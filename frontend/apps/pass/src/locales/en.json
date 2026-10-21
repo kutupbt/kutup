@@ -496,6 +496,7 @@
     "versionsLeft_one": "{{count}} earlier version could not be deleted; try deleting it from Drive.",
     "versionsLeft_other": "{{count}} earlier versions could not be deleted; try deleting them from Drive.",
     "done": "The vault's key was changed",
-    "submit": "Change key"
+    "submit": "Change key",
+    "pendingCopyPassword": "Kutup didn't answer. The vault keeps its new key and is saved under it when the connection is back. The generated password is only on this page: show it and copy it now, before closing."
   }
 }

@@ -496,6 +496,7 @@
     "versionsLeft_one": "{{count}} önceki sürüm silinemedi; Drive'dan silmeyi deneyin.",
     "versionsLeft_other": "{{count}} önceki sürüm silinemedi; Drive'dan silmeyi deneyin.",
     "done": "Kasanın anahtarı değiştirildi",
-    "submit": "Anahtarı değiştir"
+    "submit": "Anahtarı değiştir",
+    "pendingCopyPassword": "Kutup yanıt vermedi. Kasa yeni anahtarını korur ve bağlantı gelince onunla kaydedilir. Üretilen parola yalnızca bu sayfada: kapatmadan önce gösterip şimdi kopyalayın."
   }
 }

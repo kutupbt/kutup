@@ -119,6 +119,9 @@ fn key(password: Option<String>, key_file: Option<Vec<u8>>) -> Result<VaultKey, 
 struct MergeOutcome {
     report: kutup_pass::MergeReport,
     differs_from_theirs: bool,
+    /// Theirs opened with this vault's own key (not an older one, not one
+    /// given): a key change this vault holds is in Drive already.
+    theirs_under_current_key: bool,
 }
 
 /// One open vault.
@@ -252,15 +255,33 @@ impl Vault {
             Some(contents) => kutup_pass::open(&contents, &self.key).ok(),
             None => None,
         };
+        // Theirs under this vault's key; or, while a key change isn't known to
+        // be in Drive, under the key before it (another device saved under
+        // it meanwhile): taken in, and this vault keeps its new key; or under
+        // a key given (another device changed it), which this vault takes.
+        let mut theirs_under_previous_key = false;
         let (theirs_db, theirs_key) = match kutup_pass::open(theirs, &self.key) {
             Ok(db) => (db, None),
-            Err(_) if theirs_password.is_some() || theirs_key_file.is_some() => {
-                let other = key(theirs_password, theirs_key_file)?;
-                let db = kutup_pass::open(theirs, &other).map_err(open_error)?;
-                (db, Some(other))
+            Err(error) => {
+                let previous = self
+                    .previous_key
+                    .as_ref()
+                    .and_then(|(key, _)| kutup_pass::open(theirs, key).ok());
+                match previous {
+                    Some(db) => {
+                        theirs_under_previous_key = true;
+                        (db, None)
+                    }
+                    None if theirs_password.is_some() || theirs_key_file.is_some() => {
+                        let other = key(theirs_password, theirs_key_file)?;
+                        let db = kutup_pass::open(theirs, &other).map_err(open_error)?;
+                        (db, Some(other))
+                    }
+                    None => return Err(js_error(error)),
+                }
             }
-            Err(error) => return Err(js_error(error)),
         };
+        let theirs_under_current_key = !theirs_under_previous_key && theirs_key.is_none();
         let (merged, report) = kutup_pass::merge(base.as_ref(), &self.db, &theirs_db);
         let mut a = merged.clone();
         a.config = theirs_db.config.clone();
@@ -271,7 +292,10 @@ impl Vault {
         }
         to_js(&MergeOutcome {
             report,
-            differs_from_theirs,
+            // Theirs under the old key differs whatever its entries: it must
+            // be saved again, under the new one.
+            differs_from_theirs: differs_from_theirs || theirs_under_previous_key,
+            theirs_under_current_key,
         })
     }
 

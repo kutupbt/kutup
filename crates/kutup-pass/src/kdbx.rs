@@ -78,9 +78,8 @@ impl VaultKey {
 
     /// Whether `password` is this key's password (compared by its hash).
     pub fn has_this_password(&self, password: &str) -> bool {
-        self.password_element().is_some_and(|element| {
-            *element == *kutup_crypto::pass_vault::password_hash(password)
-        })
+        self.password_element()
+            .is_some_and(|element| *element == *kutup_crypto::pass_vault::password_hash(password))
     }
 
     /// Whether the key has a password, given as it is or as its hash.
@@ -97,20 +96,13 @@ impl VaultKey {
     /// (a password and its SHA-256 are the same part) and the same key file
     /// element, so each opens what the other does.
     pub fn same_as(&self, other: &VaultKey) -> bool {
-        use sha2::{Digest as _, Sha256};
-        let password = |key: &VaultKey| -> Option<[u8; 32]> {
-            match (&key.password, &key.password_hash) {
-                (Some(password), _) => Some(Sha256::digest(password.as_bytes()).into()),
-                (None, Some(hash)) => Some(**hash),
-                (None, None) => None,
-            }
-        };
         let element = |key: &VaultKey| {
             key.key_file
                 .as_deref()
                 .and_then(|file| keepass::key_file_element(file))
         };
-        password(self) == password(other) && element(self) == element(other)
+        self.password_element().as_deref() == other.password_element().as_deref()
+            && element(self) == element(other)
     }
 
     /// Adds the contents of a key file (any of KeePass's key file kinds).

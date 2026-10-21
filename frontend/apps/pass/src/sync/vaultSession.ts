@@ -79,6 +79,12 @@ export class VaultSession {
    * the vault in Drive under the new key.
    */
   private afterKeyChange: (() => Promise<void>) | null = null
+  /**
+   * A key change whose save got no answer: done once Drive is known to hold
+   * the vault under the new key (a save of ours lands, or the newest version
+   * opens with it). No other key change starts meanwhile.
+   */
+  private keyChangePending = false
   /** The other device's version while its key is needed. */
   private waitingTheirs: { contents: Uint8Array; version: string } | null = null
   private readonly onOnline = () => this.scheduleSave(0)
@@ -193,7 +199,9 @@ export class VaultSession {
    */
   async changeKey(change: KeyChange, whenSaved?: (changed: KeyChanged) => Promise<void>): Promise<KeyChanged> {
     if (!this.canEdit) throw new VaultError('this vault is read-only for you')
-    if (this.saving || this.dirty || this.waitingTheirs || this.state.status !== 'saved') throw new KeyChangeError('notReady')
+    if (this.saving || this.dirty || this.waitingTheirs || this.keyChangePending || this.state.status !== 'saved') {
+      throw new KeyChangeError('notReady')
+    }
     let release!: () => void
     this.saving = new Promise<void>((resolve) => (release = resolve))
     let conflict = false
@@ -226,6 +234,7 @@ export class VaultSession {
         // key and is merged; one that didn't is made now. Either way the
         // vault ends up under the new key, never under one nobody holds.
         this.dirty = true
+        this.keyChangePending = true
         this.afterKeyChange = whenSaved ? () => whenSaved(changed) : null
         this.set({ status: 'offline' })
         this.scheduleRetry()
@@ -249,6 +258,20 @@ export class VaultSession {
       // Another device's save: taken in now, under the key it has.
       if (conflict) void this.refresh()
     }
+  }
+
+  /**
+   * Drive holds the vault under the key this session has: a pending key
+   * change is done, and what was to follow it (the account's kept key, the
+   * earlier versions) follows now. Nothing when none is pending.
+   */
+  private async keyChangeLanded(): Promise<void> {
+    await this.handle.keyChangeSaved()
+    if (!this.keyChangePending) return
+    this.keyChangePending = false
+    const after = this.afterKeyChange
+    this.afterKeyChange = null
+    if (after) void after().catch(() => undefined)
   }
 
   /** The merge notice was read. */
@@ -295,12 +318,8 @@ export class VaultSession {
         this.file = saved.file
         this.baseVersion = saved.version
         this.base = contents
-        // A key change whose first save got no answer is done now; what was
-        // to follow it (the account's kept key) follows now.
-        await this.handle.keyChangeSaved()
-        const after = this.afterKeyChange
-        this.afterKeyChange = null
-        if (after) void after().catch(() => undefined)
+        // A key change whose first save got no answer is done now.
+        await this.keyChangeLanded()
         // Edits made while saving stay pending in the outbox.
         if (!this.dirty) {
           await outbox.put(this.userId, { fileId: this.file.id, baseVersion: this.baseVersion, base: this.base, pending: null, savedAt: Date.now() })
@@ -360,6 +379,9 @@ export class VaultSession {
     this.base = contents
     this.baseVersion = version
     this.dirty = outcome.differsFromTheirs
+    // The newest version opens with our key: a key change whose save got no
+    // answer did land (there is nothing left to push for it).
+    if (outcome.theirsUnderCurrentKey) await this.keyChangeLanded()
     await outbox.put(this.userId, {
       fileId: this.file.id,
       baseVersion: version,

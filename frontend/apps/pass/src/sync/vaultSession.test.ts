@@ -9,6 +9,7 @@ const handle = vi.hoisted(() => ({
   keyChangeSaved: vi.fn(() => Promise.resolve()),
   abandonKeyChange: vi.fn(() => Promise.resolve()),
   close: vi.fn(() => Promise.resolve()),
+  merge: vi.fn(),
 }))
 vi.mock('../vault/client', () => ({
   VaultError: class VaultError extends Error {},
@@ -20,7 +21,7 @@ const drive = vi.hoisted(() => ({
 vi.mock('../drive/vaults', () => ({
   ORIGINAL: 'original',
   readCurrentVault: vi.fn(() => Promise.resolve({ contents: new Uint8Array([0]), version: 'v1' })),
-  readVaultVersion: vi.fn(),
+  readVaultVersion: vi.fn(() => Promise.resolve(new Uint8Array([2]))),
   refreshVaultFile: vi.fn((_folder: unknown, file: unknown) => Promise.resolve(file)),
   saveVaultVersion: drive.saveVaultVersion,
   vaultTitle: (name: string) => name.replace(/\.kdbx$/i, ''),
@@ -29,7 +30,11 @@ vi.mock('./outbox', () => ({
   outbox: { get: vi.fn(() => Promise.resolve(null)), put: vi.fn(() => Promise.resolve()) },
 }))
 vi.mock('@kutup/collab/api', () => ({
-  VersionConflictError: class VersionConflictError extends Error {},
+  VersionConflictError: class VersionConflictError extends Error {
+    constructor(readonly current: string) {
+      super('version conflict')
+    }
+  },
   listVersions: vi.fn(() => Promise.resolve([])),
 }))
 
@@ -98,6 +103,42 @@ describe('a vault key change', () => {
     await expect(session.changeKey({ password: 'keep', shownPassword: 'eski', keyFile: 'keep' }, whenSaved)).resolves.toEqual({ passwordShowable: true })
     expect(handle.keyChangeSaved).toHaveBeenCalledTimes(1)
     expect(whenSaved).not.toHaveBeenCalled()
+    await session.close()
+  })
+
+  it('done when the save that got no answer had landed: the retry finds it under the new key', async () => {
+    const session = await opened()
+    const whenSaved = vi.fn(() => Promise.resolve())
+    drive.saveVaultVersion.mockRejectedValueOnce(noAnswer)
+    await expect(session.changeKey({ password: { set: 'yeni' }, keyFile: 'keep' }, whenSaved)).rejects.toMatchObject({ failure: 'pending' })
+    // No second key change meanwhile: undoing it would bring the first key back.
+    await expect(session.changeKey({ password: { set: 'üçüncü' }, keyFile: 'keep' })).rejects.toMatchObject({ failure: 'notReady' })
+
+    // The retry: Drive has v2 (ours, under the new key) already.
+    drive.saveVaultVersion.mockRejectedValueOnce(new VersionConflictError('v2'))
+    handle.merge.mockResolvedValueOnce({ report: { conflicts: [], groupConflicts: [], metadataConflicts: [], restored: [] }, differsFromTheirs: false, theirsUnderCurrentKey: true })
+    await session.save()
+    await vi.waitFor(() => expect(whenSaved).toHaveBeenCalledTimes(1))
+    expect(handle.keyChangeSaved).toHaveBeenCalledTimes(1)
+    expect(drive.saveVaultVersion).toHaveBeenCalledTimes(2)
+    expect(session.getState().status).toBe('saved')
+    await session.close()
+  })
+
+  it('saved again under the new key when another device saved under the old one meanwhile', async () => {
+    const session = await opened()
+    const whenSaved = vi.fn(() => Promise.resolve())
+    drive.saveVaultVersion.mockRejectedValueOnce(noAnswer)
+    await expect(session.changeKey({ password: { set: 'yeni' }, keyFile: 'keep' }, whenSaved)).rejects.toMatchObject({ failure: 'pending' })
+
+    // Theirs opens only with the old key: taken in, never adopted; ours goes up under the new one.
+    drive.saveVaultVersion.mockRejectedValueOnce(new VersionConflictError('v2'))
+    handle.merge.mockResolvedValueOnce({ report: { conflicts: [], groupConflicts: [], metadataConflicts: [], restored: [] }, differsFromTheirs: true, theirsUnderCurrentKey: false })
+    drive.saveVaultVersion.mockResolvedValueOnce({ version: 'v3', file })
+    await session.save()
+    await vi.waitFor(() => expect(whenSaved).toHaveBeenCalledTimes(1))
+    expect(drive.saveVaultVersion).toHaveBeenCalledTimes(3)
+    expect(session.getState().status).toBe('saved')
     await session.close()
   })
 })

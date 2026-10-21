@@ -92,6 +92,7 @@ export function ChangeKeyDialog({
   const [confirming, setConfirming] = useState(false)
   const [pending, setPending] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [pendingNotice, setPendingNotice] = useState(false)
   const owner = vault.folder.source === 'owned' && vault.folder.ownerUserId === signedIn.userId
 
   // A generated key file lives only here, and is wiped when the dialog goes.
@@ -115,6 +116,7 @@ export function ChangeKeyDialog({
     setMadePassword(null)
     setChosen(null)
     setDropVersions(false)
+    setPendingNotice(false)
     void (async () => {
       const parts = await session.vault().keyParts()
       const kind = await keptKeyKind(signedIn, secrets.data, fileId).catch(() => 'unknown' as const)
@@ -153,7 +155,7 @@ export function ChangeKeyDialog({
 
   const change = async () => {
     // The same rules as the button: Enter never gets past them.
-    if (!form || keyChangeProblem(form) !== null || !saved || pending) return
+    if (!form || keyChangeProblem(form) !== null || !saved || pending || pendingNotice) return
     setPending(true)
     setError(null)
     try {
@@ -168,18 +170,34 @@ export function ChangeKeyDialog({
         else if (wasKept) await forgetVaultKey(signedIn, fileId)
         await queryClient.invalidateQueries({ queryKey: secretsKey })
       }
+      const deleteVersions = dropVersions && owner
+      // What follows a key change only once Drive has the vault under it.
+      const afterSaved = async (done: KeyChanged) => {
+        await keepChoice(done).catch(() => toast.warning(t('changeKey.keepFailed')))
+        if (deleteVersions) {
+          const left = await deleteEarlierVersions(fileId)
+          if (left > 0) toast.warning(t('changeKey.versionsLeft', { count: left }))
+        }
+      }
       let changed
       try {
         changed = await session.changeKey({
           password: password === 'keep' ? 'keep' : password === 'new' ? { set: newPassword } : null,
           shownPassword: keptPassword,
           keyFile: keyFile === 'keep' ? 'keep' : keyFile === 'generate' ? generated.current : keyFile === 'choose' ? (chosen?.contents ?? null) : null,
-        }, keepChoice)
+        }, afterSaved)
       } catch (failure) {
         if (failure instanceof KeyChangeError && failure.failure === 'pending') {
           // The new key stays and is saved once Kutup answers; the kept key
-          // follows then (or at the next unlock, if this tab closes first).
+          // (and the earlier versions' deletion) follow then, or at the next
+          // unlock if this tab closes first.
           forgetGenerated()
+          if (password === 'new' && newPassword === madePassword) {
+            // A generated password exists only here until then: shown, to
+            // copy now, before the dialog goes.
+            setPendingNotice(true)
+            return
+          }
           toast.warning(t('changeKey.failure.pending'))
           onOpenChange(false)
           return
@@ -194,7 +212,7 @@ export function ChangeKeyDialog({
         keepFailed = true
       }
       let versionsLeft = 0
-      if (dropVersions && owner) versionsLeft = await deleteEarlierVersions(fileId)
+      if (deleteVersions) versionsLeft = await deleteEarlierVersions(fileId)
       forgetGenerated()
       if (keepFailed) toast.warning(t('changeKey.keepFailed'))
       if (versionsLeft > 0) toast.warning(t('changeKey.versionsLeft', { count: versionsLeft }))
@@ -320,11 +338,16 @@ export function ChangeKeyDialog({
                 </p>
               ) : null}
               {error ? <Alert variant="error">{error}</Alert> : null}
+              {pendingNotice ? (
+                <Alert variant="warn" data-testid="change-key-pending">
+                  {t('changeKey.pendingCopyPassword')}
+                </Alert>
+              ) : null}
               <DialogFooter>
                 <Button type="button" variant="outline" onClick={() => onOpenChange(false)} disabled={pending}>
                   {t('common.cancel')}
                 </Button>
-                <Button type="submit" loading={pending} disabled={problem !== null || !saved} data-testid="change-key-submit">
+                <Button type="submit" loading={pending} disabled={problem !== null || !saved || pendingNotice} data-testid="change-key-submit">
                   {t('changeKey.submit')}
                 </Button>
               </DialogFooter>
