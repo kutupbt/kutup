@@ -892,6 +892,12 @@ an edit. Plan: [`plans/pass.md`](plans/pass.md); research and decisions:
 
 ## Polish / smaller items (future)
 
+- **Load test, deferred (the user, 2026-10-21: the product first):** the
+  generator (`crates/kutup-loadtest`) and the stack (`tests/load/`) are on the
+  `feat/loadtest` branch; 200 and 500 busy users at 2 vCPU ran with no errors
+  (`docs/research/21-load-test.md` there). Still to do: 1000+ users, 4 and
+  6–8 vCPU, idle sockets, the other services' idle memory, LiveKit.
+
 - **Rate limits administrators can change (2026-10-21):** the `RATE_LIMIT_*`
   limits (per address, account and peer) are read from the environment at
   start. Per the standing rule (every limit an administrators' setting), move
