@@ -68,9 +68,10 @@ struct MergeOutcome {
 pub struct Vault {
     db: Database,
     key: VaultKey,
-    /// The key before a change not saved since (and when it was last
-    /// changed): Drive's copy still opens with it, so the new key is not
-    /// kept yet, and a failed save goes back to it (`abandonKeyChange`).
+    /// The key before a change Drive does not hold yet (and when the key was
+    /// last changed before): Drive's copy still opens with it, so the new
+    /// key is not kept yet, and a failed save goes back to it
+    /// (`abandonKeyChange`).
     previous_key: Option<(VaultKey, Option<chrono::NaiveDateTime>)>,
 }
 
@@ -170,9 +171,9 @@ impl Vault {
 
     /// The vault as KDBX 4.1 file contents.
     pub fn save(&mut self) -> Result<Vec<u8>, JsValue> {
-        let saved = kutup_pass::save(&self.db, &self.key).map_err(js_error)?;
-        self.previous_key = None;
-        Ok(saved)
+        // A key change is done only once Drive holds the file it saved
+        // (`keyChangeSaved`); until then it can still be undone.
+        kutup_pass::save(&self.db, &self.key).map_err(js_error)
     }
 
     /// Merges this vault (ours) with `theirs` against `base` (the version
@@ -221,8 +222,8 @@ impl Vault {
     /// `file_id`: the key this vault was opened or made with, so it is known
     /// to open it. `generated`: its password is one Kutup Pass made, kept to
     /// be shown (then the key must hold the password itself, not only its
-    /// hash). Base64. Fails after `changeKey` until `save` (Drive's copy
-    /// still opens with the old key).
+    /// hash). Base64. Fails after `changeKey` until `keyChangeSaved` (Drive's
+    /// copy still opens with the old key).
     #[wasm_bindgen(js_name = keepKey)]
     pub fn keep_key(
         &self,
@@ -274,15 +275,31 @@ impl Vault {
         )
     }
 
-    /// Changes the vault's key (saved with the next `save`).
+    /// Changes the vault's key: saved with the next `save`, done once Drive
+    /// holds that (`keyChangeSaved`), undone with `abandonKeyChange`.
     #[wasm_bindgen(js_name = changeKey)]
     pub fn change_key(
         &mut self,
         password: Option<String>,
+        keep_password: bool,
         key_file: Option<Vec<u8>>,
+        keep_key_file: bool,
         now_ms: f64,
     ) -> Result<(), JsValue> {
-        let new = key(password, key_file)?;
+        // What is kept comes from this vault's own key, never from the page.
+        if (keep_password && password.is_some()) || (keep_key_file && key_file.is_some()) {
+            return Err(js_error(
+                "keep a part of the key or give a new one, not both",
+            ));
+        }
+        let mut new = self.key.keeping(keep_password, keep_key_file);
+        if let Some(password) = password {
+            new = new.with_password(&password);
+        }
+        if let Some(file) = key_file {
+            new = new.with_key_file(&file);
+        }
+        new.check().map_err(js_error)?;
         let changed = Some(time(now_ms)?);
         let old = std::mem::replace(&mut self.key, new);
         // A second change before a save still goes back to the saved key.
@@ -293,8 +310,15 @@ impl Vault {
         Ok(())
     }
 
+    /// Drive holds the file saved with the new key: the change is done, and
+    /// the new key can be kept.
+    #[wasm_bindgen(js_name = keyChangeSaved)]
+    pub fn key_change_saved(&mut self) {
+        self.previous_key = None;
+    }
+
     /// Goes back to the key the vault was saved with, after a change whose
-    /// save failed: the change is undone, never left half-made.
+    /// save did not reach Drive: the change is undone, never left half-made.
     #[wasm_bindgen(js_name = abandonKeyChange)]
     pub fn abandon_key_change(&mut self) {
         if let Some((key, changed)) = self.previous_key.take() {

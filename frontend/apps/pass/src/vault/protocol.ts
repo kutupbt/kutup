@@ -19,7 +19,11 @@ type Calls =
       theirsPassword: string | null
       theirsKeyFile: Uint8Array | null
     }
-  | { call: 'changeKey'; handle: number; password: string | null; keyFile: Uint8Array | null; now: number }
+  | { call: 'changeKey'; handle: number; password: string | null; keepPassword: boolean; keyFile: Uint8Array | null; keepKeyFile: boolean; now: number }
+  | { call: 'keyChangeSaved'; handle: number }
+  | { call: 'abandonKeyChange'; handle: number }
+  | { call: 'keyParts'; handle: number }
+  | { call: 'generateKeyFile' }
   | { call: 'close'; handle: number }
   | { call: 'keepKey'; handle: number; masterKey: Uint8Array; binding: string; fileId: string; revision: number; generated: boolean }
   | { call: 'openKept'; envelope: string; masterKey: Uint8Array; binding: string; fileId: string }

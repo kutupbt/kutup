@@ -56,6 +56,16 @@ impl VaultKey {
         self.password_hash.as_deref()
     }
 
+    /// This key with only the parts asked for: what a key change keeps of
+    /// the vault's current key (a password known only as its hash too).
+    pub fn keeping(&self, password: bool, key_file: bool) -> VaultKey {
+        VaultKey {
+            password: self.password.clone().filter(|_| password),
+            password_hash: self.password_hash.clone().filter(|_| password),
+            key_file: self.key_file.clone().filter(|_| key_file),
+        }
+    }
+
     /// Whether the key has a password, given as it is or as its hash.
     pub fn has_password(&self) -> bool {
         self.password.is_some() || self.password_hash.is_some()
@@ -90,6 +100,12 @@ impl VaultKey {
     pub fn with_key_file(mut self, contents: &[u8]) -> Self {
         self.key_file = Some(Zeroizing::new(contents.to_vec()));
         self
+    }
+
+    /// Whether the key can lock a vault: a password or a key file, and a
+    /// key file KeePass reads (`KdbxError::KeyFile` otherwise).
+    pub fn check(&self) -> Result<(), KdbxError> {
+        self.database_key().map(|_| ())
     }
 
     fn database_key(&self) -> Result<DatabaseKey, KdbxError> {
@@ -264,6 +280,27 @@ mod tests {
         let kept = key_file_secret(&file).unwrap();
         assert_eq!(kept.len(), 32);
         assert!(open(&bytes, &VaultKey::new().with_key_file(&kept)).is_ok());
+    }
+
+    #[test]
+    fn a_key_change_keeps_the_parts_asked_for_even_a_hashed_password() {
+        let file = generate_key_file().unwrap();
+        let hashed = VaultKey::new()
+            .with_password_hash(&kutup_crypto::pass_vault::password_hash("parola"))
+            .with_key_file(&file);
+        // The password kept, a new key file: opens with the typed password
+        // and the new file.
+        let other = generate_key_file().unwrap();
+        let changed = hashed.keeping(true, false).with_key_file(&other);
+        let bytes = save(&sample(), &changed).unwrap();
+        let typed = VaultKey::new()
+            .with_password("parola")
+            .with_key_file(&other);
+        assert!(open(&bytes, &typed).is_ok());
+        assert!(open(&bytes, &hashed).is_err());
+        // Nothing kept and nothing new: no key.
+        assert!(hashed.keeping(false, false).check().is_err());
+        assert!(hashed.keeping(false, true).check().is_ok());
     }
 
     #[test]

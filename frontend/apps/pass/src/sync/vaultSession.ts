@@ -12,7 +12,7 @@ import { VersionConflictError, listVersions } from '@kutup/collab/api'
 import type { DriveFile, Folder } from '@kutup/drive-core/model'
 import { QuotaExceededError } from '@kutup/session/errors'
 import { ORIGINAL, readCurrentVault, readVaultVersion, refreshVaultFile, saveVaultVersion } from '../drive/vaults'
-import { VaultError, VaultHandle } from '../vault/client'
+import { VaultError, VaultHandle, type KeyChange } from '../vault/client'
 import type { Applied, MergeReport, Op, VaultKeyInput, VaultView } from '../vault/types'
 import { outbox } from './outbox'
 
@@ -43,6 +43,21 @@ const SAVE_DELAY_MS = 600
 
 function isOffline(error: unknown): boolean {
   return (isAxiosError(error) && !error.response) || (typeof navigator !== 'undefined' && navigator.onLine === false)
+}
+
+/** Why a key change was not made (nothing changed). */
+export type KeyChangeFailure =
+  /** Edits or another device's save are still on their way: save first. */
+  | 'notReady'
+  /** Another device saved meanwhile: its save is merged in, try again. */
+  | 'conflict'
+  | 'offline'
+  | 'failed'
+
+export class KeyChangeError extends Error {
+  constructor(readonly failure: KeyChangeFailure) {
+    super(`the vault key was not changed: ${failure}`)
+  }
 }
 
 function needsReview(report: MergeReport): boolean {
@@ -145,6 +160,53 @@ export class VaultSession {
       this.scheduleSave(SAVE_DELAY_MS)
     }
     return applied
+  }
+
+  /**
+   * Changes the vault's key and saves the vault with it, straight to Drive
+   * (never the outbox: a change not in Drive is undone, so the vault never
+   * ends up under a key nobody confirmed). Only from a saved vault, holding
+   * the save slot meanwhile; edits made during it are saved after, under
+   * the new key. On any failure the old key is back and nothing changed.
+   */
+  async changeKey(change: KeyChange): Promise<void> {
+    if (!this.canEdit) throw new VaultError('this vault is read-only for you')
+    if (this.saving || this.dirty || this.waitingTheirs || this.state.status !== 'saved') throw new KeyChangeError('notReady')
+    let release!: () => void
+    this.saving = new Promise<void>((resolve) => (release = resolve))
+    let conflict = false
+    try {
+      await this.handle.changeKey(change)
+      let contents: Uint8Array
+      let saved: { version: string; file: DriveFile }
+      try {
+        contents = await this.handle.save()
+        saved = await this.push(contents)
+      } catch (error) {
+        await this.handle.abandonKeyChange()
+        if (error instanceof VersionConflictError) {
+          conflict = true
+          throw new KeyChangeError('conflict')
+        }
+        throw new KeyChangeError(isOffline(error) ? 'offline' : 'failed')
+      }
+      this.file = saved.file
+      this.baseVersion = saved.version
+      this.base = contents
+      await this.handle.keyChangeSaved()
+      // Drive holds it: the outbox's base follows, so a later offline edit
+      // merges against the vault under its new key.
+      await outbox
+        .put(this.userId, { fileId: this.file.id, baseVersion: this.baseVersion, base: this.base, pending: null, savedAt: Date.now() })
+        .catch(() => undefined)
+      this.set({ view: await this.handle.view() })
+    } finally {
+      release()
+      this.saving = null
+      if (this.dirty) this.scheduleSave(0)
+      // Another device's save: taken in now, under the key it has.
+      if (conflict) void this.refresh()
+    }
   }
 
   /** The merge notice was read. */

@@ -24,7 +24,10 @@ interface WasmVault {
   otp(entryId: string, nowMs: number): unknown
   save(): Uint8Array
   mergeWith(base: Uint8Array | null | undefined, theirs: Uint8Array, password?: string | null, keyFile?: Uint8Array | null): unknown
-  changeKey(password: string | null | undefined, keyFile: Uint8Array | null | undefined, nowMs: number): void
+  changeKey(password: string | null | undefined, keepPassword: boolean, keyFile: Uint8Array | null | undefined, keepKeyFile: boolean, nowMs: number): void
+  keyChangeSaved(): void
+  abandonKeyChange(): void
+  keyParts(): unknown
   keepKey(masterKey: Uint8Array, binding: string, fileId: string, revision: number, generated: boolean): string
   keptKeyIsMine(envelope: string, masterKey: Uint8Array, binding: string, fileId: string): boolean
   free(): void
@@ -39,6 +42,7 @@ interface PassWasm {
   openKept(envelope: string, masterKey: Uint8Array, binding: string, fileId: string): unknown
   importPreview(contents: Uint8Array, provider: string | null | undefined): unknown
   importFormats(): unknown
+  generateKeyFile(): Uint8Array
 }
 
 let wasm: Promise<PassWasm> | null = null
@@ -93,8 +97,18 @@ async function run(request: Request): Promise<unknown> {
     case 'merge':
       return vault(request.handle).mergeWith(request.base, request.theirs, request.theirsPassword, request.theirsKeyFile)
     case 'changeKey':
-      vault(request.handle).changeKey(request.password, request.keyFile, request.now)
+      vault(request.handle).changeKey(request.password, request.keepPassword, request.keyFile, request.keepKeyFile, request.now)
       return null
+    case 'keyChangeSaved':
+      vault(request.handle).keyChangeSaved()
+      return null
+    case 'abandonKeyChange':
+      vault(request.handle).abandonKeyChange()
+      return null
+    case 'keyParts':
+      return vault(request.handle).keyParts()
+    case 'generateKeyFile':
+      return module.generateKeyFile()
     case 'close': {
       vaults.get(request.handle)?.free()
       vaults.delete(request.handle)

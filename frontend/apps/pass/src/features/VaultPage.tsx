@@ -28,6 +28,7 @@ import { refreshVaultFile, useVaultFiles, vaultTitle, type VaultFile } from '../
 import { lockVault, useSessionState, useVaultSession } from '../sync/openVaults'
 import type { VaultSession } from '../sync/vaultSession'
 import { fieldValue, type EntryInput, type EntryView, type GroupView, type MergeReport } from '../vault/types'
+import { ChangeKeyDialog } from './ChangeKeyDialog'
 import { EntryDetail } from './EntryDetail'
 import { EntryEditor } from './EntryEditor'
 import { GroupDialog } from './GroupDialog'
@@ -102,6 +103,7 @@ function OpenVault({ session, vault }: { session: VaultSession; vault: VaultFile
   const [renamingVault, setRenamingVault] = useState(false)
   const [importing, setImporting] = useState(false)
   const [showingKey, setShowingKey] = useState(false)
+  const [changingKey, setChangingKey] = useState(false)
   const [forgettingGenerated, setForgettingGenerated] = useState(false)
 
   // Another device's save is taken in when the tab comes back, and now and then.
@@ -223,6 +225,12 @@ function OpenVault({ session, vault }: { session: VaultSession; vault: VaultFile
                 <DropdownMenuItem onSelect={() => setImporting(true)}>
                   <FileUp />
                   {t('import.open')}
+                </DropdownMenuItem>
+              ) : null}
+              {session.canEdit && vault ? (
+                <DropdownMenuItem onSelect={() => setChangingKey(true)}>
+                  <KeyRound />
+                  {t('changeKey.open')}
                 </DropdownMenuItem>
               ) : null}
               {generatedKey ? (
@@ -476,6 +484,7 @@ function OpenVault({ session, vault }: { session: VaultSession; vault: VaultFile
           await session.apply({ op: 'updateVault', name, description: view.description, defaultUserName: view.defaultUserName })
         }}
       />
+      {vault ? <ChangeKeyDialog open={changingKey} onOpenChange={setChangingKey} session={session} vault={vault} title={title} /> : null}
       <VaultKeyDialog
         open={showingKey}
         onOpenChange={setShowingKey}

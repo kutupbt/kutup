@@ -22,11 +22,11 @@ said) · 🟡 partial (what is missing is said) · ❌ missing. "Kept" means
 Kutup reads and saves the data unchanged (other KeePass apps still see it)
 but offers no way to see or change it.
 
-**Summary** (rows per area, 2026-10-20):
+**Summary** (rows per area, 2026-10-21):
 
 | Area | ✅ | 🟡 | ❌ |
 |---|---|---|---|
-| The database (vault) | 10 | 9 | 20 |
+| The database (vault) | 14 | 9 | 16 |
 | Groups (folders) | 5 | 1 | 6 |
 | Entries | 8 | 6 | 8 |
 | Bulk actions and the entry list | 3 | 1 | 11 |
@@ -35,9 +35,9 @@ but offers no way to see or change it.
 | One-time codes, passkeys, SSH, desktop integration | 5 | 3 | 10 |
 | Health report | 2 | 1 | 4 |
 | Locking and unlocking | 5 | 1 | 2 |
-| Sync, sharing and merges | 6 | 0 | 3 |
+| Sync, sharing and merges | 7 | 0 | 2 |
 | Platforms | 2 | 4 | 4 |
-| **All** | **49** | **31** | **74** |
+| **All** | **54** | **31** | **69** |
 
 ## The database (vault)
 
@@ -54,12 +54,12 @@ but offers no way to see or change it.
 | Move a vault to another folder | save elsewhere | ❌ | only in Drive (the vault keeps its file id, so its kept key still opens it) |
 | Description, default user name | Database settings → General | 🟡 | the default user name fills new entries (`EntryEditor.tsx`), but neither can be changed: `updateVault` carries them and the UI only passes the current values on |
 | Public metadata (name, icon, colour on the unlock screen) | Database settings → General | ❌ | kept |
-| Change the password | Database settings → Security | ❌ | `changeKey` exists in `kutup-pass-wasm` and `vault/client.ts` but nothing in the UI calls it; the CLI has no command either. A vault's key cannot be changed in Kutup at all (needed too after removing a member from a shared folder, research 19 "Unlocking…") |
-| Key file: **create** (generate) | Security → Add Key File → Generate | ❌ | no way to make one; `KeyFileInput.tsx` only picks an existing file |
+| Change the password | Database settings → Security | ✅ | the vault's menu → "Change vault key…" (`features/ChangeKeyDialog.tsx`, rules in `lib/keyChange.ts`): keep, change (typed twice, or generated) or remove the password, one key part at least; saved straight to Drive or undone (`VaultSession.changeKey`, `abandonKeyChange`), then kept in the account again or the old kept key forgotten; says that Drive's earlier versions still open with the old key and copies already downloaded can't be revoked, and lets the owner delete the earlier versions and the first upload (`DELETE …/versions/original`); spec 168. Not in the CLI |
+| Key file: **create** (generate) | Security → Add Key File → Generate | ✅ | `kdbx::generate_key_file`: 32 random bytes in KeePass's XML v2, byte for byte as KeePassXC writes it (`Name.keyx`); downloaded only, never sent anywhere; the change waits until the person says it is saved |
 | Key file: **open** a vault with one (alone or with a password) | unlock screen | ✅ | `UnlockVault.tsx` takes a password, a key file or both; also when another device saved under a new key (`TheirsKeyDialog.tsx`); every key-file kind (XML v1/v2, 32-byte, hex, any file) |
 | Key file: **new vault** protected by one | wizard → credentials | ✅ | `CreateVaultDialog.tsx`, "A password I choose", with or without a password; an existing file only (see "create") |
-| Key file: **add** to an existing vault | Security → Add Key File | ❌ | as "Change the password": `changeKey` is not wired |
-| Key file: **remove** from an existing vault | Security → Remove Key File | ❌ | as above |
+| Key file: **add** to an existing vault | Security → Add Key File | ✅ | "Change vault key…": generated, or one the person has; the password part kept (also when known only as its hash, opened with the kept key) |
+| Key file: **remove** from an existing vault | Security → Remove Key File | ✅ | as above, while a password stays |
 | Key file kept with the sign-in | (none) | ✅ | beyond KeePassXC: the derived key element sealed under the account key (`crates/kutup-pass/src/kept.rs`), so the website and `kutup sync` open it without the file |
 | YubiKey / OnlyKey challenge-response | `keys/ChallengeResponseKey.cpp`, `keys/drivers` | ❌ | neither open, create, add nor remove: the crate's challenge-response feature is off, and the web would need WebHID (Chromium only; research 19 "Unlocking…") |
 | KDF settings (Argon2d/id, AES-KDF; memory, iterations, parallelism; "1 second" benchmark) | Security → Encryption | ❌ | new vaults get Argon2id 64 MiB, 10 iterations, fixed (`crates/kutup-pass/src/edit.rs`); an existing vault's KDF is kept; no setting |
@@ -235,7 +235,7 @@ no selection state anywhere in the app.
 | Share a whole vault with people | KeeShare to a shared file, or share the file | ✅ | a vault in a shared Drive folder; viewers get it read-only (`session.canEdit`); each member keeps the key under their own account |
 | Share one group (KeeShare import/export/sync containers) | `src/keeshare`, `KeeShare.adoc` | ❌ | a separate vault in a shared folder does the job today |
 | Share a single entry | (no) | ❌ | roadmap "Pass next" (research 19 §5.7) |
-| Change the key after removing a member | change the password | ❌ | see "Change the password" |
+| Change the key after removing a member | change the password | ✅ | "Change vault key…" (see "Change the password"); members' kept keys stop opening it and they are asked for the new one |
 
 ## Platforms
 
@@ -267,7 +267,7 @@ What people hit first, then what blocks moving from KeePassXC:
    delete (to Drive's trash), "Show in Drive", and **Download the
    `.kdbx`** (for KeePassXC or a backup; user report). Keep the KDBX
    `DatabaseName` in step with a rename made in Drive (on the next save).
-3. **Change the vault's key** (user report, with item 1's urgency): a
+3. ✅ **Change the vault's key** (user report, with item 1's urgency): a
    Vault settings → Security page wiring `changeKey`: change the password,
    **generate** a key file (KeePassXC's 32-byte random key in its XML v2
    form, downloaded once), **add** or **remove** a key file, and re-keep
