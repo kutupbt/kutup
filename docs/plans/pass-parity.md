@@ -141,7 +141,7 @@ read-only vault has no selection and no dragging.
 | Select several entries (Ctrl/Shift-click) | `gui/entry/EntryView.cpp` (`ExtendedSelection`) | ✅ | a checkbox on each row (shown on hover, and always once one is selected), Ctrl/Cmd-click toggles, Shift-click takes the range from the last one clicked (`lib/selection.ts`); a plain click opens the entry; Esc clears; spec 167 |
 | Select all (Ctrl+A) | Ctrl+A in the list | ✅ | what the list shows (the group and the search) |
 | Move **one** entry to another group | drag to a group | ✅ | the folder button in the entry's header → "Move to" with the vault's groups (`EntryDetail.tsx`, `moveEntry`) |
-| Move **several** entries (or all of a group, select all then move) | select, drag to a group | ✅ | the selection bar's "Move to", one `moveEntries` edit |
+| Move **several** entries (or all of a group, select all then move) | select, drag to a group | ✅ | the selection bar's "Move to group", one `moveEntries` edit |
 | Move one entry to the recycle bin | Delete | ✅ | asks first; for good inside the bin or with it off |
 | Move several to the recycle bin, delete several | select, Delete | ✅ | asks first, naming the count; for good (said so, "can't be undone") in the bin or with it off |
 | Restore from the recycle bin | drag back | ✅ | one entry or several, each back to the group it was in (KDBX's previous parent group), or the top group when that one is gone or in the bin; or "Move to" another group |

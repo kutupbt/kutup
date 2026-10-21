@@ -394,7 +394,7 @@
     "selected_other": "{{count}} selected",
     "select": "Select {{title}}",
     "clear": "Clear the selection",
-    "moveTo": "Move to",
+    "moveTo": "Move to group",
     "restore": "Restore",
     "recycle": "Move to recycle bin",
     "deleteForGood": "Delete for good",

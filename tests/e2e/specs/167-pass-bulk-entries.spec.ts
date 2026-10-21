@@ -58,7 +58,7 @@ test('pass: several entries are selected, moved, dragged, recycled, restored to 
   await expect(box(page, 'A2')).not.toBeChecked()
 
   // Moved to a group together.
-  await bar(page).getByRole('button', { name: 'Move to' }).click()
+  await bar(page).getByRole('button', { name: 'Move to group', exact: true }).click()
   await page.getByRole('menuitem', { name: 'İş' }).click()
   await expect(page.getByText('2 entries moved to İş')).toBeVisible()
   await expect(bar(page)).toBeHidden()
@@ -75,7 +75,7 @@ test('pass: several entries are selected, moved, dragged, recycled, restored to 
   await row(page, 'A4').focus()
   await page.keyboard.press('ControlOrMeta+a')
   await expect(bar(page)).toContainText('4 selected')
-  await bar(page).getByRole('button', { name: 'Move to recycle bin' }).click()
+  await bar(page).getByRole('button', { name: 'Move to recycle bin', exact: true }).click()
   const recycle = page.getByRole('alertdialog', { name: 'Move 4 entries to the recycle bin?' })
   await recycle.getByRole('button', { name: 'Move to recycle bin' }).click()
   await expect(page.getByText('4 entries moved to the recycle bin')).toBeVisible()
@@ -84,7 +84,7 @@ test('pass: several entries are selected, moved, dragged, recycled, restored to 
   // Restored, each to the group it was in.
   await row(page, 'A1').focus()
   await page.keyboard.press('ControlOrMeta+a')
-  await bar(page).getByRole('button', { name: 'Restore' }).click()
+  await bar(page).getByRole('button', { name: 'Restore', exact: true }).click()
   await expect(page.getByText('4 entries restored to where they were')).toBeVisible()
   await expectIn(page, 'İş', ['A1', 'A3'])
   await expectIn(page, 'Ev', ['A2'])
@@ -96,7 +96,7 @@ test('pass: several entries are selected, moved, dragged, recycled, restored to 
   await expect(page.getByText('1 entry moved to the recycle bin')).toBeVisible()
   await showGroup(page, 'Recycle bin')
   await box(page, 'A4').click()
-  await bar(page).getByRole('button', { name: 'Delete for good' }).click()
+  await bar(page).getByRole('button', { name: 'Delete for good', exact: true }).click()
   const forGood = page.getByRole('alertdialog', { name: 'Delete 1 entry for good?' })
   await expect(forGood).toContainText("This can't be undone.")
   await forGood.getByRole('button', { name: 'Delete for good' }).click()
