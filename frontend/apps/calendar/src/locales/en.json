@@ -1,0 +1,90 @@
+{
+  "boot": {
+    "opening": "Opening your calendars…",
+    "failedTitle": "Calendar could not open",
+    "failedDescription": "Kutup could not be reached, or signing in through your account did not finish. Check your connection and try again.",
+    "keysChanged": "This account's keys changed on the server since you signed in. Sign in again."
+  },
+  "notFound": {
+    "title": "Page not found",
+    "description": "This page does not exist in Calendar."
+  },
+  "nav": {
+    "calendars": "Calendars"
+  },
+  "calendars": {
+    "new": "New calendar",
+    "newTitle": "New calendar",
+    "editTitle": "Calendar",
+    "name": "Name",
+    "description": "Description",
+    "color": "Colour",
+    "encrypted": "The name and description are encrypted: only the calendar's members can read them.",
+    "saved": "Calendar saved",
+    "created": "Calendar created",
+    "saveFailed": "The calendar wasn't saved.",
+    "delete": "Delete calendar",
+    "deleteTitle": "Delete {{name}}?",
+    "deleteDescription": "The calendar and all its events are deleted for good.",
+    "deleted": "Calendar deleted",
+    "defaultName": "My calendar",
+    "show": "Show {{name}}",
+    "edit": "Edit {{name}}",
+    "noMailKeys": "Your mail address has no key yet, and calendars need one. Open Mail once, then come back.",
+    "none": "No calendars yet.",
+    "loadFailed": "Your calendars couldn't be loaded."
+  },
+  "events": {
+    "new": "New event",
+    "newTitle": "New event",
+    "editTitle": "Event",
+    "title": "Title",
+    "untitled": "(no title)",
+    "allDay": "All day",
+    "start": "Starts",
+    "startTime": "Start time",
+    "end": "Ends",
+    "endTime": "End time",
+    "endBeforeStart": "The event must end after it starts.",
+    "timeZone": "Time zone",
+    "calendar": "Calendar",
+    "location": "Location",
+    "description": "Description",
+    "delete": "Delete event",
+    "deleteTitle": "Delete {{name}}?",
+    "deleteDescription": "The event is deleted for good.",
+    "deleted": "Event deleted",
+    "saved": "Event saved",
+    "created": "Event created",
+    "saveFailed": "The event wasn't saved.",
+    "refused": "The event wasn't saved: this server didn't accept it.",
+    "limit": "This calendar holds as many events as the server allows.",
+    "unverified": "This event's signature doesn't check out: someone may have changed it. Its contents are shown, but don't rely on them.",
+    "unverifiedShort": "Not verified",
+    "unreadable_one": "{{count}} item couldn't be opened and isn't shown.",
+    "unreadable_other": "{{count}} items couldn't be opened and aren't shown.",
+    "loadFailed": "Events couldn't be loaded."
+  },
+  "view": {
+    "today": "Today",
+    "previous": "Previous",
+    "next": "Next",
+    "label": "View",
+    "day": "Day",
+    "week": "Week",
+    "month": "Month",
+    "more_one": "{{count}} more",
+    "more_other": "{{count}} more"
+  },
+  "settings": {
+    "title": "Settings",
+    "description": "How calendars are shown here.",
+    "zone": "Time zone",
+    "weekStart": "Week starts on",
+    "clock": "Clock",
+    "clockAuto": "As my language does",
+    "clock24": "24-hour",
+    "clock12": "12-hour",
+    "thisDevice": "These settings are kept on this device."
+  }
+}

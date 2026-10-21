@@ -211,6 +211,10 @@ export interface AdminSettings {
   chatGroupAvatarStoragePerGroupBytes: number
   /** How long an avatar upload waits for a change to name it, in seconds. */
   chatGroupAvatarPendingSeconds: number
+  /** Calendars (site_settings::CALENDAR_SETTINGS). */
+  calendarsPerAccount: number
+  calendarEventsPerCalendar: number
+  calendarSyncBatch: number
 }
 
 export type FederationMode = 'disabled' | 'allowlist' | 'blocklist' | 'open'

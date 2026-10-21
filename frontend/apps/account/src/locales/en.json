@@ -164,7 +164,8 @@
     "photos": "Your photos and videos, by when and where they were taken, end-to-end encrypted.",
     "contacts": "Everyone you write to, chat with and share with, in one encrypted address book.",
     "mail": "Your mail, end-to-end encrypted with other Kutup users and encrypted the moment it arrives from anyone else.",
-    "pass": "Your passwords in KeePass vaults kept in Drive, usable offline and with KeePassXC."
+    "pass": "Your passwords in KeePass vaults kept in Drive, usable offline and with KeePassXC.",
+    "calendar": "Your events and calendars, encrypted, with times only your server needs to remind you."
   },
   "settings": {
     "account": {
@@ -790,6 +791,16 @@
         "on": "Open to anyone",
         "code": "With a referral code",
         "off": "Closed"
+      },
+      "calendar": "Calendar",
+      "calendarHint": "Limits on what each account keeps in Calendar.",
+      "calendarLimits": {
+        "calendarsPerAccount": "Calendars per account",
+        "calendarsPerAccountHint": "How many calendars one account may own.",
+        "calendarEventsPerCalendar": "Events per calendar",
+        "calendarEventsPerCalendarHint": "How many events one calendar may hold.",
+        "calendarSyncBatch": "Changes per sync",
+        "calendarSyncBatchHint": "How many event changes one request may carry."
       }
     },
     "federation": {

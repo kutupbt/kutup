@@ -125,6 +125,7 @@
   --usage-chat-history: #65a30d;
   --usage-contacts: #db2777;
   --usage-mail: #4338ca;
+  --usage-calendar: #ea580c;
   --usage-reserved: #cbd5e1;
 }
 
@@ -192,6 +193,7 @@
   --usage-chat-history: #bef264;
   --usage-contacts: #f9a8d4;
   --usage-mail: #818cf8;
+  --usage-calendar: #fdba74;
   --usage-reserved: #475569;
 }
 
@@ -264,6 +266,7 @@
   --color-usage-chat-history: var(--usage-chat-history);
   --color-usage-contacts: var(--usage-contacts);
   --color-usage-mail: var(--usage-mail);
+  --color-usage-calendar: var(--usage-calendar);
   --color-usage-reserved: var(--usage-reserved);
   --color-kind-video: var(--kind-video);
   --color-kind-audio: var(--kind-audio);

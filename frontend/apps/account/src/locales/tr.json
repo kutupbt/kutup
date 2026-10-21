@@ -164,7 +164,8 @@
     "photos": "Fotoğraflarınız ve videolarınız, ne zaman ve nerede çekildiklerine göre, uçtan uca şifreli.",
     "contacts": "Yazıştığınız, sohbet ettiğiniz ve paylaştığınız herkes, tek bir şifreli adres defterinde.",
     "mail": "Postalarınız: diğer Kutup kullanıcılarıyla uçtan uca şifreli, başkalarından gelenler ulaştığı anda şifrelenir.",
-    "pass": "Parolalarınız, Depo'daki KeePass kasalarında; çevrimdışı ve KeePassXC ile de kullanılabilir."
+    "pass": "Parolalarınız, Depo'daki KeePass kasalarında; çevrimdışı ve KeePassXC ile de kullanılabilir.",
+    "calendar": "Etkinlikleriniz ve takvimleriniz, şifreli; sunucunuz yalnızca hatırlatmak için gereken saatleri bilir."
   },
   "settings": {
     "account": {
@@ -790,6 +791,16 @@
         "on": "Herkese açık",
         "code": "Davet koduyla",
         "off": "Kapalı"
+      },
+      "calendar": "Takvim",
+      "calendarHint": "Her hesabın Takvim'de tutabileceklerinin sınırları.",
+      "calendarLimits": {
+        "calendarsPerAccount": "Hesap başına takvim",
+        "calendarsPerAccountHint": "Bir hesabın sahip olabileceği takvim sayısı.",
+        "calendarEventsPerCalendar": "Takvim başına etkinlik",
+        "calendarEventsPerCalendarHint": "Bir takvimin barındırabileceği etkinlik sayısı.",
+        "calendarSyncBatch": "Eşitleme başına değişiklik",
+        "calendarSyncBatchHint": "Bir isteğin taşıyabileceği etkinlik değişikliği sayısı."
       }
     },
     "federation": {

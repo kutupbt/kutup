@@ -38,6 +38,14 @@ const MULTI_SETTINGS = [
   { field: 'chatMultiOriginRequestsPerMin', min: 1, max: 1_000_000 },
   { field: 'chatMultiOriginBytesPerMin', min: 1_048_576, max: 17_179_869_184 },
 ] as const satisfies readonly { field: keyof AdminSettings; min: number; max: number }[]
+/** Calendars (site_settings::CALENDAR_SETTINGS): each field with the server's range. */
+const CALENDAR_SETTINGS = [
+  { field: 'calendarsPerAccount', min: 1, max: 1000 },
+  { field: 'calendarEventsPerCalendar', min: 1, max: 1_000_000 },
+  { field: 'calendarSyncBatch', min: 1, max: 100 },
+] as const satisfies readonly { field: keyof AdminSettings; min: number; max: number }[]
+/** Every whole-number setting the page edits by field. */
+const NUMERIC_SETTINGS = [...MULTI_SETTINGS, ...CALENDAR_SETTINGS]
 /** The server's bounds (site_settings::validate_chat_group_capabilities_per_account). */
 const MAX_GROUP_CAPABILITIES = 100_000
 /**
@@ -64,11 +72,11 @@ export function ServerSettingsPage() {
     linkJoinsGroup: linkJoins,
     linkJoinsRelay: linkJoins,
     ...Object.fromEntries(
-      MULTI_SETTINGS.map(({ field, min, max }) => {
+      NUMERIC_SETTINGS.map(({ field, min, max }) => {
         const range = t('admin.settings.multi.range', { min, max })
         return [field, z.coerce.number<number>().int(range).min(min, range).max(max, range)]
       }),
-    ) as Record<(typeof MULTI_SETTINGS)[number]['field'], z.ZodNumber>,
+    ) as Record<(typeof NUMERIC_SETTINGS)[number]['field'], z.ZodNumber>,
     groupCapabilities: z.coerce.number<number>().int(t('admin.settings.groupCapabilitiesRange')).min(1, t('admin.settings.groupCapabilitiesRange')).max(MAX_GROUP_CAPABILITIES, t('admin.settings.groupCapabilitiesRange')),
     avatarMax: z.coerce.number<number>().refine((value) => (AVATAR_LENGTHS as readonly number[]).includes(value), t('admin.settings.groupAvatarMaxRange')),
     avatarStorage: z.coerce.number<number>().int(t('admin.settings.groupAvatarStorageRange')).max(MAX_AVATAR_STORAGE, t('admin.settings.groupAvatarStorageRange')),
@@ -87,7 +95,7 @@ export function ServerSettingsPage() {
       linkJoinsGroup: settings.data.chatGroupLinkJoinsPerRelayGroupPerMin,
       linkJoinsRelay: settings.data.chatGroupLinkJoinsPerRelayPerMin,
       groupCapabilities: settings.data.chatGroupCapabilitiesPerAccount,
-      ...Object.fromEntries(MULTI_SETTINGS.map(({ field }) => [field, settings.data[field]])),
+      ...Object.fromEntries(NUMERIC_SETTINGS.map(({ field }) => [field, settings.data[field]])),
       avatarMax: settings.data.chatGroupAvatarMaxBytes,
       avatarStorage: settings.data.chatGroupAvatarStoragePerGroupBytes,
       avatarPending: settings.data.chatGroupAvatarPendingSeconds,
@@ -109,7 +117,7 @@ export function ServerSettingsPage() {
         chatGroupLinkJoinsPerRelayGroupPerMin: v.linkJoinsGroup,
         chatGroupLinkJoinsPerRelayPerMin: v.linkJoinsRelay,
         chatGroupCapabilitiesPerAccount: v.groupCapabilities,
-        ...Object.fromEntries(MULTI_SETTINGS.map(({ field }) => [field, v[field]])),
+        ...Object.fromEntries(NUMERIC_SETTINGS.map(({ field }) => [field, v[field]])),
         chatGroupAvatarMaxBytes: v.avatarMax,
         chatGroupAvatarStoragePerGroupBytes: v.avatarStorage,
         chatGroupAvatarPendingSeconds: v.avatarPending,
@@ -193,6 +201,17 @@ export function ServerSettingsPage() {
               <Field label={t('admin.settings.groupAvatarPending')} error={errors.avatarPending?.message} description={t('admin.settings.groupAvatarPendingHint')} required>
                 {(field) => <Input {...field} {...register('avatarPending')} type="number" min={AVATAR_PENDING_SECONDS.min} max={AVATAR_PENDING_SECONDS.max} step={1} inputMode="numeric" />}
               </Field>
+            </CardContent>
+          </Card>
+        </Section>
+        <Section title={t('admin.settings.calendar')} description={t('admin.settings.calendarHint')}>
+          <Card>
+            <CardContent className="grid gap-4 p-5 sm:grid-cols-2">
+              {CALENDAR_SETTINGS.map(({ field, min, max }) => (
+                <Field key={field} label={t(`admin.settings.calendarLimits.${field}`)} error={errors[field]?.message} description={t(`admin.settings.calendarLimits.${field}Hint`)} required>
+                  {(control) => <Input {...control} {...register(field)} type="number" min={min} max={max} step={1} inputMode="numeric" />}
+                </Field>
+              ))}
             </CardContent>
           </Card>
         </Section>

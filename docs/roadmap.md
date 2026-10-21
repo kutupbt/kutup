@@ -658,11 +658,14 @@ arrival, and direct sending. Phases, each with its own plan before code:
   sender's own DKIM signature surviving. Stalwart's DKIM2 (0.16.12+) is the
   successor; turn it on once a major receiver verifies DKIM2
   ([`plans/mail-forwarding.md`](plans/mail-forwarding.md), "ARC").
-- **D. Calendar** (next, decided 2026-10-19): starts once the work in
-  flight is done (Chat groups slice 1, Mail forwarding, Chat contacts sync).
-  Proton Calendar is the reference: per-calendar keys, sharing, iTIP
-  invitations over Mail, reminders; no CalDAV (as Proton). A plan note comes
-  first, copying Proton's code. Replaces Chat meetings' `.ics` download.
+- **D. Calendar** ([`plans/calendar.md`](plans/calendar.md)): E1 is built,
+  personal calendars at `calendar.<domain>` (keys, encrypted names and
+  events, day, week and month views, the editor with time zones). Next:
+  E2 recurrence, reminders (web push and email) and `.ics` import and
+  export; E3 sharing, links and busy/free; E4 invitations over Mail; E5
+  feeds from a URL, Google import and Chat meetings. The view settings (zone,
+  week start, clock) are kept per device until E2 moves them to the account.
+  No CalDAV (as Proton). Replaces Chat meetings' `.ics` download (E5).
 - **Groups** ([`plans/mail-groups.md`](plans/mail-groups.md), agreed
   2026-10-10; G1 done): distribution lists and shared mailboxes with
   their own storage quota, owner/manager/member roles and post policies;

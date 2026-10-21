@@ -106,6 +106,7 @@ services:
       KUTUP_CONTACTS_URL: ${KUTUP_CONTACTS_URL:-}
       KUTUP_MAIL_URL: ${KUTUP_MAIL_URL:-}
       KUTUP_PASS_URL: ${KUTUP_PASS_URL:-}
+      KUTUP_CALENDAR_URL: ${KUTUP_CALENDAR_URL:-}
       # Who may send mail to outside addresses: off, admins or on
       # (docs/self-hosting.md, "Mail").
       MAIL_OUTSIDE_SENDING: ${MAIL_OUTSIDE_SENDING:-off}
@@ -258,6 +259,7 @@ services:
       KUTUP_CONTACTS_URL: ${KUTUP_CONTACTS_URL:-}
       KUTUP_MAIL_URL: ${KUTUP_MAIL_URL:-}
       KUTUP_PASS_URL: ${KUTUP_PASS_URL:-}
+      KUTUP_CALENDAR_URL: ${KUTUP_CALENDAR_URL:-}
 
   nginx:
     image: nginx:alpine
