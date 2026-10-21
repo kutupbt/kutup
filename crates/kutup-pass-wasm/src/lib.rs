@@ -220,9 +220,9 @@ impl Vault {
     /// secrets"), sealed under the master key for `binding` and vault
     /// `file_id`: the key this vault was opened or made with, so it is known
     /// to open it. `generated`: its password is one Kutup Pass made, kept to
-    /// be shown. Base64. Fails for a vault opened with a kept key (only its
-    /// password's hash is known here), and after `changeKey` until `save`
-    /// (Drive's copy still opens with the old key).
+    /// be shown (then the key must hold the password itself, not only its
+    /// hash). Base64. Fails after `changeKey` until `save` (Drive's copy
+    /// still opens with the old key).
     #[wasm_bindgen(js_name = keepKey)]
     pub fn keep_key(
         &self,
@@ -242,8 +242,13 @@ impl Vault {
             binding,
             &vault_id(file_id)?,
             revision_arg(revision)?,
+            // This vault's own key, never bytes from the page.
             &self.key,
-            generated,
+            if generated {
+                kutup_pass::kept::PasswordKind::Generated
+            } else {
+                kutup_pass::kept::PasswordKind::Chosen
+            },
         )
         .map_err(js_error)?;
         Ok(STANDARD.encode(sealed))
