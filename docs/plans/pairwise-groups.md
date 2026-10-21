@@ -1028,12 +1028,12 @@ them on pseudonyms (§3).
   capability" rule.
   - The token is short-lived. Its identity is the pseudonym plus a random
     per-call device tag, so the SFU never sees an account.
-  - **Media goes through the member's own server's TURN, with relay forced**
-    (`iceTransportPolicy: "relay"`, through the `turn.` host Kutup already
-    runs). Otherwise each participant's IP would reach the home's SFU next to
-    their pseudonym, a stronger link than the request path. The home's SFU
-    then sees only member servers' TURN addresses. The cost is relay bandwidth
-    on member servers.
+  - **Members connect to the home's SFU directly**, signalling and media, as
+    Signal's clients do (the user, 2026-10-21): the home sees each
+    participant's network address and device details next to that call's
+    opaque identity, and so next to the pseudonym. Identities and rooms are
+    per call, so this ties one participant to one pseudonym in one call. The
+    slice 4 server design (§11) states it in full.
   - Participants learn which member is which from the frame-key messages, which
     are pairwise and from verified members.
   - Today's `group_calls.rs` and its federation route are replaced. The meeting
@@ -1296,7 +1296,7 @@ own fallback path (§1).
 | 1. Usable groups | `kutup-crypto` derivations; state and change formats (plain and encrypted parts) in `kutup-chat-proto`, with the server's check list, reviewed by the second session; pseudonyms, bindings, slots and claims; the anonymous route's client side (HPKE encapsulation, signed requests); the state engine (verify, apply, catch up, joining, forks, the `chatGroups` scope) for create, add, claim, remove, leave, admin roles, title, timer and profile keys; sender keys, the book, the per-device sealed send through the batch request, `409`/`410`, key replacement, retry and resend; a basic UI (create, list, thread, members, admin, title, leave, message request); en and tr; e2e specs on one and two servers | State, changes with the server-side checks on pseudonyms (§3), logs and the pseudonym ACL; the anonymous route (the HPKE gateway on the home, the relay on every server, replay and rate limits); the sealed batch request and its federated transaction; the sealed route for group members who aren't contacts; limits; live tests |
 | 2. Sending once | Multi-recipient encryption, group capabilities and their rotation, the `404` handling; lifting the 64 cap | The multi-recipient route with shared-payload storage, capability publishing, the destination split |
 | 3. Links and settings | Invite links, link joins and requests by pseudonym, approval, access control, description and avatar, announcements-only, banning, ending a group; their UI and specs | Join info through the anonymous route, link checks, requests, avatar blobs, bans |
-| 4. Calls | Per-participant frame keys with our LiveKit key provider, rotation on leaving and on removal, forced TURN relay, ringing below 16, the call UI | The SFU token for pseudonyms through the anonymous route, removal through LiveKit's admin API, TURN capacity for forced relay |
+| 4. Calls | Per-participant frame keys with our LiveKit key provider, rotation on leaving and on removal, ringing below 16, the call UI | The SFU token for pseudonyms through the anonymous route, removal through LiveKit's admin API and its webhook |
 | 5. MLS out | Client and core removal | Server removal and the migration |
 
 **Estimate (honest, working days of one session).** The second session's
@@ -1800,38 +1800,40 @@ lifetimes (to put removed members out); members learn whose identity is whose
 from the frame-key messages (pairwise, from verified members) and from the
 peek (sealed to the asking member).
 
-**3. Signalling through the member's own server.** livekit-client opens the
-SFU's WebSocket with the token and the browser's details in the URL (and in
-newer protocol versions a `join_request` with its `ClientInfo`): sdk,
-version, operating system, browser, device model, network. Opened directly,
-the home would learn the member's address and a device fingerprint next to an
-identity of its group. **(Pending the user's decision; recommended.)** So it
-goes through the member's own server, as every other group request does:
-- the token answer's `url` points at the member's own server
-  (`wss://<own>/api/chat/group-calls/rtc/<home>`), opened with a one-time
-  ticket of the signed-in account;
-- that server opens the home's federation endpoint
-  (`/api/fed/chat/group-calls/rtc`, a signed upgrade) and passes frames both
-  ways; it forwards only the token and the protocol's own options
-  (`auto_subscribe`, `adaptive_stream`, `protocol`, `reconnect`, `sid`) and
-  drops the browser's details (in a `join_request`, it clears `ClientInfo`
-  but the protocol version and SDK);
-- the home's endpoint passes them to its SFU's `/rtc`; neither server logs
-  the query string;
-- what the member's own server reads is a room name for one call and an
-  opaque identity, never the group or the pseudonym; the home sees member
-  servers' addresses, never members'.
-- The relayed WebSocket counts against per-account and server-wide limits
-  (administrators' settings).
+**3. Signalling goes to the home's SFU directly (the user, 2026-10-21).**
+livekit-client opens the SFU's WebSocket with the token in the URL, and the
+browser's details (sdk, version, operating system, browser, device model,
+network; in newer protocol versions inside the `join_request`'s
+`ClientInfo`). The member's browser opens it **directly**, as Signal's
+clients reach Signal's SFU, so:
+- **the home learns each participant's network address and device details
+  next to that call's opaque identity**, and through the identity map, next
+  to the member's pseudonym. It still never learns the account. The user
+  accepted this limit (2026-10-21); it is told plainly here, in 10, and in
+  docs/chat-calls.md "What servers learn".
+- What keeps it small: identities and rooms are per call (1, 2), so an
+  address ties one participant to one pseudonym in one call, not calls
+  together through the SFU's records.
+- The client sends as little as the SDK allows: no device model or network
+  type it can leave out of `ClientInfo`, and no name or metadata.
+- The token travels in the URL's query (`access_token`); the home, its SFU
+  and its proxy never log query strings on the `/rtc` path (nginx's log
+  format for that location drops `$args`; LiveKit logs no query).
+- The relay through the member's own server, which would have hidden the
+  address and device details, was considered and not chosen: it costs a
+  relayed WebSocket per participant on every member server for a limit the
+  user accepts.
 
-**4. Media through the member's own TURN.** The client sets `iceServers` to
-its own server's TURN only, relay forced (livekit-client then ignores the
-SFU's ICE servers); with none configured, it doesn't join. So the SFU's UDP
-range (50000–60000 by default) must be reachable from other servers' TURN;
-self-hosting.md says so. TURN capacity follows: per-user and total quotas and
-a bandwidth cap per allocation become administrators' settings applied to
-coturn, with first values sized for calls (a 75-person call is 75 relayed
-streams in and out of each member server's TURN).
+**4. Media to the home's SFU, as Signal's.** With the address already
+known to the home from signalling, forcing media through the member's own
+TURN would hide nothing from it and cost relay bandwidth on every member
+server. So the client uses ordinary ICE to the SFU (its own server's TURN as
+a fallback, as for direct calls), and the person's "Always relay calls"
+setting still forces relay through their own TURN for those who want it. The
+SFU's UDP range (50000–60000 by default) must be reachable from browsers and
+from other servers' TURN; self-hosting.md says so. TURN quotas (per user,
+total, bandwidth per allocation) become administrators' settings applied to
+coturn.
 
 **5. `CallToken` (operation 6).** Member-signed through the anonymous route;
 its body is `{ "deviceTag" }` (16 random bytes, fresh per call and device).
@@ -1878,14 +1880,16 @@ participants. All administrators' settings.
 
 **10. What each server learns.**
 - The home and its SFU: per participant an opaque identity it maps to a
-  pseudonym; join and leave times; how many are in the call, how long it
-  lasts and who is speaking when (LiveKit's audio levels); member servers'
-  addresses. Never an account, a member's address, its device details
-  (relayed, point 3) or media.
-- A member's own server: that its user is in a call on that home, when, and
-  for how long (the relayed WebSocket and TURN traffic); two of its users in
-  the same call room at once likely share a group. Never which group, never
-  the pseudonym.
+  pseudonym, **the participant's network address and device details** (3,
+  accepted by the user); join and leave times; how many are in the call, how
+  long it lasts and who is speaking when (LiveKit's audio levels). Never an
+  account or media. An address seen in calls of several groups can link the
+  pseudonyms behind it across those groups, as an address can on any server
+  a person connects to.
+- A member's own server: the anonymous-route requests it relays (token and
+  peek: that its user is in some group's call on that home, and when), and
+  TURN traffic when the person relays. Never which group, never the
+  pseudonym.
 - docs/chat-calls.md and the threat model say so.
 
 **Client parts** (the third session):
@@ -1895,8 +1899,9 @@ participants. All administrators' settings.
   HKDF step) and sends the joiner only the ratcheted key, so a joiner can't
   open earlier media; the others ratchet within the key provider's window;
 - on a leave or a removal, a fresh key, switched to at once;
-- its own key provider, the ICE settings of 4, no data channel, the peek
-  cadence of 6, and the call UI off MLS.
+- its own key provider, the ICE settings of 4, `ClientInfo` kept to what the
+  SDK requires (3), no data channel, the peek cadence of 6, and the call UI
+  off MLS.
 
 **Operating it.** `CHAT_SFU_URL`, `CHAT_SFU_API_KEY` and
 `CHAT_SFU_API_SECRET` only in the home's environment; LiveKit's webhook to the
@@ -1912,16 +1917,16 @@ for `chat_group_calls` (one row per group) and the identity map.
 **Settings** (administrators', Server settings): the room's maximum
 participants (75), empty and departure timeouts (300 s, 60 s), the token's
 lifetime (600 s), tokens and peeks per group and per pseudonym a minute (120,
-240; 12, 24), concurrent call rooms and participants on the server, relayed
-call WebSockets per account, TURN quotas and bandwidth, and the ring limit
-(16).
+240; 12, 24), concurrent call rooms and participants on the server, TURN
+quotas and bandwidth, and the ring limit (16).
 
 **Tests.** Unit: identities, the room's configuration and the grants in the
 token, the era from the room name. Live, one server with the test stack's
 LiveKit: a token and a peek, a non-member's and a requester's `NotFound`, one
 room shared by concurrent token requests, a removed member put out on
 reconnecting, the room deleted on `Terminate`, the budgets. Two servers: a
-member on B joins A's room through B's relay, and A sees B's address only.
+member on B gets a token through B's relay and joins A's room, and A's
+access log for `/rtc` holds no token.
 
 ## Decisions (the user, 2026-10-17)
 

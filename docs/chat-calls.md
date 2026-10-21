@@ -519,6 +519,16 @@ It never sees who the participants are, the group, or the media. Other
 servers see only the federated token request (room id and tag) from their
 accounts.
 
+**Group calls on pairwise groups (planned, slice 4 of
+[pairwise-groups.md](plans/pairwise-groups.md)):** members connect to the
+group's server's SFU directly, as Signal's clients do. That server then sees
+each participant's **network address and device details** (browser,
+operating system, SDK) next to the call's identity, which it maps to the
+member's per-group pseudonym, never to an account. Identities and rooms are
+new for every call. An address seen in calls of several groups can link the
+pseudonyms behind it, as an address can on any server a person connects to.
+The token in the WebSocket's query is never logged.
+
 For meetings, the host additionally learns that a meeting exists, which
 account made it and when, when its sealed details change, whether it has a
 waiting room, how many people knock and when each is let in or turned away,
