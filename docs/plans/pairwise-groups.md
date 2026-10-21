@@ -1808,7 +1808,8 @@ is `GroupCallStateV1 { eraId?, participants: [identity] }`, from LiveKit's
 `ListParticipants`. The client maps each identity's pseudonym to a verified
 member for "N in the call" and the join button, without a token. Budgeted per
 pseudonym and per group (a setting, 240 a minute at first). An absent or
-empty room has no era.
+empty room is an ordinary answer, no era and no participants, never an
+error, so the banner can ask cheaply.
 
 **4. Removal and ending.**
 - After the home commits a change that drops members (`RemoveMember`, `Ban`,
