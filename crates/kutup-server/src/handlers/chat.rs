@@ -1669,9 +1669,9 @@ pub(crate) async fn consume_anonymous_rate(
     tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
     scope_type: &str,
     scope_digest: &[u8; 32],
-    limit: i64,
-    window_seconds: i64,
+    budget: crate::ratelimit::Limit,
 ) -> AppResult<()> {
+    let (limit, window_seconds) = crate::ratelimit::budget(budget);
     let count = anonymous_count(tx, scope_type, scope_digest, 1, window_seconds).await?;
     if count > limit {
         let metric_scope = match scope_type {
@@ -1728,7 +1728,13 @@ pub(crate) async fn load_user_bundles(
         if !constant_time_capability_hash_eq(capability, &stored) {
             return Err(AppError::not_found("sealed delivery unavailable"));
         }
-        consume_anonymous_rate(&mut tx, "capability_bundle", capability, 30, 60).await?;
+        consume_anonymous_rate(
+            &mut tx,
+            "capability_bundle",
+            capability,
+            crate::ratelimit::Limit::SealedCapabilityBundles,
+        )
+        .await?;
     }
 
     let account = crate::account_ids::local(&state.config.chat_server_name, target_id)?;
@@ -2286,8 +2292,20 @@ pub(crate) async fn store_sealed_messages(
         return Err(AppError::not_found("sealed delivery unavailable"));
     }
 
-    consume_anonymous_rate(tx, "capability_minute", &presented_hash, 120, 60).await?;
-    consume_anonymous_rate(tx, "capability_day", &presented_hash, 10_000, 86_400).await?;
+    consume_anonymous_rate(
+        tx,
+        "capability_minute",
+        &presented_hash,
+        crate::ratelimit::Limit::SealedCapabilityMinute,
+    )
+    .await?;
+    consume_anonymous_rate(
+        tx,
+        "capability_day",
+        &presented_hash,
+        crate::ratelimit::Limit::SealedCapabilityDay,
+    )
+    .await?;
     let recipient_digest: [u8; 32] = Sha256::digest(
         [
             b"kutup/sealed-recipient-rate/v1\0".as_slice(),
@@ -2296,7 +2314,13 @@ pub(crate) async fn store_sealed_messages(
         .concat(),
     )
     .into();
-    consume_anonymous_rate(tx, "recipient", &recipient_digest, 120, 60).await?;
+    consume_anonymous_rate(
+        tx,
+        "recipient",
+        &recipient_digest,
+        crate::ratelimit::Limit::SealedRecipient,
+    )
+    .await?;
     if let Some(origin) = federation_origin {
         let origin_digest: [u8; 32] = Sha256::digest(
             [
@@ -2306,7 +2330,13 @@ pub(crate) async fn store_sealed_messages(
             .concat(),
         )
         .into();
-        consume_anonymous_rate(tx, "federation_origin", &origin_digest, 600, 60).await?;
+        consume_anonymous_rate(
+            tx,
+            "federation_origin",
+            &origin_digest,
+            crate::ratelimit::Limit::SealedOrigin,
+        )
+        .await?;
     }
 
     let send_id = Uuid::parse_str(&request.send_id)

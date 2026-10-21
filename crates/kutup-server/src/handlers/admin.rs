@@ -840,6 +840,7 @@ pub async fn get_settings(State(state): State<AppState>, _admin: AdminUser) -> A
         "chatGroupAvatarMaxBytes": avatar.max_bytes,
         "chatGroupAvatarStoragePerGroupBytes": avatar.storage_bytes,
         "chatGroupAvatarPendingSeconds": avatar.pending_seconds,
+        "passVaultMaxBytes": crate::site_settings::pass_vault_max_bytes(&state.pool).await?,
     });
     if let Some(object) = settings.as_object_mut() {
         object.extend(numeric);
@@ -873,6 +874,7 @@ pub struct UpdateSettingsRequest {
     chat_group_avatar_storage_per_group_bytes: Option<Option<i64>>,
     #[serde(deserialize_with = "present")]
     chat_group_avatar_pending_seconds: Option<Option<i64>>,
+    pass_vault_max_bytes: Option<i64>,
 }
 
 /// A field that is present: `Some(None)` for `null`, so a missing field
@@ -912,8 +914,13 @@ pub async fn update_settings(
         && req.chat_group_avatar_max_bytes.is_none()
         && req.chat_group_avatar_storage_per_group_bytes.is_none()
         && req.chat_group_avatar_pending_seconds.is_none()
+        && req.pass_vault_max_bytes.is_none()
     {
         return Err(AppError::bad_request("at least one setting is required"));
+    }
+    if let Some(value) = req.pass_vault_max_bytes {
+        crate::site_settings::validate_pass_vault_max_bytes(value)
+            .map_err(AppError::bad_request)?;
     }
     if req
         .default_storage_quota_bytes
@@ -1030,6 +1037,10 @@ pub async fn update_settings(
         ),
         (crate::site_settings::NAME_HOLD_DAYS, req.name_hold_days),
         (
+            crate::site_settings::PASS_VAULT_MAX_BYTES,
+            req.pass_vault_max_bytes,
+        ),
+        (
             crate::site_settings::OLD_ADDRESS_RECEIVE_DAYS,
             req.old_address_receive_days,
         ),
@@ -1121,6 +1132,7 @@ pub async fn update_settings(
             "chatGroupAvatarMaxBytes": req.chat_group_avatar_max_bytes,
             "chatGroupAvatarStoragePerGroupBytes": req.chat_group_avatar_storage_per_group_bytes,
             "chatGroupAvatarPendingSeconds": req.chat_group_avatar_pending_seconds,
+            "passVaultMaxBytes": req.pass_vault_max_bytes,
         }),
     )
     .await;

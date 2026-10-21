@@ -1,4 +1,4 @@
-import { LockKeyhole, LockKeyholeOpen, Plus, Vault } from 'lucide-react'
+import { FileUp, LockKeyhole, LockKeyholeOpen, Plus, Vault } from 'lucide-react'
 import { useState } from 'react'
 import { toast } from 'sonner'
 import { useTranslation } from 'react-i18next'
@@ -15,6 +15,8 @@ import { useVaultSession } from '../sync/openVaults'
 import { usePinStatus } from '../sync/pin'
 import { SITE_ICON_MODES, useSaveSiteIconsMode, useSiteIconsMode, type SiteIconsMode } from '../sync/siteIcons'
 import { CreateVaultDialog } from './CreateVaultDialog'
+import { UploadVaultDialog } from './UploadVaultDialog'
+import { VaultMenu } from './VaultMenu'
 import { PinDialog, type PinAction } from './PinDialog'
 
 function VaultCard({ vault }: { vault: VaultFile }) {
@@ -22,10 +24,10 @@ function VaultCard({ vault }: { vault: VaultFile }) {
   const open = Boolean(useVaultSession(vault.file.id))
   const where = vault.folder.isRoot ? t('vaults.myFiles') : (vault.folder.name ?? t('vaults.unnamedFolder'))
   return (
-    <li>
+    <li className="flex items-center gap-1">
       <Link
         to={`/v/${vault.file.id}`}
-        className="flex items-center gap-4 rounded-lg border border-border bg-card p-4 transition-colors hover:bg-accent/50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+        className="flex min-w-0 flex-1 items-center gap-4 rounded-lg border border-border bg-card p-4 transition-colors hover:bg-accent/50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
       >
         <span className="grid size-10 shrink-0 place-items-center rounded-md bg-primary/10 text-primary">
           <Vault className="size-5" aria-hidden />
@@ -45,6 +47,7 @@ function VaultCard({ vault }: { vault: VaultFile }) {
           <LockKeyhole className="size-4 text-muted-foreground" aria-label={t('vaults.locked')} />
         )}
       </Link>
+      <VaultMenu vault={vault} />
     </li>
   )
 }
@@ -161,6 +164,7 @@ export function VaultsPage({ creating: startCreating = false }: { creating?: boo
   const [params] = useSearchParams()
   const { vaults, loading, error } = useVaultFiles()
   const [creating, setCreating] = useState(startCreating)
+  const [uploading, setUploading] = useState(false)
   const folderId = startCreating ? params.get('folder') : null
   if (loading) return <LoadingPanel label={t('vaults.loading')} />
   return (
@@ -169,10 +173,16 @@ export function VaultsPage({ creating: startCreating = false }: { creating?: boo
         title={t('vaults.title')}
         description={t('vaults.description')}
         actions={
-          <Button onClick={() => setCreating(true)}>
-            <Plus />
-            {t('vaults.new')}
-          </Button>
+          <div className="flex flex-wrap gap-2">
+            <Button variant="outline" onClick={() => setUploading(true)} data-testid="vault-upload">
+              <FileUp />
+              {t('upload.open')}
+            </Button>
+            <Button onClick={() => setCreating(true)}>
+              <Plus />
+              {t('vaults.new')}
+            </Button>
+          </div>
         }
       />
       {error ? <Alert variant="error">{t('vaults.loadFailed')}</Alert> : null}
@@ -181,10 +191,16 @@ export function VaultsPage({ creating: startCreating = false }: { creating?: boo
           title={t('vaults.emptyTitle')}
           description={t('vaults.emptyDescription')}
           action={
-            <Button onClick={() => setCreating(true)}>
-              <Plus />
-              {t('vaults.new')}
-            </Button>
+            <div className="flex flex-wrap justify-center gap-2">
+              <Button variant="outline" onClick={() => setUploading(true)}>
+                <FileUp />
+                {t('upload.open')}
+              </Button>
+              <Button onClick={() => setCreating(true)}>
+                <Plus />
+                {t('vaults.new')}
+              </Button>
+            </div>
           }
         />
       ) : (
@@ -197,6 +213,7 @@ export function VaultsPage({ creating: startCreating = false }: { creating?: boo
       <AutoLockSetting />
       <SiteIconsSetting />
       <p className="mt-8 max-w-3xl text-xs text-muted-foreground">{t('vaults.keepassNote')}</p>
+      <UploadVaultDialog open={uploading} onOpenChange={setUploading} />
       <CreateVaultDialog
         open={creating}
         folderId={folderId}

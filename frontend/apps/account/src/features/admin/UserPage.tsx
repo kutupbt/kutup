@@ -34,6 +34,7 @@ import {
 import { OneUseSecret } from '@kutup/session/reauth'
 import { bytesToGib, generateTempPassword, gibToBytes } from './helpers'
 import { MailSendingCard } from './MailSending'
+import { AccountRateLimits } from './RateLimitsPage'
 import { UserStatus } from './UsersPage'
 import { ReauthLockedError, WrongPasswordError } from '@kutup/session/reauth'
 
@@ -326,6 +327,10 @@ export function UserPage() {
 
       <Section title={t('admin.user.quotas')} description={t('admin.user.quotasHint')}>
         <Card className="p-0"><Quotas user={user} /></Card>
+      </Section>
+
+      <Section title={t('admin.rateLimits.accountTitle')} description={t('admin.rateLimits.accountHint')}>
+        <AccountRateLimits userId={user.id} />
       </Section>
 
       <Section title={t('admin.user.recovery')} description={t('admin.user.recoveryHint')}>

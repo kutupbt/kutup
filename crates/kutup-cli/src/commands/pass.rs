@@ -138,6 +138,8 @@ fn secrets(
 struct KeptVault {
     file_id: String,
     name: String,
+    /// What has become of the vault: only an open one's key is used.
+    state: crate::api::pass::VaultSecretState,
 }
 
 fn ls(profile: &str, json: bool) -> Result<()> {
@@ -150,6 +152,7 @@ fn ls(profile: &str, json: bool) -> Result<()> {
         vaults.push(KeptVault {
             file_id: row.file_id,
             name,
+            state: row.state,
         });
     }
     if json {
@@ -157,8 +160,15 @@ fn ls(profile: &str, json: bool) -> Result<()> {
     } else if vaults.is_empty() {
         println!("No vault keys kept.");
     } else {
+        use crate::api::pass::VaultSecretState;
         for vault in vaults {
-            println!("{}  {}", vault.file_id, vault.name);
+            let note = match vault.state {
+                VaultSecretState::Open => "",
+                VaultSecretState::Trashed => "  (in the trash)",
+                VaultSecretState::Unreachable => "  (not shared with you now)",
+                VaultSecretState::Gone => "  (deleted for good: `kutup pass forget` it)",
+            };
+            println!("{}  {}{note}", vault.file_id, vault.name);
         }
     }
     Ok(())

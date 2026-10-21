@@ -3,10 +3,12 @@
 //! Each person may keep, per vault they can open, the vault's password and
 //! key file sealed under their master key (`kutup_crypto::pass_vault`), so
 //! Kutup Pass and `kutup sync` unlock vaults with the Kutup sign-in. The
-//! server stores the envelopes and checks only their public header. A record
-//! of a vault its owner cannot reach now (unshared, perhaps for a moment) is
-//! hidden, never deleted on a read; it goes with the vault (purged) or when
-//! its owner forgets it. It also keeps the PIN lock (below).
+//! server stores the envelopes and checks only their public header. Every
+//! record is listed, as the account head's `passSecrets` index lists it,
+//! with what has become of its vault (`VaultSecretState`): one in the trash,
+//! out of reach now (unshared, perhaps for a moment) or gone (purged) is
+//! never deleted on a read; it goes only when its owner forgets it
+//! (docs/plans/rollback-protection.md §9). It also keeps the PIN lock (below).
 
 use axum::extract::rejection::JsonRejection;
 use axum::extract::{Path, State};
@@ -30,11 +32,28 @@ use crate::{revisions, AppState};
 /// with the envelope's header.
 const MAX_ENVELOPE_BYTES: usize = 4096 + 512;
 
+/// What has become of a secret's vault, for its owner now.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub enum VaultSecretState {
+    /// The owner can open the vault: its kept key is in use.
+    Open,
+    /// The vault is in the trash: its key waits for a restore.
+    Trashed,
+    /// The vault is there, but not for this person now (unshared, perhaps
+    /// only for a moment).
+    Unreachable,
+    /// The vault was purged: its secret waits for its owner to forget it.
+    Gone,
+}
+
 /// One vault's sealed secret.
 #[derive(Debug, Serialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct VaultSecretRow {
     file_id: String,
+    /// What has become of the vault: only an `open` one's key is used.
+    state: VaultSecretState,
     /// Base64 of the account envelope (purpose `PassVaultSecret`).
     envelope: String,
     /// The revision in the envelope's header: the base of the next keep.
@@ -66,8 +85,8 @@ pub struct ForgetVaultSecretsRequest {
     head: Option<String>,
 }
 
-/// `GET /api/pass/vault-secrets` — the caller's vault secrets, for vaults
-/// they can still open.
+/// `GET /api/pass/vault-secrets` — every one of the caller's vault secrets,
+/// as the account head lists them, each with what has become of its vault.
 #[utoipa::path(
     get,
     path = "/api/pass/vault-secrets",
@@ -80,9 +99,11 @@ pub async fn list_vault_secrets(
     user: AuthUser,
 ) -> AppResult<Response> {
     let user_id = trusted_uuid(&user.user_id)?;
-    let rows: Vec<(Uuid, Vec<u8>, OffsetDateTime, bool)> = sqlx::query_as(
-        "SELECT s.file_id, s.envelope, s.updated_at, f.deleted_at IS NOT NULL
-           FROM pass_vault_secrets s JOIN files f ON f.id = s.file_id
+    // `exists`, `trashed`: a purged vault's file row is gone (the secret has
+    // no foreign key to it).
+    let rows: Vec<(Uuid, Vec<u8>, OffsetDateTime, bool, bool)> = sqlx::query_as(
+        "SELECT s.file_id, s.envelope, s.updated_at, f.id IS NOT NULL, f.deleted_at IS NOT NULL
+           FROM pass_vault_secrets s LEFT JOIN files f ON f.id = s.file_id
           WHERE s.user_id = $1
           ORDER BY s.file_id",
     )
@@ -90,18 +111,19 @@ pub async fn list_vault_secrets(
     .fetch_all(&state.pool)
     .await?;
     let mut out = Vec::with_capacity(rows.len());
-    for (file_id, envelope, updated_at, trashed) in rows {
-        // A vault in the trash keeps its secret for a restore, unlisted.
-        if trashed {
-            continue;
-        }
-        // Out of reach now (unshared, perhaps only for a moment): hidden,
-        // never deleted on a read; a failed check fails the request. A record
-        // goes only with the vault (purged: ON DELETE CASCADE) or when its
-        // owner forgets it (the same fix as #171).
-        if !can_access_file(&state.pool, user_id, file_id).await? {
-            continue;
-        }
+    for (file_id, envelope, updated_at, exists, trashed) in rows {
+        // Listed whatever became of the vault, as the head lists it (a list
+        // one short of the head's is refused, every key with it); never
+        // deleted on a read, and a failed access check fails the request.
+        let vault = if !exists {
+            VaultSecretState::Gone
+        } else if trashed {
+            VaultSecretState::Trashed
+        } else if !can_access_file(&state.pool, user_id, file_id).await? {
+            VaultSecretState::Unreachable
+        } else {
+            VaultSecretState::Open
+        };
         let revision = account_envelope::inspect(&envelope)
             .ok()
             .and_then(|header| header.revision)
@@ -110,6 +132,7 @@ pub async fn list_vault_secrets(
             .unwrap_or(0);
         out.push(VaultSecretRow {
             file_id: file_id.to_string(),
+            state: vault,
             envelope: STANDARD.encode(envelope),
             revision,
             updated_at,
@@ -368,8 +391,13 @@ async fn forget(
 // sign-in, with the password, starts its own. Setting or removing the PIN
 // takes the account password.
 
-/// Wrong PINs in a row before the sign-in ends.
-pub const PIN_ATTEMPTS: i16 = 3;
+/// Wrong PINs in a row before the sign-in ends (`pass_pin_attempts`).
+fn pin_attempts() -> i16 {
+    i16::try_from(crate::ratelimit::value(
+        crate::ratelimit::Limit::PassPinAttempts,
+    ))
+    .unwrap_or(i16::MAX)
+}
 
 fn valid_pin(pin: &str) -> bool {
     pin.len() == 6 && pin.bytes().all(|b| b.is_ascii_digit())
@@ -573,7 +601,7 @@ pub async fn verify_pin(
     )
     .bind(sign_in)
     .bind(user_id)
-    .bind(PIN_ATTEMPTS)
+    .bind(pin_attempts())
     .fetch_optional(&state.pool)
     .await?;
     let Some(failures) = reserved else {
@@ -591,7 +619,7 @@ pub async fn verify_pin(
         return Ok(StatusCode::NO_CONTENT.into_response());
     }
     tracing::warn!(user_id = %user_id, failures, "wrong Pass PIN");
-    if failures >= PIN_ATTEMPTS {
+    if failures >= pin_attempts() {
         crate::sessions::sign_out(&state.pool, user.session.session_id).await?;
         tracing::warn!(user_id = %user_id, "Pass PIN tries used up; the sign-in was ended");
         return Ok(refusal(StatusCode::FORBIDDEN, "signedOut", Some(0)));
@@ -599,7 +627,7 @@ pub async fn verify_pin(
     Ok(refusal(
         StatusCode::FORBIDDEN,
         "wrongPin",
-        Some(PIN_ATTEMPTS - failures),
+        Some(pin_attempts() - failures),
     ))
 }
 

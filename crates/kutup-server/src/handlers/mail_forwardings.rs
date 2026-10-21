@@ -631,7 +631,7 @@ The link works for {} days. If you don't know who this is, decline or ignore thi
 }
 
 /// A fresh link for a pending (or declined) outside forwarding, at most
-/// [`forwarding::MAX_INVITES_PER_DAY`] a day. Its token, to send.
+/// `forwarding_invites` times a day. Its token, to send.
 async fn reinvite_in(
     tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
     forwarding_id: Uuid,
@@ -661,7 +661,10 @@ async fn reinvite_in(
     .bind(forwarding_id)
     .bind(&hash)
     .bind(PENDING_DAYS)
-    .bind(forwarding::MAX_INVITES_PER_DAY)
+    .bind(forwarding::limit(
+        crate::ratelimit::Limit::ForwardingInvites,
+        None,
+    ))
     .execute(&mut *savepoint)
     .await?;
     if renewed.rows_affected() != 1 {
@@ -942,7 +945,7 @@ pub struct ExternalForwarding {
 /// Confirmation-page requests one client may make in a minute.
 static EXTERNAL_LIMIT: std::sync::LazyLock<crate::ratelimit::RateLimiter> =
     std::sync::LazyLock::new(|| {
-        crate::ratelimit::RateLimiter::new(30, std::time::Duration::from_secs(60))
+        crate::ratelimit::RateLimiter::registered(crate::ratelimit::Limit::ForwardingConfirmations)
     });
 
 /// The confirmation page is public: limited per client, keyed as the

@@ -42,6 +42,8 @@ interface PassWasm {
   openKept(envelope: string, masterKey: Uint8Array, binding: string, fileId: string): unknown
   importPreview(contents: Uint8Array, provider: string | null | undefined): unknown
   importFormats(): unknown
+  probeVault(contents: Uint8Array): unknown
+  resealKeptKey(envelope: string, masterKey: Uint8Array, binding: string, from: string, to: string, revision: number): string
   generateKeyFile(): Uint8Array
 }
 
@@ -124,6 +126,10 @@ async function run(request: Request): Promise<unknown> {
       return module.importPreview(request.contents, request.provider)
     case 'importFormats':
       return module.importFormats()
+    case 'probeVault':
+      return module.probeVault(request.contents)
+    case 'resealKeptKey':
+      return module.resealKeptKey(request.envelope, request.masterKey, request.binding, request.from, request.to, request.revision)
   }
 }
 

@@ -381,6 +381,10 @@ async fn main() -> anyhow::Result<()> {
 
     // Periodic pruning of the rate-limit + TOTP-block maps (replaces the Go init goroutines).
     ratelimit::spawn_cleanup();
+    // The rate limits administrators set, over the first values, and their
+    // reload every 30 seconds (docs/plans/admin-rate-limits.md §3).
+    ratelimit::reload(&pool).await?;
+    ratelimit::spawn_reload(pool.clone());
 
     // Background maintenance jobs (version cleanup / quota reconcile / uploads sweeper /
     // trash retention).
@@ -2370,6 +2374,19 @@ fn build_router(state: AppState) -> Router {
                 .route(
                     "/api/admin/settings",
                     get(admin::get_settings).put(admin::update_settings),
+                )
+                .route("/api/admin/rate-limits", get(handlers::rate_limits::list))
+                .route(
+                    "/api/admin/rate-limits/:key",
+                    put(handlers::rate_limits::update),
+                )
+                .route(
+                    "/api/admin/users/:id/rate-limits",
+                    get(handlers::rate_limits::account_list),
+                )
+                .route(
+                    "/api/admin/users/:id/rate-limits/:key",
+                    put(handlers::rate_limits::account_update),
                 )
                 .route(
                     "/api/admin/registration-codes",

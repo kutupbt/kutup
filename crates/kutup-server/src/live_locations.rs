@@ -30,7 +30,7 @@ use uuid::Uuid;
 use crate::error::{AppError, AppResult};
 use crate::federation::{AuthenticatedFederationRequest, FederationRequestSpec, FederationStack};
 use crate::middleware::AuthUser;
-use crate::ratelimit::RateLimiter;
+use crate::ratelimit::{Limit, RateLimiter};
 use crate::AppState;
 
 pub const WRITE_HEADER: &str = "x-kutup-live-write";
@@ -44,10 +44,10 @@ const SWEEP_INTERVAL: Duration = Duration::from_secs(60);
 
 /// New streams per person: a share makes one per hour and one per leave.
 static CREATE_LIMIT: LazyLock<RateLimiter> =
-    LazyLock::new(|| RateLimiter::new(60, Duration::from_secs(3600)));
+    LazyLock::new(|| RateLimiter::registered(Limit::LiveLocationStreams));
 /// Reads per person across streams: one map open on a few shares.
 static READ_LIMIT: LazyLock<RateLimiter> =
-    LazyLock::new(|| RateLimiter::new(600, Duration::from_secs(60)));
+    LazyLock::new(|| RateLimiter::registered(Limit::LiveLocationReads));
 
 fn limited() -> AppError {
     AppError::new(

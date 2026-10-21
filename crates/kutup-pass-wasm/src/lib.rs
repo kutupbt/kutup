@@ -18,6 +18,64 @@ fn js_error(message: impl std::fmt::Display) -> JsValue {
     JsError::new(&message.to_string()).into()
 }
 
+/// A vault that didn't open: its kind first (`wrongKey`, `unsupported`,
+/// `damaged`, `keyFile`, `emptyKey`), so the page says why.
+fn open_error(error: kutup_pass::kdbx::KdbxError) -> JsValue {
+    js_error(format!("{}: {error}", error.kind()))
+}
+
+/// What a file is, from its header alone: `{ kind: "supported", version:
+/// "4.1", upgrade }`, `{ kind: "unsupported", version }` or `{ kind:
+/// "notKeePass" }`.
+#[wasm_bindgen(js_name = probeVault)]
+pub fn probe_vault(contents: &[u8]) -> Result<JsValue, JsValue> {
+    #[derive(Serialize)]
+    #[serde(tag = "kind", rename_all = "camelCase")]
+    enum Probe {
+        Supported { version: String, upgrade: bool },
+        Unsupported { version: String },
+        NotKeePass,
+    }
+    use kutup_pass::kdbx::VaultFormat;
+    to_js(&match kutup_pass::kdbx::probe(contents) {
+        VaultFormat::Supported { version, upgrade } => Probe::Supported {
+            version: format!("{}.{}", version.0, version.1),
+            upgrade,
+        },
+        VaultFormat::Unsupported { version } => Probe::Unsupported {
+            version: format!("{}.{}", version.0, version.1),
+        },
+        VaultFormat::NotKeePass => Probe::NotKeePass,
+    })
+}
+
+/// What the account keeps for vault `from` (base64), sealed for its copy `to`
+/// at `revision` (base64): the copy has the same key, so it opens with the
+/// sign-in too. Neither vault is opened.
+#[wasm_bindgen(js_name = resealKeptKey)]
+pub fn reseal_kept_key(
+    envelope: &str,
+    master_key: &[u8],
+    binding: &str,
+    from: &str,
+    to: &str,
+    revision: f64,
+) -> Result<String, JsValue> {
+    let envelope = STANDARD
+        .decode(envelope)
+        .map_err(|_| js_error("the kept key is not base64"))?;
+    let sealed = kutup_pass::kept::reseal(
+        &envelope,
+        master_key,
+        binding,
+        &vault_id(from)?,
+        &vault_id(to)?,
+        revision_arg(revision)?,
+    )
+    .map_err(js_error)?;
+    Ok(STANDARD.encode(sealed))
+}
+
 /// A new KeePassXC key file (XML v2, 32 random bytes): for the person to
 /// download, never sent anywhere.
 #[wasm_bindgen(js_name = generateKeyFile)]
@@ -121,7 +179,7 @@ impl Vault {
             Some(_) => return Err(js_error("give the password or its hash, not both")),
             None => key(password, key_file)?,
         };
-        let db = kutup_pass::open(contents, &key).map_err(js_error)?;
+        let db = kutup_pass::open(contents, &key).map_err(open_error)?;
         Ok(Vault {
             db,
             key,
@@ -198,7 +256,7 @@ impl Vault {
             Ok(db) => (db, None),
             Err(_) if theirs_password.is_some() || theirs_key_file.is_some() => {
                 let other = key(theirs_password, theirs_key_file)?;
-                let db = kutup_pass::open(theirs, &other).map_err(js_error)?;
+                let db = kutup_pass::open(theirs, &other).map_err(open_error)?;
                 (db, Some(other))
             }
             Err(error) => return Err(js_error(error)),
