@@ -250,21 +250,42 @@ pub async fn chat_group_avatar_limits(pool: &PgPool) -> Result<AvatarLimits, sql
     Ok(limits.validate().unwrap_or(default))
 }
 
-/// How many group delivery capabilities one account may publish (one per
-/// group it is in; docs/plans/pairwise-groups.md, slice 2 §2), set under
-/// Administration → Server settings.
+/// How many group delivery capabilities one account may publish
+/// (docs/plans/pairwise-groups.md, slice 2 §2), set under Administration →
+/// Server settings. Clients pad theirs to a multiple of 8 with dummies (so
+/// the count says little about how many groups an account is in), and a
+/// rotation holds the old and the new for a while: the limit is a multiple
+/// of 8, at least 16 (one group mid-rotation). 4096 at first, about 500
+/// groups with room for rotations; each capability is a 32-byte hash.
 pub const CHAT_GROUP_CAPABILITIES_PER_ACCOUNT: &str = "chat_group_capabilities_per_account";
-pub const DEFAULT_CHAT_GROUP_CAPABILITIES_PER_ACCOUNT: i64 = 1024;
+pub const DEFAULT_CHAT_GROUP_CAPABILITIES_PER_ACCOUNT: i64 = 4096;
+pub const MIN_CHAT_GROUP_CAPABILITIES_PER_ACCOUNT: i64 = 16;
+pub const MAX_CHAT_GROUP_CAPABILITIES_PER_ACCOUNT: i64 = 100_000;
+/// The block clients pad their capabilities to.
+pub const CHAT_GROUP_CAPABILITY_BLOCK: i64 = 8;
 
 pub fn validate_chat_group_capabilities_per_account(value: i64) -> Result<i64, &'static str> {
-    if (1..=100_000).contains(&value) {
+    if (MIN_CHAT_GROUP_CAPABILITIES_PER_ACCOUNT..=MAX_CHAT_GROUP_CAPABILITIES_PER_ACCOUNT)
+        .contains(&value)
+        && value % CHAT_GROUP_CAPABILITY_BLOCK == 0
+    {
         Ok(value)
     } else {
-        Err("group capabilities per account must be between 1 and 100000")
+        Err("group capabilities per account must be a multiple of 8 between 16 and 100000")
     }
 }
 
-/// The capability limit now: the stored one, else 1024.
+/// A stored limit as it applies: rounded down to a multiple of 8 and held
+/// within the bounds, never refused (a value stored before the rule).
+fn applied_capabilities_per_account(value: i64) -> i64 {
+    (value - value.rem_euclid(CHAT_GROUP_CAPABILITY_BLOCK)).clamp(
+        MIN_CHAT_GROUP_CAPABILITIES_PER_ACCOUNT,
+        MAX_CHAT_GROUP_CAPABILITIES_PER_ACCOUNT
+            - MAX_CHAT_GROUP_CAPABILITIES_PER_ACCOUNT % CHAT_GROUP_CAPABILITY_BLOCK,
+    )
+}
+
+/// The capability limit now: the stored one as it applies, else 4096.
 pub async fn chat_group_capabilities_per_account(pool: &PgPool) -> Result<i64, sqlx::Error> {
     Ok(
         sqlx::query_scalar::<_, String>("SELECT value FROM site_settings WHERE key=$1")
@@ -272,7 +293,7 @@ pub async fn chat_group_capabilities_per_account(pool: &PgPool) -> Result<i64, s
             .fetch_optional(pool)
             .await?
             .and_then(|value| value.parse::<i64>().ok())
-            .and_then(|value| validate_chat_group_capabilities_per_account(value).ok())
+            .map(applied_capabilities_per_account)
             .unwrap_or(DEFAULT_CHAT_GROUP_CAPABILITIES_PER_ACCOUNT),
     )
 }
@@ -463,16 +484,30 @@ mod tests {
     }
 
     #[test]
-    fn group_capabilities_per_account_are_bounded() {
-        assert_eq!(validate_chat_group_capabilities_per_account(1), Ok(1));
+    fn group_capabilities_are_multiples_of_eight() {
         assert_eq!(
             validate_chat_group_capabilities_per_account(
                 DEFAULT_CHAT_GROUP_CAPABILITIES_PER_ACCOUNT
             ),
-            Ok(1024)
+            Ok(4096)
         );
-        assert!(validate_chat_group_capabilities_per_account(0).is_err());
-        assert!(validate_chat_group_capabilities_per_account(100_001).is_err());
+        assert_eq!(validate_chat_group_capabilities_per_account(16), Ok(16));
+        assert_eq!(
+            validate_chat_group_capabilities_per_account(99_992),
+            Ok(99_992)
+        );
+        for refused in [0, 8, 1000 + 4, 100_000 + 8, 1001] {
+            assert!(
+                validate_chat_group_capabilities_per_account(refused).is_err(),
+                "{refused}"
+            );
+        }
+        // What was stored before the rule applies, rounded down.
+        assert_eq!(applied_capabilities_per_account(1000), 1000);
+        assert_eq!(applied_capabilities_per_account(1001), 1000);
+        assert_eq!(applied_capabilities_per_account(5), 16);
+        assert_eq!(applied_capabilities_per_account(100_000), 100_000);
+        assert_eq!(applied_capabilities_per_account(1_000_000), 100_000);
     }
 
     #[test]
