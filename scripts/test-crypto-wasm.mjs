@@ -1186,7 +1186,7 @@ assert.equal(crypto.incarnationIdOfAuthority(iv.authorityPublicKey), crypto.deri
 // address key) unlocks the calendar from its sealed passphrase, and the
 // event and metadata open as the Rust vectors say; the refused ones don't.
 if (build === 'crypto') {
-  for (const name of ['createCalendar', 'unlockCalendar', 'sealCalendarEvent', 'calendarTimeZones']) {
+  for (const name of ['createCalendar', 'unlockCalendar', 'calendarTimeZones']) {
     assert.equal(crypto[name], undefined, `${name} is in the plain crypto build`)
   }
 } else {
@@ -1197,11 +1197,15 @@ if (build === 'crypto') {
   const opened = unlocked.openEvent(v.event, [v.ownerPublicKey])
   assert.equal(opened.verified, true)
   assert.deepEqual(opened.fields, v.fields)
-  const metadata = unlocked.openMetadata(
-    { keyPacket: v.metadata.keyPacket, dataPacket: v.metadata.dataPacket, signature: v.metadata.signature },
-    [v.ownerPublicKey],
-  )
+  const sealedMetadata = { keyPacket: v.metadata.keyPacket, dataPacket: v.metadata.dataPacket, signature: v.metadata.signature }
+  const metadata = unlocked.openMetadata(sealedMetadata, v.calendarId, [v.ownerPublicKey])
   assert.deepEqual(metadata, { name: v.metadata.name, description: v.metadata.description, verified: true })
+  // Bound to its calendar: under another id, refused.
+  assert.throws(() => unlocked.openMetadata(sealedMetadata, 'another-calendar', [v.ownerPublicKey]))
+  assert.equal(unlocked.fingerprint, v.calendarFingerprint)
+  // Nothing seals to a public key handed in: only the unlocked calendar seals.
+  assert.equal(crypto.sealCalendarEvent, undefined)
+  assert.equal(crypto.sealCalendarMetadata, undefined)
   for (const refused of v.refused) {
     let accepted = false
     try {
@@ -1214,8 +1218,16 @@ if (build === 'crypto') {
   // A passphrase signed by someone else: the calendar doesn't unlock.
   assert.throws(() => crypto.unlockCalendar(...owner, passphrase, [v.calendarPublicKey], v.calendarLockedSecretKey))
   // What the browser seals, the vectors' calendar opens.
-  const sealed = crypto.sealCalendarEvent(...owner, v.calendarPublicKey, v.fields)
+  const sealed = unlocked.sealEvent(...owner, v.fields)
   assert.deepEqual(unlocked.openEvent(sealed, [v.ownerPublicKey]).fields, v.fields)
+  const renamed = unlocked.sealMetadata(...owner, v.calendarId, { name: 'Ev', description: '' })
+  assert.equal(unlocked.openMetadata(renamed, v.calendarId, [v.ownerPublicKey]).name, 'Ev')
+  // A new calendar, under the id the client drew.
+  const made = crypto.createCalendar(...owner, v.ownerPublicKey, 'c-new', { name: 'İş', description: '' }, 1790000000)
+  const opened2 = crypto.unlockCalendar(...owner, made.passphrase, [v.ownerPublicKey], made.lockedSecretKey)
+  assert.equal(opened2.openMetadata(made.metadata, 'c-new', [v.ownerPublicKey]).name, 'İş')
+  assert.equal(opened2.fingerprint, made.fingerprint)
+  opened2.free()
   // Time zones: the bundled database, as the server converts.
   assert.equal(crypto.calendarLocalToUtc('2026-10-29T09:30:00', 'Europe/Istanbul'), v.startUtc)
   assert.equal(crypto.calendarUtcToLocal(v.startUtc, 'Europe/Istanbul'), '2026-10-29T09:30:00')

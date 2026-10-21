@@ -12,9 +12,8 @@ use serde::{Deserialize, Serialize};
 
 use kutup_crypto::calendar::{
     check_signed_parts, generate_calendar_key, inspect_calendar_public_key, key_packet_to,
-    open_event, open_metadata, open_passphrase, seal_event, seal_metadata, seal_passphrase,
-    unlock_calendar_key, CalendarMetadataV1, EventPart, EventParts, Passphrase, SealedEvent,
-    SealedMetadata, SessionKey,
+    open_passphrase, seal_passphrase, unlock_calendar_key, EventPart, EventParts, Passphrase,
+    SealedEvent, SealedMetadata, SessionKey,
 };
 use kutup_crypto::calendar_event::{
     CalendarEncrypted, CalendarSigned, EventFieldsV1, EventTime, SharedEncrypted, SharedSigned,
@@ -30,6 +29,8 @@ const PATH: &str = concat!(
 #[derive(Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct Vectors {
+    /// The calendar the metadata names.
+    calendar_id: String,
     owner_secret_key: String,
     owner_public_key: String,
     passphrase: String,
@@ -197,14 +198,16 @@ fn write_vectors() {
     let passphrase = Passphrase::generate();
     let calendar = generate_calendar_key(&passphrase, 1_790_000_000).unwrap();
     let sealed = seal_passphrase(&passphrase, &[&owner_public], &owner_secret).unwrap();
-    let metadata = CalendarMetadataV1 {
-        version: 1,
-        name: "Ev".into(),
-        description: "Family, İstanbul".into(),
-    };
-    let sealed_metadata = seal_metadata(&metadata, &calendar.public_key, &owner_secret).unwrap();
+    let calendar_id = "6f1d3c2a-8b4e-4f7a-9c1d-2e3f4a5b6c7d";
+    let sealed_metadata = calendar
+        .unlocked
+        .seal_metadata(calendar_id, "Ev", "Family, İstanbul", &owner_secret)
+        .unwrap();
     let parts = parts();
-    let event = seal_event(&parts, &calendar.public_key, &owner_secret, None, None).unwrap();
+    let event = calendar
+        .unlocked
+        .seal_event(&parts, &owner_secret, None, None)
+        .unwrap();
 
     let mut refused = Vec::new();
     // The time moved after signing.
@@ -242,6 +245,7 @@ fn write_vectors() {
 
     let text = |part: &EventPart| String::from_utf8(part.data.clone()).unwrap();
     let vectors = Vectors {
+        calendar_id: calendar_id.into(),
         owner_secret_key: STANDARD.encode(&owner_secret),
         owner_public_key: STANDARD.encode(&owner_public),
         passphrase: passphrase.as_str().to_owned(),
@@ -255,8 +259,8 @@ fn write_vectors() {
             key_packet: STANDARD.encode(&sealed_metadata.key_packet),
             data_packet: STANDARD.encode(&sealed_metadata.data_packet),
             signature: sealed_metadata.signature,
-            name: metadata.name,
-            description: metadata.description,
+            name: "Ev".into(),
+            description: "Family, İstanbul".into(),
         },
         shared_signed_text: text(&event.shared_signed),
         shared_encrypted_text: parts.shared_encrypted.build().unwrap(),
@@ -309,18 +313,22 @@ fn calendar_vectors_open() {
     )
     .unwrap();
     assert_eq!(passphrase.as_str(), v.passphrase);
-    let secret = unlock_calendar_key(&b64(&v.calendar_locked_secret_key), &passphrase).unwrap();
+    let unlocked = unlock_calendar_key(&b64(&v.calendar_locked_secret_key), &passphrase).unwrap();
+    assert_eq!(hex::encode(unlocked.fingerprint()), v.calendar_fingerprint);
 
-    let (metadata, verified) = open_metadata(
-        &SealedMetadata {
-            key_packet: b64(&v.metadata.key_packet),
-            data_packet: b64(&v.metadata.data_packet),
-            signature: v.metadata.signature.clone(),
-        },
-        &secret,
-        &[&owner_public],
-    )
-    .unwrap();
+    let sealed_metadata = SealedMetadata {
+        key_packet: b64(&v.metadata.key_packet),
+        data_packet: b64(&v.metadata.data_packet),
+        signature: v.metadata.signature.clone(),
+    };
+    let (metadata, verified) = unlocked
+        .open_metadata(&sealed_metadata, &v.calendar_id, &[&owner_public])
+        .unwrap();
+    // The name and description are bound to their calendar.
+    assert_eq!(metadata.calendar_id, v.calendar_id);
+    assert!(unlocked
+        .open_metadata(&sealed_metadata, "another-calendar", &[&owner_public])
+        .is_err());
     assert!(verified);
     assert_eq!(
         (metadata.name, metadata.description),
@@ -337,7 +345,7 @@ fn calendar_vectors_open() {
         shared.dtend.unwrap().instant().unwrap().to_string(),
         v.end_utc
     );
-    let opened = open_event(&event, &secret, &[&owner_public]).unwrap();
+    let opened = unlocked.open_event(&event, &[&owner_public]).unwrap();
     assert!(opened.verified);
     assert_eq!(
         opened.parts.shared_encrypted.build().unwrap(),
@@ -373,7 +381,7 @@ fn calendar_vectors_open() {
     for case in &v.refused {
         let event = event_out(&case.event);
         let server = check_signed_parts(&event, &[&owner_public]);
-        let member = open_event(&event, &secret, &[&owner_public]);
+        let member = unlocked.open_event(&event, &[&owner_public]);
         assert!(
             server.is_err() || member.is_err() || !member.unwrap().verified,
             "{} was accepted",

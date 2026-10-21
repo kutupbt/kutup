@@ -5,12 +5,11 @@
 
 use base64::{engine::general_purpose::STANDARD, Engine as _};
 use kutup_crypto::calendar::{
-    self, CalendarMetadataV1, Passphrase, SealedEventV1, SealedMetadataV1,
+    self, Passphrase, SealedEventV1, SealedMetadataV1, UnlockedCalendarKey,
 };
 use kutup_crypto::calendar_event::{self, EventFieldsV1};
 use serde::{Deserialize, Serialize};
 use wasm_bindgen::prelude::*;
-use zeroize::Zeroizing;
 
 use crate::{decode_canonical_base64, js_error, open_mail_secret};
 
@@ -54,9 +53,17 @@ struct SealedPassphrase {
     key_packet: String,
 }
 
-/// Makes a calendar owned by the signed-in member's address key: its key,
-/// its passphrase sealed to that key and signed, and its sealed name and
-/// description.
+/// A calendar's name and description, as a client gives them.
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct Names {
+    name: String,
+    description: String,
+}
+
+/// Makes a calendar owned by the signed-in member's address key, under the
+/// id the client drew: its key, its passphrase sealed to that key and
+/// signed, and its sealed name and description bound to the id and key.
 #[wasm_bindgen(js_name = createCalendar)]
 #[allow(clippy::too_many_arguments)]
 pub fn create_calendar(
@@ -66,7 +73,8 @@ pub fn create_calendar(
     envelope_base64: &str,
     fingerprint_hex: &str,
     owner_public_key_base64: &str,
-    metadata: JsValue,
+    calendar_id: &str,
+    names: JsValue,
     created_at_secs: u32,
 ) -> Result<JsValue, JsValue> {
     let owner_secret = open_mail_secret(
@@ -77,14 +85,16 @@ pub fn create_calendar(
         fingerprint_hex,
     )?;
     let owner_public = decode_canonical_base64(owner_public_key_base64, "owner public key")?;
-    let metadata: CalendarMetadataV1 = from_js(metadata, "metadata")?;
+    let names: Names = from_js(names, "names")?;
     let passphrase = Passphrase::generate();
     let key =
         calendar::generate_calendar_key(&passphrase, created_at_secs).map_err(crypto_error)?;
     let sealed = calendar::seal_passphrase(&passphrase, &[&owner_public], &owner_secret)
         .map_err(crypto_error)?;
-    let metadata =
-        calendar::seal_metadata(&metadata, &key.public_key, &owner_secret).map_err(crypto_error)?;
+    let metadata = key
+        .unlocked
+        .seal_metadata(calendar_id, &names.name, &names.description, &owner_secret)
+        .map_err(crypto_error)?;
     to_js(&NewCalendar {
         public_key: STANDARD.encode(&key.public_key),
         locked_secret_key: STANDARD.encode(&key.locked_secret_key),
@@ -98,10 +108,11 @@ pub fn create_calendar(
     })
 }
 
-/// A calendar's key, unlocked and kept in WASM memory.
+/// A calendar's key, unlocked and kept in WASM memory. It seals to the key
+/// derived from its own secret, never to one the server lists.
 #[wasm_bindgen(js_name = UnlockedCalendar)]
 pub struct UnlockedCalendarJs {
-    secret: Zeroizing<Vec<u8>>,
+    key: UnlockedCalendarKey,
 }
 
 /// Opens the member's copy of a calendar's passphrase with the member's
@@ -137,8 +148,8 @@ pub fn unlock_calendar(
     )
     .map_err(crypto_error)?;
     let locked = decode_canonical_base64(locked_secret_key_base64, "calendar key")?;
-    let secret = calendar::unlock_calendar_key(&locked, &passphrase).map_err(crypto_error)?;
-    Ok(UnlockedCalendarJs { secret })
+    let key = calendar::unlock_calendar_key(&locked, &passphrase).map_err(crypto_error)?;
+    Ok(UnlockedCalendarJs { key })
 }
 
 #[derive(Serialize)]
@@ -169,99 +180,108 @@ impl UnlockedCalendarJs {
         let event: SealedEventV1 = from_js(event, "event")?;
         let authors = public_keys(&author_public_keys_base64)?;
         let authors: Vec<&[u8]> = authors.iter().map(Vec::as_slice).collect();
-        let opened = calendar::open_event(
-            &event.to_event().map_err(crypto_error)?,
-            &self.secret,
-            &authors,
-        )
-        .map_err(crypto_error)?;
+        let opened = self
+            .key
+            .open_event(&event.to_event().map_err(crypto_error)?, &authors)
+            .map_err(crypto_error)?;
         to_js(&OpenedEvent {
             fields: EventFieldsV1::of(&opened.parts),
             verified: opened.verified,
         })
     }
 
-    /// Opens the calendar's name and description (`SealedMetadataV1`).
+    /// The calendar key's fingerprint (hex), derived from the unlocked secret.
+    #[wasm_bindgen(getter)]
+    pub fn fingerprint(&self) -> String {
+        hex::encode(self.key.fingerprint())
+    }
+
+    /// Opens the calendar's name and description (`SealedMetadataV1`),
+    /// refused unless they name `calendar_id` and this key.
     #[wasm_bindgen(js_name = openMetadata)]
     pub fn open_metadata(
         &self,
         metadata: JsValue,
+        calendar_id: &str,
         author_public_keys_base64: Vec<String>,
     ) -> Result<JsValue, JsValue> {
         let sealed: SealedMetadataV1 = from_js(metadata, "metadata")?;
         let authors = public_keys(&author_public_keys_base64)?;
         let authors: Vec<&[u8]> = authors.iter().map(Vec::as_slice).collect();
-        let (metadata, verified) = calendar::open_metadata(
-            &sealed.to_sealed().map_err(crypto_error)?,
-            &self.secret,
-            &authors,
-        )
-        .map_err(crypto_error)?;
+        let (metadata, verified) = self
+            .key
+            .open_metadata(
+                &sealed.to_sealed().map_err(crypto_error)?,
+                calendar_id,
+                &authors,
+            )
+            .map_err(crypto_error)?;
         to_js(&OpenedMetadata {
             name: metadata.name,
             description: metadata.description,
             verified,
         })
     }
-}
 
-/// Seals an event's fields (`EventFieldsV1`) for a calendar, signed by the
-/// author's address key: what the browser posts in an events sync.
-#[wasm_bindgen(js_name = sealCalendarEvent)]
-#[allow(clippy::too_many_arguments)]
-pub fn seal_calendar_event(
-    master_key_base64: &str,
-    binding: &str,
-    address: &str,
-    envelope_base64: &str,
-    fingerprint_hex: &str,
-    calendar_public_key_base64: &str,
-    fields: JsValue,
-) -> Result<JsValue, JsValue> {
-    let author_secret = open_mail_secret(
-        master_key_base64,
-        binding,
-        address,
-        envelope_base64,
-        fingerprint_hex,
-    )?;
-    let fields: EventFieldsV1 = from_js(fields, "event fields")?;
-    let calendar_public = decode_canonical_base64(calendar_public_key_base64, "calendar key")?;
-    let sealed = calendar::seal_event(
-        &fields.to_parts().map_err(crypto_error)?,
-        &calendar_public,
-        &author_secret,
-        None,
-        None,
-    )
-    .map_err(crypto_error)?;
-    to_js(&SealedEventV1::of(&sealed))
-}
+    /// Seals an event's fields (`EventFieldsV1`) for this calendar, signed
+    /// by the author's address key: what the browser posts in an events sync.
+    #[wasm_bindgen(js_name = sealEvent)]
+    pub fn seal_event(
+        &self,
+        master_key_base64: &str,
+        binding: &str,
+        address: &str,
+        envelope_base64: &str,
+        fingerprint_hex: &str,
+        fields: JsValue,
+    ) -> Result<JsValue, JsValue> {
+        let author_secret = open_mail_secret(
+            master_key_base64,
+            binding,
+            address,
+            envelope_base64,
+            fingerprint_hex,
+        )?;
+        let fields: EventFieldsV1 = from_js(fields, "event fields")?;
+        let sealed = self
+            .key
+            .seal_event(
+                &fields.to_parts().map_err(crypto_error)?,
+                &author_secret,
+                None,
+                None,
+            )
+            .map_err(crypto_error)?;
+        to_js(&SealedEventV1::of(&sealed))
+    }
 
-/// Seals a calendar's new name and description for its key.
-#[wasm_bindgen(js_name = sealCalendarMetadata)]
-#[allow(clippy::too_many_arguments)]
-pub fn seal_calendar_metadata(
-    master_key_base64: &str,
-    binding: &str,
-    address: &str,
-    envelope_base64: &str,
-    fingerprint_hex: &str,
-    calendar_public_key_base64: &str,
-    metadata: JsValue,
-) -> Result<JsValue, JsValue> {
-    let author_secret = open_mail_secret(
-        master_key_base64,
-        binding,
-        address,
-        envelope_base64,
-        fingerprint_hex,
-    )?;
-    let metadata: CalendarMetadataV1 = from_js(metadata, "metadata")?;
-    let calendar_public = decode_canonical_base64(calendar_public_key_base64, "calendar key")?;
-    let sealed = calendar::seal_metadata(&metadata, &calendar_public, &author_secret)
-        .map_err(crypto_error)?;
-    to_js(&SealedMetadataV1::of(&sealed))
+    /// Seals this calendar's new name and description, bound to its id.
+    #[wasm_bindgen(js_name = sealMetadata)]
+    #[allow(clippy::too_many_arguments)]
+    pub fn seal_metadata(
+        &self,
+        master_key_base64: &str,
+        binding: &str,
+        address: &str,
+        envelope_base64: &str,
+        fingerprint_hex: &str,
+        calendar_id: &str,
+        names: JsValue,
+    ) -> Result<JsValue, JsValue> {
+        let author_secret = open_mail_secret(
+            master_key_base64,
+            binding,
+            address,
+            envelope_base64,
+            fingerprint_hex,
+        )?;
+        let names: Names = from_js(names, "names")?;
+        let sealed = self
+            .key
+            .seal_metadata(calendar_id, &names.name, &names.description, &author_secret)
+            .map_err(crypto_error)?;
+        to_js(&SealedMetadataV1::of(&sealed))
+    }
 }
 
 /// A UTC instant as a wall-clock time in an IANA zone, through the bundled
