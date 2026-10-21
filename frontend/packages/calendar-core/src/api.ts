@@ -59,8 +59,6 @@ export interface Calendar {
   display: boolean
   permissions: number
   revision: number
-  /** The owner signed the name and description. */
-  verified: boolean
   unlocked: UnlockedCalendar
 }
 
@@ -172,12 +170,16 @@ export async function loadCalendars(session: Session, account: MailAccount): Pro
       for (const row of data.calendars) {
         try {
           const key = await unlock(account, row)
+          // The id the metadata must name is the one the verified head lists
+          // (`expectListing` and `expect` above refuse any other listing).
           const metadata = key.openMetadata(row.metadata, row.id, account.ownPublicKeys)
+          // A name its owner didn't sign is never shown: the calendar counts
+          // as unreadable.
+          if (!metadata.verified) throw new Error('the calendar name is not signed by its owner')
           calendars.push({
             id: row.id,
             name: metadata.name,
             description: metadata.description,
-            verified: metadata.verified,
             color: row.color,
             display: row.display,
             permissions: row.permissions,
@@ -210,7 +212,7 @@ export const CALENDAR_COLORS = ['#8080ff', '#db60d6', '#415df0', '#179fd9', '#1d
 export async function createCalendar(session: Session, account: MailAccount, name: string, color: string): Promise<string> {
   const id = crypto.randomUUID()
   const addressId = await activeAddressId(account)
-  const made = await makeCalendar(account.key, account.publicKey, id, { name, description: '' })
+  const made = await makeCalendar(account.key, id, { name, description: '' })
   // The fingerprint is the server's to read from the key, not to be told.
   const body = { publicKey: made.publicKey, lockedSecretKey: made.lockedSecretKey, passphrase: made.passphrase, metadata: made.metadata }
   await listed(session, (index) =>
@@ -408,9 +410,10 @@ export async function saveEvent(
   return stored?.id ?? existing?.id ?? ''
 }
 
-export async function deleteEvent(account: MailAccount, calendar: Calendar, id: string): Promise<void> {
+/** Deletes `existing` (as opened): refused when another device changed it since. */
+export async function deleteEvent(account: MailAccount, calendar: Calendar, existing: Pick<CalendarEvent, 'id' | 'revision'>): Promise<void> {
   const addressId = await activeAddressId(account)
-  await syncOne(calendar, addressId, { delete: { id } })
+  await syncOne(calendar, addressId, { delete: { id: existing.id, baseRevision: existing.revision } })
 }
 
 // ----- hooks -----

@@ -96,7 +96,7 @@ export interface UnlockedCalendar {
 }
 
 interface CalendarWasm {
-  createCalendar(...args: [...KeyArgs, ownerPublicKey: string, calendarId: string, metadata: CalendarMetadata, createdAtSecs: number]): NewCalendar
+  createCalendar(...args: [...KeyArgs, calendarId: string, metadata: CalendarMetadata, createdAtSecs: number]): NewCalendar
   unlockCalendar(...args: [...KeyArgs, passphrase: SealedPassphrase, ownerPublicKeys: string[], lockedSecretKey: string]): UnlockedCalendar
   calendarUtcToLocal(instant: string, tzid: string): string
   calendarLocalToUtc(local: string, tzid: string): string
@@ -116,9 +116,13 @@ function keyArgs(key: SealedMailKey): KeyArgs {
   return [key.masterKeyBase64, key.binding, key.address, key.envelope, key.fingerprint]
 }
 
-/** A new calendar `calendarId` owned by `owner` (its primary address key), named `metadata`. */
-export async function createCalendar(owner: SealedMailKey, ownerPublicKey: string, calendarId: string, metadata: CalendarMetadata): Promise<NewCalendar> {
-  return (await wasm()).createCalendar(...keyArgs(owner), ownerPublicKey, calendarId, metadata, Math.floor(Date.now() / 1000))
+/**
+ * A new calendar `calendarId` owned by `owner` (its primary address key),
+ * named `metadata`; the passphrase is sealed to the key derived from the
+ * owner's secret, never to a public key given.
+ */
+export async function createCalendar(owner: SealedMailKey, calendarId: string, metadata: CalendarMetadata): Promise<NewCalendar> {
+  return (await wasm()).createCalendar(...keyArgs(owner), calendarId, metadata, Math.floor(Date.now() / 1000))
 }
 
 /**

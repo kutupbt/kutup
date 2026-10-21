@@ -150,7 +150,7 @@ export function EventDialog() {
   const remove = useCalendarMutation(async () => {
     const calendar = writable.find((c) => c.id === existing?.calendarId)
     if (!account.data || !calendar || !existing) throw new Error('no calendar')
-    await deleteEvent(account.data, calendar, existing.id)
+    await deleteEvent(account.data, calendar, existing)
   })
 
   const close = () => openEditor(null)
@@ -286,7 +286,9 @@ export function EventDialog() {
           submit={t('events.delete')}
           pending={remove.isPending}
           error={remove.error}
-          errorFallback={t('events.saveFailed')}
+          errorFallback={
+            remove.error instanceof EventRefusedError && remove.error.code === 'revision_conflict' ? t('events.changedElsewhere') : t('events.saveFailed')
+          }
           onConfirm={() =>
             remove.mutate(undefined, {
               onSuccess: () => {
