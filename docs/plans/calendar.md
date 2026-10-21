@@ -274,8 +274,7 @@ except where marked.
   the parts): the server parses the shared signed part with the Rust core,
   checks the author's detached signature against the author's current address
   keys (key list), and converts DTSTART/DTEND with their TZID to UTC (a time
-  zone database: `jiff` with its bundled tzdb, or `chrono-tz`; whichever the
-  dependency policy passes). Unknown TZIDs are refused (clients map Windows
+  zone database: `jiff` with its bundled, pinned tzdb). Unknown TZIDs are refused (clients map Windows
   and other aliases first, as Proton's `getSupportedTimezone`).
 - *Routes* (`/api/calendar/...`, Proton's shapes renamed to Kutup's style):
   `GET/POST calendars`, `PUT/DELETE calendars/{id}` (metadata, colour,
@@ -321,9 +320,15 @@ except where marked.
 and busy/free (E3), invitations (E4), URL feeds, Google import, meetings
 (E5), holidays (later).
 
-**Questions for the reviewer.**
-1. The `calendars` account-head scope beyond Proton (recommended).
-2. The time zone crate: `jiff` (newer, bundled tzdb, one crate) or
-   `chrono-tz` (widely used, compiled-in tzdb).
-3. E1 as one PR (crypto + server + app, about Contacts' size) or two (crypto
-   and server first, then the app).
+**Answers (the main session, 2026-10-21).**
+1. The `calendars` account-head scope is added: rollback protection like the
+   other listed scopes, a deliberate addition beyond Proton.
+2. Time zones through **jiff with its bundled tzdb** (`jiff-tzdb`), pinned,
+   so every server and the WASM client convert identically whatever the
+   host's zoneinfo. A tzdb update is a dependency bump (a new `jiff-tzdb`
+   release), reviewed and gated like any other.
+3. Two PRs: (a) crypto, proto and server with live tests; (b) the app. No
+   UI affordance ships before its backend.
+- The rPGP additions get vectors, cross-checked against a Proton calendar
+  event where the references hold one (OpenPGP.js / go-crypto test data),
+  and pass `cargo deny`.
