@@ -36,6 +36,7 @@ const LIMITS: &[(&str, u64)] = &[
     ("RATE_LIMIT_REGISTRATION_CODE_CHECK_PER_HOUR", 30),
     ("RATE_LIMIT_REGISTRATION_CODE_FAILURES_PER_HOUR", 20),
     ("RATE_LIMIT_REPORT_PER_HOUR", 20),
+    ("RATE_LIMIT_MAIL_DOMAIN_CHECKS_PER_HOUR", 30),
     ("RATE_LIMIT_FEEDBACK_PER_HOUR", 10),
     ("RATE_LIMIT_ADMIN_PER_MIN", 120),
     ("RATE_LIMIT_CHAT_KEYS_PER_MIN", 30),
@@ -374,6 +375,14 @@ pub static CHAT_GROUP_FAILURES_RELAY: LazyLock<RateLimiter> = LazyLock::new(|| {
     RateLimiter::new(
         env_limit("RATE_LIMIT_CHAT_GROUP_FAILURES_RELAY_PER_MIN", 600) as usize,
         Duration::from_secs(60),
+    )
+});
+/// A custom domain's "Refresh status": 30 an hour per account
+/// (docs/plans/mail-custom-domains.md §2), each an uncached set of lookups.
+pub static MAIL_DOMAIN_CHECKS: LazyLock<RateLimiter> = LazyLock::new(|| {
+    RateLimiter::new(
+        env_limit("RATE_LIMIT_MAIL_DOMAIN_CHECKS_PER_HOUR", 30) as usize,
+        Duration::from_secs(3600),
     )
 });
 /// New groups: 600 / hour / relay server

@@ -13,6 +13,14 @@ services:
       MAIL_TEST_KEY_ORIGIN: http://mail-keys:8080
       # A fixed test key for forwarding's sealed proxy factors.
       MAIL_FORWARDING_KEYS: "1:Zm9yd2FyZGluZy10ZXN0LWtleS0wMTIzNDU2Nzg5YWI="
+      # Custom domains: their DNS is mail-dns (unsigned test zones, so no
+      # DNSSEC), their periods on the test clock (hours to seconds), the
+      # DKIM keys' seal key fixed.
+      MAIL_DNS_RESOLVER: mail-dns:53
+      MAIL_DNS_INSECURE: "true"
+      MAIL_DOMAINS_SWEEP_SECONDS: "5"
+      MAIL_DOMAINS_TIME_SCALE: "3600"
+      MAIL_DKIM_KEYS: "1:ZGtpbS10ZXN0LWtleS0wMTIzNDU2Nzg5YWJjZGVmMDE="
   stalwart-setup:
     restart: "no"
     environment:
@@ -34,3 +42,9 @@ services:
     volumes:
       - ${KUTUP_MAIL_KEYS_DIR:?the gate sets KUTUP_MAIL_KEYS_DIR}:/keys:ro
       - ./tests/mail/keys.py:/keys.py:ro
+  mail-dns:
+    image: coredns/coredns:1.11.3
+    command: ["-conf", "/Corefile"]
+    volumes:
+      - ./tests/mail/Corefile:/Corefile:ro
+      - ${KUTUP_MAIL_DNS_DIR:?the gate sets KUTUP_MAIL_DNS_DIR}:/zones:ro

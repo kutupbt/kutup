@@ -34,7 +34,6 @@ use crate::account_envelope::{self, AccountEnvelopePurpose};
 use crate::account_ref::AccountRef;
 use crate::error::{CryptoError, Result};
 use crate::identity::{authority_key_id_from_public, incarnation_id_from_authority_public};
-use crate::named_share::canonical_account;
 
 /// The key may verify signatures (Proton's `FLAG_NOT_COMPROMISED`).
 pub const FLAG_NOT_COMPROMISED: u32 = 1;
@@ -61,11 +60,10 @@ const PRIVATE_KEY_DOMAIN: &[u8] = b"kutup/mail-address-key/v1\0";
 const KEY_LIST_DOMAIN: &[u8] = b"kutup/mail-key-list/v1\0";
 const KEY_LIST_VERSION: u16 = 1;
 
-/// A canonical address: `local@domain`, lowercase. Phase A addresses are
-/// Kutup usernames on the server name, the same canonical form as accounts.
+/// A canonical address ([`crate::mail_address::canonical`]): what keys and
+/// key lists bind, on the server's own domain and on custom domains.
 pub fn canonical_address(value: &str) -> Result<String> {
-    canonical_account(value)
-        .map_err(|_| CryptoError::InvalidInput("mail address is not canonical".into()))
+    crate::mail_address::canonical(value)
 }
 
 /// A freshly generated address key.

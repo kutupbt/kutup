@@ -1,0 +1,10 @@
+# The mail gate's DNS for custom domains (crates/kutup-server/tests/
+# mail_inbound_live.rs, custom_domains): every zone file the test writes in
+# /zones (<origin>.zone), reread every second.
+. {
+    auto {
+        directory /zones (.*)\.zone {1}
+        reload 1s
+    }
+    errors
+}

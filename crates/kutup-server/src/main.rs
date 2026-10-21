@@ -470,6 +470,8 @@ async fn main() -> anyhow::Result<()> {
     mail::outbox::spawn(state.clone());
     mail::snooze::spawn(state.clone());
     mail::forwarding::spawn(state.clone());
+    mail::domains::set_time_scale(state.config.mail_domains_time_scale);
+    mail::domains::sweep::spawn(state.clone());
     mail::expiry::spawn(state.clone());
 
     // Trailing-slash normalization wraps the whole Router from the *outside* (a
@@ -1014,6 +1016,22 @@ fn build_router(state: AppState) -> Router {
         .route(
             "/api/mail/filters/:id",
             patch(handlers::mail_filters::update).delete(handlers::mail_filters::delete),
+        )
+        .route(
+            "/api/mail/domains",
+            get(handlers::mail_domains::list).post(handlers::mail_domains::add),
+        )
+        .route(
+            "/api/mail/domains/addresses",
+            post(handlers::mail_domains::create_address),
+        )
+        .route(
+            "/api/mail/domains/:id",
+            get(handlers::mail_domains::get).delete(handlers::mail_domains::delete),
+        )
+        .route(
+            "/api/mail/domains/:id/catch-all",
+            put(handlers::mail_domains::catch_all),
         )
         .route(
             "/api/mail/forwardings",
@@ -2274,6 +2292,35 @@ fn build_router(state: AppState) -> Router {
                 .route(
                     "/api/admin/mail/senders",
                     get(handlers::mail_sending::senders),
+                )
+                .route(
+                    "/api/admin/mail/domains",
+                    get(handlers::mail_domains_admin::list),
+                )
+                .route(
+                    "/api/admin/mail/domains/settings",
+                    put(handlers::mail_domains_admin::set_settings),
+                )
+                .route(
+                    "/api/admin/mail/domains/:id/approve",
+                    post(handlers::mail_domains_admin::approve),
+                )
+                .route(
+                    "/api/admin/mail/domains/:id/deactivate",
+                    post(handlers::mail_domains_admin::deactivate),
+                )
+                .route(
+                    "/api/admin/mail/domains/blocks",
+                    get(handlers::mail_domains_admin::blocks),
+                )
+                .route(
+                    "/api/admin/mail/domains/blocks/:name",
+                    delete(handlers::mail_domains_admin::unblock),
+                )
+                .route(
+                    "/api/admin/users/:id/mail-domains",
+                    get(handlers::mail_domains_admin::overrides)
+                        .put(handlers::mail_domains_admin::set_overrides),
                 )
                 .route(
                     "/api/admin/mail/outside-sending",

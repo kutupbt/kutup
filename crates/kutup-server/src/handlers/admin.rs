@@ -2533,7 +2533,8 @@ fn map_insert_conflict(err: sqlx::Error) -> AppError {
 /// listed value sealed under the old keys stays to be listed in it
 /// (docs/plans/rollback-protection.md, "Account reset"): contacts, the
 /// group list, the Chat contact list, labels, filters and Pass secrets go; custom folders keep
-/// their mail and lose their names, until their owner names them again. The
+/// their mail and lose their names, until their owner names them again;
+/// custom-domain addresses close until rekeyed. The
 /// identity pins were sealed under the old master key too: nothing can open
 /// them now.
 async fn clear_account_values(
@@ -2561,6 +2562,21 @@ async fn clear_account_values(
         "UPDATE mail_addresses SET state = 'closed', receive_until = now()
           WHERE user_id = $1 AND state = 'receiving'",
         "UPDATE account_names SET receive_until = now() WHERE user_id = $1 AND state = 'held'",
+        // Addresses on the account's custom domains stay its own but close
+        // until rekeyed (docs/plans/mail-custom-domains.md §8): their keys
+        // were sealed under the old master key, so their key lists (signed by
+        // the old authority) go, their keys stop being primary, and mail to
+        // them is refused until the owner makes each again with a new key.
+        "DELETE FROM mail_key_lists WHERE address_id IN
+            (SELECT id FROM mail_addresses
+              WHERE user_id = $1 AND domain_id IS NOT NULL AND state = 'active')",
+        // Obsolete as well (Proton's FLAG_NOT_OBSOLETE cleared): nobody can
+        // open mail encrypted to them now.
+        "UPDATE mail_address_keys SET is_primary = false, flags = flags & ~2 WHERE address_id IN
+            (SELECT id FROM mail_addresses
+              WHERE user_id = $1 AND domain_id IS NOT NULL AND state = 'active')",
+        "UPDATE mail_addresses SET state = 'closed'
+          WHERE user_id = $1 AND domain_id IS NOT NULL AND state = 'active'",
         "UPDATE account_names SET incarnation_id = NULL WHERE user_id = $1 AND state = 'current'",
     ] {
         sqlx::query(statement)

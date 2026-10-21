@@ -55,6 +55,7 @@ services:
       MAIL_HOSTNAME: ${MAIL_HOSTNAME:?set MAIL_HOSTNAME to mail.<domain>}
       # Kutup's sending account's password (stalwart/plan.ndjson).
       MAIL_INBOUND_TOKEN: ${MAIL_INBOUND_TOKEN:?set MAIL_INBOUND_TOKEN}
+      MAIL_STALWART_DOMAINS_TOKEN: ${MAIL_STALWART_DOMAINS_TOKEN:-}
       STALWART_WATCH_CERTIFICATES: "1"
     volumes:
       - ./nginx/certs:/certs:ro

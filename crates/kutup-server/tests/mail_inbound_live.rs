@@ -6676,3 +6676,820 @@ Date: Mon, 19 Oct 2026 10:00:00 +0000\r\nMessage-ID: <opause-{tag}@sender.test>\
         other => panic!("unknown phase {other}"),
     }
 }
+
+/// Publishes `records` as the zone `origin` for the gate's DNS server
+/// (CoreDNS's `auto` plugin rereads the directory every second).
+fn write_zone(dir: &str, origin: &str, records: &[String]) {
+    let serial = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
+    let mut zone = format!(
+        "$ORIGIN {origin}.\n$TTL 1\n@ IN SOA ns.{origin}. admin.{origin}. {serial} 1 1 1 1\n@ IN NS ns.{origin}.\nns IN A 127.0.0.1\n"
+    );
+    for record in records {
+        zone.push_str(record);
+        zone.push('\n');
+    }
+    std::fs::write(format!("{dir}/{origin}.zone"), zone).unwrap();
+}
+
+/// A TXT value as zone-file strings of at most 255 bytes each.
+fn txt(value: &str) -> String {
+    value
+        .as_bytes()
+        .chunks(255)
+        .map(|chunk| format!("\"{}\"", String::from_utf8_lossy(chunk)))
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+/// A key for the address `id` of `user`, uploaded with its first key list.
+fn add_address_key(c: &Client, base: &str, user: &User, id: &str, address: &str) -> Address {
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs() as u32;
+    let key = mail_key::generate_address_key(address, now).unwrap();
+    let envelope =
+        mail_key::seal_address_key(&user.master_key, &user.binding, address, &key.secret_key)
+            .unwrap();
+    let hex32 = |value: String| -> [u8; 32] { hex::decode(value).unwrap().try_into().unwrap() };
+    // The address's keys already there (an address reopened after an
+    // account reset keeps its old, obsolete ones), listed as they are, as a
+    // client lists them; the new key first.
+    let listed: Value = bearer(c.get(format!("{base}/api/mail/addresses")), &user.token)
+        .send()
+        .unwrap()
+        .json()
+        .unwrap();
+    let mut keys = vec![MailKeyEntryV1 {
+        fingerprint: key.fingerprint,
+        sha256_fingerprint: key.sha256_fingerprint,
+        primary: true,
+        flags: DEFAULT_FLAGS,
+    }];
+    if let Some(row) = listed.as_array().unwrap().iter().find(|a| a["id"] == id) {
+        for old in row["keys"].as_array().unwrap() {
+            keys.push(MailKeyEntryV1 {
+                fingerprint: hex::decode(old["fingerprint"].as_str().unwrap())
+                    .unwrap()
+                    .try_into()
+                    .unwrap(),
+                sha256_fingerprint: hex32(old["sha256Fingerprint"].as_str().unwrap().to_owned()),
+                primary: false,
+                flags: old["flags"].as_u64().unwrap() as u32,
+            });
+        }
+    }
+    // The format orders a list's keys by fingerprint.
+    keys.sort_by_key(|key| key.fingerprint);
+    let list = MailKeyListV1 {
+        incarnation_id: hex32(user.identity.incarnation_id()),
+        authority_key_id: hex32(user.identity.authority_key_id()),
+        address: address.to_owned(),
+        sequence: 1,
+        previous_hash: None,
+        issued_at: "2026-10-10T12:00:00Z".into(),
+        keys,
+    }
+    .sign(user.identity.authority_signing_key())
+    .unwrap();
+    let r = bearer(
+        c.post(format!("{base}/api/mail/addresses/{id}/keys")),
+        &user.token,
+    )
+    .json(&json!({
+        "publicKey": b64(&key.public_key),
+        "privateKeyEnvelope": b64(&envelope),
+        "keyList": { "data": b64(&list.data), "signature": b64(&list.signature) },
+    }))
+    .send()
+    .unwrap();
+    assert!(r.status().is_success(), "add key: {}", r.status());
+    Address {
+        address: address.to_owned(),
+        secret_key: key.secret_key.to_vec(),
+        public_key: key.public_key,
+    }
+}
+
+fn admin_token(c: &Client, base: &str, admin: &str) -> String {
+    let (name, password) = admin.split_once(':').unwrap();
+    common::sign_in(c, base, name, password)["accessToken"]
+        .as_str()
+        .unwrap()
+        .to_owned()
+}
+
+fn domain(c: &Client, base: &str, user: &User, id: &str, refresh: bool) -> Value {
+    let query = if refresh { "?refresh=1" } else { "" };
+    let r = bearer(
+        c.get(format!("{base}/api/mail/domains/{id}{query}")),
+        &user.token,
+    )
+    .send()
+    .unwrap();
+    assert!(r.status().is_success(), "domain: {}", r.status());
+    r.json().unwrap()
+}
+
+/// Waits until `check` holds for what `read` gives, or fails with `what`.
+fn eventually<T>(
+    what: &str,
+    seconds: u64,
+    mut read: impl FnMut() -> T,
+    check: impl Fn(&T) -> bool,
+) -> T {
+    let deadline = Instant::now() + Duration::from_secs(seconds);
+    loop {
+        let value = read();
+        if check(&value) {
+            return value;
+        }
+        assert!(Instant::now() < deadline, "{what}");
+        std::thread::sleep(Duration::from_secs(1));
+    }
+}
+
+/// Custom domains end to end (docs/plans/mail-custom-domains.md), against
+/// the gate's DNS server, Stalwart and the sink, on the test stack's clock
+/// (`MAIL_DOMAINS_TIME_SCALE`): the shared DKIM key published and made
+/// active; a domain added, proved and checked as Proton checks it; an
+/// address on it that receives through Stalwart; the catch-all; mail sent
+/// from it, signed for the domain (the gate checks the sink); and another
+/// account taking the domain over, which frees the first one's address.
+#[test]
+fn custom_domains() {
+    let (Ok(base), Ok(smtp), Ok(admin), Ok(zones)) = (
+        std::env::var("KUTUP_LIVE_SERVER"),
+        std::env::var("KUTUP_LIVE_SMTP"),
+        std::env::var("KUTUP_LIVE_ADMIN"),
+        std::env::var("KUTUP_LIVE_DNS_DIR"),
+    ) else {
+        eprintln!("KUTUP_LIVE_DNS_DIR not set; skipping custom domains");
+        return;
+    };
+    let c = common::client();
+    let server = "kutup.test";
+    let customer = "customer.test";
+    let spf = format!("_spf IN TXT {}", txt("v=spf1 ip4:0.0.0.0/0 -all"));
+    write_zone(&zones, server, std::slice::from_ref(&spf));
+
+    // The shared key: made pending, published by "the operator", active.
+    let admin_token = admin_token(&c, &base, &admin);
+    let admin_view = |c: &Client| -> Value {
+        bearer(
+            c.get(format!("{base}/api/admin/mail/domains")),
+            &admin_token,
+        )
+        .send()
+        .unwrap()
+        .json()
+        .unwrap()
+    };
+    let view = eventually(
+        "no DKIM key was made",
+        60,
+        || admin_view(&c),
+        |v| {
+            v["dkimKeys"]
+                .as_array()
+                .is_some_and(|keys| !keys.is_empty())
+        },
+    );
+    assert_eq!(view["configured"], true);
+    let key = &view["dkimKeys"][0];
+    let selector = key["selector"].as_str().unwrap().to_owned();
+    write_zone(
+        &zones,
+        server,
+        &[
+            spf.clone(),
+            format!(
+                "*.{selector}._dk IN TXT {}",
+                txt(key["txt"].as_str().unwrap())
+            ),
+        ],
+    );
+    eventually(
+        "the DKIM key never became active",
+        120,
+        || admin_view(&c),
+        |v| v["dkimKeys"][0]["state"] == "active",
+    );
+
+    // Alice adds the domain and publishes what it lists. Her own address
+    // has its key, as a client makes at sign-up: the server's notices to
+    // her arrive there.
+    let alice = register(&c, &base);
+    set_up_address(&c, &base, &alice);
+    let r = bearer(c.post(format!("{base}/api/mail/domains")), &alice.token)
+        .json(&json!({ "name": "Customer.TEST." }))
+        .send()
+        .unwrap();
+    assert_eq!(r.status().as_u16(), 201, "{}", r.text().unwrap_or_default());
+    let added: Value = r.json().unwrap();
+    assert_eq!(added["name"], customer);
+    let id = added["id"].as_str().unwrap().to_owned();
+    let records = &added["records"];
+    // Pending: no address on it, and Stalwart takes no mail for it.
+    let r = bearer(
+        c.post(format!("{base}/api/mail/domains/addresses")),
+        &alice.token,
+    )
+    .json(&json!({ "local": "early", "domainId": id }))
+    .send()
+    .unwrap();
+    assert_eq!(r.status().as_u16(), 409);
+    assert_eq!(r.json::<Value>().unwrap()["code"], "domainNotVerified");
+    let (rcpt, _) = smtp_send(
+        &smtp,
+        "early@customer.test",
+        "From: writer@sender.test\r\nTo: early@customer.test\r\nSubject: early\r\n\r\nearly\r\n",
+    );
+    assert!(rcpt >= 500, "a pending domain takes no mail: {rcpt}");
+    let zone_for = |code: &str| -> Vec<String> {
+        let mut zone = vec![
+            format!("@ IN TXT {}", txt(code)),
+            format!(
+                "@ IN MX 10 {}.",
+                records["mx"][0]["value"].as_str().unwrap()
+            ),
+            format!(
+                "@ IN TXT {}",
+                txt(records["spf"]["value"].as_str().unwrap())
+            ),
+            format!(
+                "_dmarc IN TXT {}",
+                txt(records["dmarc"]["value"].as_str().unwrap())
+            ),
+        ];
+        for cname in records["dkim"].as_array().unwrap() {
+            zone.push(format!(
+                "{} IN CNAME {}",
+                cname["host"].as_str().unwrap(),
+                cname["value"].as_str().unwrap()
+            ));
+        }
+        zone
+    };
+    write_zone(
+        &zones,
+        customer,
+        &zone_for(records["verify"]["value"].as_str().unwrap()),
+    );
+    let checked = eventually(
+        "the domain never verified",
+        30,
+        || domain(&c, &base, &alice, &id, true),
+        |d| d["state"] == 1,
+    );
+    assert_eq!(
+        [
+            &checked["verifyState"],
+            &checked["mxState"],
+            &checked["spfState"],
+            &checked["dkimState"],
+            &checked["dmarcState"]
+        ],
+        [&json!(2), &json!(3), &json!(3), &json!(4), &json!(4)],
+        "{checked}"
+    );
+
+    // An address on it, with its key; mail to it arrives through Stalwart.
+    let r = bearer(
+        c.post(format!("{base}/api/mail/domains/addresses")),
+        &alice.token,
+    )
+    .json(&json!({ "local": "Info", "domainId": id }))
+    .send()
+    .unwrap();
+    assert_eq!(r.status().as_u16(), 201, "{}", r.text().unwrap_or_default());
+    let created: Value = r.json().unwrap();
+    assert_eq!(created["address"], "info@customer.test");
+    let address_id = created["id"].as_str().unwrap().to_owned();
+    let info = add_address_key(&c, &base, &alice, &address_id, "info@customer.test");
+    let message = |to: &str, id: &str| {
+        format!(
+            "From: Writer <writer@sender.test>\r\nTo: {to}\r\nSubject: domain\r\nMessage-ID: <{id}>\r\n\r\nfor {to}\r\n"
+        )
+    };
+    let first = format!("{}@sender.test", uuid::Uuid::new_v4().simple());
+    eventually(
+        "Stalwart never took mail for the domain",
+        180,
+        || {
+            smtp_send(
+                &smtp,
+                "info@customer.test",
+                &message("info@customer.test", &first),
+            )
+        },
+        |(rcpt, data)| *rcpt == 250 && *data == 250,
+    );
+    let row = wait_for(&c, &base, &alice, &first);
+    assert!(open_row(&c, &base, &alice, &info, &row).contains("for info@customer.test"));
+
+    // The catch-all takes unknown names on the domain, tags stripped.
+    let r = bearer(
+        c.put(format!("{base}/api/mail/domains/{id}/catch-all")),
+        &alice.token,
+    )
+    .json(&json!({ "addressId": address_id }))
+    .send()
+    .unwrap();
+    assert_eq!(r.status().as_u16(), 204);
+    let caught = format!("{}@sender.test", uuid::Uuid::new_v4().simple());
+    let (rcpt, data) = smtp_send(
+        &smtp,
+        "nobody+tag@customer.test",
+        &message("nobody+tag@customer.test", &caught),
+    );
+    assert_eq!((rcpt, data), (250, 250));
+    wait_for(&c, &base, &alice, &caught);
+
+    // info@ forwards to Carol: mail to it reaches her, caught mail never
+    // does (a catch-all can't relay mail for any name to anywhere).
+    let carol = register(&c, &base);
+    let carol_address = set_up_address(&c, &base, &carol);
+    let (_, request, terms) =
+        forwarding_request(&info, &address_id, &carol_address, "all", json!([]));
+    let r = bearer(c.post(format!("{base}/api/mail/forwardings")), &alice.token)
+        .json(&request)
+        .send()
+        .unwrap();
+    assert_eq!(r.status().as_u16(), 201, "{}", r.text().unwrap_or_default());
+    accept_forwarding(&c, &base, &carol, &carol_address, &info.public_key, &terms);
+    let direct = format!("{}@sender.test", uuid::Uuid::new_v4().simple());
+    assert_eq!(
+        smtp_send(
+            &smtp,
+            "info@customer.test",
+            &message("info@customer.test", &direct)
+        ),
+        (250, 250)
+    );
+    wait_for(&c, &base, &carol, &direct);
+    let caught_again = format!("{}@sender.test", uuid::Uuid::new_v4().simple());
+    assert_eq!(
+        smtp_send(
+            &smtp,
+            "someone@customer.test",
+            &message("someone@customer.test", &caught_again)
+        ),
+        (250, 250)
+    );
+    wait_for(&c, &base, &alice, &caught_again);
+    std::thread::sleep(Duration::from_secs(5));
+    assert!(
+        !messages(&c, &base, &carol.token)
+            .iter()
+            .any(|m| m["messageId"] == caught_again),
+        "caught mail was forwarded"
+    );
+
+    // The catch-all's daily cap, counted once per message in the database:
+    // two caught so far, so a cap of 3 takes one more, then answers 452.
+    let put_settings = |body: Value| {
+        let r = bearer(
+            c.put(format!("{base}/api/admin/mail/domains/settings")),
+            &admin_token,
+        )
+        .json(&body)
+        .send()
+        .unwrap();
+        assert!(r.status().is_success(), "settings: {}", r.status());
+    };
+    put_settings(json!({ "mail_domains.catch_all_per_day": "3" }));
+    let third = format!("{}@sender.test", uuid::Uuid::new_v4().simple());
+    assert_eq!(
+        smtp_send(
+            &smtp,
+            "third@customer.test",
+            &message("third@customer.test", &third)
+        ),
+        (250, 250)
+    );
+    wait_for(&c, &base, &alice, &third);
+    let (rcpt, _) = smtp_send(
+        &smtp,
+        "fourth@customer.test",
+        &message("fourth@customer.test", "fourth@sender.test"),
+    );
+    assert_eq!(rcpt, 452, "the catch-all's day is full");
+    put_settings(json!({ "mail_domains.catch_all_per_day": "500" }));
+
+    // Mail from the address to the outside: the gate checks the sink for
+    // the domain's own DKIM signature.
+    let outside_id = format!("{}@customer.test", uuid::Uuid::new_v4().simple());
+    let mime = format!(
+        "From: info@customer.test\r\nTo: dave@outside.test\r\nSubject: from the domain\r\nMessage-ID: <{outside_id}>\r\n\r\nhello\r\n"
+    );
+    let split =
+        mail_key::encrypt_split(&[&info.public_key], &info.secret_key, mime.as_bytes()).unwrap();
+    let meta = json!({
+        "to": [{ "address": "dave@outside.test" }],
+        "subject": "from the domain",
+        "messageId": outside_id,
+        "keyPackets": { "self": b64(&split.key_packets[0]) },
+        "readable": ["dave@outside.test"],
+        "fromAddress": address_id,
+    });
+    let r = bearer(c.post(format!("{base}/api/mail/send")), &alice.token)
+        .multipart(form(vec![
+            ("meta", serde_json::to_vec(&meta).unwrap()),
+            ("data", split.data_packet),
+            ("mime", mime.into_bytes()),
+        ]))
+        .send()
+        .unwrap();
+    assert!(
+        r.status().is_success(),
+        "send from the domain: {}",
+        r.text().unwrap_or_default()
+    );
+    println!("DOMAIN-OUTSIDE-ID {outside_id}");
+
+    // Sending as an address that isn't Alice's, or with another From in the
+    // MIME, is refused.
+    let send_as = |user: &User, from_address: &str, from_header: &str| {
+        let message_id = format!("{}@customer.test", uuid::Uuid::new_v4().simple());
+        let mime = format!(
+            "From: {from_header}\r\nTo: dave@outside.test\r\nSubject: as\r\nMessage-ID: <{message_id}>\r\n\r\nhello\r\n"
+        );
+        let split = mail_key::encrypt_split(&[&info.public_key], &info.secret_key, mime.as_bytes())
+            .unwrap();
+        let meta = json!({
+            "to": [{ "address": "dave@outside.test" }],
+            "subject": "as",
+            "messageId": message_id,
+            "keyPackets": { "self": b64(&split.key_packets[0]) },
+            "readable": ["dave@outside.test"],
+            "fromAddress": from_address,
+        });
+        let r = bearer(c.post(format!("{base}/api/mail/send")), &user.token)
+            .multipart(form(vec![
+                ("meta", serde_json::to_vec(&meta).unwrap()),
+                ("data", split.data_packet),
+                ("mime", mime.into_bytes()),
+            ]))
+            .send()
+            .unwrap();
+        let status = r.status().as_u16();
+        (status, r.json::<Value>().unwrap_or(Value::Null))
+    };
+    let bob = register(&c, &base);
+    set_up_address(&c, &base, &bob);
+    let bobs_own = self::address_id(&c, &base, &bob);
+    let (status, body) = send_as(&alice, &bobs_own, "info@customer.test");
+    assert_eq!(
+        (status, &body["code"]),
+        (404, &json!("notYourAddress")),
+        "{body}"
+    );
+    let (status, body) = send_as(&alice, &address_id, "boss@customer.test");
+    assert_eq!(
+        (status, &body["code"]),
+        (400, &json!("mimeMismatch")),
+        "another From in the MIME: {body}"
+    );
+    let alices_key: Value = bearer(
+        c.get(format!("{base}/api/mail/keys?email=info@customer.test")),
+        &alice.token,
+    )
+    .send()
+    .unwrap()
+    .json()
+    .unwrap();
+    let alices_fingerprint = alices_key["keys"][0]["fingerprint"].clone();
+
+    // Bob proves the domain too: refused while Alice holds it.
+    let r = bearer(c.post(format!("{base}/api/mail/domains")), &bob.token)
+        .json(&json!({ "name": customer }))
+        .send()
+        .unwrap();
+    assert_eq!(r.status().as_u16(), 201);
+    let bobs: Value = r.json().unwrap();
+    let bob_id = bobs["id"].as_str().unwrap().to_owned();
+    let bob_code = bobs["records"]["verify"]["value"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    assert_eq!(
+        domain(&c, &base, &bob, &bob_id, true)["state"],
+        0,
+        "Alice holds it"
+    );
+    // Both codes published: no transfer, however far apart the checks.
+    let alice_code = records["verify"]["value"].as_str().unwrap().to_owned();
+    let mut both = zone_for(&alice_code);
+    both.push(format!("@ IN TXT {}", txt(&bob_code)));
+    write_zone(&zones, customer, &both);
+    std::thread::sleep(Duration::from_secs(2));
+    assert_eq!(domain(&c, &base, &bob, &bob_id, true)["state"], 0);
+    std::thread::sleep(Duration::from_secs(2));
+    assert_eq!(
+        domain(&c, &base, &bob, &bob_id, true)["state"],
+        0,
+        "while Alice's code is published too"
+    );
+    // Only Bob's code: one check never moves it (the sweep leaves Bob's row
+    // alone for 15 minutes after his own checks). The clock is stepped by
+    // hand, each step two seconds (two scaled hours, past the one-hour
+    // confirmation).
+    let bob_state = || domain(&c, &base, &bob, &bob_id, true)["state"].clone();
+    let step = || std::thread::sleep(Duration::from_secs(2));
+    write_zone(&zones, customer, &zone_for(&bob_code));
+    step();
+    assert_eq!(bob_state(), 0, "a single check never transfers");
+    // A check that misses Bob's code clears that first sighting...
+    write_zone(&zones, customer, &zone_for(&alice_code));
+    step();
+    assert_eq!(bob_state(), 0);
+    // ... so the next one to find it is a first sighting again.
+    write_zone(&zones, customer, &zone_for(&bob_code));
+    step();
+    assert_eq!(bob_state(), 0, "the sighting before the gap was cleared");
+    // A first sighting older than 48 (scaled) hours pairs with nothing.
+    std::thread::sleep(Duration::from_secs(50));
+    assert_eq!(bob_state(), 0, "an expired sighting starts over");
+    assert_eq!(domain(&c, &base, &alice, &id, false)["state"], 1);
+    step();
+    assert_eq!(bob_state(), 1);
+    assert_eq!(
+        domain(&c, &base, &alice, &id, false)["state"],
+        0,
+        "Alice lost it"
+    );
+    let addresses: Value = bearer(c.get(format!("{base}/api/mail/addresses")), &alice.token)
+        .send()
+        .unwrap()
+        .json()
+        .unwrap();
+    assert!(
+        !addresses
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|a| a["address"] == "info@customer.test" && a["state"] == "active"),
+        "Alice's address on the domain is freed: {addresses}"
+    );
+    let events: Value = bearer(
+        c.get(format!("{base}/api/user/security-events")),
+        &alice.token,
+    )
+    .send()
+    .unwrap()
+    .json()
+    .unwrap();
+    assert!(events.to_string().contains("domainLost"), "{events}");
+    // ... and a notice in her inbox.
+    eventually(
+        "Alice was never told in her inbox",
+        30,
+        || messages(&c, &base, &alice.token),
+        |rows| {
+            rows.iter()
+                .any(|m| m["subject"] == "You no longer hold customer.test")
+        },
+    );
+    // She can't send from it any more.
+    let (status, body) = send_as(&alice, &address_id, "info@customer.test");
+    assert!(
+        status >= 400
+            && ["notYourAddress", "domainNotVerified"]
+                .contains(&body["code"].as_str().unwrap_or("")),
+        "Alice still sends from the domain: {status} {body}"
+    );
+    // Bob makes the same name, and its key is the only one served.
+    let r = bearer(
+        c.post(format!("{base}/api/mail/domains/addresses")),
+        &bob.token,
+    )
+    .json(&json!({ "local": "info", "domainId": bob_id }))
+    .send()
+    .unwrap();
+    assert_eq!(r.status().as_u16(), 201, "{}", r.text().unwrap_or_default());
+    let bobs_address: Value = r.json().unwrap();
+    add_address_key(
+        &c,
+        &base,
+        &bob,
+        bobs_address["id"].as_str().unwrap(),
+        "info@customer.test",
+    );
+    let served: Value = bearer(
+        c.get(format!("{base}/api/mail/keys?email=info@customer.test")),
+        &alice.token,
+    )
+    .send()
+    .unwrap()
+    .json()
+    .unwrap();
+    let keys = served["keys"].as_array().unwrap();
+    assert_eq!(keys.len(), 1, "{served}");
+    assert_ne!(keys[0]["fingerprint"], alices_fingerprint, "{served}");
+
+    // Bob's ownership TXT goes, his MX stays: warn after two failing
+    // checks (12 scaled hours apart), inactive after the warn grace (set to
+    // a day: 24 seconds here), and then RCPT refuses.
+    put_settings(json!({ "mail_domains.grace_warn_days": "1" }));
+    write_zone(&zones, customer, &zone_for(&bob_code)[1..]);
+    eventually(
+        "Bob's domain never warned",
+        60,
+        || domain(&c, &base, &bob, &bob_id, true),
+        |d| d["state"] == 2,
+    );
+    eventually(
+        "Bob's domain never went inactive",
+        90,
+        || domain(&c, &base, &bob, &bob_id, true),
+        |d| d["state"] == 0,
+    );
+    eventually(
+        "RCPT still takes mail for an inactive domain",
+        60,
+        || {
+            smtp_send(
+                &smtp,
+                "info@customer.test",
+                &message("info@customer.test", "late@sender.test"),
+            )
+            .0
+        },
+        |rcpt| *rcpt >= 500,
+    );
+    put_settings(json!({ "mail_domains.grace_warn_days": "14" }));
+    // Bob is told in his inbox that the domain lapsed.
+    eventually(
+        "Bob was never told the domain lapsed",
+        30,
+        || messages(&c, &base, &bob.token),
+        |rows| {
+            rows.iter()
+                .any(|m| m["subject"] == "You no longer hold customer.test")
+        },
+    );
+
+    // Bob proves it again, and makes info@ again with a new key.
+    write_zone(&zones, customer, &zone_for(&bob_code));
+    eventually(
+        "Bob's domain never came back",
+        30,
+        || domain(&c, &base, &bob, &bob_id, true),
+        |d| d["state"] == 1,
+    );
+    let make_info = |user: &User| -> (String, Address) {
+        let r = bearer(
+            c.post(format!("{base}/api/mail/domains/addresses")),
+            &user.token,
+        )
+        .json(&json!({ "local": "info", "domainId": bob_id }))
+        .send()
+        .unwrap();
+        assert_eq!(r.status().as_u16(), 201, "{}", r.text().unwrap_or_default());
+        let id = r.json::<Value>().unwrap()["id"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        let key = add_address_key(&c, &base, user, &id, "info@customer.test");
+        (id, key)
+    };
+    let (bob_info_id, _) = make_info(&bob);
+    let lookup = |token: &str| {
+        bearer(
+            c.get(format!("{base}/api/mail/keys?email=info@customer.test")),
+            token,
+        )
+        .send()
+        .unwrap()
+        .status()
+        .as_u16()
+    };
+    assert_eq!(lookup(&alice.token), 200);
+    let rcpt_to_info = || {
+        smtp_send(
+            &smtp,
+            "info@customer.test",
+            &message(
+                "info@customer.test",
+                &format!("{}@sender.test", uuid::Uuid::new_v4().simple()),
+            ),
+        )
+        .0
+    };
+    eventually(
+        "Stalwart never took mail for the domain again",
+        60,
+        rcpt_to_info,
+        |rcpt| *rcpt == 250,
+    );
+
+    // Custom domains turned off: no keys served, mail refused at RCPT (the
+    // reconcile drops the domain from Stalwart); turned on, all comes back.
+    put_settings(json!({ "mail_domains.mode": "off" }));
+    assert_eq!(lookup(&alice.token), 404, "no keys while off");
+    eventually(
+        "RCPT still took mail with custom domains off",
+        60,
+        rcpt_to_info,
+        |rcpt| *rcpt >= 500,
+    );
+    put_settings(json!({ "mail_domains.mode": "everyone" }));
+    assert_eq!(lookup(&alice.token), 200);
+    eventually(
+        "RCPT never took mail again once custom domains were on",
+        60,
+        rcpt_to_info,
+        |rcpt| *rcpt == 250,
+    );
+
+    // An administrator wipes Bob's account: info@ closes (its keys were
+    // sealed under the old master key), then Bob, set up again, makes it
+    // again with a new key, and it receives.
+    let (admin_name, admin_password) = admin.split_once(':').unwrap();
+    let grant =
+        common::admin_reset_grant(&c, &base, &admin_token, admin_name, admin_password, &bob.id);
+    let mut setup = common::temp_registration(
+        &c,
+        &base,
+        "Temporary*Password123",
+        &admin_token,
+        Some(&grant),
+    );
+    setup["grant"] = json!(grant);
+    let r = bearer(
+        c.post(format!("{base}/api/admin/users/{}/wipe", bob.id)),
+        &admin_token,
+    )
+    .json(&setup)
+    .send()
+    .unwrap();
+    assert!(r.status().is_success(), "wipe: {}", r.status());
+    let first = common::sign_in(&c, &base, &bob.username, "Temporary*Password123");
+    let bob = common::set_up_again(&c, &base, &first, &bob, "Another*Password456");
+    assert_eq!(lookup(&alice.token), 404, "a closed address serves no keys");
+    eventually(
+        "RCPT still took mail for a closed address",
+        30,
+        rcpt_to_info,
+        |rcpt| *rcpt >= 500,
+    );
+    let (reopened_id, new_key) = make_info(&bob);
+    assert_eq!(reopened_id, bob_info_id, "the same address, reopened");
+    let after_reset = format!("{}@sender.test", uuid::Uuid::new_v4().simple());
+    assert_eq!(
+        smtp_send(
+            &smtp,
+            "info@customer.test",
+            &message("info@customer.test", &after_reset)
+        ),
+        (250, 250)
+    );
+    let row = wait_for(&c, &base, &bob, &after_reset);
+    assert!(open_row(&c, &base, &bob, &new_key, &row).contains("for info@customer.test"));
+
+    // An administrator deactivates the domain: its name and the names under
+    // it are blocked until lifted, whatever DNS says.
+    let r = bearer(
+        c.post(format!("{base}/api/admin/mail/domains/{bob_id}/deactivate")),
+        &admin_token,
+    )
+    .send()
+    .unwrap();
+    assert_eq!(r.status().as_u16(), 204);
+    assert_eq!(
+        domain(&c, &base, &bob, &bob_id, true)["state"],
+        0,
+        "blocked"
+    );
+    let blocks: Value = bearer(
+        c.get(format!("{base}/api/admin/mail/domains/blocks")),
+        &admin_token,
+    )
+    .send()
+    .unwrap()
+    .json()
+    .unwrap();
+    assert_eq!(blocks[0]["name"], customer, "{blocks}");
+    let r = bearer(c.post(format!("{base}/api/mail/domains")), &alice.token)
+        .json(&json!({ "name": "mail.customer.test" }))
+        .send()
+        .unwrap();
+    assert_eq!(r.status().as_u16(), 409);
+    assert_eq!(r.json::<Value>().unwrap()["code"], "domainBlocked");
+    let r = bearer(
+        c.delete(format!("{base}/api/admin/mail/domains/blocks/{customer}")),
+        &admin_token,
+    )
+    .send()
+    .unwrap();
+    assert_eq!(r.status().as_u16(), 204);
+    assert_eq!(
+        domain(&c, &base, &bob, &bob_id, true)["state"],
+        1,
+        "lifted: proven again"
+    );
+}
