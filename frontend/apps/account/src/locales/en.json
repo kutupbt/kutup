@@ -766,9 +766,9 @@
         "chatMultiOriginBytesPerMin": "Group sends from another server (bytes a minute)",
         "chatMultiOriginBytesPerMinHint": "The same in bytes."
       },
-      "groupCapabilities": "Groups an account may receive group messages for",
-      "groupCapabilitiesHint": "Each group an account is in publishes one delivery key here; past this, it gets that group's messages one by one.",
-      "groupCapabilitiesRange": "Between 1 and 100000.",
+      "groupCapabilities": "Group delivery keys per account",
+      "groupCapabilitiesHint": "Each group an account is in publishes a delivery key, padded in eights so the count says little; a key change briefly needs two. Past this, the account gets those groups' messages one by one.",
+      "groupCapabilitiesRange": "A multiple of 8 between 16 and 100000.",
       "groupAvatarMax": "Largest group picture",
       "groupAvatarMaxHint": "Encrypted group pictures come in four sizes; larger ones are refused.",
       "groupAvatarMaxRange": "Choose one of the sizes.",
