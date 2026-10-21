@@ -942,7 +942,7 @@ pub struct ExternalForwarding {
 /// Confirmation-page requests one client may make in a minute.
 static EXTERNAL_LIMIT: std::sync::LazyLock<crate::ratelimit::RateLimiter> =
     std::sync::LazyLock::new(|| {
-        crate::ratelimit::RateLimiter::new(30, std::time::Duration::from_secs(60))
+        crate::ratelimit::RateLimiter::registered(crate::ratelimit::Limit::ForwardingConfirmations)
     });
 
 /// The confirmation page is public: limited per client, keyed as the

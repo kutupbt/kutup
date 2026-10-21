@@ -80,9 +80,9 @@ pub(crate) async fn consume_media_rate(
     transaction: &mut sqlx::Transaction<'_, sqlx::Postgres>,
     scope_type: &'static str,
     scope_digest: &[u8; 32],
-    limit: i64,
-    window_seconds: i64,
+    budget: crate::ratelimit::Limit,
 ) -> AppResult<()> {
+    let (limit, window_seconds) = crate::ratelimit::budget(budget);
     debug_assert!(matches!(
         scope_type,
         "capability_minute" | "capability_day" | "recipient" | "federation_origin"
@@ -840,16 +840,14 @@ pub async fn deliver_local(
         &mut transaction,
         "capability_minute",
         &presented_capability_hash,
-        120,
-        60,
+        crate::ratelimit::Limit::MediaCapabilityMinute,
     )
     .await?;
     consume_media_rate(
         &mut transaction,
         "capability_day",
         &presented_capability_hash,
-        10_000,
-        86_400,
+        crate::ratelimit::Limit::MediaCapabilityDay,
     )
     .await?;
     let recipient_rate_digest: [u8; 32] = Sha256::digest(
@@ -864,8 +862,7 @@ pub async fn deliver_local(
         &mut transaction,
         "recipient",
         &recipient_rate_digest,
-        120,
-        60,
+        crate::ratelimit::Limit::MediaRecipient,
     )
     .await?;
 

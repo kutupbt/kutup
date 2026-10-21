@@ -31,7 +31,7 @@ use url::Url;
 use crate::error::{AppError, AppResult};
 use crate::middleware::AuthUser;
 use crate::public_fetch::{self, Checks, Options};
-use crate::ratelimit::RateLimiter;
+use crate::ratelimit::{Limit, RateLimiter};
 
 const IMAGE_LIMIT_BYTES: usize = 5 * 1024 * 1024;
 /// Bytes an account may fetch a minute, refilled evenly.
@@ -49,7 +49,7 @@ pub const TRACKER_HEADER: &str = "x-kutup-tracker";
 
 /// 120 images a minute per account, as Pass icons' fetches.
 pub(crate) static MAIL_IMAGES: LazyLock<RateLimiter> =
-    LazyLock::new(|| RateLimiter::new(120, Duration::from_secs(60)));
+    LazyLock::new(|| RateLimiter::registered(Limit::MailImages));
 static BYTES: LazyLock<ByteBudget> = LazyLock::new(ByteBudget::default);
 static AT_ONCE: LazyLock<AccountSlots> = LazyLock::new(AccountSlots::default);
 static FETCHING: LazyLock<tokio::sync::Semaphore> =

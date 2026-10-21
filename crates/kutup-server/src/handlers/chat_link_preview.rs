@@ -22,7 +22,7 @@ use serde::{Deserialize, Serialize};
 use crate::error::{AppError, AppResult};
 use crate::middleware::AuthUser;
 use crate::public_fetch;
-use crate::ratelimit::RateLimiter;
+use crate::ratelimit::{Limit, RateLimiter};
 use crate::AppState;
 
 const PAGE_LIMIT_BYTES: usize = 512 * 1024;
@@ -32,7 +32,7 @@ const USER_AGENT: &str = "Mozilla/5.0 (compatible; KutupLinkPreview/1.0)";
 
 /// 30 fetches a minute per account: a preview is one page and one image.
 pub(crate) static LINK_PREVIEWS: LazyLock<RateLimiter> =
-    LazyLock::new(|| RateLimiter::new(30, Duration::from_secs(60)));
+    LazyLock::new(|| RateLimiter::registered(Limit::LinkPreviews));
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize, utoipa::ToSchema)]
 #[serde(rename_all = "camelCase")]

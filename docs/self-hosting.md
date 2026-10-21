@@ -105,6 +105,18 @@ name) stops it with exit code 2 and the full list of problems, never a silent
 default. `kutup-server check-config` runs that check alone (no database, no
 migrations); run it against a new image and your `.env` before switching over.
 
+**Rate limits** are administrators' settings: Administration → Rate limits
+lists every limit the server keeps (sign-in, Drive, Chat, groups, Mail, calls
+and maps, Pass, federation, the admin API), what it counts and per what, its
+value and its first value. A `RATE_LIMIT_*` or `LOGIN_*` variable only sets
+that first value. A change applies at once on the backend that saves it and
+within 30 seconds on every other; each value is between 1 and 100 times its
+default. The limits counted per account can also be set for one account, on
+its page under Administration. The windows are counted in each backend's
+memory: with several backends behind a balancer, a client spread over them
+can get up to that many times a limit (Kutup runs one backend per server).
+The sealed-sender budgets are counted in the database and shared.
+
 **Chat groups are off by default** (`CHAT_GROUPS=false`): Chat offers direct
 chats, calls and meeting links, but no group chats or group calls; the
 server reports none and refuses the group routes. Groups return with the
