@@ -67,6 +67,7 @@ Specific codes, where an app does something particular (a test in
 | `malformed` | 400 | `POST /api/chat/anonymous/messages/multi`: the payload doesn't parse, a device is listed twice, or the capabilities don't name exactly the payload's accounts ([chat-protocol.md](chat-protocol.md) §7); also a group route's refusal code |
 | `peerUnavailable` | 503 | `POST /api/chat/anonymous/messages/multi` for another server's accounts: that server didn't take the send (slow, unreachable or unwilling); send their copies one by one |
 | `capabilityLimit` | 409 | `PUT /api/chat/group-capabilities` or `POST …/set`: the account would pass its group capability limit; nothing changed |
+| `calendarExists` | 409 | `POST /api/calendar/calendars`: the id (or the calendar key) is in use; draw another |
 | `calendarLimit` | 409 | `POST /api/calendar/calendars`: the account owns as many calendars as the administrators allow (`calendarsPerAccount`) |
 | `eventLimit` | 409 | An events sync: the calendar holds as many events as the administrators allow (`calendarEventsPerCalendar`); that change only |
 | `uidTaken` | 409 | An events sync: an event with this UID is in the calendar already; that change only |
@@ -2235,9 +2236,11 @@ the key packet is to), `metadata` (`keyPacket`, `dataPacket`, `signature`),
 `permissions` (Proton's bits; 127 for the owner), `color`, `display`,
 `revision`, `createdAt`, `updatedAt`.
 
-`POST` makes one: `{ addressId, publicKey, lockedSecretKey, passphrase,
-metadata, color, head }` (`createCalendar` in WASM makes all but `color` and
-`head`). The server checks the key's shape, that the locked secret is the
+`POST` makes one: `{ id, addressId, publicKey, lockedSecretKey, passphrase,
+metadata, color, head }` (`createCalendar` in WASM makes the keys, the
+passphrase and the metadata). `id` is a fresh UUID v4 the client draws, so
+the account head naming it is made before the create; one in use is
+`409 calendarExists`. The server checks the key's shape, that the locked secret is the
 key's and locked, that the passphrase's key packet is to the address's
 primary key and the metadata's to the calendar key. `201` with the
 CalendarView; `400` when a check fails; `409 calendarLimit` at the

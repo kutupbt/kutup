@@ -97,6 +97,7 @@ fn new_calendar(owner: &Owner, name: &str) -> (Value, Passphrase) {
     .unwrap();
     (
         json!({
+            "id": uuid::Uuid::new_v4(),
             "addressId": owner.address_id,
             "publicKey": b64(&key.public_key),
             "lockedSecretKey": b64(&key.locked_secret_key),
@@ -248,6 +249,19 @@ fn calendars_and_events() {
     .json()
     .unwrap();
     assert!(index["values"].to_string().contains(&id), "{index}");
+
+    // A second calendar with the same id: refused.
+    let (mut again, _) = new_calendar(&ada, "Again");
+    again["id"] = json!(id);
+    let r = bearer(
+        c.post(format!("{base}/api/calendar/calendars")),
+        &ada.user.token,
+    )
+    .json(&again)
+    .send()
+    .unwrap();
+    assert_eq!(r.status(), StatusCode::CONFLICT);
+    assert_eq!(r.json::<Value>().unwrap()["code"], "calendarExists");
 
     // Refused calendars: a passphrase to someone else's key, a locked key
     // that isn't the calendar's, another account's address.

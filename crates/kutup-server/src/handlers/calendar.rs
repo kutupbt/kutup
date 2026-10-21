@@ -276,6 +276,10 @@ async fn charge(tx: &mut Transaction<'_, Postgres>, owner: Uuid, add: i64) -> Ap
 #[derive(Debug, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct CalendarCreate {
+    /// The calendar's id, a fresh UUID v4 the client draws: the account
+    /// head's `calendars` scope names it, and the head is made before the
+    /// create (as Contacts' UIDs).
+    pub id: Uuid,
     /// The owner's address whose key the passphrase is sealed to.
     pub address_id: Uuid,
     pub public_key: String,
@@ -311,6 +315,9 @@ pub async fn create(
     let user_id = trusted_uuid(&user.user_id)?;
     limited(user_id)?;
     let head = NextHead::parse(input.head.as_deref())?;
+    if input.id.get_version_num() != 4 {
+        return Err(AppError::bad_request("a calendar's id is a UUID v4"));
+    }
     let public_key = b64(&input.public_key, "public key")?;
     let locked = b64(&input.locked_secret_key, "locked secret key")?;
     let fingerprint = cal::inspect_calendar_public_key(&public_key).map_err(crypto)?;
@@ -359,10 +366,10 @@ pub async fn create(
         + metadata.signature.len()) as i64;
     charge(&mut tx, user_id, bytes).await?;
     let id: Uuid = sqlx::query_scalar(
-        "INSERT INTO calendars (owner_id, public_key, fingerprint, locked_secret_key,
+        "INSERT INTO calendars (id, owner_id, public_key, fingerprint, locked_secret_key,
              passphrase_data_packet, passphrase_signature,
              metadata_key_packet, metadata_data_packet, metadata_signature, bytes)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+         VALUES ($11, $1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
          RETURNING id",
     )
     .bind(user_id)
@@ -375,11 +382,13 @@ pub async fn create(
     .bind(&metadata.data_packet)
     .bind(&metadata.signature)
     .bind(bytes)
+    .bind(input.id)
     .fetch_one(&mut *tx)
     .await
     .map_err(|error| match &error {
         sqlx::Error::Database(db) if db.is_unique_violation() => {
-            AppError::conflict("this calendar key is in use")
+            AppError::conflict("this calendar id or key is in use")
+                .with_details(serde_json::json!({ "code": "calendarExists" }))
         }
         _ => error.into(),
     })?;
