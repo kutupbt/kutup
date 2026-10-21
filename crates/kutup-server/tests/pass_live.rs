@@ -858,6 +858,25 @@ fn the_largest_vault_upload_is_an_administrators_setting() {
     };
     let (name, password) = admin.split_once(':').unwrap();
     let token = admin_token(&c, &base, password, name);
+    // Back to the default however this test ends, so a failure here never
+    // leaves the stack refusing larger uploads.
+    struct Restore<'a> {
+        c: &'a Client,
+        url: String,
+        token: &'a str,
+    }
+    impl Drop for Restore<'_> {
+        fn drop(&mut self) {
+            let _ = bearer(self.c.put(&self.url), self.token)
+                .json(&json!({ "passVaultMaxBytes": 64 * 1024 * 1024 }))
+                .send();
+        }
+    }
+    let _restore = Restore {
+        c: &c,
+        url: format!("{base}/api/admin/settings"),
+        token: &token,
+    };
     let put = |value: Value| {
         bearer(c.put(format!("{base}/api/admin/settings")), &token)
             .json(&json!({ "passVaultMaxBytes": value }))

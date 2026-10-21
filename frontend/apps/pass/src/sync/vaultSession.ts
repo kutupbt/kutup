@@ -140,18 +140,24 @@ export class VaultSession {
     if (!this.canEdit) throw new VaultError('this vault is read-only for you')
     const applied = await this.handle.apply(op)
     if (applied.changed) {
+      // The edit is saved whatever follows.
+      this.dirty = true
+      this.scheduleSave(SAVE_DELAY_MS)
       // A rename made while locked, or in Drive, reaches the name inside the
-      // KeePass file with the next edit (KeePassXC shows that one).
+      // KeePass file with the next edit (KeePassXC shows that one); best
+      // effort, never in the way of the edit itself.
       const title = vaultTitle(this.file.name)
       if (op.op !== 'updateVault' && title) {
-        const view = await this.handle.view()
-        if (view.name !== title) {
-          await this.handle.apply({ op: 'updateVault', name: title, description: view.description, defaultUserName: view.defaultUserName })
+        try {
+          const view = await this.handle.view()
+          if (view.name !== title) {
+            await this.handle.apply({ op: 'updateVault', name: title, description: view.description, defaultUserName: view.defaultUserName })
+          }
+        } catch {
+          // Tried again with the next edit.
         }
       }
-      this.dirty = true
       this.set({ view: await this.handle.view(), status: this.state.status === 'saved' ? 'saving' : this.state.status })
-      this.scheduleSave(SAVE_DELAY_MS)
     }
     return applied
   }

@@ -74,6 +74,15 @@ test('pass: a vault is renamed while locked, downloaded, duplicated, moved, dele
   await page.getByRole('alertdialog').getByRole('button', { name: 'Delete' }).click()
   await expect(vaultRow(page, 'Yeni ad (2)')).toHaveCount(0, { timeout: 30_000 })
 
+  // A vault in the trash with a kept key leaves the others opening with the
+  // sign-in: the original, locked in this tab, asks only for the Kutup
+  // password (its kept key was read), never the vault's own.
+  await vaultRow(page, 'Yeni ad').getByText('Yeni ad', { exact: true }).click()
+  await page.getByLabel('Your Kutup password').fill(PASSWORD)
+  await page.getByRole('button', { name: 'Unlock with my password' }).click()
+  await expect(page.getByRole('list', { name: 'Entries' }).getByRole('button', { name: 'Banka' })).toBeVisible({ timeout: 60_000 })
+  await openPass(page)
+
   // Uploaded back: not a .kdbx refused at once; the wrong password said
   // before anything is uploaded; the right one, and it opens.
   await page.getByTestId('vault-upload').click()

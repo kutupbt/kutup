@@ -62,4 +62,3 @@ export async function moveFile(from: Folder, listed: DriveFile, to: Folder): Pro
     throw error
   }
 }
-

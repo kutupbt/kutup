@@ -88,8 +88,15 @@ export function UploadVaultDialog({ open, onOpenChange }: { open: boolean; onOpe
       setError(t('upload.tooLarge', { size: formatBytes(maxBytes, i18n.language) }))
       return
     }
-    const contents = new Uint8Array(await file.arrayBuffer())
-    const probe = await probeVault(contents)
+    let contents: Uint8Array
+    let probe: VaultProbe
+    try {
+      contents = new Uint8Array(await file.arrayBuffer())
+      probe = await probeVault(contents)
+    } catch {
+      setError(t('upload.unreadable'))
+      return
+    }
     if (probe.kind === 'notKeePass') {
       setError(t('upload.notKeePass'))
       return

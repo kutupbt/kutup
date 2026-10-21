@@ -441,6 +441,7 @@
     "keyFile": "The key file couldn't be read.",
     "failed": "The vault couldn't be uploaded. Try again.",
     "done": "Vault uploaded.",
-    "submit": "Upload"
+    "submit": "Upload",
+    "unreadable": "This file couldn't be read. Choose it again."
   }
 }

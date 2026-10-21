@@ -441,6 +441,7 @@
     "keyFile": "Anahtar dosyası okunamadı.",
     "failed": "Kasa yüklenemedi. Yeniden deneyin.",
     "done": "Kasa yüklendi.",
-    "submit": "Yükle"
+    "submit": "Yükle",
+    "unreadable": "Bu dosya okunamadı. Yeniden seçin."
   }
 }
