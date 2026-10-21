@@ -2160,13 +2160,17 @@ only the envelope's public header.
 
 ### GET /api/pass/vault-secrets
 
-The caller's vault secrets, for vaults they can open: `[{fileId, envelope,
-revision, updatedAt}]` (`envelope` base64; `revision` the one in its header,
-the base of the next keep). A vault in the trash keeps its secret,
-unlisted, until it is restored; a secret for a vault the caller cannot open
-now (unshared) is unlisted too, and listed again if access comes back: a
-read never deletes one, and a failed access check fails the request. Purging
-a vault deletes every secret for it.
+Every one of the caller's vault secrets, as the account head's `passSecrets`
+index lists them: `[{fileId, envelope, state, revision, updatedAt}]`
+(`envelope` base64; `revision` the one in its header, the base of the next
+keep). `state` says what has become of the vault: `open` (the caller can
+open it: the only state whose key clients use), `trashed` (kept for a
+restore), `unreachable` (the vault is there but not shared with the caller
+now; `open` again if access comes back) or `gone` (purged). A read never
+deletes one, and a failed access check fails the request; a secret goes only
+when its owner forgets it (`DELETE`, or `POST …/forget` for several), since
+it may be the only copy of a generated password or a key file's element.
+Clients check the whole list, every state, against the head.
 
 ### PUT /api/pass/vault-secrets/:fileId
 

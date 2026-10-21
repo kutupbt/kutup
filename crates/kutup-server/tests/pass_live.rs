@@ -3,9 +3,9 @@
 //!
 //! Each person keeps, per vault they can open, the vault's key sealed under
 //! their master key. The server checks the envelope is that account's vault
-//! secret and that the vault is theirs to open; a trashed vault's secret is
-//! kept but unlisted, and a purged vault's secret stays (unreachable but
-//! listed in the account head's index) until its owner forgets it
+//! secret and that the vault is theirs to open. Every secret is listed, as
+//! the account head's index lists it, with what became of its vault: one in
+//! the trash, out of reach or purged stays until its owner forgets it
 //! (docs/plans/rollback-protection.md §9).
 //!
 //! Gated on `KUTUP_LIVE_SERVER`:
@@ -101,6 +101,19 @@ fn list(c: &Client, base: &str, user: &User) -> Vec<Value> {
         .unwrap();
     assert_eq!(r.status(), StatusCode::OK);
     r.json().unwrap()
+}
+
+/// Each listed secret's vault and what became of it.
+fn states(c: &Client, base: &str, user: &User) -> Vec<(String, String)> {
+    list(c, base, user)
+        .into_iter()
+        .map(|row| {
+            (
+                row["fileId"].as_str().unwrap().to_owned(),
+                row["state"].as_str().unwrap().to_owned(),
+            )
+        })
+        .collect()
 }
 
 #[test]
@@ -292,7 +305,7 @@ fn vault_secrets() {
     assert_eq!(list(&c, &base, &member).len(), 0);
     assert_eq!(list(&c, &base, &owner).len(), 1);
 
-    // In the trash: kept, unlisted; restored: listed again.
+    // In the trash: kept, listed as such (the head lists it); restored: open.
     let trashed = bearer(
         c.delete(format!("{base}/api/files/{}", vault.id)),
         &owner.token,
@@ -300,7 +313,10 @@ fn vault_secrets() {
     .send()
     .unwrap();
     assert!(trashed.status().is_success(), "trash: {}", trashed.status());
-    assert_eq!(list(&c, &base, &owner).len(), 0);
+    assert_eq!(
+        states(&c, &base, &owner),
+        vec![(vault.id.clone(), "trashed".to_owned())]
+    );
     let restored = bearer(
         c.post(format!("{base}/api/trash/{}/restore", vault.id)),
         &owner.token,
@@ -312,9 +328,12 @@ fn vault_secrets() {
         "restore: {}",
         restored.status()
     );
-    assert_eq!(list(&c, &base, &owner).len(), 1);
+    assert_eq!(
+        states(&c, &base, &owner),
+        vec![(vault.id.clone(), "open".to_owned())]
+    );
 
-    // Purged: its secrets go with it.
+    // Purged: its secret stays, listed as gone, until its owner forgets it.
     bearer(
         c.delete(format!("{base}/api/files/{}", vault.id)),
         &owner.token,
@@ -334,6 +353,18 @@ fn vault_secrets() {
     )
     .send()
     .unwrap();
+    assert_eq!(
+        states(&c, &base, &owner),
+        vec![(vault.id.clone(), "gone".to_owned())]
+    );
+    let forgot = bearer(
+        c.post(format!("{base}/api/pass/vault-secrets/forget")),
+        &owner.token,
+    )
+    .json(&json!({ "fileIds": [vault.id] }))
+    .send()
+    .unwrap();
+    assert_eq!(forgot.status(), StatusCode::NO_CONTENT);
     assert_eq!(list(&c, &base, &owner).len(), 0);
     // Nothing left stored by this test.
     assert_eq!(used(&c, &base, &owner.token), 0);
@@ -750,9 +781,9 @@ fn a_kept_key_is_hidden_not_deleted_while_access_is_gone() {
     )
     .unwrap();
     assert_eq!(
-        list(&c, &base, &member).len(),
-        0,
-        "hidden while out of reach"
+        states(&c, &base, &member),
+        vec![(vault.id.clone(), "unreachable".to_owned())],
+        "listed, not used, while out of reach"
     );
     assert_eq!(held(), 1, "the read deleted nothing");
     rt.block_on(
@@ -764,16 +795,20 @@ fn a_kept_key_is_hidden_not_deleted_while_access_is_gone() {
         .execute(&pool),
     )
     .unwrap();
-    let back = list(&c, &base, &member);
-    assert_eq!(back.len(), 1);
-    assert_eq!(back[0]["fileId"], vault.id.as_str());
+    assert_eq!(
+        states(&c, &base, &member),
+        vec![(vault.id.clone(), "open".to_owned())]
+    );
 
     // Purged, the vault leaves the kept key for its owner to forget (never
-    // dropped by the server, which could not write a head for it): hidden
-    // from the list, gone once forgotten.
+    // dropped by the server, which could not write a head for it): listed
+    // as gone, and gone once forgotten.
     purge_file(&c, &base, &owner, &vault.id);
     assert_eq!(held(), 1, "kept until forgotten");
-    assert_eq!(list(&c, &base, &member).len(), 0);
+    assert_eq!(
+        states(&c, &base, &member),
+        vec![(vault.id.clone(), "gone".to_owned())]
+    );
     let forgot = bearer(
         c.post(format!("{base}/api/pass/vault-secrets/forget")),
         &member.token,

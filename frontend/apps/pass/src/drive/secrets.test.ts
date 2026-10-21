@@ -57,7 +57,7 @@ import { forgetVaultKey, keepCopiedKey, keepVaultKey, keptGeneratedPassword, kep
 
 const BINDING = '5f0c2f6e-1d2b-4c3a-8e9f-0a1b2c3d4e5f'
 const session = { userId: 'u1', masterKey: new Uint8Array(32), envelopeBinding: BINDING } as unknown as Session
-const row = (kind: string, binding: string, revision = T) => ({ fileId: 'v', envelope: `${kind}:${binding}:v:${revision}`, revision, updatedAt: '' })
+const row = (kind: string, binding: string, revision = T) => ({ fileId: 'v', envelope: `${kind}:${binding}:v:${revision}`, state: 'open' as const, revision, updatedAt: '' })
 const conflict = (revision: number) => Object.assign(new Error('409'), { isAxiosError: true, response: { status: 409, data: { code: 'revision_conflict', revision } } })
 
 /** A vault handle whose keepKey seals the fake way, at the revision asked. */
@@ -169,6 +169,22 @@ describe('kept vault keys', () => {
     const rows = await loadVaultSecrets(session)
     expect(rows[0]?.vouched).toBe(T + 1)
     expect(await keptKey(session, rows, 'v')).toBeNull()
+  })
+
+  it("checks every listed key against the head, and uses only those of vaults open to the account", async () => {
+    head.covered = true
+    head.index = () => [['v', T], ['t', T], ['g', T]]
+    get.mockResolvedValue({
+      data: [
+        row('sealed', BINDING, T),
+        { ...row('sealed', BINDING, T), fileId: 't', state: 'trashed' },
+        { ...row('sealed', BINDING, T), fileId: 'g', state: 'gone' },
+      ],
+    })
+    expect((await loadVaultSecrets(session)).map((r) => r.fileId)).toEqual(['v'])
+    // One short of the head's, a trashed vault's left out: refused, as any.
+    get.mockResolvedValue({ data: [row('sealed', BINDING, T), { ...row('sealed', BINDING, T), fileId: 'g', state: 'gone' }] })
+    await expect(loadVaultSecrets(session)).rejects.toBeInstanceOf(NotInVerifiedIndexError)
   })
 })
 
