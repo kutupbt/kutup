@@ -18,6 +18,15 @@ fn js_error(message: impl std::fmt::Display) -> JsValue {
     JsError::new(&message.to_string()).into()
 }
 
+/// A new KeePassXC key file (XML v2, 32 random bytes): for the person to
+/// download, never sent anywhere.
+#[wasm_bindgen(js_name = generateKeyFile)]
+pub fn generate_key_file() -> Result<Vec<u8>, JsValue> {
+    Ok(kutup_pass::kdbx::generate_key_file()
+        .map_err(js_error)?
+        .to_vec())
+}
+
 fn to_js<T: Serialize>(value: &T) -> Result<JsValue, JsValue> {
     // `null`, not `undefined`, for what is missing.
     value
@@ -59,9 +68,10 @@ struct MergeOutcome {
 pub struct Vault {
     db: Database,
     key: VaultKey,
-    /// The key was changed and not saved since: Drive's copy still opens
-    /// with the old one, so the new one is not kept yet.
-    key_unsaved: bool,
+    /// The key before a change not saved since (and when it was last
+    /// changed): Drive's copy still opens with it, so the new key is not
+    /// kept yet, and a failed save goes back to it (`abandonKeyChange`).
+    previous_key: Option<(VaultKey, Option<chrono::NaiveDateTime>)>,
 }
 
 #[wasm_bindgen]
@@ -78,7 +88,7 @@ impl Vault {
         Ok(Vault {
             db,
             key,
-            key_unsaved: false,
+            previous_key: None,
         })
     }
 
@@ -114,7 +124,7 @@ impl Vault {
         Ok(Vault {
             db,
             key,
-            key_unsaved: false,
+            previous_key: None,
         })
     }
 
@@ -161,7 +171,7 @@ impl Vault {
     /// The vault as KDBX 4.1 file contents.
     pub fn save(&mut self) -> Result<Vec<u8>, JsValue> {
         let saved = kutup_pass::save(&self.db, &self.key).map_err(js_error)?;
-        self.key_unsaved = false;
+        self.previous_key = None;
         Ok(saved)
     }
 
@@ -222,7 +232,7 @@ impl Vault {
         revision: f64,
         generated: bool,
     ) -> Result<String, JsValue> {
-        if self.key_unsaved {
+        if self.previous_key.is_some() {
             return Err(js_error(
                 "save the vault with its new key before keeping it",
             ));
@@ -267,10 +277,41 @@ impl Vault {
         key_file: Option<Vec<u8>>,
         now_ms: f64,
     ) -> Result<(), JsValue> {
-        self.key = key(password, key_file)?;
-        self.key_unsaved = true;
-        self.db.meta.master_key_changed = Some(time(now_ms)?);
+        let new = key(password, key_file)?;
+        let changed = Some(time(now_ms)?);
+        let old = std::mem::replace(&mut self.key, new);
+        // A second change before a save still goes back to the saved key.
+        if self.previous_key.is_none() {
+            self.previous_key = Some((old, self.db.meta.master_key_changed));
+        }
+        self.db.meta.master_key_changed = changed;
         Ok(())
+    }
+
+    /// Goes back to the key the vault was saved with, after a change whose
+    /// save failed: the change is undone, never left half-made.
+    #[wasm_bindgen(js_name = abandonKeyChange)]
+    pub fn abandon_key_change(&mut self) {
+        if let Some((key, changed)) = self.previous_key.take() {
+            self.key = key;
+            self.db.meta.master_key_changed = changed;
+        }
+    }
+
+    /// What the vault's key is made of: `{ password, keyFile }` (a password
+    /// known only as its hash, opened with a kept key, counts).
+    #[wasm_bindgen(js_name = keyParts)]
+    pub fn key_parts(&self) -> Result<JsValue, JsValue> {
+        #[derive(Serialize)]
+        #[serde(rename_all = "camelCase")]
+        struct KeyParts {
+            password: bool,
+            key_file: bool,
+        }
+        to_js(&KeyParts {
+            password: self.key.has_password(),
+            key_file: self.key.key_file().is_some(),
+        })
     }
 }
 

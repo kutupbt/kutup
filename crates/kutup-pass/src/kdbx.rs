@@ -56,6 +56,11 @@ impl VaultKey {
         self.password_hash.as_deref()
     }
 
+    /// Whether the key has a password, given as it is or as its hash.
+    pub fn has_password(&self) -> bool {
+        self.password.is_some() || self.password_hash.is_some()
+    }
+
     /// The key file's contents, if the key has one.
     pub fn key_file(&self) -> Option<&[u8]> {
         self.key_file.as_deref().map(Vec::as_slice)
