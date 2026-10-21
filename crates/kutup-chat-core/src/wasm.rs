@@ -4111,6 +4111,43 @@ impl WasmChatClient {
             .map_err(chat_error)
     }
 
+    /// Writes `peer`'s pending pin to the account's list now (they renamed):
+    /// true when one was written.
+    #[wasm_bindgen(js_name = writeIdentityPinNow)]
+    pub async fn write_identity_pin_now(
+        &mut self,
+        peer: String,
+    ) -> std::result::Result<bool, JsValue> {
+        self.engine
+            .write_identity_pin_now(&peer)
+            .await
+            .map_err(chat_error)
+    }
+
+    /// The pin Chat keeps for `peer` and hasn't written to the account's
+    /// list yet: `{authorityPublicKey, since}`, or null.
+    #[wasm_bindgen(js_name = pendingIdentityPin)]
+    pub async fn pending_identity_pin(
+        &mut self,
+        peer: String,
+    ) -> std::result::Result<JsValue, JsValue> {
+        #[derive(Serialize)]
+        #[serde(rename_all = "camelCase")]
+        struct PendingPin {
+            authority_public_key: String,
+            since: String,
+        }
+        let pending = self
+            .engine
+            .pending_identity_pin(&peer)
+            .await
+            .map_err(chat_error)?;
+        to_output(&pending.map(|(authority_public_key, since)| PendingPin {
+            authority_public_key,
+            since,
+        }))
+    }
+
     /// The line saying `peer` (an account key) changed their username from
     /// `previous` to `current`, step `sequence` of their own verified rename
     /// chain; written once. True when it was written now.

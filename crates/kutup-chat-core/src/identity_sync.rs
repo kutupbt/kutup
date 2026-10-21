@@ -163,23 +163,28 @@ impl IdentityPinsSync {
         trust: &ManifestTrust,
         now_seconds: u64,
     ) -> Result<()> {
-        self.record_all(transport, std::slice::from_ref(trust), now_seconds)
+        self.record_all(transport, &[(trust.clone(), now_seconds)], now_seconds)
             .await
     }
 
     /// Writes Chat's view of every one of `trusts` in one write: the
-    /// contacts the list does not know, and the ones verified here. One that
-    /// the list holds for another account is never written (and said, once
-    /// the others are).
+    /// contacts the list does not know, and the ones verified here, each
+    /// pinned as of when it was first seen (its `since`: a rename after it
+    /// is the one a person is told of, even when the pin is written later).
+    /// One that the list holds for another account is never written (and
+    /// said, once the others are).
     pub(crate) async fn record_all(
         &mut self,
         transport: &dyn ChatTransport,
-        trusts: &[ManifestTrust],
+        trusts: &[(ManifestTrust, u64)],
         now_seconds: u64,
     ) -> Result<()> {
-        let trusts: Vec<&ManifestTrust> = trusts
+        let trusts: Vec<(&ManifestTrust, u64)> = trusts
             .iter()
-            .filter(|trust| !trust.continuity_gap && trust.trust != AuthorityTrust::Quarantined)
+            .filter(|(trust, _)| {
+                !trust.continuity_gap && trust.trust != AuthorityTrust::Quarantined
+            })
+            .map(|(trust, seen)| (trust, (*seen).min(now_seconds)))
             .collect();
         if trusts.is_empty() {
             return Ok(());
@@ -187,9 +192,9 @@ impl IdentityPinsSync {
         for _ in 0..5 {
             let (revision, mut list) = self.load(transport).await?;
             let before = list.clone();
-            let since = identity_pins::since_from_unix(now_seconds);
             let mut elsewhere = false;
-            for trust in &trusts {
+            for (trust, seen) in &trusts {
+                let since = identity_pins::since_from_unix(*seen);
                 // The rules every app shares (identity_pins::record): a
                 // contact met through a trusted manifest is pinned on first
                 // use, and one verified in person replaces whatever was

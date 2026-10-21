@@ -280,6 +280,18 @@ following the main session's review of #252:
     together (`flush_identity_pins`, on the same tick and at sign-out); an
     in-person verification is written at once. A queued pin lost to a reload
     is queued again at the next contact.
+  - A queued pin keeps when the account was first seen, and is written with
+    that as its `since`: a rename after the first meeting is still told,
+    however late the pin is written. Meanwhile Chat's rename watch follows
+    the peer's rename chain against the queued pin
+    (`pendingIdentityPin`, the chain verified against its authority; the
+    list is not touched), so a rename right after a first meeting is told
+    at once (spec 160; master CI on e43bb82c found it missed). When that
+    shows a rename, the peer's pin is written at once
+    (`writeIdentityPinNow`) and the chain followed into the list, so the
+    list's other checks (someone else now at their old address) know them
+    by both addresses. A rename is rare and the list sealed: writing early
+    then tells the server little.
 - Web: `ApiChatTransport.fetchContactList / storeContactEntry /
   deleteContactEntry` under the account head's `chatContacts` scope; `full`
   is the server's `contactListFull` code. Signing out flushes the contact
@@ -338,6 +350,12 @@ The user's answers (2026-10-19, relayed by the main session):
   - eviction never drops a block.
 - Browser: spec 34's restored pair is mutual contacts again with no
   re-accept, and a block made before the loss holds after it.
+- **The gate for any change to contacts or identity pins** (who is met,
+  when a pin is written, how it is dated): specs 34 and 164 (chat-backup
+  suite) **and spec 160** (username renames, in the account suite). Run
+  spec 160 locally before such a PR: in CI the account suite runs only
+  after the mail specs, on master, so a pin change that breaks it got past
+  #279's checks (master CI on e43bb82c).
 
 ## Order
 
