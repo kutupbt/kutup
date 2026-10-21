@@ -40,6 +40,9 @@ static() {
   step "Documentation checks"
   python3 scripts/test-check-docs.py
   python3 scripts/check-docs.py
+  step "Frontend lockfile (runtime singletons resolve once)"
+  python3 scripts/test-check-lockfile-singletons.py
+  python3 scripts/check-lockfile-singletons.py frontend/pnpm-lock.yaml
   step "Formatting (workspace, standalone crates, fuzz)"
   cargo fmt --all -- --check
   for crate in "${standalone_crates[@]}"; do
