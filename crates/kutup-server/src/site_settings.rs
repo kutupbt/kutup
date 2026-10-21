@@ -147,6 +147,35 @@ pub async fn chat_group_link_joins(pool: &PgPool) -> Result<(i64, i64), sqlx::Er
     ))
 }
 
+/// The largest `.kdbx` file Kutup Pass takes in an upload (an existing
+/// vault brought in from KeePassXC or a backup), set under Administration →
+/// Server settings. The browser opens a vault whole, so this bounds what an
+/// upload makes it hold; a vault's own saves are never refused by it.
+pub const PASS_VAULT_MAX_BYTES: &str = "pass_vault_max_bytes";
+pub const PASS_VAULT_MAX_BYTES_DEFAULT: i64 = 64 * 1024 * 1024;
+
+/// 1 MiB to 1 GiB.
+pub fn validate_pass_vault_max_bytes(value: i64) -> Result<i64, &'static str> {
+    if (1024 * 1024..=1024 * 1024 * 1024).contains(&value) {
+        Ok(value)
+    } else {
+        Err("the largest Pass vault upload must be between 1 MiB and 1 GiB")
+    }
+}
+
+/// The stored largest Pass vault upload, else its first value.
+pub async fn pass_vault_max_bytes(pool: &PgPool) -> Result<i64, sqlx::Error> {
+    Ok(
+        sqlx::query_scalar::<_, String>("SELECT value FROM site_settings WHERE key=$1")
+            .bind(PASS_VAULT_MAX_BYTES)
+            .fetch_optional(pool)
+            .await?
+            .and_then(|value| value.parse::<i64>().ok())
+            .and_then(|value| validate_pass_vault_max_bytes(value).ok())
+            .unwrap_or(PASS_VAULT_MAX_BYTES_DEFAULT),
+    )
+}
+
 /// Group avatars on this home (docs/plans/pairwise-groups.md, "Avatar"):
 /// the largest blob it takes (one of the avatar lengths), the most its
 /// avatars may take per group (the current blob and a pending upload), and
@@ -506,6 +535,14 @@ mod tests {
         );
         assert!(validate_chat_group_link_joins(0).is_err());
         assert!(validate_chat_group_link_joins(MAX_LINK_JOINS_PER_MIN + 1).is_err());
+    }
+
+    #[test]
+    fn a_pass_vault_upload_limit_stays_within_its_bounds() {
+        assert!(validate_pass_vault_max_bytes(PASS_VAULT_MAX_BYTES_DEFAULT).is_ok());
+        assert!(validate_pass_vault_max_bytes(1024 * 1024).is_ok());
+        assert!(validate_pass_vault_max_bytes(1024 * 1024 - 1).is_err());
+        assert!(validate_pass_vault_max_bytes(1024 * 1024 * 1024 + 1).is_err());
     }
 
     #[test]

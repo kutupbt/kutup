@@ -97,6 +97,24 @@ pub fn open(
     })
 }
 
+/// Keeps what the account keeps for vault `from` for vault `to` too, at
+/// `revision`: for a copy of the vault, which has the same key. The secret
+/// moves as it is (a chosen password's hash, a generated password, a key
+/// file's element), so neither vault is opened and no password is needed.
+pub fn reseal(
+    envelope: &[u8],
+    master_key: &[u8],
+    binding: &str,
+    from: &[u8; 16],
+    to: &[u8; 16],
+    revision: u64,
+) -> Result<Vec<u8>, KeptError> {
+    let (secret, _) = open_vault_secret(envelope, master_key, binding, from)?;
+    Ok(seal_vault_secret(
+        master_key, binding, to, revision, &secret,
+    )?)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -136,6 +154,46 @@ mod tests {
                 generated.then(|| key.password.as_deref().unwrap().as_str())
             );
         }
+    }
+
+    #[test]
+    fn a_copy_keeps_the_same_secret_and_only_for_itself() {
+        const COPY: [u8; 16] = [2; 16];
+        for (key, generated) in [
+            (VaultKey::new().with_password("parola-çğ"), false),
+            (VaultKey::new().with_password("k7m2q-9xd4t-4tpav"), true),
+            (
+                VaultKey::new()
+                    .with_password("p")
+                    .with_key_file(b"<KeyFile/>"),
+                false,
+            ),
+        ] {
+            let contents = vault_saved_with(&key);
+            let envelope = seal(&MASTER, BINDING, &VAULT, 5, &key, generated).unwrap();
+            let copied = reseal(&envelope, &MASTER, BINDING, &VAULT, &COPY, 1).unwrap();
+            let kept = open(&copied, &MASTER, BINDING, &COPY).unwrap();
+            assert_eq!(kept.revision, 1);
+            assert!(open_vault(&contents, &kept.key).is_ok());
+            assert_eq!(
+                kept.generated_password.as_deref().map(String::as_str),
+                generated.then(|| key.password.as_deref().unwrap().as_str())
+            );
+            // Bound to the copy: it doesn't stand in for the original.
+            assert!(open(&copied, &MASTER, BINDING, &VAULT).is_err());
+        }
+        // Only from what is kept for the vault named.
+        let envelope = seal(
+            &MASTER,
+            BINDING,
+            &VAULT,
+            5,
+            &VaultKey::new().with_password("p"),
+            false,
+        )
+        .unwrap();
+        assert!(reseal(&envelope, &MASTER, BINDING, &COPY, &VAULT, 1).is_err());
+        assert!(reseal(&envelope, &[8; 32], BINDING, &VAULT, &COPY, 1).is_err());
     }
 
     #[test]

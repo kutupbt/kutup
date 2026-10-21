@@ -211,9 +211,18 @@ capability advertisement, and where each web app lives (`apps`, from
     "photos": "https://photos.example.org",
     "office": "https://office.example.org",
     "editor": "https://editor.example.org"
-  }
+  },
+  "nameHoldDays": 180,
+  "oldAddressReceiveDays": 90,
+  "passVaultMaxBytes": 67108864
 }
 ```
+
+`passVaultMaxBytes` is the largest `.kdbx` file Kutup Pass takes in an
+upload (an existing vault brought in from KeePassXC or a backup), as
+administrators set it (`PUT /api/admin/settings`; 64 MiB at first). The
+browser opens a vault whole, so this bounds what an upload makes it hold;
+a vault's own saves are never refused by it.
 
 The chat block also advertises size/retention limits, the canonical federation
 server name when enabled, and the authenticated sealed-sender service-policy
@@ -2345,13 +2354,17 @@ only the envelope's public header.
 
 ### GET /api/pass/vault-secrets
 
-The caller's vault secrets, for vaults they can open: `[{fileId, envelope,
-revision, updatedAt}]` (`envelope` base64; `revision` the one in its header,
-the base of the next keep). A vault in the trash keeps its secret,
-unlisted, until it is restored; a secret for a vault the caller cannot open
-now (unshared) is unlisted too, and listed again if access comes back: a
-read never deletes one, and a failed access check fails the request. Purging
-a vault deletes every secret for it.
+Every one of the caller's vault secrets, as the account head's `passSecrets`
+index lists them: `[{fileId, envelope, state, revision, updatedAt}]`
+(`envelope` base64; `revision` the one in its header, the base of the next
+keep). `state` says what has become of the vault: `open` (the caller can
+open it: the only state whose key clients use), `trashed` (kept for a
+restore), `unreachable` (the vault is there but not shared with the caller
+now; `open` again if access comes back) or `gone` (purged). A read never
+deletes one, and a failed access check fails the request; a secret goes only
+when its owner forgets it (`DELETE`, or `POST …/forget` for several), since
+it may be the only copy of a generated password or a key file's element.
+Clients check the whole list, every state, against the head.
 
 ### PUT /api/pass/vault-secrets/:fileId
 
@@ -4720,9 +4733,13 @@ Return current global server settings.
   "chatGroupCapabilitiesPerAccount": 1024,
   "chatGroupAvatarMaxBytes": 41001,
   "chatGroupAvatarStoragePerGroupBytes": 82002,
-  "chatGroupAvatarPendingSeconds": 86400
+  "chatGroupAvatarPendingSeconds": 86400,
+  "passVaultMaxBytes": 67108864
 }
 ```
+
+`passVaultMaxBytes` is the largest `.kdbx` file Kutup Pass takes in an
+upload: 1 MiB to 1 GiB (`400` otherwise), 64 MiB at first.
 
 `chatGroupAvatarMaxBytes` is the largest group avatar blob this server takes
 for the groups it hosts: 8233, 16425, 32809 or 41001.

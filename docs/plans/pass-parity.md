@@ -26,7 +26,7 @@ but offers no way to see or change it.
 
 | Area | ✅ | 🟡 | ❌ |
 |---|---|---|---|
-| The database (vault) | 10 | 9 | 20 |
+| The database (vault) | 17 | 6 | 17 |
 | Groups (folders) | 5 | 1 | 6 |
 | Entries | 8 | 6 | 8 |
 | Bulk actions and the entry list | 3 | 1 | 11 |
@@ -37,7 +37,7 @@ but offers no way to see or change it.
 | Locking and unlocking | 5 | 1 | 2 |
 | Sync, sharing and merges | 6 | 0 | 3 |
 | Platforms | 2 | 4 | 4 |
-| **All** | **49** | **31** | **74** |
+| **All** | **56** | **28** | **71** |
 
 ## The database (vault)
 
@@ -47,11 +47,12 @@ but offers no way to see or change it.
 | Save KDBX 4.1 | `Kdbx4Writer.cpp` | ✅ | only 4.1 is written |
 | Several vaults | tabs, one per database | ✅ | every `.kdbx` the account reaches in Drive, own and shared (`features/VaultsPage.tsx`, `drive/vaults.ts`) |
 | Create a vault | Database → New (wizard) | ✅ | `features/CreateVaultDialog.tsx`: a folder, a random vault key kept in the account (default) or a password and/or key file; also from Drive's New menu |
-| Rename a vault | Database settings → name | 🟡 | works, but only inside an **unlocked** vault, in the icon-only "…" menu of its header (`features/VaultPage.tsx`, "Rename vault"; hidden on a read-only vault). The vault list (`VaultsPage.tsx`) has no menu at all, so a locked vault can be renamed only in Drive: users report "no rename" |
-| Vault name vs KDBX `DatabaseName` | the name inside the file | 🟡 | Pass shows the **file** name (`vaultTitle`, falling back to the KDBX name). Renaming in Pass renames both; renaming in Drive renames only the file, so KeePassXC then shows the old name |
-| Delete a vault | delete the file | ❌ | only in Drive (to Drive's trash); nothing in Pass |
-| Duplicate a vault ("Save as") | Database → Save as / Save a copy | ❌ | only Drive's copy |
-| Move a vault to another folder | save elsewhere | ❌ | only in Drive (the vault keeps its file id, so its kept key still opens it) |
+| Rename a vault | Database settings → name | ✅ | the vault list's menu (`features/VaultMenu.tsx`), also while locked, and inside an open vault's "…" menu |
+| Vault name vs KDBX `DatabaseName` | the name inside the file | ✅ | Pass shows the **file** name; a rename here renames both when the vault is open, and a rename made while locked or in Drive reaches `DatabaseName` at the vault's next edit (`sync/vaultSession.ts`) |
+| Delete a vault | delete the file | ✅ | the vault list's menu: to Drive's trash, restorable there, its kept key kept so it opens again once restored |
+| Duplicate a vault ("Save as") | Database → Save as / Save a copy | ✅ | the vault list's menu: a copy in the same folder sharing the vault's key (said so), its kept key kept for the copy too |
+| Move a vault to another folder | save elsewhere | ✅ | the vault list's menu, among the owner's writable folders (Drive's `moveFile`, now in `drive-core`); the file keeps its id, so its kept key still opens it |
+| Bring in an existing vault (`.kdbx` upload) | Database → Open | ✅ | "Upload a .kdbx" (`features/UploadVaultDialog.tsx`): checked by its header (KeePass 1, KDBX 3.0 and unknown formats refused with their own message) and that its password or key file opens it before anything is uploaded; up to the administrators' `passVaultMaxBytes` (64 MiB at first); its key kept in the account by default; a KDBX 3.1 or 4.0 file is said to be saved as 4.1 at its first change |
 | Description, default user name | Database settings → General | 🟡 | the default user name fills new entries (`EntryEditor.tsx`), but neither can be changed: `updateVault` carries them and the UI only passes the current values on |
 | Public metadata (name, icon, colour on the unlock screen) | Database settings → General | ❌ | kept |
 | Change the password | Database settings → Security | ❌ | `changeKey` exists in `kutup-pass-wasm` and `vault/client.ts` but nothing in the UI calls it; the CLI has no command either. A vault's key cannot be changed in Kutup at all (needed too after removing a member from a shared folder, research 19 "Unlocking…") |
@@ -76,7 +77,7 @@ but offers no way to see or change it.
 | Import Proton Pass (ZIP/JSON) | `ProtonPassReader.cpp` | 🟡 | Proton Pass's CSV only |
 | Import KeePass 1 (`.kdb`) | `KeePass1Reader.cpp` | ❌ | |
 | Import KeePass XML | Import → KeePass XML | ❌ | |
-| Export KDBX (the file itself) | Save a copy | 🟡 | the vault **is** a `.kdbx` in Drive, but Pass has no download: you go to Drive (user report) |
+| Export KDBX (the file itself) | Save a copy | ✅ | the vault list's menu, "Download .kdbx", also while locked: Drive's layer opened, the KeePass file as it is; the key never in or beside it (said so), and where to see a generated one |
 | Export CSV | `CsvExporter.cpp` | ❌ | |
 | Export XML | `KdbxXmlWriter.cpp` | ❌ | |
 | Export HTML (paper backup) | `HtmlExporter.cpp` | ❌ | |
@@ -261,12 +262,9 @@ What people hit first, then what blocks moving from KeePassXC:
    bin, delete; drag and drop of entries onto groups. Today only one
    entry moves, from its own header. A batch of `moveEntry`/`deleteEntry`
    as one edit (one save, one history step), as Drive's selection does.
-2. **Vault management from the vault list** (user report): a menu on each
-   vault in `VaultsPage.tsx`, also while locked: rename (today only inside
-   an unlocked vault's "…" menu), move to another folder, duplicate,
-   delete (to Drive's trash), "Show in Drive", and **Download the
-   `.kdbx`** (for KeePassXC or a backup; user report). Keep the KDBX
-   `DatabaseName` in step with a rename made in Drive (on the next save).
+2. ~~**Vault management from the vault list**~~ (user report): done. A menu
+   on each vault, also while locked (rename, move, duplicate, download,
+   show in Drive, delete), and uploading an existing `.kdbx`; spec 166.
 3. **Change the vault's key** (user report, with item 1's urgency): a
    Vault settings → Security page wiring `changeKey`: change the password,
    **generate** a key file (KeePassXC's 32-byte random key in its XML v2
