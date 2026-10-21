@@ -10,7 +10,6 @@
 //! sealed requester belongs to it.
 
 use std::sync::LazyLock;
-use std::time::Duration;
 
 use axum::body::Bytes;
 use axum::extract::State;
@@ -34,7 +33,7 @@ use super::{active_policy, signed_federation_error, signed_federation_json};
 use crate::error::{AppError, AppResult};
 use crate::federation::FederationRequestSpec;
 use crate::middleware::AuthUser;
-use crate::ratelimit::RateLimiter;
+use crate::ratelimit::{Limit, RateLimiter};
 use crate::AppState;
 
 const FEDERATION_PATH: &str = "/api/fed/chat/invite-links";
@@ -44,11 +43,11 @@ const MAX_LINKS_PER_ORIGIN: i64 = 10_000;
 const MAX_PENDING_PER_ORIGIN: i64 = 32;
 
 static ACCOUNT_CALLS: LazyLock<RateLimiter> =
-    LazyLock::new(|| RateLimiter::new(120, Duration::from_secs(60)));
+    LazyLock::new(|| RateLimiter::registered(Limit::InviteLinkAccountCalls));
 static ACCOUNT_REQUESTS: LazyLock<RateLimiter> =
-    LazyLock::new(|| RateLimiter::new(10, Duration::from_secs(60 * 60)));
+    LazyLock::new(|| RateLimiter::registered(Limit::InviteLinkAccountRequests));
 static ORIGIN_CALLS: LazyLock<RateLimiter> =
-    LazyLock::new(|| RateLimiter::new(600, Duration::from_secs(60)));
+    LazyLock::new(|| RateLimiter::registered(Limit::InviteLinkOriginCalls));
 
 fn token_hash(token: &str) -> AppResult<Vec<u8>> {
     let bytes = STANDARD

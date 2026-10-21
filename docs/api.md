@@ -4582,6 +4582,53 @@ entry.
 
 ---
 
+### GET /api/admin/rate-limits · PUT /api/admin/rate-limits/{key}
+
+**Auth:** Bearer JWT (admin)
+
+Every rate limit the server keeps (docs/plans/admin-rate-limits.md):
+
+```json
+{
+  "limits": [
+    {
+      "key": "login",
+      "section": "accounts",
+      "per": "address",
+      "unit": "events",
+      "windowSeconds": 60,
+      "about": "Sign-in attempts (and their second factor).",
+      "value": 10,
+      "firstValue": 10,
+      "firstFrom": "default",
+      "env": "RATE_LIMIT_LOGIN_PER_MIN",
+      "set": false,
+      "min": 1,
+      "max": 1000
+    }
+  ]
+}
+```
+
+`unit` is `events` (in `windowSeconds`), `attempts` or `minutes`;
+`firstFrom` is `default`, `environment` or `testStack`. `PUT` takes
+`{ "value": 20 }`, or `{ "value": null }` to go back to the first value, and
+answers the limit as it is now. A value outside `min`–`max` is `400`, an
+unknown key `404`. It applies at once on this backend and within 30 seconds
+on the others; each change writes a `settings.rate_limit` audit entry.
+
+### GET /api/admin/users/{id}/rate-limits · PUT /api/admin/users/{id}/rate-limits/{key}
+
+**Auth:** Bearer JWT (admin)
+
+The limits counted per account, as they stand for one account:
+`{ "limits": [{ "key", "section", "unit", "windowSeconds", "value",
+"siteValue", "override", "min", "max" }] }`. `PUT` gives the account its own
+value (`{ "value": 3 }`) or takes it back (`null`); a limit not counted per
+account is `400`. Each change writes a `user.rate_limit` audit entry.
+
+---
+
 ### GET /api/admin/settings
 
 Return current global server settings.

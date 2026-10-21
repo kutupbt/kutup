@@ -28,3 +28,11 @@ export function generateTempPassword(length = 20): string {
   }
   return out.join('')
 }
+
+/** A rate limit's window in its largest whole unit: 900 s is 15 minutes. */
+export function windowUnit(seconds: number): { unit: 'days' | 'hours' | 'minutes' | 'seconds'; count: number } {
+  if (seconds % 86_400 === 0) return { unit: 'days', count: seconds / 86_400 }
+  if (seconds % 3600 === 0) return { unit: 'hours', count: seconds / 3600 }
+  if (seconds % 60 === 0) return { unit: 'minutes', count: seconds / 60 }
+  return { unit: 'seconds', count: seconds }
+}

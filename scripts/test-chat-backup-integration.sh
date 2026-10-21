@@ -17,7 +17,7 @@ export RATE_LIMIT_LOGIN_PER_MIN=1000
 export RATE_LIMIT_PREFLIGHT_PER_MIN=1000
 export RATE_LIMIT_REGISTER_PER_HOUR=1000
 # Recovery grants and preflights, from several tests in an hour.
-export RATE_LIMIT_RECOVERY_PER_HOUR=1000
+export RATE_LIMIT_RECOVERY_PER_HOUR=500
 # The live tests register their own accounts.
 export REGISTRATION_MODE=on
 # The device tests register more than 20 devices on one account in a minute.
@@ -121,6 +121,11 @@ KUTUP_LIVE_SERVER="http://127.0.0.1:$port" \
 KUTUP_LIVE_SERVER="http://127.0.0.1:$port" \
   KUTUP_LIVE_ADMIN="$test_admin_username:$test_admin_password" \
   cargo test -p kutup-server --test registration_codes_live -- --nocapture
+# Rate limits administrators set (docs/plans/admin-rate-limits.md): lowered
+# and raised without a restart, bounds, admins only, a reset, the audit.
+KUTUP_LIVE_SERVER="http://127.0.0.1:$port" \
+  KUTUP_LIVE_ADMIN="$test_admin_username:$test_admin_password" \
+  cargo test -p kutup-server --test rate_limits_live -- --nocapture
 
 # The collaboration log over HTTP (the CLI's way in): kept like a socket's
 # frame, and every bad frame refused alike on both paths.

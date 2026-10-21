@@ -28,7 +28,7 @@ use utoipa::ToSchema;
 use crate::error::{AppError, AppResult};
 use crate::handlers::trusted_uuid;
 use crate::middleware::{AdminUser, AuthUser};
-use crate::ratelimit::RateLimiter;
+use crate::ratelimit::{Limit, RateLimiter};
 use crate::AppState;
 
 const SETTING_KEY: &str = "maps";
@@ -45,7 +45,7 @@ const SETTINGS_REFRESH: Duration = Duration::from_secs(60);
 
 /// A map view loads dozens of tiles at once; this bounds a runaway client.
 static PROXY_LIMIT: LazyLock<RateLimiter> =
-    LazyLock::new(|| RateLimiter::new(1200, Duration::from_secs(60)));
+    LazyLock::new(|| RateLimiter::registered(Limit::MapTiles));
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "lowercase")]

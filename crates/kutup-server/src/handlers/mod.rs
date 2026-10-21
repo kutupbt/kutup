@@ -48,6 +48,7 @@ pub mod name_hashes;
 pub mod opaque;
 pub mod pass;
 pub mod pass_icons;
+pub mod rate_limits;
 pub mod registration_codes;
 pub mod renames;
 pub mod security_events;

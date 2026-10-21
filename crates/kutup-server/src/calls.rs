@@ -9,7 +9,6 @@
 //! username))`), so the relay needs no account database.
 
 use std::sync::LazyLock;
-use std::time::Duration;
 
 use axum::extract::State;
 use axum::Json;
@@ -22,14 +21,14 @@ use sha2::{Digest, Sha256};
 
 use crate::error::{AppError, AppResult};
 use crate::middleware::AuthUser;
-use crate::ratelimit::RateLimiter;
+use crate::ratelimit::{Limit, RateLimiter};
 use crate::AppState;
 
 /// How long handed-out TURN credentials work.
 const CREDENTIAL_TTL_SECONDS: i64 = 12 * 60 * 60;
 
 static REQUESTS: LazyLock<RateLimiter> =
-    LazyLock::new(|| RateLimiter::new(60, Duration::from_secs(60)));
+    LazyLock::new(|| RateLimiter::registered(Limit::TurnCredentials));
 
 #[derive(Debug, Serialize, utoipa::ToSchema)]
 #[serde(rename_all = "camelCase")]

@@ -16,6 +16,8 @@ const ACTION_KEYS: Record<string, string> = {
   'report.dismiss': 'reportDismiss',
   'share.remove': 'shareRemove',
   'settings.update': 'settingsUpdate',
+  'settings.rate_limit': 'rateLimitUpdate',
+  'user.rate_limit': 'userRateLimitUpdate',
   'registration_code.created': 'registrationCodeCreated',
   'registration_code.revoked': 'registrationCodeRevoked',
   'maps.settings.update': 'mapsSettingsUpdate',
@@ -61,6 +63,11 @@ export function activitySentence(e: AdminActivityEntry, t: TFunction): string {
     from: text(e.payload.from) ? t(`admin.mailSending.policy.${text(e.payload.from)}`) : '',
     to: text(e.payload.to) ? t(`admin.mailSending.policy.${text(e.payload.to)}`) : '',
     action: e.action,
+    // A rate limit by its name on the page, and its new value (none: reset).
+    limit: text(e.payload.key) ? t(`admin.rateLimits.limit.${text(e.payload.key)}`) : '',
+    value: text(e.payload.value),
   }
+  if (key === 'rateLimitUpdate' && values.value === '') return t('admin.activity.actions.rateLimitReset', values)
+  if (key === 'userRateLimitUpdate' && values.value === '') return t('admin.activity.actions.userRateLimitReset', values)
   return key ? t(`admin.activity.actions.${key}`, values) : t('admin.activity.actions.unknown', values)
 }

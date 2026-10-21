@@ -235,6 +235,10 @@ All file content and metadata are encrypted client-side; the server stores only 
         crate::maps::proxy,
         crate::maps::admin_get,
         crate::maps::admin_put,
+        crate::handlers::rate_limits::list,
+        crate::handlers::rate_limits::update,
+        crate::handlers::rate_limits::account_list,
+        crate::handlers::rate_limits::account_update,
         crate::drive_profile_keys::put_profile_key,
         crate::drive_profile_keys::receive_profile_key,
         // --- devices ---
@@ -561,6 +565,15 @@ All file content and metadata are encrypted client-side; the server stores only 
         crate::drive_profile_keys::DrivePeopleResponse,
         crate::drive_profile_keys::DrivePerson,
         crate::maps::MapSettings,
+        crate::handlers::rate_limits::RateLimitsResponse,
+        crate::handlers::rate_limits::RateLimitEntry,
+        crate::handlers::rate_limits::RateLimitUnit,
+        crate::handlers::rate_limits::UpdateRateLimitRequest,
+        crate::handlers::rate_limits::AccountRateLimitsResponse,
+        crate::handlers::rate_limits::AccountRateLimitEntry,
+        crate::ratelimit::Section,
+        crate::ratelimit::Per,
+        crate::ratelimit::FirstFrom,
         crate::ui_preferences::UiPreferences,
         crate::handlers::name_hashes::ContentHashRequest,
         crate::handlers::name_hashes::AvailableHashesRequest,
@@ -868,7 +881,7 @@ mod tests {
     /// Every HTTP operation registered in `build_router` (74 router entries → 78
     /// method+path pairs, counting each method on a multi-method route). Keep in sync
     /// with `paths(...)` above when routes change.
-    const EXPECTED_OPERATIONS: usize = 91;
+    const EXPECTED_OPERATIONS: usize = 95;
 
     #[test]
     fn spec_lists_every_router_operation() {
