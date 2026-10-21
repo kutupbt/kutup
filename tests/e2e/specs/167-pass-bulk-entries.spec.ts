@@ -1,5 +1,5 @@
 import { expect, test, type Page } from '@playwright/test'
-import { appUrl, newAccount, registerAccount } from '../fixtures/apps'
+import { newAccount, registerAccount } from '../fixtures/apps'
 import { addEntry, createVault, expectSaved, openPass } from '../fixtures/pass'
 
 const PASSWORD = 'Deneme123*PassBulkEntries'
@@ -38,7 +38,6 @@ test('pass: several entries are selected, moved, dragged, recycled, restored to 
   const context = await browser.newContext()
   await registerAccount(context, newAccount('pass167', PASSWORD))
   const page = await context.newPage()
-  await page.goto(appUrl('pass'))
   await openPass(page)
   await createVault(page, 'Toplu', null)
   await newGroup(page, 'Toplu', 'İş')
