@@ -30,7 +30,8 @@ use crate::error::{AppError, AppResult};
 use crate::handlers::trusted_uuid;
 use crate::middleware::AuthUser;
 use crate::site_settings::{
-    CALENDARS_PER_ACCOUNT, CALENDAR_EVENTS_PER_CALENDAR, CALENDAR_SYNC_BATCH,
+    CALENDARS_PER_ACCOUNT, CALENDAR_EVENTS_PAGE, CALENDAR_EVENTS_PER_CALENDAR, CALENDAR_SYNC_BATCH,
+    CALENDAR_WINDOW_DAYS,
 };
 use crate::{revisions, AppState};
 
@@ -60,11 +61,6 @@ fn limited(user_id: Uuid) -> AppResult<()> {
             .with_details(serde_json::json!({ "code": "rateLimited" })))
     }
 }
-
-/// The most events one page answers.
-const MAX_PAGE: i64 = 1000;
-/// The widest window one events query asks (Proton asks a few weeks).
-const MAX_WINDOW_DAYS: i64 = 400;
 
 fn b64(value: &str, what: &str) -> AppResult<Vec<u8>> {
     STANDARD
@@ -605,16 +601,30 @@ pub struct EventView {
     pub end_utc: time::OffsetDateTime,
     pub full_day: bool,
     pub sequence: i32,
+    /// The stored version: a change names it as its `baseRevision`.
+    pub revision: i64,
     #[serde(with = "time::serde::rfc3339")]
     pub modified_at: time::OffsetDateTime,
+}
+
+/// Where the next page starts: after this event, by (start, id). The client
+/// keeps it, so an event deleted or moved meanwhile never ends or skips a
+/// page.
+#[derive(Debug, Serialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct EventCursor {
+    #[serde(with = "time::serde::rfc3339")]
+    pub after_start: time::OffsetDateTime,
+    pub after_id: Uuid,
 }
 
 #[derive(Debug, Serialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct EventPage {
     pub events: Vec<EventView>,
-    /// Pass as `after` for the next page; none when this was the last.
-    pub next: Option<Uuid>,
+    /// Pass as `afterStart` and `afterId` for the next page; none when this
+    /// was the last.
+    pub next: Option<EventCursor>,
 }
 
 #[derive(sqlx::FromRow)]
@@ -637,6 +647,7 @@ struct EventRow {
     end_utc: time::OffsetDateTime,
     full_day: bool,
     sequence: i32,
+    revision: i64,
     modified_at: time::OffsetDateTime,
 }
 
@@ -646,7 +657,7 @@ const EVENT_VIEW: &str = "SELECT e.id, e.calendar_id, e.uid, a.address AS author
         e.shared_encrypted, e.shared_encrypted_signature,
         e.calendar_signed, e.calendar_signed_signature,
         e.calendar_encrypted, e.calendar_encrypted_signature,
-        e.start_utc, e.end_utc, e.full_day, e.sequence, e.modified_at
+        e.start_utc, e.end_utc, e.full_day, e.sequence, e.revision, e.modified_at
    FROM calendar_events e
    LEFT JOIN mail_addresses a ON a.id = e.author_address_id";
 
@@ -684,6 +695,7 @@ fn event_view(row: EventRow) -> EventView {
         end_utc: row.end_utc,
         full_day: row.full_day,
         sequence: row.sequence,
+        revision: row.revision,
         modified_at: row.modified_at,
     }
 }
@@ -711,7 +723,9 @@ pub struct EventsQuery {
     /// The window, RFC 3339: events that meet [start, end).
     pub start: String,
     pub end: String,
-    pub after: Option<Uuid>,
+    /// The `next` of the previous page, both or neither.
+    pub after_start: Option<String>,
+    pub after_id: Option<Uuid>,
     pub limit: Option<i64>,
 }
 
@@ -738,39 +752,50 @@ pub async fn events(
 ) -> AppResult<Json<EventPage>> {
     let user_id = trusted_uuid(&user.user_id)?;
     let (start, end) = (instant(&query.start, "start")?, instant(&query.end, "end")?);
-    if end <= start || end - start > time::Duration::days(MAX_WINDOW_DAYS) {
+    let window_days = CALENDAR_WINDOW_DAYS.load(&state.pool).await?;
+    if end <= start || end - start > time::Duration::days(window_days) {
         return Err(AppError::bad_request(format!(
-            "the window is up to {MAX_WINDOW_DAYS} days, end after start"
+            "the window is up to {window_days} days, end after start"
         )));
     }
-    let limit = query.limit.unwrap_or(MAX_PAGE).clamp(1, MAX_PAGE);
+    let after = match (&query.after_start, query.after_id) {
+        (Some(at), Some(id)) => Some((instant(at, "afterStart")?, id)),
+        (None, None) => None,
+        _ => return Err(AppError::bad_request("afterStart and afterId go together")),
+    };
+    let page = CALENDAR_EVENTS_PAGE.load(&state.pool).await?;
+    let limit = query.limit.unwrap_or(page).clamp(1, page);
     let mut conn = state.pool.acquire().await?;
     let permissions = member_permissions(&mut conn, user_id, id).await?;
     if permissions & READ == 0 {
         return Err(AppError::forbidden("this calendar shows busy times only"));
     }
-    // An event meets the window when it starts before its end and ends (or,
-    // for a repeating one, may still recur) at or after its start. A page
-    // continues after the event `after` by (start, id).
+    // An event meets the half-open window [start, end) when it starts before
+    // its end and ends (or, repeating, may still recur) after its start; one
+    // of no length meets it when it starts in it. A page continues after the
+    // client's cursor by (start, id).
     let mut rows: Vec<EventRow> = sqlx::query_as(&format!(
         "{EVENT_VIEW}
           WHERE e.calendar_id = $1 AND e.start_utc < $3
-            AND COALESCE(e.range_end_utc, 'infinity'::timestamptz) >= $2
-            AND ($4::uuid IS NULL OR (e.start_utc, e.id) >
-                 (SELECT start_utc, id FROM calendar_events WHERE id = $4 AND calendar_id = $1))
+            AND (COALESCE(e.range_end_utc, 'infinity'::timestamptz) > $2 OR e.start_utc >= $2)
+            AND ($4::timestamptz IS NULL OR (e.start_utc, e.id) > ($4, $5))
           ORDER BY e.start_utc, e.id
-          LIMIT $5"
+          LIMIT $6"
     ))
     .bind(id)
     .bind(start)
     .bind(end)
-    .bind(query.after)
+    .bind(after.map(|(at, _)| at))
+    .bind(after.map(|(_, id)| id))
     .bind(limit + 1)
     .fetch_all(&mut *conn)
     .await?;
     let next = (rows.len() as i64 > limit).then(|| {
         rows.truncate(limit as usize);
-        rows.last().map(|row| row.id)
+        rows.last().map(|row| EventCursor {
+            after_start: row.start_utc,
+            after_id: row.id,
+        })
     });
     Ok(Json(EventPage {
         events: rows.into_iter().map(event_view).collect(),
@@ -815,8 +840,17 @@ pub async fn event(
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub enum EventChange {
     Create(SealedEventV1),
-    Update { id: Uuid, event: SealedEventV1 },
-    Delete { id: Uuid },
+    /// `base_revision`: the event's stored revision the change was made
+    /// from; another is `409 revision_conflict`.
+    #[serde(rename_all = "camelCase")]
+    Update {
+        id: Uuid,
+        base_revision: i64,
+        event: SealedEventV1,
+    },
+    Delete {
+        id: Uuid,
+    },
 }
 
 #[derive(Debug, Deserialize, ToSchema)]
@@ -1028,11 +1062,28 @@ async fn apply(
     change: &EventChange,
 ) -> AppResult<Option<Uuid>> {
     let mut tx = state.pool.begin().await?;
-    // The calendar row orders the calendar's writes (the count, the UID).
-    sqlx::query("SELECT 1 FROM calendars WHERE id = $1 FOR UPDATE")
-        .bind(calendar)
-        .execute(&mut *tx)
-        .await?;
+    // The calendar row orders the calendar's writes (the count, the UID),
+    // and under it the caller is still a member who may write: a calendar
+    // deleted or a member removed since the sync began is 404 or 403.
+    let permissions: Option<i32> = sqlx::query_scalar(
+        "SELECT m.permissions FROM calendars c
+           JOIN calendar_members m ON m.calendar_id = c.id AND m.user_id = $2
+          WHERE c.id = $1
+          FOR UPDATE OF c",
+    )
+    .bind(calendar)
+    .bind(user_id)
+    .fetch_optional(&mut *tx)
+    .await?;
+    match permissions {
+        None => return Err(AppError::not_found("not found")),
+        Some(permissions) if permissions & WRITE == 0 => {
+            return Err(AppError::forbidden(
+                "you may not change this calendar's events",
+            ))
+        }
+        Some(_) => {}
+    }
     let result = match change {
         EventChange::Create(event) => {
             let checked = check_event(event, public_key, author_keys)?;
@@ -1049,21 +1100,38 @@ async fn apply(
             let id = insert(&mut tx, calendar, user_id, address_id, &checked).await?;
             Some(id)
         }
-        EventChange::Update { id, event } => {
+        EventChange::Update {
+            id,
+            base_revision,
+            event,
+        } => {
             let checked = check_event(event, public_key, author_keys)?;
-            let current: Option<(String, i64, time::OffsetDateTime)> = sqlx::query_as(
-                "SELECT uid, bytes, created_at FROM calendar_events
+            type Current = (String, i64, time::OffsetDateTime, i64, i32);
+            let current: Option<Current> = sqlx::query_as(
+                "SELECT uid, bytes, created_at, revision, sequence FROM calendar_events
                   WHERE id = $1 AND calendar_id = $2 FOR UPDATE",
             )
             .bind(id)
             .bind(calendar)
             .fetch_optional(&mut *tx)
             .await?;
-            let Some((uid, old_bytes, created_at)) = current else {
+            let Some((uid, old_bytes, created_at, revision, sequence)) = current else {
                 return Err(AppError::not_found("not found"));
             };
             if uid != checked.shared.uid {
                 return Err(AppError::bad_request("an event keeps its UID"));
+            }
+            // Made from the stored version, never an older one replayed nor
+            // over another device's newer save.
+            if revision != *base_revision {
+                return Err(revisions::conflict(
+                    "this event was changed elsewhere",
+                    revision,
+                ));
+            }
+            if i64::from(checked.shared.sequence) < i64::from(sequence) {
+                return Err(AppError::conflict("an event's SEQUENCE never goes down")
+                    .with_details(serde_json::json!({ "code": "sequenceBehind" })));
             }
             charge(&mut tx, owner, checked.bytes - old_bytes).await?;
             sqlx::query("DELETE FROM calendar_events WHERE id = $1")
@@ -1074,7 +1142,7 @@ async fn apply(
             // parts), keeping its id and when it was made.
             insert_as(
                 &mut tx,
-                Some((*id, created_at)),
+                Some((*id, created_at, revision + 1)),
                 calendar,
                 user_id,
                 address_id,
@@ -1111,10 +1179,10 @@ async fn insert(
 }
 
 /// Inserts a checked event; `kept` is the id and creation time of the
-/// version it replaces.
+/// version it replaces, and the new version's revision.
 async fn insert_as(
     tx: &mut Transaction<'_, Postgres>,
-    kept: Option<(Uuid, time::OffsetDateTime)>,
+    kept: Option<(Uuid, time::OffsetDateTime, i64)>,
     calendar: Uuid,
     user_id: Uuid,
     address_id: Uuid,
@@ -1130,13 +1198,13 @@ async fn insert_as(
              calendar_signed, calendar_signed_signature,
              calendar_encrypted, calendar_encrypted_signature,
              start_utc, end_utc, start_tz, end_tz, full_day, rrule, recurrence_id, range_end_utc,
-             sequence, bytes, created_at)
+             sequence, bytes, created_at, revision)
          VALUES (COALESCE($1, gen_random_uuid()), $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12,
                  $13, $14, $15, $16, $17, $18, $19, $20, NULL, NULL, $17, $21, $22,
-                 COALESCE($23, now()))
+                 COALESCE($23, now()), COALESCE($24, 1))
          RETURNING id",
     )
-    .bind(kept.map(|(id, _)| id))
+    .bind(kept.map(|(id, _, _)| id))
     .bind(calendar)
     .bind(&shared.uid)
     .bind(address_id)
@@ -1168,7 +1236,8 @@ async fn insert_as(
     .bind(shared.dtstart.is_date())
     .bind(shared.sequence.min(i32::MAX as u32) as i32)
     .bind(checked.bytes)
-    .bind(kept.map(|(_, created_at)| created_at))
+    .bind(kept.map(|(_, created_at, _)| created_at))
+    .bind(kept.map(|(_, _, revision)| revision))
     .fetch_one(&mut **tx)
     .await
     .map_err(|error| match &error {

@@ -414,10 +414,28 @@ pub const CALENDAR_SYNC_BATCH: NumericSetting = NumericSetting {
     min: 1,
     max: 100,
 };
-pub const CALENDAR_SETTINGS: [NumericSetting; 3] = [
+/// The widest window one events query asks, in days, and the events one
+/// page answers.
+pub const CALENDAR_WINDOW_DAYS: NumericSetting = NumericSetting {
+    key: "calendar_window_days",
+    field: "calendarWindowDays",
+    default: 400,
+    min: 1,
+    max: 3660,
+};
+pub const CALENDAR_EVENTS_PAGE: NumericSetting = NumericSetting {
+    key: "calendar_events_page",
+    field: "calendarEventsPage",
+    default: 1000,
+    min: 10,
+    max: 5000,
+};
+pub const CALENDAR_SETTINGS: [NumericSetting; 5] = [
     CALENDARS_PER_ACCOUNT,
     CALENDAR_EVENTS_PER_CALENDAR,
     CALENDAR_SYNC_BATCH,
+    CALENDAR_WINDOW_DAYS,
+    CALENDAR_EVENTS_PAGE,
 ];
 
 /// Every whole-number setting `/api/admin/settings` lists by field.

@@ -717,6 +717,7 @@ All file content and metadata are encrypted client-side; the server stores only 
         crate::handlers::calendar::CalendarDelete,
         crate::handlers::calendar::EventView,
         crate::handlers::calendar::EventPage,
+        crate::handlers::calendar::EventCursor,
         crate::handlers::calendar::EventSync,
         crate::handlers::calendar::EventResult,
         crate::handlers::calendar::EventSyncResults,
