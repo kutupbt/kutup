@@ -558,4 +558,5 @@ fn the_original_upload_is_deleted_by_its_owner_once_replaced() {
     .unwrap();
     assert!(current.status().is_success());
     assert_ne!(current.headers()["x-kutup-version"], "original");
+    common::purge_accounts(&c, &base, &[&owner, &stranger]);
 }

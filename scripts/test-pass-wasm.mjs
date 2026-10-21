@@ -60,12 +60,34 @@ assert.deepEqual(ours.otp(twoFa, 59_000), { code: '94287082', period: 30, remain
 assert.equal(ours.otp(bank, 59_000), null)
 
 // A key changed: the new one opens the saved vault, the old one does not.
-ours.changeKey('yeni', null, minute(8))
-// Not kept before it is saved: Drive's copy still opens with the old key.
-assert.throws(() => ours.keepKey(new Uint8Array(32), '6f1d2c3b-4a59-4e8f-9a0b-1c2d3e4f5a6b', '3f1c9a52-6b7e-4f0e-9d1a-2c3b4d5e6f70', 1, false))
+// (password, keepPassword, keyFile, keepKeyFile, now)
+assert.deepEqual(ours.keyParts(), { password: true, keyFile: false })
+assert.throws(() => ours.changeKey(null, false, null, false, minute(8)), /password or a key file/)
+assert.throws(() => ours.changeKey('yeni', true, null, false, minute(8)))
+// Undone: back to the key Drive's copy opens with.
+ours.changeKey('geçici', false, null, false, minute(8))
+ours.abandonKeyChange()
+assert.ok(pass.Vault.open(ours.save(), 'parola-çğ', null, null))
+ours.changeKey('yeni', false, null, false, minute(8))
+// Not kept before Drive holds it: Drive's copy still opens with the old key.
+const keepArgs = [new Uint8Array(32), '6f1d2c3b-4a59-4e8f-9a0b-1c2d3e4f5a6b', '3f1c9a52-6b7e-4f0e-9d1a-2c3b4d5e6f70', 1, false]
+assert.throws(() => ours.keepKey(...keepArgs))
 const rekeyed = ours.save()
+assert.throws(() => ours.keepKey(...keepArgs), /save the vault/)
+ours.keyChangeSaved()
+assert.ok(ours.keepKey(...keepArgs))
 assert.ok(pass.Vault.open(rekeyed, 'yeni', null, null))
 assert.throws(() => pass.Vault.open(rekeyed, 'parola-çğ', null, null))
+
+// A generated key file (KeePassXC's XML v2) added, the password kept.
+const keyFile = pass.generateKeyFile()
+assert.match(Buffer.from(keyFile).toString(), /<Version>2\.0<\/Version>[\s\S]*<Data Hash="[0-9A-F]{8}">/)
+const withFile = pass.Vault.open(rekeyed, 'yeni', null, null)
+withFile.changeKey(null, true, keyFile, false, minute(9))
+assert.deepEqual(withFile.keyParts(), { password: true, keyFile: true })
+const filed = withFile.save()
+assert.ok(pass.Vault.open(filed, 'yeni', null, keyFile))
+assert.throws(() => pass.Vault.open(filed, 'yeni', null, null))
 
 // Kept vault keys (kutup_pass::kept): the checked-in vectors open, and a key
 // kept from an open vault opens it again, for this account and vault only.
@@ -104,6 +126,8 @@ const relabelled = Buffer.from(chosenEnvelope)
 relabelled[lastRevisionByte] ^= 2
 assert.throws(() => pass.openKept(relabelled.toString('base64'), masterKey, vectors.binding, vectors.fileId))
 assert.ok(pass.Vault.open(rekeyed, null, Buffer.from(keptKey.passwordHash, 'base64'), null))
-// Opened with a kept key, only the password's hash is known: nothing to keep.
-assert.throws(() => byHash.keepKey(masterKey, vectors.binding, vectors.fileId, 1, false))
+// Opened with a kept key, only the password's hash is known: kept as that
+// hash when chosen; a generated one needs the password itself.
+assert.ok(byHash.keepKey(masterKey, vectors.binding, vectors.fileId, 1, false))
+assert.throws(() => byHash.keepKey(masterKey, vectors.binding, vectors.fileId, 1, true))
 console.log('pass WASM checks passed')
