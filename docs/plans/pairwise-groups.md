@@ -1343,10 +1343,13 @@ title.
 
 **The invite link.**
 - `https://chat.<server>/join#<base64url>`. The fragment is
-  `GroupInviteLinkV1`: version, the master key, the 16-byte password, and the
-  home pin (server, identity sequence, identity document hash), canonical
-  JSON, base64url without padding. The fragment never reaches a server: not in
-  the path or query, so not in logs or `Referer`.
+  `GroupInviteLinkV1` in a fixed binary layout, base64url without padding:
+  `version (1) ‖ master key (32) ‖ password (16) ‖ identity sequence (u64
+  BE) ‖ identity document hash (32) ‖ server (UTF-8, the rest)`. As built
+  binary rather than JSON: a link stays under 160 characters with any server
+  name. Only its one canonical spelling reads. The fragment never reaches a
+  server: not in the path or query, so not in logs or `Referer`. Someone on
+  another server opens the same fragment in their own server's Chat.
 - The joiner derives the group id from the key and the pin and checks it as
   any invitation is checked (`master_at`). Kept short for QR codes: the pin's
   hash is the 64-character hex form, and the whole link stays under 300
@@ -1471,6 +1474,86 @@ title.
 - per-change timeline lines;
 - the web: wasm and service, the link, request and settings screens moved off
   their MLS versions, en and tr, specs on one and two servers.
+
+### Slice 3: as built (client, 2026-10-20)
+
+- **Link settings.** `set_group_link(off | join | approve)` changes
+  `addFromInviteLink`, setting a password the first time; off keeps the
+  password, so turning the link on again gives the same link (Signal).
+  `reset_group_link` sets a new one. A member previewing their own group's
+  link sees "already a member", and no record is made.
+- **Requests.** `approve_group_request` refuses a request whose verified
+  binding names a banned account (the home can't know accounts).
+  `deny_group_request` is `DenyRequest` + `Ban` of the pseudonym, and the
+  account goes on the ban list when its binding verified. A rejoiner through
+  the link (asking, then approved) takes a whole state over the one it kept,
+  as an invited rejoiner does.
+- **The ban list.** `GroupBanListV1 {version, banned: [{account,
+  pseudonyms}]}`, sorted by account, each account's pseudonyms sorted (at
+  most 64, one per join epoch), so lifting an account's ban unbans its
+  pseudonyms in the same change. About 150 accounts fit the 24 KiB sealed cap
+  (not 180: the pseudonyms are kept with each account).
+  - When the list has no room, `groupDetails.banListFull` says so beforehand
+    (counted for the longest possible account), the UI says it in the bans
+    section and in the ban dialog, and a ban or denial then holds for the
+    pseudonym only: the home enforces that; nothing fails.
+  - `ban_group_member(resetLink)`: `Ban` (which removes) + the list + a new
+    password when the link is on (the default in the UI).
+  - "Remove unverified or banned": every non-administrator member whose
+    binding didn't verify or whose account is banned, 64 removals per
+    change; refused while some member's manifest can't be fetched.
+- **Attributes.** Description: trimmed, at most 480 characters
+  (`MAX_GROUP_DESCRIPTION_CHARS`, Signal-Desktop's), no control characters
+  but newlines. Title: 32 characters in the UI (`MAX_GROUP_TITLE_CHARS`).
+  Timer: the sealed `u32` seconds, big-endian; absent is off. Every group
+  send of a visible kind carries the group's timer as its own
+  `expiresAfterSeconds`.
+- **Receiving and sending rules.** Once the group ended, or while it is
+  announcements-only for a non-administrator: nothing is sent (the engine
+  refuses, the composer is replaced by the read-only line), and what
+  arrives is dropped on both receive paths, change notices excepted.
+- **A removed member is told** (§4, "Remove"): a removal or a ban sends the
+  removed verified account a hidden `groupRemoval` content pairwise,
+  carrying the log entry (change and notary). Their device takes it when it
+  is the next change of the chain it holds (the notary and the chain head
+  prove it; the sender needn't be trusted, so it bypasses the sender gate,
+  as an invitation does) and the group is `gone` at once. A device further
+  behind learns as before, when the home stops answering it (Signal's server
+  doesn't serve a removed member's log either).
+- **Timeline lines.** Every change a device verifies (from the log, or its
+  own) writes a local `groupUpdate` row with the MLS groups' kinds plus
+  `timerChanged`, `addersChanged`, `membersInvited`, `invitationsRevoked`,
+  `joinedByInvitation`, `joinedFromLink`, `joinRequested`,
+  `joinRequestCanceled`, `joinRequestApproved`, `joinRequestDenied`,
+  `memberBanned` and `memberUnbanned`. Its id is `grp:<groupId>:<revision>`,
+  so reading a change twice writes one line. Only verified accounts are
+  named: a change by or about an unverified pseudonym has no line about it.
+  A line whose accounts can't be checked when the change is read is left
+  out, never the change.
+- **Periodic sync (web).** Each member group is caught up 15 s after the app
+  opens, then about every 10 minutes (30 in a hidden tab), ±20%, one group
+  at a time.
+- **A request's outcome** (`GetRequestStatus`, #285). The asker's device
+  asks when the group opens and at each periodic sync: approved takes the
+  whole state (a member now), denied or unknown ends the group as `gone`
+  here. Content arriving for a group still `requesting` settles the request
+  first, so the first messages after an approval aren't dropped (only
+  members send to it). Withdrawing is a `CancelRequest` at the revision and
+  head the status names, so it works after a link reset too; it is asked
+  again once if the log moved meanwhile.
+- **The avatar** (#288). The image is scaled down on the device (256×256,
+  WebP, under 16 KiB, so the second bucket every home takes), padded to its
+  bucket and sealed under a fresh key (`kutup_crypto::chat_group::
+  seal_group_avatar`, vector `chat-group-avatar-v1.json`); uploaded with
+  `PutAvatar` in the route's padded body; then `ModifyAttribute` names the
+  blob's SHA-256 in the clear and `GroupAvatarV1 {version, key,
+  contentType}` in the sealed attribute. Members read it back with
+  `GetAvatar` and check the hash the state names (a home serving another
+  blob is caught); a link's preview reads it under the link proof and opens
+  it with the key (the join info names no hash; the AEAD holds). The web
+  caches pictures by hash. The home's refusals (`avatarTooLarge`,
+  `avatarStorageFull`, `avatarMissing`) are said as such, as every refused
+  group change now is.
 
 ### Slice 2: client notes (for the server design)
 

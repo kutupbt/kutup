@@ -127,6 +127,11 @@ pub mod kind {
     /// (Signal's group update message). Sent under the sender key with an
     /// implicit content hint; never history. [IMPL]
     pub const GROUP_CHANGE: &str = "groupChange";
+    /// Tells a removed (or banned) member of their removal, pairwise: the
+    /// change and its notary, which they verify against the chain head they
+    /// hold, since the home no longer answers them. Hidden; never history.
+    /// [IMPL]
+    pub const GROUP_REMOVAL: &str = "groupRemoval";
 }
 
 /// The decrypted plaintext of a chat message.
@@ -473,6 +478,7 @@ impl ChatContent {
             // transcript (docs/plans/pairwise-groups.md §1, §4).
             || self.kind == kind::SENDER_KEY_DISTRIBUTION
             || self.kind == kind::GROUP_INVITE
+            || self.kind == kind::GROUP_REMOVAL
     }
 
     /// Builds the invisible message that carries a fresh session to a device
@@ -577,6 +583,32 @@ impl ChatContent {
             seq,
             serde_json::json!({}),
         )
+    }
+
+    /// A removal, for the removed member only: the group and the log entry
+    /// that removed them.
+    pub fn group_removal_with_id(
+        message_id: impl Into<String>,
+        sent_at: impl Into<String>,
+        seq: u64,
+        removal: &GroupRemovalBody,
+    ) -> Self {
+        Self::hidden_with_id(
+            kind::GROUP_REMOVAL,
+            message_id,
+            sent_at,
+            seq,
+            serde_json::to_value(removal).unwrap_or_default(),
+        )
+    }
+
+    pub fn as_group_removal(&self) -> Option<GroupRemovalBody> {
+        if self.kind != kind::GROUP_REMOVAL || self.v != Self::VERSION {
+            return None;
+        }
+        let removal: GroupRemovalBody = serde_json::from_value(self.body.clone()).ok()?;
+        crate::group::decode_group_id(&removal.group_id).ok()?;
+        Some(removal)
     }
 
     pub fn as_group_invite(&self) -> Option<crate::group::GroupInviteV1> {
@@ -1193,8 +1225,18 @@ impl ChatContent {
                     | kind::SENDER_KEY_DISTRIBUTION
                     | kind::GROUP_INVITE
                     | kind::GROUP_CHANGE
+                    | kind::GROUP_REMOVAL
             )
     }
+}
+
+/// Body of a `groupRemoval`: the group, and the log entry that removed the
+/// recipient (its change and the home's notary), as `GetLogs` serves it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct GroupRemovalBody {
+    pub group_id: String,
+    pub entry: crate::group_route::GroupLogEntryV1,
 }
 
 /// Body of a `text` message.
@@ -1561,8 +1603,9 @@ impl ReadPositionBody {
     }
 }
 
-/// One visible change an applied group Commit made. Members are accounts,
-/// never addresses.
+/// One visible change an applied group change made (an MLS Commit, or a
+/// pairwise group's change from its home's log). Members are accounts, never
+/// addresses or pseudonyms.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", tag = "type", deny_unknown_fields)]
 pub enum GroupUpdateChange {
@@ -1628,6 +1671,49 @@ pub enum GroupUpdateChange {
         approval_required: bool,
     },
     Closed,
+    /// The group's disappearing-messages timer; 0 is off.
+    #[serde(rename_all = "camelCase")]
+    TimerChanged {
+        seconds: u32,
+    },
+    /// Who may add members.
+    #[serde(rename_all = "camelCase")]
+    AddersChanged {
+        administrators_only: bool,
+    },
+    /// The actor invited this many accounts (who, only the invitees learn).
+    #[serde(rename_all = "camelCase")]
+    MembersInvited {
+        count: u16,
+    },
+    #[serde(rename_all = "camelCase")]
+    InvitationsRevoked {
+        count: u16,
+    },
+    /// The actor took an invitation and joined.
+    JoinedByInvitation,
+    /// The actor joined through the group link.
+    JoinedFromLink,
+    /// The actor asked to join through the group link.
+    JoinRequested,
+    /// The actor withdrew their request.
+    JoinRequestCanceled,
+    #[serde(rename_all = "camelCase")]
+    JoinRequestApproved {
+        member: AccountRef,
+    },
+    #[serde(rename_all = "camelCase")]
+    JoinRequestDenied {
+        member: AccountRef,
+    },
+    #[serde(rename_all = "camelCase")]
+    MemberBanned {
+        member: AccountRef,
+    },
+    #[serde(rename_all = "camelCase")]
+    MemberUnbanned {
+        member: AccountRef,
+    },
 }
 
 /// Who made an applied group change, and what it changed.

@@ -66,8 +66,8 @@ test.describe('groups across two servers', () => {
     await expect(message(pageC, fromBob)).toBeVisible({ timeout: 60_000 })
 
     // Alice removes Carol. Bob hears of it from Alice's change notice and
-    // catches up; his next message doesn't go to Carol, and Carol's later
-    // one isn't taken by him.
+    // catches up; his next message doesn't go to Carol, who is told of her
+    // removal pairwise and can't send there any more.
     await openDetails(pageA)
     await removeGroupMember(pageA, carol.username)
     await expect(pageA.getByTestId('chat-group-members')).toContainText('2 members', { timeout: 60_000 })
@@ -78,8 +78,8 @@ test.describe('groups across two servers', () => {
     const bobAfter = `fed-group-bob-after-removal-${tag}`
     await send(pageB, bobAfter)
     await expect(message(pageA, bobAfter)).toBeVisible({ timeout: 60_000 })
-    const carolLate = `fed-group-carol-late-${tag}`
-    await send(pageC, carolLate)
+    await openGroup(pageC, groupId)
+    await expect(pageC.getByText("You're no longer a member of this group.")).toBeVisible({ timeout: 90_000 })
     await pageB.reload()
     await openGroup(pageB, groupId)
     await expect(message(pageB, bobAfter)).toBeVisible({ timeout: 90_000 })
@@ -95,8 +95,6 @@ test.describe('groups across two servers', () => {
     await expect(message(pageB, probeB)).toBeVisible({ timeout: 90_000 })
     await openConversationWith(pageC, alice.username)
     await expect(message(pageC, probeC)).toBeVisible({ timeout: 90_000 })
-    await openGroup(pageB, groupId)
-    await expect(message(pageB, carolLate)).toHaveCount(0)
     await openGroup(pageC, groupId)
     await expect(message(pageC, bobAfter)).toHaveCount(0)
     await openGroup(pageA, groupId)
@@ -113,5 +111,51 @@ test.describe('groups across two servers', () => {
     await contextA.close()
     await contextB.close()
     await contextC.close()
+  })
+
+  test('a stranger on another server joins through the group link, by their own server', async ({ browser }) => {
+    test.slow()
+    const tag = Date.now().toString(36)
+    const alice = newAccount('fedlnkalice', PASSWORD, 'primary')
+    const dave = newAccount('fedlnkdave', PASSWORD, 'secondary')
+    const contextA = await browser.newContext()
+    const contextD = await browser.newContext()
+    await registerAccount(contextA, alice)
+    await registerAccount(contextD, dave)
+    const pageA = await openChat(contextA, 'primary')
+    const pageD = await openChat(contextD, 'secondary')
+    const home = new URL(apiUrl('/', 'primary')).host
+    const toHome: string[] = []
+    pageD.on('request', (request) => {
+      if (new URL(request.url()).host === home) toHome.push(request.url())
+    })
+
+    const groupId = await createGroup(pageA, [], `Open ${tag}`)
+    await openDetails(pageA)
+    await pageA.getByTestId('chat-group-link-mode').click()
+    await pageA.getByTestId('chat-group-link-mode-join').click()
+    const url = (await pageA.getByTestId('chat-group-link-url').textContent({ timeout: 45_000 }))!.trim()
+    await closeDetails(pageA)
+
+    // Dave opens it in his own server's Chat: the fragment carries the
+    // home, and his server relays.
+    await pageD.goto(`${new URL(pageD.url()).origin}/join${new URL(url).hash}`)
+    const join = pageD.getByTestId('chat-group-join-dialog')
+    await expect(join.getByTestId('chat-group-join-preview')).toContainText(`Open ${tag}`, { timeout: 60_000 })
+    await join.getByTestId('chat-group-join-submit').click()
+    await pageD.waitForURL((at) => decodeURIComponent(at.pathname).includes(`/c/group:${groupId}`), { timeout: 90_000 })
+
+    const hello = `fed-link-hello-${tag}`
+    await openGroup(pageA, groupId)
+    await send(pageA, hello)
+    await expect(message(pageD, hello)).toBeVisible({ timeout: 90_000 })
+    const back = `fed-link-back-${tag}`
+    await send(pageD, back)
+    await expect(message(pageA, back)).toBeVisible({ timeout: 90_000 })
+    await expect(pageA.getByTestId('chat-group-notice').filter({ hasText: /joined the group through the group link/ })).toBeVisible({ timeout: 90_000 })
+
+    expect(toHome).toEqual([])
+    await contextA.close()
+    await contextD.close()
   })
 })

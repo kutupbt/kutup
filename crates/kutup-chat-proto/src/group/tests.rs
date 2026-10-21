@@ -1022,3 +1022,70 @@ fn an_avatar_and_its_clear_hash_come_together() {
     assert!(check_avatar_hash(GroupAttribute::Title, &sealed, &hash).is_err());
     assert!(check_avatar_hash(GroupAttribute::Title, &sealed, &None).is_ok());
 }
+
+#[test]
+fn a_ban_list_stays_sorted_and_canonical() {
+    use super::entry::GroupBanListV1;
+    use kutup_crypto::account_ref::AccountRef;
+    let account = |id: &str| AccountRef::new("home.example", id).unwrap();
+    let pseudonym = |byte: u8| super::encode(&[byte; 32]);
+    let mut list = GroupBanListV1 {
+        version: super::GROUP_FORMAT_VERSION,
+        banned: Vec::new(),
+    };
+    let b = account("00000000-0000-4000-8000-00000000000b");
+    let a = account("00000000-0000-4000-8000-00000000000a");
+    list.ban(&b, Some(&pseudonym(9)));
+    list.ban(&a, None);
+    list.ban(&b, Some(&pseudonym(3)));
+    list.ban(&b, Some(&pseudonym(9)));
+    assert_eq!(list.banned[0].account, a);
+    assert_eq!(
+        list.get(&b).unwrap().pseudonyms,
+        vec![pseudonym(3), pseudonym(9)]
+    );
+    let bytes = list.canonical_bytes().unwrap();
+    assert_eq!(GroupBanListV1::from_canonical_bytes(&bytes).unwrap(), list);
+    // 150 accounts with a pseudonym each fit the sealed cap.
+    let mut full = GroupBanListV1 {
+        version: super::GROUP_FORMAT_VERSION,
+        banned: Vec::new(),
+    };
+    for i in 0..150u32 {
+        full.ban(
+            &account(&format!("00000000-0000-4000-8000-{i:012x}")),
+            Some(&pseudonym(i as u8)),
+        );
+    }
+    assert!(
+        kutup_crypto::chat_group::sealed_len(full.canonical_bytes().unwrap().len())
+            <= super::MAX_SEALED_BAN_LIST_BYTES
+    );
+    let removed = list.unban(&b).unwrap();
+    assert_eq!(removed.pseudonyms.len(), 2);
+    assert!(list.get(&b).is_none());
+    // Out of order: refused.
+    let mut unsorted = list.clone();
+    unsorted.ban(&b, None);
+    unsorted.banned.swap(0, 1);
+    assert!(unsorted.canonical_bytes().is_err());
+}
+
+#[test]
+fn an_avatar_attribute_fits_its_sealed_cap_and_names_an_image_type() {
+    use super::entry::GroupAvatarV1;
+    let avatar = GroupAvatarV1 {
+        version: super::GROUP_FORMAT_VERSION,
+        key: super::encode(&[9u8; 32]),
+        content_type: "image/webp".into(),
+    };
+    let bytes = avatar.canonical_bytes().unwrap();
+    assert!(kutup_crypto::chat_group::sealed_len(bytes.len()) <= super::MAX_SEALED_AVATAR_BYTES);
+    assert_eq!(GroupAvatarV1::from_canonical_bytes(&bytes).unwrap(), avatar);
+    assert!(!format!("{avatar:?}").contains(&avatar.key));
+    let gif = GroupAvatarV1 {
+        content_type: "image/gif".into(),
+        ..avatar
+    };
+    assert!(gif.canonical_bytes().is_err());
+}
