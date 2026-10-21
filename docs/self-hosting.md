@@ -1041,6 +1041,40 @@ Stalwart keeps its queue (mail not yet handed over) and its DKIM keys in the
 `stalwart_data` volume. Back it up with the rest; losing it means
 publishing new DKIM records.
 
+**Custom domains** ([`plans/mail-custom-domains.md`](plans/mail-custom-domains.md)).
+Accounts can bring their own domains, as with Proton, once the server has:
+- `MAIL_DKIM_KEYS`: the keys the shared DKIM keys are sealed under, in the
+  `MAIL_FORWARDING_KEYS` form (`1:$(openssl rand -base64 32)`). The DKIM keys
+  live in Kutup's database, so a Stalwart restore keeps signing.
+- `MAIL_STALWART_DOMAINS_TOKEN` (`openssl rand -hex 32`): the password of a
+  Stalwart account, `kutup-domains`, that `stalwart-setup` makes with its
+  permissions replaced by managing domains and DKIM signatures only
+  (`MAIL_STALWART_URL` defaults to `http://stalwart:8080`). Kutup keeps
+  Stalwart's custom domains in step with its own; it never touches the
+  server's own domain.
+- Administration → Mail → Domains set to `everyone` (the default) or
+  `approve`.
+
+DNS you publish once, under the server's own domain:
+- `_spf.<server>` TXT `v=spf1 ip4:<outbound IPv4> ip6:<outbound IPv6> -all`:
+  customers' SPF includes it.
+- One wildcard TXT per DKIM selector, `*.kutup1._dk.<server>` (and
+  `kutup2`, `kutup3` as they come), with the value Administration → Mail →
+  Domains shows. Customers' CNAMEs point under them, so nothing is published
+  per customer. A new key waits, unused, until its TXT has been in DNS for a
+  day; the console says which to publish. Keys rotate every 180 days, one
+  selector at a time, and the old one stays published for a week.
+
+Customers' MX points at `MAIL_HOSTNAME`, so receiving needs no certificate per
+domain. The checks ask `MAIL_DNS_RESOLVER` (an `ip:port`) or the system's
+resolver, and validate DNSSEC themselves, so that resolver must pass DNSSEC
+records (RRSIG, DNSKEY, DS) through. Docker's embedded resolver forwards to
+the host's, and some host setups strip those records: every check of a signed
+domain then comes back unknown and the domain never verifies. If yours does,
+point `MAIL_DNS_RESOLVER` at a resolver that keeps them (a local Unbound, or a
+public one such as `1.1.1.1:53`). `MAIL_BACKUP_MX` names a backup MX you run,
+if any.
+
 ---
 
 ## Security Hardening

@@ -270,3 +270,113 @@ fn a_group_list_keeps_at_most_1024_entries() {
     assert_eq!(r.status(), StatusCode::BAD_REQUEST);
     purge_accounts(&c, &base, &[&user]);
 }
+
+/// Group delivery capabilities (slice 2 §2): hashes added and removed in one
+/// call, the whole set replaced, malformed hashes refused, and the
+/// administrators' limit refusing a change whole.
+#[test]
+fn group_capabilities_change_together_within_the_limit() {
+    let Some(base) = base() else { return };
+    let c = client();
+    let alice = register(&c, &base);
+    let hash = |n: u8| STANDARD.encode([n; 32]);
+    let put = |body: Value| {
+        let r = bearer(
+            c.put(format!("{base}/api/chat/group-capabilities")),
+            &alice.token,
+        )
+        .json(&body)
+        .send()
+        .unwrap();
+        let status = r.status();
+        (status, r.json::<Value>().unwrap_or(Value::Null))
+    };
+    let set = |hashes: Vec<String>| {
+        let r = bearer(
+            c.post(format!("{base}/api/chat/group-capabilities/set")),
+            &alice.token,
+        )
+        .json(&json!({ "hashes": hashes }))
+        .send()
+        .unwrap();
+        let status = r.status();
+        (status, r.json::<Value>().unwrap_or(Value::Null))
+    };
+    let (status, body) = put(json!({ "add": [hash(1), hash(2), hash(3)] }));
+    assert_eq!(
+        (status, &body["count"]),
+        (StatusCode::OK, &json!(3)),
+        "{body}"
+    );
+    // A swap: the old one out, the new one in, in one call.
+    let (status, body) = put(json!({ "add": [hash(4)], "remove": [hash(1)] }));
+    assert_eq!(
+        (status, &body["count"]),
+        (StatusCode::OK, &json!(3)),
+        "{body}"
+    );
+    // Adding one again changes nothing.
+    let (_, body) = put(json!({ "add": [hash(4)] }));
+    assert_eq!(body["count"], 3);
+    let (status, body) = set(vec![hash(7), hash(8)]);
+    assert_eq!(
+        (status, &body["count"]),
+        (StatusCode::OK, &json!(2)),
+        "{body}"
+    );
+    let (status, _) = put(json!({ "add": [STANDARD.encode([1u8; 31])] }));
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    let (status, _) = put(json!({ "add": ["not base64"] }));
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+
+    // The limit, as administrators set it: a change past it is refused
+    // whole.
+    let Ok(admin) = std::env::var("KUTUP_LIVE_ADMIN") else {
+        eprintln!("KUTUP_LIVE_ADMIN unset; skipping the limit");
+        purge_accounts(&c, &base, &[&alice]);
+        return;
+    };
+    let (name, password) = admin.split_once(':').unwrap();
+    let token = admin_token(&c, &base, password, name);
+    let limit = |value: Value| {
+        bearer(c.put(format!("{base}/api/admin/settings")), &token)
+            .json(&json!({ "chatGroupCapabilitiesPerAccount": value }))
+            .send()
+            .unwrap()
+            .status()
+    };
+    assert_eq!(limit(json!(0)), StatusCode::BAD_REQUEST);
+    assert_eq!(limit(json!(3)), StatusCode::OK);
+    let (status, body) = put(json!({ "add": [hash(9), hash(10)], "remove": [] }));
+    assert_eq!(status, StatusCode::CONFLICT, "{body}");
+    assert_eq!(body["code"], "capabilityLimit");
+    let (_, body) = put(json!({}));
+    assert_eq!(body["count"], 2, "nothing of the refused change was kept");
+    let (status, _) = set((20..24).map(hash).collect());
+    assert_eq!(status, StatusCode::CONFLICT);
+    let (status, body) = put(json!({ "add": [hash(9)] }));
+    assert_eq!(
+        (status, &body["count"]),
+        (StatusCode::OK, &json!(3)),
+        "{body}"
+    );
+    // At the limit, two adds at once: one goes, the other is refused, never
+    // both (the account's row is locked for each change).
+    put(json!({ "remove": [hash(9)] }));
+    let racers: Vec<StatusCode> = std::thread::scope(|scope| {
+        let handles: Vec<_> = [30u8, 31]
+            .into_iter()
+            .map(|n| scope.spawn(move || put(json!({ "add": [hash(n)] })).0))
+            .collect();
+        handles.into_iter().map(|h| h.join().unwrap()).collect()
+    });
+    assert_eq!(
+        racers.iter().filter(|s| **s == StatusCode::OK).count(),
+        1,
+        "{racers:?}"
+    );
+    let (_, body) = put(json!({}));
+    assert_eq!(body["count"], 3, "never past the limit");
+    assert_eq!(limit(Value::Null), StatusCode::OK);
+    purge_accounts(&c, &base, &[&alice]);
+}

@@ -2569,6 +2569,37 @@ impl Session {
         Ok((trust, line))
     }
 
+    /// Lines this device writes for itself in its own timeline (a group's
+    /// change notices): kept as delivered sent rows under their own ids, so
+    /// writing one again replaces it. Never sent.
+    pub(crate) async fn record_local_lines(&mut self, lines: Vec<ChatContent>) -> Result<()> {
+        if lines.is_empty() {
+            return Ok(());
+        }
+        let now = now_millis();
+        let me = self.account_ref().to_string();
+        for content in lines {
+            self.store.stage_sent_message(SentMessage {
+                send_id: content.message_id.clone(),
+                peer: me.clone(),
+                sender_device_id: self.device_id(),
+                content: serde_json::to_vec(&content)
+                    .map_err(|e| ChatError::Content(e.to_string()))?,
+                created_at: now,
+                delivered_at: Some(now),
+                delivered: true,
+                deduplicated: false,
+                failed_recipients: 0,
+                waiting_recipients: None,
+            });
+        }
+        if let Err(error) = self.store.commit().await {
+            self.store.discard();
+            return Err(error);
+        }
+        Ok(())
+    }
+
     pub(crate) async fn accept_authority_reset(&mut self, peer: &str) -> Result<ManifestTrust> {
         let mut retained = self
             .manifest_trust(peer)
@@ -4052,7 +4083,7 @@ impl Session {
         envelope: &DeliveredEnvelope,
         inspection: &SealedEnvelopeInspection,
         validating_root: &PublicKey,
-        gate: &dyn Fn(&kutup_chat_proto::group::GroupContextV1) -> GroupGate,
+        gate: &dyn Fn(&kutup_chat_proto::group::GroupContextV1, &str) -> GroupGate,
     ) -> Result<ReceiveOutcome> {
         let group_id = inspection
             .group_id
@@ -4101,7 +4132,7 @@ impl Session {
                     content.kind
                 )));
             }
-            let gate = gate(&context);
+            let gate = gate(&context, &content.kind);
             if gate == GroupGate::Accept && !change {
                 self.store.stage_message(InboxMessage {
                     id: envelope.id.clone(),
@@ -5199,7 +5230,7 @@ mod sealed_tests {
                     &envelope,
                     &inspection,
                     &trust_root.public_key,
-                    &|_| GroupGate::CatchUp,
+                    &|_, _| GroupGate::CatchUp,
                 ))
                 .unwrap();
                 assert!(matches!(outcome, ReceiveOutcome::GroupCatchUp));
@@ -5209,7 +5240,7 @@ mod sealed_tests {
                 &envelope,
                 &inspection,
                 &trust_root.public_key,
-                &|_| GroupGate::Accept,
+                &|_, _| GroupGate::Accept,
             ))
             .unwrap() else {
                 panic!("a group message is a message")
@@ -5235,7 +5266,7 @@ mod sealed_tests {
                     &envelope,
                     &inspection,
                     &trust_root.public_key,
-                    &|_| GroupGate::Accept,
+                    &|_, _| GroupGate::Accept,
                 )) else {
                     panic!("a message under a key never held can't be read")
                 };
@@ -5278,7 +5309,7 @@ mod sealed_tests {
                 &envelope,
                 &inspection,
                 &trust_root.public_key,
-                &|_| GroupGate::Accept,
+                &|_, _| GroupGate::Accept,
             )),
             Err(ChatError::Trust(_))
         ));
@@ -5315,7 +5346,7 @@ mod sealed_tests {
                 &envelope,
                 &inspection,
                 &trust_root.public_key,
-                &|_| GroupGate::Refuse,
+                &|_, _| GroupGate::Refuse,
             ))
             .unwrap(),
             ReceiveOutcome::Suppressed { .. }
@@ -5353,7 +5384,11 @@ fn is_group_history_kind(kind: &str) -> bool {
 fn group_of_content(
     content: &ChatContent,
 ) -> Option<(String, Option<kutup_chat_proto::group::GroupContextV1>)> {
-    if content.kind == kutup_chat_proto::content::kind::GROUP_INVITE {
+    // Both verify on their own: an invitation by what it carries, a removal
+    // by the chain head and notary this device holds.
+    if content.kind == kutup_chat_proto::content::kind::GROUP_INVITE
+        || content.kind == kutup_chat_proto::content::kind::GROUP_REMOVAL
+    {
         return None;
     }
     let context = content.group_context().or_else(|| {
@@ -5383,6 +5418,7 @@ fn is_group_content(content: &ChatContent) -> bool {
     use kutup_chat_proto::content::kind;
     content.kind == kind::SENDER_KEY_DISTRIBUTION
         || content.kind == kind::GROUP_INVITE
+        || content.kind == kind::GROUP_REMOVAL
         || content.group_context().is_some()
         || content
             .as_session_control()

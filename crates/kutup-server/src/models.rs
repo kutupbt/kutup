@@ -93,6 +93,9 @@ pub struct AdminSettingsResponse {
     pub chat_group_link_joins_per_relay_group_per_min: i64,
     /// The same per minute per relay server, across all groups.
     pub chat_group_link_joins_per_relay_per_min: i64,
+    /// How many group delivery capabilities one account may publish (1 to
+    /// 100000).
+    pub chat_group_capabilities_per_account: i64,
     /// The largest group avatar blob this home takes: 8233, 16425, 32809 or
     /// 41001 bytes.
     pub chat_group_avatar_max_bytes: i64,
@@ -496,6 +499,8 @@ pub struct UpdateAdminSettingsRequest {
     pub chat_group_link_joins_per_relay_group_per_min: Option<i64>,
     /// `null` resets to the configured first value.
     pub chat_group_link_joins_per_relay_per_min: Option<i64>,
+    /// `null` resets to the first value (1024).
+    pub chat_group_capabilities_per_account: Option<i64>,
     /// `null` resets to the first value (41001).
     pub chat_group_avatar_max_bytes: Option<i64>,
     /// `null` resets to the first value (82002).

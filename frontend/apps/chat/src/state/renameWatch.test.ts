@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 const serverAddressOf = vi.fn<(account: { accountId: string }, fresh: boolean) => Promise<string | null>>()
-const followAccountRenames = vi.fn<(me: unknown, account: { accountId: string }, current: string) => Promise<unknown[]>>()
+const followAccountRenames = vi.fn<(me: unknown, account: { accountId: string }, current: string, pending?: unknown) => Promise<unknown[]>>()
 const forgetAccountName = vi.fn<(key: string) => void>()
 vi.mock('@kutup/drive-core/accountName', () => ({ serverAddressOf: (...a: Parameters<typeof serverAddressOf>) => serverAddressOf(...a) }))
 vi.mock('@kutup/drive-core/identityPins', () => ({ followAccountRenames: (...a: Parameters<typeof followAccountRenames>) => followAccountRenames(...a) }))
@@ -17,11 +17,17 @@ const key = (n: number) => `aci:00000000-0000-4000-8000-00000000000${n}@a.test`
 const RENAME = { from: 'ada@a.test', to: 'ada.new@a.test', sequence: 1, issuedAtMs: 1 }
 
 const record = vi.fn<(account: unknown, rename: unknown) => Promise<boolean>>()
+const pendingPin = vi.fn<(account: unknown) => Promise<unknown>>()
+const writeNow = vi.fn<(account: unknown) => Promise<boolean>>()
 
-function service(written = true) {
+function service(written = true, pending: unknown = null) {
   record.mockReset()
   record.mockResolvedValue(written)
-  return { recordPeerRenamed: record } as unknown as import('@kutup/chat-core/service').ChatService
+  pendingPin.mockReset()
+  pendingPin.mockResolvedValue(pending)
+  writeNow.mockReset()
+  writeNow.mockResolvedValue(true)
+  return { recordPeerRenamed: record, pendingIdentityPin: pendingPin, writeIdentityPinNow: writeNow } as unknown as import('@kutup/chat-core/service').ChatService
 }
 
 afterEach(() => {
@@ -93,5 +99,18 @@ describe('directPeersByRecency', () => {
     ]
     const contacts = [{ peer: key(3), updatedAtMs: 20 }, { peer: key(1), updatedAtMs: 1 }]
     expect(directPeersByRecency(history, contacts, key(9))).toEqual([key(1), key(2), key(3)])
+  })
+
+  it("follows a peer met lately against Chat's pin that isn't written yet", async () => {
+    serverAddressOf.mockResolvedValue('ada.new@a.test')
+    followAccountRenames.mockResolvedValue([RENAME])
+    const pending = { authorityPublicKey: 'A', since: '2026-10-20T00:00:00Z' }
+    await checkRenames(service(true, pending), [key(1)], vi.fn(), 10)
+    expect(followAccountRenames.mock.calls[0]?.[3]).toEqual(pending)
+    // The pin is written now, and the chain followed into the list.
+    expect(writeNow).toHaveBeenCalledTimes(1)
+    expect(followAccountRenames).toHaveBeenCalledTimes(2)
+    expect(followAccountRenames.mock.calls[1]?.[3]).toBeUndefined()
+    expect(record).toHaveBeenCalledWith(expect.anything(), RENAME)
   })
 })

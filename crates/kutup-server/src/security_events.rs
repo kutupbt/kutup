@@ -27,6 +27,9 @@ pub enum Kind {
     NameClosed,
     /// A held name freed by an administrator before its date.
     NameFreed,
+    /// A custom mail domain the account held, lost (`old_name` is the
+    /// domain): another account proved it, or its DNS stopped proving it.
+    DomainLost,
 }
 
 impl Kind {
@@ -41,6 +44,7 @@ impl Kind {
             Kind::NameDropped => "nameDropped",
             Kind::NameClosed => "nameClosed",
             Kind::NameFreed => "nameFreed",
+            Kind::DomainLost => "domainLost",
         }
     }
 }

@@ -34,6 +34,52 @@ pub struct GroupSlotEntryV1 {
     pub account: AccountRef,
 }
 
+/// The sealed avatar attribute (field `Avatar`, no subject): the key that
+/// opens the avatar blob, and what the image is. The blob's SHA-256 travels
+/// beside it in the clear (`ModifyAttribute.avatarHash`), so the home can
+/// serve and clean up blobs (docs/plans/pairwise-groups.md §11).
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct GroupAvatarV1 {
+    pub version: u16,
+    /// 32 bytes, standard base64.
+    pub key: String,
+    pub content_type: String,
+}
+
+/// Never prints the key.
+impl std::fmt::Debug for GroupAvatarV1 {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("GroupAvatarV1")
+            .field("content_type", &self.content_type)
+            .finish_non_exhaustive()
+    }
+}
+
+/// The image types an avatar may be (Signal's, as the MLS groups took).
+pub const GROUP_AVATAR_CONTENT_TYPES: [&str; 3] = ["image/jpeg", "image/png", "image/webp"];
+
+/// The sealed ban list (field `BanList`, no subject): the banned accounts,
+/// each with the pseudonyms banned for it, so an unban lifts them too. The
+/// home sees and enforces only the pseudonyms (docs/plans/pairwise-groups.md
+/// §4, "Bans by account").
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct GroupBanListV1 {
+    pub version: u16,
+    /// Sorted by account, each once.
+    pub banned: Vec<GroupBannedAccountV1>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct GroupBannedAccountV1 {
+    pub account: AccountRef,
+    /// Its banned pseudonyms in this group, sorted, each once; empty when
+    /// the account was banned before any pseudonym of it was seen.
+    pub pseudonyms: Vec<String>,
+}
+
 /// The group a group message belongs to, inside its encrypted content
 /// (Signal's `GroupContextV2`, plus the home and the chain head): a member
 /// that lost the group learns it again from any message, and every receiver
@@ -217,6 +263,8 @@ canonical_json!(GroupMemberEntryV1, "group member entry");
 canonical_json!(GroupSlotEntryV1, "group slot entry");
 canonical_json!(GroupInviteV1, "group invite");
 canonical_json!(GroupListEntryV1, "group list entry");
+canonical_json!(GroupBanListV1, "group ban list");
+canonical_json!(GroupAvatarV1, "group avatar");
 
 fn require_version(version: u16) -> Result<(), String> {
     if version != GROUP_FORMAT_VERSION {
@@ -231,6 +279,93 @@ impl GroupMemberEntryV1 {
         decode_exact::<PROFILE_KEY_LEN>("profileKey", &self.profile_key)?;
         decode_exact::<BINDING_SIGNATURE_LEN>("bindingSignature", &self.binding_signature)?;
         Ok(())
+    }
+}
+
+impl GroupAvatarV1 {
+    pub fn validate(&self) -> Result<(), String> {
+        require_version(self.version)?;
+        decode_exact::<32>("key", &self.key)?;
+        if !GROUP_AVATAR_CONTENT_TYPES.contains(&self.content_type.as_str()) {
+            return Err("a group avatar is a JPEG, PNG or WebP image".into());
+        }
+        Ok(())
+    }
+}
+
+/// The most pseudonyms one banned account keeps: one per join epoch.
+pub const MAX_BANNED_PSEUDONYMS_PER_ACCOUNT: usize = 64;
+
+impl GroupBanListV1 {
+    pub fn validate(&self) -> Result<(), String> {
+        require_version(self.version)?;
+        if !self
+            .banned
+            .windows(2)
+            .all(|pair| pair[0].account < pair[1].account)
+        {
+            return Err("a ban list is sorted by account, each once".into());
+        }
+        for banned in &self.banned {
+            if banned.pseudonyms.len() > MAX_BANNED_PSEUDONYMS_PER_ACCOUNT {
+                return Err("too many pseudonyms for one banned account".into());
+            }
+            let mut previous: Option<[u8; 32]> = None;
+            for pseudonym in &banned.pseudonyms {
+                let key = decode_exact::<32>("pseudonym", pseudonym)?;
+                if previous.is_some_and(|previous| previous >= key) {
+                    return Err("a banned account's pseudonyms are sorted, each once".into());
+                }
+                previous = Some(key);
+            }
+        }
+        Ok(())
+    }
+
+    /// The entry for `account`, if banned.
+    pub fn get(&self, account: &AccountRef) -> Option<&GroupBannedAccountV1> {
+        self.banned
+            .binary_search_by(|banned| banned.account.cmp(account))
+            .ok()
+            .map(|index| &self.banned[index])
+    }
+
+    /// Bans `account` (again), with `pseudonym` if one is known.
+    pub fn ban(&mut self, account: &AccountRef, pseudonym: Option<&str>) {
+        let index = match self
+            .banned
+            .binary_search_by(|banned| banned.account.cmp(account))
+        {
+            Ok(index) => index,
+            Err(index) => {
+                self.banned.insert(
+                    index,
+                    GroupBannedAccountV1 {
+                        account: account.clone(),
+                        pseudonyms: Vec::new(),
+                    },
+                );
+                index
+            }
+        };
+        if let Some(pseudonym) = pseudonym {
+            let pseudonyms = &mut self.banned[index].pseudonyms;
+            let key = decode_exact::<32>("pseudonym", pseudonym).ok();
+            let at = pseudonyms
+                .partition_point(|other| decode_exact::<32>("pseudonym", other).ok() < key);
+            if pseudonyms.get(at).map(String::as_str) != Some(pseudonym) {
+                pseudonyms.insert(at, pseudonym.to_string());
+            }
+        }
+    }
+
+    /// Lifts `account`'s ban: its entry, whose pseudonyms are unbanned too.
+    pub fn unban(&mut self, account: &AccountRef) -> Option<GroupBannedAccountV1> {
+        let index = self
+            .banned
+            .binary_search_by(|banned| banned.account.cmp(account))
+            .ok()?;
+        Some(self.banned.remove(index))
     }
 }
 

@@ -1087,9 +1087,253 @@ enum GroupSyncView {
     },
 }
 
+fn route_reason(failure: crate::group_client::RouteFailure) -> &'static str {
+    use crate::group_client::RouteFailure;
+    match failure {
+        RouteFailure::RateLimited => "rateLimited",
+        RouteFailure::Unreachable => "unreachable",
+        RouteFailure::GroupsOff => "groupsOff",
+    }
+}
+
+/// What a group link leads to: `{kind: "group", ...}`, `{kind: "invalid"}`
+/// (reset, turned off, or the group gone) or `{kind: "unreachable", reason}`.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase", tag = "kind")]
+enum GroupLinkPreviewView {
+    #[serde(rename_all = "camelCase")]
+    Group {
+        group_id: String,
+        title: Option<String>,
+        description: Option<String>,
+        member_count: u16,
+        requires_approval: bool,
+        /// This account's place in it already: `invited`, `requesting`,
+        /// `member`, `gone`, or absent.
+        status: Option<&'static str>,
+        avatar: Option<GroupAvatarWasmView>,
+    },
+    Invalid,
+    Unreachable {
+        reason: &'static str,
+    },
+}
+
+fn status_name(status: &crate::group::GroupStatus) -> &'static str {
+    use crate::group::GroupStatus;
+    match status {
+        GroupStatus::Invited { .. } => "invited",
+        GroupStatus::Requesting => "requesting",
+        GroupStatus::Member => "member",
+        GroupStatus::Gone => "gone",
+    }
+}
+
+/// A group's picture: standard base64 and its type.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct GroupAvatarWasmView {
+    data: String,
+    content_type: String,
+}
+
+impl From<crate::group_avatar::GroupAvatarImage> for GroupAvatarWasmView {
+    fn from(image: crate::group_avatar::GroupAvatarImage) -> Self {
+        Self {
+            data: STANDARD.encode(&image.data),
+            content_type: image.content_type,
+        }
+    }
+}
+
+/// A group's picture as fetched: `{kind: "image", data, contentType}`,
+/// `{kind: "none"}` or `{kind: "unreachable", reason}`.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase", tag = "kind")]
+enum GroupAvatarFetchView {
+    #[serde(rename_all = "camelCase")]
+    Image {
+        data: String,
+        content_type: String,
+    },
+    None,
+    Unreachable {
+        reason: &'static str,
+    },
+}
+
+/// A join through a link: `{kind: "joined", sync}`, `{kind: "requested"}`,
+/// `{kind: "invalid"}` or `{kind: "unreachable", reason}`.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase", tag = "kind")]
+enum GroupLinkJoinView {
+    Joined { sync: GroupSyncView },
+    Requested,
+    Invalid,
+    Unreachable { reason: &'static str },
+}
+
+/// Where a request to join stands: `{kind: "pending"}`, `{kind: "joined",
+/// sync}`, `{kind: "denied"}`, `{kind: "canceled"}` or `{kind:
+/// "unreachable", reason}`.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase", tag = "kind")]
+enum GroupRequestView {
+    Pending,
+    Joined { sync: GroupSyncView },
+    Denied,
+    Canceled,
+    Unreachable { reason: &'static str },
+}
+
+impl From<crate::group_link::GroupRequestOutcome> for GroupRequestView {
+    fn from(outcome: crate::group_link::GroupRequestOutcome) -> Self {
+        use crate::group_link::GroupRequestOutcome;
+        match outcome {
+            GroupRequestOutcome::Pending => Self::Pending,
+            GroupRequestOutcome::Joined(sync) => Self::Joined { sync: sync.into() },
+            GroupRequestOutcome::Denied => Self::Denied,
+            GroupRequestOutcome::Canceled => Self::Canceled,
+            GroupRequestOutcome::Unreachable(failure) => Self::Unreachable {
+                reason: route_reason(failure),
+            },
+        }
+    }
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct GroupLinkView {
+    /// `off`, `join` or `approve`.
+    mode: &'static str,
+    /// The URL fragment to share, while the link is on.
+    fragment: Option<String>,
+}
+
+impl From<crate::group_link::GroupLinkSettings> for GroupLinkView {
+    fn from(link: crate::group_link::GroupLinkSettings) -> Self {
+        use crate::group_link::GroupLinkMode;
+        Self {
+            mode: match link.mode {
+                GroupLinkMode::Off => "off",
+                GroupLinkMode::Join => "join",
+                GroupLinkMode::Approve => "approve",
+            },
+            fragment: link.fragment,
+        }
+    }
+}
+
+fn link_mode(mode: &str) -> std::result::Result<crate::group_link::GroupLinkMode, JsValue> {
+    use crate::group_link::GroupLinkMode;
+    match mode {
+        "off" => Ok(GroupLinkMode::Off),
+        "join" => Ok(GroupLinkMode::Join),
+        "approve" => Ok(GroupLinkMode::Approve),
+        _ => Err(js_error("a group link mode is off, join or approve")),
+    }
+}
+
+fn access_required(
+    value: &str,
+) -> std::result::Result<kutup_chat_proto::group::AccessRequired, JsValue> {
+    use kutup_chat_proto::group::AccessRequired;
+    match value {
+        "member" => Ok(AccessRequired::Member),
+        "administrator" => Ok(AccessRequired::Administrator),
+        _ => Err(js_error("access is member or administrator")),
+    }
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct GroupRequestWasmView {
+    pseudonym: String,
+    requested_at_revision: u64,
+    /// The account when the binding verified; absent otherwise.
+    account: Option<String>,
+    /// Its account is banned: it can't be approved.
+    banned: bool,
+    /// The account the entry names, verified or not.
+    claimed: Option<String>,
+    /// That account can't be checked now: not approvable yet.
+    unconfirmed: bool,
+}
+
+#[derive(Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct GroupBanWasmView {
+    /// The banned account, or absent for a pseudonym nobody verified.
+    account: Option<String>,
+    pseudonyms: Vec<String>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct GroupDetailsView {
+    group_id: String,
+    title: Option<String>,
+    description: Option<String>,
+    timer_seconds: u32,
+    announcements_only: bool,
+    terminated: bool,
+    access: kutup_chat_proto::group::GroupAccessV1,
+    link: GroupLinkView,
+    administrator: bool,
+    requests: Vec<GroupRequestWasmView>,
+    bans: Vec<GroupBanWasmView>,
+    banned_members: Vec<String>,
+    /// No room on the ban list for another account: bans hold by pseudonym.
+    ban_list_full: bool,
+    ban_list_unreadable: bool,
+    has_avatar: bool,
+}
+
+impl From<crate::group_settings::GroupDetails> for GroupDetailsView {
+    fn from(details: crate::group_settings::GroupDetails) -> Self {
+        Self {
+            group_id: details.group_id,
+            title: details.title,
+            description: details.description,
+            timer_seconds: details.timer_seconds,
+            announcements_only: details.announcements_only,
+            terminated: details.terminated,
+            access: details.access,
+            link: details.link.into(),
+            administrator: details.administrator,
+            requests: details
+                .requests
+                .into_iter()
+                .map(|request| GroupRequestWasmView {
+                    pseudonym: request.requester.pseudonym,
+                    requested_at_revision: request.requester.requested_at_revision,
+                    account: request
+                        .requester
+                        .verified
+                        .map(|verified| verified.account.to_string()),
+                    banned: request.banned,
+                    claimed: request.requester.claimed.map(|account| account.to_string()),
+                    unconfirmed: request.requester.unconfirmed,
+                })
+                .collect(),
+            bans: details
+                .bans
+                .into_iter()
+                .map(|ban| GroupBanWasmView {
+                    account: ban.account.map(|account| account.to_string()),
+                    pseudonyms: ban.pseudonyms,
+                })
+                .collect(),
+            banned_members: details.banned_members,
+            ban_list_full: details.ban_list_full,
+            ban_list_unreadable: details.ban_list_unreadable,
+            has_avatar: details.has_avatar,
+        }
+    }
+}
+
 impl From<crate::group_engine::GroupSync> for GroupSyncView {
     fn from(sync: crate::group_engine::GroupSync) -> Self {
-        use crate::group_client::RouteFailure;
         use crate::group_engine::GroupSync;
         match sync {
             GroupSync::Current {
@@ -1101,11 +1345,7 @@ impl From<crate::group_engine::GroupSync> for GroupSyncView {
             },
             GroupSync::MaybeRemoved { since_ms } => Self::MaybeRemoved { since_ms },
             GroupSync::Unreachable(failure) => Self::Unreachable {
-                reason: match failure {
-                    RouteFailure::RateLimited => "rateLimited",
-                    RouteFailure::Unreachable => "unreachable",
-                    RouteFailure::GroupsOff => "groupsOff",
-                },
+                reason: route_reason(failure),
             },
             GroupSync::Gone => Self::Gone,
             GroupSync::Partial { revision } => Self::Partial { revision },
@@ -1154,6 +1394,14 @@ struct GroupSummaryView {
     /// Who may rename it (`attributes`) and add members (`members`):
     /// `any`, `member`, `administrator` or `unsatisfiable`.
     access: Option<kutup_chat_proto::group::GroupAccessV1>,
+    /// This account may send there now (a member; not ended; an
+    /// administrator while it is announcements-only).
+    may_send: bool,
+    announcements_only: bool,
+    terminated: bool,
+    timer_seconds: u32,
+    /// The avatar blob's hash, when the group has one.
+    avatar_hash: Option<String>,
 }
 
 impl From<crate::group_engine::GroupSummary> for GroupSummaryView {
@@ -1177,6 +1425,11 @@ impl From<crate::group_engine::GroupSummary> for GroupSummaryView {
             fork_suspected: summary.fork_suspected,
             known_since_ms: summary.known_since_ms,
             access: summary.access,
+            may_send: summary.may_send,
+            announcements_only: summary.announcements_only,
+            terminated: summary.terminated,
+            timer_seconds: summary.timer_seconds,
+            avatar_hash: summary.avatar_hash,
         }
     }
 }
@@ -1450,6 +1703,322 @@ impl WasmChatClient {
             .decline_group_invite(&group_id)
             .await
             .map_err(chat_error)
+    }
+
+    /// What a group link (its URL fragment) leads to, read before joining.
+    #[wasm_bindgen(js_name = previewGroupLink)]
+    pub async fn preview_group_link(
+        &mut self,
+        fragment: String,
+    ) -> std::result::Result<JsValue, JsValue> {
+        let preview = self
+            .engine
+            .preview_group_link(&fragment)
+            .await
+            .map_err(chat_error)?;
+        to_output(&match preview {
+            Ok(Some(preview)) => GroupLinkPreviewView::Group {
+                group_id: preview.group_id,
+                title: preview.title,
+                description: preview.description,
+                member_count: preview.member_count,
+                requires_approval: preview.requires_approval,
+                status: preview.status.as_ref().map(status_name),
+                avatar: preview.avatar.map(GroupAvatarWasmView::from),
+            },
+            Ok(None) => GroupLinkPreviewView::Invalid,
+            Err(failure) => GroupLinkPreviewView::Unreachable {
+                reason: route_reason(failure),
+            },
+        })
+    }
+
+    /// Joins through a link, or asks to when an administrator approves.
+    #[wasm_bindgen(js_name = joinGroupByLink)]
+    pub async fn join_group_by_link(
+        &mut self,
+        fragment: String,
+    ) -> std::result::Result<JsValue, JsValue> {
+        use crate::group_link::GroupLinkJoin;
+        let mut rng = OsRng.unwrap_err();
+        let joined = self
+            .engine
+            .join_group_by_link(&fragment, &mut rng)
+            .await
+            .map_err(chat_error)?;
+        to_output(&match joined {
+            GroupLinkJoin::Joined(sync) => GroupLinkJoinView::Joined { sync: sync.into() },
+            GroupLinkJoin::Requested => GroupLinkJoinView::Requested,
+            GroupLinkJoin::LinkInvalid => GroupLinkJoinView::Invalid,
+            GroupLinkJoin::Unreachable(failure) => GroupLinkJoinView::Unreachable {
+                reason: route_reason(failure),
+            },
+        })
+    }
+
+    /// Where this account's request to join stands, settled here.
+    #[wasm_bindgen(js_name = checkGroupRequest)]
+    pub async fn check_group_request(
+        &mut self,
+        group_id: String,
+    ) -> std::result::Result<JsValue, JsValue> {
+        let outcome = self
+            .engine
+            .check_group_request(&group_id)
+            .await
+            .map_err(chat_error)?;
+        to_output(&GroupRequestView::from(outcome))
+    }
+
+    /// Withdraws this account's request to join.
+    #[wasm_bindgen(js_name = cancelGroupRequest)]
+    pub async fn cancel_group_request(
+        &mut self,
+        group_id: String,
+    ) -> std::result::Result<JsValue, JsValue> {
+        let outcome = self
+            .engine
+            .cancel_group_request(&group_id)
+            .await
+            .map_err(chat_error)?;
+        to_output(&GroupRequestView::from(outcome))
+    }
+
+    /// The group's settings, requests and bans, from its verified state.
+    #[wasm_bindgen(js_name = groupDetails)]
+    pub async fn group_details(
+        &mut self,
+        group_id: String,
+    ) -> std::result::Result<JsValue, JsValue> {
+        let details = self
+            .engine
+            .group_details(&group_id)
+            .await
+            .map_err(chat_error)?;
+        to_output(&GroupDetailsView::from(details))
+    }
+
+    /// The link: `off`, `join` (anyone with it joins) or `approve`.
+    #[wasm_bindgen(js_name = setGroupLink)]
+    pub async fn set_group_link(
+        &mut self,
+        group_id: String,
+        mode: String,
+    ) -> std::result::Result<(), JsValue> {
+        let mode = link_mode(&mode)?;
+        let mut rng = OsRng.unwrap_err();
+        self.engine
+            .set_group_link(&group_id, mode, &mut rng)
+            .await
+            .map_err(chat_error)
+    }
+
+    #[wasm_bindgen(js_name = resetGroupLink)]
+    pub async fn reset_group_link(&mut self, group_id: String) -> std::result::Result<(), JsValue> {
+        let mut rng = OsRng.unwrap_err();
+        self.engine
+            .reset_group_link(&group_id, &mut rng)
+            .await
+            .map_err(chat_error)
+    }
+
+    #[wasm_bindgen(js_name = setGroupDescription)]
+    pub async fn set_group_description(
+        &mut self,
+        group_id: String,
+        description: String,
+    ) -> std::result::Result<(), JsValue> {
+        let mut rng = OsRng.unwrap_err();
+        self.engine
+            .set_group_description(&group_id, &description, &mut rng)
+            .await
+            .map_err(chat_error)
+    }
+
+    /// The disappearing-messages timer in seconds; 0 turns it off.
+    #[wasm_bindgen(js_name = setGroupTimer)]
+    pub async fn set_group_timer(
+        &mut self,
+        group_id: String,
+        seconds: u32,
+    ) -> std::result::Result<(), JsValue> {
+        let mut rng = OsRng.unwrap_err();
+        self.engine
+            .set_group_timer(&group_id, seconds, &mut rng)
+            .await
+            .map_err(chat_error)
+    }
+
+    /// Who may edit the details (`attributes`) and add members (`members`):
+    /// `member` or `administrator`.
+    #[wasm_bindgen(js_name = setGroupAccess)]
+    pub async fn set_group_access(
+        &mut self,
+        group_id: String,
+        attributes: String,
+        members: String,
+    ) -> std::result::Result<(), JsValue> {
+        let (attributes, members) = (access_required(&attributes)?, access_required(&members)?);
+        let mut rng = OsRng.unwrap_err();
+        self.engine
+            .set_group_access(&group_id, attributes, members, &mut rng)
+            .await
+            .map_err(chat_error)
+    }
+
+    #[wasm_bindgen(js_name = setGroupAnnouncementsOnly)]
+    pub async fn set_group_announcements_only(
+        &mut self,
+        group_id: String,
+        on: bool,
+    ) -> std::result::Result<(), JsValue> {
+        let mut rng = OsRng.unwrap_err();
+        self.engine
+            .set_group_announcements_only(&group_id, on, &mut rng)
+            .await
+            .map_err(chat_error)
+    }
+
+    #[wasm_bindgen(js_name = approveGroupRequest)]
+    pub async fn approve_group_request(
+        &mut self,
+        group_id: String,
+        pseudonym: String,
+    ) -> std::result::Result<(), JsValue> {
+        let mut rng = OsRng.unwrap_err();
+        self.engine
+            .approve_group_request(&group_id, &pseudonym, &mut rng)
+            .await
+            .map_err(chat_error)
+    }
+
+    /// Turns a request down; it is banned from the link, as Signal does.
+    #[wasm_bindgen(js_name = denyGroupRequest)]
+    pub async fn deny_group_request(
+        &mut self,
+        group_id: String,
+        pseudonym: String,
+    ) -> std::result::Result<(), JsValue> {
+        let mut rng = OsRng.unwrap_err();
+        self.engine
+            .deny_group_request(&group_id, &pseudonym, &mut rng)
+            .await
+            .map_err(chat_error)
+    }
+
+    /// Removes and bans a member; `resetLink` changes the link too.
+    #[wasm_bindgen(js_name = banGroupMember)]
+    pub async fn ban_group_member(
+        &mut self,
+        group_id: String,
+        pseudonym: String,
+        reset_link: bool,
+    ) -> std::result::Result<(), JsValue> {
+        let mut rng = OsRng.unwrap_err();
+        self.engine
+            .ban_group_member(&group_id, &pseudonym, reset_link, &mut rng)
+            .await
+            .map_err(chat_error)
+    }
+
+    /// Lifts a ban, as `groupDetails` lists it.
+    #[wasm_bindgen(js_name = unbanGroup)]
+    pub async fn unban_group(
+        &mut self,
+        group_id: String,
+        ban: JsValue,
+    ) -> std::result::Result<(), JsValue> {
+        let ban: GroupBanWasmView = from_transport(ban).map_err(chat_error)?;
+        let ban = crate::group_settings::GroupBanView {
+            account: ban
+                .account
+                .as_deref()
+                .map(crate::address::parse_account)
+                .transpose()
+                .map_err(chat_error)?,
+            pseudonyms: ban.pseudonyms,
+        };
+        let mut rng = OsRng.unwrap_err();
+        self.engine
+            .unban_group(&group_id, &ban, &mut rng)
+            .await
+            .map_err(chat_error)
+    }
+
+    /// Sets the group's avatar: `image` already scaled down (JPEG, PNG or
+    /// WebP, under 40 KiB).
+    #[wasm_bindgen(js_name = setGroupAvatar)]
+    pub async fn set_group_avatar(
+        &mut self,
+        group_id: String,
+        image: Vec<u8>,
+        content_type: String,
+    ) -> std::result::Result<(), JsValue> {
+        let mut rng = OsRng.unwrap_err();
+        self.engine
+            .set_group_avatar(&group_id, &image, &content_type, &mut rng)
+            .await
+            .map_err(chat_error)
+    }
+
+    /// The group's picture, checked against the hash its state names.
+    #[wasm_bindgen(js_name = groupAvatar)]
+    pub async fn group_avatar(
+        &mut self,
+        group_id: String,
+    ) -> std::result::Result<JsValue, JsValue> {
+        let fetched = self
+            .engine
+            .group_avatar(&group_id)
+            .await
+            .map_err(chat_error)?;
+        to_output(&match fetched {
+            Ok(Some(image)) => GroupAvatarFetchView::Image {
+                data: STANDARD.encode(&image.data),
+                content_type: image.content_type,
+            },
+            Ok(None) => GroupAvatarFetchView::None,
+            Err(failure) => GroupAvatarFetchView::Unreachable {
+                reason: route_reason(failure),
+            },
+        })
+    }
+
+    #[wasm_bindgen(js_name = removeGroupAvatar)]
+    pub async fn remove_group_avatar(
+        &mut self,
+        group_id: String,
+    ) -> std::result::Result<(), JsValue> {
+        let mut rng = OsRng.unwrap_err();
+        self.engine
+            .remove_group_avatar(&group_id, &mut rng)
+            .await
+            .map_err(chat_error)
+    }
+
+    /// Ends the group for everyone.
+    #[wasm_bindgen(js_name = endGroup)]
+    pub async fn end_group(&mut self, group_id: String) -> std::result::Result<(), JsValue> {
+        let mut rng = OsRng.unwrap_err();
+        self.engine
+            .end_group(&group_id, &mut rng)
+            .await
+            .map_err(chat_error)
+    }
+
+    /// Removes every unverified or banned member: how many.
+    #[wasm_bindgen(js_name = removeUnverifiedGroupMembers)]
+    pub async fn remove_unverified_group_members(
+        &mut self,
+        group_id: String,
+    ) -> std::result::Result<u32, JsValue> {
+        let mut rng = OsRng.unwrap_err();
+        let removed = self
+            .engine
+            .remove_unverified_group_members(&group_id, &mut rng)
+            .await
+            .map_err(chat_error)?;
+        Ok(u32::try_from(removed).unwrap_or(u32::MAX))
     }
 
     #[wasm_bindgen(js_name = leaveGroup)]
@@ -3540,6 +4109,43 @@ impl WasmChatClient {
             .record_local_notice(&peer, &content)
             .await
             .map_err(chat_error)
+    }
+
+    /// Writes `peer`'s pending pin to the account's list now (they renamed):
+    /// true when one was written.
+    #[wasm_bindgen(js_name = writeIdentityPinNow)]
+    pub async fn write_identity_pin_now(
+        &mut self,
+        peer: String,
+    ) -> std::result::Result<bool, JsValue> {
+        self.engine
+            .write_identity_pin_now(&peer)
+            .await
+            .map_err(chat_error)
+    }
+
+    /// The pin Chat keeps for `peer` and hasn't written to the account's
+    /// list yet: `{authorityPublicKey, since}`, or null.
+    #[wasm_bindgen(js_name = pendingIdentityPin)]
+    pub async fn pending_identity_pin(
+        &mut self,
+        peer: String,
+    ) -> std::result::Result<JsValue, JsValue> {
+        #[derive(Serialize)]
+        #[serde(rename_all = "camelCase")]
+        struct PendingPin {
+            authority_public_key: String,
+            since: String,
+        }
+        let pending = self
+            .engine
+            .pending_identity_pin(&peer)
+            .await
+            .map_err(chat_error)?;
+        to_output(&pending.map(|(authority_public_key, since)| PendingPin {
+            authority_public_key,
+            since,
+        }))
     }
 
     /// The line saying `peer` (an account key) changed their username from

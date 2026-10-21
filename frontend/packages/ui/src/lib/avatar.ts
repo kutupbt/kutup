@@ -9,6 +9,12 @@ function toBase64(bytes: Uint8Array): string {
 export const PROFILE_AVATAR = { maxSide: 512, maxBytes: 512 * 1024 }
 /** A group picture travels inside the group state: at most 256×256 and 48 KiB. */
 export const GROUP_AVATAR = { maxSide: 256, maxBytes: 48 * 1024 }
+/**
+ * A pairwise group's picture: a sealed blob on the group's home, padded to a
+ * size bucket (8, 16, 32 or 40 KiB). 256×256 under 16 KiB keeps it in the
+ * second bucket, which every home takes.
+ */
+export const PAIRWISE_GROUP_AVATAR = { maxSide: 256, maxBytes: 16 * 1024 - 1 }
 
 /**
  * A picture as it is sent: the image's centre square, scaled down to fit,

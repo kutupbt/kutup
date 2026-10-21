@@ -64,6 +64,9 @@ Specific codes, where an app does something particular (a test in
 | `head_conflict` | 409 | The account head moved (another device wrote first; `sequence` the current one, or a folder delete whose `removes` is not what it removes): read the head and index again, redo the edit |
 | `head_required` | 409 | The account keeps a head, and this listed write carried none |
 | `contactListFull` | 400 | `PUT /api/chat/contact-list/{id}`: a new entry past the 10,000 the list keeps; the client keeps the write due (a block is never dropped) and tells its person |
+| `malformed` | 400 | `POST /api/chat/anonymous/messages/multi`: the payload doesn't parse, a device is listed twice, or the capabilities don't name exactly the payload's accounts ([chat-protocol.md](chat-protocol.md) §7); also a group route's refusal code |
+| `peerUnavailable` | 503 | `POST /api/chat/anonymous/messages/multi` for another server's accounts: that server didn't take the send (slow, unreachable or unwilling); send their copies one by one |
+| `capabilityLimit` | 409 | `PUT /api/chat/group-capabilities` or `POST …/set`: the account would pass its group capability limit; nothing changed |
 | `setupRequired` | 409 | The account has no keys yet (an admin-made account before its first sign-in): a listed write or a rename waits for setup |
 | `renamed` | 409 | A lookup of a name an account no longer goes by (held, or named in a rename chain): `renames` carries `{ "version": 1, "chains": [...] }`, never keys |
 | `nameReserved` | 409 | The name is the server's (postmaster, abuse, …, the break-glass account), in any spelling |
@@ -79,6 +82,12 @@ Specific codes, where an app does something particular (a test in
 | `endToEndRequired` | 400 | `POST /api/mail/forwardings` to a Kutup address without `endToEnd` material |
 | `forwardingExists` | 409 | The address already forwards there |
 | `forwardingLimit` | 409 | 10 forwardings per address or 25 per account |
+| `customDomainsOff` | 403 | Custom mail domains are off here (`POST /api/mail/domains`) |
+| `domainNotVerified` | 409 | The address's custom domain doesn't take mail now (sending from it, a new address or a catch-all on it) |
+| `notYourAddress` | 404 | `fromAddress` names no active address of the caller's |
+| `mimeMismatch` | 400 | `POST /api/mail/send`: the readable `mime` isn't the same message (another From than the sender's address, another Message-ID, or a Bcc header) |
+| `checkTimedOut` | 503 | `GET /api/mail/domains/{id}?refresh=1`: the domain's whole DNS check ran past its time (`mail_domains.check_timeout_seconds`); nothing changed |
+| `domainBlocked` | 409 | `POST /api/mail/domains`: an administrator deactivated this name; nobody may add it until they lift the block |
 | `forwardingUnavailable` | 409 | This server has no `MAIL_FORWARDING_KEYS`: no forwarding can be set up |
 | `forwardingState` | 409 | A forwarding action from the wrong state (pause an active one, accept a pending one, …) |
 | `keyListRequired` | 400 | The first outside forwarding of an address brings its next key list, with EMAIL_NO_ENCRYPT on every key |
@@ -1748,6 +1757,120 @@ not send outside (the server's policy, or its sending paused); confirmation
 emails wait likewise. A forwarder's new primary key makes
 its end-to-end forwardings `outdated` and deletes their k.
 
+
+## Custom mail domains
+
+An account's own domains, as Proton's
+([`plans/mail-custom-domains.md`](plans/mail-custom-domains.md)): added,
+proved with a TXT record before any mail flows, checked as Proton checks them,
+and given addresses. `404` unless the server has Mail; adds answer `403
+customDomainsOff` unless an administrator allows them and the server has
+Stalwart's management key and `MAIL_DKIM_KEYS`. **Auth:** Bearer JWT.
+
+A domain: `{ "id", "name", "state", "verifyState", "mxState", "spfState",
+"dkimState", "dmarcState", "awaitingApproval", "stopped", "catchAllAddressId",
+"addressCount", "records", "createdAt", "checkedAt", "warnedAt" }`. The states
+are Proton's numbers (`DOMAIN_STATE` 0 not verified, 1 verified, 2 warn;
+`VERIFY_STATE`, `MX_STATE`, `SPF_STATE`, `DKIM_STATE`, `DMARC_STATE` as in
+Proton's `Domain.ts`). `records` lists what to publish, each `{ "type", "host",
+"value", "priority"? }`: `verify` (TXT `@` = `kutup-verification=…`), `mx`,
+`spf` (`v=spf1 include:_spf.<server> ~all`), `dkim` (three CNAMEs,
+`kutupN._domainkey` → `<domain id>.kutupN._dk.<server>.`) and `dmarc`.
+
+A held domain whose TXT goes missing keeps working in `warn` for 14 days
+(admin-settable) while its MX is still this server; with its MX gone too,
+sending and delivery stop at once (`stopped`) and it ends within 72 hours.
+Then its addresses are freed and its owner sees a `domainLost` security
+event, as when another account proves the domain (two checks an hour apart
+that find that account's code and not the holder's).
+
+### GET /api/mail/domains
+
+`{ "domains": [...], "used", "max", "mode": "everyone"|"approve"|"off" }`.
+
+### POST /api/mail/domains
+
+`{ "name" }` → `201` with the domain (or the one the account removed before,
+with its code). The name is lowercased and put in its IDNA form. `400`
+`invalidDomain`, `domainIsAddress`, `serverDomain` (this server's or a name
+under it) or `publicSuffix`; `409` `domainLimit`, `domainDailyLimit`,
+`serverDomainLimit` or `domainBlocked`.
+
+### GET /api/mail/domains/{id}?refresh=1
+
+The domain; `refresh=1` checks its DNS now, uncached (Proton's "Refresh
+status"), at most 30 times an hour per account (`429`), and at most
+`mail_domains.refreshes_at_once` across the server at a time (`429`). A
+check that runs past `mail_domains.check_timeout_seconds` changes nothing
+(`503` `checkTimedOut`). A check that finds the domain changed since it was
+read (another check, an administrator) returns it as it is.
+
+### DELETE /api/mail/domains/{id}
+
+`204`: the domain is removed and its addresses freed (their keys stay for old
+mail; nothing is published for them).
+
+### PUT /api/mail/domains/{id}/catch-all
+
+`{ "addressId": "<an active address on the domain>" | null }` → `204`. Unknown
+names on the domain then reach it, at most the owner's
+`mail_domains.catch_all_per_day` a day (500 at first; `452 4.2.2` after),
+counted once per stored message across every backend; caught mail is never
+forwarded. `403` when catch-alls are off, `409`
+while the domain isn't verified.
+
+### POST /api/mail/domains/addresses
+
+`{ "local", "domainId" }` → `201 { "id", "address" }`: an address on one of
+the caller's verified domains, compared lowercased (no `. _ -` folding there).
+It has no key yet: the client adds one with `POST
+/api/mail/addresses/{id}/keys`. Every address counts toward the account's
+limit (10 by default), its username's included. `400 invalidAddress`, `409`
+`addressLimit`, `addressTaken` or `domainNotVerified`. Sending from it: `POST
+/api/mail/send` (and drafts) with `fromAddress: "<its id>"` in the meta.
+
+### GET /api/admin/mail/domains · PUT /api/admin/mail/domains/settings
+
+Administrators only. `GET`: `{ "configured", "stalwartDriftAt", "settings": { "mail_domains.mode":
+"everyone"|"approve"|"off", "mail_domains.per_account", …addresses_per_account,
+…on_server, …adds_per_day, …pending_days, …catch_all, …catch_all_per_day,
+…grace_warn_days, …grace_stopped_hours, …refreshes_at_once, …check_timeout_seconds }, "spf", "dkimKeys": [{ "selector",
+"state", "host", "txt", "publishedSince" }], "domains": [... "blocked" ...] }`.
+`stalwartDriftAt` is when Stalwart's domains or DKIM signatures outside the
+custom domains (`MAIL_DOMAIN`'s own) last changed, as the reconcile saw them
+(it never touches them, so a change is someone else's; it is also logged as
+an error). A pending
+DKIM key signs only once its TXT (`*.kutupN._dk.<server>`) has been in DNS for
+a day. `PUT` takes any of the settings, each checked against its range
+(`400` otherwise), applies at once and is audited (`mail.domains.settings`).
+The mode `off` stops every custom domain at once: no new ones, and held ones
+neither send nor receive; the reconcile then removes them from Stalwart, so
+mail to them is refused at RCPT (`5xx`, the sender bounces it) rather than
+deferred. Turning the mode back on restores held domains that still prove
+themselves; their addresses keep working as before.
+
+### POST /api/admin/mail/domains/{id}/approve · /deactivate
+
+Administrators only. `approve` lets a verified domain take mail in the
+`approve` mode; `deactivate` ends a domain at once (its addresses freed, its
+owner told in its inbox and its security events) and blocks its name and
+every name under it (`mail.<name>` too), so no account proves or takes any of
+them over until the block is lifted. Both audited.
+
+### GET /api/admin/mail/domains/blocks · DELETE /api/admin/mail/domains/blocks/{name}
+
+Administrators only. `GET`: the blocked names, newest first, `[{ "name",
+"blockedAt", "blockedBy" }]` (`blockedBy` null once that administrator's
+account is gone), whether or not a domain row is left for them. `DELETE`
+lifts one by its name (`204`; `404` for a name not blocked), audited
+(`mail.domains.unblock`).
+
+### GET · PUT /api/admin/users/{id}/mail-domains
+
+Administrators only. One account's limits over the site's: `{ "maxDomains":
+0–100 | null, "maxAddresses": 1–1000 | null, "catchAll": bool | null }`, `null`
+keeping the site's.
+
 ## Mail
 
 Mail from outside arrives through Stalwart and is encrypted to the address's
@@ -1813,7 +1936,7 @@ only), `inReplyTo` and `references`.
 ### POST /api/mail/drafts · PUT /api/mail/drafts/:id
 
 Multipart: `meta` (JSON: `subject`, `fromName`, `to`, `cc`, `bcc` as
-`[{ "address", "name" }]`, `messageId` as `…@<server name>`, `inReplyTo`,
+`[{ "address", "name" }]`, `messageId` as `…@<server name>` or `…@<the sender's domain>`, `inReplyTo`,
 `references`, `attachmentCount`, `threadId`) and `body` (the message without
 attachments, encrypted to your own address key; `400` with `code: keyChanged`
 otherwise). **Response:** the draft, as in the list. `413` when too large or
@@ -3436,6 +3559,22 @@ over the storage per group (the current blob and the upload), both
 administrators' settings; `malformed` for a body not padded so. An upload
 spends the change budgets.
 
+### PUT /api/chat/group-capabilities · POST /api/chat/group-capabilities/set
+
+Group delivery capabilities ([`plans/pairwise-groups.md`](plans/pairwise-groups.md),
+slice 2 §2; `404` unless `CHAT_GROUPS=true` and federation is on). Signed-in,
+the account's own. Each is the SHA-256 (32 bytes, canonical base64) of one
+random capability per group the account is in, with no group id; a sender
+presents the raw capability with a multi-recipient send. `PUT` takes `{
+"add": [hash], "remove": [hash] }` and applies both in one transaction (a
+member replacing its capability never has neither); adding one already there
+or removing one not there changes nothing. `POST …/set` takes `{ "hashes":
+[...] }` and makes the set exactly these (a device restoring from its group
+list). Both answer `{ "count" }`. `400` for a hash that isn't 32 bytes of
+canonical base64; `409 capabilityLimit` when the change would pass the
+account's limit (`chatGroupCapabilitiesPerAccount`, 1024 at first), refused
+whole. An account reset clears them.
+
 ### GET /api/chat/group-list
 
 The account's group list ([`plans/pairwise-groups.md`](plans/pairwise-groups.md) §5;
@@ -4473,6 +4612,7 @@ Return current global server settings.
   "oldAddressReceiveDays": 90,
   "chatGroupLinkJoinsPerRelayGroupPerMin": 120,
   "chatGroupLinkJoinsPerRelayPerMin": 1200,
+  "chatGroupCapabilitiesPerAccount": 1024,
   "chatGroupAvatarMaxBytes": 41001,
   "chatGroupAvatarStoragePerGroupBytes": 82002,
   "chatGroupAvatarPendingSeconds": 86400,

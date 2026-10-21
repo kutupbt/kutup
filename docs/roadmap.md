@@ -117,6 +117,11 @@ Left before the tag:
   Slice 1 (state engine, sender keys, sealed batches, basic UI) is built,
   and a new device of a member keeps their groups (the account's
   `chatGroups` group list, `specs/38-chat-group-device-replaced.spec.ts`).
+  Slice 3 (links, requests, settings, bans, ending a group, removal notices,
+  timeline lines; `specs/165-chat-group-link.spec.ts` and the second test of
+  `specs/161-chat-groups-two-server.spec.ts`) is built, with request status,
+  withdrawal and the avatar on the server's #285 and #288. Slices 2 (sending once), 4 (calls) and 5 (MLS out)
+  follow; groups stay off until all are done.
 - **An independent security review** of the V1 formats and protocols, with a
   review bundle prepared for it.
 - **The remaining libsodium primitives.** Formats are sealed in WASM, but the
@@ -693,8 +698,12 @@ arrival, and direct sending. Phases, each with its own plan before code:
 - **Custom domains** (moved up, decided 2026-10-20): your own domain for
   Mail addresses, following Proton: add the domain, verify ownership and its
   MX, SPF, DKIM and DMARC records, addresses on it with their own keys,
-  catch-all. Runs beside Chat groups and Calendar. A plan note settled from
-  Proton's code comes first (`plans/mail-custom-domains.md`, to be written).
+  catch-all. Runs beside Chat groups and Calendar. Plan:
+  `plans/mail-custom-domains.md`; the server is built (the web UI is the
+  third session's). Open: a signed zone in the mail gate, so DNSSEC
+  validation itself is tested end to end (CoreDNS's `dnssec` plugin, a
+  test-only trust anchor for hickory, and a backend validating beside the
+  one that reads the unsigned test zones).
 - **E.** IMAP/SMTP and CalDAV/CardDAV bridge, organisations (which then own
   groups' storage, see the groups plan).
 
@@ -882,6 +891,12 @@ an edit. Plan: [`plans/pass.md`](plans/pass.md); research and decisions:
 ---
 
 ## Polish / smaller items (future)
+
+- **Rate limits administrators can change (2026-10-21):** the `RATE_LIMIT_*`
+  limits (per address, account and peer) are read from the environment at
+  start. Per the standing rule (every limit an administrators' setting), move
+  them to site settings under Administration, applied without a restart, as
+  the group, mail-domain and multi-recipient limits already are.
 
 ### Chat app (web) follow-ups
 

@@ -213,6 +213,10 @@ pub struct Engine {
     pub(crate) manifest_keys_seen: BTreeMap<String, (i64, [u8; 32])>,
     /// Each group's catch-ups for incoming content (`group_gate`).
     pub(crate) group_catch_ups: BTreeMap<String, crate::group_gate::CatchUps>,
+    /// When arriving content last made this device ask the home about a
+    /// group on its own (a request's status, a removal it couldn't place):
+    /// at most once a minute per group, whatever arrives.
+    pub(crate) group_nudges: BTreeMap<String, i64>,
     /// When the session with a peer device was last set aside for being
     /// unreadable (`process_inbound`), by `(account, device)`.
     session_resets: BTreeMap<(String, u32), i64>,
@@ -243,7 +247,7 @@ pub struct Engine {
     /// First-seen identity pins waiting for their delayed write, by peer
     /// (docs/plans/chat-contacts-sync.md, "The pin list follows the same
     /// rule"). A pin lost to a reload is due again at the next contact.
-    pub(crate) pins_due: BTreeMap<String, i64>,
+    pub(crate) pins_due: BTreeMap<String, PinDue>,
     /// The account's group keys (its self-authority and its pseudonyms),
     /// from its master key: no group is made or joined without them.
     pub(crate) group_keys: Option<crate::group::GroupAccountKeys>,
@@ -338,6 +342,7 @@ impl Engine {
             group_members_seen: BTreeMap::new(),
             manifest_keys_seen: BTreeMap::new(),
             group_catch_ups: BTreeMap::new(),
+            group_nudges: BTreeMap::new(),
             session_resets: BTreeMap::new(),
             resent: BTreeMap::new(),
             asked_again: BTreeMap::new(),
@@ -427,13 +432,40 @@ impl Engine {
                 let now = self.now_ms();
                 self.load_pins_due().await?;
                 if !self.pins_due.contains_key(peer) {
-                    self.pins_due
-                        .insert(peer.to_string(), crate::contact_list::fresh_due(now));
+                    self.pins_due.insert(
+                        peer.to_string(),
+                        PinDue {
+                            due_ms: crate::contact_list::fresh_due(now),
+                            seen_ms: now,
+                        },
+                    );
                     self.save_pins_due().await?;
                 }
             }
         }
         Ok(())
+    }
+
+    /// The pin this device keeps for `peer` and hasn't written to the
+    /// account's list yet (a first meeting waits for a random moment): the
+    /// self-authority key Chat trusts for them and when they were first
+    /// seen, as the pin will say once written. What a rename is followed
+    /// against meanwhile; `None` once it is written, or for a peer whose
+    /// manifest isn't trusted.
+    pub async fn pending_identity_pin(&mut self, peer: &str) -> Result<Option<(String, String)>> {
+        self.load_pins_due().await?;
+        let Some(due) = self.pins_due.get(peer).copied() else {
+            return Ok(None);
+        };
+        let Some(trust) = self.session.manifest_trust(peer).await? else {
+            return Ok(None);
+        };
+        if trust.continuity_gap || trust.trust == crate::db::AuthorityTrust::Quarantined {
+            return Ok(None);
+        }
+        let since =
+            kutup_crypto::identity_pins::since_from_unix((due.seen_ms.max(0) / 1000) as u64);
+        Ok(Some((trust.self_authority_key, since)))
     }
 
     /// Writes the first-seen pins that are due (all of them with `all`,
@@ -444,9 +476,27 @@ impl Engine {
         let due: Vec<String> = self
             .pins_due
             .iter()
-            .filter(|(_, at)| all || **at <= now)
+            .filter(|(_, pin)| all || pin.due_ms <= now)
             .map(|(peer, _)| peer.clone())
             .collect();
+        self.write_due_pins(due).await
+    }
+
+    /// Writes `peer`'s first-seen pin now, ahead of its random moment: when
+    /// the peer renamed, so the account's list (which every app's checks
+    /// read) knows them and their old address. A rename is rare and the
+    /// list is sealed, so writing early tells the server little. True when
+    /// one was written.
+    pub async fn write_identity_pin_now(&mut self, peer: &str) -> Result<bool> {
+        self.load_pins_due().await?;
+        if !self.pins_due.contains_key(peer) {
+            return Ok(false);
+        }
+        Ok(self.write_due_pins(vec![peer.to_string()]).await? > 0)
+    }
+
+    async fn write_due_pins(&mut self, due: Vec<String>) -> Result<usize> {
+        let now = self.now_ms();
         if due.is_empty() {
             return Ok(0);
         }
@@ -458,7 +508,8 @@ impl Engine {
         let mut trusts = Vec::new();
         for peer in &due {
             if let Some(trust) = self.session.manifest_trust(peer).await? {
-                trusts.push(trust);
+                let seen_ms = self.pins_due.get(peer).map_or(now, |pin| pin.seen_ms);
+                trusts.push((trust, (seen_ms.max(0) / 1000) as u64));
             }
         }
         let seconds = (crate::clock::unix_millis().max(0) / 1000) as u64;
@@ -2582,10 +2633,10 @@ impl Engine {
     /// tab's, or before a reload) into this engine's.
     async fn load_pins_due(&mut self) -> Result<()> {
         if let Some(bytes) = self.session.pins_due().await? {
-            let stored: BTreeMap<String, i64> = serde_json::from_slice(&bytes)
+            let stored: BTreeMap<String, StoredPinDue> = serde_json::from_slice(&bytes)
                 .map_err(|error| ChatError::Db(format!("decode due pins: {error}")))?;
             for (peer, at) in stored {
-                self.pins_due.entry(peer).or_insert(at);
+                self.pins_due.entry(peer).or_insert(at.into());
             }
         }
         Ok(())
@@ -3549,5 +3600,73 @@ mod tests {
                 "{invalid}"
             );
         }
+    }
+}
+
+/// A first-seen pin waiting for its write: when it is due (a random moment,
+/// docs/plans/chat-contacts-sync.md) and when the account was first seen,
+/// which the pin is dated by once written.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct PinDue {
+    pub due_ms: i64,
+    pub seen_ms: i64,
+}
+
+/// What a stored due pin was: its due time alone at first, then both.
+#[derive(serde::Deserialize)]
+#[serde(untagged)]
+enum StoredPinDue {
+    Due(i64),
+    #[serde(rename_all = "camelCase")]
+    Both {
+        due_ms: i64,
+        seen_ms: i64,
+    },
+}
+
+impl From<StoredPinDue> for PinDue {
+    fn from(stored: StoredPinDue) -> Self {
+        match stored {
+            // Only its due time is known: never later than that.
+            StoredPinDue::Due(due_ms) => Self {
+                due_ms,
+                seen_ms: due_ms,
+            },
+            StoredPinDue::Both { due_ms, seen_ms } => Self { due_ms, seen_ms },
+        }
+    }
+}
+
+#[cfg(test)]
+mod pin_due_tests {
+    use super::*;
+
+    #[test]
+    fn a_due_pin_stored_before_its_first_seen_time_was_kept_still_reads() {
+        let stored: BTreeMap<String, StoredPinDue> =
+            serde_json::from_str(r#"{"old":5000,"new":{"dueMs":9000,"seenMs":1000}}"#).unwrap();
+        let read: BTreeMap<String, PinDue> = stored
+            .into_iter()
+            .map(|(peer, due)| (peer, due.into()))
+            .collect();
+        assert_eq!(
+            read["old"],
+            PinDue {
+                due_ms: 5000,
+                seen_ms: 5000
+            }
+        );
+        assert_eq!(
+            read["new"],
+            PinDue {
+                due_ms: 9000,
+                seen_ms: 1000
+            }
+        );
+        assert_eq!(
+            serde_json::to_string(&read["new"]).unwrap(),
+            r#"{"dueMs":9000,"seenMs":1000}"#
+        );
     }
 }

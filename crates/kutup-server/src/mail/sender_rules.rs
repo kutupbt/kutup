@@ -95,8 +95,7 @@ pub async fn verdict(
         "SELECT kind FROM mail_sender_rules
           WHERE user_id = $1
             AND pattern IN ($2, $3, (SELECT folded FROM mail_addresses
-                                       WHERE folded = kutup_fold(split_part($2, '@', 1))
-                                                      || '@' || lower(split_part($2, '@', 2))
+                                       WHERE folded = kutup_address_folded($2)
                                        LIMIT 1))
           ORDER BY (pattern = $3) ASC LIMIT 1",
     )

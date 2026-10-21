@@ -36,7 +36,7 @@
   },
   "devDependencies": {
     "@kutup/config": "workspace:*",
-    "vite": "^8.0.16",
+    "vite": "^8.1.6",
     "@types/zxcvbn": "^4.4.4"
   }
 }

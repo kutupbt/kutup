@@ -22,6 +22,7 @@ import { ConversationMenuItems } from './ConversationMenu'
 import { CONTEXT_PARTS, DROPDOWN_PARTS } from './menuParts'
 import { conversationPath } from './paths'
 import { useListActions } from './useListActions'
+import { useChatGroupAvatar } from '../../lib/chatGroupAvatar'
 
 /**
  * The conversations as Signal Desktop lists them: pinned ones first, then
@@ -229,6 +230,7 @@ function ConversationRow({
   const [menuOpen, setMenuOpen] = useState(false)
   const markedUnread = unread === 0 && (state?.markedUnread ?? false)
   const highlighted = unread > 0 || markedUnread
+  const chatGroupPicture = useChatGroupAvatar(item.chatGroup)
   return (
     <ContextMenu>
       <ContextMenuTrigger asChild>
@@ -245,8 +247,8 @@ function ConversationRow({
           >
             <Avatar
               name={title}
-              image={item.groupInfo?.avatar?.data ?? item.profile?.avatar}
-              contentType={item.groupInfo?.avatar?.contentType ?? item.profile?.avatarContentType}
+              image={chatGroupPicture?.data ?? item.groupInfo?.avatar?.data ?? item.profile?.avatar}
+              contentType={chatGroupPicture?.contentType ?? item.groupInfo?.avatar?.contentType ?? item.profile?.avatarContentType}
               group={item.conversation.kind === 'group'}
             />
             <span className="min-w-0 flex-1">

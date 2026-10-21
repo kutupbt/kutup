@@ -29,6 +29,8 @@ mod contact_list_harness_tests;
 #[allow(dead_code)]
 mod group;
 #[cfg_attr(not(feature = "wasm"), allow(dead_code))]
+mod group_avatar;
+#[cfg_attr(not(feature = "wasm"), allow(dead_code))]
 mod group_client;
 #[cfg_attr(not(feature = "wasm"), allow(dead_code))]
 mod group_engine;
@@ -40,11 +42,14 @@ mod group_harness_tests;
 mod group_heal;
 #[cfg_attr(not(feature = "wasm"), allow(dead_code))]
 mod group_invite;
+mod group_lines;
+mod group_link;
 #[cfg_attr(not(feature = "wasm"), allow(dead_code))]
 mod group_list;
 mod group_recover;
 #[cfg_attr(not(feature = "wasm"), allow(dead_code))]
 mod group_send;
+mod group_settings;
 mod invite_link;
 mod keys;
 mod manifest;

@@ -78,7 +78,38 @@ export function ConversationBar({ model }: { model: ConversationModel }) {
     }
   }
 
+  /** Withdraws this account's request to join a pairwise group. */
+  async function withdrawRequest() {
+    const groupId = model.chatGroup?.groupId
+    if (!service || !groupId) return
+    setBusy(true)
+    try {
+      const outcome = await service.cancelChatGroupRequest(groupId)
+      if (outcome.kind === 'canceled') toast.success(t('chat.chatGroupLink.withdrawn'))
+      else if (outcome.kind === 'joined') toast.success(t('chat.chatGroupLink.joined'))
+      else if (outcome.kind === 'denied') toast.message(t('chat.chatGroupLink.denied'))
+      else toast.error(t('chat.chatGroupLink.unreachable'))
+      await refreshChat()
+    } catch (error) {
+      toast.error(chatErrorMessage(error, t))
+    } finally {
+      setBusy(false)
+    }
+  }
+
   const frame = 'border-t border-border px-4 py-3'
+  if (model.readOnly === 'requesting' && model.chatGroup) {
+    return (
+      <div className={frame} data-testid="chat-group-requesting">
+        <p className="text-center text-sm text-muted-foreground">{t('chat.readOnly.requesting')}</p>
+        <div className="mt-3 flex justify-center">
+          <Button variant="outline" disabled={busy} onClick={() => void withdrawRequest()} data-testid="chat-group-withdraw">
+            {t('chat.chatGroupLink.withdraw')}
+          </Button>
+        </div>
+      </div>
+    )
+  }
   switch (model.readOnly) {
     case 'request':
       return (
