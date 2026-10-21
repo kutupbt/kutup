@@ -1776,14 +1776,22 @@ Frame keys, ringing and the call line are the clients', end to end.
   characters of base32(HMAC-SHA256(a key of the home's, group id)), so SFU
   logs don't carry the group id.
 - The home creates it (LiveKit's `CreateRoom`, idempotent) when it mints a
-  token for a room that is absent or empty, with its maximum participants
-  and its empty timeout (both administrators' settings, 75 and five minutes
-  at first; 75 is Signal's group-call cap).
-- The **era** (16 random bytes, Signal's `eraId`) is drawn by the home at that
-  moment and kept with the group (`chat_group_calls`: group, era, started at).
-  It names the call: the start line and every frame-key message carry it, so
-  a device that joins late, or that missed the start line, finds the call's
-  era from the home.
+  token for a room LiveKit doesn't have, with its maximum participants and
+  its empty timeout (both administrators' settings, 75 and five minutes at
+  first; 75 is Signal's group-call cap).
+- The **era** (16 random bytes, Signal's `eraId`) names the call: the start
+  line and every frame-key message carry it, so a device that joins late, or
+  missed the start line, finds the call's era from the home. It is kept with
+  the group (`chat_group_calls`: group, era, started at) and **lives as long
+  as the room**:
+  - a new era is drawn only when the group has no row, or LiveKit says the
+    room is absent (deleted, or its empty timeout ran out);
+  - it is drawn under the group's row lock (`SELECT … FOR UPDATE`, or
+    `INSERT … ON CONFLICT` for the first), so token requests at the same
+    moment, before anyone has connected, share one era rather than split
+    the call;
+  - an empty room that still exists keeps its era, so members who rejoin
+    within the empty timeout continue the same call (close to Signal's).
 
 **2. `CallToken` (operation 6).** Signed by a member's pseudonym through the
 anonymous route; its body is `{ "deviceTag" }` (16 random bytes, fresh per
@@ -1807,9 +1815,10 @@ call and device).
 is `GroupCallStateV1 { eraId?, participants: [identity] }`, from LiveKit's
 `ListParticipants`. The client maps each identity's pseudonym to a verified
 member for "N in the call" and the join button, without a token. Budgeted per
-pseudonym and per group (a setting, 240 a minute at first). An absent or
-empty room is an ordinary answer, no era and no participants, never an
-error, so the banner can ask cheaply.
+pseudonym and per group (a setting, 240 a minute at first). A room with no
+participants is "no call": no era and no participants, an ordinary answer and
+never an error, so the banner can ask cheaply, even while a row (and an
+empty room) still exists. A room LiveKit doesn't have clears the group's row.
 
 **4. Removal and ending.**
 - After the home commits a change that drops members (`RemoveMember`, `Ban`,
@@ -1855,8 +1864,9 @@ id, era, started at; one row per group, cascading with the group).
 participants (75), its empty timeout (300 s), the token's lifetime (600 s),
 tokens and peeks per group a minute (120, 240), and the ring limit (16).
 
-**Tests.** Unit: the room name, the identity, the token's claims, the era
-drawn only for an empty room. Live, one server with the test stack's LiveKit:
+**Tests.** Unit: the room name, the identity, the token's claims. Live: the era
+kept while the room exists, shared by concurrent token requests, and drawn
+anew only once the room is gone. Live, one server with the test stack's LiveKit:
 a member's token and peek, a non-member's `NotFound`, a removed member's
 participant removed, the room deleted on `Terminate`, the settings honoured.
 Two servers: a member on B gets A's token through B's relay.
