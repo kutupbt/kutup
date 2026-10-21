@@ -524,14 +524,13 @@ impl Engine {
         let distribution_id = self
             .distribute_sender_key(record, &recipients, &certificate, rng)
             .await?;
-        // This account's capability for the multi-recipient route, to the
-        // members who don't hold it yet, and the published set when it
-        // changed. Best effort: the message goes either way (to this account
-        // pairwise meanwhile), and both are tried again with the next one.
+        // This account's capability for the multi-recipient route, published
+        // (when it changed) and then handed to the members who don't hold it
+        // yet. Best effort: the message goes either way (to this account
+        // pairwise meanwhile), and it is tried again with the next one.
         let _ = self
             .hand_out_delivery(record, &recipients, &certificate, rng)
             .await;
-        let _ = self.publish_group_capabilities().await;
         let me = self.session.account_ref().to_string();
         let message = self
             .session
@@ -756,7 +755,9 @@ impl Engine {
         let mut sends = Vec::with_capacity(retry.len());
         let mut places = Vec::with_capacity(retry.len());
         for &index in retry {
-            if entry.legs[index].multi {
+            // A leg that began the round on the multi-recipient route is
+            // done for this round (sent there, or back for the next one).
+            if multi.contains(&index) {
                 continue;
             }
             let leg = &mut entry.legs[index];
@@ -864,6 +865,9 @@ impl Engine {
                 Some(SealedBatchOutcomeV1::RateLimited) | None => wait(&mut entry.legs[index], now),
             }
         }
+        // Each leg once in the next round: one account is named once a batch.
+        again.sort_unstable();
+        again.dedup();
         (again, book_news)
     }
 
@@ -910,6 +914,13 @@ impl Engine {
         // longer holds goes pairwise.
         let mut by_server: BTreeMap<String, Vec<usize>> = BTreeMap::new();
         let mut to_pairwise: Vec<usize> = Vec::new();
+        // The devices each leg was sealed for on this route: a leg whose
+        // account gained or reinstalled a device goes on as an ordinary leg
+        // for these, and the pairwise path's amendment then gives the new
+        // device a copy naming the member (how it finds the group again),
+        // which a shared multi-recipient copy can't.
+        let mut sealed_for: BTreeMap<usize, Vec<DevicePreKeyBundle>> = BTreeMap::new();
+        let mut moved_on: Vec<usize> = Vec::new();
         for &index in multi {
             let account = entry.legs[index].account.clone();
             match (
@@ -946,6 +957,7 @@ impl Engine {
                         capabilities.insert(parsed.account_id.clone(), STANDARD.encode(capability));
                         entry.legs[index].devices =
                             bundles.iter().map(|bundle| bundle.device_id).collect();
+                        sealed_for.insert(index, bundles.clone());
                         recipients.push((parsed, bundles));
                         going.push(index);
                     }
@@ -991,11 +1003,19 @@ impl Engine {
             match outcome {
                 Ok(crate::transport::MultiSendOutcome::Answered { status, response }) => {
                     let stored = status == 200;
+                    // New or reinstalled devices: on as an ordinary leg (see
+                    // `sealed_for`). Only devices that are gone: again here.
+                    let gained: Vec<&String> = response
+                        .devices
+                        .iter()
+                        .filter(|devices| !devices.missing_devices.is_empty())
+                        .map(|devices| &devices.account_id)
+                        .chain(response.stale.iter().map(|stale| &stale.account_id))
+                        .collect();
                     let moved: Vec<&String> = response
                         .devices
                         .iter()
                         .map(|devices| &devices.account_id)
-                        .chain(response.stale.iter().map(|stale| &stale.account_id))
                         .collect();
                     for index in going {
                         let id = account_id(index, entry);
@@ -1006,6 +1026,11 @@ impl Engine {
                         } else if response.rate_limited.contains(&id) {
                             wait(&mut entry.legs[index], now);
                             to_pairwise.push(index);
+                        } else if gained.contains(&&id) {
+                            news.push(BookNews::Mismatch {
+                                account: account.clone(),
+                            });
+                            moved_on.push(index);
                         } else if moved.contains(&&id) {
                             news.push(BookNews::Mismatch {
                                 account: account.clone(),
@@ -1044,6 +1069,41 @@ impl Engine {
                         wait(&mut entry.legs[index], now);
                     }
                 }
+            }
+        }
+        for index in moved_on {
+            let bundles = sealed_for.remove(&index).unwrap_or_default();
+            let account = entry.legs[index].account.clone();
+            match self
+                .session
+                .seal_group_message(
+                    &account,
+                    &bundles,
+                    &certificate,
+                    &group_bytes,
+                    &message,
+                    hint,
+                    rng,
+                )
+                .await
+            {
+                Ok(sealed) => {
+                    let envelopes = self.sealed_envelopes(sealed);
+                    let leg = &mut entry.legs[index];
+                    leg.devices = envelopes
+                        .iter()
+                        .map(|envelope| envelope.device_id)
+                        .collect();
+                    match serde_json::to_vec(&envelopes) {
+                        Ok(envelopes) => {
+                            leg.envelopes = envelopes;
+                            leg.multi = false;
+                            again.push(index);
+                        }
+                        Err(_) => wait(leg, now),
+                    }
+                }
+                Err(_) => wait(&mut entry.legs[index], now),
             }
         }
         for index in to_pairwise {

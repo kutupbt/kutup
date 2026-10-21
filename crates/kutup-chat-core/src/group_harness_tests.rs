@@ -147,6 +147,13 @@ pub(crate) struct World {
     pub(crate) pin_writes: Cell<usize>,
     /// How many sealed batches were sent.
     pub(crate) batches: Cell<usize>,
+    /// Multi-recipient requests taken (slice 2), and each account's
+    /// published group capability hashes.
+    pub(crate) multi_requests: Cell<usize>,
+    /// A server without the multi-recipient route (an older one): it takes
+    /// no group capabilities, so every group message goes pairwise.
+    pub(crate) no_multi_route: Cell<bool>,
+    pub(crate) group_capabilities: RefCell<BTreeMap<String, Vec<[u8; 32]>>>,
     /// How many whole states the group home was asked for.
     pub(crate) state_requests: Cell<usize>,
     /// How many changes the group home took.
@@ -254,6 +261,9 @@ impl World {
             cursor: Cell::new(0),
             sealed_sent: RefCell::new(Vec::new()),
             batches: Cell::new(0),
+            multi_requests: Cell::new(0),
+            no_multi_route: Cell::new(false),
+            group_capabilities: RefCell::new(BTreeMap::new()),
             state_requests: Cell::new(0),
             group_changes: Cell::new(0),
             group_list_down: Cell::new(false),
@@ -1274,6 +1284,155 @@ impl ChatTransport for Client {
         }
         entries.remove(id);
         Ok(true)
+    }
+
+    /// The account's published group capabilities, as the server keeps them.
+    async fn set_group_capabilities(
+        &self,
+        hashes: &[String],
+    ) -> Result<crate::transport::GroupCapabilitiesOutcome> {
+        if self.world.no_multi_route.get() {
+            return Err(ChatError::Transport("404 Not Found".into()));
+        }
+        let hashes: Vec<[u8; 32]> = hashes
+            .iter()
+            .map(|hash| {
+                STANDARD
+                    .decode(hash)
+                    .ok()
+                    .and_then(|bytes| bytes.try_into().ok())
+                    .ok_or_else(|| ChatError::Transport("malformed capability hash".into()))
+            })
+            .collect::<Result<_>>()?;
+        assert_eq!(hashes.len() % 8, 0, "padded to a multiple of 8");
+        let count = u32::try_from(hashes.len()).unwrap_or(u32::MAX);
+        self.world
+            .group_capabilities
+            .borrow_mut()
+            .insert(self.account.clone(), hashes);
+        Ok(crate::transport::GroupCapabilitiesOutcome::Set { count })
+    }
+
+    /// The multi-recipient route as the server applies it: capabilities
+    /// first (refused), then devices (409, 410: nothing stored), then each
+    /// device's copy, assembled from the payload as Signal-Server does.
+    async fn send_sealed_multi(
+        &self,
+        server: &str,
+        submission: &kutup_chat_proto::SealedMultiSubmissionV1,
+    ) -> Result<crate::transport::MultiSendOutcome> {
+        use crate::transport::MultiSendOutcome;
+        use kutup_chat_proto::{SealedMultiDevicesV1, SealedMultiResponseV1, SealedMultiStaleV1};
+        self.world
+            .multi_requests
+            .set(self.world.multi_requests.get() + 1);
+        let payload = STANDARD
+            .decode(&submission.payload)
+            .map_err(|_| ChatError::Transport("malformed payload".into()))?;
+        let sent = libsignal_protocol::SealedSenderV2SentMessage::parse(&payload)
+            .map_err(|error| ChatError::Transport(error.to_string()))?;
+        assert_eq!(sent.version, 0x23);
+        let mut response = SealedMultiResponseV1::default();
+        let mut deliver = Vec::new();
+        for (service_id, recipient) in &sent.recipients {
+            let account_id = service_id.service_id_string();
+            let account = format!("aci:{account_id}@{server}");
+            let holds = submission
+                .capabilities
+                .get(&account_id)
+                .and_then(|capability| STANDARD.decode(capability).ok())
+                .is_some_and(|capability| {
+                    let hash: [u8; 32] = sha2::Sha256::digest(&capability).into();
+                    self.world
+                        .group_capabilities
+                        .borrow()
+                        .get(&account)
+                        .is_some_and(|hashes| hashes.contains(&hash))
+                });
+            if !holds {
+                response.refused.push(account_id);
+                continue;
+            }
+            let devices: Vec<(u32, u32)> = recipient
+                .devices
+                .iter()
+                .map(|(device, registration)| {
+                    (u32::from(u8::from(*device)), u32::from(*registration))
+                })
+                .collect();
+            if let Some(mismatch) = self.world.device_check(&account, &devices, None) {
+                if !mismatch.missing_devices.is_empty() || !mismatch.extra_devices.is_empty() {
+                    response.devices.push(SealedMultiDevicesV1 {
+                        account_id: account_id.clone(),
+                        missing_devices: mismatch.missing_devices,
+                        extra_devices: mismatch.extra_devices,
+                    });
+                }
+                if !mismatch.stale_devices.is_empty() {
+                    response.stale.push(SealedMultiStaleV1 {
+                        account_id,
+                        stale_devices: mismatch.stale_devices,
+                    });
+                }
+                continue;
+            }
+            let content = STANDARD.encode(
+                sent.received_message_parts_for_recipient(recipient)
+                    .as_ref()
+                    .concat(),
+            );
+            deliver.push((account, devices, content));
+        }
+        if !response.devices.is_empty() {
+            return Ok(MultiSendOutcome::Answered {
+                status: 409,
+                response,
+            });
+        }
+        if !response.stale.is_empty() {
+            return Ok(MultiSendOutcome::Answered {
+                status: 410,
+                response,
+            });
+        }
+        for (account, devices, content) in deliver {
+            // Recorded as the pairwise route records a send: who it reached.
+            self.world.sealed_sent.borrow_mut().push((
+                account.clone(),
+                SealedMessageSubmissionV1 {
+                    send_id: submission.send_id.clone(),
+                    capability: submission
+                        .capabilities
+                        .values()
+                        .next()
+                        .cloned()
+                        .unwrap_or_default(),
+                    envelopes: Vec::new(),
+                },
+            ));
+            for (device, _) in devices {
+                self.world.deposit(
+                    &account,
+                    device,
+                    DeliveredEnvelope {
+                        id: String::new(),
+                        cursor: 0,
+                        sender: None,
+                        sealed_sender: true,
+                        sender_device_id: 0,
+                        envelope_type: EnvelopeType::Message,
+                        suite: kutup_chat_proto::DirectChatSuiteId::PqxdhTripleRatchetV1,
+                        content: content.clone(),
+                        server_timestamp: crate::clock::rfc3339(crate::clock::unix_millis()),
+                        send_id: Some(submission.send_id.clone()),
+                    },
+                );
+            }
+        }
+        Ok(MultiSendOutcome::Answered {
+            status: 200,
+            response,
+        })
     }
 
     /// The batch route, recipient by recipient as the server applies it.
@@ -2754,6 +2913,8 @@ fn group_third_a_disappearing_group_message_leaves_the_send_log() {
 #[test]
 fn group_batches_a_message_goes_to_all_member_accounts_in_one_request() {
     let world = World::new();
+    // The pairwise batch route, as an older server has only it.
+    world.no_multi_route.set(true);
     let mut alice = world.person(0xa1);
     let mut bob = world.person(0xb2);
     let mut carol = world.person(0xc3);
@@ -2783,6 +2944,8 @@ fn group_batches_a_message_goes_to_all_member_accounts_in_one_request() {
 fn group_batches_a_limited_leg_waits_and_a_refused_one_fails() {
     use kutup_chat_proto::SealedBatchOutcomeV1 as Outcome;
     let world = World::new();
+    // The pairwise batch route, as an older server has only it.
+    world.no_multi_route.set(true);
     let mut alice = world.person(0xa1);
     let mut bob = world.person(0xb2);
     let mut carol = world.person(0xc3);
@@ -2992,6 +3155,8 @@ fn group_followup_an_evicted_envelope_is_acknowledged_and_reported() {
 fn group_batches_a_conflicting_leg_waits_for_its_queued_copy() {
     use kutup_chat_proto::SealedBatchOutcomeV1 as Outcome;
     let world = World::new();
+    // The pairwise batch route, as an older server has only it.
+    world.no_multi_route.set(true);
     let mut alice = world.person(0xa1);
     let mut bob = world.person(0xb2);
     let group_id = group_of(&mut alice, &mut [&mut bob]);
@@ -3024,6 +3189,8 @@ fn group_batches_a_conflicting_leg_waits_for_its_queued_copy() {
 fn group_batches_a_queued_leg_waits_and_reaches_a_device_linked_meanwhile() {
     use kutup_chat_proto::SealedBatchOutcomeV1 as Outcome;
     let world = World::new();
+    // The pairwise batch route, as an older server has only it.
+    world.no_multi_route.set(true);
     let mut alice = world.person(0xa1);
     let mut bob = world.person(0xb2);
     let group_id = group_of(&mut alice, &mut [&mut bob]);
@@ -3071,6 +3238,8 @@ fn group_batches_a_queued_leg_waits_and_reaches_a_device_linked_meanwhile() {
 #[test]
 fn group_batches_a_failed_batch_goes_again_with_the_same_send_ids() {
     let world = World::new();
+    // The pairwise batch route, as an older server has only it.
+    world.no_multi_route.set(true);
     let mut alice = world.person(0xa1);
     let mut bob = world.person(0xb2);
     let group_id = group_of(&mut alice, &mut [&mut bob]);
@@ -3099,6 +3268,8 @@ fn group_batches_a_failed_batch_goes_again_with_the_same_send_ids() {
 fn group_batches_a_leg_not_taken_in_a_week_fails_and_says_so() {
     use kutup_chat_proto::SealedBatchOutcomeV1 as Outcome;
     let world = World::new();
+    // The pairwise batch route, as an older server has only it.
+    world.no_multi_route.set(true);
     let mut alice = world.person(0xa1);
     let mut bob = world.person(0xb2);
     let group_id = group_of(&mut alice, &mut [&mut bob]);
@@ -3128,6 +3299,8 @@ fn group_batches_a_leg_not_taken_in_a_week_fails_and_says_so() {
 fn group_batches_a_queued_sender_key_is_not_in_the_book_nor_queued_again_within_the_hour() {
     use kutup_chat_proto::SealedBatchOutcomeV1 as Outcome;
     let world = World::new();
+    // The pairwise batch route, as an older server has only it.
+    world.no_multi_route.set(true);
     let mut alice = world.person(0xa1);
     let mut bob = world.person(0xb2);
     let group_id = group_of(&mut alice, &mut [&mut bob]);
@@ -3176,6 +3349,8 @@ fn group_batches_a_queued_sender_key_is_not_in_the_book_nor_queued_again_within_
 fn group_batches_a_message_is_sent_once_its_server_has_every_leg() {
     use kutup_chat_proto::SealedBatchOutcomeV1 as Outcome;
     let world = World::new();
+    // The pairwise batch route, as an older server has only it.
+    world.no_multi_route.set(true);
     let mut alice = world.person(0xa1);
     let mut bob = world.person(0xb2);
     let mut carol = world.person(0xc3);
@@ -3245,6 +3420,8 @@ fn group_batches_a_message_is_sent_once_its_server_has_every_leg() {
 fn group_batches_a_leg_whose_devices_changed_after_queueing_is_sending_again() {
     use kutup_chat_proto::{DeviceListMismatch, SealedBatchOutcomeV1 as Outcome};
     let world = World::new();
+    // The pairwise batch route, as an older server has only it.
+    world.no_multi_route.set(true);
     let mut alice = world.person(0xa1);
     let mut bob = world.person(0xb2);
     let group_id = group_of(&mut alice, &mut [&mut bob]);
@@ -3286,6 +3463,8 @@ fn group_batches_a_leg_whose_devices_changed_after_queueing_is_sending_again() {
 fn group_batches_a_queued_key_is_held_once_a_message_after_it_arrives() {
     use kutup_chat_proto::{DeviceListMismatch, SealedBatchOutcomeV1 as Outcome};
     let world = World::new();
+    // The pairwise batch route, as an older server has only it.
+    world.no_multi_route.set(true);
     let mut alice = world.person(0xa1);
     let mut bob = world.person(0xb2);
     let mut carol = world.person(0xc3);

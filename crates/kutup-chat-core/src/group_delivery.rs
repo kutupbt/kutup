@@ -66,6 +66,17 @@ impl Engine {
             // This account's other devices take it from the group list.
             self.schedule_group_entry(&record.group_id).await?;
         }
+        // Handed out only once its server has it: a member sending with an
+        // unpublished capability would only be refused. A server without the
+        // route, or one over its limit, keeps this account pairwise.
+        if self.group_capabilities_due {
+            // Saved first: the published set is read from the stored records.
+            self.save_group(record).await?;
+            self.publish_group_capabilities().await?;
+        }
+        if self.group_capabilities_due || self.group_capability_limit {
+            return Ok(());
+        }
         let book = record.delivery.clone().expect("drawn above");
         let missing: Vec<String> = book.missing(&members).into_iter().cloned().collect();
         if missing.is_empty() {

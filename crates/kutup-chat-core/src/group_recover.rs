@@ -130,6 +130,7 @@ impl Engine {
             join_epoch,
             delivery: None,
             member_capabilities: Default::default(),
+            listed_delivery_ms: None,
         };
         if !matches!(
             self.fetch_whole_state(&mut record).await?,

@@ -45,7 +45,17 @@ const READ_EVERY_MS: i64 = 10 * 60 * 1000;
 #[derive(Debug, Clone, Copy)]
 struct Listed {
     revision: u64,
-    said: Option<(GroupListStatus, u32)>,
+    /// The entry's status, join epoch, and when its delivery capability was
+    /// drawn (0 for none).
+    said: Option<(GroupListStatus, u32, i64)>,
+}
+
+/// When `entry`'s delivery capability was drawn (0 for none).
+fn delivery_at(entry: &GroupListEntryV1) -> i64 {
+    entry
+        .delivery
+        .as_ref()
+        .map_or(0, |delivery| delivery.drawn_at_ms)
 }
 
 /// An entry the account head lists that can't be what it claims: the read
@@ -125,6 +135,12 @@ impl Engine {
             status,
             verified_revision: state.revision,
             chain_hash: encode(&head),
+            delivery: record.delivery.as_ref().map(|book| {
+                kutup_chat_proto::group::GroupListDeliveryV1 {
+                    capability: book.capability.0.clone(),
+                    drawn_at_ms: book.drawn_at_ms,
+                }
+            }),
         }))
     }
 
@@ -156,7 +172,10 @@ impl Engine {
     pub(crate) fn listed_join(&self, group_id: &str) -> Option<(GroupListStatus, u32)> {
         let list = self.group_list.as_ref()?;
         let id = list.entry_id(group_id).ok()?;
-        list.listed.get(&id).and_then(|listed| listed.said)
+        list.listed
+            .get(&id)
+            .and_then(|listed| listed.said)
+            .map(|(status, epoch, _)| (status, epoch))
     }
 
     /// Makes `group_id`'s entry due when the list doesn't say what the group
@@ -170,7 +189,11 @@ impl Engine {
         let Some(status) = list_status(&record.status) else {
             return Ok(());
         };
-        if record.listed_status == Some(status) || record.list_due_at_ms.is_some() {
+        let delivery = record.delivery.as_ref().map_or(0, |book| book.drawn_at_ms);
+        if (record.listed_status == Some(status)
+            && record.listed_delivery_ms.unwrap_or(0) == delivery)
+            || record.list_due_at_ms.is_some()
+        {
             return Ok(());
         }
         let delay = i64::from(OsRng.next_u32()) % (WRITE_DELAY_MAX_MS + 1);
@@ -212,12 +235,16 @@ impl Engine {
             // An entry of a later version is that version's to write.
             let later = listed.is_some_and(|listed| listed.said.is_none());
             if !later
-                && listed.and_then(|listed| listed.said).map(|said| said.0) != Some(entry.status)
+                && listed
+                    .and_then(|listed| listed.said)
+                    .map(|said| (said.0, said.2))
+                    != Some((entry.status, delivery_at(&entry)))
             {
                 self.write_group_entry(&id, &entry).await?;
                 written += 1;
             }
             record.listed_status = Some(entry.status);
+            record.listed_delivery_ms = Some(delivery_at(&entry));
             record.list_due_at_ms = None;
             self.save_group(&record).await?;
         }
@@ -249,7 +276,7 @@ impl Engine {
                     id.to_string(),
                     Listed {
                         revision,
-                        said: Some((entry.status, entry.join_epoch)),
+                        said: Some((entry.status, entry.join_epoch, delivery_at(entry))),
                     },
                 );
                 return Ok(());
@@ -312,7 +339,7 @@ impl Engine {
                 item.id,
                 Listed {
                     revision: opened.revision,
-                    said: Some((entry.status, entry.join_epoch)),
+                    said: Some((entry.status, entry.join_epoch, delivery_at(&entry))),
                 },
             );
             entries.push(entry);
@@ -367,9 +394,11 @@ impl Engine {
                         listed_status: Some(GroupListStatus::Member),
                         list_due_at_ms: None,
                         join_epoch: entry.join_epoch,
-                        delivery: None,
+                        delivery: listed_delivery(&entry),
                         member_capabilities: Default::default(),
+                        listed_delivery_ms: Some(delivery_at(&entry)),
                     };
+                    self.group_capabilities_due = true;
                     self.save_group(&record).await?;
                     // Its state, and this device's binding where needed; a
                     // home that can't be reached now is tried at the next
@@ -406,6 +435,18 @@ impl Engine {
                     }
                     if record.min_revision < entry.verified_revision {
                         record.min_revision = entry.verified_revision;
+                        changed = true;
+                    }
+                    // Another device of this account drew a newer capability:
+                    // this one hands out and publishes that one.
+                    let held = record.delivery.as_ref().map_or(0, |book| book.drawn_at_ms);
+                    if delivery_at(&entry) > held {
+                        record.delivery = listed_delivery(&entry);
+                        self.group_capabilities_due = true;
+                        changed = true;
+                    }
+                    if record.listed_delivery_ms != Some(delivery_at(&entry)) {
+                        record.listed_delivery_ms = Some(delivery_at(&entry));
                         changed = true;
                     }
                     if changed {
@@ -455,4 +496,18 @@ impl Engine {
             let _ = self.schedule_group_entry(group_id).await;
         }
     }
+}
+
+/// The delivery book a listed entry gives this device: the capability, held
+/// by no member yet as far as this device knows (it hands it out again; a
+/// member that holds it already takes it as the same).
+fn listed_delivery(entry: &GroupListEntryV1) -> Option<crate::group::DeliveryBook> {
+    entry
+        .delivery
+        .as_ref()
+        .map(|delivery| crate::group::DeliveryBook {
+            capability: SecretText(delivery.capability.clone()),
+            drawn_at_ms: delivery.drawn_at_ms,
+            holders: Vec::new(),
+        })
 }

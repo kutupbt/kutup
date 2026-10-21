@@ -145,6 +145,10 @@ pub struct GroupRecordV1 {
     /// route. A member not here gets pairwise copies.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub member_capabilities: BTreeMap<String, HeldCapability>,
+    /// When the delivery capability the group list last said was drawn (0
+    /// for none): the entry is due again when this device's differs.
+    #[serde(default)]
+    pub listed_delivery_ms: Option<i64>,
 }
 
 /// This account's capability for receiving a group's messages on the
@@ -571,6 +575,7 @@ pub fn create_group(new: NewGroup<'_>) -> Result<(GroupRecordV1, GroupChangeV1),
         join_epoch,
         delivery: None,
         member_capabilities: Default::default(),
+        listed_delivery_ms: None,
     };
     Ok((record, change))
 }
@@ -742,6 +747,7 @@ pub fn record_from_invite(
         join_epoch,
         delivery: None,
         member_capabilities: Default::default(),
+        listed_delivery_ms: None,
     };
     if let Some(previous) = previous {
         let replaceable = match &previous.status {
@@ -926,6 +932,7 @@ pub fn record_from_link(
         join_epoch,
         delivery: None,
         member_capabilities: Default::default(),
+        listed_delivery_ms: None,
     };
     if let Some(previous) = previous {
         record.state = previous.state.clone();
