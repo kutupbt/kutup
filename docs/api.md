@@ -198,9 +198,18 @@ capability advertisement, and where each web app lives (`apps`, from
     "photos": "https://photos.example.org",
     "office": "https://office.example.org",
     "editor": "https://editor.example.org"
-  }
+  },
+  "nameHoldDays": 180,
+  "oldAddressReceiveDays": 90,
+  "passVaultMaxBytes": 67108864
 }
 ```
+
+`passVaultMaxBytes` is the largest `.kdbx` file Kutup Pass takes in an
+upload (an existing vault brought in from KeePassXC or a backup), as
+administrators set it (`PUT /api/admin/settings`; 64 MiB at first). The
+browser opens a vault whole, so this bounds what an upload makes it hold;
+a vault's own saves are never refused by it.
 
 The chat block also advertises size/retention limits, the canonical federation
 server name when enabled, and the authenticated sealed-sender service-policy
@@ -4462,9 +4471,13 @@ Return current global server settings.
   "chatGroupLinkJoinsPerRelayPerMin": 1200,
   "chatGroupAvatarMaxBytes": 41001,
   "chatGroupAvatarStoragePerGroupBytes": 82002,
-  "chatGroupAvatarPendingSeconds": 86400
+  "chatGroupAvatarPendingSeconds": 86400,
+  "passVaultMaxBytes": 67108864
 }
 ```
+
+`passVaultMaxBytes` is the largest `.kdbx` file Kutup Pass takes in an
+upload: 1 MiB to 1 GiB (`400` otherwise), 64 MiB at first.
 
 `chatGroupAvatarMaxBytes` is the largest group avatar blob this server takes
 for the groups it hosts: 8233, 16425, 32809 or 41001.

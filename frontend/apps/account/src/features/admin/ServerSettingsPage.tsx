@@ -33,6 +33,10 @@ const AVATAR_LENGTHS = [8233, 16425, 32809, 41001] as const
 const MAX_AVATAR_STORAGE = 2 * 41001
 const AVATAR_PENDING_SECONDS = { min: 60, max: 7 * 24 * 3600 } as const
 
+
+/** The largest Pass vault upload is set in MiB. */
+const MIB = 1024 * 1024
+
 export function ServerSettingsPage() {
   const { t } = useTranslation()
   const settings = useAdminSettings()
@@ -50,6 +54,7 @@ export function ServerSettingsPage() {
     avatarMax: z.coerce.number<number>().refine((value) => (AVATAR_LENGTHS as readonly number[]).includes(value), t('admin.settings.groupAvatarMaxRange')),
     avatarStorage: z.coerce.number<number>().int(t('admin.settings.groupAvatarStorageRange')).max(MAX_AVATAR_STORAGE, t('admin.settings.groupAvatarStorageRange')),
     avatarPending: z.coerce.number<number>().int(t('admin.settings.groupAvatarPendingRange')).min(AVATAR_PENDING_SECONDS.min, t('admin.settings.groupAvatarPendingRange')).max(AVATAR_PENDING_SECONDS.max, t('admin.settings.groupAvatarPendingRange')),
+    passVaultMib: z.coerce.number<number>().int(t('admin.settings.passVaultMaxRange')).min(1, t('admin.settings.passVaultMaxRange')).max(1024, t('admin.settings.passVaultMaxRange')),
   }).refine((v) => v.avatarStorage >= 2 * v.avatarMax, { path: ['avatarStorage'], message: t('admin.settings.groupAvatarStorageRange') })
   const { register, control, handleSubmit, reset, formState: { errors, isDirty } } = useForm<z.infer<typeof schema>>({
     resolver: zodResolver(schema),
@@ -66,6 +71,7 @@ export function ServerSettingsPage() {
       avatarMax: settings.data.chatGroupAvatarMaxBytes,
       avatarStorage: settings.data.chatGroupAvatarStoragePerGroupBytes,
       avatarPending: settings.data.chatGroupAvatarPendingSeconds,
+      passVaultMib: Math.round(settings.data.passVaultMaxBytes / MIB),
     })
   }, [settings.data, reset])
 
@@ -86,6 +92,7 @@ export function ServerSettingsPage() {
         chatGroupAvatarMaxBytes: v.avatarMax,
         chatGroupAvatarStoragePerGroupBytes: v.avatarStorage,
         chatGroupAvatarPendingSeconds: v.avatarPending,
+        passVaultMaxBytes: v.passVaultMib * MIB,
       },
       { onSuccess: () => toast.success(t('admin.settings.saved')) },
     ),
@@ -157,6 +164,15 @@ export function ServerSettingsPage() {
               </Field>
               <Field label={t('admin.settings.groupAvatarPending')} error={errors.avatarPending?.message} description={t('admin.settings.groupAvatarPendingHint')} required>
                 {(field) => <Input {...field} {...register('avatarPending')} type="number" min={AVATAR_PENDING_SECONDS.min} max={AVATAR_PENDING_SECONDS.max} step={1} inputMode="numeric" />}
+              </Field>
+            </CardContent>
+          </Card>
+        </Section>
+        <Section title={t('admin.settings.pass')} description={t('admin.settings.passHint')}>
+          <Card>
+            <CardContent className="grid gap-4 p-5 sm:grid-cols-2">
+              <Field label={t('admin.settings.passVaultMax')} error={errors.passVaultMib?.message} description={t('admin.settings.passVaultMaxHint')} required>
+                {(field) => <Input {...field} {...register('passVaultMib')} type="number" min={1} max={1024} step={1} inputMode="numeric" />}
               </Field>
             </CardContent>
           </Card>

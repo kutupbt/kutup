@@ -763,7 +763,12 @@
         "on": "Open to anyone",
         "code": "With a referral code",
         "off": "Closed"
-      }
+      },
+      "pass": "Pass",
+      "passHint": "Kutup Pass, the password manager.",
+      "passVaultMax": "Largest vault upload (MiB)",
+      "passVaultMaxHint": "The largest .kdbx file someone can upload into Pass (from KeePassXC or a backup). A vault's own saves are never refused. 1 to 1024.",
+      "passVaultMaxRange": "Between 1 and 1024 MiB."
     },
     "federation": {
       "title": "Federation",

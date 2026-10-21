@@ -785,3 +785,46 @@ fn a_kept_key_is_hidden_not_deleted_while_access_is_gone() {
     assert_eq!(held(), 0, "forgotten");
     assert_eq!(used(&c, &base, &owner.token), 0);
 }
+
+/// The largest `.kdbx` Kutup Pass takes in an upload: advertised to every
+/// client, and set by administrators within its bounds (1 MiB to 1 GiB).
+#[test]
+fn the_largest_vault_upload_is_an_administrators_setting() {
+    let Ok(base) = std::env::var("KUTUP_LIVE_SERVER") else {
+        return;
+    };
+    let base = base.trim_end_matches('/').to_string();
+    let c = crate::common::client_builder()
+        .danger_accept_invalid_certs(true)
+        .build()
+        .unwrap();
+    let public = |c: &Client| -> i64 {
+        c.get(format!("{base}/api/auth/settings"))
+            .send()
+            .unwrap()
+            .json::<Value>()
+            .unwrap()["passVaultMaxBytes"]
+            .as_i64()
+            .unwrap()
+    };
+    assert_eq!(public(&c), 64 * 1024 * 1024);
+    let Ok(admin) = std::env::var("KUTUP_LIVE_ADMIN") else {
+        eprintln!("KUTUP_LIVE_ADMIN unset; skipping the administrator's part");
+        return;
+    };
+    let (name, password) = admin.split_once(':').unwrap();
+    let token = admin_token(&c, &base, password, name);
+    let put = |value: Value| {
+        bearer(c.put(format!("{base}/api/admin/settings")), &token)
+            .json(&json!({ "passVaultMaxBytes": value }))
+            .send()
+            .unwrap()
+            .status()
+    };
+    assert_eq!(put(json!(1024)), StatusCode::BAD_REQUEST);
+    assert_eq!(put(json!(2u64 << 30)), StatusCode::BAD_REQUEST);
+    assert_eq!(put(json!(8 * 1024 * 1024)), StatusCode::OK);
+    assert_eq!(public(&c), 8 * 1024 * 1024);
+    assert_eq!(put(json!(64 * 1024 * 1024)), StatusCode::OK);
+    assert_eq!(public(&c), 64 * 1024 * 1024);
+}

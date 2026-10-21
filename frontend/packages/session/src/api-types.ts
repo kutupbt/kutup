@@ -200,6 +200,8 @@ export interface AdminSettings {
   chatGroupAvatarStoragePerGroupBytes: number
   /** How long an avatar upload waits for a change to name it, in seconds. */
   chatGroupAvatarPendingSeconds: number
+  /** The largest `.kdbx` file Kutup Pass takes in an upload, in bytes (1 MiB to 1 GiB). */
+  passVaultMaxBytes: number
 }
 
 export type FederationMode = 'disabled' | 'allowlist' | 'blocklist' | 'open'

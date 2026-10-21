@@ -60,6 +60,8 @@ pub struct SettingsResponse {
     pub name_hold_days: i64,
     /// Days a renamed account's old address still receives.
     pub old_address_receive_days: i64,
+    /// The largest `.kdbx` file Kutup Pass takes in an upload, in bytes.
+    pub pass_vault_max_bytes: i64,
 }
 
 /// What the feedback form offers besides sending to the administrators.
@@ -100,6 +102,8 @@ pub struct AdminSettingsResponse {
     /// How long an avatar upload waits for a change to name it (60 seconds
     /// to a week).
     pub chat_group_avatar_pending_seconds: i64,
+    /// The largest `.kdbx` file Kutup Pass takes in an upload: 1 MiB to 1 GiB.
+    pub pass_vault_max_bytes: i64,
 }
 
 /// `GET /api/auth/recover/preflight` — mirrors `handlers.PreflightRecoverResponse`.
@@ -498,6 +502,8 @@ pub struct UpdateAdminSettingsRequest {
     pub chat_group_avatar_storage_per_group_bytes: Option<i64>,
     /// `null` resets to the first value (86400).
     pub chat_group_avatar_pending_seconds: Option<i64>,
+    /// 1 MiB to 1 GiB.
+    pub pass_vault_max_bytes: Option<i64>,
 }
 
 /// `GET /api/admin/stats` — mirrors `handlers.StatsResponse`.
