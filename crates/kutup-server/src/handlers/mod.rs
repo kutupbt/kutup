@@ -4,6 +4,7 @@ pub mod account_heads;
 pub mod accounts;
 pub mod admin;
 pub mod auth;
+pub mod calendar;
 pub mod chat;
 pub mod chat_backup;
 pub mod chat_contact_list;

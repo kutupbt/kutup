@@ -3,11 +3,16 @@ import { readFile } from 'node:fs/promises'
 import { fileURLToPath } from 'node:url'
 
 const root = fileURLToPath(new URL('..', import.meta.url))
+// The runtime to check: `crypto` (default) or `crypto-calendar`, the same
+// with calendars. Every vector runs on both; calendars only on the second,
+// and the first must carry none of them.
+const build = process.argv[2] ?? 'crypto'
+assert.ok(['crypto', 'crypto-calendar'].includes(build), `unknown build ${build}`)
 const modulePath = new URL(
-  '../frontend/wasm/crypto-wasm/kutup_crypto_wasm.js',
+  `../frontend/wasm/${build}-wasm/kutup_crypto_wasm.js`,
   import.meta.url,
 )
-const wasmPath = `${root}/frontend/wasm/crypto-wasm/kutup_crypto_wasm_bg.wasm`
+const wasmPath = `${root}/frontend/wasm/${build}-wasm/kutup_crypto_wasm_bg.wasm`
 const crypto = await import(modulePath)
 const wasm = await readFile(wasmPath)
 await crypto.default({ module_or_path: wasm })
@@ -1177,4 +1182,46 @@ assert.equal(crypto.incarnationIdOfAuthority(iv.authorityPublicKey), crypto.deri
   head.free()
 }
 
-console.log('crypto WASM canonical vectors passed')
+// Calendars (docs/plans/calendar.md, E1): the owner (the mail vectors'
+// address key) unlocks the calendar from its sealed passphrase, and the
+// event and metadata open as the Rust vectors say; the refused ones don't.
+if (build === 'crypto') {
+  for (const name of ['createCalendar', 'unlockCalendar', 'sealCalendarEvent', 'calendarTimeZones']) {
+    assert.equal(crypto[name], undefined, `${name} is in the plain crypto build`)
+  }
+} else {
+  const v = JSON.parse(await readFile(`${root}/crates/kutup-crypto/tests/vectors/calendar-v1.json`, 'utf8'))
+  const owner = [mailVectors.masterKey, mailVectors.binding, mailVectors.address, mailVectors.envelope, mailVectors.fingerprint]
+  const passphrase = { dataPacket: v.passphraseDataPacket, signature: v.passphraseSignature, keyPacket: v.passphraseKeyPacket }
+  const unlocked = crypto.unlockCalendar(...owner, passphrase, [v.ownerPublicKey], v.calendarLockedSecretKey)
+  const opened = unlocked.openEvent(v.event, [v.ownerPublicKey])
+  assert.equal(opened.verified, true)
+  assert.deepEqual(opened.fields, v.fields)
+  const metadata = unlocked.openMetadata(
+    { keyPacket: v.metadata.keyPacket, dataPacket: v.metadata.dataPacket, signature: v.metadata.signature },
+    [v.ownerPublicKey],
+  )
+  assert.deepEqual(metadata, { name: v.metadata.name, description: v.metadata.description, verified: true })
+  for (const refused of v.refused) {
+    let accepted = false
+    try {
+      accepted = unlocked.openEvent(refused.event, [v.ownerPublicKey]).verified
+    } catch {
+      accepted = false
+    }
+    assert.equal(accepted, false, refused.why)
+  }
+  // A passphrase signed by someone else: the calendar doesn't unlock.
+  assert.throws(() => crypto.unlockCalendar(...owner, passphrase, [v.calendarPublicKey], v.calendarLockedSecretKey))
+  // What the browser seals, the vectors' calendar opens.
+  const sealed = crypto.sealCalendarEvent(...owner, v.calendarPublicKey, v.fields)
+  assert.deepEqual(unlocked.openEvent(sealed, [v.ownerPublicKey]).fields, v.fields)
+  // Time zones: the bundled database, as the server converts.
+  assert.equal(crypto.calendarLocalToUtc('2026-10-29T09:30:00', 'Europe/Istanbul'), v.startUtc)
+  assert.equal(crypto.calendarUtcToLocal(v.startUtc, 'Europe/Istanbul'), '2026-10-29T09:30:00')
+  assert.ok(crypto.calendarTimeZones().includes('Europe/Istanbul'))
+  assert.throws(() => crypto.calendarLocalToUtc('2026-10-29T09:30:00', 'Nowhere/Else'))
+  unlocked.free()
+}
+
+console.log(`${build} WASM canonical vectors passed`)

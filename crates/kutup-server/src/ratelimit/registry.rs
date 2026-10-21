@@ -48,6 +48,7 @@ pub enum Section {
     Chat,
     Groups,
     Mail,
+    Calendar,
     CallsAndMaps,
     Pass,
     Federation,
@@ -221,6 +222,8 @@ pub enum Limit {
     ForwardingBounces,
     ForwardingOutside,
     ForwardingOutsideAccount,
+    // Calendar.
+    CalendarWrites,
     // Calls and maps.
     CallLinks,
     CallLinkPolls,
@@ -926,6 +929,16 @@ pub static SPECS: &[Spec] = &[
         Account,
         Mail,
         "Messages one account's forwardings re-send outside."
+    ),
+    spec!(
+        CalendarWrites,
+        "calendar_writes",
+        None,
+        600,
+        Events(MINUTE),
+        Account,
+        Calendar,
+        "Calendar changes: calendars made or changed and event syncs."
     ),
     spec!(
         CallLinks,

@@ -316,6 +316,17 @@ except where marked.
 - en and tr; e2e specs (create a calendar, an event across a time zone,
   edit, move, delete; a second device reads them).
 
+**The browser runtime and its budget (the main session, 2026-10-21).**
+Calendars and the bundled time zone database add about 805 KB raw, 230 KB
+gzipped, to the crypto WASM. So `kutup-crypto-wasm` is built twice from the
+one crate: `crypto` for every app, and `crypto-calendar` (its `calendar`
+feature) which the Calendar app, and Mail once invitations need it (E4),
+load **instead of** `crypto`, never both. Every WASM runtime has a gzipped
+size budget (`frontend/wasm-budgets.json`, about 5% above its size when
+set), checked in the web gate (`scripts/check-wasm-size.mjs`): crypto
+1.78 MB, crypto-calendar 2.02 MB. The WASM vectors run on both builds, and
+the plain one must carry no calendar function.
+
 **Not in E1:** recurrence, reminders, import/export (E2), sharing and links
 and busy/free (E3), invitations (E4), URL feeds, Google import, meetings
 (E5), holidays (later).

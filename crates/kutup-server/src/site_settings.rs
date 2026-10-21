@@ -361,6 +361,41 @@ pub const CHAT_MULTI_SETTINGS: [NumericSetting; 8] = [
     CHAT_MULTI_ORIGIN_BYTES_PER_MIN,
 ];
 
+/// Calendars (docs/plans/calendar.md, E1): how many one account owns, the
+/// events one calendar holds, and the changes one events sync carries
+/// (Proton's 25, its practical event cap, and its batch of 10).
+pub const CALENDARS_PER_ACCOUNT: NumericSetting = NumericSetting {
+    key: "calendars_per_account",
+    field: "calendarsPerAccount",
+    default: 25,
+    min: 1,
+    max: 1000,
+};
+pub const CALENDAR_EVENTS_PER_CALENDAR: NumericSetting = NumericSetting {
+    key: "calendar_events_per_calendar",
+    field: "calendarEventsPerCalendar",
+    default: 25_000,
+    min: 1,
+    max: 1_000_000,
+};
+pub const CALENDAR_SYNC_BATCH: NumericSetting = NumericSetting {
+    key: "calendar_sync_batch",
+    field: "calendarSyncBatch",
+    default: 10,
+    min: 1,
+    max: 100,
+};
+pub const CALENDAR_SETTINGS: [NumericSetting; 3] = [
+    CALENDARS_PER_ACCOUNT,
+    CALENDAR_EVENTS_PER_CALENDAR,
+    CALENDAR_SYNC_BATCH,
+];
+
+/// Every whole-number setting `/api/admin/settings` lists by field.
+pub fn numeric_settings() -> impl Iterator<Item = &'static NumericSetting> {
+    CHAT_MULTI_SETTINGS.iter().chain(CALENDAR_SETTINGS.iter())
+}
+
 /// The multi-recipient limits now.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct MultiLimits {
@@ -448,7 +483,7 @@ mod tests {
 
     #[test]
     fn multi_settings_hold_their_ranges_and_firsts() {
-        for setting in CHAT_MULTI_SETTINGS {
+        for &setting in numeric_settings() {
             assert_eq!(
                 setting.validate(setting.default),
                 Ok(setting.default),
@@ -457,9 +492,8 @@ mod tests {
             assert!(setting.validate(setting.min - 1).is_err());
             assert!(setting.validate(setting.max + 1).is_err());
         }
-        let fields: std::collections::BTreeSet<_> =
-            CHAT_MULTI_SETTINGS.iter().map(|s| s.field).collect();
-        assert_eq!(fields.len(), CHAT_MULTI_SETTINGS.len(), "one field each");
+        let fields: std::collections::BTreeSet<_> = numeric_settings().map(|s| s.field).collect();
+        assert_eq!(fields.len(), numeric_settings().count(), "one field each");
     }
 
     #[test]

@@ -44,7 +44,7 @@ export interface RateLimit {
 const rateLimitsKey = [...adminKey, 'rate-limits'] as const
 
 /** The order sections are listed in, as the server groups them. */
-const SECTIONS = ['accounts', 'drive', 'chat', 'groups', 'mail', 'callsAndMaps', 'pass', 'federation', 'administration'] as const
+const SECTIONS = ['accounts', 'drive', 'chat', 'groups', 'mail', 'calendar', 'callsAndMaps', 'pass', 'federation', 'administration'] as const
 
 /**
  * Administration → Rate limits (docs/plans/admin-rate-limits.md §6): every

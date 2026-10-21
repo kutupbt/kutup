@@ -83,6 +83,13 @@ pub struct GeneratedAddressKey {
 /// (Unix seconds, passed in so browsers and vectors control the clock).
 pub fn generate_address_key(address: &str, created_at_secs: u32) -> Result<GeneratedAddressKey> {
     let address = canonical_address(address)?;
+    generate_key(user_id(&address), created_at_secs)
+}
+
+/// A key in the address keys' shape (Ed25519 primary that certifies and
+/// signs, one Curve25519 encryption subkey, AES-256, no AEAD) under
+/// `user_id`: an address key, or a calendar's (`crate::calendar`).
+pub(crate) fn generate_key(user_id: String, created_at_secs: u32) -> Result<GeneratedAddressKey> {
     let created_at = Timestamp::from_secs(created_at_secs);
     let mut encryption = SubkeyParamsBuilder::default();
     encryption
@@ -98,7 +105,7 @@ pub fn generate_address_key(address: &str, created_at_secs: u32) -> Result<Gener
         .can_sign(true)
         .can_encrypt(EncryptionCaps::None)
         .created_at(created_at)
-        .primary_user_id(user_id(&address))
+        .primary_user_id(user_id)
         .preferred_symmetric_algorithms(
             [SymmetricKeyAlgorithm::AES256, SymmetricKeyAlgorithm::AES128]
                 .into_iter()
@@ -239,7 +246,7 @@ pub fn armor_secret_key_for_tests(secret_key: &[u8]) -> String {
         .expect("secret key armors")
 }
 
-fn fingerprint_of(key: &SignedPublicKey) -> Result<[u8; FINGERPRINT_LEN]> {
+pub(crate) fn fingerprint_of(key: &SignedPublicKey) -> Result<[u8; FINGERPRINT_LEN]> {
     key.fingerprint()
         .as_bytes()
         .try_into()
@@ -675,7 +682,7 @@ fn refuse_forwarding(key: &SignedPublicKey) -> Result<()> {
 }
 
 /// A key to sign with: never a forwarding key.
-fn signing_key(secret_key: &[u8]) -> Result<SignedSecretKey> {
+pub(crate) fn signing_key(secret_key: &[u8]) -> Result<SignedSecretKey> {
     let key = SignedSecretKey::from_bytes(secret_key)
         .map_err(|_| CryptoError::InvalidInput("signing key does not parse".into()))?;
     refuse_forwarding(&SignedPublicKey::from(key.clone()))?;
@@ -1324,7 +1331,7 @@ fn packet_tag(first: u8) -> Option<u8> {
 
 /// A packet's tag, header length and whole length (header and body), for
 /// packets with a definite length; key packets always have one.
-pub(crate) fn packet_extent(bytes: &[u8]) -> Result<(u8, usize, usize)> {
+pub fn packet_extent(bytes: &[u8]) -> Result<(u8, usize, usize)> {
     let invalid = || CryptoError::InvalidInput("malformed OpenPGP packet".into());
     let first = *bytes.first().ok_or_else(invalid)?;
     let tag = packet_tag(first).ok_or_else(invalid)?;
@@ -1362,14 +1369,14 @@ pub(crate) fn packet_extent(bytes: &[u8]) -> Result<(u8, usize, usize)> {
     Ok((tag, header, total))
 }
 
-fn parse_recipient(public_key: &[u8]) -> Result<SignedPublicKey> {
+pub(crate) fn parse_recipient(public_key: &[u8]) -> Result<SignedPublicKey> {
     let key = SignedPublicKey::from_bytes(public_key)
         .map_err(|_| CryptoError::InvalidInput("recipient key does not parse".into()))?;
     refuse_forwarding(&key)?;
     Ok(key)
 }
 
-fn encryption_subkey(recipient: &SignedPublicKey) -> Result<&SignedPublicSubKey> {
+pub(crate) fn encryption_subkey(recipient: &SignedPublicKey) -> Result<&SignedPublicSubKey> {
     recipient
         .public_subkeys
         .iter()

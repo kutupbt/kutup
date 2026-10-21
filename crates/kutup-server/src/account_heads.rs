@@ -264,6 +264,7 @@ pub enum Scope {
     PassSecrets,
     ChatGroups,
     ChatContacts,
+    Calendars,
 }
 
 impl Scope {
@@ -275,6 +276,7 @@ impl Scope {
             "passSecrets" => Scope::PassSecrets,
             "chatGroups" => Scope::ChatGroups,
             "chatContacts" => Scope::ChatContacts,
+            "calendars" => Scope::Calendars,
             _ => return None,
         })
     }
@@ -282,13 +284,14 @@ impl Scope {
 
 impl Scope {
     /// Every scope, in the order the basis covers them.
-    pub const ALL: [Scope; 6] = [
+    pub const ALL: [Scope; 7] = [
         Scope::Contacts,
         Scope::MailNames,
         Scope::Pins,
         Scope::PassSecrets,
         Scope::ChatGroups,
         Scope::ChatContacts,
+        Scope::Calendars,
     ];
 
     fn name(self) -> &'static str {
@@ -299,6 +302,7 @@ impl Scope {
             Scope::PassSecrets => "passSecrets",
             Scope::ChatGroups => "chatGroups",
             Scope::ChatContacts => "chatContacts",
+            Scope::Calendars => "calendars",
         }
     }
 }
@@ -364,6 +368,14 @@ async fn values(
                 .bind(user_id)
                 .fetch_all(&mut *conn)
                 .await?
+        }
+        Scope::Calendars => {
+            sqlx::query_as(
+                "SELECT calendar_id::text, revision FROM calendar_members WHERE user_id = $1",
+            )
+            .bind(user_id)
+            .fetch_all(&mut *conn)
+            .await?
         }
     };
     values.sort();

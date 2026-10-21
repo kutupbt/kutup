@@ -10,6 +10,12 @@ rust-version.workspace = true
 [lib]
 crate-type = ["cdylib", "rlib"]
 
+[features]
+# Calendars (docs/plans/calendar.md): built as a second runtime,
+# `crypto-calendar`, which the Calendar app (and Mail for invitations) loads
+# instead of `crypto`, so no other app carries the time zone database.
+calendar = ["kutup-crypto/calendar"]
+
 [dependencies]
 kutup-crypto = { path = "../kutup-crypto", features = ["mail"] }
 kutup-chat-proto = { path = "../kutup-chat-proto" }

@@ -27,6 +27,16 @@ pub struct StorageUsageResponse {
     pub chat: ChatUsage,
     pub contacts: ContactsUsage,
     pub mail: MailUsage,
+    pub calendar: CalendarUsage,
+}
+
+/// Calendars the account owns, with their events.
+#[derive(Debug, Serialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct CalendarUsage {
+    pub bytes: i64,
+    /// Events in them.
+    pub count: i64,
 }
 
 /// The address book: each contact's summary and sealed card.
@@ -132,6 +142,16 @@ pub async fn usage(
     .bind(user_id)
     .fetch_one(&state.pool)
     .await?;
+    let (calendar_bytes, calendar_count): (i64, i64) = sqlx::query_as(
+        "SELECT (COALESCE((SELECT SUM(bytes) FROM calendars WHERE owner_id = $1), 0)
+               + COALESCE((SELECT SUM(e.bytes) FROM calendar_events e
+                             JOIN calendars c ON c.id = e.calendar_id WHERE c.owner_id = $1), 0))::bigint,
+                (SELECT COUNT(*) FROM calendar_events e JOIN calendars c ON c.id = e.calendar_id
+                  WHERE c.owner_id = $1)",
+    )
+    .bind(user_id)
+    .fetch_one(&state.pool)
+    .await?;
     let (quota, used, files, files_count, trash, trash_count, versions, thumbnails, assets) = (
         row.0, row.1, row.2, row.3, row.4, row.5, row.6, row.7, row.8,
     );
@@ -160,6 +180,10 @@ pub async fn usage(
         mail: MailUsage {
             bytes: mail_bytes,
             count: mail_count,
+        },
+        calendar: CalendarUsage {
+            bytes: calendar_bytes,
+            count: calendar_count,
         },
     }))
 }
