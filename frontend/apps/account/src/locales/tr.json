@@ -767,9 +767,9 @@
         "chatMultiOriginBytesPerMin": "Başka bir sunucudan grup gönderimi (dakikada bayt)",
         "chatMultiOriginBytesPerMinHint": "Aynısı, bayt olarak."
       },
-      "groupCapabilities": "Bir hesabın grup iletisi alabileceği grup sayısı",
-      "groupCapabilitiesHint": "Hesabın üye olduğu her grup buraya bir teslim anahtarı yayımlar; bunun ötesinde o grubun iletileri tek tek gelir.",
-      "groupCapabilitiesRange": "1 ile 100000 arasında.",
+      "groupCapabilities": "Hesap başına grup teslim anahtarı",
+      "groupCapabilitiesHint": "Hesabın üye olduğu her grup bir teslim anahtarı yayımlar; sayı az şey söylesin diye sekizer sekizer doldurulur, anahtar değişirken kısa süre ikisi gerekir. Bunun ötesinde o grupların iletileri tek tek gelir.",
+      "groupCapabilitiesRange": "16 ile 100000 arasında, 8'in katı.",
       "groupAvatarMax": "En büyük grup resmi",
       "groupAvatarMaxHint": "Şifreli grup resimleri dört boyutta gelir; daha büyükleri reddedilir.",
       "groupAvatarMaxRange": "Boyutlardan birini seçin.",
