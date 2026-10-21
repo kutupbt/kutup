@@ -12,7 +12,7 @@ function vaultRow(page: Page, name: string) {
 }
 
 async function vaultMenu(page: Page, name: string, item: string): Promise<void> {
-  await page.getByRole('button', { name: `More for ${name}` }).click()
+  await page.getByRole('button', { name: `More for ${name}`, exact: true }).click()
   await page.getByRole('menuitem', { name: item }).click()
 }
 
