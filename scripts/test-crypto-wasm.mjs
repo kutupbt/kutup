@@ -1223,7 +1223,7 @@ if (build === 'crypto') {
   const renamed = unlocked.sealMetadata(...owner, v.calendarId, { name: 'Ev', description: '' })
   assert.equal(unlocked.openMetadata(renamed, v.calendarId, [v.ownerPublicKey]).name, 'Ev')
   // A new calendar, under the id the client drew.
-  const made = crypto.createCalendar(...owner, v.ownerPublicKey, 'c-new', { name: 'İş', description: '' }, 1790000000)
+  const made = crypto.createCalendar(...owner, 'c-new', { name: 'İş', description: '' }, 1790000000)
   const opened2 = crypto.unlockCalendar(...owner, made.passphrase, [v.ownerPublicKey], made.lockedSecretKey)
   assert.equal(opened2.openMetadata(made.metadata, 'c-new', [v.ownerPublicKey]).name, 'İş')
   assert.equal(opened2.fingerprint, made.fingerprint)
