@@ -312,6 +312,24 @@ extern "C" {
         request: JsValue,
     ) -> std::result::Result<JsValue, JsValue>;
 
+    /// `POST /api/chat/anonymous/messages/multi?server=`: a
+    /// `MultiSendOutcome` (`{ kind: "answered", status, response }`,
+    /// `peerUnavailable`, `tooLarge` or `rateLimited`).
+    #[wasm_bindgen(method, catch, js_name = sendSealedMulti)]
+    async fn js_send_sealed_multi(
+        this: &JsChatTransport,
+        server: &str,
+        request: JsValue,
+    ) -> std::result::Result<JsValue, JsValue>;
+
+    /// `POST /api/chat/group-capabilities/set`: a `GroupCapabilitiesOutcome`
+    /// (`{ kind: "set", count }` or `limitReached`).
+    #[wasm_bindgen(method, catch, js_name = setGroupCapabilities)]
+    async fn js_set_group_capabilities(
+        this: &JsChatTransport,
+        hashes: JsValue,
+    ) -> std::result::Result<JsValue, JsValue>;
+
     #[wasm_bindgen(method, catch, js_name = sendSyncMessage)]
     async fn js_send_sync_message(
         this: &JsChatTransport,
@@ -822,6 +840,31 @@ impl ChatTransport for BrowserTransport {
         from_transport(
             self.js
                 .js_send_sealed_batch(server, to_transport(batch)?)
+                .await
+                .map_err(transport_error)?,
+        )
+    }
+
+    async fn send_sealed_multi(
+        &self,
+        server: &str,
+        submission: &kutup_chat_proto::SealedMultiSubmissionV1,
+    ) -> Result<crate::transport::MultiSendOutcome> {
+        from_transport(
+            self.js
+                .js_send_sealed_multi(server, to_transport(submission)?)
+                .await
+                .map_err(transport_error)?,
+        )
+    }
+
+    async fn set_group_capabilities(
+        &self,
+        hashes: &[String],
+    ) -> Result<crate::transport::GroupCapabilitiesOutcome> {
+        from_transport(
+            self.js
+                .js_set_group_capabilities(to_transport(&hashes)?)
                 .await
                 .map_err(transport_error)?,
         )

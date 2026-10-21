@@ -652,6 +652,58 @@ export class ApiChatTransport implements ChatTransportPort {
     }
   }
 
+  /**
+   * One group message to every listed account of `server`, sealed once
+   * (`SealedMultiSubmissionV1`; docs/plans/pairwise-groups.md, "Slice 2").
+   * `200`, `409` and `410` are answers (who was refused or over a budget,
+   * whose devices moved on); a destination that didn't answer (`503`), or a
+   * server without the route (`404`), sends those members pairwise.
+   */
+  async sendSealedMulti(
+    server: string,
+    request: unknown,
+  ): Promise<
+    | { kind: 'answered'; status: number; response: unknown }
+    | { kind: 'peerUnavailable' }
+    | { kind: 'tooLarge' }
+    | { kind: 'rateLimited' }
+  > {
+    try {
+      const response = await axios.post(`${apiBase()}/chat/anonymous/messages/multi`, request, {
+        params: { server },
+        withCredentials: false,
+        headers: { Authorization: undefined },
+      })
+      return { kind: 'answered', status: response.status, response: response.data }
+    } catch (error) {
+      if (axios.isAxiosError(error) && error.response) {
+        const status = error.response.status
+        if (status === 409 || status === 410) return { kind: 'answered', status, response: error.response.data }
+        if (status === 503 || status === 404) return { kind: 'peerUnavailable' }
+        if (status === 413) return { kind: 'tooLarge' }
+        if (status === 429) return { kind: 'rateLimited' }
+      }
+      throw peerSendError(error)
+    }
+  }
+
+  /**
+   * Sets this account's published group capabilities to exactly `hashes`
+   * (padded to a multiple of 8 by the caller); `limitReached` when the
+   * server takes no more for one account.
+   */
+  async setGroupCapabilities(hashes: string[]): Promise<{ kind: 'set'; count: number } | { kind: 'limitReached' }> {
+    try {
+      const response = await api.post<{ count: number }>('/chat/group-capabilities/set', { hashes })
+      return { kind: 'set', count: response.data.count }
+    } catch (error) {
+      if (axios.isAxiosError(error) && error.response?.status === 409 && errorCode(error) === 'capabilityLimit') {
+        return { kind: 'limitReached' }
+      }
+      throw error
+    }
+  }
+
   async sendSyncMessage(
     request: unknown,
   ): Promise<
