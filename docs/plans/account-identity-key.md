@@ -120,25 +120,35 @@ authority signs a manifest without it (`revoke_manifest_device`, as today).
 next send gets `409` (extra device), and they drop that device's session; no
 safety-number notice.
 
-What a removed device keeps: the identity private key. Without a link token
-and the account's sign-in it can't register a device, and the server refuses
-its sends (no device row, no session token). It could still open the outer
-sealed layer of envelopes that reach it, which none do any more. This is
-Signal's exposure, accepted the same way, and said in the threat model. For a
-stolen device the person can **reset the account identity** (re-registration
-by choice, below), which makes every peer re-establish sessions and shows the
-notice.
+What a removed device keeps: the identity private key, and (every Kutup
+device has it) the account master key. Without a link token it can't add
+itself back as a linked device, and the server refuses its sends (no device
+row). It could open the outer sealed layer of envelopes that reach it, which
+none do any more. But with the master key it derives the account authority,
+so it could sign a **re-registration** (below) and take the identity back,
+which drops every other device: visible to the person at once, never silent.
+So, as for Drive today, **real revocation of a lost or stolen device is a
+password and master-key change**; removing it from the device list is
+Signal's removal, no more. The threat model says so, and the removal screen
+points to "Change password" for a lost or stolen device. The person can also
+**reset the account identity** (re-registration by choice), which makes every
+peer re-establish sessions and shows the notice.
 
 ## Re-registration: a new identity
 
 When the account's identity is lost (every device gone, the person restores
 from the recovery phrase or a backup) or the person resets it after a theft:
 
-- the device makes a new identity, re-registers its own keys under it, and
-  publishes a manifest listing only itself with the new key; the authority
-  signs it (the master key proves it is the account);
-- the server takes it as the account's identity and drops the other device
-  rows, as Signal's `reclaimAccount` unlinks every device;
+- the device makes a new identity and registers with a **re-registration
+  manifest** in the same call (`POST /api/chat/device` with `reregistration`,
+  server section): the next V2 manifest, signed by the authority (the master
+  key proves it is the account), with the new identity key, listing only
+  this device; its prekeys verify against the new key;
+- the server, in one transaction, inserts its row, swaps the account
+  identity, publishes the manifest and drops the other device rows, as
+  Signal's `reclaimAccount` unlinks every device (Signal gates it on the
+  number and the registration lock; Kutup on the authority, so on the master
+  key);
 - peers see the identity change. **The safety number does not change**: it is
   computed over the account authority, which the person still holds. Peers see
   Signal's notice wording adapted to that: "Ada's keys changed: she
@@ -213,6 +223,11 @@ limits.)
   has moved; no row is a legacy account (per-device keys, today's rules).
 - `chat_link_tokens (token_hash bytea PK, user_id, issued_by_device int,
   expires_at, used_at)`: single use, only the hash stored.
+- `chat_device_pending_identity (user_id, device_id, identity_key, signed and
+  last-resort keys, one-time Kyber keys, staged_at)`: a device's keys under
+  the account identity staged during the migration, never served.
+- `chat_devices.session_id` (the session that registered it) and
+  `chat_devices.expired_at` (Q-b).
 - `chat_devices.identity_key` stays; for a moved account it must equal the
   account's key (enforced in the apply code, with a test: a cross-table CHECK
   isn't possible). `UNIQUE (user_id, identity_key)` goes, and the register
@@ -225,18 +240,30 @@ limits.)
    (WebSocket); the server gives it a random provisioning address for the
    socket's life and relays exactly one envelope to it, nothing on disk.
 2. An existing device of the same account calls `POST /api/chat/link-tokens`
-   (device-bound: the JWT and a registered device id, as replenishing keys
-   is) and gets a fresh link token.
+   and gets a fresh link token. What really gates a new device is that its
+   prekeys must verify against the account identity, so only a holder of the
+   private key registers one; the token adds single use and a lifetime, and
+   stops a removed device from coming back with only a fresh sign-in. Device
+   calls are bound to their device: `chat_devices` records the sign-in session
+   that registered it (`session_id`), and the device's own endpoints
+   (link-tokens, keys, identity, removing itself) require that session, as
+   Signal's per-device credentials do (today any session of the account may
+   name any `deviceId`).
 3. It calls `PUT /api/chat/provisioning/{address}` with the opaque envelope
    (encrypted to the new device's ephemeral key from the QR code). The server
    checks only that both ends are one account and the size, relays it and
-   forgets it; no socket listening is a `404`.
+   forgets it. No socket listening and another account's address are the same
+   `404`, so an address can't be probed.
 4. The new device calls `POST /api/chat/device` with `linkToken` and its keys.
 
 **Key upload checks**, on `POST /api/chat/device` and `PUT /api/chat/keys`,
 for a moved account:
-- `linkToken` is required on register: unused, unexpired, the same account;
-  consumed in the same transaction as the insert.
+- On register, either `linkToken` (unused, unexpired, the same account;
+  consumed in the same transaction as the insert) or `reregistration`: an
+  `AccountManifestV2` that verifies under the account's authority, is the next
+  sequence, carries a new identity key and lists only the registering device.
+  The server then inserts the row, swaps `chat_account_identities`, publishes
+  the manifest and drops every other device row in one transaction.
 - `identityKey` equals the account's (33 bytes, a valid point).
 - The signed prekey, the last-resort Kyber key and every one-time Kyber key
   verify against the account identity key (libsignal
@@ -257,9 +284,11 @@ for a moved account:
   as Signal's `reclaimAccount` unlinks every device.
 
 **Device expiry** (`jobs.rs`, today deleting rows without a manifest): for a
-moved account the expiry only marks the device, and the account's next V2
-manifest leaves it out (so the server never drops a device the authority
-still lists; Q-b).
+moved account the expiry only marks the device (`expired_at`). A marked
+device leaves the send set and the bundles at once (Signal's sends never
+wait on dead devices), and the next V2 manifest, signed by any online device
+of the account when it gets `DevicesChanged`, leaves it out; then the row
+goes (the server never drops a device the authority still lists; Q-b).
 
 **Bundles.** `GET /api/chat/accounts/:id/keys` (local, federated,
 anonymous) answers the account identity once, and each device's
@@ -277,16 +306,22 @@ device id.
 
 **The migration on the server.**
 1. The migration adds the tables; every account starts legacy.
-2. `PUT /api/chat/device/{id}/identity`: a device re-registers its own keys
-   (identity, signed prekey, last-resort Kyber, one-time Kyber; all verifying
-   against the new identity) while its account is legacy, for the caller's
-   device only.
-3. The account's first V2 manifest establishes the identity; devices it
-   doesn't list are deleted (`DevicesChanged`), as today.
+2. `PUT /api/chat/device/{id}/identity`: a device **stages** its own keys
+   under the new identity (identity, signed prekey, last-resort Kyber,
+   one-time Kyber; all verifying against it) while its account is legacy,
+   for its own device only. Live rows and bundles stay legacy, so peers never
+   see mixed identities and V1 publishing keeps working.
+3. The account's first V2 manifest swaps the staged keys into the live rows
+   of exactly the devices it lists, in its transaction, establishes the
+   identity, deletes the devices it doesn't list (`DevicesChanged`) and drops
+   every other staged row. Racing first devices: the first V2 wins (sequence
+   check) and stages under the losing identity are discarded.
 
-**Limits** (site settings): link-token lifetime (10 minutes) and outstanding
-tokens per account (3); provisioning envelope size (64 KiB) and provisioning
-sockets per address a minute; the migration's sync window (one minute); the
+**Limits** (site settings, admin-editable as every limit; the request limits
+in the rate-limit registry, `Limit`): link-token lifetime (10 minutes),
+outstanding tokens per account (3) and link tokens a minute; provisioning
+envelope size (64 KiB), provisioning sockets per address a minute and
+provisioning relays a minute; the migration's sync window (one minute); the
 existing device cap (`chat_max_active_devices`).
 
 **Server tests:**
@@ -294,7 +329,10 @@ existing device cap (`chat_max_active_devices`).
   expiry, other account), the V2 publish rules (establish, mismatch, V1 after
   V2, re-registration drops the others);
 - live: linking end to end (socket, token, envelope relay, register),
-  `keys/check`, the migration's re-register then V2, two devices racing;
+  `keys/check`, re-registration (a device without a row, the others dropped),
+  the migration (staged keys never served before V2, swapped in by it, stages
+  under a losing identity discarded), two devices racing, device-bound calls
+  refused from another session;
 - two servers: federated bundles with the account identity, verified against
   the manifest.
 
@@ -304,25 +342,34 @@ Every existing account has per-device identities. It moves once, by its own
 devices, and nothing keeps both formats afterwards.
 
 1. **The first device of the account that opens the new version** (any one;
-   the server serialises the step) makes the account identity, re-registers its
-   own keys under it (`PUT /api/chat/device/{id}/identity`, allowed only while
-   the account is legacy and only for the caller's device), and keeps the
-   identity.
+   the server serialises the step) makes the account identity and stages its
+   own keys under it (`PUT /api/chat/device/{id}/identity`, server section:
+   staged, not served, until the V2 manifest).
 2. It sends the identity to **its other devices it already has sessions
    with**, as Signal's `PniChangeNumber` sync message pushes a new key pair to
    linked devices: a hidden pairwise `accountIdentity` sync message (never
    history) with the key pair, the account and the manifest sequence it will
    publish. Each of those devices checks it as a provisioning message, re-keys
-   its own prekeys under the identity and re-registers them the same way.
+   its own prekeys under the identity and stages them the same way.
 3. After a short window (a site setting; one minute at first) or once all have
    answered, the first device publishes the account's first **V2 manifest**,
-   listing itself and the devices whose rows now carry the identity. That
-   establishes the account identity on the server; devices that didn't make
+   listing itself and the devices that staged under the identity; the server
+   swaps their staged keys in with it. That establishes the account identity; devices that didn't make
    it (offline, an old version) are left out and are linked again later
    through the provisioning flow, keeping their data (their history comes
    back through the encrypted backup, as a new device's does today).
 4. Peers see one identity change per account (above), under the same
    authority: the notice, not a warning.
+
+**Peers of a legacy account** (one no device of which has opened the new
+version yet): their manifest is still V1, so the multi-recipient route,
+which needs one identity per account, isn't used for them; they get
+per-device copies (pairwise), as today.
+
+**An end to the legacy model:** a later release drops the per-device paths;
+an account still legacy then must re-register (its first device to open that
+release makes a new identity). The release is a roadmap item with a date the
+user sets, so both models aren't kept forever.
 
 Two devices that start at once: the server takes the first V2 manifest; the
 other's publish fails (sequence conflict), it reads the V2 manifest, and if
@@ -373,11 +420,15 @@ waits for it or is linked.
 
 - **Q-a** (answered): random and provisioned, as Signal, not derived from the
   master key.
-- **Q-b** (server): a moved account's device expiry goes through a V2 manifest
-  too, so the server never drops a device the authority still lists.
+- **Q-b** (answered): a moved account's device expiry marks it, it leaves the
+  sends at once, and the next V2 manifest drops it.
 - **Q-c** (answered): the manifest carries the key itself.
 - **Q-d** (for approval): the identity-change notice wording when the
   authority is the same (above), and whether a verified contact stays verified
-  (proposed: yes, verification is of the authority).
+  (proposed: yes, verification is of the authority). Know what that means:
+  whoever has the master key (a password compromise, or a removed device that
+  kept it) can reset the identity with only that soft notice. That is no
+  worse than today, where the master key already signs any manifest, but it
+  is a choice to make knowingly.
 - **Q-e** (for approval): the migration's sync window (one minute) and that
   devices left out are linked again rather than kept as legacy.
