@@ -28,7 +28,7 @@ import {
 } from '../lib/keyChange'
 import { useSessionState } from '../sync/openVaults'
 import { KeyChangeError, type VaultSession } from '../sync/vaultSession'
-import { generateKeyFile } from '../vault/client'
+import { generateKeyFile, type KeyChanged } from '../vault/client'
 import { KeyFileInput } from './KeyFileInput'
 
 /** Saves `contents` as a download named `name`; the bytes go nowhere else. */
@@ -161,17 +161,24 @@ export function ChangeKeyDialog({
       // stays one that can be shown. The worker takes it only if it is the
       // vault's password now (a stale kept copy never replaces it).
       const keptPassword = password === 'keep' && keptGenerated ? await keptGeneratedPassword(signedIn, secrets.data, fileId).catch(() => null) : null
+      // What the account keeps follows the vault's new key, as chosen:
+      // now, or once a save that got no answer has reached Drive.
+      const keepChoice = async (done: KeyChanged) => {
+        if (remember) await keepVaultKey(signedIn, fileId, session.vault(), password === 'new' ? newPassword === madePassword : password === 'keep' && done.passwordShowable)
+        else if (wasKept) await forgetVaultKey(signedIn, fileId)
+        await queryClient.invalidateQueries({ queryKey: secretsKey })
+      }
       let changed
       try {
         changed = await session.changeKey({
           password: password === 'keep' ? 'keep' : password === 'new' ? { set: newPassword } : null,
           shownPassword: keptPassword,
           keyFile: keyFile === 'keep' ? 'keep' : keyFile === 'generate' ? generated.current : keyFile === 'choose' ? (chosen?.contents ?? null) : null,
-        })
+        }, keepChoice)
       } catch (failure) {
         if (failure instanceof KeyChangeError && failure.failure === 'pending') {
-          // The new key stays and is saved once Kutup answers: nothing here
-          // to undo, and the kept key follows at the next unlock.
+          // The new key stays and is saved once Kutup answers; the kept key
+          // follows then (or at the next unlock, if this tab closes first).
           forgetGenerated()
           toast.warning(t('changeKey.failure.pending'))
           onOpenChange(false)
@@ -180,16 +187,12 @@ export function ChangeKeyDialog({
         setError(failure instanceof KeyChangeError ? t(`changeKey.failure.${failure.failure}`) : t('changeKey.failure.failed'))
         return
       }
-      const generatedPassword = password === 'new' ? newPassword === madePassword : password === 'keep' && changed.passwordShowable
-      // Drive holds the vault under its new key. What the account keeps follows it.
       let keepFailed = false
       try {
-        if (remember) await keepVaultKey(signedIn, fileId, session.vault(), generatedPassword)
-        else if (wasKept) await forgetVaultKey(signedIn, fileId)
+        await keepChoice(changed)
       } catch {
         keepFailed = true
       }
-      await queryClient.invalidateQueries({ queryKey: secretsKey })
       let versionsLeft = 0
       if (dropVersions && owner) versionsLeft = await deleteEarlierVersions(fileId)
       forgetGenerated()

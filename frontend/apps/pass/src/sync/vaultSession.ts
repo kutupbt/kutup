@@ -73,6 +73,12 @@ export class VaultSession {
   private saving: Promise<void> | null = null
   private dirty = false
   private closed = false
+  /**
+   * What follows a key change whose save got no answer (keeping the new key
+   * in the account, or forgetting the old one): run once the save loop has
+   * the vault in Drive under the new key.
+   */
+  private afterKeyChange: (() => Promise<void>) | null = null
   /** The other device's version while its key is needed. */
   private waitingTheirs: { contents: Uint8Array; version: string } | null = null
   private readonly onOnline = () => this.scheduleSave(0)
@@ -185,7 +191,7 @@ export class VaultSession {
    * the save slot meanwhile; edits made during it are saved after, under
    * the new key. On any failure the old key is back and nothing changed.
    */
-  async changeKey(change: KeyChange): Promise<KeyChanged> {
+  async changeKey(change: KeyChange, whenSaved?: (changed: KeyChanged) => Promise<void>): Promise<KeyChanged> {
     if (!this.canEdit) throw new VaultError('this vault is read-only for you')
     if (this.saving || this.dirty || this.waitingTheirs || this.state.status !== 'saved') throw new KeyChangeError('notReady')
     let release!: () => void
@@ -220,6 +226,7 @@ export class VaultSession {
         // key and is merged; one that didn't is made now. Either way the
         // vault ends up under the new key, never under one nobody holds.
         this.dirty = true
+        this.afterKeyChange = whenSaved ? () => whenSaved(changed) : null
         this.set({ status: 'offline' })
         this.scheduleRetry()
         throw new KeyChangeError('pending')
@@ -288,8 +295,12 @@ export class VaultSession {
         this.file = saved.file
         this.baseVersion = saved.version
         this.base = contents
-        // A key change whose first save got no answer is done now.
+        // A key change whose first save got no answer is done now; what was
+        // to follow it (the account's kept key) follows now.
         await this.handle.keyChangeSaved()
+        const after = this.afterKeyChange
+        this.afterKeyChange = null
+        if (after) void after().catch(() => undefined)
         // Edits made while saving stay pending in the outbox.
         if (!this.dirty) {
           await outbox.put(this.userId, { fileId: this.file.id, baseVersion: this.baseVersion, base: this.base, pending: null, savedAt: Date.now() })
