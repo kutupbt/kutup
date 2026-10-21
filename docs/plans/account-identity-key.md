@@ -188,21 +188,23 @@ to each device), applied to the account identity. Kutup uses it for the
 **migration** and for **"reset identity, keep my devices"**.
 
 1. One device of the account makes a new identity key pair, and for **every**
-   device of the account (itself included): a signed prekey and a last-resort
+   device it keeps (itself included): a signed prekey and a last-resort
    Kyber key, signed by the new identity, and a new registration id.
 2. It sends one request (server section): the new identity, each device's
    keys and registration id, a `deviceMessages` sync for each other device,
-   and the next **V2 manifest** listing the identity and every device with its
-   new registration id.
+   and the next **V2 manifest** listing the identity and every device it keeps
+   with its new registration id (a lost device is simply not listed: the
+   server drops it in the same transaction).
 3. The sync to each device (`accountIdentity`, Signal's `PniChangeNumber`):
    the identity key pair, that device's signed prekey and last-resort Kyber
    key (private parts), its registration id, and the manifest's sequence and
    hash. It is sealed pairwise to the device, under its current session, as
    any sync message; hidden, never history.
-4. The server checks every signature and the device set (all of the account's
-   devices, no more, no fewer: `409`/`410` otherwise), and in one transaction
-   swaps every device's identity, keys and registration id, clears their
-   one-time EC and Kyber keys, publishes the manifest and queues the syncs.
+4. The server checks every signature and the device set (the devices the
+   manifest lists, all of them the account's: `409`/`410` otherwise), and in
+   one transaction swaps every listed device's identity, keys and
+   registration id, drops the unlisted ones, clears the account's one-time EC
+   and Kyber keys, publishes the manifest and queues the syncs.
 5. Each other device applies its sync when it next connects: it checks it as a
    provisioning message (the manifest lists exactly this identity and its own
    registration id), takes the identity, its keys and its registration id, and
@@ -299,7 +301,175 @@ change: quarantined, as now (`quarantine_authority`).
 route, per-device credentials, link tokens and provisioning, key-upload
 checks, the V2 manifest, bundles, federation, limits.)
 
-<!-- SERVER SECTION -->
+**Today** (for the record):
+- Every `chat_devices` row has its own `identity_key`, with
+  `UNIQUE (user_id, identity_key)`.
+- `POST /api/chat/device` checks only that the fields are base64: it never
+  compares identity keys across an account's devices and never verifies a
+  signed or Kyber prekey's signature ("stored and served verbatim for clients
+  to verify", `handlers/chat.rs`).
+- The only binding of a device to its account is `AccountManifestV1`, signed
+  by the account authority, which the server verifies on publish and checks
+  against the registered rows.
+- Chat requests aren't device-authenticated: replenishing takes a `deviceId`
+  any JWT holder of the account can name.
+- There is no linking: a new device registers with the account's sign-in
+  alone.
+
+**Tables** (one migration, no wipe; its number is taken above master and the
+open PRs when it is pushed):
+- `chat_account_identities (user_id PK → users, identity_key text NOT NULL,
+  manifest_version bigint NOT NULL, changed_at)`: one row per account that
+  has moved; no row is a legacy account (per-device keys, today's rules).
+- `chat_devices` gains `credential_hash bytea` (Signal's `SaltedTokenHash`:
+  SHA-256 over a per-row salt and a 32-byte random credential the device drew
+  at registration; a high-entropy token needs no slow hash, as Signal) and
+  `expired_at timestamptz` (Q-b); `UNIQUE (user_id, identity_key)` goes.
+- `chat_link_tokens (token_hash bytea PK, user_id, issued_by_device int,
+  expires_at, used_at)`: single use, only the hash stored.
+
+**Device credentials** (Signal's per-device password):
+- `POST /api/chat/device` takes `credential` (32 random bytes, base64) and
+  stores only its salted hash.
+- Device-bound calls carry `X-Kutup-Chat-Device: <deviceId>.<credential>`
+  beside the JWT: replenishing keys, `keys/check`, link tokens, identity
+  distribution, manifest publish, revoke, sends. The server checks it in
+  constant time against that device's row of the JWT's account; missing or
+  wrong is `401` (Signal's `AccountAuthenticator`). A removed or expired
+  device's credential dies with its row.
+- Legacy devices claim one on their first call after the upgrade
+  (`PUT /api/chat/device/{id}/credential`, accepted once, only while the row
+  has none): each device claims it first thing when it opens the new version.
+  A row's first claimant wins; any session of the account could claim an
+  unclaimed legacy row once, which gives it no more than that session already
+  has.
+- The register call's retry key becomes the credential hash (the same
+  credential again answers the row it made).
+
+**Linking** (Signal's `/v1/devices/provisioning/code`, provisioning socket,
+`PUT /v1/devices/link`):
+1. The new device signs in (JWT) and opens `GET /api/chat/provisioning`
+   (WebSocket); the server gives it a random address for the socket's life
+   and relays exactly one envelope to it, nothing on disk.
+2. An existing device calls `POST /api/chat/link-tokens`
+   (device-authenticated) and gets a one-time token.
+3. It sends the envelope with `PUT /api/chat/provisioning/{address}`
+   (device-authenticated). The server checks the size and that the address is
+   a socket of the same account; "no such socket" and "another account's
+   socket" are the same `404`, so addresses can't be probed. It relays the
+   envelope and forgets it.
+4. The new device calls `POST /api/chat/device` with `linkToken`, its
+   `credential`, its registration id and keys; the token is consumed in the
+   insert's transaction. Then a device publishes the V2 manifest listing it.
+
+**Key upload checks** (moved account; `POST /api/chat/device`,
+`PUT /api/chat/keys`):
+- `identityKey` is the account's (33 bytes, a valid point).
+- The signed prekey, the last-resort Kyber key and every one-time Kyber key
+  verify against the account identity key (libsignal
+  `IdentityKey::verify_signature`, as Signal's `PreKeySignatureValidator`);
+  otherwise `400 badSignature`.
+- `POST /api/chat/keys/check` (Signal's `/v2/keys/check`): a digest of the
+  identity key and the device's repeated-use keys, so the device learns
+  whether the server's copy is its own.
+
+**Identity distribution** (Signal's `PUT /v2/accounts/number` key part,
+`PhoneNumberIdentityKeyDistributionRequest`): `PUT /api/chat/account-identity`,
+device-authenticated, one request from one device:
+- `identityKey`: the new account identity;
+- per device the manifest lists (this one included): `signedPreKey`,
+  `lastResortKyberPreKey`, `registrationId`;
+- `deviceMessages`: exactly one sealed sync per other listed device (Signal's
+  `PniChangeNumber`), carrying the identity's private key and that device's
+  new private prekeys, encrypted on its existing session;
+- `manifest`: the `AccountManifestV2` listing exactly these devices with
+  these registration ids and this identity key, the next sequence, under the
+  account's authority. It may leave out devices the account has (a lost
+  device being reset away): those rows are dropped in the same transaction.
+
+The server, in one transaction:
+1. Device set: the per-device maps and `deviceMessages` name exactly the
+   devices the manifest lists, all of them devices of the account (an unknown
+   device is `409`, Signal's `MismatchedDevicesResponse`); a device message
+   whose registration id doesn't match its stored row is `410`
+   (`StaleDevicesResponse`). Nothing is stored either way.
+2. Every signed prekey and last-resort key verifies against `identityKey`
+   (`400 badSignature`); the manifest verifies, names this identity and these
+   registration ids, and is the next sequence.
+3. Swap: `chat_account_identities` set (or created: the migration), every
+   listed device row's identity, signed prekey, last-resort key and
+   registration id replaced, unlisted rows deleted, every one-time EC and
+   Kyber key of the account deleted (Signal's `deleteSingleUsePreKeys`;
+   devices refill through `PUT /api/chat/keys`), the manifest stored as head
+   and in history.
+4. The `deviceMessages` queued to their devices' mailboxes in the same
+   transaction; then `DevicesChanged`.
+
+It serves the migration (a legacy account's first V2), "reset identity, keep
+my devices" (the lost device left out of the manifest), and an account with
+one device re-keying itself. **Re-registration** after every device is lost
+is the same request from a new device with an empty `deviceMessages`: that
+device registers with `reregistration: true` and no link token, accepted only
+in the same call as a distribution whose manifest lists it alone; every other
+row is dropped (Signal's `reclaimAccount`). The gate is the account authority,
+so the master key.
+
+**Manifest V2 on publish** (`POST /api/chat/manifest`): its identity key
+equals `chat_account_identities` (a different one only through the
+distribution route); its devices' registration ids equal the rows' (a
+registration id changes only with a manifest that names it, at linking or a
+distribution); unlisted rows are deleted, as today; after the first V2, V1 is
+refused.
+
+**Registration ids:** bundles and `410` answers are built from rows equal to
+the signed manifest; the server never answers a registration id the head
+manifest doesn't carry, and clients refuse one that disagrees (client
+section).
+
+**Device expiry** (Q-b): for a moved account `jobs.rs` sets `expired_at`
+instead of deleting; an expired device leaves the send device set and the
+bundles at once (sends never wait on it, as Signal), and any online device of
+the account, on `DevicesChanged`, publishes the V2 manifest that drops it;
+then the row goes.
+
+**Bundles:** `GET /api/chat/accounts/:id/keys` (local, federated, anonymous)
+answers the account identity once, and each listed device's registration id
+and prekeys (Signal's `/v2/keys`).
+
+**Federation:** `fetch_remote_bundles` verifies the attached manifest (as
+`fetch_remote_manifest` does) and the bundles against it. A distribution or
+a reset is pushed to peer servers as a device revocation is (the
+manifest-changed notice to the peers that serve this account's contacts),
+so their clients fetch it. A remote account's sender certificates carry its
+identity key; receiving clients check them against the account's federated
+manifest (client section); a server checks only that its own certificates
+match the issuing account's current identity.
+
+**Sender certificates:** `issue_sender_certificate` reads the account
+identity and the caller's authenticated device id.
+
+**Sends:** unchanged; #297's multi-recipient route keeps libsignal's parse
+(one key share per account).
+
+**Limits** (site settings; the request limits in the rate-limit registry):
+link-token lifetime (10 minutes) and outstanding tokens per account (3); the
+provisioning envelope size (64 KiB), provisioning sockets per address a
+minute and relays per account a minute; distributions per account a day; the
+`deviceMessages` size per device; the device cap (`chat_max_active_devices`).
+
+**Server tests:**
+- unit: prekey signature checks (good, bad, wrong key); credentials
+  (missing, wrong, another device's, compared in constant time); link tokens
+  (reuse, expiry, another account); the distribution's `409`/`410`, a bad
+  signature, a manifest that disagrees, one-time keys cleared, an unlisted
+  device dropped; the V2 publish rules; a registration id outside the
+  manifest refused;
+- live: linking end to end; `keys/check`; the migration as one distribution
+  with the syncs drained by each device; a reset leaving a lost device out;
+  re-registration from a new device; two distributions racing (the second
+  gets a sequence conflict); expiry leaving the send set;
+- two servers: federated bundles under the account identity, verified
+  against the manifest; a reset seen by the peer.
 
 ## Migration without a wipe
 
