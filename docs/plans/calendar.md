@@ -337,7 +337,8 @@ and busy/free (E3), invitations (E4), URL feeds, Google import, meetings
 
 Recurrence and exceptions, reminders, `.ics` import and export, following
 Proton's web client (`packages/shared/lib/calendar`, `applications/calendar`)
-unless marked **Q-n** for the main session. Three PRs, as E1: (a) the Rust
+unless marked **Q-n** (the main session's answers, 2026-10-21, are in
+place). Three PRs, as E1: (a) the Rust
 core, (b) the server, (c) the app.
 
 **1. Recurrence: Proton's subset, in the Rust core.**
@@ -389,11 +390,17 @@ core, (b) the server, (c) the app.
   checks a child's parent exists in the calendar (same UID, no
   `RECURRENCE-ID`, an `RRULE`) and that the `RECURRENCE-ID` is one of its
   occurrences; the unique (calendar, UID, RECURRENCE-ID) index already
-  holds one child per occurrence. **Q-1:** a "this and following" edit is
-  three changes (delete children, cut parent, create series); a failure
-  between them leaves the series cut without its continuation, as Proton's.
-  Recommended: keep Proton's per-change sync, and make the app retry the
-  rest from its local plan (it knows all three changes before sending).
+  holds one child per occurrence. **Q-1 (answered: as Proton's):** a "this
+  and following" edit is three changes (delete the later children, cut the
+  parent, create the new series), each applied alone. The app plans all
+  three before sending and retries what hasn't landed, and every step is
+  idempotent: an event's id is drawn by the client (a UUID v4, as calendar
+  ids in E1), so a create retried with the same id and content answers the
+  stored event instead of a second one; the cut names its `baseRevision`,
+  so a retry after it landed is a `revision_conflict` the app reads as done
+  (it checks the stored rule) and never cuts twice; a delete of an event
+  already gone is done. The series shows as pending until all three have
+  landed.
 
 **3. The window and range end.** `range_end_utc` (E1's column, NULL for
 endless) becomes the last occurrence's end, computed by the server from the
@@ -429,16 +436,17 @@ against their own, as E1 checks the start.
   (Proton's: two days ahead, refetched before the end, one timer for the
   next). When no tab is open the server sends a **web push** through
   Chat's `web_push.rs` (its VAPID key, allowlisted push services, a
-  subscription per browser now also for the Calendar app). **Q-2:** Chat's
-  pushes are empty; a reminder push can carry, encrypted to the browser
-  (RFC 8291), only what the server knows: the start time and the event id,
-  so the notification reads "An event starts at 09:30", and opening it
-  opens the event. Recommended (the title stays end-to-end encrypted; the
-  service worker never holds calendar keys).
+  subscription per browser now also for the Calendar app). **Q-2
+  (answered):** Chat's pushes are empty; a reminder push carries, encrypted
+  to the browser (RFC 8291), only the start time and the event id, never
+  the title (the server can't read it), so the notification reads "An
+  event starts at 09:30", and opening it opens the event. The service
+  worker never holds calendar keys.
 - **Email:** a message the server writes to the member's own Kutup address,
   delivered through Mail's inbound path (so it is encrypted at rest to the
-  address key like any mail) with the same content as the push (time, a
-  link to the event), never the title. Only for accounts with a Mail
+  address key like any mail) saying only "You have an event at <time>" and
+  a link to the event: never the title, description or location, which the
+  server can't read. Only for accounts with a Mail
   address; the editor hides the email type otherwise.
 
 **5. Import (`.ics`, in the browser).**
@@ -459,9 +467,11 @@ against their own, as E1 checks the start.
   names table, then a substring), floating times in `X-WR-TIMEZONE` or the
   person's zone.
 - Events go in batches of `calendarSyncBatch`, parents before children,
-  each with its own reminders (imported events take no defaults); a UID
-  already there is reported, never overwritten (**Q-3:** Proton's
-  `Overwrite:1` replaces it; Kutup asks per import, default skip).
+  each with its own reminders (imported events take no defaults). **Q-3
+  (answered: as Proton's `Overwrite:1`):** a UID already in the calendar
+  is overwritten, unless the imported `SEQUENCE` is lower than the stored
+  one: that event is refused (`sequenceBehind`, as E1's updates) and listed
+  as skipped in the import's report.
 
 **6. Export.** All events of a calendar (paged by id), opened in the
 browser, written by the Rust core as one `VCALENDAR` (`VERSION:2.0`,
