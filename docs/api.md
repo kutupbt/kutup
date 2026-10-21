@@ -3572,7 +3572,8 @@ or removing one not there changes nothing. `POST …/set` takes `{ "hashes":
 [...] }` and makes the set exactly these (a device restoring from its group
 list). Both answer `{ "count" }`. `400` for a hash that isn't 32 bytes of
 canonical base64; `409 capabilityLimit` when the change would pass the
-account's limit (`chatGroupCapabilitiesPerAccount`, 1024 at first), refused
+account's limit (`chatGroupCapabilitiesPerAccount`, 4096 at first, a multiple
+of 8 as clients pad theirs to eights), refused
 whole. An account reset clears them.
 
 ### GET /api/chat/group-list
@@ -4659,7 +4660,7 @@ Return current global server settings.
   "oldAddressReceiveDays": 90,
   "chatGroupLinkJoinsPerRelayGroupPerMin": 120,
   "chatGroupLinkJoinsPerRelayPerMin": 1200,
-  "chatGroupCapabilitiesPerAccount": 1024,
+  "chatGroupCapabilitiesPerAccount": 4096,
   "chatGroupAvatarMaxBytes": 41001,
   "chatGroupAvatarStoragePerGroupBytes": 82002,
   "chatGroupAvatarPendingSeconds": 86400,
