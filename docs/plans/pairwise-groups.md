@@ -1028,12 +1028,12 @@ them on pseudonyms (§3).
   capability" rule.
   - The token is short-lived. Its identity is the pseudonym plus a random
     per-call device tag, so the SFU never sees an account.
-  - **Media goes through the member's own server's TURN, with relay forced**
-    (`iceTransportPolicy: "relay"`, through the `turn.` host Kutup already
-    runs). Otherwise each participant's IP would reach the home's SFU next to
-    their pseudonym, a stronger link than the request path. The home's SFU
-    then sees only member servers' TURN addresses. The cost is relay bandwidth
-    on member servers.
+  - **Members connect to the home's SFU directly**, signalling and media, as
+    Signal's clients do (the user, 2026-10-21): the home sees each
+    participant's network address and device details next to that call's
+    opaque identity, and so next to the pseudonym. Identities and rooms are
+    per call, so this ties one participant to one pseudonym in one call. The
+    slice 4 server design (§11) states it in full.
   - Participants learn which member is which from the frame-key messages, which
     are pairwise and from verified members.
   - Today's `group_calls.rs` and its federation route are replaced. The meeting
@@ -1296,7 +1296,7 @@ own fallback path (§1).
 | 1. Usable groups | `kutup-crypto` derivations; state and change formats (plain and encrypted parts) in `kutup-chat-proto`, with the server's check list, reviewed by the second session; pseudonyms, bindings, slots and claims; the anonymous route's client side (HPKE encapsulation, signed requests); the state engine (verify, apply, catch up, joining, forks, the `chatGroups` scope) for create, add, claim, remove, leave, admin roles, title, timer and profile keys; sender keys, the book, the per-device sealed send through the batch request, `409`/`410`, key replacement, retry and resend; a basic UI (create, list, thread, members, admin, title, leave, message request); en and tr; e2e specs on one and two servers | State, changes with the server-side checks on pseudonyms (§3), logs and the pseudonym ACL; the anonymous route (the HPKE gateway on the home, the relay on every server, replay and rate limits); the sealed batch request and its federated transaction; the sealed route for group members who aren't contacts; limits; live tests |
 | 2. Sending once | Multi-recipient encryption, group capabilities and their rotation, the `404` handling; lifting the 64 cap | The multi-recipient route with shared-payload storage, capability publishing, the destination split |
 | 3. Links and settings | Invite links, link joins and requests by pseudonym, approval, access control, description and avatar, announcements-only, banning, ending a group; their UI and specs | Join info through the anonymous route, link checks, requests, avatar blobs, bans |
-| 4. Calls | Per-participant frame keys with our LiveKit key provider, rotation on leaving and on removal, forced TURN relay, ringing below 16, the call UI | The SFU token for pseudonyms through the anonymous route, removal through LiveKit's admin API, TURN capacity for forced relay |
+| 4. Calls | Per-participant frame keys with our LiveKit key provider, rotation on leaving and on removal, ringing below 16, the call UI | The SFU token for pseudonyms through the anonymous route, removal through LiveKit's admin API and its webhook |
 | 5. MLS out | Client and core removal | Server removal and the migration |
 
 **Estimate (honest, working days of one session).** The second session's
@@ -1758,6 +1758,175 @@ per address (`RATE_LIMIT_FED_MULTI_FAILURES_PER_MIN`, 60, charged before the
 body is read and given back once a request authenticates), an env rate limit
 as the other pre-authentication limits. The server never had the 64 cap: `CHAT_GROUP_MAX_MEMBERS` is 256 and
 `GroupLimits` takes at most that; the client lifts its own once this is in.
+
+### Slice 4: group calls, the server design (second session, 2026-10-21)
+
+Agreed with the third session and revised after the main session's review
+(LiveKit's server and livekit-client 2.22.3 read for the facts below; ringrtc
+isn't in the references, so its points are unverified). Built on §6.
+
+**What the home's server does, and nothing more:** it admits current full
+members to a call room on its SFU under opaque identities, tells members who
+is in the call and under which era, and puts out whoever the group removed.
+Frame keys, ringing and the call line are the clients', end to end.
+
+**1. The call room and its era.**
+- A call gets a room of its own on the home's SFU, named `g` + 26 random
+  base32 characters when the call starts. The home keeps the group's current
+  room (`chat_group_calls`: group, room, era, created at), so the members
+  meet in it; a name per call means no room name ties calls of one group
+  together over time.
+- The **era** (Signal's `eraId`) is HMAC(the home's call key, room name), 16
+  bytes: one per room, so every member and every message agrees on it. The
+  call key is drawn once and kept for the server's life.
+- A new room (and so a new era) is made only when the group has none, or
+  LiveKit says its room is gone; under the group's row lock (`SELECT … FOR
+  UPDATE`, `INSERT … ON CONFLICT`), so token requests at the same moment share
+  one room rather than split the call. An empty room that still exists keeps
+  its era: members who rejoin within its timeouts continue the same call.
+- LiveKit creates rooms on first join (`room.auto_create`, on by default,
+  which meetings use), so **every token carries the room's configuration**
+  (`roomConfig` in its grant: maximum participants, the empty timeout before
+  anyone joins and the departure timeout after the last leaves; all
+  administrators' settings, 75, 300 s and 60 s at first). A room recreated
+  from an old token then has the same limits; being a past call's name, it
+  holds nobody else and no current member is sent to it.
+
+**2. Opaque identities.** A participant's LiveKit identity is
+HMAC(the call key, pseudonym ‖ era ‖ device tag), base64url: stable for one
+device in one call, unlinkable across calls and groups, and meaningless to
+anyone but the home. The home keeps identity → pseudonym for its rooms'
+lifetimes (to put removed members out); members learn whose identity is whose
+from the frame-key messages (pairwise, from verified members) and from the
+peek (sealed to the asking member).
+
+**3. Signalling goes to the home's SFU directly (the user, 2026-10-21).**
+livekit-client opens the SFU's WebSocket with the token in the URL, and the
+browser's details (sdk, version, operating system, browser, device model,
+network; in newer protocol versions inside the `join_request`'s
+`ClientInfo`). The member's browser opens it **directly**, as Signal's
+clients reach Signal's SFU, so:
+- **the home learns each participant's network address and device details
+  next to that call's opaque identity**, and through the identity map, next
+  to the member's pseudonym. It still never learns the account. The user
+  accepted this limit (2026-10-21); it is told plainly here, in 10, and in
+  docs/chat-calls.md "What servers learn".
+- What keeps it small: identities and rooms are per call (1, 2), so an
+  address ties one participant to one pseudonym in one call, not calls
+  together through the SFU's records.
+- The client sends as little as the SDK allows: no device model or network
+  type it can leave out of `ClientInfo`, and no name or metadata.
+- The token travels in the URL's query (`access_token`); the home, its SFU
+  and its proxy never log query strings on the `/rtc` path (nginx's log
+  format for that location drops `$args`; LiveKit logs no query).
+- The relay through the member's own server, which would have hidden the
+  address and device details, was considered and not chosen: it costs a
+  relayed WebSocket per participant on every member server for a limit the
+  user accepts.
+
+**4. Media to the home's SFU, as Signal's.** With the address already
+known to the home from signalling, forcing media through the member's own
+TURN would hide nothing from it and cost relay bandwidth on every member
+server. So the client uses ordinary ICE to the SFU (its own server's TURN as
+a fallback, as for direct calls), and the person's "Always relay calls"
+setting still forces relay through their own TURN for those who want it. The
+SFU's UDP range (50000–60000 by default) must be reachable from browsers and
+from other servers' TURN; self-hosting.md says so. TURN quotas (per user,
+total, bandwidth per allocation) become administrators' settings applied to
+coturn.
+
+**5. `CallToken` (operation 6).** Member-signed through the anonymous route;
+its body is `{ "deviceTag" }` (16 random bytes, fresh per call and device).
+- Only a **full member** of a group that hasn't ended gets one (a requester
+  or a pending slot gets `NotFound`, as a stranger does); a home without an
+  SFU answers `Unavailable` and the client says this group's server has no
+  calls.
+- The answer is `GroupCallTokenV1 { url, token, identity, room, eraId,
+  expiresAt, maxParticipants }`.
+- The token grants exactly: joining that one room; publishing the camera,
+  microphone, screen share and its audio; subscribing; no data publishing
+  (the keys go pairwise), no updating its own metadata or name; nothing of
+  admin, create, list, record, hidden or agent; an empty name and metadata.
+- It lives `chatGroupCallTokenSeconds` (600 s at first). LiveKit refreshes a
+  connected participant's token itself (every 5 minutes, at least 10 minutes
+  valid), so **removal is not revocation**; see 7.
+
+**6. `GetCallState` (operation 10).** Member-signed, no body.
+`GroupCallStateV1 { eraId?, participants: [{ identity, pseudonym }],
+maxParticipants, full }`. A room with nobody in it is "no call": no era and
+no participants, never an error. The client asks when the conversation opens
+and when a `groupCall` line arrives (Signal's peek cadence), not on a timer.
+
+**7. Removal, and the SFU's view of who may be there.**
+- Media safety rests on the clients: on a removal every sender switches at
+  once to a fresh key sent only to those who remain, so a removed member
+  that reconnects sees frames it can't decrypt.
+- The home also keeps the room to its members: LiveKit's `participant_joined`
+  webhook (signed with the API key) is checked against the group's current
+  members, and anyone else is removed at once; every token and peek request
+  reconciles the room the same way; after a change that drops members the
+  home removes theirs; when the group ends it deletes the room.
+- A live test: a removed member reconnecting with its refreshed token is
+  put out.
+
+**8. Budgets.** Tokens and peeks per group a minute (120 and 240 at first),
+and per pseudonym strictly smaller shares (12 and 24), so one member can't
+spend the group's; a server-wide cap on concurrent group-call rooms and
+participants. All administrators' settings.
+
+**9. Ringing.** Below 16 members a start rings, as Signal's
+`maxGroupCallRingSize`; the starter's own server's setting decides
+(`chat.groupCallRingMax` in `/api/auth/settings`).
+
+**10. What each server learns.**
+- The home and its SFU: per participant an opaque identity it maps to a
+  pseudonym, **the participant's network address and device details** (3,
+  accepted by the user); join and leave times; how many are in the call, how
+  long it lasts and who is speaking when (LiveKit's audio levels). Never an
+  account or media. An address seen in calls of several groups can link the
+  pseudonyms behind it across those groups, as an address can on any server
+  a person connects to.
+- A member's own server: the anonymous-route requests it relays (token and
+  peek: that its user is in some group's call on that home, and when), and
+  TURN traffic when the person relays. Never which group, never the
+  pseudonym.
+- docs/chat-calls.md and the threat model say so.
+
+**Client parts** (the third session):
+- the frame-key message `{ eraId, identity, generation, ratchetCount, key }`,
+  pairwise to verified members only;
+- **on a join**, each sender ratchets its key once (LiveKit `ratchetKey`, an
+  HKDF step) and sends the joiner only the ratcheted key, so a joiner can't
+  open earlier media; the others ratchet within the key provider's window;
+- on a leave or a removal, a fresh key, switched to at once;
+- its own key provider, the ICE settings of 4, `ClientInfo` kept to what the
+  SDK requires (3), no data channel, the peek cadence of 6, and the call UI
+  off MLS.
+
+**Operating it.** `CHAT_SFU_URL`, `CHAT_SFU_API_KEY` and
+`CHAT_SFU_API_SECRET` only in the home's environment; LiveKit's webhook to the
+home; the SFU's UDP range reachable from other servers' TURN. Meeting room ids
+are validated so they never begin with `g`. The LiveKit code (tokens, the room
+service, webhooks) moves out of `chat_mls/` first; today's `group_calls.rs`
+and its federation route go with the MLS removal (slice 5).
+
+**Proto and storage.** `GetCallState` (tag 10); `CallToken` takes a body;
+`GroupCallTokenV1` and `GroupCallStateV1` in `group_route.rs`. A migration
+for `chat_group_calls` (one row per group) and the identity map.
+
+**Settings** (administrators', Server settings): the room's maximum
+participants (75), empty and departure timeouts (300 s, 60 s), the token's
+lifetime (600 s), tokens and peeks per group and per pseudonym a minute (120,
+240; 12, 24), concurrent call rooms and participants on the server, TURN
+quotas and bandwidth, and the ring limit (16).
+
+**Tests.** Unit: identities, the room's configuration and the grants in the
+token, the era from the room name. Live, one server with the test stack's
+LiveKit: a token and a peek, a non-member's and a requester's `NotFound`, one
+room shared by concurrent token requests, a removed member put out on
+reconnecting, the room deleted on `Terminate`, the budgets. Two servers: a
+member on B gets a token through B's relay and joins A's room, and A's
+access log for `/rtc` holds no token.
 
 ## Decisions (the user, 2026-10-17)
 
