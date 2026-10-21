@@ -1,6 +1,6 @@
 # Calendar
 
-Status: proposal (second session, 2026-10-21), settled from Proton Calendar's
+Status: decided (the user, 2026-10-21; see Decisions), settled from Proton Calendar's
 code in WebClients (`applications/calendar`, `packages/shared/lib/calendar`,
 `packages/activation`), for the user's decisions. Follows
 [research 17](../research/17-mail-calendar-contacts.md) "Calendar" and the
@@ -115,7 +115,7 @@ the server needs neither.
   calendar app can subscribe; or
 - (b) the key in the fragment: only Kutup's own web view opens it, nothing
   is decrypted by the server, and other apps can't subscribe.
-- Recommended: offer both, the default being (b), and (a) labelled "for
+- Decided: offer both, the default being (b), and (a) labelled "for
   other calendar apps (the server reads it while serving)".
 - Limited (busy only) links need no key, as Proton's.
 
@@ -142,7 +142,7 @@ the user asked for.
 - (b) the browser runs the OAuth (PKCE) and reads Google's Calendar API
   itself, encrypting before upload: no Google token or event ever on Kutup's
   server.
-- Recommended (b); either needs a Google OAuth client registered by the
+- Decided (b); either needs a Google OAuth client registered by the
   operator (and Google's verification for the calendar scope), so it is off
   on a server without one.
 - `.ics` import and export in the browser as Proton's (limits as settings).
@@ -155,7 +155,7 @@ answering only busy blocks).
 through Chat's call links, its title encrypted as Proton Meet's), replacing
 today's `.ics` download in Chat; recurring meetings come from here.
 
-**11. Not now:** holiday calendars (**D-4**: later, or not), Zoom and other
+**11. Not now:** holiday calendars (**D-4**: a later phase), Zoom and other
 outside video links (a link pasted into the event works without them).
 
 **12. Limits.** All administrators' settings, per account where it fits:
@@ -180,14 +180,25 @@ widgets in Mail. English and Turkish.
 | E4 | Invitations over Mail (outside and Kutup-to-Kutup), the Mail widgets |
 | E5 | Add calendar from URL, import from Google (per D-3), Chat meetings in events |
 
-## Decisions for the user
+## Decisions (the user, 2026-10-21)
 
-- **D-1** Encrypt calendar names and descriptions (recommended) or keep them
-  readable as Proton's.
-- **D-2** Share links: both kinds, fragment by default (recommended); or
-  Proton's only.
-- **D-3** Import from Google: in the browser (recommended) or server-side as
-  Proton's.
-- **D-4** Holiday calendars: later, or not at all.
-- Confirm: event times, recurrence and reminders readable by the server as
-  Proton's (research 17 decided so; needed for reminders and busy/free).
+- **D-1: calendar names and descriptions are encrypted** (to the calendar's
+  key), unlike Proton's: the server needs neither. Colours stay readable.
+- **D-2: both kinds of share link, the fragment kind by default.** Its key is
+  in the URL's fragment, so the server never decrypts; only Kutup's web view
+  opens it. Proton's kind (the key in the query, the server decrypts on each
+  fetch) is optional, for subscribing from other calendar apps, and the UI
+  warns plainly that the server reads the calendar while serving it.
+  Busy-only links need no key.
+- **D-3: Google import runs in the browser** (OAuth with PKCE, Google's
+  Calendar API, events encrypted before upload): no Google token or event
+  ever reaches Kutup's server. It needs a Google OAuth client the operator
+  registers (and Google's verification for the calendar scope);
+  self-hosting.md documents the registration, and the import is off where
+  none is configured.
+- **D-4: holiday calendars come later**, in a phase after E5.
+- **Confirmed:** event times, time zones, all-day, recurrence, exceptions
+  and reminders stay readable by the server, as Proton's (needed for
+  reminders, busy/free and time-window queries); titles, descriptions,
+  locations, attendees and comments are encrypted and signed.
+- Phases E1 to E5 as above; building starts after the rate limits (#299).
