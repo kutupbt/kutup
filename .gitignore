@@ -26,3 +26,6 @@ package-lock.json
 
 # Rust workspace (Go→Rust rewrite: crates/ + root Cargo workspace).
 /target/
+
+# Python bytecode (scripts/ tests import their scripts).
+__pycache__/

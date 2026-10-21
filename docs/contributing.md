@@ -159,7 +159,7 @@ with the Axum router. An interactive Swagger UI is deferred (see `docs/roadmap.m
 one of its stages, so a stage that passes locally passes in CI:
 
 ```sh
-scripts/gate.sh static              # fmt and clippy (every Cargo root), docs and Compose checks
+scripts/gate.sh static              # fmt and clippy (every Cargo root), docs, Compose and lockfile checks
 scripts/gate.sh rust                # workspace tests; Chat core tests; FFI and fuzz lockfiles
 scripts/gate.sh web                 # install, Chat WASM clippy, WASM build, tsc, lint, vitest, WASM vectors, build
 scripts/gate.sh browser mail pass   # browser specs of the named suites, against a running stack
@@ -473,6 +473,13 @@ The sweep does **not** persist progress — a crash mid-run means rerunning from
   a new version of that package, carry the patch over or drop it if upstream
   fixed it; `pnpm install` fails while a listed version is no longer in the
   lockfile.
+- **Runtime singletons resolve once.** React, its renderer and every library
+  that keeps state or a context the whole app shares (sonner, React Query,
+  i18next, routing, zustand, Yjs) must be installed once. pnpm installs a
+  second copy when the same version resolves with different peers, which a
+  lockfile update can do silently (a Dependabot bump once split `sonner`, and
+  no toast showed). `scripts/check-lockfile-singletons.py`, in `gate.sh
+  static`, fails on it; `pnpm -C frontend dedupe` fixes it.
 
 ---
 
