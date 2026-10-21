@@ -214,8 +214,17 @@ fn vault_secrets() {
     assert!(statuses
         .iter()
         .all(|s| *s == StatusCode::NO_CONTENT || *s == StatusCode::CONFLICT));
-    // Removed again: the rest of this test counts the first vault's.
+    // Removed again, its key listed as gone until forgotten: the rest of
+    // this test counts the first vault's.
     purge_file(&c, &base, &owner, &fresh.id);
+    assert!(states(&c, &base, &owner).contains(&(fresh.id.clone(), "gone".to_owned())));
+    let forgot = bearer(
+        c.delete(format!("{base}/api/pass/vault-secrets/{}", fresh.id)),
+        &owner.token,
+    )
+    .send()
+    .unwrap();
+    assert_eq!(forgot.status(), StatusCode::NO_CONTENT);
 
     // Kept only on top of the key the change started from: a device that
     // read the first one does not overwrite the second, nor does an older
