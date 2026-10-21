@@ -360,6 +360,23 @@ fn group_capabilities_change_together_within_the_limit() {
         (StatusCode::OK, &json!(3)),
         "{body}"
     );
+    // At the limit, two adds at once: one goes, the other is refused, never
+    // both (the account's row is locked for each change).
+    put(json!({ "remove": [hash(9)] }));
+    let racers: Vec<StatusCode> = std::thread::scope(|scope| {
+        let handles: Vec<_> = [30u8, 31]
+            .into_iter()
+            .map(|n| scope.spawn(move || put(json!({ "add": [hash(n)] })).0))
+            .collect();
+        handles.into_iter().map(|h| h.join().unwrap()).collect()
+    });
+    assert_eq!(
+        racers.iter().filter(|s| **s == StatusCode::OK).count(),
+        1,
+        "{racers:?}"
+    );
+    let (_, body) = put(json!({}));
+    assert_eq!(body["count"], 3, "never past the limit");
     assert_eq!(limit(Value::Null), StatusCode::OK);
     purge_accounts(&c, &base, &[&alice]);
 }

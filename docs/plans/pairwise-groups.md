@@ -1670,9 +1670,10 @@ peerUnavailable` otherwise), shared-payload storage collected by reference,
 drain assembly with pages capped by bytes, and the budgets of §4 (the sealed
 batch route counts the address once per request and by bytes too). Every
 limit is an administrators' setting (Server settings) with Signal's values
-first; the one pre-authentication limit per peer address on the federated
-route is `RATE_LIMIT_FED_MULTI_IP_PER_MIN`, as the other pre-authentication
-limits. The server never had the 64 cap: `CHAT_GROUP_MAX_MEMBERS` is 256 and
+first; requests to the federated route that don't authenticate are limited
+per address (`RATE_LIMIT_FED_MULTI_FAILURES_PER_MIN`, 60, charged before the
+body is read and given back once a request authenticates), an env rate limit
+as the other pre-authentication limits. The server never had the 64 cap: `CHAT_GROUP_MAX_MEMBERS` is 256 and
 `GroupLimits` takes at most that; the client lifts its own once this is in.
 
 ## Decisions (the user, 2026-10-17)

@@ -1362,6 +1362,17 @@ pub async fn revoke_device(
         .bind(user_id)
         .execute(&mut *tx)
         .await?;
+    // The shared payloads the device's mailbox rows name: its rows go with
+    // it (cascade), and the payloads no other row names after them.
+    let shared: Vec<Uuid> = sqlx::query_scalar(
+        "SELECT DISTINCT shared_payload_id FROM chat_mailbox
+          WHERE recipient_user_id = $1 AND recipient_device_id = $2
+            AND shared_payload_id IS NOT NULL",
+    )
+    .bind(user_id)
+    .bind(device_id)
+    .fetch_all(&mut *tx)
+    .await?;
     let deleted = sqlx::query("DELETE FROM chat_devices WHERE user_id = $1 AND device_id = $2")
         .bind(user_id)
         .bind(device_id)
@@ -1382,6 +1393,9 @@ pub async fn revoke_device(
         .execute(&mut *tx)
         .await?;
     tx.commit().await?;
+    if let Err(error) = crate::handlers::chat_multi::collect_payloads(&state.pool, &shared).await {
+        tracing::warn!(error = %error.message, "chat: shared payload collection after a device removal failed");
+    }
     state.chat_hub.close_device(user_id, device_id);
     state.chat_hub.notify_devices_changed(user_id);
     Ok(StatusCode::NO_CONTENT.into_response())
@@ -2103,10 +2117,25 @@ pub async fn send_sealed_batch(
         .federation
         .as_ref()
         .ok_or_else(|| AppError::not_found("sealed delivery unavailable"))?;
+    // Each queued send is an outbox row and, at the destination, a charge on
+    // this whole server's origin budget: here the address's anonymous limit
+    // counts every recipient after the first (the middleware charged it), so
+    // one address can't fill the outbox or spend the origin's budget.
+    let mut within_wall = (0..batch.recipients.len()).map(|index| {
+        index == 0 || {
+            let allowed = crate::ratelimit::CHAT_ANONYMOUS_IP.allow(&address);
+            if !allowed {
+                crate::telemetry::rate_limit_rejection("anonymous_ip");
+            }
+            allowed
+        }
+    });
     let mut queued = Vec::with_capacity(batch.recipients.len());
     for recipient in batch.recipients {
         let send_id = recipient.submission.send_id.clone();
-        let outcome = {
+        let outcome = if within_wall.next() != Some(true) {
+            Err(Outcome::RateLimited)
+        } else {
             match crate::account_ids::named(&local, &recipient.account_id, Some(&server)) {
                 Err(_) => Err(Outcome::Unavailable),
                 Ok(account) => match crate::chat_federation::enqueue_sealed_row(
@@ -2714,11 +2743,14 @@ pub async fn drain_mailbox(
         String,
         OffsetDateTime,
         Option<String>,
-        Option<Vec<u8>>,
+        Option<Uuid>,
+        Option<i32>,
     )> = sqlx::query_as(
+        // A shared payload's size only: the payloads themselves are read
+        // for the rows that fit the page's bytes (below).
         "SELECT m.id, m.cursor, m.sender_server, m.sender_account_id, m.sealed_sender,
                 m.sender_device_id, m.envelope_type, m.suite, m.content, m.server_ts, m.send_id,
-                p.payload
+                m.shared_payload_id, octet_length(p.payload)
              FROM chat_mailbox m
              LEFT JOIN chat_shared_payloads p ON p.id = m.shared_payload_id
              WHERE m.recipient_user_id = $1 AND m.recipient_device_id = $2
@@ -2741,11 +2773,10 @@ pub async fn drain_mailbox(
     let mut bytes = 0usize;
     let mut fits = 0usize;
     for row in &rows {
-        let size = row.8.len()
-            + row
-                .11
-                .as_ref()
-                .map_or(0, |payload| payload.len() * 4 / 3 + 4);
+        let shared = row
+            .12
+            .map_or(0, |len| usize::try_from(len).unwrap_or(usize::MAX));
+        let size = row.8.len() + shared.saturating_mul(4) / 3 + 4;
         if fits > 0 && bytes + size > MAX_DRAIN_BYTES {
             break;
         }
@@ -2756,6 +2787,21 @@ pub async fn drain_mailbox(
         rows.truncate(fits);
         more = true;
     }
+    let mut payload_ids: Vec<Uuid> = rows.iter().filter_map(|row| row.11).collect();
+    payload_ids.sort();
+    payload_ids.dedup();
+    let payloads: std::collections::HashMap<Uuid, Vec<u8>> = if payload_ids.is_empty() {
+        Default::default()
+    } else {
+        sqlx::query_as::<_, (Uuid, Vec<u8>)>(
+            "SELECT id, payload FROM chat_shared_payloads WHERE id = ANY($1)",
+        )
+        .bind(&payload_ids)
+        .fetch_all(&state.pool)
+        .await?
+        .into_iter()
+        .collect()
+    };
     let envelopes: Vec<DeliveredEnvelope> = rows
         .into_iter()
         .map(
@@ -2772,9 +2818,15 @@ pub async fn drain_mailbox(
                 ts,
                 send_id,
                 shared,
+                _,
             )| {
                 let content = match shared {
-                    Some(shared) => crate::handlers::chat_multi::assemble(&content, &shared)?,
+                    Some(id) => {
+                        let shared = payloads.get(&id).ok_or_else(|| {
+                            AppError::internal("a mailbox row names a missing shared payload")
+                        })?;
+                        crate::handlers::chat_multi::assemble(&content, shared)?
+                    }
                     None => content,
                 };
                 let sender = match (sender_server, sender_account_id) {

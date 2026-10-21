@@ -60,6 +60,15 @@ struct Parsed {
     shared: Vec<u8>,
 }
 
+/// Where pairwise groups are (`CHAT_GROUPS` and federation); elsewhere `404`.
+fn enabled(state: &AppState) -> AppResult<()> {
+    if state.config.chat_groups && state.federation.is_some() {
+        Ok(())
+    } else {
+        Err(AppError::not_found("not found"))
+    }
+}
+
 fn malformed(message: &str) -> AppError {
     AppError::bad_request(message.to_owned())
         .with_details(serde_json::json!({ "code": "malformed" }))
@@ -207,6 +216,7 @@ pub async fn send_multi(
     Query(query): Query<AccountServerQuery>,
     Json(submission): Json<SealedMultiSubmissionV1>,
 ) -> AppResult<Response> {
+    enabled(&state)?;
     let limits = crate::site_settings::chat_multi_limits(&state.pool).await?;
     let parsed = parse(&submission, &limits)?;
     // This address's bytes a minute (the request itself was counted by the
@@ -217,7 +227,7 @@ pub async fn send_multi(
         Sha256::digest([b"kutup/multi-ip-bytes/v1\0".as_slice(), address.as_bytes()].concat())
             .into();
     let bytes = i64::try_from(submission.payload.len()).unwrap_or(i64::MAX);
-    if charge(&state, "ip_bytes", &address_digest, bytes).await? > limits.ip_bytes_per_min {
+    if charge(&state, "ip_bytes", &address_digest, bytes, 60).await? > limits.ip_bytes_per_min {
         crate::telemetry::rate_limit_rejection("anonymous_ip");
         return Err(AppError::too_many_requests(
             "anonymous delivery rate limit exceeded",
@@ -239,9 +249,15 @@ pub async fn send_multi(
 /// Adds `amount` to a budget in a transaction of its own, so it counts
 /// whatever the send's answer (a refusal or a device mismatch is no free
 /// probe); the new count.
-async fn charge(state: &AppState, scope: &str, digest: &[u8; 32], amount: i64) -> AppResult<i64> {
+async fn charge(
+    state: &AppState,
+    scope: &str,
+    digest: &[u8; 32],
+    amount: i64,
+    window_seconds: i64,
+) -> AppResult<i64> {
     let mut tx = state.pool.begin().await?;
-    let count = anonymous_count(&mut tx, scope, digest, amount, 60).await?;
+    let count = anonymous_count(&mut tx, scope, digest, amount, window_seconds).await?;
     tx.commit().await?;
     Ok(count)
 }
@@ -270,7 +286,7 @@ async fn deliver(
             "SELECT u.id FROM users u
                JOIN chat_group_capabilities c ON c.user_id = u.id
               WHERE u.id = $1 AND u.is_active AND c.capability_hash = $2
-              FOR SHARE OF u",
+              FOR SHARE OF u, c",
         )
         .bind(recipient.user_id)
         .bind(&hash[..])
@@ -281,19 +297,20 @@ async fn deliver(
             continue;
         }
         // 2. Budgets per capability: one member's capability drains only
-        // its own group's, never the member's direct sealed route.
-        let minute = anonymous_count(&mut tx, "group_capability_minute", &hash, 1, 60).await?;
-        let day = anonymous_count(&mut tx, "group_capability_day", &hash, 1, 86_400).await?;
+        // its own group's, never the member's direct sealed route. Charged
+        // on their own, so a send answered 409 or 410 counts too.
+        let minute = charge(state, "group_capability_minute", &hash, 1, 60).await?;
+        let day = charge(state, "group_capability_day", &hash, 1, 86_400).await?;
         if minute > limits.capability_sends_per_min || day > limits.capability_sends_per_day {
             answer.rate_limited.push(recipient.account_id);
             continue;
         }
-        passing.push((recipient, hash));
+        passing.push(recipient);
     }
 
     // 3. Devices, for those that passed: missing or extra (409) before a
     // changed registration (410); nothing is stored on either.
-    for (recipient, _) in &passing {
+    for recipient in &passing {
         let current: Vec<(i32, i64)> = sqlx::query_as(
             "SELECT device_id, registration_id FROM chat_devices WHERE user_id = $1",
         )
@@ -325,43 +342,43 @@ async fn deliver(
     }
 
     // 4. Store: the shared part once (only if a device gets a new row), and
-    // a row per device naming it. A sendId already stored for an account
-    // stores nothing again for it.
+    // a row per device naming it.
     let send_id = Uuid::parse_str(&submission.send_id)
         .map_err(|_| malformed("sendId must be a lowercase hyphenated UUID"))?;
     let mut payload_id: Option<Uuid> = None;
     let mut stored = Vec::new();
-    for (recipient, hash) in &passing {
-        let claimed: Option<i32> = sqlx::query_scalar(
-            "INSERT INTO chat_anonymous_send_ids
-                 (recipient_user_id, capability_hash, send_id, stored_count)
-             VALUES ($1, $2, $3, $4)
-             ON CONFLICT DO NOTHING RETURNING stored_count",
-        )
-        .bind(recipient.user_id)
-        .bind(&hash[..])
-        .bind(send_id)
-        .bind(i32::try_from(recipient.devices.len()).unwrap_or(i32::MAX))
-        .fetch_optional(&mut *tx)
-        .await?;
-        if claimed.is_none() {
-            continue;
-        }
-        let shared_id = match payload_id {
-            Some(id) => id,
-            None => {
-                let id: Uuid = sqlx::query_scalar(
-                    "INSERT INTO chat_shared_payloads (payload) VALUES ($1) RETURNING id",
-                )
-                .bind(&parsed.shared)
-                .fetch_one(&mut *tx)
-                .await?;
-                payload_id = Some(id);
-                id
-            }
-        };
+    for recipient in &passing {
         let content = STANDARD.encode(&recipient.key_material);
         for (device, _) in &recipient.devices {
+            let device_id = i32::try_from(*device).unwrap_or(i32::MAX);
+            // Stored for this device under this sendId already: a retry
+            // stores nothing again for it, while a device added since gets
+            // its copy.
+            let claimed: Option<i32> = sqlx::query_scalar(
+                "INSERT INTO chat_multi_send_ids (user_id, device_id, send_id)
+                 VALUES ($1, $2, $3) ON CONFLICT DO NOTHING RETURNING 1",
+            )
+            .bind(recipient.user_id)
+            .bind(device_id)
+            .bind(send_id)
+            .fetch_optional(&mut *tx)
+            .await?;
+            if claimed.is_none() {
+                continue;
+            }
+            let shared_id = match payload_id {
+                Some(id) => id,
+                None => {
+                    let id: Uuid = sqlx::query_scalar(
+                        "INSERT INTO chat_shared_payloads (payload) VALUES ($1) RETURNING id",
+                    )
+                    .bind(&parsed.shared)
+                    .fetch_one(&mut *tx)
+                    .await?;
+                    payload_id = Some(id);
+                    id
+                }
+            };
             sqlx::query(
                 "INSERT INTO chat_mailbox
                     (recipient_user_id, recipient_device_id, sealed_sender, sender_device_id,
@@ -369,7 +386,7 @@ async fn deliver(
                  VALUES ($1, $2, true, 0, $3, $4, $5, $6, $7)",
             )
             .bind(recipient.user_id)
-            .bind(i32::try_from(*device).unwrap_or(i32::MAX))
+            .bind(device_id)
             .bind(envelope_type_code(EnvelopeType::Message))
             .bind(SEALED_SUITE)
             .bind(&content)
@@ -377,10 +394,7 @@ async fn deliver(
             .bind(shared_id)
             .execute(&mut *tx)
             .await?;
-            stored.push((
-                recipient.user_id,
-                i32::try_from(*device).unwrap_or(i32::MAX),
-            ));
+            stored.push((recipient.user_id, device_id));
         }
     }
     tx.commit().await?;
@@ -452,10 +466,15 @@ async fn forward(
 /// The destination's endpoint for a forwarded multi-recipient send.
 pub(crate) const FEDERATED_PATH: &str = "/api/fed/chat/sealed/multi";
 
-/// The largest forwarded send a destination reads: the largest payload,
-/// base64, and its capabilities.
-pub(crate) const MAX_FEDERATED_BODY: usize =
-    kutup_chat_proto::MAX_SEALED_MULTI_PAYLOAD_BYTES * 4 / 3 + 256 * 1024;
+/// The largest send body either route reads: the largest request the
+/// settings can allow (their highest base size and recipient count), base64,
+/// with a capability per recipient and the rest of the JSON.
+pub(crate) const MAX_BODY: usize = {
+    let base = crate::site_settings::CHAT_MULTI_BASE_BYTES.max as usize;
+    let recipients = crate::site_settings::CHAT_MULTI_MAX_RECIPIENTS.max as usize;
+    let payload = base + PER_RECIPIENT_BYTES as usize * recipients;
+    payload * 4 / 3 + recipients * 80 + 4096
+};
 
 /// `POST /api/fed/chat/sealed/multi` — a multi-recipient send another
 /// server forwarded for this server's accounts, checked and stored as a
@@ -478,10 +497,12 @@ pub(crate) const MAX_FEDERATED_BODY: usize =
 )]
 pub async fn deliver_federated(
     State(state): State<AppState>,
+    ConnectInfo(peer): ConnectInfo<std::net::SocketAddr>,
     headers: HeaderMap,
     body: axum::body::Bytes,
 ) -> AppResult<Response> {
-    if body.len() > MAX_FEDERATED_BODY {
+    enabled(&state)?;
+    if body.len() > MAX_BODY {
         return Err(too_large("the send is too large"));
     }
     let federation = state
@@ -498,19 +519,20 @@ pub async fn deliver_federated(
             kutup_federation_proto::FederationFeature::ChatV2,
         )
         .await?;
+    // Authenticated: the middleware's charge for unauthenticated requests
+    // is given back; the origin's budgets count from here.
+    crate::ratelimit::FED_MULTI_IP.pop(&crate::middleware::client_key(
+        crate::middleware::client_ip_from_headers(&headers),
+        peer,
+    ));
     let signed_error =
         |error| crate::chat_federation::signed_app_error(federation, &authenticated, error);
     if authenticated.destination() != federation.server_name() {
         return signed_error(AppError::unauthorized("multi send destination mismatch"));
     }
-    let Ok(submission) = serde_json::from_slice::<SealedMultiSubmissionV1>(&body) else {
-        return signed_error(malformed("invalid multi send"));
-    };
+    // The origin's budgets, before anything is checked: a malformed or too
+    // large send counts as well.
     let limits = crate::site_settings::chat_multi_limits(&state.pool).await?;
-    let parsed = match parse(&submission, &limits) {
-        Ok(parsed) => parsed,
-        Err(error) => return signed_error(error),
-    };
     let origin: [u8; 32] = Sha256::digest(
         [
             b"kutup/multi-origin/v1\0".as_slice(),
@@ -519,12 +541,13 @@ pub async fn deliver_federated(
         .concat(),
     )
     .into();
-    let requests = charge(&state, "origin_multi_requests", &origin, 1).await?;
+    let requests = charge(&state, "origin_multi_requests", &origin, 1, 60).await?;
     let bytes = charge(
         &state,
         "origin_multi_bytes",
         &origin,
         i64::try_from(body.len()).unwrap_or(i64::MAX),
+        60,
     )
     .await?;
     if requests > limits.origin_requests_per_min || bytes > limits.origin_bytes_per_min {
@@ -533,6 +556,13 @@ pub async fn deliver_federated(
             "origin multi send budget exceeded",
         ));
     }
+    let Ok(submission) = serde_json::from_slice::<SealedMultiSubmissionV1>(&body) else {
+        return signed_error(malformed("invalid multi send"));
+    };
+    let parsed = match parse(&submission, &limits) {
+        Ok(parsed) => parsed,
+        Err(error) => return signed_error(error),
+    };
     match deliver(&state, &submission, parsed, &limits).await {
         Ok((status, answer)) => {
             crate::chat_federation::signed_json(federation, &authenticated, status, &answer)
@@ -681,10 +711,22 @@ mod tests {
         let first = parsed.recipients.iter().find(|r| r.user_id == a).unwrap();
         assert_eq!(first.devices, vec![(1, 10), (2, 20)]);
         assert_eq!(first.key_material, [1u8; KEY_MATERIAL_LEN]);
-        // What the device drains is libsignal's received message.
+        // What the device drains is libsignal's received message for it.
         let drained = STANDARD
             .decode(assemble(&STANDARD.encode(&first.key_material), &parsed.shared).unwrap())
             .unwrap();
+        let sent_message = SealedSenderV2SentMessage::parse(&payload).unwrap();
+        let theirs = sent_message
+            .recipients
+            .get(&ServiceId::from(Aci::from(a)))
+            .unwrap();
+        assert_eq!(
+            drained,
+            sent_message
+                .received_message_parts_for_recipient(theirs)
+                .as_ref()
+                .concat()
+        );
         assert_eq!(drained[0], RECEIVED_VERSION);
         assert_eq!(&drained[1..49], &[1u8; KEY_MATERIAL_LEN]);
         assert_eq!(&drained[49..], &shared);

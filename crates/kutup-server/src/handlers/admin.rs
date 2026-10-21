@@ -1110,7 +1110,14 @@ pub async fn update_settings(
             "chatGroupLinkJoinsPerRelayGroupPerMin": req.chat_group_link_joins_per_relay_group_per_min,
             "chatGroupLinkJoinsPerRelayPerMin": req.chat_group_link_joins_per_relay_per_min,
             "chatGroupCapabilitiesPerAccount": req.chat_group_capabilities_per_account,
-            "numeric": req.numeric,
+            "numeric": crate::site_settings::CHAT_MULTI_SETTINGS
+                .iter()
+                .filter_map(|setting| {
+                    req.numeric
+                        .get(setting.field)
+                        .map(|value| (setting.field.to_owned(), value.clone()))
+                })
+                .collect::<serde_json::Map<_, _>>(),
             "chatGroupAvatarMaxBytes": req.chat_group_avatar_max_bytes,
             "chatGroupAvatarStoragePerGroupBytes": req.chat_group_avatar_storage_per_group_bytes,
             "chatGroupAvatarPendingSeconds": req.chat_group_avatar_pending_seconds,

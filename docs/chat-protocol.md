@@ -724,11 +724,14 @@ and invalid capability return the same response shape.
 1–64 sealed sends to accounts of one server (`SealedBatchSubmissionV1`: each
 recipient's `accountId` and its single-route submission), at most 4 MiB, in one
 request: a group message reaches every member device without one request per
-member. The address's anonymous limit counts the request once, and its bytes
-a minute (an administrators' setting shared with multi-recipient sends;
-`429` past it), so a message to many members is one request and neighbours
-behind one address aren't starved; each recipient's capability is checked and
-counted on its own, and each gets its own result in order:
+member. The address's bytes a minute count (an administrators' setting
+shared with multi-recipient sends; `429` past it). For this server's
+accounts the address's anonymous limit counts the request once, so a message
+to many members is one request and neighbours behind one address aren't
+starved; for another server's, each send is queued and charged at the
+destination against this whole server, so the limit counts each recipient
+(those past it answered `rateLimited`). Each recipient's capability is
+checked and counted on its own, and each gets its own result in order:
 
 - `delivered`;
 - `deviceMismatch`, with the single route's mismatch body;
@@ -737,8 +740,9 @@ counted on its own, and each gets its own result in order:
 - `refused`, refused for good by that server, or too large for one federated
   transaction (1 MiB encoded), and then never queued;
 - `peerUnsupported`;
-- `rateLimited`, over the capability's or the recipient's limit; nothing was
-  stored or queued, so it is resent later;
+- `rateLimited`, over the capability's or the recipient's limit (or, to
+  another server, the address's); nothing was stored or queued, so it is
+  resent later;
 - `conflict`, other content under this `sendId` still queued; nothing was
   queued, so it is resent once that one is answered.
 
@@ -774,8 +778,10 @@ device with its account's key material. A device drains each as its ordinary
 sealed envelope, `0x22 ‖ C_i ‖ AT_i ‖ e_pub ‖ ciphertext`; drain pages are
 capped at 4 MiB as well as by count. Connected devices are nudged
 (`drainMailbox`) rather than sent the message; an urgent send also wakes
-offline devices by web push. A `sendId` already stored for an account stores
-nothing again for it. The shared part goes once no row names it (after an ack,
+offline devices by web push. A `sendId` already stored for a device stores
+nothing again for it, while a device added since gets its copy on a retry.
+The budgets are charged whatever the answer: a send answered `409` or `410`
+counts too. The shared part goes once no row names it (after an ack,
 or the maintenance sweep).
 
 For another server's members, this server forwards the send at once to that
@@ -788,8 +794,10 @@ the pairwise path, which is durable. The destination checks and stores the
 send as a local one, and budgets its origin per request and per byte a
 minute, all of the origin's users together (`chatMultiOriginRequestsPerMin`,
 6000, and `chatMultiOriginBytesPerMin`, 512 MiB, at first), never per stored
-recipient; before authentication, `RATE_LIMIT_FED_MULTI_IP_PER_MIN` (6000)
-per peer address.
+recipient. A request that doesn't authenticate is limited per address
+(`RATE_LIMIT_FED_MULTI_FAILURES_PER_MIN`, 60): each is charged before its body
+is read and given back once it authenticates, so a known peer is bounded by
+its origin budgets alone.
 
 For another server, the origin queues each send exactly as a single sealed
 send (same outbox, sequence and `sendId` dedup), then flushes the

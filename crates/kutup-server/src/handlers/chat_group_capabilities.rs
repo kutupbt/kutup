@@ -77,6 +77,19 @@ fn over_limit() -> AppError {
         .with_details(serde_json::json!({ "code": "capabilityLimit" }))
 }
 
+/// One change to an account's set at a time, so the count after it holds
+/// (two concurrent adds can't both pass the limit under READ COMMITTED).
+async fn lock_account(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    user_id: uuid::Uuid,
+) -> AppResult<()> {
+    sqlx::query("SELECT 1 FROM users WHERE id = $1 FOR UPDATE")
+        .bind(user_id)
+        .execute(&mut **tx)
+        .await?;
+    Ok(())
+}
+
 /// The account's count after a change in `tx`, refused whole when over the
 /// limit (the transaction is then dropped, so nothing changed).
 async fn checked_count(
@@ -121,6 +134,7 @@ pub async fn change(
     let add = hashes(&changes.add, limit)?;
     let remove = hashes(&changes.remove, limit)?;
     let mut tx = state.pool.begin().await?;
+    lock_account(&mut tx, user_id).await?;
     sqlx::query(
         "DELETE FROM chat_group_capabilities
           WHERE user_id = $1 AND capability_hash = ANY($2)",
@@ -167,6 +181,7 @@ pub async fn set(
     let limit = crate::site_settings::chat_group_capabilities_per_account(&state.pool).await?;
     let hashes = hashes(&set.hashes, limit)?;
     let mut tx = state.pool.begin().await?;
+    lock_account(&mut tx, user_id).await?;
     sqlx::query("DELETE FROM chat_group_capabilities WHERE user_id = $1")
         .bind(user_id)
         .execute(&mut *tx)

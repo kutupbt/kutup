@@ -490,3 +490,260 @@ fn a_send_to_a_server_that_is_down_is_peer_unavailable() {
     assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE, "{answer}");
     assert_eq!(answer["code"], "peerUnavailable");
 }
+
+/// An administrator of the server at `base` (`KUTUP_LIVE_ADMIN`, or
+/// `KUTUP_LIVE_ADMIN_B` for B): a session, or `None` to skip.
+fn admin_session(c: &Client, base: &str, variable: &str) -> Option<String> {
+    let Ok(admin) = std::env::var(variable) else {
+        eprintln!("{variable} unset; skipping");
+        return None;
+    };
+    let (name, password) = admin.split_once(':').unwrap();
+    Some(admin_token(c, base, password, name))
+}
+
+fn settings(c: &Client, base: &str, token: &str, body: Value) {
+    let r = bearer(c.put(format!("{base}/api/admin/settings")), token)
+        .json(&body)
+        .send()
+        .unwrap();
+    assert_eq!(r.status(), StatusCode::OK, "settings {body}");
+}
+
+/// A device added after a send was stored gets its copy when the send is
+/// retried under the same sendId; the devices that had it get nothing more.
+#[test]
+fn a_retry_reaches_a_device_added_since() {
+    let Some(base) = base() else { return };
+    let c = client();
+    let bob = member(&c, &base, &[61]);
+    let shared = [0x31u8; 80];
+    let send_id = Uuid::new_v4().to_string();
+    let first = sent(&[(&bob.account_id, &bob.devices, 1)], &shared);
+    let (status, answer) = post(
+        &c,
+        &base,
+        submission(&send_id, &first, &[(&bob, bob.capability)]),
+    );
+    assert_eq!(status, StatusCode::OK, "{answer}");
+    let added = add_device(&c, &base, &bob.user, 62);
+    let both = [bob.devices[0], added];
+    let retry = sent(&[(&bob.account_id, &both, 1)], &shared);
+    let (status, answer) = post(
+        &c,
+        &base,
+        submission(&send_id, &retry, &[(&bob, bob.capability)]),
+    );
+    assert_eq!(status, StatusCode::OK, "{answer}");
+    let old = drain(&c, &base, &bob, bob.devices[0].0);
+    assert_eq!(old.len(), 1, "the first device has it once: {old:?}");
+    let new = drain(&c, &base, &bob, added.0);
+    assert_eq!(new.len(), 1, "the added device got its copy: {new:?}");
+    assert_eq!(new[0]["content"], received(1, &shared));
+    ack(&c, &base, &bob, bob.devices[0].0, &old);
+    ack(&c, &base, &bob, added.0, &new);
+    purge_accounts(&c, &base, &[&bob.user]);
+}
+
+/// A send that isn't urgent is stored and drained the same (it only skips
+/// waking offline devices); a removed device's rows go with it and their
+/// shared part once no row names it; two devices acking at once leave no
+/// shared part behind (the gate counts what's left).
+#[test]
+fn shared_parts_go_with_the_last_row_naming_them() {
+    let Some(base) = base() else { return };
+    let c = client();
+    let bob = member(&c, &base, &[63, 64]);
+    let shared = [0x42u8; 90];
+    let payload = sent(&[(&bob.account_id, &bob.devices, 1)], &shared);
+    let mut body = submission(
+        &Uuid::new_v4().to_string(),
+        &payload,
+        &[(&bob, bob.capability)],
+    );
+    body["urgent"] = json!(false);
+    let (status, answer) = post(&c, &base, body);
+    assert_eq!(status, StatusCode::OK, "{answer}");
+    assert_eq!(drain(&c, &base, &bob, bob.devices[0].0).len(), 1);
+    // The second device is removed before it drains; the first acks.
+    let r = bearer(
+        c.delete(format!("{base}/api/chat/device/{}", bob.devices[1].0)),
+        &bob.user.token,
+    )
+    .send()
+    .unwrap();
+    assert!(r.status().is_success(), "remove a device: {}", r.status());
+    let got = drain(&c, &base, &bob, bob.devices[0].0);
+    ack(&c, &base, &bob, bob.devices[0].0, &got);
+
+    // Two devices acking at the same moment.
+    let carol = member(&c, &base, &[65, 66]);
+    let payload = sent(&[(&carol.account_id, &carol.devices, 2)], &shared);
+    let (status, answer) = post(
+        &c,
+        &base,
+        submission(
+            &Uuid::new_v4().to_string(),
+            &payload,
+            &[(&carol, carol.capability)],
+        ),
+    );
+    assert_eq!(status, StatusCode::OK, "{answer}");
+    let pages: Vec<(u32, Vec<Value>)> = carol
+        .devices
+        .iter()
+        .map(|(device, _)| (*device, drain(&c, &base, &carol, *device)))
+        .collect();
+    std::thread::scope(|scope| {
+        for (device, page) in &pages {
+            let (c, base, carol) = (&c, &base, &carol);
+            scope.spawn(move || ack(c, base, carol, *device, page));
+        }
+    });
+    purge_accounts(&c, &base, &[&bob.user, &carol.user]);
+}
+
+/// The administrators' limits: a capability's sends a minute
+/// (`rateLimited`), recipients per send (`413`), and an inactive account
+/// refused as an unknown one.
+#[test]
+fn limits_and_inactive_accounts_answer_as_set() {
+    let Some(base) = base() else { return };
+    let c = client();
+    let Some(admin) = admin_session(&c, &base, "KUTUP_LIVE_ADMIN") else {
+        return;
+    };
+    let bob = member(&c, &base, &[67]);
+    let carol = member(&c, &base, &[68]);
+    let shared = [0x53u8; 70];
+    let to_bob = || {
+        let payload = sent(&[(&bob.account_id, &bob.devices, 1)], &shared);
+        post(
+            &c,
+            &base,
+            submission(
+                &Uuid::new_v4().to_string(),
+                &payload,
+                &[(&bob, bob.capability)],
+            ),
+        )
+    };
+    settings(
+        &c,
+        &base,
+        &admin,
+        json!({ "chatGroupCapabilitySendsPerMin": 1 }),
+    );
+    let (status, answer) = to_bob();
+    assert_eq!(
+        (status, &answer["rateLimited"]),
+        (StatusCode::OK, &json!([])),
+        "{answer}"
+    );
+    let (status, answer) = to_bob();
+    assert_eq!(status, StatusCode::OK, "{answer}");
+    assert_eq!(answer["rateLimited"], json!([bob.account_id]));
+    settings(
+        &c,
+        &base,
+        &admin,
+        json!({ "chatGroupCapabilitySendsPerMin": null }),
+    );
+
+    settings(&c, &base, &admin, json!({ "chatMultiMaxRecipients": 1 }));
+    let payload = sent(
+        &[
+            (&bob.account_id, &bob.devices, 1),
+            (&carol.account_id, &carol.devices, 2),
+        ],
+        &shared,
+    );
+    let (status, _) = post(
+        &c,
+        &base,
+        submission(
+            &Uuid::new_v4().to_string(),
+            &payload,
+            &[(&bob, bob.capability), (&carol, carol.capability)],
+        ),
+    );
+    assert_eq!(status, StatusCode::PAYLOAD_TOO_LARGE);
+    settings(&c, &base, &admin, json!({ "chatMultiMaxRecipients": null }));
+
+    let r = bearer(
+        c.put(format!("{base}/api/admin/users/{}", carol.user.id)),
+        &admin,
+    )
+    .json(&json!({ "isActive": false }))
+    .send()
+    .unwrap();
+    assert!(r.status().is_success(), "deactivate: {}", r.status());
+    let payload = sent(&[(&carol.account_id, &carol.devices, 2)], &shared);
+    let (status, answer) = post(
+        &c,
+        &base,
+        submission(
+            &Uuid::new_v4().to_string(),
+            &payload,
+            &[(&carol, carol.capability)],
+        ),
+    );
+    assert_eq!(status, StatusCode::OK, "{answer}");
+    assert_eq!(answer["refused"], json!([carol.account_id]));
+    for (device, _) in &bob.devices {
+        let got = drain(&c, &base, &bob, *device);
+        ack(&c, &base, &bob, *device, &got);
+    }
+    purge_accounts(&c, &base, &[&bob.user, &carol.user]);
+}
+
+/// B's budget for A's sends: once spent, A answers its client that B didn't
+/// take the send (`503 peerUnavailable`), as for B down.
+#[test]
+fn a_destination_budgets_its_origins_sends() {
+    if std::env::var("KUTUP_MULTI_PEER_DOWN").is_ok() {
+        return;
+    }
+    let Some((a, b)) = federation() else { return };
+    let c = client();
+    let Some(admin_b) = admin_session(&c, &b, "KUTUP_LIVE_ADMIN_B") else {
+        return;
+    };
+    let b_name = server_name(&c, &b);
+    let bob = member(&c, &b, &[69]);
+    let shared = [0x64u8; 60];
+    let to_bob = || {
+        let payload = sent(&[(&bob.account_id, &bob.devices, 1)], &shared);
+        post_to(
+            &c,
+            &a,
+            &b_name,
+            submission(
+                &Uuid::new_v4().to_string(),
+                &payload,
+                &[(&bob, bob.capability)],
+            ),
+        )
+    };
+    // Past the minute's earlier sends from A.
+    std::thread::sleep(std::time::Duration::from_secs(61));
+    settings(
+        &c,
+        &b,
+        &admin_b,
+        json!({ "chatMultiOriginRequestsPerMin": 1 }),
+    );
+    let (status, answer) = to_bob();
+    assert_eq!(status, StatusCode::OK, "{answer}");
+    let (status, answer) = to_bob();
+    assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE, "{answer}");
+    assert_eq!(answer["code"], "peerUnavailable");
+    settings(
+        &c,
+        &b,
+        &admin_b,
+        json!({ "chatMultiOriginRequestsPerMin": null }),
+    );
+    let got = drain(&c, &b, &bob, bob.devices[0].0);
+    ack(&c, &b, &bob, bob.devices[0].0, &got);
+}

@@ -338,8 +338,9 @@ pub async fn rate_limit_recovery(
     limit(addr, &ratelimit::RECOVERY, None, req, next).await
 }
 
-/// 6000/min/IP — pre-authentication limit for forwarded multi-recipient
-/// sends (a peer's group messages, all its users together).
+/// 60/min/IP for forwarded multi-recipient sends that don't authenticate:
+/// charged here, before the body is read, and given back by the handler
+/// once the request authenticates (`ratelimit::FED_MULTI_IP`).
 pub async fn rate_limit_fed_multi(
     ConnectInfo(addr): ConnectInfo<SocketAddr>,
     req: Request,

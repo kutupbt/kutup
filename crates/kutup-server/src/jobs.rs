@@ -161,11 +161,6 @@ pub async fn chat_maintenance_once(
             Err(error) => tracing::warn!("chat maintenance: mailbox retention failed: {error}"),
         }
     }
-    // Shared payloads no mailbox row names any more (retention above, deleted
-    // devices, acks whose collection failed).
-    if let Err(error) = crate::handlers::chat_multi::sweep_payloads(pool).await {
-        tracing::warn!(error = %error.message, "chat maintenance: shared payload sweep failed");
-    }
     if policy.send_retention_days > 0 {
         match sqlx::query(
             "DELETE FROM chat_sends
@@ -231,6 +226,24 @@ pub async fn chat_maintenance_once(
     match crate::chat_mls::sweep_invite_links(pool, INVITE_LINK_IDLE_DAYS).await {
         Ok(rows) => result.invite_link_rows = rows,
         Err(error) => tracing::warn!("chat maintenance: invite link cleanup failed: {error}"),
+    }
+    // Multi-recipient sendIds dedupe within the mailbox's own retention: past
+    // it the copies they guard are gone too.
+    if mailbox_retention_days > 0 {
+        if let Err(error) = sqlx::query(
+            "DELETE FROM chat_multi_send_ids WHERE created_at < now() - ($1 * interval '1 day')",
+        )
+        .bind(mailbox_retention_days)
+        .execute(pool)
+        .await
+        {
+            tracing::warn!("chat maintenance: multi send id cleanup failed: {error}");
+        }
+    }
+    // Last, the shared payloads no mailbox row names any more (retention and
+    // device expiry above, acks whose collection failed).
+    if let Err(error) = crate::handlers::chat_multi::sweep_payloads(pool).await {
+        tracing::warn!(error = %error.message, "chat maintenance: shared payload sweep failed");
     }
     if result != ChatSweepResult::default() {
         tracing::info!(

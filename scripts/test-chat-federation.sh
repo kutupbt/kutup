@@ -158,6 +158,7 @@ KUTUP_LIVE_GROUPS_SERVER="http://127.0.0.1:$port_a" \
 KUTUP_LIVE_ADMIN="admina:federation-live-password" \
 KUTUP_FEDERATION_SERVER_A="http://127.0.0.1:$port_a" \
 KUTUP_FEDERATION_SERVER_B="http://127.0.0.1:$port_b" \
+KUTUP_LIVE_ADMIN_B="adminb:federation-live-password" \
   cargo test -p kutup-server --test chat_multi_live -- --test-threads=1 --nocapture
 for side in a b; do
   left="$(compose exec -T "postgres-$side" psql -U kutup -d kutup -Atc \

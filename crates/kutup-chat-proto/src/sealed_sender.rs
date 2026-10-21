@@ -444,7 +444,8 @@ impl SealedMultiSubmissionV1 {
 /// A recipient account whose device list the send got wrong (`409`).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
+// No deny_unknown_fields: an answer a newer server writes stays readable.
+#[serde(rename_all = "camelCase")]
 pub struct SealedMultiDevicesV1 {
     pub account_id: String,
     pub missing_devices: Vec<u32>,
@@ -454,7 +455,8 @@ pub struct SealedMultiDevicesV1 {
 /// A recipient account with devices whose registration changed (`410`).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
+// No deny_unknown_fields: an answer a newer server writes stays readable.
+#[serde(rename_all = "camelCase")]
 pub struct SealedMultiStaleV1 {
     pub account_id: String,
     pub stale_devices: Vec<u32>,
@@ -464,9 +466,10 @@ pub struct SealedMultiStaleV1 {
 /// a budget (the rest delivered); `409` with `devices`, or `410` with
 /// `stale`, when nothing was stored, those lists carried as well so the
 /// client handles them in the same retry.
+// No deny_unknown_fields: an answer a newer server writes stays readable.
 #[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[serde(rename_all = "camelCase")]
 pub struct SealedMultiResponseV1 {
     /// Accounts not delivered to: not an active account here, or a
     /// capability that doesn't hold (one answer for all).

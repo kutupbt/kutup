@@ -18,3 +18,15 @@ ALTER TABLE chat_anonymous_rate_counters ADD CONSTRAINT chat_anonymous_rate_coun
     CHECK (scope_type = ANY (ARRAY['capability_bundle', 'capability_minute', 'capability_day',
         'recipient', 'federation_origin', 'group_capability_minute', 'group_capability_day',
         'ip_bytes', 'origin_multi_requests', 'origin_multi_bytes']));
+
+-- A multi-recipient send stored for a device, by its sendId: a retry stores
+-- nothing again for that device, and a device added since gets its copy.
+CREATE TABLE chat_multi_send_ids (
+    user_id uuid NOT NULL,
+    device_id integer NOT NULL,
+    send_id uuid NOT NULL,
+    created_at timestamptz NOT NULL DEFAULT now(),
+    PRIMARY KEY (user_id, device_id, send_id),
+    FOREIGN KEY (user_id, device_id) REFERENCES chat_devices (user_id, device_id) ON DELETE CASCADE
+);
+CREATE INDEX chat_multi_send_ids_created_at ON chat_multi_send_ids (created_at);
