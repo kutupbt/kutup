@@ -242,7 +242,12 @@ impl VaultKeys {
             // is used and vaults ask for their own.
             self.stored = Some(
                 verified_secrets(client, &account.master_key, &account.binding, &account.dir)
-                    .map(|rows| rows.into_iter().map(|r| (r.file_id, r.envelope)).collect())
+                    .map(|rows| {
+                        rows.into_iter()
+                            .filter(|r| r.state == crate::api::pass::VaultSecretState::Open)
+                            .map(|r| (r.file_id, r.envelope))
+                            .collect()
+                    })
                     .unwrap_or_else(|error| {
                         eprintln!("  The kept vault keys could not be checked: {error:#}");
                         BTreeMap::new()

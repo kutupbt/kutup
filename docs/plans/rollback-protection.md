@@ -225,7 +225,7 @@ Every write of a listed value also writes the next head, in the same request:
 | Identity pin list put | yes |
 | Pass vault secret keep, forget, forget many | yes |
 | Group list entry put, delete (`chatGroups`) | yes |
-| A vault's file purged | nothing: the secret is no longer deleted with it (its foreign key to `files` is gone); it stays listed, "unreachable but listed", until the owner's client forgets it, which it does on its next Pass write or unlock, all such under one head |
+| A vault's file purged | nothing: the secret is no longer deleted with it (its foreign key to `files` is gone); it stays listed (`state: gone` in `GET /api/pass/vault-secrets`, as a trashed vault's is `trashed` and an unshared one's `unreachable`) and unused until its owner forgets it (`kutup pass forget`, or `POST /api/pass/vault-secrets/forget` for several under one head); never forgotten automatically, since it may be the only copy of a generated password or a key file's element |
 | Account deletion | everything goes, heads included |
 | Account reset (an administrator's wipe) | the chain and every listed value sealed under the old keys go in the reset transaction: contacts, labels, filters, Pass secrets, identity pins, the group list. Custom folders keep their mail and lose their names (`name_sealed` null), left out of the index until their owner names them again from revision 0, under the new incarnation's first heads. So no verified head ever lists a value no key opens. |
 
