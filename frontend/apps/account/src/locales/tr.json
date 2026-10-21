@@ -792,6 +792,11 @@
         "code": "Davet koduyla",
         "off": "Kapalı"
       },
+      "pass": "Kasa",
+      "passHint": "Kutup Kasa, parola yöneticisi.",
+      "passVaultMax": "En büyük kasa yüklemesi (MiB)",
+      "passVaultMaxHint": "Kasa'ya yüklenebilecek en büyük .kdbx dosyası (KeePassXC'den ya da bir yedekten). Bir kasanın kendi kayıtları hiçbir zaman reddedilmez. 1 ile 1024 arasında.",
+      "passVaultMaxRange": "1 ile 1024 MiB arasında.",
       "calendar": "Takvim",
       "calendarHint": "Her hesabın Takvim'de tutabileceklerinin sınırları.",
       "calendarLimits": {
@@ -800,7 +805,11 @@
         "calendarEventsPerCalendar": "Takvim başına etkinlik",
         "calendarEventsPerCalendarHint": "Bir takvimin barındırabileceği etkinlik sayısı.",
         "calendarSyncBatch": "Eşitleme başına değişiklik",
-        "calendarSyncBatchHint": "Bir isteğin taşıyabileceği etkinlik değişikliği sayısı."
+        "calendarSyncBatchHint": "Bir isteğin taşıyabileceği etkinlik değişikliği sayısı.",
+        "calendarWindowDays": "En uzun etkinlik aralığı (gün)",
+        "calendarWindowDaysHint": "Bir etkinlik sorgusunun isteyebileceği en uzun süre.",
+        "calendarEventsPage": "Sayfa başına etkinlik",
+        "calendarEventsPageHint": "Bir etkinlik sorgusu sayfasının taşıyabileceği en çok etkinlik."
       }
     },
     "federation": {

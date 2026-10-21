@@ -77,20 +77,27 @@ export interface NewCalendar {
   metadata: SealedMetadata
 }
 
-/** A calendar's key in WASM memory; `free()` it when the calendar closes. */
+type KeyArgs = [masterKeyBase64: string, binding: string, address: string, envelope: string, fingerprint: string]
+
+/**
+ * A calendar's key in WASM memory; `free()` it when the calendar closes. It
+ * seals only to the key derived from its own secret, never to a public key
+ * the server lists (#307 review H1).
+ */
 export interface UnlockedCalendar {
+  /** The key's fingerprint (hex), derived from the unlocked secret. */
+  readonly fingerprint: string
   openEvent(event: SealedEvent, authorPublicKeys: string[]): { fields: EventFields; verified: boolean }
-  openMetadata(metadata: SealedMetadata, authorPublicKeys: string[]): CalendarMetadata & { verified: boolean }
+  /** Refused unless the metadata names `calendarId` and this key. */
+  openMetadata(metadata: SealedMetadata, calendarId: string, authorPublicKeys: string[]): CalendarMetadata & { verified: boolean }
+  sealEvent(...args: [...KeyArgs, fields: EventFields]): SealedEvent
+  sealMetadata(...args: [...KeyArgs, calendarId: string, metadata: CalendarMetadata]): SealedMetadata
   free(): void
 }
 
-type KeyArgs = [masterKeyBase64: string, binding: string, address: string, envelope: string, fingerprint: string]
-
 interface CalendarWasm {
-  createCalendar(...args: [...KeyArgs, ownerPublicKey: string, metadata: { version: 1 } & CalendarMetadata, createdAtSecs: number]): NewCalendar
+  createCalendar(...args: [...KeyArgs, ownerPublicKey: string, calendarId: string, metadata: CalendarMetadata, createdAtSecs: number]): NewCalendar
   unlockCalendar(...args: [...KeyArgs, passphrase: SealedPassphrase, ownerPublicKeys: string[], lockedSecretKey: string]): UnlockedCalendar
-  sealCalendarEvent(...args: [...KeyArgs, calendarPublicKey: string, fields: EventFields]): SealedEvent
-  sealCalendarMetadata(...args: [...KeyArgs, calendarPublicKey: string, metadata: { version: 1 } & CalendarMetadata]): SealedMetadata
   calendarUtcToLocal(instant: string, tzid: string): string
   calendarLocalToUtc(local: string, tzid: string): string
   calendarTimeZones(): string[]
@@ -109,9 +116,9 @@ function keyArgs(key: SealedMailKey): KeyArgs {
   return [key.masterKeyBase64, key.binding, key.address, key.envelope, key.fingerprint]
 }
 
-/** A new calendar owned by `owner` (its primary address key), named `metadata`. */
-export async function createCalendar(owner: SealedMailKey, ownerPublicKey: string, metadata: CalendarMetadata): Promise<NewCalendar> {
-  return (await wasm()).createCalendar(...keyArgs(owner), ownerPublicKey, { version: 1, ...metadata }, Math.floor(Date.now() / 1000))
+/** A new calendar `calendarId` owned by `owner` (its primary address key), named `metadata`. */
+export async function createCalendar(owner: SealedMailKey, ownerPublicKey: string, calendarId: string, metadata: CalendarMetadata): Promise<NewCalendar> {
+  return (await wasm()).createCalendar(...keyArgs(owner), ownerPublicKey, calendarId, metadata, Math.floor(Date.now() / 1000))
 }
 
 /**
@@ -127,14 +134,14 @@ export async function unlockCalendar(
   return (await wasm()).unlockCalendar(...keyArgs(member), passphrase, ownerPublicKeys, lockedSecretKey)
 }
 
-/** Seals an event's fields for a calendar, signed by the author's address key. */
-export async function sealCalendarEvent(author: SealedMailKey, calendarPublicKey: string, fields: EventFields): Promise<SealedEvent> {
-  return (await wasm()).sealCalendarEvent(...keyArgs(author), calendarPublicKey, fields)
+/** Seals an event's fields for an unlocked calendar, signed by the author's address key. */
+export function sealCalendarEvent(calendar: UnlockedCalendar, author: SealedMailKey, fields: EventFields): SealedEvent {
+  return calendar.sealEvent(...keyArgs(author), fields)
 }
 
-/** Seals a calendar's new name and description. */
-export async function sealCalendarMetadata(author: SealedMailKey, calendarPublicKey: string, metadata: CalendarMetadata): Promise<SealedMetadata> {
-  return (await wasm()).sealCalendarMetadata(...keyArgs(author), calendarPublicKey, { version: 1, ...metadata })
+/** Seals an unlocked calendar's new name and description, bound to its id. */
+export function sealCalendarMetadata(calendar: UnlockedCalendar, author: SealedMailKey, calendarId: string, metadata: CalendarMetadata): SealedMetadata {
+  return calendar.sealMetadata(...keyArgs(author), calendarId, metadata)
 }
 
 /** A UTC instant (RFC 3339) as a wall-clock time in `tzid`, `2026-10-29T09:30:00`. */

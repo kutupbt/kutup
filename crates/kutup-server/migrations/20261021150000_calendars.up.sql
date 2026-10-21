@@ -6,6 +6,10 @@
 CREATE TABLE calendars (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     owner_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    -- The key's suite: 1 is a v4 OpenPGP key (Curve25519) with v3 key
+    -- packets. A post-quantum suite comes with Mail's (rPGP v6 and ML-KEM;
+    -- docs/plans/calendar.md), alongside, so no calendar needs a wipe.
+    suite SMALLINT NOT NULL DEFAULT 1 CHECK (suite = 1),
     public_key BYTEA NOT NULL CHECK (octet_length(public_key) BETWEEN 1 AND 8192),
     fingerprint CHAR(40) NOT NULL CHECK (fingerprint ~ '^[0-9a-f]{40}$'),
     locked_secret_key BYTEA NOT NULL CHECK (octet_length(locked_secret_key) BETWEEN 1 AND 8192),
@@ -72,6 +76,10 @@ CREATE TABLE calendar_events (
     -- The last instant any occurrence can reach; NULL for an endless rule.
     range_end_utc TIMESTAMPTZ,
     sequence INTEGER NOT NULL CHECK (sequence >= 0),
+    -- Counts the event's stored versions: a change names the one it was
+    -- made from (`baseRevision`), so a replay or another device's newer
+    -- save is a conflict, never overwritten.
+    revision BIGINT NOT NULL DEFAULT 1 CHECK (revision >= 1),
     bytes BIGINT NOT NULL CHECK (bytes >= 0),
     created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     modified_at TIMESTAMPTZ NOT NULL DEFAULT now(),
@@ -82,3 +90,6 @@ CREATE TABLE calendar_events (
 CREATE UNIQUE INDEX calendar_events_uid
     ON calendar_events (calendar_id, uid, COALESCE(recurrence_id, '-infinity'::timestamptz));
 CREATE INDEX calendar_events_window ON calendar_events (calendar_id, start_utc, range_end_utc);
+-- For ON DELETE SET NULL when an address or account goes.
+CREATE INDEX calendar_events_author_address ON calendar_events (author_address_id);
+CREATE INDEX calendar_events_author_user ON calendar_events (author_user_id);

@@ -70,6 +70,7 @@ Specific codes, where an app does something particular (a test in
 | `calendarExists` | 409 | `POST /api/calendar/calendars`: the id (or the calendar key) is in use; draw another |
 | `calendarLimit` | 409 | `POST /api/calendar/calendars`: the account owns as many calendars as the administrators allow (`calendarsPerAccount`) |
 | `eventLimit` | 409 | An events sync: the calendar holds as many events as the administrators allow (`calendarEventsPerCalendar`); that change only |
+| `sequenceBehind` | 409 | An events sync: the changed event's `SEQUENCE` is lower than the stored one's; that change only |
 | `uidTaken` | 409 | An events sync: an event with this UID is in the calendar already; that change only |
 | `setupRequired` | 409 | The account has no keys yet (an admin-made account before its first sign-in): a listed write or a rename waits for setup |
 | `renamed` | 409 | A lookup of a name an account no longer goes by (held, or named in a rename chain): `renames` carries `{ "version": 1, "chains": [...] }`, never keys |
@@ -211,9 +212,18 @@ capability advertisement, and where each web app lives (`apps`, from
     "photos": "https://photos.example.org",
     "office": "https://office.example.org",
     "editor": "https://editor.example.org"
-  }
+  },
+  "nameHoldDays": 180,
+  "oldAddressReceiveDays": 90,
+  "passVaultMaxBytes": 67108864
 }
 ```
+
+`passVaultMaxBytes` is the largest `.kdbx` file Kutup Pass takes in an
+upload (an existing vault brought in from KeePassXC or a backup), as
+administrators set it (`PUT /api/admin/settings`; 64 MiB at first). The
+browser opens a vault whole, so this bounds what an upload makes it hold;
+a vault's own saves are never refused by it.
 
 The chat block also advertises size/retention limits, the canonical federation
 server name when enabled, and the authenticated sealed-sender service-policy
@@ -2255,27 +2265,37 @@ and visibility. `409 revision_conflict` when `baseRevision` is not the
 member row's; `403` when someone else than the owner sends `metadata`.
 `DELETE` (body `{ head }`) deletes the calendar and its events, owner only.
 
-### GET /api/calendar/calendars/{id}/events?start=&end=&after=&limit=
+### GET /api/calendar/calendars/{id}/events?start=&end=&afterStart=&afterId=&limit=
 
-The events that meet `[start, end)` (RFC 3339, at most 400 days), oldest
-start first, at most 1000 a page: `{ events: [EventView], next }`, `next`
-being the `after` of the next page. An EventView is `{ id, calendarId, uid,
-authorAddress, event: SealedEventV1, startUtc, endUtc, fullDay, sequence,
-modifiedAt }`; the times are what the server read from the shared signed
+The events that meet the half-open window `[start, end)` (RFC 3339, at most
+`calendarWindowDays`, 400 at first), ordered by start then id, at most
+`calendarEventsPage` (1000) a page: `{ events: [EventView], next }`. `next`
+is `null` on the last page, else `{ afterStart, afterId }`, the last event's
+start and id, which the client sends back for the next page (the cursor is
+the client's, so an event deleted or moved meanwhile never ends or skips a
+page); one of the two without the other is `400`. An EventView is `{ id,
+calendarId, uid, authorAddress, event: SealedEventV1, startUtc, endUtc,
+fullDay, sequence, revision, modifiedAt }`; the times are what the server read from the shared signed
 part, which a client checks again when it opens the event. A calendar the
 caller isn't a member of is `404`. `GET …/events/{eventId}` answers one.
 
 ### POST /api/calendar/calendars/{id}/events/sync
 
-`{ addressId, changes: [{"create": SealedEventV1} | {"update": {id, event}} |
-{"delete": {id}}] }`, 1 to `calendarSyncBatch` (10) changes, each applied
+`{ addressId, changes: [{"create": SealedEventV1} | {"update": {id,
+baseRevision, event}} | {"delete": {id}}] }`, 1 to `calendarSyncBatch` (10) changes, each applied
 alone (Proton's sync): `{ results: [{ status, event?, code?, error? }] }` in
 the order sent. A created or changed event's signed parts must be signed by
 one of the address's keys, its key packets be to the calendar key, and it
 must keep its UID; E1 refuses `RRULE`, `RECURRENCE-ID`, `EXDATE` and
 `ORGANIZER` (recurrence comes in E2, invitations in E4). `409 uidTaken`
 for a UID already in the calendar, `409 eventLimit` at
-`calendarEventsPerCalendar` (25,000). Everything is charged to the
+`calendarEventsPerCalendar` (25,000). An update names the event's
+`revision` it was made from: another one is `409 revision_conflict` (with
+the stored `revision`), so a replayed or older change never overwrites a
+newer one; a `SEQUENCE` lower than the stored one is `409 sequenceBehind`.
+An event starts at revision 1 and each update adds one. The caller's
+permissions are checked again in each change's transaction, so a member
+removed mid-sync writes nothing further. Everything is charged to the
 calendar owner's storage pool.
 
 ## Maps
@@ -2345,13 +2365,17 @@ only the envelope's public header.
 
 ### GET /api/pass/vault-secrets
 
-The caller's vault secrets, for vaults they can open: `[{fileId, envelope,
-revision, updatedAt}]` (`envelope` base64; `revision` the one in its header,
-the base of the next keep). A vault in the trash keeps its secret,
-unlisted, until it is restored; a secret for a vault the caller cannot open
-now (unshared) is unlisted too, and listed again if access comes back: a
-read never deletes one, and a failed access check fails the request. Purging
-a vault deletes every secret for it.
+Every one of the caller's vault secrets, as the account head's `passSecrets`
+index lists them: `[{fileId, envelope, state, revision, updatedAt}]`
+(`envelope` base64; `revision` the one in its header, the base of the next
+keep). `state` says what has become of the vault: `open` (the caller can
+open it: the only state whose key clients use), `trashed` (kept for a
+restore), `unreachable` (the vault is there but not shared with the caller
+now; `open` again if access comes back) or `gone` (purged). A read never
+deletes one, and a failed access check fails the request; a secret goes only
+when its owner forgets it (`DELETE`, or `POST …/forget` for several), since
+it may be the only copy of a generated password or a key file's element.
+Clients check the whole list, every state, against the head.
 
 ### PUT /api/pass/vault-secrets/:fileId
 
@@ -4720,9 +4744,25 @@ Return current global server settings.
   "chatGroupCapabilitiesPerAccount": 1024,
   "chatGroupAvatarMaxBytes": 41001,
   "chatGroupAvatarStoragePerGroupBytes": 82002,
-  "chatGroupAvatarPendingSeconds": 86400
+  "chatGroupAvatarPendingSeconds": 86400,
+  "passVaultMaxBytes": 67108864,
+  "calendarsPerAccount": 25,
+  "calendarEventsPerCalendar": 25000,
+  "calendarSyncBatch": 10,
+  "calendarWindowDays": 400,
+  "calendarEventsPage": 1000
 }
 ```
+
+The Calendar settings: `calendarsPerAccount` (1–1000) is how many calendars
+one account may own, `calendarEventsPerCalendar` how many events one
+calendar may hold, `calendarSyncBatch` (1–100) the most changes in one
+events sync, `calendarWindowDays` (1–3660) the longest window an events
+query may ask for, and `calendarEventsPage` (10–5000) the most events on one
+page.
+
+`passVaultMaxBytes` is the largest `.kdbx` file Kutup Pass takes in an
+upload: 1 MiB to 1 GiB (`400` otherwise), 64 MiB at first.
 
 `chatGroupAvatarMaxBytes` is the largest group avatar blob this server takes
 for the groups it hosts: 8233, 16425, 32809 or 41001.

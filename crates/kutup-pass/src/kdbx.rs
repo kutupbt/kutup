@@ -147,6 +147,66 @@ pub enum KdbxError {
     Save(#[from] DatabaseSaveError),
 }
 
+impl KdbxError {
+    /// Why, as a code a person's message is chosen by: `wrongKey` (the key
+    /// doesn't open it, which is also what a YubiKey-protected vault gives
+    /// without its YubiKey), `unsupported` (a cipher or key derivation this
+    /// build doesn't know), `damaged` (not a whole KeePass file), `keyFile`,
+    /// `emptyKey`, or `save`.
+    pub fn kind(&self) -> &'static str {
+        match self {
+            Self::EmptyKey => "emptyKey",
+            Self::KeyFile => "keyFile",
+            Self::Open(DatabaseOpenError::Key(_)) => "wrongKey",
+            Self::Open(DatabaseOpenError::UnsupportedVersion) => "unsupported",
+            Self::Open(DatabaseOpenError::Format(_)) => "unsupported",
+            Self::Open(_) => "damaged",
+            Self::Key(_) | Self::Save(_) => "save",
+        }
+    }
+}
+
+/// What a file is, read from its header alone (no key): a KeePass vault
+/// Kutup opens, and whether its first save upgrades it to KDBX 4.1, or why
+/// it can't be opened here.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum VaultFormat {
+    /// KDBX 3.1, 4.0 or 4.1; `upgrade` when it isn't 4.1 already.
+    Supported { version: (u16, u16), upgrade: bool },
+    /// A KeePass file of a version Kutup can't open: KeePass 1 (`.kdb`),
+    /// KeePass 2's pre-releases, KDBX 3.0, or a future major version.
+    Unsupported { version: (u16, u16) },
+    /// Not a KeePass file.
+    NotKeePass,
+}
+
+/// Reads `contents`' header: what [`open`] would make of its version.
+pub fn probe(contents: &[u8]) -> VaultFormat {
+    match Database::get_version(&mut &contents[..]) {
+        Ok(DatabaseVersion::KDB4(minor)) if minor <= 1 => VaultFormat::Supported {
+            version: (4, minor),
+            upgrade: minor < 1,
+        },
+        Ok(DatabaseVersion::KDB3(1)) => VaultFormat::Supported {
+            version: (3, 1),
+            upgrade: true,
+        },
+        Ok(DatabaseVersion::KDB(minor)) => VaultFormat::Unsupported {
+            version: (1, minor),
+        },
+        Ok(DatabaseVersion::KDB2(minor)) => VaultFormat::Unsupported {
+            version: (2, minor),
+        },
+        Ok(DatabaseVersion::KDB3(minor)) => VaultFormat::Unsupported {
+            version: (3, minor),
+        },
+        Ok(DatabaseVersion::KDB4(minor)) => VaultFormat::Unsupported {
+            version: (4, minor),
+        },
+        Err(_) => VaultFormat::NotKeePass,
+    }
+}
+
 /// Opens a vault from its file contents.
 pub fn open(contents: &[u8], key: &VaultKey) -> Result<Database, KdbxError> {
     Ok(Database::open(&mut &contents[..], key.database_key()?)?)
@@ -317,5 +377,31 @@ mod tests {
         let shown = format!("{key:?}");
         assert!(!shown.contains("secret"));
         assert_eq!(shown.matches("[redacted]").count(), 2);
+    }
+
+    #[test]
+    fn a_header_says_what_a_file_is_before_any_key() {
+        let key = VaultKey::new().with_password("probe");
+        let saved = save(&sample(), &key).unwrap();
+        assert_eq!(
+            probe(&saved),
+            VaultFormat::Supported {
+                version: (4, 1),
+                upgrade: false
+            }
+        );
+        assert_eq!(probe(b"not a vault at all"), VaultFormat::NotKeePass);
+        // KeePass 1: its own signature.
+        let mut kdb = vec![
+            0x03, 0xd9, 0xa2, 0x9a, 0x65, 0xfb, 0x4b, 0xb5, 0x01, 0x00, 0x03, 0x00,
+        ];
+        kdb.resize(124, 0);
+        assert!(matches!(
+            probe(&kdb),
+            VaultFormat::Unsupported { version: (1, _) }
+        ));
+        // A wrong key is said as such.
+        let wrong = open(&saved, &VaultKey::new().with_password("not it")).unwrap_err();
+        assert_eq!(wrong.kind(), "wrongKey");
     }
 }

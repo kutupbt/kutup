@@ -10,7 +10,7 @@ use std::process::{Command, Stdio};
 
 use kutup_crypto::calendar::{
     decrypt_data_packet, encrypt_data_packet, generate_calendar_key, key_packet_to,
-    open_key_packet, unlock_calendar_key, Passphrase, SessionKey,
+    unlock_calendar_key, Passphrase, SessionKey,
 };
 use kutup_crypto::mail_key::{armor_public_key, packet_extent};
 
@@ -99,8 +99,8 @@ fn gnupg_reads_calendar_packets_and_kutup_reads_gnupg() {
     assert!(ok, "encrypt: {err}");
     let (_, _, key_packet_len) = packet_extent(&message).unwrap();
     let (key_packet, data_packet) = message.split_at(key_packet_len);
-    let secret = unlock_calendar_key(&calendar.locked_secret_key, &passphrase).unwrap();
-    let opened = open_key_packet(key_packet, &secret).unwrap();
+    let unlocked = unlock_calendar_key(&calendar.locked_secret_key, &passphrase).unwrap();
+    let opened = unlocked.open_key_packet(key_packet).unwrap();
     assert_eq!(
         decrypt_data_packet(&opened, data_packet)
             .unwrap()

@@ -145,7 +145,7 @@ export function EventDialog() {
   const save = useCalendarMutation(async (next: Draft) => {
     const calendar = writable.find((c) => c.id === next.calendarId)
     if (!account.data || !calendar) throw new Error('no calendar')
-    return saveEvent(account.data, calendar, fieldsOf(next, account.data.domain, existing), existing?.id)
+    return saveEvent(account.data, calendar, fieldsOf(next, account.data.domain, existing), existing)
   })
   const remove = useCalendarMutation(async () => {
     const calendar = writable.find((c) => c.id === existing?.calendarId)
@@ -158,7 +158,7 @@ export function EventDialog() {
   const valid = draft !== null && draft.calendarId !== '' && endsAfterStart(draft)
   const saveError =
     save.error instanceof EventRefusedError
-      ? t(save.error.code === 'eventLimit' ? 'events.limit' : 'events.refused')
+      ? t(save.error.code === 'eventLimit' ? 'events.limit' : save.error.code === 'revision_conflict' ? 'events.changedElsewhere' : 'events.refused')
       : save.error
         ? apiErrorMessage(save.error, t('events.saveFailed'))
         : null

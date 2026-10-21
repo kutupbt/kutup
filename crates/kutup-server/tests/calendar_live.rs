@@ -7,8 +7,8 @@ use reqwest::StatusCode;
 use serde_json::{json, Value};
 
 use kutup_crypto::calendar::{
-    self as cal, CalendarMetadataV1, EventPartV1, Passphrase, SealedEventV1, SealedMetadataV1,
-    SessionKey,
+    self as cal, EventPartV1, Passphrase, SealedEventV1, SealedMetadataV1, SessionKey,
+    UnlockedCalendarKey,
 };
 use kutup_crypto::calendar_event::{EventFieldsV1, TimeV1};
 use kutup_crypto::mail_key::{self, MailKeyEntryV1, MailKeyListV1, DEFAULT_FLAGS};
@@ -79,25 +79,20 @@ fn owner(c: &Client, base: &str) -> Owner {
     }
 }
 
-/// A new calendar's body, and its passphrase.
-fn new_calendar(owner: &Owner, name: &str) -> (Value, Passphrase) {
+/// A new calendar's body, its passphrase and its key as made.
+fn new_calendar(owner: &Owner, name: &str) -> (Value, Passphrase, UnlockedCalendarKey) {
+    let id = uuid::Uuid::new_v4();
     let passphrase = Passphrase::generate();
     let key = cal::generate_calendar_key(&passphrase, 1_790_000_000).unwrap();
     let sealed =
         cal::seal_passphrase(&passphrase, &[&owner.public_key], &owner.secret_key).unwrap();
-    let metadata = cal::seal_metadata(
-        &CalendarMetadataV1 {
-            version: 1,
-            name: name.into(),
-            description: "Family".into(),
-        },
-        &key.public_key,
-        &owner.secret_key,
-    )
-    .unwrap();
+    let metadata = key
+        .unlocked
+        .seal_metadata(&id.to_string(), name, "Family", &owner.secret_key)
+        .unwrap();
     (
         json!({
-            "id": uuid::Uuid::new_v4(),
+            "id": id,
             "addressId": owner.address_id,
             "publicKey": b64(&key.public_key),
             "lockedSecretKey": b64(&key.locked_secret_key),
@@ -110,6 +105,7 @@ fn new_calendar(owner: &Owner, name: &str) -> (Value, Passphrase) {
             "color": "#3E7BFA",
         }),
         passphrase,
+        key.unlocked,
     )
 }
 
@@ -141,15 +137,10 @@ fn fields(uid: &str, start: &str, end: &str, summary: &str) -> EventFieldsV1 {
     }
 }
 
-fn seal(fields: &EventFieldsV1, calendar_public_key: &[u8], author_secret: &[u8]) -> Value {
-    let sealed = cal::seal_event(
-        &fields.to_parts().unwrap(),
-        calendar_public_key,
-        author_secret,
-        None,
-        None,
-    )
-    .unwrap();
+fn seal(fields: &EventFieldsV1, calendar: &UnlockedCalendarKey, author_secret: &[u8]) -> Value {
+    let sealed = calendar
+        .seal_event(&fields.to_parts().unwrap(), author_secret, None, None)
+        .unwrap();
     serde_json::to_value(SealedEventV1::of(&sealed)).unwrap()
 }
 
@@ -192,7 +183,7 @@ fn calendars_and_events() {
 
     // A calendar: its key, the passphrase sealed to Ada's address key and
     // signed, the name sealed to the calendar.
-    let (body, passphrase) = new_calendar(&ada, "Ev");
+    let (body, passphrase, key) = new_calendar(&ada, "Ev");
     let r = bearer(
         c.post(format!("{base}/api/calendar/calendars")),
         &ada.user.token,
@@ -211,7 +202,10 @@ fn calendars_and_events() {
     assert_eq!(created["permissions"], 127);
     assert_eq!(created["color"], "#3e7bfa");
     assert_eq!(created["revision"], 1);
-    let calendar_public = decode(created["publicKey"].as_str().unwrap());
+    assert_eq!(
+        decode(created["publicKey"].as_str().unwrap()),
+        key.public_key()
+    );
 
     // What the server hands back opens: the passphrase, the key, the name.
     let opened = cal::open_passphrase(
@@ -226,14 +220,16 @@ fn calendars_and_events() {
     )
     .unwrap();
     assert_eq!(opened.as_str(), passphrase.as_str());
-    let secret = cal::unlock_calendar_key(
+    let unlocked = cal::unlock_calendar_key(
         &decode(created["lockedSecretKey"].as_str().unwrap()),
         &opened,
     )
     .unwrap();
     let metadata: SealedMetadataV1 = serde_json::from_value(created["metadata"].clone()).unwrap();
-    let (metadata, verified) =
-        cal::open_metadata(&metadata.to_sealed().unwrap(), &secret, &[&ada.public_key]).unwrap();
+    let (metadata, verified) = unlocked
+        .open_metadata(&metadata.to_sealed().unwrap(), &id, &[&ada.public_key])
+        .unwrap();
+    assert_eq!(unlocked.fingerprint(), key.fingerprint());
     assert!(verified);
     assert_eq!(metadata.name, "Ev");
     let charged = storage(&c, &base, &ada.user);
@@ -251,7 +247,7 @@ fn calendars_and_events() {
     assert!(index["values"].to_string().contains(&id), "{index}");
 
     // A second calendar with the same id: refused.
-    let (mut again, _) = new_calendar(&ada, "Again");
+    let (mut again, _, _) = new_calendar(&ada, "Again");
     again["id"] = json!(id);
     let r = bearer(
         c.post(format!("{base}/api/calendar/calendars")),
@@ -265,8 +261,8 @@ fn calendars_and_events() {
 
     // Refused calendars: a passphrase to someone else's key, a locked key
     // that isn't the calendar's, another account's address.
-    let (mut bad, _) = new_calendar(&ada, "Bad");
-    let (other, _) = new_calendar(&eve, "Other");
+    let (mut bad, _, _) = new_calendar(&ada, "Bad");
+    let (other, _, _) = new_calendar(&eve, "Other");
     bad["passphrase"] = other["passphrase"].clone();
     assert_status(
         &c,
@@ -277,7 +273,7 @@ fn calendars_and_events() {
         &bad,
         StatusCode::BAD_REQUEST,
     );
-    let (mut bad, _) = new_calendar(&ada, "Bad");
+    let (mut bad, _, _) = new_calendar(&ada, "Bad");
     bad["lockedSecretKey"] = other["lockedSecretKey"].clone();
     assert_status(
         &c,
@@ -288,7 +284,7 @@ fn calendars_and_events() {
         &bad,
         StatusCode::BAD_REQUEST,
     );
-    let (mut bad, _) = new_calendar(&ada, "Bad");
+    let (mut bad, _, _) = new_calendar(&ada, "Bad");
     bad["addressId"] = json!(eve.address_id);
     assert_status(
         &c,
@@ -308,7 +304,7 @@ fn calendars_and_events() {
         &base,
         &ada,
         &id,
-        json!([{ "create": seal(&first, &calendar_public, &ada.secret_key) }]),
+        json!([{ "create": seal(&first, &key, &ada.secret_key) }]),
     );
     assert_eq!(results[0]["status"], 200, "{results:?}");
     let event = &results[0]["event"];
@@ -330,7 +326,9 @@ fn calendars_and_events() {
     .unwrap();
     assert_eq!(page["events"].as_array().unwrap().len(), 1, "{page}");
     let stored: SealedEventV1 = serde_json::from_value(page["events"][0]["event"].clone()).unwrap();
-    let opened = cal::open_event(&stored.to_event().unwrap(), &secret, &[&ada.public_key]).unwrap();
+    let opened = unlocked
+        .open_event(&stored.to_event().unwrap(), &[&ada.public_key])
+        .unwrap();
     assert!(opened.verified);
     assert_eq!(EventFieldsV1::of(&opened.parts), first);
     let outside: Value = bearer(
@@ -354,7 +352,7 @@ fn calendars_and_events() {
             "2026-10-30T10:00:00",
             "x",
         ),
-        &calendar_public,
+        &key,
         &eve.secret_key,
     );
     let mut elsewhere: SealedEventV1 = serde_json::from_value(seal(
@@ -364,7 +362,7 @@ fn calendars_and_events() {
             "2026-10-30T10:00:00",
             "x",
         ),
-        &calendar_public,
+        &key,
         &ada.secret_key,
     ))
     .unwrap();
@@ -385,8 +383,8 @@ fn calendars_and_events() {
         json!([
             { "create": by_eve },
             { "create": elsewhere },
-            { "create": seal(&repeating, &calendar_public, &ada.secret_key) },
-            { "create": seal(&first, &calendar_public, &ada.secret_key) },
+            { "create": seal(&repeating, &key, &ada.secret_key) },
+            { "create": seal(&first, &key, &ada.secret_key) },
         ]),
     );
     let statuses: Vec<_> = results
@@ -403,7 +401,7 @@ fn calendars_and_events() {
             "2026-10-30T10:00:00",
             "x",
         ),
-        &calendar_public,
+        &key,
         &ada.secret_key,
     ))
     .unwrap();
@@ -429,10 +427,93 @@ fn calendars_and_events() {
         &base,
         &ada,
         &id,
-        json!([{ "update": { "id": event_id, "event": seal(&later, &calendar_public, &ada.secret_key) } }]),
+        json!([{ "update": { "id": event_id, "baseRevision": 1, "event": seal(&later, &key, &ada.secret_key) } }]),
     );
     assert_eq!(results[0]["status"], 200, "{results:?}");
     assert_eq!(results[0]["event"]["startUtc"], "2026-10-29T09:00:00Z");
+    assert_eq!(results[0]["event"]["revision"], 2);
+    // From a version no longer stored (a replay, or another device saved
+    // first): refused, nothing changed.
+    let results = sync(
+        &c,
+        &base,
+        &ada,
+        &id,
+        json!([{ "update": { "id": event_id, "baseRevision": 1, "event": seal(&later, &key, &ada.secret_key) } }]),
+    );
+    assert_eq!(
+        (results[0]["status"].as_u64(), results[0]["code"].as_str()),
+        (Some(409), Some("revision_conflict")),
+        "{results:?}"
+    );
+    // A SEQUENCE lower than the stored one: refused.
+    let mut ahead = later.clone();
+    ahead.sequence = 2;
+    let results = sync(
+        &c,
+        &base,
+        &ada,
+        &id,
+        json!([{ "update": { "id": event_id, "baseRevision": 2, "event": seal(&ahead, &key, &ada.secret_key) } }]),
+    );
+    assert_eq!(results[0]["event"]["revision"], 3, "{results:?}");
+    let results = sync(
+        &c,
+        &base,
+        &ada,
+        &id,
+        json!([{ "update": { "id": event_id, "baseRevision": 3, "event": seal(&later, &key, &ada.secret_key) } }]),
+    );
+    assert_eq!(
+        (results[0]["status"].as_u64(), results[0]["code"].as_str()),
+        (Some(409), Some("sequenceBehind")),
+        "{results:?}"
+    );
+
+    // Pages: the cursor is the last event's (start, id), held by the client.
+    let results = sync(
+        &c,
+        &base,
+        &ada,
+        &id,
+        json!([{ "create": seal(&fields("paged@kutup.test", "2026-10-30T09:00:00", "2026-10-30T10:00:00", "Paged"), &key, &ada.secret_key) }]),
+    );
+    assert_eq!(results[0]["status"], 200, "{results:?}");
+    let window = "start=2026-10-26T00:00:00Z&end=2026-11-02T00:00:00Z";
+    let page = |query: &str| -> Value {
+        bearer(
+            c.get(format!(
+                "{base}/api/calendar/calendars/{id}/events?{window}&limit=1{query}"
+            )),
+            &ada.user.token,
+        )
+        .send()
+        .unwrap()
+        .json()
+        .unwrap()
+    };
+    let one = page("");
+    assert_eq!(one["events"].as_array().unwrap().len(), 1, "{one}");
+    assert_eq!(one["events"][0]["id"], event_id, "{one}");
+    let next = &one["next"];
+    let two = page(&format!(
+        "&afterStart={}&afterId={}",
+        next["afterStart"].as_str().unwrap().replace('+', "%2B"),
+        next["afterId"].as_str().unwrap()
+    ));
+    assert_eq!(two["events"].as_array().unwrap().len(), 1, "{two}");
+    assert_ne!(two["events"][0]["id"], event_id, "{two}");
+    assert!(two["next"].is_null(), "the last page: {two}");
+    // Half a cursor: refused.
+    let r = bearer(
+        c.get(format!(
+            "{base}/api/calendar/calendars/{id}/events?{window}&afterId={event_id}"
+        )),
+        &ada.user.token,
+    )
+    .send()
+    .unwrap();
+    assert_eq!(r.status(), StatusCode::BAD_REQUEST);
     let other_uid = fields(
         "other@kutup.test",
         "2026-10-29T12:00:00",
@@ -444,7 +525,7 @@ fn calendars_and_events() {
         &base,
         &ada,
         &id,
-        json!([{ "update": { "id": event_id, "event": seal(&other_uid, &calendar_public, &ada.secret_key) } }]),
+        json!([{ "update": { "id": event_id, "baseRevision": 3, "event": seal(&other_uid, &key, &ada.secret_key) } }]),
     );
     assert_eq!(results[0]["status"], 400, "an event keeps its UID");
 

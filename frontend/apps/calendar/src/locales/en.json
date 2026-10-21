@@ -59,6 +59,7 @@
     "saveFailed": "The event wasn't saved.",
     "refused": "The event wasn't saved: this server didn't accept it.",
     "limit": "This calendar holds as many events as the server allows.",
+    "changedElsewhere": "Another device changed this event first. Close it and open it again.",
     "unverified": "This event's signature doesn't check out: someone may have changed it. Its contents are shown, but don't rely on them.",
     "unverifiedShort": "Not verified",
     "unreadable_one": "{{count}} item couldn't be opened and isn't shown.",

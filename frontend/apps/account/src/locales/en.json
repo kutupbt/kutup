@@ -792,6 +792,11 @@
         "code": "With a referral code",
         "off": "Closed"
       },
+      "pass": "Pass",
+      "passHint": "Kutup Pass, the password manager.",
+      "passVaultMax": "Largest vault upload (MiB)",
+      "passVaultMaxHint": "The largest .kdbx file someone can upload into Pass (from KeePassXC or a backup). A vault's own saves are never refused. 1 to 1024.",
+      "passVaultMaxRange": "Between 1 and 1024 MiB.",
       "calendar": "Calendar",
       "calendarHint": "Limits on what each account keeps in Calendar.",
       "calendarLimits": {
@@ -800,7 +805,11 @@
         "calendarEventsPerCalendar": "Events per calendar",
         "calendarEventsPerCalendarHint": "How many events one calendar may hold.",
         "calendarSyncBatch": "Changes per sync",
-        "calendarSyncBatchHint": "How many event changes one request may carry."
+        "calendarSyncBatchHint": "How many event changes one request may carry.",
+        "calendarWindowDays": "Longest events window (days)",
+        "calendarWindowDaysHint": "The longest span one events query may ask for.",
+        "calendarEventsPage": "Events per page",
+        "calendarEventsPageHint": "The most events one page of an events query carries."
       }
     },
     "federation": {

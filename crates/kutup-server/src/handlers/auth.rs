@@ -579,6 +579,7 @@ pub async fn get_public_settings(State(state): State<AppState>) -> AppResult<Res
         },
         name_hold_days,
         old_address_receive_days,
+        pass_vault_max_bytes: crate::site_settings::pass_vault_max_bytes(&state.pool).await?,
     })
     .into_response())
 }

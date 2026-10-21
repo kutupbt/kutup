@@ -347,3 +347,32 @@ and busy/free (E3), invitations (E4), URL feeds, Google import, meetings
 - The rPGP additions get vectors, cross-checked against a Proton calendar
   event where the references hold one (OpenPGP.js / go-crypto test data),
   and pass `cargo deny`.
+
+**Security review (the main session, 2026-10-21), fixed in #307 before any
+data exists.**
+- H1: a client seals events and metadata only through the calendar key it
+  unlocked (`UnlockedCalendarKey`, whose public key is derived from the
+  secret), never to a public key the server hands it; the WASM has no
+  seal-to-a-key function.
+- M3: the sealed metadata names its calendar id and the key's fingerprint,
+  and opens only under both, so the server can't move one calendar's name
+  onto another.
+- L6: a locked key is taken only in the form this code writes (AES-256,
+  iterated and salted S2K, a bounded count).
+- M1, L1: the events page cursor is the client's `(afterStart, afterId)`;
+  the window is half-open.
+- L2: events carry a revision; an update names its `baseRevision`, and
+  `SEQUENCE` never goes down.
+- L3: the member's permissions are checked again inside each change's
+  transaction. L7: the author columns are indexed.
+- The window and page sizes are site settings (`calendarWindowDays`,
+  `calendarEventsPage`).
+
+**Recorded for later.**
+- M2 (post-quantum): calendar keys follow Mail's keys to PQ OpenPGP
+  ([`mail-pq-openpgp.md`](mail-pq-openpgp.md)). `calendars.suite` (1 =
+  the current Ed25519/X25519 key) is in the schema now, so a PQ suite is a
+  new value with its own read and migrate policy, never a format change.
+- L4: deleting a calendar removes the members' rows without their account
+  heads naming the change. E1 has owners only; E3 (sharing) makes the delete
+  tell each member's client, which then drops the calendar from its head.

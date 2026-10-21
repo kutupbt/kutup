@@ -59,7 +59,6 @@ export interface Calendar {
   display: boolean
   permissions: number
   revision: number
-  publicKey: string
   /** The owner signed the name and description. */
   verified: boolean
   unlocked: UnlockedCalendar
@@ -76,6 +75,8 @@ export interface EventRow {
   endUtc: string
   fullDay: boolean
   sequence: number
+  /** Starts at 1; each update adds one, and names the one it was made from. */
+  revision: number
   modifiedAt: string
 }
 
@@ -87,6 +88,8 @@ export interface CalendarEvent {
   startUtc: string
   endUtc: string
   fullDay: boolean
+  /** The stored revision, which a change of it names as its base. */
+  revision: number
   /**
    * Its author signed every part, and the times the server read are the
    * ones signed. An event that isn't is shown as such, never trusted.
@@ -115,11 +118,19 @@ async function unlock(account: MailAccount, row: CalendarRow): Promise<UnlockedC
       }
       let last: unknown = null
       for (const key of ownKeys(account)) {
+        let opened: UnlockedCalendar
         try {
-          return await unlockCalendar(key, row.passphrase, account.ownPublicKeys, row.lockedSecretKey)
+          opened = await unlockCalendar(key, row.passphrase, account.ownPublicKeys, row.lockedSecretKey)
         } catch (error) {
           last = error
+          continue
         }
+        // The key unlocked is the one listed, or the listing is not the calendar's.
+        if (opened.fingerprint !== row.fingerprint.toLowerCase()) {
+          opened.free()
+          throw new Error('the calendar key is not the one listed')
+        }
+        return opened
       }
       throw last instanceof Error ? last : new Error('no key opens this calendar')
     })()
@@ -161,7 +172,7 @@ export async function loadCalendars(session: Session, account: MailAccount): Pro
       for (const row of data.calendars) {
         try {
           const key = await unlock(account, row)
-          const metadata = key.openMetadata(row.metadata, account.ownPublicKeys)
+          const metadata = key.openMetadata(row.metadata, row.id, account.ownPublicKeys)
           calendars.push({
             id: row.id,
             name: metadata.name,
@@ -171,7 +182,6 @@ export async function loadCalendars(session: Session, account: MailAccount): Pro
             display: row.display,
             permissions: row.permissions,
             revision: row.revision,
-            publicKey: row.publicKey,
             unlocked: key,
           })
         } catch {
@@ -200,7 +210,7 @@ export const CALENDAR_COLORS = ['#8080ff', '#db60d6', '#415df0', '#179fd9', '#1d
 export async function createCalendar(session: Session, account: MailAccount, name: string, color: string): Promise<string> {
   const id = crypto.randomUUID()
   const addressId = await activeAddressId(account)
-  const made = await makeCalendar(account.key, account.publicKey, { name, description: '' })
+  const made = await makeCalendar(account.key, account.publicKey, id, { name, description: '' })
   // The fingerprint is the server's to read from the key, not to be told.
   const body = { publicKey: made.publicKey, lockedSecretKey: made.lockedSecretKey, passphrase: made.passphrase, metadata: made.metadata }
   await listed(session, (index) =>
@@ -237,7 +247,7 @@ export interface CalendarChange {
 export async function updateCalendar(session: Session, account: MailAccount, calendar: Calendar, change: CalendarChange): Promise<void> {
   const renamed = change.name !== undefined || change.description !== undefined
   const metadata = renamed
-    ? await sealCalendarMetadata(account.key, calendar.publicKey, {
+    ? sealCalendarMetadata(calendar.unlocked, account.key, calendar.id, {
         name: change.name ?? calendar.name,
         description: change.description ?? calendar.description,
       })
@@ -311,8 +321,15 @@ export async function openEvent(account: MailAccount, calendar: Calendar, row: E
     startUtc: row.startUtc,
     endUtc: row.endUtc,
     fullDay: row.fullDay,
+    revision: row.revision,
     verified: opened.verified && ownAuthor && sameInstant(start, row.startUtc),
   }
+}
+
+/** Where the next page of events starts. */
+interface EventCursor {
+  afterStart: string
+  afterId: string
 }
 
 /** The events of `calendar` that meet [start, end), every page, opened (unreadable ones counted). */
@@ -324,9 +341,10 @@ export async function loadEvents(
 ): Promise<{ events: CalendarEvent[]; unreadable: number }> {
   const events: CalendarEvent[] = []
   let unreadable = 0
-  for (let after: string | null = null; ; ) {
-    const response: { data: { events: EventRow[]; next: string | null } } = await api.get(`/calendar/calendars/${calendar.id}/events`, {
-      params: { start, end, after: after ?? undefined },
+  // The cursor is the last event's (start, id), the client's to hold.
+  for (let after: EventCursor | null = null; ; ) {
+    const response: { data: { events: EventRow[]; next: EventCursor | null } } = await api.get(`/calendar/calendars/${calendar.id}/events`, {
+      params: { start, end, ...after },
     })
     const data = response.data
     for (const row of data.events) {
@@ -342,7 +360,11 @@ export async function loadEvents(
   return { events, unreadable }
 }
 
-/** One change refused by an events sync, with its code (`uidTaken`, `eventLimit`, `invalid`…). */
+/**
+ * One change refused by an events sync, with its code (`uidTaken`,
+ * `eventLimit`, `revision_conflict` when another device saved first,
+ * `sequenceBehind`…).
+ */
 export class EventRefusedError extends Error {
   constructor(
     readonly status: number,
@@ -369,17 +391,21 @@ async function syncOne(calendar: Calendar, addressId: string, change: unknown): 
   return result.event
 }
 
-/** Saves an event's fields to `calendar`: a new event, or `existingId` changed. */
+/** Saves an event's fields to `calendar`: a new event, or `existing` (as opened) changed. */
 export async function saveEvent(
   account: MailAccount,
   calendar: Calendar,
   fields: EventFields,
-  existingId?: string,
+  existing?: Pick<CalendarEvent, 'id' | 'revision'>,
 ): Promise<string> {
   const addressId = await activeAddressId(account)
-  const event = await sealCalendarEvent(account.key, calendar.publicKey, fields)
-  const stored = await syncOne(calendar, addressId, existingId ? { update: { id: existingId, event } } : { create: event })
-  return stored?.id ?? existingId ?? ''
+  const event = sealCalendarEvent(calendar.unlocked, account.key, fields)
+  const stored = await syncOne(
+    calendar,
+    addressId,
+    existing ? { update: { id: existing.id, baseRevision: existing.revision, event } } : { create: event },
+  )
+  return stored?.id ?? existing?.id ?? ''
 }
 
 export async function deleteEvent(account: MailAccount, calendar: Calendar, id: string): Promise<void> {

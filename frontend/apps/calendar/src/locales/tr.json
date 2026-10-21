@@ -59,6 +59,7 @@
     "saveFailed": "Etkinlik kaydedilemedi.",
     "refused": "Etkinlik kaydedilemedi: sunucu kabul etmedi.",
     "limit": "Bu takvim, sunucunun izin verdiği kadar etkinlik barındırıyor.",
+    "changedElsewhere": "Bu etkinliği önce başka bir cihaz değiştirdi. Kapatıp yeniden açın.",
     "unverified": "Bu etkinliğin imzası doğrulanamadı: biri değiştirmiş olabilir. İçeriği gösteriliyor ama ona güvenmeyin.",
     "unverifiedShort": "Doğrulanmadı",
     "unreadable_one": "{{count}} öğe açılamadı ve gösterilmiyor.",

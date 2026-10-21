@@ -122,6 +122,149 @@ pub struct CalendarKey {
     /// passphrase (OpenPGP's iterated and salted S2K, AES-256).
     pub locked_secret_key: Vec<u8>,
     pub fingerprint: [u8; FINGERPRINT_LEN],
+    /// The key as made, to seal the new calendar's name with.
+    pub unlocked: UnlockedCalendarKey,
+}
+
+/// A calendar's key, unlocked: its secret and the public key derived from
+/// that secret, never one a server handed over. Everything sealed to the
+/// calendar goes through it, so a server can't make a client encrypt to a
+/// key of its own (the public key on the server's row is only for the
+/// server's own checks).
+pub struct UnlockedCalendarKey {
+    secret: Zeroizing<Vec<u8>>,
+    public: Vec<u8>,
+    fingerprint: [u8; FINGERPRINT_LEN],
+}
+
+impl UnlockedCalendarKey {
+    fn from_secret(secret: Zeroizing<Vec<u8>>) -> Result<Self> {
+        let key = SignedSecretKey::from_bytes(secret.as_slice())
+            .map_err(|_| CryptoError::InvalidInput("calendar key does not parse".into()))?;
+        let public = SignedPublicKey::from(key);
+        Ok(UnlockedCalendarKey {
+            fingerprint: fingerprint_of(&public)?,
+            public: public.to_bytes().map_err(backend)?,
+            secret,
+        })
+    }
+
+    /// The public key, derived from the secret.
+    pub fn public_key(&self) -> &[u8] {
+        &self.public
+    }
+
+    pub fn fingerprint(&self) -> [u8; FINGERPRINT_LEN] {
+        self.fingerprint
+    }
+
+    /// Seals an event for this calendar, signed by its author's unlocked
+    /// address key. Fresh session keys, unless kept from an earlier version
+    /// (invitations keep the shared one, E4).
+    pub fn seal_event(
+        &self,
+        parts: &EventParts,
+        author_secret_key: &[u8],
+        shared_key: Option<&SessionKey>,
+        calendar_key: Option<&SessionKey>,
+    ) -> Result<SealedEvent> {
+        seal_event_to(
+            parts,
+            &self.public,
+            author_secret_key,
+            shared_key,
+            calendar_key,
+        )
+    }
+
+    /// Opens an event, checking every part's signature against the author's
+    /// address keys.
+    pub fn open_event(
+        &self,
+        event: &SealedEvent,
+        author_public_keys: &[&[u8]],
+    ) -> Result<OpenedEvent> {
+        open_event_with(event, &self.secret, author_public_keys)
+    }
+
+    /// Seals this calendar's name and description, bound to its id and key.
+    pub fn seal_metadata(
+        &self,
+        calendar_id: &str,
+        name: &str,
+        description: &str,
+        author_secret_key: &[u8],
+    ) -> Result<SealedMetadata> {
+        let metadata = CalendarMetadataV1 {
+            version: 1,
+            calendar_id: calendar_id.to_owned(),
+            fingerprint: hex::encode(self.fingerprint),
+            name: name.to_owned(),
+            description: description.to_owned(),
+        };
+        seal_metadata_to(&metadata, &self.public, author_secret_key)
+    }
+
+    /// Opens this calendar's name and description. Refused unless they name
+    /// `calendar_id` and this key (a server can't serve one calendar's name
+    /// under another's id); `verified` says whether one of the given address
+    /// keys (the owner's) signed them.
+    pub fn open_metadata(
+        &self,
+        sealed: &SealedMetadata,
+        calendar_id: &str,
+        author_public_keys: &[&[u8]],
+    ) -> Result<(CalendarMetadataV1, bool)> {
+        let (metadata, verified) = open_metadata_with(sealed, &self.secret, author_public_keys)?;
+        if metadata.calendar_id != calendar_id
+            || metadata.fingerprint != hex::encode(self.fingerprint)
+        {
+            return Err(CryptoError::InvalidInput(
+                "the name and description are another calendar's".into(),
+            ));
+        }
+        Ok((metadata, verified))
+    }
+
+    /// Opens a key packet to this calendar's key.
+    pub fn open_key_packet(&self, key_packet: &[u8]) -> Result<SessionKey> {
+        open_key_packet(key_packet, &self.secret)
+    }
+
+    /// The unlocked secret, for opening key packets in this crate's tests.
+    #[cfg(test)]
+    pub(crate) fn secret(&self) -> &[u8] {
+        &self.secret
+    }
+}
+
+/// The cost a calendar key's S2K may have: OpenPGP's iterated count byte as
+/// this crate writes it (rPGP's v4 default, 224), and no other S2K. The
+/// passphrase is 32 random bytes, so the S2K adds nothing to its strength;
+/// the rule only keeps a server from making clients do arbitrary work.
+const MAX_S2K_COUNT: u8 = 224;
+
+/// Whether every secret part of `key` is locked the way this crate locks
+/// a calendar key: CFB with AES-256 over an iterated and salted S2K of at
+/// most [`MAX_S2K_COUNT`] (no Argon2 a server could size).
+fn locked_as_written(key: &SignedSecretKey) -> bool {
+    use pgp::types::{S2kParams, SecretParams, StringToKey};
+    let ok = |params: &SecretParams| match params {
+        SecretParams::Encrypted(encrypted) => matches!(
+            encrypted.string_to_key_params(),
+            S2kParams::Cfb {
+                sym_alg: SymmetricKeyAlgorithm::AES256,
+                s2k: StringToKey::IteratedAndSalted { count, .. },
+                ..
+            } if *count <= MAX_S2K_COUNT
+        ),
+        SecretParams::Plain(_) => false,
+    };
+    ok(key.primary_key.secret_params())
+        && key
+            .secret_subkeys
+            .iter()
+            .all(|subkey| ok(subkey.key.secret_params()))
 }
 
 /// Generates a calendar key locked with `passphrase`, created at
@@ -143,6 +286,7 @@ pub fn generate_calendar_key(passphrase: &Passphrase, created_at_secs: u32) -> R
         public_key: generated.public_key,
         locked_secret_key: key.to_bytes().map_err(backend)?,
         fingerprint: generated.fingerprint,
+        unlocked: UnlockedCalendarKey::from_secret(generated.secret_key)?,
     })
 }
 
@@ -188,14 +332,9 @@ pub fn inspect_locked_calendar_key(locked_secret_key: &[u8], public_key: &[u8]) 
             "the secret key is not the calendar key's".into(),
         ));
     }
-    let locked = secret.primary_key.secret_params().is_encrypted()
-        && secret
-            .secret_subkeys
-            .iter()
-            .all(|subkey| subkey.key.secret_params().is_encrypted());
-    if !locked {
+    if !locked_as_written(&secret) {
         return Err(CryptoError::InvalidInput(
-            "a calendar's secret key is locked with its passphrase".into(),
+            "a calendar's secret key is locked with its passphrase (AES-256, iterated S2K)".into(),
         ));
     }
     Ok(())
@@ -226,12 +365,13 @@ pub fn check_sealed_shape(event: &SealedEvent, calendar_public_key: &[u8]) -> Re
     Ok(())
 }
 
-/// Unlocks a calendar's secret key with its passphrase: the key that opens
-/// its key packets. A wrong passphrase is [`CryptoError::AuthFailed`].
+/// Unlocks a calendar's secret key with its passphrase. Refused before any
+/// work when the key isn't locked as this crate locks one (a server can't
+/// pick the S2K's cost); a wrong passphrase is [`CryptoError::AuthFailed`].
 pub fn unlock_calendar_key(
     locked_secret_key: &[u8],
     passphrase: &Passphrase,
-) -> Result<Zeroizing<Vec<u8>>> {
+) -> Result<UnlockedCalendarKey> {
     if locked_secret_key.len() > MAX_LOCKED_KEY_LEN {
         return Err(CryptoError::InvalidInput(
             "calendar key is too large".into(),
@@ -239,6 +379,11 @@ pub fn unlock_calendar_key(
     }
     let mut key = SignedSecretKey::from_bytes(locked_secret_key)
         .map_err(|_| CryptoError::InvalidInput("calendar key does not parse".into()))?;
+    if !locked_as_written(&key) {
+        return Err(CryptoError::InvalidInput(
+            "the calendar key is not locked as Kutup locks one".into(),
+        ));
+    }
     let password = Password::from(passphrase.as_str());
     key.primary_key
         .remove_password(&password)
@@ -249,7 +394,7 @@ pub fn unlock_calendar_key(
             .remove_password(&password)
             .map_err(|_| CryptoError::AuthFailed)?;
     }
-    key.to_bytes().map(Zeroizing::new).map_err(backend)
+    UnlockedCalendarKey::from_secret(key.to_bytes().map(Zeroizing::new).map_err(backend)?)
 }
 
 /// A key packet carrying `session_key` to `public_key`'s encryption subkey
@@ -465,10 +610,9 @@ pub struct EventParts {
     pub calendar_encrypted: Option<CalendarEncrypted>,
 }
 
-/// Seals an event for the calendar whose public key is given, signed by its
-/// author's unlocked address key. Fresh session keys, unless kept from an
-/// earlier version (invitations keep the shared one, E4).
-pub fn seal_event(
+/// Seals an event to `calendar_public_key`: only through
+/// [`UnlockedCalendarKey::seal_event`], whose key is derived from the secret.
+fn seal_event_to(
     parts: &EventParts,
     calendar_public_key: &[u8],
     author_secret_key: &[u8],
@@ -575,9 +719,7 @@ pub struct OpenedEvent {
     pub verified: bool,
 }
 
-/// Opens an event with its calendar's unlocked key, checking every part's
-/// signature against the author's address keys.
-pub fn open_event(
+fn open_event_with(
     event: &SealedEvent,
     calendar_secret_key: &[u8],
     author_public_keys: &[&[u8]],
@@ -628,6 +770,10 @@ pub struct SealedMetadata {
 #[serde(deny_unknown_fields)]
 pub struct CalendarMetadataV1 {
     pub version: u16,
+    /// The calendar it names, and the fingerprint (hex) of its key: signed
+    /// with the name, so a server can't serve it under another calendar.
+    pub calendar_id: String,
+    pub fingerprint: String,
     pub name: String,
     pub description: String,
 }
@@ -639,6 +785,9 @@ pub const MAX_CALENDAR_DESCRIPTION_CHARS: usize = 255;
 impl CalendarMetadataV1 {
     fn check(&self) -> Result<()> {
         if self.version != 1
+            || self.calendar_id.is_empty()
+            || self.calendar_id.len() > 64
+            || self.fingerprint.len() != 2 * FINGERPRINT_LEN
             || self.name.trim().is_empty()
             || self.name.chars().count() > MAX_CALENDAR_NAME_CHARS
             || self.description.chars().count() > MAX_CALENDAR_DESCRIPTION_CHARS
@@ -656,7 +805,7 @@ impl CalendarMetadataV1 {
     }
 }
 
-pub fn seal_metadata(
+fn seal_metadata_to(
     metadata: &CalendarMetadataV1,
     calendar_public_key: &[u8],
     author_secret_key: &[u8],
@@ -671,9 +820,7 @@ pub fn seal_metadata(
     })
 }
 
-/// Opens a calendar's name and description; `verified` says whether one of
-/// the given address keys (the calendar's owner's) signed them.
-pub fn open_metadata(
+fn open_metadata_with(
     sealed: &SealedMetadata,
     calendar_secret_key: &[u8],
     author_public_keys: &[&[u8]],
@@ -812,7 +959,9 @@ mod tests {
             unlock_calendar_key(&key.locked_secret_key, &wrong),
             Err(CryptoError::AuthFailed)
         ));
-        let secret = unlock_calendar_key(&key.locked_secret_key, &passphrase).unwrap();
+        let unlocked = unlock_calendar_key(&key.locked_secret_key, &passphrase).unwrap();
+        assert_eq!(unlocked.public_key(), key.public_key.as_slice());
+        let secret = unlocked.secret();
 
         let session_key = SessionKey::generate();
         let key_packet = key_packet_to(&session_key, &key.public_key).unwrap();
@@ -820,7 +969,7 @@ mod tests {
             key_packet_key_id(&key_packet).unwrap(),
             encryption_key_id(&key.public_key).unwrap()
         );
-        let opened = open_key_packet(&key_packet, &secret).unwrap();
+        let opened = open_key_packet(&key_packet, secret).unwrap();
         assert_eq!(opened.as_bytes(), session_key.as_bytes());
 
         let data = encrypt_data_packet(&session_key, b"BEGIN:VCALENDAR").unwrap();
@@ -917,22 +1066,17 @@ mod tests {
         let other = generate_address_key("eve@example.org", 1_760_000_000).unwrap();
         let passphrase = Passphrase::generate();
         let calendar = generate_calendar_key(&passphrase, 1_760_000_000).unwrap();
-        let secret = unlock_calendar_key(&calendar.locked_secret_key, &passphrase).unwrap();
+        let unlocked = unlock_calendar_key(&calendar.locked_secret_key, &passphrase).unwrap();
 
-        let sealed = seal_event(
-            &parts("u1@kutup"),
-            &calendar.public_key,
-            &author.secret_key,
-            None,
-            None,
-        )
-        .unwrap();
+        let sealed = unlocked
+            .seal_event(&parts("u1@kutup"), &author.secret_key, None, None)
+            .unwrap();
         // The server reads the times only from a part the author signed.
         let (shared, _) = check_signed_parts(&sealed, &[&author.public_key]).unwrap();
+        assert_eq!(shared.uid, "u1@kutup");
         check_sealed_shape(&sealed, &calendar.public_key).unwrap();
         let elsewhere = generate_calendar_key(&passphrase, 1_760_000_000).unwrap();
         assert!(check_sealed_shape(&sealed, &elsewhere.public_key).is_err());
-        assert_eq!(shared.uid, "u1@kutup");
         assert!(matches!(
             check_signed_parts(&sealed, &[&other.public_key]),
             Err(CryptoError::AuthFailed)
@@ -944,29 +1088,90 @@ mod tests {
             .into_bytes();
         assert!(check_signed_parts(&moved, &[&author.public_key]).is_err());
 
-        let opened = open_event(&sealed, &secret, &[&author.public_key]).unwrap();
+        let opened = unlocked.open_event(&sealed, &[&author.public_key]).unwrap();
         assert!(opened.verified);
         assert_eq!(
             opened.parts.shared_encrypted.summary.as_deref(),
             Some("Planning")
         );
         assert!(
-            !open_event(&sealed, &secret, &[&other.public_key])
+            !unlocked
+                .open_event(&sealed, &[&other.public_key])
                 .unwrap()
                 .verified
         );
         // Parts of two events: refused.
-        assert!(seal_event(
-            &EventParts {
-                shared_encrypted: parts("u2@kutup").shared_encrypted,
-                ..parts("u1@kutup")
+        assert!(unlocked
+            .seal_event(
+                &EventParts {
+                    shared_encrypted: parts("u2@kutup").shared_encrypted,
+                    ..parts("u1@kutup")
+                },
+                &author.secret_key,
+                None,
+                None,
+            )
+            .is_err());
+    }
+
+    /// A server that lists another key for a calendar can't make a client
+    /// seal to it: the unlocked key seals to the key derived from its secret.
+    #[test]
+    fn a_substituted_public_key_is_never_sealed_to() {
+        let author = generate_address_key("ada@example.org", 1_760_000_000).unwrap();
+        let passphrase = Passphrase::generate();
+        let calendar = generate_calendar_key(&passphrase, 1_760_000_000).unwrap();
+        let servers = generate_calendar_key(&Passphrase::generate(), 1_760_000_000).unwrap();
+        let unlocked = unlock_calendar_key(&calendar.locked_secret_key, &passphrase).unwrap();
+        assert_ne!(unlocked.public_key(), servers.public_key.as_slice());
+        let sealed = unlocked
+            .seal_event(&parts("u1@kutup"), &author.secret_key, None, None)
+            .unwrap();
+        // The packets are to the calendar's own key, not the server's.
+        check_sealed_shape(&sealed, &calendar.public_key).unwrap();
+        assert!(check_sealed_shape(&sealed, &servers.public_key).is_err());
+        let servers_unlocked = servers.unlocked;
+        assert!(servers_unlocked
+            .open_event(&sealed, &[&author.public_key])
+            .is_err());
+        let metadata = unlocked
+            .seal_metadata("c1", "Work", "", &author.secret_key)
+            .unwrap();
+        assert!(servers_unlocked
+            .open_metadata(&metadata, "c1", &[&author.public_key])
+            .is_err());
+    }
+
+    /// Only a key locked as this crate locks one unlocks: no other S2K, so a
+    /// server can't choose the work.
+    #[test]
+    fn a_key_locked_another_way_is_refused() {
+        use pgp::types::{S2kParams, StringToKey};
+        let passphrase = Passphrase::generate();
+        let calendar = generate_calendar_key(&passphrase, 1_760_000_000).unwrap();
+        let mut key = SignedSecretKey::from_bytes(calendar.unlocked.secret()).unwrap();
+        let password = Password::from(passphrase.as_str());
+        let costly = || S2kParams::Cfb {
+            sym_alg: SymmetricKeyAlgorithm::AES256,
+            s2k: StringToKey::IteratedAndSalted {
+                hash_alg: pgp::crypto::hash::HashAlgorithm::Sha256,
+                salt: [7; 8],
+                count: 255,
             },
-            &calendar.public_key,
-            &author.secret_key,
-            None,
-            None,
-        )
-        .is_err());
+            iv: vec![0u8; 16].into(),
+        };
+        key.primary_key
+            .set_password_with_s2k(&password, costly())
+            .unwrap();
+        for subkey in &mut key.secret_subkeys {
+            subkey
+                .key
+                .set_password_with_s2k(&password, costly())
+                .unwrap();
+        }
+        let locked = key.to_bytes().unwrap();
+        assert!(unlock_calendar_key(&locked, &passphrase).is_err());
+        assert!(inspect_locked_calendar_key(&locked, &calendar.public_key).is_err());
     }
 
     #[test]
@@ -974,24 +1179,25 @@ mod tests {
         let author = generate_address_key("ada@example.org", 1_760_000_000).unwrap();
         let passphrase = Passphrase::generate();
         let calendar = generate_calendar_key(&passphrase, 1_760_000_000).unwrap();
-        let secret = unlock_calendar_key(&calendar.locked_secret_key, &passphrase).unwrap();
-        let metadata = CalendarMetadataV1 {
-            version: 1,
-            name: "Work".into(),
-            description: "Team, Q4".into(),
-        };
-        let sealed = seal_metadata(&metadata, &calendar.public_key, &author.secret_key).unwrap();
-        let (opened, verified) = open_metadata(&sealed, &secret, &[&author.public_key]).unwrap();
-        assert_eq!(opened, metadata);
+        let unlocked = unlock_calendar_key(&calendar.locked_secret_key, &passphrase).unwrap();
+        let sealed = unlocked
+            .seal_metadata("c1", "Work", "Team, Q4", &author.secret_key)
+            .unwrap();
+        let (opened, verified) = unlocked
+            .open_metadata(&sealed, "c1", &[&author.public_key])
+            .unwrap();
+        assert_eq!(
+            (opened.name.as_str(), opened.description.as_str()),
+            ("Work", "Team, Q4")
+        );
+        assert_eq!(opened.fingerprint, hex::encode(calendar.fingerprint));
         assert!(verified);
-        assert!(seal_metadata(
-            &CalendarMetadataV1 {
-                name: " ".into(),
-                ..metadata
-            },
-            &calendar.public_key,
-            &author.secret_key,
-        )
-        .is_err());
+        // Served under another calendar's id: refused.
+        assert!(unlocked
+            .open_metadata(&sealed, "c2", &[&author.public_key])
+            .is_err());
+        assert!(unlocked
+            .seal_metadata("c1", " ", "", &author.secret_key)
+            .is_err());
     }
 }
