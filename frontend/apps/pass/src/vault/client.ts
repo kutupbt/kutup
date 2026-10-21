@@ -4,12 +4,36 @@
 import type { Call, Request, Response } from './protocol'
 import type { Applied, EntryView, ImportFailure, ImportFormat, ImportPreview, MergeOutcome, Op, OtpView, VaultKeyInput, VaultView } from './types'
 
+/** Why a vault didn't open, when the vault library says (its message's first word). */
+export type VaultFailure = 'wrongKey' | 'unsupported' | 'damaged' | 'keyFile' | 'emptyKey'
+const FAILURES: readonly string[] = ['wrongKey', 'unsupported', 'damaged', 'keyFile', 'emptyKey']
+
 /** The worker refused or failed a call; `message` is the vault library's. */
 export class VaultError extends Error {
+  /** Why it didn't open, for an open that failed. */
+  readonly failure: VaultFailure | null
   constructor(message: string) {
     super(message)
     this.name = 'VaultError'
+    const kind = /^(\w+): /.exec(message)?.[1]
+    this.failure = kind && FAILURES.includes(kind) ? (kind as VaultFailure) : null
   }
+}
+
+/** What a file is, from its header alone (no key). */
+export type VaultProbe =
+  | { kind: 'supported'; version: string; upgrade: boolean }
+  | { kind: 'unsupported'; version: string }
+  | { kind: 'notKeePass' }
+
+/** Reads a file's header: whether Kutup opens it, and whether its first save upgrades it. */
+export function probeVault(contents: Uint8Array): Promise<VaultProbe> {
+  return call({ call: 'probeVault', contents })
+}
+
+/** The account's kept key of vault `from` (its envelope), sealed for its copy `to` at `revision`. */
+export function resealKeptKey(envelope: string, masterKey: Uint8Array, binding: string, from: string, to: string, revision: number): Promise<string> {
+  return call({ call: 'resealKeptKey', envelope, masterKey, binding, from, to, revision })
 }
 
 let worker: Worker | null = null

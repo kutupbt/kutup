@@ -7,3 +7,4 @@ specs/151-pass-pin.spec.ts
 specs/152-pass-site-icons.spec.ts
 specs/153-pass-custom-icons.spec.ts
 specs/154-pass-vault-keys.spec.ts
+specs/166-pass-vault-menu.spec.ts

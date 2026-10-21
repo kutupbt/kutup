@@ -14,7 +14,7 @@ import {
 } from '@kutup/session/accountHead'
 import api from '@kutup/session/client'
 import { getSession, type Session } from '@kutup/session/store'
-import { openKept, type KeptKey, type VaultHandle } from '../vault/client'
+import { openKept, resealKeptKey, type KeptKey, type VaultHandle } from '../vault/client'
 import type { VaultKeyInput } from '../vault/types'
 
 // What is kept, and how, is decided once, in Rust (kutup_pass::kept, through
@@ -23,9 +23,18 @@ import type { VaultKeyInput } from '../vault/types'
 // than this browser has seen is not used, and a new one is stored only on top
 // of the one it replaces.
 
-interface SecretRow {
+/**
+ * What has become of a secret's vault: only an `open` one's key is used. The
+ * others are listed as the account head lists them, and kept until their
+ * owner forgets them (the key may be the only copy of a generated password
+ * or a key file's element, for a downloaded copy of the vault).
+ */
+export type SecretState = 'open' | 'trashed' | 'unreachable' | 'gone'
+
+export interface SecretRow {
   fileId: string
   envelope: string
+  state: SecretState
   /** The revision in the envelope's header, as the server read it. */
   revision: number
   updatedAt: string
@@ -63,10 +72,11 @@ async function secretsIndex(session: Session): Promise<VerifiedIndex | null> {
 }
 
 /**
- * The account's vault secrets, held to the head: a list with one more or one
- * fewer than the head vouches for is refused (read again once first, for a
- * write landing between the two reads), and each row carries the revision it
- * must open at. Refused, no kept key is used: vaults open with their password.
+ * The account's vault secrets in use (those of vaults open to it), held to
+ * the head: the whole list, every state, with one more or one fewer than
+ * the head vouches for is refused (read again once first, for a write
+ * landing between the two reads), and each row carries the revision it must
+ * open at. Refused, no kept key is used: vaults open with their password.
  */
 export async function loadVaultSecrets(session: Session): Promise<SecretRow[]> {
   for (let attempt = 0; ; attempt++) {
@@ -78,7 +88,9 @@ export async function loadVaultSecrets(session: Session): Promise<SecretRow[]> {
       if (error instanceof NotInVerifiedIndexError && attempt === 0) continue
       throw error
     }
-    return rows.map((row) => (index?.covered ? { ...row, vouched: index.revision(row.fileId) } : row))
+    return rows
+      .filter((row) => row.state === 'open')
+      .map((row) => (index?.covered ? { ...row, vouched: index.revision(row.fileId) } : row))
   }
 }
 
@@ -171,6 +183,22 @@ export async function putKeptKey(session: Session, fileId: string, sealed: Seale
   await revisionGuard(session)
     .accept(KEPT_SCOPE, fileId, sealed.revision)
     .catch(() => undefined)
+}
+
+/**
+ * Keeps the key the account keeps for vault `from` for its copy `to` as well
+ * (the copy has the same key), so the copy opens with the sign-in too. The
+ * kept secret moves as it is, in the worker: no vault is opened and no
+ * password is needed. False when nothing usable is kept for `from`.
+ */
+export async function keepCopiedKey(session: Session, rows: SecretRow[] | undefined, from: string, to: string): Promise<boolean> {
+  // Only one the account head vouches for, and not a replay.
+  if (!(await openRow(session, rows, from))) return false
+  const row = rows!.find((r) => r.fileId === from)!
+  const revision = await revisionGuard(session).next(KEPT_SCOPE, to, 0)
+  const envelope = await resealKeptKey(row.envelope, session.masterKey, session.envelopeBinding, from, to, revision)
+  await putKeptKey(session, to, { envelope, revision, base: 0 })
+  return true
 }
 
 /** Seals the key of the vault open in `vault` to replace the kept one at `base`. */

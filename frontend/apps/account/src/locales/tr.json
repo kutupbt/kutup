@@ -790,7 +790,12 @@
         "on": "Herkese açık",
         "code": "Davet koduyla",
         "off": "Kapalı"
-      }
+      },
+      "pass": "Kasa",
+      "passHint": "Kutup Kasa, parola yöneticisi.",
+      "passVaultMax": "En büyük kasa yüklemesi (MiB)",
+      "passVaultMaxHint": "Kasa'ya yüklenebilecek en büyük .kdbx dosyası (KeePassXC'den ya da bir yedekten). Bir kasanın kendi kayıtları hiçbir zaman reddedilmez. 1 ile 1024 arasında.",
+      "passVaultMaxRange": "1 ile 1024 MiB arasında."
     },
     "federation": {
       "title": "Federasyon",

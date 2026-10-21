@@ -7,6 +7,16 @@ use serde::Deserialize;
 
 use super::Client;
 
+/// What has become of a secret's vault (the server's `VaultSecretState`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum VaultSecretState {
+    Open,
+    Trashed,
+    Unreachable,
+    Gone,
+}
+
 /// One of the caller's sealed vault secrets.
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -14,10 +24,14 @@ pub struct VaultSecretRow {
     pub file_id: String,
     /// Base64 of the account envelope (`kutup_crypto::pass_vault`).
     pub envelope: String,
+    /// Only an `open` vault's key is used; the others are listed as the
+    /// account head lists them.
+    pub state: VaultSecretState,
 }
 
 impl Client {
-    /// The caller's vault secrets, for vaults they can still open.
+    /// Every one of the caller's vault secrets, each with what has become of
+    /// its vault.
     pub fn list_vault_secrets(&self) -> Result<Vec<VaultSecretRow>> {
         let resp = self.request(Method::GET, "/pass/vault-secrets").send()?;
         super::decode_json(resp)

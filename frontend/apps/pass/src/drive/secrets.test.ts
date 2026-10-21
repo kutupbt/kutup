@@ -45,14 +45,19 @@ vi.mock('../vault/client', () => ({
       revision: Number(revision),
     })
   }),
+  resealKeptKey: vi.fn((envelope: string, _key: Uint8Array, binding: string, from: string, to: string, revision: number) => {
+    const [kind, sealedBinding, sealedFile] = envelope.split(':')
+    if (sealedBinding !== binding || sealedFile !== from) return Promise.reject(new Error('auth failed'))
+    return Promise.resolve(`${kind}:${binding}:${to}:${revision}`)
+  }),
 }))
 
 import { NotInVerifiedIndexError } from '@kutup/session/accountHead'
-import { forgetVaultKey, keepVaultKey, keptGeneratedPassword, keptKey, keptKeyKind, loadVaultSecrets, putKeptKey } from './secrets'
+import { forgetVaultKey, keepCopiedKey, keepVaultKey, keptGeneratedPassword, keptKey, keptKeyKind, loadVaultSecrets, putKeptKey } from './secrets'
 
 const BINDING = '5f0c2f6e-1d2b-4c3a-8e9f-0a1b2c3d4e5f'
 const session = { userId: 'u1', masterKey: new Uint8Array(32), envelopeBinding: BINDING } as unknown as Session
-const row = (kind: string, binding: string, revision = T) => ({ fileId: 'v', envelope: `${kind}:${binding}:v:${revision}`, revision, updatedAt: '' })
+const row = (kind: string, binding: string, revision = T) => ({ fileId: 'v', envelope: `${kind}:${binding}:v:${revision}`, state: 'open' as const, revision, updatedAt: '' })
 const conflict = (revision: number) => Object.assign(new Error('409'), { isAxiosError: true, response: { status: 409, data: { code: 'revision_conflict', revision } } })
 
 /** A vault handle whose keepKey seals the fake way, at the revision asked. */
@@ -164,5 +169,47 @@ describe('kept vault keys', () => {
     const rows = await loadVaultSecrets(session)
     expect(rows[0]?.vouched).toBe(T + 1)
     expect(await keptKey(session, rows, 'v')).toBeNull()
+  })
+
+  it("checks every listed key against the head, and uses only those of vaults open to the account", async () => {
+    head.covered = true
+    head.index = () => [['v', T], ['t', T], ['g', T]]
+    get.mockResolvedValue({
+      data: [
+        row('sealed', BINDING, T),
+        { ...row('sealed', BINDING, T), fileId: 't', state: 'trashed' },
+        { ...row('sealed', BINDING, T), fileId: 'g', state: 'gone' },
+      ],
+    })
+    expect((await loadVaultSecrets(session)).map((r) => r.fileId)).toEqual(['v'])
+    // One short of the head's, a trashed vault's left out: refused, as any.
+    get.mockResolvedValue({ data: [row('sealed', BINDING, T), { ...row('sealed', BINDING, T), fileId: 'g', state: 'gone' }] })
+    await expect(loadVaultSecrets(session)).rejects.toBeInstanceOf(NotInVerifiedIndexError)
+  })
+})
+
+describe('keepCopiedKey', () => {
+  beforeEach(() => {
+    get.mockReset()
+    put.mockReset()
+    head.index = () => []
+    head.covered = false
+    resetRevisionGuardsForTesting()
+  })
+
+  it("keeps the vault's kept secret, as it is, for its copy", async () => {
+    put.mockResolvedValue({})
+    expect(await keepCopiedKey(session, [row('generated', BINDING)], 'v', 'copy')).toBe(true)
+    expect(put).toHaveBeenCalledTimes(1)
+    const [url, body] = put.mock.calls[0] as [string, { envelope: string; baseRevision: number }]
+    expect(url).toBe('/pass/vault-secrets/copy')
+    expect(body.baseRevision).toBe(0)
+    expect(body.envelope).toMatch(new RegExp(`^generated:${BINDING}:copy:\\d+$`))
+  })
+
+  it('keeps nothing when nothing usable is kept for the vault', async () => {
+    expect(await keepCopiedKey(session, [], 'v', 'copy')).toBe(false)
+    expect(await keepCopiedKey(session, [row('chosen', 'another-binding')], 'v', 'copy')).toBe(false)
+    expect(put).not.toHaveBeenCalled()
   })
 })
