@@ -228,7 +228,10 @@ pub async fn send_multi(
     let (status, answer) = if server == local {
         deliver(&state, &submission, parsed, &limits).await?
     } else {
-        forward(&state, server, &submission).await?
+        match forward(&state, server, &submission).await? {
+            Some(answered) => answered,
+            None => return Ok(peer_unavailable()),
+        }
     };
     Ok((status, Json(answer)).into_response())
 }
@@ -394,14 +397,17 @@ const MAX_FORWARD_ANSWER_BYTES: usize = 1024 * 1024;
 /// (docs/plans/pairwise-groups.md, slice 2 §5): `200`, `409` and `410` are
 /// relayed as they are, a malformed or too large send as the destination
 /// said; a slow, unreachable or unwilling destination is `503
-/// peerUnavailable`. Nothing is queued and nothing of the body is kept: the
-/// client sends those members' copies over the durable pairwise path.
+/// peerUnavailable` (`None` here). Nothing is queued and nothing of the
+/// body is kept: the client sends those members' copies over the durable
+/// pairwise path.
 async fn forward(
     state: &AppState,
     server: &str,
     submission: &SealedMultiSubmissionV1,
-) -> AppResult<(StatusCode, SealedMultiResponseV1)> {
-    let federation = state.federation.as_deref().ok_or_else(peer_unavailable)?;
+) -> AppResult<Option<(StatusCode, SealedMultiResponseV1)>> {
+    let Some(federation) = state.federation.as_deref() else {
+        return Ok(None);
+    };
     let body = serde_json::to_vec(submission)
         .map_err(|error| AppError::internal(format!("encode multi send: {error}")))?;
     let response = federation
@@ -424,22 +430,22 @@ async fn forward(
         Ok(response) => response,
         Err(error) => {
             tracing::info!(error = %error, "multi send: the destination didn't answer");
-            return Err(peer_unavailable());
+            return Ok(None);
         }
     };
     match response.status {
-        StatusCode::OK | StatusCode::CONFLICT | StatusCode::GONE => {
-            let answer: SealedMultiResponseV1 =
-                serde_json::from_slice(&response.body).map_err(|_| peer_unavailable())?;
-            Ok((response.status, answer))
-        }
+        StatusCode::OK | StatusCode::CONFLICT | StatusCode::GONE => Ok(serde_json::from_slice::<
+            SealedMultiResponseV1,
+        >(&response.body)
+        .ok()
+        .map(|answer| (response.status, answer))),
         StatusCode::BAD_REQUEST => Err(malformed(
             "the recipients' server refused the send as malformed",
         )),
         StatusCode::PAYLOAD_TOO_LARGE => Err(too_large(
             "the recipients' server refused the send as too large",
         )),
-        _ => Err(peer_unavailable()),
+        _ => Ok(None),
     }
 }
 
@@ -552,12 +558,18 @@ async fn nudge(state: &AppState, stored: &[(Uuid, i32)], urgent: bool) {
     }
 }
 
-fn peer_unavailable() -> AppError {
-    AppError::new(
+/// `503 peerUnavailable`, with its code: the one server-side status a client
+/// acts on (it sends those members' copies one by one), so it is answered
+/// as a client error is rather than as an internal one, which carries none.
+fn peer_unavailable() -> Response {
+    (
         StatusCode::SERVICE_UNAVAILABLE,
-        "the recipients' server didn't take this send; send their copies one by one",
+        Json(serde_json::json!({
+            "code": "peerUnavailable",
+            "error": "the recipients' server didn't take this send; send their copies one by one",
+        })),
     )
-    .with_details(serde_json::json!({ "code": "peerUnavailable" }))
+        .into_response()
 }
 
 /// The envelope a device drains for a mailbox row naming a shared payload:
