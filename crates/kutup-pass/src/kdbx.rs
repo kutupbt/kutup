@@ -127,6 +127,45 @@ pub fn key_file_secret(contents: &[u8]) -> Option<Vec<u8>> {
     (contents.len() <= MAX_KEPT_KEY_FILE_BYTES).then(|| contents.to_vec())
 }
 
+/// A new key file: 32 random bytes in KeePass's XML key file format v2,
+/// written as KeePassXC writes one (`FileKey::createXMLv2`), so KeePassXC,
+/// KeePass and the mobile apps open the vault with it. It never leaves the
+/// device but as the person's download (and, kept, as its key element).
+pub fn generate_key_file() -> Result<Zeroizing<Vec<u8>>, getrandom::Error> {
+    let mut key = Zeroizing::new([0u8; 32]);
+    getrandom::fill(key.as_mut())?;
+    Ok(key_file_xml(&key))
+}
+
+/// The XML v2 key file of `key`: its SHA-256's first four bytes as the
+/// `Hash` check, the key in upper-case hex, eight digits a group and four
+/// groups a line, indented as KeePassXC indents it.
+fn key_file_xml(key: &[u8; 32]) -> Zeroizing<Vec<u8>> {
+    use sha2::{Digest, Sha256};
+    let check = hex::encode_upper(&Sha256::digest(key)[..4]);
+    let digits = Zeroizing::new(hex::encode_upper(key));
+    let mut data = Zeroizing::new(String::with_capacity(96));
+    for (i, group) in digits.as_bytes().chunks(8).enumerate() {
+        data.push_str(match i {
+            0 => "",
+            _ if i % 4 == 0 => "\n            ",
+            _ => " ",
+        });
+        // Hex digits: ASCII.
+        data.push_str(std::str::from_utf8(group).unwrap_or_default());
+    }
+    Zeroizing::new(
+        format!(
+            "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n\
+             <KeyFile>\n    <Meta>\n        <Version>2.0</Version>\n    </Meta>\n    \
+             <Key>\n        <Data Hash=\"{check}\">\n            {data}\n        </Data>\n    \
+             </Key>\n</KeyFile>\n",
+            data = data.as_str()
+        )
+        .into_bytes(),
+    )
+}
+
 /// Why a vault could not be opened or saved.
 #[derive(Debug, thiserror::Error)]
 pub enum KdbxError {
@@ -187,6 +226,39 @@ mod tests {
         entry.set_unprotected("UserName", "ayse");
         entry.set_protected("Password", "çok-gizli-1");
         db
+    }
+
+    #[test]
+    fn a_generated_key_file_is_keepassxcs_xml_v2_and_opens_the_vault() {
+        // KeePassXC's own form, for a known key (its test vault's key file).
+        let key: [u8; 32] =
+            hex::decode("36057B1C35037FD962257893C0A22403EE3F8FBB504D998108B821CB00D28F89")
+                .unwrap()
+                .try_into()
+                .unwrap();
+        let xml = String::from_utf8(key_file_xml(&key).to_vec()).unwrap();
+        assert_eq!(
+            xml,
+            "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<KeyFile>\n    <Meta>\n        \
+             <Version>2.0</Version>\n    </Meta>\n    <Key>\n        <Data Hash=\"A65F0C2D\">\n            \
+             36057B1C 35037FD9 62257893 C0A22403\n            \
+             EE3F8FBB 504D9981 08B821CB 00D28F89\n        </Data>\n    </Key>\n</KeyFile>\n"
+        );
+        assert_eq!(
+            keepass::key_file_element(xml.as_bytes()).as_deref(),
+            Some(&key[..])
+        );
+
+        // A random one: its key, kept as that element, opens what it saved.
+        let file = generate_key_file().unwrap();
+        let other = generate_key_file().unwrap();
+        assert_ne!(*file, *other);
+        let key = VaultKey::new().with_key_file(&file);
+        let bytes = save(&sample(), &key).unwrap();
+        assert!(open(&bytes, &key).is_ok());
+        let kept = key_file_secret(&file).unwrap();
+        assert_eq!(kept.len(), 32);
+        assert!(open(&bytes, &VaultKey::new().with_key_file(&kept)).is_ok());
     }
 
     #[test]
