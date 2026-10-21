@@ -272,7 +272,10 @@ pub(crate) const NEWEST_VERSION: &str =
 
 /// `DELETE /api/files/{fileId}/versions/{vid}` — deletes one earlier version
 /// for good and frees its storage. The file's owner or the version's author
-/// may; the newest version cannot go.
+/// may; the newest version cannot go. `original` as the version deletes the
+/// file's first upload, once a whole-file version has replaced it (the
+/// owner or its uploader): so after a vault's key changes, no earlier copy
+/// that opens with the old key stays (docs/plans/pass-parity.md).
 #[utoipa::path(
     delete,
     path = "/api/files/{fileId}/versions/{vid}",
@@ -280,13 +283,13 @@ pub(crate) const NEWEST_VERSION: &str =
     security(("BearerAuth" = [])),
     params(
         ("fileId" = String, Path, description = "File id"),
-        ("vid" = String, Path, description = "Version id"),
+        ("vid" = String, Path, description = "Version id, or `original` for the first upload"),
     ),
     responses(
         (status = 204, description = "Deleted"),
-        (status = 403, description = "Neither the file's owner nor the version's author"),
-        (status = 404, description = "No such version"),
-        (status = 409, description = "The newest version is the file's current content"),
+        (status = 403, description = "Neither the file's owner nor the version's author (the original's uploader)"),
+        (status = 404, description = "No such version, or the original is already gone"),
+        (status = 409, description = "The newest version (or an original no whole-file version replaced) is the file's current content"),
     )
 )]
 pub async fn delete(
@@ -295,6 +298,9 @@ pub async fn delete(
     Path((file_id, vid)): Path<(String, String)>,
 ) -> AppResult<Response> {
     let (user_id, fid) = ids(&user.user_id, &file_id)?;
+    if vid == crate::handlers::files::ORIGINAL {
+        return delete_original(&state, user_id, fid).await;
+    }
     let vid = Uuid::parse_str(&vid).map_err(|_| AppError::not_found("not found"))?;
     type Row = (String, Uuid, Uuid, bool);
     let row: Option<Row> = sqlx::query_as(&format!(
@@ -328,6 +334,55 @@ pub async fn delete(
     crate::jobs::remove_version(&state.pool, &state.storage, vid, &path)
         .await
         .map_err(|_| AppError::internal("could not delete the version"))?;
+    Ok(StatusCode::NO_CONTENT.into_response())
+}
+
+/// Deletes a file's first upload: under the file row's lock, so whether a
+/// whole-file version replaced it is decided with the delete, and only the
+/// one whose mark lands (not retention, not a second request) frees the
+/// charge and the object.
+async fn delete_original(state: &AppState, user_id: Uuid, fid: Uuid) -> AppResult<Response> {
+    let mut tx = state.pool.begin().await?;
+    type Row = (String, i64, Uuid, Uuid, bool, bool);
+    let row: Option<Row> = sqlx::query_as(
+        "SELECT f.storage_path, f.encrypted_size_bytes, f.uploader_user_id, c.owner_user_id,
+                f.original_pruned,
+                EXISTS (SELECT 1 FROM file_versions v WHERE v.file_id = f.id AND v.kind = 'file')
+           FROM files f
+           JOIN collections c ON c.id = f.collection_id
+          WHERE f.id = $1 AND f.deleted_at IS NULL
+            FOR UPDATE OF f",
+    )
+    .bind(fid)
+    .fetch_optional(&mut *tx)
+    .await?;
+    let Some((path, size, uploader, owner, pruned, replaced)) = row else {
+        return Err(AppError::not_found("not found"));
+    };
+    if user_id != uploader && user_id != owner {
+        if can_access_file(&state.pool, user_id, fid).await? {
+            return Err(AppError::forbidden(
+                "only the file's owner or whoever uploaded it can delete its first upload",
+            ));
+        }
+        return Err(AppError::not_found("not found"));
+    }
+    if pruned {
+        return Err(AppError::not_found("the first upload is already gone"));
+    }
+    if !replaced {
+        return Err(AppError::conflict(
+            "the first upload is the file's current content and cannot be deleted",
+        ));
+    }
+    let marked = crate::jobs::mark_original_removed(&mut tx, fid, size, uploader).await?;
+    tx.commit().await?;
+    if !marked {
+        return Err(AppError::not_found("the first upload is already gone"));
+    }
+    if let Err(e) = state.storage.delete(&path).await {
+        tracing::warn!("delete original {path} failed: {e}");
+    }
     Ok(StatusCode::NO_CONTENT.into_response())
 }
 

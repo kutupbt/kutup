@@ -5029,6 +5029,15 @@ owner or the version's author (`403` for anyone else who can see the file,
 be deleted (`409`), whether or not it is kept forever; a kept-forever earlier
 version can be. **Response:** `204`.
 
+`original` as the version id deletes the file's first upload (KeePass vaults
+after a key change, so no earlier copy opens with the old key). Allowed for
+the file's owner or the original's uploader, once a whole-file version
+replaced it: `409` while it is still the current content, `404` once it is
+gone. Decided under the file row's lock; the upload is marked gone and its
+uploader's storage freed in one transaction, then the stored object is
+deleted. Retention removes it the same way, so a delete racing retention, or
+another delete, frees the storage once. **Response:** `204`.
+
 ### POST /api/files/:fileId/versions
 Store a version in one request (docs/plans/drive-versions-v2.md). Multipart:
 `file` — a complete typed Drive file blob, validated against the exact file,
