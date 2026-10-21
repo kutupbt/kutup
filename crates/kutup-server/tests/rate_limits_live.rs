@@ -169,6 +169,17 @@ fn administrators_set_rate_limits() {
         let status = r.status();
         (status, r.json::<Value>().unwrap_or(Value::Null))
     };
+    // An account can't set its own, even more generous, value.
+    let r = bearer(
+        c.put(format!(
+            "{base}/api/admin/users/{own_id}/rate-limits/{LIMIT}"
+        )),
+        &own.token,
+    )
+    .json(&json!({ "value": 3000 }))
+    .send()
+    .unwrap();
+    assert_eq!(r.status(), StatusCode::FORBIDDEN);
     let (status, set) = account_put(LIMIT, json!(1));
     assert_eq!(status, StatusCode::OK, "{set}");
     assert_eq!(set["value"], 1);

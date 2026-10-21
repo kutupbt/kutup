@@ -111,7 +111,11 @@ and maps, Pass, federation, the admin API), what it counts and per what, its
 value and its first value. A `RATE_LIMIT_*` or `LOGIN_*` variable only sets
 that first value. A change applies at once on the backend that saves it and
 within 30 seconds on every other; each value is between 1 and 100 times its
-default. The limits counted per account can also be set for one account, on
+default. On a test stack (`RATE_LIMITS_RELAXED`, test only) the
+`RATE_LIMIT_*` ones may go up to 100,000, except those that guard against
+guessing (sign-in, the lockout and ceilings, second factors and Pass PINs,
+registration and referral codes, recovery, user lookups), which never go
+above 100 times their default. The limits counted per account can also be set for one account, on
 its page under Administration. The windows are counted in each backend's
 memory: with several backends behind a balancer, a client spread over them
 can get up to that many times a limit (Kutup runs one backend per server).

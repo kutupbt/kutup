@@ -25,6 +25,12 @@ pub enum RateLimitUnit {
     /// Wrong attempts before a lock.
     Attempts,
     Minutes,
+    /// Bytes in `windowSeconds`.
+    Bytes,
+    /// How many at once (or a burst).
+    AtOnce,
+    /// Bytes at once (a burst).
+    BytesAtOnce,
 }
 
 #[derive(Debug, Serialize, ToSchema)]
@@ -70,6 +76,9 @@ fn entry(spec: &Spec, stored: &HashMap<String, String>) -> RateLimitEntry {
         ),
         Unit::Attempts => (RateLimitUnit::Attempts, None),
         Unit::Minutes => (RateLimitUnit::Minutes, None),
+        Unit::Bytes(window) => (RateLimitUnit::Bytes, Some(window.as_secs())),
+        Unit::AtOnce => (RateLimitUnit::AtOnce, None),
+        Unit::BytesAtOnce => (RateLimitUnit::BytesAtOnce, None),
     };
     let (first_value, first_from) = ratelimit::first(spec.limit);
     RateLimitEntry {
@@ -85,7 +94,7 @@ fn entry(spec: &Spec, stored: &HashMap<String, String>) -> RateLimitEntry {
         env: spec.env,
         set: stored.contains_key(spec.key),
         min: 1,
-        max: spec.ceiling(),
+        max: ratelimit::ceiling(spec),
     }
 }
 
@@ -102,8 +111,7 @@ pub async fn list(
     State(state): State<AppState>,
     _admin: AdminUser,
 ) -> AppResult<Json<RateLimitsResponse>> {
-    let stored = ratelimit::stored(&state.pool).await?;
-    ratelimit::apply(&stored);
+    let stored = ratelimit::reload(&state.pool).await?;
     Ok(Json(RateLimitsResponse {
         limits: ratelimit::SPECS
             .iter()
@@ -139,11 +147,11 @@ pub async fn update(
         .find(|spec| spec.key == key)
         .ok_or_else(|| AppError::not_found("no such rate limit"))?;
     if let Some(value) = request.value {
-        if !(1..=spec.ceiling()).contains(&value) {
+        if !(1..=ratelimit::ceiling(spec)).contains(&value) {
             return Err(AppError::bad_request(format!(
                 "{} is between 1 and {}",
                 spec.key,
-                spec.ceiling()
+                ratelimit::ceiling(spec)
             )));
         }
     }
@@ -167,8 +175,7 @@ pub async fn update(
                 .await?;
         }
     }
-    let stored = ratelimit::stored(&state.pool).await?;
-    ratelimit::apply(&stored);
+    let stored = ratelimit::reload(&state.pool).await?;
     crate::handlers::admin::audit(
         &state.pool,
         &admin.user_id,
@@ -219,7 +226,7 @@ fn account_entry(spec: &Spec, account: &str) -> AccountRateLimitEntry {
         site_value: site.value,
         own: own.is_some(),
         min: 1,
-        max: spec.ceiling(),
+        max: ratelimit::ceiling(spec),
     }
 }
 
@@ -298,13 +305,14 @@ pub async fn account_update(
             spec.key
         )));
     }
+    let previous = ratelimit::account_override(spec.limit, &id.to_string());
     match request.value {
         Some(value) => {
-            if !(1..=spec.ceiling()).contains(&value) {
+            if !(1..=ratelimit::ceiling(spec)).contains(&value) {
                 return Err(AppError::bad_request(format!(
                     "{} is between 1 and {}",
                     spec.key,
-                    spec.ceiling()
+                    ratelimit::ceiling(spec)
                 )));
             }
             sqlx::query(
@@ -331,7 +339,12 @@ pub async fn account_update(
         &admin.user_id,
         "user.rate_limit",
         Some(id),
-        json!({ "username": username, "key": spec.key, "value": request.value }),
+        json!({
+            "username": username,
+            "key": spec.key,
+            "value": request.value,
+            "previous": previous,
+        }),
     )
     .await;
     Ok(Json(account_entry(spec, &id.to_string())))

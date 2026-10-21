@@ -31,6 +31,12 @@ pub enum Per {
     /// A sealed-sender capability.
     Capability,
     Recipient,
+    /// One mail forwarding.
+    Forwarding,
+    /// One open connection (a collaboration socket).
+    Connection,
+    /// The whole server.
+    Server,
 }
 
 /// The admin page's section a limit is listed under.
@@ -59,6 +65,12 @@ pub enum Unit {
     Attempts,
     /// A length of time, in minutes.
     Minutes,
+    /// Bytes in a window of this length.
+    Bytes(Duration),
+    /// How many may be under way at once (or a burst allowed at once).
+    AtOnce,
+    /// Bytes allowed at once (a burst).
+    BytesAtOnce,
 }
 
 /// One limit's entry.
@@ -88,6 +100,28 @@ impl Spec {
         self.env.is_some_and(|name| name.starts_with("RATE_LIMIT_"))
     }
 
+    /// Whether it guards against guessing (a credential, a code, an
+    /// account): its ceiling stays 100 times its default even where
+    /// `RATE_LIMIT_*` values may go higher on test stacks.
+    pub fn guards_guessing(&self) -> bool {
+        matches!(
+            self.limit,
+            Limit::Login
+                | Limit::LoginLockoutThreshold
+                | Limit::LoginAccountCeiling
+                | Limit::LoginAccountDailyCeiling
+                | Limit::LoginSourceDailyCeiling
+                | Limit::TotpAttempts
+                | Limit::PassPinAttempts
+                | Limit::Register
+                | Limit::RegistrationCodeChecks
+                | Limit::RegistrationCodeFailures
+                | Limit::Recovery
+                | Limit::UserLookup
+                | Limit::FedUsers
+        )
+    }
+
     /// Whether one account may get its own value (docs/plans/admin-rate-limits.md
     /// §4): the limits counted per signed-in account. The sign-in ceilings
     /// count guesses at an account, not its own use, so they take none.
@@ -99,11 +133,13 @@ impl Spec {
             )
     }
 
-    /// The highest value it takes: 100 times its default (the relaxed value
-    /// where that is higher), so a typo cannot turn it off. The lowest is 1.
-    pub fn ceiling(&self) -> u64 {
+    /// The highest value it takes: 100 times its default, so a typo
+    /// cannot turn it off. On a test stack (`RATE_LIMITS_RELAXED`, test
+    /// only) the `RATE_LIMIT_*` ones may go up to the relaxed value, except
+    /// those that guard against guessing. The lowest is 1.
+    pub fn ceiling(&self, test_stack: bool) -> u64 {
         let ceiling = self.default.saturating_mul(100);
-        if self.relaxed() {
+        if test_stack && self.relaxed() && !self.guards_guessing() {
             ceiling.max(RELAXED)
         } else {
             ceiling
@@ -137,6 +173,10 @@ pub enum Limit {
     // Drive.
     AvailableHashes,
     CollabFramePosts,
+    CollabFramesPerSecond,
+    CollabFrameBurst,
+    CollabBytesPerSecond,
+    CollabByteBurst,
     Reports,
     // Chat.
     ChatKeysAccount,
@@ -171,7 +211,16 @@ pub enum Limit {
     // Mail.
     MailDomainChecks,
     MailImages,
+    MailImageBytes,
+    MailImagesAtOnce,
+    MailImagesServerAtOnce,
     ForwardingConfirmations,
+    ForwardingsCreated,
+    ForwardingConfirmationsSent,
+    ForwardingInvites,
+    ForwardingBounces,
+    ForwardingOutside,
+    ForwardingOutsideAccount,
     // Calls and maps.
     CallLinks,
     CallLinkPolls,
@@ -180,6 +229,7 @@ pub enum Limit {
     // Pass.
     PassIcons,
     PassIconFetches,
+    PassPinAttempts,
     // Federation.
     FedUsers,
     FedMultiFailures,
@@ -191,13 +241,14 @@ pub enum Limit {
     Admin,
 }
 
+const SECOND: Duration = Duration::from_secs(1);
 const MINUTE: Duration = Duration::from_secs(60);
 const QUARTER_HOUR: Duration = Duration::from_secs(15 * 60);
 const HOUR: Duration = Duration::from_secs(3600);
 const DAY: Duration = Duration::from_secs(24 * 3600);
 
 macro_rules! spec {
-    ($limit:ident, $key:literal, $env:expr, $default:literal, $unit:expr, $per:ident, $section:ident, $about:literal) => {
+    ($limit:ident, $key:literal, $env:expr, $default:expr, $unit:expr, $per:ident, $section:ident, $about:literal) => {
         Spec {
             limit: Limit::$limit,
             key: $key,
@@ -211,7 +262,9 @@ macro_rules! spec {
     };
 }
 
-use Unit::{Attempts, Events, EventsPerLockout, Minutes};
+use Unit::{AtOnce, Attempts, Bytes, BytesAtOnce, Events, EventsPerLockout, Minutes};
+
+const MIB: u64 = 1024 * 1024;
 
 pub static SPECS: &[Spec] = &[
     spec!(
@@ -423,6 +476,46 @@ pub static SPECS: &[Spec] = &[
         Device,
         Drive,
         "Collaboration frames sent over HTTP (the CLI)."
+    ),
+    spec!(
+        CollabFramesPerSecond,
+        "collab_frames_per_second",
+        None,
+        50,
+        Events(SECOND),
+        Connection,
+        Drive,
+        "Collaboration frames one socket sends a second, on average."
+    ),
+    spec!(
+        CollabFrameBurst,
+        "collab_frame_burst",
+        None,
+        500,
+        AtOnce,
+        Connection,
+        Drive,
+        "Collaboration frames one socket may send in a burst."
+    ),
+    spec!(
+        CollabBytesPerSecond,
+        "collab_bytes_per_second",
+        None,
+        MIB,
+        Bytes(SECOND),
+        Connection,
+        Drive,
+        "Collaboration bytes one socket sends a second, on average."
+    ),
+    spec!(
+        CollabByteBurst,
+        "collab_byte_burst",
+        None,
+        16 * MIB,
+        BytesAtOnce,
+        Connection,
+        Drive,
+        "Collaboration bytes one socket may send in a burst."
     ),
     spec!(
         Reports,
@@ -735,6 +828,36 @@ pub static SPECS: &[Spec] = &[
         "Remote images fetched through the image proxy."
     ),
     spec!(
+        MailImageBytes,
+        "mail_image_bytes",
+        None,
+        64 * MIB,
+        Bytes(MINUTE),
+        Account,
+        Mail,
+        "Remote image bytes fetched through the proxy."
+    ),
+    spec!(
+        MailImagesAtOnce,
+        "mail_images_at_once",
+        None,
+        6,
+        AtOnce,
+        Account,
+        Mail,
+        "Remote images one account fetches at once."
+    ),
+    spec!(
+        MailImagesServerAtOnce,
+        "mail_images_server_at_once",
+        None,
+        32,
+        AtOnce,
+        Server,
+        Mail,
+        "Remote images the server fetches at once, for everyone."
+    ),
+    spec!(
         ForwardingConfirmations,
         "forwarding_confirmations",
         None,
@@ -743,6 +866,66 @@ pub static SPECS: &[Spec] = &[
         Address,
         Mail,
         "Requests to the public forwarding confirmation page."
+    ),
+    spec!(
+        ForwardingsCreated,
+        "forwardings_created",
+        None,
+        10,
+        Events(HOUR),
+        Account,
+        Mail,
+        "Forwardings one account makes."
+    ),
+    spec!(
+        ForwardingConfirmationsSent,
+        "forwarding_confirmations_sent",
+        None,
+        10,
+        Events(DAY),
+        Account,
+        Mail,
+        "Confirmation emails one account causes, across its forwardings."
+    ),
+    spec!(
+        ForwardingInvites,
+        "forwarding_invites",
+        None,
+        3,
+        Events(DAY),
+        Forwarding,
+        Mail,
+        "Confirmation emails one outside forwarding sends."
+    ),
+    spec!(
+        ForwardingBounces,
+        "forwarding_bounces",
+        None,
+        5,
+        Events(DAY),
+        Forwarding,
+        Mail,
+        "Bounces that pause an outside forwarding."
+    ),
+    spec!(
+        ForwardingOutside,
+        "forwarding_outside",
+        None,
+        200,
+        Events(DAY),
+        Forwarding,
+        Mail,
+        "Messages one forwarding re-sends outside."
+    ),
+    spec!(
+        ForwardingOutsideAccount,
+        "forwarding_outside_account",
+        None,
+        500,
+        Events(DAY),
+        Account,
+        Mail,
+        "Messages one account's forwardings re-send outside."
     ),
     spec!(
         CallLinks,
@@ -803,6 +986,16 @@ pub static SPECS: &[Spec] = &[
         Account,
         Pass,
         "Sites fetched for icons (what the cache answers does not count)."
+    ),
+    spec!(
+        PassPinAttempts,
+        "pass_pin_attempts",
+        None,
+        3,
+        Attempts,
+        SignIn,
+        Pass,
+        "Wrong PINs in a row before the sign-in ends."
     ),
     spec!(
         FedUsers,
@@ -908,7 +1101,11 @@ mod tests {
                 assert!(envs.insert(env), "{env} twice");
                 assert!(!ENV_SEEDS.iter().any(|(seed, _)| *seed == env));
             }
-            assert!(spec.default >= 1 && spec.ceiling() >= spec.default);
+            assert!(spec.default >= 1 && spec.ceiling(false) >= spec.default);
+            assert!(spec.ceiling(true) >= spec.ceiling(false));
+            if spec.guards_guessing() {
+                assert_eq!(spec.ceiling(true), spec.default * 100, "{}", spec.key);
+            }
             assert!(spec
                 .key
                 .bytes()
@@ -917,7 +1114,8 @@ mod tests {
         assert_eq!(Limit::Admin as usize + 1, SPECS.len());
     }
 
-    /// Administration → Rate limits names every limit, in each language.
+    /// Administration → Rate limits names every limit and says what it
+    /// stops, in each language.
     #[test]
     fn the_admin_page_names_every_limit() {
         for language in ["en", "tr"] {
@@ -927,18 +1125,20 @@ mod tests {
             );
             let text = std::fs::read_to_string(&path).expect("the account app's strings");
             let strings: serde_json::Value = serde_json::from_str(&text).expect("JSON");
-            let names = &strings["admin"]["rateLimits"]["limit"];
-            for spec in SPECS {
-                assert!(
-                    names[spec.key].is_string(),
-                    "{language}: {} has no name",
-                    spec.key
+            for part in ["limit", "about"] {
+                let texts = &strings["admin"]["rateLimits"][part];
+                for spec in SPECS {
+                    assert!(
+                        texts[spec.key].is_string(),
+                        "{language} {part}: {}",
+                        spec.key
+                    );
+                }
+                assert_eq!(
+                    texts.as_object().map(|texts| texts.len()),
+                    Some(SPECS.len())
                 );
             }
-            assert_eq!(
-                names.as_object().map(|names| names.len()),
-                Some(SPECS.len())
-            );
         }
     }
 }

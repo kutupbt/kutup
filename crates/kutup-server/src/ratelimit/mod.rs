@@ -61,7 +61,7 @@ pub(crate) fn apply_overrides(rows: Vec<(String, String, i64)>) {
             continue;
         };
         match u64::try_from(value) {
-            Ok(value) if spec.overridable() && (1..=spec.ceiling()).contains(&value) => {
+            Ok(value) if spec.overridable() && (1..=ceiling(spec)).contains(&value) => {
                 overrides
                     .entry(account)
                     .or_default()
@@ -121,16 +121,21 @@ pub fn first(limit: Limit) -> (u64, FirstFrom) {
 /// logged.
 pub(crate) fn apply(stored: &HashMap<String, String>) {
     for spec in SPECS {
-        let value = effective(spec, stored.get(spec.key), first(spec.limit).0);
+        let value = effective(
+            spec,
+            stored.get(spec.key),
+            first(spec.limit).0,
+            ceiling(spec),
+        );
         VALUES[spec.limit as usize].store(value, Ordering::Relaxed);
     }
 }
 
 /// One limit's value: the stored one within its bounds, else its first.
-fn effective(spec: &Spec, stored: Option<&String>, first: u64) -> u64 {
+fn effective(spec: &Spec, stored: Option<&String>, first: u64, ceiling: u64) -> u64 {
     let Some(text) = stored else { return first };
     match text.parse::<u64>() {
-        Ok(value) if (1..=spec.ceiling()).contains(&value) => value,
+        Ok(value) if (1..=ceiling).contains(&value) => value,
         _ => {
             tracing::warn!(
                 limit = spec.key,
@@ -154,11 +159,20 @@ pub async fn stored(pool: &sqlx::PgPool) -> Result<HashMap<String, String>, sqlx
         .collect())
 }
 
-/// Reads the values administrators set into the snapshot.
-pub async fn reload(pool: &sqlx::PgPool) -> Result<(), sqlx::Error> {
-    apply(&stored(pool).await?);
-    apply_overrides(stored_overrides(pool).await?);
-    Ok(())
+/// Held across a reload's reads and its apply, so reloads apply in the
+/// order they read: a periodic reload that read before a save can't land
+/// after the saving backend's own reload and briefly undo it.
+static RELOADING: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
+/// Reads the values administrators set (the site's and accounts' own) into
+/// the snapshot; returns the site's, as stored.
+pub async fn reload(pool: &sqlx::PgPool) -> Result<HashMap<String, String>, sqlx::Error> {
+    let _order = RELOADING.lock().await;
+    let site = stored(pool).await?;
+    let accounts = stored_overrides(pool).await?;
+    apply(&site);
+    apply_overrides(accounts);
+    Ok(site)
 }
 
 /// How often every backend rereads the values administrators set, so all
@@ -179,9 +193,30 @@ pub fn spawn_reload(pool: sqlx::PgPool) {
     });
 }
 
+/// Whether this is a test stack (`RATE_LIMITS_RELAXED`, test only): some
+/// limits may go higher there ([`Spec::ceiling`]).
+static TEST_STACK: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// The highest value `spec` takes on this server.
+pub fn ceiling(spec: &Spec) -> u64 {
+    spec.ceiling(TEST_STACK.load(Ordering::Relaxed))
+}
+
 /// A limit's value now.
 pub fn value(limit: Limit) -> u64 {
     VALUES[limit as usize].load(Ordering::Relaxed)
+}
+
+/// A limit's value now for one account: its own where administrators set
+/// one ([`Spec::overridable`]), else the limit's. For the limits counted per
+/// account outside a [`RateLimiter`] (database counters, byte budgets).
+pub fn value_for(limit: Limit, account: &str) -> u64 {
+    if limit.spec().overridable() {
+        if let Some(own) = account_override(limit, account) {
+            return own;
+        }
+    }
+    value(limit)
 }
 
 /// A limit counted in the database (`chat_anonymous_rate_counters` and the
@@ -212,6 +247,7 @@ pub(crate) fn configure(env: &crate::config::Env, relaxed: bool) {
             env.error(format!("{name} is not a rate limit this server has"));
         }
     }
+    TEST_STACK.store(relaxed, Ordering::Relaxed);
     let first = first_values(env, relaxed);
     for (spec, (value, _)) in SPECS.iter().zip(&first) {
         VALUES[spec.limit as usize].store(*value, Ordering::Relaxed);
@@ -229,6 +265,7 @@ pub(crate) fn configure(env: &crate::config::Env, relaxed: bool) {
 fn first_values(env: &crate::config::Env, relaxed: bool) -> Vec<(u64, FirstFrom)> {
     let mut first = Vec::with_capacity(SPECS.len());
     for spec in SPECS {
+        let ceiling = spec.ceiling(relaxed);
         let (default, from) = if relaxed && spec.relaxed() {
             (registry::RELAXED, FirstFrom::TestStack)
         } else {
@@ -237,13 +274,12 @@ fn first_values(env: &crate::config::Env, relaxed: bool) -> Vec<(u64, FirstFrom)
         let configured = match spec.env.filter(|name| env.set(name).is_some()) {
             Some(name) => {
                 let configured = env.positive(name, default);
-                if configured > spec.ceiling() {
+                if configured > ceiling {
                     env.error(format!(
-                        "{name} may be at most {} (100 times its default), not {configured}",
-                        spec.ceiling()
+                        "{name} may be at most {ceiling} (100 times its default), not {configured}"
                     ));
                 }
-                (configured.min(spec.ceiling()), FirstFrom::Environment)
+                (configured.min(ceiling), FirstFrom::Environment)
             }
             None => (default, from),
         };
@@ -276,6 +312,10 @@ enum Bound {
     PerCheck,
     #[cfg(test)]
     Fixed(u64),
+    /// A value the test changes, apart from the shared snapshot that other
+    /// tests' configuration writes.
+    #[cfg(test)]
+    Cell(&'static AtomicU64),
 }
 
 impl Bound {
@@ -285,6 +325,8 @@ impl Bound {
             Bound::PerCheck => 0,
             #[cfg(test)]
             Bound::Fixed(limit) => *limit,
+            #[cfg(test)]
+            Bound::Cell(cell) => cell.load(Ordering::Relaxed),
         }
     }
 }
@@ -981,12 +1023,19 @@ mod tests {
     fn stored_values_apply_within_bounds() {
         let spec = Limit::Login.spec();
         let stored = |text: &str| Some(text.to_owned());
-        assert_eq!(effective(spec, None, 10), 10);
-        assert_eq!(effective(spec, stored("3").as_ref(), 10), 3);
-        assert_eq!(effective(spec, stored("100000").as_ref(), 10), 100_000);
-        for refused in ["0", "100001", "-1", "many"] {
+        // Sign-in guards against guessing: 100 times its default, even on a
+        // test stack.
+        assert_eq!(spec.ceiling(false), 1000);
+        assert_eq!(spec.ceiling(true), 1000);
+        assert_eq!(Limit::ChatKeysAddress.spec().ceiling(true), 100_000);
+        assert_eq!(Limit::ChatKeysAddress.spec().ceiling(false), 12_000);
+        let ceiling = spec.ceiling(false);
+        assert_eq!(effective(spec, None, 10, ceiling), 10);
+        assert_eq!(effective(spec, stored("3").as_ref(), 10, ceiling), 3);
+        assert_eq!(effective(spec, stored("1000").as_ref(), 10, ceiling), 1000);
+        for refused in ["0", "1001", "-1", "many"] {
             assert_eq!(
-                effective(spec, stored(refused).as_ref(), 10),
+                effective(spec, stored(refused).as_ref(), 10, ceiling),
                 10,
                 "{refused}"
             );
@@ -995,20 +1044,19 @@ mod tests {
 
     #[test]
     fn registered_limiters_read_the_current_value() {
-        // Nothing else in the tests uses this limit.
-        let limiter = RateLimiter::registered(Limit::InviteLinkAccountRequests);
-        let index = Limit::InviteLinkAccountRequests as usize;
-        VALUES[index].store(2, Ordering::Relaxed);
+        // Its own value source: the configuration tests write the shared
+        // snapshot while this runs.
+        static CELL: AtomicU64 = AtomicU64::new(2);
+        let limiter = RateLimiter::with(Bound::Cell(&CELL), Span::Fixed(Duration::from_secs(60)));
         assert!(limiter.allow("a"));
         assert!(limiter.allow("a"));
         assert!(!limiter.allow("a"));
         // Raised: applies at once.
-        VALUES[index].store(3, Ordering::Relaxed);
+        CELL.store(3, Ordering::Relaxed);
         assert!(limiter.allow("a"));
         // Lowered: the next check is held to it.
-        VALUES[index].store(1, Ordering::Relaxed);
+        CELL.store(1, Ordering::Relaxed);
         assert!(!limiter.allow("a"));
-        VALUES[index].store(10, Ordering::Relaxed);
     }
 
     #[test]

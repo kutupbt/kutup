@@ -10,6 +10,7 @@ import { Input } from '@kutup/ui/components/input'
 import { PageBody, PageHeader, Section } from '@kutup/ui/components/page'
 import { LoadingPanel } from '@kutup/ui/components/states'
 import { apiErrorMessage } from '@kutup/ui/lib/apiError'
+import { formatBytes } from '@kutup/ui/lib/format'
 import { adminKey } from './api'
 import { windowUnit } from './helpers'
 
@@ -29,7 +30,7 @@ export interface RateLimit {
   key: string
   section: string
   per: string
-  unit: 'events' | 'attempts' | 'minutes'
+  unit: 'events' | 'attempts' | 'minutes' | 'bytes' | 'atOnce' | 'bytesAtOnce'
   windowSeconds: number | null
   value: number
   firstValue: number
@@ -67,7 +68,6 @@ export function RateLimitsPage() {
   }
   if (limits.isPending) return <LoadingPanel label={t('common.loading')} />
 
-
   return (
     <PageBody width="prose">
       <PageHeader title={t('admin.rateLimits.title')} description={t('admin.rateLimits.description')} />
@@ -97,11 +97,14 @@ type TFunction = ReturnType<typeof useTranslation>['t']
 /** What a limit counts, per what and over which window, in words. */
 function countsText(limit: Pick<RateLimit, 'unit' | 'windowSeconds' | 'per'>, t: TFunction): string {
   const per = t(`admin.rateLimits.per.${limit.per}`)
-  if (limit.unit === 'events' && limit.windowSeconds) {
-    const window = windowUnit(limit.windowSeconds)
-    return t('admin.rateLimits.countsEvents', { per, window: t(`admin.rateLimits.window.${window.unit}`, { count: window.count }) })
+  if ((limit.unit === 'events' || limit.unit === 'bytes') && limit.windowSeconds) {
+    const unit = windowUnit(limit.windowSeconds)
+    const window = t(`admin.rateLimits.window.${unit.unit}`, { count: unit.count })
+    return t(limit.unit === 'bytes' ? 'admin.rateLimits.countsBytes' : 'admin.rateLimits.countsEvents', { per, window })
   }
   if (limit.unit === 'attempts') return t('admin.rateLimits.countsAttempts', { per })
+  if (limit.unit === 'atOnce') return t('admin.rateLimits.countsAtOnce', { per })
+  if (limit.unit === 'bytesAtOnce') return t('admin.rateLimits.countsBytesAtOnce', { per })
   return t('admin.rateLimits.countsMinutes')
 }
 
@@ -113,6 +116,7 @@ function SiteRateLimitRow({ limit }: { limit: RateLimit }) {
     <RateLimitRow
       limitKey={limit.key}
       counts={countsText(limit, t)}
+      bytes={limit.unit === 'bytes' || limit.unit === 'bytesAtOnce'}
       note={limit.set ? t('admin.rateLimits.setHere', { first }) : first}
       value={limit.value}
       min={limit.min}
@@ -151,6 +155,7 @@ export function AccountRateLimits({ userId }: { userId: string }) {
             key={limit.key}
             limitKey={limit.key}
             counts={countsText({ ...limit, per: 'account' }, t)}
+            bytes={limit.unit === 'bytes' || limit.unit === 'bytesAtOnce'}
             note={
               limit.override
                 ? t('admin.rateLimits.accountOwn', { site: limit.siteValue })
@@ -177,6 +182,8 @@ export function AccountRateLimits({ userId }: { userId: string }) {
 interface RowProps<T> {
   limitKey: string
   counts: string
+  /** The value is a number of bytes: its size is shown beside it. */
+  bytes: boolean
   note: string
   value: number
   min: number
@@ -188,8 +195,8 @@ interface RowProps<T> {
 }
 
 /** One limit: its name, what it counts, its value with save and reset. */
-function RateLimitRow<T>({ limitKey, counts, note, value, min, max, resettable, resetLabel, save, onSaved }: RowProps<T>) {
-  const { t } = useTranslation()
+function RateLimitRow<T>({ limitKey, counts, bytes, note, value, min, max, resettable, resetLabel, save, onSaved }: RowProps<T>) {
+  const { t, i18n } = useTranslation()
   const [draft, setDraft] = useState(String(value))
   useEffect(() => setDraft(String(value)), [value])
   const mutation = useMutation({
@@ -217,7 +224,11 @@ function RateLimitRow<T>({ limitKey, counts, note, value, min, max, resettable, 
     >
       <div className="min-w-0 flex-1 basis-56 space-y-1">
         <label htmlFor={inputId} className="text-sm font-medium">{t(`admin.rateLimits.limit.${limitKey}`)}</label>
-        <p className="text-sm text-muted-foreground">{counts}</p>
+        <p className="text-sm text-muted-foreground">{t(`admin.rateLimits.about.${limitKey}`)}</p>
+        <p className="text-xs text-muted-foreground">
+          {counts}
+          {bytes && valid ? ` (${t('admin.rateLimits.bytesHint', { size: formatBytes(parsed, i18n.language) })})` : ''}
+        </p>
         <p className="text-xs text-muted-foreground">{note}</p>
         {!valid && draft.trim() !== '' ? (
           <p className="text-xs text-destructive" role="alert">{t('admin.rateLimits.bounds', { min, max })}</p>
