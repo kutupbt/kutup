@@ -338,6 +338,24 @@ pub async fn rate_limit_recovery(
     limit(addr, &ratelimit::RECOVERY, None, req, next).await
 }
 
+/// 60/min/IP for forwarded multi-recipient sends that don't authenticate:
+/// charged here, before the body is read, and given back by the handler
+/// once the request authenticates (`ratelimit::FED_MULTI_IP`).
+pub async fn rate_limit_fed_multi(
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
+    req: Request,
+    next: Next,
+) -> Response {
+    limit(
+        addr,
+        &ratelimit::FED_MULTI_IP,
+        Some("federation_ip"),
+        req,
+        next,
+    )
+    .await
+}
+
 /// 60/min/IP — coarse pre-authentication limit for server-to-server directory routes.
 pub async fn rate_limit_fed_users(
     ConnectInfo(addr): ConnectInfo<SocketAddr>,

@@ -20,6 +20,7 @@
 
 pub mod check;
 pub mod entry;
+pub mod link;
 #[cfg(test)]
 mod tests;
 
@@ -35,8 +36,8 @@ pub use check::{
     GroupLimits,
 };
 pub use entry::{
-    GroupContextV1, GroupInviteV1, GroupListEntryV1, GroupListStatus, GroupMemberEntryV1,
-    GroupSlotEntryV1,
+    GroupAvatarV1, GroupBanListV1, GroupBannedAccountV1, GroupContextV1, GroupInviteV1,
+    GroupListEntryV1, GroupListStatus, GroupMemberEntryV1, GroupSlotEntryV1,
 };
 
 pub const GROUP_FORMAT_VERSION: u16 = 1;
@@ -47,6 +48,11 @@ pub const MAX_SEALED_TITLE_BYTES: usize = 1024;
 pub const MAX_SEALED_DESCRIPTION_BYTES: usize = 8192;
 pub const MAX_SEALED_TIMER_BYTES: usize = 128;
 pub const MAX_SEALED_AVATAR_BYTES: usize = 512;
+/// Signal-Desktop's limits for what members type, in characters
+/// (`GroupTitleInput`, `GroupDescriptionInput`): the sealed caps above hold
+/// them in any script.
+pub const MAX_GROUP_TITLE_CHARS: usize = 32;
+pub const MAX_GROUP_DESCRIPTION_CHARS: usize = 480;
 /// A member's or slot's sealed entry: an AccountRef, a profile key and a
 /// binding signature, with room to spare.
 pub const MAX_SEALED_ENTRY_BYTES: usize = 512;
@@ -128,6 +134,14 @@ pub struct GroupAttributesV1 {
     pub description: Option<String>,
     pub timer: Option<String>,
     pub avatar: Option<String>,
+    /// The SHA-256 (base64) of the avatar blob **as the home stores it**:
+    /// sealed and padded, never the plaintext image, which would let the
+    /// home recognise a known picture across groups. In the clear beside the
+    /// sealed avatar (its key and type), so the home serves the blob and
+    /// drops the ones no state names (docs/plans/pairwise-groups.md §11).
+    /// Present exactly when `avatar` is.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub avatar_hash: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -302,6 +316,15 @@ impl GroupStateV1 {
         self.member(pseudonym)
             .is_some_and(|member| member.role == GroupRole::Administrator)
     }
+
+    /// Whether `pseudonym` is a member that `access.attributes` lets change
+    /// the title, description, avatar and timer (the rule a
+    /// `ModifyAttribute` change is checked by; the home checks an avatar
+    /// upload with it too).
+    pub fn may_modify_attributes(&self, pseudonym: &str) -> bool {
+        self.member(pseudonym).is_some()
+            && check::allowed(self.access.attributes, self.is_administrator(pseudonym))
+    }
 }
 
 /// One action of a change (`Groups.proto` `GroupChange.Actions`, with
@@ -377,6 +400,11 @@ pub enum GroupActionV1 {
     ModifyAttribute {
         attribute: GroupAttribute,
         value: Option<String>,
+        /// The SHA-256 (base64) of the avatar blob as the home stores it
+        /// (sealed and padded, never the plaintext image): only with
+        /// `Avatar`, and exactly when `value` is set.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        avatar_hash: Option<String>,
     },
     #[serde(rename_all = "camelCase")]
     ModifyAccess {
@@ -555,7 +583,9 @@ pub fn decode_sealed(field: &str, value: &str, max: usize) -> Result<Vec<u8>, St
     Ok(bytes)
 }
 
-fn validate_home(home: &GroupHomePinV1) -> Result<(), String> {
+/// A home pin in its one canonical spelling (the group id binds it:
+/// `kutup_crypto::chat_group::GroupHome`), checked wherever one arrives.
+pub(crate) fn validate_home(home: &GroupHomePinV1) -> Result<(), String> {
     if !kutup_crypto::account_ref::valid_server(&home.server) {
         return Err("home server is not a valid server name".into());
     }
@@ -582,5 +612,29 @@ fn validate_attributes(attributes: &GroupAttributesV1) -> Result<(), String> {
             decode_sealed("attribute", value, attribute.max_sealed_bytes())?;
         }
     }
+    check_avatar_hash(
+        GroupAttribute::Avatar,
+        &attributes.avatar,
+        &attributes.avatar_hash,
+    )?;
     Ok(())
+}
+
+/// The avatar's clear hash: 32 bytes, present exactly when the avatar is;
+/// never on another attribute.
+pub(crate) fn check_avatar_hash(
+    attribute: GroupAttribute,
+    value: &Option<String>,
+    hash: &Option<String>,
+) -> Result<(), String> {
+    match (attribute, value, hash) {
+        (GroupAttribute::Avatar, Some(_), Some(hash)) => {
+            decode_exact::<32>("avatarHash", hash)?;
+            Ok(())
+        }
+        (GroupAttribute::Avatar, None, None) => Ok(()),
+        (GroupAttribute::Avatar, _, _) => Err("an avatar and its hash come together".into()),
+        (_, _, None) => Ok(()),
+        (_, _, Some(_)) => Err("only the avatar has a hash".into()),
+    }
 }

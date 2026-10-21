@@ -263,6 +263,7 @@ pub enum Scope {
     Pins,
     PassSecrets,
     ChatGroups,
+    ChatContacts,
 }
 
 impl Scope {
@@ -273,6 +274,7 @@ impl Scope {
             "pins" => Scope::Pins,
             "passSecrets" => Scope::PassSecrets,
             "chatGroups" => Scope::ChatGroups,
+            "chatContacts" => Scope::ChatContacts,
             _ => return None,
         })
     }
@@ -280,12 +282,13 @@ impl Scope {
 
 impl Scope {
     /// Every scope, in the order the basis covers them.
-    pub const ALL: [Scope; 5] = [
+    pub const ALL: [Scope; 6] = [
         Scope::Contacts,
         Scope::MailNames,
         Scope::Pins,
         Scope::PassSecrets,
         Scope::ChatGroups,
+        Scope::ChatContacts,
     ];
 
     fn name(self) -> &'static str {
@@ -295,6 +298,7 @@ impl Scope {
             Scope::Pins => "pins",
             Scope::PassSecrets => "passSecrets",
             Scope::ChatGroups => "chatGroups",
+            Scope::ChatContacts => "chatContacts",
         }
     }
 }
@@ -303,7 +307,7 @@ impl Scope {
 /// id; `folder:`, `label:` or `filter:` and the id for mail names (a folder
 /// without a name, kept through an account reset, is left out until it is
 /// named); `pins` for the one pin list; an entry's keyed id for the group
-/// list; the vault's file id for a Pass secret
+/// list and for the Chat contact list; the vault's file id for a Pass secret
 /// (every one the account keeps, trashed or out of reach included: the secret
 /// stays until its owner forgets it with a head).
 async fn values(
@@ -351,6 +355,12 @@ async fn values(
         }
         Scope::ChatGroups => {
             sqlx::query_as("SELECT id, revision FROM chat_group_list WHERE user_id = $1")
+                .bind(user_id)
+                .fetch_all(&mut *conn)
+                .await?
+        }
+        Scope::ChatContacts => {
+            sqlx::query_as("SELECT id, revision FROM chat_contact_list WHERE user_id = $1")
                 .bind(user_id)
                 .fetch_all(&mut *conn)
                 .await?

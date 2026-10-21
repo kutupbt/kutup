@@ -245,6 +245,39 @@ export interface CryptoWasmModule {
     previousDataBase64?: string,
     previousSignatureBase64?: string,
   ): import('./mailKey').SignedMailKeyList
+  makeMailForwarding(
+    masterKeyBase64: string,
+    binding: string,
+    forwarderAddress: string,
+    envelopeBase64: string,
+    fingerprintHex: string,
+    forwardeeAddress: string,
+    forwardeePublicKeyBase64: string,
+    forwardingId: string,
+    createdAtSecs: number,
+    expiresAtSecs: number,
+  ): import('./mailKey').MailForwardingMaterial
+  acceptMailForwarding(
+    masterKeyBase64: string,
+    binding: string,
+    forwardeeAddress: string,
+    envelopeBase64: string,
+    fingerprintHex: string,
+    forwarderAddress: string,
+    forwarderPublicKeyBase64: string,
+    forwardingId: string,
+    nowSecs: number,
+    activation: string,
+  ): import('./mailKey').AcceptedMailForwarding
+  openForwardedMailMessage(
+    masterKeyBase64: string,
+    binding: string,
+    address: string,
+    envelopeBase64: string,
+    fingerprintHex: string,
+    message: Uint8Array,
+    senderPublicKeyBase64?: string,
+  ): { data: Uint8Array; signed: boolean; verified: boolean; free(): void }
   openMailMessage(
     masterKeyBase64: string,
     binding: string,

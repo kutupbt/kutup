@@ -42,7 +42,9 @@ const KDF_SALT: &[u8] = b"kutup/chat-group/v1";
 /// group.
 const ID_INFO: &[u8] = b"kutup/chat-group/id/v2\0";
 const HOME_DOMAIN: &[u8] = b"kutup/chat-group/home/v1\0";
-const STATE_KEY_INFO: &[u8] = b"kutup/chat-group/state-key/v1";
+/// v2: the group id follows in the info, so a state key is its group's
+/// alone (each sealed field binds the id as well).
+const STATE_KEY_INFO: &[u8] = b"kutup/chat-group/state-key/v2\0";
 
 const SEAL_DOMAIN: &[u8] = b"kutup/chat-group/sealed-field/v1\0";
 const SEAL_VERSION: u8 = 1;
@@ -139,14 +141,13 @@ impl GroupMasterKey {
         id
     }
 
-    /// The key that seals the state's encrypted fields.
+    /// The key that seals the state's encrypted fields: the master key's,
+    /// for this group id.
     pub fn state_key(&self) -> GroupStateKey {
+        let group_id = self.group_id();
         let mut key = Zeroizing::new([0u8; 32]);
-        self.expand(STATE_KEY_INFO, key.as_mut());
-        GroupStateKey {
-            key,
-            group_id: self.group_id(),
-        }
+        self.expand(&[STATE_KEY_INFO, &group_id].concat(), key.as_mut());
+        GroupStateKey { key, group_id }
     }
 
     fn expand(&self, info: &[u8], out: &mut [u8]) {
@@ -479,6 +480,108 @@ pub fn state_hash(state_bytes: &[u8]) -> [u8; HASH_LEN] {
         .into()
 }
 
+/// A group's avatar (docs/plans/pairwise-groups.md §11, "Avatar"): the image,
+/// padded to a size bucket, sealed under a fresh random key, so the same
+/// picture in two groups gives unrelated blobs. The blob is `version (1) ‖
+/// nonce (24) ‖ ciphertext ‖ tag (16)`; the home stores and serves it by its
+/// SHA-256 and sees nothing else. The key travels in the group's sealed
+/// avatar attribute.
+pub const AVATAR_BUCKETS: [usize; 4] = [8 * 1024, 16 * 1024, 32 * 1024, 40 * 1024];
+const AVATAR_VERSION: u8 = 1;
+const AVATAR_AAD: &[u8] = b"kutup/chat-group/avatar/v1\0";
+
+/// The blob length a padded bucket gives.
+pub const fn avatar_blob_len(bucket: usize) -> usize {
+    1 + NONCE_LEN + bucket + TAG_LEN
+}
+
+/// The largest image an avatar takes: the largest bucket, less the padding
+/// marker.
+pub const MAX_AVATAR_IMAGE_BYTES: usize = AVATAR_BUCKETS[AVATAR_BUCKETS.len() - 1] - 1;
+
+/// Seals `image` as a group avatar: the blob, and the key that opens it.
+pub fn seal_group_avatar(image: &[u8]) -> Result<(Vec<u8>, Zeroizing<[u8; 32]>)> {
+    let mut key = Zeroizing::new([0u8; 32]);
+    copy_randombytes(key.as_mut_slice());
+    let mut nonce = [0u8; NONCE_LEN];
+    copy_randombytes(&mut nonce);
+    let blob = seal_group_avatar_with(image, &key, &nonce)?;
+    Ok((blob, key))
+}
+
+/// [`seal_group_avatar`] with a given key and nonce, for checked-in vectors.
+#[cfg(any(test, feature = "test-vectors"))]
+pub fn seal_group_avatar_with_fixed_key(
+    image: &[u8],
+    key: &[u8; 32],
+    nonce: &[u8; NONCE_LEN],
+) -> Result<Vec<u8>> {
+    seal_group_avatar_with(image, key, nonce)
+}
+
+fn seal_group_avatar_with(
+    image: &[u8],
+    key: &[u8; 32],
+    nonce: &[u8; NONCE_LEN],
+) -> Result<Vec<u8>> {
+    let bucket = AVATAR_BUCKETS
+        .iter()
+        .copied()
+        .find(|bucket| image.len() < *bucket)
+        .ok_or_else(|| CryptoError::InvalidInput("a group avatar is at most 40 KiB".into()))?;
+    // ISO/IEC 7816-4: a 0x80 marker, then zeros to the bucket.
+    let mut padded = Zeroizing::new(Vec::with_capacity(bucket));
+    padded.extend_from_slice(image);
+    padded.push(0x80);
+    padded.resize(bucket, 0);
+    let ciphertext = XChaCha20Poly1305::new(key.as_slice().into())
+        .encrypt(
+            XNonce::from_slice(nonce),
+            Payload {
+                msg: &padded,
+                aad: AVATAR_AAD,
+            },
+        )
+        .map_err(|_| CryptoError::Backend("group avatar seal".into()))?;
+    Ok([&[AVATAR_VERSION][..], nonce, &ciphertext].concat())
+}
+
+/// Opens a group avatar blob with its key: the image, unpadded. Any other
+/// length than a bucket's, version or key fails.
+pub fn open_group_avatar(blob: &[u8], key: &[u8; 32]) -> Result<Zeroizing<Vec<u8>>> {
+    if !AVATAR_BUCKETS
+        .iter()
+        .any(|bucket| avatar_blob_len(*bucket) == blob.len())
+        || blob[0] != AVATAR_VERSION
+    {
+        return Err(CryptoError::AuthFailed);
+    }
+    let (nonce, ciphertext) = blob[1..].split_at(NONCE_LEN);
+    let padded = Zeroizing::new(
+        XChaCha20Poly1305::new(key.as_slice().into())
+            .decrypt(
+                XNonce::from_slice(nonce),
+                Payload {
+                    msg: ciphertext,
+                    aad: AVATAR_AAD,
+                },
+            )
+            .map_err(|_| CryptoError::AuthFailed)?,
+    );
+    let end = padded
+        .iter()
+        .rposition(|byte| *byte != 0)
+        .filter(|at| padded[*at] == 0x80)
+        .ok_or(CryptoError::AuthFailed)?;
+    Ok(Zeroizing::new(padded[..end].to_vec()))
+}
+
+/// The SHA-256 of a blob as stored: what the avatar attribute names in the
+/// clear, so the home can serve and clean up blobs.
+pub fn avatar_blob_hash(blob: &[u8]) -> [u8; HASH_LEN] {
+    Sha256::digest(blob).into()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -488,6 +591,23 @@ mod tests {
         identity_sequence: 1,
         identity_document_hash: "0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f",
     };
+
+    #[test]
+    fn a_state_key_opens_only_its_own_groups_fields() {
+        let master = |home: GroupHome<'_>| GroupMasterKey::from_bytes(&[7u8; 32], home).unwrap();
+        let here = master(HOME).state_key();
+        let sealed = here.seal(SealedField::Title, b"", b"Team").unwrap();
+        assert_eq!(
+            &*here.open(SealedField::Title, b"", &sealed).unwrap(),
+            b"Team"
+        );
+        let elsewhere = master(GroupHome {
+            server: "elsewhere.example",
+            ..HOME
+        })
+        .state_key();
+        assert!(elsewhere.open(SealedField::Title, b"", &sealed).is_err());
+    }
 
     #[test]
     fn the_same_key_at_another_home_is_another_group() {
@@ -719,5 +839,49 @@ mod tests {
     #[test]
     fn hashes_are_domain_separated() {
         assert_ne!(change_hash(b"x"), state_hash(b"x"));
+    }
+
+    #[test]
+    fn a_group_avatar_pads_to_its_bucket_and_opens_with_its_key_only() {
+        for (size, bucket) in [
+            (1, 8 * 1024),
+            (8 * 1024 - 1, 8 * 1024),
+            (8 * 1024, 16 * 1024),
+            (40 * 1024 - 1, 40 * 1024),
+        ] {
+            let image = vec![7u8; size];
+            let (blob, key) = seal_group_avatar(&image).unwrap();
+            assert_eq!(blob.len(), avatar_blob_len(bucket));
+            assert_eq!(&open_group_avatar(&blob, &key).unwrap()[..], &image[..]);
+            assert!(open_group_avatar(&blob, &[0u8; 32]).is_err());
+        }
+        assert_eq!(
+            AVATAR_BUCKETS.map(avatar_blob_len),
+            [8_233, 16_425, 32_809, 41_001]
+        );
+        assert!(seal_group_avatar(&vec![0u8; 40 * 1024]).is_err());
+        // An image ending in zeros keeps them.
+        let image = [1u8, 0, 0];
+        let (blob, key) = seal_group_avatar(&image).unwrap();
+        assert_eq!(&open_group_avatar(&blob, &key).unwrap()[..], &image[..]);
+        // The same picture twice: unrelated blobs.
+        let (again, _) = seal_group_avatar(&image).unwrap();
+        assert_ne!(avatar_blob_hash(&blob), avatar_blob_hash(&again));
+        // Cut or grown: refused.
+        assert!(open_group_avatar(&blob[..blob.len() - 1], &key).is_err());
+    }
+
+    #[test]
+    fn a_group_avatar_blob_is_fixed_for_its_key_and_nonce() {
+        let blob = seal_group_avatar_with(b"avatar", &[3u8; 32], &[5u8; NONCE_LEN]).unwrap();
+        assert_eq!(blob.len(), 8_233);
+        assert_eq!(
+            &blob[..1 + NONCE_LEN],
+            &[[1u8].as_slice(), &[5u8; NONCE_LEN]].concat()[..]
+        );
+        assert_eq!(
+            &open_group_avatar(&blob, &[3u8; 32]).unwrap()[..],
+            b"avatar"
+        );
     }
 }

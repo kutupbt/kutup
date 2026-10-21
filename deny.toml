@@ -41,6 +41,17 @@ ignore = [
     { id = "RUSTSEC-2026-0173", reason = "proc-macro-error2: a build-time macro of hax-lib under libsignal's ML-KEM" },
     { id = "RUSTSEC-2026-0215", reason = "smallstr: inside yrs (Yjs) in kutup-collab" },
     { id = "RUSTSEC-2024-0384", reason = "instant: OpenMLS's timer in chat-core, removed with MLS (docs/roadmap.md)" },
+    # basic-toml 0.1.10: read by askama_derive 0.16 (a compile-time template
+    # macro) under uniffi_bindgen, only with kutup-client-ffi's `bindgen`
+    # feature, the tool that writes the Swift/Kotlin sources. Nothing shipped
+    # links it (not in `cargo tree -e normal` of the default build). uniffi
+    # 0.32.2 still takes askama 0.16; revisit at the next uniffi release.
+    { id = "RUSTSEC-2026-0374", reason = "basic-toml: build-time template config of uniffi's bindings generator, in no shipped binary" },
+    # webpki-roots 0.26.11 (sqlx-core's dependency) holds no roots of its own:
+    # it re-exports webpki-roots 1.x, which the lock pins at the fixed 1.0.10
+    # (`cargo tree -p webpki-roots@0.26.11`). The advisory matches the shim's
+    # version number only. Drop this when sqlx moves to webpki-roots 1.
+    { id = "RUSTSEC-2026-0381", reason = "webpki-roots 0.26.11 is a shim re-exporting the fixed 1.0.10" },
 ]
 
 [licenses]

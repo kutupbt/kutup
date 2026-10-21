@@ -815,15 +815,36 @@ pub async fn get_settings(State(state): State<AppState>, _admin: AdminUser) -> A
     let default_storage_quota_bytes = crate::storage_pool::default_quota(&state.pool).await?;
     let (name_hold_days, old_address_receive_days) =
         crate::site_settings::name_holds(&state.pool, &state.config).await?;
-    Ok(Json(json!({
+    let (link_joins_per_relay_group, link_joins_per_relay) =
+        crate::site_settings::chat_group_link_joins(&state.pool).await?;
+    let avatar = crate::site_settings::chat_group_avatar_limits(&state.pool).await?;
+    let group_capabilities =
+        crate::site_settings::chat_group_capabilities_per_account(&state.pool).await?;
+    let mut numeric = serde_json::Map::new();
+    for setting in crate::site_settings::CHAT_MULTI_SETTINGS {
+        numeric.insert(
+            setting.field.to_owned(),
+            json!(setting.load(&state.pool).await?),
+        );
+    }
+    let mut settings = json!({
         "registrationMode": registration_mode,
         "defaultStorageQuotaBytes": default_storage_quota_bytes,
         "chatMailboxRetentionDays": chat_mailbox_retention_days,
         "chatMediaDeliveryRetentionDays": chat_media_delivery_retention_days,
         "nameHoldDays": name_hold_days,
         "oldAddressReceiveDays": old_address_receive_days,
-    }))
-    .into_response())
+        "chatGroupLinkJoinsPerRelayGroupPerMin": link_joins_per_relay_group,
+        "chatGroupLinkJoinsPerRelayPerMin": link_joins_per_relay,
+        "chatGroupCapabilitiesPerAccount": group_capabilities,
+        "chatGroupAvatarMaxBytes": avatar.max_bytes,
+        "chatGroupAvatarStoragePerGroupBytes": avatar.storage_bytes,
+        "chatGroupAvatarPendingSeconds": avatar.pending_seconds,
+    });
+    if let Some(object) = settings.as_object_mut() {
+        object.extend(numeric);
+    }
+    Ok(Json(settings).into_response())
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -835,6 +856,31 @@ pub struct UpdateSettingsRequest {
     chat_media_delivery_retention_days: Option<i64>,
     name_hold_days: Option<i64>,
     old_address_receive_days: Option<i64>,
+    /// `null` resets to the configured first value (the stored one goes).
+    #[serde(deserialize_with = "present")]
+    chat_group_link_joins_per_relay_group_per_min: Option<Option<i64>>,
+    #[serde(deserialize_with = "present")]
+    chat_group_link_joins_per_relay_per_min: Option<Option<i64>>,
+    #[serde(deserialize_with = "present")]
+    chat_group_capabilities_per_account: Option<Option<i64>>,
+    /// The whole-number settings listed in `site_settings::CHAT_MULTI_SETTINGS`,
+    /// by field: a number sets one, `null` resets it; other fields are ignored.
+    #[serde(flatten)]
+    numeric: std::collections::BTreeMap<String, serde_json::Value>,
+    #[serde(deserialize_with = "present")]
+    chat_group_avatar_max_bytes: Option<Option<i64>>,
+    #[serde(deserialize_with = "present")]
+    chat_group_avatar_storage_per_group_bytes: Option<Option<i64>>,
+    #[serde(deserialize_with = "present")]
+    chat_group_avatar_pending_seconds: Option<Option<i64>>,
+}
+
+/// A field that is present: `Some(None)` for `null`, so a missing field
+/// (`None`, the default) and a reset differ.
+fn present<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Option<Option<i64>>, D::Error> {
+    Option::<i64>::deserialize(deserializer).map(Some)
 }
 
 /// `PUT /api/admin/settings` — mirrors `UpdateSettings`.
@@ -857,6 +903,15 @@ pub async fn update_settings(
         && req.chat_media_delivery_retention_days.is_none()
         && req.name_hold_days.is_none()
         && req.old_address_receive_days.is_none()
+        && req.chat_group_link_joins_per_relay_group_per_min.is_none()
+        && req.chat_group_link_joins_per_relay_per_min.is_none()
+        && req.chat_group_capabilities_per_account.is_none()
+        && !crate::site_settings::CHAT_MULTI_SETTINGS
+            .iter()
+            .any(|setting| req.numeric.contains_key(setting.field))
+        && req.chat_group_avatar_max_bytes.is_none()
+        && req.chat_group_avatar_storage_per_group_bytes.is_none()
+        && req.chat_group_avatar_pending_seconds.is_none()
     {
         return Err(AppError::bad_request("at least one setting is required"));
     }
@@ -879,6 +934,73 @@ pub async fn update_settings(
             .map_err(AppError::bad_request)?;
     }
 
+    for value in [
+        req.chat_group_link_joins_per_relay_group_per_min,
+        req.chat_group_link_joins_per_relay_per_min,
+    ]
+    .into_iter()
+    .flatten()
+    .flatten()
+    {
+        crate::site_settings::validate_chat_group_link_joins(value)
+            .map_err(AppError::bad_request)?;
+    }
+    if let Some(Some(value)) = req.chat_group_capabilities_per_account {
+        crate::site_settings::validate_chat_group_capabilities_per_account(value)
+            .map_err(AppError::bad_request)?;
+    }
+    // Each given whole-number setting: Some(value) to store, None to reset.
+    let mut numeric = Vec::new();
+    for setting in crate::site_settings::CHAT_MULTI_SETTINGS {
+        let Some(value) = req.numeric.get(setting.field) else {
+            continue;
+        };
+        let value = match value {
+            serde_json::Value::Null => None,
+            value => Some(
+                value
+                    .as_i64()
+                    .ok_or_else(|| {
+                        AppError::bad_request(format!("{} takes a whole number", setting.field))
+                    })
+                    .and_then(|value| setting.validate(value).map_err(AppError::bad_request))?,
+            ),
+        };
+        numeric.push((setting.key, value));
+    }
+    // The avatar limits are checked together, each new value (or reset to
+    // its first value) beside the others as they stand.
+    if req.chat_group_avatar_max_bytes.is_some()
+        || req.chat_group_avatar_storage_per_group_bytes.is_some()
+        || req.chat_group_avatar_pending_seconds.is_some()
+    {
+        use crate::site_settings::AvatarLimits;
+        let current = crate::site_settings::chat_group_avatar_limits(&state.pool).await?;
+        let pick = |new: Option<Option<i64>>, now: i64, first: i64| match new {
+            Some(Some(value)) => value,
+            Some(None) => first,
+            None => now,
+        };
+        AvatarLimits {
+            max_bytes: pick(
+                req.chat_group_avatar_max_bytes,
+                current.max_bytes,
+                AvatarLimits::DEFAULT.max_bytes,
+            ),
+            storage_bytes: pick(
+                req.chat_group_avatar_storage_per_group_bytes,
+                current.storage_bytes,
+                AvatarLimits::DEFAULT.storage_bytes,
+            ),
+            pending_seconds: pick(
+                req.chat_group_avatar_pending_seconds,
+                current.pending_seconds,
+                AvatarLimits::DEFAULT.pending_seconds,
+            ),
+        }
+        .validate()
+        .map_err(AppError::bad_request)?;
+    }
     // The two holds are checked together, each against the other's new or
     // current value.
     if req.name_hold_days.is_some() || req.old_address_receive_days.is_some() {
@@ -923,6 +1045,55 @@ pub async fn update_settings(
         .await
         .map_err(|_| AppError::internal("internal error"))?;
     }
+    for (key, value) in [
+        (
+            crate::site_settings::CHAT_GROUP_LINK_JOINS_PER_RELAY_GROUP,
+            req.chat_group_link_joins_per_relay_group_per_min,
+        ),
+        (
+            crate::site_settings::CHAT_GROUP_LINK_JOINS_PER_RELAY,
+            req.chat_group_link_joins_per_relay_per_min,
+        ),
+        (
+            crate::site_settings::CHAT_GROUP_CAPABILITIES_PER_ACCOUNT,
+            req.chat_group_capabilities_per_account,
+        ),
+        (
+            crate::site_settings::CHAT_GROUP_AVATAR_MAX_BYTES,
+            req.chat_group_avatar_max_bytes,
+        ),
+        (
+            crate::site_settings::CHAT_GROUP_AVATAR_STORAGE_BYTES,
+            req.chat_group_avatar_storage_per_group_bytes,
+        ),
+        (
+            crate::site_settings::CHAT_GROUP_AVATAR_PENDING_SECONDS,
+            req.chat_group_avatar_pending_seconds,
+        ),
+    ]
+    .into_iter()
+    .chain(numeric.iter().map(|(key, value)| (*key, Some(*value))))
+    {
+        match value {
+            None => {}
+            Some(Some(value)) => {
+                sqlx::query(
+                    "INSERT INTO site_settings (key, value) VALUES ($1, $2) \
+                     ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value",
+                )
+                .bind(key)
+                .bind(value.to_string())
+                .execute(&mut *transaction)
+                .await?;
+            }
+            Some(None) => {
+                sqlx::query("DELETE FROM site_settings WHERE key = $1")
+                    .bind(key)
+                    .execute(&mut *transaction)
+                    .await?;
+            }
+        }
+    }
     transaction.commit().await?;
     audit(
         &state.pool,
@@ -936,6 +1107,20 @@ pub async fn update_settings(
             "chatMediaDeliveryRetentionDays": req.chat_media_delivery_retention_days,
             "nameHoldDays": req.name_hold_days,
             "oldAddressReceiveDays": req.old_address_receive_days,
+            "chatGroupLinkJoinsPerRelayGroupPerMin": req.chat_group_link_joins_per_relay_group_per_min,
+            "chatGroupLinkJoinsPerRelayPerMin": req.chat_group_link_joins_per_relay_per_min,
+            "chatGroupCapabilitiesPerAccount": req.chat_group_capabilities_per_account,
+            "numeric": crate::site_settings::CHAT_MULTI_SETTINGS
+                .iter()
+                .filter_map(|setting| {
+                    req.numeric
+                        .get(setting.field)
+                        .map(|value| (setting.field.to_owned(), value.clone()))
+                })
+                .collect::<serde_json::Map<_, _>>(),
+            "chatGroupAvatarMaxBytes": req.chat_group_avatar_max_bytes,
+            "chatGroupAvatarStoragePerGroupBytes": req.chat_group_avatar_storage_per_group_bytes,
+            "chatGroupAvatarPendingSeconds": req.chat_group_avatar_pending_seconds,
         }),
     )
     .await;
@@ -2088,6 +2273,11 @@ pub async fn wipe_user(
         .bind(target)
         .execute(&state.pool)
         .await?;
+    // The group capabilities go with the group list they were kept in.
+    sqlx::query("DELETE FROM chat_group_capabilities WHERE user_id = $1")
+        .bind(target)
+        .execute(&state.pool)
+        .await?;
     sqlx::query("DELETE FROM chat_profiles WHERE user_id = $1")
         .bind(target)
         .execute(&state.pool)
@@ -2409,8 +2599,9 @@ fn map_insert_conflict(err: sqlx::Error) -> AppError {
 /// The account head chain starts again with the new incarnation, and no
 /// listed value sealed under the old keys stays to be listed in it
 /// (docs/plans/rollback-protection.md, "Account reset"): contacts, the
-/// group list, labels, filters and Pass secrets go; custom folders keep
-/// their mail and lose their names, until their owner names them again. The
+/// group list, the Chat contact list, labels, filters and Pass secrets go; custom folders keep
+/// their mail and lose their names, until their owner names them again;
+/// custom-domain addresses close until rekeyed. The
 /// identity pins were sealed under the old master key too: nothing can open
 /// them now.
 async fn clear_account_values(
@@ -2422,6 +2613,7 @@ async fn clear_account_values(
         "DELETE FROM identity_pins WHERE user_id = $1",
         "DELETE FROM contacts WHERE user_id = $1",
         "DELETE FROM chat_group_list WHERE user_id = $1",
+        "DELETE FROM chat_contact_list WHERE user_id = $1",
         // Forwardings both ways end with their proxy factors: they were
         // made for the old incarnation's keys (docs/plans/mail-forwarding.md).
         "DELETE FROM mail_forwardings WHERE user_id = $1
@@ -2437,6 +2629,21 @@ async fn clear_account_values(
         "UPDATE mail_addresses SET state = 'closed', receive_until = now()
           WHERE user_id = $1 AND state = 'receiving'",
         "UPDATE account_names SET receive_until = now() WHERE user_id = $1 AND state = 'held'",
+        // Addresses on the account's custom domains stay its own but close
+        // until rekeyed (docs/plans/mail-custom-domains.md §8): their keys
+        // were sealed under the old master key, so their key lists (signed by
+        // the old authority) go, their keys stop being primary, and mail to
+        // them is refused until the owner makes each again with a new key.
+        "DELETE FROM mail_key_lists WHERE address_id IN
+            (SELECT id FROM mail_addresses
+              WHERE user_id = $1 AND domain_id IS NOT NULL AND state = 'active')",
+        // Obsolete as well (Proton's FLAG_NOT_OBSOLETE cleared): nobody can
+        // open mail encrypted to them now.
+        "UPDATE mail_address_keys SET is_primary = false, flags = flags & ~2 WHERE address_id IN
+            (SELECT id FROM mail_addresses
+              WHERE user_id = $1 AND domain_id IS NOT NULL AND state = 'active')",
+        "UPDATE mail_addresses SET state = 'closed'
+          WHERE user_id = $1 AND domain_id IS NOT NULL AND state = 'active'",
         "UPDATE account_names SET incarnation_id = NULL WHERE user_id = $1 AND state = 'current'",
     ] {
         sqlx::query(statement)
@@ -2481,10 +2688,10 @@ mod tests {
         assert!(validate_activity_query(&noncanonical_domain).is_err());
     }
 
-    /// A reset leaves none of the old incarnation's group list behind, and
-    /// touches no other account's.
+    /// A reset leaves none of the old incarnation's group list or Chat
+    /// contact list behind, and touches no other account's.
     #[tokio::test]
-    async fn live_an_account_reset_clears_the_group_list() {
+    async fn live_an_account_reset_clears_the_group_and_contact_lists() {
         let Ok(url) = std::env::var("KUTUP_LIVE_DATABASE_URL") else {
             eprintln!("KUTUP_LIVE_DATABASE_URL unset; skipping");
             return;
@@ -2516,19 +2723,32 @@ mod tests {
             .execute(&pool)
             .await
             .unwrap();
+            sqlx::query(
+                "INSERT INTO chat_contact_list (user_id, id, revision, envelope) VALUES ($1, $2, 1, $3)",
+            )
+            .bind(user_id)
+            .bind("A".repeat(43))
+            .bind(vec![0u8; kutup_crypto::chat_contact_list::SEALED_LEN])
+            .execute(&pool)
+            .await
+            .unwrap();
         }
 
         let mut tx = pool.begin().await.unwrap();
         clear_account_values(&mut tx, reset).await.unwrap();
         tx.commit().await.unwrap();
 
-        let count = |user_id: Uuid| {
-            sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM chat_group_list WHERE user_id = $1")
-                .bind(user_id)
-                .fetch_one(&pool)
-        };
-        assert_eq!(count(reset).await.unwrap(), 0);
-        assert_eq!(count(kept).await.unwrap(), 1);
+        for table in ["chat_group_list", "chat_contact_list"] {
+            let query = format!("SELECT COUNT(*) FROM {table} WHERE user_id = $1");
+            for (user_id, expected) in [(reset, 0), (kept, 1)] {
+                let count: i64 = sqlx::query_scalar(&query)
+                    .bind(user_id)
+                    .fetch_one(&pool)
+                    .await
+                    .unwrap();
+                assert_eq!(count, expected, "{table}");
+            }
+        }
         sqlx::query("DELETE FROM users WHERE id = ANY($1)")
             .bind(vec![reset, kept])
             .execute(&pool)

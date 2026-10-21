@@ -44,6 +44,11 @@ sha1 = "0.10"
 bcrypt.workspace = true
 totp-rs.workspace = true
 url.workspace = true
+# Custom mail domains: names in their A-label form, and the public suffix list.
+idna = "1"
+psl = "2"
+# Their DNS checks, through the configured (validating) resolver.
+hickory-resolver = { version = "0.26", default-features = false, features = ["tokio", "system-config", "dnssec-aws-lc-rs"] }
 sha2.workspace = true
 hkdf.workspace = true
 hex.workspace = true

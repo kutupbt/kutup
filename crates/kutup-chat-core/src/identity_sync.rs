@@ -163,40 +163,68 @@ impl IdentityPinsSync {
         trust: &ManifestTrust,
         now_seconds: u64,
     ) -> Result<()> {
-        if trust.continuity_gap || trust.trust == AuthorityTrust::Quarantined {
+        self.record_all(transport, &[(trust.clone(), now_seconds)], now_seconds)
+            .await
+    }
+
+    /// Writes Chat's view of every one of `trusts` in one write: the
+    /// contacts the list does not know, and the ones verified here, each
+    /// pinned as of when it was first seen (its `since`: a rename after it
+    /// is the one a person is told of, even when the pin is written later).
+    /// One that the list holds for another account is never written (and
+    /// said, once the others are).
+    pub(crate) async fn record_all(
+        &mut self,
+        transport: &dyn ChatTransport,
+        trusts: &[(ManifestTrust, u64)],
+        now_seconds: u64,
+    ) -> Result<()> {
+        let trusts: Vec<(&ManifestTrust, u64)> = trusts
+            .iter()
+            .filter(|(trust, _)| {
+                !trust.continuity_gap && trust.trust != AuthorityTrust::Quarantined
+            })
+            .map(|(trust, seen)| (trust, (*seen).min(now_seconds)))
+            .collect();
+        if trusts.is_empty() {
             return Ok(());
         }
-        // The rules every app shares (identity_pins::record): a contact met
-        // through a trusted manifest is pinned on first use, and one verified
-        // in person replaces whatever was pinned.
-        let update = if trust.trust == AuthorityTrust::Verified {
-            PinUpdate::Verified
-        } else {
-            PinUpdate::FirstSeen
-        };
         for _ in 0..5 {
             let (revision, mut list) = self.load(transport).await?;
             let before = list.clone();
-            let since = identity_pins::since_from_unix(now_seconds);
-            let account = crate::address::parse_account(&trust.account)?;
-            let recorded = identity_pins::record(
-                &mut list,
-                &account,
-                None,
-                &trust.self_authority_key,
-                update,
-                &since,
-            )
-            .map_err(crypto)?;
-            // An authority the list holds for another account, handed out in
-            // this account's manifest: never written, and said.
-            if let Recorded::AuthorityElsewhere { .. } = recorded {
-                return Err(ChatError::Trust(
-                    "identity pins: this authority belongs to another account".into(),
-                ));
+            let mut elsewhere = false;
+            for (trust, seen) in &trusts {
+                let since = identity_pins::since_from_unix(*seen);
+                // The rules every app shares (identity_pins::record): a
+                // contact met through a trusted manifest is pinned on first
+                // use, and one verified in person replaces whatever was
+                // pinned.
+                let update = if trust.trust == AuthorityTrust::Verified {
+                    PinUpdate::Verified
+                } else {
+                    PinUpdate::FirstSeen
+                };
+                let account = crate::address::parse_account(&trust.account)?;
+                let recorded = identity_pins::record(
+                    &mut list,
+                    &account,
+                    None,
+                    &trust.self_authority_key,
+                    update,
+                    &since,
+                )
+                .map_err(crypto)?;
+                // An authority the list holds for another account, handed
+                // out in this account's manifest: never written.
+                if let Recorded::AuthorityElsewhere { .. } = recorded {
+                    elsewhere = true;
+                }
             }
+            let refused = || {
+                ChatError::Trust("identity pins: this authority belongs to another account".into())
+            };
             if list == before {
-                return Ok(());
+                return if elsewhere { Err(refused()) } else { Ok(()) };
             }
             // A time, above every revision seen (docs/plans/drive-identity-pins.md).
             let next = now_seconds
@@ -214,7 +242,7 @@ impl IdentityPinsSync {
             if transport.store_identity_pins(&write).await? {
                 self.highest_seen = next;
                 self.cache = Some((next, list));
-                return Ok(());
+                return if elsewhere { Err(refused()) } else { Ok(()) };
             }
         }
         Err(ChatError::Transport(

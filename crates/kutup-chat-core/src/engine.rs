@@ -213,6 +213,10 @@ pub struct Engine {
     pub(crate) manifest_keys_seen: BTreeMap<String, (i64, [u8; 32])>,
     /// Each group's catch-ups for incoming content (`group_gate`).
     pub(crate) group_catch_ups: BTreeMap<String, crate::group_gate::CatchUps>,
+    /// When arriving content last made this device ask the home about a
+    /// group on its own (a request's status, a removal it couldn't place):
+    /// at most once a minute per group, whatever arrives.
+    pub(crate) group_nudges: BTreeMap<String, i64>,
     /// When the session with a peer device was last set aside for being
     /// unreadable (`process_inbound`), by `(account, device)`.
     session_resets: BTreeMap<(String, u32), i64>,
@@ -238,6 +242,12 @@ pub struct Engine {
     /// The account's group list, once the application hands over the key
     /// (`enable_group_list`).
     pub(crate) group_list: Option<crate::group_list::GroupListSync>,
+    /// The account's Chat contact list (`enable_contact_list`).
+    pub(crate) contact_list: Option<crate::contact_list::ContactListSync>,
+    /// First-seen identity pins waiting for their delayed write, by peer
+    /// (docs/plans/chat-contacts-sync.md, "The pin list follows the same
+    /// rule"). A pin lost to a reload is due again at the next contact.
+    pub(crate) pins_due: BTreeMap<String, PinDue>,
     /// The account's group keys (its self-authority and its pseudonyms),
     /// from its master key: no group is made or joined without them.
     pub(crate) group_keys: Option<crate::group::GroupAccountKeys>,
@@ -332,6 +342,7 @@ impl Engine {
             group_members_seen: BTreeMap::new(),
             manifest_keys_seen: BTreeMap::new(),
             group_catch_ups: BTreeMap::new(),
+            group_nudges: BTreeMap::new(),
             session_resets: BTreeMap::new(),
             resent: BTreeMap::new(),
             asked_again: BTreeMap::new(),
@@ -340,6 +351,8 @@ impl Engine {
             mailbox_retention_days: DEFAULT_MAILBOX_RETENTION_DAYS,
             identity_pins: None,
             group_list: None,
+            contact_list: None,
+            pins_due: BTreeMap::new(),
             group_keys: None,
         }
     }
@@ -407,11 +420,114 @@ impl Engine {
             Err(_) => return Ok(()),
         }
         if let Some(trust) = self.session.manifest_trust(peer).await? {
-            let now = (crate::clock::unix_millis().max(0) / 1000) as u64;
-            // Best effort: the list is written again at the next contact.
-            let _ = sync.record(&*self.transport, &trust, now).await;
+            if trust.trust == crate::db::AuthorityTrust::Verified {
+                // An in-person comparison is one-sided: written at once.
+                let now = (crate::clock::unix_millis().max(0) / 1000) as u64;
+                // Best effort: the list is written again at the next contact.
+                let _ = sync.record(&*self.transport, &trust, now).await;
+            } else {
+                // A first meeting is written later, at a random moment and
+                // with whatever else is due, so two accounts meeting don't
+                // line up on the server.
+                let now = self.now_ms();
+                self.load_pins_due().await?;
+                if !self.pins_due.contains_key(peer) {
+                    self.pins_due.insert(
+                        peer.to_string(),
+                        PinDue {
+                            due_ms: crate::contact_list::fresh_due(now),
+                            seen_ms: now,
+                        },
+                    );
+                    self.save_pins_due().await?;
+                }
+            }
         }
         Ok(())
+    }
+
+    /// The pin this device keeps for `peer` and hasn't written to the
+    /// account's list yet (a first meeting waits for a random moment): the
+    /// self-authority key Chat trusts for them and when they were first
+    /// seen, as the pin will say once written. What a rename is followed
+    /// against meanwhile; `None` once it is written, or for a peer whose
+    /// manifest isn't trusted.
+    pub async fn pending_identity_pin(&mut self, peer: &str) -> Result<Option<(String, String)>> {
+        self.load_pins_due().await?;
+        let Some(due) = self.pins_due.get(peer).copied() else {
+            return Ok(None);
+        };
+        let Some(trust) = self.session.manifest_trust(peer).await? else {
+            return Ok(None);
+        };
+        if trust.continuity_gap || trust.trust == crate::db::AuthorityTrust::Quarantined {
+            return Ok(None);
+        }
+        let since =
+            kutup_crypto::identity_pins::since_from_unix((due.seen_ms.max(0) / 1000) as u64);
+        Ok(Some((trust.self_authority_key, since)))
+    }
+
+    /// Writes the first-seen pins that are due (all of them with `all`,
+    /// before this device signs out), in one write. What fails stays due.
+    pub async fn flush_identity_pins(&mut self, all: bool) -> Result<usize> {
+        self.load_pins_due().await?;
+        let now = self.now_ms();
+        let due: Vec<String> = self
+            .pins_due
+            .iter()
+            .filter(|(_, pin)| all || pin.due_ms <= now)
+            .map(|(peer, _)| peer.clone())
+            .collect();
+        self.write_due_pins(due).await
+    }
+
+    /// Writes `peer`'s first-seen pin now, ahead of its random moment: when
+    /// the peer renamed, so the account's list (which every app's checks
+    /// read) knows them and their old address. A rename is rare and the
+    /// list is sealed, so writing early tells the server little. True when
+    /// one was written.
+    pub async fn write_identity_pin_now(&mut self, peer: &str) -> Result<bool> {
+        self.load_pins_due().await?;
+        if !self.pins_due.contains_key(peer) {
+            return Ok(false);
+        }
+        Ok(self.write_due_pins(vec![peer.to_string()]).await? > 0)
+    }
+
+    async fn write_due_pins(&mut self, due: Vec<String>) -> Result<usize> {
+        let now = self.now_ms();
+        if due.is_empty() {
+            return Ok(0);
+        }
+        let Some(mut sync) = self.identity_pins.take() else {
+            self.pins_due.clear();
+            self.save_pins_due().await?;
+            return Ok(0);
+        };
+        let mut trusts = Vec::new();
+        for peer in &due {
+            if let Some(trust) = self.session.manifest_trust(peer).await? {
+                let seen_ms = self.pins_due.get(peer).map_or(now, |pin| pin.seen_ms);
+                trusts.push((trust, (seen_ms.max(0) / 1000) as u64));
+            }
+        }
+        let seconds = (crate::clock::unix_millis().max(0) / 1000) as u64;
+        let result = sync.record_all(&*self.transport, &trusts, seconds).await;
+        self.identity_pins = Some(sync);
+        match result {
+            // Written, or one of them refused as another account's: none of
+            // them is due any more (the refused one is said at its next
+            // contact, when it is checked again).
+            Ok(()) | Err(ChatError::Trust(_)) => {
+                for peer in &due {
+                    self.pins_due.remove(peer);
+                }
+                self.save_pins_due().await?;
+                Ok(trusts.len())
+            }
+            Err(error) => Err(error),
+        }
     }
 
     async fn own_device_list_version(&self) -> Result<Option<u64>> {
@@ -511,7 +627,6 @@ impl Engine {
             .clone();
         let device_id = transport.register_device(&request).await?;
         session.complete_registration(device_id).await?;
-        session.bootstrap_contacts().await?;
         Ok(Engine::new(session, transport))
     }
 
@@ -925,6 +1040,7 @@ impl Engine {
         rng: &mut R,
     ) -> Result<ContactRecord> {
         let record = self.session.accept_contact(peer).await?;
+        self.contact_changed(peer).await;
         let _ = self.flush_contact_syncs(sent_at, rng).await;
         // Signal shares the recipient's profile when a request is accepted.
         // The send path journals ciphertext before networking; a transient
@@ -940,6 +1056,7 @@ impl Engine {
         rng: &mut R,
     ) -> Result<ContactRecord> {
         let record = self.session.reject_contact(peer).await?;
+        self.contact_changed(peer).await;
         let _ = self.flush_contact_syncs(sent_at, rng).await;
         Ok(self.session.contact(peer).await?.unwrap_or(record))
     }
@@ -952,6 +1069,9 @@ impl Engine {
         rng: &mut R,
     ) -> Result<ContactRecord> {
         let record = self.session.block_contact(peer).await?;
+        // Into the account's contact list first (at once on the web), so the
+        // block holds whatever happens to this device next.
+        self.contact_changed(peer).await;
         // The block is already durable. If a profile exists, rotate and publish
         // its capability verifier before sharing the new key with the remaining
         // contacts. A publication failure is surfaced and its exact encrypted
@@ -970,6 +1090,7 @@ impl Engine {
         rng: &mut R,
     ) -> Result<ContactRecord> {
         let record = self.session.unblock_contact(peer).await?;
+        self.contact_changed(peer).await;
         // The block replaced the profile key and kept the new one from this
         // contact, so their sealed messages are refused. Give it to them again
         // when the conversation is back to accepted.
@@ -1920,6 +2041,20 @@ impl Engine {
         let mut after = self.session.last_cursor().await?;
         let mut report = ReceiveReport::default();
 
+        // A device that never followed the account's contact list in full (a
+        // clean one, after every device was lost; or one from before the
+        // list) follows it before it takes any message, so nothing from
+        // someone the account blocked is taken first. Until it can, the
+        // mailbox waits. Afterwards a failed read leaves this device's own
+        // contacts, which it keeps in step.
+        if self.contact_list.is_some() && !self.session.contact_list_followed().await? {
+            if let Err(error) = self.sync_contact_list().await {
+                self.set_state(EngineState::Degraded);
+                return Err(ChatError::ContactListUnconfirmed(error.to_string()));
+            }
+            self.session.mark_contact_list_followed().await?;
+        }
+
         self.process_inbound(None, &mut report, rng).await?;
 
         loop {
@@ -2494,6 +2629,25 @@ impl Engine {
     /// or another tab does not start them over. Read before each check and
     /// each write: these events are rare, and another tab's engine may have
     /// recorded one since.
+    /// Merges the stored first-seen pins waiting for their write (another
+    /// tab's, or before a reload) into this engine's.
+    async fn load_pins_due(&mut self) -> Result<()> {
+        if let Some(bytes) = self.session.pins_due().await? {
+            let stored: BTreeMap<String, StoredPinDue> = serde_json::from_slice(&bytes)
+                .map_err(|error| ChatError::Db(format!("decode due pins: {error}")))?;
+            for (peer, at) in stored {
+                self.pins_due.entry(peer).or_insert(at.into());
+            }
+        }
+        Ok(())
+    }
+
+    async fn save_pins_due(&mut self) -> Result<()> {
+        let bytes = serde_json::to_vec(&self.pins_due)
+            .map_err(|error| ChatError::Db(format!("encode due pins: {error}")))?;
+        self.session.save_pins_due(bytes).await
+    }
+
     pub(crate) async fn load_repair_limits(&mut self) -> Result<()> {
         if let Some(bytes) = self.session.repair_limits().await? {
             let stored: RepairLimits = serde_json::from_slice(&bytes)
@@ -3446,5 +3600,73 @@ mod tests {
                 "{invalid}"
             );
         }
+    }
+}
+
+/// A first-seen pin waiting for its write: when it is due (a random moment,
+/// docs/plans/chat-contacts-sync.md) and when the account was first seen,
+/// which the pin is dated by once written.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct PinDue {
+    pub due_ms: i64,
+    pub seen_ms: i64,
+}
+
+/// What a stored due pin was: its due time alone at first, then both.
+#[derive(serde::Deserialize)]
+#[serde(untagged)]
+enum StoredPinDue {
+    Due(i64),
+    #[serde(rename_all = "camelCase")]
+    Both {
+        due_ms: i64,
+        seen_ms: i64,
+    },
+}
+
+impl From<StoredPinDue> for PinDue {
+    fn from(stored: StoredPinDue) -> Self {
+        match stored {
+            // Only its due time is known: never later than that.
+            StoredPinDue::Due(due_ms) => Self {
+                due_ms,
+                seen_ms: due_ms,
+            },
+            StoredPinDue::Both { due_ms, seen_ms } => Self { due_ms, seen_ms },
+        }
+    }
+}
+
+#[cfg(test)]
+mod pin_due_tests {
+    use super::*;
+
+    #[test]
+    fn a_due_pin_stored_before_its_first_seen_time_was_kept_still_reads() {
+        let stored: BTreeMap<String, StoredPinDue> =
+            serde_json::from_str(r#"{"old":5000,"new":{"dueMs":9000,"seenMs":1000}}"#).unwrap();
+        let read: BTreeMap<String, PinDue> = stored
+            .into_iter()
+            .map(|(peer, due)| (peer, due.into()))
+            .collect();
+        assert_eq!(
+            read["old"],
+            PinDue {
+                due_ms: 5000,
+                seen_ms: 5000
+            }
+        );
+        assert_eq!(
+            read["new"],
+            PinDue {
+                due_ms: 9000,
+                seen_ms: 1000
+            }
+        );
+        assert_eq!(
+            serde_json::to_string(&read["new"]).unwrap(),
+            r#"{"dueMs":9000,"seenMs":1000}"#
+        );
     }
 }

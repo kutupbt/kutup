@@ -38,7 +38,17 @@ import { isServerUnreachable, REOPEN_DELAYS_MS } from './openFailure'
  * `unreachable`: the server could not be reached; Chat opens again by itself.
  * `unavailable`: this browser's own Chat state would not open.
  */
-export type ChatFailure = 'capabilities' | 'serverUnsupported' | 'browserUnsupported' | 'unreachable' | 'unavailable'
+/** The service's codes an open can fail with; any other is "unavailable". */
+const OPEN_FAILURES: ReadonlySet<string> = new Set(['serverUnsupported', 'browserUnsupported', 'contactListUnconfirmed', 'contactListIntegrity'])
+
+export type ChatFailure =
+  | 'capabilities'
+  | 'serverUnsupported'
+  | 'browserUnsupported'
+  | 'unreachable'
+  | 'unavailable'
+  | 'contactListUnconfirmed'
+  | 'contactListIntegrity'
 
 export interface ChatSelf {
   /** This account: its server and permanent id. */
@@ -62,6 +72,8 @@ export interface ChatSnapshot extends ChatData {
   /** This account's own requests through group links. */
   ownJoinRequests: OwnJoinRequest[]
   backup: ChatBackupView | null
+  /** The account's contact list is full: changes (a block too) wait to be written. */
+  contactListFull: boolean
 }
 
 export interface ChatState {
@@ -100,6 +112,7 @@ const emptySnapshot: ChatSnapshot = {
   joinRequests: [],
   ownJoinRequests: [],
   backup: null,
+  contactListFull: false,
 }
 
 const initial: ChatState = {
@@ -189,6 +202,7 @@ async function reload(service: ChatService, mlsGroups: boolean): Promise<void> {
         mlsGroups ? orPrevious(service.pendingGroupOwnerApprovals(), previous.ownerApprovals) : Promise.resolve([]),
         pairwise ? orPrevious(service.chatGroups(), previous.chatGroups) : Promise.resolve([]),
       ])
+    const contactListFull = await service.contactListFull().catch(() => previous.contactListFull)
     if (mine !== generation || state.service !== service) return
     set({
       snapshot: {
@@ -205,6 +219,7 @@ async function reload(service: ChatService, mlsGroups: boolean): Promise<void> {
         joinRequests: service.groupJoinRequests(),
         ownJoinRequests: service.ownJoinRequests(),
         backup: service.backupStatus(),
+        contactListFull,
       },
       loaded: true,
       stale: false,
@@ -297,7 +312,7 @@ export function openChat(session: Session): void {
       }
       set({
         status: 'failed',
-        failure: error instanceof ChatServiceError ? error.code : 'unavailable',
+        failure: error instanceof ChatServiceError && OPEN_FAILURES.has(error.code) ? (error.code as ChatFailure) : 'unavailable',
         capabilities,
       })
       return

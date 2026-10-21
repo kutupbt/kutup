@@ -82,10 +82,12 @@ describe('Chat pins under the account head', () => {
     expect(await transport.storeIdentityPins({ baseRevision: 5, envelope: 'E', revision: 6 })).toBe(true)
     expect(http.put).toHaveBeenCalledTimes(2)
 
-    // Stored by an earlier try whose answer was lost.
+    // Already at that revision (an earlier try whose answer was lost, or
+    // another app's list at the same number): not "stored"; the engine reads
+    // the list again, and finds its own if it was.
     head.index = () => [['pins', 6]]
     http.put.mockClear()
-    expect(await transport.storeIdentityPins({ baseRevision: 5, envelope: 'E', revision: 6 })).toBe(true)
+    expect(await transport.storeIdentityPins({ baseRevision: 5, envelope: 'E', revision: 6 })).toBe(false)
     expect(http.put).not.toHaveBeenCalled()
   })
 })

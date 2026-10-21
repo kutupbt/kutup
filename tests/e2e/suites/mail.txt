@@ -36,3 +36,4 @@ specs/110-mail-image-settings.spec.ts
 specs/111-mail-advanced-search.spec.ts
 specs/112-mail-desktop-notifications.spec.ts
 specs/113-mail-body-search.spec.ts
+specs/163-mail-forwarding.spec.ts

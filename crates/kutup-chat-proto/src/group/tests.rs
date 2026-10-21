@@ -308,6 +308,7 @@ fn signals_access_rules_decide_who_edits_and_adds() {
         vec![GroupActionV1::ModifyAttribute {
             attribute: GroupAttribute::Title,
             value: Some(title.clone()),
+            avatar_hash: None,
         }],
     );
     apply(&mut group, &edit);
@@ -341,6 +342,7 @@ fn signals_access_rules_decide_who_edits_and_adds() {
         GroupActionV1::ModifyAttribute {
             attribute: GroupAttribute::Title,
             value: None,
+            avatar_hash: None,
         },
         GroupActionV1::ModifyAccess {
             access: GroupAccessV1::DEFAULT,
@@ -760,6 +762,7 @@ fn oversized_sealed_attributes_are_refused() {
             vec![GroupActionV1::ModifyAttribute {
                 attribute,
                 value: Some(value),
+                avatar_hash: None,
             }],
         );
         assert!(matches!(
@@ -942,4 +945,147 @@ fn distribution_and_invite_kinds_read_back_only_when_valid() {
         &bad,
     );
     assert!(content.as_sender_key_distribution().is_none());
+}
+
+#[test]
+fn an_invitation_a_context_and_a_list_entry_carry_only_a_canonical_home() {
+    use base64::engine::general_purpose::STANDARD;
+    use base64::Engine as _;
+    let b64 = |len: usize| STANDARD.encode(vec![7u8; len]);
+    let invite = |home: GroupHomePinV1| GroupInviteV1 {
+        version: GROUP_FORMAT_VERSION,
+        group_id: crate::group_route::encode_group_id(&[7; 32]),
+        master_key: b64(kutup_crypto::chat_group::MASTER_KEY_LEN),
+        home,
+        slot_id: b64(kutup_crypto::chat_group::SLOT_ID_LEN),
+        slot_revision: 1,
+        claim_key_seed: b64(32),
+        title: None,
+    };
+    let context = |home: GroupHomePinV1| GroupContextV1 {
+        version: GROUP_FORMAT_VERSION,
+        group_id: crate::group_route::encode_group_id(&[7; 32]),
+        master_key: b64(kutup_crypto::chat_group::MASTER_KEY_LEN),
+        home,
+        revision: 1,
+        chain_hash: b64(32),
+        recipient_pseudonym: None,
+    };
+    let entry = |home: GroupHomePinV1| GroupListEntryV1 {
+        version: GROUP_FORMAT_VERSION,
+        group_id: crate::group_route::encode_group_id(&[7; 32]),
+        master_key: b64(kutup_crypto::chat_group::MASTER_KEY_LEN),
+        home,
+        join_epoch: 0,
+        status: GroupListStatus::Member,
+        verified_revision: 1,
+        chain_hash: b64(32),
+    };
+    assert!(invite(home_pin()).validate().is_ok());
+    assert!(context(home_pin()).validate().is_ok());
+    assert!(entry(home_pin()).validate().is_ok());
+    let other_spellings = [
+        GroupHomePinV1 {
+            server: "Home.Example".into(),
+            ..home_pin()
+        },
+        GroupHomePinV1 {
+            server: "home.example.".into(),
+            ..home_pin()
+        },
+        GroupHomePinV1 {
+            identity_document_hash: "A".repeat(64),
+            ..home_pin()
+        },
+        GroupHomePinV1 {
+            identity_document_hash: "9".repeat(63),
+            ..home_pin()
+        },
+    ];
+    for home in other_spellings {
+        assert!(invite(home.clone()).validate().is_err(), "{home:?}");
+        assert!(context(home.clone()).validate().is_err(), "{home:?}");
+        assert!(entry(home.clone()).validate().is_err(), "{home:?}");
+    }
+}
+
+#[test]
+fn an_avatar_and_its_clear_hash_come_together() {
+    let hash = Some(encode(&[9u8; 32]));
+    let sealed = Some(encode(&[1u8; 64]));
+    assert!(check_avatar_hash(GroupAttribute::Avatar, &sealed, &hash).is_ok());
+    assert!(check_avatar_hash(GroupAttribute::Avatar, &None, &None).is_ok());
+    // One without the other, a hash of another length, a hash on the title.
+    assert!(check_avatar_hash(GroupAttribute::Avatar, &sealed, &None).is_err());
+    assert!(check_avatar_hash(GroupAttribute::Avatar, &None, &hash).is_err());
+    assert!(check_avatar_hash(GroupAttribute::Avatar, &sealed, &Some(encode(&[9u8; 31]))).is_err());
+    assert!(check_avatar_hash(GroupAttribute::Title, &sealed, &hash).is_err());
+    assert!(check_avatar_hash(GroupAttribute::Title, &sealed, &None).is_ok());
+}
+
+#[test]
+fn a_ban_list_stays_sorted_and_canonical() {
+    use super::entry::GroupBanListV1;
+    use kutup_crypto::account_ref::AccountRef;
+    let account = |id: &str| AccountRef::new("home.example", id).unwrap();
+    let pseudonym = |byte: u8| super::encode(&[byte; 32]);
+    let mut list = GroupBanListV1 {
+        version: super::GROUP_FORMAT_VERSION,
+        banned: Vec::new(),
+    };
+    let b = account("00000000-0000-4000-8000-00000000000b");
+    let a = account("00000000-0000-4000-8000-00000000000a");
+    list.ban(&b, Some(&pseudonym(9)));
+    list.ban(&a, None);
+    list.ban(&b, Some(&pseudonym(3)));
+    list.ban(&b, Some(&pseudonym(9)));
+    assert_eq!(list.banned[0].account, a);
+    assert_eq!(
+        list.get(&b).unwrap().pseudonyms,
+        vec![pseudonym(3), pseudonym(9)]
+    );
+    let bytes = list.canonical_bytes().unwrap();
+    assert_eq!(GroupBanListV1::from_canonical_bytes(&bytes).unwrap(), list);
+    // 150 accounts with a pseudonym each fit the sealed cap.
+    let mut full = GroupBanListV1 {
+        version: super::GROUP_FORMAT_VERSION,
+        banned: Vec::new(),
+    };
+    for i in 0..150u32 {
+        full.ban(
+            &account(&format!("00000000-0000-4000-8000-{i:012x}")),
+            Some(&pseudonym(i as u8)),
+        );
+    }
+    assert!(
+        kutup_crypto::chat_group::sealed_len(full.canonical_bytes().unwrap().len())
+            <= super::MAX_SEALED_BAN_LIST_BYTES
+    );
+    let removed = list.unban(&b).unwrap();
+    assert_eq!(removed.pseudonyms.len(), 2);
+    assert!(list.get(&b).is_none());
+    // Out of order: refused.
+    let mut unsorted = list.clone();
+    unsorted.ban(&b, None);
+    unsorted.banned.swap(0, 1);
+    assert!(unsorted.canonical_bytes().is_err());
+}
+
+#[test]
+fn an_avatar_attribute_fits_its_sealed_cap_and_names_an_image_type() {
+    use super::entry::GroupAvatarV1;
+    let avatar = GroupAvatarV1 {
+        version: super::GROUP_FORMAT_VERSION,
+        key: super::encode(&[9u8; 32]),
+        content_type: "image/webp".into(),
+    };
+    let bytes = avatar.canonical_bytes().unwrap();
+    assert!(kutup_crypto::chat_group::sealed_len(bytes.len()) <= super::MAX_SEALED_AVATAR_BYTES);
+    assert_eq!(GroupAvatarV1::from_canonical_bytes(&bytes).unwrap(), avatar);
+    assert!(!format!("{avatar:?}").contains(&avatar.key));
+    let gif = GroupAvatarV1 {
+        content_type: "image/gif".into(),
+        ..avatar
+    };
+    assert!(gif.canonical_bytes().is_err());
 }

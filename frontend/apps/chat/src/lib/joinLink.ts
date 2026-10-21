@@ -14,7 +14,8 @@ function set(next: string | null): void {
 
 /** Show what `url` leads to; `''` asks for a link to paste. Nothing on a server without groups. */
 export function openJoinLink(url: string): void {
-  if (getChatState().capabilities?.mlsGroups !== true) return
+  const capabilities = getChatState().capabilities
+  if (capabilities?.mlsGroups !== true && capabilities?.pairwiseGroups !== true) return
   set(url)
 }
 

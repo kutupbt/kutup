@@ -20,9 +20,9 @@
 
 use kutup_chat_proto::group::{
     check_change, check_genesis, decode_exact, decode_group_id, encode, encode_group_id,
-    resulting_genesis_state, resulting_state, GroupActionV1, GroupAttribute, GroupChangeError,
-    GroupChangeV1, GroupHomePinV1, GroupInviteV1, GroupLimits, GroupListStatus, GroupMemberEntryV1,
-    GroupRole, GroupSlotEntryV1, GroupStateV1, GROUP_FORMAT_VERSION,
+    resulting_genesis_state, resulting_state, GroupActionV1, GroupAttribute, GroupBanListV1,
+    GroupChangeError, GroupChangeV1, GroupHomePinV1, GroupInviteV1, GroupLimits, GroupListStatus,
+    GroupMemberEntryV1, GroupRole, GroupSlotEntryV1, GroupStateV1, GROUP_FORMAT_VERSION,
 };
 use kutup_chat_proto::group_route::GroupNotaryV1;
 use kutup_crypto::account_ref::AccountRef;
@@ -607,8 +607,10 @@ pub struct ClaimBasis {
 /// The pseudonym is derived at the join epoch after the last one this
 /// account used: one more than an ended membership's (here, or `listed` in
 /// the account's group list), the same as an older invitation's (never
-/// claimed), 0 for a group the account never was in. So a rejoin is a new
-/// pseudonym.
+/// claimed) or as a current membership the list names (another device's,
+/// where the account is in already), 0 for a group the account never was in.
+/// So a rejoin is a new pseudonym. Never past [`MAX_JOIN_EPOCHS`] − 1: an
+/// invitation that would need a later epoch is refused.
 pub fn record_from_invite(
     invite: GroupInviteV1,
     inviter: &str,
@@ -625,12 +627,14 @@ pub fn record_from_invite(
         GroupStatus::Invited { .. } | GroupStatus::Requesting => epoch,
         GroupStatus::Member | GroupStatus::Gone => epoch.saturating_add(1),
     };
-    let join_epoch = previous
-        .map(|previous| after(&previous.status, previous.join_epoch))
-        .into_iter()
-        .chain(rejoin_epoch(listed))
-        .max()
-        .unwrap_or(0);
+    let join_epoch = within_join_epochs(
+        previous
+            .map(|previous| after(&previous.status, previous.join_epoch))
+            .into_iter()
+            .chain(listed_join_epoch(listed))
+            .max()
+            .unwrap_or(0),
+    )?;
     let pseudonym = keys.pseudonyms.pseudonym(&group_id, join_epoch);
     let mut record = GroupRecordV1 {
         version: GROUP_FORMAT_VERSION,
@@ -689,10 +693,35 @@ pub fn record_from_invite(
     Ok(record)
 }
 
-/// The join epoch after the one the account's group list names for a group
-/// (a membership there, ended or not, is past).
-pub fn rejoin_epoch(listed: Option<(GroupListStatus, u32)>) -> Option<u32> {
-    listed.map(|(_, epoch)| epoch.saturating_add(1))
+/// How many join epochs an account has in a group: 0 to this − 1, and no
+/// path takes a higher one (an invitation, the list, a claim the home refuses
+/// as a used pseudonym), so a device without the group list, which matches a
+/// pseudonym named to it against exactly these epochs, always finds its
+/// place. Matching is local (one derivation per epoch).
+pub const MAX_JOIN_EPOCHS: u32 = 64;
+
+/// `epoch`, when it is one an account may join at ([`MAX_JOIN_EPOCHS`]).
+pub fn within_join_epochs(epoch: u32) -> Result<u32, GroupError> {
+    if epoch >= MAX_JOIN_EPOCHS {
+        return Err(record_error(
+            "this account has joined this group as often as it can",
+        ));
+    }
+    Ok(epoch)
+}
+
+/// The lowest join epoch an invitation may take by the account's group
+/// list: past an ended membership there, but a current one's own epoch,
+/// since another device of the account is in the group under it (a claim
+/// made there finds the account in; one past it would find it out and take
+/// the group as gone). A current entry whose leave was never written is
+/// caught by the home instead: it refuses the claim as `pseudonymUsed`, and
+/// the claim moves on.
+pub fn listed_join_epoch(listed: Option<(GroupListStatus, u32)>) -> Option<u32> {
+    listed.map(|(status, epoch)| match status {
+        GroupListStatus::Member => epoch,
+        GroupListStatus::Gone => epoch.saturating_add(1),
+    })
 }
 
 /// The claim key of an invited record: what signs the join-info request a
@@ -758,6 +787,141 @@ pub fn claim(
     change.signature =
         encode(&pseudonym.sign_change(&change.signed_bytes().map_err(record_error)?));
     record.min_revision = record.min_revision.max(change.revision);
+    Ok(change)
+}
+
+/// A record to join `link`'s group with (docs/plans/pairwise-groups.md §11):
+/// at the join epoch a claim would take (past an ended membership here or
+/// in the list, never past `MAX_JOIN_EPOCHS` − 1), `Requesting` until the
+/// home has the join. Only an ended membership's record (or none) is
+/// replaced; its verified state is kept, so no older one is taken later.
+pub fn record_from_link(
+    link: &kutup_chat_proto::group::link::GroupInviteLinkV1,
+    previous: Option<&GroupRecordV1>,
+    listed: Option<(GroupListStatus, u32)>,
+    keys: &GroupAccountKeys,
+) -> Result<GroupRecordV1, GroupError> {
+    let master = GroupMasterKey::from_bytes(&link.master_key, home_of(&link.home))
+        .map_err(|_| record_error("the link's group key and home don't make a group"))?;
+    let group_id = master.group_id();
+    let group_text = encode_group_id(&group_id);
+    let join_epoch = within_join_epochs(
+        previous
+            .map(|previous| match previous.status {
+                GroupStatus::Member | GroupStatus::Gone => previous.join_epoch.saturating_add(1),
+                GroupStatus::Invited { .. } | GroupStatus::Requesting => previous.join_epoch,
+            })
+            .into_iter()
+            .chain(listed_join_epoch(listed))
+            .max()
+            .unwrap_or(0),
+    )?;
+    if let Some(previous) = previous {
+        if previous.group_id != group_text || previous.home != link.home {
+            return Err(record_error("the link names another group"));
+        }
+        if previous.status == GroupStatus::Member {
+            return Err(record_error("this account is in the group already"));
+        }
+    }
+    let pseudonym = keys.pseudonyms.pseudonym(&group_id, join_epoch);
+    let mut record = GroupRecordV1 {
+        version: GROUP_FORMAT_VERSION,
+        group_id: group_text,
+        master_key: SecretText(encode(master.as_bytes())),
+        home: link.home.clone(),
+        pseudonym_seed: SecretText(encode(pseudonym.seed())),
+        status: GroupStatus::Requesting,
+        min_revision: 0,
+        state: None,
+        head: None,
+        notary_sequence: None,
+        gateway: Default::default(),
+        not_found_since_ms: None,
+        sender_book: None,
+        synced_at_ms: None,
+        fork_at_revision: None,
+        fork_sender: None,
+        known_since_ms: None,
+        listed_status: None,
+        list_due_at_ms: None,
+        join_epoch,
+    };
+    if let Some(previous) = previous {
+        record.state = previous.state.clone();
+        record.head = previous.head.clone();
+        record.notary_sequence = previous.notary_sequence;
+        record.gateway = previous.gateway.clone();
+        record.min_revision = previous.min_revision;
+    }
+    Ok(record)
+}
+
+/// The change joining (`approval` false) or asking to join (`approval`
+/// true) through the link with `password`, signed by the record's
+/// pseudonym, built from the join info's revision and head; its member
+/// entry is sealed as `MemberEntry` (an approval moves it as it is).
+pub fn link_change(
+    record: &mut GroupRecordV1,
+    basis: &ClaimBasis,
+    password: &[u8; kutup_chat_proto::group::INVITE_LINK_PASSWORD_LEN],
+    approval: bool,
+    me: &AccountRef,
+    profile_key: &[u8; 32],
+    authority: &crate::manifest::AccountAuthority,
+) -> Result<GroupChangeV1, GroupError> {
+    let master = record.master()?;
+    let group_id = decode_group_id(&record.group_id).map_err(record_error)?;
+    let pseudonym = record.pseudonym()?;
+    let entry = seal_member_entry(
+        &master.state_key(),
+        &group_id,
+        &pseudonym.public_key(),
+        me,
+        profile_key,
+        authority,
+    )?;
+    let password = encode(password);
+    let action = if approval {
+        GroupActionV1::RequestToJoin { password, entry }
+    } else {
+        GroupActionV1::JoinFromLink { password, entry }
+    };
+    let mut change = GroupChangeV1 {
+        version: GROUP_FORMAT_VERSION,
+        group_id: record.group_id.clone(),
+        revision: basis.revision + 1,
+        previous_hash: encode(&basis.head),
+        actor: encode(&pseudonym.public_key()),
+        actions: vec![action],
+        resulting_state_hash: None,
+        signature: String::new(),
+    };
+    change.signature =
+        encode(&pseudonym.sign_change(&change.signed_bytes().map_err(record_error)?));
+    record.min_revision = record.min_revision.max(change.revision);
+    Ok(change)
+}
+
+/// Withdrawing this record's request to join, signed by its pseudonym, at
+/// the revision and head the home's request status names.
+pub fn cancel_change(
+    record: &GroupRecordV1,
+    basis: &ClaimBasis,
+) -> Result<GroupChangeV1, GroupError> {
+    let pseudonym = record.pseudonym()?;
+    let mut change = GroupChangeV1 {
+        version: GROUP_FORMAT_VERSION,
+        group_id: record.group_id.clone(),
+        revision: basis.revision + 1,
+        previous_hash: encode(&basis.head),
+        actor: encode(&pseudonym.public_key()),
+        actions: vec![GroupActionV1::CancelRequest],
+        resulting_state_hash: None,
+        signature: String::new(),
+    };
+    change.signature =
+        encode(&pseudonym.sign_change(&change.signed_bytes().map_err(record_error)?));
     Ok(change)
 }
 
@@ -839,12 +1003,18 @@ pub fn accept_state(
         return Err(GroupError::Change(GroupChangeError::WrongGroup));
     }
     // Only a device with no verified state takes a whole state (it just
-    // joined, or is new), or one joining again: a member catches up through
-    // the log, so every change is checked, signatures and roles included. A
-    // rejoiner's kept state only sets the lowest revision it takes (its new
-    // pseudonym reads the log only from its claim on).
+    // joined, or is new), or one joining again (invited, or through the
+    // link: asking or approved): a member catches up through the log, so
+    // every change is checked, signatures and roles included. A rejoiner's
+    // kept state only sets the lowest revision it takes (its new pseudonym
+    // reads the log only from its join on).
     let kept = record.verified()?;
-    if kept.is_some() && !matches!(record.status, GroupStatus::Invited { .. }) {
+    if kept.is_some()
+        && !matches!(
+            record.status,
+            GroupStatus::Invited { .. } | GroupStatus::Requesting
+        )
+    {
         return Err(record_error("a member catches up through the log"));
     }
     // A rejoiner takes only a state newer than the one it kept, from a notary
@@ -947,7 +1117,7 @@ pub fn members(
         .collect())
 }
 
-fn open_member(
+pub(crate) fn open_member(
     key: &GroupStateKey,
     group_id: &[u8; 32],
     pseudonym_text: &str,
@@ -1025,16 +1195,41 @@ pub fn renewed_own_entry(
 /// The accounts the last verified state's entries name, unverified: whose
 /// manifests to fetch before [`members`] checks the bindings.
 pub fn member_accounts(record: &GroupRecordV1) -> Result<Vec<AccountRef>, GroupError> {
+    entry_accounts(record, |state| {
+        state
+            .members
+            .iter()
+            .map(|member| (member.pseudonym.clone(), member.entry.clone()))
+            .collect()
+    })
+}
+
+/// The accounts the requests to join name, unverified: whose manifests to
+/// fetch before [`requesters`] checks the bindings.
+pub fn request_accounts(record: &GroupRecordV1) -> Result<Vec<AccountRef>, GroupError> {
+    entry_accounts(record, |state| {
+        state
+            .requesting
+            .iter()
+            .map(|request| (request.pseudonym.clone(), request.entry.clone()))
+            .collect()
+    })
+}
+
+fn entry_accounts(
+    record: &GroupRecordV1,
+    entries: impl Fn(&GroupStateV1) -> Vec<(String, String)>,
+) -> Result<Vec<AccountRef>, GroupError> {
     let Some((state, _)) = record.verified()? else {
         return Ok(Vec::new());
     };
     let key = record.master()?.state_key();
     let mut accounts = std::collections::BTreeSet::new();
-    for member in &state.members {
-        let Ok(pseudonym) = decode_exact::<32>("pseudonym", &member.pseudonym) else {
+    for (pseudonym, entry) in entries(&state) {
+        let Ok(pseudonym) = decode_exact::<32>("pseudonym", &pseudonym) else {
             continue;
         };
-        let Ok(sealed) = base64_decode(&member.entry) else {
+        let Ok(sealed) = base64_decode(&entry) else {
             continue;
         };
         let Ok(plain) = key.open(SealedField::MemberEntry, &pseudonym, &sealed) else {
@@ -1045,6 +1240,192 @@ pub fn member_accounts(record: &GroupRecordV1) -> Result<Vec<AccountRef>, GroupE
         }
     }
     Ok(accounts.into_iter().collect())
+}
+
+/// A request to join through the link, as an administrator sees it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GroupRequesterView {
+    pub pseudonym: String,
+    pub requested_at_revision: u64,
+    /// Who asks, when the entry opened and its binding verified; `None` for
+    /// one that didn't (approving it gives an unverified member).
+    pub verified: Option<VerifiedMember>,
+    /// The account the entry names, verified or not: what a ban is checked
+    /// against, since anyone can make their own binding fail.
+    pub claimed: Option<AccountRef>,
+    /// The claimed account's manifest couldn't be fetched now: whether its
+    /// binding holds isn't known yet.
+    pub unconfirmed: bool,
+}
+
+/// The account each member's and requester's entry names, by pseudonym,
+/// without checking bindings: what bans are checked against.
+pub fn claimed_accounts(
+    record: &GroupRecordV1,
+) -> Result<std::collections::BTreeMap<String, AccountRef>, GroupError> {
+    let Some((state, _)) = record.verified()? else {
+        return Ok(Default::default());
+    };
+    let key = record.master()?.state_key();
+    Ok(state
+        .members
+        .iter()
+        .map(|member| (&member.pseudonym, &member.entry))
+        .chain(state.requesting.iter().map(|r| (&r.pseudonym, &r.entry)))
+        .filter_map(|(pseudonym, entry)| {
+            claimed_account(&key, pseudonym, entry).map(|account| (pseudonym.clone(), account))
+        })
+        .collect())
+}
+
+/// The account a sealed entry names, without checking its binding.
+pub(crate) fn claimed_account(
+    key: &GroupStateKey,
+    pseudonym: &str,
+    entry: &str,
+) -> Option<AccountRef> {
+    let pseudonym = decode_exact::<32>("pseudonym", pseudonym).ok()?;
+    let sealed = base64_decode(entry).ok()?;
+    let plain = key
+        .open(SealedField::MemberEntry, &pseudonym, &sealed)
+        .ok()?;
+    GroupMemberEntryV1::from_canonical_bytes(&plain)
+        .ok()
+        .map(|entry| entry.account)
+}
+
+/// The requests to join, each binding checked as a member's is.
+pub fn requesters(
+    record: &GroupRecordV1,
+    authority_of: &AuthorityOf<'_>,
+    unconfirmed: &[AccountRef],
+) -> Result<Vec<GroupRequesterView>, GroupError> {
+    let Some((state, _)) = record.verified()? else {
+        return Ok(Vec::new());
+    };
+    let key = record.master()?.state_key();
+    let group_id = decode_group_id(&record.group_id).map_err(record_error)?;
+    Ok(state
+        .requesting
+        .iter()
+        .map(|request| {
+            let claimed = claimed_account(&key, &request.pseudonym, &request.entry);
+            GroupRequesterView {
+                pseudonym: request.pseudonym.clone(),
+                requested_at_revision: request.requested_at_revision,
+                verified: open_member(
+                    &key,
+                    &group_id,
+                    &request.pseudonym,
+                    &request.entry,
+                    authority_of,
+                ),
+                unconfirmed: claimed
+                    .as_ref()
+                    .is_some_and(|account| unconfirmed.contains(account)),
+                claimed,
+            }
+        })
+        .collect())
+}
+
+/// The ban list's plaintext is padded before sealing (a 0x80 marker, then
+/// zeros) to one of these sizes, the last filling the sealed cap: what the
+/// home sees says roughly how long the list is, not how many are on it.
+fn ban_list_buckets() -> [usize; 4] {
+    let cap = kutup_chat_proto::group::MAX_SEALED_BAN_LIST_BYTES
+        - kutup_crypto::chat_group::sealed_len(0);
+    [1024, 4096, 12 * 1024, cap]
+}
+
+/// `plain` padded to its bucket; `None` when it doesn't fit the largest.
+fn pad_ban_list(plain: &[u8]) -> Option<Zeroizing<Vec<u8>>> {
+    let bucket = ban_list_buckets()
+        .into_iter()
+        .find(|bucket| plain.len() < *bucket)?;
+    let mut padded = Zeroizing::new(Vec::with_capacity(bucket));
+    padded.extend_from_slice(plain);
+    padded.push(0x80);
+    padded.resize(bucket, 0);
+    Some(padded)
+}
+
+/// A ban list's opened plaintext, unpadded and read.
+pub(crate) fn read_ban_list(padded: &[u8]) -> Result<GroupBanListV1, GroupError> {
+    if !ban_list_buckets().contains(&padded.len()) {
+        return Err(GroupError::Sealed(
+            "a ban list is padded to a bucket".into(),
+        ));
+    }
+    let end = padded
+        .iter()
+        .rposition(|byte| *byte != 0)
+        .filter(|at| padded[*at] == 0x80)
+        .ok_or_else(|| GroupError::Sealed("a ban list's padding is malformed".into()))?;
+    GroupBanListV1::from_canonical_bytes(&padded[..end]).map_err(GroupError::Sealed)
+}
+
+/// The sealed ban list of the last verified state, opened; empty when there
+/// is none. One that doesn't open is an error, never read as empty: an
+/// administrator writing over it would lift every ban.
+pub fn ban_list(record: &GroupRecordV1) -> Result<GroupBanListV1, GroupError> {
+    let empty = GroupBanListV1 {
+        version: GROUP_FORMAT_VERSION,
+        banned: Vec::new(),
+    };
+    let Some((state, _)) = record.verified()? else {
+        return Ok(empty);
+    };
+    let Some(sealed) = &state.ban_list else {
+        return Ok(empty);
+    };
+    let key = record.master()?.state_key();
+    let plain = key
+        .open(SealedField::BanList, b"", &base64_decode(sealed)?)
+        .map_err(|error| GroupError::Sealed(error.to_string()))?;
+    read_ban_list(&plain)
+}
+
+/// Whether `list` has no room for one more account (the longest an account
+/// reference can be, with one pseudonym) under the sealed cap.
+pub fn ban_list_full(list: &GroupBanListV1) -> bool {
+    let mut next = list.clone();
+    let longest = AccountRef::new(
+        &format!(
+            "{}.{}.{}.{}",
+            "a".repeat(63),
+            "b".repeat(63),
+            "c".repeat(63),
+            "d".repeat(61)
+        ),
+        "ffffffff-ffff-4fff-bfff-ffffffffffff",
+    );
+    let Ok(account) = longest else {
+        return false;
+    };
+    if next.get(&account).is_some() {
+        return false;
+    }
+    next.ban(&account, Some(&encode(&[0xff; 32])));
+    next.canonical_bytes()
+        .map_or(true, |bytes| pad_ban_list(&bytes).is_none())
+}
+
+/// Seals a ban list for a `ModifyBanList` action: `None` when it is empty.
+pub fn seal_ban_list(
+    record: &GroupRecordV1,
+    list: &GroupBanListV1,
+) -> Result<Option<String>, GroupError> {
+    if list.banned.is_empty() {
+        return Ok(None);
+    }
+    let plain = Zeroizing::new(list.canonical_bytes().map_err(record_error)?);
+    let plain = pad_ban_list(&plain).ok_or(GroupError::Change(GroupChangeError::LimitReached))?;
+    let key = record.master()?.state_key();
+    Ok(Some(encode(
+        &key.seal(SealedField::BanList, b"", &plain)
+            .map_err(record_error)?,
+    )))
 }
 
 /// A group-wide sealed attribute of the last verified state, opened.

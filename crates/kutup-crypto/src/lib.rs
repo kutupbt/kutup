@@ -44,6 +44,7 @@ pub mod asset;
 pub mod chat_attachment_ledger;
 pub mod chat_backup;
 pub mod chat_backup_media;
+pub mod chat_contact_list;
 pub mod chat_group;
 pub mod chat_group_list;
 pub mod chat_media;
@@ -51,6 +52,8 @@ pub mod collection_epoch;
 pub mod collection_keyring;
 pub mod contact_card;
 pub mod device_registration;
+#[cfg(feature = "mail")]
+pub mod dkim_key;
 pub mod drive_envelope;
 pub mod drive_key_binding;
 pub mod drive_names;
@@ -66,6 +69,7 @@ pub mod kdf;
 pub mod key_binding;
 pub mod live_location;
 pub mod local_state;
+pub mod mail_address;
 #[cfg(feature = "mail")]
 pub mod mail_forwarding;
 #[cfg(feature = "mail")]

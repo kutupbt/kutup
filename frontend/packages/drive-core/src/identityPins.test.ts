@@ -930,6 +930,21 @@ describe('followAccountRenames (Chat\'s rename line)', () => {
     expect(server.puts).toBe(puts)
     expect(storedPins()).toMatchObject([{ id: 'acct-A', addresses: ['ada.l@kutup.dev'] }])
   })
+
+  it('follows a pin Chat hasn\'t written yet against its own authority, leaving the list as it is', async () => {
+    const met = new Date(Date.now() - 60_000).toISOString()
+    server.renames.set('ada.lovelace@kutup.dev', chainAt(['ada.lovelace@kutup.dev'], Date.now()))
+    const puts = server.puts
+    expect(await followAccountRenames(me, ADA, 'ada.lovelace@kutup.dev', { authorityPublicKey: 'A', since: met })).toEqual([
+      { from: 'ada.l@kutup.dev', to: 'ada.lovelace@kutup.dev', sequence: 1, issuedAtMs: expect.any(Number) as number },
+    ])
+    expect(server.puts).toBe(puts)
+    // Another authority's chain, or a rename from before the meeting: nothing.
+    expect(await followAccountRenames(me, ADA, 'ada.lovelace@kutup.dev', { authorityPublicKey: 'M', since: met })).toEqual([])
+    expect(
+      await followAccountRenames(me, ADA, 'ada.lovelace@kutup.dev', { authorityPublicKey: 'A', since: new Date(Date.now() + 60_000).toISOString() }),
+    ).toEqual([])
+  })
 })
 
 describe('this account is itself by its id, never by an address', () => {

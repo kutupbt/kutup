@@ -23,6 +23,7 @@ use crate::engine::Engine;
 use crate::error::{ChatError, Result};
 use crate::group::{self, GroupError, GroupMemberView, GroupRecordV1, GroupStatus, NewGroup};
 use crate::group_client::{self, ConfigCheck, RequestSigner, RouteFailure};
+use crate::group_lines::{self, Applied};
 
 /// How many changes one log request asks for.
 const LOG_PAGE: u16 = if cfg!(test) { 2 } else { 64 };
@@ -41,6 +42,16 @@ pub struct GroupSummary {
     pub known_since_ms: Option<i64>,
     /// Who may rename it and add members, as the verified state says.
     pub access: Option<kutup_chat_proto::group::GroupAccessV1>,
+    /// Whether this account may send there now: not once the group ended,
+    /// and only as an administrator while it is announcements-only.
+    pub may_send: bool,
+    pub announcements_only: bool,
+    pub terminated: bool,
+    /// The disappearing-messages timer in seconds; 0 is off.
+    pub timer_seconds: u32,
+    /// The SHA-256 of the avatar blob the verified state names (base64): a
+    /// new one means a new picture.
+    pub avatar_hash: Option<String>,
 }
 
 /// What group content that came pairwise did.
@@ -293,6 +304,7 @@ impl Engine {
                         vec![GroupActionV1::ModifyAttribute {
                             attribute: GroupAttribute::Title,
                             value: Some(value),
+                            avatar_hash: None,
                         }],
                     )
                     .await
@@ -313,6 +325,15 @@ impl Engine {
         record: &mut GroupRecordV1,
         actions: Vec<GroupActionV1>,
     ) -> Result<GroupStateV1> {
+        Ok(self.submit_group_change_entry(record, actions).await?.0)
+    }
+
+    /// [`Self::submit_group_change`], with the log entry the home took.
+    pub(crate) async fn submit_group_change_entry(
+        &mut self,
+        record: &mut GroupRecordV1,
+        actions: Vec<GroupActionV1>,
+    ) -> Result<(GroupStateV1, GroupLogEntryV1)> {
         let change = group::author_change(record, actions).map_err(group_error)?;
         let body = change.canonical_bytes().map_err(ChatError::Invalid)?;
         let response = match self
@@ -335,9 +356,56 @@ impl Engine {
                 "the group home returned another change".into(),
             ));
         }
+        let before = record
+            .verified()
+            .map_err(group_error)?
+            .map(|(state, _)| state);
         let next = group::accept_change(record, &change, &entry.notary).map_err(group_error)?;
         self.save_group(record).await?;
-        Ok(next)
+        if let Some(before) = before {
+            let applied = Applied {
+                before,
+                change,
+                after: next.clone(),
+            };
+            self.write_group_lines(record, vec![applied]).await;
+        }
+        Ok((next, entry))
+    }
+
+    /// Writes the timeline lines of changes this device verified. Best
+    /// effort: a line that can't be written (its accounts not checkable
+    /// now) is left out, never the change.
+    pub(crate) async fn write_group_lines(
+        &mut self,
+        record: &GroupRecordV1,
+        applied: Vec<Applied>,
+    ) {
+        if applied.is_empty() {
+            return;
+        }
+        let Ok(accounts) = group_lines::named_accounts(record, &applied) else {
+            return;
+        };
+        let Ok((keys, _, _)) = self.authority_keys(&accounts, &[]).await else {
+            return;
+        };
+        let authority_of = |account: &AccountRef| keys.get(account).copied();
+        let Ok(context) = Self::group_context(record) else {
+            return;
+        };
+        let sent_at = crate::clock::rfc3339(crate::clock::unix_millis());
+        let lines = applied
+            .iter()
+            .filter_map(|one| {
+                let body = group_lines::update_body(record, one, &authority_of)?;
+                let id = format!("grp:{}:{}", record.group_id, one.change.revision);
+                kutup_chat_proto::ChatContent::group_update_with_id(id, sent_at.clone(), &body)
+                    .ok()
+                    .map(|content| content.with_group_context(&context))
+            })
+            .collect();
+        let _ = self.session.record_local_lines(lines).await;
     }
 
     /// Makes a change as this member, then tells the group (a change
@@ -348,9 +416,130 @@ impl Engine {
         actions: Vec<GroupActionV1>,
         rng: &mut R,
     ) -> Result<()> {
+        // Members this change removes (a removal or a ban) hear of it
+        // pairwise, as only a verified account can be told.
+        let removed: Vec<String> = actions
+            .iter()
+            .filter_map(|action| match action {
+                GroupActionV1::RemoveMember { pseudonym } | GroupActionV1::Ban { pseudonym } => {
+                    Some(pseudonym.clone())
+                }
+                _ => None,
+            })
+            .collect();
+        let told = if removed.is_empty() {
+            Vec::new()
+        } else {
+            self.group_members(group_id)
+                .await
+                .unwrap_or_default()
+                .into_iter()
+                .filter(|member| removed.contains(&member.pseudonym))
+                .filter_map(|member| member.verified)
+                .collect()
+        };
         let mut record = self.load_group_record(group_id).await?;
-        self.submit_group_change(&mut record, actions).await?;
+        let (_, entry) = self.submit_group_change_entry(&mut record, actions).await?;
         self.announce_group_change(group_id, rng).await;
+        for member in told {
+            self.tell_removed(group_id, &member, &entry, rng).await;
+        }
+        Ok(())
+    }
+
+    /// The removal, sent pairwise to a removed member's devices. Best effort:
+    /// a member who misses it learns at their next catch-up, when the home
+    /// no longer answers them.
+    async fn tell_removed<R: rand::Rng + rand::CryptoRng>(
+        &mut self,
+        group_id: &str,
+        member: &group::VerifiedMember,
+        entry: &GroupLogEntryV1,
+        rng: &mut R,
+    ) {
+        let Ok(capability) =
+            kutup_chat_proto::derive_delivery_capability(&member.profile_key, &member.account)
+        else {
+            return;
+        };
+        let content = kutup_chat_proto::ChatContent::group_removal_with_id(
+            uuid::Uuid::new_v4().to_string(),
+            crate::clock::rfc3339(crate::clock::unix_millis()),
+            0,
+            &kutup_chat_proto::GroupRemovalBody {
+                group_id: group_id.to_string(),
+                entry: entry.clone(),
+            },
+        );
+        let _ = self
+            .send_sealed_pairwise(
+                &member.account.to_string(),
+                &capability,
+                None,
+                &content,
+                rng,
+            )
+            .await;
+    }
+
+    /// A removal sent to this account: taken when it is the next change of
+    /// the chain this device verified (the home's notary and the chain head
+    /// prove it); otherwise the group is caught up, which the home answers
+    /// as it answers a removed member.
+    pub(crate) async fn take_group_removal(
+        &mut self,
+        removal: kutup_chat_proto::GroupRemovalBody,
+    ) -> Result<()> {
+        let Some(mut record) = self.session.db().load_group(&removal.group_id).await? else {
+            return Ok(());
+        };
+        if record.status != GroupStatus::Member {
+            return Ok(());
+        }
+        let change = GroupChangeV1::from_canonical_bytes(&decode_b64(&removal.entry.change)?)
+            .map_err(ChatError::Invalid)?;
+        let before = record
+            .verified()
+            .map_err(group_error)?
+            .map(|(state, _)| state);
+        let next_revision = before.as_ref().map(|state| state.revision + 1);
+        if next_revision != Some(change.revision) {
+            if !self.may_nudge(&removal.group_id) {
+                return Ok(());
+            }
+            let sync = self.sync_group(&removal.group_id).await?;
+            self.list_after(&removal.group_id, &sync).await;
+            return Ok(());
+        }
+        let next = match group::accept_change(&mut record, &change, &removal.entry.notary) {
+            Ok(next) => next,
+            // Not a change of this chain, or not notarised by its home.
+            Err(_) => return Ok(()),
+        };
+        self.save_group(&record).await?;
+        if let Some(before) = before {
+            self.write_group_lines(
+                &record,
+                vec![Applied {
+                    before,
+                    change,
+                    after: next,
+                }],
+            )
+            .await;
+        }
+        let sync = if record.status == GroupStatus::Gone {
+            GroupSync::Gone
+        } else {
+            GroupSync::Current {
+                revision: record
+                    .verified()
+                    .map_err(group_error)?
+                    .map_or(0, |(state, _)| state.revision),
+                key_confirmed: false,
+            }
+        };
+        self.list_after(&removal.group_id, &sync).await;
         Ok(())
     }
 
@@ -479,6 +668,7 @@ impl Engine {
             vec![GroupActionV1::ModifyAttribute {
                 attribute: GroupAttribute::Title,
                 value,
+                avatar_hash: None,
             }],
         )
         .await?;
@@ -498,6 +688,7 @@ impl Engine {
             return self.take_whole_state(&mut record).await;
         };
         let mut from = state.revision + 1;
+        let mut applied = Vec::new();
         let mut newest = None;
         let mut history_refreshed = false;
         let mut finished = false;
@@ -531,19 +722,30 @@ impl Engine {
             for entry in &page.entries {
                 let change = GroupChangeV1::from_canonical_bytes(&decode_b64(&entry.change)?)
                     .map_err(ChatError::Invalid)?;
-                match group::accept_change(&mut record, &change, &entry.notary) {
-                    Ok(_) => {}
+                let before = record
+                    .verified()
+                    .map_err(group_error)?
+                    .map(|(state, _)| state);
+                let next = match group::accept_change(&mut record, &change, &entry.notary) {
+                    Ok(next) => next,
                     // A notary by an identity this device doesn't hold yet (the
                     // home rotated it): fetch the history again, once, and retry.
                     Err(GroupError::Notary) if !history_refreshed => {
                         history_refreshed = true;
                         self.refresh_gateway(&mut record).await?;
                         group::accept_change(&mut record, &change, &entry.notary)
-                            .map_err(group_error)?;
+                            .map_err(group_error)?
                     }
                     Err(error) => return Err(group_error(error)),
-                }
+                };
                 from = change.revision + 1;
+                if let Some(before) = before {
+                    applied.push(Applied {
+                        before,
+                        change,
+                        after: next,
+                    });
+                }
             }
             if let Some(last) = page.entries.last() {
                 newest = Some(last.notary.clone());
@@ -551,6 +753,8 @@ impl Engine {
             record.not_found_since_ms = None;
             record.synced_at_ms = Some(crate::clock::unix_millis());
             self.save_group(&record).await?;
+            self.write_group_lines(&record, std::mem::take(&mut applied))
+                .await;
             if !page.more || record.status == GroupStatus::Gone {
                 finished = true;
                 break;
@@ -713,6 +917,25 @@ impl Engine {
         accounts: &[AccountRef],
         fresh: &[AccountRef],
     ) -> Result<(Vec<GroupMemberView>, Vec<AccountRef>, Vec<AccountRef>)> {
+        let (keys, unconfirmed, cached) = self.authority_keys(accounts, fresh).await?;
+        let authority_of = |account: &AccountRef| keys.get(account).copied();
+        let members = group::members(record, &authority_of).map_err(group_error)?;
+        Ok((members, unconfirmed, cached))
+    }
+
+    /// The self-authority keys of `accounts` from their verified manifests
+    /// (kept ones, except for `fresh` accounts), the accounts whose manifest
+    /// couldn't be fetched, and those whose key was a kept one.
+    #[allow(clippy::type_complexity)]
+    pub(crate) async fn authority_keys(
+        &mut self,
+        accounts: &[AccountRef],
+        fresh: &[AccountRef],
+    ) -> Result<(
+        BTreeMap<AccountRef, [u8; 32]>,
+        Vec<AccountRef>,
+        Vec<AccountRef>,
+    )> {
         let now = crate::clock::unix_millis();
         let mut keys: BTreeMap<AccountRef, [u8; 32]> = BTreeMap::new();
         let mut unconfirmed = Vec::new();
@@ -765,9 +988,7 @@ impl Engine {
                 .insert(account_text, (now, authority));
             keys.insert(account, authority);
         }
-        let authority_of = |account: &AccountRef| keys.get(account).copied();
-        let members = group::members(record, &authority_of).map_err(group_error)?;
-        Ok((members, unconfirmed, cached))
+        Ok((keys, unconfirmed, cached))
     }
 
     /// Every group this device knows, with its title.
@@ -786,7 +1007,21 @@ impl Engine {
                     });
                 let verified = record.verified().ok().flatten();
                 let access = verified.as_ref().map(|(state, _)| state.access);
+                let me = record.pseudonym_text().ok();
+                let state = verified.as_ref().map(|(state, _)| state);
+                let announcements_only = state.is_some_and(|state| state.announcements_only);
+                let terminated = state.is_some_and(|state| state.terminated);
+                let administrator = state
+                    .zip(me.as_deref())
+                    .is_some_and(|(state, me)| state.is_administrator(me));
                 GroupSummary {
+                    may_send: record.status == GroupStatus::Member
+                        && !terminated
+                        && (!announcements_only || administrator),
+                    announcements_only,
+                    terminated,
+                    timer_seconds: crate::group_settings::timer_seconds(&record),
+                    avatar_hash: state.and_then(|state| state.attributes.avatar_hash.clone()),
                     group_id: record.group_id.clone(),
                     title,
                     status: record.status.clone(),
@@ -1019,6 +1254,7 @@ mod tests {
             vec![GroupActionV1::ModifyAttribute {
                 attribute: GroupAttribute::Title,
                 value: Some(title),
+                avatar_hash: None,
             }],
         )
         .unwrap();

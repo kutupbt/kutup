@@ -328,7 +328,7 @@ fn require(condition: bool, error: GroupChangeError) -> Result<(), GroupChangeEr
 
 /// Signal's access rule: `member` lets every member act, `administrator` only
 /// administrators; anything else lets no one.
-fn allowed(access: AccessRequired, actor_is_admin: bool) -> bool {
+pub(crate) fn allowed(access: AccessRequired, actor_is_admin: bool) -> bool {
     match access {
         AccessRequired::Member | AccessRequired::Any => true,
         AccessRequired::Administrator => actor_is_admin,
@@ -587,7 +587,11 @@ fn apply(
             Ok(())
         }
 
-        A::ModifyAttribute { attribute, value } => {
+        A::ModifyAttribute {
+            attribute,
+            value,
+            avatar_hash,
+        } => {
             require(
                 allowed(before.access.attributes, actor_is_admin),
                 GroupChangeError::NotAllowed,
@@ -595,6 +599,10 @@ fn apply(
             if let Some(value) = value {
                 decode_sealed("attribute", value, attribute.max_sealed_bytes())
                     .map_err(malformed)?;
+            }
+            super::check_avatar_hash(*attribute, value, avatar_hash).map_err(malformed)?;
+            if *attribute == GroupAttribute::Avatar {
+                next.attributes.avatar_hash = avatar_hash.clone();
             }
             let slot = match attribute {
                 GroupAttribute::Title => &mut next.attributes.title,

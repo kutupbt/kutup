@@ -117,6 +117,11 @@ Left before the tag:
   Slice 1 (state engine, sender keys, sealed batches, basic UI) is built,
   and a new device of a member keeps their groups (the account's
   `chatGroups` group list, `specs/38-chat-group-device-replaced.spec.ts`).
+  Slice 3 (links, requests, settings, bans, ending a group, removal notices,
+  timeline lines; `specs/165-chat-group-link.spec.ts` and the second test of
+  `specs/161-chat-groups-two-server.spec.ts`) is built, with request status,
+  withdrawal and the avatar on the server's #285 and #288. Slices 2 (sending once), 4 (calls) and 5 (MLS out)
+  follow; groups stay off until all are done.
 - **An independent security review** of the V1 formats and protocols, with a
   review bundle prepared for it.
 - **The remaining libsodium primitives.** Formats are sealed in WASM, but the
@@ -423,15 +428,15 @@ protocol state for new messages. The UI reports missing, invalid, offline, or
 quota-blocked backup state explicitly. Automated manual-fixture setup must not
 publish disposable headless devices unless it retains or revokes them.
 
-**Gap: contact states after total device loss.** Accepting and blocking
-someone reach the account's other devices only (contact controls over Note to
-Self). The history backup doesn't carry them, so a browser restored after
-every device was lost knows no accepted contacts: both people accept each
-other again, and a block is gone. Signal keeps these in its storage service;
-the fix is an account-synced, sealed contact list (an account-head scope, as
-the Chat group list), to be designed (`docs/plans/chat-contacts-sync.md`).
-Restoring "accepted" from history alone is not done, because it would undo
-blocks.
+**Contact states after total device loss: closed.** Who the account
+accepted, asked, rejected or blocked is kept in the account's sealed Chat
+contact list (`docs/plans/chat-contacts-sync.md`), as Signal's storage
+service keeps `ContactRecord`s: a browser restored after every device was
+lost reads it before taking any message, so blocks hold and contacts need no
+second accept (specs 34 and 164). Left: the native apps' transport has no
+contact list routes yet (the list is enabled on the web only; native apps
+are not started), and they take Signal's storage-sync timing for blocks
+(`BlockTiming::Debounced`).
 
 #### Phase 6 attachment storage and download decision
 
@@ -672,9 +677,10 @@ arrival, and direct sending. Phases, each with its own plan before code:
   simpler cases:
   - an alias is a prefix the person picks plus a suffix the server offers
     and signs (`netflix.x7f2@<alias domain>`), so nobody can claim another's
-    suffix; random aliases too; ideally on a separate domain
-    (`relay.<domain>`, needing its own MX, SPF and DKIM) so aliases cannot
-    be guessed from usernames; later the person's custom domains;
+    suffix; random aliases too; on a separate alias domain, decided
+    2026-10-20: `relay.<domain>` (`relay.kutup.dev` on kutup.dev), with its
+    own MX, SPF and DKIM, so aliases cannot be guessed from usernames and
+    their sending reputation stays apart; later the person's custom domains;
   - each alias has a display name, a note, the site it was made for, an
     on/off switch (off refuses at RCPT) and counts of forwarded, replied and
     blocked mail;
@@ -692,8 +698,12 @@ arrival, and direct sending. Phases, each with its own plan before code:
 - **Custom domains** (moved up, decided 2026-10-20): your own domain for
   Mail addresses, following Proton: add the domain, verify ownership and its
   MX, SPF, DKIM and DMARC records, addresses on it with their own keys,
-  catch-all. Runs beside Chat groups and Calendar. A plan note settled from
-  Proton's code comes first (`plans/mail-custom-domains.md`, to be written).
+  catch-all. Runs beside Chat groups and Calendar. Plan:
+  `plans/mail-custom-domains.md`; the server is built (the web UI is the
+  third session's). Open: a signed zone in the mail gate, so DNSSEC
+  validation itself is tested end to end (CoreDNS's `dnssec` plugin, a
+  test-only trust anchor for hickory, and a backend validating beside the
+  one that reads the unsigned test zones).
 - **E.** IMAP/SMTP and CalDAV/CardDAV bridge, organisations (which then own
   groups' storage, see the groups plan).
 
@@ -881,6 +891,12 @@ an edit. Plan: [`plans/pass.md`](plans/pass.md); research and decisions:
 ---
 
 ## Polish / smaller items (future)
+
+- **Rate limits administrators can change (2026-10-21):** the `RATE_LIMIT_*`
+  limits (per address, account and peer) are read from the environment at
+  start. Per the standing rule (every limit an administrators' setting), move
+  them to site settings under Administration, applied without a restart, as
+  the group, mail-domain and multi-recipient limits already are.
 
 ### Chat app (web) follow-ups
 
@@ -1288,7 +1304,11 @@ its fix is in the lockfile. Recorded 2026-10-17.
   decrypts or signs with an RSA private key.
 - **Unmaintained**, no replacement in their parents yet: `number_prefix`
   (indicatif, CLI), `proc-macro-error2` (hax-lib, under libsignal's ML-KEM),
-  `smallstr` (yrs) and `instant` (OpenMLS, removed with MLS).
+  `smallstr` (yrs), `instant` (OpenMLS, removed with MLS) and `basic-toml`
+  (RUSTSEC-2026-0374, 2026-10-20: askama's compile-time config under uniffi's
+  bindings generator, only with `kutup-client-ffi`'s `bindgen` feature; no
+  shipped binary links it; uniffi 0.32.2 still uses askama 0.16, so revisit
+  at the next uniffi release).
 - **`libcrux-chacha20poly1305` 0.0.7** (fixed in 0.0.8; a panic on an
   overlong ciphertext buffer, a crash rather than a disclosure). Not in RustSec,
   so `cargo deny` doesn't see it. It reaches `kutup-chat-core` and
@@ -1312,6 +1332,25 @@ implemented; these are product-lifecycle improvements above it.
   harness already covers the complete Drive and Chat transport lifecycle)
 - Responsive web has an automated phone/desktop axe and state-transition gate;
   physical-device browser coverage and dedicated native-app flows remain open
+
+### Responsive web · skeleton loading everywhere
+
+Make loading feel fast: show the page's shape at once, then fill it in.
+The shared `Skeleton` (`frontend/packages/ui/src/components/skeleton.tsx`)
+exists, but only Account uses it widely (Drive, Chat, Contacts one place
+each; Mail three; Pass, Photos and Office none). Wanted (user, 2026-10-20):
+- an app-shell skeleton in each app's `index.html` (sidebar, header, list
+  rows), painted before the JavaScript and WebAssembly load, so the first
+  paint is the layout, not a blank page or a spinner;
+- list and detail skeletons in every app while data loads (Drive's file
+  list, Chat's conversation list and thread, Mail's list and reading pane,
+  Pass's vault list and entries, Photos' grid, Office's home), matching the
+  real layout so nothing jumps when content arrives (the component's rule:
+  a skeleton that guesses wrong is worse than none);
+- skeletons only for waits; errors and empty states keep their own words;
+  respect reduced motion (no shimmer then); en/tr labels for screen readers.
+Measure with the performance baselines below (first contentful paint, layout
+shift) before and after.
 
 ### Performance baselines
 

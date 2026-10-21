@@ -150,6 +150,37 @@ manifest, signed with Ed25519 by the account authority:
   primary and flags, a QR-free fingerprint display for out-of-band checks,
   and "Download public key" (armored). Key import, export, rotation, and
   marking obsolete or compromised came with Mail (docs/plans/mail.md, C3e).
+- **Every next key list is built from the last list this account signed**
+  (`@kutup/mail-core/keyList`), never from the server's key rows: adding a
+  key appends only that key, and a change touches only the chosen key (or,
+  for a new primary, only the primary bits). The server's rows say which
+  keys exist and carry their envelopes, but a key the server lists and the
+  signed list lacks (or lists under another SHA-256 fingerprint) is shown as
+  "not in your key list", can't be changed, and is never signed into a list;
+  a primary or flag the server changes on its own is shown and signed as the
+  list has it. Otherwise a server could add a key it holds as primary and
+  have the account's next change sign it in.
+- **The account's own keys are checked like anyone's** (`checkedAddresses`
+  in `@kutup/mail-core/keyList`), against the authority derived from the
+  master key: each address's current list must verify, name that address
+  (folded), and be no older than one this device has seen for it (the same
+  revision-guard count recipients' lists keep). A key row is the account's
+  only when its public key, inspected here, has the fingerprints a signed
+  entry names. Mail seals drafts and Sent copies only to that primary and
+  stops with "your keys can't be trusted" when there is none (a list older
+  than one seen stops it too; so does a signed list whose key rows are gone,
+  and a signed primary marked obsolete or compromised); only those keys,
+  less any marked compromised, check the account's own signatures. The keys page shows a signed key the server no longer has
+  right, and offers "Download public key" only for checked keys.
+- **A first key only over nothing:** Mail, the Account shell and both
+  renames (web and CLI) make an address's first key only when the address
+  has neither a key nor a key list, whatever the server's rows or rename
+  check say, so a server can't have a fresh first list signed over a chain
+  the address has. Freed rows don't count as keyed. Taking back one's own
+  freed name must continue that row's chain (sequence + 1 over its newest
+  list's hash), not restart at 1, which every device that saw the old list
+  (the account's and recipients') would refuse as a rollback; until the
+  server accepts such a first list, both renames refuse it with a message.
 - The fork list gains `mail`, `calendar` and `contacts` with their app
   origins when those apps exist, not before.
 

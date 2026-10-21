@@ -797,6 +797,32 @@ pub fn complete_setup(
     (body["accessToken"].as_str().unwrap().to_string(), identity)
 }
 
+/// [`complete_setup`] for `user` after an administrator wiped it: the
+/// account as it is now, with its new keys, binding and session.
+pub fn set_up_again(
+    c: &Client,
+    base: &str,
+    first_login: &Value,
+    user: &User,
+    password: &str,
+) -> User {
+    let (status, body, identity, master_key, recovery_entropy, binding) =
+        setup_keys(c, base, first_login, &user.username, password);
+    assert_eq!(status, StatusCode::OK, "setup: {body}");
+    User {
+        id: user.id.clone(),
+        binding,
+        username: user.username.clone(),
+        password: password.to_owned(),
+        recovery_entropy,
+        token: body["accessToken"].as_str().unwrap().to_string(),
+        identity,
+        master_key,
+        person: user.person.clone(),
+        account: user.account.clone(),
+    }
+}
+
 /// [`complete_setup`], its answer as it comes (status and body).
 pub fn try_complete_setup(
     c: &Client,
@@ -805,6 +831,27 @@ pub fn try_complete_setup(
     username: &str,
     password: &str,
 ) -> (StatusCode, Value, AccountIdentityKeysV1) {
+    let (status, body, identity, ..) = setup_keys(c, base, first_login, username, password);
+    (status, body, identity)
+}
+
+/// The account set up as [`complete_setup`] does: the answer, the new
+/// identity, master key, recovery entropy and key binding.
+#[allow(clippy::type_complexity)]
+fn setup_keys(
+    c: &Client,
+    base: &str,
+    first_login: &Value,
+    username: &str,
+    password: &str,
+) -> (
+    StatusCode,
+    Value,
+    AccountIdentityKeysV1,
+    [u8; 32],
+    [u8; 32],
+    String,
+) {
     // The first sign-in's answer: its setup token and the account's id, which
     // the new keys' Drive key binding names.
     let setup_token = first_login["setupToken"].as_str().unwrap();
@@ -850,7 +897,14 @@ pub fn try_complete_setup(
         .unwrap();
     let status = completed.status();
     let body: Value = completed.json().unwrap_or(Value::Null);
-    (status, body, identity)
+    (
+        status,
+        body,
+        identity,
+        master_key,
+        recovery_entropy,
+        binding,
+    )
 }
 
 /// A temporary password as an administrator's client registers it (the

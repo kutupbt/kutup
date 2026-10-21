@@ -461,6 +461,44 @@ export async function followRename(me: DriveIdentity, address: string, renames: 
 }
 
 /** One step of an account's own rename chain: `from` → `to`, the chain's `sequence`. */
+/**
+ * A pin an app keeps for an account and hasn't written to the list yet
+ * (Chat waits a random while after a first meeting): the authority it
+ * trusts for them and when they were first seen.
+ */
+export interface PendingPin {
+  authorityPublicKey: string
+  since: string
+}
+
+/**
+ * The renames of an account the list doesn't pin yet, followed against the
+ * app's own pending pin: its chain verified against that authority, the
+ * renames since the first meeting. The list isn't touched; the pin is
+ * written in its own time, and then followed as any other.
+ */
+async function followPending(pending: PendingPin, current: string): Promise<AccountRename[]> {
+  let renames: RenameChains
+  try {
+    renames = await fetchRenames(current)
+  } catch {
+    return []
+  }
+  if (renames.version !== 1 || renames.unavailable) return []
+  const entry = renames.chains.find((chain) => chain.authorityPublicKey === pending.authorityPublicKey && chain.state === 'current')
+  if (!entry || entry.chain.length === 0 || !(await sameAddress(entry.current, current))) return []
+  try {
+    const view = await verifyAccountRenameChain(pending.authorityPublicKey, entry.chain)
+    if (!(await sameAddress(view.current, current))) return []
+  } catch {
+    return []
+  }
+  const met = Date.parse(pending.since)
+  return entry.chain
+    .filter((step) => Number.isFinite(met) && step.issuedAtMs > met)
+    .map((step) => ({ from: step.previous, to: step.current, sequence: step.sequence, issuedAtMs: step.issuedAtMs }))
+}
+
 export interface AccountRename {
   from: string
   to: string
@@ -476,14 +514,21 @@ export interface AccountRename {
  * addresses become the account's labels) and the renames issued since the
  * list first met it are returned, oldest first: a rename from before is no
  * news, and a server can't make one up. Nothing for an account the list
- * doesn't know, or one already at `current`.
+ * doesn't know, or one already at `current`; but an app's `pending` pin
+ * for an account the list doesn't pin yet (Chat writes a first meeting
+ * later) is followed in its place, the list left as it is.
  */
-export async function followAccountRenames(me: DriveIdentity, account: AccountRef, current: string): Promise<AccountRename[]> {
+export async function followAccountRenames(
+  me: DriveIdentity,
+  account: AccountRef,
+  current: string,
+  pending?: PendingPin | null,
+): Promise<AccountRename[]> {
   // Read the list again: another app (Chat's engine) may have pinned since.
   store = null
   const pins = await pinStore(me)
   const pin = pins.pins.list.pins.find((known) => sameAccount(known.account, account))
-  if (!pin) return []
+  if (!pin) return pending ? followPending(pending, current) : []
   const label = pinAddress(pin)
   if (label && (await sameAddress(label, current))) return []
   let renames: RenameChains

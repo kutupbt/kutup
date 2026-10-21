@@ -470,6 +470,8 @@ async fn main() -> anyhow::Result<()> {
     mail::outbox::spawn(state.clone());
     mail::snooze::spawn(state.clone());
     mail::forwarding::spawn(state.clone());
+    mail::domains::set_time_scale(state.config.mail_domains_time_scale);
+    mail::domains::sweep::spawn(state.clone());
     mail::expiry::spawn(state.clone());
 
     // Trailing-slash normalization wraps the whole Router from the *outside* (a
@@ -835,6 +837,30 @@ fn build_router(state: AppState) -> Router {
                 // A message of 5000 characters and a few details.
                 .route_layer(DefaultBodyLimit::max(64 * 1024)),
         )
+        .route(
+            "/api/chat/contact-list",
+            get(handlers::chat_contact_list::list),
+        )
+        .route(
+            "/api/chat/contact-list/:id",
+            put(handlers::chat_contact_list::put)
+                .delete(handlers::chat_contact_list::delete)
+                // One sealed entry, base64, and the head.
+                .route_layer(DefaultBodyLimit::max(
+                    handlers::chat_contact_list::ENVELOPE_BYTES / 3 * 4 + 64 * 1024,
+                )),
+        )
+        .route(
+            "/api/chat/group-capabilities",
+            put(handlers::chat_group_capabilities::change)
+                // Up to the limit's worth of base64 hashes each way.
+                .route_layer(DefaultBodyLimit::max(8 * 1024 * 1024)),
+        )
+        .route(
+            "/api/chat/group-capabilities/set",
+            post(handlers::chat_group_capabilities::set)
+                .route_layer(DefaultBodyLimit::max(8 * 1024 * 1024)),
+        )
         .route("/api/chat/group-list", get(handlers::chat_group_list::list))
         .route(
             "/api/chat/group-list/:id",
@@ -1001,6 +1027,22 @@ fn build_router(state: AppState) -> Router {
         .route(
             "/api/mail/filters/:id",
             patch(handlers::mail_filters::update).delete(handlers::mail_filters::delete),
+        )
+        .route(
+            "/api/mail/domains",
+            get(handlers::mail_domains::list).post(handlers::mail_domains::add),
+        )
+        .route(
+            "/api/mail/domains/addresses",
+            post(handlers::mail_domains::create_address),
+        )
+        .route(
+            "/api/mail/domains/:id",
+            get(handlers::mail_domains::get).delete(handlers::mail_domains::delete),
+        )
+        .route(
+            "/api/mail/domains/:id/catch-all",
+            put(handlers::mail_domains::catch_all),
         )
         .route(
             "/api/mail/forwardings",
@@ -1481,6 +1523,13 @@ fn build_router(state: AppState) -> Router {
                 .route_layer(from_fn(middleware::rate_limit_chat_anonymous)),
         )
         .route(
+            "/api/chat/anonymous/messages/multi",
+            post(handlers::chat_multi::send_multi)
+                // The largest payload the format takes, base64, and the rest.
+                .route_layer(DefaultBodyLimit::max(handlers::chat_multi::MAX_BODY))
+                .route_layer(from_fn(middleware::rate_limit_chat_anonymous)),
+        )
+        .route(
             "/api/chat/anonymous/messages/batch",
             post(chat::send_sealed_batch)
                 .route_layer(DefaultBodyLimit::max(
@@ -1793,6 +1842,12 @@ fn build_router(state: AppState) -> Router {
             post(chat_federation::get_sealed_user_bundles)
                 .route_layer(DefaultBodyLimit::max(8 * 1024))
                 .route_layer(from_fn(middleware::rate_limit_fed_users)),
+        )
+        .route(
+            "/api/fed/chat/sealed/multi",
+            post(handlers::chat_multi::deliver_federated)
+                .route_layer(DefaultBodyLimit::max(handlers::chat_multi::MAX_BODY))
+                .route_layer(from_fn(middleware::rate_limit_fed_multi)),
         )
         .route(
             "/api/fed/chat/sealed/batch",
@@ -2261,6 +2316,35 @@ fn build_router(state: AppState) -> Router {
                 .route(
                     "/api/admin/mail/senders",
                     get(handlers::mail_sending::senders),
+                )
+                .route(
+                    "/api/admin/mail/domains",
+                    get(handlers::mail_domains_admin::list),
+                )
+                .route(
+                    "/api/admin/mail/domains/settings",
+                    put(handlers::mail_domains_admin::set_settings),
+                )
+                .route(
+                    "/api/admin/mail/domains/:id/approve",
+                    post(handlers::mail_domains_admin::approve),
+                )
+                .route(
+                    "/api/admin/mail/domains/:id/deactivate",
+                    post(handlers::mail_domains_admin::deactivate),
+                )
+                .route(
+                    "/api/admin/mail/domains/blocks",
+                    get(handlers::mail_domains_admin::blocks),
+                )
+                .route(
+                    "/api/admin/mail/domains/blocks/:name",
+                    delete(handlers::mail_domains_admin::unblock),
+                )
+                .route(
+                    "/api/admin/users/:id/mail-domains",
+                    get(handlers::mail_domains_admin::overrides)
+                        .put(handlers::mail_domains_admin::set_overrides),
                 )
                 .route(
                     "/api/admin/mail/outside-sending",

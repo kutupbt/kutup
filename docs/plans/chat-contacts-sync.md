@@ -1,8 +1,9 @@
 # Chat contacts that survive device loss
 
 Status: decided (2026-10-19): the main session's review, and the user's
-answers (see Decisions). Third session (client and chat-core). The server half
-reuses the group list's routes; the second session owns it.
+answers (see Decisions). Third session (client and chat-core). The second
+session built `kutup_crypto::chat_contact_list` (with vectors) and the server
+half (`/api/chat/contact-list`, the `chatContacts` scope).
 
 - Gap: [`roadmap.md`](../roadmap.md), "contact states after total device
   loss"; found by spec 34 on #247.
@@ -60,7 +61,7 @@ book's contacts (the Contacts app's own scope). It is built like `chatGroups`:
 - **Entry id**: `HMAC-SHA256(id key, "kutup/chat-contact-list/id/v1\0" ‖
   AccountRef::bytes())`, exactly those bytes, base64url without padding.
 - **Sealed entry**: the group list's layout with its own magic
-  (`"KUTPCL1\0"`), suite 1, the write revision in the authenticated header,
+  (`"KUTPCC1\0"`), suite 1, the write revision in the authenticated header,
   and the AAD binding the account's key binding and the entry id.
 - **Size**: every sealed entry is exactly **2048 bytes**, padded as the group
   list's are.
@@ -180,13 +181,18 @@ cost of the correlation; it does not remove it.
 
 ### Reading
 
-On a clean device (no contacts, no highest-seen account head):
-1. read the pin list and the contact list (`check_index` against the account
-   head);
-2. apply the contacts;
-3. only then drain the mailbox and process transcripts. The mailbox is
-   **held** until the list has been read, so nothing from a blocked person is
-   taken first.
+A device that never followed the contact list in full (a clean one, or one
+from before the list):
+1. reads the contact list (every entry `check_index` lists, at the listed
+   revision, or the read fails);
+2. applies the contacts, and marks the list followed (durably);
+3. only then drains the mailbox and processes transcripts. The mailbox is
+   **held** until the list has been followed, so nothing from a blocked
+   person is taken first.
+
+The pin list is not read ahead of the mailbox: it is consulted for each
+contact as Chat meets them (`sync_identity`), before anything is sealed to
+them, which is the point it decides anything.
 
 `bootstrap_contacts` goes. It marks every peer in the device's own message
 tables as Accepted at revision 0, which would run before the list and accept
@@ -238,6 +244,80 @@ following the main session's review of #252:
 - writes are listed by the account head;
 - account reset clears it.
 
+## As built (third session)
+
+- `kutup_chat_proto::contact_list::ChatContactEntryV1`: unknown fields kept in
+  a flattened map and written back; read from any valid JSON spelling (the
+  seal vouches for the bytes), written canonically. `previousState` may be
+  `pendingIncoming` (an unblock returns to the request), never `blocked`.
+- chat-core `contact_list`:
+  - `contact_order` is the one order (`(revision, blocked, sourceDeviceId)`),
+    used by the Note-to-Self contact control and the list alike.
+  - A contact record carries `list_due_at_ms` (SQLite column, IndexedDB
+    field): set at a random moment within ten minutes by every explicit and
+    implicit change except an incoming request; a profile-key-only change
+    within the hour (`lazy_due`).
+  - `flush_contact_list` reads the list, then per due contact takes the
+    list's newer entry, writes this device's newer one over the stored write
+    revision (a conflict reads again and merges once more), or clears the due
+    mark. A new entry on a full list evicts the oldest rejected, then the
+    oldest asked; never a block. With nothing to evict the entry stays due,
+    `contact_list_full()` turns on, and Chat shows a banner (en, tr).
+  - Every read checks that an entry's account re-derives its id.
+  - `sync_contact_list` takes what is newer in the list and applies the
+    standing rule; a running web device runs it every five minutes with its
+    due writes (`sync_contact_list_if_due`).
+  - `ContactListTiming { block: Immediate | Debounced }`: the web passes
+    `Immediate`, so a block is written before `block_contact` returns.
+  - `receive` on a device that never followed the list in full follows it
+    first and marks it followed (a durable flag); until it can, the mailbox
+    waits. `bootstrap_contacts` is gone.
+  - A read fails closed: every entry the account head lists must open at the
+    listed revision and name the account its id comes from. An entry of a
+    later version is kept as it is and never overwritten (the group list
+    reads the same way).
+  - First-seen identity pins are queued (`pins_due`) and written later and
+    together (`flush_identity_pins`, on the same tick and at sign-out); an
+    in-person verification is written at once. A queued pin lost to a reload
+    is queued again at the next contact.
+  - A queued pin keeps when the account was first seen, and is written with
+    that as its `since`: a rename after the first meeting is still told,
+    however late the pin is written. Meanwhile Chat's rename watch follows
+    the peer's rename chain against the queued pin
+    (`pendingIdentityPin`, the chain verified against its authority; the
+    list is not touched), so a rename right after a first meeting is told
+    at once (spec 160; master CI on e43bb82c found it missed). When that
+    shows a rename, the peer's pin is written at once
+    (`writeIdentityPinNow`) and the chain followed into the list, so the
+    list's other checks (someone else now at their old address) know them
+    by both addresses. A rename is rare and the list sealed: writing early
+    then tells the server little.
+- Web: `ApiChatTransport.fetchContactList / storeContactEntry /
+  deleteContactEntry` under the account head's `chatContacts` scope; `full`
+  is the server's `contactListFull` code. Signing out flushes the contact
+  list (and the queued pins) with the group list.
+- A reject still waiting for its delayed write is dropped if the rejected
+  person writes again first: the contact is then an incoming request, which
+  is never written. Accepted: the list keeps what it said before, and the
+  account's devices agree through the contact control.
+- The account's lists also sync on a timer of their own (about a minute, five
+  in a hidden tab, give or take a fifth), not only when something arrives:
+  a quiet device still writes what is due.
+- An entry a later version wrote is kept as it is. So a block made on an
+  older device, for someone whose entry a later version wrote, isn't written
+  to the list: it reaches the account's other devices by the contact
+  control, and the later version writes it.
+- While the list is full, its due entries other than blocks are tried again
+  at most every 30 minutes; a block every pass.
+- First-seen pins waiting for their write are kept with the device; two tabs
+  each keep the earlier due moment of a pin they both queued, which at worst
+  writes it once more.
+- A pin list that can't be fetched leaves Chat's own pins in charge: a
+  contact the account quarantined in another app is then trusted on first use
+  here until the list is read (fail-open, as before the list existed).
+- Not yet: the native transport has no list routes, so `kutup-client-ffi`
+  doesn't enable the list.
+
 ## Decisions
 
 The user's answers (2026-10-19, relayed by the main session):
@@ -270,10 +350,16 @@ The user's answers (2026-10-19, relayed by the main session):
   - eviction never drops a block.
 - Browser: spec 34's restored pair is mutual contacts again with no
   re-accept, and a block made before the loss holds after it.
+- **The gate for any change to contacts or identity pins** (who is met,
+  when a pin is written, how it is dated): specs 34 and 164 (chat-backup
+  suite) **and spec 160** (username renames, in the account suite). Run
+  spec 160 locally before such a PR: in CI the account suite runs only
+  after the mail specs, on master, so a pin change that breaks it got past
+  #279's checks (master CI on e43bb82c).
 
 ## Order
 
-1. kutup-crypto `chat_contact_list` with vectors (third session).
+1. kutup-crypto `chat_contact_list` with vectors (second session, reviewed by the third).
 2. The server scope and routes (second session).
 3. chat-core:
    - the one order function, used by the contact control too;

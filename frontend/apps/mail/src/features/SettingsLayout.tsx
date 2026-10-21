@@ -9,6 +9,7 @@ const TABS = [
   { to: '/settings/auto-reply', key: 'settings.autoReply' },
   { to: '/settings/folders', key: 'settings.folders' },
   { to: '/settings/filters', key: 'settings.filters' },
+  { to: '/settings/forwarding', key: 'settings.forwarding' },
   { to: '/settings/senders', key: 'settings.senders' },
 ] as const
 

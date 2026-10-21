@@ -48,6 +48,10 @@ pub enum ChatError {
     /// or inconsistent with the served prekey bundles.
     #[error("device trust: {0}")]
     Trust(String),
+    /// The account's contact list couldn't be followed in full on a device
+    /// that never has: its mailbox waits (docs/plans/chat-contacts-sync.md).
+    #[error("contact list unconfirmed: {0}")]
+    ContactListUnconfirmed(String),
     /// A send exhausted its 409 device-list recovery attempts.
     #[error("send did not converge after {0} attempts")]
     SendNotConverged(u32),
@@ -123,6 +127,7 @@ impl ChatError {
             | Self::Invalid(_)
             | Self::Transport(_)
             | Self::Trust(_)
+            | Self::ContactListUnconfirmed(_)
             | Self::SendNotConverged(_)
             | Self::MissingBundle(_) => Kind::Unknown,
         }

@@ -63,6 +63,10 @@ Specific codes, where an app does something particular (a test in
 | `revision_conflict` | 409 | A newer revision exists |
 | `head_conflict` | 409 | The account head moved (another device wrote first; `sequence` the current one, or a folder delete whose `removes` is not what it removes): read the head and index again, redo the edit |
 | `head_required` | 409 | The account keeps a head, and this listed write carried none |
+| `contactListFull` | 400 | `PUT /api/chat/contact-list/{id}`: a new entry past the 10,000 the list keeps; the client keeps the write due (a block is never dropped) and tells its person |
+| `malformed` | 400 | `POST /api/chat/anonymous/messages/multi`: the payload doesn't parse, a device is listed twice, or the capabilities don't name exactly the payload's accounts ([chat-protocol.md](chat-protocol.md) §7); also a group route's refusal code |
+| `peerUnavailable` | 503 | `POST /api/chat/anonymous/messages/multi` for another server's accounts: that server didn't take the send (slow, unreachable or unwilling); send their copies one by one |
+| `capabilityLimit` | 409 | `PUT /api/chat/group-capabilities` or `POST …/set`: the account would pass its group capability limit; nothing changed |
 | `setupRequired` | 409 | The account has no keys yet (an admin-made account before its first sign-in): a listed write or a rename waits for setup |
 | `renamed` | 409 | A lookup of a name an account no longer goes by (held, or named in a rename chain): `renames` carries `{ "version": 1, "chains": [...] }`, never keys |
 | `nameReserved` | 409 | The name is the server's (postmaster, abuse, …, the break-glass account), in any spelling |
@@ -78,6 +82,12 @@ Specific codes, where an app does something particular (a test in
 | `endToEndRequired` | 400 | `POST /api/mail/forwardings` to a Kutup address without `endToEnd` material |
 | `forwardingExists` | 409 | The address already forwards there |
 | `forwardingLimit` | 409 | 10 forwardings per address or 25 per account |
+| `customDomainsOff` | 403 | Custom mail domains are off here (`POST /api/mail/domains`) |
+| `domainNotVerified` | 409 | The address's custom domain doesn't take mail now (sending from it, a new address or a catch-all on it) |
+| `notYourAddress` | 404 | `fromAddress` names no active address of the caller's |
+| `mimeMismatch` | 400 | `POST /api/mail/send`: the readable `mime` isn't the same message (another From than the sender's address, another Message-ID, or a Bcc header) |
+| `checkTimedOut` | 503 | `GET /api/mail/domains/{id}?refresh=1`: the domain's whole DNS check ran past its time (`mail_domains.check_timeout_seconds`); nothing changed |
+| `domainBlocked` | 409 | `POST /api/mail/domains`: an administrator deactivated this name; nobody may add it until they lift the block |
 | `forwardingUnavailable` | 409 | This server has no `MAIL_FORWARDING_KEYS`: no forwarding can be set up |
 | `forwardingState` | 409 | A forwarding action from the wrong state (pause an active one, accept a pending one, …) |
 | `keyListRequired` | 400 | The first outside forwarding of an address brings its next key list, with EMAIL_NO_ENCRYPT on every key |
@@ -1154,6 +1164,8 @@ chain start names. **Auth:** Bearer JWT. Scopes and their ids:
 - `chatGroups`: the group list's entry ids (`GET /api/chat/group-list`), with
   the revision in each sealed entry's header. Readable whether or not pairwise
   groups are on (empty when they are off, since nothing can be written);
+- `chatContacts`: the Chat contact list's entry ids (`GET
+  /api/chat/contact-list`), with the revision in each sealed entry's header;
 - `passSecrets`: the vault's file id, for every secret the account keeps, the
   vault trashed, purged or out of reach included ("unreachable but listed":
   the secret stays until its owner forgets it, `POST
@@ -1736,6 +1748,120 @@ not send outside (the server's policy, or its sending paused); confirmation
 emails wait likewise. A forwarder's new primary key makes
 its end-to-end forwardings `outdated` and deletes their k.
 
+
+## Custom mail domains
+
+An account's own domains, as Proton's
+([`plans/mail-custom-domains.md`](plans/mail-custom-domains.md)): added,
+proved with a TXT record before any mail flows, checked as Proton checks them,
+and given addresses. `404` unless the server has Mail; adds answer `403
+customDomainsOff` unless an administrator allows them and the server has
+Stalwart's management key and `MAIL_DKIM_KEYS`. **Auth:** Bearer JWT.
+
+A domain: `{ "id", "name", "state", "verifyState", "mxState", "spfState",
+"dkimState", "dmarcState", "awaitingApproval", "stopped", "catchAllAddressId",
+"addressCount", "records", "createdAt", "checkedAt", "warnedAt" }`. The states
+are Proton's numbers (`DOMAIN_STATE` 0 not verified, 1 verified, 2 warn;
+`VERIFY_STATE`, `MX_STATE`, `SPF_STATE`, `DKIM_STATE`, `DMARC_STATE` as in
+Proton's `Domain.ts`). `records` lists what to publish, each `{ "type", "host",
+"value", "priority"? }`: `verify` (TXT `@` = `kutup-verification=…`), `mx`,
+`spf` (`v=spf1 include:_spf.<server> ~all`), `dkim` (three CNAMEs,
+`kutupN._domainkey` → `<domain id>.kutupN._dk.<server>.`) and `dmarc`.
+
+A held domain whose TXT goes missing keeps working in `warn` for 14 days
+(admin-settable) while its MX is still this server; with its MX gone too,
+sending and delivery stop at once (`stopped`) and it ends within 72 hours.
+Then its addresses are freed and its owner sees a `domainLost` security
+event, as when another account proves the domain (two checks an hour apart
+that find that account's code and not the holder's).
+
+### GET /api/mail/domains
+
+`{ "domains": [...], "used", "max", "mode": "everyone"|"approve"|"off" }`.
+
+### POST /api/mail/domains
+
+`{ "name" }` → `201` with the domain (or the one the account removed before,
+with its code). The name is lowercased and put in its IDNA form. `400`
+`invalidDomain`, `domainIsAddress`, `serverDomain` (this server's or a name
+under it) or `publicSuffix`; `409` `domainLimit`, `domainDailyLimit`,
+`serverDomainLimit` or `domainBlocked`.
+
+### GET /api/mail/domains/{id}?refresh=1
+
+The domain; `refresh=1` checks its DNS now, uncached (Proton's "Refresh
+status"), at most 30 times an hour per account (`429`), and at most
+`mail_domains.refreshes_at_once` across the server at a time (`429`). A
+check that runs past `mail_domains.check_timeout_seconds` changes nothing
+(`503` `checkTimedOut`). A check that finds the domain changed since it was
+read (another check, an administrator) returns it as it is.
+
+### DELETE /api/mail/domains/{id}
+
+`204`: the domain is removed and its addresses freed (their keys stay for old
+mail; nothing is published for them).
+
+### PUT /api/mail/domains/{id}/catch-all
+
+`{ "addressId": "<an active address on the domain>" | null }` → `204`. Unknown
+names on the domain then reach it, at most the owner's
+`mail_domains.catch_all_per_day` a day (500 at first; `452 4.2.2` after),
+counted once per stored message across every backend; caught mail is never
+forwarded. `403` when catch-alls are off, `409`
+while the domain isn't verified.
+
+### POST /api/mail/domains/addresses
+
+`{ "local", "domainId" }` → `201 { "id", "address" }`: an address on one of
+the caller's verified domains, compared lowercased (no `. _ -` folding there).
+It has no key yet: the client adds one with `POST
+/api/mail/addresses/{id}/keys`. Every address counts toward the account's
+limit (10 by default), its username's included. `400 invalidAddress`, `409`
+`addressLimit`, `addressTaken` or `domainNotVerified`. Sending from it: `POST
+/api/mail/send` (and drafts) with `fromAddress: "<its id>"` in the meta.
+
+### GET /api/admin/mail/domains · PUT /api/admin/mail/domains/settings
+
+Administrators only. `GET`: `{ "configured", "stalwartDriftAt", "settings": { "mail_domains.mode":
+"everyone"|"approve"|"off", "mail_domains.per_account", …addresses_per_account,
+…on_server, …adds_per_day, …pending_days, …catch_all, …catch_all_per_day,
+…grace_warn_days, …grace_stopped_hours, …refreshes_at_once, …check_timeout_seconds }, "spf", "dkimKeys": [{ "selector",
+"state", "host", "txt", "publishedSince" }], "domains": [... "blocked" ...] }`.
+`stalwartDriftAt` is when Stalwart's domains or DKIM signatures outside the
+custom domains (`MAIL_DOMAIN`'s own) last changed, as the reconcile saw them
+(it never touches them, so a change is someone else's; it is also logged as
+an error). A pending
+DKIM key signs only once its TXT (`*.kutupN._dk.<server>`) has been in DNS for
+a day. `PUT` takes any of the settings, each checked against its range
+(`400` otherwise), applies at once and is audited (`mail.domains.settings`).
+The mode `off` stops every custom domain at once: no new ones, and held ones
+neither send nor receive; the reconcile then removes them from Stalwart, so
+mail to them is refused at RCPT (`5xx`, the sender bounces it) rather than
+deferred. Turning the mode back on restores held domains that still prove
+themselves; their addresses keep working as before.
+
+### POST /api/admin/mail/domains/{id}/approve · /deactivate
+
+Administrators only. `approve` lets a verified domain take mail in the
+`approve` mode; `deactivate` ends a domain at once (its addresses freed, its
+owner told in its inbox and its security events) and blocks its name and
+every name under it (`mail.<name>` too), so no account proves or takes any of
+them over until the block is lifted. Both audited.
+
+### GET /api/admin/mail/domains/blocks · DELETE /api/admin/mail/domains/blocks/{name}
+
+Administrators only. `GET`: the blocked names, newest first, `[{ "name",
+"blockedAt", "blockedBy" }]` (`blockedBy` null once that administrator's
+account is gone), whether or not a domain row is left for them. `DELETE`
+lifts one by its name (`204`; `404` for a name not blocked), audited
+(`mail.domains.unblock`).
+
+### GET · PUT /api/admin/users/{id}/mail-domains
+
+Administrators only. One account's limits over the site's: `{ "maxDomains":
+0–100 | null, "maxAddresses": 1–1000 | null, "catchAll": bool | null }`, `null`
+keeping the site's.
+
 ## Mail
 
 Mail from outside arrives through Stalwart and is encrypted to the address's
@@ -1801,7 +1927,7 @@ only), `inReplyTo` and `references`.
 ### POST /api/mail/drafts · PUT /api/mail/drafts/:id
 
 Multipart: `meta` (JSON: `subject`, `fromName`, `to`, `cc`, `bcc` as
-`[{ "address", "name" }]`, `messageId` as `…@<server name>`, `inReplyTo`,
+`[{ "address", "name" }]`, `messageId` as `…@<server name>` or `…@<the sender's domain>`, `inReplyTo`,
 `references`, `attachmentCount`, `threadId`) and `body` (the message without
 attachments, encrypted to your own address key; `400` with `code: keyChanged`
 otherwise). **Response:** the draft, as in the list. `413` when too large or
@@ -3370,11 +3496,71 @@ a bad signature; the operations and answers are `GroupRequestV1` /
 `GroupResponseV1` in `kutup_chat_proto::group_route`. The home limits per
 relaying server (6000/min), per pseudonym (240/min), changes per pseudonym
 (30/min) and per group (60/min), link requests per group (30/min), and new
-groups per relaying server (600/hour). Group budgets are charged only for
+groups per relaying server (600/hour). Joins from a link and requests to
+join are limited per relaying server and group, and per relaying server, as
+administrators set them (`chatGroupLinkJoinsPerRelayGroupPerMin`, 120/min,
+and `chatGroupLinkJoinsPerRelayPerMin`, 1200/min, at first): charged once the
+link's password holds and before the rest of the change is checked, so a
+change without the link spends nothing and one link's holders crowd only
+its group. Group budgets are charged only for
 valid changes and proven link requests; failed requests spend a separate
 budget per relaying server (600/min). A stranger, a removed member, or a
 newcomer whose claim, link password or request doesn't hold gets the same
 `notFound` as an unknown group, never a conflict or a refusal code.
+Refusal codes besides the group checks' own (`kutup_chat_proto::group`):
+`malformed` (a body that doesn't parse), `wrongActor` (a change whose actor
+isn't the request's signer), `wrongGroup` (a genesis for another group),
+`serverFull`, and `pseudonymUsed`: a newcomer's claim, join from the link or
+request to join under a pseudonym the group has had before, as a member or
+a requester. The home answers `pseudonymUsed` only once the claim's or the
+link's proof holds and the change passes every other check, and only its own
+key holder can sign a request as that pseudonym, so nobody else learns it.
+It is the one refusal that spends neither the relaying server's failure
+budget nor the group's change budget: the client retries at its next join
+epoch (up to 64).
+`getRequestStatus` (no body, signed by the requesting pseudonym) answers
+where the signer's own request stands, as `GroupRequestStatusV1`:
+`{ "status": "pending", "revision", "head" }` while it requests (what a
+cancel names, so it works after a link reset too), `member` once approved,
+`denied` when banned, or when the group saw the pseudonym (as a requester or
+a member) and it is neither now, and `unknown` for a pseudonym the group never
+saw or an unknown group: never `notFound`. It spends the per-pseudonym budget,
+and an `unknown` answer also the relaying server's failure budget; every
+answer takes the same reads, so its timing doesn't tell whether the group
+exists. A cancel is done once: sent again it meets `notFound`, so a client
+that lost the answer to its cancel asks the status (`denied` then).
+Avatars: `putAvatar` (signed by a member that `access.attributes` lets
+change attributes, else `notAllowed`) carries the sealed blob padded to one
+size (`pad_group_avatar`: its length, the blob, zeros to 41,005 bytes; the
+blob is 8,233, 16,425, 32,809 or 41,001 bytes). It becomes the group's one
+pending upload for `chatGroupAvatarPendingSeconds` (a day at first), in
+place of any earlier one; once that passes it counts as missing, swept or
+not. A change naming an
+avatar hash must find that blob, pending or current (`avatarMissing`
+otherwise; a genesis can't name one); once accepted it becomes the current
+blob and the others go, and removing the avatar drops its blob.
+`getAvatar` answers the current blob padded the same way, to a member or
+with the link's password (charged as join info), or `avatarMissing`.
+Refusals: `avatarTooLarge` over the largest blob and `avatarStorageFull`
+over the storage per group (the current blob and the upload), both
+administrators' settings; `malformed` for a body not padded so. An upload
+spends the change budgets.
+
+### PUT /api/chat/group-capabilities · POST /api/chat/group-capabilities/set
+
+Group delivery capabilities ([`plans/pairwise-groups.md`](plans/pairwise-groups.md),
+slice 2 §2; `404` unless `CHAT_GROUPS=true` and federation is on). Signed-in,
+the account's own. Each is the SHA-256 (32 bytes, canonical base64) of one
+random capability per group the account is in, with no group id; a sender
+presents the raw capability with a multi-recipient send. `PUT` takes `{
+"add": [hash], "remove": [hash] }` and applies both in one transaction (a
+member replacing its capability never has neither); adding one already there
+or removing one not there changes nothing. `POST …/set` takes `{ "hashes":
+[...] }` and makes the set exactly these (a device restoring from its group
+list). Both answer `{ "count" }`. `400` for a hash that isn't 32 bytes of
+canonical base64; `409 capabilityLimit` when the change would pass the
+account's limit (`chatGroupCapabilitiesPerAccount`, 1024 at first), refused
+whole. An account reset clears them.
 
 ### GET /api/chat/group-list
 
@@ -3406,6 +3592,36 @@ parse, and for a new entry past 1024; `404` for an id that isn't one.
 it is still at `baseRevision` (an ended group whose chat its person deleted).
 `409 revision_conflict` with the current revision when it moved, `404` when
 there is no such entry; `head` as for `PUT`.
+
+### GET /api/chat/contact-list
+
+The account's Chat contacts ([`plans/chat-contacts-sync.md`](plans/chat-contacts-sync.md)):
+one sealed entry per person the account accepted, rejected, blocked or asked,
+so a device that lost everything restores them. Wherever Chat is (pairwise
+groups needn't be on). `{ "entries": [{ "id", "revision", "envelope" }] }`.
+`id` is a keyed hash of the contact's account (`AccountRef`) under a key
+derived from the account's master key (43 characters of base64url without
+padding); `envelope` is the sealed entry (standard base64, always 2048 bytes),
+whose authenticated header carries its revision. The server never opens it.
+The account head's `chatContacts` scope lists every entry. **Auth:** Bearer
+JWT. An account reset clears the list.
+
+### PUT /api/chat/contact-list/{id}
+
+As `PUT /api/chat/group-list/{id}`: `{ "baseRevision", "envelope", "head"? }`
+→ `200` with the stored entry; `409 revision_conflict` with the current
+`revision`, `head_required` / `head_conflict`. `400` for an envelope that
+isn't 2048 bytes of canonical base64 or isn't a contact list entry (a group
+list entry isn't one), and `400 contactListFull` for a new entry past 10,000
+(the client evicts before that: the oldest rejections, then the oldest pending
+requests, never a block); `404` for an id that isn't one.
+
+### DELETE /api/chat/contact-list/{id}
+
+`{ "baseRevision": <n>, "head"?: "<base64>" }` → `204`: removes the entry if
+it is still at `baseRevision` (one the client evicted). `409
+revision_conflict` with the current revision when it moved, `404` when there
+is no such entry; `head` as for `PUT`.
 
 ### POST /api/chat/call-links
 
@@ -4378,9 +4594,35 @@ Return current global server settings.
   "registrationMode": "code",
   "defaultStorageQuotaBytes": 10737418240,
   "chatMailboxRetentionDays": 30,
-  "chatMediaDeliveryRetentionDays": 45
+  "chatMediaDeliveryRetentionDays": 45,
+  "nameHoldDays": 180,
+  "oldAddressReceiveDays": 90,
+  "chatGroupLinkJoinsPerRelayGroupPerMin": 120,
+  "chatGroupLinkJoinsPerRelayPerMin": 1200,
+  "chatGroupCapabilitiesPerAccount": 1024,
+  "chatGroupAvatarMaxBytes": 41001,
+  "chatGroupAvatarStoragePerGroupBytes": 82002,
+  "chatGroupAvatarPendingSeconds": 86400
 }
 ```
+
+`chatGroupAvatarMaxBytes` is the largest group avatar blob this server takes
+for the groups it hosts: 8233, 16425, 32809 or 41001.
+`chatGroupAvatarStoragePerGroupBytes` is the most one group's avatars (the
+current blob and a pending upload) may take: at least twice the largest blob
+(so a group can always swap its avatar) and at most 82002.
+`chatGroupAvatarPendingSeconds` is how long an upload waits for a change to
+name it, 60 to 604800. The three are checked together (`400` otherwise);
+`null` resets one to its first value (41001, 82002, 86400).
+
+The two link-join budgets limit how many joins from a group link and
+requests to join one relaying server's users may make each minute: to any
+one group this server hosts (`chatGroupLinkJoinsPerRelayGroupPerMin`), and to
+all of them together (`chatGroupLinkJoinsPerRelayPerMin`). Each is 1 to
+1000000 (`400` otherwise); `null` in a `PUT` drops the stored value, so the
+first value applies again: `RATE_LIMIT_CHAT_GROUP_LINK_JOINS_RELAY_GROUP_PER_MIN`
+(default 120) and `RATE_LIMIT_CHAT_GROUP_LINK_JOINS_RELAY_PER_MIN` (default
+1200).
 
 `defaultStorageQuotaBytes` is the storage quota new accounts get (registered,
 created by an administrator, or the bootstrap administrator); 10 GiB until an
