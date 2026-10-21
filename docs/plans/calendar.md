@@ -202,3 +202,128 @@ widgets in Mail. English and Turkish.
   reminders, busy/free and time-window queries); titles, descriptions,
   locations, attendees and comments are encrypted and signed.
 - Phases E1 to E5 as above; building starts after the rate limits (#299).
+
+## E1: build note (second session, 2026-10-21)
+
+For review before code. E1 delivers personal calendars end to end: keys,
+calendars, single events (no recurrence, reminders or sharing yet, but the
+formats and tables carry them so E2–E4 add no migration of data). Copied from
+Proton (`packages/shared/lib/calendar`, `interfaces/calendar/{Api,Event}.ts`)
+except where marked.
+
+**Crypto (`kutup-crypto` `calendar`, feature `mail`, rPGP as Mail).**
+- *Calendar key:* the same shape as a Mail address key (v4, Ed25519 primary,
+  Curve25519 ECDH subkey, AES-256), its secret armored and **locked with a
+  passphrase** (iterated S2K, AES-256; Mail's export path). Post-quantum when
+  Mail's address keys move (`mail-pq-openpgp.md`), as Proton.
+- *Passphrase:* 32 random bytes. Stored as Proton's `CalendarPassphrase`: one
+  data packet (SEIPD under a session key) and one key packet per member
+  (PKESK to that member's primary address key), plus the owner's detached
+  signature over the passphrase. A member verifies the signature against the
+  owner's address keys (`mail-core` key lists) before using it.
+- *Calendar metadata (D-1):* name and description, as one JSON object, signed
+  and encrypted to the calendar key (`encrypt_split` with the calendar key as
+  recipient: key packet and data packet stored apart). Colour is the
+  member's, readable.
+- *Events:* Proton's parts, each a VCALENDAR text with one VEVENT holding only
+  its part's properties (Proton's field lists above), types
+  `signed` / `encrypted-and-signed`:
+  - shared signed: `uid, dtstamp, dtstart, dtend, recurrence-id, rrule,
+    exdate, organizer, sequence`;
+  - shared encrypted: `uid, dtstamp, created, description, summary, location`
+    (and the conference URL later);
+  - calendar signed: `uid, dtstamp, exdate, status, transp`;
+  - calendar encrypted: `uid, dtstamp, comment`;
+  - attendees (E4): encrypted.
+  Two session keys, shared and calendar, each a key packet to the calendar
+  key; every part signed (detached) by the author's address key. **The Rust
+  core owns the parts' text**: it builds them from typed fields and parses
+  them strictly (the properties of its part, nothing else, RFC 5545 escaping,
+  `DTSTART;TZID=` or `VALUE=DATE` or UTC), so the server and every client
+  read one format.
+- *New rPGP functions:* encrypt a data packet with a given session key,
+  wrap a session key to a public key (a new key packet: sharing in E3 and
+  invitations in E4 reuse it), and open a key packet to its session key with
+  the calendar key. Mail has none of these today; they live in `mail_key.rs`
+  beside `encrypt_split`.
+- *WASM and JS:* `frontend/packages/crypto/src/calendar.ts`, the calendar
+  secret held inside WASM as Mail's address keys are: the browser passes the
+  locked key and the passphrase (opened with the member's address key) on
+  each call.
+- *Vectors:* `calendar-key-v1.json`, `calendar-event-v1.json` (fixed keys
+  and ciphertexts that must open; refused cases: a part with a property of
+  another part, a bad signature, a wrong key packet), run in Rust and WASM.
+
+**Server.**
+- Tables (one migration, above master and open PRs when built):
+  - `calendars`: id, owner, key (armored public key; the locked secret),
+    passphrase data packet and owner's signature, metadata key packet and
+    data packet, created/updated;
+  - `calendar_members`: calendar, user, address id the key packet is to,
+    permissions (Proton's bit flags; E1 writes the owner only), passphrase key
+    packet, colour, display flag;
+  - `calendar_events`: id, calendar, uid, author address, the parts (type,
+    data, signature) and the two key packets, and the readable columns the
+    server derives: `start_utc`, `end_utc`, `start_tz`, `end_tz`, `full_day`,
+    `rrule` (text), `recurrence_id`, `exdates`, `range_end_utc` (the last
+    instant any occurrence can reach; open for an endless rule), sequence,
+    status, transp, created/modified;
+  - indexes on (calendar, start_utc, range_end_utc) and (calendar, uid,
+    recurrence_id).
+- *Readable fields come from the signed part* (Proton: the API takes only
+  the parts): the server parses the shared signed part with the Rust core,
+  checks the author's detached signature against the author's current address
+  keys (key list), and converts DTSTART/DTEND with their TZID to UTC (a time
+  zone database: `jiff` with its bundled tzdb, or `chrono-tz`; whichever the
+  dependency policy passes). Unknown TZIDs are refused (clients map Windows
+  and other aliases first, as Proton's `getSupportedTimezone`).
+- *Routes* (`/api/calendar/...`, Proton's shapes renamed to Kutup's style):
+  `GET/POST calendars`, `PUT/DELETE calendars/{id}` (metadata, colour,
+  display), `GET calendars/{id}/events?start&end` (events whose
+  [start_utc, range_end_utc) meets the window; paged), `POST
+  calendars/{id}/events/sync` (Proton's batch of create/update/delete, each
+  checked alone, at most 10 a request), `GET calendars/{id}/events/{eventId}`.
+  E1 refuses `rrule`, `recurrence-id` and `exdate` (E2 lifts it).
+- *Limits* (administrators' settings, per account where they count per
+  account): calendars per account (25), events per calendar (25,000), part
+  sizes (title 255, description 3,000, location 255 characters; each part
+  ≤ 64 KiB), sync batch (10); a rate limit per account on writes in the
+  registry (#302).
+- *Storage:* every event's bytes and each calendar's keys and metadata count
+  against the owner's one pool (`storage_pool::lock`), refunded on delete;
+  the reconcile job and the usage page get a Calendar line.
+- *Account reset and deletion* remove the account's calendars (members'
+  rows with them).
+- *Rollback:* Proton keeps no index for events. Kutup adds the `calendars`
+  scope to the account head (the list of calendar ids and their metadata
+  revisions), as Contacts does, so a server can't hide or replay a calendar;
+  events per calendar get no head index in E1 (a later item if wanted).
+
+**The app (`calendar.<domain>`, dev port 5183).**
+- Every file the new-app checklist names (sessions' client type, origins,
+  fork, vite, nginx/hosts script, Dockerfile, deploy, compose files, CI SANs,
+  e2e fixtures, app switchers, launcher, storage page, feedback app list), and
+  a `calendar-core` package (API, keys, parts through WASM, time zones).
+- Views: month and week (and day), today, a mini-month to move; the event
+  editor (title, all-day, start and end with time zone, location,
+  description, calendar); the calendars sidebar (create, rename, colour,
+  show/hide, delete with its events). Times shown in the browser's zone or the
+  one the person picks (settings: zone, week start, 12/24 h). Time-zone maths
+  through `Intl` with a small tested helper (Proton's approach), no extra
+  library.
+- The first open makes a "My calendar" with the person's primary address
+  key; an account without a Mail address key gets one first (Mail's
+  `addFirstAddressKey`).
+- en and tr; e2e specs (create a calendar, an event across a time zone,
+  edit, move, delete; a second device reads them).
+
+**Not in E1:** recurrence, reminders, import/export (E2), sharing and links
+and busy/free (E3), invitations (E4), URL feeds, Google import, meetings
+(E5), holidays (later).
+
+**Questions for the reviewer.**
+1. The `calendars` account-head scope beyond Proton (recommended).
+2. The time zone crate: `jiff` (newer, bundled tzdb, one crate) or
+   `chrono-tz` (widely used, compiled-in tzdb).
+3. E1 as one PR (crypto + server + app, about Contacts' size) or two (crypto
+   and server first, then the app).
