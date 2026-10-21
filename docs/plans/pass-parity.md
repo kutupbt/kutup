@@ -22,14 +22,14 @@ said) · 🟡 partial (what is missing is said) · ❌ missing. "Kept" means
 Kutup reads and saves the data unchanged (other KeePass apps still see it)
 but offers no way to see or change it.
 
-**Summary** (rows per area, 2026-10-20):
+**Summary** (rows per area, 2026-10-21):
 
 | Area | ✅ | 🟡 | ❌ |
 |---|---|---|---|
 | The database (vault) | 10 | 9 | 20 |
 | Groups (folders) | 5 | 1 | 6 |
 | Entries | 8 | 6 | 8 |
-| Bulk actions and the entry list | 3 | 1 | 11 |
+| Bulk actions and the entry list | 8 | 1 | 6 |
 | Search | 1 | 3 | 3 |
 | Password generator | 2 | 2 | 3 |
 | One-time codes, passkeys, SSH, desktop integration | 5 | 3 | 10 |
@@ -129,22 +129,25 @@ but offers no way to see or change it.
 
 ## Bulk actions and the entry list
 
-Verified in `features/VaultPage.tsx` (the list) and `features/EntryDetail.tsx`
-(one entry): the list rows are plain buttons that open one entry; there is
-no selection state anywhere in the app.
+Verified in `features/EntryList.tsx` (the list, its selection and the
+selection bar), `features/entryDrop.ts` (groups as drop targets) and
+`features/EntryDetail.tsx` (one entry). Several entries change as one edit
+(one save, one merge step): `moveEntries`, `deleteEntries` and
+`restoreEntries` in `crates/kutup-pass/src/edit.rs`, all or nothing. A
+read-only vault has no selection and no dragging.
 
 | Feature | KeePassXC | Kutup Pass | Notes / where |
 |---|---|---|---|
-| Select several entries (Ctrl/Shift-click) | `gui/entry/EntryView.cpp` (`ExtendedSelection`) | ❌ | no checkboxes, no Ctrl/Shift selection |
-| Select all (Ctrl+A) | Ctrl+A in the list | ❌ | |
+| Select several entries (Ctrl/Shift-click) | `gui/entry/EntryView.cpp` (`ExtendedSelection`) | ✅ | a checkbox on each row (shown on hover, and always once one is selected), Ctrl/Cmd-click toggles, Shift-click takes the range from the last one clicked (`lib/selection.ts`); a plain click opens the entry; Esc clears; spec 167 |
+| Select all (Ctrl+A) | Ctrl+A in the list | ✅ | what the list shows (the group and the search) |
 | Move **one** entry to another group | drag to a group | ✅ | the folder button in the entry's header → "Move to" with the vault's groups (`EntryDetail.tsx`, `moveEntry`) |
-| Move **several** entries (or all of a group, select all then move) | select, drag to a group | ❌ | one at a time only; `moveEntry` takes one id (it would be one edit per entry, or a new batch op) |
+| Move **several** entries (or all of a group, select all then move) | select, drag to a group | ✅ | the selection bar's "Move to", one `moveEntries` edit |
 | Move one entry to the recycle bin | Delete | ✅ | asks first; for good inside the bin or with it off |
-| Move several to the recycle bin, delete several | select, Delete | ❌ | |
-| Restore from the recycle bin | drag back | 🟡 | "Restore" puts it in the **top-level** group, not where it was (KDBX's previous parent group is kept but not used) |
+| Move several to the recycle bin, delete several | select, Delete | ✅ | asks first, naming the count; for good (said so, "can't be undone") in the bin or with it off |
+| Restore from the recycle bin | drag back | ✅ | one entry or several, each back to the group it was in (KDBX's previous parent group), or the top group when that one is gone or in the bin; or "Move to" another group |
 | Empty the recycle bin | Recycle bin → Empty | ✅ | |
 | Clone several | Clone | ❌ | |
-| Drag and drop (entries to groups, groups into groups, Ctrl to copy) | `EntryView`, `GroupView` | ❌ | none anywhere |
+| Drag and drop (entries to groups, groups into groups, Ctrl to copy) | `EntryView`, `GroupView` | 🟡 | entries (one, or the selection) onto a group or the recycle bin, never deleting for good; not groups into groups, no Ctrl to copy |
 | Sort the list | click a column | ❌ | always by title, A–Z (natural order); no other order |
 | Choose columns (user name, URL, modified, expiry, attachments, TOTP…) | header menu | ❌ | each row shows the icon, title and user name (else URL) |
 | Move entries up and down (manual order) | Entries → Move up/down | ❌ | |
@@ -256,11 +259,11 @@ no selection state anywhere in the app.
 
 What people hit first, then what blocks moving from KeePassXC:
 
-1. **Several entries at once** (user report): multi-select (Ctrl/Shift and
-   checkboxes), select all, then **Move to group**, move to the recycle
-   bin, delete; drag and drop of entries onto groups. Today only one
-   entry moves, from its own header. A batch of `moveEntry`/`deleteEntry`
-   as one edit (one save, one history step), as Drive's selection does.
+1. ✅ **Several entries at once** (user report): multi-select (Ctrl/Shift
+   and checkboxes), select all, then Move to group, move to the recycle
+   bin, restore each to where it was, delete for good; drag and drop of
+   entries onto groups and the bin. Each as one edit (`moveEntries`,
+   `deleteEntries`, `restoreEntries`). Spec 167.
 2. **Vault management from the vault list** (user report): a menu on each
    vault in `VaultsPage.tsx`, also while locked: rename (today only inside
    an unlocked vault's "…" menu), move to another folder, duplicate,
@@ -273,8 +276,8 @@ What people hit first, then what blocks moving from KeePassXC:
    form, downloaded once), **add** or **remove** a key file, and re-keep
    the new key in the account. Needed too for shared vaults after a member
    leaves.
-4. **Move groups** (`moveGroup` exists in the core), restore deleted groups,
-   and restore entries to where they were.
+4. **Move groups** (`moveGroup` exists in the core) and restore deleted
+   groups (entries already go back to where they were, item 1).
 5. **Vault settings**: description, default user name, recycle bin on/off,
    history limits, KDF (Argon2id memory and iterations, with a "how long
    to open" test), compression.

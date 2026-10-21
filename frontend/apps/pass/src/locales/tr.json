@@ -387,5 +387,33 @@
     "isSet": "Hesabınızın bir PIN'i var.",
     "change": "PIN'i değiştir",
     "remove": "PIN'i kaldır"
+  },
+  "bulk": {
+    "toolbar": "Seçili kayıtlar",
+    "selected_one": "{{count}} seçili",
+    "selected_other": "{{count}} seçili",
+    "select": "{{title}} kaydını seç",
+    "clear": "Seçimi temizle",
+    "moveTo": "Taşı",
+    "restore": "Geri al",
+    "recycle": "Geri dönüşüm kutusuna taşı",
+    "deleteForGood": "Kalıcı olarak sil",
+    "moved_one": "{{count}} kayıt taşındı: {{group}}",
+    "moved_other": "{{count}} kayıt taşındı: {{group}}",
+    "restored_one": "{{count}} kayıt eski yerine geri alındı",
+    "restored_other": "{{count}} kayıt eski yerlerine geri alındı",
+    "recycled_one": "{{count}} kayıt geri dönüşüm kutusuna taşındı",
+    "recycled_other": "{{count}} kayıt geri dönüşüm kutusuna taşındı",
+    "deletedForGood_one": "{{count}} kayıt kalıcı olarak silindi",
+    "deletedForGood_other": "{{count}} kayıt kalıcı olarak silindi",
+    "recycleTitle_one": "{{count}} kayıt geri dönüşüm kutusuna taşınsın mı?",
+    "recycleTitle_other": "{{count}} kayıt geri dönüşüm kutusuna taşınsın mı?",
+    "recycleDescription_one": "Kayıt geri dönüşüm kutusuna gider; oradan geri alabilirsiniz.",
+    "recycleDescription_other": "Kayıtlar geri dönüşüm kutusuna gider; oradan geri alabilirsiniz.",
+    "deleteForGoodTitle_one": "{{count}} kayıt kalıcı olarak silinsin mi?",
+    "deleteForGoodTitle_other": "{{count}} kayıt kalıcı olarak silinsin mi?",
+    "deleteForGoodDescription_one": "Kayıt, geçmişi ve ekleri bu kasayı eşitleyen her cihazda silinir.",
+    "deleteForGoodDescription_other": "Kayıtlar, geçmişleri ve ekleri bu kasayı eşitleyen her cihazda silinir.",
+    "cannotUndo": "Bu işlem geri alınamaz."
   }
 }

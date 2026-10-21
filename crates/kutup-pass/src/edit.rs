@@ -61,6 +61,24 @@ pub enum Op {
         id: String,
         group_id: String,
     },
+    /// Moves several entries to one group, as one edit. Not into the
+    /// recycle bin: that is `DeleteEntries`. All or nothing.
+    MoveEntries {
+        ids: Vec<String>,
+        group_id: String,
+    },
+    /// Deletes several entries as one edit, each as `DeleteEntry` does
+    /// (into the recycle bin, or for good from inside it or with it off).
+    /// All or nothing.
+    DeleteEntries {
+        ids: Vec<String>,
+    },
+    /// Takes entries out of the recycle bin, each back to the group it was
+    /// in (KDBX's previous parent group), or to the top group when that one
+    /// is gone or itself in the bin. All or nothing.
+    RestoreEntries {
+        ids: Vec<String>,
+    },
     /// Makes history item `index` (oldest first) the entry's state again.
     RestoreHistory {
         id: String,
@@ -202,6 +220,16 @@ fn entry_id(db: &Database, id: &str) -> Result<EntryId, EditError> {
         .ok_or(EditError::NotFound("entry"))
 }
 
+/// Every id of `ids`, each an entry of the vault, once: one unknown refuses
+/// them all.
+fn entry_ids(db: &Database, ids: &[String]) -> Result<Vec<EntryId>, EditError> {
+    let mut seen = std::collections::HashSet::new();
+    ids.iter()
+        .map(|id| entry_id(db, id))
+        .filter(|id| id.as_ref().map_or(true, |id| seen.insert(*id)))
+        .collect()
+}
+
 fn group_id(db: &Database, id: &str) -> Result<GroupId, EditError> {
     let id = uuid::Uuid::parse_str(id)
         .map(GroupId::from)
@@ -275,6 +303,43 @@ pub fn apply(db: &mut Database, op: &Op, now: NaiveDateTime) -> Result<Applied, 
             let id = entry_id(db, id)?;
             let target = group_id(db, g)?;
             move_entry(db, id, target, now)
+        }
+        Op::MoveEntries { ids, group_id: g } => {
+            let ids = entry_ids(db, ids)?;
+            let target = group_id(db, g)?;
+            if group_in_recycle_bin(db, target) {
+                return Err(invalid("entries go to the recycle bin by being deleted"));
+            }
+            let mut changed = false;
+            for id in ids {
+                changed |= move_entry(db, id, target, now).changed;
+            }
+            Applied { id: None, changed }
+        }
+        Op::DeleteEntries { ids } => {
+            let ids = entry_ids(db, ids)?;
+            let mut changed = false;
+            for id in ids {
+                changed |= delete_entry(db, id, now).changed;
+            }
+            Applied { id: None, changed }
+        }
+        Op::RestoreEntries { ids } => {
+            let ids = entry_ids(db, ids)?;
+            if ids
+                .iter()
+                .any(|id| !group_in_recycle_bin(db, db.entries[id].parent))
+            {
+                return Err(invalid("only entries in the recycle bin are restored"));
+            }
+            for &id in &ids {
+                let target = restore_target(db, id);
+                move_entry(db, id, target, now);
+            }
+            Applied {
+                id: None,
+                changed: !ids.is_empty(),
+            }
         }
         Op::RestoreHistory { id, index } => restore_history(db, entry_id(db, id)?, *index, now)?,
         Op::ClearReview { id } => {
@@ -679,6 +744,15 @@ fn move_entry(db: &mut Database, id: EntryId, target: GroupId, now: NaiveDateTim
         id: None,
         changed: true,
     }
+}
+
+/// Where a deleted entry goes back to: the group it was in, while that is
+/// there and not itself in the recycle bin; otherwise the top group.
+fn restore_target(db: &Database, id: EntryId) -> GroupId {
+    db.entries[&id]
+        .previous_parent_group
+        .filter(|group| db.groups.contains_key(group) && !group_in_recycle_bin(db, *group))
+        .unwrap_or(db.root)
 }
 
 /// The recycle bin, made if the vault has none yet.

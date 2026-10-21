@@ -150,7 +150,7 @@ export function EntryDetail({ session, entry, view, onEdit, onGone }: { session:
         {canEdit ? (
           <div className="flex shrink-0 gap-1">
             {entry.inRecycleBin ? (
-              <Button variant="outline" size="sm" onClick={() => void run({ op: 'moveEntry', id: entry.id, groupId: view.rootGroupId }, t('detail.restored'))}>
+              <Button variant="outline" size="sm" onClick={() => void run({ op: 'restoreEntries', ids: [entry.id] }, t('detail.restored'))}>
                 <ArchiveRestore />
                 {t('detail.restore')}
               </Button>

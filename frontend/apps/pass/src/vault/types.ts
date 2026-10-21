@@ -103,6 +103,12 @@ export type Op =
   | { op: 'updateEntry'; id: string; entry: EntryInput }
   | { op: 'deleteEntry'; id: string }
   | { op: 'moveEntry'; id: string; groupId: string }
+  /** Several entries to one group, as one edit (not into the recycle bin). */
+  | { op: 'moveEntries'; ids: string[]; groupId: string }
+  /** Several entries into the recycle bin, or for good from inside it or with it off. */
+  | { op: 'deleteEntries'; ids: string[] }
+  /** Entries out of the recycle bin, each back to the group it was in (or the top group). */
+  | { op: 'restoreEntries'; ids: string[] }
   | { op: 'restoreHistory'; id: string; index: number }
   | { op: 'clearReview'; id: string }
   | { op: 'addAttachment'; entryId: string; name: string; data: string }
