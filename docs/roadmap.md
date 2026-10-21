@@ -892,6 +892,12 @@ an edit. Plan: [`plans/pass.md`](plans/pass.md); research and decisions:
 
 ## Polish / smaller items (future)
 
+- **Rate limits administrators can change (2026-10-21):** the `RATE_LIMIT_*`
+  limits (per address, account and peer) are read from the environment at
+  start. Per the standing rule (every limit an administrators' setting), move
+  them to site settings under Administration, applied without a restart, as
+  the group, mail-domain and multi-recipient limits already are.
+
 ### Chat app (web) follow-ups
 
 - **Live tests for sealed federation edge cases (owner: second session).**

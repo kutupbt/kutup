@@ -818,7 +818,16 @@ pub async fn get_settings(State(state): State<AppState>, _admin: AdminUser) -> A
     let (link_joins_per_relay_group, link_joins_per_relay) =
         crate::site_settings::chat_group_link_joins(&state.pool).await?;
     let avatar = crate::site_settings::chat_group_avatar_limits(&state.pool).await?;
-    Ok(Json(json!({
+    let group_capabilities =
+        crate::site_settings::chat_group_capabilities_per_account(&state.pool).await?;
+    let mut numeric = serde_json::Map::new();
+    for setting in crate::site_settings::CHAT_MULTI_SETTINGS {
+        numeric.insert(
+            setting.field.to_owned(),
+            json!(setting.load(&state.pool).await?),
+        );
+    }
+    let mut settings = json!({
         "registrationMode": registration_mode,
         "defaultStorageQuotaBytes": default_storage_quota_bytes,
         "chatMailboxRetentionDays": chat_mailbox_retention_days,
@@ -827,11 +836,15 @@ pub async fn get_settings(State(state): State<AppState>, _admin: AdminUser) -> A
         "oldAddressReceiveDays": old_address_receive_days,
         "chatGroupLinkJoinsPerRelayGroupPerMin": link_joins_per_relay_group,
         "chatGroupLinkJoinsPerRelayPerMin": link_joins_per_relay,
+        "chatGroupCapabilitiesPerAccount": group_capabilities,
         "chatGroupAvatarMaxBytes": avatar.max_bytes,
         "chatGroupAvatarStoragePerGroupBytes": avatar.storage_bytes,
         "chatGroupAvatarPendingSeconds": avatar.pending_seconds,
-    }))
-    .into_response())
+    });
+    if let Some(object) = settings.as_object_mut() {
+        object.extend(numeric);
+    }
+    Ok(Json(settings).into_response())
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -848,6 +861,12 @@ pub struct UpdateSettingsRequest {
     chat_group_link_joins_per_relay_group_per_min: Option<Option<i64>>,
     #[serde(deserialize_with = "present")]
     chat_group_link_joins_per_relay_per_min: Option<Option<i64>>,
+    #[serde(deserialize_with = "present")]
+    chat_group_capabilities_per_account: Option<Option<i64>>,
+    /// The whole-number settings listed in `site_settings::CHAT_MULTI_SETTINGS`,
+    /// by field: a number sets one, `null` resets it; other fields are ignored.
+    #[serde(flatten)]
+    numeric: std::collections::BTreeMap<String, serde_json::Value>,
     #[serde(deserialize_with = "present")]
     chat_group_avatar_max_bytes: Option<Option<i64>>,
     #[serde(deserialize_with = "present")]
@@ -886,6 +905,10 @@ pub async fn update_settings(
         && req.old_address_receive_days.is_none()
         && req.chat_group_link_joins_per_relay_group_per_min.is_none()
         && req.chat_group_link_joins_per_relay_per_min.is_none()
+        && req.chat_group_capabilities_per_account.is_none()
+        && !crate::site_settings::CHAT_MULTI_SETTINGS
+            .iter()
+            .any(|setting| req.numeric.contains_key(setting.field))
         && req.chat_group_avatar_max_bytes.is_none()
         && req.chat_group_avatar_storage_per_group_bytes.is_none()
         && req.chat_group_avatar_pending_seconds.is_none()
@@ -921,6 +944,29 @@ pub async fn update_settings(
     {
         crate::site_settings::validate_chat_group_link_joins(value)
             .map_err(AppError::bad_request)?;
+    }
+    if let Some(Some(value)) = req.chat_group_capabilities_per_account {
+        crate::site_settings::validate_chat_group_capabilities_per_account(value)
+            .map_err(AppError::bad_request)?;
+    }
+    // Each given whole-number setting: Some(value) to store, None to reset.
+    let mut numeric = Vec::new();
+    for setting in crate::site_settings::CHAT_MULTI_SETTINGS {
+        let Some(value) = req.numeric.get(setting.field) else {
+            continue;
+        };
+        let value = match value {
+            serde_json::Value::Null => None,
+            value => Some(
+                value
+                    .as_i64()
+                    .ok_or_else(|| {
+                        AppError::bad_request(format!("{} takes a whole number", setting.field))
+                    })
+                    .and_then(|value| setting.validate(value).map_err(AppError::bad_request))?,
+            ),
+        };
+        numeric.push((setting.key, value));
     }
     // The avatar limits are checked together, each new value (or reset to
     // its first value) beside the others as they stand.
@@ -1009,6 +1055,10 @@ pub async fn update_settings(
             req.chat_group_link_joins_per_relay_per_min,
         ),
         (
+            crate::site_settings::CHAT_GROUP_CAPABILITIES_PER_ACCOUNT,
+            req.chat_group_capabilities_per_account,
+        ),
+        (
             crate::site_settings::CHAT_GROUP_AVATAR_MAX_BYTES,
             req.chat_group_avatar_max_bytes,
         ),
@@ -1020,7 +1070,10 @@ pub async fn update_settings(
             crate::site_settings::CHAT_GROUP_AVATAR_PENDING_SECONDS,
             req.chat_group_avatar_pending_seconds,
         ),
-    ] {
+    ]
+    .into_iter()
+    .chain(numeric.iter().map(|(key, value)| (*key, Some(*value))))
+    {
         match value {
             None => {}
             Some(Some(value)) => {
@@ -1056,6 +1109,15 @@ pub async fn update_settings(
             "oldAddressReceiveDays": req.old_address_receive_days,
             "chatGroupLinkJoinsPerRelayGroupPerMin": req.chat_group_link_joins_per_relay_group_per_min,
             "chatGroupLinkJoinsPerRelayPerMin": req.chat_group_link_joins_per_relay_per_min,
+            "chatGroupCapabilitiesPerAccount": req.chat_group_capabilities_per_account,
+            "numeric": crate::site_settings::CHAT_MULTI_SETTINGS
+                .iter()
+                .filter_map(|setting| {
+                    req.numeric
+                        .get(setting.field)
+                        .map(|value| (setting.field.to_owned(), value.clone()))
+                })
+                .collect::<serde_json::Map<_, _>>(),
             "chatGroupAvatarMaxBytes": req.chat_group_avatar_max_bytes,
             "chatGroupAvatarStoragePerGroupBytes": req.chat_group_avatar_storage_per_group_bytes,
             "chatGroupAvatarPendingSeconds": req.chat_group_avatar_pending_seconds,
@@ -2208,6 +2270,11 @@ pub async fn wipe_user(
         .execute(&state.pool)
         .await?;
     sqlx::query("DELETE FROM chat_delivery_capabilities WHERE user_id = $1")
+        .bind(target)
+        .execute(&state.pool)
+        .await?;
+    // The group capabilities go with the group list they were kept in.
+    sqlx::query("DELETE FROM chat_group_capabilities WHERE user_id = $1")
         .bind(target)
         .execute(&state.pool)
         .await?;

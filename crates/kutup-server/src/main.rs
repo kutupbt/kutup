@@ -850,6 +850,17 @@ fn build_router(state: AppState) -> Router {
                     handlers::chat_contact_list::ENVELOPE_BYTES / 3 * 4 + 64 * 1024,
                 )),
         )
+        .route(
+            "/api/chat/group-capabilities",
+            put(handlers::chat_group_capabilities::change)
+                // Up to the limit's worth of base64 hashes each way.
+                .route_layer(DefaultBodyLimit::max(8 * 1024 * 1024)),
+        )
+        .route(
+            "/api/chat/group-capabilities/set",
+            post(handlers::chat_group_capabilities::set)
+                .route_layer(DefaultBodyLimit::max(8 * 1024 * 1024)),
+        )
         .route("/api/chat/group-list", get(handlers::chat_group_list::list))
         .route(
             "/api/chat/group-list/:id",
@@ -1512,6 +1523,13 @@ fn build_router(state: AppState) -> Router {
                 .route_layer(from_fn(middleware::rate_limit_chat_anonymous)),
         )
         .route(
+            "/api/chat/anonymous/messages/multi",
+            post(handlers::chat_multi::send_multi)
+                // The largest payload the format takes, base64, and the rest.
+                .route_layer(DefaultBodyLimit::max(handlers::chat_multi::MAX_BODY))
+                .route_layer(from_fn(middleware::rate_limit_chat_anonymous)),
+        )
+        .route(
             "/api/chat/anonymous/messages/batch",
             post(chat::send_sealed_batch)
                 .route_layer(DefaultBodyLimit::max(
@@ -1824,6 +1842,12 @@ fn build_router(state: AppState) -> Router {
             post(chat_federation::get_sealed_user_bundles)
                 .route_layer(DefaultBodyLimit::max(8 * 1024))
                 .route_layer(from_fn(middleware::rate_limit_fed_users)),
+        )
+        .route(
+            "/api/fed/chat/sealed/multi",
+            post(handlers::chat_multi::deliver_federated)
+                .route_layer(DefaultBodyLimit::max(handlers::chat_multi::MAX_BODY))
+                .route_layer(from_fn(middleware::rate_limit_fed_multi)),
         )
         .route(
             "/api/fed/chat/sealed/batch",

@@ -64,6 +64,9 @@ Specific codes, where an app does something particular (a test in
 | `head_conflict` | 409 | The account head moved (another device wrote first; `sequence` the current one, or a folder delete whose `removes` is not what it removes): read the head and index again, redo the edit |
 | `head_required` | 409 | The account keeps a head, and this listed write carried none |
 | `contactListFull` | 400 | `PUT /api/chat/contact-list/{id}`: a new entry past the 10,000 the list keeps; the client keeps the write due (a block is never dropped) and tells its person |
+| `malformed` | 400 | `POST /api/chat/anonymous/messages/multi`: the payload doesn't parse, a device is listed twice, or the capabilities don't name exactly the payload's accounts ([chat-protocol.md](chat-protocol.md) §7); also a group route's refusal code |
+| `peerUnavailable` | 503 | `POST /api/chat/anonymous/messages/multi` for another server's accounts: that server didn't take the send (slow, unreachable or unwilling); send their copies one by one |
+| `capabilityLimit` | 409 | `PUT /api/chat/group-capabilities` or `POST …/set`: the account would pass its group capability limit; nothing changed |
 | `setupRequired` | 409 | The account has no keys yet (an admin-made account before its first sign-in): a listed write or a rename waits for setup |
 | `renamed` | 409 | A lookup of a name an account no longer goes by (held, or named in a rename chain): `renames` carries `{ "version": 1, "chains": [...] }`, never keys |
 | `nameReserved` | 409 | The name is the server's (postmaster, abuse, …, the break-glass account), in any spelling |
@@ -3543,6 +3546,22 @@ over the storage per group (the current blob and the upload), both
 administrators' settings; `malformed` for a body not padded so. An upload
 spends the change budgets.
 
+### PUT /api/chat/group-capabilities · POST /api/chat/group-capabilities/set
+
+Group delivery capabilities ([`plans/pairwise-groups.md`](plans/pairwise-groups.md),
+slice 2 §2; `404` unless `CHAT_GROUPS=true` and federation is on). Signed-in,
+the account's own. Each is the SHA-256 (32 bytes, canonical base64) of one
+random capability per group the account is in, with no group id; a sender
+presents the raw capability with a multi-recipient send. `PUT` takes `{
+"add": [hash], "remove": [hash] }` and applies both in one transaction (a
+member replacing its capability never has neither); adding one already there
+or removing one not there changes nothing. `POST …/set` takes `{ "hashes":
+[...] }` and makes the set exactly these (a device restoring from its group
+list). Both answer `{ "count" }`. `400` for a hash that isn't 32 bytes of
+canonical base64; `409 capabilityLimit` when the change would pass the
+account's limit (`chatGroupCapabilitiesPerAccount`, 1024 at first), refused
+whole. An account reset clears them.
+
 ### GET /api/chat/group-list
 
 The account's group list ([`plans/pairwise-groups.md`](plans/pairwise-groups.md) §5;
@@ -4580,6 +4599,7 @@ Return current global server settings.
   "oldAddressReceiveDays": 90,
   "chatGroupLinkJoinsPerRelayGroupPerMin": 120,
   "chatGroupLinkJoinsPerRelayPerMin": 1200,
+  "chatGroupCapabilitiesPerAccount": 1024,
   "chatGroupAvatarMaxBytes": 41001,
   "chatGroupAvatarStoragePerGroupBytes": 82002,
   "chatGroupAvatarPendingSeconds": 86400

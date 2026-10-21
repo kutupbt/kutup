@@ -24,6 +24,7 @@ use sha2::{Digest, Sha256};
 const LIMITS: &[(&str, u64)] = &[
     ("RATE_LIMIT_RECOVERY_PER_HOUR", 5),
     ("RATE_LIMIT_FED_USERS_PER_MIN", 60),
+    ("RATE_LIMIT_FED_MULTI_FAILURES_PER_MIN", 60),
     ("RATE_LIMIT_LOGIN_PER_MIN", 10),
     ("RATE_LIMIT_FORK_PER_MIN", 120),
     ("RATE_LIMIT_CALL_LINK_PER_MIN", 60),
@@ -196,6 +197,18 @@ pub static RECOVERY: LazyLock<RateLimiter> = LazyLock::new(|| {
 pub static FED_USERS: LazyLock<RateLimiter> = LazyLock::new(|| {
     RateLimiter::new(
         env_limit("RATE_LIMIT_FED_USERS_PER_MIN", 60) as usize,
+        Duration::from_secs(60),
+    )
+});
+/// Forwarded multi-recipient sends that don't authenticate: 60 / minute /
+/// IP (`RATE_LIMIT_FED_MULTI_FAILURES_PER_MIN`). Each request is charged
+/// before it is read and given back once it authenticates, so a peer's
+/// group messages are bounded by its origin budgets (administrators'
+/// settings) alone, and a stranger's (bodies buffered, origins discovered)
+/// by this.
+pub static FED_MULTI_IP: LazyLock<RateLimiter> = LazyLock::new(|| {
+    RateLimiter::new(
+        env_limit("RATE_LIMIT_FED_MULTI_FAILURES_PER_MIN", 60) as usize,
         Duration::from_secs(60),
     )
 });
@@ -779,6 +792,7 @@ pub fn spawn_cleanup() {
             tick.tick().await;
             RECOVERY.cleanup();
             FED_USERS.cleanup();
+            FED_MULTI_IP.cleanup();
             RENAME_CHECKS.cleanup();
             RENAME_LOOKUPS.cleanup();
             RENAME_PEER_FETCHES.cleanup();

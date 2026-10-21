@@ -724,9 +724,14 @@ and invalid capability return the same response shape.
 1–64 sealed sends to accounts of one server (`SealedBatchSubmissionV1`: each
 recipient's `accountId` and its single-route submission), at most 4 MiB, in one
 request: a group message reaches every member device without one request per
-member. The address's anonymous limit counts recipients, as single sends
-would; each recipient's capability is checked and counted on its own, and
-each gets its own result in order:
+member. The address's bytes a minute count (an administrators' setting
+shared with multi-recipient sends; `429` past it). For this server's
+accounts the address's anonymous limit counts the request once, so a message
+to many members is one request and neighbours behind one address aren't
+starved; for another server's, each send is queued and charged at the
+destination against this whole server, so the limit counts each recipient
+(those past it answered `rateLimited`). Each recipient's capability is
+checked and counted on its own, and each gets its own result in order:
 
 - `delivered`;
 - `deviceMismatch`, with the single route's mismatch body;
@@ -735,13 +740,64 @@ each gets its own result in order:
 - `refused`, refused for good by that server, or too large for one federated
   transaction (1 MiB encoded), and then never queued;
 - `peerUnsupported`;
-- `rateLimited`, over the address's, the capability's or the recipient's
-  limit; nothing was stored or queued, so it is resent later;
+- `rateLimited`, over the capability's or the recipient's limit (or, to
+  another server, the address's); nothing was stored or queued, so it is
+  resent later;
 - `conflict`, other content under this `sendId` still queued; nothing was
   queued, so it is resent once that one is answered.
 
 A recipient over a limit doesn't stop the others. A server error fails the
 whole request, which is safe to repeat because `sendId`s dedupe.
+
+**Multi-recipient sends** (docs/plans/pairwise-groups.md, slice 2; Signal's
+`PUT /v1/messages/multi_recipient`). `POST
+/api/chat/anonymous/messages/multi?server=` carries one group message to
+member accounts of one server, sent once: `SealedMultiSubmissionV1` with
+`sendId`, `payload` (libsignal's sent sealed-sender v2 message, version
+`0x23`, recipients as 17-byte account service ids, no excluded recipients),
+`capabilities` (each recipient account's raw 16-byte group capability, exactly
+the payload's accounts) and `urgent` (default `true`). The checks, in order:
+1. the payload and its size: `400 malformed` for a payload that doesn't parse,
+   a device listed twice, a recipient with no devices or capabilities that
+   don't name exactly the payload's accounts; `413` past the recipient limit
+   (256), the request size (256 KiB plus 132 bytes per recipient) or one
+   recipient's message (96 KiB), each an administrators' setting;
+2. each account's capability against its published set
+   (`/api/chat/group-capabilities`): an account that isn't an active one here
+   and a capability that doesn't hold are one answer, `refused`;
+3. budgets: the address's anonymous limit counts the request once, and its
+   bytes a minute (`429` past them); each capability its sends a minute and a
+   day, `rateLimited` past them;
+4. devices, for the accounts that passed: missing or extra devices are `409`
+   (`devices`), else changed registrations `410` (`stale`); nothing is stored
+   on either, and both carry `refused` and `rateLimited` too.
+
+Otherwise the answer is `200 { "refused", "rateLimited" }` and the rest are
+stored: the shared part (`e_pub ‖ ciphertext`) once, and a mailbox row per
+device with its account's key material. A device drains each as its ordinary
+sealed envelope, `0x22 ‖ C_i ‖ AT_i ‖ e_pub ‖ ciphertext`; drain pages are
+capped at 4 MiB as well as by count. Connected devices are nudged
+(`drainMailbox`) rather than sent the message; an urgent send also wakes
+offline devices by web push. A `sendId` already stored for a device stores
+nothing again for it, while a device added since gets its copy on a retry.
+The budgets are charged whatever the answer: a send answered `409` or `410`
+counts too. The shared part goes once no row names it (after an ack,
+or the maintenance sweep).
+
+For another server's members, this server forwards the send at once to that
+server's `POST /api/fed/chat/sealed/multi` (signed federation), waits for its
+answer (the usual federation timeout) and relays it as it is: `200`, `409`,
+`410`, or the destination's `400`/`413`. A destination that is slow,
+unreachable or unwilling is `503 peerUnavailable`: nothing is queued and
+nothing of the body is kept, so the client sends those members' copies over
+the pairwise path, which is durable. The destination checks and stores the
+send as a local one, and budgets its origin per request and per byte a
+minute, all of the origin's users together (`chatMultiOriginRequestsPerMin`,
+6000, and `chatMultiOriginBytesPerMin`, 512 MiB, at first), never per stored
+recipient. A request that doesn't authenticate is limited per address
+(`RATE_LIMIT_FED_MULTI_FAILURES_PER_MIN`, 60): each is charged before its body
+is read and given back once it authenticates, so a known peer is bounded by
+its origin budgets alone.
 
 For another server, the origin queues each send exactly as a single sealed
 send (same outbox, sequence and `sendId` dedup), then flushes the

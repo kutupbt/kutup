@@ -36,7 +36,7 @@ use crate::{federation::FederationStack, AppState};
 use kutup_federation_proto::FederationFeature;
 
 const CHAT_FEDERATION_PAYLOAD_VERSION: u16 = 1;
-const JSON_CONTENT_TYPE: &str = "application/json";
+pub(crate) const JSON_CONTENT_TYPE: &str = "application/json";
 const MAX_DIRECTORY_RESPONSE_BYTES: usize = 2 * 1024 * 1024;
 const MAX_FEDERATION_TRANSACTION_BYTES: usize = 16 * 1024 * 1024;
 const RETRY_INTERVAL: Duration = Duration::from_secs(5);
@@ -2885,7 +2885,7 @@ pub async fn deliver_messages(
     signed_json(federation, &authenticated, StatusCode::OK, &response)
 }
 
-fn signed_json<T: serde::Serialize>(
+pub(crate) fn signed_json<T: serde::Serialize>(
     federation: &FederationStack,
     authenticated: &AuthenticatedFederationRequest,
     status: StatusCode,
@@ -2980,7 +2980,7 @@ async fn refuse_sealed(
     })
 }
 
-fn signed_app_error(
+pub(crate) fn signed_app_error(
     federation: &FederationStack,
     authenticated: &AuthenticatedFederationRequest,
     error: AppError,

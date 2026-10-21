@@ -1746,6 +1746,19 @@ when the peer is down, the destination refusing a foreign account.
 
 Estimate as §10 (8–10 days), the budgets and the storage change being most of it.
 
+**Built (second session, 2026-10-21):** group capabilities
+(`/api/chat/group-capabilities`), the multi-recipient route on the origin and
+the destination (`/api/fed/chat/sealed/multi`, synchronous, `503
+peerUnavailable` otherwise), shared-payload storage collected by reference,
+drain assembly with pages capped by bytes, and the budgets of §4 (the sealed
+batch route counts the address once per request and by bytes too). Every
+limit is an administrators' setting (Server settings) with Signal's values
+first; requests to the federated route that don't authenticate are limited
+per address (`RATE_LIMIT_FED_MULTI_FAILURES_PER_MIN`, 60, charged before the
+body is read and given back once a request authenticates), an env rate limit
+as the other pre-authentication limits. The server never had the 64 cap: `CHAT_GROUP_MAX_MEMBERS` is 256 and
+`GroupLimits` takes at most that; the client lifts its own once this is in.
+
 ## Decisions (the user, 2026-10-17)
 
 1. **Home.** The group lives on the server where it was created and never moves.
