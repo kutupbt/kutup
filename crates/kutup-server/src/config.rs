@@ -13,6 +13,11 @@ pub struct Config {
     /// docs/plans/mail-forwarding.md). Optional: without them, end-to-end
     /// forwarding can't be set up. Never logged.
     pub mail_forwarding_keys: crate::opaque_setup::OpaqueSetupKeys,
+    /// The keys custom domains' DKIM keys are sealed under
+    /// (`MAIL_DKIM_KEYS`, the same `id:base64,…` form;
+    /// docs/plans/mail-custom-domains.md §4). Without them, custom domains
+    /// are off. Never logged.
+    pub mail_dkim_keys: crate::opaque_setup::OpaqueSetupKeys,
     pub s3_endpoint: String,
     pub s3_access_key: String,
     pub s3_secret_key: String,
@@ -91,6 +96,27 @@ pub struct Config {
     /// Stalwart's host name (`MAIL_HOSTNAME`): the authserv-id of the
     /// Authentication-Results it writes, the only one trusted for DMARC.
     pub mail_hostname: String,
+    /// The nameserver custom domains' checks ask (`MAIL_DNS_RESOLVER`,
+    /// `host:port`, looked up once); the system's when unset. The server
+    /// validates DNSSEC itself either way, but on a test stack
+    /// (`MAIL_DNS_INSECURE`, with `APP_ENV=test` only), whose zones no root
+    /// can vouch for.
+    pub mail_dns_resolver: Option<String>,
+    pub mail_dns_insecure: bool,
+    /// How often custom domains' sweep runs (`MAIL_DOMAINS_SWEEP_SECONDS`).
+    pub mail_domains_sweep_seconds: u64,
+    /// `MAIL_DOMAINS_TIME_SCALE` (test stacks only): custom domains' periods
+    /// divided by it, for the live tests.
+    pub mail_domains_time_scale: i64,
+    /// A backup MX the operator runs (`MAIL_BACKUP_MX`): a custom domain
+    /// whose first MX is it counts as reaching us (Proton's `BACKUP`).
+    pub mail_backup_mx: Option<String>,
+    /// Stalwart's management API for custom domains (`MAIL_STALWART_URL`)
+    /// and the password of the scoped account that may manage only domains and DKIM
+    /// signatures (`MAIL_STALWART_DOMAINS_TOKEN`). Without the key, custom
+    /// domains are off: Stalwart couldn't take their mail.
+    pub mail_stalwart_url: String,
+    pub mail_stalwart_domains_token: String,
     pub mail_folders_per_account: i64,
     /// `NAME_HOLD_DAYS` and `OLD_ADDRESS_RECEIVE_DAYS`: the first values of
     /// the name holds administrators set (`site_settings::name_holds`).
@@ -353,6 +379,14 @@ impl Config {
             env.error("RATE_LIMITS_RELAXED may only be enabled with APP_ENV=test");
         }
         crate::ratelimit::configure(env, rate_limits_relaxed);
+        let mail_domains_time_scale = get_env_i64("MAIL_DOMAINS_TIME_SCALE", 1).max(1);
+        if mail_domains_time_scale > 1 && app_env != "test" {
+            env.error("MAIL_DOMAINS_TIME_SCALE may only be set with APP_ENV=test");
+        }
+        let mail_dns_insecure = env.bool("MAIL_DNS_INSECURE", false);
+        if mail_dns_insecure && app_env != "test" {
+            env.error("MAIL_DNS_INSECURE may only be enabled with APP_ENV=test");
+        }
         let registration_mode = crate::registration::RegistrationMode::parse(&env.choice(
             "REGISTRATION_MODE",
             "off",
@@ -435,6 +469,15 @@ impl Config {
                     })
                 }
             },
+            mail_dkim_keys: match env.set("MAIL_DKIM_KEYS") {
+                None => Default::default(),
+                Some(value) => {
+                    crate::opaque_setup::OpaqueSetupKeys::parse(&value).unwrap_or_else(|error| {
+                        env.error(format!("MAIL_DKIM_KEYS: {error}"));
+                        Default::default()
+                    })
+                }
+            },
             mail_forwarding_keys: match env.set("MAIL_FORWARDING_KEYS") {
                 None => Default::default(),
                 Some(value) => {
@@ -498,6 +541,28 @@ impl Config {
             mail_new_account_days: get_env_i64("MAIL_NEW_ACCOUNT_DAYS", 7),
             mail_new_account_per_day: get_env_i64("MAIL_NEW_ACCOUNT_RECIPIENTS_PER_DAY", 50),
             mail_hostname: get_env("MAIL_HOSTNAME", "").trim().to_ascii_lowercase(),
+            mail_dns_resolver: match get_env("MAIL_DNS_RESOLVER", "").trim() {
+                "" => None,
+                value
+                    if value
+                        .rsplit_once(':')
+                        .is_some_and(|(_, port)| port.parse::<u16>().is_ok()) =>
+                {
+                    Some(value.to_owned())
+                }
+                _ => {
+                    env.error("MAIL_DNS_RESOLVER must be a host:port");
+                    None
+                }
+            },
+            mail_dns_insecure,
+            mail_domains_time_scale,
+            mail_domains_sweep_seconds: (get_env_i64("MAIL_DOMAINS_SWEEP_SECONDS", 300)
+                .clamp(5, 3600)) as u64,
+            mail_stalwart_url: get_env("MAIL_STALWART_URL", "http://stalwart:8080"),
+            mail_stalwart_domains_token: get_env("MAIL_STALWART_DOMAINS_TOKEN", ""),
+            mail_backup_mx: Some(get_env("MAIL_BACKUP_MX", "").trim().to_ascii_lowercase())
+                .filter(|host| !host.is_empty()),
             mail_folders_per_account: get_env_i64("MAIL_FOLDERS_PER_ACCOUNT", 500),
             name_hold_days: get_env_i64("NAME_HOLD_DAYS", 180),
             old_address_receive_days: get_env_i64("OLD_ADDRESS_RECEIVE_DAYS", 90),

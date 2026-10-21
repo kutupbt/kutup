@@ -78,8 +78,9 @@ pub struct MailMeta {
     pub cc: Vec<MailboxInput>,
     #[serde(default)]
     pub bcc: Vec<MailboxInput>,
-    /// The Message-ID the browser gave the message, `<…@server name>`
-    /// without the brackets.
+    /// The Message-ID the browser gave the message, `<…@server name>` or
+    /// `<…@the sender's domain>` (a custom domain's, as Proton) without the
+    /// brackets.
     pub message_id: String,
     pub in_reply_to: Option<String>,
     #[serde(default)]
@@ -92,6 +93,11 @@ pub struct MailMeta {
     pub attachments: Vec<headers::AttachmentMeta>,
     /// The thread a reply belongs to, when the browser knows it.
     pub thread_id: Option<String>,
+    /// Which of the caller's addresses it is from (an address id): an
+    /// address on a custom domain (docs/plans/mail-custom-domains.md §5).
+    /// None is the account's own address.
+    #[serde(default)]
+    pub from_address: Option<String>,
 }
 
 #[derive(Debug, Deserialize, ToSchema)]
@@ -210,7 +216,8 @@ async fn sender(state: &AppState, user_id: Uuid) -> AppResult<Sender> {
         "SELECT a.id, a.address, k.public_key
            FROM mail_addresses a
            JOIN mail_address_keys k ON k.address_id = a.id AND k.is_primary
-          WHERE a.user_id = $1 AND a.state = 'active'
+          WHERE a.user_id = $1 AND a.state = 'active' AND a.domain_id IS NULL
+            AND a.group_id IS NULL
           ORDER BY a.created_at DESC LIMIT 1",
     )
     .bind(user_id)
@@ -241,6 +248,60 @@ async fn sender(state: &AppState, user_id: Uuid) -> AppResult<Sender> {
         address,
         key_id,
     })
+}
+
+/// The sender `from` names (one of the caller's active addresses, on a
+/// custom domain that is usable now), or the account's own when none.
+async fn sender_for(state: &AppState, user_id: Uuid, from: Option<&str>) -> AppResult<Sender> {
+    let Some(from) = from else {
+        return sender(state, user_id).await;
+    };
+    let address_id = Uuid::parse_str(from)
+        .map_err(|_| AppError::bad_request("fromAddress must be an address id"))?;
+    let row: Option<(String, Vec<u8>, Option<Uuid>)> = sqlx::query_as(
+        "SELECT a.address, k.public_key, a.domain_id
+           FROM mail_addresses a
+           JOIN mail_address_keys k ON k.address_id = a.id AND k.is_primary
+          WHERE a.id = $1 AND a.user_id = $2 AND a.state = 'active'",
+    )
+    .bind(address_id)
+    .bind(user_id)
+    .fetch_optional(&state.pool)
+    .await?;
+    let Some((address, public_key, domain_id)) = row else {
+        return Err(AppError::not_found("no such address of yours")
+            .with_details(json!({ "code": "notYourAddress" })));
+    };
+    if let Some(domain_id) = domain_id {
+        if !crate::mail::domains::usable_domain(state, domain_id).await? {
+            return Err(
+                AppError::conflict("this address's domain isn't verified now")
+                    .with_details(json!({ "code": "domainNotVerified" })),
+            );
+        }
+    }
+    let key_id = mail_key::encryption_key_id(&public_key)
+        .map_err(|_| AppError::internal("stored address key does not parse"))?;
+    Ok(Sender {
+        address_id,
+        address,
+        key_id,
+    })
+}
+
+/// The encryption keys of every address the caller sends from.
+async fn own_key_ids(state: &AppState, user_id: Uuid) -> AppResult<Vec<[u8; 8]>> {
+    let keys: Vec<Vec<u8>> = sqlx::query_scalar(
+        "SELECT k.public_key FROM mail_address_keys k JOIN mail_addresses a ON a.id = k.address_id
+          WHERE a.user_id = $1 AND a.state = 'active' AND k.is_primary",
+    )
+    .bind(user_id)
+    .fetch_all(&state.pool)
+    .await?;
+    Ok(keys
+        .iter()
+        .filter_map(|key| mail_key::encryption_key_id(key).ok())
+        .collect())
 }
 
 fn mailbox(input: &MailboxInput) -> AppResult<Mailbox> {
@@ -283,12 +344,17 @@ fn check_meta(meta: &MailMeta, sender: &Sender, server_name: &str) -> AppResult<
     if to.len() + cc.len() + bcc.len() > MAX_RECIPIENTS {
         return Err(AppError::bad_request("at most 100 recipients"));
     }
+    let sender_domain = sender.address.rsplit_once('@').map(|(_, domain)| domain);
     let message_id = headers::message_id(&meta.message_id)
         .filter(|id| {
-            id.rsplit_once('@')
-                .is_some_and(|(_, domain)| domain.eq_ignore_ascii_case(server_name))
+            id.rsplit_once('@').is_some_and(|(_, domain)| {
+                domain.eq_ignore_ascii_case(server_name)
+                    || sender_domain.is_some_and(|own| domain.eq_ignore_ascii_case(own))
+            })
         })
-        .ok_or_else(|| AppError::bad_request("messageId must be <…@server name>"))?;
+        .ok_or_else(|| {
+            AppError::bad_request("messageId must be <…@server name or the sender's domain>")
+        })?;
     let in_reply_to = match meta.in_reply_to.as_deref() {
         Some(id) => {
             Some(headers::message_id(id).ok_or_else(|| AppError::bad_request("bad inReplyTo"))?)
@@ -467,7 +533,7 @@ pub async fn create_draft(
     )
     .await?;
     let meta: MailMeta = meta_part(&parts)?;
-    let sender = sender(&state, user_id).await?;
+    let sender = sender_for(&state, user_id, meta.from_address.as_deref()).await?;
     let checked = check_meta(&meta, &sender, &state.config.chat_server_name)?;
     let body = parts
         .get("body")
@@ -555,7 +621,7 @@ pub async fn update_draft(
     )
     .await?;
     let meta: MailMeta = meta_part(&parts)?;
-    let sender = sender(&state, user_id).await?;
+    let sender = sender_for(&state, user_id, meta.from_address.as_deref()).await?;
     let checked = check_meta(&meta, &sender, &state.config.chat_server_name)?;
     let body = parts
         .get("body")
@@ -686,7 +752,15 @@ pub async fn add_draft_attachment(
         .get("part")
         .cloned()
         .ok_or_else(|| AppError::bad_request("missing part"))?;
-    check_own(&part, &sender(&state, user_id).await?)?;
+    // A draft's parts are sealed to the address it is from: any of the
+    // caller's.
+    let own = own_key_ids(&state, user_id).await?;
+    if !mail_key::message_key_id(&part).is_ok_and(|id| own.contains(&id)) {
+        return Err(
+            AppError::bad_request("not encrypted to your current address key")
+                .with_details(json!({ "code": "keyChanged" })),
+        );
+    }
     let attachment = Uuid::new_v4();
     let key = format!("{}att-{attachment}", crate::mail::object_prefix(user_id));
     let size = part.len() as i64;
@@ -1007,7 +1081,10 @@ pub(crate) async fn deliver(
             let (sender, group) = group_sender(&state, user_id, group).await?;
             (sender, Some(group))
         }
-        None => (sender(&state, user_id).await?, None),
+        None => (
+            sender_for(&state, user_id, meta.mail.from_address.as_deref()).await?,
+            None,
+        ),
     };
     // Whose mailbox the sent copy goes to: the account's, or the group's.
     let owner = from_group.as_ref().map_or(user_id, |group| group.id);
@@ -1081,14 +1158,21 @@ pub(crate) async fn deliver(
             .rsplit_once('@')
             .map(|(_, d)| d)
             .unwrap_or_default();
-        if !domain.eq_ignore_ascii_case(server_name) {
+        let own_domain = domain.eq_ignore_ascii_case(server_name);
+        // An address on a custom domain held here is a Kutup address too:
+        // its mail stays end-to-end (docs/plans/mail-custom-domains.md §5).
+        if !own_domain && !crate::mail::domains::held_here(&state, domain).await? {
             external.push(mailbox.address.clone());
             continue;
         }
-        // A distribution list: its members' key packets come below.
-        if let Some(group) =
+        // A distribution list (on the server's own domain only): its
+        // members' key packets come below.
+        let group = if own_domain {
             crate::mail::groups::find(&state.pool, &mailbox.address.to_ascii_lowercase()).await?
-        {
+        } else {
+            None
+        };
+        if let Some(group) = group {
             if readable_to.contains(&mailbox.address.to_ascii_lowercase()) {
                 return Err(AppError::bad_request(
                     "lists and shared mailboxes get end-to-end mail only",
@@ -1221,7 +1305,8 @@ pub(crate) async fn deliver(
             if !same_message(mime, &sender.address, readable) {
                 return Err(AppError::bad_request(
                     "mime must be the same message: From you, the same Message-ID, no Bcc header",
-                ));
+                )
+                .with_details(json!({ "code": "mimeMismatch" })));
             }
             Some(mime)
         }
@@ -1830,6 +1915,7 @@ mod tests {
             attachment_count: 1,
             attachments: Vec::new(),
             thread_id: None,
+            from_address: None,
         }
     }
 
@@ -1953,6 +2039,15 @@ mod tests {
         let mut foreign = meta();
         foreign.message_id = "abc@elsewhere.org".into();
         assert!(check_meta(&foreign, &sender(), "kutup.test").is_err());
+        // A custom domain's sender names its own domain, as Proton does.
+        let custom = Sender {
+            address: "alice@customer.test".into(),
+            ..sender()
+        };
+        let mut own = meta();
+        own.message_id = "abc@customer.test".into();
+        assert!(check_meta(&own, &custom, "kutup.test").is_ok());
+        assert!(check_meta(&own, &sender(), "kutup.test").is_err());
         let mut bad = meta();
         bad.to[0].address = "Bob <bob@kutup.test>".into();
         assert!(check_meta(&bad, &sender(), "kutup.test").is_err());

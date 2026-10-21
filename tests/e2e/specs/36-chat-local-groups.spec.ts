@@ -72,8 +72,8 @@ test('three people on one server share a group, rename it, remove a member and l
   await pageA.getByTestId('chat-group-title-save').click()
   await expect(pageB.getByTestId(`chat-group-${groupId}`)).toContainText(`Renamed ${tag}`, { timeout: 90_000 })
 
-  // Alice removes Carol: Carol's next message reaches nobody, and her group
-  // says she may have been removed.
+  // Alice removes Carol: Carol hears of it pairwise (the change, which her
+  // device verifies), and Alice's next message doesn't reach her.
   await removeGroupMember(pageA, carol.username)
   await expect(pageA.getByTestId('chat-group-members')).toContainText('2 members', { timeout: 45_000 })
   await closeDetails(pageA)
@@ -83,7 +83,8 @@ test('three people on one server share a group, rename it, remove a member and l
   await pageC.reload()
   await openGroup(pageC, groupId)
   await expect(message(pageC, afterRemoval)).toHaveCount(0)
-  await expect(pageC.getByTestId('chat-group-status')).toContainText('You may have been removed', { timeout: 90_000 })
+  await expect(pageC.getByText("You're no longer a member of this group.")).toBeVisible({ timeout: 90_000 })
+  await expect(pageC.getByTestId('chat-group-notice').filter({ hasText: /removed you/ })).toBeVisible()
 
   // The group and its history survive a reload.
   await pageA.reload()

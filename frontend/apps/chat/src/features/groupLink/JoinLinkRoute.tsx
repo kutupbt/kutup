@@ -15,7 +15,7 @@ export function JoinLinkRoute() {
   // Read before <Navigate> (whose effect runs first) replaces the URL.
   const [href] = useState(() => window.location.href)
   const known = capabilities !== null || status === 'failed'
-  const groups = capabilities?.mlsGroups === true
+  const groups = capabilities?.mlsGroups === true || capabilities?.pairwiseGroups === true
   useEffect(() => {
     if (!known) return
     if (groups) openJoinLink(href)

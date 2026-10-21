@@ -15,6 +15,16 @@ if ! printf '%s' "$MAIL_INBOUND_TOKEN" | grep -Eq '^[A-Za-z0-9_-]{32,}$'; then
   echo "MAIL_INBOUND_TOKEN must be 32 or more letters, digits, _ or - (openssl rand -hex 32)" >&2
   exit 1
 fi
+# Custom domains (docs/plans/mail-custom-domains.md §10): an account,
+# kutup-domains, whose password is this secret and whose permissions are
+# replaced by managing domains and DKIM signatures only; the backend signs
+# in with it. Spliced into the plan too.
+MAIL_STALWART_DOMAINS_TOKEN="${MAIL_STALWART_DOMAINS_TOKEN:-}"
+if [ -n "$MAIL_STALWART_DOMAINS_TOKEN" ] \
+  && ! printf '%s' "$MAIL_STALWART_DOMAINS_TOKEN" | grep -Eq '^[A-Za-z0-9_-]{32,}$'; then
+  echo "MAIL_STALWART_DOMAINS_TOKEN must be 32 or more letters, digits, _ or - (openssl rand -hex 32)" >&2
+  exit 1
+fi
 export STALWART_URL STALWART_USER STALWART_PASSWORD
 
 for name in "$MAIL_DOMAIN" "$MAIL_HOSTNAME"; do
@@ -34,8 +44,14 @@ until wget -q -O /dev/null "$STALWART_URL/healthz/live"; do
   sleep 2
 done
 
-sed -e "s/@MAIL_DOMAIN@/$MAIL_DOMAIN/g" -e "s/@MAIL_HOSTNAME@/$MAIL_HOSTNAME/g" \
-  -e "s/@MAIL_SUBMISSION_SECRET@/$MAIL_INBOUND_TOKEN/g" "$dir/plan.ndjson" | apply
+# The custom domains' account goes in the same apply: it names the domain
+# the plan upserts (#domain).
+{
+  cat "$dir/plan.ndjson"
+  if [ -n "$MAIL_STALWART_DOMAINS_TOKEN" ]; then cat "$dir/plan-domains.ndjson"; fi
+} | sed -e "s/@MAIL_DOMAIN@/$MAIL_DOMAIN/g" -e "s/@MAIL_HOSTNAME@/$MAIL_HOSTNAME/g" \
+  -e "s/@MAIL_SUBMISSION_SECRET@/$MAIL_INBOUND_TOKEN/g" \
+  -e "s/@MAIL_STALWART_DOMAINS_TOKEN@/$MAIL_STALWART_DOMAINS_TOKEN/g" | apply
 # The TLS certificate for port 25 comes from the ACME files when they are
 # mounted (/certs, root-only); Stalwart (uid 2000) reads its own copy in
 # /stalwart-certs. Without them it offers a self-signed one.

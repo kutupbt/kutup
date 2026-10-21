@@ -6,6 +6,7 @@
 //! account's one storage pool.
 
 pub mod auto_reply;
+pub mod domains;
 pub mod expiry;
 pub mod filters;
 pub mod forwarding;
@@ -13,6 +14,7 @@ pub mod group_keys;
 pub mod groups;
 pub mod headers;
 pub mod lmtp;
+pub mod notice;
 pub mod outbox;
 pub mod outside_keys;
 pub mod retention;
@@ -125,6 +127,10 @@ pub struct Recipient {
     pub(crate) user_id: Uuid,
     pub(crate) address_id: Uuid,
     pub(crate) public_key: Vec<u8>,
+    /// Taken by a custom domain's catch-all (its domain and the owner's
+    /// daily cap): never forwarded outside, so a catch-all can't relay mail
+    /// for any name to anywhere, and counted once when stored.
+    pub(crate) caught: Option<(Uuid, i64)>,
 }
 
 pub(crate) fn unknown() -> Reply {
@@ -146,25 +152,28 @@ fn try_later() -> Reply {
 /// address is unknown (`5.1.1`); one whose keys are not stored yet is a
 /// temporary failure (`4.3.0`), so the sender retries.
 pub async fn resolve(state: &AppState, recipient: &str) -> Result<Recipient, Reply> {
-    let address = local_address(recipient, &state.config.chat_server_name).ok_or_else(unknown)?;
-    // address id, account, its primary key (none yet), quota, used.
-    type Row = (Uuid, Uuid, Option<Vec<u8>>, i64, i64);
-    let row: Option<Row> = sqlx::query_as(
-        "SELECT a.id, a.user_id, k.public_key, u.storage_quota_bytes, u.storage_used_bytes
-           FROM mail_addresses a
-           JOIN users u ON u.id = a.user_id AND u.is_active
-           LEFT JOIN mail_address_keys k ON k.address_id = a.id AND k.is_primary
-          WHERE a.folded = kutup_fold(split_part($1, '@', 1)) || '@' || lower(split_part($1, '@', 2))
-            AND (a.state = 'active'
-                 OR (a.state = 'receiving' AND a.receive_until > now()))",
-    )
-    .bind(&address)
-    .fetch_optional(&state.pool)
-    .await
-    .map_err(|error| {
+    let lookup_failed = |error: sqlx::Error| {
         tracing::warn!(error = %error, "mail: recipient lookup failed");
         try_later()
-    })?;
+    };
+    let (row, caught) = match local_address(recipient, &state.config.chat_server_name) {
+        Some(address) => (
+            own_domain_row(state, &address)
+                .await
+                .map_err(lookup_failed)?,
+            None,
+        ),
+        None => match custom_domain_row(state, recipient)
+            .await
+            .map_err(lookup_failed)?
+        {
+            CustomDomain::Address(row) => (row, None),
+            CustomDomain::Caught(row, cap) => (row, Some(cap)),
+            CustomDomain::OverCap => {
+                return Err(Reply::new(452, "4.2.2", "mailbox full, try again later"))
+            }
+        },
+    };
     let (address_id, user_id, public_key, quota, used) = row.ok_or_else(unknown)?;
     // An address whose keys are not stored yet (a new account, or a rename,
     // moments before its client uploads them): try again later, never a
@@ -180,7 +189,110 @@ pub async fn resolve(state: &AppState, recipient: &str) -> Result<Recipient, Rep
         user_id,
         address_id,
         public_key,
+        caught,
     })
+}
+
+/// What a custom domain's recipient is.
+enum CustomDomain {
+    Address(Option<RecipientRow>),
+    /// The catch-all took it: its domain and the owner's daily cap.
+    Caught(Option<RecipientRow>, (Uuid, i64)),
+    /// The catch-all's day is full.
+    OverCap,
+}
+
+/// A recipient's address id, account, primary key (none yet), quota and use.
+type RecipientRow = (Uuid, Uuid, Option<Vec<u8>>, i64, i64);
+
+/// An address on the server's own domain, in any folded spelling.
+async fn own_domain_row(
+    state: &AppState,
+    address: &str,
+) -> Result<Option<RecipientRow>, sqlx::Error> {
+    sqlx::query_as(
+        "SELECT a.id, a.user_id, k.public_key, u.storage_quota_bytes, u.storage_used_bytes
+           FROM mail_addresses a
+           JOIN users u ON u.id = a.user_id AND u.is_active
+           LEFT JOIN mail_address_keys k ON k.address_id = a.id AND k.is_primary
+          WHERE a.folded = kutup_fold(split_part($1, '@', 1)) || '@' || lower(split_part($1, '@', 2))
+            AND (a.state = 'active'
+                 OR (a.state = 'receiving' AND a.receive_until > now()))",
+    )
+    .bind(address)
+    .fetch_optional(&state.pool)
+    .await
+}
+
+/// An address on a custom domain an account holds and may use now
+/// (docs/plans/mail-custom-domains.md §5–6), lowercased with its `+tag`
+/// stripped; an unknown name there goes to the domain's catch-all, within
+/// its daily cap.
+async fn custom_domain_row(state: &AppState, recipient: &str) -> Result<CustomDomain, sqlx::Error> {
+    let Some((local, domain)) = recipient.trim().rsplit_once('@') else {
+        return Ok(CustomDomain::Address(None));
+    };
+    let local = local
+        .split_once('+')
+        .map_or(local, |(base, _)| base)
+        .to_lowercase();
+    let domain = domain.to_lowercase();
+    if !domains::sweep::configured(state) {
+        return Ok(CustomDomain::Address(None));
+    }
+    let held: Option<domains::store::Row> = sqlx::query_as(&format!(
+        "SELECT {} FROM mail_domains
+          WHERE name = $1 AND state IN (1, 2) AND stopped_at IS NULL AND removed_at IS NULL",
+        domains::store::COLUMNS
+    ))
+    .bind(&domain)
+    .fetch_optional(&state.pool)
+    .await?;
+    let Some(held) = held else {
+        return Ok(CustomDomain::Address(None));
+    };
+    // The owner's settings: the site's, with an administrator's overrides
+    // for this account (the catch-all among them).
+    let settings = domains::settings::Settings::load(&state.pool)
+        .await?
+        .for_user(&state.pool, held.user_id)
+        .await?;
+    if !held.usable(&settings) {
+        return Ok(CustomDomain::Address(None));
+    }
+    let (domain_id, catch_all) = (held.id, held.catch_all_address_id);
+    const SELECT: &str =
+        "SELECT a.id, a.user_id, k.public_key, u.storage_quota_bytes, u.storage_used_bytes
+           FROM mail_addresses a
+           JOIN users u ON u.id = a.user_id AND u.is_active
+           LEFT JOIN mail_address_keys k ON k.address_id = a.id AND k.is_primary";
+    let row: Option<RecipientRow> = sqlx::query_as(&format!(
+        "{SELECT} WHERE a.folded = $1 AND a.domain_id = $2 AND a.state = 'active'"
+    ))
+    .bind(format!("{local}@{domain}"))
+    .bind(domain_id)
+    .fetch_optional(&state.pool)
+    .await?;
+    if row.is_some() {
+        return Ok(CustomDomain::Address(row));
+    }
+    let Some(catch_all) = catch_all.filter(|_| settings.catch_all) else {
+        return Ok(CustomDomain::Address(None));
+    };
+    if !domains::catch_all_has_room(&state.pool, domain_id, settings.catch_all_per_day).await? {
+        return Ok(CustomDomain::OverCap);
+    }
+    let row: Option<RecipientRow> = sqlx::query_as(&format!(
+        "{SELECT} WHERE a.id = $1 AND a.domain_id = $2 AND a.state = 'active'"
+    ))
+    .bind(catch_all)
+    .bind(domain_id)
+    .fetch_optional(&state.pool)
+    .await?;
+    Ok(CustomDomain::Caught(
+        row,
+        (domain_id, settings.catch_all_per_day),
+    ))
 }
 
 /// Where mail to an address goes: one account, or a group's receivers.
@@ -213,7 +325,11 @@ pub async fn resolve_target(
                 .ok_or_else(unknown);
         }
     }
-    let address = local_address(recipient, &state.config.chat_server_name).ok_or_else(unknown)?;
+    // Groups live on the server's own domain; a custom domain's addresses
+    // are people's (docs/plans/mail-custom-domains.md §0).
+    let Some(address) = local_address(recipient, &state.config.chat_server_name) else {
+        return resolve(state, recipient).await.map(Target::Person);
+    };
     let lookup_failed = |error: sqlx::Error| {
         tracing::warn!(error = %error, "mail: group lookup failed");
         try_later()
@@ -298,6 +414,13 @@ async fn store_inner(state: &AppState, recipient: &Recipient, raw: &[u8]) -> any
             return Ok(Reply::new(250, "2.0.0", "already delivered"));
         }
     }
+    // A caught message counts against its catch-all's day once, here; the
+    // day may have filled since RCPT on another backend.
+    if let Some((domain, per_day)) = recipient.caught {
+        if !crate::mail::domains::count_catch_all(&state.pool, domain, per_day).await? {
+            return Ok(Reply::new(452, "4.2.2", "mailbox full, try again later"));
+        }
+    }
 
     let id = Uuid::new_v4();
     let key = object_key(recipient.user_id, id);
@@ -318,10 +441,8 @@ async fn store_inner(state: &AppState, recipient: &Recipient, raw: &[u8]) -> any
                         object_key: key.clone(),
                         object_version: version.clone(),
                         readable: readable.clone(),
-                        may_forward: forwarding::may_forward(
-                            &state.config.mail_forwarding_keys,
-                            raw,
-                        ),
+                        may_forward: recipient.caught.is_none()
+                            && forwarding::may_forward(&state.config.mail_forwarding_keys, raw),
                         plaintext: Some(std::sync::Arc::new(raw.to_vec())),
                     },
                 );

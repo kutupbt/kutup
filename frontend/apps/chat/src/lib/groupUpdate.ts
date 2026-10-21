@@ -1,6 +1,7 @@
 import type { TFunction } from 'i18next'
 import { accountKey } from '@kutup/chat-core/identity'
 import type { ChatGroupUpdate, ChatGroupUpdateChange } from '@kutup/chat-core/types'
+import { disappearingLabel } from './disappearing'
 
 /**
  * The sentences of a group change notice, one per change, as Signal words
@@ -65,6 +66,29 @@ export function groupUpdateSentences(
         return t(`chat.groupUpdates.${change.type}${you}`, { actor })
       case 'closed':
         return t(`chat.groupUpdates.closed${you}`, { actor })
+      case 'timerChanged':
+        return change.seconds === 0
+          ? t(`chat.groupUpdates.timerOff${you}`, { actor })
+          : t(`chat.groupUpdates.timerOn${you}`, { actor, duration: disappearingLabel(change.seconds, t) })
+      case 'addersChanged':
+        return t(`chat.groupUpdates.addersChanged${you}`, {
+          actor,
+          who: change.administratorsOnly ? t('chat.groupUpdates.administrators') : t('chat.groupUpdates.allMembers'),
+        })
+      case 'membersInvited':
+      case 'invitationsRevoked':
+        return t(`chat.groupUpdates.${change.type}${you}`, { actor, count: change.count })
+      case 'joinedByInvitation':
+      case 'joinedFromLink':
+      case 'joinRequested':
+      case 'joinRequestCanceled':
+        return t(`chat.groupUpdates.${change.type}${you}`, { actor })
+      case 'joinRequestApproved':
+      case 'joinRequestDenied':
+      case 'memberBanned':
+      case 'memberUnbanned':
+        if (accountKey(change.member) === self) return t(`chat.groupUpdates.${change.type}_member_you`, { actor })
+        return t(`chat.groupUpdates.${change.type}${you}`, { actor, member: name(accountKey(change.member)) })
     }
   }
 }

@@ -47,6 +47,13 @@ import { isChatGroupId } from './types'
 import type {
   ChatGroupMember,
   ChatGroupSend,
+  ChatGroupAvatarFetch,
+  ChatGroupBan,
+  ChatGroupDetails,
+  ChatGroupLinkJoin,
+  ChatGroupLinkMode,
+  ChatGroupLinkPreview,
+  ChatGroupRequestOutcome,
   ChatGroupSummary,
   ChatGroupSync,
 } from './types'
@@ -117,6 +124,17 @@ const ACCOUNT_LISTS_MS = 60_000
 const ACCOUNT_LISTS_HIDDEN_MS = 5 * 60_000
 
 /**
+ * How often each pairwise group is caught up with its home when nothing
+ * arrives from it (docs/plans/pairwise-groups.md §11): administrators see
+ * requests to join this way, never by a push that would tell the home who
+ * they are. The first pass comes soon after the app opens.
+ */
+const GROUP_SYNC_MS = 10 * 60_000
+/** In a tab left hidden: rarer, so a background tab costs the home little. */
+const GROUP_SYNC_HIDDEN_MS = 30 * 60_000
+const GROUP_SYNC_FIRST_MS = 15_000
+
+/**
  * `polling`: the live socket cannot be opened (a gateway that blocks
  * WebSockets, say) but the server answers ordinary requests, so the mailbox
  * is read every few seconds instead.
@@ -157,6 +175,42 @@ export type ChatServiceErrorCode =
   | 'contactListUnconfirmed'
   /** The server's contact list contradicts the account's verified state. */
   | 'contactListIntegrity'
+  /** A group change refused, by the home or by this device's own check. */
+  | 'groupNotAllowed'
+  | 'groupLastAdministrator'
+  | 'groupLimitReached'
+  | 'groupEnded'
+  | 'groupBanned'
+  | 'groupAvatarTooLarge'
+  | 'groupAvatarStorageFull'
+  | 'groupAvatarMissing'
+  | 'groupRefused'
+  /** The group's home couldn't be reached. */
+  | 'groupUnreachable'
+
+const GROUP_REFUSALS: ReadonlyMap<string, ChatServiceErrorCode> = new Map([
+  ['notAllowed', 'groupNotAllowed'],
+  ['lastAdministrator', 'groupLastAdministrator'],
+  ['limitReached', 'groupLimitReached'],
+  ['terminated', 'groupEnded'],
+  ['banned', 'groupBanned'],
+  ['avatarTooLarge', 'groupAvatarTooLarge'],
+  ['avatarStorageFull', 'groupAvatarStorageFull'],
+  ['avatarMissing', 'groupAvatarMissing'],
+])
+
+/**
+ * A failed group action, said as what it was: a refusal by its code (the
+ * home's, or this device's own check before sending), or the home out of
+ * reach. Anything else stays as it was.
+ */
+export function groupFailure(error: unknown): unknown {
+  const message = error instanceof Error ? error.message : String(error)
+  const refused = /refused(?: the change)?: (\w+)/.exec(message)
+  if (refused) return new ChatServiceError(GROUP_REFUSALS.get(refused[1]!) ?? 'groupRefused')
+  if (message.includes("group's server can't be reached")) return new ChatServiceError('groupUnreachable')
+  return error
+}
 
 /** What the account-head checks say when the server shows another history or list than the verified one. */
 const INTEGRITY_MARKERS = [
@@ -271,6 +325,7 @@ export class ChatService {
   private linkedDeviceTimer: ReturnType<typeof setInterval> | null = null
   private prekeyTimer: ReturnType<typeof setInterval> | null = null
   private accountListsTimer: ReturnType<typeof setTimeout> | null = null
+  private groupSyncTimer: ReturnType<typeof setTimeout> | null = null
   private backup: ChatBackupCoordinator | null = null
   private backupUnsubscribe: (() => void) | null = null
 
@@ -460,6 +515,7 @@ export class ChatService {
       void service.maintainPrekeys()
       service.startPrekeyChecks()
       service.startAccountListSync()
+      service.startGroupSync()
       void service.connectSocket()
       service.startInviteLinks()
       service.startLinkedDeviceChecks()
@@ -1677,9 +1733,156 @@ export class ChatService {
     return sent
   }
 
+  /** The link, settings and administrators' actions (slice 3). */
+  private groupSettingsClient(): Required<Pick<WasmChatClientHandle,
+    | 'previewGroupLink' | 'joinGroupByLink' | 'groupDetails' | 'setGroupLink' | 'resetGroupLink'
+    | 'setGroupDescription' | 'setGroupTimer' | 'setGroupAccess' | 'setGroupAnnouncementsOnly'
+    | 'approveGroupRequest' | 'denyGroupRequest' | 'banGroupMember' | 'unbanGroup' | 'endGroup'
+    | 'removeUnverifiedGroupMembers' | 'checkGroupRequest' | 'cancelGroupRequest'
+    | 'setGroupAvatar' | 'removeGroupAvatar' | 'groupAvatar'>> {
+    this.groupClient()
+    const client = this.client
+    if (!client.previewGroupLink || !client.joinGroupByLink || !client.groupDetails
+      || !client.setGroupLink || !client.resetGroupLink || !client.setGroupDescription
+      || !client.setGroupTimer || !client.setGroupAccess || !client.setGroupAnnouncementsOnly
+      || !client.approveGroupRequest || !client.denyGroupRequest || !client.banGroupMember
+      || !client.unbanGroup || !client.endGroup || !client.removeUnverifiedGroupMembers
+      || !client.checkGroupRequest || !client.cancelGroupRequest
+      || !client.setGroupAvatar || !client.removeGroupAvatar || !client.groupAvatar) {
+      throw new ChatServiceError('serverUnsupported')
+    }
+    return client as never
+  }
+
+  /** What a group link (its URL fragment) leads to, read before joining. */
+  async previewChatGroupLink(fragment: string): Promise<ChatGroupLinkPreview> {
+    const client = this.groupSettingsClient()
+    return this.withLock(() => client.previewGroupLink(fragment))
+  }
+
+  /** Joins through a link, or asks to when an administrator approves. */
+  async joinChatGroupByLink(fragment: string): Promise<ChatGroupLinkJoin> {
+    const client = this.groupSettingsClient()
+    const joined = await this.withLock(() => client.joinGroupByLink(fragment))
+    this.notifyPeers()
+    return joined
+  }
+
+  /** Where this account's request stands: approved ones join, denied ones end. */
+  async checkChatGroupRequest(groupId: string): Promise<ChatGroupRequestOutcome> {
+    const client = this.groupSettingsClient()
+    const outcome = await this.withLock(() => client.checkGroupRequest(groupId))
+    if (outcome.kind !== 'pending' && outcome.kind !== 'unreachable') this.notifyPeers()
+    return outcome
+  }
+
+  /** Withdraws this account's request to join. */
+  async cancelChatGroupRequest(groupId: string): Promise<ChatGroupRequestOutcome> {
+    const client = this.groupSettingsClient()
+    const outcome = await this.withLock(() => client.cancelGroupRequest(groupId))
+    this.notifyPeers()
+    return outcome
+  }
+
+  async chatGroupDetails(groupId: string): Promise<ChatGroupDetails> {
+    const client = this.groupSettingsClient()
+    return this.withLock(() => client.groupDetails(groupId))
+  }
+
+  async setChatGroupLink(groupId: string, mode: ChatGroupLinkMode): Promise<void> {
+    await this.groupSettingsChange((client) => client.setGroupLink(groupId, mode))
+  }
+
+  async resetChatGroupLink(groupId: string): Promise<void> {
+    await this.groupSettingsChange((client) => client.resetGroupLink(groupId))
+  }
+
+  async setChatGroupDescription(groupId: string, description: string): Promise<void> {
+    await this.groupSettingsChange((client) => client.setGroupDescription(groupId, description))
+  }
+
+  /** The disappearing-messages timer in seconds; 0 turns it off. */
+  async setChatGroupTimer(groupId: string, seconds: number): Promise<void> {
+    await this.groupSettingsChange((client) => client.setGroupTimer(groupId, seconds))
+  }
+
+  async setChatGroupAccess(
+    groupId: string,
+    attributes: 'member' | 'administrator',
+    members: 'member' | 'administrator',
+  ): Promise<void> {
+    await this.groupSettingsChange((client) => client.setGroupAccess(groupId, attributes, members))
+  }
+
+  async setChatGroupAnnouncementsOnly(groupId: string, on: boolean): Promise<void> {
+    await this.groupSettingsChange((client) => client.setGroupAnnouncementsOnly(groupId, on))
+  }
+
+  async approveChatGroupRequest(groupId: string, pseudonym: string): Promise<void> {
+    await this.groupSettingsChange((client) => client.approveGroupRequest(groupId, pseudonym))
+  }
+
+  /** Turns a request down; it is banned from the link, as Signal does. */
+  async denyChatGroupRequest(groupId: string, pseudonym: string): Promise<void> {
+    await this.groupSettingsChange((client) => client.denyGroupRequest(groupId, pseudonym))
+  }
+
+  async banChatGroupMember(groupId: string, pseudonym: string, resetLink: boolean): Promise<void> {
+    await this.groupSettingsChange((client) => client.banGroupMember(groupId, pseudonym, resetLink))
+  }
+
+  async unbanChatGroup(groupId: string, ban: ChatGroupBan): Promise<void> {
+    await this.groupSettingsChange((client) => client.unbanGroup(groupId, ban))
+  }
+
+  /** Sets the group's picture: `image` already scaled down on this device. */
+  async setChatGroupAvatar(groupId: string, image: Uint8Array, contentType: string): Promise<void> {
+    await this.groupSettingsChange((client) => client.setGroupAvatar(groupId, image, contentType))
+  }
+
+  /** The group's picture, checked against the hash its state names. */
+  async chatGroupAvatar(groupId: string): Promise<ChatGroupAvatarFetch> {
+    const client = this.groupSettingsClient()
+    return this.withLock(() => client.groupAvatar(groupId))
+  }
+
+  async removeChatGroupAvatar(groupId: string): Promise<void> {
+    await this.groupSettingsChange((client) => client.removeGroupAvatar(groupId))
+  }
+
+  /** Ends the group for everyone. */
+  async endChatGroup(groupId: string): Promise<void> {
+    await this.groupSettingsChange((client) => client.endGroup(groupId))
+  }
+
+  /** Removes every unverified or banned member: how many. */
+  async removeUnverifiedChatGroupMembers(groupId: string): Promise<number> {
+    let removed = 0
+    await this.groupSettingsChange(async (client) => {
+      removed = await client.removeUnverifiedGroupMembers(groupId)
+    })
+    return removed
+  }
+
+  private async groupSettingsChange(
+    change: (client: ReturnType<ChatService['groupSettingsClient']>) => Promise<void>,
+  ): Promise<void> {
+    const client = this.groupSettingsClient()
+    try {
+      await this.withLock(() => change(client))
+    } catch (error) {
+      throw groupFailure(error)
+    }
+    this.notifyPeers()
+  }
+
   private async groupChange(change: (client: ReturnType<ChatService['groupClient']>) => Promise<void>): Promise<void> {
     const client = this.groupClient()
-    await this.withLock(() => change(client))
+    try {
+      await this.withLock(() => change(client))
+    } catch (error) {
+      throw groupFailure(error)
+    }
     this.notifyPeers()
   }
 
@@ -1945,6 +2148,49 @@ export class ChatService {
     next()
   }
 
+  /**
+   * Catches up every pairwise group this account is in, one at a time, at
+   * jittered intervals: soon after opening, then about every ten minutes
+   * (thirty in a hidden tab), give or take a fifth, so members' devices
+   * don't line up.
+   */
+  private startGroupSync(): void {
+    if (this.groupSyncTimer || this.capabilities.pairwiseGroups !== true) return
+    const client = this.client
+    if (!client.listGroups || !client.syncGroup) return
+    const next = (base: number) => {
+      if (this.disposed) return
+      const delay = base * (0.8 + Math.random() * 0.4)
+      this.groupSyncTimer = setTimeout(() => {
+        void this.syncMemberGroups()
+          .catch((error: unknown) => console.warn('chat: the groups could not be caught up', error))
+          .finally(() => next(document.visibilityState === 'visible' ? GROUP_SYNC_MS : GROUP_SYNC_HIDDEN_MS))
+      }, delay)
+    }
+    next(GROUP_SYNC_FIRST_MS)
+  }
+
+  private async syncMemberGroups(): Promise<void> {
+    const client = this.groupClient()
+    const groups = await this.withLock(() => client.listGroups())
+    const settings = this.client.checkGroupRequest ? this.groupSettingsClient() : null
+    for (const group of groups) {
+      if (this.disposed) return
+      // One group failing (its home unreachable) never stops the others.
+      if (group.status === 'member') {
+        await this.withLock(() => client.syncGroup(group.groupId)).catch((error: unknown) =>
+          console.warn('chat: a group could not be caught up', error),
+        )
+      } else if (group.status === 'requesting' && settings) {
+        // An approval or a denial is learnt here: the home tells nobody.
+        await this.withLock(() => settings.checkGroupRequest(group.groupId)).catch((error: unknown) =>
+          console.warn('chat: a request to join could not be checked', error),
+        )
+      }
+    }
+    this.notifyPeers()
+  }
+
   private startPrekeyChecks(): void {
     if (this.prekeyTimer) return
     this.prekeyTimer = setInterval(() => {
@@ -2051,6 +2297,7 @@ export class ChatService {
     if (this.linkedDeviceTimer) clearInterval(this.linkedDeviceTimer)
     if (this.prekeyTimer) clearInterval(this.prekeyTimer)
     if (this.accountListsTimer) clearTimeout(this.accountListsTimer)
+    if (this.groupSyncTimer) clearTimeout(this.groupSyncTimer)
     this.engineLock.close()
     this.stopHeartbeat()
     this.socket?.close()

@@ -55,10 +55,10 @@ pub use calls::{
 };
 pub use content::{
     ChatContent, ContactControlBody, ContactState, ConversationStateBody, DeleteForMeBody,
-    DisappearingExpiryStartBody, DisappearingTimerBody, GroupUpdateBody, GroupUpdateChange,
-    MessageMutationBody, MessageMutationOperation, ReactionBody, ReadPositionBody, ReceiptBody,
-    ReceiptState, SentTranscriptBody, StickerRemovedBody, StickerSavedBody, TextBody, TypingBody,
-    ViewOnceOpenedBody, MAX_SAFE_CLOCK_MS,
+    DisappearingExpiryStartBody, DisappearingTimerBody, GroupRemovalBody, GroupUpdateBody,
+    GroupUpdateChange, MessageMutationBody, MessageMutationOperation, ReactionBody,
+    ReadPositionBody, ReceiptBody, ReceiptState, SentTranscriptBody, StickerRemovedBody,
+    StickerSavedBody, TextBody, TypingBody, ViewOnceOpenedBody, MAX_SAFE_CLOCK_MS,
 };
 pub use content::{
     PeerRenamedBody, ResendBody, SessionControlAction, SessionControlBody, UndecryptableBody,

@@ -106,6 +106,8 @@ export function useConversationModel(conversation: ConversationId, now: number):
     else if (chatGroup?.status === 'invited') readOnly = 'invitation'
     else if (chatGroup?.status === 'requesting') readOnly = 'requesting'
     else if (chatGroup?.status === 'gone') readOnly = 'notMember'
+    else if (chatGroup?.terminated) readOnly = 'closed'
+    else if (chatGroup && !chatGroup.maySend) readOnly = 'adminsOnly'
     else if (group?.left) readOnly = 'left'
     else if (group?.status === 'closed') readOnly = 'closed'
     else if (group && group.currentAuthorizationPolicy.applicationSenders !== 1 && !isAdmin) readOnly = 'adminsOnly'

@@ -20,6 +20,7 @@
 
 pub mod check;
 pub mod entry;
+pub mod link;
 #[cfg(test)]
 mod tests;
 
@@ -35,8 +36,8 @@ pub use check::{
     GroupLimits,
 };
 pub use entry::{
-    GroupContextV1, GroupInviteV1, GroupListEntryV1, GroupListStatus, GroupMemberEntryV1,
-    GroupSlotEntryV1,
+    GroupAvatarV1, GroupBanListV1, GroupBannedAccountV1, GroupContextV1, GroupInviteV1,
+    GroupListEntryV1, GroupListStatus, GroupMemberEntryV1, GroupSlotEntryV1,
 };
 
 pub const GROUP_FORMAT_VERSION: u16 = 1;
@@ -47,6 +48,11 @@ pub const MAX_SEALED_TITLE_BYTES: usize = 1024;
 pub const MAX_SEALED_DESCRIPTION_BYTES: usize = 8192;
 pub const MAX_SEALED_TIMER_BYTES: usize = 128;
 pub const MAX_SEALED_AVATAR_BYTES: usize = 512;
+/// Signal-Desktop's limits for what members type, in characters
+/// (`GroupTitleInput`, `GroupDescriptionInput`): the sealed caps above hold
+/// them in any script.
+pub const MAX_GROUP_TITLE_CHARS: usize = 32;
+pub const MAX_GROUP_DESCRIPTION_CHARS: usize = 480;
 /// A member's or slot's sealed entry: an AccountRef, a profile key and a
 /// binding signature, with room to spare.
 pub const MAX_SEALED_ENTRY_BYTES: usize = 512;

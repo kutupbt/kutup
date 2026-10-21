@@ -38,6 +38,9 @@ import { isServerUnreachable, REOPEN_DELAYS_MS } from './openFailure'
  * `unreachable`: the server could not be reached; Chat opens again by itself.
  * `unavailable`: this browser's own Chat state would not open.
  */
+/** The service's codes an open can fail with; any other is "unavailable". */
+const OPEN_FAILURES: ReadonlySet<string> = new Set(['serverUnsupported', 'browserUnsupported', 'contactListUnconfirmed', 'contactListIntegrity'])
+
 export type ChatFailure =
   | 'capabilities'
   | 'serverUnsupported'
@@ -309,7 +312,7 @@ export function openChat(session: Session): void {
       }
       set({
         status: 'failed',
-        failure: error instanceof ChatServiceError ? error.code : 'unavailable',
+        failure: error instanceof ChatServiceError && OPEN_FAILURES.has(error.code) ? (error.code as ChatFailure) : 'unavailable',
         capabilities,
       })
       return
