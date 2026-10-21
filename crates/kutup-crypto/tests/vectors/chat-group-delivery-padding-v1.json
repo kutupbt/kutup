@@ -1,0 +1,25 @@
+{
+  "accountMasterKey": "ERERERERERERERERERERERERERERERERERERERERERE=",
+  "cases": [
+    {
+      "epoch": 0,
+      "slot": 0,
+      "dummy": "Q2eJhMaH8RkG8IrN7y29iomkYvAGk4aPfIBExERXyME="
+    },
+    {
+      "epoch": 1790000000000,
+      "slot": 0,
+      "dummy": "Ip6lJBh5q/aatydOvZb9m2XYTUk5vuS1MuPcGP0r3eI="
+    },
+    {
+      "epoch": 1790000000000,
+      "slot": 7,
+      "dummy": "ZonRZNhgISxW+mlEaJRdkrpNcwl/CMmR8s0RdpPKOZU="
+    },
+    {
+      "epoch": 18446744073709551615,
+      "slot": 16909060,
+      "dummy": "I9i/8XrQ7efe9aw3e+KIdFF/WppaZVgEJl9m3h8Upuk="
+    }
+  ]
+}
