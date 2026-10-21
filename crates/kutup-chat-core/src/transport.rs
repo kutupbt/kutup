@@ -21,6 +21,41 @@ use kutup_chat_proto::{
 };
 use kutup_federation_proto::FederatedFeaturePolicyHistoryV1;
 
+/// The result of a `POST /api/chat/anonymous/messages/multi`: one
+/// multi-recipient group send to one destination server
+/// (docs/plans/pairwise-groups.md, "Slice 2"). Every answer but `Answered`
+/// stored nothing.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase", tag = "kind")]
+pub enum MultiSendOutcome {
+    /// `200` (stored for every recipient but those `refused` or
+    /// `rateLimited`), or `409` / `410` (nothing stored: `devices` or
+    /// `stale` say what changed).
+    Answered {
+        status: u16,
+        response: kutup_chat_proto::SealedMultiResponseV1,
+    },
+    /// `503 peerUnavailable`: the destination didn't answer in time; its
+    /// members' copies go pairwise.
+    PeerUnavailable,
+    /// `413`: too large or too many recipients for one request.
+    TooLarge,
+    /// `429`: this address's budget for the route is spent; later.
+    RateLimited,
+}
+
+/// The result of setting this account's published group capabilities.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase", tag = "kind")]
+pub enum GroupCapabilitiesOutcome {
+    Set {
+        count: u32,
+    },
+    /// `409 capabilityLimit`: more than the server takes for one account;
+    /// nothing changed.
+    LimitReached,
+}
+
 /// The result of a `POST …/messages`. A `409 DeviceListMismatch` is modeled as a
 /// value (not an error) because it is the expected, recoverable fan-out signal.
 pub enum SendOutcome {
@@ -249,6 +284,27 @@ pub trait ChatTransport {
     ) -> Result<kutup_chat_proto::SealedBatchResponseV1> {
         Err(crate::ChatError::Transport(
             "transport does not implement sealed batches".into(),
+        ))
+    }
+
+    /// `POST /api/chat/anonymous/messages/multi?server={server}`: one group
+    /// message to every listed account of one server, sealed once.
+    async fn send_sealed_multi(
+        &self,
+        _server: &str,
+        _submission: &kutup_chat_proto::SealedMultiSubmissionV1,
+    ) -> Result<MultiSendOutcome> {
+        Err(crate::ChatError::Transport(
+            "transport does not implement multi-recipient sends".into(),
+        ))
+    }
+
+    /// `POST /api/chat/group-capabilities/set`: exactly these hashes
+    /// (canonical base64 SHA-256 of each capability, padding included) are
+    /// this account's group capabilities on its server.
+    async fn set_group_capabilities(&self, _hashes: &[String]) -> Result<GroupCapabilitiesOutcome> {
+        Err(crate::ChatError::Transport(
+            "transport does not implement group capabilities".into(),
         ))
     }
 

@@ -1690,6 +1690,8 @@ mod tests {
             listed_status: None,
             list_due_at_ms: None,
             join_epoch: 0,
+            delivery: None,
+            member_capabilities: Default::default(),
         };
         let db = SqliteChatDb::open_in_memory().unwrap();
         let mut first = Pending::default();

@@ -367,6 +367,8 @@ impl Engine {
                         listed_status: Some(GroupListStatus::Member),
                         list_due_at_ms: None,
                         join_epoch: entry.join_epoch,
+                        delivery: None,
+                        member_capabilities: Default::default(),
                     };
                     self.save_group(&record).await?;
                     // Its state, and this device's binding where needed; a

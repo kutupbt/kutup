@@ -31,6 +31,7 @@ use kutup_crypto::chat_group::{
 };
 use kutup_federation_proto::FederationIdentityDocumentV1;
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 use zeroize::Zeroizing;
 
 /// The self-authority public key of an account's verified manifest, which
@@ -132,6 +133,76 @@ pub struct GroupRecordV1 {
     /// its pseudonym is derived at this epoch.
     #[serde(default)]
     pub join_epoch: u32,
+    /// This account's delivery capability for the group, and which member
+    /// accounts this device knows hold it (slice 2's multi-recipient route).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub delivery: Option<DeliveryBook>,
+    /// The other members' delivery capabilities, by account: what this
+    /// device sends group messages to them with on the multi-recipient
+    /// route. A member not here gets pairwise copies.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub member_capabilities: BTreeMap<String, HeldCapability>,
+}
+
+/// This account's capability for receiving a group's messages on the
+/// multi-recipient route: published (its hash) to the account's server,
+/// handed to the members pairwise. Replaced whenever a member who holds it
+/// is no longer one, so a removed member's copy stops working.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct DeliveryBook {
+    pub capability: SecretText,
+    /// When it was drawn (milliseconds): the newest wins, on every device of
+    /// the account and at every member.
+    pub drawn_at_ms: i64,
+    /// The member accounts this device handed it to (their servers took it).
+    #[serde(default)]
+    pub holders: Vec<String>,
+}
+
+impl DeliveryBook {
+    pub fn draw<R: rand::Rng + rand::CryptoRng>(now_ms: i64, rng: &mut R) -> Self {
+        let mut capability = [0u8; 16];
+        rng.fill_bytes(&mut capability);
+        Self {
+            capability: SecretText(encode(&capability)),
+            drawn_at_ms: now_ms,
+            holders: Vec::new(),
+        }
+    }
+
+    /// The capability's 16 bytes.
+    pub fn bytes(&self) -> Option<[u8; 16]> {
+        decode_exact::<16>("a delivery capability", &self.capability.0).ok()
+    }
+
+    /// Whether a new capability is due: one that holds it isn't a member
+    /// any more (`members`: the current member accounts).
+    pub fn must_rotate(&self, members: &[String]) -> bool {
+        self.holders.iter().any(|holder| !members.contains(holder))
+    }
+
+    /// The members that don't hold it yet.
+    pub fn missing<'a>(&self, members: &'a [String]) -> Vec<&'a String> {
+        members
+            .iter()
+            .filter(|member| !self.holders.contains(member))
+            .collect()
+    }
+}
+
+/// A member's capability as this device holds it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct HeldCapability {
+    pub capability: SecretText,
+    pub drawn_at_ms: i64,
+}
+
+impl HeldCapability {
+    pub fn bytes(&self) -> Option<[u8; 16]> {
+        decode_exact::<16>("a delivery capability", &self.capability.0).ok()
+    }
 }
 
 /// Which member devices hold this device's current sender key for a group
@@ -495,6 +566,8 @@ pub fn create_group(new: NewGroup<'_>) -> Result<(GroupRecordV1, GroupChangeV1),
         listed_status: None,
         list_due_at_ms: None,
         join_epoch,
+        delivery: None,
+        member_capabilities: Default::default(),
     };
     Ok((record, change))
 }
@@ -664,6 +737,8 @@ pub fn record_from_invite(
         listed_status: None,
         list_due_at_ms: None,
         join_epoch,
+        delivery: None,
+        member_capabilities: Default::default(),
     };
     if let Some(previous) = previous {
         let replaceable = match &previous.status {
@@ -846,6 +921,8 @@ pub fn record_from_link(
         listed_status: None,
         list_due_at_ms: None,
         join_epoch,
+        delivery: None,
+        member_capabilities: Default::default(),
     };
     if let Some(previous) = previous {
         record.state = previous.state.clone();
