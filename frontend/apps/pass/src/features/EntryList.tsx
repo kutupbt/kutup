@@ -59,20 +59,27 @@ export function EntryList({
       setSelection(emptySelection)
       toast.success(done)
     } catch {
-      toast.error(t('entry.saveFailed'))
+      // A recycle the core refused: the bin went off meanwhile (another
+      // device), and nothing was deleted.
+      toast.error(op.op === 'recycleEntries' ? t('bulk.binOff') : t('entry.saveFailed'))
     }
   }
   const moveTo = (group: GroupView) =>
     void run({ op: 'moveEntries', ids: selected, groupId: group.id }, t('bulk.moved', { count: selected.length, group: group.name }))
   const restore = () => void run({ op: 'restoreEntries', ids: selected }, t('bulk.restored', { count: selected.length }))
   const remove = () => {
+    // What the dialog asked, not what the vault says now: a recycle never
+    // becomes a delete for good (the bin switched off meanwhile on another
+    // device); the core refuses it instead.
+    const forGoodAsked = confirming === 'forGood'
     const count = selected.length
     setConfirming(null)
     // Emptied meanwhile (another device's save): nothing to delete.
     if (count === 0) return
-    // Recycling never turns into a delete for good (the bin switched off
-    // meanwhile on another device): the core refuses it instead.
-    void run(forGood ? { op: 'deleteEntries', ids: selected } : { op: 'recycleEntries', ids: selected }, t(forGood ? 'bulk.deletedForGood' : 'bulk.recycled', { count }))
+    void run(
+      forGoodAsked ? { op: 'deleteEntries', ids: selected } : { op: 'recycleEntries', ids: selected },
+      t(forGoodAsked ? 'bulk.deletedForGood' : 'bulk.recycled', { count }),
+    )
   }
 
   const click = (event: MouseEvent, id: string) => {

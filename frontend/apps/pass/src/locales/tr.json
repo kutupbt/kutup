@@ -470,6 +470,7 @@
     "deleteForGoodTitle_other": "{{count}} kayıt kalıcı olarak silinsin mi?",
     "deleteForGoodDescription_one": "Kayıt, geçmişi ve ekleri bu kasayı eşitleyen her cihazda silinir.",
     "deleteForGoodDescription_other": "Kayıtlar, geçmişleri ve ekleri bu kasayı eşitleyen her cihazda silinir.",
-    "cannotUndo": "Bu işlem geri alınamaz."
+    "cannotUndo": "Bu işlem geri alınamaz.",
+    "binOff": "Geri dönüşüm kutusu kapatılmış; hiçbir şey silinmedi."
   }
 }

@@ -265,7 +265,8 @@ What people hit first, then what blocks moving from KeePassXC:
    and checkboxes), select all, then Move to group, move to the recycle
    bin, restore each to where it was, delete for good; drag and drop of
    entries onto groups and the bin. Each as one edit (`moveEntries`,
-   `deleteEntries`, `restoreEntries`). Spec 167.
+   `deleteEntries`, `recycleEntries`, which never deletes for good, and
+   `restoreEntries`). Spec 167.
 2. ~~**Vault management from the vault list**~~ (user report): done. A menu
    on each vault, also while locked (rename, move, duplicate, download,
    show in Drive, delete), and uploading an existing `.kdbx`; spec 166.

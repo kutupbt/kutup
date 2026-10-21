@@ -470,6 +470,7 @@
     "deleteForGoodTitle_other": "Delete {{count}} entries for good?",
     "deleteForGoodDescription_one": "The entry, its history and its attachments are deleted, on every device that syncs this vault.",
     "deleteForGoodDescription_other": "The entries, their history and their attachments are deleted, on every device that syncs this vault.",
-    "cannotUndo": "This can't be undone."
+    "cannotUndo": "This can't be undone.",
+    "binOff": "The recycle bin was turned off; nothing was deleted."
   }
 }
