@@ -40,6 +40,7 @@ const MULTI_SETTINGS = [
 ] as const satisfies readonly { field: keyof AdminSettings; min: number; max: number }[]
 /** The server's bounds (site_settings::validate_chat_group_capabilities_per_account). */
 const MAX_GROUP_CAPABILITIES = 100_000
+const MIN_GROUP_CAPABILITIES = 16
 /**
  * The avatar blob lengths (kutup_chat_proto GROUP_AVATAR_BLOB_LENGTHS) and the
  * server's bounds (site_settings::AvatarLimits): storage holds two of the
@@ -73,7 +74,7 @@ export function ServerSettingsPage() {
         return [field, z.coerce.number<number>().int(range).min(min, range).max(max, range)]
       }),
     ) as Record<(typeof MULTI_SETTINGS)[number]['field'], z.ZodNumber>,
-    groupCapabilities: z.coerce.number<number>().int(t('admin.settings.groupCapabilitiesRange')).min(1, t('admin.settings.groupCapabilitiesRange')).max(MAX_GROUP_CAPABILITIES, t('admin.settings.groupCapabilitiesRange')),
+    groupCapabilities: z.coerce.number<number>().int(t('admin.settings.groupCapabilitiesRange')).min(MIN_GROUP_CAPABILITIES, t('admin.settings.groupCapabilitiesRange')).max(MAX_GROUP_CAPABILITIES, t('admin.settings.groupCapabilitiesRange')).multipleOf(8, t('admin.settings.groupCapabilitiesRange')),
     avatarMax: z.coerce.number<number>().refine((value) => (AVATAR_LENGTHS as readonly number[]).includes(value), t('admin.settings.groupAvatarMaxRange')),
     avatarStorage: z.coerce.number<number>().int(t('admin.settings.groupAvatarStorageRange')).max(MAX_AVATAR_STORAGE, t('admin.settings.groupAvatarStorageRange')),
     avatarPending: z.coerce.number<number>().int(t('admin.settings.groupAvatarPendingRange')).min(AVATAR_PENDING_SECONDS.min, t('admin.settings.groupAvatarPendingRange')).max(AVATAR_PENDING_SECONDS.max, t('admin.settings.groupAvatarPendingRange')),
@@ -174,7 +175,7 @@ export function ServerSettingsPage() {
                 </Field>
               ))}
               <Field label={t('admin.settings.groupCapabilities')} error={errors.groupCapabilities?.message} description={t('admin.settings.groupCapabilitiesHint')} required>
-                {(field) => <Input {...field} {...register('groupCapabilities')} type="number" min={1} max={MAX_GROUP_CAPABILITIES} step={1} inputMode="numeric" />}
+                {(field) => <Input {...field} {...register('groupCapabilities')} type="number" min={MIN_GROUP_CAPABILITIES} max={MAX_GROUP_CAPABILITIES} step={8} inputMode="numeric" />}
               </Field>
               <Field label={t('admin.settings.groupAvatarMax')} error={errors.avatarMax?.message} description={t('admin.settings.groupAvatarMaxHint')} required>
                 {(field) => (

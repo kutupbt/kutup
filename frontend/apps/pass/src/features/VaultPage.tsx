@@ -31,10 +31,11 @@ import { fieldValue, type EntryInput, type EntryView, type GroupView, type Merge
 import { ChangeKeyDialog } from './ChangeKeyDialog'
 import { EntryDetail } from './EntryDetail'
 import { EntryEditor } from './EntryEditor'
+import { EntryList } from './EntryList'
+import { useEntryDrop } from './entryDrop'
 import { GroupDialog } from './GroupDialog'
 import { ImportDialog } from './ImportDialog'
 import { SecurityPanel } from './SecurityPanel'
-import { SiteIcon } from './SiteIcon'
 import { IconDialog } from './IconDialog'
 import { iconSources } from '../lib/icons'
 import { SyncBadge } from './SyncBadge'
@@ -155,6 +156,8 @@ function OpenVault({ session, vault }: { session: VaultSession; vault: VaultFile
   const groups = view.groups.filter((g) => !g.inRecycleBin)
   const toReview = view.entries.filter((e) => e.review.length > 0 && !e.inRecycleBin).length
   const pictures = useMemo(() => iconSources(view), [view])
+  const { dropProps } = useEntryDrop(session, (message) => toast.success(message))
+  const dropHere = 'data-[drop-over=true]:bg-primary/15 data-[drop-over=true]:ring-2 data-[drop-over=true]:ring-primary'
 
   const selectGroup = (id: string | null) => {
     const next = new URLSearchParams(params)
@@ -297,7 +300,8 @@ function OpenVault({ session, vault }: { session: VaultSession; vault: VaultFile
                 <button
                   type="button"
                   onClick={() => selectGroup(g.id)}
-                  className={cn('flex min-w-0 flex-1 items-center gap-2 rounded-md px-2 py-1.5 text-left hover:bg-accent/60', groupId === g.id && 'bg-accent font-medium')}
+                  {...dropProps({ id: g.id, name: g.name, bin: false })}
+                  className={cn('flex min-w-0 flex-1 items-center gap-2 rounded-md px-2 py-1.5 text-left hover:bg-accent/60', dropHere, groupId === g.id && 'bg-accent font-medium')}
                   style={{ paddingInlineStart: `${0.5 + g.depth * 0.75}rem` }}
                 >
                   {g.customIcon && pictures.get(g.customIcon) ? (
@@ -345,7 +349,8 @@ function OpenVault({ session, vault }: { session: VaultSession; vault: VaultFile
                 <button
                   type="button"
                   onClick={() => selectGroup(bin)}
-                  className={cn('flex min-w-0 flex-1 items-center gap-2 rounded-md px-2 py-1.5 text-left hover:bg-accent/60', viewingBin && 'bg-accent font-medium')}
+                  {...(view.recycleBinEnabled ? dropProps({ id: bin, name: t('groups.recycleBin'), bin: true }) : {})}
+                  className={cn('flex min-w-0 flex-1 items-center gap-2 rounded-md px-2 py-1.5 text-left hover:bg-accent/60', dropHere, viewingBin && 'bg-accent font-medium')}
                 >
                   <Trash className="size-4 shrink-0" aria-hidden />
                   <span className="truncate">{t('groups.recycleBin')}</span>
@@ -394,25 +399,7 @@ function OpenVault({ session, vault }: { session: VaultSession; vault: VaultFile
               {needle ? t('entries.noMatch') : viewingBin ? t('entries.binEmpty') : t('entries.empty', { group: selectedGroup?.name ?? title })}
             </p>
           ) : (
-            <ul className="flex-1 overflow-y-auto" aria-label={t('entries.label')}>
-              {shown.map((e) => (
-                <li key={e.id}>
-                  <button
-                    type="button"
-                    onClick={() => openEntry(e.id)}
-                    aria-current={e.id === entryId ? 'true' : undefined}
-                    className={cn('flex w-full items-center gap-3 border-b border-border px-3 py-2.5 text-left hover:bg-accent/50', e.id === entryId && 'bg-accent')}
-                  >
-                    <SiteIcon title={fieldValue(e, 'Title')} address={fieldValue(e, 'URL')} picture={e.customIcon ? pictures.get(e.customIcon) : null} />
-                    <span className="min-w-0 flex-1">
-                      <span className="block truncate text-sm font-medium">{fieldValue(e, 'Title') || t('entry.untitled')}</span>
-                      <span className="block truncate text-xs text-muted-foreground">{fieldValue(e, 'UserName') || fieldValue(e, 'URL')}</span>
-                    </span>
-                    {e.review.length > 0 ? <Badge variant="warn">{t('review.badge')}</Badge> : null}
-                  </button>
-                </li>
-              ))}
-            </ul>
+            <EntryList key={`${groupId ?? ''}:${needle}`} session={session} view={view} shown={shown} currentId={entryId} viewingBin={viewingBin} pictures={pictures} onOpen={openEntry} />
           )}
         </section>
         <section className={cn('min-w-0 flex-1', showingReport ? 'hidden' : !entry && 'hidden md:block')}>
