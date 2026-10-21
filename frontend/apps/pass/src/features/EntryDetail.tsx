@@ -128,7 +128,8 @@ export function EntryDetail({ session, entry, view, onEdit, onGone }: { session:
         return true
       },
       () => {
-        toast.error(op.op === 'recycleEntries' ? t('bulk.binOff') : t('entry.saveFailed'))
+        const binOff = op.op === 'recycleEntries' && !session.getState().view.recycleBinEnabled
+        toast.error(binOff ? t('bulk.binOff') : t('entry.saveFailed'))
         return false
       },
     )

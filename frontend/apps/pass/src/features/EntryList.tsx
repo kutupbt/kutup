@@ -59,9 +59,10 @@ export function EntryList({
       setSelection(emptySelection)
       toast.success(done)
     } catch {
-      // A recycle the core refused: the bin went off meanwhile (another
-      // device), and nothing was deleted.
-      toast.error(op.op === 'recycleEntries' ? t('bulk.binOff') : t('entry.saveFailed'))
+      // A recycle refused because the bin went off meanwhile (another
+      // device): said so; anything else is a failed save.
+      const binOff = op.op === 'recycleEntries' && !session.getState().view.recycleBinEnabled
+      toast.error(binOff ? t('bulk.binOff') : t('entry.saveFailed'))
     }
   }
   const moveTo = (group: GroupView) =>
