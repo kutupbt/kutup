@@ -682,6 +682,14 @@ impl Engine {
             }
             return Ok(GroupContentOutcome::Ignored);
         }
+        if let Some(body) = content.as_group_delivery() {
+            // A member's capability (or a request for this account's):
+            // nothing from a blocked account is taken.
+            if !self.is_blocked(&sender).await? {
+                self.take_group_delivery(&sender, body).await?;
+            }
+            return Ok(GroupContentOutcome::Ignored);
+        }
         if let Some(body) = content.as_sender_key_distribution() {
             let message = decode_b64(&body.message)?;
             self.session

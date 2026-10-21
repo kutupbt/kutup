@@ -46,6 +46,8 @@ pub type AuthorityOf<'a> = dyn Fn(&AccountRef) -> Option<[u8; 32]> + 'a;
 pub struct GroupAccountKeys {
     pub authority: crate::manifest::AccountAuthority,
     pub pseudonyms: kutup_crypto::chat_group::GroupPseudonymKey,
+    /// The dummies its published delivery capabilities are padded with.
+    pub delivery_padding: kutup_crypto::chat_group::DeliveryPaddingKey,
 }
 
 impl GroupAccountKeys {
@@ -53,6 +55,7 @@ impl GroupAccountKeys {
         Ok(Self {
             authority: crate::manifest::AccountAuthority::derive(master_key)?,
             pseudonyms: kutup_crypto::chat_group::GroupPseudonymKey::derive(master_key),
+            delivery_padding: kutup_crypto::chat_group::DeliveryPaddingKey::derive(master_key),
         })
     }
 }

@@ -216,6 +216,14 @@ pub struct GroupOutboxEntry {
     pub content: Vec<u8>,
     pub created_at: i64,
     pub legs: Vec<GroupOutboxLeg>,
+    /// The message under this device's sender key, kept for the legs on the
+    /// multi-recipient route: sealed for them again at each try, against
+    /// the sessions then (slice 2).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sender_key_message: Option<Vec<u8>>,
+    /// Its content hint is implicit (a change notice), not resendable.
+    #[serde(default)]
+    pub implicit: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -248,6 +256,11 @@ pub struct GroupOutboxLeg {
     /// `pending` answer, or its own copy already queued).
     #[serde(default)]
     pub queued: bool,
+    /// Goes on the multi-recipient route (no envelopes of its own: the
+    /// entry's sender-key message is sealed for it at each try); turned
+    /// into an ordinary leg when that route can't take it.
+    #[serde(default)]
+    pub multi: bool,
 }
 
 /// Durable local history for an outbound logical message. The pending outbox

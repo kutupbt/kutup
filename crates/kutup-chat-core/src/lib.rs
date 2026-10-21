@@ -32,6 +32,7 @@ mod group;
 mod group_avatar;
 #[cfg_attr(not(feature = "wasm"), allow(dead_code))]
 mod group_client;
+mod group_delivery;
 #[cfg_attr(not(feature = "wasm"), allow(dead_code))]
 mod group_engine;
 #[cfg_attr(not(feature = "wasm"), allow(dead_code))]
