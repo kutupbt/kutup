@@ -3,7 +3,6 @@ import { describe, expect, it, vi } from 'vitest'
 vi.mock('@kutup/drive-core/move', () => ({ moveFile: vi.fn() }))
 vi.mock('./vaults', () => ({ vaultTitle: (name: string) => name.replace(/\.kdbx$/i, '') }))
 vi.mock('./secrets', () => ({}))
-vi.mock('../vault/client', () => ({ VaultHandle: {} }))
 
 const { moveTargets } = await import('./vaultActions')
 

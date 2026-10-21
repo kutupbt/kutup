@@ -57,7 +57,7 @@ test('pass: a vault is renamed while locked, downloaded, duplicated, moved, dele
   const duplicate = page.getByRole('dialog', { name: 'Duplicate “Yeni ad”' })
   await expect(duplicate).toContainText("master key")
   await duplicate.getByTestId('vault-duplicate-confirm').click()
-  await expect(page.getByRole('heading', { name: 'Yeni ad (1)', exact: true, level: 1 })).toBeVisible({ timeout: 60_000 })
+  await expect(page.getByRole('heading', { name: 'Yeni ad (2)', exact: true, level: 1 })).toBeVisible({ timeout: 60_000 })
   await expect(page.getByRole('list', { name: 'Entries' }).getByRole('button', { name: 'Banka' })).toBeVisible({ timeout: 60_000 })
   await openPass(page)
 
@@ -70,9 +70,9 @@ test('pass: a vault is renamed while locked, downloaded, duplicated, moved, dele
   await expect(vaultRow(page, 'Yeni ad')).toContainText('In Arşiv', { timeout: 30_000 })
 
   // The copy goes to Drive's trash.
-  await vaultMenu(page, 'Yeni ad (1)', 'Delete')
+  await vaultMenu(page, 'Yeni ad (2)', 'Delete')
   await page.getByRole('alertdialog').getByRole('button', { name: 'Delete' }).click()
-  await expect(vaultRow(page, 'Yeni ad (1)')).toHaveCount(0, { timeout: 30_000 })
+  await expect(vaultRow(page, 'Yeni ad (2)')).toHaveCount(0, { timeout: 30_000 })
 
   // Uploaded back: not a .kdbx refused at once; the wrong password said
   // before anything is uploaded; the right one, and it opens.

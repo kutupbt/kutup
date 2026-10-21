@@ -14,7 +14,7 @@ import {
 } from '@kutup/session/accountHead'
 import api from '@kutup/session/client'
 import { getSession, type Session } from '@kutup/session/store'
-import { openKept, type KeptKey, type VaultHandle } from '../vault/client'
+import { openKept, resealKeptKey, type KeptKey, type VaultHandle } from '../vault/client'
 import type { VaultKeyInput } from '../vault/types'
 
 // What is kept, and how, is decided once, in Rust (kutup_pass::kept, through
@@ -171,6 +171,22 @@ export async function putKeptKey(session: Session, fileId: string, sealed: Seale
   await revisionGuard(session)
     .accept(KEPT_SCOPE, fileId, sealed.revision)
     .catch(() => undefined)
+}
+
+/**
+ * Keeps the key the account keeps for vault `from` for its copy `to` as well
+ * (the copy has the same key), so the copy opens with the sign-in too. The
+ * kept secret moves as it is, in the worker: no vault is opened and no
+ * password is needed. False when nothing usable is kept for `from`.
+ */
+export async function keepCopiedKey(session: Session, rows: SecretRow[] | undefined, from: string, to: string): Promise<boolean> {
+  // Only one the account head vouches for, and not a replay.
+  if (!(await openRow(session, rows, from))) return false
+  const row = rows!.find((r) => r.fileId === from)!
+  const revision = await revisionGuard(session).next(KEPT_SCOPE, to, 0)
+  const envelope = await resealKeptKey(row.envelope, session.masterKey, session.envelopeBinding, from, to, revision)
+  await putKeptKey(session, to, { envelope, revision, base: 0 })
+  return true
 }
 
 /** Seals the key of the vault open in `vault` to replace the kept one at `base`. */

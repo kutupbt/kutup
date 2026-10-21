@@ -27,6 +27,7 @@ type Calls =
   | { call: 'importPreview'; contents: Uint8Array; provider: string | null }
   | { call: 'importFormats' }
   | { call: 'probeVault'; contents: Uint8Array }
+  | { call: 'resealKeptKey'; envelope: string; masterKey: Uint8Array; binding: string; from: string; to: string; revision: number }
 
 export type Request = Calls & { id: number }
 export type Call = Calls

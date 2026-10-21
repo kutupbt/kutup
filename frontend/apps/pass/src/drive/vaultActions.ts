@@ -8,8 +8,7 @@ import { foldersKey } from '@kutup/drive-core/folders'
 import type { Folder } from '@kutup/drive-core/model'
 import { moveFile } from '@kutup/drive-core/move'
 import type { Session } from '@kutup/session/store'
-import { VaultHandle } from '../vault/client'
-import { keepVaultKey, keptKey, keptKeyKind, type SecretRow } from './secrets'
+import { keepCopiedKey, secretsKey, type SecretRow } from './secrets'
 import { readCurrentVault, refreshVaultFile, useCreateVaultFile, vaultTitle, type VaultFile } from './vaults'
 
 /**
@@ -42,31 +41,26 @@ export interface Duplicated {
 }
 
 /**
- * Copies a vault into its own folder under a free name ("Name (1)"). It
- * shares the vault's key: when the account keeps that key, it is kept for
- * the copy too (opened with it once, in the worker, to seal it for the new
- * file), so the copy opens with the sign-in as well.
+ * Copies a vault into its own folder under a free name (Drive's "Name (2)").
+ * It shares the vault's key: when the account keeps that key, it is kept for
+ * the copy too (the kept secret sealed again for the new file, in the
+ * worker), so the copy opens with the sign-in as well.
  */
 export function useDuplicateVault() {
   const createFile = useCreateVaultFile()
+  const queryClient = useQueryClient()
   return async (vault: VaultFile, session: Session, secrets: SecretRow[] | undefined): Promise<Duplicated> => {
     const file = await refreshVaultFile(vault.folder, vault.file)
     const { contents } = await readCurrentVault(file)
     const fileId = await createFile(vault.folder, vaultTitle(file.name) || 'vault', contents)
-    const key = await keptKey(session, secrets, file.id)
-    if (!key) return { fileId, keyKept: false }
-    const generated = (await keptKeyKind(session, secrets, file.id)) === 'generated'
-    let handle: VaultHandle | null = null
+    let keyKept = false
     try {
-      handle = await VaultHandle.open(contents, key)
-      await keepVaultKey(session, fileId, handle, generated)
-      return { fileId, keyKept: true }
+      keyKept = await keepCopiedKey(session, secrets, file.id, fileId)
     } catch {
       // The copy is there; it opens with the vault's key as it is.
-      return { fileId, keyKept: false }
-    } finally {
-      await handle?.close().catch(() => undefined)
     }
+    if (keyKept) await queryClient.invalidateQueries({ queryKey: secretsKey })
+    return { fileId, keyKept }
   }
 }
 

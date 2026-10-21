@@ -31,6 +31,11 @@ export function probeVault(contents: Uint8Array): Promise<VaultProbe> {
   return call({ call: 'probeVault', contents })
 }
 
+/** The account's kept key of vault `from` (its envelope), sealed for its copy `to` at `revision`. */
+export function resealKeptKey(envelope: string, masterKey: Uint8Array, binding: string, from: string, to: string, revision: number): Promise<string> {
+  return call({ call: 'resealKeptKey', envelope, masterKey, binding, from, to, revision })
+}
+
 let worker: Worker | null = null
 let nextId = 1
 const pending = new Map<number, { resolve: (value: unknown) => void; reject: (error: Error) => void }>()

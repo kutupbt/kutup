@@ -49,6 +49,33 @@ pub fn probe_vault(contents: &[u8]) -> Result<JsValue, JsValue> {
     })
 }
 
+/// What the account keeps for vault `from` (base64), sealed for its copy `to`
+/// at `revision` (base64): the copy has the same key, so it opens with the
+/// sign-in too. Neither vault is opened.
+#[wasm_bindgen(js_name = resealKeptKey)]
+pub fn reseal_kept_key(
+    envelope: &str,
+    master_key: &[u8],
+    binding: &str,
+    from: &str,
+    to: &str,
+    revision: f64,
+) -> Result<String, JsValue> {
+    let envelope = STANDARD
+        .decode(envelope)
+        .map_err(|_| js_error("the kept key is not base64"))?;
+    let sealed = kutup_pass::kept::reseal(
+        &envelope,
+        master_key,
+        binding,
+        &vault_id(from)?,
+        &vault_id(to)?,
+        revision_arg(revision)?,
+    )
+    .map_err(js_error)?;
+    Ok(STANDARD.encode(sealed))
+}
+
 fn to_js<T: Serialize>(value: &T) -> Result<JsValue, JsValue> {
     // `null`, not `undefined`, for what is missing.
     value
