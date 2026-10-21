@@ -24,7 +24,7 @@ interface WasmVault {
   otp(entryId: string, nowMs: number): unknown
   save(): Uint8Array
   mergeWith(base: Uint8Array | null | undefined, theirs: Uint8Array, password?: string | null, keyFile?: Uint8Array | null): unknown
-  changeKey(password: string | null | undefined, keepPassword: boolean, keyFile: Uint8Array | null | undefined, keepKeyFile: boolean, nowMs: number): void
+  changeKey(password: string | null | undefined, keepPassword: boolean, shownPassword: string | null | undefined, keyFile: Uint8Array | null | undefined, keepKeyFile: boolean, nowMs: number): unknown
   keyChangeSaved(): void
   abandonKeyChange(): void
   keyParts(): unknown
@@ -99,8 +99,7 @@ async function run(request: Request): Promise<unknown> {
     case 'merge':
       return vault(request.handle).mergeWith(request.base, request.theirs, request.theirsPassword, request.theirsKeyFile)
     case 'changeKey':
-      vault(request.handle).changeKey(request.password, request.keepPassword, request.keyFile, request.keepKeyFile, request.now)
-      return null
+      return vault(request.handle).changeKey(request.password, request.keepPassword, request.shownPassword, request.keyFile, request.keepKeyFile, request.now)
     case 'keyChangeSaved':
       vault(request.handle).keyChangeSaved()
       return null

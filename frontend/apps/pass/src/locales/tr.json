@@ -489,8 +489,8 @@
     "failure": {
       "notReady": "Kasada hâlâ kaydedilen değişiklikler var. Kaydedildi yazana kadar bekleyip yeniden deneyin.",
       "conflict": "Kasa az önce başka bir cihazda kaydedildi; o değişiklikler alınıyor. Biraz sonra yeniden deneyin.",
-      "offline": "Kutup'a ulaşılamıyor. Anahtar değiştirilmedi.",
-      "failed": "Anahtar değiştirilemedi. Hiçbir şey değişmedi."
+      "failed": "Anahtar değiştirilemedi. Hiçbir şey değişmedi.",
+      "pending": "Kutup yanıt vermedi. Kasa yeni anahtarını korur ve bağlantı gelince onunla kaydedilir; yeni anahtarı güvende tutun. Anahtar hesabınızda saklanıyorsa kasayı bir kez yenisiyle açın."
     },
     "keepFailed": "Anahtar değişti ama hesabınızda saklanamadı: kasayı bir kez yeni anahtarla açın.",
     "versionsLeft_one": "{{count}} önceki sürüm silinemedi; Drive'dan silmeyi deneyin.",

@@ -66,6 +66,23 @@ impl VaultKey {
         }
     }
 
+    /// The password's part of the composite key (its SHA-256), whichever
+    /// way the key holds it.
+    pub fn password_element(&self) -> Option<Zeroizing<[u8; 32]>> {
+        match (&self.password, &self.password_hash) {
+            (Some(password), _) => Some(kutup_crypto::pass_vault::password_hash(password)),
+            (None, Some(hash)) => Some(hash.clone()),
+            (None, None) => None,
+        }
+    }
+
+    /// Whether `password` is this key's password (compared by its hash).
+    pub fn has_this_password(&self, password: &str) -> bool {
+        self.password_element().is_some_and(|element| {
+            *element == *kutup_crypto::pass_vault::password_hash(password)
+        })
+    }
+
     /// Whether the key has a password, given as it is or as its hash.
     pub fn has_password(&self) -> bool {
         self.password.is_some() || self.password_hash.is_some()

@@ -5095,7 +5095,8 @@ version can be. **Response:** `204`.
 
 `original` as the version id deletes the file's first upload (KeePass vaults
 after a key change, so no earlier copy opens with the old key). Allowed for
-the file's owner or the original's uploader, once a whole-file version
+the file's owner or the original's uploader (`403` for anyone else who can
+see the file, `404` otherwise, as for a version), once a whole-file version
 replaced it: `409` while it is still the current content, `404` once it is
 gone. Decided under the file row's lock; the upload is marked gone and its
 uploader's storage freed in one transaction, then the stored object is

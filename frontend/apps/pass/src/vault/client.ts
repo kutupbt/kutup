@@ -142,12 +142,13 @@ export class VaultHandle {
    * from the current key (inside the worker: the page never holds it), given
    * anew, or dropped (`null`); one part at least stays.
    */
-  changeKey(change: KeyChange): Promise<void> {
+  changeKey(change: KeyChange): Promise<KeyChanged> {
     return call({
       call: 'changeKey',
       handle: this.handle,
       password: change.password === 'keep' ? null : (change.password?.set ?? null),
       keepPassword: change.password === 'keep',
+      shownPassword: change.password === 'keep' ? (change.shownPassword ?? null) : null,
       keyFile: change.keyFile === 'keep' ? null : change.keyFile,
       keepKeyFile: change.keyFile === 'keep',
       now: Date.now(),
@@ -174,10 +175,21 @@ export class VaultHandle {
   }
 }
 
-/** A key change: each part kept, set anew, or dropped (`null`). */
+/**
+ * A key change: each part kept, set anew, or dropped (`null`). With the
+ * password kept, `shownPassword` is the generated password the account
+ * keeps for it, to stay one that can be shown: the worker takes it only if
+ * it is the vault's password now.
+ */
 export interface KeyChange {
   password: 'keep' | { set: string } | null
+  shownPassword?: string | null
   keyFile: 'keep' | Uint8Array | null
+}
+
+/** What a key change did: whether the kept password is still one Kasa can show. */
+export interface KeyChanged {
+  passwordShowable: boolean
 }
 
 /** What a vault's key is made of. */

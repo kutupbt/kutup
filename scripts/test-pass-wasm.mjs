@@ -1,6 +1,7 @@
 // The Kutup Pass WASM module end to end (docs/plans/pass.md, K2b): create a
 // vault, edit it with the website's operations, save and reopen it, merge two
 // edited copies, read one-time codes and attachments.
+import { createHash } from 'node:crypto'
 import assert from 'node:assert/strict'
 import { readFile } from 'node:fs/promises'
 import { fileURLToPath } from 'node:url'
@@ -60,15 +61,15 @@ assert.deepEqual(ours.otp(twoFa, 59_000), { code: '94287082', period: 30, remain
 assert.equal(ours.otp(bank, 59_000), null)
 
 // A key changed: the new one opens the saved vault, the old one does not.
-// (password, keepPassword, keyFile, keepKeyFile, now)
+// (password, keepPassword, shownPassword, keyFile, keepKeyFile, now)
 assert.deepEqual(ours.keyParts(), { password: true, keyFile: false })
-assert.throws(() => ours.changeKey(null, false, null, false, minute(8)), /password or a key file/)
-assert.throws(() => ours.changeKey('yeni', true, null, false, minute(8)))
+assert.throws(() => ours.changeKey(null, false, null, null, false, minute(8)), /password or a key file/)
+assert.throws(() => ours.changeKey('yeni', true, null, null, false, minute(8)))
 // Undone: back to the key Drive's copy opens with.
-ours.changeKey('geçici', false, null, false, minute(8))
+ours.changeKey('geçici', false, null, null, false, minute(8))
 ours.abandonKeyChange()
 assert.ok(pass.Vault.open(ours.save(), 'parola-çğ', null, null))
-ours.changeKey('yeni', false, null, false, minute(8))
+ours.changeKey('yeni', false, null, null, false, minute(8))
 // Not kept before Drive holds it: Drive's copy still opens with the old key.
 const keepArgs = [new Uint8Array(32), '6f1d2c3b-4a59-4e8f-9a0b-1c2d3e4f5a6b', '3f1c9a52-6b7e-4f0e-9d1a-2c3b4d5e6f70', 1, false]
 assert.throws(() => ours.keepKey(...keepArgs))
@@ -83,11 +84,20 @@ assert.throws(() => pass.Vault.open(rekeyed, 'parola-çğ', null, null))
 const keyFile = pass.generateKeyFile()
 assert.match(Buffer.from(keyFile).toString(), /<Version>2\.0<\/Version>[\s\S]*<Data Hash="[0-9A-F]{8}">/)
 const withFile = pass.Vault.open(rekeyed, 'yeni', null, null)
-withFile.changeKey(null, true, keyFile, false, minute(9))
+// A stale kept copy of the password ('eski', no longer this vault's) is
+// never put in its place: the password stays, and it can't be shown.
+assert.deepEqual(withFile.changeKey(null, true, 'eski', keyFile, false, minute(9)), { passwordShowable: false })
 assert.deepEqual(withFile.keyParts(), { password: true, keyFile: true })
 const filed = withFile.save()
 assert.ok(pass.Vault.open(filed, 'yeni', null, keyFile))
+assert.throws(() => pass.Vault.open(filed, 'eski', null, keyFile))
 assert.throws(() => pass.Vault.open(filed, 'yeni', null, null))
+// The right one, opened by its hash (the kept key): taken, and showable.
+const byHashAgain = pass.Vault.open(filed, null, Buffer.from(createHash('sha256').update('yeni').digest()), keyFile)
+assert.deepEqual(byHashAgain.changeKey(null, true, 'yeni', null, false, minute(10)), { passwordShowable: true })
+assert.ok(pass.Vault.open(byHashAgain.save(), 'yeni', null, null))
+// A shown password only with the password kept.
+assert.throws(() => byHashAgain.changeKey('x', false, 'yeni', null, true, minute(11)))
 
 // Kept vault keys (kutup_pass::kept): the checked-in vectors open, and a key
 // kept from an open vault opens it again, for this account and vault only.

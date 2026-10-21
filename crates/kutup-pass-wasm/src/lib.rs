@@ -335,22 +335,35 @@ impl Vault {
 
     /// Changes the vault's key: saved with the next `save`, done once Drive
     /// holds that (`keyChangeSaved`), undone with `abandonKeyChange`.
+    /// `shownPassword`: with the password kept, the password Kutup Pass
+    /// generated for the vault as the account keeps it (to stay one that can
+    /// be shown). Used only if it is this vault's password now; otherwise
+    /// the password part is kept as it is and the answer says it can't be
+    /// shown (`{ passwordShowable }`), never a stale copy put in its place.
     #[wasm_bindgen(js_name = changeKey)]
     pub fn change_key(
         &mut self,
         password: Option<String>,
         keep_password: bool,
+        shown_password: Option<String>,
         key_file: Option<Vec<u8>>,
         keep_key_file: bool,
         now_ms: f64,
-    ) -> Result<(), JsValue> {
+    ) -> Result<JsValue, JsValue> {
         // What is kept comes from this vault's own key, never from the page.
-        if (keep_password && password.is_some()) || (keep_key_file && key_file.is_some()) {
+        if (keep_password && password.is_some())
+            || (keep_key_file && key_file.is_some())
+            || (!keep_password && shown_password.is_some())
+        {
             return Err(js_error(
                 "keep a part of the key or give a new one, not both",
             ));
         }
-        let mut new = self.key.keeping(keep_password, keep_key_file);
+        let shown = shown_password.filter(|shown| self.key.has_this_password(shown));
+        let mut new = match &shown {
+            Some(shown) => self.key.keeping(false, keep_key_file).with_password(shown),
+            None => self.key.keeping(keep_password, keep_key_file),
+        };
         if let Some(password) = password {
             new = new.with_password(&password);
         }
@@ -365,7 +378,14 @@ impl Vault {
             self.previous_key = Some((old, self.db.meta.master_key_changed));
         }
         self.db.meta.master_key_changed = changed;
-        Ok(())
+        #[derive(Serialize)]
+        #[serde(rename_all = "camelCase")]
+        struct Changed {
+            password_showable: bool,
+        }
+        to_js(&Changed {
+            password_showable: shown.is_some(),
+        })
     }
 
     /// Drive holds the file saved with the new key: the change is done, and

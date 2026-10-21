@@ -489,8 +489,8 @@
     "failure": {
       "notReady": "The vault has changes still being saved. Wait until it says Saved, then try again.",
       "conflict": "The vault was just saved on another device; its changes are being taken in. Try again in a moment.",
-      "offline": "Kutup can't be reached. The key was not changed.",
-      "failed": "The key could not be changed. Nothing was changed."
+      "failed": "The key could not be changed. Nothing was changed.",
+      "pending": "Kutup didn't answer. The vault keeps its new key and is saved under it when the connection is back; keep the new key safe. If your account keeps the key, unlock with the new one once."
     },
     "keepFailed": "The key was changed, but it could not be kept in your account: unlock the vault with the new key once.",
     "versionsLeft_one": "{{count}} earlier version could not be deleted; try deleting it from Drive.",

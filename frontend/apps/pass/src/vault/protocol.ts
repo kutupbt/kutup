@@ -19,7 +19,7 @@ type Calls =
       theirsPassword: string | null
       theirsKeyFile: Uint8Array | null
     }
-  | { call: 'changeKey'; handle: number; password: string | null; keepPassword: boolean; keyFile: Uint8Array | null; keepKeyFile: boolean; now: number }
+  | { call: 'changeKey'; handle: number; password: string | null; keepPassword: boolean; shownPassword: string | null; keyFile: Uint8Array | null; keepKeyFile: boolean; now: number }
   | { call: 'keyChangeSaved'; handle: number }
   | { call: 'abandonKeyChange'; handle: number }
   | { call: 'keyParts'; handle: number }

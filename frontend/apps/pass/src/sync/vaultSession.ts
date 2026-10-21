@@ -12,7 +12,7 @@ import { VersionConflictError, listVersions } from '@kutup/collab/api'
 import type { DriveFile, Folder } from '@kutup/drive-core/model'
 import { QuotaExceededError } from '@kutup/session/errors'
 import { ORIGINAL, readCurrentVault, readVaultVersion, refreshVaultFile, saveVaultVersion, vaultTitle } from '../drive/vaults'
-import { VaultError, VaultHandle, type KeyChange } from '../vault/client'
+import { VaultError, VaultHandle, type KeyChange, type KeyChanged } from '../vault/client'
 import type { Applied, MergeReport, Op, VaultKeyInput, VaultView } from '../vault/types'
 import { outbox } from './outbox'
 
@@ -51,7 +51,8 @@ export type KeyChangeFailure =
   | 'notReady'
   /** Another device saved meanwhile: its save is merged in, try again. */
   | 'conflict'
-  | 'offline'
+  /** Kutup didn't answer: the vault keeps the new key and saves under it when it does. */
+  | 'pending'
   | 'failed'
 
 export class KeyChangeError extends Error {
@@ -184,26 +185,44 @@ export class VaultSession {
    * the save slot meanwhile; edits made during it are saved after, under
    * the new key. On any failure the old key is back and nothing changed.
    */
-  async changeKey(change: KeyChange): Promise<void> {
+  async changeKey(change: KeyChange): Promise<KeyChanged> {
     if (!this.canEdit) throw new VaultError('this vault is read-only for you')
     if (this.saving || this.dirty || this.waitingTheirs || this.state.status !== 'saved') throw new KeyChangeError('notReady')
     let release!: () => void
     this.saving = new Promise<void>((resolve) => (release = resolve))
     let conflict = false
     try {
-      await this.handle.changeKey(change)
+      const changed = await this.handle.changeKey(change)
       let contents: Uint8Array
-      let saved: { version: string; file: DriveFile }
       try {
         contents = await this.handle.save()
+      } catch {
+        await this.handle.abandonKeyChange()
+        throw new KeyChangeError('failed')
+      }
+      let saved: { version: string; file: DriveFile }
+      try {
         saved = await this.push(contents)
       } catch (error) {
-        await this.handle.abandonKeyChange()
         if (error instanceof VersionConflictError) {
+          await this.handle.abandonKeyChange()
           conflict = true
           throw new KeyChangeError('conflict')
         }
-        throw new KeyChangeError(isOffline(error) ? 'offline' : 'failed')
+        if (isAxiosError(error) && error.response) {
+          // Answered and refused: nothing was stored.
+          await this.handle.abandonKeyChange()
+          throw new KeyChangeError('failed')
+        }
+        // No answer: Drive may hold the new version already. The new key
+        // stays, and the vault is saved under it once Kutup answers: a save
+        // that did land is then the newest version, which opens with this
+        // key and is merged; one that didn't is made now. Either way the
+        // vault ends up under the new key, never under one nobody holds.
+        this.dirty = true
+        this.set({ status: 'offline' })
+        this.scheduleRetry()
+        throw new KeyChangeError('pending')
       }
       this.file = saved.file
       this.baseVersion = saved.version
@@ -215,6 +234,7 @@ export class VaultSession {
         .put(this.userId, { fileId: this.file.id, baseVersion: this.baseVersion, base: this.base, pending: null, savedAt: Date.now() })
         .catch(() => undefined)
       this.set({ view: await this.handle.view() })
+      return changed
     } finally {
       release()
       this.saving = null
@@ -268,6 +288,8 @@ export class VaultSession {
         this.file = saved.file
         this.baseVersion = saved.version
         this.base = contents
+        // A key change whose first save got no answer is done now.
+        await this.handle.keyChangeSaved()
         // Edits made while saving stay pending in the outbox.
         if (!this.dirty) {
           await outbox.put(this.userId, { fileId: this.file.id, baseVersion: this.baseVersion, base: this.base, pending: null, savedAt: Date.now() })

@@ -157,19 +157,30 @@ export function ChangeKeyDialog({
     setPending(true)
     setError(null)
     try {
-      // A password Kasa generated and kept, kept: given as it is, so it stays
-      // one that can be shown.
+      // A password Kasa generated and kept, kept: offered as it is, so it
+      // stays one that can be shown. The worker takes it only if it is the
+      // vault's password now (a stale kept copy never replaces it).
       const keptPassword = password === 'keep' && keptGenerated ? await keptGeneratedPassword(signedIn, secrets.data, fileId).catch(() => null) : null
-      const generatedPassword = (password === 'new' && newPassword === madePassword) || keptPassword !== null
+      let changed
       try {
-        await session.changeKey({
-          password: password === 'keep' ? (keptPassword !== null ? { set: keptPassword } : 'keep') : password === 'new' ? { set: newPassword } : null,
+        changed = await session.changeKey({
+          password: password === 'keep' ? 'keep' : password === 'new' ? { set: newPassword } : null,
+          shownPassword: keptPassword,
           keyFile: keyFile === 'keep' ? 'keep' : keyFile === 'generate' ? generated.current : keyFile === 'choose' ? (chosen?.contents ?? null) : null,
         })
       } catch (failure) {
+        if (failure instanceof KeyChangeError && failure.failure === 'pending') {
+          // The new key stays and is saved once Kutup answers: nothing here
+          // to undo, and the kept key follows at the next unlock.
+          forgetGenerated()
+          toast.warning(t('changeKey.failure.pending'))
+          onOpenChange(false)
+          return
+        }
         setError(failure instanceof KeyChangeError ? t(`changeKey.failure.${failure.failure}`) : t('changeKey.failure.failed'))
         return
       }
+      const generatedPassword = password === 'new' ? newPassword === madePassword : password === 'keep' && changed.passwordShowable
       // Drive holds the vault under its new key. What the account keeps follows it.
       let keepFailed = false
       try {
