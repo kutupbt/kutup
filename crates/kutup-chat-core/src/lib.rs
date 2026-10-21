@@ -55,6 +55,7 @@ mod keys;
 mod manifest;
 mod mls_engine;
 mod mls_policy;
+mod multi_seal;
 mod padding;
 mod prekey_rotation;
 mod profile;
