@@ -23,7 +23,7 @@ import type { VaultKeyInput } from '../vault/types'
 // than this browser has seen is not used, and a new one is stored only on top
 // of the one it replaces.
 
-interface SecretRow {
+export interface SecretRow {
   fileId: string
   envelope: string
   /** The revision in the envelope's header, as the server read it. */

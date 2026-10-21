@@ -11,7 +11,7 @@ import { isAxiosError } from 'axios'
 import { VersionConflictError, listVersions } from '@kutup/collab/api'
 import type { DriveFile, Folder } from '@kutup/drive-core/model'
 import { QuotaExceededError } from '@kutup/session/errors'
-import { ORIGINAL, readCurrentVault, readVaultVersion, refreshVaultFile, saveVaultVersion } from '../drive/vaults'
+import { ORIGINAL, readCurrentVault, readVaultVersion, refreshVaultFile, saveVaultVersion, vaultTitle } from '../drive/vaults'
 import { VaultError, VaultHandle } from '../vault/client'
 import type { Applied, MergeReport, Op, VaultKeyInput, VaultView } from '../vault/types'
 import { outbox } from './outbox'
@@ -140,6 +140,15 @@ export class VaultSession {
     if (!this.canEdit) throw new VaultError('this vault is read-only for you')
     const applied = await this.handle.apply(op)
     if (applied.changed) {
+      // A rename made while locked, or in Drive, reaches the name inside the
+      // KeePass file with the next edit (KeePassXC shows that one).
+      const title = vaultTitle(this.file.name)
+      if (op.op !== 'updateVault' && title) {
+        const view = await this.handle.view()
+        if (view.name !== title) {
+          await this.handle.apply({ op: 'updateVault', name: title, description: view.description, defaultUserName: view.defaultUserName })
+        }
+      }
       this.dirty = true
       this.set({ view: await this.handle.view(), status: this.state.status === 'saved' ? 'saving' : this.state.status })
       this.scheduleSave(SAVE_DELAY_MS)
