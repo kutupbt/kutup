@@ -368,8 +368,13 @@ async fn forget(
 // sign-in, with the password, starts its own. Setting or removing the PIN
 // takes the account password.
 
-/// Wrong PINs in a row before the sign-in ends.
-pub const PIN_ATTEMPTS: i16 = 3;
+/// Wrong PINs in a row before the sign-in ends (`pass_pin_attempts`).
+fn pin_attempts() -> i16 {
+    i16::try_from(crate::ratelimit::value(
+        crate::ratelimit::Limit::PassPinAttempts,
+    ))
+    .unwrap_or(i16::MAX)
+}
 
 fn valid_pin(pin: &str) -> bool {
     pin.len() == 6 && pin.bytes().all(|b| b.is_ascii_digit())
@@ -573,7 +578,7 @@ pub async fn verify_pin(
     )
     .bind(sign_in)
     .bind(user_id)
-    .bind(PIN_ATTEMPTS)
+    .bind(pin_attempts())
     .fetch_optional(&state.pool)
     .await?;
     let Some(failures) = reserved else {
@@ -591,7 +596,7 @@ pub async fn verify_pin(
         return Ok(StatusCode::NO_CONTENT.into_response());
     }
     tracing::warn!(user_id = %user_id, failures, "wrong Pass PIN");
-    if failures >= PIN_ATTEMPTS {
+    if failures >= pin_attempts() {
         crate::sessions::sign_out(&state.pool, user.session.session_id).await?;
         tracing::warn!(user_id = %user_id, "Pass PIN tries used up; the sign-in was ended");
         return Ok(refusal(StatusCode::FORBIDDEN, "signedOut", Some(0)));
@@ -599,7 +604,7 @@ pub async fn verify_pin(
     Ok(refusal(
         StatusCode::FORBIDDEN,
         "wrongPin",
-        Some(PIN_ATTEMPTS - failures),
+        Some(pin_attempts() - failures),
     ))
 }
 

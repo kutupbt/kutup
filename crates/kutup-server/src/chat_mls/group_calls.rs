@@ -10,7 +10,6 @@
 //! can map to a person and the SFU cannot.
 
 use std::sync::LazyLock;
-use std::time::Duration;
 
 use axum::body::Bytes;
 use axum::extract::State;
@@ -26,7 +25,7 @@ use super::{signed_federation_error, signed_federation_json};
 use crate::error::{AppError, AppResult};
 use crate::federation::FederationRequestSpec;
 use crate::middleware::AuthUser;
-use crate::ratelimit::RateLimiter;
+use crate::ratelimit::{Limit, RateLimiter};
 use crate::AppState;
 
 const FEDERATION_PATH: &str = "/api/fed/chat/group-calls/token";
@@ -34,9 +33,9 @@ const FEDERATION_PATH: &str = "/api/fed/chat/group-calls/token";
 const TOKEN_TTL_SECONDS: i64 = 6 * 60 * 60;
 
 static ACCOUNT_TOKENS: LazyLock<RateLimiter> =
-    LazyLock::new(|| RateLimiter::new(30, Duration::from_secs(60)));
+    LazyLock::new(|| RateLimiter::registered(Limit::GroupCallAccountTokens));
 static ORIGIN_TOKENS: LazyLock<RateLimiter> =
-    LazyLock::new(|| RateLimiter::new(300, Duration::from_secs(60)));
+    LazyLock::new(|| RateLimiter::registered(Limit::GroupCallOriginTokens));
 
 #[derive(Debug, Clone, Deserialize, Serialize, utoipa::ToSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]

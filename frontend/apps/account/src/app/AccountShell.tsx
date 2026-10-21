@@ -1,6 +1,6 @@
 import { FeedbackButton } from '@kutup/ui/components/feedback'
 import { feedbackServices } from '@kutup/session/feedback'
-import { Activity, BookUser, ChartPie, CircleUser, FileType, Flag, Globe, HardDrive, Images, KeyRound, LayoutGrid, Mail as MailIcon, Mails, Map, MessageSquareText, MessagesSquare, MonitorSmartphone, Send, Settings2, ShieldCheck, Ticket, UserRound, Users } from 'lucide-react'
+import { Activity, BookUser, ChartPie, CircleUser, FileType, Flag, Gauge, Globe, HardDrive, Images, KeyRound, LayoutGrid, Mail as MailIcon, Mails, Map, MessageSquareText, MessagesSquare, MonitorSmartphone, Send, Settings2, ShieldCheck, Ticket, UserRound, Users } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { Outlet, useNavigate } from 'react-router-dom'
 import { appUrl } from '@kutup/session/apps'
@@ -76,6 +76,7 @@ export function AccountShell() {
               <SidebarNavLink to="/admin/activity" icon={<Activity />} label={t('nav.activity')} />
               <SidebarNavLink to="/admin/federation" icon={<Globe />} label={t('nav.federation')} />
               <SidebarNavLink to="/admin/settings" icon={<Settings2 />} label={t('nav.serverSettings')} />
+              <SidebarNavLink to="/admin/rate-limits" icon={<Gauge />} label={t('nav.rateLimits')} />
               <SidebarNavLink to="/admin/maps" icon={<Map />} label={t('nav.adminMaps')} />
               <SidebarNavLink to="/admin/mail" end icon={<Send />} label={t('nav.mailSending')} />
               <SidebarNavLink to="/admin/mail/groups" icon={<Mails />} label={t('nav.mailGroups')} />

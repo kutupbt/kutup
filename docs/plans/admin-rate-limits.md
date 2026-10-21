@@ -1,8 +1,9 @@
 # Rate limits administrators change
 
-Status: proposal (second session, 2026-10-21), for the roadmap item from #297
-and the user's standing rule: every limit is an administrators' setting in the
-admin UI, never a constant.
+Status: built (second session, 2026-10-21; plan #299), for the roadmap item
+from #297 and the user's standing rule: every limit is an administrators'
+setting in the admin UI, never a constant. The registry is
+`crates/kutup-server/src/ratelimit/registry.rs`; the API is in `docs/api.md`.
 
 ## Today
 

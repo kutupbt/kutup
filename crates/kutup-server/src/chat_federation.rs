@@ -2911,8 +2911,13 @@ async fn charge_sealed_origin(
         .concat(),
     )
     .into();
-    crate::handlers::chat::consume_anonymous_rate(tx, "federation_origin", &origin_digest, 600, 60)
-        .await
+    crate::handlers::chat::consume_anonymous_rate(
+        tx,
+        "federation_origin",
+        &origin_digest,
+        crate::ratelimit::Limit::SealedOrigin,
+    )
+    .await
 }
 
 /// Refuses a sealed transaction (400). The refusal is final only when it is

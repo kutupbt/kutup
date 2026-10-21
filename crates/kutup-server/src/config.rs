@@ -743,7 +743,7 @@ impl Env {
     }
 
     /// The value, or `None` when unset or blank.
-    fn set(&self, key: &str) -> Option<String> {
+    pub(crate) fn set(&self, key: &str) -> Option<String> {
         self.raw(key).filter(|value| !value.trim().is_empty())
     }
 
@@ -857,12 +857,12 @@ impl Env {
     pub(crate) fn unknown_with_prefix(
         &self,
         prefix: &str,
-        known: &[(&str, u64)],
+        known: &dyn Fn(&str) -> bool,
     ) -> Option<Vec<String>> {
         let names = (self.names)();
         let unknown: Vec<String> = names
             .into_iter()
-            .filter(|name| name.starts_with(prefix) && !known.iter().any(|(k, _)| k == name))
+            .filter(|name| name.starts_with(prefix) && !known(name))
             .collect();
         (!unknown.is_empty()).then_some(unknown)
     }

@@ -238,15 +238,17 @@ pub(crate) struct FrameBudget {
 }
 
 impl FrameBudget {
-    const FRAMES_PER_SEC: f64 = 50.0;
-    const FRAME_BURST: f64 = 500.0;
-    const BYTES_PER_SEC: f64 = 1024.0 * 1024.0;
-    const BYTE_BURST: f64 = 16.0 * 1024.0 * 1024.0;
+    /// A registry value (`collab_frames_per_second`, `collab_frame_burst`,
+    /// `collab_bytes_per_second`, `collab_byte_burst`), read at each frame.
+    fn of(limit: crate::ratelimit::Limit) -> f64 {
+        crate::ratelimit::value(limit) as f64
+    }
 
     pub(crate) fn new() -> Self {
+        use crate::ratelimit::Limit;
         FrameBudget {
-            frames: Self::FRAME_BURST,
-            bytes: Self::BYTE_BURST,
+            frames: Self::of(Limit::CollabFrameBurst),
+            bytes: Self::of(Limit::CollabByteBurst),
             last: std::time::Instant::now(),
         }
     }
@@ -256,8 +258,11 @@ impl FrameBudget {
         let now = std::time::Instant::now();
         let elapsed = now.duration_since(self.last).as_secs_f64();
         self.last = now;
-        self.frames = (self.frames + elapsed * Self::FRAMES_PER_SEC).min(Self::FRAME_BURST);
-        self.bytes = (self.bytes + elapsed * Self::BYTES_PER_SEC).min(Self::BYTE_BURST);
+        use crate::ratelimit::Limit;
+        self.frames = (self.frames + elapsed * Self::of(Limit::CollabFramesPerSecond))
+            .min(Self::of(Limit::CollabFrameBurst));
+        self.bytes = (self.bytes + elapsed * Self::of(Limit::CollabBytesPerSecond))
+            .min(Self::of(Limit::CollabByteBurst));
         if self.frames < 1.0 || self.bytes < len as f64 {
             return false;
         }

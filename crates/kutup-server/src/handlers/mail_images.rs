@@ -31,15 +31,23 @@ use url::Url;
 use crate::error::{AppError, AppResult};
 use crate::middleware::AuthUser;
 use crate::public_fetch::{self, Checks, Options};
-use crate::ratelimit::RateLimiter;
+use crate::ratelimit::{Limit, RateLimiter};
 
 const IMAGE_LIMIT_BYTES: usize = 5 * 1024 * 1024;
-/// Bytes an account may fetch a minute, refilled evenly.
-const BYTES_PER_MINUTE: f64 = 64.0 * 1024.0 * 1024.0;
-/// Images an account fetches at once (the reader asks six at a time).
-const PER_ACCOUNT_AT_ONCE: usize = 6;
-/// Images fetched at once on this server, for all accounts.
-const SERVER_AT_ONCE: usize = 32;
+/// Bytes an account may fetch a minute, refilled evenly
+/// (`mail_image_bytes`; the account's own where set).
+fn bytes_per_minute(account: &str) -> f64 {
+    crate::ratelimit::value_for(Limit::MailImageBytes, account) as f64
+}
+/// Images an account fetches at once (`mail_images_at_once`, 6 at first:
+/// the reader asks six at a time).
+fn per_account_at_once(account: &str) -> usize {
+    usize::try_from(crate::ratelimit::value_for(
+        Limit::MailImagesAtOnce,
+        account,
+    ))
+    .unwrap_or(usize::MAX)
+}
 /// The whole fetch, redirects included.
 const DEADLINE: Duration = Duration::from_secs(10);
 const USER_AGENT: &str = "Mozilla/5.0 (compatible; KutupImageProxy/1.0)";
@@ -49,11 +57,10 @@ pub const TRACKER_HEADER: &str = "x-kutup-tracker";
 
 /// 120 images a minute per account, as Pass icons' fetches.
 pub(crate) static MAIL_IMAGES: LazyLock<RateLimiter> =
-    LazyLock::new(|| RateLimiter::new(120, Duration::from_secs(60)));
+    LazyLock::new(|| RateLimiter::registered(Limit::MailImages));
 static BYTES: LazyLock<ByteBudget> = LazyLock::new(ByteBudget::default);
 static AT_ONCE: LazyLock<AccountSlots> = LazyLock::new(AccountSlots::default);
-static FETCHING: LazyLock<tokio::sync::Semaphore> =
-    LazyLock::new(|| tokio::sync::Semaphore::new(SERVER_AT_ONCE));
+static FETCHING: LazyLock<ServerSlots> = LazyLock::new(ServerSlots::default);
 
 /// Known open-tracking addresses: a host (or its subdomains) and, when the
 /// host also serves real images, the path where its pixels live.
@@ -151,8 +158,7 @@ pub async fn fetch(auth: AuthUser, Json(request): Json<ImageRequest>) -> AppResu
                 StatusCode::SERVICE_UNAVAILABLE,
                 "the image proxy is busy; try again shortly",
             )
-        })?
-        .map_err(|_| AppError::internal("image fetches closed"))?;
+        })?;
     let fetched = tokio::time::timeout(DEADLINE, fetch_image(url, &Checks::PUBLIC))
         .await
         .map_err(|_| public_fetch::unusable("the site did not answer in time"))??;
@@ -184,7 +190,7 @@ pub async fn fetch(auth: AuthUser, Json(request): Json<ImageRequest>) -> AppResu
         .into_response())
 }
 
-/// Bytes per account as a bucket refilled evenly ([`BYTES_PER_MINUTE`]): a
+/// Bytes per account as a bucket refilled evenly ([`bytes_per_minute`]): a
 /// fetch takes the most it may bring before it starts, under one lock, and
 /// what it did not use comes back when it succeeds.
 #[derive(Default)]
@@ -196,11 +202,11 @@ impl ByteBudget {
     fn reserve(&self, account: &str, bytes: f64) -> bool {
         let now = Instant::now();
         let mut buckets = self.buckets.lock().expect("byte budget lock");
+        let per_minute = bytes_per_minute(account);
         let (at, left) = buckets
             .entry(account.to_owned())
-            .or_insert((now, BYTES_PER_MINUTE));
-        *left = (*left + now.duration_since(*at).as_secs_f64() * BYTES_PER_MINUTE / 60.0)
-            .min(BYTES_PER_MINUTE);
+            .or_insert((now, per_minute));
+        *left = (*left + now.duration_since(*at).as_secs_f64() * per_minute / 60.0).min(per_minute);
         *at = now;
         if *left < bytes {
             return false;
@@ -212,7 +218,7 @@ impl ByteBudget {
     fn give_back(&self, account: &str, bytes: f64) {
         let mut buckets = self.buckets.lock().expect("byte budget lock");
         if let Some((_, left)) = buckets.get_mut(account) {
-            *left = (*left + bytes).min(BYTES_PER_MINUTE);
+            *left = (*left + bytes).min(bytes_per_minute(account));
         }
     }
 
@@ -222,14 +228,14 @@ impl ByteBudget {
         self.buckets
             .lock()
             .expect("byte budget lock")
-            .retain(|_, (at, left)| {
-                *left + now.duration_since(*at).as_secs_f64() * BYTES_PER_MINUTE / 60.0
-                    < BYTES_PER_MINUTE
+            .retain(|account, (at, left)| {
+                let per_minute = bytes_per_minute(account);
+                *left + now.duration_since(*at).as_secs_f64() * per_minute / 60.0 < per_minute
             });
     }
 }
 
-/// Fetches under way per account ([`PER_ACCOUNT_AT_ONCE`]).
+/// Fetches under way per account ([`per_account_at_once`]).
 #[derive(Default)]
 struct AccountSlots {
     taken: Mutex<HashMap<String, usize>>,
@@ -244,7 +250,7 @@ impl AccountSlots {
     fn take(&self, account: &str) -> Option<Slot<'_>> {
         let mut taken = self.taken.lock().expect("image slots lock");
         let count = taken.entry(account.to_owned()).or_insert(0);
-        if *count >= PER_ACCOUNT_AT_ONCE {
+        if *count >= per_account_at_once(account) {
             return None;
         }
         *count += 1;
@@ -264,6 +270,43 @@ impl Drop for Slot<'_> {
                 taken.remove(&self.account);
             }
         }
+    }
+}
+
+/// Fetches under way on this server, for all accounts
+/// (`mail_images_server_at_once`, read at each try so a change applies at
+/// once); the others wait their turn.
+#[derive(Default)]
+struct ServerSlots {
+    taken: Mutex<usize>,
+    freed: tokio::sync::Notify,
+}
+
+struct ServerSlot<'a>(&'a ServerSlots);
+
+impl ServerSlots {
+    async fn acquire(&self) -> ServerSlot<'_> {
+        loop {
+            // Asked for before the check, so a slot freed in between wakes it.
+            let freed = self.freed.notified();
+            {
+                let mut taken = self.taken.lock().expect("server slots lock");
+                let limit = usize::try_from(crate::ratelimit::value(Limit::MailImagesServerAtOnce))
+                    .unwrap_or(usize::MAX);
+                if *taken < limit {
+                    *taken += 1;
+                    return ServerSlot(self);
+                }
+            }
+            freed.await;
+        }
+    }
+}
+
+impl Drop for ServerSlot<'_> {
+    fn drop(&mut self) {
+        *self.0.taken.lock().expect("server slots lock") -= 1;
+        self.0.freed.notify_one();
     }
 }
 
@@ -534,7 +577,7 @@ mod tests {
     #[test]
     fn an_account_fetches_six_at_once() {
         let slots = AccountSlots::default();
-        let held: Vec<_> = (0..PER_ACCOUNT_AT_ONCE)
+        let held: Vec<_> = (0..per_account_at_once("a"))
             .map(|_| slots.take("a").unwrap())
             .collect();
         assert!(slots.take("a").is_none());

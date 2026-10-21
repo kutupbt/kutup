@@ -200,15 +200,16 @@ pub fn outside_address(value: &str) -> Option<String> {
 
 /// A return path lasts this many days (as SRS0's timestamp).
 const RETURN_PATH_DAYS: i64 = 21;
-/// Bounces in one day that pause an outside forwarding.
-pub const MAX_BOUNCES_PER_DAY: i32 = 5;
-/// Forwardings one account may make in an hour.
-pub const MAX_CREATED_PER_HOUR: i64 = 10;
-/// Confirmation emails one outside forwarding may send in a day.
-pub const MAX_INVITES_PER_DAY: i32 = 3;
-/// Confirmation emails one account may cause in a day, across its
-/// forwardings, deleted ones included.
-pub const MAX_CONFIRMATIONS_PER_ACCOUNT_PER_DAY: i32 = 10;
+/// A forwarding limit as the database counters compare it: the registry's
+/// value (`forwarding_*`, `forwardings_created`; one account's own where it
+/// counts per account).
+pub fn limit(limit: crate::ratelimit::Limit, account: Option<Uuid>) -> i32 {
+    let value = match account {
+        Some(account) => crate::ratelimit::value_for(limit, &account.to_string()),
+        None => crate::ratelimit::value(limit),
+    };
+    i32::try_from(value).unwrap_or(i32::MAX)
+}
 
 /// What an account spends of its forwarding allowances.
 pub enum Charge {
@@ -257,9 +258,18 @@ pub async fn charge(
     .bind(created)
     .bind(confirmations)
     .bind(forwards)
-    .bind(MAX_CREATED_PER_HOUR as i32)
-    .bind(MAX_CONFIRMATIONS_PER_ACCOUNT_PER_DAY)
-    .bind(OUTSIDE_PER_ACCOUNT_PER_DAY as i32)
+    .bind(limit(
+        crate::ratelimit::Limit::ForwardingsCreated,
+        Some(account),
+    ))
+    .bind(limit(
+        crate::ratelimit::Limit::ForwardingConfirmationsSent,
+        Some(account),
+    ))
+    .bind(limit(
+        crate::ratelimit::Limit::ForwardingOutsideAccount,
+        Some(account),
+    ))
     .execute(&mut **tx)
     .await?;
     Ok(charged.rows_affected() == 1)
@@ -365,7 +375,7 @@ pub fn bounce_forwarding(keys: &OpaqueSetupKeys, local: &str) -> Option<Uuid> {
 }
 
 /// A bounce came back for an outside forwarding: counted for the day, and
-/// after [`MAX_BOUNCES_PER_DAY`] the forwarding pauses with a notice.
+/// after `forwarding_bounces` bounces the forwarding pauses with a notice.
 pub async fn record_bounce(pool: &sqlx::PgPool, forwarding: Uuid) -> Result<(), sqlx::Error> {
     sqlx::query(
         "UPDATE mail_forwardings SET
@@ -383,7 +393,7 @@ pub async fn record_bounce(pool: &sqlx::PgPool, forwarding: Uuid) -> Result<(), 
           WHERE id = $1 AND state = 'active' AND bounces_today >= $2",
     )
     .bind(forwarding)
-    .bind(MAX_BOUNCES_PER_DAY)
+    .bind(limit(crate::ratelimit::Limit::ForwardingBounces, None))
     .execute(pool)
     .await?;
     Ok(())
@@ -467,11 +477,6 @@ pub struct Arrived {
     /// re-sends. `None` for end-to-end Kutup mail, which can't go outside.
     pub plaintext: Option<std::sync::Arc<Vec<u8>>>,
 }
-
-/// What one forwarding of an address may re-send outside in a day, and one
-/// account across its forwardings.
-pub const OUTSIDE_PER_FORWARDING_PER_DAY: i32 = 200;
-pub const OUTSIDE_PER_ACCOUNT_PER_DAY: i64 = 500;
 
 /// Whether the address has an active forwarding: the arrival paths ask
 /// before copying a message or starting a task for it.
@@ -731,7 +736,7 @@ async fn claim_budget(
           WHERE id = $1 AND (day <> current_date OR sent_today < $2)",
     )
     .bind(forwarding)
-    .bind(OUTSIDE_PER_FORWARDING_PER_DAY)
+    .bind(limit(crate::ratelimit::Limit::ForwardingOutside, None))
     .execute(&mut *tx)
     .await?
     .rows_affected()

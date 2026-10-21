@@ -40,7 +40,7 @@ use crate::error::{AppError, AppResult};
 use crate::handlers::trusted_uuid;
 use crate::middleware::AuthUser;
 use crate::public_fetch;
-use crate::ratelimit::RateLimiter;
+use crate::ratelimit::{Limit, RateLimiter};
 use crate::AppState;
 
 const PAGE_LIMIT_BYTES: usize = 512 * 1024;
@@ -63,11 +63,11 @@ const CACHE_BYTES: usize = 64 * 1024 * 1024;
 
 /// 600 answers a minute per account: opening a large vault asks for many.
 pub(crate) static PASS_ICONS: LazyLock<RateLimiter> =
-    LazyLock::new(|| RateLimiter::new(600, Duration::from_secs(60)));
+    LazyLock::new(|| RateLimiter::registered(Limit::PassIcons));
 /// 120 domains fetched a minute per account (each a page and a few icons);
 /// what the cache answers does not count.
 pub(crate) static PASS_ICON_FETCHES: LazyLock<RateLimiter> =
-    LazyLock::new(|| RateLimiter::new(120, Duration::from_secs(60)));
+    LazyLock::new(|| RateLimiter::registered(Limit::PassIconFetches));
 /// Domains fetched at once on this server, for all accounts.
 static FETCHING: LazyLock<tokio::sync::Semaphore> =
     LazyLock::new(|| tokio::sync::Semaphore::new(16));

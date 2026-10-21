@@ -892,11 +892,12 @@ an edit. Plan: [`plans/pass.md`](plans/pass.md); research and decisions:
 
 ## Polish / smaller items (future)
 
-- **Rate limits administrators can change (2026-10-21):** the `RATE_LIMIT_*`
-  limits (per address, account and peer) are read from the environment at
-  start. Per the standing rule (every limit an administrators' setting), move
-  them to site settings under Administration, applied without a restart, as
-  the group, mail-domain and multi-recipient limits already are.
+- **Rate limits across backends (2026-10-21):** every rate limit is an
+  administrators' setting (Administration → Rate limits, per account where it
+  counts per account), but the windows are counted in each backend's memory.
+  Before running several backends behind a balancer, move the
+  security-relevant ones (sign-in, registration, recovery) to database
+  counters like the sealed-sender budgets (docs/plans/admin-rate-limits.md §5).
 
 ### Chat app (web) follow-ups
 

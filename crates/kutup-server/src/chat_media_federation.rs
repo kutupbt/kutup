@@ -641,8 +641,13 @@ async fn reserve_inbound_offer(
         tx.commit().await?;
         return Ok(InboundReservation::Final(StatusCode::NOT_FOUND, response));
     };
-    chat_media::consume_media_rate(&mut tx, "capability_minute", &capability_digest, 120, 60)
-        .await?;
+    chat_media::consume_media_rate(
+        &mut tx,
+        "capability_minute",
+        &capability_digest,
+        crate::ratelimit::Limit::MediaCapabilityMinute,
+    )
+    .await?;
     chat_media::consume_media_rate(
         &mut tx,
         "federation_origin",
@@ -654,8 +659,7 @@ async fn reserve_inbound_offer(
             .concat(),
         )
         .into(),
-        600,
-        60,
+        crate::ratelimit::Limit::MediaOrigin,
     )
     .await?;
 
