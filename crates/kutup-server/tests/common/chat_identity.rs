@@ -13,8 +13,8 @@ use base64::engine::general_purpose::{STANDARD, URL_SAFE_NO_PAD};
 use base64::Engine;
 use ed25519_dalek::{Signer as _, SigningKey};
 use kutup_chat_proto::{
-    AccountIdentitySuiteId, AccountManifestDeviceV2, AccountManifestDriveKeysV1,
-    AccountManifestV2, AccountRef, DeviceRegistrationV1, DirectChatSuiteId, EcPreKey, KemPreKey,
+    AccountIdentitySuiteId, AccountManifestDeviceV2, AccountManifestDriveKeysV1, AccountManifestV2,
+    AccountRef, DeviceRegistrationV1, DirectChatSuiteId, EcPreKey, KemPreKey,
     RegisterChatDeviceRequestV2, CHAT_DEVICE_HEADER,
 };
 use libsignal_protocol::{kem, IdentityKeyPair, KeyPair};
@@ -156,10 +156,7 @@ impl ChatAccount {
             account: self.account.clone(),
             incarnation_id: hex::encode(incarnation.finalize()),
             sequence: self.head.as_ref().map_or(1, |head| head.sequence + 1),
-            previous_hash: self
-                .head
-                .as_ref()
-                .map(|head| head.manifest_hash().unwrap()),
+            previous_hash: self.head.as_ref().map(|head| head.manifest_hash().unwrap()),
             identity_key: self.identity_key(),
             drive: self.drive.clone(),
             devices: listed,
