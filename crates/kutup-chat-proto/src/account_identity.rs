@@ -4,11 +4,8 @@
 //! distribution, for the account identity), re-registration, per-device
 //! credentials, and the `accountIdentity` sync a distribution sends.
 //!
-//! These types arrive beside the V1 ones they replace. The cutover (the server
-//! migration and the clients, which land together) deletes
-//! `AccountManifestV1`, `UserPreKeyBundlesResponse` and the V1
-//! `RegisterChatDeviceRequest`, and nothing then accepts them: there is no
-//! legacy path.
+//! These types replaced the V1 manifest, bundles and registration request,
+//! which nothing accepts any more: there is no legacy path.
 //!
 //! Limits (envelope sizes, token lifetimes, rates) are site settings and live
 //! in the server; the bounds here are the formats' own.
@@ -365,7 +362,7 @@ pub struct AccountManifestPublicationV2 {
 }
 
 /// A bounded run of the V2 chain, by exact sequence cursor, as
-/// [`crate::AccountManifestHistoryPageV1`].
+/// the V1 page it replaced.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[serde(rename_all = "camelCase")]
