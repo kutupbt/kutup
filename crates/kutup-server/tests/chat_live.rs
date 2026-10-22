@@ -377,7 +377,7 @@ fn chat_backup_lifecycle(
     assert_eq!(retry["alreadyStored"], true);
 
     let mut changed_append = append.clone();
-    changed_append.account_manifest_sequence = 2;
+    changed_append.account_manifest_sequence = manifest_sequence + 1;
     assert_eq!(
         owner
             .auth(c.post(format!("{base}/api/chat/backup/segments")))
