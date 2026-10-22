@@ -215,17 +215,7 @@ pub async fn disable(
         ));
     }
     change.check_lists_exactly(None).await?;
-    if change
-        .signed
-        .list
-        .keys
-        .iter()
-        .any(|key| key.flags & FLAG_NOT_OBSOLETE != 0)
-    {
-        return Err(AppError::bad_request(
-            "a disabled address's keys are not encrypted to",
-        ));
-    }
+    // Disabled first: finishing checks its list has no key to encrypt to.
     sqlx::query("UPDATE mail_addresses SET disabled_at = now() WHERE id = $1")
         .bind(address)
         .execute(&mut *change.tx)

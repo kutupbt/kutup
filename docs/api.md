@@ -1623,7 +1623,9 @@ Publish the next signed key list for the same keys: another key made primary,
 or a key marked obsolete (flag `NOT_OBSOLETE` cleared: not encrypted to, still
 opens older mail) or compromised (both flags cleared: its signatures are no
 longer trusted either). The list is checked as for adding a key and must list
-exactly the stored keys; its primary must keep both flags.
+exactly the stored keys; its primary must keep both flags. A list with no key to
+encrypt to (every `NOT_OBSOLETE` cleared, the primary still `NOT_COMPROMISED`)
+is a disabled address's, and only Disable publishes one (Proton's).
 
 **Auth:** Bearer JWT
 
