@@ -223,6 +223,10 @@ export interface AdminSettings {
   chatLinkTokenSeconds: number
   chatLinkTokensPerAccount: number
   chatProvisionBodyBytes: number
+  chatMaxActiveDevices: number
+  chatProvisioningTicketSeconds: number
+  chatProvisioningSocketsPerAccount: number
+  chatDistributionMessageBytes: number
 }
 
 export type FederationMode = 'disabled' | 'allowlist' | 'blocklist' | 'open'

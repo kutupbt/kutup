@@ -462,9 +462,9 @@ and prekeys (Signal's `/v2/keys`).
 
 **Federation:** `fetch_remote_bundles` verifies the attached manifest (as
 `fetch_remote_manifest` does) and the bundles against it. A distribution or
-a reset is pushed to peer servers as a device revocation is (the
-manifest-changed notice to the peers that serve this account's contacts),
-so their clients fetch it. A remote account's sender certificates carry its
+a reset isn't pushed to peer servers: their clients learn it lazily, as
+they learn of a revoked device, when their next send answers `409` or `410`
+and they fetch the account's manifest and bundles again. A remote account's sender certificates carry its
 identity key; receiving clients check them against the account's federated
 manifest (client section); a server checks only that its own certificates
 match the issuing account's current identity.

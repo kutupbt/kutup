@@ -485,10 +485,47 @@ pub const CHAT_PROVISION_BODY_BYTES: NumericSetting = NumericSetting {
     min: 4 * 1024,
     max: kutup_chat_proto::MAX_PROVISION_BODY_BYTES as i64,
 };
-pub const CHAT_IDENTITY_SETTINGS: [NumericSetting; 3] = [
+/// Chat installations one account may have (Chat V1's hard cap is 10).
+pub const CHAT_MAX_ACTIVE_DEVICES: NumericSetting = NumericSetting {
+    key: "chat_max_active_devices",
+    field: "chatMaxActiveDevices",
+    default: 10,
+    min: 1,
+    max: 10,
+};
+/// How long a provisioning socket's ticket stays usable, in seconds.
+pub const CHAT_PROVISIONING_TICKET_SECONDS: NumericSetting = NumericSetting {
+    key: "chat_provisioning_ticket_seconds",
+    field: "chatProvisioningTicketSeconds",
+    default: 60,
+    min: 10,
+    max: 600,
+};
+/// Provisioning sockets one account may hold open at once.
+pub const CHAT_PROVISIONING_SOCKETS_PER_ACCOUNT: NumericSetting = NumericSetting {
+    key: "chat_provisioning_sockets_per_account",
+    field: "chatProvisioningSocketsPerAccount",
+    default: 3,
+    min: 1,
+    max: 20,
+};
+/// The largest sync one identity distribution carries to one device, in
+/// bytes (its ciphertext).
+pub const CHAT_DISTRIBUTION_MESSAGE_BYTES: NumericSetting = NumericSetting {
+    key: "chat_distribution_message_bytes",
+    field: "chatDistributionMessageBytes",
+    default: 64 * 1024,
+    min: 1024,
+    max: 1024 * 1024,
+};
+pub const CHAT_IDENTITY_SETTINGS: [NumericSetting; 7] = [
     CHAT_LINK_TOKEN_SECONDS,
     CHAT_LINK_TOKENS_PER_ACCOUNT,
     CHAT_PROVISION_BODY_BYTES,
+    CHAT_MAX_ACTIVE_DEVICES,
+    CHAT_PROVISIONING_TICKET_SECONDS,
+    CHAT_PROVISIONING_SOCKETS_PER_ACCOUNT,
+    CHAT_DISTRIBUTION_MESSAGE_BYTES,
 ];
 
 /// Every whole-number setting `/api/admin/settings` lists by field.

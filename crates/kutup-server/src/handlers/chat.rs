@@ -442,7 +442,7 @@ pub async fn register_device(
     // device, names the row it made.
     let rows: Vec<(i32, Vec<u8>, Vec<u8>)> = sqlx::query_as(
         "SELECT device_id, credential_salt, credential_hash FROM chat_devices
-          WHERE user_id = $1 ORDER BY device_id",
+          WHERE user_id = $1 AND expired_at IS NULL ORDER BY device_id",
     )
     .bind(user_id)
     .fetch_all(&mut *tx)
@@ -461,7 +461,13 @@ pub async fn register_device(
         if let DeviceRegistrationV1::Reregistration { manifest } = &req.registration {
             // A new identity (Signal's reclaimAccount): the manifest lists this
             // device alone, and every other device of the account goes with it.
-            store_manifest_v2(&mut tx, &state, user_id, manifest, IdentityChange::New).await?;
+            // Its manifest already the head without this device's credential
+            // (a retry with it answered above): a replay, never a second
+            // reclaim.
+            if !store_manifest_v2(&mut tx, &state, user_id, manifest, IdentityChange::New).await? {
+                return Err(AppError::conflict("this manifest is already the account's")
+                    .with_details(json!({ "code": "manifestConflict" })));
+            }
             let shared: Vec<Uuid> = sqlx::query_scalar(
                 "SELECT DISTINCT shared_payload_id FROM chat_mailbox
               WHERE recipient_user_id = $1 AND shared_payload_id IS NOT NULL",
@@ -470,6 +476,11 @@ pub async fn register_device(
             .fetch_all(&mut *tx)
             .await?;
             sqlx::query("DELETE FROM chat_mls_devices WHERE user_id = $1")
+                .bind(user_id)
+                .execute(&mut *tx)
+                .await?;
+            // Link tokens die with the device set they were asked under.
+            sqlx::query("DELETE FROM chat_link_tokens WHERE user_id = $1")
                 .bind(user_id)
                 .execute(&mut *tx)
                 .await?;
@@ -501,8 +512,12 @@ pub async fn register_device(
             let token =
                 kutup_chat_proto::decode_link_token(link_token).map_err(AppError::bad_request)?;
             let used: Option<i32> = sqlx::query_scalar(
-                "UPDATE chat_link_tokens SET used_at = now()
-              WHERE token_hash = $1 AND user_id = $2 AND used_at IS NULL AND expires_at > now()
+                "UPDATE chat_link_tokens t SET used_at = now()
+              WHERE t.token_hash = $1 AND t.user_id = $2 AND t.used_at IS NULL
+                AND t.expires_at > now()
+                AND EXISTS (SELECT 1 FROM chat_devices d
+                             WHERE d.user_id = t.user_id AND d.device_id = t.issued_by_device
+                               AND d.expired_at IS NULL)
               RETURNING 1",
             )
             .bind(Sha256::digest(token).as_slice())
@@ -515,7 +530,10 @@ pub async fn register_device(
                         .with_details(json!({ "code": "linkToken" })),
                 );
             }
-            if rows.len() >= state.config.chat_max_active_devices as usize {
+            let most = crate::site_settings::CHAT_MAX_ACTIVE_DEVICES
+                .load(&state.pool)
+                .await?;
+            if rows.len() as i64 >= most {
                 return Err(AppError::conflict("chat active-device limit reached"));
             }
             let mut device_id: i32 = 1;
@@ -789,6 +807,9 @@ pub async fn publish_manifest(
     let mut tx = state.pool.begin().await?;
     let stored =
         store_manifest_v2(&mut tx, &state, user_id, &manifest, IdentityChange::Same).await?;
+    // The account's lock is held now: the publishing device is still one of
+    // its live devices with this credential.
+    crate::handlers::chat_identity::credential_holds(&mut *tx, &headers, user_id).await?;
 
     let registered: Vec<(i32, i16, i64)> = sqlx::query_as(
         "SELECT device_id, suite, registration_id
@@ -1483,6 +1504,11 @@ pub async fn revoke_device(
     .bind(device_id)
     .fetch_all(&mut *tx)
     .await?;
+    // Link tokens die with the device set they were asked under.
+    sqlx::query("DELETE FROM chat_link_tokens WHERE user_id = $1")
+        .bind(user_id)
+        .execute(&mut *tx)
+        .await?;
     let deleted = sqlx::query("DELETE FROM chat_devices WHERE user_id = $1 AND device_id = $2")
         .bind(user_id)
         .bind(device_id)
@@ -1913,19 +1939,27 @@ pub(crate) async fn load_user_bundles(
         .map(|d| d.device_id as i32)
         .collect();
     #[allow(clippy::type_complexity)]
-    let devices: Vec<(i32, i16, i64, i64, String, String, i64, String, String)> = sqlx::query_as(
-        "SELECT device_id, suite, registration_id,
+    let mut devices: Vec<(i32, i16, i64, i64, String, String, i64, String, String)> =
+        sqlx::query_as(
+            "SELECT device_id, suite, registration_id,
                     signed_pre_key_id, signed_pre_key, signed_pre_key_signature,
                     last_resort_kyber_pre_key_id, last_resort_kyber_pre_key,
                     last_resort_kyber_pre_key_signature
              FROM chat_devices
              WHERE user_id = $1 AND expired_at IS NULL AND device_id = ANY($2)
              ORDER BY device_id",
-    )
-    .bind(target_id)
-    .bind(&listed)
-    .fetch_all(&mut *tx)
-    .await?;
+        )
+        .bind(target_id)
+        .bind(&listed)
+        .fetch_all(&mut *tx)
+        .await?;
+    // A row whose registration id isn't the listed one (a re-registered
+    // device before its manifest) has no bundle.
+    devices.retain(|(device_id, _, registration_id, ..)| {
+        manifest
+            .device(*device_id as u32)
+            .is_some_and(|listed| i64::from(listed.registration_id) == *registration_id)
+    });
     if devices.is_empty() {
         return Err(AppError::not_found("user has no chat devices"));
     }
@@ -2506,13 +2540,10 @@ pub(crate) async fn store_sealed_messages(
         });
     }
 
-    let current: Vec<(i32, i64)> = sqlx::query_as(
-        "SELECT device_id, registration_id FROM chat_devices
-              WHERE user_id = $1 AND expired_at IS NULL",
-    )
-    .bind(recipient_id)
-    .fetch_all(&mut **tx)
-    .await?;
+    let current: Vec<(i32, i64)> = sqlx::query_as(crate::handlers::chat_identity::LISTED_DEVICES)
+        .bind(recipient_id)
+        .fetch_all(&mut **tx)
+        .await?;
     let mismatch = sealed_device_list_mismatch(&current, &request.envelopes);
     if !mismatch.missing_devices.is_empty()
         || !mismatch.stale_devices.is_empty()
@@ -2718,10 +2749,14 @@ async fn deliver_messages(
     }
 
     // Exact device-set check (Signal's missing/stale/extra contract).
-    let mut current: Vec<(i32, i64)> = sqlx::query_as(
+    // A peer addresses the devices the account's manifest lists; the
+    // account's own sync reaches every live device it has.
+    let mut current: Vec<(i32, i64)> = sqlx::query_as(if excluded_device.is_some() {
         "SELECT device_id, registration_id FROM chat_devices
-              WHERE user_id = $1 AND expired_at IS NULL",
-    )
+          WHERE user_id = $1 AND expired_at IS NULL"
+    } else {
+        crate::handlers::chat_identity::LISTED_DEVICES
+    })
     .bind(recipient_id)
     .fetch_all(&mut *tx)
     .await?;

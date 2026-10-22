@@ -311,13 +311,11 @@ async fn deliver(
     // 3. Devices, for those that passed: missing or extra (409) before a
     // changed registration (410); nothing is stored on either.
     for recipient in &passing {
-        let current: Vec<(i32, i64)> = sqlx::query_as(
-            "SELECT device_id, registration_id FROM chat_devices
-              WHERE user_id = $1 AND expired_at IS NULL",
-        )
-        .bind(recipient.user_id)
-        .fetch_all(&mut *tx)
-        .await?;
+        let current: Vec<(i32, i64)> =
+            sqlx::query_as(crate::handlers::chat_identity::LISTED_DEVICES)
+                .bind(recipient.user_id)
+                .fetch_all(&mut *tx)
+                .await?;
         let (missing, extra, stale) = device_answers(&current, &recipient.devices);
         if !missing.is_empty() || !extra.is_empty() {
             answer.devices.push(SealedMultiDevicesV1 {

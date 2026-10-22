@@ -819,7 +819,15 @@
         "chatLinkTokensPerAccount": "Hesap başına kullanılmamış belirteç",
         "chatLinkTokensPerAccountHint": "Bir hesabın aynı anda kullanılmamış tutabileceği bağlama belirteci sayısı.",
         "chatProvisionBodyBytes": "En büyük bağlama iletisi (bayt)",
-        "chatProvisionBodyBytesHint": "Bağlanan cihaza iletilen en büyük bağlama iletisi, en çok 64 KiB."
+        "chatProvisionBodyBytesHint": "Bağlanan cihaza iletilen en büyük bağlama iletisi, en çok 64 KiB.",
+        "chatMaxActiveDevices": "Hesap başına Sohbet cihazı",
+        "chatMaxActiveDevicesHint": "Bir hesabın sahip olabileceği Sohbet kurulumu sayısı, 1 ile 10 arası.",
+        "chatProvisioningTicketSeconds": "Bağlama bağlantısı bileti (saniye)",
+        "chatProvisioningTicketSecondsHint": "Yeni bir cihazın istedikten sonra bağlama bağlantısını açması için süre.",
+        "chatProvisioningSocketsPerAccount": "Hesap başına bağlama bağlantısı",
+        "chatProvisioningSocketsPerAccountHint": "Bir hesabın aynı anda bağlanmayı bekleyebilecek cihaz sayısı.",
+        "chatDistributionMessageBytes": "En büyük kimlik eşitlemesi (bayt)",
+        "chatDistributionMessageBytesHint": "Yeni bir Sohbet kimliğinin tutulan her cihaza gönderdiği en büyük ileti."
       }
     },
     "federation": {

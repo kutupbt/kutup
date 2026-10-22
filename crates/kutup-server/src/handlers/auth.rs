@@ -537,7 +537,9 @@ pub async fn get_public_settings(State(state): State<AppState>) -> AppResult<Res
             .chat_device_expiry_days
             .try_into()
             .unwrap_or(u32::MAX),
-        maximum_active_devices: state.config.chat_max_active_devices,
+        maximum_active_devices: crate::site_settings::CHAT_MAX_ACTIVE_DEVICES
+            .load(&state.pool)
+            .await? as u32,
         server_name: Some(state.config.chat_server_name.clone()),
         federation: federation_enabled,
         sealed_sender: sealed_sender_policy.is_some(),

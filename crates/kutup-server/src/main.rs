@@ -1473,12 +1473,16 @@ fn build_router(state: AppState) -> Router {
         )
         .route(
             "/api/chat/provisioning/:address",
+            // Above `chatProvisionBodyBytes`' largest (64 KiB), base64; the
+            // handler holds a body to the setting.
             put(handlers::chat_provisioning::relay).route_layer(DefaultBodyLimit::max(128 * 1024)),
         )
         .route(
             "/api/chat/account-identity",
+            // The ceiling the settings' maxima allow: ten devices' syncs at
+            // `chatDistributionMessageBytes`' largest, base64, plus their keys.
             put(handlers::chat_identity::distribute_identity)
-                .route_layer(DefaultBodyLimit::max(2 * 1024 * 1024)),
+                .route_layer(DefaultBodyLimit::max(16 * 1024 * 1024)),
         )
         .route(
             "/api/chat/keys/check",

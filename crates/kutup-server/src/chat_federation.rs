@@ -2793,13 +2793,10 @@ pub async fn deliver_messages(
         return signed_json(federation, &authenticated, StatusCode::OK, &response);
     };
 
-    let current: Vec<(i32, i64)> = sqlx::query_as(
-        "SELECT device_id, registration_id FROM chat_devices
-              WHERE user_id = $1 AND expired_at IS NULL",
-    )
-    .bind(recipient_id)
-    .fetch_all(&mut *tx)
-    .await?;
+    let current: Vec<(i32, i64)> = sqlx::query_as(crate::handlers::chat_identity::LISTED_DEVICES)
+        .bind(recipient_id)
+        .fetch_all(&mut *tx)
+        .await?;
     if current.is_empty() {
         let response = FederationDeliveryResponse {
             stored: 0,
