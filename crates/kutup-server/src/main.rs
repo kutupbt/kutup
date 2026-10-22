@@ -11,6 +11,7 @@ mod account_ids;
 mod account_names;
 mod albums;
 mod auth_check;
+mod calendar_reminders;
 mod calls;
 mod change_feed;
 mod chat_federation;
