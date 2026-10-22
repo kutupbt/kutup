@@ -1151,7 +1151,8 @@
         "callsAndMaps": "Aramalar ve haritalar",
         "pass": "Pass",
         "federation": "Federasyon",
-        "administration": "Yönetim"
+        "administration": "Yönetim",
+        "calendar": "Takvim"
       },
       "per": {
         "address": "adres",
@@ -1274,7 +1275,8 @@
         "forwarding_bounces": "Yönlendirme duraklamadan önceki geri dönmeler",
         "forwarding_outside": "Dışarıya yönlendirilen iletiler",
         "forwarding_outside_account": "Dışarıya yönlendirilen iletiler, hesap başına",
-        "pass_pin_attempts": "Oturum kapanmadan önceki yanlış Pass PIN'leri"
+        "pass_pin_attempts": "Oturum kapanmadan önceki yanlış Pass PIN'leri",
+        "calendar_writes": "Takvim değişiklikleri"
       },
       "accountTitle": "Hız sınırları",
       "accountHint": "Hesap başına sayılan sınırlarda bu hesabın kendi değerleri. Kendi değeri yoksa hesap sunucunun değerini alır.",
@@ -1361,7 +1363,8 @@
         "account_peer_fetches": "Bir hesabın bir sunucuya kimlikle sorduğu hesaplar.",
         "rename_announces": "Bir sunucudan alınan ad değişikliği duyuruları.",
         "collab_device_announces": "Başka bir sunucudan bir paylaşım için cihaz duyuruları.",
-        "admin": "Yönetim API istekleri: bir betik için duvar."
+        "admin": "Yönetim API istekleri: bir betik için duvar.",
+        "calendar_writes": "Takvim değişiklikleri: oluşturulan veya değiştirilen takvimler ve etkinlik eşitlemeleri."
       },
       "countsBytes": "{{per}} başına bayt, {{window}}",
       "countsAtOnce": "Aynı anda, {{per}} başına",

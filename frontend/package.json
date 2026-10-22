@@ -11,7 +11,7 @@
     "build:pass-wasm": "bash ../scripts/build-pass-wasm.sh",
     "build:mail-search-wasm": "bash ../scripts/build-mail-search-wasm.sh",
     "build:wasm": "pnpm run build:crypto-wasm && pnpm run build:chat-wasm && pnpm run build:pass-wasm && pnpm run build:mail-search-wasm",
-    "test:crypto-wasm": "node ../scripts/test-crypto-wasm.mjs",
+    "test:crypto-wasm": "node ../scripts/test-crypto-wasm.mjs crypto && node ../scripts/test-crypto-wasm.mjs crypto-calendar && node ../scripts/check-wasm-size.mjs",
     "test:pass-wasm": "node ../scripts/test-pass-wasm.mjs",
     "test:mail-search-wasm": "node ../scripts/test-mail-search-wasm.mjs",
     "typecheck": "tsc --noEmit -p tsconfig.json",

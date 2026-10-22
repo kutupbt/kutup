@@ -1151,7 +1151,8 @@
         "callsAndMaps": "Calls and maps",
         "pass": "Pass",
         "federation": "Federation",
-        "administration": "Administration"
+        "administration": "Administration",
+        "calendar": "Calendar"
       },
       "per": {
         "address": "address",
@@ -1274,7 +1275,8 @@
         "forwarding_bounces": "Bounces before a forwarding pauses",
         "forwarding_outside": "Messages forwarded outside",
         "forwarding_outside_account": "Messages forwarded outside, per account",
-        "pass_pin_attempts": "Wrong Pass PINs before signing out"
+        "pass_pin_attempts": "Wrong Pass PINs before signing out",
+        "calendar_writes": "Calendar changes"
       },
       "accountTitle": "Rate limits",
       "accountHint": "This account's own values of the limits counted per account. Without one, the account gets the server's value.",
@@ -1361,7 +1363,8 @@
         "account_peer_fetches": "Accounts one account asks of one peer by id.",
         "rename_announces": "Rename announces taken from one peer.",
         "collab_device_announces": "Device announces from another server for one share.",
-        "admin": "Admin API requests: a wall for a script."
+        "admin": "Admin API requests: a wall for a script.",
+        "calendar_writes": "Calendar changes: calendars made or changed and event syncs."
       },
       "countsBytes": "Bytes per {{per}} {{window}}",
       "countsAtOnce": "At once, per {{per}}",

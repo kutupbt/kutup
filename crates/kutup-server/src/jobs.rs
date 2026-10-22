@@ -497,7 +497,7 @@ pub async fn quota_reconcile_tick(pool: &PgPool) -> usize {
     // single UPDATE … FROM would write sums from before a charge it waited on).
     let drifted: Vec<Uuid> = match sqlx::query_scalar(&format!(
         "SELECT u.id FROM users u, LATERAL ({}) e
-         WHERE u.storage_used_bytes <> e.drive_bytes + e.chat_bytes + e.contacts_bytes + e.mail_bytes",
+         WHERE u.storage_used_bytes <> e.drive_bytes + e.chat_bytes + e.contacts_bytes + e.mail_bytes + e.calendar_bytes",
         reconcile_sums("u.id")
     ))
     .fetch_all(pool)
@@ -517,7 +517,7 @@ pub async fn quota_reconcile_tick(pool: &PgPool) -> usize {
                 .bind(uid)
                 .execute(&mut *tx)
                 .await?;
-            let (drive, chat, contacts, mail): (i64, i64, i64, i64) =
+            let (drive, chat, contacts, mail, calendar): (i64, i64, i64, i64, i64) =
                 sqlx::query_as(&reconcile_sums("$1"))
                     .bind(uid)
                     .fetch_one(&mut *tx)
@@ -525,7 +525,8 @@ pub async fn quota_reconcile_tick(pool: &PgPool) -> usize {
             let total = drive
                 .saturating_add(chat)
                 .saturating_add(contacts)
-                .saturating_add(mail);
+                .saturating_add(mail)
+                .saturating_add(calendar);
             let row: Option<i64> = sqlx::query_scalar(
                 "UPDATE users SET storage_used_bytes = $2
                  WHERE id = $1 AND storage_used_bytes <> $2
@@ -536,14 +537,14 @@ pub async fn quota_reconcile_tick(pool: &PgPool) -> usize {
             .fetch_optional(&mut *tx)
             .await?;
             tx.commit().await?;
-            Ok(row.map(|used| (used, drive, chat, contacts, mail)))
+            Ok(row.map(|used| (used, drive, chat, contacts, mail, calendar)))
         }
         .await;
         match fixed {
-            Ok(Some((used, drive, chat, contacts, mail))) => {
+            Ok(Some((used, drive, chat, contacts, mail, calendar))) => {
                 corrected += 1;
                 tracing::info!(
-                    "quota reconcile: user={uid} used={used} (drive {drive}, chat {chat}, contacts {contacts}, mail {mail}; drift corrected)"
+                    "quota reconcile: user={uid} used={used} (drive {drive}, chat {chat}, contacts {contacts}, mail {mail}, calendar {calendar}; drift corrected)"
                 );
             }
             Ok(None) => {}
@@ -560,7 +561,8 @@ pub async fn quota_reconcile_tick(pool: &PgPool) -> usize {
 /// rows, as `drive_bytes` (files less pruned originals, assets, thumbnails,
 /// versions), `chat_bytes` (media references and the history backup) and
 /// `contacts_bytes` (summaries and sealed cards, `contacts_charge`) and
-/// `mail_bytes` (stored messages and draft attachments); their sum is the account's storage
+/// `mail_bytes` (stored messages and draft attachments) and `calendar_bytes`
+/// (the calendars it owns and their events); their sum is the account's storage
 /// counter.
 fn reconcile_sums(user: &str) -> String {
     format!(
@@ -575,13 +577,16 @@ fn reconcile_sums(user: &str) -> String {
    + COALESCE((SELECT SUM(ciphertext_bytes) FROM chat_backup_media_objects WHERE user_id = {user}), 0))::bigint AS chat_bytes,
     COALESCE((SELECT SUM(octet_length(summary) + octet_length(card)) FROM contacts WHERE user_id = {user}), 0)::bigint AS contacts_bytes,
     (COALESCE((SELECT SUM(size_bytes) FROM mail_messages WHERE user_id = {user} AND key_packet IS NULL), 0)
-   + COALESCE((SELECT SUM(size_bytes) FROM mail_draft_attachments WHERE user_id = {user}), 0))::bigint AS mail_bytes"#
+   + COALESCE((SELECT SUM(size_bytes) FROM mail_draft_attachments WHERE user_id = {user}), 0))::bigint AS mail_bytes,
+    (COALESCE((SELECT SUM(bytes) FROM calendars WHERE owner_id = {user}), 0)
+   + COALESCE((SELECT SUM(e.bytes) FROM calendar_events e JOIN calendars c ON c.id = e.calendar_id
+                WHERE c.owner_id = {user}), 0))::bigint AS calendar_bytes"#
     )
 }
 
-/// A corrected account: its new counter, then the Drive, Chat, Contacts and
-/// Mail bytes it adds up from.
-type Reconciled = (i64, i64, i64, i64, i64);
+/// A corrected account: its new counter, then the Drive, Chat, Contacts,
+/// Mail and Calendar bytes it adds up from.
+type Reconciled = (i64, i64, i64, i64, i64, i64);
 
 /// Reaps abandoned tus uploads (rows whose `updated_at` is older than 24 h): aborts the S3
 /// multipart, then drops the row (freeing soft-reserved quota) — mirrors

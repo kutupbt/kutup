@@ -12,6 +12,8 @@ default = ["mnemonic"]
 mnemonic = ["dep:bip39"]
 # OpenPGP mail address keys (`mail_key`); off for clients that do not need rPGP (Chat).
 mail = ["dep:pgp", "dep:rand", "dep:rsa"]
+# Calendars (`calendar`, `calendar_event`): mail's OpenPGP plus time zones.
+calendar = ["mail", "dep:jiff", "dep:jiff-tzdb"]
 # Builders of malformed values for negative vectors; on for this crate's own
 # tests only (the dev-dependency on itself below), never for a client.
 test-vectors = []
@@ -51,6 +53,11 @@ pgp = { version = "=0.21.0", default-features = false, features = ["draft-wussle
 rand = { workspace = true, optional = true }
 # Only for an RSA key's size in the key table; the same version rPGP uses.
 rsa = { version = "=0.9.10", default-features = false, optional = true }
+# Calendar time zones (docs/plans/calendar.md, E1): the IANA database
+# bundled and pinned, so every server and the browser convert alike whatever
+# the host's zoneinfo. A tzdb update is a bump of `jiff-tzdb`.
+jiff = { version = "=0.2.38", default-features = false, features = ["std", "tzdb-bundle-always"], optional = true }
+jiff-tzdb = { version = "=0.1.9", optional = true }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 # Browser clock and randomness for rPGP's signature timestamps.
@@ -94,3 +101,11 @@ required-features = ["mail"]
 [[test]]
 name = "mail_pgp_gnupg"
 required-features = ["mail"]
+
+[[test]]
+name = "calendar_gnupg"
+required-features = ["calendar"]
+
+[[test]]
+name = "calendar_vectors"
+required-features = ["calendar"]

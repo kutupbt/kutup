@@ -1,0 +1,10 @@
+{
+  "comment": "Gzipped (level 9) size budget per WASM runtime, in bytes, checked by scripts/check-wasm-size.mjs in the web gate. About 5% above each runtime's size when set (2026-10-21); raise one only with a reason in the commit. crypto-calendar is crypto plus calendars and the time zone database (docs/plans/calendar.md), loaded instead of crypto by the apps with calendars.",
+  "budgets": {
+    "crypto": 1780000,
+    "crypto-calendar": 2020000,
+    "chat": 3350000,
+    "pass": 670000,
+    "mail-search": 200000
+  }
+}

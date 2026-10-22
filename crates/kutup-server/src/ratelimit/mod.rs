@@ -965,6 +965,7 @@ pub fn spawn_cleanup() {
             crate::handlers::pass_icons::PASS_ICON_FETCHES.cleanup();
             crate::handlers::mail_images::MAIL_IMAGES.cleanup();
             crate::handlers::mail_images::cleanup();
+            crate::handlers::calendar::WRITES.cleanup();
         }
     });
 }

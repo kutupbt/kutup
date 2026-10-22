@@ -1157,6 +1157,26 @@ fn build_router(state: AppState) -> Router {
             get(handlers::contacts::list).post(handlers::contacts::create),
         )
         .route(
+            "/api/calendar/calendars",
+            get(handlers::calendar::list).post(handlers::calendar::create),
+        )
+        .route(
+            "/api/calendar/calendars/:id",
+            put(handlers::calendar::update).delete(handlers::calendar::delete),
+        )
+        .route(
+            "/api/calendar/calendars/:id/events",
+            get(handlers::calendar::events),
+        )
+        .route(
+            "/api/calendar/calendars/:id/events/sync",
+            post(handlers::calendar::sync),
+        )
+        .route(
+            "/api/calendar/calendars/:id/events/:event_id",
+            get(handlers::calendar::event),
+        )
+        .route(
             "/api/contacts/delete",
             post(handlers::contacts::delete_many),
         )

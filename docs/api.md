@@ -67,6 +67,11 @@ Specific codes, where an app does something particular (a test in
 | `malformed` | 400 | `POST /api/chat/anonymous/messages/multi`: the payload doesn't parse, a device is listed twice, or the capabilities don't name exactly the payload's accounts ([chat-protocol.md](chat-protocol.md) §7); also a group route's refusal code |
 | `peerUnavailable` | 503 | `POST /api/chat/anonymous/messages/multi` for another server's accounts: that server didn't take the send (slow, unreachable or unwilling); send their copies one by one |
 | `capabilityLimit` | 409 | `PUT /api/chat/group-capabilities` or `POST …/set`: the account would pass its group capability limit; nothing changed |
+| `calendarExists` | 409 | `POST /api/calendar/calendars`: the id (or the calendar key) is in use; draw another |
+| `calendarLimit` | 409 | `POST /api/calendar/calendars`: the account owns as many calendars as the administrators allow (`calendarsPerAccount`) |
+| `eventLimit` | 409 | An events sync: the calendar holds as many events as the administrators allow (`calendarEventsPerCalendar`); that change only |
+| `sequenceBehind` | 409 | An events sync: the changed event's `SEQUENCE` is lower than the stored one's; that change only |
+| `uidTaken` | 409 | An events sync: an event with this UID is in the calendar already; that change only |
 | `setupRequired` | 409 | The account has no keys yet (an admin-made account before its first sign-in): a listed write or a rename waits for setup |
 | `renamed` | 409 | A lookup of a name an account no longer goes by (held, or named in a rename chain): `renames` carries `{ "version": 1, "chains": [...] }`, never keys |
 | `nameReserved` | 409 | The name is the server's (postmaster, abuse, …, the break-glass account), in any spelling |
@@ -2215,6 +2220,83 @@ re-signed without it on their next edit, and readers ignore unknown ids).
 Membership is the summary's `groups`, so it is signed.
 
 ---
+
+## Calendar
+
+Proton Calendar's model (docs/plans/calendar.md, E1): each calendar is an
+OpenPGP key whose secret is locked with a passphrase; the passphrase is
+sealed per member to the member's address key and signed by the owner; the
+name and description are sealed to the calendar key. Events are Proton's
+parts (`SealedEventV1`): signed parts in the clear, encrypted parts as data
+packets, two key packets to the calendar key, every part signed by its
+author's address key. The browser makes and opens all of it through the
+`crypto-calendar` WASM. Every calendar a member holds is listed by the
+account head's `calendars` scope (the calendar id and the member row's
+`revision`); a write that adds, changes or removes one carries `head`.
+
+### GET /api/calendar/calendars · POST /api/calendar/calendars
+
+**Auth:** Bearer JWT
+
+`GET` answers `{ "calendars": [CalendarView] }`, the caller's calendars:
+`id`, `ownerAddress` (whose key list verifies the passphrase and metadata
+signatures), `publicKey`, `fingerprint`, `lockedSecretKey`, `passphrase`
+(`dataPacket`, `signature`, `keyPacket`), `addressId` (the member's address
+the key packet is to), `metadata` (`keyPacket`, `dataPacket`, `signature`),
+`permissions` (Proton's bits; 127 for the owner), `color`, `display`,
+`revision`, `createdAt`, `updatedAt`.
+
+`POST` makes one: `{ id, addressId, publicKey, lockedSecretKey, passphrase,
+metadata, color, head }` (`createCalendar` in WASM makes the keys, the
+passphrase and the metadata). `id` is a fresh UUID v4 the client draws, so
+the account head naming it is made before the create; one in use is
+`409 calendarExists`. The server checks the key's shape, that the locked secret is the
+key's and locked, that the passphrase's key packet is to the address's
+primary key and the metadata's to the calendar key. `201` with the
+CalendarView; `400` when a check fails; `409 calendarLimit` at the
+administrators' `calendarsPerAccount` (25 at first); `413` over the storage
+quota.
+
+### PUT /api/calendar/calendars/{id} · DELETE /api/calendar/calendars/{id}
+
+`PUT` takes `{ metadata?, color?, display?, baseRevision, revision, head }`:
+the owner's new sealed name and description, and the member's own colour
+and visibility. `409 revision_conflict` when `baseRevision` is not the
+member row's; `403` when someone else than the owner sends `metadata`.
+`DELETE` (body `{ head }`) deletes the calendar and its events, owner only.
+
+### GET /api/calendar/calendars/{id}/events?start=&end=&afterStart=&afterId=&limit=
+
+The events that meet the half-open window `[start, end)` (RFC 3339, at most
+`calendarWindowDays`, 400 at first), ordered by start then id, at most
+`calendarEventsPage` (1000) a page: `{ events: [EventView], next }`. `next`
+is `null` on the last page, else `{ afterStart, afterId }`, the last event's
+start and id, which the client sends back for the next page (the cursor is
+the client's, so an event deleted or moved meanwhile never ends or skips a
+page); one of the two without the other is `400`. An EventView is `{ id,
+calendarId, uid, authorAddress, event: SealedEventV1, startUtc, endUtc,
+fullDay, sequence, revision, modifiedAt }`; the times are what the server read from the shared signed
+part, which a client checks again when it opens the event. A calendar the
+caller isn't a member of is `404`. `GET …/events/{eventId}` answers one.
+
+### POST /api/calendar/calendars/{id}/events/sync
+
+`{ addressId, changes: [{"create": SealedEventV1} | {"update": {id,
+baseRevision, event}} | {"delete": {id, baseRevision}}] }`, 1 to `calendarSyncBatch` (10) changes, each applied
+alone (Proton's sync): `{ results: [{ status, event?, code?, error? }] }` in
+the order sent. A created or changed event's signed parts must be signed by
+one of the address's keys, its key packets be to the calendar key, and it
+must keep its UID; E1 refuses `RRULE`, `RECURRENCE-ID`, `EXDATE` and
+`ORGANIZER` (recurrence comes in E2, invitations in E4). `409 uidTaken`
+for a UID already in the calendar, `409 eventLimit` at
+`calendarEventsPerCalendar` (25,000). An update or a delete names
+the event's `revision` it was made from: another one is `409 revision_conflict` (with
+the stored `revision`), so a replayed or older change never overwrites a
+newer one; a `SEQUENCE` lower than the stored one is `409 sequenceBehind`.
+An event starts at revision 1 and each update adds one. The caller's
+permissions are checked again in each change's transaction, so a member
+removed mid-sync writes nothing further. Everything is charged to the
+calendar owner's storage pool.
 
 ## Maps
 
@@ -4664,9 +4746,21 @@ Return current global server settings.
   "chatGroupAvatarMaxBytes": 41001,
   "chatGroupAvatarStoragePerGroupBytes": 82002,
   "chatGroupAvatarPendingSeconds": 86400,
-  "passVaultMaxBytes": 67108864
+  "passVaultMaxBytes": 67108864,
+  "calendarsPerAccount": 25,
+  "calendarEventsPerCalendar": 25000,
+  "calendarSyncBatch": 10,
+  "calendarWindowDays": 400,
+  "calendarEventsPage": 1000
 }
 ```
+
+The Calendar settings: `calendarsPerAccount` (1–1000) is how many calendars
+one account may own, `calendarEventsPerCalendar` how many events one
+calendar may hold, `calendarSyncBatch` (1–100) the most changes in one
+events sync, `calendarWindowDays` (1–3660) the longest window an events
+query may ask for, and `calendarEventsPage` (10–5000) the most events on one
+page.
 
 `passVaultMaxBytes` is the largest `.kdbx` file Kutup Pass takes in an
 upload: 1 MiB to 1 GiB (`400` otherwise), 64 MiB at first.

@@ -127,6 +127,13 @@ KUTUP_LIVE_SERVER="http://127.0.0.1:$port" \
   KUTUP_LIVE_ADMIN="$test_admin_username:$test_admin_password" \
   cargo test -p kutup-server --test rate_limits_live -- --nocapture
 
+# Calendars (docs/plans/calendar.md, E1): keys and the sealed passphrase,
+# events checked against their author's keys and read only from the signed
+# part, the calendar limit as a setting, storage charged and refunded.
+KUTUP_LIVE_SERVER="http://127.0.0.1:$port" \
+  KUTUP_LIVE_ADMIN="$test_admin_username:$test_admin_password" \
+  cargo test -p kutup-server --test calendar_live -- --nocapture --test-threads 1
+
 # The collaboration log over HTTP (the CLI's way in): kept like a socket's
 # frame, and every bad frame refused alike on both paths.
 KUTUP_LIVE_SERVER="http://127.0.0.1:$port" \
