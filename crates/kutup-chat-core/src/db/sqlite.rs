@@ -1815,10 +1815,14 @@ mod tests {
                         .unwrap(),
                     1,
                     None,
+                    base64::engine::general_purpose::STANDARD.encode({
+                        let mut key = [seed; 33];
+                        key[0] = 0x05;
+                        key
+                    }),
                     vec![AccountManifestDeviceV2 {
                         device_id: 1,
                         direct_chat_suite: DirectChatSuiteId::PqxdhTripleRatchetV1,
-                        identity_key: base64::engine::general_purpose::STANDARD.encode([seed; 33]),
                         registration_id: 7,
                         mls: None,
                     }],
@@ -1838,6 +1842,9 @@ mod tests {
                 drive_share_signing_public_key: manifest.drive.share_signing_public_key.clone(),
                 highest_sequence: manifest.sequence,
                 manifest_hash: manifest.manifest_hash().unwrap(),
+                identity_key: manifest.identity_key.clone(),
+                identity_verified: false,
+                identity_verified_at_ms: 0,
                 trust,
                 continuity_gap: false,
                 quarantine_reason: None,
@@ -1924,6 +1931,167 @@ mod tests {
         let _ = std::fs::remove_file(path);
     }
 
+    /// The schema this build writes: 4 (the device credential, the account
+    /// identity and its verified state in the pins, the kept identity sync).
+    #[test]
+    fn a_new_store_is_schema_four() {
+        let db = SqliteChatDb::open_in_memory().unwrap();
+        let versions: Vec<i64> = {
+            let conn = db.conn.borrow();
+            let mut statement = conn
+                .prepare("SELECT version FROM schema_migrations")
+                .unwrap();
+            let rows = statement
+                .query_map([], |row| row.get(0))
+                .unwrap()
+                .collect::<rusqlite::Result<Vec<i64>>>()
+                .unwrap();
+            rows
+        };
+        assert_eq!(versions, vec![4]);
+    }
+
+    /// A store with a bit of everything: transport state, pins, history,
+    /// the outbox and a contact.
+    fn full_store() -> SqliteChatDb {
+        use futures_executor::block_on;
+        let db = SqliteChatDb::open_in_memory().unwrap();
+        let mut pending = Pending {
+            local_identity: Some(LocalIdentity {
+                identity_key_pair: vec![1, 2, 3],
+                registration_id: 42,
+                device_id: Some(1),
+                credential: Some("credential".into()),
+            }),
+            last_cursor: Some(9),
+            pending_account_identity: Some(Some(vec![7, 7])),
+            ..Pending::default()
+        };
+        pending.sessions.insert("peer.1".into(), Some(vec![4]));
+        pending.identities.insert("peer.1".into(), vec![5]);
+        pending.pre_keys.insert(100, Some(vec![6]));
+        pending.signed_pre_keys.insert(1, vec![7]);
+        pending.kyber_pre_keys.insert(1, vec![8]);
+        pending.manifest_trust.insert(
+            "peer".into(),
+            ManifestTrust {
+                peer: "peer".into(),
+                account: "aci:00000000-0000-4000-8000-2bd806c97f0e@a.test".into(),
+                incarnation_id: "i".into(),
+                authority_key_id: "a".into(),
+                self_authority_key: "k".into(),
+                drive_hpke_public_key: "d".into(),
+                drive_share_signing_public_key: "s".into(),
+                highest_sequence: 3,
+                manifest_hash: "h".into(),
+                identity_key: "identity".into(),
+                identity_verified: true,
+                identity_verified_at_ms: 11,
+                trust: AuthorityTrust::Tofu,
+                continuity_gap: false,
+                quarantine_reason: None,
+                pending_reset: None,
+            },
+        );
+        pending.outbox.insert(
+            "send".into(),
+            Some(OutboxEntry {
+                send_id: "send".into(),
+                peer: "aci:00000000-0000-4000-8000-2bd806c97f0e@a.test".into(),
+                content: b"{}".to_vec(),
+                envelopes: b"[]".to_vec(),
+                sealed_sender: false,
+                sealed_capability: None,
+                attempts: 0,
+                created_at: 1,
+                primary_delivered: false,
+                sync: None,
+            }),
+        );
+        pending.contacts.insert(
+            "aci:00000000-0000-4000-8000-2bd806c97f0e@a.test".into(),
+            ContactRecord {
+                peer: "aci:00000000-0000-4000-8000-2bd806c97f0e@a.test".into(),
+                state: kutup_chat_proto::ContactState::Accepted,
+                previous_state: None,
+                revision: 1,
+                source_device_id: 1,
+                updated_at_ms: 1,
+                sync_pending: false,
+                sync_send_id: None,
+                list_due_at_ms: None,
+            },
+        );
+        block_on(db.apply(&pending)).unwrap();
+        db
+    }
+
+    #[test]
+    fn a_transport_reset_keeps_history_outbox_and_contacts_only() {
+        use futures_executor::block_on;
+        let db = full_store();
+        assert_eq!(
+            block_on(db.load_pending_account_identity()).unwrap(),
+            Some(vec![7, 7])
+        );
+        block_on(db.apply(&Pending {
+            reset_transport: true,
+            ..Pending::default()
+        }))
+        .unwrap();
+        assert!(block_on(db.load_local_identity()).unwrap().is_none());
+        assert!(block_on(db.load_session("peer.1")).unwrap().is_none());
+        assert!(block_on(db.load_identity("peer.1")).unwrap().is_none());
+        assert!(block_on(db.load_pre_key(100)).unwrap().is_none());
+        assert!(block_on(db.load_signed_pre_key(1)).unwrap().is_none());
+        assert!(block_on(db.load_kyber_pre_key(1)).unwrap().is_none());
+        assert!(block_on(db.load_manifest_trust("peer")).unwrap().is_none());
+        assert!(block_on(db.load_last_cursor()).unwrap().is_none());
+        assert!(block_on(db.load_pending_account_identity())
+            .unwrap()
+            .is_none());
+        assert_eq!(block_on(db.list_outbox()).unwrap().len(), 1);
+        assert_eq!(block_on(db.list_contacts()).unwrap().len(), 1);
+    }
+
+    #[test]
+    fn an_identity_reset_keeps_the_device_and_its_pins() {
+        use futures_executor::block_on;
+        let db = full_store();
+        block_on(db.apply(&Pending {
+            reset_identity: true,
+            ..Pending::default()
+        }))
+        .unwrap();
+        assert!(block_on(db.load_session("peer.1")).unwrap().is_none());
+        assert!(block_on(db.load_identity("peer.1")).unwrap().is_none());
+        assert!(block_on(db.load_pre_key(100)).unwrap().is_none());
+        assert!(block_on(db.load_signed_pre_key(1)).unwrap().is_none());
+        assert!(block_on(db.load_kyber_pre_key(1)).unwrap().is_none());
+        let local = block_on(db.load_local_identity()).unwrap().unwrap();
+        assert_eq!(local.credential.as_deref(), Some("credential"));
+        let pin = block_on(db.load_manifest_trust("peer")).unwrap().unwrap();
+        assert_eq!(pin.identity_key, "identity");
+        assert!(pin.identity_verified);
+        assert_eq!(pin.identity_verified_at_ms, 11);
+        assert_eq!(block_on(db.load_last_cursor()).unwrap(), Some(9));
+        assert_eq!(block_on(db.list_outbox()).unwrap().len(), 1);
+        assert_eq!(block_on(db.list_contacts()).unwrap().len(), 1);
+        // The kept sync is cleared only by the commit that installs it.
+        assert_eq!(
+            block_on(db.load_pending_account_identity()).unwrap(),
+            Some(vec![7, 7])
+        );
+        block_on(db.apply(&Pending {
+            pending_account_identity: Some(None),
+            ..Pending::default()
+        }))
+        .unwrap();
+        assert!(block_on(db.load_pending_account_identity())
+            .unwrap()
+            .is_none());
+    }
+
     #[cfg(feature = "sqlcipher")]
     #[test]
     fn sqlcipher_store_reopens_with_the_key_and_rejects_a_wrong_key() {
@@ -1937,6 +2105,7 @@ mod tests {
                 identity_key_pair: vec![1, 2, 3],
                 registration_id: 42,
                 device_id: Some(1),
+                credential: Some("credential".into()),
             }),
             ..Pending::default()
         };

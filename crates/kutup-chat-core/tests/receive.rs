@@ -40,7 +40,7 @@ fn in_memory<R: Rng + CryptoRng>(user: &str, device_id: u32, rng: &mut R) -> Ses
     .unwrap();
     publish_device(
         user,
-        serve_bundle(session.registration().unwrap(), device_id),
+        serve_bundle(session.published_keys().unwrap(), device_id),
     );
     session
 }
@@ -70,20 +70,25 @@ fn authority_of(user: &str) -> AccountAuthority {
     AccountAuthority::derive(&[seed; 32]).unwrap()
 }
 
-/// `user`'s signed manifest and bundles, from the devices a test made.
+/// `user`'s signed manifest and bundles, from the devices a test made: the
+/// account's identity once (every device of an account has it).
 fn published(user: &str) -> AccountPreKeyBundlesResponse {
     let devices = DEVICES.with(|devices| devices.borrow().get(user).cloned().unwrap_or_default());
+    let identity_key = devices
+        .first()
+        .map(|bundle| bundle.identity_key.clone())
+        .expect("a test publishes a device before its bundles are fetched");
     let manifest = authority_of(user)
         .sign_manifest(
             user.parse().unwrap(),
             1,
             None,
+            identity_key.clone(),
             devices
                 .iter()
                 .map(|bundle| kutup_chat_proto::AccountManifestDeviceV2 {
                     device_id: bundle.device_id,
                     direct_chat_suite: kutup_chat_proto::DirectChatSuiteId::PqxdhTripleRatchetV1,
-                    identity_key: bundle.identity_key.clone(),
                     registration_id: bundle.registration_id,
                     mls: None,
                 })
@@ -93,12 +98,23 @@ fn published(user: &str) -> AccountPreKeyBundlesResponse {
         .unwrap();
     AccountPreKeyBundlesResponse {
         account: user.parse().unwrap(),
-        devices,
-        manifest: Some(manifest),
+        identity_key,
+        devices: devices
+            .into_iter()
+            .map(|bundle| kutup_chat_proto::DevicePreKeyBundleV2 {
+                device_id: bundle.device_id,
+                registration_id: bundle.registration_id,
+                suite: bundle.suite,
+                signed_pre_key: bundle.signed_pre_key,
+                kyber_pre_key: bundle.kyber_pre_key,
+                one_time_pre_key: bundle.one_time_pre_key,
+            })
+            .collect(),
+        manifest,
     }
 }
 
-fn serve_bundle(reg: &RegisterChatDeviceRequestV2, device_id: u32) -> DevicePreKeyBundle {
+fn serve_bundle(reg: &kutup_chat_core::PublishedKeys, device_id: u32) -> DevicePreKeyBundle {
     DevicePreKeyBundle {
         device_id,
         registration_id: reg.registration_id,
@@ -160,6 +176,8 @@ struct Mailbox {
     /// The manifest this account's device published (its own, signed with
     /// its own authority).
     own_manifest: RefCell<Option<kutup_chat_proto::AccountManifestV2>>,
+    /// Every manifest of this account's chain, as the server keeps them.
+    own_history: RefCell<Vec<kutup_chat_proto::AccountManifestV2>>,
 }
 
 impl Mailbox {
@@ -199,8 +217,33 @@ impl ChatTransport for Mailbox {
         manifest: &kutup_chat_proto::AccountManifestV2,
     ) -> Result<kutup_chat_proto::AccountManifestPublicationV2> {
         *self.own_manifest.borrow_mut() = Some(manifest.clone());
+        self.own_history.borrow_mut().push(manifest.clone());
         Ok(kutup_chat_proto::AccountManifestPublicationV2 {
             manifest: manifest.clone(),
+        })
+    }
+    async fn fetch_manifest_history(
+        &self,
+        account: &str,
+        _from_sequence: u64,
+        to_sequence: u64,
+        page_from_sequence: u64,
+    ) -> Result<kutup_chat_proto::AccountManifestHistoryPageV2> {
+        let manifests: Vec<_> = self
+            .own_history
+            .borrow()
+            .iter()
+            .filter(|manifest| {
+                manifest.sequence >= page_from_sequence && manifest.sequence <= to_sequence
+            })
+            .cloned()
+            .collect();
+        Ok(kutup_chat_proto::AccountManifestHistoryPageV2 {
+            account: account.parse().unwrap(),
+            from_sequence: page_from_sequence,
+            to_sequence,
+            manifests,
+            next_sequence: None,
         })
     }
     async fn send(&self, _username: &str, _req: &SendMessagesRequest) -> Result<SendOutcome> {
@@ -251,7 +294,7 @@ fn drains_decrypts_persists_and_acks_resuming_from_cursor() {
             &mut rng,
         ))
         .unwrap();
-        let bundle = serve_bundle(bob.registration().unwrap(), 1);
+        let bundle = serve_bundle(bob.published_keys().unwrap(), 1);
         block_on(bob.complete_registration(1)).unwrap();
 
         let mut alice = in_memory(
@@ -358,7 +401,7 @@ fn dedups_a_redelivered_cursor() {
         1,
         &mut rng,
     );
-    let bundle = serve_bundle(bob_session.registration().unwrap(), 1);
+    let bundle = serve_bundle(bob_session.published_keys().unwrap(), 1);
 
     let mut alice = in_memory(
         "aci:00000000-0000-4000-8000-2bd806c97f0e@example.test",
@@ -417,7 +460,7 @@ fn authenticated_replay_with_a_new_cursor_is_classified_and_acked() {
         1,
         &mut rng,
     );
-    let bundle = serve_bundle(bob_session.registration().unwrap(), 1);
+    let bundle = serve_bundle(bob_session.published_keys().unwrap(), 1);
     let mut alice = in_memory(
         "aci:00000000-0000-4000-8000-2bd806c97f0e@example.test",
         1,
@@ -531,7 +574,7 @@ fn a_peer_cannot_turn_a_transcript_shaped_message_into_outgoing_history() {
         1,
         &mut rng,
     );
-    let bundle = serve_bundle(bob_session.registration().unwrap(), 1);
+    let bundle = serve_bundle(bob_session.published_keys().unwrap(), 1);
     let mut alice = in_memory(
         "aci:00000000-0000-4000-8000-2bd806c97f0e@example.test",
         1,
@@ -575,7 +618,7 @@ fn typing_is_live_only_for_accepted_contacts_and_never_creates_history() {
         1,
         &mut rng,
     );
-    let bundle = serve_bundle(bob_session.registration().unwrap(), 1);
+    let bundle = serve_bundle(bob_session.published_keys().unwrap(), 1);
     let mut alice = in_memory(
         "aci:00000000-0000-4000-8000-2bd806c97f0e@example.test",
         1,
@@ -667,7 +710,7 @@ fn a_call_from_someone_not_accepted_does_not_ring() {
         1,
         &mut rng,
     );
-    let bundle = serve_bundle(bob_session.registration().unwrap(), 1);
+    let bundle = serve_bundle(bob_session.published_keys().unwrap(), 1);
     let mut alice = in_memory(
         "aci:00000000-0000-4000-8000-2bd806c97f0e@example.test",
         1,
@@ -714,7 +757,7 @@ fn disappearing_timer_is_durable_only_for_established_conversations() {
         1,
         &mut rng,
     );
-    let bundle = serve_bundle(bob_session.registration().unwrap(), 1);
+    let bundle = serve_bundle(bob_session.published_keys().unwrap(), 1);
     let mut alice = in_memory(
         "aci:00000000-0000-4000-8000-2bd806c97f0e@example.test",
         1,
@@ -811,7 +854,7 @@ fn a_peer_cannot_inject_a_recipient_disappearing_expiry_start() {
         1,
         &mut rng,
     );
-    let bundle = serve_bundle(bob_session.registration().unwrap(), 1);
+    let bundle = serve_bundle(bob_session.published_keys().unwrap(), 1);
     let mut alice = in_memory(
         "aci:00000000-0000-4000-8000-2bd806c97f0e@example.test",
         1,
@@ -861,7 +904,7 @@ fn requests_reject_cleanly_and_blocks_advance_the_ratchet_without_plaintext() {
         1,
         &mut rng,
     );
-    let bundle = serve_bundle(bob_session.registration().unwrap(), 1);
+    let bundle = serve_bundle(bob_session.published_keys().unwrap(), 1);
     let mut alice = in_memory(
         "aci:00000000-0000-4000-8000-2bd806c97f0e@example.test",
         1,
@@ -1019,7 +1062,7 @@ const BOB: &str = "aci:00000000-0000-4000-8000-81b637d8fcd2@example.test";
 fn bob_device<R: Rng + CryptoRng>(rng: &mut R) -> (TempDb, DevicePreKeyBundle) {
     let db = TempDb::new();
     let mut bob = block_on(Session::generate(db.open(), BOB, 1, 10, rng)).unwrap();
-    let bundle = serve_bundle(bob.registration().unwrap(), 1);
+    let bundle = serve_bundle(bob.published_keys().unwrap(), 1);
     block_on(bob.complete_registration(1)).unwrap();
     (db, bundle)
 }
@@ -1043,7 +1086,7 @@ fn forged_from<R: Rng + CryptoRng>(
             rng,
         ))
         .unwrap();
-        devices.push(serve_bundle(mallory.registration().unwrap(), device));
+        devices.push(serve_bundle(mallory.published_keys().unwrap(), device));
         block_on(mallory.establish(&bob_addr, bundle, rng)).unwrap();
         let env = block_on(mallory.encrypt(
             &bob_addr,
@@ -1103,8 +1146,26 @@ fn an_own_account_message_is_taken_only_from_a_device_of_the_own_verified_manife
     assert_eq!(report.errors.len(), 2);
     assert!(server.acked().is_empty());
 
-    // Bob's own manifest under his own authority: device 1 only.
+    // Bob's own manifest under his own authority (as his re-registration
+    // published it): his identity, device 1 only.
     let authority = AccountAuthority::derive(&[42u8; 32]).unwrap();
+    let first = authority
+        .sign_manifest(
+            BOB.parse().unwrap(),
+            1,
+            None,
+            bundle.identity_key.clone(),
+            vec![kutup_chat_proto::AccountManifestDeviceV2 {
+                device_id: 1,
+                direct_chat_suite: kutup_chat_proto::DirectChatSuiteId::PqxdhTripleRatchetV1,
+                registration_id: bundle.registration_id,
+                mls: None,
+            }],
+            "2026-10-16T10:00:00Z",
+        )
+        .unwrap();
+    *server.own_manifest.borrow_mut() = Some(first.clone());
+    server.own_history.borrow_mut().push(first);
     block_on(engine.sync_own_manifest(&authority, "2026-10-16T10:00:00Z")).unwrap();
     let report = block_on(engine.receive(&mut rng)).unwrap();
     assert!(

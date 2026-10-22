@@ -244,6 +244,8 @@ pub struct Session {
     /// The registration payload to publish — `Some` right after [`Session::generate`],
     /// `None` for a device reloaded via [`Session::open`] (already registered).
     registration: Option<RegisterChatDeviceRequestV2>,
+    /// What this device publishes, right after it was generated.
+    published: Option<keys::PublishedKeys>,
     /// This account's key (`aci:<uuid>@<server>`), used by every account-level comparison.
     /// `address` is the same account with this device's id: its libsignal address.
     account: String,
@@ -263,7 +265,56 @@ impl Session {
     /// Returns the session; publish [`Session::registration`] to `POST
     /// /api/chat/device`, then apply the server-assigned id via
     /// [`Session::complete_registration`].
-    pub(crate) async fn generate<R: Rng + CryptoRng>(
+    /// A device with a new identity and no registration request: for tests
+    /// and tools that serve its bundle themselves ([`Self::published_keys`]).
+    pub async fn generate<R: Rng + CryptoRng>(
+        db: Rc<dyn ChatDb>,
+        user: impl Into<String>,
+        device_id: u32,
+        num_one_time: usize,
+        rng: &mut R,
+    ) -> Result<Self> {
+        Self::generate_device(
+            db,
+            user,
+            device_id,
+            num_one_time,
+            keys::NewDevice::Standalone { identity: None },
+            rng,
+        )
+        .await
+    }
+
+    /// Another device of `from`'s account, with its identity: the local half
+    /// of linking, for tests and tools.
+    pub async fn generate_linked<R: Rng + CryptoRng>(
+        db: Rc<dyn ChatDb>,
+        from: &Session,
+        device_id: u32,
+        num_one_time: usize,
+        rng: &mut R,
+    ) -> Result<Self> {
+        let user = from.user().to_string();
+        Self::generate_device(
+            db,
+            user,
+            device_id,
+            num_one_time,
+            keys::NewDevice::Standalone {
+                identity: Some(from.local_identity_key_pair()),
+            },
+            rng,
+        )
+        .await
+    }
+
+    /// What this device publishes for its bundle, right after it was
+    /// generated.
+    pub fn published_keys(&self) -> Option<&keys::PublishedKeys> {
+        self.published.as_ref()
+    }
+
+    pub(crate) async fn generate_device<R: Rng + CryptoRng>(
         db: Rc<dyn ChatDb>,
         user: impl Into<String>,
         device_id: u32,
@@ -279,11 +330,12 @@ impl Session {
         let store = ChatStore::attach(db, material.local)?;
         Ok(Session {
             store,
-            registration: Some(material.registration),
+            registration: material.registration,
             account,
             address,
             group_decisions: Default::default(),
             identity_changes: Vec::new(),
+            published: Some(material.published),
         })
     }
 
@@ -317,6 +369,7 @@ impl Session {
             address,
             group_decisions: Default::default(),
             identity_changes: Vec::new(),
+            published: None,
         })
     }
 
@@ -347,6 +400,7 @@ impl Session {
             address,
             group_decisions: Default::default(),
             identity_changes: Vec::new(),
+            published: None,
         })
     }
 
@@ -4651,7 +4705,7 @@ mod sealed_tests {
     use kutup_chat_proto::{DeliveredEnvelope, DevicePreKeyBundle, EnvelopeType};
 
     fn bundle(session: &Session) -> DevicePreKeyBundle {
-        let registration = session.registration().expect("fresh registration");
+        let registration = session.published_keys().expect("fresh keys");
         DevicePreKeyBundle {
             device_id: session.device_id(),
             registration_id: registration.registration_id,

@@ -338,17 +338,18 @@ impl NativeTransport {
         path: String,
         body_json: Option<String>,
     ) -> CoreResult<ChatHttpResponse> {
+        let chat_device = self
+            .device
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone();
         let response = self
             .http
             .execute(ChatHttpRequest {
                 method,
                 path,
                 body_json,
-                chat_device: self
-                    .device
-                    .lock()
-                    .unwrap_or_else(|e| e.into_inner())
-                    .clone(),
+                chat_device,
             })
             .await
             .map_err(|error| ChatError::Transport(error.to_string()))?;

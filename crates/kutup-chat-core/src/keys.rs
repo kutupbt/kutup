@@ -42,6 +42,23 @@ pub(crate) enum NewDevice<'a> {
     Reregistration {
         manifest: &'a dyn Fn(&str, u32) -> crate::Result<AccountManifestV2>,
     },
+    /// Keys alone, with no registration request: a new identity, or the one
+    /// given (another device of the same account). For tests and tools that
+    /// serve bundles themselves.
+    Standalone { identity: Option<IdentityKeyPair> },
+}
+
+/// What a device publishes for its bundle: its registration id, the
+/// account's identity key and its prekeys.
+#[derive(Clone, Debug)]
+pub struct PublishedKeys {
+    pub registration_id: u32,
+    pub suite: DirectChatSuiteId,
+    pub identity_key: String,
+    pub signed_pre_key: EcPreKey,
+    pub last_resort_kyber_pre_key: KemPreKey,
+    pub one_time_pre_keys: Vec<EcPreKey>,
+    pub one_time_kyber_pre_keys: Vec<KemPreKey>,
 }
 /// Fixed creation timestamp for generated prekeys. Prekey timestamps drive only
 /// libsignal's rotation bookkeeping, not the wire; a constant keeps generation
@@ -53,7 +70,9 @@ const PREKEY_TS_MS: u64 = 42;
 pub(crate) struct GeneratedMaterial {
     pub local: LocalIdentity,
     pub seed: Pending,
-    pub registration: RegisterChatDeviceRequestV2,
+    pub published: PublishedKeys,
+    /// The request to register with; none for [`NewDevice::Standalone`].
+    pub registration: Option<RegisterChatDeviceRequestV2>,
 }
 
 pub(crate) struct ReplenishmentMaterial {
@@ -83,6 +102,11 @@ pub(crate) fn generate<R: Rng + CryptoRng>(
         NewDevice::Reregistration { manifest } => {
             (IdentityKeyPair::generate(rng), None, Some(manifest))
         }
+        NewDevice::Standalone { identity } => (
+            identity.unwrap_or_else(|| IdentityKeyPair::generate(rng)),
+            None,
+            None,
+        ),
     };
     let mut credential = zeroize::Zeroizing::new([0u8; DEVICE_CREDENTIAL_LEN]);
     rng.fill_bytes(credential.as_mut());
@@ -172,17 +196,10 @@ pub(crate) fn generate<R: Rng + CryptoRng>(
     }
 
     let identity_key = b64(&identity_pair.identity_key().serialize());
-    let registration_kind = match (link_token, manifest) {
-        (Some(link_token), None) => DeviceRegistrationV1::Link { link_token },
-        (None, Some(manifest)) => DeviceRegistrationV1::Reregistration {
-            manifest: Box::new(manifest(&identity_key, registration_id)?),
-        },
-        _ => unreachable!("a new device is linked or re-registered"),
-    };
-    let registration = RegisterChatDeviceRequestV2 {
-        suite: DirectChatSuiteId::PqxdhTripleRatchetV1,
+    let published = PublishedKeys {
         registration_id,
-        identity_key,
+        suite: DirectChatSuiteId::PqxdhTripleRatchetV1,
+        identity_key: identity_key.clone(),
         signed_pre_key: EcPreKey {
             key_id: spk_id,
             public_key: b64(&spk_pub),
@@ -195,20 +212,45 @@ pub(crate) fn generate<R: Rng + CryptoRng>(
         },
         one_time_pre_keys,
         one_time_kyber_pre_keys,
-        name: name.into(),
-        credential,
-        registration: registration_kind,
     };
-    registration
-        .validate()
-        .map_err(|error| crate::ChatError::Invalid(format!("registration request: {error}")))?;
-    seed.registration_upload = Some(Some(serde_json::to_vec(&registration).map_err(
-        |error| crate::ChatError::Content(format!("serialize registration request: {error}")),
-    )?));
+    let registration_kind = match (link_token, manifest) {
+        (Some(link_token), None) => Some(DeviceRegistrationV1::Link { link_token }),
+        (None, Some(manifest)) => Some(DeviceRegistrationV1::Reregistration {
+            manifest: Box::new(manifest(&identity_key, registration_id)?),
+        }),
+        _ => None,
+    };
+    let registration = match registration_kind {
+        Some(registration_kind) => {
+            let registration = RegisterChatDeviceRequestV2 {
+                suite: published.suite,
+                registration_id,
+                identity_key,
+                signed_pre_key: published.signed_pre_key.clone(),
+                last_resort_kyber_pre_key: published.last_resort_kyber_pre_key.clone(),
+                one_time_pre_keys: published.one_time_pre_keys.clone(),
+                one_time_kyber_pre_keys: published.one_time_kyber_pre_keys.clone(),
+                name: name.into(),
+                credential,
+                registration: registration_kind,
+            };
+            registration.validate().map_err(|error| {
+                crate::ChatError::Invalid(format!("registration request: {error}"))
+            })?;
+            seed.registration_upload = Some(Some(serde_json::to_vec(&registration).map_err(
+                |error| {
+                    crate::ChatError::Content(format!("serialize registration request: {error}"))
+                },
+            )?));
+            Some(registration)
+        }
+        None => None,
+    };
 
     Ok(GeneratedMaterial {
         local,
         seed,
+        published,
         registration,
     })
 }

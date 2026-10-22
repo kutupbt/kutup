@@ -558,14 +558,72 @@ fn match_expected_account(expected_peer: &str, authenticated_account: &AccountRe
 #[cfg(test)]
 mod tests {
     use super::*;
+    use kutup_chat_proto::{AccountManifestDeviceV2, DirectChatSuiteId};
+
+    const ALICE_IDENTITY: &str =
+        "0506863bc66d02b40d27b8d49ca7c09e9239236f9d7d25d6fcca5ce13c7064d868";
+    const BOB_IDENTITY: &str = "05f781b6fb32fed9ba1cf2de978d4d5da28dc34046ae814402b5c0dbd96fda907b";
+    const ALICE: &str = "aci:00000000-0000-4000-8000-2bd806c97f0e@alpha.example";
+    const BOB: &str = "aci:00000000-0000-4000-8000-81b637d8fcd2@beta.example";
+
+    fn key(hex_key: &str) -> libsignal_protocol::IdentityKey {
+        libsignal_protocol::IdentityKey::decode(&hex::decode(hex_key).unwrap()).unwrap()
+    }
+
+    fn key_b64(hex_key: &str) -> String {
+        STANDARD.encode(hex::decode(hex_key).unwrap())
+    }
+
+    fn device(device_id: u32, registration_id: u32) -> AccountManifestDeviceV2 {
+        AccountManifestDeviceV2 {
+            device_id,
+            direct_chat_suite: DirectChatSuiteId::PqxdhTripleRatchetV1,
+            registration_id,
+            mls: None,
+        }
+    }
+
+    /// libsignal's own fingerprint vector (testVectorsVersion2), through the
+    /// helper the safety number uses.
+    #[test]
+    fn the_fingerprint_is_libsignals_v2_vector() {
+        let (alice_digits, alice_scannable) = fingerprint(
+            b"+14152222222",
+            &key(ALICE_IDENTITY),
+            b"+14153333333",
+            &key(BOB_IDENTITY),
+        )
+        .unwrap();
+        let (bob_digits, bob_scannable) = fingerprint(
+            b"+14153333333",
+            &key(BOB_IDENTITY),
+            b"+14152222222",
+            &key(ALICE_IDENTITY),
+        )
+        .unwrap();
+        let expected = "300354477692869396892869876765458257569162576843440918079131"
+            .as_bytes()
+            .chunks(5)
+            .map(|chunk| std::str::from_utf8(chunk).unwrap())
+            .collect::<Vec<_>>()
+            .join(" ");
+        assert_eq!(alice_digits, expected);
+        assert_eq!(bob_digits, expected);
+        assert_eq!(
+            hex::encode(alice_scannable.serialize().unwrap()),
+            "080212220a201e301a0353dce3dbe7684cb8336e85136cdc0ee96219494ada305d62a7bd61df1a220a20d62cbf73a11592015b6b9f1682ac306fea3aaf3885b84d12bca631e9d4fb3a4d"
+        );
+        assert!(alice_scannable
+            .compare(&bob_scannable.serialize().unwrap())
+            .unwrap());
+    }
 
     /// The one-way suite upgrade (docs/plans/pq-shares.md): a pinned suite-1
     /// Drive key rises to X-Wing only in the linked next manifest, under the
     /// same authority and signing key; never back, never across a gap.
     #[test]
     fn a_drive_key_changes_only_by_rising_to_x_wing_in_the_next_manifest() {
-        use kutup_chat_proto::{AccountManifestDeviceV2, DirectChatSuiteId};
-        let peer = "aci:00000000-0000-4000-8000-81b637d8fcd2@chat.example";
+        let peer = BOB;
         let authority = AccountAuthority::derive(&[5u8; 32]).unwrap();
         let sign = |sequence: u64, previous: Option<String>| {
             authority
@@ -573,13 +631,8 @@ mod tests {
                     peer.parse().unwrap(),
                     sequence,
                     previous,
-                    vec![AccountManifestDeviceV2 {
-                        device_id: 1,
-                        direct_chat_suite: DirectChatSuiteId::PqxdhTripleRatchetV1,
-                        identity_key: STANDARD.encode([5u8; 33]),
-                        registration_id: 7,
-                        mls: None,
-                    }],
+                    key_b64(BOB_IDENTITY),
+                    vec![device(1, 7)],
                     "2026-10-18T00:00:00Z",
                 )
                 .unwrap()
@@ -611,94 +664,113 @@ mod tests {
         assert!(verify_manifest_trust(peer, &after, Some(&risen)).is_ok());
     }
 
-    fn trust(peer: &str, authority: &AccountAuthority) -> ManifestTrust {
-        ManifestTrust {
-            peer: peer.into(),
-            account: peer.into(),
-            incarnation_id: authority.incarnation_id(),
-            authority_key_id: authority.key_id(),
-            self_authority_key: authority.public_key_base64(),
-            drive_hpke_public_key: STANDARD.encode([7u8; 32]),
-            drive_share_signing_public_key: STANDARD.encode([8u8; 32]),
-            highest_sequence: 1,
-            manifest_hash: "11".repeat(32),
-            trust: AuthorityTrust::Tofu,
-            continuity_gap: false,
-            quarantine_reason: None,
-            pending_reset: None,
-        }
+    /// A peer's pin, as a verified manifest of `account` with `identity`
+    /// leaves it.
+    fn trust(account: &str, seed: u8, identity: &str) -> ManifestTrust {
+        let authority = AccountAuthority::derive(&[seed; 32]).unwrap();
+        let manifest = authority
+            .sign_manifest(
+                account.parse().unwrap(),
+                1,
+                None,
+                key_b64(identity),
+                vec![device(1, 7)],
+                "2026-10-18T00:00:00Z",
+            )
+            .unwrap();
+        verify_manifest_trust(account, &manifest, None).unwrap()
     }
 
     #[test]
     fn safety_number_is_symmetric_and_losslessly_formatted() {
-        let alice = AccountAuthority::derive(&[1u8; 32]).unwrap();
-        let bob = AccountAuthority::derive(&[2u8; 32]).unwrap();
-        let alice_view = derive_safety_number(
-            "aci:00000000-0000-4000-8000-2bd806c97f0e@alpha.example",
-            &alice.public_key_base64(),
-            &trust(
-                "aci:00000000-0000-4000-8000-81b637d8fcd2@beta.example",
-                &bob,
-            ),
-        )
-        .unwrap();
-        let bob_view = derive_safety_number(
-            "aci:00000000-0000-4000-8000-81b637d8fcd2@beta.example",
-            &bob.public_key_base64(),
-            &trust(
-                "aci:00000000-0000-4000-8000-2bd806c97f0e@alpha.example",
-                &alice,
-            ),
-        )
-        .unwrap();
+        let alice_view =
+            derive_safety_number(ALICE, &key(ALICE_IDENTITY), &trust(BOB, 2, BOB_IDENTITY))
+                .unwrap();
+        let bob_view =
+            derive_safety_number(BOB, &key(BOB_IDENTITY), &trust(ALICE, 1, ALICE_IDENTITY))
+                .unwrap();
 
         assert_eq!(alice_view.fingerprint, bob_view.fingerprint);
+        assert_eq!(alice_view.identity_key, key_b64(BOB_IDENTITY));
         let groups: Vec<_> = alice_view.fingerprint.split(' ').collect();
         assert_eq!(groups.len(), 12);
         assert!(groups
             .iter()
             .all(|group| group.len() == 5 && group.bytes().all(|byte| byte.is_ascii_digit())));
+        assert!(alice_view.qr_payload.starts_with(SAFETY_QR_PREFIX));
         // Each side scans the other's code; its own does not match.
         assert!(alice_view.matches_qr_payload(&bob_view.qr_payload));
         assert!(bob_view.matches_qr_payload(&alice_view.qr_payload));
         assert!(!alice_view.matches_qr_payload(&alice_view.qr_payload));
+        assert_eq!(alice_view.trust, AuthorityTrust::Tofu);
     }
 
     #[test]
-    fn safety_number_rejects_another_pair_and_note_to_self() {
-        let alice = AccountAuthority::derive(&[1u8; 32]).unwrap();
-        let bob = AccountAuthority::derive(&[2u8; 32]).unwrap();
-        let mallory = AccountAuthority::derive(&[3u8; 32]).unwrap();
-        let expected = derive_safety_number(
-            "aci:00000000-0000-4000-8000-2bd806c97f0e@alpha.example",
-            &alice.public_key_base64(),
-            &trust(
-                "aci:00000000-0000-4000-8000-81b637d8fcd2@beta.example",
-                &bob,
-            ),
-        )
-        .unwrap();
-        let wrong = derive_safety_number(
-            "aci:00000000-0000-4000-8000-2bd806c97f0e@alpha.example",
-            &alice.public_key_base64(),
-            &trust(
-                "aci:00000000-0000-4000-8000-c0a497761b17@gamma.example",
-                &mallory,
-            ),
-        )
-        .unwrap();
-
-        assert!(!expected.matches_qr_payload(&wrong.qr_payload));
-        assert!(!expected
-            .matches_qr_payload(&"x".repeat(kutup_crypto::safety_number::MAX_QR_BYTES + 1)));
+    fn safety_number_rejects_another_identity_and_note_to_self() {
+        let expected =
+            derive_safety_number(ALICE, &key(ALICE_IDENTITY), &trust(BOB, 2, BOB_IDENTITY))
+                .unwrap();
+        // Bob under another identity (a reset): another number; a scan of
+        // its code doesn't match the number for the old one.
+        let other = libsignal_protocol::IdentityKeyPair::generate(&mut rand::rng());
+        let other_hex = hex::encode(other.identity_key().serialize());
+        let reset_bob_view =
+            derive_safety_number(BOB, &key(&other_hex), &trust(ALICE, 1, ALICE_IDENTITY)).unwrap();
+        assert!(!expected.matches_qr_payload(&reset_bob_view.qr_payload));
+        assert!(!expected.matches_qr_payload("kutup://verify/v3/abc"));
+        assert!(!expected.matches_qr_payload(&format!("{SAFETY_QR_PREFIX}!!")));
         assert!(derive_safety_number(
-            "aci:00000000-0000-4000-8000-2bd806c97f0e@alpha.example",
-            &alice.public_key_base64(),
-            &trust(
-                "aci:00000000-0000-4000-8000-2bd806c97f0e@alpha.example",
-                &alice
-            ),
+            ALICE,
+            &key(ALICE_IDENTITY),
+            &trust(ALICE, 1, ALICE_IDENTITY)
         )
         .is_err());
+    }
+
+    /// Verified stays with the identity it verified: kept while later
+    /// manifests only change devices, gone with another identity.
+    #[test]
+    fn verified_clears_with_another_identity_only() {
+        let authority = AccountAuthority::derive(&[2u8; 32]).unwrap();
+        let sign = |sequence: u64, previous: Option<String>, identity: &str, devices| {
+            authority
+                .sign_manifest(
+                    BOB.parse().unwrap(),
+                    sequence,
+                    previous,
+                    key_b64(identity),
+                    devices,
+                    "2026-10-18T00:00:00Z",
+                )
+                .unwrap()
+        };
+        let first = sign(1, None, BOB_IDENTITY, vec![device(1, 7)]);
+        let mut pin = verify_manifest_trust(BOB, &first, None).unwrap();
+        pin.identity_verified = true;
+        pin.identity_verified_at_ms = 42;
+        let linked = sign(
+            2,
+            Some(pin.manifest_hash.clone()),
+            BOB_IDENTITY,
+            vec![device(1, 7), device(2, 9)],
+        );
+        let kept = verify_manifest_trust(BOB, &linked, Some(&pin)).unwrap();
+        assert!(kept.identity_verified);
+        assert_eq!(kept.identity_verified_at_ms, 42);
+        let other = libsignal_protocol::IdentityKeyPair::generate(&mut rand::rng());
+        let reset = sign(
+            3,
+            Some(kept.manifest_hash.clone()),
+            &hex::encode(other.identity_key().serialize()),
+            vec![device(1, 11)],
+        );
+        let cleared = verify_manifest_trust(BOB, &reset, Some(&kept)).unwrap();
+        assert!(!cleared.identity_verified);
+        assert_eq!(cleared.identity_verified_at_ms, 0);
+        assert_ne!(cleared.identity_key, kept.identity_key);
+        let view = derive_safety_number(ALICE, &key(ALICE_IDENTITY), &kept).unwrap();
+        assert_eq!(view.trust, AuthorityTrust::Verified);
+        let view = derive_safety_number(ALICE, &key(ALICE_IDENTITY), &cleared).unwrap();
+        assert_eq!(view.trust, AuthorityTrust::Tofu);
     }
 }

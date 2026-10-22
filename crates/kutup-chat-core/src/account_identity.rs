@@ -299,7 +299,7 @@ impl Engine {
                 .map_err(ChatError::Trust)?;
             Ok(manifest)
         };
-        let session = Session::generate(
+        let session = Session::generate_device(
             db,
             user,
             REREGISTRATION_DEVICE_ID,
@@ -326,7 +326,7 @@ impl Engine {
         crate::timeline::ensure_built(db.as_ref()).await?;
         // The provisional id is never used for a crypto operation before the
         // server's answer binds the real one.
-        let session = Session::generate(
+        let session = Session::generate_device(
             db,
             user,
             1,
@@ -379,6 +379,8 @@ impl Engine {
         session.complete_registration(device_id).await?;
         let mut engine = Engine::new(session, transport);
         engine.authenticate_device()?;
+        // A new device's sender keys are new: the groups' books start over.
+        engine.forget_sender_books().await?;
         // The re-registration's manifest is the account's head now: pin it as
         // this account's own.
         if let kutup_chat_proto::DeviceRegistrationV1::Reregistration { manifest } =
@@ -721,6 +723,7 @@ impl Engine {
         self.authenticate_device()?;
         self.known_devices.clear();
         self.known_devices_at.clear();
+        self.forget_sender_books().await?;
         self.accept_current_manifest_evidence(&user, manifest)
             .await?;
         Ok(())
@@ -735,4 +738,292 @@ fn decode_record(value: &str) -> Result<Vec<u8>> {
 
 fn protocol(error: libsignal_protocol::SignalProtocolError) -> ChatError {
     ChatError::Protocol(error.to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use std::rc::Rc;
+
+    use futures_executor::block_on;
+
+    use super::*;
+    use crate::group_harness_tests::{rng, World, ISSUED_AT};
+    use crate::SqliteChatDb;
+
+    fn authority(person: &crate::group_harness_tests::Person) -> AccountAuthority {
+        AccountAuthority::derive(&[person.authority_seed; 32]).unwrap()
+    }
+
+    fn head(world: &Rc<World>, account: &str) -> AccountManifestV2 {
+        block_on(world.client(account).fetch_manifest(account))
+            .unwrap()
+            .unwrap()
+    }
+
+    fn settings() -> ProvisionedSettings {
+        ProvisionedSettings {
+            read_receipts: false,
+            typing_indicators: true,
+        }
+    }
+
+    /// An account's first device re-registers: device 1 alone, the chain's
+    /// first manifest; a later re-registration continues the chain and
+    /// drops every other device.
+    #[test]
+    fn re_registration_lists_device_one_alone_and_continues_the_chain() {
+        let world = World::new();
+        let mut alice = world.person(1);
+        let first = head(&world, &alice.account);
+        assert_eq!(first.devices.len(), 1);
+        assert_eq!(first.devices[0].device_id, REREGISTRATION_DEVICE_ID);
+        assert_eq!(
+            first.identity_key,
+            alice.engine.session().account_identity_key()
+        );
+        let _alice2 = world.link_device(&mut alice);
+        let linked = head(&world, &alice.account);
+        assert_eq!(linked.devices.len(), 2);
+
+        // Every device lost: a new browser re-registers.
+        let client = world.client(&alice.account);
+        let fresh = block_on(Engine::reregister(
+            Rc::new(SqliteChatDb::open_in_memory().unwrap()),
+            client,
+            alice.account.clone(),
+            &authority(&alice),
+            ISSUED_AT,
+            8,
+            &mut rng(),
+        ))
+        .unwrap();
+        let reregistered = head(&world, &alice.account);
+        reregistered.verify_successor(Some(&linked)).unwrap();
+        assert_eq!(reregistered.devices.len(), 1);
+        assert_eq!(reregistered.devices[0].device_id, REREGISTRATION_DEVICE_ID);
+        assert_ne!(reregistered.identity_key, linked.identity_key);
+        assert_eq!(
+            fresh.session().account_identity_key(),
+            reregistered.identity_key
+        );
+    }
+
+    /// Linking end to end: the code, the envelope, the checks, and a new
+    /// device with the account's identity.
+    #[test]
+    fn a_linked_device_shares_the_account_identity() {
+        let world = World::new();
+        let mut alice = world.person(1);
+        let alice2 = world.link_device(&mut alice);
+        assert_eq!(
+            alice2.engine.session().account_identity_key(),
+            alice.engine.session().account_identity_key()
+        );
+        assert_ne!(alice2.device(), alice.device());
+        let manifest = head(&world, &alice.account);
+        assert!(manifest.device(alice2.device()).is_some());
+        assert_eq!(
+            manifest.identity_key,
+            alice.engine.session().account_identity_key()
+        );
+        // The new device holds a credential of its own.
+        let local = block_on(alice2.engine.session().db().load_local_identity())
+            .unwrap()
+            .unwrap();
+        assert!(local.credential.is_some());
+    }
+
+    #[test]
+    fn a_provisioning_message_is_refused_unless_it_checks_out() {
+        let world = World::new();
+        let mut alice = world.person(1);
+        let bob = world.person(2);
+        let linking = LinkingDevice::new();
+        let envelope = world.provisioning_envelope(&mut alice, &linking, settings());
+
+        // Another account's new device: refused.
+        let bob_client = world.client(&bob.account);
+        assert!(matches!(
+            block_on(linking.verify(
+                bob_client.as_ref(),
+                &bob.account,
+                &authority(&bob),
+                &envelope
+            )),
+            Err(ChatError::Trust(_))
+        ));
+        // Tampered with on the way: refused before anything is read.
+        let mut tampered = envelope.clone();
+        let mut body = STANDARD.decode(&tampered.body).unwrap();
+        let last = body.len() - 1;
+        body[last] ^= 1;
+        tampered.body = STANDARD.encode(&body);
+        let client = world.client(&alice.account);
+        assert!(block_on(linking.verify(
+            client.as_ref(),
+            &alice.account,
+            &authority(&alice),
+            &tampered
+        ))
+        .is_err());
+        // Another ephemeral key than the code's: it doesn't open.
+        assert!(block_on(LinkingDevice::new().verify(
+            client.as_ref(),
+            &alice.account,
+            &authority(&alice),
+            &envelope
+        ))
+        .is_err());
+        // The account's identity moved on (a reset) after it was sent: the
+        // manifest lists another identity now.
+        block_on(alice.engine.reset_identity(&[], ISSUED_AT, &mut rng())).unwrap();
+        assert!(matches!(
+            block_on(linking.verify(
+                client.as_ref(),
+                &alice.account,
+                &authority(&alice),
+                &envelope
+            )),
+            Err(ChatError::Trust(_))
+        ));
+    }
+
+    #[test]
+    fn a_fresh_envelope_verifies() {
+        let world = World::new();
+        let mut alice = world.person(1);
+        let linking = LinkingDevice::new();
+        let envelope = world.provisioning_envelope(&mut alice, &linking, settings());
+        let client = world.client(&alice.account);
+        let provision = block_on(linking.verify(
+            client.as_ref(),
+            &alice.account,
+            &authority(&alice),
+            &envelope,
+        ))
+        .unwrap();
+        assert_eq!(provision.settings, settings());
+    }
+
+    /// "Reset identity, keep my devices": the sender installs the new
+    /// identity at once, keeping its device id and credential, its one-time
+    /// keys gone; the other device takes it from its sync.
+    #[test]
+    fn a_distribution_moves_every_kept_device_to_the_new_identity() {
+        let world = World::new();
+        let mut alice = world.person(1);
+        let mut alice2 = world.link_device(&mut alice);
+        let before = block_on(alice.engine.session().db().load_local_identity())
+            .unwrap()
+            .unwrap();
+        let old_identity = alice.engine.session().account_identity_key();
+        assert!(block_on(alice.engine.session().db().load_pre_key(100))
+            .unwrap()
+            .is_some());
+
+        let kept = block_on(alice.engine.reset_identity(&[], ISSUED_AT, &mut rng())).unwrap();
+        assert_eq!(kept, vec![alice.device(), alice2.device()]);
+        let manifest = head(&world, &alice.account);
+        let new_identity = alice.engine.session().account_identity_key();
+        assert_ne!(new_identity, old_identity);
+        assert_eq!(manifest.identity_key, new_identity);
+        let after = block_on(alice.engine.session().db().load_local_identity())
+            .unwrap()
+            .unwrap();
+        assert_eq!(after.device_id, before.device_id);
+        assert_eq!(after.credential, before.credential);
+        assert_eq!(
+            Some(after.registration_id),
+            manifest
+                .device(alice.device())
+                .map(|device| device.registration_id)
+        );
+        assert!(block_on(alice.engine.session().db().load_pre_key(100))
+            .unwrap()
+            .is_none());
+
+        // The other device applies its sync when it next reads its mail.
+        alice2.receive();
+        assert_eq!(alice2.engine.session().account_identity_key(), new_identity);
+        let local2 = block_on(alice2.engine.session().db().load_local_identity())
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            Some(local2.registration_id),
+            manifest
+                .device(alice2.device())
+                .map(|device| device.registration_id)
+        );
+        assert!(
+            block_on(alice2.engine.session().db().load_pending_account_identity())
+                .unwrap()
+                .is_none()
+        );
+    }
+
+    /// A sync the account moved past (a second reset before the device read
+    /// the first) is dropped: the device is no longer the account's.
+    #[test]
+    fn a_distribution_the_account_moved_past_is_dropped() {
+        let world = World::new();
+        let mut alice = world.person(1);
+        let mut alice2 = world.link_device(&mut alice);
+        block_on(alice.engine.reset_identity(&[], ISSUED_AT, &mut rng())).unwrap();
+        block_on(alice.engine.reset_identity(&[], ISSUED_AT, &mut rng())).unwrap();
+        let result = block_on(alice2.engine.receive(&mut rng()));
+        assert!(matches!(result, Err(ChatError::Trust(_))), "{result:?}");
+        assert!(
+            block_on(alice2.engine.session().db().load_pending_account_identity())
+                .unwrap()
+                .is_none()
+        );
+        assert_ne!(
+            alice2.engine.session().account_identity_key(),
+            head(&world, &alice.account).identity_key
+        );
+    }
+
+    /// A store from before the account identity (a local identity with no
+    /// credential) is no device: it links or re-registers.
+    #[test]
+    fn a_store_from_before_the_account_identity_is_no_device() {
+        let world = World::new();
+        let alice = world.person(1);
+        let db = SqliteChatDb::open_in_memory().unwrap();
+        block_on(
+            db.apply(&crate::Pending {
+                local_identity: Some(crate::LocalIdentity {
+                    identity_key_pair: alice
+                        .engine
+                        .session()
+                        .local_identity_key_pair()
+                        .serialize()
+                        .to_vec(),
+                    registration_id: 5,
+                    device_id: Some(4),
+                    credential: None,
+                }),
+                ..crate::Pending::default()
+            }),
+        )
+        .unwrap();
+        let client = world.client(&alice.account);
+        assert_eq!(
+            block_on(Engine::installation(&db, client.as_ref(), &alice.account)).unwrap(),
+            Installation::Unregistered {
+                account_has_identity: true
+            }
+        );
+        let stranger = format!(
+            "aci:00000000-0000-4000-8000-0000000000ee@{}",
+            crate::group_harness_tests::SERVER
+        );
+        let client = world.client(&stranger);
+        assert_eq!(
+            block_on(Engine::installation(&db, client.as_ref(), &stranger)).unwrap(),
+            Installation::Unregistered {
+                account_has_identity: false
+            }
+        );
+    }
 }

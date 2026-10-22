@@ -1228,6 +1228,7 @@ mod tests {
             identity_key_pair: vec![1, 2, 3],
             registration_id: 42,
             device_id: Some(3),
+            credential: Some("credential".into()),
         });
         pending.sessions.insert("alice.1".into(), Some(vec![4]));
         pending.identities.insert("alice.1".into(), vec![5]);
@@ -1299,6 +1300,9 @@ mod tests {
                 drive_share_signing_public_key: "share".into(),
                 highest_sequence: u64::MAX,
                 manifest_hash: "hash".into(),
+                identity_key: "identity".into(),
+                identity_verified: true,
+                identity_verified_at_ms: 7,
                 trust: AuthorityTrust::Verified,
                 continuity_gap: false,
                 quarantine_reason: None,

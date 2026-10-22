@@ -53,6 +53,7 @@ mod group_send;
 mod group_settings;
 mod invite_link;
 mod keys;
+pub use keys::PublishedKeys;
 mod manifest;
 mod mls_engine;
 mod mls_policy;
