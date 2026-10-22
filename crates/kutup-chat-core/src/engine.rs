@@ -22,7 +22,7 @@ use crate::db::{
 use crate::error::{ChatError, Result};
 use crate::manifest::{
     derive_safety_number, verify_bundle_trust, verify_manifest_evidence, verify_manifest_history,
-    AccountAuthority, ManifestPolicy, SafetyNumberV1,
+    AccountAuthority, ManifestPolicy, SafetyNumberV2,
 };
 use crate::sealed_sender::SealedSenderPolicyPin;
 use crate::session::{
@@ -625,7 +625,8 @@ impl Engine {
     /// boundary without leaking libsignal or storage operations.
     pub fn take_events(&mut self) -> Vec<ChatEvent> {
         for peer in self.session.take_identity_changes() {
-            self.events.push_back(ChatEvent::SafetyNumberChanged { peer });
+            self.events
+                .push_back(ChatEvent::SafetyNumberChanged { peer });
         }
         self.events.drain(..).collect()
     }
@@ -664,12 +665,9 @@ impl Engine {
         self.manifest_policy
     }
 
-    /// Build the exact pair-bound safety number from the current durable pin.
-    pub async fn safety_number(
-        &mut self,
-        authority: &AccountAuthority,
-        peer: &str,
-    ) -> Result<SafetyNumberV1> {
+    /// Build the exact pair-bound safety number from the current durable pin:
+    /// this account's identity key against the one the peer's manifest lists.
+    pub async fn safety_number(&mut self, peer: &str) -> Result<SafetyNumberV2> {
         // Receiving the first identified message establishes a Signal session,
         // but it must not treat a sender key carried by that message as an
         // account-authority pin. Fetch and authenticate the signed account
@@ -697,7 +695,7 @@ impl Engine {
             .map_or(&trust, |pending| &pending.candidate);
         let mut safety = derive_safety_number(
             &self.canonical_self()?,
-            &authority.public_key_base64(),
+            self.session.local_identity_key_pair().identity_key(),
             safety_source,
         )?;
         if trust.trust == crate::AuthorityTrust::Quarantined {
@@ -708,15 +706,15 @@ impl Engine {
         Ok(safety)
     }
 
-    /// Promote a TOFU pin only after Rust has compared the scanned QR payload
-    /// against the locally derived pair/key binding.
+    /// Mark the peer's identity verified only after Rust has compared the
+    /// scanned QR payload with the locally derived pair of identities. A
+    /// quarantined authority is accepted the same way.
     pub async fn verify_safety_number(
         &mut self,
-        authority: &AccountAuthority,
         peer: &str,
         scanned_payload: &str,
-    ) -> Result<SafetyNumberV1> {
-        let expected = self.safety_number(authority, peer).await?;
+    ) -> Result<SafetyNumberV2> {
+        let expected = self.safety_number(peer).await?;
         if expected.continuity_gap {
             return Err(ChatError::Trust(
                 "an incomplete manifest chain cannot be manually verified".into(),
@@ -732,9 +730,40 @@ impl Engine {
         } else {
             self.session.mark_authority_verified(peer).await?;
         }
-        // Verified in person: verified for the account's other apps too.
+        self.set_identity_verified(peer, &expected.identity_key, true)
+            .await?;
+        // Verified in person: the authority is verified for the account's
+        // other apps too.
         self.sync_identity(peer).await?;
-        self.safety_number(authority, peer).await
+        self.safety_number(peer).await
+    }
+
+    /// Mark the peer's current identity verified or not by hand, after
+    /// comparing the numbers (Signal's "Mark as verified" / "Clear
+    /// verification"). `identity_key` is the one the person compared: a
+    /// number that moved on meanwhile is refused.
+    pub async fn set_identity_verified(
+        &mut self,
+        peer: &str,
+        identity_key: &str,
+        verified: bool,
+    ) -> Result<SafetyNumberV2> {
+        let now = self.now_ms();
+        self.session
+            .set_identity_verified(peer, identity_key, verified, now)
+            .await?;
+        // The account's other devices take it from the contact list, with the
+        // contact's entry.
+        if let Some(contact) = self.session.contact(peer).await? {
+            let due = crate::contact_list::due_after_change(&contact, now);
+            self.session
+                .save_contact(ContactRecord {
+                    list_due_at_ms: due,
+                    ..contact
+                })
+                .await?;
+        }
+        self.safety_number(peer).await
     }
 
     pub async fn contacts(&self) -> Result<Vec<ContactRecord>> {

@@ -17,8 +17,8 @@ use kutup_chat_core::{
     InboundFailureKind, InboundState, Result, SendOutcome, Session, SqliteChatDb,
 };
 use kutup_chat_proto::{
-    ConversationId, DeliveredEnvelope, DevicePreKeyBundle, MailboxPage, OutgoingEnvelope,
-    RegisterChatDeviceRequestV2, SendMessagesRequest, AccountPreKeyBundlesResponse,
+    AccountPreKeyBundlesResponse, ConversationId, DeliveredEnvelope, DevicePreKeyBundle,
+    MailboxPage, OutgoingEnvelope, RegisterChatDeviceRequestV2, SendMessagesRequest,
 };
 use rand::rngs::OsRng;
 use rand::{CryptoRng, Rng, TryRngCore as _};

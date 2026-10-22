@@ -89,8 +89,8 @@ impl LinkingDevice {
     /// The code to show, as a QR code and as text, once the socket has given
     /// its address (canonical unpadded base64url of 16 bytes).
     pub fn link_code(&self, address: &str) -> Result<String> {
-        let address = kutup_chat_proto::decode_provisioning_address(address)
-            .map_err(ChatError::Protocol)?;
+        let address =
+            kutup_chat_proto::decode_provisioning_address(address).map_err(ChatError::Protocol)?;
         Ok(ProvisioningLinkCodeV1 {
             address,
             public_key: self.key_pair.public_key(),
@@ -125,7 +125,9 @@ impl LinkingDevice {
             .map_err(|error| ChatError::Protocol(format!("provisioning message: {error}")))?;
         message.validate().map_err(ChatError::Protocol)?;
         if message.provisioning_version != PROVISIONING_VERSION {
-            return Err(ChatError::Protocol("unsupported provisioning version".into()));
+            return Err(ChatError::Protocol(
+                "unsupported provisioning version".into(),
+            ));
         }
         let account = crate::address::parse_account(user)?;
         if message.account != account {
@@ -133,7 +135,8 @@ impl LinkingDevice {
                 "the provisioning message is for another account".into(),
             ));
         }
-        let identity = identity_from_parts(&message.identity_key_public, &message.identity_key_private)?;
+        let identity =
+            identity_from_parts(&message.identity_key_public, &message.identity_key_private)?;
 
         let head = transport
             .fetch_manifest(user)
@@ -589,10 +592,7 @@ impl Engine {
                     .map_err(|error| ChatError::Content(error.to_string()))?;
                 messages.push((bundle, plaintext));
             }
-            let mut device_messages = self
-                .session
-                .seal_to_own_devices(&messages, rng)
-                .await?;
+            let mut device_messages = self.session.seal_to_own_devices(&messages, rng).await?;
             device_messages.sort_by_key(|envelope| envelope.device_id);
             devices.sort_by_key(|keys| keys.device_id);
             let request = kutup_chat_proto::AccountIdentityDistributionRequest {
@@ -628,7 +628,9 @@ impl Engine {
             self.reopen_after_identity_change(&manifest).await?;
             return Ok(kept.iter().map(|device| device.device_id).collect());
         }
-        Err(ChatError::SendNotConverged(crate::engine::MAX_SEND_ATTEMPTS))
+        Err(ChatError::SendNotConverged(
+            crate::engine::MAX_SEND_ATTEMPTS,
+        ))
     }
 
     /// Apply an `accountIdentity` sync another device of this account sent
@@ -675,17 +677,19 @@ impl Engine {
         let signed_record = libsignal_protocol::SignedPreKeyRecord::deserialize(&signed)
             .map_err(|error| ChatError::Protocol(format!("signed prekey: {error}")))?;
         let last_resort = decode_record(&body.last_resort_kyber_pre_key)?;
-        let last_resort_record = libsignal_protocol::KyberPreKeyRecord::deserialize(&last_resort)
-            .map_err(|error| ChatError::Protocol(format!("last-resort Kyber key: {error}")))?;
+        let last_resort_record =
+            libsignal_protocol::KyberPreKeyRecord::deserialize(&last_resort)
+                .map_err(|error| ChatError::Protocol(format!("last-resort Kyber key: {error}")))?;
         // Both keys are the new identity's, as the server checked too.
-        let signed_ok = identity
-            .public_key()
-            .verify_signature(
-                &signed_record.public_key().map_err(protocol)?.serialize(),
-                &signed_record.signature().map_err(protocol)?,
-            );
+        let signed_ok = identity.public_key().verify_signature(
+            &signed_record.public_key().map_err(protocol)?.serialize(),
+            &signed_record.signature().map_err(protocol)?,
+        );
         let last_resort_ok = identity.public_key().verify_signature(
-            &last_resort_record.public_key().map_err(protocol)?.serialize(),
+            &last_resort_record
+                .public_key()
+                .map_err(protocol)?
+                .serialize(),
             &last_resort_record.signature().map_err(protocol)?,
         );
         if !signed_ok || !last_resort_ok {

@@ -12,13 +12,14 @@ use base64::engine::general_purpose::STANDARD;
 use base64::Engine as _;
 use kutup_chat_proto::{
     AccountManifestHistoryPageV2, AccountManifestPublicationV2, AccountManifestV2,
-    AnonymousMlsDeviceEnvelopeV1, ChatProfileResponse, CommitMlsControlBlockResponseV1,
-    DeviceListMismatch, MailboxPage, MlsClientControlHistoryPageV1, MlsControlActionTypeV1,
-    MlsConversationMemberV1, MlsGroupAuthorizationPolicyV1, MlsGroupCryptographicPolicyV1,
-    MlsIncarnationRecoveryV1, MlsOrderingQuorumCertificateV1, MlsOrderingServicePolicyV1,
-    MlsOwnerSetV1, OwnChatProfileResponse, PreKeyCountResponse, PutChatProfileRequest,
+    AccountPreKeyBundlesResponse, AnonymousMlsDeviceEnvelopeV1, ChatProfileResponse,
+    CommitMlsControlBlockResponseV1, DeviceListMismatch, MailboxPage,
+    MlsClientControlHistoryPageV1, MlsControlActionTypeV1, MlsConversationMemberV1,
+    MlsGroupAuthorizationPolicyV1, MlsGroupCryptographicPolicyV1, MlsIncarnationRecoveryV1,
+    MlsOrderingQuorumCertificateV1, MlsOrderingServicePolicyV1, MlsOwnerSetV1,
+    OwnChatProfileResponse, PreKeyCountResponse, PutChatProfileRequest,
     RecoverMlsConversationResponseV1, RegisterChatDeviceRequestV2, RegisterChatDeviceResponse,
-    ReplenishKeysRequest, SendMessagesRequest, AccountPreKeyBundlesResponse,
+    ReplenishKeysRequest, SendMessagesRequest,
 };
 use rand::rngs::OsRng;
 use rand::TryRngCore as _;
@@ -1543,22 +1544,20 @@ impl WasmChatClient {
             .map_err(chat_error)?;
         let transport = BrowserTransport { js: transport };
         let account = canonical_account(&account)?;
-        Ok(
-            match Engine::installation(&db, &transport, &account)
-                .await
-                .map_err(chat_error)?
-            {
-                crate::Installation::Registered { .. } => "registered",
-                crate::Installation::Registering => "registering",
-                crate::Installation::Unregistered {
-                    account_has_identity: true,
-                } => "link",
-                crate::Installation::Unregistered {
-                    account_has_identity: false,
-                } => "reregister",
-            }
-            .to_string(),
-        )
+        Ok(match Engine::installation(&db, &transport, &account)
+            .await
+            .map_err(chat_error)?
+        {
+            crate::Installation::Registered { .. } => "registered",
+            crate::Installation::Registering => "registering",
+            crate::Installation::Unregistered {
+                account_has_identity: true,
+            } => "link",
+            crate::Installation::Unregistered {
+                account_has_identity: false,
+            } => "reregister",
+        }
+        .to_string())
     }
 
     /// Open this browser's registered device (or finish a registration it
@@ -5123,11 +5122,7 @@ impl WasmChatClient {
 
     #[wasm_bindgen(js_name = safetyNumber)]
     pub async fn safety_number(&mut self, peer: String) -> std::result::Result<JsValue, JsValue> {
-        let safety_number = self
-            .engine
-            .safety_number(&self.authority, &peer)
-            .await
-            .map_err(chat_error)?;
+        let safety_number = self.engine.safety_number(&peer).await.map_err(chat_error)?;
         to_output(&safety_number)
     }
 
@@ -5139,7 +5134,25 @@ impl WasmChatClient {
     ) -> std::result::Result<JsValue, JsValue> {
         let safety_number = self
             .engine
-            .verify_safety_number(&self.authority, &peer, &scanned_payload)
+            .verify_safety_number(&peer, &scanned_payload)
+            .await
+            .map_err(chat_error)?;
+        to_output(&safety_number)
+    }
+
+    /// Mark the contact's identity verified (or clear it) by hand, after
+    /// comparing the numbers. `identity_key` is the `identityKey` of the
+    /// safety number the person compared.
+    #[wasm_bindgen(js_name = setIdentityVerified)]
+    pub async fn set_identity_verified(
+        &mut self,
+        peer: String,
+        identity_key: String,
+        verified: bool,
+    ) -> std::result::Result<JsValue, JsValue> {
+        let safety_number = self
+            .engine
+            .set_identity_verified(&peer, &identity_key, verified)
             .await
             .map_err(chat_error)?;
         to_output(&safety_number)

@@ -174,7 +174,9 @@ CREATE TABLE IF NOT EXISTS manifest_trust (
     continuity_gap     INTEGER NOT NULL,
     quarantine_reason  TEXT,
     pending_reset_json TEXT,
-    identity_key       TEXT    NOT NULL
+    identity_key       TEXT    NOT NULL,
+    identity_verified  INTEGER NOT NULL DEFAULT 0,
+    identity_verified_at_ms INTEGER NOT NULL DEFAULT 0
 );
 CREATE TABLE IF NOT EXISTS manifest_history (
     peer          TEXT    NOT NULL,
@@ -625,7 +627,8 @@ impl ChatDb for SqliteChatDb {
                         self_authority_key, drive_hpke_public_key,
                         drive_share_signing_public_key, highest_sequence,
                         manifest_hash, trust_state, continuity_gap,
-                        quarantine_reason, pending_reset_json, identity_key
+                        quarantine_reason, pending_reset_json, identity_key,
+                        identity_verified, identity_verified_at_ms
                  FROM manifest_trust WHERE peer = ?1",
                 [peer],
                 |row| {
@@ -648,6 +651,8 @@ impl ChatDb for SqliteChatDb {
                         highest_sequence: row.get::<_, i64>(7)? as u64,
                         manifest_hash: row.get(8)?,
                         identity_key: row.get(13)?,
+                        identity_verified: row.get::<_, i64>(14)? != 0,
+                        identity_verified_at_ms: row.get(15)?,
                         trust,
                         continuity_gap: row.get::<_, i64>(10)? != 0,
                         quarantine_reason: row.get(11)?,
@@ -1183,8 +1188,9 @@ impl ChatDb for SqliteChatDb {
                       self_authority_key, drive_hpke_public_key,
                       drive_share_signing_public_key, highest_sequence,
                       manifest_hash, trust_state, continuity_gap,
-                      quarantine_reason, pending_reset_json, identity_key)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)
+                      quarantine_reason, pending_reset_json, identity_key,
+                      identity_verified, identity_verified_at_ms)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16)
                  ON CONFLICT(peer) DO UPDATE SET
                      account = excluded.account,
                      incarnation_id = excluded.incarnation_id,
@@ -1198,7 +1204,9 @@ impl ChatDb for SqliteChatDb {
                      continuity_gap = excluded.continuity_gap,
                      quarantine_reason = excluded.quarantine_reason,
                      pending_reset_json = excluded.pending_reset_json,
-                     identity_key = excluded.identity_key",
+                     identity_key = excluded.identity_key,
+                     identity_verified = excluded.identity_verified,
+                     identity_verified_at_ms = excluded.identity_verified_at_ms",
                 rusqlite::params![
                     peer,
                     trust.account,
@@ -1219,6 +1227,8 @@ impl ChatDb for SqliteChatDb {
                         .transpose()
                         .map_err(|error| ChatError::Db(error.to_string()))?,
                     trust.identity_key,
+                    i64::from(trust.identity_verified),
+                    trust.identity_verified_at_ms,
                 ],
             ))?;
         }

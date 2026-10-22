@@ -11,7 +11,7 @@ use kutup_chat_core::{
     ChatDb, ChatError, ChatTransport, Engine, Result, SendOutcome, SqliteChatDb,
 };
 use kutup_chat_proto::{
-    MailboxPage, RegisterChatDeviceRequestV2, SendMessagesRequest, AccountPreKeyBundlesResponse,
+    AccountPreKeyBundlesResponse, MailboxPage, RegisterChatDeviceRequestV2, SendMessagesRequest,
 };
 use rand::rngs::OsRng;
 use rand::TryRngCore as _;

@@ -8,14 +8,15 @@ use std::collections::BTreeMap;
 use base64::engine::general_purpose::STANDARD;
 use base64::Engine as _;
 use kutup_chat_proto::contact_list::{
-    ChatContactEntryV1, ContactEntryControlV1, CONTACT_ENTRY_VERSION,
+    ChatContactEntryV1, ContactEntryControlV1, ContactIdentityStateV1, ContactIdentityV1,
+    CONTACT_ENTRY_VERSION,
 };
 use kutup_chat_proto::ContactState;
 use kutup_crypto::account_ref::AccountRef;
 use kutup_crypto::chat_contact_list::{self, ContactListKey};
 use rand_core::{OsRng, RngCore as _};
 
-use crate::db::ContactRecord;
+use crate::db::{ContactRecord, ManifestTrust};
 use crate::engine::Engine;
 use crate::error::{ChatError, Result};
 use crate::transport::ContactListWrite;
@@ -178,6 +179,7 @@ fn entry_of(
     contact: &ContactRecord,
     account: AccountRef,
     profile_key: Option<&[u8]>,
+    identity: Option<&ManifestTrust>,
     listed: Option<&ChatContactEntryV1>,
 ) -> ChatContactEntryV1 {
     let blocked = contact.state == ContactState::Blocked;
@@ -205,9 +207,37 @@ fn entry_of(
             source_device_id: contact.source_device_id,
             updated_at_ms: contact.updated_at_ms,
         },
+        identity: identity_of(identity, listed),
         unknown: listed
             .map(|listed| listed.unknown.clone())
             .unwrap_or_default(),
+    }
+}
+
+/// The verification an entry carries: this device's, once it set one later
+/// than the list's; else the list's as it was.
+fn identity_of(
+    trust: Option<&ManifestTrust>,
+    listed: Option<&ChatContactEntryV1>,
+) -> Option<ContactIdentityV1> {
+    let listed = listed.and_then(|listed| listed.identity.clone());
+    match trust.filter(|trust| trust.identity_verified_at_ms > 0) {
+        Some(trust)
+            if listed
+                .as_ref()
+                .is_none_or(|listed| trust.identity_verified_at_ms > listed.updated_at_ms) =>
+        {
+            Some(ContactIdentityV1 {
+                identity_key: trust.identity_key.clone(),
+                state: if trust.identity_verified {
+                    ContactIdentityStateV1::Verified
+                } else {
+                    ContactIdentityStateV1::Unverified
+                },
+                updated_at_ms: trust.identity_verified_at_ms,
+            })
+        }
+        _ => listed,
     }
 }
 
@@ -324,10 +354,12 @@ impl Engine {
             .peer_profile(&contact.peer)
             .await?
             .map(|profile| profile.key);
+        let trust = self.session.manifest_trust(&contact.peer).await?;
         let entry = entry_of(
             contact,
             account,
             key.as_deref(),
+            trust.as_ref(),
             listed.map(|(_, entry)| entry),
         );
         let same = listed.is_some_and(|(listed, written)| {
@@ -335,6 +367,7 @@ impl Engine {
                 && written.state == entry.state
                 && written.previous_state == entry.previous_state
                 && written.profile_key == entry.profile_key
+                && written.identity == entry.identity
         });
         Ok(if same {
             Step::Nothing
@@ -560,6 +593,24 @@ impl Engine {
             let peer = entry.account.to_string();
             if peer == self.session.user() {
                 continue;
+            }
+            // A verification another device of the account set later, of
+            // the identity this device has pinned for the contact.
+            if let Some(identity) = &entry.identity {
+                if let Some(trust) = self.session.manifest_trust(&peer).await? {
+                    if trust.identity_key == identity.identity_key
+                        && identity.updated_at_ms > trust.identity_verified_at_ms
+                    {
+                        self.session
+                            .set_identity_verified(
+                                &peer,
+                                &identity.identity_key,
+                                identity.state == ContactIdentityStateV1::Verified,
+                                identity.updated_at_ms,
+                            )
+                            .await?;
+                    }
+                }
             }
             let newer = local.get(&peer).is_none_or(|contact| {
                 contact_order(

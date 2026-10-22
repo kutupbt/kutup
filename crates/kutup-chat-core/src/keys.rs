@@ -80,7 +80,9 @@ pub(crate) fn generate<R: Rng + CryptoRng>(
             identity,
             link_token,
         } => (identity, Some(link_token), None),
-        NewDevice::Reregistration { manifest } => (IdentityKeyPair::generate(rng), None, Some(manifest)),
+        NewDevice::Reregistration { manifest } => {
+            (IdentityKeyPair::generate(rng), None, Some(manifest))
+        }
     };
     let mut credential = zeroize::Zeroizing::new([0u8; DEVICE_CREDENTIAL_LEN]);
     rng.fill_bytes(credential.as_mut());

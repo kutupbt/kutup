@@ -16,9 +16,9 @@ use kutup_chat_core::{
 };
 use kutup_chat_proto::{
     AccountManifestDeviceV2, AccountManifestHistoryPageV2, AccountManifestPublicationV2,
-    AccountManifestV2, DeliveredEnvelope, DeviceListMismatch, DevicePreKeyBundle,
-    DirectChatSuiteId, MailboxPage, OwnChatProfileResponse, PutChatProfileRequest, ReceiptState,
-    RegisterChatDeviceRequestV2, SendMessagesRequest, AccountPreKeyBundlesResponse,
+    AccountManifestV2, AccountPreKeyBundlesResponse, DeliveredEnvelope, DeviceListMismatch,
+    DevicePreKeyBundle, DirectChatSuiteId, MailboxPage, OwnChatProfileResponse,
+    PutChatProfileRequest, ReceiptState, RegisterChatDeviceRequestV2, SendMessagesRequest,
 };
 use rand::rngs::OsRng;
 use rand::{CryptoRng, Rng, TryRngCore as _};

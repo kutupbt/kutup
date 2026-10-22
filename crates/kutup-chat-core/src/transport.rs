@@ -14,10 +14,10 @@ use crate::error::Result;
 use async_trait::async_trait;
 use kutup_chat_proto::{
     AccountManifestHistoryPageV2, AccountManifestPublicationV2, AccountManifestV2,
-    AnonymousMlsKeyPackageRequestV1, ChatProfileResponse, DeviceListMismatch,
-    IdentifiedMlsKeyPackageRequestV1, MailboxPage, MlsKeyPackageBundleV1, OwnChatProfileResponse,
-    PreKeyCountResponse, PutChatProfileRequest, RegisterChatDeviceRequestV2, ReplenishKeysRequest,
-    SendMessagesRequest, AccountPreKeyBundlesResponse,
+    AccountPreKeyBundlesResponse, AnonymousMlsKeyPackageRequestV1, ChatProfileResponse,
+    DeviceListMismatch, IdentifiedMlsKeyPackageRequestV1, MailboxPage, MlsKeyPackageBundleV1,
+    OwnChatProfileResponse, PreKeyCountResponse, PutChatProfileRequest,
+    RegisterChatDeviceRequestV2, ReplenishKeysRequest, SendMessagesRequest,
 };
 use kutup_federation_proto::FederatedFeaturePolicyHistoryV1;
 
@@ -463,4 +463,3 @@ pub enum DistributionOutcome {
     /// Nothing was stored; fetch the manifest and build it again.
     Mismatch(kutup_chat_proto::DeviceListMismatch),
 }
-

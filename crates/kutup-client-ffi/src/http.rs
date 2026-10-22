@@ -6,10 +6,10 @@ use kutup_chat_core::{
     SendOutcome,
 };
 use kutup_chat_proto::{
-    AccountManifestHistoryPageV1, AccountManifestPublicationV1, AccountManifestV1,
-    DeviceListMismatch, MailboxPage, PreKeyCountResponse, RegisterChatDeviceRequestV2,
+    AccountIdentityDistributionRequest, AccountManifestHistoryPageV2, AccountManifestPublicationV2,
+    AccountManifestV2, AccountPreKeyBundlesResponse, ChatLinkTokenResponse, DeviceListMismatch,
+    MailboxPage, PreKeyCountResponse, ProvisioningRelayRequest, RegisterChatDeviceRequestV2,
     RegisterChatDeviceResponse, ReplenishKeysRequest, SendMessagesRequest,
-    UserPreKeyBundlesResponse,
 };
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
@@ -31,6 +31,17 @@ pub trait ChatHttpClient: Send + Sync {
 
 pub(crate) struct NativeTransport {
     pub http: Arc<dyn ChatHttpClient>,
+    /// `<deviceId>.<credential>` once the device is registered.
+    pub device: std::sync::Mutex<Option<String>>,
+}
+
+impl NativeTransport {
+    pub(crate) fn new(http: Arc<dyn ChatHttpClient>) -> Self {
+        Self {
+            http,
+            device: std::sync::Mutex::new(None),
+        }
+    }
 }
 
 #[derive(Deserialize)]
@@ -42,6 +53,55 @@ struct DeliveredResponse {
 
 #[async_trait(?Send)]
 impl ChatTransport for NativeTransport {
+    fn set_device_auth(&self, device_id: u32, credential: &str) {
+        *self.device.lock().unwrap_or_else(|e| e.into_inner()) =
+            Some(format!("{device_id}.{credential}"));
+    }
+
+    async fn create_link_token(&self) -> CoreResult<ChatLinkTokenResponse> {
+        self.json::<(), _>(ChatHttpMethod::Post, "/chat/link-tokens".into(), None)
+            .await
+    }
+
+    async fn relay_provisioning(
+        &self,
+        address: &str,
+        request: &ProvisioningRelayRequest,
+    ) -> CoreResult<bool> {
+        let response = self
+            .request(
+                ChatHttpMethod::Put,
+                format!("/chat/provisioning/{}", urlencoding::encode(address)),
+                Some(encode(request)?),
+            )
+            .await?;
+        if response.status == 404 {
+            return Ok(false);
+        }
+        ensure_success(&response)?;
+        Ok(true)
+    }
+
+    async fn distribute_identity(
+        &self,
+        request: &AccountIdentityDistributionRequest,
+    ) -> CoreResult<kutup_chat_core::DistributionOutcome> {
+        let response = self
+            .request(
+                ChatHttpMethod::Put,
+                "/chat/account-identity".into(),
+                Some(encode(request)?),
+            )
+            .await?;
+        if response.status == 409 || response.status == 410 {
+            return Ok(kutup_chat_core::DistributionOutcome::Mismatch(decode(
+                &response.body_json,
+            )?));
+        }
+        ensure_success(&response)?;
+        Ok(kutup_chat_core::DistributionOutcome::Accepted)
+    }
+
     async fn register_device(&self, request: &RegisterChatDeviceRequestV2) -> CoreResult<u32> {
         let response: RegisterChatDeviceResponse = self
             .json(ChatHttpMethod::Post, "/chat/device".into(), Some(request))
@@ -49,7 +109,7 @@ impl ChatTransport for NativeTransport {
         Ok(response.device_id)
     }
 
-    async fn fetch_bundles(&self, account: &str) -> CoreResult<UserPreKeyBundlesResponse> {
+    async fn fetch_bundles(&self, account: &str) -> CoreResult<AccountPreKeyBundlesResponse> {
         self.json::<(), _>(ChatHttpMethod::Get, account_path(account, "/keys")?, None)
             .await
     }
@@ -58,7 +118,7 @@ impl ChatTransport for NativeTransport {
         &self,
         account: &str,
         current_device_id: u32,
-    ) -> CoreResult<UserPreKeyBundlesResponse> {
+    ) -> CoreResult<AccountPreKeyBundlesResponse> {
         self.json::<(), _>(
             ChatHttpMethod::Get,
             account_path(account, &format!("/keys?syncDeviceId={current_device_id}"))?,
@@ -67,7 +127,7 @@ impl ChatTransport for NativeTransport {
         .await
     }
 
-    async fn fetch_manifest(&self, account: &str) -> CoreResult<Option<AccountManifestV1>> {
+    async fn fetch_manifest(&self, account: &str) -> CoreResult<Option<AccountManifestV2>> {
         let response = self
             .request(
                 ChatHttpMethod::Get,
@@ -132,8 +192,8 @@ impl ChatTransport for NativeTransport {
 
     async fn publish_manifest(
         &self,
-        manifest: &AccountManifestV1,
-    ) -> CoreResult<AccountManifestPublicationV1> {
+        manifest: &AccountManifestV2,
+    ) -> CoreResult<AccountManifestPublicationV2> {
         self.json(
             ChatHttpMethod::Post,
             "/chat/manifest".into(),
@@ -148,7 +208,7 @@ impl ChatTransport for NativeTransport {
         from_sequence: u64,
         to_sequence: u64,
         page_from_sequence: u64,
-    ) -> CoreResult<AccountManifestHistoryPageV1> {
+    ) -> CoreResult<AccountManifestHistoryPageV2> {
         self.json::<(), _>(
             ChatHttpMethod::Get,
             account_path(account, &format!("/manifest-history?fromSequence={from_sequence}&toSequence={to_sequence}&pageFromSequence={page_from_sequence}"))?,
@@ -284,6 +344,11 @@ impl NativeTransport {
                 method,
                 path,
                 body_json,
+                chat_device: self
+                    .device
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .clone(),
             })
             .await
             .map_err(|error| ChatError::Transport(error.to_string()))?;

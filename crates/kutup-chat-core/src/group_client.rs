@@ -279,7 +279,7 @@ mod tests {
     use futures_executor::block_on;
     use kutup_chat_proto::group_route::{GroupGatewayKeyConfigV1, GroupHomePinV1};
     use kutup_chat_proto::{
-        MailboxPage, RegisterChatDeviceRequestV2, SendMessagesRequest, AccountPreKeyBundlesResponse,
+        AccountPreKeyBundlesResponse, MailboxPage, RegisterChatDeviceRequestV2, SendMessagesRequest,
     };
     use kutup_crypto::oblivious::GatewayKey;
     use kutup_federation_proto::FederationIdentityDocumentV1;

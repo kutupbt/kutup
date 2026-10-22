@@ -73,9 +73,7 @@ mod transport;
 mod wasm;
 mod wire;
 
-pub use account_identity::{
-    Installation, LinkingDevice, ProvisionedSettings, VerifiedProvision,
-};
+pub use account_identity::{Installation, LinkingDevice, ProvisionedSettings, VerifiedProvision};
 pub use address::{parse_account, ChatAddress};
 pub use call_link::{
     call_link_fragment, call_link_token_hash, new_call_link_nonce, open_joined_meeting,
@@ -109,7 +107,7 @@ pub use kutup_chat_proto::{
 };
 pub use manifest::{
     derive_safety_number, verify_bundle_response, verify_manifest, AccountAuthority,
-    ManifestPolicy, SafetyNumberV1,
+    ManifestPolicy, SafetyNumberV2, SAFETY_QR_PREFIX,
 };
 pub use mls_engine::{
     AnonymousMlsRecipientDevice, AppliedInboundMlsApplication, AppliedInboundMlsCommit,
@@ -134,7 +132,8 @@ pub use mls_policy::{
 pub use profile::{derive_wrapping_key, MAX_AVATAR_BYTES};
 pub use session::{ReceivedMessage, SendSummary, Session};
 pub use transport::{
-    ChatTransport, DistributionOutcome, GroupListItem, IdentityPinsRecord, IdentityPinsWrite, SendOutcome,
+    ChatTransport, DistributionOutcome, GroupListItem, IdentityPinsRecord, IdentityPinsWrite,
+    SendOutcome,
 };
 #[cfg(all(feature = "wasm", target_arch = "wasm32"))]
 pub use wasm::WasmChatClient;

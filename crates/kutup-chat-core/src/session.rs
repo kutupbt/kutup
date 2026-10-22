@@ -37,10 +37,10 @@ use crate::manifest::{verify_bundle_trust, verify_manifest_evidence, ManifestPol
 use crate::store::ChatStore;
 use crate::wire::{decode_ciphertext, decode_identity_key, encode_ciphertext, to_prekey_bundle};
 use kutup_chat_proto::{
-    AccountManifestDeviceV2, AccountManifestV2, ChatContent, ContactControlBody, ContactState,
-    DeliveredEnvelope, DeviceListMismatch, DevicePreKeyBundle, DirectChatSuiteId,
-    DisappearingExpiryStartBody, OutgoingEnvelope, RegisterChatDeviceRequestV2, ReplenishKeysRequest,
-    SealedOutgoingEnvelopeV1, AccountPreKeyBundlesResponse,
+    AccountManifestDeviceV2, AccountManifestV2, AccountPreKeyBundlesResponse, ChatContent,
+    ContactControlBody, ContactState, DeliveredEnvelope, DeviceListMismatch, DevicePreKeyBundle,
+    DirectChatSuiteId, DisappearingExpiryStartBody, OutgoingEnvelope, RegisterChatDeviceRequestV2,
+    ReplenishKeysRequest, SealedOutgoingEnvelopeV1,
 };
 
 /// What a [`Engine::send`](crate::Engine::send) did: whether it landed, and any
@@ -1423,10 +1423,9 @@ impl Session {
         // another device of this account. Kept, sealed in the store, in the
         // commit that acknowledges it; the engine checks it against the
         // account's manifest and installs it (`apply_account_identity`).
-        if parsed
-            .as_ref()
-            .is_some_and(|content| content.kind == kutup_chat_proto::content::kind::ACCOUNT_IDENTITY)
-        {
+        if parsed.as_ref().is_some_and(|content| {
+            content.kind == kutup_chat_proto::content::kind::ACCOUNT_IDENTITY
+        }) {
             let body = parsed
                 .as_ref()
                 .and_then(ChatContent::as_account_identity)
@@ -1441,7 +1440,8 @@ impl Session {
             let encoded = zeroize::Zeroizing::new(
                 serde_json::to_vec(&body).map_err(|e| ChatError::Content(e.to_string()))?,
             );
-            self.store.stage_pending_account_identity(Some(encoded.to_vec()));
+            self.store
+                .stage_pending_account_identity(Some(encoded.to_vec()));
             self.stage_inbound_ack(envelope)?;
             self.store.commit().await?;
             return Ok(ReceiveOutcome::AccountIdentity {
@@ -2494,8 +2494,13 @@ impl Session {
                 "current manifest requires complete history recovery".into(),
             ));
         }
-        self.stage_identity_change(account, prior_manifest.as_ref(), &trust, &device_ids(manifest))
-            .await?;
+        self.stage_identity_change(
+            account,
+            prior_manifest.as_ref(),
+            &trust,
+            &device_ids(manifest),
+        )
+        .await?;
         self.store.stage_manifest_trust(trust);
         self.store
             .stage_manifest_history(AccountManifestHistoryRecord {
@@ -2536,8 +2541,13 @@ impl Session {
             self.store.stage_manifest_history(record);
         }
         let prior_manifest = self.store.db().load_manifest_trust(account).await?;
-        self.stage_identity_change(account, prior_manifest.as_ref(), &trust, &device_ids(pending))
-            .await?;
+        self.stage_identity_change(
+            account,
+            prior_manifest.as_ref(),
+            &trust,
+            &device_ids(pending),
+        )
+        .await?;
         self.store.stage_manifest_trust(trust);
         self.store.commit().await?;
         Ok(pending.clone())
@@ -2577,7 +2587,13 @@ impl Session {
             .manifest_history(peer, &prior.incarnation_id, prior.highest_sequence)
             .await?
         {
-            devices.extend(record.manifest.devices.iter().map(|device| device.device_id));
+            devices.extend(
+                record
+                    .manifest
+                    .devices
+                    .iter()
+                    .map(|device| device.device_id),
+            );
         }
         for device_id in devices {
             let address = ChatAddress::from_sender(&next.account, device_id)?
@@ -2608,6 +2624,31 @@ impl Session {
         });
         self.identity_changes.push(peer.to_string());
         Ok(())
+    }
+
+    /// Set whether the peer's pinned identity is verified, if it is still
+    /// `identity_key`.
+    pub(crate) async fn set_identity_verified(
+        &mut self,
+        peer: &str,
+        identity_key: &str,
+        verified: bool,
+        now_ms: i64,
+    ) -> Result<ManifestTrust> {
+        let mut trust = self
+            .manifest_trust(peer)
+            .await?
+            .ok_or_else(|| ChatError::Trust(format!("no identity is pinned for {peer}")))?;
+        if trust.identity_key != identity_key {
+            return Err(ChatError::Trust(
+                "the safety number changed while it was being compared".into(),
+            ));
+        }
+        trust.identity_verified = verified;
+        trust.identity_verified_at_ms = now_ms;
+        self.store.stage_manifest_trust(trust.clone());
+        self.store.commit().await?;
+        Ok(trust)
     }
 
     /// Mark the current TOFU authority as verified after the application has
@@ -3715,7 +3756,8 @@ impl Session {
         let mut envelopes = Vec::with_capacity(messages.len());
         let result = async {
             for (bundle, plaintext) in messages {
-                let peer = ChatAddress::from_account(self.address.account.clone(), bundle.device_id);
+                let peer =
+                    ChatAddress::from_account(self.address.account.clone(), bundle.device_id);
                 envelopes.push(
                     self.seal_device(&peer, bundle, plaintext, &mut summary, rng)
                         .await?,
@@ -4086,7 +4128,11 @@ fn now() -> SystemTime {
 /// Unix-epoch millis, saturating to 0 before the epoch (never in practice).
 /// The devices a manifest lists.
 fn device_ids(manifest: &AccountManifestV2) -> Vec<u32> {
-    manifest.devices.iter().map(|device| device.device_id).collect()
+    manifest
+        .devices
+        .iter()
+        .map(|device| device.device_id)
+        .collect()
 }
 
 fn now_millis() -> i64 {

@@ -1046,7 +1046,7 @@ mod tests {
     use kutup_chat_proto::group::{check_change, check_genesis, decode_group_id, GroupLimits};
     use kutup_chat_proto::group_route::{GroupGatewayKeyConfigV1, GroupNotaryV1, GroupRequestV1};
     use kutup_chat_proto::{
-        MailboxPage, RegisterChatDeviceRequestV2, SendMessagesRequest, AccountPreKeyBundlesResponse,
+        AccountPreKeyBundlesResponse, MailboxPage, RegisterChatDeviceRequestV2, SendMessagesRequest,
     };
     use kutup_crypto::oblivious::GatewayKey;
     use kutup_federation_proto::FederationIdentityDocumentV1;

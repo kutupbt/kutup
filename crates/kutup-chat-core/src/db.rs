@@ -440,7 +440,17 @@ pub struct ManifestTrust {
     /// The account's libsignal identity key as its latest accepted manifest
     /// lists it (canonical base64). Sessions with every device of the account
     /// use it; it changes only with a later signed manifest.
+    #[serde(default)]
     pub identity_key: String,
+    /// The user verified `identity_key` (compared the safety number), as
+    /// Signal keeps a verified status with an identity. A new identity key is
+    /// never verified: an identity change clears it.
+    #[serde(default)]
+    pub identity_verified: bool,
+    /// When `identity_verified` last changed (0: never), which orders it
+    /// against what the account's other devices wrote in the contact list.
+    #[serde(default)]
+    pub identity_verified_at_ms: i64,
     pub trust: AuthorityTrust,
     /// True if this client first observed a version after v1 or skipped one or
     /// more signed versions while offline. The latest state is still authentic,

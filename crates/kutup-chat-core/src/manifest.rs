@@ -51,47 +51,95 @@ pub struct AccountAuthority {
     identity: kutup_crypto::identity::AccountIdentityKeysV1,
 }
 
-/// Human-verifiable binding between two accounts and their account
-/// self-authority public keys (kutup-crypto `safety_number`, Signal's
-/// fingerprint). Both participants show the same digits; each side's QR code
-/// carries its own half first, so a scan is compared with the other side's.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+/// The safety number of two accounts, as Signal's: libsignal's numeric
+/// fingerprint over each side's account id and account identity key
+/// (docs/plans/account-identity-key.md). Both sides show the same sixty
+/// digits; each side's QR code carries its own half first, so a scan is
+/// compared with the other side's. A new identity of either side is a new
+/// number; linking or removing a device changes nothing.
+#[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct SafetyNumberV1 {
+pub struct SafetyNumberV2 {
     pub local_account: String,
     pub peer_account: String,
-    /// Twelve five-digit groups: both sides' halves, the lower first.
+    /// Twelve five-digit groups.
     pub fingerprint: String,
-    /// This side's QR code: what the other side scans.
+    /// This side's QR code (`kutup://verify/v4/…`): what the other side scans.
     pub qr_payload: String,
-    /// The derivation, which knows the other side's QR code: what a scan
-    /// here must be.
+    /// The peer's account identity key the number covers.
+    pub identity_key: String,
     #[serde(skip)]
-    derived: kutup_crypto::safety_number::SafetyNumberV3,
+    scannable: libsignal_protocol::ScannableFingerprint,
     pub authority_key_id: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub retained_authority_key_id: Option<String>,
+    /// `Verified` when this identity was verified; `Quarantined` while the
+    /// account's authority itself is in question; `Tofu` otherwise.
     pub trust: AuthorityTrust,
     pub continuity_gap: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub quarantine_reason: Option<String>,
 }
 
-impl SafetyNumberV1 {
-    /// Compare a scanned QR payload with the other side's, derived here. The
-    /// QR never adds trust on its own: only the exact pair of accounts and
-    /// keys succeeds.
+/// The QR prefix of a [`SafetyNumberV2`] (v3 was the authority's).
+pub const SAFETY_QR_PREFIX: &str = "kutup://verify/v4/";
+/// Signal's fingerprint version for its account identities (ACI) and
+/// iteration count.
+const FINGERPRINT_VERSION: u32 = 2;
+const FINGERPRINT_ITERATIONS: u32 = 5200;
+
+impl SafetyNumberV2 {
+    /// Compare a scanned QR payload with the other side's half, derived here.
+    /// Only the exact pair of accounts and identity keys succeeds.
     pub fn matches_qr_payload(&self, scanned: &str) -> bool {
-        kutup_crypto::safety_number::matches_qr_payload(&self.derived, scanned)
+        use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+        let Some(encoded) = scanned.trim().strip_prefix(SAFETY_QR_PREFIX) else {
+            return false;
+        };
+        let Ok(bytes) = URL_SAFE_NO_PAD.decode(encoded) else {
+            return false;
+        };
+        self.scannable.compare(&bytes).unwrap_or(false)
     }
 }
 
-/// Derive the shared safety number for an already authenticated manifest pin.
+/// libsignal's fingerprint of two stable ids and identity keys: the displayed
+/// digits (grouped by five) and the scannable form.
+pub(crate) fn fingerprint(
+    local_id: &[u8],
+    local_key: &libsignal_protocol::IdentityKey,
+    peer_id: &[u8],
+    peer_key: &libsignal_protocol::IdentityKey,
+) -> Result<(String, libsignal_protocol::ScannableFingerprint)> {
+    let fingerprint = libsignal_protocol::Fingerprint::new(
+        FINGERPRINT_VERSION,
+        FINGERPRINT_ITERATIONS,
+        local_id,
+        local_key,
+        peer_id,
+        peer_key,
+    )
+    .map_err(|error| ChatError::Invalid(error.to_string()))?;
+    let digits = fingerprint
+        .display_string()
+        .map_err(|error| ChatError::Invalid(error.to_string()))?;
+    let grouped = digits
+        .as_bytes()
+        .chunks(5)
+        .map(|chunk| std::str::from_utf8(chunk).expect("digits are ASCII"))
+        .collect::<Vec<_>>()
+        .join(" ");
+    Ok((grouped, fingerprint.scannable))
+}
+
+/// Derive the safety number with an already authenticated peer pin: this
+/// account's identity key against the identity the peer's manifest lists.
 pub fn derive_safety_number(
     local_account: &str,
-    local_authority_public_key: &str,
+    local_identity_key: &libsignal_protocol::IdentityKey,
     trust: &ManifestTrust,
-) -> Result<SafetyNumberV1> {
+) -> Result<SafetyNumberV2> {
+    use base64::engine::general_purpose::URL_SAFE_NO_PAD;
     let local = crate::address::parse_account(local_account)?;
     let peer = crate::address::parse_account(&trust.account)?;
     if local == peer {
@@ -99,38 +147,40 @@ pub fn derive_safety_number(
             "Note to Self does not have a peer safety number".into(),
         ));
     }
-    let local_key = decode_authority_key("local self-authority key", local_authority_public_key)?;
-    let peer_key = decode_authority_key("peer self-authority key", &trust.self_authority_key)?;
-    // One number for every app (kutup-crypto safety_number).
-    let derived = kutup_crypto::safety_number::derive(&local, &local_key, &peer, &peer_key)
-        .map_err(|error| ChatError::Invalid(error.to_string()))?;
-
-    Ok(SafetyNumberV1 {
+    let peer_key = STANDARD
+        .decode(&trust.identity_key)
+        .ok()
+        .and_then(|bytes| libsignal_protocol::IdentityKey::decode(&bytes).ok())
+        .ok_or_else(|| ChatError::Trust("the peer has no account identity pinned".into()))?;
+    let (fingerprint, scannable) =
+        fingerprint(&local.bytes(), local_identity_key, &peer.bytes(), &peer_key)?;
+    let qr_payload = format!(
+        "{SAFETY_QR_PREFIX}{}",
+        URL_SAFE_NO_PAD.encode(
+            scannable
+                .serialize()
+                .map_err(|error| ChatError::Invalid(error.to_string()))?
+        )
+    );
+    Ok(SafetyNumberV2 {
         local_account: local.to_string(),
         peer_account: peer.to_string(),
-        fingerprint: derived.fingerprint.clone(),
-        qr_payload: derived.qr_payload.clone(),
-        derived,
+        fingerprint,
+        qr_payload,
+        identity_key: trust.identity_key.clone(),
+        scannable,
         authority_key_id: trust.authority_key_id.clone(),
         retained_authority_key_id: None,
-        trust: trust.trust,
+        trust: if trust.trust == AuthorityTrust::Quarantined {
+            AuthorityTrust::Quarantined
+        } else if trust.identity_verified {
+            AuthorityTrust::Verified
+        } else {
+            AuthorityTrust::Tofu
+        },
         continuity_gap: trust.continuity_gap,
         quarantine_reason: trust.quarantine_reason.clone(),
     })
-}
-
-fn decode_authority_key(label: &str, value: &str) -> Result<[u8; 32]> {
-    let decoded = STANDARD
-        .decode(value)
-        .map_err(|_| ChatError::Trust(format!("{label} is not canonical base64")))?;
-    if STANDARD.encode(&decoded) != value {
-        return Err(ChatError::Trust(format!(
-            "{label} is not canonical padded base64"
-        )));
-    }
-    decoded
-        .try_into()
-        .map_err(|_| ChatError::Trust(format!("{label} must be 32 bytes")))
 }
 
 impl AccountAuthority {
@@ -247,9 +297,9 @@ pub fn verify_bundle_response(
     // listed device with its listed registration id and suite, at most once.
     // A listed device may lack a bundle (the server dropped an expired one,
     // as Signal's): it is then not sent to.
-    response
-        .check_against_manifest()
-        .map_err(|error| ChatError::Trust(format!("bundles contradict the signed manifest: {error}")))?;
+    response.check_against_manifest().map_err(|error| {
+        ChatError::Trust(format!("bundles contradict the signed manifest: {error}"))
+    })?;
     verify_manifest_trust(expected_peer, manifest, prior).map(Some)
 }
 
@@ -365,6 +415,13 @@ fn verify_manifest_trust(
         highest_sequence: manifest.sequence,
         manifest_hash,
         identity_key: manifest.identity_key.clone(),
+        // Verified stays with the identity it verified: a new one is not.
+        identity_verified: prior.is_some_and(|prior| {
+            prior.identity_verified && prior.identity_key == manifest.identity_key
+        }),
+        identity_verified_at_ms: prior
+            .filter(|prior| prior.identity_key == manifest.identity_key)
+            .map_or(0, |prior| prior.identity_verified_at_ms),
         trust,
         continuity_gap,
         quarantine_reason: None,

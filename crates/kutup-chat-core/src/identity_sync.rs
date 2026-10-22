@@ -262,7 +262,7 @@ mod tests {
     use async_trait::async_trait;
     use futures_executor::block_on;
     use kutup_chat_proto::{
-        MailboxPage, RegisterChatDeviceRequestV2, SendMessagesRequest, AccountPreKeyBundlesResponse,
+        AccountPreKeyBundlesResponse, MailboxPage, RegisterChatDeviceRequestV2, SendMessagesRequest,
     };
 
     use super::*;
