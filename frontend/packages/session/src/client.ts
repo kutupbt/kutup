@@ -7,7 +7,7 @@ import { clearSession, getAccessToken, setAccessToken } from './store'
 import { noteSessionVersion, SESSION_VERSION_HEADER } from './sessionVersion'
 
 /** The server-side session types a web app can hold (X-Kutup-Client). */
-export type WebClientType = 'web-account' | 'web-drive' | 'web-chat' | 'web-maps' | 'web-photos' | 'web-office' | 'web-contacts' | 'web-mail' | 'web-pass'
+export type WebClientType = 'web-account' | 'web-drive' | 'web-chat' | 'web-maps' | 'web-photos' | 'web-office' | 'web-contacts' | 'web-mail' | 'web-pass' | 'web-calendar'
 
 let clientType: WebClientType | null = null
 

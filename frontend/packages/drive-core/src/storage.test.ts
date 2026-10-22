@@ -9,6 +9,7 @@ const usage: StorageUsage = {
   chat: { mediaBytes: 120, historyBytes: 70, historyMediaBytes: 10 },
   contacts: { bytes: 0, count: 0 },
   mail: { bytes: 0, count: 0 },
+  calendar: { bytes: 0, count: 0 },
 }
 
 describe('usageCategories', () => {

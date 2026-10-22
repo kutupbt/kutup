@@ -223,8 +223,8 @@ This builds the backend and frontend images, then starts all services:
 
 **The web apps and their hostnames.** Each app has its own origin:
 `account.`, `drive.`, `chat.`, `photos.`, `maps.`, `office.`, `contacts.`,
-`mail.` and `pass.` under `KUTUP_BASE_DOMAIN` (or the explicit
-`KUTUP_{ACCOUNT,DRIVE,CHAT,PHOTOS,MAPS,OFFICE,CONTACTS,MAIL,PASS}_URL`). One more name,
+`mail.`, `pass.` and `calendar.` under `KUTUP_BASE_DOMAIN` (or the explicit
+`KUTUP_{ACCOUNT,DRIVE,CHAT,PHOTOS,MAPS,OFFICE,CONTACTS,MAIL,PASS,CALENDAR}_URL`). One more name,
 `editor.` (`KUTUP_EDITOR_URL`), is not an app: it is the sandbox the
 OnlyOffice editor runs in, which holds no session and no keys. The backend and the
 `frontend` container read the same settings: the backend publishes the map to
@@ -876,6 +876,19 @@ vault secrets it keeps sealed. An existing deployment that names its apps one
 by one must add `KUTUP_PASS_URL` (or set `KUTUP_BASE_DOMAIN`), point `pass.`
 at the server and add it to the certificate; with `docker-compose.acme.yml`
 the name is requested automatically.
+
+The Calendar app (`KUTUP_CALENDAR_URL`, e.g. `calendar.example.org`, the
+same frontend image) keeps each calendar as Proton Calendar does: its own
+OpenPGP key, the passphrase sealed to each member's mail address key, and
+events encrypted but for their times (`docs/plans/calendar.md`). It needs a
+Mail address key, which the account makes at its first sign-in. Calendars
+and events count against the owner's storage quota; the calendars per
+account, events per calendar and the changes one sync carries are
+administrators' settings (Server settings). An existing deployment that names
+its apps one by one must add `KUTUP_CALENDAR_URL` (or set
+`KUTUP_BASE_DOMAIN`), point `calendar.` at the server and add it to the
+certificate; with `docker-compose.acme.yml` the name is requested
+automatically.
 
 The Photos app (`KUTUP_PHOTOS_URL`, e.g. `photos.example.org`, the same
 frontend image) shows people's photos and videos by when and where they were
