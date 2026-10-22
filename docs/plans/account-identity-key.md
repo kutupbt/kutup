@@ -570,7 +570,7 @@ does and doesn't revoke.
   manifest); `ChatProvisionV1`, `ProvisionEnvelopeV1`, the provisioning
   socket's messages, the relay request and the `kutup://link` code; the link
   token response; `AccountIdentityDistributionRequest` with its row-free
-  checks (`400`, or `409` with the device lists); `ReregistrationV1` (the
+  checks (`400`, or `409` with the device lists); `DeviceRegistrationV1::Reregistration` (the
   manifest lists this device alone as device 1, the id left free once the
   other rows go); `RegisterChatDeviceRequestV2` (a required
   `credential`, and `registration`: exactly one of a link token and a
