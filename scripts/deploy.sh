@@ -308,6 +308,27 @@ if docker compose ps --services 2>/dev/null | grep -qx acme && command -v openss
       sleep 5
     done
     echo "certificate now names every host"
+    # nginx notices a new certificate only on its own 30-second check: reload
+    # it now, and wait until what it serves names the new hosts.
+    docker compose exec -T nginx nginx -s reload >/dev/null
+    served() {
+      local names
+      names="$(openssl s_client -connect 127.0.0.1:443 -servername "$1" </dev/null 2>/dev/null \
+        | openssl x509 -noout -ext subjectAltName 2>/dev/null \
+        | tr ',' '\n' | sed -n 's/.*DNS://p' || true)"
+      grep -qxF "$1" <<<"$names"
+    }
+    deadline=$((SECONDS + 60))
+    for h in $missing; do
+      until served "$h"; do
+        if (( SECONDS >= deadline )); then
+          echo "deploy: nginx still serves a certificate without $h after its reload" >&2
+          exit 1
+        fi
+        sleep 2
+      done
+    done
+    echo "nginx serves it"
   fi
 fi
 failed=0
