@@ -1253,6 +1253,7 @@ mod env_example {
         ("KUTUP_HTTP_PORT", "docker-compose.yml"),
         ("KUTUP_HTTPS_PORT", "docker-compose.yml"),
         ("CHAT_TURN_REALM", "docker-compose.yml"),
+        ("CHAT_TURN_DENIED_PEER_IPS", "docker-compose.yml"),
         ("CHAT_SFU_TURN_DOMAIN", "docker-compose.yml"),
         ("KUTUP_ACME_EMAIL", "docker-compose.acme.yml"),
         ("KUTUP_ACME_DOMAINS", "docker-compose.acme.yml"),
