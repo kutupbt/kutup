@@ -2,6 +2,15 @@ import { useEffect, useState } from 'react'
 import { Camera, Link2, Loader2 } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
+import {
+  AlertDialog,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from '@kutup/ui/components/alert-dialog'
 import { Button } from '@kutup/ui/components/button'
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@kutup/ui/components/dialog'
 import { Textarea } from '@kutup/ui/components/textarea'
@@ -15,8 +24,9 @@ const LINK_CODE_PREFIX = 'kutup://link?'
 
 /**
  * Link a new device of this account (Signal's "Link a new device"): scan the
- * QR code its "Link this device" screen shows, or paste its code, and send it
- * the account's Chat identity. It then finishes on its own.
+ * QR code its "Link this device" screen shows, or paste its code, confirm
+ * (Signal's "Link this device?"), and send it the account's Chat identity. It
+ * then finishes on its own.
  */
 export function LinkNewDeviceDialog({ open, onOpenChange }: { open: boolean; onOpenChange: (open: boolean) => void }) {
   const { t } = useTranslation()
@@ -25,9 +35,13 @@ export function LinkNewDeviceDialog({ open, onOpenChange }: { open: boolean; onO
   const typingIndicators = useTypingIndicators()
   const [code, setCode] = useState('')
   const [linking, setLinking] = useState(false)
+  const [confirming, setConfirming] = useState(false)
   const scanner = useQrScanner(
     LINK_CODE_PREFIX,
-    (value) => setCode(value),
+    (value) => {
+      setCode(value)
+      setConfirming(true)
+    },
     (failure) => toast.error(t(failure === 'unsupported' ? 'chat.linkNew.scanUnsupported' : 'chat.linkNew.cameraUnavailable')),
   )
 
@@ -35,6 +49,7 @@ export function LinkNewDeviceDialog({ open, onOpenChange }: { open: boolean; onO
     if (!open) {
       scanner.stop()
       setCode('')
+      setConfirming(false)
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open])
@@ -43,6 +58,7 @@ export function LinkNewDeviceDialog({ open, onOpenChange }: { open: boolean; onO
 
   async function link() {
     if (!service || !valid || linking) return
+    setConfirming(false)
     setLinking(true)
     try {
       const sent = await service.linkDevice(code, { readReceipts, typingIndicators })
@@ -90,11 +106,25 @@ export function LinkNewDeviceDialog({ open, onOpenChange }: { open: boolean; onO
             />
           </label>
           <p className="text-xs text-muted-foreground">{t('chat.linkNew.warning')}</p>
-          <Button type="button" disabled={!valid || linking} onClick={() => void link()} data-testid="chat-link-new-submit">
+          <Button type="button" disabled={!valid || linking} onClick={() => setConfirming(true)} data-testid="chat-link-new-submit">
             {linking ? <Loader2 className="animate-spin" /> : <Link2 />}
             {t('chat.linkNew.submit')}
           </Button>
         </div>
+        <AlertDialog open={confirming && valid} onOpenChange={setConfirming}>
+          <AlertDialogContent data-testid="chat-link-new-confirm-dialog">
+            <AlertDialogHeader>
+              <AlertDialogTitle>{t('chat.linkNew.confirmTitle')}</AlertDialogTitle>
+              <AlertDialogDescription>{t('chat.linkNew.confirmBody')}</AlertDialogDescription>
+            </AlertDialogHeader>
+            <AlertDialogFooter>
+              <AlertDialogCancel>{t('common.cancel')}</AlertDialogCancel>
+              <Button onClick={() => void link()} data-testid="chat-link-new-confirm">
+                {t('chat.linkNew.confirm')}
+              </Button>
+            </AlertDialogFooter>
+          </AlertDialogContent>
+        </AlertDialog>
       </DialogContent>
     </Dialog>
   )

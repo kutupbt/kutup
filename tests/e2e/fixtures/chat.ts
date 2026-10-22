@@ -43,6 +43,8 @@ export async function linkDevice(from: Page, to: Page): Promise<void> {
   await from.getByTestId('chat-link-new-device').click()
   await from.getByTestId('chat-link-new-code').fill(value)
   await from.getByTestId('chat-link-new-submit').click()
+  // "Link this device?"
+  await from.getByTestId('chat-link-new-confirm').click()
   await expect(from.getByTestId('chat-link-new-dialog')).toBeHidden({ timeout: 45_000 })
   await openChats(from)
 }

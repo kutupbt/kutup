@@ -1306,6 +1306,9 @@
       "pasteLabel": "Ya da kodunu yapıştırın",
       "warning": "Yalnızca size ait ve önünüzde duran bir cihazı bağlayın: İleti kimliğinizi alır.",
       "submit": "Cihazı bağla",
+      "confirmTitle": "Bu cihaz bağlansın mı?",
+      "confirmBody": "İleti kimliğinizi alır: bundan sonra gelen mesajları okuyabilir, kişilerinizi ve gruplarınızı görebilir ve sizin adınıza mesaj gönderebilir. Yalnızca sizinse ve üzerinde az önce Bu cihazı bağla'yı seçtiyseniz bağlayın.",
+      "confirm": "Bağla",
       "sent": "Gönderildi. Yeni cihaz bağlanmayı kendisi tamamlar.",
       "expired": "O kodun süresi dolmuş. Yeni cihazdan yeni bir kod isteyin."
     }

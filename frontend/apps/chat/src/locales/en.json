@@ -1306,6 +1306,9 @@
       "pasteLabel": "Or paste its code",
       "warning": "Link only a device that is yours and in front of you: it gets your Chat identity.",
       "submit": "Link device",
+      "confirmTitle": "Link this device?",
+      "confirmBody": "It will get your Chat identity: it can read the messages that arrive from now on, see your contacts and groups, and send messages as you. Link it only if it is yours and you just chose Link this device on it.",
+      "confirm": "Link",
       "sent": "Sent. The new device finishes linking by itself.",
       "expired": "That code has expired. Ask the new device for a new one."
     }
