@@ -1,6 +1,6 @@
 import { FeedbackButton } from '@kutup/ui/components/feedback'
 import { feedbackServices } from '@kutup/session/feedback'
-import { BookUser, FileType, HardDrive, Images, KeyRound, Mail as MailIcon, Map as MapIcon, MessagesSquare, Plus, UserRound, Users } from 'lucide-react'
+import { BookUser, CalendarDays, FileType, HardDrive, Images, KeyRound, Mail as MailIcon, Map as MapIcon, MessagesSquare, Plus, UserRound, Users } from 'lucide-react'
 import { useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { Outlet, useSearchParams } from 'react-router-dom'
@@ -63,6 +63,7 @@ export function ContactsShell() {
             { id: 'office', name: t('apps.office'), href: appUrl('office'), icon: <FileType /> },
             { id: 'chat', name: t('apps.chat'), href: appUrl('chat'), icon: <MessagesSquare /> },
             { id: 'mail', name: t('apps.mail'), href: appUrl('mail'), icon: <MailIcon /> },
+            { id: 'calendar', name: t('apps.calendar'), href: appUrl('calendar'), icon: <CalendarDays /> },
             { id: 'pass', name: t('apps.pass'), href: appUrl('pass'), icon: <KeyRound /> },
             { id: 'contacts', name: t('apps.contacts'), href: appUrl('contacts'), icon: <BookUser /> },
             { id: 'photos', name: t('apps.photos'), href: appUrl('photos'), icon: <Images /> },
