@@ -65,6 +65,14 @@ pub struct OwnMailAddress {
     /// `active` (the current one, which sends), `receiving`, `closed` or
     /// `freed`: an old address's keys open the mail it received.
     pub state: String,
+    /// The custom domain it is on, null for the server's own domain.
+    pub domain_id: Option<String>,
+    /// Its place in the account's order (Proton's `Order`): the first
+    /// enabled current address with a key is the default.
+    pub position: i32,
+    /// Disabled (Proton's Status 0): it neither receives nor sends; its keys
+    /// keep opening the mail it received.
+    pub disabled: bool,
     pub keys: Vec<OwnMailKey>,
     /// The current signed key list; null until the first key is added.
     pub key_list: Option<SignedKeyList>,
@@ -127,15 +135,26 @@ async fn own_address(
     .bind(address_id)
     .fetch_optional(&state.pool)
     .await?;
-    let (address_state, key_list_owed): (String, bool) =
-        sqlx::query_as("SELECT state, key_list_owed FROM mail_addresses WHERE id = $1")
-            .bind(address_id)
-            .fetch_one(&state.pool)
-            .await?;
+    let (address_state, key_list_owed, domain_id, position, disabled): (
+        String,
+        bool,
+        Option<Uuid>,
+        i32,
+        bool,
+    ) = sqlx::query_as(
+        "SELECT state, key_list_owed, domain_id, position, disabled_at IS NOT NULL
+           FROM mail_addresses WHERE id = $1",
+    )
+    .bind(address_id)
+    .fetch_one(&state.pool)
+    .await?;
     Ok(OwnMailAddress {
         id: address_id.to_string(),
         address,
         state: address_state,
+        domain_id: domain_id.map(|id| id.to_string()),
+        position,
+        disabled,
         keys: keys
             .into_iter()
             .map(
@@ -186,12 +205,12 @@ pub async fn list_addresses(
     user: AuthUser,
 ) -> AppResult<Json<Vec<OwnMailAddress>>> {
     let user_id = trusted_uuid(&user.user_id)?;
-    // Read only: the rows come with the account and its renames. The current
-    // address first, then its addresses on custom domains, then the old
-    // ones, newest first.
+    // Read only: the rows come with the account and its renames. The
+    // current addresses in the account's order (the default first), then the
+    // old ones, newest first.
     let rows: Vec<(Uuid, String)> = sqlx::query_as(
         "SELECT id, address FROM mail_addresses WHERE user_id = $1
-          ORDER BY state = 'active' DESC, domain_id IS NULL DESC, created_at DESC",
+          ORDER BY state = 'active' DESC, position, created_at DESC",
     )
     .bind(user_id)
     .fetch_all(&state.pool)
