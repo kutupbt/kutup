@@ -40,7 +40,7 @@ test('display name and signature: set in Settings, used when writing', async ({ 
   await expect(own.getByText('Active', { exact: true })).toBeVisible()
   await expect(mail.getByRole('button', { name: 'Add address' })).toHaveCount(0)
   await expect(own.getByRole('button', { name: /^Actions for/ })).toHaveCount(0)
-  await mail.getByLabel('Display name').fill('Alice Yılmaz')
+  await mail.getByRole('textbox', { name: 'Display name' }).fill('Alice Yılmaz')
   const editor = mail.getByLabel('Signature', { exact: true })
   await editor.click()
   await mail.keyboard.type(`Saygılarımla, Alice ${tag}`)
