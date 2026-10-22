@@ -11,7 +11,7 @@ import { reloadGuardScript } from './src/reloadGuard.ts'
 const FRONTEND = path.resolve(import.meta.dirname, '../..')
 const WASM_ROOT = path.join(FRONTEND, 'wasm')
 
-export type KutupApp = 'account' | 'drive' | 'chat' | 'maps' | 'photos' | 'office' | 'contacts' | 'mail' | 'pass'
+export type KutupApp = 'account' | 'drive' | 'chat' | 'maps' | 'photos' | 'office' | 'contacts' | 'mail' | 'pass' | 'calendar'
 export type WasmModule = 'crypto' | 'crypto-calendar' | 'chat' | 'pass' | 'mail-search'
 
 /**
@@ -118,7 +118,7 @@ function kutupWasm(modules: WasmModule[]): Plugin {
 }
 
 /** Dev ports; each app also has its own hostname so cookies stay per app. */
-export const DEV_PORTS: Record<KutupApp | 'editor', number> = { account: 5173, drive: 5174, chat: 5175, editor: 5176, maps: 5177, photos: 5178, office: 5179, contacts: 5180, mail: 5181, pass: 5182 }
+export const DEV_PORTS: Record<KutupApp | 'editor', number> = { account: 5173, drive: 5174, chat: 5175, editor: 5176, maps: 5177, photos: 5178, office: 5179, contacts: 5180, mail: 5181, pass: 5182, calendar: 5183 }
 
 /**
  * The Vite config every Kutup web app shares. Each app runs on its own

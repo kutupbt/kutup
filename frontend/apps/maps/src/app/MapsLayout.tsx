@@ -1,4 +1,4 @@
-import { BookUser, ChevronDown, ChevronUp, FileType, HardDrive, Images, KeyRound, Mail as MailIcon, Map as MapIcon, MapPinPlus, MessagesSquare, UserRound } from 'lucide-react'
+import { BookUser, CalendarDays, ChevronDown, ChevronUp, FileType, HardDrive, Images, KeyRound, Mail as MailIcon, Map as MapIcon, MapPinPlus, MessagesSquare, UserRound } from 'lucide-react'
 import { lazy, Suspense, useEffect, useMemo, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { Outlet } from 'react-router-dom'
@@ -174,6 +174,7 @@ export function MapsLayout() {
                 { id: 'office', name: t('apps.office'), href: appUrl('office'), icon: <FileType /> },
                 { id: 'chat', name: t('apps.chat'), href: appUrl('chat'), icon: <MessagesSquare /> },
                 { id: 'mail', name: t('apps.mail'), href: appUrl('mail'), icon: <MailIcon /> },
+                { id: 'calendar', name: t('apps.calendar'), href: appUrl('calendar'), icon: <CalendarDays /> },
                 { id: 'pass', name: t('apps.pass'), href: appUrl('pass'), icon: <KeyRound /> },
                 { id: 'contacts', name: t('apps.contacts'), href: appUrl('contacts'), icon: <BookUser /> },
                 { id: 'photos', name: t('apps.photos'), href: appUrl('photos'), icon: <Images /> },

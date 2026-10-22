@@ -205,6 +205,10 @@ widgets in Mail. English and Turkish.
 
 ## E1: build note (second session, 2026-10-21)
 
+Built: crypto and server in #307, the app in its follow-up (PR (b)). The view
+settings are kept per device in E1 (`kutup-calendar-prefs`); the account-wide
+settings come with reminders in E2.
+
 For review before code. E1 delivers personal calendars end to end: keys,
 calendars, single events (no recurrence, reminders or sharing yet, but the
 formats and tables carry them so E2–E4 add no migration of data). Copied from

@@ -45,6 +45,7 @@ pub enum ClientType {
     WebContacts,
     WebMail,
     WebPass,
+    WebCalendar,
     Cli,
 }
 
@@ -60,6 +61,7 @@ impl ClientType {
             Self::WebContacts => "web-contacts",
             Self::WebMail => "web-mail",
             Self::WebPass => "web-pass",
+            Self::WebCalendar => "web-calendar",
             Self::Cli => "cli",
         }
     }
@@ -75,6 +77,7 @@ impl ClientType {
             "web-contacts" => Some(Self::WebContacts),
             "web-mail" => Some(Self::WebMail),
             "web-pass" => Some(Self::WebPass),
+            "web-calendar" => Some(Self::WebCalendar),
             "cli" => Some(Self::Cli),
             _ => None,
         }
@@ -103,6 +106,7 @@ impl ClientType {
                 | Self::WebContacts
                 | Self::WebMail
                 | Self::WebPass
+                | Self::WebCalendar
         )
     }
 }
