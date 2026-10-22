@@ -1,9 +1,9 @@
 # One identity key per account (Signal's ACI model)
 
-Status: design note for approval (2026-10-22), revised after the main
-session's review against Signal-Desktop and Signal-Server. Docs only:
-nothing is built before the main session and the user approve it. Client
-sections by the third session, server and key endpoints by the second.
+Status: approved by the user (2026-10-22) and being built. The wire types
+are #314; the client (kutup-crypto's provisioning cipher, chat-core, the web
+app, client-ffi) and the server land together with one combined browser gate.
+Client sections by the third session, server and key endpoints by the second.
 
 ## Why
 

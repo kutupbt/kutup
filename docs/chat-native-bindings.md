@@ -14,8 +14,9 @@ CLI workspace.
 Rust owns:
 
 - Signal registration, PQXDH/Triple Ratchet sessions, prekeys, and ciphertext.
-- Signed account manifests, complete hash-linked history, durable TOFU/
-  verified/quarantined authority pins, and pair-bound safety numbers.
+- The account's Chat identity (linking, re-registration, the identity
+  distribution), signed account manifests, complete hash-linked history,
+  durable TOFU/verified/quarantined pins, and pair-bound safety numbers.
 - Endpoint paths, request/response JSON, exact-device recovery, durable outbox,
   mailbox journal/decrypt/ack ordering, and history mapping.
 - Note to Self routing and encrypted sent-transcript synchronization for all
@@ -67,13 +68,25 @@ it with the platform vault, and reuse it for that account installation. Call:
 openNativeChatClient(
   databasePath,
   databaseKey,
-  username,
-  serverName,
+  account,            // aci:<uuid>@<server>
   accountMasterKey,
   keyBinding,
   authenticatedHttpClient
 )
 ```
+
+The account has one Chat identity shared by its devices
+(docs/plans/account-identity-key.md). Opening opens the device this database
+holds, finishes a registration it started, or re-registers when the account
+has no Chat identity yet (its first device). When another device of the
+account holds the identity it fails with `LinkRequired`: show "Link this
+device" with a `NativeLinkingDevice` (`linkCode(address)` once the
+provisioning socket gave its address), then call
+`openLinkedNativeChatClient(linking, envelopeJson, …same arguments)` with the
+envelope the socket delivers. `reregisterNativeChatClient(…)` is "I don't have
+my other devices": a new identity, and the account's other devices leave.
+The HTTP adapter sends `ChatHttpRequest.chatDevice`, when present, as the
+`X-Kutup-Chat-Device` header.
 
 `keyBinding` is the account's key binding (the session's `envelopeBinding`,
 a UUID v4): the account's own seals, such as its synced identity pin list,
@@ -100,9 +113,13 @@ Opening is restart-safe. A partially registered install reuses its persisted
 registration request; an installed device reopens without registering again.
 The call publishes or confirms the account-signed local manifest before
 returning. A server response can create only a gray TOFU pin. Native UI obtains
-`safetyNumber(peer)` and passes the scanned peer QR to
-`verifySafetyNumber(peer, payload)`; Rust performs the exact comparison and
-atomic promotion. There is no blind native `verifyAuthority` operation.
+`safetyNumber(peer)` (libsignal's fingerprint over both account identity
+keys, QR `kutup://verify/v4/`) and passes the scanned peer QR to
+`verifySafetyNumber(peer, payload)`; Rust performs the exact comparison.
+`setIdentityVerified(peer, identityKey, verified)` marks the compared identity
+verified, or clears it, after the person compared the numbers by eye; it is
+refused if the identity moved on meanwhile. There is no blind native
+`verifyAuthority` operation.
 
 ## Generated API
 
@@ -111,7 +128,9 @@ The exported object currently covers the phase-2b native engine contract:
 - `sendText`, `reconcile`, `history`, `pendingSendCount`
 - `maintainPrekeys`, `setMailboxRetentionDays`, `syncManifest`
 - `inboundAttention`, `quarantineInbound`, `resolveDeadLetter`
-- `safetyNumber`, `verifySafetyNumber`
+- `safetyNumber`, `verifySafetyNumber`, `setIdentityVerified`
+- `linkDevice(code, settings)` (Linked devices → Link a new device),
+  `resetIdentity(remove)` (remove a lost device and reset the identity)
 - `shutdown` for logout/account-lock cleanup
 
 Swift receives `async throws`; Kotlin receives `suspend` functions and typed

@@ -88,6 +88,20 @@ fn list_status(status: &GroupStatus) -> Option<GroupListStatus> {
 }
 
 impl Engine {
+    /// After this device's identity changed (a distribution, sent or
+    /// applied) or it registered anew: its sender-key states went with the old
+    /// identity, so no member holds its next key. Every group's sender book is
+    /// dropped, and the next send starts a new key and hands it to every
+    /// member device, as Signal resets sender keys on a key change.
+    pub(crate) async fn forget_sender_books(&mut self) -> Result<()> {
+        for mut record in self.session.db().list_groups().await? {
+            if record.sender_book.take().is_some() {
+                self.save_group(&record).await?;
+            }
+        }
+        Ok(())
+    }
+
     /// Keeps this account's groups in its group list, under keys from its
     /// `master_key`, bound to its key `binding`; and takes the account's
     /// group keys (its self-authority, its pseudonyms) from the same key.
