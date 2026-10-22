@@ -83,11 +83,27 @@ impl AppError {
     }
 }
 
+/// Server errors whose body a client may see: each a `code` a handler set
+/// on purpose, about the request rather than the server's insides (a DNS
+/// check that ran out of time). Every other 5xx is replaced.
+const SHOWN_SERVER_CODES: &[&str] = &["checkTimedOut"];
+
+impl AppError {
+    /// Whether this server error is one a client may see as it is.
+    fn shown_server_error(&self) -> bool {
+        self.details
+            .as_ref()
+            .and_then(|details| details.get("code"))
+            .and_then(serde_json::Value::as_str)
+            .is_some_and(|code| SHOWN_SERVER_CODES.contains(&code))
+    }
+}
+
 impl IntoResponse for AppError {
     fn into_response(self) -> Response {
         // 5xx detail is logged but never leaked verbatim — mirrors the Go handlers,
         // which return a generic "internal server error" while logging the cause.
-        if self.status.is_server_error() {
+        if self.status.is_server_error() && !self.shown_server_error() {
             tracing::error!(status = %self.status, error = %self.message, "request failed");
             return (
                 self.status,
@@ -277,6 +293,34 @@ mod tests {
         let (status, body) = body_string(AppError::from(sqlx::Error::PoolTimedOut)).await;
         assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
         assert_eq!(body, r#"{"error":"internal server error"}"#);
+    }
+
+    #[tokio::test]
+    async fn an_allowed_coded_server_error_is_shown() {
+        let error = AppError::new(StatusCode::SERVICE_UNAVAILABLE, "the check took too long")
+            .with_details(serde_json::json!({ "code": "checkTimedOut" }));
+        let (status, body) = body_string(error).await;
+        assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
+        let body: serde_json::Value = serde_json::from_str(&body).unwrap();
+        assert_eq!(body["code"], "checkTimedOut");
+        assert_eq!(body["error"], "the check took too long");
+    }
+
+    #[tokio::test]
+    async fn other_server_errors_stay_generic_coded_or_not() {
+        // An uncoded 500, and one with a code that isn't on the list.
+        for error in [
+            AppError::internal("secret db dsn leaked"),
+            AppError::internal("secret db dsn leaked")
+                .with_details(serde_json::json!({ "code": "conflict" })),
+            AppError::new(StatusCode::SERVICE_UNAVAILABLE, "secret upstream")
+                .with_details(serde_json::json!({ "code": 5 })),
+        ] {
+            let status = error.status;
+            let (got, body) = body_string(error).await;
+            assert_eq!(got, status);
+            assert_eq!(body, r#"{"error":"internal server error"}"#);
+        }
     }
 
     #[tokio::test]

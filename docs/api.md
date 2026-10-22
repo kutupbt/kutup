@@ -17,7 +17,10 @@ upload routes raise it (whole-file upload 10 GiB, a multipart version 2 GiB
 A failed request answers JSON `{"error": "<English text>", "code": "<code>"}`,
 plus fields a code names. **Apps act on `code`, never on the text**, which
 is for logs and people reading the API. A `5xx` answers only
-`{"error": "internal server error"}`.
+`{"error": "internal server error"}`, except the few coded ones about the
+request rather than the server (listed with their `5xx` status below,
+today `checkTimedOut`), which carry their `code` and `error` as client
+errors do.
 
 Without a specific code, a client error carries its status's default:
 
