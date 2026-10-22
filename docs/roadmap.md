@@ -53,6 +53,13 @@ Items below are organized by **whether they block v1** vs. whether they can ship
 7. Native apps.
 8. Signed builds.
 9. The admin app at `admin.<domain>`.
+10. A strict Content-Security-Policy for every app. Today's policy (set by
+    `frontend/docker/40-kutup-hosts.sh`) allows `'unsafe-inline'` and
+    `'unsafe-eval'` scripts and WebSockets to any host (`connect-src … wss:`).
+    In an end-to-end encrypted app any injected script could read keys and
+    send them anywhere, so the goal is nonce- or hash-based scripts, no
+    `unsafe-eval` outside the office-editor sandbox origin, and `connect-src`
+    limited to Kutup's own hosts (the edge review, 2026-10-22).
 
 ### Shipped in the clean-slate release (2d26c64eb60d, live 2026-10-17)
 
