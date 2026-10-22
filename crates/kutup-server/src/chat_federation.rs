@@ -3320,6 +3320,17 @@ mod sealed_live_tests {
         .execute(pool)
         .await
         .unwrap();
+        // Listed in the account's manifest: only listed devices are addressed.
+        sqlx::query(
+            "INSERT INTO chat_device_manifests
+                 (user_id, version, manifest_hash, authority_key_id, manifest)
+             VALUES ($1, 1, repeat('a', 64), repeat('b', 64),
+                     '{\"devices\": [{\"deviceId\": 1, \"registrationId\": 77}]}')",
+        )
+        .bind(id)
+        .execute(pool)
+        .await
+        .unwrap();
         sqlx::query(
             "INSERT INTO chat_delivery_capabilities
                  (user_id, profile_version, profile_revision, capability_hash)
