@@ -2495,7 +2495,8 @@ pub(crate) async fn store_sealed_messages(
     }
 
     let current: Vec<(i32, i64)> =
-        sqlx::query_as("SELECT device_id, registration_id FROM chat_devices WHERE user_id = $1")
+        sqlx::query_as("SELECT device_id, registration_id FROM chat_devices
+              WHERE user_id = $1 AND expired_at IS NULL")
             .bind(recipient_id)
             .fetch_all(&mut **tx)
             .await?;
@@ -2700,7 +2701,8 @@ async fn deliver_messages(
 
     // Exact device-set check (Signal's missing/stale/extra contract).
     let mut current: Vec<(i32, i64)> =
-        sqlx::query_as("SELECT device_id, registration_id FROM chat_devices WHERE user_id = $1")
+        sqlx::query_as("SELECT device_id, registration_id FROM chat_devices
+              WHERE user_id = $1 AND expired_at IS NULL")
             .bind(recipient_id)
             .fetch_all(&mut *tx)
             .await?;
