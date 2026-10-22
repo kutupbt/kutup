@@ -14,9 +14,12 @@ anonymity relays, and traffic-shape protection are separate milestones.
 - The recoverable account master key derives purpose-separated account
   authority, Drive X25519, and Drive share-signing Ed25519 keys. Private keys
   never leave the client.
-- `AccountManifestV1` binds the canonical account, incarnation, account-scoped
-  Drive keys, and every active device. At most ten devices are active. Each
-  manifest is account-authority signed and hash-links its predecessor.
+- `AccountManifestV2` binds the canonical account, incarnation, account-scoped
+  Drive keys, the account's one libsignal identity key, and every active
+  device. At most ten devices are active. Each manifest is account-authority
+  signed and hash-links its predecessor. Its `identityBinding` is the identity
+  key's own signature over the authority key id, incarnation, account and
+  identity key, so an authority can list only an identity that named it.
 - A homeserver distributes current and historical manifests. It cannot promote
   TOFU to verified, silently replace an authority, or manufacture a device.
 - First observation is explicit TOFU. Face-to-face safety-number/QR comparison
@@ -94,6 +97,7 @@ hide IP addresses from the origin, timing, size, origin domain, or recipient.
 | Signed authority/incarnation replacement | Durable retained pin plus separately stored complete candidate history | Red quarantine. No send/share proceeds. Exact pair-bound QR verification atomically accepts the replacement while retaining old history. |
 | Homeserver swaps an account's identity key | The identity key is in the authority-signed manifest; the identity store refuses any other key for the account; an identity change comes only with a signed manifest | Reject. A signed change (a distribution, a re-registration) shows "safety number changed" once and clears verified. |
 | Homeserver forges a provisioning message or answers another account's socket | The new device opens it only with its own ephemeral key, checks the account and that the account's verified manifest lists exactly that identity; sockets of another account answer `404` | Nothing is taken. |
+| Homeserver lists an account's real identity key under an authority of its own (the safety number is over identities, so the genuine QR would match) | `identityBinding`: the identity key signs the authority, incarnation and account; clients and servers verify it on every manifest | Reject before any safety number shows; a scan pins nothing. |
 | Malformed or forged manifest | Strict bounded canonical encoding and Ed25519 verification | Reject; a contradiction against an existing pin is durably quarantined. |
 | Hostile first-contact server | Explicit TOFU state and face-to-face verification | UI remains gray until independent comparison. V1 makes no stronger first-contact claim. |
 | Stolen delivery capability | Recipient-bound HKDF capability, database limits, profile-key rotation on block | Bounded anonymous attempts only. Blocking publishes a new verifier before the new profile key is redistributed. |

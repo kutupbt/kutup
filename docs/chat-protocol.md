@@ -212,6 +212,16 @@ Trust states are:
 - red / `Quarantined`: rollback, equivocation, stable-key contradiction, or a
   signed replacement incarnation blocks new sends/shares.
 
+The safety number covers identities, not authorities, so the identity has to
+name its authority: every manifest carries `identityBinding`, the account
+identity key's XEdDSA signature over `kutup/account-identity-binding/v1\0`,
+the authority key id, incarnation id, account (`AccountRef` bytes) and the
+identity key, and the authority signs it with the rest. Clients and servers
+refuse a manifest whose binding the identity didn't sign (`400 badSignature`
+on upload), so a server cannot list a person's real identity under an
+authority of its own and have the genuine QR verify it. Only a device holding
+the identity can bind it to a new authority or incarnation.
+
 `Verified` is kept with the identity key it verified (`ManifestTrust`'s
 `identityVerified`), as Signal keeps a verified status with an identity: a
 later manifest with another identity (a distribution, a re-registration) is

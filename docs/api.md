@@ -38,7 +38,7 @@ Specific codes, where an app does something particular (a test in
 | Code | Status | Meaning |
 |---|---|---|
 | `deviceCredential` | 401 | A Chat call made as a device without that device's `X-Kutup-Chat-Device` credential, with a wrong one, or for a removed or expired device (one answer for all) |
-| `badSignature` | 400 | A Chat prekey (signed EC, last-resort or one-time Kyber) not signed by the account's identity key |
+| `badSignature` | 400 | A Chat prekey (signed EC, last-resort or one-time Kyber), or a manifest's `identityBinding`, not signed by the account's identity key |
 | `keysDiffer` | 409 | `POST /api/chat/keys/check`: the server holds other keys for this device; it uploads them again |
 | `linkTokenLimit` | 409 | `POST /api/chat/link-tokens`: as many unused link tokens as the administrators allow (`chatLinkTokensPerAccount`) |
 | `manifestConflict` | 409 | A re-registration (`POST /api/chat/device` with `registration.type = reregistration`) or an identity distribution lost a race with another manifest change for the account: read the manifest again and retry (a replay of the current head answers 200) |
@@ -3528,8 +3528,11 @@ Publish the account's next `AccountManifestV2`, signed by the account
 self-authority (device-authenticated). It follows the head
 (`verifySuccessor`: head + 1, linked by hash, the same account, incarnation
 and authority), names the account's identity (`409 identityMismatch`: the
-identity changes only by a distribution or a re-registration), and every
-listed device is a live registered row with its listed registration id and
+identity changes only by a distribution or a re-registration), carries
+that identity's `identityBinding` (its signature over the authority key id,
+incarnation, account and identity key; `400 badSignature` otherwise, here and
+wherever a manifest is uploaded), and every listed device is a live
+registered row with its listed registration id and
 suite. Rows it doesn't list (a crash between registration and publication, an
 expired device, an injected row) are pruned atomically. The Drive HPKE and
 share-signing keys are account-scoped fields in the same manifest. Publication

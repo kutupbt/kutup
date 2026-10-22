@@ -97,6 +97,7 @@ the identity moved up to the account:
 | Drive keys (as V1) | yes | unchanged |
 | `issuedAt`, `authorityKeyId`, `selfAuthorityKey`, `signature` | yes | as V1, under the V2 domain |
 | **`identityKey`** | new | the account's libsignal identity key (33 bytes) itself, not a hash |
+| **`identityBinding`** | new (review) | the identity key's signature over the authority key id, incarnation, account and identity key: an authority can list only an identity that named it |
 | `devices[]`: `deviceId`, `directChatSuite`, **`registrationId`** | yes, without `identityKey` | the registration id is now part of what the authority vouches for |
 | `devices[].mls` | yes | dropped if the MLS removal lands first |
 
