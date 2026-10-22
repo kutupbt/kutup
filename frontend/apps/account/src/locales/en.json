@@ -811,7 +811,15 @@
         "calendarEventsPage": "Events per page",
         "calendarEventsPageHint": "The most events one page of an events query carries.",
         "calendarMaxCount": "Most occurrences by count",
-        "calendarMaxCountHint": "The largest COUNT a repeating event may have (Proton's 49)."
+        "calendarMaxCountHint": "The largest COUNT a repeating event may have (Proton's 49).",
+        "calendarRemindersPerEvent": "Reminders per event",
+        "calendarRemindersPerEventHint": "How many reminders one member sets for one event.",
+        "calendarDefaultReminders": "Default reminders",
+        "calendarDefaultRemindersHint": "How many default reminders one member keeps for a calendar.",
+        "calendarReminderLatenessSeconds": "Late reminders (seconds)",
+        "calendarReminderLatenessSecondsHint": "How late a reminder may still be sent; later ones are skipped.",
+        "calendarAlarmsPage": "Alarms per page",
+        "calendarAlarmsPageHint": "The most alarms one page of the alarms query carries."
       }
     },
     "federation": {

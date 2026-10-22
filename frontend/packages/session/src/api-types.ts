@@ -218,6 +218,10 @@ export interface AdminSettings {
   calendarEventsPerCalendar: number
   calendarSyncBatch: number
   calendarMaxCount: number
+  calendarRemindersPerEvent: number
+  calendarDefaultReminders: number
+  calendarReminderLatenessSeconds: number
+  calendarAlarmsPage: number
   calendarWindowDays: number
   calendarEventsPage: number
 }

@@ -44,6 +44,10 @@ const CALENDAR_SETTINGS = [
   { field: 'calendarEventsPerCalendar', min: 1, max: 1_000_000 },
   { field: 'calendarSyncBatch', min: 1, max: 100 },
   { field: 'calendarMaxCount', min: 1, max: 499 },
+  { field: 'calendarRemindersPerEvent', min: 1, max: 50 },
+  { field: 'calendarDefaultReminders', min: 1, max: 20 },
+  { field: 'calendarReminderLatenessSeconds', min: 10, max: 3600 },
+  { field: 'calendarAlarmsPage', min: 10, max: 1000 },
   { field: 'calendarWindowDays', min: 1, max: 3660 },
   { field: 'calendarEventsPage', min: 10, max: 5000 },
 ] as const satisfies readonly { field: keyof AdminSettings; min: number; max: number }[]

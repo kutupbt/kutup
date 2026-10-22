@@ -811,7 +811,15 @@
         "calendarEventsPage": "Sayfa başına etkinlik",
         "calendarEventsPageHint": "Bir etkinlik sorgusu sayfasının taşıyabileceği en çok etkinlik.",
         "calendarMaxCount": "Sayıyla en çok tekrar",
-        "calendarMaxCountHint": "Yinelenen bir etkinliğin alabileceği en büyük COUNT (Proton'unki 49)."
+        "calendarMaxCountHint": "Yinelenen bir etkinliğin alabileceği en büyük COUNT (Proton'unki 49).",
+        "calendarRemindersPerEvent": "Etkinlik başına hatırlatıcı",
+        "calendarRemindersPerEventHint": "Bir üyenin bir etkinlik için kurabileceği hatırlatıcı sayısı.",
+        "calendarDefaultReminders": "Varsayılan hatırlatıcılar",
+        "calendarDefaultRemindersHint": "Bir üyenin bir takvim için tuttuğu varsayılan hatırlatıcı sayısı.",
+        "calendarReminderLatenessSeconds": "Geç hatırlatıcılar (saniye)",
+        "calendarReminderLatenessSecondsHint": "Bir hatırlatıcının ne kadar geç gönderilebileceği; daha geç olanlar atlanır.",
+        "calendarAlarmsPage": "Sayfa başına alarm",
+        "calendarAlarmsPageHint": "Alarm sorgusunun bir sayfasının taşıdığı en fazla alarm."
       }
     },
     "federation": {

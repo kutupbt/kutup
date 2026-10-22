@@ -1177,6 +1177,20 @@ fn build_router(state: AppState) -> Router {
             post(handlers::calendar::sync),
         )
         .route(
+            "/api/calendar/alarms",
+            get(handlers::calendar_reminders::alarms),
+        )
+        .route(
+            "/api/calendar/settings",
+            get(handlers::calendar_reminders::settings)
+                .put(handlers::calendar_reminders::put_settings),
+        )
+        .route(
+            "/api/calendar/push-subscription",
+            put(handlers::calendar_reminders::put_push_subscription)
+                .delete(handlers::calendar_reminders::delete_push_subscription),
+        )
+        .route(
             "/api/calendar/calendars/:id/events/:event_id",
             get(handlers::calendar::event),
         )
