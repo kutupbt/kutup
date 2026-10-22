@@ -661,6 +661,37 @@ impl Series {
         Ok(None)
     }
 
+    /// Whether every start in `starts` is an occurrence of the series, in
+    /// its form (the same date or time and zone): one pass, however many
+    /// starts, so a write's `EXDATE`s or `RECURRENCE-ID` cost one walk.
+    pub fn occurs_at_all(&self, starts: &[EventTime]) -> Result<bool> {
+        let mut wanted: Vec<(civil::DateTime, Option<&str>)> = starts
+            .iter()
+            .map(|start| (local_of(start), start.tzid()))
+            .collect();
+        wanted.sort();
+        wanted.dedup();
+        let mut next = 0;
+        for occurrence in self.occurrences() {
+            let Some((local, tzid)) = wanted.get(next) else {
+                break;
+            };
+            let occurrence = occurrence?;
+            let at = local_of(&occurrence.start);
+            if *local < at {
+                // Passed by: not an occurrence.
+                return Ok(false);
+            }
+            if *local == at {
+                if *tzid != occurrence.start.tzid() {
+                    return Ok(false);
+                }
+                next += 1;
+            }
+        }
+        Ok(next == wanted.len())
+    }
+
     /// Every occurrence in order, `EXDATE`s removed.
     pub fn occurrences(&self) -> impl Iterator<Item = Result<Occurrence>> + '_ {
         self.candidates()
@@ -1072,6 +1103,68 @@ mod tests {
                 EventTime::Utc(at) => at.to_string(),
             })
             .collect()
+    }
+
+    #[test]
+    fn occurs_at_all_checks_every_start_in_one_pass() {
+        let start = zoned("2026-10-26T09:00:00", "Europe/Istanbul");
+        let end = zoned("2026-10-26T10:00:00", "Europe/Istanbul");
+        let rule = Rule::parse("FREQ=WEEKLY;COUNT=10;BYDAY=MO,WE").unwrap();
+        let series = Series::new(&start, Some(&end), Some(&rule), &[]).unwrap();
+        let on = |local: &str| zoned(local, "Europe/Istanbul");
+        assert!(series
+            .occurs_at_all(&[
+                on("2026-10-28T09:00:00"),
+                on("2026-10-26T09:00:00"),
+                on("2026-10-28T09:00:00")
+            ])
+            .unwrap());
+        // Not a day of the rule, not its time, another zone, past the count.
+        for wrong in [
+            on("2026-10-27T09:00:00"),
+            on("2026-10-28T10:00:00"),
+            zoned("2026-10-28T09:00:00", "Europe/Berlin"),
+            on("2026-12-02T09:00:00"),
+        ] {
+            assert!(
+                !series
+                    .occurs_at_all(&[on("2026-10-26T09:00:00"), wrong.clone()])
+                    .unwrap(),
+                "{wrong:?}"
+            );
+        }
+        assert!(series.occurs_at_all(&[]).unwrap());
+    }
+
+    /// The heaviest series a write can name: daily from 1970 to 2037 with
+    /// the most EXDATEs. A write expands it a few times (the range end, the
+    /// EXDATE check); each stays bounded, so writes are no CPU lever.
+    #[test]
+    fn the_heaviest_series_stays_bounded() {
+        let start = zoned("1970-01-01T09:00:00", "Europe/Istanbul");
+        let end = zoned("1970-01-01T10:00:00", "Europe/Istanbul");
+        let rule = Rule::parse("FREQ=DAILY;UNTIL=20371231T235959Z").unwrap();
+        let exdates: Vec<EventTime> = (0..crate::calendar_event::MAX_EXDATES)
+            .map(|day| {
+                let date = civil::date(2036, 8, 1)
+                    .checked_add((day as i64).days())
+                    .unwrap();
+                EventTime::Zoned {
+                    local: date.at(9, 0, 0, 0),
+                    tzid: "Europe/Istanbul".into(),
+                }
+            })
+            .collect();
+        let began = std::time::Instant::now();
+        let series = Series::new(&start, Some(&end), Some(&rule), &exdates).unwrap();
+        let bare = Series::new(&start, Some(&end), Some(&rule), &[]).unwrap();
+        assert!(bare.occurs_at_all(&exdates).unwrap());
+        let last = series.range_end().unwrap().unwrap();
+        let took = began.elapsed();
+        println!("the heaviest write's expansion took {took:?}");
+        assert!(last.to_string().starts_with("2037-12-31"), "{last}");
+        // Generous for debug builds on a busy machine; release is far less.
+        assert!(took < std::time::Duration::from_secs(5), "{took:?}");
     }
 
     #[test]
