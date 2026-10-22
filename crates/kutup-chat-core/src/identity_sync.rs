@@ -262,7 +262,7 @@ mod tests {
     use async_trait::async_trait;
     use futures_executor::block_on;
     use kutup_chat_proto::{
-        MailboxPage, RegisterChatDeviceRequest, SendMessagesRequest, UserPreKeyBundlesResponse,
+        MailboxPage, RegisterChatDeviceRequest, SendMessagesRequest, AccountPreKeyBundlesResponse,
     };
 
     use super::*;
@@ -281,7 +281,7 @@ mod tests {
         async fn register_device(&self, _: &RegisterChatDeviceRequest) -> Result<u32> {
             unimplemented!()
         }
-        async fn fetch_bundles(&self, _: &str) -> Result<UserPreKeyBundlesResponse> {
+        async fn fetch_bundles(&self, _: &str) -> Result<AccountPreKeyBundlesResponse> {
             unimplemented!()
         }
         async fn send(&self, _: &str, _: &SendMessagesRequest) -> Result<SendOutcome> {

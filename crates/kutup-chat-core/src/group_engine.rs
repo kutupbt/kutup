@@ -1046,7 +1046,7 @@ mod tests {
     use kutup_chat_proto::group::{check_change, check_genesis, decode_group_id, GroupLimits};
     use kutup_chat_proto::group_route::{GroupGatewayKeyConfigV1, GroupNotaryV1, GroupRequestV1};
     use kutup_chat_proto::{
-        MailboxPage, RegisterChatDeviceRequest, SendMessagesRequest, UserPreKeyBundlesResponse,
+        MailboxPage, RegisterChatDeviceRequest, SendMessagesRequest, AccountPreKeyBundlesResponse,
     };
     use kutup_crypto::oblivious::GatewayKey;
     use kutup_federation_proto::FederationIdentityDocumentV1;
@@ -1155,7 +1155,7 @@ mod tests {
         async fn register_device(&self, _: &RegisterChatDeviceRequest) -> Result<u32> {
             Ok(1)
         }
-        async fn fetch_bundles(&self, _: &str) -> Result<UserPreKeyBundlesResponse> {
+        async fn fetch_bundles(&self, _: &str) -> Result<AccountPreKeyBundlesResponse> {
             unreachable!()
         }
         async fn send(&self, _: &str, _: &SendMessagesRequest) -> Result<SendOutcome> {

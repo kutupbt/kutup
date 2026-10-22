@@ -11,7 +11,7 @@ use kutup_chat_core::{
     ChatDb, ChatError, ChatTransport, Engine, Result, SendOutcome, SqliteChatDb,
 };
 use kutup_chat_proto::{
-    MailboxPage, RegisterChatDeviceRequest, SendMessagesRequest, UserPreKeyBundlesResponse,
+    MailboxPage, RegisterChatDeviceRequest, SendMessagesRequest, AccountPreKeyBundlesResponse,
 };
 use rand::rngs::OsRng;
 use rand::TryRngCore as _;
@@ -34,7 +34,7 @@ impl ChatTransport for RegistrationServer {
         Ok(self.assigned)
     }
 
-    async fn fetch_bundles(&self, _username: &str) -> Result<UserPreKeyBundlesResponse> {
+    async fn fetch_bundles(&self, _username: &str) -> Result<AccountPreKeyBundlesResponse> {
         unreachable!()
     }
 

@@ -1,16 +1,18 @@
-//! V1 account self-authority, signed manifest history, and durable peer pins.
+//! The account self-authority, the signed V2 manifest history (one libsignal
+//! identity per account, docs/plans/account-identity-key.md), and durable peer
+//! pins.
 
 use base64::engine::general_purpose::STANDARD;
 use base64::Engine as _;
 use ed25519_dalek::Signer as _;
 use kutup_chat_proto::{
-    AccountIdentitySuiteId, AccountManifestDeviceV1, AccountManifestDriveKeysV1,
-    AccountManifestHistoryPageV1, AccountManifestV1, AccountRef, UserPreKeyBundlesResponse,
-    ACCOUNT_MANIFEST_VERSION,
+    AccountIdentitySuiteId, AccountManifestDeviceV2, AccountManifestDriveKeysV1,
+    AccountManifestHistoryPageV2, AccountManifestV2, AccountPreKeyBundlesResponse, AccountRef,
+    DevicePreKeyBundle, ACCOUNT_MANIFEST_V2_VERSION,
 };
 use serde::Serialize;
 
-use crate::db::{AccountManifestHistoryRecordV1, AuthorityTrust, ManifestTrust};
+use crate::db::{AccountManifestHistoryRecord, AuthorityTrust, ManifestTrust};
 use crate::error::{ChatError, Result};
 
 /// Whether a development transport may omit signed account identity. V1
@@ -23,6 +25,24 @@ pub enum ManifestPolicy {
 
 pub(crate) struct VerifiedBundleTrust {
     pub manifest: Option<ManifestTrust>,
+}
+
+/// A bundle response's devices, each with the account's identity key: the
+/// shape sessions are built from. Only after [`verify_bundle_response`].
+pub(crate) fn account_bundles(response: &AccountPreKeyBundlesResponse) -> Vec<DevicePreKeyBundle> {
+    response
+        .devices
+        .iter()
+        .map(|bundle| DevicePreKeyBundle {
+            device_id: bundle.device_id,
+            registration_id: bundle.registration_id,
+            suite: bundle.suite,
+            identity_key: response.identity_key.clone(),
+            signed_pre_key: bundle.signed_pre_key.clone(),
+            kyber_pre_key: bundle.kyber_pre_key.clone(),
+            one_time_pre_key: bundle.one_time_pre_key.clone(),
+        })
+        .collect()
 }
 
 /// Purpose-separated identity deterministically recovered from the account
@@ -164,21 +184,25 @@ impl AccountAuthority {
         }
     }
 
+    /// Sign the account's manifest: its libsignal identity key
+    /// (`identity_key`, canonical base64 of the 33-byte key) and its devices.
     pub fn sign_manifest(
         &self,
         account: AccountRef,
         sequence: u64,
         previous_hash: Option<String>,
-        mut devices: Vec<AccountManifestDeviceV1>,
+        identity_key: String,
+        mut devices: Vec<AccountManifestDeviceV2>,
         issued_at: impl Into<String>,
-    ) -> Result<AccountManifestV1> {
+    ) -> Result<AccountManifestV2> {
         devices.sort_by_key(|device| device.device_id);
-        let mut manifest = AccountManifestV1 {
-            manifest_version: ACCOUNT_MANIFEST_VERSION,
+        let mut manifest = AccountManifestV2 {
+            manifest_version: ACCOUNT_MANIFEST_V2_VERSION,
             account,
             incarnation_id: self.incarnation_id(),
             sequence,
             previous_hash,
+            identity_key,
             drive: self.drive_keys(),
             devices,
             issued_at: issued_at.into(),
@@ -198,30 +222,20 @@ impl AccountAuthority {
     }
 }
 
-pub fn verify_manifest(manifest: &AccountManifestV1) -> Result<()> {
+pub fn verify_manifest(manifest: &AccountManifestV2) -> Result<()> {
     manifest.verify().map_err(ChatError::Protocol)
 }
 
 /// Verify one bundle response before any libsignal session mutation.
 pub fn verify_bundle_response(
     expected_peer: &str,
-    response: &UserPreKeyBundlesResponse,
+    response: &AccountPreKeyBundlesResponse,
     policy: ManifestPolicy,
     prior: Option<&ManifestTrust>,
 ) -> Result<Option<ManifestTrust>> {
-    let Some(manifest) = &response.manifest else {
-        if prior.is_some() {
-            return Err(ChatError::Trust(
-                "server omitted a previously required account manifest".into(),
-            ));
-        }
-        return match policy {
-            ManifestPolicy::Required => Err(ChatError::Trust(
-                "server omitted the required account manifest".into(),
-            )),
-            ManifestPolicy::AllowMissingForDevelopment => Ok(None),
-        };
-    };
+    // Every V2 bundle response carries its signed manifest.
+    let _ = policy;
+    let manifest = &response.manifest;
     manifest.verify().map_err(ChatError::Trust)?;
     if response.account != manifest.account {
         return Err(ChatError::Trust(
@@ -229,44 +243,19 @@ pub fn verify_bundle_response(
         ));
     }
     match_expected_account(expected_peer, &manifest.account)?;
-
-    if response.devices.len() != manifest.devices.len() {
-        return Err(ChatError::Trust(
-            "bundle device count does not match signed account manifest".into(),
-        ));
-    }
-    let mut served = std::collections::BTreeMap::new();
-    for bundle in &response.devices {
-        if served.insert(bundle.device_id, bundle).is_some() {
-            return Err(ChatError::Trust(format!(
-                "bundle response repeats device {}",
-                bundle.device_id
-            )));
-        }
-    }
-    for declared in &manifest.devices {
-        let bundle = served.get(&declared.device_id).ok_or_else(|| {
-            ChatError::Trust(format!(
-                "signed device {} has no prekey bundle",
-                declared.device_id
-            ))
-        })?;
-        if bundle.suite != declared.direct_chat_suite
-            || bundle.registration_id != declared.registration_id
-            || bundle.identity_key != declared.identity_key
-        {
-            return Err(ChatError::Trust(format!(
-                "bundle for device {} contradicts the signed account manifest",
-                declared.device_id
-            )));
-        }
-    }
+    // The account's identity once, as its manifest lists it; each bundle a
+    // listed device with its listed registration id and suite, at most once.
+    // A listed device may lack a bundle (the server dropped an expired one,
+    // as Signal's): it is then not sent to.
+    response
+        .check_against_manifest()
+        .map_err(|error| ChatError::Trust(format!("bundles contradict the signed manifest: {error}")))?;
     verify_manifest_trust(expected_peer, manifest, prior).map(Some)
 }
 
 pub(crate) fn verify_bundle_trust(
     expected_peer: &str,
-    response: &UserPreKeyBundlesResponse,
+    response: &AccountPreKeyBundlesResponse,
     policy: ManifestPolicy,
     prior: Option<&ManifestTrust>,
 ) -> Result<VerifiedBundleTrust> {
@@ -279,7 +268,7 @@ pub(crate) fn verify_bundle_trust(
 /// retrieves and atomically commits every missing complete sequence.
 pub(crate) fn verify_manifest_evidence(
     expected_peer: &str,
-    manifest: &AccountManifestV1,
+    manifest: &AccountManifestV2,
     prior: Option<&ManifestTrust>,
 ) -> Result<ManifestTrust> {
     verify_manifest_trust(expected_peer, manifest, prior)
@@ -287,7 +276,7 @@ pub(crate) fn verify_manifest_evidence(
 
 fn verify_manifest_trust(
     expected_peer: &str,
-    manifest: &AccountManifestV1,
+    manifest: &AccountManifestV2,
     prior: Option<&ManifestTrust>,
 ) -> Result<ManifestTrust> {
     manifest.verify().map_err(ChatError::Trust)?;
@@ -375,6 +364,7 @@ fn verify_manifest_trust(
         drive_share_signing_public_key: manifest.drive.share_signing_public_key.clone(),
         highest_sequence: manifest.sequence,
         manifest_hash,
+        identity_key: manifest.identity_key.clone(),
         trust,
         continuity_gap,
         quarantine_reason: None,
@@ -387,10 +377,10 @@ fn verify_manifest_trust(
 /// authority signature and predecessor hash on every entry are authoritative.
 pub(crate) fn verify_manifest_history(
     expected_peer: &str,
-    pages: &[AccountManifestHistoryPageV1],
+    pages: &[AccountManifestHistoryPageV2],
     prior: Option<&ManifestTrust>,
-    pending: &AccountManifestV1,
-) -> Result<(ManifestTrust, Vec<AccountManifestHistoryRecordV1>)> {
+    pending: &AccountManifestV2,
+) -> Result<(ManifestTrust, Vec<AccountManifestHistoryRecord>)> {
     if pages.is_empty() {
         return Err(ChatError::Trust(
             "account manifest gap recovery returned no history".into(),
@@ -452,7 +442,7 @@ pub(crate) fn verify_manifest_history(
             }
             rolling = Some(checked);
             predecessor = Some(manifest.manifest_hash().map_err(ChatError::Trust)?);
-            records.push(AccountManifestHistoryRecordV1 {
+            records.push(AccountManifestHistoryRecord {
                 peer: expected_peer.to_string(),
                 sequence: manifest.sequence,
                 manifest: manifest.clone(),
@@ -486,12 +476,12 @@ mod legacy_suite1_for_upgrade {
     use base64::engine::general_purpose::STANDARD;
     use base64::Engine as _;
     use kutup_chat_proto::{
-        legacy_suite1_for_upgrade::HPKE_PUBLIC_KEY_LEN, AccountIdentitySuiteId, AccountManifestV1,
+        legacy_suite1_for_upgrade::HPKE_PUBLIC_KEY_LEN, AccountIdentitySuiteId, AccountManifestV2,
     };
 
     /// Whether `next` raises a suite-1 Drive key (`prior_key`, as pinned) to
     /// an X-Wing one. Never the other way.
-    pub(super) fn drive_key_rises(prior_key: &str, next: &AccountManifestV1) -> bool {
+    pub(super) fn drive_key_rises(prior_key: &str, next: &AccountManifestV2) -> bool {
         STANDARD.decode(prior_key).map(|key| key.len()) == Ok(HPKE_PUBLIC_KEY_LEN)
             && next.drive.suite == AccountIdentitySuiteId::XWingEd25519V2
     }
@@ -517,7 +507,7 @@ mod tests {
     /// same authority and signing key; never back, never across a gap.
     #[test]
     fn a_drive_key_changes_only_by_rising_to_x_wing_in_the_next_manifest() {
-        use kutup_chat_proto::{AccountManifestDeviceV1, DirectChatSuiteId};
+        use kutup_chat_proto::{AccountManifestDeviceV2, DirectChatSuiteId};
         let peer = "aci:00000000-0000-4000-8000-81b637d8fcd2@chat.example";
         let authority = AccountAuthority::derive(&[5u8; 32]).unwrap();
         let sign = |sequence: u64, previous: Option<String>| {
@@ -526,7 +516,7 @@ mod tests {
                     peer.parse().unwrap(),
                     sequence,
                     previous,
-                    vec![AccountManifestDeviceV1 {
+                    vec![AccountManifestDeviceV2 {
                         device_id: 1,
                         direct_chat_suite: DirectChatSuiteId::PqxdhTripleRatchetV1,
                         identity_key: STANDARD.encode([5u8; 33]),

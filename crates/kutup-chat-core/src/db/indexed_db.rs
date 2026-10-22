@@ -26,7 +26,7 @@ use wasm_bindgen::JsValue;
 
 use crate::db::store_cipher::{keys, StoreCipher};
 use crate::db::{
-    AccountManifestHistoryRecordV1, ChatDb, ContactRecord, InboundEnvelope, InboxMessage,
+    AccountManifestHistoryRecord, ChatDb, ContactRecord, InboundEnvelope, InboxMessage,
     LocalIdentity, LocalProfile, ManifestTrust, MlsHistoryMessage, MlsOutboxEntry, OutboxEntry,
     PeerProfile, Pending, SentMessage,
 };
@@ -592,7 +592,7 @@ impl ChatDb for IndexedDbChatDb {
         peer: &str,
         incarnation_id: &str,
         version: u64,
-    ) -> Result<Option<AccountManifestHistoryRecordV1>> {
+    ) -> Result<Option<AccountManifestHistoryRecord>> {
         self.get(
             MANIFEST_HISTORY,
             triple_key(peer, incarnation_id, &version.to_string()),

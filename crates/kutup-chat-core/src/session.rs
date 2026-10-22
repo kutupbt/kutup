@@ -27,7 +27,7 @@ use sha2::{Digest, Sha256};
 
 use crate::address::ChatAddress;
 use crate::db::{
-    AccountManifestHistoryRecordV1, AuthorityTrust, ChatDb, ContactRecord, InboundEnvelope,
+    AccountManifestHistoryRecord, AuthorityTrust, ChatDb, ContactRecord, InboundEnvelope,
     InboundFailureKind, InboundState, InboxMessage, LocalIdentity, LocalProfile, ManifestTrust,
     OutboxEntry, OutboxLeg, OutboxSyncLeg, PeerProfile, SentMessage,
 };
@@ -37,10 +37,10 @@ use crate::manifest::{verify_bundle_trust, verify_manifest_evidence, ManifestPol
 use crate::store::ChatStore;
 use crate::wire::{decode_ciphertext, decode_identity_key, encode_ciphertext, to_prekey_bundle};
 use kutup_chat_proto::{
-    AccountManifestDeviceV1, AccountManifestV1, ChatContent, ContactControlBody, ContactState,
+    AccountManifestDeviceV2, AccountManifestV2, ChatContent, ContactControlBody, ContactState,
     DeliveredEnvelope, DeviceListMismatch, DevicePreKeyBundle, DirectChatSuiteId,
     DisappearingExpiryStartBody, OutgoingEnvelope, RegisterChatDeviceRequest, ReplenishKeysRequest,
-    SealedOutgoingEnvelopeV1, UserPreKeyBundlesResponse,
+    SealedOutgoingEnvelopeV1, AccountPreKeyBundlesResponse,
 };
 
 /// What a [`Engine::send`](crate::Engine::send) did: whether it landed, and any
@@ -472,7 +472,7 @@ impl Session {
 
     /// Public identity and registration id for this local device, suitable for
     /// inclusion in the account-signed device manifest.
-    pub fn manifest_device(&self) -> AccountManifestDeviceV1 {
+    pub fn manifest_device(&self) -> AccountManifestDeviceV2 {
         self.store.local_manifest_device(self.device_id())
     }
 
@@ -481,7 +481,7 @@ impl Session {
     pub fn manifest_device_with_mls(
         &self,
         mls: kutup_chat_proto::MlsManifestDeviceV1,
-    ) -> AccountManifestDeviceV1 {
+    ) -> AccountManifestDeviceV2 {
         self.store
             .local_manifest_device_with_mls(self.device_id(), Some(mls))
     }
@@ -2423,7 +2423,7 @@ impl Session {
         peer: &str,
         incarnation_id: &str,
         sequence: u64,
-    ) -> Result<Option<AccountManifestHistoryRecordV1>> {
+    ) -> Result<Option<AccountManifestHistoryRecord>> {
         self.store
             .db()
             .load_manifest_history(peer, incarnation_id, sequence)
@@ -2433,8 +2433,8 @@ impl Session {
     pub(crate) async fn accept_manifest_evidence(
         &mut self,
         account: &str,
-        manifest: &AccountManifestV1,
-    ) -> Result<AccountManifestV1> {
+        manifest: &AccountManifestV2,
+    ) -> Result<AccountManifestV2> {
         let prior_manifest = self.store.db().load_manifest_trust(account).await?;
         let trust = verify_manifest_evidence(account, manifest, prior_manifest.as_ref())?;
         if trust.continuity_gap {
@@ -2444,7 +2444,7 @@ impl Session {
         }
         self.store.stage_manifest_trust(trust);
         self.store
-            .stage_manifest_history(AccountManifestHistoryRecordV1 {
+            .stage_manifest_history(AccountManifestHistoryRecord {
                 peer: account.to_string(),
                 sequence: manifest.sequence,
                 manifest: manifest.clone(),
@@ -2456,10 +2456,10 @@ impl Session {
     pub(crate) async fn accept_manifest_evidence_with_history(
         &mut self,
         account: &str,
-        pending: &AccountManifestV1,
+        pending: &AccountManifestV2,
         trust: ManifestTrust,
-        history: Vec<AccountManifestHistoryRecordV1>,
-    ) -> Result<AccountManifestV1> {
+        history: Vec<AccountManifestHistoryRecord>,
+    ) -> Result<AccountManifestV2> {
         let last = history.last().ok_or_else(|| {
             ChatError::Trust("manifest history recovery returned no complete history".into())
         })?;
@@ -2649,7 +2649,7 @@ impl Session {
     pub(crate) async fn accept_bundle_response(
         &mut self,
         peer: &str,
-        response: UserPreKeyBundlesResponse,
+        response: AccountPreKeyBundlesResponse,
         policy: ManifestPolicy,
     ) -> Result<Vec<DevicePreKeyBundle>> {
         let prior_manifest = self.store.db().load_manifest_trust(peer).await?;
@@ -2668,7 +2668,7 @@ impl Session {
         }
         if let Some(manifest) = response.manifest.as_ref() {
             self.store
-                .stage_manifest_history(AccountManifestHistoryRecordV1 {
+                .stage_manifest_history(AccountManifestHistoryRecord {
                     peer: peer.to_string(),
                     sequence: manifest.sequence,
                     manifest: manifest.clone(),
@@ -2686,9 +2686,9 @@ impl Session {
     pub(crate) async fn accept_bundle_response_with_history(
         &mut self,
         peer: &str,
-        response: UserPreKeyBundlesResponse,
+        response: AccountPreKeyBundlesResponse,
         trust: ManifestTrust,
-        history: Vec<AccountManifestHistoryRecordV1>,
+        history: Vec<AccountManifestHistoryRecord>,
         policy: ManifestPolicy,
     ) -> Result<Vec<DevicePreKeyBundle>> {
         let prior_manifest = self.store.db().load_manifest_trust(peer).await?;

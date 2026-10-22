@@ -20,7 +20,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::error::Result;
 use kutup_chat_proto::PutChatProfileRequest;
-use kutup_chat_proto::{AccountManifestV1, ContactState};
+use kutup_chat_proto::{AccountManifestV2, ContactState};
 
 #[cfg(all(feature = "wasm", target_arch = "wasm32"))]
 pub mod indexed_db;
@@ -430,6 +430,10 @@ pub struct ManifestTrust {
     pub drive_share_signing_public_key: String,
     pub highest_sequence: u64,
     pub manifest_hash: String,
+    /// The account's libsignal identity key as its latest accepted manifest
+    /// lists it (canonical base64). Sessions with every device of the account
+    /// use it; it changes only with a later signed manifest.
+    pub identity_key: String,
     pub trust: AuthorityTrust,
     /// True if this client first observed a version after v1 or skipped one or
     /// more signed versions while offline. The latest state is still authentic,
@@ -448,16 +452,16 @@ pub struct ManifestTrust {
 /// append-only and are committed in the same client transaction as the latest
 /// trust pin, so a recovered version gap can never be partially accepted.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct AccountManifestHistoryRecordV1 {
+pub struct AccountManifestHistoryRecord {
     pub peer: String,
     pub sequence: u64,
-    pub manifest: AccountManifestV1,
+    pub manifest: AccountManifestV2,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PendingAccountIdentityResetV1 {
     pub candidate: ManifestTrust,
-    pub history: Vec<AccountManifestHistoryRecordV1>,
+    pub history: Vec<AccountManifestHistoryRecord>,
 }
 
 #[cfg(feature = "sqlite")]
@@ -603,7 +607,7 @@ pub struct Pending {
     /// Peer account → latest accepted signed-manifest trust record.
     pub(crate) manifest_trust: HashMap<String, ManifestTrust>,
     /// `(peer, incarnation, version)` → immutable complete signed manifest.
-    pub(crate) manifest_history: HashMap<(String, String, u64), AccountManifestHistoryRecordV1>,
+    pub(crate) manifest_history: HashMap<(String, String, u64), AccountManifestHistoryRecord>,
     /// Peer account → local contact/request state.
     pub(crate) contacts: HashMap<String, ContactRecord>,
     /// Group id → this device's record of the group (docs/plans/pairwise-groups.md).
@@ -810,7 +814,7 @@ pub trait ChatDb {
         peer: &str,
         incarnation_id: &str,
         version: u64,
-    ) -> Result<Option<AccountManifestHistoryRecordV1>>;
+    ) -> Result<Option<AccountManifestHistoryRecord>>;
 
     /// Client-owned relationship state for one canonical peer.
     async fn load_contact(&self, peer: &str) -> Result<Option<ContactRecord>>;

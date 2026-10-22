@@ -13,11 +13,11 @@
 use crate::error::Result;
 use async_trait::async_trait;
 use kutup_chat_proto::{
-    AccountManifestHistoryPageV1, AccountManifestPublicationV1, AccountManifestV1,
+    AccountManifestHistoryPageV2, AccountManifestPublicationV2, AccountManifestV2,
     AnonymousMlsKeyPackageRequestV1, ChatProfileResponse, DeviceListMismatch,
     IdentifiedMlsKeyPackageRequestV1, MailboxPage, MlsKeyPackageBundleV1, OwnChatProfileResponse,
     PreKeyCountResponse, PutChatProfileRequest, RegisterChatDeviceRequest, ReplenishKeysRequest,
-    SendMessagesRequest, UserPreKeyBundlesResponse,
+    SendMessagesRequest, AccountPreKeyBundlesResponse,
 };
 use kutup_federation_proto::FederatedFeaturePolicyHistoryV1;
 
@@ -134,7 +134,7 @@ pub trait ChatTransport {
     ///
     /// `GET /api/chat/accounts/{accountId}/keys` — every active device's bundle
     /// (consumes one one-time prekey per device server-side).
-    async fn fetch_bundles(&self, account: &str) -> Result<UserPreKeyBundlesResponse>;
+    async fn fetch_bundles(&self, account: &str) -> Result<AccountPreKeyBundlesResponse>;
 
     /// Fetch the local account's complete signed bundle set for an encrypted
     /// linked-device sync. The server does not consume one-time prekeys for
@@ -143,7 +143,7 @@ pub trait ChatTransport {
         &self,
         _account: &str,
         _current_device_id: u32,
-    ) -> Result<UserPreKeyBundlesResponse> {
+    ) -> Result<AccountPreKeyBundlesResponse> {
         Err(crate::ChatError::Transport(
             "transport does not implement linked-device bundle fetches".into(),
         ))
@@ -162,7 +162,7 @@ pub trait ChatTransport {
     }
 
     /// Latest account-signed device manifest. `None` maps the endpoint's 404.
-    async fn fetch_manifest(&self, _account: &str) -> Result<Option<AccountManifestV1>> {
+    async fn fetch_manifest(&self, _account: &str) -> Result<Option<AccountManifestV2>> {
         Err(crate::ChatError::Transport(
             "transport does not implement device manifests".into(),
         ))
@@ -175,7 +175,7 @@ pub trait ChatTransport {
         _from_sequence: u64,
         _to_sequence: u64,
         _page_from_sequence: u64,
-    ) -> Result<AccountManifestHistoryPageV1> {
+    ) -> Result<AccountManifestHistoryPageV2> {
         Err(crate::ChatError::Transport(
             "transport does not implement account manifest history".into(),
         ))
@@ -223,7 +223,7 @@ pub trait ChatTransport {
         &self,
         _account: &str,
         _capability: &[u8; 16],
-    ) -> Result<UserPreKeyBundlesResponse> {
+    ) -> Result<AccountPreKeyBundlesResponse> {
         Err(crate::ChatError::Transport(
             "transport does not implement anonymous prekey retrieval".into(),
         ))
@@ -270,8 +270,8 @@ pub trait ChatTransport {
     /// Publish the caller's next account-signed manifest.
     async fn publish_manifest(
         &self,
-        _manifest: &AccountManifestV1,
-    ) -> Result<AccountManifestPublicationV1> {
+        _manifest: &AccountManifestV2,
+    ) -> Result<AccountManifestPublicationV2> {
         Err(crate::ChatError::Transport(
             "transport does not implement device manifests".into(),
         ))

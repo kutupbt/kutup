@@ -25,12 +25,12 @@ use kutup_chat_proto::group_route::{
     GroupResponseStatusV1, GroupResponseV1, GroupStateAnswerV1,
 };
 use kutup_chat_proto::{
-    AccountManifestHistoryPageV1, AccountManifestPublicationV1, AccountManifestV1,
+    AccountManifestHistoryPageV2, AccountManifestPublicationV2, AccountManifestV2,
     DeliveredEnvelope, DeviceListMismatch, DevicePreKeyBundle, DirectChatSuiteId, EnvelopeType,
     MailboxPage, OwnChatProfileResponse, PutChatProfileRequest, RegisterChatDeviceRequest,
     SealedMessageSubmissionV1, SealedSenderRootV1, SealedSenderServerCertificateV1,
     SealedSenderServicePolicyV1, SealedSenderSuiteId, SendMessagesRequest,
-    SenderCertificateResponseV1, UserPreKeyBundlesResponse,
+    SenderCertificateResponseV1, AccountPreKeyBundlesResponse,
 };
 use kutup_crypto::oblivious::GatewayKey;
 use kutup_federation_proto::{
@@ -97,7 +97,7 @@ impl HostedDevice {
 #[derive(Default)]
 struct HostedAccount {
     devices: BTreeMap<u32, HostedDevice>,
-    manifests: Vec<AccountManifestV1>,
+    manifests: Vec<AccountManifestV2>,
     profile: Option<PutChatProfileRequest>,
 }
 
@@ -483,7 +483,7 @@ impl World {
             })
     }
 
-    fn bundles(&self, account: &str, keep: Option<u32>) -> Result<UserPreKeyBundlesResponse> {
+    fn bundles(&self, account: &str, keep: Option<u32>) -> Result<AccountPreKeyBundlesResponse> {
         let mut accounts = self.accounts.borrow_mut();
         let hosted = accounts
             .get_mut(account)
@@ -495,7 +495,7 @@ impl World {
             // asking device's own one-time prekeys aren't used up.
             .map(|(id, device)| device.bundle(*id, Some(*id) != keep))
             .collect();
-        Ok(UserPreKeyBundlesResponse {
+        Ok(AccountPreKeyBundlesResponse {
             account: account.parse().unwrap(),
             devices,
             manifest: hosted.manifests.last().cloned(),
@@ -969,7 +969,7 @@ impl ChatTransport for Client {
         Ok(device_id)
     }
 
-    async fn fetch_bundles(&self, account: &str) -> Result<UserPreKeyBundlesResponse> {
+    async fn fetch_bundles(&self, account: &str) -> Result<AccountPreKeyBundlesResponse> {
         self.world.bundles(account, None)
     }
 
@@ -977,11 +977,11 @@ impl ChatTransport for Client {
         &self,
         account: &str,
         current_device_id: u32,
-    ) -> Result<UserPreKeyBundlesResponse> {
+    ) -> Result<AccountPreKeyBundlesResponse> {
         self.world.bundles(account, Some(current_device_id))
     }
 
-    async fn fetch_manifest(&self, account: &str) -> Result<Option<AccountManifestV1>> {
+    async fn fetch_manifest(&self, account: &str) -> Result<Option<AccountManifestV2>> {
         if self.world.manifests_down.borrow().contains(account) {
             return Err(ChatError::Transport(
                 "the manifest can't be fetched now".into(),
@@ -1001,7 +1001,7 @@ impl ChatTransport for Client {
         _from_sequence: u64,
         to_sequence: u64,
         page_from_sequence: u64,
-    ) -> Result<AccountManifestHistoryPageV1> {
+    ) -> Result<AccountManifestHistoryPageV2> {
         let manifests = self
             .world
             .accounts
@@ -1016,7 +1016,7 @@ impl ChatTransport for Client {
                     .collect()
             })
             .unwrap_or_default();
-        Ok(AccountManifestHistoryPageV1 {
+        Ok(AccountManifestHistoryPageV2 {
             account: account.parse().unwrap(),
             from_sequence: page_from_sequence,
             to_sequence,
@@ -1027,8 +1027,8 @@ impl ChatTransport for Client {
 
     async fn publish_manifest(
         &self,
-        manifest: &AccountManifestV1,
-    ) -> Result<AccountManifestPublicationV1> {
+        manifest: &AccountManifestV2,
+    ) -> Result<AccountManifestPublicationV2> {
         let mut accounts = self.world.accounts.borrow_mut();
         let hosted = accounts.entry(self.account.clone()).or_default();
         if hosted
@@ -1046,7 +1046,7 @@ impl ChatTransport for Client {
             hosted.devices.retain(|id, _| listed.contains(id));
             hosted.manifests.push(manifest.clone());
         }
-        Ok(AccountManifestPublicationV1 {
+        Ok(AccountManifestPublicationV2 {
             manifest: hosted.manifests.last().cloned().unwrap(),
         })
     }
@@ -1133,7 +1133,7 @@ impl ChatTransport for Client {
         &self,
         account: &str,
         capability: &[u8; 16],
-    ) -> Result<UserPreKeyBundlesResponse> {
+    ) -> Result<AccountPreKeyBundlesResponse> {
         if !self.world.capability_holds(account, capability) {
             return Err(ChatError::Transport("sealed delivery unavailable".into()));
         }

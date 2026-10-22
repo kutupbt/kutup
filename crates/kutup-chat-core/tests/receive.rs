@@ -18,7 +18,7 @@ use kutup_chat_core::{
 };
 use kutup_chat_proto::{
     ConversationId, DeliveredEnvelope, DevicePreKeyBundle, MailboxPage, OutgoingEnvelope,
-    RegisterChatDeviceRequest, SendMessagesRequest, UserPreKeyBundlesResponse,
+    RegisterChatDeviceRequest, SendMessagesRequest, AccountPreKeyBundlesResponse,
 };
 use rand::rngs::OsRng;
 use rand::{CryptoRng, Rng, TryRngCore as _};
@@ -71,7 +71,7 @@ fn authority_of(user: &str) -> AccountAuthority {
 }
 
 /// `user`'s signed manifest and bundles, from the devices a test made.
-fn published(user: &str) -> UserPreKeyBundlesResponse {
+fn published(user: &str) -> AccountPreKeyBundlesResponse {
     let devices = DEVICES.with(|devices| devices.borrow().get(user).cloned().unwrap_or_default());
     let manifest = authority_of(user)
         .sign_manifest(
@@ -80,7 +80,7 @@ fn published(user: &str) -> UserPreKeyBundlesResponse {
             None,
             devices
                 .iter()
-                .map(|bundle| kutup_chat_proto::AccountManifestDeviceV1 {
+                .map(|bundle| kutup_chat_proto::AccountManifestDeviceV2 {
                     device_id: bundle.device_id,
                     direct_chat_suite: kutup_chat_proto::DirectChatSuiteId::PqxdhTripleRatchetV1,
                     identity_key: bundle.identity_key.clone(),
@@ -91,7 +91,7 @@ fn published(user: &str) -> UserPreKeyBundlesResponse {
             "2026-10-15T10:00:00Z",
         )
         .unwrap();
-    UserPreKeyBundlesResponse {
+    AccountPreKeyBundlesResponse {
         account: user.parse().unwrap(),
         devices,
         manifest: Some(manifest),
@@ -159,7 +159,7 @@ struct Mailbox {
     acked: RefCell<Vec<String>>,
     /// The manifest this account's device published (its own, signed with
     /// its own authority).
-    own_manifest: RefCell<Option<kutup_chat_proto::AccountManifestV1>>,
+    own_manifest: RefCell<Option<kutup_chat_proto::AccountManifestV2>>,
 }
 
 impl Mailbox {
@@ -176,7 +176,7 @@ impl ChatTransport for Mailbox {
     async fn register_device(&self, _req: &RegisterChatDeviceRequest) -> Result<u32> {
         unreachable!("receive path does not register")
     }
-    async fn fetch_bundles(&self, account: &str) -> Result<UserPreKeyBundlesResponse> {
+    async fn fetch_bundles(&self, account: &str) -> Result<AccountPreKeyBundlesResponse> {
         // Only to verify a sender's devices before anything of theirs is read.
         Ok(published(account))
     }
@@ -184,22 +184,22 @@ impl ChatTransport for Mailbox {
         &self,
         account: &str,
         _current_device_id: u32,
-    ) -> Result<UserPreKeyBundlesResponse> {
+    ) -> Result<AccountPreKeyBundlesResponse> {
         // What this server claims about the account's own devices.
         Ok(published(account))
     }
     async fn fetch_manifest(
         &self,
         _account: &str,
-    ) -> Result<Option<kutup_chat_proto::AccountManifestV1>> {
+    ) -> Result<Option<kutup_chat_proto::AccountManifestV2>> {
         Ok(self.own_manifest.borrow().clone())
     }
     async fn publish_manifest(
         &self,
-        manifest: &kutup_chat_proto::AccountManifestV1,
-    ) -> Result<kutup_chat_proto::AccountManifestPublicationV1> {
+        manifest: &kutup_chat_proto::AccountManifestV2,
+    ) -> Result<kutup_chat_proto::AccountManifestPublicationV2> {
         *self.own_manifest.borrow_mut() = Some(manifest.clone());
-        Ok(kutup_chat_proto::AccountManifestPublicationV1 {
+        Ok(kutup_chat_proto::AccountManifestPublicationV2 {
             manifest: manifest.clone(),
         })
     }

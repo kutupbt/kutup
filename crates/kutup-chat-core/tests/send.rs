@@ -15,10 +15,10 @@ use kutup_chat_core::{
     ContactState, Engine, Result, SendOutcome, Session, SqliteChatDb,
 };
 use kutup_chat_proto::{
-    AccountManifestDeviceV1, AccountManifestHistoryPageV1, AccountManifestPublicationV1,
-    AccountManifestV1, DeliveredEnvelope, DeviceListMismatch, DevicePreKeyBundle,
+    AccountManifestDeviceV2, AccountManifestHistoryPageV2, AccountManifestPublicationV2,
+    AccountManifestV2, DeliveredEnvelope, DeviceListMismatch, DevicePreKeyBundle,
     DirectChatSuiteId, MailboxPage, OwnChatProfileResponse, PutChatProfileRequest, ReceiptState,
-    RegisterChatDeviceRequest, SendMessagesRequest, UserPreKeyBundlesResponse,
+    RegisterChatDeviceRequest, SendMessagesRequest, AccountPreKeyBundlesResponse,
 };
 use rand::rngs::OsRng;
 use rand::{CryptoRng, Rng, TryRngCore as _};
@@ -90,11 +90,11 @@ fn wrap(env: &kutup_chat_proto::OutgoingEnvelope, sender: &str) -> DeliveredEnve
 struct MockServer {
     /// Each `fetch_bundles` pops the front; the last entry repeats.
     fetch_script: RefCell<Vec<Vec<DevicePreKeyBundle>>>,
-    manifest_script: RefCell<Vec<Option<AccountManifestV1>>>,
+    manifest_script: RefCell<Vec<Option<AccountManifestV2>>>,
     sync_fetch_script: RefCell<Vec<Vec<DevicePreKeyBundle>>>,
-    sync_manifest_script: RefCell<Vec<Option<AccountManifestV1>>>,
-    own_manifest: RefCell<Option<AccountManifestV1>>,
-    manifest_history: RefCell<Vec<AccountManifestV1>>,
+    sync_manifest_script: RefCell<Vec<Option<AccountManifestV2>>>,
+    own_manifest: RefCell<Option<AccountManifestV2>>,
+    manifest_history: RefCell<Vec<AccountManifestV2>>,
     active: RefCell<Vec<(u32, u32)>>,
     sync_active: RefCell<Vec<(u32, u32)>>,
     fail_sends: RefCell<u32>,
@@ -122,10 +122,10 @@ impl MockServer {
     fn set_sync_active(&self, active: Vec<(u32, u32)>) {
         *self.sync_active.borrow_mut() = active;
     }
-    fn script_manifests(&self, manifests: Vec<Option<AccountManifestV1>>) {
+    fn script_manifests(&self, manifests: Vec<Option<AccountManifestV2>>) {
         *self.manifest_script.borrow_mut() = manifests;
     }
-    fn script_sync_manifests(&self, manifests: Vec<Option<AccountManifestV1>>) {
+    fn script_sync_manifests(&self, manifests: Vec<Option<AccountManifestV2>>) {
         *self.sync_manifest_script.borrow_mut() = manifests;
     }
     /// The envelopes of the most recent accepted send.
@@ -170,7 +170,7 @@ impl ChatTransport for MockServer {
         Ok(1)
     }
 
-    async fn fetch_bundles(&self, username: &str) -> Result<UserPreKeyBundlesResponse> {
+    async fn fetch_bundles(&self, username: &str) -> Result<AccountPreKeyBundlesResponse> {
         let mut script = self.fetch_script.borrow_mut();
         let devices = if script.len() > 1 {
             script.remove(0)
@@ -183,7 +183,7 @@ impl ChatTransport for MockServer {
         } else {
             manifests.first().cloned().unwrap_or(None)
         };
-        Ok(UserPreKeyBundlesResponse {
+        Ok(AccountPreKeyBundlesResponse {
             account: manifest.as_ref().map_or_else(
                 || username.parse().unwrap(),
                 |manifest| manifest.account.clone(),
@@ -197,7 +197,7 @@ impl ChatTransport for MockServer {
         &self,
         username: &str,
         _current_device_id: u32,
-    ) -> Result<UserPreKeyBundlesResponse> {
+    ) -> Result<AccountPreKeyBundlesResponse> {
         let mut script = self.sync_fetch_script.borrow_mut();
         let devices = if script.len() > 1 {
             script.remove(0)
@@ -210,7 +210,7 @@ impl ChatTransport for MockServer {
         } else {
             manifests.first().cloned().unwrap_or(None)
         };
-        Ok(UserPreKeyBundlesResponse {
+        Ok(AccountPreKeyBundlesResponse {
             account: manifest.as_ref().map_or_else(
                 || username.parse().unwrap(),
                 |manifest| manifest.account.clone(),
@@ -220,7 +220,7 @@ impl ChatTransport for MockServer {
         })
     }
 
-    async fn fetch_manifest(&self, _username: &str) -> Result<Option<AccountManifestV1>> {
+    async fn fetch_manifest(&self, _username: &str) -> Result<Option<AccountManifestV2>> {
         Ok(self.own_manifest.borrow().clone())
     }
 
@@ -230,7 +230,7 @@ impl ChatTransport for MockServer {
         _from_sequence: u64,
         to_sequence: u64,
         page_from_sequence: u64,
-    ) -> Result<AccountManifestHistoryPageV1> {
+    ) -> Result<AccountManifestHistoryPageV2> {
         let manifests = self
             .manifest_history
             .borrow()
@@ -240,7 +240,7 @@ impl ChatTransport for MockServer {
             })
             .cloned()
             .collect::<Vec<_>>();
-        Ok(AccountManifestHistoryPageV1 {
+        Ok(AccountManifestHistoryPageV2 {
             account: manifests
                 .first()
                 .map(|manifest| manifest.account.clone())
@@ -254,8 +254,8 @@ impl ChatTransport for MockServer {
 
     async fn publish_manifest(
         &self,
-        manifest: &AccountManifestV1,
-    ) -> Result<AccountManifestPublicationV1> {
+        manifest: &AccountManifestV2,
+    ) -> Result<AccountManifestPublicationV2> {
         *self.own_manifest.borrow_mut() = Some(manifest.clone());
         let mut history = self.manifest_history.borrow_mut();
         if history
@@ -264,7 +264,7 @@ impl ChatTransport for MockServer {
         {
             history.push(manifest.clone());
         }
-        Ok(AccountManifestPublicationV1 {
+        Ok(AccountManifestPublicationV2 {
             manifest: manifest.clone(),
         })
     }
@@ -450,7 +450,7 @@ fn decrypt_for<R: Rng + CryptoRng>(
     block_on(dst.decrypt(from, &wrap(env, &from.name()), rng)).unwrap()
 }
 
-fn signed_manifest(account: &str, bundle: &DevicePreKeyBundle) -> AccountManifestV1 {
+fn signed_manifest(account: &str, bundle: &DevicePreKeyBundle) -> AccountManifestV2 {
     signed_manifest_with_authority(
         account,
         bundle,
@@ -462,13 +462,13 @@ fn signed_manifest_with_authority(
     account: &str,
     bundle: &DevicePreKeyBundle,
     authority: &AccountAuthority,
-) -> AccountManifestV1 {
+) -> AccountManifestV2 {
     authority
         .sign_manifest(
             account.parse().unwrap(),
             1,
             None,
-            vec![AccountManifestDeviceV1 {
+            vec![AccountManifestDeviceV2 {
                 device_id: bundle.device_id,
                 direct_chat_suite: DirectChatSuiteId::PqxdhTripleRatchetV1,
                 identity_key: bundle.identity_key.clone(),

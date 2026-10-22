@@ -11,14 +11,14 @@ use async_trait::async_trait;
 use base64::engine::general_purpose::STANDARD;
 use base64::Engine as _;
 use kutup_chat_proto::{
-    AccountManifestHistoryPageV1, AccountManifestPublicationV1, AccountManifestV1,
+    AccountManifestHistoryPageV2, AccountManifestPublicationV2, AccountManifestV2,
     AnonymousMlsDeviceEnvelopeV1, ChatProfileResponse, CommitMlsControlBlockResponseV1,
     DeviceListMismatch, MailboxPage, MlsClientControlHistoryPageV1, MlsControlActionTypeV1,
     MlsConversationMemberV1, MlsGroupAuthorizationPolicyV1, MlsGroupCryptographicPolicyV1,
     MlsIncarnationRecoveryV1, MlsOrderingQuorumCertificateV1, MlsOrderingServicePolicyV1,
     MlsOwnerSetV1, OwnChatProfileResponse, PreKeyCountResponse, PutChatProfileRequest,
     RecoverMlsConversationResponseV1, RegisterChatDeviceRequest, RegisterChatDeviceResponse,
-    ReplenishKeysRequest, SendMessagesRequest, UserPreKeyBundlesResponse,
+    ReplenishKeysRequest, SendMessagesRequest, AccountPreKeyBundlesResponse,
 };
 use rand::rngs::OsRng;
 use rand::TryRngCore as _;
@@ -564,7 +564,7 @@ impl ChatTransport for BrowserTransport {
         Ok(response.device_id)
     }
 
-    async fn fetch_bundles(&self, account: &str) -> Result<UserPreKeyBundlesResponse> {
+    async fn fetch_bundles(&self, account: &str) -> Result<AccountPreKeyBundlesResponse> {
         from_transport(
             self.js
                 .js_fetch_bundles(account)
@@ -577,7 +577,7 @@ impl ChatTransport for BrowserTransport {
         &self,
         account: &str,
         current_device_id: u32,
-    ) -> Result<UserPreKeyBundlesResponse> {
+    ) -> Result<AccountPreKeyBundlesResponse> {
         from_transport(
             self.js
                 .js_fetch_sync_bundles(account, current_device_id)
@@ -598,7 +598,7 @@ impl ChatTransport for BrowserTransport {
         )
     }
 
-    async fn fetch_manifest(&self, account: &str) -> Result<Option<AccountManifestV1>> {
+    async fn fetch_manifest(&self, account: &str) -> Result<Option<AccountManifestV2>> {
         from_transport(
             self.js
                 .js_fetch_manifest(account)
@@ -613,7 +613,7 @@ impl ChatTransport for BrowserTransport {
         from_sequence: u64,
         to_sequence: u64,
         page_from_sequence: u64,
-    ) -> Result<AccountManifestHistoryPageV1> {
+    ) -> Result<AccountManifestHistoryPageV2> {
         from_transport(
             self.js
                 .js_fetch_manifest_history(
@@ -679,7 +679,7 @@ impl ChatTransport for BrowserTransport {
         &self,
         account: &str,
         capability: &[u8; 16],
-    ) -> Result<UserPreKeyBundlesResponse> {
+    ) -> Result<AccountPreKeyBundlesResponse> {
         from_transport(
             self.js
                 .js_fetch_sealed_bundles(account, &STANDARD.encode(capability))
@@ -690,8 +690,8 @@ impl ChatTransport for BrowserTransport {
 
     async fn publish_manifest(
         &self,
-        manifest: &AccountManifestV1,
-    ) -> Result<AccountManifestPublicationV1> {
+        manifest: &AccountManifestV2,
+    ) -> Result<AccountManifestPublicationV2> {
         from_transport(
             self.js
                 .js_publish_manifest(to_transport(manifest)?)

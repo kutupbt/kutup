@@ -85,7 +85,7 @@ pub use db::indexed_db::IndexedDbChatDb;
 #[cfg(feature = "sqlite")]
 pub use db::sqlite::SqliteChatDb;
 pub use db::{
-    AccountManifestHistoryRecordV1, AuthorityTrust, ChatDb, ContactRecord, InboundEnvelope,
+    AccountManifestHistoryRecord, AuthorityTrust, ChatDb, ContactRecord, InboundEnvelope,
     InboundFailureKind, InboundState, InboxMessage, LocalIdentity, LocalProfile, ManifestTrust,
     MlsHistoryMessage, MlsOutboxDelivery, MlsOutboxEntry, OutboxEntry, OutboxSyncLeg, PeerProfile,
     Pending, PendingAccountIdentityResetV1, SentMessage,

@@ -17,7 +17,7 @@ use rusqlite::{Connection, OptionalExtension};
 use zeroize::Zeroize as _;
 
 use crate::db::{
-    contact_state_code, contact_state_from_code, AccountManifestHistoryRecordV1, AuthorityTrust,
+    contact_state_code, contact_state_from_code, AccountManifestHistoryRecord, AuthorityTrust,
     ChatDb, ContactRecord, InboundEnvelope, InboundFailureKind, InboundState, InboxMessage,
     LocalIdentity, LocalProfile, ManifestTrust, MlsHistoryMessage, MlsOutboxDelivery,
     MlsOutboxEntry, OutboxEntry, PeerProfile, Pending, SentMessage,
@@ -172,7 +172,8 @@ CREATE TABLE IF NOT EXISTS manifest_trust (
     trust_state        INTEGER NOT NULL,
     continuity_gap     INTEGER NOT NULL,
     quarantine_reason  TEXT,
-    pending_reset_json TEXT
+    pending_reset_json TEXT,
+    identity_key       TEXT    NOT NULL
 );
 CREATE TABLE IF NOT EXISTS manifest_history (
     peer          TEXT    NOT NULL,
@@ -617,7 +618,7 @@ impl ChatDb for SqliteChatDb {
                         self_authority_key, drive_hpke_public_key,
                         drive_share_signing_public_key, highest_sequence,
                         manifest_hash, trust_state, continuity_gap,
-                        quarantine_reason, pending_reset_json
+                        quarantine_reason, pending_reset_json, identity_key
                  FROM manifest_trust WHERE peer = ?1",
                 [peer],
                 |row| {
@@ -639,6 +640,7 @@ impl ChatDb for SqliteChatDb {
                         drive_share_signing_public_key: row.get(6)?,
                         highest_sequence: row.get::<_, i64>(7)? as u64,
                         manifest_hash: row.get(8)?,
+                        identity_key: row.get(13)?,
                         trust,
                         continuity_gap: row.get::<_, i64>(10)? != 0,
                         quarantine_reason: row.get(11)?,
@@ -664,7 +666,7 @@ impl ChatDb for SqliteChatDb {
         peer: &str,
         incarnation_id: &str,
         sequence: u64,
-    ) -> Result<Option<AccountManifestHistoryRecordV1>> {
+    ) -> Result<Option<AccountManifestHistoryRecord>> {
         let conn = self.conn.borrow();
         let row: Option<String> = db(conn
             .query_row(
@@ -675,7 +677,7 @@ impl ChatDb for SqliteChatDb {
             )
             .optional())?;
         row.map(|manifest| {
-            Ok(AccountManifestHistoryRecordV1 {
+            Ok(AccountManifestHistoryRecord {
                 peer: peer.to_string(),
                 sequence,
                 manifest: serde_json::from_str(&manifest)
@@ -1133,8 +1135,8 @@ impl ChatDb for SqliteChatDb {
                       self_authority_key, drive_hpke_public_key,
                       drive_share_signing_public_key, highest_sequence,
                       manifest_hash, trust_state, continuity_gap,
-                      quarantine_reason, pending_reset_json)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)
+                      quarantine_reason, pending_reset_json, identity_key)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)
                  ON CONFLICT(peer) DO UPDATE SET
                      account = excluded.account,
                      incarnation_id = excluded.incarnation_id,
@@ -1147,7 +1149,8 @@ impl ChatDb for SqliteChatDb {
                      trust_state = excluded.trust_state,
                      continuity_gap = excluded.continuity_gap,
                      quarantine_reason = excluded.quarantine_reason,
-                     pending_reset_json = excluded.pending_reset_json",
+                     pending_reset_json = excluded.pending_reset_json,
+                     identity_key = excluded.identity_key",
                 rusqlite::params![
                     peer,
                     trust.account,
@@ -1167,6 +1170,7 @@ impl ChatDb for SqliteChatDb {
                         .map(serde_json::to_string)
                         .transpose()
                         .map_err(|error| ChatError::Db(error.to_string()))?,
+                    trust.identity_key,
                 ],
             ))?;
         }
@@ -1732,9 +1736,9 @@ mod tests {
     fn quarantined_replacement_and_both_incarnation_histories_round_trip_atomically() {
         use base64::Engine as _;
         use futures_executor::block_on;
-        use kutup_chat_proto::{AccountManifestDeviceV1, AccountManifestV1, DirectChatSuiteId};
+        use kutup_chat_proto::{AccountManifestDeviceV2, AccountManifestV2, DirectChatSuiteId};
 
-        fn manifest(seed: u8) -> AccountManifestV1 {
+        fn manifest(seed: u8) -> AccountManifestV2 {
             crate::AccountAuthority::derive(&[seed; 32])
                 .unwrap()
                 .sign_manifest(
@@ -1743,7 +1747,7 @@ mod tests {
                         .unwrap(),
                     1,
                     None,
-                    vec![AccountManifestDeviceV1 {
+                    vec![AccountManifestDeviceV2 {
                         device_id: 1,
                         direct_chat_suite: DirectChatSuiteId::PqxdhTripleRatchetV1,
                         identity_key: base64::engine::general_purpose::STANDARD.encode([seed; 33]),
@@ -1755,7 +1759,7 @@ mod tests {
                 .unwrap()
         }
 
-        fn pin(manifest: &AccountManifestV1, trust: AuthorityTrust) -> ManifestTrust {
+        fn pin(manifest: &AccountManifestV2, trust: AuthorityTrust) -> ManifestTrust {
             ManifestTrust {
                 peer: manifest.account.to_string(),
                 account: manifest.account.to_string(),
@@ -1775,12 +1779,12 @@ mod tests {
 
         let retained_manifest = manifest(3);
         let candidate_manifest = manifest(4);
-        let retained_record = AccountManifestHistoryRecordV1 {
+        let retained_record = AccountManifestHistoryRecord {
             peer: retained_manifest.account.to_string(),
             sequence: 1,
             manifest: retained_manifest.clone(),
         };
-        let candidate_record = AccountManifestHistoryRecordV1 {
+        let candidate_record = AccountManifestHistoryRecord {
             peer: candidate_manifest.account.to_string(),
             sequence: 1,
             manifest: candidate_manifest.clone(),

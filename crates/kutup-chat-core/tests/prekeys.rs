@@ -13,7 +13,7 @@ use kutup_chat_core::{
 };
 use kutup_chat_proto::{
     MailboxPage, PreKeyCountResponse, RegisterChatDeviceRequest, ReplenishKeysRequest,
-    SendMessagesRequest, UserPreKeyBundlesResponse,
+    SendMessagesRequest, AccountPreKeyBundlesResponse,
 };
 use rand::rngs::OsRng;
 use rand::{CryptoRng, Rng, TryRngCore as _};
@@ -60,7 +60,7 @@ impl ChatTransport for KeyServer {
         unreachable!()
     }
 
-    async fn fetch_bundles(&self, _username: &str) -> Result<UserPreKeyBundlesResponse> {
+    async fn fetch_bundles(&self, _username: &str) -> Result<AccountPreKeyBundlesResponse> {
         unreachable!()
     }
 

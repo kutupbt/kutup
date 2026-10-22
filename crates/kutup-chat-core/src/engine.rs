@@ -31,7 +31,7 @@ use crate::session::{
 };
 use crate::transport::{ChatTransport, SendOutcome};
 use kutup_chat_proto::{
-    AccountManifestV1, AccountRef, AnonymousMlsKeyPackageRequestV1, ChatContent,
+    AccountManifestV2, AccountRef, AnonymousMlsKeyPackageRequestV1, ChatContent,
     ContactControlBody, ContactState, IdentifiedMlsKeyPackageRequestV1, MlsCipherSuiteId,
     MlsKeyPackageBundleV1, OutgoingEnvelope, PreKeyCountResponse, SealedMessageSubmissionV1,
     SealedOutgoingEnvelopeV1, SendMessagesRequest, MLS_PROTOCOL_VERSION,
@@ -1169,7 +1169,7 @@ impl Engine {
         &mut self,
         authority: &AccountAuthority,
         issued_at: impl Into<String>,
-    ) -> Result<AccountManifestV1> {
+    ) -> Result<AccountManifestV2> {
         let transport = Rc::clone(&self.transport);
         let current = transport.fetch_manifest(self.session.user()).await?;
         let canonical_self = self.self_account()?;
@@ -1259,7 +1259,7 @@ impl Engine {
         authority: &AccountAuthority,
         device_id: u32,
         issued_at: impl Into<String>,
-    ) -> Result<AccountManifestV1> {
+    ) -> Result<AccountManifestV2> {
         if device_id == self.session.device_id() {
             return Err(ChatError::Invalid(
                 "the current device cannot revoke itself from the account manifest".into(),
@@ -3113,7 +3113,7 @@ impl Engine {
     async fn accept_verified_bundle_response(
         &mut self,
         peer_user: &str,
-        response: kutup_chat_proto::UserPreKeyBundlesResponse,
+        response: kutup_chat_proto::AccountPreKeyBundlesResponse,
     ) -> Result<Vec<kutup_chat_proto::DevicePreKeyBundle>> {
         let prior_manifest = self.session.manifest_trust(peer_user).await?;
         let inspected = match verify_bundle_trust(
@@ -3345,8 +3345,8 @@ impl Engine {
     pub(crate) async fn accept_current_manifest_evidence(
         &mut self,
         account: &str,
-        manifest: &AccountManifestV1,
-    ) -> Result<AccountManifestV1> {
+        manifest: &AccountManifestV2,
+    ) -> Result<AccountManifestV2> {
         let prior_manifest = self.session.manifest_trust(account).await?;
         let manifest_trust =
             match verify_manifest_evidence(account, manifest, prior_manifest.as_ref()) {
@@ -3381,11 +3381,11 @@ impl Engine {
     async fn recover_manifest_history(
         &self,
         peer: &str,
-        pending_manifest: &AccountManifestV1,
+        pending_manifest: &AccountManifestV2,
         prior_trust: Option<&crate::ManifestTrust>,
     ) -> Result<(
         crate::ManifestTrust,
-        Vec<crate::AccountManifestHistoryRecordV1>,
+        Vec<crate::AccountManifestHistoryRecord>,
     )> {
         let from_sequence = prior_trust.map_or(1, |trust| trust.highest_sequence.saturating_add(1));
         if from_sequence > pending_manifest.sequence {
@@ -3428,7 +3428,7 @@ impl Engine {
     async fn quarantine_manifest_failure(
         &mut self,
         peer: &str,
-        pending_manifest: Option<&AccountManifestV1>,
+        pending_manifest: Option<&AccountManifestV2>,
         prior_trust: Option<&crate::ManifestTrust>,
         error: &ChatError,
     ) -> Result<()> {
@@ -3453,7 +3453,7 @@ impl Engine {
                     } else {
                         Some((
                             candidate,
-                            vec![crate::AccountManifestHistoryRecordV1 {
+                            vec![crate::AccountManifestHistoryRecord {
                                 peer: peer.to_string(),
                                 sequence: manifest.sequence,
                                 manifest: manifest.clone(),
