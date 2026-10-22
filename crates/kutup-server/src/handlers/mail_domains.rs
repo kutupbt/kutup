@@ -518,7 +518,12 @@ pub async fn create_address(
         Some(id) => Some(id),
         None => {
             sqlx::query_scalar(
-                "INSERT INTO mail_addresses (user_id, address, domain_id) VALUES ($1, $2, $3)
+                // Last in the account's order (Proton adds an address at the
+                // end; "Set as default" moves it first).
+                "INSERT INTO mail_addresses (user_id, address, domain_id, position)
+                 VALUES ($1, $2, $3,
+                         (SELECT COALESCE(max(position) + 1, 0) FROM mail_addresses
+                           WHERE user_id = $1 AND state = 'active'))
                  ON CONFLICT (folded) WHERE state <> 'freed' DO NOTHING RETURNING id",
             )
             .bind(user_id)

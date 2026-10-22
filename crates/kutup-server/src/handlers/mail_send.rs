@@ -212,17 +212,19 @@ async fn from_old_address(state: &AppState, user_id: Uuid, key_id: [u8; 8]) -> A
 }
 
 async fn sender(state: &AppState, user_id: Uuid) -> AppResult<Sender> {
-    let row: Option<(Uuid, String, Vec<u8>)> = sqlx::query_as(
-        "SELECT a.id, a.address, k.public_key
-           FROM mail_addresses a
-           JOIN mail_address_keys k ON k.address_id = a.id AND k.is_primary
-          WHERE a.user_id = $1 AND a.state = 'active' AND a.domain_id IS NULL
-            AND a.group_id IS NULL
-          ORDER BY a.created_at DESC LIMIT 1",
-    )
-    .bind(user_id)
-    .fetch_optional(&state.pool)
-    .await?;
+    // The default address: the first enabled one in the account's order.
+    let row: Option<(Uuid, String, Vec<u8>)> =
+        match crate::handlers::mail_addresses::default_address(state, user_id).await? {
+            None => None,
+            Some((address_id, address)) => sqlx::query_scalar(
+                "SELECT public_key FROM mail_address_keys
+                  WHERE address_id = $1 AND is_primary",
+            )
+            .bind(address_id)
+            .fetch_optional(&state.pool)
+            .await?
+            .map(|public_key| (address_id, address, public_key)),
+        };
     let Some((address_id, address, public_key)) = row else {
         // Old addresses receive only: an account with no current address to
         // send from is refused as such, never sent from an old one.
@@ -258,8 +260,8 @@ async fn sender_for(state: &AppState, user_id: Uuid, from: Option<&str>) -> AppR
     };
     let address_id = Uuid::parse_str(from)
         .map_err(|_| AppError::bad_request("fromAddress must be an address id"))?;
-    let row: Option<(String, Vec<u8>, Option<Uuid>)> = sqlx::query_as(
-        "SELECT a.address, k.public_key, a.domain_id
+    let row: Option<(String, Vec<u8>, Option<Uuid>, bool)> = sqlx::query_as(
+        "SELECT a.address, k.public_key, a.domain_id, a.disabled_at IS NOT NULL
            FROM mail_addresses a
            JOIN mail_address_keys k ON k.address_id = a.id AND k.is_primary
           WHERE a.id = $1 AND a.user_id = $2 AND a.state = 'active'",
@@ -268,10 +270,14 @@ async fn sender_for(state: &AppState, user_id: Uuid, from: Option<&str>) -> AppR
     .bind(user_id)
     .fetch_optional(&state.pool)
     .await?;
-    let Some((address, public_key, domain_id)) = row else {
+    let Some((address, public_key, domain_id, disabled)) = row else {
         return Err(AppError::not_found("no such address of yours")
             .with_details(json!({ "code": "notYourAddress" })));
     };
+    if disabled {
+        return Err(AppError::forbidden("this address is disabled")
+            .with_details(json!({ "code": "addressDisabled" })));
+    }
     if let Some(domain_id) = domain_id {
         if !crate::mail::domains::usable_domain(state, domain_id).await? {
             return Err(
@@ -293,7 +299,8 @@ async fn sender_for(state: &AppState, user_id: Uuid, from: Option<&str>) -> AppR
 async fn own_key_ids(state: &AppState, user_id: Uuid) -> AppResult<Vec<[u8; 8]>> {
     let keys: Vec<Vec<u8>> = sqlx::query_scalar(
         "SELECT k.public_key FROM mail_address_keys k JOIN mail_addresses a ON a.id = k.address_id
-          WHERE a.user_id = $1 AND a.state = 'active' AND k.is_primary",
+          WHERE a.user_id = $1 AND a.state = 'active' AND a.disabled_at IS NULL
+            AND k.is_primary",
     )
     .bind(user_id)
     .fetch_all(&state.pool)

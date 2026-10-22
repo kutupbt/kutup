@@ -726,6 +726,7 @@ async fn public_keys(
     let row: Option<(Uuid, String, Option<Uuid>)> = sqlx::query_as(
         "SELECT a.id, a.address, a.domain_id FROM mail_addresses a JOIN users u ON u.id = a.user_id
           WHERE a.folded = kutup_address_folded($1)
+            AND a.disabled_at IS NULL
             AND (a.state = 'active'
                  OR (a.state = 'receiving' AND a.receive_until > now()))
             AND u.is_active",
@@ -815,6 +816,21 @@ pub async fn lookup_keys(
         // `GET /api/mail/groups/recipients` for them.
         return Err(AppError::not_found("this address is a group")
             .with_details(serde_json::json!({ "code": "group" })));
+    }
+    // A disabled address offers no key (Proton's: "This address is
+    // disabled. To be able to send to this address, the owner must first
+    // enable the address.").
+    let disabled: bool = sqlx::query_scalar(
+        "SELECT EXISTS (SELECT 1 FROM mail_addresses
+                         WHERE folded = kutup_address_folded($1) AND state = 'active'
+                           AND disabled_at IS NOT NULL)",
+    )
+    .bind(&address)
+    .fetch_one(&state.pool)
+    .await?;
+    if disabled {
+        return Err(AppError::not_found("this address is disabled")
+            .with_details(serde_json::json!({ "code": "addressDisabled" })));
     }
     Err(AppError::not_found("not found"))
 }
