@@ -89,6 +89,22 @@ export interface AddressKeys {
    * server can forward it (Proton's `encryptionDisabled`).
    */
   encryptionDisabled: boolean
+  /**
+   * The owner's newest list encrypts to nothing: the address is disabled
+   * (Proton's). Nothing is sent to it; `addressKeys` refuses it once this
+   * device has counted the list.
+   */
+  disabled: boolean
+}
+
+/**
+ * The address is disabled by its owner (Proton's): it takes no mail, and
+ * nothing is encrypted to it. Never a reason to send another way.
+ */
+export class AddressDisabled extends Error {
+  constructor(readonly address: string) {
+    super(`${address} is disabled`)
+  }
 }
 
 /** The address is not a Kutup address (or has no key yet). */
@@ -201,6 +217,7 @@ async function load(address: string): Promise<AddressKeys> {
   } catch (error) {
     const response = (error as { response?: { status?: number; data?: { code?: string } } }).response
     if (response?.status === 404 && response.data?.code === 'group') throw new GroupAddress(address)
+    if (response?.status === 404 && response.data?.code === 'addressDisabled') throw new AddressDisabled(address)
     if (response?.status === 404) throw new NoKutupAddress(address)
     throw error
   }
@@ -214,7 +231,10 @@ async function load(address: string): Promise<AddressKeys> {
     if (isGroupLookup(lookup) && (await knownGroup(lookup))) throw new GroupKeysChanged(address)
     throw error
   }
-  return pinned(await notRolledBack(address, keys))
+  // Counted before it is refused: a list from before can't be used after.
+  const checked = await pinned(await notRolledBack(address, keys))
+  if (checked.disabled) throw new AddressDisabled(address)
+  return checked
 }
 
 async function knownGroup(lookup: GroupKeyLookup): Promise<boolean> {
@@ -304,6 +324,7 @@ export async function verified(address: string, lookup: KeyLookup): Promise<Addr
     // A key its owner marked compromised no longer vouches for anything.
     all: [primary, ...kept.filter((k) => k !== primary)].filter((k) => k.flags & MAIL_KEY_FLAGS.notCompromised).map((k) => k.publicKey),
     encryptionDisabled: (primary.flags & MAIL_KEY_FLAGS.emailNoEncrypt) !== 0,
+    disabled: (primary.flags & MAIL_KEY_FLAGS.notObsolete) === 0,
   }
 }
 
@@ -385,5 +406,7 @@ export async function groupMembers(address: string): Promise<AddressKeys[]> {
   // Each held to what this device has seen, as a lookup is: a replayed older
   // list (one without EMAIL_NO_ENCRYPT, or with it) never decides how a
   // member's mail goes.
-  return Promise.all(members.map(async (member) => pinned(await notRolledBack(member.address, await verified(member.address, member)))))
+  const checked = await Promise.all(members.map(async (member) => pinned(await notRolledBack(member.address, await verified(member.address, member)))))
+  // A disabled member's address takes no mail: the list's goes to the rest.
+  return checked.filter((member) => !member.disabled)
 }

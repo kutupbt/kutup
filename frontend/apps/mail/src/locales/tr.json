@@ -240,7 +240,8 @@
       },
       "readableKutup": "Bu ileti için uçtan uca şifreli değil: geldiğinde şifrelenir",
       "readableOutside": "Bu ileti için şifreli değil: düz posta",
-      "encryptionDisabled": "Uçtan uca şifreli değil: bu adres postasını Kutup dışına yönlendiriyor, bu yüzden ulaştığında şifrelenir"
+      "encryptionDisabled": "Uçtan uca şifreli değil: bu adres postasını Kutup dışına yönlendiriyor, bu yüzden ulaştığında şifrelenir",
+      "disabled": "Bu adres devre dışı: e-posta alamıyor"
     },
     "outsideOffNotice": "Bu sunucu henüz Kutup dışındaki adreslere e-posta göndermiyor. Kutup adreslerine giden e-postalar her zamanki gibi gider.",
     "outsideOff": "Bu sunucuda Kutup dışındaki adreslere e-posta henüz gönderilemiyor. Kutup adreslerine göndermek için onları çıkarın.",
@@ -276,7 +277,8 @@
     "trustGroupKeys": "Yeni anahtarlara güven",
     "groupKeysTrusted": "{{address}} için yeni anahtarlara güveniliyor. Yeniden gönderin.",
     "groupKeysTrustFailed": "Yeni anahtarlar kaydedilemedi. Yeniden deneyin.",
-    "writeTo": "{{address}} adresine yaz"
+    "writeTo": "{{address}} adresine yaz",
+    "recipientDisabled": "{{address}} devre dışı ve e-posta alamıyor. İleti gönderilmedi."
   },
   "emptyHint": {
     "inbox": "Kutup kullanıcılarından gelen postalar uçtan uca şifreli ulaşır; başkalarından gelenler ulaştığı anda şifrelenir.",
@@ -1147,7 +1149,8 @@
       "endToEndRequired": "Bu bir Kutup adresi: sayfayı yenileyip yeniden deneyin.",
       "keyList": "Adres anahtarlarınız bu arada değişti. Sayfayı yenileyip yeniden deneyin.",
       "state": "Bu yönlendirme bu arada değişti. Sayfayı yenileyip yeniden deneyin.",
-      "rateLimited": "Bugün çok fazla onay e-postası gönderildi. Yarın yeniden deneyin."
+      "rateLimited": "Bugün çok fazla onay e-postası gönderildi. Yarın yeniden deneyin.",
+      "disabled": "Bu adres devre dışı ve e-posta alamıyor."
     }
   },
   "addresses": {

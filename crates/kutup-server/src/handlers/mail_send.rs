@@ -984,7 +984,7 @@ struct LocalCopy {
         (status = 409, description = "A recipient's key changed (code keyChanged, address)"),
         (status = 403, description = "Outside sending is off on this server (code outsideSendingOff), or paused for you (code sendingPaused)"),
         (status = 413, description = "Too large, or your storage quota exceeded"),
-        (status = 422, description = "No such Kutup address (code unknownRecipient), or refused outside"),
+        (status = 422, description = "No such Kutup address (code unknownRecipient), a disabled one (addressDisabled), or refused outside"),
         (status = 429, description = "Sending limit reached"),
     )
 )]
@@ -1196,11 +1196,30 @@ pub(crate) async fn deliver(
                 None
             }
             Err(_) => {
+                // Disabled by its owner (Proton's): it takes nothing, and
+                // the sender is told so, never sent another way.
+                let disabled: bool = sqlx::query_scalar(
+                    "SELECT EXISTS (SELECT 1 FROM mail_addresses
+                                     WHERE folded = kutup_address_folded($1) AND state = 'active'
+                                       AND disabled_at IS NOT NULL)",
+                )
+                .bind(&mailbox.address)
+                .fetch_one(&state.pool)
+                .await?;
+                let code = if disabled {
+                    "addressDisabled"
+                } else {
+                    "unknownRecipient"
+                };
                 return Err(AppError::new(
                     StatusCode::UNPROCESSABLE_ENTITY,
-                    "no such Kutup address",
+                    if disabled {
+                        "this address is disabled"
+                    } else {
+                        "no such Kutup address"
+                    },
                 )
-                .with_details(json!({ "code": "unknownRecipient", "address": mailbox.address })));
+                .with_details(json!({ "code": code, "address": mailbox.address })));
             }
         };
         let packet = if readable_to.contains(&mailbox.address.to_ascii_lowercase()) {

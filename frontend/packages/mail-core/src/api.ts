@@ -31,7 +31,7 @@ import { keysFor, type ContactEmailPgp, type ContactKey } from '@kutup/contacts-
 import api from '@kutup/session/client'
 import { useRequiredSession, type Session } from '@kutup/session/store'
 import { addFirstAddressKey } from './addressKey'
-import { addressKeys, forgetKeys, GroupAddress, groupMembers, NoKutupAddress } from './keys'
+import { AddressDisabled, addressKeys, forgetKeys, GroupAddress, groupMembers, NoKutupAddress } from './keys'
 import { checkedAddresses, OwnKeyListRolledBack, type CheckedKey } from './keyList'
 import { sanitizeSignature } from './sanitize'
 import { searchText } from './searchText'
@@ -1289,6 +1289,13 @@ export class UnknownRecipient extends Error {
   }
 }
 
+/** A recipient's address is disabled by its owner: the message isn't sent, to anyone. */
+export class RecipientDisabled extends Error {
+  constructor(readonly address: string) {
+    super(`${address} is disabled`)
+  }
+}
+
 /**
  * What Contacts say about an outside address (docs/plans/contact-keys.md):
  * its trusted keys in order (the first that can encrypt is used for sending,
@@ -1404,8 +1411,24 @@ export async function sendDraft(
   const content = { html: draft.html, text: draft.text, attachments: attachmentParts, receipt: draft.receipt, plain: draft.plain }
   const message = buildMessage({ ...header, ...content })
   const everyone = [...new Set([...draft.to, ...draft.cc, ...draft.bcc].map((m) => m.address.toLowerCase()))]
-  const local = everyone.filter((address) => address.endsWith(`@${account.domain}`))
-  const external = everyone.filter((address) => !local.includes(address))
+  // Kutup recipients: the server's own domain, and any other address this
+  // server holds (a custom domain), as its key lookup says (Proton's
+  // internal recipients). A disabled one stops the send: never another way.
+  const held = await Promise.all(
+    everyone.map(async (address) => {
+      if (address.endsWith(`@${account.domain}`)) return true
+      try {
+        await addressKeys(address)
+        return true
+      } catch (error) {
+        if (error instanceof AddressDisabled) throw new RecipientDisabled(address)
+        if (error instanceof NoKutupAddress) return false
+        throw error
+      }
+    }),
+  )
+  const local = everyone.filter((_, i) => held[i])
+  const external = everyone.filter((_, i) => !held[i])
   const bcc = new Set(draft.bcc.map((m) => m.address.toLowerCase()))
 
   // Outside recipients' keys, and the PGP/MIME messages for them.
@@ -1478,6 +1501,7 @@ export async function sendDraft(
         else readable.push(address)
       } catch (error) {
         if (error instanceof NoKutupAddress) throw new UnknownRecipient(address)
+        if (error instanceof AddressDisabled) throw new RecipientDisabled(address)
         if (!(error instanceof GroupAddress)) throw error
         for (const member of await groupMembers(address)) {
           if (member.address === self.address || targets.has(member.address) || readable.includes(member.address)) continue
@@ -1536,6 +1560,11 @@ export async function sendDraft(
     }
     if (response?.status === 422 && response.data?.code === 'unknownRecipient' && response.data.address) {
       throw new UnknownRecipient(response.data.address)
+    }
+    if (response?.status === 422 && response.data?.code === 'addressDisabled' && response.data.address) {
+      // Disabled since its keys were looked up: forgotten, and not sent.
+      forgetKeys(response.data.address)
+      throw new RecipientDisabled(response.data.address)
     }
     throw error
   }

@@ -240,7 +240,8 @@
       },
       "readableKutup": "Not end-to-end encrypted for this message: encrypted when it arrives",
       "readableOutside": "Not encrypted for this message: plain mail",
-      "encryptionDisabled": "Not end-to-end encrypted: this address forwards its mail outside Kutup, so it's encrypted when it arrives"
+      "encryptionDisabled": "Not end-to-end encrypted: this address forwards its mail outside Kutup, so it's encrypted when it arrives",
+      "disabled": "This address is disabled: it can't receive email"
     },
     "outsideOffNotice": "This server doesn't send mail to addresses outside Kutup yet. Mail to Kutup addresses goes as usual.",
     "outsideOff": "Mail to addresses outside Kutup isn't available on this server yet. Remove them to send to the Kutup addresses.",
@@ -276,7 +277,8 @@
     "trustGroupKeys": "Trust the new keys",
     "groupKeysTrusted": "The new keys of {{address}} are trusted. Send again.",
     "groupKeysTrustFailed": "The new keys could not be saved. Try again.",
-    "writeTo": "Write to {{address}}"
+    "writeTo": "Write to {{address}}",
+    "recipientDisabled": "{{address}} is disabled and can't receive email. The message wasn't sent."
   },
   "emptyHint": {
     "inbox": "Mail from Kutup users arrives end-to-end encrypted; mail from anyone else is encrypted the moment it arrives.",
@@ -1147,7 +1149,8 @@
       "endToEndRequired": "This is a Kutup address: reload the page and try again.",
       "keyList": "Your address keys changed meanwhile. Reload the page and try again.",
       "state": "This forwarding changed meanwhile. Reload the page and try again.",
-      "rateLimited": "Too many confirmation emails today. Try again tomorrow."
+      "rateLimited": "Too many confirmation emails today. Try again tomorrow.",
+      "disabled": "This address is disabled and can't receive email."
     }
   },
   "addresses": {

@@ -5,7 +5,7 @@ import api from '@kutup/session/client'
 import { useRequiredSession, type Session } from '@kutup/session/store'
 import { mailKey, useMailAccount, type MailAccount } from './api'
 import type { FilterCondition } from './filters'
-import { addressKeys, GroupAddress, NoKutupAddress, type AddressKeys } from './keys'
+import { AddressDisabled, addressKeys, GroupAddress, NoKutupAddress, type AddressKeys } from './keys'
 import { checkedAddresses, encryptionOff, encryptionOffList, KeyListNotSigned, settleOwedKeyLists, type AddressRow, type CheckedAddress } from './keyList'
 
 // Mail forwarding (docs/plans/mail-forwarding.md), as Proton's: to a Kutup
@@ -113,7 +113,7 @@ export function useSettleOwedKeyLists() {
 
 /** The forwardee address can't be forwarded to (or isn't what the user confirmed). */
 export class ForwardeeRefused extends Error {
-  constructor(readonly reason: 'ownAddress' | 'group' | 'unverified' | 'unknown' | 'kindChanged') {
+  constructor(readonly reason: 'ownAddress' | 'group' | 'unverified' | 'unknown' | 'kindChanged' | 'disabled') {
     super(`this address can't be forwarded to (${reason})`)
   }
 }
@@ -141,6 +141,7 @@ export async function forwardingKindOf(
       return { kind: 'outside' }
     }
     if (error instanceof GroupAddress) throw new ForwardeeRefused('group')
+    if (error instanceof AddressDisabled) throw new ForwardeeRefused('disabled')
     throw new ForwardeeRefused('unverified')
   }
   if (keys.group) throw new ForwardeeRefused('group')
