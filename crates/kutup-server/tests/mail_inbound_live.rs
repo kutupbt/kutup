@@ -7247,7 +7247,10 @@ fn custom_domains() {
     };
     // "Set as default": sales@ first, and it is what names no From.
     assert_eq!(order(&[&sales_id, &own_id, &address_id]).0, 204);
-    assert_eq!(ids(), [sales_id.clone(), own_id.clone(), address_id.clone()]);
+    assert_eq!(
+        ids(),
+        [sales_id.clone(), own_id.clone(), address_id.clone()]
+    );
     assert_eq!(identity(None)["address"], "sales@customer.test");
     // Each address has its own display name and signature.
     let r = bearer(
