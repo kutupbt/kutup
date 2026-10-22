@@ -17,6 +17,7 @@ use kutup_chat_proto::{
     AccountRef, DeviceRegistrationV1, DirectChatSuiteId, EcPreKey, KemPreKey,
     RegisterChatDeviceRequestV2, CHAT_DEVICE_HEADER,
 };
+use kutup_crypto::identity::AccountIdentityKeysV1;
 use libsignal_protocol::{kem, IdentityKeyPair, KeyPair};
 use rand::RngCore;
 use reqwest::blocking::{Client, RequestBuilder, Response};
@@ -116,14 +117,24 @@ fn new_device_secrets() -> (u32, [u8; 32]) {
 impl ChatAccount {
     /// `user`'s Chat side, before it has a device: a new identity.
     pub fn of(user: &User, token: &str) -> ChatAccount {
+        ChatAccount::from_keys(user.person.clone(), token, &user.identity)
+    }
+
+    /// The Chat side of the account `account` with the account keys `keys`,
+    /// before it has a device: a new identity.
+    pub fn from_keys(
+        account: AccountRef,
+        token: &str,
+        keys: &AccountIdentityKeysV1,
+    ) -> ChatAccount {
         ChatAccount {
-            account: user.person.clone(),
+            account,
             token: token.to_owned(),
-            authority: user.identity.authority_signing_key().clone(),
+            authority: keys.authority_signing_key().clone(),
             drive: AccountManifestDriveKeysV1 {
                 suite: AccountIdentitySuiteId::XWingEd25519V2,
-                hpke_public_key: b64(&user.identity.drive_hpke_public_key()),
-                share_signing_public_key: b64(&user.identity.drive_signing_public_key()),
+                hpke_public_key: b64(&keys.drive_hpke_public_key()),
+                share_signing_public_key: b64(&keys.drive_signing_public_key()),
             },
             identity: IdentityKeyPair::generate(&mut rand09::rng()),
             devices: Vec::new(),
@@ -167,12 +178,32 @@ impl ChatAccount {
             self_authority_key: b64(public.as_bytes()),
             signature: String::new(),
         };
+        self.sign(&mut manifest);
+        manifest.verify_successor(self.head.as_ref()).unwrap();
+        manifest
+    }
+
+    /// Signs `manifest` (again) with the account's authority.
+    pub fn sign(&self, manifest: &mut AccountManifestV2) {
         manifest.signature = b64(&self
             .authority
             .sign(&manifest.signing_bytes().unwrap())
             .to_bytes());
-        manifest.verify_successor(self.head.as_ref()).unwrap();
-        manifest
+    }
+
+    /// `POST /api/chat/manifest` of `manifest` as `by`, as it is.
+    pub fn post_manifest(
+        &self,
+        c: &Client,
+        base: &str,
+        by: &ChatDevice,
+        manifest: &AccountManifestV2,
+    ) -> Response {
+        by.auth(c.post(format!("{base}/api/chat/manifest")))
+            .bearer_auth(&self.token)
+            .json(manifest)
+            .send()
+            .unwrap()
     }
 
     /// A registration body for a new device of this identity.
@@ -214,6 +245,17 @@ impl ChatAccount {
     /// a manifest listing it alone; every other device is dropped.
     pub fn reregister(&mut self, c: &Client, base: &str) -> ChatDevice {
         let (registration_id, credential) = new_device_secrets();
+        self.reregister_as(c, base, registration_id, credential)
+    }
+
+    /// [`Self::reregister`] with the device's registration id and credential.
+    pub fn reregister_as(
+        &mut self,
+        c: &Client,
+        base: &str,
+        registration_id: u32,
+        credential: [u8; 32],
+    ) -> ChatDevice {
         let device = ChatDevice {
             id: kutup_chat_proto::REREGISTRATION_DEVICE_ID,
             registration_id,
@@ -254,8 +296,42 @@ impl ChatAccount {
     /// A further device, linked with a token `by` asked for, then the
     /// manifest listing every device published by `by`.
     pub fn link(&mut self, c: &Client, base: &str, by: &ChatDevice) -> ChatDevice {
-        let token = self.link_token(c, base, by);
         let (registration_id, credential) = new_device_secrets();
+        self.link_as(c, base, by, registration_id, credential)
+    }
+
+    /// [`Self::link`] with the device's registration id and credential.
+    pub fn link_as(
+        &mut self,
+        c: &Client,
+        base: &str,
+        by: &ChatDevice,
+        registration_id: u32,
+        credential: [u8; 32],
+    ) -> ChatDevice {
+        let device = self.link_unlisted_as(c, base, by, registration_id, credential);
+        self.devices.push(device.clone());
+        self.publish(c, base, by);
+        device
+    }
+
+    /// A device registered with a link token `by` asked for and never listed
+    /// (a registration interrupted before its manifest): not in
+    /// `self.devices`, so the next [`Self::publish`] drops it.
+    pub fn link_unlisted(&self, c: &Client, base: &str, by: &ChatDevice) -> ChatDevice {
+        let (registration_id, credential) = new_device_secrets();
+        self.link_unlisted_as(c, base, by, registration_id, credential)
+    }
+
+    fn link_unlisted_as(
+        &self,
+        c: &Client,
+        base: &str,
+        by: &ChatDevice,
+        registration_id: u32,
+        credential: [u8; 32],
+    ) -> ChatDevice {
+        let token = self.link_token(c, base, by);
         let body = self.registration(
             registration_id,
             &credential,
@@ -265,14 +341,11 @@ impl ChatAccount {
         let status = r.status();
         let answer: Value = r.json().unwrap_or_default();
         assert_eq!(status, StatusCode::OK, "link: {answer}");
-        let device = ChatDevice {
+        ChatDevice {
             id: answer["deviceId"].as_u64().unwrap() as u32,
             registration_id,
             credential,
-        };
-        self.devices.push(device.clone());
-        self.publish(c, base, by);
-        device
+        }
     }
 
     /// The next manifest listing every device in `self.devices`, published
@@ -280,12 +353,7 @@ impl ChatAccount {
     pub fn publish(&mut self, c: &Client, base: &str, by: &ChatDevice) -> AccountManifestV2 {
         let devices: Vec<&ChatDevice> = self.devices.iter().collect();
         let manifest = self.next_manifest(&devices);
-        let r = by
-            .auth(c.post(format!("{base}/api/chat/manifest")))
-            .bearer_auth(&self.token)
-            .json(&manifest)
-            .send()
-            .unwrap();
+        let r = self.post_manifest(c, base, by, &manifest);
         let status = r.status();
         let text = r.text().unwrap();
         assert_eq!(status, StatusCode::OK, "publish manifest: {text}");

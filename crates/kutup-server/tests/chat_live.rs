@@ -1,11 +1,12 @@
 //! Live e2e for the chat v1 wire contract (`docs/chat-protocol.md`).
 //!
-//! The server is crypto-blind — it only validates base64 and routes opaque
-//! ciphertext — so this exercises the *entire* server-side contract with
-//! synthetic base64 blobs, no libsignal needed. It registers/logs in real
-//! accounts (full account crypto via `kutup-crypto`), then drives device
-//! registration, bundle fetch, send + `sendId` idempotency, `maxContentBytes`,
-//! the 409 device-list contract, cursor paging, and ack.
+//! The server never decrypts: envelopes carry synthetic base64 ciphertext.
+//! Device keys are real, signed by the account's libsignal identity
+//! (`common::chat_identity`), since the server checks prekey signatures. It
+//! registers/logs in real accounts (full account crypto via `kutup-crypto`),
+//! then drives device registration, bundle fetch, send + `sendId`
+//! idempotency, `maxContentBytes`, the 409 device-list contract, cursor
+//! paging, and ack.
 //!
 //! Gated on `KUTUP_LIVE_SERVER` so a normal `cargo test` skips it:
 //!   KUTUP_LIVE_SERVER=https://localhost:38443 KUTUP_INSECURE_TLS=1 \
@@ -15,16 +16,16 @@ mod common;
 
 use base64::engine::general_purpose::STANDARD;
 use base64::Engine;
+use common::chat_identity::{ChatAccount, ChatDevice};
 use ed25519_dalek::{Signer as _, SigningKey};
 use kutup_chat_proto::{
-    AccountIdentitySuiteId, AccountManifestDeviceV1, AccountManifestDriveKeysV1,
-    AccountManifestPublicationV1, AccountManifestV1, AccountRef, AppendChatBackupSegmentRequestV1,
-    ChatBackupManifestV1, ChatBackupMediaReferenceV1, ChatBackupSignerAuthorizationV1,
-    CommitChatBackupManifestRequestV1, DirectChatSuiteId, ProfileEnvelopeContextV1,
-    ProfileEnvelopePurpose, ProvisionChatBackupRequestV1, ReconcileChatBackupMediaRequestV1,
-    StageChatBackupBaseRequestV1, UploadChatBackupMediaRequestV1, UserPreKeyBundlesResponse,
+    AccountManifestPublicationV2, AccountManifestV2, AccountPreKeyBundlesResponse, AccountRef,
+    AppendChatBackupSegmentRequestV1, ChatBackupManifestV1, ChatBackupMediaReferenceV1,
+    ChatBackupSignerAuthorizationV1, CommitChatBackupManifestRequestV1, DeviceRegistrationV1,
+    ProfileEnvelopeContextV1, ProfileEnvelopePurpose, ProvisionChatBackupRequestV1,
+    ReconcileChatBackupMediaRequestV1, StageChatBackupBaseRequestV1,
+    UploadChatBackupMediaRequestV1, CHAT_DEVICE_HEADER,
 };
-use rand::RngCore;
 use reqwest::{blocking::Client, StatusCode};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
@@ -70,74 +71,42 @@ fn client() -> Client {
         .unwrap()
 }
 
-/// Registers a fresh account, then signs it in (OPAQUE, as the CLI):
-/// `(key binding, username, access_token, …)`. The token is the sign-in's,
-/// not the one registration answers.
-fn register_and_login(
-    c: &Client,
-    base: &str,
-    tag: &str,
-) -> (
-    String,
-    AccountRef,
-    String,
-    String,
-    SigningKey,
-    String,
-    [u8; 32],
-) {
+/// Registers a fresh account, then signs it in (OPAQUE, as the CLI): the
+/// account and its Chat side under the sign-in's token (not the one
+/// registration answers).
+fn register_and_login(c: &Client, base: &str, tag: &str) -> (common::User, ChatAccount) {
     let user = common::register(c, base);
     let session = common::sign_in(c, base, &user.username, &user.password);
     let token = session["accessToken"]
         .as_str()
         .unwrap_or_else(|| panic!("sign-in {tag}: {session}"))
         .to_string();
-    let identity = &user.identity;
-    let authority = identity.authority_signing_key().clone();
-    let drive_signing_public_key = b64(&identity.drive_signing_public_key());
-    (
-        user.binding.clone(),
-        user.person.clone(),
-        token,
-        b64(&identity.drive_hpke_public_key()),
-        authority,
-        drive_signing_public_key,
-        user.master_key,
-    )
+    let chat = ChatAccount::of(&user, &token);
+    (user, chat)
 }
 
-/// A synthetic (base64-valid, crypto-meaningless) chat device registration.
-fn register_chat_device(c: &Client, base: &str, token: &str) -> (u32, u32, String) {
-    let mut rng = rand::thread_rng();
-    let reg_id = (rng.next_u32() % 16000) + 1;
-    let seed = rng.next_u32();
-    let key = |n: u8| {
-        let mut digest = Sha256::new();
-        digest.update(seed.to_be_bytes());
-        digest.update([n]);
-        let mut bytes = [0u8; 33];
-        bytes[0] = n;
-        bytes[1..].copy_from_slice(&digest.finalize());
-        b64(&bytes)
-    };
-    let identity_key = key(1);
-    let body = json!({
-        "suite": 1, "registrationId": reg_id,
-        "identityKey": identity_key,
-        "signedPreKey": { "keyId": 1, "publicKey": key(2), "signature": key(3) },
-        "lastResortKyberPreKey": { "keyId": 1, "publicKey": key(4), "signature": key(5) },
-        "oneTimePreKeys": [ { "keyId": 10, "publicKey": key(6) } ],
-        "oneTimeKyberPreKeys": [ { "keyId": 20, "publicKey": key(7), "signature": key(8) } ],
-        "name": "live-test-device"
-    });
-
+/// The account's first Chat device, by re-registration, with the
+/// registration's JSON boundary, retry and rename checks.
+fn register_chat_device(c: &Client, base: &str, chat: &mut ChatAccount) -> ChatDevice {
     // The deployed JSON boundary must reject an unknown selected suite before
     // it can create device state or silently fall back to suite 1.
-    let mut unsupported_body = body.clone();
+    let probe = ChatDevice {
+        id: 1,
+        registration_id: 7,
+        credential: rand::random(),
+    };
+    let mut unsupported_body = serde_json::to_value(chat.registration(
+        probe.registration_id,
+        &probe.credential,
+        DeviceRegistrationV1::Reregistration {
+            manifest: Box::new(chat.next_manifest(&[&probe])),
+        },
+    ))
+    .unwrap();
     unsupported_body["suite"] = json!(2);
     let unsupported = c
         .post(format!("{base}/api/chat/device"))
-        .bearer_auth(token)
+        .bearer_auth(&chat.token)
         .json(&unsupported_body)
         .send()
         .unwrap();
@@ -147,38 +116,32 @@ fn register_chat_device(c: &Client, base: &str, token: &str) -> (u32, u32, Strin
         "unknown suite must fail at the JSON boundary"
     );
 
-    let r = c
-        .post(format!("{base}/api/chat/device"))
-        .bearer_auth(token)
-        .json(&body)
-        .send()
-        .unwrap();
-    assert!(r.status().is_success(), "register device: {}", r.status());
-    let v: Value = r.json().unwrap();
-    let device_id = v["deviceId"].as_u64().unwrap() as u32;
+    let device = chat.reregister(c, base);
 
-    // An ambiguous first response is retried with the exact durable request.
-    // The identity key is install-unique, so the server must return the same id
-    // without creating a second directory row.
-    let retry = c
-        .post(format!("{base}/api/chat/device"))
-        .bearer_auth(token)
-        .json(&body)
-        .send()
-        .unwrap();
+    // An ambiguous first response is retried with the device's credential,
+    // drawn once: the server must return the same id without creating a
+    // second directory row.
+    let retry_body = chat.registration(
+        device.registration_id,
+        &device.credential,
+        DeviceRegistrationV1::Reregistration {
+            manifest: Box::new(chat.head.clone().unwrap()),
+        },
+    );
+    let retry = chat.post_registration(c, base, &retry_body);
     assert!(
         retry.status().is_success(),
         "retry device registration: {}",
         retry.status()
     );
     let retry_body: Value = retry.json().unwrap();
-    assert_eq!(retry_body["deviceId"], device_id);
+    assert_eq!(retry_body["deviceId"], device.id);
 
     // The database read path and public JSON shape must preserve the numeric
     // registry code rather than defaulting or serializing a Rust variant name.
     let devices: Value = c
         .get(format!("{base}/api/chat/device"))
-        .bearer_auth(token)
+        .bearer_auth(&chat.token)
         .send()
         .unwrap()
         .json()
@@ -187,28 +150,28 @@ fn register_chat_device(c: &Client, base: &str, token: &str) -> (u32, u32, Strin
         .as_array()
         .unwrap()
         .iter()
-        .find(|device| device["deviceId"] == device_id)
+        .find(|listed| listed["deviceId"] == device.id)
         .expect("registered device is listed");
     assert_eq!(listed["suite"], json!(1));
 
-    let invalid_name = c
-        .patch(format!("{base}/api/chat/device/{device_id}"))
-        .bearer_auth(token)
+    let invalid_name = device
+        .auth(c.patch(format!("{base}/api/chat/device/{}", device.id)))
+        .bearer_auth(&chat.token)
         .json(&json!({ "name": "   " }))
         .send()
         .unwrap();
     assert_eq!(invalid_name.status(), StatusCode::BAD_REQUEST);
 
-    let renamed = c
-        .patch(format!("{base}/api/chat/device/{device_id}"))
-        .bearer_auth(token)
+    let renamed = device
+        .auth(c.patch(format!("{base}/api/chat/device/{}", device.id)))
+        .bearer_auth(&chat.token)
         .json(&json!({ "name": "  Live test laptop  " }))
         .send()
         .unwrap();
     assert_eq!(renamed.status(), StatusCode::NO_CONTENT);
     let devices: Value = c
         .get(format!("{base}/api/chat/device"))
-        .bearer_auth(token)
+        .bearer_auth(&chat.token)
         .send()
         .unwrap()
         .json()
@@ -217,40 +180,27 @@ fn register_chat_device(c: &Client, base: &str, token: &str) -> (u32, u32, Strin
         .as_array()
         .unwrap()
         .iter()
-        .find(|device| device["deviceId"] == device_id)
+        .find(|listed| listed["deviceId"] == device.id)
         .expect("renamed device is listed");
     assert_eq!(renamed_device["name"], "Live test laptop");
 
-    (device_id, reg_id, identity_key)
+    device
 }
 
-#[allow(clippy::too_many_arguments)]
+/// Publishes the account's next manifest listing `chat.devices`, as `by`.
 fn publish_manifest(
     c: &Client,
     base: &str,
-    token: &str,
-    signing: &SigningKey,
-    account: &AccountRef,
-    drive_public_key: &str,
-    drive_signing_public_key: &str,
-    sequence: u64,
-    previous_hash: Option<String>,
-    devices: Vec<AccountManifestDeviceV1>,
-) -> AccountManifestV1 {
-    let manifest = signed_manifest(
-        signing,
-        account,
-        drive_public_key,
-        drive_signing_public_key,
-        sequence,
-        previous_hash,
-        devices,
-    );
+    chat: &mut ChatAccount,
+    by: &ChatDevice,
+) -> AccountManifestV2 {
+    let devices: Vec<&ChatDevice> = chat.devices.iter().collect();
+    let manifest = chat.next_manifest(&devices);
     // Publication is idempotent, so a transient transport failure can retry
     // the exact manifest without publishing different bytes.
     let mut response = None;
     for attempt in 0..3 {
-        let candidate = post_manifest(c, base, token, &manifest);
+        let candidate = chat.post_manifest(c, base, by, &manifest);
         if candidate.status() != StatusCode::SERVICE_UNAVAILABLE || attempt == 2 {
             response = Some(candidate);
             break;
@@ -262,60 +212,12 @@ fn publish_manifest(
     let response_body = response.text().unwrap();
     assert!(
         response_status.is_success(),
-        "publish manifest sequence {sequence}: {response_status}: {response_body}",
+        "publish manifest sequence {}: {response_status}: {response_body}",
+        manifest.sequence,
     );
-    let published = serde_json::from_str::<AccountManifestPublicationV1>(&response_body).unwrap();
+    let published = serde_json::from_str::<AccountManifestPublicationV2>(&response_body).unwrap();
     assert_eq!(published.manifest, manifest);
-    manifest
-}
-
-fn post_manifest(
-    c: &Client,
-    base: &str,
-    token: &str,
-    manifest: &AccountManifestV1,
-) -> reqwest::blocking::Response {
-    c.post(format!("{base}/api/chat/manifest"))
-        .bearer_auth(token)
-        .json(manifest)
-        .send()
-        .unwrap()
-}
-
-fn signed_manifest(
-    signing: &SigningKey,
-    account: &AccountRef,
-    drive_public_key: &str,
-    drive_signing_public_key: &str,
-    sequence: u64,
-    previous_hash: Option<String>,
-    devices: Vec<AccountManifestDeviceV1>,
-) -> AccountManifestV1 {
-    let public = signing.verifying_key();
-    let mut incarnation = Sha256::new();
-    incarnation.update(b"kutup/account-incarnation/v1\0");
-    incarnation.update(public.as_bytes());
-    let mut manifest = AccountManifestV1 {
-        manifest_version: 1,
-        account: account.clone(),
-        incarnation_id: hex::encode(incarnation.finalize()),
-        sequence,
-        previous_hash,
-        drive: AccountManifestDriveKeysV1 {
-            suite: AccountIdentitySuiteId::XWingEd25519V2,
-            hpke_public_key: drive_public_key.into(),
-            share_signing_public_key: drive_signing_public_key.into(),
-        },
-        devices,
-        issued_at: time::OffsetDateTime::now_utc()
-            .format(&time::format_description::well_known::Rfc3339)
-            .unwrap(),
-        authority_key_id: hex::encode(Sha256::digest(public.as_bytes())),
-        self_authority_key: b64(public.as_bytes()),
-        signature: String::new(),
-    };
-    manifest.signature = b64(&signing.sign(&manifest.signing_bytes().unwrap()).to_bytes());
-    manifest.verify().unwrap();
+    chat.head = Some(manifest.clone());
     manifest
 }
 
@@ -328,7 +230,8 @@ fn chat_backup_lifecycle(
     foreign_token: &str,
     master_key: &[u8; 32],
     authority: &SigningKey,
-    device_id: u32,
+    owner: &ChatDevice,
+    foreign: &ChatDevice,
     admin_token: Option<&str>,
 ) {
     use kutup_crypto::account_envelope::{self, AccountEnvelopePurpose};
@@ -339,6 +242,7 @@ fn chat_backup_lifecycle(
     use kutup_crypto::chat_backup_media::{self, ChatBackupMediaContextV1};
     use kutup_crypto::identity::AccountIdentityKeysV1;
     use kutup_crypto::stream::{StreamEncryptor, TAG_FINAL};
+    let device_id = owner.id;
 
     let initial: Value = c
         .get(format!("{base}/api/chat/backup"))
@@ -449,8 +353,8 @@ fn chat_backup_lifecycle(
         ciphertext_sha256: hex::encode(Sha256::digest(&ciphertext)),
         ciphertext: b64(&ciphertext),
     };
-    let receipt: Value = c
-        .post(format!("{base}/api/chat/backup/segments"))
+    let receipt: Value = owner
+        .auth(c.post(format!("{base}/api/chat/backup/segments")))
         .bearer_auth(owner_token)
         .json(&append)
         .send()
@@ -459,8 +363,8 @@ fn chat_backup_lifecycle(
         .unwrap();
     assert_eq!(receipt["cursor"], 1);
     assert_eq!(receipt["alreadyStored"], false);
-    let retry: Value = c
-        .post(format!("{base}/api/chat/backup/segments"))
+    let retry: Value = owner
+        .auth(c.post(format!("{base}/api/chat/backup/segments")))
         .bearer_auth(owner_token)
         .json(&append)
         .send()
@@ -473,7 +377,8 @@ fn chat_backup_lifecycle(
     let mut changed_append = append.clone();
     changed_append.account_manifest_sequence = 2;
     assert_eq!(
-        c.post(format!("{base}/api/chat/backup/segments"))
+        owner
+            .auth(c.post(format!("{base}/api/chat/backup/segments")))
             .bearer_auth(owner_token)
             .json(&changed_append)
             .send()
@@ -484,7 +389,8 @@ fn chat_backup_lifecycle(
     let mut malformed = append.clone();
     malformed.ciphertext_sha256 = "00".repeat(32);
     assert_eq!(
-        c.post(format!("{base}/api/chat/backup/segments"))
+        owner
+            .auth(c.post(format!("{base}/api/chat/backup/segments")))
             .bearer_auth(owner_token)
             .json(&malformed)
             .send()
@@ -493,7 +399,8 @@ fn chat_backup_lifecycle(
         StatusCode::BAD_REQUEST
     );
     assert_eq!(
-        c.post(format!("{base}/api/chat/backup/segments"))
+        foreign
+            .auth(c.post(format!("{base}/api/chat/backup/segments")))
             .bearer_auth(foreign_token)
             .json(&append)
             .send()
@@ -560,9 +467,11 @@ fn chat_backup_lifecycle(
         let send_candidate = |client: Client, request: AppendChatBackupSegmentRequestV1| {
             let base = base.to_string();
             let token = owner_token.to_string();
+            let header = owner.header();
             std::thread::spawn(move || {
                 client
                     .post(format!("{base}/api/chat/backup/segments"))
+                    .header(CHAT_DEVICE_HEADER, header)
                     .bearer_auth(token)
                     .json(&request)
                     .send()
@@ -926,14 +835,14 @@ fn chat_backup_lifecycle(
         media_ciphertext.len()
     );
     if let Some(admin_token) = admin_token {
-        let owner: Value = c
+        let me: Value = c
             .get(format!("{base}/api/user/me"))
             .bearer_auth(owner_token)
             .send()
             .unwrap()
             .json()
             .unwrap();
-        let owner_id = owner["id"].as_str().expect("current user id");
+        let owner_id = me["id"].as_str().expect("current user id");
         let set_quota = |quota: usize| {
             let response = c
                 .put(format!("{base}/api/admin/users/{owner_id}"))
@@ -973,8 +882,8 @@ fn chat_backup_lifecycle(
                 ciphertext_sha256: hex::encode(Sha256::digest(&ciphertext)),
                 ciphertext: b64(&ciphertext),
             };
-            let response = c
-                .post(format!("{base}/api/chat/backup/segments"))
+            let response = owner
+                .auth(c.post(format!("{base}/api/chat/backup/segments")))
                 .bearer_auth(owner_token)
                 .json(&candidate)
                 .send()
@@ -1005,8 +914,8 @@ fn chat_backup_lifecycle(
             protected_bytes + accepted_bytes
         );
         set_quota(protected_bytes + pending.ciphertext_bytes as usize);
-        let resumed: Value = c
-            .post(format!("{base}/api/chat/backup/segments"))
+        let resumed: Value = owner
+            .auth(c.post(format!("{base}/api/chat/backup/segments")))
             .bearer_auth(owner_token)
             .json(&pending)
             .send()
@@ -1171,69 +1080,43 @@ fn chat_v1_contract() {
     assert!(chat["deviceExpiryDays"].is_number());
     println!("ok  - capability block");
 
-    let (binding_a, ua, ta, drive_a, authority_a, drive_sign_a, master_a) =
-        register_and_login(&c, &base, "a");
-    let (_eb, ub, tb, drive_b, authority_b, drive_sign_b, _master_b) =
-        register_and_login(&c, &base, "b");
+    let (user_a, mut chat_a) = register_and_login(&c, &base, "a");
+    let (_user_b, mut chat_b) = register_and_login(&c, &base, "b");
+    let (ta, tb) = (chat_a.token.clone(), chat_b.token.clone());
     let domain = chat["serverName"]
         .as_str()
         .expect("Chat capability has a server name")
         .to_string();
     // Chat names accounts by id (docs/plans/account-ids.md).
-    let (account_a, account_b) = (ua, ub);
+    let (account_a, account_b) = (chat_a.account.clone(), chat_b.account.clone());
     assert_eq!(account_a.server, domain);
     println!("ok  - two accounts registered + logged in");
 
-    let (dev_a, reg_a, identity_a) = register_chat_device(&c, &base, &ta);
-    let (interrupted_a, _, _) = register_chat_device(&c, &base, &ta);
-    let (dev_b, reg_b, identity_b) = register_chat_device(&c, &base, &tb);
-    println!("ok  - chat devices registered (A={dev_a} B={dev_b})");
+    let dev_a = register_chat_device(&c, &base, &mut chat_a);
+    // A link interrupted before its manifest: registered, never listed.
+    let interrupted_a = chat_a.link_unlisted(&c, &base, &dev_a);
+    let dev_b = register_chat_device(&c, &base, &mut chat_b);
+    println!(
+        "ok  - chat devices registered (A={} B={})",
+        dev_a.id, dev_b.id
+    );
 
     // A manifest names the caller's own account: another account id here,
     // or the caller's id on another server, is refused (and changes nothing).
-    let device_a = AccountManifestDeviceV1 {
-        device_id: dev_a,
-        direct_chat_suite: DirectChatSuiteId::PqxdhTripleRatchetV1,
-        identity_key: identity_a.clone(),
-        registration_id: reg_a,
-        mls: None,
-    };
     for wrong in [
         AccountRef::new(&domain, &Uuid::new_v4().to_string()).unwrap(),
         AccountRef::new("elsewhere.example", &account_a.account_id).unwrap(),
     ] {
-        let manifest = signed_manifest(
-            &authority_a,
-            &wrong,
-            &drive_a,
-            &drive_sign_a,
-            1,
-            None,
-            vec![device_a.clone()],
-        );
-        let refused = post_manifest(&c, &base, &ta, &manifest);
+        let mut manifest = chat_a.next_manifest(&[&dev_a]);
+        manifest.account = wrong.clone();
+        chat_a.sign(&mut manifest);
+        let refused = chat_a.post_manifest(&c, &base, &dev_a, &manifest);
         assert_eq!(refused.status(), StatusCode::CONFLICT, "{wrong}");
     }
     println!("ok  - a manifest naming another account is refused");
 
-    let manifest_a1 = publish_manifest(
-        &c,
-        &base,
-        &ta,
-        &authority_a,
-        &account_a,
-        &drive_a,
-        &drive_sign_a,
-        1,
-        None,
-        vec![AccountManifestDeviceV1 {
-            device_id: dev_a,
-            direct_chat_suite: DirectChatSuiteId::PqxdhTripleRatchetV1,
-            identity_key: identity_a.clone(),
-            registration_id: reg_a,
-            mls: None,
-        }],
-    );
+    // The next manifest lists device 1 alone: the unlisted row goes.
+    let manifest_a1 = publish_manifest(&c, &base, &mut chat_a, &dev_a);
     // `?server=` naming this server is this server; a spelling that is not
     // the canonical name is refused, never looked up elsewhere.
     for query in ["", "?server=", "?server=UPPER"] {
@@ -1254,7 +1137,7 @@ fn chat_v1_contract() {
             assert_eq!(r.status(), StatusCode::BAD_REQUEST, "{url}");
         } else {
             assert_eq!(r.status(), StatusCode::OK, "{url}");
-            assert_eq!(r.json::<AccountManifestV1>().unwrap(), manifest_a1, "{url}");
+            assert_eq!(r.json::<AccountManifestV2>().unwrap(), manifest_a1, "{url}");
         }
     }
     println!("ok  - ?server= with this server's name resolves here");
@@ -1274,36 +1157,19 @@ fn chat_v1_contract() {
     );
     assert_eq!(
         devices_after_first_manifest["devices"][0]["deviceId"],
-        dev_a
+        dev_a.id
     );
-    assert_ne!(interrupted_a, dev_a);
-    publish_manifest(
-        &c,
-        &base,
-        &tb,
-        &authority_b,
-        &account_b,
-        &drive_b,
-        &drive_sign_b,
-        1,
-        None,
-        vec![AccountManifestDeviceV1 {
-            device_id: dev_b,
-            direct_chat_suite: DirectChatSuiteId::PqxdhTripleRatchetV1,
-            identity_key: identity_b,
-            registration_id: reg_b,
-            mls: None,
-        }],
-    );
+    assert_ne!(interrupted_a.id, dev_a.id);
     chat_backup_lifecycle(
         &c,
         &base,
-        &binding_a,
+        &user_a.binding,
         &ta,
         &tb,
-        &master_a,
-        &authority_a,
-        dev_a,
+        &user_a.master_key,
+        &chat_a.authority,
+        &dev_a,
+        &dev_b,
         admin_token.as_deref(),
     );
 
@@ -1318,14 +1184,14 @@ fn chat_v1_contract() {
         "account": &account_a,
         "version": profile_v1_version,
         "revision": 1,
-        "sourceDeviceId": dev_a,
-        "name": opaque_profile_envelope(&account_a, &profile_v1_version, 1, dev_a, ProfileEnvelopePurpose::DisplayName, 53 + 16, 31),
-        "wrappedKey": opaque_profile_envelope(&account_a, &profile_v1_version, 1, dev_a, ProfileEnvelopePurpose::WrappedProfileKey, 32 + 16, 41),
+        "sourceDeviceId": dev_a.id,
+        "name": opaque_profile_envelope(&account_a, &profile_v1_version, 1, dev_a.id, ProfileEnvelopePurpose::DisplayName, 53 + 16, 31),
+        "wrappedKey": opaque_profile_envelope(&account_a, &profile_v1_version, 1, dev_a.id, ProfileEnvelopePurpose::WrappedProfileKey, 32 + 16, 41),
         "accessKeyVerifier": hex::encode(Sha256::digest(access_v1)),
         "deliveryCapabilityVerifier": hex::encode(Sha256::digest(delivery_v1)),
     });
-    let put = c
-        .put(format!("{base}/api/chat/profile"))
+    let put = dev_a
+        .auth(c.put(format!("{base}/api/chat/profile")))
         .bearer_auth(&ta)
         .json(&profile_v1)
         .send()
@@ -1370,14 +1236,14 @@ fn chat_v1_contract() {
         "account": &account_a,
         "version": profile_v2_version,
         "revision": 2,
-        "sourceDeviceId": dev_a,
-        "name": opaque_profile_envelope(&account_a, &profile_v2_version, 2, dev_a, ProfileEnvelopePurpose::DisplayName, 53 + 16, 32),
-        "wrappedKey": opaque_profile_envelope(&account_a, &profile_v2_version, 2, dev_a, ProfileEnvelopePurpose::WrappedProfileKey, 32 + 16, 42),
+        "sourceDeviceId": dev_a.id,
+        "name": opaque_profile_envelope(&account_a, &profile_v2_version, 2, dev_a.id, ProfileEnvelopePurpose::DisplayName, 53 + 16, 32),
+        "wrappedKey": opaque_profile_envelope(&account_a, &profile_v2_version, 2, dev_a.id, ProfileEnvelopePurpose::WrappedProfileKey, 32 + 16, 42),
         "accessKeyVerifier": hex::encode(Sha256::digest(access_v2)),
         "deliveryCapabilityVerifier": hex::encode(Sha256::digest(delivery_v2)),
     });
-    let rotated = c
-        .put(format!("{base}/api/chat/profile"))
+    let rotated = dev_a
+        .auth(c.put(format!("{base}/api/chat/profile")))
         .bearer_auth(&ta)
         .json(&profile_v2)
         .send()
@@ -1406,85 +1272,50 @@ fn chat_v1_contract() {
 
     // A links a second device. A sync-mode bundle fetch returns the complete
     // signed-set shape, but does not consume a one-time key for the caller.
-    let (interrupted_a2, _, _) = register_chat_device(&c, &base, &ta);
-    let (dev_a2, reg_a2, identity_a2) = register_chat_device(&c, &base, &ta);
-    let manifest_a2 = publish_manifest(
-        &c,
-        &base,
-        &ta,
-        &authority_a,
-        &account_a,
-        &drive_a,
-        &drive_sign_a,
-        2,
-        Some(manifest_a1.manifest_hash().unwrap()),
-        vec![
-            AccountManifestDeviceV1 {
-                device_id: dev_a,
-                direct_chat_suite: DirectChatSuiteId::PqxdhTripleRatchetV1,
-                identity_key: identity_a.clone(),
-                registration_id: reg_a,
-                mls: None,
-            },
-            AccountManifestDeviceV1 {
-                device_id: dev_a2,
-                direct_chat_suite: DirectChatSuiteId::PqxdhTripleRatchetV1,
-                identity_key: identity_a2,
-                registration_id: reg_a2,
-                mls: None,
-            },
-        ],
-    );
-    let sync_bundles_value: Value = c
-        .get(format!(
-            "{base}/api/chat/accounts/{}/keys?syncDeviceId={dev_a}",
-            account_a.account_id
-        ))
+    let interrupted_a2 = chat_a.link_unlisted(&c, &base, &dev_a);
+    let dev_a2 = chat_a.link(&c, &base, &dev_a);
+    let sync_bundles_value: Value = dev_a
+        .auth(c.get(format!(
+            "{base}/api/chat/accounts/{}/keys?syncDeviceId={}",
+            account_a.account_id, dev_a.id
+        )))
         .bearer_auth(&ta)
         .send()
         .unwrap()
         .json()
         .unwrap();
-    let sync_bundles: UserPreKeyBundlesResponse =
+    let sync_bundles: AccountPreKeyBundlesResponse =
         serde_json::from_value(sync_bundles_value.clone()).unwrap();
-    assert_eq!(sync_bundles.manifest.as_ref().unwrap().account, account_a);
+    sync_bundles.check_against_manifest().unwrap();
+    assert_eq!(sync_bundles.account, account_a);
+    assert_eq!(sync_bundles.manifest, *chat_a.head.as_ref().unwrap());
+    assert_eq!(sync_bundles.identity_key, chat_a.identity_key());
     let sync_bundles = sync_bundles_value;
     let sync_devices = sync_bundles["devices"].as_array().unwrap();
     assert_eq!(sync_devices.len(), 2);
     assert!(sync_devices
         .iter()
-        .all(|device| device["deviceId"] != interrupted_a2));
+        .all(|device| device["deviceId"] != interrupted_a2.id));
     let current = sync_devices
         .iter()
-        .find(|device| device["deviceId"] == dev_a)
+        .find(|device| device["deviceId"] == dev_a.id)
         .unwrap();
     assert!(current.get("oneTimePreKey").is_none());
     println!("ok  - linked-device bundle fetch preserves current prekeys");
 
     // Advance the complete account-signed manifest history.
-    publish_manifest(
-        &c,
-        &base,
-        &ta,
-        &authority_a,
-        &account_a,
-        &drive_a,
-        &drive_sign_a,
-        3,
-        Some(manifest_a2.manifest_hash().unwrap()),
-        manifest_a2.devices.clone(),
-    );
+    publish_manifest(&c, &base, &mut chat_a, &dev_a);
 
     let sync_id = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
-    let sync = c
-        .post(format!("{base}/api/chat/sync/messages"))
+    let sync = dev_a
+        .auth(c.post(format!("{base}/api/chat/sync/messages")))
         .bearer_auth(&ta)
         .json(&json!({
-            "senderDeviceId": dev_a,
+            "senderDeviceId": dev_a.id,
             "sendId": sync_id,
             "envelopes": [{
-                "deviceId": dev_a2,
-                "registrationId": reg_a2,
+                "deviceId": dev_a2.id,
+                "registrationId": dev_a2.registration_id,
                 "envelopeType": "message",
                 "suite": 1,
                 "content": b64(b"encrypted-sent-transcript")
@@ -1493,10 +1324,11 @@ fn chat_v1_contract() {
         .send()
         .unwrap();
     assert!(sync.status().is_success(), "self sync: {}", sync.status());
-    let own_page: Value = c
-        .get(format!(
-            "{base}/api/chat/messages?deviceId={dev_a2}&limit=10"
-        ))
+    let own_page: Value = dev_a2
+        .auth(c.get(format!(
+            "{base}/api/chat/messages?deviceId={}&limit=10",
+            dev_a2.id
+        )))
         .bearer_auth(&ta)
         .send()
         .unwrap()
@@ -1505,11 +1337,11 @@ fn chat_v1_contract() {
     let own_envelopes = own_page["envelopes"].as_array().unwrap();
     assert_eq!(own_envelopes.len(), 1);
     assert_eq!(own_envelopes[0]["sender"], json!(account_a));
-    assert_eq!(own_envelopes[0]["senderDeviceId"], dev_a);
+    assert_eq!(own_envelopes[0]["senderDeviceId"], dev_a.id);
     println!("ok  - encrypted transcript routed only to the linked device");
 
-    let ticket: Value = c
-        .post(format!("{base}/api/chat/ws-ticket?deviceId={dev_a}"))
+    let ticket: Value = dev_a
+        .auth(c.post(format!("{base}/api/chat/ws-ticket?deviceId={}", dev_a.id)))
         .bearer_auth(&ta)
         .send()
         .unwrap()
@@ -1532,14 +1364,16 @@ fn chat_v1_contract() {
         .unwrap()
         .json()
         .unwrap();
-    let typed_bundles: UserPreKeyBundlesResponse =
+    let typed_bundles: AccountPreKeyBundlesResponse =
         serde_json::from_value(bundles_value.clone()).unwrap();
-    assert_eq!(typed_bundles.manifest.as_ref().unwrap().account, account_b);
+    typed_bundles.check_against_manifest().unwrap();
+    assert_eq!(typed_bundles.account, account_b);
+    assert_eq!(typed_bundles.identity_key, chat_b.identity_key());
     let bundles = bundles_value;
     let devs = bundles["devices"].as_array().unwrap();
     assert_eq!(devs.len(), 1, "B has one device");
     let d = &devs[0];
-    assert_eq!(d["deviceId"], dev_b);
+    assert_eq!(d["deviceId"], dev_b.id);
     assert!(d["kyberPreKey"].is_object(), "PQ prekey never absent");
     assert!(
         d["oneTimePreKey"].is_object(),
@@ -1547,27 +1381,29 @@ fn chat_v1_contract() {
     );
     println!("ok  - bundle fetch + account-signed manifest binding");
 
+    let (dev_b_id, reg_b) = (dev_b.id, dev_b.registration_id);
     let send = |send_id: &str, dev: u32, reg: u32, content: &str| {
-        c.post(format!(
-            "{base}/api/chat/accounts/{}/messages",
-            account_b.account_id
-        ))
-        .bearer_auth(&ta)
-        .json(&json!({
-            "senderDeviceId": dev_a,
-            "sendId": send_id,
-            "envelopes": [ { "deviceId": dev, "registrationId": reg,
-                             "envelopeType": "message", "suite": 1, "content": content } ],
-        }))
-        .send()
-        .unwrap()
+        dev_a
+            .auth(c.post(format!(
+                "{base}/api/chat/accounts/{}/messages",
+                account_b.account_id
+            )))
+            .bearer_auth(&ta)
+            .json(&json!({
+                "senderDeviceId": dev_a.id,
+                "sendId": send_id,
+                "envelopes": [ { "deviceId": dev, "registrationId": reg,
+                                 "envelopeType": "message", "suite": 1, "content": content } ],
+            }))
+            .send()
+            .unwrap()
     };
 
     // Correct send.
     // The same logical sendId was already claimed by the own-device sync
     // endpoint above. Direct and sync idempotency scopes must not collide.
     let sid = sync_id;
-    let r = send(sid, dev_b, reg_b, &b64(b"ciphertext-one"));
+    let r = send(sid, dev_b_id, reg_b, &b64(b"ciphertext-one"));
     assert!(r.status().is_success(), "send: {}", r.status());
     let body: Value = r.json().unwrap();
     assert_eq!(body["stored"], 1);
@@ -1575,14 +1411,19 @@ fn chat_v1_contract() {
     println!("ok  - direct send stored independently of sync scope");
 
     // Idempotent retry: same sendId → deduplicated, no new row.
-    let r = send(sid, dev_b, reg_b, &b64(b"ciphertext-one"));
+    let r = send(sid, dev_b_id, reg_b, &b64(b"ciphertext-one"));
     let body: Value = r.json().unwrap();
     assert_eq!(body["deduplicated"], true, "sendId dedupe");
     println!("ok  - sendId idempotency");
 
     // maxContentBytes: oversized content → 413.
     let big = b64(&vec![0u8; 70_000]);
-    let r = send("22222222-2222-4222-8222-222222222222", dev_b, reg_b, &big);
+    let r = send(
+        "22222222-2222-4222-8222-222222222222",
+        dev_b_id,
+        reg_b,
+        &big,
+    );
     assert_eq!(r.status().as_u16(), 413, "oversized content rejected");
     println!("ok  - maxContentBytes enforced (413)");
 
@@ -1597,21 +1438,23 @@ fn chat_v1_contract() {
     let m: Value = r.json().unwrap();
     assert_eq!(m["extraDevices"], json!([99]));
     // (missing device 1 too, since we only addressed 99)
-    assert_eq!(m["missingDevices"], json!([dev_b]));
+    assert_eq!(m["missingDevices"], json!([dev_b_id]));
     println!("ok  - 409 device-list mismatch");
 
     // Send a second real message so drain paging has 2 rows.
     let r = send(
         "44444444-4444-4444-8444-444444444444",
-        dev_b,
+        dev_b_id,
         reg_b,
         &b64(b"ciphertext-two"),
     );
     assert!(r.status().is_success());
 
     // B drains: 2 envelopes, sender=A username, monotonic cursor.
-    let page: Value = c
-        .get(format!("{base}/api/chat/messages?deviceId={dev_b}&limit=1"))
+    let page: Value = dev_b
+        .auth(c.get(format!(
+            "{base}/api/chat/messages?deviceId={dev_b_id}&limit=1"
+        )))
         .bearer_auth(&tb)
         .send()
         .unwrap()
@@ -1630,10 +1473,10 @@ fn chat_v1_contract() {
     println!("ok  - drain page 1 (cursor={c0})");
 
     // Page 2 via ?after=cursor.
-    let page2: Value = c
-        .get(format!(
-            "{base}/api/chat/messages?deviceId={dev_b}&limit=10&after={c0}"
-        ))
+    let page2: Value = dev_b
+        .auth(c.get(format!(
+            "{base}/api/chat/messages?deviceId={dev_b_id}&limit=10&after={c0}"
+        )))
         .bearer_auth(&tb)
         .send()
         .unwrap()
@@ -1649,17 +1492,17 @@ fn chat_v1_contract() {
     println!("ok  - cursor paging (?after=)");
 
     // Ack the first; it disappears from a fresh drain.
-    let r = c
-        .post(format!("{base}/api/chat/messages/ack?deviceId={dev_b}"))
+    let r = dev_b
+        .auth(c.post(format!("{base}/api/chat/messages/ack?deviceId={dev_b_id}")))
         .bearer_auth(&tb)
         .json(&json!({ "ids": [first_id] }))
         .send()
         .unwrap();
     assert!(r.status().is_success(), "ack: {}", r.status());
-    let after_ack: Value = c
-        .get(format!(
-            "{base}/api/chat/messages?deviceId={dev_b}&limit=10"
-        ))
+    let after_ack: Value = dev_b
+        .auth(c.get(format!(
+            "{base}/api/chat/messages?deviceId={dev_b_id}&limit=10"
+        )))
         .bearer_auth(&tb)
         .send()
         .unwrap()

@@ -515,3 +515,47 @@ fn a_provisioning_message_reaches_the_new_device_once() {
         let _ = socket.close(None).await;
     });
 }
+
+/// A registration retried after its answer was lost (the same credential)
+/// answers the device it made: a re-registration once its manifest is the
+/// head, and a link once its token is spent.
+#[test]
+fn a_retried_registration_answers_the_device_it_made() {
+    let Some(base) = live() else { return };
+    let c = common::client();
+    let mut ada = account(&c, &base);
+    let first = ChatDevice {
+        id: 1,
+        registration_id: 4321,
+        credential: [5; 32],
+    };
+    let manifest = ada.next_manifest(&[&first]);
+    let body = ada.registration(
+        first.registration_id,
+        &first.credential,
+        DeviceRegistrationV1::Reregistration {
+            manifest: Box::new(manifest.clone()),
+        },
+    );
+    for _ in 0..2 {
+        let (status, answer) = code(ada.post_registration(&c, &base, &body));
+        assert_eq!(status, StatusCode::OK, "{answer}");
+        assert_eq!(answer["deviceId"], 1);
+    }
+    ada.head = Some(manifest);
+    ada.devices = vec![first.clone()];
+
+    let token = ada.link_token(&c, &base, &first);
+    let body = ada.registration(
+        1234,
+        &[6; 32],
+        DeviceRegistrationV1::Link { link_token: token },
+    );
+    let mut ids = Vec::new();
+    for _ in 0..2 {
+        let (status, answer) = code(ada.post_registration(&c, &base, &body));
+        assert_eq!(status, StatusCode::OK, "{answer}");
+        ids.push(answer["deviceId"].clone());
+    }
+    assert_eq!(ids, [json!(2), json!(2)]);
+}
