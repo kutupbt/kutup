@@ -132,6 +132,11 @@ pub mod kind {
     /// hold, since the home no longer answers them. Hidden; never history.
     /// [IMPL]
     pub const GROUP_REMOVAL: &str = "groupRemoval";
+    /// An identity distribution's message to one kept device of the account
+    /// (Signal's `PniChangeNumber`): the new account identity, that device's
+    /// new keys and registration id (`crate::AccountIdentityBody`). Accepted
+    /// only from another device of the local account; hidden, never history.
+    pub const ACCOUNT_IDENTITY: &str = "accountIdentity";
 }
 
 /// The decrypted plaintext of a chat message.
