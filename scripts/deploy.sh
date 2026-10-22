@@ -281,9 +281,40 @@ until docker compose logs --no-color stalwart-setup --since "$started" 2>&1 \
 done
 docker compose run --rm --no-deps backend storage-check | tail -1
 [ -n "$hosts" ] || hosts="$(for a in account drive chat office editor maps photos contacts mail pass calendar; do printf '%s.%s ' "$a" "$(env_get KUTUP_BASE_DOMAIN)"; done)"
+# A new app (a host the certificate doesn't name yet) is certified only when
+# acme asks Let's Encrypt again, and its loop sleeps 12 hours after a
+# success: restart it, and wait for the certificate that names every host.
+cert_names() {
+  openssl x509 -in nginx/certs/fullchain.pem -noout -ext subjectAltName 2>/dev/null \
+    | tr ',' '\n' | sed -n 's/.*DNS://p' || true
+}
+uncovered() {
+  local names
+  names="$(cert_names)"
+  for h in $hosts; do grep -qxF "$h" <<<"$names" || printf '%s ' "$h"; done
+}
+if docker compose ps --services 2>/dev/null | grep -qx acme && command -v openssl >/dev/null; then
+  missing="$(uncovered)"
+  if [ -n "$missing" ]; then
+    echo "certificate lacks: $missing- asking acme for a new one"
+    docker compose restart acme >/dev/null
+    deadline=$((SECONDS + 300))
+    until [ -z "$(uncovered)" ]; do
+      if (( SECONDS >= deadline )); then
+        echo "deploy: after 5 minutes the certificate still lacks: $(uncovered)" >&2
+        echo "deploy: check that each name points at this machine; read: docker compose logs acme" >&2
+        exit 1
+      fi
+      sleep 5
+    done
+    echo "certificate now names every host"
+  fi
+fi
 failed=0
 for h in $hosts; do
-  code="$(curl -s -o /dev/null -w '%{http_code}' "https://$h/")"
+  # curl's own exit says why a host gave no answer at all (60: the
+  # certificate doesn't name it).
+  code="$(curl -s -o /dev/null -w '%{http_code}' "https://$h/")" || code="000 (curl exit $?)"
   echo "  $h $code"
   [ "$code" = 200 ] || failed=1
 done
