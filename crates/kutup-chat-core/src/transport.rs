@@ -16,7 +16,7 @@ use kutup_chat_proto::{
     AccountManifestHistoryPageV2, AccountManifestPublicationV2, AccountManifestV2,
     AnonymousMlsKeyPackageRequestV1, ChatProfileResponse, DeviceListMismatch,
     IdentifiedMlsKeyPackageRequestV1, MailboxPage, MlsKeyPackageBundleV1, OwnChatProfileResponse,
-    PreKeyCountResponse, PutChatProfileRequest, RegisterChatDeviceRequest, ReplenishKeysRequest,
+    PreKeyCountResponse, PutChatProfileRequest, RegisterChatDeviceRequestV2, ReplenishKeysRequest,
     SendMessagesRequest, AccountPreKeyBundlesResponse,
 };
 use kutup_federation_proto::FederatedFeaturePolicyHistoryV1;
@@ -126,7 +126,46 @@ pub enum GroupRelayOutcome {
 #[async_trait(?Send)]
 pub trait ChatTransport {
     /// `POST /api/chat/device` — returns the server-assigned device id.
-    async fn register_device(&self, req: &RegisterChatDeviceRequest) -> Result<u32>;
+    async fn register_device(&self, req: &RegisterChatDeviceRequestV2) -> Result<u32>;
+
+    /// This device's id and credential, sent as `X-Kutup-Chat-Device` beside
+    /// the session token on every device-bound call from now on (Signal's
+    /// per-device password). Called once the device is registered or opened.
+    fn set_device_auth(&self, _device_id: u32, _credential: &str) {}
+
+    /// `POST /api/chat/link-tokens` (device-authenticated): one single-use
+    /// token for linking one new device.
+    async fn create_link_token(&self) -> Result<kutup_chat_proto::ChatLinkTokenResponse> {
+        Err(crate::ChatError::Transport(
+            "transport does not implement device linking".into(),
+        ))
+    }
+
+    /// `PUT /api/chat/account-identity` (device-authenticated): the identity
+    /// distribution. A `409` (devices that aren't the manifest's) or `410`
+    /// (a message under a stale registration id) is [`DistributionOutcome::Mismatch`].
+    async fn distribute_identity(
+        &self,
+        _request: &kutup_chat_proto::AccountIdentityDistributionRequest,
+    ) -> Result<DistributionOutcome> {
+        Err(crate::ChatError::Transport(
+            "transport does not implement identity distribution".into(),
+        ))
+    }
+
+    /// `PUT /api/chat/provisioning/{address}` (device-authenticated): relay
+    /// one provisioning envelope to the new device's socket. `Ok(false)` is
+    /// the server's `404`: no such socket of this account (closed, expired,
+    /// or never this account's).
+    async fn relay_provisioning(
+        &self,
+        _address: &str,
+        _request: &kutup_chat_proto::ProvisioningRelayRequest,
+    ) -> Result<bool> {
+        Err(crate::ChatError::Transport(
+            "transport does not implement device linking".into(),
+        ))
+    }
 
     /// Every method naming an account takes its string form,
     /// `aci:<uuid>@<server>` (docs/plans/account-ids.md): the transport routes
@@ -415,3 +454,13 @@ pub trait ChatTransport {
         ))
     }
 }
+/// What the server answered an identity distribution.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum DistributionOutcome {
+    /// Stored: the new identity, keys and manifest are the account's.
+    Accepted,
+    /// `409`/`410`: the devices or their registration ids moved meanwhile.
+    /// Nothing was stored; fetch the manifest and build it again.
+    Mismatch(kutup_chat_proto::DeviceListMismatch),
+}
+

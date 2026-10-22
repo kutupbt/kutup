@@ -18,7 +18,7 @@ use kutup_chat_proto::{
     AccountManifestDeviceV2, AccountManifestHistoryPageV2, AccountManifestPublicationV2,
     AccountManifestV2, DeliveredEnvelope, DeviceListMismatch, DevicePreKeyBundle,
     DirectChatSuiteId, MailboxPage, OwnChatProfileResponse, PutChatProfileRequest, ReceiptState,
-    RegisterChatDeviceRequest, SendMessagesRequest, AccountPreKeyBundlesResponse,
+    RegisterChatDeviceRequestV2, SendMessagesRequest, AccountPreKeyBundlesResponse,
 };
 use rand::rngs::OsRng;
 use rand::{CryptoRng, Rng, TryRngCore as _};
@@ -41,7 +41,7 @@ fn device<R: Rng + CryptoRng>(user: &str, device_id: u32, rng: &mut R) -> Sessio
 }
 
 /// A per-device bundle served from a device's published registration.
-fn serve_bundle(reg: &RegisterChatDeviceRequest, device_id: u32) -> DevicePreKeyBundle {
+fn serve_bundle(reg: &RegisterChatDeviceRequestV2, device_id: u32) -> DevicePreKeyBundle {
     DevicePreKeyBundle {
         device_id,
         registration_id: reg.registration_id,
@@ -166,7 +166,7 @@ impl ChatTransport for MockServer {
         Ok(true)
     }
 
-    async fn register_device(&self, _req: &RegisterChatDeviceRequest) -> Result<u32> {
+    async fn register_device(&self, _req: &RegisterChatDeviceRequestV2) -> Result<u32> {
         Ok(1)
     }
 

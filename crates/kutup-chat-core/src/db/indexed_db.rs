@@ -97,6 +97,7 @@ const PREKEY_ROTATION: &str = "prekey_rotation";
 const REPAIR_LIMITS: &str = "repair_limits";
 const WRITER_GENERATION: &str = "writer_generation";
 const PENDING_REGISTRATION: &str = "pending_registration";
+const PENDING_ACCOUNT_IDENTITY: &str = "pending_account_identity";
 /// Kept in `meta` under these plain names (not hashed, not sealed): the
 /// wrapped store key, and the format the records are in.
 const STORE_KEY: &str = "store_key";
@@ -688,6 +689,10 @@ impl ChatDb for IndexedDbChatDb {
         Ok(next)
     }
 
+    async fn load_pending_account_identity(&self) -> Result<Option<Vec<u8>>> {
+        self.get(META, string_key(PENDING_ACCOUNT_IDENTITY)).await
+    }
+
     async fn load_pending_registration(&self) -> Result<Option<Vec<u8>>> {
         self.get(META, string_key(PENDING_REGISTRATION)).await
     }
@@ -774,6 +779,45 @@ impl ChatDb for IndexedDbChatDb {
         let index = store(INDEX)?;
 
         let mut operations = Vec::new();
+        // Issued first, so the rest of the batch writes onto the cleared
+        // stores (requests in one transaction run in order).
+        if pending.reset_transport || pending.reset_identity {
+            for target in [
+                &sessions,
+                &identities,
+                &pre_keys,
+                &used_pre_keys,
+                &signed_pre_keys,
+                &kyber_pre_keys,
+                &kyber_seen,
+                &sender_keys,
+            ] {
+                operations.push(clear_op(&target.store));
+            }
+            for key in [PENDING_PREKEY_UPLOAD, PREKEY_ROTATION] {
+                operations.push(self.delete(&meta, string_key(key)));
+            }
+        }
+        if pending.reset_transport {
+            for target in [
+                &local_identity,
+                &mls_state,
+                &mls_outbox,
+                &inbound,
+                &manifest_trust,
+                &manifest_history,
+            ] {
+                operations.push(clear_op(&target.store));
+            }
+            for key in [
+                LAST_CURSOR,
+                REPAIR_LIMITS,
+                PENDING_REGISTRATION,
+                PENDING_ACCOUNT_IDENTITY,
+            ] {
+                operations.push(self.delete(&meta, string_key(key)));
+            }
+        }
         for (key, value) in &index_values {
             match value {
                 Some(value) => operations.push(self.put(&index, key.clone(), &encode(value)?)?),
@@ -878,6 +922,16 @@ impl ChatDb for IndexedDbChatDb {
                 None => operations.push(self.delete(&meta, string_key(PENDING_REGISTRATION))),
             }
         }
+        if let Some(value) = writes.pending_account_identity {
+            match value {
+                Some(value) => operations.push(self.put(
+                    &meta,
+                    string_key(PENDING_ACCOUNT_IDENTITY),
+                    &value,
+                )?),
+                None => operations.push(self.delete(&meta, string_key(PENDING_ACCOUNT_IDENTITY))),
+            }
+        }
         if let Some(cursor) = writes.last_cursor {
             operations.push(self.put(&meta, string_key(LAST_CURSOR), &cursor)?);
         }
@@ -916,6 +970,10 @@ fn put_op(store: &idb::ObjectStore, value: JsValue, key: JsValue) -> Operation<'
 
 fn delete_op(store: &idb::ObjectStore, key: JsValue) -> Operation<'_> {
     Box::pin(async move { store.delete(idb::Query::Key(key))?.await })
+}
+
+fn clear_op(store: &idb::ObjectStore) -> Operation<'_> {
+    Box::pin(async move { store.clear()?.await })
 }
 
 #[wasm_bindgen::prelude::wasm_bindgen]
@@ -1010,6 +1068,7 @@ struct PreparedWrites {
     delete_signed_pre_keys: Vec<u32>,
     delete_kyber_pre_keys: Vec<u32>,
     registration_upload: Option<Option<Vec<u8>>>,
+    pending_account_identity: Option<Option<Vec<u8>>>,
     last_cursor: Option<Vec<u8>>,
     last_sent_seq: Option<Vec<u8>>,
     contact_list_followed: Option<Vec<u8>>,
@@ -1066,6 +1125,11 @@ impl PreparedWrites {
             delete_kyber_pre_keys: pending.delete_kyber_pre_keys.iter().copied().collect(),
             registration_upload: pending
                 .registration_upload
+                .as_ref()
+                .map(|value| value.as_ref().map(encode).transpose())
+                .transpose()?,
+            pending_account_identity: pending
+                .pending_account_identity
                 .as_ref()
                 .map(|value| value.as_ref().map(encode).transpose())
                 .transpose()?,

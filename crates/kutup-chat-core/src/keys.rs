@@ -15,11 +15,34 @@ use rand::{CryptoRng, Rng};
 use crate::db::{LocalIdentity, Pending};
 use crate::error::{crypto, Result};
 use kutup_chat_proto::{
-    DirectChatSuiteId, EcPreKey, KemPreKey, RegisterChatDeviceRequest, ReplenishKeysRequest,
+    AccountManifestV2, DeviceRegistrationV1, DirectChatSuiteId, EcPreKey, KemPreKey,
+    RegisterChatDeviceRequestV2, ReplenishKeysRequest, DEVICE_CREDENTIAL_LEN,
 };
 
 /// libsignal registration ids must fit the reserved range (`< 16380`).
 const MAX_REGISTRATION_ID: u32 = 16380;
+
+/// A libsignal registration id, 1..=16380.
+pub(crate) fn random_registration_id<R: Rng + CryptoRng>(rng: &mut R) -> u32 {
+    rng.random::<u32>() % MAX_REGISTRATION_ID + 1
+}
+
+/// How a new device gets the account's identity.
+pub(crate) enum NewDevice<'a> {
+    /// Linked: the identity came in a provisioning message, with the
+    /// one-time link token.
+    Linked {
+        identity: IdentityKeyPair,
+        link_token: String,
+    },
+    /// A re-registration (also an account's first device): a new identity,
+    /// and the account's next manifest listing this device alone, signed by
+    /// `manifest` from the new identity key (canonical base64) and the
+    /// registration id.
+    Reregistration {
+        manifest: &'a dyn Fn(&str, u32) -> crate::Result<AccountManifestV2>,
+    },
+}
 /// Fixed creation timestamp for generated prekeys. Prekey timestamps drive only
 /// libsignal's rotation bookkeeping, not the wire; a constant keeps generation
 /// deterministic given the RNG.
@@ -30,7 +53,7 @@ const PREKEY_TS_MS: u64 = 42;
 pub(crate) struct GeneratedMaterial {
     pub local: LocalIdentity,
     pub seed: Pending,
-    pub registration: RegisterChatDeviceRequest,
+    pub registration: RegisterChatDeviceRequestV2,
 }
 
 pub(crate) struct ReplenishmentMaterial {
@@ -40,22 +63,38 @@ pub(crate) struct ReplenishmentMaterial {
 }
 
 /// Generate a new chat device with `num_one_time` one-time prekeys of each kind
-/// plus a last-resort Kyber prekey. `name` is the human device label.
+/// plus a last-resort Kyber prekey, every signed key signed by the account's
+/// identity. `name` is the human device label. The seed discards whatever
+/// Chat transport state the store held before (a re-registration, or a store
+/// from before the account identity) in the same commit that installs this
+/// device.
 pub(crate) fn generate<R: Rng + CryptoRng>(
     name: impl Into<String>,
     num_one_time: usize,
+    new_device: NewDevice<'_>,
     rng: &mut R,
 ) -> Result<GeneratedMaterial> {
-    let registration_id = rng.random::<u32>() % MAX_REGISTRATION_ID + 1;
-    let identity_pair = IdentityKeyPair::generate(rng);
+    let registration_id = random_registration_id(rng);
+    let (identity_pair, link_token, manifest) = match new_device {
+        NewDevice::Linked {
+            identity,
+            link_token,
+        } => (identity, Some(link_token), None),
+        NewDevice::Reregistration { manifest } => (IdentityKeyPair::generate(rng), None, Some(manifest)),
+    };
+    let mut credential = zeroize::Zeroizing::new([0u8; DEVICE_CREDENTIAL_LEN]);
+    rng.fill_bytes(credential.as_mut());
+    let credential = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(credential.as_ref());
     let local = LocalIdentity {
         identity_key_pair: identity_pair.serialize().to_vec(),
         registration_id,
         device_id: None,
+        credential: Some(credential.clone()),
     };
     let private = identity_pair.private_key();
 
     let mut seed = Pending {
+        reset_transport: true,
         local_identity: Some(local.clone()),
         ..Pending::default()
     };
@@ -130,10 +169,18 @@ pub(crate) fn generate<R: Rng + CryptoRng>(
         });
     }
 
-    let registration = RegisterChatDeviceRequest {
+    let identity_key = b64(&identity_pair.identity_key().serialize());
+    let registration_kind = match (link_token, manifest) {
+        (Some(link_token), None) => DeviceRegistrationV1::Link { link_token },
+        (None, Some(manifest)) => DeviceRegistrationV1::Reregistration {
+            manifest: Box::new(manifest(&identity_key, registration_id)?),
+        },
+        _ => unreachable!("a new device is linked or re-registered"),
+    };
+    let registration = RegisterChatDeviceRequestV2 {
         suite: DirectChatSuiteId::PqxdhTripleRatchetV1,
         registration_id,
-        identity_key: b64(&identity_pair.identity_key().serialize()),
+        identity_key,
         signed_pre_key: EcPreKey {
             key_id: spk_id,
             public_key: b64(&spk_pub),
@@ -147,8 +194,12 @@ pub(crate) fn generate<R: Rng + CryptoRng>(
         one_time_pre_keys,
         one_time_kyber_pre_keys,
         name: name.into(),
-        device_signature: None,
+        credential,
+        registration: registration_kind,
     };
+    registration
+        .validate()
+        .map_err(|error| crate::ChatError::Invalid(format!("registration request: {error}")))?;
     seed.registration_upload = Some(Some(serde_json::to_vec(&registration).map_err(
         |error| crate::ChatError::Content(format!("serialize registration request: {error}")),
     )?));

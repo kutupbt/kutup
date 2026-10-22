@@ -18,7 +18,7 @@ use rand::TryRngCore as _;
 /// bundle: it hands out the signed prekey, the identity, one one-time Kyber
 /// prekey, and one one-time EC prekey (consumed). No private material.
 fn serve_bundle(
-    reg: &kutup_chat_proto::RegisterChatDeviceRequest,
+    reg: &kutup_chat_proto::RegisterChatDeviceRequestV2,
     device_id: u32,
 ) -> DevicePreKeyBundle {
     DevicePreKeyBundle {

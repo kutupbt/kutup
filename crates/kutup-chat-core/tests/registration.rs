@@ -11,7 +11,7 @@ use kutup_chat_core::{
     ChatDb, ChatError, ChatTransport, Engine, Result, SendOutcome, SqliteChatDb,
 };
 use kutup_chat_proto::{
-    MailboxPage, RegisterChatDeviceRequest, SendMessagesRequest, AccountPreKeyBundlesResponse,
+    MailboxPage, RegisterChatDeviceRequestV2, SendMessagesRequest, AccountPreKeyBundlesResponse,
 };
 use rand::rngs::OsRng;
 use rand::TryRngCore as _;
@@ -24,7 +24,7 @@ struct RegistrationServer {
 
 #[async_trait(?Send)]
 impl ChatTransport for RegistrationServer {
-    async fn register_device(&self, req: &RegisterChatDeviceRequest) -> Result<u32> {
+    async fn register_device(&self, req: &RegisterChatDeviceRequestV2) -> Result<u32> {
         self.requests
             .borrow_mut()
             .push(serde_json::to_vec(req).unwrap());

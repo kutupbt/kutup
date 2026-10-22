@@ -27,7 +27,7 @@ use kutup_chat_proto::group_route::{
 use kutup_chat_proto::{
     AccountManifestHistoryPageV2, AccountManifestPublicationV2, AccountManifestV2,
     DeliveredEnvelope, DeviceListMismatch, DevicePreKeyBundle, DirectChatSuiteId, EnvelopeType,
-    MailboxPage, OwnChatProfileResponse, PutChatProfileRequest, RegisterChatDeviceRequest,
+    MailboxPage, OwnChatProfileResponse, PutChatProfileRequest, RegisterChatDeviceRequestV2,
     SealedMessageSubmissionV1, SealedSenderRootV1, SealedSenderServerCertificateV1,
     SealedSenderServicePolicyV1, SealedSenderSuiteId, SendMessagesRequest,
     SenderCertificateResponseV1, AccountPreKeyBundlesResponse,
@@ -62,7 +62,7 @@ fn now() -> i64 {
 
 /// One device's published keys; one-time prekeys are handed out once each.
 struct HostedDevice {
-    registration: RegisterChatDeviceRequest,
+    registration: RegisterChatDeviceRequestV2,
     next_ec: usize,
     next_kyber: usize,
 }
@@ -953,7 +953,7 @@ pub(crate) struct Client {
 
 #[async_trait(?Send)]
 impl ChatTransport for Client {
-    async fn register_device(&self, request: &RegisterChatDeviceRequest) -> Result<u32> {
+    async fn register_device(&self, request: &RegisterChatDeviceRequestV2) -> Result<u32> {
         let mut accounts = self.world.accounts.borrow_mut();
         let hosted = accounts.entry(self.account.clone()).or_default();
         let device_id = hosted.devices.keys().max().map_or(1, |last| last + 1);

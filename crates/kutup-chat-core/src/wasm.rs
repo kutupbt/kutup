@@ -17,7 +17,7 @@ use kutup_chat_proto::{
     MlsConversationMemberV1, MlsGroupAuthorizationPolicyV1, MlsGroupCryptographicPolicyV1,
     MlsIncarnationRecoveryV1, MlsOrderingQuorumCertificateV1, MlsOrderingServicePolicyV1,
     MlsOwnerSetV1, OwnChatProfileResponse, PreKeyCountResponse, PutChatProfileRequest,
-    RecoverMlsConversationResponseV1, RegisterChatDeviceRequest, RegisterChatDeviceResponse,
+    RecoverMlsConversationResponseV1, RegisterChatDeviceRequestV2, RegisterChatDeviceResponse,
     ReplenishKeysRequest, SendMessagesRequest, AccountPreKeyBundlesResponse,
 };
 use rand::rngs::OsRng;
@@ -38,6 +38,15 @@ use crate::{
 const TRANSPORT_TYPES: &str = r#"
 export interface KutupChatTransport {
   registerDevice(request: unknown): Promise<unknown>;
+  /** This device's id and credential, for the `X-Kutup-Chat-Device` header on every device-bound call from now on. */
+  setDeviceAuth(deviceId: number, credential: string): void;
+  createLinkToken(): Promise<unknown>;
+  /** `false` is the server's 404: the new device's socket is gone. */
+  relayProvisioning(address: string, request: unknown): Promise<boolean>;
+  distributeIdentity(request: unknown): Promise<
+    | { kind: "accepted" }
+    | { kind: "mismatch"; mismatch: unknown }
+  >;
   fetchBundles(account: string): Promise<unknown>;
   fetchSyncBundles(account: string, currentDeviceId: number): Promise<unknown>;
   fetchMlsOrderingPolicy(domain: string): Promise<unknown>;
@@ -333,6 +342,25 @@ extern "C" {
         ids: JsValue,
     ) -> std::result::Result<JsValue, JsValue>;
 
+    #[wasm_bindgen(method, js_name = setDeviceAuth)]
+    fn js_set_device_auth(this: &JsChatTransport, device_id: u32, credential: &str);
+
+    #[wasm_bindgen(method, catch, js_name = createLinkToken)]
+    async fn js_create_link_token(this: &JsChatTransport) -> std::result::Result<JsValue, JsValue>;
+
+    #[wasm_bindgen(method, catch, js_name = relayProvisioning)]
+    async fn js_relay_provisioning(
+        this: &JsChatTransport,
+        address: &str,
+        request: JsValue,
+    ) -> std::result::Result<JsValue, JsValue>;
+
+    #[wasm_bindgen(method, catch, js_name = distributeIdentity)]
+    async fn js_distribute_identity(
+        this: &JsChatTransport,
+        request: JsValue,
+    ) -> std::result::Result<JsValue, JsValue>;
+
     /// `GET /api/chat/groups/gateway-key`: `{config, identityHistory}`.
     #[wasm_bindgen(method, catch, js_name = fetchGroupGateway)]
     async fn js_fetch_group_gateway(
@@ -407,6 +435,13 @@ struct GroupEntryWrite<'a> {
 
 struct BrowserTransport {
     js: JsChatTransport,
+}
+
+#[derive(Deserialize)]
+#[serde(tag = "kind", rename_all = "camelCase")]
+enum BrowserDistributionOutcome {
+    Accepted,
+    Mismatch { mismatch: DeviceListMismatch },
 }
 
 #[derive(Deserialize)]
@@ -554,7 +589,51 @@ impl ChatTransport for BrowserTransport {
         )
     }
 
-    async fn register_device(&self, req: &RegisterChatDeviceRequest) -> Result<u32> {
+    fn set_device_auth(&self, device_id: u32, credential: &str) {
+        self.js.js_set_device_auth(device_id, credential);
+    }
+
+    async fn create_link_token(&self) -> Result<kutup_chat_proto::ChatLinkTokenResponse> {
+        from_transport(
+            self.js
+                .js_create_link_token()
+                .await
+                .map_err(transport_error)?,
+        )
+    }
+
+    async fn relay_provisioning(
+        &self,
+        address: &str,
+        request: &kutup_chat_proto::ProvisioningRelayRequest,
+    ) -> Result<bool> {
+        from_transport(
+            self.js
+                .js_relay_provisioning(address, to_transport(request)?)
+                .await
+                .map_err(transport_error)?,
+        )
+    }
+
+    async fn distribute_identity(
+        &self,
+        request: &kutup_chat_proto::AccountIdentityDistributionRequest,
+    ) -> Result<crate::DistributionOutcome> {
+        let outcome: BrowserDistributionOutcome = from_transport(
+            self.js
+                .js_distribute_identity(to_transport(request)?)
+                .await
+                .map_err(transport_error)?,
+        )?;
+        Ok(match outcome {
+            BrowserDistributionOutcome::Accepted => crate::DistributionOutcome::Accepted,
+            BrowserDistributionOutcome::Mismatch { mismatch } => {
+                crate::DistributionOutcome::Mismatch(mismatch)
+            }
+        })
+    }
+
+    async fn register_device(&self, req: &RegisterChatDeviceRequestV2) -> Result<u32> {
         let response: RegisterChatDeviceResponse = from_transport(
             self.js
                 .js_register_device(to_transport(req)?)
@@ -1445,12 +1524,50 @@ struct ConversationPageView {
 
 #[wasm_bindgen]
 impl WasmChatClient {
-    /// Open or restart-safely register the local device, then publish its
-    /// account-signed manifest. The database name must be account scoped;
-    /// `account` is this account's string form, `aci:<uuid>@<server>`;
-    /// `display_name` is the name a first profile starts with (the
-    /// username); `binding` is the account's key binding
-    /// (`session.envelopeBinding`), which its own seals bind.
+    /// Where this browser stands with the account's Chat identity:
+    /// `"registered"` or `"registering"` (open it), `"link"` (another device
+    /// of the account holds the identity: show "Link this device"), or
+    /// `"reregister"` (the account has no Chat identity yet: this is its
+    /// first device). A store from before the account identity counts as no
+    /// device (docs/plans/account-identity-key.md).
+    #[wasm_bindgen(js_name = installation)]
+    pub async fn installation(
+        database_name: String,
+        account: String,
+        master_key: Vec<u8>,
+        transport: JsChatTransport,
+    ) -> std::result::Result<String, JsValue> {
+        let master_key = master_key_bytes(master_key)?;
+        let db = IndexedDbChatDb::open(&database_name, &master_key)
+            .await
+            .map_err(chat_error)?;
+        let transport = BrowserTransport { js: transport };
+        let account = canonical_account(&account)?;
+        Ok(
+            match Engine::installation(&db, &transport, &account)
+                .await
+                .map_err(chat_error)?
+            {
+                crate::Installation::Registered { .. } => "registered",
+                crate::Installation::Registering => "registering",
+                crate::Installation::Unregistered {
+                    account_has_identity: true,
+                } => "link",
+                crate::Installation::Unregistered {
+                    account_has_identity: false,
+                } => "reregister",
+            }
+            .to_string(),
+        )
+    }
+
+    /// Open this browser's registered device (or finish a registration it
+    /// started), then publish its manifest entry. The database name must be
+    /// account scoped; `account` is this account's string form,
+    /// `aci:<uuid>@<server>`; `display_name` is the name a first profile
+    /// starts with (the username); `binding` is the account's key binding
+    /// (`session.envelopeBinding`), which its own seals bind. A browser
+    /// without a device is refused: ask `installation` first.
     #[wasm_bindgen(js_name = open)]
     pub async fn open(
         database_name: String,
@@ -1461,50 +1578,123 @@ impl WasmChatClient {
         binding: String,
         transport: JsChatTransport,
     ) -> std::result::Result<WasmChatClient, JsValue> {
-        let master_key: [u8; 32] = master_key
-            .try_into()
-            .map_err(|_| js_error("chat account authority requires a 32-byte master key"))?;
-        let authority = AccountAuthority::derive(&master_key).map_err(chat_error)?;
-        let profile_wrapping_key =
-            crate::profile::derive_wrapping_key(&master_key, &binding).map_err(chat_error)?;
+        let master_key = master_key_bytes(master_key)?;
         let db = Rc::new(
             IndexedDbChatDb::open(&database_name, &master_key)
                 .await
                 .map_err(chat_error)?,
         );
         let transport: Rc<dyn ChatTransport> = Rc::new(BrowserTransport { js: transport });
-        let mut rng = OsRng.unwrap_err();
-        // The device's account, for good: its string form.
-        let account = crate::address::parse_account(&account)
-            .map_err(chat_error)?
-            .to_string();
-        let mut engine = Engine::register(db, transport, account, 50, &mut rng)
+        let account = canonical_account(&account)?;
+        let engine = match Engine::installation(db.as_ref(), transport.as_ref(), &account)
             .await
-            .map_err(chat_error)?;
+            .map_err(chat_error)?
+        {
+            crate::Installation::Registered { device_id } => {
+                Engine::open(db, transport, account, device_id).await
+            }
+            crate::Installation::Registering => {
+                Engine::resume_registration(db, transport, account).await
+            }
+            crate::Installation::Unregistered { .. } => {
+                return Err(js_error("chatDeviceNotRegistered"));
+            }
+        }
+        .map_err(chat_error)?;
+        Self::finish_open(
+            engine,
+            &master_key,
+            &binding,
+            &display_name,
+            sealed_sender_enabled,
+        )
+        .await
+    }
+
+    /// Re-register this browser: a new account identity, this device alone
+    /// in the account's manifest, every other device of the account dropped.
+    /// The account's first Chat device does this; so does "I don't have my
+    /// other devices". Contacts see the safety number change once.
+    #[wasm_bindgen(js_name = reregister)]
+    pub async fn reregister(
+        database_name: String,
+        account: String,
+        display_name: String,
+        sealed_sender_enabled: bool,
+        master_key: Vec<u8>,
+        binding: String,
+        transport: JsChatTransport,
+    ) -> std::result::Result<WasmChatClient, JsValue> {
+        let master_key = master_key_bytes(master_key)?;
+        let authority = AccountAuthority::derive(&master_key).map_err(chat_error)?;
+        let db = Rc::new(
+            IndexedDbChatDb::open(&database_name, &master_key)
+                .await
+                .map_err(chat_error)?,
+        );
+        let transport: Rc<dyn ChatTransport> = Rc::new(BrowserTransport { js: transport });
+        let account = canonical_account(&account)?;
+        let mut rng = OsRng.unwrap_err();
+        let engine = Engine::reregister(
+            db,
+            transport,
+            account,
+            &authority,
+            now_rfc3339(),
+            50,
+            &mut rng,
+        )
+        .await
+        .map_err(chat_error)?;
+        Self::finish_open(
+            engine,
+            &master_key,
+            &binding,
+            &display_name,
+            sealed_sender_enabled,
+        )
+        .await
+    }
+
+    /// What every way of opening ends with: the account's lists and keys,
+    /// sealed sender, this device in the account's manifest, the profile.
+    async fn finish_open(
+        mut engine: Engine,
+        master_key: &[u8; 32],
+        binding: &str,
+        display_name: &str,
+        sealed_sender_enabled: bool,
+    ) -> std::result::Result<WasmChatClient, JsValue> {
+        let authority = AccountAuthority::derive(master_key).map_err(chat_error)?;
+        let profile_wrapping_key =
+            crate::profile::derive_wrapping_key(master_key, binding).map_err(chat_error)?;
+        let mut rng = OsRng.unwrap_err();
         // One identity for every app of the account (docs/plans/drive-identity-pins.md).
         engine
-            .enable_identity_pins(&master_key, &binding)
+            .enable_identity_pins(master_key, binding)
             .map_err(chat_error)?;
         engine
-            .enable_group_list(&master_key, &binding)
+            .enable_group_list(master_key, binding)
             .map_err(chat_error)?;
         // The web writes a block at once (docs/plans/chat-contacts-sync.md).
         engine
             .enable_contact_list(
-                &master_key,
-                &binding,
+                master_key,
+                binding,
                 crate::contact_list::ContactListTiming {
                     block: crate::contact_list::BlockTiming::Immediate,
                 },
             )
             .map_err(chat_error)?;
         engine.set_sealed_sender_enabled(sealed_sender_enabled);
+        // A kept identity sync from a run that stopped before applying it.
+        engine.apply_account_identity().await.map_err(chat_error)?;
         engine
             .sync_own_manifest(&authority, now_rfc3339())
             .await
             .map_err(chat_error)?;
         engine
-            .initialize_profile(&profile_wrapping_key, &display_name, &mut rng)
+            .initialize_profile(&profile_wrapping_key, display_name, &mut rng)
             .await
             .map_err(chat_error)?;
         Ok(Self {
@@ -1513,6 +1703,45 @@ impl WasmChatClient {
             profile_wrapping_key,
             search_cache: Default::default(),
         })
+    }
+
+    /// Link a new device of this account (Settings → Linked devices): `code`
+    /// is the `kutup://link?…` code it shows, scanned or pasted. Sends it the
+    /// account identity and the account's read-receipt and typing settings.
+    /// `false`: the code has expired; the new device shows a new one.
+    #[wasm_bindgen(js_name = linkDevice)]
+    pub async fn link_device(
+        &mut self,
+        code: String,
+        read_receipts: bool,
+        typing_indicators: bool,
+    ) -> std::result::Result<bool, JsValue> {
+        self.engine
+            .link_device(
+                &code,
+                crate::ProvisionedSettings {
+                    read_receipts,
+                    typing_indicators,
+                },
+                &self.authority,
+            )
+            .await
+            .map_err(chat_error)
+    }
+
+    /// Reset the account's identity, keeping its devices but those in
+    /// `remove` (a lost or stolen one), which leave the account. Contacts see
+    /// the safety number change once. Returns the devices kept.
+    #[wasm_bindgen(js_name = resetIdentity)]
+    pub async fn reset_identity(
+        &mut self,
+        remove: Vec<u32>,
+    ) -> std::result::Result<Vec<u32>, JsValue> {
+        let mut rng = OsRng.unwrap_err();
+        self.engine
+            .reset_identity(&remove, now_rfc3339(), &mut rng)
+            .await
+            .map_err(chat_error)
     }
 
     /// How many writes this browser's store has committed in this session:
@@ -6200,4 +6429,107 @@ pub async fn bench_search_index(name: String, count: u32) -> std::result::Result
         .await
         .map_err(chat_error)?;
     to_output(&report)
+}
+
+fn master_key_bytes(master_key: Vec<u8>) -> std::result::Result<[u8; 32], JsValue> {
+    master_key
+        .try_into()
+        .map_err(|_| js_error("chat account authority requires a 32-byte master key"))
+}
+
+/// The device's account, for good: its string form.
+fn canonical_account(account: &str) -> std::result::Result<String, JsValue> {
+    Ok(crate::address::parse_account(account)
+        .map_err(chat_error)?
+        .to_string())
+}
+
+/// The new device's side of linking (docs/plans/account-identity-key.md):
+/// make one, show `linkCode(address)` once the provisioning socket gave its
+/// address, and hand the envelope the socket delivers to `completeLink`.
+#[wasm_bindgen]
+pub struct WasmLinkingDevice {
+    inner: crate::LinkingDevice,
+    settings: Option<crate::ProvisionedSettings>,
+}
+
+impl Default for WasmLinkingDevice {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+#[wasm_bindgen]
+impl WasmLinkingDevice {
+    #[wasm_bindgen(constructor)]
+    pub fn new() -> Self {
+        Self {
+            inner: crate::LinkingDevice::new(),
+            settings: None,
+        }
+    }
+
+    /// `kutup://link?address=…&key=…`, for the QR code and to copy.
+    #[wasm_bindgen(js_name = linkCode)]
+    pub fn link_code(&self, address: String) -> std::result::Result<String, JsValue> {
+        self.inner.link_code(&address).map_err(chat_error)
+    }
+
+    /// Check the provisioning envelope, register this browser with the
+    /// identity it carries, and open it (as `WasmChatClient.open` does). The
+    /// account's read-receipt and typing settings are then `readReceipts` and
+    /// `typingIndicators`.
+    #[wasm_bindgen(js_name = completeLink)]
+    #[allow(clippy::too_many_arguments)]
+    pub async fn complete_link(
+        &mut self,
+        envelope: JsValue,
+        database_name: String,
+        account: String,
+        display_name: String,
+        sealed_sender_enabled: bool,
+        master_key: Vec<u8>,
+        binding: String,
+        transport: JsChatTransport,
+    ) -> std::result::Result<WasmChatClient, JsValue> {
+        let envelope: kutup_chat_proto::ProvisionEnvelopeV1 =
+            from_transport(envelope).map_err(chat_error)?;
+        let master_key = master_key_bytes(master_key)?;
+        let authority = AccountAuthority::derive(&master_key).map_err(chat_error)?;
+        let db = Rc::new(
+            IndexedDbChatDb::open(&database_name, &master_key)
+                .await
+                .map_err(chat_error)?,
+        );
+        let transport: Rc<dyn ChatTransport> = Rc::new(BrowserTransport { js: transport });
+        let account = canonical_account(&account)?;
+        let provision = self
+            .inner
+            .verify(transport.as_ref(), &account, &authority, &envelope)
+            .await
+            .map_err(chat_error)?;
+        self.settings = Some(provision.settings);
+        let mut rng = OsRng.unwrap_err();
+        let engine = Engine::register_linked(db, transport, account, provision, 50, &mut rng)
+            .await
+            .map_err(chat_error)?;
+        WasmChatClient::finish_open(
+            engine,
+            &master_key,
+            &binding,
+            &display_name,
+            sealed_sender_enabled,
+        )
+        .await
+    }
+
+    #[wasm_bindgen(getter, js_name = readReceipts)]
+    pub fn read_receipts(&self) -> Option<bool> {
+        self.settings.map(|settings| settings.read_receipts)
+    }
+
+    #[wasm_bindgen(getter, js_name = typingIndicators)]
+    pub fn typing_indicators(&self) -> Option<bool> {
+        self.settings.map(|settings| settings.typing_indicators)
+    }
 }

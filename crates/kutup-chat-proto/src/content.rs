@@ -559,6 +559,33 @@ impl ChatContent {
         Some(body)
     }
 
+    /// An identity distribution's message to one kept device of this
+    /// account (`kind::ACCOUNT_IDENTITY`). Hidden; never history.
+    pub fn account_identity_with_id(
+        message_id: impl Into<String>,
+        sent_at: impl Into<String>,
+        seq: u64,
+        body: &crate::AccountIdentityBody,
+    ) -> Self {
+        Self::hidden_with_id(
+            kind::ACCOUNT_IDENTITY,
+            message_id,
+            sent_at,
+            seq,
+            serde_json::to_value(body).unwrap_or_default(),
+        )
+    }
+
+    /// The `accountIdentity` body, when this is one and it is well formed.
+    pub fn as_account_identity(&self) -> Option<crate::AccountIdentityBody> {
+        if self.kind != kind::ACCOUNT_IDENTITY || self.v != Self::VERSION {
+            return None;
+        }
+        let body: crate::AccountIdentityBody = serde_json::from_value(self.body.clone()).ok()?;
+        body.validate().ok()?;
+        Some(body)
+    }
+
     /// An invitation to a group, for the invitee only.
     pub fn group_invite_with_id(
         message_id: impl Into<String>,

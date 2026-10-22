@@ -279,7 +279,7 @@ mod tests {
     use futures_executor::block_on;
     use kutup_chat_proto::group_route::{GroupGatewayKeyConfigV1, GroupHomePinV1};
     use kutup_chat_proto::{
-        MailboxPage, RegisterChatDeviceRequest, SendMessagesRequest, AccountPreKeyBundlesResponse,
+        MailboxPage, RegisterChatDeviceRequestV2, SendMessagesRequest, AccountPreKeyBundlesResponse,
     };
     use kutup_crypto::oblivious::GatewayKey;
     use kutup_federation_proto::FederationIdentityDocumentV1;
@@ -351,7 +351,7 @@ mod tests {
 
     #[async_trait(?Send)]
     impl ChatTransport for Home {
-        async fn register_device(&self, _: &RegisterChatDeviceRequest) -> Result<u32> {
+        async fn register_device(&self, _: &RegisterChatDeviceRequestV2) -> Result<u32> {
             unreachable!()
         }
         async fn fetch_bundles(&self, _: &str) -> Result<AccountPreKeyBundlesResponse> {

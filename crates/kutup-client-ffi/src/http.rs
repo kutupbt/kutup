@@ -7,7 +7,7 @@ use kutup_chat_core::{
 };
 use kutup_chat_proto::{
     AccountManifestHistoryPageV1, AccountManifestPublicationV1, AccountManifestV1,
-    DeviceListMismatch, MailboxPage, PreKeyCountResponse, RegisterChatDeviceRequest,
+    DeviceListMismatch, MailboxPage, PreKeyCountResponse, RegisterChatDeviceRequestV2,
     RegisterChatDeviceResponse, ReplenishKeysRequest, SendMessagesRequest,
     UserPreKeyBundlesResponse,
 };
@@ -42,7 +42,7 @@ struct DeliveredResponse {
 
 #[async_trait(?Send)]
 impl ChatTransport for NativeTransport {
-    async fn register_device(&self, request: &RegisterChatDeviceRequest) -> CoreResult<u32> {
+    async fn register_device(&self, request: &RegisterChatDeviceRequestV2) -> CoreResult<u32> {
         let response: RegisterChatDeviceResponse = self
             .json(ChatHttpMethod::Post, "/chat/device".into(), Some(request))
             .await?;

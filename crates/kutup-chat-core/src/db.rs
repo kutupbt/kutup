@@ -42,6 +42,13 @@ pub struct LocalIdentity {
     /// registration request is awaiting its first confirmed response.
     #[serde(default)]
     pub device_id: Option<u32>,
+    /// The device's credential (Signal's per-device password), canonical
+    /// unpadded base64url of 32 random bytes, sent beside the session token on
+    /// every device-bound call. `None` only in a store from before the account
+    /// identity (docs/plans/account-identity-key.md), whose transport state is
+    /// discarded when it is opened.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub credential: Option<String>,
 }
 
 /// A decrypted inbound message, persisted atomically with the ratchet advance that
@@ -569,6 +576,19 @@ pub struct PeerProfile {
 /// them. (When an out-of-crate store lands, it gets public accessors then.)
 #[derive(Default)]
 pub struct Pending {
+    /// Discard this device's Chat transport state before anything else in the
+    /// batch is written: its identity, sessions, peer identities, prekeys,
+    /// sender keys, MLS state, undecrypted inbound envelopes, manifest pins
+    /// and history, mailbox cursor and journals. History, the outbox, contacts,
+    /// groups and profiles stay. A re-registration, and a store from before
+    /// the account identity, start over this way.
+    pub(crate) reset_transport: bool,
+    /// The narrower reset an identity change of this account needs (a
+    /// distribution, sent or applied): sessions, peer identities as sessions
+    /// saw them, every prekey and the replay guard, sender keys, and the
+    /// prekey journals go, since all of them belong to the old identity. The
+    /// manifest pins, the mailbox cursor and the inbound queue stay.
+    pub(crate) reset_identity: bool,
     /// Set only when installing a freshly generated device.
     pub(crate) local_identity: Option<LocalIdentity>,
     /// address string (`name.deviceId`) → `Some(SessionRecord::serialize())`
@@ -645,9 +665,14 @@ pub struct Pending {
     /// Kyber prekeys no longer needed (used one-time keys past their grace,
     /// retired last-resort keys): deleted with their replay-guard rows.
     pub(crate) delete_kyber_pre_keys: HashSet<u32>,
-    /// Serialized `RegisterChatDeviceRequest` durably paired with freshly
+    /// Serialized `RegisterChatDeviceRequestV2` durably paired with freshly
     /// generated private keys until the server-assigned device id is committed.
     pub(crate) registration_upload: Option<Option<Vec<u8>>>,
+    /// An `accountIdentity` sync taken from the mailbox and not yet applied
+    /// (serialized `AccountIdentityBody`): written in the commit that
+    /// acknowledges it, cleared in the one that installs the identity, so a
+    /// crash between the two never loses it.
+    pub(crate) pending_account_identity: Option<Option<Vec<u8>>>,
     /// The highest mailbox cursor processed — advanced with each message so a
     /// re-drain never re-decrypts (which the ratchet couldn't do anyway).
     pub(crate) last_cursor: Option<u64>,
@@ -667,7 +692,9 @@ impl Pending {
     /// Nothing staged — a crypto op that made no writes (e.g. a failed decrypt
     /// that never reached a store call). Lets `commit` short-circuit.
     pub(crate) fn is_empty(&self) -> bool {
-        self.local_identity.is_none()
+        !self.reset_transport
+            && !self.reset_identity
+            && self.local_identity.is_none()
             && self.sessions.is_empty()
             && self.identities.is_empty()
             && self.pre_keys.is_empty()
@@ -700,6 +727,7 @@ impl Pending {
             && self.delete_signed_pre_keys.is_empty()
             && self.delete_kyber_pre_keys.is_empty()
             && self.registration_upload.is_none()
+            && self.pending_account_identity.is_none()
             && self.last_cursor.is_none()
             && self.last_sent_seq.is_none()
             && !self.contact_list_followed
@@ -868,6 +896,10 @@ pub trait ChatDb {
     /// Exact device-registration request whose private material is installed,
     /// but whose server-assigned id is not yet confirmed locally.
     async fn load_pending_registration(&self) -> Result<Option<Vec<u8>>>;
+
+    /// An `accountIdentity` sync received and not yet applied
+    /// (`Pending::pending_account_identity`).
+    async fn load_pending_account_identity(&self) -> Result<Option<Vec<u8>>>;
 
     /// Commit a whole unit of work atomically. Either every staged write lands or
     /// none does; a partial apply MUST NOT be observable after a crash.

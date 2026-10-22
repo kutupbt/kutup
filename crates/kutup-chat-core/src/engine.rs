@@ -39,7 +39,7 @@ use kutup_chat_proto::{
 
 /// How many send/recovery rounds a single message gets before giving up. Each 409
 /// consumes one; a well-behaved server converges in 1–2.
-const MAX_SEND_ATTEMPTS: u32 = 5;
+pub(crate) const MAX_SEND_ATTEMPTS: u32 = 5;
 /// Drain page size (the contract caps it at 500).
 const DRAIN_LIMIT: u32 = 500;
 /// A session with one device is set aside for unreadable messages at most
@@ -590,44 +590,8 @@ impl Engine {
     }
 
     /// This account, as its manifest names it.
-    fn self_account(&self) -> Result<AccountRef> {
+    pub(crate) fn self_account(&self) -> Result<AccountRef> {
         crate::address::parse_account(self.session.user())
-    }
-
-    /// Register a brand-new device end-to-end: generate keys, `POST` the
-    /// registration, and adopt the server-assigned device id.
-    pub async fn register<R: Rng + CryptoRng>(
-        db: Rc<dyn ChatDb>,
-        transport: Rc<dyn ChatTransport>,
-        user: impl Into<String>,
-        num_one_time: usize,
-        rng: &mut R,
-    ) -> Result<Self> {
-        let user = user.into();
-        crate::timeline::ensure_built(db.as_ref()).await?;
-        // Registration is restart-safe. Generation persists both private keys
-        // and the exact request atomically; a retry reuses that journal. Once a
-        // device id is committed, initialization simply reopens the install.
-        let mut session = match db.load_local_identity().await? {
-            Some(local) => match local.device_id {
-                Some(device_id) => {
-                    return Self::open(db, transport, user, device_id).await;
-                }
-                None => Session::resume_registration(db, user, local).await?,
-            },
-            None => {
-                // Provisional id 1 is never used for a crypto operation before
-                // the server response binds the real id.
-                Session::generate(db, user, 1, num_one_time, rng).await?
-            }
-        };
-        let request = session
-            .registration()
-            .expect("a freshly generated session carries its registration")
-            .clone();
-        let device_id = transport.register_device(&request).await?;
-        session.complete_registration(device_id).await?;
-        Ok(Engine::new(session, transport))
     }
 
     /// Reopen an installed device.
@@ -637,10 +601,9 @@ impl Engine {
         user: impl Into<String>,
         device_id: u32,
     ) -> Result<Self> {
-        Ok(Engine::new(
-            Session::open(db, user, device_id).await?,
-            transport,
-        ))
+        let engine = Engine::new(Session::open(db, user, device_id).await?, transport);
+        engine.authenticate_device()?;
+        Ok(engine)
     }
 
     /// The underlying device session (for the crypto/store primitives + the
@@ -661,6 +624,9 @@ impl Engine {
     /// Drain engine-owned events. Bindings expose this as their callback/stream
     /// boundary without leaking libsignal or storage operations.
     pub fn take_events(&mut self) -> Vec<ChatEvent> {
+        for peer in self.session.take_identity_changes() {
+            self.events.push_back(ChatEvent::SafetyNumberChanged { peer });
+        }
         self.events.drain(..).collect()
     }
 
@@ -1181,8 +1147,12 @@ impl Engine {
         let local = self.session.manifest_device_with_mls(mls);
         let issued_at = issued_at.into();
         let candidate = match current {
+            // The account's first manifest comes with its re-registration
+            // (`reregister`), never from here.
             None => {
-                authority.sign_manifest(canonical_self.clone(), 1, None, vec![local], issued_at)?
+                return Err(ChatError::Trust(
+                    "the account has no manifest; this device must re-register".into(),
+                ))
             }
             Some(current) => {
                 current.verify().map_err(ChatError::Trust)?;
@@ -1198,14 +1168,20 @@ impl Engine {
                         "stored account manifest belongs to a different authority".into(),
                     ));
                 }
+                // The identity rule: this device holds the account's identity,
+                // or it has been reset away from it and must not sign.
+                if current.identity_key != self.session.account_identity_key() {
+                    return Err(ChatError::Trust(
+                        "the account's identity is not this device's".into(),
+                    ));
+                }
                 let mut devices = current.devices.clone();
                 match devices.binary_search_by_key(&local.device_id, |device| device.device_id) {
                     // Unchanged, unless the account's Drive keys moved on (an
                     // upgrade to X-Wing, docs/plans/pq-shares.md): then the
                     // next manifest carries them.
                     Ok(index)
-                        if devices[index].identity_key == local.identity_key
-                            && devices[index].registration_id == local.registration_id
+                        if devices[index].registration_id == local.registration_id
                             && devices[index].mls == local.mls
                             && current.drive == authority.drive_keys() =>
                     {
@@ -1219,13 +1195,17 @@ impl Engine {
                         let next_sequence = current.sequence.checked_add(1).ok_or_else(|| {
                             ChatError::Trust("manifest sequence is exhausted".into())
                         })?;
-                        authority.sign_manifest(
+                        let next = authority.sign_manifest(
                             canonical_self.clone(),
                             next_sequence,
                             Some(current.manifest_hash().map_err(ChatError::Trust)?),
+                            current.identity_key.clone(),
                             devices,
                             issued_at,
-                        )?
+                        )?;
+                        next.verify_successor(Some(&current))
+                            .map_err(ChatError::Trust)?;
+                        next
                     }
                 }
             }
@@ -1302,9 +1282,13 @@ impl Engine {
             canonical_self.clone(),
             next_sequence,
             Some(current.manifest_hash().map_err(ChatError::Trust)?),
+            current.identity_key.clone(),
             devices,
             issued_at,
         )?;
+        candidate
+            .verify_successor(Some(&current))
+            .map_err(ChatError::Trust)?;
         let expected_hash = candidate.manifest_hash().map_err(ChatError::Trust)?;
         let published = transport.publish_manifest(&candidate).await?;
         published.manifest.verify().map_err(ChatError::Trust)?;
@@ -2035,6 +2019,14 @@ impl Engine {
     /// decrypt (or an explicit dead-letter state) is acknowledged; repairable
     /// failures remain durable and unacked.
     pub async fn receive<R: Rng + CryptoRng>(&mut self, rng: &mut R) -> Result<ReceiveReport> {
+        let report = self.receive_pass(rng).await?;
+        // An identity distribution another device of this account sent this
+        // one, kept by the pass (or by an earlier run that stopped first).
+        self.apply_account_identity().await?;
+        Ok(report)
+    }
+
+    async fn receive_pass<R: Rng + CryptoRng>(&mut self, rng: &mut R) -> Result<ReceiveReport> {
         self.set_state(EngineState::CatchingUp);
         let transport = Rc::clone(&self.transport);
         let device_id = self.session.device_id();
@@ -2358,6 +2350,12 @@ impl Engine {
                     }
                 }
                 Ok(ReceiveOutcome::Suppressed { id }) => {
+                    ack_ids.push(id.clone());
+                    report.suppressed.push(id);
+                }
+                // Kept in the store; applied once this pass is read, so what
+                // came before it under the old identity is read first.
+                Ok(ReceiveOutcome::AccountIdentity { id }) => {
                     ack_ids.push(id.clone());
                     report.suppressed.push(id);
                 }
@@ -3074,7 +3072,7 @@ impl Engine {
         );
     }
 
-    async fn fetch_verified_bundles(
+    pub(crate) async fn fetch_verified_bundles(
         &mut self,
         peer_user: &str,
     ) -> Result<Vec<kutup_chat_proto::DevicePreKeyBundle>> {
@@ -3126,7 +3124,7 @@ impl Engine {
             Err(error) => {
                 self.quarantine_manifest_failure(
                     peer_user,
-                    response.manifest.as_ref(),
+                    Some(&response.manifest),
                     prior_manifest.as_ref(),
                     &error,
                 )
@@ -3139,10 +3137,7 @@ impl Engine {
             .as_ref()
             .is_some_and(|trust| trust.continuity_gap)
         {
-            let pending = response
-                .manifest
-                .as_ref()
-                .ok_or_else(|| ChatError::Trust("manifest is missing".into()))?;
+            let pending = &response.manifest;
             let (trust, history) = self
                 .recover_manifest_history(peer_user, pending, prior_manifest.as_ref())
                 .await?;

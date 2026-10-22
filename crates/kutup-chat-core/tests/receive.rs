@@ -18,7 +18,7 @@ use kutup_chat_core::{
 };
 use kutup_chat_proto::{
     ConversationId, DeliveredEnvelope, DevicePreKeyBundle, MailboxPage, OutgoingEnvelope,
-    RegisterChatDeviceRequest, SendMessagesRequest, AccountPreKeyBundlesResponse,
+    RegisterChatDeviceRequestV2, SendMessagesRequest, AccountPreKeyBundlesResponse,
 };
 use rand::rngs::OsRng;
 use rand::{CryptoRng, Rng, TryRngCore as _};
@@ -98,7 +98,7 @@ fn published(user: &str) -> AccountPreKeyBundlesResponse {
     }
 }
 
-fn serve_bundle(reg: &RegisterChatDeviceRequest, device_id: u32) -> DevicePreKeyBundle {
+fn serve_bundle(reg: &RegisterChatDeviceRequestV2, device_id: u32) -> DevicePreKeyBundle {
     DevicePreKeyBundle {
         device_id,
         registration_id: reg.registration_id,
@@ -173,7 +173,7 @@ impl Mailbox {
 
 #[async_trait(?Send)]
 impl ChatTransport for Mailbox {
-    async fn register_device(&self, _req: &RegisterChatDeviceRequest) -> Result<u32> {
+    async fn register_device(&self, _req: &RegisterChatDeviceRequestV2) -> Result<u32> {
         unreachable!("receive path does not register")
     }
     async fn fetch_bundles(&self, account: &str) -> Result<AccountPreKeyBundlesResponse> {

@@ -34,12 +34,13 @@ CREATE TABLE IF NOT EXISTS schema_migrations (
     version    INTEGER PRIMARY KEY,
     applied_at INTEGER NOT NULL
 );
-INSERT OR IGNORE INTO schema_migrations (version, applied_at) VALUES (3, 0);
+INSERT OR IGNORE INTO schema_migrations (version, applied_at) VALUES (4, 0);
 CREATE TABLE IF NOT EXISTS local_identity (
     id                INTEGER PRIMARY KEY CHECK (id = 1),
     identity_key_pair BLOB    NOT NULL,
     registration_id   INTEGER NOT NULL,
-    device_id          INTEGER
+    device_id          INTEGER,
+    credential         TEXT
 );
 CREATE TABLE IF NOT EXISTS sessions (
     address TEXT PRIMARY KEY,
@@ -202,6 +203,10 @@ CREATE TABLE IF NOT EXISTS pending_chat_registration (
     id      INTEGER PRIMARY KEY CHECK (id = 1),
     request BLOB NOT NULL
 );
+CREATE TABLE IF NOT EXISTS pending_account_identity (
+    id   INTEGER PRIMARY KEY CHECK (id = 1),
+    body BLOB NOT NULL
+);
 CREATE TABLE IF NOT EXISTS contacts (
     peer             TEXT PRIMARY KEY,
     state            INTEGER NOT NULL,
@@ -293,12 +298,12 @@ impl SqliteChatDb {
         // SQLite free pages after its logical row is removed.
         db(conn.pragma_update(None, "secure_delete", "ON"))?;
         db(conn.execute_batch(SCHEMA))?;
-        // One schema version, created whole (3: contacts gained when their
-        // list entry is due, and the contact-list flag). A store from an older layout
+        // One schema version, created whole (4: the device credential and
+        // the account identity in manifest pins). A store from an older layout
         // (development builds only; no native app has shipped) is refused
         // rather than upgraded.
         let foreign: i64 = db(conn.query_row(
-            "SELECT COUNT(*) FROM schema_migrations WHERE version <> 3",
+            "SELECT COUNT(*) FROM schema_migrations WHERE version <> 4",
             [],
             |row| row.get(0),
         ))?;
@@ -321,13 +326,15 @@ impl ChatDb for SqliteChatDb {
         let conn = self.conn.borrow();
         db(conn
             .query_row(
-                "SELECT identity_key_pair, registration_id, device_id FROM local_identity WHERE id = 1",
+                "SELECT identity_key_pair, registration_id, device_id, credential \
+                 FROM local_identity WHERE id = 1",
                 [],
                 |row| {
                     Ok(LocalIdentity {
                         identity_key_pair: row.get(0)?,
                         registration_id: row.get(1)?,
                         device_id: row.get(2)?,
+                        credential: row.get(3)?,
                     })
                 },
             )
@@ -830,6 +837,17 @@ impl ChatDb for SqliteChatDb {
             .optional())
     }
 
+    async fn load_pending_account_identity(&self) -> Result<Option<Vec<u8>>> {
+        let conn = self.conn.borrow();
+        db(conn
+            .query_row(
+                "SELECT body FROM pending_account_identity WHERE id = 1",
+                [],
+                |row| row.get(0),
+            )
+            .optional())
+    }
+
     async fn apply(&self, pending: &Pending) -> Result<()> {
         // The conversation timelines move with the records they index.
         let crate::timeline::Changes {
@@ -842,18 +860,48 @@ impl ChatDb for SqliteChatDb {
         let mut conn = self.conn.borrow_mut();
         let tx = db(conn.transaction())?;
 
+        if pending.reset_transport || pending.reset_identity {
+            db(tx.execute_batch(
+                "DELETE FROM sessions;
+                 DELETE FROM identities;
+                 DELETE FROM pre_keys;
+                 DELETE FROM signed_pre_keys;
+                 DELETE FROM kyber_pre_keys;
+                 DELETE FROM kyber_base_keys_seen;
+                 DELETE FROM sender_keys;
+                 DELETE FROM pending_prekey_upload;
+                 DELETE FROM prekey_rotation;",
+            ))?;
+        }
+        if pending.reset_transport {
+            db(tx.execute_batch(
+                "DELETE FROM local_identity;
+                 DELETE FROM mls_state;
+                 DELETE FROM mls_outbox;
+                 DELETE FROM inbound_envelopes;
+                 DELETE FROM manifest_trust;
+                 DELETE FROM manifest_history;
+                 DELETE FROM repair_limits;
+                 DELETE FROM pending_account_identity;
+                 DELETE FROM pending_chat_registration;
+                 DELETE FROM meta WHERE key = 'last_cursor';",
+            ))?;
+        }
         if let Some(local) = &pending.local_identity {
             db(tx.execute(
-                "INSERT INTO local_identity (id, identity_key_pair, registration_id, device_id) \
-                 VALUES (1, ?1, ?2, ?3) \
+                "INSERT INTO local_identity \
+                   (id, identity_key_pair, registration_id, device_id, credential) \
+                 VALUES (1, ?1, ?2, ?3, ?4) \
                  ON CONFLICT(id) DO UPDATE SET \
                    identity_key_pair = excluded.identity_key_pair, \
                    registration_id = excluded.registration_id, \
-                   device_id = excluded.device_id",
+                   device_id = excluded.device_id, \
+                   credential = excluded.credential",
                 rusqlite::params![
                     local.identity_key_pair,
                     local.registration_id,
-                    local.device_id
+                    local.device_id,
+                    local.credential
                 ],
             ))?;
         }
@@ -1326,6 +1374,16 @@ impl ChatDb for SqliteChatDb {
                     [request],
                 ))?,
                 None => db(tx.execute("DELETE FROM pending_chat_registration WHERE id = 1", []))?,
+            };
+        }
+        if let Some(body) = &pending.pending_account_identity {
+            match body {
+                Some(body) => db(tx.execute(
+                    "INSERT INTO pending_account_identity (id, body) VALUES (1, ?1)
+                     ON CONFLICT(id) DO UPDATE SET body = excluded.body",
+                    [body],
+                ))?,
+                None => db(tx.execute("DELETE FROM pending_account_identity WHERE id = 1", []))?,
             };
         }
         if let Some(state) = &pending.pins_due {
