@@ -472,19 +472,21 @@ export interface MailIdentity {
   signature: string
 }
 
-export function useMailIdentity() {
+/** An address's display name and signature: `addressId`'s, or the default address's. */
+export function useMailIdentity(addressId?: string) {
   return useQuery({
-    queryKey: ['mail', 'identity'],
-    queryFn: async () => (await api.get<MailIdentity>('/mail/identity')).data,
+    queryKey: ['mail', 'identity', addressId ?? null],
+    queryFn: async () => (await api.get<MailIdentity>('/mail/identity', { params: addressId ? { addressId } : {} })).data,
   })
 }
 
-export function useUpdateMailIdentity() {
+export function useUpdateMailIdentity(addressId?: string) {
   const queryClient = useQueryClient()
   return useMutation({
-    mutationFn: async (change: Partial<Pick<MailIdentity, 'displayName' | 'signature'>>) => (await api.patch<MailIdentity>('/mail/identity', change)).data,
+    mutationFn: async (change: Partial<Pick<MailIdentity, 'displayName' | 'signature'>>) =>
+      (await api.patch<MailIdentity>('/mail/identity', change, { params: addressId ? { addressId } : {} })).data,
     onSuccess: (identity) => {
-      queryClient.setQueryData(['mail', 'identity'], identity)
+      queryClient.setQueryData(['mail', 'identity', addressId ?? null], identity)
       // The composer reads both from the account.
       void queryClient.invalidateQueries({ queryKey: ['mail', 'account'] })
     },

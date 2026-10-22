@@ -135,6 +135,32 @@ export async function encryptionOnList(session: Pick<Session, 'masterKey'>, addr
   return signList(session, current, withEncryptionOff(signedEntries(address), false))
 }
 
+/**
+ * The next key list for disabling the address: its keys, none of them to be
+ * encrypted to (`NOT_OBSOLETE` cleared), so senders and WKD stop offering it
+ * (`PUT /api/mail/addresses/{id}/disable`).
+ */
+export async function disabledKeyList(session: Pick<Session, 'masterKey'>, address: Pick<KeyListAddress, 'verifiedList'>): Promise<SignedMailKeyList> {
+  return nextKeyList(
+    session,
+    address,
+    signedEntries(address).map((key) => ({ ...key, flags: key.flags & ~MAIL_KEY_FLAGS.notObsolete })),
+  )
+}
+
+/**
+ * The next key list for enabling the address again: its primary key to be
+ * encrypted to (`PUT /api/mail/addresses/{id}/enable`); the others stay as
+ * they are (only the primary is encrypted to).
+ */
+export async function enabledKeyList(session: Pick<Session, 'masterKey'>, address: Pick<KeyListAddress, 'verifiedList'>): Promise<SignedMailKeyList> {
+  return nextKeyList(
+    session,
+    address,
+    signedEntries(address).map((key) => (key.primary ? { ...key, flags: key.flags | MAIL_KEY_FLAGS.notObsolete } : key)),
+  )
+}
+
 /** One of the account's addresses as `GET /api/mail/addresses` lists it, with what key lists need. */
 export interface AddressRow {
   id: string

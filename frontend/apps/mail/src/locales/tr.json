@@ -536,7 +536,7 @@
     "filters": "Filtreler",
     "general": "Genel",
     "senders": "Engelle ve izin ver",
-    "identity": "Kimlik",
+    "identity": "Kimlik ve adresler",
     "autoReply": "Otomatik yanıt",
     "appearance": "Görünüm",
     "forwarding": "Yönlendirme"
@@ -628,8 +628,8 @@
     "count_other": "{{count}} gönderici"
   },
   "identity": {
-    "title": "Kimlik",
-    "description": "{{address}} adresinden giden postalarınızın nasıl imzalanacağı.",
+    "title": "Kimlik ve adresler",
+    "description": "Adresleriniz ve her birinden giden postaların nasıl imzalanacağı.",
     "displayName": "Görünen ad",
     "displayNameHint": "İnsanların adresinizin yanında gördüğü ad.",
     "nameTooLong": "Görünen ad en fazla 100 karakter olabilir.",
@@ -638,7 +638,9 @@
     "link": "Bağlantı",
     "linkPrompt": "Bağlantı adresi (https:// veya mailto:)",
     "signatureTooLong": "İmza çok uzun (en fazla 10 KB).",
-    "addLink": "Bağlantı ekle"
+    "addLink": "Bağlantı ekle",
+    "nameAndSignature": "Görünen ad ve imza",
+    "address": "Adres"
   },
   "autoReply": {
     "title": "Otomatik yanıt",
@@ -1147,5 +1149,42 @@
       "state": "Bu yönlendirme bu arada değişti. Sayfayı yenileyip yeniden deneyin.",
       "rateLimited": "Bugün çok fazla onay e-postası gönderildi. Yarın yeniden deneyin."
     }
+  },
+  "addresses": {
+    "title": "Adresler",
+    "add": "Adres ekle",
+    "addTitle": "Adres ekle",
+    "address": "Adres",
+    "status": "Durum",
+    "actions": "İşlemler",
+    "actionsFor": "{{address}} için işlemler",
+    "save": "Adresi kaydet",
+    "added": "Adres eklendi",
+    "statuses": {
+      "default": "Varsayılan",
+      "active": "Etkin",
+      "disabled": "Devre dışı",
+      "missingKeys": "Anahtar eksik"
+    },
+    "generateKeys": "Eksik anahtarları oluştur",
+    "generateKeysInfo": "Yeni adreslerinizden e-posta gönderip almaya başlamadan önce onlar için şifreleme anahtarları oluşturmanız gerekir.",
+    "submit": "Gönder",
+    "keysCreated": "Anahtarlar oluşturuldu",
+    "enable": "Etkinleştir",
+    "enabled": "Adres etkinleştirildi",
+    "setDefault": "Varsayılan yap",
+    "setDefaultFor": "{{address}} adresini varsayılan yap",
+    "disable": "Devre dışı bırak",
+    "disableTitle": "Adres devre dışı bırakılsın mı?",
+    "disableBody": "{{address}} adresini devre dışı bırakırsanız bu adresle artık e-posta gönderemez ve alamazsınız.",
+    "disableSure": "Bu adresi devre dışı bırakmak istediğinizden emin misiniz?",
+    "disableSubmit": "Adresi devre dışı bırak",
+    "disabled": "Adres devre dışı bırakıldı",
+    "delete": "Adresi sil",
+    "deleteTitle": "Adres silinsin mi?",
+    "deleteBody": "{{address}} adresini silerseniz bu adresle artık e-posta gönderemez ve alamazsınız.",
+    "deleteSure": "Daha önce aldığı postalar okunabilir kalır.",
+    "deleteSubmit": "Adresi sil",
+    "deleted": "Adres silindi"
   }
 }

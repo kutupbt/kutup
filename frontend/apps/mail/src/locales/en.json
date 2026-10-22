@@ -536,7 +536,7 @@
     "filters": "Filters",
     "general": "General",
     "senders": "Block and allow",
-    "identity": "Identity",
+    "identity": "Identity and addresses",
     "autoReply": "Auto-reply",
     "appearance": "Appearance",
     "forwarding": "Forwarding"
@@ -628,8 +628,8 @@
     "count_other": "{{count}} senders"
   },
   "identity": {
-    "title": "Identity",
-    "description": "How your mail from {{address}} is signed off.",
+    "title": "Identity and addresses",
+    "description": "Your addresses, and how mail from each one is signed off.",
     "displayName": "Display name",
     "displayNameHint": "The name people see next to your address.",
     "nameTooLong": "A display name is 100 characters at most.",
@@ -638,7 +638,9 @@
     "link": "Link",
     "linkPrompt": "Link address (https:// or mailto:)",
     "signatureTooLong": "The signature is too long (10 KB at most).",
-    "addLink": "Add link"
+    "addLink": "Add link",
+    "nameAndSignature": "Display name and signature",
+    "address": "Address"
   },
   "autoReply": {
     "title": "Auto-reply",
@@ -1147,5 +1149,42 @@
       "state": "This forwarding changed meanwhile. Reload the page and try again.",
       "rateLimited": "Too many confirmation emails today. Try again tomorrow."
     }
+  },
+  "addresses": {
+    "title": "Addresses",
+    "add": "Add address",
+    "addTitle": "Add address",
+    "address": "Address",
+    "status": "Status",
+    "actions": "Actions",
+    "actionsFor": "Actions for {{address}}",
+    "save": "Save address",
+    "added": "Address added",
+    "statuses": {
+      "default": "Default",
+      "active": "Active",
+      "disabled": "Disabled",
+      "missingKeys": "Missing keys"
+    },
+    "generateKeys": "Generate missing keys",
+    "generateKeysInfo": "Before you can start sending and receiving emails from your new addresses you need to create encryption keys for them.",
+    "submit": "Submit",
+    "keysCreated": "Keys created",
+    "enable": "Enable",
+    "enabled": "Address enabled",
+    "setDefault": "Set as default",
+    "setDefaultFor": "Set {{address}} as default",
+    "disable": "Disable",
+    "disableTitle": "Disable address?",
+    "disableBody": "By disabling this address {{address}}, you will no longer be able to send or receive emails using this address.",
+    "disableSure": "Are you sure you want to disable this address?",
+    "disableSubmit": "Disable address",
+    "disabled": "Address disabled",
+    "delete": "Delete address",
+    "deleteTitle": "Delete address?",
+    "deleteBody": "Please note that if you delete this address {{address}}, you will no longer be able to send or receive emails using this address.",
+    "deleteSure": "Mail it already received stays readable.",
+    "deleteSubmit": "Delete address",
+    "deleted": "Address deleted"
   }
 }
