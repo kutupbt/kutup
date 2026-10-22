@@ -1459,6 +1459,15 @@ fn build_router(state: AppState) -> Router {
         .route("/api/chat/keys", put(chat::replenish_keys))
         .route("/api/chat/keys/count", get(chat::prekey_count))
         .route(
+            "/api/chat/account-identity",
+            put(handlers::chat_identity::distribute_identity)
+                .route_layer(DefaultBodyLimit::max(2 * 1024 * 1024)),
+        )
+        .route(
+            "/api/chat/keys/check",
+            post(handlers::chat_identity::check_keys).route_layer(DefaultBodyLimit::max(1024)),
+        )
+        .route(
             "/api/chat/mls/key-packages",
             put(chat_mls::publish_key_packages).route_layer(DefaultBodyLimit::max(8 * 1024 * 1024)),
         )

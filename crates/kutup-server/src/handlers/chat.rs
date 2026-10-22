@@ -105,7 +105,7 @@ fn profile_suite_from_db(value: i16, source: &'static str) -> AppResult<ProfileS
 const DEFAULT_DRAIN_LIMIT: i64 = 100;
 /// Max decoded ciphertext bytes per envelope (advertised as `maxContentBytes`).
 /// Kilobyte-scale headroom over a `PreKeySignalMessage` (~1.8 KB with the PQ KEM).
-const MAX_CONTENT_BYTES: usize = 65536;
+pub(crate) const MAX_CONTENT_BYTES: usize = 65536;
 const WS_TICKET_TTL_SECONDS: i64 = 60;
 const MAX_PREKEY_BATCH: usize = 100;
 pub(crate) const PROFILE_ACCESS_KEY_HEADER: &str = "x-kutup-profile-access-key";
@@ -1524,20 +1524,16 @@ pub struct BundleQuery {
     pub(crate) server: Option<String>,
 }
 
-/// Asserts the (user, device) pair exists; used by the device-scoped endpoints.
-async fn require_device(state: &AppState, user_id: Uuid, device_id: i32) -> AppResult<()> {
-    let exists: Option<i32> = sqlx::query_scalar(
-        "UPDATE chat_devices SET last_seen_at = now()
-         WHERE user_id = $1 AND device_id = $2 RETURNING 1",
-    )
-    .bind(user_id)
-    .bind(device_id)
-    .fetch_optional(&state.pool)
-    .await?;
-    if exists.is_none() {
-        return Err(AppError::not_found("no such chat device"));
-    }
-    Ok(())
+/// The caller acts as its device `device_id`: the `X-Kutup-Chat-Device`
+/// credential is that device's (`401` otherwise); marks it seen.
+async fn require_device(
+    state: &AppState,
+    headers: &HeaderMap,
+    user_id: Uuid,
+    device_id: i32,
+) -> AppResult<()> {
+    crate::handlers::chat_identity::authenticate_device(&state.pool, headers, user_id, device_id)
+        .await
 }
 
 /// `PUT /api/chat/keys?deviceId=N` — rotate the signed prekey / last-resort Kyber
@@ -1558,11 +1554,12 @@ async fn require_device(state: &AppState, user_id: Uuid, device_id: i32) -> AppR
 pub async fn replenish_keys(
     State(state): State<AppState>,
     auth: AuthUser,
+    headers: HeaderMap,
     Query(q): Query<DeviceQuery>,
     Json(req): Json<ReplenishKeysRequest>,
 ) -> AppResult<Response> {
     let user_id = trusted_uuid(&auth.user_id)?;
-    require_device(&state, user_id, q.device_id).await?;
+    require_device(&state, &headers, user_id, q.device_id).await?;
 
     if req.one_time_pre_keys.len() > MAX_PREKEY_BATCH
         || req.one_time_kyber_pre_keys.len() > MAX_PREKEY_BATCH
@@ -1586,6 +1583,21 @@ pub async fn replenish_keys(
     }
 
     let mut tx = state.pool.begin().await?;
+    // Every signed key is the account identity's.
+    let identity = crate::handlers::chat_identity::account_identity(&mut tx, user_id)
+        .await?
+        .ok_or_else(|| AppError::conflict("the account has no Chat identity"))?;
+    let identity = crate::handlers::chat_identity::identity_public_key(&identity.0)?;
+    let kyber: Vec<&KemPreKey> = req
+        .last_resort_kyber_pre_key
+        .iter()
+        .chain(&req.one_time_kyber_pre_keys)
+        .collect();
+    crate::handlers::chat_identity::verify_prekey_signatures(
+        &identity,
+        req.signed_pre_key.as_ref(),
+        &kyber,
+    )?;
 
     if let Some(spk) = &req.signed_pre_key {
         sqlx::query(
@@ -1636,10 +1648,11 @@ pub async fn replenish_keys(
 pub async fn prekey_count(
     State(state): State<AppState>,
     auth: AuthUser,
+    headers: HeaderMap,
     Query(q): Query<DeviceQuery>,
 ) -> AppResult<Response> {
     let user_id = trusted_uuid(&auth.user_id)?;
-    require_device(&state, user_id, q.device_id).await?;
+    require_device(&state, &headers, user_id, q.device_id).await?;
     let ec: i64 = sqlx::query_scalar(
         "SELECT COUNT(*) FROM chat_one_time_pre_keys WHERE user_id = $1 AND device_id = $2",
     )
@@ -2854,10 +2867,11 @@ pub struct DrainQuery {
 pub async fn drain_mailbox(
     State(state): State<AppState>,
     auth: AuthUser,
+    headers: HeaderMap,
     Query(q): Query<DrainQuery>,
 ) -> AppResult<Response> {
     let user_id = trusted_uuid(&auth.user_id)?;
-    require_device(&state, user_id, q.device_id).await?;
+    require_device(&state, &headers, user_id, q.device_id).await?;
     let limit = q
         .limit
         .unwrap_or(DEFAULT_DRAIN_LIMIT)
@@ -3009,11 +3023,12 @@ pub struct AckQuery {
 pub async fn ack_messages(
     State(state): State<AppState>,
     auth: AuthUser,
+    headers: HeaderMap,
     Query(q): Query<AckQuery>,
     Json(req): Json<AckRequest>,
 ) -> AppResult<Response> {
     let user_id = trusted_uuid(&auth.user_id)?;
-    require_device(&state, user_id, q.device_id).await?;
+    require_device(&state, &headers, user_id, q.device_id).await?;
     let ids: Vec<Uuid> = req
         .ids
         .iter()
@@ -3062,10 +3077,11 @@ fn ws_ticket_hash(ticket: &str) -> String {
 pub async fn create_ws_ticket(
     State(state): State<AppState>,
     auth: AuthUser,
+    headers: HeaderMap,
     Query(q): Query<DeviceQuery>,
 ) -> AppResult<Response> {
     let user_id = trusted_uuid(&auth.user_id)?;
-    require_device(&state, user_id, q.device_id).await?;
+    require_device(&state, &headers, user_id, q.device_id).await?;
     let ticket = random_token(32);
     let expires_at: OffsetDateTime = sqlx::query_scalar(
         "INSERT INTO chat_ws_tickets (token_hash, user_id, device_id, expires_at)
@@ -3147,7 +3163,7 @@ pub async fn ws(
                     return Err(AppError::unauthorized("missing or invalid deviceId"));
                 }
             };
-            require_device(&state, user_uuid, device_id).await?;
+            require_device(&state, &headers, user_uuid, device_id).await?;
             (user_uuid, device_id)
         }
         None => match q.ticket.as_deref() {

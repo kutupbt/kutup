@@ -11,8 +11,9 @@ use axum::http::HeaderMap;
 use base64::engine::general_purpose::STANDARD;
 use base64::Engine as _;
 use kutup_chat_proto::{
-    decode_identity_key, parse_device_header, AccountManifestV2, EcPreKey, KemPreKey,
-    CHAT_DEVICE_HEADER, DEVICE_CREDENTIAL_LEN,
+    decode_identity_key, parse_device_header, repeated_use_keys_digest,
+    AccountIdentityDistributionRequest, AccountManifestPublicationV2, AccountManifestV2,
+    ChatKeysCheckRequest, DeviceListMismatch, DistributionError, EcPreKey, KemPreKey, CHAT_DEVICE_HEADER, DEVICE_CREDENTIAL_LEN,
 };
 use sha2::{Digest, Sha256};
 use sqlx::{Postgres, Transaction};
@@ -177,6 +178,259 @@ pub(crate) fn validate_manifest_v2(manifest: &AccountManifestV2) -> AppResult<()
         ));
     }
     Ok(())
+}
+
+/// `POST /api/chat/keys/check` (device-authenticated; Signal's
+/// `/v2/keys/check`): whether the server holds what the device believes it
+/// holds for it (the account identity, its signed prekey and its last-resort
+/// key). `204` when they agree, `409 keysDiffer` when they don't (the device
+/// then uploads its keys again).
+#[utoipa::path(
+    post,
+    path = "/api/chat/keys/check",
+    tag = "chat",
+    operation_id = "checkChatKeys",
+    request_body = ChatKeysCheckRequest,
+    responses(
+        (status = 204, description = "The server's keys are the device's"),
+        (status = 401, description = "Missing or wrong device credential"),
+        (status = 409, description = "The server holds other keys"),
+    ),
+    security(("bearerAuth" = []))
+)]
+pub async fn check_keys(
+    axum::extract::State(state): axum::extract::State<crate::AppState>,
+    auth: crate::middleware::AuthUser,
+    headers: HeaderMap,
+    axum::Json(request): axum::Json<ChatKeysCheckRequest>,
+) -> AppResult<axum::response::Response> {
+    use axum::response::IntoResponse as _;
+    let user_id = crate::handlers::trusted_uuid(&auth.user_id)?;
+    let device_id = authenticated_device(&state.pool, &headers, user_id).await?;
+    let presented = hex::decode(&request.digest)
+        .ok()
+        .filter(|bytes| bytes.len() == 32 && hex::encode(bytes) == request.digest)
+        .ok_or_else(|| AppError::bad_request("digest must be lowercase hex of 32 bytes"))?;
+    let (identity_key, spk_id, spk, lrk_id, lrk): (String, i64, String, i64, String) =
+        sqlx::query_as(
+            "SELECT identity_key, signed_pre_key_id, signed_pre_key,
+                    last_resort_kyber_pre_key_id, last_resort_kyber_pre_key
+               FROM chat_devices WHERE user_id = $1 AND device_id = $2",
+        )
+        .bind(user_id)
+        .bind(device_id)
+        .fetch_one(&state.pool)
+        .await?;
+    let decode = |value: &str| STANDARD.decode(value).unwrap_or_default();
+    let held = repeated_use_keys_digest(
+        &decode(&identity_key),
+        spk_id as u32,
+        &decode(&spk),
+        lrk_id as u32,
+        &decode(&lrk),
+    );
+    if crate::handlers::chat::constant_time_eq(&held, &presented) {
+        Ok(axum::http::StatusCode::NO_CONTENT.into_response())
+    } else {
+        Err(AppError::conflict("the server holds other keys for this device")
+            .with_details(serde_json::json!({ "code": "keysDiffer" })))
+    }
+}
+
+/// `PUT /api/chat/account-identity` (device-authenticated; Signal's
+/// `PhoneNumberIdentityKeyDistributionRequest`): a new account identity for
+/// every device the manifest keeps, in one transaction. The request names
+/// exactly the manifest's devices (`409` with the mismatch otherwise, and for
+/// a listed device that isn't the account's), each with a signed prekey and
+/// a last-resort key under the new identity (`400 badSignature`), and one
+/// sealed `accountIdentity` sync per other device on its current session
+/// (`410` when its registration id is no longer the device's). Rows the
+/// manifest leaves out (a lost device) are dropped; every one-time key of
+/// the account goes, and the devices upload new ones.
+#[utoipa::path(
+    put,
+    path = "/api/chat/account-identity",
+    tag = "chat",
+    operation_id = "distributeChatAccountIdentity",
+    request_body = AccountIdentityDistributionRequest,
+    responses(
+        (status = 200, description = "Distributed", body = AccountManifestPublicationV2),
+        (status = 400, description = "Malformed, or a key not signed by the identity"),
+        (status = 401, description = "Missing or wrong device credential"),
+        (status = 409, description = "Devices missing or extra, or a manifest conflict", body = DeviceListMismatch),
+        (status = 410, description = "A device's registration id changed", body = DeviceListMismatch),
+    ),
+    security(("bearerAuth" = []))
+)]
+pub async fn distribute_identity(
+    axum::extract::State(state): axum::extract::State<crate::AppState>,
+    auth: crate::middleware::AuthUser,
+    headers: HeaderMap,
+    axum::Json(request): axum::Json<AccountIdentityDistributionRequest>,
+) -> AppResult<axum::response::Response> {
+    use axum::response::IntoResponse as _;
+    use axum::Json;
+    let user_id = crate::handlers::trusted_uuid(&auth.user_id)?;
+    let sender = authenticated_device(&state.pool, &headers, user_id).await?;
+    match request.validate(sender as u32) {
+        Ok(()) => {}
+        Err(DistributionError::Invalid(message)) => return Err(AppError::bad_request(message)),
+        Err(DistributionError::Mismatched(mismatch)) => {
+            return Ok((axum::http::StatusCode::CONFLICT, Json(mismatch)).into_response())
+        }
+    }
+    validate_manifest_v2(&request.manifest)?;
+    let identity = identity_public_key(&request.identity_key)?;
+    for keys in &request.devices {
+        verify_prekey_signatures(
+            &identity,
+            Some(&keys.signed_pre_key),
+            &[&keys.last_resort_kyber_pre_key],
+        )?;
+    }
+    for message in &request.device_messages {
+        let content = STANDARD
+            .decode(&message.content)
+            .map_err(|_| AppError::bad_request("deviceMessages content must be base64"))?;
+        if content.is_empty() || content.len() > crate::handlers::chat::MAX_CONTENT_BYTES {
+            return Err(AppError::bad_request("a device message is empty or too large"));
+        }
+    }
+
+    let mut tx = state.pool.begin().await?;
+    sqlx::query("SELECT id FROM users WHERE id = $1 FOR UPDATE")
+        .bind(user_id)
+        .execute(&mut *tx)
+        .await?;
+    let rows: Vec<(i32, i64)> = sqlx::query_as(
+        "SELECT device_id, registration_id FROM chat_devices
+          WHERE user_id = $1 AND expired_at IS NULL",
+    )
+    .bind(user_id)
+    .fetch_all(&mut *tx)
+    .await?;
+    // A listed device the account doesn't have: 409, as an extra device.
+    let extra: Vec<u32> = request
+        .devices
+        .iter()
+        .map(|keys| keys.device_id)
+        .filter(|id| !rows.iter().any(|(row, _)| *row as u32 == *id))
+        .collect();
+    if !extra.is_empty() {
+        let mismatch = DeviceListMismatch {
+            missing_devices: Vec::new(),
+            stale_devices: Vec::new(),
+            extra_devices: extra,
+        };
+        return Ok((axum::http::StatusCode::CONFLICT, Json(mismatch)).into_response());
+    }
+    // A sync on a session the device no longer has: 410, as on sends.
+    let stale: Vec<u32> = request
+        .device_messages
+        .iter()
+        .filter(|message| {
+            rows.iter()
+                .any(|(row, registration)| {
+                    *row as u32 == message.device_id && *registration as u32 != message.registration_id
+                })
+        })
+        .map(|message| message.device_id)
+        .collect();
+    if !stale.is_empty() {
+        let mismatch = DeviceListMismatch {
+            missing_devices: Vec::new(),
+            stale_devices: stale,
+            extra_devices: Vec::new(),
+        };
+        return Ok((axum::http::StatusCode::GONE, Json(mismatch)).into_response());
+    }
+
+    crate::handlers::chat::store_manifest_v2(
+        &mut tx,
+        &state,
+        user_id,
+        &request.manifest,
+        crate::handlers::chat::IdentityChange::New,
+    )
+    .await?;
+    // The devices left out (a lost or stolen one) go now.
+    let kept: Vec<i32> = request.devices.iter().map(|keys| keys.device_id as i32).collect();
+    let dropped: Vec<i32> = sqlx::query_scalar(
+        "DELETE FROM chat_devices WHERE user_id = $1 AND NOT (device_id = ANY($2))
+         RETURNING device_id",
+    )
+    .bind(user_id)
+    .bind(&kept)
+    .fetch_all(&mut *tx)
+    .await?;
+    sqlx::query("DELETE FROM chat_mls_devices WHERE user_id = $1 AND NOT (device_id = ANY($2))")
+        .bind(user_id)
+        .bind(&kept)
+        .execute(&mut *tx)
+        .await?;
+    for keys in &request.devices {
+        sqlx::query(
+            "UPDATE chat_devices SET identity_key = $3, registration_id = $4,
+                 signed_pre_key_id = $5, signed_pre_key = $6, signed_pre_key_signature = $7,
+                 last_resort_kyber_pre_key_id = $8, last_resort_kyber_pre_key = $9,
+                 last_resort_kyber_pre_key_signature = $10
+             WHERE user_id = $1 AND device_id = $2",
+        )
+        .bind(user_id)
+        .bind(keys.device_id as i32)
+        .bind(&request.identity_key)
+        .bind(keys.registration_id as i64)
+        .bind(keys.signed_pre_key.key_id as i64)
+        .bind(&keys.signed_pre_key.public_key)
+        .bind(keys.signed_pre_key.signature.as_deref().unwrap_or_default())
+        .bind(keys.last_resort_kyber_pre_key.key_id as i64)
+        .bind(&keys.last_resort_kyber_pre_key.public_key)
+        .bind(&keys.last_resort_kyber_pre_key.signature)
+        .execute(&mut *tx)
+        .await?;
+    }
+    // One-time keys were signed by (or made for) the old identity: Signal's
+    // deleteSingleUsePreKeys.
+    sqlx::query("DELETE FROM chat_one_time_pre_keys WHERE user_id = $1")
+        .bind(user_id)
+        .execute(&mut *tx)
+        .await?;
+    sqlx::query("DELETE FROM chat_one_time_kyber_pre_keys WHERE user_id = $1")
+        .bind(user_id)
+        .execute(&mut *tx)
+        .await?;
+    // The syncs, from the sending device to each kept one, in this
+    // transaction: they arrive with the swap or not at all.
+    let account = crate::account_ids::local(&state.config.chat_server_name, user_id)?;
+    let send_id = uuid::Uuid::new_v4().to_string();
+    for message in &request.device_messages {
+        sqlx::query(
+            "INSERT INTO chat_mailbox (recipient_user_id, recipient_device_id, sender_server,
+                 sender_account_id, sender_device_id, envelope_type, suite, content, send_id)
+             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)",
+        )
+        .bind(user_id)
+        .bind(message.device_id as i32)
+        .bind(&account.server)
+        .bind(user_id)
+        .bind(sender)
+        .bind(crate::handlers::chat::envelope_type_code(message.envelope_type))
+        .bind(message.suite.as_u16() as i16)
+        .bind(&message.content)
+        .bind(&send_id)
+        .execute(&mut *tx)
+        .await?;
+    }
+    tx.commit().await?;
+
+    for device_id in dropped {
+        state.chat_hub.close_device(user_id, device_id);
+    }
+    state.chat_hub.notify_devices_changed(user_id);
+    Ok(Json(AccountManifestPublicationV2 {
+        manifest: request.manifest,
+    })
+    .into_response())
 }
 
 #[cfg(test)]
