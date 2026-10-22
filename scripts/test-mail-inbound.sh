@@ -248,18 +248,25 @@ run_forward() {
     KUTUP_LIVE_FORWARD_PHASE="$1" \
     KUTUP_LIVE_FORWARD_STATE="$forward_state" \
     KUTUP_LIVE_FORWARD_TOKEN="${2:-}" \
+    KUTUP_LIVE_FORWARD_CODE="${3:-}" \
     cargo test -p kutup-server --test mail_inbound_live outside_forwarding -- --exact --nocapture \
     | tee -a "$forward_output"
 }
 run_forward setup
 forward_to="$(grep -o 'FORWARD-OUTSIDE-TO [^ ]*' "$forward_output" | cut -d' ' -f2)"
 [[ -n "$forward_to" ]] || { echo "the forwarding test did not report its forwardee" >&2; exit 1; }
-wait_sink "To: $forward_to"
-forward_token="$(sink_message "To: $forward_to" | grep -o '/email-forwarding#[A-Za-z0-9_-]*' | head -1 | cut -d'#' -f2)"
-[[ "$forward_token" =~ ^[A-Za-z0-9_-]{43}$ ]] || { echo "no confirmation link reached $forward_to" >&2; exit 1; }
-grep -q "^DKIM-Signature: v=1; a=ed25519-sha256" <<<"$(sink_message "To: $forward_to")" \
-  || { echo "the confirmation is not DKIM-signed" >&2; exit 1; }
-run_forward confirm "$forward_token"
+# Only the code mail has gone to it yet.
+wait_sink "$forward_to"
+forward_mail="$(sink_message "$forward_to")"
+forward_token="$(grep -o '/email-forwarding#[A-Za-z0-9_-]*' <<<"$forward_mail" | head -1 | cut -d'#' -f2)"
+[[ "$forward_token" =~ ^[A-Za-z0-9_-]{43}$ ]] || { echo "no stop link reached $forward_to" >&2; exit 1; }
+forward_code="$(grep -o 'Verification code: [0-9]\{6\}' <<<"$forward_mail" | head -1 | cut -d' ' -f3)"
+[[ "$forward_code" =~ ^[0-9]{6}$ ]] || { echo "no verification code reached $forward_to" >&2; exit 1; }
+grep -q "^From: .*<postmaster@" <<<"$forward_mail" \
+  || { echo "the code is not from the system sender" >&2; exit 1; }
+grep -q "^DKIM-Signature: v=1; a=ed25519-sha256" <<<"$forward_mail" \
+  || { echo "the code mail is not DKIM-signed" >&2; exit 1; }
+run_forward confirm "$forward_token" "$forward_code"
 for expected in $(grep -o 'FORWARD-EXPECT [^ ]*' "$forward_output" | cut -d' ' -f2); do
   wait_sink "Message-ID: <$expected>"
   forwarded="$(sink_message "Message-ID: <$expected>")"

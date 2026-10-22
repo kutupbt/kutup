@@ -5568,7 +5568,26 @@ fn forwarding_request(
     rule: &str,
     conditions: Value,
 ) -> (String, Value, mail_forwarding::ActivationTerms) {
-    let id = uuid::Uuid::new_v4().to_string();
+    forwarding_request_for(
+        &uuid::Uuid::new_v4().to_string(),
+        forwarder,
+        forwarder_address_id,
+        forwardee,
+        rule,
+        conditions,
+    )
+}
+
+/// [`forwarding_request`] for the forwarding `id` (renewing one).
+fn forwarding_request_for(
+    id: &str,
+    forwarder: &Address,
+    forwarder_address_id: &str,
+    forwardee: &Address,
+    rule: &str,
+    conditions: Value,
+) -> (String, Value, mail_forwarding::ActivationTerms) {
+    let id = id.to_owned();
     let material = mail_forwarding::generate_material(
         &forwarder.secret_key,
         &forwardee.address,
@@ -5612,6 +5631,91 @@ fn forwarding_request(
         },
     });
     (id, body, terms)
+}
+
+/// The verification codes mailed to `address` (a Kutup forwarding
+/// destination) for forwardings from `forwarder_address`, newest first.
+fn mailed_codes(
+    c: &Client,
+    base: &str,
+    user: &User,
+    address: &Address,
+    forwarder_address: &str,
+) -> Vec<String> {
+    let subject = format!("Verification code for forwarding from {forwarder_address}");
+    let mut rows: Vec<Value> = messages(c, base, &user.token)
+        .into_iter()
+        .filter(|m| m["subject"] == subject.as_str())
+        .collect();
+    rows.sort_by(|x, y| {
+        y["receivedAt"]
+            .as_str()
+            .unwrap_or_default()
+            .cmp(x["receivedAt"].as_str().unwrap_or_default())
+    });
+    rows.iter()
+        .map(|row| {
+            let text = open_row(c, base, user, address, row);
+            let at =
+                text.find("Verification code: ").expect("a code") + "Verification code: ".len();
+            text[at..at + 6].to_owned()
+        })
+        .collect()
+}
+
+/// Waits until `count` codes from `forwarder_address` reached `address`;
+/// the newest.
+fn newest_code(
+    c: &Client,
+    base: &str,
+    user: &User,
+    address: &Address,
+    forwarder_address: &str,
+    count: usize,
+) -> String {
+    let deadline = Instant::now() + Duration::from_secs(60);
+    loop {
+        let codes = mailed_codes(c, base, user, address, forwarder_address);
+        if codes.len() >= count {
+            return codes[0].clone();
+        }
+        assert!(
+            Instant::now() < deadline,
+            "no verification code reached {}",
+            address.address
+        );
+        std::thread::sleep(Duration::from_secs(1));
+    }
+}
+
+/// The forwarder enters a code: `(status, body)`.
+fn enter_code(c: &Client, base: &str, forwarder: &User, id: &str, code: &str) -> (u16, Value) {
+    let r = bearer(
+        c.post(format!("{base}/api/mail/forwardings/{id}/verify")),
+        &forwarder.token,
+    )
+    .json(&json!({ "code": code }))
+    .send()
+    .unwrap();
+    let status = r.status().as_u16();
+    (status, r.json().unwrap_or(Value::Null))
+}
+
+/// The forwarder enters the newest code mailed to the Kutup destination:
+/// the forwarding is verified, and its forwardee sees it.
+fn verify_forwarding(
+    c: &Client,
+    base: &str,
+    forwarder: &User,
+    forwarder_address: &str,
+    forwardee: &User,
+    forwardee_address: &Address,
+    id: &str,
+) {
+    let code = newest_code(c, base, forwardee, forwardee_address, forwarder_address, 1);
+    let (status, body) = enter_code(c, base, forwarder, id, &code);
+    assert_eq!(status, 200, "verify: {body}");
+    assert_eq!(body["verified"], true);
 }
 
 /// The forwardee's client accepts: opens and checks the activation, keeps
@@ -5870,6 +5974,19 @@ fn end_to_end_forwarding() {
             .json()
             .unwrap()
     };
+    // Unverified: Bob isn't shown it, and can't fetch its activation.
+    assert_eq!(listed(&bob)["incoming"], json!([]));
+    assert_eq!(
+        bearer(
+            c.get(format!("{base}/api/mail/forwardings/{id}/activation")),
+            &bob.token
+        )
+        .send()
+        .unwrap()
+        .status(),
+        reqwest::StatusCode::NOT_FOUND
+    );
+    verify_forwarding(&c, &base, &alice, &a.address, &bob, &b, &id);
     let bob_sees = listed(&bob);
     assert_eq!(bob_sees["incoming"][0]["id"], id);
     assert!(!bob_sees.to_string().contains(k));
@@ -6074,6 +6191,7 @@ Date: Mon, 19 Oct 2026 10:00:00 +0000\r\nMessage-ID: <blocked-{tag}@sender.test>
         create(&bob, &onward_request).status(),
         reqwest::StatusCode::CREATED
     );
+    verify_forwarding(&c, &base, &bob, &b.address, &carol, &cc, &onward);
     accept_forwarding(&c, &base, &carol, &cc, &b.public_key, &onward_terms);
     let chained = send_between(&c, &base, &carol, &cc, &a, "forward me twice");
     wait_for(&c, &base, &bob, &chained);
@@ -6185,6 +6303,7 @@ Date: Mon, 19 Oct 2026 10:00:00 +0000\r\nMessage-ID: <blocked-{tag}@sender.test>
         create(&alice, &declined_request).status(),
         reqwest::StatusCode::CREATED
     );
+    verify_forwarding(&c, &base, &alice, &new_a.address, &carol, &cc, &declined);
     let r = bearer(
         c.post(format!("{base}/api/mail/forwardings/{declined}/decline")),
         &carol.token,
@@ -6204,6 +6323,184 @@ Date: Mon, 19 Oct 2026 10:00:00 +0000\r\nMessage-ID: <blocked-{tag}@sender.test>
         .all(|f| f["id"] != declined));
 }
 
+/// Verifying a forwarding's destination (docs/plans/mail-forwarding.md,
+/// "Verification"): the code mailed to a Kutup address, entered by the
+/// forwarder. Wrong codes count down and void it; a void or expired code
+/// needs a new one, at most one a minute; the forwardee sees nothing before;
+/// renewing a declined forwarding makes it unverified again.
+#[test]
+fn forwarding_codes() {
+    let (Ok(base), Ok(admin)) = (
+        std::env::var("KUTUP_LIVE_SERVER"),
+        std::env::var("KUTUP_LIVE_ADMIN"),
+    ) else {
+        eprintln!("KUTUP_LIVE_SERVER / KUTUP_LIVE_ADMIN not set; skipping");
+        return;
+    };
+    let c = client();
+    let admin_token = admin_token(&c, &base, &admin);
+    let set_limit = |key: &str, value: u64| {
+        let r = bearer(
+            c.put(format!("{base}/api/admin/rate-limits/{key}")),
+            &admin_token,
+        )
+        .json(&json!({ "value": value }))
+        .send()
+        .unwrap();
+        assert!(r.status().is_success(), "{key}: {}", r.status());
+    };
+    let (alice, bob, carol) = (
+        register(&c, &base),
+        register(&c, &base),
+        register(&c, &base),
+    );
+    let (a, b, cc) = (
+        set_up_address(&c, &base, &alice),
+        set_up_address(&c, &base, &bob),
+        set_up_address(&c, &base, &carol),
+    );
+    let alice_address_id = address_id(&c, &base, &alice);
+    let create = |body: &Value| {
+        let r = bearer(c.post(format!("{base}/api/mail/forwardings")), &alice.token)
+            .json(body)
+            .send()
+            .unwrap();
+        assert_eq!(r.status().as_u16(), 201, "{}", r.text().unwrap_or_default());
+        r.json::<Value>().unwrap()
+    };
+    let listed = |user: &User| -> Value {
+        bearer(c.get(format!("{base}/api/mail/forwardings")), &user.token)
+            .send()
+            .unwrap()
+            .json()
+            .unwrap()
+    };
+    let send_code = |id: &str| {
+        let r = bearer(
+            c.post(format!("{base}/api/mail/forwardings/{id}/code")),
+            &alice.token,
+        )
+        .send()
+        .unwrap();
+        let status = r.status().as_u16();
+        (status, r.json::<Value>().unwrap_or(Value::Null))
+    };
+
+    // To Carol, with codes that last a minute (the limit applies when a
+    // code is made).
+    set_limit("forwarding_code_minutes", 1);
+    let (to_carol, request, _) = forwarding_request(&a, &alice_address_id, &cc, "all", json!([]));
+    create(&request);
+    set_limit("forwarding_code_minutes", 15);
+    // To Bob: unverified, a code live, Bob shown nothing.
+    let (id, request, _) = forwarding_request(&a, &alice_address_id, &b, "all", json!([]));
+    let made = create(&request);
+    assert_eq!(made["verified"], false);
+    assert_eq!(made["codeAttemptsLeft"], 5);
+    assert!(made["codeExpiresAt"].is_string());
+    assert_eq!(listed(&bob)["incoming"], json!([]));
+    let r = bearer(
+        c.post(format!("{base}/api/mail/forwardings/{id}/decline")),
+        &bob.token,
+    )
+    .send()
+    .unwrap();
+    assert_eq!(
+        r.status().as_u16(),
+        404,
+        "Bob can't decline what he isn't shown"
+    );
+    let first = newest_code(&c, &base, &bob, &b, &a.address, 1);
+
+    // Only Alice enters it; not six digits counts no try.
+    let (status, _) = enter_code(&c, &base, &bob, &id, &first);
+    assert_eq!(status, 404);
+    let (status, _) = enter_code(&c, &base, &alice, &id, "12a456");
+    assert_eq!(status, 400);
+    // A new code at most once a minute.
+    let (status, body) = send_code(&id);
+    assert_eq!((status, &body["code"]), (429, &json!("rateLimited")));
+    // Wrong codes count down, the last voids the code: then even the right
+    // one is refused.
+    let wrong = if first == "000000" {
+        "111111"
+    } else {
+        "000000"
+    };
+    for left in (1..=4).rev() {
+        let (status, body) = enter_code(&c, &base, &alice, &id, wrong);
+        assert_eq!(
+            (status, &body["code"]),
+            (400, &json!("codeWrong")),
+            "{body}"
+        );
+        assert_eq!(body["attemptsLeft"], left);
+    }
+    let (status, body) = enter_code(&c, &base, &alice, &id, wrong);
+    assert_eq!((status, &body["code"]), (409, &json!("codeVoid")));
+    let (status, body) = enter_code(&c, &base, &alice, &id, &first);
+    assert_eq!((status, &body["code"]), (409, &json!("codeVoid")));
+
+    // A minute on: Carol's code has expired, and Bob gets a new one.
+    std::thread::sleep(Duration::from_secs(62));
+    let carol_code = newest_code(&c, &base, &carol, &cc, &a.address, 1);
+    let (status, body) = enter_code(&c, &base, &alice, &to_carol, &carol_code);
+    assert_eq!(
+        (status, &body["code"]),
+        (409, &json!("codeExpired")),
+        "{body}"
+    );
+    let (status, body) = send_code(&id);
+    assert_eq!(status, 200, "{body}");
+    assert_eq!(body["codeAttemptsLeft"], 5);
+    let second = newest_code(&c, &base, &bob, &b, &a.address, 2);
+    let (status, body) = enter_code(&c, &base, &alice, &id, &second);
+    assert_eq!(status, 200, "{body}");
+    assert_eq!(body["verified"], true);
+    assert!(body["codeExpiresAt"].is_null());
+    // Again: answered unchanged; and no new code for a verified one.
+    assert_eq!(enter_code(&c, &base, &alice, &id, &second).0, 200);
+    let (status, body) = send_code(&id);
+    assert_eq!((status, &body["code"]), (409, &json!("forwardingVerified")));
+
+    // Now Bob sees it, and declines; Alice renews it: unverified again, a
+    // new code to Bob, and Bob shown nothing until it is entered.
+    assert_eq!(listed(&bob)["incoming"][0]["id"], id);
+    let r = bearer(
+        c.post(format!("{base}/api/mail/forwardings/{id}/decline")),
+        &bob.token,
+    )
+    .send()
+    .unwrap();
+    assert_eq!(r.status().as_u16(), 204);
+    let (_, renewal, terms_again) =
+        forwarding_request_for(&id, &a, &alice_address_id, &b, "all", json!([]));
+    let r = bearer(
+        c.put(format!("{base}/api/mail/forwardings/{id}")),
+        &alice.token,
+    )
+    .json(&json!({ "endToEnd": renewal["endToEnd"] }))
+    .send()
+    .unwrap();
+    assert_eq!(r.status().as_u16(), 200, "{}", r.text().unwrap_or_default());
+    let renewed: Value = r.json().unwrap();
+    assert_eq!(renewed["state"], "pending");
+    assert_eq!(renewed["verified"], false);
+    assert_eq!(listed(&bob)["incoming"], json!([]));
+    let third = newest_code(&c, &base, &bob, &b, &a.address, 3);
+    assert_eq!(enter_code(&c, &base, &alice, &id, &third).0, 200);
+    accept_forwarding(&c, &base, &bob, &b, &a.public_key, &terms_again);
+    assert_eq!(
+        listed(&alice)["outgoing"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|f| f["id"] == id.as_str())
+            .unwrap()["state"],
+        "active"
+    );
+}
+
 /// What the phases of [`outside_forwarding`] hand on.
 #[derive(serde::Serialize, serde::Deserialize)]
 struct ForwardState {
@@ -6220,14 +6517,15 @@ struct ForwardState {
 }
 
 /// Forwarding outside Kutup (docs/plans/mail-forwarding.md), in phases the
-/// mail gate drives (`KUTUP_LIVE_FORWARD_PHASE`): the confirmation link
-/// reaches the sink, whose token the gate hands back.
+/// mail gate drives (`KUTUP_LIVE_FORWARD_PHASE`): the verification code and
+/// the stop link reach the sink, and the gate hands both back.
 /// - `setup`: the first outside forwarding needs the next key list with
 ///   EMAIL_NO_ENCRYPT on every key; WKD stops offering the key; a list
 ///   clearing the flag is refused while it lasts.
-/// - `confirm`: the link confirms; mail from outside and readable Kutup
-///   mail go out (the gate checks the sink), end-to-end Kutup mail is
-///   skipped and counted.
+/// - `confirm`: nothing goes out before the code is entered; a wrong code
+///   counts, the right one makes it active (the stop link only reads and
+///   stops); mail from outside and readable Kutup mail go out (the gate
+///   checks the sink), end-to-end Kutup mail is skipped and counted.
 /// - `end`: deleting it leaves the address owing a list without the flag,
 ///   which settles it, and WKD offers the key again.
 #[test]
@@ -6477,6 +6775,7 @@ fn outside_forwarding() {
         }
         "confirm" => {
             let token = std::env::var("KUTUP_LIVE_FORWARD_TOKEN").unwrap();
+            let code = std::env::var("KUTUP_LIVE_FORWARD_CODE").unwrap();
             let smtp_address = std::env::var("KUTUP_LIVE_SMTP").unwrap();
             let state: ForwardState =
                 serde_json::from_slice(&std::fs::read(&state_path).unwrap()).unwrap();
@@ -6493,15 +6792,6 @@ fn outside_forwarding() {
             let found: Value = external("", &token).json().unwrap();
             assert_eq!(found["state"], "pending");
             assert_eq!(found["forwarderEmail"], json!(state.address));
-            assert_eq!(
-                external("/accept", &token).status(),
-                reqwest::StatusCode::NO_CONTENT
-            );
-            // The link is spent.
-            assert_eq!(
-                external("/accept", &token).status(),
-                reqwest::StatusCode::NOT_FOUND
-            );
             let token_of = |user: &str, password: &str| {
                 common::sign_in(&c, &base, user, password)["accessToken"]
                     .as_str()
@@ -6509,6 +6799,52 @@ fn outside_forwarding() {
                     .to_string()
             };
             let alice_token = token_of(&state.username, &state.password);
+            // Unverified: what arrives meanwhile isn't forwarded.
+            let early_tag = uuid::Uuid::new_v4().simple().to_string();
+            let early_id = format!("oearly-{early_tag}@sender.test");
+            let early = format!(
+                "From: writer@sender.test\r\nTo: {}\r\nSubject: before the code\r\n\
+Date: Mon, 19 Oct 2026 10:00:00 +0000\r\nMessage-ID: <{early_id}>\r\n\r\nearly\r\n",
+                state.address
+            );
+            assert_eq!(smtp_send(&smtp_address, &state.address, &early), (250, 250));
+            let deadline = Instant::now() + Duration::from_secs(90);
+            while !messages(&c, &base, &alice_token)
+                .iter()
+                .any(|m| m["messageId"] == early_id.as_str())
+            {
+                assert!(Instant::now() < deadline, "{early_id} never arrived");
+                std::thread::sleep(Duration::from_secs(1));
+            }
+            println!("FORWARD-NOT {early_id}");
+            // The forwarder enters the code: a wrong one counts, the right
+            // one makes it active.
+            let verify = |code: &str| {
+                let r = bearer(
+                    c.post(format!(
+                        "{base}/api/mail/forwardings/{}/verify",
+                        state.forwarding_id
+                    )),
+                    &alice_token,
+                )
+                .json(&json!({ "code": code }))
+                .send()
+                .unwrap();
+                let status = r.status().as_u16();
+                (status, r.json::<Value>().unwrap_or(Value::Null))
+            };
+            let wrong = if code == "000000" { "111111" } else { "000000" };
+            let (status, body) = verify(wrong);
+            assert_eq!((status, &body["code"]), (400, &json!("codeWrong")));
+            let (status, body) = verify(&code);
+            assert_eq!(status, 200, "{body}");
+            assert_eq!(
+                (&body["state"], &body["verified"]),
+                (&json!("active"), &json!(true))
+            );
+            // The stop link still reads it (it could stop it, never start it).
+            let found: Value = external("", &token).json().unwrap();
+            assert_eq!(found["state"], "active");
             let listed = |token: &str| -> Value {
                 bearer(c.get(format!("{base}/api/mail/forwardings")), token)
                     .send()
@@ -7020,6 +7356,16 @@ fn custom_domains() {
         .send()
         .unwrap();
     assert_eq!(r.status().as_u16(), 201, "{}", r.text().unwrap_or_default());
+    let forwarding_id = request["id"].as_str().unwrap().to_owned();
+    verify_forwarding(
+        &c,
+        &base,
+        &alice,
+        "info@customer.test",
+        &carol,
+        &carol_address,
+        &forwarding_id,
+    );
     accept_forwarding(&c, &base, &carol, &carol_address, &info.public_key, &terms);
     let direct = format!("{}@sender.test", uuid::Uuid::new_v4().simple());
     assert_eq!(
