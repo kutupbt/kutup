@@ -280,7 +280,7 @@ until docker compose logs --no-color stalwart-setup --since "$started" 2>&1 \
   sleep 3
 done
 docker compose run --rm --no-deps backend storage-check | tail -1
-[ -n "$hosts" ] || hosts="$(for a in account drive chat office editor maps photos contacts mail pass; do printf '%s.%s ' "$a" "$(env_get KUTUP_BASE_DOMAIN)"; done)"
+[ -n "$hosts" ] || hosts="$(for a in account drive chat office editor maps photos contacts mail pass calendar; do printf '%s.%s ' "$a" "$(env_get KUTUP_BASE_DOMAIN)"; done)"
 failed=0
 for h in $hosts; do
   code="$(curl -s -o /dev/null -w '%{http_code}' "https://$h/")"

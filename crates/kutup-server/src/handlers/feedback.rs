@@ -25,8 +25,9 @@ use crate::{ratelimit, AppState};
 /// What a person sends.
 pub(crate) const KINDS: [&str; 3] = ["bug", "feature", "other"];
 /// The apps whose sidebar has the form.
-const APPS: [&str; 10] = [
-    "account", "chat", "contacts", "drive", "mail", "maps", "office", "pass", "photos", "editor",
+const APPS: [&str; 11] = [
+    "account", "calendar", "chat", "contacts", "drive", "mail", "maps", "office", "pass", "photos",
+    "editor",
 ];
 const MAX_MESSAGE_CHARS: usize = 5000;
 /// What the form may add, each shown to the person before sending.

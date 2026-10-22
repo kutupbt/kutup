@@ -1,31 +1,6 @@
 import { FeedbackButton } from '@kutup/ui/components/feedback'
 import { feedbackServices } from '@kutup/session/feedback'
-import {
-  Archive,
-  BookUser,
-  AlarmClock,
-  Clock,
-  FilePen,
-  FileType,
-  HardDrive,
-  Images,
-  Inbox,
-  KeyRound,
-  Mail as MailIcon,
-  Mails,
-  Map as MapIcon,
-  MessagesSquare,
-  OctagonAlert,
-  PenSquare,
-  Search,
-  Send,
-  Settings,
-  SlidersHorizontal,
-  Star,
-  Trash2,
-  UserRound,
-  Users,
-} from 'lucide-react'
+import { AlarmClock, Archive, BookUser, CalendarDays, Clock, FilePen, FileType, HardDrive, Images, Inbox, KeyRound, Mail as MailIcon, Mails, Map as MapIcon, MessagesSquare, OctagonAlert, PenSquare, Search, Send, Settings, SlidersHorizontal, Star, Trash2, UserRound, Users } from 'lucide-react'
 import { lazy, Suspense, useEffect, useState, type ReactNode } from 'react'
 import { useTranslation } from 'react-i18next'
 import { Link, Outlet, useNavigate, useParams, useSearchParams } from 'react-router-dom'
@@ -238,6 +213,7 @@ export function MailShell() {
             { id: 'office', name: t('apps.office'), href: appUrl('office'), icon: <FileType /> },
             { id: 'chat', name: t('apps.chat'), href: appUrl('chat'), icon: <MessagesSquare /> },
             { id: 'mail', name: t('apps.mail'), href: appUrl('mail'), icon: <MailIcon /> },
+            { id: 'calendar', name: t('apps.calendar'), href: appUrl('calendar'), icon: <CalendarDays /> },
             { id: 'pass', name: t('apps.pass'), href: appUrl('pass'), icon: <KeyRound /> },
             { id: 'contacts', name: t('apps.contacts'), href: appUrl('contacts'), icon: <BookUser /> },
             { id: 'photos', name: t('apps.photos'), href: appUrl('photos'), icon: <Images /> },

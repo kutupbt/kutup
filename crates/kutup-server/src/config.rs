@@ -241,6 +241,8 @@ pub struct AppOrigins {
     pub mail: String,
     /// Kutup Pass, the password manager (docs/plans/pass.md).
     pub pass: String,
+    /// The Calendar app (docs/plans/calendar.md).
+    pub calendar: String,
 }
 
 impl AppOrigins {
@@ -258,6 +260,7 @@ impl AppOrigins {
             contacts: none(),
             mail: none(),
             pass: none(),
+            calendar: none(),
         }
     }
 
@@ -274,6 +277,7 @@ impl AppOrigins {
             ClientType::WebContacts => Some(&self.contacts),
             ClientType::WebMail => Some(&self.mail),
             ClientType::WebPass => Some(&self.pass),
+            ClientType::WebCalendar => Some(&self.calendar),
             ClientType::Cli => None,
         }
     }
@@ -322,6 +326,7 @@ pub fn resolve_app_origins(
         contacts: pick("contacts", "KUTUP_CONTACTS_URL", 5180)?,
         mail: pick("mail", "KUTUP_MAIL_URL", 5181)?,
         pass: pick("pass", "KUTUP_PASS_URL", 5182)?,
+        calendar: pick("calendar", "KUTUP_CALENDAR_URL", 5183)?,
     };
     let all = [
         &origins.account,
@@ -334,6 +339,7 @@ pub fn resolve_app_origins(
         &origins.contacts,
         &origins.mail,
         &origins.pass,
+        &origins.calendar,
     ];
     for (i, a) in all.iter().enumerate() {
         if all[i + 1..].contains(a) {
@@ -925,6 +931,7 @@ mod tests {
         assert_eq!(o.contacts, "https://contacts.example.org");
         assert_eq!(o.mail, "https://mail.example.org");
         assert_eq!(o.pass, "https://pass.example.org");
+        assert_eq!(o.calendar, "https://calendar.example.org");
     }
 
     #[test]
@@ -954,6 +961,7 @@ mod tests {
         assert_eq!(o.contacts, "http://contacts.localhost:5180");
         assert_eq!(o.mail, "http://mail.localhost:5181");
         assert_eq!(o.pass, "http://pass.localhost:5182");
+        assert_eq!(o.calendar, "http://calendar.localhost:5183");
     }
 
     #[test]
@@ -1245,6 +1253,7 @@ mod env_example {
         ("KUTUP_HTTP_PORT", "docker-compose.yml"),
         ("KUTUP_HTTPS_PORT", "docker-compose.yml"),
         ("CHAT_TURN_REALM", "docker-compose.yml"),
+        ("CHAT_TURN_DENIED_PEER_IPS", "docker-compose.yml"),
         ("CHAT_SFU_TURN_DOMAIN", "docker-compose.yml"),
         ("KUTUP_ACME_EMAIL", "docker-compose.acme.yml"),
         ("KUTUP_ACME_DOMAINS", "docker-compose.acme.yml"),
