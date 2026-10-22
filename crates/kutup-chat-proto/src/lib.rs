@@ -295,7 +295,7 @@ pub struct RegisterChatDeviceRequest {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub device_signature: Option<String>,
     /// The device's credential (Signal's per-device password): canonical
-    /// base64 of 32 random bytes; the server stores a salted hash and the
+    /// unpadded base64url of 32 random bytes, as in the header; the server stores a salted hash and the
     /// device sends it in [`CHAT_DEVICE_HEADER`]. Required from the
     /// account-identity cutover (docs/plans/account-identity-key.md).
     #[serde(default, skip_serializing_if = "Option::is_none")]

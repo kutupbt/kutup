@@ -53,6 +53,10 @@ pub const REREGISTRATION_DEVICE_ID: u32 = 1;
 /// A serialized libsignal `SignedPreKeyRecord` or `KyberPreKeyRecord` inside a
 /// sync (a Kyber1024 record is about 4.8 KiB).
 pub const MAX_PREKEY_RECORD_BYTES: usize = 16 * 1024;
+/// The largest provisioning cipher body the format allows; the site setting
+/// that caps the relay request stays at or below it. A provisioning message
+/// is under 1 KiB.
+pub const MAX_PROVISION_BODY_BYTES: usize = 64 * 1024;
 
 /// The `kutup://link` code a new device shows (QR code and copyable text):
 /// its provisioning socket's address and its ephemeral X25519 key, as
@@ -467,10 +471,10 @@ pub fn parse_device_header(value: &str) -> Result<(u32, [u8; DEVICE_CREDENTIAL_L
     Ok((device_id, credential.try_into().expect("length checked")))
 }
 
-/// The registration's credential field: canonical padded base64, as the
-/// request's other binary fields.
+/// The registration's credential field: canonical unpadded base64url, as in
+/// the header (one encoding for the credential everywhere).
 pub fn decode_device_credential(value: &str) -> Result<[u8; DEVICE_CREDENTIAL_LEN], String> {
-    let bytes = decode_canonical_base64_exact("credential", value, DEVICE_CREDENTIAL_LEN)?;
+    let bytes = decode_b64url_exact("credential", value, DEVICE_CREDENTIAL_LEN)?;
     Ok(bytes.try_into().expect("length checked"))
 }
 
@@ -517,12 +521,12 @@ impl ProvisionEnvelopeV1 {
     /// Version, IV, at least one cipher block, MAC.
     pub const MIN_BODY_LEN: usize = 1 + 16 + 16 + 32;
 
-    /// The shape only: the key's type, and a body whose ciphertext is whole
-    /// AES blocks. The site setting caps the encoded size; the MAC is the
-    /// recipient's.
+    /// The shape only: the key's type, and a body of at most
+    /// [`MAX_PROVISION_BODY_BYTES`] whose ciphertext is whole AES blocks. The
+    /// MAC is the recipient's.
     pub fn validate(&self) -> Result<(), String> {
         decode_identity_key("publicKey", &self.public_key)?;
-        let body = decode_canonical_base64_bounded("body", &self.body, usize::MAX)?;
+        let body = decode_canonical_base64_bounded("body", &self.body, MAX_PROVISION_BODY_BYTES)?;
         if body.len() < Self::MIN_BODY_LEN || (body.len() - 1 - 16 - 32) % 16 != 0 {
             return Err("provisioning body has an invalid length".into());
         }
@@ -665,6 +669,10 @@ impl Drop for ChatProvisionV1 {
 // ---------------------------------------------------------------------------
 
 /// One kept device's new keys in a distribution, signed by the new identity.
+/// [`AccountIdentityDistributionRequest::validate`] checks only that the
+/// signed prekey carries a signature; the server verifies both the signed
+/// prekey's and the last-resort Kyber key's signatures against `identityKey`
+/// with libsignal (`400 badSignature`), and the receiving devices do too.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -801,9 +809,13 @@ impl AccountIdentityDistributionRequest {
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ReregistrationV1 {
-    /// The next V2 manifest (sequence 1 when the account has none), listing
-    /// this device alone as [`REREGISTRATION_DEVICE_ID`] with the request's
-    /// identity and registration id.
+    /// The next V2 manifest, listing this device alone as
+    /// [`REREGISTRATION_DEVICE_ID`] with the request's identity and
+    /// registration id. It continues the account's chain as any manifest
+    /// does: sequence 1 with no `previousHash` when the account has no V2
+    /// manifest, otherwise the head's sequence + 1 linked to the head's hash
+    /// (a reset after every device was lost). The server checks it as it
+    /// checks a distribution's.
     pub manifest: AccountManifestV2,
 }
 

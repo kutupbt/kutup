@@ -226,11 +226,9 @@ fn device_header_round_trips_and_is_strict() {
     ] {
         assert!(parse_device_header(&bad).is_err(), "{bad}");
     }
-    assert_eq!(
-        decode_device_credential(&b64(&credential)).unwrap(),
-        credential
-    );
-    assert!(decode_device_credential(&b64(&[1; 31])).is_err());
+    assert_eq!(decode_device_credential(&encoded).unwrap(), credential);
+    assert!(decode_device_credential(&b64(&credential)).is_err());
+    assert!(decode_device_credential(&b64url_encode(&[1; 31])).is_err());
 }
 
 #[test]
@@ -279,6 +277,8 @@ fn provision_envelope_shape() {
     good(65 + 16 * 4).validate().unwrap();
     assert!(good(64).validate().is_err());
     assert!(good(66).validate().is_err());
+    good(MAX_PROVISION_BODY_BYTES - 15).validate().unwrap();
+    assert!(good(MAX_PROVISION_BODY_BYTES + 1).validate().is_err());
     let mut version = good(65);
     version.body = b64(&[2; 65]);
     assert!(version.validate().is_err());
@@ -455,7 +455,7 @@ fn registration(reregistration: Option<ReregistrationV1>) -> RegisterChatDeviceR
         one_time_kyber_pre_keys: Vec::new(),
         name: "Firefox".into(),
         device_signature: None,
-        credential: Some(b64(&[1; 32])),
+        credential: Some(b64url_encode(&[1; 32])),
         link_token: None,
         reregistration,
     }
