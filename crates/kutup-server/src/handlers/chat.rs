@@ -987,9 +987,16 @@ pub async fn get_manifest_history(
 pub async fn put_profile(
     State(state): State<AppState>,
     auth: AuthUser,
+    headers: HeaderMap,
     Json(profile): Json<PutChatProfileRequest>,
 ) -> AppResult<Response> {
     let user_id = trusted_uuid(&auth.user_id)?;
+    // A Chat device writes as itself, with its credential; the account app
+    // writes as the account.
+    if profile.source_device_id != kutup_chat_proto::ACCOUNT_PROFILE_SOURCE {
+        crate::handlers::chat_identity::authenticate_device(&state.pool, &headers, user_id, profile.source_device_id as i32)
+            .await?;
+    }
     let mut tx = state.pool.begin().await?;
     // The account's row is the lock every profile write takes.
     sqlx::query("SELECT 1 FROM users WHERE id = $1 FOR UPDATE")
@@ -1400,10 +1407,13 @@ pub async fn list_devices(State(state): State<AppState>, auth: AuthUser) -> AppR
 pub async fn rename_device(
     State(state): State<AppState>,
     auth: AuthUser,
+    headers: HeaderMap,
     Path(device_id): Path<i32>,
     Json(req): Json<RenameChatDeviceRequest>,
 ) -> AppResult<Response> {
     let user_id = trusted_uuid(&auth.user_id)?;
+    // A device of the account does it (Signal's linked-device management).
+    crate::handlers::chat_identity::authenticated_device(&state.pool, &headers, user_id).await?;
     let name = normalized_device_name(&req.name)?;
     let updated = sqlx::query(
         "UPDATE chat_devices SET name = $3
@@ -1439,9 +1449,12 @@ pub async fn rename_device(
 pub async fn revoke_device(
     State(state): State<AppState>,
     auth: AuthUser,
+    headers: HeaderMap,
     Path(device_id): Path<i32>,
 ) -> AppResult<Response> {
     let user_id = trusted_uuid(&auth.user_id)?;
+    // A device of the account does it (Signal's linked-device management).
+    crate::handlers::chat_identity::authenticated_device(&state.pool, &headers, user_id).await?;
     let mut tx = state.pool.begin().await?;
     // Serialize revocation with registration, manifest publication, bundle
     // snapshots, and sends that validate this account's exact device set.
@@ -1678,9 +1691,15 @@ pub async fn prekey_count(
 pub async fn get_user_bundles(
     State(state): State<AppState>,
     auth: AuthUser,
+    headers: HeaderMap,
     Path(account_id): Path<String>,
     Query(query): Query<BundleQuery>,
 ) -> AppResult<Response> {
+    // A linked-device fetch is made as that device.
+    if let Some(device_id) = query.sync_device_id {
+        crate::handlers::chat_identity::authenticate_device(&state.pool, &headers, trusted_uuid(&auth.user_id)?, device_id)
+            .await?;
+    }
     if !ratelimit::CHAT_KEYS_ACCOUNT.allow(&auth.user_id) {
         crate::telemetry::rate_limit_rejection("prekey_account");
         return Err(AppError::too_many_requests(
@@ -2002,11 +2021,14 @@ pub(crate) async fn load_user_bundles(
 pub async fn send_messages(
     State(state): State<AppState>,
     auth: AuthUser,
+    headers: HeaderMap,
     Path(account_id): Path<String>,
     Query(query): Query<AccountServerQuery>,
     Json(req): Json<SendMessagesRequest>,
 ) -> AppResult<Response> {
     let sender_id = trusted_uuid(&auth.user_id)?;
+    crate::handlers::chat_identity::authenticate_device(&state.pool, &headers, sender_id, req.sender_device_id as i32)
+        .await?;
     validate_send_request(&req, false, None)?;
     let recipient_id = match named_account(&state, &account_id, query.server.as_deref()).await? {
         NamedAccount::Local(user_id) => user_id,
@@ -2606,9 +2628,12 @@ pub(crate) async fn push_sealed(state: &AppState, stored: Vec<(Uuid, i32, Delive
 pub async fn sync_messages(
     State(state): State<AppState>,
     auth: AuthUser,
+    headers: HeaderMap,
     Json(req): Json<SendMessagesRequest>,
 ) -> AppResult<Response> {
     let sender_id = trusted_uuid(&auth.user_id)?;
+    crate::handlers::chat_identity::authenticate_device(&state.pool, &headers, sender_id, req.sender_device_id as i32)
+        .await?;
     let excluded_device = req.sender_device_id as i32;
     validate_send_request(&req, true, Some(excluded_device))?;
     deliver_messages(&state, sender_id, sender_id, req, Some(excluded_device)).await

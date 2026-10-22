@@ -272,6 +272,10 @@ pub async fn distribute_identity(
     use axum::Json;
     let user_id = crate::handlers::trusted_uuid(&auth.user_id)?;
     let sender = authenticated_device(&state.pool, &headers, user_id).await?;
+    if !crate::ratelimit::CHAT_IDENTITY_DISTRIBUTIONS.allow(&auth.user_id) {
+        return Err(AppError::too_many_requests("too many identity distributions")
+            .with_details(serde_json::json!({ "code": "rateLimited" })));
+    }
     match request.validate(sender as u32) {
         Ok(()) => {}
         Err(DistributionError::Invalid(message)) => return Err(AppError::bad_request(message)),
