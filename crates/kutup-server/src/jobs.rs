@@ -1426,10 +1426,25 @@ mod tests {
             .execute(&pool)
             .await
             .unwrap();
-        assert_eq!(
-            sweep_chat_mailboxes_before(&pool, cutoff).await.unwrap(),
-            (0, 0)
-        );
+        // The sweep is server-wide (other live tests leave mail behind):
+        // what matters is that rows at the cutoff stay and older ones go.
+        let alive = |pool: sqlx::PgPool| async move {
+            let direct: bool =
+                sqlx::query_scalar("SELECT EXISTS (SELECT 1 FROM chat_mailbox WHERE id = $1)")
+                    .bind(direct_id)
+                    .fetch_one(&pool)
+                    .await
+                    .unwrap();
+            let mls: bool =
+                sqlx::query_scalar("SELECT EXISTS (SELECT 1 FROM chat_mls_mailbox WHERE id = $1)")
+                    .bind(mls_id)
+                    .fetch_one(&pool)
+                    .await
+                    .unwrap();
+            (direct, mls)
+        };
+        sweep_chat_mailboxes_before(&pool, cutoff).await.unwrap();
+        assert_eq!(alive(pool.clone()).await, (true, true));
         sqlx::query("UPDATE chat_mailbox SET server_ts=$1 WHERE id=$2")
             .bind(cutoff - time::Duration::SECOND)
             .bind(direct_id)
@@ -1442,10 +1457,9 @@ mod tests {
             .execute(&pool)
             .await
             .unwrap();
-        assert_eq!(
-            sweep_chat_mailboxes_before(&pool, cutoff).await.unwrap(),
-            (1, 1)
-        );
+        let (direct, mls) = sweep_chat_mailboxes_before(&pool, cutoff).await.unwrap();
+        assert!(direct >= 1 && mls >= 1, "{direct} {mls}");
+        assert_eq!(alive(pool.clone()).await, (false, false));
         pool.close().await;
     }
 
