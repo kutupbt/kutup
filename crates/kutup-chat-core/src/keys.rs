@@ -37,10 +37,10 @@ pub(crate) enum NewDevice<'a> {
     },
     /// A re-registration (also an account's first device): a new identity,
     /// and the account's next manifest listing this device alone, signed by
-    /// `manifest` from the new identity key (canonical base64) and the
-    /// registration id.
+    /// `manifest` from the new identity (which also signs its binding to the
+    /// authority) and the registration id.
     Reregistration {
-        manifest: &'a dyn Fn(&str, u32) -> crate::Result<AccountManifestV2>,
+        manifest: &'a dyn Fn(&IdentityKeyPair, u32) -> crate::Result<AccountManifestV2>,
     },
     /// Keys alone, with no registration request: a new identity, or the one
     /// given (another device of the same account). For tests and tools that
@@ -216,7 +216,7 @@ pub(crate) fn generate<R: Rng + CryptoRng>(
     let registration_kind = match (link_token, manifest) {
         (Some(link_token), None) => Some(DeviceRegistrationV1::Link { link_token }),
         (None, Some(manifest)) => Some(DeviceRegistrationV1::Reregistration {
-            manifest: Box::new(manifest(&identity_key, registration_id)?),
+            manifest: Box::new(manifest(&identity_pair, registration_id)?),
         }),
         _ => None,
     };

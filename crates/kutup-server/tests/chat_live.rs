@@ -1111,6 +1111,7 @@ fn chat_v1_contract() {
     ] {
         let mut manifest = chat_a.next_manifest(&[&dev_a]);
         manifest.account = wrong.clone();
+        chat_a.bind(&mut manifest);
         chat_a.sign(&mut manifest);
         let refused = chat_a.post_manifest(&c, &base, &dev_a, &manifest);
         assert_eq!(refused.status(), StatusCode::CONFLICT, "{wrong}");

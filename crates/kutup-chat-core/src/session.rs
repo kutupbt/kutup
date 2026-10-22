@@ -543,6 +543,13 @@ impl Session {
         self.store.local_identity_key_pair()
     }
 
+    /// This device's account identity bound to `authority` (the manifest's
+    /// `identityBinding`), signed with the identity key it holds; the key
+    /// itself never leaves the session.
+    pub fn identity_binding(&self, authority: &crate::AccountAuthority) -> Result<String> {
+        authority.identity_binding(self.account_ref(), &self.local_identity_key_pair())
+    }
+
     /// The account's identity key, as this device holds it and the manifest
     /// lists it.
     pub fn account_identity_key(&self) -> String {

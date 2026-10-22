@@ -409,6 +409,61 @@ fn a_distribution_gives_the_kept_devices_a_new_identity() {
     assert!(r.status().is_success(), "ack: {}", r.status());
 }
 
+/// A manifest listing an identity its identity key didn't bind to this
+/// authority (another identity's binding, or a real binding copied under
+/// another account) is refused, at re-registration and at publication.
+#[test]
+fn a_manifest_without_its_identitys_binding_is_refused() {
+    let Some(base) = live() else { return };
+    let c = common::client();
+    let mut ada = account(&c, &base);
+    let (registration_id, credential) = (4242, [7u8; 32]);
+    let device = ChatDevice {
+        id: kutup_chat_proto::REREGISTRATION_DEVICE_ID,
+        registration_id,
+        credential,
+    };
+    let mut forged = ada.next_manifest(&[&device]);
+    let other = IdentityKeyPair::generate(&mut rand09::rng());
+    forged.identity_binding = STANDARD.encode(
+        other
+            .private_key()
+            .calculate_signature(
+                &forged.identity_binding_bytes().unwrap(),
+                &mut rand09::rng(),
+            )
+            .unwrap(),
+    );
+    ada.sign(&mut forged);
+    let body = ada.registration(
+        registration_id,
+        &credential,
+        DeviceRegistrationV1::Reregistration {
+            manifest: Box::new(forged),
+        },
+    );
+    let (status, answer) = code(ada.post_registration(&c, &base, &body));
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{answer}");
+    assert_eq!(answer["code"], "badSignature");
+
+    // Registered properly: a binding the identity made for another account
+    // doesn't hold here, and the account's own one does.
+    let first = ada.reregister(&c, &base);
+    let bob = account(&c, &base);
+    let mut next = ada.next_manifest(&[&first]);
+    let mut elsewhere = next.clone();
+    elsewhere.account = bob.account.clone();
+    ada.bind(&mut elsewhere);
+    next.identity_binding = elsewhere.identity_binding;
+    ada.sign(&mut next);
+    let (status, answer) = code(ada.post_manifest(&c, &base, &first, &next));
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{answer}");
+    assert_eq!(answer["code"], "badSignature");
+    let next = ada.next_manifest(&[&first]);
+    let (status, answer) = code(ada.post_manifest(&c, &base, &first, &next));
+    assert_eq!(status, StatusCode::OK, "{answer}");
+}
+
 #[test]
 fn a_reregistration_drops_every_other_device() {
     let Some(base) = live() else { return };

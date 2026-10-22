@@ -42,6 +42,13 @@ fn in_memory<R: Rng + CryptoRng>(user: &str, device_id: u32, rng: &mut R) -> Ses
         user,
         serve_bundle(session.published_keys().unwrap(), device_id),
     );
+    let binding = session.identity_binding(&authority_of(user)).unwrap();
+    BINDINGS.with(|bindings| {
+        bindings
+            .borrow_mut()
+            .entry(user.to_string())
+            .or_insert(binding);
+    });
     session
 }
 
@@ -49,6 +56,13 @@ thread_local! {
     /// Every sender device a test made, by account: the mock server publishes
     /// them in each account's signed manifest, as the real one would.
     static DEVICES: RefCell<std::collections::BTreeMap<String, Vec<DevicePreKeyBundle>>> =
+        const { RefCell::new(std::collections::BTreeMap::new()) };
+}
+
+thread_local! {
+    /// Each test account's identity bound to its authority (`authority_of`),
+    /// signed by the device that made the identity.
+    static BINDINGS: RefCell<std::collections::BTreeMap<String, String>> =
         const { RefCell::new(std::collections::BTreeMap::new()) };
 }
 
@@ -78,12 +92,18 @@ fn published(user: &str) -> AccountPreKeyBundlesResponse {
         .first()
         .map(|bundle| bundle.identity_key.clone())
         .expect("a test publishes a device before its bundles are fetched");
+    // An account no test device made the identity of (the server's forgery):
+    // a binding no identity signed, which a client refuses.
+    let binding = BINDINGS
+        .with(|bindings| bindings.borrow().get(user).cloned())
+        .unwrap_or_else(|| base64::engine::general_purpose::STANDARD.encode([0u8; 64]));
     let manifest = authority_of(user)
-        .sign_manifest(
+        .sign_manifest_with_binding(
             user.parse().unwrap(),
             1,
             None,
             identity_key.clone(),
+            binding,
             devices
                 .iter()
                 .map(|bundle| kutup_chat_proto::AccountManifestDeviceV2 {
@@ -1059,12 +1079,17 @@ const ALICE: &str = "aci:00000000-0000-4000-8000-2bd806c97f0e@example.test";
 const BOB: &str = "aci:00000000-0000-4000-8000-81b637d8fcd2@example.test";
 
 /// Bob's registered device in a reopenable store, and its bundle.
-fn bob_device<R: Rng + CryptoRng>(rng: &mut R) -> (TempDb, DevicePreKeyBundle) {
+/// Bob's device in a database of its own, its bundle, and its identity's
+/// binding to Bob's own authority (`[42; 32]`).
+fn bob_device<R: Rng + CryptoRng>(rng: &mut R) -> (TempDb, DevicePreKeyBundle, String) {
     let db = TempDb::new();
     let mut bob = block_on(Session::generate(db.open(), BOB, 1, 10, rng)).unwrap();
     let bundle = serve_bundle(bob.published_keys().unwrap(), 1);
+    let binding = bob
+        .identity_binding(&AccountAuthority::derive(&[42u8; 32]).unwrap())
+        .unwrap();
     block_on(bob.complete_registration(1)).unwrap();
-    (db, bundle)
+    (db, bundle, binding)
 }
 
 /// Messages to Bob in `sender`'s name from devices nobody published for
@@ -1108,7 +1133,7 @@ fn forged_from<R: Rng + CryptoRng>(
 #[test]
 fn an_identified_message_is_taken_only_from_a_device_of_the_senders_manifest() {
     let mut rng = test_rng();
-    let (bob_db, bundle) = bob_device(&mut rng);
+    let (bob_db, bundle, _) = bob_device(&mut rng);
     // Alice's real device 1 is in her manifest.
     let _alice = in_memory(ALICE, 1, &mut rng);
     let server = Rc::new(Mailbox::default());
@@ -1130,7 +1155,7 @@ fn an_identified_message_is_taken_only_from_a_device_of_the_senders_manifest() {
 #[test]
 fn an_own_account_message_is_taken_only_from_a_device_of_the_own_verified_manifest() {
     let mut rng = test_rng();
-    let (bob_db, bundle) = bob_device(&mut rng);
+    let (bob_db, bundle, bob_binding) = bob_device(&mut rng);
     let server = Rc::new(Mailbox::default());
     let (forged, devices) = forged_from(BOB, &bundle, &mut rng);
     // The server lists Bob's device and a forged one in a manifest under an
@@ -1150,11 +1175,12 @@ fn an_own_account_message_is_taken_only_from_a_device_of_the_own_verified_manife
     // published it): his identity, device 1 only.
     let authority = AccountAuthority::derive(&[42u8; 32]).unwrap();
     let first = authority
-        .sign_manifest(
+        .sign_manifest_with_binding(
             BOB.parse().unwrap(),
             1,
             None,
             bundle.identity_key.clone(),
+            bob_binding.clone(),
             vec![kutup_chat_proto::AccountManifestDeviceV2 {
                 device_id: 1,
                 direct_chat_suite: kutup_chat_proto::DirectChatSuiteId::PqxdhTripleRatchetV1,

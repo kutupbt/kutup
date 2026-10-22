@@ -124,6 +124,11 @@ impl MlsRepository {
         manifest.verify().map_err(|error| {
             AppError::internal(format!("stored manifest failed verification: {error}"))
         })?;
+        if !crate::handlers::chat_identity::identity_binding_holds(&manifest) {
+            return Err(AppError::internal(
+                "stored manifest has an invalid identity binding",
+            ));
+        }
         let declared = manifest
             .devices
             .iter()

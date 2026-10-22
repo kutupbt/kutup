@@ -193,12 +193,34 @@ pub(crate) fn verify_prekey_signatures(
     Ok(())
 }
 
-/// The manifest's own checks and an `issuedAt` not from the future.
+/// Whether the manifest's account identity key signed its identity binding
+/// (this authority, incarnation and account). The authority's signature
+/// alone would let anyone list someone's identity under an authority of
+/// their own.
+pub(crate) fn identity_binding_holds(manifest: &AccountManifestV2) -> bool {
+    let Ok(bytes) = manifest.identity_binding_bytes() else {
+        return false;
+    };
+    let (Ok(key), Ok(signature)) = (
+        STANDARD.decode(&manifest.identity_key),
+        STANDARD.decode(&manifest.identity_binding),
+    ) else {
+        return false;
+    };
+    libsignal_protocol::IdentityKey::decode(&key)
+        .is_ok_and(|identity| identity.public_key().verify_signature(&bytes, &signature))
+}
+
+/// The manifest's own checks, its identity binding and an `issuedAt` not
+/// from the future.
 pub(crate) fn validate_manifest_v2(manifest: &AccountManifestV2) -> AppResult<()> {
     if manifest.sequence > i64::MAX as u64 {
         return Err(AppError::bad_request("manifest sequence is too large"));
     }
     manifest.verify().map_err(AppError::bad_request)?;
+    if !identity_binding_holds(manifest) {
+        return Err(bad_signature("the identity binding"));
+    }
     let issued_at = OffsetDateTime::parse(&manifest.issued_at, &Rfc3339)
         .map_err(|_| AppError::bad_request("manifest issuedAt must be RFC 3339"))?;
     if issued_at > OffsetDateTime::now_utc() + time::Duration::minutes(10) {

@@ -910,6 +910,11 @@ pub(crate) async fn load_account_manifest(
     manifest
         .verify()
         .map_err(|error| AppError::internal(format!("stored chat manifest is invalid: {error}")))?;
+    if !crate::handlers::chat_identity::identity_binding_holds(&manifest) {
+        return Err(AppError::internal(
+            "stored chat manifest has an invalid identity binding",
+        ));
+    }
     Ok(manifest)
 }
 

@@ -37,16 +37,16 @@ mod security_policy;
 
 pub use account_identity::{
     decode_device_credential, decode_identity_key, decode_link_token, decode_provisioning_address,
-    format_device_header, parse_device_header, repeated_use_keys_digest, AccountIdentityBody,
-    AccountIdentityDistributionRequest, AccountManifestDeviceV2, AccountManifestHistoryPageV2,
-    AccountManifestPublicationV2, AccountManifestV2, AccountPreKeyBundlesResponse,
-    ChatKeysCheckRequest, ChatLinkTokenResponse, ChatProvisionV1, DevicePreKeyBundleV2,
-    DeviceRegistrationV1, DistributedDeviceKeysV1, DistributionError, ProvisionEnvelopeV1,
-    ProvisioningLinkCodeV1, ProvisioningRelayRequest, ProvisioningSocketMessage,
-    RegisterChatDeviceRequestV2, ACCOUNT_MANIFEST_V2_VERSION, CHAT_DEVICE_HEADER,
-    DEVICE_CREDENTIAL_LEN, LINK_TOKEN_LEN, LINK_URI_PREFIX, MAX_PREKEY_RECORD_BYTES,
-    MAX_PROVISION_BODY_BYTES, PROVISIONING_ADDRESS_LEN, PROVISIONING_VERSION,
-    REREGISTRATION_DEVICE_ID,
+    format_device_header, identity_binding_bytes, parse_device_header, repeated_use_keys_digest,
+    AccountIdentityBody, AccountIdentityDistributionRequest, AccountManifestDeviceV2,
+    AccountManifestHistoryPageV2, AccountManifestPublicationV2, AccountManifestV2,
+    AccountPreKeyBundlesResponse, ChatKeysCheckRequest, ChatLinkTokenResponse, ChatProvisionV1,
+    DevicePreKeyBundleV2, DeviceRegistrationV1, DistributedDeviceKeysV1, DistributionError,
+    ProvisionEnvelopeV1, ProvisioningLinkCodeV1, ProvisioningRelayRequest,
+    ProvisioningSocketMessage, RegisterChatDeviceRequestV2, ACCOUNT_MANIFEST_V2_VERSION,
+    CHAT_DEVICE_HEADER, DEVICE_CREDENTIAL_LEN, IDENTITY_BINDING_LEN, LINK_TOKEN_LEN,
+    LINK_URI_PREFIX, MAX_PREKEY_RECORD_BYTES, MAX_PROVISION_BODY_BYTES, PROVISIONING_ADDRESS_LEN,
+    PROVISIONING_VERSION, REREGISTRATION_DEVICE_ID,
 };
 pub use backup::{
     chat_backup_media_reference_set_digest, AppendChatBackupSegmentRequestV1,

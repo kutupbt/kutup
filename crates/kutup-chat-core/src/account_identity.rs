@@ -210,6 +210,7 @@ pub(crate) fn verify_own_manifest(
     authority: &AccountAuthority,
 ) -> Result<()> {
     manifest.verify().map_err(ChatError::Trust)?;
+    crate::manifest::verify_identity_binding(manifest)?;
     if manifest.account != *account {
         return Err(ChatError::Trust(
             "the account manifest belongs to another account".into(),
@@ -280,25 +281,26 @@ impl Engine {
             ),
         };
         let issued_at = issued_at.into();
-        let sign = |identity_key: &str, registration_id: u32| -> Result<AccountManifestV2> {
-            let manifest = authority.sign_manifest(
-                account.clone(),
-                sequence,
-                previous_hash.clone(),
-                identity_key.to_string(),
-                vec![AccountManifestDeviceV2 {
-                    device_id: REREGISTRATION_DEVICE_ID,
-                    direct_chat_suite: DirectChatSuiteId::PqxdhTripleRatchetV1,
-                    registration_id,
-                    mls: None,
-                }],
-                issued_at.clone(),
-            )?;
-            manifest
-                .verify_successor(head.as_ref())
-                .map_err(ChatError::Trust)?;
-            Ok(manifest)
-        };
+        let sign =
+            |identity: &IdentityKeyPair, registration_id: u32| -> Result<AccountManifestV2> {
+                let manifest = authority.sign_manifest(
+                    account.clone(),
+                    sequence,
+                    previous_hash.clone(),
+                    identity,
+                    vec![AccountManifestDeviceV2 {
+                        device_id: REREGISTRATION_DEVICE_ID,
+                        direct_chat_suite: DirectChatSuiteId::PqxdhTripleRatchetV1,
+                        registration_id,
+                        mls: None,
+                    }],
+                    issued_at.clone(),
+                )?;
+                manifest
+                    .verify_successor(head.as_ref())
+                    .map_err(ChatError::Trust)?;
+                Ok(manifest)
+            };
         let session = Session::generate_device(
             db,
             user,
@@ -545,7 +547,7 @@ impl Engine {
                     .checked_add(1)
                     .ok_or_else(|| ChatError::Trust("manifest sequence is exhausted".into()))?,
                 Some(head.manifest_hash().map_err(ChatError::Trust)?),
-                identity_key.clone(),
+                &identity,
                 listed,
                 issued_at.clone(),
             )?;
@@ -1048,7 +1050,8 @@ mod tests {
         let text = |from: &mut crate::group_harness_tests::Person, to: &str, body: &str| {
             let send_id = uuid::Uuid::new_v4().to_string();
             let seq = block_on(from.engine.session().next_sent_seq()).unwrap();
-            let content = kutup_chat_proto::ChatContent::text_with_id(&send_id, ISSUED_AT, seq, body);
+            let content =
+                kutup_chat_proto::ChatContent::text_with_id(&send_id, ISSUED_AT, seq, body);
             block_on(from.engine.send(&send_id, to, &content, &mut rng())).unwrap();
             send_id
         };
@@ -1063,13 +1066,24 @@ mod tests {
         alice2.receive();
 
         let removed = alice2.device();
-        block_on(alice.engine.reset_identity(&[removed], ISSUED_AT, &mut rng())).unwrap();
+        block_on(
+            alice
+                .engine
+                .reset_identity(&[removed], ISSUED_AT, &mut rng()),
+        )
+        .unwrap();
         let after = text(&mut alice, &bob_account, "after reset");
         let got = bob.receive();
-        assert!(got.messages.iter().any(|m| m.content.message_id == after), "{got:?}");
+        assert!(
+            got.messages.iter().any(|m| m.content.message_id == after),
+            "{got:?}"
+        );
         let reply = text(&mut bob, &alice_account, "reply after reset");
         let got = alice.receive();
-        assert!(got.messages.iter().any(|m| m.content.message_id == reply), "{got:?}");
+        assert!(
+            got.messages.iter().any(|m| m.content.message_id == reply),
+            "{got:?}"
+        );
     }
 
     /// A sync the account moved past (a second reset before the device read

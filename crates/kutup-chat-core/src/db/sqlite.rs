@@ -1802,7 +1802,6 @@ mod tests {
 
     #[test]
     fn quarantined_replacement_and_both_incarnation_histories_round_trip_atomically() {
-        use base64::Engine as _;
         use futures_executor::block_on;
         use kutup_chat_proto::{AccountManifestDeviceV2, AccountManifestV2, DirectChatSuiteId};
 
@@ -1815,11 +1814,14 @@ mod tests {
                         .unwrap(),
                     1,
                     None,
-                    base64::engine::general_purpose::STANDARD.encode({
-                        let mut key = [seed; 33];
-                        key[0] = 0x05;
-                        key
-                    }),
+                    &{
+                        let private =
+                            libsignal_protocol::PrivateKey::deserialize(&[seed; 32]).unwrap();
+                        libsignal_protocol::IdentityKeyPair::new(
+                            libsignal_protocol::IdentityKey::new(private.public_key().unwrap()),
+                            private,
+                        )
+                    },
                     vec![AccountManifestDeviceV2 {
                         device_id: 1,
                         direct_chat_suite: DirectChatSuiteId::PqxdhTripleRatchetV1,

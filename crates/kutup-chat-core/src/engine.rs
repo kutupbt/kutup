@@ -1185,6 +1185,7 @@ impl Engine {
             }
             Some(current) => {
                 current.verify().map_err(ChatError::Trust)?;
+                crate::manifest::verify_identity_binding(&current)?;
                 if current.account != canonical_self {
                     return Err(ChatError::Trust(
                         "stored account manifest belongs to another account".into(),
@@ -1224,11 +1225,12 @@ impl Engine {
                         let next_sequence = current.sequence.checked_add(1).ok_or_else(|| {
                             ChatError::Trust("manifest sequence is exhausted".into())
                         })?;
-                        let next = authority.sign_manifest(
+                        let next = authority.sign_manifest_with_binding(
                             canonical_self.clone(),
                             next_sequence,
                             Some(current.manifest_hash().map_err(ChatError::Trust)?),
                             current.identity_key.clone(),
+                            current.identity_binding.clone(),
                             devices,
                             issued_at,
                         )?;
@@ -1280,6 +1282,7 @@ impl Engine {
             .await?
             .ok_or_else(|| ChatError::Trust("account manifest is unavailable".into()))?;
         current.verify().map_err(ChatError::Trust)?;
+        crate::manifest::verify_identity_binding(&current)?;
         let canonical_self = self.self_account()?;
         if current.account != canonical_self {
             return Err(ChatError::Trust(
@@ -1307,11 +1310,12 @@ impl Engine {
             .sequence
             .checked_add(1)
             .ok_or_else(|| ChatError::Trust("manifest sequence is exhausted".into()))?;
-        let candidate = authority.sign_manifest(
+        let candidate = authority.sign_manifest_with_binding(
             canonical_self.clone(),
             next_sequence,
             Some(current.manifest_hash().map_err(ChatError::Trust)?),
             current.identity_key.clone(),
+            current.identity_binding.clone(),
             devices,
             issued_at,
         )?;

@@ -234,7 +234,11 @@ pub async fn fetch_remote_manifest(
         .map_err(|_| AppError::new(StatusCode::BAD_GATEWAY, "invalid remote manifest response"))?;
     manifest
         .verify()
-        .map_err(|_| AppError::new(StatusCode::BAD_GATEWAY, "invalid remote manifest response"))?;
+        .ok()
+        .filter(|()| crate::handlers::chat_identity::identity_binding_holds(&manifest))
+        .ok_or_else(|| {
+            AppError::new(StatusCode::BAD_GATEWAY, "invalid remote manifest response")
+        })?;
     if manifest.account != *account {
         return Err(AppError::new(
             StatusCode::BAD_GATEWAY,

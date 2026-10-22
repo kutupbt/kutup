@@ -234,14 +234,67 @@ impl AccountAuthority {
         }
     }
 
-    /// Sign the account's manifest: its libsignal identity key
-    /// (`identity_key`, canonical base64 of the 33-byte key) and its devices.
+    /// The account identity's binding to this authority (`identityBinding`):
+    /// `identity` signs the authority's key id, its incarnation, the account
+    /// and the identity key itself.
+    pub fn identity_binding(
+        &self,
+        account: &AccountRef,
+        identity: &libsignal_protocol::IdentityKeyPair,
+    ) -> Result<String> {
+        use rand::TryRngCore as _;
+        let identity_key = STANDARD.encode(identity.identity_key().serialize());
+        let bytes = kutup_chat_proto::identity_binding_bytes(
+            &self.key_id(),
+            &self.incarnation_id(),
+            account,
+            &identity_key,
+        )
+        .map_err(ChatError::Invalid)?;
+        let signature = identity
+            .private_key()
+            .calculate_signature(&bytes, &mut rand::rngs::OsRng.unwrap_err())
+            .map_err(|error| ChatError::Protocol(error.to_string()))?;
+        Ok(STANDARD.encode(signature))
+    }
+
+    /// Sign the account's manifest for `identity`, the account's libsignal
+    /// identity, and its devices, with the identity's binding to this
+    /// authority.
     pub fn sign_manifest(
         &self,
         account: AccountRef,
         sequence: u64,
         previous_hash: Option<String>,
+        identity: &libsignal_protocol::IdentityKeyPair,
+        devices: Vec<AccountManifestDeviceV2>,
+        issued_at: impl Into<String>,
+    ) -> Result<AccountManifestV2> {
+        let identity_binding = self.identity_binding(&account, identity)?;
+        self.sign_manifest_with_binding(
+            account,
+            sequence,
+            previous_hash,
+            STANDARD.encode(identity.identity_key().serialize()),
+            identity_binding,
+            devices,
+            issued_at,
+        )
+    }
+
+    /// Sign the account's manifest with an identity binding made before (the
+    /// head's, for the same identity: it doesn't depend on the devices).
+    /// Only the authority's signature is checked here: the caller checked the
+    /// binding it carries over (`verify_identity_binding`), and every reader
+    /// checks it again.
+    #[allow(clippy::too_many_arguments)]
+    pub fn sign_manifest_with_binding(
+        &self,
+        account: AccountRef,
+        sequence: u64,
+        previous_hash: Option<String>,
         identity_key: String,
+        identity_binding: String,
         mut devices: Vec<AccountManifestDeviceV2>,
         issued_at: impl Into<String>,
     ) -> Result<AccountManifestV2> {
@@ -253,6 +306,7 @@ impl AccountAuthority {
             sequence,
             previous_hash,
             identity_key,
+            identity_binding,
             drive: self.drive_keys(),
             devices,
             issued_at: issued_at.into(),
@@ -267,13 +321,37 @@ impl AccountAuthority {
                 .sign(&bytes)
                 .to_bytes(),
         );
-        manifest.verify().map_err(ChatError::Invalid)?;
+        manifest.verify().map_err(ChatError::Protocol)?;
         Ok(manifest)
     }
 }
 
+/// The manifest's authority signature and its identity binding: the account
+/// identity key signed this authority, incarnation and account. A server
+/// listing someone's identity under an authority of its own has no such
+/// signature.
 pub fn verify_manifest(manifest: &AccountManifestV2) -> Result<()> {
-    manifest.verify().map_err(ChatError::Protocol)
+    manifest.verify().map_err(ChatError::Protocol)?;
+    verify_identity_binding(manifest).map_err(|error| ChatError::Protocol(error.to_string()))
+}
+
+/// The identity binding alone (libsignal's XEdDSA check), as a trust error.
+pub(crate) fn verify_identity_binding(manifest: &AccountManifestV2) -> Result<()> {
+    let refused = || ChatError::Trust("the manifest's identity binding is invalid".into());
+    let bytes = manifest.identity_binding_bytes().map_err(|_| refused())?;
+    let key = STANDARD
+        .decode(&manifest.identity_key)
+        .ok()
+        .and_then(|bytes| libsignal_protocol::IdentityKey::decode(&bytes).ok())
+        .ok_or_else(refused)?;
+    let signature = STANDARD
+        .decode(&manifest.identity_binding)
+        .map_err(|_| refused())?;
+    if key.public_key().verify_signature(&bytes, &signature) {
+        Ok(())
+    } else {
+        Err(refused())
+    }
 }
 
 /// Verify one bundle response before any libsignal session mutation.
@@ -330,6 +408,7 @@ fn verify_manifest_trust(
     prior: Option<&ManifestTrust>,
 ) -> Result<ManifestTrust> {
     manifest.verify().map_err(ChatError::Trust)?;
+    verify_identity_binding(manifest)?;
     match_expected_account(expected_peer, &manifest.account)?;
     let manifest_hash = manifest.manifest_hash().map_err(ChatError::Trust)?;
     let (trust, continuity_gap) = match prior {
@@ -566,12 +645,29 @@ mod tests {
     const ALICE: &str = "aci:00000000-0000-4000-8000-2bd806c97f0e@alpha.example";
     const BOB: &str = "aci:00000000-0000-4000-8000-81b637d8fcd2@beta.example";
 
-    fn key(hex_key: &str) -> libsignal_protocol::IdentityKey {
+    /// libsignal's fingerprint vector keys (public only).
+    fn vector_key(hex_key: &str) -> libsignal_protocol::IdentityKey {
         libsignal_protocol::IdentityKey::decode(&hex::decode(hex_key).unwrap()).unwrap()
     }
 
-    fn key_b64(hex_key: &str) -> String {
-        STANDARD.encode(hex::decode(hex_key).unwrap())
+    /// A deterministic identity key pair per label, for manifests that need
+    /// the identity's binding signature.
+    fn pair(label: &str) -> libsignal_protocol::IdentityKeyPair {
+        use sha2::{Digest as _, Sha256};
+        let private =
+            libsignal_protocol::PrivateKey::deserialize(&Sha256::digest(label.as_bytes())).unwrap();
+        libsignal_protocol::IdentityKeyPair::new(
+            libsignal_protocol::IdentityKey::new(private.public_key().unwrap()),
+            private,
+        )
+    }
+
+    fn key(label: &str) -> libsignal_protocol::IdentityKey {
+        *pair(label).identity_key()
+    }
+
+    fn key_b64(label: &str) -> String {
+        STANDARD.encode(key(label).serialize())
     }
 
     fn device(device_id: u32, registration_id: u32) -> AccountManifestDeviceV2 {
@@ -589,16 +685,16 @@ mod tests {
     fn the_fingerprint_is_libsignals_v2_vector() {
         let (alice_digits, alice_scannable) = fingerprint(
             b"+14152222222",
-            &key(ALICE_IDENTITY),
+            &vector_key(ALICE_IDENTITY),
             b"+14153333333",
-            &key(BOB_IDENTITY),
+            &vector_key(BOB_IDENTITY),
         )
         .unwrap();
         let (bob_digits, bob_scannable) = fingerprint(
             b"+14153333333",
-            &key(BOB_IDENTITY),
+            &vector_key(BOB_IDENTITY),
             b"+14152222222",
-            &key(ALICE_IDENTITY),
+            &vector_key(ALICE_IDENTITY),
         )
         .unwrap();
         let expected = "300354477692869396892869876765458257569162576843440918079131"
@@ -631,7 +727,7 @@ mod tests {
                     peer.parse().unwrap(),
                     sequence,
                     previous,
-                    key_b64(BOB_IDENTITY),
+                    &pair(BOB_IDENTITY),
                     vec![device(1, 7)],
                     "2026-10-18T00:00:00Z",
                 )
@@ -673,7 +769,7 @@ mod tests {
                 account.parse().unwrap(),
                 1,
                 None,
-                key_b64(identity),
+                &pair(identity),
                 vec![device(1, 7)],
                 "2026-10-18T00:00:00Z",
             )
@@ -738,7 +834,7 @@ mod tests {
                     BOB.parse().unwrap(),
                     sequence,
                     previous,
-                    key_b64(identity),
+                    &pair(identity),
                     devices,
                     "2026-10-18T00:00:00Z",
                 )

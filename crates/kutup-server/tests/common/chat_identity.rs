@@ -169,6 +169,7 @@ impl ChatAccount {
             sequence: self.head.as_ref().map_or(1, |head| head.sequence + 1),
             previous_hash: self.head.as_ref().map(|head| head.manifest_hash().unwrap()),
             identity_key: self.identity_key(),
+            identity_binding: String::new(),
             drive: self.drive.clone(),
             devices: listed,
             issued_at: time::OffsetDateTime::now_utc()
@@ -178,9 +179,23 @@ impl ChatAccount {
             self_authority_key: b64(public.as_bytes()),
             signature: String::new(),
         };
+        self.bind(&mut manifest);
         self.sign(&mut manifest);
         manifest.verify_successor(self.head.as_ref()).unwrap();
         manifest
+    }
+
+    /// The account identity's signature over `manifest`'s authority,
+    /// incarnation and account (its identity binding).
+    pub fn bind(&self, manifest: &mut AccountManifestV2) {
+        manifest.identity_binding = b64(&self
+            .identity
+            .private_key()
+            .calculate_signature(
+                &manifest.identity_binding_bytes().unwrap(),
+                &mut rand09::rng(),
+            )
+            .unwrap());
     }
 
     /// Signs `manifest` (again) with the account's authority.
