@@ -324,7 +324,10 @@ impl Session {
     ) -> Result<Self> {
         let address = ChatAddress::from_sender(&user.into(), device_id)?;
         let account = address.name();
-        let material = keys::generate("kutup device", num_one_time, new_device, rng)?;
+        let mut material = keys::generate("kutup device", num_one_time, new_device, rng)?;
+        // This account's own chain starts again with this device; contacts'
+        // pins and verified state stay.
+        material.seed.forget_manifests_of.insert(account.clone());
         // Install the whole device (identity + every prekey) in one transaction.
         db.apply(&material.seed).await?;
         let store = ChatStore::attach(db, material.local)?;
@@ -2670,12 +2673,8 @@ impl Session {
             self.store.archive_session(&address).await?;
         }
         let now = now_millis();
-        let fingerprint = {
-            use sha2::{Digest as _, Sha256};
-            hex::encode(&Sha256::digest(next.identity_key.as_bytes())[..16])
-        };
         let content = ChatContent::safety_number_changed_with_id(
-            format!("safety:identity:{fingerprint}"),
+            safety_line_id(&next.identity_key),
             crate::clock::rfc3339(now),
         );
         self.store.stage_sent_message(SentMessage {
@@ -2692,6 +2691,27 @@ impl Session {
         });
         self.identity_changes.push(peer.to_string());
         Ok(())
+    }
+
+    /// Another device of the account verified an identity of `peer` that
+    /// isn't the one pinned here (`pinned_identity`, which the account's
+    /// manifest lists): as Signal does when a storage record's verified
+    /// identity key differs, the thread says the safety number changed,
+    /// once per pinned identity, so the person compares it again.
+    pub(crate) async fn note_verified_elsewhere_for_another_identity(
+        &mut self,
+        peer: &str,
+        pinned_identity: &str,
+    ) -> Result<bool> {
+        let id = safety_line_id(pinned_identity);
+        if self.sent_message(&id).await?.is_some() {
+            return Ok(false);
+        }
+        let content =
+            ChatContent::safety_number_changed_with_id(id, crate::clock::rfc3339(now_millis()));
+        self.record_local_notice(peer, &content).await?;
+        self.identity_changes.push(peer.to_string());
+        Ok(true)
     }
 
     /// Set whether the peer's pinned identity is verified, if it is still
@@ -5740,4 +5760,14 @@ fn refuse_group_only(content: &ChatContent) -> std::result::Result<(), String> {
         return Err("a group call is not Direct content".into());
     }
     Ok(())
+}
+
+/// The id of the "safety number changed" line for a peer's identity: one
+/// line per identity, however often it is met.
+fn safety_line_id(identity_key: &str) -> String {
+    use sha2::{Digest as _, Sha256};
+    format!(
+        "safety:identity:{}",
+        hex::encode(&Sha256::digest(identity_key.as_bytes())[..16])
+    )
 }

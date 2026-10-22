@@ -1069,6 +1069,101 @@ mod tests {
         );
     }
 
+    /// Linked again over its store, a device keeps its contacts' pins with
+    /// their verified state, and its history; only its own account's chain
+    /// starts again.
+    #[test]
+    fn a_device_linked_again_keeps_its_contacts_pins_and_verified_state() {
+        use crate::group_harness_tests::befriend;
+        let world = World::new();
+        let mut alice = world.person(1);
+        let mut alice2 = world.link_device(&mut alice);
+        let mut bob = world.person(2);
+        befriend(&mut alice2, &mut bob);
+        let bob_identity = bob.engine.session().account_identity_key();
+        block_on(
+            alice2
+                .engine
+                .set_identity_verified(&bob.account, &bob_identity, true),
+        )
+        .unwrap();
+        let history = block_on(alice2.engine.session().sent_history())
+            .unwrap()
+            .len();
+        let db = alice2.engine.session().db().clone();
+        block_on(alice.engine.reset_identity(&[], ISSUED_AT, &mut rng())).unwrap();
+        world.retain_mailbox(&alice2.account, alice2.device(), |_| false);
+        assert!(matches!(
+            block_on(alice2.engine.catch_up_identity(&mut rng())),
+            Err(ChatError::LinkRequired)
+        ));
+        drop(alice2);
+
+        let alice2 = world.link_device_into(&mut alice, db);
+        let pin = block_on(alice2.engine.session().manifest_trust(&bob.account))
+            .unwrap()
+            .expect("the contact's pin stays");
+        assert_eq!(pin.identity_key, bob_identity);
+        assert!(pin.identity_verified);
+        assert_eq!(
+            block_on(alice2.engine.session().sent_history())
+                .unwrap()
+                .len(),
+            history
+        );
+        let own = block_on(alice2.engine.session().manifest_trust(&alice.account))
+            .unwrap()
+            .expect("its own account is pinned again");
+        assert_eq!(
+            own.identity_key,
+            alice.engine.session().account_identity_key()
+        );
+    }
+
+    /// The contact list says another device verified an identity of a
+    /// contact that this device never pinned (the contact moved on): the
+    /// manifest is read again, the verification isn't taken, and the thread
+    /// says the safety number changed, once.
+    #[test]
+    fn a_verification_of_another_identity_in_the_list_warns_once() {
+        use crate::group_harness_tests::befriend;
+        let world = World::new();
+        let mut alice = world.person(1);
+        let mut bob = world.person(2);
+        befriend(&mut alice, &mut bob);
+        let old = block_on(bob.engine.safety_number(&alice.account))
+            .unwrap()
+            .identity_key;
+        block_on(bob.engine.set_identity_verified(&alice.account, &old, true)).unwrap();
+        block_on(bob.engine.flush_contact_list(true)).unwrap();
+
+        block_on(alice.engine.reset_identity(&[], ISSUED_AT, &mut rng())).unwrap();
+        let mut bob2 = world.link_device(&mut bob);
+        let pinned = block_on(bob2.engine.safety_number(&alice.account)).unwrap();
+        assert_ne!(pinned.identity_key, old);
+        let lines = |person: &crate::group_harness_tests::Person| {
+            block_on(person.engine.session().sent_history())
+                .unwrap()
+                .into_iter()
+                .filter(|message| {
+                    message.peer == alice.account
+                        && serde_json::from_slice::<kutup_chat_proto::ChatContent>(&message.content)
+                            .is_ok_and(|content| content.is_safety_number_changed())
+                })
+                .count()
+        };
+        assert_eq!(lines(&bob2), 0, "a first pin says nothing");
+
+        block_on(bob2.engine.sync_contact_list()).unwrap();
+        block_on(bob2.engine.sync_contact_list()).unwrap();
+        assert_eq!(lines(&bob2), 1);
+        let trust = block_on(bob2.engine.session().manifest_trust(&alice.account))
+            .unwrap()
+            .unwrap();
+        assert_eq!(trust.identity_key, pinned.identity_key);
+        assert!(!trust.identity_verified);
+    }
+
     /// A contact reads a message sent under the account's new identity
     /// (sealed, before they saw the manifest that lists it): they fetch the
     /// account's signed manifest, take the new identity, see one "safety

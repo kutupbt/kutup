@@ -235,7 +235,16 @@ the identity can bind it to a new authority or incarnation.
 later manifest with another identity (a distribution, a re-registration) is
 not verified. It reaches the account's other devices in the contact list
 entry (`identity`: the key, `verified` or `unverified`, and when; the later
-setting wins, and only for the identity the device has pinned).
+setting wins, and only for the identity the device has pinned). A
+verification of another identity than the pinned one is never taken from the
+list: the device reads the contact's signed manifest again, and if it still
+lists another identity, the thread gets its "safety number changed" line
+(once per identity), as Signal does when a storage record's verified
+identity key differs.
+
+A device linked or re-registered over an existing store keeps its contacts'
+pins, their verified state and history; only its own account's manifest
+chain starts again.
 
 An identity change under the same authority (a signed manifest naming another
 identity key) archives the sessions with every device of the account, writes

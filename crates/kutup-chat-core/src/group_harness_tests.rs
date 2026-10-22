@@ -312,6 +312,15 @@ impl World {
     /// `person` sends it the account identity, and it registers with the
     /// link token and publishes the manifest that lists it.
     pub(crate) fn link_device(self: &Rc<Self>, person: &mut Person) -> Person {
+        self.link_device_into(person, Rc::new(SqliteChatDb::open_in_memory().unwrap()))
+    }
+
+    /// [`Self::link_device`] into the store `db` (a browser linked again).
+    pub(crate) fn link_device_into(
+        self: &Rc<Self>,
+        person: &mut Person,
+        db: Rc<dyn crate::db::ChatDb>,
+    ) -> Person {
         let account = person.account.clone();
         let authority = AccountAuthority::derive(&[person.authority_seed; 32]).unwrap();
         let linking = crate::LinkingDevice::new();
@@ -324,7 +333,6 @@ impl World {
         let provision =
             block_on(linking.verify(client.as_ref(), &account, &authority, &envelope)).unwrap();
         assert_eq!(provision.settings, settings);
-        let db = Rc::new(SqliteChatDb::open_in_memory().unwrap());
         let engine = block_on(Engine::register_linked(
             db,
             client.clone(),

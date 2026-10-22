@@ -712,6 +712,24 @@ impl ChatDb for IndexedDbChatDb {
                 .map(|message| message.id)
                 .collect()
         };
+        // The history of the accounts whose pins go (`forget_manifests_of`),
+        // found before the write transaction opens.
+        let forgotten_history: Vec<Vec<u8>> = if pending.forget_manifests_of.is_empty() {
+            Vec::new()
+        } else {
+            self.all::<AccountManifestHistoryRecord>(MANIFEST_HISTORY)
+                .await?
+                .into_iter()
+                .filter(|record| pending.forget_manifests_of.contains(&record.peer))
+                .map(|record| {
+                    triple_key(
+                        &record.peer,
+                        &record.manifest.incarnation_id,
+                        &record.sequence.to_string(),
+                    )
+                })
+                .collect()
+        };
         // IndexedDB has one writer in this engine. Check immutable records
         // before opening the atomic write transaction; an existing different
         // value is a durable cryptographic contradiction, never an upsert.
@@ -799,14 +817,7 @@ impl ChatDb for IndexedDbChatDb {
             }
         }
         if pending.reset_transport {
-            for target in [
-                &local_identity,
-                &mls_state,
-                &mls_outbox,
-                &inbound,
-                &manifest_trust,
-                &manifest_history,
-            ] {
+            for target in [&local_identity, &mls_state, &mls_outbox, &inbound] {
                 operations.push(clear_op(&target.store));
             }
             for key in [
@@ -817,6 +828,12 @@ impl ChatDb for IndexedDbChatDb {
             ] {
                 operations.push(self.delete(&meta, string_key(key)));
             }
+        }
+        for peer in &pending.forget_manifests_of {
+            operations.push(self.delete(&manifest_trust, string_key(peer)));
+        }
+        for key in forgotten_history {
+            operations.push(self.delete(&manifest_history, key));
         }
         for (key, value) in &index_values {
             match value {

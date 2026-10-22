@@ -884,13 +884,15 @@ impl ChatDb for SqliteChatDb {
                  DELETE FROM mls_state;
                  DELETE FROM mls_outbox;
                  DELETE FROM inbound_envelopes;
-                 DELETE FROM manifest_trust;
-                 DELETE FROM manifest_history;
                  DELETE FROM repair_limits;
                  DELETE FROM pending_account_identity;
                  DELETE FROM pending_chat_registration;
                  DELETE FROM meta WHERE key = 'last_cursor';",
             ))?;
+        }
+        for peer in &pending.forget_manifests_of {
+            db(tx.execute("DELETE FROM manifest_trust WHERE peer = ?1", [peer]))?;
+            db(tx.execute("DELETE FROM manifest_history WHERE peer = ?1", [peer]))?;
         }
         if let Some(local) = &pending.local_identity {
             db(tx.execute(
@@ -1800,37 +1802,41 @@ mod tests {
         let _ = std::fs::remove_file(&path);
     }
 
+    /// A signed manifest of a test account, its authority and identity from `seed`.
+    fn test_manifest(seed: u8) -> kutup_chat_proto::AccountManifestV2 {
+        crate::AccountAuthority::derive(&[seed; 32])
+            .unwrap()
+            .sign_manifest(
+                "aci:00000000-0000-4000-8000-81b637d8fcd2@chat.example"
+                    .parse()
+                    .unwrap(),
+                1,
+                None,
+                &{
+                    let private = libsignal_protocol::PrivateKey::deserialize(&[seed; 32]).unwrap();
+                    libsignal_protocol::IdentityKeyPair::new(
+                        libsignal_protocol::IdentityKey::new(private.public_key().unwrap()),
+                        private,
+                    )
+                },
+                vec![kutup_chat_proto::AccountManifestDeviceV2 {
+                    device_id: 1,
+                    direct_chat_suite: kutup_chat_proto::DirectChatSuiteId::PqxdhTripleRatchetV1,
+                    registration_id: 7,
+                    mls: None,
+                }],
+                "2026-07-29T00:00:00Z",
+            )
+            .unwrap()
+    }
+
     #[test]
     fn quarantined_replacement_and_both_incarnation_histories_round_trip_atomically() {
         use futures_executor::block_on;
-        use kutup_chat_proto::{AccountManifestDeviceV2, AccountManifestV2, DirectChatSuiteId};
+        use kutup_chat_proto::AccountManifestV2;
 
         fn manifest(seed: u8) -> AccountManifestV2 {
-            crate::AccountAuthority::derive(&[seed; 32])
-                .unwrap()
-                .sign_manifest(
-                    "aci:00000000-0000-4000-8000-81b637d8fcd2@chat.example"
-                        .parse()
-                        .unwrap(),
-                    1,
-                    None,
-                    &{
-                        let private =
-                            libsignal_protocol::PrivateKey::deserialize(&[seed; 32]).unwrap();
-                        libsignal_protocol::IdentityKeyPair::new(
-                            libsignal_protocol::IdentityKey::new(private.public_key().unwrap()),
-                            private,
-                        )
-                    },
-                    vec![AccountManifestDeviceV2 {
-                        device_id: 1,
-                        direct_chat_suite: DirectChatSuiteId::PqxdhTripleRatchetV1,
-                        registration_id: 7,
-                        mls: None,
-                    }],
-                    "2026-07-29T00:00:00Z",
-                )
-                .unwrap()
+            test_manifest(seed)
         }
 
         fn pin(manifest: &AccountManifestV2, trust: AuthorityTrust) -> ManifestTrust {
@@ -2029,7 +2035,7 @@ mod tests {
     }
 
     #[test]
-    fn a_transport_reset_keeps_history_outbox_and_contacts_only() {
+    fn a_transport_reset_keeps_history_outbox_contacts_and_their_pins() {
         use futures_executor::block_on;
         let db = full_store();
         assert_eq!(
@@ -2047,13 +2053,52 @@ mod tests {
         assert!(block_on(db.load_pre_key(100)).unwrap().is_none());
         assert!(block_on(db.load_signed_pre_key(1)).unwrap().is_none());
         assert!(block_on(db.load_kyber_pre_key(1)).unwrap().is_none());
-        assert!(block_on(db.load_manifest_trust("peer")).unwrap().is_none());
+        // A contact's pin and verified state stay.
+        let pin = block_on(db.load_manifest_trust("peer")).unwrap().unwrap();
+        assert!(pin.identity_verified);
         assert!(block_on(db.load_last_cursor()).unwrap().is_none());
         assert!(block_on(db.load_pending_account_identity())
             .unwrap()
             .is_none());
         assert_eq!(block_on(db.list_outbox()).unwrap().len(), 1);
         assert_eq!(block_on(db.list_contacts()).unwrap().len(), 1);
+    }
+
+    /// The pins and history of a forgotten account go (the account's own,
+    /// on a new device); another account's stay.
+    #[test]
+    fn forgetting_an_accounts_manifests_drops_its_pin_and_history_only() {
+        use futures_executor::block_on;
+        let db = full_store();
+        let history = |peer: &str| crate::db::AccountManifestHistoryRecord {
+            peer: peer.into(),
+            sequence: 1,
+            manifest: test_manifest(5),
+        };
+        let mut pending = Pending::default();
+        for peer in ["peer", "other"] {
+            pending.manifest_history.insert(
+                (peer.into(), test_manifest(5).incarnation_id, 1),
+                history(peer),
+            );
+        }
+        let mut other = block_on(db.load_manifest_trust("peer")).unwrap().unwrap();
+        other.peer = "other".into();
+        pending.manifest_trust.insert("other".into(), other);
+        block_on(db.apply(&pending)).unwrap();
+
+        let mut forget = Pending::default();
+        forget.forget_manifests_of.insert("peer".into());
+        block_on(db.apply(&forget)).unwrap();
+        let incarnation = test_manifest(5).incarnation_id;
+        assert!(block_on(db.load_manifest_trust("peer")).unwrap().is_none());
+        assert!(block_on(db.load_manifest_history("peer", &incarnation, 1))
+            .unwrap()
+            .is_none());
+        assert!(block_on(db.load_manifest_trust("other")).unwrap().is_some());
+        assert!(block_on(db.load_manifest_history("other", &incarnation, 1))
+            .unwrap()
+            .is_some());
     }
 
     #[test]

@@ -2063,7 +2063,10 @@ impl Engine {
         Ok(report)
     }
 
-    pub(crate) async fn receive_pass<R: Rng + CryptoRng>(&mut self, rng: &mut R) -> Result<ReceiveReport> {
+    pub(crate) async fn receive_pass<R: Rng + CryptoRng>(
+        &mut self,
+        rng: &mut R,
+    ) -> Result<ReceiveReport> {
         self.set_state(EngineState::CatchingUp);
         let transport = Rc::clone(&self.transport);
         let device_id = self.session.device_id();
@@ -3345,7 +3348,7 @@ impl Engine {
     /// has seen the manifest that lists it. Accepting it is what an identity
     /// change does here (`Session::stage_identity_change`); a manifest that
     /// isn't the authority's next one is refused as any other.
-    async fn refresh_account_manifest(&mut self, account: &str) -> Result<()> {
+    pub(crate) async fn refresh_account_manifest(&mut self, account: &str) -> Result<()> {
         let manifest = Rc::clone(&self.transport)
             .fetch_manifest(account)
             .await?

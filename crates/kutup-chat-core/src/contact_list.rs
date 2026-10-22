@@ -597,7 +597,36 @@ impl Engine {
             // A verification another device of the account set later, of
             // the identity this device has pinned for the contact.
             if let Some(identity) = &entry.identity {
-                if let Some(trust) = self.session.manifest_trust(&peer).await? {
+                let mut pinned = self.session.manifest_trust(&peer).await?;
+                // One of an identity this device hasn't pinned: the account's
+                // signed manifest decides which is current (the identity is
+                // never taken from the list). Read it again; if it still
+                // lists another identity, the verification is of an old one
+                // and the thread says the safety number changed.
+                if let Some(trust) = pinned.as_ref().filter(|trust| {
+                    trust.identity_key != identity.identity_key
+                        && identity.state == ContactIdentityStateV1::Verified
+                }) {
+                    let before = trust.identity_key.clone();
+                    if self.refresh_account_manifest(&peer).await.is_ok() {
+                        pinned = self.session.manifest_trust(&peer).await?;
+                    }
+                    if let Some(trust) = pinned
+                        .as_ref()
+                        .filter(|trust| trust.identity_key != identity.identity_key)
+                    {
+                        // A pin that moved meanwhile wrote its own line.
+                        if trust.identity_key == before {
+                            self.session
+                                .note_verified_elsewhere_for_another_identity(
+                                    &peer,
+                                    &trust.identity_key,
+                                )
+                                .await?;
+                        }
+                    }
+                }
+                if let Some(trust) = pinned {
                     if trust.identity_key == identity.identity_key
                         && identity.updated_at_ms > trust.identity_verified_at_ms
                     {

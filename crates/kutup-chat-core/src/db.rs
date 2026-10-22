@@ -588,10 +588,11 @@ pub struct PeerProfile {
 pub struct Pending {
     /// Discard this device's Chat transport state before anything else in the
     /// batch is written: its identity, sessions, peer identities, prekeys,
-    /// sender keys, MLS state, undecrypted inbound envelopes, manifest pins
-    /// and history, mailbox cursor and journals. History, the outbox, contacts,
-    /// groups and profiles stay. A re-registration, and a store from before
-    /// the account identity, start over this way.
+    /// sender keys, MLS state, undecrypted inbound envelopes, mailbox cursor
+    /// and journals. History, the outbox, contacts, contacts' manifest pins
+    /// (with their verified state) and history, groups and profiles stay. A
+    /// link, a re-registration, and a store from before the account identity
+    /// start over this way.
     pub(crate) reset_transport: bool,
     /// The narrower reset an identity change of this account needs (a
     /// distribution, sent or applied): sessions, peer identities as sessions
@@ -599,6 +600,11 @@ pub struct Pending {
     /// prekey journals go, since all of them belong to the old identity. The
     /// manifest pins, the mailbox cursor and the inbound queue stay.
     pub(crate) reset_identity: bool,
+    /// Accounts whose manifest pins and history go: this account's own when
+    /// a device is installed over a store (a link, a re-registration), since
+    /// its own chain starts again. Contacts' pins, verified state and
+    /// history stay.
+    pub(crate) forget_manifests_of: HashSet<String>,
     /// Set only when installing a freshly generated device.
     pub(crate) local_identity: Option<LocalIdentity>,
     /// address string (`name.deviceId`) → `Some(SessionRecord::serialize())`
@@ -704,6 +710,7 @@ impl Pending {
     pub(crate) fn is_empty(&self) -> bool {
         !self.reset_transport
             && !self.reset_identity
+            && self.forget_manifests_of.is_empty()
             && self.local_identity.is_none()
             && self.sessions.is_empty()
             && self.identities.is_empty()
