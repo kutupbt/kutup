@@ -34,7 +34,7 @@ use kutup_chat_proto::{
     ChatWsServerMessage, ChatWsTicketResponse, DeliveredEnvelope, DeviceListMismatch,
     DevicePreKeyBundleV2, DirectChatSuiteId, EcPreKey, EnvelopeType, KemPreKey, MailboxPage,
     OutgoingEnvelope, OwnChatProfileResponse, PreKeyCountResponse, ProfileEnvelopeContextV1,
-    ProfileEnvelopePurpose, ProfileSuiteId, PutChatProfileRequest, RegisterChatDeviceRequest,
+    ProfileEnvelopePurpose, ProfileSuiteId, PutChatProfileRequest, RegisterChatDeviceRequestV2,
     RegisterChatDeviceResponse, RenameChatDeviceRequest, ReplenishKeysRequest,
     SealedDeliveryResponseV1, SealedMessageSubmissionV1, SealedOutgoingEnvelopeV1,
     SendMessagesRequest, AccountPreKeyBundlesResponse,
@@ -379,7 +379,7 @@ pub(crate) fn constant_time_eq(left: &[u8], right: &[u8]) -> bool {
     path = "/api/chat/device",
     tag = "chat",
     operation_id = "registerChatDevice",
-    request_body = RegisterChatDeviceRequest,
+    request_body = RegisterChatDeviceRequestV2,
     responses(
         (status = 200, description = "Registered", body = RegisterChatDeviceResponse),
         (status = 400, description = "Malformed key material"),
@@ -390,9 +390,10 @@ pub(crate) fn constant_time_eq(left: &[u8], right: &[u8]) -> bool {
 pub async fn register_device(
     State(state): State<AppState>,
     auth: AuthUser,
-    Json(req): Json<RegisterChatDeviceRequest>,
+    Json(req): Json<RegisterChatDeviceRequestV2>,
 ) -> AppResult<Response> {
     use crate::handlers::chat_identity as identity;
+    use kutup_chat_proto::DeviceRegistrationV1;
     let user_id = trusted_uuid(&auth.user_id)?;
 
     if req.registration_id == 0 || req.registration_id > MAX_REGISTRATION_ID {
@@ -413,12 +414,9 @@ pub async fn register_device(
     for k in &req.one_time_kyber_pre_keys {
         validate_kem_prekey("oneTimeKyberPreKeys", k)?;
     }
-    let credential = kutup_chat_proto::decode_device_credential(
-        req.credential
-            .as_deref()
-            .ok_or_else(|| AppError::bad_request("credential is required"))?,
-    )
-    .map_err(AppError::bad_request)?;
+    req.validate().map_err(AppError::bad_request)?;
+    let credential =
+        kutup_chat_proto::decode_device_credential(&req.credential).map_err(AppError::bad_request)?;
     // Every signed key is the account identity's (Signal's
     // PreKeySignatureValidator); the identity is checked against the
     // account's below.
@@ -427,19 +425,8 @@ pub async fn register_device(
         .chain(&req.one_time_kyber_pre_keys)
         .collect();
     identity::verify_prekey_signatures(&account_identity, Some(&req.signed_pre_key), &kyber)?;
-    match (&req.reregistration, &req.link_token) {
-        (Some(reregistration), _) => {
-            reregistration
-                .validate(&req)
-                .map_err(AppError::bad_request)?;
-            identity::validate_manifest_v2(&reregistration.manifest)?;
-        }
-        (None, Some(_)) => {}
-        (None, None) => {
-            return Err(AppError::bad_request(
-                "a Chat device registers with a link token or as a re-registration",
-            ))
-        }
+    if let DeviceRegistrationV1::Reregistration { manifest } = &req.registration {
+        identity::validate_manifest_v2(manifest)?;
     }
 
     let mut tx = state.pool.begin().await?;
@@ -470,14 +457,16 @@ pub async fn register_device(
         .into_response());
     }
 
-    let (device_id, dropped) = if let Some(reregistration) = &req.reregistration {
+    let (device_id, dropped) = if let DeviceRegistrationV1::Reregistration { manifest } =
+        &req.registration
+    {
         // A new identity (Signal's reclaimAccount): the manifest lists this
         // device alone, and every other device of the account goes with it.
         store_manifest_v2(
             &mut tx,
             &state,
             user_id,
-            &reregistration.manifest,
+            manifest,
             IdentityChange::New,
         )
         .await?;
@@ -511,10 +500,10 @@ pub async fn register_device(
             return Err(AppError::conflict("this is not the account's identity")
                 .with_details(json!({ "code": "identityMismatch" })));
         }
-        let token = kutup_chat_proto::decode_link_token(
-            req.link_token.as_deref().expect("matched above"),
-        )
-        .map_err(AppError::bad_request)?;
+        let DeviceRegistrationV1::Link { link_token } = &req.registration else {
+            unreachable!("a re-registration is handled above");
+        };
+        let token = kutup_chat_proto::decode_link_token(link_token).map_err(AppError::bad_request)?;
         let used: Option<i32> = sqlx::query_scalar(
             "UPDATE chat_link_tokens SET used_at = now()
               WHERE token_hash = $1 AND user_id = $2 AND used_at IS NULL AND expires_at > now()
@@ -680,36 +669,28 @@ pub(crate) async fn store_manifest_v2(
     .bind(user_id)
     .fetch_optional(&mut **tx)
     .await?;
-    match current {
-        None if manifest.sequence != 1 || manifest.previous_hash.is_some() => {
-            return Err(AppError::conflict("first manifest must be sequence 1"));
-        }
-        None => {}
+    let head: Option<AccountManifestV2> = match current {
+        None => None,
         Some((version, current_hash, current_value)) => {
             if manifest.sequence == version as u64 && manifest_hash == current_hash {
                 return Ok(false);
             }
-            if manifest.sequence != version as u64 + 1 {
-                return Err(AppError::conflict(
-                    "manifest sequence must advance by exactly one",
-                ));
-            }
-            if manifest.previous_hash.as_deref() != Some(current_hash.as_str()) {
-                return Err(AppError::conflict("manifest previousHash mismatch"));
-            }
-            let current_manifest: AccountManifestV2 = serde_json::from_value(current_value)
-                .map_err(|error| AppError::internal(format!("stored manifest: {error}")))?;
-            // Nothing of the authority changes inside one incarnation; the
-            // Drive keys change only by the one-way suite upgrade.
-            if manifest.incarnation_id != current_manifest.incarnation_id
-                || manifest.authority_key_id != current_manifest.authority_key_id
-                || manifest.self_authority_key != current_manifest.self_authority_key
-                || !drive_keys_follow(&current_manifest.drive, &manifest.drive)
-            {
-                return Err(AppError::conflict(
-                    "stable account identity cannot change inside one incarnation",
-                ));
-            }
+            Some(
+                serde_json::from_value(current_value)
+                    .map_err(|error| AppError::internal(format!("stored manifest: {error}")))?,
+            )
+        }
+    };
+    // The one chain check every side uses (kutup-chat-proto), and the Drive
+    // keys change only by the one-way suite upgrade.
+    manifest
+        .verify_successor(head.as_ref())
+        .map_err(AppError::conflict)?;
+    if let Some(head) = &head {
+        if !drive_keys_follow(&head.drive, &manifest.drive) {
+            return Err(AppError::conflict(
+                "stable account identity cannot change inside one incarnation",
+            ));
         }
     }
 
