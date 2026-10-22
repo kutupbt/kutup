@@ -409,8 +409,12 @@ core, (b) the server, (c) the app.
   stays 09:00 across DST; a gap moves forward, an overlap takes the earlier
   instant (jiff's `compatible`); the end is start + duration in the start
   zone; all-day durations count days. `EXDATE` matches by local start.
-  Vectors cross-checked against ical.js runs of the same rules (the
-  references' test data), and a fuzz target for the parser and expander.
+  Vectors (RFC 5545's examples in the subset and Kutup's cases: DST gaps
+  and folds, EXDATEs, rules refused for their DTSTART) are expanded by
+  python-dateutil, an independent RFC 5545 implementation
+  (`scripts/generate-calendar-recurrence-vectors.py`; the WebClients
+  reference holds no recurrence test data), and a fuzz target covers the
+  parser and expander.
 - The same code runs in the server (below) and in WASM (`crypto-calendar`;
   its size budget is raised only with the measured growth).
 

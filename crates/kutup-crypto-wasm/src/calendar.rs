@@ -8,6 +8,7 @@ use kutup_crypto::calendar::{
     self, Passphrase, SealedEventV1, SealedMetadataV1, UnlockedCalendarKey,
 };
 use kutup_crypto::calendar_event::{self, EventFieldsV1};
+use kutup_crypto::calendar_recurrence;
 use serde::{Deserialize, Serialize};
 use wasm_bindgen::prelude::*;
 
@@ -299,4 +300,50 @@ pub fn calendar_local_to_utc(local: &str, tzid: &str) -> Result<String, JsValue>
 #[wasm_bindgen(js_name = calendarTimeZones)]
 pub fn calendar_time_zones() -> Vec<String> {
     calendar_event::time_zone_names()
+}
+
+/// A rule from the editor (`RuleV1`) as its canonical `RRULE` value, or
+/// refused outside Proton's subset.
+#[wasm_bindgen(js_name = calendarRuleText)]
+pub fn calendar_rule_text(rule: JsValue) -> Result<String, JsValue> {
+    let rule: calendar_recurrence::RuleV1 = from_js(rule, "rule")?;
+    rule.to_text().map_err(crypto_error)
+}
+
+/// An `RRULE` value as the editor shows it (`RuleV1`): any spelling others
+/// write, normalised, or refused outside Proton's subset.
+#[wasm_bindgen(js_name = calendarReadRule)]
+pub fn calendar_read_rule(text: &str) -> Result<JsValue, JsValue> {
+    let rule = calendar_recurrence::Rule::read(text).map_err(crypto_error)?;
+    to_js(&calendar_recurrence::RuleV1::of(&rule))
+}
+
+/// The `UNTIL` for a series starting at `start` (`TimeV1`) and ending on
+/// `date` (`yyyy-MM-dd`): a date, or the end of that day in the start's zone.
+#[wasm_bindgen(js_name = calendarSupportedUntil)]
+pub fn calendar_supported_until(start: JsValue, date: &str) -> Result<JsValue, JsValue> {
+    let start: calendar_event::TimeV1 = from_js(start, "start")?;
+    to_js(&calendar_recurrence::supported_until_v1(&start, date).map_err(crypto_error)?)
+}
+
+/// An event's occurrences (`EventFieldsV1`) meeting `[from, to)`, at most
+/// `max`: what the app draws.
+#[wasm_bindgen(js_name = calendarOccurrences)]
+pub fn calendar_occurrences(
+    fields: JsValue,
+    from: &str,
+    to: &str,
+    max: u32,
+) -> Result<JsValue, JsValue> {
+    let fields: EventFieldsV1 = from_js(fields, "event fields")?;
+    let occurrences = calendar_recurrence::occurrences_v1(&fields, from, to, max as usize)
+        .map_err(crypto_error)?;
+    to_js(&occurrences)
+}
+
+/// When an event's last occurrence ends, or null for a series without end.
+#[wasm_bindgen(js_name = calendarRangeEnd)]
+pub fn calendar_range_end(fields: JsValue) -> Result<Option<String>, JsValue> {
+    let fields: EventFieldsV1 = from_js(fields, "event fields")?;
+    calendar_recurrence::range_end_v1(&fields).map_err(crypto_error)
 }
