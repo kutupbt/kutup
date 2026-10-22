@@ -38,6 +38,11 @@ function txt(value: string): string {
   return parts.join(' ')
 }
 
+/** A host name as a zone file takes it: absolute, with its trailing dot. */
+function absolute(name: string): string {
+  return name.endsWith('.') ? name : `${name}.`
+}
+
 /** The values a wizard step's table lists, from its copy cells. */
 async function values(wizard: Locator): Promise<{ host: string; value: string; priority: string }[]> {
   const rows = wizard.getByTestId('dns-record')
@@ -125,10 +130,11 @@ test('custom domains: the wizard, addresses on the domain, catch-all, deleting i
   // Published: refresh, and every record's badge turns good.
   writeZone(name, [
     `@ IN TXT ${txt(verify.value)}`,
-    ...mx.map((record) => `@ IN MX ${record.priority} ${record.value}`),
+    // Host names absolute (a trailing dot), or the zone would read them as its own.
+    ...mx.map((record) => `@ IN MX ${record.priority} ${absolute(record.value)}`),
     `@ IN TXT ${txt(spf.value)}`,
     `_dmarc IN TXT ${txt(dmarc)}`,
-    ...dkim.map((record) => `${record.host} IN CNAME ${record.value}`),
+    ...dkim.map((record) => `${record.host} IN CNAME ${absolute(record.value)}`),
   ])
   await expect(async () => {
     await mail.getByRole('button', { name: 'Refresh status' }).click()
