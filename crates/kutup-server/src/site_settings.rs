@@ -444,6 +444,39 @@ pub const CALENDAR_MAX_COUNT: NumericSetting = NumericSetting {
     min: 1,
     max: 499,
 };
+/// Reminders a member's list for one event takes, and for a calendar's
+/// defaults (Proton's 10 and 5).
+pub const CALENDAR_REMINDERS_PER_EVENT: NumericSetting = NumericSetting {
+    key: "calendar_reminders_per_event",
+    field: "calendarRemindersPerEvent",
+    default: 10,
+    min: 1,
+    max: 50,
+};
+pub const CALENDAR_DEFAULT_REMINDERS: NumericSetting = NumericSetting {
+    key: "calendar_default_reminders",
+    field: "calendarDefaultReminders",
+    default: 5,
+    min: 1,
+    max: 20,
+};
+/// How late a reminder may still fire, in seconds (Proton's web: a minute);
+/// later ones are skipped.
+pub const CALENDAR_REMINDER_LATENESS_SECONDS: NumericSetting = NumericSetting {
+    key: "calendar_reminder_lateness_seconds",
+    field: "calendarReminderLatenessSeconds",
+    default: 60,
+    min: 10,
+    max: 3600,
+};
+/// Alarms one page of `/api/calendar/alarms` answers.
+pub const CALENDAR_ALARMS_PAGE: NumericSetting = NumericSetting {
+    key: "calendar_alarms_page",
+    field: "calendarAlarmsPage",
+    default: 100,
+    min: 10,
+    max: 1000,
+};
 /// The widest window one events query asks, in days, and the events one
 /// page answers.
 pub const CALENDAR_WINDOW_DAYS: NumericSetting = NumericSetting {
@@ -460,11 +493,15 @@ pub const CALENDAR_EVENTS_PAGE: NumericSetting = NumericSetting {
     min: 10,
     max: 5000,
 };
-pub const CALENDAR_SETTINGS: [NumericSetting; 6] = [
+pub const CALENDAR_SETTINGS: [NumericSetting; 10] = [
     CALENDARS_PER_ACCOUNT,
     CALENDAR_EVENTS_PER_CALENDAR,
     CALENDAR_SYNC_BATCH,
     CALENDAR_MAX_COUNT,
+    CALENDAR_REMINDERS_PER_EVENT,
+    CALENDAR_DEFAULT_REMINDERS,
+    CALENDAR_REMINDER_LATENESS_SECONDS,
+    CALENDAR_ALARMS_PAGE,
     CALENDAR_WINDOW_DAYS,
     CALENDAR_EVENTS_PAGE,
 ];

@@ -43,6 +43,17 @@ pub async fn domain_lost(state: &AppState, user: Uuid, name: &str, why: DomainLo
     }
 }
 
+/// A notice to `user`'s own address (a calendar reminder, …): errors are
+/// the caller's to log.
+pub async fn to_account(
+    state: &AppState,
+    user: Uuid,
+    subject: &str,
+    body: &str,
+) -> anyhow::Result<()> {
+    deliver(state, user, subject, body).await
+}
+
 async fn deliver(state: &AppState, user: Uuid, subject: &str, body: &str) -> anyhow::Result<()> {
     // The account's own address on the server's domain, the oldest first.
     let address: Option<String> = sqlx::query_scalar(

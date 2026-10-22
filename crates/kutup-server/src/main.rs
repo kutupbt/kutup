@@ -11,6 +11,7 @@ mod account_ids;
 mod account_names;
 mod albums;
 mod auth_check;
+mod calendar_alarms;
 mod calendar_reminders;
 mod calls;
 mod change_feed;
@@ -479,6 +480,7 @@ async fn main() -> anyhow::Result<()> {
     mail::domains::set_time_scale(state.config.mail_domains_time_scale);
     mail::domains::sweep::spawn(state.clone());
     mail::expiry::spawn(state.clone());
+    calendar_alarms::spawn(state.clone());
 
     // Trailing-slash normalization wraps the whole Router from the *outside* (a
     // `Router::layer` only runs for already-matched paths, so it can't rescue an unmatched
