@@ -459,9 +459,44 @@ pub const CALENDAR_SETTINGS: [NumericSetting; 5] = [
     CALENDAR_EVENTS_PAGE,
 ];
 
+/// How long a Chat link token, and the provisioning socket of the device
+/// it links, stay usable (docs/plans/account-identity-key.md).
+pub const CHAT_LINK_TOKEN_SECONDS: NumericSetting = NumericSetting {
+    key: "chat_link_token_seconds",
+    field: "chatLinkTokenSeconds",
+    default: 600,
+    min: 60,
+    max: 3600,
+};
+/// Link tokens one account may hold unused at once.
+pub const CHAT_LINK_TOKENS_PER_ACCOUNT: NumericSetting = NumericSetting {
+    key: "chat_link_tokens_per_account",
+    field: "chatLinkTokensPerAccount",
+    default: 3,
+    min: 1,
+    max: 20,
+};
+/// The largest provisioning message body relayed, in bytes (at most the
+/// format's own, `MAX_PROVISION_BODY_BYTES`).
+pub const CHAT_PROVISION_BODY_BYTES: NumericSetting = NumericSetting {
+    key: "chat_provision_body_bytes",
+    field: "chatProvisionBodyBytes",
+    default: kutup_chat_proto::MAX_PROVISION_BODY_BYTES as i64,
+    min: 4 * 1024,
+    max: kutup_chat_proto::MAX_PROVISION_BODY_BYTES as i64,
+};
+pub const CHAT_IDENTITY_SETTINGS: [NumericSetting; 3] = [
+    CHAT_LINK_TOKEN_SECONDS,
+    CHAT_LINK_TOKENS_PER_ACCOUNT,
+    CHAT_PROVISION_BODY_BYTES,
+];
+
 /// Every whole-number setting `/api/admin/settings` lists by field.
 pub fn numeric_settings() -> impl Iterator<Item = &'static NumericSetting> {
-    CHAT_MULTI_SETTINGS.iter().chain(CALENDAR_SETTINGS.iter())
+    CHAT_MULTI_SETTINGS
+        .iter()
+        .chain(CALENDAR_SETTINGS.iter())
+        .chain(CHAT_IDENTITY_SETTINGS.iter())
 }
 
 /// The multi-recipient limits now.

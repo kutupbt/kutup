@@ -314,6 +314,23 @@ pub async fn rate_limit_chat_keys(
     limit(addr, &ratelimit::CHAT_KEYS_IP, Some("prekey_ip"), req, next).await
 }
 
+/// Provisioning sockets asked for, per address: the device waiting to be
+/// linked has no credential yet (docs/plans/account-identity-key.md).
+pub async fn rate_limit_chat_provisioning(
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
+    req: Request,
+    next: Next,
+) -> Response {
+    limit(
+        addr,
+        &ratelimit::CHAT_PROVISIONING_SOCKETS,
+        Some("provisioning_ip"),
+        req,
+        next,
+    )
+    .await
+}
+
 pub async fn rate_limit_chat_anonymous(
     ConnectInfo(addr): ConnectInfo<SocketAddr>,
     req: Request,

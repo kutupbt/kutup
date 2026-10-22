@@ -45,7 +45,8 @@ pub use account_identity::{
     ProvisioningLinkCodeV1, ProvisioningRelayRequest, ProvisioningSocketMessage,
     RegisterChatDeviceRequestV2, ACCOUNT_MANIFEST_V2_VERSION, CHAT_DEVICE_HEADER,
     DEVICE_CREDENTIAL_LEN, LINK_TOKEN_LEN, LINK_URI_PREFIX, MAX_PREKEY_RECORD_BYTES,
-    PROVISIONING_ADDRESS_LEN, PROVISIONING_VERSION, REREGISTRATION_DEVICE_ID,
+    MAX_PROVISION_BODY_BYTES, PROVISIONING_ADDRESS_LEN, PROVISIONING_VERSION,
+    REREGISTRATION_DEVICE_ID,
 };
 pub use backup::{
     chat_backup_media_reference_set_digest, AppendChatBackupSegmentRequestV1,
