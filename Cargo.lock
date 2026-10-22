@@ -3494,6 +3494,8 @@ dependencies = [
  "base64 0.22.1",
  "chrono",
  "csv",
+ "getrandom 0.3.4",
+ "hex",
  "keepass",
  "kutup-crypto",
  "proptest",

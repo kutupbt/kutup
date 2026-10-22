@@ -155,6 +155,8 @@ export interface MergeReport {
 export interface MergeOutcome {
   report: MergeReport
   differsFromTheirs: boolean
+  /** Theirs opened with this vault's own key: a key change it holds is in Drive already. */
+  theirsUnderCurrentKey: boolean
 }
 
 export interface ImportFormat {

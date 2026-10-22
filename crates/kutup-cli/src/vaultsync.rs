@@ -442,8 +442,14 @@ pub(crate) fn keep_secret(
             .as_ref()
             .map_or(0, |row| envelope_revision(&row.envelope));
         let revision = guard.next(GUARD_SCOPE, file_id, base)?;
-        let sealed =
-            kutup_pass::kept::seal(master_key, binding, id.as_bytes(), revision, &key, false)?;
+        let sealed = kutup_pass::kept::seal(
+            master_key,
+            binding,
+            id.as_bytes(),
+            revision,
+            &key,
+            kutup_pass::kept::PasswordKind::Chosen,
+        )?;
         let envelope = base64::engine::general_purpose::STANDARD.encode(sealed);
         Ok(Some(crate::account_head::Edit {
             changes: vec![(file_id.to_owned(), Some(revision))],

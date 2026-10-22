@@ -373,27 +373,9 @@ pub async fn version_retention_tick(pool: &PgPool, storage: &StorageService) -> 
     .await
     .unwrap_or_default();
     for (file_id, path, size, uploader) in originals {
-        // Marked first: once marked nothing serves the blob, so deleting it
-        // after cannot break a reader. Mark and release commit together.
         let marked: anyhow::Result<bool> = async {
             let mut tx = pool.begin().await?;
-            let marked = sqlx::query(
-                "UPDATE files SET original_pruned = true WHERE id = $1 AND NOT original_pruned",
-            )
-            .bind(file_id)
-            .execute(&mut *tx)
-            .await?
-            .rows_affected()
-                == 1;
-            if marked {
-                sqlx::query(
-                    "UPDATE users SET storage_used_bytes = GREATEST(0, storage_used_bytes - $1) WHERE id = $2",
-                )
-                .bind(size)
-                .bind(uploader)
-                .execute(&mut *tx)
-                .await?;
-            }
+            let marked = mark_original_removed(&mut tx, file_id, size, uploader).await?;
             tx.commit().await?;
             Ok(marked)
         }
@@ -429,6 +411,37 @@ pub async fn version_retention_tick(pool: &PgPool, storage: &StorageService) -> 
         tracing::info!("version retention: removed {removed} old versions and originals");
     }
     removed
+}
+
+/// Marks a file's original upload removed and frees its uploader's
+/// storage, in the caller's transaction: by retention, or by its owner
+/// (`DELETE …/versions/original`). Only the caller whose mark lands frees
+/// the charge and then deletes the object (after its commit: once marked,
+/// nothing serves the blob, so deleting it cannot break a reader).
+pub(crate) async fn mark_original_removed(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    file_id: Uuid,
+    size: i64,
+    uploader: Uuid,
+) -> sqlx::Result<bool> {
+    let marked = sqlx::query(
+        "UPDATE files SET original_pruned = true WHERE id = $1 AND NOT original_pruned",
+    )
+    .bind(file_id)
+    .execute(&mut **tx)
+    .await?
+    .rows_affected()
+        == 1;
+    if marked {
+        sqlx::query(
+            "UPDATE users SET storage_used_bytes = GREATEST(0, storage_used_bytes - $1) WHERE id = $2",
+        )
+        .bind(size)
+        .bind(uploader)
+        .execute(&mut **tx)
+        .await?;
+    }
+    Ok(marked)
 }
 
 /// Deletes one version on request (the owner's or author's, or a bulk clean-up

@@ -23,6 +23,10 @@ ssh-key = { version = "0.6", features = ["std", "ed25519", "rsa", "p256", "p384"
 rsa = { version = "0.9", features = ["sha2"] }
 sha2.workspace = true
 quick-xml = "0.42"
+# Random key files (kdbx::generate_key_file); in the browser through
+# kutup-pass-wasm's `wasm_js` backend.
+getrandom = "0.3"
+hex = "0.4"
 # Other password managers' exports (import.rs).
 csv = "1"
 serde_json.workspace = true

@@ -472,5 +472,60 @@
     "deleteForGoodDescription_other": "Kayıtlar, geçmişleri ve ekleri bu kasayı eşitleyen her cihazda silinir.",
     "cannotUndo": "Bu işlem geri alınamaz.",
     "binOff": "Geri dönüşüm kutusu kapatılmış; hiçbir şey silinmedi."
+  },
+  "changeKey": {
+    "open": "Kasa anahtarını değiştir…",
+    "title": "{{name}} anahtarını değiştir",
+    "description": "Kasanın anahtarı parolası, anahtar dosyası ya da ikisidir: KeePass uygulamaları açmak için bunu ister.",
+    "nowBoth": "Şu an: bir parola ve bir anahtar dosyası.",
+    "nowPassword": "Şu an: bir parola.",
+    "nowKeyFile": "Şu an: bir anahtar dosyası.",
+    "password": "Parola",
+    "passwordChoice": {
+      "keep": "Parolayı koru",
+      "new": "Yeni bir parola",
+      "none": "Parola olmasın"
+    },
+    "newPassword": "Yeni parola",
+    "confirmPassword": "Yeni parolayı tekrarlayın",
+    "generatePassword": "Parola üret",
+    "keyFile": "Anahtar dosyası",
+    "keyFileChoice": {
+      "keep": "Anahtar dosyasını koru",
+      "generate": "Yeni bir anahtar dosyası üret",
+      "choose": "Elimdeki bir anahtar dosyasını kullan",
+      "none": "Anahtar dosyası olmasın"
+    },
+    "generateKeyFile": "Üret ve indir",
+    "downloadAgain": "Yeniden indir",
+    "keyFileSaved": "{{name}} dosyasını güvenli bir yere kaydettim. O olmadan kasa KeePass uygulamalarında açılamaz; anahtarı hesabımda saklanmıyorsa burada da açılamaz.",
+    "generateFailed": "Anahtar dosyası üretilemedi. Yeniden deneyin.",
+    "othersNeedIt": "Bu kasayı açan herkesin yeni anahtara ihtiyacı olur: diğer cihazlarınızdaki KeePass uygulamaları ve kasanın paylaşıldığı kişiler. Sakladıkları anahtarlar artık açmaz; yenisi istenir.",
+    "earlierVersions": "Drive bu kasanın önceki sürümlerini saklar ve onlar eski anahtarla açılmaya devam eder. Önceden indirilmiş ya da başka yerlere eşitlenmiş kopyalar geri alınamaz.",
+    "deleteVersions": "Bu kasanın önceki sürümlerini de sil",
+    "deleteVersionsDescription": "Bir sızıntıdan sonra: Drive'da yalnızca kasanın yeni anahtarıyla şimdi kaydedilen hâli kalır.",
+    "deleteVersionsTitle": "Anahtar değiştirilip önceki sürümler silinsin mi?",
+    "deleteVersionsConfirm": "Kasa yeni anahtarıyla kaydedilir, ardından Drive'daki tüm önceki sürümleri, ilk yüklemesi de dahil, silinir.",
+    "deleteVersionsWarning": "Silinen sürümler geri getirilemez.",
+    "submitAndDelete": "Anahtarı değiştir ve sürümleri sil",
+    "waitSaved": "Kasa kaydedilene kadar bekleyin, sonra anahtarını değiştirin.",
+    "problem": {
+      "noKey": "Bir kasanın parolası, anahtar dosyası ya da ikisi olmalı.",
+      "mismatch": "Parolalar aynı değil.",
+      "saveKeyFile": "Anahtar dosyasını üretin, indirin ve kaydettiğinizi belirtin.",
+      "chooseKeyFile": "Anahtar dosyasını seçin."
+    },
+    "failure": {
+      "notReady": "Kasada hâlâ kaydedilen değişiklikler var. Kaydedildi yazana kadar bekleyip yeniden deneyin.",
+      "conflict": "Kasa az önce başka bir cihazda kaydedildi; o değişiklikler alınıyor. Biraz sonra yeniden deneyin.",
+      "failed": "Anahtar değiştirilemedi. Hiçbir şey değişmedi.",
+      "pending": "Kutup yanıt vermedi. Kasa yeni anahtarını korur ve bağlantı gelince onunla kaydedilir; yeni anahtarı güvende tutun. Anahtar hesabınızda saklanıyorsa kasayı bir kez yenisiyle açın."
+    },
+    "keepFailed": "Anahtar değişti ama hesabınızda saklanamadı: kasayı bir kez yeni anahtarla açın.",
+    "versionsLeft_one": "{{count}} önceki sürüm silinemedi; Drive'dan silmeyi deneyin.",
+    "versionsLeft_other": "{{count}} önceki sürüm silinemedi; Drive'dan silmeyi deneyin.",
+    "done": "Kasanın anahtarı değiştirildi",
+    "submit": "Anahtarı değiştir",
+    "pendingCopyPassword": "Kutup yanıt vermedi. Kasa yeni anahtarını korur ve bağlantı gelince onunla kaydedilir. Üretilen parola yalnızca bu sayfada: kapatmadan önce gösterip şimdi kopyalayın."
   }
 }

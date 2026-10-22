@@ -56,6 +56,37 @@ impl VaultKey {
         self.password_hash.as_deref()
     }
 
+    /// This key with only the parts asked for: what a key change keeps of
+    /// the vault's current key (a password known only as its hash too).
+    pub fn keeping(&self, password: bool, key_file: bool) -> VaultKey {
+        VaultKey {
+            password: self.password.clone().filter(|_| password),
+            password_hash: self.password_hash.clone().filter(|_| password),
+            key_file: self.key_file.clone().filter(|_| key_file),
+        }
+    }
+
+    /// The password's part of the composite key (its SHA-256), whichever
+    /// way the key holds it.
+    pub fn password_element(&self) -> Option<Zeroizing<[u8; 32]>> {
+        match (&self.password, &self.password_hash) {
+            (Some(password), _) => Some(kutup_crypto::pass_vault::password_hash(password)),
+            (None, Some(hash)) => Some(hash.clone()),
+            (None, None) => None,
+        }
+    }
+
+    /// Whether `password` is this key's password (compared by its hash).
+    pub fn has_this_password(&self, password: &str) -> bool {
+        self.password_element()
+            .is_some_and(|element| *element == *kutup_crypto::pass_vault::password_hash(password))
+    }
+
+    /// Whether the key has a password, given as it is or as its hash.
+    pub fn has_password(&self) -> bool {
+        self.password.is_some() || self.password_hash.is_some()
+    }
+
     /// The key file's contents, if the key has one.
     pub fn key_file(&self) -> Option<&[u8]> {
         self.key_file.as_deref().map(Vec::as_slice)
@@ -65,26 +96,25 @@ impl VaultKey {
     /// (a password and its SHA-256 are the same part) and the same key file
     /// element, so each opens what the other does.
     pub fn same_as(&self, other: &VaultKey) -> bool {
-        use sha2::{Digest as _, Sha256};
-        let password = |key: &VaultKey| -> Option<[u8; 32]> {
-            match (&key.password, &key.password_hash) {
-                (Some(password), _) => Some(Sha256::digest(password.as_bytes()).into()),
-                (None, Some(hash)) => Some(**hash),
-                (None, None) => None,
-            }
-        };
         let element = |key: &VaultKey| {
             key.key_file
                 .as_deref()
                 .and_then(|file| keepass::key_file_element(file))
         };
-        password(self) == password(other) && element(self) == element(other)
+        self.password_element().as_deref() == other.password_element().as_deref()
+            && element(self) == element(other)
     }
 
     /// Adds the contents of a key file (any of KeePass's key file kinds).
     pub fn with_key_file(mut self, contents: &[u8]) -> Self {
         self.key_file = Some(Zeroizing::new(contents.to_vec()));
         self
+    }
+
+    /// Whether the key can lock a vault: a password or a key file, and a
+    /// key file KeePass reads (`KdbxError::KeyFile` otherwise).
+    pub fn check(&self) -> Result<(), KdbxError> {
+        self.database_key().map(|_| ())
     }
 
     fn database_key(&self) -> Result<DatabaseKey, KdbxError> {
@@ -125,6 +155,45 @@ pub fn key_file_secret(contents: &[u8]) -> Option<Vec<u8>> {
         return Some(element.to_vec());
     }
     (contents.len() <= MAX_KEPT_KEY_FILE_BYTES).then(|| contents.to_vec())
+}
+
+/// A new key file: 32 random bytes in KeePass's XML key file format v2,
+/// written as KeePassXC writes one (`FileKey::createXMLv2`), so KeePassXC,
+/// KeePass and the mobile apps open the vault with it. It never leaves the
+/// device but as the person's download (and, kept, as its key element).
+pub fn generate_key_file() -> Result<Zeroizing<Vec<u8>>, getrandom::Error> {
+    let mut key = Zeroizing::new([0u8; 32]);
+    getrandom::fill(key.as_mut())?;
+    Ok(key_file_xml(&key))
+}
+
+/// The XML v2 key file of `key`: its SHA-256's first four bytes as the
+/// `Hash` check, the key in upper-case hex, eight digits a group and four
+/// groups a line, indented as KeePassXC indents it.
+fn key_file_xml(key: &[u8; 32]) -> Zeroizing<Vec<u8>> {
+    use sha2::{Digest, Sha256};
+    let check = hex::encode_upper(&Sha256::digest(key)[..4]);
+    let digits = Zeroizing::new(hex::encode_upper(key));
+    let mut data = Zeroizing::new(String::with_capacity(96));
+    for (i, group) in digits.as_bytes().chunks(8).enumerate() {
+        data.push_str(match i {
+            0 => "",
+            _ if i % 4 == 0 => "\n            ",
+            _ => " ",
+        });
+        // Hex digits: ASCII.
+        data.push_str(std::str::from_utf8(group).unwrap_or_default());
+    }
+    Zeroizing::new(
+        format!(
+            "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n\
+             <KeyFile>\n    <Meta>\n        <Version>2.0</Version>\n    </Meta>\n    \
+             <Key>\n        <Data Hash=\"{check}\">\n            {data}\n        </Data>\n    \
+             </Key>\n</KeyFile>\n",
+            data = data.as_str()
+        )
+        .into_bytes(),
+    )
 }
 
 /// Why a vault could not be opened or saved.
@@ -247,6 +316,60 @@ mod tests {
         entry.set_unprotected("UserName", "ayse");
         entry.set_protected("Password", "çok-gizli-1");
         db
+    }
+
+    #[test]
+    fn a_generated_key_file_is_keepassxcs_xml_v2_and_opens_the_vault() {
+        // KeePassXC's own form, for a known key (its test vault's key file).
+        let key: [u8; 32] =
+            hex::decode("36057B1C35037FD962257893C0A22403EE3F8FBB504D998108B821CB00D28F89")
+                .unwrap()
+                .try_into()
+                .unwrap();
+        let xml = String::from_utf8(key_file_xml(&key).to_vec()).unwrap();
+        assert_eq!(
+            xml,
+            "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<KeyFile>\n    <Meta>\n        \
+             <Version>2.0</Version>\n    </Meta>\n    <Key>\n        <Data Hash=\"A65F0C2D\">\n            \
+             36057B1C 35037FD9 62257893 C0A22403\n            \
+             EE3F8FBB 504D9981 08B821CB 00D28F89\n        </Data>\n    </Key>\n</KeyFile>\n"
+        );
+        assert_eq!(
+            keepass::key_file_element(xml.as_bytes()).as_deref(),
+            Some(&key[..])
+        );
+
+        // A random one: its key, kept as that element, opens what it saved.
+        let file = generate_key_file().unwrap();
+        let other = generate_key_file().unwrap();
+        assert_ne!(*file, *other);
+        let key = VaultKey::new().with_key_file(&file);
+        let bytes = save(&sample(), &key).unwrap();
+        assert!(open(&bytes, &key).is_ok());
+        let kept = key_file_secret(&file).unwrap();
+        assert_eq!(kept.len(), 32);
+        assert!(open(&bytes, &VaultKey::new().with_key_file(&kept)).is_ok());
+    }
+
+    #[test]
+    fn a_key_change_keeps_the_parts_asked_for_even_a_hashed_password() {
+        let file = generate_key_file().unwrap();
+        let hashed = VaultKey::new()
+            .with_password_hash(&kutup_crypto::pass_vault::password_hash("parola"))
+            .with_key_file(&file);
+        // The password kept, a new key file: opens with the typed password
+        // and the new file.
+        let other = generate_key_file().unwrap();
+        let changed = hashed.keeping(true, false).with_key_file(&other);
+        let bytes = save(&sample(), &changed).unwrap();
+        let typed = VaultKey::new()
+            .with_password("parola")
+            .with_key_file(&other);
+        assert!(open(&bytes, &typed).is_ok());
+        assert!(open(&bytes, &hashed).is_err());
+        // Nothing kept and nothing new: no key.
+        assert!(hashed.keeping(false, false).check().is_err());
+        assert!(hashed.keeping(false, true).check().is_ok());
     }
 
     #[test]
