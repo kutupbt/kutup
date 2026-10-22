@@ -222,6 +222,7 @@ test('forwarding: verified by code; end to end set up, accepted, received, pause
   await again.goto(appUrl('account', `/email-forwarding#${token.toString('base64url')}`))
   await expect(again.getByTestId('email-forwarding-problem')).toBeVisible({ timeout: 60_000 })
   await again.close()
+  await openForwarding(mail)
   await expect(async () => {
     await mail.reload()
     await expect(mail.getByTestId('forwarding-list-outgoing').getByTestId('forwarding-row')).toHaveAttribute('data-state', 'rejected', { timeout: 5_000 })
