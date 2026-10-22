@@ -132,7 +132,13 @@ export class ApiChatTransport implements ChatTransportPort {
         .get(path, { params: { server } })
         .then((response) => response.data)
     } catch (error) {
-      if (axios.isAxiosError(error) && error.response?.status === 404) return null
+      // Only the server's own "no manifest" (`404 noManifest`): another 404
+      // (a proxy, Chat switched off) must not read as an account without a
+      // Chat identity, which this device would then re-register.
+      if (axios.isAxiosError(error) && error.response?.status === 404
+        && (error.response.data as { code?: unknown } | undefined)?.code === 'noManifest') {
+        return null
+      }
       throw error
     }
   }

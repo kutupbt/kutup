@@ -154,14 +154,20 @@ describe('ApiChatTransport', () => {
     expect(post).toHaveBeenCalledWith('/chat/manifest', { sequence: 2 })
   })
 
-  it('treats only a manifest 404 as an absent manifest', async () => {
+  it('treats only the server\'s noManifest 404 as an absent manifest', async () => {
     const get = vi.spyOn(api, 'get').mockRejectedValue({
       isAxiosError: true,
-      response: { status: 404 },
+      response: { status: 404, data: { error: 'chat manifest not found', code: 'noManifest' } },
     })
     const transport = new ApiChatTransport()
 
     await expect(transport.fetchManifest(BOB)).resolves.toBeNull()
+
+    // Another 404 (a proxy, Chat off) is no answer: never a re-registration.
+    get.mockRejectedValueOnce({ isAxiosError: true, response: { status: 404, data: '' } })
+    await expect(transport.fetchManifest(BOB)).rejects.toMatchObject({
+      response: { status: 404 },
+    })
 
     get.mockRejectedValueOnce({ isAxiosError: true, response: { status: 503 } })
     await expect(transport.fetchManifest(BOB)).rejects.toMatchObject({

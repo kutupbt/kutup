@@ -65,6 +65,23 @@ fn a_first_device_reregisters_and_a_second_links() {
     let c = common::client();
     let mut ada = account(&c, &base);
 
+    // No Chat device yet: the server's own "no manifest", which alone means
+    // "re-register as the first device"; an unknown account is another 404.
+    let manifest_of = |id: &str| {
+        code(
+            c.get(format!("{base}/api/chat/accounts/{id}/manifest"))
+                .bearer_auth(&ada.token)
+                .send()
+                .unwrap(),
+        )
+    };
+    let (status, answer) = manifest_of(&ada.account.account_id);
+    assert_eq!(status, StatusCode::NOT_FOUND, "{answer}");
+    assert_eq!(answer["code"], "noManifest");
+    let (status, answer) = manifest_of(&uuid::Uuid::new_v4().to_string());
+    assert_eq!(status, StatusCode::NOT_FOUND, "{answer}");
+    assert_ne!(answer["code"], "noManifest");
+
     // Without a link token or a re-registration: refused at the JSON
     // boundary (exactly one kind, by type).
     let mut body = serde_json::to_value(ada.registration(

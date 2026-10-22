@@ -894,6 +894,15 @@ pub async fn get_user_manifest(
     }
 }
 
+/// The account has no Chat manifest yet (no Chat device ever registered):
+/// `404 noManifest`, the one answer a client takes for "re-register as the
+/// account's first device". Any other 404 (an unknown account, a proxy, Chat
+/// switched off) is not that.
+pub(crate) fn no_manifest() -> AppError {
+    AppError::not_found("chat manifest not found")
+        .with_details(serde_json::json!({ "code": "noManifest" }))
+}
+
 pub(crate) async fn load_account_manifest(
     state: &AppState,
     user_id: Uuid,
@@ -903,10 +912,8 @@ pub(crate) async fn load_account_manifest(
             .bind(user_id)
             .fetch_optional(&state.pool)
             .await?;
-    let manifest: AccountManifestV2 = serde_json::from_value(
-        value.ok_or_else(|| AppError::not_found("chat manifest not found"))?,
-    )
-    .map_err(|error| AppError::internal(format!("stored chat manifest is invalid: {error}")))?;
+    let manifest: AccountManifestV2 = serde_json::from_value(value.ok_or_else(no_manifest)?)
+        .map_err(|error| AppError::internal(format!("stored chat manifest is invalid: {error}")))?;
     manifest
         .verify()
         .map_err(|error| AppError::internal(format!("stored chat manifest is invalid: {error}")))?;

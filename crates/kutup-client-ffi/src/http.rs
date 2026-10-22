@@ -135,7 +135,13 @@ impl ChatTransport for NativeTransport {
                 None,
             )
             .await?;
-        if response.status == 404 {
+        // Only the server's own "no manifest": another 404 must not read as
+        // an account without a Chat identity, which this device would then
+        // re-register.
+        if response.status == 404
+            && serde_json::from_str::<serde_json::Value>(&response.body_json)
+                .is_ok_and(|body| body["code"] == "noManifest")
+        {
             return Ok(None);
         }
         ensure_success(&response)?;

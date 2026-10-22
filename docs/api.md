@@ -38,6 +38,7 @@ Specific codes, where an app does something particular (a test in
 | Code | Status | Meaning |
 |---|---|---|
 | `deviceCredential` | 401 | A Chat call made as a device without that device's `X-Kutup-Chat-Device` credential, with a wrong one, or for a removed or expired device (one answer for all) |
+| `noManifest` | 404 | `GET /api/chat/accounts/{accountId}/manifest` (and its federation route): the account has no Chat manifest, since no Chat device ever registered. Clients take only this 404 for "re-register as the account's first device"; any other 404 is an error |
 | `badSignature` | 400 | A Chat prekey (signed EC, last-resort or one-time Kyber), or a manifest's `identityBinding`, not signed by the account's identity key |
 | `keysDiffer` | 409 | `POST /api/chat/keys/check`: the server holds other keys for this device; it uploads them again |
 | `linkTokenLimit` | 409 | `POST /api/chat/link-tokens`: as many unused link tokens as the administrators allow (`chatLinkTokensPerAccount`) |
@@ -3561,7 +3562,9 @@ failure. Manifests, profiles, key bundles (`account`) and mailbox envelopes
 Return the current account-signed device manifest for an account. This direct
 manifest endpoint is authenticated. A client independently verifies its
 signature, authority continuity, and hash chain rather than trusting a server
-status label.
+status label. `404 noManifest`: the account has no Chat manifest yet; a 404
+without that code (an unknown account; a remote server that didn't say so)
+is not that answer.
 
 ### GET /api/chat/accounts/{accountId}/manifest-history
 
@@ -4108,7 +4111,8 @@ exhaust the remote recipient's pool.
 ### GET /api/fed/chat/accounts/{accountId}/manifest
 
 Return the current complete account-signed manifest through an authenticated,
-origin- and destination-bound federation response.
+origin- and destination-bound federation response (`404 noManifest` when the
+account has none).
 
 ### GET /api/fed/chat/accounts/{accountId}/manifest-history
 

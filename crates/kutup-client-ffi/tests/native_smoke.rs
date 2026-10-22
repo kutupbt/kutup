@@ -56,9 +56,12 @@ impl ChatHttpClient for MockHttp {
                         status: 200,
                         body_json,
                     },
+                    // The server's own "no manifest": the account's first
+                    // device re-registers.
                     None => ChatHttpResponse {
                         status: 404,
-                        body_json: String::new(),
+                        body_json: r#"{"error":"chat manifest not found","code":"noManifest"}"#
+                            .into(),
                     },
                 })
             }

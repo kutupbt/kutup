@@ -222,7 +222,20 @@ pub async fn fetch_remote_manifest(
         .await
         .map_err(federation_gateway_error)?;
     if response.status == StatusCode::NOT_FOUND {
-        return Err(AppError::not_found("remote chat manifest not found"));
+        // Only the remote server's own "no manifest" passes on as one; any
+        // other 404 (an unknown account) is not taken for it.
+        let code = serde_json::from_slice::<serde_json::Value>(&response.body)
+            .ok()
+            .and_then(|body| {
+                body.get("code")
+                    .and_then(|code| code.as_str())
+                    .map(str::to_owned)
+            });
+        return Err(if code.as_deref() == Some("noManifest") {
+            crate::handlers::chat::no_manifest()
+        } else {
+            AppError::not_found("remote chat account not found")
+        });
     }
     if response.status != StatusCode::OK {
         return Err(AppError::new(
@@ -2557,7 +2570,7 @@ pub async fn get_manifest(
         return signed_app_error(
             federation,
             &authenticated,
-            AppError::not_found("chat manifest not found"),
+            crate::handlers::chat::no_manifest(),
         );
     };
     let manifest: AccountManifestV2 = serde_json::from_value(value)
