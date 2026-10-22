@@ -4,13 +4,23 @@
 //! distribution, for the account identity), re-registration, per-device
 //! credentials, and the `accountIdentity` sync a distribution sends.
 //!
-//! These types are additive until the cutover: the V1 manifest and the
-//! per-device identity stay in use until the server migration and the clients
-//! switch together; then V1 goes and the optional registration fields below
-//! become required.
+//! These types arrive beside the V1 ones they replace. The cutover (the server
+//! migration and the clients, which land together) deletes
+//! `AccountManifestV1`, `UserPreKeyBundlesResponse` and the V1
+//! `RegisterChatDeviceRequest`, and nothing then accepts them: there is no
+//! legacy path.
 //!
 //! Limits (envelope sizes, token lifetimes, rates) are site settings and live
 //! in the server; the bounds here are the formats' own.
+//!
+//! Unknown fields: what a client sends and the server parses is strict
+//! (`deny_unknown_fields`), as is what one client sends another (the
+//! provisioning message, the `accountIdentity` sync) and the signed manifest.
+//! What the server answers and clients read (bundles, link tokens, the
+//! provisioning socket's messages) takes unknown fields, so a field a newer
+//! server adds doesn't break an older client. The key types shared by
+//! requests and answers (`EcPreKey`, `KemPreKey`, `OutgoingEnvelope`) stay as
+//! they are for that reason.
 
 use serde::{Deserialize, Serialize};
 
@@ -314,12 +324,42 @@ impl AccountManifestV2 {
             .verify_strict(&self.signing_bytes()?, &signature)
             .map_err(|_| "manifest signature is invalid".to_string())
     }
+
+    /// Whether this manifest may follow `head`, the account's current one
+    /// (`None`: the account has none). The one continuity check the server,
+    /// the web client and the native clients all use: it verifies, and either
+    /// starts the chain (sequence 1, no `previousHash`) or continues `head`
+    /// (the same account, incarnation and authority, sequence + 1, and
+    /// `previousHash` the head's [`Self::manifest_hash`]).
+    pub fn verify_successor(&self, head: Option<&AccountManifestV2>) -> Result<(), String> {
+        self.verify()?;
+        let Some(head) = head else {
+            if self.sequence != 1 {
+                return Err("the account has no manifest: the chain starts at sequence 1".into());
+            }
+            return Ok(());
+        };
+        if self.account != head.account
+            || self.incarnation_id != head.incarnation_id
+            || self.authority_key_id != head.authority_key_id
+            || self.self_authority_key != head.self_authority_key
+        {
+            return Err("a successor names another account, incarnation or authority".into());
+        }
+        if Some(self.sequence) != head.sequence.checked_add(1) {
+            return Err("a successor's sequence is the head's + 1".into());
+        }
+        if self.previous_hash.as_deref() != Some(head.manifest_hash()?.as_str()) {
+            return Err("a successor's previousHash is the head's manifest hash".into());
+        }
+        Ok(())
+    }
 }
 
 /// Successful publication of one signed V2 manifest.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[serde(rename_all = "camelCase")]
 pub struct AccountManifestPublicationV2 {
     pub manifest: AccountManifestV2,
 }
@@ -328,7 +368,7 @@ pub struct AccountManifestPublicationV2 {
 /// [`crate::AccountManifestHistoryPageV1`].
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[serde(rename_all = "camelCase")]
 pub struct AccountManifestHistoryPageV2 {
     #[cfg_attr(feature = "openapi", schema(value_type = AccountRefSchema))]
     pub account: AccountRef,
@@ -359,6 +399,12 @@ impl AccountManifestHistoryPageV2 {
             }
             if previous.is_some() && manifest.previous_hash != previous {
                 return Err("account manifest history page breaks the hash chain".into());
+            }
+            let first = &self.manifests[0];
+            if manifest.incarnation_id != first.incarnation_id
+                || manifest.authority_key_id != first.authority_key_id
+            {
+                return Err("account manifest history page changes authority".into());
             }
             previous = Some(manifest.manifest_hash()?);
             expected = expected
@@ -486,7 +532,7 @@ pub fn decode_device_credential(value: &str) -> Result<[u8; DEVICE_CREDENTIAL_LE
 /// for one new device, as Signal's provisioning code.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[serde(rename_all = "camelCase")]
 pub struct ChatLinkTokenResponse {
     /// Canonical unpadded base64url of 32 random bytes; the server stores
     /// only its hash.
@@ -509,7 +555,7 @@ pub fn decode_provisioning_address(value: &str) -> Result<[u8; PROVISIONING_ADDR
 /// HMAC-SHA256(32)` (kutup-crypto `provisioning`).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[serde(rename_all = "camelCase")]
 pub struct ProvisionEnvelopeV1 {
     /// Canonical base64 of the sender's 33-byte serialized X25519 key.
     pub public_key: String,
@@ -552,7 +598,7 @@ pub struct ProvisioningRelayRequest {
 /// closes the socket after the envelope.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
-#[serde(rename_all = "camelCase", tag = "type", deny_unknown_fields)]
+#[serde(rename_all = "camelCase", tag = "type")]
 pub enum ProvisioningSocketMessage {
     Address { address: String },
     Envelope { envelope: ProvisionEnvelopeV1 },
@@ -698,8 +744,9 @@ pub struct AccountIdentityDistributionRequest {
     /// current session; `registrationId` is the device's **current** one (a
     /// mismatch is `410`). Strictly ordered by `deviceId`.
     pub device_messages: Vec<OutgoingEnvelope>,
-    /// The next V2 manifest: this identity, exactly these devices with these
-    /// registration ids.
+    /// The account's next V2 manifest (sequence + 1, `previousHash` the
+    /// head's hash: [`AccountManifestV2::verify_successor`]): this identity,
+    /// exactly these devices with these registration ids.
     pub manifest: AccountManifestV2,
 }
 
@@ -801,43 +848,94 @@ impl AccountIdentityDistributionRequest {
     }
 }
 
-/// A re-registration: the device takes a new identity and every other device
-/// of the account is dropped (Signal's `reclaimAccount`). Carried by
-/// `POST /api/chat/device`, with no link token; the account's first Chat
-/// device registers this way too. The gate is the account authority.
+/// How a device registers: linked by a device of the account, or a
+/// re-registration. Exactly one, by type.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[serde(rename_all = "camelCase", tag = "type", deny_unknown_fields)]
+pub enum DeviceRegistrationV1 {
+    /// Linked: the one-time token the linking device obtained and sent in
+    /// the provisioning message, consumed in the insert's transaction. A
+    /// device of the account publishes the manifest that lists it afterwards.
+    #[serde(rename_all = "camelCase")]
+    Link { link_token: String },
+    /// A re-registration: this device takes a new identity and every other
+    /// device of the account is dropped (Signal's `reclaimAccount`); the
+    /// account's first Chat device registers this way too. The gate is the
+    /// account authority. `manifest` is the account's next V2 manifest,
+    /// listing this device alone as [`REREGISTRATION_DEVICE_ID`] with the
+    /// request's identity and registration id; it continues the chain
+    /// ([`AccountManifestV2::verify_successor`]): sequence 1 with no
+    /// `previousHash` when the account has no V2 manifest, otherwise the
+    /// head's sequence + 1 with `previousHash` the head's hash. The server
+    /// inserts the device as 1 in the transaction that drops the others and
+    /// publishes the manifest.
+    Reregistration { manifest: Box<AccountManifestV2> },
+}
+
+/// `POST /api/chat/device` from the cutover on: the V1 request with the
+/// account's identity key, the device's credential, and how it registers.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct ReregistrationV1 {
-    /// The next V2 manifest, listing this device alone as
-    /// [`REREGISTRATION_DEVICE_ID`] with the request's identity and
-    /// registration id. It continues the account's chain as any manifest
-    /// does: sequence 1 with no `previousHash` when the account has no V2
-    /// manifest, otherwise the head's sequence + 1 linked to the head's hash
-    /// (a reset after every device was lost). The server checks it as it
-    /// checks a distribution's.
-    pub manifest: AccountManifestV2,
+pub struct RegisterChatDeviceRequestV2 {
+    pub suite: DirectChatSuiteId,
+    /// libsignal registration id, 1..=16383.
+    pub registration_id: u32,
+    /// The account's identity key (canonical base64 of the 33-byte key).
+    pub identity_key: String,
+    /// Signed by the account identity key, as are the Kyber keys.
+    pub signed_pre_key: EcPreKey,
+    pub last_resort_kyber_pre_key: KemPreKey,
+    #[serde(default)]
+    pub one_time_pre_keys: Vec<EcPreKey>,
+    #[serde(default)]
+    pub one_time_kyber_pre_keys: Vec<KemPreKey>,
+    /// Human label shown in device management ("Firefox on laptop").
+    #[serde(default)]
+    pub name: String,
+    /// The device's credential (Signal's per-device password): canonical
+    /// unpadded base64url of 32 random bytes; the server stores a salted hash
+    /// and the device sends it in [`CHAT_DEVICE_HEADER`].
+    pub credential: String,
+    pub registration: DeviceRegistrationV1,
 }
 
-impl ReregistrationV1 {
-    /// Against the registration request it rides in.
-    pub fn validate(&self, request: &crate::RegisterChatDeviceRequest) -> Result<(), String> {
-        self.manifest.verify()?;
-        if request.link_token.is_some() {
-            return Err("a re-registration takes no link token".into());
+impl RegisterChatDeviceRequestV2 {
+    /// Everything that needs no rows and no libsignal: the identity's and
+    /// the credential's encodings, the registration id, the link token's
+    /// encoding, and a re-registration manifest that verifies and lists this
+    /// device alone with this identity, registration id and suite. The
+    /// server then checks the prekey signatures (`400 badSignature`), the
+    /// token, and the manifest's place in the chain.
+    pub fn validate(&self) -> Result<(), String> {
+        decode_identity_key("identityKey", &self.identity_key)?;
+        decode_device_credential(&self.credential)?;
+        check_registration_id(self.registration_id)?;
+        if self.signed_pre_key.signature.is_none() {
+            return Err("a signed prekey must carry its signature".into());
         }
-        if self.manifest.identity_key != request.identity_key {
-            return Err("the manifest lists another identity".into());
-        }
-        match self.manifest.devices.as_slice() {
-            [device]
-                if device.device_id == REREGISTRATION_DEVICE_ID
-                    && device.registration_id == request.registration_id
-                    && device.direct_chat_suite == request.suite =>
-            {
+        match &self.registration {
+            DeviceRegistrationV1::Link { link_token } => {
+                decode_link_token(link_token)?;
                 Ok(())
             }
-            _ => Err("a re-registration manifest lists this device alone".into()),
+            DeviceRegistrationV1::Reregistration { manifest } => {
+                manifest.verify()?;
+                if manifest.identity_key != self.identity_key {
+                    return Err("the manifest lists another identity".into());
+                }
+                match manifest.devices.as_slice() {
+                    [device]
+                        if device.device_id == REREGISTRATION_DEVICE_ID
+                            && device.registration_id == self.registration_id
+                            && device.direct_chat_suite == self.suite =>
+                    {
+                        Ok(())
+                    }
+                    _ => Err("a re-registration manifest lists this device alone".into()),
+                }
+            }
         }
     }
 }
