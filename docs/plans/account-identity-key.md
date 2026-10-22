@@ -28,15 +28,26 @@ by its permanent account id and username, so there is one identity (the
 ACI's) and nothing of Signal's PNI machinery but the one pattern below (its
 identity distribution), reused for the account identity.
 
-## What stays
+## What stays, and what follows Signal
 
 Kutup's **account authority** (an Ed25519 key derived from the account master
-key, chat-protocol.md §4) stays the root of trust. It signs the account
-manifest, safety numbers are computed over it (§5), identity pins and the QR
-verification are per authority, and group bindings and pseudonyms derive from
-the master key. None of that is tied to a device identity today, and none of
-it changes. The authority now also signs which identity key the account has
-and each device's registration id.
+key, chat-protocol.md §4) stays the root of the account: it signs the
+account manifest (now also which identity key the account has and each
+device's registration id), the synced identity pins keep it (manifest
+continuity, and Drive's sharing, which is per authority), and group bindings
+and pseudonyms derive from the master key.
+
+**Safety numbers and verification follow Signal** (the user, 2026-10-22:
+"reference signal directly"): they move from the authority to the account
+identity key. The safety number is libsignal's `NumericFingerprint` over each
+side's account id and account identity key, as Signal's (which uses the ACI
+and the ACI identity key); the QR code carries that fingerprint (a new
+version of `kutup://verify`). A contact's verified state is kept with the
+identity key it verified, and synced to the account's own devices in the
+Chat contact record (docs/plans/chat-contacts-sync.md), as Signal keeps
+`identityKey` and `identityState` in its `ContactRecord`. So an identity reset
+changes the safety number and clears verified, exactly as in Signal; linking
+or removing a device does neither.
 
 ## The model
 
@@ -262,9 +273,11 @@ browser), or the person chooses "I don't have my other devices":
 An identity change under the same authority (a distribution or a
 re-registration):
 
-- the safety number **does not change** (it is computed over the authority);
-- a notice in the conversation: "Ada's keys changed. Her safety number is the
-  same." (exact wording and the verified state: Q-d, the user's decision);
+- **Signal's notice:** "Your safety number with Ada has changed" in the
+  conversation, as Signal shows it;
+- the safety number is new (it is computed over the identity key), and a
+  verified contact is **no longer verified** (Signal's VERIFIED to
+  UNVERIFIED), synced so on every device of the account;
 - sessions with every device of the account are archived and re-established;
 - her sender keys are reset in every group she is in, and so are theirs
   toward her, as Signal's `addKeyChange` does;
@@ -281,8 +294,9 @@ change: quarantined, as now (`quarantine_authority`).
 - **Reinstall detection** follows the manifest's registration ids (above),
   never a device's identity.
 - **`ChatEvent::IdentityChanged`** fires only for an account identity change,
-  once per account. That also ends today's false "safety number changed"
-  notices on a peer's reinstall.
+  once per account, and carries the new safety number. That also ends today's
+  "safety number changed" notices on a peer's reinstall or new device (a new
+  device doesn't change the identity, so it changes nothing, as in Signal).
 - **Sender certificates** carry the account identity key; on receipt the key
   is checked against the account's verified manifest and the device id
   against its listed devices, also for a remote sender (the federated
@@ -482,12 +496,20 @@ identity distribution (above):
    transaction.
 2. Each other device applies its sync when it next connects (offline ones
    later), and uploads its one-time keys.
-3. Peers see one identity change per account, under the same authority: the
-   notice, not a warning.
+3. **Every contact sees one "safety number changed" notice for the account,
+   and loses its verified state for it once**, as in Signal after a
+   re-registration: the safety number is now over the account identity, which
+   didn't exist before. The release notes say so plainly (below).
 
 Two devices that start at once: the server takes the first distribution (the
 manifest's sequence decides); the other's fails with a sequence conflict, it
 reads the V2 manifest, and waits for its sync.
+
+**What people are told.** The release notes say: "This update moves Chat to
+one identity key per account, as Signal. Each of your contacts will see your
+safety number change once, and you'll see theirs change once as they update.
+If you had verified a contact, verify them again." The app shows the same
+once, after the migration.
 
 **Peers of a legacy account** (no device of which has opened the new version
 yet): their manifest is still V1, so the multi-recipient route isn't used for
@@ -517,12 +539,17 @@ does and doesn't revoke.
 
 ## What changes where
 
-- **kutup-crypto:** the provisioning cipher (with vectors).
+- **kutup-crypto:** the provisioning cipher (with vectors); the safety
+  number moves to libsignal's `NumericFingerprint` over the account id and
+  identity key (vectors against libsignal's own), and the verification QR gets
+  a new version.
 - **kutup-chat-proto:** `ChatProvisionV1`, `AccountManifestV2`, the
   `accountIdentity` sync kind, the distribution and registration request
   types.
 - **kutup-chat-core:** `keys::generate` takes the identity instead of making
-  one; the identity rule and the registration-id rule; `IdentityChanged` per
+  one; the safety number and verified state per identity key (the Chat
+  contact record gains `identityKey` and `identityState`, as Signal's
+  `ContactRecord`); the authority quarantine stays for manifest continuity; the identity rule and the registration-id rule; `IdentityChanged` per
   account; linking (both sides); the distribution (send and apply);
   re-registration; the migration; group sends with legacy members; slice 2
   unparked.
@@ -530,12 +557,16 @@ does and doesn't revoke.
   native apps (not built yet; the API is in the bindings).
 - **Web:** Settings → Linked devices (link, list, remove, remove a lost
   device and reset), "Link this device" (QR and code, with the pasted-code
-  advice), the identity-change notice, the migration on open, the restore
-  screen's steer.
+  advice), Signal's "safety number changed" notice and the verified state
+  cleared, the new safety number and QR, the migration on open with its
+  one-time explanation, the restore screen's steer.
 - **CLI:** the lost-device and password texts.
 - **Server:** the second session's section.
-- **Docs:** chat-protocol.md §4.1, §5, §6, chat-backup.md, the threat model
-  (removal, lost devices, master-key rotation not built).
+- **Docs:** chat-protocol.md §4.1, §5 (the safety number over the identity
+  key), §6, chat-backup.md, docs/plans/chat-contacts-sync.md (the verified
+  state in the contact record), the threat model (removal, lost devices,
+  master-key rotation not built), and the release notes (the one-time
+  "safety number changed" for every contact).
 
 ## Tests
 
@@ -544,23 +575,34 @@ does and doesn't revoke.
     first, wrong account, an identity the manifest doesn't list);
   - V2 manifest verification, the identity rule, the registration-id rule
     (a `409`/`410` that disagrees is refused);
+  - the safety number against libsignal's fingerprint vectors; verified
+    cleared by an identity change and kept by linking and removal;
   - prekeys signed by the account key;
   - the distribution (built and applied, a device offline applies it later);
   - re-registration; the migration with two devices starting at once.
 - **Harness:** a three-device account messages and receives on the
   multi-recipient route; linking end to end; removal (no notice); remove a
-  lost device and reset (notice, sessions re-established, sender keys reset);
+  lost device and reset ("safety number changed", verified cleared, sessions
+  re-established, sender keys reset); linking a device changes nothing for
+  peers;
   re-registration; a group with a legacy member.
-- **Browser:** spec 169 (Chat suite): link a second browser with the code,
-  message from both, remove a lost device and reset, re-register after a
-  cleared browser. The two-server gate (spec 34) and the group specs.
+- **Browser:** spec 169 (Chat suite): link a second browser with the code
+  (no notice at the contact), message from both, verify a contact, remove a
+  lost device and reset (the contact sees "safety number changed" and is no
+  longer verified), re-register after a cleared browser. The two-server gate (spec 34) and the group specs.
 - **Server:** the second session's section.
 
-## Open questions
+## Decisions
 
-- **Q-d** (the user's decision, asked by the main session): the notice
-  wording when the authority is the same, and whether a verified contact
-  stays verified (proposed: yes, verification is of the authority). Whoever
-  has the master key could reset the identity with only that notice; that is
-  no worse than today, where the master key already signs any manifest.
-- **The legacy end date** (above).
+- **Q-a:** the identity is random and provisioned, as Signal, not derived
+  from the master key.
+- **Q-b:** a moved account's device expiry marks it, it leaves the sends at
+  once, and the next V2 manifest drops it.
+- **Q-c:** the manifest carries the identity key itself.
+- **Q-d** (the user, 2026-10-22, "reference signal directly"): safety numbers
+  and verification follow the account identity key, as Signal's; an identity
+  reset shows "safety number changed" and clears verified; the migration does
+  that once per contact.
+- **Q-e:** gone (the distribution replaced the migration's window).
+- **The legacy end:** a fixed date, no later than the release after next and
+  before v1, set with the user.
