@@ -1402,15 +1402,11 @@
   "emailForwarding": {
     "title": "Email forwarding",
     "request": "{{from}} wants to forward email to {{to}}.",
-    "notEncrypted": "Forwarded email isn't end-to-end encrypted on its way to you. You can decline, and {{from}} can stop forwarding at any time.",
-    "accept": "Accept",
-    "decline": "Decline",
-    "accepted": "Forwarding accepted. You'll receive email forwarded from {{from}}.",
+    "notEncrypted": "Forwarded email isn't end-to-end encrypted on its way to you. Nothing is forwarded unless the code sent to you is entered. You can stop it here at any time.",
+    "decline": "Stop forwarding",
     "declined": "Forwarding declined. You won't receive email forwarded from {{from}}.",
-    "alreadyAnswered": "This forwarding has been answered already.",
     "alreadyDeclined": "This forwarding was declined.",
-    "invalid": "This link isn't valid, or it has been used already.",
-    "expired": "This link has expired. A new one is on its way to you by email.",
+    "invalid": "This link isn't valid, or the forwarding has already been stopped.",
     "rateLimited": "Too many attempts. Try again in a minute."
   }
 }
