@@ -161,7 +161,8 @@ pub struct SharedSigned {
     /// None: as long as the start says (a date: one day; a time: no length).
     pub dtend: Option<EventTime>,
     pub recurrence_id: Option<EventTime>,
-    /// The RRULE value as written (E2 reads it; E1 refuses one).
+    /// The RRULE value, in its canonical form
+    /// ([`crate::calendar_recurrence::Rule::parse`]).
     pub rrule: Option<String>,
     pub exdates: Vec<EventTime>,
     /// `mailto:` of the organizer (invitations, E4).
@@ -263,6 +264,22 @@ const KNOWN: &[&str] = &[
 ];
 
 impl SharedSigned {
+    /// The event's times and rule as a series (one occurrence when it
+    /// doesn't repeat), checked.
+    pub fn series(&self) -> Result<crate::calendar_recurrence::Series> {
+        let rule = self
+            .rrule
+            .as_deref()
+            .map(crate::calendar_recurrence::Rule::parse)
+            .transpose()?;
+        crate::calendar_recurrence::Series::new(
+            &self.dtstart,
+            self.dtend.as_ref(),
+            rule.as_ref(),
+            &self.exdates,
+        )
+    }
+
     pub fn build(&self) -> Result<String> {
         check_uid(&self.uid)?;
         let mut lines = vec![
@@ -287,12 +304,20 @@ impl SharedSigned {
         }
         if let Some(id) = &self.recurrence_id {
             check_time(id)?;
+            // One occurrence changed (Proton's single edit): no rule of its own.
+            if self.rrule.is_some() || !self.exdates.is_empty() {
+                return Err(CryptoError::InvalidInput(
+                    "an event with RECURRENCE-ID has no RRULE or EXDATE".into(),
+                ));
+            }
             lines.push(id.write("RECURRENCE-ID"));
         }
         if let Some(rule) = &self.rrule {
-            check_rrule(rule)?;
             lines.push(format!("RRULE:{rule}"));
         }
+        // The rule in its canonical form, fitting the start, and at least
+        // one occurrence left.
+        self.series()?;
         push_exdates(&mut lines, &self.exdates)?;
         if let Some(organizer) = &self.organizer {
             check_mailto(organizer)?;
@@ -492,7 +517,7 @@ pub enum TimeV1 {
 }
 
 impl TimeV1 {
-    fn to_time(&self) -> Result<EventTime> {
+    pub(crate) fn to_time(&self) -> Result<EventTime> {
         let invalid = || CryptoError::InvalidInput("time is invalid".into());
         Ok(match self {
             TimeV1::Date(date) => EventTime::Date(date.parse().map_err(|_| invalid())?),
@@ -507,7 +532,7 @@ impl TimeV1 {
         })
     }
 
-    fn of(time: &EventTime) -> Self {
+    pub(crate) fn of(time: &EventTime) -> Self {
         match time {
             EventTime::Date(date) => TimeV1::Date(date.to_string()),
             EventTime::Zoned { local, tzid } => TimeV1::Zoned {
@@ -745,19 +770,6 @@ fn check_time(time: &EventTime) -> Result<()> {
         time_zone(tzid)?;
     }
     time.instant().map(|_| ())
-}
-
-/// An RRULE value: RFC 5545 recur syntax characters only (E2 parses it).
-fn check_rrule(rule: &str) -> Result<()> {
-    if rule.is_empty()
-        || rule.len() > 1024
-        || !rule
-            .bytes()
-            .all(|b| b.is_ascii_alphanumeric() || b"=;,-+:".contains(&b))
-    {
-        return Err(CryptoError::InvalidInput("RRULE is invalid".into()));
-    }
-    Ok(())
 }
 
 fn check_mailto(value: &str) -> Result<()> {
