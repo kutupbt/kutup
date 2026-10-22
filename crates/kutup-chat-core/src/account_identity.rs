@@ -444,11 +444,12 @@ impl Engine {
             .ok_or_else(|| ChatError::Invalid("this device has no profile key yet".into()))?;
         let token = transport.create_link_token().await?;
         let identity = self.session.local_identity_key_pair();
+        let private = Zeroizing::new(identity.private_key().serialize());
         let message = ChatProvisionV1 {
             provisioning_version: PROVISIONING_VERSION,
             account,
             identity_key_public: identity_key,
-            identity_key_private: STANDARD.encode(identity.private_key().serialize()),
+            identity_key_private: STANDARD.encode(private.as_slice()),
             link_token: token.token.clone(),
             manifest_sequence: head.sequence,
             manifest_hash: head.manifest_hash().map_err(ChatError::Trust)?,
@@ -572,6 +573,7 @@ impl Engine {
             } else {
                 self.fetch_verified_bundles(&user).await?
             };
+            let private_key = Zeroizing::new(identity.private_key().serialize());
             let mut messages = Vec::with_capacity(others.len());
             for (device_id, registration_id, rotation) in &private {
                 if *device_id == self.session.device_id() {
@@ -583,7 +585,7 @@ impl Engine {
                     .ok_or(ChatError::MissingBundle(*device_id))?;
                 let body = kutup_chat_proto::AccountIdentityBody {
                     identity_key_public: identity_key.clone(),
-                    identity_key_private: STANDARD.encode(identity.private_key().serialize()),
+                    identity_key_private: STANDARD.encode(private_key.as_slice()),
                     registration_id: *registration_id,
                     signed_pre_key: STANDARD.encode(&rotation.signed_record),
                     last_resort_kyber_pre_key: STANDARD.encode(&rotation.last_resort_record),
@@ -600,7 +602,12 @@ impl Engine {
                     .map_err(|error| ChatError::Content(error.to_string()))?;
                 messages.push((bundle, plaintext));
             }
-            let mut device_messages = self.session.seal_to_own_devices(&messages, rng).await?;
+            let sealed = self.session.seal_to_own_devices(&messages, rng).await;
+            // The plaintexts carry the identity's private key.
+            for (_, plaintext) in &mut messages {
+                zeroize::Zeroize::zeroize(plaintext);
+            }
+            let mut device_messages = sealed?;
             device_messages.sort_by_key(|envelope| envelope.device_id);
             devices.sort_by_key(|keys| keys.device_id);
             let request = kutup_chat_proto::AccountIdentityDistributionRequest {

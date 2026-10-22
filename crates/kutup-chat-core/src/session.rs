@@ -1508,11 +1508,13 @@ impl Session {
                     id: envelope.id.clone(),
                 });
             };
-            let encoded = zeroize::Zeroizing::new(
+            // The plaintext carries the identity's private key.
+            zeroize::Zeroize::zeroize(&mut plaintext);
+            let mut encoded = zeroize::Zeroizing::new(
                 serde_json::to_vec(&body).map_err(|e| ChatError::Content(e.to_string()))?,
             );
             self.store
-                .stage_pending_account_identity(Some(encoded.to_vec()));
+                .stage_pending_account_identity(Some(std::mem::take(&mut *encoded)));
             self.stage_inbound_ack(envelope)?;
             self.store.commit().await?;
             return Ok(ReceiveOutcome::AccountIdentity {
