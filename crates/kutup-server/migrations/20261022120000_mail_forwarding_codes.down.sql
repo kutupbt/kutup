@@ -1,0 +1,9 @@
+ALTER TABLE mail_forwardings
+    DROP CONSTRAINT mail_forwardings_code_whole,
+    DROP CONSTRAINT mail_forwardings_code_hash_length,
+    DROP COLUMN code_sent_at,
+    DROP COLUMN code_attempts,
+    DROP COLUMN code_expires_at,
+    DROP COLUMN code_key_version,
+    DROP COLUMN code_hash,
+    DROP COLUMN verified_at;

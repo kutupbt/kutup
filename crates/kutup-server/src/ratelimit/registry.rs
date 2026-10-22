@@ -114,6 +114,7 @@ impl Spec {
                 | Limit::LoginSourceDailyCeiling
                 | Limit::TotpAttempts
                 | Limit::PassPinAttempts
+                | Limit::ForwardingCodeAttempts
                 | Limit::Register
                 | Limit::RegistrationCodeChecks
                 | Limit::RegistrationCodeFailures
@@ -219,6 +220,9 @@ pub enum Limit {
     ForwardingsCreated,
     ForwardingConfirmationsSent,
     ForwardingInvites,
+    ForwardingCodeMinutes,
+    ForwardingCodeAttempts,
+    ForwardingCodeResends,
     ForwardingBounces,
     ForwardingOutside,
     ForwardingOutsideAccount,
@@ -888,17 +892,47 @@ pub static SPECS: &[Spec] = &[
         Events(DAY),
         Account,
         Mail,
-        "Confirmation emails one account causes, across its forwardings."
+        "Verification code emails one account causes, across its forwardings."
     ),
     spec!(
         ForwardingInvites,
         "forwarding_invites",
         None,
-        3,
+        10,
         Events(DAY),
         Forwarding,
         Mail,
-        "Confirmation emails one outside forwarding sends."
+        "Verification codes one forwarding sends."
+    ),
+    spec!(
+        ForwardingCodeMinutes,
+        "forwarding_code_minutes",
+        None,
+        15,
+        Minutes,
+        Forwarding,
+        Mail,
+        "How long a forwarding's verification code lasts."
+    ),
+    spec!(
+        ForwardingCodeAttempts,
+        "forwarding_code_attempts",
+        None,
+        5,
+        Attempts,
+        Forwarding,
+        Mail,
+        "Wrong verification codes before the code is void and a new one is needed."
+    ),
+    spec!(
+        ForwardingCodeResends,
+        "forwarding_code_resends",
+        None,
+        1,
+        Events(MINUTE),
+        Forwarding,
+        Mail,
+        "Verification codes one forwarding may send in a minute."
     ),
     spec!(
         ForwardingBounces,

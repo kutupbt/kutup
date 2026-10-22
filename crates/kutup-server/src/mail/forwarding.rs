@@ -25,7 +25,8 @@ pub const MAX_PER_ADDRESS: i64 = 10;
 pub const MAX_PER_ACCOUNT: i64 = 25;
 /// Pending forwardings to one address at a time.
 pub const MAX_PENDING_PER_FORWARDEE: i64 = 5;
-/// A pending forwarding's activation or confirmation link lives this long.
+/// A pending forwarding's activation, or its wait to be verified, lasts this
+/// long.
 pub const PENDING_DAYS: i64 = 7;
 /// Mail that arrives with more `Received` headers than this is delivered
 /// but never forwarded again (a loop through outside providers).
@@ -483,7 +484,8 @@ pub struct Arrived {
 pub async fn forwards(pool: &sqlx::PgPool, address: Uuid) -> bool {
     sqlx::query_scalar(
         "SELECT EXISTS (SELECT 1 FROM mail_forwardings
-                         WHERE forwarder_address_id = $1 AND state = 'active')",
+                         WHERE forwarder_address_id = $1 AND state = 'active'
+                           AND verified_at IS NOT NULL)",
     )
     .bind(address)
     .fetch_one(pool)
@@ -585,6 +587,7 @@ async fn forward_copy(state: &AppState, arrived: Arrived) -> anyhow::Result<()> 
            LEFT JOIN mail_addresses b ON b.id = f.forwardee_address_id
            LEFT JOIN users u ON u.id = b.user_id
           WHERE f.forwarder_address_id = $1 AND f.state = 'active'
+            AND f.verified_at IS NOT NULL
             AND (f.kind = 'outside' OR (b.state = 'active' AND u.is_active))",
     )
     .bind(arrived.address_id)

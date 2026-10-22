@@ -99,7 +99,10 @@ Specific codes, where an app does something particular (a test in
 | `keyListMismatch` | 400 | That key list changes more than adding EMAIL_NO_ENCRYPT |
 | `forwardingKeepsNoEncrypt` | 409 | A key list clearing EMAIL_NO_ENCRYPT while the address forwards outside Kutup |
 | `internationalAddressUnsupported` | 400 | `POST /api/mail/forwardings` to an address with non-ASCII characters: not supported yet (an IDN domain works in its punycode `xn--` form) |
-| `linkExpired` | 410 | A forwarding confirmation link past its 7 days; a new one was sent |
+| `codeWrong` | 400 | `POST /api/mail/forwardings/:id/verify`: not the code; `attemptsLeft` says how many more tries the code takes |
+| `codeVoid` | 409 | `POST /api/mail/forwardings/:id/verify`: the code took its last wrong try (`forwarding_code_attempts`); send a new one |
+| `codeExpired` | 409 | `POST /api/mail/forwardings/:id/verify`: no live code (past `forwarding_code_minutes`, or none sent); send a new one |
+| `forwardingVerified` | 409 | `POST /api/mail/forwardings/:id/code`: the forwarding is verified already |
 | `tooOld` | 410 | `GET /api/account/heads`: the anchor is past the kept window (1,000 heads): re-anchor with a notice |
 | `name_taken`, `nameTaken` | 409 | The name is in use (with what holds it) |
 | `nameNeeded` | 400/409 | A write without its `nameHash` (400), or a folder restored at the top level that needs a name there (409) |
@@ -1674,8 +1677,8 @@ dot-atom local part, a domain of two or more labels; no quoting, IP
 literals, control characters or whitespace). The first outside forwarding of an
 address brings `"keyList"`: its next signed key list, every key as it is
 plus `EMAIL_NO_ENCRYPT` (`400 keyListRequired` without it, `400
-keyListMismatch` for any other change). The forwardee is emailed a link to
-confirm or decline (7 days; 3 a day). While the address forwards outside,
+keyListMismatch` for any other change). It stays pending (7 days) until the
+forwarder enters the code mailed to the destination (see Verification below). While the address forwards outside,
 WKD offers none of its keys, and a key list clearing the flag is `409
 forwardingKeepsNoEncrypt`. When the last one ends without the owner's client
 (declined, or deleted), `GET /api/mail/addresses` says `keyListOwed: true`
@@ -1688,27 +1691,64 @@ subkeys and name exactly the forwardee key's subkeys
 past 10 per address or 25 per account; `409 forwardingUnavailable` when the
 server has no `MAIL_FORWARDING_KEYS`.
 
+**Verification.** Every new forwarding, to a Kutup address or outside, is
+unverified, and nothing is forwarded until it is verified. Creating it mails
+a 6-digit code to the destination from `postmaster@` the server, in the
+forwarder's language: who asks, the code, when it expires, and to ignore it
+if unexpected. To a Kutup address it arrives in that inbox, and the
+forwardee sees the forwarding (in `incoming`, its activation, accept and
+decline) only once it is verified. Outside, the mail also carries a link
+that can only refuse the forwarding (the stop page below), never start it.
+The code is kept as an HMAC under a key derived from `MAIL_FORWARDING_KEYS`.
+Limits (Administration → Rate limits): `forwarding_code_minutes` (15),
+`forwarding_code_attempts` (5), `forwarding_code_resends` (1 a minute),
+`forwarding_invites` (10 a day per forwarding) and
+`forwarding_confirmations_sent` (10 a day per account, across its
+forwardings); past them `429 rateLimited`. Renewing or asking again makes
+a forwarding unverified and sends a new code. A forwarding's row says
+`"verified"` and, for the forwarder while a code is live,
+`"codeExpiresAt"` and `"codeAttemptsLeft"`.
+
+### POST /api/mail/forwardings/:id/code
+
+The forwarder has a new code mailed (the last one void) → the forwarding.
+`409 forwardingVerified` when verified; `409 forwardingState` when rejected
+or outdated; `429 rateLimited` past the limits above.
+
+### POST /api/mail/forwardings/:id/verify
+
+The forwarder enters `{ "code": "123456" }` → the forwarding, verified: an
+outside one becomes active; an end-to-end one now waits for its forwardee to
+accept. `400` when it isn't six digits (no try counted); `400 codeWrong`
+with `attemptsLeft`; `409 codeVoid` after the last wrong try; `409
+codeExpired` when no code is live. Verifying a verified one answers it
+unchanged.
+
 ### PUT /api/mail/forwardings/:id
 
 The forwarder renews an `outdated` or `rejected` forwarding with new
-material: `{ "endToEnd": {...} }` as above → pending again.
+material: `{ "endToEnd": {...} }` as above → pending and unverified again,
+with a new code mailed.
 
 ### PUT /api/mail/forwardings/:id/reinvite
 
-The forwarder sends an outside forwardee a fresh link (pending, or declined
-and asked again): `429 rateLimited` past 3 a day for the forwarding, or 10 a
-day for the account (deleted forwardings' links included; making
+The forwarder asks an outside destination again (pending, or declined):
+pending and unverified, with a new code mailed; `429 rateLimited` past the
+code limits above (deleted forwardings' codes count for the account; making
 forwardings is likewise limited to 10 an hour per account, however many are
 deleted). A declined one whose address is end to end again is `400
 keyListRequired`: set it up anew.
 
-### POST /api/mail/forwardings/external · /external/accept · /external/decline
+### POST /api/mail/forwardings/external · /external/decline
 
-No account: the confirmation page, with `{ "token" }` from the link (in the
-body, never the URL); 30 requests a minute per client (`429 rateLimited`). The first answers `{ "state", "forwarderEmail",
-"forwardeeEmail" }`; accept makes it active, decline `rejected`; each spends
-the link. `404` for an unknown token; `410 linkExpired` for an expired one,
-and a new link is sent.
+No account: the stop page, with `{ "token" }` from the link in an outside
+forwarding's code mail (in the body, never the URL); 30 requests a minute
+per client (`429 rateLimited`). The first answers `{ "state",
+"forwarderEmail", "forwardeeEmail" }`; decline makes it `rejected`, pending
+or active, and spends the link. Nothing here starts a forwarding: only the
+forwarder's code does. The link doesn't expire (it is derived from the
+current `MAIL_FORWARDING_KEYS` key; rotating the key ends old links). `404`
+for an unknown token.
 
 ### PUT /api/mail/forwardings/:id/pause · /resume · /conditions
 
