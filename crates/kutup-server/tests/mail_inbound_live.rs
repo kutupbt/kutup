@@ -6473,6 +6473,8 @@ fn forwarding_codes() {
     .send()
     .unwrap();
     assert_eq!(r.status().as_u16(), 204);
+    // Renewing sends a code: a minute after the last, as any code.
+    std::thread::sleep(Duration::from_secs(62));
     let (_, renewal, terms_again) =
         forwarding_request_for(&id, &a, &alice_address_id, &b, "all", json!([]));
     let r = bearer(
