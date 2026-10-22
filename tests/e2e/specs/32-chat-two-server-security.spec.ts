@@ -353,18 +353,19 @@ test.describe('two-server secure chat', () => {
     await openDetails(pageA)
     await pageA.getByTestId('chat-safety-open').click()
     const safetyA = pageA.getByRole('dialog')
-    // Signal's safety number (kutup-crypto safety_number v3): both sides show
-    // the same twelve groups of five digits; each side's QR carries its own
-    // half first, so each scans the other's code.
+    // Signal's safety number (libsignal Fingerprint v2 over the account
+    // identities, QR `kutup://verify/v4/`): both sides show the same twelve
+    // groups of five digits; each side's QR carries its own half first, so
+    // each scans the other's code.
     const qrA = await safetyA.getByTestId('chat-safety-qr').getAttribute('data-value')
-    expect(qrA).toMatch(/^kutup:\/\/verify\/v3\/[A-Za-z0-9_-]+$/)
+    expect(qrA).toMatch(/^kutup:\/\/verify\/v4\/[A-Za-z0-9_-]+$/)
     const numberA = (await safetyA.getByTestId('chat-safety-number').textContent())?.trim()
     expect(numberA).toMatch(/^\d{5}( \d{5}){11}$/)
     await openDetails(pageB)
     await pageB.getByTestId('chat-safety-open').click()
     const safetyB = pageB.getByRole('dialog')
     const qrB = await safetyB.getByTestId('chat-safety-qr').getAttribute('data-value')
-    expect(qrB).toMatch(/^kutup:\/\/verify\/v3\/[A-Za-z0-9_-]+$/)
+    expect(qrB).toMatch(/^kutup:\/\/verify\/v4\/[A-Za-z0-9_-]+$/)
     expect(qrB).not.toBe(qrA)
     await expect(safetyB.getByTestId('chat-safety-number')).toHaveText(numberA!)
     // A side's own code is not a match: only the other side's is.
