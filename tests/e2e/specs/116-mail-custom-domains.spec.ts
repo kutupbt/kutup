@@ -69,8 +69,11 @@ test('custom domains: the wizard, addresses on the domain, catch-all, deleting i
   const context = await browser.newContext({ viewport: { width: 1400, height: 900 } })
   await registerAccount(context, alice)
   const mail = await context.newPage()
+  // Mail first (its sign-in lands on the inbox), then its settings.
+  await mail.goto(appUrl('mail'))
+  await expect(mail.getByRole('heading', { name: 'Inbox' })).toBeVisible({ timeout: 120_000 })
   await mail.goto(appUrl('mail', '/settings/domains'))
-  await expect(mail.getByRole('heading', { name: 'Domain names' })).toBeVisible({ timeout: 120_000 })
+  await expect(mail.getByRole('heading', { name: 'Domain names' })).toBeVisible({ timeout: 60_000 })
   await expect(mail.getByText('No custom domain yet')).toBeVisible()
 
   // Step 1: the name ("www." warns).
