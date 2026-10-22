@@ -158,7 +158,20 @@ export interface FolderCount {
 }
 
 /** The account's own address and its key, as the browser uses them. */
+/** One of the account's addresses that sends: enabled, with a verified primary key. */
+export interface MailSender {
+  addressId: string
+  address: string
+  /** Its display name and signature (Proton's identity is per address). */
+  name: string
+  signature: string
+  publicKey: string
+  key: SealedMailKey
+}
+
 export interface MailAccount {
+  /** The address that sends (the default, or the one the composer chose). */
+  addressId: string
   address: string
   domain: string
   /** The display name outgoing mail carries (Mail → Settings → Identity). */
@@ -185,6 +198,8 @@ export interface MailAccount {
   ownPublicKeys: string[]
   /** Whether `address` is one of the account's, in any spelling (compared folded). */
   isOwnAddress: (address: string | null | undefined) => boolean
+  /** Every address it can send from, the default first (the composer's From). */
+  senders: MailSender[]
   /**
    * What opens this account's shares of shared mailboxes' keys: the account
    * (its server and id) and its account-level HPKE private key (base64).
@@ -274,6 +289,12 @@ export interface OwnAddressRow {
   id: string
   address: string
   state: 'active' | 'receiving' | 'closed' | 'freed'
+  /** The custom domain it is on; null for the server's own. */
+  domainId: string | null
+  /** Its place in the account's order: the first enabled one with a key is the default. */
+  position: number
+  /** Disabled: it neither receives nor sends; its keys keep opening its mail. */
+  disabled: boolean
   keys: { fingerprint: string; sha256Fingerprint: string; publicKey: string; privateKeyEnvelope: string; primary: boolean; flags: number; forwarding?: boolean }[]
   keyList: { data: string; signature: string } | null
 }
@@ -303,19 +324,27 @@ export function mailAccountOf(
   fold: (address: string) => string | null,
   /** The account itself, as `/user/me` names it: its server and id. */
   self: AccountRef,
+  /** The other sending addresses' identities, by address id. */
+  identities: Readonly<Record<string, Pick<MailIdentity, 'displayName' | 'signature'>>> = {},
 ): MailAccount {
   // Forwarding keys open only forwarded mail: never primary, never among
   // the keys that open the account's own mail or vouch for its signatures.
   const ownKeys = (row: CheckedOwnAddress) => row.keys.filter((k) => !k.forwarding)
-  const current = rows.find((row) => row.state === 'active')
+  // The default: the first enabled current address (in the account's order)
+  // with a key, or the first enabled one, which then gets its first key.
+  const enabled = rows.filter((row) => row.state === 'active' && !row.disabled)
+  const current = enabled.find((row) => row.keys.length > 0 || row.keyList !== null) ?? enabled[0]
   // No key yet is only an address without a key list too: one with a list
   // and no rows lost its keys on the server's side.
   if (!current || (current.keys.length === 0 && current.keyList === null)) throw new NoAddressKey()
   // The signed primary, usable (neither obsolete nor compromised), and its
   // row's public key checked.
   const usable = MAIL_KEY_FLAGS.notCompromised | MAIL_KEY_FLAGS.notObsolete
-  const signedPrimary = current.verifiedList?.keys.find((entry) => entry.primary && (entry.flags & usable) === usable)
-  const primary = signedPrimary && ownKeys(current).find((k) => k.listed && k.fingerprint === signedPrimary.fingerprint)
+  const primaryOf = (row: CheckedOwnAddress) => {
+    const signed = row.verifiedList?.keys.find((entry) => entry.primary && (entry.flags & usable) === usable)
+    return signed ? ownKeys(row).find((k) => k.listed && k.fingerprint === signed.fingerprint) : undefined
+  }
+  const primary = primaryOf(current)
   if (!primary) throw new UnverifiedOwnKeys(current.address)
   // A key the account marked compromised vouches for nothing it signs.
   const trusted = (row: CheckedOwnAddress, key: CheckedOwnAddress['keys'][number]) =>
@@ -333,7 +362,19 @@ export function mailAccountOf(
     envelope: key.privateKeyEnvelope,
     fingerprint: key.fingerprint,
   })
+  const displayName = (row: CheckedOwnAddress) =>
+    (row === current ? identity?.displayName : identities[row.id]?.displayName) || session.username || ''
+  const signatureOf = (row: CheckedOwnAddress) =>
+    sanitizeSignature((row === current ? identity?.signature : identities[row.id]?.signature) ?? '')
+  const senders: MailSender[] = [current, ...enabled.filter((row) => row !== current)].flatMap((row) => {
+    const key = row === current ? primary : primaryOf(row)
+    return key
+      ? [{ addressId: row.id, address: row.address, name: displayName(row), signature: signatureOf(row), publicKey: key.publicKey, key: sealed(row)(key) }]
+      : []
+  })
   return {
+    addressId: current.id,
+    senders,
     address: current.address,
     domain: current.address.split('@')[1] ?? '',
     name: identity?.displayName || session.username || '',
@@ -359,6 +400,20 @@ export function mailAccountOf(
   }
 }
 
+/** The account writing as one of its addresses (the composer's From). */
+export function asSender(account: MailAccount, sender: MailSender): MailAccount {
+  return {
+    ...account,
+    addressId: sender.addressId,
+    address: sender.address,
+    domain: sender.address.split('@')[1] ?? '',
+    name: sender.name,
+    signature: sender.signature,
+    publicKey: sender.publicKey,
+    key: sender.key,
+  }
+}
+
 export function useMailAccount() {
   const session = useRequiredSession()
   return useQuery({
@@ -372,7 +427,9 @@ export function useMailAccount() {
       // The current address sends; the earlier ones (after a rename) only
       // keep the keys their mail opens with.
       let { data } = await api.get<OwnAddressRow[]>('/mail/addresses')
-      const active = data.find((row) => row.state === 'active')
+      // The account's own address: one on a custom domain gets its keys by
+      // "Generate missing keys" (Proton's), never silently.
+      const active = data.find((row) => row.state === 'active' && row.domainId === null)
       // Only an address with no key and no key list: a server that drops the
       // rows of a keyed address can't have a fresh first list signed.
       if (active && active.keys.length === 0 && active.keyList === null) {
@@ -388,7 +445,21 @@ export function useMailAccount() {
       const { data: me } = await api.get<{ server: string; accountId: string }>('/user/me')
       // Strict: a list older than one this device has seen stops Mail.
       const checked = await checkedAddresses(session, data, { strict: true })
-      return mailAccountOf(checked, identity, session, await addressFolder(), { server: me.server, accountId: me.accountId })
+      // Each sending address's own name and signature (Proton's per-address
+      // identity); the default's is `identity`.
+      const others = data.filter((row) => row.state === 'active' && !row.disabled && row.keys.length > 0)
+      const identities = Object.fromEntries(
+        await Promise.all(
+          others.map(async (row) => [
+            row.id,
+            await api
+              .get<MailIdentity>('/mail/identity', { params: { addressId: row.id } })
+              .then((r) => r.data)
+              .catch(() => ({ displayName: '', signature: '' })),
+          ]),
+        ),
+      ) as Record<string, Pick<MailIdentity, 'displayName' | 'signature'>>
+      return mailAccountOf(checked, identity, session, await addressFolder(), { server: me.server, accountId: me.accountId }, identities)
     },
   })
 }
@@ -1097,6 +1168,9 @@ function meta(account: MailAccount, draft: Draft) {
   return {
     subject: draft.subject,
     fromName: account.name,
+    // Which of the account's addresses it is from (a shared mailbox's
+    // `fromGroup` takes precedence on the server).
+    fromAddress: account.addressId,
     to: draft.to,
     cc: draft.cc,
     bcc: draft.bcc,
