@@ -527,6 +527,26 @@ fn a_provisioning_message_reaches_the_new_device_once() {
 /// A registration retried after its answer was lost (the same credential)
 /// answers the device it made: a re-registration once its manifest is the
 /// head, and a link once its token is spent.
+/// Unused socket tickets count against the account's sockets: each may
+/// become one (`chatProvisioningSocketsPerAccount`, 3 by default).
+#[test]
+fn unused_provisioning_tickets_count_against_the_socket_cap() {
+    let Some(base) = live() else { return };
+    let c = common::client();
+    let ada = account(&c, &base);
+    let ticket = || {
+        c.post(format!("{base}/api/chat/provisioning/ticket"))
+            .bearer_auth(&ada.token)
+            .send()
+            .unwrap()
+            .status()
+    };
+    for _ in 0..3 {
+        assert_eq!(ticket(), StatusCode::OK);
+    }
+    assert_eq!(ticket(), StatusCode::TOO_MANY_REQUESTS);
+}
+
 #[test]
 fn a_retried_registration_answers_the_device_it_made() {
     let Some(base) = live() else { return };

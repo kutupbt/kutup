@@ -102,8 +102,8 @@ HKDF-SHA256(
 Purposes are self-authority Ed25519, Drive HPKE X25519 and Drive named-share
 Ed25519. Keys are never reused across purposes.
 
-An account may have 1-10 active devices. `CHAT_MAX_ACTIVE_DEVICES` may lower
-the local limit but cannot exceed ten. Device wire IDs remain 1-127 and are not
+An account may have 1-10 active devices. The site setting
+`chatMaxActiveDevices` may lower the local limit but cannot exceed ten. Device wire IDs remain 1-127 and are not
 reused as an assertion of active-device capacity.
 
 ### 4.1 Web installation continuity

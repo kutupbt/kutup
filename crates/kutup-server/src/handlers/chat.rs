@@ -1953,12 +1953,13 @@ pub(crate) async fn load_user_bundles(
         .bind(&listed)
         .fetch_all(&mut *tx)
         .await?;
-    // A row whose registration id isn't the listed one (a re-registered
-    // device before its manifest) has no bundle.
-    devices.retain(|(device_id, _, registration_id, ..)| {
-        manifest
-            .device(*device_id as u32)
-            .is_some_and(|listed| i64::from(listed.registration_id) == *registration_id)
+    // A row whose registration id or suite isn't the listed one (a
+    // re-registered device before its manifest) has no bundle.
+    devices.retain(|(device_id, suite, registration_id, ..)| {
+        manifest.device(*device_id as u32).is_some_and(|listed| {
+            i64::from(listed.registration_id) == *registration_id
+                && i32::from(listed.direct_chat_suite.as_u16()) == i32::from(*suite)
+        })
     });
     if devices.is_empty() {
         return Err(AppError::not_found("user has no chat devices"));
