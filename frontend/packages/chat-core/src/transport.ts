@@ -6,6 +6,7 @@ import { accountHead, NotInVerifiedIndexError } from '@kutup/session/accountHead
 import api from '@kutup/session/client'
 import { getSession } from '@kutup/session/store'
 import { apiBase } from '@kutup/session/apiBase'
+import { setChatDeviceAuth } from './device-auth'
 import type {
   ChatDevice,
   ChatTransportPort,
@@ -62,6 +63,41 @@ export class ApiChatTransport implements ChatTransportPort {
 
   async registerDevice(request: unknown): Promise<unknown> {
     return api.post('/chat/device', request).then((response) => response.data)
+  }
+
+  setDeviceAuth(deviceId: number, credential: string): void {
+    setChatDeviceAuth(deviceId, credential)
+  }
+
+  async createLinkToken(): Promise<unknown> {
+    return api.post('/chat/link-tokens').then((response) => response.data)
+  }
+
+  async relayProvisioning(address: string, request: unknown): Promise<boolean> {
+    try {
+      await api.put(`/chat/provisioning/${encodeURIComponent(address)}`, request)
+      return true
+    } catch (error) {
+      // The new device's socket is gone (closed, expired, or not this
+      // account's: one answer for all three).
+      if (axios.isAxiosError(error) && error.response?.status === 404) return false
+      throw error
+    }
+  }
+
+  async distributeIdentity(
+    request: unknown,
+  ): Promise<{ kind: 'accepted' } | { kind: 'mismatch'; mismatch: unknown }> {
+    try {
+      await api.put('/chat/account-identity', request)
+      return { kind: 'accepted' }
+    } catch (error) {
+      const status = axios.isAxiosError(error) ? error.response?.status : undefined
+      if (axios.isAxiosError(error) && (status === 409 || status === 410)) {
+        return { kind: 'mismatch', mismatch: error.response?.data }
+      }
+      throw error
+    }
   }
 
   async fetchBundles(account: string): Promise<unknown> {

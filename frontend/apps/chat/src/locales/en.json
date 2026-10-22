@@ -177,14 +177,14 @@
     "deviceRecovery": {
       "action": "Repair this browser",
       "title": "Reset this browser’s Chat device?",
-      "description": "Kutup will remove this browser’s invalid cryptographic device state, register a fresh device, and restore server-acknowledged encrypted history. Your account and server backup are not deleted.",
+      "description": "Kutup will remove this browser’s invalid Chat device state. Then you link this browser again from another of your devices, and your server-acknowledged encrypted history is restored. Your account and server backup are not deleted.",
       "warning": "Chat changes that exist only in this browser and were never acknowledged by the server may be lost. Close other Kutup tabs before continuing.",
       "confirm": "Reset and restore",
       "failed": "This browser’s Chat device could not be reset."
     },
     "devices": {
-      "title": "Active Chat installations",
-      "description": "Each browser profile, private window, or cleared site storage is a separate end-to-end encrypted installation. Names are private to your account and do not change encryption keys.",
+      "title": "Linked devices",
+      "description": "Every device of your account shares its Chat identity. Link a new one from here; names are private to your account and change no keys.",
       "loading": "Loading Chat devices…",
       "current": "This device",
       "id": "Device ID {{device}}",
@@ -194,12 +194,16 @@
       "created": "Added {{time}}",
       "lastSeen": "Last active {{time}}",
       "neverSeen": "No activity yet",
-      "revoke": "Revoke",
-      "confirm": "Revoke {{device}}? It will stop receiving future messages.",
-      "revoked": "Chat device revoked",
-      "historyWarning": "Revocation stops future delivery. It does not copy that device's local message history.",
+      "revoke": "Remove",
+      "confirm": "Remove {{device}}? It will stop receiving messages.",
+      "revoked": "Device removed",
+      "historyWarning": "Removing a device stops future delivery to it. It does not copy that device's local message history.",
       "thisOne": "This browser is chat device {{device}}.",
-      "revokeTitle": "Revoke this device?"
+      "revokeTitle": "Remove this device?",
+      "resetIdentity": "Also reset your Chat identity (recommended if the device is lost or stolen)",
+      "resetIdentityHint": "Your other devices keep working with a new identity. Your contacts see your safety number change once and verify you again if they had.",
+      "revokeAndReset": "Remove and reset identity",
+      "revokedAndReset": "Device removed and your Chat identity reset"
     },
     "disappearing": {
       "setting": "Disappearing messages",
@@ -1268,6 +1272,42 @@
       "withdraw": "Withdraw request",
       "withdrawn": "Request withdrawn.",
       "denied": "Your request to join was declined."
+    },
+    "link": {
+      "title": "Link this device",
+      "body": "Your account already uses Chat on another device. Link this one from it to bring your Chat identity here.",
+      "starting": "Preparing a link code…",
+      "stepOpen": "Open Kutup Chat on a device you already use.",
+      "stepSettings": "Go to Settings → Linked devices → Link a new device.",
+      "stepScan": "Scan this QR code, or paste the code below.",
+      "qrLabel": "Link code for this device",
+      "codeLabel": "Link code",
+      "copied": "Link code copied",
+      "copyFailed": "Couldn’t copy the link code.",
+      "codeAdvice": "Copy this code only to your own other device, typed by hand or sent to yourself in Kutup Chat or Mail. Never share it with anyone else or through another app: whoever links with it gets your Chat identity.",
+      "waiting": "Waiting for your other device…",
+      "expired": "This code has expired. Get a new one and link again.",
+      "failed": "The link didn’t go through. Get a new code and try again.",
+      "newCode": "Get a new code",
+      "noDevices": "I don’t have my other devices",
+      "startOverTitle": "Start Chat over on this device?",
+      "startOverDescription": "This device gets a new Chat identity. Your account’s other Chat devices are signed out of Chat, and your server-acknowledged history is restored here.",
+      "startOverWarning": "Your contacts see your safety number change and verify you again if they had. Messages not yet delivered to your other devices are lost.",
+      "startOverConfirm": "Start over"
+    },
+    "linkNew": {
+      "action": "Link a new device",
+      "title": "Link a new device",
+      "description": "On the new device, open Kutup Chat and choose Link this device. Then scan its QR code or paste its code here.",
+      "scan": "Scan its QR code",
+      "scanning": "Scanning…",
+      "scanUnsupported": "This browser cannot scan QR codes. Paste the code instead.",
+      "cameraUnavailable": "Camera access was unavailable. Paste the code instead.",
+      "pasteLabel": "Or paste its code",
+      "warning": "Link only a device that is yours and in front of you: it gets your Chat identity.",
+      "submit": "Link device",
+      "sent": "Sent. The new device finishes linking by itself.",
+      "expired": "That code has expired. Ask the new device for a new one."
     }
   },
   "boot": {

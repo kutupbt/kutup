@@ -40,8 +40,10 @@ import type {
   MlsAuthorityPolicyInspection,
   PendingMlsOwnerApprovalRequest,
   PendingMlsInvitation,
-  SafetyNumberV1,
+  SafetyNumberV2,
+  ChatWasmModule,
   WasmChatClientHandle,
+  WasmLinkingDeviceHandle,
 } from './types'
 import { isChatGroupId } from './types'
 import type {
@@ -171,6 +173,11 @@ const PONG_TIMEOUT_MS = 10_000
 export type ChatServiceErrorCode =
   | 'browserUnsupported'
   | 'serverUnsupported'
+  /**
+   * Another device of the account holds its Chat identity: this browser is
+   * linked from it (or re-registers, dropping the account's other devices).
+   */
+  | 'linkRequired'
   /** The account's contact list couldn't be read yet: the mailbox waits. */
   | 'contactListUnconfirmed'
   /** The server's contact list contradicts the account's verified state. */
@@ -232,6 +239,40 @@ export function contactListFailure(error: unknown): ChatServiceError | null {
   return new ChatServiceError(INTEGRITY_MARKERS.some((marker) => message.includes(marker)) ? 'contactListIntegrity' : 'contactListUnconfirmed')
 }
 
+/**
+ * The engine for this browser, as `options.install` says: the device it
+ * has; the account's first one; a re-registration; or a linked device.
+ */
+async function openClientHandle(
+  wasm: ChatWasmModule,
+  transport: ApiChatTransport,
+  databaseName: string,
+  options: ChatServiceOptions,
+): Promise<WasmChatClientHandle> {
+  const args = [
+    databaseName,
+    accountKey(options.account),
+    options.displayName,
+    options.capabilities.sealedSender,
+    options.masterKey,
+    options.envelopeBinding,
+    transport,
+  ] as const
+  const install = options.install ?? { kind: 'open' }
+  if (install.kind === 'link') return await install.linking.completeLink(install.envelope, ...args)
+  if (install.kind === 'reregister') return await wasm.WasmChatClient.reregister(...args)
+  const state = await wasm.WasmChatClient.installation(
+    databaseName,
+    accountKey(options.account),
+    options.masterKey,
+    transport,
+  )
+  if (state === 'link') throw new ChatServiceError('linkRequired')
+  // The account has no Chat identity yet: this is its first device.
+  if (state === 'reregister') return await wasm.WasmChatClient.reregister(...args)
+  return await wasm.WasmChatClient.open(...args)
+}
+
 export class ChatServiceError extends Error {
   constructor(readonly code: ChatServiceErrorCode) {
     super(code)
@@ -249,7 +290,19 @@ export interface ChatServiceOptions {
   displayName: string
   masterKey: Uint8Array
   capabilities: ChatCapabilities
+  /**
+   * How this browser gets its device (docs/plans/account-identity-key.md):
+   * by default the one it has, or the account's first; `reregister` after the
+   * person confirmed losing the account's other devices; `link` with the
+   * provisioning envelope another device sent.
+   */
+  install?: ChatInstall
 }
+
+export type ChatInstall =
+  | { kind: 'open' }
+  | { kind: 'reregister' }
+  | { kind: 'link'; linking: WasmLinkingDeviceHandle; envelope: unknown }
 
 export interface ChatMediaStorageView {
   totalQuotaBytes: number
@@ -439,15 +492,7 @@ export class ChatService {
     let client: WasmChatClientHandle
     try {
       client = await engineLock.run(async (tookOver) => {
-        const handle = await wasm.WasmChatClient.open(
-          databaseName,
-          accountKey(options.account),
-          options.displayName,
-          capabilities.sealedSender,
-          options.masterKey,
-          options.envelopeBinding,
-          transport,
-        )
+        const handle = await openClientHandle(wasm, transport, databaseName, options)
         // Taken over before there was a client to claim with: claim now.
         if (tookOver) await handle.claimWriter?.(true)
         opened = handle
@@ -2290,18 +2335,53 @@ export class ChatService {
     }
   }
 
-  async safetyNumber(peer: string): Promise<SafetyNumberV1> {
+  async safetyNumber(peer: string): Promise<SafetyNumberV2> {
     const account = requireAccountKey(peer)
     return this.withLock(() => this.client.safetyNumber(account))
   }
 
-  async verifySafetyNumber(peer: string, scannedPayload: string): Promise<SafetyNumberV1> {
+  async verifySafetyNumber(peer: string, scannedPayload: string): Promise<SafetyNumberV2> {
     const account = requireAccountKey(peer)
     const verified = await this.withLock(() =>
       this.client.verifySafetyNumber(account, scannedPayload),
     )
     this.notifyPeers()
     return verified
+  }
+
+  /** Mark the contact's identity verified (or clear it) after comparing the numbers. */
+  async setIdentityVerified(peer: string, identityKey: string, verified: boolean): Promise<SafetyNumberV2> {
+    const account = requireAccountKey(peer)
+    const safety = await this.withLock(() =>
+      this.client.setIdentityVerified(account, identityKey, verified),
+    )
+    this.notifyPeers()
+    return safety
+  }
+
+  /**
+   * Link a new device of this account from the code it shows (scanned or
+   * pasted), sending it the account identity and these settings. `false`:
+   * the code expired, and the new device shows a new one.
+   */
+  async linkDevice(
+    code: string,
+    settings: { readReceipts: boolean; typingIndicators: boolean },
+  ): Promise<boolean> {
+    return await this.withLock(() =>
+      this.client.linkDevice(code.trim(), settings.readReceipts, settings.typingIndicators),
+    )
+  }
+
+  /**
+   * Reset the account's identity, keeping its devices but `remove` (a lost or
+   * stolen one), which leave the account. Contacts see the safety number
+   * change once. Returns the devices kept.
+   */
+  async resetIdentity(remove: number[]): Promise<ChatDevice[]> {
+    await this.withLock(() => this.client.resetIdentity(remove))
+    this.notifyPeers()
+    return this.devices()
   }
 
   async quarantineInbound(id: string): Promise<void> {

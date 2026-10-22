@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useState } from 'react'
 import { AlertTriangle, Camera, Check, Copy, Loader2, Shield, ShieldCheck } from 'lucide-react'
 import { QRCodeSVG } from 'qrcode.react'
 import { useTranslation } from 'react-i18next'
@@ -8,25 +8,14 @@ import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, Di
 import { Input } from './input'
 import { Mono } from './mono'
 import { copyText } from '../lib/clipboard'
-
-interface DetectedBarcode {
-  rawValue: string
-}
-
-interface BarcodeDetectorInstance {
-  detect(source: HTMLVideoElement): Promise<DetectedBarcode[]>
-}
-
-type BarcodeDetectorConstructor = new (options: { formats: string[] }) => BarcodeDetectorInstance
-
-function browserBarcodeDetector(): BarcodeDetectorConstructor | undefined {
-  return (window as typeof window & { BarcodeDetector?: BarcodeDetectorConstructor }).BarcodeDetector
-}
+import { useQrScanner } from '../lib/qrScanner'
 
 /**
- * Every app's safety QR (Chat, Drive): kutup-crypto `safety_number::QR_PREFIX`,
- * Signal's fingerprint v2 as base64url `CombinedFingerprints`. Each side's code
- * carries its own half first, so a scan here is the other side's code.
+ * Drive's safety QR: kutup-crypto `safety_number::QR_PREFIX`, over the
+ * accounts' authorities. Chat's covers the account identity keys
+ * (`kutup://verify/v4/`, chat-core's `SAFETY_QR_PREFIX`) and passes it as
+ * `payloadPrefix`. Each side's code carries its own half first, so a scan
+ * here is the other side's code.
  */
 const VERIFY_PAYLOAD_PREFIX = 'kutup://verify/v3/'
 
@@ -51,6 +40,14 @@ export interface SafetyVerificationDialogProps {
   safety: SafetyNumberView
   /** Resolves when the scanned payload matched and the peer is verified; rejects otherwise. */
   onVerify: (scannedPayload: string) => Promise<unknown>
+  /** The QR codes this app's numbers use (Drive's by default). */
+  payloadPrefix?: string
+  /**
+   * Mark the peer verified, or clear it, after comparing the numbers by eye
+   * (Signal's "Mark as verified" / "Clear verification"). Without it, only a
+   * scan verifies.
+   */
+  onSetVerified?: (verified: boolean) => Promise<unknown>
   /** Test ids start with this (`chat-safety` in Chat). */
   testIdPrefix?: string
   /**
@@ -72,6 +69,8 @@ export function SafetyVerificationDialog({
   open: controlledOpen,
   onOpenChange,
   testIdPrefix = 'safety',
+  payloadPrefix = VERIFY_PAYLOAD_PREFIX,
+  onSetVerified,
 }: SafetyVerificationDialogProps) {
   const { t } = useTranslation()
   const [uncontrolledOpen, setUncontrolledOpen] = useState(false)
@@ -79,72 +78,34 @@ export function SafetyVerificationDialog({
   const open = controlled ? controlledOpen : uncontrolledOpen
   const [scannedPayload, setScannedPayload] = useState('')
   const [verifying, setVerifying] = useState(false)
-  const [scanning, setScanning] = useState(false)
-  const videoRef = useRef<HTMLVideoElement>(null)
-  const streamRef = useRef<MediaStream | null>(null)
-  const scanTimerRef = useRef<number | null>(null)
+  const [marking, setMarking] = useState(false)
+  const scanner = useQrScanner(
+    payloadPrefix,
+    (value) => setScannedPayload(value),
+    (failure) =>
+      toast.error(t(failure === 'unsupported' ? 'safetyNumber.scanUnsupported' : 'safetyNumber.cameraUnavailable')),
+  )
+  const { scanning } = scanner
   const verified = safety.state === 'verified'
   const blocked = safety.state === 'blocked'
   const verifyDisabled = !scannedPayload || verifying || (blocked && !safety.canVerifyBlocked)
 
-  function stopScanner() {
-    if (scanTimerRef.current !== null) window.clearTimeout(scanTimerRef.current)
-    scanTimerRef.current = null
-    streamRef.current?.getTracks().forEach((track) => track.stop())
-    streamRef.current = null
-    if (videoRef.current) videoRef.current.srcObject = null
-    setScanning(false)
-  }
-
-  useEffect(() => stopScanner, [])
-
   // A host closing a controlled dialog must release the camera too.
   useEffect(() => {
-    if (!open) stopScanner()
+    if (!open) scanner.stop()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open])
 
-  async function startScanner() {
-    const Detector = browserBarcodeDetector()
-    if (!Detector || !navigator.mediaDevices?.getUserMedia) {
-      toast.error(t('safetyNumber.scanUnsupported'))
-      return
-    }
+  async function setVerified(value: boolean) {
+    if (!onSetVerified || marking) return
+    setMarking(true)
     try {
-      stopScanner()
-      const stream = await navigator.mediaDevices.getUserMedia({
-        video: { facingMode: { ideal: 'environment' } },
-        audio: false,
-      })
-      streamRef.current = stream
-      setScanning(true)
-      const video = videoRef.current
-      if (!video) {
-        stopScanner()
-        return
-      }
-      video.srcObject = stream
-      await video.play()
-      const detector = new Detector({ formats: ['qr_code'] })
-      const inspect = async () => {
-        if (!streamRef.current || !videoRef.current) return
-        try {
-          const codes = await detector.detect(videoRef.current)
-          const value = codes.find((code) => code.rawValue.startsWith(VERIFY_PAYLOAD_PREFIX))
-            ?.rawValue
-          if (value) {
-            setScannedPayload(value)
-            stopScanner()
-            return
-          }
-        } catch {
-          // A frame may be unavailable while the camera warms up; keep scanning.
-        }
-        scanTimerRef.current = window.setTimeout(() => void inspect(), 250)
-      }
-      void inspect()
+      await onSetVerified(value)
+      toast.success(value ? t('safetyNumber.markedVerified', { peer }) : t('safetyNumber.clearedVerified'))
     } catch {
-      stopScanner()
-      toast.error(t('safetyNumber.cameraUnavailable'))
+      toast.error(t('safetyNumber.markFailed'))
+    } finally {
+      setMarking(false)
     }
   }
 
@@ -176,7 +137,7 @@ export function SafetyVerificationDialog({
       onOpenChange={(next) => {
         if (!controlled) setUncontrolledOpen(next)
         onOpenChange?.(next)
-        if (!next) stopScanner()
+        if (!next) scanner.stop()
       }}
     >
       {!controlled && (
@@ -273,12 +234,12 @@ export function SafetyVerificationDialog({
           {!verified && (
             <div className="grid gap-3 border-t pt-4">
               <video
-                ref={videoRef}
+                ref={scanner.videoRef}
                 className={scanning ? 'aspect-square w-full rounded-lg bg-black object-cover' : 'hidden'}
                 muted
                 playsInline
               />
-              <Button type="button" variant="outline" onClick={() => void startScanner()}>
+              <Button type="button" variant="outline" onClick={() => void scanner.start()}>
                 <Camera />
                 {scanning ? t('safetyNumber.scanning') : t('safetyNumber.scan')}
               </Button>
@@ -289,7 +250,7 @@ export function SafetyVerificationDialog({
                   onChange={(event) => setScannedPayload(event.target.value.trim())}
                   autoComplete="off"
                   spellCheck={false}
-                  placeholder={`${VERIFY_PAYLOAD_PREFIX}…`}
+                  placeholder={`${payloadPrefix}…`}
                   className="font-mono"
                 />
               </label>
@@ -297,8 +258,37 @@ export function SafetyVerificationDialog({
                 {verifying ? <Loader2 className="animate-spin" /> : <Check />}
                 {t('safetyNumber.verify')}
               </Button>
+              {onSetVerified && !blocked ? (
+                <div className="grid gap-2 border-t pt-3">
+                  <p className="text-xs text-muted-foreground">{t('safetyNumber.markVerifiedHint')}</p>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    disabled={marking}
+                    onClick={() => void setVerified(true)}
+                    data-testid={`${testIdPrefix}-mark-verified`}
+                  >
+                    {marking ? <Loader2 className="animate-spin" /> : <ShieldCheck />}
+                    {t('safetyNumber.markVerified')}
+                  </Button>
+                </div>
+              ) : null}
             </div>
           )}
+          {verified && onSetVerified ? (
+            <div className="grid gap-2 border-t pt-4">
+              <Button
+                type="button"
+                variant="outline"
+                disabled={marking}
+                onClick={() => void setVerified(false)}
+                data-testid={`${testIdPrefix}-clear-verified`}
+              >
+                {marking ? <Loader2 className="animate-spin" /> : <Shield />}
+                {t('safetyNumber.clearVerified')}
+              </Button>
+            </div>
+          ) : null}
         </div>
       </DialogContent>
     </Dialog>
