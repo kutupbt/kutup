@@ -773,11 +773,16 @@ fn expiry_of_tokens_and_devices() {
     let second = ada.link(&c, &base, &first);
 
     // A token past its time: refused.
+    let user_id = uuid::Uuid::parse_str(&ada.account.account_id).unwrap();
     let token = ada.link_token(&c, &base, &first);
     runtime
         .block_on(
-            sqlx::query("UPDATE chat_link_tokens SET expires_at = now() - interval '1 second'")
-                .execute(&pool),
+            sqlx::query(
+                "UPDATE chat_link_tokens SET expires_at = now() - interval '1 second'
+                  WHERE user_id = $1",
+            )
+            .bind(user_id)
+            .execute(&pool),
         )
         .unwrap();
     let body = ada.registration(
@@ -791,7 +796,6 @@ fn expiry_of_tokens_and_devices() {
 
     // The second device expired: sends address the first alone, and naming
     // the expired one is an extra device.
-    let user_id = uuid::Uuid::parse_str(&ada.account.account_id).unwrap();
     runtime
         .block_on(
             sqlx::query(
