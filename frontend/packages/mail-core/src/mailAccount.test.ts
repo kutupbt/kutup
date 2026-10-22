@@ -159,4 +159,3 @@ describe('the account\'s addresses (Proton\'s Identity and addresses)', () => {
     expect(asOwn.name).toBe('Ada L')
   })
 })
-
