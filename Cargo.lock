@@ -3622,6 +3622,7 @@ dependencies = [
 name = "kutup-server"
 version = "0.1.0"
 dependencies = [
+ "aes-gcm",
  "anyhow",
  "aws-config",
  "aws-credential-types",

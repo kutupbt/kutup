@@ -66,6 +66,7 @@ mod totp;
 mod ui_preferences;
 mod version_retention;
 mod web_push;
+mod web_push_payload;
 
 use std::net::SocketAddr;
 use std::sync::Arc;
