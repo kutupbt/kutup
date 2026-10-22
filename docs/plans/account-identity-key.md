@@ -85,22 +85,22 @@ identity.
 ## The manifest (V2)
 
 `AccountManifestV2`, a new version and signing domain, signed by the same
-authority. It carries everything V1 carries, with the identity moved up to
-the account:
+authority, **replacing V1** (no account keeps a V1 manifest: the deploy below
+starts every account's Chat afresh). It carries everything V1 carries, with
+the identity moved up to the account:
 
 | Field | From V1 | Note |
 |---|---|---|
 | `account` (AccountRef) | yes | |
 | `incarnationId` | yes | an account reset is a new incarnation, as today |
-| `sequence`, `previousHash` | yes | the chain: +1, linked to the previous manifest (V1's last, for the first V2) |
+| `sequence`, `previousHash` | yes | the chain: +1, linked to the previous manifest |
 | Drive keys (as V1) | yes | unchanged |
 | `issuedAt`, `authorityKeyId`, `selfAuthorityKey`, `signature` | yes | as V1, under the V2 domain |
 | **`identityKey`** | new | the account's libsignal identity key (33 bytes) itself, not a hash |
 | `devices[]`: `deviceId`, `directChatSuite`, **`registrationId`** | yes, without `identityKey` | the registration id is now part of what the authority vouches for |
 | `devices[].mls` | yes | dropped if the MLS removal lands first |
 
-After an account's first V2 manifest, V1 manifests are refused for it, by
-the server and by every client that has seen the V2.
+V1 manifests are no longer accepted, by the server or by any client.
 
 **Registration ids live in the signed manifest.** A bundle, or a server's
 `409`/`410`, that disagrees with the manifest is refused, never silently
@@ -195,8 +195,9 @@ re-registration (below) and says what it costs.
 One mechanism moves an account to a new identity while keeping its devices:
 Signal's PNI identity-key distribution (`PhoneNumberIdentityKeyDistributionRequest`
 to `AccountControllerV2`'s distribution route, with a `PniChangeNumber` sync
-to each device), applied to the account identity. Kutup uses it for the
-**migration** and for **"reset identity, keep my devices"**.
+to each device), applied to the account identity. Kutup uses it for **"reset identity, keep
+my devices"** (a lost or stolen device, or a device that wants a new
+identity).
 
 1. One device of the account makes a new identity key pair, and for **every**
    device it keeps (itself included): a signed prekey and a last-resort
@@ -301,13 +302,10 @@ change: quarantined, as now (`quarantine_authority`).
   is checked against the account's verified manifest and the device id
   against its listed devices, also for a remote sender (the federated
   manifest).
-- **Groups:** a member account still on the per-device model (legacy, below)
-  gets its copies of a group message pairwise within the same send, while V2
-  members get theirs on the multi-recipient route. An identity change resets
-  sender keys both ways (above).
+- **Groups:** an identity change resets sender keys both ways (above).
 - **Slice 2** then uses libsignal's `sealed_sender_multi_recipient_encrypt` as
-  it is (one key share per account) for V2 members; the server's parse stays
-  libsignal's (#297).
+  it is (one key share per account); the server's parse stays libsignal's
+  (#297).
 
 ## Server and key endpoints
 
@@ -330,11 +328,15 @@ checks, the V2 manifest, bundles, federation, limits.)
 - There is no linking: a new device registers with the account's sign-in
   alone.
 
-**Tables** (one migration, no wipe; its number is taken above master and the
+**Tables** (one migration, which clears Chat's transport state, below; its number is taken above master and the
 open PRs when it is pushed):
 - `chat_account_identities (user_id PK → users, identity_key text NOT NULL,
-  manifest_version bigint NOT NULL, changed_at)`: one row per account that
-  has moved; no row is a legacy account (per-device keys, today's rules).
+  manifest_version bigint NOT NULL, changed_at)`: one row per account with a
+  Chat identity; no row means the account has no Chat device yet (its first
+  device registers with a re-registration, below).
+- The migration deletes every `chat_devices` row (and with them their
+  prekeys, mailboxes and push subscriptions) and the manifests: the deploy
+  above.
 - `chat_devices` gains `credential_hash bytea` (Signal's `SaltedTokenHash`:
   SHA-256 over a per-row salt and a 32-byte random credential the device drew
   at registration; a high-entropy token needs no slow hash, as Signal) and
@@ -351,12 +353,6 @@ open PRs when it is pushed):
   constant time against that device's row of the JWT's account; missing or
   wrong is `401` (Signal's `AccountAuthenticator`). A removed or expired
   device's credential dies with its row.
-- Legacy devices claim one on their first call after the upgrade
-  (`PUT /api/chat/device/{id}/credential`, accepted once, only while the row
-  has none): each device claims it first thing when it opens the new version.
-  A row's first claimant wins; any session of the account could claim an
-  unclaimed legacy row once, which gives it no more than that session already
-  has.
 - The register call's retry key becomes the credential hash (the same
   credential again answers the row it made).
 
@@ -376,7 +372,7 @@ open PRs when it is pushed):
    `credential`, its registration id and keys; the token is consumed in the
    insert's transaction. Then a device publishes the V2 manifest listing it.
 
-**Key upload checks** (moved account; `POST /api/chat/device`,
+**Key upload checks** (`POST /api/chat/device`,
 `PUT /api/chat/keys`):
 - `identityKey` is the account's (33 bytes, a valid point).
 - The signed prekey, the last-resort Kyber key and every one-time Kyber key
@@ -410,7 +406,7 @@ The server, in one transaction:
 2. Every signed prekey and last-resort key verifies against `identityKey`
    (`400 badSignature`); the manifest verifies, names this identity and these
    registration ids, and is the next sequence.
-3. Swap: `chat_account_identities` set (or created: the migration), every
+3. Swap: `chat_account_identities` set, every
    listed device row's identity, signed prekey, last-resort key and
    registration id replaced, unlisted rows deleted, every one-time EC and
    Kyber key of the account deleted (Signal's `deleteSingleUsePreKeys`;
@@ -419,9 +415,9 @@ The server, in one transaction:
 4. The `deviceMessages` queued to their devices' mailboxes in the same
    transaction; then `DevicesChanged`.
 
-It serves the migration (a legacy account's first V2), "reset identity, keep
-my devices" (the lost device left out of the manifest), and an account with
-one device re-keying itself. **Re-registration** after every device is lost
+It serves "reset identity, keep my devices" (the lost device left out of the
+manifest), and an account with one device re-keying itself. **Re-registration** after every device is lost, and an account's first
+Chat device,
 is the same request from a new device with an empty `deviceMessages`: that
 device registers with `reregistration: true` and no link token, accepted only
 in the same call as a distribution whose manifest lists it alone; every other
@@ -432,15 +428,14 @@ so the master key.
 equals `chat_account_identities` (a different one only through the
 distribution route); its devices' registration ids equal the rows' (a
 registration id changes only with a manifest that names it, at linking or a
-distribution); unlisted rows are deleted, as today; after the first V2, V1 is
-refused.
+distribution); unlisted rows are deleted, as today; V1 is refused.
 
 **Registration ids:** bundles and `410` answers are built from rows equal to
 the signed manifest; the server never answers a registration id the head
 manifest doesn't carry, and clients refuse one that disagrees (client
 section).
 
-**Device expiry** (Q-b): for a moved account `jobs.rs` sets `expired_at`
+**Device expiry** (Q-b): `jobs.rs` sets `expired_at`
 instead of deleting; an expired device leaves the send device set and the
 bundles at once (sends never wait on it, as Signal), and any online device of
 the account, on `DevicesChanged`, publishes the V2 manifest that drops it;
@@ -478,48 +473,52 @@ minute and relays per account a minute; distributions per account a day; the
   signature, a manifest that disagrees, one-time keys cleared, an unlisted
   device dropped; the V2 publish rules; a registration id outside the
   manifest refused;
-- live: linking end to end; `keys/check`; the migration as one distribution
-  with the syncs drained by each device; a reset leaving a lost device out;
+- live: linking end to end; `keys/check`; a reset as one distribution with
+  the syncs drained by each device; a reset leaving a lost device out;
   re-registration from a new device; two distributions racing (the second
   gets a sequence conflict); expiry leaving the send set;
 - two servers: federated bundles under the account identity, verified
   against the manifest; a reset seen by the peer.
 
-## Migration without a wipe
+## The deploy: no migration
 
-Every existing account has per-device identities. It moves once, through the
-identity distribution (above):
+Kutup has three accounts, all the user's (2026-10-22), so there is no
+migration of old accounts, no per-device legacy path and no V1 manifest:
 
-1. **The first device of the account that opens the new version** (any one)
-   makes the account identity and sends the distribution for every device of
-   the account, with the first V2 manifest. The server swaps everything in one
-   transaction.
-2. Each other device applies its sync when it next connects (offline ones
-   later), and uploads its one-time keys.
-3. **Every contact sees one "safety number changed" notice for the account,
-   and loses its verified state for it once**, as in Signal after a
-   re-registration: the safety number is now over the account identity, which
-   didn't exist before. The release notes say so plainly (below).
+1. **The server's migration** deletes every account's Chat devices, their
+   prekeys, their mailboxes and their manifests (Chat's transport state
+   only). Accounts, contacts and the Chat contact list, group lists and the
+   groups' state at their homes, Chat backups, Drive and the rest stay.
+2. **The first device of an account that opens the new version** finds no
+   identity for the account, discards its own old Chat transport state
+   (identity, sessions, prekeys; never its history), and re-registers: a new
+   account identity and a V2 manifest listing itself (the re-registration
+   above).
+3. **Each other device** finds the account has an identity it doesn't hold
+   and shows "Link this device"; it is linked from the first one (QR or
+   code), keeping its own local history.
+4. **Peers** (here, the user's other accounts) see one "safety number
+   changed" for the account and lose their verified state for it once, as
+   after any re-registration; sessions are re-established and group sender
+   keys handed out again with the next message.
 
-Two devices that start at once: the server takes the first distribution (the
-manifest's sequence decides); the other's fails with a sequence conflict, it
-reads the V2 manifest, and waits for its sync.
+**What is kept:** every device's local Chat history (only transport state is
+replaced); a device that has lost its local data restores its display
+history from the Chat backup, as a cleared browser does today
+(docs/chat-backup.md, "Fresh-browser restore"); groups, contacts, settings;
+messages waiting in a device's outbox, which go out again under the new
+sessions.
 
-**What people are told.** The release notes say: "This update moves Chat to
-one identity key per account, as Signal. Each of your contacts will see your
-safety number change once, and you'll see theirs change once as they update.
-If you had verified a contact, verify them again." The app shows the same
-once, after the migration.
+**What is lost:** messages still waiting **unfetched in a device's server
+mailbox** at the deploy (the migration clears the mailboxes): open every
+device just before the deploy so its mailbox is drained. And anything of the
+old MLS groups (their state is per device; MLS is being removed in any
+case).
 
-**Peers of a legacy account** (no device of which has opened the new version
-yet): their manifest is still V1, so the multi-recipient route isn't used for
-them; they get per-device copies (pairwise), as today, within the same group
-send.
-
-**The end of the legacy model:** a fixed date, no later than the release
-after next and before v1 (the main session and the user set it; a roadmap
-item). After it the per-device paths go; an account still on them re-registers
-when its first device opens that release.
+**What people are told.** The release notes say: "Chat now has one identity
+key per account, as Signal. Your contacts will see your safety number change
+once. If you had verified a contact, verify them again. Open each device
+before updating, then link your other devices from the first one you open."
 
 ## Backups
 
@@ -551,15 +550,15 @@ does and doesn't revoke.
   contact record gains `identityKey` and `identityState`, as Signal's
   `ContactRecord`); the authority quarantine stays for manifest continuity; the identity rule and the registration-id rule; `IdentityChanged` per
   account; linking (both sides); the distribution (send and apply);
-  re-registration; the migration; group sends with legacy members; slice 2
+  re-registration; slice 2
   unparked.
 - **kutup-client-ffi:** linking, the distribution, removal and reset for the
   native apps (not built yet; the API is in the bindings).
 - **Web:** Settings → Linked devices (link, list, remove, remove a lost
   device and reset), "Link this device" (QR and code, with the pasted-code
   advice), Signal's "safety number changed" notice and the verified state
-  cleared, the new safety number and QR, the migration on open with its
-  one-time explanation, the restore screen's steer.
+  cleared, the new safety number and QR, the first open after the deploy
+  (re-register or link), the restore screen's steer.
 - **CLI:** the lost-device and password texts.
 - **Server:** the second session's section.
 - **Docs:** chat-protocol.md §4.1, §5 (the safety number over the identity
@@ -579,13 +578,14 @@ does and doesn't revoke.
     cleared by an identity change and kept by linking and removal;
   - prekeys signed by the account key;
   - the distribution (built and applied, a device offline applies it later);
-  - re-registration; the migration with two devices starting at once.
+  - re-registration; an account's first device; two devices of a fresh
+    account starting at once (the second is told to link).
 - **Harness:** a three-device account messages and receives on the
   multi-recipient route; linking end to end; removal (no notice); remove a
   lost device and reset ("safety number changed", verified cleared, sessions
   re-established, sender keys reset); linking a device changes nothing for
   peers;
-  re-registration; a group with a legacy member.
+  re-registration.
 - **Browser:** spec 169 (Chat suite): link a second browser with the code
   (no notice at the contact), message from both, verify a contact, remove a
   lost device and reset (the contact sees "safety number changed" and is no
@@ -596,13 +596,13 @@ does and doesn't revoke.
 
 - **Q-a:** the identity is random and provisioned, as Signal, not derived
   from the master key.
-- **Q-b:** a moved account's device expiry marks it, it leaves the sends at
+- **Q-b:** an account's device expiry marks it, it leaves the sends at
   once, and the next V2 manifest drops it.
 - **Q-c:** the manifest carries the identity key itself.
 - **Q-d** (the user, 2026-10-22, "reference signal directly"): safety numbers
   and verification follow the account identity key, as Signal's; an identity
-  reset shows "safety number changed" and clears verified; the migration does
-  that once per contact.
-- **Q-e:** gone (the distribution replaced the migration's window).
-- **The legacy end:** a fixed date, no later than the release after next and
-  before v1, set with the user.
+  reset shows "safety number changed" and clears verified.
+- **No migration** (the user, 2026-10-22: "only 3 users exist, all me"): no
+  migration of old accounts, no per-device legacy path, no V1 manifests. The
+  deploy clears Chat's transport state and every device re-registers or is
+  linked, as a normal reset (above); Q-e and the legacy end date go with it.
