@@ -200,6 +200,10 @@ pub struct Engine {
     /// The devices of each account as last fetched and verified this run
     /// (`bundles_for_send`). Never used to establish a session.
     pub(crate) known_devices: BTreeMap<String, Vec<kutup_chat_proto::DevicePreKeyBundle>>,
+    /// Accounts whose manifest a message under an unpinned identity made
+    /// this receive pass read again: once per account and pass, so a flood
+    /// of such messages costs one fetch, not one each.
+    manifests_refreshed: std::collections::BTreeSet<String>,
     /// When each entry of `known_devices` was fetched: a list older than
     /// `KNOWN_DEVICES_TTL_MS` is fetched and verified again.
     pub(crate) known_devices_at: BTreeMap<String, i64>,
@@ -338,6 +342,7 @@ impl Engine {
             manifest_policy,
             sealed_sender_enabled: false,
             known_devices: BTreeMap::new(),
+            manifests_refreshed: Default::default(),
             known_devices_at: BTreeMap::new(),
             group_members_seen: BTreeMap::new(),
             manifest_keys_seen: BTreeMap::new(),
@@ -2068,6 +2073,7 @@ impl Engine {
         rng: &mut R,
     ) -> Result<ReceiveReport> {
         self.set_state(EngineState::CatchingUp);
+        self.manifests_refreshed.clear();
         let transport = Rc::clone(&self.transport);
         let device_id = self.session.device_id();
         let mut after = self.session.last_cursor().await?;
@@ -3320,7 +3326,7 @@ impl Engine {
                 } else {
                     // The account may have a new identity this device hasn't
                     // seen: its current signed manifest decides.
-                    self.refresh_account_manifest(&sender).await?;
+                    self.refresh_manifest_for_inbound(&sender).await?;
                     self.session
                         .manifest_identity_key(&sender, device_id)
                         .await?
@@ -3359,6 +3365,16 @@ impl Engine {
         Ok(())
     }
 
+    /// [`Self::refresh_account_manifest`] for a message under an identity
+    /// the pin doesn't carry, at most once per account in a receive pass:
+    /// the pin it left decides for the rest of the pass.
+    async fn refresh_manifest_for_inbound(&mut self, account: &str) -> Result<()> {
+        if !self.manifests_refreshed.insert(account.to_string()) {
+            return Ok(());
+        }
+        self.refresh_account_manifest(account).await
+    }
+
     async fn validate_inbound_sealed_envelope(
         &mut self,
         envelope: &kutup_chat_proto::DeliveredEnvelope,
@@ -3386,7 +3402,8 @@ impl Engine {
         if manifest_identity
             .is_some_and(|key| key.serialize() != inspection.identity_key.serialize())
         {
-            self.refresh_account_manifest(&inspection.sender).await?;
+            self.refresh_manifest_for_inbound(&inspection.sender)
+                .await?;
             manifest_identity = self
                 .session
                 .manifest_identity_key(&inspection.sender, inspection.sender_device_id)

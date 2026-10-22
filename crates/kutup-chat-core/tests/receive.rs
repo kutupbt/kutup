@@ -198,6 +198,8 @@ struct Mailbox {
     own_manifest: RefCell<Option<kutup_chat_proto::AccountManifestV2>>,
     /// Every manifest of this account's chain, as the server keeps them.
     own_history: RefCell<Vec<kutup_chat_proto::AccountManifestV2>>,
+    /// The accounts whose current manifest was asked for, in order.
+    manifest_fetches: RefCell<Vec<String>>,
 }
 
 impl Mailbox {
@@ -228,8 +230,9 @@ impl ChatTransport for Mailbox {
     }
     async fn fetch_manifest(
         &self,
-        _account: &str,
+        account: &str,
     ) -> Result<Option<kutup_chat_proto::AccountManifestV2>> {
+        self.manifest_fetches.borrow_mut().push(account.to_string());
         Ok(self.own_manifest.borrow().clone())
     }
     async fn publish_manifest(
@@ -1146,6 +1149,55 @@ fn an_identified_message_is_taken_only_from_a_device_of_the_senders_manifest() {
     );
     assert_eq!(report.errors.len(), 2);
     assert!(server.acked().is_empty());
+}
+
+/// Messages in a pinned person's name under identities their manifest
+/// doesn't list: the manifest is read again once in the pass, not once per
+/// message, and none is taken.
+#[test]
+fn a_flood_of_unpinned_identities_reads_the_manifest_once_per_pass() {
+    let mut rng = test_rng();
+    let (bob_db, bundle, _) = bob_device(&mut rng);
+    let _alice = in_memory(ALICE, 1, &mut rng);
+    let bob_addr = ChatAddress::from_sender(BOB, 1).unwrap();
+    let mut envelopes = Vec::new();
+    for cursor in 1..=3u64 {
+        let mut mallory = block_on(Session::generate(
+            Rc::new(SqliteChatDb::open_in_memory().unwrap()),
+            ALICE,
+            1,
+            10,
+            &mut rng,
+        ))
+        .unwrap();
+        block_on(mallory.establish(&bob_addr, &bundle, &mut rng)).unwrap();
+        let env = block_on(mallory.encrypt(
+            &bob_addr,
+            bundle.registration_id,
+            &ChatContent::text_with_id("forged", "t", 1, "it is me"),
+            &mut rng,
+        ))
+        .unwrap();
+        envelopes.push(deliver(&env, ALICE, &format!("forged-{cursor}"), cursor));
+    }
+    let server = Rc::new(Mailbox::default());
+    server.deposit(envelopes);
+    let mut engine = block_on(Engine::open(bob_db.open(), server.clone(), BOB, 1)).unwrap();
+    let report = block_on(engine.receive(&mut rng)).unwrap();
+    assert!(report.messages.is_empty());
+    assert_eq!(report.errors.len(), 3);
+    let fetches = |server: &Mailbox| {
+        server
+            .manifest_fetches
+            .borrow()
+            .iter()
+            .filter(|account| *account == ALICE)
+            .count()
+    };
+    assert_eq!(fetches(&server), 1);
+    // The next pass may read it again, once.
+    block_on(engine.receive(&mut rng)).unwrap();
+    assert_eq!(fetches(&server), 2);
 }
 
 /// A "new own device" the server made up: before this device verified its
