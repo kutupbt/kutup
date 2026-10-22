@@ -16,3 +16,13 @@ ALTER TABLE mail_forwardings
     ADD CONSTRAINT mail_forwardings_code_whole
         CHECK ((code_hash IS NULL) = (code_key_version IS NULL)
            AND (code_hash IS NULL) = (code_expires_at IS NULL));
+
+-- Codes a destination address received a day, from every account (the
+-- `forwarding_codes_per_destination` limit): against code spam and guesses
+-- summed over many accounts. Old days are swept.
+CREATE TABLE mail_forwarding_code_sends (
+    destination text NOT NULL CHECK (destination = lower(destination)),
+    day date NOT NULL,
+    sent integer NOT NULL CHECK (sent > 0),
+    PRIMARY KEY (destination, day)
+);

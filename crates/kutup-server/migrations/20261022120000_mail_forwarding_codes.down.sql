@@ -1,3 +1,4 @@
+DROP TABLE mail_forwarding_code_sends;
 ALTER TABLE mail_forwardings
     DROP CONSTRAINT mail_forwardings_code_whole,
     DROP CONSTRAINT mail_forwardings_code_hash_length,

@@ -332,13 +332,14 @@ type Row = (
     bool,
     Option<OffsetDateTime>,
     i32,
+    Uuid,
 );
 
 const SELECT: &str = "SELECT f.id, f.kind, f.state, a.address, f.forwardee_email, f.match,
                              f.conditions, f.skipped, f.created_at, f.expires_at,
                              f.notice, f.verified_at IS NOT NULL,
                              CASE WHEN f.code_expires_at > now() THEN f.code_expires_at END,
-                             f.code_attempts
+                             f.code_attempts, f.user_id
                         FROM mail_forwardings f JOIN mail_addresses a ON a.id = f.forwarder_address_id";
 
 fn view(row: Row) -> MailForwarding {
@@ -357,8 +358,12 @@ fn view(row: Row) -> MailForwarding {
         verified,
         code_expires_at,
         code_attempts,
+        account,
     ) = row;
-    let attempts = forwarding::limit(crate::ratelimit::Limit::ForwardingCodeAttempts, None);
+    let attempts = forwarding::limit(
+        crate::ratelimit::Limit::ForwardingCodeAttempts,
+        Some(account),
+    );
     MailForwarding {
         id: id.to_string(),
         kind,
@@ -411,7 +416,8 @@ pub async fn list(
     .await?;
     let incoming: Vec<Row> = sqlx::query_as(&format!(
         "{SELECT} JOIN mail_addresses b ON b.id = f.forwardee_address_id
-          WHERE b.user_id = $1 AND f.state <> 'rejected' AND f.verified_at IS NOT NULL
+          WHERE b.user_id = $1 AND f.state <> 'rejected'
+            AND (f.verified_at IS NOT NULL OR f.state <> 'pending')
           ORDER BY f.created_at"
     ))
     .bind(user_id)
@@ -502,6 +508,7 @@ pub async fn create(
         ));
     };
     pending_room(&mut tx, forwardee_address_id).await?;
+    unverified_room(&mut tx, user_id, None).await?;
     let material = check_material(material, &forwarder_key)?;
     if state.config.mail_forwarding_keys.current().is_none() {
         return Err(unavailable());
@@ -682,9 +689,11 @@ async fn pending_room(
         .bind(forwardee_address)
         .execute(&mut **tx)
         .await?;
+    // Only those its owner sees and can decline: unverified ones have
+    // their own cap, on the account that made them (`unverified_room`).
     let pending_to: i64 = sqlx::query_scalar(
         "SELECT COUNT(*) FROM mail_forwardings
-          WHERE forwardee_address_id = $1 AND state = 'pending'",
+          WHERE forwardee_address_id = $1 AND state = 'pending' AND verified_at IS NOT NULL",
     )
     .bind(forwardee_address)
     .fetch_one(&mut **tx)
@@ -692,6 +701,40 @@ async fn pending_room(
     if pending_to >= forwarding::MAX_PENDING_PER_FORWARDEE {
         return Err(code(
             AppError::conflict("this address has too many forwardings waiting"),
+            "forwardingLimit",
+        ));
+    }
+    Ok(())
+}
+
+/// At most `forwarding_unverified_pending` forwardings of an account wait
+/// for their code at once (`except` the one being asked again), so nobody
+/// piles requests nobody verifies onto anyone. Under the account's lock.
+async fn unverified_room(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    user_id: Uuid,
+    except: Option<Uuid>,
+) -> AppResult<()> {
+    sqlx::query("SELECT 1 FROM users WHERE id = $1 FOR NO KEY UPDATE")
+        .bind(user_id)
+        .execute(&mut **tx)
+        .await?;
+    let waiting: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM mail_forwardings
+          WHERE user_id = $1 AND state = 'pending' AND verified_at IS NULL
+            AND id IS DISTINCT FROM $2",
+    )
+    .bind(user_id)
+    .bind(except)
+    .fetch_one(&mut **tx)
+    .await?;
+    let most = forwarding::limit(
+        crate::ratelimit::Limit::ForwardingUnverifiedPending,
+        Some(user_id),
+    );
+    if waiting >= i64::from(most) {
+        return Err(code(
+            AppError::conflict("too many forwardings wait for their code"),
             "forwardingLimit",
         ));
     }
@@ -769,6 +812,7 @@ async fn create_outside(
         (None, None) => unreachable!("one of the two"),
     };
     prepare(tx, user_id, address_id).await?;
+    unverified_room(tx, user_id, None).await?;
     // The address's keys as stored: the list must keep each as it is, with
     // EMAIL_NO_ENCRYPT added; without a list they must carry it already.
     let stored: Vec<(String, bool, i32)> = sqlx::query_as(
@@ -899,6 +943,7 @@ pub async fn reinvite(
             "keyListRequired",
         ));
     }
+    unverified_room(&mut tx, user_id, Some(id)).await?;
     repend_outside(&mut tx, id).await?;
     let code = verify_again(&state, &mut tx, id, true).await?;
     tx.commit().await?;
@@ -1233,15 +1278,17 @@ pub async fn verify(
         return Err(AppError::not_found("not found"));
     }
     #[allow(clippy::type_complexity)]
-    let (verified, kept, version, live, attempts): (
+    let (verified, kept, version, live, attempts, lapsed): (
         bool,
         Option<Vec<u8>>,
         Option<i16>,
         bool,
         i32,
+        bool,
     ) = sqlx::query_as(
         "SELECT verified_at IS NOT NULL, code_hash, code_key_version,
-                COALESCE(code_expires_at > now(), false), code_attempts
+                COALESCE(code_expires_at > now(), false), code_attempts,
+                COALESCE(state = 'pending' AND expires_at <= now(), false)
            FROM mail_forwardings WHERE id = $1",
     )
     .bind(id)
@@ -1251,13 +1298,17 @@ pub async fn verify(
         tx.commit().await?;
         return Ok(Json(one(&state, id).await?));
     }
-    if current == "rejected" || current == "outdated" {
+    // A pending one past its wait lapsed: the sweep only hasn't got to it.
+    if current == "rejected" || current == "outdated" || lapsed {
         return Err(code(
             AppError::conflict(format!("the forwarding is {current}")),
             "forwardingState",
         ));
     }
-    let most = forwarding::limit(crate::ratelimit::Limit::ForwardingCodeAttempts, None);
+    let most = forwarding::limit(
+        crate::ratelimit::Limit::ForwardingCodeAttempts,
+        Some(user_id),
+    );
     let void = || {
         code(
             AppError::conflict("this code is void: send a new one"),
@@ -1442,6 +1493,7 @@ pub async fn renew(
     if let Some(forwardee_address) = forwardee_address {
         pending_room(&mut tx, forwardee_address).await?;
     }
+    unverified_room(&mut tx, user_id, Some(id)).await?;
     let material = check_material(&req.end_to_end, &forwarder_key)?;
     store_material(&state, &mut tx, id, &material).await?;
     let code = verify_again(&state, &mut tx, id, false).await?;

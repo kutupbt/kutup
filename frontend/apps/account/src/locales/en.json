@@ -1294,7 +1294,10 @@
         "calendar_writes": "Calendar changes",
         "forwarding_code_minutes": "Forwarding code lifetime",
         "forwarding_code_attempts": "Wrong forwarding codes",
-        "forwarding_code_resends": "Forwarding codes sent"
+        "forwarding_code_resends": "Forwarding codes sent",
+        "forwarding_codes_per_destination": "Codes per destination",
+        "forwarding_unverified_pending": "Forwardings awaiting a code",
+        "forwarding_unverified_minutes": "Unverified forwarding lifetime"
       },
       "accountTitle": "Rate limits",
       "accountHint": "This account's own values of the limits counted per account. Without one, the account gets the server's value.",
@@ -1385,7 +1388,10 @@
         "calendar_writes": "Calendar changes: calendars made or changed and event syncs.",
         "forwarding_code_minutes": "How long a forwarding's verification code lasts.",
         "forwarding_code_attempts": "Wrong verification codes before the code is void and a new one is needed.",
-        "forwarding_code_resends": "Verification codes one forwarding may send in a minute."
+        "forwarding_code_resends": "Verification codes one forwarding may send in a minute.",
+        "forwarding_codes_per_destination": "Verification codes one destination address receives in a day, from every account.",
+        "forwarding_unverified_pending": "Forwardings one account may have waiting for their code at once.",
+        "forwarding_unverified_minutes": "How long after its last code an unverified forwarding lapses."
       },
       "countsBytes": "Bytes per {{per}} {{window}}",
       "countsAtOnce": "At once, per {{per}}",

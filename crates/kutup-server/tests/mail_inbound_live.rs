@@ -6501,6 +6501,36 @@ fn forwarding_codes() {
             .unwrap()["state"],
         "active"
     );
+
+    // Forwardings waiting for their code: at most so many per account
+    // (Carol's is still waiting; one more fits under 2, then no more).
+    set_limit("forwarding_unverified_pending", 2);
+    let (dave, erin) = (register(&c, &base), register(&c, &base));
+    let (d, e) = (
+        set_up_address(&c, &base, &dave),
+        set_up_address(&c, &base, &erin),
+    );
+    let (_, to_dave, _) = forwarding_request(&a, &alice_address_id, &d, "all", json!([]));
+    create(&to_dave);
+    let (_, to_erin, _) = forwarding_request(&a, &alice_address_id, &e, "all", json!([]));
+    let r = bearer(c.post(format!("{base}/api/mail/forwardings")), &alice.token)
+        .json(&to_erin)
+        .send()
+        .unwrap();
+    assert_eq!(r.status().as_u16(), 409);
+    assert_eq!(r.json::<Value>().unwrap()["code"], "forwardingLimit");
+    set_limit("forwarding_unverified_pending", 5);
+
+    // Codes to one destination a day, from every account: Dave had his.
+    set_limit("forwarding_codes_per_destination", 1);
+    let bob_address_id = address_id(&c, &base, &bob);
+    let (_, bob_to_dave, _) = forwarding_request(&b, &bob_address_id, &d, "all", json!([]));
+    let r = bearer(c.post(format!("{base}/api/mail/forwardings")), &bob.token)
+        .json(&bob_to_dave)
+        .send()
+        .unwrap();
+    assert_eq!(r.status().as_u16(), 429, "{}", r.text().unwrap_or_default());
+    set_limit("forwarding_codes_per_destination", 10);
 }
 
 /// What the phases of [`outside_forwarding`] hand on.

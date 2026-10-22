@@ -151,15 +151,28 @@ pub async fn sweep_expired(pool: &sqlx::PgPool) -> Result<(), sqlx::Error> {
     // Locked as they are read, so an accept racing the sweep wins or loses
     // whole.
     let mut tx = pool.begin().await?;
+    // Past its wait, or unverified a while after its last code (so codes
+    // nobody enters don't hold anyone's room).
     let lapsed: Vec<Uuid> = sqlx::query_scalar(
-        "SELECT id FROM mail_forwardings WHERE state = 'pending' AND expires_at <= now()
+        "SELECT id FROM mail_forwardings
+          WHERE state = 'pending'
+            AND (expires_at <= now()
+                 OR (verified_at IS NULL
+                     AND COALESCE(code_sent_at, created_at) <= now() - ($1 * interval '1 minute')))
             FOR UPDATE SKIP LOCKED",
     )
+    .bind(i64::from(limit(
+        crate::ratelimit::Limit::ForwardingUnverifiedMinutes,
+        None,
+    )))
     .fetch_all(&mut *tx)
     .await?;
     for forwarding in lapsed {
         reject(&mut tx, forwarding).await?;
     }
+    sqlx::query("DELETE FROM mail_forwarding_code_sends WHERE day < current_date")
+        .execute(&mut *tx)
+        .await?;
     tx.commit().await
 }
 

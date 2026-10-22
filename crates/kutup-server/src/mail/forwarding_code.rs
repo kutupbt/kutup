@@ -130,16 +130,41 @@ pub async fn issue(
 ) -> Result<Issued, NotIssued> {
     let (version, _) = keys.current().ok_or(NotIssued::Unavailable)?;
     let key = code_key(keys, version).expect("the current key is configured");
-    let account: Uuid = sqlx::query_scalar("SELECT user_id FROM mail_forwardings WHERE id = $1")
-        .bind(forwarding)
-        .fetch_one(&mut **tx)
-        .await?;
-    // Both allowances or neither: a refused code charges nothing.
+    let (account, destination): (Uuid, String) = sqlx::query_as(
+        "SELECT user_id, lower(forwardee_email) FROM mail_forwardings WHERE id = $1",
+    )
+    .bind(forwarding)
+    .fetch_one(&mut **tx)
+    .await?;
+    // Every allowance or none: a refused code charges nothing.
     let mut savepoint = sqlx::Acquire::begin(&mut **tx).await?;
     if !forwarding::charge(&mut savepoint, account, Charge::Confirmation).await? {
         return Err(NotIssued::RateLimited);
     }
-    let minutes = i64::from(forwarding::limit(Limit::ForwardingCodeMinutes, None)).max(1);
+    // The destination's day, from every account: no address is flooded
+    // with codes, nor guessed at through many accounts.
+    let counted = sqlx::query(
+        "INSERT INTO mail_forwarding_code_sends (destination, day, sent)
+         VALUES ($1, current_date, 1)
+         ON CONFLICT (destination, day) DO UPDATE
+            SET sent = mail_forwarding_code_sends.sent + 1
+          WHERE mail_forwarding_code_sends.sent < $2",
+    )
+    .bind(&destination)
+    .bind(forwarding::limit(
+        Limit::ForwardingCodesPerDestination,
+        None,
+    ))
+    .execute(&mut *savepoint)
+    .await?;
+    if counted.rows_affected() != 1 {
+        return Err(NotIssued::RateLimited);
+    }
+    let minutes = i64::from(forwarding::limit(
+        Limit::ForwardingCodeMinutes,
+        Some(account),
+    ))
+    .max(1);
     let code = new_code();
     let kept = code_mac(&key, forwarding, &code)
         .finalize()
@@ -160,14 +185,18 @@ pub async fn issue(
     .bind(&kept)
     .bind(i16::try_from(version).unwrap_or(i16::MAX))
     .bind(minutes)
-    .bind(forwarding::limit(Limit::ForwardingInvites, None))
+    .bind(forwarding::limit(Limit::ForwardingInvites, Some(account)))
     .execute(&mut *savepoint)
     .await?;
     if issued.rows_affected() != 1 {
         return Err(NotIssued::RateLimited);
     }
     // Last, so a refusal above spends none of the minute's sends.
-    if !RESENDS.allow(&forwarding.to_string()) {
+    let resends = forwarding::limit(Limit::ForwardingCodeResends, Some(account));
+    if !RESENDS.allow_up_to(
+        &forwarding.to_string(),
+        usize::try_from(resends).unwrap_or(1),
+    ) {
         return Err(NotIssued::RateLimited);
     }
     savepoint.commit().await?;

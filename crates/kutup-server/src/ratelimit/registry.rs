@@ -128,7 +128,8 @@ impl Spec {
     /// §4): the limits counted per signed-in account. The sign-in ceilings
     /// count guesses at an account, not its own use, so they take none.
     pub fn overridable(&self) -> bool {
-        self.per == Per::Account
+        // A forwarding's limits are its account's to override too.
+        matches!(self.per, Per::Account | Per::Forwarding)
             && !matches!(
                 self.limit,
                 Limit::LoginAccountCeiling | Limit::LoginAccountDailyCeiling
@@ -223,6 +224,9 @@ pub enum Limit {
     ForwardingCodeMinutes,
     ForwardingCodeAttempts,
     ForwardingCodeResends,
+    ForwardingCodesPerDestination,
+    ForwardingUnverifiedPending,
+    ForwardingUnverifiedMinutes,
     ForwardingBounces,
     ForwardingOutside,
     ForwardingOutsideAccount,
@@ -933,6 +937,36 @@ pub static SPECS: &[Spec] = &[
         Forwarding,
         Mail,
         "Verification codes one forwarding may send in a minute."
+    ),
+    spec!(
+        ForwardingCodesPerDestination,
+        "forwarding_codes_per_destination",
+        None,
+        10,
+        Events(DAY),
+        Recipient,
+        Mail,
+        "Verification codes one destination address receives in a day, from every account."
+    ),
+    spec!(
+        ForwardingUnverifiedPending,
+        "forwarding_unverified_pending",
+        None,
+        5,
+        AtOnce,
+        Account,
+        Mail,
+        "Forwardings one account may have waiting for their code at once."
+    ),
+    spec!(
+        ForwardingUnverifiedMinutes,
+        "forwarding_unverified_minutes",
+        None,
+        1440,
+        Minutes,
+        Forwarding,
+        Mail,
+        "How long after its last code an unverified forwarding lapses."
     ),
     spec!(
         ForwardingBounces,
