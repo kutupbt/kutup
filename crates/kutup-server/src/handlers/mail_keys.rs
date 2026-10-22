@@ -365,6 +365,26 @@ impl ListChange {
 
     /// Primary and flags follow the list; the list is recorded.
     pub(crate) async fn finish(mut self, state: &AppState) -> AppResult<OwnMailAddress> {
+        // A list with no key to encrypt to is a disabled address's, and only
+        // its (Proton's): Disable publishes it, Enable the next.
+        let disabled: bool =
+            sqlx::query_scalar("SELECT disabled_at IS NOT NULL FROM mail_addresses WHERE id = $1")
+                .bind(self.address_id)
+                .fetch_one(&mut *self.tx)
+                .await?;
+        let encrypted_to = self
+            .signed
+            .list
+            .keys
+            .iter()
+            .any(|key| key.flags & FLAG_NOT_OBSOLETE != 0);
+        if disabled == encrypted_to {
+            return Err(AppError::bad_request(if disabled {
+                "a disabled address's keys are not encrypted to"
+            } else {
+                "an enabled address keeps a key to encrypt to"
+            }));
+        }
         // While the address forwards outside, every key it lists keeps
         // EMAIL_NO_ENCRYPT (docs/plans/mail-forwarding.md); once none does,
         // a list without it settles what the address owed.
