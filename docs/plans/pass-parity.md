@@ -26,7 +26,7 @@ but offers no way to see or change it.
 
 | Area | ✅ | 🟡 | ❌ |
 |---|---|---|---|
-| The database (vault) | 17 | 6 | 17 |
+| The database (vault) | 21 | 6 | 13 |
 | Groups (folders) | 5 | 1 | 6 |
 | Entries | 8 | 6 | 8 |
 | Bulk actions and the entry list | 8 | 1 | 6 |
@@ -35,9 +35,9 @@ but offers no way to see or change it.
 | One-time codes, passkeys, SSH, desktop integration | 5 | 3 | 10 |
 | Health report | 2 | 1 | 4 |
 | Locking and unlocking | 5 | 1 | 2 |
-| Sync, sharing and merges | 6 | 0 | 3 |
+| Sync, sharing and merges | 7 | 0 | 2 |
 | Platforms | 2 | 4 | 4 |
-| **All** | **61** | **28** | **66** |
+| **All** | **66** | **28** | **61** |
 
 ## The database (vault)
 
@@ -55,12 +55,12 @@ but offers no way to see or change it.
 | Bring in an existing vault (`.kdbx` upload) | Database → Open | ✅ | "Upload a .kdbx" (`features/UploadVaultDialog.tsx`): checked by its header (KeePass 1, KDBX 3.0 and unknown formats refused with their own message) and that its password or key file opens it before anything is uploaded; up to the administrators' `passVaultMaxBytes` (64 MiB at first); its key kept in the account by default; a KDBX 3.1 or 4.0 file is said to be saved as 4.1 at its first change |
 | Description, default user name | Database settings → General | 🟡 | the default user name fills new entries (`EntryEditor.tsx`), but neither can be changed: `updateVault` carries them and the UI only passes the current values on |
 | Public metadata (name, icon, colour on the unlock screen) | Database settings → General | ❌ | kept |
-| Change the password | Database settings → Security | ❌ | `changeKey` exists in `kutup-pass-wasm` and `vault/client.ts` but nothing in the UI calls it; the CLI has no command either. A vault's key cannot be changed in Kutup at all (needed too after removing a member from a shared folder, research 19 "Unlocking…") |
-| Key file: **create** (generate) | Security → Add Key File → Generate | ❌ | no way to make one; `KeyFileInput.tsx` only picks an existing file |
+| Change the password | Database settings → Security | ✅ | the vault's menu → "Change vault key…" (`features/ChangeKeyDialog.tsx`, rules in `lib/keyChange.ts`): keep, change (typed twice, or generated) or remove the password, one key part at least; saved straight to Drive or undone (`VaultSession.changeKey`, `abandonKeyChange`), then kept in the account again or the old kept key forgotten; says that Drive's earlier versions still open with the old key and copies already downloaded can't be revoked, and lets the owner delete the earlier versions and the first upload (`DELETE …/versions/original`); spec 168. Not in the CLI |
+| Key file: **create** (generate) | Security → Add Key File → Generate | ✅ | `kdbx::generate_key_file`: 32 random bytes in KeePass's XML v2, byte for byte as KeePassXC writes it (`Name.keyx`); downloaded only, never sent anywhere; the change waits until the person says it is saved |
 | Key file: **open** a vault with one (alone or with a password) | unlock screen | ✅ | `UnlockVault.tsx` takes a password, a key file or both; also when another device saved under a new key (`TheirsKeyDialog.tsx`); every key-file kind (XML v1/v2, 32-byte, hex, any file) |
 | Key file: **new vault** protected by one | wizard → credentials | ✅ | `CreateVaultDialog.tsx`, "A password I choose", with or without a password; an existing file only (see "create") |
-| Key file: **add** to an existing vault | Security → Add Key File | ❌ | as "Change the password": `changeKey` is not wired |
-| Key file: **remove** from an existing vault | Security → Remove Key File | ❌ | as above |
+| Key file: **add** to an existing vault | Security → Add Key File | ✅ | "Change vault key…": generated, or one the person has; the password part kept (also when known only as its hash, opened with the kept key) |
+| Key file: **remove** from an existing vault | Security → Remove Key File | ✅ | as above, while a password stays |
 | Key file kept with the sign-in | (none) | ✅ | beyond KeePassXC: the derived key element sealed under the account key (`crates/kutup-pass/src/kept.rs`), so the website and `kutup sync` open it without the file |
 | YubiKey / OnlyKey challenge-response | `keys/ChallengeResponseKey.cpp`, `keys/drivers` | ❌ | neither open, create, add nor remove: the crate's challenge-response feature is off, and the web would need WebHID (Chromium only; research 19 "Unlocking…") |
 | KDF settings (Argon2d/id, AES-KDF; memory, iterations, parallelism; "1 second" benchmark) | Security → Encryption | ❌ | new vaults get Argon2id 64 MiB, 10 iterations, fixed (`crates/kutup-pass/src/edit.rs`); an existing vault's KDF is kept; no setting |
@@ -240,7 +240,7 @@ read-only vault has no selection and no dragging.
 | Share a whole vault with people | KeeShare to a shared file, or share the file | ✅ | a vault in a shared Drive folder; viewers get it read-only (`session.canEdit`); each member keeps the key under their own account |
 | Share one group (KeeShare import/export/sync containers) | `src/keeshare`, `KeeShare.adoc` | ❌ | a separate vault in a shared folder does the job today |
 | Share a single entry | (no) | ❌ | roadmap "Pass next" (research 19 §5.7) |
-| Change the key after removing a member | change the password | ❌ | see "Change the password" |
+| Change the key after removing a member | change the password | ✅ | "Change vault key…" (see "Change the password"); members' kept keys stop opening it and they are asked for the new one |
 
 ## Platforms
 
@@ -270,7 +270,7 @@ What people hit first, then what blocks moving from KeePassXC:
 2. ~~**Vault management from the vault list**~~ (user report): done. A menu
    on each vault, also while locked (rename, move, duplicate, download,
    show in Drive, delete), and uploading an existing `.kdbx`; spec 166.
-3. **Change the vault's key** (user report, with item 1's urgency): a
+3. ~~**Change the vault's key**~~ (user report, with item 1's urgency): done, spec 168. A
    Vault settings → Security page wiring `changeKey`: change the password,
    **generate** a key file (KeePassXC's 32-byte random key in its XML v2
    form, downloaded once), **add** or **remove** a key file, and re-keep

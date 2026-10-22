@@ -9,3 +9,4 @@ specs/153-pass-custom-icons.spec.ts
 specs/154-pass-vault-keys.spec.ts
 specs/166-pass-vault-menu.spec.ts
 specs/167-pass-bulk-entries.spec.ts
+specs/168-pass-change-key.spec.ts

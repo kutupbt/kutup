@@ -381,7 +381,10 @@ one database, plus a report of what happened.
   from it (an XML key file's key, a 32-byte or hex file's bytes, any other
   file's SHA-256: 32 bytes that open the vault as the file does, whatever its
   size or padding); an unusual key file whose key is not 32 bytes is kept as
-  it is, up to 2048 bytes. Only a key that opened the vault is kept: the Pass
+  it is, up to 2048 bytes. A chosen password the open vault knows only as
+  its hash (opened with its kept key, then its key file changed) is kept as
+  that hash, which is what a chosen password is kept as anyway; a generated
+  one needs the password itself (`kept::PasswordKind`). Only a key that opened the vault is kept: the Pass
   worker keeps the key its vault was opened or made with, and the CLI opens
   the vault with the key first. Stored by the server
   (`pass_vault_secrets`, `/api/pass/vault-secrets`), unreadable to it.
@@ -399,9 +402,7 @@ one database, plus a report of what happened.
   handles a key file's reduction or the payload itself. A duplicated vault
   has the same key, so its kept secret is sealed again, as it is, for the
   copy's file id (`reseal`): no vault is opened and no password is needed,
-  and a generated password stays one that can be shown. A key opened from
-  what is kept (a chosen password's hash) is never sealed again through
-  `seal`, which refuses it. `kutup sync` tries the kept secret before the environment and the
+  and a generated password stays one that can be shown. `kutup sync` tries the kept secret before the environment and the
   prompt, offers to keep a typed password, and `kutup pass keep|ls|forget`
   manages them headless.
 - **Vault secrets and the account's binding** (docs/plans/account-identity.md):
