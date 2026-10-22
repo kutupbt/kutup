@@ -548,9 +548,19 @@ does and doesn't revoke.
   number moves to libsignal's `NumericFingerprint` over the account id and
   identity key (vectors against libsignal's own), and the verification QR gets
   a new version.
-- **kutup-chat-proto:** `ChatProvisionV1`, `AccountManifestV2`, the
-  `accountIdentity` sync kind, the distribution and registration request
-  types.
+- **kutup-chat-proto** (`src/account_identity.rs`, in first and additive
+  until the cutover): `AccountManifestV2` (domain `kutup/account-manifest/v2`,
+  its chain starting at sequence 1) with its publication and history page;
+  `AccountPreKeyBundlesResponse` (the identity once, checked against the
+  manifest); `ChatProvisionV1`, `ProvisionEnvelopeV1`, the provisioning
+  socket's messages, the relay request and the `kutup://link` code; the link
+  token response; `AccountIdentityDistributionRequest` with its row-free
+  checks (`400`, or `409` with the device lists); `ReregistrationV1` (the
+  manifest lists this device alone as device 1, the id left free once the
+  other rows go); the registration's `credential`, `linkToken` and
+  `reregistration` (optional until the cutover, then required as the rules
+  say); the `X-Kutup-Chat-Device` header; the `keys/check` digest; the
+  `accountIdentity` sync body.
 - **kutup-chat-core:** `keys::generate` takes the identity instead of making
   one; the safety number and verified state per identity key (the Chat
   contact record gains `identityKey` and `identityState`, as Signal's

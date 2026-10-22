@@ -1,0 +1,541 @@
+use super::*;
+use crate::{AccountIdentitySuiteId, EnvelopeType, RegisterChatDeviceRequest};
+use base64::Engine as _;
+use ed25519_dalek::Signer as _;
+use sha2::{Digest, Sha256};
+
+fn b64(bytes: &[u8]) -> String {
+    base64::engine::general_purpose::STANDARD.encode(bytes)
+}
+
+fn identity(byte: u8) -> String {
+    let mut key = [byte; 33];
+    key[0] = DJB_KEY_TYPE;
+    b64(&key)
+}
+
+fn authority() -> ed25519_dalek::SigningKey {
+    ed25519_dalek::SigningKey::from_bytes(&[7; 32])
+}
+
+fn device(device_id: u32, registration_id: u32) -> AccountManifestDeviceV2 {
+    AccountManifestDeviceV2 {
+        device_id,
+        direct_chat_suite: DirectChatSuiteId::PqxdhTripleRatchetV1,
+        registration_id,
+        mls: None,
+    }
+}
+
+fn sign(manifest: &mut AccountManifestV2) {
+    manifest.signature = b64(&authority()
+        .sign(&manifest.signing_bytes().unwrap())
+        .to_bytes());
+}
+
+fn manifest(devices: Vec<AccountManifestDeviceV2>) -> AccountManifestV2 {
+    let public = authority().verifying_key().to_bytes();
+    let mut incarnation = Sha256::new();
+    incarnation.update(b"kutup/account-incarnation/v1\0");
+    incarnation.update(public);
+    let drive_signing = ed25519_dalek::SigningKey::from_bytes(&[8; 32]);
+    let mut manifest = AccountManifestV2 {
+        manifest_version: ACCOUNT_MANIFEST_V2_VERSION,
+        account: AccountRef::new("example.test", "0b6b5e0c-4c1e-4b8e-9c2d-6a1f3e5d7c9b").unwrap(),
+        incarnation_id: hex::encode(incarnation.finalize()),
+        sequence: 1,
+        previous_hash: None,
+        identity_key: identity(3),
+        drive: AccountManifestDriveKeysV1 {
+            suite: AccountIdentitySuiteId::XWingEd25519V2,
+            hpke_public_key: b64(&[9; 1216]),
+            share_signing_public_key: b64(&drive_signing.verifying_key().to_bytes()),
+        },
+        devices,
+        issued_at: "2026-10-22T12:00:00Z".into(),
+        authority_key_id: hex::encode(Sha256::digest(public)),
+        self_authority_key: b64(&public),
+        signature: String::new(),
+    };
+    sign(&mut manifest);
+    manifest
+}
+
+fn two_devices() -> AccountManifestV2 {
+    manifest(vec![device(1, 10), device(2, 20)])
+}
+
+#[test]
+fn manifest_v2_verifies_and_binds_every_field() {
+    let good = two_devices();
+    good.verify().unwrap();
+    assert_eq!(good.device(2).unwrap().registration_id, 20);
+    assert!(good.device(3).is_none());
+
+    // Every vouched-for field is under the signature.
+    let mut other_identity = good.clone();
+    other_identity.identity_key = identity(4);
+    assert!(other_identity.verify().is_err());
+    let mut other_registration = good.clone();
+    other_registration.devices[1].registration_id = 21;
+    assert!(other_registration.verify().is_err());
+    let mut other_sequence = good.clone();
+    other_sequence.sequence = 2;
+    other_sequence.previous_hash = Some(good.manifest_hash().unwrap());
+    assert!(other_sequence.verify().is_err());
+}
+
+#[test]
+fn manifest_v2_refuses_bad_shapes_even_when_signed() {
+    let mut v1 = two_devices();
+    v1.manifest_version = 1;
+    sign(&mut v1);
+    assert!(v1.verify().is_err());
+
+    // An unordered device list has no signing bytes, so it can't verify.
+    let mut unordered = two_devices();
+    unordered.devices.reverse();
+    assert!(unordered.signing_bytes().is_err());
+    assert!(unordered.verify().is_err());
+
+    for (device_id, registration_id) in [(0, 1), (128, 1), (1, 0), (1, 0x4000)] {
+        let bad = manifest(vec![device(device_id, registration_id)]);
+        assert!(bad.verify().is_err(), "{device_id}/{registration_id}");
+    }
+
+    let mut not_curve = two_devices();
+    not_curve.identity_key = b64(&[3; 33]);
+    assert!(not_curve.signing_bytes().is_err());
+
+    let mut no_link = two_devices();
+    no_link.sequence = 2;
+    sign(&mut no_link);
+    assert!(no_link.verify().is_err());
+
+    let empty = manifest(Vec::new());
+    assert!(empty.verify().is_err());
+}
+
+#[test]
+fn manifest_v2_domain_differs_from_v1() {
+    let bytes = two_devices().signing_bytes().unwrap();
+    assert!(bytes.starts_with(b"kutup/account-manifest/v2\0"));
+}
+
+#[test]
+fn history_page_follows_the_hash_chain() {
+    let first = two_devices();
+    let mut second = manifest(vec![device(1, 10)]);
+    second.sequence = 2;
+    second.previous_hash = Some(first.manifest_hash().unwrap());
+    sign(&mut second);
+    let page = AccountManifestHistoryPageV2 {
+        account: first.account.clone(),
+        from_sequence: 1,
+        to_sequence: 2,
+        manifests: vec![first.clone(), second.clone()],
+        next_sequence: None,
+    };
+    page.validate().unwrap();
+
+    let mut forked = second.clone();
+    forked.previous_hash = Some(hex::encode([1; 32]));
+    sign(&mut forked);
+    let page = AccountManifestHistoryPageV2 {
+        manifests: vec![first, forked],
+        ..page
+    };
+    assert!(page.validate().is_err());
+}
+
+fn ec(key_id: u32) -> EcPreKey {
+    EcPreKey {
+        key_id,
+        public_key: identity(5),
+        signature: Some(b64(&[6; 64])),
+    }
+}
+
+fn kem(key_id: u32) -> KemPreKey {
+    KemPreKey {
+        key_id,
+        public_key: b64(&[8; 1569]),
+        signature: b64(&[6; 64]),
+    }
+}
+
+fn bundle(device_id: u32, registration_id: u32) -> DevicePreKeyBundleV2 {
+    DevicePreKeyBundleV2 {
+        device_id,
+        registration_id,
+        suite: DirectChatSuiteId::PqxdhTripleRatchetV1,
+        signed_pre_key: ec(1),
+        kyber_pre_key: kem(2),
+        one_time_pre_key: None,
+    }
+}
+
+#[test]
+fn bundles_must_agree_with_the_manifest() {
+    let manifest = two_devices();
+    let good = AccountPreKeyBundlesResponse {
+        account: manifest.account.clone(),
+        identity_key: manifest.identity_key.clone(),
+        devices: vec![bundle(1, 10), bundle(2, 20)],
+        manifest,
+    };
+    good.check_against_manifest().unwrap();
+
+    // A device may lack a bundle (the caller decides); a bundle may never
+    // disagree with the manifest.
+    let mut fewer = good.clone();
+    fewer.devices.pop();
+    fewer.check_against_manifest().unwrap();
+
+    let mut stale = good.clone();
+    stale.devices[1].registration_id = 21;
+    assert!(stale.check_against_manifest().is_err());
+    let mut unlisted = good.clone();
+    unlisted.devices.push(bundle(3, 30));
+    assert!(unlisted.check_against_manifest().is_err());
+    let mut twice = good.clone();
+    twice.devices.push(bundle(1, 10));
+    assert!(twice.check_against_manifest().is_err());
+    let mut other_identity = good.clone();
+    other_identity.identity_key = identity(4);
+    assert!(other_identity.check_against_manifest().is_err());
+}
+
+#[test]
+fn device_header_round_trips_and_is_strict() {
+    let credential = [0xa5; 32];
+    let header = format_device_header(12, &credential);
+    assert_eq!(parse_device_header(&header).unwrap(), (12, credential));
+
+    let encoded = header.split_once('.').unwrap().1.to_string();
+    for bad in [
+        format!("012.{encoded}"),
+        format!("0.{encoded}"),
+        format!("128.{encoded}"),
+        format!("+1.{encoded}"),
+        format!(".{encoded}"),
+        format!("1.{encoded}="),
+        format!("1.{}", b64(&credential)),
+        "1".to_string(),
+        format!("1.{}", b64url_encode(&[1; 31])),
+    ] {
+        assert!(parse_device_header(&bad).is_err(), "{bad}");
+    }
+    assert_eq!(
+        decode_device_credential(&b64(&credential)).unwrap(),
+        credential
+    );
+    assert!(decode_device_credential(&b64(&[1; 31])).is_err());
+}
+
+#[test]
+fn link_code_round_trips_and_refuses_anything_else() {
+    let mut public_key = [9; 33];
+    public_key[0] = DJB_KEY_TYPE;
+    let code = ProvisioningLinkCodeV1 {
+        address: [4; 16],
+        public_key,
+    };
+    let uri = code.to_uri();
+    assert!(uri.starts_with("kutup://link?address="));
+    assert_eq!(ProvisioningLinkCodeV1::parse(&uri).unwrap(), code);
+    assert_eq!(
+        ProvisioningLinkCodeV1::parse(&format!("  {uri}\n")).unwrap(),
+        code
+    );
+
+    let key = b64url_encode(&public_key);
+    let address = b64url_encode(&[4; 16]);
+    for bad in [
+        format!("sgnl://linkdevice?uuid={address}&pub_key={key}"),
+        format!("kutup://link?key={key}&address={address}"),
+        format!("kutup://link?address={address}&key={key}&x=1"),
+        format!(
+            "kutup://link?address={address}&key={}",
+            b64url_encode(&[9; 33])
+        ),
+        format!("kutup://link?address={}&key={key}", b64url_encode(&[4; 15])),
+    ] {
+        assert!(ProvisioningLinkCodeV1::parse(&bad).is_err(), "{bad}");
+    }
+}
+
+#[test]
+fn provision_envelope_shape() {
+    let good = |len: usize| {
+        let mut body = vec![0; len];
+        body[0] = 1;
+        ProvisionEnvelopeV1 {
+            public_key: identity(2),
+            body: b64(&body),
+        }
+    };
+    good(65).validate().unwrap();
+    good(65 + 16 * 4).validate().unwrap();
+    assert!(good(64).validate().is_err());
+    assert!(good(66).validate().is_err());
+    let mut version = good(65);
+    version.body = b64(&[2; 65]);
+    assert!(version.validate().is_err());
+
+    let message = ProvisioningSocketMessage::Envelope { envelope: good(65) };
+    let json = serde_json::to_value(&message).unwrap();
+    assert_eq!(json["type"], "envelope");
+    assert_eq!(
+        serde_json::from_value::<ProvisioningSocketMessage>(json).unwrap(),
+        message
+    );
+    let address = serde_json::to_value(ProvisioningSocketMessage::Address {
+        address: b64url_encode(&[1; 16]),
+    })
+    .unwrap();
+    assert_eq!(address["type"], "address");
+}
+
+fn provision() -> ChatProvisionV1 {
+    ChatProvisionV1 {
+        provisioning_version: PROVISIONING_VERSION,
+        account: two_devices().account,
+        identity_key_public: identity(3),
+        identity_key_private: b64(&[0x42; 32]),
+        link_token: b64url_encode(&[5; 32]),
+        manifest_sequence: 1,
+        manifest_hash: hex::encode([6; 32]),
+        profile_key: b64(&[0x43; 32]),
+        profile_suite: ProfileSuiteId::XChaCha20Poly1305V1,
+        read_receipts: true,
+        typing_indicators: false,
+    }
+}
+
+#[test]
+fn provision_message_validates_and_hides_secrets() {
+    let message = provision();
+    message.validate().unwrap();
+    let json = serde_json::to_string(&message).unwrap();
+    assert!(json.contains("\"identityKeyPrivate\""));
+    assert!(json.contains("\"profileSuite\":1"));
+    assert_eq!(
+        serde_json::from_str::<ChatProvisionV1>(&json).unwrap(),
+        message
+    );
+    let mut extra: serde_json::Value = serde_json::from_str(&json).unwrap();
+    extra["masterKey"] = "x".into();
+    assert!(serde_json::from_value::<ChatProvisionV1>(extra).is_err());
+
+    let debug = format!("{message:?}");
+    assert!(!debug.contains(&b64(&[0x42; 32])) && !debug.contains(&b64(&[0x43; 32])));
+
+    let mut bad = provision();
+    bad.provisioning_version = 2;
+    assert!(bad.validate().is_err());
+    let mut bad = provision();
+    bad.manifest_sequence = 0;
+    assert!(bad.validate().is_err());
+    let mut bad = provision();
+    bad.identity_key_private = b64(&[1; 33]);
+    assert!(bad.validate().is_err());
+    let mut bad = provision();
+    bad.link_token = b64(&[5; 32]);
+    assert!(bad.validate().is_err());
+}
+
+fn sync_envelope(device_id: u32, registration_id: u32) -> OutgoingEnvelope {
+    OutgoingEnvelope {
+        device_id,
+        registration_id,
+        envelope_type: EnvelopeType::Message,
+        suite: DirectChatSuiteId::PqxdhTripleRatchetV1,
+        content: b64(b"sealed"),
+    }
+}
+
+fn keys(device_id: u32, registration_id: u32) -> DistributedDeviceKeysV1 {
+    DistributedDeviceKeysV1 {
+        device_id,
+        registration_id,
+        signed_pre_key: ec(1),
+        last_resort_kyber_pre_key: kem(2),
+    }
+}
+
+fn distribution() -> AccountIdentityDistributionRequest {
+    let mut manifest = manifest(vec![device(1, 11), device(3, 31)]);
+    manifest.sequence = 2;
+    manifest.previous_hash = Some(hex::encode([7; 32]));
+    sign(&mut manifest);
+    AccountIdentityDistributionRequest {
+        identity_key: manifest.identity_key.clone(),
+        devices: vec![keys(1, 11), keys(3, 31)],
+        // The message carries device 3's current registration id.
+        device_messages: vec![sync_envelope(3, 30)],
+        manifest,
+    }
+}
+
+#[test]
+fn distribution_names_exactly_the_manifest_devices() {
+    distribution().validate(1).unwrap();
+
+    // Device 3 sending: it keeps itself and messages device 1.
+    let mut from_three = distribution();
+    from_three.device_messages = vec![sync_envelope(1, 10)];
+    from_three.validate(3).unwrap();
+
+    // A sender that left itself out.
+    assert!(matches!(
+        distribution().validate(2),
+        Err(DistributionError::Invalid(_))
+    ));
+
+    let mut missing_keys = distribution();
+    missing_keys.devices.pop();
+    assert_eq!(
+        missing_keys.validate(1),
+        Err(DistributionError::Mismatched(DeviceListMismatch {
+            missing_devices: vec![3],
+            ..Default::default()
+        }))
+    );
+    let mut extra_message = distribution();
+    extra_message.device_messages.push(sync_envelope(4, 40));
+    assert_eq!(
+        extra_message.validate(1),
+        Err(DistributionError::Mismatched(DeviceListMismatch {
+            extra_devices: vec![4],
+            ..Default::default()
+        }))
+    );
+    let mut to_self = distribution();
+    to_self.device_messages.insert(0, sync_envelope(1, 10));
+    assert!(matches!(
+        to_self.validate(1),
+        Err(DistributionError::Mismatched(_))
+    ));
+
+    let mut unordered = distribution();
+    unordered.devices.reverse();
+    assert!(matches!(
+        unordered.validate(1),
+        Err(DistributionError::Invalid(_))
+    ));
+    let mut registration = distribution();
+    registration.devices[1].registration_id = 32;
+    assert!(matches!(
+        registration.validate(1),
+        Err(DistributionError::Invalid(_))
+    ));
+    let mut other_identity = distribution();
+    other_identity.identity_key = identity(4);
+    assert!(matches!(
+        other_identity.validate(1),
+        Err(DistributionError::Invalid(_))
+    ));
+    let mut unsigned = distribution();
+    unsigned.devices[0].signed_pre_key.signature = None;
+    assert!(matches!(
+        unsigned.validate(1),
+        Err(DistributionError::Invalid(_))
+    ));
+}
+
+fn registration(reregistration: Option<ReregistrationV1>) -> RegisterChatDeviceRequest {
+    RegisterChatDeviceRequest {
+        suite: DirectChatSuiteId::PqxdhTripleRatchetV1,
+        registration_id: 10,
+        identity_key: identity(3),
+        signed_pre_key: ec(1),
+        last_resort_kyber_pre_key: kem(2),
+        one_time_pre_keys: Vec::new(),
+        one_time_kyber_pre_keys: Vec::new(),
+        name: "Firefox".into(),
+        device_signature: None,
+        credential: Some(b64(&[1; 32])),
+        link_token: None,
+        reregistration,
+    }
+}
+
+#[test]
+fn reregistration_lists_this_device_alone() {
+    let alone = ReregistrationV1 {
+        manifest: manifest(vec![device(1, 10)]),
+    };
+    alone.validate(&registration(None)).unwrap();
+
+    let mut with_token = registration(None);
+    with_token.link_token = Some(b64url_encode(&[5; 32]));
+    assert!(alone.validate(&with_token).is_err());
+
+    let mut other_registration = registration(None);
+    other_registration.registration_id = 11;
+    assert!(alone.validate(&other_registration).is_err());
+
+    for devices in [vec![device(1, 10), device(2, 20)], vec![device(2, 10)]] {
+        let bad = ReregistrationV1 {
+            manifest: manifest(devices),
+        };
+        assert!(bad.validate(&registration(None)).is_err());
+    }
+
+    // The fields round-trip and stay optional for today's clients.
+    let json = serde_json::to_value(registration(Some(alone))).unwrap();
+    assert!(json["reregistration"]["manifest"].is_object());
+    let mut today = json.clone();
+    for field in ["credential", "linkToken", "reregistration"] {
+        today.as_object_mut().unwrap().remove(field);
+    }
+    let parsed: RegisterChatDeviceRequest = serde_json::from_value(today).unwrap();
+    assert!(parsed.credential.is_none() && parsed.reregistration.is_none());
+}
+
+#[test]
+fn account_identity_sync_body() {
+    let body = AccountIdentityBody {
+        identity_key_public: identity(3),
+        identity_key_private: b64(&[0x42; 32]),
+        registration_id: 31,
+        signed_pre_key: b64(&[1; 120]),
+        last_resort_kyber_pre_key: b64(&[2; 4800]),
+        manifest_sequence: 2,
+        manifest_hash: hex::encode([6; 32]),
+    };
+    body.validate().unwrap();
+    assert!(!format!("{body:?}").contains(&b64(&[0x42; 32])));
+
+    let mut bad = body.clone();
+    bad.registration_id = 0;
+    assert!(bad.validate().is_err());
+    let mut bad = body.clone();
+    bad.last_resort_kyber_pre_key = b64(&vec![2; MAX_PREKEY_RECORD_BYTES + 1]);
+    assert!(bad.validate().is_err());
+    let mut bad = body.clone();
+    bad.signed_pre_key = String::new();
+    assert!(bad.validate().is_err());
+    assert_eq!(crate::content::kind::ACCOUNT_IDENTITY, "accountIdentity");
+}
+
+#[test]
+fn keys_check_digest_is_pinned() {
+    // A fixed vector, so the server and every client compute the same bytes.
+    let digest = repeated_use_keys_digest(&[5; 33], 7, &[6; 33], 9, &[8; 1569]);
+    assert_eq!(
+        hex::encode(digest),
+        hex::encode(repeated_use_keys_digest(
+            &[5; 33], 7, &[6; 33], 9, &[8; 1569]
+        ))
+    );
+    assert_ne!(
+        digest,
+        repeated_use_keys_digest(&[5; 33], 8, &[6; 33], 9, &[8; 1569])
+    );
+    assert_ne!(
+        digest,
+        repeated_use_keys_digest(&[5; 33], 7, &[6; 33], 9, &[7; 1569])
+    );
+}
