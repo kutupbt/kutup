@@ -1367,8 +1367,14 @@ mod tests {
             .connect(&database_url)
             .await
             .unwrap();
+        // A device the earlier live tests left a Direct envelope for (the
+        // newest device needn't have one).
         let (user_id, device_id): (uuid::Uuid, i32) = sqlx::query_as(
-            "SELECT user_id,device_id FROM chat_devices ORDER BY created_at DESC LIMIT 1",
+            "SELECT m.recipient_user_id, m.recipient_device_id
+               FROM chat_mailbox m
+               JOIN chat_devices d ON d.user_id = m.recipient_user_id
+                                  AND d.device_id = m.recipient_device_id
+              ORDER BY m.server_ts DESC LIMIT 1",
         )
         .fetch_one(&pool)
         .await
