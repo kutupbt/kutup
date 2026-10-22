@@ -399,6 +399,14 @@ fn a_distribution_gives_the_kept_devices_a_new_identity() {
         Some(1),
         "{page}"
     );
+    // Taken, as the device takes it (the mailbox sweep is server-wide).
+    let r = renamed
+        .auth(c.post(format!("{base}/api/chat/messages/ack?deviceId=2")))
+        .bearer_auth(&ada.token)
+        .json(&json!({ "ids": [page["envelopes"][0]["id"]] }))
+        .send()
+        .unwrap();
+    assert!(r.status().is_success(), "ack: {}", r.status());
 }
 
 #[test]
