@@ -1,4 +1,4 @@
-import { AlertTriangle, Loader2, LockKeyhole, LockKeyholeOpen, ShieldAlert, ShieldCheck } from 'lucide-react'
+import { AlertTriangle, Ban, Loader2, LockKeyhole, LockKeyholeOpen, ShieldAlert, ShieldCheck } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import type { PinnedKeys } from '@kutup/mail-core/api'
 import { useProtection } from '@kutup/mail-core/protection'
@@ -23,6 +23,15 @@ export function RecipientLock({ address, domain, pinned, encrypt = true }: { add
     )
   }
   const value = protection.data
+  // Disabled by its owner: nothing can be sent to it (Proton's).
+  if (value.kind === 'disabled') {
+    const label = t('compose.lock.disabled')
+    return (
+      <Tooltip label={label}>
+        <Ban className="size-3 text-destructive" role="img" aria-label={label} data-testid="recipient-disabled" />
+      </Tooltip>
+    )
+  }
   // The address forwards outside Kutup: its owner turned end-to-end
   // encryption off for it (Proton shows the same open lock).
   if (value.kind === 'kutup' && value.encryptionDisabled) {

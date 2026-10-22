@@ -1,7 +1,7 @@
 import { useQuery } from '@tanstack/react-query'
 import { fromBase64, inspectExternalMailKey } from '@kutup/crypto'
 import type { ContactEmailPgp, ContactKey } from '@kutup/contacts-core/model'
-import { addressKeys, outsideKey, type OutsideKey } from './keys'
+import { AddressDisabled, addressKeys, GroupAddress, NoKutupAddress, outsideKey, type OutsideKey } from './keys'
 
 // How mail to one recipient is protected (docs/plans/mail.md, C3;
 // docs/plans/contact-keys.md), decided as Proton decides it: Kutup
@@ -18,6 +18,8 @@ export type Protection =
   | { kind: 'found'; publicKey: string; fingerprint: string; source: OutsideKey['source'] }
   /** Trusted keys, none of which can be used any more: sending waits until one is trusted again or they are removed. */
   | { kind: 'pinnedUnusable'; fingerprint: string }
+  /** Its owner disabled the address: nothing can be sent to it. */
+  | { kind: 'disabled' }
   | { kind: 'none' }
 
 /** What Contacts say about an outside address (mail-core `PinnedAddress`). */
@@ -50,8 +52,17 @@ export async function protectionFor(address: string, domain: string, pinned: Pin
   if (lower.endsWith(`@${domain}`)) {
     // Whether its owner's key list says not to encrypt; a lookup that fails
     // here is reported when sending.
-    const keys = await addressKeys(lower).catch(() => null)
+    const keys = await addressKeys(lower).catch((error: unknown) => (error instanceof AddressDisabled ? 'disabled' : null))
+    if (keys === 'disabled') return { kind: 'disabled' }
     return keys?.encryptionDisabled ? { kind: 'kutup', encryptionDisabled: true } : { kind: 'kutup' }
+  }
+  // Another address this server holds (a custom domain): a Kutup address too.
+  try {
+    const keys = await addressKeys(lower)
+    return keys.encryptionDisabled ? { kind: 'kutup', encryptionDisabled: true } : { kind: 'kutup' }
+  } catch (error) {
+    if (error instanceof AddressDisabled) return { kind: 'disabled' }
+    if (!(error instanceof NoKutupAddress) && !(error instanceof GroupAddress)) throw new KeyLookupFailed(lower)
   }
   // The person chose not to encrypt to this address.
   if (pinned?.pgp.encrypt === false) return { kind: 'none' }

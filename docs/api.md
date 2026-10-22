@@ -91,7 +91,7 @@ Specific codes, where an app does something particular (a test in
 | `forwardingExists` | 409 | The address already forwards there |
 | `forwardingLimit` | 409 | 10 forwardings per address or 25 per account |
 | `customDomainsOff` | 403 | Custom mail domains are off here (`POST /api/mail/domains`) |
-| `addressDisabled` | 403/404 | The address is disabled: a send from it (403), a key lookup for it (404) |
+| `addressDisabled` | 403/404/422 | The address is disabled: a send from it (403), a key lookup for it (404), a send to it (422); clients never send to it another way |
 | `addressEnabled` | 409 | `PUT /api/mail/addresses/{id}/delete` or `/enable`: the address isn't disabled |
 | `addressSetChanged` | 409 | `PUT /api/mail/addresses/order`: the ids aren't exactly the account's current addresses |
 | `defaultAddress` | 409 | Disabling the default address: make another address default first |

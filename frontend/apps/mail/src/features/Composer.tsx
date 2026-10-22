@@ -16,6 +16,7 @@ import {
   outboxStatus,
   sendDraft,
   UnknownRecipient,
+  RecipientDisabled,
   asSender,
   useMailAccount,
   useMailRefresh,
@@ -682,6 +683,7 @@ function ComposerPanel({ base, target }: { base: MailAccount; target: ComposerTa
       closed.current = false
       setSending(false)
       if (error instanceof UnknownRecipient) toast.error(t('compose.unknownRecipient', { address: error.address }))
+      else if (error instanceof RecipientDisabled) toast.error(t('compose.recipientDisabled', { address: error.address }))
       else if (error instanceof NoGroupShare) toast.error(t('compose.noGroupShare'))
       else if (error instanceof GroupNotAllowed) toast.error(t('compose.groupNotAllowed', { address: error.address }))
       else if (error instanceof GroupKeysChanged) {
