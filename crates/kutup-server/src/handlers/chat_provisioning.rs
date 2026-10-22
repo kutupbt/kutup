@@ -54,12 +54,17 @@ const CLOSE_EXPIRED: u16 = 4408;
 
 type Address = [u8; PROVISIONING_ADDRESS_LEN];
 
-/// The sockets waiting for their one envelope, by address, with the account
-/// that opened each.
-static SOCKETS: LazyLock<Mutex<HashMap<Address, (Uuid, oneshot::Sender<ProvisionEnvelopeV1>)>>> =
+/// A waiting socket: the account that opened it, and where its one
+/// envelope goes.
+type Waiting = (Uuid, oneshot::Sender<ProvisionEnvelopeV1>);
+/// A socket ticket: the account, and when it lapses.
+type Ticket = (Uuid, Instant);
+
+/// The sockets waiting for their one envelope, by address.
+static SOCKETS: LazyLock<Mutex<HashMap<Address, Waiting>>> =
     LazyLock::new(|| Mutex::new(HashMap::new()));
-/// Socket tickets, by their hash: the account and when the ticket lapses.
-static TICKETS: LazyLock<Mutex<HashMap<[u8; 32], (Uuid, Instant)>>> =
+/// Socket tickets, by their hash.
+static TICKETS: LazyLock<Mutex<HashMap<[u8; 32], Ticket>>> =
     LazyLock::new(|| Mutex::new(HashMap::new()));
 
 fn random<const N: usize>() -> [u8; N] {
@@ -120,8 +125,10 @@ pub async fn create_link_token(
             .fetch_one(&mut *tx)
             .await?;
     if unused >= most {
-        return Err(AppError::conflict("as many link tokens as allowed are unused")
-            .with_details(serde_json::json!({ "code": "linkTokenLimit" })));
+        return Err(
+            AppError::conflict("as many link tokens as allowed are unused")
+                .with_details(serde_json::json!({ "code": "linkTokenLimit" })),
+        );
     }
     let token: [u8; 32] = random();
     let expires_at = time::OffsetDateTime::now_utc() + time::Duration::seconds(lifetime);
@@ -262,7 +269,10 @@ async fn serve(socket: WebSocket, user_id: Uuid, lifetime: Duration) {
             }
         }
     }
-    SOCKETS.lock().expect("provisioning sockets").remove(&address);
+    SOCKETS
+        .lock()
+        .expect("provisioning sockets")
+        .remove(&address);
 }
 
 /// `PUT /api/chat/provisioning/{address}` (device-authenticated): relay one
@@ -300,12 +310,11 @@ pub async fn relay(
     let most = CHAT_PROVISION_BODY_BYTES.load(&state.pool).await?;
     // The body's encoded size bounds the decoded one.
     if i64::try_from(request.envelope.body.len()).unwrap_or(i64::MAX) > most * 4 / 3 + 4 {
-        return Err(AppError::bad_request("the provisioning message is too large"));
+        return Err(AppError::bad_request(
+            "the provisioning message is too large",
+        ));
     }
-    request
-        .envelope
-        .validate()
-        .map_err(AppError::bad_request)?;
+    request.envelope.validate().map_err(AppError::bad_request)?;
     let not_found = || AppError::not_found("no such provisioning socket");
     let address = decode_provisioning_address(&address).map_err(|_| not_found())?;
     let sender = {

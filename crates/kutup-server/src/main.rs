@@ -1473,8 +1473,7 @@ fn build_router(state: AppState) -> Router {
         )
         .route(
             "/api/chat/provisioning/:address",
-            put(handlers::chat_provisioning::relay)
-                .route_layer(DefaultBodyLimit::max(128 * 1024)),
+            put(handlers::chat_provisioning::relay).route_layer(DefaultBodyLimit::max(128 * 1024)),
         )
         .route(
             "/api/chat/account-identity",

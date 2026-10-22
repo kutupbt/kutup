@@ -13,7 +13,8 @@ use base64::Engine as _;
 use kutup_chat_proto::{
     decode_identity_key, parse_device_header, repeated_use_keys_digest,
     AccountIdentityDistributionRequest, AccountManifestPublicationV2, AccountManifestV2,
-    ChatKeysCheckRequest, DeviceListMismatch, DistributionError, EcPreKey, KemPreKey, CHAT_DEVICE_HEADER, DEVICE_CREDENTIAL_LEN,
+    ChatKeysCheckRequest, DeviceListMismatch, DistributionError, EcPreKey, KemPreKey,
+    CHAT_DEVICE_HEADER, DEVICE_CREDENTIAL_LEN,
 };
 use sha2::{Digest, Sha256};
 use sqlx::{Postgres, Transaction};
@@ -128,7 +129,9 @@ fn decode(name: &'static str, value: &str) -> AppResult<Vec<u8>> {
 }
 
 /// The account identity's public key, a valid point.
-pub(crate) fn identity_public_key(identity_key: &str) -> AppResult<libsignal_protocol::IdentityKey> {
+pub(crate) fn identity_public_key(
+    identity_key: &str,
+) -> AppResult<libsignal_protocol::IdentityKey> {
     let bytes = decode_identity_key("identityKey", identity_key).map_err(AppError::bad_request)?;
     libsignal_protocol::IdentityKey::decode(&bytes)
         .map_err(|_| AppError::bad_request("identityKey is not a valid Curve25519 key"))
@@ -232,8 +235,10 @@ pub async fn check_keys(
     if crate::handlers::chat::constant_time_eq(&held, &presented) {
         Ok(axum::http::StatusCode::NO_CONTENT.into_response())
     } else {
-        Err(AppError::conflict("the server holds other keys for this device")
-            .with_details(serde_json::json!({ "code": "keysDiffer" })))
+        Err(
+            AppError::conflict("the server holds other keys for this device")
+                .with_details(serde_json::json!({ "code": "keysDiffer" })),
+        )
     }
 }
 
@@ -273,8 +278,10 @@ pub async fn distribute_identity(
     let user_id = crate::handlers::trusted_uuid(&auth.user_id)?;
     let sender = authenticated_device(&state.pool, &headers, user_id).await?;
     if !crate::ratelimit::CHAT_IDENTITY_DISTRIBUTIONS.allow(&auth.user_id) {
-        return Err(AppError::too_many_requests("too many identity distributions")
-            .with_details(serde_json::json!({ "code": "rateLimited" })));
+        return Err(
+            AppError::too_many_requests("too many identity distributions")
+                .with_details(serde_json::json!({ "code": "rateLimited" })),
+        );
     }
     match request.validate(sender as u32) {
         Ok(()) => {}
@@ -297,7 +304,9 @@ pub async fn distribute_identity(
             .decode(&message.content)
             .map_err(|_| AppError::bad_request("deviceMessages content must be base64"))?;
         if content.is_empty() || content.len() > crate::handlers::chat::MAX_CONTENT_BYTES {
-            return Err(AppError::bad_request("a device message is empty or too large"));
+            return Err(AppError::bad_request(
+                "a device message is empty or too large",
+            ));
         }
     }
 
@@ -333,10 +342,9 @@ pub async fn distribute_identity(
         .device_messages
         .iter()
         .filter(|message| {
-            rows.iter()
-                .any(|(row, registration)| {
-                    *row as u32 == message.device_id && *registration as u32 != message.registration_id
-                })
+            rows.iter().any(|(row, registration)| {
+                *row as u32 == message.device_id && *registration as u32 != message.registration_id
+            })
         })
         .map(|message| message.device_id)
         .collect();
@@ -358,7 +366,11 @@ pub async fn distribute_identity(
     )
     .await?;
     // The devices left out (a lost or stolen one) go now.
-    let kept: Vec<i32> = request.devices.iter().map(|keys| keys.device_id as i32).collect();
+    let kept: Vec<i32> = request
+        .devices
+        .iter()
+        .map(|keys| keys.device_id as i32)
+        .collect();
     let dropped: Vec<i32> = sqlx::query_scalar(
         "DELETE FROM chat_devices WHERE user_id = $1 AND NOT (device_id = ANY($2))
          RETURNING device_id",
@@ -418,7 +430,9 @@ pub async fn distribute_identity(
         .bind(&account.server)
         .bind(user_id)
         .bind(sender)
-        .bind(crate::handlers::chat::envelope_type_code(message.envelope_type))
+        .bind(crate::handlers::chat::envelope_type_code(
+            message.envelope_type,
+        ))
         .bind(message.suite.as_u16() as i16)
         .bind(&message.content)
         .bind(&send_id)
@@ -462,11 +476,13 @@ mod tests {
         let spk = |by: &IdentityKeyPair| EcPreKey {
             key_id: 1,
             public_key: STANDARD.encode(&signed),
-            signature: Some(STANDARD.encode(
-                by.private_key()
-                    .calculate_signature(&signed, &mut rand09::rng())
-                    .unwrap(),
-            )),
+            signature: Some(
+                STANDARD.encode(
+                    by.private_key()
+                        .calculate_signature(&signed, &mut rand09::rng())
+                        .unwrap(),
+                ),
+            ),
         };
         let kyber = kem::KeyPair::generate(kem::KeyType::Kyber1024, &mut rng)
             .public_key

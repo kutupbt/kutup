@@ -289,7 +289,6 @@ pub struct DeviceQuery {
     pub device_id: i32,
 }
 
-
 #[utoipa::path(
     put,
     path = "/api/chat/push-subscription",

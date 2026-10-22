@@ -29,7 +29,7 @@ use uuid::Uuid;
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
 use kutup_chat_proto::{
     capability_hash, constant_time_capability_hash_eq, AccountManifestHistoryPageV2,
-    AccountManifestPublicationV2, AccountManifestV2, AccountRef,
+    AccountManifestPublicationV2, AccountManifestV2, AccountPreKeyBundlesResponse, AccountRef,
     AckRequest, AnonymousPreKeyRequestV1, ChatProfileResponse, ChatWsClientMessage,
     ChatWsServerMessage, ChatWsTicketResponse, DeliveredEnvelope, DeviceListMismatch,
     DevicePreKeyBundleV2, DirectChatSuiteId, EcPreKey, EnvelopeType, KemPreKey, MailboxPage,
@@ -37,7 +37,7 @@ use kutup_chat_proto::{
     ProfileEnvelopePurpose, ProfileSuiteId, PutChatProfileRequest, RegisterChatDeviceRequestV2,
     RegisterChatDeviceResponse, RenameChatDeviceRequest, ReplenishKeysRequest,
     SealedDeliveryResponseV1, SealedMessageSubmissionV1, SealedOutgoingEnvelopeV1,
-    SendMessagesRequest, AccountPreKeyBundlesResponse,
+    SendMessagesRequest,
 };
 
 use crate::chat_hub::ChatWsOut;
@@ -415,8 +415,8 @@ pub async fn register_device(
         validate_kem_prekey("oneTimeKyberPreKeys", k)?;
     }
     req.validate().map_err(AppError::bad_request)?;
-    let credential =
-        kutup_chat_proto::decode_device_credential(&req.credential).map_err(AppError::bad_request)?;
+    let credential = kutup_chat_proto::decode_device_credential(&req.credential)
+        .map_err(AppError::bad_request)?;
     // Every signed key is the account identity's (Signal's
     // PreKeySignatureValidator); the identity is checked against the
     // account's below.
@@ -457,82 +457,80 @@ pub async fn register_device(
         .into_response());
     }
 
-    let (device_id, dropped) = if let DeviceRegistrationV1::Reregistration { manifest } =
-        &req.registration
-    {
-        // A new identity (Signal's reclaimAccount): the manifest lists this
-        // device alone, and every other device of the account goes with it.
-        store_manifest_v2(
-            &mut tx,
-            &state,
-            user_id,
-            manifest,
-            IdentityChange::New,
-        )
-        .await?;
-        let shared: Vec<Uuid> = sqlx::query_scalar(
-            "SELECT DISTINCT shared_payload_id FROM chat_mailbox
+    let (device_id, dropped) =
+        if let DeviceRegistrationV1::Reregistration { manifest } = &req.registration {
+            // A new identity (Signal's reclaimAccount): the manifest lists this
+            // device alone, and every other device of the account goes with it.
+            store_manifest_v2(&mut tx, &state, user_id, manifest, IdentityChange::New).await?;
+            let shared: Vec<Uuid> = sqlx::query_scalar(
+                "SELECT DISTINCT shared_payload_id FROM chat_mailbox
               WHERE recipient_user_id = $1 AND shared_payload_id IS NOT NULL",
-        )
-        .bind(user_id)
-        .fetch_all(&mut *tx)
-        .await?;
-        sqlx::query("DELETE FROM chat_mls_devices WHERE user_id = $1")
+            )
             .bind(user_id)
-            .execute(&mut *tx)
+            .fetch_all(&mut *tx)
             .await?;
-        sqlx::query("DELETE FROM chat_devices WHERE user_id = $1")
-            .bind(user_id)
-            .execute(&mut *tx)
-            .await?;
-        let dropped: Vec<i32> = rows.iter().map(|(id, _, _)| *id).collect();
-        ((kutup_chat_proto::REREGISTRATION_DEVICE_ID as i32), Some((dropped, shared)))
-    } else {
-        // A link: the account's identity, and a token an existing device of
-        // the account asked for, unused and unexpired.
-        let current = identity::account_identity(&mut tx, user_id)
-            .await?
-            .ok_or_else(|| {
-                AppError::conflict("the account has no Chat identity: re-register")
-                    .with_details(json!({ "code": "noAccountIdentity" }))
-            })?;
-        if current.0 != req.identity_key {
-            return Err(AppError::conflict("this is not the account's identity")
-                .with_details(json!({ "code": "identityMismatch" })));
-        }
-        let DeviceRegistrationV1::Link { link_token } = &req.registration else {
-            unreachable!("a re-registration is handled above");
-        };
-        let token = kutup_chat_proto::decode_link_token(link_token).map_err(AppError::bad_request)?;
-        let used: Option<i32> = sqlx::query_scalar(
-            "UPDATE chat_link_tokens SET used_at = now()
+            sqlx::query("DELETE FROM chat_mls_devices WHERE user_id = $1")
+                .bind(user_id)
+                .execute(&mut *tx)
+                .await?;
+            sqlx::query("DELETE FROM chat_devices WHERE user_id = $1")
+                .bind(user_id)
+                .execute(&mut *tx)
+                .await?;
+            let dropped: Vec<i32> = rows.iter().map(|(id, _, _)| *id).collect();
+            (
+                (kutup_chat_proto::REREGISTRATION_DEVICE_ID as i32),
+                Some((dropped, shared)),
+            )
+        } else {
+            // A link: the account's identity, and a token an existing device of
+            // the account asked for, unused and unexpired.
+            let current = identity::account_identity(&mut tx, user_id)
+                .await?
+                .ok_or_else(|| {
+                    AppError::conflict("the account has no Chat identity: re-register")
+                        .with_details(json!({ "code": "noAccountIdentity" }))
+                })?;
+            if current.0 != req.identity_key {
+                return Err(AppError::conflict("this is not the account's identity")
+                    .with_details(json!({ "code": "identityMismatch" })));
+            }
+            let DeviceRegistrationV1::Link { link_token } = &req.registration else {
+                unreachable!("a re-registration is handled above");
+            };
+            let token =
+                kutup_chat_proto::decode_link_token(link_token).map_err(AppError::bad_request)?;
+            let used: Option<i32> = sqlx::query_scalar(
+                "UPDATE chat_link_tokens SET used_at = now()
               WHERE token_hash = $1 AND user_id = $2 AND used_at IS NULL AND expires_at > now()
               RETURNING 1",
-        )
-        .bind(Sha256::digest(token).as_slice())
-        .bind(user_id)
-        .fetch_optional(&mut *tx)
-        .await?;
-        if used.is_none() {
-            return Err(AppError::forbidden("the link token is used, expired or unknown")
-                .with_details(json!({ "code": "linkToken" })));
-        }
-        if rows.len() >= state.config.chat_max_active_devices as usize {
-            return Err(AppError::conflict("chat active-device limit reached"));
-        }
-        let mut device_id: i32 = 1;
-        for (taken, _, _) in &rows {
-            if *taken == device_id {
-                device_id += 1;
-            } else {
-                break;
+            )
+            .bind(Sha256::digest(token).as_slice())
+            .bind(user_id)
+            .fetch_optional(&mut *tx)
+            .await?;
+            if used.is_none() {
+                return Err(
+                    AppError::forbidden("the link token is used, expired or unknown")
+                        .with_details(json!({ "code": "linkToken" })),
+                );
             }
-        }
-        if device_id > MAX_DEVICE_ID {
-            return Err(AppError::conflict("chat device limit reached"));
-        }
-        (device_id, None)
-    };
+            if rows.len() >= state.config.chat_max_active_devices as usize {
+                return Err(AppError::conflict("chat active-device limit reached"));
+            }
+            let mut device_id: i32 = 1;
+            for (taken, _, _) in &rows {
+                if *taken == device_id {
+                    device_id += 1;
+                } else {
+                    break;
+                }
+            }
+            if device_id > MAX_DEVICE_ID {
+                return Err(AppError::conflict("chat device limit reached"));
+            }
+            (device_id, None)
+        };
 
     let (salt, hash) = identity::new_credential(&credential);
     sqlx::query(
@@ -564,7 +562,8 @@ pub async fn register_device(
     tx.commit().await?;
 
     if let Some((dropped, shared)) = dropped {
-        if let Err(error) = crate::handlers::chat_multi::collect_payloads(&state.pool, &shared).await
+        if let Err(error) =
+            crate::handlers::chat_multi::collect_payloads(&state.pool, &shared).await
         {
             tracing::warn!(error = %error.message, "chat: shared payload collection after a re-registration failed");
         }
@@ -788,8 +787,8 @@ pub async fn publish_manifest(
     crate::handlers::chat_identity::authenticated_device(&state.pool, &headers, user_id).await?;
     crate::handlers::chat_identity::validate_manifest_v2(&manifest)?;
     let mut tx = state.pool.begin().await?;
-    let stored = store_manifest_v2(&mut tx, &state, user_id, &manifest, IdentityChange::Same)
-        .await?;
+    let stored =
+        store_manifest_v2(&mut tx, &state, user_id, &manifest, IdentityChange::Same).await?;
 
     let registered: Vec<(i32, i16, i64)> = sqlx::query_as(
         "SELECT device_id, suite, registration_id
@@ -800,11 +799,13 @@ pub async fn publish_manifest(
     .fetch_all(&mut *tx)
     .await?;
     let every_listed_device_is_registered = manifest.devices.iter().all(|listed| {
-        registered.iter().any(|(device_id, suite, registration_id)| {
-            listed.device_id == *device_id as u32
-                && listed.direct_chat_suite.as_u16() == *suite as u16
-                && listed.registration_id == *registration_id as u32
-        })
+        registered
+            .iter()
+            .any(|(device_id, suite, registration_id)| {
+                listed.device_id == *device_id as u32
+                    && listed.direct_chat_suite.as_u16() == *suite as u16
+                    && listed.registration_id == *registration_id as u32
+            })
     });
     if !every_listed_device_is_registered {
         return Err(AppError::conflict(
@@ -814,7 +815,11 @@ pub async fn publish_manifest(
     // Registration precedes publication so a device learns its id; rows the
     // authority did not list (a crash in that gap, an expired device, an
     // injected row) are pruned here.
-    let listed: Vec<i32> = manifest.devices.iter().map(|d| d.device_id as i32).collect();
+    let listed: Vec<i32> = manifest
+        .devices
+        .iter()
+        .map(|d| d.device_id as i32)
+        .collect();
     let pruned: Vec<i32> = sqlx::query_scalar(
         "DELETE FROM chat_devices WHERE user_id = $1 AND NOT (device_id = ANY($2))
          RETURNING device_id",
@@ -994,8 +999,13 @@ pub async fn put_profile(
     // A Chat device writes as itself, with its credential; the account app
     // writes as the account.
     if profile.source_device_id != kutup_chat_proto::ACCOUNT_PROFILE_SOURCE {
-        crate::handlers::chat_identity::authenticate_device(&state.pool, &headers, user_id, profile.source_device_id as i32)
-            .await?;
+        crate::handlers::chat_identity::authenticate_device(
+            &state.pool,
+            &headers,
+            user_id,
+            profile.source_device_id as i32,
+        )
+        .await?;
     }
     let mut tx = state.pool.begin().await?;
     // The account's row is the lock every profile write takes.
@@ -1697,8 +1707,13 @@ pub async fn get_user_bundles(
 ) -> AppResult<Response> {
     // A linked-device fetch is made as that device.
     if let Some(device_id) = query.sync_device_id {
-        crate::handlers::chat_identity::authenticate_device(&state.pool, &headers, trusted_uuid(&auth.user_id)?, device_id)
-            .await?;
+        crate::handlers::chat_identity::authenticate_device(
+            &state.pool,
+            &headers,
+            trusted_uuid(&auth.user_id)?,
+            device_id,
+        )
+        .await?;
     }
     if !ratelimit::CHAT_KEYS_ACCOUNT.allow(&auth.user_id) {
         crate::telemetry::rate_limit_rejection("prekey_account");
@@ -1892,39 +1907,31 @@ pub(crate) async fn load_user_bundles(
         .await?
         .ok_or_else(|| AppError::not_found("user has no chat devices"))?
         .0;
-    let listed: Vec<i32> = manifest.devices.iter().map(|d| d.device_id as i32).collect();
+    let listed: Vec<i32> = manifest
+        .devices
+        .iter()
+        .map(|d| d.device_id as i32)
+        .collect();
     #[allow(clippy::type_complexity)]
-    let devices: Vec<(i32, i16, i64, i64, String, String, i64, String, String)> =
-        sqlx::query_as(
-            "SELECT device_id, suite, registration_id,
+    let devices: Vec<(i32, i16, i64, i64, String, String, i64, String, String)> = sqlx::query_as(
+        "SELECT device_id, suite, registration_id,
                     signed_pre_key_id, signed_pre_key, signed_pre_key_signature,
                     last_resort_kyber_pre_key_id, last_resort_kyber_pre_key,
                     last_resort_kyber_pre_key_signature
              FROM chat_devices
              WHERE user_id = $1 AND expired_at IS NULL AND device_id = ANY($2)
              ORDER BY device_id",
-        )
-        .bind(target_id)
-        .bind(&listed)
-        .fetch_all(&mut *tx)
-        .await?;
+    )
+    .bind(target_id)
+    .bind(&listed)
+    .fetch_all(&mut *tx)
+    .await?;
     if devices.is_empty() {
         return Err(AppError::not_found("user has no chat devices"));
     }
 
     let mut bundles = Vec::with_capacity(devices.len());
-    for (
-        device_id,
-        suite,
-        registration_id,
-        spk_id,
-        spk,
-        spk_sig,
-        lrk_id,
-        lrk,
-        lrk_sig,
-    ) in devices
-    {
+    for (device_id, suite, registration_id, spk_id, spk, spk_sig, lrk_id, lrk, lrk_sig) in devices {
         // A self-sync fetch includes the caller's public bundle so it can be
         // checked against the complete signed manifest, but that bundle is
         // never used for encryption and must not burn a one-time prekey.
@@ -2027,8 +2034,13 @@ pub async fn send_messages(
     Json(req): Json<SendMessagesRequest>,
 ) -> AppResult<Response> {
     let sender_id = trusted_uuid(&auth.user_id)?;
-    crate::handlers::chat_identity::authenticate_device(&state.pool, &headers, sender_id, req.sender_device_id as i32)
-        .await?;
+    crate::handlers::chat_identity::authenticate_device(
+        &state.pool,
+        &headers,
+        sender_id,
+        req.sender_device_id as i32,
+    )
+    .await?;
     validate_send_request(&req, false, None)?;
     let recipient_id = match named_account(&state, &account_id, query.server.as_deref()).await? {
         NamedAccount::Local(user_id) => user_id,
@@ -2494,12 +2506,13 @@ pub(crate) async fn store_sealed_messages(
         });
     }
 
-    let current: Vec<(i32, i64)> =
-        sqlx::query_as("SELECT device_id, registration_id FROM chat_devices
-              WHERE user_id = $1 AND expired_at IS NULL")
-            .bind(recipient_id)
-            .fetch_all(&mut **tx)
-            .await?;
+    let current: Vec<(i32, i64)> = sqlx::query_as(
+        "SELECT device_id, registration_id FROM chat_devices
+              WHERE user_id = $1 AND expired_at IS NULL",
+    )
+    .bind(recipient_id)
+    .fetch_all(&mut **tx)
+    .await?;
     let mismatch = sealed_device_list_mismatch(&current, &request.envelopes);
     if !mismatch.missing_devices.is_empty()
         || !mismatch.stale_devices.is_empty()
@@ -2633,8 +2646,13 @@ pub async fn sync_messages(
     Json(req): Json<SendMessagesRequest>,
 ) -> AppResult<Response> {
     let sender_id = trusted_uuid(&auth.user_id)?;
-    crate::handlers::chat_identity::authenticate_device(&state.pool, &headers, sender_id, req.sender_device_id as i32)
-        .await?;
+    crate::handlers::chat_identity::authenticate_device(
+        &state.pool,
+        &headers,
+        sender_id,
+        req.sender_device_id as i32,
+    )
+    .await?;
     let excluded_device = req.sender_device_id as i32;
     validate_send_request(&req, true, Some(excluded_device))?;
     deliver_messages(&state, sender_id, sender_id, req, Some(excluded_device)).await
@@ -2700,12 +2718,13 @@ async fn deliver_messages(
     }
 
     // Exact device-set check (Signal's missing/stale/extra contract).
-    let mut current: Vec<(i32, i64)> =
-        sqlx::query_as("SELECT device_id, registration_id FROM chat_devices
-              WHERE user_id = $1 AND expired_at IS NULL")
-            .bind(recipient_id)
-            .fetch_all(&mut *tx)
-            .await?;
+    let mut current: Vec<(i32, i64)> = sqlx::query_as(
+        "SELECT device_id, registration_id FROM chat_devices
+              WHERE user_id = $1 AND expired_at IS NULL",
+    )
+    .bind(recipient_id)
+    .fetch_all(&mut *tx)
+    .await?;
     if let Some(excluded_device) = excluded_device {
         if !current
             .iter()
