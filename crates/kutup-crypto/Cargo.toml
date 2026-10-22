@@ -109,3 +109,7 @@ required-features = ["calendar"]
 [[test]]
 name = "calendar_vectors"
 required-features = ["calendar"]
+
+[[test]]
+name = "calendar_recurrence_vectors"
+required-features = ["calendar"]

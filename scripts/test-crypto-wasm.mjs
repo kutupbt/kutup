@@ -1186,7 +1186,7 @@ assert.equal(crypto.incarnationIdOfAuthority(iv.authorityPublicKey), crypto.deri
 // address key) unlocks the calendar from its sealed passphrase, and the
 // event and metadata open as the Rust vectors say; the refused ones don't.
 if (build === 'crypto') {
-  for (const name of ['createCalendar', 'unlockCalendar', 'calendarTimeZones']) {
+  for (const name of ['createCalendar', 'unlockCalendar', 'calendarTimeZones', 'calendarOccurrences', 'calendarRuleText']) {
     assert.equal(crypto[name], undefined, `${name} is in the plain crypto build`)
   }
 } else {
@@ -1234,6 +1234,33 @@ if (build === 'crypto') {
   assert.ok(crypto.calendarTimeZones().includes('Europe/Istanbul'))
   assert.throws(() => crypto.calendarLocalToUtc('2026-10-29T09:30:00', 'Nowhere/Else'))
   unlocked.free()
+
+  // Recurrence (E2): every vector case expands in the browser as in Rust and
+  // as python-dateutil does.
+  const recurrence = JSON.parse(await readFile(`${root}/crates/kutup-crypto/tests/vectors/calendar-recurrence-v1.json`, 'utf8'))
+  for (const c of recurrence.cases) {
+    const start = 'date' in c.start ? { date: c.start.date } : c.start.zoned.tzid === 'UTC' ? { utc: `${c.start.zoned.local}Z` } : c.start
+    const rule = crypto.calendarReadRule(c.rule)
+    const text = crypto.calendarRuleText(rule)
+    assert.deepEqual(crypto.calendarReadRule(text), rule, c.name)
+    const exdate = (value) => ('date' in start ? { date: value } : 'utc' in start ? { utc: `${value}Z` } : { zoned: { local: value, tzid: start.zoned.tzid } })
+    const fields = {
+      uid: 'r@kutup.test', dtstamp: '2026-10-22T08:00:00Z', created: null, start, end: null, recurrenceId: null,
+      rrule: text, exdates: (c.exdates ?? []).map(exdate), organizer: null, summary: null, description: null, location: null, status: null, transp: null, comment: null,
+    }
+    if (c.refused) {
+      assert.throws(() => crypto.calendarOccurrences(fields, '1970-01-01T00:00:00Z', '2038-01-01T00:00:00Z', 10), c.name)
+      continue
+    }
+    const occurrences = crypto.calendarOccurrences(fields, '1970-01-01T00:00:00Z', '2038-01-01T00:00:00Z', c.take)
+    const local = occurrences.map((o) => o.start.date ?? o.start.zoned?.local ?? o.start.utc.replace('Z', '').replace(/\.\d+$/, ''))
+    assert.deepEqual(local, c.local, c.name)
+    if (c.utc?.length) assert.deepEqual(occurrences.map((o) => o.startUtc), c.utc, c.name)
+  }
+  // Outside Proton's subset: refused.
+  assert.throws(() => crypto.calendarReadRule('FREQ=HOURLY'))
+  assert.throws(() => crypto.calendarRuleText({ frequency: 'monthly', byDay: ['MO'] }))
+  assert.deepEqual(crypto.calendarSupportedUntil({ zoned: { local: '2026-12-28T22:30:00', tzid: 'Europe/Istanbul' } }, '2026-12-29'), { utc: '2026-12-29T20:59:59Z' })
 }
 
 console.log(`${build} WASM canonical vectors passed`)
