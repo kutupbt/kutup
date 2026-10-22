@@ -1173,7 +1173,6 @@
     "enable": "Etkinleştir",
     "enabled": "Adres etkinleştirildi",
     "setDefault": "Varsayılan yap",
-    "setDefaultFor": "{{address}} adresini varsayılan yap",
     "disable": "Devre dışı bırak",
     "disableTitle": "Adres devre dışı bırakılsın mı?",
     "disableBody": "{{address}} adresini devre dışı bırakırsanız bu adresle artık e-posta gönderemez ve alamazsınız.",

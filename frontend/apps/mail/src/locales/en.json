@@ -1173,7 +1173,6 @@
     "enable": "Enable",
     "enabled": "Address enabled",
     "setDefault": "Set as default",
-    "setDefaultFor": "Set {{address}} as default",
     "disable": "Disable",
     "disableTitle": "Disable address?",
     "disableBody": "By disabling this address {{address}}, you will no longer be able to send or receive emails using this address.",

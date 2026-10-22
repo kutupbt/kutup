@@ -50,6 +50,7 @@ export function AddressesSection() {
   const disable = useDisableAddress()
   const remove = useDeleteAddress()
   const generate = useGenerateMissingKeys()
+  const add = useAddAddress()
   const [adding, setAdding] = useState(false)
   const [disabling, setDisabling] = useState<OwnAddressRow | null>(null)
   const [deleting, setDeleting] = useState<OwnAddressRow | null>(null)
@@ -94,6 +95,18 @@ export function AddressesSection() {
             const custom = row.domainId !== null
             const statuses = addressStatuses(row, isDefault)
             const missingKeys = statuses.includes('missingKeys')
+            // Proton's actions, in its order; none for the account's own address.
+            const actions: { label: string; run: () => void; danger?: boolean }[] = []
+            if (missingKeys) actions.push({ label: t('addresses.generateKeys'), run: () => setMissing([row]) })
+            if (row.disabled) {
+              actions.push({
+                label: t('addresses.enable'),
+                run: () => enable.mutate(row, { onSuccess: () => toast.success(t('addresses.enabled')), onError: failed }),
+              })
+            }
+            if (!isDefault && !row.disabled && !missingKeys) actions.push({ label: t('addresses.setDefault'), run: () => setDefault(row) })
+            if (custom && !row.disabled && !isDefault) actions.push({ label: t('addresses.disable'), run: () => setDisabling(row) })
+            if (custom && !isDefault) actions.push({ label: t('addresses.delete'), run: () => setDeleting(row), danger: true })
             return (
               <TableRow key={row.id} data-testid="address-row">
                 <TableCell className="font-medium">{row.address}</TableCell>
@@ -107,38 +120,22 @@ export function AddressesSection() {
                   </span>
                 </TableCell>
                 <TableCell>
-                  <DropdownMenu>
-                    <DropdownMenuTrigger asChild>
-                      <Button variant="ghost" size="icon" aria-label={t('addresses.actionsFor', { address: row.address })}>
-                        <MoreHorizontal className="size-4" />
-                      </Button>
-                    </DropdownMenuTrigger>
-                    <DropdownMenuContent align="end">
-                      {missingKeys ? <DropdownMenuItem onSelect={() => setMissing([row])}>{t('addresses.generateKeys')}</DropdownMenuItem> : null}
-                      {row.disabled ? (
-                        <DropdownMenuItem
-                          onSelect={() =>
-                            enable.mutate(row, { onSuccess: () => toast.success(t('addresses.enabled')), onError: failed })
-                          }
-                        >
-                          {t('addresses.enable')}
-                        </DropdownMenuItem>
-                      ) : null}
-                      {!isDefault && !row.disabled && !missingKeys ? (
-                        <DropdownMenuItem aria-label={t('addresses.setDefaultFor', { address: row.address })} onSelect={() => setDefault(row)}>
-                          {t('addresses.setDefault')}
-                        </DropdownMenuItem>
-                      ) : null}
-                      {custom && !row.disabled && !isDefault ? (
-                        <DropdownMenuItem onSelect={() => setDisabling(row)}>{t('addresses.disable')}</DropdownMenuItem>
-                      ) : null}
-                      {custom && !isDefault ? (
-                        <DropdownMenuItem className="text-destructive" onSelect={() => setDeleting(row)}>
-                          {t('addresses.delete')}
-                        </DropdownMenuItem>
-                      ) : null}
-                    </DropdownMenuContent>
-                  </DropdownMenu>
+                  {actions.length ? (
+                    <DropdownMenu>
+                      <DropdownMenuTrigger asChild>
+                        <Button variant="ghost" size="icon" aria-label={t('addresses.actionsFor', { address: row.address })}>
+                          <MoreHorizontal className="size-4" />
+                        </Button>
+                      </DropdownMenuTrigger>
+                      <DropdownMenuContent align="end">
+                        {actions.map((action) => (
+                          <DropdownMenuItem key={action.label} className={action.danger ? 'text-destructive' : undefined} onSelect={action.run}>
+                            {action.label}
+                          </DropdownMenuItem>
+                        ))}
+                      </DropdownMenuContent>
+                    </DropdownMenu>
+                  ) : null}
                 </TableCell>
               </TableRow>
             )
@@ -146,7 +143,7 @@ export function AddressesSection() {
         </TableBody>
       </Table>
 
-      <AddAddressDialog open={adding} onOpenChange={setAdding} add={useAddAddress()} domains={domains.data ?? []} />
+      <AddAddressDialog open={adding} onOpenChange={setAdding} add={add} domains={domains.data ?? []} />
 
       <ConfirmDestructive
         open={disabling !== null}

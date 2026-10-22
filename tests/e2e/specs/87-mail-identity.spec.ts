@@ -30,7 +30,16 @@ test('display name and signature: set in Settings, used when writing', async ({ 
   const tag = Date.now().toString(36)
 
   await mail.goto(appUrl('mail', '/settings/identity'))
-  await expect(mail.getByRole('heading', { name: 'Identity' })).toBeVisible()
+  await expect(mail.getByRole('heading', { name: 'Identity and addresses' })).toBeVisible()
+  // Addresses (Proton's): the account's own one, default and active. It is
+  // never disabled or deleted, and with no custom domain nothing is added.
+  const own = mail.getByTestId('address-row')
+  await expect(own).toHaveCount(1)
+  await expect(own.getByRole('cell', { name: `${alice.username}@${domain}` })).toBeVisible()
+  await expect(own.getByText('Default', { exact: true })).toBeVisible()
+  await expect(own.getByText('Active', { exact: true })).toBeVisible()
+  await expect(mail.getByRole('button', { name: 'Add address' })).toHaveCount(0)
+  await expect(own.getByRole('button', { name: /^Actions for/ })).toHaveCount(0)
   await mail.getByLabel('Display name').fill('Alice Yılmaz')
   const editor = mail.getByLabel('Signature', { exact: true })
   await editor.click()
