@@ -407,12 +407,21 @@ async fn load_status(state: &AppState, user_id: Uuid) -> AppResult<ChatBackupSta
 pub async fn append_segment(
     State(state): State<AppState>,
     user: AuthUser,
+    headers: axum::http::HeaderMap,
     Json(request): Json<AppendChatBackupSegmentRequestV1>,
 ) -> AppResult<Json<ChatBackupSegmentReceiptV1>> {
     let ciphertext = request
         .validate()
         .map_err(|error| AppError::bad_request(format!("invalid backup segment: {error}")))?;
     let user_id = trusted_uuid(&user.user_id)?;
+    // Written by the device it names, with its credential (a replay too).
+    crate::handlers::chat_identity::authenticate_device(
+        &state.pool,
+        &headers,
+        user_id,
+        request.source_device_id as i32,
+    )
+    .await?;
     let operation_id = canonical_uuid("backup operation id", &request.operation_id)?;
     let backup_incarnation_id =
         canonical_uuid("backup incarnation id", &request.backup_incarnation_id)?;

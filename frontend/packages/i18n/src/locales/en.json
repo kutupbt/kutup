@@ -37,7 +37,8 @@
     "photos": "Photos",
     "contacts": "Contacts",
     "mail": "Mail",
-    "pass": "Pass"
+    "pass": "Pass",
+    "calendar": "Calendar"
   },
   "theme": {
     "dark": "Dark theme",
@@ -134,7 +135,8 @@
       "chatHistory": "Chat history backup",
       "reserved": "Uploads in progress",
       "contacts": "Contacts",
-      "mail": "Mail"
+      "mail": "Mail",
+      "calendar": "Calendar"
     }
   },
   "uploads": {

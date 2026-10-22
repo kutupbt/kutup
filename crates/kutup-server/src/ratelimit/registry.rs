@@ -181,6 +181,10 @@ pub enum Limit {
     Reports,
     // Chat.
     ChatKeysAccount,
+    ChatLinkTokens,
+    ChatProvisioningSockets,
+    ChatProvisioningRelays,
+    ChatIdentityDistributions,
     ChatKeysAddress,
     ChatAnonymousAddress,
     SealedCapabilityBundles,
@@ -539,6 +543,46 @@ pub static SPECS: &[Spec] = &[
         Account,
         Chat,
         "Key bundles fetched: draining one-time prekeys."
+    ),
+    spec!(
+        ChatLinkTokens,
+        "chat_link_tokens",
+        None,
+        20,
+        Events(HOUR),
+        Account,
+        Chat,
+        "Link tokens asked for, to link a new Chat device."
+    ),
+    spec!(
+        ChatProvisioningSockets,
+        "chat_provisioning_sockets",
+        None,
+        10,
+        Events(MINUTE),
+        Address,
+        Chat,
+        "Provisioning sockets opened by devices waiting to be linked."
+    ),
+    spec!(
+        ChatProvisioningRelays,
+        "chat_provisioning_relays",
+        None,
+        10,
+        Events(MINUTE),
+        Account,
+        Chat,
+        "Provisioning messages relayed to a device being linked."
+    ),
+    spec!(
+        ChatIdentityDistributions,
+        "chat_identity_distributions",
+        None,
+        5,
+        Events(DAY),
+        Account,
+        Chat,
+        "New Chat identities for an account's devices."
     ),
     spec!(
         ChatKeysAddress,

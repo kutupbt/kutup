@@ -18,10 +18,18 @@ use crate::AppState;
 pub(crate) async fn publish_key_packages(
     State(state): State<AppState>,
     auth: AuthUser,
+    headers: axum::http::HeaderMap,
     Json(request): Json<PublishMlsKeyPackagesRequestV1>,
 ) -> AppResult<Response> {
     active_policy(&state).await?;
     let user_id = trusted_uuid(&auth.user_id)?;
+    crate::handlers::chat_identity::authenticate_device(
+        &state.pool,
+        &headers,
+        user_id,
+        request.device_id as i32,
+    )
+    .await?;
     let available = MlsRepository::new(state.pool)
         .publish_key_packages(user_id, &request, OffsetDateTime::now_utc())
         .await?;
@@ -35,12 +43,20 @@ pub(crate) async fn publish_key_packages(
 pub(crate) async fn key_package_count(
     State(state): State<AppState>,
     auth: AuthUser,
+    headers: axum::http::HeaderMap,
     axum::extract::Path(device_id): axum::extract::Path<u32>,
 ) -> AppResult<Response> {
     active_policy(&state).await?;
     if device_id == 0 || device_id > MAX_DEVICE_ID {
         return Err(AppError::bad_request("invalid MLS device id"));
     }
+    crate::handlers::chat_identity::authenticate_device(
+        &state.pool,
+        &headers,
+        trusted_uuid(&auth.user_id)?,
+        device_id as i32,
+    )
+    .await?;
     let available = MlsRepository::new(state.pool)
         .available_key_package_count(
             trusted_uuid(&auth.user_id)?,

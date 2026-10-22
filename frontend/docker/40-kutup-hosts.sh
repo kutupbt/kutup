@@ -34,6 +34,7 @@ photos=$(origin_of photos KUTUP_PHOTOS_URL)
 contacts=$(origin_of contacts KUTUP_CONTACTS_URL)
 mail=$(origin_of mail KUTUP_MAIL_URL)
 pass=$(origin_of pass KUTUP_PASS_URL)
+calendar=$(origin_of calendar KUTUP_CALENDAR_URL)
 
 conf=/etc/nginx/conf.d/kutup.conf
 {
@@ -46,7 +47,7 @@ server {
 }
 NGINX
   editor_origin=$(printf '%s' "$editor" | sed -E 's#^([a-z]+://[^/]+).*#\1#')
-  for app in account drive chat maps photos office contacts mail pass; do
+  for app in account drive chat maps photos office contacts mail pass calendar; do
     eval "origin=\$$app"
     host=$(host_of "$origin")
     # The apps' policy. WASM needs 'wasm-unsafe-eval' (and libsodium paths
@@ -83,7 +84,7 @@ server {
     # The Rust runtimes live in directories named for their content hash
     # (frontend/packages/config/vite.ts), which the bundle names: a new
     # build is a new URL, so they are cached for good, like /assets/.
-    location ~ "^/(crypto|chat|pass)-wasm/[0-9a-f]{16}/" {
+    location ~ "^/(crypto|crypto-calendar|chat|pass)-wasm/[0-9a-f]{16}/" {
         try_files \$uri =404;
         add_header Cache-Control "public, max-age=31536000, immutable" always;
         add_header X-Content-Type-Options nosniff always;
@@ -92,7 +93,7 @@ server {
     }
 
     # Anything else there (none is expected) is revalidated.
-    location ~ ^/(crypto|chat|pass)-wasm/ {
+    location ~ ^/(crypto|crypto-calendar|chat|pass)-wasm/ {
         try_files \$uri =404;
         add_header Cache-Control "no-cache" always;
         add_header X-Content-Type-Options nosniff always;
@@ -155,4 +156,4 @@ server {
 }
 NGINX
 } > "$conf"
-echo "kutup: serving account=$account drive=$drive chat=$chat maps=$maps photos=$photos office=$office contacts=$contacts mail=$mail pass=$pass editor=$editor"
+echo "kutup: serving account=$account drive=$drive chat=$chat maps=$maps photos=$photos office=$office contacts=$contacts mail=$mail pass=$pass calendar=$calendar editor=$editor"

@@ -164,7 +164,8 @@
     "photos": "Your photos and videos, by when and where they were taken, end-to-end encrypted.",
     "contacts": "Everyone you write to, chat with and share with, in one encrypted address book.",
     "mail": "Your mail, end-to-end encrypted with other Kutup users and encrypted the moment it arrives from anyone else.",
-    "pass": "Your passwords in KeePass vaults kept in Drive, usable offline and with KeePassXC."
+    "pass": "Your passwords in KeePass vaults kept in Drive, usable offline and with KeePassXC.",
+    "calendar": "Your events and calendars, encrypted, with times only your server needs to remind you."
   },
   "settings": {
     "account": {
@@ -795,7 +796,31 @@
       "passHint": "Kutup Pass, the password manager.",
       "passVaultMax": "Largest vault upload (MiB)",
       "passVaultMaxHint": "The largest .kdbx file someone can upload into Pass (from KeePassXC or a backup). A vault's own saves are never refused. 1 to 1024.",
-      "passVaultMaxRange": "Between 1 and 1024 MiB."
+      "passVaultMaxRange": "Between 1 and 1024 MiB.",
+      "calendar": "Calendar",
+      "calendarHint": "Limits on what each account keeps in Calendar.",
+      "calendarLimits": {
+        "calendarsPerAccount": "Calendars per account",
+        "calendarsPerAccountHint": "How many calendars one account may own.",
+        "calendarEventsPerCalendar": "Events per calendar",
+        "calendarEventsPerCalendarHint": "How many events one calendar may hold.",
+        "calendarSyncBatch": "Changes per sync",
+        "calendarSyncBatchHint": "How many event changes one request may carry.",
+        "calendarWindowDays": "Longest events window (days)",
+        "calendarWindowDaysHint": "The longest span one events query may ask for.",
+        "calendarEventsPage": "Events per page",
+        "calendarEventsPageHint": "The most events one page of an events query carries."
+      },
+      "chatLinking": "Linking Chat devices",
+      "chatLinkingHint": "How a new Chat device is linked by one the account already has.",
+      "chatLinkingLimits": {
+        "chatLinkTokenSeconds": "Link code lifetime (seconds)",
+        "chatLinkTokenSecondsHint": "How long a link token and the new device's link code stay usable.",
+        "chatLinkTokensPerAccount": "Unused link tokens per account",
+        "chatLinkTokensPerAccountHint": "How many link tokens one account may hold unused at once.",
+        "chatProvisionBodyBytes": "Largest linking message (bytes)",
+        "chatProvisionBodyBytesHint": "The largest provisioning message relayed to a device being linked, up to 64 KiB."
+      }
     },
     "federation": {
       "title": "Federation",
@@ -1219,6 +1244,10 @@
         "collab_frame_posts": "Collaboration frames over HTTP",
         "reports": "Reports on public links",
         "chat_keys_account": "Key bundles fetched",
+        "chat_identity_distributions": "New Chat identities",
+        "chat_provisioning_relays": "Linking messages",
+        "chat_provisioning_sockets": "Linking sockets",
+        "chat_link_tokens": "Link tokens",
         "chat_keys_address": "Key bundles fetched, per address",
         "chat_anonymous_address": "Sealed deliveries, per address",
         "sealed_capability_bundles": "Key bundles per sealed-sender capability",
@@ -1311,6 +1340,10 @@
         "collab_byte_burst": "Collaboration bytes one socket may send in a burst.",
         "reports": "Reports on public links, which need no account.",
         "chat_keys_account": "Key bundles fetched: draining one-time prekeys.",
+        "chat_identity_distributions": "New Chat identities an account gives its devices.",
+        "chat_provisioning_relays": "Linking messages an account sends to a device being linked.",
+        "chat_provisioning_sockets": "Linking sockets opened from one address by devices waiting to be linked.",
+        "chat_link_tokens": "Link tokens an account asks for, to link a new Chat device.",
         "chat_keys_address": "The outer wall on key bundles fetched.",
         "chat_anonymous_address": "The outer wall on sealed-sender deliveries.",
         "sealed_capability_bundles": "Key bundles fetched with one sealed-sender capability.",

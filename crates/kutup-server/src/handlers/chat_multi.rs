@@ -312,7 +312,8 @@ async fn deliver(
     // changed registration (410); nothing is stored on either.
     for recipient in &passing {
         let current: Vec<(i32, i64)> = sqlx::query_as(
-            "SELECT device_id, registration_id FROM chat_devices WHERE user_id = $1",
+            "SELECT device_id, registration_id FROM chat_devices
+              WHERE user_id = $1 AND expired_at IS NULL",
         )
         .bind(recipient.user_id)
         .fetch_all(&mut *tx)

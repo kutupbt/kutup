@@ -121,6 +121,7 @@ services:
       KUTUP_CONTACTS_URL: http://contacts.a.test:${KUTUP_FED_A_PORT:-39081}
       KUTUP_MAIL_URL: http://mail.a.test:${KUTUP_FED_A_PORT:-39081}
       KUTUP_PASS_URL: http://pass.a.test:${KUTUP_FED_A_PORT:-39081}
+      KUTUP_CALENDAR_URL: http://calendar.a.test:${KUTUP_FED_A_PORT:-39081}
       # Group calls hosted on A (no SFU runs: the live test checks tokens).
       CHAT_SFU_URL: ws://sfu.a.test
       CHAT_SFU_API_KEY: federation-sfu-key
@@ -173,6 +174,7 @@ services:
       KUTUP_CONTACTS_URL: http://contacts.b.test:${KUTUP_FED_B_PORT:-39082}
       KUTUP_MAIL_URL: http://mail.b.test:${KUTUP_FED_B_PORT:-39082}
       KUTUP_PASS_URL: http://pass.b.test:${KUTUP_FED_B_PORT:-39082}
+      KUTUP_CALENDAR_URL: http://calendar.b.test:${KUTUP_FED_B_PORT:-39082}
       ALLOWED_ORIGINS: http://127.0.0.1:39082
       ADMIN_ACCOUNT: adminb:federation-admin-temp
       SEAWEEDFS_MASTER_URL: ""
@@ -211,6 +213,7 @@ services:
       KUTUP_CONTACTS_URL: http://contacts.a.test:${KUTUP_FED_A_PORT:-39081}
       KUTUP_MAIL_URL: http://mail.a.test:${KUTUP_FED_A_PORT:-39081}
       KUTUP_PASS_URL: http://pass.a.test:${KUTUP_FED_A_PORT:-39081}
+      KUTUP_CALENDAR_URL: http://calendar.a.test:${KUTUP_FED_A_PORT:-39081}
 
   frontend-b:
     image: ${KUTUP_FEDERATION_FRONTEND_IMAGE:-kutup-federation-frontend:local}
@@ -228,6 +231,7 @@ services:
       KUTUP_CONTACTS_URL: http://contacts.b.test:${KUTUP_FED_B_PORT:-39082}
       KUTUP_MAIL_URL: http://mail.b.test:${KUTUP_FED_B_PORT:-39082}
       KUTUP_PASS_URL: http://pass.b.test:${KUTUP_FED_B_PORT:-39082}
+      KUTUP_CALENDAR_URL: http://calendar.b.test:${KUTUP_FED_B_PORT:-39082}
 
   edge-a:
     image: nginx:alpine

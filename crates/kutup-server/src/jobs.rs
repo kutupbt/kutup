@@ -202,9 +202,15 @@ pub async fn chat_maintenance_once(
         }
     }
     if policy.device_expiry_days > 0 {
+        // Marked, not deleted: an expired device leaves sends and bundles at
+        // once, and the account's next manifest (any of its devices publishes
+        // one on DevicesChanged) drops the row, so the server never drops a
+        // device the account's authority still lists
+        // (docs/plans/account-identity-key.md).
         match sqlx::query_as::<_, (Uuid, i32)>(
-            "DELETE FROM chat_devices
-             WHERE COALESCE(last_seen_at, created_at) < now() - ($1 * interval '1 day')
+            "UPDATE chat_devices SET expired_at = now()
+             WHERE expired_at IS NULL
+               AND COALESCE(last_seen_at, created_at) < now() - ($1 * interval '1 day')
              RETURNING user_id, device_id",
         )
         .bind(policy.device_expiry_days)
