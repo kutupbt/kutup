@@ -13,13 +13,14 @@ use axum::response::Response;
 use base64::engine::general_purpose::STANDARD;
 use base64::Engine as _;
 use kutup_chat_proto::{
-    capability_hash, AccountManifestHistoryPageV1, AccountManifestV1, AccountRef,
+    capability_hash, AccountManifestHistoryPageV2, AccountManifestV2, AccountPreKeyBundlesResponse,
+    AccountRef,
     AnonymousPreKeyRequestV1, ChatProfileResponse, ChatWsServerMessage, DeliveredEnvelope,
     DeviceListMismatch, FederatedChatTransaction, FederatedSealedBatchItemV1,
     FederatedSealedBatchResponseV1, FederatedSealedBatchV1, FederatedSealedTransactionV1,
     FederationDeliveryError, FederationDeliveryRejection, FederationDeliveryResponse,
     SealedDeliveryResponseV1, SealedMessageSubmissionV1, SendMessagesRequest,
-    UserPreKeyBundlesResponse, MAX_SEALED_BATCH_BYTES, MAX_SEALED_BATCH_ITEMS,
+    MAX_SEALED_BATCH_BYTES, MAX_SEALED_BATCH_ITEMS,
 };
 use rand::Rng as _;
 use reqwest::Method;
@@ -56,7 +57,7 @@ fn configured_stack(state: &AppState) -> AppResult<&FederationStack> {
 pub async fn fetch_remote_bundles(
     state: &AppState,
     account: &AccountRef,
-) -> AppResult<UserPreKeyBundlesResponse> {
+) -> AppResult<AccountPreKeyBundlesResponse> {
     let federation = configured_stack(state)?;
     let destination = account.server.as_str();
     let path = format!("/api/fed/chat/accounts/{}/keys", account.account_id);
@@ -86,17 +87,19 @@ pub async fn fetch_remote_bundles(
             format!("remote chat directory returned {}", response.status),
         ));
     }
-    let bundles: UserPreKeyBundlesResponse =
+    let bundles: AccountPreKeyBundlesResponse =
         serde_json::from_slice(&response.body).map_err(|_| {
             AppError::new(
                 StatusCode::BAD_GATEWAY,
                 "invalid remote chat directory response",
             )
         })?;
-    if bundles.account != *account {
+    // The bundles are the account's and agree with its signed manifest (the
+    // clients check them again, and the prekey signatures).
+    if bundles.account != *account || bundles.check_against_manifest().is_err() {
         return Err(AppError::new(
             StatusCode::BAD_GATEWAY,
-            "remote chat directory returned the wrong account",
+            "remote chat directory returned the wrong account or unlisted bundles",
         ));
     }
     Ok(bundles)
@@ -106,7 +109,7 @@ pub async fn fetch_remote_sealed_bundles(
     state: &AppState,
     account: &AccountRef,
     request: &AnonymousPreKeyRequestV1,
-) -> AppResult<UserPreKeyBundlesResponse> {
+) -> AppResult<AccountPreKeyBundlesResponse> {
     let federation = configured_stack(state)?;
     let destination = account.server.as_str();
     let path = format!("/api/fed/chat/sealed/accounts/{}/keys", account.account_id);
@@ -132,9 +135,9 @@ pub async fn fetch_remote_sealed_bundles(
     if response.status != StatusCode::OK {
         return Err(AppError::not_found("sealed delivery unavailable"));
     }
-    let bundles: UserPreKeyBundlesResponse = serde_json::from_slice(&response.body)
+    let bundles: AccountPreKeyBundlesResponse = serde_json::from_slice(&response.body)
         .map_err(|_| AppError::not_found("sealed delivery unavailable"))?;
-    if bundles.account != *account {
+    if bundles.account != *account || bundles.check_against_manifest().is_err() {
         return Err(AppError::not_found("sealed delivery unavailable"));
     }
     Ok(bundles)
@@ -144,7 +147,7 @@ pub async fn fetch_remote_manifest_history(
     state: &AppState,
     account: &AccountRef,
     query: &crate::handlers::chat::ManifestHistoryQuery,
-) -> AppResult<AccountManifestHistoryPageV1> {
+) -> AppResult<AccountManifestHistoryPageV2> {
     let federation = configured_stack(state)?;
     let destination = account.server.as_str();
     let query_string = manifest_history_query_string(query);
@@ -179,7 +182,7 @@ pub async fn fetch_remote_manifest_history(
             format!("remote manifest history returned {}", response.status),
         ));
     }
-    let page: AccountManifestHistoryPageV1 = serde_json::from_slice(&response.body)
+    let page: AccountManifestHistoryPageV2 = serde_json::from_slice(&response.body)
         .map_err(|_| AppError::new(StatusCode::BAD_GATEWAY, "invalid remote manifest history"))?;
     if page.account != *account
         || page.from_sequence != query.page_from_sequence.unwrap_or(query.from_sequence)
@@ -198,7 +201,7 @@ pub async fn fetch_remote_manifest_history(
 pub async fn fetch_remote_manifest(
     state: &AppState,
     account: &AccountRef,
-) -> AppResult<AccountManifestV1> {
+) -> AppResult<AccountManifestV2> {
     let federation = configured_stack(state)?;
     let destination = account.server.as_str();
     let path = format!("/api/fed/chat/accounts/{}/manifest", account.account_id);
@@ -228,7 +231,7 @@ pub async fn fetch_remote_manifest(
             format!("remote manifest proof returned {}", response.status),
         ));
     }
-    let manifest: AccountManifestV1 = serde_json::from_slice(&response.body)
+    let manifest: AccountManifestV2 = serde_json::from_slice(&response.body)
         .map_err(|_| AppError::new(StatusCode::BAD_GATEWAY, "invalid remote manifest response"))?;
     manifest
         .verify()
@@ -1884,7 +1887,7 @@ async fn flush_due_sealed(state: &AppState) -> AppResult<()> {
         ("accountId" = String, Path, description = "Recipient's account id on this server")
     ),
     responses(
-        (status = 200, description = "Signed manifest and replay-safe PQ bundles", body = UserPreKeyBundlesResponse),
+        (status = 200, description = "Signed manifest and replay-safe PQ bundles", body = AccountPreKeyBundlesResponse),
         (status = 401, description = "Invalid federation request signature or destination"),
         (status = 404, description = "Unknown user or federation disabled")
     )
@@ -2497,7 +2500,7 @@ pub async fn get_manifest_history(
     }
     let mut manifests = values
         .into_iter()
-        .map(serde_json::from_value::<AccountManifestV1>)
+        .map(serde_json::from_value::<AccountManifestV2>)
         .collect::<Result<Vec<_>, _>>()
         .map_err(|error| AppError::internal(format!("stored chat manifest: {error}")))?;
     let next_sequence = if manifests.len() > 64 {
@@ -2506,7 +2509,7 @@ pub async fn get_manifest_history(
     } else {
         None
     };
-    let page = AccountManifestHistoryPageV1 {
+    let page = AccountManifestHistoryPageV2 {
         account: manifests[0].account.clone(),
         from_sequence: page_from,
         to_sequence: query.to_sequence,
@@ -2554,7 +2557,7 @@ pub async fn get_manifest(
             AppError::not_found("chat manifest not found"),
         );
     };
-    let manifest: AccountManifestV1 = serde_json::from_value(value)
+    let manifest: AccountManifestV2 = serde_json::from_value(value)
         .map_err(|error| AppError::internal(format!("stored chat manifest: {error}")))?;
     signed_json(federation, &authenticated, StatusCode::OK, &manifest)
 }

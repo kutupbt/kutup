@@ -32,12 +32,12 @@ use kutup_chat_proto::{
     AccountManifestPublicationV2, AccountManifestV2, AccountRef,
     AckRequest, AnonymousPreKeyRequestV1, ChatProfileResponse, ChatWsClientMessage,
     ChatWsServerMessage, ChatWsTicketResponse, DeliveredEnvelope, DeviceListMismatch,
-    DevicePreKeyBundle, DirectChatSuiteId, EcPreKey, EnvelopeType, KemPreKey, MailboxPage,
+    DevicePreKeyBundleV2, DirectChatSuiteId, EcPreKey, EnvelopeType, KemPreKey, MailboxPage,
     OutgoingEnvelope, OwnChatProfileResponse, PreKeyCountResponse, ProfileEnvelopeContextV1,
     ProfileEnvelopePurpose, ProfileSuiteId, PutChatProfileRequest, RegisterChatDeviceRequest,
     RegisterChatDeviceResponse, RenameChatDeviceRequest, ReplenishKeysRequest,
     SealedDeliveryResponseV1, SealedMessageSubmissionV1, SealedOutgoingEnvelopeV1,
-    SendMessagesRequest, UserPreKeyBundlesResponse,
+    SendMessagesRequest, AccountPreKeyBundlesResponse,
 };
 
 use crate::chat_hub::ChatWsOut;
@@ -1676,7 +1676,7 @@ pub async fn prekey_count(
         ("syncDeviceId" = Option<u32>, Query, description = "Authenticated current device for own-account sync")
     ),
     responses(
-        (status = 200, description = "Bundles for all devices", body = UserPreKeyBundlesResponse),
+        (status = 200, description = "Bundles for all devices", body = AccountPreKeyBundlesResponse),
         (status = 404, description = "Unknown user or user has no chat devices"),
     ),
     security(("bearerAuth" = []))
@@ -1808,7 +1808,7 @@ pub(crate) async fn load_user_bundles(
     sync_device_id: Option<i32>,
     consume_one_time: bool,
     delivery_capability: Option<&[u8; 32]>,
-) -> AppResult<UserPreKeyBundlesResponse> {
+) -> AppResult<AccountPreKeyBundlesResponse> {
     let mut tx = state.pool.begin().await?;
     let target: Option<Option<Vec<u8>>> = sqlx::query_scalar(
         "SELECT c.capability_hash
@@ -1864,28 +1864,37 @@ pub(crate) async fn load_user_bundles(
         }
     }
 
+    // The identity once and the manifest the bundles are checked against;
+    // only the devices it lists, and not expired, have bundles.
+    let manifest: Option<serde_json::Value> =
+        sqlx::query_scalar("SELECT manifest FROM chat_device_manifests WHERE user_id = $1")
+            .bind(target_id)
+            .fetch_optional(&mut *tx)
+            .await?;
+    let manifest: AccountManifestV2 = serde_json::from_value(
+        manifest.ok_or_else(|| AppError::not_found("user has no chat devices"))?,
+    )
+    .map_err(|error| AppError::internal(format!("stored chat manifest is invalid: {error}")))?;
+    let identity_key = crate::handlers::chat_identity::account_identity(&mut tx, target_id)
+        .await?
+        .ok_or_else(|| AppError::not_found("user has no chat devices"))?
+        .0;
+    let listed: Vec<i32> = manifest.devices.iter().map(|d| d.device_id as i32).collect();
     #[allow(clippy::type_complexity)]
-    let devices: Vec<(
-        i32,
-        i16,
-        i64,
-        String,
-        i64,
-        String,
-        String,
-        i64,
-        String,
-        String,
-    )> = sqlx::query_as(
-        "SELECT device_id, suite, registration_id, identity_key,
+    let devices: Vec<(i32, i16, i64, i64, String, String, i64, String, String)> =
+        sqlx::query_as(
+            "SELECT device_id, suite, registration_id,
                     signed_pre_key_id, signed_pre_key, signed_pre_key_signature,
                     last_resort_kyber_pre_key_id, last_resort_kyber_pre_key,
                     last_resort_kyber_pre_key_signature
-             FROM chat_devices WHERE user_id = $1 ORDER BY device_id",
-    )
-    .bind(target_id)
-    .fetch_all(&mut *tx)
-    .await?;
+             FROM chat_devices
+             WHERE user_id = $1 AND expired_at IS NULL AND device_id = ANY($2)
+             ORDER BY device_id",
+        )
+        .bind(target_id)
+        .bind(&listed)
+        .fetch_all(&mut *tx)
+        .await?;
     if devices.is_empty() {
         return Err(AppError::not_found("user has no chat devices"));
     }
@@ -1895,7 +1904,6 @@ pub(crate) async fn load_user_bundles(
         device_id,
         suite,
         registration_id,
-        identity_key,
         spk_id,
         spk,
         spk_sig,
@@ -1944,11 +1952,10 @@ pub(crate) async fn load_user_bundles(
         };
         let (kyber_id, kyber_pub, kyber_sig) = kem.unwrap_or((lrk_id, lrk, lrk_sig));
 
-        bundles.push(DevicePreKeyBundle {
+        bundles.push(DevicePreKeyBundleV2 {
             device_id: device_id as u32,
             registration_id: registration_id as u32,
             suite: direct_chat_suite_from_db(suite, "chat_devices")?,
-            identity_key,
             signed_pre_key: EcPreKey {
                 key_id: spk_id as u32,
                 public_key: spk,
@@ -1967,19 +1974,11 @@ pub(crate) async fn load_user_bundles(
         });
     }
 
-    let manifest: Option<serde_json::Value> =
-        sqlx::query_scalar("SELECT manifest FROM chat_device_manifests WHERE user_id = $1")
-            .bind(target_id)
-            .fetch_optional(&mut *tx)
-            .await?;
-    let manifest = manifest
-        .map(serde_json::from_value)
-        .transpose()
-        .map_err(|error| AppError::internal(format!("stored chat manifest is invalid: {error}")))?;
     tx.commit().await?;
 
-    Ok(UserPreKeyBundlesResponse {
+    Ok(AccountPreKeyBundlesResponse {
         account,
+        identity_key,
         devices: bundles,
         manifest,
     })
