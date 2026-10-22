@@ -810,6 +810,16 @@
         "calendarWindowDaysHint": "The longest span one events query may ask for.",
         "calendarEventsPage": "Events per page",
         "calendarEventsPageHint": "The most events one page of an events query carries."
+      },
+      "chatLinking": "Linking Chat devices",
+      "chatLinkingHint": "How a new Chat device is linked by one the account already has.",
+      "chatLinkingLimits": {
+        "chatLinkTokenSeconds": "Link code lifetime (seconds)",
+        "chatLinkTokenSecondsHint": "How long a link token and the new device's link code stay usable.",
+        "chatLinkTokensPerAccount": "Unused link tokens per account",
+        "chatLinkTokensPerAccountHint": "How many link tokens one account may hold unused at once.",
+        "chatProvisionBodyBytes": "Largest linking message (bytes)",
+        "chatProvisionBodyBytesHint": "The largest provisioning message relayed to a device being linked, up to 64 KiB."
       }
     },
     "federation": {
