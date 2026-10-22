@@ -1,6 +1,7 @@
 import { expect, test, type Page } from '@playwright/test'
 import { newAccount, registerAccount, signIn } from '../fixtures/apps'
 import {
+  backupCursor,
   befriend,
   closeDetails,
   message,
@@ -10,6 +11,7 @@ import {
   openDetails,
   openSettings,
   send,
+  waitForProtection,
 } from '../fixtures/chat'
 
 const PASSWORD = 'Deneme123*AccountIdentityPassword'
@@ -104,9 +106,12 @@ test('links a device, resets the identity on removal, and starts over in a clear
   await openDetails(pageB)
   await expect(pageB.getByText('You have verified this safety number.')).toHaveCount(0)
   await closeDetails(pageB)
+  const cursorBeforeReply = await backupCursor(pageA)
   const replyAfterReset = `reply-after-reset-${tag}`
   await send(pageB, replyAfterReset)
   await expect(message(pageA, replyAfterReset)).toBeVisible({ timeout: 60_000 })
+  // The reply is in Alice's history backup before her browser goes.
+  await waitForProtection(pageA, cursorBeforeReply)
 
   // Alice's last browser is cleared too: with no device to link from, she
   // starts over in a new one, which restores her history.
