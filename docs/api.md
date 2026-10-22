@@ -37,6 +37,13 @@ Specific codes, where an app does something particular (a test in
 
 | Code | Status | Meaning |
 |---|---|---|
+| `deviceCredential` | 401 | A Chat call made as a device without that device's `X-Kutup-Chat-Device` credential, with a wrong one, or for a removed or expired device (one answer for all) |
+| `badSignature` | 400 | A Chat prekey (signed EC, last-resort or one-time Kyber) not signed by the account's identity key |
+| `keysDiffer` | 409 | `POST /api/chat/keys/check`: the server holds other keys for this device; it uploads them again |
+| `linkTokenLimit` | 409 | `POST /api/chat/link-tokens`: as many unused link tokens as the administrators allow (`chatLinkTokensPerAccount`) |
+| `linkToken` | 403 | `POST /api/chat/device` linking: the link token is used, expired, unknown or another account's |
+| `noAccountIdentity` | 409 | `POST /api/chat/device` linking: the account has no Chat identity yet; its first device re-registers |
+| `identityMismatch` | 409 | A Chat registration or manifest naming another identity than the account's (it changes only by a distribution or a re-registration) |
 | `invalidCredentials` | 401 | A sign-in that does not finish: a wrong password, a name that is no account, a used or expired login id, a password changed since the sign-in started (not an expired session). At `login/2fa`: a wrong code, the token still good |
 | `preAuthInvalid` | 401 | `login/2fa`: the second step's token is expired, not one, or from a password the account no longer has: back to the password step |
 | `setupTokenInvalid` | 401 | `complete-setup` (and `register/start` under it): the setup token is expired, not one, already used, or from a temporary password since replaced: sign in again |
@@ -3310,11 +3317,49 @@ and opaque ciphertext rather than protected plaintext. All endpoints require a
 Bearer JWT unless noted. Wire types live in `crates/kutup-chat-proto` and are
 fully described by the OpenAPI document.
 
+### One identity per account (docs/plans/account-identity-key.md)
+
+A Chat account has one libsignal identity key, as Signal's ACI: every device
+of the account holds it, and each device has its own registration id and
+prekeys, signed by that identity. The account authority's signed manifest
+(`AccountManifestV2`) names the identity and the devices.
+
+**Device credentials.** A device draws 32 random bytes at registration (its
+`credential`, unpadded base64url); the server keeps a salted hash. Every call
+a device makes as itself carries `X-Kutup-Chat-Device: <deviceId>.<credential>`
+beside the JWT: keys, `keys/check`, the manifest, link tokens and relays, the
+identity distribution, sends and syncs, the mailbox, socket tickets, the
+sender certificate, push subscriptions, profile writes as a device, backup
+segments, device rename and removal, and the MLS device routes. A missing or
+wrong credential, or one of a removed or expired device, is `401
+deviceCredential`.
+
 ### POST /api/chat/device
 
-Register the calling client as a chat device. The server assigns the lowest free device id and enforces its configured active-device limit, never exceeding the V1 hard cap of 10. Body: `suite` (`1`), `registrationId` (libsignal, `1..16383`), `identityKey`, `signedPreKey` (signature required), `lastResortKyberPreKey` (bundles are never non-PQ), optional `oneTimePreKeys[]` / `oneTimeKyberPreKeys[]` pools, optional `name`. All key material is canonical base64.
+Register a Chat device (`RegisterChatDeviceRequestV2`): `suite` (`1`),
+`registrationId` (`1..16383`), the account's `identityKey`, `signedPreKey`
+and `lastResortKyberPreKey` (both signed by that identity; one-time Kyber
+keys too: `400 badSignature`), optional `oneTimePreKeys[]` /
+`oneTimeKyberPreKeys[]`, optional `name`, the device's `credential`, and
+`registration`, one of:
 
-**Response:** `200 OK` → `{ "deviceId": 1 }` · `409` when the configured active-device limit is reached.
+- `{"type": "link", "linkToken"}`: a device linked by one of the account's
+  (below). The identity is the account's (`409 identityMismatch`; `409
+  noAccountIdentity` when it has none); the token is unused, unexpired and the
+  account's (`403 linkToken`), consumed with the insert. The server assigns the
+  lowest free device id within `chatMaxActiveDevices` (`409`). A device of the
+  account then publishes the manifest that lists it.
+- `{"type": "reregistration", "manifest"}`: a new identity (Signal's
+  `reclaimAccount`): the account's first Chat device, or one restoring after
+  every device is lost. The manifest is the account's next (`verifySuccessor`:
+  sequence 1 with no manifest, else head + 1 linked by hash) and lists this
+  device alone as device 1. In one transaction the server drops every other
+  device of the account (prekeys, mailboxes, tickets and push subscriptions
+  with them), inserts this one as 1, records the identity and publishes the
+  manifest. The gate is the account authority, so the master key.
+
+A retry with the same credential answers the device it made. `200 OK` →
+`{ "deviceId": 1 }`.
 
 ### GET /api/chat/device
 
@@ -3420,7 +3465,55 @@ gives the full breakdown.
 
 ### PUT /api/chat/keys?deviceId=N
 
-Rotate `signedPreKey` / `lastResortKyberPreKey` and/or upload more one-time prekeys (only fields present are changed; pool inserts are idempotent per `keyId`).
+Rotate `signedPreKey` / `lastResortKyberPreKey` and/or upload more one-time prekeys (only fields present are changed; pool inserts are idempotent per `keyId`). Signed keys must be the account identity's (`400 badSignature`).
+
+### POST /api/chat/keys/check
+
+Signal's `/v2/keys/check`: `{ "digest" }`, lowercase hex of
+`repeated_use_keys_digest` (kutup-chat-proto) over the account identity, the
+device's signed prekey and its last-resort key. `204` when the server holds
+the same, `409 keysDiffer` otherwise (the device uploads its keys again).
+
+### PUT /api/chat/account-identity
+
+A new account identity for the devices the account keeps (Signal's
+`PhoneNumberIdentityKeyDistributionRequest`), for "reset identity, keep my
+devices" after a lost or stolen device: `{ identityKey, devices: [{ deviceId,
+registrationId, signedPreKey, lastResortKyberPreKey }], deviceMessages:
+[OutgoingEnvelope], manifest }`, each list strictly ordered by `deviceId`.
+`devices` names exactly the manifest's devices (the sender included) with its
+registration ids, and `deviceMessages` one sealed `accountIdentity` sync per
+other listed device on its current session. `409` (`DeviceListMismatch`) when
+the lists don't match the manifest or name a device the account doesn't have;
+`410` (`staleDevices`) when a message's `registrationId` is no longer its
+device's; `400 badSignature` for a key not signed by the new identity. In one
+transaction the server records the identity, publishes the manifest, drops
+the devices it leaves out, swaps every kept device's identity, registration
+id and keys, deletes every one-time prekey of the account (the devices upload
+new ones) and queues the syncs. At most `chatIdentityDistributions` a day.
+
+### Linking a device
+
+As Signal links Desktop to the phone:
+
+1. The new device, signed in, asks `POST /api/chat/provisioning/ticket` for a
+   socket ticket (`{ ticket }`, once, within a minute; per address at most
+   `chatProvisioningSockets` a minute) and opens `GET
+   /api/chat/provisioning?ticket=` (WebSocket). The socket sends `{ "type":
+   "address", "address" }` (16 random bytes, base64url) and shows it with its
+   ephemeral key as the link code `kutup://link?address=…&key=…`. Pings every
+   30 seconds; closed `1000` after the envelope, `4408` (expired) after
+   `chatLinkTokenSeconds`.
+2. A device of the account asks `POST /api/chat/link-tokens` for a token
+   (`{ token, expiresAt }`, single use, lasting `chatLinkTokenSeconds`; at most
+   `chatLinkTokensPerAccount` unused: `409 linkTokenLimit`; at most
+   `chatLinkTokens` an hour).
+3. It sends the provisioning message, encrypted to the new device's key, with
+   `PUT /api/chat/provisioning/{address}` (`{ envelope: ProvisionEnvelopeV1 }`,
+   at most `chatProvisionBodyBytes`; `chatProvisioningRelays` a minute). The
+   server relays it to that socket (`{ "type": "envelope", "envelope" }`) and
+   keeps nothing; an address that is no socket of the account is `404`.
+4. The new device registers with `{"type": "link", "linkToken"}`.
 
 ### GET /api/chat/keys/count?deviceId=N
 
@@ -3428,18 +3521,24 @@ Remaining one-time pool sizes: `{ "oneTimePreKeys": n, "oneTimeKyberPreKeys": n 
 
 ### POST /api/chat/manifest
 
-Publish one complete `AccountManifestV1`, signed by the account self-authority.
-Sequences advance by exactly one and hash-link to the preceding signed record.
-The authority and incarnation cannot change inside a chain. Every signed
-device id, registration id, direct-chat identity key, MLS credential/delivery
-key and suite must exactly match a registered server tuple. Registered rows
-not selected by the authority-signed manifest are pruned atomically; this
-recovers a crash between device registration and manifest publication without
-allowing an unmanifested device to become trusted. The Drive HPKE and
+Publish the account's next `AccountManifestV2`, signed by the account
+self-authority (device-authenticated). It follows the head
+(`verifySuccessor`: head + 1, linked by hash, the same account, incarnation
+and authority), names the account's identity (`409 identityMismatch`: the
+identity changes only by a distribution or a re-registration), and every
+listed device is a live registered row with its listed registration id and
+suite. Rows it doesn't list (a crash between registration and publication, an
+expired device, an injected row) are pruned atomically. The Drive HPKE and
 share-signing keys are account-scoped fields in the same manifest. Publication
 atomically updates the current head and immutable history; exact replay is
-idempotent. Malformed signatures, gaps, forks, authority replacement, or a
-declared device-key conflict return `409`.
+idempotent. `AccountManifestPublicationV2`.
+
+### Device expiry
+
+A device idle for the administrators' `deviceExpiryDays` is marked expired:
+it leaves send device sets and key bundles at once and its credential stops
+working; the account's next manifest (any of its devices publishes one on
+`DevicesChanged`) drops the row.
 
 ### Chat routes name accounts by id
 
@@ -3500,13 +3599,17 @@ indistinguishable from a missing profile and returns `404`.
 
 ### GET /api/chat/accounts/{accountId}/keys
 
-Return PQXDH prekey bundles for **every** active Chat device of the account
-(a logical message encrypts to all of them), together with the exact complete
-account-signed manifest. Each bundle carries `identityKey`, `signedPreKey`,
-`kyberPreKey` (a consumed one-time ML-KEM-1024 prekey, or the reusable
-last-resort key when the pool is empty), and optionally a consumed one-time EC
-prekey. The client verifies manifest and bundle identity equality before
-creating sessions. Fetches are limited to 30/min per authenticated account
+Return `AccountPreKeyBundlesResponse`: the account's `identityKey` once,
+PQXDH prekey bundles for **every** device its manifest lists that hasn't
+expired (a logical message encrypts to all of them), and the exact complete
+account-signed `AccountManifestV2`. Each bundle carries its `deviceId`,
+`registrationId`, `suite`, `signedPreKey`, `kyberPreKey` (a consumed one-time
+ML-KEM-1024 prekey, or the reusable last-resort key when the pool is empty),
+and optionally a consumed one-time EC prekey. The client checks the bundles
+against the manifest (`check_against_manifest`) and the prekey signatures
+against the identity before creating sessions; a server relaying another
+server's bundles checks them against its manifest first. A `syncDeviceId`
+fetch is made as that device (its credential). Fetches are limited to 30/min per authenticated account
 (`RATE_LIMIT_CHAT_KEYS_PER_MIN`) with a coarse 120/min IP wall
 (`RATE_LIMIT_CHAT_KEYS_IP_PER_MIN`).
 
