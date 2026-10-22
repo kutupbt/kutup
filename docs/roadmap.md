@@ -122,6 +122,12 @@ Left before the tag:
   `specs/161-chat-groups-two-server.spec.ts`) is built, with request status,
   withdrawal and the avatar on the server's #285 and #288. Slices 2 (sending once), 4 (calls) and 5 (MLS out)
   follow; groups stay off until all are done.
+- **libsignal ≥ 0.99 with hpke-rs 0.7**, with or after the MLS removal.
+  hpke-rs 0.6.1 is pinned by libsignal v0.97.2, chat-core and kutup-crypto,
+  and its optional libcrux backend (never compiled) keeps
+  `libcrux-chacha20poly1305` 0.0.7 in the chat-core and client-ffi lockfiles
+  (GHSA-hc3c-63hc-2r9f, dismissed as not used on 2026-10-22). The upgrade
+  also takes openmls_rust_crypto 0.6, unless MLS is gone by then.
 - **An independent security review** of the V1 formats and protocols, with a
   review bundle prepared for it.
 - **The remaining libsodium primitives.** Formats are sealed in WASM, but the
