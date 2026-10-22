@@ -72,6 +72,7 @@ Specific codes, where an app does something particular (a test in
 | `eventLimit` | 409 | An events sync: the calendar holds as many events as the administrators allow (`calendarEventsPerCalendar`); that change only |
 | `sequenceBehind` | 409 | An events sync: the changed event's `SEQUENCE` is lower than the stored one's; that change only |
 | `uidTaken` | 409 | An events sync: an event with this UID is in the calendar already; that change only |
+| `eventIdTaken` | 409 | An events sync: a create's id holds another event; that change only |
 | `countTooLarge` | 400 | An events sync: the rule's `COUNT` is above `calendarMaxCount`; that change only |
 | `exdateNotAnOccurrence` | 400 | An events sync: a calendar-part `EXDATE` isn't an occurrence of the series; that change only |
 | `parentMissing` | 400 | An events sync: a changed occurrence's series isn't in the calendar; that change only |
@@ -2285,8 +2286,11 @@ caller isn't a member of is `404`. `GET …/events/{eventId}` answers one.
 
 ### POST /api/calendar/calendars/{id}/events/sync
 
-`{ addressId, changes: [{"create": SealedEventV1} | {"update": {id,
-baseRevision, event}} | {"delete": {id, baseRevision}}] }`, 1 to `calendarSyncBatch` (10) changes, each applied
+`{ addressId, changes: [{"create": {id, event}} | {"update": {id,
+baseRevision, event}} | {"delete": {id, baseRevision}}] }` (a create's `id`
+is drawn by the client, a UUID v4: a create sent again with the same id and
+parts answers the stored event, the id holding another is `409
+eventIdTaken`), 1 to `calendarSyncBatch` (10) changes, each applied
 alone (Proton's sync): `{ results: [{ status, event?, code?, error? }] }` in
 the order sent. A created or changed event's signed parts must be signed by
 one of the address's keys, its key packets be to the calendar key, and it

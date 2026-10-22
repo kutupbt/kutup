@@ -601,6 +601,11 @@ pub struct EventView {
     #[serde(with = "time::serde::rfc3339")]
     pub end_utc: time::OffsetDateTime,
     pub full_day: bool,
+    /// A repeating event's last end, as the server expanded it from both
+    /// parts (absent for one without end); a client checks it against its
+    /// own expansion, as it checks the start.
+    #[serde(with = "time::serde::rfc3339::option")]
+    pub range_end_utc: Option<time::OffsetDateTime>,
     pub sequence: i32,
     /// The stored version: a change names it as its `baseRevision`.
     pub revision: i64,
@@ -647,6 +652,7 @@ struct EventRow {
     start_utc: time::OffsetDateTime,
     end_utc: time::OffsetDateTime,
     full_day: bool,
+    range_end_utc: Option<time::OffsetDateTime>,
     sequence: i32,
     revision: i64,
     modified_at: time::OffsetDateTime,
@@ -658,7 +664,8 @@ const EVENT_VIEW: &str = "SELECT e.id, e.calendar_id, e.uid, a.address AS author
         e.shared_encrypted, e.shared_encrypted_signature,
         e.calendar_signed, e.calendar_signed_signature,
         e.calendar_encrypted, e.calendar_encrypted_signature,
-        e.start_utc, e.end_utc, e.full_day, e.sequence, e.revision, e.modified_at
+        e.start_utc, e.end_utc, e.full_day, e.range_end_utc, e.sequence, e.revision,
+        e.modified_at
    FROM calendar_events e
    LEFT JOIN mail_addresses a ON a.id = e.author_address_id";
 
@@ -695,6 +702,7 @@ fn event_view(row: EventRow) -> EventView {
         start_utc: row.start_utc,
         end_utc: row.end_utc,
         full_day: row.full_day,
+        range_end_utc: row.range_end_utc,
         sequence: row.sequence,
         revision: row.revision,
         modified_at: row.modified_at,
@@ -836,12 +844,15 @@ pub async fn event(
 }
 
 /// One change in an events sync (Proton's `SyncMultipleEvents`):
-/// `{"create": event}`, `{"update": {"id", "baseRevision", "event"}}` or
-/// `{"delete": {"id", "baseRevision"}}`.
+/// `{"create": {"id", "event"}}`, `{"update": {"id", "baseRevision",
+/// "event"}}` or `{"delete": {"id", "baseRevision"}}`.
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub enum EventChange {
-    Create(SealedEventV1),
+    /// `id`: drawn by the client (a UUID v4), so a create retried after it
+    /// landed answers the stored event instead of making a second one.
+    #[serde(rename_all = "camelCase")]
+    Create { id: Uuid, event: SealedEventV1 },
     /// `base_revision`: the event's stored revision the change was made
     /// from; another is `409 revision_conflict`.
     #[serde(rename_all = "camelCase")]
@@ -853,10 +864,7 @@ pub enum EventChange {
     /// Names the revision it was made from, as an update does, so a delete
     /// never removes a change another device just saved.
     #[serde(rename_all = "camelCase")]
-    Delete {
-        id: Uuid,
-        base_revision: i64,
-    },
+    Delete { id: Uuid, base_revision: i64 },
 }
 
 #[derive(Debug, Deserialize, ToSchema)]
@@ -1159,8 +1167,38 @@ async fn apply(
         Some(_) => {}
     }
     let result = match change {
-        EventChange::Create(event) => {
+        EventChange::Create { id, event } => {
+            if id.get_version_num() != 4 {
+                return Err(AppError::bad_request("an event's id is a UUID v4"));
+            }
             let checked = check_event(event, public_key, author_keys, max_count)?;
+            // A create retried after it landed: the same id and parts are
+            // the stored event; the id holding anything else is taken.
+            type Stored = (Uuid, String, String, String, String, Vec<u8>);
+            let stored: Option<Stored> = sqlx::query_as(
+                "SELECT calendar_id, shared_signed, shared_signed_signature,
+                        calendar_signed, calendar_signed_signature, shared_encrypted
+                   FROM calendar_events WHERE id = $1",
+            )
+            .bind(id)
+            .fetch_optional(&mut *tx)
+            .await?;
+            if let Some((at, shared, shared_signature, own, own_signature, encrypted)) = stored {
+                let event = &checked.event;
+                let same = at == calendar
+                    && shared.as_bytes() == event.shared_signed.data.as_slice()
+                    && shared_signature == event.shared_signed.signature
+                    && own.as_bytes() == event.calendar_signed.data.as_slice()
+                    && own_signature == event.calendar_signed.signature
+                    && encrypted == event.shared_encrypted.data;
+                if same {
+                    return Ok(Some(*id));
+                }
+                return Err(coded(
+                    AppError::conflict("another event has this id"),
+                    "eventIdTaken",
+                ));
+            }
             check_parent(&mut tx, calendar, &checked).await?;
             let count: i64 =
                 sqlx::query_scalar("SELECT COUNT(*) FROM calendar_events WHERE calendar_id = $1")
@@ -1172,8 +1210,7 @@ async fn apply(
                     .with_details(serde_json::json!({ "code": "eventLimit" })));
             }
             charge(&mut tx, owner, checked.bytes).await?;
-            let id = insert(&mut tx, calendar, user_id, address_id, &checked).await?;
-            Some(id)
+            Some(insert(&mut tx, *id, calendar, user_id, address_id, &checked).await?)
         }
         EventChange::Update {
             id,
@@ -1307,12 +1344,22 @@ async fn check_parent(
 
 async fn insert(
     tx: &mut Transaction<'_, Postgres>,
+    id: Uuid,
     calendar: Uuid,
     user_id: Uuid,
     address_id: Uuid,
     checked: &Checked,
 ) -> AppResult<Uuid> {
-    insert_as(tx, None, calendar, user_id, address_id, checked).await
+    let now = time::OffsetDateTime::now_utc();
+    insert_as(
+        tx,
+        Some((id, now, 1)),
+        calendar,
+        user_id,
+        address_id,
+        checked,
+    )
+    .await
 }
 
 /// Inserts a checked event; `kept` is the id and creation time of the
