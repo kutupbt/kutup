@@ -137,7 +137,7 @@
     "chooseConversation": "Bir konuşma seçin veya başlatın.",
     "timeline": "Konuşma zaman çizelgesi",
     "jumpToLatest": "En yeniye git",
-    "safetyNumberChanged": "Bir alıcı cihazın kimliği değişti. Güvenlik numarasını doğrulayın.",
+    "safetyNumberChanged": "Bir kişinin güvenlik numarası değişti. Hassas bir şey paylaşmadan önce yeniden doğrulayın.",
     "device": "Cihaz {{device}}",
     "backup": {
       "title": "Şifreli sohbet geçmişi",
@@ -669,7 +669,7 @@
       "title": "İleti ayarları",
       "profile": "Profil",
       "privacy": "Gizlilik",
-      "devices": "Cihazlar",
+      "devices": "Bağlı cihazlar",
       "backup": "Geçmiş yedeği",
       "storage": "Depolama",
       "notifications": "Bildirimler"

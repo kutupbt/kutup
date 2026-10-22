@@ -137,7 +137,7 @@
     "chooseConversation": "Select or start a conversation.",
     "timeline": "Conversation timeline",
     "jumpToLatest": "Jump to latest",
-    "safetyNumberChanged": "A recipient device identity changed. Verify the safety number.",
+    "safetyNumberChanged": "A contact’s safety number changed. Verify it again before sharing anything sensitive.",
     "device": "Device {{device}}",
     "backup": {
       "title": "Encrypted Chat history",
@@ -669,7 +669,7 @@
       "title": "Chat settings",
       "profile": "Profile",
       "privacy": "Privacy",
-      "devices": "Devices",
+      "devices": "Linked devices",
       "backup": "History backup",
       "storage": "Storage",
       "notifications": "Notifications"

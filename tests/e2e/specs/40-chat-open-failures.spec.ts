@@ -5,7 +5,7 @@
 
 import { expect, test } from '@playwright/test'
 import { newAccount, registerAccount, signIn } from '../fixtures/apps'
-import { openChat, openChats, openSettings, revokeOtherDevices } from '../fixtures/chat'
+import { linkDevice, openChat, openChats, openSettings, revokeOtherDevices } from '../fixtures/chat'
 
 const PASSWORD = 'Deneme123*OpenFailurePassword'
 
@@ -57,18 +57,23 @@ test('a browser whose device was removed elsewhere says so and can be set up aga
   await registerAccount(contextA, account)
   const pageA = await openChat(contextA)
 
+  // A second browser of the account, linked from the first, removes it.
   const contextB = await browser.newContext()
   await signIn(contextB, account)
-  const pageB = await openChat(contextB)
+  const pageB = await openChat(contextB, 'primary', undefined, { linkFrom: pageA })
   await revokeOtherDevices(pageB, 1)
 
   await expect(pageA.getByText('This browser is no longer one of your Chat devices')).toBeVisible({ timeout: 120_000 })
   await pageA.getByRole('button', { name: 'Set up again' }).click()
+  // Set up again: the account's identity is on the other browser, which
+  // links this one again.
+  await linkDevice(pageB, pageA)
+  await expect(pageA.getByTestId('chat-device-status')).toHaveAttribute('data-device-id', /^\d+$/, { timeout: 120_000 })
   await openChats(pageA)
   await expect(pageA.getByText('This browser is no longer one of your Chat devices')).toHaveCount(0)
 
   // It is a device of the account again: the other browser now lists it.
-  await openSettings(pageB, 'Devices')
+  await openSettings(pageB, 'Linked devices')
   await expect(pageB.locator('[data-testid^="chat-device-revoke-"]')).toHaveCount(1, { timeout: 60_000 })
 
   await contextA.close()

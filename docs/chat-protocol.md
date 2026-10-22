@@ -106,13 +106,37 @@ An account may have 1-10 active devices. `CHAT_MAX_ACTIVE_DEVICES` may lower
 the local limit but cannot exceed ten. Device wire IDs remain 1-127 and are not
 reused as an assertion of active-device capacity.
 
-### 4.1 Web installation continuity
+### 4.1 One identity per account, and web installations
 
-A browser installation is a cryptographic device, not merely a login session.
-IndexedDB/site-data loss, a private window, a new browser profile or storage
-eviction therefore creates a new device key tuple. Password-derived account
-authority proves that the account may authorize the tuple; it does not make
-old per-device libsignal ciphertext decryptable by the replacement.
+The account has one libsignal identity key pair, random, made by its first
+Chat device and shared by all of them, as Signal's ACI identity
+(docs/plans/account-identity-key.md). Each device has its own registration id,
+prekeys (signed by the account identity key), sessions and a device
+credential: 32 random bytes the server keeps salted and hashed, sent as
+`X-Kutup-Chat-Device: <deviceId>.<credential>` beside the session token on
+every device-bound call, never on the anonymous routes.
+
+A browser installation is a device, not merely a login session. IndexedDB or
+site-data loss, a private window, a new browser profile or storage eviction
+leaves a browser without one. It then gets the identity one of two ways:
+
+- **linked** from a device of the account that has it (Signal's
+  provisioning): the new browser opens a provisioning socket and shows its
+  address and an ephemeral X25519 key as a QR code and as a code
+  (`kutup://link?address=…&key=…`); the linking device sends the identity, a
+  one-time link token and the account's settings sealed to that key (the
+  provisioning cipher, `kutup-crypto` `provisioning`); the new browser checks
+  the identity against the account's manifest, verified under the authority
+  it derives from the master key, and registers with the token;
+- **re-registered** when no device of the account has the identity (the
+  account's first Chat device, or "I don't have my other devices"): a new
+  identity, and the account's next manifest listing this device alone as
+  device 1, in the registration call; the server drops the account's other
+  devices in the same transaction (Signal's `reclaimAccount`).
+
+Any device may link a new one, remove one, or reset the identity keeping the
+others (an identity distribution, below): every device holds the master key,
+so none is primary.
 
 Clients provide explicit active-installation review, last-seen information and
 revocation. Chat display history is protected separately by the always-on,
@@ -126,18 +150,37 @@ The backup-specific trust boundary and residual fresh-device rollback risk are
 normative in
 [`chat-backup-security-threat-model.md`](chat-backup-security-threat-model.md).
 
-`AccountManifestV1` contains:
+`AccountManifestV2` contains:
 
 - canonical account and account-identity suite;
 - authority key ID and public key;
 - incarnation ID derived from that authority;
+- the account's libsignal identity key, once;
 - account-scoped Drive public keys;
 - sequence and exact predecessor hash;
 - issued-at value;
-- 1-10 strictly ordered complete device records;
-- Direct Chat identity/registration data and optional MLS credential/delivery
-  keys for each device;
+- 1-10 strictly ordered device records: device id, Direct Chat suite,
+  registration id, and optional MLS credential/delivery keys;
 - Ed25519 signature by the account self-authority.
+
+A bundle, or a server's `409`/`410`, that disagrees with the verified
+manifest's registration ids is refused, never answered with a new session.
+`AccountManifestV2::verify_successor` is the one chain check: sequence 1 with
+no predecessor, or the head's sequence + 1 linked to its hash under the same
+account, incarnation and authority.
+
+**The identity distribution** (Signal's PNI identity-key distribution, for
+the account identity) resets the identity and keeps the devices: one device
+makes a new identity, and for every device it keeps a registration id and
+signed and last-resort keys, an `accountIdentity` sync sealed to each other
+kept device on its current session, and the next manifest listing exactly
+them; `PUT /api/chat/account-identity` stores it all in one transaction
+(`409` for devices that aren't the manifest's, `410` for a stale
+registration id), drops the devices left out, clears the account's one-time
+keys and queues the syncs. Each other device keeps its sync in its store in
+the commit that acknowledges it and installs it once the account's manifest
+lists exactly that identity and its registration id. A lost or stolen device
+is removed this way by default, so the identity it holds is useless.
 
 The signing representation is domain-separated deterministic binary encoding
 with fixed-width integers and big-endian length-prefixed UTF-8/byte fields.
@@ -162,10 +205,25 @@ not clear the gap.
 Trust states are:
 
 - gray / `Tofu`: a valid stable account signature and complete history are
-  pinned, but the users have not independently compared keys;
-- green / `Verified`: the user scanned the exact face-to-face safety QR;
+  pinned, but the users have not compared safety numbers;
+- green / `Verified`: the user verified the account's current identity key,
+  by scanning the exact face-to-face safety QR or by marking it verified after
+  comparing the numbers (Signal's "Mark as verified");
 - red / `Quarantined`: rollback, equivocation, stable-key contradiction, or a
   signed replacement incarnation blocks new sends/shares.
+
+`Verified` is kept with the identity key it verified (`ManifestTrust`'s
+`identityVerified`), as Signal keeps a verified status with an identity: a
+later manifest with another identity (a distribution, a re-registration) is
+not verified. It reaches the account's other devices in the contact list
+entry (`identity`: the key, `verified` or `unverified`, and when; the later
+setting wins, and only for the identity the device has pinned).
+
+An identity change under the same authority (a signed manifest naming another
+identity key) archives the sessions with every device of the account, writes
+one local `safetyNumberChanged` line in the thread (its id names the new
+identity) and raises `SafetyNumberChanged`, once per account. Linking or
+removing a device changes nothing for peers.
 
 A replacement is stored separately from the retained pin with its complete
 history. The browser and native bindings derive the expected QR in Rust. Only
@@ -178,18 +236,17 @@ peer's thread (one per change; its id names the pinned and the offered
 incarnation), as Signal shows the change in the conversation. Native clients
 also get a `SafetyNumberChanged` engine event.
 
-The safety number is Signal's fingerprint (version 2 of libsignal's
-`NumericFingerprintGenerator`, 5200 iterations of SHA-512 per side): each
-side's stable id is the account's `AccountRef` bytes (server and permanent
-account id) and its identity key the raw Ed25519 account authority key; the
-two 30-digit halves show as twelve five-digit groups, the lower half first.
-The QR is `kutup://verify/v3/` and the base64url `CombinedFingerprints`
-protobuf, this side's half first, so a scan is compared with the other side's
-code. It names no address, as Signal's names only the ACI and identity key: a
-rename keeps the number, and another account under a name (a new incarnation,
-a new holder of a released name) has another authority and so another number.
-The derivation lives in `kutup-crypto` (`safety_number`), so Drive and the CLI
-show the same number.
+The safety number is Signal's: libsignal's `Fingerprint` (version 2, 5200
+iterations of SHA-512 per side) over each side's stable id, the account's
+`AccountRef` bytes (server and permanent account id), and its account
+identity key; the two 30-digit halves show as twelve five-digit groups. The
+QR is `kutup://verify/v4/` and the base64url `CombinedFingerprints` protobuf,
+this side's half first, so a scan is compared with the other side's code. It
+names no address: a rename keeps the number; a new identity of either account
+changes it. Drive keeps its own number over the accounts' authorities
+(`kutup-crypto` `safety_number`, `kutup://verify/v3/`); verifying in Chat also
+marks the authority verified in the synced identity pins, since the manifest
+the identity is checked against is signed by it.
 
 Chat also keeps to the account's synced identity pins, the list Drive, Office,
 Photos and the CLI share (docs/plans/drive-identity-pins.md). Right after the
@@ -214,7 +271,13 @@ Relevant routes:
 
 | Route | Meaning |
 |---|---|
-| `POST /api/chat/device` | restart-safe device registration |
+| `POST /api/chat/device` | restart-safe device registration (`RegisterChatDeviceRequestV2`: a link token or a re-registration manifest, and the device credential) |
+| `POST /api/chat/link-tokens` | one single-use token for linking a new device |
+| `POST /api/chat/provisioning/ticket` | a single-use ticket for the new device's provisioning socket |
+| `GET /api/chat/provisioning?ticket=` | the provisioning socket: an address, then at most one envelope |
+| `PUT /api/chat/provisioning/{address}` | relay one provisioning envelope to a socket of the same account |
+| `PUT /api/chat/account-identity` | the identity distribution |
+| `POST /api/chat/keys/check` | whether the server holds this device's identity and repeated-use keys |
 | `PATCH /api/chat/device/{deviceId}` | rename the account-private device label without changing its identity |
 | `DELETE /api/chat/device/{deviceId}` | revoke one device |
 | `POST/GET /api/chat/backup` | provision or inspect the encrypted history archive |
@@ -233,10 +296,14 @@ Relevant routes:
 
 ## 6. Direct Chat and Note to Self
 
-Every device publishes one libsignal identity key, signed prekey, last-resort
-ML-KEM prekey, and bounded one-time EC/PQ prekeys. Session establishment and
-steady-state ciphertext are generated only by libsignal. A bundle is unusable
-until its exact device identity matches the accepted account manifest.
+Every device publishes its registration id, a signed prekey, a last-resort
+ML-KEM prekey and bounded one-time EC/PQ prekeys, all signed by the account
+identity key; a bundle response carries the account's identity key once and
+the manifest it is checked against. Session establishment and steady-state
+ciphertext are generated only by libsignal. A bundle is unusable until the
+account's identity and the device's registration id match the accepted
+manifest, and the identity store takes no identity for an account but the one
+its manifest lists.
 
 ### Prekeys
 
@@ -369,7 +436,7 @@ An identified envelope is read only when its sender device is in the
 verified signed manifest of the authority pinned for the sender account, as
 for a sealed one (whose certificate must also match it). An unknown sender's
 manifest is fetched and verified first. A session-starting (PreKey) message
-must carry that device's identity key. This account's own devices are checked
+must carry the account's identity key. This account's own devices are checked
 against the manifest this device verified under its own authority, never one
 a server offers first. Otherwise a server could start a session in a pinned
 person's name, or as a "new own device" (a transcript or a contact control),

@@ -295,10 +295,10 @@ test.describe('two-server secure chat', () => {
     await registerAccount(abandonedContextA, alice)
     await registerAccount(contextB, bob)
 
-    // An installation whose first manifest never reaches the server leaves an
-    // unmanifested registration behind. A request that fails to connect is
-    // the server being out of reach: Chat says so and keeps retrying, and
-    // offers no repair.
+    // An installation re-registers (the account's first Chat device, its
+    // manifest in the registration), then its manifest update never reaches
+    // the server. A request that fails to connect is the server being out of
+    // reach: Chat says so and keeps retrying, and offers no repair.
     const abandonedPageA = await abandonedContextA.newPage()
     let interruptedManifestAttempts = 0
     await abandonedPageA.route('**/api/chat/manifest', async (route) => {
@@ -315,9 +315,8 @@ test.describe('two-server secure chat', () => {
     expect(interruptedManifestAttempts).toBeGreaterThan(0)
     await abandonedContextA.close()
 
-    // A different installation must be able to recover the abandoned,
-    // unmanifested server registration. Its authority-signed first manifest
-    // selects only its own exact key tuple and atomically prunes the orphan.
+    // A different installation, with the abandoned one gone, starts Alice's
+    // Chat over: its re-registration drops the abandoned device.
     const contextA = await browser.newContext()
     await signIn(contextA, alice)
     const pageA = await openChat(contextA, 'primary', watchErrors)
@@ -369,16 +368,16 @@ test.describe('two-server secure chat', () => {
     expect(qrB).not.toBe(qrA)
     await expect(safetyB.getByTestId('chat-safety-number')).toHaveText(numberA!)
     // A side's own code is not a match: only the other side's is.
-    await safetyB.getByPlaceholder('kutup://verify/v3/…').fill(qrB!)
+    await safetyB.getByPlaceholder('kutup://verify/v4/…').fill(qrB!)
     await safetyB.getByRole('button', { name: 'Verify exact match' }).click()
     await expect(pageB.getByText('That QR code does not match this conversation. Nothing was verified.')).toBeVisible()
     await expect(safetyB.getByText('Verified face to face on this device.')).toHaveCount(0)
-    await safetyB.getByPlaceholder('kutup://verify/v3/…').fill(qrA!)
+    await safetyB.getByPlaceholder('kutup://verify/v4/…').fill(qrA!)
     await safetyB.getByRole('button', { name: 'Verify exact match' }).click()
     await expect(safetyB.getByText('Verified face to face on this device.')).toBeVisible()
     await pageB.keyboard.press('Escape')
     await closeDetails(pageB)
-    await safetyA.getByPlaceholder('kutup://verify/v3/…').fill(qrB!)
+    await safetyA.getByPlaceholder('kutup://verify/v4/…').fill(qrB!)
     await safetyA.getByRole('button', { name: 'Verify exact match' }).click()
     await expect(safetyA.getByText('Verified face to face on this device.')).toBeVisible()
     await pageA.keyboard.press('Escape')

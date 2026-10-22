@@ -49,6 +49,28 @@ anonymity relays, and traffic-shape protection are separate milestones.
   status and body as an unknown group, and a device asks it only for a
   pseudonym a member named to it.
 
+- The account has one libsignal identity, shared by its devices
+  (docs/plans/account-identity-key.md). It reaches a device only in an
+  encrypted provisioning message from a device that has it (sealed to an
+  ephemeral key the new device shows, checked against the account's manifest
+  under the authority the master key yields) or in a distribution sync sealed
+  pairwise; the server never holds it. Each device authenticates its own calls
+  with a credential the server stores salted and hashed.
+- **A lost or stolen device** keeps the identity private key and, since every
+  device has it, the account master key. Removing it stops its credential and
+  its delivery; by default the removal also resets the identity, keeping the
+  other devices (the identity distribution), so the identity it holds speaks
+  for nothing. The master key still lets it sign manifests and so re-register,
+  taking the identity back and dropping every other device: visible at once to
+  the account and, as a safety-number change, to its contacts, never silent.
+  **Full revocation needs master-key rotation**, which V1 does not have (a
+  roadmap item). Until then the screen points to changing the password, with
+  that caveat.
+- A pasted link code carries the new device's provisioning address and
+  ephemeral key: whoever holds it can be sent the identity if the person
+  confirms on their own device. The screens say to move it only to the
+  person's own device.
+
 Kutup V1 deliberately has no global key-transparency log, sparse map,
 checkpoint monitor, witness, or auditor. The self-hosted deployment model does
 not pretend that an operator witnessing itself is independent. Consequently,
@@ -70,6 +92,8 @@ hide IP addresses from the origin, timing, size, origin domain, or recipient.
 | Homeserver adds or replaces a device | Account signature, exact complete manifest, stable authority/incarnation pin | Reject before session, MLS, or Drive-key mutation. |
 | Rollback, skipped update, or same-sequence equivocation | Monotonic sequence, `previousHash`, append-only complete history, atomic pin/history commit | Retrieve every missing version. Missing, reordered, duplicated, rolled-back, or conflicting history blocks sensitive operations. |
 | Signed authority/incarnation replacement | Durable retained pin plus separately stored complete candidate history | Red quarantine. No send/share proceeds. Exact pair-bound QR verification atomically accepts the replacement while retaining old history. |
+| Homeserver swaps an account's identity key | The identity key is in the authority-signed manifest; the identity store refuses any other key for the account; an identity change comes only with a signed manifest | Reject. A signed change (a distribution, a re-registration) shows "safety number changed" once and clears verified. |
+| Homeserver forges a provisioning message or answers another account's socket | The new device opens it only with its own ephemeral key, checks the account and that the account's verified manifest lists exactly that identity; sockets of another account answer `404` | Nothing is taken. |
 | Malformed or forged manifest | Strict bounded canonical encoding and Ed25519 verification | Reject; a contradiction against an existing pin is durably quarantined. |
 | Hostile first-contact server | Explicit TOFU state and face-to-face verification | UI remains gray until independent comparison. V1 makes no stronger first-contact claim. |
 | Stolen delivery capability | Recipient-bound HKDF capability, database limits, profile-key rotation on block | Bounded anonymous attempts only. Blocking publishes a new verifier before the new profile key is redistributed. |

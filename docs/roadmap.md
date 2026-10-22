@@ -122,6 +122,13 @@ Left before the tag:
   `specs/161-chat-groups-two-server.spec.ts`) is built, with request status,
   withdrawal and the avatar on the server's #285 and #288. Slices 2 (sending once), 4 (calls) and 5 (MLS out)
   follow; groups stay off until all are done.
+- **Master-key rotation.** Every device holds the account master key, so a
+  lost or stolen device keeps it: removing the device and resetting the Chat
+  identity (docs/plans/account-identity-key.md) leaves it able to sign
+  manifests and re-register, visibly. Full revocation is a new master key that
+  re-wraps the account's data and derives a new authority, which contacts
+  verify as an authority change. Its own plan comes first; until then the
+  removal screen and the CLI's password change say so.
 - **libsignal ≥ 0.99 with hpke-rs 0.7**, with or after the MLS removal.
   hpke-rs 0.6.1 is pinned by libsignal v0.97.2, chat-core and kutup-crypto,
   and its optional libcrux backend (never compiled) keeps

@@ -3,20 +3,54 @@ import { appUrl, type Server } from './apps'
 
 /**
  * Opens the Chat app on a signed-in context and waits until this browser's
- * chat device is registered (its id shows under Settings → Devices), then
- * returns to the conversation list.
+ * chat device is registered (its id shows under Settings → Linked devices),
+ * then returns to the conversation list. When the account already has a Chat
+ * identity on another device, this browser is linked from `linkFrom`, or,
+ * without it, starts over ("I don't have my other devices"), which drops the
+ * account's other devices (docs/plans/account-identity-key.md).
  */
 export async function openChat(
   context: BrowserContext,
   server: Server = 'primary',
   watch?: (page: Page) => void,
+  { linkFrom }: { linkFrom?: Page } = {},
 ): Promise<Page> {
   const page = await context.newPage()
   watch?.(page)
   await page.goto(appUrl('chat', '/settings/devices', server))
-  await expect(page.getByTestId('chat-device-status')).toHaveAttribute('data-device-id', /^\d+$/, { timeout: 120_000 })
+  const status = page.getByTestId('chat-device-status')
+  const link = page.getByTestId('chat-link-this-device')
+  await expect(status.or(link)).toBeVisible({ timeout: 120_000 })
+  if (await link.isVisible()) {
+    if (linkFrom) await linkDevice(linkFrom, page)
+    else await startOver(page)
+  }
+  await expect(status).toHaveAttribute('data-device-id', /^\d+$/, { timeout: 120_000 })
   await openChats(page)
   return page
+}
+
+/**
+ * Links the browser showing "Link this device" (`to`) from a device of the
+ * same account (`from`): its code pasted into Linked devices → Link a new
+ * device, as someone without a camera does.
+ */
+export async function linkDevice(from: Page, to: Page): Promise<void> {
+  const code = to.getByTestId('chat-link-code')
+  await expect(code).toHaveText(/^kutup:\/\/link\?/, { timeout: 60_000 })
+  const value = (await code.textContent())!
+  await openSettings(from, 'Linked devices')
+  await from.getByTestId('chat-link-new-device').click()
+  await from.getByTestId('chat-link-new-code').fill(value)
+  await from.getByTestId('chat-link-new-submit').click()
+  await expect(from.getByTestId('chat-link-new-dialog')).toBeHidden({ timeout: 45_000 })
+  await openChats(from)
+}
+
+/** "I don't have my other devices": this browser re-registers. */
+export async function startOver(page: Page): Promise<void> {
+  await page.getByTestId('chat-link-no-devices').click()
+  await page.getByRole('alertdialog').getByRole('button', { name: 'Start over', exact: true }).click()
 }
 
 /** The sidebar's conversation list. */
@@ -36,7 +70,7 @@ export async function openSettings(page: Page, section: string): Promise<void> {
 
 /** This browser's chat device id. */
 export async function deviceId(page: Page): Promise<number> {
-  await openSettings(page, 'Devices')
+  await openSettings(page, 'Linked devices')
   const status = page.getByTestId('chat-device-status')
   await expect(status).toHaveAttribute('data-device-id', /^\d+$/, { timeout: 60_000 })
   const id = Number(await status.getAttribute('data-device-id'))
@@ -185,14 +219,19 @@ export async function setDisappearing(page: Page, preset: 'off' | 'thirtySeconds
   await page.getByTestId(`chat-disappearing-${preset}`).click()
 }
 
-/** Revokes every chat device of this account except this browser's own. */
+/**
+ * Removes every chat device of this account except this browser's own,
+ * without resetting the identity (devices given away, not lost).
+ */
 export async function revokeOtherDevices(page: Page, expected: number): Promise<void> {
-  await openSettings(page, 'Devices')
+  await openSettings(page, 'Linked devices')
   const revoke = page.locator('[data-testid^="chat-device-revoke-"]')
   await expect(revoke).toHaveCount(expected, { timeout: 45_000 })
   for (let left = expected; left > 0; left--) {
     await revoke.first().click()
-    await page.getByRole('alertdialog').getByRole('button', { name: 'Revoke', exact: true }).click()
+    const dialog = page.getByRole('alertdialog')
+    await dialog.getByTestId('chat-device-reset-identity').uncheck()
+    await dialog.getByRole('button', { name: 'Remove', exact: true }).click()
     await expect(revoke).toHaveCount(left - 1, { timeout: 45_000 })
   }
   await openChats(page)

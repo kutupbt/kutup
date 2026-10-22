@@ -1,6 +1,6 @@
 import { expect, test } from '@playwright/test'
 import { newAccount, registerAccount, signIn } from '../fixtures/apps'
-import { acceptGroup, befriend, composer, createGroup, message, openChat, openChats, openGroup, openSettings, revokeOtherDevices, send } from '../fixtures/chat'
+import { acceptGroup, befriend, composer, createGroup, message, openChat, openChats, openGroup, openSettings, send } from '../fixtures/chat'
 
 const PASSWORD = 'Deneme123*GroupDevicePassword'
 
@@ -34,12 +34,13 @@ test('a group member keeps the group after replacing their only device', async (
   await send(pageB, reply)
   await expect(message(pageA, reply)).toBeVisible({ timeout: 45_000 })
 
-  // Bob's browser is gone; he signs in on a new one and revokes the old.
+  // Bob's browser is gone; he signs in on a new one, which starts his Chat
+  // over (no other device to link it from): the old device leaves the
+  // account, and his groups stay with the account.
   await contextB.close()
   const contextB2 = await browser.newContext()
   await signIn(contextB2, bob)
   const pageB2 = await openChat(contextB2)
-  await revokeOtherDevices(pageB2, 1)
 
   // Alice writes; the new device takes the group up from her message and
   // reads it.
@@ -92,7 +93,7 @@ test('a group member keeps the group after repairing their browser', async ({ br
   await openChats(pageB)
 
   // The device this browser was is gone from the account, unasked.
-  await openSettings(pageB, 'Devices')
+  await openSettings(pageB, 'Linked devices')
   await expect(pageB.getByTestId('chat-device-status')).toHaveAttribute('data-device-id', /^\d+$/, { timeout: 60_000 })
   await expect(pageB.locator('[data-testid^="chat-device-revoke-"]')).toHaveCount(0, { timeout: 60_000 })
   await openChats(pageB)
