@@ -567,3 +567,249 @@ fn a_retried_registration_answers_the_device_it_made() {
     }
     assert_eq!(ids, [json!(2), json!(2)]);
 }
+
+fn envelope(device: &ChatDevice) -> OutgoingEnvelope {
+    OutgoingEnvelope {
+        device_id: device.id,
+        registration_id: device.registration_id,
+        envelope_type: EnvelopeType::Message,
+        suite: DirectChatSuiteId::PqxdhTripleRatchetV1,
+        content: STANDARD.encode(b"opaque"),
+    }
+}
+
+/// A send from `from` to `to`'s devices `targets`.
+fn send(
+    c: &Client,
+    base: &str,
+    from: (&ChatAccount, &ChatDevice),
+    to: &ChatAccount,
+    targets: &[&ChatDevice],
+) -> (StatusCode, Value) {
+    code(
+        from.1
+            .auth(c.post(format!(
+                "{base}/api/chat/accounts/{}/messages",
+                to.account.account_id
+            )))
+            .bearer_auth(&from.0.token)
+            .json(&json!({
+                "senderDeviceId": from.1.id,
+                "sendId": uuid::Uuid::new_v4().to_string(),
+                "envelopes": targets.iter().map(|d| envelope(d)).collect::<Vec<_>>(),
+            }))
+            .send()
+            .unwrap(),
+    )
+}
+
+/// A device linked but not yet in a manifest is not one peers address: a
+/// send to the listed devices goes through (#319 review M2).
+#[test]
+fn a_device_not_yet_listed_is_not_addressed() {
+    let Some(base) = live() else { return };
+    let c = common::client();
+    let mut ada = account(&c, &base);
+    let first = ada.reregister(&c, &base);
+    let token = ada.link_token(&c, &base, &first);
+    let body = ada.registration(
+        777,
+        &[8; 32],
+        DeviceRegistrationV1::Link { link_token: token },
+    );
+    let (status, answer) = code(ada.post_registration(&c, &base, &body));
+    assert_eq!(status, StatusCode::OK, "{answer}");
+    let mut bob = account(&c, &base);
+    let bobs = bob.reregister(&c, &base);
+    let (status, answer) = send(&c, &base, (&bob, &bobs), &ada, &[&first]);
+    assert_eq!(status, StatusCode::OK, "{answer}");
+}
+
+/// Replays change nothing (#319 review M1): a distribution sent again
+/// answers as before with its sync queued once; a re-registration's
+/// manifest replayed with another credential is refused.
+#[test]
+fn replays_of_identity_changes_change_nothing() {
+    let Some(base) = live() else { return };
+    let c = common::client();
+    let mut ada = account(&c, &base);
+    let first = ada.reregister(&c, &base);
+    let second = ada.link(&c, &base, &first);
+    let new_identity = IdentityKeyPair::generate(&mut rand09::rng());
+    let (request, _) = distribution(
+        &ada,
+        &new_identity,
+        &[(&first, 201), (&second, 202)],
+        &[&second],
+    );
+    for _ in 0..2 {
+        let (status, answer) = code(
+            first
+                .auth(c.put(format!("{base}/api/chat/account-identity")))
+                .bearer_auth(&ada.token)
+                .json(&request)
+                .send()
+                .unwrap(),
+        );
+        assert_eq!(status, StatusCode::OK, "{answer}");
+    }
+    let kept = ChatDevice {
+        registration_id: 202,
+        ..second.clone()
+    };
+    let page: Value = kept
+        .auth(c.get(format!("{base}/api/chat/messages?deviceId=2")))
+        .bearer_auth(&ada.token)
+        .send()
+        .unwrap()
+        .json()
+        .unwrap();
+    let envelopes = page["envelopes"].as_array().unwrap();
+    assert_eq!(envelopes.len(), 1, "{page}");
+    let r = kept
+        .auth(c.post(format!("{base}/api/chat/messages/ack?deviceId=2")))
+        .bearer_auth(&ada.token)
+        .json(&json!({ "ids": [envelopes[0]["id"]] }))
+        .send()
+        .unwrap();
+    assert!(r.status().is_success());
+
+    // A re-registration's manifest, already the head, under another
+    // credential: refused, nothing dropped.
+    let mut bob = account(&c, &base);
+    let device = ChatDevice {
+        id: 1,
+        registration_id: 3333,
+        credential: [4; 32],
+    };
+    let manifest = bob.next_manifest(&[&device]);
+    let first_try = bob.registration(
+        3333,
+        &[4; 32],
+        DeviceRegistrationV1::Reregistration {
+            manifest: Box::new(manifest.clone()),
+        },
+    );
+    let (status, _) = code(bob.post_registration(&c, &base, &first_try));
+    assert_eq!(status, StatusCode::OK);
+    bob.head = Some(manifest.clone());
+    let replay = bob.registration(
+        3333,
+        &[5; 32],
+        DeviceRegistrationV1::Reregistration {
+            manifest: Box::new(manifest),
+        },
+    );
+    let (status, answer) = code(bob.post_registration(&c, &base, &replay));
+    assert_eq!(status, StatusCode::CONFLICT, "{answer}");
+    assert_eq!(answer["code"], "manifestConflict");
+    // The device made first still works.
+    let r = device
+        .auth(c.post(format!("{base}/api/chat/link-tokens")))
+        .bearer_auth(&bob.token)
+        .send()
+        .unwrap();
+    assert_eq!(r.status(), StatusCode::OK);
+}
+
+/// Two distributions at once: one applies, the other is refused.
+#[test]
+fn racing_distributions_apply_once() {
+    let Some(base) = live() else { return };
+    let c = common::client();
+    let mut ada = account(&c, &base);
+    let first = ada.reregister(&c, &base);
+    let second = ada.link(&c, &base, &first);
+    let requests: Vec<AccountIdentityDistributionRequest> = (0..2)
+        .map(|n| {
+            let identity = IdentityKeyPair::generate(&mut rand09::rng());
+            distribution(
+                &ada,
+                &identity,
+                &[(&first, 300 + n), (&second, 400 + n)],
+                &[&second],
+            )
+            .0
+        })
+        .collect();
+    let statuses: Vec<StatusCode> = std::thread::scope(|scope| {
+        let handles: Vec<_> = requests
+            .iter()
+            .map(|request| {
+                let (c, base, first, token) = (&c, &base, &first, &ada.token);
+                scope.spawn(move || {
+                    first
+                        .auth(c.put(format!("{base}/api/chat/account-identity")))
+                        .bearer_auth(token)
+                        .json(request)
+                        .send()
+                        .unwrap()
+                        .status()
+                })
+            })
+            .collect();
+        handles.into_iter().map(|h| h.join().unwrap()).collect()
+    });
+    let ok = statuses.iter().filter(|s| **s == StatusCode::OK).count();
+    assert_eq!(ok, 1, "{statuses:?}");
+}
+
+/// Database-level cases: a link token past its time, and an expired device
+/// leaving the send set (needs KUTUP_LIVE_DATABASE_URL).
+#[test]
+fn expiry_of_tokens_and_devices() {
+    let Some(base) = live() else { return };
+    let Ok(database_url) = std::env::var("KUTUP_LIVE_DATABASE_URL") else {
+        eprintln!("KUTUP_LIVE_DATABASE_URL not set; skipping");
+        return;
+    };
+    let runtime = tokio::runtime::Runtime::new().unwrap();
+    let pool = runtime
+        .block_on(sqlx::PgPool::connect(&database_url))
+        .unwrap();
+    let c = common::client();
+    let mut ada = account(&c, &base);
+    let first = ada.reregister(&c, &base);
+    let second = ada.link(&c, &base, &first);
+
+    // A token past its time: refused.
+    let user_id = uuid::Uuid::parse_str(&ada.account.account_id).unwrap();
+    let token = ada.link_token(&c, &base, &first);
+    runtime
+        .block_on(
+            sqlx::query(
+                "UPDATE chat_link_tokens SET expires_at = now() - interval '1 second'
+                  WHERE user_id = $1",
+            )
+            .bind(user_id)
+            .execute(&pool),
+        )
+        .unwrap();
+    let body = ada.registration(
+        555,
+        &[9; 32],
+        DeviceRegistrationV1::Link { link_token: token },
+    );
+    let (status, answer) = code(ada.post_registration(&c, &base, &body));
+    assert_eq!(status, StatusCode::FORBIDDEN, "{answer}");
+    assert_eq!(answer["code"], "linkToken");
+
+    // The second device expired: sends address the first alone, and naming
+    // the expired one is an extra device.
+    runtime
+        .block_on(
+            sqlx::query(
+                "UPDATE chat_devices SET expired_at = now() WHERE user_id = $1 AND device_id = 2",
+            )
+            .bind(user_id)
+            .execute(&pool),
+        )
+        .unwrap();
+    let mut bob = account(&c, &base);
+    let bobs = bob.reregister(&c, &base);
+    let (status, answer) = send(&c, &base, (&bob, &bobs), &ada, &[&first, &second]);
+    assert_eq!(status, StatusCode::CONFLICT, "{answer}");
+    assert_eq!(answer["extraDevices"], json!([2]));
+    let (status, answer) = send(&c, &base, (&bob, &bobs), &ada, &[&first]);
+    assert_eq!(status, StatusCode::OK, "{answer}");
+}

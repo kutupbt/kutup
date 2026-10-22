@@ -41,12 +41,13 @@ use crate::handlers::chat_identity::authenticated_device;
 use crate::handlers::trusted_uuid;
 use crate::middleware::AuthUser;
 use crate::site_settings::{
-    CHAT_LINK_TOKENS_PER_ACCOUNT, CHAT_LINK_TOKEN_SECONDS, CHAT_PROVISION_BODY_BYTES,
+    CHAT_LINK_TOKENS_PER_ACCOUNT, CHAT_LINK_TOKEN_SECONDS, CHAT_PROVISIONING_SOCKETS_PER_ACCOUNT,
+    CHAT_PROVISIONING_TICKET_SECONDS, CHAT_PROVISION_BODY_BYTES,
 };
 use crate::{ratelimit, AppState};
 
-/// A socket ticket is used within this long.
-const TICKET_SECONDS: u64 = 60;
+/// Nothing the new device sends matters: its frames are small or refused.
+const MAX_INCOMING_FRAME: usize = 1024;
 const PING_EVERY: Duration = Duration::from_secs(30);
 /// The close code at the end of the socket's life (the client shows a new
 /// link code).
@@ -60,7 +61,10 @@ type Waiting = (Uuid, oneshot::Sender<ProvisionEnvelopeV1>);
 /// A socket ticket: the account, and when it lapses.
 type Ticket = (Uuid, Instant);
 
-/// The sockets waiting for their one envelope, by address.
+/// The sockets waiting for their one envelope, by address. Kept in this
+/// process: a deployment of several server processes needs the new device's
+/// socket and the relay on the same one (or a shared relay), as Chat's own
+/// sockets do.
 static SOCKETS: LazyLock<Mutex<HashMap<Address, Waiting>>> =
     LazyLock::new(|| Mutex::new(HashMap::new()));
 /// Socket tickets, by their hash.
@@ -172,15 +176,34 @@ pub struct ProvisioningTicketResponse {
     ),
     security(("bearerAuth" = []))
 )]
-pub async fn create_ticket(auth: AuthUser) -> AppResult<Response> {
+pub async fn create_ticket(State(state): State<AppState>, auth: AuthUser) -> AppResult<Response> {
     let user_id = trusted_uuid(&auth.user_id)?;
+    let lifetime = CHAT_PROVISIONING_TICKET_SECONDS.load(&state.pool).await?;
+    let most = CHAT_PROVISIONING_SOCKETS_PER_ACCOUNT
+        .load(&state.pool)
+        .await?;
+    let open = SOCKETS
+        .lock()
+        .expect("provisioning sockets")
+        .values()
+        .filter(|(owner, _)| *owner == user_id)
+        .count();
+    if open as i64 >= most {
+        return Err(
+            AppError::too_many_requests("as many linking sockets as allowed are open")
+                .with_details(serde_json::json!({ "code": "rateLimited" })),
+        );
+    }
     let ticket: [u8; 32] = random();
     let now = Instant::now();
     let mut tickets = TICKETS.lock().expect("provisioning tickets");
     tickets.retain(|_, (_, lapses)| *lapses > now);
     tickets.insert(
         Sha256::digest(ticket).into(),
-        (user_id, now + Duration::from_secs(TICKET_SECONDS)),
+        (
+            user_id,
+            now + Duration::from_secs(u64::try_from(lifetime).unwrap_or(60)),
+        ),
     );
     Ok(Json(ProvisioningTicketResponse {
         ticket: URL_SAFE_NO_PAD.encode(ticket),
@@ -214,7 +237,10 @@ pub async fn socket(
     };
     let lifetime = CHAT_LINK_TOKEN_SECONDS.load(&state.pool).await?;
     let lifetime = Duration::from_secs(u64::try_from(lifetime).unwrap_or(600));
-    Ok(upgrade.on_upgrade(move |socket| serve(socket, user_id, lifetime)))
+    Ok(upgrade
+        .max_message_size(MAX_INCOMING_FRAME)
+        .max_frame_size(MAX_INCOMING_FRAME)
+        .on_upgrade(move |socket| serve(socket, user_id, lifetime)))
 }
 
 async fn serve(socket: WebSocket, user_id: Uuid, lifetime: Duration) {

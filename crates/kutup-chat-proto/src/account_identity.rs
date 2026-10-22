@@ -870,6 +870,16 @@ pub enum DeviceRegistrationV1 {
     Reregistration { manifest: Box<AccountManifestV2> },
 }
 
+/// The link token is single-use, but wiped all the same once the request is
+/// dropped.
+impl Drop for DeviceRegistrationV1 {
+    fn drop(&mut self) {
+        if let Self::Link { link_token } = self {
+            zeroize::Zeroize::zeroize(link_token);
+        }
+    }
+}
+
 /// `POST /api/chat/device` from the cutover on: the V1 request with the
 /// account's identity key, the device's credential, and how it registers.
 #[derive(Debug, Clone, Serialize, Deserialize)]

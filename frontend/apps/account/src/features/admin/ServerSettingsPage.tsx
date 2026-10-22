@@ -51,6 +51,10 @@ const CHAT_LINKING_SETTINGS = [
   { field: 'chatLinkTokenSeconds', min: 60, max: 3600 },
   { field: 'chatLinkTokensPerAccount', min: 1, max: 20 },
   { field: 'chatProvisionBodyBytes', min: 4096, max: 65_536 },
+  { field: 'chatMaxActiveDevices', min: 1, max: 10 },
+  { field: 'chatProvisioningTicketSeconds', min: 10, max: 600 },
+  { field: 'chatProvisioningSocketsPerAccount', min: 1, max: 20 },
+  { field: 'chatDistributionMessageBytes', min: 1024, max: 1_048_576 },
 ] as const satisfies readonly { field: keyof AdminSettings; min: number; max: number }[]
 /** Every whole-number setting the page edits by field. */
 const NUMERIC_SETTINGS = [...MULTI_SETTINGS, ...CALENDAR_SETTINGS, ...CHAT_LINKING_SETTINGS]

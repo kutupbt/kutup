@@ -2793,13 +2793,10 @@ pub async fn deliver_messages(
         return signed_json(federation, &authenticated, StatusCode::OK, &response);
     };
 
-    let current: Vec<(i32, i64)> = sqlx::query_as(
-        "SELECT device_id, registration_id FROM chat_devices
-              WHERE user_id = $1 AND expired_at IS NULL",
-    )
-    .bind(recipient_id)
-    .fetch_all(&mut *tx)
-    .await?;
+    let current: Vec<(i32, i64)> = sqlx::query_as(crate::handlers::chat_identity::LISTED_DEVICES)
+        .bind(recipient_id)
+        .fetch_all(&mut *tx)
+        .await?;
     if current.is_empty() {
         let response = FederationDeliveryResponse {
             stored: 0,
@@ -3318,6 +3315,17 @@ mod sealed_live_tests {
                  last_resort_kyber_pre_key_signature, credential_salt, credential_hash)
              VALUES ($1, 1, 1, 77, 'k', 1, 'k', 's', 1, 'k', 's',
                      decode(repeat('00', 16), 'hex'), decode(repeat('00', 32), 'hex'))",
+        )
+        .bind(id)
+        .execute(pool)
+        .await
+        .unwrap();
+        // Listed in the account's manifest: only listed devices are addressed.
+        sqlx::query(
+            "INSERT INTO chat_device_manifests
+                 (user_id, version, manifest_hash, authority_key_id, manifest)
+             VALUES ($1, 1, repeat('a', 64), repeat('b', 64),
+                     '{\"devices\": [{\"deviceId\": 1, \"registrationId\": 77}]}')",
         )
         .bind(id)
         .execute(pool)

@@ -819,7 +819,15 @@
         "chatLinkTokensPerAccount": "Unused link tokens per account",
         "chatLinkTokensPerAccountHint": "How many link tokens one account may hold unused at once.",
         "chatProvisionBodyBytes": "Largest linking message (bytes)",
-        "chatProvisionBodyBytesHint": "The largest provisioning message relayed to a device being linked, up to 64 KiB."
+        "chatProvisionBodyBytesHint": "The largest provisioning message relayed to a device being linked, up to 64 KiB.",
+        "chatMaxActiveDevices": "Chat devices per account",
+        "chatMaxActiveDevicesHint": "How many Chat installations one account may have, 1 to 10.",
+        "chatProvisioningTicketSeconds": "Linking socket ticket (seconds)",
+        "chatProvisioningTicketSecondsHint": "How long a new device has to open its linking socket after asking for it.",
+        "chatProvisioningSocketsPerAccount": "Linking sockets per account",
+        "chatProvisioningSocketsPerAccountHint": "How many devices of one account may wait to be linked at once.",
+        "chatDistributionMessageBytes": "Largest identity sync (bytes)",
+        "chatDistributionMessageBytesHint": "The largest message a new Chat identity sends each kept device."
       }
     },
     "federation": {

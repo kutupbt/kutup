@@ -234,8 +234,8 @@ a vault's own saves are never refused by it.
 
 The chat block also advertises size/retention limits, the canonical federation
 server name when enabled, and the authenticated sealed-sender service-policy
-history. `maximumActiveDevices` is operator-configurable from 1 through the V1
-hard cap of 10. A capability is advertised only when its complete local and
+history. `maximumActiveDevices` is the site setting `chatMaxActiveDevices`,
+from 1 through the V1 hard cap of 10. A capability is advertised only when its complete local and
 federated path is enabled.
 
 ---
@@ -3483,7 +3483,8 @@ registrationId, signedPreKey, lastResortKyberPreKey }], deviceMessages:
 [OutgoingEnvelope], manifest }`, each list strictly ordered by `deviceId`.
 `devices` names exactly the manifest's devices (the sender included) with its
 registration ids, and `deviceMessages` one sealed `accountIdentity` sync per
-other listed device on its current session. `409` (`DeviceListMismatch`) when
+other listed device on its current session (each at most
+`chatDistributionMessageBytes`). `409` (`DeviceListMismatch`) when
 the lists don't match the manifest or name a device the account doesn't have;
 `410` (`staleDevices`) when a message's `registrationId` is no longer its
 device's; `400 badSignature` for a key not signed by the new identity. In one
@@ -3497,8 +3498,9 @@ new ones) and queues the syncs. At most `chatIdentityDistributions` a day.
 As Signal links Desktop to the phone:
 
 1. The new device, signed in, asks `POST /api/chat/provisioning/ticket` for a
-   socket ticket (`{ ticket }`, once, within a minute; per address at most
-   `chatProvisioningSockets` a minute) and opens `GET
+   socket ticket (`{ ticket }`, once, within `chatProvisioningTicketSeconds`;
+   per address at most `chatProvisioningSockets` a minute; at most
+   `chatProvisioningSocketsPerAccount` sockets of one account open at once) and opens `GET
    /api/chat/provisioning?ticket=` (WebSocket). The socket sends `{ "type":
    "address", "address" }` (16 random bytes, base64url) and shows it with its
    ephemeral key as the link code `kutup://link?address=…&key=…`. Pings every
