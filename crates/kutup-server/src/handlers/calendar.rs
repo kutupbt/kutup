@@ -31,7 +31,8 @@ use crate::error::{AppError, AppResult};
 use crate::handlers::trusted_uuid;
 use crate::middleware::AuthUser;
 use crate::site_settings::{
-    CALENDARS_PER_ACCOUNT, CALENDAR_EVENTS_PAGE, CALENDAR_EVENTS_PER_CALENDAR, CALENDAR_MAX_COUNT,
+    CALENDARS_PER_ACCOUNT, CALENDAR_DEFAULT_REMINDERS, CALENDAR_EVENTS_PAGE,
+    CALENDAR_EVENTS_PER_CALENDAR, CALENDAR_MAX_COUNT, CALENDAR_REMINDERS_PER_EVENT,
     CALENDAR_SYNC_BATCH, CALENDAR_WINDOW_DAYS,
 };
 use crate::{revisions, AppState};
@@ -119,12 +120,22 @@ pub struct CalendarView {
     pub permissions: i32,
     pub color: String,
     pub display: bool,
+    /// The member's default reminders for the calendar's events (Proton's
+    /// DefaultPartDayNotifications and DefaultFullDayNotifications).
+    pub default_reminders: DefaultReminders,
     /// The member row's revision (the account head's `calendars` scope).
     pub revision: i64,
     #[serde(with = "time::serde::rfc3339")]
     pub created_at: time::OffsetDateTime,
     #[serde(with = "time::serde::rfc3339")]
     pub updated_at: time::OffsetDateTime,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct DefaultReminders {
+    pub timed: Vec<crate::calendar_reminders::Reminder>,
+    pub all_day: Vec<crate::calendar_reminders::Reminder>,
 }
 
 #[derive(Debug, Serialize, ToSchema)]
@@ -149,6 +160,8 @@ struct ViewRow {
     permissions: i32,
     color: String,
     display: bool,
+    default_reminders_timed: serde_json::Value,
+    default_reminders_all_day: serde_json::Value,
     revision: i64,
     created_at: time::OffsetDateTime,
     updated_at: time::OffsetDateTime,
@@ -158,7 +171,8 @@ const VIEW: &str =
     "SELECT c.id, oa.address AS owner_address, c.public_key, c.fingerprint, c.locked_secret_key,
         c.passphrase_data_packet, c.passphrase_signature, m.passphrase_key_packet, m.address_id,
         c.metadata_key_packet, c.metadata_data_packet, c.metadata_signature,
-        m.permissions, m.color, m.display, m.revision, c.created_at, c.updated_at
+        m.permissions, m.color, m.display, m.default_reminders_timed,
+        m.default_reminders_all_day, m.revision, c.created_at, c.updated_at
    FROM calendar_members m
    JOIN calendars c ON c.id = m.calendar_id
    JOIN calendar_members om ON om.calendar_id = c.id AND om.user_id = c.owner_id
@@ -185,6 +199,10 @@ fn view(row: ViewRow) -> CalendarView {
         permissions: row.permissions,
         color: row.color,
         display: row.display,
+        default_reminders: DefaultReminders {
+            timed: serde_json::from_value(row.default_reminders_timed).unwrap_or_default(),
+            all_day: serde_json::from_value(row.default_reminders_all_day).unwrap_or_default(),
+        },
         revision: row.revision,
         created_at: row.created_at,
         updated_at: row.updated_at,
@@ -416,6 +434,8 @@ pub struct CalendarUpdate {
     pub metadata: Option<SealedMetadataV1>,
     pub color: Option<String>,
     pub display: Option<bool>,
+    /// The member's own default reminders.
+    pub default_reminders: Option<DefaultReminders>,
     /// The member row's revision the change started from, and its new one.
     pub base_revision: i64,
     pub revision: u64,
@@ -447,6 +467,13 @@ pub async fn update(
     let head = NextHead::parse(input.head.as_deref())?;
     let revision = revisions::check_follows(input.revision, input.base_revision)?;
     let color = input.color.as_deref().map(color).transpose()?;
+    if let Some(defaults) = &input.default_reminders {
+        let most =
+            usize::try_from(CALENDAR_DEFAULT_REMINDERS.load(&state.pool).await?).unwrap_or(5);
+        crate::calendar_reminders::check(&defaults.timed, false, most)
+            .and_then(|()| crate::calendar_reminders::check(&defaults.all_day, true, most))
+            .map_err(|reason| coded(AppError::bad_request(reason), "invalidReminders"))?;
+    }
     let metadata = input
         .metadata
         .as_ref()
@@ -521,6 +548,21 @@ pub async fn update(
     .bind(revision)
     .execute(&mut *tx)
     .await?;
+    if let Some(defaults) = &input.default_reminders {
+        sqlx::query(
+            "UPDATE calendar_members SET default_reminders_timed = $3, default_reminders_all_day = $4
+              WHERE calendar_id = $1 AND user_id = $2",
+        )
+        .bind(id)
+        .bind(user_id)
+        .bind(serde_json::to_value(&defaults.timed).expect("reminders serialize"))
+        .bind(serde_json::to_value(&defaults.all_day).expect("reminders serialize"))
+        .execute(&mut *tx)
+        .await?;
+        crate::calendar_alarms::recompute_calendar(&mut tx, id)
+            .await
+            .map_err(|error| AppError::internal(error.to_string()))?;
+    }
     account_heads::advance(&mut tx, &locked, head.as_ref()).await?;
     tx.commit().await?;
     Ok(Json(fetch(&state, user_id, id).await?))
@@ -852,7 +894,13 @@ pub enum EventChange {
     /// `id`: drawn by the client (a UUID v4), so a create retried after it
     /// landed answers the stored event instead of making a second one.
     #[serde(rename_all = "camelCase")]
-    Create { id: Uuid, event: SealedEventV1 },
+    Create {
+        id: Uuid,
+        event: SealedEventV1,
+        /// The caller's own reminders for it; absent: their calendar's defaults.
+        #[serde(default)]
+        reminders: Option<Vec<crate::calendar_reminders::Reminder>>,
+    },
     /// `base_revision`: the event's stored revision the change was made
     /// from; another is `409 revision_conflict`.
     #[serde(rename_all = "camelCase")]
@@ -860,11 +908,80 @@ pub enum EventChange {
         id: Uuid,
         base_revision: i64,
         event: SealedEventV1,
+        /// The caller's reminders: absent keeps them, null goes back to the
+        /// calendar's defaults, a list replaces them.
+        #[serde(default, deserialize_with = "present")]
+        reminders: Option<Option<Vec<crate::calendar_reminders::Reminder>>>,
     },
     /// Names the revision it was made from, as an update does, so a delete
     /// never removes a change another device just saved.
     #[serde(rename_all = "camelCase")]
     Delete { id: Uuid, base_revision: i64 },
+}
+
+/// A field that was sent, null or not (`None` only when absent).
+fn present<'de, D, T>(deserializer: D) -> Result<Option<Option<T>>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    T: Deserialize<'de>,
+{
+    Option::<T>::deserialize(deserializer).map(Some)
+}
+
+/// What a sync change does to the caller's reminders for its event.
+enum RemindersChange<'a> {
+    Keep,
+    Defaults,
+    Own(&'a [crate::calendar_reminders::Reminder]),
+}
+
+/// Checks and applies the caller's reminders for an event, then recomputes
+/// its alarms (every member's: the event changed).
+async fn reminders_then_alarms(
+    tx: &mut Transaction<'_, Postgres>,
+    event: Uuid,
+    user_id: Uuid,
+    change: RemindersChange<'_>,
+) -> AppResult<()> {
+    match change {
+        RemindersChange::Keep => {}
+        RemindersChange::Defaults => {
+            sqlx::query(
+                "DELETE FROM calendar_event_reminders WHERE event_id = $1 AND user_id = $2",
+            )
+            .bind(event)
+            .bind(user_id)
+            .execute(&mut **tx)
+            .await?;
+        }
+        RemindersChange::Own(list) => {
+            sqlx::query(
+                "INSERT INTO calendar_event_reminders (event_id, user_id, reminders)
+                 VALUES ($1, $2, $3)
+                 ON CONFLICT (event_id, user_id) DO UPDATE SET reminders = EXCLUDED.reminders",
+            )
+            .bind(event)
+            .bind(user_id)
+            .bind(serde_json::to_value(list).expect("reminders serialize"))
+            .execute(&mut **tx)
+            .await?;
+        }
+    }
+    crate::calendar_alarms::recompute(tx, event)
+        .await
+        .map_err(|error| AppError::internal(error.to_string()))
+}
+
+fn check_reminders(
+    list: Option<&[crate::calendar_reminders::Reminder]>,
+    checked: &Checked,
+    most: usize,
+) -> AppResult<()> {
+    if let Some(list) = list {
+        crate::calendar_reminders::check(list, checked.shared.dtstart.is_date(), most)
+            .map_err(|reason| coded(AppError::bad_request(reason), "invalidReminders"))?;
+    }
+    Ok(())
 }
 
 #[derive(Debug, Deserialize, ToSchema)]
@@ -1074,6 +1191,8 @@ pub async fn sync(
     };
     let max_events = CALENDAR_EVENTS_PER_CALENDAR.load(&state.pool).await?;
     let max_count = CALENDAR_MAX_COUNT.load(&state.pool).await?;
+    let most_reminders =
+        usize::try_from(CALENDAR_REMINDERS_PER_EVENT.load(&state.pool).await?).unwrap_or(10);
     let mut results = Vec::with_capacity(input.changes.len());
     for change in &input.changes {
         let outcome = apply(
@@ -1086,6 +1205,7 @@ pub async fn sync(
             &author_keys,
             max_events,
             max_count,
+            most_reminders,
             change,
         )
         .await;
@@ -1141,6 +1261,7 @@ async fn apply(
     author_keys: &[Vec<u8>],
     max_events: i64,
     max_count: i64,
+    most_reminders: usize,
     change: &EventChange,
 ) -> AppResult<Option<Uuid>> {
     let mut tx = state.pool.begin().await?;
@@ -1167,11 +1288,16 @@ async fn apply(
         Some(_) => {}
     }
     let result = match change {
-        EventChange::Create { id, event } => {
+        EventChange::Create {
+            id,
+            event,
+            reminders,
+        } => {
             if id.get_version_num() != 4 {
                 return Err(AppError::bad_request("an event's id is a UUID v4"));
             }
             let checked = check_event(event, public_key, author_keys, max_count)?;
+            check_reminders(reminders.as_deref(), &checked, most_reminders)?;
             // A create retried after it landed: the same id and parts are
             // the stored event; the id holding anything else is taken.
             type Stored = (Uuid, String, String, String, String, Vec<u8>);
@@ -1210,14 +1336,26 @@ async fn apply(
                     .with_details(serde_json::json!({ "code": "eventLimit" })));
             }
             charge(&mut tx, owner, checked.bytes).await?;
-            Some(insert(&mut tx, *id, calendar, user_id, address_id, &checked).await?)
+            let id = insert(&mut tx, *id, calendar, user_id, address_id, &checked).await?;
+            let change = match reminders {
+                Some(list) => RemindersChange::Own(list),
+                None => RemindersChange::Keep,
+            };
+            reminders_then_alarms(&mut tx, id, user_id, change).await?;
+            Some(id)
         }
         EventChange::Update {
             id,
             base_revision,
             event,
+            reminders,
         } => {
             let checked = check_event(event, public_key, author_keys, max_count)?;
+            check_reminders(
+                reminders.as_ref().and_then(|r| r.as_deref()),
+                &checked,
+                most_reminders,
+            )?;
             check_parent(&mut tx, calendar, &checked).await?;
             type Current = (String, i64, time::OffsetDateTime, i64, i32);
             let current: Option<Current> = sqlx::query_as(
@@ -1247,6 +1385,13 @@ async fn apply(
                     .with_details(serde_json::json!({ "code": "sequenceBehind" })));
             }
             charge(&mut tx, owner, checked.bytes - old_bytes).await?;
+            // Every member's own reminders outlive the rewrite below.
+            let kept: Vec<(Uuid, serde_json::Value)> = sqlx::query_as(
+                "SELECT user_id, reminders FROM calendar_event_reminders WHERE event_id = $1",
+            )
+            .bind(id)
+            .fetch_all(&mut *tx)
+            .await?;
             sqlx::query("DELETE FROM calendar_events WHERE id = $1")
                 .bind(id)
                 .execute(&mut *tx)
@@ -1262,6 +1407,23 @@ async fn apply(
                 &checked,
             )
             .await?;
+            for (member, list) in kept {
+                sqlx::query(
+                    "INSERT INTO calendar_event_reminders (event_id, user_id, reminders)
+                     VALUES ($1, $2, $3)",
+                )
+                .bind(id)
+                .bind(member)
+                .bind(list)
+                .execute(&mut *tx)
+                .await?;
+            }
+            let change = match reminders {
+                None => RemindersChange::Keep,
+                Some(None) => RemindersChange::Defaults,
+                Some(Some(list)) => RemindersChange::Own(list),
+            };
+            reminders_then_alarms(&mut tx, *id, user_id, change).await?;
             Some(*id)
         }
         EventChange::Delete { id, base_revision } => {

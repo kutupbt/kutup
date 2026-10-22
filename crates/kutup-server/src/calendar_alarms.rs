@@ -11,7 +11,7 @@ use sqlx::PgConnection;
 use uuid::Uuid;
 
 use crate::calendar_reminders::{self, Reminder, ReminderType};
-use crate::site_settings::{CALENDAR_REMINDERS_PER_EVENT, CALENDAR_REMINDER_LATENESS_SECONDS};
+use crate::site_settings::CALENDAR_REMINDER_LATENESS_SECONDS;
 use crate::AppState;
 
 /// How often the job looks for due alarms, and how many it takes at once.
@@ -164,11 +164,6 @@ pub async fn recompute_calendar(conn: &mut PgConnection, calendar: Uuid) -> anyh
     Ok(())
 }
 
-/// The most reminders a member's list for one event takes (the site's).
-pub async fn most_per_event(pool: &sqlx::PgPool) -> anyhow::Result<usize> {
-    Ok(usize::try_from(CALENDAR_REMINDERS_PER_EVENT.load(pool).await?).unwrap_or(10))
-}
-
 /// One alarm the job took, to fire once its transaction committed.
 struct Due {
     user: Uuid,
@@ -181,7 +176,7 @@ struct Due {
 /// so none fires twice), each moved to its reminder's next occurrence.
 pub fn spawn(state: AppState) {
     tokio::spawn(async move {
-        let client = reqwest::Client::builder()
+        let client = crate::tls::client_builder()
             .timeout(std::time::Duration::from_secs(10))
             .build()
             .expect("an HTTP client");

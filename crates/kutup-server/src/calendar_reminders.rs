@@ -140,9 +140,11 @@ pub fn check(reminders: &[Reminder], all_day: bool, most: usize) -> Result<(), S
     Ok(())
 }
 
-/// Proton's defaults (`DefaultPartDayNotifications`,
+/// Proton's defaults (the migration's column defaults; kept here for the
+/// tests that check them) (`DefaultPartDayNotifications`,
 /// `DefaultFullDayNotifications`): 15 minutes before a timed event, 15 hours
 /// before an all-day one (09:00 the day before), on the device and by email.
+#[cfg(test)]
 pub fn defaults(all_day: bool) -> Vec<Reminder> {
     let trigger = if all_day { "-PT15H" } else { "-PT15M" };
     [ReminderType::Device, ReminderType::Email]
