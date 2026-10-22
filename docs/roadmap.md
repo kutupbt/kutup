@@ -73,7 +73,7 @@ The release wiped kutup.dev (database and bucket) and shipped:
 - safety numbers v3, copied from Signal;
 - rollback protection ([`plans/rollback-protection.md`](plans/rollback-protection.md));
 - device limits: Chat installations 1–10 per account
-  (`CHAT_MAX_ACTIVE_DEVICES`, default 10, the protocol's hard cap; a new
+  (the site setting `chatMaxActiveDevices`, default 10, the protocol's hard cap; a new
   installation past it is refused) and at most 20 collaboration devices in
   use per account, fixed ([`plans/device-registration.md`](plans/device-registration.md));
 - username renames: names folded (dots, `_` and `-` ignored), freed after an
@@ -201,12 +201,6 @@ has Chat's link uses it.
 ## Important (should-have, can ship after v1)
 
 These aren't blockers — kutup can release without them — but they're real production gaps and should land in v1.1 or shortly after.
-
-### Admin · Chat device limit as a setting
-
-`CHAT_MAX_ACTIVE_DEVICES` is an environment setting only. Wanted: a durable
-administrator setting with its UI in Administration and an audit event when
-it changes, within the same 1–10 bounds.
 
 ### Operations · runbook and alerting
 

@@ -182,22 +182,19 @@ pub async fn create_ticket(State(state): State<AppState>, auth: AuthUser) -> App
     let most = CHAT_PROVISIONING_SOCKETS_PER_ACCOUNT
         .load(&state.pool)
         .await?;
-    let open = SOCKETS
-        .lock()
-        .expect("provisioning sockets")
-        .values()
-        .filter(|(owner, _)| *owner == user_id)
-        .count();
-    if open as i64 >= most {
-        return Err(
-            AppError::too_many_requests("as many linking sockets as allowed are open")
-                .with_details(serde_json::json!({ "code": "rateLimited" })),
-        );
-    }
-    let ticket: [u8; 32] = random();
+    // Open sockets and tickets not yet used both count: each ticket may
+    // become a socket. The upgrade checks again (`socket`).
     let now = Instant::now();
     let mut tickets = TICKETS.lock().expect("provisioning tickets");
     tickets.retain(|_, (_, lapses)| *lapses > now);
+    let unused = tickets
+        .values()
+        .filter(|(owner, _)| *owner == user_id)
+        .count();
+    if (open_sockets(user_id) + unused) as i64 >= most {
+        return Err(too_many_sockets());
+    }
+    let ticket: [u8; 32] = random();
     tickets.insert(
         Sha256::digest(ticket).into(),
         (
@@ -209,6 +206,20 @@ pub async fn create_ticket(State(state): State<AppState>, auth: AuthUser) -> App
         ticket: URL_SAFE_NO_PAD.encode(ticket),
     })
     .into_response())
+}
+
+fn too_many_sockets() -> AppError {
+    AppError::too_many_requests("as many linking sockets as allowed are open")
+        .with_details(serde_json::json!({ "code": "rateLimited" }))
+}
+
+fn open_sockets(user_id: Uuid) -> usize {
+    SOCKETS
+        .lock()
+        .expect("provisioning sockets")
+        .values()
+        .filter(|(owner, _)| *owner == user_id)
+        .count()
 }
 
 #[derive(Debug, Deserialize)]
@@ -237,19 +248,42 @@ pub async fn socket(
     };
     let lifetime = CHAT_LINK_TOKEN_SECONDS.load(&state.pool).await?;
     let lifetime = Duration::from_secs(u64::try_from(lifetime).unwrap_or(600));
+    let most = CHAT_PROVISIONING_SOCKETS_PER_ACCOUNT
+        .load(&state.pool)
+        .await?;
+    // The socket's place, taken under the lock that counts the account's
+    // open sockets: concurrent upgrades can't pass the cap together.
+    let address: Address = random();
+    let (sender, envelope) = oneshot::channel();
+    {
+        let mut sockets = SOCKETS.lock().expect("provisioning sockets");
+        let open = sockets
+            .values()
+            .filter(|(owner, _)| *owner == user_id)
+            .count();
+        if open as i64 >= most {
+            return Err(too_many_sockets());
+        }
+        sockets.insert(address, (user_id, sender));
+    }
     Ok(upgrade
         .max_message_size(MAX_INCOMING_FRAME)
         .max_frame_size(MAX_INCOMING_FRAME)
-        .on_upgrade(move |socket| serve(socket, user_id, lifetime)))
+        .on_failed_upgrade(move |_| {
+            SOCKETS
+                .lock()
+                .expect("provisioning sockets")
+                .remove(&address);
+        })
+        .on_upgrade(move |socket| serve(socket, address, envelope, lifetime)))
 }
 
-async fn serve(socket: WebSocket, user_id: Uuid, lifetime: Duration) {
-    let address: Address = random();
-    let (sender, mut envelope) = oneshot::channel();
-    SOCKETS
-        .lock()
-        .expect("provisioning sockets")
-        .insert(address, (user_id, sender));
+async fn serve(
+    socket: WebSocket,
+    address: Address,
+    mut envelope: oneshot::Receiver<ProvisionEnvelopeV1>,
+    lifetime: Duration,
+) {
     let (mut sink, mut stream) = socket.split();
     let first = ProvisioningSocketMessage::Address {
         address: URL_SAFE_NO_PAD.encode(address),

@@ -128,7 +128,7 @@ pub(crate) async fn account_identity(
 }
 
 /// The devices a peer's send must address (`$1` the recipient account): the
-/// live rows whose id and registration id the account's signed manifest
+/// live rows whose id, registration id and suite the account's signed manifest
 /// lists. A device registered but not yet listed (a link before its
 /// manifest) isn't one: peers would refuse it, as they check bundles and
 /// mismatches against the manifest. The account's own syncs use its rows.
@@ -138,7 +138,8 @@ pub(crate) const LISTED_DEVICES: &str = "SELECT d.device_id, d.registration_id
        JOIN LATERAL jsonb_array_elements(m.manifest -> 'devices') listed ON true
       WHERE d.user_id = $1 AND d.expired_at IS NULL
         AND (listed ->> 'deviceId')::int = d.device_id
-        AND (listed ->> 'registrationId')::bigint = d.registration_id";
+        AND (listed ->> 'registrationId')::bigint = d.registration_id
+        AND (listed ->> 'directChatSuite')::int = d.suite";
 
 fn bad_signature(what: &str) -> AppError {
     AppError::bad_request(format!("{what} is not signed by the account identity"))
