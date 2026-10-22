@@ -27,7 +27,7 @@ dual-written. This destructive rule expires at the first stable `v*` tag.
 | Folder key history | — (new) | **Implemented end to end:** `DriveEnvelopeV1` purpose 8 seals epoch *e − 1*'s key under epoch *e*'s; `collection_keyring::unlock` verifies the whole owner-signed statement chain and every key commitment (docs/plans/drive-share-revocation.md) |
 | Public-link owner copy | — (new) | **Implemented end to end:** `DriveEnvelopeV1` purpose 9 seals a link's key under the owner's master key (object = link id), so links can be listed, copied and re-wrapped on rotation |
 | Encrypted profile | AES-256-GCM nonce/ciphertext | **Implemented end to end:** `ProfileSuiteId = 1` plus account/revision/device/purpose-bound XChaCha `ProfileEnvelopeV1`; suite code accompanies every E2EE profile-key capability; the owner's own copy of the profile key is wrapped under a key from the master key and the key binding (`kutup-chat-profile-wrap-v2`) |
-| Identity pins | — (new) | **Implemented end to end:** `KUTIP2` suite 2, the account's synced pin list sealed under a master-key-derived key, bound to the account's key binding and the list's revision (the pinned accounts inside stay addresses). Vector: `identity-pins-v2.json` |
+| Identity pins | — (new) | **Implemented end to end:** `KUTIP3` suite 3, the account's synced pin list sealed under a master-key-derived key, bound to the account's key binding and the list's revision; pins are keyed by account (server and account id), with addresses kept only as labels. Earlier suites are not read. Vector: `identity-pins-v3.json` |
 | Contacts | — (new) | **Implemented end to end:** summaries signed by the account authority under `kutup/contact-summary/v2` and cards sealed as `KUTCC2` suite 2, both bound to the account's key binding (cards also to the contact UID). Vector: `contact-card-v2.json` |
 | Mail folder, label and filter names | — (new) | **Implemented end to end:** `KUTMN2` suite 2, sealed under a master-key-derived key, bound to the account's key binding, the kind and the id. Vector: `mail-names-v2.json` |
 | Direct Chat | `DirectChatSuiteId = 1`, libsignal bytes | Unchanged pinned libsignal suite |
@@ -159,8 +159,8 @@ stored records the generation it was sealed under and opens through
 signature: an envelope under a key the server does not hold cannot be forged,
 and each is bound to its file and generation. Vector: `fileKeyring`.
 
-`NamedShareEnvelopeV1` uses the fixed RFC 9180
-DHKEM(X25519)/HKDF-SHA256/ChaCha20-Poly1305 suite. Its AAD and Ed25519 signature
+`NamedShareEnvelopeV1` uses the fixed RFC 9180 HPKE suite X-Wing (X25519 +
+ML-KEM-768, KEM 0x647a)/HKDF-SHA256/ChaCha20-Poly1305 (named-share suite 2). Its AAD and Ed25519 signature
 bind the collection UUID, epoch, canonical sender and recipient accounts, and
 both account incarnation IDs. The sender key is the manifest-bound Drive share
 signer; the recipient key is the manifest-bound Drive HPKE key. V1 intentionally
