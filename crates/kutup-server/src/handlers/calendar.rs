@@ -20,6 +20,7 @@ use base64::engine::general_purpose::STANDARD;
 use base64::Engine as _;
 use kutup_crypto::calendar::{self as cal, SealedEventV1, SealedMetadataV1};
 use kutup_crypto::calendar_event::{EventTime, SharedSigned};
+use kutup_crypto::calendar_recurrence::{Rule, Series};
 use serde::{Deserialize, Serialize};
 use sqlx::{Postgres, Transaction};
 use utoipa::ToSchema;
@@ -30,8 +31,8 @@ use crate::error::{AppError, AppResult};
 use crate::handlers::trusted_uuid;
 use crate::middleware::AuthUser;
 use crate::site_settings::{
-    CALENDARS_PER_ACCOUNT, CALENDAR_EVENTS_PAGE, CALENDAR_EVENTS_PER_CALENDAR, CALENDAR_SYNC_BATCH,
-    CALENDAR_WINDOW_DAYS,
+    CALENDARS_PER_ACCOUNT, CALENDAR_EVENTS_PAGE, CALENDAR_EVENTS_PER_CALENDAR, CALENDAR_MAX_COUNT,
+    CALENDAR_SYNC_BATCH, CALENDAR_WINDOW_DAYS,
 };
 use crate::{revisions, AppState};
 
@@ -890,6 +891,11 @@ struct Checked {
     shared: SharedSigned,
     start: time::OffsetDateTime,
     end: time::OffsetDateTime,
+    /// The last occurrence's end as this calendar shows the series; `None`
+    /// for one without end.
+    range_end: Option<time::OffsetDateTime>,
+    /// A changed occurrence: the instant it replaces.
+    recurrence_id: Option<time::OffsetDateTime>,
     bytes: i64,
 }
 
@@ -901,30 +907,88 @@ fn to_time(time: &EventTime) -> AppResult<time::OffsetDateTime> {
         .map_err(|_| AppError::bad_request("a time is out of range"))
 }
 
+fn coded(error: AppError, code: &str) -> AppError {
+    error.with_details(serde_json::json!({ "code": code }))
+}
+
+fn from_seconds(seconds: i64) -> AppResult<time::OffsetDateTime> {
+    time::OffsetDateTime::from_unix_timestamp(seconds)
+        .map_err(|_| AppError::bad_request("a time is out of range"))
+}
+
 /// Checks a sealed event for a calendar and its author's keys, and reads
-/// its columns. E1 takes single events: no recurrence, exceptions or
-/// organizer yet (E2, E4).
+/// its columns, the series expanded once for its range end (bounded: the
+/// format's 1970–2037 range and 500 EXDATEs). No organizer yet (E4).
 fn check_event(
     event: &SealedEventV1,
     calendar_public_key: &[u8],
     author_keys: &[Vec<u8>],
+    max_count: i64,
 ) -> AppResult<Checked> {
     let event = event.to_event().map_err(crypto)?;
     cal::check_sealed_shape(&event, calendar_public_key).map_err(crypto)?;
     let authors: Vec<&[u8]> = author_keys.iter().map(Vec::as_slice).collect();
     let (shared, calendar) = cal::check_signed_parts(&event, &authors).map_err(crypto)?;
-    if shared.rrule.is_some()
-        || shared.recurrence_id.is_some()
-        || !shared.exdates.is_empty()
-        || !calendar.exdates.is_empty()
-    {
-        return Err(AppError::bad_request(
-            "repeating events come with recurrence (E2)",
-        ));
-    }
     if shared.organizer.is_some() {
         return Err(AppError::bad_request("invitations come later (E4)"));
     }
+    // This calendar's own EXDATEs (Proton's calendar part) remove
+    // occurrences of the shared series, and only those: each is one of its
+    // occurrences, in its form; together with the shared ones at least one
+    // occurrence is left (docs/plans/calendar.md, E2b item 3).
+    let rule = shared
+        .rrule
+        .as_deref()
+        .map(Rule::parse)
+        .transpose()
+        .map_err(crypto)?;
+    if rule
+        .as_ref()
+        .and_then(|rule| rule.count)
+        .is_some_and(|count| i64::from(count) > max_count)
+    {
+        return Err(coded(
+            AppError::bad_request(format!(
+                "a series repeats at most {max_count} times by COUNT"
+            )),
+            "countTooLarge",
+        ));
+    }
+    if !calendar.exdates.is_empty() {
+        let Some(rule) = rule.as_ref() else {
+            return Err(coded(
+                AppError::bad_request("an EXDATE removes an occurrence of a repeating event"),
+                "exdateNotAnOccurrence",
+            ));
+        };
+        let bare =
+            Series::new(&shared.dtstart, shared.dtend.as_ref(), Some(rule), &[]).map_err(crypto)?;
+        if !bare.occurs_at_all(&calendar.exdates).map_err(crypto)? {
+            return Err(coded(
+                AppError::bad_request("an EXDATE is not an occurrence of the series"),
+                "exdateNotAnOccurrence",
+            ));
+        }
+    }
+    let mut exdates = shared.exdates.clone();
+    for exdate in &calendar.exdates {
+        if !exdates.contains(exdate) {
+            exdates.push(exdate.clone());
+        }
+    }
+    let series = Series::new(
+        &shared.dtstart,
+        shared.dtend.as_ref(),
+        rule.as_ref(),
+        &exdates,
+    )
+    .map_err(crypto)?;
+    let range_end = series
+        .range_end()
+        .map_err(crypto)?
+        .map(|at| from_seconds(at.as_second()))
+        .transpose()?;
+    let recurrence_id = shared.recurrence_id.as_ref().map(to_time).transpose()?;
     let start = to_time(&shared.dtstart)?;
     let end = match &shared.dtend {
         Some(end) => to_time(end)?,
@@ -949,6 +1013,8 @@ fn check_event(
         shared,
         start,
         end,
+        range_end,
+        recurrence_id,
         bytes,
     })
 }
@@ -999,6 +1065,7 @@ pub async fn sync(
         address_keys(&mut conn, user_id, input.address_id).await?.0
     };
     let max_events = CALENDAR_EVENTS_PER_CALENDAR.load(&state.pool).await?;
+    let max_count = CALENDAR_MAX_COUNT.load(&state.pool).await?;
     let mut results = Vec::with_capacity(input.changes.len());
     for change in &input.changes {
         let outcome = apply(
@@ -1010,6 +1077,7 @@ pub async fn sync(
             &public_key,
             &author_keys,
             max_events,
+            max_count,
             change,
         )
         .await;
@@ -1064,6 +1132,7 @@ async fn apply(
     public_key: &[u8],
     author_keys: &[Vec<u8>],
     max_events: i64,
+    max_count: i64,
     change: &EventChange,
 ) -> AppResult<Option<Uuid>> {
     let mut tx = state.pool.begin().await?;
@@ -1091,7 +1160,8 @@ async fn apply(
     }
     let result = match change {
         EventChange::Create(event) => {
-            let checked = check_event(event, public_key, author_keys)?;
+            let checked = check_event(event, public_key, author_keys, max_count)?;
+            check_parent(&mut tx, calendar, &checked).await?;
             let count: i64 =
                 sqlx::query_scalar("SELECT COUNT(*) FROM calendar_events WHERE calendar_id = $1")
                     .bind(calendar)
@@ -1110,7 +1180,8 @@ async fn apply(
             base_revision,
             event,
         } => {
-            let checked = check_event(event, public_key, author_keys)?;
+            let checked = check_event(event, public_key, author_keys, max_count)?;
+            check_parent(&mut tx, calendar, &checked).await?;
             type Current = (String, i64, time::OffsetDateTime, i64, i32);
             let current: Option<Current> = sqlx::query_as(
                 "SELECT uid, bytes, created_at, revision, sequence FROM calendar_events
@@ -1186,6 +1257,54 @@ async fn apply(
     Ok(result)
 }
 
+/// A changed occurrence (Proton's single edit) belongs to a series in the
+/// calendar: the same UID, no RECURRENCE-ID, a rule; and its RECURRENCE-ID
+/// is one of the series' occurrences (an excluded one too: the change
+/// replaces it). A series deleted later leaves its changes as single events.
+async fn check_parent(
+    tx: &mut Transaction<'_, Postgres>,
+    calendar: Uuid,
+    checked: &Checked,
+) -> AppResult<()> {
+    let Some(recurrence_id) = &checked.shared.recurrence_id else {
+        return Ok(());
+    };
+    let parent: Option<String> = sqlx::query_scalar(
+        "SELECT shared_signed FROM calendar_events
+          WHERE calendar_id = $1 AND uid = $2 AND recurrence_id IS NULL AND rrule IS NOT NULL",
+    )
+    .bind(calendar)
+    .bind(&checked.shared.uid)
+    .fetch_optional(&mut **tx)
+    .await?;
+    let Some(parent) = parent else {
+        return Err(coded(
+            AppError::bad_request("a changed occurrence needs its series in the calendar"),
+            "parentMissing",
+        ));
+    };
+    let stored = || AppError::internal("a stored series doesn't parse");
+    let parent = SharedSigned::parse(&parent).map_err(|_| stored())?;
+    let rule = parent
+        .rrule
+        .as_deref()
+        .map(Rule::parse)
+        .transpose()
+        .map_err(|_| stored())?;
+    let bare = Series::new(&parent.dtstart, parent.dtend.as_ref(), rule.as_ref(), &[])
+        .map_err(|_| stored())?;
+    if !bare
+        .occurs_at_all(std::slice::from_ref(recurrence_id))
+        .map_err(crypto)?
+    {
+        return Err(coded(
+            AppError::bad_request("RECURRENCE-ID is not an occurrence of the series"),
+            "notAnOccurrence",
+        ));
+    }
+    Ok(())
+}
+
 async fn insert(
     tx: &mut Transaction<'_, Postgres>,
     calendar: Uuid,
@@ -1218,7 +1337,7 @@ async fn insert_as(
              start_utc, end_utc, start_tz, end_tz, full_day, rrule, recurrence_id, range_end_utc,
              sequence, bytes, created_at, revision)
          VALUES (COALESCE($1, gen_random_uuid()), $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12,
-                 $13, $14, $15, $16, $17, $18, $19, $20, NULL, NULL, $17, $21, $22,
+                 $13, $14, $15, $16, $17, $18, $19, $20, $25, $26, $27, $21, $22,
                  COALESCE($23, now()), COALESCE($24, 1))
          RETURNING id",
     )
@@ -1256,6 +1375,9 @@ async fn insert_as(
     .bind(checked.bytes)
     .bind(kept.map(|(_, created_at, _)| created_at))
     .bind(kept.map(|(_, _, revision)| revision))
+    .bind(&shared.rrule)
+    .bind(checked.recurrence_id)
+    .bind(checked.range_end)
     .fetch_one(&mut **tx)
     .await
     .map_err(|error| match &error {

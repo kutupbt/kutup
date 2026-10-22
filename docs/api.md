@@ -72,6 +72,10 @@ Specific codes, where an app does something particular (a test in
 | `eventLimit` | 409 | An events sync: the calendar holds as many events as the administrators allow (`calendarEventsPerCalendar`); that change only |
 | `sequenceBehind` | 409 | An events sync: the changed event's `SEQUENCE` is lower than the stored one's; that change only |
 | `uidTaken` | 409 | An events sync: an event with this UID is in the calendar already; that change only |
+| `countTooLarge` | 400 | An events sync: the rule's `COUNT` is above `calendarMaxCount`; that change only |
+| `exdateNotAnOccurrence` | 400 | An events sync: a calendar-part `EXDATE` isn't an occurrence of the series; that change only |
+| `parentMissing` | 400 | An events sync: a changed occurrence's series isn't in the calendar; that change only |
+| `notAnOccurrence` | 400 | An events sync: a `RECURRENCE-ID` isn't an occurrence of its series; that change only |
 | `setupRequired` | 409 | The account has no keys yet (an admin-made account before its first sign-in): a listed write or a rename waits for setup |
 | `renamed` | 409 | A lookup of a name an account no longer goes by (held, or named in a rename chain): `renames` carries `{ "version": 1, "chains": [...] }`, never keys |
 | `nameReserved` | 409 | The name is the server's (postmaster, abuse, …, the break-glass account), in any spelling |
@@ -2286,8 +2290,19 @@ baseRevision, event}} | {"delete": {id, baseRevision}}] }`, 1 to `calendarSyncBa
 alone (Proton's sync): `{ results: [{ status, event?, code?, error? }] }` in
 the order sent. A created or changed event's signed parts must be signed by
 one of the address's keys, its key packets be to the calendar key, and it
-must keep its UID; E1 refuses `RRULE`, `RECURRENCE-ID`, `EXDATE` and
-`ORGANIZER` (recurrence comes in E2, invitations in E4). `409 uidTaken`
+must keep its UID; `ORGANIZER` is refused (invitations come in E4).
+Repeating events (E2): the shared part's `RRULE` and `EXDATE`s are Proton's
+subset (`kutup_crypto::calendar_recurrence`), a `COUNT` at most
+`calendarMaxCount` (49; `400 countTooLarge`). The calendar part's `EXDATE`s
+remove occurrences on this calendar only: each must be an occurrence of
+the series in its form (`400 exdateNotAnOccurrence`), and with the shared
+ones at least one occurrence is left. The server stores the series' last
+end (`rangeEndUtc`, absent for one without end) from both parts'
+`EXDATE`s. A changed occurrence (`RECURRENCE-ID`) needs its series in the
+calendar, the same UID with a rule (`400 parentMissing`), and its
+`RECURRENCE-ID` must be one of the series' occurrences, an excluded one
+included (`400 notAnOccurrence`); a series deleted later leaves its changes
+as single events. `409 uidTaken`
 for a UID already in the calendar, `409 eventLimit` at
 `calendarEventsPerCalendar` (25,000). An update or a delete names
 the event's `revision` it was made from: another one is `409 revision_conflict` (with

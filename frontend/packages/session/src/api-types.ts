@@ -217,6 +217,7 @@ export interface AdminSettings {
   calendarsPerAccount: number
   calendarEventsPerCalendar: number
   calendarSyncBatch: number
+  calendarMaxCount: number
   calendarWindowDays: number
   calendarEventsPage: number
 }
