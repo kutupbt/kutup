@@ -25,7 +25,7 @@ test('calendar: a first calendar, events in two time zones, week and month, edit
   await expect(page.getByTestId('calendar-title')).toHaveText('October 2026')
 
   // An event at nine on Thursday, moved to half past.
-  await page.getByTestId('calendar-column-2026-10-29').locator('button').nth(9).click()
+  await page.getByTestId('calendar-slot-2026-10-29-18').click()
   const editor = page.getByRole('dialog', { name: 'New event' })
   await expect(editor.getByLabel('Start time')).toHaveValue('09:00')
   await editor.getByLabel('Title').fill('Republic Day lunch')
@@ -38,7 +38,7 @@ test('calendar: a first calendar, events in two time zones, week and month, edit
   await expect(thursday.getByTestId('calendar-event').filter({ hasText: 'Republic Day lunch' })).toContainText('09:30')
 
   // One set in New York's time: 09:00 there (EDT, UTC−4) is 16:00 in Istanbul (UTC+3).
-  await page.getByTestId('calendar-column-2026-10-30').locator('button').nth(9).click()
+  await page.getByTestId('calendar-slot-2026-10-30-18').click()
   const call = page.getByRole('dialog', { name: 'New event' })
   await call.getByLabel('Title').fill('Call with New York')
   await call.getByTestId('event-zone').click()

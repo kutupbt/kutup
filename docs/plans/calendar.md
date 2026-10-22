@@ -553,3 +553,70 @@ stack's lateness), import of a Google export and export round-trip.
 
 **Not in E2:** sharing and busy/free (E3), invitations and their wider
 rule set (E4), feeds and Google import (E5).
+
+## Calendar UX parity (second session, 2026-10-22)
+
+The user asked for drag to create on the time grid. Read from Proton's web
+client (`applications/calendar`: `components/calendar/TimeGrid.tsx`,
+`interactions/timeGridMouseHandler.ts`, `interactions/dayGridMouseHandler.ts`,
+`containers/calendar/InteractiveCalendarView.tsx`,
+`hooks/useCalendarHotkeys.ts`); Google Calendar, Fantastical and Outlook
+only where they do better.
+
+**Built (the time grid):**
+- **As Proton:**
+  - **Drag to create:** 30-minute snap (fixed; Proton has no setting); a
+    press becomes a drag past 20 px; downwards from the press slot to the
+    pointer's slot end, upwards from the pointer's slot to the press slot;
+    at least one slot; on the day it began; the grid auto-scrolls near its
+    edges.
+  - **Click:** an event of the default 30 minutes at the clicked slot.
+  - **Move:** dragging an event keeps its length, moves in 30-minute steps
+    from its own start, and crosses days. On drop the editor opens with the
+    new times; nothing is saved until Save, as Proton's popover asks for
+    Save.
+  - **Day grid** (the all-day row, the month): a drag across days makes a
+    multi-day all-day event, a click a one-day one; an event dragged moves by
+    whole days, its times kept.
+  - **Current time:** a line in today's column, refreshed every 30
+    seconds, and the grid scrolled to now on opening, Today and a change of
+    view.
+  - **Shortcuts:** ← → previous and next, T today, 1 2 3 day, week and
+    month, N a new event at the next half hour. Proton asks for its
+    Shortcuts setting first; Kutup's are always on, never in a field or
+    dialog.
+- **Beyond Proton** (the user's request; Proton lacks these):
+  - **Release opens the full editor** with the span. Kutup has no quick
+    popover yet (below).
+  - **Resize** by an event's bottom edge for every event (Proton resizes
+    only booking ranges): at least 30 minutes, on the day it ends, opening
+    the editor as a move does.
+  - **Escape** cancels a drag in progress.
+  - **Touch:** a long press (400 ms) arms a drag, so a swipe still scrolls;
+    the page holds still under an armed finger. Proton has no touch
+    handling.
+  - **Keyboard:** each half-hour slot is a cell (one in the tab order,
+    arrows move between slots and days); Shift with ↑ or ↓ widens a span
+    and Enter opens it; on an event, Alt with the arrows moves it and
+    Alt+Shift with ↑ or ↓ resizes it, then Enter opens it and Escape drops
+    it; a live region says the span. Proton's grid has no keyboard path.
+- Repeating events (E2's app) will take Proton's "This event / This and
+  future events / All events" choice on a move or resize.
+
+**Missing, Proton first:**
+
+| | Proton | Kutup |
+| --- | --- | --- |
+| Quick-create popover on a click or drag (title, then Save or "More options") | `CreateEventPopover` | ❌ the full editor opens |
+| Event peek popover (Edit, Delete, Duplicate; location, calendar, notifications) | `EventPopover` | ❌ the editor opens |
+| Mini month navigator, with a drag for a custom range of days or weeks | `MiniCalendar` | ❌ |
+| Search events (`/`) | `CalendarSearch` | ❌ |
+| Shortcuts list (`?`) and the quick actions menu (Meta+K) | `CalendarShortcutsAndCommander` | ❌ |
+| Week numbers | `DisplayWeekNumber` | ❌ |
+| A secondary time zone column | settings, `TimeGrid` | ❌ |
+| Default view, default event duration (per calendar: 30, 60, 90, 120) | `CalendarLayoutSection`, `CalendarEventDefaultsSection` | ❌ (E2 settings) |
+| A day header opens that day | `handleClickDateWeekView` | ❌ |
+| "+N more" in the month opens the day's events | `MorePopoverEvent` | ❌ a count only |
+| Working hours shaded | none | ❌ (Google, Outlook: worth having) |
+| Per-user snap step | none | ❌ (Outlook's; Proton's fixed 30 kept) |
+| Natural-language quick add | none | ➖ (Fantastical's; not planned) |
