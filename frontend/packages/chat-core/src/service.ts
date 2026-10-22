@@ -1579,9 +1579,17 @@ export class ChatService {
     })
       .then(async ({ commits, expiry, report }) => {
         await this.releaseExpiredAttachments(expiry)
-        const mlsTyping = await this.withMlsWorkflow(async () => {
-          return await this.mls?.reconcile() ?? []
-        })
+        // MLS groups go their own way: a failure there (an MLS device the
+        // server no longer has, say after an identity reset) never holds
+        // back what this pass took for direct conversations.
+        let mlsTyping: ChatTypingEvent[] = []
+        try {
+          mlsTyping = await this.withMlsWorkflow(async () => {
+            return await this.mls?.reconcile() ?? []
+          })
+        } catch (error) {
+          reportBackgroundFailure(error)
+        }
         // A queued message the server would not take stays queued, behind
         // nothing but its own conversation; it is tried again on every pass.
         const waiting = new Set<string>()

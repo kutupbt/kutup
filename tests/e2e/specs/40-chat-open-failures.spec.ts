@@ -68,6 +68,7 @@ test('a browser whose device was removed elsewhere says so and can be set up aga
   // Set up again: the account's identity is on the other browser, which
   // links this one again.
   await linkDevice(pageB, pageA)
+  await openSettings(pageA, 'Linked devices')
   await expect(pageA.getByTestId('chat-device-status')).toHaveAttribute('data-device-id', /^\d+$/, { timeout: 120_000 })
   await openChats(pageA)
   await expect(pageA.getByText('This browser is no longer one of your Chat devices')).toHaveCount(0)

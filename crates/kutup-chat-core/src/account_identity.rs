@@ -1033,6 +1033,45 @@ mod tests {
             .any(|message| message.content.message_id == answer));
     }
 
+    /// As spec 169: Alice has a linked device, both write to Bob, then her
+    /// first device removes the second (lost) and resets the identity; Bob's
+    /// reply reaches her.
+    #[test]
+    fn after_removing_a_lost_device_with_a_reset_both_sides_read_each_other() {
+        use crate::group_harness_tests::befriend;
+        let world = World::new();
+        let mut alice = world.person(1);
+        let mut bob = world.person(2);
+        befriend(&mut alice, &mut bob);
+        let mut alice2 = world.link_device(&mut alice);
+        alice2.receive();
+        let text = |from: &mut crate::group_harness_tests::Person, to: &str, body: &str| {
+            let send_id = uuid::Uuid::new_v4().to_string();
+            let seq = block_on(from.engine.session().next_sent_seq()).unwrap();
+            let content = kutup_chat_proto::ChatContent::text_with_id(&send_id, ISSUED_AT, seq, body);
+            block_on(from.engine.send(&send_id, to, &content, &mut rng())).unwrap();
+            send_id
+        };
+        let bob_account = bob.account.clone();
+        let alice_account = alice.account.clone();
+        text(&mut alice, &bob_account, "from first");
+        text(&mut alice2, &bob_account, "from second");
+        bob.receive();
+        let answer = text(&mut bob, &alice_account, "answer");
+        let got = alice.receive();
+        assert!(got.messages.iter().any(|m| m.content.message_id == answer));
+        alice2.receive();
+
+        let removed = alice2.device();
+        block_on(alice.engine.reset_identity(&[removed], ISSUED_AT, &mut rng())).unwrap();
+        let after = text(&mut alice, &bob_account, "after reset");
+        let got = bob.receive();
+        assert!(got.messages.iter().any(|m| m.content.message_id == after), "{got:?}");
+        let reply = text(&mut bob, &alice_account, "reply after reset");
+        let got = alice.receive();
+        assert!(got.messages.iter().any(|m| m.content.message_id == reply), "{got:?}");
+    }
+
     /// A sync the account moved past (a second reset before the device read
     /// the first) is dropped: the device is no longer the account's.
     #[test]
