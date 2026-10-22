@@ -2,6 +2,7 @@ import api from '@kutup/session/client'
 import { isAxiosError } from 'axios'
 import { resolveApiBase } from '@kutup/session/apiBase'
 import { ApiChatTransport, PEER_UNSUPPORTED } from './transport'
+import { takeDeviceCredentialRefusal } from './device-auth'
 import type {
   ChatCapabilities,
   ChangeMark,
@@ -492,7 +493,15 @@ export class ChatService {
     let client: WasmChatClientHandle
     try {
       client = await engineLock.run(async (tookOver) => {
-        const handle = await openClientHandle(wasm, transport, databaseName, options)
+        let handle: WasmChatClientHandle
+        try {
+          handle = await openClientHandle(wasm, transport, databaseName, options)
+        } catch (error) {
+          // This browser's device was removed while it was closed: it is
+          // linked again (its history stays), like a new one.
+          if (takeDeviceCredentialRefusal()) throw new ChatServiceError('linkRequired')
+          throw error
+        }
         // Taken over before there was a client to claim with: claim now.
         if (tookOver) await handle.claimWriter?.(true)
         opened = handle
@@ -2726,7 +2735,7 @@ export class ChatService {
       // Only the server's own answer counts: a 404 from a proxy, or from a
       // server where Chat is off, says nothing about this device, and the
       // repair offered for a removed one drops what waits to be sent.
-      if (isAxiosError(error) && error.response?.status === 404 && isNoSuchDevice(error.response.data)) {
+      if (isAxiosError(error) && isDeviceGone(error.response?.status, error.response?.data)) {
         this.stopPolling()
         this.setConnection('deviceRemoved')
         return
@@ -2952,6 +2961,19 @@ function parseCallBroadcast(value: unknown): ChatCallEvent | null {
 /** The server's answer when it does not know this browser's Chat device. */
 function isNoSuchDevice(body: unknown): boolean {
   return typeof body === 'object' && body !== null && (body as { error?: unknown }).error === 'no such chat device'
+}
+
+/**
+ * The server's own answer that this browser's Chat device is gone: its
+ * credential matches no live device of the account (`401 deviceCredential`:
+ * removed here or on another device, or dropped by a re-registration), or the
+ * older `404` for a device id it doesn't know.
+ */
+export function isDeviceGone(status: number | undefined, body: unknown): boolean {
+  if (status === 401) {
+    return typeof body === 'object' && body !== null && (body as { code?: unknown }).code === 'deviceCredential'
+  }
+  return status === 404 && isNoSuchDevice(body)
 }
 
 /** Newest entries per changed conversation the attachment ledger looks at. */

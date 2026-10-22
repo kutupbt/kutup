@@ -3303,7 +3303,24 @@ impl Engine {
             let message =
                 crate::wire::decode_ciphertext(envelope.envelope_type, &envelope.content)?;
             if let libsignal_protocol::CiphertextMessage::PreKeySignalMessage(message) = message {
-                if message.identity_key().public_key().serialize() != identity.serialize() {
+                let carried = *message.identity_key().public_key();
+                let identity = if carried.serialize() == identity.serialize() {
+                    identity
+                } else {
+                    // The account may have a new identity this device hasn't
+                    // seen: its current signed manifest decides.
+                    self.refresh_account_manifest(&sender).await?;
+                    self.session
+                        .manifest_identity_key(&sender, device_id)
+                        .await?
+                        .ok_or_else(|| {
+                            ChatError::Trust(
+                                "sender device is absent from the account-manifest-verified manifest"
+                                    .into(),
+                            )
+                        })?
+                };
+                if carried.serialize() != identity.serialize() {
                     return Err(ChatError::Trust(
                         "session-starting identity key differs from the signed account manifest"
                             .into(),
@@ -3311,6 +3328,23 @@ impl Engine {
                 }
             }
         }
+        Ok(())
+    }
+
+    /// Fetch and accept the account's current signed manifest (no prekeys
+    /// taken): after an identity distribution or a re-registration, a
+    /// message under the account's new identity arrives before this device
+    /// has seen the manifest that lists it. Accepting it is what an identity
+    /// change does here (`Session::stage_identity_change`); a manifest that
+    /// isn't the authority's next one is refused as any other.
+    async fn refresh_account_manifest(&mut self, account: &str) -> Result<()> {
+        let manifest = Rc::clone(&self.transport)
+            .fetch_manifest(account)
+            .await?
+            .ok_or_else(|| ChatError::Trust(format!("no signed account manifest for {account}")))?;
+        self.accept_current_manifest_evidence(account, &manifest)
+            .await?;
+        self.known_devices.remove(account);
         Ok(())
     }
 
@@ -3331,6 +3365,17 @@ impl Engine {
             // Retrieve and verify the complete current manifest before touching
             // the inner ratchet. The returned prekeys are intentionally unused.
             self.fetch_verified_bundles(&inspection.sender).await?;
+            manifest_identity = self
+                .session
+                .manifest_identity_key(&inspection.sender, inspection.sender_device_id)
+                .await?;
+        }
+        // An identity the pinned manifest doesn't carry may be the account's
+        // new one: its current signed manifest decides.
+        if manifest_identity
+            .is_some_and(|key| key.serialize() != inspection.identity_key.serialize())
+        {
+            self.refresh_account_manifest(&inspection.sender).await?;
             manifest_identity = self
                 .session
                 .manifest_identity_key(&inspection.sender, inspection.sender_device_id)

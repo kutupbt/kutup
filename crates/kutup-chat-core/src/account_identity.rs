@@ -961,6 +961,78 @@ mod tests {
         );
     }
 
+    /// A contact reads a message sent under the account's new identity
+    /// (sealed, before they saw the manifest that lists it): they fetch the
+    /// account's signed manifest, take the new identity, see one "safety
+    /// number changed" line, and are no longer verified for it.
+    #[test]
+    fn a_contact_reads_the_new_identity_and_sees_it_changed_once() {
+        use crate::group_harness_tests::befriend;
+        let world = World::new();
+        let mut alice = world.person(1);
+        let mut bob = world.person(2);
+        befriend(&mut alice, &mut bob);
+        let identity = block_on(bob.engine.safety_number(&alice.account))
+            .unwrap()
+            .identity_key;
+        block_on(
+            bob.engine
+                .set_identity_verified(&alice.account, &identity, true),
+        )
+        .unwrap();
+
+        block_on(alice.engine.reset_identity(&[], ISSUED_AT, &mut rng())).unwrap();
+        let send_id = uuid::Uuid::new_v4().to_string();
+        let seq = block_on(alice.engine.session().next_sent_seq()).unwrap();
+        let content =
+            kutup_chat_proto::ChatContent::text_with_id(&send_id, ISSUED_AT, seq, "new identity");
+        block_on(
+            alice
+                .engine
+                .send(&send_id, &bob.account, &content, &mut rng()),
+        )
+        .unwrap();
+        let report = bob.receive();
+        assert!(
+            report
+                .messages
+                .iter()
+                .any(|message| message.content.message_id == send_id),
+            "{report:?}"
+        );
+        let changed: Vec<_> = bob.engine.take_events().into_iter().filter(|event| {
+            matches!(event, crate::ChatEvent::SafetyNumberChanged { peer } if *peer == alice.account)
+        }).collect();
+        assert_eq!(changed.len(), 1);
+        let lines = block_on(bob.engine.session().sent_history())
+            .unwrap()
+            .into_iter()
+            .filter(|message| {
+                serde_json::from_slice::<kutup_chat_proto::ChatContent>(&message.content)
+                    .is_ok_and(|content| content.is_safety_number_changed())
+            })
+            .count();
+        assert_eq!(lines, 1);
+        let safety = block_on(bob.engine.safety_number(&alice.account)).unwrap();
+        assert_ne!(safety.identity_key, identity);
+        assert_eq!(safety.trust, crate::AuthorityTrust::Tofu);
+
+        // And Bob's answer reaches Alice under her new identity.
+        let answer = uuid::Uuid::new_v4().to_string();
+        let seq = block_on(bob.engine.session().next_sent_seq()).unwrap();
+        let content = kutup_chat_proto::ChatContent::text_with_id(&answer, ISSUED_AT, seq, "ok");
+        block_on(
+            bob.engine
+                .send(&answer, &alice.account, &content, &mut rng()),
+        )
+        .unwrap();
+        let report = alice.receive();
+        assert!(report
+            .messages
+            .iter()
+            .any(|message| message.content.message_id == answer));
+    }
+
     /// A sync the account moved past (a second reset before the device read
     /// the first) is dropped: the device is no longer the account's.
     #[test]

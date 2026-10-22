@@ -206,7 +206,10 @@ api.interceptors.response.use(
       SIGN_IN_CALL.test((originalRequest.url ?? '').split('?')[0]!) ||
       code === 'invalidCredentials' ||
       code === 'setupTokenInvalid' ||
-      code === 'preAuthInvalid'
+      code === 'preAuthInvalid' ||
+      // A Chat device's own credential (X-Kutup-Chat-Device) refused: the
+      // device was removed, not this session.
+      code === 'deviceCredential'
     if (status === 401 && !originalRequest._retry && !skipRefresh) {
       if (isRefreshing) {
         return new Promise((resolve, reject) => {

@@ -11,9 +11,11 @@ export const CHAT_DEVICE_HEADER = 'X-Kutup-Chat-Device'
 
 let header: string | null = null
 let installed = false
+let refused = false
 
 export function setChatDeviceAuth(deviceId: number, credential: string): void {
   header = `${deviceId}.${credential}`
+  refused = false
   if (installed) return
   installed = true
   api.interceptors.request.use((config) => {
@@ -22,6 +24,27 @@ export function setChatDeviceAuth(deviceId: number, credential: string): void {
     }
     return config
   })
+  api.interceptors.response.use(undefined, (error: unknown) => {
+    const response = (error as { response?: { status?: number; data?: unknown } }).response
+    if (
+      response?.status === 401 &&
+      (response.data as { code?: unknown } | undefined)?.code === 'deviceCredential'
+    ) {
+      refused = true
+    }
+    return Promise.reject(error)
+  })
+}
+
+/**
+ * Whether the server refused this browser's device credential since it was
+ * set (`401 deviceCredential`): the device was removed, here or on another
+ * device, or dropped by a re-registration. Reading it clears it.
+ */
+export function takeDeviceCredentialRefusal(): boolean {
+  const value = refused
+  refused = false
+  return value
 }
 
 /** Forget the credential (sign-out, a closed service). */

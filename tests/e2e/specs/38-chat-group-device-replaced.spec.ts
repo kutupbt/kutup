@@ -1,6 +1,6 @@
 import { expect, test } from '@playwright/test'
 import { newAccount, registerAccount, signIn } from '../fixtures/apps'
-import { acceptGroup, befriend, composer, createGroup, message, openChat, openChats, openGroup, openSettings, send } from '../fixtures/chat'
+import { acceptGroup, befriend, composer, createGroup, message, openChat, openChats, openGroup, openSettings, send, startOver } from '../fixtures/chat'
 
 const PASSWORD = 'Deneme123*GroupDevicePassword'
 
@@ -90,6 +90,9 @@ test('a group member keeps the group after repairing their browser', async ({ br
   await pageB.getByRole('button', { name: 'Repair this browser' }).click()
   await pageB.unroute('**/api/chat/messages*')
   await pageB.getByRole('button', { name: 'Reset and restore' }).click()
+  // The account's identity was only on this browser's discarded device:
+  // with no other device to link from, Bob starts over.
+  await startOver(pageB)
   await openChats(pageB)
 
   // The device this browser was is gone from the account, unasked.
