@@ -37,7 +37,8 @@
     "photos": "Galeri",
     "contacts": "Kişiler",
     "mail": "Posta",
-    "pass": "Kasa"
+    "pass": "Kasa",
+    "calendar": "Takvim"
   },
   "theme": {
     "dark": "Koyu tema",
@@ -134,7 +135,8 @@
       "chatHistory": "Sohbet geçmişi yedeği",
       "reserved": "Süren yüklemeler",
       "contacts": "Kişiler",
-      "mail": "Posta"
+      "mail": "Posta",
+      "calendar": "Takvim"
     }
   },
   "uploads": {
