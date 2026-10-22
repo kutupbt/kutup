@@ -369,8 +369,9 @@ fn calendars_and_events() {
         b64(&cal::testing::key_packet_to(&SessionKey::generate(), &eve.public_key).unwrap());
     let mut repeating = fields(
         "e3@kutup.test",
-        "2026-10-30T09:00:00",
-        "2026-10-30T10:00:00",
+        // After the paging window below, so its pages hold the two events.
+        "2026-12-04T09:00:00",
+        "2026-12-04T10:00:00",
         "x",
     );
     repeating.rrule = Some("FREQ=WEEKLY".into());
