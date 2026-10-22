@@ -3315,8 +3315,9 @@ mod sealed_live_tests {
             "INSERT INTO chat_devices (user_id, device_id, suite, registration_id, identity_key,
                  signed_pre_key_id, signed_pre_key, signed_pre_key_signature,
                  last_resort_kyber_pre_key_id, last_resort_kyber_pre_key,
-                 last_resort_kyber_pre_key_signature)
-             VALUES ($1, 1, 1, 77, 'k', 1, 'k', 's', 1, 'k', 's')",
+                 last_resort_kyber_pre_key_signature, credential_salt, credential_hash)
+             VALUES ($1, 1, 1, 77, 'k', 1, 'k', 's', 1, 'k', 's',
+                     decode(repeat('00', 16), 'hex'), decode(repeat('00', 32), 'hex'))",
         )
         .bind(id)
         .execute(pool)

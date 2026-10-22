@@ -233,6 +233,8 @@ fn chat_backup_lifecycle(
     owner: &ChatDevice,
     foreign: &ChatDevice,
     admin_token: Option<&str>,
+    // The owner's current manifest sequence, which every segment names.
+    manifest_sequence: u64,
 ) {
     use kutup_crypto::account_envelope::{self, AccountEnvelopePurpose};
     use kutup_crypto::chat_backup::{
@@ -348,7 +350,7 @@ fn chat_backup_lifecycle(
         source_device_id: device_id,
         device_sequence: 1,
         previous_segment_digest: "00".repeat(32),
-        account_manifest_sequence: 1,
+        account_manifest_sequence: manifest_sequence,
         ciphertext_bytes: ciphertext.len() as u32,
         ciphertext_sha256: hex::encode(Sha256::digest(&ciphertext)),
         ciphertext: b64(&ciphertext),
@@ -361,7 +363,7 @@ fn chat_backup_lifecycle(
         .unwrap()
         .json()
         .unwrap();
-    assert_eq!(receipt["cursor"], 1);
+    assert_eq!(receipt["cursor"], 1, "{receipt}");
     assert_eq!(receipt["alreadyStored"], false);
     let retry: Value = owner
         .auth(c.post(format!("{base}/api/chat/backup/segments")))
@@ -456,7 +458,7 @@ fn chat_backup_lifecycle(
                 source_device_id: device_id,
                 device_sequence: sequence,
                 previous_segment_digest: previous_digest.clone(),
-                account_manifest_sequence: 1,
+                account_manifest_sequence: manifest_sequence,
                 ciphertext_bytes: ciphertext.len() as u32,
                 ciphertext_sha256: hex::encode(Sha256::digest(&ciphertext)),
                 ciphertext: b64(&ciphertext),
@@ -877,7 +879,7 @@ fn chat_backup_lifecycle(
                 source_device_id: device_id,
                 device_sequence: sequence,
                 previous_segment_digest: head_digest.clone(),
-                account_manifest_sequence: 1,
+                account_manifest_sequence: manifest_sequence,
                 ciphertext_bytes: ciphertext.len() as u32,
                 ciphertext_sha256: hex::encode(Sha256::digest(&ciphertext)),
                 ciphertext: b64(&ciphertext),
@@ -1171,6 +1173,7 @@ fn chat_v1_contract() {
         &dev_a,
         &dev_b,
         admin_token.as_deref(),
+        chat_a.head.as_ref().unwrap().sequence,
     );
 
     // Opaque encrypted profiles are owner-writable and bearer-capability
