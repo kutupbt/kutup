@@ -138,9 +138,12 @@ test('custom domains: the wizard, addresses on the domain, catch-all, deleting i
   ])
   await expect(async () => {
     await mail.getByRole('button', { name: 'Refresh status' }).click()
-    for (const label of ['Verified', 'MX', 'SPF', 'DKIM', 'DMARC']) {
+    for (const label of ['Verified', 'MX', 'SPF', 'DKIM']) {
       await expect(await badge(mail, label)).toHaveAttribute('data-tone', 'ok', { timeout: 5_000 })
     }
+    // DMARC checks "relaxed" (Proton's RELAXED: DKIM aligned relaxed), which
+    // Proton's badge shows neutral, never as a fault.
+    await expect(await badge(mail, 'DMARC')).not.toHaveAttribute('data-tone', 'danger', { timeout: 5_000 })
   }).toPass({ timeout: 120_000 })
   await expect(await badge(mail, '0 addresses')).toHaveAttribute('data-tone', 'danger')
   await expect(mail.getByTestId('domains-used')).toContainText('1 /')
