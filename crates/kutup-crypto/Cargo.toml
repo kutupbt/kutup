@@ -33,6 +33,10 @@ serde.workspace = true
 serde_json.workspace = true
 zeroize.workspace = true
 hex.workspace = true
+# Signal's ProvisioningCipher (AES-256-CBC + HMAC-SHA256) for linking a Chat
+# device (`provisioning`); the versions libsignal already brings.
+aes = "=0.8.4"
+cbc = { version = "=0.1.2", features = ["alloc"] }
 hpke-rs = { version = "=0.6.1" }
 # `experimental` is hpke-rs's name for its post-quantum KEMs: the groups'
 # anonymous route (`oblivious`) uses X-Wing (X25519 + ML-KEM-768,
