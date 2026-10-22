@@ -33,6 +33,7 @@ import {
 } from './api'
 import { OneUseSecret } from '@kutup/session/reauth'
 import { bytesToGib, generateTempPassword, gibToBytes } from './helpers'
+import { MailDomainOverridesCard } from './MailDomainOverrides'
 import { MailSendingCard } from './MailSending'
 import { AccountRateLimits } from './RateLimitsPage'
 import { UserStatus } from './UsersPage'
@@ -323,6 +324,10 @@ export function UserPage() {
 
       <Section title={t('admin.mailSending.title')} description={t('admin.mailSending.cardHint')}>
         <MailSendingCard userId={user.id} />
+      </Section>
+
+      <Section title={t('admin.mailDomains.overrides.title')}>
+        <MailDomainOverridesCard userId={user.id} />
       </Section>
 
       <Section title={t('admin.user.quotas')} description={t('admin.user.quotasHint')}>
