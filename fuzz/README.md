@@ -24,7 +24,12 @@ The targets are:
   sealed-sender outer envelopes through the real decrypt/parser entry point;
 - `mls_control_parsers`: authority changes, old/new vote requests, finalized
   blocks, replicas, destination-private deliveries, bootstrap/history pages,
-  and the mandatory private control state.
+  and the mandatory private control state;
+- `calendar_parsers`: `RRULE` values in any spelling and in the canonical
+  form, a calendar event's shared signed part, and the series it makes, whose
+  expansion must end (docs/plans/calendar.md). Its seed corpus, from the
+  recurrence and calendar vectors, is checked in under
+  `seeds/calendar_parsers/`.
 
 Install `cargo-fuzz`, then run both targets with a nightly toolchain:
 
@@ -37,6 +42,7 @@ cargo +nightly fuzz run profile_envelope_parser -- -max_len=1048576
 cargo +nightly fuzz run account_policy_parsers -- -max_len=2097152
 cargo +nightly fuzz run sealed_sender_parsers -- -max_len=1048576
 cargo +nightly fuzz run mls_control_parsers -- -max_len=8388608
+cargo +nightly fuzz run calendar_parsers corpus/calendar_parsers seeds/calendar_parsers -- -max_len=65536
 ```
 
 CI and phase-gate smoke runs should add a bounded `-runs=10000`; scheduled
