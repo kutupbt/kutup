@@ -515,6 +515,12 @@ device just before the deploy so its mailbox is drained. And anything of the
 old MLS groups (their state is per device; MLS is being removed in any
 case).
 
+**Rollout.** The deploy that runs this migration deletes Chat device and
+manifest data on kutup.dev. Per the standing rule, it waits for the user's
+live "yes" right before it runs ("deleting Chat devices and manifests on
+kutup.dev now, are you confirming?"), even with only the user's accounts;
+the deploying session asks.
+
 **What people are told.** The release notes say: "Chat now has one identity
 key per account, as Signal. Your contacts will see your safety number change
 once. If you had verified a contact, verify them again. Open each device
