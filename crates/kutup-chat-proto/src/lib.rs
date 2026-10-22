@@ -41,11 +41,11 @@ pub use account_identity::{
     AccountIdentityDistributionRequest, AccountManifestDeviceV2, AccountManifestHistoryPageV2,
     AccountManifestPublicationV2, AccountManifestV2, AccountPreKeyBundlesResponse,
     ChatKeysCheckRequest, ChatLinkTokenResponse, ChatProvisionV1, DevicePreKeyBundleV2,
-    DistributedDeviceKeysV1, DistributionError, ProvisionEnvelopeV1, ProvisioningLinkCodeV1,
-    ProvisioningRelayRequest, ProvisioningSocketMessage, ReregistrationV1,
-    ACCOUNT_MANIFEST_V2_VERSION, CHAT_DEVICE_HEADER, DEVICE_CREDENTIAL_LEN, LINK_TOKEN_LEN,
-    LINK_URI_PREFIX, MAX_PREKEY_RECORD_BYTES, PROVISIONING_ADDRESS_LEN, PROVISIONING_VERSION,
-    REREGISTRATION_DEVICE_ID,
+    DeviceRegistrationV1, DistributedDeviceKeysV1, DistributionError, ProvisionEnvelopeV1,
+    ProvisioningLinkCodeV1, ProvisioningRelayRequest, ProvisioningSocketMessage,
+    RegisterChatDeviceRequestV2, ACCOUNT_MANIFEST_V2_VERSION, CHAT_DEVICE_HEADER,
+    DEVICE_CREDENTIAL_LEN, LINK_TOKEN_LEN, LINK_URI_PREFIX, MAX_PREKEY_RECORD_BYTES,
+    PROVISIONING_ADDRESS_LEN, PROVISIONING_VERSION, REREGISTRATION_DEVICE_ID,
 };
 pub use backup::{
     chat_backup_media_reference_set_digest, AppendChatBackupSegmentRequestV1,
@@ -294,22 +294,6 @@ pub struct RegisterChatDeviceRequest {
     /// accepted when present. See `docs/chat-protocol.md` §5.2.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub device_signature: Option<String>,
-    /// The device's credential (Signal's per-device password): canonical
-    /// unpadded base64url of 32 random bytes, as in the header; the server stores a salted hash and the
-    /// device sends it in [`CHAT_DEVICE_HEADER`]. Required from the
-    /// account-identity cutover (docs/plans/account-identity-key.md).
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub credential: Option<String>,
-    /// The one-time token a linking device obtained and sent in the
-    /// provisioning message; consumed in the insert's transaction. Absent
-    /// only with `reregistration`.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub link_token: Option<String>,
-    /// A re-registration: this device takes a new identity and the account's
-    /// other devices are dropped (the account's first Chat device registers
-    /// this way too).
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub reregistration: Option<ReregistrationV1>,
 }
 
 /// One entry in a signed [`AccountManifestV1`].

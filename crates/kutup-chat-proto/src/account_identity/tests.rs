@@ -1,5 +1,5 @@
 use super::*;
-use crate::{AccountIdentitySuiteId, EnvelopeType, RegisterChatDeviceRequest};
+use crate::{AccountIdentitySuiteId, EnvelopeType};
 use base64::Engine as _;
 use ed25519_dalek::Signer as _;
 use sha2::{Digest, Sha256};
@@ -444,8 +444,8 @@ fn distribution_names_exactly_the_manifest_devices() {
     ));
 }
 
-fn registration(reregistration: Option<ReregistrationV1>) -> RegisterChatDeviceRequest {
-    RegisterChatDeviceRequest {
+fn registration(registration: DeviceRegistrationV1) -> RegisterChatDeviceRequestV2 {
+    RegisterChatDeviceRequestV2 {
         suite: DirectChatSuiteId::PqxdhTripleRatchetV1,
         registration_id: 10,
         identity_key: identity(3),
@@ -454,45 +454,162 @@ fn registration(reregistration: Option<ReregistrationV1>) -> RegisterChatDeviceR
         one_time_pre_keys: Vec::new(),
         one_time_kyber_pre_keys: Vec::new(),
         name: "Firefox".into(),
-        device_signature: None,
-        credential: Some(b64url_encode(&[1; 32])),
-        link_token: None,
-        reregistration,
+        credential: b64url_encode(&[1; 32]),
+        registration,
+    }
+}
+
+fn link() -> DeviceRegistrationV1 {
+    DeviceRegistrationV1::Link {
+        link_token: b64url_encode(&[5; 32]),
     }
 }
 
 #[test]
+fn registration_is_a_link_or_a_reregistration() {
+    registration(link()).validate().unwrap();
+    let json = serde_json::to_value(registration(link())).unwrap();
+    assert_eq!(json["registration"]["type"], "link");
+    assert!(json["registration"]["linkToken"].is_string());
+
+    // Exactly one kind, a credential, and nothing else.
+    let mut both = json.clone();
+    both["registration"]["manifest"] = serde_json::to_value(manifest(vec![device(1, 10)])).unwrap();
+    assert!(serde_json::from_value::<RegisterChatDeviceRequestV2>(both).is_err());
+    let mut neither = json.clone();
+    neither.as_object_mut().unwrap().remove("registration");
+    assert!(serde_json::from_value::<RegisterChatDeviceRequestV2>(neither).is_err());
+    let mut no_credential = json.clone();
+    no_credential.as_object_mut().unwrap().remove("credential");
+    assert!(serde_json::from_value::<RegisterChatDeviceRequestV2>(no_credential).is_err());
+    let mut extra = json;
+    extra["deviceSignature"] = "x".into();
+    assert!(serde_json::from_value::<RegisterChatDeviceRequestV2>(extra).is_err());
+
+    let mut padded = registration(link());
+    padded.credential = b64(&[1; 32]);
+    assert!(padded.validate().is_err());
+    let bad_token = registration(DeviceRegistrationV1::Link {
+        link_token: b64(&[5; 32]),
+    });
+    assert!(bad_token.validate().is_err());
+}
+
+#[test]
 fn reregistration_lists_this_device_alone() {
-    let alone = ReregistrationV1 {
-        manifest: manifest(vec![device(1, 10)]),
+    let alone = || DeviceRegistrationV1::Reregistration {
+        manifest: Box::new(manifest(vec![device(1, 10)])),
     };
-    alone.validate(&registration(None)).unwrap();
+    registration(alone()).validate().unwrap();
+    let json = serde_json::to_value(registration(alone())).unwrap();
+    assert_eq!(json["registration"]["type"], "reregistration");
+    assert!(json["registration"]["manifest"].is_object());
 
-    let mut with_token = registration(None);
-    with_token.link_token = Some(b64url_encode(&[5; 32]));
-    assert!(alone.validate(&with_token).is_err());
-
-    let mut other_registration = registration(None);
+    let mut other_registration = registration(alone());
     other_registration.registration_id = 11;
-    assert!(alone.validate(&other_registration).is_err());
+    assert!(other_registration.validate().is_err());
+    let mut other_identity = registration(alone());
+    other_identity.identity_key = identity(4);
+    assert!(other_identity.validate().is_err());
 
     for devices in [vec![device(1, 10), device(2, 20)], vec![device(2, 10)]] {
-        let bad = ReregistrationV1 {
-            manifest: manifest(devices),
-        };
-        assert!(bad.validate(&registration(None)).is_err());
+        let bad = registration(DeviceRegistrationV1::Reregistration {
+            manifest: Box::new(manifest(devices)),
+        });
+        assert!(bad.validate().is_err());
     }
-
-    // The fields round-trip and stay optional for today's clients.
-    let json = serde_json::to_value(registration(Some(alone))).unwrap();
-    assert!(json["reregistration"]["manifest"].is_object());
-    let mut today = json.clone();
-    for field in ["credential", "linkToken", "reregistration"] {
-        today.as_object_mut().unwrap().remove(field);
-    }
-    let parsed: RegisterChatDeviceRequest = serde_json::from_value(today).unwrap();
-    assert!(parsed.credential.is_none() && parsed.reregistration.is_none());
 }
+
+fn successor(head: &AccountManifestV2, devices: Vec<AccountManifestDeviceV2>) -> AccountManifestV2 {
+    let mut next = manifest(devices);
+    next.sequence = head.sequence + 1;
+    next.previous_hash = Some(head.manifest_hash().unwrap());
+    sign(&mut next);
+    next
+}
+
+#[test]
+fn successors_continue_the_chain() {
+    let head = two_devices();
+    let first = manifest(vec![device(1, 10)]);
+    first.verify_successor(None).unwrap();
+    let next = successor(&head, vec![device(1, 10)]);
+    next.verify_successor(Some(&head)).unwrap();
+
+    // A chain that starts over: sequence 1 again, while a head exists.
+    assert!(first.verify_successor(Some(&head)).is_err());
+    // Not sequence 1 with no head.
+    assert!(next.verify_successor(None).is_err());
+    // A skipped sequence, or another predecessor.
+    let mut skipped = next.clone();
+    skipped.sequence = 3;
+    sign(&mut skipped);
+    assert!(skipped.verify_successor(Some(&head)).is_err());
+    let mut forked = next.clone();
+    forked.previous_hash = Some(hex::encode([1; 32]));
+    sign(&mut forked);
+    assert!(forked.verify_successor(Some(&head)).is_err());
+
+    // Another authority (so another incarnation), signed by it.
+    let other = ed25519_dalek::SigningKey::from_bytes(&[9; 32]);
+    let public = other.verifying_key().to_bytes();
+    let mut incarnation = Sha256::new();
+    incarnation.update(b"kutup/account-incarnation/v1\0");
+    incarnation.update(public);
+    let mut foreign = next.clone();
+    foreign.self_authority_key = b64(&public);
+    foreign.authority_key_id = hex::encode(Sha256::digest(public));
+    foreign.incarnation_id = hex::encode(incarnation.finalize());
+    foreign.signature = b64(&other.sign(&foreign.signing_bytes().unwrap()).to_bytes());
+    foreign.verify().unwrap();
+    assert!(foreign.verify_successor(Some(&head)).is_err());
+
+    // A distribution's manifest must be such a successor: sequence 1 is not.
+    let mut distribution = distribution();
+    distribution.manifest = manifest(vec![device(1, 11), device(3, 31)]);
+    distribution.validate(1).unwrap();
+    assert!(distribution.manifest.verify_successor(Some(&head)).is_err());
+}
+
+#[test]
+fn history_page_pagination_and_authority() {
+    let first = two_devices();
+    let second = successor(&first, vec![device(1, 10)]);
+    let page = AccountManifestHistoryPageV2 {
+        account: first.account.clone(),
+        from_sequence: 1,
+        to_sequence: 3,
+        manifests: vec![first.clone(), second.clone()],
+        next_sequence: Some(3),
+    };
+    page.validate().unwrap();
+    for next_sequence in [None, Some(2), Some(4)] {
+        let bad = AccountManifestHistoryPageV2 {
+            next_sequence,
+            ..page.clone()
+        };
+        assert!(bad.validate().is_err(), "{next_sequence:?}");
+    }
+    let mut short = page.clone();
+    short.to_sequence = 2;
+    assert!(short.validate().is_err());
+    short.next_sequence = None;
+    short.validate().unwrap();
+}
+
+#[test]
+fn manifest_v2_vector_is_pinned() {
+    // The signing bytes and hash of the fixed test manifest: a change to the
+    // encoding is a deliberate format change, never an accident.
+    let manifest = two_devices();
+    let bytes = manifest.signing_bytes().unwrap();
+    assert_eq!(hex::encode(Sha256::digest(&bytes)), SIGNING_BYTES_SHA256);
+    assert_eq!(manifest.manifest_hash().unwrap(), MANIFEST_HASH);
+}
+
+const SIGNING_BYTES_SHA256: &str =
+    "7976993fcd92d5914bd4af66fc02b9c536b8b5a20240ae1cc5809197231cd016";
+const MANIFEST_HASH: &str = "7e6fb68b2b4b3320b388612daba86173ad311a440c9c5fcb5e65e602c815094b";
 
 #[test]
 fn account_identity_sync_body() {

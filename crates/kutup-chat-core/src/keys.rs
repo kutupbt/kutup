@@ -148,9 +148,6 @@ pub(crate) fn generate<R: Rng + CryptoRng>(
         one_time_kyber_pre_keys,
         name: name.into(),
         device_signature: None,
-        credential: None,
-        link_token: None,
-        reregistration: None,
     };
     seed.registration_upload = Some(Some(serde_json::to_vec(&registration).map_err(
         |error| crate::ChatError::Content(format!("serialize registration request: {error}")),

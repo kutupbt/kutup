@@ -162,7 +162,14 @@ fields Kutup needs of Signal's `ProvisionMessage`):
 | `manifestSequence`, `manifestHash` | — | the manifest the identity is listed in (the new device verifies the key against it, under the authority it derives from the master key) |
 | `profileKey` | `profileKey` | as Signal |
 | `readReceipts`, `typingIndicators` | `readReceipts` | the account's settings, as Signal |
+| `profileSuite` | — | the profile key's suite, as every Kutup profile key carries |
 | `provisioningVersion` | `provisioningVersion` | 1 |
+
+Signal's `userAgent` is left out (the server already tells the linking device
+the new device's name), and so are its backup keys (`ephemeralBackupKey`,
+`mediaRootBackupKey`, `accountEntropyPool`): Kutup's Chat backup and media
+keys come from the account master key, which every device has from signing
+in.
 
 The master key is **not** in it (Signal sends `masterKey`/`accountEntropyPool`
 because a linked Desktop has no other way to them; a Kutup device already has
@@ -345,7 +352,7 @@ open PRs when it is pushed):
   expires_at, used_at)`: single use, only the hash stored.
 
 **Device credentials** (Signal's per-device password):
-- `POST /api/chat/device` takes `credential` (32 random bytes, base64) and
+- `POST /api/chat/device` takes `credential` (32 random bytes, unpadded base64url) and
   stores only its salted hash.
 - Device-bound calls carry `X-Kutup-Chat-Device: <deviceId>.<credential>`
   beside the JWT: replenishing keys, `keys/check`, link tokens, identity
@@ -416,13 +423,21 @@ The server, in one transaction:
    transaction; then `DevicesChanged`.
 
 It serves "reset identity, keep my devices" (the lost device left out of the
-manifest), and an account with one device re-keying itself. **Re-registration** after every device is lost, and an account's first
-Chat device,
-is the same request from a new device with an empty `deviceMessages`: that
-device registers with `reregistration: true` and no link token, accepted only
-in the same call as a distribution whose manifest lists it alone; every other
-row is dropped (Signal's `reclaimAccount`). The gate is the account authority,
-so the master key.
+manifest), and an account with one device re-keying itself.
+
+**Re-registration** (after every device is lost, and an account's first Chat
+device) is one registration call, `POST /api/chat/device` with
+`registration: { type: "reregistration", manifest }` and no link token
+(`RegisterChatDeviceRequestV2`, whose `registration` is exactly one of `link`
+and `reregistration`, beside a required `credential`). The manifest is the
+account's next V2 manifest (`AccountManifestV2::verify_successor`: sequence 1
+with no `previousHash` when the account has none, otherwise the head's
+sequence + 1 with `previousHash` the head's hash) and lists this device alone
+as device 1 with the request's identity and registration id. In one
+transaction the server deletes every other device row of the account, inserts
+this one as device 1, sets the account identity and publishes the manifest
+(Signal's `reclaimAccount`). The gate is the account authority, so the master
+key.
 
 **Manifest V2 on publish** (`POST /api/chat/manifest`): its identity key
 equals `chat_account_identities` (a different one only through the
@@ -557,9 +572,10 @@ does and doesn't revoke.
   token response; `AccountIdentityDistributionRequest` with its row-free
   checks (`400`, or `409` with the device lists); `ReregistrationV1` (the
   manifest lists this device alone as device 1, the id left free once the
-  other rows go); the registration's `credential`, `linkToken` and
-  `reregistration` (optional until the cutover, then required as the rules
-  say); the `X-Kutup-Chat-Device` header; the `keys/check` digest; the
+  other rows go); `RegisterChatDeviceRequestV2` (a required
+  `credential`, and `registration`: exactly one of a link token and a
+  re-registration manifest); `AccountManifestV2::verify_successor`, the one
+  chain check every implementation uses; the `X-Kutup-Chat-Device` header; the `keys/check` digest; the
   `accountIdentity` sync body.
 - **kutup-chat-core:** `keys::generate` takes the identity instead of making
   one; the safety number and verified state per identity key (the Chat
