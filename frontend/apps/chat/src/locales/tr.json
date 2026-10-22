@@ -695,8 +695,8 @@
       "queued": "Yeni mesajlar bağlantı kurulunca görünecek. Gönderdiğiniz mesajlar da o zaman gönderilecek.",
       "retry": "Yeniden dene",
       "deviceRemoved": "Bu tarayıcı artık İleti cihazlarınızdan biri değil",
-      "deviceRemovedBody": "Başka bir cihazdan ya da uzun süre kullanılmadığı için hesabınızdan kaldırıldı. Mesajlar buraya ulaşmıyor. Yeniden kurmak onu baştan kaydeder ve geçmişinizi şifreli yedekten geri yükler; bu tarayıcıdan gönderilmeyi bekleyen mesajlar kaybolur.",
-      "setUpAgain": "Yeniden kur"
+      "deviceRemovedBody": "Başka bir cihazdan ya da uzun süre kullanılmadığı için hesabınızdan kaldırıldı veya Chat kimliğinizdeki bir değişikliği kaçırdı. Mesajlar buraya ulaşmıyor. Cihazlarınızdan birinden yeniden bağlayın; bu tarayıcıdaki geçmiş korunur.",
+      "linkAgain": "Yeniden bağla"
     },
     "groupUpdates": {
       "nameChanged": "{{actor}} grubun adını “{{name}}” olarak değiştirdi.",

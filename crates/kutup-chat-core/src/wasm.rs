@@ -1596,7 +1596,7 @@ impl WasmChatClient {
                 Engine::resume_registration(db, transport, account).await
             }
             crate::Installation::Unregistered { .. } => {
-                return Err(js_error("chatDeviceNotRegistered"));
+                return Err(js_error(DEVICE_NOT_REGISTERED));
             }
         }
         .map_err(chat_error)?;
@@ -1686,8 +1686,13 @@ impl WasmChatClient {
             )
             .map_err(chat_error)?;
         engine.set_sealed_sender_enabled(sealed_sender_enabled);
-        // A kept identity sync from a run that stopped before applying it.
-        engine.apply_account_identity().await.map_err(chat_error)?;
+        // The account's identity: a kept sync from a run that stopped before
+        // applying it, one that waits in the mailbox, or none (this device
+        // missed it and is linked again).
+        engine
+            .catch_up_identity(&mut rng)
+            .await
+            .map_err(chat_error)?;
         engine
             .sync_own_manifest(&authority, now_rfc3339())
             .await
@@ -6386,8 +6391,15 @@ fn transport_error(value: JsValue) -> ChatError {
 }
 
 fn chat_error(error: ChatError) -> JsValue {
-    js_error(&error.to_string())
+    match error {
+        // The web links it again (`ChatServiceError('linkRequired')`).
+        ChatError::LinkRequired => js_error(DEVICE_NOT_REGISTERED),
+        error => js_error(&error.to_string()),
+    }
 }
+
+/// The error a browser without a device of the account opens with.
+const DEVICE_NOT_REGISTERED: &str = "chatDeviceNotRegistered";
 
 fn js_error(message: &str) -> JsValue {
     js_sys::Error::new(message).into()

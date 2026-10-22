@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { ChatService, type ChatConnectionStatus } from './service'
+import { ChatService, isLinkRequired, type ChatConnectionStatus } from './service'
 
 vi.mock('@kutup/session/client', () => ({
   default: {
@@ -110,6 +110,25 @@ describe('ChatService connection status', () => {
     await vi.advanceTimersByTimeAsync(60_000)
     expect(FakeSocket.instances).toHaveLength(0)
     expect(statuses).toEqual(['deviceRemoved'])
+  })
+
+  it('says the device was removed when it missed the account\'s identity', async () => {
+    const { service, statuses } = socketService()
+    const missed = new Error('chatDeviceNotRegistered')
+    Object.assign(service, {
+      reconcile: ChatService.prototype.reconcile,
+      reconcilePromise: null,
+      reconcileAgain: false,
+      withLock: (run: () => Promise<unknown>) => run(),
+      client: {
+        purgeExpiredMessages: vi.fn().mockResolvedValue([]),
+        reconcile: vi.fn().mockRejectedValue(missed),
+      },
+    })
+    await expect(service.reconcile()).rejects.toBe(missed)
+    expect(service.connectionStatus()).toBe('deviceRemoved')
+    expect(statuses).toEqual(['deviceRemoved'])
+    expect(isLinkRequired(new Error('device trust: something else'))).toBe(false)
   })
 
   it('does not take a 404 from something else for a removed device', async () => {

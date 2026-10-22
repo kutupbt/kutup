@@ -584,6 +584,13 @@ impl Session {
         Ok(())
     }
 
+    /// This device missed the account's identity: forget its registration
+    /// (its history stays) so it is linked again.
+    pub(crate) async fn forget_registration(&mut self) -> Result<()> {
+        self.store.stage_registration_forgotten();
+        self.store.commit().await
+    }
+
     // ----- single-op public API (each commits atomically) -----
 
     /// Establish an outbound session to `peer` from its served prekey bundle.

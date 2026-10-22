@@ -142,9 +142,10 @@ const GROUP_SYNC_FIRST_MS = 15_000
  * WebSockets, say) but the server answers ordinary requests, so the mailbox
  * is read every few seconds instead.
  *
- * `deviceRemoved`: the server no longer knows this browser's Chat device (it
- * was revoked from another device, or expired unused). Nothing reconnects
- * it; it has to be set up again.
+ * `deviceRemoved`: this browser is no longer a Chat device of the account (it
+ * was revoked from another device, expired unused, or missed an identity
+ * distribution). Nothing reconnects it; it is linked again, keeping its
+ * history.
  */
 export type ChatConnectionStatus = 'connected' | 'connecting' | 'polling' | 'offline' | 'deviceRemoved'
 
@@ -499,7 +500,9 @@ export class ChatService {
         } catch (error) {
           // This browser's device was removed while it was closed: it is
           // linked again (its history stays), like a new one.
-          if (takeDeviceCredentialRefusal()) throw new ChatServiceError('linkRequired')
+          if (takeDeviceCredentialRefusal() || isLinkRequired(error)) {
+            throw new ChatServiceError('linkRequired')
+          }
           throw error
         }
         // Taken over before there was a client to claim with: claim now.
@@ -1651,6 +1654,15 @@ export class ChatService {
           if (this.mls?.takeInvitationsChanged() || entered) this.emitUpdate()
         }
         return report
+      })
+      .catch((error: unknown) => {
+        // The account moved to an identity this device missed: it has
+        // forgotten its registration and is linked again (its history stays).
+        if (isLinkRequired(error)) {
+          this.stopPolling()
+          this.setConnection('deviceRemoved')
+        }
+        throw error
       })
       .finally(() => {
         this.reconcilePromise = null
@@ -2967,6 +2979,15 @@ function parseCallBroadcast(value: unknown): ChatCallEvent | null {
 }
 
 /** The server's answer when it does not know this browser's Chat device. */
+/**
+ * The core's answer that this browser has no device of the account: it
+ * never had one, or it missed an identity distribution and forgot its
+ * registration. It is linked again, keeping its history.
+ */
+export function isLinkRequired(error: unknown): boolean {
+  return error instanceof Error && error.message === 'chatDeviceNotRegistered'
+}
+
 function isNoSuchDevice(body: unknown): boolean {
   return typeof body === 'object' && body !== null && (body as { error?: unknown }).error === 'no such chat device'
 }

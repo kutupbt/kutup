@@ -66,6 +66,7 @@ impl From<ChatError> for KutupChatError {
             },
             ChatError::SendNotConverged(attempts) => Self::SendNotConverged { attempts },
             ChatError::MissingBundle(device_id) => Self::MissingBundle { device_id },
+            ChatError::LinkRequired => Self::LinkRequired,
         }
     }
 }

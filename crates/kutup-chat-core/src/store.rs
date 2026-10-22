@@ -360,6 +360,21 @@ impl ChatStore {
         pending.registration_upload = Some(None);
     }
 
+    /// This device is no longer one of the account's: it keeps its history
+    /// and its identity material, but neither a device id nor a credential,
+    /// so it opens as a device to link (as a store from before the account
+    /// identity does).
+    pub(crate) fn stage_registration_forgotten(&self) {
+        let mut pending = self.pending.borrow_mut();
+        pending.local_identity = Some(LocalIdentity {
+            identity_key_pair: self.identity_store.key_pair.serialize().to_vec(),
+            registration_id: self.identity_store.registration_id,
+            device_id: None,
+            credential: None,
+        });
+        pending.pending_account_identity = Some(None);
+    }
+
     pub(crate) fn stage_generated_pre_key(&self, id: u32, record: Vec<u8>) {
         self.pending.borrow_mut().pre_keys.insert(id, Some(record));
     }

@@ -226,6 +226,10 @@ pub(crate) fn verify_own_manifest(
     Ok(())
 }
 
+/// Manifests [`Engine::catch_up_identity`] follows before it gives up for
+/// now (each a distribution made while it caught up).
+const IDENTITY_CATCH_UP_ROUNDS: usize = 4;
+
 impl Engine {
     /// Where `db` stands: a registered device, a registration to finish, or
     /// none (link or re-register, by whether the account has an identity).
@@ -642,11 +646,12 @@ impl Engine {
     /// account's manifest, verified under its authority, lists exactly this
     /// identity and this device with this registration id — then install the
     /// identity, its keys and the registration id. A sync the account has
-    /// moved past (a later distribution) is dropped: this device is then no
-    /// longer the account's and is linked again.
-    pub(crate) async fn apply_account_identity(&mut self) -> Result<()> {
+    /// moved past (a later distribution) is dropped, and `false` says so:
+    /// [`Engine::catch_up_identity`] then finds whether a later one is on its
+    /// way or this device missed it.
+    pub(crate) async fn apply_account_identity(&mut self) -> Result<bool> {
         let Some(encoded) = self.session.db().load_pending_account_identity().await? else {
-            return Ok(());
+            return Ok(true);
         };
         let encoded = Zeroizing::new(encoded);
         let body: kutup_chat_proto::AccountIdentityBody = serde_json::from_slice(&encoded)
@@ -672,9 +677,7 @@ impl Engine {
             };
         if !current {
             self.session.drop_pending_account_identity().await?;
-            return Err(ChatError::Trust(
-                "the account's identity moved past this device's distribution".into(),
-            ));
+            return Ok(false);
         }
         let identity = identity_from_parts(&body.identity_key_public, &body.identity_key_private)?;
         let signed = decode_record(&body.signed_pre_key)?;
@@ -711,7 +714,43 @@ impl Engine {
                 (last_resort_id, last_resort),
             )
             .await?;
-        self.reopen_after_identity_change(&head).await
+        self.reopen_after_identity_change(&head).await?;
+        Ok(true)
+    }
+
+    /// Bring this device to the account's identity, or find that it missed
+    /// it. A device that was offline through a distribution finds its
+    /// `accountIdentity` sync in its mailbox: the account's manifest is read
+    /// first and the mailbox drained after, so a sync for that manifest is
+    /// in the drain. If the same manifest still names another identity
+    /// afterwards, this device wasn't kept (or lost the sync): it forgets
+    /// its registration, keeping its history, and is linked again
+    /// ([`ChatError::LinkRequired`]).
+    pub async fn catch_up_identity<R: Rng + CryptoRng>(&mut self, rng: &mut R) -> Result<()> {
+        let account = self.self_account()?;
+        let user = self.session.user().to_string();
+        let mut drained_after: Option<String> = None;
+        for _ in 0..IDENTITY_CATCH_UP_ROUNDS {
+            self.apply_account_identity().await?;
+            let head = Rc::clone(&self.transport)
+                .fetch_manifest(&user)
+                .await?
+                .ok_or_else(|| ChatError::Trust("the account has no manifest".into()))?;
+            verify_own_manifest(&head, &account, &self.group_keys()?.authority)?;
+            if head.identity_key == self.session.account_identity_key() {
+                return Ok(());
+            }
+            let hash = head.manifest_hash().map_err(ChatError::Trust)?;
+            if drained_after.as_deref() == Some(hash.as_str()) {
+                self.session.forget_registration().await?;
+                return Err(ChatError::LinkRequired);
+            }
+            self.receive_pass(rng).await?;
+            drained_after = Some(hash);
+        }
+        Err(ChatError::Trust(
+            "the account's identity kept changing while this device caught up".into(),
+        ))
     }
 
     /// After this device's identity changed: open the session again on the
@@ -963,6 +1002,73 @@ mod tests {
         );
     }
 
+    /// A kept device that was closed through the distribution opens on the
+    /// old identity: catching up drains its mailbox and takes the sync
+    /// waiting there.
+    #[test]
+    fn a_kept_device_closed_through_a_distribution_catches_up() {
+        let world = World::new();
+        let mut alice = world.person(1);
+        let mut alice2 = world.link_device(&mut alice);
+        block_on(alice.engine.reset_identity(&[], ISSUED_AT, &mut rng())).unwrap();
+        let new_identity = alice.engine.session().account_identity_key();
+        assert_ne!(alice2.engine.session().account_identity_key(), new_identity);
+        block_on(alice2.engine.catch_up_identity(&mut rng())).unwrap();
+        assert_eq!(alice2.engine.session().account_identity_key(), new_identity);
+        assert!(block_on(alice2.engine.session().db().load_local_identity())
+            .unwrap()
+            .unwrap()
+            .credential
+            .is_some());
+    }
+
+    /// A device that missed the distribution (its sync never came) isn't
+    /// left on an identity nobody uses: it forgets its registration, keeps
+    /// its history, and opens as a device to link.
+    #[test]
+    fn a_device_that_missed_a_distribution_is_linked_again() {
+        use crate::group_harness_tests::befriend;
+        let world = World::new();
+        let mut alice = world.person(1);
+        let mut alice2 = world.link_device(&mut alice);
+        let mut bob = world.person(2);
+        befriend(&mut alice2, &mut bob);
+        let history = block_on(alice2.engine.session().sent_history())
+            .unwrap()
+            .len();
+        assert!(history > 0);
+        block_on(alice.engine.reset_identity(&[], ISSUED_AT, &mut rng())).unwrap();
+        world.retain_mailbox(&alice2.account, alice2.device(), |_| false);
+
+        assert!(matches!(
+            block_on(alice2.engine.catch_up_identity(&mut rng())),
+            Err(ChatError::LinkRequired)
+        ));
+        let local = block_on(alice2.engine.session().db().load_local_identity())
+            .unwrap()
+            .unwrap();
+        assert_eq!(local.credential, None);
+        assert_eq!(local.device_id, None);
+        assert_eq!(
+            block_on(Engine::installation(
+                alice2.engine.session().db().as_ref(),
+                alice2.client.as_ref(),
+                &alice2.account,
+            ))
+            .unwrap(),
+            Installation::Unregistered {
+                account_has_identity: true
+            }
+        );
+        assert_eq!(
+            block_on(alice2.engine.session().sent_history())
+                .unwrap()
+                .len(),
+            history,
+            "its history stays"
+        );
+    }
+
     /// A contact reads a message sent under the account's new identity
     /// (sealed, before they saw the manifest that lists it): they fetch the
     /// account's signed manifest, take the new identity, see one "safety
@@ -1087,7 +1193,8 @@ mod tests {
     }
 
     /// A sync the account moved past (a second reset before the device read
-    /// the first) is dropped: the device is no longer the account's.
+    /// the first) is dropped; with nothing newer in its mailbox the device is
+    /// no longer the account's and is linked again.
     #[test]
     fn a_distribution_the_account_moved_past_is_dropped() {
         let world = World::new();
@@ -1096,7 +1203,14 @@ mod tests {
         block_on(alice.engine.reset_identity(&[], ISSUED_AT, &mut rng())).unwrap();
         block_on(alice.engine.reset_identity(&[], ISSUED_AT, &mut rng())).unwrap();
         let result = block_on(alice2.engine.receive(&mut rng()));
-        assert!(matches!(result, Err(ChatError::Trust(_))), "{result:?}");
+        assert!(matches!(result, Err(ChatError::LinkRequired)), "{result:?}");
+        assert_eq!(
+            block_on(alice2.engine.session().db().load_local_identity())
+                .unwrap()
+                .unwrap()
+                .credential,
+            None
+        );
         assert!(
             block_on(alice2.engine.session().db().load_pending_account_identity())
                 .unwrap()

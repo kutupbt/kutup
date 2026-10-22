@@ -49,8 +49,8 @@ test('a failure of this browser\'s own state offers the repair', async ({ browse
 })
 
 // A device revoked from another browser used to sit on "Reconnecting…"
-// for ever. It is told what happened and can register afresh.
-test('a browser whose device was removed elsewhere says so and can be set up again', async ({ browser }) => {
+// for ever. It is told what happened and is linked again.
+test('a browser whose device was removed elsewhere says so and can be linked again', async ({ browser }) => {
   test.slow()
   const account = newAccount('removed', PASSWORD)
   const contextA = await browser.newContext()
@@ -64,9 +64,9 @@ test('a browser whose device was removed elsewhere says so and can be set up aga
   await revokeOtherDevices(pageB, 1)
 
   await expect(pageA.getByText('This browser is no longer one of your Chat devices')).toBeVisible({ timeout: 120_000 })
-  await pageA.getByRole('button', { name: 'Set up again' }).click()
-  // Set up again: the account's identity is on the other browser, which
-  // links this one again.
+  await pageA.getByRole('button', { name: 'Link again' }).click()
+  // The account's identity is on the other browser, which links this one
+  // again.
   await linkDevice(pageB, pageA)
   await openSettings(pageA, 'Linked devices')
   await expect(pageA.getByTestId('chat-device-status')).toHaveAttribute('data-device-id', /^\d+$/, { timeout: 120_000 })

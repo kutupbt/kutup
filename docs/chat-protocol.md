@@ -182,6 +182,14 @@ the commit that acknowledges it and installs it once the account's manifest
 lists exactly that identity and its registration id. A lost or stolen device
 is removed this way by default, so the identity it holds is useless.
 
+A device that opens (or reads a sync the account moved past) while the
+account's manifest names another identity catches up: it reads the manifest,
+then drains its mailbox, where the sync for that manifest would be. If the
+same manifest still names another identity afterwards, the device missed the
+distribution: it forgets its device id and credential, keeps its history,
+and is linked again (the web shows "link this device"; native clients get
+`LinkRequired`).
+
 The signing representation is domain-separated deterministic binary encoding
 with fixed-width integers and big-endian length-prefixed UTF-8/byte fields.
 JSON is transport only.

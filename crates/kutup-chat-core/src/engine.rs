@@ -2055,11 +2055,15 @@ impl Engine {
         let report = self.receive_pass(rng).await?;
         // An identity distribution another device of this account sent this
         // one, kept by the pass (or by an earlier run that stopped first).
-        self.apply_account_identity().await?;
+        // One the account moved past: a later one may be on its way, or this
+        // device missed it.
+        if !self.apply_account_identity().await? {
+            self.catch_up_identity(rng).await?;
+        }
         Ok(report)
     }
 
-    async fn receive_pass<R: Rng + CryptoRng>(&mut self, rng: &mut R) -> Result<ReceiveReport> {
+    pub(crate) async fn receive_pass<R: Rng + CryptoRng>(&mut self, rng: &mut R) -> Result<ReceiveReport> {
         self.set_state(EngineState::CatchingUp);
         let transport = Rc::clone(&self.transport);
         let device_id = self.session.device_id();

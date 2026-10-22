@@ -540,6 +540,9 @@ fn worker_main(
         engine.enable_identity_pins(&config.master_key, &config.binding)?;
         engine.enable_group_list(&config.master_key, &config.binding)?;
         config.master_key.zeroize();
+        // The account's identity: a kept sync, one in the mailbox, or none
+        // (this device missed it: `LinkRequired`).
+        engine.catch_up_identity(&mut rng).await?;
         engine.sync_own_manifest(&authority, now_rfc3339()?).await?;
         Result::<_>::Ok((engine, authority))
     });
