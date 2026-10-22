@@ -895,6 +895,106 @@
     "2026-10-26T14:00:00Z",
     "2026-10-30T14:00:00Z"
    ]
+  },
+  {
+   "name": "daily through a fold (New York, November)",
+   "rule": "FREQ=DAILY;COUNT=4",
+   "take": 5,
+   "start": {
+    "zoned": {
+     "local": "2026-10-30T01:30:00",
+     "tzid": "America/New_York"
+    }
+   },
+   "local": [
+    "2026-10-30T01:30:00",
+    "2026-10-31T01:30:00",
+    "2026-11-01T01:30:00",
+    "2026-11-02T01:30:00"
+   ],
+   "utc": [
+    "2026-10-30T05:30:00Z",
+    "2026-10-31T05:30:00Z",
+    "2026-11-01T05:30:00Z",
+    "2026-11-02T06:30:00Z"
+   ]
+  },
+  {
+   "name": "weekly with two EXDATEs",
+   "rule": "FREQ=WEEKLY;COUNT=5",
+   "take": 10,
+   "exdates": [
+    "2026-11-09T09:00:00",
+    "2026-11-23T09:00:00"
+   ],
+   "start": {
+    "zoned": {
+     "local": "2026-11-02T09:00:00",
+     "tzid": "Europe/Istanbul"
+    }
+   },
+   "local": [
+    "2026-11-02T09:00:00",
+    "2026-11-16T09:00:00",
+    "2026-11-30T09:00:00"
+   ],
+   "utc": [
+    "2026-11-02T06:00:00Z",
+    "2026-11-16T06:00:00Z",
+    "2026-11-30T06:00:00Z"
+   ]
+  },
+  {
+   "name": "all-day monthly with an EXDATE",
+   "rule": "FREQ=MONTHLY;COUNT=4",
+   "take": 10,
+   "exdates": [
+    "2027-02-15"
+   ],
+   "start": {
+    "date": "2027-01-15"
+   },
+   "local": [
+    "2027-01-15",
+    "2027-03-15",
+    "2027-04-15"
+   ]
+  },
+  {
+   "name": "February 30th never occurs",
+   "rule": "FREQ=YEARLY;BYMONTHDAY=30;BYMONTH=2",
+   "take": 0,
+   "refused": true,
+   "local": [],
+   "start": {
+    "date": "2027-02-01"
+   }
+  },
+  {
+   "name": "DTSTART not on the rule's day",
+   "rule": "FREQ=MONTHLY;BYMONTHDAY=30",
+   "take": 0,
+   "refused": true,
+   "local": [],
+   "start": {
+    "zoned": {
+     "local": "2027-01-15T09:00:00",
+     "tzid": "Europe/Berlin"
+    }
+   }
+  },
+  {
+   "name": "DTSTART not on the rule's weekdays",
+   "rule": "FREQ=WEEKLY;BYDAY=TU,TH",
+   "take": 0,
+   "refused": true,
+   "local": [],
+   "start": {
+    "zoned": {
+     "local": "2026-10-21T09:00:00",
+     "tzid": "UTC"
+    }
+   }
   }
  ]
 }

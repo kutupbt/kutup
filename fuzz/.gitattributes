@@ -1,0 +1,2 @@
+# Fuzz seeds are raw inputs (iCalendar text is CRLF): kept byte for byte.
+seeds/** binary

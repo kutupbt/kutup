@@ -1243,9 +1243,14 @@ if (build === 'crypto') {
     const rule = crypto.calendarReadRule(c.rule)
     const text = crypto.calendarRuleText(rule)
     assert.deepEqual(crypto.calendarReadRule(text), rule, c.name)
+    const exdate = (value) => ('date' in start ? { date: value } : 'utc' in start ? { utc: `${value}Z` } : { zoned: { local: value, tzid: start.zoned.tzid } })
     const fields = {
       uid: 'r@kutup.test', dtstamp: '2026-10-22T08:00:00Z', created: null, start, end: null, recurrenceId: null,
-      rrule: text, organizer: null, summary: null, description: null, location: null, status: null, transp: null, comment: null,
+      rrule: text, exdates: (c.exdates ?? []).map(exdate), organizer: null, summary: null, description: null, location: null, status: null, transp: null, comment: null,
+    }
+    if (c.refused) {
+      assert.throws(() => crypto.calendarOccurrences(fields, '1970-01-01T00:00:00Z', '2038-01-01T00:00:00Z', 10), c.name)
+      continue
     }
     const occurrences = crypto.calendarOccurrences(fields, '1970-01-01T00:00:00Z', '2038-01-01T00:00:00Z', c.take)
     const local = occurrences.map((o) => o.start.date ?? o.start.zoned?.local ?? o.start.utc.replace('Z', '').replace(/\.\d+$/, ''))

@@ -175,6 +175,14 @@ impl Rule {
         if text.is_empty() || text.len() > MAX_RULE_LEN {
             return Err(invalid("empty or too long"));
         }
+        // RFC 5545 recur values are ASCII; anything else is refused before a
+        // part is cut.
+        if !text
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b"=;,-+".contains(&b))
+        {
+            return Err(invalid("characters outside RFC 5545's recur syntax"));
+        }
         let mut frequency = None;
         let mut rule = Rule {
             frequency: Frequency::Daily,
@@ -476,7 +484,7 @@ pub struct Occurrence {
 pub struct Series {
     start: EventTime,
     rule: Option<Rule>,
-    /// The removed occurrences' wall-clock starts.
+    /// The removed occurrences' wall-clock starts, sorted.
     excluded: Vec<civil::DateTime>,
     /// All-day: how many days each occurrence lasts. Timed: how long, on the
     /// wall clock of the start's zone.
@@ -529,6 +537,9 @@ impl Series {
             }
             (_, None) => Length::Time(SignedDuration::ZERO),
         };
+        if exdates.len() > crate::calendar_event::MAX_EXDATES {
+            return Err(CryptoError::InvalidInput("too many EXDATEs".into()));
+        }
         if rule.is_none() && !exdates.is_empty() {
             return Err(CryptoError::InvalidInput("EXDATE without RRULE".into()));
         }
@@ -547,6 +558,8 @@ impl Series {
             }
             excluded.push(local_of(exdate));
         }
+        excluded.sort();
+        excluded.dedup();
         let series = Series {
             start: start.clone(),
             rule: rule.cloned(),
@@ -651,7 +664,7 @@ impl Series {
     /// Every occurrence in order, `EXDATE`s removed.
     pub fn occurrences(&self) -> impl Iterator<Item = Result<Occurrence>> + '_ {
         self.candidates()
-            .filter(|(_, local)| !self.excluded.contains(local))
+            .filter(|(_, local)| self.excluded.binary_search(local).is_err())
             .map(|(number, local)| self.occurrence(number, local))
     }
 
@@ -1004,6 +1017,15 @@ pub fn supported_until_v1(start: &TimeV1, date: &str) -> Result<TimeV1> {
     })
 }
 
+/// The series of an event's fields after every check its shared signed part
+/// makes when built (EXDATE count, RECURRENCE-ID without a rule), so the
+/// browser draws only what a server would store.
+fn checked_series(fields: &EventFieldsV1) -> Result<Series> {
+    let shared = fields.to_parts()?.shared_signed;
+    shared.build()?;
+    shared.series()
+}
+
 /// An event's occurrences meeting `[from, to)` (RFC 3339), at most `max`.
 pub fn occurrences_v1(
     fields: &EventFieldsV1,
@@ -1015,7 +1037,7 @@ pub fn occurrences_v1(
         text.parse()
             .map_err(|_| CryptoError::InvalidInput("instant is invalid".into()))
     };
-    let series = fields.to_parts()?.shared_signed.series()?;
+    let series = checked_series(fields)?;
     Ok(series
         .occurrences_between(instant(from)?, instant(to)?, max)?
         .iter()
@@ -1025,7 +1047,7 @@ pub fn occurrences_v1(
 
 /// When an event's last occurrence ends (RFC 3339), or `None` without end.
 pub fn range_end_v1(fields: &EventFieldsV1) -> Result<Option<String>> {
-    let series = fields.to_parts()?.shared_signed.series()?;
+    let series = checked_series(fields)?;
     Ok(series.range_end()?.map(|end| end.to_string()))
 }
 
@@ -1078,6 +1100,22 @@ mod tests {
             Rule::read("FREQ=MONTHLY;BYDAY=2TU").unwrap().write(),
             "FREQ=MONTHLY;BYSETPOS=2;BYDAY=TU"
         );
+    }
+
+    /// A multi-byte character where a weekday's two letters are cut must be
+    /// refused, never panic (the server reads rules from clients and peers).
+    #[test]
+    fn non_ascii_is_refused_without_panicking() {
+        for text in [
+            "FREQ=WEEKLY;BYDAY=aéM",
+            "FREQ=WEEKLY;BYDAY=é",
+            "FREQ=MONTHLY;BYDAY=2é",
+            "FREQ=DAİLY",
+            "FREQ=WEEKLY;BYDAY=MO,ü",
+        ] {
+            assert!(Rule::read(text).is_err(), "{text}");
+            assert!(Rule::parse(text).is_err(), "{text}");
+        }
     }
 
     #[test]

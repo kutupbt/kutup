@@ -37,6 +37,24 @@ CASES = [
   ("weekly in a gap hour (New York, March)", "2027-03-07T02:30:00", "America/New_York", "FREQ=WEEKLY;COUNT=3", 5),
   ("every 3 months", "2026-11-30T12:00:00", "Asia/Tokyo", "FREQ=MONTHLY;INTERVAL=3;COUNT=5", 10),
   ("UTC weekly", "2026-10-23T14:00:00", "UTC", "FREQ=WEEKLY;COUNT=3;BYDAY=MO,FR", 5),
+  # A wall time in the repeated hour (New York, November): the earlier offset.
+  ("daily through a fold (New York, November)", "2026-10-30T01:30:00", "America/New_York", "FREQ=DAILY;COUNT=4", 5),
+]
+
+# Cases with EXDATEs (wall-clock times in DTSTART's form), expanded by a
+# dateutil rruleset.
+EXDATE_CASES = [
+  ("weekly with two EXDATEs", "2026-11-02T09:00:00", "Europe/Istanbul", "FREQ=WEEKLY;COUNT=5",
+   ["2026-11-09T09:00:00", "2026-11-23T09:00:00"], 10),
+  ("all-day monthly with an EXDATE", "2027-01-15", None, "FREQ=MONTHLY;COUNT=4", ["2027-02-15"], 10),
+]
+
+# Rules refused for their DTSTART: no occurrence at all, or DTSTART not the
+# rule's first occurrence.
+REFUSED = [
+  ("February 30th never occurs", "2027-02-01", None, "FREQ=YEARLY;BYMONTHDAY=30;BYMONTH=2"),
+  ("DTSTART not on the rule's day", "2027-01-15T09:00:00", "Europe/Berlin", "FREQ=MONTHLY;BYMONTHDAY=30"),
+  ("DTSTART not on the rule's weekdays", "2026-10-21T09:00:00", "UTC", "FREQ=WEEKLY;BYDAY=TU,TH"),
 ]
 
 def utc_text(dt):
@@ -78,6 +96,37 @@ for name, start, tzid, rule, take in CASES:
         z = ZoneInfo(tzid)
         utc = [utc_text(o.replace(tzinfo=z, fold=0)) for o in local]
         case["utc"] = utc
+    out.append(case)
+
+from dateutil.rrule import rruleset
+
+for name, start, tzid, rule, exdates, take in EXDATE_CASES:
+    all_day = tzid is None
+    def parse(value):
+        if all_day:
+            d = date.fromisoformat(value)
+            return datetime(d.year, d.month, d.day)
+        return datetime.fromisoformat(value)
+    dtstart = parse(start)
+    rs = rruleset()
+    rs.rrule(rrulestr(rule, dtstart=dtstart))
+    for value in exdates:
+        rs.exdate(parse(value))
+    local = [o for i, o in enumerate(rs) if i < take]
+    case = {"name": name, "rule": rule, "take": take, "exdates": exdates}
+    if all_day:
+        case["start"] = {"date": start}
+        case["local"] = [o.strftime("%Y-%m-%d") for o in local]
+    else:
+        case["start"] = {"zoned": {"local": start, "tzid": tzid}}
+        case["local"] = [o.strftime("%Y-%m-%dT%H:%M:%S") for o in local]
+        z = ZoneInfo(tzid)
+        case["utc"] = [utc_text(o.replace(tzinfo=z, fold=0)) for o in local]
+    out.append(case)
+
+for name, start, tzid, rule in REFUSED:
+    case = {"name": name, "rule": rule, "take": 0, "refused": True, "local": []}
+    case["start"] = {"date": start} if tzid is None else {"zoned": {"local": start, "tzid": tzid}}
     out.append(case)
 
 json.dump({"version": 1, "generator": "python-dateutil 2.9.0.post0", "cases": out},

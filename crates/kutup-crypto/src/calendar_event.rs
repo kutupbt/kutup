@@ -315,10 +315,10 @@ impl SharedSigned {
         if let Some(rule) = &self.rrule {
             lines.push(format!("RRULE:{rule}"));
         }
-        // The rule in its canonical form, fitting the start, and at least
-        // one occurrence left.
-        self.series()?;
+        // The EXDATE count first, then the rule in its canonical form,
+        // fitting the start, and at least one occurrence left.
         push_exdates(&mut lines, &self.exdates)?;
+        self.series()?;
         if let Some(organizer) = &self.organizer {
             check_mailto(organizer)?;
             lines.push(format!("ORGANIZER:{organizer}"));

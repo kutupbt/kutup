@@ -24,6 +24,13 @@ struct Case {
     local: Vec<String>,
     #[serde(default)]
     utc: Vec<String>,
+    /// Wall-clock times in DTSTART's form.
+    #[serde(default)]
+    exdates: Vec<String>,
+    /// A rule refused for its DTSTART (no occurrence, or DTSTART not its
+    /// first).
+    #[serde(default)]
+    refused: bool,
 }
 
 #[derive(Deserialize)]
@@ -53,8 +60,24 @@ fn every_case_expands_as_dateutil_does() {
         let rule = Rule::read(&case.rule).unwrap_or_else(|e| panic!("{}: {e}", case.name));
         // The canonical text reads strictly and gives the same rule.
         assert_eq!(Rule::parse(&rule.write()).unwrap(), rule, "{}", case.name);
-        let series = Series::new(&start, None, Some(&rule), &[])
-            .unwrap_or_else(|e| panic!("{}: {e}", case.name));
+        let exdates: Vec<EventTime> = case
+            .exdates
+            .iter()
+            .map(|value| match &start {
+                EventTime::Date(_) => EventTime::Date(value.parse().unwrap()),
+                EventTime::Utc(_) => EventTime::Utc(format!("{value}Z").parse().unwrap()),
+                EventTime::Zoned { tzid, .. } => EventTime::Zoned {
+                    local: value.parse().unwrap(),
+                    tzid: tzid.clone(),
+                },
+            })
+            .collect();
+        let series = Series::new(&start, None, Some(&rule), &exdates);
+        if case.refused {
+            assert!(series.is_err(), "{} is refused", case.name);
+            continue;
+        }
+        let series = series.unwrap_or_else(|e| panic!("{}: {e}", case.name));
         let occurrences: Vec<_> = series
             .occurrences()
             .take(case.take)
