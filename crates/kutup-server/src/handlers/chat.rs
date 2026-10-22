@@ -28,8 +28,8 @@ use uuid::Uuid;
 
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
 use kutup_chat_proto::{
-    capability_hash, constant_time_capability_hash_eq, AccountManifestDeviceV1,
-    AccountManifestHistoryPageV1, AccountManifestPublicationV1, AccountManifestV1, AccountRef,
+    capability_hash, constant_time_capability_hash_eq, AccountManifestHistoryPageV2,
+    AccountManifestPublicationV2, AccountManifestV2, AccountRef,
     AckRequest, AnonymousPreKeyRequestV1, ChatProfileResponse, ChatWsClientMessage,
     ChatWsServerMessage, ChatWsTicketResponse, DeliveredEnvelope, DeviceListMismatch,
     DevicePreKeyBundle, DirectChatSuiteId, EcPreKey, EnvelopeType, KemPreKey, MailboxPage,
@@ -232,21 +232,6 @@ fn envelope_type_from_code(code: i16) -> EnvelopeType {
     }
 }
 
-fn validate_manifest(manifest: &AccountManifestV1) -> AppResult<()> {
-    if manifest.sequence > i64::MAX as u64 {
-        return Err(AppError::bad_request("manifest version is too large"));
-    }
-    manifest.verify().map_err(AppError::bad_request)?;
-    let issued_at = OffsetDateTime::parse(&manifest.issued_at, &Rfc3339)
-        .map_err(|_| AppError::bad_request("manifest issuedAt must be RFC 3339"))?;
-    if issued_at > OffsetDateTime::now_utc() + time::Duration::minutes(10) {
-        return Err(AppError::bad_request(
-            "manifest issuedAt is too far in the future",
-        ));
-    }
-    Ok(())
-}
-
 fn validate_profile(
     profile: &PutChatProfileRequest,
     expected_account: &AccountRef,
@@ -407,6 +392,7 @@ pub async fn register_device(
     auth: AuthUser,
     Json(req): Json<RegisterChatDeviceRequest>,
 ) -> AppResult<Response> {
+    use crate::handlers::chat_identity as identity;
     let user_id = trusted_uuid(&auth.user_id)?;
 
     if req.registration_id == 0 || req.registration_id > MAX_REGISTRATION_ID {
@@ -419,7 +405,6 @@ pub async fn register_device(
             "one-time prekey batches are limited to 100 keys per type",
         ));
     }
-    b64_field("identityKey", &req.identity_key)?;
     validate_ec_prekey("signedPreKey", &req.signed_pre_key, true)?;
     validate_kem_prekey("lastResortKyberPreKey", &req.last_resort_kyber_pre_key)?;
     for k in &req.one_time_pre_keys {
@@ -428,9 +413,36 @@ pub async fn register_device(
     for k in &req.one_time_kyber_pre_keys {
         validate_kem_prekey("oneTimeKyberPreKeys", k)?;
     }
+    let credential = kutup_chat_proto::decode_device_credential(
+        req.credential
+            .as_deref()
+            .ok_or_else(|| AppError::bad_request("credential is required"))?,
+    )
+    .map_err(AppError::bad_request)?;
+    // Every signed key is the account identity's (Signal's
+    // PreKeySignatureValidator); the identity is checked against the
+    // account's below.
+    let account_identity = identity::identity_public_key(&req.identity_key)?;
+    let kyber: Vec<&KemPreKey> = std::iter::once(&req.last_resort_kyber_pre_key)
+        .chain(&req.one_time_kyber_pre_keys)
+        .collect();
+    identity::verify_prekey_signatures(&account_identity, Some(&req.signed_pre_key), &kyber)?;
+    match (&req.reregistration, &req.link_token) {
+        (Some(reregistration), _) => {
+            reregistration
+                .validate(&req)
+                .map_err(AppError::bad_request)?;
+            identity::validate_manifest_v2(&reregistration.manifest)?;
+        }
+        (None, Some(_)) => {}
+        (None, None) => {
+            return Err(AppError::bad_request(
+                "a Chat device registers with a link token or as a re-registration",
+            ))
+        }
+    }
 
     let mut tx = state.pool.begin().await?;
-
     // Lock the account row, including when it has no chat devices yet. `FOR
     // UPDATE` over chat_devices alone does not lock an empty key range in
     // PostgreSQL, so two first-install requests could otherwise both choose 1.
@@ -439,53 +451,108 @@ pub async fn register_device(
         .execute(&mut *tx)
         .await?;
 
-    // The exact request is durably retried after ambiguous network outcomes.
-    // Its identity key is generated once with the private store, making this a
-    // stable idempotency key without adding a caller-controlled token.
-    let existing: Option<i32> = sqlx::query_scalar(
-        "SELECT device_id FROM chat_devices WHERE user_id = $1 AND identity_key = $2",
-    )
-    .bind(user_id)
-    .bind(&req.identity_key)
-    .fetch_optional(&mut *tx)
-    .await?;
-    if let Some(device_id) = existing {
-        tx.commit().await?;
-        return Ok(Json(RegisterChatDeviceResponse {
-            device_id: device_id as u32,
-        })
-        .into_response());
-    }
-
-    // Serialize per-user registrations, then take the lowest free id.
-    let taken: Vec<i32> = sqlx::query_scalar(
-        "SELECT device_id FROM chat_devices WHERE user_id = $1 ORDER BY device_id FOR UPDATE",
+    // A retry after an answer was lost: the credential, drawn once by the
+    // device, names the row it made.
+    let rows: Vec<(i32, Vec<u8>, Vec<u8>)> = sqlx::query_as(
+        "SELECT device_id, credential_salt, credential_hash FROM chat_devices
+          WHERE user_id = $1 ORDER BY device_id",
     )
     .bind(user_id)
     .fetch_all(&mut *tx)
     .await?;
-    if taken.len() >= state.config.chat_max_active_devices as usize {
-        return Err(AppError::conflict("chat active-device limit reached"));
-    }
-    let mut device_id: i32 = 1;
-    for t in &taken {
-        if *t == device_id {
-            device_id += 1;
-        } else {
-            break;
-        }
-    }
-    if device_id > MAX_DEVICE_ID {
-        return Err(AppError::conflict("chat device limit reached"));
+    if let Some((device_id, _, _)) = rows.iter().find(|(_, salt, hash)| {
+        constant_time_eq(&identity::credential_hash(salt, &credential), hash)
+    }) {
+        tx.commit().await?;
+        return Ok(Json(RegisterChatDeviceResponse {
+            device_id: *device_id as u32,
+        })
+        .into_response());
     }
 
+    let (device_id, dropped) = if let Some(reregistration) = &req.reregistration {
+        // A new identity (Signal's reclaimAccount): the manifest lists this
+        // device alone, and every other device of the account goes with it.
+        store_manifest_v2(
+            &mut tx,
+            &state,
+            user_id,
+            &reregistration.manifest,
+            IdentityChange::New,
+        )
+        .await?;
+        let shared: Vec<Uuid> = sqlx::query_scalar(
+            "SELECT DISTINCT shared_payload_id FROM chat_mailbox
+              WHERE recipient_user_id = $1 AND shared_payload_id IS NOT NULL",
+        )
+        .bind(user_id)
+        .fetch_all(&mut *tx)
+        .await?;
+        sqlx::query("DELETE FROM chat_mls_devices WHERE user_id = $1")
+            .bind(user_id)
+            .execute(&mut *tx)
+            .await?;
+        sqlx::query("DELETE FROM chat_devices WHERE user_id = $1")
+            .bind(user_id)
+            .execute(&mut *tx)
+            .await?;
+        let dropped: Vec<i32> = rows.iter().map(|(id, _, _)| *id).collect();
+        ((kutup_chat_proto::REREGISTRATION_DEVICE_ID as i32), Some((dropped, shared)))
+    } else {
+        // A link: the account's identity, and a token an existing device of
+        // the account asked for, unused and unexpired.
+        let current = identity::account_identity(&mut tx, user_id)
+            .await?
+            .ok_or_else(|| {
+                AppError::conflict("the account has no Chat identity: re-register")
+                    .with_details(json!({ "code": "noAccountIdentity" }))
+            })?;
+        if current.0 != req.identity_key {
+            return Err(AppError::conflict("this is not the account's identity")
+                .with_details(json!({ "code": "identityMismatch" })));
+        }
+        let token = kutup_chat_proto::decode_link_token(
+            req.link_token.as_deref().expect("matched above"),
+        )
+        .map_err(AppError::bad_request)?;
+        let used: Option<i32> = sqlx::query_scalar(
+            "UPDATE chat_link_tokens SET used_at = now()
+              WHERE token_hash = $1 AND user_id = $2 AND used_at IS NULL AND expires_at > now()
+              RETURNING 1",
+        )
+        .bind(Sha256::digest(token).as_slice())
+        .bind(user_id)
+        .fetch_optional(&mut *tx)
+        .await?;
+        if used.is_none() {
+            return Err(AppError::forbidden("the link token is used, expired or unknown")
+                .with_details(json!({ "code": "linkToken" })));
+        }
+        if rows.len() >= state.config.chat_max_active_devices as usize {
+            return Err(AppError::conflict("chat active-device limit reached"));
+        }
+        let mut device_id: i32 = 1;
+        for (taken, _, _) in &rows {
+            if *taken == device_id {
+                device_id += 1;
+            } else {
+                break;
+            }
+        }
+        if device_id > MAX_DEVICE_ID {
+            return Err(AppError::conflict("chat device limit reached"));
+        }
+        (device_id, None)
+    };
+
+    let (salt, hash) = identity::new_credential(&credential);
     sqlx::query(
         r#"INSERT INTO chat_devices (
                user_id, device_id, suite, registration_id, identity_key,
                signed_pre_key_id, signed_pre_key, signed_pre_key_signature,
                last_resort_kyber_pre_key_id, last_resort_kyber_pre_key,
-               last_resort_kyber_pre_key_signature, name)
-           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)"#,
+               last_resort_kyber_pre_key_signature, name, credential_salt, credential_hash)
+           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)"#,
     )
     .bind(user_id)
     .bind(device_id)
@@ -499,15 +566,24 @@ pub async fn register_device(
     .bind(&req.last_resort_kyber_pre_key.public_key)
     .bind(&req.last_resort_kyber_pre_key.signature)
     .bind(&req.name)
+    .bind(&salt[..])
+    .bind(&hash[..])
     .execute(&mut *tx)
     .await?;
-
     insert_ec_pool(&mut tx, user_id, device_id, &req.one_time_pre_keys).await?;
     insert_kem_pool(&mut tx, user_id, device_id, &req.one_time_kyber_pre_keys).await?;
-
     tx.commit().await?;
-    state.chat_hub.notify_devices_changed(user_id);
 
+    if let Some((dropped, shared)) = dropped {
+        if let Err(error) = crate::handlers::chat_multi::collect_payloads(&state.pool, &shared).await
+        {
+            tracing::warn!(error = %error.message, "chat: shared payload collection after a re-registration failed");
+        }
+        for id in dropped {
+            state.chat_hub.close_device(user_id, id);
+        }
+    }
+    state.chat_hub.notify_devices_changed(user_id);
     Ok(Json(RegisterChatDeviceResponse {
         device_id: device_id as u32,
     })
@@ -539,43 +615,38 @@ fn drive_keys_follow(
         && next.share_signing_public_key == current.share_signing_public_key
 }
 
-/// `POST /api/chat/manifest` — publish the caller's signed current device set.
-/// Updates form a strict hash-linked sequence and cannot rotate the account
-/// authority key in v1. The declared devices must exactly match the server's
-/// registered devices, making an injected server-side device fail closed.
-#[utoipa::path(
-    post,
-    path = "/api/chat/manifest",
-    tag = "chat",
-    operation_id = "publishChatAccountManifestV1",
-    request_body = AccountManifestV1,
-    responses(
-        (status = 200, description = "Published manifest", body = AccountManifestPublicationV1),
-        (status = 400, description = "Malformed or invalid signature"),
-        (status = 409, description = "Version, chain, authority, or device-set conflict"),
-    ),
-    security(("bearerAuth" = []))
-)]
-pub async fn publish_manifest(
-    State(state): State<AppState>,
-    auth: AuthUser,
-    Json(manifest): Json<AccountManifestV1>,
-) -> AppResult<Response> {
-    let user_id = trusted_uuid(&auth.user_id)?;
-    validate_manifest(&manifest)?;
-    let manifest_hash = manifest.manifest_hash().map_err(AppError::bad_request)?;
-    let mut tx = state.pool.begin().await?;
+/// Whether a manifest may set the account's identity.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum IdentityChange {
+    /// An ordinary publish: the identity is the account's.
+    Same,
+    /// A re-registration or an identity distribution: the manifest sets it.
+    New,
+}
 
-    // This is the common serialization point for every device-set mutation and
-    // observation. It also locks the first-manifest case, where selecting the
-    // (not-yet-existent) manifest row `FOR UPDATE` cannot lock anything.
+/// Stores the next V2 manifest of `user_id` as head and in history, in the
+/// caller's transaction: it names this account and its authority and Drive
+/// keys, follows the head (sequence 1 with no head, else head + 1 linked by
+/// hash; the same manifest again is a no-op), keeps the account identity
+/// unless `identity` is [`IdentityChange::New`], whose identity it records.
+/// Whether the devices it lists are the account's is the caller's check.
+/// Returns false when it was already the head.
+pub(crate) async fn store_manifest_v2(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    state: &AppState,
+    user_id: Uuid,
+    manifest: &AccountManifestV2,
+    identity: IdentityChange,
+) -> AppResult<bool> {
+    let manifest_hash = manifest.manifest_hash().map_err(AppError::bad_request)?;
+    // The common serialization point for every device-set change.
     let account: (String, String, String, String, String) = sqlx::query_as(
         "SELECT public_key, account_authority_public_key,
                 account_authority_key_id, account_incarnation_id, drive_signing_public_key
          FROM users WHERE id = $1 FOR UPDATE",
     )
     .bind(user_id)
-    .fetch_one(&mut *tx)
+    .fetch_one(&mut **tx)
     .await?;
     let (
         drive_public_key,
@@ -607,33 +678,30 @@ pub async fn publish_manifest(
          FROM chat_device_manifests WHERE user_id = $1 FOR UPDATE",
     )
     .bind(user_id)
-    .fetch_optional(&mut *tx)
+    .fetch_optional(&mut **tx)
     .await?;
-
-    let mut idempotent = false;
     match current {
         None if manifest.sequence != 1 || manifest.previous_hash.is_some() => {
-            return Err(AppError::conflict("first manifest must be version 1"));
+            return Err(AppError::conflict("first manifest must be sequence 1"));
         }
         None => {}
         Some((version, current_hash, current_value)) => {
-            let current_manifest: AccountManifestV1 = serde_json::from_value(current_value)
-                .map_err(|error| AppError::internal(format!("stored manifest: {error}")))?;
             if manifest.sequence == version as u64 && manifest_hash == current_hash {
-                idempotent = true;
-            } else if manifest.sequence != version as u64 + 1 {
+                return Ok(false);
+            }
+            if manifest.sequence != version as u64 + 1 {
                 return Err(AppError::conflict(
-                    "manifest version must advance by exactly one",
+                    "manifest sequence must advance by exactly one",
                 ));
-            } else if manifest.previous_hash.as_deref() != Some(current_hash.as_str()) {
+            }
+            if manifest.previous_hash.as_deref() != Some(current_hash.as_str()) {
                 return Err(AppError::conflict("manifest previousHash mismatch"));
             }
-            // Nothing of the identity changes inside one incarnation; the
-            // account is its id, which never changes either. The Drive keys
-            // change only by the one-way suite upgrade (checked as chat-core
-            // checks it).
-            if manifest.account != current_manifest.account
-                || manifest.incarnation_id != current_manifest.incarnation_id
+            let current_manifest: AccountManifestV2 = serde_json::from_value(current_value)
+                .map_err(|error| AppError::internal(format!("stored manifest: {error}")))?;
+            // Nothing of the authority changes inside one incarnation; the
+            // Drive keys change only by the one-way suite upgrade.
+            if manifest.incarnation_id != current_manifest.incarnation_id
                 || manifest.authority_key_id != current_manifest.authority_key_id
                 || manifest.self_authority_key != current_manifest.self_authority_key
                 || !drive_keys_follow(&current_manifest.drive, &manifest.drive)
@@ -645,65 +713,34 @@ pub async fn publish_manifest(
         }
     }
 
-    let registered: Vec<(i32, i16, i64, String)> = sqlx::query_as(
-        "SELECT device_id, suite, registration_id, identity_key
-         FROM chat_devices WHERE user_id = $1 ORDER BY device_id FOR SHARE",
-    )
-    .bind(user_id)
-    .fetch_all(&mut *tx)
-    .await?;
-    if registered.is_empty() {
-        return Err(AppError::conflict("account has no registered chat devices"));
-    }
-    let registered_matches =
-        |(device_id, suite, registration_id, identity_key): &(i32, i16, i64, String),
-         declared: &AccountManifestDeviceV1| {
-            declared.device_id == *device_id as u32
-                && declared.direct_chat_suite.as_u16() == *suite as u16
-                && declared.registration_id == *registration_id as u32
-                && declared.identity_key == *identity_key
-        };
-    let every_declared_device_is_registered = manifest.devices.iter().all(|declared| {
-        registered
-            .iter()
-            .any(|registered| registered_matches(registered, declared))
-    });
-    if !every_declared_device_is_registered {
-        return Err(AppError::conflict(
-            "manifest devices do not match registered chat devices",
-        ));
+    match identity {
+        IdentityChange::Same => {
+            let current = crate::handlers::chat_identity::account_identity(tx, user_id)
+                .await?
+                .ok_or_else(|| AppError::conflict("the account has no Chat identity"))?;
+            if current.0 != manifest.identity_key {
+                return Err(AppError::conflict(
+                    "the identity changes only by a distribution or a re-registration",
+                )
+                .with_details(json!({ "code": "identityMismatch" })));
+            }
+        }
+        IdentityChange::New => {
+            sqlx::query(
+                "INSERT INTO chat_account_identities (user_id, identity_key, manifest_version)
+                 VALUES ($1, $2, $3)
+                 ON CONFLICT (user_id) DO UPDATE SET identity_key = EXCLUDED.identity_key,
+                     manifest_version = EXCLUDED.manifest_version, changed_at = now()",
+            )
+            .bind(user_id)
+            .bind(&manifest.identity_key)
+            .bind(manifest.sequence as i64)
+            .execute(&mut **tx)
+            .await?;
+        }
     }
 
-    // Registration deliberately precedes signed-manifest publication so a
-    // device can obtain its server-assigned id. A browser crash in that gap
-    // must not leave an unauthenticated row that permanently blocks this
-    // account. The authority-signed manifest is the source of truth: every
-    // declared device must match a registered key tuple above, while rows the
-    // authority did not select are pruned in this same transaction. Cascades
-    // remove their prekeys, mailbox rows and WebSocket tickets. This also turns
-    // a server-injected row into recoverable state rather than manifest
-    // inclusion; the server still cannot invent a device accepted by clients.
-    if registered.len() != manifest.devices.len() {
-        let selected_device_ids = manifest
-            .devices
-            .iter()
-            .map(|device| device.device_id as i32)
-            .collect::<Vec<_>>();
-        sqlx::query(
-            "DELETE FROM chat_devices
-             WHERE user_id = $1 AND NOT (device_id = ANY($2))",
-        )
-        .bind(user_id)
-        .bind(&selected_device_ids)
-        .execute(&mut *tx)
-        .await?;
-    }
-    if idempotent {
-        tx.commit().await?;
-        return Ok(Json(AccountManifestPublicationV1 { manifest }).into_response());
-    }
-
-    let value = serde_json::to_value(&manifest)
+    let value = serde_json::to_value(manifest)
         .map_err(|error| AppError::internal(format!("serialize chat manifest: {error}")))?;
     sqlx::query(
         "INSERT INTO chat_device_manifests
@@ -720,8 +757,8 @@ pub async fn publish_manifest(
     .bind(manifest.sequence as i64)
     .bind(&manifest_hash)
     .bind(&manifest.authority_key_id)
-    .bind(value)
-    .execute(&mut *tx)
+    .bind(&value)
+    .execute(&mut **tx)
     .await?;
     sqlx::query(
         "INSERT INTO chat_device_manifest_history
@@ -734,16 +771,85 @@ pub async fn publish_manifest(
     .bind(manifest.sequence as i64)
     .bind(&manifest_hash)
     .bind(&manifest.authority_key_id)
-    .bind(
-        serde_json::to_value(&manifest).map_err(|error| {
-            AppError::internal(format!("serialize chat manifest history: {error}"))
-        })?,
+    .bind(value)
+    .execute(&mut **tx)
+    .await?;
+    Ok(true)
+}
+
+/// `POST /api/chat/manifest` — publish the account's next signed device set
+/// (device-authenticated). The identity is the account's; every listed
+/// device is a live registered row with its listed registration id and
+/// suite; rows the authority didn't list are deleted in the same
+/// transaction (their prekeys, mailboxes and tickets cascade), so a
+/// server-injected row never becomes a listed device.
+#[utoipa::path(
+    post,
+    path = "/api/chat/manifest",
+    tag = "chat",
+    operation_id = "publishChatAccountManifestV2",
+    request_body = AccountManifestV2,
+    responses(
+        (status = 200, description = "Published manifest", body = AccountManifestPublicationV2),
+        (status = 400, description = "Malformed or invalid signature"),
+        (status = 401, description = "Missing or wrong device credential"),
+        (status = 409, description = "Sequence, chain, authority, identity or device-set conflict"),
+    ),
+    security(("bearerAuth" = []))
+)]
+pub async fn publish_manifest(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    headers: HeaderMap,
+    Json(manifest): Json<AccountManifestV2>,
+) -> AppResult<Response> {
+    let user_id = trusted_uuid(&auth.user_id)?;
+    crate::handlers::chat_identity::authenticated_device(&state.pool, &headers, user_id).await?;
+    crate::handlers::chat_identity::validate_manifest_v2(&manifest)?;
+    let mut tx = state.pool.begin().await?;
+    let stored = store_manifest_v2(&mut tx, &state, user_id, &manifest, IdentityChange::Same)
+        .await?;
+
+    let registered: Vec<(i32, i16, i64)> = sqlx::query_as(
+        "SELECT device_id, suite, registration_id
+         FROM chat_devices WHERE user_id = $1 AND expired_at IS NULL
+         ORDER BY device_id FOR SHARE",
     )
-    .execute(&mut *tx)
+    .bind(user_id)
+    .fetch_all(&mut *tx)
+    .await?;
+    let every_listed_device_is_registered = manifest.devices.iter().all(|listed| {
+        registered.iter().any(|(device_id, suite, registration_id)| {
+            listed.device_id == *device_id as u32
+                && listed.direct_chat_suite.as_u16() == *suite as u16
+                && listed.registration_id == *registration_id as u32
+        })
+    });
+    if !every_listed_device_is_registered {
+        return Err(AppError::conflict(
+            "manifest devices do not match registered chat devices",
+        ));
+    }
+    // Registration precedes publication so a device learns its id; rows the
+    // authority did not list (a crash in that gap, an expired device, an
+    // injected row) are pruned here.
+    let listed: Vec<i32> = manifest.devices.iter().map(|d| d.device_id as i32).collect();
+    let pruned: Vec<i32> = sqlx::query_scalar(
+        "DELETE FROM chat_devices WHERE user_id = $1 AND NOT (device_id = ANY($2))
+         RETURNING device_id",
+    )
+    .bind(user_id)
+    .bind(&listed)
+    .fetch_all(&mut *tx)
     .await?;
     tx.commit().await?;
-    state.chat_hub.notify_devices_changed(user_id);
-    Ok(Json(AccountManifestPublicationV1 { manifest }).into_response())
+    for device_id in pruned {
+        state.chat_hub.close_device(user_id, device_id);
+    }
+    if stored {
+        state.chat_hub.notify_devices_changed(user_id);
+    }
+    Ok(Json(AccountManifestPublicationV2 { manifest }).into_response())
 }
 
 /// `GET /api/chat/accounts/{accountId}/manifest?server=` — fetch an
@@ -753,13 +859,13 @@ pub async fn publish_manifest(
     get,
     path = "/api/chat/accounts/{accountId}/manifest",
     tag = "chat",
-    operation_id = "getChatAccountManifestV1",
+    operation_id = "getChatAccountManifestV2",
     params(
         ("accountId" = String, Path, description = "Permanent account id"),
         AccountServerQuery
     ),
     responses(
-        (status = 200, description = "Latest signed manifest", body = AccountManifestV1),
+        (status = 200, description = "Latest signed manifest", body = AccountManifestV2),
         (status = 404, description = "Unknown user or no manifest"),
     ),
     security(("bearerAuth" = []))
@@ -784,13 +890,13 @@ pub async fn get_user_manifest(
 pub(crate) async fn load_account_manifest(
     state: &AppState,
     user_id: Uuid,
-) -> AppResult<AccountManifestV1> {
+) -> AppResult<AccountManifestV2> {
     let value: Option<serde_json::Value> =
         sqlx::query_scalar("SELECT manifest FROM chat_device_manifests WHERE user_id = $1")
             .bind(user_id)
             .fetch_optional(&state.pool)
             .await?;
-    let manifest: AccountManifestV1 = serde_json::from_value(
+    let manifest: AccountManifestV2 = serde_json::from_value(
         value.ok_or_else(|| AppError::not_found("chat manifest not found"))?,
     )
     .map_err(|error| AppError::internal(format!("stored chat manifest is invalid: {error}")))?;
@@ -852,7 +958,7 @@ pub async fn get_manifest_history(
     let mut manifests = values
         .into_iter()
         .map(|value| {
-            serde_json::from_value::<AccountManifestV1>(value)
+            serde_json::from_value::<AccountManifestV2>(value)
                 .map_err(|error| AppError::internal(format!("stored chat manifest: {error}")))
         })
         .collect::<AppResult<Vec<_>>>()?;
@@ -869,7 +975,7 @@ pub async fn get_manifest_history(
     } else {
         None
     };
-    let page = AccountManifestHistoryPageV1 {
+    let page = AccountManifestHistoryPageV2 {
         account: manifests[0].account.clone(),
         from_sequence: page_from,
         to_sequence: query.to_sequence,
