@@ -11,6 +11,8 @@ mod account_ids;
 mod account_names;
 mod albums;
 mod auth_check;
+mod calendar_alarms;
+mod calendar_reminders;
 mod calls;
 mod change_feed;
 mod chat_federation;
@@ -66,6 +68,7 @@ mod totp;
 mod ui_preferences;
 mod version_retention;
 mod web_push;
+mod web_push_payload;
 
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -477,6 +480,7 @@ async fn main() -> anyhow::Result<()> {
     mail::domains::set_time_scale(state.config.mail_domains_time_scale);
     mail::domains::sweep::spawn(state.clone());
     mail::expiry::spawn(state.clone());
+    calendar_alarms::spawn(state.clone());
 
     // Trailing-slash normalization wraps the whole Router from the *outside* (a
     // `Router::layer` only runs for already-matched paths, so it can't rescue an unmatched
@@ -1175,6 +1179,20 @@ fn build_router(state: AppState) -> Router {
         .route(
             "/api/calendar/calendars/:id/events/sync",
             post(handlers::calendar::sync),
+        )
+        .route(
+            "/api/calendar/alarms",
+            get(handlers::calendar_reminders::alarms),
+        )
+        .route(
+            "/api/calendar/settings",
+            get(handlers::calendar_reminders::settings)
+                .put(handlers::calendar_reminders::put_settings),
+        )
+        .route(
+            "/api/calendar/push-subscription",
+            put(handlers::calendar_reminders::put_push_subscription)
+                .delete(handlers::calendar_reminders::delete_push_subscription),
         )
         .route(
             "/api/calendar/calendars/:id/events/:event_id",
