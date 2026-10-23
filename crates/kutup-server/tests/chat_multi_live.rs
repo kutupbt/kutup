@@ -15,6 +15,7 @@ mod common;
 
 use base64::engine::general_purpose::STANDARD;
 use base64::Engine as _;
+use common::chat_identity::{ChatAccount, ChatDevice};
 use common::*;
 use reqwest::blocking::Client;
 use reqwest::StatusCode;
@@ -34,40 +35,31 @@ fn base() -> Option<String> {
 struct Member {
     user: User,
     account_id: String,
+    chat: ChatAccount,
     /// Device id and registration id.
     devices: Vec<(u32, u32)>,
     capability: [u8; 16],
 }
 
-fn add_device(c: &Client, base: &str, user: &User, seed: u8) -> (u32, u32) {
-    let registration_id = 6000 + u32::from(seed);
-    let key = |offset: u8| STANDARD.encode([seed.wrapping_add(offset); 33]);
-    let device: Value = bearer(c.post(format!("{base}/api/chat/device")), &user.token)
-        .json(&json!({
-            "suite": 1,
-            "registrationId": registration_id,
-            "identityKey": key(1),
-            "signedPreKey": {"keyId": 1, "publicKey": key(2), "signature": key(3)},
-            "lastResortKyberPreKey": {"keyId": 1, "publicKey": key(4), "signature": key(5)},
-            "oneTimePreKeys": [{"keyId": 10, "publicKey": key(6)}],
-            "oneTimeKyberPreKeys": [{"keyId": 20, "publicKey": key(7), "signature": key(8)}],
-            "name": format!("multi-test-{seed}")
-        }))
-        .send()
-        .unwrap()
-        .json()
-        .unwrap();
-    (
-        device["deviceId"].as_u64().expect("a device id") as u32,
-        registration_id,
-    )
+impl Member {
+    fn device(&self, id: u32) -> &ChatDevice {
+        self.chat.devices.iter().find(|d| d.id == id).unwrap()
+    }
 }
 
+/// `seeds.len()` devices (the first re-registered, the others linked) and a
+/// capability from the first seed.
 fn member(c: &Client, base: &str, seeds: &[u8]) -> Member {
     let user = register(c, base);
-    let devices = seeds
+    let mut chat = ChatAccount::of(&user, &user.token);
+    let first = chat.reregister(c, base);
+    for _ in 1..seeds.len() {
+        chat.link(c, base, &first);
+    }
+    let devices = chat
+        .devices
         .iter()
-        .map(|seed| add_device(c, base, &user, *seed))
+        .map(|d| (d.id, d.registration_id))
         .collect();
     let capability = [seeds[0]; 16];
     let r = bearer(
@@ -81,6 +73,7 @@ fn member(c: &Client, base: &str, seeds: &[u8]) -> Member {
     Member {
         account_id: user.person.account_id.clone(),
         user,
+        chat,
         devices,
         capability,
     }
@@ -132,7 +125,9 @@ fn submission(send_id: &str, payload: &[u8], capabilities: &[(&Member, [u8; 16])
 
 fn drain(c: &Client, base: &str, member: &Member, device: u32) -> Vec<Value> {
     let page: Value = bearer(
-        c.get(format!("{base}/api/chat/messages?deviceId={device}")),
+        member
+            .device(device)
+            .auth(c.get(format!("{base}/api/chat/messages?deviceId={device}"))),
         &member.user.token,
     )
     .send()
@@ -148,7 +143,9 @@ fn ack(c: &Client, base: &str, member: &Member, device: u32, envelopes: &[Value]
         .map(|e| e["id"].as_str().unwrap())
         .collect();
     let r = bearer(
-        c.post(format!("{base}/api/chat/messages/ack?deviceId={device}")),
+        member
+            .device(device)
+            .auth(c.post(format!("{base}/api/chat/messages/ack?deviceId={device}"))),
         &member.user.token,
     )
     .json(&json!({ "ids": ids }))
@@ -294,7 +291,10 @@ fn capabilities_then_devices_answer_each_account() {
     assert_eq!(answer["refused"], json!([carol.account_id]));
 
     // A changed registration: 410.
-    let stale = [bob.devices[0], (bob.devices[1].0, bob.devices[1].1 + 1)];
+    let stale = [
+        bob.devices[0],
+        (bob.devices[1].0, bob.devices[1].1 % 16383 + 1),
+    ];
     let payload = sent(&[(&bob.account_id, &stale, 1)], &shared);
     let (status, answer) = post(
         &c,
@@ -516,7 +516,7 @@ fn settings(c: &Client, base: &str, token: &str, body: Value) {
 fn a_retry_reaches_a_device_added_since() {
     let Some(base) = base() else { return };
     let c = client();
-    let bob = member(&c, &base, &[61]);
+    let mut bob = member(&c, &base, &[61]);
     let shared = [0x31u8; 80];
     let send_id = Uuid::new_v4().to_string();
     let first = sent(&[(&bob.account_id, &bob.devices, 1)], &shared);
@@ -526,7 +526,9 @@ fn a_retry_reaches_a_device_added_since() {
         submission(&send_id, &first, &[(&bob, bob.capability)]),
     );
     assert_eq!(status, StatusCode::OK, "{answer}");
-    let added = add_device(&c, &base, &bob.user, 62);
+    let first = bob.chat.devices[0].clone();
+    let added = bob.chat.link(&c, &base, &first);
+    let added = (added.id, added.registration_id);
     let both = [bob.devices[0], added];
     let retry = sent(&[(&bob.account_id, &both, 1)], &shared);
     let (status, answer) = post(
@@ -565,9 +567,11 @@ fn shared_parts_go_with_the_last_row_naming_them() {
     let (status, answer) = post(&c, &base, body);
     assert_eq!(status, StatusCode::OK, "{answer}");
     assert_eq!(drain(&c, &base, &bob, bob.devices[0].0).len(), 1);
-    // The second device is removed before it drains; the first acks.
+    // The second device is removed (by the first) before it drains; the
+    // first acks.
     let r = bearer(
-        c.delete(format!("{base}/api/chat/device/{}", bob.devices[1].0)),
+        bob.device(bob.devices[0].0)
+            .auth(c.delete(format!("{base}/api/chat/device/{}", bob.devices[1].0))),
         &bob.user.token,
     )
     .send()

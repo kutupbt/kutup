@@ -3,7 +3,7 @@
 use base64::engine::general_purpose::STANDARD;
 use base64::Engine as _;
 use kutup_chat_proto::{
-    AccountManifestV1, MlsCipherSuiteId, MlsDeliveryCapabilityKindV1, MlsKeyPackageV1,
+    AccountManifestV2, MlsCipherSuiteId, MlsDeliveryCapabilityKindV1, MlsKeyPackageV1,
     PublishMlsDeliveryCapabilityV1, PublishMlsKeyPackagesRequestV1,
 };
 use serde_json::Value;
@@ -119,11 +119,16 @@ impl MlsRepository {
                 "MLS KeyPackages must use the current manifest version",
             ));
         }
-        let manifest: AccountManifestV1 = serde_json::from_value(manifest_value)
+        let manifest: AccountManifestV2 = serde_json::from_value(manifest_value)
             .map_err(|error| AppError::internal(format!("stored manifest is invalid: {error}")))?;
         manifest.verify().map_err(|error| {
             AppError::internal(format!("stored manifest failed verification: {error}"))
         })?;
+        if !crate::handlers::chat_identity::identity_binding_holds(&manifest) {
+            return Err(AppError::internal(
+                "stored manifest has an invalid identity binding",
+            ));
+        }
         let declared = manifest
             .devices
             .iter()

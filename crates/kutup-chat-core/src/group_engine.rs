@@ -1046,7 +1046,7 @@ mod tests {
     use kutup_chat_proto::group::{check_change, check_genesis, decode_group_id, GroupLimits};
     use kutup_chat_proto::group_route::{GroupGatewayKeyConfigV1, GroupNotaryV1, GroupRequestV1};
     use kutup_chat_proto::{
-        MailboxPage, RegisterChatDeviceRequest, SendMessagesRequest, UserPreKeyBundlesResponse,
+        AccountPreKeyBundlesResponse, MailboxPage, RegisterChatDeviceRequestV2, SendMessagesRequest,
     };
     use kutup_crypto::oblivious::GatewayKey;
     use kutup_federation_proto::FederationIdentityDocumentV1;
@@ -1152,11 +1152,18 @@ mod tests {
 
     #[async_trait(?Send)]
     impl ChatTransport for Home {
-        async fn register_device(&self, _: &RegisterChatDeviceRequest) -> Result<u32> {
+        async fn register_device(&self, _: &RegisterChatDeviceRequestV2) -> Result<u32> {
             Ok(1)
         }
-        async fn fetch_bundles(&self, _: &str) -> Result<UserPreKeyBundlesResponse> {
+        async fn fetch_bundles(&self, _: &str) -> Result<AccountPreKeyBundlesResponse> {
             unreachable!()
+        }
+        // The account's first device: no manifest yet.
+        async fn fetch_manifest(
+            &self,
+            _: &str,
+        ) -> Result<Option<kutup_chat_proto::AccountManifestV2>> {
+            Ok(None)
         }
         async fn send(&self, _: &str, _: &SendMessagesRequest) -> Result<SendOutcome> {
             unreachable!()
@@ -1227,10 +1234,12 @@ mod tests {
     fn setup() -> (Engine, Rc<Home>, String) {
         let home = Rc::new(Home::new());
         let db = Rc::new(SqliteChatDb::open_in_memory().unwrap());
-        let mut engine = block_on(Engine::register(
+        let mut engine = block_on(Engine::reregister(
             db,
             home.clone(),
             "aci:00000000-0000-4000-8000-2bd806c97f0e@example.test",
+            &crate::AccountAuthority::derive(&[3u8; 32]).unwrap(),
+            "2026-10-18T00:00:00Z",
             10,
             &mut OsRng.unwrap_err(),
         ))

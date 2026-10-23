@@ -55,6 +55,11 @@ pub enum ChatError {
     /// A send exhausted its 409 device-list recovery attempts.
     #[error("send did not converge after {0} attempts")]
     SendNotConverged(u32),
+    /// The account moved to an identity this device never received (it
+    /// missed a distribution): it is no longer one of the account's devices
+    /// and is linked again from one that is, keeping its history.
+    #[error("this device must be linked again from one of the account's devices")]
+    LinkRequired,
     /// A 409 named a device the served bundles didn't include (server inconsistency).
     #[error("no bundle for device {0}")]
     MissingBundle(u32),
@@ -129,7 +134,8 @@ impl ChatError {
             | Self::Trust(_)
             | Self::ContactListUnconfirmed(_)
             | Self::SendNotConverged(_)
-            | Self::MissingBundle(_) => Kind::Unknown,
+            | Self::MissingBundle(_)
+            | Self::LinkRequired => Kind::Unknown,
         }
     }
 }

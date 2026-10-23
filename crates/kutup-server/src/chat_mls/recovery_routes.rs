@@ -65,8 +65,16 @@ pub(crate) async fn get_recovery(
 pub(crate) async fn recover_conversation(
     State(state): State<AppState>,
     auth: AuthUser,
+    headers: axum::http::HeaderMap,
     Json(request): Json<RecoverMlsConversationRequestV1>,
 ) -> AppResult<Response> {
+    // Made by a device of the account, with its credential.
+    crate::handlers::chat_identity::authenticated_device(
+        &state.pool,
+        &headers,
+        crate::handlers::trusted_uuid(&auth.user_id)?,
+    )
+    .await?;
     request.validate_shape().map_err(AppError::bad_request)?;
     let policy = active_policy(&state).await?;
     let federation = state

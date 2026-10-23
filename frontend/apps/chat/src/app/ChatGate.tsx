@@ -8,6 +8,7 @@ import { Button } from '@kutup/ui/components/button'
 import { ConfirmDestructive } from '@kutup/ui/components/confirm-destructive'
 import { LoadingPanel, Spinner } from '@kutup/ui/components/states'
 import { openChat, reopenChat, useChat } from './chatStore'
+import { LinkThisDevice } from './LinkThisDevice'
 
 /**
  * Opens the chat for the signed-in account and holds everything back until
@@ -29,6 +30,8 @@ export function ChatGate({ children }: { children: ReactNode }) {
   if (chat.status !== 'failed') return <LoadingPanel label={t('chat.preparing')} />
 
   const failure = chat.failure ?? 'unavailable'
+  // Another device of the account holds its Chat identity: link this one.
+  if (failure === 'linkRequired') return <LinkThisDevice session={session} />
   // The server is out of reach, which is nobody's device at fault: wait and
   // retry, and offer nothing destructive.
   if (failure === 'unreachable') {

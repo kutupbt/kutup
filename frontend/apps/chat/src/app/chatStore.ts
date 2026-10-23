@@ -2,7 +2,7 @@ import { useSyncExternalStore } from 'react'
 import type { ChatBackupView } from '@kutup/chat-core/backup'
 import { fetchChatCapabilities, isSupportedChat } from '@kutup/chat-core/capabilities'
 import { accountKey, conversationKey, directKey, type AccountRef } from '@kutup/chat-core/identity'
-import { ChatService, ChatServiceError, type ChatConnectionStatus } from '@kutup/chat-core/service'
+import { ChatService, ChatServiceError, type ChatConnectionStatus, type ChatInstall } from '@kutup/chat-core/service'
 import type {
   ChatCapabilities,
   ConversationId,
@@ -23,6 +23,7 @@ import { currentReadMarks } from '../state/readState'
 import { foldAccountState, mergeReadMarks } from '../state/accountState'
 import { startAccountNames, stopAccountNames } from '../state/accountNames'
 import { checkRenames, resetRenameWatch } from '../state/renameWatch'
+import { setReadReceipts, setTypingIndicators } from '../state/prefs'
 import { isServerUnreachable, REOPEN_DELAYS_MS } from './openFailure'
 
 /**
@@ -39,7 +40,7 @@ import { isServerUnreachable, REOPEN_DELAYS_MS } from './openFailure'
  * `unavailable`: this browser's own Chat state would not open.
  */
 /** The service's codes an open can fail with; any other is "unavailable". */
-const OPEN_FAILURES: ReadonlySet<string> = new Set(['serverUnsupported', 'browserUnsupported', 'contactListUnconfirmed', 'contactListIntegrity'])
+const OPEN_FAILURES: ReadonlySet<string> = new Set(['serverUnsupported', 'browserUnsupported', 'contactListUnconfirmed', 'contactListIntegrity', 'linkRequired'])
 
 export type ChatFailure =
   | 'capabilities'
@@ -49,6 +50,8 @@ export type ChatFailure =
   | 'unavailable'
   | 'contactListUnconfirmed'
   | 'contactListIntegrity'
+  /** Another device of the account holds its Chat identity: link this one. */
+  | 'linkRequired'
 
 export interface ChatSelf {
   /** This account: its server and permanent id. */
@@ -265,7 +268,7 @@ function expireTyping(): void {
  * Open the chat for `session` (once; later calls for the same session do
  * nothing). A failure is kept in the state for the page to explain.
  */
-export function openChat(session: Session): void {
+export function openChat(session: Session, install?: ChatInstall): void {
   if (openedFor === session.sessionId) return
   closeChat()
   openedFor = session.sessionId
@@ -302,6 +305,7 @@ export function openChat(session: Session): void {
         displayName: session.username,
         masterKey: session.masterKey,
         capabilities,
+        install,
       })
     } catch (error) {
       if (openedFor !== sessionId) return
@@ -320,6 +324,12 @@ export function openChat(session: Session): void {
     if (openedFor !== sessionId) {
       service.dispose()
       return
+    }
+    // Linked: the account's settings, as the linking device sent them.
+    if (install?.kind === 'link') {
+      if (install.linking.readReceipts !== undefined) setReadReceipts(install.linking.readReceipts)
+      if (install.linking.typingIndicators !== undefined) setTypingIndicators(install.linking.typingIndicators)
+      install.linking.free()
     }
     const mlsGroups = capabilities.mlsGroups === true
     const unsubscribers = [
@@ -397,6 +407,16 @@ function reopenLater(session: Session, capabilities: ChatCapabilities | null): v
   }
   reopenTimer = window.setTimeout(reopen, delay)
   window.addEventListener('online', reopen, { once: true })
+}
+
+/**
+ * Open Chat again with this browser's device made as `install` says: linked
+ * with the envelope another device sent, or re-registered after the person
+ * confirmed they have none of the account's other devices.
+ */
+export function openChatWith(session: Session, install: ChatInstall): void {
+  closeChat()
+  openChat(session, install)
 }
 
 /** Try to open Chat again now (the "Try now" button, the retry timer). */

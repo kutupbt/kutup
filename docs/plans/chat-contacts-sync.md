@@ -82,9 +82,13 @@ Fields and their budget (canonical JSON, before padding):
 | `blockedAtMs` | when blocked | ~30 |
 | `profileKey` | the contact's profile key, base64 | ~60 |
 | `control` | `{revision, sourceDeviceId, updatedAtMs}`, see below | ~80 |
+| `identity` | `{identityKey, state, updatedAtMs}`: the contact identity this account verified (`verified`) or cleared (`unverified`), as Signal's `identityKey` and `identityState` (docs/plans/account-identity-key.md) | ~130 |
 | keys and punctuation | | ~100 |
 
-That is about 500 bytes. 2048 leaves room for Signal's later fields (a
+That is about 630 bytes. `identity` has its own order: the later
+`updatedAtMs` wins, written with the entry when this device set it later than
+the list, and taken by a device only for the identity it has pinned for the
+contact (a verification of an older identity verifies nothing). 2048 leaves room for Signal's later fields (a
 nickname, a note, mute and archive), each a few hundred bytes at most.
 
 A device keeps the fields it doesn't know and writes them back as they were.

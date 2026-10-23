@@ -11,6 +11,7 @@ mod common;
 
 use base64::engine::general_purpose::STANDARD;
 use base64::Engine as _;
+use common::chat_identity::ChatAccount;
 use common::*;
 use kutup_chat_proto::{
     ProfileEnvelopeContextV1, ProfileEnvelopePurpose, ProfileSuiteId, PutChatProfileRequest,
@@ -46,24 +47,8 @@ struct Recipient {
 
 fn recipient(c: &Client, base: &str, seed: u8) -> Recipient {
     let user = register(c, base);
-    let registration_id = 5000 + u32::from(seed);
-    let key = |offset: u8| STANDARD.encode([seed.wrapping_add(offset); 33]);
-    let device: Value = bearer(c.post(format!("{base}/api/chat/device")), &user.token)
-        .json(&json!({
-            "suite": 1,
-            "registrationId": registration_id,
-            "identityKey": key(1),
-            "signedPreKey": {"keyId": 1, "publicKey": key(2), "signature": key(3)},
-            "lastResortKyberPreKey": {"keyId": 1, "publicKey": key(4), "signature": key(5)},
-            "oneTimePreKeys": [{"keyId": 10, "publicKey": key(6)}],
-            "oneTimeKyberPreKeys": [{"keyId": 20, "publicKey": key(7), "signature": key(8)}],
-            "name": format!("batch-test-{seed}")
-        }))
-        .send()
-        .unwrap()
-        .json()
-        .unwrap();
-    let device_id = device["deviceId"].as_u64().expect("a device id") as u32;
+    let device = ChatAccount::of(&user, &user.token).reregister(c, base);
+    let (device_id, registration_id) = (device.id, device.registration_id);
     let capability = [seed; 16];
     let version = "71".repeat(32);
     let profile = PutChatProfileRequest {
@@ -89,10 +74,13 @@ fn recipient(c: &Client, base: &str, seed: u8) -> Recipient {
         access_key_verifier: "72".repeat(32),
         delivery_capability_verifier: hex::encode(Sha256::digest(capability)),
     };
-    let r = bearer(c.put(format!("{base}/api/chat/profile")), &user.token)
-        .json(&profile)
-        .send()
-        .unwrap();
+    let r = bearer(
+        device.auth(c.put(format!("{base}/api/chat/profile"))),
+        &user.token,
+    )
+    .json(&profile)
+    .send()
+    .unwrap();
     assert!(
         r.status().is_success(),
         "publish profile: {}",
@@ -175,6 +163,8 @@ fn exercise(c: &Client, base: &str, server: &str, bob: &Recipient, carol: &Recip
             (carol.device_id, registration_id),
         )
     };
+    // Another registration id than Carol's, within range.
+    let stale = |n: u32| (carol.registration_id + n - 1) % 16383 + 1;
     let outcome =
         |results: &[Value], index: usize| results[index]["outcome"].as_str().unwrap().to_owned();
     let results = batch(
@@ -190,7 +180,7 @@ fn exercise(c: &Client, base: &str, server: &str, bob: &Recipient, carol: &Recip
             ),
             send(&ghost, &ghost_send, &[0x11; 16], (1, 1)),
             bob_ok(&bob_send),
-            carol_with(carol.registration_id + 1),
+            carol_with(stale(1)),
         ],
     );
     assert_eq!(results.len(), 4, "{results:?}");
@@ -211,7 +201,7 @@ fn exercise(c: &Client, base: &str, server: &str, bob: &Recipient, carol: &Recip
 
     // (c) A resend that is stale again is another mismatch, then the right
     // one is delivered.
-    let stale_again = batch(c, base, server, vec![carol_with(carol.registration_id + 2)]);
+    let stale_again = batch(c, base, server, vec![carol_with(stale(2))]);
     assert_eq!(
         outcome(&stale_again, 0),
         "deviceMismatch",

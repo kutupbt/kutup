@@ -53,7 +53,6 @@ pub struct Config {
     pub chat_device_expiry_days: i64,
     /// Maximum simultaneously active chat devices per account. V1 permits
     /// 1..=10; device ids retain their independent libsignal wire range.
-    pub chat_max_active_devices: u32,
     /// Maximum Chat-media plaintext-class bytes accepted per immutable object.
     /// Administrators may lower, but never raise, the V1 2 GiB protocol cap.
     pub chat_media_max_plaintext_bytes: u64,
@@ -415,10 +414,6 @@ impl Config {
         if chat_group_max_groups < 1 {
             env.error("CHAT_GROUP_MAX_GROUPS must be at least 1");
         }
-        let chat_max_active_devices = get_env_i64("CHAT_MAX_ACTIVE_DEVICES", 10);
-        if !(1..=10).contains(&chat_max_active_devices) {
-            env.error("CHAT_MAX_ACTIVE_DEVICES must be between 1 and 10");
-        }
         let chat_media_max_plaintext_bytes = get_env_i64(
             "CHAT_MEDIA_MAX_PLAINTEXT_BYTES",
             kutup_crypto::chat_media::MAX_CHAT_MEDIA_PLAINTEXT_BYTES as i64,
@@ -512,7 +507,6 @@ impl Config {
             chat_mailbox_retention_days,
             chat_send_retention_days: get_env_i64("CHAT_SEND_RETENTION_DAYS", 30),
             chat_device_expiry_days: get_env_i64("CHAT_DEVICE_EXPIRY_DAYS", 90),
-            chat_max_active_devices: chat_max_active_devices as u32,
             chat_media_max_plaintext_bytes: chat_media_max_plaintext_bytes as u64,
             chat_media_delivery_retention_days,
             chat_server_name,

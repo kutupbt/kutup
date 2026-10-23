@@ -59,6 +59,13 @@ pub fn run(profile: &str, json: bool) -> Result<()> {
         crate::output::print_json(&serde_json::json!({ "changed": true }))?;
     } else {
         println!("Password changed. Your other sign-ins have ended.");
+        // What a password change can't do for a lost or stolen device
+        // (docs/plans/account-identity-key.md, docs/chat-security-threat-model.md).
+        println!(
+            "If a device was lost or stolen, also remove it in Chat (Settings → Linked devices) \
+             with \"Also reset your Chat identity\". A device that held your account keys \
+             keeps them: a new password does not take them back."
+        );
     }
     Ok(())
 }

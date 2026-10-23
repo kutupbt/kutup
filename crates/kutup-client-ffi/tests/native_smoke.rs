@@ -2,7 +2,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
 use async_trait::async_trait;
-use kutup_chat_proto::{AccountManifestPublicationV1, AccountManifestV1};
+use kutup_chat_proto::{AccountManifestPublicationV2, AccountManifestV2};
 use kutup_client_ffi::{
     open_native_chat_client, ChatHttpClient, ChatHttpMethod, ChatHttpRequest, ChatHttpResponse,
     KutupChatError,
@@ -12,6 +12,8 @@ struct MockHttp {
     registrations: AtomicUsize,
     registration: Mutex<Option<serde_json::Value>>,
     manifest: Mutex<Option<String>>,
+    /// Device-bound calls that carried the device's credential header.
+    authenticated: AtomicUsize,
 }
 
 impl MockHttp {
@@ -20,6 +22,7 @@ impl MockHttp {
             registrations: AtomicUsize::new(0),
             registration: Mutex::new(None),
             manifest: Mutex::new(None),
+            authenticated: AtomicUsize::new(0),
         }
     }
 }
@@ -28,15 +31,22 @@ impl MockHttp {
 impl ChatHttpClient for MockHttp {
     async fn execute(&self, request: ChatHttpRequest) -> Result<ChatHttpResponse, KutupChatError> {
         match (request.method, request.path.as_str()) {
+            // The account's first device re-registers: the server takes its
+            // manifest as the head and answers device 1.
             (ChatHttpMethod::Post, "/chat/device") => {
+                assert!(request.chat_device.is_none(), "a registration has no credential header");
                 self.registrations.fetch_add(1, Ordering::Relaxed);
                 let body = request.body_json.expect("registration body");
                 let value: serde_json::Value = serde_json::from_str(&body).unwrap();
                 assert_eq!(value["suite"], 1);
+                assert_eq!(value["registration"]["type"], "reregistration");
+                let manifest = value["registration"]["manifest"].clone();
+                assert_eq!(manifest["identityKey"], value["identityKey"]);
+                *self.manifest.lock().unwrap() = Some(manifest.to_string());
                 *self.registration.lock().unwrap() = Some(value);
                 Ok(ChatHttpResponse {
                     status: 201,
-                    body_json: r#"{"deviceId":7}"#.into(),
+                    body_json: r#"{"deviceId":1}"#.into(),
                 })
             }
             (ChatHttpMethod::Get, "/chat/accounts/00000000-0000-4000-8000-2bd806c97f0e/manifest?server=chat.test") => {
@@ -46,25 +56,36 @@ impl ChatHttpClient for MockHttp {
                         status: 200,
                         body_json,
                     },
+                    // The server's own "no manifest": the account's first
+                    // device re-registers.
                     None => ChatHttpResponse {
                         status: 404,
-                        body_json: String::new(),
+                        body_json: r#"{"error":"chat manifest not found","code":"noManifest"}"#
+                            .into(),
                     },
                 })
             }
             (ChatHttpMethod::Post, "/chat/manifest") => {
+                let registration = self.registration.lock().unwrap().clone().unwrap();
+                let credential = registration["credential"].as_str().unwrap();
+                assert_eq!(
+                    request.chat_device.as_deref(),
+                    Some(format!("1.{credential}").as_str()),
+                    "a manifest publication carries the device credential"
+                );
+                self.authenticated.fetch_add(1, Ordering::Relaxed);
                 let body_json = request.body_json.expect("manifest body");
                 *self.manifest.lock().unwrap() = Some(body_json.clone());
-                let manifest: AccountManifestV1 = serde_json::from_str(&body_json).unwrap();
-                let response = AccountManifestPublicationV1 { manifest };
+                let manifest: AccountManifestV2 = serde_json::from_str(&body_json).unwrap();
+                let response = AccountManifestPublicationV2 { manifest };
                 Ok(ChatHttpResponse {
                     status: 200,
                     body_json: serde_json::to_string(&response).unwrap(),
                 })
             }
-            (ChatHttpMethod::Get, "/chat/accounts/00000000-0000-4000-8000-2bd806c97f0e/keys?syncDeviceId=7&server=chat.test") => {
+            (ChatHttpMethod::Get, "/chat/accounts/00000000-0000-4000-8000-2bd806c97f0e/keys?syncDeviceId=1&server=chat.test") => {
                 let registration = self.registration.lock().unwrap().clone().unwrap();
-                let manifest: AccountManifestV1 = serde_json::from_str(
+                let manifest: AccountManifestV2 = serde_json::from_str(
                     self.manifest
                         .lock()
                         .unwrap()
@@ -76,11 +97,11 @@ impl ChatHttpClient for MockHttp {
                     status: 200,
                     body_json: serde_json::json!({
                         "account": { "server": "chat.test", "accountId": "00000000-0000-4000-8000-2bd806c97f0e" },
+                        "identityKey": registration["identityKey"],
                         "devices": [{
-                            "deviceId": 7,
+                            "deviceId": 1,
                             "registrationId": registration["registrationId"],
                             "suite": registration["suite"],
-                            "identityKey": registration["identityKey"],
                             "signedPreKey": registration["signedPreKey"],
                             "kyberPreKey": registration["lastResortKyberPreKey"]
                         }],
@@ -114,7 +135,7 @@ fn encrypted_install_registers_once_and_reopens() {
         http.clone(),
     ))
     .unwrap();
-    assert_eq!(first.device_id(), 7);
+    assert_eq!(first.device_id(), 1);
     assert_eq!(first.user(), ALICE);
     assert_eq!(
         futures_executor::block_on(first.pending_send_count()).unwrap(),
@@ -162,8 +183,9 @@ fn encrypted_install_registers_once_and_reopens() {
         http.clone(),
     ))
     .unwrap();
-    assert_eq!(second.device_id(), 7);
+    assert_eq!(second.device_id(), 1);
     assert_eq!(http.registrations.load(Ordering::Relaxed), 1);
+    assert!(http.authenticated.load(Ordering::Relaxed) >= 1);
     futures_executor::block_on(second.shutdown()).unwrap();
     assert!(matches!(
         futures_executor::block_on(second.history()),

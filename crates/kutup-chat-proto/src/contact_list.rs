@@ -31,6 +31,29 @@ pub struct ContactEntryControlV1 {
     pub updated_at_ms: i64,
 }
 
+/// Whether this account verified a contact's identity (Signal's
+/// `ContactRecord.identityState`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum ContactIdentityStateV1 {
+    /// The safety number was compared for `identityKey`.
+    Verified,
+    /// A verification of `identityKey` was cleared by hand.
+    Unverified,
+}
+
+/// The identity a contact's verification is about, and when it was set: a
+/// device takes it only for the identity the contact's manifest lists, and
+/// the later setting wins.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ContactIdentityV1 {
+    /// The contact's account identity key, canonical base64 of 33 bytes.
+    pub identity_key: String,
+    pub state: ContactIdentityStateV1,
+    pub updated_at_ms: i64,
+}
+
 /// One person this account accepted, asked, rejected or blocked.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -49,6 +72,10 @@ pub struct ChatContactEntryV1 {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub profile_key: Option<String>,
     pub control: ContactEntryControlV1,
+    /// Whether the contact's identity was verified, as Signal keeps it in the
+    /// contact record (docs/plans/account-identity-key.md).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub identity: Option<ContactIdentityV1>,
     /// Fields of a later version, kept and written back as they came.
     #[serde(flatten)]
     pub unknown: BTreeMap<String, serde_json::Value>,
@@ -81,6 +108,9 @@ impl ChatContactEntryV1 {
             if bytes.len() != PROFILE_KEY_LEN || STANDARD.encode(&bytes) != *key {
                 return Err("profileKey must be 32 bytes, canonical base64".into());
             }
+        }
+        if let Some(identity) = &self.identity {
+            crate::decode_identity_key("identity.identityKey", &identity.identity_key)?;
         }
         Ok(())
     }
@@ -119,6 +149,7 @@ mod tests {
                 source_device_id: 2,
                 updated_at_ms: 1_700_000_000_000,
             },
+            identity: None,
             unknown: BTreeMap::new(),
         }
     }

@@ -22,7 +22,7 @@ use crate::db::{
 use crate::error::{ChatError, Result};
 use crate::manifest::{
     derive_safety_number, verify_bundle_trust, verify_manifest_evidence, verify_manifest_history,
-    AccountAuthority, ManifestPolicy, SafetyNumberV1,
+    AccountAuthority, ManifestPolicy, SafetyNumberV2,
 };
 use crate::sealed_sender::SealedSenderPolicyPin;
 use crate::session::{
@@ -31,7 +31,7 @@ use crate::session::{
 };
 use crate::transport::{ChatTransport, SendOutcome};
 use kutup_chat_proto::{
-    AccountManifestV1, AccountRef, AnonymousMlsKeyPackageRequestV1, ChatContent,
+    AccountManifestV2, AccountRef, AnonymousMlsKeyPackageRequestV1, ChatContent,
     ContactControlBody, ContactState, IdentifiedMlsKeyPackageRequestV1, MlsCipherSuiteId,
     MlsKeyPackageBundleV1, OutgoingEnvelope, PreKeyCountResponse, SealedMessageSubmissionV1,
     SealedOutgoingEnvelopeV1, SendMessagesRequest, MLS_PROTOCOL_VERSION,
@@ -39,7 +39,7 @@ use kutup_chat_proto::{
 
 /// How many send/recovery rounds a single message gets before giving up. Each 409
 /// consumes one; a well-behaved server converges in 1–2.
-const MAX_SEND_ATTEMPTS: u32 = 5;
+pub(crate) const MAX_SEND_ATTEMPTS: u32 = 5;
 /// Drain page size (the contract caps it at 500).
 const DRAIN_LIMIT: u32 = 500;
 /// A session with one device is set aside for unreadable messages at most
@@ -200,6 +200,10 @@ pub struct Engine {
     /// The devices of each account as last fetched and verified this run
     /// (`bundles_for_send`). Never used to establish a session.
     pub(crate) known_devices: BTreeMap<String, Vec<kutup_chat_proto::DevicePreKeyBundle>>,
+    /// Accounts whose manifest a message under an unpinned identity made
+    /// this receive pass read again: once per account and pass, so a flood
+    /// of such messages costs one fetch, not one each.
+    manifests_refreshed: std::collections::BTreeSet<String>,
     /// When each entry of `known_devices` was fetched: a list older than
     /// `KNOWN_DEVICES_TTL_MS` is fetched and verified again.
     pub(crate) known_devices_at: BTreeMap<String, i64>,
@@ -338,6 +342,7 @@ impl Engine {
             manifest_policy,
             sealed_sender_enabled: false,
             known_devices: BTreeMap::new(),
+            manifests_refreshed: Default::default(),
             known_devices_at: BTreeMap::new(),
             group_members_seen: BTreeMap::new(),
             manifest_keys_seen: BTreeMap::new(),
@@ -590,44 +595,8 @@ impl Engine {
     }
 
     /// This account, as its manifest names it.
-    fn self_account(&self) -> Result<AccountRef> {
+    pub(crate) fn self_account(&self) -> Result<AccountRef> {
         crate::address::parse_account(self.session.user())
-    }
-
-    /// Register a brand-new device end-to-end: generate keys, `POST` the
-    /// registration, and adopt the server-assigned device id.
-    pub async fn register<R: Rng + CryptoRng>(
-        db: Rc<dyn ChatDb>,
-        transport: Rc<dyn ChatTransport>,
-        user: impl Into<String>,
-        num_one_time: usize,
-        rng: &mut R,
-    ) -> Result<Self> {
-        let user = user.into();
-        crate::timeline::ensure_built(db.as_ref()).await?;
-        // Registration is restart-safe. Generation persists both private keys
-        // and the exact request atomically; a retry reuses that journal. Once a
-        // device id is committed, initialization simply reopens the install.
-        let mut session = match db.load_local_identity().await? {
-            Some(local) => match local.device_id {
-                Some(device_id) => {
-                    return Self::open(db, transport, user, device_id).await;
-                }
-                None => Session::resume_registration(db, user, local).await?,
-            },
-            None => {
-                // Provisional id 1 is never used for a crypto operation before
-                // the server response binds the real id.
-                Session::generate(db, user, 1, num_one_time, rng).await?
-            }
-        };
-        let request = session
-            .registration()
-            .expect("a freshly generated session carries its registration")
-            .clone();
-        let device_id = transport.register_device(&request).await?;
-        session.complete_registration(device_id).await?;
-        Ok(Engine::new(session, transport))
     }
 
     /// Reopen an installed device.
@@ -637,10 +606,9 @@ impl Engine {
         user: impl Into<String>,
         device_id: u32,
     ) -> Result<Self> {
-        Ok(Engine::new(
-            Session::open(db, user, device_id).await?,
-            transport,
-        ))
+        let engine = Engine::new(Session::open(db, user, device_id).await?, transport);
+        engine.authenticate_device()?;
+        Ok(engine)
     }
 
     /// The underlying device session (for the crypto/store primitives + the
@@ -661,6 +629,10 @@ impl Engine {
     /// Drain engine-owned events. Bindings expose this as their callback/stream
     /// boundary without leaking libsignal or storage operations.
     pub fn take_events(&mut self) -> Vec<ChatEvent> {
+        for peer in self.session.take_identity_changes() {
+            self.events
+                .push_back(ChatEvent::SafetyNumberChanged { peer });
+        }
         self.events.drain(..).collect()
     }
 
@@ -698,12 +670,9 @@ impl Engine {
         self.manifest_policy
     }
 
-    /// Build the exact pair-bound safety number from the current durable pin.
-    pub async fn safety_number(
-        &mut self,
-        authority: &AccountAuthority,
-        peer: &str,
-    ) -> Result<SafetyNumberV1> {
+    /// Build the exact pair-bound safety number from the current durable pin:
+    /// this account's identity key against the one the peer's manifest lists.
+    pub async fn safety_number(&mut self, peer: &str) -> Result<SafetyNumberV2> {
         // Receiving the first identified message establishes a Signal session,
         // but it must not treat a sender key carried by that message as an
         // account-authority pin. Fetch and authenticate the signed account
@@ -731,7 +700,7 @@ impl Engine {
             .map_or(&trust, |pending| &pending.candidate);
         let mut safety = derive_safety_number(
             &self.canonical_self()?,
-            &authority.public_key_base64(),
+            self.session.local_identity_key_pair().identity_key(),
             safety_source,
         )?;
         if trust.trust == crate::AuthorityTrust::Quarantined {
@@ -742,15 +711,15 @@ impl Engine {
         Ok(safety)
     }
 
-    /// Promote a TOFU pin only after Rust has compared the scanned QR payload
-    /// against the locally derived pair/key binding.
+    /// Mark the peer's identity verified only after Rust has compared the
+    /// scanned QR payload with the locally derived pair of identities. A
+    /// quarantined authority is accepted the same way.
     pub async fn verify_safety_number(
         &mut self,
-        authority: &AccountAuthority,
         peer: &str,
         scanned_payload: &str,
-    ) -> Result<SafetyNumberV1> {
-        let expected = self.safety_number(authority, peer).await?;
+    ) -> Result<SafetyNumberV2> {
+        let expected = self.safety_number(peer).await?;
         if expected.continuity_gap {
             return Err(ChatError::Trust(
                 "an incomplete manifest chain cannot be manually verified".into(),
@@ -766,9 +735,40 @@ impl Engine {
         } else {
             self.session.mark_authority_verified(peer).await?;
         }
-        // Verified in person: verified for the account's other apps too.
+        self.set_identity_verified(peer, &expected.identity_key, true)
+            .await?;
+        // Verified in person: the authority is verified for the account's
+        // other apps too.
         self.sync_identity(peer).await?;
-        self.safety_number(authority, peer).await
+        self.safety_number(peer).await
+    }
+
+    /// Mark the peer's current identity verified or not by hand, after
+    /// comparing the numbers (Signal's "Mark as verified" / "Clear
+    /// verification"). `identity_key` is the one the person compared: a
+    /// number that moved on meanwhile is refused.
+    pub async fn set_identity_verified(
+        &mut self,
+        peer: &str,
+        identity_key: &str,
+        verified: bool,
+    ) -> Result<SafetyNumberV2> {
+        let now = self.now_ms();
+        self.session
+            .set_identity_verified(peer, identity_key, verified, now)
+            .await?;
+        // The account's other devices take it from the contact list, with the
+        // contact's entry.
+        if let Some(contact) = self.session.contact(peer).await? {
+            let due = crate::contact_list::due_after_change(&contact, now);
+            self.session
+                .save_contact(ContactRecord {
+                    list_due_at_ms: due,
+                    ..contact
+                })
+                .await?;
+        }
+        self.safety_number(peer).await
     }
 
     pub async fn contacts(&self) -> Result<Vec<ContactRecord>> {
@@ -1169,7 +1169,7 @@ impl Engine {
         &mut self,
         authority: &AccountAuthority,
         issued_at: impl Into<String>,
-    ) -> Result<AccountManifestV1> {
+    ) -> Result<AccountManifestV2> {
         let transport = Rc::clone(&self.transport);
         let current = transport.fetch_manifest(self.session.user()).await?;
         let canonical_self = self.self_account()?;
@@ -1181,11 +1181,16 @@ impl Engine {
         let local = self.session.manifest_device_with_mls(mls);
         let issued_at = issued_at.into();
         let candidate = match current {
+            // The account's first manifest comes with its re-registration
+            // (`reregister`), never from here.
             None => {
-                authority.sign_manifest(canonical_self.clone(), 1, None, vec![local], issued_at)?
+                return Err(ChatError::Trust(
+                    "the account has no manifest; this device must re-register".into(),
+                ))
             }
             Some(current) => {
                 current.verify().map_err(ChatError::Trust)?;
+                crate::manifest::verify_identity_binding(&current)?;
                 if current.account != canonical_self {
                     return Err(ChatError::Trust(
                         "stored account manifest belongs to another account".into(),
@@ -1198,14 +1203,20 @@ impl Engine {
                         "stored account manifest belongs to a different authority".into(),
                     ));
                 }
+                // The identity rule: this device holds the account's identity,
+                // or it has been reset away from it and must not sign.
+                if current.identity_key != self.session.account_identity_key() {
+                    return Err(ChatError::Trust(
+                        "the account's identity is not this device's".into(),
+                    ));
+                }
                 let mut devices = current.devices.clone();
                 match devices.binary_search_by_key(&local.device_id, |device| device.device_id) {
                     // Unchanged, unless the account's Drive keys moved on (an
                     // upgrade to X-Wing, docs/plans/pq-shares.md): then the
                     // next manifest carries them.
                     Ok(index)
-                        if devices[index].identity_key == local.identity_key
-                            && devices[index].registration_id == local.registration_id
+                        if devices[index].registration_id == local.registration_id
                             && devices[index].mls == local.mls
                             && current.drive == authority.drive_keys() =>
                     {
@@ -1219,13 +1230,18 @@ impl Engine {
                         let next_sequence = current.sequence.checked_add(1).ok_or_else(|| {
                             ChatError::Trust("manifest sequence is exhausted".into())
                         })?;
-                        authority.sign_manifest(
+                        let next = authority.sign_manifest_with_binding(
                             canonical_self.clone(),
                             next_sequence,
                             Some(current.manifest_hash().map_err(ChatError::Trust)?),
+                            current.identity_key.clone(),
+                            current.identity_binding.clone(),
                             devices,
                             issued_at,
-                        )?
+                        )?;
+                        next.verify_successor(Some(&current))
+                            .map_err(ChatError::Trust)?;
+                        next
                     }
                 }
             }
@@ -1259,7 +1275,7 @@ impl Engine {
         authority: &AccountAuthority,
         device_id: u32,
         issued_at: impl Into<String>,
-    ) -> Result<AccountManifestV1> {
+    ) -> Result<AccountManifestV2> {
         if device_id == self.session.device_id() {
             return Err(ChatError::Invalid(
                 "the current device cannot revoke itself from the account manifest".into(),
@@ -1271,6 +1287,7 @@ impl Engine {
             .await?
             .ok_or_else(|| ChatError::Trust("account manifest is unavailable".into()))?;
         current.verify().map_err(ChatError::Trust)?;
+        crate::manifest::verify_identity_binding(&current)?;
         let canonical_self = self.self_account()?;
         if current.account != canonical_self {
             return Err(ChatError::Trust(
@@ -1298,13 +1315,18 @@ impl Engine {
             .sequence
             .checked_add(1)
             .ok_or_else(|| ChatError::Trust("manifest sequence is exhausted".into()))?;
-        let candidate = authority.sign_manifest(
+        let candidate = authority.sign_manifest_with_binding(
             canonical_self.clone(),
             next_sequence,
             Some(current.manifest_hash().map_err(ChatError::Trust)?),
+            current.identity_key.clone(),
+            current.identity_binding.clone(),
             devices,
             issued_at,
         )?;
+        candidate
+            .verify_successor(Some(&current))
+            .map_err(ChatError::Trust)?;
         let expected_hash = candidate.manifest_hash().map_err(ChatError::Trust)?;
         let published = transport.publish_manifest(&candidate).await?;
         published.manifest.verify().map_err(ChatError::Trust)?;
@@ -2035,7 +2057,23 @@ impl Engine {
     /// decrypt (or an explicit dead-letter state) is acknowledged; repairable
     /// failures remain durable and unacked.
     pub async fn receive<R: Rng + CryptoRng>(&mut self, rng: &mut R) -> Result<ReceiveReport> {
+        let report = self.receive_pass(rng).await?;
+        // An identity distribution another device of this account sent this
+        // one, kept by the pass (or by an earlier run that stopped first).
+        // One the account moved past: a later one may be on its way, or this
+        // device missed it.
+        if !self.apply_account_identity().await? {
+            self.catch_up_identity(rng).await?;
+        }
+        Ok(report)
+    }
+
+    pub(crate) async fn receive_pass<R: Rng + CryptoRng>(
+        &mut self,
+        rng: &mut R,
+    ) -> Result<ReceiveReport> {
         self.set_state(EngineState::CatchingUp);
+        self.manifests_refreshed.clear();
         let transport = Rc::clone(&self.transport);
         let device_id = self.session.device_id();
         let mut after = self.session.last_cursor().await?;
@@ -2358,6 +2396,12 @@ impl Engine {
                     }
                 }
                 Ok(ReceiveOutcome::Suppressed { id }) => {
+                    ack_ids.push(id.clone());
+                    report.suppressed.push(id);
+                }
+                // Kept in the store; applied once this pass is read, so what
+                // came before it under the old identity is read first.
+                Ok(ReceiveOutcome::AccountIdentity { id }) => {
                     ack_ids.push(id.clone());
                     report.suppressed.push(id);
                 }
@@ -3074,7 +3118,7 @@ impl Engine {
         );
     }
 
-    async fn fetch_verified_bundles(
+    pub(crate) async fn fetch_verified_bundles(
         &mut self,
         peer_user: &str,
     ) -> Result<Vec<kutup_chat_proto::DevicePreKeyBundle>> {
@@ -3113,7 +3157,7 @@ impl Engine {
     async fn accept_verified_bundle_response(
         &mut self,
         peer_user: &str,
-        response: kutup_chat_proto::UserPreKeyBundlesResponse,
+        response: kutup_chat_proto::AccountPreKeyBundlesResponse,
     ) -> Result<Vec<kutup_chat_proto::DevicePreKeyBundle>> {
         let prior_manifest = self.session.manifest_trust(peer_user).await?;
         let inspected = match verify_bundle_trust(
@@ -3126,7 +3170,7 @@ impl Engine {
             Err(error) => {
                 self.quarantine_manifest_failure(
                     peer_user,
-                    response.manifest.as_ref(),
+                    Some(&response.manifest),
                     prior_manifest.as_ref(),
                     &error,
                 )
@@ -3139,10 +3183,7 @@ impl Engine {
             .as_ref()
             .is_some_and(|trust| trust.continuity_gap)
         {
-            let pending = response
-                .manifest
-                .as_ref()
-                .ok_or_else(|| ChatError::Trust("manifest is missing".into()))?;
+            let pending = &response.manifest;
             let (trust, history) = self
                 .recover_manifest_history(peer_user, pending, prior_manifest.as_ref())
                 .await?;
@@ -3279,7 +3320,24 @@ impl Engine {
             let message =
                 crate::wire::decode_ciphertext(envelope.envelope_type, &envelope.content)?;
             if let libsignal_protocol::CiphertextMessage::PreKeySignalMessage(message) = message {
-                if message.identity_key().public_key().serialize() != identity.serialize() {
+                let carried = *message.identity_key().public_key();
+                let identity = if carried.serialize() == identity.serialize() {
+                    identity
+                } else {
+                    // The account may have a new identity this device hasn't
+                    // seen: its current signed manifest decides.
+                    self.refresh_manifest_for_inbound(&sender).await?;
+                    self.session
+                        .manifest_identity_key(&sender, device_id)
+                        .await?
+                        .ok_or_else(|| {
+                            ChatError::Trust(
+                                "sender device is absent from the account-manifest-verified manifest"
+                                    .into(),
+                            )
+                        })?
+                };
+                if carried.serialize() != identity.serialize() {
                     return Err(ChatError::Trust(
                         "session-starting identity key differs from the signed account manifest"
                             .into(),
@@ -3288,6 +3346,33 @@ impl Engine {
             }
         }
         Ok(())
+    }
+
+    /// Fetch and accept the account's current signed manifest (no prekeys
+    /// taken): after an identity distribution or a re-registration, a
+    /// message under the account's new identity arrives before this device
+    /// has seen the manifest that lists it. Accepting it is what an identity
+    /// change does here (`Session::stage_identity_change`); a manifest that
+    /// isn't the authority's next one is refused as any other.
+    pub(crate) async fn refresh_account_manifest(&mut self, account: &str) -> Result<()> {
+        let manifest = Rc::clone(&self.transport)
+            .fetch_manifest(account)
+            .await?
+            .ok_or_else(|| ChatError::Trust(format!("no signed account manifest for {account}")))?;
+        self.accept_current_manifest_evidence(account, &manifest)
+            .await?;
+        self.known_devices.remove(account);
+        Ok(())
+    }
+
+    /// [`Self::refresh_account_manifest`] for a message under an identity
+    /// the pin doesn't carry, at most once per account in a receive pass:
+    /// the pin it left decides for the rest of the pass.
+    async fn refresh_manifest_for_inbound(&mut self, account: &str) -> Result<()> {
+        if !self.manifests_refreshed.insert(account.to_string()) {
+            return Ok(());
+        }
+        self.refresh_account_manifest(account).await
     }
 
     async fn validate_inbound_sealed_envelope(
@@ -3307,6 +3392,18 @@ impl Engine {
             // Retrieve and verify the complete current manifest before touching
             // the inner ratchet. The returned prekeys are intentionally unused.
             self.fetch_verified_bundles(&inspection.sender).await?;
+            manifest_identity = self
+                .session
+                .manifest_identity_key(&inspection.sender, inspection.sender_device_id)
+                .await?;
+        }
+        // An identity the pinned manifest doesn't carry may be the account's
+        // new one: its current signed manifest decides.
+        if manifest_identity
+            .is_some_and(|key| key.serialize() != inspection.identity_key.serialize())
+        {
+            self.refresh_manifest_for_inbound(&inspection.sender)
+                .await?;
             manifest_identity = self
                 .session
                 .manifest_identity_key(&inspection.sender, inspection.sender_device_id)
@@ -3345,8 +3442,8 @@ impl Engine {
     pub(crate) async fn accept_current_manifest_evidence(
         &mut self,
         account: &str,
-        manifest: &AccountManifestV1,
-    ) -> Result<AccountManifestV1> {
+        manifest: &AccountManifestV2,
+    ) -> Result<AccountManifestV2> {
         let prior_manifest = self.session.manifest_trust(account).await?;
         let manifest_trust =
             match verify_manifest_evidence(account, manifest, prior_manifest.as_ref()) {
@@ -3381,11 +3478,11 @@ impl Engine {
     async fn recover_manifest_history(
         &self,
         peer: &str,
-        pending_manifest: &AccountManifestV1,
+        pending_manifest: &AccountManifestV2,
         prior_trust: Option<&crate::ManifestTrust>,
     ) -> Result<(
         crate::ManifestTrust,
-        Vec<crate::AccountManifestHistoryRecordV1>,
+        Vec<crate::AccountManifestHistoryRecord>,
     )> {
         let from_sequence = prior_trust.map_or(1, |trust| trust.highest_sequence.saturating_add(1));
         if from_sequence > pending_manifest.sequence {
@@ -3428,7 +3525,7 @@ impl Engine {
     async fn quarantine_manifest_failure(
         &mut self,
         peer: &str,
-        pending_manifest: Option<&AccountManifestV1>,
+        pending_manifest: Option<&AccountManifestV2>,
         prior_trust: Option<&crate::ManifestTrust>,
         error: &ChatError,
     ) -> Result<()> {
@@ -3453,7 +3550,7 @@ impl Engine {
                     } else {
                         Some((
                             candidate,
-                            vec![crate::AccountManifestHistoryRecordV1 {
+                            vec![crate::AccountManifestHistoryRecord {
                                 peer: peer.to_string(),
                                 sequence: manifest.sequence,
                                 manifest: manifest.clone(),
