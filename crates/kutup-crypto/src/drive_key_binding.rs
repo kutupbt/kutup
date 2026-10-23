@@ -22,11 +22,10 @@
 //! yet: only epoch 1 exists, so there is nothing to roll back to. Pins must
 //! record it before any epoch 2 is signed (docs/roadmap.md).
 
-use ed25519_dalek::{Signature, Signer as _, VerifyingKey};
-
 use crate::account_ref::AccountRef;
 use crate::error::{CryptoError, Result};
 use crate::identity::{incarnation_id_from_authority_public, AccountIdentityKeysV1};
+use crate::primitives::{Suite, VerifyingKey};
 
 const DOMAIN: &[u8] = b"kutup/drive-key-binding/v2\0";
 /// The account identity suite of the bound keys (X-Wing + Ed25519).
@@ -79,7 +78,7 @@ pub fn sign(
         &identity.drive_hpke_public_key(),
         &identity.drive_signing_public_key(),
     )?;
-    Ok(identity.authority_signing_key().sign(&bytes).to_bytes())
+    Ok(identity.authority_signing_key().sign_array(&bytes))
 }
 
 /// Checks that `authority_public` vouches for these Drive keys of `account`
@@ -106,9 +105,9 @@ pub fn verify(
         drive_hpke_public,
         drive_signing_public,
     )?;
-    VerifyingKey::from_bytes(authority_public)
+    VerifyingKey::from_bytes(Suite::V1, authority_public)
         .map_err(|_| CryptoError::InvalidInput("authority key is invalid".into()))?
-        .verify_strict(&bytes, &Signature::from_bytes(&signature))
+        .verify(&bytes, &signature)
         .map_err(|_| CryptoError::AuthFailed)
 }
 

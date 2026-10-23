@@ -13,8 +13,7 @@
 //! The complete fixed header is AEAD associated data. The signature covers the
 //! header and ciphertext, but not its own trailing bytes.
 
-use crate::primitives::{Aead, Kdf, Suite};
-use ed25519_dalek::{Signature, Signer, SigningKey, VerifyingKey};
+use crate::primitives::{Aead, Kdf, SigningKey, Suite, VerifyingKey};
 use zeroize::Zeroizing;
 
 use crate::drive_object::parse_canonical_uuid;
@@ -313,8 +312,8 @@ pub fn sign(frame: &Frame, signing_seed: &[u8]) -> Result<Vec<u8>> {
     let mut unsigned = frame.clone();
     unsigned.signature = [0u8; SIGNATURE_SIZE];
     let packed = unsigned.pack();
-    let signature = SigningKey::from_bytes(&seed).sign(signing_bytes(&packed)?);
-    attach_signature(&packed, &signature.to_bytes())
+    let signature = SigningKey::from_seed(Suite::V1, &seed).sign(signing_bytes(&packed)?);
+    attach_signature(&packed, &signature)
 }
 
 pub fn verify(packed: &[u8], public_key: &[u8]) -> Result<()> {
@@ -326,10 +325,9 @@ pub fn verify(packed: &[u8], public_key: &[u8]) -> Result<()> {
             got: public_key.len(),
         })?;
     let verifying_key =
-        VerifyingKey::from_bytes(&public_key).map_err(|_| CryptoError::AuthFailed)?;
-    let signature = Signature::from_bytes(&frame.signature);
+        VerifyingKey::from_bytes(Suite::V1, &public_key).map_err(|_| CryptoError::AuthFailed)?;
     verifying_key
-        .verify_strict(signing_bytes(packed)?, &signature)
+        .verify(signing_bytes(packed)?, &frame.signature)
         .map_err(|_| CryptoError::AuthFailed)
 }
 
@@ -379,7 +377,9 @@ mod tests {
         let unsigned = seal_unsigned(b"collaboration", &file_key, context()).unwrap();
         let frame = Frame::unpack(&unsigned).unwrap();
         let signed = sign(&frame, &seed).unwrap();
-        let public = SigningKey::from_bytes(&seed).verifying_key().to_bytes();
+        let public = SigningKey::from_seed(Suite::V1, &seed)
+            .verifying_key()
+            .to_array::<32>();
         verify(&signed, &public).unwrap();
         assert_eq!(
             open(

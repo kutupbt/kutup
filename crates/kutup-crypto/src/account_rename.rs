@@ -14,9 +14,8 @@
 //! Both addresses are on one server: moving an account between servers is a
 //! different thing, not this.
 
-use crate::primitives::{Hasher, Suite};
+use crate::primitives::{Hasher, Suite, VerifyingKey};
 use base64::{engine::general_purpose::STANDARD, Engine as _};
-use ed25519_dalek::{Signature, Signer as _, VerifyingKey};
 use serde::{Deserialize, Serialize};
 
 use crate::error::{CryptoError, Result};
@@ -112,7 +111,7 @@ pub fn sign(
         previous: previous.to_owned(),
         current: current.to_owned(),
         issued_at_ms,
-        signature: STANDARD.encode(identity.authority_signing_key().sign(&bytes).to_bytes()),
+        signature: STANDARD.encode(identity.authority_signing_key().sign(&bytes)),
     })
 }
 
@@ -141,9 +140,9 @@ impl AccountRenameV1 {
             .filter(|raw| STANDARD.encode(raw) == self.signature)
             .and_then(|raw| raw.try_into().ok())
             .ok_or_else(|| invalid("signature"))?;
-        VerifyingKey::from_bytes(authority_public)
+        VerifyingKey::from_bytes(Suite::V1, authority_public)
             .map_err(|_| invalid("authority key"))?
-            .verify_strict(&bytes, &Signature::from_bytes(&signature))
+            .verify(&bytes, &signature)
             .map_err(|_| CryptoError::AuthFailed)
     }
 

@@ -1,8 +1,7 @@
 //! Account-authority-signed, hash-linked collection key epochs.
 
-use crate::primitives::{hash, Hasher, Suite};
+use crate::primitives::{hash, Hasher, SigningKey, Suite, VerifyingKey};
 use base64::Engine as _;
-use ed25519_dalek::{Signature, Signer as _, SigningKey, Verifier as _, VerifyingKey};
 
 use crate::drive_object::parse_canonical_uuid;
 use crate::error::{CryptoError, Result};
@@ -80,7 +79,7 @@ impl CollectionEpochStatementV1 {
             authority_key_id,
             signature: [0u8; 64],
         };
-        statement.signature = authority.sign(&statement.signing_bytes()).to_bytes();
+        statement.signature = authority.sign_array(&statement.signing_bytes());
         Ok(statement)
     }
 
@@ -172,12 +171,9 @@ impl CollectionEpochStatementV1 {
             return Err(CryptoError::AuthFailed);
         }
         let verifying_key =
-            VerifyingKey::from_bytes(&authority).map_err(|_| CryptoError::AuthFailed)?;
+            VerifyingKey::from_bytes(Suite::V1, &authority).map_err(|_| CryptoError::AuthFailed)?;
         verifying_key
-            .verify(
-                &self.signing_bytes(),
-                &Signature::from_bytes(&self.signature),
-            )
+            .verify(&self.signing_bytes(), &self.signature)
             .map_err(|_| CryptoError::AuthFailed)
     }
 
@@ -287,7 +283,7 @@ mod tests {
             1,
             None,
             &[0x33; 32],
-            &SigningKey::from_bytes(&[0x44; 32]),
+            &SigningKey::from_seed(Suite::V1, &[0x44; 32]),
         )
         .unwrap()
     }
@@ -304,9 +300,9 @@ mod tests {
             "c08cafb6eaa364dda50b3bfd62abe1db19d1a52c6a82de8582b43cbab7d04f6e"
         );
         let decoded = CollectionEpochStatementV1::decode_b64(&statement.encode_b64()).unwrap();
-        let authority = SigningKey::from_bytes(&[0x44; 32])
+        let authority = SigningKey::from_seed(Suite::V1, &[0x44; 32])
             .verifying_key()
-            .to_bytes();
+            .to_array::<32>();
         decoded.verify_authority(&authority).unwrap();
         decoded
             .verify_binding(
@@ -327,9 +323,9 @@ mod tests {
         let mut encoded = statement.encode();
         encoded[80] ^= 1;
         let decoded = CollectionEpochStatementV1::decode(&encoded).unwrap();
-        let authority = SigningKey::from_bytes(&[0x44; 32])
+        let authority = SigningKey::from_seed(Suite::V1, &[0x44; 32])
             .verifying_key()
-            .to_bytes();
+            .to_array::<32>();
         assert!(decoded.verify_authority(&authority).is_err());
         assert!(CollectionEpochStatementV1::create(
             "11111111-1111-4111-8111-111111111111",
@@ -337,7 +333,7 @@ mod tests {
             2,
             None,
             &[0x33; 32],
-            &SigningKey::from_bytes(&[0x44; 32]),
+            &SigningKey::from_seed(Suite::V1, &[0x44; 32]),
         )
         .is_err());
     }

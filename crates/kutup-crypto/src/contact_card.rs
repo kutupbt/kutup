@@ -23,8 +23,7 @@
 //! address-bound version 1 of both is not read: nothing from before carries
 //! over.
 
-use crate::primitives::{Aead, Kdf, Suite};
-use ed25519_dalek::{Signature, Signer as _, SigningKey, VerifyingKey};
+use crate::primitives::{Aead, Kdf, SigningKey, Suite, VerifyingKey};
 use serde::{Deserialize, Serialize};
 use zeroize::Zeroizing;
 
@@ -262,10 +261,10 @@ pub fn sign_summary(
     let signing = summary_signing_bytes(
         binding,
         revision,
-        &authority.verifying_key().to_bytes(),
+        &authority.verifying_key().to_array(),
         &bytes,
     )?;
-    Ok((bytes, authority.sign(&signing).to_bytes()))
+    Ok((bytes, authority.sign_array(&signing)))
 }
 
 /// Checks a stored summary's signature against the authority of the account
@@ -286,9 +285,9 @@ pub fn verify_summary(
             got: signature.len(),
         })?;
     let signing = summary_signing_bytes(binding, revision, authority_public, summary)?;
-    VerifyingKey::from_bytes(authority_public)
+    VerifyingKey::from_bytes(Suite::V1, authority_public)
         .map_err(|_| invalid("authority key is invalid"))?
-        .verify_strict(&signing, &Signature::from_bytes(&signature))
+        .verify(&signing, &signature)
         .map_err(|_| CryptoError::AuthFailed)?;
     Ok(parsed)
 }

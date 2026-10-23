@@ -1,8 +1,8 @@
 //! Authenticated HPKE envelopes for named local and federated Drive shares,
 //! sealed with X-Wing ([`crate::hpke_xwing`]; docs/plans/pq-shares.md).
 
+use crate::primitives::{SigningKey, Suite, VerifyingKey};
 use base64::Engine as _;
-use ed25519_dalek::{Signature, Signer as _, SigningKey, Verifier as _, VerifyingKey};
 use hpke_rs::{Hpke, HpkePrivateKey, HpkePublicKey};
 use hpke_rs_rust_crypto::HpkeRustCrypto;
 
@@ -147,9 +147,7 @@ macro_rules! share_envelope {
                             expected: COLLECTION_KEY_CIPHERTEXT_LEN,
                             got: value.len(),
                         })?;
-                envelope.signature = sender_signing_key
-                    .sign(&envelope.signing_bytes()?)
-                    .to_bytes();
+                envelope.signature = sender_signing_key.sign_array(&envelope.signing_bytes()?);
                 Ok(envelope)
             }
 
@@ -346,13 +344,10 @@ macro_rules! share_envelope {
                             got: sender_signing_public_key.len(),
                         }
                     })?;
-                let signing_public = VerifyingKey::from_bytes(&signing_public)
+                let signing_public = VerifyingKey::from_bytes(Suite::V1, &signing_public)
                     .map_err(|_| CryptoError::AuthFailed)?;
                 signing_public
-                    .verify(
-                        &self.signing_bytes()?,
-                        &Signature::from_bytes(&self.signature),
-                    )
+                    .verify(&self.signing_bytes()?, &self.signature)
                     .map_err(|_| CryptoError::AuthFailed)
             }
         }

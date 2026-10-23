@@ -9,8 +9,7 @@
 //! its private key is the 32-byte X-Wing seed the HKDF gives, its public key
 //! the 1216-byte encapsulation key derived from that seed.
 
-use crate::primitives::{hash, Hasher, Kdf, Suite};
-use ed25519_dalek::SigningKey;
+use crate::primitives::{hash, Hasher, Kdf, SigningKey, Suite};
 use zeroize::Zeroizing;
 
 use crate::hpke_xwing;
@@ -48,9 +47,9 @@ impl AccountIdentityKeysV1 {
         hkdf.expand(DRIVE_SIGNING_INFO, signing_seed.as_mut_slice())
             .map_err(|_| CryptoError::Backend("Drive signing HKDF expand".into()))?;
 
-        let authority = SigningKey::from_bytes(&authority_seed);
+        let authority = SigningKey::from_seed(Suite::V1, &authority_seed);
         let drive_hpke_public = hpke_xwing::public_key(&hpke_seed);
-        let drive_signing = SigningKey::from_bytes(&signing_seed);
+        let drive_signing = SigningKey::from_seed(Suite::V1, &signing_seed);
 
         Ok(Self {
             authority,
@@ -65,7 +64,7 @@ impl AccountIdentityKeysV1 {
     }
 
     pub fn authority_public_key(&self) -> [u8; 32] {
-        self.authority.verifying_key().to_bytes()
+        self.authority.verifying_key().to_array()
     }
 
     pub fn authority_key_id(&self) -> String {
@@ -94,7 +93,7 @@ impl AccountIdentityKeysV1 {
     }
 
     pub fn drive_signing_public_key(&self) -> [u8; 32] {
-        self.drive_signing.verifying_key().to_bytes()
+        self.drive_signing.verifying_key().to_array()
     }
 }
 
@@ -133,7 +132,7 @@ mod tests {
         );
         assert_ne!(
             first.drive_hpke_private_key().as_slice(),
-            first.drive_signing_key().to_bytes().as_slice()
+            first.drive_signing_key().seed().as_slice()
         );
     }
 

@@ -12,8 +12,7 @@
 //!   its keys, which is primary, and their flags, hash-chained and signed by
 //!   the account authority. Whoever has pinned the account (Chat, Drive)
 //!   therefore trusts its mail keys too.
-
-use ed25519_dalek::{Signature, Signer as _, SigningKey, VerifyingKey};
+use crate::primitives::{SigningKey, Suite, VerifyingKey};
 use pgp::{
     composed::{
         ArmorOptions, Deserializable, EncryptionCaps, KeyType, Message, MessageBuilder,
@@ -1614,10 +1613,10 @@ impl MailKeyListV1 {
 
     /// Signs the list with the account authority.
     pub fn sign(&self, authority: &SigningKey) -> Result<SignedMailKeyListV1> {
-        let authority_public = authority.verifying_key().to_bytes();
+        let authority_public = authority.verifying_key().to_array();
         self.check_authority(&authority_public)?;
         let data = self.to_bytes()?;
-        let signature = authority.sign(&data).to_bytes();
+        let signature = authority.sign_array(&data);
         Ok(SignedMailKeyListV1 {
             list: self.clone(),
             data,
@@ -1659,9 +1658,9 @@ impl SignedMailKeyListV1 {
                 expected: 64,
                 got: signature.len(),
             })?;
-        VerifyingKey::from_bytes(authority_public)
+        VerifyingKey::from_bytes(Suite::V1, authority_public)
             .map_err(|_| CryptoError::InvalidInput("authority key is invalid".into()))?
-            .verify_strict(data, &Signature::from_bytes(&signature))
+            .verify(data, &signature)
             .map_err(|_| CryptoError::AuthFailed)?;
         Ok(Self {
             list,

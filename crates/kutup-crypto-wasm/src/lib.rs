@@ -209,14 +209,11 @@ pub fn create_chat_backup_signer_authorization(
         account_authority_signature: String::new(),
     };
     authorization.account_authority_signature = STANDARD.encode(
-        identity
-            .authority_signing_key()
-            .sign(
-                &authorization
-                    .signing_bytes()
-                    .map_err(|error| js_error(&error))?,
-            )
-            .to_bytes(),
+        identity.authority_signing_key().sign(
+            &authorization
+                .signing_bytes()
+                .map_err(|error| js_error(&error))?,
+        ),
     );
     serde_wasm_bindgen::to_value(&authorization)
         .map_err(|error| js_error(&format!("encode backup authorization: {error}")))

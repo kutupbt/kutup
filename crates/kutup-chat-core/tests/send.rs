@@ -763,7 +763,6 @@ fn local_devices_extend_only_the_prior_account_signed_manifest() {
 #[test]
 fn a_manifest_from_before_x_wing_moves_on_to_the_accounts_new_drive_keys() {
     use base64::Engine as _;
-    use ed25519_dalek::Signer as _;
     let mut rng = test_rng();
     let server = Rc::new(MockServer::default());
     let master = [12; 32];
@@ -792,8 +791,7 @@ fn a_manifest_from_before_x_wing_moves_on_to_the_accounts_new_drive_keys() {
     before.signature = base64::engine::general_purpose::STANDARD.encode(
         identity
             .authority_signing_key()
-            .sign(&before.signing_bytes().unwrap())
-            .to_bytes(),
+            .sign(&before.signing_bytes().unwrap()),
     );
     before.verify().unwrap();
     *server.own_manifest.borrow_mut() = Some(before.clone());

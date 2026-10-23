@@ -18,8 +18,7 @@
 //!   key, so devices coming and going never touch it ([`sign_binding`],
 //!   [`verify_binding`]).
 
-use crate::primitives::{hash, Aead, Hasher, Kdf, Suite};
-use ed25519_dalek::{Signature, Signer as _, SigningKey, VerifyingKey};
+use crate::primitives::{hash, Aead, Hasher, Kdf, SigningKey, Suite, VerifyingKey};
 use zeroize::Zeroizing;
 
 use crate::account_ref::AccountRef;
@@ -261,7 +260,9 @@ impl GroupKeyPair {
     }
 
     pub fn from_seed(seed: &[u8; 32]) -> Self {
-        let public = SigningKey::from_bytes(seed).verifying_key().to_bytes();
+        let public = SigningKey::from_seed(Suite::V1, seed)
+            .verifying_key()
+            .to_array();
         Self {
             seed: Zeroizing::new(*seed),
             public,
@@ -298,7 +299,7 @@ impl GroupKeyPair {
     }
 
     fn sign(&self, bytes: &[u8]) -> [u8; SIGNATURE_LEN] {
-        SigningKey::from_bytes(&self.seed).sign(bytes).to_bytes()
+        SigningKey::from_seed(Suite::V1, &self.seed).sign_array(bytes)
     }
 }
 
@@ -387,9 +388,7 @@ pub fn sign_binding(
     pseudonym: &[u8; PUBLIC_KEY_LEN],
     account: &AccountRef,
 ) -> [u8; SIGNATURE_LEN] {
-    authority
-        .sign(&binding_signed_bytes(group_id, pseudonym, account))
-        .to_bytes()
+    authority.sign_array(&binding_signed_bytes(group_id, pseudonym, account))
 }
 
 /// Checks a binding against the account's self-authority public key (strict).
@@ -413,9 +412,9 @@ fn verify(
     bytes: &[u8],
     signature: &[u8; SIGNATURE_LEN],
 ) -> Result<()> {
-    VerifyingKey::from_bytes(public)
+    VerifyingKey::from_bytes(Suite::V1, public)
         .map_err(|_| CryptoError::AuthFailed)?
-        .verify_strict(bytes, &Signature::from_bytes(signature))
+        .verify(bytes, signature)
         .map_err(|_| CryptoError::AuthFailed)
 }
 
@@ -734,8 +733,7 @@ mod tests {
             // The same payload under another domain, signed by the same key.
             let other = identity
                 .authority_signing_key()
-                .sign(&[*domain, &payload].concat())
-                .to_bytes();
+                .sign_array(&[*domain, &payload].concat());
             assert!(verify_binding(&authority, &group_id, &pseudonym, &account(), &other).is_err());
         }
     }
