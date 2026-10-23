@@ -8,6 +8,7 @@
 
 mod common;
 
+use common::chat_identity::ChatAccount;
 use common::*;
 use reqwest::StatusCode;
 use serde_json::{json, Value};
@@ -130,7 +131,7 @@ mod legacy_suite1 {
     use super::*;
     use ed25519_dalek::Signer as _;
     use hkdf::Hkdf;
-    use kutup_chat_proto::{AccountIdentitySuiteId, AccountManifestV1};
+    use kutup_chat_proto::{AccountIdentitySuiteId, AccountManifestV2};
     use kutup_crypto::account_envelope::{self, AccountEnvelopePurpose};
     use kutup_crypto::account_ref::AccountRef;
     use kutup_crypto::identity::{incarnation_id_from_authority_public, AccountIdentityKeysV1};
@@ -211,9 +212,9 @@ mod legacy_suite1 {
         .await
         .unwrap();
         let mut previous: Option<String> = None;
-        let mut last: Option<(i64, AccountManifestV1, String)> = None;
+        let mut last: Option<(i64, AccountManifestV2, String)> = None;
         for (version, value) in history {
-            let mut manifest: AccountManifestV1 = serde_json::from_value(value).unwrap();
+            let mut manifest: AccountManifestV2 = serde_json::from_value(value).unwrap();
             manifest.drive.suite = AccountIdentitySuiteId::X25519Ed25519V1;
             manifest.drive.hpke_public_key = b64(&drive_public);
             if manifest.sequence > 1 {
@@ -296,91 +297,6 @@ fn make_a_suite_1_account() {
     eprintln!("{username} is a suite-1 account now");
 }
 
-/// A synthetic Chat device (base64-valid keys), registered for `token`.
-fn chat_device(
-    c: &reqwest::blocking::Client,
-    base: &str,
-    token: &str,
-) -> kutup_chat_proto::AccountManifestDeviceV1 {
-    use rand::RngCore as _;
-    let mut rng = rand::thread_rng();
-    let registration_id = (rng.next_u32() % 16000) + 1;
-    let key = |n: u8| {
-        let mut bytes = [0u8; 33];
-        bytes[0] = 5;
-        rng_fill(&mut bytes[1..], n);
-        b64(&bytes)
-    };
-    let identity_key = key(1);
-    let r = bearer(c.post(format!("{base}/api/chat/device")), token)
-        .json(&json!({
-            "suite": 1, "registrationId": registration_id, "identityKey": identity_key,
-            "signedPreKey": { "keyId": 1, "publicKey": key(2), "signature": key(3) },
-            "lastResortKyberPreKey": { "keyId": 1, "publicKey": key(4), "signature": key(5) },
-            "oneTimePreKeys": [ { "keyId": 10, "publicKey": key(6) } ],
-            "oneTimeKyberPreKeys": [ { "keyId": 20, "publicKey": key(7), "signature": key(8) } ],
-            "name": "suite-1 test device"
-        }))
-        .send()
-        .unwrap();
-    assert!(r.status().is_success(), "register device: {}", r.status());
-    let device_id = r.json::<Value>().unwrap()["deviceId"].as_u64().unwrap() as u32;
-    kutup_chat_proto::AccountManifestDeviceV1 {
-        device_id,
-        direct_chat_suite: kutup_chat_proto::DirectChatSuiteId::PqxdhTripleRatchetV1,
-        identity_key,
-        registration_id,
-        mls: None,
-    }
-}
-
-fn rng_fill(out: &mut [u8], salt: u8) {
-    use rand::RngCore as _;
-    rand::thread_rng().fill_bytes(out);
-    out[0] ^= salt;
-}
-
-/// `user`'s manifest at `sequence`, signed by its authority with its
-/// current (X-Wing) Drive key.
-fn xwing_manifest(
-    user: &User,
-    sequence: u64,
-    previous_hash: Option<String>,
-    devices: Vec<kutup_chat_proto::AccountManifestDeviceV1>,
-) -> kutup_chat_proto::AccountManifestV1 {
-    let mut manifest = kutup_chat_proto::AccountManifestV1 {
-        manifest_version: 1,
-        account: user.person.clone(),
-        incarnation_id: user.identity.incarnation_id(),
-        sequence,
-        previous_hash,
-        drive: kutup_chat_proto::AccountManifestDriveKeysV1 {
-            suite: kutup_chat_proto::AccountIdentitySuiteId::XWingEd25519V2,
-            hpke_public_key: b64(&user.identity.drive_hpke_public_key()),
-            share_signing_public_key: b64(&user.identity.drive_signing_public_key()),
-        },
-        devices,
-        issued_at: time::OffsetDateTime::now_utc()
-            .format(&time::format_description::well_known::Rfc3339)
-            .unwrap(),
-        authority_key_id: user.identity.authority_key_id(),
-        self_authority_key: b64(&user.identity.authority_public_key()),
-        signature: String::new(),
-    };
-    sign(user, &mut manifest);
-    manifest
-}
-
-/// Signs `manifest` with `user`'s authority.
-fn sign(user: &User, manifest: &mut kutup_chat_proto::AccountManifestV1) {
-    use ed25519_dalek::Signer as _;
-    manifest.signature = b64(&user
-        .identity
-        .authority_signing_key()
-        .sign(&manifest.signing_bytes().unwrap())
-        .to_bytes());
-}
-
 /// An account from before X-Wing with Chat (a suite-1 Drive key and suite-1
 /// manifests, made as clients made them) upgrades, and its next manifest
 /// raises the Drive key: the server takes it (and nothing else), so Chat
@@ -397,22 +313,13 @@ fn a_suite_1_account_with_chat_manifests_publishes_its_next_one_after_the_upgrad
     let base = base.trim_end_matches('/').to_string();
     let c = crate::common::client();
     let bob = register(&c, &base);
-    let device = chat_device(&c, &base, &bob.token);
-    let publish = |manifest: &kutup_chat_proto::AccountManifestV1| {
-        bearer(c.post(format!("{base}/api/chat/manifest")), &bob.token)
-            .json(manifest)
-            .send()
-            .unwrap()
+    let mut chat = ChatAccount::of(&bob, &bob.token);
+    // Manifest 1 with the re-registration, then 2.
+    let device = chat.reregister(&c, &base);
+    chat.publish(&c, &base, &device);
+    let publish = |chat: &ChatAccount, manifest: &kutup_chat_proto::AccountManifestV2| {
+        chat.post_manifest(&c, &base, &device, manifest)
     };
-    let first = xwing_manifest(&bob, 1, None, vec![device.clone()]);
-    assert!(publish(&first).status().is_success());
-    let second = xwing_manifest(
-        &bob,
-        2,
-        Some(first.manifest_hash().unwrap()),
-        vec![device.clone()],
-    );
-    assert!(publish(&second).status().is_success());
 
     // Bob as he was before X-Wing: both manifests suite 1.
     let runtime = tokio::runtime::Runtime::new().unwrap();
@@ -439,8 +346,13 @@ fn a_suite_1_account_with_chat_manifests_publishes_its_next_one_after_the_upgrad
     assert_eq!(stored.2["drive"]["suite"], 1);
 
     // Before the upgrade his X-Wing manifest is refused: not his key yet.
-    let early = xwing_manifest(&bob, 3, Some(stored.1.clone()), vec![device.clone()]);
-    assert_eq!(publish(&early).status(), StatusCode::CONFLICT);
+    chat.head = Some(serde_json::from_value(stored.2.clone()).unwrap());
+    assert_eq!(
+        chat.head.as_ref().unwrap().manifest_hash().unwrap(),
+        stored.1
+    );
+    let early = chat.next_manifest(&[&device]);
+    assert_eq!(publish(&chat, &early).status(), StatusCode::CONFLICT);
 
     // The upgrade takes epoch 1 only.
     let upgrade = |epoch: u32| {
@@ -473,20 +385,16 @@ fn a_suite_1_account_with_chat_manifests_publishes_its_next_one_after_the_upgrad
     assert_eq!(upgrade(1), StatusCode::NO_CONTENT);
 
     // Now the next manifest raises the key, linked to the suite-1 one.
-    assert_eq!(publish(&early).status(), StatusCode::OK, "the rise");
+    assert_eq!(publish(&chat, &early).status(), StatusCode::OK, "the rise");
+    chat.head = Some(early);
     // Not back, and no other key.
-    let mut back = xwing_manifest(
-        &bob,
-        4,
-        Some(early.manifest_hash().unwrap()),
-        vec![device.clone()],
-    );
+    let mut back = chat.next_manifest(&[&device]);
     back.drive.suite = kutup_chat_proto::AccountIdentitySuiteId::X25519Ed25519V1;
     back.drive.hpke_public_key = b64(&legacy_suite1::drive_keys(&bob.master_key).0);
-    sign(&bob, &mut back);
+    chat.sign(&mut back);
     back.verify().unwrap();
-    assert_eq!(publish(&back).status(), StatusCode::CONFLICT);
-    let same = xwing_manifest(&bob, 4, Some(early.manifest_hash().unwrap()), vec![device]);
-    assert_eq!(publish(&same).status(), StatusCode::OK);
+    assert_eq!(publish(&chat, &back).status(), StatusCode::CONFLICT);
+    let same = chat.next_manifest(&[&device]);
+    assert_eq!(publish(&chat, &same).status(), StatusCode::OK);
     purge_accounts(&c, &base, &[&bob]);
 }

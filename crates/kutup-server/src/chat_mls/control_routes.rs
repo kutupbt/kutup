@@ -25,8 +25,16 @@ use crate::AppState;
 pub(crate) async fn create_conversation(
     State(state): State<AppState>,
     auth: AuthUser,
+    headers: axum::http::HeaderMap,
     Json(request): Json<CreateMlsConversationRequestV1>,
 ) -> AppResult<Response> {
+    // Made by a device of the account, with its credential.
+    crate::handlers::chat_identity::authenticated_device(
+        &state.pool,
+        &headers,
+        crate::handlers::trusted_uuid(&auth.user_id)?,
+    )
+    .await?;
     let policy = active_policy(&state).await?;
     if request.genesis.kind == MlsConversationKindV1::Group && !policy.accepts_group_ordering {
         return Err(AppError::forbidden(

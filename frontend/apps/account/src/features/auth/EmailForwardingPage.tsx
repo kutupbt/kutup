@@ -16,21 +16,20 @@ interface ExternalForwarding {
 }
 
 /** Why a link can't be used, as the server says it. */
-function linkProblem(error: unknown): 'invalid' | 'expired' | 'rateLimited' | null {
+function linkProblem(error: unknown): 'invalid' | 'rateLimited' | null {
   if (!isAxiosError(error)) return null
   const status = error.response?.status
   if (status === 404) return 'invalid'
-  if (status === 410) return 'expired'
   if (status === 429) return 'rateLimited'
   return null
 }
 
 /**
- * The page an outside forwardee's confirmation email links to
- * (`/email-forwarding#<token>`, Proton's accept/decline page): no account is
- * needed. The token stays in the fragment, so no server log holds it, and
- * goes to the server in a request body. Accepting or declining spends the
- * link (docs/plans/mail-forwarding.md).
+ * The page an outside forwarding's code email links to
+ * (`/email-forwarding#<token>`): no account is needed. It can only stop the
+ * forwarding, pending or active; only the code the forwarder enters starts
+ * one. The token stays in the fragment, so no server log holds it, and goes
+ * to the server in a request body (docs/plans/mail-forwarding.md).
  */
 export function EmailForwardingPage() {
   const { t } = useTranslation()
@@ -40,7 +39,7 @@ export function EmailForwardingPage() {
   useEffect(() => {
     if (window.location.hash) window.history.replaceState(window.history.state, '', window.location.pathname + window.location.search)
   }, [])
-  const [done, setDone] = useState<'accepted' | 'declined' | null>(null)
+  const [done, setDone] = useState(false)
   const forwarding = useQuery({
     queryKey: ['email-forwarding', token],
     enabled: token !== '',
@@ -48,11 +47,10 @@ export function EmailForwardingPage() {
     queryFn: async () => (await api.post<ExternalForwarding>('/mail/forwardings/external', { token })).data,
   })
   const answer = useMutation({
-    mutationFn: async (choice: 'accept' | 'decline') => {
-      await api.post(`/mail/forwardings/external/${choice}`, { token })
-      return choice
+    mutationFn: async () => {
+      await api.post('/mail/forwardings/external/decline', { token })
     },
-    onSuccess: (choice) => setDone(choice === 'accept' ? 'accepted' : 'declined'),
+    onSuccess: () => setDone(true),
   })
 
   const problem = token === '' ? 'invalid' : linkProblem(forwarding.error ?? answer.error)
@@ -68,7 +66,7 @@ export function EmailForwardingPage() {
         <Alert variant="error">{t('common.tryAgain')}</Alert>
       ) : done ? (
         <Alert data-testid="email-forwarding-done">
-          {t(`emailForwarding.${done}`, { from: forwarding.data?.forwarderEmail ?? '' })}
+          {t('emailForwarding.declined', { from: forwarding.data?.forwarderEmail ?? '' })}
         </Alert>
       ) : forwarding.data ? (
         <div className="space-y-4">
@@ -76,17 +74,12 @@ export function EmailForwardingPage() {
             {t('emailForwarding.request', { from: forwarding.data.forwarderEmail, to: forwarding.data.forwardeeEmail })}
           </p>
           <p className="text-sm text-muted-foreground">{t('emailForwarding.notEncrypted', { from: forwarding.data.forwarderEmail })}</p>
-          {forwarding.data.state === 'pending' ? (
-            <div className="flex gap-2">
-              <Button onClick={() => answer.mutate('accept')} loading={answer.isPending && answer.variables === 'accept'} disabled={answer.isPending} data-testid="email-forwarding-accept">
-                {t('emailForwarding.accept')}
-              </Button>
-              <Button variant="outline" onClick={() => answer.mutate('decline')} loading={answer.isPending && answer.variables === 'decline'} disabled={answer.isPending}>
-                {t('emailForwarding.decline')}
-              </Button>
-            </div>
+          {forwarding.data.state === 'rejected' ? (
+            <Alert>{t('emailForwarding.alreadyDeclined')}</Alert>
           ) : (
-            <Alert>{t(forwarding.data.state === 'rejected' ? 'emailForwarding.alreadyDeclined' : 'emailForwarding.alreadyAnswered')}</Alert>
+            <Button variant="outline" onClick={() => answer.mutate()} loading={answer.isPending} data-testid="email-forwarding-decline">
+              {t('emailForwarding.decline')}
+            </Button>
           )}
         </div>
       ) : null}

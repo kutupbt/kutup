@@ -10,6 +10,7 @@ pub mod domains;
 pub mod expiry;
 pub mod filters;
 pub mod forwarding;
+pub mod forwarding_code;
 pub mod group_keys;
 pub mod groups;
 pub mod headers;

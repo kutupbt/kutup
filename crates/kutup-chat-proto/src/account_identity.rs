@@ -4,11 +4,8 @@
 //! distribution, for the account identity), re-registration, per-device
 //! credentials, and the `accountIdentity` sync a distribution sends.
 //!
-//! These types arrive beside the V1 ones they replace. The cutover (the server
-//! migration and the clients, which land together) deletes
-//! `AccountManifestV1`, `UserPreKeyBundlesResponse` and the V1
-//! `RegisterChatDeviceRequest`, and nothing then accepts them: there is no
-//! legacy path.
+//! These types replaced the V1 manifest, bundles and registration request,
+//! which nothing accepts any more: there is no legacy path.
 //!
 //! Limits (envelope sizes, token lifetimes, rates) are site settings and live
 //! in the server; the bounds here are the formats' own.
@@ -34,6 +31,26 @@ use crate::{
 };
 
 pub const ACCOUNT_MANIFEST_V2_VERSION: u16 = 2;
+
+/// An XEdDSA signature by the account identity key (`identityBinding`).
+pub const IDENTITY_BINDING_LEN: usize = 64;
+
+/// The bytes an account identity key signs to bind itself to its authority
+/// ([`AccountManifestV2::identity_binding`]), for a manifest not built yet.
+pub fn identity_binding_bytes(
+    authority_key_id: &str,
+    incarnation_id: &str,
+    account: &AccountRef,
+    identity_key: &str,
+) -> Result<Vec<u8>, String> {
+    let mut out = Vec::with_capacity(160);
+    out.extend_from_slice(b"kutup/account-identity-binding/v1\0");
+    out.extend_from_slice(&decode_lower_hex_32("authorityKeyId", authority_key_id)?);
+    out.extend_from_slice(&decode_lower_hex_32("incarnationId", incarnation_id)?);
+    out.extend_from_slice(&account.bytes());
+    out.extend_from_slice(&decode_identity_key("identityKey", identity_key)?);
+    Ok(out)
+}
 
 /// libsignal's serialized identity public key: the Curve25519 type byte and
 /// 32 bytes.
@@ -172,6 +189,15 @@ pub struct AccountManifestV2 {
     /// bytes). It changes only with an identity distribution or a
     /// re-registration (the identity rule).
     pub identity_key: String,
+    /// The identity key's signature (XEdDSA, as libsignal signs prekeys) over
+    /// [`AccountManifestV2::identity_binding_bytes`]: the identity vouches for
+    /// this authority, incarnation and account, as the authority vouches for
+    /// the identity. Without it a server could list someone's real identity
+    /// under an authority of its own, and comparing safety numbers (which
+    /// cover the identity) would wrongly vouch for that authority. Canonical
+    /// base64 of 64 bytes; libsignal checks it (clients and server), since
+    /// this crate has no XEdDSA.
+    pub identity_binding: String,
     pub drive: AccountManifestDriveKeysV1,
     /// Strictly ordered by `deviceId`.
     pub devices: Vec<AccountManifestDeviceV2>,
@@ -204,6 +230,11 @@ impl AccountManifestV2 {
             32,
         )?);
         out.extend_from_slice(&decode_identity_key("identityKey", &self.identity_key)?);
+        out.extend_from_slice(&decode_canonical_base64_exact(
+            "identityBinding",
+            &self.identity_binding,
+            IDENTITY_BINDING_LEN,
+        )?);
         out.extend_from_slice(&u16::from(self.drive.suite).to_be_bytes());
         out.extend_from_slice(&decode_canonical_base64_exact(
             "drive.hpkePublicKey",
@@ -238,6 +269,19 @@ impl AccountManifestV2 {
             }
         }
         Ok(out)
+    }
+
+    /// What the account identity key signs for [`Self::identity_binding`]:
+    /// its own domain, the authority's key id, the incarnation, the account
+    /// and the identity key itself. Nothing that changes with the devices, so
+    /// one binding serves every manifest of the same identity and authority.
+    pub fn identity_binding_bytes(&self) -> Result<Vec<u8>, String> {
+        identity_binding_bytes(
+            &self.authority_key_id,
+            &self.incarnation_id,
+            &self.account,
+            &self.identity_key,
+        )
     }
 
     /// What the next manifest's `previousHash`, and a provisioning message's
@@ -365,7 +409,7 @@ pub struct AccountManifestPublicationV2 {
 }
 
 /// A bounded run of the V2 chain, by exact sequence cursor, as
-/// [`crate::AccountManifestHistoryPageV1`].
+/// the V1 page it replaced.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[serde(rename_all = "camelCase")]

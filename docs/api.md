@@ -37,6 +37,15 @@ Specific codes, where an app does something particular (a test in
 
 | Code | Status | Meaning |
 |---|---|---|
+| `deviceCredential` | 401 | A Chat call made as a device without that device's `X-Kutup-Chat-Device` credential, with a wrong one, or for a removed or expired device (one answer for all) |
+| `noManifest` | 404 | `GET /api/chat/accounts/{accountId}/manifest` (and its federation route): the account has no Chat manifest, since no Chat device ever registered. Clients take only this 404 for "re-register as the account's first device"; any other 404 is an error |
+| `badSignature` | 400 | A Chat prekey (signed EC, last-resort or one-time Kyber), or a manifest's `identityBinding`, not signed by the account's identity key |
+| `keysDiffer` | 409 | `POST /api/chat/keys/check`: the server holds other keys for this device; it uploads them again |
+| `linkTokenLimit` | 409 | `POST /api/chat/link-tokens`: as many unused link tokens as the administrators allow (`chatLinkTokensPerAccount`) |
+| `manifestConflict` | 409 | A re-registration (`POST /api/chat/device` with `registration.type = reregistration`) or an identity distribution lost a race with another manifest change for the account: read the manifest again and retry (a replay of the current head answers 200) |
+| `linkToken` | 403 | `POST /api/chat/device` linking: the link token is used, expired, unknown or another account's |
+| `noAccountIdentity` | 409 | `POST /api/chat/device` linking: the account has no Chat identity yet; its first device re-registers |
+| `identityMismatch` | 409 | A Chat registration or manifest naming another identity than the account's (it changes only by a distribution or a re-registration) |
 | `invalidCredentials` | 401 | A sign-in that does not finish: a wrong password, a name that is no account, a used or expired login id, a password changed since the sign-in started (not an expired session). At `login/2fa`: a wrong code, the token still good |
 | `preAuthInvalid` | 401 | `login/2fa`: the second step's token is expired, not one, or from a password the account no longer has: back to the password step |
 | `setupTokenInvalid` | 401 | `complete-setup` (and `register/start` under it): the setup token is expired, not one, already used, or from a temporary password since replaced: sign in again |
@@ -105,7 +114,10 @@ Specific codes, where an app does something particular (a test in
 | `keyListMismatch` | 400 | That key list changes more than adding EMAIL_NO_ENCRYPT |
 | `forwardingKeepsNoEncrypt` | 409 | A key list clearing EMAIL_NO_ENCRYPT while the address forwards outside Kutup |
 | `internationalAddressUnsupported` | 400 | `POST /api/mail/forwardings` to an address with non-ASCII characters: not supported yet (an IDN domain works in its punycode `xn--` form) |
-| `linkExpired` | 410 | A forwarding confirmation link past its 7 days; a new one was sent |
+| `codeWrong` | 400 | `POST /api/mail/forwardings/:id/verify`: not the code; `attemptsLeft` says how many more tries the code takes |
+| `codeVoid` | 409 | `POST /api/mail/forwardings/:id/verify`: the code took its last wrong try (`forwarding_code_attempts`); send a new one |
+| `codeExpired` | 409 | `POST /api/mail/forwardings/:id/verify`: no live code (past `forwarding_code_minutes`, or none sent); send a new one |
+| `forwardingVerified` | 409 | `POST /api/mail/forwardings/:id/code`: the forwarding is verified already |
 | `tooOld` | 410 | `GET /api/account/heads`: the anchor is past the kept window (1,000 heads): re-anchor with a notice |
 | `name_taken`, `nameTaken` | 409 | The name is in use (with what holds it) |
 | `nameNeeded` | 400/409 | A write without its `nameHash` (400), or a folder restored at the top level that needs a name there (409) |
@@ -233,8 +245,8 @@ a vault's own saves are never refused by it.
 
 The chat block also advertises size/retention limits, the canonical federation
 server name when enabled, and the authenticated sealed-sender service-policy
-history. `maximumActiveDevices` is operator-configurable from 1 through the V1
-hard cap of 10. A capability is advertised only when its complete local and
+history. `maximumActiveDevices` is the site setting `chatMaxActiveDevices`,
+from 1 through the V1 hard cap of 10. A capability is advertised only when its complete local and
 federated path is enabled.
 
 ---
@@ -1727,8 +1739,8 @@ dot-atom local part, a domain of two or more labels; no quoting, IP
 literals, control characters or whitespace). The first outside forwarding of an
 address brings `"keyList"`: its next signed key list, every key as it is
 plus `EMAIL_NO_ENCRYPT` (`400 keyListRequired` without it, `400
-keyListMismatch` for any other change). The forwardee is emailed a link to
-confirm or decline (7 days; 3 a day). While the address forwards outside,
+keyListMismatch` for any other change). It stays pending (7 days) until the
+forwarder enters the code mailed to the destination (see Verification below). While the address forwards outside,
 WKD offers none of its keys, and a key list clearing the flag is `409
 forwardingKeepsNoEncrypt`. When the last one ends without the owner's client
 (declined, or deleted), `GET /api/mail/addresses` says `keyListOwed: true`
@@ -1741,27 +1753,64 @@ subkeys and name exactly the forwardee key's subkeys
 past 10 per address or 25 per account; `409 forwardingUnavailable` when the
 server has no `MAIL_FORWARDING_KEYS`.
 
+**Verification.** Every new forwarding, to a Kutup address or outside, is
+unverified, and nothing is forwarded until it is verified. Creating it mails
+a 6-digit code to the destination from `postmaster@` the server, in the
+forwarder's language: who asks, the code, when it expires, and to ignore it
+if unexpected. To a Kutup address it arrives in that inbox, and the
+forwardee sees the forwarding (in `incoming`, its activation, accept and
+decline) only once it is verified. Outside, the mail also carries a link
+that can only refuse the forwarding (the stop page below), never start it.
+The code is kept as an HMAC under a key derived from `MAIL_FORWARDING_KEYS`.
+Limits (Administration → Rate limits): `forwarding_code_minutes` (15),
+`forwarding_code_attempts` (5), `forwarding_code_resends` (1 a minute),
+`forwarding_invites` (10 a day per forwarding) and
+`forwarding_confirmations_sent` (10 a day per account, across its
+forwardings); past them `429 rateLimited`. Renewing or asking again makes
+a forwarding unverified and sends a new code. A forwarding's row says
+`"verified"` and, for the forwarder while a code is live,
+`"codeExpiresAt"` and `"codeAttemptsLeft"`.
+
+### POST /api/mail/forwardings/:id/code
+
+The forwarder has a new code mailed (the last one void) → the forwarding.
+`409 forwardingVerified` when verified; `409 forwardingState` when rejected
+or outdated; `429 rateLimited` past the limits above.
+
+### POST /api/mail/forwardings/:id/verify
+
+The forwarder enters `{ "code": "123456" }` → the forwarding, verified: an
+outside one becomes active; an end-to-end one now waits for its forwardee to
+accept. `400` when it isn't six digits (no try counted); `400 codeWrong`
+with `attemptsLeft`; `409 codeVoid` after the last wrong try; `409
+codeExpired` when no code is live. Verifying a verified one answers it
+unchanged.
+
 ### PUT /api/mail/forwardings/:id
 
 The forwarder renews an `outdated` or `rejected` forwarding with new
-material: `{ "endToEnd": {...} }` as above → pending again.
+material: `{ "endToEnd": {...} }` as above → pending and unverified again,
+with a new code mailed.
 
 ### PUT /api/mail/forwardings/:id/reinvite
 
-The forwarder sends an outside forwardee a fresh link (pending, or declined
-and asked again): `429 rateLimited` past 3 a day for the forwarding, or 10 a
-day for the account (deleted forwardings' links included; making
+The forwarder asks an outside destination again (pending, or declined):
+pending and unverified, with a new code mailed; `429 rateLimited` past the
+code limits above (deleted forwardings' codes count for the account; making
 forwardings is likewise limited to 10 an hour per account, however many are
 deleted). A declined one whose address is end to end again is `400
 keyListRequired`: set it up anew.
 
-### POST /api/mail/forwardings/external · /external/accept · /external/decline
+### POST /api/mail/forwardings/external · /external/decline
 
-No account: the confirmation page, with `{ "token" }` from the link (in the
-body, never the URL); 30 requests a minute per client (`429 rateLimited`). The first answers `{ "state", "forwarderEmail",
-"forwardeeEmail" }`; accept makes it active, decline `rejected`; each spends
-the link. `404` for an unknown token; `410 linkExpired` for an expired one,
-and a new link is sent.
+No account: the stop page, with `{ "token" }` from the link in an outside
+forwarding's code mail (in the body, never the URL); 30 requests a minute
+per client (`429 rateLimited`). The first answers `{ "state",
+"forwarderEmail", "forwardeeEmail" }`; decline makes it `rejected`, pending
+or active, and spends the link. Nothing here starts a forwarding: only the
+forwarder's code does. The link doesn't expire (it is derived from the
+current `MAIL_FORWARDING_KEYS` key; rotating the key ends old links). `404`
+for an unknown token.
 
 ### PUT /api/mail/forwardings/:id/pause · /resume · /conditions
 
@@ -3363,11 +3412,49 @@ and opaque ciphertext rather than protected plaintext. All endpoints require a
 Bearer JWT unless noted. Wire types live in `crates/kutup-chat-proto` and are
 fully described by the OpenAPI document.
 
+### One identity per account (docs/plans/account-identity-key.md)
+
+A Chat account has one libsignal identity key, as Signal's ACI: every device
+of the account holds it, and each device has its own registration id and
+prekeys, signed by that identity. The account authority's signed manifest
+(`AccountManifestV2`) names the identity and the devices.
+
+**Device credentials.** A device draws 32 random bytes at registration (its
+`credential`, unpadded base64url); the server keeps a salted hash. Every call
+a device makes as itself carries `X-Kutup-Chat-Device: <deviceId>.<credential>`
+beside the JWT: keys, `keys/check`, the manifest, link tokens and relays, the
+identity distribution, sends and syncs, the mailbox, socket tickets, the
+sender certificate, push subscriptions, profile writes as a device, backup
+segments, device rename and removal, and the MLS device routes. A missing or
+wrong credential, or one of a removed or expired device, is `401
+deviceCredential`.
+
 ### POST /api/chat/device
 
-Register the calling client as a chat device. The server assigns the lowest free device id and enforces its configured active-device limit, never exceeding the V1 hard cap of 10. Body: `suite` (`1`), `registrationId` (libsignal, `1..16383`), `identityKey`, `signedPreKey` (signature required), `lastResortKyberPreKey` (bundles are never non-PQ), optional `oneTimePreKeys[]` / `oneTimeKyberPreKeys[]` pools, optional `name`. All key material is canonical base64.
+Register a Chat device (`RegisterChatDeviceRequestV2`): `suite` (`1`),
+`registrationId` (`1..16383`), the account's `identityKey`, `signedPreKey`
+and `lastResortKyberPreKey` (both signed by that identity; one-time Kyber
+keys too: `400 badSignature`), optional `oneTimePreKeys[]` /
+`oneTimeKyberPreKeys[]`, optional `name`, the device's `credential`, and
+`registration`, one of:
 
-**Response:** `200 OK` → `{ "deviceId": 1 }` · `409` when the configured active-device limit is reached.
+- `{"type": "link", "linkToken"}`: a device linked by one of the account's
+  (below). The identity is the account's (`409 identityMismatch`; `409
+  noAccountIdentity` when it has none); the token is unused, unexpired and the
+  account's (`403 linkToken`), consumed with the insert. The server assigns the
+  lowest free device id within `chatMaxActiveDevices` (`409`). A device of the
+  account then publishes the manifest that lists it.
+- `{"type": "reregistration", "manifest"}`: a new identity (Signal's
+  `reclaimAccount`): the account's first Chat device, or one restoring after
+  every device is lost. The manifest is the account's next (`verifySuccessor`:
+  sequence 1 with no manifest, else head + 1 linked by hash) and lists this
+  device alone as device 1. In one transaction the server drops every other
+  device of the account (prekeys, mailboxes, tickets and push subscriptions
+  with them), inserts this one as 1, records the identity and publishes the
+  manifest. The gate is the account authority, so the master key.
+
+A retry with the same credential answers the device it made. `200 OK` →
+`{ "deviceId": 1 }`.
 
 ### GET /api/chat/device
 
@@ -3473,7 +3560,57 @@ gives the full breakdown.
 
 ### PUT /api/chat/keys?deviceId=N
 
-Rotate `signedPreKey` / `lastResortKyberPreKey` and/or upload more one-time prekeys (only fields present are changed; pool inserts are idempotent per `keyId`).
+Rotate `signedPreKey` / `lastResortKyberPreKey` and/or upload more one-time prekeys (only fields present are changed; pool inserts are idempotent per `keyId`). Signed keys must be the account identity's (`400 badSignature`).
+
+### POST /api/chat/keys/check
+
+Signal's `/v2/keys/check`: `{ "digest" }`, lowercase hex of
+`repeated_use_keys_digest` (kutup-chat-proto) over the account identity, the
+device's signed prekey and its last-resort key. `204` when the server holds
+the same, `409 keysDiffer` otherwise (the device uploads its keys again).
+
+### PUT /api/chat/account-identity
+
+A new account identity for the devices the account keeps (Signal's
+`PhoneNumberIdentityKeyDistributionRequest`), for "reset identity, keep my
+devices" after a lost or stolen device: `{ identityKey, devices: [{ deviceId,
+registrationId, signedPreKey, lastResortKyberPreKey }], deviceMessages:
+[OutgoingEnvelope], manifest }`, each list strictly ordered by `deviceId`.
+`devices` names exactly the manifest's devices (the sender included) with its
+registration ids, and `deviceMessages` one sealed `accountIdentity` sync per
+other listed device on its current session (each at most
+`chatDistributionMessageBytes`). `409` (`DeviceListMismatch`) when
+the lists don't match the manifest or name a device the account doesn't have;
+`410` (`staleDevices`) when a message's `registrationId` is no longer its
+device's; `400 badSignature` for a key not signed by the new identity. In one
+transaction the server records the identity, publishes the manifest, drops
+the devices it leaves out, swaps every kept device's identity, registration
+id and keys, deletes every one-time prekey of the account (the devices upload
+new ones) and queues the syncs. At most `chatIdentityDistributions` a day.
+
+### Linking a device
+
+As Signal links Desktop to the phone:
+
+1. The new device, signed in, asks `POST /api/chat/provisioning/ticket` for a
+   socket ticket (`{ ticket }`, once, within `chatProvisioningTicketSeconds`;
+   per address at most `chatProvisioningSockets` a minute; at most
+   `chatProvisioningSocketsPerAccount` sockets of one account open at once) and opens `GET
+   /api/chat/provisioning?ticket=` (WebSocket). The socket sends `{ "type":
+   "address", "address" }` (16 random bytes, base64url) and shows it with its
+   ephemeral key as the link code `kutup://link?address=…&key=…`. Pings every
+   30 seconds; closed `1000` after the envelope, `4408` (expired) after
+   `chatLinkTokenSeconds`.
+2. A device of the account asks `POST /api/chat/link-tokens` for a token
+   (`{ token, expiresAt }`, single use, lasting `chatLinkTokenSeconds`; at most
+   `chatLinkTokensPerAccount` unused: `409 linkTokenLimit`; at most
+   `chatLinkTokens` an hour).
+3. It sends the provisioning message, encrypted to the new device's key, with
+   `PUT /api/chat/provisioning/{address}` (`{ envelope: ProvisionEnvelopeV1 }`,
+   at most `chatProvisionBodyBytes`; `chatProvisioningRelays` a minute). The
+   server relays it to that socket (`{ "type": "envelope", "envelope" }`) and
+   keeps nothing; an address that is no socket of the account is `404`.
+4. The new device registers with `{"type": "link", "linkToken"}`.
 
 ### GET /api/chat/keys/count?deviceId=N
 
@@ -3481,18 +3618,27 @@ Remaining one-time pool sizes: `{ "oneTimePreKeys": n, "oneTimeKyberPreKeys": n 
 
 ### POST /api/chat/manifest
 
-Publish one complete `AccountManifestV1`, signed by the account self-authority.
-Sequences advance by exactly one and hash-link to the preceding signed record.
-The authority and incarnation cannot change inside a chain. Every signed
-device id, registration id, direct-chat identity key, MLS credential/delivery
-key and suite must exactly match a registered server tuple. Registered rows
-not selected by the authority-signed manifest are pruned atomically; this
-recovers a crash between device registration and manifest publication without
-allowing an unmanifested device to become trusted. The Drive HPKE and
+Publish the account's next `AccountManifestV2`, signed by the account
+self-authority (device-authenticated). It follows the head
+(`verifySuccessor`: head + 1, linked by hash, the same account, incarnation
+and authority), names the account's identity (`409 identityMismatch`: the
+identity changes only by a distribution or a re-registration), carries
+that identity's `identityBinding` (its signature over the authority key id,
+incarnation, account and identity key; `400 badSignature` otherwise, here and
+wherever a manifest is uploaded), and every listed device is a live
+registered row with its listed registration id and
+suite. Rows it doesn't list (a crash between registration and publication, an
+expired device, an injected row) are pruned atomically. The Drive HPKE and
 share-signing keys are account-scoped fields in the same manifest. Publication
 atomically updates the current head and immutable history; exact replay is
-idempotent. Malformed signatures, gaps, forks, authority replacement, or a
-declared device-key conflict return `409`.
+idempotent. `AccountManifestPublicationV2`.
+
+### Device expiry
+
+A device idle for the administrators' `deviceExpiryDays` is marked expired:
+it leaves send device sets and key bundles at once and its credential stops
+working; the account's next manifest (any of its devices publishes one on
+`DevicesChanged`) drops the row.
 
 ### Chat routes name accounts by id
 
@@ -3509,7 +3655,9 @@ failure. Manifests, profiles, key bundles (`account`) and mailbox envelopes
 Return the current account-signed device manifest for an account. This direct
 manifest endpoint is authenticated. A client independently verifies its
 signature, authority continuity, and hash chain rather than trusting a server
-status label.
+status label. `404 noManifest`: the account has no Chat manifest yet; a 404
+without that code (an unknown account; a remote server that didn't say so)
+is not that answer.
 
 ### GET /api/chat/accounts/{accountId}/manifest-history
 
@@ -3553,13 +3701,17 @@ indistinguishable from a missing profile and returns `404`.
 
 ### GET /api/chat/accounts/{accountId}/keys
 
-Return PQXDH prekey bundles for **every** active Chat device of the account
-(a logical message encrypts to all of them), together with the exact complete
-account-signed manifest. Each bundle carries `identityKey`, `signedPreKey`,
-`kyberPreKey` (a consumed one-time ML-KEM-1024 prekey, or the reusable
-last-resort key when the pool is empty), and optionally a consumed one-time EC
-prekey. The client verifies manifest and bundle identity equality before
-creating sessions. Fetches are limited to 30/min per authenticated account
+Return `AccountPreKeyBundlesResponse`: the account's `identityKey` once,
+PQXDH prekey bundles for **every** device its manifest lists that hasn't
+expired (a logical message encrypts to all of them), and the exact complete
+account-signed `AccountManifestV2`. Each bundle carries its `deviceId`,
+`registrationId`, `suite`, `signedPreKey`, `kyberPreKey` (a consumed one-time
+ML-KEM-1024 prekey, or the reusable last-resort key when the pool is empty),
+and optionally a consumed one-time EC prekey. The client checks the bundles
+against the manifest (`check_against_manifest`) and the prekey signatures
+against the identity before creating sessions; a server relaying another
+server's bundles checks them against its manifest first. A `syncDeviceId`
+fetch is made as that device (its credential). Fetches are limited to 30/min per authenticated account
 (`RATE_LIMIT_CHAT_KEYS_PER_MIN`) with a coarse 120/min IP wall
 (`RATE_LIMIT_CHAT_KEYS_IP_PER_MIN`).
 
@@ -4052,7 +4204,8 @@ exhaust the remote recipient's pool.
 ### GET /api/fed/chat/accounts/{accountId}/manifest
 
 Return the current complete account-signed manifest through an authenticated,
-origin- and destination-bound federation response.
+origin- and destination-bound federation response (`404 noManifest` when the
+account has none).
 
 ### GET /api/fed/chat/accounts/{accountId}/manifest-history
 

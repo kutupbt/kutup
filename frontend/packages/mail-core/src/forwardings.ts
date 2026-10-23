@@ -34,6 +34,12 @@ export interface MailForwarding {
   notice: 'bounces' | 'budget' | null
   createdAt: string
   expiresAt: string | null
+  /** Whether the forwarder entered the code mailed to the destination; nothing is forwarded before. */
+  verified: boolean
+  /** For the forwarder, while a code is live: when it expires. */
+  codeExpiresAt: string | null
+  /** For the forwarder, while a code is live: wrong tries it still takes. */
+  codeAttemptsLeft: number | null
 }
 
 export interface MailForwardings {
@@ -338,6 +344,30 @@ export function useForwardingAction() {
   })
 }
 
+/** Mails a new verification code to a forwarding's destination (the last one void). */
+export function useSendForwardingCode() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: async (id: string) => (await api.post<MailForwarding>(`/mail/forwardings/${id}/code`)).data,
+    onSettled: () => queryClient.invalidateQueries({ queryKey: forwardingsKey }),
+  })
+}
+
+/** Enters the code mailed to a forwarding's destination. */
+export function useVerifyForwarding() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: async ({ id, code }: { id: string; code: string }) =>
+      (await api.post<MailForwarding>(`/mail/forwardings/${id}/verify`, { code })).data,
+    onSettled: () => queryClient.invalidateQueries({ queryKey: forwardingsKey }),
+  })
+}
+
+/** Whether a forwarding of the account's waits for its code (rejected and outdated ones are asked again instead). */
+export function awaitsCode(forwarding: MailForwarding): boolean {
+  return !forwarding.verified && forwarding.state !== 'rejected' && forwarding.state !== 'outdated'
+}
+
 /** Changes which mail a forwarding sends on. */
 export function useForwardingConditions() {
   const queryClient = useQueryClient()
@@ -350,8 +380,10 @@ export function useForwardingConditions() {
 }
 
 /** What a forwarder may do with a forwarding of theirs in each state (Proton's table). */
-export function forwarderActions(forwarding: MailForwarding): ('edit' | 'pause' | 'resume' | 'reinvite' | 'renew' | 'delete')[] {
+export function forwarderActions(forwarding: MailForwarding): ('verify' | 'edit' | 'pause' | 'resume' | 'reinvite' | 'renew' | 'delete')[] {
   const outside = forwarding.kind === 'outside'
+  // Unverified: the code first (a new one can be sent from its dialog).
+  if (awaitsCode(forwarding)) return ['verify', 'edit', 'delete']
   switch (forwarding.state) {
     case 'pending':
       return outside ? ['edit', 'reinvite', 'delete'] : ['edit', 'delete']

@@ -114,6 +114,7 @@ impl Spec {
                 | Limit::LoginSourceDailyCeiling
                 | Limit::TotpAttempts
                 | Limit::PassPinAttempts
+                | Limit::ForwardingCodeAttempts
                 | Limit::Register
                 | Limit::RegistrationCodeChecks
                 | Limit::RegistrationCodeFailures
@@ -127,7 +128,8 @@ impl Spec {
     /// §4): the limits counted per signed-in account. The sign-in ceilings
     /// count guesses at an account, not its own use, so they take none.
     pub fn overridable(&self) -> bool {
-        self.per == Per::Account
+        // A forwarding's limits are its account's to override too.
+        matches!(self.per, Per::Account | Per::Forwarding)
             && !matches!(
                 self.limit,
                 Limit::LoginAccountCeiling | Limit::LoginAccountDailyCeiling
@@ -181,6 +183,10 @@ pub enum Limit {
     Reports,
     // Chat.
     ChatKeysAccount,
+    ChatLinkTokens,
+    ChatProvisioningSockets,
+    ChatProvisioningRelays,
+    ChatIdentityDistributions,
     ChatKeysAddress,
     ChatAnonymousAddress,
     SealedCapabilityBundles,
@@ -219,6 +225,12 @@ pub enum Limit {
     ForwardingsCreated,
     ForwardingConfirmationsSent,
     ForwardingInvites,
+    ForwardingCodeMinutes,
+    ForwardingCodeAttempts,
+    ForwardingCodeResends,
+    ForwardingCodesPerDestination,
+    ForwardingUnverifiedPending,
+    ForwardingUnverifiedMinutes,
     ForwardingBounces,
     ForwardingOutside,
     ForwardingOutsideAccount,
@@ -539,6 +551,46 @@ pub static SPECS: &[Spec] = &[
         Account,
         Chat,
         "Key bundles fetched: draining one-time prekeys."
+    ),
+    spec!(
+        ChatLinkTokens,
+        "chat_link_tokens",
+        None,
+        20,
+        Events(HOUR),
+        Account,
+        Chat,
+        "Link tokens asked for, to link a new Chat device."
+    ),
+    spec!(
+        ChatProvisioningSockets,
+        "chat_provisioning_sockets",
+        None,
+        10,
+        Events(MINUTE),
+        Address,
+        Chat,
+        "Provisioning sockets opened by devices waiting to be linked."
+    ),
+    spec!(
+        ChatProvisioningRelays,
+        "chat_provisioning_relays",
+        None,
+        10,
+        Events(MINUTE),
+        Account,
+        Chat,
+        "Provisioning messages relayed to a device being linked."
+    ),
+    spec!(
+        ChatIdentityDistributions,
+        "chat_identity_distributions",
+        None,
+        5,
+        Events(DAY),
+        Account,
+        Chat,
+        "New Chat identities for an account's devices."
     ),
     spec!(
         ChatKeysAddress,
@@ -888,17 +940,77 @@ pub static SPECS: &[Spec] = &[
         Events(DAY),
         Account,
         Mail,
-        "Confirmation emails one account causes, across its forwardings."
+        "Verification code emails one account causes, across its forwardings."
     ),
     spec!(
         ForwardingInvites,
         "forwarding_invites",
         None,
-        3,
+        10,
         Events(DAY),
         Forwarding,
         Mail,
-        "Confirmation emails one outside forwarding sends."
+        "Verification codes one forwarding sends."
+    ),
+    spec!(
+        ForwardingCodeMinutes,
+        "forwarding_code_minutes",
+        None,
+        15,
+        Minutes,
+        Forwarding,
+        Mail,
+        "How long a forwarding's verification code lasts."
+    ),
+    spec!(
+        ForwardingCodeAttempts,
+        "forwarding_code_attempts",
+        None,
+        5,
+        Attempts,
+        Forwarding,
+        Mail,
+        "Wrong verification codes before the code is void and a new one is needed."
+    ),
+    spec!(
+        ForwardingCodeResends,
+        "forwarding_code_resends",
+        None,
+        1,
+        Events(MINUTE),
+        Forwarding,
+        Mail,
+        "Verification codes one forwarding may send in a minute."
+    ),
+    spec!(
+        ForwardingCodesPerDestination,
+        "forwarding_codes_per_destination",
+        None,
+        10,
+        Events(DAY),
+        Recipient,
+        Mail,
+        "Verification codes one destination address receives in a day, from every account."
+    ),
+    spec!(
+        ForwardingUnverifiedPending,
+        "forwarding_unverified_pending",
+        None,
+        5,
+        AtOnce,
+        Account,
+        Mail,
+        "Forwardings one account may have waiting for their code at once."
+    ),
+    spec!(
+        ForwardingUnverifiedMinutes,
+        "forwarding_unverified_minutes",
+        None,
+        1440,
+        Minutes,
+        Forwarding,
+        Mail,
+        "How long after its last code an unverified forwarding lapses."
     ),
     spec!(
         ForwardingBounces,

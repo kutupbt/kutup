@@ -1,11 +1,13 @@
-import type { SafetyNumberV1 } from '@kutup/chat-core/types'
+import type { SafetyNumberV2 } from '@kutup/chat-core/types'
 import { SafetyVerificationDialog as SharedDialog } from '@kutup/ui/components/safety-verification'
 
 export interface SafetyVerificationDialogProps {
   /** Who the number is with, as shown (a name or an address, never an account key). */
   peer: string
-  safety: SafetyNumberV1
-  onVerify: (scannedPayload: string) => Promise<SafetyNumberV1>
+  safety: SafetyNumberV2
+  onVerify: (scannedPayload: string) => Promise<SafetyNumberV2>
+  /** Mark the contact's identity verified (or clear it) after comparing the numbers by eye. */
+  onSetVerified?: (verified: boolean) => Promise<SafetyNumberV2>
   /**
    * Controlled mode. When `open` is given the dialog renders no trigger of its
    * own — the host (e.g. the details panel) owns the button. Left undefined,
@@ -15,10 +17,13 @@ export interface SafetyVerificationDialogProps {
   onOpenChange?: (open: boolean) => void
 }
 
+/** Chat's QR codes: the safety number over both account identity keys. */
+const CHAT_SAFETY_QR_PREFIX = 'kutup://verify/v4/'
+
 /**
- * Chat's safety number in the shared dialog (the same number Drive shows,
- * kutup-crypto safety_number). Rust performs the authoritative payload
- * comparison and owns the trust state.
+ * Chat's safety number in the shared dialog: libsignal's fingerprint over
+ * both accounts' identity keys, as Signal's (docs/plans/account-identity-key.md).
+ * Rust performs the authoritative payload comparison and owns the trust state.
  */
 export function SafetyVerificationDialog({ safety, ...props }: SafetyVerificationDialogProps) {
   const blocked = safety.continuityGap || safety.trust === 'Quarantined'
@@ -26,6 +31,7 @@ export function SafetyVerificationDialog({ safety, ...props }: SafetyVerificatio
     <SharedDialog
       {...props}
       testIdPrefix="chat-safety"
+      payloadPrefix={CHAT_SAFETY_QR_PREFIX}
       safety={{
         fingerprint: safety.fingerprint,
         qrPayload: safety.qrPayload,

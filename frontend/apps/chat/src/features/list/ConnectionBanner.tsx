@@ -1,8 +1,6 @@
 import { CloudOff, MonitorX, RefreshCw, Timer } from 'lucide-react'
 import { useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
-import { requestLocalChatDeviceReset } from '@kutup/chat-core/local-store'
-import { useRequiredSession } from '@kutup/session/store'
 import { Button } from '@kutup/ui/components/button'
 import { useChat } from '../../app/chatStore'
 
@@ -17,7 +15,6 @@ const GRACE_MS = 3_000
 export function ConnectionBanner() {
   const { t } = useTranslation()
   const { connection, service } = useChat()
-  const session = useRequiredSession()
   const [shown, setShown] = useState(false)
 
   useEffect(() => {
@@ -44,12 +41,11 @@ export function ConnectionBanner() {
         <Button
           size="sm"
           className="self-start"
-          onClick={() => {
-            requestLocalChatDeviceReset(session.userId)
-            window.location.reload()
-          }}
+          // Opening again finds no device here and shows how to link it,
+          // with this browser's history kept.
+          onClick={() => window.location.reload()}
         >
-          {t('chat.connection.setUpAgain')}
+          {t('chat.connection.linkAgain')}
         </Button>
       </div>
     )

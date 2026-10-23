@@ -31,6 +31,33 @@ describe('ApiChatTransport', () => {
     expect(remove).toHaveBeenCalledWith('/chat/device/2')
   })
 
+  it('links, relays and distributes with their refusals said as outcomes', async () => {
+    const transport = new ApiChatTransport()
+    const post = vi.spyOn(api, 'post').mockResolvedValue({ data: { token: 't', expiresAt: 'x' } } as never)
+    await expect(transport.createLinkToken()).resolves.toEqual({ token: 't', expiresAt: 'x' })
+    expect(post).toHaveBeenCalledWith('/chat/link-tokens')
+
+    const put = vi.spyOn(api, 'put').mockResolvedValueOnce({ data: undefined } as never)
+    await expect(transport.relayProvisioning('a/b', { envelope: {} })).resolves.toBe(true)
+    expect(put).toHaveBeenCalledWith('/chat/provisioning/a%2Fb', { envelope: {} })
+    const gone = new axios.AxiosError('gone', '404', undefined, undefined, { status: 404 } as never)
+    put.mockRejectedValueOnce(gone)
+    await expect(transport.relayProvisioning('a', {})).resolves.toBe(false)
+
+    put.mockResolvedValueOnce({ data: undefined } as never)
+    await expect(transport.distributeIdentity({})).resolves.toEqual({ kind: 'accepted' })
+    for (const status of [409, 410]) {
+      const mismatch = { missingDevices: [3], staleDevices: [], extraDevices: [] }
+      put.mockRejectedValueOnce(
+        new axios.AxiosError('mismatch', String(status), undefined, undefined, { status, data: mismatch } as never),
+      )
+      await expect(transport.distributeIdentity({})).resolves.toEqual({ kind: 'mismatch', mismatch })
+    }
+    const refused = new axios.AxiosError('bad', '400', undefined, undefined, { status: 400 } as never)
+    put.mockRejectedValueOnce(refused)
+    await expect(transport.distributeIdentity({})).rejects.toBe(refused)
+  })
+
   it('waits for a lagging ordering server before giving up on a quorum', async () => {
     vi.useFakeTimers()
     try {
@@ -127,14 +154,20 @@ describe('ApiChatTransport', () => {
     expect(post).toHaveBeenCalledWith('/chat/manifest', { sequence: 2 })
   })
 
-  it('treats only a manifest 404 as an absent manifest', async () => {
+  it('treats only the server\'s noManifest 404 as an absent manifest', async () => {
     const get = vi.spyOn(api, 'get').mockRejectedValue({
       isAxiosError: true,
-      response: { status: 404 },
+      response: { status: 404, data: { error: 'chat manifest not found', code: 'noManifest' } },
     })
     const transport = new ApiChatTransport()
 
     await expect(transport.fetchManifest(BOB)).resolves.toBeNull()
+
+    // Another 404 (a proxy, Chat off) is no answer: never a re-registration.
+    get.mockRejectedValueOnce({ isAxiosError: true, response: { status: 404, data: '' } })
+    await expect(transport.fetchManifest(BOB)).rejects.toMatchObject({
+      response: { status: 404 },
+    })
 
     get.mockRejectedValueOnce({ isAxiosError: true, response: { status: 503 } })
     await expect(transport.fetchManifest(BOB)).rejects.toMatchObject({

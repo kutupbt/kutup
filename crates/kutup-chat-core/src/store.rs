@@ -20,12 +20,12 @@ use std::rc::Rc;
 
 use async_trait::async_trait;
 use base64::Engine as _;
-use kutup_chat_proto::{AccountManifestDeviceV1, MlsManifestDeviceV1};
+use kutup_chat_proto::{AccountManifestDeviceV2, MlsManifestDeviceV1};
 use libsignal_protocol::*;
 use uuid::Uuid;
 
 use crate::db::{
-    AccountManifestHistoryRecordV1, ChatDb, ContactRecord, InboundEnvelope, InboxMessage,
+    AccountManifestHistoryRecord, ChatDb, ContactRecord, InboundEnvelope, InboxMessage,
     LocalIdentity, ManifestTrust, OutboxEntry, Pending, SentMessage,
 };
 use crate::error::{ChatError, Result as ChatResult};
@@ -46,6 +46,8 @@ fn cb(method: &'static str) -> impl FnOnce(ChatError) -> SignalProtocolError {
 pub(crate) struct ChatStore {
     pending: Rc<RefCell<Pending>>,
     db: Rc<dyn ChatDb>,
+    /// The device's credential (`LocalIdentity::credential`).
+    credential: Option<String>,
     pub(crate) session_store: SessionAdapter,
     pub(crate) identity_store: IdentityAdapter,
     pub(crate) pre_key_store: PreKeyAdapter,
@@ -63,6 +65,7 @@ impl ChatStore {
             .map_err(|e| ChatError::Protocol(e.to_string()))?;
         let pending = Rc::new(RefCell::new(Pending::default()));
         Ok(ChatStore {
+            credential: local.credential.clone(),
             session_store: SessionAdapter {
                 db: db.clone(),
                 pending: pending.clone(),
@@ -256,7 +259,7 @@ impl ChatStore {
             .insert(trust.peer.clone(), trust);
     }
 
-    pub(crate) fn stage_manifest_history(&self, record: AccountManifestHistoryRecordV1) {
+    pub(crate) fn stage_manifest_history(&self, record: AccountManifestHistoryRecord) {
         let incarnation_id = record.manifest.incarnation_id.clone();
         self.pending.borrow_mut().manifest_history.insert(
             (record.peer.clone(), incarnation_id, record.sequence),
@@ -310,7 +313,7 @@ impl ChatStore {
             .insert(record_id.to_string());
     }
 
-    pub(crate) fn local_manifest_device(&self, device_id: u32) -> AccountManifestDeviceV1 {
+    pub(crate) fn local_manifest_device(&self, device_id: u32) -> AccountManifestDeviceV2 {
         self.local_manifest_device_with_mls(device_id, None)
     }
 
@@ -318,15 +321,26 @@ impl ChatStore {
         &self,
         device_id: u32,
         mls: Option<MlsManifestDeviceV1>,
-    ) -> AccountManifestDeviceV1 {
-        AccountManifestDeviceV1 {
+    ) -> AccountManifestDeviceV2 {
+        AccountManifestDeviceV2 {
             device_id,
             direct_chat_suite: kutup_chat_proto::DirectChatSuiteId::PqxdhTripleRatchetV1,
-            identity_key: base64::engine::general_purpose::STANDARD
-                .encode(self.identity_store.key_pair.identity_key().serialize()),
             registration_id: self.identity_store.registration_id,
             mls,
         }
+    }
+
+    /// The account's identity key, as the manifest lists it (canonical
+    /// base64 of the 33-byte key).
+    pub(crate) fn local_identity_key_base64(&self) -> String {
+        base64::engine::general_purpose::STANDARD
+            .encode(self.identity_store.key_pair.identity_key().serialize())
+    }
+
+    /// The device's credential, `None` only in a store from before the
+    /// account identity.
+    pub(crate) fn credential(&self) -> Option<&str> {
+        self.credential.as_deref()
     }
 
     pub(crate) fn local_identity_key_pair(&self) -> IdentityKeyPair {
@@ -341,8 +355,24 @@ impl ChatStore {
             identity_key_pair: self.identity_store.key_pair.serialize().to_vec(),
             registration_id: self.identity_store.registration_id,
             device_id: Some(device_id),
+            credential: self.credential.clone(),
         });
         pending.registration_upload = Some(None);
+    }
+
+    /// This device is no longer one of the account's: it keeps its history
+    /// and its identity material, but neither a device id nor a credential,
+    /// so it opens as a device to link (as a store from before the account
+    /// identity does).
+    pub(crate) fn stage_registration_forgotten(&self) {
+        let mut pending = self.pending.borrow_mut();
+        pending.local_identity = Some(LocalIdentity {
+            identity_key_pair: self.identity_store.key_pair.serialize().to_vec(),
+            registration_id: self.identity_store.registration_id,
+            device_id: None,
+            credential: None,
+        });
+        pending.pending_account_identity = Some(None);
     }
 
     pub(crate) fn stage_generated_pre_key(&self, id: u32, record: Vec<u8>) {
@@ -351,6 +381,32 @@ impl ChatStore {
 
     pub(crate) fn stage_generated_kyber_pre_key(&self, id: u32, record: Vec<u8>) {
         self.pending.borrow_mut().kyber_pre_keys.insert(id, record);
+    }
+
+    /// Keep (`Some`) or clear (`None`) a received `accountIdentity` sync.
+    pub(crate) fn stage_pending_account_identity(&self, body: Option<Vec<u8>>) {
+        self.pending.borrow_mut().pending_account_identity = Some(body);
+    }
+
+    /// Install this device's part of an identity change: the old identity's
+    /// sessions, prekeys and sender keys go (`Pending::reset_identity`), and
+    /// the new identity, registration id, signed prekey and last-resort Kyber
+    /// key take their place, in one commit with whatever else is staged.
+    pub(crate) fn stage_identity_install(
+        &self,
+        local: LocalIdentity,
+        signed_pre_key: (u32, Vec<u8>),
+        last_resort_kyber_pre_key: (u32, Vec<u8>),
+    ) {
+        let mut pending = self.pending.borrow_mut();
+        pending.reset_identity = true;
+        pending.local_identity = Some(local);
+        pending
+            .signed_pre_keys
+            .insert(signed_pre_key.0, signed_pre_key.1);
+        pending
+            .kyber_pre_keys
+            .insert(last_resort_kyber_pre_key.0, last_resort_kyber_pre_key.1);
     }
 
     pub(crate) fn stage_generated_signed_pre_key(&self, id: u32, record: Vec<u8>) {
@@ -502,6 +558,30 @@ impl IdentityAdapter {
     }
 }
 
+impl IdentityAdapter {
+    /// The account's identity key as its accepted manifest lists it (the pin
+    /// staged in this unit of work first). `None` without a pin, or with one
+    /// from before the account identity.
+    async fn manifest_identity(&self, account: &str) -> Result<Option<IdentityKey>> {
+        let staged = self.pending.borrow().manifest_trust.get(account).cloned();
+        let trust = match staged {
+            Some(trust) => Some(trust),
+            None => self
+                .db
+                .load_manifest_trust(account)
+                .await
+                .map_err(cb("manifest_identity"))?,
+        };
+        let Some(trust) = trust.filter(|trust| !trust.identity_key.is_empty()) else {
+            return Ok(None);
+        };
+        let bytes = base64::engine::general_purpose::STANDARD
+            .decode(&trust.identity_key)
+            .map_err(|_| SignalProtocolError::InvalidArgument("pinned identity key".into()))?;
+        Ok(Some(IdentityKey::decode(&bytes)?))
+    }
+}
+
 #[async_trait(?Send)]
 impl IdentityKeyStore for IdentityAdapter {
     async fn get_identity_key_pair(&self) -> Result<IdentityKeyPair> {
@@ -517,6 +597,13 @@ impl IdentityKeyStore for IdentityAdapter {
         address: &ProtocolAddress,
         identity: &IdentityKey,
     ) -> Result<IdentityChange> {
+        // The identity rule: every device of an account has the account's
+        // identity, the one its verified manifest lists; any other is refused.
+        if let Some(listed) = self.manifest_identity(address.name()).await? {
+            if &listed != identity {
+                return Err(SignalProtocolError::UntrustedIdentity(address.clone()));
+            }
+        }
         let key = address.to_string();
         // TOFU with change detection — mirrors InMemIdentityKeyStore exactly: only
         // (re)write when new or changed, and report whether an existing key moved.
@@ -538,6 +625,11 @@ impl IdentityKeyStore for IdentityAdapter {
         identity: &IdentityKey,
         _direction: Direction,
     ) -> Result<bool> {
+        // The account's manifest decides; only a development transport without
+        // manifests falls back to the first key seen.
+        if let Some(listed) = self.manifest_identity(address.name()).await? {
+            return Ok(&listed == identity);
+        }
         match self.stored_identity(&address.to_string()).await? {
             None => Ok(true), // trust on first use
             Some(k) => Ok(&k == identity),

@@ -17,7 +17,7 @@ use rusqlite::{Connection, OptionalExtension};
 use zeroize::Zeroize as _;
 
 use crate::db::{
-    contact_state_code, contact_state_from_code, AccountManifestHistoryRecordV1, AuthorityTrust,
+    contact_state_code, contact_state_from_code, AccountManifestHistoryRecord, AuthorityTrust,
     ChatDb, ContactRecord, InboundEnvelope, InboundFailureKind, InboundState, InboxMessage,
     LocalIdentity, LocalProfile, ManifestTrust, MlsHistoryMessage, MlsOutboxDelivery,
     MlsOutboxEntry, OutboxEntry, PeerProfile, Pending, SentMessage,
@@ -34,12 +34,13 @@ CREATE TABLE IF NOT EXISTS schema_migrations (
     version    INTEGER PRIMARY KEY,
     applied_at INTEGER NOT NULL
 );
-INSERT OR IGNORE INTO schema_migrations (version, applied_at) VALUES (3, 0);
+INSERT OR IGNORE INTO schema_migrations (version, applied_at) VALUES (4, 0);
 CREATE TABLE IF NOT EXISTS local_identity (
     id                INTEGER PRIMARY KEY CHECK (id = 1),
     identity_key_pair BLOB    NOT NULL,
     registration_id   INTEGER NOT NULL,
-    device_id          INTEGER
+    device_id          INTEGER,
+    credential         TEXT
 );
 CREATE TABLE IF NOT EXISTS sessions (
     address TEXT PRIMARY KEY,
@@ -172,7 +173,10 @@ CREATE TABLE IF NOT EXISTS manifest_trust (
     trust_state        INTEGER NOT NULL,
     continuity_gap     INTEGER NOT NULL,
     quarantine_reason  TEXT,
-    pending_reset_json TEXT
+    pending_reset_json TEXT,
+    identity_key       TEXT    NOT NULL,
+    identity_verified  INTEGER NOT NULL DEFAULT 0,
+    identity_verified_at_ms INTEGER NOT NULL DEFAULT 0
 );
 CREATE TABLE IF NOT EXISTS manifest_history (
     peer          TEXT    NOT NULL,
@@ -200,6 +204,10 @@ CREATE TABLE IF NOT EXISTS index_values (
 CREATE TABLE IF NOT EXISTS pending_chat_registration (
     id      INTEGER PRIMARY KEY CHECK (id = 1),
     request BLOB NOT NULL
+);
+CREATE TABLE IF NOT EXISTS pending_account_identity (
+    id   INTEGER PRIMARY KEY CHECK (id = 1),
+    body BLOB NOT NULL
 );
 CREATE TABLE IF NOT EXISTS contacts (
     peer             TEXT PRIMARY KEY,
@@ -292,12 +300,12 @@ impl SqliteChatDb {
         // SQLite free pages after its logical row is removed.
         db(conn.pragma_update(None, "secure_delete", "ON"))?;
         db(conn.execute_batch(SCHEMA))?;
-        // One schema version, created whole (3: contacts gained when their
-        // list entry is due, and the contact-list flag). A store from an older layout
+        // One schema version, created whole (4: the device credential and
+        // the account identity in manifest pins). A store from an older layout
         // (development builds only; no native app has shipped) is refused
         // rather than upgraded.
         let foreign: i64 = db(conn.query_row(
-            "SELECT COUNT(*) FROM schema_migrations WHERE version <> 3",
+            "SELECT COUNT(*) FROM schema_migrations WHERE version <> 4",
             [],
             |row| row.get(0),
         ))?;
@@ -320,13 +328,15 @@ impl ChatDb for SqliteChatDb {
         let conn = self.conn.borrow();
         db(conn
             .query_row(
-                "SELECT identity_key_pair, registration_id, device_id FROM local_identity WHERE id = 1",
+                "SELECT identity_key_pair, registration_id, device_id, credential \
+                 FROM local_identity WHERE id = 1",
                 [],
                 |row| {
                     Ok(LocalIdentity {
                         identity_key_pair: row.get(0)?,
                         registration_id: row.get(1)?,
                         device_id: row.get(2)?,
+                        credential: row.get(3)?,
                     })
                 },
             )
@@ -617,7 +627,8 @@ impl ChatDb for SqliteChatDb {
                         self_authority_key, drive_hpke_public_key,
                         drive_share_signing_public_key, highest_sequence,
                         manifest_hash, trust_state, continuity_gap,
-                        quarantine_reason, pending_reset_json
+                        quarantine_reason, pending_reset_json, identity_key,
+                        identity_verified, identity_verified_at_ms
                  FROM manifest_trust WHERE peer = ?1",
                 [peer],
                 |row| {
@@ -639,6 +650,9 @@ impl ChatDb for SqliteChatDb {
                         drive_share_signing_public_key: row.get(6)?,
                         highest_sequence: row.get::<_, i64>(7)? as u64,
                         manifest_hash: row.get(8)?,
+                        identity_key: row.get(13)?,
+                        identity_verified: row.get::<_, i64>(14)? != 0,
+                        identity_verified_at_ms: row.get(15)?,
                         trust,
                         continuity_gap: row.get::<_, i64>(10)? != 0,
                         quarantine_reason: row.get(11)?,
@@ -664,7 +678,7 @@ impl ChatDb for SqliteChatDb {
         peer: &str,
         incarnation_id: &str,
         sequence: u64,
-    ) -> Result<Option<AccountManifestHistoryRecordV1>> {
+    ) -> Result<Option<AccountManifestHistoryRecord>> {
         let conn = self.conn.borrow();
         let row: Option<String> = db(conn
             .query_row(
@@ -675,7 +689,7 @@ impl ChatDb for SqliteChatDb {
             )
             .optional())?;
         row.map(|manifest| {
-            Ok(AccountManifestHistoryRecordV1 {
+            Ok(AccountManifestHistoryRecord {
                 peer: peer.to_string(),
                 sequence,
                 manifest: serde_json::from_str(&manifest)
@@ -828,6 +842,17 @@ impl ChatDb for SqliteChatDb {
             .optional())
     }
 
+    async fn load_pending_account_identity(&self) -> Result<Option<Vec<u8>>> {
+        let conn = self.conn.borrow();
+        db(conn
+            .query_row(
+                "SELECT body FROM pending_account_identity WHERE id = 1",
+                [],
+                |row| row.get(0),
+            )
+            .optional())
+    }
+
     async fn apply(&self, pending: &Pending) -> Result<()> {
         // The conversation timelines move with the records they index.
         let crate::timeline::Changes {
@@ -840,18 +865,50 @@ impl ChatDb for SqliteChatDb {
         let mut conn = self.conn.borrow_mut();
         let tx = db(conn.transaction())?;
 
+        if pending.reset_transport || pending.reset_identity {
+            db(tx.execute_batch(
+                "DELETE FROM sessions;
+                 DELETE FROM identities;
+                 DELETE FROM pre_keys;
+                 DELETE FROM signed_pre_keys;
+                 DELETE FROM kyber_pre_keys;
+                 DELETE FROM kyber_base_keys_seen;
+                 DELETE FROM sender_keys;
+                 DELETE FROM pending_prekey_upload;
+                 DELETE FROM prekey_rotation;",
+            ))?;
+        }
+        if pending.reset_transport {
+            db(tx.execute_batch(
+                "DELETE FROM local_identity;
+                 DELETE FROM mls_state;
+                 DELETE FROM mls_outbox;
+                 DELETE FROM inbound_envelopes;
+                 DELETE FROM repair_limits;
+                 DELETE FROM pending_account_identity;
+                 DELETE FROM pending_chat_registration;
+                 DELETE FROM meta WHERE key = 'last_cursor';",
+            ))?;
+        }
+        for peer in &pending.forget_manifests_of {
+            db(tx.execute("DELETE FROM manifest_trust WHERE peer = ?1", [peer]))?;
+            db(tx.execute("DELETE FROM manifest_history WHERE peer = ?1", [peer]))?;
+        }
         if let Some(local) = &pending.local_identity {
             db(tx.execute(
-                "INSERT INTO local_identity (id, identity_key_pair, registration_id, device_id) \
-                 VALUES (1, ?1, ?2, ?3) \
+                "INSERT INTO local_identity \
+                   (id, identity_key_pair, registration_id, device_id, credential) \
+                 VALUES (1, ?1, ?2, ?3, ?4) \
                  ON CONFLICT(id) DO UPDATE SET \
                    identity_key_pair = excluded.identity_key_pair, \
                    registration_id = excluded.registration_id, \
-                   device_id = excluded.device_id",
+                   device_id = excluded.device_id, \
+                   credential = excluded.credential",
                 rusqlite::params![
                     local.identity_key_pair,
                     local.registration_id,
-                    local.device_id
+                    local.device_id,
+                    local.credential
                 ],
             ))?;
         }
@@ -1133,8 +1190,9 @@ impl ChatDb for SqliteChatDb {
                       self_authority_key, drive_hpke_public_key,
                       drive_share_signing_public_key, highest_sequence,
                       manifest_hash, trust_state, continuity_gap,
-                      quarantine_reason, pending_reset_json)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)
+                      quarantine_reason, pending_reset_json, identity_key,
+                      identity_verified, identity_verified_at_ms)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16)
                  ON CONFLICT(peer) DO UPDATE SET
                      account = excluded.account,
                      incarnation_id = excluded.incarnation_id,
@@ -1147,7 +1205,10 @@ impl ChatDb for SqliteChatDb {
                      trust_state = excluded.trust_state,
                      continuity_gap = excluded.continuity_gap,
                      quarantine_reason = excluded.quarantine_reason,
-                     pending_reset_json = excluded.pending_reset_json",
+                     pending_reset_json = excluded.pending_reset_json,
+                     identity_key = excluded.identity_key,
+                     identity_verified = excluded.identity_verified,
+                     identity_verified_at_ms = excluded.identity_verified_at_ms",
                 rusqlite::params![
                     peer,
                     trust.account,
@@ -1167,6 +1228,9 @@ impl ChatDb for SqliteChatDb {
                         .map(serde_json::to_string)
                         .transpose()
                         .map_err(|error| ChatError::Db(error.to_string()))?,
+                    trust.identity_key,
+                    i64::from(trust.identity_verified),
+                    trust.identity_verified_at_ms,
                 ],
             ))?;
         }
@@ -1322,6 +1386,16 @@ impl ChatDb for SqliteChatDb {
                     [request],
                 ))?,
                 None => db(tx.execute("DELETE FROM pending_chat_registration WHERE id = 1", []))?,
+            };
+        }
+        if let Some(body) = &pending.pending_account_identity {
+            match body {
+                Some(body) => db(tx.execute(
+                    "INSERT INTO pending_account_identity (id, body) VALUES (1, ?1)
+                     ON CONFLICT(id) DO UPDATE SET body = excluded.body",
+                    [body],
+                ))?,
+                None => db(tx.execute("DELETE FROM pending_account_identity WHERE id = 1", []))?,
             };
         }
         if let Some(state) = &pending.pins_due {
@@ -1728,34 +1802,44 @@ mod tests {
         let _ = std::fs::remove_file(&path);
     }
 
+    /// A signed manifest of a test account, its authority and identity from `seed`.
+    fn test_manifest(seed: u8) -> kutup_chat_proto::AccountManifestV2 {
+        crate::AccountAuthority::derive(&[seed; 32])
+            .unwrap()
+            .sign_manifest(
+                "aci:00000000-0000-4000-8000-81b637d8fcd2@chat.example"
+                    .parse()
+                    .unwrap(),
+                1,
+                None,
+                &{
+                    let private = libsignal_protocol::PrivateKey::deserialize(&[seed; 32]).unwrap();
+                    libsignal_protocol::IdentityKeyPair::new(
+                        libsignal_protocol::IdentityKey::new(private.public_key().unwrap()),
+                        private,
+                    )
+                },
+                vec![kutup_chat_proto::AccountManifestDeviceV2 {
+                    device_id: 1,
+                    direct_chat_suite: kutup_chat_proto::DirectChatSuiteId::PqxdhTripleRatchetV1,
+                    registration_id: 7,
+                    mls: None,
+                }],
+                "2026-07-29T00:00:00Z",
+            )
+            .unwrap()
+    }
+
     #[test]
     fn quarantined_replacement_and_both_incarnation_histories_round_trip_atomically() {
-        use base64::Engine as _;
         use futures_executor::block_on;
-        use kutup_chat_proto::{AccountManifestDeviceV1, AccountManifestV1, DirectChatSuiteId};
+        use kutup_chat_proto::AccountManifestV2;
 
-        fn manifest(seed: u8) -> AccountManifestV1 {
-            crate::AccountAuthority::derive(&[seed; 32])
-                .unwrap()
-                .sign_manifest(
-                    "aci:00000000-0000-4000-8000-81b637d8fcd2@chat.example"
-                        .parse()
-                        .unwrap(),
-                    1,
-                    None,
-                    vec![AccountManifestDeviceV1 {
-                        device_id: 1,
-                        direct_chat_suite: DirectChatSuiteId::PqxdhTripleRatchetV1,
-                        identity_key: base64::engine::general_purpose::STANDARD.encode([seed; 33]),
-                        registration_id: 7,
-                        mls: None,
-                    }],
-                    "2026-07-29T00:00:00Z",
-                )
-                .unwrap()
+        fn manifest(seed: u8) -> AccountManifestV2 {
+            test_manifest(seed)
         }
 
-        fn pin(manifest: &AccountManifestV1, trust: AuthorityTrust) -> ManifestTrust {
+        fn pin(manifest: &AccountManifestV2, trust: AuthorityTrust) -> ManifestTrust {
             ManifestTrust {
                 peer: manifest.account.to_string(),
                 account: manifest.account.to_string(),
@@ -1766,6 +1850,9 @@ mod tests {
                 drive_share_signing_public_key: manifest.drive.share_signing_public_key.clone(),
                 highest_sequence: manifest.sequence,
                 manifest_hash: manifest.manifest_hash().unwrap(),
+                identity_key: manifest.identity_key.clone(),
+                identity_verified: false,
+                identity_verified_at_ms: 0,
                 trust,
                 continuity_gap: false,
                 quarantine_reason: None,
@@ -1775,12 +1862,12 @@ mod tests {
 
         let retained_manifest = manifest(3);
         let candidate_manifest = manifest(4);
-        let retained_record = AccountManifestHistoryRecordV1 {
+        let retained_record = AccountManifestHistoryRecord {
             peer: retained_manifest.account.to_string(),
             sequence: 1,
             manifest: retained_manifest.clone(),
         };
-        let candidate_record = AccountManifestHistoryRecordV1 {
+        let candidate_record = AccountManifestHistoryRecord {
             peer: candidate_manifest.account.to_string(),
             sequence: 1,
             manifest: candidate_manifest.clone(),
@@ -1852,6 +1939,206 @@ mod tests {
         let _ = std::fs::remove_file(path);
     }
 
+    /// The schema this build writes: 4 (the device credential, the account
+    /// identity and its verified state in the pins, the kept identity sync).
+    #[test]
+    fn a_new_store_is_schema_four() {
+        let db = SqliteChatDb::open_in_memory().unwrap();
+        let versions: Vec<i64> = {
+            let conn = db.conn.borrow();
+            let mut statement = conn
+                .prepare("SELECT version FROM schema_migrations")
+                .unwrap();
+            let rows = statement
+                .query_map([], |row| row.get(0))
+                .unwrap()
+                .collect::<rusqlite::Result<Vec<i64>>>()
+                .unwrap();
+            rows
+        };
+        assert_eq!(versions, vec![4]);
+    }
+
+    /// A store with a bit of everything: transport state, pins, history,
+    /// the outbox and a contact.
+    fn full_store() -> SqliteChatDb {
+        use futures_executor::block_on;
+        let db = SqliteChatDb::open_in_memory().unwrap();
+        let mut pending = Pending {
+            local_identity: Some(LocalIdentity {
+                identity_key_pair: vec![1, 2, 3],
+                registration_id: 42,
+                device_id: Some(1),
+                credential: Some("credential".into()),
+            }),
+            last_cursor: Some(9),
+            pending_account_identity: Some(Some(vec![7, 7])),
+            ..Pending::default()
+        };
+        pending.sessions.insert("peer.1".into(), Some(vec![4]));
+        pending.identities.insert("peer.1".into(), vec![5]);
+        pending.pre_keys.insert(100, Some(vec![6]));
+        pending.signed_pre_keys.insert(1, vec![7]);
+        pending.kyber_pre_keys.insert(1, vec![8]);
+        pending.manifest_trust.insert(
+            "peer".into(),
+            ManifestTrust {
+                peer: "peer".into(),
+                account: "aci:00000000-0000-4000-8000-2bd806c97f0e@a.test".into(),
+                incarnation_id: "i".into(),
+                authority_key_id: "a".into(),
+                self_authority_key: "k".into(),
+                drive_hpke_public_key: "d".into(),
+                drive_share_signing_public_key: "s".into(),
+                highest_sequence: 3,
+                manifest_hash: "h".into(),
+                identity_key: "identity".into(),
+                identity_verified: true,
+                identity_verified_at_ms: 11,
+                trust: AuthorityTrust::Tofu,
+                continuity_gap: false,
+                quarantine_reason: None,
+                pending_reset: None,
+            },
+        );
+        pending.outbox.insert(
+            "send".into(),
+            Some(OutboxEntry {
+                send_id: "send".into(),
+                peer: "aci:00000000-0000-4000-8000-2bd806c97f0e@a.test".into(),
+                content: b"{}".to_vec(),
+                envelopes: b"[]".to_vec(),
+                sealed_sender: false,
+                sealed_capability: None,
+                attempts: 0,
+                created_at: 1,
+                primary_delivered: false,
+                sync: None,
+            }),
+        );
+        pending.contacts.insert(
+            "aci:00000000-0000-4000-8000-2bd806c97f0e@a.test".into(),
+            ContactRecord {
+                peer: "aci:00000000-0000-4000-8000-2bd806c97f0e@a.test".into(),
+                state: kutup_chat_proto::ContactState::Accepted,
+                previous_state: None,
+                revision: 1,
+                source_device_id: 1,
+                updated_at_ms: 1,
+                sync_pending: false,
+                sync_send_id: None,
+                list_due_at_ms: None,
+            },
+        );
+        block_on(db.apply(&pending)).unwrap();
+        db
+    }
+
+    #[test]
+    fn a_transport_reset_keeps_history_outbox_contacts_and_their_pins() {
+        use futures_executor::block_on;
+        let db = full_store();
+        assert_eq!(
+            block_on(db.load_pending_account_identity()).unwrap(),
+            Some(vec![7, 7])
+        );
+        block_on(db.apply(&Pending {
+            reset_transport: true,
+            ..Pending::default()
+        }))
+        .unwrap();
+        assert!(block_on(db.load_local_identity()).unwrap().is_none());
+        assert!(block_on(db.load_session("peer.1")).unwrap().is_none());
+        assert!(block_on(db.load_identity("peer.1")).unwrap().is_none());
+        assert!(block_on(db.load_pre_key(100)).unwrap().is_none());
+        assert!(block_on(db.load_signed_pre_key(1)).unwrap().is_none());
+        assert!(block_on(db.load_kyber_pre_key(1)).unwrap().is_none());
+        // A contact's pin and verified state stay.
+        let pin = block_on(db.load_manifest_trust("peer")).unwrap().unwrap();
+        assert!(pin.identity_verified);
+        assert!(block_on(db.load_last_cursor()).unwrap().is_none());
+        assert!(block_on(db.load_pending_account_identity())
+            .unwrap()
+            .is_none());
+        assert_eq!(block_on(db.list_outbox()).unwrap().len(), 1);
+        assert_eq!(block_on(db.list_contacts()).unwrap().len(), 1);
+    }
+
+    /// The pins and history of a forgotten account go (the account's own,
+    /// on a new device); another account's stay.
+    #[test]
+    fn forgetting_an_accounts_manifests_drops_its_pin_and_history_only() {
+        use futures_executor::block_on;
+        let db = full_store();
+        let history = |peer: &str| crate::db::AccountManifestHistoryRecord {
+            peer: peer.into(),
+            sequence: 1,
+            manifest: test_manifest(5),
+        };
+        let mut pending = Pending::default();
+        for peer in ["peer", "other"] {
+            pending.manifest_history.insert(
+                (peer.into(), test_manifest(5).incarnation_id, 1),
+                history(peer),
+            );
+        }
+        let mut other = block_on(db.load_manifest_trust("peer")).unwrap().unwrap();
+        other.peer = "other".into();
+        pending.manifest_trust.insert("other".into(), other);
+        block_on(db.apply(&pending)).unwrap();
+
+        let mut forget = Pending::default();
+        forget.forget_manifests_of.insert("peer".into());
+        block_on(db.apply(&forget)).unwrap();
+        let incarnation = test_manifest(5).incarnation_id;
+        assert!(block_on(db.load_manifest_trust("peer")).unwrap().is_none());
+        assert!(block_on(db.load_manifest_history("peer", &incarnation, 1))
+            .unwrap()
+            .is_none());
+        assert!(block_on(db.load_manifest_trust("other")).unwrap().is_some());
+        assert!(block_on(db.load_manifest_history("other", &incarnation, 1))
+            .unwrap()
+            .is_some());
+    }
+
+    #[test]
+    fn an_identity_reset_keeps_the_device_and_its_pins() {
+        use futures_executor::block_on;
+        let db = full_store();
+        block_on(db.apply(&Pending {
+            reset_identity: true,
+            ..Pending::default()
+        }))
+        .unwrap();
+        assert!(block_on(db.load_session("peer.1")).unwrap().is_none());
+        assert!(block_on(db.load_identity("peer.1")).unwrap().is_none());
+        assert!(block_on(db.load_pre_key(100)).unwrap().is_none());
+        assert!(block_on(db.load_signed_pre_key(1)).unwrap().is_none());
+        assert!(block_on(db.load_kyber_pre_key(1)).unwrap().is_none());
+        let local = block_on(db.load_local_identity()).unwrap().unwrap();
+        assert_eq!(local.credential.as_deref(), Some("credential"));
+        let pin = block_on(db.load_manifest_trust("peer")).unwrap().unwrap();
+        assert_eq!(pin.identity_key, "identity");
+        assert!(pin.identity_verified);
+        assert_eq!(pin.identity_verified_at_ms, 11);
+        assert_eq!(block_on(db.load_last_cursor()).unwrap(), Some(9));
+        assert_eq!(block_on(db.list_outbox()).unwrap().len(), 1);
+        assert_eq!(block_on(db.list_contacts()).unwrap().len(), 1);
+        // The kept sync is cleared only by the commit that installs it.
+        assert_eq!(
+            block_on(db.load_pending_account_identity()).unwrap(),
+            Some(vec![7, 7])
+        );
+        block_on(db.apply(&Pending {
+            pending_account_identity: Some(None),
+            ..Pending::default()
+        }))
+        .unwrap();
+        assert!(block_on(db.load_pending_account_identity())
+            .unwrap()
+            .is_none());
+    }
+
     #[cfg(feature = "sqlcipher")]
     #[test]
     fn sqlcipher_store_reopens_with_the_key_and_rejects_a_wrong_key() {
@@ -1865,6 +2152,7 @@ mod tests {
                 identity_key_pair: vec![1, 2, 3],
                 registration_id: 42,
                 device_id: Some(1),
+                credential: Some("credential".into()),
             }),
             ..Pending::default()
         };

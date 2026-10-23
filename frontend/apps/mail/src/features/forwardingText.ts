@@ -29,6 +29,7 @@ const CODES: Record<string, string> = {
   forwardingMaterialMismatch: 'forwarding.errors.keyList',
   forwardingKeepsNoEncrypt: 'forwarding.errors.keyList',
   forwardingState: 'forwarding.errors.state',
+  forwardingVerified: 'forwarding.errors.state',
   rateLimited: 'forwarding.errors.rateLimited',
 }
 
