@@ -1,8 +1,8 @@
 # Group send endorsements for the multi-recipient route
 
-Status: **design note for approval** (third session, client and crypto parts,
-2026-10-24; the server and federation parts are drafted for the second
-session to settle, marked *(server)*). Nothing here is built yet.
+Status: **design note for approval** (third session, client and crypto parts;
+second session, the server and federation parts marked *(server)*;
+2026-10-24). Nothing here is built yet.
 
 **Decision being implemented (the user, 2026-10-24):** "do it Signal's way".
 Replace the per-group delivery capabilities of slice 2
@@ -120,8 +120,27 @@ and UTC day `d`, the same `CallLinkSecretParams`
   expiration)`, each with its own proof so it can be checked alone;
 - the endorsement key is D's `ServerSecretParams` endorsement root
   (`get_endorsement_root_key_pair`), derived per expiration as Signal does;
-- limits (site settings): presentations per request and requests per account
-  and day.
+- **the credential** comes from `POST /api/chat/group-send/credential`
+  (bearer): `CallLinkAuthCredentialResponse`s for today and tomorrow
+  (redemption times day-aligned, UTC), under D's current key id, so a client
+  can present across midnight. Answered from D's `GenericServerSecretParams`;
+- **limits** (site settings, admin-editable, per the standing rule):
+  - `chatGroupSendPresentationsPerRequest`: the most presentations in one
+    request, default 512 and always a multiple of 8 (a request over it is
+    `400`; the client splits it into buckets of 8);
+  - `chatGroupSendRequestsPerDay`: requests per account and UTC day, default
+    48 (joining a group mid-day costs one request of 8; a day's refresh one);
+  - `chatGroupSendCredentialsPerDay`: credential requests per account and
+    day, default 24;
+  - all three counted in Postgres per account and day (the rate-limit
+    table's day window), `429` past them;
+- **refusals:** a presentation that doesn't verify (another account's
+  credential, a stale redemption time, malformed) refuses the whole request
+  (`400 invalidPresentation`), so a dummy can never be told apart by a
+  partial answer; an expiration that isn't day-aligned, under 25 hours or
+  over 7 days ahead is `400 invalidExpiration`;
+- nothing is stored: D keeps no record of presentations, ciphertexts or
+  endorsements, only the day's counters.
 - **What D learns:** that its user is in at most that many groups (the
   bucket), daily; the day's public params of each (unrelated across days).
   Two of its users in one group present the same public params on the same
@@ -134,6 +153,28 @@ public key)`), seals it under the group's state key and uploads it to the home
 as a new group operation, keyed by its pseudonym and the expiration. The home
 keeps the newest two per pseudonym, serves them with state reads, and deletes
 a pseudonym's when it stops being a member.
+- **The operation:** `PUT …/groups/{id}/endorsement` on the home (local or
+  through the federated group route, authenticated as the pseudonym like any
+  member operation), body `{ expiration, sealed }`:
+  - `sealed` is opaque to the home: the member's
+    `{ server, keyId, endorsement }` under the group's state key, padded to
+    **one size, 512 bytes** before sealing (an endorsement is 32 bytes, a
+    server name at most 253), so every blob is the same length;
+  - `expiration` is in clear (day-aligned, checked like D checks it), so the
+    home can drop expired blobs without reading them;
+  - a member may have at most two (the current and the next day's); a third
+    replaces the oldest; uploads per pseudonym and day are limited
+    (`chatGroupEndorsementUploadsPerDay`, default 8).
+- **Storage:** `chat_group_endorsements (group_id, pseudonym, expiration,
+  sealed, uploaded_seq)`, primary key `(group_id, pseudonym, expiration)`;
+  rows go when the pseudonym leaves the group (in the removal's transaction),
+  when the group is deleted, and an hour after their expiration (the group
+  sweep).
+- **Reading:** a separate read, `GET …/groups/{id}/endorsements?after=<seq>`,
+  for members, returning the blobs uploaded after the client's cursor
+  (`uploaded_seq`, per group), paged. State reads don't carry them, so a
+  1000-member group's state stays small and a client fetches only what's new
+  (two blobs per member per day at most).
 - **What the home learns:** one opaque blob per member per day, and when it
   arrives. It already sees members by pseudonym and the timing of their
   requests; it learns no account or server (the blob is sealed).
@@ -156,10 +197,28 @@ a pseudonym's when it stops being a member.
 **3.6 Verifying** *(server)*. D recomputes the token over every recipient
 account id in the payload with its derived key for the token's expiration
 (`GroupSendFullToken::verify`), before devices are looked at (Signal's order,
-access first). A token that doesn't verify refuses the whole request: Signal
-answers `401`; Kutup answers `200` with every recipient `refused` (the same
-outcome as a refused capability today, no existence oracle), and the client
-sends pairwise, refreshes the group, and asks for fresh endorsements.
+access first).
+- **Which key:** the token carries no key id. D tries the key its current id
+  issues with, then the previous key while it is still in its verification
+  window (§4); at most two verifications, the second only on failure.
+- **A bad token is `401 groupSendTokenInvalid`, as Signal's** (expired,
+  another day's params, a recipient added or missing, another server's key).
+  It says nothing about any recipient: the check is over the ids the sender
+  named, before any is looked up, so there is no existence oracle either
+  way, and a whole-request status is clearer for the client than every
+  recipient `refused` (which also means "this device is gone"). The client
+  sends pairwise, re-reads the group's endorsements, and asks for fresh ones
+  if its own is the stale one. A federated `401` passes back unchanged.
+- **Budgets on the multi route,** now without capability hashes (site
+  settings):
+  - per recipient account: `chatMultiPerRecipientPerMinute` sealed multi
+    deliveries, across all senders (what the per-capability budget mostly
+    protected: one account flooded through one group);
+  - per token: `chatMultiPerTokenPerMinute`, keyed by the hash of the full
+    token (same recipients, day and params), so one group's token for a day
+    can't be replayed past a rate; tokens differ per recipient set, so this
+    is a budget per group-and-day without naming either;
+  - the existing per-request, per-origin and payload-size limits stay.
 
 **3.7 Expiry and removal.**
 - Expiration: the start of day `d+2` UTC for day `d`'s params, so every
@@ -173,14 +232,30 @@ sends pairwise, refreshes the group, and asks for fresh endorsements.
 
 ## 4. Federation *(server)*
 
-- **Keys in discovery.** Each server publishes its `ServerPublicParams`
-  endorsement public key and its `GenericServerPublicParams` in its signed
-  federation identity document (or a key document signed by that identity),
-  with a key id, so members check issuance proofs and senders check
-  endorsements of any destination. Verification never needs another server's
-  key: D verifies only tokens it issued itself.
-- **Rotation.** A new key id keeps the old one for verification until the
-  last expiration issued under it (at most 7 days).
+- **The keys.** One key set per server and key id: zkgroup's
+  `ServerSecretParams` (the endorsement root) and `GenericServerSecretParams`
+  (the call-link credential), generated together on first start, as the
+  VAPID key is.
+  - Stored in `chat_zk_server_keys (key_id, server_secret_sealed,
+    generic_secret_sealed, created_at, issues_until, verifies_until)`, both
+    secrets sealed at rest under the server's sealing keys
+    (`OPAQUE_SETUP_KEYS`, with their key id), as DKIM private keys are; never
+    logged, never in a backup in clear.
+  - **Rotation** is an admin command, `kutup-server chat-zk-keys rotate`:
+    the new key issues from then on; the old one stops issuing at once and
+    keeps verifying for 8 days (the longest expiration, 7 days, plus a day of
+    clock and redemption slack), then its row is deleted. A credential under
+    the old key id is refused for new presentations after rotation, so
+    clients fetch a new one; tokens built on endorsements under the old key
+    keep verifying until their expiration.
+- **Discovery.** The signed federation identity document gains
+  `chatGroupSend: [{ keyId, serverPublicParams, genericServerPublicParams,
+  issuesUntil }]`: the current key and, during the verification window, the
+  previous one (base64, zkgroup's own serialization). Senders check another
+  server's endorsements with it, and members check their own server's
+  issuance; a local client reads the same from `GET /api/chat/group-send/params`
+  (unsigned is fine there: it's its own server over TLS). Verification never
+  needs another server's key: D verifies only tokens it issued itself.
 - **The federated route.** The origin forwards `groupSendToken` with the
   multi-recipient body to the destination's `/api/fed/chat/sealed/multi`
   unchanged; only the destination verifies it. The origin learns nothing new
@@ -254,18 +329,31 @@ PRs when built) drops `chat_group_capabilities` and the site setting's row.
   a federated multi send with a token, a bad token refused whole, key
   rotation in discovery.
 
-## 9. Open for the second session
+## 9. Settled by the second session
 
-- Where the two server key sets live, their generation and rotation, and the
-  discovery fields.
-- The issuance request's limits and budgets, and the per-recipient budget on
-  the multi route without capability hashes.
-- The home's endorsement operation (format, padding bucket, retention), and
-  whether the state read carries the blobs or a separate read does.
-- `refused` for everyone vs `401` on a bad token.
+- **Keys:** one zkgroup key set per server and key id, sealed at rest under
+  `OPAQUE_SETUP_KEYS`, made on first start, rotated by an admin command, the
+  old key verifying 8 days (§4).
+- **Discovery:** `chatGroupSend` in the signed identity document, with the
+  previous key during its window; `GET /api/chat/group-send/params` locally.
+- **Limits:** presentations per request (512, a multiple of 8), requests and
+  credentials per account and day, uploads per pseudonym and day; all site
+  settings (§3.3, §3.4).
+- **Budgets on the multi route:** per recipient account and per full-token
+  hash, replacing the per-capability one (§3.6).
+- **The home:** a separate endorsement operation and paged read, blobs of one
+  size (512 bytes before sealing), two per pseudonym, dropped on leave and
+  after expiry (§3.4).
+- **A bad token:** `401 groupSendTokenInvalid`, as Signal (§3.6).
+
+**Server estimate:** 4–5 days: the key table, sealing and rotation command,
+the credential and issuance routes with their limits, discovery, the home's
+endorsement operation and read (local and federated), the token check and
+budgets on the multi route, removing the capability tables and settings, and
+live tests on one and two servers.
 
 ## 10. Estimate
 
 Client and crypto (third session): 4–6 days, mostly the issuance and home
 round trip and moving the harness. Server and federation (second session):
-to estimate.
+4–5 days (§9).
