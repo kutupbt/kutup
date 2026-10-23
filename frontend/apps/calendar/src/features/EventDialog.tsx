@@ -26,6 +26,7 @@ import { Textarea } from '@kutup/ui/components/textarea'
 import { apiErrorMessage } from '@kutup/ui/lib/apiError'
 import { cn } from '@kutup/ui/lib/cn'
 import { Choice } from './Choice'
+import { DEFAULT_DURATION_MINUTES } from './gridInteraction'
 import { zoneOptions } from './format'
 import { openEditor, useEditorTarget, type EditorTarget } from './editorState'
 import { useCalendarPrefs } from './prefs'
@@ -61,14 +62,15 @@ function hhmm(minutes: number): string {
 function draftOf(target: EditorTarget, zone: string, defaultCalendar: string): Draft {
   if (target.kind === 'new') {
     const start = target.minutes ?? 9 * 60
-    const end = start + 60
+    const end = target.endMinutes ?? start + DEFAULT_DURATION_MINUTES
+    const endDate = target.endDate ?? target.date
     return {
       calendarId: defaultCalendar,
       title: '',
       allDay: target.allDay ?? false,
       startDate: target.date,
       startTime: hhmm(start),
-      endDate: end >= 24 * 60 ? addDays(target.date, 1) : target.date,
+      endDate: target.allDay ? (target.lastDate ?? target.date) : end >= 24 * 60 ? addDays(endDate, 1) : endDate,
       endTime: hhmm(end),
       tzid: zone,
       location: '',
@@ -77,15 +79,17 @@ function draftOf(target: EditorTarget, zone: string, defaultCalendar: string): D
   }
   const { fields } = target.event
   const base = { calendarId: target.event.calendarId, title: fields.summary ?? '', location: fields.location ?? '', description: fields.description ?? '' }
+  const moved = target.moved
   if ('date' in fields.start) {
+    if (moved) return { ...base, allDay: true, startDate: moved.start, startTime: '09:00', endDate: moved.end, endTime: '10:00', tzid: zone }
     const end = fields.end && 'date' in fields.end ? fields.end.date : addDays(fields.start.date, 1)
     // DTEND is exclusive; the form shows the last day.
     return { ...base, allDay: true, startDate: fields.start.date, startTime: '09:00', endDate: addDays(end, -1), endTime: '10:00', tzid: zone }
   }
   const local = (time: EventFields['start'] | null) => (time === null ? null : 'zoned' in time ? time.zoned.local : 'utc' in time ? time.utc.slice(0, 19) : `${time.date}T00:00:00`)
   const tzid = 'zoned' in fields.start ? fields.start.zoned.tzid : 'UTC'
-  const start = local(fields.start)!
-  const end = local(fields.end) ?? start
+  const start = moved?.start ?? local(fields.start)!
+  const end = moved?.end ?? local(fields.end) ?? start
   return { ...base, allDay: false, startDate: start.slice(0, 10), startTime: timeOf(start), endDate: end.slice(0, 10), endTime: timeOf(end), tzid }
 }
 
