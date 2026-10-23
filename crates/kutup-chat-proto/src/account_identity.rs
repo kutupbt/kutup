@@ -26,7 +26,7 @@ use crate::AccountRefSchema;
 use crate::{
     decode_canonical_base64_exact, decode_lower_hex_32, push_optional, push_string,
     AccountManifestDriveKeysV1, AccountRef, DeviceListMismatch, DirectChatSuiteId, EcPreKey,
-    KemPreKey, MlsManifestDeviceV1, OutgoingEnvelope, ProfileSuiteId, MAX_ACCOUNT_MANIFEST_DEVICES,
+    KemPreKey, OutgoingEnvelope, ProfileSuiteId, MAX_ACCOUNT_MANIFEST_DEVICES,
     MAX_ACCOUNT_MANIFEST_HISTORY_PAGE,
 };
 
@@ -166,8 +166,54 @@ pub struct AccountManifestDeviceV2 {
     pub direct_chat_suite: DirectChatSuiteId,
     /// Bundles, `409`s and `410`s that disagree with it are refused.
     pub registration_id: u32,
+    /// A device's keys for the MLS groups Kutup no longer has: never
+    /// written now, kept only so a manifest that carries it still reads and
+    /// verifies (its bytes are signed). Goes with the next manifest format.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub mls: Option<MlsManifestDeviceV1>,
+    pub mls: Option<LegacyMlsDeviceV1>,
+}
+
+/// What an [`AccountManifestDeviceV2`] carried for MLS: its ciphersuite (only
+/// `0x0003`), Ed25519 credential key and X25519 anonymous delivery key.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct LegacyMlsDeviceV1 {
+    pub suite: u16,
+    pub credential_public_key: String,
+    pub anonymous_delivery_public_key: String,
+}
+
+/// The one MLS ciphersuite a [`LegacyMlsDeviceV1`] names (X25519,
+/// ChaCha20-Poly1305, SHA-256, Ed25519).
+const LEGACY_MLS_CIPHERSUITE: u16 = 0x0003;
+
+impl LegacyMlsDeviceV1 {
+    pub fn validate(&self) -> Result<(), String> {
+        if self.suite != LEGACY_MLS_CIPHERSUITE {
+            return Err(format!("unknown MLS ciphersuite {:#06x}", self.suite));
+        }
+        let credential: [u8; 32] = decode_canonical_base64_exact(
+            "MLS credentialPublicKey",
+            &self.credential_public_key,
+            32,
+        )?
+        .try_into()
+        .map_err(|_| "MLS credentialPublicKey must be 32 bytes".to_string())?;
+        ed25519_dalek::VerifyingKey::from_bytes(&credential)
+            .map_err(|_| "MLS credentialPublicKey must be a valid Ed25519 public key")?;
+        let delivery = decode_canonical_base64_exact(
+            "MLS anonymousDeliveryPublicKey",
+            &self.anonymous_delivery_public_key,
+            32,
+        )?;
+        if delivery.iter().all(|byte| *byte == 0) {
+            return Err(
+                "MLS anonymousDeliveryPublicKey must not be the all-zero X25519 key".into(),
+            );
+        }
+        Ok(())
+    }
 }
 
 /// The account manifest with one libsignal identity for the account, signed
@@ -261,7 +307,7 @@ impl AccountManifestV2 {
                 Some(mls) => {
                     out.push(1);
                     mls.validate()?;
-                    out.extend_from_slice(&u16::from(mls.suite).to_be_bytes());
+                    out.extend_from_slice(&mls.suite.to_be_bytes());
                     push_string(&mut out, &mls.credential_public_key)?;
                     push_string(&mut out, &mls.anonymous_delivery_public_key)?;
                 }

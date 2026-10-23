@@ -20,7 +20,7 @@ use std::rc::Rc;
 
 use async_trait::async_trait;
 use base64::Engine as _;
-use kutup_chat_proto::{AccountManifestDeviceV2, MlsManifestDeviceV1};
+use kutup_chat_proto::AccountManifestDeviceV2;
 use libsignal_protocol::*;
 use uuid::Uuid;
 
@@ -203,13 +203,6 @@ impl ChatStore {
             .insert(send_id.to_string(), None);
     }
 
-    pub(crate) fn delete_mls_outbox(&self, send_id: &str) {
-        self.pending
-            .borrow_mut()
-            .mls_outbox
-            .insert(send_id.to_string(), None);
-    }
-
     /// The durable store handle, for reads the engine makes outside a unit of work
     /// (e.g. loading the outbox on resend).
     pub(crate) fn db(&self) -> &Rc<dyn ChatDb> {
@@ -306,27 +299,12 @@ impl ChatStore {
             .insert(send_id.to_string());
     }
 
-    pub(crate) fn delete_mls_message(&self, record_id: &str) {
-        self.pending
-            .borrow_mut()
-            .delete_mls_message_ids
-            .insert(record_id.to_string());
-    }
-
     pub(crate) fn local_manifest_device(&self, device_id: u32) -> AccountManifestDeviceV2 {
-        self.local_manifest_device_with_mls(device_id, None)
-    }
-
-    pub(crate) fn local_manifest_device_with_mls(
-        &self,
-        device_id: u32,
-        mls: Option<MlsManifestDeviceV1>,
-    ) -> AccountManifestDeviceV2 {
         AccountManifestDeviceV2 {
             device_id,
             direct_chat_suite: kutup_chat_proto::DirectChatSuiteId::PqxdhTripleRatchetV1,
             registration_id: self.identity_store.registration_id,
-            mls,
+            mls: None,
         }
     }
 

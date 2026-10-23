@@ -19,8 +19,7 @@ use zeroize::Zeroize as _;
 use crate::db::{
     contact_state_code, contact_state_from_code, AccountManifestHistoryRecord, AuthorityTrust,
     ChatDb, ContactRecord, InboundEnvelope, InboundFailureKind, InboundState, InboxMessage,
-    LocalIdentity, LocalProfile, ManifestTrust, MlsHistoryMessage, MlsOutboxDelivery,
-    MlsOutboxEntry, OutboxEntry, PeerProfile, Pending, SentMessage,
+    LocalIdentity, LocalProfile, ManifestTrust, OutboxEntry, PeerProfile, Pending, SentMessage,
 };
 use crate::error::{ChatError, Result};
 
@@ -87,45 +86,12 @@ CREATE TABLE IF NOT EXISTS outbox (
     sealed_sender    INTEGER NOT NULL DEFAULT 0,
     sealed_capability BLOB
 );
-CREATE TABLE IF NOT EXISTS mls_state (
-    id    INTEGER PRIMARY KEY CHECK (id = 1),
-    state BLOB NOT NULL
-);
-CREATE TABLE IF NOT EXISTS mls_outbox (
-    send_id          TEXT PRIMARY KEY,
-    conversation_id BLOB    NOT NULL CHECK (length(conversation_id) = 16),
-    incarnation      INTEGER NOT NULL CHECK (incarnation > 0),
-    mls_group_id     BLOB    NOT NULL CHECK (length(mls_group_id) BETWEEN 16 AND 255),
-    epoch            INTEGER NOT NULL CHECK (epoch >= 0),
-    content_digest   BLOB    NOT NULL CHECK (length(content_digest) = 32),
-    content          BLOB    NOT NULL DEFAULT X'',
-    ciphertext       BLOB    NOT NULL,
-    expected_recipients BLOB NOT NULL DEFAULT X'5B5D',
-    deliveries       BLOB    NOT NULL DEFAULT X'5B5D',
-    created_at       INTEGER NOT NULL,
-    attempts         INTEGER NOT NULL CHECK (attempts >= 0)
-);
-CREATE INDEX IF NOT EXISTS mls_outbox_by_created_at
-    ON mls_outbox (created_at, send_id);
-CREATE TABLE IF NOT EXISTS mls_messages (
-    record_id        TEXT PRIMARY KEY,
-    message_id       TEXT    NOT NULL,
-    conversation_id BLOB    NOT NULL CHECK (length(conversation_id) = 16),
-    incarnation      INTEGER NOT NULL CHECK (incarnation > 0),
-    mls_group_id     BLOB    NOT NULL CHECK (length(mls_group_id) BETWEEN 16 AND 255),
-    epoch            INTEGER NOT NULL CHECK (epoch >= 0),
-    sender           TEXT    NOT NULL,
-    sender_device_id INTEGER NOT NULL CHECK (sender_device_id > 0),
-    outgoing         INTEGER NOT NULL,
-    cursor           INTEGER,
-    transport_digest BLOB    NOT NULL CHECK (length(transport_digest) = 32),
-    content          BLOB    NOT NULL,
-    timestamp_ms     INTEGER NOT NULL,
-    delivered        INTEGER NOT NULL,
-    deduplicated     INTEGER NOT NULL
-);
-CREATE INDEX IF NOT EXISTS mls_messages_by_time
-    ON mls_messages (timestamp_ms, record_id);
+-- The MLS groups Kutup no longer has: an older store's tables go.
+DROP INDEX IF EXISTS mls_outbox_by_created_at;
+DROP INDEX IF EXISTS mls_messages_by_time;
+DROP TABLE IF EXISTS mls_state;
+DROP TABLE IF EXISTS mls_outbox;
+DROP TABLE IF EXISTS mls_messages;
 CREATE TABLE IF NOT EXISTS messages (
     id               TEXT PRIMARY KEY,
     peer             TEXT    NOT NULL,
@@ -437,67 +403,6 @@ impl ChatDb for SqliteChatDb {
             out.push(db(row)?);
         }
         Ok(out)
-    }
-
-    async fn load_mls_outbox(&self, send_id: &str) -> Result<Option<MlsOutboxEntry>> {
-        let conn = self.conn.borrow();
-        db(conn
-            .query_row(
-                "SELECT send_id, conversation_id, incarnation, mls_group_id, epoch,
-                        content_digest, content, ciphertext, expected_recipients,
-                        deliveries, created_at, attempts
-                 FROM mls_outbox WHERE send_id = ?1",
-                [send_id],
-                mls_outbox_row,
-            )
-            .optional())
-    }
-
-    async fn list_mls_outbox(&self) -> Result<Vec<MlsOutboxEntry>> {
-        let conn = self.conn.borrow();
-        let mut statement = db(conn.prepare(
-            "SELECT send_id, conversation_id, incarnation, mls_group_id, epoch,
-                    content_digest, content, ciphertext, expected_recipients,
-                    deliveries, created_at, attempts
-             FROM mls_outbox ORDER BY created_at, send_id",
-        ))?;
-        let rows = db(statement.query_map([], mls_outbox_row))?;
-        rows.map(db).collect()
-    }
-
-    async fn load_mls_message(&self, record_id: &str) -> Result<Option<MlsHistoryMessage>> {
-        let conn = self.conn.borrow();
-        db(conn
-            .query_row(
-                "SELECT record_id, message_id, conversation_id, incarnation,
-                        mls_group_id, epoch, sender, sender_device_id, outgoing,
-                        cursor, transport_digest, content, timestamp_ms, delivered, deduplicated
-                 FROM mls_messages WHERE record_id = ?1",
-                [record_id],
-                mls_message_row,
-            )
-            .optional())
-    }
-
-    async fn list_mls_messages(&self) -> Result<Vec<MlsHistoryMessage>> {
-        let conn = self.conn.borrow();
-        let mut statement = db(conn.prepare(
-            "SELECT record_id, message_id, conversation_id, incarnation,
-                    mls_group_id, epoch, sender, sender_device_id, outgoing,
-                    cursor, transport_digest, content, timestamp_ms, delivered, deduplicated
-             FROM mls_messages ORDER BY timestamp_ms, record_id",
-        ))?;
-        let rows = db(statement.query_map([], mls_message_row))?;
-        rows.map(db).collect()
-    }
-
-    async fn load_mls_state(&self) -> Result<Option<Vec<u8>>> {
-        let conn = self.conn.borrow();
-        db(conn
-            .query_row("SELECT state FROM mls_state WHERE id = 1", [], |row| {
-                row.get(0)
-            })
-            .optional())
     }
 
     async fn load_last_cursor(&self) -> Result<Option<u64>> {
@@ -881,8 +786,6 @@ impl ChatDb for SqliteChatDb {
         if pending.reset_transport {
             db(tx.execute_batch(
                 "DELETE FROM local_identity;
-                 DELETE FROM mls_state;
-                 DELETE FROM mls_outbox;
                  DELETE FROM inbound_envelopes;
                  DELETE FROM repair_limits;
                  DELETE FROM pending_account_identity;
@@ -1001,110 +904,6 @@ impl ChatDb for SqliteChatDb {
                 ))?,
                 None => db(tx.execute("DELETE FROM outbox WHERE send_id = ?1", [send_id]))?,
             };
-        }
-        if let Some(state) = &pending.mls_state {
-            db(tx.execute(
-                "INSERT INTO mls_state (id, state) VALUES (1, ?1)
-                 ON CONFLICT(id) DO UPDATE SET state = excluded.state",
-                [state],
-            ))?;
-        }
-        for (send_id, entry) in &pending.mls_outbox {
-            match entry {
-                Some(entry) => {
-                    let changed = db(tx.execute(
-                        "INSERT INTO mls_outbox
-                             (send_id, conversation_id, incarnation, mls_group_id, epoch,
-                              content_digest, content, ciphertext, expected_recipients,
-                              deliveries, created_at, attempts)
-                         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)
-                         ON CONFLICT(send_id) DO UPDATE SET
-                           attempts = excluded.attempts,
-                           deliveries = excluded.deliveries
-                         WHERE mls_outbox.conversation_id = excluded.conversation_id
-                           AND mls_outbox.incarnation = excluded.incarnation
-                           AND mls_outbox.mls_group_id = excluded.mls_group_id
-                           AND mls_outbox.epoch = excluded.epoch
-                           AND mls_outbox.content_digest = excluded.content_digest
-                           AND mls_outbox.content = excluded.content
-                           AND mls_outbox.ciphertext = excluded.ciphertext
-                           AND mls_outbox.expected_recipients = excluded.expected_recipients",
-                        rusqlite::params![
-                            send_id,
-                            entry.conversation_id.as_slice(),
-                            entry.incarnation as i64,
-                            entry.mls_group_id,
-                            entry.epoch as i64,
-                            entry.content_digest.as_slice(),
-                            entry.content,
-                            entry.ciphertext,
-                            serde_json::to_vec(&entry.expected_recipients)
-                                .map_err(|error| ChatError::Db(error.to_string()))?,
-                            serde_json::to_vec(&entry.deliveries)
-                                .map_err(|error| ChatError::Db(error.to_string()))?,
-                            entry.created_at,
-                            entry.attempts,
-                        ],
-                    ))?;
-                    if changed != 1 {
-                        return Err(ChatError::Trust(format!(
-                            "MLS send id {send_id} is already bound to different ciphertext"
-                        )));
-                    }
-                }
-                None => {
-                    db(tx.execute("DELETE FROM mls_outbox WHERE send_id = ?1", [send_id]))?;
-                }
-            };
-        }
-        for (record_id, message) in &pending.mls_messages {
-            let changed = db(tx.execute(
-                "INSERT INTO mls_messages
-                     (record_id, message_id, conversation_id, incarnation,
-                      mls_group_id, epoch, sender, sender_device_id, outgoing,
-                      cursor, transport_digest, content, timestamp_ms, delivered, deduplicated)
-                 VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15)
-                 ON CONFLICT(record_id) DO UPDATE SET
-                   delivered = excluded.delivered,
-                   deduplicated = excluded.deduplicated
-                 WHERE mls_messages.message_id = excluded.message_id
-                   AND mls_messages.conversation_id = excluded.conversation_id
-                   AND mls_messages.incarnation = excluded.incarnation
-                   AND mls_messages.mls_group_id = excluded.mls_group_id
-                   AND mls_messages.epoch = excluded.epoch
-                   AND mls_messages.sender = excluded.sender
-                   AND mls_messages.sender_device_id = excluded.sender_device_id
-                   AND mls_messages.outgoing = excluded.outgoing
-                   AND mls_messages.cursor IS excluded.cursor
-                   AND mls_messages.transport_digest = excluded.transport_digest
-                   AND mls_messages.content = excluded.content
-                   AND mls_messages.timestamp_ms = excluded.timestamp_ms",
-                rusqlite::params![
-                    record_id,
-                    message.message_id,
-                    message.conversation_id.as_slice(),
-                    message.incarnation as i64,
-                    message.mls_group_id,
-                    message.epoch as i64,
-                    message.sender,
-                    message.sender_device_id,
-                    i64::from(message.outgoing),
-                    message.cursor.map(|cursor| cursor as i64),
-                    message.transport_digest.as_slice(),
-                    message.content,
-                    message.timestamp_ms,
-                    i64::from(message.delivered),
-                    i64::from(message.deduplicated),
-                ],
-            ))?;
-            if changed != 1 {
-                return Err(ChatError::Trust(format!(
-                    "MLS application receipt {record_id} conflicts with durable history"
-                )));
-            }
-        }
-        for record_id in &pending.delete_mls_message_ids {
-            db(tx.execute("DELETE FROM mls_messages WHERE record_id = ?1", [record_id]))?;
         }
         for msg in &pending.messages {
             // INSERT OR IGNORE: redelivery of the same mailbox id is a no-op.
@@ -1553,130 +1352,6 @@ fn outbox_row(row: &rusqlite::Row) -> rusqlite::Result<OutboxEntry> {
                 })
             })
             .transpose()?,
-    })
-}
-
-fn mls_outbox_row(row: &rusqlite::Row) -> rusqlite::Result<MlsOutboxEntry> {
-    let conversation_id: Vec<u8> = row.get(1)?;
-    let conversation_id: [u8; 16] = conversation_id.try_into().map_err(|value: Vec<u8>| {
-        rusqlite::Error::FromSqlConversionFailure(
-            value.len(),
-            rusqlite::types::Type::Blob,
-            "MLS conversation id must be 16 bytes".into(),
-        )
-    })?;
-    let incarnation = u64::try_from(row.get::<_, i64>(2)?).map_err(|error| {
-        rusqlite::Error::FromSqlConversionFailure(
-            2,
-            rusqlite::types::Type::Integer,
-            Box::new(error),
-        )
-    })?;
-    let epoch = u64::try_from(row.get::<_, i64>(4)?).map_err(|error| {
-        rusqlite::Error::FromSqlConversionFailure(
-            4,
-            rusqlite::types::Type::Integer,
-            Box::new(error),
-        )
-    })?;
-    let content_digest: Vec<u8> = row.get(5)?;
-    let content_digest: [u8; 32] = content_digest.try_into().map_err(|value: Vec<u8>| {
-        rusqlite::Error::FromSqlConversionFailure(
-            value.len(),
-            rusqlite::types::Type::Blob,
-            "MLS content digest must be 32 bytes".into(),
-        )
-    })?;
-    Ok(MlsOutboxEntry {
-        send_id: row.get(0)?,
-        conversation_id,
-        incarnation,
-        mls_group_id: row.get(3)?,
-        epoch,
-        content_digest,
-        content: row.get(6)?,
-        ciphertext: row.get(7)?,
-        expected_recipients: serde_json::from_slice(&row.get::<_, Vec<u8>>(8)?).map_err(
-            |error| {
-                rusqlite::Error::FromSqlConversionFailure(
-                    8,
-                    rusqlite::types::Type::Blob,
-                    Box::new(error),
-                )
-            },
-        )?,
-        deliveries: serde_json::from_slice::<Vec<MlsOutboxDelivery>>(&row.get::<_, Vec<u8>>(9)?)
-            .map_err(|error| {
-                rusqlite::Error::FromSqlConversionFailure(
-                    9,
-                    rusqlite::types::Type::Blob,
-                    Box::new(error),
-                )
-            })?,
-        created_at: row.get(10)?,
-        attempts: row.get(11)?,
-    })
-}
-
-fn mls_message_row(row: &rusqlite::Row) -> rusqlite::Result<MlsHistoryMessage> {
-    let conversation_id: Vec<u8> = row.get(2)?;
-    let conversation_id: [u8; 16] = conversation_id.try_into().map_err(|value: Vec<u8>| {
-        rusqlite::Error::FromSqlConversionFailure(
-            value.len(),
-            rusqlite::types::Type::Blob,
-            "MLS conversation id must be 16 bytes".into(),
-        )
-    })?;
-    let incarnation = u64::try_from(row.get::<_, i64>(3)?).map_err(|error| {
-        rusqlite::Error::FromSqlConversionFailure(
-            3,
-            rusqlite::types::Type::Integer,
-            Box::new(error),
-        )
-    })?;
-    let epoch = u64::try_from(row.get::<_, i64>(5)?).map_err(|error| {
-        rusqlite::Error::FromSqlConversionFailure(
-            5,
-            rusqlite::types::Type::Integer,
-            Box::new(error),
-        )
-    })?;
-    let cursor = row
-        .get::<_, Option<i64>>(9)?
-        .map(u64::try_from)
-        .transpose()
-        .map_err(|error| {
-            rusqlite::Error::FromSqlConversionFailure(
-                9,
-                rusqlite::types::Type::Integer,
-                Box::new(error),
-            )
-        })?;
-    Ok(MlsHistoryMessage {
-        record_id: row.get(0)?,
-        message_id: row.get(1)?,
-        conversation_id,
-        incarnation,
-        mls_group_id: row.get(4)?,
-        epoch,
-        sender: row.get(6)?,
-        sender_device_id: row.get(7)?,
-        outgoing: row.get::<_, i64>(8)? != 0,
-        cursor,
-        transport_digest: row
-            .get::<_, Vec<u8>>(10)?
-            .try_into()
-            .map_err(|value: Vec<u8>| {
-                rusqlite::Error::FromSqlConversionFailure(
-                    value.len(),
-                    rusqlite::types::Type::Blob,
-                    "MLS transport digest must be 32 bytes".into(),
-                )
-            })?,
-        content: row.get(11)?,
-        timestamp_ms: row.get(12)?,
-        delivered: row.get::<_, i64>(13)? != 0,
-        deduplicated: row.get::<_, i64>(14)? != 0,
     })
 }
 

@@ -26,10 +26,8 @@ pub mod federation;
 pub mod group;
 pub mod group_route;
 mod identity;
-mod invite_link;
 mod locations;
 mod media;
-mod mls;
 mod polls;
 mod profile;
 mod sealed_sender;
@@ -42,7 +40,7 @@ pub use account_identity::{
     AccountManifestHistoryPageV2, AccountManifestPublicationV2, AccountManifestV2,
     AccountPreKeyBundlesResponse, ChatKeysCheckRequest, ChatLinkTokenResponse, ChatProvisionV1,
     DevicePreKeyBundleV2, DeviceRegistrationV1, DistributedDeviceKeysV1, DistributionError,
-    ProvisionEnvelopeV1, ProvisioningLinkCodeV1, ProvisioningRelayRequest,
+    LegacyMlsDeviceV1, ProvisionEnvelopeV1, ProvisioningLinkCodeV1, ProvisioningRelayRequest,
     ProvisioningSocketMessage, RegisterChatDeviceRequestV2, ACCOUNT_MANIFEST_V2_VERSION,
     CHAT_DEVICE_HEADER, DEVICE_CREDENTIAL_LEN, IDENTITY_BINDING_LEN, LINK_TOKEN_LEN,
     LINK_URI_PREFIX, MAX_PREKEY_RECORD_BYTES, MAX_PROVISION_BODY_BYTES, PROVISIONING_ADDRESS_LEN,
@@ -88,11 +86,6 @@ pub use federation::{
 #[cfg(feature = "openapi")]
 pub use identity::AccountRefSchema;
 pub use identity::{AccountAddress, AddressError, ConversationId};
-pub use invite_link::{
-    InviteJoinRequestV1, InviteLinkCallV1, InviteLinkOperationV1, InviteLinkPreviewV1,
-    InviteLinkRequestEntryV1, InviteLinkResultV1, InviteRequestStatusV1, INVITE_LINK_TOKEN_BYTES,
-    MAX_INVITE_PREVIEW_SEALED_BYTES, MAX_INVITE_REQUEST_SEALED_BYTES, MAX_PENDING_INVITE_REQUESTS,
-};
 /// A person across servers: their server and permanent account id
 /// (docs/plans/account-ids.md).
 pub use kutup_crypto::account_ref::AccountRef;
@@ -109,44 +102,6 @@ pub use media::{
     FederatedChatMediaTransactionV1, CHAT_ATTACHMENT_LEDGER_ENTRY_VERSION, CHAT_ATTACHMENT_VERSION,
     CHAT_MEDIA_PROTOCOL_VERSION, MAX_CHAT_ATTACHMENT_LEDGER_PAGE_ENTITIES,
     MAX_CHAT_MEDIA_CAPTION_BYTES, MAX_CHAT_MEDIA_DISPLAY_NAME_BYTES, MAX_CHAT_MEDIA_PREVIEW_BYTES,
-};
-pub use mls::{
-    anonymous_mls_delivery_aad, derive_group_delivery_capability, mls_authority_history_digest,
-    mls_transition_digest, roster_commitment, verify_mls_authority_bootstrap_history,
-    verify_mls_client_control_history, verify_mls_participant_bootstrap_history, AckMlsMailboxV1,
-    AnonymousMlsDeliveryResponseV1, AnonymousMlsDeviceEnvelopeV1, AnonymousMlsKeyPackageRequestV1,
-    AnonymousMlsSubmissionV1, CommitMlsControlBlockResponseV1, CommitMlsControlBlockV1,
-    CreateMlsConversationRequestV1, CreateMlsConversationResponseV1, Ed25519MlsControlSigner,
-    Ed25519MlsOwnerSigner, FederatedAnonymousMlsTransactionV1,
-    FederatedIdentifiedMlsKeyPackageRequestV1, FederatedMlsAuthorityBootstrapPageV1,
-    FederatedMlsControlReplicaV1, FederatedMlsGenesisReplicaV1, FederatedMlsOrderingVoteRequestV1,
-    FederatedMlsParticipantBootstrapPageV1, FederatedMlsRecoveryReplicaV1,
-    IdentifiedMlsKeyPackageRequestV1, MlsAbuseLimitsV1, MlsAnonymousDeliverySuiteV1,
-    MlsApplicationSenderPolicyV1, MlsAuthorityBootstrapDescriptorV1, MlsAuthorityChangeV1,
-    MlsAuthoritySetV1, MlsAuthorityTransitionCertificateV1, MlsAuthorityV1, MlsCipherSuiteId,
-    MlsClientControlHistoryPageV1, MlsControlActionTypeV1, MlsControlBlockV1, MlsControlProposalV1,
-    MlsControlSigner, MlsConversationDeviceV1, MlsConversationGenesisV1, MlsConversationKindV1,
-    MlsConversationMemberV1, MlsDeliveryCapabilityKindV1, MlsFinalizedControlBlockV1,
-    MlsGroupAuthorizationPolicyV1, MlsGroupAvatarV1, MlsGroupControlBodyV1,
-    MlsGroupCryptographicPolicyV1, MlsGroupInfoEditorsV1, MlsGroupInfoV1, MlsGroupInviteLinkV1,
-    MlsIncarnationRecoveryPlanV1, MlsIncarnationRecoveryV1, MlsInvitationAcceptanceV1,
-    MlsInvitationFeedbackDecisionV1, MlsInvitationFeedbackV1, MlsKeyPackageBundleV1,
-    MlsKeyPackageCountResponseV1, MlsKeyPackageV1, MlsLeaveRequestV1, MlsMailboxDeliveryKindV1,
-    MlsMailboxEnvelopeV1, MlsMailboxPageV1, MlsManifestDeviceV1, MlsMembershipDeliveryCommitmentV1,
-    MlsMembershipDeliveryV1, MlsMembershipEnvelopeKindV1, MlsMembershipEnvelopeV1,
-    MlsMembershipTransitionV1, MlsOrderingQuorumCertificateV1, MlsOrderingServicePolicyV1,
-    MlsOrderingVoteTypeV1, MlsOrderingVoteV1, MlsOwnerApprovalCertificateV1,
-    MlsOwnerApprovalRequestV1, MlsOwnerApprovalV1, MlsOwnerCandidateV1, MlsOwnerChangeV1,
-    MlsOwnerSetV1, MlsOwnerSigner, MlsOwnerV1, MlsParticipantBootstrapDescriptorV1,
-    MlsPrivateControlStateV1, PendingMessageRequestPolicyV1, PendingMlsInvitationV1,
-    PublishMlsDeliveryCapabilityV1, PublishMlsKeyPackagesRequestV1,
-    RecoverMlsConversationRequestV1, RecoverMlsConversationResponseV1,
-    RespondMlsInvitationResponseV1, RespondMlsInvitationV1, ANONYMOUS_MLS_DELIVERY_CONTEXT,
-    MAX_MLS_DEVICES_PER_ACCOUNT, MAX_MLS_GROUP_ACCOUNTS, MAX_MLS_GROUP_LEAVES,
-    MLS_CIPHERSUITE_X25519_CHACHA20POLY1305_SHA256_ED25519, MLS_GROUP_AUTHORIZATION_POLICY_VERSION,
-    MLS_GROUP_CRYPTOGRAPHIC_POLICY_VERSION, MLS_INVITATION_FEEDBACK_VERSION,
-    MLS_ORDERING_SERVICE_POLICY_VERSION, MLS_PADDING_BLOCK_BYTES,
-    MLS_PRIVATE_CONTROL_EXTENSION_TYPE, MLS_PROTOCOL_VERSION,
 };
 pub use polls::{
     PollBody, PollTerminateBody, PollVoteBody, MAX_POLL_OPTIONS, MAX_POLL_OPTION_CHARS,

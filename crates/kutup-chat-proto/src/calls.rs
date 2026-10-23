@@ -208,7 +208,7 @@ impl GroupCallBody {
             return Err("a group call needs an id".into());
         }
         validate_room_id(&self.room_id)?;
-        crate::mls::decode_canonical_base64("groupCallSecret", &self.secret, 32, 32)?;
+        crate::decode_canonical_base64_exact("groupCallSecret", &self.secret, 32)?;
         kutup_federation_proto::validate_server_name(&self.host)
             .map_err(|error| format!("group call host: {error}"))
     }

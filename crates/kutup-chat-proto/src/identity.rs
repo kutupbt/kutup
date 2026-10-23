@@ -88,7 +88,7 @@ impl ConversationId {
     }
 
     /// Stable key suitable for IndexedDB indexes and frontend selection
-    /// state: `direct:aci:<uuid>@<server>` or `group:<uuid>`.
+    /// state: `direct:aci:<uuid>@<server>` or `group:<groupId>`.
     pub fn key(&self) -> String {
         match self {
             Self::Direct { account } => format!("direct:{account}"),
