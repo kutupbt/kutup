@@ -11,7 +11,7 @@ code-grounded against a local libsignal checkout at **v0.97.2** (2026).
 > messaging/media, and continuous history recovery. The dedicated native apps
 > are separate work in progress and are not release-ready. See
 > [`../chat-protocol.md`](../chat-protocol.md),
-> [`../chat-mls.md`](../chat-mls.md), and
+> `chat-mls.md` (removed with MLS groups), and
 > [`../chat-backup.md`](../chat-backup.md).
 
 > **Superseded in part by `13-chat-architecture-comparative-research.md` (2026-07-13).**

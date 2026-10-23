@@ -362,7 +362,7 @@ retain, and delete these objects but cannot read the archive.
 
 After unified account recovery, a clean browser verifies and restores the
 latest base plus complete tail. It does not restore device keys, libsignal
-ratchets, MLS epochs, mailbox cursors, receipts, or pending outboxes, and it
+ratchets, sender keys, mailbox cursors, receipts, or pending outboxes, and it
 does not contact another installation for history. The current contract and
 threat model are [`chat-backup.md`](chat-backup.md) and
 [`chat-backup-security-threat-model.md`](chat-backup-security-threat-model.md).
@@ -456,7 +456,7 @@ not create a feature-owned identity, cache, client, or admission path.
 
 The web client supports Direct Chat, linked-device synchronization, Note to
 Self, transport federation, message requests/blocking, encrypted profiles,
-sealed sender, MLS private groups, encrypted attachments, replies, reactions,
+sealed sender, pairwise groups, encrypted attachments, replies, reactions,
 edits/deletions, delivery/read state, typing, disappearing messages, local
 search, camera/voice capture, and continuous encrypted history/media recovery.
 Confidential broadcast, calls, push delivery, and native-client product

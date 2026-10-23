@@ -47,7 +47,6 @@ ignore = [
     { id = "RUSTSEC-2025-0119", reason = "number_prefix: indicatif's progress bars in the CLI" },
     { id = "RUSTSEC-2026-0173", reason = "proc-macro-error2: a build-time macro of hax-lib under libsignal's ML-KEM" },
     { id = "RUSTSEC-2026-0215", reason = "smallstr: inside yrs (Yjs) in kutup-collab" },
-    { id = "RUSTSEC-2024-0384", reason = "instant: OpenMLS's timer in chat-core, removed with MLS (docs/roadmap.md)" },
     # basic-toml 0.1.10: read by askama_derive 0.16 (a compile-time template
     # macro) under uniffi_bindgen, only with kutup-client-ffi's `bindgen`
     # feature, the tool that writes the Swift/Kotlin sources. Nothing shipped

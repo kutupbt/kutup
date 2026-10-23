@@ -108,8 +108,8 @@ every other outbound request (`ssrf::is_public`), which also refuses NAT64,
 IPv4-only peers (a known limit; run federation dual-stack).
 
 `chat.v2` is the Chat wire of the clean-slate release: every account is
-`username@server`, every message carries its `messageId`, and the MLS group
-policy always spells out `groupInfoEditors`. It replaced `chat.v1` outright;
+`username@server` and every message carries its `messageId` (the MLS group
+policy it also covered went with MLS groups). It replaced `chat.v1` outright;
 the feature name is also signed into every request (`kutup-federation-feature`),
 so a `chat.v1` server is neither sent to nor accepted. A send to a server whose
 discovery lacks `chat.v2` is not retried every few seconds: it stays queued in

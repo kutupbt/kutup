@@ -46,7 +46,8 @@ Next, in order:
    previews (fetched by the sender's server), view-once media, polls, and
    personal stickers (made from any picture, synced with `stickerSaved` /
    `stickerRemoved`; Signal's sticker packs are not carried over).
-7. **Invite links** (done, [`chat-invite-links.md`](../chat-invite-links.md)):
+7. **Invite links** (done for MLS groups, `chat-invite-links.md`, removed with
+   them; pairwise groups have group links, pairwise-groups.md slice 3):
    the secret rides in the group information and the link fragment; a
    sealed mailbox on the host server holds the preview and requests;
    administrators approve, or their clients add people when approval is

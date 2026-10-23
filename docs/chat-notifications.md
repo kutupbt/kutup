@@ -47,15 +47,16 @@ then shows what arrived.
   - Each start renews the registration, for a new server key or a new
     language of the worker's words, which travel in its registration URL.
   - Signing out removes it.
-- **When the server pushes:** after it stores a Direct, sealed, federated or
-  MLS mailbox row for a device that has no live WebSocket. It then:
+- **When the server pushes:** after it stores a Direct, sealed or federated
+  mailbox row (a group's multi-recipient copy when it is marked urgent) for a
+  device that has no live WebSocket. It then:
   - waits five seconds, so a page reload doesn't cause a push;
   - pushes at most once a minute per device;
   - sends `TTL: 86400`, `Urgency: high` and `Topic: kutup-chat`, so the push
     service keeps only the latest wake-up;
   - never pushes for this account's own sent transcripts or notes to self.
-- **What else wakes a device:** MLS mailbox rows are anonymous, so group
-  controls and your own group messages also wake your other closed browsers.
+- **What else wakes a device:** sealed rows are anonymous, so your own group
+  messages also wake your other closed browsers.
 - **Signing:** pushes carry an RFC 8292 VAPID token (ES256, P-256). The
   server makes the key once and keeps it in `chat_web_push_key`.
 - **Stale subscriptions:** when the push service answers `404` or `410`, the
