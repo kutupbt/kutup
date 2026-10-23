@@ -33,6 +33,11 @@ serde.workspace = true
 serde_json.workspace = true
 zeroize.workspace = true
 hex.workspace = true
+# The one random source (primitives::random); in the browser through
+# kutup-crypto-wasm's `wasm_js` backend.
+getrandom = "0.3"
+# primitives::ct_eq.
+subtle = "2"
 # Signal's ProvisioningCipher (AES-256-CBC + HMAC-SHA256) for linking a Chat
 # device (`provisioning`); the versions libsignal already brings.
 aes = "=0.8.4"

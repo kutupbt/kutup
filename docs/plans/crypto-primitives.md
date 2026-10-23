@@ -1,9 +1,9 @@
 # One primitive layer: build note (W2)
 
-**Status:** build note for review, 2026-10-23 (second session). Implements W2
+**Status:** approved 2026-10-23; step 1 built (second session). Implements W2
 of [`wipe-unification.md`](wipe-unification.md), whose open question 1 is
 settled: one suite table of whole tuples, with each format allowlisting its
-suites. Nothing is built yet.
+suites ([`../crypto-agility.md`](../crypto-agility.md), amended).
 
 ## 1. The module
 
@@ -60,9 +60,18 @@ pub fn pwhash(params: &PwhashParams, password, salt, out) -> Result<()>;  // Arg
 | V1 | SHA-256 | HMAC-SHA256 / HKDF-SHA256 | XChaCha20-Poly1305 | Ed25519 (strict) | HPKE base: X-Wing, HKDF-SHA256, ChaCha20-Poly1305 |
 | future | … | … | … | Ed25519 + ML-DSA-65 | … |
 
-- **Defined once**, in `primitives/suite.rs`: the row and its known-answer
-  vectors (`tests/vectors/primitives-v1.json`, from RFC test vectors and an
-  independent implementation for each operation).
+- **Defined once**, in `primitives/suite.rs` (`SuiteParams`), every
+  parameter named: digest and tag lengths, HKDF's extract-then-expand with
+  an empty salt as the zero key and the caller's `kutup/<area>/<purpose>/vN\0`
+  as info, the AEAD's 32-byte key, 24-byte random nonce and 16-byte tag,
+  Ed25519 with `verify_strict` (canonical S, no small-order A or R), HPKE's
+  ids (KEM 0x647a, KDF 0x0001, AEAD 0x0003) and lengths, Argon2id as
+  libsodium's one-lane `crypto_pwhash`, and the random source. A test checks
+  the code does what the row says, so a V2 is a plain diff of one row.
+- **Known answers** (`tests/vectors/primitives-v1.json`) are written by other
+  implementations (`scripts/primitives-vectors.mjs`: OpenSSL through
+  node:crypto, and libsodium), from the RFCs' own examples where they have
+  them; HPKE opens the libcrux message.
 - **Every format keeps its own wire suite id for now** and maps it to
   `Suite` through a per-format allowlist, checked on parse:
 
@@ -133,14 +142,38 @@ tests) prove nothing on the wire changed.
    commits, each green on the vectors.
 3. **kutup-server:** token hashes, the four `subkey` copies, one RNG (drops
    rand 0.8, p256's `OsRng`), one `ct_eq`.
-4. **kutup-cli:** the master key and recovery entropy from `random` (today
-   `thread_rng`, `register.rs:61-65`), SHA-256 helpers.
+4. **kutup-cli:** the master key and recovery entropy from
+   `primitives::random_key` (today `thread_rng`, `register.rs:61-65`), with a
+   test that they come from the one RNG; SHA-256 helpers.
 5. **The frontend lint** and the moves behind `@kutup/crypto`.
 6. **kutup-pass** (random only; KDBX and SSH stay adapters).
 7. **deny `[bans]`** last, once nothing outside the wrappers uses the crates.
 
 After that, **block format slices 1-2** build their framing on `Aead::new`
 and `hash`, and the wipe branch sets every header's suite to 1.
+
+## Lint exceptions
+
+The crypto rules are in the root `clippy.toml` from step 1. Clippy reads a
+crate's nearest `clippy.toml`, so a crate not yet moved carries its own,
+which keeps only the workspace's other rules (the `reqwest` ones) and starts
+with `# W2: moving`. A crate-level `#![allow]` would switch those off too.
+Each move PR deletes its crate's file; the last step makes CI fail on any
+file with the marker.
+
+| Crate | Moves in |
+|---|---|
+| `crates/kutup-crypto` | step 2 |
+| `crates/kutup-crypto-wasm` | step 2 |
+| `crates/kutup-server` | step 3 |
+| `crates/kutup-cli` | step 4 |
+| `crates/kutup-pass` | step 6 (KDBX and the SSH agent become adapters) |
+| `crates/kutup-federation-proto` | step 3 |
+| `crates/kutup-chat-proto` | with chat-core's crypto (wipe plan, code item 1) |
+| `crates/kutup-chat-core`, `crates/kutup-client-ffi`, `fuzz` | with chat-core's crypto |
+
+`kutup_crypto::primitives` itself carries `#[allow]` for the rules, as do
+the adapters once their crates move.
 
 ## Not in this note
 

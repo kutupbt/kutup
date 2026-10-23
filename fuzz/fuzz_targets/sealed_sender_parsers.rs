@@ -20,8 +20,8 @@ fuzz_target!(|data: &[u8]| {
 
     let _ = SenderCertificate::deserialize(data);
     let _ = UnidentifiedSenderMessageContent::deserialize(data);
-    let mut identity_store = fixed_identity_store();
-    let _ = futures_executor::block_on(sealed_sender_decrypt_to_usmc(data, &mut identity_store));
+    let identity_store = fixed_identity_store();
+    let _ = futures_executor::block_on(sealed_sender_decrypt_to_usmc(data, &identity_store));
 
     if let Ok(response) = serde_json::from_slice::<SenderCertificateResponseV1>(data) {
         if let Ok(certificate) =
@@ -43,10 +43,10 @@ fuzz_target!(|data: &[u8]| {
             if let Ok(ciphertext) =
                 base64::engine::general_purpose::STANDARD.decode(&envelope.content)
             {
-                let mut identity_store = fixed_identity_store();
+                let identity_store = fixed_identity_store();
                 let _ = futures_executor::block_on(sealed_sender_decrypt_to_usmc(
                     &ciphertext,
-                    &mut identity_store,
+                    &identity_store,
                 ));
             }
         }
