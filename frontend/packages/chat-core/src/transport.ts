@@ -506,6 +506,8 @@ export class ApiChatTransport implements ChatTransportPort {
         withCredentials: false,
         headers: { Authorization: undefined },
       })
+      // Only a 200 stores; any other success status is no answer the engine knows.
+      if (response.status !== 200) throw new Error(`unexpected multi-recipient status ${response.status}`)
       return { kind: 'answered', status: response.status, response: response.data }
     } catch (error) {
       if (axios.isAxiosError(error) && error.response) {
@@ -520,14 +522,17 @@ export class ApiChatTransport implements ChatTransportPort {
   }
 
   /**
-   * Sets this account's published group capabilities to exactly `hashes`
-   * (padded to a multiple of 8 by the caller); `limitReached` when the
-   * server takes no more for one account.
+   * Adds and removes published group capability hashes in one change (the
+   * engine keeps what is owed until it is taken); `limitReached` when the
+   * server takes no more for one account and changed nothing.
    */
-  async setGroupCapabilities(hashes: string[]): Promise<{ kind: 'set'; count: number } | { kind: 'limitReached' }> {
+  async changeGroupCapabilities(changes: {
+    add: string[]
+    remove: string[]
+  }): Promise<{ kind: 'changed'; count: number } | { kind: 'limitReached' }> {
     try {
-      const response = await api.post<{ count: number }>('/chat/group-capabilities/set', { hashes })
-      return { kind: 'set', count: response.data.count }
+      const response = await api.put<{ count: number }>('/chat/group-capabilities', changes)
+      return { kind: 'changed', count: response.data.count }
     } catch (error) {
       if (axios.isAxiosError(error) && error.response?.status === 409 && errorCode(error) === 'capabilityLimit') {
         return { kind: 'limitReached' }

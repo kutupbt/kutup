@@ -153,8 +153,9 @@ pub struct GroupRecordV1 {
 
 /// This account's capability for receiving a group's messages on the
 /// multi-recipient route: published (its hash) to the account's server,
-/// handed to the members pairwise. Replaced whenever a member who holds it
-/// is no longer one, so a removed member's copy stops working.
+/// handed to the members pairwise. Retired as soon as an account that may
+/// hold it is no longer a member (`settle_delivery`), so a removed member's
+/// copy stops working; the next send draws another.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct DeliveryBook {
@@ -165,28 +166,42 @@ pub struct DeliveryBook {
     /// The member accounts this device handed it to (their servers took it).
     #[serde(default)]
     pub holders: Vec<String>,
+    /// Every account that may hold it: the members when it was drawn, or,
+    /// for one taken from the group list, when this device first saw the
+    /// group's state with it (`None` until then), and everyone it was
+    /// handed to since.
+    #[serde(default)]
+    pub exposed: Option<Vec<String>>,
+    /// This device drew it, so this device publishes it (one taken from the
+    /// list was published by the device that drew it, and is never added
+    /// again from here: a stale list can't bring back a retired one).
+    #[serde(default)]
+    pub drawn_here: bool,
 }
 
 impl DeliveryBook {
-    pub fn draw<R: rand::Rng + rand::CryptoRng>(now_ms: i64, rng: &mut R) -> Self {
+    /// A new capability, drawn here for `members`, dated after `after_ms`
+    /// (the one it replaces) even on a clock that went back.
+    pub fn draw<R: rand::Rng + rand::CryptoRng>(
+        now_ms: i64,
+        after_ms: i64,
+        members: Vec<String>,
+        rng: &mut R,
+    ) -> Self {
         let mut capability = [0u8; 16];
         rng.fill_bytes(&mut capability);
         Self {
             capability: SecretText(encode(&capability)),
-            drawn_at_ms: now_ms,
+            drawn_at_ms: now_ms.max(after_ms.saturating_add(1)),
             holders: Vec::new(),
+            exposed: Some(members),
+            drawn_here: true,
         }
     }
 
     /// The capability's 16 bytes.
     pub fn bytes(&self) -> Option<[u8; 16]> {
         decode_exact::<16>("a delivery capability", &self.capability.0).ok()
-    }
-
-    /// Whether a new capability is due: one that holds it isn't a member
-    /// any more (`members`: the current member accounts).
-    pub fn must_rotate(&self, members: &[String]) -> bool {
-        self.holders.iter().any(|holder| !members.contains(holder))
     }
 
     /// The members that don't hold it yet.
@@ -196,6 +211,45 @@ impl DeliveryBook {
             .filter(|member| !self.holders.contains(member))
             .collect()
     }
+
+    /// `account` holds it now (its server took it).
+    pub fn handed_to(&mut self, account: &str) {
+        if !self.holders.iter().any(|holder| holder == account) {
+            self.holders.push(account.to_string());
+            self.holders.sort();
+        }
+        let exposed = self.exposed.get_or_insert_with(Vec::new);
+        if !exposed.iter().any(|known| known == account) {
+            exposed.push(account.to_string());
+            exposed.sort();
+        }
+    }
+}
+
+/// After the record's verified state moved (`before`: the member accounts
+/// until then, `None` for a first state): the delivery capability is
+/// retired when an account that may hold it isn't a member now. One taken
+/// from the group list counts as held by every member of the first state
+/// this device sees with it.
+fn settle_delivery(
+    record: &mut GroupRecordV1,
+    before: Option<Vec<String>>,
+) -> Result<(), GroupError> {
+    if record.delivery.is_none() {
+        return Ok(());
+    }
+    let after: Vec<String> = member_accounts(record)?
+        .iter()
+        .map(ToString::to_string)
+        .collect();
+    let book = record.delivery.as_mut().expect("checked above");
+    let exposed = book
+        .exposed
+        .get_or_insert_with(|| before.unwrap_or_else(|| after.clone()));
+    if exposed.iter().any(|account| !after.contains(account)) {
+        record.delivery = None;
+    }
+    Ok(())
 }
 
 /// A member's capability as this device holds it.
@@ -1052,6 +1106,15 @@ pub fn accept_change(
     let change_hash = change.hash().map_err(record_error)?;
     let group_id = decode_group_id(&record.group_id).map_err(record_error)?;
     let history = record.followed_history()?;
+    let before = match record.verified()? {
+        Some(_) => Some(
+            member_accounts(record)?
+                .iter()
+                .map(ToString::to_string)
+                .collect(),
+        ),
+        None => None,
+    };
     // For a newcomer's change, this is where the notary's state hash is
     // compared with the state this device computed.
     notary
@@ -1066,6 +1129,7 @@ pub fn accept_change(
         .map_err(|_| GroupError::Notary)?;
     record.set_verified(&next, change_hash)?;
     record.notary_sequence = Some(notary.identity_sequence);
+    settle_delivery(record, before)?;
     Ok(next)
 }
 
@@ -1132,6 +1196,12 @@ pub fn accept_state(
         .map_err(|_| GroupError::Notary)?;
     record.set_verified(state, change_hash)?;
     record.notary_sequence = Some(notary.identity_sequence);
+    if kept.is_some() {
+        // Joining again: the capability of the earlier membership was
+        // retired when it ended; a new one is drawn.
+        record.delivery = None;
+    }
+    settle_delivery(record, None)?;
     Ok(())
 }
 

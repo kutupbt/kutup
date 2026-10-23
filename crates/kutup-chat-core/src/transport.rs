@@ -43,13 +43,12 @@ pub enum MultiSendOutcome {
     RateLimited,
 }
 
-/// The result of setting this account's published group capabilities.
+/// The result of changing this account's published group capabilities.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase", tag = "kind")]
 pub enum GroupCapabilitiesOutcome {
-    Set {
-        count: u32,
-    },
+    /// Taken: the account now publishes `count` hashes.
+    Changed { count: u32 },
     /// `409 capabilityLimit`: more than the server takes for one account;
     /// nothing changed.
     LimitReached,
@@ -305,10 +304,14 @@ pub trait ChatTransport {
         ))
     }
 
-    /// `POST /api/chat/group-capabilities/set`: exactly these hashes
-    /// (canonical base64 SHA-256 of each capability, padding included) are
-    /// this account's group capabilities on its server.
-    async fn set_group_capabilities(&self, _hashes: &[String]) -> Result<GroupCapabilitiesOutcome> {
+    /// `PUT /api/chat/group-capabilities`: adds and removes these hashes
+    /// (canonical base64 SHA-256 of each capability, or a padding dummy) in
+    /// one change of this account's group capabilities on its server.
+    async fn change_group_capabilities(
+        &self,
+        _add: &[String],
+        _remove: &[String],
+    ) -> Result<GroupCapabilitiesOutcome> {
         Err(crate::ChatError::Transport(
             "transport does not implement group capabilities".into(),
         ))

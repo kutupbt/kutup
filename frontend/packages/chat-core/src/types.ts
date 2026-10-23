@@ -938,6 +938,8 @@ export interface WasmChatClientHandle {
   leaveGroup?(groupId: string): Promise<void>
   /** Writes the due group list entries now (before signing out); how many. */
   flushGroupList?(): Promise<number>
+  /** The account's server takes no more group capabilities: some groups' messages reach it pairwise only. */
+  groupCapabilityLimitReached?(): Promise<boolean>
   /** Writes the due group and contact list entries and follows other devices' changes (a timer of its own). */
   syncAccountLists?(): Promise<void>
   /** Writes the due contact list entries now (before signing out); how many. */

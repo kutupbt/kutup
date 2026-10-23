@@ -219,12 +219,9 @@ pub struct Engine {
     /// group on its own (a request's status, a removal it couldn't place):
     /// at most once a minute per group, whatever arrives.
     pub(crate) group_nudges: BTreeMap<String, i64>,
-    /// This account's published group capabilities are out of date (a
-    /// capability drawn or a group left): set again at the next chance.
-    pub(crate) group_capabilities_due: bool,
-    /// The server refused them as too many for one account: groups keep
-    /// the pairwise route, and the page says so.
-    pub(crate) group_capability_limit: bool,
+    /// While the server holds this account's group capabilities at its
+    /// limit: when new ones are offered again (`group_delivery`).
+    pub(crate) capability_retry_at_ms: i64,
     /// When the session with a peer device was last set aside for being
     /// unreadable (`process_inbound`), by `(account, device)`.
     session_resets: BTreeMap<(String, u32), i64>,
@@ -352,8 +349,7 @@ impl Engine {
             manifest_keys_seen: BTreeMap::new(),
             group_catch_ups: BTreeMap::new(),
             group_nudges: BTreeMap::new(),
-            group_capabilities_due: true,
-            group_capability_limit: false,
+            capability_retry_at_ms: 0,
             session_resets: BTreeMap::new(),
             resent: BTreeMap::new(),
             asked_again: BTreeMap::new(),

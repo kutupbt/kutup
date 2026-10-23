@@ -1027,6 +1027,15 @@ impl Engine {
                     .unwrap_or_default()
             };
             match outcome {
+                // Only 200, 409 and 410 are answers; any other status is an
+                // error, as no answer: they wait.
+                Ok(crate::transport::MultiSendOutcome::Answered { status, .. })
+                    if !matches!(status, 200 | 409 | 410) =>
+                {
+                    for index in going {
+                        wait(&mut entry.legs[index], now);
+                    }
+                }
                 Ok(crate::transport::MultiSendOutcome::Answered { status, response }) => {
                     let stored = status == 200;
                     // New or reinstalled devices: on as an ordinary leg (see
@@ -1043,6 +1052,12 @@ impl Engine {
                         .iter()
                         .map(|devices| &devices.account_id)
                         .collect();
+                    // A 409/410 that names none of these legs answers no
+                    // request of this device's.
+                    let names_a_leg = going.iter().any(|&index| {
+                        let id = account_id(index, entry);
+                        gained.contains(&&id) || moved.contains(&&id)
+                    });
                     for index in going {
                         let id = account_id(index, entry);
                         let account = entry.legs[index].account.clone();
@@ -1077,9 +1092,21 @@ impl Engine {
                                 account,
                                 devices: leg.devices.clone(),
                             });
-                        } else {
-                            // A 409/410 stored nothing for anyone: again.
+                        } else if names_a_leg {
+                            // A 409/410 stored nothing for anyone: again,
+                            // with the named legs' devices brought up to date.
                             again.push(index);
+                        } else {
+                            // One that names no leg at all: after a wait,
+                            // and counted, so such answers can't keep the
+                            // legs going round.
+                            let leg = &mut entry.legs[index];
+                            leg.mismatches = leg.mismatches.saturating_add(1);
+                            if leg.mismatches >= MAX_LEG_MISMATCHES {
+                                to_pairwise.push(index);
+                            } else {
+                                wait(leg, now);
+                            }
                         }
                     }
                 }

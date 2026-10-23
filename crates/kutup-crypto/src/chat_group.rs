@@ -379,14 +379,13 @@ impl DeliveryPaddingKey {
         }
     }
 
-    /// The dummy hash in `slot` at `epoch`.
-    pub fn dummy(&self, epoch: u64, slot: u32) -> [u8; 32] {
-        let mut info = [0u8; 12];
-        info[..8].copy_from_slice(&epoch.to_be_bytes());
-        info[8..].copy_from_slice(&slot.to_be_bytes());
+    /// The dummy hash in `slot`. The same for as long as the account keeps
+    /// it, so two published sets differ only where a real capability or a
+    /// slot changed: diffing them never tells the dummies apart.
+    pub fn dummy(&self, slot: u32) -> [u8; 32] {
         let mut out = [0u8; 32];
         self.hkdf
-            .expand(&info, &mut out)
+            .expand(&slot.to_be_bytes(), &mut out)
             .expect("HKDF output length is fixed and valid");
         out
     }
@@ -622,19 +621,14 @@ mod tests {
     use super::*;
 
     #[test]
-    fn delivery_padding_is_the_accounts_own_and_changes_with_the_epoch() {
+    fn delivery_padding_is_the_accounts_own_and_one_per_slot() {
         let key = DeliveryPaddingKey::derive(&[1u8; 32]);
         let again = DeliveryPaddingKey::derive(&[1u8; 32]);
-        assert_eq!(
-            key.dummy(7, 0),
-            again.dummy(7, 0),
-            "every device makes the same"
-        );
-        assert_ne!(key.dummy(7, 0), key.dummy(7, 1));
-        assert_ne!(key.dummy(7, 0), key.dummy(8, 0));
+        assert_eq!(key.dummy(0), again.dummy(0), "every device makes the same");
+        assert_ne!(key.dummy(0), key.dummy(1));
         assert_ne!(
-            key.dummy(7, 0),
-            DeliveryPaddingKey::derive(&[2u8; 32]).dummy(7, 0)
+            key.dummy(0),
+            DeliveryPaddingKey::derive(&[2u8; 32]).dummy(0)
         );
     }
 

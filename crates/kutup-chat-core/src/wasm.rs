@@ -305,12 +305,13 @@ extern "C" {
         request: JsValue,
     ) -> std::result::Result<JsValue, JsValue>;
 
-    /// `POST /api/chat/group-capabilities/set`: a `GroupCapabilitiesOutcome`
-    /// (`{ kind: "set", count }` or `limitReached`).
-    #[wasm_bindgen(method, catch, js_name = setGroupCapabilities)]
-    async fn js_set_group_capabilities(
+    /// `PUT /api/chat/group-capabilities` with `{ add, remove }`: a
+    /// `GroupCapabilitiesOutcome` (`{ kind: "changed", count }` or
+    /// `limitReached`).
+    #[wasm_bindgen(method, catch, js_name = changeGroupCapabilities)]
+    async fn js_change_group_capabilities(
         this: &JsChatTransport,
-        hashes: JsValue,
+        changes: JsValue,
     ) -> std::result::Result<JsValue, JsValue>;
 
     #[wasm_bindgen(method, catch, js_name = sendSyncMessage)]
@@ -875,13 +876,20 @@ impl ChatTransport for BrowserTransport {
         )
     }
 
-    async fn set_group_capabilities(
+    async fn change_group_capabilities(
         &self,
-        hashes: &[String],
+        add: &[String],
+        remove: &[String],
     ) -> Result<crate::transport::GroupCapabilitiesOutcome> {
+        #[derive(serde::Serialize)]
+        struct Changes<'a> {
+            add: &'a [String],
+            remove: &'a [String],
+        }
+        let changes = Changes { add, remove };
         from_transport(
             self.js
-                .js_set_group_capabilities(to_transport(&hashes)?)
+                .js_change_group_capabilities(to_transport(&changes)?)
                 .await
                 .map_err(transport_error)?,
         )
@@ -2265,6 +2273,17 @@ impl WasmChatClient {
                 .map(GroupSummaryView::from)
                 .collect::<Vec<_>>(),
         )
+    }
+
+    /// Whether this account's server refused its new group capabilities as
+    /// too many: those groups' messages reach it pairwise, which the page
+    /// says.
+    #[wasm_bindgen(js_name = groupCapabilityLimitReached)]
+    pub async fn group_capability_limit_reached(&self) -> std::result::Result<bool, JsValue> {
+        self.engine
+            .group_capability_limit_reached()
+            .await
+            .map_err(chat_error)
     }
 
     #[wasm_bindgen(js_name = syncManifest)]

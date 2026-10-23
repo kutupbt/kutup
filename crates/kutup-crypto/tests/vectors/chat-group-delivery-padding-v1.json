@@ -2,24 +2,20 @@
   "accountMasterKey": "ERERERERERERERERERERERERERERERERERERERERERE=",
   "cases": [
     {
-      "epoch": 0,
       "slot": 0,
-      "dummy": "Q2eJhMaH8RkG8IrN7y29iomkYvAGk4aPfIBExERXyME="
+      "dummy": "2RmffDvI7L/oh2b+3SYZZCBOhFRjKi2R35ZvIXTiDtA="
     },
     {
-      "epoch": 1790000000000,
-      "slot": 0,
-      "dummy": "Ip6lJBh5q/aatydOvZb9m2XYTUk5vuS1MuPcGP0r3eI="
+      "slot": 1,
+      "dummy": "JLZRsV5jDF2ahkO9q+6H+wyJ0zCRcsEhUNWFnn195Kw="
     },
     {
-      "epoch": 1790000000000,
       "slot": 7,
-      "dummy": "ZonRZNhgISxW+mlEaJRdkrpNcwl/CMmR8s0RdpPKOZU="
+      "dummy": "5aU9lNLN8kSwQy6DpjRoXo/ppeBohrA1/zeIfkGPtJw="
     },
     {
-      "epoch": 18446744073709551615,
       "slot": 16909060,
-      "dummy": "I9i/8XrQ7efe9aw3e+KIdFF/WppaZVgEJl9m3h8Upuk="
+      "dummy": "58eIvF/A8oJbzCAbB14yLMgHUSky86b+vRYGR4uFRuM="
     }
   ]
 }

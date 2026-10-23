@@ -877,17 +877,29 @@ counts too. The shared part goes once no row names it (after an ack,
 or the maintenance sweep).
 
 **The client side.** Each member draws a random 16-byte capability per group
-(`DeliveryBook`) and publishes the hashes of all its groups' capabilities in
-one set (`POST /api/chat/group-capabilities/set`), padded to a multiple of 8
-with dummies derived from the account's padding key, so the set's size says
-little about how many groups it is in. A capability is handed to the other
-members only after its set was taken, pairwise, in the hidden `groupDelivery`
+(`DeliveryBook`) and publishes its hash (`PUT /api/chat/group-capabilities`,
+`{ add, remove }`). The account's set is padded to a multiple of 8 with
+dummies derived from the account's padding key, one per slot, the same for
+as long as the account keeps it, so the set's size says little about how many
+groups it is in and two sets compared don't tell the dummies apart. Only the
+slots whose dummy comes or goes are sent. A capability is handed to the other
+members only once the server took it, pairwise, in the hidden `groupDelivery`
 kind, and kept in the account's group list entry so its other devices hold it
-too; the newest draw wins everywhere. It is drawn again when a member who
-holds it leaves or is removed, and a group this account leaves (or is
-removed from, or that ends) comes off the set at once. A server over its
-per-account limit (`409 capabilityLimit`) keeps the account's groups on the
-pairwise route.
+too; the newest draw wins everywhere (a draw is dated after the one it
+replaces, even on a clock that went back).
+
+A capability is retired as soon as an account that may hold it is no longer
+a member: every account it was drawn for or handed to, or, for one a device
+took from the group list, every member of the first state that device saw
+with it. Each device of the account checks this as it accepts each change,
+and the next send draws another. A group this account leaves (or is removed
+from, or that ends) retires its capability too. Retired hashes come off the
+server at once. Changes go as deltas from a durable ledger, never as a whole
+set, so a device that is behind can't bring back a retired capability; only
+the device that drew a capability adds it. A server over its per-account
+limit (`409 capabilityLimit`) still takes the removals; the account's new
+capabilities wait (offered again hourly), and those groups stay on the
+pairwise route meanwhile.
 
 A group message goes on this route to each member whose capability the
 sender holds, one request per destination server, the sender-key message
