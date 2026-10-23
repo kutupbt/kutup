@@ -1,5 +1,6 @@
-// Desktop notifications (docs/plans/mail-parity.md, P6), as Proton's
-// `desktopNotification` helpers: the browser's permission is the only switch.
+// Desktop notifications (docs/plans/mail-parity.md, P6; Calendar's
+// reminders), as Proton's `desktopNotification` helpers: the browser's
+// permission is the only switch.
 
 export type NotificationStatus = 'granted' | 'denied' | 'default' | 'unsupported'
 
@@ -18,7 +19,7 @@ export async function requestNotifications(): Promise<NotificationStatus> {
   }
 }
 
-/** Shows one, when allowed; clicking focuses Mail and runs `onClick`. */
+/** Shows one, when allowed; clicking focuses the app and runs `onClick`. */
 export function showNotification(title: string, options: NotificationOptions, onClick?: () => void): void {
   if (notificationStatus() !== 'granted') return
   try {

@@ -222,6 +222,9 @@ struct Due {
     event: Uuid,
     action: ReminderType,
     occurrence_start: time::OffsetDateTime,
+    /// When it was due: with the occurrence, it names this reminder (two for
+    /// one occurrence are two notifications).
+    fire_at: time::OffsetDateTime,
     all_day: bool,
 }
 
@@ -391,6 +394,7 @@ async fn fire_due(state: &AppState, client: &reqwest::Client, late: bool) -> any
                     ReminderType::Device
                 },
                 occurrence_start,
+                fire_at,
                 all_day: parsed.as_ref().is_some_and(|(_, all_day)| *all_day),
             });
         }
@@ -551,6 +555,9 @@ async fn push(
     let start = alarm
         .occurrence_start
         .format(&time::format_description::well_known::Rfc3339)?;
+    let fire_at = alarm
+        .fire_at
+        .format(&time::format_description::well_known::Rfc3339)?;
     let until_start = (alarm.occurrence_start - time::OffsetDateTime::now_utc()).whole_seconds();
     let ttl = until_start.max(lateness).clamp(1, MAX_TTL_SECONDS) as u32;
     for (session, endpoint, p256dh, auth) in subscriptions {
@@ -562,7 +569,7 @@ async fn push(
         let topic = subscription_tag(&auth, b"topic", alarm.event.as_bytes(), 32);
         let account = subscription_tag(&auth, b"account", alarm.user.as_bytes(), 22);
         let payload =
-            serde_json::json!({ "eventId": alarm.event, "startUtc": start, "account": account })
+            serde_json::json!({ "eventId": alarm.event, "startUtc": start, "fireAt": fire_at, "allDay": alarm.all_day, "account": account })
                 .to_string();
         let body = crate::web_push_payload::encrypt(&p256dh, &auth, payload.as_bytes())?;
         match sender
@@ -701,6 +708,22 @@ mod tests {
         // Past the last: none.
         let after = utc("2026-11-03T00:00:00Z");
         assert!(next_fire(&series, "UTC", -15, after).unwrap().is_none());
+    }
+
+    /// The vector the calendar's service worker checks too
+    /// (`apps/calendar/src/features/reminders/push-sw.test.ts`).
+    #[test]
+    fn the_account_tag_matches_the_service_worker_s() {
+        let account = Uuid::parse_str("3f1c9a52-6b7e-4f0e-9d1a-2c3b4d5e6f70").unwrap();
+        assert_eq!(
+            subscription_tag(&[1; 16], b"account", account.as_bytes(), 22),
+            "bOzkrVOAPAcr6dlqCNiyod"
+        );
+        let event = Uuid::parse_str("11111111-2222-4333-8444-555555555555").unwrap();
+        assert_eq!(
+            subscription_tag(&[1; 16], b"topic", event.as_bytes(), 32),
+            "uNoLKqi4nmMfISj-3ezbUTFjYbMOclUk"
+        );
     }
 
     #[test]

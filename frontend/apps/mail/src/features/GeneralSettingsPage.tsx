@@ -10,7 +10,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { LoadingPanel } from '@kutup/ui/components/states'
 import { apiErrorMessage } from '@kutup/ui/lib/apiError'
 import { useContentSearch, useContentSearchState } from '@kutup/mail-core/contentSearch'
-import { notificationStatus, requestNotifications, showNotification, type NotificationStatus } from './desktopNotifications'
+import { notificationStatus, requestNotifications, showNotification, type NotificationStatus } from '@kutup/ui/lib/desktopNotifications'
 import { registerMailtoHandler } from './mailto'
 
 function Setting({ label, hint, checked, onChange }: { label: string; hint: string; checked: boolean; onChange: (on: boolean) => void }) {

@@ -625,3 +625,84 @@ only where they do better.
 | Working hours shaded | none | ❌ (Google, Outlook: worth having) |
 | Per-user snap step | none | ❌ (Outlook's; Proton's fixed 30 kept) |
 | Natural-language quick add | none | ➖ (Fantastical's; not planned) |
+
+## E2b-3: reminders in the app (second session, 2026-10-23)
+
+The user's rule (2026-10-23): follow Proton's Calendar exactly; Kutup adds
+the closed-app push, which Proton lacks. Read from Proton's web client:
+`applications/calendar/src/app/containers/alarms/` (`AlarmContainer`,
+`useCalendarsAlarms`, `AlarmWatcher`), `packages/shared/lib/calendar/alarms/`
+(`getAlarmMessageText`, `notificationDefaults`, `getValarmTrigger`),
+`packages/components/containers/calendar/notifications/` (the picker) and
+`CalendarEventDefaultsSection`.
+
+**1. Firing in an open tab (Proton's `AlarmWatcher`).** The app fetches the
+caller's device alarms (`GET /api/calendar/alarms`, `action = device`) for
+`[now, now + 2 days]`, paged, and fetches again 2 minutes before the window
+ends (and after a sync, a change of reminders, defaults or zone, and a wake
+from sleep). One timer chain fires them in order: each alarm once (an
+in-memory set), skipped if more than a minute late (Proton's `MIN_CUTOFF`).
+The event is opened with the calendar key to read its title. The
+notification is Proton's: title "Calendar reminder", the body Proton's
+`getAlarmMessage` texts ("{title} starts at 09:30", "starts tomorrow at …",
+"started …", all-day "starts today"), in the calendar's zone and the app's
+language; its tag is `kutup-calendar:<eventId>:<occurrenceStart>`. A click
+focuses the tab and opens the event.
+
+**2. Firing with the app closed (Kutup's push).** The calendar app's own
+service worker (`apps/calendar/public/push-sw.js`, Chat's shape) takes the
+reminder push. It holds no keys: the payload (`{ eventId, startUtc, fireAt,
+allDay, account }`) gives only when, so it shows "Event at 09:30" (or "Event
+today", "Event on Friday, 30 October" for all-day), formatted with the zone
+and language the app put in its registration URL. Its tag is the tab's, per
+reminder (`<event>:<start>:<fire time>`, as Proton tags per alarm), so a
+push and a tab's notification for one reminder are one notification. The
+open app shows its reminders through the worker's registration, so a push
+can find them. A browser wants every push to show a notification
+(`userVisibleOnly`): a push for one the tab already showed shows that one
+again, silently; any other push alerts with its time only, open tab or not
+(whether a tab will fire it isn't known to the worker: another account, a
+hidden calendar, a locked or frozen tab), and a tab firing it later only
+puts its title in, silently (same tag, no `renotify`). One reminder, one
+alert.
+The push's ids and times are checked (an event id is a UUID, the times
+parse). A click focuses an open Calendar or opens `/?event=<id>`, only ever
+Calendar's own pages. The `account` tag is checked against the account that
+registered the worker (its id in the registration URL): the worker computes
+the tag from its subscription's own secret (`getKey('auth')`), so nothing
+account-identifying is stored in clear; another account's push in this
+browser opens Calendar's start page, not an event.
+
+**3. Settings (Proton's).**
+- Each calendar's default reminders, timed and all-day (Proton's
+  `CalendarEventDefaultsSection`), in the calendar's dialog: up to
+  `calendarDefaultReminders` each, Proton's picker.
+- The event editor's reminders (Proton's `Notifications` field), up to
+  `calendarRemindersPerEvent`: the calendar's defaults until edited; saved as
+  the event's own (`reminders` on create and update; `null` back to the
+  defaults). The server returns the caller's own list with each event
+  (a small server change: `reminders` in the event view, null for the
+  defaults).
+- Proton's picker: Notification or Email; a number and "minutes, hours,
+  days, weeks before", or "at time of event"; all-day: "on the same day" or
+  "days, weeks before", at a time of day.
+- Desktop notifications: Proton's banner asking for permission (Mail's
+  helper and banner), and permission asked when the first device reminder
+  is saved. Kutup's addition: "Remind me when Calendar is closed" in the
+  settings (the push subscription, with the browser's keys), on by default
+  once permission is given.
+- The calendar's zone is the account's (`PUT /api/calendar/settings`,
+  Proton's primary zone), so all-day reminders fire in it: a device shows
+  it unless it chose its own in the settings, which is also the only time a
+  device writes it (an account without one takes the first device's).
+
+**4. Server changes:** the caller's `reminders` in the event view; `allDay`
+in the push payload; one `now` per batch from the database (done in the
+follow-ups PR).
+
+**Tests:** unit (message texts as Proton's, the timer chain with fake
+timers, the picker's triggers); a browser spec: an event two minutes ahead
+with a reminder at its start fires an in-tab notification (Playwright's
+Notification stub), the editor shows and saves reminders, a calendar's
+defaults apply to a new event. Push is covered by the server's live test
+and a unit test of the service worker's handlers.

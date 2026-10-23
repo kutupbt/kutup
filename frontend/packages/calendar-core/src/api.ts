@@ -47,6 +47,22 @@ const MAX_EVENT_PAGES = 1000
 /** Proton's permission bits (`CALENDAR_PERMISSIONS`). */
 export const PERMISSION = { superOwner: 1, owner: 2, write: 16, read: 32 } as const
 
+/**
+ * A reminder (Proton's notification): on this member's devices or by email,
+ * `trigger` an RFC 5545 duration from the start (`-PT15M`; all-day `PT9H` is
+ * 09:00 that day). Readable by the server, which keeps and fires the alarms.
+ */
+export interface Reminder {
+  type: 'device' | 'email'
+  trigger: string
+}
+
+/** A member's default reminders for a calendar's timed and all-day events. */
+export interface DefaultReminders {
+  timed: Reminder[]
+  allDay: Reminder[]
+}
+
 /** A calendar as the server lists it for its member. */
 export interface CalendarRow {
   id: string
@@ -60,6 +76,8 @@ export interface CalendarRow {
   permissions: number
   color: string
   display: boolean
+  /** This member's defaults (Proton's DefaultPartDayNotifications and DefaultFullDayNotifications). */
+  defaultReminders: DefaultReminders
   revision: number
   createdAt: string
   updatedAt: string
@@ -74,6 +92,7 @@ export interface Calendar {
   display: boolean
   permissions: number
   revision: number
+  defaultReminders: DefaultReminders
   unlocked: UnlockedCalendar
 }
 
@@ -93,6 +112,8 @@ export interface EventRow {
   /** Starts at 1; each update adds one, and names the one it was made from. */
   revision: number
   modifiedAt: string
+  /** The caller's own reminders for it; null: the calendar's defaults. */
+  reminders: Reminder[] | null
 }
 
 /** An event, opened. */
@@ -105,6 +126,8 @@ export interface CalendarEvent {
   fullDay: boolean
   /** The stored revision, which a change of it names as its base. */
   revision: number
+  /** This member's own reminders; null: the calendar's defaults. */
+  reminders: Reminder[] | null
   /**
    * Its author signed every part, and the times the server read are the
    * ones signed. An event that isn't is shown as such, never trusted.
@@ -206,6 +229,7 @@ export async function loadCalendars(session: Session, account: MailAccount): Pro
             display: row.display,
             permissions: row.permissions,
             revision: row.revision,
+            defaultReminders: row.defaultReminders,
             unlocked: key,
           })
         } catch (error) {
@@ -268,6 +292,8 @@ export interface CalendarChange {
   description?: string
   color?: string
   display?: boolean
+  /** This member's defaults (Proton's event defaults). */
+  defaultReminders?: DefaultReminders
 }
 
 /** Changes a calendar: the owner's name and description, the member's colour and visibility. */
@@ -292,6 +318,7 @@ export async function updateCalendar(session: Session, account: MailAccount, cal
             metadata,
             color: change.color,
             display: change.display,
+            defaultReminders: change.defaultReminders,
             baseRevision: calendar.revision,
             revision,
             head,
@@ -369,8 +396,15 @@ export async function openEvent(account: MailAccount, calendar: Calendar, row: E
     fields: opened.fields,
     ...times,
     revision: row.revision,
+    reminders: row.reminders ?? null,
     verified: opened.verified && ownAuthor && asServed,
   }
+}
+
+/** One event of `calendar`, opened (a reminder's, to name it). */
+export async function loadEvent(account: MailAccount, calendar: Calendar, eventId: string): Promise<CalendarEvent> {
+  const { data } = await api.get<EventRow>(`/calendar/calendars/${encodeURIComponent(calendar.id)}/events/${encodeURIComponent(eventId)}`)
+  return openEvent(account, calendar, data)
 }
 
 /** Where the next page of events starts. */
@@ -457,13 +491,18 @@ async function beforeEventWrite(session: Session): Promise<void> {
   await (await accountHead(session)).verifiedHead()
 }
 
-/** Saves an event's fields to `calendar`: a new event, or `existing` (as opened) changed. */
+/**
+ * Saves an event's fields to `calendar`: a new event, or `existing` (as
+ * opened) changed. `reminders`: this member's own (a list), the calendar's
+ * defaults (`null`), or, left out, as they are (a new event: the defaults).
+ */
 export async function saveEvent(
   session: Session,
   account: MailAccount,
   calendar: Calendar,
   fields: EventFields,
   existing?: Pick<CalendarEvent, 'id' | 'revision'>,
+  reminders?: Reminder[] | null,
 ): Promise<string> {
   await beforeEventWrite(session)
   const addressId = await activeAddressId(account)
@@ -472,7 +511,9 @@ export async function saveEvent(
     calendar,
     addressId,
     // A new event's id is drawn here, so a create sent again is the stored one, never a second.
-    existing ? { update: { id: existing.id, baseRevision: existing.revision, event } } : { create: { id: crypto.randomUUID(), event } },
+    existing
+      ? { update: { id: existing.id, baseRevision: existing.revision, event, ...(reminders !== undefined ? { reminders } : {}) } }
+      : { create: { id: crypto.randomUUID(), event, ...(reminders ? { reminders } : {}) } },
   )
   return stored?.id ?? existing?.id ?? ''
 }
@@ -487,6 +528,59 @@ export async function deleteEvent(
   await beforeEventWrite(session)
   const addressId = await activeAddressId(account)
   await syncOne(calendar, addressId, { delete: { id: existing.id, baseRevision: existing.revision } })
+}
+
+/** One of the caller's alarms (`GET /api/calendar/alarms`). */
+export interface Alarm {
+  calendarId: string
+  eventId: string
+  action: 'device' | 'email'
+  /** The occurrence it is for, and when it fires (RFC 3339). */
+  occurrenceStart: string
+  fireAt: string
+}
+
+/** The most pages one alarms window is read in (a server that never ends a listing). */
+const MAX_ALARM_PAGES = 100
+
+/** The caller's alarms firing in [start, end), every page, by fire time. */
+export async function loadAlarms(start: string, end: string): Promise<Alarm[]> {
+  const alarms: Alarm[] = []
+  let after: { afterFire: string; afterEvent: string } | null = null
+  for (let pages = 1; ; pages++) {
+    const response: { data: { alarms: Alarm[] } } = await api.get('/calendar/alarms', { params: { start, end, ...after } })
+    const page = response.data.alarms
+    alarms.push(...page)
+    // Pages go on after the last one's last alarm until one is empty (the
+    // page size is the server's setting); each must move forward.
+    const last = page.at(-1)
+    if (!last) break
+    const next = { afterFire: last.fireAt, afterEvent: last.eventId }
+    const forward = !after || Date.parse(next.afterFire) > Date.parse(after.afterFire) || (next.afterFire === after.afterFire && next.afterEvent > after.afterEvent)
+    if (!forward) throw new Error('the server repeats a page')
+    if (pages >= MAX_ALARM_PAGES) throw new Error('the server never ends this listing')
+    after = next
+  }
+  return alarms
+}
+
+/** The account's calendar zone (all-day reminders fire in it); null: UTC. */
+export async function loadCalendarZone(): Promise<string | null> {
+  const { data } = await api.get<{ zone: string | null }>('/calendar/settings')
+  return data.zone
+}
+
+export async function saveCalendarZone(zone: string | null): Promise<void> {
+  await api.put('/calendar/settings', { zone })
+}
+
+/** This browser takes reminder pushes (its `PushSubscription`'s endpoint and keys, base64url). */
+export async function savePushSubscription(subscription: { endpoint: string; p256dh: string; auth: string }): Promise<void> {
+  await api.put('/calendar/push-subscription', subscription)
+}
+
+export async function deletePushSubscription(): Promise<void> {
+  await api.delete('/calendar/push-subscription')
 }
 
 // ----- hooks -----

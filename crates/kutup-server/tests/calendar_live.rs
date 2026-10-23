@@ -1107,6 +1107,11 @@ fn reminders_and_alarms() {
     assert_eq!(results[0]["code"], "invalidReminders", "{results:?}");
     let results = update(json!([{ "type": "device", "trigger": "-PT1H" }]), 1);
     assert_eq!(results[0]["status"], 200, "{results:?}");
+    // The event shows the caller's own list.
+    assert_eq!(
+        results[0]["event"]["reminders"],
+        json!([{ "type": "device", "trigger": "-PT1H" }])
+    );
     let found = alarms("2027-10-29T00:00:00Z", "2027-10-30T00:00:00Z");
     assert_eq!(found.len(), 1);
     assert_eq!(found[0]["fireAt"], "2027-10-29T05:00:00Z");
@@ -1114,6 +1119,10 @@ fn reminders_and_alarms() {
     // Back to the defaults (null).
     let results = update(Value::Null, 2);
     assert_eq!(results[0]["status"], 200, "{results:?}");
+    assert!(
+        results[0]["event"]["reminders"].is_null(),
+        "back to the defaults"
+    );
     assert_eq!(
         alarms("2027-10-29T00:00:00Z", "2027-10-30T00:00:00Z").len(),
         2

@@ -19,10 +19,16 @@ import { AppSwitcher } from '@kutup/ui/components/app-switcher'
 import { Button } from '@kutup/ui/components/button'
 import { Checkbox } from '@kutup/ui/components/checkbox'
 import { HeadStateBanner } from '@kutup/ui/components/head-state-banner'
+import { NotificationBanner } from '@kutup/ui/components/notification-banner'
 import { UserMenu } from '@kutup/ui/components/user-menu'
 import { apiErrorMessage } from '@kutup/ui/lib/apiError'
 import { CalendarDialog } from '../features/CalendarDialog'
 import { EventDialog } from '../features/EventDialog'
+import { AlarmWatcher } from '../features/reminders/AlarmWatcher'
+import { refreshPush } from '../features/reminders/push'
+import { useAccountZone } from '../features/reminders/useAccountZone'
+import { useEventLink } from '../features/reminders/useEventLink'
+import { usePush } from '../features/reminders/usePush'
 import { openEditor } from '../features/editorState'
 import { useCalendarPrefs } from '../features/prefs'
 import { SettingsDialog } from '../features/SettingsDialog'
@@ -81,6 +87,9 @@ function CalendarRow({ calendar, onEdit }: { calendar: Calendar; onEdit: () => v
 /** Calendar's frame: new event, the calendars, settings and the shared storage. */
 export function CalendarShell() {
   const { t } = useTranslation()
+  useAccountZone()
+  usePush()
+  useEventLink()
   const session = useRequiredSession()
   const accountHeadState = useAccountHeadState()
   useAccountUiPreferences()
@@ -183,6 +192,15 @@ export function CalendarShell() {
     >
       <Outlet />
       <EventDialog />
+      <AlarmWatcher />
+      <NotificationBanner
+        storageKey="kutup.calendar.notificationBanner.dismissed"
+        message={t('reminders.banner')}
+        label={t('reminders.bannerLabel')}
+        enable={t('reminders.enable')}
+        dismiss={t('reminders.dismiss')}
+        onAnswer={refreshPush}
+      />
       <CalendarDialog
         open={editing !== null}
         onOpenChange={(open) => !open && setEditing(null)}

@@ -2,7 +2,7 @@ import { useEffect, useRef } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useNavigate } from 'react-router-dom'
 import { fetchNewMail, type NewMail } from '@kutup/mail-core/api'
-import { notificationStatus, showNotification } from './desktopNotifications'
+import { notificationStatus, showNotification } from '@kutup/ui/lib/desktopNotifications'
 
 // New-mail notifications while Mail is open (docs/plans/mail-parity.md, P6),
 // as Proton's `useNewEmailNotification`: one for each new unread message in
