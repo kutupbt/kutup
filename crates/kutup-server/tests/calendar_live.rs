@@ -881,6 +881,141 @@ fn repeating_events() {
         1,
         "one new series however often it was sent: {november:?}"
     );
+
+    let events = |start: &str, end: &str| -> Vec<Value> {
+        let page: Value = bearer(
+            c.get(format!(
+                "{base}/api/calendar/calendars/{id}/events?start={start}&end={end}"
+            )),
+            &ada.user.token,
+        )
+        .send()
+        .unwrap()
+        .json()
+        .unwrap();
+        page["events"].as_array().unwrap().clone()
+    };
+    // An event by its UID and start (a series and its changes share one).
+    let one = |uid: &str, start_utc: &str| -> Value {
+        events("2026-10-19T00:00:00Z", "2026-11-30T00:00:00Z")
+            .into_iter()
+            .find(|e| e["uid"] == uid && e["startUtc"] == start_utc)
+            .unwrap_or_else(|| panic!("{uid} at {start_utc}"))
+    };
+    let status = |results: &[Value]| {
+        (
+            results[0]["status"].as_u64(),
+            results[0]["code"].as_str().map(str::to_owned),
+        )
+    };
+
+    // A changed occurrence is not behind its series' SEQUENCE (the cut made
+    // it 1).
+    let mut behind = fields(
+        "weekly@kutup.test",
+        "2026-10-19T12:00:00",
+        "2026-10-19T13:00:00",
+        "Behind",
+    );
+    behind.start = berlin("2026-10-19T12:00:00");
+    behind.end = Some(berlin("2026-10-19T13:00:00"));
+    behind.recurrence_id = Some(berlin("2026-10-19T09:00:00"));
+    let results = sync(&c, &base, &ada, &id, json!([create(sealed(&behind))]));
+    assert_eq!(
+        status(&results),
+        (Some(409), Some("sequenceBehind".into())),
+        "{results:?}"
+    );
+    behind.sequence = 1;
+    let results = sync(&c, &base, &ada, &id, json!([create(sealed(&behind))]));
+    assert_eq!(results[0]["status"], 200, "{results:?}");
+
+    // A series never turns into a changed occurrence.
+    let series = one("weekly_R20261102T090000@kutup.test", "2026-11-02T08:00:00Z");
+    let mut turned = following.clone();
+    turned.recurrence_id = Some(berlin("2026-11-02T09:00:00"));
+    turned.rrule = None;
+    let results = sync(
+        &c,
+        &base,
+        &ada,
+        &id,
+        json!([{ "update": {
+            "id": series["id"], "baseRevision": series["revision"], "event": sealed(&turned),
+        } }]),
+    );
+    assert_eq!(
+        status(&results),
+        (Some(400), Some("recurrenceIdChanged".into())),
+        "{results:?}"
+    );
+
+    // Its series deleted, a changed occurrence stays a single event that
+    // can still be changed.
+    let parent = one("weekly@kutup.test", "2026-10-19T07:00:00Z");
+    let results = sync(
+        &c,
+        &base,
+        &ada,
+        &id,
+        json!([{ "delete": { "id": parent["id"], "baseRevision": parent["revision"] } }]),
+    );
+    assert_eq!(results[0]["status"], 200, "{results:?}");
+    let orphan = one("weekly@kutup.test", "2026-10-19T10:00:00Z");
+    let mut changed = behind.clone();
+    changed.summary = Some("Still here".into());
+    changed.sequence = 2;
+    let results = sync(
+        &c,
+        &base,
+        &ada,
+        &id,
+        json!([{ "update": {
+            "id": orphan["id"], "baseRevision": orphan["revision"], "event": sealed(&changed),
+        } }]),
+    );
+    assert_eq!(results[0]["status"], 200, "{results:?}");
+
+    // An id another calendar's event has is taken, and that event isn't
+    // read for it.
+    let (other, other_key) = made_calendar(&c, &base, &ada, "İkinci");
+    let elsewhere = fields(
+        "elsewhere@kutup.test",
+        "2026-12-01T09:00:00",
+        "2026-12-01T10:00:00",
+        "x",
+    );
+    let results = sync(
+        &c,
+        &base,
+        &ada,
+        &other,
+        json!([{ "create": {
+            "id": series["id"], "event": seal(&elsewhere, &other_key, &ada.secret_key),
+        } }]),
+    );
+    assert_eq!(
+        status(&results),
+        (Some(409), Some("eventIdTaken".into())),
+        "{results:?}"
+    );
+
+    // A series whose last occurrence has no length, at a window's start:
+    // in that window.
+    let mut zero = fields(
+        "zero@kutup.test",
+        "2026-12-01T09:00:00",
+        "2026-12-01T09:00:00",
+        "Zero",
+    );
+    zero.rrule = Some("FREQ=DAILY;COUNT=2".into());
+    let results = sync(&c, &base, &ada, &id, json!([create(sealed(&zero))]));
+    assert_eq!(
+        results[0]["event"]["rangeEndUtc"], "2026-12-02T06:00:00Z",
+        "{results:?}"
+    );
+    assert!(window("2026-12-02T06:00:00Z", "2026-12-02T07:00:00Z")
+        .contains(&"zero@kutup.test".to_owned()));
 }
 
 #[test]

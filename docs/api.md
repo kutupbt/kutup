@@ -70,9 +70,10 @@ Specific codes, where an app does something particular (a test in
 | `calendarExists` | 409 | `POST /api/calendar/calendars`: the id (or the calendar key) is in use; draw another |
 | `calendarLimit` | 409 | `POST /api/calendar/calendars`: the account owns as many calendars as the administrators allow (`calendarsPerAccount`) |
 | `eventLimit` | 409 | An events sync: the calendar holds as many events as the administrators allow (`calendarEventsPerCalendar`); that change only |
-| `sequenceBehind` | 409 | An events sync: the changed event's `SEQUENCE` is lower than the stored one's; that change only |
+| `sequenceBehind` | 409 | An events sync: the changed event's `SEQUENCE` is lower than the stored one's, or a changed occurrence's is lower than its series'; that change only |
 | `uidTaken` | 409 | An events sync: an event with this UID is in the calendar already; that change only |
-| `eventIdTaken` | 409 | An events sync: a create's id holds another event; that change only |
+| `eventIdTaken` | 409 | An events sync: a create's id holds another event (in any calendar); that change only |
+| `recurrenceIdChanged` | 400 | An events sync: an update would turn a series into a changed occurrence, a change into a series, or move a change to another `RECURRENCE-ID`; that change only |
 | `countTooLarge` | 400 | An events sync: the rule's `COUNT` is above `calendarMaxCount`; that change only |
 | `exdateNotAnOccurrence` | 400 | An events sync: a calendar-part `EXDATE` isn't an occurrence of the series; that change only |
 | `parentMissing` | 400 | An events sync: a changed occurrence's series isn't in the calendar; that change only |
@@ -2305,8 +2306,12 @@ end (`rangeEndUtc`, absent for one without end) from both parts'
 `EXDATE`s. A changed occurrence (`RECURRENCE-ID`) needs its series in the
 calendar, the same UID with a rule (`400 parentMissing`), and its
 `RECURRENCE-ID` must be one of the series' occurrences, an excluded one
-included (`400 notAnOccurrence`); a series deleted later leaves its changes
-as single events. `409 uidTaken`
+included (`400 notAnOccurrence`), and its `SEQUENCE` is not lower than the
+series' (`409 sequenceBehind`). An update keeps the event's `RECURRENCE-ID`
+(or its absence; `400 recurrenceIdChanged`). A series deleted later leaves
+its changes as single events, which can still be changed. A window lists
+every event that meets it, and also those ending exactly at its start (a
+series' last occurrence of no length there). `409 uidTaken`
 for a UID already in the calendar, `409 eventLimit` at
 `calendarEventsPerCalendar` (25,000). An update or a delete names
 the event's `revision` it was made from: another one is `409 revision_conflict` (with
