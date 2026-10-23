@@ -14,8 +14,7 @@
 //! a name: the database's own name is an HMAC under a second master-derived
 //! key, found before the wrapped store key is read.
 
-use crate::primitives::{Aead, Suite};
-use hkdf::Hkdf;
+use crate::primitives::{Aead, Kdf, Suite};
 use hmac::{Hmac, Mac};
 use sha2::Sha256;
 use zeroize::Zeroizing;
@@ -47,7 +46,7 @@ fn invalid(message: &str) -> CryptoError {
 
 fn expand(salt: &[u8], ikm: &[u8], info: &[u8]) -> Result<Zeroizing<[u8; 32]>> {
     let mut out = Zeroizing::new([0u8; 32]);
-    Hkdf::<Sha256>::new(Some(salt), ikm)
+    Kdf::new(Suite::V1, salt, ikm)
         .expand(info, out.as_mut_slice())
         .map_err(|_| CryptoError::Backend("mail search key HKDF expand".into()))?;
     Ok(out)

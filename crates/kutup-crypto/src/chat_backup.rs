@@ -5,10 +5,8 @@
 //! This module never accepts Direct, MLS, Drive, Chat-media, attachment-ledger,
 //! or device-transfer keys as substitutes.
 
-use crate::primitives::{Aead, Suite};
-use hkdf::Hkdf;
+use crate::primitives::{Aead, Kdf, Suite};
 use serde::{Deserialize, Serialize};
-use sha2::Sha256;
 use zeroize::Zeroizing;
 
 use crate::error::{CryptoError, Result};
@@ -218,7 +216,7 @@ fn derive_object_key(
 ) -> Result<Zeroizing<[u8; CHAT_BACKUP_KEY_BYTES]>> {
     require_root(root)?;
     context.validate()?;
-    let hkdf = Hkdf::<Sha256>::new(Some(HKDF_SALT), root);
+    let hkdf = Kdf::new(Suite::V1, HKDF_SALT, root);
     let mut key = Zeroizing::new([0u8; CHAT_BACKUP_KEY_BYTES]);
     hkdf.expand(&derivation_info(context), key.as_mut_slice())
         .map_err(|_| CryptoError::Backend("Chat backup object HKDF expand".into()))?;
@@ -232,7 +230,7 @@ fn derive_subkey(
     binding: &[u8],
 ) -> Result<Zeroizing<[u8; CHAT_BACKUP_KEY_BYTES]>> {
     require_root(root)?;
-    let hkdf = Hkdf::<Sha256>::new(Some(HKDF_SALT), root);
+    let hkdf = Kdf::new(Suite::V1, HKDF_SALT, root);
     let mut info = Vec::with_capacity(label.len() + 100 + binding.len());
     info.extend_from_slice(label);
     info.extend_from_slice(

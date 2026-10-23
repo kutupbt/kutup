@@ -7,8 +7,7 @@
 //! key that sealed it. It names no folder: a file moves between folders
 //! without re-encryption (docs/plans/drive-move.md).
 
-use hkdf::Hkdf;
-use sha2::Sha256;
+use crate::primitives::{Kdf, Suite};
 use zeroize::Zeroizing;
 
 use crate::error::{CryptoError, Result};
@@ -210,7 +209,7 @@ pub fn derive_file_blob_key(
         });
     }
     let header = file_blob_header(context);
-    let hkdf = Hkdf::<Sha256>::new(Some(FILE_BLOB_KEY_SALT), file_key);
+    let hkdf = Kdf::new(Suite::V1, FILE_BLOB_KEY_SALT, file_key);
     let mut key = Zeroizing::new([0u8; KEY_LEN]);
     hkdf.expand(&header, key.as_mut_slice())
         .map_err(|_| CryptoError::Backend("Drive file-blob HKDF expand".into()))?;

@@ -25,7 +25,7 @@
 //! combining dot above, so `İstanbul` and `istanbul` stay different names
 //! while `ISTANBUL` and `istanbul` do not.
 
-use hkdf::Hkdf;
+use crate::primitives::{Kdf, Suite};
 use hmac::{Hmac, Mac};
 use sha2::{Digest, Sha256};
 use unicode_normalization::UnicodeNormalization;
@@ -47,7 +47,7 @@ pub fn folder_hash_key(first_folder_key: &[u8], collection_id: &str) -> Result<[
     if collection_id.is_empty() {
         return Err(CryptoError::InvalidInput("folder id is empty".into()));
     }
-    let hkdf = Hkdf::<Sha256>::new(Some(collection_id.as_bytes()), first_folder_key);
+    let hkdf = Kdf::new(Suite::V1, collection_id.as_bytes(), first_folder_key);
     let mut key = [0u8; 32];
     hkdf.expand(HASH_KEY_INFO, &mut key)
         .map_err(|_| CryptoError::InvalidInput("folder hash key derivation failed".into()))?;
@@ -62,7 +62,7 @@ pub fn top_level_hash_key(master_key: &[u8]) -> Result<[u8; 32]> {
             "master key must be 32 bytes".into(),
         ));
     }
-    let hkdf = Hkdf::<Sha256>::new(None, master_key);
+    let hkdf = Kdf::new(Suite::V1, &[], master_key);
     let mut key = [0u8; 32];
     hkdf.expand(TOP_LEVEL_INFO, &mut key)
         .map_err(|_| CryptoError::InvalidInput("top-level hash key derivation failed".into()))?;

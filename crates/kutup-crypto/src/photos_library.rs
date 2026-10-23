@@ -13,9 +13,8 @@
 //! XChaCha20-Poly1305 ciphertext; the header is the AAD and the input of the
 //! per-envelope key.
 
-use crate::primitives::{Aead, Suite};
+use crate::primitives::{Aead, Kdf, Suite};
 use base64::Engine as _;
-use hkdf::Hkdf;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use zeroize::Zeroizing;
@@ -102,7 +101,7 @@ pub fn derive_photos_library_key(master_key: &[u8]) -> Result<Zeroizing<[u8; KEY
             got: master_key.len(),
         });
     }
-    let hkdf = Hkdf::<Sha256>::new(Some(ACCOUNT_KEY_SALT), master_key);
+    let hkdf = Kdf::new(Suite::V1, ACCOUNT_KEY_SALT, master_key);
     let mut key = Zeroizing::new([0_u8; KEY_LEN]);
     hkdf.expand(ACCOUNT_KEY_INFO, key.as_mut_slice())
         .map_err(|_| CryptoError::Backend("Photos library account HKDF expand".into()))?;
@@ -136,7 +135,7 @@ fn derive_key(
             got: library_key.len(),
         });
     }
-    let hkdf = Hkdf::<Sha256>::new(Some(KEY_DERIVATION_SALT), library_key);
+    let hkdf = Kdf::new(Suite::V1, KEY_DERIVATION_SALT, library_key);
     let mut key = Zeroizing::new([0u8; KEY_LEN]);
     hkdf.expand(header, key.as_mut_slice())
         .map_err(|_| CryptoError::Backend("Photos library HKDF expand".into()))?;

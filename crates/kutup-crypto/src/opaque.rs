@@ -23,9 +23,8 @@
 //! The server's setup (OPRF seed and key pairs) is kept sealed under a key that
 //! is not in the database ([`seal_server_setup`]).
 
-use crate::primitives::{Aead, Suite};
+use crate::primitives::{Aead, Kdf, Suite};
 use dryoc::classic::crypto_pwhash::{crypto_pwhash, PasswordHashAlgorithm};
-use hkdf::Hkdf;
 use opaque_ke::errors::{InternalError, ProtocolError};
 use opaque_ke::generic_array::{ArrayLength, GenericArray};
 use opaque_ke::ksf::Ksf;
@@ -36,7 +35,7 @@ use opaque_ke::{
     CredentialResponse, RegistrationRequest, RegistrationResponse, RegistrationUpload,
     Ristretto255, ServerLogin, ServerLoginParameters, ServerRegistration, ServerSetup, TripleDh,
 };
-use sha2::{Sha256, Sha512};
+use sha2::Sha512;
 use zeroize::{Zeroize, Zeroizing};
 
 use crate::account_envelope::{self, AccountEnvelopePurpose};
@@ -148,7 +147,7 @@ impl ExportKey {
         info.extend_from_slice(MASTER_KEY_KEK_INFO);
         info.extend_from_slice(key_binding.as_bytes());
         let mut kek = Zeroizing::new([0u8; 32]);
-        Hkdf::<Sha256>::new(Some(EXPORT_SALT), &self.0)
+        Kdf::new(Suite::V1, EXPORT_SALT, &self.0)
             .expand(&info, kek.as_mut_slice())
             .map_err(|_| CryptoError::Backend("opaque export key HKDF".into()))?;
         Ok(kek)

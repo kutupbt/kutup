@@ -18,9 +18,8 @@
 //!   key, so devices coming and going never touch it ([`sign_binding`],
 //!   [`verify_binding`]).
 
-use crate::primitives::{Aead, Suite};
+use crate::primitives::{Aead, Kdf, Suite};
 use ed25519_dalek::{Signature, Signer as _, SigningKey, VerifyingKey};
-use hkdf::Hkdf;
 use sha2::{Digest, Sha256};
 use zeroize::Zeroizing;
 
@@ -149,7 +148,7 @@ impl GroupMasterKey {
     }
 
     fn expand(&self, info: &[u8], out: &mut [u8]) {
-        Hkdf::<Sha256>::new(Some(KDF_SALT), self.key.as_ref())
+        Kdf::new(Suite::V1, KDF_SALT, self.key.as_ref())
             .expand(info, out)
             .expect("HKDF output length is fixed and valid");
     }
@@ -315,13 +314,13 @@ const PSEUDONYM_SALT: &[u8] = b"kutup/chat-group-pseudonym/v1\0";
 /// after leaving, so a rejoin is a new pseudonym. Without the account key,
 /// one account's pseudonyms in different groups (or epochs) are unrelated.
 pub struct GroupPseudonymKey {
-    hkdf: Hkdf<Sha256>,
+    hkdf: Kdf,
 }
 
 impl GroupPseudonymKey {
     pub fn derive(account_master_key: &[u8; 32]) -> Self {
         Self {
-            hkdf: Hkdf::<Sha256>::new(Some(PSEUDONYM_SALT), account_master_key),
+            hkdf: Kdf::new(Suite::V1, PSEUDONYM_SALT, account_master_key),
         }
     }
 

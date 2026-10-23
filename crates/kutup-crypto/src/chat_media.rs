@@ -5,7 +5,7 @@
 //! is encrypted once and can therefore be durably copied between homeservers
 //! without teaching them a filename, MIME type, sender or conversation.
 
-use hkdf::Hkdf;
+use crate::primitives::{Kdf, Suite};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use zeroize::Zeroizing;
@@ -167,7 +167,7 @@ pub fn derive_object_key(
         });
     }
     let header = object_header(context);
-    let hkdf = Hkdf::<Sha256>::new(Some(OBJECT_KEY_SALT), attachment_key);
+    let hkdf = Kdf::new(Suite::V1, OBJECT_KEY_SALT, attachment_key);
     let mut key = Zeroizing::new([0u8; KEY_LEN]);
     hkdf.expand(&header, key.as_mut_slice())
         .map_err(|_| CryptoError::Backend("Chat-media object HKDF expand".into()))?;

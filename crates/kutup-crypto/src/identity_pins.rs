@@ -21,12 +21,10 @@
 //! (`KUTIP3`) binds the owner's key binding. Earlier suites are not read:
 //! nothing from before carries over.
 
-use crate::primitives::{Aead, Suite};
+use crate::primitives::{Aead, Kdf, Suite};
 use base64::engine::general_purpose::STANDARD;
 use base64::Engine as _;
-use hkdf::Hkdf;
 use serde::{Deserialize, Serialize};
-use sha2::Sha256;
 use zeroize::Zeroizing;
 
 use crate::account_ref::AccountRef;
@@ -995,7 +993,7 @@ pub fn decode(bytes: &[u8]) -> Result<IdentityPinsV2> {
 /// The account's pins key, derived from the master key.
 pub fn derive_key(master_key: &[u8; 32]) -> Result<Zeroizing<[u8; 32]>> {
     let mut key = Zeroizing::new([0u8; 32]);
-    Hkdf::<Sha256>::new(Some(PINS_KEY_SALT), master_key)
+    Kdf::new(Suite::V1, PINS_KEY_SALT, master_key)
         .expand(PINS_KEY_INFO, key.as_mut_slice())
         .map_err(|_| CryptoError::Backend("identity pins key HKDF expand".into()))?;
     Ok(key)

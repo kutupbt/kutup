@@ -9,9 +9,7 @@
 //! ‖ login id (16 bytes)`, so a state opens only for the login it was made
 //! for.
 
-use crate::primitives::{Aead, Suite};
-use hkdf::Hkdf;
-use sha2::Sha256;
+use crate::primitives::{Aead, Kdf, Suite};
 use zeroize::Zeroizing;
 
 use crate::error::{CryptoError, Result};
@@ -22,7 +20,7 @@ const NONCE_LEN: usize = 24;
 
 fn key(setup_key: &[u8; 32]) -> Result<Zeroizing<[u8; 32]>> {
     let mut key = Zeroizing::new([0u8; 32]);
-    Hkdf::<Sha256>::new(None, setup_key)
+    Kdf::new(Suite::V1, &[], setup_key)
         .expand(LABEL, key.as_mut_slice())
         .map_err(|_| CryptoError::Backend("opaque login state HKDF".into()))?;
     Ok(key)

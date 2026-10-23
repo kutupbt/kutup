@@ -16,10 +16,9 @@
 //!   an entry opens only under its own id and revision, for this incarnation
 //!   of the account.
 
-use crate::primitives::{Aead, Suite};
+use crate::primitives::{Aead, Kdf, Suite};
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use base64::Engine as _;
-use hkdf::Hkdf;
 use hmac::{Hmac, Mac};
 use sha2::Sha256;
 use zeroize::Zeroizing;
@@ -59,7 +58,7 @@ pub struct OpenedEntry {
 
 impl ContactListKey {
     pub fn derive(account_master_key: &[u8; 32]) -> Self {
-        let hkdf = Hkdf::<Sha256>::new(Some(SALT), account_master_key);
+        let hkdf = Kdf::new(Suite::V1, SALT, account_master_key);
         let mut id_key = Zeroizing::new([0u8; 32]);
         let mut seal_key = Zeroizing::new([0u8; 32]);
         hkdf.expand(ID_KEY_INFO, id_key.as_mut())

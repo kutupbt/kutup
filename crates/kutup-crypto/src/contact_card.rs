@@ -23,11 +23,9 @@
 //! address-bound version 1 of both is not read: nothing from before carries
 //! over.
 
-use crate::primitives::{Aead, Suite};
+use crate::primitives::{Aead, Kdf, Suite};
 use ed25519_dalek::{Signature, Signer as _, SigningKey, VerifyingKey};
-use hkdf::Hkdf;
 use serde::{Deserialize, Serialize};
-use sha2::Sha256;
 use zeroize::Zeroizing;
 
 use crate::error::{CryptoError, Result};
@@ -298,7 +296,7 @@ pub fn verify_summary(
 /// The account's contacts key, derived from the master key.
 pub fn derive_contacts_key(master_key: &[u8; 32]) -> Result<Zeroizing<[u8; 32]>> {
     let mut key = Zeroizing::new([0u8; 32]);
-    Hkdf::<Sha256>::new(Some(CONTACTS_KEY_SALT), master_key)
+    Kdf::new(Suite::V1, CONTACTS_KEY_SALT, master_key)
         .expand(CONTACTS_KEY_INFO, key.as_mut_slice())
         .map_err(|_| CryptoError::Backend("contacts key HKDF expand".into()))?;
     Ok(key)

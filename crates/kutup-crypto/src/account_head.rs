@@ -19,8 +19,7 @@
 //! writing device are HMAC'd, so the head tells the server nothing it does not
 //! already know.
 
-use crate::primitives::{Aead, Suite};
-use hkdf::Hkdf;
+use crate::primitives::{Aead, Kdf, Suite};
 use hmac::{Hmac, Mac};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest as _, Sha256};
@@ -70,7 +69,7 @@ pub struct HeadKeys {
 
 impl HeadKeys {
     pub fn derive(master_key: &[u8; 32]) -> Result<Self> {
-        let hkdf = Hkdf::<Sha256>::new(Some(SALT), master_key);
+        let hkdf = Kdf::new(Suite::V1, SALT, master_key);
         let mut seal = Zeroizing::new([0u8; 32]);
         let mut id = Zeroizing::new([0u8; 32]);
         hkdf.expand(SEAL_KEY_INFO, seal.as_mut_slice())

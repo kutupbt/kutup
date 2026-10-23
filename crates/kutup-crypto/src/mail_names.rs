@@ -20,9 +20,7 @@
 //! Suite 1 (bound to the address) is not read: nothing from before carries
 //! over.
 
-use crate::primitives::{Aead, Suite};
-use hkdf::Hkdf;
-use sha2::Sha256;
+use crate::primitives::{Aead, Kdf, Suite};
 use zeroize::Zeroizing;
 
 use crate::error::{CryptoError, Result};
@@ -73,7 +71,7 @@ fn invalid(message: &str) -> CryptoError {
 /// The account's key for mail names, derived from the master key.
 pub fn derive_names_key(master_key: &[u8; 32]) -> Result<Zeroizing<[u8; 32]>> {
     let mut key = Zeroizing::new([0u8; 32]);
-    Hkdf::<Sha256>::new(Some(KEY_SALT), master_key)
+    Kdf::new(Suite::V1, KEY_SALT, master_key)
         .expand(KEY_INFO, key.as_mut_slice())
         .map_err(|_| CryptoError::Backend("mail names key HKDF expand".into()))?;
     Ok(key)

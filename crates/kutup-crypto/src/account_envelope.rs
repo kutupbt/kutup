@@ -13,10 +13,8 @@
 //! the AEAD key, bound to the sign-in email) is no longer read or written:
 //! no account from before carries over (the private beta was reset).
 
-use crate::primitives::{Aead, Suite};
+use crate::primitives::{Aead, Kdf, Suite};
 use base64::Engine as _;
-use hkdf::Hkdf;
-use sha2::Sha256;
 use zeroize::Zeroizing;
 
 use crate::error::{CryptoError, Result};
@@ -271,7 +269,7 @@ fn aead_key(
             info.extend_from_slice(binding.as_bytes());
             info.push(object_id.len() as u8);
             info.extend_from_slice(object_id);
-            Hkdf::<Sha256>::new(Some(V2_KEY_SALT), key)
+            Kdf::new(Suite::V1, V2_KEY_SALT, key)
                 .expand(&info, out.as_mut_slice())
                 .map_err(|_| CryptoError::Backend("account-envelope key".into()))?;
         }

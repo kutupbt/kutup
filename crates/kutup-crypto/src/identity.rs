@@ -9,8 +9,8 @@
 //! its private key is the 32-byte X-Wing seed the HKDF gives, its public key
 //! the 1216-byte encapsulation key derived from that seed.
 
+use crate::primitives::{Kdf, Suite};
 use ed25519_dalek::SigningKey;
-use hkdf::Hkdf;
 use sha2::{Digest as _, Sha256};
 use zeroize::Zeroizing;
 
@@ -38,7 +38,7 @@ pub struct AccountIdentityKeysV1 {
 
 impl AccountIdentityKeysV1 {
     pub fn derive(master_key: &[u8; 32]) -> Result<Self> {
-        let hkdf = Hkdf::<Sha256>::new(Some(ACCOUNT_IDENTITY_SALT), master_key);
+        let hkdf = Kdf::new(Suite::V1, ACCOUNT_IDENTITY_SALT, master_key);
         let mut authority_seed = Zeroizing::new([0u8; 32]);
         let mut hpke_seed = Zeroizing::new([0u8; 32]);
         let mut signing_seed = Zeroizing::new([0u8; 32]);

@@ -12,8 +12,7 @@
 //! (the first revision read is trusted), or put back an older copy of one; it
 //! can no longer read them or set one to a revision it chooses.
 
-use crate::primitives::{Aead, Suite};
-use hkdf::Hkdf;
+use crate::primitives::{Aead, Kdf, Suite};
 use hmac::{Hmac, Mac};
 use sha2::Sha256;
 use zeroize::Zeroizing;
@@ -37,7 +36,7 @@ pub struct GuardKeys {
 
 impl GuardKeys {
     pub fn derive(master_key: &[u8; 32]) -> Result<Self> {
-        let hkdf = Hkdf::<Sha256>::new(Some(SALT), master_key);
+        let hkdf = Kdf::new(Suite::V1, SALT, master_key);
         let mut entry = Zeroizing::new([0u8; 32]);
         let mut seal = Zeroizing::new([0u8; 32]);
         hkdf.expand(ENTRY_KEY_INFO, entry.as_mut_slice())

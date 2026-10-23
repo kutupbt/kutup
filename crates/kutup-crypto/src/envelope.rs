@@ -13,10 +13,8 @@
 //! The complete fixed header is AEAD associated data. The signature covers the
 //! header and ciphertext, but not its own trailing bytes.
 
-use crate::primitives::{Aead, Suite};
+use crate::primitives::{Aead, Kdf, Suite};
 use ed25519_dalek::{Signature, Signer, SigningKey, VerifyingKey};
-use hkdf::Hkdf;
-use sha2::Sha256;
 use zeroize::Zeroizing;
 
 use crate::drive_object::parse_canonical_uuid;
@@ -232,7 +230,7 @@ fn derive_key(file_key: &[u8], context: CollabFrameContextV1) -> Result<Zeroizin
     info.extend_from_slice(&context.key_generation.to_be_bytes());
     info.extend_from_slice(&context.doc_key_id.to_be_bytes());
     info.extend_from_slice(&context.file_id);
-    let hkdf = Hkdf::<Sha256>::new(Some(KEY_DERIVATION_SALT), file_key);
+    let hkdf = Kdf::new(Suite::V1, KEY_DERIVATION_SALT, file_key);
     let mut key = Zeroizing::new([0u8; KEY_LEN]);
     hkdf.expand(&info, key.as_mut_slice())
         .map_err(|_| CryptoError::Backend("collaboration frame HKDF expand".into()))?;
