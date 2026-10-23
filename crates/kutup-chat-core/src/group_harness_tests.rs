@@ -114,11 +114,15 @@ pub(crate) struct HostedGroup {
     avatars: BTreeMap<String, Vec<u8>>,
 }
 
-/// The one server of these tests.
 /// One account's group list as its server keeps it: entry id → (revision,
 /// envelope).
 pub(crate) type GroupList = BTreeMap<String, (u64, String)>;
 
+/// One capability change an account made: the account, the hashes added,
+/// the hashes removed.
+type CapabilityChange = (String, Vec<[u8; 32]>, Vec<[u8; 32]>);
+
+/// The one server of these tests.
 pub(crate) struct World {
     identity: FederationIdentityDocumentV1,
     key: SigningKey,
@@ -164,7 +168,7 @@ pub(crate) struct World {
     /// no limit); a change past it is refused whole.
     pub(crate) capability_limit: Cell<Option<usize>>,
     /// Every capability change an account made: (account, added, removed).
-    pub(crate) capability_changes: RefCell<Vec<(String, Vec<[u8; 32]>, Vec<[u8; 32]>)>>,
+    pub(crate) capability_changes: RefCell<Vec<CapabilityChange>>,
     /// How many whole states the group home was asked for.
     pub(crate) state_requests: Cell<usize>,
     /// How many changes the group home took.
