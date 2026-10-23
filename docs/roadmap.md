@@ -94,7 +94,9 @@ format rather than preserve development-only ciphertexts or trust machinery.
 This destructive-change permission expires at the first stable `v*` tag;
 afterward `docs/crypto-agility.md` requires versioned readers, authenticated
 migrations, peer capability windows and no silent downgrade. No second wipe of
-kutup.dev is planned: what is left must land without one.
+kutup.dev was planned; the user has since allowed one for the block format
+(2026-10-22, [`plans/drive-block-format.md`](plans/drive-block-format.md)),
+with the items bundled there.
 
 State against the normative checklist,
 [`docs/draft/v1/security-review-follow-ups.md`](draft/v1/security-review-follow-ups.md).
@@ -139,6 +141,22 @@ Left before the tag:
   [`docs/cryptographic-dependencies.md`](cryptographic-dependencies.md) or
   moves to WASM. The Android Worker benchmark is still open; with OPAQUE's
   KSF it may be moot.
+- **Block format for large objects, so films and long recordings stream with
+  seeking** ([`plans/drive-block-format.md`](plans/drive-block-format.md),
+  plan 2026-10-22, not built). It follows Proton Drive's block format:
+  - 4 MiB blocks, each AEAD-sealed on its own and bound to its index and
+    the file's revision;
+  - a sealed manifest of block hashes signed by the uploader;
+  - a service worker that answers the `<video>`/`<audio>` element's Range
+    requests while the page decrypts only the blocks needed.
+
+  One framing serves Drive files, snapshots, Chat attachments and Chat
+  backup media, and secretstream and the browser's libsodium stream code
+  then go. The same change binds the sealed metadata and thumbnails to the
+  current revision, so the server cannot serve an older version as the
+  current one. The plan recommends shipping it with a wipe of kutup.dev,
+  together with the Chat identity change, rather than converting files in
+  the background.
 - **Remove the leftover Argon2id KEK/login root** in `kutup-crypto`'s
   `kdf.rs` and its WASM export: OPAQUE replaced it and the frontend no longer
   calls it (small).
@@ -748,7 +766,10 @@ albums) is the second reference.
 - **Albums are views:** an album lists photos without copying them, so one
   photo can be in several albums and still count once.
 - **Photo handling:** dates and locations kept per photo (encrypted),
-  thumbnails at several sizes, video streaming.
+  thumbnails at several sizes, video streaming. Streaming with seeking
+  needs the block format in
+  [`plans/drive-block-format.md`](plans/drive-block-format.md) (Proton
+  Drive's model); until then videos play once downloaded, up to 1 GiB.
 - **Sharing:** one photo with single-file sharing
   (docs/plans/drive-file-sharing.md); albums shared with people here and on
   other servers, collaborative albums, and public album links with the key
