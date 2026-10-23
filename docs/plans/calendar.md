@@ -659,9 +659,12 @@ reminder (`<event>:<start>:<fire time>`, as Proton tags per alarm), so a
 push and a tab's notification for one reminder are one notification. The
 open app shows its reminders through the worker's registration, so a push
 can find them. A browser wants every push to show a notification
-(`userVisibleOnly`): with a Calendar window open, a push for one the tab
-showed shows that one again, silently, and one the tab hasn't shown yet
-comes silently with its time only, for the tab's to replace by its title.
+(`userVisibleOnly`): a push for one the tab already showed shows that one
+again, silently; any other push alerts with its time only, open tab or not
+(whether a tab will fire it isn't known to the worker: another account, a
+hidden calendar, a locked or frozen tab), and a tab firing it later only
+puts its title in, silently (same tag, no `renotify`). One reminder, one
+alert.
 The push's ids and times are checked (an event id is a UUID, the times
 parse). A click focuses an open Calendar or opens `/?event=<id>`, only ever
 Calendar's own pages. The `account` tag is checked against the account that

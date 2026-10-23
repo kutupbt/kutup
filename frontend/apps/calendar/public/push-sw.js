@@ -5,13 +5,13 @@
 // never what ("Event at 09:30"). Its words, zone and language come in the
 // registration URL from the page that registered it.
 //
-// One reminder is one notification: its tag is the open app's for the same
-// alarm (`kutup-calendar:<eventId>:<start ms>:<fire ms>`). The open app
-// fires its own reminders, named by their titles: while a Calendar window is
-// open, a push for one the app showed shows that notification again,
-// silently (the browser wants each push to show one), and one the app hasn't
-// shown yet comes silently with its time only, for the app's to replace.
-// With Calendar closed, a push shows its reminder (time only) as usual.
+// One reminder is one alert: its tag is the open app's for the same alarm
+// (`kutup-calendar:<eventId>:<start ms>:<fire ms>`). A push for one the app
+// has shown already shows that notification again, silently (the browser
+// wants each push to show one). Any other push alerts, with its time only:
+// whether an open tab will fire it isn't known here (another account, a
+// hidden calendar, a locked or frozen tab), and a tab firing it later only
+// puts its title in, silently.
 
 const params = new URL(self.location.href).searchParams
 const TITLE = params.get('title') || 'Kutup Calendar'
@@ -102,14 +102,11 @@ self.addEventListener('push', (event) => {
       await self.registration.showNotification(shown.title, { body: shown.body, tag, icon: shown.icon, data: shown.data, silent: true })
       return
     }
-    const windows = await self.clients.matchAll({ type: 'window', includeUncontrolled: true })
     const mine = await ours(data.account)
     await self.registration.showNotification(TITLE, {
       body: body(data.startUtc, data.allDay === true),
       tag,
       icon: '/favicon.svg',
-      // Calendar is open: it fires this one by its title in a moment, replacing this.
-      silent: windows.length > 0,
       // Another account's reminder in this browser opens Calendar's start page.
       data: { url: mine ? `/?event=${encodeURIComponent(data.eventId)}` : '/' },
     })

@@ -78,11 +78,10 @@ describe('the calendar’s service worker', () => {
     expect(title).toBe('Kutup Calendar')
     expect(options.body).toMatch(/^Event (at|on) /)
     expect(options.tag).toBe(`kutup-calendar:${E1}:${start.getTime()}:${Date.parse(FIRE)}`)
-    expect(options.silent).toBe(false)
     expect(options.data.url).toBe(`/?event=${E1}`)
   })
 
-  it('with Calendar open: shows the app’s one again silently, or one of its own silently', async () => {
+  it('is silent only for one the open app showed; any other alerts, Calendar open or not', async () => {
     const start = '2030-01-01T09:00:00Z'
     const tag = `kutup-calendar:${E1}:${Date.parse(start)}:${Date.parse(FIRE)}`
     const again = worker([{ tag, title: 'Calendar reminder', body: 'Toplantı starts at 9:30' }], [{}])
@@ -92,7 +91,7 @@ describe('the calendar’s service worker', () => {
 
     const first = worker([], [{}])
     await first.fire('push', push({ eventId: E1, startUtc: start, fireAt: FIRE, allDay: false, account: ACCOUNT_TAG }))
-    expect(first.showNotification.mock.calls[0][1].silent).toBe(true)
+    expect(first.showNotification.mock.calls[0][1].silent).toBeUndefined()
   })
 
   it('opens the start page for another account’s reminder', async () => {
