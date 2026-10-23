@@ -21,6 +21,13 @@ export interface PressHandlers {
 
 /** Whether a touch drag holds the page still (read by `holdTouches`' listener). */
 let holding = false
+/** Presses being followed now. */
+let active = 0
+
+/** Whether a press is being followed (the page's shortcuts wait for it to end). */
+export function pressActive(): boolean {
+  return active > 0
+}
 
 /**
  * Keeps an armed or dragging touch from scrolling `element`: a listener in
@@ -46,8 +53,10 @@ const SCROLL_STEP_PX = 8
  * grid scrolls on its own; the click a drag would end with is swallowed.
  */
 export function follow(event: ReactPointerEvent, handlers: PressHandlers, scroller: HTMLElement | null): void {
-  if (event.pointerType === 'mouse' && event.button !== 0) return
-  const kind = event.pointerType === 'mouse' ? 'mouse' : 'touch'
+  if (event.pointerType !== 'touch' && event.button !== 0) return
+  // A pen drags as a mouse does (it doesn't scroll the page by moving); only
+  // a finger needs the long press.
+  const kind = event.pointerType === 'touch' ? 'touch' : 'mouse'
   const press = new Press(kind, event.clientX, event.clientY, performance.now())
   let last: Point = { x: event.clientX, y: event.clientY }
   let frame = 0
@@ -66,7 +75,12 @@ export function follow(event: ReactPointerEvent, handlers: PressHandlers, scroll
     }
     frame = requestAnimationFrame(scroll)
   }
+  let ended = false
   const end = () => {
+    if (!ended) {
+      ended = true
+      active -= 1
+    }
     window.removeEventListener('pointermove', move, true)
     window.removeEventListener('pointerup', up, true)
     window.removeEventListener('pointercancel', lost, true)
@@ -118,6 +132,7 @@ export function follow(event: ReactPointerEvent, handlers: PressHandlers, scroll
     end()
     handlers.cancel()
   }
+  active += 1
   window.addEventListener('pointermove', move, true)
   window.addEventListener('pointerup', up, true)
   window.addEventListener('pointercancel', lost, true)

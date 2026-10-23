@@ -27,6 +27,17 @@ async function drag(page: Page, from: { x: number; y: number }, to: { x: number;
 
 const slot = (page: Page, day: string, index: number) => page.getByTestId(`calendar-slot-${day}-${index}`)
 
+/**
+ * The grid scrolled to 08:00 at its top (it opens at the time of day now,
+ * which a run can't choose): the slots the test drags between are on
+ * screen whenever it runs.
+ */
+async function fromEight(page: Page) {
+  await page.getByTestId('calendar-scroller').evaluate((el) => {
+    el.scrollTop = 8 * 48
+  })
+}
+
 test('calendar grid: drag to make, move and resize events; the all-day row; the keyboard', async ({ browser }) => {
   test.slow()
   const account = newAccount('caldrag', PASSWORD)
@@ -43,9 +54,9 @@ test('calendar grid: drag to make, move and resize events; the all-day row; the 
     await expect(dialog.getByTestId('event-start-time')).toHaveValue(start)
     await expect(dialog.getByTestId('event-end-time')).toHaveValue(end)
   }
+  await fromEight(page)
 
   // Down: from 10:00 to the 11:30 slot is 10:00–12:00, the editor filled in.
-  await slot(page, '2026-10-29', 20).scrollIntoViewIfNeeded()
   await drag(page, await centre(slot(page, '2026-10-29', 20)), await centre(slot(page, '2026-10-29', 23)))
   await times(editor, '10:00', '12:00')
   await expect(editor.getByTestId('event-start-date')).toHaveValue('2026-10-29')
@@ -76,7 +87,7 @@ test('calendar grid: drag to make, move and resize events; the all-day row; the 
   await editor.getByRole('button', { name: 'Cancel' }).click()
 
   // Moved: an hour later and a day on (the editor shows it; Save keeps it).
-  await planning.scrollIntoViewIfNeeded()
+  await fromEight(page)
   const from = await centre(planning)
   const hourBelow = (await centre(slot(page, '2026-10-30', 24))).y - (await centre(slot(page, '2026-10-30', 22))).y
   const friday = await centre(page.getByTestId('calendar-column-2026-10-30'))
@@ -107,7 +118,7 @@ test('calendar grid: drag to make, move and resize events; the all-day row; the 
   // The keyboard: 09:00 on Monday, Shift+↓ three times, Enter: 09:00–11:00.
   await slot(page, '2026-10-26', 18).focus()
   for (let i = 0; i < 3; i++) await page.keyboard.press('Shift+ArrowDown')
-  await expect(page.getByRole('status')).toContainText('09:00 to 11:00')
+  await expect(page.getByTestId('calendar-announce')).toContainText('09:00 to 11:00')
   await page.keyboard.press('Enter')
   await times(editor, '09:00', '11:00')
   await expect(editor.getByTestId('event-start-date')).toHaveValue('2026-10-26')

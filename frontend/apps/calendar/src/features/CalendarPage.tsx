@@ -15,12 +15,13 @@ import { ghostCovers, pressDays, pressShiftDays, type DaySpanGhost } from './Day
 import { EventChip } from './EventChip'
 import { openEditor } from './editorState'
 import { formatDayNumber, formatTitle, formatWeekday } from './format'
-import { DEFAULT_DURATION_MINUTES, SNAP_MINUTES } from './gridInteraction'
-import { openMoved } from './moves'
+import { newEventStart } from './gridInteraction'
+import { openMoved, openNew } from './moves'
 import { covers, place, type Placed } from './placement'
+import { holdTouches, pressActive } from './press'
 import { useCalendarPrefs } from './prefs'
 import { TimeGrid } from './TimeGrid'
-import { useToday } from './today'
+import { useNowMinutes, useToday } from './today'
 
 type View = 'day' | 'week' | 'month'
 const VIEWS: readonly View[] = ['day', 'week', 'month']
@@ -30,6 +31,10 @@ export function CalendarPage() {
   const { t, i18n } = useTranslation()
   const prefs = useCalendarPrefs()
   const today = useToday(prefs.zone)
+  const nowMinutes = useNowMinutes(prefs.zone)
+  // An armed touch holds the page still wherever it is: the time grid, the
+  // all-day row, the month's cells.
+  useEffect(() => holdTouches(document.documentElement), [])
   const [params, setParams] = useSearchParams()
   const view: View = VIEWS.includes(params.get('view') as View) ? (params.get('view') as View) : 'week'
   const requested = params.get('date')
@@ -64,7 +69,7 @@ export function CalendarPage() {
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.target instanceof HTMLElement && e.target.closest('input, textarea, select, [role="dialog"]')) return
-      if (e.altKey || e.ctrlKey || e.metaKey || !date) return
+      if (e.altKey || e.ctrlKey || e.metaKey || !date || pressActive()) return
       if (e.key === 'ArrowLeft') go({ date: step(view, date, -1) })
       else if (e.key === 'ArrowRight') go({ date: step(view, date, 1) })
       else if ((e.key === 't' || e.key === 'T') && today) go({ date: today })
@@ -72,10 +77,10 @@ export function CalendarPage() {
       else if (e.key === '2') go({ view: 'week' })
       else if (e.key === '3') go({ view: 'month' })
       else if ((e.key === 'n' || e.key === 'N') && today) {
-        // At the next half hour from now, as Proton's new event.
-        const nowMinutes = new Date().getHours() * 60 + new Date().getMinutes()
-        const start = Math.min(Math.ceil((nowMinutes + 1) / SNAP_MINUTES) * SNAP_MINUTES, 24 * 60 - DEFAULT_DURATION_MINUTES)
-        openEditor({ kind: 'new', date: today, minutes: start, endMinutes: start + DEFAULT_DURATION_MINUTES })
+        // At the next half hour from now in the calendar's zone, as
+        // Proton's new event: tomorrow's first once today's last has begun.
+        const next = newEventStart(nowMinutes)
+        void openNew(addDays(today, next.dayOffset), next.start, next.end, prefs.zone)
       } else return
       e.preventDefault()
     }

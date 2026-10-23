@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { clickSpan, createSpan, localAt, LONG_PRESS_MS, Press, resizeEnd, shiftLocal, snap } from './gridInteraction'
+import { clickSpan, createSpan, localAt, LONG_PRESS_MS, newEventStart, Press, resizeEnd, shiftLocal, snap } from './gridInteraction'
 
 describe('snapping and spans, as Proton’s time grid', () => {
   it('snaps down to half hours within the day', () => {
@@ -55,5 +55,14 @@ describe('a press: click, drag or scroll', () => {
     const tap = new Press('touch', 100, 100, 0)
     tap.tick(LONG_PRESS_MS + 100)
     expect(tap.isClick()).toBe(true)
+  })
+})
+
+describe('the N shortcut’s new event', () => {
+  it('starts at the next half hour, tomorrow once today’s last has begun', () => {
+    expect(newEventStart(9 * 60 + 10)).toEqual({ dayOffset: 0, start: 9 * 60 + 30, end: 10 * 60 })
+    expect(newEventStart(9 * 60 + 30)).toEqual({ dayOffset: 0, start: 10 * 60, end: 10 * 60 + 30 })
+    expect(newEventStart(23 * 60 + 10)).toEqual({ dayOffset: 0, start: 23 * 60 + 30, end: 24 * 60 })
+    expect(newEventStart(23 * 60 + 40)).toEqual({ dayOffset: 1, start: 0, end: 30 })
   })
 })

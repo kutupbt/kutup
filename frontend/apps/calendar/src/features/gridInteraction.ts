@@ -18,6 +18,18 @@ export const LONG_PRESS_SLOP_PX = 10
 export const DEFAULT_DURATION_MINUTES = 30
 export const DAY_MINUTES = 24 * 60
 
+/**
+ * Where the N shortcut's new event goes (Proton's): at the next half hour
+ * after `nowMinutes` (the minute of the day in the calendar's zone), for
+ * the default length; past today's last start, tomorrow's first, never a
+ * start already gone.
+ */
+export function newEventStart(nowMinutes: number, duration = DEFAULT_DURATION_MINUTES): { dayOffset: number; start: number; end: number } {
+  const start = Math.ceil((nowMinutes + 1) / SNAP_MINUTES) * SNAP_MINUTES
+  if (start + duration > DAY_MINUTES) return { dayOffset: 1, start: 0, end: duration }
+  return { dayOffset: 0, start, end: start + duration }
+}
+
 /** Minutes snapped down to the step, within the day. */
 export function snap(minutes: number, step = SNAP_MINUTES): number {
   const clamped = Math.min(Math.max(minutes, 0), DAY_MINUTES - 1)

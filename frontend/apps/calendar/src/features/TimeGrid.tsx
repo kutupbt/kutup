@@ -8,10 +8,11 @@ import { EventChip } from './EventChip'
 import { openEditor } from './editorState'
 import { formatHour, formatLongDate, formatTime, formatDayNumber, formatWeekday } from './format'
 import { clickSpan, createSpan, DAY_MINUTES, localAt, resizeEnd, shiftLocal, snap, SNAP_MINUTES } from './gridInteraction'
-import { openMoved, openTimes } from './moves'
+import { openMoved, openNew, openTimes } from './moves'
 import { columns, covers, type Placed } from './placement'
 import { follow, holdTouches, type Point } from './press'
 import { useCalendarPrefs } from './prefs'
+import { useNowMinutes } from './today'
 
 export const HOUR_PX = 48
 const SLOTS = DAY_MINUTES / SNAP_MINUTES
@@ -34,29 +35,13 @@ function segment(start: string, end: string, day: CivilDate): { top: number; bot
   return { top, bottom: Math.max(bottom, top + 20) }
 }
 
-/** The current minute of the day in `zone`, refreshed every 30 seconds (Proton's). */
-function useNowMinutes(zone: string): number {
-  const read = () => {
-    const parts = new Intl.DateTimeFormat('en-GB', { timeZone: zone, hour: '2-digit', minute: '2-digit', hourCycle: 'h23' }).formatToParts(new Date())
-    const value = (type: string) => Number(parts.find((p) => p.type === type)?.value ?? 0)
-    return value('hour') * 60 + value('minute')
-  }
-  const [now, setNow] = useState(read)
-  useEffect(() => {
-    const timer = window.setInterval(() => setNow(read()), 30_000)
-    return () => window.clearInterval(timer)
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- the zone is the dependency
-  }, [zone])
-  return now
-}
-
 /**
  * The day and week views: the all-day row, then 24 hours of half-hour
  * slots. Press and drag to make an event (snapped to 30 minutes), drag one
  * to move it, drag its bottom edge to resize it; a touch drags after a long
  * press. On the keyboard: arrows move between slots and days, Shift with ↑
  * or ↓ widens the span, Enter opens it; on an event, Alt with the arrows
- * moves it, Alt+Shift with ↑ or ↓ resizes it, Enter opens it.
+ * moves it, Alt+Shift with ↑ or ↓ resizes it, Enter or Space opens it.
  */
 export function TimeGrid({ days, today, placed, scrollKey }: { days: CivilDate[]; today?: CivilDate; placed: Placed[]; scrollKey: string }) {
   const { t, i18n } = useTranslation()
@@ -74,6 +59,10 @@ export function TimeGrid({ days, today, placed, scrollKey }: { days: CivilDate[]
   const [dayGhost, setDayGhost] = useState<DaySpanGhost | null>(null)
   // The keyboard's place: a slot, and where a Shift selection began.
   const [focus, setFocus] = useState<{ day: number; slot: number; anchor: number | null }>({ day: 0, slot: 18, anchor: null })
+  // A view with fewer days keeps a slot in the Tab order.
+  const focusDay = Math.min(focus.day, days.length - 1)
+  // Focus follows the keyboard only: never on opening (scroll to now stays).
+  const keyMoved = useRef(false)
   const [said, setSaid] = useState('')
 
   // Proton's scroll to now: the current time in the middle, on opening, on Today and on a change of view.
@@ -118,11 +107,11 @@ export function TimeGrid({ days, today, placed, scrollKey }: { days: CivilDate[]
         drop: () => {
           const g = ghostRef.current
           setGhost(null)
-          if (g?.kind === 'create') openEditor({ kind: 'new', date: days[g.day], minutes: g.start, endMinutes: g.end })
+          if (g?.kind === 'create') void openNew(days[g.day], g.start, g.end, prefs.zone)
         },
         click: () => {
           const span = clickSpan(pressSlot)
-          openEditor({ kind: 'new', date: days[dayIndex], minutes: span.start, endMinutes: span.end })
+          void openNew(days[dayIndex], span.start, span.end, prefs.zone)
         },
         cancel: () => setGhost(null),
       },
@@ -168,8 +157,10 @@ export function TimeGrid({ days, today, placed, scrollKey }: { days: CivilDate[]
 
   // The keyboard on a slot.
   useEffect(() => {
-    cells.current.get(`${focus.day}-${focus.slot}`)?.focus({ preventScroll: false })
-  }, [focus.day, focus.slot])
+    if (!keyMoved.current) return
+    keyMoved.current = false
+    cells.current.get(`${focusDay}-${focus.slot}`)?.focus({ preventScroll: false })
+  }, [focusDay, focus.slot])
   const keySpan = (f: typeof focus) => {
     const span = f.anchor === null ? clickSpan(f.slot * SNAP_MINUTES) : createSpan(f.anchor * SNAP_MINUTES, f.slot * SNAP_MINUTES)
     return span
@@ -182,6 +173,7 @@ export function TimeGrid({ days, today, placed, scrollKey }: { days: CivilDate[]
         slot: Math.min(Math.max(next.slot ?? slot, 0), SLOTS - 1),
         anchor: extend ? (focus.anchor ?? slot) : null,
       }
+      keyMoved.current = true
       setFocus(f)
       if (f.anchor !== null) {
         const span = keySpan(f)
@@ -202,13 +194,13 @@ export function TimeGrid({ days, today, placed, scrollKey }: { days: CivilDate[]
       const span = keySpan({ day: dayIndex, slot, anchor: focus.anchor })
       setFocus({ day: dayIndex, slot, anchor: null })
       setGhost(null)
-      openEditor({ kind: 'new', date: days[dayIndex], minutes: span.start, endMinutes: span.end })
+      void openNew(days[dayIndex], span.start, span.end, prefs.zone)
     } else return
     // Keys the grid took stay out of the page's shortcuts.
     event.stopPropagation()
   }
 
-  // The keyboard on an event: Alt+arrows move it, Alt+Shift+↑/↓ resize it, Enter opens it as moved.
+  // The keyboard on an event: Alt+arrows move it, Alt+Shift+↑/↓ resize it, Enter or Space opens it as moved.
   const onEventKey = (event: ReactKeyboardEvent, p: Placed) => {
     const current = ghostRef.current?.kind === 'times' && ghostRef.current.placed === p ? ghostRef.current : null
     const start = current?.start ?? p.start
@@ -236,7 +228,7 @@ export function TimeGrid({ days, today, placed, scrollKey }: { days: CivilDate[]
       event.preventDefault()
       event.stopPropagation()
       setGhost(null)
-    } else if (event.key === 'Enter' && current) {
+    } else if ((event.key === 'Enter' || event.key === ' ') && current) {
       event.preventDefault()
       event.stopPropagation()
       setGhost(null)
@@ -248,7 +240,7 @@ export function TimeGrid({ days, today, placed, scrollKey }: { days: CivilDate[]
   const moving = ghost?.kind === 'times' ? ghost.placed : dayGhost?.kind === 'shift' ? dayGhost.placed : null
   return (
     <div className="flex min-h-0 flex-1 flex-col" data-testid="calendar-week">
-      <div className="sr-only" role="status" aria-live="polite">
+      <div className="sr-only" role="status" aria-live="polite" data-testid="calendar-announce">
         {said}
       </div>
       <div className="grid border-b border-border" style={{ gridTemplateColumns: `3.5rem repeat(${days.length}, minmax(0, 1fr))` }}>
@@ -282,7 +274,7 @@ export function TimeGrid({ days, today, placed, scrollKey }: { days: CivilDate[]
           </div>
         ))}
       </div>
-      <div ref={scroller} className="min-h-0 flex-1 overflow-y-auto">
+      <div ref={scroller} className="min-h-0 flex-1 overflow-y-auto" data-testid="calendar-scroller">
         <div className="relative grid" style={{ gridTemplateColumns: `3.5rem repeat(${days.length}, minmax(0, 1fr))`, height: 24 * HOUR_PX }}>
           <div>
             {Array.from({ length: 24 }, (_, hour) => (
@@ -324,9 +316,17 @@ export function TimeGrid({ days, today, placed, scrollKey }: { days: CivilDate[]
                       else cells.current.delete(`${dayIndex}-${slot}`)
                     }}
                     type="button"
-                    tabIndex={focus.day === dayIndex && focus.slot === slot ? 0 : -1}
+                    tabIndex={focusDay === dayIndex && focus.slot === slot ? 0 : -1}
                     aria-label={t('grid.slot', { day: formatLongDate(day, i18n.language), time: formatTime(localAt(day, slot * SNAP_MINUTES), i18n.language, prefs.hour12) })}
-                    onFocus={() => focus.day !== dayIndex || focus.slot !== slot ? setFocus({ day: dayIndex, slot, anchor: null }) : undefined}
+                    onFocus={() => (focusDay !== dayIndex || focus.slot !== slot ? setFocus({ day: dayIndex, slot, anchor: null }) : undefined)}
+                    // A Shift selection ends when focus leaves the grid's slots.
+                    onBlur={(e) => {
+                      if (!(e.relatedTarget instanceof HTMLElement && e.relatedTarget.closest('[data-slot]')) && ghostRef.current?.kind === 'create') {
+                        setFocus((f) => ({ ...f, anchor: null }))
+                        setGhost(null)
+                      }
+                    }}
+                    data-slot
                     onKeyDown={(e) => onSlotKey(e, dayIndex, slot)}
                     // A pointer's click is the column's press; a key's is handled above.
                     onClick={(e) => e.preventDefault()}
@@ -358,6 +358,10 @@ export function TimeGrid({ days, today, placed, scrollKey }: { days: CivilDate[]
                       resizable={endsOn(s.placed, day)}
                       onPointerDown={(e, resizable) => pressEvent(e, s.placed, dayIndex, resizable)}
                       onKeyDown={(e) => onEventKey(e, s.placed)}
+                      // A keyboard move not opened is dropped when focus leaves it.
+                      onBlur={() => {
+                        if (ghostRef.current?.kind === 'times' && ghostRef.current.placed === s.placed) setGhost(null)
+                      }}
                     />
                   </div>
                 ))}
@@ -394,12 +398,14 @@ function TimedBlock({
   resizable,
   onPointerDown,
   onKeyDown,
+  onBlur,
 }: {
   placed: Placed
   faded: boolean
   resizable: boolean
   onPointerDown: (event: ReactPointerEvent<HTMLElement>, resizable: boolean) => void
   onKeyDown: (event: ReactKeyboardEvent) => void
+  onBlur: () => void
 }) {
   const { t, i18n } = useTranslation()
   const prefs = useCalendarPrefs()
@@ -409,6 +415,7 @@ function TimedBlock({
       data-event
       onPointerDown={(e) => onPointerDown(e, resizable)}
       onKeyDown={onKeyDown}
+      onBlur={onBlur}
       onClick={(e) => {
         e.stopPropagation()
         // A pointer's click is the grid's press; a key's opens the event.
