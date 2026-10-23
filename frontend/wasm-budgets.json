@@ -3,7 +3,7 @@
   "budgets": {
     "crypto": 1780000,
     "crypto-calendar": 2020000,
-    "chat": 3350000,
+    "chat": 3550000,
     "pass": 670000,
     "mail-search": 200000
   }
