@@ -11,8 +11,8 @@ import { reloadGuardScript } from './src/reloadGuard.ts'
 const FRONTEND = path.resolve(import.meta.dirname, '../..')
 const WASM_ROOT = path.join(FRONTEND, 'wasm')
 
-export type KutupApp = 'account' | 'drive' | 'chat' | 'maps' | 'photos' | 'office' | 'contacts' | 'mail' | 'pass'
-export type WasmModule = 'crypto' | 'chat' | 'pass' | 'mail-search'
+export type KutupApp = 'account' | 'drive' | 'chat' | 'maps' | 'photos' | 'office' | 'contacts' | 'mail' | 'pass' | 'calendar'
+export type WasmModule = 'crypto' | 'crypto-calendar' | 'chat' | 'pass' | 'mail-search'
 
 /**
  * A WASM runtime's content hash (16 hex digits): its directory's files, in
@@ -70,7 +70,14 @@ function kutupWasm(modules: WasmModule[]): Plugin {
     config() {
       return {
         define: {
-          __KUTUP_CRYPTO_WASM__: JSON.stringify(wasmHash('crypto')),
+          // The crypto runtime this app loads, as `<dir>/<hash>`: `crypto`,
+          // or `crypto-calendar` (the same and calendars) where the app
+          // lists it; never both.
+          __KUTUP_CRYPTO_WASM__: JSON.stringify(
+            modules.includes('crypto-calendar')
+              ? `crypto-calendar-wasm/${wasmHash('crypto-calendar')}`
+              : `crypto-wasm/${wasmHash('crypto')}`,
+          ),
           __KUTUP_CHAT_WASM__: JSON.stringify(wasmHash('chat')),
           __KUTUP_PASS_WASM__: JSON.stringify(wasmHash('pass')),
           __KUTUP_MAIL_SEARCH_WASM__: JSON.stringify(wasmHash('mail-search')),
@@ -111,7 +118,7 @@ function kutupWasm(modules: WasmModule[]): Plugin {
 }
 
 /** Dev ports; each app also has its own hostname so cookies stay per app. */
-export const DEV_PORTS: Record<KutupApp | 'editor', number> = { account: 5173, drive: 5174, chat: 5175, editor: 5176, maps: 5177, photos: 5178, office: 5179, contacts: 5180, mail: 5181, pass: 5182 }
+export const DEV_PORTS: Record<KutupApp | 'editor', number> = { account: 5173, drive: 5174, chat: 5175, editor: 5176, maps: 5177, photos: 5178, office: 5179, contacts: 5180, mail: 5181, pass: 5182, calendar: 5183 }
 
 /**
  * The Vite config every Kutup web app shares. Each app runs on its own

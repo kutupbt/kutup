@@ -280,10 +280,62 @@ until docker compose logs --no-color stalwart-setup --since "$started" 2>&1 \
   sleep 3
 done
 docker compose run --rm --no-deps backend storage-check | tail -1
-[ -n "$hosts" ] || hosts="$(for a in account drive chat office editor maps photos contacts mail pass; do printf '%s.%s ' "$a" "$(env_get KUTUP_BASE_DOMAIN)"; done)"
+[ -n "$hosts" ] || hosts="$(for a in account drive chat office editor maps photos contacts mail pass calendar; do printf '%s.%s ' "$a" "$(env_get KUTUP_BASE_DOMAIN)"; done)"
+# A new app (a host the certificate doesn't name yet) is certified only when
+# acme asks Let's Encrypt again, and its loop sleeps 12 hours after a
+# success: restart it, and wait for the certificate that names every host.
+cert_names() {
+  openssl x509 -in nginx/certs/fullchain.pem -noout -ext subjectAltName 2>/dev/null \
+    | tr ',' '\n' | sed -n 's/.*DNS://p' || true
+}
+uncovered() {
+  local names
+  names="$(cert_names)"
+  for h in $hosts; do grep -qxF "$h" <<<"$names" || printf '%s ' "$h"; done
+}
+if docker compose ps --services 2>/dev/null | grep -qx acme && command -v openssl >/dev/null; then
+  missing="$(uncovered)"
+  if [ -n "$missing" ]; then
+    echo "certificate lacks: $missing- asking acme for a new one"
+    docker compose restart acme >/dev/null
+    deadline=$((SECONDS + 300))
+    until [ -z "$(uncovered)" ]; do
+      if (( SECONDS >= deadline )); then
+        echo "deploy: after 5 minutes the certificate still lacks: $(uncovered)" >&2
+        echo "deploy: check that each name points at this machine; read: docker compose logs acme" >&2
+        exit 1
+      fi
+      sleep 5
+    done
+    echo "certificate now names every host"
+    # nginx notices a new certificate only on its own 30-second check: reload
+    # it now, and wait until what it serves names the new hosts.
+    docker compose exec -T nginx nginx -s reload >/dev/null
+    served() {
+      local names
+      names="$(openssl s_client -connect 127.0.0.1:443 -servername "$1" </dev/null 2>/dev/null \
+        | openssl x509 -noout -ext subjectAltName 2>/dev/null \
+        | tr ',' '\n' | sed -n 's/.*DNS://p' || true)"
+      grep -qxF "$1" <<<"$names"
+    }
+    deadline=$((SECONDS + 60))
+    for h in $missing; do
+      until served "$h"; do
+        if (( SECONDS >= deadline )); then
+          echo "deploy: nginx still serves a certificate without $h after its reload" >&2
+          exit 1
+        fi
+        sleep 2
+      done
+    done
+    echo "nginx serves it"
+  fi
+fi
 failed=0
 for h in $hosts; do
-  code="$(curl -s -o /dev/null -w '%{http_code}' "https://$h/")"
+  # curl's own exit says why a host gave no answer at all (60: the
+  # certificate doesn't name it).
+  code="$(curl -s -o /dev/null -w '%{http_code}' "https://$h/")" || code="000 (curl exit $?)"
   echo "  $h $code"
   [ "$code" = 200 ] || failed=1
 done

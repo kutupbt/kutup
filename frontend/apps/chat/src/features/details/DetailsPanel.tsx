@@ -2,7 +2,7 @@ import { ArrowLeft, Ban, Check, Pencil, ShieldCheck, Timer } from 'lucide-react'
 import { useEffect, useRef, useState, type ReactNode } from 'react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
-import type { SafetyNumberV1 } from '@kutup/chat-core/types'
+import type { SafetyNumberV2 } from '@kutup/chat-core/types'
 import { Button } from '@kutup/ui/components/button'
 import { cn } from '@kutup/ui/lib/cn'
 import { refreshChat, useChat } from '../../app/chatStore'
@@ -179,7 +179,7 @@ function DisappearingSection({ model }: { model: ConversationModel }) {
 function SafetySection({ model }: { model: ConversationModel }) {
   const { t } = useTranslation()
   const { service } = useChat()
-  const [safety, setSafety] = useState<SafetyNumberV1 | null>(null)
+  const [safety, setSafety] = useState<SafetyNumberV2 | null>(null)
   const [open, setOpen] = useState(false)
   const peer = model.peer!
   useEffect(() => {
@@ -216,6 +216,12 @@ function SafetySection({ model }: { model: ConversationModel }) {
           safety={safety}
           onVerify={async (payload: string) => {
             const next = await service!.verifySafetyNumber(peer, payload)
+            setSafety(next)
+            await refreshChat()
+            return next
+          }}
+          onSetVerified={async (verified: boolean) => {
+            const next = await service!.setIdentityVerified(peer, safety.identityKey, verified)
             setSafety(next)
             await refreshChat()
             return next

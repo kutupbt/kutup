@@ -213,6 +213,20 @@ export interface AdminSettings {
   chatGroupAvatarPendingSeconds: number
   /** The largest `.kdbx` file Kutup Pass takes in an upload, in bytes (1 MiB to 1 GiB). */
   passVaultMaxBytes: number
+  /** Calendars (site_settings::CALENDAR_SETTINGS). */
+  calendarsPerAccount: number
+  calendarEventsPerCalendar: number
+  calendarSyncBatch: number
+  calendarWindowDays: number
+  calendarEventsPage: number
+  /** Linking Chat devices (site_settings::CHAT_IDENTITY_SETTINGS). */
+  chatLinkTokenSeconds: number
+  chatLinkTokensPerAccount: number
+  chatProvisionBodyBytes: number
+  chatMaxActiveDevices: number
+  chatProvisioningTicketSeconds: number
+  chatProvisioningSocketsPerAccount: number
+  chatDistributionMessageBytes: number
 }
 
 export type FederationMode = 'disabled' | 'allowlist' | 'blocklist' | 'open'

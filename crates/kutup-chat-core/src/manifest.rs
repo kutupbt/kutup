@@ -1,16 +1,18 @@
-//! V1 account self-authority, signed manifest history, and durable peer pins.
+//! The account self-authority, the signed V2 manifest history (one libsignal
+//! identity per account, docs/plans/account-identity-key.md), and durable peer
+//! pins.
 
 use base64::engine::general_purpose::STANDARD;
 use base64::Engine as _;
 use ed25519_dalek::Signer as _;
 use kutup_chat_proto::{
-    AccountIdentitySuiteId, AccountManifestDeviceV1, AccountManifestDriveKeysV1,
-    AccountManifestHistoryPageV1, AccountManifestV1, AccountRef, UserPreKeyBundlesResponse,
-    ACCOUNT_MANIFEST_VERSION,
+    AccountIdentitySuiteId, AccountManifestDeviceV2, AccountManifestDriveKeysV1,
+    AccountManifestHistoryPageV2, AccountManifestV2, AccountPreKeyBundlesResponse, AccountRef,
+    DevicePreKeyBundle, ACCOUNT_MANIFEST_V2_VERSION,
 };
 use serde::Serialize;
 
-use crate::db::{AccountManifestHistoryRecordV1, AuthorityTrust, ManifestTrust};
+use crate::db::{AccountManifestHistoryRecord, AuthorityTrust, ManifestTrust};
 use crate::error::{ChatError, Result};
 
 /// Whether a development transport may omit signed account identity. V1
@@ -25,53 +27,119 @@ pub(crate) struct VerifiedBundleTrust {
     pub manifest: Option<ManifestTrust>,
 }
 
+/// A bundle response's devices, each with the account's identity key: the
+/// shape sessions are built from. Only after [`verify_bundle_response`].
+pub(crate) fn account_bundles(response: &AccountPreKeyBundlesResponse) -> Vec<DevicePreKeyBundle> {
+    response
+        .devices
+        .iter()
+        .map(|bundle| DevicePreKeyBundle {
+            device_id: bundle.device_id,
+            registration_id: bundle.registration_id,
+            suite: bundle.suite,
+            identity_key: response.identity_key.clone(),
+            signed_pre_key: bundle.signed_pre_key.clone(),
+            kyber_pre_key: bundle.kyber_pre_key.clone(),
+            one_time_pre_key: bundle.one_time_pre_key.clone(),
+        })
+        .collect()
+}
+
 /// Purpose-separated identity deterministically recovered from the account
 /// master key. The server never receives the authority or Drive signing keys.
 pub struct AccountAuthority {
     identity: kutup_crypto::identity::AccountIdentityKeysV1,
 }
 
-/// Human-verifiable binding between two accounts and their account
-/// self-authority public keys (kutup-crypto `safety_number`, Signal's
-/// fingerprint). Both participants show the same digits; each side's QR code
-/// carries its own half first, so a scan is compared with the other side's.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+/// The safety number of two accounts, as Signal's: libsignal's numeric
+/// fingerprint over each side's account id and account identity key
+/// (docs/plans/account-identity-key.md). Both sides show the same sixty
+/// digits; each side's QR code carries its own half first, so a scan is
+/// compared with the other side's. A new identity of either side is a new
+/// number; linking or removing a device changes nothing.
+#[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct SafetyNumberV1 {
+pub struct SafetyNumberV2 {
     pub local_account: String,
     pub peer_account: String,
-    /// Twelve five-digit groups: both sides' halves, the lower first.
+    /// Twelve five-digit groups.
     pub fingerprint: String,
-    /// This side's QR code: what the other side scans.
+    /// This side's QR code (`kutup://verify/v4/…`): what the other side scans.
     pub qr_payload: String,
-    /// The derivation, which knows the other side's QR code: what a scan
-    /// here must be.
+    /// The peer's account identity key the number covers.
+    pub identity_key: String,
     #[serde(skip)]
-    derived: kutup_crypto::safety_number::SafetyNumberV3,
+    scannable: libsignal_protocol::ScannableFingerprint,
     pub authority_key_id: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub retained_authority_key_id: Option<String>,
+    /// `Verified` when this identity was verified; `Quarantined` while the
+    /// account's authority itself is in question; `Tofu` otherwise.
     pub trust: AuthorityTrust,
     pub continuity_gap: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub quarantine_reason: Option<String>,
 }
 
-impl SafetyNumberV1 {
-    /// Compare a scanned QR payload with the other side's, derived here. The
-    /// QR never adds trust on its own: only the exact pair of accounts and
-    /// keys succeeds.
+/// The QR prefix of a [`SafetyNumberV2`] (v3 was the authority's).
+pub const SAFETY_QR_PREFIX: &str = "kutup://verify/v4/";
+/// Signal's fingerprint version for its account identities (ACI) and
+/// iteration count.
+const FINGERPRINT_VERSION: u32 = 2;
+const FINGERPRINT_ITERATIONS: u32 = 5200;
+
+impl SafetyNumberV2 {
+    /// Compare a scanned QR payload with the other side's half, derived here.
+    /// Only the exact pair of accounts and identity keys succeeds.
     pub fn matches_qr_payload(&self, scanned: &str) -> bool {
-        kutup_crypto::safety_number::matches_qr_payload(&self.derived, scanned)
+        use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+        let Some(encoded) = scanned.trim().strip_prefix(SAFETY_QR_PREFIX) else {
+            return false;
+        };
+        let Ok(bytes) = URL_SAFE_NO_PAD.decode(encoded) else {
+            return false;
+        };
+        self.scannable.compare(&bytes).unwrap_or(false)
     }
 }
 
-/// Derive the shared safety number for an already authenticated manifest pin.
+/// libsignal's fingerprint of two stable ids and identity keys: the displayed
+/// digits (grouped by five) and the scannable form.
+pub(crate) fn fingerprint(
+    local_id: &[u8],
+    local_key: &libsignal_protocol::IdentityKey,
+    peer_id: &[u8],
+    peer_key: &libsignal_protocol::IdentityKey,
+) -> Result<(String, libsignal_protocol::ScannableFingerprint)> {
+    let fingerprint = libsignal_protocol::Fingerprint::new(
+        FINGERPRINT_VERSION,
+        FINGERPRINT_ITERATIONS,
+        local_id,
+        local_key,
+        peer_id,
+        peer_key,
+    )
+    .map_err(|error| ChatError::Invalid(error.to_string()))?;
+    let digits = fingerprint
+        .display_string()
+        .map_err(|error| ChatError::Invalid(error.to_string()))?;
+    let grouped = digits
+        .as_bytes()
+        .chunks(5)
+        .map(|chunk| std::str::from_utf8(chunk).expect("digits are ASCII"))
+        .collect::<Vec<_>>()
+        .join(" ");
+    Ok((grouped, fingerprint.scannable))
+}
+
+/// Derive the safety number with an already authenticated peer pin: this
+/// account's identity key against the identity the peer's manifest lists.
 pub fn derive_safety_number(
     local_account: &str,
-    local_authority_public_key: &str,
+    local_identity_key: &libsignal_protocol::IdentityKey,
     trust: &ManifestTrust,
-) -> Result<SafetyNumberV1> {
+) -> Result<SafetyNumberV2> {
+    use base64::engine::general_purpose::URL_SAFE_NO_PAD;
     let local = crate::address::parse_account(local_account)?;
     let peer = crate::address::parse_account(&trust.account)?;
     if local == peer {
@@ -79,38 +147,40 @@ pub fn derive_safety_number(
             "Note to Self does not have a peer safety number".into(),
         ));
     }
-    let local_key = decode_authority_key("local self-authority key", local_authority_public_key)?;
-    let peer_key = decode_authority_key("peer self-authority key", &trust.self_authority_key)?;
-    // One number for every app (kutup-crypto safety_number).
-    let derived = kutup_crypto::safety_number::derive(&local, &local_key, &peer, &peer_key)
-        .map_err(|error| ChatError::Invalid(error.to_string()))?;
-
-    Ok(SafetyNumberV1 {
+    let peer_key = STANDARD
+        .decode(&trust.identity_key)
+        .ok()
+        .and_then(|bytes| libsignal_protocol::IdentityKey::decode(&bytes).ok())
+        .ok_or_else(|| ChatError::Trust("the peer has no account identity pinned".into()))?;
+    let (fingerprint, scannable) =
+        fingerprint(&local.bytes(), local_identity_key, &peer.bytes(), &peer_key)?;
+    let qr_payload = format!(
+        "{SAFETY_QR_PREFIX}{}",
+        URL_SAFE_NO_PAD.encode(
+            scannable
+                .serialize()
+                .map_err(|error| ChatError::Invalid(error.to_string()))?
+        )
+    );
+    Ok(SafetyNumberV2 {
         local_account: local.to_string(),
         peer_account: peer.to_string(),
-        fingerprint: derived.fingerprint.clone(),
-        qr_payload: derived.qr_payload.clone(),
-        derived,
+        fingerprint,
+        qr_payload,
+        identity_key: trust.identity_key.clone(),
+        scannable,
         authority_key_id: trust.authority_key_id.clone(),
         retained_authority_key_id: None,
-        trust: trust.trust,
+        trust: if trust.trust == AuthorityTrust::Quarantined {
+            AuthorityTrust::Quarantined
+        } else if trust.identity_verified {
+            AuthorityTrust::Verified
+        } else {
+            AuthorityTrust::Tofu
+        },
         continuity_gap: trust.continuity_gap,
         quarantine_reason: trust.quarantine_reason.clone(),
     })
-}
-
-fn decode_authority_key(label: &str, value: &str) -> Result<[u8; 32]> {
-    let decoded = STANDARD
-        .decode(value)
-        .map_err(|_| ChatError::Trust(format!("{label} is not canonical base64")))?;
-    if STANDARD.encode(&decoded) != value {
-        return Err(ChatError::Trust(format!(
-            "{label} is not canonical padded base64"
-        )));
-    }
-    decoded
-        .try_into()
-        .map_err(|_| ChatError::Trust(format!("{label} must be 32 bytes")))
 }
 
 impl AccountAuthority {
@@ -164,21 +234,79 @@ impl AccountAuthority {
         }
     }
 
+    /// The account identity's binding to this authority (`identityBinding`):
+    /// `identity` signs the authority's key id, its incarnation, the account
+    /// and the identity key itself.
+    pub fn identity_binding(
+        &self,
+        account: &AccountRef,
+        identity: &libsignal_protocol::IdentityKeyPair,
+    ) -> Result<String> {
+        use rand::TryRngCore as _;
+        let identity_key = STANDARD.encode(identity.identity_key().serialize());
+        let bytes = kutup_chat_proto::identity_binding_bytes(
+            &self.key_id(),
+            &self.incarnation_id(),
+            account,
+            &identity_key,
+        )
+        .map_err(ChatError::Invalid)?;
+        let signature = identity
+            .private_key()
+            .calculate_signature(&bytes, &mut rand::rngs::OsRng.unwrap_err())
+            .map_err(|error| ChatError::Protocol(error.to_string()))?;
+        Ok(STANDARD.encode(signature))
+    }
+
+    /// Sign the account's manifest for `identity`, the account's libsignal
+    /// identity, and its devices, with the identity's binding to this
+    /// authority.
     pub fn sign_manifest(
         &self,
         account: AccountRef,
         sequence: u64,
         previous_hash: Option<String>,
-        mut devices: Vec<AccountManifestDeviceV1>,
+        identity: &libsignal_protocol::IdentityKeyPair,
+        devices: Vec<AccountManifestDeviceV2>,
         issued_at: impl Into<String>,
-    ) -> Result<AccountManifestV1> {
+    ) -> Result<AccountManifestV2> {
+        let identity_binding = self.identity_binding(&account, identity)?;
+        self.sign_manifest_with_binding(
+            account,
+            sequence,
+            previous_hash,
+            STANDARD.encode(identity.identity_key().serialize()),
+            identity_binding,
+            devices,
+            issued_at,
+        )
+    }
+
+    /// Sign the account's manifest with an identity binding made before (the
+    /// head's, for the same identity: it doesn't depend on the devices).
+    /// Only the authority's signature is checked here: the caller checked the
+    /// binding it carries over (`verify_identity_binding`), and every reader
+    /// checks it again.
+    #[allow(clippy::too_many_arguments)]
+    pub fn sign_manifest_with_binding(
+        &self,
+        account: AccountRef,
+        sequence: u64,
+        previous_hash: Option<String>,
+        identity_key: String,
+        identity_binding: String,
+        mut devices: Vec<AccountManifestDeviceV2>,
+        issued_at: impl Into<String>,
+    ) -> Result<AccountManifestV2> {
         devices.sort_by_key(|device| device.device_id);
-        let mut manifest = AccountManifestV1 {
-            manifest_version: ACCOUNT_MANIFEST_VERSION,
+        let mut manifest = AccountManifestV2 {
+            manifest_version: ACCOUNT_MANIFEST_V2_VERSION,
             account,
             incarnation_id: self.incarnation_id(),
             sequence,
             previous_hash,
+            identity_key,
+            identity_binding,
             drive: self.drive_keys(),
             devices,
             issued_at: issued_at.into(),
@@ -193,35 +321,49 @@ impl AccountAuthority {
                 .sign(&bytes)
                 .to_bytes(),
         );
-        manifest.verify().map_err(ChatError::Invalid)?;
+        manifest.verify().map_err(ChatError::Protocol)?;
         Ok(manifest)
     }
 }
 
-pub fn verify_manifest(manifest: &AccountManifestV1) -> Result<()> {
-    manifest.verify().map_err(ChatError::Protocol)
+/// The manifest's authority signature and its identity binding: the account
+/// identity key signed this authority, incarnation and account. A server
+/// listing someone's identity under an authority of its own has no such
+/// signature.
+pub fn verify_manifest(manifest: &AccountManifestV2) -> Result<()> {
+    manifest.verify().map_err(ChatError::Protocol)?;
+    verify_identity_binding(manifest).map_err(|error| ChatError::Protocol(error.to_string()))
+}
+
+/// The identity binding alone (libsignal's XEdDSA check), as a trust error.
+pub(crate) fn verify_identity_binding(manifest: &AccountManifestV2) -> Result<()> {
+    let refused = || ChatError::Trust("the manifest's identity binding is invalid".into());
+    let bytes = manifest.identity_binding_bytes().map_err(|_| refused())?;
+    let key = STANDARD
+        .decode(&manifest.identity_key)
+        .ok()
+        .and_then(|bytes| libsignal_protocol::IdentityKey::decode(&bytes).ok())
+        .ok_or_else(refused)?;
+    let signature = STANDARD
+        .decode(&manifest.identity_binding)
+        .map_err(|_| refused())?;
+    if key.public_key().verify_signature(&bytes, &signature) {
+        Ok(())
+    } else {
+        Err(refused())
+    }
 }
 
 /// Verify one bundle response before any libsignal session mutation.
 pub fn verify_bundle_response(
     expected_peer: &str,
-    response: &UserPreKeyBundlesResponse,
+    response: &AccountPreKeyBundlesResponse,
     policy: ManifestPolicy,
     prior: Option<&ManifestTrust>,
 ) -> Result<Option<ManifestTrust>> {
-    let Some(manifest) = &response.manifest else {
-        if prior.is_some() {
-            return Err(ChatError::Trust(
-                "server omitted a previously required account manifest".into(),
-            ));
-        }
-        return match policy {
-            ManifestPolicy::Required => Err(ChatError::Trust(
-                "server omitted the required account manifest".into(),
-            )),
-            ManifestPolicy::AllowMissingForDevelopment => Ok(None),
-        };
-    };
+    // Every V2 bundle response carries its signed manifest.
+    let _ = policy;
+    let manifest = &response.manifest;
     manifest.verify().map_err(ChatError::Trust)?;
     if response.account != manifest.account {
         return Err(ChatError::Trust(
@@ -229,44 +371,19 @@ pub fn verify_bundle_response(
         ));
     }
     match_expected_account(expected_peer, &manifest.account)?;
-
-    if response.devices.len() != manifest.devices.len() {
-        return Err(ChatError::Trust(
-            "bundle device count does not match signed account manifest".into(),
-        ));
-    }
-    let mut served = std::collections::BTreeMap::new();
-    for bundle in &response.devices {
-        if served.insert(bundle.device_id, bundle).is_some() {
-            return Err(ChatError::Trust(format!(
-                "bundle response repeats device {}",
-                bundle.device_id
-            )));
-        }
-    }
-    for declared in &manifest.devices {
-        let bundle = served.get(&declared.device_id).ok_or_else(|| {
-            ChatError::Trust(format!(
-                "signed device {} has no prekey bundle",
-                declared.device_id
-            ))
-        })?;
-        if bundle.suite != declared.direct_chat_suite
-            || bundle.registration_id != declared.registration_id
-            || bundle.identity_key != declared.identity_key
-        {
-            return Err(ChatError::Trust(format!(
-                "bundle for device {} contradicts the signed account manifest",
-                declared.device_id
-            )));
-        }
-    }
+    // The account's identity once, as its manifest lists it; each bundle a
+    // listed device with its listed registration id and suite, at most once.
+    // A listed device may lack a bundle (the server dropped an expired one,
+    // as Signal's): it is then not sent to.
+    response.check_against_manifest().map_err(|error| {
+        ChatError::Trust(format!("bundles contradict the signed manifest: {error}"))
+    })?;
     verify_manifest_trust(expected_peer, manifest, prior).map(Some)
 }
 
 pub(crate) fn verify_bundle_trust(
     expected_peer: &str,
-    response: &UserPreKeyBundlesResponse,
+    response: &AccountPreKeyBundlesResponse,
     policy: ManifestPolicy,
     prior: Option<&ManifestTrust>,
 ) -> Result<VerifiedBundleTrust> {
@@ -279,7 +396,7 @@ pub(crate) fn verify_bundle_trust(
 /// retrieves and atomically commits every missing complete sequence.
 pub(crate) fn verify_manifest_evidence(
     expected_peer: &str,
-    manifest: &AccountManifestV1,
+    manifest: &AccountManifestV2,
     prior: Option<&ManifestTrust>,
 ) -> Result<ManifestTrust> {
     verify_manifest_trust(expected_peer, manifest, prior)
@@ -287,10 +404,11 @@ pub(crate) fn verify_manifest_evidence(
 
 fn verify_manifest_trust(
     expected_peer: &str,
-    manifest: &AccountManifestV1,
+    manifest: &AccountManifestV2,
     prior: Option<&ManifestTrust>,
 ) -> Result<ManifestTrust> {
     manifest.verify().map_err(ChatError::Trust)?;
+    verify_identity_binding(manifest)?;
     match_expected_account(expected_peer, &manifest.account)?;
     let manifest_hash = manifest.manifest_hash().map_err(ChatError::Trust)?;
     let (trust, continuity_gap) = match prior {
@@ -375,6 +493,14 @@ fn verify_manifest_trust(
         drive_share_signing_public_key: manifest.drive.share_signing_public_key.clone(),
         highest_sequence: manifest.sequence,
         manifest_hash,
+        identity_key: manifest.identity_key.clone(),
+        // Verified stays with the identity it verified: a new one is not.
+        identity_verified: prior.is_some_and(|prior| {
+            prior.identity_verified && prior.identity_key == manifest.identity_key
+        }),
+        identity_verified_at_ms: prior
+            .filter(|prior| prior.identity_key == manifest.identity_key)
+            .map_or(0, |prior| prior.identity_verified_at_ms),
         trust,
         continuity_gap,
         quarantine_reason: None,
@@ -387,10 +513,10 @@ fn verify_manifest_trust(
 /// authority signature and predecessor hash on every entry are authoritative.
 pub(crate) fn verify_manifest_history(
     expected_peer: &str,
-    pages: &[AccountManifestHistoryPageV1],
+    pages: &[AccountManifestHistoryPageV2],
     prior: Option<&ManifestTrust>,
-    pending: &AccountManifestV1,
-) -> Result<(ManifestTrust, Vec<AccountManifestHistoryRecordV1>)> {
+    pending: &AccountManifestV2,
+) -> Result<(ManifestTrust, Vec<AccountManifestHistoryRecord>)> {
     if pages.is_empty() {
         return Err(ChatError::Trust(
             "account manifest gap recovery returned no history".into(),
@@ -452,7 +578,7 @@ pub(crate) fn verify_manifest_history(
             }
             rolling = Some(checked);
             predecessor = Some(manifest.manifest_hash().map_err(ChatError::Trust)?);
-            records.push(AccountManifestHistoryRecordV1 {
+            records.push(AccountManifestHistoryRecord {
                 peer: expected_peer.to_string(),
                 sequence: manifest.sequence,
                 manifest: manifest.clone(),
@@ -486,12 +612,12 @@ mod legacy_suite1_for_upgrade {
     use base64::engine::general_purpose::STANDARD;
     use base64::Engine as _;
     use kutup_chat_proto::{
-        legacy_suite1_for_upgrade::HPKE_PUBLIC_KEY_LEN, AccountIdentitySuiteId, AccountManifestV1,
+        legacy_suite1_for_upgrade::HPKE_PUBLIC_KEY_LEN, AccountIdentitySuiteId, AccountManifestV2,
     };
 
     /// Whether `next` raises a suite-1 Drive key (`prior_key`, as pinned) to
     /// an X-Wing one. Never the other way.
-    pub(super) fn drive_key_rises(prior_key: &str, next: &AccountManifestV1) -> bool {
+    pub(super) fn drive_key_rises(prior_key: &str, next: &AccountManifestV2) -> bool {
         STANDARD.decode(prior_key).map(|key| key.len()) == Ok(HPKE_PUBLIC_KEY_LEN)
             && next.drive.suite == AccountIdentitySuiteId::XWingEd25519V2
     }
@@ -511,14 +637,89 @@ fn match_expected_account(expected_peer: &str, authenticated_account: &AccountRe
 #[cfg(test)]
 mod tests {
     use super::*;
+    use kutup_chat_proto::{AccountManifestDeviceV2, DirectChatSuiteId};
+
+    const ALICE_IDENTITY: &str =
+        "0506863bc66d02b40d27b8d49ca7c09e9239236f9d7d25d6fcca5ce13c7064d868";
+    const BOB_IDENTITY: &str = "05f781b6fb32fed9ba1cf2de978d4d5da28dc34046ae814402b5c0dbd96fda907b";
+    const ALICE: &str = "aci:00000000-0000-4000-8000-2bd806c97f0e@alpha.example";
+    const BOB: &str = "aci:00000000-0000-4000-8000-81b637d8fcd2@beta.example";
+
+    /// libsignal's fingerprint vector keys (public only).
+    fn vector_key(hex_key: &str) -> libsignal_protocol::IdentityKey {
+        libsignal_protocol::IdentityKey::decode(&hex::decode(hex_key).unwrap()).unwrap()
+    }
+
+    /// A deterministic identity key pair per label, for manifests that need
+    /// the identity's binding signature.
+    fn pair(label: &str) -> libsignal_protocol::IdentityKeyPair {
+        use sha2::{Digest as _, Sha256};
+        let private =
+            libsignal_protocol::PrivateKey::deserialize(&Sha256::digest(label.as_bytes())).unwrap();
+        libsignal_protocol::IdentityKeyPair::new(
+            libsignal_protocol::IdentityKey::new(private.public_key().unwrap()),
+            private,
+        )
+    }
+
+    fn key(label: &str) -> libsignal_protocol::IdentityKey {
+        *pair(label).identity_key()
+    }
+
+    fn key_b64(label: &str) -> String {
+        STANDARD.encode(key(label).serialize())
+    }
+
+    fn device(device_id: u32, registration_id: u32) -> AccountManifestDeviceV2 {
+        AccountManifestDeviceV2 {
+            device_id,
+            direct_chat_suite: DirectChatSuiteId::PqxdhTripleRatchetV1,
+            registration_id,
+            mls: None,
+        }
+    }
+
+    /// libsignal's own fingerprint vector (testVectorsVersion2), through the
+    /// helper the safety number uses.
+    #[test]
+    fn the_fingerprint_is_libsignals_v2_vector() {
+        let (alice_digits, alice_scannable) = fingerprint(
+            b"+14152222222",
+            &vector_key(ALICE_IDENTITY),
+            b"+14153333333",
+            &vector_key(BOB_IDENTITY),
+        )
+        .unwrap();
+        let (bob_digits, bob_scannable) = fingerprint(
+            b"+14153333333",
+            &vector_key(BOB_IDENTITY),
+            b"+14152222222",
+            &vector_key(ALICE_IDENTITY),
+        )
+        .unwrap();
+        let expected = "300354477692869396892869876765458257569162576843440918079131"
+            .as_bytes()
+            .chunks(5)
+            .map(|chunk| std::str::from_utf8(chunk).unwrap())
+            .collect::<Vec<_>>()
+            .join(" ");
+        assert_eq!(alice_digits, expected);
+        assert_eq!(bob_digits, expected);
+        assert_eq!(
+            hex::encode(alice_scannable.serialize().unwrap()),
+            "080212220a201e301a0353dce3dbe7684cb8336e85136cdc0ee96219494ada305d62a7bd61df1a220a20d62cbf73a11592015b6b9f1682ac306fea3aaf3885b84d12bca631e9d4fb3a4d"
+        );
+        assert!(alice_scannable
+            .compare(&bob_scannable.serialize().unwrap())
+            .unwrap());
+    }
 
     /// The one-way suite upgrade (docs/plans/pq-shares.md): a pinned suite-1
     /// Drive key rises to X-Wing only in the linked next manifest, under the
     /// same authority and signing key; never back, never across a gap.
     #[test]
     fn a_drive_key_changes_only_by_rising_to_x_wing_in_the_next_manifest() {
-        use kutup_chat_proto::{AccountManifestDeviceV1, DirectChatSuiteId};
-        let peer = "aci:00000000-0000-4000-8000-81b637d8fcd2@chat.example";
+        let peer = BOB;
         let authority = AccountAuthority::derive(&[5u8; 32]).unwrap();
         let sign = |sequence: u64, previous: Option<String>| {
             authority
@@ -526,13 +727,8 @@ mod tests {
                     peer.parse().unwrap(),
                     sequence,
                     previous,
-                    vec![AccountManifestDeviceV1 {
-                        device_id: 1,
-                        direct_chat_suite: DirectChatSuiteId::PqxdhTripleRatchetV1,
-                        identity_key: STANDARD.encode([5u8; 33]),
-                        registration_id: 7,
-                        mls: None,
-                    }],
+                    &pair(BOB_IDENTITY),
+                    vec![device(1, 7)],
                     "2026-10-18T00:00:00Z",
                 )
                 .unwrap()
@@ -564,94 +760,113 @@ mod tests {
         assert!(verify_manifest_trust(peer, &after, Some(&risen)).is_ok());
     }
 
-    fn trust(peer: &str, authority: &AccountAuthority) -> ManifestTrust {
-        ManifestTrust {
-            peer: peer.into(),
-            account: peer.into(),
-            incarnation_id: authority.incarnation_id(),
-            authority_key_id: authority.key_id(),
-            self_authority_key: authority.public_key_base64(),
-            drive_hpke_public_key: STANDARD.encode([7u8; 32]),
-            drive_share_signing_public_key: STANDARD.encode([8u8; 32]),
-            highest_sequence: 1,
-            manifest_hash: "11".repeat(32),
-            trust: AuthorityTrust::Tofu,
-            continuity_gap: false,
-            quarantine_reason: None,
-            pending_reset: None,
-        }
+    /// A peer's pin, as a verified manifest of `account` with `identity`
+    /// leaves it.
+    fn trust(account: &str, seed: u8, identity: &str) -> ManifestTrust {
+        let authority = AccountAuthority::derive(&[seed; 32]).unwrap();
+        let manifest = authority
+            .sign_manifest(
+                account.parse().unwrap(),
+                1,
+                None,
+                &pair(identity),
+                vec![device(1, 7)],
+                "2026-10-18T00:00:00Z",
+            )
+            .unwrap();
+        verify_manifest_trust(account, &manifest, None).unwrap()
     }
 
     #[test]
     fn safety_number_is_symmetric_and_losslessly_formatted() {
-        let alice = AccountAuthority::derive(&[1u8; 32]).unwrap();
-        let bob = AccountAuthority::derive(&[2u8; 32]).unwrap();
-        let alice_view = derive_safety_number(
-            "aci:00000000-0000-4000-8000-2bd806c97f0e@alpha.example",
-            &alice.public_key_base64(),
-            &trust(
-                "aci:00000000-0000-4000-8000-81b637d8fcd2@beta.example",
-                &bob,
-            ),
-        )
-        .unwrap();
-        let bob_view = derive_safety_number(
-            "aci:00000000-0000-4000-8000-81b637d8fcd2@beta.example",
-            &bob.public_key_base64(),
-            &trust(
-                "aci:00000000-0000-4000-8000-2bd806c97f0e@alpha.example",
-                &alice,
-            ),
-        )
-        .unwrap();
+        let alice_view =
+            derive_safety_number(ALICE, &key(ALICE_IDENTITY), &trust(BOB, 2, BOB_IDENTITY))
+                .unwrap();
+        let bob_view =
+            derive_safety_number(BOB, &key(BOB_IDENTITY), &trust(ALICE, 1, ALICE_IDENTITY))
+                .unwrap();
 
         assert_eq!(alice_view.fingerprint, bob_view.fingerprint);
+        assert_eq!(alice_view.identity_key, key_b64(BOB_IDENTITY));
         let groups: Vec<_> = alice_view.fingerprint.split(' ').collect();
         assert_eq!(groups.len(), 12);
         assert!(groups
             .iter()
             .all(|group| group.len() == 5 && group.bytes().all(|byte| byte.is_ascii_digit())));
+        assert!(alice_view.qr_payload.starts_with(SAFETY_QR_PREFIX));
         // Each side scans the other's code; its own does not match.
         assert!(alice_view.matches_qr_payload(&bob_view.qr_payload));
         assert!(bob_view.matches_qr_payload(&alice_view.qr_payload));
         assert!(!alice_view.matches_qr_payload(&alice_view.qr_payload));
+        assert_eq!(alice_view.trust, AuthorityTrust::Tofu);
     }
 
     #[test]
-    fn safety_number_rejects_another_pair_and_note_to_self() {
-        let alice = AccountAuthority::derive(&[1u8; 32]).unwrap();
-        let bob = AccountAuthority::derive(&[2u8; 32]).unwrap();
-        let mallory = AccountAuthority::derive(&[3u8; 32]).unwrap();
-        let expected = derive_safety_number(
-            "aci:00000000-0000-4000-8000-2bd806c97f0e@alpha.example",
-            &alice.public_key_base64(),
-            &trust(
-                "aci:00000000-0000-4000-8000-81b637d8fcd2@beta.example",
-                &bob,
-            ),
-        )
-        .unwrap();
-        let wrong = derive_safety_number(
-            "aci:00000000-0000-4000-8000-2bd806c97f0e@alpha.example",
-            &alice.public_key_base64(),
-            &trust(
-                "aci:00000000-0000-4000-8000-c0a497761b17@gamma.example",
-                &mallory,
-            ),
-        )
-        .unwrap();
-
-        assert!(!expected.matches_qr_payload(&wrong.qr_payload));
-        assert!(!expected
-            .matches_qr_payload(&"x".repeat(kutup_crypto::safety_number::MAX_QR_BYTES + 1)));
+    fn safety_number_rejects_another_identity_and_note_to_self() {
+        let expected =
+            derive_safety_number(ALICE, &key(ALICE_IDENTITY), &trust(BOB, 2, BOB_IDENTITY))
+                .unwrap();
+        // Bob under another identity (a reset): another number; a scan of
+        // its code doesn't match the number for the old one.
+        let other = libsignal_protocol::IdentityKeyPair::generate(&mut rand::rng());
+        let other_hex = hex::encode(other.identity_key().serialize());
+        let reset_bob_view =
+            derive_safety_number(BOB, &key(&other_hex), &trust(ALICE, 1, ALICE_IDENTITY)).unwrap();
+        assert!(!expected.matches_qr_payload(&reset_bob_view.qr_payload));
+        assert!(!expected.matches_qr_payload("kutup://verify/v3/abc"));
+        assert!(!expected.matches_qr_payload(&format!("{SAFETY_QR_PREFIX}!!")));
         assert!(derive_safety_number(
-            "aci:00000000-0000-4000-8000-2bd806c97f0e@alpha.example",
-            &alice.public_key_base64(),
-            &trust(
-                "aci:00000000-0000-4000-8000-2bd806c97f0e@alpha.example",
-                &alice
-            ),
+            ALICE,
+            &key(ALICE_IDENTITY),
+            &trust(ALICE, 1, ALICE_IDENTITY)
         )
         .is_err());
+    }
+
+    /// Verified stays with the identity it verified: kept while later
+    /// manifests only change devices, gone with another identity.
+    #[test]
+    fn verified_clears_with_another_identity_only() {
+        let authority = AccountAuthority::derive(&[2u8; 32]).unwrap();
+        let sign = |sequence: u64, previous: Option<String>, identity: &str, devices| {
+            authority
+                .sign_manifest(
+                    BOB.parse().unwrap(),
+                    sequence,
+                    previous,
+                    &pair(identity),
+                    devices,
+                    "2026-10-18T00:00:00Z",
+                )
+                .unwrap()
+        };
+        let first = sign(1, None, BOB_IDENTITY, vec![device(1, 7)]);
+        let mut pin = verify_manifest_trust(BOB, &first, None).unwrap();
+        pin.identity_verified = true;
+        pin.identity_verified_at_ms = 42;
+        let linked = sign(
+            2,
+            Some(pin.manifest_hash.clone()),
+            BOB_IDENTITY,
+            vec![device(1, 7), device(2, 9)],
+        );
+        let kept = verify_manifest_trust(BOB, &linked, Some(&pin)).unwrap();
+        assert!(kept.identity_verified);
+        assert_eq!(kept.identity_verified_at_ms, 42);
+        let other = libsignal_protocol::IdentityKeyPair::generate(&mut rand::rng());
+        let reset = sign(
+            3,
+            Some(kept.manifest_hash.clone()),
+            &hex::encode(other.identity_key().serialize()),
+            vec![device(1, 11)],
+        );
+        let cleared = verify_manifest_trust(BOB, &reset, Some(&kept)).unwrap();
+        assert!(!cleared.identity_verified);
+        assert_eq!(cleared.identity_verified_at_ms, 0);
+        assert_ne!(cleared.identity_key, kept.identity_key);
+        let view = derive_safety_number(ALICE, &key(ALICE_IDENTITY), &kept).unwrap();
+        assert_eq!(view.trust, AuthorityTrust::Verified);
+        let view = derive_safety_number(ALICE, &key(ALICE_IDENTITY), &cleared).unwrap();
+        assert_eq!(view.trust, AuthorityTrust::Tofu);
     }
 }

@@ -6,6 +6,7 @@ import { accountHead, NotInVerifiedIndexError } from '@kutup/session/accountHead
 import api from '@kutup/session/client'
 import { getSession } from '@kutup/session/store'
 import { apiBase } from '@kutup/session/apiBase'
+import { setChatDeviceAuth } from './device-auth'
 import type {
   ChatDevice,
   ChatTransportPort,
@@ -64,6 +65,41 @@ export class ApiChatTransport implements ChatTransportPort {
     return api.post('/chat/device', request).then((response) => response.data)
   }
 
+  setDeviceAuth(deviceId: number, credential: string): void {
+    setChatDeviceAuth(deviceId, credential)
+  }
+
+  async createLinkToken(): Promise<unknown> {
+    return api.post('/chat/link-tokens').then((response) => response.data)
+  }
+
+  async relayProvisioning(address: string, request: unknown): Promise<boolean> {
+    try {
+      await api.put(`/chat/provisioning/${encodeURIComponent(address)}`, request)
+      return true
+    } catch (error) {
+      // The new device's socket is gone (closed, expired, or not this
+      // account's: one answer for all three).
+      if (axios.isAxiosError(error) && error.response?.status === 404) return false
+      throw error
+    }
+  }
+
+  async distributeIdentity(
+    request: unknown,
+  ): Promise<{ kind: 'accepted' } | { kind: 'mismatch'; mismatch: unknown }> {
+    try {
+      await api.put('/chat/account-identity', request)
+      return { kind: 'accepted' }
+    } catch (error) {
+      const status = axios.isAxiosError(error) ? error.response?.status : undefined
+      if (axios.isAxiosError(error) && (status === 409 || status === 410)) {
+        return { kind: 'mismatch', mismatch: error.response?.data }
+      }
+      throw error
+    }
+  }
+
   async fetchBundles(account: string): Promise<unknown> {
     const { path, server } = accountRoute(account, '/keys')
     return api
@@ -96,7 +132,13 @@ export class ApiChatTransport implements ChatTransportPort {
         .get(path, { params: { server } })
         .then((response) => response.data)
     } catch (error) {
-      if (axios.isAxiosError(error) && error.response?.status === 404) return null
+      // Only the server's own "no manifest" (`404 noManifest`): another 404
+      // (a proxy, Chat switched off) must not read as an account without a
+      // Chat identity, which this device would then re-register.
+      if (axios.isAxiosError(error) && error.response?.status === 404
+        && (error.response.data as { code?: unknown } | undefined)?.code === 'noManifest') {
+        return null
+      }
       throw error
     }
   }

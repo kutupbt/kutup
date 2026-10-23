@@ -821,7 +821,7 @@ pub async fn get_settings(State(state): State<AppState>, _admin: AdminUser) -> A
     let group_capabilities =
         crate::site_settings::chat_group_capabilities_per_account(&state.pool).await?;
     let mut numeric = serde_json::Map::new();
-    for setting in crate::site_settings::CHAT_MULTI_SETTINGS {
+    for setting in crate::site_settings::numeric_settings() {
         numeric.insert(
             setting.field.to_owned(),
             json!(setting.load(&state.pool).await?),
@@ -864,7 +864,7 @@ pub struct UpdateSettingsRequest {
     chat_group_link_joins_per_relay_per_min: Option<Option<i64>>,
     #[serde(deserialize_with = "present")]
     chat_group_capabilities_per_account: Option<Option<i64>>,
-    /// The whole-number settings listed in `site_settings::CHAT_MULTI_SETTINGS`,
+    /// The whole-number settings listed in `site_settings::numeric_settings`,
     /// by field: a number sets one, `null` resets it; other fields are ignored.
     #[serde(flatten)]
     numeric: std::collections::BTreeMap<String, serde_json::Value>,
@@ -908,8 +908,7 @@ pub async fn update_settings(
         && req.chat_group_link_joins_per_relay_group_per_min.is_none()
         && req.chat_group_link_joins_per_relay_per_min.is_none()
         && req.chat_group_capabilities_per_account.is_none()
-        && !crate::site_settings::CHAT_MULTI_SETTINGS
-            .iter()
+        && !crate::site_settings::numeric_settings()
             .any(|setting| req.numeric.contains_key(setting.field))
         && req.chat_group_avatar_max_bytes.is_none()
         && req.chat_group_avatar_storage_per_group_bytes.is_none()
@@ -958,7 +957,7 @@ pub async fn update_settings(
     }
     // Each given whole-number setting: Some(value) to store, None to reset.
     let mut numeric = Vec::new();
-    for setting in crate::site_settings::CHAT_MULTI_SETTINGS {
+    for setting in crate::site_settings::numeric_settings() {
         let Some(value) = req.numeric.get(setting.field) else {
             continue;
         };
@@ -1121,8 +1120,7 @@ pub async fn update_settings(
             "chatGroupLinkJoinsPerRelayGroupPerMin": req.chat_group_link_joins_per_relay_group_per_min,
             "chatGroupLinkJoinsPerRelayPerMin": req.chat_group_link_joins_per_relay_per_min,
             "chatGroupCapabilitiesPerAccount": req.chat_group_capabilities_per_account,
-            "numeric": crate::site_settings::CHAT_MULTI_SETTINGS
-                .iter()
+            "numeric": crate::site_settings::numeric_settings()
                 .filter_map(|setting| {
                     req.numeric
                         .get(setting.field)
@@ -2298,6 +2296,18 @@ pub async fn wipe_user(
         .bind(target)
         .execute(&state.pool)
         .await?;
+    // The account identity (docs/plans/account-identity-key.md) and what
+    // hangs on it: the next device re-registers under a new one.
+    for table in [
+        "chat_account_identities",
+        "chat_link_tokens",
+        "chat_mls_devices",
+    ] {
+        sqlx::query(&format!("DELETE FROM {table} WHERE user_id = $1"))
+            .bind(target)
+            .execute(&state.pool)
+            .await?;
+    }
 
     // 3. Erase the key bundle + TOTP and reset to first-login with the new temp password,
     //    and with them the old incarnation's collab devices, in one step. Revoked
@@ -2611,7 +2621,7 @@ fn map_insert_conflict(err: sqlx::Error) -> AppError {
 /// The account head chain starts again with the new incarnation, and no
 /// listed value sealed under the old keys stays to be listed in it
 /// (docs/plans/rollback-protection.md, "Account reset"): contacts, the
-/// group list, the Chat contact list, labels, filters and Pass secrets go; custom folders keep
+/// group list, the Chat contact list, calendars, labels, filters and Pass secrets go; custom folders keep
 /// their mail and lose their names, until their owner names them again;
 /// custom-domain addresses close until rekeyed. The
 /// identity pins were sealed under the old master key too: nothing can open
@@ -2626,6 +2636,10 @@ async fn clear_account_values(
         "DELETE FROM contacts WHERE user_id = $1",
         "DELETE FROM chat_group_list WHERE user_id = $1",
         "DELETE FROM chat_contact_list WHERE user_id = $1",
+        // Calendars' passphrases were sealed to the old address keys: the
+        // account's own calendars go, and its places in others'.
+        "DELETE FROM calendars WHERE owner_id = $1",
+        "DELETE FROM calendar_members WHERE user_id = $1",
         // Forwardings both ways end with their proxy factors: they were
         // made for the old incarnation's keys (docs/plans/mail-forwarding.md).
         "DELETE FROM mail_forwardings WHERE user_id = $1

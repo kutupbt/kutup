@@ -39,6 +39,11 @@ export interface StorageUsage {
     bytes: number
     count: number
   }
+  /** The calendars the account owns, with their events (count: events). */
+  calendar: {
+    bytes: number
+    count: number
+  }
 }
 
 export function useStorageUsage(enabled = true) {
@@ -58,7 +63,7 @@ export function storageLevel(usage: Pick<StorageUsage, 'quotaBytes' | 'usedBytes
   return ratio >= 1 ? 'danger' : ratio >= 0.8 ? 'warning' : 'ok'
 }
 
-export type UsageCategoryId = FileKind | 'files' | 'trash' | 'versions' | 'previews' | 'chatMedia' | 'chatHistory' | 'contacts' | 'mail' | 'reserved'
+export type UsageCategoryId = FileKind | 'files' | 'trash' | 'versions' | 'previews' | 'chatMedia' | 'chatHistory' | 'contacts' | 'mail' | 'calendar' | 'reserved'
 
 export interface UsageCategory {
   id: UsageCategoryId
@@ -78,6 +83,7 @@ const COLOR: Record<Exclude<UsageCategoryId, FileKind>, string> = {
   chatHistory: 'var(--usage-chat-history)',
   contacts: 'var(--usage-contacts)',
   mail: 'var(--usage-mail)',
+  calendar: 'var(--usage-calendar)',
   reserved: 'var(--usage-reserved)',
 }
 
@@ -120,6 +126,7 @@ export function usageCategories(usage: StorageUsage, kinds?: KindTotals | null):
     { id: 'chatHistory', bytes: chat.historyBytes + chat.historyMediaBytes, color: COLOR.chatHistory },
     { id: 'mail', bytes: usage.mail.bytes, count: usage.mail.count, color: COLOR.mail },
     { id: 'contacts', bytes: usage.contacts.bytes, count: usage.contacts.count, color: COLOR.contacts },
+    { id: 'calendar', bytes: usage.calendar.bytes, count: usage.calendar.count, color: COLOR.calendar },
     { id: 'reserved', bytes: usage.reservedBytes, color: COLOR.reserved },
   )
   return categories.filter((c) => c.bytes > 0).sort((a, b) => b.bytes - a.bytes)

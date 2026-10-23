@@ -25,12 +25,12 @@ use kutup_chat_proto::group_route::{
     GroupResponseStatusV1, GroupResponseV1, GroupStateAnswerV1,
 };
 use kutup_chat_proto::{
-    AccountManifestHistoryPageV1, AccountManifestPublicationV1, AccountManifestV1,
-    DeliveredEnvelope, DeviceListMismatch, DevicePreKeyBundle, DirectChatSuiteId, EnvelopeType,
-    MailboxPage, OwnChatProfileResponse, PutChatProfileRequest, RegisterChatDeviceRequest,
-    SealedMessageSubmissionV1, SealedSenderRootV1, SealedSenderServerCertificateV1,
-    SealedSenderServicePolicyV1, SealedSenderSuiteId, SendMessagesRequest,
-    SenderCertificateResponseV1, UserPreKeyBundlesResponse,
+    AccountManifestHistoryPageV2, AccountManifestPublicationV2, AccountManifestV2,
+    AccountPreKeyBundlesResponse, DeliveredEnvelope, DeviceListMismatch, DevicePreKeyBundle,
+    DirectChatSuiteId, EnvelopeType, MailboxPage, OwnChatProfileResponse, PutChatProfileRequest,
+    RegisterChatDeviceRequestV2, SealedMessageSubmissionV1, SealedSenderRootV1,
+    SealedSenderServerCertificateV1, SealedSenderServicePolicyV1, SealedSenderSuiteId,
+    SendMessagesRequest, SenderCertificateResponseV1,
 };
 use kutup_crypto::oblivious::GatewayKey;
 use kutup_federation_proto::{
@@ -50,6 +50,7 @@ use crate::transport::{ChatTransport, GroupGatewayAnswer, GroupRelayOutcome, Sen
 use crate::{AccountAuthority, ChatContent, SqliteChatDb};
 
 pub(crate) const SERVER: &str = "example.test";
+use base64::engine::general_purpose::URL_SAFE_NO_PAD as STANDARD_NO_PAD_URL;
 pub(crate) const ISSUED_AT: &str = "2026-10-18T00:00:00Z";
 
 pub(crate) fn rng() -> impl Rng + CryptoRng {
@@ -62,7 +63,7 @@ fn now() -> i64 {
 
 /// One device's published keys; one-time prekeys are handed out once each.
 struct HostedDevice {
-    registration: RegisterChatDeviceRequest,
+    registration: RegisterChatDeviceRequestV2,
     next_ec: usize,
     next_kyber: usize,
 }
@@ -97,7 +98,7 @@ impl HostedDevice {
 #[derive(Default)]
 struct HostedAccount {
     devices: BTreeMap<u32, HostedDevice>,
-    manifests: Vec<AccountManifestV1>,
+    manifests: Vec<AccountManifestV2>,
     profile: Option<PutChatProfileRequest>,
 }
 
@@ -182,6 +183,11 @@ pub(crate) struct World {
     pub(crate) home_down: Cell<bool>,
     /// How many requests reached the home.
     pub(crate) home_requests: Cell<usize>,
+    /// Open provisioning sockets: address → (account, the envelope relayed).
+    provisioning:
+        RefCell<BTreeMap<String, (String, Option<kutup_chat_proto::ProvisionEnvelopeV1>)>>,
+    /// Link tokens given out and not used: token → account.
+    link_tokens: RefCell<BTreeMap<String, String>>,
 }
 
 impl World {
@@ -283,57 +289,122 @@ impl World {
             pin_writes: Cell::new(0),
             home_down: Cell::new(false),
             home_requests: Cell::new(0),
+            provisioning: RefCell::new(BTreeMap::new()),
+            link_tokens: RefCell::new(BTreeMap::new()),
         })
     }
 
-    /// A new account with its first device, its manifest and its profile
+    /// A new account with its first device (a re-registration, as an
+    /// account's first Chat device is), its manifest and its profile
     /// published, sealed sender on. `n` makes its id.
     pub(crate) fn person(self: &Rc<Self>, n: u8) -> Person {
         let account = format!("aci:00000000-0000-4000-8000-0000000000{n:02x}@{SERVER}");
-        let authority = AccountAuthority::derive(&[n; 32]).unwrap();
         let wrapping_key = [n.wrapping_add(100); 32];
-        self.device_of(&account, authority, wrapping_key)
-    }
-
-    /// Another device of `person`'s account, linked as a new install is.
-    #[allow(dead_code)] // for the linked-device tests
-    pub(crate) fn link_device(self: &Rc<Self>, person: &Person) -> Person {
-        let seed = person.authority_seed;
-        self.device_of(
-            &person.account,
-            AccountAuthority::derive(&[seed; 32]).unwrap(),
-            person.wrapping_key,
-        )
-    }
-
-    fn device_of(
-        self: &Rc<Self>,
-        account: &str,
-        authority: AccountAuthority,
-        wrapping_key: [u8; 32],
-    ) -> Person {
         let mut rng = rng();
-        let client = Rc::new(Client {
-            world: Rc::clone(self),
-            account: account.to_string(),
-            device: Cell::new(0),
-        });
+        let client = self.client(&account);
         let db = Rc::new(SqliteChatDb::open_in_memory().unwrap());
-        let mut engine = block_on(Engine::register(
+        let authority = AccountAuthority::derive(&[n; 32]).unwrap();
+        let engine = block_on(Engine::reregister(
             db,
             client.clone(),
-            account.to_string(),
+            account.clone(),
+            &authority,
+            ISSUED_AT,
             32,
             &mut rng,
         ))
         .unwrap();
-        engine.set_sealed_sender_enabled(true);
-        block_on(engine.sync_own_manifest(&authority, ISSUED_AT)).unwrap();
-        block_on(engine.initialize_profile(&wrapping_key, "Someone", &mut rng)).unwrap();
+        self.set_up(engine, client, &account, wrapping_key)
+    }
+
+    /// Another device of `person`'s account, linked from it as Signal links
+    /// one: the new device opens a provisioning socket and shows its code,
+    /// `person` sends it the account identity, and it registers with the
+    /// link token and publishes the manifest that lists it.
+    pub(crate) fn link_device(self: &Rc<Self>, person: &mut Person) -> Person {
+        self.link_device_into(person, Rc::new(SqliteChatDb::open_in_memory().unwrap()))
+    }
+
+    /// [`Self::link_device`] into the store `db` (a browser linked again).
+    pub(crate) fn link_device_into(
+        self: &Rc<Self>,
+        person: &mut Person,
+        db: Rc<dyn crate::db::ChatDb>,
+    ) -> Person {
+        let account = person.account.clone();
+        let authority = AccountAuthority::derive(&[person.authority_seed; 32]).unwrap();
+        let linking = crate::LinkingDevice::new();
+        let settings = crate::ProvisionedSettings {
+            read_receipts: true,
+            typing_indicators: false,
+        };
+        let envelope = self.provisioning_envelope(person, &linking, settings);
+        let client = self.client(&account);
+        let provision =
+            block_on(linking.verify(client.as_ref(), &account, &authority, &envelope)).unwrap();
+        assert_eq!(provision.settings, settings);
+        let engine = block_on(Engine::register_linked(
+            db,
+            client.clone(),
+            account.clone(),
+            provision,
+            32,
+            &mut rng(),
+        ))
+        .unwrap();
+        self.set_up(engine, client, &account, person.wrapping_key)
+    }
+
+    /// The new device's side of linking up to the envelope: its socket and
+    /// code, and `person` sending it the identity through the server.
+    pub(crate) fn provisioning_envelope(
+        self: &Rc<Self>,
+        person: &mut Person,
+        linking: &crate::LinkingDevice,
+        settings: crate::ProvisionedSettings,
+    ) -> kutup_chat_proto::ProvisionEnvelopeV1 {
+        let authority = AccountAuthority::derive(&[person.authority_seed; 32]).unwrap();
+        let address = STANDARD_NO_PAD_URL.encode(uuid::Uuid::new_v4().as_bytes());
+        self.provisioning
+            .borrow_mut()
+            .insert(address.clone(), (person.account.clone(), None));
+        let code = linking.link_code(&address).unwrap();
+        assert!(block_on(person.engine.link_device(&code, settings, &authority)).unwrap());
+        self.provisioning
+            .borrow_mut()
+            .remove(&address)
+            .and_then(|(_, envelope)| envelope)
+            .expect("the linking device relayed an envelope")
+    }
+
+    /// A client of `account` on this server (a new browser of it).
+    pub(crate) fn client(self: &Rc<Self>, account: &str) -> Rc<Client> {
+        Rc::new(Client {
+            world: Rc::clone(self),
+            account: account.to_string(),
+            device: Cell::new(0),
+        })
+    }
+
+    /// What the app does once a device is registered: its manifest entry,
+    /// its profile, its lists.
+    fn set_up(
+        self: &Rc<Self>,
+        mut engine: Engine,
+        client: Rc<Client>,
+        account: &str,
+        wrapping_key: [u8; 32],
+    ) -> Person {
+        let mut rng = rng();
         let authority_seed = account
             .strip_suffix(&format!("@{SERVER}"))
             .and_then(|id| u8::from_str_radix(&id[id.len() - 2..], 16).ok())
             .unwrap();
+        let authority = AccountAuthority::derive(&[authority_seed; 32]).unwrap();
+        client.device.set(engine.session().device_id());
+        engine.set_sealed_sender_enabled(true);
+        block_on(engine.sync_own_manifest(&authority, ISSUED_AT)).unwrap();
+        block_on(engine.initialize_profile(&wrapping_key, "Someone", &mut rng)).unwrap();
         // The account's master key (its authority's, as above) and key
         // binding, as the app hands them over.
         let binding = format!("{authority_seed:08x}-0000-4000-8000-{authority_seed:012x}");
@@ -493,22 +564,38 @@ impl World {
             })
     }
 
-    fn bundles(&self, account: &str, keep: Option<u32>) -> Result<UserPreKeyBundlesResponse> {
+    fn bundles(&self, account: &str, keep: Option<u32>) -> Result<AccountPreKeyBundlesResponse> {
         let mut accounts = self.accounts.borrow_mut();
         let hosted = accounts
             .get_mut(account)
             .ok_or_else(|| ChatError::Transport("no such account".into()))?;
+        let manifest = hosted
+            .manifests
+            .last()
+            .cloned()
+            .ok_or_else(|| ChatError::Transport("the account has no manifest".into()))?;
         let devices = hosted
             .devices
             .iter_mut()
             // Every device is served (the manifest names them all); the
             // asking device's own one-time prekeys aren't used up.
-            .map(|(id, device)| device.bundle(*id, Some(*id) != keep))
+            .map(|(id, device)| {
+                let bundle = device.bundle(*id, Some(*id) != keep);
+                kutup_chat_proto::DevicePreKeyBundleV2 {
+                    device_id: bundle.device_id,
+                    registration_id: bundle.registration_id,
+                    suite: bundle.suite,
+                    signed_pre_key: bundle.signed_pre_key,
+                    kyber_pre_key: bundle.kyber_pre_key,
+                    one_time_pre_key: bundle.one_time_pre_key,
+                }
+            })
             .collect();
-        Ok(UserPreKeyBundlesResponse {
+        Ok(AccountPreKeyBundlesResponse {
             account: account.parse().unwrap(),
+            identity_key: manifest.identity_key.clone(),
             devices,
-            manifest: hosted.manifests.last().cloned(),
+            manifest,
         })
     }
 
@@ -963,10 +1050,32 @@ pub(crate) struct Client {
 
 #[async_trait(?Send)]
 impl ChatTransport for Client {
-    async fn register_device(&self, request: &RegisterChatDeviceRequest) -> Result<u32> {
+    async fn register_device(&self, request: &RegisterChatDeviceRequestV2) -> Result<u32> {
+        request.validate().map_err(ChatError::Transport)?;
         let mut accounts = self.world.accounts.borrow_mut();
         let hosted = accounts.entry(self.account.clone()).or_default();
-        let device_id = hosted.devices.keys().max().map_or(1, |last| last + 1);
+        let device_id = match &request.registration {
+            kutup_chat_proto::DeviceRegistrationV1::Reregistration { manifest } => {
+                // The account authority's next manifest, this device alone:
+                // every other device goes, as Signal's reclaimAccount.
+                manifest
+                    .verify_successor(hosted.manifests.last())
+                    .map_err(ChatError::Transport)?;
+                hosted.devices.clear();
+                hosted.manifests.push((**manifest).clone());
+                kutup_chat_proto::REREGISTRATION_DEVICE_ID
+            }
+            kutup_chat_proto::DeviceRegistrationV1::Link { link_token } => {
+                let owner = self.world.link_tokens.borrow_mut().remove(link_token);
+                if owner.as_deref() != Some(self.account.as_str()) {
+                    return Err(ChatError::Transport("no such link token".into()));
+                }
+                if hosted.manifests.last().map(|m| &m.identity_key) != Some(&request.identity_key) {
+                    return Err(ChatError::Transport("not the account's identity".into()));
+                }
+                (1..).find(|id| !hosted.devices.contains_key(id)).unwrap()
+            }
+        };
         hosted.devices.insert(
             device_id,
             HostedDevice {
@@ -979,7 +1088,123 @@ impl ChatTransport for Client {
         Ok(device_id)
     }
 
-    async fn fetch_bundles(&self, account: &str) -> Result<UserPreKeyBundlesResponse> {
+    async fn create_link_token(&self) -> Result<kutup_chat_proto::ChatLinkTokenResponse> {
+        let token = STANDARD_NO_PAD_URL.encode(rng().random::<[u8; 32]>());
+        self.world
+            .link_tokens
+            .borrow_mut()
+            .insert(token.clone(), self.account.clone());
+        Ok(kutup_chat_proto::ChatLinkTokenResponse {
+            token,
+            expires_at: ISSUED_AT.into(),
+        })
+    }
+
+    async fn relay_provisioning(
+        &self,
+        address: &str,
+        request: &kutup_chat_proto::ProvisioningRelayRequest,
+    ) -> Result<bool> {
+        request.envelope.validate().map_err(ChatError::Transport)?;
+        let mut sockets = self.world.provisioning.borrow_mut();
+        match sockets.get_mut(address) {
+            Some((account, slot)) if *account == self.account && slot.is_none() => {
+                *slot = Some(request.envelope.clone());
+                Ok(true)
+            }
+            _ => Ok(false),
+        }
+    }
+
+    async fn distribute_identity(
+        &self,
+        request: &kutup_chat_proto::AccountIdentityDistributionRequest,
+    ) -> Result<crate::transport::DistributionOutcome> {
+        let sender = self.device.get();
+        if let Err(error) = request.validate(sender) {
+            return match error {
+                kutup_chat_proto::DistributionError::Mismatched(mismatch) => {
+                    Ok(crate::transport::DistributionOutcome::Mismatch(mismatch))
+                }
+                kutup_chat_proto::DistributionError::Invalid(error) => {
+                    Err(ChatError::Transport(error))
+                }
+            };
+        }
+        {
+            let accounts = self.world.accounts.borrow();
+            let hosted = &accounts[&self.account];
+            request
+                .manifest
+                .verify_successor(hosted.manifests.last())
+                .map_err(ChatError::Transport)?;
+            let extra: Vec<u32> = request
+                .devices
+                .iter()
+                .map(|keys| keys.device_id)
+                .filter(|id| !hosted.devices.contains_key(id))
+                .collect();
+            if !extra.is_empty() {
+                return Ok(crate::transport::DistributionOutcome::Mismatch(
+                    DeviceListMismatch {
+                        extra_devices: extra,
+                        ..Default::default()
+                    },
+                ));
+            }
+            let stale: Vec<u32> = request
+                .device_messages
+                .iter()
+                .filter(|message| {
+                    hosted.devices[&message.device_id]
+                        .registration
+                        .registration_id
+                        != message.registration_id
+                })
+                .map(|message| message.device_id)
+                .collect();
+            if !stale.is_empty() {
+                return Ok(crate::transport::DistributionOutcome::Mismatch(
+                    DeviceListMismatch {
+                        stale_devices: stale,
+                        ..Default::default()
+                    },
+                ));
+            }
+        }
+        let mut accounts = self.world.accounts.borrow_mut();
+        let hosted = accounts.get_mut(&self.account).unwrap();
+        hosted
+            .devices
+            .retain(|id, _| request.devices.iter().any(|keys| keys.device_id == *id));
+        for keys in &request.devices {
+            let device = hosted.devices.get_mut(&keys.device_id).unwrap();
+            device.registration.identity_key = request.identity_key.clone();
+            device.registration.registration_id = keys.registration_id;
+            device.registration.signed_pre_key = keys.signed_pre_key.clone();
+            device.registration.last_resort_kyber_pre_key = keys.last_resort_kyber_pre_key.clone();
+            // One-time keys go; the devices refill them.
+            device.registration.one_time_pre_keys.clear();
+            device.registration.one_time_kyber_pre_keys.clear();
+            device.next_ec = 0;
+            device.next_kyber = 0;
+        }
+        hosted.manifests.push(request.manifest.clone());
+        drop(accounts);
+        let account = self.account.clone();
+        self.store_identified(
+            &account,
+            &SendMessagesRequest {
+                sender_device_id: sender,
+                send_id: uuid::Uuid::new_v4().to_string(),
+                envelopes: request.device_messages.clone(),
+                access_token: None,
+            },
+        );
+        Ok(crate::transport::DistributionOutcome::Accepted)
+    }
+
+    async fn fetch_bundles(&self, account: &str) -> Result<AccountPreKeyBundlesResponse> {
         self.world.bundles(account, None)
     }
 
@@ -987,11 +1212,11 @@ impl ChatTransport for Client {
         &self,
         account: &str,
         current_device_id: u32,
-    ) -> Result<UserPreKeyBundlesResponse> {
+    ) -> Result<AccountPreKeyBundlesResponse> {
         self.world.bundles(account, Some(current_device_id))
     }
 
-    async fn fetch_manifest(&self, account: &str) -> Result<Option<AccountManifestV1>> {
+    async fn fetch_manifest(&self, account: &str) -> Result<Option<AccountManifestV2>> {
         if self.world.manifests_down.borrow().contains(account) {
             return Err(ChatError::Transport(
                 "the manifest can't be fetched now".into(),
@@ -1011,7 +1236,7 @@ impl ChatTransport for Client {
         _from_sequence: u64,
         to_sequence: u64,
         page_from_sequence: u64,
-    ) -> Result<AccountManifestHistoryPageV1> {
+    ) -> Result<AccountManifestHistoryPageV2> {
         let manifests = self
             .world
             .accounts
@@ -1026,7 +1251,7 @@ impl ChatTransport for Client {
                     .collect()
             })
             .unwrap_or_default();
-        Ok(AccountManifestHistoryPageV1 {
+        Ok(AccountManifestHistoryPageV2 {
             account: account.parse().unwrap(),
             from_sequence: page_from_sequence,
             to_sequence,
@@ -1037,8 +1262,8 @@ impl ChatTransport for Client {
 
     async fn publish_manifest(
         &self,
-        manifest: &AccountManifestV1,
-    ) -> Result<AccountManifestPublicationV1> {
+        manifest: &AccountManifestV2,
+    ) -> Result<AccountManifestPublicationV2> {
         let mut accounts = self.world.accounts.borrow_mut();
         let hosted = accounts.entry(self.account.clone()).or_default();
         if hosted
@@ -1056,7 +1281,7 @@ impl ChatTransport for Client {
             hosted.devices.retain(|id, _| listed.contains(id));
             hosted.manifests.push(manifest.clone());
         }
-        Ok(AccountManifestPublicationV1 {
+        Ok(AccountManifestPublicationV2 {
             manifest: hosted.manifests.last().cloned().unwrap(),
         })
     }
@@ -1143,7 +1368,7 @@ impl ChatTransport for Client {
         &self,
         account: &str,
         capability: &[u8; 16],
-    ) -> Result<UserPreKeyBundlesResponse> {
+    ) -> Result<AccountPreKeyBundlesResponse> {
         if !self.world.capability_holds(account, capability) {
             return Err(ChatError::Transport("sealed delivery unavailable".into()));
         }
@@ -3208,7 +3433,7 @@ fn group_batches_a_queued_leg_waits_and_reaches_a_device_linked_meanwhile() {
     assert!(!sent.delivered, "a queued leg is not delivered");
     // Meanwhile Bob links a device; the next try meets the new device set,
     // and both his devices get it.
-    let bob2 = world.link_device(&bob);
+    let bob2 = world.link_device(&mut bob);
     block_on(alice.engine.group_legs_due_now_for_testing()).unwrap();
     let flushed = block_on(alice.engine.flush_group_outbox(&mut rng())).unwrap();
     assert_eq!((flushed[0].pending, flushed[0].failed), (0, 0));
@@ -3538,7 +3763,7 @@ fn group_invite_reaches_a_device_linked_just_before() {
     // Alice knows Bob's one device; then Bob links another (or signs in on a
     // clean browser): the invitation's first send meets a device mismatch,
     // and goes again to the devices he has now.
-    let mut bob2 = world.link_device(&bob);
+    let mut bob2 = world.link_device(&mut bob);
     let group_id = block_on(alice.engine.create_group("Team"))
         .unwrap()
         .group_id;
@@ -3597,7 +3822,7 @@ fn group_invite_from_a_stranger_after_a_declined_one_is_taken() {
     let mut bob = world.person(0xb2);
     befriend(&mut alice, &mut bob);
     // A device of Bob's that knows no contacts (a clean browser).
-    let mut bob2 = world.link_device(&bob);
+    let mut bob2 = world.link_device(&mut bob);
     assert!(block_on(bob2.engine.session().contact(&alice.account))
         .unwrap()
         .is_none());
@@ -3674,7 +3899,7 @@ fn group_list_a_member_who_replaces_their_only_device_keeps_the_group() {
     );
 
     // Bob's only device is gone; a new one is set up and the old one revoked.
-    let mut bob2 = world.link_device(&bob);
+    let mut bob2 = world.link_device(&mut bob);
     let authority = AccountAuthority::derive(&[0xb2; 32]).unwrap();
     block_on(
         bob2.engine
@@ -3722,8 +3947,8 @@ fn group_list_a_member_who_replaces_their_only_device_keeps_the_group() {
 
 /// Bob's only device goes before its list write did; a new one is set up
 /// and the old one revoked. Nothing in his list.
-fn bob_replaced_before_his_list_write(world: &Rc<World>, bob: Person) -> Person {
-    let mut bob2 = world.link_device(&bob);
+fn bob_replaced_before_his_list_write(world: &Rc<World>, mut bob: Person) -> Person {
+    let mut bob2 = world.link_device(&mut bob);
     let authority = AccountAuthority::derive(&[bob.authority_seed; 32]).unwrap();
     block_on(
         bob2.engine
@@ -3967,7 +4192,7 @@ fn group_recover_fails_closed_when_the_list_cant_be_read() {
     let group_id = group_of(&mut alice, &mut [&mut bob]);
     let bobs = derived_pseudonym(&bob, &group_id, 0);
     // A fresh device that hasn't read the list this run, which is down.
-    let mut bob2 = world.link_device(&bob);
+    let mut bob2 = world.link_device(&mut bob);
     drop(bob);
     world.group_list_down.set(true);
     let probes = world.state_requests.get();
@@ -4042,7 +4267,7 @@ fn group_claim_goes_past_an_epoch_the_list_learnt_after_the_invitation() {
     let mut alice = world.person(0xa1);
     let mut bob = world.person(0xb2);
     // Bob's second device reads his (empty) list early in its run.
-    let mut bob2 = world.link_device(&bob);
+    let mut bob2 = world.link_device(&mut bob);
     block_on(bob2.engine.sync_group_list(&mut rng())).unwrap();
     // The invitation reaches both devices; the first joins (epoch 0) and
     // leaves again, and the list says so.
@@ -4090,7 +4315,7 @@ fn group_rejoin_after_a_reload_goes_past_the_epoch_the_list_holds() {
     deliver_all(&mut [&mut alice, &mut bob]);
     // A fresh device of Bob's, which hasn't read the list this run, is
     // invited back and accepts: epoch 1, a new pseudonym.
-    let mut bob2 = world.link_device(&bob);
+    let mut bob2 = world.link_device(&mut bob);
     drop(bob);
     block_on(
         alice
@@ -4195,7 +4420,7 @@ fn group_claim_after_a_total_loss_goes_past_a_pseudonym_the_home_has_seen() {
     assert_ne!(pseudonym_of(&mut alice, &group_id, &bob2), first);
     // The list now holds epoch 1, for his next devices.
     bob2.flush_list();
-    let mut bob3 = world.link_device(&bob2);
+    let mut bob3 = world.link_device(&mut bob2);
     block_on(bob3.engine.sync_group_list(&mut rng())).unwrap();
     assert_eq!(bob3.status(&group_id), GroupStatus::Member);
     assert_eq!(
@@ -4276,7 +4501,7 @@ fn group_claim_after_another_device_joined_and_listed_it_is_a_member_too() {
     let world = World::new();
     let mut alice = world.person(0xa1);
     let mut bob = world.person(0xb2);
-    let mut bob2 = world.link_device(&bob);
+    let mut bob2 = world.link_device(&mut bob);
     befriend(&mut alice, &mut bob);
     let group_id = block_on(alice.engine.create_group("Team"))
         .unwrap()
@@ -4307,7 +4532,7 @@ fn group_claim_after_another_device_joined_and_listed_it_is_a_member_too() {
     }
     // Neither device wrote the account out of the group.
     bob2.flush_list();
-    let mut bob3 = world.link_device(&bob);
+    let mut bob3 = world.link_device(&mut bob);
     block_on(bob3.engine.sync_group_list(&mut rng())).unwrap();
     assert_eq!(bob3.status(&group_id), GroupStatus::Member);
     assert_eq!(world.group_state(&group_id).members.len(), 2);
@@ -4318,7 +4543,7 @@ fn group_claim_two_devices_accepting_at_once_are_both_members() {
     let world = World::new();
     let mut alice = world.person(0xa1);
     let mut bob = world.person(0xb2);
-    let mut bob2 = world.link_device(&bob);
+    let mut bob2 = world.link_device(&mut bob);
     befriend(&mut alice, &mut bob);
     let group_id = block_on(alice.engine.create_group("Team"))
         .unwrap()
@@ -4356,7 +4581,7 @@ fn group_list_a_group_left_on_one_device_is_left_on_the_other() {
     let mut carol = world.person(0xc3);
     let group_id = group_of(&mut alice, &mut [&mut bob, &mut carol]);
     bob.flush_list();
-    let mut bob2 = world.link_device(&bob);
+    let mut bob2 = world.link_device(&mut bob);
     block_on(bob2.engine.sync_group_list(&mut rng())).unwrap();
     assert_eq!(bob2.status(&group_id), GroupStatus::Member);
     block_on(bob.engine.leave_group(&group_id, &mut rng())).unwrap();
@@ -4422,7 +4647,7 @@ fn group_list_writes_wait_and_only_joins_and_leaves_write() {
     alice.send_text(&group_id, "hello");
     deliver_all(&mut [&mut alice, &mut bob]);
     assert_eq!(bob.flush_list(), 0);
-    let mut bob2 = world.link_device(&bob);
+    let mut bob2 = world.link_device(&mut bob);
     block_on(bob2.engine.sync_group_list(&mut rng())).unwrap();
     assert_eq!(bob2.flush_list(), 0);
 
@@ -5097,7 +5322,7 @@ fn group_list_an_older_entry_served_under_the_listed_revision_is_refused() {
         .get_mut(&bob.account)
         .unwrap()
         .insert(id, (listed, member));
-    let mut bob2 = world.link_device(&bob);
+    let mut bob2 = world.link_device(&mut bob);
     assert!(block_on(bob2.engine.sync_group_list(&mut rng())).is_err());
     assert!(block_on(bob2.engine.list_groups()).unwrap().is_empty());
 }

@@ -594,6 +594,20 @@ pub static CHAT_GROUP_CREATES_RELAY: LazyLock<RateLimiter> =
 pub static CHAT_KEYS_ACCOUNT: LazyLock<RateLimiter> =
     LazyLock::new(|| RateLimiter::registered(Limit::ChatKeysAccount));
 
+/// Link tokens asked for (docs/plans/account-identity-key.md).
+pub static CHAT_LINK_TOKENS: LazyLock<RateLimiter> =
+    LazyLock::new(|| RateLimiter::registered(Limit::ChatLinkTokens));
+/// Provisioning sockets opened, per address: a device waiting to be linked
+/// has no credential yet.
+pub static CHAT_PROVISIONING_SOCKETS: LazyLock<RateLimiter> =
+    LazyLock::new(|| RateLimiter::registered(Limit::ChatProvisioningSockets));
+/// Provisioning messages relayed, per account.
+pub static CHAT_PROVISIONING_RELAYS: LazyLock<RateLimiter> =
+    LazyLock::new(|| RateLimiter::registered(Limit::ChatProvisioningRelays));
+/// Identity distributions, per account.
+pub static CHAT_IDENTITY_DISTRIBUTIONS: LazyLock<RateLimiter> =
+    LazyLock::new(|| RateLimiter::registered(Limit::ChatIdentityDistributions));
+
 /// Coarse 120 / minute / IP outer wall for chat bundle fetches. This is
 /// deliberately looser than the account budget so unrelated mobile users behind
 /// one CGNAT address do not consume each other's primary allowance.
@@ -965,6 +979,7 @@ pub fn spawn_cleanup() {
             crate::handlers::pass_icons::PASS_ICON_FETCHES.cleanup();
             crate::handlers::mail_images::MAIL_IMAGES.cleanup();
             crate::handlers::mail_images::cleanup();
+            crate::handlers::calendar::WRITES.cleanup();
         }
     });
 }

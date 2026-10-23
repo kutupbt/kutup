@@ -22,22 +22,22 @@ said) · 🟡 partial (what is missing is said) · ❌ missing. "Kept" means
 Kutup reads and saves the data unchanged (other KeePass apps still see it)
 but offers no way to see or change it.
 
-**Summary** (rows per area, 2026-10-20):
+**Summary** (rows per area, 2026-10-21):
 
 | Area | ✅ | 🟡 | ❌ |
 |---|---|---|---|
-| The database (vault) | 17 | 6 | 17 |
+| The database (vault) | 21 | 6 | 13 |
 | Groups (folders) | 5 | 1 | 6 |
 | Entries | 8 | 6 | 8 |
-| Bulk actions and the entry list | 3 | 1 | 11 |
+| Bulk actions and the entry list | 8 | 1 | 6 |
 | Search | 1 | 3 | 3 |
 | Password generator | 2 | 2 | 3 |
 | One-time codes, passkeys, SSH, desktop integration | 5 | 3 | 10 |
 | Health report | 2 | 1 | 4 |
 | Locking and unlocking | 5 | 1 | 2 |
-| Sync, sharing and merges | 6 | 0 | 3 |
+| Sync, sharing and merges | 7 | 0 | 2 |
 | Platforms | 2 | 4 | 4 |
-| **All** | **56** | **28** | **71** |
+| **All** | **66** | **28** | **61** |
 
 ## The database (vault)
 
@@ -55,12 +55,12 @@ but offers no way to see or change it.
 | Bring in an existing vault (`.kdbx` upload) | Database → Open | ✅ | "Upload a .kdbx" (`features/UploadVaultDialog.tsx`): checked by its header (KeePass 1, KDBX 3.0 and unknown formats refused with their own message) and that its password or key file opens it before anything is uploaded; up to the administrators' `passVaultMaxBytes` (64 MiB at first); its key kept in the account by default; a KDBX 3.1 or 4.0 file is said to be saved as 4.1 at its first change |
 | Description, default user name | Database settings → General | 🟡 | the default user name fills new entries (`EntryEditor.tsx`), but neither can be changed: `updateVault` carries them and the UI only passes the current values on |
 | Public metadata (name, icon, colour on the unlock screen) | Database settings → General | ❌ | kept |
-| Change the password | Database settings → Security | ❌ | `changeKey` exists in `kutup-pass-wasm` and `vault/client.ts` but nothing in the UI calls it; the CLI has no command either. A vault's key cannot be changed in Kutup at all (needed too after removing a member from a shared folder, research 19 "Unlocking…") |
-| Key file: **create** (generate) | Security → Add Key File → Generate | ❌ | no way to make one; `KeyFileInput.tsx` only picks an existing file |
+| Change the password | Database settings → Security | ✅ | the vault's menu → "Change vault key…" (`features/ChangeKeyDialog.tsx`, rules in `lib/keyChange.ts`): keep, change (typed twice, or generated) or remove the password, one key part at least; saved straight to Drive or undone (`VaultSession.changeKey`, `abandonKeyChange`), then kept in the account again or the old kept key forgotten; says that Drive's earlier versions still open with the old key and copies already downloaded can't be revoked, and lets the owner delete the earlier versions and the first upload (`DELETE …/versions/original`); spec 168. Not in the CLI |
+| Key file: **create** (generate) | Security → Add Key File → Generate | ✅ | `kdbx::generate_key_file`: 32 random bytes in KeePass's XML v2, byte for byte as KeePassXC writes it (`Name.keyx`); downloaded only, never sent anywhere; the change waits until the person says it is saved |
 | Key file: **open** a vault with one (alone or with a password) | unlock screen | ✅ | `UnlockVault.tsx` takes a password, a key file or both; also when another device saved under a new key (`TheirsKeyDialog.tsx`); every key-file kind (XML v1/v2, 32-byte, hex, any file) |
 | Key file: **new vault** protected by one | wizard → credentials | ✅ | `CreateVaultDialog.tsx`, "A password I choose", with or without a password; an existing file only (see "create") |
-| Key file: **add** to an existing vault | Security → Add Key File | ❌ | as "Change the password": `changeKey` is not wired |
-| Key file: **remove** from an existing vault | Security → Remove Key File | ❌ | as above |
+| Key file: **add** to an existing vault | Security → Add Key File | ✅ | "Change vault key…": generated, or one the person has; the password part kept (also when known only as its hash, opened with the kept key) |
+| Key file: **remove** from an existing vault | Security → Remove Key File | ✅ | as above, while a password stays |
 | Key file kept with the sign-in | (none) | ✅ | beyond KeePassXC: the derived key element sealed under the account key (`crates/kutup-pass/src/kept.rs`), so the website and `kutup sync` open it without the file |
 | YubiKey / OnlyKey challenge-response | `keys/ChallengeResponseKey.cpp`, `keys/drivers` | ❌ | neither open, create, add nor remove: the crate's challenge-response feature is off, and the web would need WebHID (Chromium only; research 19 "Unlocking…") |
 | KDF settings (Argon2d/id, AES-KDF; memory, iterations, parallelism; "1 second" benchmark) | Security → Encryption | ❌ | new vaults get Argon2id 64 MiB, 10 iterations, fixed (`crates/kutup-pass/src/edit.rs`); an existing vault's KDF is kept; no setting |
@@ -130,22 +130,26 @@ but offers no way to see or change it.
 
 ## Bulk actions and the entry list
 
-Verified in `features/VaultPage.tsx` (the list) and `features/EntryDetail.tsx`
-(one entry): the list rows are plain buttons that open one entry; there is
-no selection state anywhere in the app.
+Verified in `features/EntryList.tsx` (the list, its selection and the
+selection bar), `features/entryDrop.ts` (groups as drop targets) and
+`features/EntryDetail.tsx` (one entry). Several entries change as one edit
+(one save, one merge step): `moveEntries`, `deleteEntries`,
+`recycleEntries` (never for good) and `restoreEntries` in
+`crates/kutup-pass/src/edit.rs`, all or nothing. A
+read-only vault has no selection and no dragging.
 
 | Feature | KeePassXC | Kutup Pass | Notes / where |
 |---|---|---|---|
-| Select several entries (Ctrl/Shift-click) | `gui/entry/EntryView.cpp` (`ExtendedSelection`) | ❌ | no checkboxes, no Ctrl/Shift selection |
-| Select all (Ctrl+A) | Ctrl+A in the list | ❌ | |
+| Select several entries (Ctrl/Shift-click) | `gui/entry/EntryView.cpp` (`ExtendedSelection`) | ✅ | a checkbox on each row (shown on hover, and always once one is selected), Ctrl/Cmd-click toggles, Shift-click takes the range from the last one clicked (`lib/selection.ts`); a plain click opens the entry; Esc clears; spec 167 |
+| Select all (Ctrl+A) | Ctrl+A in the list | ✅ | what the list shows (the group and the search) |
 | Move **one** entry to another group | drag to a group | ✅ | the folder button in the entry's header → "Move to" with the vault's groups (`EntryDetail.tsx`, `moveEntry`) |
-| Move **several** entries (or all of a group, select all then move) | select, drag to a group | ❌ | one at a time only; `moveEntry` takes one id (it would be one edit per entry, or a new batch op) |
+| Move **several** entries (or all of a group, select all then move) | select, drag to a group | ✅ | the selection bar's "Move to group", one `moveEntries` edit |
 | Move one entry to the recycle bin | Delete | ✅ | asks first; for good inside the bin or with it off |
-| Move several to the recycle bin, delete several | select, Delete | ❌ | |
-| Restore from the recycle bin | drag back | 🟡 | "Restore" puts it in the **top-level** group, not where it was (KDBX's previous parent group is kept but not used) |
+| Move several to the recycle bin, delete several | select, Delete | ✅ | asks first, naming the count; for good (said so, "can't be undone") in the bin or with it off |
+| Restore from the recycle bin | drag back | ✅ | one entry or several, each back to the group it was in (KDBX's previous parent group), or the top group when that one is gone or in the bin; or "Move to" another group |
 | Empty the recycle bin | Recycle bin → Empty | ✅ | |
 | Clone several | Clone | ❌ | |
-| Drag and drop (entries to groups, groups into groups, Ctrl to copy) | `EntryView`, `GroupView` | ❌ | none anywhere |
+| Drag and drop (entries to groups, groups into groups, Ctrl to copy) | `EntryView`, `GroupView` | 🟡 | entries (one, or the selection) onto a group, or onto the recycle bin while it is on (`recycleEntries`, which refuses rather than delete for good); not groups into groups, no Ctrl to copy |
 | Sort the list | click a column | ❌ | always by title, A–Z (natural order); no other order |
 | Choose columns (user name, URL, modified, expiry, attachments, TOTP…) | header menu | ❌ | each row shows the icon, title and user name (else URL) |
 | Move entries up and down (manual order) | Entries → Move up/down | ❌ | |
@@ -236,7 +240,7 @@ no selection state anywhere in the app.
 | Share a whole vault with people | KeeShare to a shared file, or share the file | ✅ | a vault in a shared Drive folder; viewers get it read-only (`session.canEdit`); each member keeps the key under their own account |
 | Share one group (KeeShare import/export/sync containers) | `src/keeshare`, `KeeShare.adoc` | ❌ | a separate vault in a shared folder does the job today |
 | Share a single entry | (no) | ❌ | roadmap "Pass next" (research 19 §5.7) |
-| Change the key after removing a member | change the password | ❌ | see "Change the password" |
+| Change the key after removing a member | change the password | ✅ | "Change vault key…" (see "Change the password"); members' kept keys stop opening it and they are asked for the new one |
 
 ## Platforms
 
@@ -257,22 +261,23 @@ no selection state anywhere in the app.
 
 What people hit first, then what blocks moving from KeePassXC:
 
-1. **Several entries at once** (user report): multi-select (Ctrl/Shift and
-   checkboxes), select all, then **Move to group**, move to the recycle
-   bin, delete; drag and drop of entries onto groups. Today only one
-   entry moves, from its own header. A batch of `moveEntry`/`deleteEntry`
-   as one edit (one save, one history step), as Drive's selection does.
+1. ~~**Several entries at once**~~ (user report): done. Multi-select (Ctrl/Shift
+   and checkboxes), select all, then Move to group, move to the recycle
+   bin, restore each to where it was, delete for good; drag and drop of
+   entries onto groups and the bin. Each as one edit (`moveEntries`,
+   `deleteEntries`, `recycleEntries`, which never deletes for good, and
+   `restoreEntries`). Spec 167.
 2. ~~**Vault management from the vault list**~~ (user report): done. A menu
    on each vault, also while locked (rename, move, duplicate, download,
    show in Drive, delete), and uploading an existing `.kdbx`; spec 166.
-3. **Change the vault's key** (user report, with item 1's urgency): a
+3. ~~**Change the vault's key**~~ (user report, with item 1's urgency): done, spec 168. A
    Vault settings → Security page wiring `changeKey`: change the password,
    **generate** a key file (KeePassXC's 32-byte random key in its XML v2
    form, downloaded once), **add** or **remove** a key file, and re-keep
    the new key in the account. Needed too for shared vaults after a member
    leaves.
-4. **Move groups** (`moveGroup` exists in the core), restore deleted groups,
-   and restore entries to where they were.
+4. **Move groups** (`moveGroup` exists in the core) and restore deleted
+   groups (entries already go back to where they were, item 1).
 5. **Vault settings**: description, default user name, recycle bin on/off,
    history limits, KDF (Argon2id memory and iterations, with a "how long
    to open" test), compression.

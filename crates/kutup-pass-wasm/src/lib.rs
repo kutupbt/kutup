@@ -76,6 +76,15 @@ pub fn reseal_kept_key(
     Ok(STANDARD.encode(sealed))
 }
 
+/// A new KeePassXC key file (XML v2, 32 random bytes): for the person to
+/// download, never sent anywhere.
+#[wasm_bindgen(js_name = generateKeyFile)]
+pub fn generate_key_file() -> Result<Vec<u8>, JsValue> {
+    Ok(kutup_pass::kdbx::generate_key_file()
+        .map_err(js_error)?
+        .to_vec())
+}
+
 fn to_js<T: Serialize>(value: &T) -> Result<JsValue, JsValue> {
     // `null`, not `undefined`, for what is missing.
     value
@@ -110,6 +119,9 @@ fn key(password: Option<String>, key_file: Option<Vec<u8>>) -> Result<VaultKey, 
 struct MergeOutcome {
     report: kutup_pass::MergeReport,
     differs_from_theirs: bool,
+    /// Theirs opened with this vault's own key (not an older one, not one
+    /// given): a key change this vault holds is in Drive already.
+    theirs_under_current_key: bool,
 }
 
 /// One open vault.
@@ -117,9 +129,11 @@ struct MergeOutcome {
 pub struct Vault {
     db: Database,
     key: VaultKey,
-    /// The key was changed and not saved since: Drive's copy still opens
-    /// with the old one, so the new one is not kept yet.
-    key_unsaved: bool,
+    /// The key before a change Drive does not hold yet (and when the key was
+    /// last changed before): Drive's copy still opens with it, so the new
+    /// key is not kept yet, and a failed save goes back to it
+    /// (`abandonKeyChange`).
+    previous_key: Option<(VaultKey, Option<chrono::NaiveDateTime>)>,
 }
 
 #[wasm_bindgen]
@@ -136,7 +150,7 @@ impl Vault {
         Ok(Vault {
             db,
             key,
-            key_unsaved: false,
+            previous_key: None,
         })
     }
 
@@ -172,7 +186,7 @@ impl Vault {
         Ok(Vault {
             db,
             key,
-            key_unsaved: false,
+            previous_key: None,
         })
     }
 
@@ -218,9 +232,9 @@ impl Vault {
 
     /// The vault as KDBX 4.1 file contents.
     pub fn save(&mut self) -> Result<Vec<u8>, JsValue> {
-        let saved = kutup_pass::save(&self.db, &self.key).map_err(js_error)?;
-        self.key_unsaved = false;
-        Ok(saved)
+        // A key change is done only once Drive holds the file it saved
+        // (`keyChangeSaved`); until then it can still be undone.
+        kutup_pass::save(&self.db, &self.key).map_err(js_error)
     }
 
     /// Merges this vault (ours) with `theirs` against `base` (the version
@@ -241,15 +255,33 @@ impl Vault {
             Some(contents) => kutup_pass::open(&contents, &self.key).ok(),
             None => None,
         };
+        // Theirs under this vault's key; or, while a key change isn't known to
+        // be in Drive, under the key before it (another device saved under
+        // it meanwhile): taken in, and this vault keeps its new key; or under
+        // a key given (another device changed it), which this vault takes.
+        let mut theirs_under_previous_key = false;
         let (theirs_db, theirs_key) = match kutup_pass::open(theirs, &self.key) {
             Ok(db) => (db, None),
-            Err(_) if theirs_password.is_some() || theirs_key_file.is_some() => {
-                let other = key(theirs_password, theirs_key_file)?;
-                let db = kutup_pass::open(theirs, &other).map_err(open_error)?;
-                (db, Some(other))
+            Err(error) => {
+                let previous = self
+                    .previous_key
+                    .as_ref()
+                    .and_then(|(key, _)| kutup_pass::open(theirs, key).ok());
+                match previous {
+                    Some(db) => {
+                        theirs_under_previous_key = true;
+                        (db, None)
+                    }
+                    None if theirs_password.is_some() || theirs_key_file.is_some() => {
+                        let other = key(theirs_password, theirs_key_file)?;
+                        let db = kutup_pass::open(theirs, &other).map_err(open_error)?;
+                        (db, Some(other))
+                    }
+                    None => return Err(js_error(error)),
+                }
             }
-            Err(error) => return Err(js_error(error)),
         };
+        let theirs_under_current_key = !theirs_under_previous_key && theirs_key.is_none();
         let (merged, report) = kutup_pass::merge(base.as_ref(), &self.db, &theirs_db);
         let mut a = merged.clone();
         a.config = theirs_db.config.clone();
@@ -260,7 +292,10 @@ impl Vault {
         }
         to_js(&MergeOutcome {
             report,
-            differs_from_theirs,
+            // Theirs under the old key differs whatever its entries: it must
+            // be saved again, under the new one.
+            differs_from_theirs: differs_from_theirs || theirs_under_previous_key,
+            theirs_under_current_key,
         })
     }
 
@@ -268,9 +303,9 @@ impl Vault {
     /// secrets"), sealed under the master key for `binding` and vault
     /// `file_id`: the key this vault was opened or made with, so it is known
     /// to open it. `generated`: its password is one Kutup Pass made, kept to
-    /// be shown. Base64. Fails for a vault opened with a kept key (only its
-    /// password's hash is known here), and after `changeKey` until `save`
-    /// (Drive's copy still opens with the old key).
+    /// be shown (then the key must hold the password itself, not only its
+    /// hash). Base64. Fails after `changeKey` until `keyChangeSaved` (Drive's
+    /// copy still opens with the old key).
     #[wasm_bindgen(js_name = keepKey)]
     pub fn keep_key(
         &self,
@@ -280,7 +315,7 @@ impl Vault {
         revision: f64,
         generated: bool,
     ) -> Result<String, JsValue> {
-        if self.key_unsaved {
+        if self.previous_key.is_some() {
             return Err(js_error(
                 "save the vault with its new key before keeping it",
             ));
@@ -290,8 +325,13 @@ impl Vault {
             binding,
             &vault_id(file_id)?,
             revision_arg(revision)?,
+            // This vault's own key, never bytes from the page.
             &self.key,
-            generated,
+            if generated {
+                kutup_pass::kept::PasswordKind::Generated
+            } else {
+                kutup_pass::kept::PasswordKind::Chosen
+            },
         )
         .map_err(js_error)?;
         Ok(STANDARD.encode(sealed))
@@ -317,18 +357,92 @@ impl Vault {
         )
     }
 
-    /// Changes the vault's key (saved with the next `save`).
+    /// Changes the vault's key: saved with the next `save`, done once Drive
+    /// holds that (`keyChangeSaved`), undone with `abandonKeyChange`.
+    /// `shownPassword`: with the password kept, the password Kutup Pass
+    /// generated for the vault as the account keeps it (to stay one that can
+    /// be shown). Used only if it is this vault's password now; otherwise
+    /// the password part is kept as it is and the answer says it can't be
+    /// shown (`{ passwordShowable }`), never a stale copy put in its place.
     #[wasm_bindgen(js_name = changeKey)]
     pub fn change_key(
         &mut self,
         password: Option<String>,
+        keep_password: bool,
+        shown_password: Option<String>,
         key_file: Option<Vec<u8>>,
+        keep_key_file: bool,
         now_ms: f64,
-    ) -> Result<(), JsValue> {
-        self.key = key(password, key_file)?;
-        self.key_unsaved = true;
-        self.db.meta.master_key_changed = Some(time(now_ms)?);
-        Ok(())
+    ) -> Result<JsValue, JsValue> {
+        // What is kept comes from this vault's own key, never from the page.
+        if (keep_password && password.is_some())
+            || (keep_key_file && key_file.is_some())
+            || (!keep_password && shown_password.is_some())
+        {
+            return Err(js_error(
+                "keep a part of the key or give a new one, not both",
+            ));
+        }
+        let shown = shown_password.filter(|shown| self.key.has_this_password(shown));
+        let mut new = match &shown {
+            Some(shown) => self.key.keeping(false, keep_key_file).with_password(shown),
+            None => self.key.keeping(keep_password, keep_key_file),
+        };
+        if let Some(password) = password {
+            new = new.with_password(&password);
+        }
+        if let Some(file) = key_file {
+            new = new.with_key_file(&file);
+        }
+        new.check().map_err(js_error)?;
+        let changed = Some(time(now_ms)?);
+        let old = std::mem::replace(&mut self.key, new);
+        // A second change before a save still goes back to the saved key.
+        if self.previous_key.is_none() {
+            self.previous_key = Some((old, self.db.meta.master_key_changed));
+        }
+        self.db.meta.master_key_changed = changed;
+        #[derive(Serialize)]
+        #[serde(rename_all = "camelCase")]
+        struct Changed {
+            password_showable: bool,
+        }
+        to_js(&Changed {
+            password_showable: shown.is_some(),
+        })
+    }
+
+    /// Drive holds the file saved with the new key: the change is done, and
+    /// the new key can be kept.
+    #[wasm_bindgen(js_name = keyChangeSaved)]
+    pub fn key_change_saved(&mut self) {
+        self.previous_key = None;
+    }
+
+    /// Goes back to the key the vault was saved with, after a change whose
+    /// save did not reach Drive: the change is undone, never left half-made.
+    #[wasm_bindgen(js_name = abandonKeyChange)]
+    pub fn abandon_key_change(&mut self) {
+        if let Some((key, changed)) = self.previous_key.take() {
+            self.key = key;
+            self.db.meta.master_key_changed = changed;
+        }
+    }
+
+    /// What the vault's key is made of: `{ password, keyFile }` (a password
+    /// known only as its hash, opened with a kept key, counts).
+    #[wasm_bindgen(js_name = keyParts)]
+    pub fn key_parts(&self) -> Result<JsValue, JsValue> {
+        #[derive(Serialize)]
+        #[serde(rename_all = "camelCase")]
+        struct KeyParts {
+            password: bool,
+            key_file: bool,
+        }
+        to_js(&KeyParts {
+            password: self.key.has_password(),
+            key_file: self.key.key_file().is_some(),
+        })
     }
 }
 

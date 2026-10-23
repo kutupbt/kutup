@@ -121,6 +121,7 @@ services:
       KUTUP_CONTACTS_URL: http://contacts.a.test:${KUTUP_FED_A_PORT:-39081}
       KUTUP_MAIL_URL: http://mail.a.test:${KUTUP_FED_A_PORT:-39081}
       KUTUP_PASS_URL: http://pass.a.test:${KUTUP_FED_A_PORT:-39081}
+      KUTUP_CALENDAR_URL: http://calendar.a.test:${KUTUP_FED_A_PORT:-39081}
       # Group calls hosted on A (no SFU runs: the live test checks tokens).
       CHAT_SFU_URL: ws://sfu.a.test
       CHAT_SFU_API_KEY: federation-sfu-key
@@ -131,7 +132,6 @@ services:
       FEDERATION_SERVER_NAME: a.test
       FEDERATION_SIGNING_KEY: VVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVVU=
       FEDERATION_TEST_ALLOW_PRIVATE: "true"
-      CHAT_MAX_ACTIVE_DEVICES: 10
       CHAT_SEALED_SENDER_POLICY: '{"policyVersion":1,"canonicalDomain":"a.test","suite":1,"roots":[{"rootId":"6bd42eda5a2a7dea39e542961af827b14066a65649c9867437f07d882f076a2b","publicKey":"Bcgj9bmc+8OqKwWos4IzA9hc2cLItxOTZPcKjA7PptBi","activatesAt":0}],"serverCertificates":[{"certificateId":1001,"rootId":"6bd42eda5a2a7dea39e542961af827b14066a65649c9867437f07d882f076a2b","certificate":"CiYI6QcSIQUvslThY0S8VFBEbhLtBC9jvpme+XGdf4C8qn7yNg3VchJAGA7i+/Upk2Hmm//XaKvThXf8anTsZyzDv9DGD5lsprF1MqI75xa36Xpi2ML7hHM3cOlmOer2jUGR9XA1/t1DjQ==","activatesAt":0,"expiresAt":4102444800}],"senderCertificateLifetimeSeconds":86400,"maximumClockSkewSeconds":300,"directChatSuite":1}'
       CHAT_SEALED_SENDER_ONLINE_PRIVATE_KEY: mCqE4wC1lUNmYH3ToO60pCl4QGu8STnZJUI6OhnLNGA=
       CHAT_MLS_CONTROL_SIGNING_KEY: d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3d3c=
@@ -173,13 +173,13 @@ services:
       KUTUP_CONTACTS_URL: http://contacts.b.test:${KUTUP_FED_B_PORT:-39082}
       KUTUP_MAIL_URL: http://mail.b.test:${KUTUP_FED_B_PORT:-39082}
       KUTUP_PASS_URL: http://pass.b.test:${KUTUP_FED_B_PORT:-39082}
+      KUTUP_CALENDAR_URL: http://calendar.b.test:${KUTUP_FED_B_PORT:-39082}
       ALLOWED_ORIGINS: http://127.0.0.1:39082
       ADMIN_ACCOUNT: adminb:federation-admin-temp
       SEAWEEDFS_MASTER_URL: ""
       FEDERATION_SERVER_NAME: b.test
       FEDERATION_SIGNING_KEY: ZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmY=
       FEDERATION_TEST_ALLOW_PRIVATE: "true"
-      CHAT_MAX_ACTIVE_DEVICES: 10
       CHAT_SEALED_SENDER_POLICY: '{"policyVersion":1,"canonicalDomain":"b.test","suite":1,"roots":[{"rootId":"5ed789aa5eecb1f3ed0796c63a239d216e60b9a35a71764ecc2ffab2a2056d87","publicKey":"BZ6TyjkRS/lF8WzpRMUf6+RcHa8Fnt71SmksHdExK6o2","activatesAt":0}],"serverCertificates":[{"certificateId":2001,"rootId":"5ed789aa5eecb1f3ed0796c63a239d216e60b9a35a71764ecc2ffab2a2056d87","certificate":"CiYI0Q8SIQW7kkXV3BgpWEU5E+TvYkY4xLesorhLDnmQt6YjDx7kTxJAUAc1No6JDsOpAscz0FQrlL9GwEs+qqp8DsxeceeA7ITIlXi4XKtg7s0oavo190YvKxTnId8CuSbB0VoDICCVjw==","activatesAt":0,"expiresAt":4102444800}],"senderCertificateLifetimeSeconds":86400,"maximumClockSkewSeconds":300,"directChatSuite":1}'
       CHAT_SEALED_SENDER_ONLINE_PRIVATE_KEY: GOLN7fF5VgnzycQY39P0VdvANiJR2doFH2xaatQLilM=
       CHAT_MLS_CONTROL_SIGNING_KEY: iIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIg=
@@ -211,6 +211,7 @@ services:
       KUTUP_CONTACTS_URL: http://contacts.a.test:${KUTUP_FED_A_PORT:-39081}
       KUTUP_MAIL_URL: http://mail.a.test:${KUTUP_FED_A_PORT:-39081}
       KUTUP_PASS_URL: http://pass.a.test:${KUTUP_FED_A_PORT:-39081}
+      KUTUP_CALENDAR_URL: http://calendar.a.test:${KUTUP_FED_A_PORT:-39081}
 
   frontend-b:
     image: ${KUTUP_FEDERATION_FRONTEND_IMAGE:-kutup-federation-frontend:local}
@@ -228,6 +229,7 @@ services:
       KUTUP_CONTACTS_URL: http://contacts.b.test:${KUTUP_FED_B_PORT:-39082}
       KUTUP_MAIL_URL: http://mail.b.test:${KUTUP_FED_B_PORT:-39082}
       KUTUP_PASS_URL: http://pass.b.test:${KUTUP_FED_B_PORT:-39082}
+      KUTUP_CALENDAR_URL: http://calendar.b.test:${KUTUP_FED_B_PORT:-39082}
 
   edge-a:
     image: nginx:alpine

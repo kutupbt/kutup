@@ -332,7 +332,7 @@ kutup/
 │   ├── kutup-crypto/        # Canonical Kutup-owned E2EE formats
 │   │   ├── src/{kdf,account_envelope,drive_envelope,drive_object,named_share,stream,envelope}.rs
 │   │   └── tests/vectors/   # Checked-in byte-parity vectors
-│   ├── kutup-crypto-wasm/   # Browser bindings for canonical crypto
+│   ├── kutup-crypto-wasm/   # Browser bindings for canonical crypto (built twice: crypto, and crypto-calendar with calendars)
 │   ├── kutup-chat-proto/    # Typed Chat wire DTOs and validation
 │   ├── kutup-federation-proto/ # Shared authenticated federation types
 │   ├── kutup-pass/          # Kutup Pass core: KeePass (KDBX) vaults, their edits and three-way merge

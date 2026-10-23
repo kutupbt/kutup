@@ -250,21 +250,42 @@ pub async fn chat_group_avatar_limits(pool: &PgPool) -> Result<AvatarLimits, sql
     Ok(limits.validate().unwrap_or(default))
 }
 
-/// How many group delivery capabilities one account may publish (one per
-/// group it is in; docs/plans/pairwise-groups.md, slice 2 §2), set under
-/// Administration → Server settings.
+/// How many group delivery capabilities one account may publish
+/// (docs/plans/pairwise-groups.md, slice 2 §2), set under Administration →
+/// Server settings. Clients pad theirs to a multiple of 8 with dummies (so
+/// the count says little about how many groups an account is in), and a
+/// rotation holds the old and the new for a while: the limit is a multiple
+/// of 8, at least 16 (one group mid-rotation). 4096 at first, about 500
+/// groups with room for rotations; each capability is a 32-byte hash.
 pub const CHAT_GROUP_CAPABILITIES_PER_ACCOUNT: &str = "chat_group_capabilities_per_account";
-pub const DEFAULT_CHAT_GROUP_CAPABILITIES_PER_ACCOUNT: i64 = 1024;
+pub const DEFAULT_CHAT_GROUP_CAPABILITIES_PER_ACCOUNT: i64 = 4096;
+pub const MIN_CHAT_GROUP_CAPABILITIES_PER_ACCOUNT: i64 = 16;
+pub const MAX_CHAT_GROUP_CAPABILITIES_PER_ACCOUNT: i64 = 100_000;
+/// The block clients pad their capabilities to.
+pub const CHAT_GROUP_CAPABILITY_BLOCK: i64 = 8;
 
 pub fn validate_chat_group_capabilities_per_account(value: i64) -> Result<i64, &'static str> {
-    if (1..=100_000).contains(&value) {
+    if (MIN_CHAT_GROUP_CAPABILITIES_PER_ACCOUNT..=MAX_CHAT_GROUP_CAPABILITIES_PER_ACCOUNT)
+        .contains(&value)
+        && value % CHAT_GROUP_CAPABILITY_BLOCK == 0
+    {
         Ok(value)
     } else {
-        Err("group capabilities per account must be between 1 and 100000")
+        Err("group capabilities per account must be a multiple of 8 between 16 and 100000")
     }
 }
 
-/// The capability limit now: the stored one, else 1024.
+/// A stored limit as it applies: rounded down to a multiple of 8 and held
+/// within the bounds, never refused (a value stored before the rule).
+fn applied_capabilities_per_account(value: i64) -> i64 {
+    (value - value.rem_euclid(CHAT_GROUP_CAPABILITY_BLOCK)).clamp(
+        MIN_CHAT_GROUP_CAPABILITIES_PER_ACCOUNT,
+        MAX_CHAT_GROUP_CAPABILITIES_PER_ACCOUNT
+            - MAX_CHAT_GROUP_CAPABILITIES_PER_ACCOUNT % CHAT_GROUP_CAPABILITY_BLOCK,
+    )
+}
+
+/// The capability limit now: the stored one as it applies, else 4096.
 pub async fn chat_group_capabilities_per_account(pool: &PgPool) -> Result<i64, sqlx::Error> {
     Ok(
         sqlx::query_scalar::<_, String>("SELECT value FROM site_settings WHERE key=$1")
@@ -272,7 +293,7 @@ pub async fn chat_group_capabilities_per_account(pool: &PgPool) -> Result<i64, s
             .fetch_optional(pool)
             .await?
             .and_then(|value| value.parse::<i64>().ok())
-            .and_then(|value| validate_chat_group_capabilities_per_account(value).ok())
+            .map(applied_capabilities_per_account)
             .unwrap_or(DEFAULT_CHAT_GROUP_CAPABILITIES_PER_ACCOUNT),
     )
 }
@@ -390,6 +411,131 @@ pub const CHAT_MULTI_SETTINGS: [NumericSetting; 8] = [
     CHAT_MULTI_ORIGIN_BYTES_PER_MIN,
 ];
 
+/// Calendars (docs/plans/calendar.md, E1): how many one account owns, the
+/// events one calendar holds, and the changes one events sync carries
+/// (Proton's 25, its practical event cap, and its batch of 10).
+pub const CALENDARS_PER_ACCOUNT: NumericSetting = NumericSetting {
+    key: "calendars_per_account",
+    field: "calendarsPerAccount",
+    default: 25,
+    min: 1,
+    max: 1000,
+};
+pub const CALENDAR_EVENTS_PER_CALENDAR: NumericSetting = NumericSetting {
+    key: "calendar_events_per_calendar",
+    field: "calendarEventsPerCalendar",
+    default: 25_000,
+    min: 1,
+    max: 1_000_000,
+};
+pub const CALENDAR_SYNC_BATCH: NumericSetting = NumericSetting {
+    key: "calendar_sync_batch",
+    field: "calendarSyncBatch",
+    default: 10,
+    min: 1,
+    max: 100,
+};
+/// The widest window one events query asks, in days, and the events one
+/// page answers.
+pub const CALENDAR_WINDOW_DAYS: NumericSetting = NumericSetting {
+    key: "calendar_window_days",
+    field: "calendarWindowDays",
+    default: 400,
+    min: 1,
+    max: 3660,
+};
+pub const CALENDAR_EVENTS_PAGE: NumericSetting = NumericSetting {
+    key: "calendar_events_page",
+    field: "calendarEventsPage",
+    default: 1000,
+    min: 10,
+    max: 5000,
+};
+pub const CALENDAR_SETTINGS: [NumericSetting; 5] = [
+    CALENDARS_PER_ACCOUNT,
+    CALENDAR_EVENTS_PER_CALENDAR,
+    CALENDAR_SYNC_BATCH,
+    CALENDAR_WINDOW_DAYS,
+    CALENDAR_EVENTS_PAGE,
+];
+
+/// How long a Chat link token, and the provisioning socket of the device
+/// it links, stay usable (docs/plans/account-identity-key.md).
+pub const CHAT_LINK_TOKEN_SECONDS: NumericSetting = NumericSetting {
+    key: "chat_link_token_seconds",
+    field: "chatLinkTokenSeconds",
+    default: 600,
+    min: 60,
+    max: 3600,
+};
+/// Link tokens one account may hold unused at once.
+pub const CHAT_LINK_TOKENS_PER_ACCOUNT: NumericSetting = NumericSetting {
+    key: "chat_link_tokens_per_account",
+    field: "chatLinkTokensPerAccount",
+    default: 3,
+    min: 1,
+    max: 20,
+};
+/// The largest provisioning message body relayed, in bytes (at most the
+/// format's own, `MAX_PROVISION_BODY_BYTES`).
+pub const CHAT_PROVISION_BODY_BYTES: NumericSetting = NumericSetting {
+    key: "chat_provision_body_bytes",
+    field: "chatProvisionBodyBytes",
+    default: kutup_chat_proto::MAX_PROVISION_BODY_BYTES as i64,
+    min: 4 * 1024,
+    max: kutup_chat_proto::MAX_PROVISION_BODY_BYTES as i64,
+};
+/// Chat installations one account may have (Chat V1's hard cap is 10).
+pub const CHAT_MAX_ACTIVE_DEVICES: NumericSetting = NumericSetting {
+    key: "chat_max_active_devices",
+    field: "chatMaxActiveDevices",
+    default: 10,
+    min: 1,
+    max: 10,
+};
+/// How long a provisioning socket's ticket stays usable, in seconds.
+pub const CHAT_PROVISIONING_TICKET_SECONDS: NumericSetting = NumericSetting {
+    key: "chat_provisioning_ticket_seconds",
+    field: "chatProvisioningTicketSeconds",
+    default: 60,
+    min: 10,
+    max: 600,
+};
+/// Provisioning sockets one account may hold open at once.
+pub const CHAT_PROVISIONING_SOCKETS_PER_ACCOUNT: NumericSetting = NumericSetting {
+    key: "chat_provisioning_sockets_per_account",
+    field: "chatProvisioningSocketsPerAccount",
+    default: 3,
+    min: 1,
+    max: 20,
+};
+/// The largest sync one identity distribution carries to one device, in
+/// bytes (its ciphertext).
+pub const CHAT_DISTRIBUTION_MESSAGE_BYTES: NumericSetting = NumericSetting {
+    key: "chat_distribution_message_bytes",
+    field: "chatDistributionMessageBytes",
+    default: 64 * 1024,
+    min: 1024,
+    max: 1024 * 1024,
+};
+pub const CHAT_IDENTITY_SETTINGS: [NumericSetting; 7] = [
+    CHAT_LINK_TOKEN_SECONDS,
+    CHAT_LINK_TOKENS_PER_ACCOUNT,
+    CHAT_PROVISION_BODY_BYTES,
+    CHAT_MAX_ACTIVE_DEVICES,
+    CHAT_PROVISIONING_TICKET_SECONDS,
+    CHAT_PROVISIONING_SOCKETS_PER_ACCOUNT,
+    CHAT_DISTRIBUTION_MESSAGE_BYTES,
+];
+
+/// Every whole-number setting `/api/admin/settings` lists by field.
+pub fn numeric_settings() -> impl Iterator<Item = &'static NumericSetting> {
+    CHAT_MULTI_SETTINGS
+        .iter()
+        .chain(CALENDAR_SETTINGS.iter())
+        .chain(CHAT_IDENTITY_SETTINGS.iter())
+}
+
 /// The multi-recipient limits now.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct MultiLimits {
@@ -463,21 +609,35 @@ mod tests {
     }
 
     #[test]
-    fn group_capabilities_per_account_are_bounded() {
-        assert_eq!(validate_chat_group_capabilities_per_account(1), Ok(1));
+    fn group_capabilities_are_multiples_of_eight() {
         assert_eq!(
             validate_chat_group_capabilities_per_account(
                 DEFAULT_CHAT_GROUP_CAPABILITIES_PER_ACCOUNT
             ),
-            Ok(1024)
+            Ok(4096)
         );
-        assert!(validate_chat_group_capabilities_per_account(0).is_err());
-        assert!(validate_chat_group_capabilities_per_account(100_001).is_err());
+        assert_eq!(validate_chat_group_capabilities_per_account(16), Ok(16));
+        assert_eq!(
+            validate_chat_group_capabilities_per_account(99_992),
+            Ok(99_992)
+        );
+        for refused in [0, 8, 1000 + 4, 100_000 + 8, 1001] {
+            assert!(
+                validate_chat_group_capabilities_per_account(refused).is_err(),
+                "{refused}"
+            );
+        }
+        // What was stored before the rule applies, rounded down.
+        assert_eq!(applied_capabilities_per_account(1000), 1000);
+        assert_eq!(applied_capabilities_per_account(1001), 1000);
+        assert_eq!(applied_capabilities_per_account(5), 16);
+        assert_eq!(applied_capabilities_per_account(100_000), 100_000);
+        assert_eq!(applied_capabilities_per_account(1_000_000), 100_000);
     }
 
     #[test]
     fn multi_settings_hold_their_ranges_and_firsts() {
-        for setting in CHAT_MULTI_SETTINGS {
+        for &setting in numeric_settings() {
             assert_eq!(
                 setting.validate(setting.default),
                 Ok(setting.default),
@@ -486,9 +646,8 @@ mod tests {
             assert!(setting.validate(setting.min - 1).is_err());
             assert!(setting.validate(setting.max + 1).is_err());
         }
-        let fields: std::collections::BTreeSet<_> =
-            CHAT_MULTI_SETTINGS.iter().map(|s| s.field).collect();
-        assert_eq!(fields.len(), CHAT_MULTI_SETTINGS.len(), "one field each");
+        let fields: std::collections::BTreeSet<_> = numeric_settings().map(|s| s.field).collect();
+        assert_eq!(fields.len(), numeric_settings().count(), "one field each");
     }
 
     #[test]

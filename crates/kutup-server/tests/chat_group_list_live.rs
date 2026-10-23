@@ -345,24 +345,34 @@ fn group_capabilities_change_together_within_the_limit() {
             .unwrap()
             .status()
     };
-    assert_eq!(limit(json!(0)), StatusCode::BAD_REQUEST);
-    assert_eq!(limit(json!(3)), StatusCode::OK);
-    let (status, body) = put(json!({ "add": [hash(9), hash(10)], "remove": [] }));
+    // A multiple of 8, at least 16 (clients pad theirs to eights).
+    for refused in [0, 3, 8, 20] {
+        assert_eq!(limit(json!(refused)), StatusCode::BAD_REQUEST, "{refused}");
+    }
+    assert_eq!(limit(json!(16)), StatusCode::OK);
+    // The account holds 2; 12 more make 14.
+    let (status, body) =
+        put(json!({ "add": (40..52).map(hash).collect::<Vec<_>>(), "remove": [] }));
+    assert_eq!(
+        (status, &body["count"]),
+        (StatusCode::OK, &json!(14)),
+        "{body}"
+    );
+    let (status, body) = put(json!({ "add": [hash(9), hash(10), hash(11)], "remove": [] }));
     assert_eq!(status, StatusCode::CONFLICT, "{body}");
     assert_eq!(body["code"], "capabilityLimit");
     let (_, body) = put(json!({}));
-    assert_eq!(body["count"], 2, "nothing of the refused change was kept");
-    let (status, _) = set((20..24).map(hash).collect());
+    assert_eq!(body["count"], 14, "nothing of the refused change was kept");
+    let (status, _) = set((60..77).map(hash).collect());
     assert_eq!(status, StatusCode::CONFLICT);
     let (status, body) = put(json!({ "add": [hash(9)] }));
     assert_eq!(
         (status, &body["count"]),
-        (StatusCode::OK, &json!(3)),
+        (StatusCode::OK, &json!(15)),
         "{body}"
     );
     // At the limit, two adds at once: one goes, the other is refused, never
     // both (the account's row is locked for each change).
-    put(json!({ "remove": [hash(9)] }));
     let racers: Vec<StatusCode> = std::thread::scope(|scope| {
         let handles: Vec<_> = [30u8, 31]
             .into_iter()
@@ -376,7 +386,7 @@ fn group_capabilities_change_together_within_the_limit() {
         "{racers:?}"
     );
     let (_, body) = put(json!({}));
-    assert_eq!(body["count"], 3, "never past the limit");
+    assert_eq!(body["count"], 16, "never past the limit");
     assert_eq!(limit(Value::Null), StatusCode::OK);
     purge_accounts(&c, &base, &[&alice]);
 }

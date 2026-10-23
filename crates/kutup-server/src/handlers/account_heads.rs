@@ -161,14 +161,14 @@ pub async fn start(
 
 /// `GET /api/account/index/{scope}` — a scope's `(id, revision)` pairs and
 /// the head read with them (one snapshot). Scopes: `contacts`, `mailNames`,
-/// `pins`, `passSecrets`, `chatGroups`, `chatContacts`; any other is `404` (a
+/// `pins`, `passSecrets`, `chatGroups`, `chatContacts`, `calendars`; any other is `404` (a
 /// client treats it as a scope with no index yet).
 #[utoipa::path(
     get,
     path = "/api/account/index/{scope}",
     tag = "account",
     security(("BearerAuth" = [])),
-    params(("scope" = String, Path, description = "contacts, mailNames, pins, passSecrets, chatGroups or chatContacts")),
+    params(("scope" = String, Path, description = "contacts, mailNames, pins, passSecrets, chatGroups, chatContacts or calendars")),
     responses(
         (status = 200, body = IndexView),
         (status = 404, description = "No such scope")

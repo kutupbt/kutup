@@ -14,7 +14,7 @@ use std::thread::{self, JoinHandle};
 
 use futures_channel::oneshot;
 use kutup_chat_core::{
-    AccountAuthority, ChatContent, ChatError, ChatTransport, Engine, SqliteChatDb,
+    AccountAuthority, ChatContent, ChatError, ChatTransport, Engine, Installation, SqliteChatDb,
 };
 use rand::rngs::OsRng;
 use rand::TryRngCore as _;
@@ -148,6 +148,67 @@ impl NativeChatClient {
         })
         .await
     }
+
+    /// Mark the contact's identity verified (or clear it) by hand, after
+    /// comparing the numbers; `identity_key` is the compared number's.
+    pub async fn set_identity_verified(
+        &self,
+        peer: String,
+        identity_key: String,
+        verified: bool,
+    ) -> Result<ChatSafetyNumber> {
+        self.dispatch(|reply| Command::SetIdentityVerified {
+            peer,
+            identity_key,
+            verified,
+            reply,
+        })
+        .await
+    }
+
+    /// Link a new device of this account: `code` is the `kutup://link?…`
+    /// code it shows. `false`: the code expired.
+    pub async fn link_device(
+        &self,
+        code: String,
+        settings: ChatProvisionedSettings,
+    ) -> Result<bool> {
+        self.dispatch(|reply| Command::LinkDevice {
+            code,
+            settings,
+            reply,
+        })
+        .await
+    }
+
+    /// Reset the account's identity, keeping its devices but `remove` (a
+    /// lost or stolen one). Returns the devices kept.
+    pub async fn reset_identity(&self, remove: Vec<u32>) -> Result<Vec<u32>> {
+        self.dispatch(|reply| Command::ResetIdentity { remove, reply })
+            .await
+    }
+}
+
+/// The new device's side of linking (docs/plans/account-identity-key.md):
+/// show `link_code` once the provisioning socket gave its address, and hand
+/// the envelope the socket delivers to [`open_linked_native_chat_client`].
+#[derive(uniffi::Object)]
+pub struct NativeLinkingDevice {
+    inner: kutup_chat_core::LinkingDevice,
+}
+
+#[uniffi::export]
+impl NativeLinkingDevice {
+    #[uniffi::constructor]
+    pub fn new() -> Arc<Self> {
+        Arc::new(Self {
+            inner: kutup_chat_core::LinkingDevice::new(),
+        })
+    }
+
+    pub fn link_code(&self, address: String) -> Result<String> {
+        Ok(self.inner.link_code(&address)?)
+    }
 }
 
 impl NativeChatClient {
@@ -182,11 +243,13 @@ impl Drop for NativeChatClient {
     }
 }
 
-/// Open or restart-safely register an account's native chat device. Key bytes
-/// are moved to the engine worker, used to unlock/derive state, and zeroized
-/// before the first result crosses back to Swift/Kotlin. `binding` is the
-/// account's key binding (the session's `envelopeBinding`), which the
-/// account's own seals bind.
+/// Open an account's native chat device: the one this database holds, a
+/// registration it started, or — for the account's first Chat device — a
+/// re-registration. Another device of the account holding the identity is
+/// [`KutupChatError::LinkRequired`]. Key bytes are moved to the engine
+/// worker, used to unlock/derive state, and zeroized before the first result
+/// crosses back to Swift/Kotlin. `binding` is the account's key binding (the
+/// session's `envelopeBinding`), which the account's own seals bind.
 #[uniffi::export]
 pub async fn open_native_chat_client(
     database_path: String,
@@ -195,6 +258,91 @@ pub async fn open_native_chat_client(
     master_key: Vec<u8>,
     binding: String,
     http: Arc<dyn ChatHttpClient>,
+) -> Result<Arc<NativeChatClient>> {
+    start_client(
+        database_path,
+        database_key,
+        account,
+        master_key,
+        binding,
+        http,
+        Install::Open,
+    )
+    .await
+}
+
+/// Re-register: a new account identity, this device alone in the account's
+/// manifest, the account's other devices dropped ("I don't have my other
+/// devices"). Contacts see the safety number change once.
+#[uniffi::export]
+pub async fn reregister_native_chat_client(
+    database_path: String,
+    database_key: Vec<u8>,
+    account: String,
+    master_key: Vec<u8>,
+    binding: String,
+    http: Arc<dyn ChatHttpClient>,
+) -> Result<Arc<NativeChatClient>> {
+    start_client(
+        database_path,
+        database_key,
+        account,
+        master_key,
+        binding,
+        http,
+        Install::Reregister,
+    )
+    .await
+}
+
+/// Register this device with the identity a linking device sent: `envelope`
+/// is the provisioning envelope (JSON) the socket delivered.
+#[uniffi::export]
+#[allow(clippy::too_many_arguments)]
+pub async fn open_linked_native_chat_client(
+    linking: Arc<NativeLinkingDevice>,
+    envelope: String,
+    database_path: String,
+    database_key: Vec<u8>,
+    account: String,
+    master_key: Vec<u8>,
+    binding: String,
+    http: Arc<dyn ChatHttpClient>,
+) -> Result<Arc<NativeChatClient>> {
+    let envelope =
+        serde_json::from_str(&envelope).map_err(|error| KutupChatError::InvalidInput {
+            message: format!("provisioning envelope: {error}"),
+        })?;
+    start_client(
+        database_path,
+        database_key,
+        account,
+        master_key,
+        binding,
+        http,
+        Install::Linked { linking, envelope },
+    )
+    .await
+}
+
+/// How the worker gets its device.
+enum Install {
+    Open,
+    Reregister,
+    Linked {
+        linking: Arc<NativeLinkingDevice>,
+        envelope: kutup_chat_proto::ProvisionEnvelopeV1,
+    },
+}
+
+async fn start_client(
+    database_path: String,
+    database_key: Vec<u8>,
+    account: String,
+    master_key: Vec<u8>,
+    binding: String,
+    http: Arc<dyn ChatHttpClient>,
+    install: Install,
 ) -> Result<Arc<NativeChatClient>> {
     if database_path.trim().is_empty() {
         return Err(KutupChatError::InvalidInput {
@@ -223,6 +371,7 @@ pub async fn open_native_chat_client(
                     binding,
                     user: worker_user,
                     http,
+                    install,
                 },
                 receiver,
                 ready,
@@ -260,6 +409,7 @@ struct WorkerConfig {
     /// The account: `aci:<uuid>@<server>`.
     user: String,
     http: Arc<dyn ChatHttpClient>,
+    install: Install,
 }
 
 enum Command {
@@ -297,6 +447,21 @@ enum Command {
         scanned_payload: String,
         reply: oneshot::Sender<Result<ChatSafetyNumber>>,
     },
+    SetIdentityVerified {
+        peer: String,
+        identity_key: String,
+        verified: bool,
+        reply: oneshot::Sender<Result<ChatSafetyNumber>>,
+    },
+    LinkDevice {
+        code: String,
+        settings: ChatProvisionedSettings,
+        reply: oneshot::Sender<Result<bool>>,
+    },
+    ResetIdentity {
+        remove: Vec<u32>,
+        reply: oneshot::Sender<Result<Vec<u32>>>,
+    },
     Shutdown(oneshot::Sender<Result<()>>),
 }
 
@@ -311,14 +476,73 @@ fn worker_main(
         let database = Rc::new(database?);
 
         let authority = AccountAuthority::derive(&config.master_key)?;
-        let transport: Rc<dyn ChatTransport> = Rc::new(http::NativeTransport { http: config.http });
+        let transport: Rc<dyn ChatTransport> =
+            Rc::new(http::NativeTransport::new(config.http.clone()));
         let mut rng = OsRng.unwrap_err();
-        let mut engine =
-            Engine::register(database, transport, config.user, INITIAL_PREKEYS, &mut rng).await?;
+        let user = config.user.clone();
+        let mut engine = match std::mem::replace(&mut config.install, Install::Open) {
+            Install::Open => {
+                match Engine::installation(database.as_ref(), transport.as_ref(), &user).await? {
+                    Installation::Registered { device_id } => {
+                        Engine::open(database, transport, user, device_id).await?
+                    }
+                    Installation::Registering => {
+                        Engine::resume_registration(database, transport, user).await?
+                    }
+                    Installation::Unregistered {
+                        account_has_identity: false,
+                    } => {
+                        Engine::reregister(
+                            database,
+                            transport,
+                            user,
+                            &authority,
+                            now_rfc3339()?,
+                            INITIAL_PREKEYS,
+                            &mut rng,
+                        )
+                        .await?
+                    }
+                    Installation::Unregistered {
+                        account_has_identity: true,
+                    } => return Err(KutupChatError::LinkRequired),
+                }
+            }
+            Install::Reregister => {
+                Engine::reregister(
+                    database,
+                    transport,
+                    user,
+                    &authority,
+                    now_rfc3339()?,
+                    INITIAL_PREKEYS,
+                    &mut rng,
+                )
+                .await?
+            }
+            Install::Linked { linking, envelope } => {
+                let provision = linking
+                    .inner
+                    .verify(transport.as_ref(), &user, &authority, &envelope)
+                    .await?;
+                Engine::register_linked(
+                    database,
+                    transport,
+                    user,
+                    provision,
+                    INITIAL_PREKEYS,
+                    &mut rng,
+                )
+                .await?
+            }
+        };
         // One identity for every app of the account (docs/plans/drive-identity-pins.md).
         engine.enable_identity_pins(&config.master_key, &config.binding)?;
         engine.enable_group_list(&config.master_key, &config.binding)?;
         config.master_key.zeroize();
+        // The account's identity: a kept sync, one in the mailbox, or none
+        // (this device missed it: `LinkRequired`).
+        engine.catch_up_identity(&mut rng).await?;
         engine.sync_own_manifest(&authority, now_rfc3339()?).await?;
         Result::<_>::Ok((engine, authority))
     });
@@ -425,7 +649,7 @@ fn worker_main(
             }
             Command::SafetyNumber { peer, reply } => {
                 let result = futures_executor::block_on(async {
-                    Ok(engine.safety_number(&authority, &peer).await?.into())
+                    Ok(engine.safety_number(&peer).await?.into())
                 });
                 let _ = reply.send(result);
             }
@@ -436,9 +660,51 @@ fn worker_main(
             } => {
                 let result = futures_executor::block_on(async {
                     Ok(engine
-                        .verify_safety_number(&authority, &peer, &scanned_payload)
+                        .verify_safety_number(&peer, &scanned_payload)
                         .await?
                         .into())
+                });
+                let _ = reply.send(result);
+            }
+            Command::SetIdentityVerified {
+                peer,
+                identity_key,
+                verified,
+                reply,
+            } => {
+                let result = futures_executor::block_on(async {
+                    Ok(engine
+                        .set_identity_verified(&peer, &identity_key, verified)
+                        .await?
+                        .into())
+                });
+                let _ = reply.send(result);
+            }
+            Command::LinkDevice {
+                code,
+                settings,
+                reply,
+            } => {
+                let result = futures_executor::block_on(async {
+                    Ok(engine
+                        .link_device(
+                            &code,
+                            kutup_chat_core::ProvisionedSettings {
+                                read_receipts: settings.read_receipts,
+                                typing_indicators: settings.typing_indicators,
+                            },
+                            &authority,
+                        )
+                        .await?)
+                });
+                let _ = reply.send(result);
+            }
+            Command::ResetIdentity { remove, reply } => {
+                let result = futures_executor::block_on(async {
+                    let mut rng = OsRng.unwrap_err();
+                    Ok(engine
+                        .reset_identity(&remove, now_rfc3339()?, &mut rng)
+                        .await?)
                 });
                 let _ = reply.send(result);
             }

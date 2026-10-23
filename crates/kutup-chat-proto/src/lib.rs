@@ -16,6 +16,7 @@
 
 use serde::{Deserialize, Serialize};
 
+mod account_identity;
 mod backup;
 mod calls;
 pub mod contact_list;
@@ -34,6 +35,19 @@ mod profile;
 mod sealed_sender;
 mod security_policy;
 
+pub use account_identity::{
+    decode_device_credential, decode_identity_key, decode_link_token, decode_provisioning_address,
+    format_device_header, identity_binding_bytes, parse_device_header, repeated_use_keys_digest,
+    AccountIdentityBody, AccountIdentityDistributionRequest, AccountManifestDeviceV2,
+    AccountManifestHistoryPageV2, AccountManifestPublicationV2, AccountManifestV2,
+    AccountPreKeyBundlesResponse, ChatKeysCheckRequest, ChatLinkTokenResponse, ChatProvisionV1,
+    DevicePreKeyBundleV2, DeviceRegistrationV1, DistributedDeviceKeysV1, DistributionError,
+    ProvisionEnvelopeV1, ProvisioningLinkCodeV1, ProvisioningRelayRequest,
+    ProvisioningSocketMessage, RegisterChatDeviceRequestV2, ACCOUNT_MANIFEST_V2_VERSION,
+    CHAT_DEVICE_HEADER, DEVICE_CREDENTIAL_LEN, IDENTITY_BINDING_LEN, LINK_TOKEN_LEN,
+    LINK_URI_PREFIX, MAX_PREKEY_RECORD_BYTES, MAX_PROVISION_BODY_BYTES, PROVISIONING_ADDRESS_LEN,
+    PROVISIONING_VERSION, REREGISTRATION_DEVICE_ID,
+};
 pub use backup::{
     chat_backup_media_reference_set_digest, AppendChatBackupSegmentRequestV1,
     ChatBackupBasePlaintextV1, ChatBackupBaseReceiptV1, ChatBackupCapabilitiesV1,
@@ -248,57 +262,6 @@ pub struct KemPreKey {
     pub signature: String,
 }
 
-/// `POST /api/chat/device` — register (or re-register) this client as a chat device.
-///
-/// Re-registration with fresh keys replaces the device's directory entry and mailbox
-/// (the standard Signal semantics for a reinstalled client).
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
-#[serde(rename_all = "camelCase")]
-pub struct RegisterChatDeviceRequest {
-    pub suite: DirectChatSuiteId,
-    /// libsignal registration id (random u32 < 16384, generated at install time).
-    pub registration_id: u32,
-    /// base64 serialized public `IdentityKey`.
-    pub identity_key: String,
-    /// The current signed EC prekey (signature required).
-    pub signed_pre_key: EcPreKey,
-    /// The last-resort Kyber prekey — served when the one-time pool is empty so
-    /// session establishment never downgrades to non-PQ.
-    pub last_resort_kyber_pre_key: KemPreKey,
-    /// Initial one-time EC prekey pool (may be empty; bundles then omit the EC one-time).
-    #[serde(default)]
-    pub one_time_pre_keys: Vec<EcPreKey>,
-    /// Initial one-time Kyber prekey pool.
-    #[serde(default)]
-    pub one_time_kyber_pre_keys: Vec<KemPreKey>,
-    /// Human label shown in device management ("Firefox on laptop").
-    #[serde(default)]
-    pub name: String,
-    /// [RSV] The device identity key signed by the account **self-authority
-    /// key** (§5.3), binding this device to the account so a malicious server
-    /// can't inject one. Absent until device-manifest support ships; MUST be
-    /// accepted when present. See `docs/chat-protocol.md` §5.2.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub device_signature: Option<String>,
-}
-
-/// One entry in a signed [`AccountManifestV1`].
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct AccountManifestDeviceV1 {
-    pub device_id: u32,
-    pub direct_chat_suite: DirectChatSuiteId,
-    pub identity_key: String,
-    pub registration_id: u32,
-    /// MLS-only device keys covered by the account manifest. An MLS
-    /// registration is rejected unless this binding is present and exact.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub mls: Option<MlsManifestDeviceV1>,
-}
-
-pub const ACCOUNT_MANIFEST_VERSION: u16 = 1;
 pub const MAX_ACCOUNT_MANIFEST_DEVICES: usize = 10;
 
 /// Closed construction for the account-scoped public keys carried by the
@@ -373,196 +336,6 @@ pub struct AccountManifestDriveKeysV1 {
     pub share_signing_public_key: String,
 }
 
-/// Complete V1 account identity: account-scoped Drive keys and every active
-/// cryptographic device, signed by an account self-authority key the server
-/// never sees. Clients persist every accepted sequence and fail closed on a
-/// gap, rollback, equivocation, authority change or incarnation change.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct AccountManifestV1 {
-    pub manifest_version: u16,
-    /// The account: its server and permanent account id (docs/plans/account-ids.md),
-    /// never a name. The server refuses a manifest naming any other account than
-    /// the one publishing it.
-    #[cfg_attr(feature = "openapi", schema(value_type = AccountRefSchema))]
-    pub account: AccountRef,
-    /// Domain-separated SHA-256 identifier derived from the authority public
-    /// key. A destructive account wipe necessarily starts another incarnation.
-    pub incarnation_id: String,
-    /// Monotonic within this exact authority/incarnation.
-    pub sequence: u64,
-    /// SHA-256 of the preceding manifest's canonical signed bytes and signature.
-    /// Absent only at sequence 1; binds updates into a rollback-evident chain.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub previous_hash: Option<String>,
-    pub drive: AccountManifestDriveKeysV1,
-    pub devices: Vec<AccountManifestDeviceV1>,
-    pub issued_at: String,
-    /// Stable identifier for the authority key (lowercase SHA-256 of its raw
-    /// public-key bytes in v1). Allows additive authority rotation later.
-    pub authority_key_id: String,
-    /// base64 account self-signing PUBLIC key.
-    pub self_authority_key: String,
-    /// base64 signature over the canonical `version‖devices‖issuedAt`.
-    pub signature: String,
-}
-
-impl AccountManifestV1 {
-    /// Deterministic, domain-separated binary encoding signed by every client.
-    /// Devices MUST be strictly ordered by `deviceId`; accepting multiple
-    /// encodings for one manifest would make cross-client signatures unsafe.
-    pub fn signing_bytes(&self) -> Result<Vec<u8>, String> {
-        const DOMAIN: &[u8] = b"kutup/account-manifest/v1\0";
-        let mut out = Vec::with_capacity(256 + self.devices.len() * 96);
-        out.extend_from_slice(DOMAIN);
-        out.extend_from_slice(&self.manifest_version.to_be_bytes());
-        out.extend_from_slice(&self.account.bytes());
-        out.extend_from_slice(&decode_lower_hex_32("incarnationId", &self.incarnation_id)?);
-        out.extend_from_slice(&self.sequence.to_be_bytes());
-        push_optional(&mut out, self.previous_hash.as_deref())?;
-        push_string(&mut out, &self.issued_at)?;
-        out.extend_from_slice(&decode_lower_hex_32(
-            "authorityKeyId",
-            &self.authority_key_id,
-        )?);
-        out.extend_from_slice(&decode_canonical_base64_exact(
-            "selfAuthorityKey",
-            &self.self_authority_key,
-            32,
-        )?);
-        out.extend_from_slice(&u16::from(self.drive.suite).to_be_bytes());
-        out.extend_from_slice(&decode_canonical_base64_exact(
-            "drive.hpkePublicKey",
-            &self.drive.hpke_public_key,
-            self.drive.suite.hpke_public_key_len(),
-        )?);
-        out.extend_from_slice(&decode_canonical_base64_exact(
-            "drive.shareSigningPublicKey",
-            &self.drive.share_signing_public_key,
-            32,
-        )?);
-        let count = u32::try_from(self.devices.len()).map_err(|_| "too many devices")?;
-        out.extend_from_slice(&count.to_be_bytes());
-        let mut prior = None;
-        for device in &self.devices {
-            if prior.is_some_and(|id| device.device_id <= id) {
-                return Err("manifest devices must be strictly ordered by deviceId".into());
-            }
-            prior = Some(device.device_id);
-            out.extend_from_slice(&device.device_id.to_be_bytes());
-            out.extend_from_slice(&device.registration_id.to_be_bytes());
-            out.extend_from_slice(&u16::from(device.direct_chat_suite).to_be_bytes());
-            push_string(&mut out, &device.identity_key)?;
-            match &device.mls {
-                Some(mls) => {
-                    out.push(1);
-                    mls.validate()?;
-                    out.extend_from_slice(&u16::from(mls.suite).to_be_bytes());
-                    push_string(&mut out, &mls.credential_public_key)?;
-                    push_string(&mut out, &mls.anonymous_delivery_public_key)?;
-                }
-                None => out.push(0),
-            }
-        }
-        Ok(out)
-    }
-
-    /// Hash used by the next manifest's `previousHash` link. The signature is
-    /// included so the chain commits to the exact authenticated record.
-    pub fn manifest_hash(&self) -> Result<String, String> {
-        use sha2::{Digest, Sha256};
-        let mut hasher = Sha256::new();
-        hasher.update(self.signing_bytes()?);
-        hasher.update(self.signature.as_bytes());
-        Ok(hex::encode(hasher.finalize()))
-    }
-
-    /// Verify the account authority binding, chain-shape invariants, canonical
-    /// ordering, and Ed25519 signature. Version continuity against a previously
-    /// observed manifest is a stateful client/server responsibility.
-    pub fn verify(&self) -> Result<(), String> {
-        use ed25519_dalek::{Signature, VerifyingKey};
-        use sha2::{Digest, Sha256};
-
-        if self.manifest_version != ACCOUNT_MANIFEST_VERSION {
-            return Err("unsupported account manifest version".into());
-        }
-        if self.sequence == 0 {
-            return Err("manifest sequence must be positive".into());
-        }
-        if self.sequence == 1 && self.previous_hash.is_some() {
-            return Err("manifest sequence 1 cannot have previousHash".into());
-        }
-        if self.sequence > 1 && self.previous_hash.is_none() {
-            return Err("manifest update requires previousHash".into());
-        }
-        if let Some(previous_hash) = &self.previous_hash {
-            let decoded = hex::decode(previous_hash)
-                .map_err(|_| "previousHash must be lowercase SHA-256 hex".to_string())?;
-            if decoded.len() != 32 || hex::encode(decoded) != *previous_hash {
-                return Err("previousHash must be lowercase SHA-256 hex".into());
-            }
-        }
-
-        if self.issued_at.is_empty() || self.issued_at.len() > 64 {
-            return Err("manifest issuedAt must be 1-64 bytes".into());
-        }
-        if self.devices.is_empty() || self.devices.len() > MAX_ACCOUNT_MANIFEST_DEVICES {
-            return Err("account manifest requires 1-10 active devices".into());
-        }
-
-        let public =
-            decode_canonical_base64_exact("selfAuthorityKey", &self.self_authority_key, 32)?;
-        let public: [u8; 32] = public
-            .try_into()
-            .map_err(|_| "selfAuthorityKey must be 32 bytes".to_string())?;
-        let expected_id = hex::encode(Sha256::digest(public));
-        if self.authority_key_id != expected_id {
-            return Err("authorityKeyId does not match selfAuthorityKey".into());
-        }
-        let mut incarnation = Sha256::new();
-        incarnation.update(b"kutup/account-incarnation/v1\0");
-        incarnation.update(public);
-        if self.incarnation_id != hex::encode(incarnation.finalize()) {
-            return Err("incarnationId does not match selfAuthorityKey".into());
-        }
-
-        decode_canonical_base64_exact(
-            "drive.hpkePublicKey",
-            &self.drive.hpke_public_key,
-            self.drive.suite.hpke_public_key_len(),
-        )?;
-        let drive_signing = decode_canonical_base64_exact(
-            "drive.shareSigningPublicKey",
-            &self.drive.share_signing_public_key,
-            32,
-        )?;
-        VerifyingKey::from_bytes(
-            &drive_signing
-                .try_into()
-                .map_err(|_| "Drive signing public key must be 32 bytes")?,
-        )
-        .map_err(|_| "Drive signing public key is not valid Ed25519")?;
-
-        for device in &self.devices {
-            if device.device_id == 0 || device.device_id > 127 || device.registration_id >= 16_384 {
-                return Err("manifest device identifiers are outside V1 bounds".into());
-            }
-            decode_canonical_base64_exact("device.identityKey", &device.identity_key, 33)?;
-        }
-
-        let signature = decode_canonical_base64_exact("signature", &self.signature, 64)?;
-        let signature = Signature::from_slice(&signature)
-            .map_err(|_| "manifest signature must be 64 bytes".to_string())?;
-        let verifying = VerifyingKey::from_bytes(&public)
-            .map_err(|_| "selfAuthorityKey is not a valid Ed25519 key".to_string())?;
-        verifying
-            .verify_strict(&self.signing_bytes()?, &signature)
-            .map_err(|_| "manifest signature is invalid".to_string())
-    }
-}
-
 fn decode_lower_hex_32(name: &str, value: &str) -> Result<[u8; 32], String> {
     let bytes = hex::decode(value).map_err(|_| format!("{name} must be lowercase SHA-256 hex"))?;
     if bytes.len() != 32 || hex::encode(&bytes) != value {
@@ -591,59 +364,7 @@ fn decode_canonical_base64_exact(
     Ok(bytes)
 }
 
-/// Successful publication of one exact signed account-manifest sequence.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct AccountManifestPublicationV1 {
-    pub manifest: AccountManifestV1,
-}
-
 pub const MAX_ACCOUNT_MANIFEST_HISTORY_PAGE: usize = 64;
-
-/// Bounded complete account-manifest history. Pagination is an exact sequence
-/// cursor; every manifest is independently signed and hash-linked, so no
-/// server-generated proof or opaque cursor is trusted.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct AccountManifestHistoryPageV1 {
-    #[cfg_attr(feature = "openapi", schema(value_type = AccountRefSchema))]
-    pub account: AccountRef,
-    pub from_sequence: u64,
-    pub to_sequence: u64,
-    pub manifests: Vec<AccountManifestV1>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub next_sequence: Option<u64>,
-}
-
-impl AccountManifestHistoryPageV1 {
-    pub fn validate(&self) -> Result<(), String> {
-        if self.from_sequence == 0
-            || self.to_sequence < self.from_sequence
-            || self.manifests.is_empty()
-            || self.manifests.len() > MAX_ACCOUNT_MANIFEST_HISTORY_PAGE
-        {
-            return Err("account manifest history page has an invalid shape".into());
-        }
-        let mut expected = self.from_sequence;
-        for manifest in &self.manifests {
-            manifest.verify()?;
-            if manifest.account != self.account || manifest.sequence != expected {
-                return Err("account manifest history page is missing or reordered".into());
-            }
-            expected = expected
-                .checked_add(1)
-                .ok_or_else(|| "account manifest sequence is exhausted".to_string())?;
-        }
-        let last = expected - 1;
-        match self.next_sequence {
-            Some(next) if last < self.to_sequence && next == expected => Ok(()),
-            None if last == self.to_sequence => Ok(()),
-            _ => Err("account manifest history pagination is inconsistent".into()),
-        }
-    }
-}
 
 fn push_string(out: &mut Vec<u8>, value: &str) -> Result<(), String> {
     let len = u32::try_from(value.len()).map_err(|_| "manifest string is too long")?;
@@ -715,7 +436,9 @@ pub struct ChatWsTicketResponse {
     pub expires_at: String,
 }
 
-/// One device's prekey bundle, as served by `GET /api/chat/users/{username}/keys`.
+/// One device's bundle with its account's identity key filled in: what a
+/// client builds a session from once it verified an
+/// [`AccountPreKeyBundlesResponse`] (which carries the identity once).
 /// Field-for-field what libsignal's `PreKeyBundle::new` consumes.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
@@ -732,26 +455,6 @@ pub struct DevicePreKeyBundle {
     /// Consumed from the one-time EC pool; absent when the pool is empty.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub one_time_pre_key: Option<EcPreKey>,
-}
-
-/// `GET /api/chat/accounts/{accountId}/keys` — bundles for every active device.
-/// A 1:1 conversation encrypts to all of the peer's devices (and the sender's other
-/// devices, for sync — the client fetches its own bundle list too).
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
-#[serde(rename_all = "camelCase")]
-pub struct UserPreKeyBundlesResponse {
-    /// The account the bundles are for (server and account id); a client
-    /// checks it is the one it asked for and the one the manifest names.
-    #[cfg_attr(feature = "openapi", schema(value_type = AccountRefSchema))]
-    pub account: AccountRef,
-    pub devices: Vec<DevicePreKeyBundle>,
-    /// The signed device manifest (§5.3). A verifying client checks each
-    /// returned bundle against it before establishing a session. Absence is
-    /// allowed only when the server advertises `manifests: false` and the
-    /// client explicitly enables development TOFU.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub manifest: Option<AccountManifestV1>,
 }
 
 /// One per-device ciphertext inside a send request.
@@ -1005,59 +708,6 @@ impl Default for ChatCapabilities {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use base64::Engine as _;
-    use ed25519_dalek::Signer as _;
-    use sha2::{Digest, Sha256};
-
-    fn test_manifest() -> AccountManifestV1 {
-        let authority = ed25519_dalek::SigningKey::from_bytes(&[7; 32]);
-        let authority_public = authority.verifying_key().to_bytes();
-        let authority_key_id = hex::encode(Sha256::digest(authority_public));
-        let mut incarnation = Sha256::new();
-        incarnation.update(b"kutup/account-incarnation/v1\0");
-        incarnation.update(authority_public);
-        let drive_signing = ed25519_dalek::SigningKey::from_bytes(&[8; 32]);
-        let mut manifest = AccountManifestV1 {
-            manifest_version: ACCOUNT_MANIFEST_VERSION,
-            account: AccountRef::new("example.test", "0b6b5e0c-4c1e-4b8e-9c2d-6a1f3e5d7c9b")
-                .unwrap(),
-            incarnation_id: hex::encode(incarnation.finalize()),
-            sequence: 1,
-            previous_hash: None,
-            drive: AccountManifestDriveKeysV1 {
-                suite: AccountIdentitySuiteId::XWingEd25519V2,
-                hpke_public_key: base64::engine::general_purpose::STANDARD.encode([9; 1216]),
-                share_signing_public_key: base64::engine::general_purpose::STANDARD
-                    .encode(drive_signing.verifying_key().to_bytes()),
-            },
-            devices: vec![
-                AccountManifestDeviceV1 {
-                    device_id: 1,
-                    direct_chat_suite: DirectChatSuiteId::PqxdhTripleRatchetV1,
-                    identity_key: base64::engine::general_purpose::STANDARD.encode([10; 33]),
-                    registration_id: 10,
-                    mls: None,
-                },
-                AccountManifestDeviceV1 {
-                    device_id: 2,
-                    direct_chat_suite: DirectChatSuiteId::PqxdhTripleRatchetV1,
-                    identity_key: base64::engine::general_purpose::STANDARD.encode([11; 33]),
-                    registration_id: 20,
-                    mls: None,
-                },
-            ],
-            issued_at: "2026-07-15T12:00:00Z".into(),
-            authority_key_id,
-            self_authority_key: base64::engine::general_purpose::STANDARD.encode(authority_public),
-            signature: String::new(),
-        };
-        manifest.signature = base64::engine::general_purpose::STANDARD.encode(
-            authority
-                .sign(&manifest.signing_bytes().unwrap())
-                .to_bytes(),
-        );
-        manifest
-    }
 
     #[test]
     fn suite_id_round_trips() {
@@ -1157,29 +807,5 @@ mod tests {
         assert_eq!(v["manifests"], true);
         assert_eq!(v["profiles"], true);
         assert!(v.get("media").is_none());
-    }
-
-    #[test]
-    fn manifest_signing_bytes_are_canonical_and_order_sensitive() {
-        let manifest = test_manifest();
-        let bytes = manifest.signing_bytes().unwrap();
-        assert!(bytes.starts_with(b"kutup/account-manifest/v1\0"));
-        assert_eq!(manifest.signing_bytes().unwrap(), bytes);
-        assert_eq!(manifest.manifest_hash().unwrap().len(), 64);
-        manifest.verify().unwrap();
-
-        let mut unordered = manifest.clone();
-        unordered.devices.swap(0, 1);
-        assert!(unordered.signing_bytes().is_err());
-    }
-
-    #[test]
-    fn manifest_verification_rejects_bad_chain_shape_before_crypto() {
-        let mut manifest = test_manifest();
-        manifest.manifest_version = 0;
-        assert_eq!(
-            manifest.verify().unwrap_err(),
-            "unsupported account manifest version"
-        );
     }
 }

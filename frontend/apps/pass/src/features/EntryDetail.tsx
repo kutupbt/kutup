@@ -106,7 +106,8 @@ function downloadBytes(bytes: Uint8Array, name: string) {
 export function EntryDetail({ session, entry, view, onEdit, onGone }: { session: VaultSession; entry: EntryView; view: VaultView; onEdit: () => void; onGone: () => void }) {
   const { t, i18n } = useTranslation()
   const [history, setHistory] = useState(false)
-  const [confirmDelete, setConfirmDelete] = useState(false)
+  // Which delete the dialog was opened as: a recycle stays one, whatever the vault says by the time it is confirmed.
+  const [confirmDelete, setConfirmDelete] = useState<'recycle' | 'forGood' | null>(null)
   const [changingIcon, setChangingIcon] = useState(false)
   const attachInput = useRef<HTMLInputElement>(null)
   const canEdit = session.canEdit
@@ -119,10 +120,18 @@ export function EntryDetail({ session, entry, view, onEdit, onGone }: { session:
   const groups = view.groups.filter((g) => !g.inRecycleBin)
   const safeUrl = /^https?:\/\//i.test(url) ? url : null
   const picture = entry.customIcon ? (iconSources(view).get(entry.customIcon) ?? null) : null
-  const run = (op: Parameters<VaultSession['apply']>[0], done?: string) =>
+  /** Applies `op`; whether it was. */
+  const run = (op: Parameters<VaultSession['apply']>[0], done?: string): Promise<boolean> =>
     session.apply(op).then(
-      () => done && toast.success(done),
-      () => toast.error(t('entry.saveFailed')),
+      () => {
+        if (done) toast.success(done)
+        return true
+      },
+      () => {
+        const binOff = op.op === 'recycleEntries' && !session.getState().view.recycleBinEnabled
+        toast.error(binOff ? t('bulk.binOff') : t('entry.saveFailed'))
+        return false
+      },
     )
 
   return (
@@ -150,7 +159,7 @@ export function EntryDetail({ session, entry, view, onEdit, onGone }: { session:
         {canEdit ? (
           <div className="flex shrink-0 gap-1">
             {entry.inRecycleBin ? (
-              <Button variant="outline" size="sm" onClick={() => void run({ op: 'moveEntry', id: entry.id, groupId: view.rootGroupId }, t('detail.restored'))}>
+              <Button variant="outline" size="sm" onClick={() => void run({ op: 'restoreEntries', ids: [entry.id] }, t('detail.restored'))}>
                 <ArchiveRestore />
                 {t('detail.restore')}
               </Button>
@@ -175,7 +184,7 @@ export function EntryDetail({ session, entry, view, onEdit, onGone }: { session:
                 ))}
               </DropdownMenuContent>
             </DropdownMenu>
-            <Button variant="ghost" size="icon" onClick={() => setConfirmDelete(true)} aria-label={t('detail.delete')}>
+            <Button variant="ghost" size="icon" onClick={() => setConfirmDelete(entry.inRecycleBin || !view.recycleBinEnabled ? 'forGood' : 'recycle')} aria-label={t('detail.delete')}>
               <Trash2 />
             </Button>
           </div>
@@ -334,15 +343,18 @@ export function EntryDetail({ session, entry, view, onEdit, onGone }: { session:
         }}
       />
       <ConfirmDestructive
-        open={confirmDelete}
-        onOpenChange={setConfirmDelete}
-        title={entry.inRecycleBin || !view.recycleBinEnabled ? t('detail.deleteForGoodTitle') : t('detail.deleteTitle')}
-        description={entry.inRecycleBin || !view.recycleBinEnabled ? t('detail.deleteForGoodDescription', { title }) : t('detail.deleteDescription', { title })}
+        open={confirmDelete !== null}
+        onOpenChange={(open) => !open && setConfirmDelete(null)}
+        title={confirmDelete === 'forGood' ? t('detail.deleteForGoodTitle') : t('detail.deleteTitle')}
+        description={confirmDelete === 'forGood' ? t('detail.deleteForGoodDescription', { title }) : t('detail.deleteDescription', { title })}
         submit={t('detail.delete')}
         errorFallback={t('entry.saveFailed')}
         onConfirm={() => {
-          setConfirmDelete(false)
-          void run({ op: 'deleteEntry', id: entry.id }, t('detail.deleted')).then(onGone)
+          const asked = confirmDelete
+          setConfirmDelete(null)
+          void run(asked === 'forGood' ? { op: 'deleteEntry', id: entry.id } : { op: 'recycleEntries', ids: [entry.id] }, t('detail.deleted')).then(
+            (done) => done && onGone(),
+          )
         }}
       />
     </article>

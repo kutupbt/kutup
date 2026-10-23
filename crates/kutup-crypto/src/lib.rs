@@ -34,6 +34,8 @@
 //! - [`mail_search`] — the browser's Mail search index at rest.
 //! - [`mail_key`] — OpenPGP mail address keys (rPGP) and their signed key lists.
 //! - [`mail_forwarding`] — end-to-end mail forwarding (proxy re-encryption).
+//! - [`calendar`] — calendar keys, passphrases and session-key packets (rPGP).
+//! - [`calendar_recurrence`] — Proton's RRULE subset and the expansion of a series.
 //! - [`pass_vault`] — Kutup Pass vault secrets sealed under the master key.
 
 pub mod account_envelope;
@@ -41,6 +43,12 @@ pub mod account_head;
 pub mod account_ref;
 pub mod account_rename;
 pub mod asset;
+#[cfg(feature = "calendar")]
+pub mod calendar;
+#[cfg(feature = "calendar")]
+pub mod calendar_event;
+#[cfg(feature = "calendar")]
+pub mod calendar_recurrence;
 pub mod chat_attachment_ledger;
 pub mod chat_backup;
 pub mod chat_backup_media;
@@ -89,6 +97,7 @@ pub mod padding;
 pub mod pass_vault;
 pub mod photos_library;
 pub mod profile_key_share;
+pub mod provisioning;
 pub mod revision_guard;
 pub mod safety_number;
 pub mod stream;

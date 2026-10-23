@@ -3,6 +3,9 @@
 //! This crate contains no cryptographic construction or policy. It converts
 //! JS transport values and delegates to the canonical Rust implementation.
 
+#[cfg(feature = "calendar")]
+mod calendar;
+
 use base64::engine::general_purpose::STANDARD;
 use base64::Engine as _;
 use ed25519_dalek::{Signer as _, SigningKey};
@@ -1580,7 +1583,7 @@ pub fn live_location_open(
     .map_err(|error| js_error(&error.to_string()))
 }
 
-fn decode_canonical_base64(value: &str, field: &str) -> Result<Vec<u8>, JsValue> {
+pub(crate) fn decode_canonical_base64(value: &str, field: &str) -> Result<Vec<u8>, JsValue> {
     let decoded = STANDARD
         .decode(value)
         .map_err(|_| js_error(&format!("{field} must be canonical base64")))?;
@@ -1598,7 +1601,7 @@ fn account_arg(
     serde_wasm_bindgen::from_value(value).map_err(|error| js_error(&format!("{what}: {error}")))
 }
 
-fn js_error(message: &str) -> JsValue {
+pub(crate) fn js_error(message: &str) -> JsValue {
     JsValue::from_str(message)
 }
 
@@ -1946,7 +1949,7 @@ pub fn inspect_mail_address_public_key(
     .map_err(|error| js_error(&format!("encode public key: {error}")))
 }
 
-fn open_mail_secret(
+pub(crate) fn open_mail_secret(
     master_key_base64: &str,
     binding: &str,
     address: &str,

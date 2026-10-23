@@ -3,11 +3,16 @@ import { readFile } from 'node:fs/promises'
 import { fileURLToPath } from 'node:url'
 
 const root = fileURLToPath(new URL('..', import.meta.url))
+// The runtime to check: `crypto` (default) or `crypto-calendar`, the same
+// with calendars. Every vector runs on both; calendars only on the second,
+// and the first must carry none of them.
+const build = process.argv[2] ?? 'crypto'
+assert.ok(['crypto', 'crypto-calendar'].includes(build), `unknown build ${build}`)
 const modulePath = new URL(
-  '../frontend/wasm/crypto-wasm/kutup_crypto_wasm.js',
+  `../frontend/wasm/${build}-wasm/kutup_crypto_wasm.js`,
   import.meta.url,
 )
-const wasmPath = `${root}/frontend/wasm/crypto-wasm/kutup_crypto_wasm_bg.wasm`
+const wasmPath = `${root}/frontend/wasm/${build}-wasm/kutup_crypto_wasm_bg.wasm`
 const crypto = await import(modulePath)
 const wasm = await readFile(wasmPath)
 await crypto.default({ module_or_path: wasm })
@@ -1177,4 +1182,85 @@ assert.equal(crypto.incarnationIdOfAuthority(iv.authorityPublicKey), crypto.deri
   head.free()
 }
 
-console.log('crypto WASM canonical vectors passed')
+// Calendars (docs/plans/calendar.md, E1): the owner (the mail vectors'
+// address key) unlocks the calendar from its sealed passphrase, and the
+// event and metadata open as the Rust vectors say; the refused ones don't.
+if (build === 'crypto') {
+  for (const name of ['createCalendar', 'unlockCalendar', 'calendarTimeZones', 'calendarOccurrences', 'calendarRuleText']) {
+    assert.equal(crypto[name], undefined, `${name} is in the plain crypto build`)
+  }
+} else {
+  const v = JSON.parse(await readFile(`${root}/crates/kutup-crypto/tests/vectors/calendar-v1.json`, 'utf8'))
+  const owner = [mailVectors.masterKey, mailVectors.binding, mailVectors.address, mailVectors.envelope, mailVectors.fingerprint]
+  const passphrase = { dataPacket: v.passphraseDataPacket, signature: v.passphraseSignature, keyPacket: v.passphraseKeyPacket }
+  const unlocked = crypto.unlockCalendar(...owner, passphrase, [v.ownerPublicKey], v.calendarLockedSecretKey)
+  const opened = unlocked.openEvent(v.event, [v.ownerPublicKey])
+  assert.equal(opened.verified, true)
+  assert.deepEqual(opened.fields, v.fields)
+  const sealedMetadata = { keyPacket: v.metadata.keyPacket, dataPacket: v.metadata.dataPacket, signature: v.metadata.signature }
+  const metadata = unlocked.openMetadata(sealedMetadata, v.calendarId, [v.ownerPublicKey])
+  assert.deepEqual(metadata, { name: v.metadata.name, description: v.metadata.description, verified: true })
+  // Bound to its calendar: under another id, refused.
+  assert.throws(() => unlocked.openMetadata(sealedMetadata, 'another-calendar', [v.ownerPublicKey]))
+  assert.equal(unlocked.fingerprint, v.calendarFingerprint)
+  // Nothing seals to a public key handed in: only the unlocked calendar seals.
+  assert.equal(crypto.sealCalendarEvent, undefined)
+  assert.equal(crypto.sealCalendarMetadata, undefined)
+  for (const refused of v.refused) {
+    let accepted = false
+    try {
+      accepted = unlocked.openEvent(refused.event, [v.ownerPublicKey]).verified
+    } catch {
+      accepted = false
+    }
+    assert.equal(accepted, false, refused.why)
+  }
+  // A passphrase signed by someone else: the calendar doesn't unlock.
+  assert.throws(() => crypto.unlockCalendar(...owner, passphrase, [v.calendarPublicKey], v.calendarLockedSecretKey))
+  // What the browser seals, the vectors' calendar opens.
+  const sealed = unlocked.sealEvent(...owner, v.fields)
+  assert.deepEqual(unlocked.openEvent(sealed, [v.ownerPublicKey]).fields, v.fields)
+  const renamed = unlocked.sealMetadata(...owner, v.calendarId, { name: 'Ev', description: '' })
+  assert.equal(unlocked.openMetadata(renamed, v.calendarId, [v.ownerPublicKey]).name, 'Ev')
+  // A new calendar, under the id the client drew.
+  const made = crypto.createCalendar(...owner, 'c-new', { name: 'İş', description: '' }, 1790000000)
+  const opened2 = crypto.unlockCalendar(...owner, made.passphrase, [v.ownerPublicKey], made.lockedSecretKey)
+  assert.equal(opened2.openMetadata(made.metadata, 'c-new', [v.ownerPublicKey]).name, 'İş')
+  assert.equal(opened2.fingerprint, made.fingerprint)
+  opened2.free()
+  // Time zones: the bundled database, as the server converts.
+  assert.equal(crypto.calendarLocalToUtc('2026-10-29T09:30:00', 'Europe/Istanbul'), v.startUtc)
+  assert.equal(crypto.calendarUtcToLocal(v.startUtc, 'Europe/Istanbul'), '2026-10-29T09:30:00')
+  assert.ok(crypto.calendarTimeZones().includes('Europe/Istanbul'))
+  assert.throws(() => crypto.calendarLocalToUtc('2026-10-29T09:30:00', 'Nowhere/Else'))
+  unlocked.free()
+
+  // Recurrence (E2): every vector case expands in the browser as in Rust and
+  // as python-dateutil does.
+  const recurrence = JSON.parse(await readFile(`${root}/crates/kutup-crypto/tests/vectors/calendar-recurrence-v1.json`, 'utf8'))
+  for (const c of recurrence.cases) {
+    const start = 'date' in c.start ? { date: c.start.date } : c.start.zoned.tzid === 'UTC' ? { utc: `${c.start.zoned.local}Z` } : c.start
+    const rule = crypto.calendarReadRule(c.rule)
+    const text = crypto.calendarRuleText(rule)
+    assert.deepEqual(crypto.calendarReadRule(text), rule, c.name)
+    const exdate = (value) => ('date' in start ? { date: value } : 'utc' in start ? { utc: `${value}Z` } : { zoned: { local: value, tzid: start.zoned.tzid } })
+    const fields = {
+      uid: 'r@kutup.test', dtstamp: '2026-10-22T08:00:00Z', created: null, start, end: null, recurrenceId: null,
+      rrule: text, exdates: (c.exdates ?? []).map(exdate), organizer: null, summary: null, description: null, location: null, status: null, transp: null, comment: null,
+    }
+    if (c.refused) {
+      assert.throws(() => crypto.calendarOccurrences(fields, '1970-01-01T00:00:00Z', '2038-01-01T00:00:00Z', 10), c.name)
+      continue
+    }
+    const occurrences = crypto.calendarOccurrences(fields, '1970-01-01T00:00:00Z', '2038-01-01T00:00:00Z', c.take)
+    const local = occurrences.map((o) => o.start.date ?? o.start.zoned?.local ?? o.start.utc.replace('Z', '').replace(/\.\d+$/, ''))
+    assert.deepEqual(local, c.local, c.name)
+    if (c.utc?.length) assert.deepEqual(occurrences.map((o) => o.startUtc), c.utc, c.name)
+  }
+  // Outside Proton's subset: refused.
+  assert.throws(() => crypto.calendarReadRule('FREQ=HOURLY'))
+  assert.throws(() => crypto.calendarRuleText({ frequency: 'monthly', byDay: ['MO'] }))
+  assert.deepEqual(crypto.calendarSupportedUntil({ zoned: { local: '2026-12-28T22:30:00', tzid: 'Europe/Istanbul' } }, '2026-12-29'), { utc: '2026-12-29T20:59:59Z' })
+}
+
+console.log(`${build} WASM canonical vectors passed`)

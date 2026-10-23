@@ -7,7 +7,7 @@ import { clearSession, getAccessToken, setAccessToken } from './store'
 import { noteSessionVersion, SESSION_VERSION_HEADER } from './sessionVersion'
 
 /** The server-side session types a web app can hold (X-Kutup-Client). */
-export type WebClientType = 'web-account' | 'web-drive' | 'web-chat' | 'web-maps' | 'web-photos' | 'web-office' | 'web-contacts' | 'web-mail' | 'web-pass'
+export type WebClientType = 'web-account' | 'web-drive' | 'web-chat' | 'web-maps' | 'web-photos' | 'web-office' | 'web-contacts' | 'web-mail' | 'web-pass' | 'web-calendar'
 
 let clientType: WebClientType | null = null
 
@@ -206,7 +206,10 @@ api.interceptors.response.use(
       SIGN_IN_CALL.test((originalRequest.url ?? '').split('?')[0]!) ||
       code === 'invalidCredentials' ||
       code === 'setupTokenInvalid' ||
-      code === 'preAuthInvalid'
+      code === 'preAuthInvalid' ||
+      // A Chat device's own credential (X-Kutup-Chat-Device) refused: the
+      // device was removed, not this session.
+      code === 'deviceCredential'
     if (status === 401 && !originalRequest._retry && !skipRefresh) {
       if (isRefreshing) {
         return new Promise((resolve, reject) => {

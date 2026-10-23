@@ -85,6 +85,17 @@ impl VaultSecret {
         }
     }
 
+    /// The same, from the password's hash: KeePass's password element, as a
+    /// vault opened with its kept key holds the password (what is kept is
+    /// the same either way).
+    pub fn chosen_hashed(password_hash: &[u8; 32], key_file: Option<&[u8]>) -> Self {
+        Self {
+            password_hash: Some(Zeroizing::new(*password_hash)),
+            generated_password: None,
+            key_file: key_file.map(|k| Zeroizing::new(k.to_vec())),
+        }
+    }
+
     /// The key of a vault whose password Kutup Pass generated.
     pub fn generated(password: &str, key_file: Option<&[u8]>) -> Self {
         Self {

@@ -408,3 +408,155 @@ fn versions_v2_contract() {
     // Nothing left behind for the gate's checks.
     common::purge_accounts(&c, &base, &[&owner, &stranger]);
 }
+
+/// An owned folder with one uploaded file, as the website makes them:
+/// (token, file id, the file key, the original's encrypted size).
+fn owned_file(c: &Client, base: &str, owner: &User) -> (String, String, [u8; 32], i64) {
+    let token = token_of(c, base, owner);
+    let user_id = me(c, base, &token)["id"].as_str().unwrap().to_string();
+    let identity =
+        kutup_crypto::identity::AccountIdentityKeysV1::derive(&owner.master_key).unwrap();
+    let collection_id = uuid();
+    let collection_key = [0x52u8; 32];
+    let ctx = |purpose, object: &str, parent: &str| {
+        DriveEnvelopeContextV1::new(purpose, 1, 1, object, parent).unwrap()
+    };
+    let created = bearer(c.post(format!("{base}/api/collections")), &token)
+        .json(&json!({
+            "id": collection_id,
+            "ownerKeyEnvelope": drive_envelope::seal_b64(&collection_key, &owner.master_key, ctx(DriveEnvelopePurpose::CollectionKey, &collection_id, &user_id)).unwrap(),
+            "nameEnvelope": drive_envelope::seal_b64(b"Kasa", &collection_key, ctx(DriveEnvelopePurpose::CollectionName, &collection_id, &user_id)).unwrap(),
+            "epochStatement": CollectionEpochStatementV1::create(&collection_id, &user_id, 1, None, &collection_key, identity.authority_signing_key()).unwrap().encode_b64(),
+            "parentCollectionId": null,
+            "nameHash": collection_id.replace('-', "").repeat(2),
+        }))
+        .send()
+        .unwrap();
+    assert!(
+        created.status().is_success(),
+        "collection: {}",
+        created.status()
+    );
+    let file_id = uuid();
+    let file_key = [0x62u8; 32];
+    let blob = drive_object::encrypt_file_blob(
+        b"a vault under its old key",
+        &file_key,
+        DriveFileBlobContextV1::new(&file_id, 1).unwrap(),
+    )
+    .unwrap();
+    let size = blob.len() as i64;
+    let form = reqwest::blocking::multipart::Form::new()
+        .text("fileId", file_id.clone())
+        .text("collectionId", collection_id.clone())
+        .text("nameHash", file_id.replace('-', "").repeat(2))
+        .text(
+            "fileKeyEnvelope",
+            drive_envelope::seal_b64(
+                &file_key,
+                &collection_key,
+                DriveEnvelopeContextV1::file_key(&file_id, &collection_id, 1, 1).unwrap(),
+            )
+            .unwrap(),
+        )
+        .text(
+            "metadataEnvelope",
+            drive_envelope::seal_b64(
+                br#"{"name":"Kasa.kdbx","mimeType":"application/x-keepass2","size":25}"#,
+                &file_key,
+                DriveEnvelopeContextV1::file_metadata(&file_id, 1, 1).unwrap(),
+            )
+            .unwrap(),
+        )
+        .part(
+            "file",
+            reqwest::blocking::multipart::Part::bytes(blob).file_name("encrypted"),
+        );
+    let uploaded = bearer(c.post(format!("{base}/api/files/upload")), &token)
+        .multipart(form)
+        .send()
+        .unwrap();
+    assert!(
+        uploaded.status().is_success(),
+        "upload: {}",
+        uploaded.status()
+    );
+    (token, file_id, file_key, size)
+}
+
+/// The first upload deleted by its owner once a whole-file version replaced
+/// it (docs/api.md, `DELETE …/versions/original`): never while it is the
+/// current content, never by someone without the file, its charge freed
+/// once even when two deletes race.
+#[test]
+fn the_original_upload_is_deleted_by_its_owner_once_replaced() {
+    let Ok(base) = std::env::var("KUTUP_LIVE_SERVER") else {
+        return;
+    };
+    let base = base.trim_end_matches('/').to_string();
+    let c = client();
+    let owner = register(&c, &base);
+    let (token, file_id, file_key, size) = owned_file(&c, &base, &owner);
+    let delete = |token: &str| {
+        bearer(
+            c.delete(format!("{base}/api/files/{file_id}/versions/original")),
+            token,
+        )
+        .send()
+        .unwrap()
+        .status()
+    };
+
+    // Still the current content: refused. Someone without the file: not found.
+    assert_eq!(delete(&token), StatusCode::CONFLICT);
+    let stranger = register(&c, &base);
+    assert_eq!(
+        delete(&token_of(&c, &base, &stranger)),
+        StatusCode::NOT_FOUND
+    );
+
+    // Replaced by a whole-file version (the vault saved under a new key).
+    let version = drive_object::encrypt_file_blob(
+        b"the vault under its new key",
+        &file_key,
+        DriveFileBlobContextV1::new(&file_id, 1).unwrap(),
+    )
+    .unwrap();
+    let r = post_version(&c, &base, &token, &file_id, "file", version, &[]);
+    assert_eq!(r.status(), StatusCode::CREATED);
+    let before = used(&c, &base, &token);
+
+    // Two deletes at once: one deletes, the other finds it gone; the charge
+    // is freed once.
+    let statuses: Vec<StatusCode> = std::thread::scope(|scope| {
+        let handles: Vec<_> = (0..2).map(|_| scope.spawn(|| delete(&token))).collect();
+        handles.into_iter().map(|h| h.join().unwrap()).collect()
+    });
+    let mut sorted = statuses.clone();
+    sorted.sort();
+    assert_eq!(
+        sorted,
+        vec![StatusCode::NO_CONTENT, StatusCode::NOT_FOUND],
+        "{statuses:?}"
+    );
+    assert_eq!(used(&c, &base, &token), before - size, "freed once");
+    assert_eq!(delete(&token), StatusCode::NOT_FOUND);
+
+    // Gone from reads; the current content is the version.
+    let original = bearer(
+        c.get(format!("{base}/api/files/{file_id}/original")),
+        &token,
+    )
+    .send()
+    .unwrap();
+    assert_eq!(original.status(), StatusCode::NOT_FOUND);
+    let current = bearer(
+        c.get(format!("{base}/api/files/{file_id}/download")),
+        &token,
+    )
+    .send()
+    .unwrap();
+    assert!(current.status().is_success());
+    assert_ne!(current.headers()["x-kutup-version"], "original");
+    common::purge_accounts(&c, &base, &[&owner, &stranger]);
+}

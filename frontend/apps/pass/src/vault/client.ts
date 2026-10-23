@@ -137,13 +137,70 @@ export class VaultHandle {
     })
   }
 
-  changeKey(key: VaultKeyInput): Promise<void> {
-    return call({ call: 'changeKey', handle: this.handle, password: key.password, keyFile: key.keyFile, now: Date.now() })
+  /**
+   * Changes the vault's key, saved with the next save. Each part is kept
+   * from the current key (inside the worker: the page never holds it), given
+   * anew, or dropped (`null`); one part at least stays.
+   */
+  changeKey(change: KeyChange): Promise<KeyChanged> {
+    return call({
+      call: 'changeKey',
+      handle: this.handle,
+      password: change.password === 'keep' ? null : (change.password?.set ?? null),
+      keepPassword: change.password === 'keep',
+      shownPassword: change.password === 'keep' ? (change.shownPassword ?? null) : null,
+      keyFile: change.keyFile === 'keep' ? null : change.keyFile,
+      keepKeyFile: change.keyFile === 'keep',
+      now: Date.now(),
+    })
+  }
+
+  /** Drive holds the vault saved with its new key: the change is done. */
+  keyChangeSaved(): Promise<void> {
+    return call({ call: 'keyChangeSaved', handle: this.handle })
+  }
+
+  /** Back to the key Drive's copy opens with, after a change that did not reach it. */
+  abandonKeyChange(): Promise<void> {
+    return call({ call: 'abandonKeyChange', handle: this.handle })
+  }
+
+  /** What the vault's key is made of. */
+  keyParts(): Promise<KeyParts> {
+    return call({ call: 'keyParts', handle: this.handle })
   }
 
   close(): Promise<void> {
     return call({ call: 'close', handle: this.handle })
   }
+}
+
+/**
+ * A key change: each part kept, set anew, or dropped (`null`). With the
+ * password kept, `shownPassword` is the generated password the account
+ * keeps for it, to stay one that can be shown: the worker takes it only if
+ * it is the vault's password now.
+ */
+export interface KeyChange {
+  password: 'keep' | { set: string } | null
+  shownPassword?: string | null
+  keyFile: 'keep' | Uint8Array | null
+}
+
+/** What a key change did: whether the kept password is still one Kasa can show. */
+export interface KeyChanged {
+  passwordShowable: boolean
+}
+
+/** What a vault's key is made of. */
+export interface KeyParts {
+  password: boolean
+  keyFile: boolean
+}
+
+/** A new KeePassXC key file (XML v2), made in the worker: for the person to download, never sent anywhere. */
+export function generateKeyFile(): Promise<Uint8Array> {
+  return call({ call: 'generateKeyFile' })
 }
 
 /** A kept vault key, opened (kutup_pass::kept): bytes in base64. */

@@ -1061,8 +1061,12 @@ fn build_router(state: AppState) -> Router {
             post(handlers::mail_forwardings::external),
         )
         .route(
-            "/api/mail/forwardings/external/accept",
-            post(handlers::mail_forwardings::external_accept),
+            "/api/mail/forwardings/:id/code",
+            post(handlers::mail_forwardings::send_code),
+        )
+        .route(
+            "/api/mail/forwardings/:id/verify",
+            post(handlers::mail_forwardings::verify),
         )
         .route(
             "/api/mail/forwardings/external/decline",
@@ -1155,6 +1159,26 @@ fn build_router(state: AppState) -> Router {
         .route(
             "/api/contacts",
             get(handlers::contacts::list).post(handlers::contacts::create),
+        )
+        .route(
+            "/api/calendar/calendars",
+            get(handlers::calendar::list).post(handlers::calendar::create),
+        )
+        .route(
+            "/api/calendar/calendars/:id",
+            put(handlers::calendar::update).delete(handlers::calendar::delete),
+        )
+        .route(
+            "/api/calendar/calendars/:id/events",
+            get(handlers::calendar::events),
+        )
+        .route(
+            "/api/calendar/calendars/:id/events/sync",
+            post(handlers::calendar::sync),
+        )
+        .route(
+            "/api/calendar/calendars/:id/events/:event_id",
+            get(handlers::calendar::event),
         )
         .route(
             "/api/contacts/delete",
@@ -1438,6 +1462,36 @@ fn build_router(state: AppState) -> Router {
         )
         .route("/api/chat/keys", put(chat::replenish_keys))
         .route("/api/chat/keys/count", get(chat::prekey_count))
+        .route(
+            "/api/chat/link-tokens",
+            post(handlers::chat_provisioning::create_link_token),
+        )
+        .route(
+            "/api/chat/provisioning/ticket",
+            post(handlers::chat_provisioning::create_ticket)
+                .route_layer(from_fn(middleware::rate_limit_chat_provisioning)),
+        )
+        .route(
+            "/api/chat/provisioning",
+            get(handlers::chat_provisioning::socket),
+        )
+        .route(
+            "/api/chat/provisioning/:address",
+            // Above `chatProvisionBodyBytes`' largest (64 KiB), base64; the
+            // handler holds a body to the setting.
+            put(handlers::chat_provisioning::relay).route_layer(DefaultBodyLimit::max(128 * 1024)),
+        )
+        .route(
+            "/api/chat/account-identity",
+            // The ceiling the settings' maxima allow: ten devices' syncs at
+            // `chatDistributionMessageBytes`' largest, base64, plus their keys.
+            put(handlers::chat_identity::distribute_identity)
+                .route_layer(DefaultBodyLimit::max(16 * 1024 * 1024)),
+        )
+        .route(
+            "/api/chat/keys/check",
+            post(handlers::chat_identity::check_keys).route_layer(DefaultBodyLimit::max(1024)),
+        )
         .route(
             "/api/chat/mls/key-packages",
             put(chat_mls::publish_key_packages).route_layer(DefaultBodyLimit::max(8 * 1024 * 1024)),

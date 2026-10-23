@@ -205,6 +205,10 @@ widgets in Mail. English and Turkish.
 
 ## E1: build note (second session, 2026-10-21)
 
+Built: crypto and server in #307, the app in its follow-up (PR (b)). The view
+settings are kept per device in E1 (`kutup-calendar-prefs`); the account-wide
+settings come with reminders in E2.
+
 For review before code. E1 delivers personal calendars end to end: keys,
 calendars, single events (no recurrence, reminders or sharing yet, but the
 formats and tables carry them so E2–E4 add no migration of data). Copied from
@@ -316,6 +320,17 @@ except where marked.
 - en and tr; e2e specs (create a calendar, an event across a time zone,
   edit, move, delete; a second device reads them).
 
+**The browser runtime and its budget (the main session, 2026-10-21).**
+Calendars and the bundled time zone database add about 805 KB raw, 230 KB
+gzipped, to the crypto WASM. So `kutup-crypto-wasm` is built twice from the
+one crate: `crypto` for every app, and `crypto-calendar` (its `calendar`
+feature) which the Calendar app, and Mail once invitations need it (E4),
+load **instead of** `crypto`, never both. Every WASM runtime has a gzipped
+size budget (`frontend/wasm-budgets.json`, about 5% above its size when
+set), checked in the web gate (`scripts/check-wasm-size.mjs`): crypto
+1.78 MB, crypto-calendar 2.02 MB. The WASM vectors run on both builds, and
+the plain one must carry no calendar function.
+
 **Not in E1:** recurrence, reminders, import/export (E2), sharing and links
 and busy/free (E3), invitations (E4), URL feeds, Google import, meetings
 (E5), holidays (later).
@@ -332,3 +347,209 @@ and busy/free (E3), invitations (E4), URL feeds, Google import, meetings
 - The rPGP additions get vectors, cross-checked against a Proton calendar
   event where the references hold one (OpenPGP.js / go-crypto test data),
   and pass `cargo deny`.
+
+**Security review (the main session, 2026-10-21), fixed in #307 before any
+data exists.**
+- H1: a client seals events and metadata only through the calendar key it
+  unlocked (`UnlockedCalendarKey`, whose public key is derived from the
+  secret), never to a public key the server hands it; the WASM has no
+  seal-to-a-key function.
+- M3: the sealed metadata names its calendar id and the key's fingerprint,
+  and opens only under both, so the server can't move one calendar's name
+  onto another.
+- L6: a locked key is taken only in the form this code writes (AES-256,
+  iterated and salted S2K, a bounded count).
+- M1, L1: the events page cursor is the client's `(afterStart, afterId)`;
+  the window is half-open.
+- L2: events carry a revision; an update names its `baseRevision`, and
+  `SEQUENCE` never goes down.
+- L3: the member's permissions are checked again inside each change's
+  transaction. L7: the author columns are indexed.
+- The window and page sizes are site settings (`calendarWindowDays`,
+  `calendarEventsPage`).
+
+**Recorded for later.**
+- M2 (post-quantum): calendar keys follow Mail's keys to PQ OpenPGP
+  ([`mail-pq-openpgp.md`](mail-pq-openpgp.md)). `calendars.suite` (1 =
+  the current Ed25519/X25519 key) is in the schema now, so a PQ suite is a
+  new value with its own read and migrate policy, never a format change.
+- L4: deleting a calendar removes the members' rows without their account
+  heads naming the change. E1 has owners only; E3 (sharing) makes the delete
+  tell each member's client, which then drops the calendar from its head.
+
+## E2: build note (second session, 2026-10-21)
+
+Recurrence and exceptions, reminders, `.ics` import and export, following
+Proton's web client (`packages/shared/lib/calendar`, `applications/calendar`)
+unless marked **Q-n** (the main session's answers, 2026-10-21, are in
+place). Three PRs, as E1: (a) the Rust
+core, (b) the server, (c) the app.
+
+**1. Recurrence: Proton's subset, in the Rust core.**
+- `RRULE` with `FREQ` DAILY, WEEKLY, MONTHLY or YEARLY only, and only
+  Proton's parts per frequency (`rrule.ts:83-142`): `INTERVAL`, `COUNT`,
+  `UNTIL`, `WKST`; WEEKLY `BYDAY`; MONTHLY one `BYMONTHDAY`, or one `BYDAY`
+  with `BYSETPOS` in {-1, 1, 2, 3, 4} (also written `2TU`); YEARLY one
+  `BYMONTH` with one `BYMONTHDAY`, or `BYYEARDAY`. `COUNT` and `UNTIL`
+  never together; `DTSTART` is the first occurrence; at least one
+  occurrence. `RDATE`, `EXRULE`, `BYWEEKNO`, `BYHOUR` and lists in monthly
+  or yearly rules are refused, as Proton refuses them (they are kept as
+  unsupported, read-only, on import; see 5).
+- `UNTIL` is normalised as Proton's (`getSupportedUntil`): before `DTSTART`
+  becomes `DTSTART`; all-day a `DATE`; timed 23:59:59 of that day in
+  `DTSTART`'s zone, as UTC. `WKST` is kept only when not MO and meaningful.
+- The canonical form of E1 already carries `RRULE` and `EXDATE` in the
+  shared and calendar signed parts; E2 lifts E1's refusal and parses them
+  strictly (a rebuild must match byte for byte).
+- **The expander is Kutup's, on jiff**, not the `rrule` crate the plan
+  named: `rrule` brings `chrono` and `chrono-tz`, a second time zone
+  database that could disagree with `jiff-tzdb`, and Proton's subset is
+  small. As Proton's (`recurring.ts`): the rule runs on the wall clock in
+  `DTSTART`'s zone and each occurrence converts with that zone, so 09:00
+  stays 09:00 across DST; a gap moves forward, an overlap takes the earlier
+  instant (jiff's `compatible`); the end is start + duration in the start
+  zone; all-day durations count days. `EXDATE` matches by local start.
+  Vectors (RFC 5545's examples in the subset and Kutup's cases: DST gaps
+  and folds, EXDATEs, rules refused for their DTSTART) are expanded by
+  python-dateutil, an independent RFC 5545 implementation
+  (`scripts/generate-calendar-recurrence-vectors.py`; the WebClients
+  reference holds no recurrence test data), and a fuzz target covers the
+  parser and expander.
+- The same code runs in the server (below) and in WASM (`crypto-calendar`;
+  its size budget is raised only with the measured growth).
+
+**2. Exceptions, as Proton's (`containers/calendar/recurrence`).**
+- One occurrence changed: a child event with the same UID and
+  `RECURRENCE-ID` = the occurrence's local start (`DATE` for all-day), no
+  `RRULE` or `EXDATE`. Deleted: an `EXDATE` on the parent, and the child
+  deleted if any.
+- This and following: the series is cut (`COUNT` reduced, or `UNTIL` the
+  previous day 23:59:59 in its zone; the `RRULE` removed when nothing is
+  left), the later children deleted, and a new series created with Proton's
+  UID `<uid>_R<yyyymmdd>[T<hhmmss>]@<domain>` (an older `_R` suffix
+  replaced), `SEQUENCE` 0.
+- All occurrences: the parent changed and the children deleted, with
+  Proton's three choices when the start moved (keep single changes, keep the
+  original date with the new time, use the new date).
+- `SEQUENCE` as Proton's (`sequence.ts`): +1 unless the times, all-day and
+  rule are unchanged or the new rule is a subset of the old; a child's is at
+  least its parent's.
+- Each change is one sync change, applied alone, as Proton's. The server
+  checks a child's parent exists in the calendar (same UID, no
+  `RECURRENCE-ID`, an `RRULE`) and that the `RECURRENCE-ID` is one of its
+  occurrences; the unique (calendar, UID, RECURRENCE-ID) index already
+  holds one child per occurrence. **Q-1 (answered: as Proton's):** a "this
+  and following" edit is three changes (delete the later children, cut the
+  parent, create the new series), each applied alone. The app plans all
+  three before sending and retries what hasn't landed, and every step is
+  idempotent: an event's id is drawn by the client (a UUID v4, as calendar
+  ids in E1), so a create retried with the same id and content answers the
+  stored event instead of a second one; the cut names its `baseRevision`,
+  so a retry after it landed is a `revision_conflict` the app reads as done
+  (it checks the stored rule) and never cuts twice; a delete of an event
+  already gone is done. The series shows as pending until all three have
+  landed.
+
+**3. The window and range end.** `range_end_utc` (E1's column, NULL for
+endless) becomes the last occurrence's end, computed by the server from the
+signed `DTSTART`, `DTEND`, `RRULE` and `EXDATE` with the expander, so the
+window query of E1 is unchanged. Clients expand the series in the window
+from the opened event and check the server's `startUtc` and range end
+against their own, as E1 checks the start.
+
+**4. Reminders.**
+- As Proton's: `{ type: email | device, trigger }` relative to the start
+  only (`-PT15M`), readable by the server, never in the encrypted parts.
+  They belong to the member, not the event (each member of a shared
+  calendar in E3 has their own): a table `calendar_event_reminders (event,
+  user, reminders jsonb)`, absent meaning the calendar's defaults, sent
+  beside the event in a sync change (`reminders`). Proton's bounds:
+  triggers up to 999 weeks, 6999 days, 999 hours or 9999 minutes before;
+  at the start for timed events, up to a day after for all-day ones
+  (`VALARM`s otherwise are dropped on import).
+- Defaults per member and calendar, as Proton's calendar settings
+  (`DefaultPartDayNotifications`, `DefaultFullDayNotifications`,
+  `DefaultEventDuration`): timed 15 minutes before, all-day 15 hours before
+  (09:00 the day before), device and email. On the member row, under its
+  revision and the account head like colour and display.
+- **The server expands and fires.** A table `calendar_alarms (user, event,
+  occurrence, fire_at, action)` holds each member's next alarm per event
+  and reminder, recomputed when the event or its reminders change and after
+  one fires; a job (`jobs.rs`) every minute takes the due ones (`FOR UPDATE
+  SKIP LOCKED`, so several servers never fire one twice) and skips any more
+  than the site setting's lateness (Proton: one minute for the web).
+  `GET /api/calendar/alarms?start=&end=` lists a member's alarms in a
+  window (pages by fire time), as Proton's `/alarms`, for the open app.
+- **Device:** the open app fires its own notifications from `/alarms`
+  (Proton's: two days ahead, refetched before the end, one timer for the
+  next). When no tab is open the server sends a **web push** through
+  Chat's `web_push.rs` (its VAPID key, allowlisted push services, a
+  subscription per browser now also for the Calendar app). **Q-2
+  (answered):** Chat's pushes are empty; a reminder push carries, encrypted
+  to the browser (RFC 8291), only the start time and the event id, never
+  the title (the server can't read it), so the notification reads "An
+  event starts at 09:30", and opening it opens the event. The service
+  worker never holds calendar keys.
+- **Email:** a message the server writes to the member's own Kutup address,
+  delivered through Mail's inbound path (so it is encrypted at rest to the
+  address key like any mail) saying only "You have an event at <time>" and
+  a link to the event: never the title, description or location, which the
+  server can't read. Only for accounts with a Mail
+  address; the editor hides the email type otherwise.
+
+**5. Import (`.ics`, in the browser).**
+- As Proton's: `.ics`, `.ical`, `.icalendar`, `.ifb`; up to 10 MB and
+  15,000 components (site settings); errors as Proton's (empty, not a
+  calendar, no events, too many, corrupted; a non-`PUBLISH` method warns).
+- A lenient parser in the Rust core (folded lines, bad line endings, the
+  repairs Proton's `icsSurgery` makes) that rebuilds each event by
+  Proton's whitelist: UID (made when missing), DTSTAMP, DTSTART, DTEND
+  (`DURATION` turned into `DTEND`, a zero-length one dropped), SEQUENCE
+  (mod 2^31), SUMMARY, LOCATION, DESCRIPTION (Proton's lengths), EXDATE,
+  RECURRENCE-ID, RRULE, VALARMs (10 at most, `AUDIO` as device).
+  `ORGANIZER`/`ATTENDEE` dropped on `PUBLISH`; `VTODO`, `VJOURNAL` and
+  `VFREEBUSY` refused; an unsupported rule or `RECURRENCE-ID` with `RRULE`
+  is reported per event and not imported, as Proton's.
+- Time zones: `VTIMEZONE` blocks ignored; a `TZID` mapped as Proton's
+  `getSupportedTimezone` (IANA, then `(UTC+x) Name`, then the Windows
+  names table, then a substring), floating times in `X-WR-TIMEZONE` or the
+  person's zone.
+- Events go in batches of `calendarSyncBatch`, parents before children,
+  each with its own reminders (imported events take no defaults). **Q-3
+  (answered: as Proton's `Overwrite:1`):** a UID already in the calendar
+  is overwritten, unless the imported `SEQUENCE` is lower than the stored
+  one: that event is refused (`sequenceBehind`, as E1's updates) and listed
+  as skipped in the import's report.
+
+**6. Export.** All events of a calendar (paged by id), opened in the
+browser, written by the Rust core as one `VCALENDAR` (`VERSION:2.0`,
+`METHOD:PUBLISH`, `CALSCALE:GREGORIAN`, `X-WR-CALNAME`, `X-WR-CALDESC`,
+`X-WR-TIMEZONE`) with a `VTIMEZONE` for each zone used, built from the
+bundled tzdb's transitions over the events' years; reminders as `VALARM`s;
+the colour not exported; the file `<name>-yyyy-MM-dd.ics`.
+
+**7. Settings.** Proton's calendar user settings that apply in E2 (week
+length, week numbers, default calendar, the primary zone and its
+auto-detect, a secondary zone, the default view) move from the app's local
+`prefs.ts` to the account's synced UI preferences (`ui_preferences.rs`),
+so every device shows the same; week start stays the account's.
+
+**8. Limits (site settings, per account where it fits).** Reminders per
+event (10) and per calendar's defaults (5), the largest `COUNT` (49; 499
+for invitations in E4), import size and components (10 MB, 15,000), how
+late a reminder may still fire (1 minute), the alarms page (100). The rule
+grammar (which `RRULE` parts) and the 1970–2037 date range are the format,
+as Proton's, not limits.
+
+**9. The app.** The editor's repeat control (Proton's: none, daily,
+weekly, monthly on the day or the nth weekday, yearly, custom with interval,
+weekdays and an end by date or count), the "this / this and following /
+all" choice for edits and deletes, reminders with defaults, import (a file,
+a calendar, a report) and export from the calendar's menu, the settings
+above, notification permission asked when the first device reminder is
+saved. English and Turkish; e2e specs for a weekly series across DST, an
+exception, a cut series, a reminder fired (a short trigger with the test
+stack's lateness), import of a Google export and export round-trip.
+
+**Not in E2:** sharing and busy/free (E3), invitations and their wider
+rule set (E4), feeds and Google import (E5).

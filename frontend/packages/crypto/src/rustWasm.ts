@@ -3,12 +3,13 @@
 
 import { freshUrl, retryLoad } from './retry'
 
-// The runtime's directory is named for its content hash (the build passes
-// it in, @kutup/config/vite), so a new build is a new URL and the files can
-// be cached for good. Without it (tests) the files are looked for directly
+// The runtime's path is its build (`crypto-wasm`, or `crypto-calendar-wasm`
+// for the apps with calendars) and its content hash (the build passes it in,
+// @kutup/config/vite), so a new build is a new URL and the files can be
+// cached for good. Without it (tests) the files are looked for directly
 // under /crypto-wasm/.
 declare const __KUTUP_CRYPTO_WASM__: string | undefined
-const BASE = typeof __KUTUP_CRYPTO_WASM__ === 'string' && __KUTUP_CRYPTO_WASM__ ? `/crypto-wasm/${__KUTUP_CRYPTO_WASM__}` : '/crypto-wasm'
+const BASE = typeof __KUTUP_CRYPTO_WASM__ === 'string' && /\/[0-9a-f]{16}$/.test(__KUTUP_CRYPTO_WASM__) ? `/${__KUTUP_CRYPTO_WASM__}` : '/crypto-wasm'
 const MODULE_URL = `${BASE}/kutup_crypto_wasm.js`
 const WASM_URL = `${BASE}/kutup_crypto_wasm_bg.wasm`
 

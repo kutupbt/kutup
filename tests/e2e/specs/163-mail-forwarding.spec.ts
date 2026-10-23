@@ -5,6 +5,9 @@ import { apiUrl, appUrl, newAccount, registerAccount } from '../fixtures/apps'
 import { openWhenArrived } from '../fixtures/mail'
 
 // Mail forwarding (docs/plans/mail-forwarding.md), as Proton's:
+// - every destination is verified first: a 6-digit code mailed to it, which
+//   the forwarder enters (a wrong one says how many tries are left); the
+//   forwardee sees nothing before;
 // - end to end to a Kutup address here: set up in Settings → Forwarding,
 //   accepted by the forwardee in theirs, then mail to the forwarder reaches
 //   the forwardee too (the forwarder keeps the original) and opens with the
@@ -13,12 +16,12 @@ import { openWhenArrived } from '../fixtures/mail'
 //   forwarder's side;
 // - outside: the confirmation step says end-to-end encryption goes off for
 //   the address, the address's signed key list says so while it lasts (a
-//   sender's composer reads it from there), and deleting the forwarding
-//   turns it back on;
-// - the outside recipient confirms on the public page, with no account (the
+//   sender's composer reads it from there), even while it waits for its
+//   code;
+// - the outside recipient stops it on the public page, with no account (the
 //   link's token is the one the spec puts in place of the emailed one:
-//   E2E_PSQL, tests/e2e/README.md), and the page drops the token from the
-//   address bar.
+//   E2E_PSQL, tests/e2e/README.md), the page drops the token from the
+//   address bar, and the address's encryption comes back on.
 
 const PASSWORD = 'Deneme123*MailForwardingPassword'
 
@@ -63,7 +66,7 @@ async function startForwarding(page: Page, to: string) {
   return dialog
 }
 
-test('forwarding: end to end set up, accepted, received, paused and deleted; outside turns encryption off and back on', async ({ browser, request }) => {
+test('forwarding: verified by code; end to end set up, accepted, received, paused and deleted; outside turns encryption off, stopped by its recipient', async ({ browser, request }) => {
   test.slow()
   expect(process.env.E2E_PSQL, 'E2E_PSQL: a command that runs SQL from its stdin against the test stack database').toBeTruthy()
   const settings = (await (await request.get(apiUrl('/auth/settings'))).json()) as { chat: { serverName: string } }
@@ -84,14 +87,36 @@ test('forwarding: end to end set up, accepted, received, paused and deleted; out
   const bobAddress = `${bob.username}@${domain}`
   const tag = Date.now().toString(36)
 
-  // Alice forwards everything to Bob: end to end, pending until he accepts.
+  // Alice forwards everything to Bob: end to end, pending until he accepts,
+  // and first until she enters the code mailed to his address.
   await openForwarding(mail)
   const dialog = await startForwarding(mail, bobAddress)
   await expect(dialog.getByText('End-to-end encrypted', { exact: true })).toBeVisible()
   await expect(dialog.getByTestId('forwarding-outside-warning')).toHaveCount(0)
   await dialog.getByTestId('forwarding-submit').click()
+  const codeDialog = mail.getByTestId('forwarding-code-dialog')
+  await expect(codeDialog).toBeVisible({ timeout: 60_000 })
+  await expect(codeDialog).toContainText(bobAddress)
+  // Bob is shown nothing yet.
+  await openForwarding(bobMail)
+  await bobMail.getByRole('tab', { name: 'To me' }).click()
+  await expect(bobMail.getByText('Nobody forwards to you')).toBeVisible({ timeout: 60_000 })
+  // The code reaches Bob's inbox, from the server.
+  await bobMail.goto(appUrl('mail', '/inbox'))
+  await openWhenArrived(bobMail, new RegExp(`Verification code for forwarding from ${aliceAddress}`))
+  const codeMail = bobMail.frameLocator('iframe[title="Message"]').last().getByText(/Verification code: \d{6}/)
+  await expect(codeMail).toBeVisible({ timeout: 60_000 })
+  const code = /Verification code: (\d{6})/.exec((await codeMail.textContent()) ?? '')![1]
+  const codeInput = codeDialog.getByLabel('Verification code')
+  await codeInput.fill(code === '000000' ? '111111' : '000000')
+  await codeDialog.getByRole('button', { name: 'Verify' }).click()
+  await expect(codeDialog.getByTestId('forwarding-code-error')).toContainText("That isn't the code. 4 tries left.", { timeout: 60_000 })
+  await codeInput.fill(code)
+  await codeDialog.getByRole('button', { name: 'Verify' }).click()
+  await expect(codeDialog).toHaveCount(0, { timeout: 60_000 })
   const outgoing = mail.getByTestId('forwarding-list-outgoing')
   await expect(outgoing.getByTestId('forwarding-row')).toHaveAttribute('data-state', 'pending', { timeout: 60_000 })
+  await expect(outgoing.getByText('Pending verification')).toHaveCount(0)
 
   // Bob accepts in his settings ("To me").
   await openForwarding(bobMail)
@@ -154,34 +179,14 @@ test('forwarding: end to end set up, accepted, received, paused and deleted; out
   await expect(outsideDialog.getByText('Not end-to-end encrypted', { exact: true })).toBeVisible()
   await expect(outsideDialog.getByTestId('forwarding-outside-warning')).toContainText(aliceAddress)
   await outsideDialog.getByTestId('forwarding-submit').click()
+  // Its code went to the outside address; Alice enters it later.
+  await mail.getByTestId('forwarding-code-dialog').getByRole('button', { name: 'Later' }).click()
   await expect(mail.getByTestId('forwarding-encryption-off')).toBeVisible({ timeout: 60_000 })
+  const outsideRow = mail.getByTestId('forwarding-list-outgoing').getByTestId('forwarding-row')
   await expect(mail.getByTestId('forwarding-list-outgoing').getByText(outside)).toBeVisible()
-  await expect(mail.getByTestId('forwarding-list-outgoing').getByTestId('forwarding-row')).toHaveAttribute('data-state', 'pending')
-
-  // The recipient confirms through the link, with no account. The emailed
-  // token never reaches the test, so one of the spec's own takes its place
-  // (the server keeps only its hash).
-  const token = randomBytes(32)
-  const updated = sql(
-    `UPDATE mail_forwardings SET confirmation_hash = '\\x${createHash('sha256').update(token).digest('hex')}' WHERE forwardee_email = '${outside}' AND state = 'pending';`,
-  )
-  expect(updated).toContain('UPDATE 1')
-  const visitor = await browser.newContext()
-  const page = await visitor.newPage()
-  await page.goto(appUrl('account', `/email-forwarding#${token.toString('base64url')}`))
-  await expect(page.getByTestId('email-forwarding-request')).toContainText(`${aliceAddress} wants to forward email to ${outside}`, { timeout: 60_000 })
-  expect(new URL(page.url()).hash).toBe('')
-  await page.getByTestId('email-forwarding-accept').click()
-  await expect(page.getByTestId('email-forwarding-done')).toContainText('Forwarding accepted', { timeout: 60_000 })
-  // Spent: the link answers no more (opened again, as from the email).
-  const again = await visitor.newPage()
-  await again.goto(appUrl('account', `/email-forwarding#${token.toString('base64url')}`))
-  await expect(again.getByTestId('email-forwarding-problem')).toBeVisible({ timeout: 60_000 })
-  await again.close()
-  await expect(async () => {
-    await mail.reload()
-    await expect(mail.getByTestId('forwarding-list-outgoing').getByTestId('forwarding-row')).toHaveAttribute('data-state', 'active', { timeout: 5_000 })
-  }).toPass({ timeout: 60_000 })
+  await expect(outsideRow).toHaveAttribute('data-state', 'pending')
+  await expect(outsideRow.getByText('Pending verification')).toBeVisible()
+  await expect(outsideRow.getByTestId('forwarding-verify')).toBeVisible()
   const keys = await aliceContext.newPage()
   await keys.goto(appUrl('account', '/settings/keys'))
   await expect(keys.getByTestId('mail-keys-encryption-off')).toBeVisible({ timeout: 60_000 })
@@ -194,12 +199,35 @@ test('forwarding: end to end set up, accepted, received, paused and deleted; out
   })
   await mail.goto(appUrl('mail', '/inbox'))
   await openWhenArrived(mail, new RegExp(readable))
+
+  // The recipient stops it through the link in the code mail, with no
+  // account. The emailed token never reaches the test, so one of the
+  // spec's own takes its place (the server keeps only its hash).
+  const token = randomBytes(32)
+  const updated = sql(
+    `UPDATE mail_forwardings SET confirmation_hash = '\\x${createHash('sha256').update(token).digest('hex')}' WHERE forwardee_email = '${outside}' AND state = 'pending';`,
+  )
+  expect(updated).toContain('UPDATE 1')
+  const visitor = await browser.newContext()
+  const page = await visitor.newPage()
+  await page.goto(appUrl('account', `/email-forwarding#${token.toString('base64url')}`))
+  await expect(page.getByTestId('email-forwarding-request')).toContainText(`${aliceAddress} wants to forward email to ${outside}`, { timeout: 60_000 })
+  expect(new URL(page.url()).hash).toBe('')
+  // Nothing here starts it: only stopping is offered.
+  await expect(page.getByRole('button', { name: /Accept|Confirm|Verify/ })).toHaveCount(0)
+  await page.getByTestId('email-forwarding-decline').click()
+  await expect(page.getByTestId('email-forwarding-done')).toContainText('Forwarding declined', { timeout: 60_000 })
+  // Spent: the link answers no more (opened again, as from the email).
+  const again = await visitor.newPage()
+  await again.goto(appUrl('account', `/email-forwarding#${token.toString('base64url')}`))
+  await expect(again.getByTestId('email-forwarding-problem')).toBeVisible({ timeout: 60_000 })
+  await again.close()
   await openForwarding(mail)
-  const outsideRow = mail.getByTestId('forwarding-list-outgoing').getByTestId('forwarding-row')
-  await outsideRow.getByRole('button', { name: 'Delete' }).click()
-  await mail.getByRole('alertdialog').getByRole('button', { name: 'Delete' }).click()
-  await expect(mail.getByText('No forwarding yet')).toBeVisible({ timeout: 60_000 })
-  // The deletion owes a key list without the flag; Mail signs it on its next look.
+  await expect(async () => {
+    await mail.reload()
+    await expect(mail.getByTestId('forwarding-list-outgoing').getByTestId('forwarding-row')).toHaveAttribute('data-state', 'rejected', { timeout: 5_000 })
+  }).toPass({ timeout: 60_000 })
+  // Declined, the address owes a key list without the flag; Mail signs it on its next look.
   await expect(async () => {
     await mail.reload()
     await expect(mail.getByTestId('forwarding-encryption-off')).toHaveCount(0, { timeout: 5_000 })
@@ -215,6 +243,11 @@ test('forwarding: end to end set up, accepted, received, paused and deleted; out
   await composer.getByRole('combobox', { name: 'To' }).press('Enter')
   await expect(composer.getByRole('img', { name: 'End-to-end encrypted: a Kutup address' })).toBeVisible({ timeout: 60_000 })
   await expect(composer.getByTestId('recipient-encryption-disabled')).toHaveCount(0)
+  // The declined row goes.
+  await openForwarding(mail)
+  await outsideRow.getByRole('button', { name: 'Delete' }).click()
+  await mail.getByRole('alertdialog').getByRole('button', { name: 'Delete' }).click()
+  await expect(mail.getByText('No forwarding yet')).toBeVisible({ timeout: 60_000 })
 
   // A link that isn't one says so.
   const madeUp = await visitor.newPage()

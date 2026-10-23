@@ -138,6 +138,11 @@ pub mod kind {
     /// (docs/plans/pairwise-groups.md, "Slice 2"). Hidden; never history.
     /// [IMPL]
     pub const GROUP_DELIVERY: &str = "groupDelivery";
+    /// An identity distribution's message to one kept device of the account
+    /// (Signal's `PniChangeNumber`): the new account identity, that device's
+    /// new keys and registration id (`crate::AccountIdentityBody`). Accepted
+    /// only from another device of the local account; hidden, never history.
+    pub const ACCOUNT_IDENTITY: &str = "accountIdentity";
 }
 
 /// The decrypted plaintext of a chat message.
@@ -557,6 +562,33 @@ impl ChatContent {
             return None;
         }
         let body: SenderKeyDistributionBody = serde_json::from_value(self.body.clone()).ok()?;
+        body.validate().ok()?;
+        Some(body)
+    }
+
+    /// An identity distribution's message to one kept device of this
+    /// account (`kind::ACCOUNT_IDENTITY`). Hidden; never history.
+    pub fn account_identity_with_id(
+        message_id: impl Into<String>,
+        sent_at: impl Into<String>,
+        seq: u64,
+        body: &crate::AccountIdentityBody,
+    ) -> Self {
+        Self::hidden_with_id(
+            kind::ACCOUNT_IDENTITY,
+            message_id,
+            sent_at,
+            seq,
+            serde_json::to_value(body).unwrap_or_default(),
+        )
+    }
+
+    /// The `accountIdentity` body, when this is one and it is well formed.
+    pub fn as_account_identity(&self) -> Option<crate::AccountIdentityBody> {
+        if self.kind != kind::ACCOUNT_IDENTITY || self.v != Self::VERSION {
+            return None;
+        }
+        let body: crate::AccountIdentityBody = serde_json::from_value(self.body.clone()).ok()?;
         body.validate().ok()?;
         Some(body)
     }

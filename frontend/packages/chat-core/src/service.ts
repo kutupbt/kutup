@@ -2,6 +2,7 @@ import api from '@kutup/session/client'
 import { isAxiosError } from 'axios'
 import { resolveApiBase } from '@kutup/session/apiBase'
 import { ApiChatTransport, PEER_UNSUPPORTED } from './transport'
+import { takeDeviceCredentialRefusal } from './device-auth'
 import type {
   ChatCapabilities,
   ChangeMark,
@@ -40,8 +41,10 @@ import type {
   MlsAuthorityPolicyInspection,
   PendingMlsOwnerApprovalRequest,
   PendingMlsInvitation,
-  SafetyNumberV1,
+  SafetyNumberV2,
+  ChatWasmModule,
   WasmChatClientHandle,
+  WasmLinkingDeviceHandle,
 } from './types'
 import { isChatGroupId } from './types'
 import type {
@@ -139,9 +142,10 @@ const GROUP_SYNC_FIRST_MS = 15_000
  * WebSockets, say) but the server answers ordinary requests, so the mailbox
  * is read every few seconds instead.
  *
- * `deviceRemoved`: the server no longer knows this browser's Chat device (it
- * was revoked from another device, or expired unused). Nothing reconnects
- * it; it has to be set up again.
+ * `deviceRemoved`: this browser is no longer a Chat device of the account (it
+ * was revoked from another device, expired unused, or missed an identity
+ * distribution). Nothing reconnects it; it is linked again, keeping its
+ * history.
  */
 export type ChatConnectionStatus = 'connected' | 'connecting' | 'polling' | 'offline' | 'deviceRemoved'
 
@@ -171,6 +175,11 @@ const PONG_TIMEOUT_MS = 10_000
 export type ChatServiceErrorCode =
   | 'browserUnsupported'
   | 'serverUnsupported'
+  /**
+   * Another device of the account holds its Chat identity: this browser is
+   * linked from it (or re-registers, dropping the account's other devices).
+   */
+  | 'linkRequired'
   /** The account's contact list couldn't be read yet: the mailbox waits. */
   | 'contactListUnconfirmed'
   /** The server's contact list contradicts the account's verified state. */
@@ -232,6 +241,40 @@ export function contactListFailure(error: unknown): ChatServiceError | null {
   return new ChatServiceError(INTEGRITY_MARKERS.some((marker) => message.includes(marker)) ? 'contactListIntegrity' : 'contactListUnconfirmed')
 }
 
+/**
+ * The engine for this browser, as `options.install` says: the device it
+ * has; the account's first one; a re-registration; or a linked device.
+ */
+async function openClientHandle(
+  wasm: ChatWasmModule,
+  transport: ApiChatTransport,
+  databaseName: string,
+  options: ChatServiceOptions,
+): Promise<WasmChatClientHandle> {
+  const args = [
+    databaseName,
+    accountKey(options.account),
+    options.displayName,
+    options.capabilities.sealedSender,
+    options.masterKey,
+    options.envelopeBinding,
+    transport,
+  ] as const
+  const install = options.install ?? { kind: 'open' }
+  if (install.kind === 'link') return await install.linking.completeLink(install.envelope, ...args)
+  if (install.kind === 'reregister') return await wasm.WasmChatClient.reregister(...args)
+  const state = await wasm.WasmChatClient.installation(
+    databaseName,
+    accountKey(options.account),
+    options.masterKey,
+    transport,
+  )
+  if (state === 'link') throw new ChatServiceError('linkRequired')
+  // The account has no Chat identity yet: this is its first device.
+  if (state === 'reregister') return await wasm.WasmChatClient.reregister(...args)
+  return await wasm.WasmChatClient.open(...args)
+}
+
 export class ChatServiceError extends Error {
   constructor(readonly code: ChatServiceErrorCode) {
     super(code)
@@ -249,7 +292,19 @@ export interface ChatServiceOptions {
   displayName: string
   masterKey: Uint8Array
   capabilities: ChatCapabilities
+  /**
+   * How this browser gets its device (docs/plans/account-identity-key.md):
+   * by default the one it has, or the account's first; `reregister` after the
+   * person confirmed losing the account's other devices; `link` with the
+   * provisioning envelope another device sent.
+   */
+  install?: ChatInstall
 }
+
+export type ChatInstall =
+  | { kind: 'open' }
+  | { kind: 'reregister' }
+  | { kind: 'link'; linking: WasmLinkingDeviceHandle; envelope: unknown }
 
 export interface ChatMediaStorageView {
   totalQuotaBytes: number
@@ -439,15 +494,17 @@ export class ChatService {
     let client: WasmChatClientHandle
     try {
       client = await engineLock.run(async (tookOver) => {
-        const handle = await wasm.WasmChatClient.open(
-          databaseName,
-          accountKey(options.account),
-          options.displayName,
-          capabilities.sealedSender,
-          options.masterKey,
-          options.envelopeBinding,
-          transport,
-        )
+        let handle: WasmChatClientHandle
+        try {
+          handle = await openClientHandle(wasm, transport, databaseName, options)
+        } catch (error) {
+          // This browser's device was removed while it was closed: it is
+          // linked again (its history stays), like a new one.
+          if (takeDeviceCredentialRefusal() || isLinkRequired(error)) {
+            throw new ChatServiceError('linkRequired')
+          }
+          throw error
+        }
         // Taken over before there was a client to claim with: claim now.
         if (tookOver) await handle.claimWriter?.(true)
         opened = handle
@@ -1525,9 +1582,17 @@ export class ChatService {
     })
       .then(async ({ commits, expiry, report }) => {
         await this.releaseExpiredAttachments(expiry)
-        const mlsTyping = await this.withMlsWorkflow(async () => {
-          return await this.mls?.reconcile() ?? []
-        })
+        // MLS groups go their own way: a failure there (an MLS device the
+        // server no longer has, say after an identity reset) never holds
+        // back what this pass took for direct conversations.
+        let mlsTyping: ChatTypingEvent[] = []
+        try {
+          mlsTyping = await this.withMlsWorkflow(async () => {
+            return await this.mls?.reconcile() ?? []
+          })
+        } catch (error) {
+          reportBackgroundFailure(error)
+        }
         // A queued message the server would not take stays queued, behind
         // nothing but its own conversation; it is tried again on every pass.
         const waiting = new Set<string>()
@@ -1589,6 +1654,15 @@ export class ChatService {
           if (this.mls?.takeInvitationsChanged() || entered) this.emitUpdate()
         }
         return report
+      })
+      .catch((error: unknown) => {
+        // The account moved to an identity this device missed: it has
+        // forgotten its registration and is linked again (its history stays).
+        if (isLinkRequired(error)) {
+          this.stopPolling()
+          this.setConnection('deviceRemoved')
+        }
+        throw error
       })
       .finally(() => {
         this.reconcilePromise = null
@@ -2290,18 +2364,53 @@ export class ChatService {
     }
   }
 
-  async safetyNumber(peer: string): Promise<SafetyNumberV1> {
+  async safetyNumber(peer: string): Promise<SafetyNumberV2> {
     const account = requireAccountKey(peer)
     return this.withLock(() => this.client.safetyNumber(account))
   }
 
-  async verifySafetyNumber(peer: string, scannedPayload: string): Promise<SafetyNumberV1> {
+  async verifySafetyNumber(peer: string, scannedPayload: string): Promise<SafetyNumberV2> {
     const account = requireAccountKey(peer)
     const verified = await this.withLock(() =>
       this.client.verifySafetyNumber(account, scannedPayload),
     )
     this.notifyPeers()
     return verified
+  }
+
+  /** Mark the contact's identity verified (or clear it) after comparing the numbers. */
+  async setIdentityVerified(peer: string, identityKey: string, verified: boolean): Promise<SafetyNumberV2> {
+    const account = requireAccountKey(peer)
+    const safety = await this.withLock(() =>
+      this.client.setIdentityVerified(account, identityKey, verified),
+    )
+    this.notifyPeers()
+    return safety
+  }
+
+  /**
+   * Link a new device of this account from the code it shows (scanned or
+   * pasted), sending it the account identity and these settings. `false`:
+   * the code expired, and the new device shows a new one.
+   */
+  async linkDevice(
+    code: string,
+    settings: { readReceipts: boolean; typingIndicators: boolean },
+  ): Promise<boolean> {
+    return await this.withLock(() =>
+      this.client.linkDevice(code.trim(), settings.readReceipts, settings.typingIndicators),
+    )
+  }
+
+  /**
+   * Reset the account's identity, keeping its devices but `remove` (a lost or
+   * stolen one), which leave the account. Contacts see the safety number
+   * change once. Returns the devices kept.
+   */
+  async resetIdentity(remove: number[]): Promise<ChatDevice[]> {
+    await this.withLock(() => this.client.resetIdentity(remove))
+    this.notifyPeers()
+    return this.devices()
   }
 
   async quarantineInbound(id: string): Promise<void> {
@@ -2646,7 +2755,7 @@ export class ChatService {
       // Only the server's own answer counts: a 404 from a proxy, or from a
       // server where Chat is off, says nothing about this device, and the
       // repair offered for a removed one drops what waits to be sent.
-      if (isAxiosError(error) && error.response?.status === 404 && isNoSuchDevice(error.response.data)) {
+      if (isAxiosError(error) && isDeviceGone(error.response?.status, error.response?.data)) {
         this.stopPolling()
         this.setConnection('deviceRemoved')
         return
@@ -2870,8 +2979,30 @@ function parseCallBroadcast(value: unknown): ChatCallEvent | null {
 }
 
 /** The server's answer when it does not know this browser's Chat device. */
+/**
+ * The core's answer that this browser has no device of the account: it
+ * never had one, or it missed an identity distribution and forgot its
+ * registration. It is linked again, keeping its history.
+ */
+export function isLinkRequired(error: unknown): boolean {
+  return error instanceof Error && error.message === 'chatDeviceNotRegistered'
+}
+
 function isNoSuchDevice(body: unknown): boolean {
   return typeof body === 'object' && body !== null && (body as { error?: unknown }).error === 'no such chat device'
+}
+
+/**
+ * The server's own answer that this browser's Chat device is gone: its
+ * credential matches no live device of the account (`401 deviceCredential`:
+ * removed here or on another device, or dropped by a re-registration), or the
+ * older `404` for a device id it doesn't know.
+ */
+export function isDeviceGone(status: number | undefined, body: unknown): boolean {
+  if (status === 401) {
+    return typeof body === 'object' && body !== null && (body as { code?: unknown }).code === 'deviceCredential'
+  }
+  return status === 404 && isNoSuchDevice(body)
 }
 
 /** Newest entries per changed conversation the attachment ledger looks at. */

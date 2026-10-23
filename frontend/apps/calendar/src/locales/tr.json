@@ -1,0 +1,91 @@
+{
+  "boot": {
+    "opening": "Takvimleriniz açılıyor…",
+    "failedTitle": "Takvim açılamadı",
+    "failedDescription": "Kutup'a ulaşılamadı ya da hesabınız üzerinden oturum açma tamamlanmadı. Bağlantınızı denetleyip yeniden deneyin.",
+    "keysChanged": "Bu hesabın anahtarları oturum açtığınızdan beri sunucuda değişti. Yeniden oturum açın."
+  },
+  "notFound": {
+    "title": "Sayfa bulunamadı",
+    "description": "Bu sayfa Takvim'de yok."
+  },
+  "nav": {
+    "calendars": "Takvimler"
+  },
+  "calendars": {
+    "new": "Yeni takvim",
+    "newTitle": "Yeni takvim",
+    "editTitle": "Takvim",
+    "name": "Ad",
+    "description": "Açıklama",
+    "color": "Renk",
+    "encrypted": "Ad ve açıklama şifrelidir: yalnızca takvimin üyeleri okuyabilir.",
+    "saved": "Takvim kaydedildi",
+    "created": "Takvim oluşturuldu",
+    "saveFailed": "Takvim kaydedilemedi.",
+    "delete": "Takvimi sil",
+    "deleteTitle": "{{name}} silinsin mi?",
+    "deleteDescription": "Takvim ve tüm etkinlikleri kalıcı olarak silinir.",
+    "deleted": "Takvim silindi",
+    "defaultName": "Takvimim",
+    "show": "{{name}} gösterilsin",
+    "edit": "{{name}} düzenle",
+    "noMailKeys": "Posta adresinizin henüz anahtarı yok; takvimler için gerekir. Posta'yı bir kez açıp geri gelin.",
+    "none": "Henüz takvim yok.",
+    "loadFailed": "Takvimleriniz yüklenemedi."
+  },
+  "events": {
+    "new": "Yeni etkinlik",
+    "newTitle": "Yeni etkinlik",
+    "editTitle": "Etkinlik",
+    "title": "Başlık",
+    "untitled": "(başlıksız)",
+    "allDay": "Tüm gün",
+    "start": "Başlangıç",
+    "startTime": "Başlangıç saati",
+    "end": "Bitiş",
+    "endTime": "Bitiş saati",
+    "endBeforeStart": "Etkinlik başladıktan sonra bitmeli.",
+    "timeZone": "Saat dilimi",
+    "calendar": "Takvim",
+    "location": "Konum",
+    "description": "Açıklama",
+    "delete": "Etkinliği sil",
+    "deleteTitle": "{{name}} silinsin mi?",
+    "deleteDescription": "Etkinlik kalıcı olarak silinir.",
+    "deleted": "Etkinlik silindi",
+    "saved": "Etkinlik kaydedildi",
+    "created": "Etkinlik oluşturuldu",
+    "saveFailed": "Etkinlik kaydedilemedi.",
+    "refused": "Etkinlik kaydedilemedi: sunucu kabul etmedi.",
+    "limit": "Bu takvim, sunucunun izin verdiği kadar etkinlik barındırıyor.",
+    "changedElsewhere": "Bu etkinliği önce başka bir cihaz değiştirdi. Kapatıp yeniden açın.",
+    "unverified": "Bu etkinliğin imzası doğrulanamadı: biri değiştirmiş olabilir. İçeriği gösteriliyor ama ona güvenmeyin.",
+    "unverifiedShort": "Doğrulanmadı",
+    "unreadable_one": "{{count}} öğe açılamadı ve gösterilmiyor.",
+    "unreadable_other": "{{count}} öğe açılamadı ve gösterilmiyor.",
+    "loadFailed": "Etkinlikler yüklenemedi."
+  },
+  "view": {
+    "today": "Bugün",
+    "previous": "Önceki",
+    "next": "Sonraki",
+    "label": "Görünüm",
+    "day": "Gün",
+    "week": "Hafta",
+    "month": "Ay",
+    "more_one": "{{count}} tane daha",
+    "more_other": "{{count}} tane daha"
+  },
+  "settings": {
+    "title": "Ayarlar",
+    "description": "Takvimlerin burada nasıl gösterileceği.",
+    "zone": "Saat dilimi",
+    "weekStart": "Hafta başlangıcı",
+    "clock": "Saat",
+    "clockAuto": "Dilime göre",
+    "clock24": "24 saat",
+    "clock12": "12 saat",
+    "thisDevice": "Bu ayarlar bu cihazda tutulur."
+  }
+}

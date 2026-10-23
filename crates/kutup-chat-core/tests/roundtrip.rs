@@ -17,10 +17,7 @@ use rand::TryRngCore as _;
 /// Simulates the server serving Bob's *published* registration as a per-device
 /// bundle: it hands out the signed prekey, the identity, one one-time Kyber
 /// prekey, and one one-time EC prekey (consumed). No private material.
-fn serve_bundle(
-    reg: &kutup_chat_proto::RegisterChatDeviceRequest,
-    device_id: u32,
-) -> DevicePreKeyBundle {
+fn serve_bundle(reg: &kutup_chat_core::PublishedKeys, device_id: u32) -> DevicePreKeyBundle {
     DevicePreKeyBundle {
         device_id,
         registration_id: reg.registration_id,
@@ -105,11 +102,11 @@ fn one_to_one_text_round_trip_through_wire_types() {
     let alice_addr =
         ChatAddress::from_sender("aci:00000000-0000-4000-8000-2bd806c97f0e@example.test", 1)
             .unwrap();
-    let bob_reg = bob.registration().unwrap().registration_id;
-    let alice_reg = alice.registration().unwrap().registration_id;
+    let bob_reg = bob.published_keys().unwrap().registration_id;
+    let alice_reg = alice.published_keys().unwrap().registration_id;
 
     // Sanity: Bob's published bundle carries a PQ prekey and a signed prekey.
-    let bob_bundle = serve_bundle(bob.registration().unwrap(), 1);
+    let bob_bundle = serve_bundle(bob.published_keys().unwrap(), 1);
     assert!(
         !bob_bundle.kyber_pre_key.public_key.is_empty(),
         "PQ prekey present"
@@ -211,10 +208,10 @@ fn device_state_survives_reopen() {
             &mut rng,
         ))
         .unwrap();
-        let bob_reg = bob.registration().unwrap().registration_id;
-        let alice_reg = alice.registration().unwrap().registration_id;
+        let bob_reg = bob.published_keys().unwrap().registration_id;
+        let alice_reg = alice.published_keys().unwrap().registration_id;
 
-        let bundle = serve_bundle(bob.registration().unwrap(), 1);
+        let bundle = serve_bundle(bob.published_keys().unwrap(), 1);
         block_on(alice.complete_registration(1)).unwrap();
         block_on(bob.complete_registration(1)).unwrap();
         block_on(alice.establish(&bob_addr, &bundle, &mut rng)).unwrap();
@@ -257,8 +254,8 @@ fn device_state_survives_reopen() {
         ))
         .unwrap();
         // Opened devices don't carry a fresh registration payload.
-        assert!(alice.registration().is_none());
-        assert!(bob.registration().is_none());
+        assert!(alice.published_keys().is_none());
+        assert!(bob.published_keys().is_none());
 
         // Alice → Bob continues her sender ratchet loaded from disk.
         let e = block_on(alice.encrypt(
@@ -328,12 +325,12 @@ fn tampered_ciphertext_is_rejected() {
         ChatAddress::from_sender("aci:00000000-0000-4000-8000-2bd806c97f0e@example.test", 1)
             .unwrap();
 
-    let bundle = serve_bundle(bob.registration().unwrap(), 1);
+    let bundle = serve_bundle(bob.published_keys().unwrap(), 1);
     block_on(alice.establish(&bob_addr, &bundle, &mut rng)).unwrap();
     let msg = ChatContent::text_with_id("m8", "t", 1, "secret");
     let mut env = block_on(alice.encrypt(
         &bob_addr,
-        bob.registration().unwrap().registration_id,
+        bob.published_keys().unwrap().registration_id,
         &msg,
         &mut rng,
     ))
