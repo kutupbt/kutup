@@ -223,8 +223,12 @@ access first).
 **3.7 Expiry and removal.**
 - Expiration: the start of day `d+2` UTC for day `d`'s params, so every
   member's endorsement for a day combines. D issues only day-aligned
-  expirations between 2 hours and 7 days ahead (libsignal's own check); the
-  client refreshes in the last 6 hours of a day for the next.
+  expirations at least 25 hours and at most 7 days ahead (§3.3, inside
+  libsignal's own 2 hours to 7 days), so day `d`'s can be asked for until
+  23:00 UTC on day `d`. The client asks for day `d+1`'s from 18:00 UTC on
+  day `d` (with the credential for tomorrow, §3.3) and uploads both, so
+  every member holds the next day's before the current one ends; a sender
+  uses the newest expiration all the recipients on one server share.
 - Removal: the removed member can send to the others until their current
   endorsements expire (at most about two days), as in Signal. It gets no new
   ones: it can't read the home's state, and the home deletes its blob.
