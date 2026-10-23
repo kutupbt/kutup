@@ -1491,7 +1491,8 @@ pub(crate) async fn deliver(
         let mut forwards = Vec::new();
         let forwarding: Vec<Uuid> = sqlx::query_scalar(
             "SELECT DISTINCT forwarder_address_id FROM mail_forwardings
-              WHERE state = 'active' AND forwarder_address_id = ANY($1)",
+              WHERE state = 'active' AND verified_at IS NOT NULL
+                AND forwarder_address_id = ANY($1)",
         )
         .bind(
             copies

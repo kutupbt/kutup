@@ -1529,6 +1529,12 @@ export interface AppliedInboundMlsApplication {
 
 export interface ChatTransportPort {
   registerDevice(request: unknown): Promise<unknown>
+  setDeviceAuth(deviceId: number, credential: string): void
+  createLinkToken(): Promise<unknown>
+  relayProvisioning(address: string, request: unknown): Promise<boolean>
+  distributeIdentity(
+    request: unknown,
+  ): Promise<{ kind: 'accepted' } | { kind: 'mismatch'; mismatch: unknown }>
   fetchBundles(account: string): Promise<unknown>
   fetchSyncBundles(
     account: string,
@@ -2216,16 +2222,28 @@ export interface WasmChatClientHandle {
   mediaDeliveryCapability(peer: string): Promise<string>
   syncManifest(): Promise<unknown>
   revokeManifestDevice(deviceId: number): Promise<unknown>
-  safetyNumber(peer: string): Promise<SafetyNumberV1>
-  verifySafetyNumber(peer: string, scannedPayload: string): Promise<SafetyNumberV1>
+  safetyNumber(peer: string): Promise<SafetyNumberV2>
+  verifySafetyNumber(peer: string, scannedPayload: string): Promise<SafetyNumberV2>
+  setIdentityVerified(peer: string, identityKey: string, verified: boolean): Promise<SafetyNumberV2>
+  /** Link a new device of this account from its code; `false`: the code expired. */
+  linkDevice(code: string, readReceipts: boolean, typingIndicators: boolean): Promise<boolean>
+  /** Reset the account identity, keeping its devices but `remove`; the devices kept. */
+  resetIdentity(remove: number[]): Promise<number[]>
   free(): void
 }
 
-export interface SafetyNumberV1 {
+/**
+ * The safety number over both accounts' identity keys (libsignal's
+ * fingerprint, as Signal's). `trust` is `Verified` when this identity was
+ * verified, `Quarantined` while the account's authority is in question.
+ */
+export interface SafetyNumberV2 {
   localAccount: string
   peerAccount: string
   fingerprint: string
   qrPayload: string
+  /** The peer's account identity key this number covers. */
+  identityKey: string
   authorityKeyId: string
   trust: 'Tofu' | 'Verified' | 'Quarantined'
   continuityGap: boolean
@@ -2282,6 +2300,18 @@ export interface ChatWasmModule extends InviteLinkCrypto, CallLinkCrypto {
   openLocalData(masterKey: Uint8Array, scope: string, purposes: string[], sealed: Uint8Array[]): (Uint8Array | null)[]
   default(input?: unknown): Promise<unknown>
   WasmChatClient: {
+    /**
+     * Where this browser stands with the account's Chat identity
+     * (docs/plans/account-identity-key.md): open it (`registered`,
+     * `registering`), link it from another device (`link`), or register the
+     * account's first Chat device (`reregister`).
+     */
+    installation(
+      databaseName: string,
+      account: string,
+      masterKey: Uint8Array,
+      transport: ChatTransportPort,
+    ): Promise<ChatInstallation>
     open(
       databaseName: string,
       user: string,
@@ -2292,5 +2322,38 @@ export interface ChatWasmModule extends InviteLinkCrypto, CallLinkCrypto {
       binding: string,
       transport: ChatTransportPort,
     ): Promise<WasmChatClientHandle>
+    /** A new account identity, this device alone; the account's other devices leave. */
+    reregister(
+      databaseName: string,
+      user: string,
+      serverName: string,
+      sealedSenderEnabled: boolean,
+      masterKey: Uint8Array,
+      binding: string,
+      transport: ChatTransportPort,
+    ): Promise<WasmChatClientHandle>
   }
+  WasmLinkingDevice: new () => WasmLinkingDeviceHandle
+}
+
+export type ChatInstallation = 'registered' | 'registering' | 'link' | 'reregister'
+
+/** The new device's side of linking: one ephemeral key for one provisioning socket. */
+export interface WasmLinkingDeviceHandle {
+  /** `kutup://link?address=…&key=…`, for the QR code and to copy. */
+  linkCode(address: string): string
+  completeLink(
+    envelope: unknown,
+    databaseName: string,
+    user: string,
+    displayName: string,
+    sealedSenderEnabled: boolean,
+    masterKey: Uint8Array,
+    binding: string,
+    transport: ChatTransportPort,
+  ): Promise<WasmChatClientHandle>
+  /** The linking device's settings, once `completeLink` read them. */
+  readonly readReceipts?: boolean
+  readonly typingIndicators?: boolean
+  free(): void
 }

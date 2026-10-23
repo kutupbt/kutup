@@ -147,7 +147,7 @@ export function EventDialog() {
   const save = useCalendarMutation(async (next: Draft) => {
     const calendar = writable.find((c) => c.id === next.calendarId)
     if (!account.data || !calendar) throw new Error('no calendar')
-    return saveEvent(session, account.data, calendar, fieldsOf(next, account.data.domain, existing), existing)
+    return saveEvent(session, account.data, calendar, fieldsOf(next, account.data.serverDomain, existing), existing)
   })
   const remove = useCalendarMutation(async () => {
     const calendar = writable.find((c) => c.id === existing?.calendarId)

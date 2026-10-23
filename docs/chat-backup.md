@@ -29,6 +29,11 @@ an implementation record.
   device identity, libsignal ratchet/session, MLS epoch, mailbox cursor,
   receipt outbox, federation outbox, draft, typing state, or pending send. The
   replacement installation establishes fresh Direct and MLS state.
+- The account's Chat identity is not in the backup either, as Signal's isn't
+  (docs/plans/account-identity-key.md): a cleared browser is linked again
+  from another device of the account, which brings the identity, and then
+  restores its history; with none of the account's other devices it
+  re-registers (a new identity) and restores its history the same way.
 - Device-to-device history transfer is removed and unsupported. Missing,
   corrupt, rolled-back, or otherwise invalid backup state enters the explicit
   history-loss flow; another installation is never offered as a source.

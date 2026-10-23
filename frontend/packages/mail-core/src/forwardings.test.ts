@@ -13,7 +13,7 @@ vi.mock('./keys', async (original) => ({
 const { ForwardeeRefused, forwardeeActions, forwarderActions, forwardingKindOf } = await import('./forwardings')
 type MailForwarding = import('./forwardings').MailForwarding
 
-const forwarding = (state: MailForwarding['state'], kind: MailForwarding['kind']): MailForwarding => ({
+const forwarding = (state: MailForwarding['state'], kind: MailForwarding['kind'], verified = true): MailForwarding => ({
   id: 'f',
   kind,
   state,
@@ -25,6 +25,9 @@ const forwarding = (state: MailForwarding['state'], kind: MailForwarding['kind']
   notice: null,
   createdAt: '2026-10-19T00:00:00Z',
   expiresAt: null,
+  verified,
+  codeExpiresAt: null,
+  codeAttemptsLeft: null,
 })
 
 describe('what each side may do, by state (Proton’s table)', () => {
@@ -38,6 +41,17 @@ describe('what each side may do, by state (Proton’s table)', () => {
     expect(forwarderActions(forwarding('rejected', 'end_to_end'))).toEqual(['renew', 'delete'])
   })
 
+  it('asks for the code first while a forwarding is unverified, whatever its state', () => {
+    for (const state of ['pending', 'active', 'paused'] as const) {
+      for (const kind of ['outside', 'end_to_end'] as const) {
+        expect(forwarderActions(forwarding(state, kind, false))).toEqual(['verify', 'edit', 'delete'])
+      }
+    }
+    // Rejected and outdated ones are asked again (a new code goes with it).
+    expect(forwarderActions(forwarding('rejected', 'outside', false))).toEqual(['reinvite', 'delete'])
+    expect(forwarderActions(forwarding('outdated', 'end_to_end', false))).toEqual(['renew', 'delete'])
+  })
+
   it('lets the forwardee accept or decline a pending one, and delete any other', () => {
     expect(forwardeeActions(forwarding('pending', 'end_to_end'))).toEqual(['accept', 'decline'])
     for (const state of ['active', 'paused', 'outdated'] as const) {
@@ -47,7 +61,12 @@ describe('what each side may do, by state (Proton’s table)', () => {
 })
 
 describe('which kind a forwarding is', () => {
-  const account = { domain: 'kutup.test', isOwnAddress: (address: string | null | undefined) => address === 'alice@kutup.test' }
+  // Alice writes from a custom domain by default: this server is still kutup.test.
+  const account = {
+    serverDomain: 'kutup.test',
+    isOwnAddress: (address: string | null | undefined) => address === 'alice@kutup.test' || address === 'alice@work.test',
+    groupHolder: { account: { server: 'kutup.test', accountId: 'a' }, hpkePrivateKey: '' },
+  }
 
   it('is end to end to a person here, outside elsewhere', async () => {
     expect((await forwardingKindOf(account, 'bob@kutup.test')).kind).toBe('end_to_end')
@@ -58,9 +77,12 @@ describe('which kind a forwarding is', () => {
   it('never takes an address on this server without a key as outside', async () => {
     await expect(forwardingKindOf(account, 'nobody@kutup.test')).rejects.toEqual(new ForwardeeRefused('unknown'))
     await expect(forwardingKindOf(account, 'nobody@KUTUP.test')).rejects.toEqual(new ForwardeeRefused('unknown'))
+    // The From's domain is not this server's: no key there is outside.
+    expect((await forwardingKindOf(account, 'nobody@work.test')).kind).toBe('outside')
   })
 
   it("refuses the account's own addresses", async () => {
     await expect(forwardingKindOf(account, 'alice@kutup.test')).rejects.toEqual(new ForwardeeRefused('ownAddress'))
+    await expect(forwardingKindOf(account, 'alice@work.test')).rejects.toEqual(new ForwardeeRefused('ownAddress'))
   })
 })

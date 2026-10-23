@@ -173,7 +173,12 @@ export interface MailAccount {
   /** The address that sends (the default, or the one the composer chose). */
   addressId: string
   address: string
-  domain: string
+  /**
+   * This server's own mail domain (`/user/me`'s server), never
+   * the From's: who is a Kutup user and who is outside is judged by it. The
+   * sending address's domain (`address`) only names its Message-IDs.
+   */
+  serverDomain: string
   /** The display name outgoing mail carries (Mail → Settings → Identity). */
   name: string
   /** The signature new messages start with (HTML, sanitised); empty for none. */
@@ -295,6 +300,10 @@ export interface OwnAddressRow {
   position: number
   /** Disabled: it neither receives nor sends; its keys keep opening its mail. */
   disabled: boolean
+  /** It sends now (as the server says): current, enabled, with a primary key, on a usable domain. */
+  usable: boolean
+  /** The account's default (as the server chooses it): the first usable address in its order. */
+  isDefault: boolean
   keys: { fingerprint: string; sha256Fingerprint: string; publicKey: string; privateKeyEnvelope: string; primary: boolean; flags: number; forwarding?: boolean }[]
   keyList: { data: string; signature: string } | null
 }
@@ -322,18 +331,24 @@ export function mailAccountOf(
   identity: Pick<MailIdentity, 'displayName' | 'signature'> | null,
   session: Pick<Session, 'masterKey' | 'envelopeBinding' | 'username' | 'privateKey'>,
   fold: (address: string) => string | null,
-  /** The account itself, as `/user/me` names it: its server and id. */
-  self: AccountRef,
+  /**
+   * The account itself, as `/user/me` names it: its server and id, and
+   * this server's mail domain (its server name: Kutup addresses are
+   * `username@server`).
+   */
+  self: AccountRef & { domain: string },
   /** The other sending addresses' identities, by address id. */
   identities: Readonly<Record<string, Pick<MailIdentity, 'displayName' | 'signature'>>> = {},
 ): MailAccount {
   // Forwarding keys open only forwarded mail: never primary, never among
   // the keys that open the account's own mail or vouch for its signatures.
   const ownKeys = (row: CheckedOwnAddress) => row.keys.filter((k) => !k.forwarding)
-  // The default: the first enabled current address (in the account's order)
+  // The default, as the server chooses it (the first usable address in the
+  // account's order); with none usable yet, the first enabled current one
   // with a key, or the first enabled one, which then gets its first key.
   const enabled = rows.filter((row) => row.state === 'active' && !row.disabled)
-  const current = enabled.find((row) => row.keys.length > 0 || row.keyList !== null) ?? enabled[0]
+  const current =
+    enabled.find((row) => row.isDefault) ?? enabled.find((row) => row.keys.length > 0 || row.keyList !== null) ?? enabled[0]
   // No key yet is only an address without a key list too: one with a list
   // and no rows lost its keys on the server's side.
   if (!current || (current.keys.length === 0 && current.keyList === null)) throw new NoAddressKey()
@@ -366,7 +381,9 @@ export function mailAccountOf(
     (row === current ? identity?.displayName : identities[row.id]?.displayName) || session.username || ''
   const signatureOf = (row: CheckedOwnAddress) =>
     sanitizeSignature((row === current ? identity?.signature : identities[row.id]?.signature) ?? '')
-  const senders: MailSender[] = [current, ...enabled.filter((row) => row !== current)].flatMap((row) => {
+  // Every other address that sends now (as the server says): a custom
+  // domain's that isn't usable yet doesn't.
+  const senders: MailSender[] = [current, ...enabled.filter((row) => row !== current && row.usable)].flatMap((row) => {
     const key = row === current ? primary : primaryOf(row)
     return key
       ? [{ addressId: row.id, address: row.address, name: displayName(row), signature: signatureOf(row), publicKey: key.publicKey, key: sealed(row)(key) }]
@@ -376,7 +393,7 @@ export function mailAccountOf(
     addressId: current.id,
     senders,
     address: current.address,
-    domain: current.address.split('@')[1] ?? '',
+    serverDomain: self.domain.toLowerCase(),
     name: identity?.displayName || session.username || '',
     signature: sanitizeSignature(identity?.signature ?? ''),
     publicKey: primary.publicKey,
@@ -400,13 +417,20 @@ export function mailAccountOf(
   }
 }
 
+/**
+ * Whether an address is on this server's own mail domain (any case): a
+ * Kutup user's, never judged by the domain the account writes from.
+ */
+export function onServer(account: Pick<MailAccount, 'serverDomain'>, address: string): boolean {
+  return address.trim().toLowerCase().endsWith(`@${account.serverDomain}`)
+}
+
 /** The account writing as one of its addresses (the composer's From). */
 export function asSender(account: MailAccount, sender: MailSender): MailAccount {
   return {
     ...account,
     addressId: sender.addressId,
     address: sender.address,
-    domain: sender.address.split('@')[1] ?? '',
     name: sender.name,
     signature: sender.signature,
     publicKey: sender.publicKey,
@@ -459,7 +483,7 @@ export function useMailAccount() {
           ]),
         ),
       ) as Record<string, Pick<MailIdentity, 'displayName' | 'signature'>>
-      return mailAccountOf(checked, identity, session, await addressFolder(), { server: me.server, accountId: me.accountId }, identities)
+      return mailAccountOf(checked, identity, session, await addressFolder(), { server: me.server, accountId: me.accountId, domain: me.server }, identities)
     },
   })
 }
@@ -700,7 +724,7 @@ export async function openMessageText(account: MailAccount, message: MailMessage
   const response = await api.get<ArrayBuffer>(`/mail/messages/${message.id}/content`, { responseType: 'arraybuffer' })
   const opened = await openWithKeys(account, new Uint8Array(response.data), undefined, !!message.forwardedFrom)
   const sender = message.from?.address
-  const outside = message.direction === 'inbound' && !!sender && !sender.endsWith(`@${account.domain}`)
+  const outside = message.direction === 'inbound' && !!sender && !onServer(account, sender)
   const pgp = outside
     ? await openPgp(
         opened.data,
@@ -745,7 +769,7 @@ export async function openMessage(account: MailAccount, message: MailMessage, pi
     if (!opened.signed || opened.verified) break
     opened = await open(stored, candidate)
   }
-  const outside = message.direction === 'inbound' && sender && !sender.endsWith(`@${account.domain}`)
+  const outside = message.direction === 'inbound' && !!sender && !onServer(account, sender)
   // A Kutup user's mail they sent with Encrypt off (docs/plans/mail-encrypt-sign.md):
   // readable on the way, encrypted on arrival; its signature, if any, is
   // checked against the sender's own key list.
@@ -987,7 +1011,7 @@ const imageSendersKey = ['mail', 'image-senders'] as const
  */
 export function useSenderKey(address: string | null | undefined) {
   const account = useMailAccount()
-  const domain = account.data?.domain.toLowerCase()
+  const domain = account.data?.serverDomain
   return useQuery({
     queryKey: ['mail', 'sender-key', address?.trim().toLowerCase(), domain],
     enabled: !!address && !!domain,
@@ -1204,7 +1228,7 @@ function blob(bytes: Uint8Array, type = 'application/octet-stream'): Blob {
 
 /** A new, empty draft's fields. */
 export function emptyDraft(account: MailAccount, init: Partial<Draft> = {}): Draft {
-  return { to: [], cc: [], bcc: [], subject: '', html: '', text: '', attachments: [], messageId: newMessageId(account.domain), ...init }
+  return { to: [], cc: [], bcc: [], subject: '', html: '', text: '', attachments: [], messageId: newMessageId(account.address.split('@')[1] ?? ''), ...init }
 }
 
 /** Saves a draft's text and fields (its attachments are uploaded on their own). */
@@ -1416,7 +1440,7 @@ export async function sendDraft(
   // internal recipients). A disabled one stops the send: never another way.
   const held = await Promise.all(
     everyone.map(async (address) => {
-      if (address.endsWith(`@${account.domain}`)) return true
+      if (onServer(account, address)) return true
       try {
         await addressKeys(address)
         return true
@@ -1432,7 +1456,7 @@ export async function sendDraft(
   const bcc = new Set(draft.bcc.map((m) => m.address.toLowerCase()))
 
   // Outside recipients' keys, and the PGP/MIME messages for them.
-  const protections = await Promise.all(external.map((address) => protectionFor(address, account.domain, pinned(address))))
+  const protections = await Promise.all(external.map((address) => protectionFor(address, account.serverDomain, pinned(address))))
   const unusable = external.find((_, i) => protections[i].kind === 'pinnedUnusable')
   if (unusable) throw new PinnedKeyUnusable(unusable)
   // Encrypt off: no outside recipient gets a PGP message.

@@ -46,6 +46,7 @@ fn manifest(devices: Vec<AccountManifestDeviceV2>) -> AccountManifestV2 {
         sequence: 1,
         previous_hash: None,
         identity_key: identity(3),
+        identity_binding: b64(&[0x5b; 64]),
         drive: AccountManifestDriveKeysV1 {
             suite: AccountIdentitySuiteId::XWingEd25519V2,
             hpke_public_key: b64(&[9; 1216]),
@@ -608,8 +609,8 @@ fn manifest_v2_vector_is_pinned() {
 }
 
 const SIGNING_BYTES_SHA256: &str =
-    "7976993fcd92d5914bd4af66fc02b9c536b8b5a20240ae1cc5809197231cd016";
-const MANIFEST_HASH: &str = "7e6fb68b2b4b3320b388612daba86173ad311a440c9c5fcb5e65e602c815094b";
+    "77b135457250c2cd79ae2a85224300e187ddf20cb76fb7d5ff7f82d251a27420";
+const MANIFEST_HASH: &str = "b66ce32c6f4006b607423f90734c61f1de0c59e021573050df4b3da1e5cda15c";
 
 #[test]
 fn account_identity_sync_body() {
@@ -655,4 +656,36 @@ fn keys_check_digest_is_pinned() {
         digest,
         repeated_use_keys_digest(&[5; 33], 7, &[6; 33], 9, &[7; 1569])
     );
+}
+
+#[test]
+fn the_identity_binding_is_signed_and_names_authority_incarnation_account_and_identity() {
+    let manifest = two_devices();
+    let bytes = manifest.identity_binding_bytes().unwrap();
+    assert!(bytes.starts_with(b"kutup/account-identity-binding/v1\0"));
+    assert_eq!(
+        bytes.len(),
+        34 + 32 + 32 + manifest.account.bytes().len() + 33
+    );
+    assert_eq!(
+        bytes,
+        identity_binding_bytes(
+            &manifest.authority_key_id,
+            &manifest.incarnation_id,
+            &manifest.account,
+            &manifest.identity_key
+        )
+        .unwrap()
+    );
+    // The same identity and authority: the same bytes, whatever the devices.
+    let mut fewer = manifest.clone();
+    fewer.devices.pop();
+    assert_eq!(fewer.identity_binding_bytes().unwrap(), bytes);
+    // The binding itself is under the authority's signature, and its length
+    // is checked.
+    let mut other = manifest.clone();
+    other.identity_binding = b64(&[0x5c; 64]);
+    assert!(other.verify().is_err());
+    other.identity_binding = b64(&[0x5c; 63]);
+    assert!(other.signing_bytes().is_err());
 }

@@ -12,8 +12,8 @@ use kutup_chat_core::{
     ChatDb, ChatError, ChatTransport, Engine, Result, SendOutcome, Session, SqliteChatDb,
 };
 use kutup_chat_proto::{
-    MailboxPage, PreKeyCountResponse, RegisterChatDeviceRequest, ReplenishKeysRequest,
-    SendMessagesRequest, UserPreKeyBundlesResponse,
+    AccountPreKeyBundlesResponse, MailboxPage, PreKeyCountResponse, RegisterChatDeviceRequestV2,
+    ReplenishKeysRequest, SendMessagesRequest,
 };
 use rand::rngs::OsRng;
 use rand::{CryptoRng, Rng, TryRngCore as _};
@@ -56,11 +56,11 @@ struct KeyServer {
 
 #[async_trait(?Send)]
 impl ChatTransport for KeyServer {
-    async fn register_device(&self, _req: &RegisterChatDeviceRequest) -> Result<u32> {
+    async fn register_device(&self, _req: &RegisterChatDeviceRequestV2) -> Result<u32> {
         unreachable!()
     }
 
-    async fn fetch_bundles(&self, _username: &str) -> Result<UserPreKeyBundlesResponse> {
+    async fn fetch_bundles(&self, _username: &str) -> Result<AccountPreKeyBundlesResponse> {
         unreachable!()
     }
 

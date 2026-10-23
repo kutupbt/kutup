@@ -31,13 +31,14 @@ pub(crate) struct MlsMailboxQuery {
 pub(crate) async fn drain(
     State(state): State<AppState>,
     auth: AuthUser,
+    headers: axum::http::HeaderMap,
     Path(device_id): Path<u32>,
     Query(query): Query<MlsMailboxQuery>,
 ) -> AppResult<Response> {
     active_policy(&state).await?;
     validate_device_id(device_id)?;
     let user_id = trusted_uuid(&auth.user_id)?;
-    require_device(&state, user_id, device_id).await?;
+    require_device(&state, &headers, user_id, device_id).await?;
     let after = parse_cursor(query.after.as_deref())?;
     let limit = query.limit.unwrap_or(DEFAULT_PAGE_SIZE);
     if limit == 0 || limit > MAX_PAGE_SIZE {
@@ -105,13 +106,14 @@ pub(crate) async fn drain(
 pub(crate) async fn ack(
     State(state): State<AppState>,
     auth: AuthUser,
+    headers: axum::http::HeaderMap,
     Json(request): Json<AckMlsMailboxV1>,
 ) -> AppResult<Response> {
     active_policy(&state).await?;
     request.validate().map_err(AppError::bad_request)?;
     validate_device_id(request.device_id)?;
     let user_id = trusted_uuid(&auth.user_id)?;
-    require_device(&state, user_id, request.device_id).await?;
+    require_device(&state, &headers, user_id, request.device_id).await?;
     sqlx::query(
         "DELETE FROM chat_mls_mailbox
          WHERE recipient_user_id = $1 AND recipient_device_id = $2
@@ -130,7 +132,21 @@ pub(crate) async fn ack(
     .into_response())
 }
 
-async fn require_device(state: &AppState, user_id: Uuid, device_id: u32) -> AppResult<()> {
+/// The caller acts as its device (its credential), which has an MLS row at
+/// the current manifest.
+async fn require_device(
+    state: &AppState,
+    headers: &axum::http::HeaderMap,
+    user_id: Uuid,
+    device_id: u32,
+) -> AppResult<()> {
+    crate::handlers::chat_identity::authenticate_device(
+        &state.pool,
+        headers,
+        user_id,
+        device_id as i32,
+    )
+    .await?;
     let exists: bool = sqlx::query_scalar(
         "SELECT EXISTS(
             SELECT 1

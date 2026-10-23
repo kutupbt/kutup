@@ -23,6 +23,7 @@ import {
   useMailSettings,
   usePinnedKeys,
   useSendingStatus,
+  onServer,
   type Draft,
   type HeldSend,
   type MailAccount,
@@ -354,7 +355,7 @@ function ComposerPanel({ base, target }: { base: MailAccount; target: ComposerTa
     setBcc(nextBcc)
   }
   // Before the server's mail setup is checked, only Kutup addresses are reachable.
-  const outsideRecipients = [...to, ...cc, ...bcc].filter((m) => isAddress(m.address) && !m.address.toLowerCase().endsWith(`@${account.domain}`))
+  const outsideRecipients = [...to, ...cc, ...bcc].filter((m) => isAddress(m.address) && !onServer(account, m.address))
   const outsideBlocked = sendingStatus.data?.outsideAllowed === false && outsideRecipients.length > 0
   const [showCopies, setShowCopies] = useState(start.draft.cc.length > 0 || start.draft.bcc.length > 0)
   const [subject, setSubject] = useState(start.draft.subject)
@@ -386,7 +387,7 @@ function ComposerPanel({ base, target }: { base: MailAccount; target: ComposerTa
   const [signChoice, setSignChoice] = useState<boolean | undefined>()
   const signOutside = mailSettings.data?.signOutside ?? true
   const sign = signChoice ?? (outsideRecipients.length === 0 || outsideRecipients.some((m) => pinned?.(m.address)?.pgp.sign ?? signOutside))
-  const kutupRecipients = [...to, ...cc, ...bcc].some((m) => isAddress(m.address) && m.address.toLowerCase().endsWith(`@${account.domain}`))
+  const kutupRecipients = [...to, ...cc, ...bcc].some((m) => isAddress(m.address) && onServer(account, m.address))
   const [revision, setRevision] = useState(0)
   const draftId = useRef<string | undefined>(start.draft.id)
   const saving = useRef<Promise<void>>(Promise.resolve())
@@ -869,7 +870,7 @@ function ComposerPanel({ base, target }: { base: MailAccount; target: ComposerTa
               )}
             </div>
             <div className="relative">
-              <RecipientField label={t('compose.to')} value={to} onChange={setTo} domain={account.domain} pinned={pinned} encrypt={encrypt} autoFocus={target.kind === 'new' && !start.draft.to.length} />
+              <RecipientField label={t('compose.to')} value={to} onChange={setTo} domain={account.serverDomain} pinned={pinned} encrypt={encrypt} autoFocus={target.kind === 'new' && !start.draft.to.length} />
               {!showCopies ? (
                 <button type="button" className="absolute right-3 top-2 text-xs text-muted-foreground hover:text-foreground" onClick={() => setShowCopies(true)}>
                   {t('compose.ccBcc')}
@@ -878,8 +879,8 @@ function ComposerPanel({ base, target }: { base: MailAccount; target: ComposerTa
             </div>
             {showCopies ? (
               <>
-                <RecipientField label={t('compose.cc')} value={cc} onChange={setCc} domain={account.domain} pinned={pinned} encrypt={encrypt} />
-                <RecipientField label={t('compose.bcc')} value={bcc} onChange={setBcc} domain={account.domain} pinned={pinned} encrypt={encrypt} />
+                <RecipientField label={t('compose.cc')} value={cc} onChange={setCc} domain={account.serverDomain} pinned={pinned} encrypt={encrypt} />
+                <RecipientField label={t('compose.bcc')} value={bcc} onChange={setBcc} domain={account.serverDomain} pinned={pinned} encrypt={encrypt} />
               </>
             ) : null}
             <Input

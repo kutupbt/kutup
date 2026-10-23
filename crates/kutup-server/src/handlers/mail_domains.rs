@@ -448,7 +448,7 @@ pub struct CreatedAddress {
         (status = 201, body = CreatedAddress),
         (status = 400, description = "invalidAddress"),
         (status = 404, description = "No such domain of the caller's"),
-        (status = 409, description = "addressLimit, addressTaken or domainNotVerified"),
+        (status = 409, description = "addressLimit, addressTaken, addressDeleted or domainNotVerified"),
     )
 )]
 pub async fn create_address(
@@ -499,6 +499,25 @@ pub async fn create_address(
         return Err(coded(
             AppError::conflict("the account has all its addresses"),
             "addressLimit",
+        ));
+    }
+    // One the account deleted keeps its signed key list's chain: taking it
+    // back must continue that chain (docs/plans/mail-address-keys.md), which
+    // isn't built yet, so it is refused for now (as a rename back to a freed
+    // name is).
+    let deleted: bool = sqlx::query_scalar(
+        "SELECT EXISTS (SELECT 1 FROM mail_addresses a
+                         WHERE a.user_id = $1 AND a.folded = lower($2) AND a.state = 'freed'
+                           AND EXISTS (SELECT 1 FROM mail_key_lists l WHERE l.address_id = a.id))",
+    )
+    .bind(user_id)
+    .bind(&address)
+    .fetch_one(&mut *tx)
+    .await?;
+    if deleted {
+        return Err(coded(
+            AppError::conflict("an address you deleted can't be added again yet"),
+            "addressDeleted",
         ));
     }
     // One of the account's own addresses closed by an account reset comes

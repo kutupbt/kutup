@@ -73,6 +73,12 @@ pub struct OwnMailAddress {
     /// Disabled (Proton's Status 0): it neither receives nor sends; its keys
     /// keep opening the mail it received.
     pub disabled: bool,
+    /// It sends now: current, enabled, with a primary key, on the server's
+    /// domain or a custom one usable now.
+    pub usable: bool,
+    /// The account's default: its first usable address in its order (what
+    /// sends when a message names no From).
+    pub is_default: bool,
     pub keys: Vec<OwnMailKey>,
     /// The current signed key list; null until the first key is added.
     pub key_list: Option<SignedKeyList>,
@@ -135,19 +141,37 @@ async fn own_address(
     .bind(address_id)
     .fetch_optional(&state.pool)
     .await?;
-    let (address_state, key_list_owed, domain_id, position, disabled): (
+    let (address_state, key_list_owed, domain_id, position, disabled, user_id): (
         String,
         bool,
         Option<Uuid>,
         i32,
         bool,
+        Option<Uuid>,
     ) = sqlx::query_as(
-        "SELECT state, key_list_owed, domain_id, position, disabled_at IS NOT NULL
+        "SELECT state, key_list_owed, domain_id, position, disabled_at IS NOT NULL, user_id
            FROM mail_addresses WHERE id = $1",
     )
     .bind(address_id)
     .fetch_one(&state.pool)
     .await?;
+    // As the default is chosen (`default_address`).
+    let usable = address_state == "active"
+        && !disabled
+        && keys.iter().any(|key| key.5)
+        && match domain_id {
+            None => true,
+            Some(domain_id) => crate::mail::domains::usable_domain(state, domain_id).await?,
+        };
+    let is_default = match user_id {
+        Some(user_id) if usable => {
+            crate::handlers::mail_addresses::default_address(state, user_id)
+                .await?
+                .map(|(id, _)| id)
+                == Some(address_id)
+        }
+        _ => false,
+    };
     Ok(OwnMailAddress {
         id: address_id.to_string(),
         address,
@@ -155,6 +179,8 @@ async fn own_address(
         domain_id: domain_id.map(|id| id.to_string()),
         position,
         disabled,
+        usable,
+        is_default,
         keys: keys
             .into_iter()
             .map(

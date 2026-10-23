@@ -307,6 +307,7 @@ pub(crate) struct SenderCertificateQuery {
 pub(crate) async fn issue_sender_certificate(
     State(state): State<AppState>,
     auth: AuthUser,
+    headers: axum::http::HeaderMap,
     Query(query): Query<SenderCertificateQuery>,
 ) -> AppResult<Response> {
     let service = state
@@ -314,14 +315,21 @@ pub(crate) async fn issue_sender_certificate(
         .as_ref()
         .ok_or_else(|| AppError::not_found("sealed sender is not enabled"))?;
     let user_id = trusted_uuid(&auth.user_id)?;
+    // Issued to the device that asks, under the account's identity (Signal's
+    // certificate carries the ACI identity key and the device id).
+    crate::handlers::chat_identity::authenticate_device(
+        &state.pool,
+        &headers,
+        user_id,
+        query.device_id as i32,
+    )
+    .await?;
     let row: Option<String> = sqlx::query_scalar(
-        "UPDATE chat_devices d SET last_seen_at = now()
-         FROM users u
-         WHERE d.user_id = $1 AND d.device_id = $2 AND u.id = d.user_id AND u.is_active = true
-         RETURNING d.identity_key",
+        "SELECT i.identity_key FROM chat_account_identities i
+           JOIN users u ON u.id = i.user_id
+          WHERE i.user_id = $1 AND u.is_active = true",
     )
     .bind(user_id)
-    .bind(query.device_id as i32)
     .fetch_optional(&state.pool)
     .await?;
     let encoded_identity = row.ok_or_else(|| AppError::not_found("no such chat device"))?;

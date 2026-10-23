@@ -34,6 +34,9 @@ export function useOwnAddresses() {
 
 /** The default: the first enabled address with a key (or the first enabled one). */
 export function defaultAddressId(rows: OwnAddressRow[]): string | undefined {
+  const chosen = rows.find((row) => row.isDefault)
+  if (chosen) return chosen.id
+  // None usable yet: the one that gets its first key.
   const enabled = rows.filter((row) => !row.disabled)
   return (enabled.find((row) => row.keys.length > 0 || row.keyList !== null) ?? enabled[0])?.id
 }
@@ -94,10 +97,14 @@ export function useEnableAddress() {
   })
 }
 
-/** Deletes an address on a custom domain, disabling it first as Proton's client does. */
+/**
+ * Deletes an address on a custom domain, disabling it first as Proton's
+ * client does; one that never had a key (nothing to disable) at once.
+ */
 export function useDeleteAddress() {
   return useAddressMutation(async (session, row: OwnAddressRow) => {
-    if (!row.disabled) await disableAddress(session, row)
+    const keyless = row.keys.length === 0 && row.keyList === null
+    if (!row.disabled && !keyless) await disableAddress(session, row)
     await api.put(`/mail/addresses/${row.id}/delete`)
   })
 }

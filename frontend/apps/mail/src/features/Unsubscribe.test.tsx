@@ -16,7 +16,7 @@ vi.mock('sonner', () => ({ toast: { success: vi.fn(), error: vi.fn() } }))
 
 const { UnsubscribeBanner } = await import('./Unsubscribe')
 
-const account = { address: 'ayse@kutup.dev', domain: 'kutup.dev' } as MailAccount
+const account = { address: 'ayse@kutup.dev', serverDomain: 'kutup.dev' } as MailAccount
 const message = { id: 'msg-1', direction: 'inbound', unsubscribed: false } as MailMessage
 const raw = (headers: string) => new TextEncoder().encode(`From: n@l.example\r\n${headers}\r\n\r\nbody`)
 
