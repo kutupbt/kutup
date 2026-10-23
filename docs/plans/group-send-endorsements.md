@@ -324,5 +324,9 @@ PRs when built) drops `chat_group_capabilities` and the site setting's row.
 
 Client and crypto (third session): 3–4 days (one fetch, the upload and read,
 token building, moving the harness). Server and federation (second session):
-about 3–4 days, the credential and issuance routes of the earlier draft gone
-(to confirm).
+3 days, confirmed: the key table, sealing and rotation command (½), the daily
+endorsement route and its limit (½), the discovery field (¼), the home's
+endorsement operation and read, local and federated (¾), the token check over
+deduplicated ids and the per-recipient budget on the multi route (½), removing
+the capability tables, routes and settings (¼), and live tests on one and two
+servers (½).
