@@ -353,8 +353,8 @@ fn the_lockout_holds_one_client_and_known_clients_pass_the_ceiling() {
     };
     assert!(matches("/api/auth/login/start"));
     for route in [
-        "/api/chat/mls/anonymous/key-packages",
-        "/api/chat/mls/anonymous/messages",
+        "/api/chat/anonymous/messages/multi",
+        "/api/chat/anonymous/accounts/x/keys",
         "/api/chat/users/x/keys",
         "/api",
     ] {

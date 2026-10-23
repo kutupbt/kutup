@@ -80,7 +80,7 @@ impl FederatedFeaturePolicyHistoryV1 {
 #[repr(u16)]
 pub enum FederatedFeaturePolicyTypeV1 {
     SealedSenderService = 1,
-    MlsOrderingService = 2,
+    // 2 was the MLS ordering service, removed with MLS groups: never reused.
 }
 
 impl FederatedFeaturePolicyTypeV1 {
@@ -101,7 +101,6 @@ impl TryFrom<u16> for FederatedFeaturePolicyTypeV1 {
     fn try_from(value: u16) -> Result<Self, Self::Error> {
         match value {
             1 => Ok(Self::SealedSenderService),
-            2 => Ok(Self::MlsOrderingService),
             _ => Err(crate::error::invalid_field(
                 "featureType",
                 "is not a supported feature policy type",
