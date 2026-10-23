@@ -11,7 +11,8 @@ import { appUrl, newAccount, registerAccount, signInAsAdmin } from '../fixtures/
 //   until the TXT record is there, then passes; the MX, SPF, DKIM and DMARC
 //   tabs list what to publish, and once published every badge turns good;
 // - Identity and addresses: an address on the domain, made default and
-//   back, disabled, enabled and deleted; the composer offers it as From;
+//   back, disabled, enabled, deleted and taken back (Mail still opens); the
+//   composer offers it as From; another Kutup user writes to it end to end;
 // - the catch-all, set and shown; deleting the domain;
 // - Administration → Mail domains: approving a domain when administrators
 //   approve each, an account's own limits, deactivating a domain (its name
@@ -199,6 +200,43 @@ test('custom domains: the wizard, addresses on the domain, catch-all, deleting i
   await mail.getByRole('alertdialog').getByRole('button', { name: 'Delete address' }).click()
   await expect(mail.getByText('Address deleted').first()).toBeVisible({ timeout: 60_000 })
   await expect(row(sales)).toHaveCount(0)
+  // Taken back: the same address, its keys and their chain with it (enabled
+  // with the chain's next list), and Mail still opens here, a device that
+  // saw the old chain.
+  await addAddress('sales')
+  await expect(row(sales).getByText('Active', { exact: true })).toBeVisible({ timeout: 60_000 })
+  await mail.goto(appUrl('mail', '/inbox'))
+  await expect(mail.getByRole('heading', { name: 'Inbox' })).toBeVisible({ timeout: 60_000 })
+  await mail.goto(appUrl('mail', '/settings/identity'))
+  await act(sales, 'Delete address')
+  await mail.getByRole('alertdialog').getByRole('button', { name: 'Delete address' }).click()
+  await expect(row(sales)).toHaveCount(0, { timeout: 60_000 })
+
+  // Another Kutup user writes to info@ from the composer: end to end, and
+  // it arrives.
+  const bob = newAccount('dombob', PASSWORD)
+  const bobContext = await browser.newContext({ viewport: { width: 1400, height: 900 } })
+  await registerAccount(bobContext, bob)
+  const bobMail = await bobContext.newPage()
+  await bobMail.goto(appUrl('mail'))
+  await expect(bobMail.getByRole('heading', { name: 'Inbox' })).toBeVisible({ timeout: 120_000 })
+  const subject = `Alan adı ${Date.now().toString(36)}`
+  await bobMail.getByRole('button', { name: 'New message' }).click()
+  const bobComposer = bobMail.getByRole('dialog', { name: 'New message' })
+  await bobComposer.getByRole('combobox').first().fill(info)
+  await bobComposer.getByRole('combobox').first().press('Enter')
+  await expect(bobComposer.getByLabel('End-to-end encrypted: a Kutup address')).toBeVisible({ timeout: 60_000 })
+  await bobComposer.getByRole('textbox', { name: 'Subject' }).fill(subject)
+  await bobMail.getByRole('textbox', { name: 'Message' }).fill('Merhaba info.')
+  await bobMail.getByRole('dialog', { name: subject }).getByRole('button', { name: 'Send', exact: true }).click()
+  await expect(bobMail.getByText('Message sent')).toBeVisible({ timeout: 60_000 })
+  await mail.goto(appUrl('mail', '/inbox'))
+  const arrived = mail.getByRole('link', { name: new RegExp(subject) })
+  await expect(arrived).toBeVisible({ timeout: 60_000 })
+  await arrived.click()
+  await expect(mail.frameLocator('iframe[title="Message"]').getByText('Merhaba info.')).toBeVisible({ timeout: 60_000 })
+  await bobContext.close()
+  await mail.goto(appUrl('mail', '/settings/identity'))
 
   // The catch-all: info@, shown on the domain.
   await mail.goto(appUrl('mail', '/settings/domains'))
