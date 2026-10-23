@@ -626,7 +626,10 @@ mod tests {
         let again = DeliveryPaddingKey::derive(&[1u8; 32]);
         assert_eq!(key.dummy(0), again.dummy(0), "every device makes the same");
         assert_ne!(key.dummy(0), key.dummy(1));
-        assert_ne!(key.dummy(0), DeliveryPaddingKey::derive(&[2u8; 32]).dummy(0));
+        assert_ne!(
+            key.dummy(0),
+            DeliveryPaddingKey::derive(&[2u8; 32]).dummy(0)
+        );
     }
 
     const HOME: GroupHome<'static> = GroupHome {

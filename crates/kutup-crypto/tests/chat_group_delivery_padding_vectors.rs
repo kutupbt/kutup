@@ -40,7 +40,7 @@ fn computed() -> Vectors {
             slot,
             dummy: STANDARD.encode(key.dummy(slot)),
         })
-    .collect();
+        .collect();
     Vectors {
         account_master_key: STANDARD.encode(master),
         cases,
