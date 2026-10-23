@@ -109,6 +109,10 @@
       "startedYesterdayAt": "{{title}} dün {{time}} saatinde başladı",
       "startedOn": "{{title}} {{date}} tarihinde başladı",
       "startedOnAt": "{{title}} {{date}} tarihinde {{time}} saatinde başladı"
-    }
+    },
+    "banner": "Kutup Takvim'in etkinlik hatırlatıcıları için masaüstü bildirimleri gösterebilmesi için izninize ihtiyacı var.",
+    "bannerLabel": "Masaüstü bildirimleri",
+    "enable": "Masaüstü bildirimlerini aç",
+    "dismiss": "Şimdi değil"
   }
 }

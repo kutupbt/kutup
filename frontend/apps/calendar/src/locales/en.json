@@ -109,6 +109,10 @@
       "startedYesterdayAt": "{{title}} started yesterday at {{time}}",
       "startedOn": "{{title}} started on {{date}}",
       "startedOnAt": "{{title}} started on {{date}} at {{time}}"
-    }
+    },
+    "banner": "Kutup Calendar needs your permission to show desktop notifications for event reminders.",
+    "bannerLabel": "Desktop notifications",
+    "enable": "Enable desktop notifications",
+    "dismiss": "Not now"
   }
 }

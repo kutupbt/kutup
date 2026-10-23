@@ -19,10 +19,12 @@ import { AppSwitcher } from '@kutup/ui/components/app-switcher'
 import { Button } from '@kutup/ui/components/button'
 import { Checkbox } from '@kutup/ui/components/checkbox'
 import { HeadStateBanner } from '@kutup/ui/components/head-state-banner'
+import { NotificationBanner } from '@kutup/ui/components/notification-banner'
 import { UserMenu } from '@kutup/ui/components/user-menu'
 import { apiErrorMessage } from '@kutup/ui/lib/apiError'
 import { CalendarDialog } from '../features/CalendarDialog'
 import { EventDialog } from '../features/EventDialog'
+import { AlarmWatcher } from '../features/reminders/AlarmWatcher'
 import { openEditor } from '../features/editorState'
 import { useCalendarPrefs } from '../features/prefs'
 import { SettingsDialog } from '../features/SettingsDialog'
@@ -183,6 +185,14 @@ export function CalendarShell() {
     >
       <Outlet />
       <EventDialog />
+      <AlarmWatcher />
+      <NotificationBanner
+        storageKey="kutup.calendar.notificationBanner.dismissed"
+        message={t('reminders.banner')}
+        label={t('reminders.bannerLabel')}
+        enable={t('reminders.enable')}
+        dismiss={t('reminders.dismiss')}
+      />
       <CalendarDialog
         open={editing !== null}
         onOpenChange={(open) => !open && setEditing(null)}
