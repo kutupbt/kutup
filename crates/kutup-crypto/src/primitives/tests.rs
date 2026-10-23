@@ -107,7 +107,7 @@ fn kdf_matches_openssl() {
 fn aead_matches_libsodium_and_refuses_any_change() {
     for case in vectors().aead {
         let key: [u8; 32] = h(&case.key).try_into().unwrap();
-        let aead = Aead::new(S, &key);
+        let aead = Aead::new(S, &key).unwrap();
         let (nonce, aad) = (h(&case.nonce), h(&case.aad));
         let sealed = aead
             .seal_with_nonce(&nonce, &aad, &h(&case.plaintext))
@@ -124,7 +124,8 @@ fn aead_matches_libsodium_and_refuses_any_change() {
         assert!(aead.open_with_nonce(&nonce[1..], &aad, &sealed).is_err());
     }
     // A random nonce, carried in front.
-    let aead = Aead::new(S, &random_key());
+    let aead = Aead::new(S, random_key().as_slice()).unwrap();
+    assert!(Aead::new(S, &[0; 31]).is_err());
     let sealed = aead.seal(b"aad", b"hello").unwrap();
     assert_eq!(
         sealed.len(),
@@ -245,7 +246,7 @@ fn the_table_is_what_the_code_does() {
     let p = S.params();
     assert_eq!(hash(S, b"").as_bytes().len(), p.digest_len);
     assert_eq!(mac(S, b"k", &[b""]).as_bytes().len(), p.mac_tag_len);
-    let aead = Aead::new(S, &[0; 32]);
+    let aead = Aead::new(S, &[0; 32]).unwrap();
     assert_eq!(
         (aead.nonce_len(), aead.tag_len()),
         (p.aead_nonce_len, p.aead_tag_len)

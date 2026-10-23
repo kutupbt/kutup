@@ -23,8 +23,7 @@
 //! The server's setup (OPRF seed and key pairs) is kept sealed under a key that
 //! is not in the database ([`seal_server_setup`]).
 
-use chacha20poly1305::aead::{Aead, KeyInit, Payload};
-use chacha20poly1305::{XChaCha20Poly1305, XNonce};
+use crate::primitives::{Aead, Suite};
 use dryoc::classic::crypto_pwhash::{crypto_pwhash, PasswordHashAlgorithm};
 use hkdf::Hkdf;
 use opaque_ke::errors::{InternalError, ProtocolError};
@@ -419,14 +418,8 @@ fn seal_server_setup_with_nonce(
     let plain = Zeroizing::new(serialized.to_vec());
     serialized.as_mut_slice().zeroize();
     let aad = [SETUP_AAD, &key_id.to_be_bytes()].concat();
-    let ciphertext = XChaCha20Poly1305::new(key.into())
-        .encrypt(
-            XNonce::from_slice(nonce),
-            Payload {
-                msg: &plain,
-                aad: &aad,
-            },
-        )
+    let ciphertext = Aead::new(Suite::V1, key.as_ref())?
+        .seal_with_nonce(nonce, &aad, &plain)
         .map_err(|_| CryptoError::Backend("opaque setup seal".into()))?;
     Ok([
         SETUP_MAGIC.as_slice(),
@@ -452,13 +445,11 @@ pub fn open_server_setup(sealed: &[u8], key: &[u8; 32], key_id: u16) -> Result<S
     }
     let aad = [SETUP_AAD, &key_id.to_be_bytes()].concat();
     let plain = Zeroizing::new(
-        XChaCha20Poly1305::new(key.into())
-            .decrypt(
-                XNonce::from_slice(&sealed[SETUP_MAGIC.len() + 2..header]),
-                Payload {
-                    msg: &sealed[header..],
-                    aad: &aad,
-                },
+        Aead::new(Suite::V1, key.as_ref())?
+            .open_with_nonce(
+                &sealed[SETUP_MAGIC.len() + 2..header],
+                &aad,
+                &sealed[header..],
             )
             .map_err(|_| CryptoError::AuthFailed)?,
     );
@@ -731,14 +722,9 @@ mod tests {
         let mut nonce = [0u8; NONCE_LEN];
         nonce[0] = 1;
         let aad = [SETUP_AAD, &1u16.to_be_bytes()].concat();
-        let ciphertext = XChaCha20Poly1305::new((&key).into())
-            .encrypt(
-                XNonce::from_slice(&nonce),
-                Payload {
-                    msg: &serialized,
-                    aad: &aad,
-                },
-            )
+        let ciphertext = Aead::new(Suite::V1, &key.as_ref())
+            .unwrap()
+            .seal_with_nonce(&nonce, &aad, &serialized)
             .unwrap();
         let sealed = [
             SETUP_MAGIC.as_slice(),

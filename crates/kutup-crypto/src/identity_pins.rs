@@ -21,10 +21,9 @@
 //! (`KUTIP3`) binds the owner's key binding. Earlier suites are not read:
 //! nothing from before carries over.
 
+use crate::primitives::{Aead, Suite};
 use base64::engine::general_purpose::STANDARD;
 use base64::Engine as _;
-use chacha20poly1305::aead::{Aead, KeyInit, Payload};
-use chacha20poly1305::{XChaCha20Poly1305, XNonce};
 use hkdf::Hkdf;
 use serde::{Deserialize, Serialize};
 use sha2::Sha256;
@@ -1034,14 +1033,8 @@ pub fn seal_with_nonce(
         return Err(invalid("revisions start at 1"));
     }
     let plain = Zeroizing::new(PADDING.pad(&encode(list)?)?);
-    let ciphertext = XChaCha20Poly1305::new(key.into())
-        .encrypt(
-            XNonce::from_slice(nonce),
-            Payload {
-                msg: &plain,
-                aad: &aad(owner, revision)?,
-            },
-        )
+    let ciphertext = Aead::new(Suite::V1, key.as_ref())?
+        .seal_with_nonce(nonce, &aad(owner, revision)?, &plain)
         .map_err(|_| CryptoError::Backend("identity pins seal".into()))?;
     let mut out = Vec::with_capacity(HEADER_LEN + ciphertext.len());
     out.extend_from_slice(MAGIC);
@@ -1056,13 +1049,11 @@ pub fn seal_with_nonce(
 /// the revision it was sealed at (refuse one older than seen).
 pub fn open(key: &[u8; 32], owner: &str, sealed: &[u8]) -> Result<(IdentityPinsV2, u64)> {
     let revision = inspect(sealed)?;
-    let plain = XChaCha20Poly1305::new(key.into())
-        .decrypt(
-            XNonce::from_slice(&sealed[10 + REVISION_LEN..HEADER_LEN]),
-            Payload {
-                msg: &sealed[HEADER_LEN..],
-                aad: &aad(owner, revision)?,
-            },
+    let plain = Aead::new(Suite::V1, key.as_ref())?
+        .open_with_nonce(
+            &sealed[10 + REVISION_LEN..HEADER_LEN],
+            &aad(owner, revision)?,
+            &sealed[HEADER_LEN..],
         )
         .map(Zeroizing::new)
         .map_err(|_| CryptoError::AuthFailed)?;

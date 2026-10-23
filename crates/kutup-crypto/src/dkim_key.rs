@@ -5,10 +5,9 @@
 //! sealed key can't be moved to another selector. Stalwart takes the key as
 //! PKCS#8 PEM; DNS publishes it as `v=DKIM1; k=rsa; p=<SPKI>`.
 
+use crate::primitives::{Aead, Suite};
 use base64::engine::general_purpose::STANDARD;
 use base64::Engine as _;
-use chacha20poly1305::aead::{Aead as _, KeyInit as _, Payload};
-use chacha20poly1305::{XChaCha20Poly1305, XNonce};
 use rsa::pkcs8::{DecodePrivateKey as _, EncodePrivateKey as _, EncodePublicKey as _};
 use zeroize::Zeroizing;
 
@@ -87,13 +86,11 @@ pub fn seal(
 ) -> Result<Vec<u8>> {
     let mut nonce = [0u8; NONCE_LEN];
     crate::primitives::random(&mut nonce);
-    let sealed = XChaCha20Poly1305::new(server_key.into())
-        .encrypt(
-            XNonce::from_slice(&nonce),
-            Payload {
-                msg: private_pkcs8,
-                aad: &aad(server_key_id, dkim_key_id, selector),
-            },
+    let sealed = Aead::new(Suite::V1, server_key.as_ref())?
+        .seal_with_nonce(
+            &nonce,
+            &aad(server_key_id, dkim_key_id, selector),
+            private_pkcs8,
         )
         .map_err(|_| CryptoError::Backend("seal the DKIM key".into()))?;
     Ok([nonce.as_slice(), &sealed].concat())
@@ -112,15 +109,12 @@ pub fn open(
         return Err(CryptoError::AuthFailed);
     }
     let (nonce, ciphertext) = sealed.split_at(NONCE_LEN);
-    XChaCha20Poly1305::new(server_key.into())
-        .decrypt(
-            XNonce::from_slice(nonce),
-            Payload {
-                msg: ciphertext,
-                aad: &aad(server_key_id, dkim_key_id, selector),
-            },
+    Aead::new(Suite::V1, server_key.as_ref())?
+        .open_with_nonce(
+            nonce,
+            &aad(server_key_id, dkim_key_id, selector),
+            ciphertext,
         )
-        .map(Zeroizing::new)
         .map_err(|_| CryptoError::AuthFailed)
 }
 

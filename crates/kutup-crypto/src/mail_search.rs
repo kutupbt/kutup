@@ -14,8 +14,7 @@
 //! a name: the database's own name is an HMAC under a second master-derived
 //! key, found before the wrapped store key is read.
 
-use chacha20poly1305::aead::{Aead, KeyInit, Payload};
-use chacha20poly1305::{XChaCha20Poly1305, XNonce};
+use crate::primitives::{Aead, Suite};
 use hkdf::Hkdf;
 use hmac::{Hmac, Mac};
 use sha2::Sha256;
@@ -109,14 +108,8 @@ impl MailSearchKeys {
         let wrap = expand(ACCOUNT_SALT, master_key, WRAP_KEY_INFO)?;
         let mut out = header(WRAP_MAGIC, nonce);
         let aad = [out.as_slice(), WRAP_AAD_DOMAIN].concat();
-        let ciphertext = XChaCha20Poly1305::new(wrap.as_slice().into())
-            .encrypt(
-                XNonce::from_slice(nonce),
-                Payload {
-                    msg: store_key,
-                    aad: &aad,
-                },
-            )
+        let ciphertext = Aead::new(Suite::V1, wrap.as_ref())?
+            .seal_with_nonce(nonce, &aad, store_key)
             .map_err(|_| CryptoError::Backend("mail search store key wrap".into()))?;
         out.extend_from_slice(&ciphertext);
         Ok(out)
@@ -131,15 +124,10 @@ impl MailSearchKeys {
         let wrap = expand(ACCOUNT_SALT, master_key, WRAP_KEY_INFO)?;
         let aad = [&wrapped[..HEADER_LEN], WRAP_AAD_DOMAIN].concat();
         let store_key = Zeroizing::new(
-            XChaCha20Poly1305::new(wrap.as_slice().into())
-                .decrypt(
-                    XNonce::from_slice(&wrapped[10..HEADER_LEN]),
-                    Payload {
-                        msg: &wrapped[HEADER_LEN..],
-                        aad: &aad,
-                    },
-                )
-                .map_err(|_| CryptoError::AuthFailed)?,
+            Aead::new(Suite::V1, wrap.as_ref())?
+                .open_with_nonce(&wrapped[10..HEADER_LEN], &aad, &wrapped[HEADER_LEN..])
+                .map_err(|_| CryptoError::AuthFailed)
+                .map(crate::primitives::into_vec)?,
         );
         let store_key: &[u8; 32] = store_key
             .as_slice()
@@ -194,14 +182,8 @@ impl MailSearchKeys {
             return Err(invalid("record is too large"));
         }
         let aad = self.aad(&self.record_id(name));
-        let ciphertext = XChaCha20Poly1305::new(self.record.as_slice().into())
-            .encrypt(
-                XNonce::from_slice(nonce),
-                Payload {
-                    msg: value,
-                    aad: &aad,
-                },
-            )
+        let ciphertext = Aead::new(Suite::V1, self.record.as_ref())?
+            .seal_with_nonce(nonce, &aad, value)
             .map_err(|_| CryptoError::Backend("mail search seal".into()))?;
         let mut out = header(MAGIC, nonce);
         out.extend_from_slice(&ciphertext);
@@ -215,15 +197,10 @@ impl MailSearchKeys {
         }
         check_header(MAGIC, sealed)?;
         let aad = self.aad(&self.record_id(name));
-        XChaCha20Poly1305::new(self.record.as_slice().into())
-            .decrypt(
-                XNonce::from_slice(&sealed[10..HEADER_LEN]),
-                Payload {
-                    msg: &sealed[HEADER_LEN..],
-                    aad: &aad,
-                },
-            )
+        Aead::new(Suite::V1, self.record.as_ref())?
+            .open_with_nonce(&sealed[10..HEADER_LEN], &aad, &sealed[HEADER_LEN..])
             .map_err(|_| CryptoError::AuthFailed)
+            .map(crate::primitives::into_vec)
     }
 }
 

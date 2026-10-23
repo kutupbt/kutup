@@ -5,8 +5,7 @@
 //! This module never accepts Direct, MLS, Drive, Chat-media, attachment-ledger,
 //! or device-transfer keys as substitutes.
 
-use chacha20poly1305::aead::{Aead, KeyInit, Payload};
-use chacha20poly1305::{XChaCha20Poly1305, XNonce};
+use crate::primitives::{Aead, Suite};
 use hkdf::Hkdf;
 use serde::{Deserialize, Serialize};
 use sha2::Sha256;
@@ -327,16 +326,10 @@ pub fn seal_object(
     crate::primitives::random(&mut nonce);
     let header = build_header(context, plaintext_bytes, &nonce);
     let key = derive_object_key(root, context)?;
-    let cipher = XChaCha20Poly1305::new_from_slice(key.as_slice())
+    let cipher = Aead::new(Suite::V1, key.as_slice())
         .map_err(|_| CryptoError::Backend("Chat backup AEAD key".into()))?;
     let ciphertext = cipher
-        .encrypt(
-            XNonce::from_slice(&nonce),
-            Payload {
-                msg: plaintext,
-                aad: &header,
-            },
-        )
+        .seal_with_nonce(&nonce, &header, plaintext)
         .map_err(|_| CryptoError::Backend("Chat backup encryption failed".into()))?;
     let mut out = header;
     out.extend_from_slice(&ciphertext);
@@ -462,16 +455,11 @@ pub fn open_object(
         return Err(CryptoError::AuthFailed);
     }
     let key = derive_object_key(root, expected)?;
-    XChaCha20Poly1305::new_from_slice(key.as_slice())
+    Aead::new(Suite::V1, key.as_slice())
         .map_err(|_| CryptoError::Backend("Chat backup AEAD key".into()))?
-        .decrypt(
-            XNonce::from_slice(parsed.nonce),
-            Payload {
-                msg: parsed.ciphertext,
-                aad: parsed.aad,
-            },
-        )
+        .open_with_nonce(parsed.nonce, parsed.aad, parsed.ciphertext)
         .map_err(|_| CryptoError::AuthFailed)
+        .map(crate::primitives::into_vec)
 }
 
 #[cfg(test)]

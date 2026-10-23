@@ -19,8 +19,7 @@
 //! writing device are HMAC'd, so the head tells the server nothing it does not
 //! already know.
 
-use chacha20poly1305::aead::{Aead, KeyInit, Payload};
-use chacha20poly1305::{XChaCha20Poly1305, XNonce};
+use crate::primitives::{Aead, Suite};
 use hkdf::Hkdf;
 use hmac::{Hmac, Mac};
 use serde::{Deserialize, Serialize};
@@ -310,14 +309,8 @@ fn seal_with_nonce(
 ) -> Result<Vec<u8>> {
     head.validate()?;
     let plain = serde_json::to_vec(head).map_err(|_| invalid("encode"))?;
-    let ciphertext = XChaCha20Poly1305::new(keys.seal.as_slice().into())
-        .encrypt(
-            XNonce::from_slice(nonce),
-            Payload {
-                msg: &plain,
-                aad: &aad(binding, head.sequence)?,
-            },
-        )
+    let ciphertext = Aead::new(Suite::V1, keys.seal.as_ref())?
+        .seal_with_nonce(nonce, &aad(binding, head.sequence)?, &plain)
         .map_err(|_| CryptoError::Backend("account head seal".into()))?;
     let sealed = [
         MAGIC.as_slice(),
@@ -351,13 +344,11 @@ pub fn inspect(sealed: &[u8]) -> Result<u64> {
 /// Opens a sealed head of the account whose key binding is `binding`.
 pub fn open(keys: &HeadKeys, binding: &str, sealed: &[u8]) -> Result<AccountHeadV1> {
     let sequence = inspect(sealed)?;
-    let plain = XChaCha20Poly1305::new(keys.seal.as_slice().into())
-        .decrypt(
-            XNonce::from_slice(&sealed[18..HEADER_LEN]),
-            Payload {
-                msg: &sealed[HEADER_LEN..],
-                aad: &aad(binding, sequence)?,
-            },
+    let plain = Aead::new(Suite::V1, keys.seal.as_ref())?
+        .open_with_nonce(
+            &sealed[18..HEADER_LEN],
+            &aad(binding, sequence)?,
+            &sealed[HEADER_LEN..],
         )
         .map_err(|_| CryptoError::AuthFailed)?;
     let head: AccountHeadV1 = serde_json::from_slice(&plain).map_err(|_| invalid("decode"))?;
@@ -880,14 +871,8 @@ fn seal_local_with_nonce(
 ) -> Result<Vec<u8>> {
     state.validate()?;
     let plain = Zeroizing::new(serde_json::to_vec(state).map_err(|_| invalid("encode"))?);
-    let ciphertext = XChaCha20Poly1305::new(keys.seal.as_slice().into())
-        .encrypt(
-            XNonce::from_slice(nonce),
-            Payload {
-                msg: &plain,
-                aad: &local_aad(binding, &state.incarnation_id)?,
-            },
-        )
+    let ciphertext = Aead::new(Suite::V1, keys.seal.as_ref())?
+        .seal_with_nonce(nonce, &local_aad(binding, &state.incarnation_id)?, &plain)
         .map_err(|_| CryptoError::Backend("account head local seal".into()))?;
     let sealed = [
         LOCAL_MAGIC.as_slice(),
@@ -920,13 +905,11 @@ pub fn open_local_state(
         return Err(invalid("not a local head state"));
     }
     let plain = Zeroizing::new(
-        XChaCha20Poly1305::new(keys.seal.as_slice().into())
-            .decrypt(
-                XNonce::from_slice(&sealed[10..header]),
-                Payload {
-                    msg: &sealed[header..],
-                    aad: &local_aad(binding, incarnation_id)?,
-                },
+        Aead::new(Suite::V1, keys.seal.as_ref())?
+            .open_with_nonce(
+                &sealed[10..header],
+                &local_aad(binding, incarnation_id)?,
+                &sealed[header..],
             )
             .map_err(|_| CryptoError::AuthFailed)?,
     );

@@ -21,6 +21,7 @@
 //! k with the forwardee's secret key gives the forwarder's secret key
 //! (dB = k·dC), so k never reaches the forwardee.
 
+use crate::primitives::{Aead, Suite};
 use std::io::BufReader;
 
 use pgp::{
@@ -571,21 +572,18 @@ pub fn seal_proxy_parameter(
     forwarding_id: &[u8; 16],
     instance: &ProxyInstance,
 ) -> Result<Vec<u8>> {
-    use chacha20poly1305::aead::{Aead as _, KeyInit as _, Payload};
     let mut nonce = [0u8; SEAL_NONCE_LEN];
     crate::primitives::random(&mut nonce);
-    let sealed = chacha20poly1305::XChaCha20Poly1305::new(server_key.into())
-        .encrypt(
-            chacha20poly1305::XNonce::from_slice(&nonce),
-            Payload {
-                msg: instance.proxy_parameter.as_slice(),
-                aad: &seal_aad(
-                    key_id,
-                    forwarding_id,
-                    &instance.forwarder_fingerprint,
-                    &instance.forwardee_fingerprint,
-                ),
-            },
+    let sealed = Aead::new(Suite::V1, server_key.as_ref())?
+        .seal_with_nonce(
+            &nonce,
+            &seal_aad(
+                key_id,
+                forwarding_id,
+                &instance.forwarder_fingerprint,
+                &instance.forwardee_fingerprint,
+            ),
+            instance.proxy_parameter.as_slice(),
         )
         .map_err(|_| CryptoError::Backend("seal the proxy parameter".into()))?;
     Ok([nonce.as_slice(), &sealed].concat())
@@ -601,27 +599,22 @@ pub fn open_proxy_parameter(
     forwardee_fingerprint: [u8; FINGERPRINT_LEN],
     sealed: &[u8],
 ) -> Result<ProxyInstance> {
-    use chacha20poly1305::aead::{Aead as _, KeyInit as _, Payload};
     if sealed.len() <= SEAL_NONCE_LEN {
         return Err(CryptoError::AuthFailed);
     }
     let (nonce, ciphertext) = sealed.split_at(SEAL_NONCE_LEN);
-    let opened = Zeroizing::new(
-        chacha20poly1305::XChaCha20Poly1305::new(server_key.into())
-            .decrypt(
-                chacha20poly1305::XNonce::from_slice(nonce),
-                Payload {
-                    msg: ciphertext,
-                    aad: &seal_aad(
-                        key_id,
-                        forwarding_id,
-                        &forwarder_fingerprint,
-                        &forwardee_fingerprint,
-                    ),
-                },
-            )
-            .map_err(|_| CryptoError::AuthFailed)?,
-    );
+    let opened = Aead::new(Suite::V1, server_key.as_ref())?
+        .open_with_nonce(
+            nonce,
+            &seal_aad(
+                key_id,
+                forwarding_id,
+                &forwarder_fingerprint,
+                &forwardee_fingerprint,
+            ),
+            ciphertext,
+        )
+        .map_err(|_| CryptoError::AuthFailed)?;
     let proxy_parameter: [u8; 32] = opened
         .as_slice()
         .try_into()

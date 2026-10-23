@@ -6,9 +6,8 @@
 //! root key. Raw master, collection, file, and link keys are never used as an
 //! AEAD key directly.
 
+use crate::primitives::{Aead, Suite};
 use base64::Engine as _;
-use chacha20poly1305::aead::{Aead, KeyInit, Payload};
-use chacha20poly1305::{XChaCha20Poly1305, XNonce};
 use hkdf::Hkdf;
 use sha2::{Digest, Sha256};
 use zeroize::Zeroizing;
@@ -437,16 +436,10 @@ fn seal_body(
         .map_err(|_| CryptoError::InvalidInput("Drive envelope plaintext is too long".into()))?;
     let header = build_header(context, &nonce, ciphertext_len);
     let key = derive_key(root_key, context)?;
-    let cipher = XChaCha20Poly1305::new_from_slice(key.as_slice())
+    let cipher = Aead::new(Suite::V1, key.as_slice())
         .map_err(|_| CryptoError::Backend("Drive envelope AEAD init".into()))?;
     let ciphertext = cipher
-        .encrypt(
-            XNonce::from_slice(&nonce),
-            Payload {
-                msg: plaintext,
-                aad: &header,
-            },
-        )
+        .seal_with_nonce(&nonce, &header, plaintext)
         .map_err(|_| CryptoError::Backend("Drive envelope seal".into()))?;
     let mut envelope = header;
     envelope.extend_from_slice(&ciphertext);
@@ -519,17 +512,12 @@ pub fn open(envelope: &[u8], root_key: &[u8], expected: DriveEnvelopeContextV1) 
         return Err(CryptoError::AuthFailed);
     }
     let key = derive_key(root_key, expected)?;
-    let cipher = XChaCha20Poly1305::new_from_slice(key.as_slice())
+    let cipher = Aead::new(Suite::V1, key.as_slice())
         .map_err(|_| CryptoError::Backend("Drive envelope AEAD init".into()))?;
     let body = cipher
-        .decrypt(
-            XNonce::from_slice(parsed.nonce),
-            Payload {
-                msg: parsed.ciphertext,
-                aad: parsed.aad,
-            },
-        )
-        .map_err(|_| CryptoError::AuthFailed)?;
+        .open_with_nonce(parsed.nonce, parsed.aad, parsed.ciphertext)
+        .map_err(|_| CryptoError::AuthFailed)
+        .map(crate::primitives::into_vec)?;
     let plaintext = match expected.purpose.padding() {
         Some(policy) => policy.unpad(body)?,
         None => body,

@@ -4,9 +4,8 @@
 //! persistence. Conversation, message, media class and display metadata remain
 //! inside the XChaCha20-Poly1305 ciphertext and are projected locally.
 
+use crate::primitives::{Aead, Suite};
 use base64::Engine as _;
-use chacha20poly1305::aead::{Aead, KeyInit, Payload};
-use chacha20poly1305::{XChaCha20Poly1305, XNonce};
 use hkdf::Hkdf;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -256,16 +255,10 @@ pub fn seal_with_nonce(
         .map_err(|_| CryptoError::InvalidInput("ledger plaintext is too long".into()))?;
     let header = build_header(context, &nonce, ciphertext_len);
     let key = derive_key(ledger_key, &header)?;
-    let cipher = XChaCha20Poly1305::new_from_slice(key.as_slice())
+    let cipher = Aead::new(Suite::V1, key.as_slice())
         .map_err(|_| CryptoError::Backend("Chat attachment-ledger AEAD init".into()))?;
     let ciphertext = cipher
-        .encrypt(
-            XNonce::from_slice(&nonce),
-            Payload {
-                msg: plaintext,
-                aad: &header,
-            },
-        )
+        .seal_with_nonce(&nonce, &header, plaintext)
         .map_err(|_| CryptoError::Backend("Chat attachment-ledger seal".into()))?;
     let mut envelope = header.to_vec();
     envelope.extend_from_slice(&ciphertext);
@@ -358,17 +351,12 @@ pub fn open(
         .try_into()
         .expect("parser returns the fixed ledger header");
     let key = derive_key(ledger_key, header)?;
-    let cipher = XChaCha20Poly1305::new_from_slice(key.as_slice())
+    let cipher = Aead::new(Suite::V1, key.as_slice())
         .map_err(|_| CryptoError::Backend("Chat attachment-ledger AEAD init".into()))?;
     cipher
-        .decrypt(
-            XNonce::from_slice(parsed.nonce),
-            Payload {
-                msg: parsed.ciphertext,
-                aad: parsed.aad,
-            },
-        )
+        .open_with_nonce(parsed.nonce, parsed.aad, parsed.ciphertext)
         .map_err(|_| CryptoError::AuthFailed)
+        .map(crate::primitives::into_vec)
 }
 
 pub fn seal_b64(

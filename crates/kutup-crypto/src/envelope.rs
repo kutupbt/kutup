@@ -13,8 +13,7 @@
 //! The complete fixed header is AEAD associated data. The signature covers the
 //! header and ciphertext, but not its own trailing bytes.
 
-use chacha20poly1305::aead::{Aead, KeyInit, Payload};
-use chacha20poly1305::{XChaCha20Poly1305, XNonce};
+use crate::primitives::{Aead, Suite};
 use ed25519_dalek::{Signature, Signer, SigningKey, VerifyingKey};
 use hkdf::Hkdf;
 use sha2::Sha256;
@@ -280,16 +279,10 @@ pub fn seal_unsigned_with_nonce(
     };
     let aad = frame.header();
     let key = derive_key(file_key, context)?;
-    let cipher = XChaCha20Poly1305::new_from_slice(key.as_slice())
+    let cipher = Aead::new(Suite::V1, key.as_slice())
         .map_err(|_| CryptoError::Backend("collaboration frame AEAD init".into()))?;
     frame.ciphertext = cipher
-        .encrypt(
-            XNonce::from_slice(&nonce),
-            Payload {
-                msg: plaintext,
-                aad: &aad,
-            },
-        )
+        .seal_with_nonce(&nonce, &aad, plaintext)
         .map_err(|_| CryptoError::Backend("collaboration frame seal".into()))?;
     Ok(frame.pack())
 }
@@ -356,17 +349,12 @@ pub fn open(
         ));
     }
     let key = derive_key(file_key, frame.context())?;
-    let cipher = XChaCha20Poly1305::new_from_slice(key.as_slice())
+    let cipher = Aead::new(Suite::V1, key.as_slice())
         .map_err(|_| CryptoError::Backend("collaboration frame AEAD init".into()))?;
     let plaintext = cipher
-        .decrypt(
-            XNonce::from_slice(&frame.nonce),
-            Payload {
-                msg: &frame.ciphertext,
-                aad: &frame.header(),
-            },
-        )
-        .map_err(|_| CryptoError::AuthFailed)?;
+        .open_with_nonce(&frame.nonce, &frame.header(), &frame.ciphertext)
+        .map_err(|_| CryptoError::AuthFailed)
+        .map(crate::primitives::into_vec)?;
     Ok((frame, plaintext))
 }
 

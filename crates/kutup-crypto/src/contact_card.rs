@@ -23,8 +23,7 @@
 //! address-bound version 1 of both is not read: nothing from before carries
 //! over.
 
-use chacha20poly1305::aead::{Aead, KeyInit, Payload};
-use chacha20poly1305::{XChaCha20Poly1305, XNonce};
+use crate::primitives::{Aead, Suite};
 use ed25519_dalek::{Signature, Signer as _, SigningKey, VerifyingKey};
 use hkdf::Hkdf;
 use serde::{Deserialize, Serialize};
@@ -354,14 +353,8 @@ pub fn seal_card_with_nonce(
     }
     let aad = card_aad(binding, uid, revision)?;
     let padded = Zeroizing::new(CARD_PADDING.pad(vcard)?);
-    let ciphertext = XChaCha20Poly1305::new(contacts_key.into())
-        .encrypt(
-            XNonce::from_slice(nonce),
-            Payload {
-                msg: &padded,
-                aad: &aad,
-            },
-        )
+    let ciphertext = Aead::new(Suite::V1, contacts_key.as_ref())?
+        .seal_with_nonce(nonce, &aad, &padded)
         .map_err(|_| CryptoError::Backend("contact card seal".into()))?;
     let mut out = Vec::with_capacity(CARD_HEADER_LEN + ciphertext.len());
     out.extend_from_slice(CARD_MAGIC);
@@ -384,15 +377,10 @@ pub fn open_card(
     let revision = inspect_card(sealed)?;
     let aad = card_aad(binding, uid, revision)?;
     let nonce = &sealed[10 + REVISION_LEN..CARD_HEADER_LEN];
-    let padded = XChaCha20Poly1305::new(contacts_key.into())
-        .decrypt(
-            XNonce::from_slice(nonce),
-            Payload {
-                msg: &sealed[CARD_HEADER_LEN..],
-                aad: &aad,
-            },
-        )
-        .map_err(|_| CryptoError::AuthFailed)?;
+    let padded = Aead::new(Suite::V1, contacts_key.as_ref())?
+        .open_with_nonce(nonce, &aad, &sealed[CARD_HEADER_LEN..])
+        .map_err(|_| CryptoError::AuthFailed)
+        .map(crate::primitives::into_vec)?;
     let vcard = Zeroizing::new(CARD_PADDING.unpad(padded)?);
     if vcard.is_empty() || vcard.len() > MAX_CARD_BYTES {
         return Err(invalid("card size is invalid"));

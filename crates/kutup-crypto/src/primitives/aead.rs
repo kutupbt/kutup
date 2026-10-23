@@ -20,11 +20,20 @@ enum Cipher {
 }
 
 impl Aead {
-    pub fn new(suite: Suite, key: &[u8; 32]) -> Self {
+    /// The cipher under `key`, as long as the suite's
+    /// (`SuiteParams::aead_key_len`); another length is refused.
+    pub fn new(suite: Suite, key: &[u8]) -> Result<Self> {
+        let expected = suite.params().aead_key_len;
+        if key.len() != expected {
+            return Err(CryptoError::InvalidLength {
+                expected,
+                got: key.len(),
+            });
+        }
         let cipher = match suite {
             Suite::V1 => Cipher::XChaCha(XChaCha20Poly1305::new(key.into())),
         };
-        Self { suite, cipher }
+        Ok(Self { suite, cipher })
     }
 
     pub const fn nonce_len(&self) -> usize {
@@ -103,4 +112,10 @@ impl Aead {
         let (nonce, ciphertext) = sealed.split_at(self.nonce_len());
         self.open_with_nonce(nonce, aad, ciphertext)
     }
+}
+
+/// An opened plaintext as a plain `Vec`, for a format whose own API returns
+/// one (the buffer moves, nothing is copied).
+pub fn into_vec(mut plain: Zeroizing<Vec<u8>>) -> Vec<u8> {
+    std::mem::take(&mut *plain)
 }

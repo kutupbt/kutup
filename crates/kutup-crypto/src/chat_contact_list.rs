@@ -16,10 +16,9 @@
 //!   an entry opens only under its own id and revision, for this incarnation
 //!   of the account.
 
+use crate::primitives::{Aead, Suite};
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use base64::Engine as _;
-use chacha20poly1305::aead::{Aead, KeyInit, Payload};
-use chacha20poly1305::{XChaCha20Poly1305, XNonce};
 use hkdf::Hkdf;
 use hmac::{Hmac, Mac};
 use sha2::Sha256;
@@ -132,13 +131,11 @@ impl ContactListKey {
         sealed.extend_from_slice(&SUITE_V1.to_be_bytes());
         sealed.extend_from_slice(&revision.to_be_bytes());
         sealed.extend_from_slice(nonce);
-        let ciphertext = XChaCha20Poly1305::new(self.seal_key.as_slice().into())
-            .encrypt(
-                XNonce::from_slice(nonce),
-                Payload {
-                    msg: &padded,
-                    aad: &aad(&sealed[..MAGIC.len() + 10], binding, entry_id)?,
-                },
+        let ciphertext = Aead::new(Suite::V1, self.seal_key.as_ref())?
+            .seal_with_nonce(
+                nonce,
+                &aad(&sealed[..MAGIC.len() + 10], binding, entry_id)?,
+                &padded,
             )
             .map_err(|_| CryptoError::Backend("contact list entry seal".into()))?;
         sealed.extend_from_slice(&ciphertext);
@@ -164,13 +161,11 @@ impl ContactListKey {
     ) -> Result<OpenedEntry> {
         let revision = inspect(sealed).map_err(|_| CryptoError::AuthFailed)?;
         let nonce = &sealed[MAGIC.len() + 10..HEADER_LEN];
-        let padded = XChaCha20Poly1305::new(self.seal_key.as_slice().into())
-            .decrypt(
-                XNonce::from_slice(nonce),
-                Payload {
-                    msg: &sealed[HEADER_LEN..],
-                    aad: &aad(&sealed[..MAGIC.len() + 10], binding, entry_id)?,
-                },
+        let padded = Aead::new(Suite::V1, self.seal_key.as_ref())?
+            .open_with_nonce(
+                nonce,
+                &aad(&sealed[..MAGIC.len() + 10], binding, entry_id)?,
+                &sealed[HEADER_LEN..],
             )
             .map_err(|_| CryptoError::AuthFailed)?;
         let padded = Zeroizing::new(padded);
@@ -308,13 +303,12 @@ mod tests {
             &nonce,
         ]
         .concat();
-        let ciphertext = XChaCha20Poly1305::new(key.seal_key.as_slice().into())
-            .encrypt(
-                XNonce::from_slice(&nonce),
-                Payload {
-                    msg: padded,
-                    aad: &aad(&sealed[..MAGIC.len() + 10], BINDING, id).unwrap(),
-                },
+        let ciphertext = Aead::new(Suite::V1, key.seal_key.as_ref())
+            .unwrap()
+            .seal_with_nonce(
+                &nonce,
+                &aad(&sealed[..MAGIC.len() + 10], BINDING, id).unwrap(),
+                padded,
             )
             .unwrap();
         sealed.extend_from_slice(&ciphertext);

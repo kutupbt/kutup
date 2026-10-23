@@ -25,7 +25,7 @@ mod random;
 mod sign;
 pub mod suite;
 
-pub use aead::{Aead, AeadKey};
+pub use aead::{into_vec, Aead, AeadKey};
 pub use ct::ct_eq;
 pub use hash::{hash, Digest, Hasher};
 pub use hpke::{hpke_open, hpke_public_key, hpke_seal, HpkeSealed};

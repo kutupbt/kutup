@@ -18,8 +18,7 @@
 //!   key, so devices coming and going never touch it ([`sign_binding`],
 //!   [`verify_binding`]).
 
-use chacha20poly1305::aead::{Aead, KeyInit, Payload};
-use chacha20poly1305::{XChaCha20Poly1305, XNonce};
+use crate::primitives::{Aead, Suite};
 use ed25519_dalek::{Signature, Signer as _, SigningKey, VerifyingKey};
 use hkdf::Hkdf;
 use sha2::{Digest, Sha256};
@@ -206,14 +205,8 @@ impl GroupStateKey {
         plain: &[u8],
         nonce: &[u8; NONCE_LEN],
     ) -> Result<Vec<u8>> {
-        let ciphertext = XChaCha20Poly1305::new(self.key.as_slice().into())
-            .encrypt(
-                XNonce::from_slice(nonce),
-                Payload {
-                    msg: plain,
-                    aad: &self.aad(field, subject)?,
-                },
-            )
+        let ciphertext = Aead::new(Suite::V1, self.key.as_ref())?
+            .seal_with_nonce(nonce, &self.aad(field, subject)?, plain)
             .map_err(|_| CryptoError::Backend("group field seal".into()))?;
         Ok([&[SEAL_VERSION][..], nonce, &ciphertext].concat())
     }
@@ -230,16 +223,10 @@ impl GroupStateKey {
             return Err(CryptoError::AuthFailed);
         }
         let (nonce, ciphertext) = sealed[1..].split_at(NONCE_LEN);
-        let plain = XChaCha20Poly1305::new(self.key.as_slice().into())
-            .decrypt(
-                XNonce::from_slice(nonce),
-                Payload {
-                    msg: ciphertext,
-                    aad: &self.aad(field, subject)?,
-                },
-            )
+        let plain = Aead::new(Suite::V1, self.key.as_ref())?
+            .open_with_nonce(nonce, &self.aad(field, subject)?, ciphertext)
             .map_err(|_| CryptoError::AuthFailed)?;
-        Ok(Zeroizing::new(plain))
+        Ok(plain)
     }
 
     fn aad(&self, field: SealedField, subject: &[u8]) -> Result<Vec<u8>> {
@@ -533,14 +520,8 @@ fn seal_group_avatar_with(
     padded.extend_from_slice(image);
     padded.push(0x80);
     padded.resize(bucket, 0);
-    let ciphertext = XChaCha20Poly1305::new(key.as_slice().into())
-        .encrypt(
-            XNonce::from_slice(nonce),
-            Payload {
-                msg: &padded,
-                aad: AVATAR_AAD,
-            },
-        )
+    let ciphertext = Aead::new(Suite::V1, key.as_ref())?
+        .seal_with_nonce(nonce, AVATAR_AAD, &padded)
         .map_err(|_| CryptoError::Backend("group avatar seal".into()))?;
     Ok([&[AVATAR_VERSION][..], nonce, &ciphertext].concat())
 }
@@ -557,14 +538,8 @@ pub fn open_group_avatar(blob: &[u8], key: &[u8; 32]) -> Result<Zeroizing<Vec<u8
     }
     let (nonce, ciphertext) = blob[1..].split_at(NONCE_LEN);
     let padded = Zeroizing::new(
-        XChaCha20Poly1305::new(key.as_slice().into())
-            .decrypt(
-                XNonce::from_slice(nonce),
-                Payload {
-                    msg: ciphertext,
-                    aad: AVATAR_AAD,
-                },
-            )
+        Aead::new(Suite::V1, key.as_ref())?
+            .open_with_nonce(nonce, AVATAR_AAD, ciphertext)
             .map_err(|_| CryptoError::AuthFailed)?,
     );
     let end = padded

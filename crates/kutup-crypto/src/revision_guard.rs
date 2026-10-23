@@ -12,8 +12,7 @@
 //! (the first revision read is trusted), or put back an older copy of one; it
 //! can no longer read them or set one to a revision it chooses.
 
-use chacha20poly1305::aead::{Aead, KeyInit, Payload};
-use chacha20poly1305::{XChaCha20Poly1305, XNonce};
+use crate::primitives::{Aead, Suite};
 use hkdf::Hkdf;
 use hmac::{Hmac, Mac};
 use sha2::Sha256;
@@ -76,14 +75,8 @@ impl GuardKeys {
     pub fn seal_seen(&self, entry_id: &str, revision: u64) -> Result<Vec<u8>> {
         let mut nonce = [0u8; NONCE_LEN];
         crate::primitives::random(&mut nonce);
-        let ciphertext = XChaCha20Poly1305::new(self.seal.as_slice().into())
-            .encrypt(
-                XNonce::from_slice(&nonce),
-                Payload {
-                    msg: &revision.to_be_bytes(),
-                    aad: &Self::aad(entry_id),
-                },
-            )
+        let ciphertext = Aead::new(Suite::V1, self.seal.as_ref())?
+            .seal_with_nonce(&nonce, &Self::aad(entry_id), &revision.to_be_bytes())
             .map_err(|_| CryptoError::Backend("revision guard seal".into()))?;
         Ok([nonce.as_slice(), &ciphertext].concat())
     }
@@ -94,15 +87,14 @@ impl GuardKeys {
         if sealed.len() != SEALED_LEN {
             return Err(CryptoError::AuthFailed);
         }
-        let plain = XChaCha20Poly1305::new(self.seal.as_slice().into())
-            .decrypt(
-                XNonce::from_slice(&sealed[..NONCE_LEN]),
-                Payload {
-                    msg: &sealed[NONCE_LEN..],
-                    aad: &Self::aad(entry_id),
-                },
+        let plain = Aead::new(Suite::V1, self.seal.as_ref())?
+            .open_with_nonce(
+                &sealed[..NONCE_LEN],
+                &Self::aad(entry_id),
+                &sealed[NONCE_LEN..],
             )
-            .map_err(|_| CryptoError::AuthFailed)?;
+            .map_err(|_| CryptoError::AuthFailed)
+            .map(crate::primitives::into_vec)?;
         Ok(u64::from_be_bytes(
             plain.try_into().map_err(|_| CryptoError::AuthFailed)?,
         ))
