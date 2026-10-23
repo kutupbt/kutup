@@ -27,7 +27,10 @@ fn groups_are_off_unless_switched_on() {
         .json()
         .unwrap();
     let chat = &settings["chat"];
-    assert!(chat.get("mlsGroups").is_none(), "MLS groups are gone: {chat}");
+    assert!(
+        chat.get("mlsGroups").is_none(),
+        "MLS groups are gone: {chat}"
+    );
     assert_eq!(chat["pairwiseGroups"], false, "{chat}");
     assert_eq!(chat["groupCalls"], false, "{chat}");
 

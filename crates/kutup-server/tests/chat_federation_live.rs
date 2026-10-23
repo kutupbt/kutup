@@ -1941,7 +1941,10 @@ fn setup_phase(c: &Client, a: &str, b: &str) {
             "advertised group capability",
         );
         assert_eq!(settings["chat"]["pairwiseGroups"], true);
-        assert!(settings["chat"].get("mlsGroups").is_none(), "MLS groups are gone");
+        assert!(
+            settings["chat"].get("mlsGroups").is_none(),
+            "MLS groups are gone"
+        );
     }
     update_feature_mode(c, a, &admin_a, "drive", "open");
     update_feature_mode(c, b, &admin_b, "drive", "open");
