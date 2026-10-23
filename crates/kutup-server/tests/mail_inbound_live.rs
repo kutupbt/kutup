@@ -7850,6 +7850,16 @@ fn custom_domains() {
         .send()
         .unwrap();
     assert_eq!(r.status().as_u16(), 201, "{}", r.text().unwrap_or_default());
+    // Its code entered: Bob sees it too.
+    verify_forwarding(
+        &c,
+        &base,
+        &alice,
+        &sales.address,
+        &bob,
+        &bob_key,
+        &forwarding_id,
+    );
     let forwards = |user: &User| -> bool {
         let listed: Value = bearer(c.get(format!("{base}/api/mail/forwardings")), &user.token)
             .send()
