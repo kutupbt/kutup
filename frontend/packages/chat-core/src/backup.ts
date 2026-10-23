@@ -621,8 +621,24 @@ export class ChatBackupCoordinator {
     })
   }
 
-  pageHidden(): void {
-    if (document.visibilityState === 'hidden') void this.runCycle()
+  /**
+   * The page went hidden, or is going away (`pagehide`): what is scheduled
+   * goes now, not after the debounce the page may not outlive.
+   */
+  pageHidden(goingAway = false): void {
+    if (goingAway || document.visibilityState === 'hidden') void this.flushScheduled()
+  }
+
+  /**
+   * Collects and uploads everything scheduled now, even a change that came
+   * in while a cycle was already running (that cycle didn't collect it).
+   */
+  private async flushScheduled(): Promise<void> {
+    if (this.running) await this.running.catch(() => undefined)
+    if (this.disposed) return
+    if (this.timer !== null) this.runtime.scheduler.cancel(this.timer)
+    this.timer = null
+    await this.runCycle()
   }
 
   online(): void {

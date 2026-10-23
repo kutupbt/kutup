@@ -723,6 +723,24 @@ describe('ChatBackupCoordinator durable retry', () => {
     expect(coordinator.view().state).toBe('protected')
   })
 
+  it('backs up what waits at once when the page goes away', async () => {
+    const transport = new ScriptedTransport()
+    const databaseName = `backup-coordinator:${crypto.randomUUID()}`
+    databaseNames.push(databaseName)
+    const entries = [historyEntry()]
+    const coordinator = await open(transport, databaseName, async () => entries)
+    await coordinator.settled()
+    expect(transport.segments).toHaveLength(1)
+
+    // A message arrives, and the page is closed before the debounce: it
+    // goes now (this test's scheduler never fires on its own).
+    entries.push({ ...historyEntry(), id: '44444444-4444-4444-8444-444444444444', timestampMs: 1_700_000_001_000 })
+    coordinator.schedule()
+    coordinator.pageHidden(true)
+    await vi.waitFor(() => expect(transport.segments).toHaveLength(2))
+    await vi.waitFor(() => expect(coordinator.view().state).toBe('protected'))
+  })
+
   it('returns one promise for overlapping manual flush triggers', async () => {
     const transport = new ScriptedTransport()
     const databaseName = `backup-coordinator:${crypto.randomUUID()}`
