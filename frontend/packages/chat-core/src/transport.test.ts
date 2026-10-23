@@ -303,6 +303,49 @@ describe('ApiChatTransport', () => {
     await expect(transport.sendSealedBatch('b.test', { recipients: [] })).rejects.toThrow(/peerUnsupported/)
   })
 
+  it('sends a multi-recipient group copy anonymously and maps each answer', async () => {
+    const response = { refused: [], rateLimited: [], devices: [], stale: [] }
+    const post = vi.spyOn(axios, 'post').mockResolvedValueOnce({ status: 200, data: response } as never)
+    const transport = new ApiChatTransport()
+    await expect(transport.sendSealedMulti('b.test', { sendId: 's' })).resolves
+      .toEqual({ kind: 'answered', status: 200, response })
+    expect(post).toHaveBeenCalledWith(
+      expect.stringMatching(/\/chat\/anonymous\/messages\/multi$/),
+      { sendId: 's' },
+      { params: { server: 'b.test' }, withCredentials: false, headers: { Authorization: undefined } },
+    )
+    const answer = (status: number, data: unknown = {}) =>
+      new axios.AxiosError('failed', String(status), undefined, undefined, { status, data } as never)
+    const moved = { ...response, devices: [{ accountId: 'x', missingDevices: [2], extraDevices: [] }] }
+    for (const [status, expected] of [
+      [409, { kind: 'answered', status: 409, response: moved }],
+      [410, { kind: 'answered', status: 410, response: moved }],
+      [503, { kind: 'peerUnavailable' }],
+      [404, { kind: 'peerUnavailable' }],
+      [413, { kind: 'tooLarge' }],
+      [429, { kind: 'rateLimited' }],
+    ] as const) {
+      post.mockRejectedValueOnce(answer(status, moved))
+      await expect(transport.sendSealedMulti('b.test', {})).resolves.toEqual(expected)
+    }
+    post.mockRejectedValueOnce(new Error('offline'))
+    await expect(transport.sendSealedMulti('b.test', {})).rejects.toBeTruthy()
+  })
+
+  it('sets the published group capabilities and says when the server takes no more', async () => {
+    const post = vi.spyOn(api, 'post').mockResolvedValueOnce({ data: { count: 8 } } as never)
+    const transport = new ApiChatTransport()
+    const hashes = Array.from({ length: 8 }, (_, index) => `h${index}`)
+    await expect(transport.setGroupCapabilities(hashes)).resolves.toEqual({ kind: 'set', count: 8 })
+    expect(post).toHaveBeenCalledWith('/chat/group-capabilities/set', { hashes })
+    post.mockRejectedValueOnce(new axios.AxiosError('full', '409', undefined, undefined,
+      { status: 409, data: { error: 'too many', code: 'capabilityLimit' } } as never))
+    await expect(transport.setGroupCapabilities(hashes)).resolves.toEqual({ kind: 'limitReached' })
+    const other = new axios.AxiosError('conflict', '409', undefined, undefined, { status: 409, data: {} } as never)
+    post.mockRejectedValueOnce(other)
+    await expect(transport.setGroupCapabilities(hashes)).rejects.toBe(other)
+  })
+
   it('reports only the server\'s own sealed refusal as refused', async () => {
     await resolveApiBase()
     const refusal = (data: unknown) => new axios.AxiosError('failed', '404', undefined, undefined, { status: 404, data } as never)

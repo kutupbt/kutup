@@ -878,6 +878,32 @@ The budgets are charged whatever the answer: a send answered `409` or `410`
 counts too. The shared part goes once no row names it (after an ack,
 or the maintenance sweep).
 
+**The client side.** Each member draws a random 16-byte capability per group
+(`DeliveryBook`) and publishes the hashes of all its groups' capabilities in
+one set (`POST /api/chat/group-capabilities/set`), padded to a multiple of 8
+with dummies derived from the account's padding key, so the set's size says
+little about how many groups it is in. A capability is handed to the other
+members only after its set was taken, pairwise, in the hidden `groupDelivery`
+kind, and kept in the account's group list entry so its other devices hold it
+too; the newest draw wins everywhere. It is drawn again when a member who
+holds it leaves or is removed, and a group this account leaves (or is
+removed from, or that ends) comes off the set at once. A server over its
+per-account limit (`409 capabilityLimit`) keeps the account's groups on the
+pairwise route.
+
+A group message goes on this route to each member whose capability the
+sender holds, one request per destination server, the sender-key message
+sealed once (libsignal's `sealed_sender_multi_recipient_encrypt`). The
+account's own other devices get their copies pairwise, as do members whose
+capability it doesn't hold. A member device the sender key hasn't reached (one
+the account gained since the key's distribution) can't read a shared copy:
+that member's leg goes pairwise, the new device's copy naming the member so it
+finds the group again. Answers: `refused` sends that member's copy pairwise at
+once and asks it for its current capability (its next message hands it out);
+`409`/`410` refetch that account's signed device list and try again;
+`503 peerUnavailable`, `404` (a server without the route) and `413` send the
+copies pairwise in the same pass; `429` and `rateLimited` wait.
+
 For another server's members, this server forwards the send at once to that
 server's `POST /api/fed/chat/sealed/multi` (signed federation), waits for its
 answer (the usual federation timeout) and relays it as it is: `200`, `409`,

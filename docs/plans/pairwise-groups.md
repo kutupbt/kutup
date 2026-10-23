@@ -1759,6 +1759,30 @@ body is read and given back once a request authenticates), an env rate limit
 as the other pre-authentication limits. The server never had the 64 cap: `CHAT_GROUP_MAX_MEMBERS` is 256 and
 `GroupLimits` takes at most that; the client lifts its own once this is in.
 
+### Slice 2: as built (client, 2026-10-23)
+
+Built on one identity per account (docs/plans/account-identity-key.md), so
+libsignal's sealed sender v2 is used as it is: one key share per account.
+The contract is in docs/chat-protocol.md §7 ("The client side"). What
+building it settled:
+- **Capability per group** (`DeliveryBook` in the group record): drawn on
+  the first send that needs it, published in one padded set of all groups
+  (multiples of 8, dummies from `kutup_crypto::chat_group::DeliveryPaddingKey`,
+  the epoch the newest draw), handed out only after the set was taken, kept in
+  the group list entry; redrawn when a holder is no longer a member;
+  unpublished when this account's membership ends (any path: `save_group`).
+- **Legs:** a member whose capability is held goes on the multi route; own
+  devices and the rest go pairwise. A leg whose account has devices the sender
+  key hasn't reached goes on as an ordinary leg (sender-key copies for the
+  devices that hold the key, a pairwise copy naming the member for the rest),
+  since a shared copy can't carry the member's pseudonym and the new device
+  couldn't read it.
+- **Answers:** as the protocol says; `refused` also asks the member for its
+  current capability (`groupDelivery` request).
+- **Tests:** chat-core harness (`group_multi_*`), with a server double that
+  parses the `0x23` payload and checks capabilities and devices as the server
+  does; the TS transport maps every answer.
+
 ### Slice 4: group calls, the server design (second session, 2026-10-21)
 
 Agreed with the third session and revised after the main session's review
