@@ -6310,8 +6310,11 @@ pub fn account_profile_seal(
     to_output(&upload)
 }
 
+/// A request body for the browser transport, which sends it as JSON: maps as
+/// plain objects (a JS `Map` would encode as `{}`).
 fn to_transport<T: Serialize + ?Sized>(value: &T) -> Result<JsValue> {
-    serde_wasm_bindgen::to_value(value)
+    value
+        .serialize(&serde_wasm_bindgen::Serializer::new().serialize_maps_as_objects(true))
         .map_err(|error| ChatError::Transport(format!("encode transport request: {error}")))
 }
 
