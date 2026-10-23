@@ -7558,7 +7558,7 @@ fn custom_domains() {
         (status, r.json::<Value>().unwrap_or(Value::Null))
     };
     let bob = register(&c, &base);
-    set_up_address(&c, &base, &bob);
+    let bob_key = set_up_address(&c, &base, &bob);
     let bobs_own = self::address_id(&c, &base, &bob);
     let (status, body) = send_as(&alice, &bobs_own, "info@customer.test");
     assert_eq!(
@@ -7842,6 +7842,23 @@ fn custom_domains() {
     assert_eq!(lookup("sales@customer.test").0, 200);
     let (status, body) = send_sales();
     assert!(status < 300, "send from sales@ again: {status} {body}");
+    // A forwarding from it, to end with it.
+    let (forwarding_id, request, _) =
+        forwarding_request(&sales, &sales_id, &bob_key, "all", json!([]));
+    let r = bearer(c.post(format!("{base}/api/mail/forwardings")), &alice.token)
+        .json(&request)
+        .send()
+        .unwrap();
+    assert_eq!(r.status().as_u16(), 201, "{}", r.text().unwrap_or_default());
+    let forwards = |user: &User| -> bool {
+        let listed: Value = bearer(c.get(format!("{base}/api/mail/forwardings")), &user.token)
+            .send()
+            .unwrap()
+            .json()
+            .unwrap();
+        listed.to_string().contains(&forwarding_id)
+    };
+    assert!(forwards(&alice) && forwards(&bob));
 
     // Deleting: only once disabled; the name is gone, its keys stay to
     // open what it received.
@@ -7878,6 +7895,11 @@ fn custom_domains() {
             .sum()
     };
     assert_eq!(held, 1, "a deleted address's key stays with the account");
+    // Its forwardings ended with it, for both sides.
+    assert!(
+        !forwards(&alice) && !forwards(&bob),
+        "a deleted address's forwardings end"
+    );
     // Taken back: the same row, its keys and its chain, disabled until the
     // chain's next list enables it (devices that saw the old chain never see
     // it start over).
@@ -7905,6 +7927,8 @@ fn custom_domains() {
         .unwrap();
     assert_eq!(row["disabled"], true);
     assert_eq!(enable_again(&c, &base, &alice, &sales_id), before + 1);
+    // Taken back, it has none: they never come back with it.
+    assert!(!forwards(&alice) && !forwards(&bob));
     assert_eq!(lookup("sales@customer.test").0, 200);
     // Deleted again, for what follows.
     let (status, _) = put_list(

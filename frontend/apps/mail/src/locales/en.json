@@ -1141,6 +1141,7 @@
       "ownAddress": "You can't forward to one of your own addresses.",
       "unknown": "There's no such address on this server.",
       "kindChanged": "This address changed since you checked it. Check it again before you save.",
+      "pinnedConflict": "You trust other keys for this address in Contacts, while this server says it is a Kutup user's. Check with them, and remove the keys in Contacts if the address moved to Kutup.",
       "group": "Email can't be forwarded to a shared mailbox or a list.",
       "unverified": "This address's keys couldn't be verified, so nothing can be forwarded to it now.",
       "exists": "You already forward to this address.",

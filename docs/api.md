@@ -1603,9 +1603,11 @@ address.
 ### PUT /api/mail/addresses/:id/delete
 
 Proton's Delete for a disabled address on a custom domain (`409
-addressEnabled` while enabled: disable it first, as Proton's client does).
-The name is free for anyone again; its keys stay with this account, opening
-the mail it received, never published or used for new mail. `204`.
+addressEnabled` while enabled: disable it first, as Proton's client does; one
+that never had a key is deleted at once). The name is free for anyone again;
+its keys stay with this account, opening the mail it received, never
+published or used for new mail. Its forwardings end, from it and to it, and
+never come back if the account takes the address back. `204`.
 
 ### POST /api/mail/addresses/:id/keys
 
