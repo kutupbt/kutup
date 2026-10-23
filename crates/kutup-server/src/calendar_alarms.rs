@@ -292,6 +292,12 @@ async fn fire_due(state: &AppState, client: &reqwest::Client, late: bool) -> any
     let per_account = CALENDAR_ALARM_BATCH_PER_ACCOUNT.load(&state.pool).await?;
     let sends = CALENDAR_ALARM_SENDS.load(&state.pool).await?;
     let mut tx = state.pool.begin().await?;
+    // The database's clock, one value for the whole batch: `now()` is the
+    // transaction's start, which the queries below use too, so the skip and
+    // lateness checks here never disagree with them (clock skew).
+    let now: time::OffsetDateTime = sqlx::query_scalar("SELECT now()")
+        .fetch_one(&mut *tx)
+        .await?;
     type Row = (
         Uuid,
         Uuid,
@@ -349,7 +355,6 @@ async fn fire_due(state: &AppState, client: &reqwest::Client, late: bool) -> any
         .await?
     };
     let full = rows.len() as i64 == batch;
-    let now = time::OffsetDateTime::now_utc();
     let mut due = Vec::new();
     // Each event's series read once per batch.
     let mut series: HashMap<Uuid, Option<(Series, bool)>> = HashMap::new();
