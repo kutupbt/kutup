@@ -554,6 +554,11 @@ stack's lateness), import of a Google export and export round-trip.
 **Not in E2:** sharing and busy/free (E3), invitations and their wider
 rule set (E4), feeds and Google import (E5).
 
+**For E3 (from the E2b-2 review):** a member who sees busy times only gets
+no alarms (the job recomputes their alarms when their permissions change),
+and removing a member deletes their alarms, event reminders and recompute
+requests with them.
+
 ## Calendar UX parity (second session, 2026-10-22)
 
 The user asked for drag to create on the time grid. Read from Proton's web

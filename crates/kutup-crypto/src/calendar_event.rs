@@ -517,7 +517,7 @@ pub enum TimeV1 {
 }
 
 impl TimeV1 {
-    pub(crate) fn to_time(&self) -> Result<EventTime> {
+    pub fn to_time(&self) -> Result<EventTime> {
         let invalid = || CryptoError::InvalidInput("time is invalid".into());
         Ok(match self {
             TimeV1::Date(date) => EventTime::Date(date.parse().map_err(|_| invalid())?),
