@@ -92,5 +92,23 @@
     "slot": "{{day}}, {{time}}",
     "span": "{{day}}, {{start}} to {{end}}. Enter to create.",
     "moved": "Moves to {{start}} until {{end}}. Enter to open, Escape to cancel."
+  },
+  "reminders": {
+    "title": "Calendar reminder",
+    "untitled": "(no title)",
+    "text": {
+      "startsNow": "{{title}} starts now",
+      "startsToday": "{{title}} starts today",
+      "startsAt": "{{title}} starts at {{time}}",
+      "startsTomorrow": "{{title}} starts tomorrow",
+      "startsTomorrowAt": "{{title}} starts tomorrow at {{time}}",
+      "startsOn": "{{title}} starts on {{date}}",
+      "startsOnAt": "{{title}} starts on {{date}} at {{time}}",
+      "startedAt": "{{title}} started at {{time}}",
+      "startedYesterday": "{{title}} started yesterday",
+      "startedYesterdayAt": "{{title}} started yesterday at {{time}}",
+      "startedOn": "{{title}} started on {{date}}",
+      "startedOnAt": "{{title}} started on {{date}} at {{time}}"
+    }
   }
 }

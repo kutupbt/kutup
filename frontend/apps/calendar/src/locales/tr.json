@@ -92,5 +92,23 @@
     "slot": "{{day}}, {{time}}",
     "span": "{{day}}, {{start}} ile {{end}} arası. Oluşturmak için Enter.",
     "moved": "{{start}} ile {{end}} arasına taşınıyor. Açmak için Enter, vazgeçmek için Escape."
+  },
+  "reminders": {
+    "title": "Takvim hatırlatıcısı",
+    "untitled": "(başlıksız)",
+    "text": {
+      "startsNow": "{{title}} şimdi başlıyor",
+      "startsToday": "{{title}} bugün başlıyor",
+      "startsAt": "{{title}} {{time}} saatinde başlıyor",
+      "startsTomorrow": "{{title}} yarın başlıyor",
+      "startsTomorrowAt": "{{title}} yarın {{time}} saatinde başlıyor",
+      "startsOn": "{{title}} {{date}} tarihinde başlıyor",
+      "startsOnAt": "{{title}} {{date}} tarihinde {{time}} saatinde başlıyor",
+      "startedAt": "{{title}} {{time}} saatinde başladı",
+      "startedYesterday": "{{title}} dün başladı",
+      "startedYesterdayAt": "{{title}} dün {{time}} saatinde başladı",
+      "startedOn": "{{title}} {{date}} tarihinde başladı",
+      "startedOnAt": "{{title}} {{date}} tarihinde {{time}} saatinde başladı"
+    }
   }
 }
