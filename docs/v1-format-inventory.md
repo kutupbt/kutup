@@ -66,13 +66,14 @@ extra object or revision, a length its policy never gives, and trailing data.
 envelopes that must be refused, read by the Rust and the WASM tests.
 
 Contact cards (`KUTCC2`), mail names (`KUTMN2`) and identity pin lists
-(`KUTIP2`) carry their revision in clear after the suite, covered by the AAD
+(`KUTIP3`) carry their revision in clear after the suite, covered by the AAD
 (docs/plans/sealed-revisions.md); cards and names are padded to a multiple of
 256 bytes.
 
 The account's own at-rest formats bind the key binding, never a name, and a
 format that bound a name was replaced by a new version with no reader for the
-old one (the private beta was reset): identity pins `KUTIP1` → `KUTIP2`,
+old one (the private beta was reset): identity pins `KUTIP1` → `KUTIP2` →
+`KUTIP3` (suite 3, the key binding),
 contact summaries `kutup/contact-summary/v1` → `/v2` and cards `KUTCC1` →
 `KUTCC2`, mail names `KUTMN1` → `KUTMN2`, and Chat's wrapped profile key
 `kutup-chat-profile-wrap-v1` → `-v2`. Each vector file lists the values that

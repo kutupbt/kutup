@@ -57,9 +57,12 @@ serde_json = { version = "1", features = ["preserve_order"] }
 
 # CLI (kutup-cli).
 clap = { version = "4", features = ["derive"] }
-# TLS on rustls with aws-lc-rs only (no ring anywhere), which prefers the
-# post-quantum X25519MLKEM768 key exchange; every binary installs it as the
-# process default at start (`tls::install_crypto_provider`).
+# TLS on rustls with aws-lc-rs only, which prefers the post-quantum
+# X25519MLKEM768 key exchange; every binary installs it as the process
+# default at start (`tls::install_crypto_provider`). No build compiles ring:
+# Cargo.lock lists it only as an optional dependency of rustls-webpki and
+# hickory-proto that nothing enables (`cargo tree -i ring --target all` is
+# empty).
 reqwest = { version = "0.12", default-features = false, features = ["blocking", "json", "multipart", "stream", "rustls-tls-webpki-roots-no-provider"] }
 # `aws_lc_rs` also turns on aws-lc-sys's `prebuilt-nasm`, which the Windows
 # (x86_64-pc-windows-msvc) CLI release needs: its runners have no NASM.

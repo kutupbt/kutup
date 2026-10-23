@@ -31,11 +31,18 @@ ignore = [
     # sender certificates. Native aarch64 clients (the native apps, not started)
     # need it fixed: lifted by a libsignal release pinning >= 0.0.6.
     { id = "RUSTSEC-2026-0212", reason = "aarch64-only, in libsignal's ML-KEM; web is WASM, native apps not started; needs a libsignal bump" },
-    # rsa 0.9.10, Marvin: timing of RSA private-key decryption. Kutup never
-    # decrypts or signs with an RSA private key: address keys are Ed25519 plus
-    # Curve25519 (imports refused otherwise), RSA serves only to describe an
-    # outside public key, and the server's JWTs are HS256. No fixed release.
-    { id = "RUSTSEC-2023-0071", reason = "no RSA private-key operation anywhere in Kutup" },
+    # rsa 0.9.10, Marvin: its private-key operation isn't constant time, so
+    # one who can time many of them may learn the key. No fixed release. The
+    # only private-key use is Pass's SSH agent signing with a vault's RSA SSH
+    # key (crates/kutup-pass/src/ssh.rs), blinded with the OS RNG; nothing
+    # decrypts with RSA (Mail's keys are Ed25519 + Curve25519, the server's
+    # JWTs HS256). Signatures go only to the agent's owner-only local socket,
+    # each approved on the desktop (or per host until the agent locks; never
+    # for a forwarded request): timing one needs code running as the user,
+    # who can already use the key. An SSH server sees one signature per login
+    # through the network, too few and too noisy to time. Lift when rsa ships
+    # a constant-time release (0.10).
+    { id = "RUSTSEC-2023-0071", reason = "Pass's SSH agent signs with RSA, blinded, on an owner-only local socket with desktop approval; no fixed release" },
     # Unmaintained, no replacement in their parents yet:
     { id = "RUSTSEC-2025-0119", reason = "number_prefix: indicatif's progress bars in the CLI" },
     { id = "RUSTSEC-2026-0173", reason = "proc-macro-error2: a build-time macro of hax-lib under libsignal's ML-KEM" },
