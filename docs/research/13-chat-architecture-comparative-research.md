@@ -15,7 +15,7 @@ codebases checked out locally: `libsignal`, Prosody, ejabberd, Monal.
 > recommendation. Dedicated native integration remains work in progress and is
 > not release-ready. Current normative behavior lives in
 > [`../chat-protocol.md`](../chat-protocol.md),
-> [`../chat-mls.md`](../chat-mls.md), and
+> `chat-mls.md` (removed with MLS groups), and
 > [`../chat-backup.md`](../chat-backup.md).
 
 This document answers one question: **is kutup's chat architecture correct,

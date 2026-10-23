@@ -3,7 +3,7 @@
 Status: final draft (2026-10-17), with the user's decisions (end of the note)
 and both sessions' reviews. Next is the main session's security review of the
 pseudonym design. No code before the user's go.
-- Replaces: [`chat-mls.md`](../chat-mls.md) and [`chat-invite-links.md`](../chat-invite-links.md). MLS groups were never enabled in the beta (`CHAT_GROUPS` is off).
+- Replaces: `chat-mls.md` and `chat-invite-links.md` (both removed with MLS groups, §9). MLS groups were never enabled in the beta (`CHAT_GROUPS` is off).
 - Background: the research report "Self healing encrypted group chat"
   (2026-10, outside the repository). It compares per-sender keys, pairwise fan-out
   and MLS, and recommends per-sender keys under a membership log that clients

@@ -26,9 +26,9 @@ an implementation record.
   states **Starting**, **Backing up**, **Offline**, **Media pending**,
   **Backup needs attention**, and **Protected**.
 - Backup is display history, not transport state. It never restores a Chat
-  device identity, libsignal ratchet/session, MLS epoch, mailbox cursor,
+  device identity, libsignal ratchet/session, group sender key, mailbox cursor,
   receipt outbox, federation outbox, draft, typing state, or pending send. The
-  replacement installation establishes fresh Direct and MLS state.
+  replacement installation establishes fresh Direct and group state.
 - The account's Chat identity is not in the backup either, as Signal's isn't
   (docs/plans/account-identity-key.md): a cleared browser is linked again
   from another device of the account, which brings the identity, and then
@@ -62,7 +62,7 @@ records, cursors, digests, lengths, quota counters, and staging/reconciliation
 state. It cannot decrypt conversation IDs, participants, messages, reactions,
 filenames, MIME types, expiry controls, previews, or media.
 
-Backups are account-local. Federated Direct or MLS messages enter each
+Backups are account-local. Federated Direct and group messages enter each
 participant's archive only through that participant's client and are stored
 only by that account's homeserver. Federation never copies one account's
 backup to the peer server.
@@ -267,7 +267,7 @@ The required CI workflow has four complementary levels:
   quota, reconciliation, concurrency, interruption, and purge coverage;
 - `Clean-browser Chat backup recovery`: single-server automatic restore and
   protected/unavailable media behavior in a genuinely empty context; and
-- `Two-server browser security`: Direct/MLS/media recovery for both accounts,
+- `Two-server browser security`: Direct, group and media recovery for both accounts,
   account-local object proof, homeserver restart, and new post-restore sessions.
 
 Playwright retries are zero. Sensitive jobs retain only allow-listed phase
