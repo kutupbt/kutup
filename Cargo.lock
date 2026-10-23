@@ -3488,8 +3488,10 @@ dependencies = [
 name = "kutup-crypto"
 version = "0.1.0"
 dependencies = [
+ "aes 0.8.4",
  "base64 0.22.1",
  "bip39",
+ "cbc 0.1.2",
  "chacha20poly1305",
  "dryoc",
  "ed25519-dalek",

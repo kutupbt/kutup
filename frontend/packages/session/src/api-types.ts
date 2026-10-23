@@ -230,6 +230,14 @@ export interface AdminSettings {
   calendarRecomputeBatch: number
   calendarWindowDays: number
   calendarEventsPage: number
+  /** Linking Chat devices (site_settings::CHAT_IDENTITY_SETTINGS). */
+  chatLinkTokenSeconds: number
+  chatLinkTokensPerAccount: number
+  chatProvisionBodyBytes: number
+  chatMaxActiveDevices: number
+  chatProvisioningTicketSeconds: number
+  chatProvisioningSocketsPerAccount: number
+  chatDistributionMessageBytes: number
 }
 
 export type FederationMode = 'disabled' | 'allowlist' | 'blocklist' | 'open'

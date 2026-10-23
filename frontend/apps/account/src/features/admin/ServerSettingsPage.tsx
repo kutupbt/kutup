@@ -57,8 +57,18 @@ const CALENDAR_SETTINGS = [
   { field: 'calendarWindowDays', min: 1, max: 3660 },
   { field: 'calendarEventsPage', min: 10, max: 5000 },
 ] as const satisfies readonly { field: keyof AdminSettings; min: number; max: number }[]
+/** Linking Chat devices (site_settings::CHAT_IDENTITY_SETTINGS). */
+const CHAT_LINKING_SETTINGS = [
+  { field: 'chatLinkTokenSeconds', min: 60, max: 3600 },
+  { field: 'chatLinkTokensPerAccount', min: 1, max: 20 },
+  { field: 'chatProvisionBodyBytes', min: 4096, max: 65_536 },
+  { field: 'chatMaxActiveDevices', min: 1, max: 10 },
+  { field: 'chatProvisioningTicketSeconds', min: 10, max: 600 },
+  { field: 'chatProvisioningSocketsPerAccount', min: 1, max: 20 },
+  { field: 'chatDistributionMessageBytes', min: 1024, max: 1_048_576 },
+] as const satisfies readonly { field: keyof AdminSettings; min: number; max: number }[]
 /** Every whole-number setting the page edits by field. */
-const NUMERIC_SETTINGS = [...MULTI_SETTINGS, ...CALENDAR_SETTINGS]
+const NUMERIC_SETTINGS = [...MULTI_SETTINGS, ...CALENDAR_SETTINGS, ...CHAT_LINKING_SETTINGS]
 /** The server's bounds (site_settings::validate_chat_group_capabilities_per_account). */
 const MAX_GROUP_CAPABILITIES = 100_000
 const MIN_GROUP_CAPABILITIES = 16
@@ -239,6 +249,17 @@ export function ServerSettingsPage() {
             <CardContent className="grid gap-4 p-5 sm:grid-cols-2">
               {CALENDAR_SETTINGS.map(({ field, min, max }) => (
                 <Field key={field} label={t(`admin.settings.calendarLimits.${field}`)} error={errors[field]?.message} description={t(`admin.settings.calendarLimits.${field}Hint`)} required>
+                  {(control) => <Input {...control} {...register(field)} type="number" min={min} max={max} step={1} inputMode="numeric" />}
+                </Field>
+              ))}
+            </CardContent>
+          </Card>
+        </Section>
+        <Section title={t('admin.settings.chatLinking')} description={t('admin.settings.chatLinkingHint')}>
+          <Card>
+            <CardContent className="grid gap-4 p-5 sm:grid-cols-2">
+              {CHAT_LINKING_SETTINGS.map(({ field, min, max }) => (
+                <Field key={field} label={t(`admin.settings.chatLinkingLimits.${field}`)} error={errors[field]?.message} description={t(`admin.settings.chatLinkingLimits.${field}Hint`)} required>
                   {(control) => <Input {...control} {...register(field)} type="number" min={min} max={max} step={1} inputMode="numeric" />}
                 </Field>
               ))}

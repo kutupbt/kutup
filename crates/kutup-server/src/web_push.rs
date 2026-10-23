@@ -323,19 +323,6 @@ pub struct DeviceQuery {
     pub device_id: i32,
 }
 
-async fn require_device(pool: &PgPool, user_id: Uuid, device_id: i32) -> AppResult<()> {
-    let exists: Option<i32> = sqlx::query_scalar(
-        "SELECT device_id FROM chat_devices WHERE user_id = $1 AND device_id = $2",
-    )
-    .bind(user_id)
-    .bind(device_id)
-    .fetch_optional(pool)
-    .await?;
-    exists
-        .map(drop)
-        .ok_or_else(|| AppError::not_found("chat device not found"))
-}
-
 #[utoipa::path(
     put,
     path = "/api/chat/push-subscription",
@@ -352,6 +339,7 @@ async fn require_device(pool: &PgPool, user_id: Uuid, device_id: i32) -> AppResu
 pub async fn put_subscription(
     State(state): State<AppState>,
     auth: AuthUser,
+    headers: axum::http::HeaderMap,
     Json(request): Json<PushSubscriptionRequest>,
 ) -> AppResult<Response> {
     let push = state
@@ -364,7 +352,13 @@ pub async fn put_subscription(
         ));
     }
     let user_id = trusted_uuid(&auth.user_id)?;
-    require_device(&state.pool, user_id, request.device_id).await?;
+    crate::handlers::chat_identity::authenticate_device(
+        &state.pool,
+        &headers,
+        user_id,
+        request.device_id,
+    )
+    .await?;
     sqlx::query(
         "INSERT INTO chat_push_subscriptions (user_id, device_id, endpoint)
          VALUES ($1, $2, $3)
@@ -391,9 +385,17 @@ pub async fn put_subscription(
 pub async fn delete_subscription(
     State(state): State<AppState>,
     auth: AuthUser,
+    headers: axum::http::HeaderMap,
     Query(query): Query<DeviceQuery>,
 ) -> AppResult<Response> {
     let user_id = trusted_uuid(&auth.user_id)?;
+    crate::handlers::chat_identity::authenticate_device(
+        &state.pool,
+        &headers,
+        user_id,
+        query.device_id,
+    )
+    .await?;
     forget(&state.pool, user_id, query.device_id)
         .await
         .map_err(|error| AppError::internal(error.to_string()))?;

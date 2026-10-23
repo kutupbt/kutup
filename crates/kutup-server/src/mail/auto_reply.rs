@@ -538,10 +538,23 @@ pub struct Compose<'a> {
 pub(crate) fn header_text(value: &str) -> String {
     let clean: String = value.chars().filter(|c| !c.is_control()).collect();
     if clean.is_ascii() {
-        clean
-    } else {
-        format!("=?UTF-8?B?{}?=", STANDARD.encode(clean.as_bytes()))
+        return clean;
     }
+    // Encoded words of at most 75 characters (RFC 2047 §2): 45 bytes of
+    // text each, whole characters, folded onto lines of their own.
+    let mut words = Vec::new();
+    let mut chunk = String::new();
+    for c in clean.chars() {
+        if chunk.len() + c.len_utf8() > 45 {
+            words.push(format!("=?UTF-8?B?{}?=", STANDARD.encode(chunk.as_bytes())));
+            chunk.clear();
+        }
+        chunk.push(c);
+    }
+    if !chunk.is_empty() {
+        words.push(format!("=?UTF-8?B?{}?=", STANDARD.encode(chunk.as_bytes())));
+    }
+    words.join("\r\n ")
 }
 
 fn base64_lines(body: &str) -> String {
@@ -669,6 +682,26 @@ pub fn may_answer(raw: &[u8]) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn long_header_text_is_several_short_encoded_words() {
+        assert_eq!(header_text("plain\r\nBcc: x"), "plainBcc: x");
+        let long = "Yönlendirme için doğrulama kodu: çok uzun bir konu satırı, ".repeat(3);
+        let encoded = header_text(&long);
+        let words: Vec<&str> = encoded.split("\r\n ").collect();
+        assert!(words.len() > 1);
+        let mut back = Vec::new();
+        for word in &words {
+            assert!(word.len() <= 75, "{word}");
+            let inner = word
+                .strip_prefix("=?UTF-8?B?")
+                .unwrap()
+                .strip_suffix("?=")
+                .unwrap();
+            back.extend(STANDARD.decode(inner).unwrap());
+        }
+        assert_eq!(String::from_utf8(back).unwrap(), long);
+    }
 
     fn at(text: &str) -> PrimitiveDateTime {
         parse_local(text).expect("a local time")

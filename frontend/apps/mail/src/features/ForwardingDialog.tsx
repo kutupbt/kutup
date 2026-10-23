@@ -40,7 +40,8 @@ export function ForwardingDialog({
   /** The forwarder address: the account's current one. */
   from: CheckedAddress
   forwarding?: MailForwarding
-  onClose: () => void
+  /** Closed; with the forwarding just made, whose code is now to be entered. */
+  onClose: (made?: MailForwarding) => void
 }) {
   const { t } = useTranslation()
   const account = useMailAccount()
@@ -102,8 +103,8 @@ export function ForwardingDialog({
       { from, to: to.trim(), kind, ...body },
       {
         onSuccess: (made) => {
-          toast.success(t(made.kind === 'outside' ? 'forwarding.createdOutside' : 'forwarding.created', { to: made.forwardeeEmail }))
-          onClose()
+          toast.success(t('forwarding.code.sent', { to: made.forwardeeEmail }))
+          onClose(made)
         },
         onError: (e) => {
           setError(forwardingErrorMessage(e, t))
@@ -183,7 +184,7 @@ export function ForwardingDialog({
               {t('common.back')}
             </Button>
           ) : (
-            <Button variant="outline" onClick={onClose} disabled={pending}>
+            <Button variant="outline" onClick={() => onClose()} disabled={pending}>
               {t('common.cancel')}
             </Button>
           )}

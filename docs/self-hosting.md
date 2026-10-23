@@ -451,12 +451,12 @@ configuration. Every account signs its own complete manifest locally; the
 server verifies and distributes the current head and append-only history but
 cannot mark a peer verified.
 
-`CHAT_MAX_ACTIVE_DEVICES` defaults to 10 and accepts values from 1 through 10.
-A lower value is a local resource/product policy. Ten is the V1 protocol hard
-cap and cannot be raised by configuration:
+The Chat device limit is the site setting `chatMaxActiveDevices` in
+Administration (default 10, from 1 through 10; no environment variable). A
+lower value is a local resource/product policy. Ten is the V1 protocol hard
+cap and cannot be raised:
 
 ```sh
-CHAT_MAX_ACTIVE_DEVICES=10
 CHAT_MEDIA_MAX_PLAINTEXT_BYTES=2147483648
 ```
 
