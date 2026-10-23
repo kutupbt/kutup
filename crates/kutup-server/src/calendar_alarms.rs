@@ -703,6 +703,22 @@ mod tests {
         assert!(next_fire(&series, "UTC", -15, after).unwrap().is_none());
     }
 
+    /// The vector the calendar's service worker checks too
+    /// (`apps/calendar/src/features/reminders/push-sw.test.ts`).
+    #[test]
+    fn the_account_tag_matches_the_service_worker_s() {
+        let account = Uuid::parse_str("3f1c9a52-6b7e-4f0e-9d1a-2c3b4d5e6f70").unwrap();
+        assert_eq!(
+            subscription_tag(&[1; 16], b"account", account.as_bytes(), 22),
+            "bOzkrVOAPAcr6dlqCNiyod"
+        );
+        let event = Uuid::parse_str("11111111-2222-4333-8444-555555555555").unwrap();
+        assert_eq!(
+            subscription_tag(&[1; 16], b"topic", event.as_bytes(), 32),
+            "uNoLKqi4nmMfISj-3ezbUTFjYbMOclUk"
+        );
+    }
+
     #[test]
     fn tags_are_the_browser_s_own_and_fit_a_topic() {
         let event = Uuid::new_v4();
