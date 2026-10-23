@@ -7,7 +7,6 @@
 
 use chacha20poly1305::aead::{Aead, KeyInit, Payload};
 use chacha20poly1305::{XChaCha20Poly1305, XNonce};
-use dryoc::rng::copy_randombytes;
 use hkdf::Hkdf;
 use serde::{Deserialize, Serialize};
 use sha2::Sha256;
@@ -325,7 +324,7 @@ pub fn seal_object(
     let plaintext_bytes = u32::try_from(plaintext.len())
         .map_err(|_| CryptoError::InvalidInput("Chat backup plaintext is too large".into()))?;
     let mut nonce = [0u8; NONCE_LEN];
-    copy_randombytes(&mut nonce);
+    crate::primitives::random(&mut nonce);
     let header = build_header(context, plaintext_bytes, &nonce);
     let key = derive_object_key(root, context)?;
     let cipher = XChaCha20Poly1305::new_from_slice(key.as_slice())

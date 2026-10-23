@@ -131,7 +131,7 @@ pub(crate) fn generate_key(user_id: String, created_at_secs: u32) -> Result<Gene
     let secret = params
         .build()
         .map_err(backend)?
-        .generate(rand::rngs::OsRng)
+        .generate(crate::primitives::Rng)
         .map_err(backend)?;
     let public = SignedPublicKey::from(secret.clone());
     Ok(GeneratedAddressKey {
@@ -529,12 +529,12 @@ pub fn export_address_secret_key(secret_key: &[u8], passphrase: &str) -> Result<
         .map_err(|_| CryptoError::InvalidInput("address secret key does not parse".into()))?;
     let password = Password::from(passphrase);
     key.primary_key
-        .set_password(rand::rngs::OsRng, &password)
+        .set_password(crate::primitives::Rng, &password)
         .map_err(backend)?;
     for subkey in &mut key.secret_subkeys {
         subkey
             .key
-            .set_password(rand::rngs::OsRng, &password)
+            .set_password(crate::primitives::Rng, &password)
             .map_err(backend)?;
     }
     key.to_armored_string(ArmorOptions::default())
@@ -601,9 +601,9 @@ pub fn encrypt(
     let recipient = parse_recipient(recipient_public_key)?;
     let subkey = encryption_subkey(&recipient)?;
     let mut builder = MessageBuilder::from_bytes("", plaintext.to_vec())
-        .seipd_v1(rand::rngs::OsRng, SymmetricKeyAlgorithm::AES256);
+        .seipd_v1(crate::primitives::Rng, SymmetricKeyAlgorithm::AES256);
     builder
-        .encrypt_to_key(rand::rngs::OsRng, subkey)
+        .encrypt_to_key(crate::primitives::Rng, subkey)
         .map_err(backend)?;
     let signer = match signer_secret_key {
         Some(secret) => Some(signing_key(secret)?),
@@ -617,7 +617,7 @@ pub fn encrypt(
         );
     }
     builder
-        .to_armored_string(rand::rngs::OsRng, ArmorOptions::default())
+        .to_armored_string(crate::primitives::Rng, ArmorOptions::default())
         .map_err(backend)
 }
 
@@ -629,11 +629,11 @@ pub fn encrypt_binary(recipient_public_key: &[u8], plaintext: &[u8]) -> Result<V
     let recipient = parse_recipient(recipient_public_key)?;
     let subkey = encryption_subkey(&recipient)?;
     let mut builder = MessageBuilder::from_bytes("", plaintext.to_vec())
-        .seipd_v1(rand::rngs::OsRng, SymmetricKeyAlgorithm::AES256);
+        .seipd_v1(crate::primitives::Rng, SymmetricKeyAlgorithm::AES256);
     builder
-        .encrypt_to_key(rand::rngs::OsRng, subkey)
+        .encrypt_to_key(crate::primitives::Rng, subkey)
         .map_err(backend)?;
-    builder.to_vec(rand::rngs::OsRng).map_err(backend)
+    builder.to_vec(crate::primitives::Rng).map_err(backend)
 }
 
 /// An outside correspondent's key (docs/plans/mail.md, C3), as found
@@ -1055,13 +1055,13 @@ pub fn encrypt_armored(
         .collect::<Result<Vec<_>>>()?;
     let signer = signer_secret_key.map(signing_key).transpose()?;
     let mut builder = MessageBuilder::from_bytes("", plaintext.to_vec())
-        .seipd_v1(rand::rngs::OsRng, SymmetricKeyAlgorithm::AES256);
+        .seipd_v1(crate::primitives::Rng, SymmetricKeyAlgorithm::AES256);
     for key in &keys {
         let subkey = usable_encryption_subkey(key, now_secs).ok_or_else(|| {
             CryptoError::InvalidInput("a recipient key has no usable encryption subkey".into())
         })?;
         builder
-            .encrypt_to_key(rand::rngs::OsRng, subkey)
+            .encrypt_to_key(crate::primitives::Rng, subkey)
             .map_err(backend)?;
     }
     if let Some(signer) = &signer {
@@ -1072,7 +1072,7 @@ pub fn encrypt_armored(
         );
     }
     builder
-        .to_armored_string(rand::rngs::OsRng, ArmorOptions::default())
+        .to_armored_string(crate::primitives::Rng, ArmorOptions::default())
         .map_err(backend)
 }
 
@@ -1084,7 +1084,7 @@ pub fn encrypt_armored(
 pub fn sign_detached(signer_secret_key: &[u8], content: &[u8]) -> Result<String> {
     let signer = signing_key(signer_secret_key)?;
     pgp::composed::DetachedSignature::sign_binary_data(
-        rand::rngs::OsRng,
+        crate::primitives::Rng,
         &signer.primary_key,
         &Password::empty(),
         HashAlgorithm::Sha512,
@@ -1102,7 +1102,7 @@ pub fn sign_detached(signer_secret_key: &[u8], content: &[u8]) -> Result<String>
 pub fn sign_cleartext(signer_secret_key: &[u8], text: &str) -> Result<String> {
     let signer = signing_key(signer_secret_key)?;
     pgp::composed::CleartextSignedMessage::sign(
-        rand::rngs::OsRng,
+        crate::primitives::Rng,
         text,
         &signer.primary_key,
         &Password::empty(),
@@ -1198,10 +1198,10 @@ fn split(
         .collect::<Result<Vec<_>>>()?;
     let signer = signer_secret_key.map(signing_key).transpose()?;
     let mut builder = MessageBuilder::from_bytes("", plaintext.to_vec())
-        .seipd_v1(rand::rngs::OsRng, SymmetricKeyAlgorithm::AES256);
+        .seipd_v1(crate::primitives::Rng, SymmetricKeyAlgorithm::AES256);
     for recipient in &recipients {
         builder
-            .encrypt_to_key(rand::rngs::OsRng, encryption_subkey(recipient)?)
+            .encrypt_to_key(crate::primitives::Rng, encryption_subkey(recipient)?)
             .map_err(backend)?;
     }
     if let Some(signer) = &signer {
@@ -1211,7 +1211,7 @@ fn split(
             HashAlgorithm::Sha512,
         );
     }
-    let message = builder.to_vec(rand::rngs::OsRng).map_err(backend)?;
+    let message = builder.to_vec(crate::primitives::Rng).map_err(backend)?;
     let mut rest = message.as_slice();
     let mut key_packets = Vec::with_capacity(recipients.len());
     for _ in &recipients {

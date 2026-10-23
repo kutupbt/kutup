@@ -22,7 +22,6 @@
 
 use chacha20poly1305::aead::{Aead, KeyInit, Payload};
 use chacha20poly1305::{XChaCha20Poly1305, XNonce};
-use dryoc::rng::copy_randombytes;
 use hkdf::Hkdf;
 use sha2::Sha256;
 use zeroize::Zeroizing;
@@ -131,7 +130,7 @@ pub fn seal_name(
     name: &str,
 ) -> Result<Vec<u8>> {
     let mut nonce = [0u8; NONCE_LEN];
-    copy_randombytes(&mut nonce);
+    crate::primitives::random(&mut nonce);
     seal_name_with_nonce(key, binding, kind, id, revision, name, &nonce)
 }
 

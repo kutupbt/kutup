@@ -25,7 +25,6 @@
 
 use chacha20poly1305::aead::{Aead, KeyInit, Payload};
 use chacha20poly1305::{XChaCha20Poly1305, XNonce};
-use dryoc::rng::copy_randombytes;
 use ed25519_dalek::{Signature, Signer as _, SigningKey, VerifyingKey};
 use hkdf::Hkdf;
 use serde::{Deserialize, Serialize};
@@ -337,7 +336,7 @@ pub fn seal_card(
     vcard: &[u8],
 ) -> Result<Vec<u8>> {
     let mut nonce = [0u8; NONCE_LEN];
-    copy_randombytes(&mut nonce);
+    crate::primitives::random(&mut nonce);
     seal_card_with_nonce(contacts_key, binding, uid, revision, vcard, &nonce)
 }
 

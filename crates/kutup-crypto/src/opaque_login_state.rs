@@ -36,7 +36,7 @@ fn aad(login_id: &[u8; 16]) -> Vec<u8> {
 /// Seals `state` for login `login_id` under the setup key.
 pub fn seal(setup_key: &[u8; 32], login_id: &[u8; 16], state: &[u8]) -> Result<Vec<u8>> {
     let mut nonce = [0u8; NONCE_LEN];
-    dryoc::rng::copy_randombytes(&mut nonce);
+    crate::primitives::random(&mut nonce);
     let key = key(setup_key)?;
     let sealed = XChaCha20Poly1305::new(key.as_slice().into())
         .encrypt(

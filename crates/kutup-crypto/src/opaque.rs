@@ -93,38 +93,6 @@ impl opaque_ke::CipherSuite for Suite1 {
     type Ksf = Argon2idV1;
 }
 
-/// The operating system's randomness (through dryoc, which also works in the
-/// browser), for OPAQUE's blinding factors and key-exchange nonces.
-pub struct SystemRng;
-
-impl RngCore for SystemRng {
-    fn next_u32(&mut self) -> u32 {
-        let mut bytes = [0u8; 4];
-        self.fill_bytes(&mut bytes);
-        u32::from_le_bytes(bytes)
-    }
-
-    fn next_u64(&mut self) -> u64 {
-        let mut bytes = [0u8; 8];
-        self.fill_bytes(&mut bytes);
-        u64::from_le_bytes(bytes)
-    }
-
-    fn fill_bytes(&mut self, dest: &mut [u8]) {
-        dryoc::rng::copy_randombytes(dest);
-    }
-
-    fn try_fill_bytes(
-        &mut self,
-        dest: &mut [u8],
-    ) -> std::result::Result<(), opaque_ke::rand::Error> {
-        self.fill_bytes(dest);
-        Ok(())
-    }
-}
-
-impl CryptoRng for SystemRng {}
-
 fn protocol(error: ProtocolError) -> CryptoError {
     match error {
         // A wrong password, or a server that is not the one registered with.
@@ -243,7 +211,7 @@ pub struct Registered {
 
 /// Starts registering `password`: the state, and the request for the server.
 pub fn client_registration_start(password: &str) -> Result<(ClientRegistering, Vec<u8>)> {
-    client_registration_start_with(&mut SystemRng, password)
+    client_registration_start_with(&mut crate::primitives::Rng, password)
 }
 
 pub fn client_registration_start_with<R: RngCore + CryptoRng>(
@@ -264,7 +232,7 @@ pub fn client_registration_start_with<R: RngCore + CryptoRng>(
 impl ClientRegistering {
     /// Finishes with the server's response: the record and the export key.
     pub fn finish(self, response: &[u8]) -> Result<Registered> {
-        self.finish_with(&mut SystemRng, response)
+        self.finish_with(&mut crate::primitives::Rng, response)
     }
 
     pub fn finish_with<R: RngCore + CryptoRng>(
@@ -307,7 +275,7 @@ pub struct SignedIn {
 
 /// Starts signing in with `password`: the state, and the request for the server.
 pub fn client_login_start(password: &str) -> Result<(ClientSigningIn, Vec<u8>)> {
-    client_login_start_with(&mut SystemRng, password)
+    client_login_start_with(&mut crate::primitives::Rng, password)
 }
 
 pub fn client_login_start_with<R: RngCore + CryptoRng>(
@@ -329,7 +297,7 @@ impl ClientSigningIn {
     /// wrong password (or a server other than the one registered with); the
     /// server's answer to an unknown name fails the same way.
     pub fn finish(self, response: &[u8]) -> Result<SignedIn> {
-        self.finish_with(&mut SystemRng, response)
+        self.finish_with(&mut crate::primitives::Rng, response)
     }
 
     pub fn finish_with<R: RngCore + CryptoRng>(
@@ -409,7 +377,7 @@ pub struct ServerSecrets(ServerSetup<Suite1>);
 impl ServerSecrets {
     /// New secrets, made once per setup key id.
     pub fn generate() -> Self {
-        Self(ServerSetup::<Suite1>::new(&mut SystemRng))
+        Self(ServerSetup::<Suite1>::new(&mut crate::primitives::Rng))
     }
 
     pub fn generate_with<R: RngCore + CryptoRng>(rng: &mut R) -> Self {
@@ -426,7 +394,7 @@ impl ServerSecrets {
 /// database) for setup `key_id`: `magic ‖ key id ‖ nonce ‖ ciphertext`.
 pub fn seal_server_setup(secrets: &ServerSecrets, key: &[u8; 32], key_id: u16) -> Result<Vec<u8>> {
     let mut nonce = [0u8; NONCE_LEN];
-    dryoc::rng::copy_randombytes(&mut nonce);
+    crate::primitives::random(&mut nonce);
     seal_server_setup_with_nonce(secrets, key, key_id, &nonce)
 }
 
@@ -550,7 +518,13 @@ pub fn server_login_start(
     request: &[u8],
     credential: &[u8],
 ) -> Result<ServerSigningIn> {
-    server_login_start_with(&mut SystemRng, secrets, record, request, credential)
+    server_login_start_with(
+        &mut crate::primitives::Rng,
+        secrets,
+        record,
+        request,
+        credential,
+    )
 }
 
 pub fn server_login_start_with<R: RngCore + CryptoRng>(

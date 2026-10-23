@@ -16,7 +16,6 @@
 
 use chacha20poly1305::aead::{Aead, KeyInit, Payload};
 use chacha20poly1305::{XChaCha20Poly1305, XNonce};
-use dryoc::rng::copy_randombytes;
 use hkdf::Hkdf;
 use hmac::{Hmac, Mac};
 use sha2::Sha256;
@@ -93,9 +92,9 @@ impl MailSearchKeys {
     /// A new store key, and its wrapped form to keep in the database.
     pub fn create(master_key: &[u8; 32]) -> Result<(Self, Vec<u8>)> {
         let mut store_key = Zeroizing::new([0u8; 32]);
-        copy_randombytes(store_key.as_mut_slice());
+        crate::primitives::random(store_key.as_mut_slice());
         let mut nonce = [0u8; NONCE_LEN];
-        copy_randombytes(&mut nonce);
+        crate::primitives::random(&mut nonce);
         let wrapped = Self::wrap_with_nonce(master_key, &store_key, &nonce)?;
         Ok((Self::from_store_key(&store_key)?, wrapped))
     }
@@ -180,7 +179,7 @@ impl MailSearchKeys {
     /// its purpose and the record's hashed name.
     pub fn seal(&self, name: &str, value: &[u8]) -> Result<Vec<u8>> {
         let mut nonce = [0u8; NONCE_LEN];
-        copy_randombytes(&mut nonce);
+        crate::primitives::random(&mut nonce);
         self.seal_with_nonce(name, value, &nonce)
     }
 

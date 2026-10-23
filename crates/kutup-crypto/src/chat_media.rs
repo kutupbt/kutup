@@ -5,7 +5,6 @@
 //! is encrypted once and can therefore be durably copied between homeservers
 //! without teaching them a filename, MIME type, sender or conversation.
 
-use dryoc::rng::copy_randombytes;
 use hkdf::Hkdf;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -107,7 +106,7 @@ pub struct ChatMediaObjectHeaderV1 {
 
 pub fn generate_attachment_key() -> Zeroizing<[u8; KEY_LEN]> {
     let mut key = Zeroizing::new([0u8; KEY_LEN]);
-    copy_randombytes(key.as_mut_slice());
+    crate::primitives::random(key.as_mut_slice());
     key
 }
 

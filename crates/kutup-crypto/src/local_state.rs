@@ -18,7 +18,6 @@
 
 use chacha20poly1305::aead::{Aead, KeyInit, Payload};
 use chacha20poly1305::{XChaCha20Poly1305, XNonce};
-use dryoc::rng::copy_randombytes;
 
 use crate::error::{CryptoError, Result};
 
@@ -136,7 +135,7 @@ pub fn seal(
     profile: &str,
 ) -> Result<Vec<u8>> {
     let mut nonce = [0u8; NONCE_LEN];
-    copy_randombytes(&mut nonce);
+    crate::primitives::random(&mut nonce);
     seal_with_nonce(plaintext, key, purpose, profile, &nonce)
 }
 

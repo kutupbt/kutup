@@ -20,7 +20,6 @@
 
 use chacha20poly1305::aead::{Aead, KeyInit, Payload};
 use chacha20poly1305::{XChaCha20Poly1305, XNonce};
-use dryoc::rng::copy_randombytes;
 use ed25519_dalek::{Signature, Signer as _, SigningKey, VerifyingKey};
 use hkdf::Hkdf;
 use sha2::{Digest, Sha256};
@@ -114,7 +113,7 @@ impl GroupMasterKey {
     pub fn generate(home: GroupHome<'_>) -> Result<Self> {
         let home = home.digest()?;
         let mut key = Zeroizing::new([0u8; MASTER_KEY_LEN]);
-        copy_randombytes(key.as_mut());
+        crate::primitives::random(key.as_mut());
         Ok(Self { key, home })
     }
 
@@ -185,7 +184,7 @@ impl GroupStateKey {
     /// slot id, or empty for a group-wide field).
     pub fn seal(&self, field: SealedField, subject: &[u8], plain: &[u8]) -> Result<Vec<u8>> {
         let mut nonce = [0u8; NONCE_LEN];
-        copy_randombytes(&mut nonce);
+        crate::primitives::random(&mut nonce);
         self.seal_with_nonce(field, subject, plain, &nonce)
     }
 
@@ -272,7 +271,7 @@ pub struct GroupKeyPair {
 impl GroupKeyPair {
     pub fn generate() -> Self {
         let mut seed = Zeroizing::new([0u8; 32]);
-        copy_randombytes(seed.as_mut());
+        crate::primitives::random(seed.as_mut());
         Self::from_seed(&seed)
     }
 
@@ -502,9 +501,9 @@ pub const MAX_AVATAR_IMAGE_BYTES: usize = AVATAR_BUCKETS[AVATAR_BUCKETS.len() - 
 /// Seals `image` as a group avatar: the blob, and the key that opens it.
 pub fn seal_group_avatar(image: &[u8]) -> Result<(Vec<u8>, Zeroizing<[u8; 32]>)> {
     let mut key = Zeroizing::new([0u8; 32]);
-    copy_randombytes(key.as_mut_slice());
+    crate::primitives::random(key.as_mut_slice());
     let mut nonce = [0u8; NONCE_LEN];
-    copy_randombytes(&mut nonce);
+    crate::primitives::random(&mut nonce);
     let blob = seal_group_avatar_with(image, &key, &nonce)?;
     Ok((blob, key))
 }

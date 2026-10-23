@@ -22,7 +22,6 @@ use aes::Aes256;
 use cbc::cipher::block_padding::Pkcs7;
 use cbc::cipher::{BlockDecryptMut, BlockEncryptMut, KeyIvInit};
 use dryoc::classic::crypto_core::{crypto_scalarmult, crypto_scalarmult_base};
-use dryoc::rng::copy_randombytes;
 use hkdf::Hkdf;
 use hmac::{Hmac, Mac};
 use sha2::Sha256;
@@ -53,7 +52,7 @@ pub struct ProvisioningKeyPair {
 impl ProvisioningKeyPair {
     pub fn generate() -> Self {
         let mut private = Zeroizing::new([0u8; 32]);
-        copy_randombytes(private.as_mut());
+        crate::primitives::random(private.as_mut());
         Self::from_private(*private)
     }
 
@@ -88,9 +87,9 @@ pub struct Sealed {
 /// with a fresh ephemeral key and IV.
 pub fn seal(recipient_public: &[u8], message: &[u8]) -> Result<Sealed> {
     let mut ephemeral = Zeroizing::new([0u8; 32]);
-    copy_randombytes(ephemeral.as_mut());
+    crate::primitives::random(ephemeral.as_mut());
     let mut iv = [0u8; IV_LEN];
-    copy_randombytes(&mut iv);
+    crate::primitives::random(&mut iv);
     seal_with_info(INFO, &ephemeral, &iv, recipient_public, message)
 }
 

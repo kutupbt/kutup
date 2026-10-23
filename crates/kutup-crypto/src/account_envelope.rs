@@ -16,7 +16,6 @@
 use base64::Engine as _;
 use chacha20poly1305::aead::{Aead, KeyInit, Payload};
 use chacha20poly1305::{XChaCha20Poly1305, XNonce};
-use dryoc::rng::copy_randombytes;
 use hkdf::Hkdf;
 use sha2::Sha256;
 use zeroize::Zeroizing;
@@ -312,7 +311,7 @@ fn check_key(key: &[u8]) -> Result<()> {
 
 fn random_nonce() -> [u8; NONCE_LEN] {
     let mut nonce = [0u8; NONCE_LEN];
-    copy_randombytes(&mut nonce);
+    crate::primitives::random(&mut nonce);
     nonce
 }
 

@@ -87,7 +87,7 @@ pub fn generate_material(
         ));
     }
     let created_at = Timestamp::from_secs(created_at_secs);
-    let mut rng = rand::rngs::OsRng;
+    let mut rng = crate::primitives::Rng;
     let mut forwardee = SecretKeyParamsBuilder::default()
         .key_type(KeyType::Ed25519Legacy)
         // Certifies its subkeys only: a forwarding key never signs (its
@@ -573,7 +573,7 @@ pub fn seal_proxy_parameter(
 ) -> Result<Vec<u8>> {
     use chacha20poly1305::aead::{Aead as _, KeyInit as _, Payload};
     let mut nonce = [0u8; SEAL_NONCE_LEN];
-    dryoc::rng::copy_randombytes(&mut nonce);
+    crate::primitives::random(&mut nonce);
     let sealed = chacha20poly1305::XChaCha20Poly1305::new(server_key.into())
         .encrypt(
             chacha20poly1305::XNonce::from_slice(&nonce),

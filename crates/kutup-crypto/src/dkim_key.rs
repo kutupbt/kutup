@@ -25,7 +25,7 @@ pub struct DkimKey {
 }
 
 pub fn generate() -> Result<DkimKey> {
-    let key = rsa::RsaPrivateKey::new(&mut rand::rngs::OsRng, BITS)
+    let key = rsa::RsaPrivateKey::new(&mut crate::primitives::Rng, BITS)
         .map_err(|e| CryptoError::Backend(format!("RSA key: {e}")))?;
     let private_pkcs8 = Zeroizing::new(
         key.to_pkcs8_der()
@@ -86,7 +86,7 @@ pub fn seal(
     private_pkcs8: &[u8],
 ) -> Result<Vec<u8>> {
     let mut nonce = [0u8; NONCE_LEN];
-    dryoc::rng::copy_randombytes(&mut nonce);
+    crate::primitives::random(&mut nonce);
     let sealed = XChaCha20Poly1305::new(server_key.into())
         .encrypt(
             XNonce::from_slice(&nonce),

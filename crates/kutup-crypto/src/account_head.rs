@@ -21,7 +21,6 @@
 
 use chacha20poly1305::aead::{Aead, KeyInit, Payload};
 use chacha20poly1305::{XChaCha20Poly1305, XNonce};
-use dryoc::rng::copy_randombytes;
 use hkdf::Hkdf;
 use hmac::{Hmac, Mac};
 use serde::{Deserialize, Serialize};
@@ -288,7 +287,7 @@ fn aad(binding: &str, sequence: u64) -> Result<Vec<u8>> {
 /// (the server's compare-and-swap reads it) and authenticated.
 pub fn seal(keys: &HeadKeys, binding: &str, head: &AccountHeadV1) -> Result<Vec<u8>> {
     let mut nonce = [0u8; NONCE_LEN];
-    copy_randombytes(&mut nonce);
+    crate::primitives::random(&mut nonce);
     seal_with_nonce(keys, binding, head, &nonce)
 }
 
@@ -739,7 +738,7 @@ impl LocalHeadStateV1 {
     /// A device's state before it has seen any head, with a new random device id.
     pub fn new(incarnation_id: &str) -> Result<Self> {
         let mut device = [0u8; 16];
-        copy_randombytes(&mut device);
+        crate::primitives::random(&mut device);
         Self::with_device(incarnation_id, &hex::encode(device))
     }
 
@@ -858,7 +857,7 @@ pub fn seal_local_state(
     state: &LocalHeadStateV1,
 ) -> Result<Vec<u8>> {
     let mut nonce = [0u8; NONCE_LEN];
-    copy_randombytes(&mut nonce);
+    crate::primitives::random(&mut nonce);
     seal_local_with_nonce(keys, binding, state, &nonce)
 }
 

@@ -25,7 +25,6 @@ use base64::engine::general_purpose::STANDARD;
 use base64::Engine as _;
 use chacha20poly1305::aead::{Aead, KeyInit, Payload};
 use chacha20poly1305::{XChaCha20Poly1305, XNonce};
-use dryoc::rng::copy_randombytes;
 use hkdf::Hkdf;
 use serde::{Deserialize, Serialize};
 use sha2::Sha256;
@@ -1019,7 +1018,7 @@ fn aad(binding: &str, revision: u64) -> Result<Vec<u8>> {
 /// `revision`: `magic ‖ suite ‖ revision ‖ nonce ‖ ciphertext`.
 pub fn seal(key: &[u8; 32], owner: &str, revision: u64, list: &IdentityPinsV2) -> Result<Vec<u8>> {
     let mut nonce = [0u8; NONCE_LEN];
-    copy_randombytes(&mut nonce);
+    crate::primitives::random(&mut nonce);
     seal_with_nonce(key, owner, revision, list, &nonce)
 }
 

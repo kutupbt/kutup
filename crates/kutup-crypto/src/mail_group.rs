@@ -18,7 +18,6 @@
 //!   stores a list.
 
 use ed25519_dalek::{Signature, Signer as _, SigningKey, VerifyingKey};
-use rand::RngCore as _;
 use zeroize::Zeroizing;
 
 use crate::account_ref::AccountRef;
@@ -43,7 +42,7 @@ pub struct GroupSigningKey {
 impl GroupSigningKey {
     pub fn generate() -> Self {
         let mut seed = Zeroizing::new([0u8; 32]);
-        rand::rngs::OsRng.fill_bytes(seed.as_mut());
+        crate::primitives::random(seed.as_mut());
         Self::from_seed(&seed)
     }
 
