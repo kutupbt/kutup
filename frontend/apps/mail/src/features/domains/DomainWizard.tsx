@@ -48,7 +48,8 @@ function marks(domain: MailDomain | null): Record<Step, Mark> {
           : domain.dkimState === DKIM_STATE.default || domain.dkimState === DKIM_STATE.delegated
             ? null
             : 'bad',
-    dmarc: of(domain.dmarcState, DMARC_STATE.good),
+    // A relaxed policy works, as the list's neutral badge says: no mark.
+    dmarc: domain.dmarcState === DMARC_STATE.relaxed ? null : of(domain.dmarcState, DMARC_STATE.good),
   }
 }
 

@@ -18,6 +18,12 @@ interface Overrides {
   catchAll: boolean | null
 }
 
+/** The overrides as the server shows them, with each one's range. */
+interface OverridesView extends Overrides {
+  maxDomainsRange: { min: number; max: number }
+  maxAddressesRange: { min: number; max: number }
+}
+
 /** A number field's value, `null` when left empty (the site's). */
 function parsed(value: string): number | null {
   return value.trim() === '' ? null : Number(value)
@@ -34,7 +40,7 @@ export function MailDomainOverridesCard({ userId }: { userId: string }) {
   const key = [...adminKey, 'mail', 'domains', 'overrides', userId] as const
   const current = useQuery({
     queryKey: key,
-    queryFn: async () => (await api.get<Overrides>(`/admin/users/${userId}/mail-domains`)).data,
+    queryFn: async () => (await api.get<OverridesView>(`/admin/users/${userId}/mail-domains`)).data,
   })
   const [domains, setDomains] = useState('')
   const [addresses, setAddresses] = useState('')
@@ -48,7 +54,7 @@ export function MailDomainOverridesCard({ userId }: { userId: string }) {
   const save = useMutation({
     mutationFn: async (body: Overrides) => (await api.put<Overrides>(`/admin/users/${userId}/mail-domains`, body)).data,
     onSuccess: (saved) => {
-      queryClient.setQueryData(key, saved)
+      queryClient.setQueryData<OverridesView>(key, (old) => (old ? { ...old, ...saved } : old))
       toast.success(t('admin.mailDomains.overrides.saved'))
     },
     onError: (e) => toast.error(apiErrorMessage(e, t('common.tryAgain'))),
@@ -57,19 +63,21 @@ export function MailDomainOverridesCard({ userId }: { userId: string }) {
   if (current.isError) return <p className="p-4 text-sm text-destructive">{apiErrorMessage(current.error, t('common.tryAgain'))}</p>
   const maxDomains = parsed(domains)
   const maxAddresses = parsed(addresses)
-  const valid =
-    (maxDomains === null || (Number.isInteger(maxDomains) && maxDomains >= 0 && maxDomains <= 100)) &&
-    (maxAddresses === null || (Number.isInteger(maxAddresses) && maxAddresses >= 1 && maxAddresses <= 1000))
+  // The ranges are the server's (the site settings these override).
+  const { maxDomainsRange: dr, maxAddressesRange: ar } = current.data
+  const within = (value: number | null, range: { min: number; max: number }) =>
+    value === null || (Number.isInteger(value) && value >= range.min && value <= range.max)
+  const valid = within(maxDomains, dr) && within(maxAddresses, ar)
   return (
     <Card className="space-y-3 p-4" data-testid="mail-domain-overrides">
       <p className="text-sm text-muted-foreground">{t('admin.mailDomains.overrides.description')}</p>
       <div className="grid gap-3 sm:grid-cols-3">
-        <Field label={t('admin.mailDomains.overrides.maxDomains')} description={t('admin.mailDomains.range', { min: 0, max: 100 })}>
-          {(props) => <Input {...props} type="number" min={0} max={100} placeholder={t('admin.mailDomains.overrides.site')} value={domains} onChange={(e) => setDomains(e.target.value)} />}
+        <Field label={t('admin.mailDomains.overrides.maxDomains')} description={t('admin.mailDomains.range', { min: dr.min, max: dr.max })}>
+          {(props) => <Input {...props} type="number" min={dr.min} max={dr.max} placeholder={t('admin.mailDomains.overrides.site')} value={domains} onChange={(e) => setDomains(e.target.value)} />}
         </Field>
-        <Field label={t('admin.mailDomains.overrides.maxAddresses')} description={t('admin.mailDomains.range', { min: 1, max: 1000 })}>
+        <Field label={t('admin.mailDomains.overrides.maxAddresses')} description={t('admin.mailDomains.range', { min: ar.min, max: ar.max })}>
           {(props) => (
-            <Input {...props} type="number" min={1} max={1000} placeholder={t('admin.mailDomains.overrides.site')} value={addresses} onChange={(e) => setAddresses(e.target.value)} />
+            <Input {...props} type="number" min={ar.min} max={ar.max} placeholder={t('admin.mailDomains.overrides.site')} value={addresses} onChange={(e) => setAddresses(e.target.value)} />
           )}
         </Field>
         <Field label={t('admin.mailDomains.overrides.catchAll')}>

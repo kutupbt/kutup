@@ -52,6 +52,8 @@ interface AdminDomains {
   stalwartDriftAt: string | null
   configured: boolean
   settings: Record<string, string>
+  /** Each numeric setting's range, by key (the server's). */
+  ranges: Record<string, { min: number; max: number }>
   spf: DkimKey
   dkimKeys: DkimKey[]
   domains: AdminDomain[]
@@ -63,19 +65,19 @@ interface DomainBlock {
   blockedBy: string | null
 }
 
-/** The numeric settings, in the order the page shows them, with their ranges (the server's `KEYS`). */
-const NUMBERS: [string, number, number][] = [
-  ['mail_domains.per_account', 0, 100],
-  ['mail_domains.addresses_per_account', 1, 1000],
-  ['mail_domains.on_server', 0, 1_000_000],
-  ['mail_domains.adds_per_day', 1, 1000],
-  ['mail_domains.pending_days', 1, 365],
-  ['mail_domains.catch_all_per_day', 0, 100_000],
-  ['mail_domains.grace_warn_days', 1, 365],
-  ['mail_domains.grace_stopped_hours', 1, 720],
-  ['mail_domains.refreshes_at_once', 1, 1000],
-  ['mail_domains.check_timeout_seconds', 10, 600],
-]
+/** The numeric settings, in the order the page shows them; their ranges come from the server. */
+const NUMBERS = [
+  'mail_domains.per_account',
+  'mail_domains.addresses_per_account',
+  'mail_domains.on_server',
+  'mail_domains.adds_per_day',
+  'mail_domains.pending_days',
+  'mail_domains.catch_all_per_day',
+  'mail_domains.grace_warn_days',
+  'mail_domains.grace_stopped_hours',
+  'mail_domains.refreshes_at_once',
+  'mail_domains.check_timeout_seconds',
+] as const
 
 const domainsAdminKey = [...adminKey, 'mail', 'domains'] as const
 const blocksKey = [...domainsAdminKey, 'blocks'] as const
@@ -245,11 +247,16 @@ export function MailDomainsPage() {
         )}
       </section>
 
-      <SettingsForm settings={data.settings} onSaved={refresh} />
+      <SettingsForm settings={data.settings} ranges={data.ranges} onSaved={refresh} />
 
       <ConfirmDestructive
         open={ending !== null}
-        onOpenChange={(open) => !open && setEnding(null)}
+        onOpenChange={(open) => {
+          // One domain's refusal never shows on the next one's dialog.
+          if (open) return
+          setEnding(null)
+          deactivate.reset()
+        }}
         title={t('admin.mailDomains.deactivateTitle', { domain: ending?.name ?? '' })}
         description={t('admin.mailDomains.deactivateBody', { domain: ending?.name ?? '', owner: ending?.owner ?? '' })}
         warning={t('admin.mailDomains.deactivateWarning')}
@@ -274,7 +281,7 @@ export function MailDomainsPage() {
 }
 
 /** Every `mail_domains.*` setting, checked against its range, saved together. */
-function SettingsForm({ settings, onSaved }: { settings: Record<string, string>; onSaved: () => void }) {
+function SettingsForm({ settings, ranges, onSaved }: { settings: Record<string, string>; ranges: AdminDomains['ranges']; onSaved: () => void }) {
   const { t } = useTranslation()
   const [values, setValues] = useState(settings)
   useEffect(() => setValues(settings), [settings])
@@ -287,7 +294,8 @@ function SettingsForm({ settings, onSaved }: { settings: Record<string, string>;
     onError: (e) => toast.error(apiErrorMessage(e, t('common.tryAgain'))),
   })
   const changed = Object.fromEntries(Object.entries(values).filter(([key, value]) => settings[key] !== value))
-  const wrong = NUMBERS.find(([key, min, max]) => {
+  const numbers = NUMBERS.flatMap((key) => (ranges[key] ? [[key, ranges[key].min, ranges[key].max] as const] : []))
+  const wrong = numbers.find(([key, min, max]) => {
     const value = Number(values[key])
     return !Number.isInteger(value) || value < min || value > max
   })
@@ -325,7 +333,7 @@ function SettingsForm({ settings, onSaved }: { settings: Record<string, string>;
           </Select>
         )}
       </Field>
-      {NUMBERS.map(([key, min, max]) => (
+      {numbers.map(([key, min, max]) => (
         <Field key={key} label={t(`admin.mailDomains.settings.${settingKey(key)}`)} description={t('admin.mailDomains.range', { min, max })}>
           {(props) => (
             <Input

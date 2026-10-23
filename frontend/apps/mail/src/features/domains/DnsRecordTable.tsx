@@ -19,7 +19,7 @@ export function CopyValue({ value, copied, children }: { value: string; copied: 
           size="icon"
           className="size-7 shrink-0"
           aria-label={t('common.copy')}
-          onClick={() => void navigator.clipboard.writeText(value).then(() => toast.success(copied))}
+          onClick={() => void navigator.clipboard.writeText(value).then(() => toast.success(copied), () => toast.error(t('common.copyFailed')))}
         >
           <Copy className="size-3.5" />
         </Button>

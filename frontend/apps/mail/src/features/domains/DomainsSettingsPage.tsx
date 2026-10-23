@@ -146,7 +146,12 @@ export function DomainsSettingsPage() {
       {catchAll ? <CatchAllDialog domain={catchAll} onClose={() => setCatchAll(null)} /> : null}
       <ConfirmDestructive
         open={deleting !== null}
-        onOpenChange={(open) => !open && setDeleting(null)}
+        onOpenChange={(open) => {
+          // One domain's refusal never shows on the next one's dialog.
+          if (open) return
+          setDeleting(null)
+          remove.reset()
+        }}
         title={t('domains.deleteTitle')}
         description={<Trans i18nKey="domains.deleteBody" values={{ domain: deleting?.name ?? '' }} components={{ strong: <strong /> }} />}
         warning={t('domains.deleteSure')}

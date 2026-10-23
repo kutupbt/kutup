@@ -7,6 +7,7 @@
     "continue": "Devam",
     "copied": "Kopyalandı",
     "copy": "Kopyala",
+    "copyFailed": "Kopyalanamadı. Değeri seçip kendiniz kopyalayın.",
     "hidePassword": "Parolayı gizle",
     "loading": "Yükleniyor…",
     "retry": "Yeniden dene",
@@ -462,6 +463,7 @@
   },
   "apiErrors": {
     "keysPendingUpgrade": "Bu kişiyle paylaşabilmeniz için Kutup'a bir kez daha giriş yapması gerekiyor: hesabı daha güçlü şifreleme anahtarlarına geçiyor.",
+    "checkTimedOut": "DNS denetimi çok uzun sürdü. Bir dakika sonra yeniden deneyin.",
     "peerOutdated": "Bu kişinin sunucusu Kutup'un eski bir sürümünü çalıştırıyor. Sunucu güncellendiğinde onunla paylaşabilirsiniz."
   },
   "pendingUpgrade": {

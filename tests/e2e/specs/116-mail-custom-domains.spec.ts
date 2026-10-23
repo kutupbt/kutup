@@ -1,7 +1,7 @@
 import { writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { expect, test, type Locator, type Page } from '@playwright/test'
-import { appUrl, newAccount, registerAccount } from '../fixtures/apps'
+import { appUrl, newAccount, registerAccount, signInAsAdmin } from '../fixtures/apps'
 
 // Custom domains (docs/plans/mail-custom-domains.md §11), Proton's settings
 // on the mail gate's stack (scripts/test-mail-domains-browser.sh): its
@@ -12,7 +12,10 @@ import { appUrl, newAccount, registerAccount } from '../fixtures/apps'
 //   tabs list what to publish, and once published every badge turns good;
 // - Identity and addresses: an address on the domain, made default and
 //   back, disabled, enabled and deleted; the composer offers it as From;
-// - the catch-all, set and shown; deleting the domain.
+// - the catch-all, set and shown; deleting the domain;
+// - Administration → Mail domains: approving a domain when administrators
+//   approve each, an account's own limits, deactivating a domain (its name
+//   blocked) and lifting the block.
 
 const PASSWORD = 'Deneme123*MailDomainsPassword'
 
@@ -227,4 +230,84 @@ test('custom domains: the wizard, addresses on the domain, catch-all, deleting i
   await expect(row(info)).toHaveCount(0, { timeout: 60_000 })
 
   await context.close()
+})
+
+/** Sets who may add domains on the administrators' page. */
+async function setMode(admin: Page, label: 'Everyone may add domains' | 'Administrators approve each domain') {
+  await admin.goto(appUrl('account', '/admin/mail/domains'))
+  const mode = admin.getByRole('combobox', { name: 'Who may add domains' })
+  await expect(mode).toBeVisible({ timeout: 60_000 })
+  if ((await mode.textContent())?.includes(label)) return
+  await mode.click()
+  await admin.getByRole('option', { name: label }).click()
+  await admin.getByRole('button', { name: 'Save' }).click()
+  await expect(admin.getByText('Settings saved').first()).toBeVisible({ timeout: 30_000 })
+}
+
+test('custom domains: the administrators’ page', async ({ browser }) => {
+  test.slow()
+  expect(process.env.KUTUP_MAIL_DNS_DIR, 'run through scripts/test-mail-domains-browser.sh').toBeTruthy()
+  const name = `a${Date.now().toString(36)}.test`
+  const adminContext = await browser.newContext({ viewport: { width: 1400, height: 900 } })
+  await signInAsAdmin(adminContext)
+  const admin = await adminContext.newPage()
+  await setMode(admin, 'Administrators approve each domain')
+  try {
+    // Bob adds and verifies a domain; it waits for an administrator.
+    const bob = newAccount('domadmin', PASSWORD)
+    const context = await browser.newContext({ viewport: { width: 1400, height: 900 } })
+    await registerAccount(context, bob)
+    const mail = await context.newPage()
+    await mail.goto(appUrl('mail'))
+    await expect(mail.getByRole('heading', { name: 'Inbox' })).toBeVisible({ timeout: 120_000 })
+    await mail.goto(appUrl('mail', '/settings/domains'))
+    await mail.getByTestId('domain-add').click()
+    const wizard = mail.getByTestId('domain-wizard')
+    await wizard.getByTestId('domain-name').fill(name)
+    await wizard.getByTestId('domain-wizard-next').click()
+    await expect(wizard.getByText(`we need to verify that you are the owner of ${name}`, { exact: false })).toBeVisible({ timeout: 60_000 })
+    const [verify] = await values(wizard)
+    writeZone(name, [`@ IN TXT ${txt(verify.value)}`])
+    await expect(async () => {
+      await wizard.getByTestId('domain-wizard-next').click()
+      await expect(mail.getByText('Domain verified')).toBeVisible({ timeout: 5_000 })
+    }).toPass({ timeout: 60_000 })
+    await wizard.getByRole('button', { name: 'Close' }).first().click()
+
+    // Approved by an administrator.
+    await admin.reload()
+    const row = admin.getByTestId('admin-domain-row').filter({ hasText: name })
+    await expect(row.getByText('Awaiting approval')).toBeVisible({ timeout: 60_000 })
+    await row.getByRole('button', { name: 'Approve' }).click()
+    await expect(admin.getByText('Domain approved').first()).toBeVisible({ timeout: 30_000 })
+    await expect(row.getByText('Awaiting approval')).toHaveCount(0)
+
+    // Bob's own limit: three domains, shown on his page.
+    await admin.goto(appUrl('account', '/admin/users'))
+    await admin.getByRole('link', { name: new RegExp(bob.username) }).first().click()
+    const limits = admin.getByTestId('mail-domain-overrides')
+    await expect(limits.getByText('From 0 to 100.')).toBeVisible({ timeout: 60_000 })
+    await limits.getByRole('spinbutton', { name: 'Domains' }).fill('3')
+    await limits.getByRole('button', { name: 'Save' }).click()
+    await expect(admin.getByText('Limits saved').first()).toBeVisible({ timeout: 30_000 })
+    await mail.reload()
+    await expect(mail.getByTestId('domains-used')).toHaveText('1 / 3 domains used', { timeout: 60_000 })
+
+    // Deactivated: the name blocked, then the block lifted.
+    await admin.goto(appUrl('account', '/admin/mail/domains'))
+    await admin.getByTestId('admin-domain-row').filter({ hasText: name }).getByRole('button', { name: 'Deactivate' }).click()
+    const dialog = admin.getByRole('alertdialog').or(admin.getByRole('dialog')).filter({ hasText: `Deactivate ${name}?` })
+    await dialog.getByLabel(`Type ${name} to confirm`).fill(name)
+    await dialog.getByRole('button', { name: 'Deactivate' }).click()
+    await expect(admin.getByText('Domain deactivated').first()).toBeVisible({ timeout: 30_000 })
+    const block = admin.getByTestId('admin-domain-block').filter({ hasText: name })
+    await expect(block).toBeVisible({ timeout: 30_000 })
+    await block.getByRole('button', { name: 'Lift the block' }).click()
+    await expect(admin.getByText('Block lifted').first()).toBeVisible({ timeout: 30_000 })
+    await expect(block).toHaveCount(0)
+    await context.close()
+  } finally {
+    await setMode(admin, 'Everyone may add domains')
+    await adminContext.close()
+  }
 })
