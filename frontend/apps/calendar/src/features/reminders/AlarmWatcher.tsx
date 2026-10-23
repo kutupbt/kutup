@@ -7,7 +7,7 @@ import { useMailAccount } from '@kutup/mail-core/api'
 import { showNotification } from '@kutup/ui/lib/desktopNotifications'
 import { openEditor } from '../editorState'
 import { useCalendarPrefs } from '../prefs'
-import { alarmTag, LOOK_AHEAD_MS, PADDING_MS, runAlarms } from './alarmChain'
+import { alarmTag, LATE_MS, LOOK_AHEAD_MS, PADDING_MS, runAlarms } from './alarmChain'
 import { alarmText, alarmTitle } from './alarmText'
 import { showReminder } from './push'
 
@@ -39,9 +39,10 @@ export function AlarmWatcher() {
     enabled: !!account.data && calendars.data !== undefined,
     refetchOnWindowFocus: true,
     queryFn: async () => {
-      const start = Date.now()
-      const end = start + LOOK_AHEAD_MS
-      const all = await loadAlarms(instant(start), instant(end))
+      // From a minute ago: one just due when the app opened still fires.
+      const now = Date.now()
+      const end = now + LOOK_AHEAD_MS
+      const all = await loadAlarms(instant(now - LATE_MS), instant(end))
       return { end, alarms: all.filter((alarm) => alarm.action === 'device' && shownIds.includes(alarm.calendarId)) }
     },
   })
@@ -61,7 +62,8 @@ export function AlarmWatcher() {
     let last = Date.now()
     const timer = setInterval(() => {
       const now = Date.now()
-      if (now - last > SUSPENDED_MS) {
+      // A jump either way (sleep, or a clock set back) starts the chain again.
+      if (Math.abs(now - last - 60_000) > SUSPENDED_MS - 60_000) {
         setWoke((n) => n + 1)
         void refetch()
       }

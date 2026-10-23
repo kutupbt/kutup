@@ -143,7 +143,7 @@
       "at": "Etkinlik saat {{time}}",
       "today": "Bugün etkinlik var",
       "on": "{{date}} tarihinde etkinlik",
-      "onAt": "{{date}} {{time}} etkinlik"
+      "onAt": "{{date}} saat {{time}} etkinlik"
     },
     "settings": {
       "title": "Masaüstü bildirimleri",

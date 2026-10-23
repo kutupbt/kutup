@@ -2505,7 +2505,7 @@ account's once: a new session's subscription takes it over from an earlier
 one (signed out, expired or not); another account signed in to the same
 browser has its own. An account keeps at most
 `calendarPushSubscriptionsPerAccount` (10): ended sessions' go first, then
-the longest-held. A push's payload is `{ eventId, startUtc, allDay, account }`,
+the longest-held. A push's payload is `{ eventId, startUtc, fireAt, allDay, account }`,
 `account` and its `Topic` keyed by the subscription's own secret
 (base64url HMAC-SHA256 over the account or event id), so the push service
 links neither two members' pushes nor one account's browsers. The push service must be on Chat's

@@ -73,6 +73,8 @@ describe('the open app’s reminders (Proton’s AlarmWatcher)', () => {
   })
 
   it('names an alarm as the push does: its event and occurrence', () => {
-    expect(alarmTag(alarm('e1', 0))).toBe(`kutup-calendar:e1:${Date.parse('2026-10-29T09:15:00Z')}`)
+    expect(alarmTag(alarm('e1', 0))).toBe(`kutup-calendar:e1:${Date.parse('2026-10-29T09:15:00Z')}:${T0}`)
+    // Two reminders for one occurrence: two names.
+    expect(alarmTag(alarm('e1', 0))).not.toBe(alarmTag(alarm('e1', 60_000)))
   })
 })

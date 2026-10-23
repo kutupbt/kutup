@@ -14,16 +14,12 @@ export const LATE_MS = MINUTE
 
 /**
  * One alarm's name for a notification (its tag) and for the fired set:
- * the event and occurrence, as the service worker's push names it too, so
- * the two never show one reminder twice.
+ * its event, occurrence and fire time (Proton tags per alarm: two
+ * reminders for one occurrence are two notifications), as the service
+ * worker's push names it too, so the two never show one reminder twice.
  */
-export function alarmTag(alarm: Pick<Alarm, 'eventId' | 'occurrenceStart'>): string {
-  return `kutup-calendar:${alarm.eventId}:${Date.parse(alarm.occurrenceStart)}`
-}
-
-/** A reminder (and which one: several can fire for one occurrence). */
-function firedKey(alarm: Alarm): string {
-  return `${alarmTag(alarm)}:${Date.parse(alarm.fireAt)}`
+export function alarmTag(alarm: Pick<Alarm, 'eventId' | 'occurrenceStart' | 'fireAt'>): string {
+  return `kutup-calendar:${alarm.eventId}:${Date.parse(alarm.occurrenceStart)}:${Date.parse(alarm.fireAt)}`
 }
 
 /**
@@ -36,13 +32,18 @@ export function runAlarms(alarms: Alarm[], fired: Set<string>, fire: (alarm: Ala
   let stopped = false
   const run = () => {
     if (stopped) return
-    const next = alarms.find((alarm) => !fired.has(firedKey(alarm)))
+    const next = alarms.find((alarm) => !fired.has(alarmTag(alarm)))
     if (!next) return
     const at = Date.parse(next.fireAt)
     timer = setTimeout(
       () => {
         if (stopped) return
-        fired.add(firedKey(next))
+        // A timer can come early (throttled, clamped): wait out the rest.
+        if (now() < at - 1_000) {
+          run()
+          return
+        }
+        fired.add(alarmTag(next))
         if (now() - at > LATE_MS) {
           run()
           return

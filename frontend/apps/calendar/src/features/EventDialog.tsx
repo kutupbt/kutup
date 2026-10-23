@@ -175,11 +175,7 @@ export function EventDialog() {
     if (!account.data || !calendar) throw new Error('no calendar')
     // Own reminders when edited; back to the defaults when they were own; else as they are.
     const reminders = next.reminders.custom ? (next.allDay ? next.reminders.allDay : next.reminders.timed) : existing?.reminders ? null : undefined
-    const id = await saveEvent(session, account.data, calendar, fieldsOf(next, account.data.serverDomain, existing), existing, reminders)
-    // Proton asks for the browser's permission with the first device reminder.
-    const applied = next.allDay ? next.reminders.allDay : next.reminders.timed
-    if (applied.some((r) => r.type === 'device') && notificationStatus() === 'default') void requestNotifications().then(refreshPush)
-    return id
+    return saveEvent(session, account.data, calendar, fieldsOf(next, account.data.serverDomain, existing), existing, reminders)
   })
   const remove = useCalendarMutation(async () => {
     const calendar = writable.find((c) => c.id === existing?.calendarId)
@@ -220,6 +216,10 @@ export function EventDialog() {
               onSubmit={(e) => {
                 e.preventDefault()
                 if (!valid) return
+                // Proton asks for the browser's permission with the first device
+                // reminder: here, in the click itself (a browser asks only then).
+                const applied = draft.allDay ? draft.reminders.allDay : draft.reminders.timed
+                if (applied.some((r) => r.type === 'device') && notificationStatus() === 'default') void requestNotifications().then(refreshPush)
                 save.mutate(draft, {
                   onSuccess: () => {
                     toast.success(existing ? t('events.saved') : t('events.created'))

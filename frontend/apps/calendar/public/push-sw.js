@@ -6,9 +6,12 @@
 // registration URL from the page that registered it.
 //
 // One reminder is one notification: its tag is the open app's for the same
-// alarm (`kutup-calendar:<eventId>:<start ms>`). A push for one the app has
-// shown already is dropped; the app showing one the push showed replaces it
-// with its title.
+// alarm (`kutup-calendar:<eventId>:<start ms>:<fire ms>`). The open app
+// fires its own reminders, named by their titles: while a Calendar window is
+// open, a push for one the app showed shows that notification again,
+// silently (the browser wants each push to show one), and one the app hasn't
+// shown yet comes silently with its time only, for the app's to replace.
+// With Calendar closed, a push shows its reminder (time only) as usual.
 
 const params = new URL(self.location.href).searchParams
 const TITLE = params.get('title') || 'Kutup Calendar'
@@ -78,6 +81,8 @@ async function ours(account) {
   return !!auth && (await accountTag(auth, ACCOUNT)) === account
 }
 
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
+
 self.addEventListener('push', (event) => {
   event.waitUntil((async () => {
     let data
@@ -86,15 +91,25 @@ self.addEventListener('push', (event) => {
     } catch {
       return
     }
-    if (typeof data.eventId !== 'string' || typeof data.startUtc !== 'string') return
-    const tag = `kutup-calendar:${data.eventId}:${Date.parse(data.startUtc)}`
-    // The open app showed it already (with its title).
-    if ((await self.registration.getNotifications({ tag })).length > 0) return
+    // A reminder names an event by its id and gives real times; nothing else is one.
+    const start = typeof data.startUtc === 'string' ? Date.parse(data.startUtc) : NaN
+    const fire = typeof data.fireAt === 'string' ? Date.parse(data.fireAt) : NaN
+    if (typeof data.eventId !== 'string' || !UUID.test(data.eventId) || Number.isNaN(start) || Number.isNaN(fire)) return
+    const tag = `kutup-calendar:${data.eventId}:${start}:${fire}`
+    const [shown] = await self.registration.getNotifications({ tag })
+    if (shown) {
+      // The open app showed it (with its title): the same, again, silently.
+      await self.registration.showNotification(shown.title, { body: shown.body, tag, icon: shown.icon, data: shown.data, silent: true })
+      return
+    }
+    const windows = await self.clients.matchAll({ type: 'window', includeUncontrolled: true })
     const mine = await ours(data.account)
     await self.registration.showNotification(TITLE, {
       body: body(data.startUtc, data.allDay === true),
       tag,
       icon: '/favicon.svg',
+      // Calendar is open: it fires this one by its title in a moment, replacing this.
+      silent: windows.length > 0,
       // Another account's reminder in this browser opens Calendar's start page.
       data: { url: mine ? `/?event=${encodeURIComponent(data.eventId)}` : '/' },
     })
@@ -103,7 +118,9 @@ self.addEventListener('push', (event) => {
 
 self.addEventListener('notificationclick', (event) => {
   event.notification.close()
-  const url = (event.notification.data && event.notification.data.url) || '/'
+  const wanted = (event.notification.data && event.notification.data.url) || '/'
+  // Only Calendar's own pages: its start page, or an event by its id.
+  const url = wanted === '/' || /^\/\?event=[0-9a-f-]{36}$/.test(wanted) ? wanted : '/'
   event.waitUntil((async () => {
     const windows = await self.clients.matchAll({ type: 'window', includeUncontrolled: true })
     for (const client of windows) {

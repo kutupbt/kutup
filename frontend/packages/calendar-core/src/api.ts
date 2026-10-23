@@ -403,7 +403,7 @@ export async function openEvent(account: MailAccount, calendar: Calendar, row: E
 
 /** One event of `calendar`, opened (a reminder's, to name it). */
 export async function loadEvent(account: MailAccount, calendar: Calendar, eventId: string): Promise<CalendarEvent> {
-  const { data } = await api.get<EventRow>(`/calendar/calendars/${calendar.id}/events/${eventId}`)
+  const { data } = await api.get<EventRow>(`/calendar/calendars/${encodeURIComponent(calendar.id)}/events/${encodeURIComponent(eventId)}`)
   return openEvent(account, calendar, data)
 }
 
