@@ -1,7 +1,8 @@
-//! Chat groups are off by default (`CHAT_GROUPS`; the beta launches without
-//! them, until the pairwise group design replaces MLS — docs/roadmap.md):
-//! the server reports no groups and no group calls, and refuses every group,
-//! MLS and group-call route. Meeting links are not groups and stay.
+//! Chat groups are off by default (`CHAT_GROUPS`; on once every pairwise
+//! groups slice is done, docs/plans/pairwise-groups.md §10): the server
+//! reports no groups and no group calls, and refuses every group and
+//! group-call route; the removed MLS routes are gone. Meeting links are not
+//! groups and stay.
 //!
 //! Needs `KUTUP_LIVE_SERVER`, a server started without `CHAT_GROUPS`.
 
@@ -26,7 +27,7 @@ fn groups_are_off_unless_switched_on() {
         .json()
         .unwrap();
     let chat = &settings["chat"];
-    assert_eq!(chat["mlsGroups"], false, "{chat}");
+    assert!(chat.get("mlsGroups").is_none(), "MLS groups are gone: {chat}");
     assert_eq!(chat["pairwiseGroups"], false, "{chat}");
     assert_eq!(chat["groupCalls"], false, "{chat}");
 
@@ -38,6 +39,7 @@ fn groups_are_off_unless_switched_on() {
             .status()
     };
     for path in [
+        // The MLS routes are gone.
         "/api/chat/mls/invitations",
         "/api/chat/mls/invitation-feedback",
         "/api/chat/mls/messages/1",

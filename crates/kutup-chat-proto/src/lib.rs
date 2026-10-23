@@ -590,15 +590,10 @@ pub struct ChatCapabilities {
     /// [RSV] flips true when sealed sender ships.
     #[serde(default)]
     pub sealed_sender: bool,
-    /// RFC 9420 group creation, invitation, ordered membership, and anonymous
-    /// application delivery are complete on the local and federated paths.
-    #[serde(default)]
-    pub mls_groups: bool,
     /// Pairwise groups (docs/plans/pairwise-groups.md): this server hosts
     /// groups behind its anonymous gateway, relays its users' group requests
     /// and takes sealed batches. On only with `CHAT_GROUPS`, federation and
-    /// sealed sender all on; separate from `mls_groups`, so the old MLS paths
-    /// can't turn on with it.
+    /// sealed sender all on.
     #[serde(default)]
     pub pairwise_groups: bool,
     /// `POST /api/chat/link-preview` fetches public pages for the sender's
@@ -610,6 +605,8 @@ pub struct ChatCapabilities {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub web_push_public_key: Option<String>,
     /// This server hosts group calls on its SFU (accounts can start them).
+    /// Off until pairwise groups' calls are built (docs/plans/pairwise-groups.md
+    /// §6).
     #[serde(default)]
     pub group_calls: bool,
     /// This server hosts call links on its SFU: accounts can make links that
@@ -647,7 +644,6 @@ impl Default for ChatCapabilities {
             manifests: true,
             profiles: true,
             sealed_sender: false,
-            mls_groups: false,
             pairwise_groups: false,
             link_previews: false,
             web_push_public_key: None,
