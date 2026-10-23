@@ -28,8 +28,7 @@ async function sendNoteAttachment(
 function restorationSideEffect(request: Request): string | undefined {
   const path = new URL(request.url()).pathname
   if (path.includes('history-transfer')) return `${request.method()} ${path}`
-  if (request.method() === 'POST'
-      && (path.endsWith('/chat/messages/ack') || path.endsWith('/chat/mls/messages/ack'))) {
+  if (request.method() === 'POST' && path.endsWith('/chat/messages/ack')) {
     return `${request.method()} ${path}`
   }
   return undefined

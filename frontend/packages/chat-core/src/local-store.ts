@@ -10,7 +10,7 @@ export async function chatDeviceDatabaseName(userId: string): Promise<string> {
 }
 
 /**
- * Remove only this browser's Direct/MLS device state. The continuous-backup
+ * Remove only this browser's Chat device state. The continuous-backup
  * database and private media cache deliberately remain intact so a subsequent
  * device registration can restore acknowledged display history.
  */

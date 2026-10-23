@@ -40,7 +40,6 @@ function service(history: () => ChatHistoryEntry[], commits: () => number = () =
     reportedSendFailures: new Set(),
     withLock: (work: () => Promise<unknown>) => work(),
     withMlsWorkflow: (work: () => Promise<unknown>) => work(),
-    mls: null,
     ledgerMark: null,
     remoteWrites: 0,
     pendingAttachments: new Map(),
@@ -120,23 +119,10 @@ describe('ChatService history', () => {
     expect(updates).toHaveBeenCalledTimes(1)
   })
 
-  it('shows a group invitation that arrived without anything written here', async () => {
-    const { svc, updates } = service(() => [], () => 4)
-    let changed = true
-    Object.assign(svc, {
-      mls: { reconcile: vi.fn().mockResolvedValue([]), takeInvitationsChanged: () => { const value = changed; changed = false; return value } },
-    })
-    await svc.reconcile()
-    expect(updates).toHaveBeenCalledTimes(1)
-    await svc.reconcile()
-    expect(updates).toHaveBeenCalledTimes(1)
-  })
-
   it('retries a waiting attachment on a pass that wrote nothing, and does nothing when none waits', async () => {
     const { svc, updates } = service(() => [], () => 7)
     const reconcileLedger = vi.fn(async () => true)
     Object.assign(svc, {
-      mls: { reconcile: vi.fn().mockResolvedValue([]), takeInvitationsChanged: () => false },
       reconcileAttachmentLedger: reconcileLedger,
     })
     await svc.reconcile()

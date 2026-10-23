@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { chatGroupLinkFragment } from './chatGroupLink'
+import { chatGroupLinkFragment, groupLinkFragmentFromUrl } from './chatGroupLink'
 
 function fragment(bytes: number[]): string {
   return btoa(String.fromCharCode(...bytes)).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '')
@@ -13,9 +13,18 @@ describe('chatGroupLinkFragment', () => {
     expect(chatGroupLinkFragment(link)).toBe(link)
   })
 
-  it('leaves anything else to the MLS links', () => {
+  it('takes nothing else', () => {
     expect(chatGroupLinkFragment(fragment([2, ...new Array<number>(100).fill(7)]))).toBeNull()
     expect(chatGroupLinkFragment(fragment([1, 2, 3]))).toBeNull()
     expect(chatGroupLinkFragment('https://chat.home.example/join#not+a/link')).toBeNull()
+  })
+
+  it('reads a group link URL of any server, and nothing else', () => {
+    expect(groupLinkFragmentFromUrl(`https://chat.a.test/join#${link}`)).toBe(link)
+    expect(groupLinkFragmentFromUrl(` https://chat.b.test/join/#${link} `)).toBe(link)
+    expect(groupLinkFragmentFromUrl(`https://chat.b.test/c/x#${link}`)).toBeNull()
+    expect(groupLinkFragmentFromUrl('https://chat.b.test/join#short')).toBeNull()
+    expect(groupLinkFragmentFromUrl(`javascript:alert(1)//join#${link}`)).toBeNull()
+    expect(groupLinkFragmentFromUrl(link)).toBeNull()
   })
 })

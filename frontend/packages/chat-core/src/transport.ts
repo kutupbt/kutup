@@ -7,19 +7,7 @@ import api from '@kutup/session/client'
 import { getSession } from '@kutup/session/store'
 import { apiBase } from '@kutup/session/apiBase'
 import { setChatDeviceAuth } from './device-auth'
-import type {
-  ChatDevice,
-  ChatTransportPort,
-  InviteLinkOperation,
-  InviteLinkResult,
-  MlsInvitationDecision,
-  MlsInvitationDecisionResponse,
-  MlsInvitationFeedback,
-  MlsIncarnationRecovery,
-  MlsMailboxPage,
-  PendingMlsInvitation,
-  RecoverMlsConversationRequest,
-} from './types'
+import type { ChatDevice, ChatTransportPort } from './types'
 
 /**
  * A Chat route for one account, given as its `aci:<uuid>@<server>` string:
@@ -43,9 +31,6 @@ function signedIn() {
 }
 
 /** Authenticated REST adapter consumed by the Rust engine. */
-/** Extra waits for an ordering quorum, after the API client's own retries. */
-const QUORUM_RETRY_DELAYS_MS = [3_000, 6_000]
-
 export class ApiChatTransport implements ChatTransportPort {
   async listDevices(): Promise<ChatDevice[]> {
     return api
@@ -116,12 +101,6 @@ export class ApiChatTransport implements ChatTransportPort {
       .get(path, {
         params: { syncDeviceId: currentDeviceId, server },
       })
-      .then((response) => response.data)
-  }
-
-  async fetchMlsOrderingPolicy(domain: string): Promise<unknown> {
-    return api
-      .get(`/chat/mls/domains/${encodeURIComponent(domain)}/policy`)
       .then((response) => response.data)
   }
 
@@ -430,195 +409,6 @@ export class ApiChatTransport implements ChatTransportPort {
 
   async replenishPrekeys(deviceId: number, request: unknown): Promise<void> {
     await api.put('/chat/keys', request, { params: { deviceId } })
-  }
-
-  async publishMlsKeyPackages(request: unknown): Promise<unknown> {
-    return api.put('/chat/mls/key-packages', request).then((response) => response.data)
-  }
-
-  async mlsKeyPackageCount(deviceId: number): Promise<unknown> {
-    return api
-      .get(`/chat/mls/key-packages/${deviceId}/count`)
-      .then((response) => response.data)
-  }
-
-  async createMlsConversation(request: unknown): Promise<unknown> {
-    return api.post('/chat/mls/conversations', request).then((response) => response.data)
-  }
-
-  async recoverMlsConversation(request: RecoverMlsConversationRequest): Promise<unknown> {
-    return api
-      .post('/chat/mls/conversations/recover', request)
-      .then((response) => response.data)
-  }
-
-  async fetchMlsRecovery(
-    conversationId: string,
-    incarnation: number,
-  ): Promise<MlsIncarnationRecovery> {
-    return api
-      .get(
-        `/chat/mls/conversations/${encodeURIComponent(conversationId)}/${incarnation}/recovery`,
-      )
-      .then((response) => response.data)
-  }
-
-  async stageMlsMembershipDelivery(request: unknown): Promise<unknown> {
-    return api
-      .put('/chat/mls/control/membership-deliveries', request)
-      .then((response) => response.data)
-  }
-
-  /**
-   * A quorum certificate for a control block. 503 means an ordering server
-   * declined to vote, usually because it is one block behind the others and
-   * still replicating it; the API client's short retry window is not always
-   * enough, so this waits a little longer before giving up.
-   */
-  async collectMlsOrderingVotes(request: unknown): Promise<unknown> {
-    for (let attempt = 0; ; attempt++) {
-      try {
-        return (await api.post('/chat/mls/control/votes', request)).data
-      } catch (error) {
-        const quorumUnavailable = axios.isAxiosError(error) && error.response?.status === 503
-        if (!quorumUnavailable || attempt >= QUORUM_RETRY_DELAYS_MS.length) throw error
-        await new Promise((resolve) => setTimeout(resolve, QUORUM_RETRY_DELAYS_MS[attempt]))
-      }
-    }
-  }
-
-  async commitMlsControlBlock(request: unknown): Promise<unknown> {
-    return api
-      .post('/chat/mls/control/blocks', request)
-      .then((response) => response.data)
-  }
-
-  async fetchMlsControlHistory(
-    conversationId: string,
-    incarnation: number,
-    afterHeight: string,
-    limit = 64,
-  ): Promise<{
-    bytes: Uint8Array
-    entryCount: number
-    nextHeight?: string
-    genesisGroupId: string
-  }> {
-    const response = await api.get(
-      `/chat/mls/conversations/${encodeURIComponent(conversationId)}/${incarnation}/control-history`,
-      {
-        params: { afterHeight, limit },
-        responseType: 'arraybuffer',
-      },
-    )
-    const bytes = new Uint8Array(response.data as ArrayBuffer)
-    let parsed: unknown
-    try {
-      parsed = JSON.parse(new TextDecoder().decode(bytes))
-    } catch {
-      throw new Error('server returned malformed MLS control-history JSON')
-    }
-    const record = typeof parsed === 'object' && parsed !== null
-      ? parsed as Record<string, unknown>
-      : null
-    const nextHeight = record?.nextHeight
-    const genesis = record?.genesis
-    const genesisGroupId = typeof genesis === 'object'
-      && genesis !== null
-      && 'mlsGroupId' in genesis
-      && typeof genesis.mlsGroupId === 'string'
-      ? genesis.mlsGroupId
-      : null
-    const entryCount = record && Array.isArray(record.commits)
-      ? record.commits.length
-      : -1
-    if (
-      entryCount < 0
-      || entryCount > 64
-      || genesisGroupId === null
-      || (
-      nextHeight !== undefined
-      && (
-        typeof nextHeight !== 'string'
-        || !/^[1-9][0-9]*$/.test(nextHeight)
-      )
-      )
-    ) {
-      throw new Error('server returned invalid MLS control-history pagination')
-    }
-    return {
-      bytes,
-      entryCount,
-      genesisGroupId,
-      ...(nextHeight === undefined ? {} : { nextHeight }),
-    }
-  }
-
-  async listMlsInvitations(): Promise<PendingMlsInvitation[]> {
-    return api.get('/chat/mls/invitations').then((response) => response.data)
-  }
-
-  async listMlsInvitationFeedback(): Promise<MlsInvitationFeedback[]> {
-    return api.get('/chat/mls/invitation-feedback').then((response) => response.data)
-  }
-
-  async respondMlsInvitation(
-    request: MlsInvitationDecision,
-  ): Promise<MlsInvitationDecisionResponse> {
-    return api.post('/chat/mls/invitations', request).then((response) => response.data)
-  }
-
-  async callInviteLink(host: string, operation: InviteLinkOperation): Promise<InviteLinkResult> {
-    return api
-      .post<InviteLinkResult>('/chat/invite-links', { host, operation })
-      .then((response) => response.data)
-  }
-
-  async drainMlsMailbox(
-    deviceId: number,
-    after?: string,
-    limit = 100,
-  ): Promise<MlsMailboxPage> {
-    return api
-      .get(`/chat/mls/messages/${deviceId}`, {
-        params: { after, limit },
-      })
-      .then((response) => response.data)
-  }
-
-  async ackMlsMailbox(deviceId: number, envelopeIds: string[]): Promise<void> {
-    await api.post('/chat/mls/messages/ack', {
-      deviceId,
-      envelopeIds: [...envelopeIds].sort(),
-    })
-  }
-
-  async publishMlsDeliveryCapability(request: unknown): Promise<void> {
-    await api.put('/chat/mls/delivery-capability', request)
-  }
-
-  async fetchIdentifiedMlsKeyPackages(request: unknown): Promise<unknown> {
-    return api
-      .post('/chat/mls/key-packages/identified', request)
-      .then((response) => response.data)
-  }
-
-  async fetchAnonymousMlsKeyPackages(request: unknown): Promise<unknown> {
-    return axios
-      .post(`${apiBase()}/chat/mls/anonymous/key-packages`, request, {
-        withCredentials: false,
-        headers: { Authorization: undefined },
-      })
-      .then((response) => response.data)
-  }
-
-  async submitAnonymousMlsMessage(request: unknown): Promise<unknown> {
-    return axios
-      .post(`${apiBase()}/chat/mls/anonymous/messages`, request, {
-        withCredentials: false,
-        headers: { Authorization: undefined },
-      })
-      .then((response) => response.data)
   }
 
   async sendMessage(

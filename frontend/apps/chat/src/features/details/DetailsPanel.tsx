@@ -1,4 +1,4 @@
-import { ArrowLeft, Ban, Check, Pencil, ShieldCheck, Timer } from 'lucide-react'
+import { ArrowLeft, Ban, Check, ShieldCheck, Timer } from 'lucide-react'
 import { useEffect, useRef, useState, type ReactNode } from 'react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
@@ -11,9 +11,7 @@ import { DISAPPEARING_PRESETS } from '../../lib/disappearing'
 import { chatErrorMessage } from '../../lib/errors'
 import { ContactEntry } from '../contacts/ContactEntry'
 import type { ConversationModel } from '../thread/useConversationModel'
-import { EditGroupInfoDialog } from './EditGroupInfoDialog'
 import { ChatGroupDetails } from './ChatGroupDetails'
-import { GroupDetails } from './GroupDetails'
 import { SafetyVerificationDialog } from './SafetyVerificationDialog'
 import { useChatGroupAvatar } from '../../lib/chatGroupAvatar'
 
@@ -64,7 +62,7 @@ export function DetailsPanel({ open, onClose, model }: { open: boolean; onClose:
           <Button variant="ghost" size="icon" onClick={onClose} aria-label={t('chat.details.close')}>
             <ArrowLeft />
           </Button>
-          <h2 className="text-sm font-semibold">{model.group || model.chatGroup || model.historyOnly ? t('chat.details.groupTitle') : t('chat.details.title')}</h2>
+          <h2 className="text-sm font-semibold">{model.chatGroup || model.historyOnly ? t('chat.details.groupTitle') : t('chat.details.title')}</h2>
         </header>
         <div className="min-h-0 flex-1 overflow-y-auto">
           {open ? <DetailsBody model={model} /> : null}
@@ -76,13 +74,11 @@ export function DetailsPanel({ open, onClose, model }: { open: boolean; onClose:
 
 function DetailsBody({ model }: { model: ConversationModel }) {
   const { t } = useTranslation()
-  const [editing, setEditing] = useState(false)
-  const info = model.group?.currentGroupInfo
   const chatGroupPicture = useChatGroupAvatar(model.chatGroup)
   return (
     <div className="pb-8">
       <div className="flex flex-col items-center gap-2 px-6 pb-6 pt-8 text-center">
-        <Avatar name={model.title} image={chatGroupPicture?.data ?? model.group?.currentGroupInfo?.avatar?.data ?? model.profile?.avatar} contentType={chatGroupPicture?.contentType ?? model.group?.currentGroupInfo?.avatar?.contentType ?? model.profile?.avatarContentType} group={model.conversation.kind === 'group'} size={80} />
+        <Avatar name={model.title} image={chatGroupPicture?.data ?? model.profile?.avatar} contentType={chatGroupPicture?.contentType ?? model.profile?.avatarContentType} group={model.conversation.kind === 'group'} size={80} />
         <h3 className="mt-2 text-lg font-semibold" dir="auto">{model.title}</h3>
         {model.address && !model.note && model.profile?.displayName ? (
           <p className="break-all text-sm text-muted-foreground">{model.address}</p>
@@ -92,26 +88,14 @@ function DetailsBody({ model }: { model: ConversationModel }) {
         ) : null}
         {model.note ? <p className="text-sm text-muted-foreground">{t('chat.noteToSelfDescription')}</p> : null}
         {model.peer && model.address && !model.note ? <ContactEntry peer={model.peer} address={model.address} name={model.profile?.displayName} /> : null}
-        {model.group ? <p className="text-sm text-muted-foreground">{t('chat.group.members', { count: model.group.currentRoster.length })}</p> : null}
         {model.chatGroup?.status === 'member' ? (
           <p className="text-sm text-muted-foreground">{t('chat.group.members', { count: model.chatGroup.memberCount })}</p>
         ) : null}
-        {info?.description ? (
-          <p className="max-w-full whitespace-pre-line break-words text-sm" data-testid="chat-group-about">{info.description}</p>
-        ) : null}
-        {model.group && model.canEditGroupInfo ? (
-          <Button variant="outline" size="sm" className="mt-2" onClick={() => setEditing(true)} data-testid="chat-group-info-edit">
-            <Pencil />
-            {t('chat.group.info.edit')}
-          </Button>
-        ) : null}
-        {model.group ? <EditGroupInfoDialog group={model.group} open={editing} onOpenChange={setEditing} /> : null}
         {model.historyOnly ? <p className="text-sm text-muted-foreground">{t('chat.readOnly.history')}</p> : null}
       </div>
 
       {model.canSetTimer ? <DisappearingSection model={model} /> : null}
       {model.peer && !model.note ? <SafetySection model={model} /> : null}
-      {model.group ? <GroupDetails model={model} group={model.group} /> : null}
       {model.chatGroup ? <ChatGroupDetails group={model.chatGroup} /> : null}
       {model.peer && !model.note && model.contact ? <BlockSection model={model} /> : null}
     </div>
