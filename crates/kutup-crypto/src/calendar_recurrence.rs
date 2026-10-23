@@ -755,8 +755,9 @@ impl Series {
     /// each.
     pub fn occurrences_from(
         &self,
-        from: Timestamp,
+        from_second: i64,
     ) -> impl Iterator<Item = Result<Occurrence>> + '_ {
+        let from = Timestamp::from_second(from_second).unwrap_or(Timestamp::MIN);
         let zone = match &self.start {
             EventTime::Zoned { tzid, .. } => time_zone(tzid).unwrap_or(jiff::tz::TimeZone::UTC),
             _ => jiff::tz::TimeZone::UTC,
@@ -1344,7 +1345,7 @@ mod tests {
                     for pick in [0, 1, 17, 100, all.len().saturating_sub(1)] {
                         let Some(at) = all.get(pick) else { continue };
                         let from: Vec<Timestamp> = series
-                            .occurrences_from(at.start_utc)
+                            .occurrences_from(at.start_utc.as_second())
                             .map(|o| o.unwrap().start_utc)
                             .filter(|t| *t >= at.start_utc)
                             .take(30)
