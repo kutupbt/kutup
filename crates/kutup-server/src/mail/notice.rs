@@ -73,6 +73,8 @@ async fn deliver(state: &AppState, user: Uuid, subject: &str, body: &str) -> any
     let server = &state.config.chat_server_name;
     let date =
         time::OffsetDateTime::now_utc().format(&time::format_description::well_known::Rfc2822)?;
+    // A subject in another script is RFC 2047 encoded.
+    let subject = super::auto_reply::header_text(subject);
     let raw = format!(
         "From: {server} <postmaster@{server}>\r\nTo: <{address}>\r\nSubject: {subject}\r\n\
          Date: {date}\r\nMessage-ID: <{}@{server}>\r\nMIME-Version: 1.0\r\n\

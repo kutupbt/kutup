@@ -818,6 +818,18 @@
         "calendarDefaultRemindersHint": "How many default reminders one member keeps for a calendar.",
         "calendarReminderLatenessSeconds": "Late reminders (seconds)",
         "calendarReminderLatenessSecondsHint": "How late a reminder may still be sent; later ones are skipped.",
+        "calendarAlarmTickSeconds": "Reminder job interval (seconds)",
+        "calendarAlarmTickSecondsHint": "How often the server looks for reminders to send.",
+        "calendarAlarmBatch": "Reminders per batch",
+        "calendarAlarmBatchHint": "How many due reminders the server takes at once; it takes batches until none is due.",
+        "calendarAlarmBatchPerAccount": "Reminders per account per batch",
+        "calendarAlarmBatchPerAccountHint": "Of one batch, the most one account's reminders take, so one account never delays everyone else's.",
+        "calendarAlarmSends": "Reminders sent at once",
+        "calendarAlarmSendsHint": "How many reminder pushes and emails the server sends at the same time.",
+        "calendarAlarmsPerAccount": "Reminders kept per account",
+        "calendarAlarmsPerAccountHint": "The most upcoming reminders one account keeps; reminders past it don't fire.",
+        "calendarRecomputeBatch": "Reminder updates per batch",
+        "calendarRecomputeBatchHint": "How many events' reminders the server updates at once after someone changes their defaults or time zone.",
         "calendarAlarmsPage": "Alarms per page",
         "calendarAlarmsPageHint": "The most alarms one page of the alarms query carries."
       }

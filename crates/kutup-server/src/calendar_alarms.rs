@@ -5,18 +5,25 @@
 //! the member's own Kutup address saying only when. The server reads no
 //! title, place or description: it can't.
 
+use std::collections::HashMap;
+
+use futures_util::StreamExt as _;
 use kutup_crypto::calendar_event::{CalendarSigned, EventTime, SharedSigned, TimeV1};
 use kutup_crypto::calendar_recurrence::{Rule, Series};
 use sqlx::PgConnection;
 use uuid::Uuid;
 
 use crate::calendar_reminders::{self, Reminder, ReminderType};
-use crate::site_settings::CALENDAR_REMINDER_LATENESS_SECONDS;
+use crate::site_settings::{
+    CALENDAR_ALARMS_PER_ACCOUNT, CALENDAR_ALARM_BATCH, CALENDAR_ALARM_BATCH_PER_ACCOUNT,
+    CALENDAR_ALARM_SENDS, CALENDAR_ALARM_TICK_SECONDS, CALENDAR_RECOMPUTE_BATCH,
+    CALENDAR_REMINDER_LATENESS_SECONDS,
+};
 use crate::AppState;
 
-/// How often the job looks for due alarms, and how many it takes at once.
-const TICK: std::time::Duration = std::time::Duration::from_secs(20);
-const BATCH: i64 = 200;
+/// A reminder push's longest life at the push service: a week (a reminder
+/// for an occurrence further off is never sent that early).
+const MAX_TTL_SECONDS: i64 = 7 * 24 * 60 * 60;
 
 /// An event's series as a calendar shows it: the shared rule and both
 /// parts' `EXDATE`s (E2b), and whether it is all-day.
@@ -57,14 +64,18 @@ fn reminder_start(start: &EventTime, start_utc: i64, zone: &str) -> anyhow::Resu
 
 /// The first firing of a reminder `minutes` from each occurrence's start
 /// at or after `from` (Unix seconds): the occurrence's start and the fire
-/// time.
+/// time. The walk starts about where that occurrence is (a series without
+/// `COUNT` skips the years before it).
 pub fn next_fire(
     series: &Series,
     zone: &str,
     minutes: i64,
     from: i64,
 ) -> anyhow::Result<Option<(i64, i64)>> {
-    for occurrence in series.occurrences() {
+    // An occurrence firing at `from` starts `minutes` from it; a day more
+    // for an all-day start in the member's zone.
+    let earliest = from - minutes * 60 - 2 * 24 * 60 * 60;
+    for occurrence in series.occurrences_from(earliest) {
         let occurrence = occurrence?;
         let start = reminder_start(&occurrence.start, occurrence.start_utc.as_second(), zone)?;
         let fire = start + minutes * 60;
@@ -81,13 +92,26 @@ fn at(seconds: i64) -> anyhow::Result<time::OffsetDateTime> {
 
 /// Sets every member's next alarms for an event: their own reminders, or
 /// their calendar's defaults; none for an event gone. Called after the event
-/// or a member's reminders or defaults change, under that change's
-/// transaction.
+/// or a member's reminders change, under that change's transaction.
 pub async fn recompute(conn: &mut PgConnection, event_id: Uuid) -> anyhow::Result<()> {
-    sqlx::query("DELETE FROM calendar_alarms WHERE event_id = $1")
-        .bind(event_id)
-        .execute(&mut *conn)
-        .await?;
+    recompute_for(conn, event_id, None).await
+}
+
+/// [`recompute`] for one member only (`Some`), or every member. An account
+/// keeps at most `calendarAlarmsPerAccount` alarms: reminders past it fire
+/// nothing until others are gone.
+async fn recompute_for(
+    conn: &mut PgConnection,
+    event_id: Uuid,
+    only: Option<Uuid>,
+) -> anyhow::Result<()> {
+    sqlx::query(
+        "DELETE FROM calendar_alarms WHERE event_id = $1 AND ($2::uuid IS NULL OR user_id = $2)",
+    )
+    .bind(event_id)
+    .bind(only)
+    .execute(&mut *conn)
+    .await?;
     let event: Option<(Uuid, String, String)> = sqlx::query_as(
         "SELECT calendar_id, shared_signed, calendar_signed FROM calendar_events WHERE id = $1",
     )
@@ -98,34 +122,42 @@ pub async fn recompute(conn: &mut PgConnection, event_id: Uuid) -> anyhow::Resul
         return Ok(());
     };
     let (series, all_day) = series_of(&shared, &own)?;
+    let most = CALENDAR_ALARMS_PER_ACCOUNT.load(&mut *conn).await?;
     type Member = (
         Uuid,
         serde_json::Value,
         serde_json::Value,
         Option<serde_json::Value>,
         Option<String>,
+        i64,
     );
     let members: Vec<Member> = sqlx::query_as(
         "SELECT m.user_id, m.default_reminders_timed, m.default_reminders_all_day,
-                r.reminders, s.zone
+                r.reminders, s.zone,
+                (SELECT count(*) FROM calendar_alarms a WHERE a.user_id = m.user_id)
            FROM calendar_members m
            LEFT JOIN calendar_event_reminders r ON r.event_id = $2 AND r.user_id = m.user_id
            LEFT JOIN calendar_user_settings s ON s.user_id = m.user_id
-          WHERE m.calendar_id = $1",
+          WHERE m.calendar_id = $1 AND ($3::uuid IS NULL OR m.user_id = $3)",
     )
     .bind(calendar)
     .bind(event_id)
+    .bind(only)
     .fetch_all(&mut *conn)
     .await?;
     let now = time::OffsetDateTime::now_utc().unix_timestamp();
-    for (user, timed, full_day, own, zone) in members {
+    for (user, timed, full_day, own, zone, held) in members {
         let list = own.unwrap_or(if all_day { full_day } else { timed });
         // Stored as checked; a list that no longer reads fires nothing.
         let Ok(reminders) = serde_json::from_value::<Vec<Reminder>>(list) else {
             continue;
         };
         let zone = zone.unwrap_or_else(|| "UTC".into());
+        let mut held = held;
         for (index, reminder) in reminders.iter().enumerate() {
+            if held >= most {
+                break;
+            }
             let Ok(minutes) = calendar_reminders::trigger_minutes(&reminder.trigger, all_day)
             else {
                 continue;
@@ -146,21 +178,31 @@ pub async fn recompute(conn: &mut PgConnection, event_id: Uuid) -> anyhow::Resul
             .bind(at(fire)?)
             .execute(&mut *conn)
             .await?;
+            held += 1;
         }
     }
     Ok(())
 }
 
-/// Recomputes every event of a calendar for one member's new defaults.
-pub async fn recompute_calendar(conn: &mut PgConnection, calendar: Uuid) -> anyhow::Result<()> {
-    let events: Vec<Uuid> =
-        sqlx::query_scalar("SELECT id FROM calendar_events WHERE calendar_id = $1")
-            .bind(calendar)
-            .fetch_all(&mut *conn)
-            .await?;
-    for event in events {
-        recompute(conn, event).await?;
-    }
+/// Asks the job to recompute a member's alarms: in one calendar (their
+/// defaults there changed), or in all of theirs (`None`: their zone
+/// changed). A request already waiting starts over.
+pub async fn queue_recompute(
+    conn: &mut PgConnection,
+    user: Uuid,
+    calendar: Option<Uuid>,
+) -> anyhow::Result<()> {
+    sqlx::query(
+        "INSERT INTO calendar_alarm_recomputes (user_id, calendar_id)
+         SELECT $1, m.calendar_id FROM calendar_members m
+          WHERE m.user_id = $1 AND ($2::uuid IS NULL OR m.calendar_id = $2)
+         ON CONFLICT (user_id, calendar_id)
+            DO UPDATE SET after_event = NULL, requested_at = now()",
+    )
+    .bind(user)
+    .bind(calendar)
+    .execute(&mut *conn)
+    .await?;
     Ok(())
 }
 
@@ -170,28 +212,60 @@ struct Due {
     event: Uuid,
     action: ReminderType,
     occurrence_start: time::OffsetDateTime,
+    all_day: bool,
 }
 
-/// The job: every `TICK`, the due alarms fire (each server takes its own,
-/// so none fires twice), each moved to its reminder's next occurrence.
+/// The job: every `calendarAlarmTickSeconds`, the due alarms fire, batch by
+/// batch until none is due (each server takes its own, so none fires
+/// twice), each moved to its reminder's next occurrence; then waiting
+/// recomputes go on.
 pub fn spawn(state: AppState) {
     tokio::spawn(async move {
-        let client = crate::tls::client_builder()
+        // Chat's push client: no redirects (the push service allowlist
+        // holds for the URL sent to, never another), short timeouts.
+        let client = match crate::tls::client_builder()
+            .redirect(reqwest::redirect::Policy::none())
+            .connect_timeout(std::time::Duration::from_secs(5))
             .timeout(std::time::Duration::from_secs(10))
             .build()
-            .expect("an HTTP client");
-        let mut tick = tokio::time::interval(TICK);
+        {
+            Ok(client) => client,
+            Err(error) => {
+                tracing::error!(%error, "calendar: cannot build an HTTP client; reminders are off");
+                return;
+            }
+        };
         loop {
-            tick.tick().await;
-            if let Err(error) = fire_due(&state, &client).await {
-                tracing::warn!(error = %error, "calendar: firing reminders failed");
+            let tick = CALENDAR_ALARM_TICK_SECONDS
+                .load(&state.pool)
+                .await
+                .unwrap_or(CALENDAR_ALARM_TICK_SECONDS.default);
+            tokio::time::sleep(std::time::Duration::from_secs(tick as u64)).await;
+            loop {
+                match fire_due(&state, &client).await {
+                    Ok(true) => continue,
+                    Ok(false) => break,
+                    Err(error) => {
+                        tracing::warn!(error = %error, "calendar: firing reminders failed");
+                        break;
+                    }
+                }
+            }
+            if let Err(error) = recompute_queued(&state).await {
+                tracing::warn!(error = %error, "calendar: recomputing reminders failed");
             }
         }
     });
 }
 
-async fn fire_due(state: &AppState, client: &reqwest::Client) -> anyhow::Result<()> {
+/// One batch of due alarms: sent (at most `calendarAlarmSends` at once,
+/// after the batch's transaction) unless later than the lateness, and moved
+/// on. Whether the batch was full (more may be due).
+async fn fire_due(state: &AppState, client: &reqwest::Client) -> anyhow::Result<bool> {
     let lateness = CALENDAR_REMINDER_LATENESS_SECONDS.load(&state.pool).await?;
+    let batch = CALENDAR_ALARM_BATCH.load(&state.pool).await?;
+    let per_account = CALENDAR_ALARM_BATCH_PER_ACCOUNT.load(&state.pool).await?;
+    let sends = CALENDAR_ALARM_SENDS.load(&state.pool).await?;
     let mut tx = state.pool.begin().await?;
     type Row = (
         Uuid,
@@ -200,21 +274,64 @@ async fn fire_due(state: &AppState, client: &reqwest::Client) -> anyhow::Result<
         String,
         time::OffsetDateTime,
         time::OffsetDateTime,
+        String,
+        String,
+        serde_json::Value,
+        serde_json::Value,
+        Option<serde_json::Value>,
+        Option<String>,
     );
+    // The earliest due first, at most `per_account` of one account's, so
+    // one account's many never make the others' late; with what moving each
+    // on reads.
     let rows: Vec<Row> = sqlx::query_as(
-        "SELECT user_id, event_id, reminder, action, occurrence_start, fire_at
-           FROM calendar_alarms WHERE fire_at <= now()
-          ORDER BY fire_at LIMIT $1 FOR UPDATE SKIP LOCKED",
+        "SELECT a.user_id, a.event_id, a.reminder, a.action, a.occurrence_start, a.fire_at,
+                e.shared_signed, e.calendar_signed, m.default_reminders_timed,
+                m.default_reminders_all_day, r.reminders, s.zone
+           FROM calendar_alarms a
+           JOIN (SELECT user_id, event_id, reminder,
+                        row_number() OVER (PARTITION BY user_id ORDER BY fire_at) AS place
+                   FROM calendar_alarms WHERE fire_at <= now()) d
+             ON d.user_id = a.user_id AND d.event_id = a.event_id AND d.reminder = a.reminder
+           JOIN calendar_events e ON e.id = a.event_id
+           JOIN calendar_members m ON m.calendar_id = e.calendar_id AND m.user_id = a.user_id
+           LEFT JOIN calendar_event_reminders r ON r.event_id = a.event_id AND r.user_id = a.user_id
+           LEFT JOIN calendar_user_settings s ON s.user_id = a.user_id
+          WHERE d.place <= $2
+          ORDER BY a.fire_at
+          LIMIT $1
+          FOR UPDATE OF a SKIP LOCKED",
     )
-    .bind(BATCH)
+    .bind(batch)
+    .bind(per_account)
     .fetch_all(&mut *tx)
     .await?;
+    let full = rows.len() as i64 == batch;
     let now = time::OffsetDateTime::now_utc();
     let mut due = Vec::new();
-    let mut moved = Vec::new();
-    for (user, event, reminder, action, occurrence_start, fire_at) in rows {
+    // Each event's series read once per batch.
+    let mut series: HashMap<Uuid, Option<(Series, bool)>> = HashMap::new();
+    for (
+        user,
+        event,
+        reminder,
+        action,
+        occurrence_start,
+        fire_at,
+        shared,
+        own,
+        timed,
+        full_day,
+        mine,
+        zone,
+    ) in rows
+    {
+        let parsed = series
+            .entry(event)
+            .or_insert_with(|| series_of(&shared, &own).ok());
+        let late = (now - fire_at).whole_seconds() > lateness;
         // Too late is never sent (Proton's web: a minute), only moved on.
-        if (now - fire_at).whole_seconds() <= lateness {
+        if !late {
             due.push(Due {
                 user,
                 event,
@@ -224,69 +341,56 @@ async fn fire_due(state: &AppState, client: &reqwest::Client) -> anyhow::Result<
                     ReminderType::Device
                 },
                 occurrence_start,
+                all_day: parsed.as_ref().is_some_and(|(_, all_day)| *all_day),
             });
         }
-        moved.push((user, event, reminder, fire_at));
-    }
-    for (user, event, reminder, fire_at) in moved {
-        advance(&mut tx, user, event, reminder, fire_at.unix_timestamp() + 1).await?;
+        // A late one moves past now: the occurrences it missed are skipped
+        // in one step, never fired one batch at a time.
+        let from = if late {
+            now.unix_timestamp()
+        } else {
+            fire_at.unix_timestamp() + 1
+        };
+        let next = match parsed {
+            None => None,
+            Some((series, all_day)) => {
+                let list = mine.unwrap_or(if *all_day { full_day } else { timed });
+                serde_json::from_value::<Vec<Reminder>>(list)
+                    .ok()
+                    .and_then(|reminders| reminders.into_iter().nth(reminder as usize))
+                    .and_then(|r| calendar_reminders::trigger_minutes(&r.trigger, *all_day).ok())
+                    .map(|minutes| {
+                        next_fire(series, zone.as_deref().unwrap_or("UTC"), minutes, from)
+                    })
+                    .transpose()?
+                    .flatten()
+            }
+        };
+        moved(&mut tx, user, event, reminder, next).await?;
     }
     tx.commit().await?;
-    for alarm in due {
-        let result = match alarm.action {
-            ReminderType::Device => push(state, client, &alarm).await,
-            ReminderType::Email => email(state, &alarm).await,
-        };
-        if let Err(error) = result {
-            tracing::warn!(event = %alarm.event, error = %error, "calendar: a reminder was not sent");
-        }
-    }
-    Ok(())
+    futures_util::stream::iter(due)
+        .for_each_concurrent(sends.max(1) as usize, |alarm| async move {
+            let result = match alarm.action {
+                ReminderType::Device => push(state, client, &alarm, lateness).await,
+                ReminderType::Email => email(state, &alarm).await,
+            };
+            if let Err(error) = result {
+                tracing::warn!(event = %alarm.event, error = %error, "calendar: a reminder was not sent");
+            }
+        })
+        .await;
+    Ok(full)
 }
 
-/// Moves one alarm to its reminder's next firing after `from`, or drops it.
-async fn advance(
+/// Sets one alarm to its next firing, or drops it.
+async fn moved(
     conn: &mut PgConnection,
     user: Uuid,
     event: Uuid,
     reminder: i16,
-    from: i64,
+    next: Option<(i64, i64)>,
 ) -> anyhow::Result<()> {
-    type Found = (
-        String,
-        String,
-        serde_json::Value,
-        serde_json::Value,
-        Option<serde_json::Value>,
-        Option<String>,
-    );
-    let found: Option<Found> = sqlx::query_as(
-        "SELECT e.shared_signed, e.calendar_signed, m.default_reminders_timed,
-                m.default_reminders_all_day, r.reminders, s.zone
-           FROM calendar_events e
-           JOIN calendar_members m ON m.calendar_id = e.calendar_id AND m.user_id = $2
-           LEFT JOIN calendar_event_reminders r ON r.event_id = e.id AND r.user_id = $2
-           LEFT JOIN calendar_user_settings s ON s.user_id = $2
-          WHERE e.id = $1",
-    )
-    .bind(event)
-    .bind(user)
-    .fetch_optional(&mut *conn)
-    .await?;
-    let next = match found {
-        None => None,
-        Some((shared, own, timed, full_day, mine, zone)) => {
-            let (series, all_day) = series_of(&shared, &own)?;
-            let list = mine.unwrap_or(if all_day { full_day } else { timed });
-            serde_json::from_value::<Vec<Reminder>>(list)
-                .ok()
-                .and_then(|reminders| reminders.into_iter().nth(reminder as usize))
-                .and_then(|r| calendar_reminders::trigger_minutes(&r.trigger, all_day).ok())
-                .map(|minutes| next_fire(&series, zone.as_deref().unwrap_or("UTC"), minutes, from))
-                .transpose()?
-                .flatten()
-        }
-    };
     match next {
         Some((occurrence, fire)) => {
             sqlx::query(
@@ -315,10 +419,66 @@ async fn advance(
     Ok(())
 }
 
+/// Recomputes waiting members' alarms, `calendarRecomputeBatch` events at a
+/// time per request, each request taken by one server.
+async fn recompute_queued(state: &AppState) -> anyhow::Result<()> {
+    let batch = CALENDAR_RECOMPUTE_BATCH.load(&state.pool).await?;
+    let mut tx = state.pool.begin().await?;
+    let waiting: Vec<(Uuid, Uuid, Option<Uuid>)> = sqlx::query_as(
+        "SELECT user_id, calendar_id, after_event FROM calendar_alarm_recomputes
+          ORDER BY requested_at LIMIT 10 FOR UPDATE SKIP LOCKED",
+    )
+    .fetch_all(&mut *tx)
+    .await?;
+    for (user, calendar, after) in waiting {
+        let events: Vec<Uuid> = sqlx::query_scalar(
+            "SELECT id FROM calendar_events
+              WHERE calendar_id = $1 AND ($2::uuid IS NULL OR id > $2)
+              ORDER BY id LIMIT $3",
+        )
+        .bind(calendar)
+        .bind(after)
+        .bind(batch)
+        .fetch_all(&mut *tx)
+        .await?;
+        for event in &events {
+            recompute_for(&mut tx, *event, Some(user)).await?;
+        }
+        if (events.len() as i64) < batch {
+            sqlx::query(
+                "DELETE FROM calendar_alarm_recomputes WHERE user_id = $1 AND calendar_id = $2",
+            )
+            .bind(user)
+            .bind(calendar)
+            .execute(&mut *tx)
+            .await?;
+        } else {
+            sqlx::query(
+                "UPDATE calendar_alarm_recomputes SET after_event = $3
+                  WHERE user_id = $1 AND calendar_id = $2",
+            )
+            .bind(user)
+            .bind(calendar)
+            .bind(events.last())
+            .execute(&mut *tx)
+            .await?;
+        }
+    }
+    tx.commit().await?;
+    Ok(())
+}
+
 /// A device reminder: to each of the member's signed-in browsers that
 /// subscribed, the event's id and start only (Q-2), encrypted to the
-/// browser. A subscription the push service no longer knows is dropped.
-async fn push(state: &AppState, client: &reqwest::Client, alarm: &Due) -> anyhow::Result<()> {
+/// browser. It lives at the push service until the occurrence starts (at
+/// least the lateness), one per event (a newer replaces an older not yet
+/// delivered). A subscription the push service no longer knows is dropped.
+async fn push(
+    state: &AppState,
+    client: &reqwest::Client,
+    alarm: &Due,
+    lateness: i64,
+) -> anyhow::Result<()> {
     let Some(sender) = &state.web_push else {
         return Ok(());
     };
@@ -335,10 +495,14 @@ async fn push(state: &AppState, client: &reqwest::Client, alarm: &Due) -> anyhow
         .occurrence_start
         .format(&time::format_description::well_known::Rfc3339)?;
     let payload = serde_json::json!({ "eventId": alarm.event, "startUtc": start }).to_string();
+    let until_start = (alarm.occurrence_start - time::OffsetDateTime::now_utc()).whole_seconds();
+    let ttl = until_start.max(lateness).clamp(1, MAX_TTL_SECONDS) as u32;
+    // A Topic is at most 32 base64url characters: the event id's hex.
+    let topic = alarm.event.simple().to_string();
     for (session, endpoint, p256dh, auth) in subscriptions {
         let body = crate::web_push_payload::encrypt(&p256dh, &auth, payload.as_bytes())?;
         match sender
-            .send_encrypted(client, &endpoint, body, "kutup-calendar")
+            .send_encrypted(client, &endpoint, body, &topic, ttl)
             .await
         {
             Ok(status)
@@ -358,7 +522,8 @@ async fn push(state: &AppState, client: &reqwest::Client, alarm: &Due) -> anyhow
 }
 
 /// An email reminder: to the member's own Kutup address, only when (the
-/// server can't read what), in their language and zone, with a link.
+/// server can't read what), in their language and zone, with a link. An
+/// all-day event's says its date, "all day".
 async fn email(state: &AppState, alarm: &Due) -> anyhow::Result<()> {
     let (language, zone): (Option<String>, Option<String>) = sqlx::query_as(
         "SELECT p.language, s.zone FROM users u
@@ -374,11 +539,22 @@ async fn email(state: &AppState, alarm: &Due) -> anyhow::Result<()> {
     let utc = alarm
         .occurrence_start
         .format(&time::format_description::well_known::Rfc3339)?;
-    let local =
-        kutup_crypto::calendar_event::utc_to_local(&utc, &zone).unwrap_or_else(|_| utc.clone());
-    let when = format!("{} {} ({zone})", &local[..10], &local[11..16]);
+    let turkish = language.as_deref() == Some("tr");
+    let when = if alarm.all_day {
+        // Its date (the UTC instant of its midnight), in no zone.
+        let date = &utc[..10];
+        if turkish {
+            format!("{date}, tüm gün")
+        } else {
+            format!("{date}, all day")
+        }
+    } else {
+        let local =
+            kutup_crypto::calendar_event::utc_to_local(&utc, &zone).unwrap_or_else(|_| utc.clone());
+        format!("{} {} ({zone})", &local[..10], &local[11..16])
+    };
     let link = format!("{}/?event={}", state.config.apps.calendar, alarm.event);
-    let (subject, body) = if language.as_deref() == Some("tr") {
+    let (subject, body) = if turkish {
         (
             format!("Etkinlik hatırlatıcısı: {when}"),
             format!("{when} için bir etkinliğiniz var.\r\n\r\nAçmak için: {link}\r\n"),
@@ -386,7 +562,7 @@ async fn email(state: &AppState, alarm: &Due) -> anyhow::Result<()> {
     } else {
         (
             format!("Event reminder: {when}"),
-            format!("You have an event at {when}.\r\n\r\nOpen it: {link}\r\n"),
+            format!("You have an event on {when}.\r\n\r\nOpen it: {link}\r\n"),
         )
     };
     crate::mail::notice::to_account(state, alarm.user, &subject, &body).await

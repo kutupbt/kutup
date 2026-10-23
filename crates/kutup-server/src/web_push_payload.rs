@@ -18,8 +18,9 @@ use sha2::Sha256;
 /// RFC 8188's record size, as RFC 8291 §4 writes it; a reminder is far
 /// smaller.
 const RECORD_SIZE: u32 = 4096;
-/// The most a payload carries: one record, less the delimiter and the tag.
-pub const MAX_PLAINTEXT: usize = RECORD_SIZE as usize - 1 - 16;
+/// The most a payload carries (RFC 8291 §4): a push message is at most 4096
+/// octets, less the 86-octet header, the delimiter and the 16-octet tag.
+pub const MAX_PLAINTEXT: usize = 3993;
 
 #[derive(Debug, thiserror::Error)]
 pub enum PayloadError {

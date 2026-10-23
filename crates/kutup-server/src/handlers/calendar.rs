@@ -55,7 +55,7 @@ pub(crate) static WRITES: std::sync::LazyLock<crate::ratelimit::RateLimiter> =
         crate::ratelimit::RateLimiter::registered(crate::ratelimit::Limit::CalendarWrites)
     });
 
-fn limited(user_id: Uuid) -> AppResult<()> {
+pub(crate) fn limited(user_id: Uuid) -> AppResult<()> {
     if WRITES.allow(&user_id.to_string()) {
         Ok(())
     } else {
@@ -559,7 +559,9 @@ pub async fn update(
         .bind(serde_json::to_value(&defaults.all_day).expect("reminders serialize"))
         .execute(&mut *tx)
         .await?;
-        crate::calendar_alarms::recompute_calendar(&mut tx, id)
+        // The member's alarms follow, recomputed by the job (a calendar
+        // may hold many events).
+        crate::calendar_alarms::queue_recompute(&mut tx, user_id, Some(id))
             .await
             .map_err(|error| AppError::internal(error.to_string()))?;
     }

@@ -321,12 +321,13 @@ impl NumericSetting {
         }
     }
 
-    /// The stored value, else the first value.
-    pub async fn load(&self, pool: &PgPool) -> Result<i64, sqlx::Error> {
+    /// The stored value, else the first value (on the pool, or in a
+    /// transaction).
+    pub async fn load<'e, E: sqlx::PgExecutor<'e>>(&self, executor: E) -> Result<i64, sqlx::Error> {
         Ok(
             sqlx::query_scalar::<_, String>("SELECT value FROM site_settings WHERE key=$1")
                 .bind(self.key)
-                .fetch_optional(pool)
+                .fetch_optional(executor)
                 .await?
                 .and_then(|value| value.parse::<i64>().ok())
                 .and_then(|value| self.validate(value).ok())
@@ -469,6 +470,57 @@ pub const CALENDAR_REMINDER_LATENESS_SECONDS: NumericSetting = NumericSetting {
     min: 10,
     max: 3600,
 };
+/// How often the reminder job looks for due alarms, in seconds.
+pub const CALENDAR_ALARM_TICK_SECONDS: NumericSetting = NumericSetting {
+    key: "calendar_alarm_tick_seconds",
+    field: "calendarAlarmTickSeconds",
+    default: 20,
+    min: 5,
+    max: 300,
+};
+/// Due alarms the job takes at once (it takes batches until none is due).
+pub const CALENDAR_ALARM_BATCH: NumericSetting = NumericSetting {
+    key: "calendar_alarm_batch",
+    field: "calendarAlarmBatch",
+    default: 200,
+    min: 10,
+    max: 5000,
+};
+/// Of one batch, the most one account's alarms take: one account's many
+/// never make everyone else's late.
+pub const CALENDAR_ALARM_BATCH_PER_ACCOUNT: NumericSetting = NumericSetting {
+    key: "calendar_alarm_batch_per_account",
+    field: "calendarAlarmBatchPerAccount",
+    default: 20,
+    min: 1,
+    max: 1000,
+};
+/// Reminder pushes and emails the job sends at the same time.
+pub const CALENDAR_ALARM_SENDS: NumericSetting = NumericSetting {
+    key: "calendar_alarm_sends",
+    field: "calendarAlarmSends",
+    default: 16,
+    min: 1,
+    max: 256,
+};
+/// The most alarms an account keeps (an event's reminders past it fire
+/// nothing until others are gone).
+pub const CALENDAR_ALARMS_PER_ACCOUNT: NumericSetting = NumericSetting {
+    key: "calendar_alarms_per_account",
+    field: "calendarAlarmsPerAccount",
+    default: 10_000,
+    min: 100,
+    max: 1_000_000,
+};
+/// Events whose alarms the job recomputes at once after a member's
+/// defaults or zone change.
+pub const CALENDAR_RECOMPUTE_BATCH: NumericSetting = NumericSetting {
+    key: "calendar_recompute_batch",
+    field: "calendarRecomputeBatch",
+    default: 500,
+    min: 10,
+    max: 10_000,
+};
 /// Alarms one page of `/api/calendar/alarms` answers.
 pub const CALENDAR_ALARMS_PAGE: NumericSetting = NumericSetting {
     key: "calendar_alarms_page",
@@ -493,7 +545,7 @@ pub const CALENDAR_EVENTS_PAGE: NumericSetting = NumericSetting {
     min: 10,
     max: 5000,
 };
-pub const CALENDAR_SETTINGS: [NumericSetting; 10] = [
+pub const CALENDAR_SETTINGS: [NumericSetting; 16] = [
     CALENDARS_PER_ACCOUNT,
     CALENDAR_EVENTS_PER_CALENDAR,
     CALENDAR_SYNC_BATCH,
@@ -501,6 +553,12 @@ pub const CALENDAR_SETTINGS: [NumericSetting; 10] = [
     CALENDAR_REMINDERS_PER_EVENT,
     CALENDAR_DEFAULT_REMINDERS,
     CALENDAR_REMINDER_LATENESS_SECONDS,
+    CALENDAR_ALARM_TICK_SECONDS,
+    CALENDAR_ALARM_BATCH,
+    CALENDAR_ALARM_BATCH_PER_ACCOUNT,
+    CALENDAR_ALARM_SENDS,
+    CALENDAR_ALARMS_PER_ACCOUNT,
+    CALENDAR_RECOMPUTE_BATCH,
     CALENDAR_ALARMS_PAGE,
     CALENDAR_WINDOW_DAYS,
     CALENDAR_EVENTS_PAGE,

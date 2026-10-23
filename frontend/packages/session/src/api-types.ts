@@ -222,6 +222,12 @@ export interface AdminSettings {
   calendarDefaultReminders: number
   calendarReminderLatenessSeconds: number
   calendarAlarmsPage: number
+  calendarAlarmTickSeconds: number
+  calendarAlarmBatch: number
+  calendarAlarmBatchPerAccount: number
+  calendarAlarmSends: number
+  calendarAlarmsPerAccount: number
+  calendarRecomputeBatch: number
   calendarWindowDays: number
   calendarEventsPage: number
 }

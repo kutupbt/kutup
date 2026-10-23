@@ -47,14 +47,25 @@ CREATE TABLE calendar_alarms (
 CREATE INDEX calendar_alarms_due ON calendar_alarms (fire_at);
 CREATE INDEX calendar_alarms_event ON calendar_alarms (event_id);
 
+-- Members whose alarms the job recomputes (their defaults or zone changed),
+-- a calendar at a time, by event id from `after_event` on.
+CREATE TABLE calendar_alarm_recomputes (
+    user_id uuid NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    calendar_id uuid NOT NULL REFERENCES calendars(id) ON DELETE CASCADE,
+    after_event uuid,
+    requested_at timestamptz NOT NULL DEFAULT now(),
+    PRIMARY KEY (user_id, calendar_id)
+);
+
 -- The browsers that take reminder pushes: one per signed-in session (a
--- sign-out ends it), its keys for RFC 8291.
+-- sign-out ends it), its keys for RFC 8291. A browser's endpoint is one
+-- per account: two accounts signed in to one browser profile each have it.
 CREATE TABLE calendar_push_subscriptions (
     session_id uuid PRIMARY KEY REFERENCES auth_sessions(id) ON DELETE CASCADE,
     user_id uuid NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-    endpoint text NOT NULL UNIQUE CHECK (char_length(endpoint) <= 2048),
+    endpoint text NOT NULL CHECK (char_length(endpoint) <= 2048),
     p256dh bytea NOT NULL CHECK (octet_length(p256dh) = 65),
     auth bytea NOT NULL CHECK (octet_length(auth) = 16),
-    created_at timestamptz NOT NULL DEFAULT now()
+    created_at timestamptz NOT NULL DEFAULT now(),
+    UNIQUE (user_id, endpoint)
 );
-CREATE INDEX calendar_push_subscriptions_user ON calendar_push_subscriptions (user_id);

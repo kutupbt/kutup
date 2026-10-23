@@ -2354,8 +2354,16 @@ series expanded from both parts' `EXDATE`s; all-day ones in the zone of
 web push to each of the member's signed-in browsers that subscribed, its
 payload encrypted to the browser (RFC 8291) and only `{ eventId, startUtc }`;
 an **email** reminder to the member's own Kutup address, saying only when,
-with a link. One later than `calendarReminderLatenessSeconds` (60) is
-skipped.
+with a link (an all-day event's says its date, "all day"). One later than
+`calendarReminderLatenessSeconds` (60) is skipped, and the occurrences it
+missed with it. The job looks every `calendarAlarmTickSeconds` (20) and
+takes due alarms `calendarAlarmBatch` (200) at a time until none is due, at
+most `calendarAlarmBatchPerAccount` (20) of one account's per batch, sending
+`calendarAlarmSends` (16) at once. An account keeps at most
+`calendarAlarmsPerAccount` (10,000) alarms; reminders past it fire nothing.
+A reminder push lives at the push service until its occurrence starts (at
+least the lateness), one per event (`Topic`), signed with the server's
+VAPID key (the one Chat's pushes carry).
 
 ### GET /api/calendar/alarms?start=&end=&afterFire=&afterEvent=
 
@@ -2368,13 +2376,18 @@ fireAt }] }`: the open app fires its own notifications from these.
 
 `{ zone }`: the IANA zone the account's calendars show in, where all-day
 reminders fire (`null`: UTC). `400 unknownZone` for a zone the bundled
-database doesn't know. Setting it moves the account's all-day alarms.
+database doesn't know. Setting it moves the account's all-day alarms
+shortly after: the job recomputes them, `calendarRecomputeBatch` (500)
+events at a time (as for a change of a calendar's default reminders).
 
 ### PUT · DELETE /api/calendar/push-subscription
 
 `{ endpoint, p256dh, auth }` from the browser's `PushSubscription`
 (base64url keys): this signed-in session's browser takes reminder pushes,
-one per session, ended by signing out. The push service must be on Chat's
+one per session, ended by signing out. A browser's endpoint is the
+account's once: a new session's subscription takes it over from an earlier
+one (signed out, expired or not); another account signed in to the same
+browser has its own. The push service must be on Chat's
 allowlist (`400`); `404` where Web Push is off. A push service's `404` or
 `410` drops the subscription. `DELETE` ends it.
 

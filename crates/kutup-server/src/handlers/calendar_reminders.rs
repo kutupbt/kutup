@@ -156,7 +156,7 @@ pub async fn settings(
 }
 
 /// `PUT /api/calendar/settings` — the account's calendar zone; its all-day
-/// reminders move with it.
+/// reminders move with it (shortly: the reminder job recomputes them).
 #[utoipa::path(
     put,
     path = "/api/calendar/settings",
@@ -171,6 +171,7 @@ pub async fn put_settings(
     Json(input): Json<CalendarSettings>,
 ) -> AppResult<Json<CalendarSettings>> {
     let user_id = trusted_uuid(&user.user_id)?;
+    crate::handlers::calendar::limited(user_id)?;
     if let Some(zone) = &input.zone {
         // The bundled time zone database knows it.
         if kutup_crypto::calendar_event::utc_to_local("2026-01-01T00:00:00Z", zone).is_err() {
@@ -199,20 +200,11 @@ pub async fn put_settings(
                 .await?;
         }
     }
-    // The caller's all-day alarms fire in the new zone.
-    let all_day: Vec<Uuid> = sqlx::query_scalar(
-        "SELECT e.id FROM calendar_events e
-           JOIN calendar_members m ON m.calendar_id = e.calendar_id AND m.user_id = $1
-          WHERE e.full_day",
-    )
-    .bind(user_id)
-    .fetch_all(&mut *tx)
-    .await?;
-    for event in all_day {
-        crate::calendar_alarms::recompute(&mut tx, event)
-            .await
-            .map_err(|error| AppError::internal(error.to_string()))?;
-    }
+    // The caller's all-day alarms fire in the new zone: the job recomputes
+    // their alarms (they may have many events).
+    crate::calendar_alarms::queue_recompute(&mut tx, user_id, None)
+        .await
+        .map_err(|error| AppError::internal(error.to_string()))?;
     tx.commit().await?;
     Ok(Json(input))
 }
@@ -247,6 +239,8 @@ pub async fn put_push_subscription(
         .web_push
         .as_ref()
         .ok_or_else(|| AppError::not_found("Web Push is off on this server"))?;
+    let user_id = trusted_uuid(&user.user_id)?;
+    crate::handlers::calendar::limited(user_id)?;
     if !push.allowed_endpoint(&input.endpoint) {
         return Err(AppError::bad_request(
             "this push service is not one the server sends to",
@@ -262,8 +256,20 @@ pub async fn put_push_subscription(
         .ok()
         .filter(|auth| auth.len() == 16)
         .ok_or_else(|| AppError::bad_request("auth is 16 bytes"))?;
-    let user_id = trusted_uuid(&user.user_id)?;
     let session = user.session.session_id;
+    let mut tx = state.pool.begin().await?;
+    // The browser's subscription is this account's under one session: this
+    // one takes it over from an earlier one (signed out, expired or still
+    // signed in). Another account in the same browser has its own.
+    sqlx::query(
+        "DELETE FROM calendar_push_subscriptions
+          WHERE user_id = $1 AND endpoint = $2 AND session_id <> $3",
+    )
+    .bind(user_id)
+    .bind(&input.endpoint)
+    .bind(session)
+    .execute(&mut *tx)
+    .await?;
     sqlx::query(
         "INSERT INTO calendar_push_subscriptions (session_id, user_id, endpoint, p256dh, auth)
          VALUES ($1, $2, $3, $4, $5)
@@ -275,15 +281,9 @@ pub async fn put_push_subscription(
     .bind(&input.endpoint)
     .bind(&p256dh)
     .bind(&auth)
-    .execute(&state.pool)
-    .await
-    .map_err(|error| match &error {
-        // The browser's endpoint under another session of someone's.
-        sqlx::Error::Database(db) if db.is_unique_violation() => {
-            AppError::conflict("this browser's subscription is another session's")
-        }
-        _ => error.into(),
-    })?;
+    .execute(&mut *tx)
+    .await?;
+    tx.commit().await?;
     Ok(StatusCode::NO_CONTENT)
 }
 

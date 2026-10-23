@@ -818,6 +818,18 @@
         "calendarDefaultRemindersHint": "Bir üyenin bir takvim için tuttuğu varsayılan hatırlatıcı sayısı.",
         "calendarReminderLatenessSeconds": "Geç hatırlatıcılar (saniye)",
         "calendarReminderLatenessSecondsHint": "Bir hatırlatıcının ne kadar geç gönderilebileceği; daha geç olanlar atlanır.",
+        "calendarAlarmTickSeconds": "Hatırlatıcı işi aralığı (saniye)",
+        "calendarAlarmTickSecondsHint": "Sunucunun gönderilecek hatırlatıcılara ne sıklıkla baktığı.",
+        "calendarAlarmBatch": "Parti başına hatırlatıcı",
+        "calendarAlarmBatchHint": "Sunucunun bir seferde aldığı zamanı gelmiş hatırlatıcı sayısı; zamanı gelen kalmayana dek partiler alır.",
+        "calendarAlarmBatchPerAccount": "Parti başına hesap hatırlatıcısı",
+        "calendarAlarmBatchPerAccountHint": "Bir partide tek bir hesabın hatırlatıcılarının alabileceği en fazla yer; böylece bir hesap diğerlerini geciktirmez.",
+        "calendarAlarmSends": "Aynı anda gönderilen hatırlatıcı",
+        "calendarAlarmSendsHint": "Sunucunun aynı anda gönderdiği hatırlatıcı bildirimi ve e-postası sayısı.",
+        "calendarAlarmsPerAccount": "Hesap başına tutulan hatırlatıcı",
+        "calendarAlarmsPerAccountHint": "Bir hesabın tuttuğu en fazla yaklaşan hatırlatıcı; fazlası çalmaz.",
+        "calendarRecomputeBatch": "Parti başına hatırlatıcı güncellemesi",
+        "calendarRecomputeBatchHint": "Biri varsayılanlarını veya saat dilimini değiştirdikten sonra sunucunun bir seferde hatırlatıcılarını güncellediği etkinlik sayısı.",
         "calendarAlarmsPage": "Sayfa başına alarm",
         "calendarAlarmsPageHint": "Alarm sorgusunun bir sayfasının taşıdığı en fazla alarm."
       }

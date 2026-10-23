@@ -1022,6 +1022,16 @@ fn repeating_events() {
 /// calendar's defaults, the alarms the server keeps for them (and moves
 /// with the event, the defaults and the zone), the browsers that take
 /// reminder pushes, and the job firing a due alarm then moving it on.
+/// Waits up to two minutes for `done` (a job's work), checking every two
+/// seconds.
+fn eventually(what: &str, mut done: impl FnMut() -> bool) {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(120);
+    while !done() {
+        assert!(std::time::Instant::now() < deadline, "never: {what}");
+        std::thread::sleep(std::time::Duration::from_secs(2));
+    }
+}
+
 #[test]
 fn reminders_and_alarms() {
     let Ok(base) = std::env::var("KUTUP_LIVE_SERVER") else {
@@ -1132,10 +1142,10 @@ fn reminders_and_alarms() {
     .send()
     .unwrap();
     assert_eq!(r.status(), StatusCode::OK);
-    assert_eq!(
-        at("2027-11-04T00:00:00Z"),
-        ["2027-11-04T06:00:00Z", "2027-11-04T06:00:00Z"]
-    );
+    // The reminder job recomputes them (within a tick or two).
+    eventually("all-day alarms in Istanbul", || {
+        at("2027-11-04T00:00:00Z") == ["2027-11-04T06:00:00Z", "2027-11-04T06:00:00Z"]
+    });
 
     // The member's defaults, for every event of the calendar.
     let listed: Value = bearer(
@@ -1174,11 +1184,13 @@ fn reminders_and_alarms() {
         "{}",
         r.text().unwrap_or_default()
     );
-    let found = alarms("2027-10-28T00:00:00Z", "2027-10-30T00:00:00Z");
-    assert_eq!(found.len(), 1);
-    assert_eq!(found[0]["fireAt"], "2027-10-28T06:00:00Z");
-    // All-day: PT9H, 09:00 Istanbul on the day.
-    assert_eq!(at("2027-11-04T00:00:00Z"), ["2027-11-05T06:00:00Z"]);
+    eventually("the new defaults' alarms", || {
+        let found = alarms("2027-10-28T00:00:00Z", "2027-10-30T00:00:00Z");
+        // All-day: PT9H, 09:00 Istanbul on the day.
+        found.len() == 1
+            && found[0]["fireAt"] == "2027-10-28T06:00:00Z"
+            && at("2027-11-04T00:00:00Z") == ["2027-11-05T06:00:00Z"]
+    });
 
     // A browser's subscription: Chat's push services only, real keys only
     // (404 where this server has Web Push off).

@@ -535,7 +535,7 @@ pub struct Compose<'a> {
 
 /// A header value: as is when plain ASCII, else RFC 2047 encoded; control
 /// characters never reach the header.
-fn header_text(value: &str) -> String {
+pub(crate) fn header_text(value: &str) -> String {
     let clean: String = value.chars().filter(|c| !c.is_control()).collect();
     if clean.is_ascii() {
         clean
