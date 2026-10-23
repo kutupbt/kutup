@@ -273,6 +273,13 @@ async function notRolledBack(address: string, keys: AddressKeys): Promise<Addres
   return keys
 }
 
+/** This server's name: the domain of the account's own Kutup address. */
+function ownServer(): string | null {
+  const address = getSession()?.address
+  const at = address?.lastIndexOf('@') ?? -1
+  return address && at > 0 ? address.slice(at + 1).toLowerCase() : null
+}
+
 /**
  * A lookup's keys, kept only when the account's signed key lists name them.
  * The answer names the address as stored (another spelling of the address
@@ -281,8 +288,11 @@ async function notRolledBack(address: string, keys: AddressKeys): Promise<Addres
 export async function verified(address: string, lookup: KeyLookup): Promise<AddressKeys> {
   const asked = await foldAddress(address)
   if (!asked || asked !== (await foldAddress(lookup.address))) throw new UnverifiedKeys(address)
-  // An account lives on the server of its address.
-  if (lookup.server !== lookup.address.slice(lookup.address.lastIndexOf('@') + 1).toLowerCase()) throw new UnverifiedKeys(address)
+  // An account lives on the server of its address, or on this server (an
+  // address on a custom domain it holds). Contacts' trusted keys for such an
+  // address still win over this server's word (`protectionFor`).
+  const domain = lookup.address.slice(lookup.address.lastIndexOf('@') + 1).toLowerCase()
+  if (lookup.server !== domain && lookup.server !== ownServer()) throw new UnverifiedKeys(address)
   let newest: SignedMailKeyList | null = null
   let group: GroupChainOf | undefined
   let signer: string

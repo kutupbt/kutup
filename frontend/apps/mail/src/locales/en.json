@@ -227,12 +227,14 @@
     "sendLimitNew": "New accounts can send to {{perDay}} outside addresses a day in their first week. Try again later.",
     "pausedNotice": "Mail to outside addresses is paused for your account; mail to Kutup users still goes.",
     "pinnedKeyUnusable": "The key you trust for {{address}} can no longer be used. Replace or remove it in Contacts.",
+    "pinnedKeyConflict": "This server says {{address}} is a Kutup user's, but you trust other keys for it in Contacts. Nothing was sent: check with them, then remove the keys in Contacts if the address moved to Kutup.",
     "keyLookupFailed": "Keys for {{address}} could not be looked up. Try again.",
     "lock": {
       "looking": "Looking up encryption keys",
       "lookupFailed": "Encryption keys could not be looked up",
       "pinned": "End-to-end encrypted with a key you trust",
       "pinnedUnusable": "The key you trust for this address can no longer be used",
+      "pinnedConflict": "This server says this is a Kutup address, but you trust other keys for it",
       "found": {
         "wkd": "End-to-end encrypted with a key from the recipient's domain (Web Key Directory)",
         "proton": "End-to-end encrypted with the recipient's Proton key",

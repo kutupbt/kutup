@@ -34,7 +34,7 @@ import { acceptGroupKeys, GroupKeysChanged, GroupNotAllowed, KeysIdentityChanged
 import { foldAddress } from '@kutup/crypto/accountRename'
 import { armorMailPublicKey } from '@kutup/crypto'
 import { attachmentPart, describePart, inlineContentId, partContent, type Mailbox, type ParsedMessage } from '@kutup/mail-core/mime'
-import { KeyLookupFailed, PinnedKeyUnusable } from '@kutup/mail-core/protection'
+import { KeyLookupFailed, PinnedKeyConflict, PinnedKeyUnusable } from '@kutup/mail-core/protection'
 import { groupKeys, heldKeys, useMyGroups, type MailGroup } from '@kutup/mail-core/groups'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@kutup/ui/components/select'
 import api from '@kutup/session/client'
@@ -722,6 +722,7 @@ function ComposerPanel({ base, target }: { base: MailAccount; target: ComposerTa
           toast.error(t('compose.addressTaken', { address: error.address }))
         }
       } else if (error instanceof PinnedKeyUnusable) toast.error(t('compose.pinnedKeyUnusable', { address: error.address }))
+      else if (error instanceof PinnedKeyConflict) toast.error(t('compose.pinnedKeyConflict', { address: error.address }))
       else if (error instanceof KeyLookupFailed) toast.error(t('compose.keyLookupFailed', { address: error.address }))
       else {
         const data = (error as { response?: { data?: { code?: string; newAccount?: boolean; perDay?: number } } }).response?.data

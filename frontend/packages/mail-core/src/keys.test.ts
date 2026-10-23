@@ -28,7 +28,7 @@ vi.mock('@kutup/drive-core/identityPins', () => ({
   }),
 }))
 vi.mock('@kutup/drive-core/identity', () => ({ driveIdentityOf: vi.fn(() => Promise.resolve({})) }))
-vi.mock('@kutup/session/store', () => ({ getSession: () => ({ username: 'me' }) }))
+vi.mock('@kutup/session/store', () => ({ getSession: () => ({ username: 'me', address: 'me@kutup.dev' }) }))
 // The device's revision guard, in memory: the highest key-list sequence seen per address and signer.
 const seen = vi.hoisted(() => new Map<string, number>())
 vi.mock('@kutup/crypto/revisionGuard', async (importActual) => {
@@ -106,6 +106,14 @@ describe('an address’s keys', () => {
     await expect(verified('ada_l@kutup.dev', { ...lookup, server: 'other.dev' })).rejects.toBeInstanceOf(UnverifiedKeys)
     await expect(verified('bob@kutup.dev', lookup)).rejects.toBeInstanceOf(UnverifiedKeys)
     await expect(verified('ada_l@other.dev', lookup)).rejects.toBeInstanceOf(UnverifiedKeys)
+  })
+
+  it('are a Kutup user’s on a custom domain when this server answers for it, never another server', async () => {
+    // A domain this server holds: the account is this server's (kutup.dev).
+    const lookup = await lookupOf(master, binding, 'ada@work.example')
+    await expect(verified('ada@work.example', lookup)).resolves.toMatchObject({ address: 'ada@work.example' })
+    // Another server can't answer for a domain that isn't its own.
+    await expect(verified('ada@work.example', { ...lookup, server: 'other.dev' })).rejects.toBeInstanceOf(UnverifiedKeys)
   })
 
   it('say encryption is off only when the signed list does', async () => {

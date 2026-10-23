@@ -20,6 +20,12 @@ export type Protection =
   | { kind: 'pinnedUnusable'; fingerprint: string }
   /** Its owner disabled the address: nothing can be sent to it. */
   | { kind: 'disabled' }
+  /**
+   * This server says an address on another domain is a Kutup user's (a
+   * custom domain it holds) while Contacts trust other keys for it: nothing
+   * is sent until the person settles it, never the server's word over theirs.
+   */
+  | { kind: 'pinnedConflict'; fingerprint: string }
   | { kind: 'none' }
 
 /** What Contacts say about an outside address (mail-core `PinnedAddress`). */
@@ -40,6 +46,13 @@ export class PinnedKeyUnusable extends Error {
   }
 }
 
+/** A server-held address whose Contacts trust other keys (`pinnedConflict`). */
+export class PinnedKeyConflict extends Error {
+  constructor(readonly address: string) {
+    super(`this server holds ${address}, but the keys trusted for it are others`)
+  }
+}
+
 /** The key lookup for an outside address failed (not: found nothing). */
 export class KeyLookupFailed extends Error {
   constructor(readonly address: string) {
@@ -56,9 +69,12 @@ export async function protectionFor(address: string, domain: string, pinned: Pin
     if (keys === 'disabled') return { kind: 'disabled' }
     return keys?.encryptionDisabled ? { kind: 'kutup', encryptionDisabled: true } : { kind: 'kutup' }
   }
-  // Another address this server holds (a custom domain): a Kutup address too.
+  // Another address this server holds (a custom domain): a Kutup address too,
+  // unless Contacts trust other keys for it.
   try {
     const keys = await addressKeys(lower)
+    const trusted = pinned?.keys ?? []
+    if (trusted.length > 0) return { kind: 'pinnedConflict', fingerprint: trusted[0].fingerprint }
     return keys.encryptionDisabled ? { kind: 'kutup', encryptionDisabled: true } : { kind: 'kutup' }
   } catch (error) {
     if (error instanceof AddressDisabled) return { kind: 'disabled' }

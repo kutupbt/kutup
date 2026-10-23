@@ -109,11 +109,24 @@ export function useDeleteAddress() {
   })
 }
 
-/** A new address on a custom domain, with its first key made here. */
+/**
+ * A new address on a custom domain, with its first key made here. One the
+ * account held before comes back with its keys, disabled: it is enabled with
+ * its chain's next list, never a first key (which this account's other
+ * devices would read as a rollback).
+ */
 export function useAddAddress() {
   return useAddressMutation(async (session, input: { local: string; domainId: string }) => {
-    const { data } = await api.post<{ id: string; address: string }>('/mail/domains/addresses', input)
-    await addFirstAddressKey(session, data)
+    const { data } = await api.post<{ id: string; address: string; continues?: boolean }>('/mail/domains/addresses', input)
+    if (data.continues) {
+      const rows = (await api.get<OwnAddressRow[]>('/mail/addresses')).data
+      const row = rows.find((r) => r.id === data.id)
+      if (!row) throw new Error('the address taken back is not listed')
+      const list = await enabledKeyList(session, await checkedRow(session, row))
+      await api.put(`/mail/addresses/${row.id}/enable`, { keyList: { data: list.data, signature: list.signature } })
+    } else {
+      await addFirstAddressKey(session, data)
+    }
     return data
   })
 }

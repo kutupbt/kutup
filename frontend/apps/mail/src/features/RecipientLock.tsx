@@ -44,7 +44,7 @@ export function RecipientLock({ address, domain, pinned, encrypt = true }: { add
   }
   // Encrypt off for this message: whoever could have had end-to-end mail now
   // gets it readable on the way (docs/plans/mail-encrypt-sign.md).
-  if (!encrypt && value.kind !== 'none' && value.kind !== 'pinnedUnusable') {
+  if (!encrypt && value.kind !== 'none' && value.kind !== 'pinnedUnusable' && value.kind !== 'pinnedConflict') {
     const label = value.kind === 'kutup' ? t('compose.lock.readableKutup') : t('compose.lock.readableOutside')
     return (
       <Tooltip label={label}>
@@ -61,7 +61,9 @@ export function RecipientLock({ address, domain, pinned, encrypt = true }: { add
           ? [LockKeyhole, t(`compose.lock.found.${value.source}`), 'text-primary']
           : value.kind === 'pinnedUnusable'
             ? [ShieldAlert, t('compose.lock.pinnedUnusable'), 'text-destructive']
-            : [null, '', '']
+            : value.kind === 'pinnedConflict'
+              ? [ShieldAlert, t('compose.lock.pinnedConflict'), 'text-destructive']
+              : [null, '', '']
   if (!Icon) return null
   return (
     <Tooltip label={label}>

@@ -227,12 +227,14 @@
     "sendLimitNew": "Yeni hesaplar ilk haftalarında günde {{perDay}} dış adrese gönderebilir. Daha sonra yeniden deneyin.",
     "pausedNotice": "Hesabınız için dış adreslere posta gönderimi duraklatıldı; Kutup kullanıcılarına postalar yine gider.",
     "pinnedKeyUnusable": "{{address}} için güvendiğiniz anahtar artık kullanılamıyor. Kişiler'de değiştirin ya da kaldırın.",
+    "pinnedKeyConflict": "Bu sunucu {{address}} adresinin bir Kutup kullanıcısına ait olduğunu söylüyor, ama Kişiler'de bu adres için başka anahtarlara güveniyorsunuz. Hiçbir şey gönderilmedi: kişiyle doğrulayın, adres Kutup'a taşındıysa Kişiler'deki anahtarları kaldırın.",
     "keyLookupFailed": "{{address}} için anahtarlar aranamadı. Yeniden deneyin.",
     "lock": {
       "looking": "Şifreleme anahtarları aranıyor",
       "lookupFailed": "Şifreleme anahtarları aranamadı",
       "pinned": "Güvendiğiniz bir anahtarla uçtan uca şifreli",
       "pinnedUnusable": "Bu adres için güvendiğiniz anahtar artık kullanılamıyor",
+      "pinnedConflict": "Bu sunucu bunun bir Kutup adresi olduğunu söylüyor, ama bu adres için başka anahtarlara güveniyorsunuz",
       "found": {
         "wkd": "Alıcının alan adından alınan bir anahtarla uçtan uca şifreli (Web Key Directory)",
         "proton": "Alıcının Proton anahtarıyla uçtan uca şifreli",
