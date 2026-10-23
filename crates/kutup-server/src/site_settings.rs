@@ -512,6 +512,15 @@ pub const CALENDAR_ALARMS_PER_ACCOUNT: NumericSetting = NumericSetting {
     min: 100,
     max: 1_000_000,
 };
+/// Browsers one account keeps taking reminder pushes (a new one past it
+/// ends the longest-held).
+pub const CALENDAR_PUSH_SUBSCRIPTIONS_PER_ACCOUNT: NumericSetting = NumericSetting {
+    key: "calendar_push_subscriptions_per_account",
+    field: "calendarPushSubscriptionsPerAccount",
+    default: 10,
+    min: 1,
+    max: 100,
+};
 /// Events whose alarms the job recomputes at once after a member's
 /// defaults or zone change.
 pub const CALENDAR_RECOMPUTE_BATCH: NumericSetting = NumericSetting {
@@ -545,7 +554,7 @@ pub const CALENDAR_EVENTS_PAGE: NumericSetting = NumericSetting {
     min: 10,
     max: 5000,
 };
-pub const CALENDAR_SETTINGS: [NumericSetting; 16] = [
+pub const CALENDAR_SETTINGS: [NumericSetting; 17] = [
     CALENDARS_PER_ACCOUNT,
     CALENDAR_EVENTS_PER_CALENDAR,
     CALENDAR_SYNC_BATCH,
@@ -559,6 +568,7 @@ pub const CALENDAR_SETTINGS: [NumericSetting; 16] = [
     CALENDAR_ALARM_SENDS,
     CALENDAR_ALARMS_PER_ACCOUNT,
     CALENDAR_RECOMPUTE_BATCH,
+    CALENDAR_PUSH_SUBSCRIPTIONS_PER_ACCOUNT,
     CALENDAR_ALARMS_PAGE,
     CALENDAR_WINDOW_DAYS,
     CALENDAR_EVENTS_PAGE,

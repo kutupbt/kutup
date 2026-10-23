@@ -228,6 +228,7 @@ export interface AdminSettings {
   calendarAlarmSends: number
   calendarAlarmsPerAccount: number
   calendarRecomputeBatch: number
+  calendarPushSubscriptionsPerAccount: number
   calendarWindowDays: number
   calendarEventsPage: number
   /** Linking Chat devices (site_settings::CHAT_IDENTITY_SETTINGS). */

@@ -121,7 +121,14 @@ async fn recompute_for(
     let Some((calendar, shared, own)) = event else {
         return Ok(());
     };
-    let (series, all_day) = series_of(&shared, &own)?;
+    // A series that doesn't read has no alarms; the caller goes on.
+    let (series, all_day) = match series_of(&shared, &own) {
+        Ok(read) => read,
+        Err(error) => {
+            tracing::warn!(event = %event_id, %error, "calendar: an event's series doesn't read; no alarms");
+            return Ok(());
+        }
+    };
     let most = CALENDAR_ALARMS_PER_ACCOUNT.load(&mut *conn).await?;
     type Member = (
         Uuid,
@@ -162,7 +169,10 @@ async fn recompute_for(
             else {
                 continue;
             };
-            let Some((occurrence, fire)) = next_fire(&series, &zone, minutes, now)? else {
+            let Ok(Some((occurrence, fire))) = next_fire(&series, &zone, minutes, now) else {
+                continue;
+            };
+            let (Ok(occurrence), Ok(fire)) = (at(occurrence), at(fire)) else {
                 continue;
             };
             sqlx::query(
@@ -174,8 +184,8 @@ async fn recompute_for(
             .bind(event_id)
             .bind(index as i16)
             .bind(reminder.kind.as_str())
-            .bind(at(occurrence)?)
-            .bind(at(fire)?)
+            .bind(occurrence)
+            .bind(fire)
             .execute(&mut *conn)
             .await?;
             held += 1;
@@ -215,11 +225,24 @@ struct Due {
     all_day: bool,
 }
 
-/// The job: every `calendarAlarmTickSeconds`, the due alarms fire, batch by
+/// The jobs: every `calendarAlarmTickSeconds`, the due alarms fire, batch by
 /// batch until none is due (each server takes its own, so none fires
-/// twice), each moved to its reminder's next occurrence; then waiting
-/// recomputes go on.
+/// twice), each moved to its reminder's next occurrence; and, on their own,
+/// waiting recomputes go on (a long one never delays a reminder).
 pub fn spawn(state: AppState) {
+    let recomputing = state.clone();
+    tokio::spawn(async move {
+        loop {
+            let tick = CALENDAR_ALARM_TICK_SECONDS
+                .load(&recomputing.pool)
+                .await
+                .unwrap_or(CALENDAR_ALARM_TICK_SECONDS.default);
+            tokio::time::sleep(std::time::Duration::from_secs(tick as u64)).await;
+            if let Err(error) = recompute_queued(&recomputing).await {
+                tracing::warn!(error = %error, "calendar: recomputing reminders failed");
+            }
+        }
+    });
     tokio::spawn(async move {
         // Chat's push client: no redirects (the push service allowlist
         // holds for the URL sent to, never another), short timeouts.
@@ -241,27 +264,29 @@ pub fn spawn(state: AppState) {
                 .await
                 .unwrap_or(CALENDAR_ALARM_TICK_SECONDS.default);
             tokio::time::sleep(std::time::Duration::from_secs(tick as u64)).await;
-            loop {
-                match fire_due(&state, &client).await {
-                    Ok(true) => continue,
-                    Ok(false) => break,
-                    Err(error) => {
-                        tracing::warn!(error = %error, "calendar: firing reminders failed");
-                        break;
+            // Late ones first, moved on without sending, all of them (no
+            // account's share applies: nothing is sent); then the due ones.
+            for late in [true, false] {
+                loop {
+                    match fire_due(&state, &client, late).await {
+                        Ok(true) => continue,
+                        Ok(false) => break,
+                        Err(error) => {
+                            tracing::warn!(error = %error, "calendar: firing reminders failed");
+                            break;
+                        }
                     }
                 }
-            }
-            if let Err(error) = recompute_queued(&state).await {
-                tracing::warn!(error = %error, "calendar: recomputing reminders failed");
             }
         }
     });
 }
 
-/// One batch of due alarms: sent (at most `calendarAlarmSends` at once,
-/// after the batch's transaction) unless later than the lateness, and moved
-/// on. Whether the batch was full (more may be due).
-async fn fire_due(state: &AppState, client: &reqwest::Client) -> anyhow::Result<bool> {
+/// One batch of due alarms, sent (at most `calendarAlarmSends` at once,
+/// after the batch's transaction) and moved on; or (`late`) of alarms later
+/// than the lateness, only moved on. Whether the batch was full (more may be
+/// due).
+async fn fire_due(state: &AppState, client: &reqwest::Client, late: bool) -> anyhow::Result<bool> {
     let lateness = CALENDAR_REMINDER_LATENESS_SECONDS.load(&state.pool).await?;
     let batch = CALENDAR_ALARM_BATCH.load(&state.pool).await?;
     let per_account = CALENDAR_ALARM_BATCH_PER_ACCOUNT.load(&state.pool).await?;
@@ -281,31 +306,48 @@ async fn fire_due(state: &AppState, client: &reqwest::Client) -> anyhow::Result<
         Option<serde_json::Value>,
         Option<String>,
     );
-    // The earliest due first, at most `per_account` of one account's, so
-    // one account's many never make the others' late; with what moving each
-    // on reads.
-    let rows: Vec<Row> = sqlx::query_as(
-        "SELECT a.user_id, a.event_id, a.reminder, a.action, a.occurrence_start, a.fire_at,
+    // The earliest first, with what moving each on reads. Due ones: at most
+    // `per_account` of one account's, so one account's many never make the
+    // others' late. The outer `fire_at` bounds hold for the version locked:
+    // a row another server moved on meanwhile is skipped, never sent again.
+    let columns = "a.user_id, a.event_id, a.reminder, a.action, a.occurrence_start, a.fire_at,
                 e.shared_signed, e.calendar_signed, m.default_reminders_timed,
-                m.default_reminders_all_day, r.reminders, s.zone
-           FROM calendar_alarms a
-           JOIN (SELECT user_id, event_id, reminder,
-                        row_number() OVER (PARTITION BY user_id ORDER BY fire_at) AS place
-                   FROM calendar_alarms WHERE fire_at <= now()) d
-             ON d.user_id = a.user_id AND d.event_id = a.event_id AND d.reminder = a.reminder
-           JOIN calendar_events e ON e.id = a.event_id
+                m.default_reminders_all_day, r.reminders, s.zone";
+    let joins = "JOIN calendar_events e ON e.id = a.event_id
            JOIN calendar_members m ON m.calendar_id = e.calendar_id AND m.user_id = a.user_id
            LEFT JOIN calendar_event_reminders r ON r.event_id = a.event_id AND r.user_id = a.user_id
-           LEFT JOIN calendar_user_settings s ON s.user_id = a.user_id
-          WHERE d.place <= $2
-          ORDER BY a.fire_at
-          LIMIT $1
-          FOR UPDATE OF a SKIP LOCKED",
-    )
-    .bind(batch)
-    .bind(per_account)
-    .fetch_all(&mut *tx)
-    .await?;
+           LEFT JOIN calendar_user_settings s ON s.user_id = a.user_id";
+    let rows: Vec<Row> = if late {
+        sqlx::query_as(&format!(
+            "SELECT {columns} FROM calendar_alarms a {joins}
+              WHERE a.fire_at < now() - make_interval(secs => $2)
+              ORDER BY a.fire_at LIMIT $1
+              FOR UPDATE OF a SKIP LOCKED"
+        ))
+        .bind(batch)
+        .bind(lateness as f64)
+        .fetch_all(&mut *tx)
+        .await?
+    } else {
+        sqlx::query_as(&format!(
+            "SELECT {columns} FROM calendar_alarms a
+               JOIN (SELECT user_id, event_id, reminder,
+                            row_number() OVER (PARTITION BY user_id ORDER BY fire_at) AS place
+                       FROM calendar_alarms
+                      WHERE fire_at <= now() AND fire_at >= now() - make_interval(secs => $3)) d
+                 ON d.user_id = a.user_id AND d.event_id = a.event_id AND d.reminder = a.reminder
+               {joins}
+              WHERE d.place <= $2
+                AND a.fire_at <= now() AND a.fire_at >= now() - make_interval(secs => $3)
+              ORDER BY a.fire_at LIMIT $1
+              FOR UPDATE OF a SKIP LOCKED"
+        ))
+        .bind(batch)
+        .bind(per_account)
+        .bind(lateness as f64)
+        .fetch_all(&mut *tx)
+        .await?
+    };
     let full = rows.len() as i64 == batch;
     let now = time::OffsetDateTime::now_utc();
     let mut due = Vec::new();
@@ -326,9 +368,17 @@ async fn fire_due(state: &AppState, client: &reqwest::Client) -> anyhow::Result<
         zone,
     ) in rows
     {
-        let parsed = series
-            .entry(event)
-            .or_insert_with(|| series_of(&shared, &own).ok());
+        // Moved on meanwhile (another server's): not this one's to fire.
+        if fire_at > now {
+            continue;
+        }
+        let parsed = series.entry(event).or_insert_with(|| {
+            series_of(&shared, &own)
+                .map_err(|error| {
+                    tracing::warn!(%event, %error, "calendar: an event's series doesn't read; its alarms end")
+                })
+                .ok()
+        });
         let late = (now - fire_at).whole_seconds() > lateness;
         // Too late is never sent (Proton's web: a minute), only moved on.
         if !late {
@@ -359,11 +409,16 @@ async fn fire_due(state: &AppState, client: &reqwest::Client) -> anyhow::Result<
                     .ok()
                     .and_then(|reminders| reminders.into_iter().nth(reminder as usize))
                     .and_then(|r| calendar_reminders::trigger_minutes(&r.trigger, *all_day).ok())
-                    .map(|minutes| {
+                    .and_then(|minutes| {
+                        // One alarm that can't be moved on ends, alone: the
+                        // batch goes on.
                         next_fire(series, zone.as_deref().unwrap_or("UTC"), minutes, from)
+                            .map_err(|error| {
+                                tracing::warn!(%event, %error, "calendar: an alarm can't move on; it ends")
+                            })
+                            .ok()
+                            .flatten()
                     })
-                    .transpose()?
-                    .flatten()
             }
         };
         moved(&mut tx, user, event, reminder, next).await?;
@@ -391,6 +446,8 @@ async fn moved(
     reminder: i16,
     next: Option<(i64, i64)>,
 ) -> anyhow::Result<()> {
+    // Times out of range end the alarm too.
+    let next = next.and_then(|(occurrence, fire)| Some((at(occurrence).ok()?, at(fire).ok()?)));
     match next {
         Some((occurrence, fire)) => {
             sqlx::query(
@@ -400,8 +457,8 @@ async fn moved(
             .bind(user)
             .bind(event)
             .bind(reminder)
-            .bind(at(occurrence)?)
-            .bind(at(fire)?)
+            .bind(occurrence)
+            .bind(fire)
             .execute(&mut *conn)
             .await?;
         }
@@ -494,12 +551,19 @@ async fn push(
     let start = alarm
         .occurrence_start
         .format(&time::format_description::well_known::Rfc3339)?;
-    let payload = serde_json::json!({ "eventId": alarm.event, "startUtc": start }).to_string();
     let until_start = (alarm.occurrence_start - time::OffsetDateTime::now_utc()).whole_seconds();
     let ttl = until_start.max(lateness).clamp(1, MAX_TTL_SECONDS) as u32;
-    // A Topic is at most 32 base64url characters: the event id's hex.
-    let topic = alarm.event.simple().to_string();
     for (session, endpoint, p256dh, auth) in subscriptions {
+        // Keyed by the browser's own secret: the push service can't link
+        // two members' pushes for one event, nor one account's browsers.
+        // The Topic (at most 32 base64url characters) keeps one push per
+        // event; `account` lets the browser tell its signed-in accounts
+        // apart (it holds the secret and its accounts' ids).
+        let topic = subscription_tag(&auth, b"topic", alarm.event.as_bytes(), 32);
+        let account = subscription_tag(&auth, b"account", alarm.user.as_bytes(), 22);
+        let payload =
+            serde_json::json!({ "eventId": alarm.event, "startUtc": start, "account": account })
+                .to_string();
         let body = crate::web_push_payload::encrypt(&p256dh, &auth, payload.as_bytes())?;
         match sender
             .send_encrypted(client, &endpoint, body, &topic, ttl)
@@ -519,6 +583,20 @@ async fn push(
         }
     }
     Ok(())
+}
+
+/// base64url(HMAC-SHA256(auth, label ‖ value)), cut to `length` characters.
+fn subscription_tag(auth: &[u8], label: &[u8], value: &[u8], length: usize) -> String {
+    use base64::Engine as _;
+    use hmac::Mac as _;
+    let mut mac = hmac::Hmac::<sha2::Sha256>::new_from_slice(auth).expect("HMAC takes any key");
+    mac.update(label);
+    mac.update(&[0]);
+    mac.update(value);
+    let mut tag =
+        base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(mac.finalize().into_bytes());
+    tag.truncate(length);
+    tag
 }
 
 /// An email reminder: to the member's own Kutup address, only when (the
@@ -623,6 +701,29 @@ mod tests {
         // Past the last: none.
         let after = utc("2026-11-03T00:00:00Z");
         assert!(next_fire(&series, "UTC", -15, after).unwrap().is_none());
+    }
+
+    #[test]
+    fn tags_are_the_browser_s_own_and_fit_a_topic() {
+        let event = Uuid::new_v4();
+        let one = subscription_tag(&[1; 16], b"topic", event.as_bytes(), 32);
+        assert_eq!(one.len(), 32);
+        assert!(one
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_'));
+        assert_eq!(
+            one,
+            subscription_tag(&[1; 16], b"topic", event.as_bytes(), 32)
+        );
+        // Another browser's secret, or another label: unrelated.
+        assert_ne!(
+            one,
+            subscription_tag(&[2; 16], b"topic", event.as_bytes(), 32)
+        );
+        assert_ne!(
+            one,
+            subscription_tag(&[1; 16], b"account", event.as_bytes(), 32)
+        );
     }
 
     #[test]

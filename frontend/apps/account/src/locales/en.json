@@ -830,6 +830,8 @@
         "calendarAlarmsPerAccountHint": "The most upcoming reminders one account keeps; reminders past it don't fire.",
         "calendarRecomputeBatch": "Reminder updates per batch",
         "calendarRecomputeBatchHint": "How many events' reminders the server updates at once after someone changes their defaults or time zone.",
+        "calendarPushSubscriptionsPerAccount": "Browsers taking reminders per account",
+        "calendarPushSubscriptionsPerAccountHint": "How many browsers of one account take reminder pushes; a new one past it replaces the longest-held.",
         "calendarAlarmsPage": "Alarms per page",
         "calendarAlarmsPageHint": "The most alarms one page of the alarms query carries."
       },

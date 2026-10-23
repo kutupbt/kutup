@@ -830,6 +830,8 @@
         "calendarAlarmsPerAccountHint": "Bir hesabın tuttuğu en fazla yaklaşan hatırlatıcı; fazlası çalmaz.",
         "calendarRecomputeBatch": "Parti başına hatırlatıcı güncellemesi",
         "calendarRecomputeBatchHint": "Biri varsayılanlarını veya saat dilimini değiştirdikten sonra sunucunun bir seferde hatırlatıcılarını güncellediği etkinlik sayısı.",
+        "calendarPushSubscriptionsPerAccount": "Hesap başına hatırlatıcı alan tarayıcı",
+        "calendarPushSubscriptionsPerAccountHint": "Bir hesabın kaç tarayıcısının hatırlatıcı bildirimi aldığı; fazlası en eskisinin yerini alır.",
         "calendarAlarmsPage": "Sayfa başına alarm",
         "calendarAlarmsPageHint": "Alarm sorgusunun bir sayfasının taşıdığı en fazla alarm."
       },

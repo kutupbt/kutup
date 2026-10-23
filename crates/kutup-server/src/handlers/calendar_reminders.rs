@@ -270,6 +270,30 @@ pub async fn put_push_subscription(
     .bind(session)
     .execute(&mut *tx)
     .await?;
+    // At most `calendarPushSubscriptionsPerAccount` browsers: those of
+    // sessions that ended go first, then the longest-held.
+    let most = crate::site_settings::CALENDAR_PUSH_SUBSCRIPTIONS_PER_ACCOUNT
+        .load(&mut *tx)
+        .await?;
+    sqlx::query(
+        "DELETE FROM calendar_push_subscriptions p USING auth_sessions a
+          WHERE p.user_id = $1 AND a.id = p.session_id
+            AND (a.revoked_at IS NOT NULL OR a.expires_at <= now())",
+    )
+    .bind(user_id)
+    .execute(&mut *tx)
+    .await?;
+    sqlx::query(
+        "DELETE FROM calendar_push_subscriptions WHERE session_id IN (
+           SELECT session_id FROM calendar_push_subscriptions
+            WHERE user_id = $1 AND session_id <> $2
+            ORDER BY created_at DESC OFFSET $3)",
+    )
+    .bind(user_id)
+    .bind(session)
+    .bind(most - 1)
+    .execute(&mut *tx)
+    .await?;
     sqlx::query(
         "INSERT INTO calendar_push_subscriptions (session_id, user_id, endpoint, p256dh, auth)
          VALUES ($1, $2, $3, $4, $5)

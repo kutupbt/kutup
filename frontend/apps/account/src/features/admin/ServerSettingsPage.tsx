@@ -53,6 +53,7 @@ const CALENDAR_SETTINGS = [
   { field: 'calendarAlarmSends', min: 1, max: 256 },
   { field: 'calendarAlarmsPerAccount', min: 100, max: 1_000_000 },
   { field: 'calendarRecomputeBatch', min: 10, max: 10_000 },
+  { field: 'calendarPushSubscriptionsPerAccount', min: 1, max: 100 },
   { field: 'calendarAlarmsPage', min: 10, max: 1000 },
   { field: 'calendarWindowDays', min: 1, max: 3660 },
   { field: 'calendarEventsPage', min: 10, max: 5000 },
