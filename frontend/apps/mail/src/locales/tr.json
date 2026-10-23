@@ -1142,6 +1142,7 @@
       "ownAddress": "Kendi adreslerinizden birine yönlendiremezsiniz.",
       "unknown": "Bu sunucuda böyle bir adres yok.",
       "kindChanged": "Bu adres siz kontrol ettikten sonra değişti. Kaydetmeden önce yeniden kontrol edin.",
+      "pinnedConflict": "Kişiler'de bu adres için başka anahtarlara güveniyorsunuz, ama bu sunucu adresin bir Kutup kullanıcısına ait olduğunu söylüyor. Kişiyle doğrulayın; adres Kutup'a taşındıysa Kişiler'deki anahtarları kaldırın.",
       "group": "E-posta paylaşılan bir posta kutusuna veya listeye yönlendirilemez.",
       "unverified": "Bu adresin anahtarları doğrulanamadı, bu yüzden şu an ona yönlendirme yapılamaz.",
       "exists": "Bu adrese zaten yönlendiriyorsunuz.",

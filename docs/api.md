@@ -82,8 +82,16 @@ Specific codes, where an app does something particular (a test in
 | `calendarExists` | 409 | `POST /api/calendar/calendars`: the id (or the calendar key) is in use; draw another |
 | `calendarLimit` | 409 | `POST /api/calendar/calendars`: the account owns as many calendars as the administrators allow (`calendarsPerAccount`) |
 | `eventLimit` | 409 | An events sync: the calendar holds as many events as the administrators allow (`calendarEventsPerCalendar`); that change only |
-| `sequenceBehind` | 409 | An events sync: the changed event's `SEQUENCE` is lower than the stored one's; that change only |
+| `sequenceBehind` | 409 | An events sync: the changed event's `SEQUENCE` is lower than the stored one's, or a changed occurrence's is lower than its series'; that change only |
 | `uidTaken` | 409 | An events sync: an event with this UID is in the calendar already; that change only |
+| `eventIdTaken` | 409 | An events sync: a create's id holds another event (in any calendar); that change only |
+| `recurrenceIdChanged` | 400 | An events sync: an update would turn a series into a changed occurrence, a change into a series, or move a change to another `RECURRENCE-ID`; that change only |
+| `invalidReminders` | 400 | A calendar event's or default reminders out of bounds or too many; that change only |
+| `unknownZone` | 400 | `PUT /api/calendar/settings`: a time zone the server's database doesn't know |
+| `countTooLarge` | 400 | An events sync: the rule's `COUNT` is above `calendarMaxCount`; that change only |
+| `exdateNotAnOccurrence` | 400 | An events sync: a calendar-part `EXDATE` isn't an occurrence of the series; that change only |
+| `parentMissing` | 400 | An events sync: a changed occurrence's series isn't in the calendar; that change only |
+| `notAnOccurrence` | 400 | An events sync: a `RECURRENCE-ID` isn't an occurrence of its series; that change only |
 | `setupRequired` | 409 | The account has no keys yet (an admin-made account before its first sign-in): a listed write or a rename waits for setup |
 | `renamed` | 409 | A lookup of a name an account no longer goes by (held, or named in a rename chain): `renames` carries `{ "version": 1, "chains": [...] }`, never keys |
 | `nameReserved` | 409 | The name is the server's (postmaster, abuse, …, the break-glass account), in any spelling |
@@ -1606,9 +1614,11 @@ address.
 ### PUT /api/mail/addresses/:id/delete
 
 Proton's Delete for a disabled address on a custom domain (`409
-addressEnabled` while enabled: disable it first, as Proton's client does).
-The name is free for anyone again; its keys stay with this account, opening
-the mail it received, never published or used for new mail. `204`.
+addressEnabled` while enabled: disable it first, as Proton's client does; one
+that never had a key is deleted at once). The name is free for anyone again;
+its keys stay with this account, opening the mail it received, never
+published or used for new mail. Its forwardings end, from it and to it, and
+never come back if the account takes the address back. `204`.
 
 ### POST /api/mail/addresses/:id/keys
 
@@ -2372,9 +2382,13 @@ quota.
 
 ### PUT /api/calendar/calendars/{id} · DELETE /api/calendar/calendars/{id}
 
-`PUT` takes `{ metadata?, color?, display?, baseRevision, revision, head }`:
-the owner's new sealed name and description, and the member's own colour
-and visibility. `409 revision_conflict` when `baseRevision` is not the
+`PUT` takes `{ metadata?, color?, display?, defaultReminders?, baseRevision,
+revision, head }`: the owner's new sealed name and description, and the
+member's own colour, visibility and default reminders (`{ timed, allDay }`,
+lists of reminders as below, `calendarDefaultReminders` (5) each; Proton's
+defaults: 15 minutes before a timed event, 15 hours before an all-day one,
+on the device and by email). A calendar's view carries the member's
+`defaultReminders`. `409 revision_conflict` when `baseRevision` is not the
 member row's; `403` when someone else than the owner sends `metadata`.
 `DELETE` (body `{ head }`) deletes the calendar and its events, owner only.
 
@@ -2394,13 +2408,31 @@ caller isn't a member of is `404`. `GET …/events/{eventId}` answers one.
 
 ### POST /api/calendar/calendars/{id}/events/sync
 
-`{ addressId, changes: [{"create": SealedEventV1} | {"update": {id,
-baseRevision, event}} | {"delete": {id, baseRevision}}] }`, 1 to `calendarSyncBatch` (10) changes, each applied
+`{ addressId, changes: [{"create": {id, event}} | {"update": {id,
+baseRevision, event}} | {"delete": {id, baseRevision}}] }` (a create's `id`
+is drawn by the client, a UUID v4: a create sent again with the same id and
+parts answers the stored event, the id holding another is `409
+eventIdTaken`), 1 to `calendarSyncBatch` (10) changes, each applied
 alone (Proton's sync): `{ results: [{ status, event?, code?, error? }] }` in
 the order sent. A created or changed event's signed parts must be signed by
 one of the address's keys, its key packets be to the calendar key, and it
-must keep its UID; E1 refuses `RRULE`, `RECURRENCE-ID`, `EXDATE` and
-`ORGANIZER` (recurrence comes in E2, invitations in E4). `409 uidTaken`
+must keep its UID; `ORGANIZER` is refused (invitations come in E4).
+Repeating events (E2): the shared part's `RRULE` and `EXDATE`s are Proton's
+subset (`kutup_crypto::calendar_recurrence`), a `COUNT` at most
+`calendarMaxCount` (49; `400 countTooLarge`). The calendar part's `EXDATE`s
+remove occurrences on this calendar only: each must be an occurrence of
+the series in its form (`400 exdateNotAnOccurrence`), and with the shared
+ones at least one occurrence is left. The server stores the series' last
+end (`rangeEndUtc`, absent for one without end) from both parts'
+`EXDATE`s. A changed occurrence (`RECURRENCE-ID`) needs its series in the
+calendar, the same UID with a rule (`400 parentMissing`), and its
+`RECURRENCE-ID` must be one of the series' occurrences, an excluded one
+included (`400 notAnOccurrence`), and its `SEQUENCE` is not lower than the
+series' (`409 sequenceBehind`). An update keeps the event's `RECURRENCE-ID`
+(or its absence; `400 recurrenceIdChanged`). A series deleted later leaves
+its changes as single events, which can still be changed. A window lists
+every event that meets it, and also those ending exactly at its start (a
+series' last occurrence of no length there). `409 uidTaken`
 for a UID already in the calendar, `409 eventLimit` at
 `calendarEventsPerCalendar` (25,000). An update or a delete names
 the event's `revision` it was made from: another one is `409 revision_conflict` (with
@@ -2417,6 +2449,67 @@ Kutup stores no map data (docs/plans/maps.md). The administrator chooses the
 providers people may use and whether map traffic goes through this server;
 each person turns maps on (off by default) and chooses within that. Places
 themselves are end-to-end encrypted elsewhere and drawn in the browser.
+
+### Calendar reminders
+
+A reminder is `{ "type": "device" | "email", "trigger": "-PT15M" }`, as
+Proton's notifications: an RFC 5545 duration from the event's start, at
+most 999 weeks, 6999 days, 999 hours or 9999 minutes before, each in its own
+unit; a timed event's at its start or before, an all-day event's before its
+day ends (`PT9H`: 09:00 that day). Readable by the server, which fires them;
+never in the encrypted parts. An event sync's `create` and `update` take the
+caller's own `reminders` for the event (`calendarRemindersPerEvent`, 10;
+`400 invalidReminders` otherwise): on a create a list, absent for the
+calendar's defaults; on an update absent keeps them, `null` goes back to the
+defaults, a list replaces them. Each member's are their own.
+
+The server keeps each member's next alarm per event and reminder (the
+series expanded from both parts' `EXDATE`s; all-day ones in the zone of
+`/api/calendar/settings`) and fires the due ones: a **device** reminder as a
+web push to each of the member's signed-in browsers that subscribed, its
+payload encrypted to the browser (RFC 8291) and only `{ eventId, startUtc }`;
+an **email** reminder to the member's own Kutup address, saying only when,
+with a link (an all-day event's says its date, "all day"). One later than
+`calendarReminderLatenessSeconds` (60) is skipped, and the occurrences it
+missed with it. The job looks every `calendarAlarmTickSeconds` (20) and
+takes due alarms `calendarAlarmBatch` (200) at a time until none is due, at
+most `calendarAlarmBatchPerAccount` (20) of one account's per batch, sending
+`calendarAlarmSends` (16) at once. An account keeps at most
+`calendarAlarmsPerAccount` (10,000) alarms; reminders past it fire nothing.
+A reminder push lives at the push service until its occurrence starts (at
+least the lateness), one per event (`Topic`), signed with the server's
+VAPID key (the one Chat's pushes carry).
+
+### GET /api/calendar/alarms?start=&end=&afterFire=&afterEvent=
+
+The caller's next alarms firing in the window, by fire time,
+`calendarAlarmsPage` (100) at most; the page's last `fireAt` and `eventId`
+continue it. `{ alarms: [{ calendarId, eventId, action, occurrenceStart,
+fireAt }] }`: the open app fires its own notifications from these.
+
+### GET · PUT /api/calendar/settings
+
+`{ zone }`: the IANA zone the account's calendars show in, where all-day
+reminders fire (`null`: UTC). `400 unknownZone` for a zone the bundled
+database doesn't know. Setting it moves the account's all-day alarms
+shortly after: the job recomputes them, `calendarRecomputeBatch` (500)
+events at a time (as for a change of a calendar's default reminders).
+
+### PUT · DELETE /api/calendar/push-subscription
+
+`{ endpoint, p256dh, auth }` from the browser's `PushSubscription`
+(base64url keys): this signed-in session's browser takes reminder pushes,
+one per session, ended by signing out. A browser's endpoint is the
+account's once: a new session's subscription takes it over from an earlier
+one (signed out, expired or not); another account signed in to the same
+browser has its own. An account keeps at most
+`calendarPushSubscriptionsPerAccount` (10): ended sessions' go first, then
+the longest-held. A push's payload is `{ eventId, startUtc, account }`,
+`account` and its `Topic` keyed by the subscription's own secret
+(base64url HMAC-SHA256 over the account or event id), so the push service
+links neither two members' pushes nor one account's browsers. The push service must be on Chat's
+allowlist (`400`); `404` where Web Push is off. A push service's `404` or
+`410` drops the subscription. `DELETE` ends it.
 
 ### GET /api/maps
 

@@ -109,6 +109,40 @@ impl WebPush {
     }
 }
 
+impl WebPush {
+    /// Sends an RFC 8291 body (`web_push_payload::encrypt`) to an allowed
+    /// endpoint with this server's VAPID signature (the one Chat's pushes
+    /// carry: one key per server, in the database), kept by the push
+    /// service `ttl` seconds under `topic`; the push service's answer, for
+    /// the caller to drop a gone subscription (404, 410).
+    pub(crate) async fn send_encrypted(
+        &self,
+        client: &reqwest::Client,
+        endpoint: &str,
+        body: Vec<u8>,
+        topic: &str,
+        ttl: u32,
+    ) -> anyhow::Result<StatusCode> {
+        if !self.allowed_endpoint(endpoint) {
+            return Ok(StatusCode::GONE);
+        }
+        let url = reqwest::Url::parse(endpoint)?;
+        let now = time::OffsetDateTime::now_utc().unix_timestamp() as u64;
+        let response = client
+            .post(url.clone())
+            .header("Authorization", self.authorization(&url, now))
+            .header("TTL", ttl.to_string())
+            .header("Urgency", "high")
+            .header("Topic", topic)
+            .header("Content-Encoding", "aes128gcm")
+            .header(reqwest::header::CONTENT_TYPE, "application/octet-stream")
+            .body(body)
+            .send()
+            .await?;
+        Ok(response.status())
+    }
+}
+
 fn parse_hosts(hosts: &str) -> Vec<String> {
     hosts
         .split(',')

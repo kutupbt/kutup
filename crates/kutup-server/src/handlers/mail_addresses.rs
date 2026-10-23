@@ -328,6 +328,14 @@ pub async fn delete(
             "addressEnabled",
         ));
     }
+    // Its forwardings end with it, both ways (as a domain lost ends its
+    // addresses'): taking the address back never brings them back.
+    sqlx::query(
+        "DELETE FROM mail_forwardings WHERE forwarder_address_id = $1 OR forwardee_address_id = $1",
+    )
+    .bind(address)
+    .execute(&mut *tx)
+    .await?;
     sqlx::query("UPDATE mail_addresses SET state = 'freed', receive_until = NULL WHERE id = $1")
         .bind(address)
         .execute(&mut *tx)
