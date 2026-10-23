@@ -444,6 +444,66 @@ jobs:
       - name: Run the mail gate
         run: scripts/gate.sh live mail
 
+  mail-domains-browser:
+    name: Mail custom domains browser specs
+    # Custom domains in the browser on the mail gate's stack, whose CoreDNS
+    # serves the zones the spec writes (scripts/test-mail-domains-browser.sh).
+    # On master and on demand only; run it locally before merging.
+    if: github.event_name != 'pull_request'
+    needs:
+      - rust-workspace
+      - web
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    env:
+      KUTUP_E2E_SAFE_ARTIFACTS: "1"
+      KUTUP_E2E_DIAGNOSTICS_DIR: sanitized-results
+    steps:
+      - uses: actions/checkout@v7
+      - name: Set up Node
+        uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: tests/e2e/package-lock.json
+      - name: Install browser test dependencies
+        run: npm ci --prefix tests/e2e
+      - name: Install Chromium
+        run: npx --prefix tests/e2e playwright install --with-deps chromium
+      - name: Restore image build caches
+        id: image-build-cache
+        continue-on-error: true
+        uses: actions/cache@v6
+        with:
+          path: ci-docker-cache
+          key: image-build-${{ runner.os }}-${{ hashFiles('Cargo.lock', 'crates/kutup-chat-core/Cargo.lock', 'Dockerfile.server', 'frontend/Dockerfile') }}
+          restore-keys: |
+            image-build-${{ runner.os }}-
+      - name: Hand the caches to the image builder
+        continue-on-error: true
+        uses: reproducible-containers/buildkit-cache-dance@v3
+        with:
+          cache-map: |
+            {
+              "ci-docker-cache/server-registry": { "target": "/usr/local/cargo/registry", "id": "kutup-server-cargo-registry" },
+              "ci-docker-cache/server-target": { "target": "/build/target", "id": "kutup-server-release-target" },
+              "ci-docker-cache/browser-registry": { "target": "/usr/local/cargo/registry", "id": "kutup-browser-cargo-registry" },
+              "ci-docker-cache/browser-git": { "target": "/usr/local/cargo/git", "id": "kutup-browser-cargo-git" },
+              "ci-docker-cache/browser-target": { "target": "/src/target", "id": "kutup-browser-root-target" },
+              "ci-docker-cache/browser-chat-target": { "target": "/src/crates/kutup-chat-core/target", "id": "kutup-browser-chat-target" }
+            }
+          skip-extraction: ${{ steps.image-build-cache.outputs.cache-hit }}
+      - name: Run the custom domains browser specs
+        run: scripts/gate.sh live mail-domains
+      - name: Upload failure artifacts
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: mail-domains-browser-results
+          if-no-files-found: ignore
+          retention-days: 14
+          path: tests/e2e/sanitized-results/**
+
   chat-security-e2e:
     name: Two-server browser security
     # The browser gates build the whole stack and take the longest. They run

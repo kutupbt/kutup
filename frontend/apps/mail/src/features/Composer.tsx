@@ -34,7 +34,7 @@ import { acceptGroupKeys, GroupKeysChanged, GroupNotAllowed, KeysIdentityChanged
 import { foldAddress } from '@kutup/crypto/accountRename'
 import { armorMailPublicKey } from '@kutup/crypto'
 import { attachmentPart, describePart, inlineContentId, partContent, type Mailbox, type ParsedMessage } from '@kutup/mail-core/mime'
-import { KeyLookupFailed, PinnedKeyConflict, PinnedKeyUnusable } from '@kutup/mail-core/protection'
+import { KeyLookupFailed, PinnedKeyConflict, PinnedKeyUnusable, useKutupElsewhere } from '@kutup/mail-core/protection'
 import { groupKeys, heldKeys, useMyGroups, type MailGroup } from '@kutup/mail-core/groups'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@kutup/ui/components/select'
 import api from '@kutup/session/client'
@@ -354,8 +354,12 @@ function ComposerPanel({ base, target }: { base: MailAccount; target: ComposerTa
     setCc(nextCc)
     setBcc(nextBcc)
   }
-  // Before the server's mail setup is checked, only Kutup addresses are reachable.
-  const outsideRecipients = [...to, ...cc, ...bcc].filter((m) => isAddress(m.address) && !onServer(account, m.address))
+  // Kutup users: on this server's domain, or on a custom domain it holds
+  // (their key lookup says so). Before the server's mail setup is checked,
+  // only Kutup addresses are reachable.
+  const elsewhere = useKutupElsewhere([...to, ...cc, ...bcc].filter((m) => isAddress(m.address) && !onServer(account, m.address)).map((m) => m.address))
+  const isKutup = (address: string) => onServer(account, address) || elsewhere.kutup.has(address.trim().toLowerCase())
+  const outsideRecipients = [...to, ...cc, ...bcc].filter((m) => isAddress(m.address) && !isKutup(m.address))
   const outsideBlocked = sendingStatus.data?.outsideAllowed === false && outsideRecipients.length > 0
   const [showCopies, setShowCopies] = useState(start.draft.cc.length > 0 || start.draft.bcc.length > 0)
   const [subject, setSubject] = useState(start.draft.subject)
@@ -387,7 +391,7 @@ function ComposerPanel({ base, target }: { base: MailAccount; target: ComposerTa
   const [signChoice, setSignChoice] = useState<boolean | undefined>()
   const signOutside = mailSettings.data?.signOutside ?? true
   const sign = signChoice ?? (outsideRecipients.length === 0 || outsideRecipients.some((m) => pinned?.(m.address)?.pgp.sign ?? signOutside))
-  const kutupRecipients = [...to, ...cc, ...bcc].some((m) => isAddress(m.address) && onServer(account, m.address))
+  const kutupRecipients = [...to, ...cc, ...bcc].some((m) => isAddress(m.address) && isKutup(m.address))
   const [revision, setRevision] = useState(0)
   const draftId = useRef<string | undefined>(start.draft.id)
   const saving = useRef<Promise<void>>(Promise.resolve())
