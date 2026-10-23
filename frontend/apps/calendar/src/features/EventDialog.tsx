@@ -33,6 +33,7 @@ import { DEFAULT_DURATION_MINUTES } from './gridInteraction'
 import { zoneOptions } from './format'
 import { openEditor, useEditorTarget, type EditorTarget } from './editorState'
 import { useCalendarPrefs } from './prefs'
+import { refreshPush } from './reminders/push'
 import { ReminderList } from './reminders/ReminderList'
 import { hasRepeats } from './reminders/triggers'
 
@@ -177,7 +178,7 @@ export function EventDialog() {
     const id = await saveEvent(session, account.data, calendar, fieldsOf(next, account.data.serverDomain, existing), existing, reminders)
     // Proton asks for the browser's permission with the first device reminder.
     const applied = next.allDay ? next.reminders.allDay : next.reminders.timed
-    if (applied.some((r) => r.type === 'device') && notificationStatus() === 'default') void requestNotifications()
+    if (applied.some((r) => r.type === 'device') && notificationStatus() === 'default') void requestNotifications().then(refreshPush)
     return id
   })
   const remove = useCalendarMutation(async () => {

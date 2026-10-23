@@ -2,8 +2,8 @@ import { useSyncExternalStore } from 'react'
 import { localeWeekStart } from '@kutup/calendar-core/time'
 
 // How this browser shows calendars: the time zone, the first day of the
-// week and the clock. Kept on this device (E1); the account-wide settings
-// come with reminders (docs/plans/calendar.md, E2).
+// week and the clock, kept on this device. The zone is the account's too
+// (`/api/calendar/settings`): all-day reminders fire in it (`useAccountZone`).
 
 export interface CalendarPrefs {
   /** An IANA zone; the browser's by default. */
@@ -41,6 +41,16 @@ function read(): CalendarPrefs {
     hour12: typeof stored.hour12 === 'boolean' ? stored.hour12 : null,
   }
   return cached
+}
+
+/** Whether this device chose its zone (else it shows the browser's, or the account's once read). */
+export function zoneChosen(): boolean {
+  try {
+    const stored = JSON.parse(localStorage.getItem(KEY) ?? '{}') as Partial<CalendarPrefs>
+    return typeof stored.zone === 'string' && stored.zone !== ''
+  } catch {
+    return false
+  }
 }
 
 export function setPrefs(change: Partial<CalendarPrefs>): void {

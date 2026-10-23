@@ -10,6 +10,7 @@ import {
   updateCalendar,
   useCalendarMutation,
   type Calendar,
+  type DefaultReminders,
 } from '@kutup/calendar-core/api'
 import { useMailAccount } from '@kutup/mail-core/api'
 import { useRequiredSession } from '@kutup/session/store'
@@ -22,10 +23,14 @@ import { Label } from '@kutup/ui/components/label'
 import { Textarea } from '@kutup/ui/components/textarea'
 import { apiErrorMessage } from '@kutup/ui/lib/apiError'
 import { cn } from '@kutup/ui/lib/cn'
+import { ReminderList } from './reminders/ReminderList'
+import { hasRepeats } from './reminders/triggers'
 
 /** Kutup-crypto's limits on a calendar's name and description. */
 const MAX_NAME = 100
 const MAX_DESCRIPTION = 255
+/** Proton's default notifications per kind (`MAX_DEFAULT_NOTIFICATIONS`); the server holds its own (`calendarDefaultReminders`). */
+const MAX_DEFAULT_REMINDERS = 5
 
 /** Makes a calendar, or renames, recolours or deletes one. */
 export function CalendarDialog({ open, onOpenChange, calendar }: { open: boolean; onOpenChange: (open: boolean) => void; calendar?: Calendar }) {
@@ -36,6 +41,8 @@ export function CalendarDialog({ open, onOpenChange, calendar }: { open: boolean
   const [description, setDescription] = useState('')
   const [color, setColor] = useState<string>(CALENDAR_COLORS[0])
   const [confirming, setConfirming] = useState(false)
+  // Proton's event defaults: this member's, for timed and all-day events.
+  const [defaults, setDefaults] = useState<DefaultReminders>({ timed: [], allDay: [] })
   const owner = !calendar || (calendar.permissions & PERMISSION.owner) !== 0
 
   const save = useCalendarMutation(async () => {
@@ -44,6 +51,7 @@ export function CalendarDialog({ open, onOpenChange, calendar }: { open: boolean
     await updateCalendar(session, account.data, calendar, {
       ...(owner && (name.trim() !== calendar.name || description !== calendar.description) ? { name: name.trim(), description } : {}),
       ...(color !== calendar.color ? { color } : {}),
+      ...(JSON.stringify(defaults) !== JSON.stringify(calendar.defaultReminders) ? { defaultReminders: defaults } : {}),
     })
     return calendar.id
   })
@@ -56,6 +64,7 @@ export function CalendarDialog({ open, onOpenChange, calendar }: { open: boolean
     setName(calendar?.name ?? '')
     setDescription(calendar?.description ?? '')
     setColor(calendar?.color ?? CALENDAR_COLORS[Math.floor(Math.random() * CALENDAR_COLORS.length)])
+    setDefaults(calendar?.defaultReminders ?? { timed: [], allDay: [] })
     save.reset()
     // eslint-disable-next-line react-hooks/exhaustive-deps -- reset once per opening
   }, [open, calendar])
@@ -122,6 +131,23 @@ export function CalendarDialog({ open, onOpenChange, calendar }: { open: boolean
                 ))}
               </div>
             </fieldset>
+            {calendar ? (
+              <>
+                <div className="space-y-1.5">
+                  <Label>{t('reminders.defaults.timed')}</Label>
+                  <ReminderList id="calendar-timed" allDay={false} reminders={defaults.timed} max={MAX_DEFAULT_REMINDERS} onChange={(timed) => setDefaults((d) => ({ ...d, timed }))} />
+                </div>
+                <div className="space-y-1.5">
+                  <Label>{t('reminders.defaults.allDay')}</Label>
+                  <ReminderList id="calendar-all-day" allDay reminders={defaults.allDay} max={MAX_DEFAULT_REMINDERS} onChange={(allDay) => setDefaults((d) => ({ ...d, allDay }))} />
+                </div>
+                {hasRepeats(defaults.timed) || hasRepeats(defaults.allDay) ? (
+                  <p className="text-xs text-destructive" role="alert">
+                    {t('reminders.picker.repeats')}
+                  </p>
+                ) : null}
+              </>
+            ) : null}
             <p className="text-xs text-muted-foreground">{t('calendars.encrypted')}</p>
             {save.error ? <Alert variant="error">{apiErrorMessage(save.error, t('calendars.saveFailed'))}</Alert> : null}
             <DialogFooter className="sm:justify-between">
@@ -136,7 +162,7 @@ export function CalendarDialog({ open, onOpenChange, calendar }: { open: boolean
                 <Button type="button" variant="ghost" onClick={() => onOpenChange(false)}>
                   {t('common.cancel')}
                 </Button>
-                <Button type="submit" loading={save.isPending} disabled={!name.trim()} data-testid="calendar-save">
+                <Button type="submit" loading={save.isPending} disabled={!name.trim() || hasRepeats(defaults.timed) || hasRepeats(defaults.allDay)} data-testid="calendar-save">
                   {t('common.save')}
                 </Button>
               </div>

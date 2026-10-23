@@ -133,6 +133,25 @@
       "other": "A reminder set elsewhere ({{trigger}})",
       "repeats": "The same notification twice: change or remove one."
     },
-    "field": "Notifications"
+    "field": "Notifications",
+    "defaults": {
+      "timed": "Notifications",
+      "allDay": "All-day event notifications"
+    },
+    "push": {
+      "title": "Kutup Calendar",
+      "at": "Event at {{time}}",
+      "today": "Event today",
+      "on": "Event on {{date}}",
+      "onAt": "Event on {{date}} at {{time}}"
+    },
+    "settings": {
+      "title": "Desktop notifications",
+      "denied": "Notifications are turned off for Calendar in this browser. Allow them in the browser's site settings.",
+      "unsupported": "This browser doesn't show notifications.",
+      "allowed": "Reminders show as desktop notifications while Calendar is open.",
+      "push": "Remind me when Calendar is closed",
+      "pushHint": "The reminder says only when an event starts; its title shows once Calendar opens."
+    }
   }
 }

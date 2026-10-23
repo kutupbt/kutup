@@ -9,6 +9,7 @@ import { openEditor } from '../editorState'
 import { useCalendarPrefs } from '../prefs'
 import { alarmTag, LOOK_AHEAD_MS, PADDING_MS, runAlarms } from './alarmChain'
 import { alarmText, alarmTitle } from './alarmText'
+import { showReminder } from './push'
 
 /** RFC 3339 without milliseconds, as the server writes instants. */
 function instant(ms: number): string {
@@ -85,10 +86,10 @@ export function AlarmWatcher() {
       const nowLocal = await utcToLocal(instant(Date.now()), zone)
       const start = event.fullDay ? alarm.occurrenceStart.slice(0, 10) : await utcToLocal(alarm.occurrenceStart.replace(/\.\d+Z$/, 'Z'), zone)
       const title = alarmTitle(event.verified ? event.fields.summary : null, t('reminders.untitled'))
-      showNotification(
-        t('reminders.title'),
-        { body: alarmText(t, { title, allDay: event.fullDay, start, now: nowLocal, locale: language, hour12 }), tag: alarmTag(alarm) },
-        () => openEditor({ kind: 'edit', event }),
+      const body = alarmText(t, { title, allDay: event.fullDay, start, now: nowLocal, locale: language, hour12 })
+      const tag = alarmTag(alarm)
+      await showReminder(t('reminders.title'), { body, tag, eventId: event.id }, () =>
+        showNotification(t('reminders.title'), { body, tag }, () => openEditor({ kind: 'edit', event })),
       )
     }
     return runAlarms(list, fired.current, fire)

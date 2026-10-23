@@ -133,6 +133,25 @@
       "other": "Başka yerde kurulmuş bir hatırlatıcı ({{trigger}})",
       "repeats": "Aynı bildirim iki kez var: birini değiştirin ya da kaldırın."
     },
-    "field": "Bildirimler"
+    "field": "Bildirimler",
+    "defaults": {
+      "timed": "Bildirimler",
+      "allDay": "Tüm gün etkinlik bildirimleri"
+    },
+    "push": {
+      "title": "Kutup Takvim",
+      "at": "Etkinlik saat {{time}}",
+      "today": "Bugün etkinlik var",
+      "on": "{{date}} tarihinde etkinlik",
+      "onAt": "{{date}} {{time}} etkinlik"
+    },
+    "settings": {
+      "title": "Masaüstü bildirimleri",
+      "denied": "Bu tarayıcıda Takvim için bildirimler kapalı. Tarayıcının site ayarlarından izin verin.",
+      "unsupported": "Bu tarayıcı bildirim göstermiyor.",
+      "allowed": "Takvim açıkken hatırlatıcılar masaüstü bildirimi olarak görünür.",
+      "push": "Takvim kapalıyken de hatırlat",
+      "pushHint": "Hatırlatıcı yalnızca etkinliğin ne zaman başladığını söyler; başlığı Takvim açılınca görünür."
+    }
   }
 }

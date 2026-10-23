@@ -22,12 +22,15 @@ export function NotificationBanner({
   label,
   enable,
   dismiss,
+  onAnswer,
 }: {
   storageKey: string
   message: string
   label: string
   enable: string
   dismiss: string
+  /** After the browser answered. */
+  onAnswer?: () => void
 }) {
   const [hidden, setHidden] = useState(() => dismissed(storageKey) || notificationStatus() !== 'default')
   if (hidden) return null
@@ -43,7 +46,12 @@ export function NotificationBanner({
     <div role="region" aria-label={label} className="fixed bottom-4 left-1/2 z-40 flex w-[min(32rem,calc(100vw-2rem))] -translate-x-1/2 items-center gap-3 rounded-lg border border-border bg-card px-4 py-3 text-sm shadow-lg">
       <BellRing className="size-4 shrink-0 text-primary" aria-hidden />
       <span className="flex-1">{message}</span>
-      <Button size="sm" onClick={() => void requestNotifications().then(() => setHidden(true))}>
+      <Button size="sm" onClick={() =>
+          void requestNotifications().then(() => {
+            setHidden(true)
+            onAnswer?.()
+          })
+        }>
         {enable}
       </Button>
       <Button variant="ghost" size="icon" className="size-8" aria-label={dismiss} onClick={close}>
