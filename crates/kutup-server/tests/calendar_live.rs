@@ -1303,6 +1303,7 @@ fn reminders_and_alarms() {
         );
         std::thread::sleep(std::time::Duration::from_secs(5));
     }
+    drop_calendars(&c, &base, &ada, &[&id]);
 }
 
 #[test]
