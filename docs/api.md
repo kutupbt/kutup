@@ -2396,7 +2396,8 @@ start and id, which the client sends back for the next page (the cursor is
 the client's, so an event deleted or moved meanwhile never ends or skips a
 page); one of the two without the other is `400`. An EventView is `{ id,
 calendarId, uid, authorAddress, event: SealedEventV1, startUtc, endUtc,
-fullDay, sequence, revision, modifiedAt }`; the times are what the server read from the shared signed
+fullDay, rangeEndUtc, sequence, revision, modifiedAt, reminders }` (`reminders`:
+the caller's own for it, null for their calendar's defaults); the times are what the server read from the shared signed
 part, which a client checks again when it opens the event. A calendar the
 caller isn't a member of is `404`. `GET …/events/{eventId}` answers one.
 
@@ -2498,7 +2499,7 @@ account's once: a new session's subscription takes it over from an earlier
 one (signed out, expired or not); another account signed in to the same
 browser has its own. An account keeps at most
 `calendarPushSubscriptionsPerAccount` (10): ended sessions' go first, then
-the longest-held. A push's payload is `{ eventId, startUtc, account }`,
+the longest-held. A push's payload is `{ eventId, startUtc, allDay, account }`,
 `account` and its `Topic` keyed by the subscription's own secret
 (base64url HMAC-SHA256 over the account or event id), so the push service
 links neither two members' pushes nor one account's browsers. The push service must be on Chat's

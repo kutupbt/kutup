@@ -562,7 +562,7 @@ async fn push(
         let topic = subscription_tag(&auth, b"topic", alarm.event.as_bytes(), 32);
         let account = subscription_tag(&auth, b"account", alarm.user.as_bytes(), 22);
         let payload =
-            serde_json::json!({ "eventId": alarm.event, "startUtc": start, "account": account })
+            serde_json::json!({ "eventId": alarm.event, "startUtc": start, "allDay": alarm.all_day, "account": account })
                 .to_string();
         let body = crate::web_push_payload::encrypt(&p256dh, &auth, payload.as_bytes())?;
         match sender
