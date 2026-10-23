@@ -783,7 +783,7 @@ mod tests {
             vec![0x42; 32]
         );
         // The wrapping key is never the AEAD key.
-        let raw = Aead::new(Suite::V1, &[0x24u8; 32].as_ref()).unwrap();
+        let raw = Aead::new(Suite::V1, [0x24u8; 32].as_ref()).unwrap();
         let header_len = envelope.len() - 48;
         assert!(raw
             .open_with_nonce(

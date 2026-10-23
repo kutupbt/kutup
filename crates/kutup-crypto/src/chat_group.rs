@@ -18,9 +18,8 @@
 //!   key, so devices coming and going never touch it ([`sign_binding`],
 //!   [`verify_binding`]).
 
-use crate::primitives::{Aead, Kdf, Suite};
+use crate::primitives::{hash, Aead, Hasher, Kdf, Suite};
 use ed25519_dalek::{Signature, Signer as _, SigningKey, VerifyingKey};
-use sha2::{Digest, Sha256};
 use zeroize::Zeroizing;
 
 use crate::account_ref::AccountRef;
@@ -88,14 +87,14 @@ impl GroupHome<'_> {
                 "a group home must be a canonical server name and identity hash".into(),
             ));
         }
-        let mut hash = Sha256::new();
+        let mut hash = Hasher::new(Suite::V1);
         hash.update(HOME_DOMAIN);
         for text in [self.server, self.identity_document_hash] {
             hash.update((text.len() as u16).to_be_bytes());
             hash.update(text.as_bytes());
         }
         hash.update(self.identity_sequence.to_be_bytes());
-        Ok(hash.finalize().into())
+        Ok(hash.finish().to_array())
     }
 }
 
@@ -448,20 +447,20 @@ pub fn verify_claim_signature(
 /// The hash a change is chained and notarised by: of its canonical bytes
 /// with its signature.
 pub fn change_hash(signed_change_bytes: &[u8]) -> [u8; HASH_LEN] {
-    Sha256::new()
-        .chain_update(CHANGE_HASH_DOMAIN)
-        .chain_update(signed_change_bytes)
-        .finalize()
+    Hasher::new(Suite::V1)
+        .chain(CHANGE_HASH_DOMAIN)
+        .chain(signed_change_bytes)
+        .finish()
         .into()
 }
 
 /// The hash of a state: of its canonical bytes, which carry the sealed
 /// fields as their ciphertext, so a server can compute it.
 pub fn state_hash(state_bytes: &[u8]) -> [u8; HASH_LEN] {
-    Sha256::new()
-        .chain_update(STATE_HASH_DOMAIN)
-        .chain_update(state_bytes)
-        .finalize()
+    Hasher::new(Suite::V1)
+        .chain(STATE_HASH_DOMAIN)
+        .chain(state_bytes)
+        .finish()
         .into()
 }
 
@@ -552,7 +551,7 @@ pub fn open_group_avatar(blob: &[u8], key: &[u8; 32]) -> Result<Zeroizing<Vec<u8
 /// The SHA-256 of a blob as stored: what the avatar attribute names in the
 /// clear, so the home can serve and clean up blobs.
 pub fn avatar_blob_hash(blob: &[u8]) -> [u8; HASH_LEN] {
-    Sha256::digest(blob).into()
+    hash(Suite::V1, blob).to_array()
 }
 
 #[cfg(test)]

@@ -14,10 +14,10 @@
 //! Both addresses are on one server: moving an account between servers is a
 //! different thing, not this.
 
+use crate::primitives::{Hasher, Suite};
 use base64::{engine::general_purpose::STANDARD, Engine as _};
 use ed25519_dalek::{Signature, Signer as _, VerifyingKey};
 use serde::{Deserialize, Serialize};
-use sha2::{Digest as _, Sha256};
 
 use crate::error::{CryptoError, Result};
 use crate::identity::{incarnation_id_from_authority_public, AccountIdentityKeysV1};
@@ -149,10 +149,10 @@ impl AccountRenameV1 {
 
     /// The statement's digest: what a client remembers of a chain it verified.
     fn digest(&self) -> Result<[u8; 32]> {
-        let mut hasher = Sha256::new();
+        let mut hasher = Hasher::new(Suite::V1);
         hasher.update(self.bytes()?);
         hasher.update(self.signature.as_bytes());
-        Ok(hasher.finalize().into())
+        Ok(hasher.finish().to_array())
     }
 }
 

@@ -6,9 +6,8 @@
 //! root key. Raw master, collection, file, and link keys are never used as an
 //! AEAD key directly.
 
-use crate::primitives::{Aead, Kdf, Suite};
+use crate::primitives::{Aead, Hasher, Kdf, Suite};
 use base64::Engine as _;
-use sha2::{Digest, Sha256};
 use zeroize::Zeroizing;
 
 use crate::drive_object::{parse_canonical_uuid, DriveObjectSuiteId};
@@ -295,11 +294,11 @@ impl DriveEnvelopeContextV1 {
             ));
         }
         let file_id = parse_canonical_uuid(file_id, "whiteboard file")?;
-        let mut digest = Sha256::new();
+        let mut digest = Hasher::new(Suite::V1);
         digest.update(WHITEBOARD_ASSET_BINDING_LABEL);
         digest.update((asset_id.len() as u16).to_be_bytes());
         digest.update(asset_id.as_bytes());
-        let digest = digest.finalize();
+        let digest = digest.finish();
         Ok(Self {
             purpose: DriveEnvelopePurpose::WhiteboardAsset,
             epoch: generation,
@@ -323,10 +322,10 @@ impl DriveEnvelopeContextV1 {
             ));
         }
         let file_id = parse_canonical_uuid(file_id, "thumbnail file")?;
-        let mut digest = Sha256::new();
+        let mut digest = Hasher::new(Suite::V1);
         digest.update(THUMBNAIL_BINDING_LABEL);
         digest.update(variant.as_str().as_bytes());
-        let digest = digest.finalize();
+        let digest = digest.finish();
         Ok(Self {
             purpose: DriveEnvelopePurpose::Thumbnail,
             epoch: generation,

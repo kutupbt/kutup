@@ -1,8 +1,8 @@
 //! Account-authority-signed, hash-linked collection key epochs.
 
+use crate::primitives::{hash, Hasher, Suite};
 use base64::Engine as _;
 use ed25519_dalek::{Signature, Signer as _, SigningKey, Verifier as _, VerifyingKey};
-use sha2::{Digest as _, Sha256};
 
 use crate::drive_object::parse_canonical_uuid;
 use crate::error::{CryptoError, Result};
@@ -69,7 +69,7 @@ impl CollectionEpochStatementV1 {
         let owner_user_id = parse_canonical_uuid(owner_user_id, "owner")?;
         let collection_key_commitment =
             collection_key_commitment(collection_id, epoch, collection_key);
-        let authority_key_id = Sha256::digest(authority.verifying_key().to_bytes()).into();
+        let authority_key_id = hash(Suite::V1, authority.verifying_key().to_bytes()).to_array();
         let mut statement = Self {
             suite: CollectionEpochSuiteId::Ed25519Sha256V1,
             collection_id,
@@ -168,7 +168,7 @@ impl CollectionEpochStatementV1 {
                     expected: 32,
                     got: expected_authority_public_key.len(),
                 })?;
-        if self.authority_key_id != Sha256::digest(authority).as_slice() {
+        if self.authority_key_id != hash(Suite::V1, authority).as_bytes() {
             return Err(CryptoError::AuthFailed);
         }
         let verifying_key =
@@ -232,10 +232,10 @@ impl CollectionEpochStatementV1 {
     }
 
     pub fn statement_hash(&self) -> String {
-        let mut hasher = Sha256::new();
+        let mut hasher = Hasher::new(Suite::V1);
         hasher.update(RECORD_HASH_DOMAIN);
         hasher.update(self.encode());
-        hex::encode(hasher.finalize())
+        hex::encode(hasher.finish())
     }
 }
 
@@ -268,12 +268,12 @@ fn collection_key_commitment(
     epoch: u32,
     collection_key: &[u8],
 ) -> [u8; 32] {
-    let mut hasher = Sha256::new();
+    let mut hasher = Hasher::new(Suite::V1);
     hasher.update(KEY_COMMITMENT_DOMAIN);
     hasher.update(collection_id);
     hasher.update(epoch.to_be_bytes());
     hasher.update(collection_key);
-    hasher.finalize().into()
+    hasher.finish().to_array()
 }
 
 #[cfg(test)]

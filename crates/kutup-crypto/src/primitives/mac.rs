@@ -58,9 +58,9 @@ impl Mac {
         }
     }
 
-    pub fn update(&mut self, data: &[u8]) -> &mut Self {
+    pub fn update(&mut self, data: impl AsRef<[u8]>) -> &mut Self {
         match &mut self.0 {
-            MacInner::HmacSha256(m) => m.update(data),
+            MacInner::HmacSha256(m) => m.update(data.as_ref()),
         }
         self
     }

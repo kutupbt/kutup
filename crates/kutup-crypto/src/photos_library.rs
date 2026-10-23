@@ -13,10 +13,9 @@
 //! XChaCha20-Poly1305 ciphertext; the header is the AAD and the input of the
 //! per-envelope key.
 
-use crate::primitives::{Aead, Kdf, Suite};
+use crate::primitives::{hash, Aead, Kdf, Suite};
 use base64::Engine as _;
 use serde::{Deserialize, Serialize};
-use sha2::{Digest, Sha256};
 use zeroize::Zeroizing;
 
 use crate::drive_object::parse_canonical_uuid;
@@ -227,7 +226,7 @@ pub fn inspect(envelope: &[u8]) -> Result<PhotosLibraryContextV1> {
 /// SHA-256 of a well-formed envelope, lowercase hex: the next one's predecessor.
 pub fn envelope_digest(envelope: &[u8]) -> Result<String> {
     inspect(envelope)?;
-    Ok(hex::encode(Sha256::digest(envelope)))
+    Ok(hex::encode(hash(Suite::V1, envelope)))
 }
 
 pub fn open(

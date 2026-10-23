@@ -19,9 +19,8 @@
 //! writing device are HMAC'd, so the head tells the server nothing it does not
 //! already know.
 
-use crate::primitives::{Aead, Kdf, Mac, Suite};
+use crate::primitives::{hash, Aead, Hasher, Kdf, Mac, Suite};
 use serde::{Deserialize, Serialize};
-use sha2::{Digest as _, Sha256};
 use zeroize::Zeroizing;
 
 use crate::error::{CryptoError, Result};
@@ -81,7 +80,7 @@ impl HeadKeys {
         let mut mac = Mac::new(Suite::V1, self.id.as_slice());
         mac.update(domain);
         for part in parts {
-            mac.update(&(part.len() as u32).to_be_bytes());
+            mac.update((part.len() as u32).to_be_bytes());
             mac.update(part);
         }
         mac.finish().to_array()
@@ -139,7 +138,7 @@ impl HeadKeys {
         if pairs.windows(2).any(|pair| pair[0].0 == pair[1].0) {
             return Err(invalid("a value is listed twice"));
         }
-        let mut hasher = Sha256::new();
+        let mut hasher = Hasher::new(Suite::V1);
         hasher.update(SCOPE_DOMAIN);
         hasher.update((scope.len() as u32).to_be_bytes());
         hasher.update(scope.as_bytes());
@@ -151,7 +150,7 @@ impl HeadKeys {
         Ok(ScopeV1 {
             scope: scope.to_owned(),
             count: pairs.len() as u64,
-            digest: hex::encode(hasher.finalize()),
+            digest: hex::encode(hasher.finish()),
         })
     }
 }
@@ -262,7 +261,7 @@ impl AccountHeadV1 {
 
 /// What a head is known by: the SHA-256 of its sealed bytes.
 pub fn digest(sealed: &[u8]) -> [u8; 32] {
-    Sha256::digest(sealed).into()
+    hash(Suite::V1, sealed).to_array()
 }
 
 fn aad(binding: &str, sequence: u64) -> Result<Vec<u8>> {

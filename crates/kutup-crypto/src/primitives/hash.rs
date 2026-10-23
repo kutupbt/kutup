@@ -29,6 +29,19 @@ impl Digest {
     }
 }
 
+impl std::ops::Deref for Digest {
+    type Target = [u8];
+    fn deref(&self) -> &[u8] {
+        self.as_bytes()
+    }
+}
+
+impl From<Digest> for [u8; 32] {
+    fn from(digest: Digest) -> Self {
+        digest.to_array()
+    }
+}
+
 impl AsRef<[u8]> for Digest {
     fn as_ref(&self) -> &[u8] {
         self.as_bytes()
@@ -42,7 +55,7 @@ impl std::fmt::Debug for Digest {
 }
 
 /// The suite's hash of `data`.
-pub fn hash(suite: Suite, data: &[u8]) -> Digest {
+pub fn hash(suite: Suite, data: impl AsRef<[u8]>) -> Digest {
     let mut hasher = Hasher::new(suite);
     hasher.update(data);
     hasher.finish()
@@ -64,10 +77,16 @@ impl Hasher {
         }
     }
 
-    pub fn update(&mut self, data: &[u8]) -> &mut Self {
+    pub fn update(&mut self, data: impl AsRef<[u8]>) -> &mut Self {
         match &mut self.0 {
-            Inner::Sha256(h) => h.update(data),
+            Inner::Sha256(h) => h.update(data.as_ref()),
         }
+        self
+    }
+
+    /// `update`, by value: for building a hash in one expression.
+    pub fn chain(mut self, data: impl AsRef<[u8]>) -> Self {
+        self.update(data);
         self
     }
 

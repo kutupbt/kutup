@@ -70,7 +70,7 @@ impl ContactListKey {
     pub fn entry_id(&self, contact: &AccountRef) -> [u8; ENTRY_ID_LEN] {
         let mut mac = Mac::new(Suite::V1, self.id_key.as_ref());
         mac.update(ID_DOMAIN);
-        mac.update(&contact.bytes());
+        mac.update(contact.bytes());
         mac.finish().to_array()
     }
 

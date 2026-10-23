@@ -4,10 +4,9 @@
 //! persistence. Conversation, message, media class and display metadata remain
 //! inside the XChaCha20-Poly1305 ciphertext and are projected locally.
 
-use crate::primitives::{Aead, Kdf, Suite};
+use crate::primitives::{hash, Aead, Kdf, Suite};
 use base64::Engine as _;
 use serde::{Deserialize, Serialize};
-use sha2::{Digest, Sha256};
 use zeroize::Zeroizing;
 
 use crate::drive_object::parse_canonical_uuid;
@@ -330,7 +329,7 @@ pub fn inspect(envelope: &[u8]) -> Result<ChatAttachmentLedgerHeaderV1> {
 
 pub fn envelope_digest(envelope: &[u8]) -> Result<String> {
     parse(envelope)?;
-    Ok(hex::encode(Sha256::digest(envelope)))
+    Ok(hex::encode(hash(Suite::V1, envelope)))
 }
 
 pub fn open(

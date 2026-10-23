@@ -25,8 +25,7 @@
 //! combining dot above, so `İstanbul` and `istanbul` stay different names
 //! while `ISTANBUL` and `istanbul` do not.
 
-use crate::primitives::{Kdf, Mac, Suite};
-use sha2::{Digest, Sha256};
+use crate::primitives::{hash, Kdf, Mac, Suite};
 use unicode_normalization::UnicodeNormalization;
 
 use crate::error::{CryptoError, Result};
@@ -109,7 +108,7 @@ pub fn content_hash(hash_key: &[u8], content_sha256: &[u8]) -> Result<String> {
 /// SHA-256 of a whole plaintext held in memory (small files, tests); large
 /// files are hashed a chunk at a time by the client.
 pub fn content_sha256(plaintext: &[u8]) -> [u8; 32] {
-    Sha256::digest(plaintext).into()
+    hash(Suite::V1, plaintext).to_array()
 }
 
 #[cfg(test)]

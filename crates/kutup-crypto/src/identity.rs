@@ -9,9 +9,8 @@
 //! its private key is the 32-byte X-Wing seed the HKDF gives, its public key
 //! the 1216-byte encapsulation key derived from that seed.
 
-use crate::primitives::{Kdf, Suite};
+use crate::primitives::{hash, Hasher, Kdf, Suite};
 use ed25519_dalek::SigningKey;
-use sha2::{Digest as _, Sha256};
 use zeroize::Zeroizing;
 
 use crate::hpke_xwing;
@@ -100,14 +99,14 @@ impl AccountIdentityKeysV1 {
 }
 
 pub fn authority_key_id_from_public(authority_public_key: &[u8; 32]) -> String {
-    hex::encode(Sha256::digest(authority_public_key))
+    hex::encode(hash(Suite::V1, authority_public_key))
 }
 
 pub fn incarnation_id_from_authority_public(authority_public_key: &[u8; 32]) -> String {
-    let mut hasher = Sha256::new();
+    let mut hasher = Hasher::new(Suite::V1);
     hasher.update(INCARNATION_DOMAIN);
     hasher.update(authority_public_key);
-    hex::encode(hasher.finalize())
+    hex::encode(hasher.finish())
 }
 
 #[cfg(test)]

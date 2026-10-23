@@ -69,7 +69,7 @@ const S: Suite = Suite::V1;
 #[test]
 fn hash_matches_openssl() {
     for case in vectors().hash {
-        assert_eq!(hash(S, &h(&case.data)).as_bytes(), h(&case.digest));
+        assert_eq!(hash(S, h(&case.data)).as_bytes(), h(&case.digest));
         // In parts, the same.
         let data = h(&case.data);
         let (a, b) = data.split_at(data.len() / 2);

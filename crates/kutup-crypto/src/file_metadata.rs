@@ -10,9 +10,9 @@
 //! is strict (unknown fields and out-of-range values are refused), so every
 //! client reads and writes the same thing.
 
+use crate::primitives::{Hasher, Suite};
 use base64::{engine::general_purpose::STANDARD, Engine as _};
 use serde::{Deserialize, Serialize};
-use sha2::{Digest, Sha256};
 
 use crate::error::{CryptoError, Result};
 
@@ -225,8 +225,14 @@ pub fn decode(bytes: &[u8]) -> Result<FileMetadataV1> {
 }
 
 /// A content hash, fed as the content streams past (`FileMetadataV1::sha256`).
-#[derive(Default, Clone)]
-pub struct ContentHasher(Sha256);
+#[derive(Clone)]
+pub struct ContentHasher(Hasher);
+
+impl Default for ContentHasher {
+    fn default() -> Self {
+        Self(Hasher::new(Suite::V1))
+    }
+}
 
 impl ContentHasher {
     pub fn new() -> Self {
@@ -239,7 +245,7 @@ impl ContentHasher {
 
     /// Canonical base64 of the SHA-256.
     pub fn finish(self) -> String {
-        STANDARD.encode(self.0.finalize())
+        STANDARD.encode(self.0.finish())
     }
 }
 

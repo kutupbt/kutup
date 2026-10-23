@@ -5,9 +5,8 @@
 //! is encrypted once and can therefore be durably copied between homeservers
 //! without teaching them a filename, MIME type, sender or conversation.
 
-use crate::primitives::{Kdf, Suite};
+use crate::primitives::{hash, Kdf, Suite};
 use serde::{Deserialize, Serialize};
-use sha2::{Digest, Sha256};
 use zeroize::Zeroizing;
 
 use crate::drive_object::parse_canonical_uuid;
@@ -215,7 +214,7 @@ pub fn validate_public_object(object: &[u8], expected: ChatMediaObjectContextV1)
 }
 
 pub fn object_sha256(object: &[u8]) -> String {
-    hex::encode(Sha256::digest(object))
+    hex::encode(hash(Suite::V1, object))
 }
 
 pub fn encrypt_object(

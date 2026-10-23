@@ -721,7 +721,7 @@ mod tests {
         let mut nonce = [0u8; NONCE_LEN];
         nonce[0] = 1;
         let aad = [SETUP_AAD, &1u16.to_be_bytes()].concat();
-        let ciphertext = Aead::new(Suite::V1, &key.as_ref())
+        let ciphertext = Aead::new(Suite::V1, key.as_ref())
             .unwrap()
             .seal_with_nonce(&nonce, &aad, &serialized)
             .unwrap();

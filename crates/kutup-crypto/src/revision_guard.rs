@@ -56,9 +56,9 @@ impl GuardKeys {
         }
         let mut mac = Mac::new(Suite::V1, self.entry.as_slice());
         mac.update(ENTRY_DOMAIN);
-        mac.update(&(scope.len() as u16).to_be_bytes());
+        mac.update((scope.len() as u16).to_be_bytes());
         mac.update(scope.as_bytes());
-        mac.update(&(id.len() as u16).to_be_bytes());
+        mac.update((id.len() as u16).to_be_bytes());
         mac.update(id.as_bytes());
         Ok(hex::encode(mac.finish()))
     }
