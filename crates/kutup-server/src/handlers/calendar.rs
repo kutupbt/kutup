@@ -823,12 +823,14 @@ pub async fn events(
     }
     // An event meets the half-open window [start, end) when it starts before
     // its end and ends (or, repeating, may still recur) after its start; one
-    // of no length meets it when it starts in it. A page continues after the
+    // of no length meets it when it starts in it, so an event (or a series'
+    // last occurrence) ending at the window's start is listed too (the
+    // client keeps what meets the window). A page continues after the
     // client's cursor by (start, id).
     let mut rows: Vec<EventRow> = sqlx::query_as(&format!(
         "{EVENT_VIEW}
           WHERE e.calendar_id = $1 AND e.start_utc < $3
-            AND (COALESCE(e.range_end_utc, 'infinity'::timestamptz) > $2 OR e.start_utc >= $2)
+            AND COALESCE(e.range_end_utc, 'infinity'::timestamptz) >= $2
             AND ($4::timestamptz IS NULL OR (e.start_utc, e.id) > ($4, $5))
           ORDER BY e.start_utc, e.id
           LIMIT $6"
@@ -1144,6 +1146,24 @@ fn check_event(
     })
 }
 
+/// [`check_event`] on a blocking thread: a series' checks are CPU work, kept
+/// off the server's async threads and done before the calendar is locked.
+async fn check_event_blocking(
+    event: &SealedEventV1,
+    calendar_public_key: &[u8],
+    author_keys: &[Vec<u8>],
+    max_count: i64,
+) -> AppResult<Checked> {
+    let (event, public_key, author_keys) = (
+        event.clone(),
+        calendar_public_key.to_vec(),
+        author_keys.to_vec(),
+    );
+    tokio::task::spawn_blocking(move || check_event(&event, &public_key, &author_keys, max_count))
+        .await
+        .map_err(|error| AppError::internal(error.to_string()))?
+}
+
 /// `POST /api/calendar/calendars/{id}/events/sync` — creates, changes and
 /// deletes events, each alone (Proton's sync): one result per change.
 #[utoipa::path(
@@ -1264,6 +1284,16 @@ async fn apply(
     most_reminders: usize,
     change: &EventChange,
 ) -> AppResult<Option<Uuid>> {
+    // The parts checked first, before the calendar is locked.
+    let checked = match change {
+        EventChange::Create { id, .. } if id.get_version_num() != 4 => {
+            return Err(AppError::bad_request("an event's id is a UUID v4"));
+        }
+        EventChange::Create { event, .. } | EventChange::Update { event, .. } => {
+            Some(check_event_blocking(event, public_key, author_keys, max_count).await?)
+        }
+        EventChange::Delete { .. } => None,
+    };
     let mut tx = state.pool.begin().await?;
     // The calendar row orders the calendar's writes (the count, the UID),
     // and under it the caller is still a member who may write: a calendar
@@ -1288,31 +1318,26 @@ async fn apply(
         Some(_) => {}
     }
     let result = match change {
-        EventChange::Create {
-            id,
-            event,
-            reminders,
-        } => {
-            if id.get_version_num() != 4 {
-                return Err(AppError::bad_request("an event's id is a UUID v4"));
-            }
-            let checked = check_event(event, public_key, author_keys, max_count)?;
+        EventChange::Create { id, reminders, .. } => {
+            let checked = checked.expect("checked above");
             check_reminders(reminders.as_deref(), &checked, most_reminders)?;
             // A create retried after it landed: the same id and parts are
-            // the stored event; the id holding anything else is taken.
-            type Stored = (Uuid, String, String, String, String, Vec<u8>);
+            // the stored event; the id holding anything else is taken. Only
+            // this calendar's events are read; an id another calendar holds
+            // is taken all the same (the insert says so).
+            type Stored = (String, String, String, String, Vec<u8>);
             let stored: Option<Stored> = sqlx::query_as(
-                "SELECT calendar_id, shared_signed, shared_signed_signature,
+                "SELECT shared_signed, shared_signed_signature,
                         calendar_signed, calendar_signed_signature, shared_encrypted
-                   FROM calendar_events WHERE id = $1",
+                   FROM calendar_events WHERE id = $1 AND calendar_id = $2",
             )
             .bind(id)
+            .bind(calendar)
             .fetch_optional(&mut *tx)
             .await?;
-            if let Some((at, shared, shared_signature, own, own_signature, encrypted)) = stored {
+            if let Some((shared, shared_signature, own, own_signature, encrypted)) = stored {
                 let event = &checked.event;
-                let same = at == calendar
-                    && shared.as_bytes() == event.shared_signed.data.as_slice()
+                let same = shared.as_bytes() == event.shared_signed.data.as_slice()
                     && shared_signature == event.shared_signed.signature
                     && own.as_bytes() == event.calendar_signed.data.as_slice()
                     && own_signature == event.calendar_signed.signature
@@ -1325,7 +1350,7 @@ async fn apply(
                     "eventIdTaken",
                 ));
             }
-            check_parent(&mut tx, calendar, &checked).await?;
+            check_parent(&mut tx, calendar, &checked, false).await?;
             let count: i64 =
                 sqlx::query_scalar("SELECT COUNT(*) FROM calendar_events WHERE calendar_id = $1")
                     .bind(calendar)
@@ -1347,31 +1372,49 @@ async fn apply(
         EventChange::Update {
             id,
             base_revision,
-            event,
             reminders,
+            ..
         } => {
-            let checked = check_event(event, public_key, author_keys, max_count)?;
+            let checked = checked.expect("checked above");
             check_reminders(
                 reminders.as_ref().and_then(|r| r.as_deref()),
                 &checked,
                 most_reminders,
             )?;
-            check_parent(&mut tx, calendar, &checked).await?;
-            type Current = (String, i64, time::OffsetDateTime, i64, i32);
+            type Current = (
+                String,
+                i64,
+                time::OffsetDateTime,
+                i64,
+                i32,
+                Option<time::OffsetDateTime>,
+            );
             let current: Option<Current> = sqlx::query_as(
-                "SELECT uid, bytes, created_at, revision, sequence FROM calendar_events
+                "SELECT uid, bytes, created_at, revision, sequence, recurrence_id FROM calendar_events
                   WHERE id = $1 AND calendar_id = $2 FOR UPDATE",
             )
             .bind(id)
             .bind(calendar)
             .fetch_optional(&mut *tx)
             .await?;
-            let Some((uid, old_bytes, created_at, revision, sequence)) = current else {
+            let Some((uid, old_bytes, created_at, revision, sequence, recurrence_id)) = current
+            else {
                 return Err(AppError::not_found("not found"));
             };
             if uid != checked.shared.uid {
                 return Err(AppError::bad_request("an event keeps its UID"));
             }
+            // A series stays a series and a changed occurrence the one it
+            // changes (Proton's): never one turned into the other.
+            if recurrence_id != checked.recurrence_id {
+                return Err(coded(
+                    AppError::bad_request("an event keeps its RECURRENCE-ID"),
+                    "recurrenceIdChanged",
+                ));
+            }
+            // A changed occurrence whose series is gone stays a single
+            // event, and can still be changed.
+            check_parent(&mut tx, calendar, &checked, true).await?;
             // Made from the stored version, never an older one replayed nor
             // over another device's newer save.
             if revision != *base_revision {
@@ -1427,6 +1470,7 @@ async fn apply(
             Some(*id)
         }
         EventChange::Delete { id, base_revision } => {
+            debug_assert!(checked.is_none());
             let current: Option<(i64, i64)> = sqlx::query_as(
                 "SELECT revision, bytes FROM calendar_events
                   WHERE id = $1 AND calendar_id = $2 FOR UPDATE",
@@ -1457,15 +1501,18 @@ async fn apply(
 }
 
 /// A changed occurrence (Proton's single edit) belongs to a series in the
-/// calendar: the same UID, no RECURRENCE-ID, a rule; and its RECURRENCE-ID
-/// is one of the series' occurrences (an excluded one too: the change
-/// replaces it). A series deleted later leaves its changes as single events.
+/// calendar: the same UID, no RECURRENCE-ID, a rule; its RECURRENCE-ID is
+/// one of the series' occurrences (an excluded one too: the change replaces
+/// it); and its SEQUENCE is not behind the series'. A series deleted later
+/// leaves its changes as single events: `orphan_ok` (a change of an existing
+/// one) lets them be changed still.
 async fn check_parent(
     tx: &mut Transaction<'_, Postgres>,
     calendar: Uuid,
     checked: &Checked,
+    orphan_ok: bool,
 ) -> AppResult<()> {
-    let Some(recurrence_id) = &checked.shared.recurrence_id else {
+    let Some(recurrence_id) = checked.shared.recurrence_id.clone() else {
         return Ok(());
     };
     let parent: Option<String> = sqlx::query_scalar(
@@ -1477,6 +1524,9 @@ async fn check_parent(
     .fetch_optional(&mut **tx)
     .await?;
     let Some(parent) = parent else {
+        if orphan_ok {
+            return Ok(());
+        }
         return Err(coded(
             AppError::bad_request("a changed occurrence needs its series in the calendar"),
             "parentMissing",
@@ -1490,12 +1540,22 @@ async fn check_parent(
         .map(Rule::parse)
         .transpose()
         .map_err(|_| stored())?;
+    if checked.shared.sequence < parent.sequence {
+        return Err(AppError::conflict(
+            "a changed occurrence's SEQUENCE is not behind its series'",
+        )
+        .with_details(serde_json::json!({ "code": "sequenceBehind" })));
+    }
     let bare = Series::new(&parent.dtstart, parent.dtend.as_ref(), rule.as_ref(), &[])
         .map_err(|_| stored())?;
-    if !bare
-        .occurs_at_all(std::slice::from_ref(recurrence_id))
-        .map_err(crypto)?
-    {
+    // Off the async thread, as the event's own checks.
+    let occurs = tokio::task::spawn_blocking(move || {
+        bare.occurs_at_all(std::slice::from_ref(&recurrence_id))
+    })
+    .await
+    .map_err(|error| AppError::internal(error.to_string()))?
+    .map_err(crypto)?;
+    if !occurs {
         return Err(coded(
             AppError::bad_request("RECURRENCE-ID is not an occurrence of the series"),
             "notAnOccurrence",
@@ -1590,6 +1650,15 @@ async fn insert_as(
     .fetch_one(&mut **tx)
     .await
     .map_err(|error| match &error {
+        // The id is another calendar's event's.
+        sqlx::Error::Database(db)
+            if db.is_unique_violation() && db.constraint() == Some("calendar_events_pkey") =>
+        {
+            coded(
+                AppError::conflict("another event has this id"),
+                "eventIdTaken",
+            )
+        }
         sqlx::Error::Database(db) if db.is_unique_violation() => {
             AppError::conflict("an event with this UID is in the calendar")
                 .with_details(serde_json::json!({ "code": "uidTaken" }))

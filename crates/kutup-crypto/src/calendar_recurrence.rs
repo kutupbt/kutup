@@ -632,15 +632,40 @@ impl Series {
     /// When the last occurrence ends, or `None` for a series without end
     /// (the server's `range_end_utc`).
     pub fn range_end(&self) -> Result<Option<Timestamp>> {
-        match &self.rule {
-            Some(rule) if rule.count.is_none() && rule.until.is_none() => Ok(None),
+        let until = match &self.rule {
+            Some(rule) if rule.count.is_none() && rule.until.is_none() => return Ok(None),
+            Some(Rule {
+                count: None,
+                until: Some(until),
+                ..
+            }) => *until,
+            // A single event or a COUNT: a walk of at most COUNT.
             _ => {
                 let mut last = None;
                 for occurrence in self.occurrences() {
                     last = Some(occurrence?.end_utc);
                 }
-                Ok(last)
+                return Ok(last);
             }
+        };
+        // UNTIL without COUNT: the last occurrences only, from a little
+        // before UNTIL, further back while none is found there (every one
+        // excluded, or a rule that skips periods), never from DTSTART on.
+        let until_date = match until {
+            Until::Date(day) => day,
+            Until::Utc(instant) => instant.to_zoned(jiff::tz::TimeZone::UTC).date(),
+        };
+        let mut back: i64 = 64;
+        loop {
+            let from = until_date.checked_sub(back.days()).unwrap_or(first_date());
+            let mut last = None;
+            for occurrence in self.occurrences_from_date(from) {
+                last = Some(occurrence?.end_utc);
+            }
+            if last.is_some() || from <= local_of(&self.start).date() {
+                return Ok(last);
+            }
+            back = back.saturating_mul(4);
         }
     }
 
@@ -671,6 +696,28 @@ impl Series {
             .collect();
         wanted.sort();
         wanted.dedup();
+        if self.skips() {
+            // Each looked up where it is: a few periods each, never the
+            // years between them.
+            for (local, tzid) in wanted {
+                let mut found = false;
+                for occurrence in self.occurrences_from_date(local.date()) {
+                    let occurrence = occurrence?;
+                    let at = local_of(&occurrence.start);
+                    if at > local {
+                        break;
+                    }
+                    if at == local {
+                        found = tzid == occurrence.start.tzid();
+                        break;
+                    }
+                }
+                if !found {
+                    return Ok(false);
+                }
+            }
+            return Ok(true);
+        }
         let mut next = 0;
         for occurrence in self.occurrences() {
             let Some((local, tzid)) = wanted.get(next) else {
@@ -694,9 +741,49 @@ impl Series {
 
     /// Every occurrence in order, `EXDATE`s removed.
     pub fn occurrences(&self) -> impl Iterator<Item = Result<Occurrence>> + '_ {
-        self.candidates()
+        self.candidates_from(None)
             .filter(|(_, local)| self.excluded.binary_search(local).is_err())
             .map(|(number, local)| self.occurrence(number, local))
+    }
+
+    /// The occurrences in order from about `from` on: every one starting at
+    /// or after it, and perhaps a few just before (callers filter). A series
+    /// without `COUNT` skips the years before it, so a walk costs what it
+    /// looks at (a server's checks and alarms), not the years since
+    /// `DTSTART`; its occurrences then carry `number` 0 (not counted). With
+    /// `COUNT` the walk starts at `DTSTART` (at most `COUNT` long) and numbers
+    /// each.
+    pub fn occurrences_from(
+        &self,
+        from: Timestamp,
+    ) -> impl Iterator<Item = Result<Occurrence>> + '_ {
+        let zone = match &self.start {
+            EventTime::Zoned { tzid, .. } => time_zone(tzid).unwrap_or(jiff::tz::TimeZone::UTC),
+            _ => jiff::tz::TimeZone::UTC,
+        };
+        // A day early: an all-day occurrence starts at its date's midnight
+        // in UTC, a zoned one up to a day off UTC's date.
+        let date = from
+            .to_zoned(zone)
+            .date()
+            .checked_sub(1.days())
+            .unwrap_or(first_date());
+        self.occurrences_from_date(date)
+    }
+
+    fn occurrences_from_date(
+        &self,
+        date: civil::Date,
+    ) -> impl Iterator<Item = Result<Occurrence>> + '_ {
+        self.candidates_from(Some(date))
+            .filter(|(_, local)| self.excluded.binary_search(local).is_err())
+            .map(|(number, local)| self.occurrence(number, local))
+    }
+
+    /// Whether a walk may skip ahead: a rule without `COUNT` (nothing to
+    /// count from `DTSTART`).
+    fn skips(&self) -> bool {
+        self.rule.as_ref().is_some_and(|rule| rule.count.is_none())
     }
 
     fn occurrence(&self, number: u32, local: civil::DateTime) -> Result<Occurrence> {
@@ -744,10 +831,26 @@ impl Series {
     /// The rule's occurrences before `EXDATE`, numbered, in order, up to its
     /// `COUNT` or `UNTIL` and the last supported date.
     fn candidates(&self) -> impl Iterator<Item = (u32, civil::DateTime)> + '_ {
+        self.candidates_from(None)
+    }
+
+    /// [`Self::candidates`], from the period before the one holding `from`
+    /// on when the series [skips](Self::skips) (numbered 0 then).
+    fn candidates_from(
+        &self,
+        from: Option<civil::Date>,
+    ) -> impl Iterator<Item = (u32, civil::DateTime)> + '_ {
         let base = local_of(&self.start);
         let time = base.time();
         let rule = self.rule.clone();
-        let mut period: i64 = 0;
+        let first_period = match (&rule, from) {
+            (Some(rule), Some(from)) if self.skips() && from > base.date() => {
+                period_of(rule, base.date(), from).saturating_sub(1).max(0)
+            }
+            _ => 0,
+        };
+        let counted = first_period == 0;
+        let mut period: i64 = first_period;
         let mut pending: Vec<civil::Date> = Vec::new();
         let mut number: u32 = 0;
         let mut done = false;
@@ -779,6 +882,9 @@ impl Series {
                 if past_until || date > last_date() {
                     done = true;
                     return None;
+                }
+                if !counted {
+                    return Some((0, local));
                 }
                 number += 1;
                 if let Some(count) = rule.count {
@@ -815,6 +921,29 @@ fn instant_of(start: &EventTime, local: civil::DateTime) -> Option<Timestamp> {
             .ok()
             .map(|zoned| zoned.timestamp()),
     }
+}
+
+/// The period (0 is `base`'s) whose span holds `date` (never more: a period
+/// may have no date, so the walk goes on from there).
+fn period_of(rule: &Rule, base: civil::Date, date: civil::Date) -> i64 {
+    let interval = i64::from(rule.interval.max(1));
+    let periods = match rule.frequency {
+        Frequency::Daily => (date - base).get_days() as i64,
+        Frequency::Weekly => {
+            let wkst = rule.wkst.unwrap_or(Weekday::Monday);
+            let week_of = |day: civil::Date| {
+                day.checked_sub(i64::from(day.weekday().since(wkst)).days())
+                    .unwrap_or(day)
+            };
+            (week_of(date) - week_of(base)).get_days() as i64 / 7
+        }
+        Frequency::Monthly => {
+            (i64::from(date.year()) - i64::from(base.year())) * 12
+                + (i64::from(date.month()) - i64::from(base.month()))
+        }
+        Frequency::Yearly => i64::from(date.year()) - i64::from(base.year()),
+    };
+    (periods / interval).max(0)
 }
 
 /// The dates of the `period`th period (0 is `base`'s), in order; `None`
@@ -1139,6 +1268,122 @@ mod tests {
     /// The heaviest series a write can name: daily from 1970 to 2037 with
     /// the most EXDATEs. A write expands it a few times (the range end, the
     /// EXDATE check); each stays bounded, so writes are no CPU lever.
+    /// A walk that skips ahead finds what the walk from DTSTART finds: the
+    /// same occurrences from a point on, the same checks, the same range end.
+    #[test]
+    fn skipping_ahead_finds_what_the_whole_walk_finds() {
+        // Each rule with a date its DTSTART may be (its first occurrence).
+        let rules = [
+            ("FREQ=DAILY;INTERVAL=3", civil::date(2001, 1, 31)),
+            (
+                "FREQ=WEEKLY;INTERVAL=2;BYDAY=MO,WE,SU",
+                civil::date(2001, 1, 31),
+            ),
+            ("FREQ=WEEKLY;BYDAY=TU;WKST=SU", civil::date(2001, 1, 30)),
+            ("FREQ=MONTHLY;BYMONTHDAY=31", civil::date(2001, 1, 31)),
+            (
+                "FREQ=MONTHLY;BYDAY=FR;BYSETPOS=-1",
+                civil::date(2001, 1, 26),
+            ),
+            (
+                "FREQ=MONTHLY;INTERVAL=5;BYMONTHDAY=-1",
+                civil::date(2001, 1, 31),
+            ),
+            (
+                "FREQ=YEARLY;BYMONTH=2;BYMONTHDAY=29",
+                civil::date(2000, 2, 29),
+            ),
+            (
+                "FREQ=YEARLY;INTERVAL=3;BYYEARDAY=-1",
+                civil::date(2000, 12, 31),
+            ),
+        ];
+        let mut checked = 0;
+        for (text, day) in rules {
+            // Timed (02:30, which some days in Berlin skip) and all-day.
+            let starts = [
+                (
+                    EventTime::Zoned {
+                        local: day.at(2, 30, 0, 0),
+                        tzid: "Europe/Berlin".into(),
+                    },
+                    EventTime::Zoned {
+                        local: day.at(3, 30, 0, 0),
+                        tzid: "Europe/Berlin".into(),
+                    },
+                ),
+                (
+                    EventTime::Date(day),
+                    EventTime::Date(day.checked_add(1.day()).unwrap()),
+                ),
+            ];
+            for until in ["", ";UNTIL=20300301T000000Z", ";UNTIL=20300301"] {
+                for (start, end) in &starts {
+                    let date_start = matches!(start, EventTime::Date(_));
+                    // UNTIL of the start's kind only.
+                    if (until.ends_with('Z') && date_start)
+                        || (until.len() > 1 && !until.ends_with('Z') && !date_start)
+                    {
+                        continue;
+                    }
+                    let rule = Rule::read(&format!("{text}{until}")).unwrap();
+                    let series = Series::new(start, Some(end), Some(&rule), &[]).unwrap();
+                    checked += 1;
+                    let all: Vec<Occurrence> =
+                        series.occurrences().take(400).map(Result::unwrap).collect();
+                    // Some occurrences excluded, the series checked again.
+                    let excluded: Vec<EventTime> = all
+                        .iter()
+                        .skip(5)
+                        .step_by(7)
+                        .map(|o| o.start.clone())
+                        .collect();
+                    let series = Series::new(start, Some(end), Some(&rule), &excluded).unwrap();
+                    let all: Vec<Occurrence> =
+                        series.occurrences().take(400).map(Result::unwrap).collect();
+                    for pick in [0, 1, 17, 100, all.len().saturating_sub(1)] {
+                        let Some(at) = all.get(pick) else { continue };
+                        let from: Vec<Timestamp> = series
+                            .occurrences_from(at.start_utc)
+                            .map(|o| o.unwrap().start_utc)
+                            .filter(|t| *t >= at.start_utc)
+                            .take(30)
+                            .collect();
+                        let expected: Vec<Timestamp> =
+                            all[pick..].iter().map(|o| o.start_utc).take(30).collect();
+                        let n = from.len().min(expected.len());
+                        assert_eq!(from[..n], expected[..n], "{text}{until} from #{pick}");
+                    }
+                    let some: Vec<EventTime> =
+                        all.iter().step_by(13).map(|o| o.start.clone()).collect();
+                    let bare = Series::new(start, Some(end), Some(&rule), &[]).unwrap();
+                    assert!(bare.occurs_at_all(&some).unwrap(), "{text}{until}");
+                    assert!(bare.occurs_at_all(&excluded).unwrap(), "{text}{until}");
+                    // A time no occurrence has.
+                    if let Some(first) = all.first() {
+                        let off = match &first.start {
+                            EventTime::Zoned { local, tzid } => EventTime::Zoned {
+                                local: local.checked_add(1.hour()).unwrap(),
+                                tzid: tzid.clone(),
+                            },
+                            EventTime::Date(day) => {
+                                EventTime::Date(day.checked_add(1.day()).unwrap())
+                            }
+                            other => other.clone(),
+                        };
+                        let whole = series.occurrences().any(|o| o.unwrap().start == off);
+                        assert_eq!(bare.occurs_at_all(&[off]).unwrap(), whole, "{text}{until}");
+                    }
+                    if !until.is_empty() {
+                        let whole = series.occurrences().last().map(|o| o.unwrap().end_utc);
+                        assert_eq!(series.range_end().unwrap(), whole, "{text}{until}");
+                    }
+                }
+            }
+        }
+        assert_eq!(checked, 32);
+    }
+
     #[test]
     fn the_heaviest_series_stays_bounded() {
         let start = zoned("1970-01-01T09:00:00", "Europe/Istanbul");
