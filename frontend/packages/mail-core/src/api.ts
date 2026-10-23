@@ -31,13 +31,13 @@ import { keysFor, type ContactEmailPgp, type ContactKey } from '@kutup/contacts-
 import api from '@kutup/session/client'
 import { useRequiredSession, type Session } from '@kutup/session/store'
 import { addFirstAddressKey } from './addressKey'
-import { addressKeys, forgetKeys, GroupAddress, groupMembers, NoKutupAddress } from './keys'
+import { AddressDisabled, addressKeys, forgetKeys, GroupAddress, groupMembers, NoKutupAddress } from './keys'
 import { checkedAddresses, OwnKeyListRolledBack, type CheckedKey } from './keyList'
 import { sanitizeSignature } from './sanitize'
 import { searchText } from './searchText'
 import { attachmentPart, buildBody, buildInlineMessage, buildMessage, buildPgpMessage, buildSignedMessage, describePart, inlineContentId, newMessageId, parseMessage, partContent, type Mailbox, type ParsedMessage, type Receipt } from './mime'
 import { autocryptKey, openPgp } from './pgp'
-import { PinnedKeyUnusable, pgpKey, protectionFor } from './protection'
+import { PinnedKeyConflict, PinnedKeyUnusable, pgpKey, protectionFor } from './protection'
 
 // Mail (docs/plans/mail.md): the folders' readable fields from the server,
 // each message opened here with the address key, and messages written here,
@@ -158,9 +158,27 @@ export interface FolderCount {
 }
 
 /** The account's own address and its key, as the browser uses them. */
-export interface MailAccount {
+/** One of the account's addresses that sends: enabled, with a verified primary key. */
+export interface MailSender {
+  addressId: string
   address: string
-  domain: string
+  /** Its display name and signature (Proton's identity is per address). */
+  name: string
+  signature: string
+  publicKey: string
+  key: SealedMailKey
+}
+
+export interface MailAccount {
+  /** The address that sends (the default, or the one the composer chose). */
+  addressId: string
+  address: string
+  /**
+   * This server's own mail domain (`/user/me`'s server), never
+   * the From's: who is a Kutup user and who is outside is judged by it. The
+   * sending address's domain (`address`) only names its Message-IDs.
+   */
+  serverDomain: string
   /** The display name outgoing mail carries (Mail → Settings → Identity). */
   name: string
   /** The signature new messages start with (HTML, sanitised); empty for none. */
@@ -185,6 +203,8 @@ export interface MailAccount {
   ownPublicKeys: string[]
   /** Whether `address` is one of the account's, in any spelling (compared folded). */
   isOwnAddress: (address: string | null | undefined) => boolean
+  /** Every address it can send from, the default first (the composer's From). */
+  senders: MailSender[]
   /**
    * What opens this account's shares of shared mailboxes' keys: the account
    * (its server and id) and its account-level HPKE private key (base64).
@@ -274,6 +294,16 @@ export interface OwnAddressRow {
   id: string
   address: string
   state: 'active' | 'receiving' | 'closed' | 'freed'
+  /** The custom domain it is on; null for the server's own. */
+  domainId: string | null
+  /** Its place in the account's order: the first enabled one with a key is the default. */
+  position: number
+  /** Disabled: it neither receives nor sends; its keys keep opening its mail. */
+  disabled: boolean
+  /** It sends now (as the server says): current, enabled, with a primary key, on a usable domain. */
+  usable: boolean
+  /** The account's default (as the server chooses it): the first usable address in its order. */
+  isDefault: boolean
   keys: { fingerprint: string; sha256Fingerprint: string; publicKey: string; privateKeyEnvelope: string; primary: boolean; flags: number; forwarding?: boolean }[]
   keyList: { data: string; signature: string } | null
 }
@@ -301,21 +331,35 @@ export function mailAccountOf(
   identity: Pick<MailIdentity, 'displayName' | 'signature'> | null,
   session: Pick<Session, 'masterKey' | 'envelopeBinding' | 'username' | 'privateKey'>,
   fold: (address: string) => string | null,
-  /** The account itself, as `/user/me` names it: its server and id. */
-  self: AccountRef,
+  /**
+   * The account itself, as `/user/me` names it: its server and id, and
+   * this server's mail domain (its server name: Kutup addresses are
+   * `username@server`).
+   */
+  self: AccountRef & { domain: string },
+  /** The other sending addresses' identities, by address id. */
+  identities: Readonly<Record<string, Pick<MailIdentity, 'displayName' | 'signature'>>> = {},
 ): MailAccount {
   // Forwarding keys open only forwarded mail: never primary, never among
   // the keys that open the account's own mail or vouch for its signatures.
   const ownKeys = (row: CheckedOwnAddress) => row.keys.filter((k) => !k.forwarding)
-  const current = rows.find((row) => row.state === 'active')
+  // The default, as the server chooses it (the first usable address in the
+  // account's order); with none usable yet, the first enabled current one
+  // with a key, or the first enabled one, which then gets its first key.
+  const enabled = rows.filter((row) => row.state === 'active' && !row.disabled)
+  const current =
+    enabled.find((row) => row.isDefault) ?? enabled.find((row) => row.keys.length > 0 || row.keyList !== null) ?? enabled[0]
   // No key yet is only an address without a key list too: one with a list
   // and no rows lost its keys on the server's side.
   if (!current || (current.keys.length === 0 && current.keyList === null)) throw new NoAddressKey()
   // The signed primary, usable (neither obsolete nor compromised), and its
   // row's public key checked.
   const usable = MAIL_KEY_FLAGS.notCompromised | MAIL_KEY_FLAGS.notObsolete
-  const signedPrimary = current.verifiedList?.keys.find((entry) => entry.primary && (entry.flags & usable) === usable)
-  const primary = signedPrimary && ownKeys(current).find((k) => k.listed && k.fingerprint === signedPrimary.fingerprint)
+  const primaryOf = (row: CheckedOwnAddress) => {
+    const signed = row.verifiedList?.keys.find((entry) => entry.primary && (entry.flags & usable) === usable)
+    return signed ? ownKeys(row).find((k) => k.listed && k.fingerprint === signed.fingerprint) : undefined
+  }
+  const primary = primaryOf(current)
   if (!primary) throw new UnverifiedOwnKeys(current.address)
   // A key the account marked compromised vouches for nothing it signs.
   const trusted = (row: CheckedOwnAddress, key: CheckedOwnAddress['keys'][number]) =>
@@ -333,9 +377,23 @@ export function mailAccountOf(
     envelope: key.privateKeyEnvelope,
     fingerprint: key.fingerprint,
   })
+  const displayName = (row: CheckedOwnAddress) =>
+    (row === current ? identity?.displayName : identities[row.id]?.displayName) || session.username || ''
+  const signatureOf = (row: CheckedOwnAddress) =>
+    sanitizeSignature((row === current ? identity?.signature : identities[row.id]?.signature) ?? '')
+  // Every other address that sends now (as the server says): a custom
+  // domain's that isn't usable yet doesn't.
+  const senders: MailSender[] = [current, ...enabled.filter((row) => row !== current && row.usable)].flatMap((row) => {
+    const key = row === current ? primary : primaryOf(row)
+    return key
+      ? [{ addressId: row.id, address: row.address, name: displayName(row), signature: signatureOf(row), publicKey: key.publicKey, key: sealed(row)(key) }]
+      : []
+  })
   return {
+    addressId: current.id,
+    senders,
     address: current.address,
-    domain: current.address.split('@')[1] ?? '',
+    serverDomain: self.domain.toLowerCase(),
     name: identity?.displayName || session.username || '',
     signature: sanitizeSignature(identity?.signature ?? ''),
     publicKey: primary.publicKey,
@@ -359,6 +417,27 @@ export function mailAccountOf(
   }
 }
 
+/**
+ * Whether an address is on this server's own mail domain (any case): a
+ * Kutup user's, never judged by the domain the account writes from.
+ */
+export function onServer(account: Pick<MailAccount, 'serverDomain'>, address: string): boolean {
+  return address.trim().toLowerCase().endsWith(`@${account.serverDomain}`)
+}
+
+/** The account writing as one of its addresses (the composer's From). */
+export function asSender(account: MailAccount, sender: MailSender): MailAccount {
+  return {
+    ...account,
+    addressId: sender.addressId,
+    address: sender.address,
+    name: sender.name,
+    signature: sender.signature,
+    publicKey: sender.publicKey,
+    key: sender.key,
+  }
+}
+
 export function useMailAccount() {
   const session = useRequiredSession()
   return useQuery({
@@ -372,7 +451,9 @@ export function useMailAccount() {
       // The current address sends; the earlier ones (after a rename) only
       // keep the keys their mail opens with.
       let { data } = await api.get<OwnAddressRow[]>('/mail/addresses')
-      const active = data.find((row) => row.state === 'active')
+      // The account's own address: one on a custom domain gets its keys by
+      // "Generate missing keys" (Proton's), never silently.
+      const active = data.find((row) => row.state === 'active' && row.domainId === null)
       // Only an address with no key and no key list: a server that drops the
       // rows of a keyed address can't have a fresh first list signed.
       if (active && active.keys.length === 0 && active.keyList === null) {
@@ -388,7 +469,21 @@ export function useMailAccount() {
       const { data: me } = await api.get<{ server: string; accountId: string }>('/user/me')
       // Strict: a list older than one this device has seen stops Mail.
       const checked = await checkedAddresses(session, data, { strict: true })
-      return mailAccountOf(checked, identity, session, await addressFolder(), { server: me.server, accountId: me.accountId })
+      // Each sending address's own name and signature (Proton's per-address
+      // identity); the default's is `identity`.
+      const others = data.filter((row) => row.state === 'active' && !row.disabled && row.keys.length > 0)
+      const identities = Object.fromEntries(
+        await Promise.all(
+          others.map(async (row) => [
+            row.id,
+            await api
+              .get<MailIdentity>('/mail/identity', { params: { addressId: row.id } })
+              .then((r) => r.data)
+              .catch(() => ({ displayName: '', signature: '' })),
+          ]),
+        ),
+      ) as Record<string, Pick<MailIdentity, 'displayName' | 'signature'>>
+      return mailAccountOf(checked, identity, session, await addressFolder(), { server: me.server, accountId: me.accountId, domain: me.server }, identities)
     },
   })
 }
@@ -401,19 +496,21 @@ export interface MailIdentity {
   signature: string
 }
 
-export function useMailIdentity() {
+/** An address's display name and signature: `addressId`'s, or the default address's. */
+export function useMailIdentity(addressId?: string) {
   return useQuery({
-    queryKey: ['mail', 'identity'],
-    queryFn: async () => (await api.get<MailIdentity>('/mail/identity')).data,
+    queryKey: ['mail', 'identity', addressId ?? null],
+    queryFn: async () => (await api.get<MailIdentity>('/mail/identity', { params: addressId ? { addressId } : {} })).data,
   })
 }
 
-export function useUpdateMailIdentity() {
+export function useUpdateMailIdentity(addressId?: string) {
   const queryClient = useQueryClient()
   return useMutation({
-    mutationFn: async (change: Partial<Pick<MailIdentity, 'displayName' | 'signature'>>) => (await api.patch<MailIdentity>('/mail/identity', change)).data,
+    mutationFn: async (change: Partial<Pick<MailIdentity, 'displayName' | 'signature'>>) =>
+      (await api.patch<MailIdentity>('/mail/identity', change, { params: addressId ? { addressId } : {} })).data,
     onSuccess: (identity) => {
-      queryClient.setQueryData(['mail', 'identity'], identity)
+      queryClient.setQueryData(['mail', 'identity', addressId ?? null], identity)
       // The composer reads both from the account.
       void queryClient.invalidateQueries({ queryKey: ['mail', 'account'] })
     },
@@ -627,7 +724,7 @@ export async function openMessageText(account: MailAccount, message: MailMessage
   const response = await api.get<ArrayBuffer>(`/mail/messages/${message.id}/content`, { responseType: 'arraybuffer' })
   const opened = await openWithKeys(account, new Uint8Array(response.data), undefined, !!message.forwardedFrom)
   const sender = message.from?.address
-  const outside = message.direction === 'inbound' && !!sender && !sender.endsWith(`@${account.domain}`)
+  const outside = message.direction === 'inbound' && !!sender && !onServer(account, sender)
   const pgp = outside
     ? await openPgp(
         opened.data,
@@ -672,7 +769,7 @@ export async function openMessage(account: MailAccount, message: MailMessage, pi
     if (!opened.signed || opened.verified) break
     opened = await open(stored, candidate)
   }
-  const outside = message.direction === 'inbound' && sender && !sender.endsWith(`@${account.domain}`)
+  const outside = message.direction === 'inbound' && !!sender && !onServer(account, sender)
   // A Kutup user's mail they sent with Encrypt off (docs/plans/mail-encrypt-sign.md):
   // readable on the way, encrypted on arrival; its signature, if any, is
   // checked against the sender's own key list.
@@ -914,7 +1011,7 @@ const imageSendersKey = ['mail', 'image-senders'] as const
  */
 export function useSenderKey(address: string | null | undefined) {
   const account = useMailAccount()
-  const domain = account.data?.domain.toLowerCase()
+  const domain = account.data?.serverDomain
   return useQuery({
     queryKey: ['mail', 'sender-key', address?.trim().toLowerCase(), domain],
     enabled: !!address && !!domain,
@@ -1097,6 +1194,9 @@ function meta(account: MailAccount, draft: Draft) {
   return {
     subject: draft.subject,
     fromName: account.name,
+    // Which of the account's addresses it is from (a shared mailbox's
+    // `fromGroup` takes precedence on the server).
+    fromAddress: account.addressId,
     to: draft.to,
     cc: draft.cc,
     bcc: draft.bcc,
@@ -1128,7 +1228,7 @@ function blob(bytes: Uint8Array, type = 'application/octet-stream'): Blob {
 
 /** A new, empty draft's fields. */
 export function emptyDraft(account: MailAccount, init: Partial<Draft> = {}): Draft {
-  return { to: [], cc: [], bcc: [], subject: '', html: '', text: '', attachments: [], messageId: newMessageId(account.domain), ...init }
+  return { to: [], cc: [], bcc: [], subject: '', html: '', text: '', attachments: [], messageId: newMessageId(account.address.split('@')[1] ?? ''), ...init }
 }
 
 /** Saves a draft's text and fields (its attachments are uploaded on their own). */
@@ -1210,6 +1310,13 @@ export interface SendRecipient {
 export class UnknownRecipient extends Error {
   constructor(readonly address: string) {
     super(`${address} is not a Kutup address`)
+  }
+}
+
+/** A recipient's address is disabled by its owner: the message isn't sent, to anyone. */
+export class RecipientDisabled extends Error {
+  constructor(readonly address: string) {
+    super(`${address} is disabled`)
   }
 }
 
@@ -1328,12 +1435,31 @@ export async function sendDraft(
   const content = { html: draft.html, text: draft.text, attachments: attachmentParts, receipt: draft.receipt, plain: draft.plain }
   const message = buildMessage({ ...header, ...content })
   const everyone = [...new Set([...draft.to, ...draft.cc, ...draft.bcc].map((m) => m.address.toLowerCase()))]
-  const local = everyone.filter((address) => address.endsWith(`@${account.domain}`))
-  const external = everyone.filter((address) => !local.includes(address))
+  // Kutup recipients: the server's own domain, and any other address this
+  // server holds (a custom domain), as its key lookup says (Proton's
+  // internal recipients). A disabled one stops the send: never another way.
+  const held = await Promise.all(
+    everyone.map(async (address) => {
+      if (onServer(account, address)) return true
+      try {
+        await addressKeys(address)
+        // This server's word never outranks keys Contacts trust for it.
+        if ((pinned(address)?.keys.length ?? 0) > 0) throw new PinnedKeyConflict(address)
+        return true
+      } catch (error) {
+        if (error instanceof PinnedKeyConflict) throw error
+        if (error instanceof AddressDisabled) throw new RecipientDisabled(address)
+        if (error instanceof NoKutupAddress) return false
+        throw error
+      }
+    }),
+  )
+  const local = everyone.filter((_, i) => held[i])
+  const external = everyone.filter((_, i) => !held[i])
   const bcc = new Set(draft.bcc.map((m) => m.address.toLowerCase()))
 
   // Outside recipients' keys, and the PGP/MIME messages for them.
-  const protections = await Promise.all(external.map((address) => protectionFor(address, account.domain, pinned(address))))
+  const protections = await Promise.all(external.map((address) => protectionFor(address, account.serverDomain, pinned(address))))
   const unusable = external.find((_, i) => protections[i].kind === 'pinnedUnusable')
   if (unusable) throw new PinnedKeyUnusable(unusable)
   // Encrypt off: no outside recipient gets a PGP message.
@@ -1402,6 +1528,7 @@ export async function sendDraft(
         else readable.push(address)
       } catch (error) {
         if (error instanceof NoKutupAddress) throw new UnknownRecipient(address)
+        if (error instanceof AddressDisabled) throw new RecipientDisabled(address)
         if (!(error instanceof GroupAddress)) throw error
         for (const member of await groupMembers(address)) {
           if (member.address === self.address || targets.has(member.address) || readable.includes(member.address)) continue
@@ -1460,6 +1587,11 @@ export async function sendDraft(
     }
     if (response?.status === 422 && response.data?.code === 'unknownRecipient' && response.data.address) {
       throw new UnknownRecipient(response.data.address)
+    }
+    if (response?.status === 422 && response.data?.code === 'addressDisabled' && response.data.address) {
+      // Disabled since its keys were looked up: forgotten, and not sent.
+      forgetKeys(response.data.address)
+      throw new RecipientDisabled(response.data.address)
     }
     throw error
   }

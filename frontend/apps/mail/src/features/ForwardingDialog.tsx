@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
-import { useMailAccount } from '@kutup/mail-core/api'
+import { useMailAccount, usePinnedKeys } from '@kutup/mail-core/api'
 import {
   forwardingKindOf,
   useCreateForwarding,
@@ -45,6 +45,7 @@ export function ForwardingDialog({
 }) {
   const { t } = useTranslation()
   const account = useMailAccount()
+  const pinned = usePinnedKeys()
   const create = useCreateForwarding()
   const change = useForwardingConditions()
   const [to, setTo] = useState(forwarding?.forwardeeEmail ?? '')
@@ -72,7 +73,7 @@ export function ForwardingDialog({
     if (!account.data) return
     setChecking(true)
     try {
-      setKind((await forwardingKindOf(account.data, to.trim())).kind)
+      setKind((await forwardingKindOf(account.data, to.trim(), pinned)).kind)
       setStep('confirm')
     } catch (e) {
       setError(forwardingErrorMessage(e, t))

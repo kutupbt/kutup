@@ -429,22 +429,23 @@ pub async fn list(
     }))
 }
 
-/// A Kutup person address on this server that receives now.
-async fn local_person(state: &AppState, email: &str) -> AppResult<Option<(Uuid, Uuid, String)>> {
-    let Some((local, domain)) = email.rsplit_once('@') else {
-        return Ok(None);
-    };
-    if !domain.eq_ignore_ascii_case(&state.config.chat_server_name) {
+/// A person's current address on this server (its own domain, or a custom
+/// one it holds; as the key lookup finds them): its id, account, spelling
+/// and whether it is disabled.
+async fn local_person(
+    state: &AppState,
+    email: &str,
+) -> AppResult<Option<(Uuid, Uuid, String, bool)>> {
+    if !email.contains('@') {
         return Ok(None);
     }
     Ok(sqlx::query_as(
-        "SELECT a.id, a.user_id, a.address FROM mail_addresses a
+        "SELECT a.id, a.user_id, a.address, a.disabled_at IS NOT NULL FROM mail_addresses a
            JOIN users u ON u.id = a.user_id AND u.is_active
-          WHERE a.folded = kutup_fold($1) || '@' || lower($2)
+          WHERE a.folded = kutup_address_folded($1)
             AND a.state = 'active' AND a.group_id IS NULL",
     )
-    .bind(local)
-    .bind(domain)
+    .bind(email)
     .fetch_optional(&state.pool)
     .await?)
 }
@@ -462,6 +463,7 @@ async fn local_person(state: &AppState, email: &str) -> AppResult<Option<(Uuid, 
         (status = 201, description = "Pending until the forwardee accepts", body = MailForwarding),
         (status = 400, description = "Not a valid forwarding (codes: forwardingMaterialMismatch, endToEndRequired)"),
         (status = 409, description = "forwardingExists, forwardingLimit, forwardingUnavailable"),
+        (status = 422, description = "The forwardee's Kutup address is disabled (addressDisabled)"),
     )
 )]
 pub async fn create(
@@ -491,11 +493,19 @@ pub async fn create(
         return Err(AppError::bad_request("forwardeeEmail is not an address"));
     }
 
-    let Some((forwardee_address_id, forwardee_user, forwardee_address)) =
+    let Some((forwardee_address_id, forwardee_user, forwardee_address, disabled)) =
         local_person(&state, &forwardee_email).await?
     else {
         return create_outside(&state, user_id, address_id, id, &req, &forwardee_email).await;
     };
+    // A disabled address receives nothing, forwarded copies included (as
+    // its key lookup says): never another way to it.
+    if disabled {
+        return Err(code(
+            AppError::new(StatusCode::UNPROCESSABLE_ENTITY, "this address is disabled"),
+            "addressDisabled",
+        ));
+    }
     let mut tx = state.pool.begin().await?;
     let forwarder_key = prepare(&mut tx, user_id, address_id).await?;
     if forwardee_user == user_id {

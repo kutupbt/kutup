@@ -3,9 +3,9 @@ import { useEffect } from 'react'
 import { acceptMailForwarding, foldAddress, MAIL_KEY_FLAGS, makeMailForwarding, toBase64, type SealedMailKey } from '@kutup/crypto'
 import api from '@kutup/session/client'
 import { useRequiredSession, type Session } from '@kutup/session/store'
-import { mailKey, useMailAccount, type MailAccount } from './api'
+import { mailKey, useMailAccount, usePinnedKeys, type MailAccount, type PinnedKeys } from './api'
 import type { FilterCondition } from './filters'
-import { addressKeys, GroupAddress, NoKutupAddress, type AddressKeys } from './keys'
+import { AddressDisabled, addressKeys, GroupAddress, NoKutupAddress, type AddressKeys } from './keys'
 import { checkedAddresses, encryptionOff, encryptionOffList, KeyListNotSigned, settleOwedKeyLists, type AddressRow, type CheckedAddress } from './keyList'
 
 // Mail forwarding (docs/plans/mail-forwarding.md), as Proton's: to a Kutup
@@ -119,7 +119,7 @@ export function useSettleOwedKeyLists() {
 
 /** The forwardee address can't be forwarded to (or isn't what the user confirmed). */
 export class ForwardeeRefused extends Error {
-  constructor(readonly reason: 'ownAddress' | 'group' | 'unverified' | 'unknown' | 'kindChanged') {
+  constructor(readonly reason: 'ownAddress' | 'group' | 'unverified' | 'unknown' | 'kindChanged' | 'disabled' | 'pinnedConflict') {
     super(`this address can't be forwarded to (${reason})`)
   }
 }
@@ -134,8 +134,10 @@ export class ForwardeeRefused extends Error {
  * one whose forwarding turns end-to-end encryption off.
  */
 export async function forwardingKindOf(
-  account: Pick<MailAccount, 'domain' | 'isOwnAddress'>,
+  account: Pick<MailAccount, 'serverDomain' | 'isOwnAddress' | 'groupHolder'>,
   email: string,
+  /** Contacts' trusted keys: this server's word for an address on another domain never outranks them. */
+  pinned?: PinnedKeys,
 ): Promise<{ kind: 'end_to_end'; keys: AddressKeys } | { kind: 'outside' }> {
   if (account.isOwnAddress(email)) throw new ForwardeeRefused('ownAddress')
   let keys: AddressKeys
@@ -143,14 +145,20 @@ export async function forwardingKindOf(
     keys = await addressKeys(email)
   } catch (error) {
     if (error instanceof NoKutupAddress) {
-      if (domainOf(email) === account.domain.toLowerCase()) throw new ForwardeeRefused('unknown')
+      if (domainOf(email) === account.serverDomain) throw new ForwardeeRefused('unknown')
       return { kind: 'outside' }
     }
     if (error instanceof GroupAddress) throw new ForwardeeRefused('group')
+    if (error instanceof AddressDisabled) throw new ForwardeeRefused('disabled')
     throw new ForwardeeRefused('unverified')
   }
   if (keys.group) throw new ForwardeeRefused('group')
-  if (keys.accountRef?.server !== account.domain.toLowerCase()) return { kind: 'outside' }
+  // An address on a custom domain this server holds, whose contact trusts
+  // other keys: refused, never the server's word over the person's.
+  if (domainOf(email) !== account.serverDomain && (pinned?.(email)?.keys.length ?? 0) > 0) throw new ForwardeeRefused('pinnedConflict')
+  // A person on this server: their account names this server, as the
+  // account's own does (`/user/me`).
+  if (keys.accountRef?.server !== account.groupHolder.account.server) return { kind: 'outside' }
   return { kind: 'end_to_end', keys }
 }
 
@@ -201,6 +209,7 @@ function sealedPrimary(session: Pick<Session, 'masterKey' | 'envelopeBinding'>, 
 export function useCreateForwarding() {
   const session = useRequiredSession()
   const account = useMailAccount()
+  const pinned = usePinnedKeys()
   const queryClient = useQueryClient()
   return useMutation({
     mutationFn: async (input: NewForwarding) => {
@@ -213,7 +222,7 @@ export function useCreateForwarding() {
         match: input.match,
         conditions: input.conditions,
       }
-      const kind = await forwardingKindOf(account.data, input.to)
+      const kind = await forwardingKindOf(account.data, input.to, pinned)
       if (kind.kind !== input.kind) throw new ForwardeeRefused('kindChanged')
       if (kind.kind === 'end_to_end') {
         const now = new Date()
@@ -247,6 +256,7 @@ export function useCreateForwarding() {
 export function useRenewForwarding() {
   const session = useRequiredSession()
   const account = useMailAccount()
+  const pinned = usePinnedKeys()
   const queryClient = useQueryClient()
   return useMutation({
     mutationFn: async (input: { forwarding: MailForwarding; from: CheckedAddress }) => {
@@ -255,7 +265,7 @@ export function useRenewForwarding() {
         throw new Error('the forwarding is not an end-to-end one from this address')
       }
       // Still a person's Kutup address on this server, as when it was set up.
-      const kind = await forwardingKindOf(account.data, input.forwarding.forwardeeEmail)
+      const kind = await forwardingKindOf(account.data, input.forwarding.forwardeeEmail, pinned)
       if (kind.kind !== 'end_to_end') throw new ForwardeeRefused('kindChanged')
       const keys = kind.keys
       if (!(await sameAddress(keys.address, input.forwarding.forwardeeEmail))) throw new ForwardeeRefused('kindChanged')

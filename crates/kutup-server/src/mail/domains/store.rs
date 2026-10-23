@@ -502,7 +502,8 @@ pub async fn set_catch_all(
         }
         let fits: bool = sqlx::query_scalar(
             "SELECT EXISTS (SELECT 1 FROM mail_addresses
-                             WHERE id = $1 AND domain_id = $2 AND user_id = $3 AND state = 'active')",
+                             WHERE id = $1 AND domain_id = $2 AND user_id = $3 AND state = 'active'
+                               AND disabled_at IS NULL)",
         )
         .bind(address)
         .bind(id)
@@ -511,7 +512,7 @@ pub async fn set_catch_all(
         .await?;
         if !fits {
             return Err(AppError::bad_request(
-                "the catch-all is an active address on the domain",
+                "the catch-all is an enabled address on the domain",
             ));
         }
     }

@@ -227,12 +227,14 @@
     "sendLimitNew": "New accounts can send to {{perDay}} outside addresses a day in their first week. Try again later.",
     "pausedNotice": "Mail to outside addresses is paused for your account; mail to Kutup users still goes.",
     "pinnedKeyUnusable": "The key you trust for {{address}} can no longer be used. Replace or remove it in Contacts.",
+    "pinnedKeyConflict": "This server says {{address}} is a Kutup user's, but you trust other keys for it in Contacts. Nothing was sent: check with them, then remove the keys in Contacts if the address moved to Kutup.",
     "keyLookupFailed": "Keys for {{address}} could not be looked up. Try again.",
     "lock": {
       "looking": "Looking up encryption keys",
       "lookupFailed": "Encryption keys could not be looked up",
       "pinned": "End-to-end encrypted with a key you trust",
       "pinnedUnusable": "The key you trust for this address can no longer be used",
+      "pinnedConflict": "This server says this is a Kutup address, but you trust other keys for it",
       "found": {
         "wkd": "End-to-end encrypted with a key from the recipient's domain (Web Key Directory)",
         "proton": "End-to-end encrypted with the recipient's Proton key",
@@ -240,7 +242,8 @@
       },
       "readableKutup": "Not end-to-end encrypted for this message: encrypted when it arrives",
       "readableOutside": "Not encrypted for this message: plain mail",
-      "encryptionDisabled": "Not end-to-end encrypted: this address forwards its mail outside Kutup, so it's encrypted when it arrives"
+      "encryptionDisabled": "Not end-to-end encrypted: this address forwards its mail outside Kutup, so it's encrypted when it arrives",
+      "disabled": "This address is disabled: it can't receive email"
     },
     "outsideOffNotice": "This server doesn't send mail to addresses outside Kutup yet. Mail to Kutup addresses goes as usual.",
     "outsideOff": "Mail to addresses outside Kutup isn't available on this server yet. Remove them to send to the Kutup addresses.",
@@ -276,7 +279,8 @@
     "trustGroupKeys": "Trust the new keys",
     "groupKeysTrusted": "The new keys of {{address}} are trusted. Send again.",
     "groupKeysTrustFailed": "The new keys could not be saved. Try again.",
-    "writeTo": "Write to {{address}}"
+    "writeTo": "Write to {{address}}",
+    "recipientDisabled": "{{address}} is disabled and can't receive email. The message wasn't sent."
   },
   "emptyHint": {
     "inbox": "Mail from Kutup users arrives end-to-end encrypted; mail from anyone else is encrypted the moment it arrives.",
@@ -536,7 +540,7 @@
     "filters": "Filters",
     "general": "General",
     "senders": "Block and allow",
-    "identity": "Identity",
+    "identity": "Identity and addresses",
     "autoReply": "Auto-reply",
     "appearance": "Appearance",
     "forwarding": "Forwarding"
@@ -628,8 +632,8 @@
     "count_other": "{{count}} senders"
   },
   "identity": {
-    "title": "Identity",
-    "description": "How your mail from {{address}} is signed off.",
+    "title": "Identity and addresses",
+    "description": "Your addresses, and how mail from each one is signed off.",
     "displayName": "Display name",
     "displayNameHint": "The name people see next to your address.",
     "nameTooLong": "A display name is 100 characters at most.",
@@ -638,7 +642,9 @@
     "link": "Link",
     "linkPrompt": "Link address (https:// or mailto:)",
     "signatureTooLong": "The signature is too long (10 KB at most).",
-    "addLink": "Add link"
+    "addLink": "Add link",
+    "nameAndSignature": "Display name and signature",
+    "address": "Address"
   },
   "autoReply": {
     "title": "Auto-reply",
@@ -1135,6 +1141,7 @@
       "ownAddress": "You can't forward to one of your own addresses.",
       "unknown": "There's no such address on this server.",
       "kindChanged": "This address changed since you checked it. Check it again before you save.",
+      "pinnedConflict": "You trust other keys for this address in Contacts, while this server says it is a Kutup user's. Check with them, and remove the keys in Contacts if the address moved to Kutup.",
       "group": "Email can't be forwarded to a shared mailbox or a list.",
       "unverified": "This address's keys couldn't be verified, so nothing can be forwarded to it now.",
       "exists": "You already forward to this address.",
@@ -1144,7 +1151,8 @@
       "endToEndRequired": "This is a Kutup address: reload the page and try again.",
       "keyList": "Your address keys changed meanwhile. Reload the page and try again.",
       "state": "This forwarding changed meanwhile. Reload the page and try again.",
-      "rateLimited": "Too many verification codes for now. Try again later."
+      "rateLimited": "Too many verification codes for now. Try again later.",
+      "disabled": "This address is disabled and can't receive email."
     },
     "code": {
       "title": "Verify the forwarding address",
@@ -1168,5 +1176,41 @@
       "waiting_one": "{{count}} forwarding is paused until you enter the code sent to its address.",
       "waiting_other": "{{count}} forwardings are paused until you enter the codes sent to their addresses."
     }
+  },
+  "addresses": {
+    "title": "Addresses",
+    "add": "Add address",
+    "addTitle": "Add address",
+    "address": "Address",
+    "status": "Status",
+    "actions": "Actions",
+    "actionsFor": "Actions for {{address}}",
+    "save": "Save address",
+    "added": "Address added",
+    "statuses": {
+      "default": "Default",
+      "active": "Active",
+      "disabled": "Disabled",
+      "missingKeys": "Missing keys"
+    },
+    "generateKeys": "Generate missing keys",
+    "generateKeysInfo": "Before you can start sending and receiving emails from your new addresses you need to create encryption keys for them.",
+    "submit": "Submit",
+    "keysCreated": "Keys created",
+    "enable": "Enable",
+    "enabled": "Address enabled",
+    "setDefault": "Set as default",
+    "disable": "Disable",
+    "disableTitle": "Disable address?",
+    "disableBody": "By disabling this address {{address}}, you will no longer be able to send or receive emails using this address.",
+    "disableSure": "Are you sure you want to disable this address?",
+    "disableSubmit": "Disable address",
+    "disabled": "Address disabled",
+    "delete": "Delete address",
+    "deleteTitle": "Delete address?",
+    "deleteBody": "Please note that if you delete this address {{address}}, you will no longer be able to send or receive emails using this address.",
+    "deleteSure": "Mail it already received stays readable.",
+    "deleteSubmit": "Delete address",
+    "deleted": "Address deleted"
   }
 }

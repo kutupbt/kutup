@@ -227,12 +227,14 @@
     "sendLimitNew": "Yeni hesaplar ilk haftalarında günde {{perDay}} dış adrese gönderebilir. Daha sonra yeniden deneyin.",
     "pausedNotice": "Hesabınız için dış adreslere posta gönderimi duraklatıldı; Kutup kullanıcılarına postalar yine gider.",
     "pinnedKeyUnusable": "{{address}} için güvendiğiniz anahtar artık kullanılamıyor. Kişiler'de değiştirin ya da kaldırın.",
+    "pinnedKeyConflict": "Bu sunucu {{address}} adresinin bir Kutup kullanıcısına ait olduğunu söylüyor, ama Kişiler'de bu adres için başka anahtarlara güveniyorsunuz. Hiçbir şey gönderilmedi: kişiyle doğrulayın, adres Kutup'a taşındıysa Kişiler'deki anahtarları kaldırın.",
     "keyLookupFailed": "{{address}} için anahtarlar aranamadı. Yeniden deneyin.",
     "lock": {
       "looking": "Şifreleme anahtarları aranıyor",
       "lookupFailed": "Şifreleme anahtarları aranamadı",
       "pinned": "Güvendiğiniz bir anahtarla uçtan uca şifreli",
       "pinnedUnusable": "Bu adres için güvendiğiniz anahtar artık kullanılamıyor",
+      "pinnedConflict": "Bu sunucu bunun bir Kutup adresi olduğunu söylüyor, ama bu adres için başka anahtarlara güveniyorsunuz",
       "found": {
         "wkd": "Alıcının alan adından alınan bir anahtarla uçtan uca şifreli (Web Key Directory)",
         "proton": "Alıcının Proton anahtarıyla uçtan uca şifreli",
@@ -240,7 +242,8 @@
       },
       "readableKutup": "Bu ileti için uçtan uca şifreli değil: geldiğinde şifrelenir",
       "readableOutside": "Bu ileti için şifreli değil: düz posta",
-      "encryptionDisabled": "Uçtan uca şifreli değil: bu adres postasını Kutup dışına yönlendiriyor, bu yüzden ulaştığında şifrelenir"
+      "encryptionDisabled": "Uçtan uca şifreli değil: bu adres postasını Kutup dışına yönlendiriyor, bu yüzden ulaştığında şifrelenir",
+      "disabled": "Bu adres devre dışı: e-posta alamıyor"
     },
     "outsideOffNotice": "Bu sunucu henüz Kutup dışındaki adreslere e-posta göndermiyor. Kutup adreslerine giden e-postalar her zamanki gibi gider.",
     "outsideOff": "Bu sunucuda Kutup dışındaki adreslere e-posta henüz gönderilemiyor. Kutup adreslerine göndermek için onları çıkarın.",
@@ -276,7 +279,8 @@
     "trustGroupKeys": "Yeni anahtarlara güven",
     "groupKeysTrusted": "{{address}} için yeni anahtarlara güveniliyor. Yeniden gönderin.",
     "groupKeysTrustFailed": "Yeni anahtarlar kaydedilemedi. Yeniden deneyin.",
-    "writeTo": "{{address}} adresine yaz"
+    "writeTo": "{{address}} adresine yaz",
+    "recipientDisabled": "{{address}} devre dışı ve e-posta alamıyor. İleti gönderilmedi."
   },
   "emptyHint": {
     "inbox": "Kutup kullanıcılarından gelen postalar uçtan uca şifreli ulaşır; başkalarından gelenler ulaştığı anda şifrelenir.",
@@ -536,7 +540,7 @@
     "filters": "Filtreler",
     "general": "Genel",
     "senders": "Engelle ve izin ver",
-    "identity": "Kimlik",
+    "identity": "Kimlik ve adresler",
     "autoReply": "Otomatik yanıt",
     "appearance": "Görünüm",
     "forwarding": "Yönlendirme"
@@ -628,8 +632,8 @@
     "count_other": "{{count}} gönderici"
   },
   "identity": {
-    "title": "Kimlik",
-    "description": "{{address}} adresinden giden postalarınızın nasıl imzalanacağı.",
+    "title": "Kimlik ve adresler",
+    "description": "Adresleriniz ve her birinden giden postaların nasıl imzalanacağı.",
     "displayName": "Görünen ad",
     "displayNameHint": "İnsanların adresinizin yanında gördüğü ad.",
     "nameTooLong": "Görünen ad en fazla 100 karakter olabilir.",
@@ -638,7 +642,9 @@
     "link": "Bağlantı",
     "linkPrompt": "Bağlantı adresi (https:// veya mailto:)",
     "signatureTooLong": "İmza çok uzun (en fazla 10 KB).",
-    "addLink": "Bağlantı ekle"
+    "addLink": "Bağlantı ekle",
+    "nameAndSignature": "Görünen ad ve imza",
+    "address": "Adres"
   },
   "autoReply": {
     "title": "Otomatik yanıt",
@@ -1135,6 +1141,7 @@
       "ownAddress": "Kendi adreslerinizden birine yönlendiremezsiniz.",
       "unknown": "Bu sunucuda böyle bir adres yok.",
       "kindChanged": "Bu adres siz kontrol ettikten sonra değişti. Kaydetmeden önce yeniden kontrol edin.",
+      "pinnedConflict": "Kişiler'de bu adres için başka anahtarlara güveniyorsunuz, ama bu sunucu adresin bir Kutup kullanıcısına ait olduğunu söylüyor. Kişiyle doğrulayın; adres Kutup'a taşındıysa Kişiler'deki anahtarları kaldırın.",
       "group": "E-posta paylaşılan bir posta kutusuna veya listeye yönlendirilemez.",
       "unverified": "Bu adresin anahtarları doğrulanamadı, bu yüzden şu an ona yönlendirme yapılamaz.",
       "exists": "Bu adrese zaten yönlendiriyorsunuz.",
@@ -1144,7 +1151,8 @@
       "endToEndRequired": "Bu bir Kutup adresi: sayfayı yenileyip yeniden deneyin.",
       "keyList": "Adres anahtarlarınız bu arada değişti. Sayfayı yenileyip yeniden deneyin.",
       "state": "Bu yönlendirme bu arada değişti. Sayfayı yenileyip yeniden deneyin.",
-      "rateLimited": "Şimdilik çok fazla doğrulama kodu gönderildi. Daha sonra yeniden deneyin."
+      "rateLimited": "Şimdilik çok fazla doğrulama kodu gönderildi. Daha sonra yeniden deneyin.",
+      "disabled": "Bu adres devre dışı ve e-posta alamıyor."
     },
     "code": {
       "title": "Yönlendirme adresini doğrulayın",
@@ -1168,5 +1176,41 @@
       "waiting_one": "{{count}} yönlendirme, adresine gönderilen kod girilene kadar duraklatıldı.",
       "waiting_other": "{{count}} yönlendirme, adreslerine gönderilen kodlar girilene kadar duraklatıldı."
     }
+  },
+  "addresses": {
+    "title": "Adresler",
+    "add": "Adres ekle",
+    "addTitle": "Adres ekle",
+    "address": "Adres",
+    "status": "Durum",
+    "actions": "İşlemler",
+    "actionsFor": "{{address}} için işlemler",
+    "save": "Adresi kaydet",
+    "added": "Adres eklendi",
+    "statuses": {
+      "default": "Varsayılan",
+      "active": "Etkin",
+      "disabled": "Devre dışı",
+      "missingKeys": "Anahtar eksik"
+    },
+    "generateKeys": "Eksik anahtarları oluştur",
+    "generateKeysInfo": "Yeni adreslerinizden e-posta gönderip almaya başlamadan önce onlar için şifreleme anahtarları oluşturmanız gerekir.",
+    "submit": "Gönder",
+    "keysCreated": "Anahtarlar oluşturuldu",
+    "enable": "Etkinleştir",
+    "enabled": "Adres etkinleştirildi",
+    "setDefault": "Varsayılan yap",
+    "disable": "Devre dışı bırak",
+    "disableTitle": "Adres devre dışı bırakılsın mı?",
+    "disableBody": "{{address}} adresini devre dışı bırakırsanız bu adresle artık e-posta gönderemez ve alamazsınız.",
+    "disableSure": "Bu adresi devre dışı bırakmak istediğinizden emin misiniz?",
+    "disableSubmit": "Adresi devre dışı bırak",
+    "disabled": "Adres devre dışı bırakıldı",
+    "delete": "Adresi sil",
+    "deleteTitle": "Adres silinsin mi?",
+    "deleteBody": "{{address}} adresini silerseniz bu adresle artık e-posta gönderemez ve alamazsınız.",
+    "deleteSure": "Daha önce aldığı postalar okunabilir kalır.",
+    "deleteSubmit": "Adresi sil",
+    "deleted": "Adres silindi"
   }
 }

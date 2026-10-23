@@ -1510,8 +1510,17 @@ impl MailKeyListV1 {
             return invalid("unknown key flag");
         }
         let mut primaries = self.keys.iter().filter(|key| key.primary);
+        // A disabled address's list (Proton's): no key is encrypted to, and
+        // its primary is still trusted for what it signed.
+        let disabled = self
+            .keys
+            .iter()
+            .all(|key| key.flags & FLAG_NOT_OBSOLETE == 0);
         match (primaries.next(), primaries.next()) {
             (Some(primary), None) if primary.flags & DEFAULT_FLAGS == DEFAULT_FLAGS => Ok(()),
+            (Some(primary), None) if disabled && primary.flags & FLAG_NOT_COMPROMISED != 0 => {
+                Ok(())
+            }
             (Some(_), None) => invalid("the primary key must be usable"),
             _ => invalid("exactly one key must be primary"),
         }
@@ -1980,11 +1989,26 @@ mod tests {
         for list in bad {
             assert!(list.to_bytes().is_err());
         }
+        // An obsolete primary only where no key is encrypted to (a disabled
+        // address); a compromised primary never.
         let mut obsolete_primary = entry(1, true);
         obsolete_primary.flags = FLAG_NOT_COMPROMISED;
-        assert!(list(&identity, 1, None, vec![obsolete_primary])
+        assert!(list(&identity, 1, None, vec![obsolete_primary.clone()])
             .to_bytes()
-            .is_err());
+            .is_ok());
+        assert!(
+            list(&identity, 1, None, vec![obsolete_primary, entry(2, false)])
+                .to_bytes()
+                .is_err(),
+            "another key is still encrypted to: the primary must be"
+        );
+        for flags in [0, FLAG_NOT_OBSOLETE] {
+            let mut compromised = entry(1, true);
+            compromised.flags = flags;
+            assert!(list(&identity, 1, None, vec![compromised])
+                .to_bytes()
+                .is_err());
+        }
         let good = list(&identity, 1, None, vec![entry(1, true)])
             .to_bytes()
             .unwrap();

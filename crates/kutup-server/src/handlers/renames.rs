@@ -424,14 +424,17 @@ pub async fn rename(
     .execute(&mut *tx)
     .await?;
     // The old address receives only, until its date; the new one is the
-    // account's (its keys come as a new account's do, from the client).
-    sqlx::query(
+    // account's (its keys come as a new account's do, from the client), in
+    // the old one's place in the account's order. Its addresses on custom
+    // domains stay as they are.
+    let place: Option<i32> = sqlx::query_scalar(
         "UPDATE mail_addresses SET state = 'receiving', receive_until = $2
-          WHERE user_id = $1 AND state = 'active'",
+          WHERE user_id = $1 AND state = 'active' AND domain_id IS NULL
+          RETURNING position",
     )
     .bind(user_id)
     .bind(receive_until)
-    .execute(&mut *tx)
+    .fetch_optional(&mut *tx)
     .await?;
     let reused: u64 = sqlx::query(
         "UPDATE mail_addresses SET state = 'active', receive_until = NULL
@@ -453,11 +456,19 @@ pub async fn rename(
     // name taken back keeps its own.
     let (address_id, keyed): (Uuid, bool) = sqlx::query_as(
         "SELECT a.id, EXISTS (SELECT 1 FROM mail_address_keys k WHERE k.address_id = a.id)
-           FROM mail_addresses a WHERE a.user_id = $1 AND a.state = 'active'",
+           FROM mail_addresses a
+          WHERE a.user_id = $1 AND a.state = 'active' AND a.domain_id IS NULL",
     )
     .bind(user_id)
     .fetch_one(&mut *tx)
     .await?;
+    if let Some(place) = place {
+        sqlx::query("UPDATE mail_addresses SET position = $2 WHERE id = $1")
+            .bind(address_id)
+            .bind(place)
+            .execute(&mut *tx)
+            .await?;
+    }
     match (keyed, &req.mail_address) {
         (false, Some(first)) => {
             crate::handlers::mail_keys::first_key(

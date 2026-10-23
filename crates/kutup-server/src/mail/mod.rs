@@ -217,6 +217,7 @@ async fn own_domain_row(
            JOIN users u ON u.id = a.user_id AND u.is_active
            LEFT JOIN mail_address_keys k ON k.address_id = a.id AND k.is_primary
           WHERE a.folded = kutup_fold(split_part($1, '@', 1)) || '@' || lower(split_part($1, '@', 2))
+            AND a.disabled_at IS NULL
             AND (a.state = 'active'
                  OR (a.state = 'receiving' AND a.receive_until > now()))",
     )
@@ -268,7 +269,8 @@ async fn custom_domain_row(state: &AppState, recipient: &str) -> Result<CustomDo
            JOIN users u ON u.id = a.user_id AND u.is_active
            LEFT JOIN mail_address_keys k ON k.address_id = a.id AND k.is_primary";
     let row: Option<RecipientRow> = sqlx::query_as(&format!(
-        "{SELECT} WHERE a.folded = $1 AND a.domain_id = $2 AND a.state = 'active'"
+        "{SELECT} WHERE a.folded = $1 AND a.domain_id = $2 AND a.state = 'active'
+                    AND a.disabled_at IS NULL"
     ))
     .bind(format!("{local}@{domain}"))
     .bind(domain_id)
@@ -277,6 +279,20 @@ async fn custom_domain_row(state: &AppState, recipient: &str) -> Result<CustomDo
     if row.is_some() {
         return Ok(CustomDomain::Address(row));
     }
+    // A disabled address is no unknown name: its mail is refused, never
+    // caught.
+    let disabled: bool = sqlx::query_scalar(
+        "SELECT EXISTS (SELECT 1 FROM mail_addresses
+                         WHERE folded = $1 AND domain_id = $2 AND state = 'active'
+                           AND disabled_at IS NOT NULL)",
+    )
+    .bind(format!("{local}@{domain}"))
+    .bind(domain_id)
+    .fetch_one(&state.pool)
+    .await?;
+    if disabled {
+        return Ok(CustomDomain::Address(None));
+    }
     let Some(catch_all) = catch_all.filter(|_| settings.catch_all) else {
         return Ok(CustomDomain::Address(None));
     };
@@ -284,7 +300,8 @@ async fn custom_domain_row(state: &AppState, recipient: &str) -> Result<CustomDo
         return Ok(CustomDomain::OverCap);
     }
     let row: Option<RecipientRow> = sqlx::query_as(&format!(
-        "{SELECT} WHERE a.id = $1 AND a.domain_id = $2 AND a.state = 'active'"
+        "{SELECT} WHERE a.id = $1 AND a.domain_id = $2 AND a.state = 'active'
+                    AND a.disabled_at IS NULL"
     ))
     .bind(catch_all)
     .bind(domain_id)
