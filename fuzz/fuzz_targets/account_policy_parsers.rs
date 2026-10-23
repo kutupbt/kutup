@@ -3,9 +3,8 @@
 use kutup_chat_proto::{
     parse_device_header, AccountIdentityBody, AccountIdentityDistributionRequest,
     AccountManifestHistoryPageV2, AccountManifestPublicationV2, AccountManifestV2,
-    AccountPreKeyBundlesResponse, ChatProvisionV1, MlsOrderingServicePolicyV1,
-    ProvisionEnvelopeV1, ProvisioningLinkCodeV1, RegisterChatDeviceRequestV2,
-    SealedSenderServicePolicyV1,
+    AccountPreKeyBundlesResponse, ChatProvisionV1, MlsOrderingServicePolicyV1, ProvisionEnvelopeV1,
+    ProvisioningLinkCodeV1, RegisterChatDeviceRequestV2, SealedSenderServicePolicyV1,
 };
 use kutup_federation_proto::{FederatedFeaturePolicyEnvelopeV1, FederatedFeaturePolicyHistoryV1};
 use libfuzzer_sys::fuzz_target;
