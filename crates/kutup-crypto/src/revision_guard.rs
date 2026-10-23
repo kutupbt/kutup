@@ -12,9 +12,7 @@
 //! (the first revision read is trusted), or put back an older copy of one; it
 //! can no longer read them or set one to a revision it chooses.
 
-use crate::primitives::{Aead, Kdf, Suite};
-use hmac::{Hmac, Mac};
-use sha2::Sha256;
+use crate::primitives::{Aead, Kdf, Mac, Suite};
 use zeroize::Zeroizing;
 
 use crate::error::{CryptoError, Result};
@@ -56,14 +54,13 @@ impl GuardKeys {
                 "revision guard: scope or id is invalid".into(),
             ));
         }
-        let mut mac = <Hmac<Sha256> as Mac>::new_from_slice(self.entry.as_slice())
-            .expect("HMAC takes any key length");
+        let mut mac = Mac::new(Suite::V1, self.entry.as_slice());
         mac.update(ENTRY_DOMAIN);
         mac.update(&(scope.len() as u16).to_be_bytes());
         mac.update(scope.as_bytes());
         mac.update(&(id.len() as u16).to_be_bytes());
         mac.update(id.as_bytes());
-        Ok(hex::encode(mac.finalize().into_bytes()))
+        Ok(hex::encode(mac.finish()))
     }
 
     fn aad(entry_id: &str) -> Vec<u8> {

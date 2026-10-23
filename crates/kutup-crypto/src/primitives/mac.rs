@@ -41,3 +41,33 @@ pub fn subkey(suite: Suite, root: &[u8], label: &[u8]) -> Zeroizing<[u8; 32]> {
         Suite::V1 => Zeroizing::new(hmac(root, &[label]).finalize().into_bytes().into()),
     }
 }
+
+/// The suite's MAC under one key, fed in parts.
+#[derive(Clone)]
+pub struct Mac(MacInner);
+
+#[derive(Clone)]
+enum MacInner {
+    HmacSha256(HmacSha256),
+}
+
+impl Mac {
+    pub fn new(suite: Suite, key: &[u8]) -> Self {
+        match suite {
+            Suite::V1 => Self(MacInner::HmacSha256(hmac(key, &[]))),
+        }
+    }
+
+    pub fn update(&mut self, data: &[u8]) -> &mut Self {
+        match &mut self.0 {
+            MacInner::HmacSha256(m) => m.update(data),
+        }
+        self
+    }
+
+    pub fn finish(self) -> Tag {
+        match self.0 {
+            MacInner::HmacSha256(m) => super::hash::Digest::from_slice(&m.finalize().into_bytes()),
+        }
+    }
+}

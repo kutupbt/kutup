@@ -30,7 +30,7 @@ pub use ct::ct_eq;
 pub use hash::{hash, Digest, Hasher};
 pub use hpke::{hpke_open, hpke_public_key, hpke_seal, HpkeSealed};
 pub use kdf::{kdf, Kdf};
-pub use mac::{mac, mac_verify, subkey, Tag};
+pub use mac::{mac, mac_verify, subkey, Mac, Tag};
 pub use pwhash::{pwhash, PwhashParams};
 pub use random::{random, random_array, random_key, Rng};
 pub use sign::{SigningKey, VerifyingKey};

@@ -14,9 +14,7 @@
 //! a name: the database's own name is an HMAC under a second master-derived
 //! key, found before the wrapped store key is read.
 
-use crate::primitives::{Aead, Kdf, Suite};
-use hmac::{Hmac, Mac};
-use sha2::Sha256;
+use crate::primitives::{Aead, Kdf, Mac, Suite};
 use zeroize::Zeroizing;
 
 use crate::error::{CryptoError, Result};
@@ -74,10 +72,9 @@ fn check_header(magic: &[u8; 8], sealed: &[u8]) -> Result<()> {
 /// master-derived key, so it names no one and is found before anything is read.
 pub fn store_name(master_key: &[u8; 32]) -> Result<String> {
     let locator = expand(ACCOUNT_SALT, master_key, LOCATOR_KEY_INFO)?;
-    let mut mac =
-        <Hmac<Sha256> as Mac>::new_from_slice(locator.as_slice()).expect("any key length");
+    let mut mac = Mac::new(Suite::V1, locator.as_slice());
     mac.update(b"database\0");
-    Ok(hex::encode(&mac.finalize().into_bytes()[..16]))
+    Ok(hex::encode(&mac.finish().as_bytes()[..16]))
 }
 
 /// An account's keys for its search index, from its store key.
@@ -145,11 +142,10 @@ impl MailSearchKeys {
     /// The name a record is stored under: HMAC-SHA256 of its name, as
     /// lowercase hex.
     pub fn record_id(&self, name: &str) -> String {
-        let mut mac =
-            <Hmac<Sha256> as Mac>::new_from_slice(self.name.as_slice()).expect("any key length");
+        let mut mac = Mac::new(Suite::V1, self.name.as_slice());
         mac.update(b"record\0");
         mac.update(name.as_bytes());
-        hex::encode(mac.finalize().into_bytes())
+        hex::encode(mac.finish())
     }
 
     fn aad(&self, record_id: &str) -> Vec<u8> {

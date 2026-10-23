@@ -25,8 +25,7 @@
 //! combining dot above, so `İstanbul` and `istanbul` stay different names
 //! while `ISTANBUL` and `istanbul` do not.
 
-use crate::primitives::{Kdf, Suite};
-use hmac::{Hmac, Mac};
+use crate::primitives::{Kdf, Mac, Suite};
 use sha2::{Digest, Sha256};
 use unicode_normalization::UnicodeNormalization;
 
@@ -82,11 +81,10 @@ fn mac(hash_key: &[u8], label: &[u8], value: &[u8]) -> Result<String> {
             "folder hash key must be 32 bytes".into(),
         ));
     }
-    let mut mac = <Hmac<Sha256> as Mac>::new_from_slice(hash_key)
-        .map_err(|_| CryptoError::InvalidInput("folder hash key must be 32 bytes".into()))?;
+    let mut mac = Mac::new(Suite::V1, hash_key);
     mac.update(label);
     mac.update(value);
-    Ok(hex::encode(mac.finalize().into_bytes()))
+    Ok(hex::encode(mac.finish()))
 }
 
 /// The hash a name is kept unique by in its folder.

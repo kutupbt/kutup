@@ -16,11 +16,9 @@
 //!   an entry opens only under its own id and revision, for this incarnation
 //!   of the account.
 
-use crate::primitives::{Aead, Kdf, Suite};
+use crate::primitives::{Aead, Kdf, Mac, Suite};
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use base64::Engine as _;
-use hmac::{Hmac, Mac};
-use sha2::Sha256;
 use zeroize::Zeroizing;
 
 use crate::account_ref::AccountRef;
@@ -70,11 +68,10 @@ impl ContactListKey {
 
     /// The entry id of `contact` in this account's list.
     pub fn entry_id(&self, contact: &AccountRef) -> [u8; ENTRY_ID_LEN] {
-        let mut mac = <Hmac<Sha256> as Mac>::new_from_slice(self.id_key.as_ref())
-            .expect("HMAC takes any key length");
+        let mut mac = Mac::new(Suite::V1, self.id_key.as_ref());
         mac.update(ID_DOMAIN);
         mac.update(&contact.bytes());
-        mac.finalize().into_bytes().into()
+        mac.finish().to_array()
     }
 
     /// Seals an entry's plaintext for `entry_id` at `revision`, bound to the

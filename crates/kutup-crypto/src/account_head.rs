@@ -19,8 +19,7 @@
 //! writing device are HMAC'd, so the head tells the server nothing it does not
 //! already know.
 
-use crate::primitives::{Aead, Kdf, Suite};
-use hmac::{Hmac, Mac};
+use crate::primitives::{Aead, Kdf, Mac, Suite};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest as _, Sha256};
 use zeroize::Zeroizing;
@@ -79,14 +78,13 @@ impl HeadKeys {
     }
 
     fn mac(&self, domain: &[u8], parts: &[&[u8]]) -> [u8; 32] {
-        let mut mac = <Hmac<Sha256> as Mac>::new_from_slice(self.id.as_slice())
-            .expect("HMAC takes any key length");
+        let mut mac = Mac::new(Suite::V1, self.id.as_slice());
         mac.update(domain);
         for part in parts {
             mac.update(&(part.len() as u32).to_be_bytes());
             mac.update(part);
         }
-        mac.finalize().into_bytes().into()
+        mac.finish().to_array()
     }
 
     /// What the head knows a value by: an HMAC of its scope and id.
