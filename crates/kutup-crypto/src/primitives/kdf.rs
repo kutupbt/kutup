@@ -32,9 +32,12 @@ impl Kdf {
     /// `out.len()` bytes for the label `info`.
     pub fn expand(&self, info: &[u8], out: &mut [u8]) -> Result<()> {
         match &self.inner {
-            Inner::HkdfSha256(h) => h.expand(info, out).map_err(|_| CryptoError::InvalidLength {
-                expected: self.suite.params().kdf_max_output,
-                got: out.len(),
+            Inner::HkdfSha256(h) => h.expand(info, out).map_err(|_| {
+                CryptoError::InvalidInput(format!(
+                    "a KDF output of {} bytes is over the suite's {}",
+                    out.len(),
+                    self.suite.params().kdf_max_output
+                ))
             }),
         }
     }

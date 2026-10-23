@@ -71,7 +71,12 @@ pub fn pwhash(params: &PwhashParams, password, salt, out) -> Result<()>;  // Arg
 - **Known answers** (`tests/vectors/primitives-v1.json`) are written by other
   implementations (`scripts/primitives-vectors.mjs`: OpenSSL through
   node:crypto, and libsodium), from the RFCs' own examples where they have
-  them; HPKE opens the libcrux message.
+  them. HPKE opens a message sealed by hpke-rs on its libcrux backend: an
+  independent X-Wing, ML-KEM and AEAD, but the same hpke-rs key schedule and
+  framing, so HPKE's independence is partial (no second HPKE implementation
+  with X-Wing exists yet to check against).
+- **Tags compare only in constant time:** `Tag` has no `==`; it is checked
+  with `mac_verify`, or its bytes with `ct_eq`.
 - **Every format keeps its own wire suite id for now** and maps it to
   `Suite` through a per-format allowlist, checked on parse:
 
@@ -112,9 +117,15 @@ HMAC-SHA1, HS256 JWTs and TOTP.
 ## 4. Enforcement
 
 - **Root `clippy.toml`:** `disallowed-types` and `disallowed-methods` for
-  `chacha20poly1305::*`, `hkdf::Hkdf`, `hmac::Hmac`, `sha2::Sha256`/`Sha512`,
-  `ed25519_dalek::SigningKey`/`VerifyingKey::verify`, `rand::thread_rng`,
-  `rand::rngs::OsRng`, `dryoc::*`. Allowed with `#[allow]` only in
+  the AEADs (`XChaCha20Poly1305`, `ChaCha20Poly1305`, the generic
+  `ChaChaPoly1305`), `hkdf::Hkdf`, `hmac::Hmac`, every `sha2` hash,
+  `ed25519_dalek`'s keys and its non-strict `Verifier::verify`,
+  `x25519_dalek`'s keys, `hpke_rs::Hpke`, every RNG (`rand`'s, `rand_core`'s,
+  `getrandom`'s, dryoc's) and dryoc's secretstream, box, secretbox,
+  generic hash, scalar multiplication and `crypto_pwhash`. dryoc's constants
+  can't be named by clippy; the deny `[bans]` of the last step covers the
+  crate. The server's two local `constant_time_eq` copies go in step 3
+  (`ct_eq`). Allowed with `#[allow]` only in
   `primitives` and the named adapters. A crate not yet moved carries a
   crate-level `#![allow(..)]` with a `// W2: moving` note, removed in its move
   PR, so the lint is on from the first PR and nothing new drifts.
@@ -158,8 +169,10 @@ The crypto rules are in the root `clippy.toml` from step 1. Clippy reads a
 crate's nearest `clippy.toml`, so a crate not yet moved carries its own,
 which keeps only the workspace's other rules (the `reqwest` ones) and starts
 with `# W2: moving`. A crate-level `#![allow]` would switch those off too.
-Each move PR deletes its crate's file; the last step makes CI fail on any
-file with the marker.
+Each move PR deletes its crate's file and strikes its row out;
+`scripts/check-crypto-exceptions.py` (in `gate.sh static`) fails when the
+files and the table differ, so none can be left behind. The gate runs clippy
+on `fuzz` as on the other standalone roots.
 
 | Crate | Moves in |
 |---|---|

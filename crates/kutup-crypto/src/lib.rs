@@ -70,6 +70,8 @@ pub mod envelope;
 pub mod error;
 pub mod file_keyring;
 pub mod file_metadata;
+// The HPKE suite's backend (hpke-rs, X-Wing), which primitives::hpke calls.
+#[allow(clippy::disallowed_types, clippy::disallowed_methods)]
 pub mod hpke_xwing;
 pub mod identity;
 pub mod identity_pins;
@@ -115,6 +117,9 @@ pub mod revision_guard;
 // Adapter: Signal's safety number (iterated SHA-512).
 #[allow(clippy::disallowed_types, clippy::disallowed_methods)]
 pub mod safety_number;
+// Legacy: libsodium's secretstream, until the block format replaces it
+// (docs/plans/drive-block-format.md).
+#[allow(clippy::disallowed_types, clippy::disallowed_methods)]
 pub mod stream;
 pub mod thumbnail;
 pub mod yjs_seed;
