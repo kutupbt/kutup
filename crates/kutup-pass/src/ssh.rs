@@ -340,6 +340,32 @@ fn rsa_private_key(key: &ssh_key::private::RsaKeypair) -> Result<rsa::RsaPrivate
     Ok(private)
 }
 
+/// The system's RNG (`getrandom`) for `rsa`'s blinding, through `rsa`'s own
+/// `rand_core` traits.
+struct SystemRng;
+
+impl rsa::rand_core::RngCore for SystemRng {
+    fn next_u32(&mut self) -> u32 {
+        let mut bytes = [0; 4];
+        self.fill_bytes(&mut bytes);
+        u32::from_le_bytes(bytes)
+    }
+    fn next_u64(&mut self) -> u64 {
+        let mut bytes = [0; 8];
+        self.fill_bytes(&mut bytes);
+        u64::from_le_bytes(bytes)
+    }
+    fn fill_bytes(&mut self, dest: &mut [u8]) {
+        getrandom::fill(dest).expect("the system's random source");
+    }
+    fn try_fill_bytes(&mut self, dest: &mut [u8]) -> Result<(), rsa::rand_core::Error> {
+        self.fill_bytes(dest);
+        Ok(())
+    }
+}
+
+impl rsa::rand_core::CryptoRng for SystemRng {}
+
 fn put_string(out: &mut Vec<u8>, value: &[u8]) {
     out.extend_from_slice(&(value.len() as u32).to_be_bytes());
     out.extend_from_slice(value);
@@ -351,18 +377,28 @@ pub fn sign(key: &PrivateKey, data: &[u8], flags: u32) -> Result<Vec<u8>, SshErr
     use signature::Signer as _;
     let signature: Signature = match key.key_data() {
         KeypairData::Rsa(rsa_key) => {
+            // Blinded (the RNG's): the private-key operation's timing then
+            // says little about the key (RUSTSEC-2023-0071, Marvin; deny.toml).
+            // A PKCS#1 v1.5 signature is deterministic, so the bytes are
+            // the same as unblinded.
+            use rsa::signature::RandomizedSigner as _;
+            let mut rng = SystemRng;
             let private = rsa_private_key(rsa_key)?;
             let (hash, bytes) = if flags & RSA_SHA2_512 != 0 {
                 let signing = rsa::pkcs1v15::SigningKey::<sha2::Sha512>::new(private);
                 (
                     HashAlg::Sha512,
-                    signing.try_sign(data).map_err(|_| SshError::Sign)?,
+                    signing
+                        .try_sign_with_rng(&mut rng, data)
+                        .map_err(|_| SshError::Sign)?,
                 )
             } else if flags & RSA_SHA2_256 != 0 {
                 let signing = rsa::pkcs1v15::SigningKey::<sha2::Sha256>::new(private);
                 (
                     HashAlg::Sha256,
-                    signing.try_sign(data).map_err(|_| SshError::Sign)?,
+                    signing
+                        .try_sign_with_rng(&mut rng, data)
+                        .map_err(|_| SshError::Sign)?,
                 )
             } else {
                 // `ssh-rsa` signs with SHA-1, which OpenSSH itself refuses now.
