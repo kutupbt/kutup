@@ -161,7 +161,9 @@ jobs:
       - web
       - chat-backup-integration
     runs-on: ubuntu-24.04
-    timeout-minutes: 30
+    # A cold image cache builds every image first: its specs passed at 30
+    # minutes, the job didn't.
+    timeout-minutes: 45
     env:
       KUTUP_E2E_SAFE_ARTIFACTS: "1"
       KUTUP_E2E_DIAGNOSTICS_DIR: sanitized-results
