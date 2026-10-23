@@ -6,6 +6,7 @@ const TABS = [
   { to: '/settings/general', key: 'settings.general' },
   { to: '/settings/appearance', key: 'settings.appearance' },
   { to: '/settings/identity', key: 'settings.identity' },
+  { to: '/settings/domains', key: 'settings.domains' },
   { to: '/settings/auto-reply', key: 'settings.autoReply' },
   { to: '/settings/folders', key: 'settings.folders' },
   { to: '/settings/filters', key: 'settings.filters' },

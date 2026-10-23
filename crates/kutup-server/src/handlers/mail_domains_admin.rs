@@ -68,10 +68,46 @@ pub struct AdminDomains {
     pub configured: bool,
     /// Every setting by its key (`mail_domains.*`), as in effect.
     pub settings: BTreeMap<String, String>,
+    /// Each numeric setting's range by its key: what the page offers.
+    pub ranges: BTreeMap<String, SettingRange>,
     /// The server's SPF record for customers to include.
     pub spf: DkimKeyView,
     pub dkim_keys: Vec<DkimKeyView>,
     pub domains: Vec<AdminDomain>,
+}
+
+/// A whole-number setting's range, both ends included.
+#[derive(Debug, Clone, Copy, Serialize, ToSchema)]
+pub struct SettingRange {
+    pub min: i64,
+    pub max: i64,
+}
+
+/// Every numeric setting's range, by key (the server's `KEYS`).
+fn ranges() -> BTreeMap<String, SettingRange> {
+    KEYS.iter()
+        .map(|(key, min, max)| {
+            (
+                (*key).to_owned(),
+                SettingRange {
+                    min: *min,
+                    max: *max,
+                },
+            )
+        })
+        .collect()
+}
+
+/// One setting's range (a key of `KEYS`).
+fn range_of(key: &str) -> SettingRange {
+    let (_, min, max) = KEYS
+        .iter()
+        .find(|(k, _, _)| *k == key)
+        .expect("a key of KEYS");
+    SettingRange {
+        min: *min,
+        max: *max,
+    }
 }
 
 #[derive(sqlx::FromRow)]
@@ -162,6 +198,7 @@ pub async fn list(
         stalwart_drift_at: untagged_changed_at
             .and_then(|secs| OffsetDateTime::from_unix_timestamp(secs).ok()),
         settings: effective(&settings),
+        ranges: ranges(),
         spf: DkimKeyView {
             selector: String::new(),
             state: "spf".into(),
@@ -383,6 +420,17 @@ pub struct DomainOverrides {
     pub catch_all: Option<bool>,
 }
 
+/// An account's overrides as the page shows them, with each one's range
+/// (the site settings they override).
+#[derive(Debug, Serialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct DomainOverridesView {
+    #[serde(flatten)]
+    pub overrides: DomainOverrides,
+    pub max_domains_range: SettingRange,
+    pub max_addresses_range: SettingRange,
+}
+
 /// `GET /api/admin/users/{id}/mail-domains`
 #[utoipa::path(
     get,
@@ -390,13 +438,13 @@ pub struct DomainOverrides {
     tag = "admin",
     security(("BearerAuth" = [])),
     params(("id" = String, Path)),
-    responses((status = 200, body = DomainOverrides))
+    responses((status = 200, body = DomainOverridesView))
 )]
 pub async fn overrides(
     State(state): State<AppState>,
     _admin: AdminUser,
     Path(id): Path<String>,
-) -> AppResult<Json<DomainOverrides>> {
+) -> AppResult<Json<DomainOverridesView>> {
     let id = Uuid::parse_str(&id).map_err(|_| AppError::not_found("no such user"))?;
     let row: Option<(Option<i32>, Option<i32>, Option<bool>)> = sqlx::query_as(
         "SELECT max_domains, max_addresses, catch_all FROM mail_domain_overrides WHERE user_id = $1",
@@ -405,10 +453,14 @@ pub async fn overrides(
     .fetch_optional(&state.pool)
     .await?;
     let (max_domains, max_addresses, catch_all) = row.unwrap_or_default();
-    Ok(Json(DomainOverrides {
-        max_domains,
-        max_addresses,
-        catch_all,
+    Ok(Json(DomainOverridesView {
+        overrides: DomainOverrides {
+            max_domains,
+            max_addresses,
+            catch_all,
+        },
+        max_domains_range: range_of("mail_domains.per_account"),
+        max_addresses_range: range_of("mail_domains.addresses_per_account"),
     }))
 }
 
@@ -429,14 +481,18 @@ pub async fn set_overrides(
     Json(input): Json<DomainOverrides>,
 ) -> AppResult<Json<DomainOverrides>> {
     let id = Uuid::parse_str(&id).map_err(|_| AppError::not_found("no such user"))?;
-    if input.max_domains.is_some_and(|n| !(0..=100).contains(&n))
-        || input
-            .max_addresses
-            .is_some_and(|n| !(1..=1000).contains(&n))
-    {
-        return Err(AppError::bad_request(
-            "maxDomains is 0 to 100, maxAddresses 1 to 1000",
-        ));
+    let (domains, addresses) = (
+        range_of("mail_domains.per_account"),
+        range_of("mail_domains.addresses_per_account"),
+    );
+    let outside = |value: Option<i32>, range: SettingRange| {
+        value.is_some_and(|n| !(range.min..=range.max).contains(&i64::from(n)))
+    };
+    if outside(input.max_domains, domains) || outside(input.max_addresses, addresses) {
+        return Err(AppError::bad_request(format!(
+            "maxDomains is {} to {}, maxAddresses {} to {}",
+            domains.min, domains.max, addresses.min, addresses.max
+        )));
     }
     let exists: bool = sqlx::query_scalar("SELECT EXISTS (SELECT 1 FROM users WHERE id = $1)")
         .bind(id)

@@ -1,4 +1,4 @@
-import { useQuery } from '@tanstack/react-query'
+import { useQueries, useQuery } from '@tanstack/react-query'
 import { fromBase64, inspectExternalMailKey } from '@kutup/crypto'
 import type { ContactEmailPgp, ContactKey } from '@kutup/contacts-core/model'
 import { AddressDisabled, addressKeys, GroupAddress, NoKutupAddress, outsideKey, type OutsideKey } from './keys'
@@ -99,6 +99,41 @@ export async function protectionFor(address: string, domain: string, pinned: Pin
     throw new KeyLookupFailed(lower)
   })
   return found ? { kind: 'found', publicKey: found.publicKey, fingerprint: found.fingerprint, source: found.source } : { kind: 'none' }
+}
+
+/**
+ * Whether an address on another domain is a Kutup user's (a custom domain
+ * this server holds), as its key lookup says: a disabled one or a shared
+ * mailbox is too (sending then refuses it, or goes as it does). Not one: no
+ * Kutup key there; a lookup that fails is taken as outside.
+ */
+export async function isKutupElsewhere(address: string): Promise<boolean> {
+  try {
+    await addressKeys(address.toLowerCase())
+    return true
+  } catch (error) {
+    return error instanceof AddressDisabled || error instanceof GroupAddress
+  }
+}
+
+/**
+ * The addresses (lowercased) of `addresses` that are Kutup users' on other
+ * domains, and whether any is still being looked up.
+ */
+export function useKutupElsewhere(addresses: string[]): { kutup: Set<string>; pending: boolean } {
+  const lower = [...new Set(addresses.map((a) => a.trim().toLowerCase()))]
+  const results = useQueries({
+    queries: lower.map((address) => ({
+      queryKey: ['mail', 'kutup-elsewhere', address],
+      staleTime: 15 * 60_000,
+      retry: false,
+      queryFn: () => isKutupElsewhere(address),
+    })),
+  })
+  return {
+    kutup: new Set(lower.filter((_, i) => results[i]?.data === true)),
+    pending: results.some((r) => r.isPending),
+  }
 }
 
 /** How mail to `address` would be protected; looked up while the person writes. */

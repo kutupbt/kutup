@@ -543,7 +543,8 @@
     "identity": "Kimlik ve adresler",
     "autoReply": "Otomatik yanıt",
     "appearance": "Görünüm",
-    "forwarding": "Yönlendirme"
+    "forwarding": "Yönlendirme",
+    "domains": "Alan adları"
   },
   "emptyFolder": {
     "action": "Tümünü sil",
@@ -1212,5 +1213,130 @@
     "deleteSure": "Daha önce aldığı postalar okunabilir kalır.",
     "deleteSubmit": "Adresi sil",
     "deleted": "Adres silindi"
+  },
+  "domains": {
+    "title": "Alan adları",
+    "description": "Özel e-posta adresleri (ör. siz@sirketiniz.com) kurmak için özel alan adınızı Kutup'a bağlayın. Sihirbaz size adım adım yol gösterir.",
+    "add": "Alan adı ekle",
+    "refresh": "Durumu yenile",
+    "review": "İncele",
+    "setCatchAll": "Tümünü yakala adresi",
+    "delete": "Sil",
+    "actionsFor": "{{domain}} için işlemler",
+    "columns": {
+      "domain": "Alan adı",
+      "status": "Durum",
+      "actions": "İşlemler"
+    },
+    "used_one": "{{used}} / {{count}} alan adı kullanıldı",
+    "used_other": "{{used}} / {{count}} alan adı kullanıldı",
+    "empty": "Henüz özel alan adı yok",
+    "emptyHint": "Adreslerinde posta almak ve göndermek için sahibi olduğunuz bir alan adı ekleyin.",
+    "unavailable": "Bu sunucuda özel alan adları kullanılamıyor.",
+    "off": "Bir yönetici bu sunucuda özel alan adlarını şimdilik kapattı.",
+    "approveMode": "Bu sunucuda her alan adı doğrulandıktan sonra bir yönetici tarafından onaylanır.",
+    "stopped": "<strong>{{domain}}</strong> durdu: doğrulama TXT ve MX kayıtlarının ikisi de yok, bu yüzden adresleri posta alamıyor ve gönderemiyor. Kayıtlarını geri koyun ve durumunu yenileyin.",
+    "warned": "<strong>{{domain}}</strong> DNS denetimlerinden geçemedi. Kayıtları geri konmazsa {{date}} tarihinde durur.",
+    "deleteTitle": "Alan adı silinsin mi?",
+    "deleteBody": "<strong>{{domain}}</strong> alan adını silerseniz ona bağlı tüm adreslerin devre dışı bırakılacağını unutmayın.",
+    "deleteSure": "Bu alan adını silmek istediğinizden emin misiniz?",
+    "deleted": "Alan adı silindi",
+    "state": {
+      "default": "Doğrulanmadı",
+      "verified": "Doğrulandı",
+      "warn": "İlgi gerekiyor"
+    },
+    "badges": {
+      "verified": "Doğrulandı",
+      "addresses_one": "{{count}} adres",
+      "addresses_other": "{{count}} adres",
+      "catchAll": "TÜMÜNÜ YAKALA",
+      "awaitingApproval": "Onay bekliyor"
+    },
+    "missingSetup": "SPF/DKIM/DMARC eksikse ya da doğru kurulmadıysa büyük e-posta hizmetleri e-postalarınızı reddedebilir ya da istenmeyen klasörüne atabilir.",
+    "records": {
+      "type": "Tür",
+      "host": "Ana makine adı",
+      "value": "Değer / Veri / Hedef",
+      "priority": "Öncelik",
+      "askTxt": "Lütfen aşağıdaki TXT kaydını ekleyin. Not: DNS kayıtlarının güncellenmesi birkaç saat sürebilir.",
+      "copied": "Değer panoya kopyalandı"
+    },
+    "wizard": {
+      "addTitle": "Alan adı ekle",
+      "editTitle": "Alan adını düzenle",
+      "steps": "Adımlar",
+      "next": "İleri",
+      "done": "Bitti",
+      "good": "Tamam",
+      "bad": "İlgi gerekiyor",
+      "nameRequired": "Bir alan adı girin.",
+      "tabs": {
+        "domain": "Alan adı",
+        "verify": "Doğrula",
+        "addresses": "Adresler",
+        "mx": "MX",
+        "spf": "SPF",
+        "dkim": "DKIM",
+        "dmarc": "DMARC"
+      }
+    },
+    "domain": {
+      "intro": "Sahibi olduğunuz bir alan adını Kutup Posta hesabınıza ekleyin.",
+      "label": "Alan adı",
+      "placeholder": "alanadiniz.com",
+      "www": "'www' alt alan adları genellikle e-posta için kullanılmaz. Bu alan adını kullanmak istediğinizden emin misiniz?"
+    },
+    "verify": {
+      "intro": "Güvenlik nedeniyle {{domain}} alan adının sahibi olduğunuzu doğrulamamız gerekiyor. Lütfen aşağıdaki TXT kaydını DNS konsolunuza (alan adını satın aldığınız platformda) ekleyin.",
+      "keep": "Doğrulama başarılı olduktan sonra bu TXT kaydını silmeyin: alan adının hâlâ sizin olduğunu doğrulamak için gerekir.",
+      "copied": "Doğrulama kodu panoya kopyalandı",
+      "notYet": "Doğrulama başarılı olmadı, lütfen bir saat sonra yeniden deneyin.",
+      "wrongCode": "Yanlış doğrulama kodu. Lütfen doğrulama kodunu doğru kopyaladığınızdan emin olup yeniden deneyin. Değişikliklerin geçerli olması 24 saati bulabilir.",
+      "verified": "Alan adı doğrulandı"
+    },
+    "addresses": {
+      "intro": "Bu alan adında istediğiniz adresleri Kimlik ve adresler bölümünde ekleyin. Başka bir e-posta hizmetinden geçiyorsanız, hiçbir şey geri dönmesin diye MX kayıtlarını değiştirmeden önce hepsini ekleyin.",
+      "add": "Adres ekle"
+    },
+    "mx": {
+      "intro_one": "Özel alan adı adreslerinize Kutup Posta'da e-posta alabilmek için aşağıdaki MX kaydını DNS konsolunuza (alan adını satın aldığınız platformda) eklemeniz gerekir.",
+      "intro_other": "Özel alan adı adreslerinize Kutup Posta'da e-posta alabilmek için aşağıdaki {{count}} MX kaydını DNS konsolunuza (alan adını satın aldığınız platformda) eklemeniz gerekir.",
+      "ask_one": "Lütfen aşağıdaki MX kaydını ekleyin. Not: DNS kayıtlarının güncellenmesi birkaç saat sürebilir.",
+      "ask_other": "Lütfen aşağıdaki {{count}} MX kaydını ekleyin. Not: DNS kayıtlarının güncellenmesi birkaç saat sürebilir.",
+      "others": "Diğer MX kayıtlarını silin ya da Kutup Posta'nın önceliğinin en küçük sayı olduğundan emin olun.",
+      "switching": "Başka bir e-posta hizmetinden Kutup Posta'ya geçiyorsanız, sorunsuz bir geçiş için MX kaydını değiştirmeden önce <strong>Adresler</strong> sekmesini seçip tüm etkin e-posta adreslerini ekleyin."
+    },
+    "spf": {
+      "intro": "SPF, alan adınız adına kimin e-posta gönderebileceğini belirtir. Aşağıdaki TXT kaydını DNS konsolunuza (alan adını satın aldığınız platformda) eklediğinizden emin olun.",
+      "copied": "SPF değeri panoya kopyalandı",
+      "merge": "Her alan adının yalnızca bir SPF (TXT) kaydı olabilir. Mevcut SPF (TXT) kaydınızı korumak istiyorsanız, kaydınıza <strong>{{include}}</strong> ekleyebilirsiniz (<strong>{{start}}</strong> ifadesinden sonra).",
+      "example": "Örnek:"
+    },
+    "dkim": {
+      "intro_one": "DKIM, Kutup'un e-postalarınızı şifreleme ile imzalamasını ve saldırganların e-postanızı değiştirmesini önlemesini sağlar. Aşağıdaki CNAME kaydını DNS konsolunuza (alan adını satın aldığınız platformda) eklediğinizden emin olun.",
+      "intro_other": "DKIM, Kutup'un e-postalarınızı şifreleme ile imzalamasını ve saldırganların e-postanızı değiştirmesini önlemesini sağlar. Aşağıdaki {{count}} CNAME kaydını DNS konsolunuza (alan adını satın aldığınız platformda) eklediğinizden emin olun.",
+      "ask_one": "Lütfen aşağıdaki CNAME kaydını ekleyin. Not: DNS kayıtlarının güncellenmesi birkaç saat sürebilir.",
+      "ask_other": "Lütfen aşağıdaki {{count}} CNAME kaydının hepsini ekleyin. Not: DNS kayıtlarının güncellenmesi birkaç saat sürebilir.",
+      "error": "DNS yapılandırmanızdaki sorunlar nedeniyle DKIM imzalamayı durdurduk. İmzalamayı sürdürmek için lütfen aşağıdaki yönergeleri izleyin.",
+      "warning": "DNS yapılandırmanızda bir sorun saptadık. Lütfen kayıtlarınızın aşağıdaki yönergelerle eşleştiğinden emin olun. Sorun sürerse DKIM imzalamayı kapatmak zorunda kalacağız.",
+      "good": "DKIM imzalamanız çalışıyor.",
+      "dot": "ÖNEMLİ: DNS konsolunuz CNAME değerlerinin noktayla bitmesine izin vermiyorsa, CNAME değerlerindeki son noktayı kaldırabilirsiniz."
+    },
+    "dmarc": {
+      "intro": "DMARC, gönderenin SPF ve DKIM kayıtlarının alan adınızdan gelip gelmediğini denetler. Bu, saldırganların başka bir alan adının SPF ve DKIM kayıtlarıyla alan adınızın kimliğine bürünmesini önleyebilir. Bu kayıttaki \"p=\" (ilke), alıcı platformların yetkisiz e-postaları nasıl ele almasını istediğinizi belirtir. Çoğu alan adı için \"p=quarantine\" ilkesini öneririz. Aşağıdaki TXT kaydını DNS konsolunuza (alan adını satın aldığınız platformda) eklediğinizden emin olun.",
+      "copied": "DMARC değeri panoya kopyalandı",
+      "quarantine": "<strong>{{policy}}</strong>: alıcı platformlardan yetkisiz e-postaları istenmeyen olarak işaretlemelerini ya da karantinaya almalarını ister.",
+      "reject": "<strong>{{policy}}</strong>: alıcı platformlardan yetkisiz e-postaları reddetmelerini ister.",
+      "none": "<strong>{{policy}}</strong>: yetkisiz e-postaları karantinaya almaz ya da reddetmez. Genellikle yalnızca sorun gidermek ya da denemek için kullanılır."
+    },
+    "catchAll": {
+      "title": "Tümünü yakala adresi",
+      "description": "Bu alan adında var olmayan bir adrese (ör. yazım hatası nedeniyle) gönderilen postalar tümünü yakala adresine gider.",
+      "column": "Tümünü yakala",
+      "choose": "{{address}} adresini tümünü yakala adresi yap",
+      "enabled": "Etkin",
+      "updated": "Tümünü yakala adresi güncellendi"
+    }
   }
 }

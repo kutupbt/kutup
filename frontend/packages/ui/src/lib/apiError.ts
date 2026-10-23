@@ -62,6 +62,7 @@ export function apiErrorCode(error: unknown): ApiErrorCode | null {
 const CODE_MESSAGES: Record<string, string> = {
   keysPendingUpgrade: 'apiErrors.keysPendingUpgrade',
   peerOutdated: 'apiErrors.peerOutdated',
+  checkTimedOut: 'apiErrors.checkTimedOut',
 }
 
 /** `value`'s message for its `code`: a server body, or a client error that stops before asking. */

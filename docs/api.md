@@ -17,7 +17,10 @@ upload routes raise it (whole-file upload 10 GiB, a multipart version 2 GiB
 A failed request answers JSON `{"error": "<English text>", "code": "<code>"}`,
 plus fields a code names. **Apps act on `code`, never on the text**, which
 is for logs and people reading the API. A `5xx` answers only
-`{"error": "internal server error"}`.
+`{"error": "internal server error"}`, except the few coded ones about the
+request rather than the server (listed with their `5xx` status below,
+today `checkTimedOut`), which carry their `code` and `error` as client
+errors do.
 
 Without a specific code, a client error carries its status's default:
 
@@ -1956,7 +1959,8 @@ reset the address starts a new chain instead. Sending from it: `POST
 Administrators only. `GET`: `{ "configured", "stalwartDriftAt", "settings": { "mail_domains.mode":
 "everyone"|"approve"|"off", "mail_domains.per_account", …addresses_per_account,
 …on_server, …adds_per_day, …pending_days, …catch_all, …catch_all_per_day,
-…grace_warn_days, …grace_stopped_hours, …refreshes_at_once, …check_timeout_seconds }, "spf", "dkimKeys": [{ "selector",
+…grace_warn_days, …grace_stopped_hours, …refreshes_at_once, …check_timeout_seconds }, "ranges": {
+"<key>": { "min", "max" } } (each numeric setting's range, what the page offers), "spf", "dkimKeys": [{ "selector",
 "state", "host", "txt", "publishedSince" }], "domains": [... "blocked" ...] }`.
 `stalwartDriftAt` is when Stalwart's domains or DKIM signatures outside the
 custom domains (`MAIL_DOMAIN`'s own) last changed, as the reconcile saw them
@@ -1991,7 +1995,9 @@ lifts one by its name (`204`; `404` for a name not blocked), audited
 
 Administrators only. One account's limits over the site's: `{ "maxDomains":
 0–100 | null, "maxAddresses": 1–1000 | null, "catchAll": bool | null }`, `null`
-keeping the site's.
+keeping the site's; `GET` adds `maxDomainsRange` and `maxAddressesRange`
+(`{ min, max }`, the ranges of the site settings they override), which the
+`PUT` checks against.
 
 ## Mail
 

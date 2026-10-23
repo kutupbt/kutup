@@ -10,7 +10,7 @@
 #   scripts/gate.sh web                 frontend install, WASM builds and tests, build
 #   scripts/gate.sh browser <suite>...  browser specs from tests/e2e/suites/<suite>.txt,
 #                                       against an already running stack
-#   scripts/gate.sh live <name>...      live gates: mail, backup, federation, and pass
+#   scripts/gate.sh live <name>...      live gates: mail, mail-domains, backup, federation, and pass
 #                                       (pass: against a running stack, KUTUP_LIVE_SERVER
 #                                       and KUTUP_LIVE_DATABASE_URL set)
 #   scripts/gate.sh all                 static, rust and web
@@ -157,13 +157,14 @@ browser() {
 
 live() {
   if [ "$#" -eq 0 ]; then
-    echo "gate: live needs a gate: mail backup federation pass" >&2
+    echo "gate: live needs a gate: mail mail-domains backup federation pass" >&2
     return 2
   fi
   local name
   for name in "$@"; do
     case "$name" in
       mail) step "Mail gate"; scripts/test-mail-inbound.sh ;;
+      mail-domains) step "Custom domains in the browser"; scripts/test-mail-domains-browser.sh ;;
       backup) step "Chat backup lifecycle"; scripts/test-chat-backup-integration.sh ;;
       federation) step "Two-server federation"; scripts/test-chat-federation.sh ;;
       pass)

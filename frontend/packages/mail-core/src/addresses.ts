@@ -10,6 +10,7 @@ import api from '@kutup/session/client'
 import { useRequiredSession, type Session } from '@kutup/session/store'
 import type { OwnAddressRow } from './api'
 import { addFirstAddressKey } from './addressKey'
+import { domainUsable, type MailDomains } from './domains'
 import { checkedAddresses, disabledKeyList, enabledKeyList } from './keyList'
 
 export type AddressStatus = 'default' | 'active' | 'disabled' | 'missingKeys'
@@ -51,10 +52,8 @@ export function useAddressDomains() {
     queryKey: ['mail', 'domains', 'usable'],
     // No Mail domains on this server (404): none to add on.
     queryFn: async (): Promise<UsableDomain[]> => {
-      const response = await api
-        .get<{ domains: { id: string; name: string; state: number; stopped: boolean }[] }>('/mail/domains')
-        .catch(() => null)
-      return (response?.data.domains ?? []).filter((d) => (d.state === 1 || d.state === 2) && !d.stopped).map(({ id, name }) => ({ id, name }))
+      const response = await api.get<MailDomains>('/mail/domains').catch(() => null)
+      return (response?.data.domains ?? []).filter(domainUsable).map(({ id, name }) => ({ id, name }))
     },
   })
 }
