@@ -12,9 +12,8 @@
 //! expands independent KEK and login subkeys. The server-visible login key can
 //! therefore never decrypt the account master-key envelope.
 
-use crate::primitives::{Kdf, Suite};
+use crate::primitives::{pwhash, Kdf, PwhashParams, Suite};
 use base64::Engine;
-use dryoc::classic::crypto_pwhash::{crypto_pwhash, PasswordHashAlgorithm};
 use zeroize::Zeroizing;
 
 use crate::error::{CryptoError, Result};
@@ -98,16 +97,17 @@ fn argon2id(
             "account-protection salt must be {ACCOUNT_PROTECTION_SALT_LEN} bytes"
         )));
     }
+    let salt: &[u8; ACCOUNT_PROTECTION_SALT_LEN] = salt.try_into().expect("checked above");
     let mut out = Zeroizing::new([0u8; KEY_LEN]);
-    crypto_pwhash(
-        out.as_mut_slice(),
+    pwhash(
+        &PwhashParams {
+            operations: u64::from(parameters.iterations),
+            memory: parameters.memory_kib as usize * 1024,
+        },
         password,
         salt,
-        u64::from(parameters.iterations),
-        parameters.memory_kib as usize * 1024,
-        PasswordHashAlgorithm::Argon2id13,
-    )
-    .map_err(|e| CryptoError::Backend(format!("argon2id: {e}")))?;
+        out.as_mut_slice(),
+    )?;
     Ok(out)
 }
 

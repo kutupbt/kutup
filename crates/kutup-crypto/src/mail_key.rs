@@ -400,18 +400,10 @@ pub(crate) fn seal_group_secret(
     let incarnation =
         crate::named_share::parse_hex_32(member.incarnation_id, "member incarnation")?;
     let aad = group_share_aad(domain, &group_id, bound, member.account, &incarnation);
-    let mut hpke = crate::named_share::hpke_suite();
-    let (encapsulated, ciphertext) = hpke
-        .seal(
-            &hpke_rs::HpkePublicKey::new(member_hpke_public_key.to_vec()),
-            domain,
-            &aad,
-            secret,
-            None,
-            None,
-            None,
-        )
-        .map_err(|error| CryptoError::Backend(format!("group share HPKE seal: {error}")))?;
+    let (encapsulated, ciphertext) =
+        crate::primitives::hpke_seal(Suite::V1, member_hpke_public_key, domain, &aad, secret)
+            .map(|sealed| (sealed.encapsulated, sealed.ciphertext))
+            .map_err(|error| CryptoError::Backend(format!("group share HPKE seal: {error}")))?;
     if encapsulated.len() != crate::hpke_xwing::ENCAPSULATED_KEY_LEN {
         return Err(CryptoError::Backend(
             "group share: encapsulated key length".into(),
@@ -439,18 +431,16 @@ pub(crate) fn open_group_secret(
     let group_id = crate::drive_object::parse_canonical_uuid(group_id, "group")?;
     let incarnation: [u8; 32] = share[1..33].try_into().expect("32 bytes");
     let aad = group_share_aad(domain, &group_id, bound, member, &incarnation);
-    let hpke = crate::named_share::hpke_suite();
     Ok(Zeroizing::new(
-        hpke.open(
+        crate::primitives::hpke_open(
+            Suite::V1,
+            member_hpke_private_key,
             &share[33..GROUP_SHARE_HEADER_LEN],
-            &hpke_rs::HpkePrivateKey::new(member_hpke_private_key.to_vec()),
             domain,
             &aad,
             &share[GROUP_SHARE_HEADER_LEN..],
-            None,
-            None,
-            None,
         )
+        .map(crate::primitives::into_vec)
         .map_err(|_| CryptoError::AuthFailed)?,
     ))
 }

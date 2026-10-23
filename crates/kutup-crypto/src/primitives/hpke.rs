@@ -56,7 +56,7 @@ pub fn hpke_seal(
 /// Opens what [`hpke_seal`] sealed to `seed`'s public key.
 pub fn hpke_open(
     suite: Suite,
-    seed: &[u8; 32],
+    seed: &[u8],
     encapsulated: &[u8],
     info: &[u8],
     aad: &[u8],

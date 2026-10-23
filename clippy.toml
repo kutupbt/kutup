@@ -13,22 +13,22 @@ disallowed-methods = [
     { path = "reqwest::blocking::get", reason = "build a client with common::client() first" },
     # Algorithms are named only in kutup_crypto::primitives and the named
     # adapters (docs/plans/crypto-primitives.md); everything else asks it.
-    { path = "rand::thread_rng", reason = "use kutup_crypto::primitives::random" },
-    { path = "rand::rng", reason = "use kutup_crypto::primitives::random" },
-    { path = "getrandom::fill", reason = "use kutup_crypto::primitives::random" },
-    { path = "getrandom::getrandom", reason = "use kutup_crypto::primitives::random" },
-    { path = "dryoc::rng::copy_randombytes", reason = "use kutup_crypto::primitives::random" },
-    { path = "dryoc::classic::crypto_pwhash::crypto_pwhash", reason = "use kutup_crypto::primitives::pwhash" },
+    # `allow-invalid`: a crate without the dependency can't name it anyway.
+    { path = "rand::thread_rng", reason = "use kutup_crypto::primitives::random", allow-invalid = true },
+    { path = "getrandom::fill", reason = "use kutup_crypto::primitives::random", allow-invalid = true },
+    { path = "getrandom::getrandom", reason = "use kutup_crypto::primitives::random", allow-invalid = true },
+    { path = "dryoc::rng::copy_randombytes", reason = "use kutup_crypto::primitives::random", allow-invalid = true },
+    { path = "dryoc::classic::crypto_pwhash::crypto_pwhash", reason = "use kutup_crypto::primitives::pwhash", allow-invalid = true },
 ]
 disallowed-types = [
-    { path = "chacha20poly1305::XChaCha20Poly1305", reason = "use kutup_crypto::primitives::Aead" },
-    { path = "chacha20poly1305::ChaCha20Poly1305", reason = "use kutup_crypto::primitives::Aead" },
-    { path = "hkdf::Hkdf", reason = "use kutup_crypto::primitives::kdf" },
-    { path = "hmac::Hmac", reason = "use kutup_crypto::primitives::{mac, subkey}" },
-    { path = "sha2::Sha256", reason = "use kutup_crypto::primitives::{hash, Hasher}" },
-    { path = "sha2::Sha512", reason = "use kutup_crypto::primitives::{hash, Hasher}" },
-    { path = "ed25519_dalek::SigningKey", reason = "use kutup_crypto::primitives::SigningKey" },
-    { path = "ed25519_dalek::VerifyingKey", reason = "use kutup_crypto::primitives::VerifyingKey" },
-    { path = "rand::rngs::OsRng", reason = "use kutup_crypto::primitives::random" },
-    { path = "rand_core::OsRng", reason = "use kutup_crypto::primitives::random" },
+    { path = "chacha20poly1305::XChaCha20Poly1305", reason = "use kutup_crypto::primitives::Aead", allow-invalid = true },
+    { path = "chacha20poly1305::ChaCha20Poly1305", reason = "use kutup_crypto::primitives::Aead", allow-invalid = true },
+    { path = "hkdf::Hkdf", reason = "use kutup_crypto::primitives::kdf", allow-invalid = true },
+    { path = "hmac::Hmac", reason = "use kutup_crypto::primitives::{mac, subkey}", allow-invalid = true },
+    { path = "sha2::Sha256", reason = "use kutup_crypto::primitives::{hash, Hasher}", allow-invalid = true },
+    { path = "sha2::Sha512", reason = "use kutup_crypto::primitives::{hash, Hasher}", allow-invalid = true },
+    { path = "ed25519_dalek::SigningKey", reason = "use kutup_crypto::primitives::SigningKey", allow-invalid = true },
+    { path = "ed25519_dalek::VerifyingKey", reason = "use kutup_crypto::primitives::VerifyingKey", allow-invalid = true },
+    { path = "rand::rngs::OsRng", reason = "use kutup_crypto::primitives::random", allow-invalid = true },
+    { path = "rand_core::OsRng", reason = "use kutup_crypto::primitives::random", allow-invalid = true },
 ]

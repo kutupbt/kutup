@@ -163,8 +163,8 @@ file with the marker.
 
 | Crate | Moves in |
 |---|---|
-| `crates/kutup-crypto` | step 2 |
-| `crates/kutup-crypto-wasm` | step 2 |
+| ~~`crates/kutup-crypto`~~ | step 2: done |
+| ~~`crates/kutup-crypto-wasm`~~ | step 2: done |
 | `crates/kutup-server` | step 3 |
 | `crates/kutup-cli` | step 4 |
 | `crates/kutup-pass` | step 6 (KDBX and the SSH agent become adapters) |
@@ -173,7 +173,13 @@ file with the marker.
 | `crates/kutup-chat-core`, `crates/kutup-client-ffi`, `fuzz` | with chat-core's crypto |
 
 `kutup_crypto::primitives` itself carries `#[allow]` for the rules, as do
-the adapters once their crates move.
+the adapters once their crates move. In kutup-crypto those are `mail_key`
+(OpenPGP), `oblivious` (RFC 9458 on the HPKE suite), `opaque` (RFC 9807),
+`pass_vault` (KeePass's composite key), `provisioning` (Signal's
+ProvisioningCipher) and `safety_number` (Signal's); vector tests that check
+against reference implementations allow it too. `stream.rs` (secretstream)
+stays until the block format replaces it. Each rule has `allow-invalid`, as
+a crate without the dependency can't name the type anyway.
 
 ## Not in this note
 

@@ -8,7 +8,6 @@ mod calendar;
 
 use base64::engine::general_purpose::STANDARD;
 use base64::Engine as _;
-use ed25519_dalek::{Signer as _, SigningKey};
 use kutup_chat_proto::{
     ChatAttachmentLedgerEntryV1, ChatBackupBasePlaintextV1, ChatBackupManifestV1,
     ChatBackupSegmentPlaintextV1, ChatBackupSignerAuthorizationV1,
@@ -25,6 +24,7 @@ use kutup_crypto::drive_object::{self, DriveFileBlobContextV1};
 use kutup_crypto::envelope::{self, CollabFrameContextV1};
 use kutup_crypto::kdf::{self, AccountProtectionParameters, AccountProtectionSuiteId};
 use kutup_crypto::local_state::{self, LocalStatePurpose};
+use kutup_crypto::primitives::{SigningKey, Suite};
 use kutup_crypto::thumbnail::{self, Thumbnail, ThumbnailFormat, ThumbnailVariant};
 use serde::Serialize;
 use uuid::Uuid;
@@ -196,7 +196,7 @@ pub fn create_chat_backup_signer_authorization(
     let context = chat_backup_context(&identity.incarnation_id(), backup_incarnation_id)?;
     let signer_seed = chat_backup::derive_manifest_signing_seed(&root, context)
         .map_err(|error| js_error(&error.to_string()))?;
-    let signer = SigningKey::from_bytes(&signer_seed);
+    let signer = SigningKey::from_seed(Suite::V1, &signer_seed);
     let mut authorization = ChatBackupSignerAuthorizationV1 {
         version: 1,
         backup_incarnation_id: backup_incarnation_id.into(),
@@ -256,7 +256,7 @@ pub fn verify_chat_backup_metadata(
         .map_err(|error| js_error(&error.to_string()))?;
     if authorization.manifest_signing_public_key
         != STANDARD.encode(
-            SigningKey::from_bytes(&signer_seed)
+            SigningKey::from_seed(Suite::V1, &signer_seed)
                 .verifying_key()
                 .to_bytes(),
         )
@@ -432,12 +432,9 @@ pub fn sign_chat_backup_manifest(
     manifest.signature.clear();
     let signer_seed = chat_backup::derive_manifest_signing_seed(&root, context)
         .map_err(|error| js_error(&error.to_string()))?;
-    let signer = SigningKey::from_bytes(&signer_seed);
-    manifest.signature = STANDARD.encode(
-        signer
-            .sign(&manifest.signing_bytes().map_err(|error| js_error(&error))?)
-            .to_bytes(),
-    );
+    let signer = SigningKey::from_seed(Suite::V1, &signer_seed);
+    manifest.signature =
+        STANDARD.encode(signer.sign(&manifest.signing_bytes().map_err(|error| js_error(&error))?));
     serde_wasm_bindgen::to_value(&manifest)
         .map_err(|error| js_error(&format!("encode backup manifest: {error}")))
 }

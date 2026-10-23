@@ -24,7 +24,6 @@
 //! is not in the database ([`seal_server_setup`]).
 
 use crate::primitives::{Aead, Kdf, Suite};
-use dryoc::classic::crypto_pwhash::{crypto_pwhash, PasswordHashAlgorithm};
 use opaque_ke::errors::{InternalError, ProtocolError};
 use opaque_ke::generic_array::{ArrayLength, GenericArray};
 use opaque_ke::ksf::Ksf;
@@ -69,13 +68,14 @@ impl Ksf for Argon2idV1 {
         input: GenericArray<u8, L>,
     ) -> std::result::Result<GenericArray<u8, L>, InternalError> {
         let mut output = GenericArray::default();
-        crypto_pwhash(
-            output.as_mut_slice(),
+        crate::primitives::pwhash(
+            &crate::primitives::PwhashParams {
+                operations: KSF_PASSES,
+                memory: KSF_MEMORY_BYTES,
+            },
             input.as_slice(),
             &[0u8; 16],
-            KSF_PASSES,
-            KSF_MEMORY_BYTES,
-            PasswordHashAlgorithm::Argon2id13,
+            output.as_mut_slice(),
         )
         .map_err(|_| InternalError::KsfError)?;
         Ok(output)
