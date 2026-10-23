@@ -87,6 +87,8 @@ export interface EventRow {
   startUtc: string
   endUtc: string
   fullDay: boolean
+  /** A repeating event's last end as the server expanded it; null for one without end. */
+  rangeEndUtc: string | null
   sequence: number
   /** Starts at 1; each update adds one, and names the one it was made from. */
   revision: number
@@ -469,7 +471,8 @@ export async function saveEvent(
   const stored = await syncOne(
     calendar,
     addressId,
-    existing ? { update: { id: existing.id, baseRevision: existing.revision, event } } : { create: event },
+    // A new event's id is drawn here, so a create sent again is the stored one, never a second.
+    existing ? { update: { id: existing.id, baseRevision: existing.revision, event } } : { create: { id: crypto.randomUUID(), event } },
   )
   return stored?.id ?? existing?.id ?? ''
 }

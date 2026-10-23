@@ -160,6 +160,22 @@ fn sync(c: &Client, base: &str, owner: &Owner, calendar: &str, changes: Value) -
         .clone()
 }
 
+/// Deletes the owner's calendars (their events with them): nothing stays
+/// charged after a test (the gate checks every account comes back to zero).
+fn drop_calendars(c: &Client, base: &str, owner: &Owner, ids: &[&str]) {
+    for id in ids {
+        let r = bearer(
+            c.delete(format!("{base}/api/calendar/calendars/{id}")),
+            &owner.user.token,
+        )
+        .json(&json!({}))
+        .send()
+        .unwrap();
+        assert_eq!(r.status(), StatusCode::NO_CONTENT);
+    }
+    assert_eq!(storage(c, base, &owner.user), 0);
+}
+
 fn storage(c: &Client, base: &str, user: &User) -> i64 {
     let usage: Value = bearer(c.get(format!("{base}/api/user/storage")), &user.token)
         .send()
@@ -303,7 +319,7 @@ fn calendars_and_events() {
         &base,
         &ada,
         &id,
-        json!([{ "create": seal(&first, &key, &ada.secret_key) }]),
+        json!([{ "create": { "id": uuid::Uuid::new_v4().to_string(), "event": seal(&first, &key, &ada.secret_key) } }]),
     );
     assert_eq!(results[0]["status"], 200, "{results:?}");
     let event = &results[0]["event"];
@@ -369,8 +385,9 @@ fn calendars_and_events() {
         b64(&cal::testing::key_packet_to(&SessionKey::generate(), &eve.public_key).unwrap());
     let mut repeating = fields(
         "e3@kutup.test",
-        "2026-10-30T09:00:00",
-        "2026-10-30T10:00:00",
+        // After the paging window below, so its pages hold the two events.
+        "2026-12-04T09:00:00",
+        "2026-12-04T10:00:00",
         "x",
     );
     repeating.rrule = Some("FREQ=WEEKLY".into());
@@ -380,17 +397,18 @@ fn calendars_and_events() {
         &ada,
         &id,
         json!([
-            { "create": by_eve },
-            { "create": elsewhere },
-            { "create": seal(&repeating, &key, &ada.secret_key) },
-            { "create": seal(&first, &key, &ada.secret_key) },
+            { "create": { "id": uuid::Uuid::new_v4().to_string(), "event": by_eve } },
+            { "create": { "id": uuid::Uuid::new_v4().to_string(), "event": elsewhere } },
+            { "create": { "id": uuid::Uuid::new_v4().to_string(), "event": seal(&repeating, &key, &ada.secret_key) } },
+            { "create": { "id": uuid::Uuid::new_v4().to_string(), "event": seal(&first, &key, &ada.secret_key) } },
         ]),
     );
     let statuses: Vec<_> = results
         .iter()
         .map(|r| r["status"].as_u64().unwrap())
         .collect();
-    assert_eq!(statuses, [400, 400, 400, 409], "{results:?}");
+    // A weekly event is taken now (E2); the others are refused.
+    assert_eq!(statuses, [400, 400, 200, 409], "{results:?}");
     assert_eq!(results[3]["code"], "uidTaken");
     // A signed part changed after signing: refused.
     let mut moved: SealedEventV1 = serde_json::from_value(seal(
@@ -411,7 +429,13 @@ fn calendars_and_events() {
         data: b64(text.as_bytes()),
         signature: moved.shared_signed.signature,
     };
-    let results = sync(&c, &base, &ada, &id, json!([{ "create": moved }]));
+    let results = sync(
+        &c,
+        &base,
+        &ada,
+        &id,
+        json!([{ "create": { "id": uuid::Uuid::new_v4().to_string(), "event": moved } }]),
+    );
     assert_eq!(results[0]["status"], 400);
 
     // Changed: the same UID, new times read again.
@@ -475,7 +499,7 @@ fn calendars_and_events() {
         &base,
         &ada,
         &id,
-        json!([{ "create": seal(&fields("paged@kutup.test", "2026-10-30T09:00:00", "2026-10-30T10:00:00", "Paged"), &key, &ada.secret_key) }]),
+        json!([{ "create": { "id": uuid::Uuid::new_v4().to_string(), "event": seal(&fields("paged@kutup.test", "2026-10-30T09:00:00", "2026-10-30T10:00:00", "Paged"), &key, &ada.secret_key) } }]),
     );
     assert_eq!(results[0]["status"], 200, "{results:?}");
     let window = "start=2026-10-26T00:00:00Z&end=2026-11-02T00:00:00Z";
@@ -624,6 +648,393 @@ fn calendars_and_events() {
 }
 
 /// The calendar limit is the administrators' (`calendarsPerAccount`).
+/// A calendar of Ada's, made through the API: its id and key.
+fn made_calendar(c: &Client, base: &str, ada: &Owner, name: &str) -> (String, UnlockedCalendarKey) {
+    let (body, _, key) = new_calendar(ada, name);
+    let r = bearer(
+        c.post(format!("{base}/api/calendar/calendars")),
+        &ada.user.token,
+    )
+    .json(&body)
+    .send()
+    .unwrap();
+    assert_eq!(
+        r.status(),
+        StatusCode::CREATED,
+        "{}",
+        r.text().unwrap_or_default()
+    );
+    let created: Value = r.json().unwrap();
+    (created["id"].as_str().unwrap().to_owned(), key)
+}
+
+fn create(event: Value) -> Value {
+    json!({ "create": { "id": uuid::Uuid::new_v4().to_string(), "event": event } })
+}
+
+fn berlin(local: &str) -> TimeV1 {
+    TimeV1::Zoned {
+        local: local.into(),
+        tzid: "Europe/Berlin".into(),
+    }
+}
+
+/// Repeating events on the server (docs/plans/calendar.md, E2b): the range
+/// end of a series across a DST change, the window of an endless one, the
+/// COUNT setting, the calendar part's EXDATEs held to the series, changed
+/// occurrences held to their series, and creates that land once however
+/// often they are sent.
+#[test]
+fn repeating_events() {
+    let Ok(base) = std::env::var("KUTUP_LIVE_SERVER") else {
+        eprintln!("KUTUP_LIVE_SERVER not set; skipping");
+        return;
+    };
+    let base = base.trim_end_matches('/').to_string();
+    let c = crate::common::client();
+    let ada = owner(&c, &base);
+    let (id, key) = made_calendar(&c, &base, &ada, "Tekrar");
+    let window = |start: &str, end: &str| -> Vec<String> {
+        let page: Value = bearer(
+            c.get(format!(
+                "{base}/api/calendar/calendars/{id}/events?start={start}&end={end}"
+            )),
+            &ada.user.token,
+        )
+        .send()
+        .unwrap()
+        .json()
+        .unwrap();
+        page["events"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|e| e["uid"].as_str().unwrap().to_owned())
+            .collect()
+    };
+    let sealed = |fields: &EventFieldsV1| seal(fields, &key, &ada.secret_key);
+
+    // Mondays at 09:00 in Berlin, five times, across the end of summer time
+    // (25 October): the last ends 16 November 10:00 CET, 09:00 UTC.
+    let mut weekly = fields(
+        "weekly@kutup.test",
+        "2026-10-19T09:00:00",
+        "2026-10-19T10:00:00",
+        "Weekly",
+    );
+    weekly.start = berlin("2026-10-19T09:00:00");
+    weekly.end = Some(berlin("2026-10-19T10:00:00"));
+    weekly.rrule = Some("FREQ=WEEKLY;COUNT=5".into());
+    let results = sync(&c, &base, &ada, &id, json!([create(sealed(&weekly))]));
+    assert_eq!(results[0]["status"], 200, "{results:?}");
+    assert_eq!(results[0]["event"]["rangeEndUtc"], "2026-11-16T09:00:00Z");
+    assert!(window("2026-11-16T00:00:00Z", "2026-11-17T00:00:00Z")
+        .contains(&"weekly@kutup.test".to_owned()));
+    assert!(!window("2026-11-17T00:00:00Z", "2026-11-30T00:00:00Z")
+        .contains(&"weekly@kutup.test".to_owned()));
+
+    // Without end: no range end, in every later window.
+    let mut daily = fields(
+        "daily@kutup.test",
+        "2026-10-20T09:00:00",
+        "2026-10-20T09:30:00",
+        "Daily",
+    );
+    daily.rrule = Some("FREQ=DAILY".into());
+    let results = sync(&c, &base, &ada, &id, json!([create(sealed(&daily))]));
+    assert_eq!(results[0]["status"], 200, "{results:?}");
+    assert!(results[0]["event"]["rangeEndUtc"].is_null());
+    assert!(window("2030-01-01T00:00:00Z", "2030-01-02T00:00:00Z")
+        .contains(&"daily@kutup.test".to_owned()));
+
+    // A COUNT past the site's (49 by default).
+    let mut long = fields(
+        "long@kutup.test",
+        "2026-10-20T09:00:00",
+        "2026-10-20T09:30:00",
+        "Long",
+    );
+    long.rrule = Some("FREQ=DAILY;COUNT=50".into());
+    let results = sync(&c, &base, &ada, &id, json!([create(sealed(&long))]));
+    assert_eq!(
+        (results[0]["status"].as_u64(), results[0]["code"].as_str()),
+        (Some(400), Some("countTooLarge"))
+    );
+
+    // This calendar's own EXDATE: an occurrence of the series (the last
+    // one, so the range ends a week earlier), never another time.
+    let mut own = weekly.clone();
+    own.uid = "own@kutup.test".into();
+    let mut parts = own.to_parts().unwrap();
+    parts.calendar_signed.exdates = vec![berlin("2026-11-16T09:00:00").to_time().unwrap()];
+    let removed = key.seal_event(&parts, &ada.secret_key, None, None).unwrap();
+    let results = sync(
+        &c,
+        &base,
+        &ada,
+        &id,
+        json!([create(
+            serde_json::to_value(SealedEventV1::of(&removed)).unwrap()
+        )]),
+    );
+    assert_eq!(results[0]["status"], 200, "{results:?}");
+    assert_eq!(results[0]["event"]["rangeEndUtc"], "2026-11-09T09:00:00Z");
+    let mut off = weekly.clone();
+    off.uid = "off@kutup.test".into();
+    let mut parts = off.to_parts().unwrap();
+    // A Tuesday: no occurrence there.
+    parts.calendar_signed.exdates = vec![berlin("2026-10-20T09:00:00").to_time().unwrap()];
+    let wrong = key.seal_event(&parts, &ada.secret_key, None, None).unwrap();
+    let results = sync(
+        &c,
+        &base,
+        &ada,
+        &id,
+        json!([create(
+            serde_json::to_value(SealedEventV1::of(&wrong)).unwrap()
+        )]),
+    );
+    assert_eq!(
+        (results[0]["status"].as_u64(), results[0]["code"].as_str()),
+        (Some(400), Some("exdateNotAnOccurrence")),
+        "{results:?}"
+    );
+
+    // A changed occurrence: one of its series' (26 October, in summer time
+    // no longer), not another time, not without its series.
+    let child = |uid: &str, at: &str| {
+        let mut f = fields(uid, "2026-10-26T11:00:00", "2026-10-26T12:00:00", "Moved");
+        f.start = berlin("2026-10-26T11:00:00");
+        f.end = Some(berlin("2026-10-26T12:00:00"));
+        f.recurrence_id = Some(berlin(at));
+        sealed(&f)
+    };
+    let results = sync(
+        &c,
+        &base,
+        &ada,
+        &id,
+        json!([
+            create(child("weekly@kutup.test", "2026-10-26T09:00:00")),
+            create(child("weekly@kutup.test", "2026-10-27T09:00:00")),
+            create(child("nobody@kutup.test", "2026-10-26T09:00:00")),
+        ]),
+    );
+    let outcome: Vec<_> = results
+        .iter()
+        .map(|r| {
+            (
+                r["status"].as_u64().unwrap(),
+                r["code"].as_str().map(str::to_owned),
+            )
+        })
+        .collect();
+    assert_eq!(
+        outcome,
+        [
+            (200, None),
+            (400, Some("notAnOccurrence".into())),
+            (400, Some("parentMissing".into()))
+        ],
+        "{results:?}"
+    );
+
+    // "This and following" from 2 November, Proton's three changes, each
+    // landing once however often it is sent: cut the series to two, then
+    // the new series from the 2nd (its own UID).
+    let stored: Value = bearer(
+        c.get(format!("{base}/api/calendar/calendars/{id}/events?start=2026-10-19T00:00:00Z&end=2026-10-20T00:00:00Z")),
+        &ada.user.token,
+    )
+    .send()
+    .unwrap()
+    .json()
+    .unwrap();
+    let parent = stored["events"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|e| e["uid"] == "weekly@kutup.test" && e["event"].is_object())
+        .unwrap()
+        .clone();
+    let mut cut = weekly.clone();
+    cut.rrule = Some("FREQ=WEEKLY;COUNT=2".into());
+    cut.sequence = 1;
+    let cut_change = json!({ "update": {
+        "id": parent["id"], "baseRevision": parent["revision"], "event": sealed(&cut),
+    } });
+    let mut following = weekly.clone();
+    following.uid = "weekly_R20261102T090000@kutup.test".into();
+    following.start = berlin("2026-11-02T09:00:00");
+    following.end = Some(berlin("2026-11-02T10:00:00"));
+    following.rrule = Some("FREQ=WEEKLY;COUNT=3".into());
+    let new_series = json!({ "create": {
+        "id": uuid::Uuid::new_v4().to_string(), "event": sealed(&following),
+    } });
+    for round in 0..2 {
+        let results = sync(
+            &c,
+            &base,
+            &ada,
+            &id,
+            json!([cut_change.clone(), new_series.clone()]),
+        );
+        if round == 0 {
+            assert_eq!(results[0]["status"], 200, "{results:?}");
+            assert_eq!(results[0]["event"]["rangeEndUtc"], "2026-10-26T09:00:00Z");
+        } else {
+            // Sent again: the cut is a conflict the app reads as done.
+            assert_eq!(results[0]["code"], "revision_conflict", "{results:?}");
+        }
+        assert_eq!(results[1]["status"], 200, "{results:?}");
+    }
+    let november = window("2026-11-02T00:00:00Z", "2026-11-30T00:00:00Z");
+    assert_eq!(
+        november
+            .iter()
+            .filter(|uid| uid.contains("_R20261102"))
+            .count(),
+        1,
+        "one new series however often it was sent: {november:?}"
+    );
+
+    let events = |start: &str, end: &str| -> Vec<Value> {
+        let page: Value = bearer(
+            c.get(format!(
+                "{base}/api/calendar/calendars/{id}/events?start={start}&end={end}"
+            )),
+            &ada.user.token,
+        )
+        .send()
+        .unwrap()
+        .json()
+        .unwrap();
+        page["events"].as_array().unwrap().clone()
+    };
+    // An event by its UID and start (a series and its changes share one).
+    let one = |uid: &str, start_utc: &str| -> Value {
+        events("2026-10-19T00:00:00Z", "2026-11-30T00:00:00Z")
+            .into_iter()
+            .find(|e| e["uid"] == uid && e["startUtc"] == start_utc)
+            .unwrap_or_else(|| panic!("{uid} at {start_utc}"))
+    };
+    let status = |results: &[Value]| {
+        (
+            results[0]["status"].as_u64(),
+            results[0]["code"].as_str().map(str::to_owned),
+        )
+    };
+
+    // A changed occurrence is not behind its series' SEQUENCE (the cut made
+    // it 1).
+    let mut behind = fields(
+        "weekly@kutup.test",
+        "2026-10-19T12:00:00",
+        "2026-10-19T13:00:00",
+        "Behind",
+    );
+    behind.start = berlin("2026-10-19T12:00:00");
+    behind.end = Some(berlin("2026-10-19T13:00:00"));
+    behind.recurrence_id = Some(berlin("2026-10-19T09:00:00"));
+    let results = sync(&c, &base, &ada, &id, json!([create(sealed(&behind))]));
+    assert_eq!(
+        status(&results),
+        (Some(409), Some("sequenceBehind".into())),
+        "{results:?}"
+    );
+    behind.sequence = 1;
+    let results = sync(&c, &base, &ada, &id, json!([create(sealed(&behind))]));
+    assert_eq!(results[0]["status"], 200, "{results:?}");
+
+    // A series never turns into a changed occurrence.
+    let series = one("weekly_R20261102T090000@kutup.test", "2026-11-02T08:00:00Z");
+    let mut turned = following.clone();
+    turned.recurrence_id = Some(berlin("2026-11-02T09:00:00"));
+    turned.rrule = None;
+    let results = sync(
+        &c,
+        &base,
+        &ada,
+        &id,
+        json!([{ "update": {
+            "id": series["id"], "baseRevision": series["revision"], "event": sealed(&turned),
+        } }]),
+    );
+    assert_eq!(
+        status(&results),
+        (Some(400), Some("recurrenceIdChanged".into())),
+        "{results:?}"
+    );
+
+    // Its series deleted, a changed occurrence stays a single event that
+    // can still be changed.
+    let parent = one("weekly@kutup.test", "2026-10-19T07:00:00Z");
+    let results = sync(
+        &c,
+        &base,
+        &ada,
+        &id,
+        json!([{ "delete": { "id": parent["id"], "baseRevision": parent["revision"] } }]),
+    );
+    assert_eq!(results[0]["status"], 200, "{results:?}");
+    let orphan = one("weekly@kutup.test", "2026-10-19T10:00:00Z");
+    let mut changed = behind.clone();
+    changed.summary = Some("Still here".into());
+    changed.sequence = 2;
+    let results = sync(
+        &c,
+        &base,
+        &ada,
+        &id,
+        json!([{ "update": {
+            "id": orphan["id"], "baseRevision": orphan["revision"], "event": sealed(&changed),
+        } }]),
+    );
+    assert_eq!(results[0]["status"], 200, "{results:?}");
+
+    // An id another calendar's event has is taken, and that event isn't
+    // read for it.
+    let (other, other_key) = made_calendar(&c, &base, &ada, "İkinci");
+    let elsewhere = fields(
+        "elsewhere@kutup.test",
+        "2026-12-01T09:00:00",
+        "2026-12-01T10:00:00",
+        "x",
+    );
+    let results = sync(
+        &c,
+        &base,
+        &ada,
+        &other,
+        json!([{ "create": {
+            "id": series["id"], "event": seal(&elsewhere, &other_key, &ada.secret_key),
+        } }]),
+    );
+    assert_eq!(
+        status(&results),
+        (Some(409), Some("eventIdTaken".into())),
+        "{results:?}"
+    );
+
+    // A series whose last occurrence has no length, at a window's start:
+    // in that window.
+    let mut zero = fields(
+        "zero@kutup.test",
+        "2026-12-01T09:00:00",
+        "2026-12-01T09:00:00",
+        "Zero",
+    );
+    zero.rrule = Some("FREQ=DAILY;COUNT=2".into());
+    let results = sync(&c, &base, &ada, &id, json!([create(sealed(&zero))]));
+    assert_eq!(
+        results[0]["event"]["rangeEndUtc"], "2026-12-02T06:00:00Z",
+        "{results:?}"
+    );
+    assert!(window("2026-12-02T06:00:00Z", "2026-12-02T07:00:00Z")
+        .contains(&"zero@kutup.test".to_owned()));
+    drop_calendars(&c, &base, &ada, &[&id, &other]);
+}
+
 #[test]
 fn the_calendar_limit_is_a_setting() {
     let (Ok(base), Ok(admin)) = (

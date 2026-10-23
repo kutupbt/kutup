@@ -20,6 +20,7 @@ use base64::engine::general_purpose::STANDARD;
 use base64::Engine as _;
 use kutup_crypto::calendar::{self as cal, SealedEventV1, SealedMetadataV1};
 use kutup_crypto::calendar_event::{EventTime, SharedSigned};
+use kutup_crypto::calendar_recurrence::{Rule, Series};
 use serde::{Deserialize, Serialize};
 use sqlx::{Postgres, Transaction};
 use utoipa::ToSchema;
@@ -30,8 +31,8 @@ use crate::error::{AppError, AppResult};
 use crate::handlers::trusted_uuid;
 use crate::middleware::AuthUser;
 use crate::site_settings::{
-    CALENDARS_PER_ACCOUNT, CALENDAR_EVENTS_PAGE, CALENDAR_EVENTS_PER_CALENDAR, CALENDAR_SYNC_BATCH,
-    CALENDAR_WINDOW_DAYS,
+    CALENDARS_PER_ACCOUNT, CALENDAR_EVENTS_PAGE, CALENDAR_EVENTS_PER_CALENDAR, CALENDAR_MAX_COUNT,
+    CALENDAR_SYNC_BATCH, CALENDAR_WINDOW_DAYS,
 };
 use crate::{revisions, AppState};
 
@@ -600,6 +601,11 @@ pub struct EventView {
     #[serde(with = "time::serde::rfc3339")]
     pub end_utc: time::OffsetDateTime,
     pub full_day: bool,
+    /// A repeating event's last end, as the server expanded it from both
+    /// parts (absent for one without end); a client checks it against its
+    /// own expansion, as it checks the start.
+    #[serde(with = "time::serde::rfc3339::option")]
+    pub range_end_utc: Option<time::OffsetDateTime>,
     pub sequence: i32,
     /// The stored version: a change names it as its `baseRevision`.
     pub revision: i64,
@@ -646,6 +652,7 @@ struct EventRow {
     start_utc: time::OffsetDateTime,
     end_utc: time::OffsetDateTime,
     full_day: bool,
+    range_end_utc: Option<time::OffsetDateTime>,
     sequence: i32,
     revision: i64,
     modified_at: time::OffsetDateTime,
@@ -657,7 +664,8 @@ const EVENT_VIEW: &str = "SELECT e.id, e.calendar_id, e.uid, a.address AS author
         e.shared_encrypted, e.shared_encrypted_signature,
         e.calendar_signed, e.calendar_signed_signature,
         e.calendar_encrypted, e.calendar_encrypted_signature,
-        e.start_utc, e.end_utc, e.full_day, e.sequence, e.revision, e.modified_at
+        e.start_utc, e.end_utc, e.full_day, e.range_end_utc, e.sequence, e.revision,
+        e.modified_at
    FROM calendar_events e
    LEFT JOIN mail_addresses a ON a.id = e.author_address_id";
 
@@ -694,6 +702,7 @@ fn event_view(row: EventRow) -> EventView {
         start_utc: row.start_utc,
         end_utc: row.end_utc,
         full_day: row.full_day,
+        range_end_utc: row.range_end_utc,
         sequence: row.sequence,
         revision: row.revision,
         modified_at: row.modified_at,
@@ -772,12 +781,14 @@ pub async fn events(
     }
     // An event meets the half-open window [start, end) when it starts before
     // its end and ends (or, repeating, may still recur) after its start; one
-    // of no length meets it when it starts in it. A page continues after the
+    // of no length meets it when it starts in it, so an event (or a series'
+    // last occurrence) ending at the window's start is listed too (the
+    // client keeps what meets the window). A page continues after the
     // client's cursor by (start, id).
     let mut rows: Vec<EventRow> = sqlx::query_as(&format!(
         "{EVENT_VIEW}
           WHERE e.calendar_id = $1 AND e.start_utc < $3
-            AND (COALESCE(e.range_end_utc, 'infinity'::timestamptz) > $2 OR e.start_utc >= $2)
+            AND COALESCE(e.range_end_utc, 'infinity'::timestamptz) >= $2
             AND ($4::timestamptz IS NULL OR (e.start_utc, e.id) > ($4, $5))
           ORDER BY e.start_utc, e.id
           LIMIT $6"
@@ -835,12 +846,15 @@ pub async fn event(
 }
 
 /// One change in an events sync (Proton's `SyncMultipleEvents`):
-/// `{"create": event}`, `{"update": {"id", "baseRevision", "event"}}` or
-/// `{"delete": {"id", "baseRevision"}}`.
+/// `{"create": {"id", "event"}}`, `{"update": {"id", "baseRevision",
+/// "event"}}` or `{"delete": {"id", "baseRevision"}}`.
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub enum EventChange {
-    Create(SealedEventV1),
+    /// `id`: drawn by the client (a UUID v4), so a create retried after it
+    /// landed answers the stored event instead of making a second one.
+    #[serde(rename_all = "camelCase")]
+    Create { id: Uuid, event: SealedEventV1 },
     /// `base_revision`: the event's stored revision the change was made
     /// from; another is `409 revision_conflict`.
     #[serde(rename_all = "camelCase")]
@@ -852,10 +866,7 @@ pub enum EventChange {
     /// Names the revision it was made from, as an update does, so a delete
     /// never removes a change another device just saved.
     #[serde(rename_all = "camelCase")]
-    Delete {
-        id: Uuid,
-        base_revision: i64,
-    },
+    Delete { id: Uuid, base_revision: i64 },
 }
 
 #[derive(Debug, Deserialize, ToSchema)]
@@ -890,6 +901,11 @@ struct Checked {
     shared: SharedSigned,
     start: time::OffsetDateTime,
     end: time::OffsetDateTime,
+    /// The last occurrence's end as this calendar shows the series; `None`
+    /// for one without end.
+    range_end: Option<time::OffsetDateTime>,
+    /// A changed occurrence: the instant it replaces.
+    recurrence_id: Option<time::OffsetDateTime>,
     bytes: i64,
 }
 
@@ -901,30 +917,88 @@ fn to_time(time: &EventTime) -> AppResult<time::OffsetDateTime> {
         .map_err(|_| AppError::bad_request("a time is out of range"))
 }
 
+fn coded(error: AppError, code: &str) -> AppError {
+    error.with_details(serde_json::json!({ "code": code }))
+}
+
+fn from_seconds(seconds: i64) -> AppResult<time::OffsetDateTime> {
+    time::OffsetDateTime::from_unix_timestamp(seconds)
+        .map_err(|_| AppError::bad_request("a time is out of range"))
+}
+
 /// Checks a sealed event for a calendar and its author's keys, and reads
-/// its columns. E1 takes single events: no recurrence, exceptions or
-/// organizer yet (E2, E4).
+/// its columns, the series expanded once for its range end (bounded: the
+/// format's 1970–2037 range and 500 EXDATEs). No organizer yet (E4).
 fn check_event(
     event: &SealedEventV1,
     calendar_public_key: &[u8],
     author_keys: &[Vec<u8>],
+    max_count: i64,
 ) -> AppResult<Checked> {
     let event = event.to_event().map_err(crypto)?;
     cal::check_sealed_shape(&event, calendar_public_key).map_err(crypto)?;
     let authors: Vec<&[u8]> = author_keys.iter().map(Vec::as_slice).collect();
     let (shared, calendar) = cal::check_signed_parts(&event, &authors).map_err(crypto)?;
-    if shared.rrule.is_some()
-        || shared.recurrence_id.is_some()
-        || !shared.exdates.is_empty()
-        || !calendar.exdates.is_empty()
-    {
-        return Err(AppError::bad_request(
-            "repeating events come with recurrence (E2)",
-        ));
-    }
     if shared.organizer.is_some() {
         return Err(AppError::bad_request("invitations come later (E4)"));
     }
+    // This calendar's own EXDATEs (Proton's calendar part) remove
+    // occurrences of the shared series, and only those: each is one of its
+    // occurrences, in its form; together with the shared ones at least one
+    // occurrence is left (docs/plans/calendar.md, E2b item 3).
+    let rule = shared
+        .rrule
+        .as_deref()
+        .map(Rule::parse)
+        .transpose()
+        .map_err(crypto)?;
+    if rule
+        .as_ref()
+        .and_then(|rule| rule.count)
+        .is_some_and(|count| i64::from(count) > max_count)
+    {
+        return Err(coded(
+            AppError::bad_request(format!(
+                "a series repeats at most {max_count} times by COUNT"
+            )),
+            "countTooLarge",
+        ));
+    }
+    if !calendar.exdates.is_empty() {
+        let Some(rule) = rule.as_ref() else {
+            return Err(coded(
+                AppError::bad_request("an EXDATE removes an occurrence of a repeating event"),
+                "exdateNotAnOccurrence",
+            ));
+        };
+        let bare =
+            Series::new(&shared.dtstart, shared.dtend.as_ref(), Some(rule), &[]).map_err(crypto)?;
+        if !bare.occurs_at_all(&calendar.exdates).map_err(crypto)? {
+            return Err(coded(
+                AppError::bad_request("an EXDATE is not an occurrence of the series"),
+                "exdateNotAnOccurrence",
+            ));
+        }
+    }
+    let mut exdates = shared.exdates.clone();
+    for exdate in &calendar.exdates {
+        if !exdates.contains(exdate) {
+            exdates.push(exdate.clone());
+        }
+    }
+    let series = Series::new(
+        &shared.dtstart,
+        shared.dtend.as_ref(),
+        rule.as_ref(),
+        &exdates,
+    )
+    .map_err(crypto)?;
+    let range_end = series
+        .range_end()
+        .map_err(crypto)?
+        .map(|at| from_seconds(at.as_second()))
+        .transpose()?;
+    let recurrence_id = shared.recurrence_id.as_ref().map(to_time).transpose()?;
     let start = to_time(&shared.dtstart)?;
     let end = match &shared.dtend {
         Some(end) => to_time(end)?,
@@ -949,8 +1023,28 @@ fn check_event(
         shared,
         start,
         end,
+        range_end,
+        recurrence_id,
         bytes,
     })
+}
+
+/// [`check_event`] on a blocking thread: a series' checks are CPU work, kept
+/// off the server's async threads and done before the calendar is locked.
+async fn check_event_blocking(
+    event: &SealedEventV1,
+    calendar_public_key: &[u8],
+    author_keys: &[Vec<u8>],
+    max_count: i64,
+) -> AppResult<Checked> {
+    let (event, public_key, author_keys) = (
+        event.clone(),
+        calendar_public_key.to_vec(),
+        author_keys.to_vec(),
+    );
+    tokio::task::spawn_blocking(move || check_event(&event, &public_key, &author_keys, max_count))
+        .await
+        .map_err(|error| AppError::internal(error.to_string()))?
 }
 
 /// `POST /api/calendar/calendars/{id}/events/sync` — creates, changes and
@@ -999,6 +1093,7 @@ pub async fn sync(
         address_keys(&mut conn, user_id, input.address_id).await?.0
     };
     let max_events = CALENDAR_EVENTS_PER_CALENDAR.load(&state.pool).await?;
+    let max_count = CALENDAR_MAX_COUNT.load(&state.pool).await?;
     let mut results = Vec::with_capacity(input.changes.len());
     for change in &input.changes {
         let outcome = apply(
@@ -1010,6 +1105,7 @@ pub async fn sync(
             &public_key,
             &author_keys,
             max_events,
+            max_count,
             change,
         )
         .await;
@@ -1064,8 +1160,19 @@ async fn apply(
     public_key: &[u8],
     author_keys: &[Vec<u8>],
     max_events: i64,
+    max_count: i64,
     change: &EventChange,
 ) -> AppResult<Option<Uuid>> {
+    // The parts checked first, before the calendar is locked.
+    let checked = match change {
+        EventChange::Create { id, .. } if id.get_version_num() != 4 => {
+            return Err(AppError::bad_request("an event's id is a UUID v4"));
+        }
+        EventChange::Create { event, .. } | EventChange::Update { event, .. } => {
+            Some(check_event_blocking(event, public_key, author_keys, max_count).await?)
+        }
+        EventChange::Delete { .. } => None,
+    };
     let mut tx = state.pool.begin().await?;
     // The calendar row orders the calendar's writes (the count, the UID),
     // and under it the caller is still a member who may write: a calendar
@@ -1090,8 +1197,38 @@ async fn apply(
         Some(_) => {}
     }
     let result = match change {
-        EventChange::Create(event) => {
-            let checked = check_event(event, public_key, author_keys)?;
+        EventChange::Create { id, .. } => {
+            let checked = checked.expect("checked above");
+            // A create retried after it landed: the same id and parts are
+            // the stored event; the id holding anything else is taken. Only
+            // this calendar's events are read; an id another calendar holds
+            // is taken all the same (the insert says so).
+            type Stored = (String, String, String, String, Vec<u8>);
+            let stored: Option<Stored> = sqlx::query_as(
+                "SELECT shared_signed, shared_signed_signature,
+                        calendar_signed, calendar_signed_signature, shared_encrypted
+                   FROM calendar_events WHERE id = $1 AND calendar_id = $2",
+            )
+            .bind(id)
+            .bind(calendar)
+            .fetch_optional(&mut *tx)
+            .await?;
+            if let Some((shared, shared_signature, own, own_signature, encrypted)) = stored {
+                let event = &checked.event;
+                let same = shared.as_bytes() == event.shared_signed.data.as_slice()
+                    && shared_signature == event.shared_signed.signature
+                    && own.as_bytes() == event.calendar_signed.data.as_slice()
+                    && own_signature == event.calendar_signed.signature
+                    && encrypted == event.shared_encrypted.data;
+                if same {
+                    return Ok(Some(*id));
+                }
+                return Err(coded(
+                    AppError::conflict("another event has this id"),
+                    "eventIdTaken",
+                ));
+            }
+            check_parent(&mut tx, calendar, &checked, false).await?;
             let count: i64 =
                 sqlx::query_scalar("SELECT COUNT(*) FROM calendar_events WHERE calendar_id = $1")
                     .bind(calendar)
@@ -1102,30 +1239,46 @@ async fn apply(
                     .with_details(serde_json::json!({ "code": "eventLimit" })));
             }
             charge(&mut tx, owner, checked.bytes).await?;
-            let id = insert(&mut tx, calendar, user_id, address_id, &checked).await?;
-            Some(id)
+            Some(insert(&mut tx, *id, calendar, user_id, address_id, &checked).await?)
         }
         EventChange::Update {
-            id,
-            base_revision,
-            event,
+            id, base_revision, ..
         } => {
-            let checked = check_event(event, public_key, author_keys)?;
-            type Current = (String, i64, time::OffsetDateTime, i64, i32);
+            let checked = checked.expect("checked above");
+            type Current = (
+                String,
+                i64,
+                time::OffsetDateTime,
+                i64,
+                i32,
+                Option<time::OffsetDateTime>,
+            );
             let current: Option<Current> = sqlx::query_as(
-                "SELECT uid, bytes, created_at, revision, sequence FROM calendar_events
+                "SELECT uid, bytes, created_at, revision, sequence, recurrence_id FROM calendar_events
                   WHERE id = $1 AND calendar_id = $2 FOR UPDATE",
             )
             .bind(id)
             .bind(calendar)
             .fetch_optional(&mut *tx)
             .await?;
-            let Some((uid, old_bytes, created_at, revision, sequence)) = current else {
+            let Some((uid, old_bytes, created_at, revision, sequence, recurrence_id)) = current
+            else {
                 return Err(AppError::not_found("not found"));
             };
             if uid != checked.shared.uid {
                 return Err(AppError::bad_request("an event keeps its UID"));
             }
+            // A series stays a series and a changed occurrence the one it
+            // changes (Proton's): never one turned into the other.
+            if recurrence_id != checked.recurrence_id {
+                return Err(coded(
+                    AppError::bad_request("an event keeps its RECURRENCE-ID"),
+                    "recurrenceIdChanged",
+                ));
+            }
+            // A changed occurrence whose series is gone stays a single
+            // event, and can still be changed.
+            check_parent(&mut tx, calendar, &checked, true).await?;
             // Made from the stored version, never an older one replayed nor
             // over another device's newer save.
             if revision != *base_revision {
@@ -1157,6 +1310,7 @@ async fn apply(
             Some(*id)
         }
         EventChange::Delete { id, base_revision } => {
+            debug_assert!(checked.is_none());
             let current: Option<(i64, i64)> = sqlx::query_as(
                 "SELECT revision, bytes FROM calendar_events
                   WHERE id = $1 AND calendar_id = $2 FOR UPDATE",
@@ -1186,14 +1340,88 @@ async fn apply(
     Ok(result)
 }
 
+/// A changed occurrence (Proton's single edit) belongs to a series in the
+/// calendar: the same UID, no RECURRENCE-ID, a rule; its RECURRENCE-ID is
+/// one of the series' occurrences (an excluded one too: the change replaces
+/// it); and its SEQUENCE is not behind the series'. A series deleted later
+/// leaves its changes as single events: `orphan_ok` (a change of an existing
+/// one) lets them be changed still.
+async fn check_parent(
+    tx: &mut Transaction<'_, Postgres>,
+    calendar: Uuid,
+    checked: &Checked,
+    orphan_ok: bool,
+) -> AppResult<()> {
+    let Some(recurrence_id) = checked.shared.recurrence_id.clone() else {
+        return Ok(());
+    };
+    let parent: Option<String> = sqlx::query_scalar(
+        "SELECT shared_signed FROM calendar_events
+          WHERE calendar_id = $1 AND uid = $2 AND recurrence_id IS NULL AND rrule IS NOT NULL",
+    )
+    .bind(calendar)
+    .bind(&checked.shared.uid)
+    .fetch_optional(&mut **tx)
+    .await?;
+    let Some(parent) = parent else {
+        if orphan_ok {
+            return Ok(());
+        }
+        return Err(coded(
+            AppError::bad_request("a changed occurrence needs its series in the calendar"),
+            "parentMissing",
+        ));
+    };
+    let stored = || AppError::internal("a stored series doesn't parse");
+    let parent = SharedSigned::parse(&parent).map_err(|_| stored())?;
+    let rule = parent
+        .rrule
+        .as_deref()
+        .map(Rule::parse)
+        .transpose()
+        .map_err(|_| stored())?;
+    if checked.shared.sequence < parent.sequence {
+        return Err(AppError::conflict(
+            "a changed occurrence's SEQUENCE is not behind its series'",
+        )
+        .with_details(serde_json::json!({ "code": "sequenceBehind" })));
+    }
+    let bare = Series::new(&parent.dtstart, parent.dtend.as_ref(), rule.as_ref(), &[])
+        .map_err(|_| stored())?;
+    // Off the async thread, as the event's own checks.
+    let occurs = tokio::task::spawn_blocking(move || {
+        bare.occurs_at_all(std::slice::from_ref(&recurrence_id))
+    })
+    .await
+    .map_err(|error| AppError::internal(error.to_string()))?
+    .map_err(crypto)?;
+    if !occurs {
+        return Err(coded(
+            AppError::bad_request("RECURRENCE-ID is not an occurrence of the series"),
+            "notAnOccurrence",
+        ));
+    }
+    Ok(())
+}
+
 async fn insert(
     tx: &mut Transaction<'_, Postgres>,
+    id: Uuid,
     calendar: Uuid,
     user_id: Uuid,
     address_id: Uuid,
     checked: &Checked,
 ) -> AppResult<Uuid> {
-    insert_as(tx, None, calendar, user_id, address_id, checked).await
+    let now = time::OffsetDateTime::now_utc();
+    insert_as(
+        tx,
+        Some((id, now, 1)),
+        calendar,
+        user_id,
+        address_id,
+        checked,
+    )
+    .await
 }
 
 /// Inserts a checked event; `kept` is the id and creation time of the
@@ -1218,7 +1446,7 @@ async fn insert_as(
              start_utc, end_utc, start_tz, end_tz, full_day, rrule, recurrence_id, range_end_utc,
              sequence, bytes, created_at, revision)
          VALUES (COALESCE($1, gen_random_uuid()), $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12,
-                 $13, $14, $15, $16, $17, $18, $19, $20, NULL, NULL, $17, $21, $22,
+                 $13, $14, $15, $16, $17, $18, $19, $20, $25, $26, $27, $21, $22,
                  COALESCE($23, now()), COALESCE($24, 1))
          RETURNING id",
     )
@@ -1256,9 +1484,21 @@ async fn insert_as(
     .bind(checked.bytes)
     .bind(kept.map(|(_, created_at, _)| created_at))
     .bind(kept.map(|(_, _, revision)| revision))
+    .bind(&shared.rrule)
+    .bind(checked.recurrence_id)
+    .bind(checked.range_end)
     .fetch_one(&mut **tx)
     .await
     .map_err(|error| match &error {
+        // The id is another calendar's event's.
+        sqlx::Error::Database(db)
+            if db.is_unique_violation() && db.constraint() == Some("calendar_events_pkey") =>
+        {
+            coded(
+                AppError::conflict("another event has this id"),
+                "eventIdTaken",
+            )
+        }
         sqlx::Error::Database(db) if db.is_unique_violation() => {
             AppError::conflict("an event with this UID is in the calendar")
                 .with_details(serde_json::json!({ "code": "uidTaken" }))

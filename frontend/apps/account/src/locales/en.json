@@ -809,7 +809,9 @@
         "calendarWindowDays": "Longest events window (days)",
         "calendarWindowDaysHint": "The longest span one events query may ask for.",
         "calendarEventsPage": "Events per page",
-        "calendarEventsPageHint": "The most events one page of an events query carries."
+        "calendarEventsPageHint": "The most events one page of an events query carries.",
+        "calendarMaxCount": "Most occurrences by count",
+        "calendarMaxCountHint": "The largest COUNT a repeating event may have (Proton's 49)."
       },
       "chatLinking": "Linking Chat devices",
       "chatLinkingHint": "How a new Chat device is linked by one the account already has.",

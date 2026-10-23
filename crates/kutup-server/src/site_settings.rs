@@ -435,6 +435,15 @@ pub const CALENDAR_SYNC_BATCH: NumericSetting = NumericSetting {
     min: 1,
     max: 100,
 };
+/// The largest COUNT a repeating event takes (Proton's 49; the format's
+/// 499 is for invitations, E4).
+pub const CALENDAR_MAX_COUNT: NumericSetting = NumericSetting {
+    key: "calendar_max_count",
+    field: "calendarMaxCount",
+    default: 49,
+    min: 1,
+    max: 499,
+};
 /// The widest window one events query asks, in days, and the events one
 /// page answers.
 pub const CALENDAR_WINDOW_DAYS: NumericSetting = NumericSetting {
@@ -451,10 +460,11 @@ pub const CALENDAR_EVENTS_PAGE: NumericSetting = NumericSetting {
     min: 10,
     max: 5000,
 };
-pub const CALENDAR_SETTINGS: [NumericSetting; 5] = [
+pub const CALENDAR_SETTINGS: [NumericSetting; 6] = [
     CALENDARS_PER_ACCOUNT,
     CALENDAR_EVENTS_PER_CALENDAR,
     CALENDAR_SYNC_BATCH,
+    CALENDAR_MAX_COUNT,
     CALENDAR_WINDOW_DAYS,
     CALENDAR_EVENTS_PAGE,
 ];

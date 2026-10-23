@@ -809,7 +809,9 @@
         "calendarWindowDays": "En uzun etkinlik aralığı (gün)",
         "calendarWindowDaysHint": "Bir etkinlik sorgusunun isteyebileceği en uzun süre.",
         "calendarEventsPage": "Sayfa başına etkinlik",
-        "calendarEventsPageHint": "Bir etkinlik sorgusu sayfasının taşıyabileceği en çok etkinlik."
+        "calendarEventsPageHint": "Bir etkinlik sorgusu sayfasının taşıyabileceği en çok etkinlik.",
+        "calendarMaxCount": "Sayıyla en çok tekrar",
+        "calendarMaxCountHint": "Yinelenen bir etkinliğin alabileceği en büyük COUNT (Proton'unki 49)."
       },
       "chatLinking": "Sohbet cihazı bağlama",
       "chatLinkingHint": "Yeni bir Sohbet cihazının hesabın mevcut bir cihazıyla nasıl bağlandığı.",

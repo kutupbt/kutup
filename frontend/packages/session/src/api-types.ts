@@ -217,6 +217,7 @@ export interface AdminSettings {
   calendarsPerAccount: number
   calendarEventsPerCalendar: number
   calendarSyncBatch: number
+  calendarMaxCount: number
   calendarWindowDays: number
   calendarEventsPage: number
   /** Linking Chat devices (site_settings::CHAT_IDENTITY_SETTINGS). */
