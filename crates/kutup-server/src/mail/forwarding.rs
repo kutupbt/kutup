@@ -585,7 +585,7 @@ async fn forward_copy(state: &AppState, arrived: Arrived) -> anyhow::Result<()> 
            LEFT JOIN mail_addresses b ON b.id = f.forwardee_address_id
            LEFT JOIN users u ON u.id = b.user_id
           WHERE f.forwarder_address_id = $1 AND f.state = 'active'
-            AND (f.kind = 'outside' OR (b.state = 'active' AND u.is_active))",
+            AND (f.kind = 'outside' OR (b.state = 'active' AND b.disabled_at IS NULL AND u.is_active))",
     )
     .bind(arrived.address_id)
     .fetch_all(&state.pool)

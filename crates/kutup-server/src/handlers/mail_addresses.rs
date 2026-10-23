@@ -38,6 +38,18 @@ pub(crate) async fn default_address(
     state: &AppState,
     user_id: Uuid,
 ) -> AppResult<Option<(Uuid, String)>> {
+    let mut conn = state.pool.acquire().await?;
+    default_address_in(state, &mut conn, user_id).await
+}
+
+/// [`default_address`] on a connection: in a transaction that holds an
+/// address's row, as one reordering the account's addresses must, so no
+/// reorder makes it default meanwhile.
+async fn default_address_in(
+    state: &AppState,
+    conn: &mut PgConnection,
+    user_id: Uuid,
+) -> AppResult<Option<(Uuid, String)>> {
     let rows: Vec<(Uuid, String, Option<Uuid>)> = sqlx::query_as(
         "SELECT a.id, a.address, a.domain_id FROM mail_addresses a
           WHERE a.user_id = $1 AND a.state = 'active' AND a.disabled_at IS NULL
@@ -46,7 +58,7 @@ pub(crate) async fn default_address(
           ORDER BY a.position, a.created_at",
     )
     .bind(user_id)
-    .fetch_all(&state.pool)
+    .fetch_all(&mut *conn)
     .await?;
     for (id, address, domain_id) in rows {
         match domain_id {
@@ -201,13 +213,18 @@ pub async fn disable(
 ) -> AppResult<Json<OwnMailAddress>> {
     let user_id = trusted_uuid(&user.user_id)?;
     let address = address_id(&id)?;
-    if default_address(&state, user_id).await?.map(|(id, _)| id) == Some(address) {
+    // The address's row is held from here (the list change locks it).
+    let mut change = begin_list_change(&state, user_id, &id, &request.key_list).await?;
+    if default_address_in(&state, &mut change.tx, user_id)
+        .await?
+        .map(|(id, _)| id)
+        == Some(address)
+    {
         return Err(coded(
             AppError::conflict("make another address default first"),
             "defaultAddress",
         ));
     }
-    let mut change = begin_list_change(&state, user_id, &id, &request.key_list).await?;
     if custom_address(&mut change.tx, user_id, address).await? {
         return Err(coded(
             AppError::conflict("the address is disabled already"),
@@ -274,7 +291,8 @@ pub async fn enable(
 }
 
 /// `PUT /api/mail/addresses/{id}/delete` — Proton's Delete for an address on
-/// a custom domain, once disabled (Proton disables first): the name is free
+/// a custom domain, once disabled (Proton disables first; one that never had
+/// a key, which can't be disabled, at once): the name is free
 /// for anyone again, and its keys stay with this account to open the mail it
 /// received (never published, never used for new mail).
 #[utoipa::path(
@@ -296,7 +314,15 @@ pub async fn delete(
     let user_id = trusted_uuid(&user.user_id)?;
     let address = address_id(&id)?;
     let mut tx = state.pool.begin().await?;
-    if !custom_address(&mut tx, user_id, address).await? {
+    let disabled = custom_address(&mut tx, user_id, address).await?;
+    let keyless: bool = sqlx::query_scalar(
+        "SELECT NOT EXISTS (SELECT 1 FROM mail_address_keys WHERE address_id = $1)
+            AND NOT EXISTS (SELECT 1 FROM mail_key_lists WHERE address_id = $1)",
+    )
+    .bind(address)
+    .fetch_one(&mut *tx)
+    .await?;
+    if !disabled && !keyless {
         return Err(coded(
             AppError::conflict("disable the address first"),
             "addressEnabled",

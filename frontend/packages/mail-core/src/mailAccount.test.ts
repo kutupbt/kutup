@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest'
+import { defaultAddressId } from './addresses'
 import { asSender, mailAccountOf, NoAddressKey, onServer, UnverifiedOwnKeys, type CheckedOwnAddress } from './api'
 
 // As `kutup_crypto::names::fold_address` (whose vectors are Rust's): the
@@ -27,7 +28,12 @@ const key = (id: string, primary: boolean, listed = true) => ({
   listed,
 })
 /** The row's signed list: its listed keys, as the server rows say (tests change one side). */
-const withList = (row: Omit<CheckedOwnAddress, 'verifiedList' | 'keyList'>): CheckedOwnAddress => ({
+const withList = (
+  row: Omit<CheckedOwnAddress, 'verifiedList' | 'keyList' | 'usable' | 'isDefault'> & Partial<Pick<CheckedOwnAddress, 'usable' | 'isDefault'>>,
+): CheckedOwnAddress => ({
+  // As the server says, unless a test says otherwise: none chosen default.
+  usable: row.state === 'active' && !row.disabled && row.keys.some((k) => k.primary),
+  isDefault: false,
   ...row,
   keyList: { data: 'data', signature: 'signature' },
   verifiedList: {
@@ -158,6 +164,16 @@ describe('the account\'s addresses (Proton\'s Identity and addresses)', () => {
       expect(onServer(writing, 'bob@work.test')).toBe(false)
       expect(onServer(writing, 'bob@notkutup.test')).toBe(false)
     }
+  })
+
+  it("takes the server's default and senders: an address on a domain not usable now sends nothing", () => {
+    // work.test isn't verified (any more): the server says own is the default.
+    const account = mailAccountOf([{ ...work, usable: false }, { ...own, isDefault: true }], null, session, fold, self)
+    expect(account.addressId).toBe('own')
+    expect(account.senders.map((s) => s.addressId)).toEqual(['own'])
+    expect(defaultAddressId([{ ...work, usable: false }, { ...own, isDefault: true }])).toBe('own')
+    // None usable yet (a new account): the first enabled one, to get its key.
+    expect(defaultAddressId([{ ...bare, usable: false }])).toBe('bare')
   })
 
   it('skips a disabled default and keeps every key for reading', () => {

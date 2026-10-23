@@ -1884,7 +1884,7 @@ the caller's verified domains, compared lowercased (no `. _ -` folding there).
 It has no key yet: the client adds one with `POST
 /api/mail/addresses/{id}/keys`. Every address counts toward the account's
 limit (10 by default), its username's included. `400 invalidAddress`, `409`
-`addressLimit`, `addressTaken` or `domainNotVerified`. Sending from it: `POST
+`addressLimit`, `addressTaken`, `addressDeleted` (an address the account deleted, whose key chain a new one can't continue yet) or `domainNotVerified`. Sending from it: `POST
 /api/mail/send` (and drafts) with `fromAddress: "<its id>"` in the meta.
 
 ### GET /api/admin/mail/domains · PUT /api/admin/mail/domains/settings

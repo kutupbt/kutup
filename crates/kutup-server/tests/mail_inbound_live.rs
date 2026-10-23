@@ -7252,6 +7252,19 @@ fn custom_domains() {
         [sales_id.clone(), own_id.clone(), address_id.clone()]
     );
     assert_eq!(identity(None)["address"], "sales@customer.test");
+    // The server says which is the default, and which send.
+    let listed = rows();
+    assert_eq!(
+        listed
+            .iter()
+            .map(|row| (row["isDefault"].as_bool(), row["usable"].as_bool()))
+            .collect::<Vec<_>>(),
+        [
+            (Some(true), Some(true)),
+            (Some(false), Some(true)),
+            (Some(false), Some(true))
+        ]
+    );
     // Each address has its own display name and signature.
     let r = bearer(
         c.patch(format!("{base}/api/mail/identity?addressId={sales_id}")),
@@ -7338,6 +7351,21 @@ fn custom_domains() {
     );
     assert_eq!(status, 200, "{body}");
     assert_eq!(body["disabled"], true);
+    assert_eq!(
+        (body["usable"].as_bool(), body["isDefault"].as_bool()),
+        (Some(false), Some(false))
+    );
+    // Nobody sets a forwarding up to it (it would receive that way).
+    let r = bearer(c.post(format!("{base}/api/mail/forwardings")), &bob.token)
+        .json(&json!({
+            "id": uuid::Uuid::new_v4().to_string(),
+            "forwarderAddressId": uuid::Uuid::new_v4().to_string(),
+            "forwardeeEmail": "Sales@Customer.test",
+        }))
+        .send()
+        .unwrap();
+    assert_eq!(r.status().as_u16(), 422);
+    assert_eq!(r.json::<Value>().unwrap()["code"], "addressDisabled");
     assert!(
         domain(&c, &base, &alice, &id, false)["catchAllAddressId"].is_null(),
         "a disabled address catches nothing"
@@ -7444,6 +7472,38 @@ fn custom_domains() {
             .sum()
     };
     assert_eq!(held, 1, "a deleted address's key stays with the account");
+    // Taking it back would have to continue its key chain: refused for now.
+    let add = |local: &str| {
+        let r = bearer(
+            c.post(format!("{base}/api/mail/domains/addresses")),
+            &alice.token,
+        )
+        .json(&json!({ "local": local, "domainId": id }))
+        .send()
+        .unwrap();
+        let status = r.status().as_u16();
+        (status, r.json::<Value>().unwrap_or(Value::Null))
+    };
+    let (status, body) = add("sales");
+    assert_eq!(
+        (status, &body["code"]),
+        (409, &json!("addressDeleted")),
+        "{body}"
+    );
+    // One that never had a key (nothing to disable) is deleted at once.
+    let (status, body) = add("temp");
+    assert_eq!(status, 201, "{body}");
+    let r = bearer(
+        c.put(format!(
+            "{base}/api/mail/addresses/{}/delete",
+            body["id"].as_str().unwrap()
+        )),
+        &alice.token,
+    )
+    .send()
+    .unwrap();
+    assert_eq!(r.status().as_u16(), 204);
+    assert_eq!(ids(), [own_id.clone(), address_id.clone()]);
 
     // Bob proves the domain too: refused while Alice holds it.
     let r = bearer(c.post(format!("{base}/api/mail/domains")), &bob.token)
