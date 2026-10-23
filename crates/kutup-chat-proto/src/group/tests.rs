@@ -980,6 +980,7 @@ fn an_invitation_a_context_and_a_list_entry_carry_only_a_canonical_home() {
         status: GroupListStatus::Member,
         verified_revision: 1,
         chain_hash: b64(32),
+        delivery: None,
     };
     assert!(invite(home_pin()).validate().is_ok());
     assert!(context(home_pin()).validate().is_ok());
