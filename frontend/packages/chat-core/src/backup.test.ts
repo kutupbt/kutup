@@ -707,6 +707,22 @@ describe('ChatBackupCoordinator durable retry', () => {
     expect(second.view()).toMatchObject({ state: 'protected', pendingEvents: 0 })
   })
 
+  it('never says protected while a change waits for its cycle', async () => {
+    const transport = new ScriptedTransport()
+    const databaseName = `backup-coordinator:${crypto.randomUUID()}`
+    databaseNames.push(databaseName)
+    const coordinator = await open(transport, databaseName)
+    await coordinator.settled()
+    expect(coordinator.view().state).toBe('protected')
+
+    // A message arrived: until a cycle has collected it, a browser closed
+    // now would lose it.
+    coordinator.schedule()
+    expect(coordinator.view().state).toBe('backingUp')
+    await coordinator.flushNow()
+    expect(coordinator.view().state).toBe('protected')
+  })
+
   it('returns one promise for overlapping manual flush triggers', async () => {
     const transport = new ScriptedTransport()
     const databaseName = `backup-coordinator:${crypto.randomUUID()}`

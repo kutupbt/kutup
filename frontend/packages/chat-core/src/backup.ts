@@ -607,7 +607,14 @@ export class ChatBackupCoordinator {
   }
 
   schedule(): void {
-    if (this.disposed || this.timer !== null) return
+    if (this.disposed) return
+    // A change not collected yet isn't protected: the view says so at once,
+    // not only after the cycle (a browser closed in between would lose it).
+    if (this.viewValue.state === 'protected') {
+      this.viewValue = { ...this.viewValue, state: 'backingUp' }
+      for (const listener of this.listeners) listener()
+    }
+    if (this.timer !== null) return
     this.timer = this.runtime.scheduler.schedule(900, () => {
       this.timer = null
       void this.runCycle()
@@ -1560,10 +1567,12 @@ export class ChatBackupCoordinator {
       loadState(this.db, this.runtime.clock.now()),
     ])
     const pendingMedia = Array.from(this.media.values()).filter(value => !value.protected)
+    const computed = preferred ?? (!this.runtime.connectivity.isOnline() ? 'offline'
+      : outbox.length > 0 ? 'backingUp'
+        : this.mediaViewState())
     this.viewValue = {
-      state: preferred ?? (!this.runtime.connectivity.isOnline() ? 'offline'
-        : outbox.length > 0 ? 'backingUp'
-          : this.mediaViewState()),
+      // A cycle still scheduled has changes it hasn't collected yet.
+      state: computed === 'protected' && this.timer !== null ? 'backingUp' : computed,
       storageFull: this.messageStorageFull || pendingMedia.some(value => value.storageFull),
       currentCursor: this.status.currentCursor,
       latestProtectedAt: state.latestProtectedAt ?? this.viewValue.latestProtectedAt,
