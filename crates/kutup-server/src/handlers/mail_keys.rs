@@ -65,6 +65,20 @@ pub struct OwnMailAddress {
     /// `active` (the current one, which sends), `receiving`, `closed` or
     /// `freed`: an old address's keys open the mail it received.
     pub state: String,
+    /// The custom domain it is on, null for the server's own domain.
+    pub domain_id: Option<String>,
+    /// Its place in the account's order (Proton's `Order`): the first
+    /// enabled current address with a key is the default.
+    pub position: i32,
+    /// Disabled (Proton's Status 0): it neither receives nor sends; its keys
+    /// keep opening the mail it received.
+    pub disabled: bool,
+    /// It sends now: current, enabled, with a primary key, on the server's
+    /// domain or a custom one usable now.
+    pub usable: bool,
+    /// The account's default: its first usable address in its order (what
+    /// sends when a message names no From).
+    pub is_default: bool,
     pub keys: Vec<OwnMailKey>,
     /// The current signed key list; null until the first key is added.
     pub key_list: Option<SignedKeyList>,
@@ -127,15 +141,46 @@ async fn own_address(
     .bind(address_id)
     .fetch_optional(&state.pool)
     .await?;
-    let (address_state, key_list_owed): (String, bool) =
-        sqlx::query_as("SELECT state, key_list_owed FROM mail_addresses WHERE id = $1")
-            .bind(address_id)
-            .fetch_one(&state.pool)
-            .await?;
+    let (address_state, key_list_owed, domain_id, position, disabled, user_id): (
+        String,
+        bool,
+        Option<Uuid>,
+        i32,
+        bool,
+        Option<Uuid>,
+    ) = sqlx::query_as(
+        "SELECT state, key_list_owed, domain_id, position, disabled_at IS NOT NULL, user_id
+           FROM mail_addresses WHERE id = $1",
+    )
+    .bind(address_id)
+    .fetch_one(&state.pool)
+    .await?;
+    // As the default is chosen (`default_address`).
+    let usable = address_state == "active"
+        && !disabled
+        && keys.iter().any(|key| key.5)
+        && match domain_id {
+            None => true,
+            Some(domain_id) => crate::mail::domains::usable_domain(state, domain_id).await?,
+        };
+    let is_default = match user_id {
+        Some(user_id) if usable => {
+            crate::handlers::mail_addresses::default_address(state, user_id)
+                .await?
+                .map(|(id, _)| id)
+                == Some(address_id)
+        }
+        _ => false,
+    };
     Ok(OwnMailAddress {
         id: address_id.to_string(),
         address,
         state: address_state,
+        domain_id: domain_id.map(|id| id.to_string()),
+        position,
+        disabled,
+        usable,
+        is_default,
         keys: keys
             .into_iter()
             .map(
@@ -186,12 +231,12 @@ pub async fn list_addresses(
     user: AuthUser,
 ) -> AppResult<Json<Vec<OwnMailAddress>>> {
     let user_id = trusted_uuid(&user.user_id)?;
-    // Read only: the rows come with the account and its renames. The current
-    // address first, then its addresses on custom domains, then the old
-    // ones, newest first.
+    // Read only: the rows come with the account and its renames. The
+    // current addresses in the account's order (the default first), then the
+    // old ones, newest first.
     let rows: Vec<(Uuid, String)> = sqlx::query_as(
         "SELECT id, address FROM mail_addresses WHERE user_id = $1
-          ORDER BY state = 'active' DESC, domain_id IS NULL DESC, created_at DESC",
+          ORDER BY state = 'active' DESC, position, created_at DESC",
     )
     .bind(user_id)
     .fetch_all(&state.pool)
@@ -346,6 +391,26 @@ impl ListChange {
 
     /// Primary and flags follow the list; the list is recorded.
     pub(crate) async fn finish(mut self, state: &AppState) -> AppResult<OwnMailAddress> {
+        // A list with no key to encrypt to is a disabled address's, and only
+        // its (Proton's): Disable publishes it, Enable the next.
+        let disabled: bool =
+            sqlx::query_scalar("SELECT disabled_at IS NOT NULL FROM mail_addresses WHERE id = $1")
+                .bind(self.address_id)
+                .fetch_one(&mut *self.tx)
+                .await?;
+        let encrypted_to = self
+            .signed
+            .list
+            .keys
+            .iter()
+            .any(|key| key.flags & FLAG_NOT_OBSOLETE != 0);
+        if disabled == encrypted_to {
+            return Err(AppError::bad_request(if disabled {
+                "a disabled address's keys are not encrypted to"
+            } else {
+                "an enabled address keeps a key to encrypt to"
+            }));
+        }
         // While the address forwards outside, every key it lists keeps
         // EMAIL_NO_ENCRYPT (docs/plans/mail-forwarding.md); once none does,
         // a list without it settles what the address owed.
@@ -707,6 +772,7 @@ async fn public_keys(
     let row: Option<(Uuid, String, Option<Uuid>)> = sqlx::query_as(
         "SELECT a.id, a.address, a.domain_id FROM mail_addresses a JOIN users u ON u.id = a.user_id
           WHERE a.folded = kutup_address_folded($1)
+            AND a.disabled_at IS NULL
             AND (a.state = 'active'
                  OR (a.state = 'receiving' AND a.receive_until > now()))
             AND u.is_active",
@@ -796,6 +862,21 @@ pub async fn lookup_keys(
         // `GET /api/mail/groups/recipients` for them.
         return Err(AppError::not_found("this address is a group")
             .with_details(serde_json::json!({ "code": "group" })));
+    }
+    // A disabled address offers no key (Proton's: "This address is
+    // disabled. To be able to send to this address, the owner must first
+    // enable the address.").
+    let disabled: bool = sqlx::query_scalar(
+        "SELECT EXISTS (SELECT 1 FROM mail_addresses
+                         WHERE folded = kutup_address_folded($1) AND state = 'active'
+                           AND disabled_at IS NOT NULL)",
+    )
+    .bind(&address)
+    .fetch_one(&state.pool)
+    .await?;
+    if disabled {
+        return Err(AppError::not_found("this address is disabled")
+            .with_details(serde_json::json!({ "code": "addressDisabled" })));
     }
     Err(AppError::not_found("not found"))
 }

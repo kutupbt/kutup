@@ -1177,25 +1177,37 @@ In-Reply-To: <{message_id}>\r\nDate: Sat, 10 Oct 2026 10:05:00 +0000\r\n",
 
 /// The address's current key list, verified.
 fn current_list(c: &Client, base: &str, user: &User) -> (String, mail_key::SignedMailKeyListV1) {
+    let id = address_id(c, base, user);
+    let list = list_for(c, base, user, &id);
+    (id, list)
+}
+
+/// The current key list of the user's address `id`, verified.
+fn list_for(c: &Client, base: &str, user: &User, id: &str) -> mail_key::SignedMailKeyListV1 {
     let addresses: Value = bearer(c.get(format!("{base}/api/mail/addresses")), &user.token)
         .send()
         .unwrap()
         .json()
         .unwrap();
+    let row = addresses
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|row| row["id"] == id)
+        .unwrap();
     let decode = |field: &str| {
         base64::Engine::decode(
             &base64::engine::general_purpose::STANDARD,
-            addresses[0]["keyList"][field].as_str().unwrap(),
+            row["keyList"][field].as_str().unwrap(),
         )
         .unwrap()
     };
-    let signed = mail_key::SignedMailKeyListV1::verify(
+    mail_key::SignedMailKeyListV1::verify(
         &decode("data"),
         &decode("signature"),
         &user.identity.authority_public_key(),
     )
-    .unwrap();
-    (addresses[0]["id"].as_str().unwrap().to_string(), signed)
+    .unwrap()
 }
 
 /// The next list after `previous`, with `keys`, signed by the account.
@@ -1216,6 +1228,34 @@ fn next_list(
     .sign(user.identity.authority_signing_key())
     .unwrap();
     json!({ "data": b64(&list.data), "signature": b64(&list.signature) })
+}
+
+/// Enables the user's disabled address `id` with its chain's next list (its
+/// primary key to be encrypted to again); the new list's sequence.
+fn enable_again(c: &Client, base: &str, user: &User, id: &str) -> u64 {
+    let previous = list_for(c, base, user, id);
+    let keys = previous
+        .list
+        .keys
+        .iter()
+        .map(|key| MailKeyEntryV1 {
+            flags: if key.primary {
+                key.flags | mail_key::FLAG_NOT_OBSOLETE
+            } else {
+                key.flags
+            },
+            ..key.clone()
+        })
+        .collect();
+    let r = bearer(
+        c.put(format!("{base}/api/mail/addresses/{id}/enable")),
+        &user.token,
+    )
+    .json(&json!({ "keyList": next_list(user, &previous, keys) }))
+    .send()
+    .unwrap();
+    assert_eq!(r.status().as_u16(), 200, "{}", r.text().unwrap_or_default());
+    previous.list.sequence + 1
 }
 
 #[test]
@@ -7518,7 +7558,7 @@ fn custom_domains() {
         (status, r.json::<Value>().unwrap_or(Value::Null))
     };
     let bob = register(&c, &base);
-    set_up_address(&c, &base, &bob);
+    let bob_key = set_up_address(&c, &base, &bob);
     let bobs_own = self::address_id(&c, &base, &bob);
     let (status, body) = send_as(&alice, &bobs_own, "info@customer.test");
     assert_eq!(
@@ -7541,6 +7581,386 @@ fn custom_domains() {
     .json()
     .unwrap();
     let alices_fingerprint = alices_key["keys"][0]["fingerprint"].clone();
+
+    // Identity and addresses (Proton's): a second address, the order whose
+    // first enabled address is the default, and disabling, enabling and
+    // deleting it.
+    let r = bearer(
+        c.post(format!("{base}/api/mail/domains/addresses")),
+        &alice.token,
+    )
+    .json(&json!({ "local": "sales", "domainId": id }))
+    .send()
+    .unwrap();
+    assert_eq!(r.status().as_u16(), 201, "{}", r.text().unwrap_or_default());
+    let sales_id = r.json::<Value>().unwrap()["id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let sales = add_address_key(&c, &base, &alice, &sales_id, "sales@customer.test");
+    let rows = || -> Vec<Value> {
+        let all: Value = bearer(c.get(format!("{base}/api/mail/addresses")), &alice.token)
+            .send()
+            .unwrap()
+            .json()
+            .unwrap();
+        all.as_array()
+            .unwrap()
+            .iter()
+            .filter(|row| row["state"] == "active")
+            .cloned()
+            .collect()
+    };
+    let ids = || -> Vec<String> {
+        rows()
+            .iter()
+            .map(|row| row["id"].as_str().unwrap().to_owned())
+            .collect()
+    };
+    // A new address goes last; the account's own one stays first.
+    let first_order = ids();
+    assert_eq!(first_order.last(), Some(&sales_id));
+    let own_id = first_order[0].clone();
+    let order = |ids: &[&str]| {
+        let r = bearer(
+            c.put(format!("{base}/api/mail/addresses/order")),
+            &alice.token,
+        )
+        .json(&json!({ "ids": ids }))
+        .send()
+        .unwrap();
+        let status = r.status().as_u16();
+        (status, r.json::<Value>().unwrap_or(Value::Null))
+    };
+    let (status, body) = order(&[&sales_id, &own_id]);
+    assert_eq!(
+        (status, &body["code"]),
+        (409, &json!("addressSetChanged")),
+        "an order missing an address: {body}"
+    );
+    let identity = |address: Option<&str>| -> Value {
+        let query = address
+            .map(|a| format!("?addressId={a}"))
+            .unwrap_or_default();
+        bearer(
+            c.get(format!("{base}/api/mail/identity{query}")),
+            &alice.token,
+        )
+        .send()
+        .unwrap()
+        .json()
+        .unwrap()
+    };
+    // "Set as default": sales@ first, and it is what names no From.
+    assert_eq!(order(&[&sales_id, &own_id, &address_id]).0, 204);
+    assert_eq!(
+        ids(),
+        [sales_id.clone(), own_id.clone(), address_id.clone()]
+    );
+    assert_eq!(identity(None)["address"], "sales@customer.test");
+    // The server says which is the default, and which send.
+    let listed = rows();
+    assert_eq!(
+        listed
+            .iter()
+            .map(|row| (row["isDefault"].as_bool(), row["usable"].as_bool()))
+            .collect::<Vec<_>>(),
+        [
+            (Some(true), Some(true)),
+            (Some(false), Some(true)),
+            (Some(false), Some(true))
+        ]
+    );
+    // Each address has its own display name and signature.
+    let r = bearer(
+        c.patch(format!("{base}/api/mail/identity?addressId={sales_id}")),
+        &alice.token,
+    )
+    .json(&json!({ "displayName": "Sales", "signature": "<p>Sales team</p>" }))
+    .send()
+    .unwrap();
+    assert!(r.status().is_success(), "{}", r.status());
+    assert_eq!(identity(Some(&sales_id))["displayName"], "Sales");
+    assert_eq!(identity(Some(&address_id))["signature"], "");
+    assert_eq!(identity(None)["signature"], "<p>Sales team</p>");
+
+    // Disabling: the default first moves down; then the next key list,
+    // with no key to be encrypted to.
+    let disable_list = |list: &mail_key::SignedMailKeyListV1| {
+        let keys = list
+            .list
+            .keys
+            .iter()
+            .map(|key| MailKeyEntryV1 {
+                flags: key.flags & !mail_key::FLAG_NOT_OBSOLETE,
+                ..key.clone()
+            })
+            .collect();
+        next_list(&alice, list, keys)
+    };
+    let enable_list = |list: &mail_key::SignedMailKeyListV1| {
+        let keys = list
+            .list
+            .keys
+            .iter()
+            .map(|key| MailKeyEntryV1 {
+                flags: if key.primary {
+                    key.flags | mail_key::FLAG_NOT_OBSOLETE
+                } else {
+                    key.flags
+                },
+                ..key.clone()
+            })
+            .collect();
+        next_list(&alice, list, keys)
+    };
+    let put_list = |action: &str, key_list: Value| {
+        let r = bearer(
+            c.put(format!("{base}/api/mail/addresses/{sales_id}/{action}")),
+            &alice.token,
+        )
+        .json(&json!({ "keyList": key_list }))
+        .send()
+        .unwrap();
+        let status = r.status().as_u16();
+        (status, r.json::<Value>().unwrap_or(Value::Null))
+    };
+    let (status, body) = put_list(
+        "disable",
+        disable_list(&list_for(&c, &base, &alice, &sales_id)),
+    );
+    assert_eq!(
+        (status, &body["code"]),
+        (409, &json!("defaultAddress")),
+        "{body}"
+    );
+    assert_eq!(order(&[&own_id, &address_id, &sales_id]).0, 204);
+    let still_encrypted = list_for(&c, &base, &alice, &sales_id);
+    let keys = still_encrypted.list.keys.clone();
+    let (status, _) = put_list("disable", next_list(&alice, &still_encrypted, keys));
+    assert_eq!(status, 400, "a disabled address's keys aren't encrypted to");
+    // The catch-all moves to sales@, and disabling it ends that.
+    let catch_all = |address: &str| {
+        let r = bearer(
+            c.put(format!("{base}/api/mail/domains/{id}/catch-all")),
+            &alice.token,
+        )
+        .json(&json!({ "addressId": address }))
+        .send()
+        .unwrap();
+        assert_eq!(r.status().as_u16(), 204, "catch-all");
+    };
+    catch_all(&sales_id);
+    let (status, body) = put_list(
+        "disable",
+        disable_list(&list_for(&c, &base, &alice, &sales_id)),
+    );
+    assert_eq!(status, 200, "{body}");
+    assert_eq!(body["disabled"], true);
+    assert_eq!(
+        (body["usable"].as_bool(), body["isDefault"].as_bool()),
+        (Some(false), Some(false))
+    );
+    // Nobody sets a forwarding up to it (it would receive that way).
+    let r = bearer(c.post(format!("{base}/api/mail/forwardings")), &bob.token)
+        .json(&json!({
+            "id": uuid::Uuid::new_v4().to_string(),
+            "forwarderAddressId": uuid::Uuid::new_v4().to_string(),
+            "forwardeeEmail": "Sales@Customer.test",
+        }))
+        .send()
+        .unwrap();
+    assert_eq!(r.status().as_u16(), 422);
+    assert_eq!(r.json::<Value>().unwrap()["code"], "addressDisabled");
+    assert!(
+        domain(&c, &base, &alice, &id, false)["catchAllAddressId"].is_null(),
+        "a disabled address catches nothing"
+    );
+    catch_all(&address_id);
+    // Disabled: no keys served, its mail refused (never caught by info@'s
+    // catch-all), nothing sent from it, and never the default.
+    let lookup = |email: &str| {
+        let r = bearer(
+            c.get(format!("{base}/api/mail/keys?email={email}")),
+            &bob.token,
+        )
+        .send()
+        .unwrap();
+        let status = r.status().as_u16();
+        (status, r.json::<Value>().unwrap_or(Value::Null))
+    };
+    let (status, body) = lookup("sales@customer.test");
+    assert_eq!((status, &body["code"]), (404, &json!("addressDisabled")));
+    let (rcpt, _) = smtp_send(
+        &smtp,
+        "sales@customer.test",
+        &message("sales@customer.test", "disabled@sender.test"),
+    );
+    assert!(rcpt >= 500, "a disabled address takes no mail: {rcpt}");
+    let sales_mime = |message_id: &str| {
+        format!(
+            "From: sales@customer.test\r\nTo: dave@outside.test\r\nSubject: sales\r\nMessage-ID: <{message_id}>\r\n\r\nhello\r\n"
+        )
+    };
+    let send_sales = || {
+        let message_id = format!("{}@customer.test", uuid::Uuid::new_v4().simple());
+        let mime = sales_mime(&message_id);
+        let split =
+            mail_key::encrypt_split(&[&sales.public_key], &sales.secret_key, mime.as_bytes())
+                .unwrap();
+        let meta = json!({
+            "to": [{ "address": "dave@outside.test" }],
+            "subject": "sales",
+            "messageId": message_id,
+            "keyPackets": { "self": b64(&split.key_packets[0]) },
+            "readable": ["dave@outside.test"],
+            "fromAddress": sales_id,
+        });
+        let r = bearer(c.post(format!("{base}/api/mail/send")), &alice.token)
+            .multipart(form(vec![
+                ("meta", serde_json::to_vec(&meta).unwrap()),
+                ("data", split.data_packet),
+                ("mime", mime.into_bytes()),
+            ]))
+            .send()
+            .unwrap();
+        let status = r.status().as_u16();
+        (status, r.json::<Value>().unwrap_or(Value::Null))
+    };
+    let (status, body) = send_sales();
+    assert_eq!((status, &body["code"]), (403, &json!("addressDisabled")));
+    let (status, body) = order(&[&sales_id, &own_id, &address_id]);
+    assert_eq!((status, &body["code"]), (400, &json!("disabledDefault")));
+
+    // Enabled again: served, and it sends.
+    let (status, body) = put_list(
+        "enable",
+        enable_list(&list_for(&c, &base, &alice, &sales_id)),
+    );
+    assert_eq!(status, 200, "{body}");
+    assert_eq!(body["disabled"], false);
+    assert_eq!(lookup("sales@customer.test").0, 200);
+    let (status, body) = send_sales();
+    assert!(status < 300, "send from sales@ again: {status} {body}");
+    // A forwarding from it, to end with it.
+    let (forwarding_id, request, _) =
+        forwarding_request(&sales, &sales_id, &bob_key, "all", json!([]));
+    let r = bearer(c.post(format!("{base}/api/mail/forwardings")), &alice.token)
+        .json(&request)
+        .send()
+        .unwrap();
+    assert_eq!(r.status().as_u16(), 201, "{}", r.text().unwrap_or_default());
+    // Its code entered: Bob sees it too.
+    verify_forwarding(
+        &c,
+        &base,
+        &alice,
+        &sales.address,
+        &bob,
+        &bob_key,
+        &forwarding_id,
+    );
+    let forwards = |user: &User| -> bool {
+        let listed: Value = bearer(c.get(format!("{base}/api/mail/forwardings")), &user.token)
+            .send()
+            .unwrap()
+            .json()
+            .unwrap();
+        listed.to_string().contains(&forwarding_id)
+    };
+    assert!(forwards(&alice) && forwards(&bob));
+
+    // Deleting: only once disabled; the name is gone, its keys stay to
+    // open what it received.
+    let delete = || {
+        bearer(
+            c.put(format!("{base}/api/mail/addresses/{sales_id}/delete")),
+            &alice.token,
+        )
+        .send()
+        .unwrap()
+    };
+    let r = delete();
+    assert_eq!(r.status().as_u16(), 409);
+    assert_eq!(r.json::<Value>().unwrap()["code"], "addressEnabled");
+    let (status, _) = put_list(
+        "disable",
+        disable_list(&list_for(&c, &base, &alice, &sales_id)),
+    );
+    assert_eq!(status, 200);
+    assert_eq!(delete().status().as_u16(), 204);
+    assert_eq!(ids(), [own_id.clone(), address_id.clone()]);
+    assert_eq!(lookup("sales@customer.test").0, 404);
+    let held: i64 = {
+        let all: Value = bearer(c.get(format!("{base}/api/mail/addresses")), &alice.token)
+            .send()
+            .unwrap()
+            .json()
+            .unwrap();
+        all.as_array()
+            .unwrap()
+            .iter()
+            .filter(|row| row["id"] == sales_id.as_str())
+            .map(|row| row["keys"].as_array().unwrap().len() as i64)
+            .sum()
+    };
+    assert_eq!(held, 1, "a deleted address's key stays with the account");
+    // Its forwardings ended with it, for both sides.
+    assert!(
+        !forwards(&alice) && !forwards(&bob),
+        "a deleted address's forwardings end"
+    );
+    // Taken back: the same row, its keys and its chain, disabled until the
+    // chain's next list enables it (devices that saw the old chain never see
+    // it start over).
+    let add = |local: &str| {
+        let r = bearer(
+            c.post(format!("{base}/api/mail/domains/addresses")),
+            &alice.token,
+        )
+        .json(&json!({ "local": local, "domainId": id }))
+        .send()
+        .unwrap();
+        let status = r.status().as_u16();
+        (status, r.json::<Value>().unwrap_or(Value::Null))
+    };
+    let before = list_for(&c, &base, &alice, &sales_id).list.sequence;
+    let (status, body) = add("sales");
+    assert_eq!(status, 201, "{body}");
+    assert_eq!(
+        (&body["id"], &body["continues"]),
+        (&json!(sales_id), &json!(true))
+    );
+    let row = rows()
+        .into_iter()
+        .find(|row| row["id"] == sales_id.as_str())
+        .unwrap();
+    assert_eq!(row["disabled"], true);
+    assert_eq!(enable_again(&c, &base, &alice, &sales_id), before + 1);
+    // Taken back, it has none: they never come back with it.
+    assert!(!forwards(&alice) && !forwards(&bob));
+    assert_eq!(lookup("sales@customer.test").0, 200);
+    // Deleted again, for what follows.
+    let (status, _) = put_list(
+        "disable",
+        disable_list(&list_for(&c, &base, &alice, &sales_id)),
+    );
+    assert_eq!(status, 200);
+    assert_eq!(delete().status().as_u16(), 204);
+    // One that never had a key (nothing to disable) is deleted at once.
+    let (status, body) = add("temp");
+    assert_eq!(status, 201, "{body}");
+    let r = bearer(
+        c.put(format!(
+            "{base}/api/mail/addresses/{}/delete",
+            body["id"].as_str().unwrap()
+        )),
+        &alice.token,
+    )
+    .send()
+    .unwrap();
+    assert_eq!(r.status().as_u16(), 204);
+    assert_eq!(ids(), [own_id.clone(), address_id.clone()]);
 
     // Bob proves the domain too: refused while Alice holds it.
     let r = bearer(c.post(format!("{base}/api/mail/domains")), &bob.token)
@@ -7719,7 +8139,9 @@ fn custom_domains() {
         || domain(&c, &base, &bob, &bob_id, true),
         |d| d["state"] == 1,
     );
-    let make_info = |user: &User| -> (String, Address) {
+    // An address the user held before continues its chain (`None`: no new
+    // key); a new one gets its first key.
+    let make_info = |user: &User| -> (String, Option<Address>) {
         let r = bearer(
             c.post(format!("{base}/api/mail/domains/addresses")),
             &user.token,
@@ -7728,12 +8150,15 @@ fn custom_domains() {
         .send()
         .unwrap();
         assert_eq!(r.status().as_u16(), 201, "{}", r.text().unwrap_or_default());
-        let id = r.json::<Value>().unwrap()["id"]
-            .as_str()
-            .unwrap()
-            .to_owned();
-        let key = add_address_key(&c, &base, user, &id, "info@customer.test");
-        (id, key)
+        let body: Value = r.json().unwrap();
+        let id = body["id"].as_str().unwrap().to_owned();
+        if body["continues"] == true {
+            enable_again(&c, &base, user, &id);
+            (id, None)
+        } else {
+            let key = add_address_key(&c, &base, user, &id, "info@customer.test");
+            (id, Some(key))
+        }
     };
     let (bob_info_id, _) = make_info(&bob);
     let lookup = |token: &str| {
@@ -7816,6 +8241,7 @@ fn custom_domains() {
         |rcpt| *rcpt >= 500,
     );
     let (reopened_id, new_key) = make_info(&bob);
+    let new_key = new_key.expect("after a reset, a new first key");
     assert_eq!(reopened_id, bob_info_id, "the same address, reopened");
     let after_reset = format!("{}@sender.test", uuid::Uuid::new_v4().simple());
     assert_eq!(

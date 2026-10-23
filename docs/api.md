@@ -17,7 +17,10 @@ upload routes raise it (whole-file upload 10 GiB, a multipart version 2 GiB
 A failed request answers JSON `{"error": "<English text>", "code": "<code>"}`,
 plus fields a code names. **Apps act on `code`, never on the text**, which
 is for logs and people reading the API. A `5xx` answers only
-`{"error": "internal server error"}`.
+`{"error": "internal server error"}`, except the few coded ones about the
+request rather than the server (listed with their `5xx` status below,
+today `checkTimedOut`), which carry their `code` and `error` as client
+errors do.
 
 Without a specific code, a client error carries its status's default:
 
@@ -105,6 +108,12 @@ Specific codes, where an app does something particular (a test in
 | `forwardingExists` | 409 | The address already forwards there |
 | `forwardingLimit` | 409 | 10 forwardings per address or 25 per account |
 | `customDomainsOff` | 403 | Custom mail domains are off here (`POST /api/mail/domains`) |
+| `addressDisabled` | 403/404/422 | The address is disabled: a send from it (403), a key lookup for it (404), a send to it (422); clients never send to it another way |
+| `addressEnabled` | 409 | `PUT /api/mail/addresses/{id}/delete` or `/enable`: the address isn't disabled |
+| `addressSetChanged` | 409 | `PUT /api/mail/addresses/order`: the ids aren't exactly the account's current addresses |
+| `defaultAddress` | 409 | Disabling the default address: make another address default first |
+| `disabledDefault` | 400 | `PUT /api/mail/addresses/order`: a disabled address cannot be default |
+| `ownAddress` | 409 | Disabling or deleting the account's own address (on the server's domain) |
 | `domainNotVerified` | 409 | The address's custom domain doesn't take mail now (sending from it, a new address or a catch-all on it) |
 | `notYourAddress` | 404 | `fromAddress` names no active address of the caller's |
 | `mimeMismatch` | 400 | `POST /api/mail/send`: the readable `mime` isn't the same message (another From than the sender's address, another Message-ID, or a Bcc header) |
@@ -1537,10 +1546,14 @@ encrypted, `8` mail not expected to be signed.
 
 ### GET /api/mail/addresses
 
-The caller's addresses, the current one first: after a rename the old ones
-follow, newest first, with their keys, which open the mail they received.
-`state` is `active` (the current address, the only one that sends),
-`receiving`, `closed` or `freed`. An account without a username has none.
+The caller's addresses: its current ones in the account's order (the first
+enabled one with a key is the default), then, after a rename, the old ones,
+newest first, with their keys, which open the mail they received. `state` is
+`active` (a current address: the account's own, and its addresses on custom
+domains), `receiving`, `closed` or `freed`. `domainId` names the custom
+domain (null for the server's own), `position` its place in the order, and
+`disabled` a disabled address (it neither receives nor sends; its keys keep
+opening its mail). An account without a username has none.
 
 **Auth:** Bearer JWT
 
@@ -1550,6 +1563,9 @@ follow, newest first, with their keys, which open the mail they received.
   "id": "uuid",
   "address": "alice@kutup.dev",
   "state": "active",
+  "domainId": null,
+  "position": 0,
+  "disabled": false,
   "keys": [{
     "id": "uuid", "fingerprint": "40 hex", "sha256Fingerprint": "64 hex",
     "publicKey": "base64 binary OpenPGP certificate",
@@ -1563,6 +1579,46 @@ follow, newest first, with their keys, which open the mail they received.
 `keyList` is null until the first key is added. A key with `forwarding: true`
 is a forwarding key (below): it opens only mail forwarded to the address, is
 never primary or encrypted to, and isn't in `keyList`.
+
+### GET /api/mail/identity · PATCH /api/mail/identity
+
+An address's display name and signature, as Proton's per-address identity:
+`?addressId=` one of the caller's current addresses, or the default address
+when none is named (clients that name none keep the account's). `GET`
+answers `{ address, displayName, signature }` (the display name is the
+username when none is set); `PATCH` takes `{ displayName?, signature? }`
+(a name up to 100 characters without control characters, a signature up to
+10 KB of HTML) and answers the same.
+
+### PUT /api/mail/addresses/order
+
+Proton's `PUT addresses/order`: `{ "ids": [...] }`, every current address of
+the account (enabled or disabled) in the new order; "Set as default" moves one
+first. Not exactly the account's current addresses: `409 addressSetChanged`
+(a tab that missed one added or deleted); a disabled address first: `400
+disabledDefault`. `204`.
+
+### PUT /api/mail/addresses/:id/disable · PUT /api/mail/addresses/:id/enable
+
+Proton's Disable and Enable, for an address on a custom domain (the account's
+own address stays enabled: `409 ownAddress`). The body is the address's next
+signed key list (`{ "keyList" }`, the same keys): for disabling, none of them
+to be encrypted to (`FLAG_NOT_OBSOLETE` cleared), so senders and WKD stop
+offering it and a lookup answers `404 addressDisabled`; for enabling, its
+primary key to be encrypted to again. A disabled address neither receives
+(its mail is refused, never caught by a catch-all, which it stops being) nor
+sends (`403 addressDisabled`); its keys keep opening the mail it received.
+The default address can't be disabled (`409 defaultAddress`). `200` with the
+address.
+
+### PUT /api/mail/addresses/:id/delete
+
+Proton's Delete for a disabled address on a custom domain (`409
+addressEnabled` while enabled: disable it first, as Proton's client does; one
+that never had a key is deleted at once). The name is free for anyone again;
+its keys stay with this account, opening the mail it received, never
+published or used for new mail. Its forwardings end, from it and to it, and
+never come back if the account takes the address back. `204`.
 
 ### POST /api/mail/addresses/:id/keys
 
@@ -1592,7 +1648,9 @@ Publish the next signed key list for the same keys: another key made primary,
 or a key marked obsolete (flag `NOT_OBSOLETE` cleared: not encrypted to, still
 opens older mail) or compromised (both flags cleared: its signatures are no
 longer trusted either). The list is checked as for adding a key and must list
-exactly the stored keys; its primary must keep both flags.
+exactly the stored keys; its primary must keep both flags. A list with no key to
+encrypt to (every `NOT_OBSOLETE` cleared, the primary still `NOT_COMPROMISED`)
+is a disabled address's, and only Disable publishes one (Proton's).
 
 **Auth:** Bearer JWT
 
@@ -1888,7 +1946,12 @@ the caller's verified domains, compared lowercased (no `. _ -` folding there).
 It has no key yet: the client adds one with `POST
 /api/mail/addresses/{id}/keys`. Every address counts toward the account's
 limit (10 by default), its username's included. `400 invalidAddress`, `409`
-`addressLimit`, `addressTaken` or `domainNotVerified`. Sending from it: `POST
+`addressLimit`, `addressTaken` or `domainNotVerified`. An address the
+account held before (deleted, or freed with its domain lost) comes back with
+its keys and signed key list, disabled, and `continues: true`: the client
+enables it with the chain's next list (`PUT /api/mail/addresses/{id}/enable`),
+so devices that saw the old chain never see it start over. After an account
+reset the address starts a new chain instead. Sending from it: `POST
 /api/mail/send` (and drafts) with `fromAddress: "<its id>"` in the meta.
 
 ### GET /api/admin/mail/domains · PUT /api/admin/mail/domains/settings
@@ -1896,7 +1959,8 @@ limit (10 by default), its username's included. `400 invalidAddress`, `409`
 Administrators only. `GET`: `{ "configured", "stalwartDriftAt", "settings": { "mail_domains.mode":
 "everyone"|"approve"|"off", "mail_domains.per_account", …addresses_per_account,
 …on_server, …adds_per_day, …pending_days, …catch_all, …catch_all_per_day,
-…grace_warn_days, …grace_stopped_hours, …refreshes_at_once, …check_timeout_seconds }, "spf", "dkimKeys": [{ "selector",
+…grace_warn_days, …grace_stopped_hours, …refreshes_at_once, …check_timeout_seconds }, "ranges": {
+"<key>": { "min", "max" } } (each numeric setting's range, what the page offers), "spf", "dkimKeys": [{ "selector",
 "state", "host", "txt", "publishedSince" }], "domains": [... "blocked" ...] }`.
 `stalwartDriftAt` is when Stalwart's domains or DKIM signatures outside the
 custom domains (`MAIL_DOMAIN`'s own) last changed, as the reconcile saw them
@@ -1931,7 +1995,9 @@ lifts one by its name (`204`; `404` for a name not blocked), audited
 
 Administrators only. One account's limits over the site's: `{ "maxDomains":
 0–100 | null, "maxAddresses": 1–1000 | null, "catchAll": bool | null }`, `null`
-keeping the site's.
+keeping the site's; `GET` adds `maxDomainsRange` and `maxAddressesRange`
+(`{ min, max }`, the ranges of the site settings they override), which the
+`PUT` checks against.
 
 ## Mail
 

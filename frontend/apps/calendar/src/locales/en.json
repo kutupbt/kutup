@@ -87,5 +87,10 @@
     "clock24": "24-hour",
     "clock12": "12-hour",
     "thisDevice": "These settings are kept on this device."
+  },
+  "grid": {
+    "slot": "{{day}}, {{time}}",
+    "span": "{{day}}, {{start}} to {{end}}. Enter to create.",
+    "moved": "Moves to {{start}} until {{end}}. Enter to open, Escape to cancel."
   }
 }

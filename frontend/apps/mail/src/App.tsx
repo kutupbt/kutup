@@ -10,6 +10,7 @@ import { GroupsMoved } from './features/GroupsMoved'
 import { MailboxPage } from './features/MailboxPage'
 import { FiltersSettingsPage } from './features/FiltersSettingsPage'
 import { ForwardingSettingsPage } from './features/ForwardingSettingsPage'
+import { DomainsSettingsPage } from './features/domains/DomainsSettingsPage'
 import { GeneralSettingsPage } from './features/GeneralSettingsPage'
 import { AppearanceSettingsPage } from './features/AppearanceSettingsPage'
 import { AutoReplySettingsPage } from './features/AutoReplySettingsPage'
@@ -51,6 +52,7 @@ export function App() {
                 <Route path="folders" element={<PlacesSettingsPage />} />
                 <Route path="filters" element={<FiltersSettingsPage />} />
                 <Route path="forwarding" element={<ForwardingSettingsPage />} />
+                <Route path="domains" element={<DomainsSettingsPage />} />
                 <Route path="senders" element={<SendersSettingsPage />} />
               </Route>
               {/* A shared mailbox (docs/plans/mail-groups.md). */}

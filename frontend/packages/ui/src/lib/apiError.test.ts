@@ -12,7 +12,7 @@ function refused(status: number, data: unknown): AxiosError {
 beforeAll(async () => {
   await i18n.use(initReactI18next).init({
     lng: 'tr',
-    resources: { tr: { translation: { apiErrors: { keysPendingUpgrade: 'tekrar giriş', peerOutdated: 'eski sunucu' } } } },
+    resources: { tr: { translation: { apiErrors: { keysPendingUpgrade: 'tekrar giriş', peerOutdated: 'eski sunucu', checkTimedOut: 'çok uzun sürdü' } } } },
   })
 })
 
@@ -20,6 +20,8 @@ describe('apiErrorMessage', () => {
   it('says a known refusal in the user’s language, whatever its status', () => {
     expect(apiErrorMessage(refused(409, { error: 'in English', code: 'keysPendingUpgrade' }), 'fallback')).toBe('tekrar giriş')
     expect(apiErrorMessage(refused(502, { error: 'in English', code: 'peerOutdated' }), 'fallback')).toBe('eski sunucu')
+    // A domain's DNS check that ran out of time (Refresh, Verify).
+    expect(apiErrorMessage(refused(503, { error: 'in English', code: 'checkTimedOut' }), 'fallback')).toBe('çok uzun sürdü')
   })
 
   it('says it for a client error that stops before asking, by its code', () => {

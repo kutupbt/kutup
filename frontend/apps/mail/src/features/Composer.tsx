@@ -16,11 +16,14 @@ import {
   outboxStatus,
   sendDraft,
   UnknownRecipient,
+  RecipientDisabled,
+  asSender,
   useMailAccount,
   useMailRefresh,
   useMailSettings,
   usePinnedKeys,
   useSendingStatus,
+  onServer,
   type Draft,
   type HeldSend,
   type MailAccount,
@@ -31,7 +34,7 @@ import { acceptGroupKeys, GroupKeysChanged, GroupNotAllowed, KeysIdentityChanged
 import { foldAddress } from '@kutup/crypto/accountRename'
 import { armorMailPublicKey } from '@kutup/crypto'
 import { attachmentPart, describePart, inlineContentId, partContent, type Mailbox, type ParsedMessage } from '@kutup/mail-core/mime'
-import { KeyLookupFailed, PinnedKeyUnusable } from '@kutup/mail-core/protection'
+import { KeyLookupFailed, PinnedKeyConflict, PinnedKeyUnusable, useKutupElsewhere } from '@kutup/mail-core/protection'
 import { groupKeys, heldKeys, useMyGroups, type MailGroup } from '@kutup/mail-core/groups'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@kutup/ui/components/select'
 import api from '@kutup/session/client'
@@ -117,7 +120,7 @@ function reportSent(results: SendRecipient[], t: Translate, announce: boolean) {
  * is followed until the send goes, for what its recipients got. Lives past
  * the composer, which has closed.
  */
-function followHeld(held: HeldSend, draft: Draft, t: Translate, refresh: () => void, scheduledAt?: Date) {
+function followHeld(held: HeldSend, draft: Draft, from: Pick<ComposerTarget, 'fromGroup' | 'fromAddressId'>, t: Translate, refresh: () => void, scheduledAt?: Date) {
   const wait = Math.max(0, Date.parse(held.deliverAt) - Date.now())
   let undone = false
   const unscheduled: Draft = { ...draft, scheduleAt: undefined }
@@ -136,7 +139,7 @@ function followHeld(held: HeldSend, draft: Draft, t: Translate, refresh: () => v
             }
             toast.success(t(scheduledAt ? 'schedule.undone' : 'compose.sendUndone'))
             refresh()
-            openComposer({ kind: 'resume', draft: unscheduled })
+            openComposer({ kind: 'resume', draft: unscheduled, ...from })
           },
           () => toast.error(t('compose.undoFailed')),
         )
@@ -288,16 +291,40 @@ async function sendAs(account: MailAccount, group: MailGroup): Promise<SendAs> {
   return { groupId: group.id, address: group.address, name: group.displayName, publicKey: primary.publicKey, key }
 }
 
+/**
+ * The address a composer starts from (Proton's `getFromAddress`): the one
+ * asked for, a draft's own From, for a reply the address the message
+ * reached, else the default.
+ */
+function startingSender(account: MailAccount, target: ComposerTarget): MailAccount {
+  const byAddress = (address: string | undefined) => account.senders.find((s) => s.address === address?.toLowerCase())
+  const asked = account.senders.find((s) => s.addressId === target.fromAddressId)
+  let sender = asked
+  if (!sender && target.kind === 'draft') sender = byAddress(target.message.from?.address)
+  if (!sender && (target.kind === 'reply' || target.kind === 'replyAll' || target.kind === 'forward')) {
+    const { message, opened } = target
+    const reached = [...opened.parsed.to, ...opened.parsed.cc, ...message.to, ...message.cc]
+    sender = message.direction === 'outbound' ? byAddress((opened.parsed.from ?? message.from)?.address) : reached.map((m) => byAddress(m.address)).find(Boolean)
+  }
+  return sender ? asSender(account, sender) : account
+}
+
 /** The docked composer, as Proton's: one at a time, minimised or maximised. */
 export function Composer() {
   const { target, generation } = useComposer()
   const account = useMailAccount()
   if (!target || !account.data) return null
-  return <ComposerPanel key={generation} account={account.data} target={target} />
+  return <ComposerPanel key={generation} base={startingSender(account.data, target)} target={target} />
 }
 
-function ComposerPanel({ account, target }: { account: MailAccount; target: ComposerTarget }) {
+function ComposerPanel({ base, target }: { base: MailAccount; target: ComposerTarget }) {
   const { t, i18n } = useTranslation()
+  // The address writing (Proton's From): one of the account's that can send.
+  const [senderId, setSenderId] = useState(base.addressId)
+  const account = useMemo(() => {
+    const sender = base.senders.find((s) => s.addressId === senderId)
+    return sender ? asSender(base, sender) : base
+  }, [base, senderId])
   // Which opening this panel is (it is keyed by it): it closes only itself.
   const [mine] = useState(composerGeneration)
   const refresh = useMailRefresh()
@@ -309,7 +336,7 @@ function ComposerPanel({ account, target }: { account: MailAccount; target: Comp
   const sendAsChoices = (groups.data ?? []).filter((group) => group.kind === 'shared' && group.myCanSendAs)
   const [fromGroup, setFromGroup] = useState<string | undefined>(target.fromGroup)
   const from = sendAsChoices.find((group) => group.id === fromGroup)
-  const start = useMemo(() => initial(account, target, t, i18n.language), [account, target, t, i18n.language])
+  const start = useMemo(() => initial(base, target, t, i18n.language), [base, target, t, i18n.language])
   const [to, setTo] = useState(start.draft.to)
   const [cc, setCc] = useState(start.draft.cc)
   const [bcc, setBcc] = useState(start.draft.bcc)
@@ -327,8 +354,12 @@ function ComposerPanel({ account, target }: { account: MailAccount; target: Comp
     setCc(nextCc)
     setBcc(nextBcc)
   }
-  // Before the server's mail setup is checked, only Kutup addresses are reachable.
-  const outsideRecipients = [...to, ...cc, ...bcc].filter((m) => isAddress(m.address) && !m.address.toLowerCase().endsWith(`@${account.domain}`))
+  // Kutup users: on this server's domain, or on a custom domain it holds
+  // (their key lookup says so). Before the server's mail setup is checked,
+  // only Kutup addresses are reachable.
+  const elsewhere = useKutupElsewhere([...to, ...cc, ...bcc].filter((m) => isAddress(m.address) && !onServer(account, m.address)).map((m) => m.address))
+  const isKutup = (address: string) => onServer(account, address) || elsewhere.kutup.has(address.trim().toLowerCase())
+  const outsideRecipients = [...to, ...cc, ...bcc].filter((m) => isAddress(m.address) && !isKutup(m.address))
   const outsideBlocked = sendingStatus.data?.outsideAllowed === false && outsideRecipients.length > 0
   const [showCopies, setShowCopies] = useState(start.draft.cc.length > 0 || start.draft.bcc.length > 0)
   const [subject, setSubject] = useState(start.draft.subject)
@@ -360,7 +391,7 @@ function ComposerPanel({ account, target }: { account: MailAccount; target: Comp
   const [signChoice, setSignChoice] = useState<boolean | undefined>()
   const signOutside = mailSettings.data?.signOutside ?? true
   const sign = signChoice ?? (outsideRecipients.length === 0 || outsideRecipients.some((m) => pinned?.(m.address)?.pgp.sign ?? signOutside))
-  const kutupRecipients = [...to, ...cc, ...bcc].some((m) => isAddress(m.address) && m.address.toLowerCase().endsWith(`@${account.domain}`))
+  const kutupRecipients = [...to, ...cc, ...bcc].some((m) => isAddress(m.address) && isKutup(m.address))
   const [revision, setRevision] = useState(0)
   const draftId = useRef<string | undefined>(start.draft.id)
   const saving = useRef<Promise<void>>(Promise.resolve())
@@ -370,6 +401,9 @@ function ComposerPanel({ account, target }: { account: MailAccount; target: Comp
   // Images added (button, paste or drop), asked inline or attached (Proton's).
   const [pendingImages, setPendingImages] = useState<File[] | null>(null)
 
+  // The body as it opened, until it is written in: a new From's signature
+  // replaces the old one only then, never anything written.
+  const pristine = useRef<string | null>(null)
   const editor = useEditor({
     extensions: [
       StarterKit.configure({ link: { openOnClick: false, autolink: true, defaultProtocol: 'https' } }),
@@ -384,8 +418,28 @@ function ComposerPanel({ account, target }: { account: MailAccount; target: Comp
       handleDrop: (_view, event) => takeImages(event.dataTransfer?.files),
       attributes: { role: 'textbox', 'aria-multiline': 'true', 'aria-label': t('compose.body'), class: 'mail-editor min-h-48 px-3 py-2 text-sm focus:outline-none [&_img]:max-w-full' },
     },
+    onCreate: ({ editor }) => {
+      pristine.current = editor.getHTML()
+    },
     onUpdate: () => setRevision((r) => r + 1),
   })
+
+  /** Proton's From: an address of the account's, or a shared mailbox. */
+  const chooseFrom = (value: string) => {
+    const [kind, id] = [value.slice(0, value.indexOf(':')), value.slice(value.indexOf(':') + 1)]
+    if (kind === 'group') {
+      setFromGroup(id)
+      return
+    }
+    setFromGroup(undefined)
+    const sender = base.senders.find((s) => s.addressId === id)
+    if (!sender || id === senderId) return
+    setSenderId(id)
+    if (editor && !plain && pristine.current !== null && editor.getHTML() === pristine.current) {
+      editor.commands.setContent(initial(asSender(base, sender), target, t, i18n.language).html)
+      pristine.current = editor.getHTML()
+    }
+  }
 
   // The editor for effects that run once (a saved draft's images).
   const editorRef = useRef(editor)
@@ -625,7 +679,7 @@ function ComposerPanel({ account, target }: { account: MailAccount; target: Comp
           .map((a) => (a.part ? Promise.resolve(a.part) : draftAttachmentPart(account, draftId.current!, a.id!))),
       )
       const outcome = await sendDraft(account, draft, parts, pinned ?? (() => undefined), from ? await sendAs(account, from) : undefined, { encrypt, sign, pgpScheme: mailSettings.data?.pgpScheme })
-      if (isHeld(outcome)) followHeld(outcome, draft, t, refresh, scheduleAt)
+      if (isHeld(outcome)) followHeld(outcome, draft, { fromGroup, fromAddressId: senderId }, t, refresh, scheduleAt)
       else reportSent(outcome, t, true)
       refresh()
       // A new composer may have opened while this one was sending.
@@ -634,6 +688,7 @@ function ComposerPanel({ account, target }: { account: MailAccount; target: Comp
       closed.current = false
       setSending(false)
       if (error instanceof UnknownRecipient) toast.error(t('compose.unknownRecipient', { address: error.address }))
+      else if (error instanceof RecipientDisabled) toast.error(t('compose.recipientDisabled', { address: error.address }))
       else if (error instanceof NoGroupShare) toast.error(t('compose.noGroupShare'))
       else if (error instanceof GroupNotAllowed) toast.error(t('compose.groupNotAllowed', { address: error.address }))
       else if (error instanceof GroupKeysChanged) {
@@ -671,6 +726,7 @@ function ComposerPanel({ account, target }: { account: MailAccount; target: Comp
           toast.error(t('compose.addressTaken', { address: error.address }))
         }
       } else if (error instanceof PinnedKeyUnusable) toast.error(t('compose.pinnedKeyUnusable', { address: error.address }))
+      else if (error instanceof PinnedKeyConflict) toast.error(t('compose.pinnedKeyConflict', { address: error.address }))
       else if (error instanceof KeyLookupFailed) toast.error(t('compose.keyLookupFailed', { address: error.address }))
       else {
         const data = (error as { response?: { data?: { code?: string; newAccount?: boolean; perDay?: number } } }).response?.data
@@ -792,15 +848,23 @@ function ComposerPanel({ account, target }: { account: MailAccount; target: Comp
               <span className="w-10 shrink-0 text-muted-foreground" id="compose-from">
                 {t('compose.from')}
               </span>
-              {sendAsChoices.length > 0 ? (
-                <Select value={from?.id ?? 'self'} onValueChange={(value) => setFromGroup(value === 'self' ? undefined : value)}>
+              {sendAsChoices.length > 0 || base.senders.length > 1 ? (
+                <Select value={from ? `group:${from.id}` : `address:${senderId}`} onValueChange={chooseFrom}>
                   <SelectTrigger className="h-8 w-auto max-w-full border-0 px-1 shadow-none" aria-labelledby="compose-from">
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
-                    <SelectItem value="self">{account.name ? `${account.name} <${account.address}>` : account.address}</SelectItem>
+                    {base.senders.length ? (
+                      base.senders.map((sender) => (
+                        <SelectItem key={sender.addressId} value={`address:${sender.addressId}`}>
+                          {sender.name ? `${sender.name} <${sender.address}>` : sender.address}
+                        </SelectItem>
+                      ))
+                    ) : (
+                      <SelectItem value={`address:${senderId}`}>{account.name ? `${account.name} <${account.address}>` : account.address}</SelectItem>
+                    )}
                     {sendAsChoices.map((group) => (
-                      <SelectItem key={group.id} value={group.id}>
+                      <SelectItem key={group.id} value={`group:${group.id}`}>
                         {group.displayName ? `${group.displayName} <${group.address}>` : group.address}
                       </SelectItem>
                     ))}
@@ -811,7 +875,7 @@ function ComposerPanel({ account, target }: { account: MailAccount; target: Comp
               )}
             </div>
             <div className="relative">
-              <RecipientField label={t('compose.to')} value={to} onChange={setTo} domain={account.domain} pinned={pinned} encrypt={encrypt} autoFocus={target.kind === 'new' && !start.draft.to.length} />
+              <RecipientField label={t('compose.to')} value={to} onChange={setTo} domain={account.serverDomain} pinned={pinned} encrypt={encrypt} autoFocus={target.kind === 'new' && !start.draft.to.length} />
               {!showCopies ? (
                 <button type="button" className="absolute right-3 top-2 text-xs text-muted-foreground hover:text-foreground" onClick={() => setShowCopies(true)}>
                   {t('compose.ccBcc')}
@@ -820,8 +884,8 @@ function ComposerPanel({ account, target }: { account: MailAccount; target: Comp
             </div>
             {showCopies ? (
               <>
-                <RecipientField label={t('compose.cc')} value={cc} onChange={setCc} domain={account.domain} pinned={pinned} encrypt={encrypt} />
-                <RecipientField label={t('compose.bcc')} value={bcc} onChange={setBcc} domain={account.domain} pinned={pinned} encrypt={encrypt} />
+                <RecipientField label={t('compose.cc')} value={cc} onChange={setCc} domain={account.serverDomain} pinned={pinned} encrypt={encrypt} />
+                <RecipientField label={t('compose.bcc')} value={bcc} onChange={setBcc} domain={account.serverDomain} pinned={pinned} encrypt={encrypt} />
               </>
             ) : null}
             <Input

@@ -31,6 +31,7 @@ pub mod folder_access;
 pub mod identity;
 pub mod link_reports;
 pub mod mail;
+pub mod mail_addresses;
 pub mod mail_auto_reply;
 pub mod mail_domains;
 pub mod mail_domains_admin;

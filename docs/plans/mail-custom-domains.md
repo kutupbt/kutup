@@ -488,7 +488,22 @@ under the old master key, so those addresses come back as "Missing keys"
 - **The resolver:** the backend validates; `MAIL_DNS_RESOLVER` points to one
   that passes DNSSEC records through (§3).
 
-### 11. Web UI (third session, later)
+### 11. Web UI
+
+Built (2026-10-22): Mail → Settings → Domain names (the list, Proton's
+seven-tab wizard with its texts, the catch-all and delete modals, the warn
+and stopped banners) and Administration → Mail domains (domains with owners,
+approve, deactivate, the blocked names, the records to publish, every
+`mail_domains.*` setting, and per-user limits on the user page). A lost
+domain's transfer notice is the inbox notice (`mail::notice`). Addresses on
+a domain are made in Identity and addresses. The browser spec runs on the
+mail gate's stack with CoreDNS: `scripts/test-mail-domains-browser.sh`
+(`scripts/gate.sh live mail-domains`; CI's master-only
+`mail-domains-browser` job). Kutup has no organizations, so the wizard's
+Addresses step links to Identity and addresses rather than Proton's user
+and address pages.
+
+What was planned:
 
 **Admin console** (Kutup's own, Proton has no counterpart):
 - Mail → Domains: every held and pending domain with its owner and states,

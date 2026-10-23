@@ -227,12 +227,14 @@
     "sendLimitNew": "New accounts can send to {{perDay}} outside addresses a day in their first week. Try again later.",
     "pausedNotice": "Mail to outside addresses is paused for your account; mail to Kutup users still goes.",
     "pinnedKeyUnusable": "The key you trust for {{address}} can no longer be used. Replace or remove it in Contacts.",
+    "pinnedKeyConflict": "This server says {{address}} is a Kutup user's, but you trust other keys for it in Contacts. Nothing was sent: check with them, then remove the keys in Contacts if the address moved to Kutup.",
     "keyLookupFailed": "Keys for {{address}} could not be looked up. Try again.",
     "lock": {
       "looking": "Looking up encryption keys",
       "lookupFailed": "Encryption keys could not be looked up",
       "pinned": "End-to-end encrypted with a key you trust",
       "pinnedUnusable": "The key you trust for this address can no longer be used",
+      "pinnedConflict": "This server says this is a Kutup address, but you trust other keys for it",
       "found": {
         "wkd": "End-to-end encrypted with a key from the recipient's domain (Web Key Directory)",
         "proton": "End-to-end encrypted with the recipient's Proton key",
@@ -240,7 +242,8 @@
       },
       "readableKutup": "Not end-to-end encrypted for this message: encrypted when it arrives",
       "readableOutside": "Not encrypted for this message: plain mail",
-      "encryptionDisabled": "Not end-to-end encrypted: this address forwards its mail outside Kutup, so it's encrypted when it arrives"
+      "encryptionDisabled": "Not end-to-end encrypted: this address forwards its mail outside Kutup, so it's encrypted when it arrives",
+      "disabled": "This address is disabled: it can't receive email"
     },
     "outsideOffNotice": "This server doesn't send mail to addresses outside Kutup yet. Mail to Kutup addresses goes as usual.",
     "outsideOff": "Mail to addresses outside Kutup isn't available on this server yet. Remove them to send to the Kutup addresses.",
@@ -276,7 +279,8 @@
     "trustGroupKeys": "Trust the new keys",
     "groupKeysTrusted": "The new keys of {{address}} are trusted. Send again.",
     "groupKeysTrustFailed": "The new keys could not be saved. Try again.",
-    "writeTo": "Write to {{address}}"
+    "writeTo": "Write to {{address}}",
+    "recipientDisabled": "{{address}} is disabled and can't receive email. The message wasn't sent."
   },
   "emptyHint": {
     "inbox": "Mail from Kutup users arrives end-to-end encrypted; mail from anyone else is encrypted the moment it arrives.",
@@ -536,10 +540,11 @@
     "filters": "Filters",
     "general": "General",
     "senders": "Block and allow",
-    "identity": "Identity",
+    "identity": "Identity and addresses",
     "autoReply": "Auto-reply",
     "appearance": "Appearance",
-    "forwarding": "Forwarding"
+    "forwarding": "Forwarding",
+    "domains": "Domain names"
   },
   "emptyFolder": {
     "action": "Delete all",
@@ -628,8 +633,8 @@
     "count_other": "{{count}} senders"
   },
   "identity": {
-    "title": "Identity",
-    "description": "How your mail from {{address}} is signed off.",
+    "title": "Identity and addresses",
+    "description": "Your addresses, and how mail from each one is signed off.",
     "displayName": "Display name",
     "displayNameHint": "The name people see next to your address.",
     "nameTooLong": "A display name is 100 characters at most.",
@@ -638,7 +643,9 @@
     "link": "Link",
     "linkPrompt": "Link address (https:// or mailto:)",
     "signatureTooLong": "The signature is too long (10 KB at most).",
-    "addLink": "Add link"
+    "addLink": "Add link",
+    "nameAndSignature": "Display name and signature",
+    "address": "Address"
   },
   "autoReply": {
     "title": "Auto-reply",
@@ -1135,6 +1142,7 @@
       "ownAddress": "You can't forward to one of your own addresses.",
       "unknown": "There's no such address on this server.",
       "kindChanged": "This address changed since you checked it. Check it again before you save.",
+      "pinnedConflict": "You trust other keys for this address in Contacts, while this server says it is a Kutup user's. Check with them, and remove the keys in Contacts if the address moved to Kutup.",
       "group": "Email can't be forwarded to a shared mailbox or a list.",
       "unverified": "This address's keys couldn't be verified, so nothing can be forwarded to it now.",
       "exists": "You already forward to this address.",
@@ -1144,7 +1152,8 @@
       "endToEndRequired": "This is a Kutup address: reload the page and try again.",
       "keyList": "Your address keys changed meanwhile. Reload the page and try again.",
       "state": "This forwarding changed meanwhile. Reload the page and try again.",
-      "rateLimited": "Too many verification codes for now. Try again later."
+      "rateLimited": "Too many verification codes for now. Try again later.",
+      "disabled": "This address is disabled and can't receive email."
     },
     "code": {
       "title": "Verify the forwarding address",
@@ -1167,6 +1176,167 @@
       "verifiedOutside": "Verified. Mail is now forwarded to {{to}}.",
       "waiting_one": "{{count}} forwarding is paused until you enter the code sent to its address.",
       "waiting_other": "{{count}} forwardings are paused until you enter the codes sent to their addresses."
+    }
+  },
+  "addresses": {
+    "title": "Addresses",
+    "add": "Add address",
+    "addTitle": "Add address",
+    "address": "Address",
+    "status": "Status",
+    "actions": "Actions",
+    "actionsFor": "Actions for {{address}}",
+    "save": "Save address",
+    "added": "Address added",
+    "statuses": {
+      "default": "Default",
+      "active": "Active",
+      "disabled": "Disabled",
+      "missingKeys": "Missing keys"
+    },
+    "generateKeys": "Generate missing keys",
+    "generateKeysInfo": "Before you can start sending and receiving emails from your new addresses you need to create encryption keys for them.",
+    "submit": "Submit",
+    "keysCreated": "Keys created",
+    "enable": "Enable",
+    "enabled": "Address enabled",
+    "setDefault": "Set as default",
+    "disable": "Disable",
+    "disableTitle": "Disable address?",
+    "disableBody": "By disabling this address {{address}}, you will no longer be able to send or receive emails using this address.",
+    "disableSure": "Are you sure you want to disable this address?",
+    "disableSubmit": "Disable address",
+    "disabled": "Address disabled",
+    "delete": "Delete address",
+    "deleteTitle": "Delete address?",
+    "deleteBody": "Please note that if you delete this address {{address}}, you will no longer be able to send or receive emails using this address.",
+    "deleteSure": "Mail it already received stays readable.",
+    "deleteSubmit": "Delete address",
+    "deleted": "Address deleted"
+  },
+  "domains": {
+    "title": "Domain names",
+    "description": "Connect your custom domain to Kutup to set up custom email addresses (e.g., you@yourcompany.com). Our wizard will guide you through the process.",
+    "add": "Add domain",
+    "refresh": "Refresh status",
+    "review": "Review",
+    "setCatchAll": "Set catch-all",
+    "delete": "Delete",
+    "actionsFor": "Actions for {{domain}}",
+    "columns": {
+      "domain": "Domain",
+      "status": "Status",
+      "actions": "Actions"
+    },
+    "used_one": "{{used}} / {{count}} domain used",
+    "used_other": "{{used}} / {{count}} domains used",
+    "empty": "No custom domain yet",
+    "emptyHint": "Add a domain you own to receive and send mail at its addresses.",
+    "unavailable": "Custom domains aren't available on this server.",
+    "off": "An administrator has turned custom domains off on this server for now.",
+    "approveMode": "On this server, an administrator approves each domain once it is verified.",
+    "stopped": "<strong>{{domain}}</strong> stopped: its verification TXT and MX records are both gone, so its addresses neither receive nor send. Restore its records and refresh its status.",
+    "warned": "<strong>{{domain}}</strong> failed its DNS checks. Unless its records are restored, it stops on {{date}}.",
+    "deleteTitle": "Delete domain?",
+    "deleteBody": "Please note that if you delete this domain <strong>{{domain}}</strong>, all the addresses associated with it will be disabled.",
+    "deleteSure": "Are you sure you want to delete this domain?",
+    "deleted": "Domain deleted",
+    "state": {
+      "default": "Not verified",
+      "verified": "Verified",
+      "warn": "Needs attention"
+    },
+    "badges": {
+      "verified": "Verified",
+      "addresses_one": "{{count}} address",
+      "addresses_other": "{{count}} addresses",
+      "catchAll": "CATCH-ALL",
+      "awaitingApproval": "Awaiting approval"
+    },
+    "missingSetup": "Major email services may reject or filter your emails to spam if SPF/DKIM/DMARC are missing or not set up properly.",
+    "records": {
+      "type": "Type",
+      "host": "Host name",
+      "value": "Value / Data / Points to",
+      "priority": "Priority",
+      "askTxt": "Please add the following TXT record. Note: DNS records can take several hours to update.",
+      "copied": "Value copied to clipboard"
+    },
+    "wizard": {
+      "addTitle": "Add domain",
+      "editTitle": "Edit domain",
+      "steps": "Steps",
+      "next": "Next",
+      "done": "Done",
+      "good": "Done",
+      "bad": "Needs attention",
+      "nameRequired": "Enter a domain name.",
+      "tabs": {
+        "domain": "Domain",
+        "verify": "Verify",
+        "addresses": "Addresses",
+        "mx": "MX",
+        "spf": "SPF",
+        "dkim": "DKIM",
+        "dmarc": "DMARC"
+      }
+    },
+    "domain": {
+      "intro": "Add a domain that you own to your Kutup Mail account.",
+      "label": "Domain name",
+      "placeholder": "yourdomain.com",
+      "www": "'www' subdomains are typically not used for email. Are you sure you want to use this domain value?"
+    },
+    "verify": {
+      "intro": "For security reasons, we need to verify that you are the owner of {{domain}}. Please add the following TXT record in your DNS console (located on the platform where you purchased the custom domain).",
+      "keep": "After successful verification, do not remove this TXT record as it is needed to confirm that you continue to own the domain.",
+      "copied": "Verification code copied to clipboard",
+      "notYet": "Verification did not succeed, please try again in an hour.",
+      "wrongCode": "Wrong verification code. Please make sure you copied the verification code correctly and try again. It can take up to 24 hours for changes to take effect.",
+      "verified": "Domain verified"
+    },
+    "addresses": {
+      "intro": "Add the addresses you want on this domain in Identity and addresses. If you are moving from another email service, add them all before changing the MX records, so nothing bounces.",
+      "add": "Add address"
+    },
+    "mx": {
+      "intro_one": "Before you can receive emails for your custom domain addresses at Kutup Mail, you need to add the following MX record in your DNS console (located on the platform where you purchased the custom domain).",
+      "intro_other": "Before you can receive emails for your custom domain addresses at Kutup Mail, you need to add the following {{count}} MX records in your DNS console (located on the platform where you purchased the custom domain).",
+      "ask_one": "Please add the following MX record. Note: DNS records can take several hours to update.",
+      "ask_other": "Please add the following {{count}} MX records. Note: DNS records can take several hours to update.",
+      "others": "Delete any other MX records or make sure Kutup Mail's Priority is the lowest number.",
+      "switching": "For users who are switching to Kutup Mail from another email service, select the <strong>Addresses</strong> tab and add all active email addresses before changing the MX record to ensure a smooth transition."
+    },
+    "spf": {
+      "intro": "SPF clarifies who is allowed to send email for your domain. Make sure you add the following TXT record in your DNS console (located on the platform where you purchased the custom domain).",
+      "copied": "SPF value copied to clipboard",
+      "merge": "Each domain can only have one SPF (TXT) record. If you want to keep the existing SPF (TXT) record, you can add <strong>{{include}}</strong> to your current record (put it after <strong>{{start}}</strong>).",
+      "example": "Example:"
+    },
+    "dkim": {
+      "intro_one": "DKIM allows Kutup to cryptographically sign your emails and prevent attackers from tampering your email. Make sure you add the following CNAME record in your DNS console (located on the platform where you purchased the custom domain).",
+      "intro_other": "DKIM allows Kutup to cryptographically sign your emails and prevent attackers from tampering your email. Make sure you add the following {{count}} CNAME records in your DNS console (located on the platform where you purchased the custom domain).",
+      "ask_one": "Please add the following CNAME record. Note: DNS records can take several hours to update.",
+      "ask_other": "Please add all {{count}} of the following CNAME records. Note: DNS records can take several hours to update.",
+      "error": "We stopped DKIM signing due to problems with your DNS configuration. Please follow the instructions below to resume signing.",
+      "warning": "We detected a problem with your DNS configuration. Please make sure your records match the instructions below. If the problem persists, we will have to switch DKIM signing off.",
+      "good": "Your DKIM signing is working.",
+      "dot": "IMPORTANT: If your DNS console does not allow CNAME values to end with a dot, you can remove the last dot in the CNAME values."
+    },
+    "dmarc": {
+      "intro": "DMARC checks if the sender's SPF and DKIM records originate from your domain. This can prevent attackers from using another domain's SPF and DKIM to impersonate your domain. The \"p=\" (policy) in this record indicates how you want the recipient platforms to handle unauthorized emails. We recommend using the \"p=quarantine\" policy for most domains. Make sure you add the following TXT record in your DNS console (located on the platform where you purchased the custom domain).",
+      "copied": "DMARC value copied to clipboard",
+      "quarantine": "<strong>{{policy}}</strong>: asking the recipient platforms to mark the unauthorized emails as spam or quarantine them.",
+      "reject": "<strong>{{policy}}</strong>: asking the recipient platforms to reject the unauthorized emails.",
+      "none": "<strong>{{policy}}</strong>: do not quarantine or reject unauthorized emails. Usually, people only use this policy to troubleshoot or test."
+    },
+    "catchAll": {
+      "title": "Catch-all address",
+      "description": "Mail sent to an address on this domain that doesn't exist (e.g., because of typos) goes to the catch-all address.",
+      "column": "Catch-all",
+      "choose": "Make {{address}} the catch-all address",
+      "enabled": "Enabled",
+      "updated": "Catch-all address updated"
     }
   }
 }

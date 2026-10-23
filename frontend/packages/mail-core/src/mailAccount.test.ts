@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
-import { mailAccountOf, NoAddressKey, UnverifiedOwnKeys, type CheckedOwnAddress } from './api'
+import { defaultAddressId } from './addresses'
+import { asSender, mailAccountOf, NoAddressKey, onServer, UnverifiedOwnKeys, type CheckedOwnAddress } from './api'
 
 // As `kutup_crypto::names::fold_address` (whose vectors are Rust's): the
 // local part without `.`, `_` and `-`, all lowercase.
@@ -7,7 +8,7 @@ const fold = (address: string) => {
   const at = address.lastIndexOf('@')
   return at > 0 ? `${address.slice(0, at).replace(/[._-]/g, '').toLowerCase()}@${address.slice(at + 1).toLowerCase()}` : null
 }
-const self = { server: 'kutup.test', accountId: '3f1c9a52-6b7e-4f0e-9d1a-2c3b4d5e6f70' }
+const self = { server: 'kutup.test', accountId: '3f1c9a52-6b7e-4f0e-9d1a-2c3b4d5e6f70', domain: 'kutup.test' }
 const session = {
   masterKey: new Uint8Array(32),
   privateKey: new Uint8Array(32),
@@ -27,7 +28,12 @@ const key = (id: string, primary: boolean, listed = true) => ({
   listed,
 })
 /** The row's signed list: its listed keys, as the server rows say (tests change one side). */
-const withList = (row: Omit<CheckedOwnAddress, 'verifiedList' | 'keyList'>): CheckedOwnAddress => ({
+const withList = (
+  row: Omit<CheckedOwnAddress, 'verifiedList' | 'keyList' | 'usable' | 'isDefault'> & Partial<Pick<CheckedOwnAddress, 'usable' | 'isDefault'>>,
+): CheckedOwnAddress => ({
+  // As the server says, unless a test says otherwise: none chosen default.
+  usable: row.state === 'active' && !row.disabled && row.keys.some((k) => k.primary),
+  isDefault: false,
   ...row,
   keyList: { data: 'data', signature: 'signature' },
   verifiedList: {
@@ -43,9 +49,9 @@ const withList = (row: Omit<CheckedOwnAddress, 'verifiedList' | 'keyList'>): Che
 
 // After a rename: the current address first, the old ones after (docs/api.md).
 const rows: CheckedOwnAddress[] = [
-  withList({ id: 'a2', address: 'ada.lovelace@kutup.test', state: 'active', keys: [key('new', true), key('new-old', false)] }),
-  withList({ id: 'a1', address: 'ada.l@kutup.test', state: 'receiving', keys: [key('old', true)] }),
-  withList({ id: 'a0', address: 'ada@kutup.test', state: 'closed', keys: [key('first', true)] }),
+  withList({ id: 'a2', address: 'ada.lovelace@kutup.test', state: 'active', domainId: null, position: 0, disabled: false, keys: [key('new', true), key('new-old', false)] }),
+  withList({ id: 'a1', address: 'ada.l@kutup.test', state: 'receiving', domainId: null, position: 0, disabled: false, keys: [key('old', true)] }),
+  withList({ id: 'a0', address: 'ada@kutup.test', state: 'closed', domainId: null, position: 0, disabled: false, keys: [key('first', true)] }),
 ]
 
 describe('the mail account after a rename', () => {
@@ -124,5 +130,65 @@ describe('the mail account after a rename', () => {
     expect(account.ownPublicKeys).not.toContain('pk-first')
     expect(account.addresses).toEqual(['ada.lovelace@kutup.test', 'ada.l@kutup.test'])
     expect(account.isOwnAddress('ada.l@kutup.test')).toBe(true)
+  })
+})
+
+describe('the account\'s addresses (Proton\'s Identity and addresses)', () => {
+  const own = withList({ id: 'own', address: 'ada@kutup.test', state: 'active', domainId: null, position: 1, disabled: false, keys: [key('own', true)] })
+  const work = withList({ id: 'work', address: 'ada@work.test', state: 'active', domainId: 'd1', position: 0, disabled: false, keys: [key('work', true)] })
+  const old = withList({ id: 'old', address: 'old@work.test', state: 'active', domainId: 'd1', position: 2, disabled: true, keys: [key('old', true)] })
+  const bare = withList({ id: 'bare', address: 'new@work.test', state: 'active', domainId: 'd1', position: 3, disabled: false, keys: [] })
+
+  it('sends from the first enabled address in the account\'s order', () => {
+    const account = mailAccountOf([work, own, old, bare], null, session, fold, self, { own: { displayName: 'Ada', signature: '' } })
+    expect(account.addressId).toBe('work')
+    expect(account.address).toBe('ada@work.test')
+    // Every enabled address with a key sends, the default first; a disabled
+    // one and one without keys don't.
+    expect(account.senders.map((s) => s.addressId)).toEqual(['work', 'own'])
+    expect(account.senders[1].name).toBe('Ada')
+  })
+
+  it("judges who is a Kutup user by this server's domain, never by the From's", () => {
+    // A custom default, and writing as another custom address.
+    const account = mailAccountOf([work, own], null, session, fold, { ...self, domain: 'KUTUP.test' })
+    expect(account.serverDomain).toBe('kutup.test')
+    const asWork = asSender(mailAccountOf([own, work], null, session, fold, self), account.senders[0])
+    expect(asWork.address).toBe('ada@work.test')
+    for (const writing of [account, asWork]) {
+      expect(writing.serverDomain).toBe('kutup.test')
+      expect(onServer(writing, 'bob@kutup.test')).toBe(true)
+      expect(onServer(writing, ' Bob@KUTUP.test')).toBe(true)
+      // The From's domain is not this server's: its people are found by
+      // their keys (a custom domain this server holds), not by the domain.
+      expect(onServer(writing, 'bob@work.test')).toBe(false)
+      expect(onServer(writing, 'bob@notkutup.test')).toBe(false)
+    }
+  })
+
+  it("takes the server's default and senders: an address on a domain not usable now sends nothing", () => {
+    // work.test isn't verified (any more): the server says own is the default.
+    const account = mailAccountOf([{ ...work, usable: false }, { ...own, isDefault: true }], null, session, fold, self)
+    expect(account.addressId).toBe('own')
+    expect(account.senders.map((s) => s.addressId)).toEqual(['own'])
+    expect(defaultAddressId([{ ...work, usable: false }, { ...own, isDefault: true }])).toBe('own')
+    // None usable yet (a new account): the first enabled one, to get its key.
+    expect(defaultAddressId([{ ...bare, usable: false }])).toBe('bare')
+  })
+
+  it('skips a disabled default and keeps every key for reading', () => {
+    const account = mailAccountOf([{ ...work, disabled: true }, own], null, session, fold, self)
+    expect(account.addressId).toBe('own')
+    expect(account.olderKeys.map((k) => k.fingerprint)).toContain('fp-work')
+  })
+
+  it('writes as another address with its own key and name', () => {
+    const account = mailAccountOf([work, own], null, session, fold, self, { own: { displayName: 'Ada L', signature: '' } })
+    const asOwn = asSender(account, account.senders[1])
+    expect(asOwn.addressId).toBe('own')
+    expect(asOwn.address).toBe('ada@kutup.test')
+    expect(asOwn.serverDomain).toBe('kutup.test')
+    expect(asOwn.key.fingerprint).toBe('fp-own')
+    expect(asOwn.name).toBe('Ada L')
   })
 })

@@ -6,6 +6,7 @@ vi.mock('./keys', async (original) => ({
   addressKeys: (email: string) => {
     if (email === 'bob@kutup.test') return Promise.resolve({ address: email, accountRef: { server: 'kutup.test' }, primary: 'key' })
     if (email === 'carol@other.test') return Promise.resolve({ address: email, accountRef: { server: 'other.test' }, primary: 'key' })
+    if (email === 'eve@work.test') return Promise.resolve({ address: email, accountRef: { server: 'kutup.test' }, primary: 'key' })
     return Promise.reject(new NoKutupAddress(email))
   },
 }))
@@ -61,7 +62,12 @@ describe('what each side may do, by state (Proton’s table)', () => {
 })
 
 describe('which kind a forwarding is', () => {
-  const account = { domain: 'kutup.test', isOwnAddress: (address: string | null | undefined) => address === 'alice@kutup.test' }
+  // Alice writes from a custom domain by default: this server is still kutup.test.
+  const account = {
+    serverDomain: 'kutup.test',
+    isOwnAddress: (address: string | null | undefined) => address === 'alice@kutup.test' || address === 'alice@work.test',
+    groupHolder: { account: { server: 'kutup.test', accountId: 'a' }, hpkePrivateKey: '' },
+  }
 
   it('is end to end to a person here, outside elsewhere', async () => {
     expect((await forwardingKindOf(account, 'bob@kutup.test')).kind).toBe('end_to_end')
@@ -72,9 +78,21 @@ describe('which kind a forwarding is', () => {
   it('never takes an address on this server without a key as outside', async () => {
     await expect(forwardingKindOf(account, 'nobody@kutup.test')).rejects.toEqual(new ForwardeeRefused('unknown'))
     await expect(forwardingKindOf(account, 'nobody@KUTUP.test')).rejects.toEqual(new ForwardeeRefused('unknown'))
+    // The From's domain is not this server's: no key there is outside.
+    expect((await forwardingKindOf(account, 'nobody@work.test')).kind).toBe('outside')
+  })
+
+  it('never takes this server’s word for a custom-domain address over keys Contacts trust', async () => {
+    const pinned = (address: string) => (address === 'eve@work.test' ? { keys: [{ fingerprint: 'fp' }], pgp: {} } : undefined)
+    await expect(forwardingKindOf(account, 'eve@work.test', pinned as never)).rejects.toEqual(new ForwardeeRefused('pinnedConflict'))
+    // Without pins it's a Kutup user's; its own domain is the server's to say.
+    expect((await forwardingKindOf(account, 'eve@work.test')).kind).toBe('end_to_end')
+    const ownPinned = () => ({ keys: [{ fingerprint: 'fp' }], pgp: {} })
+    expect((await forwardingKindOf(account, 'bob@kutup.test', ownPinned as never)).kind).toBe('end_to_end')
   })
 
   it("refuses the account's own addresses", async () => {
     await expect(forwardingKindOf(account, 'alice@kutup.test')).rejects.toEqual(new ForwardeeRefused('ownAddress'))
+    await expect(forwardingKindOf(account, 'alice@work.test')).rejects.toEqual(new ForwardeeRefused('ownAddress'))
   })
 })
