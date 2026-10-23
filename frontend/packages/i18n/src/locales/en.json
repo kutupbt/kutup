@@ -7,6 +7,7 @@
     "continue": "Continue",
     "copied": "Copied",
     "copy": "Copy",
+    "copyFailed": "Couldn’t copy. Select the value and copy it yourself.",
     "hidePassword": "Hide password",
     "loading": "Loading…",
     "retry": "Try again",
@@ -462,6 +463,7 @@
   },
   "apiErrors": {
     "keysPendingUpgrade": "This person needs to sign in to Kutup once more before you can share with them: their account is moving to stronger encryption keys.",
+    "checkTimedOut": "The DNS check took too long. Try again in a minute.",
     "peerOutdated": "Their server runs an older version of Kutup. You can share with them once it is updated."
   },
   "pendingUpgrade": {

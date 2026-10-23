@@ -1,0 +1,3 @@
+# Custom domains in the browser, on the mail gate's stack with CoreDNS:
+# scripts/test-mail-domains-browser.sh (CI: mail-domains-browser, master only).
+specs/116-mail-custom-domains.spec.ts

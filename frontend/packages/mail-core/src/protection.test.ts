@@ -18,7 +18,7 @@ const keyErrors = vi.hoisted(() => {
 })
 vi.mock('./keys', () => ({ outsideKey: (address: string) => lookup(address), addressKeys: (address: string) => kutupKeys(address), ...keyErrors }))
 
-const { protectionFor } = await import('./protection')
+const { isKutupElsewhere, protectionFor } = await import('./protection')
 
 const key = (name: string) => ({ address: 'dave@example.org', publicKey: name, fingerprint: `fp-${name}` })
 
@@ -71,6 +71,17 @@ describe('protection with several trusted keys', () => {
     // Its own domain is the server's to say.
     expect(await protectionFor('ayse@kutup.dev', 'kutup.dev', { keys: [key('new')], pgp: {} })).toEqual({ kind: 'kutup' })
     expect(lookup).not.toHaveBeenCalled()
+  })
+
+  it('knows a Kutup user on a custom domain from an outside address, for the composer', async () => {
+    kutupKeys.mockResolvedValue({ encryptionDisabled: false })
+    expect(await isKutupElsewhere('Info@Customer.test')).toBe(true)
+    kutupKeys.mockRejectedValue(new keyErrors.AddressDisabled())
+    expect(await isKutupElsewhere('info@customer.test')).toBe(true)
+    kutupKeys.mockRejectedValue(new keyErrors.NoKutupAddress())
+    expect(await isKutupElsewhere('dave@example.org')).toBe(false)
+    kutupKeys.mockRejectedValue(new Error('network'))
+    expect(await isKutupElsewhere('dave@example.org')).toBe(false)
   })
 
   it('says when a Kutup address forwards outside, as its key list does', async () => {

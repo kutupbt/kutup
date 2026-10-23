@@ -34,7 +34,8 @@
     "feedback": "Geri bildirim",
     "referralCodes": "Davet kodları",
     "groupMembership": "Grup üyeliği",
-    "rateLimits": "Hız sınırları"
+    "rateLimits": "Hız sınırları",
+    "mailDomains": "Posta alan adları"
   },
   "auth": {
     "fields": {
@@ -1447,6 +1448,84 @@
       "countsAtOnce": "Aynı anda, {{per}} başına",
       "countsBytesAtOnce": "Aynı anda bayt, {{per}} başına",
       "bytesHint": "= {{size}}"
+    },
+    "mailDomains": {
+      "title": "Posta alan adları",
+      "description": "Bu sunucudaki kişilerin posta alıp gönderdiği özel alan adları: sahipleri, durumları ve sunucunun onlar için yayımladığı kayıtlar.",
+      "notConfigured": "Özel alan adları bu sunucuda henüz çalışamaz: Stalwart yönetim anahtarı ya da MAIL_DKIM_KEYS ayarlı değil.",
+      "drift": "Stalwart'ın kendi nesneleri (özel alan adları dışında) {{date}} tarihinde değişti. İnceleyin.",
+      "recordsTitle": "Yayımlanacak kayıtlar",
+      "recordsHint": "Bunları sunucunun kendi DNS'inde yayımlayın: müşterilerin SPF kaydı ilkini içerir, DKIM kayıtları diğerlerini gösterir. Bir anahtarı beklerken ya da emekliye ayrılırken yayımlı tutun.",
+      "host": "Ana makine adı",
+      "value": "Değer",
+      "state": "Durum",
+      "keyStates": {
+        "pending": "Yayımlayın",
+        "active": "Etkin",
+        "retiring": "Emekliye ayrılıyor"
+      },
+      "domainsTitle": "Alan adları",
+      "empty": "Henüz özel alan adı yok",
+      "emptyHint": "Kişilerin eklediği alan adları burada görünür.",
+      "domain": "Alan adı",
+      "owner": "Sahibi",
+      "actions": "İşlemler",
+      "states": {
+        "pending": "Doğrulanmadı",
+        "verified": "Doğrulandı",
+        "warn": "Uyarıldı"
+      },
+      "awaiting": "Onay bekliyor",
+      "stopped": "Durdu",
+      "blocked": "Devre dışı",
+      "approve": "Onayla",
+      "approved": "Alan adı onaylandı",
+      "deactivate": "Devre dışı bırak",
+      "deactivated": "Alan adı devre dışı bırakıldı",
+      "deactivateTitle": "{{domain}} devre dışı bırakılsın mı?",
+      "deactivateBody": "{{domain}} hemen durur: adresleri serbest kalır ve {{owner}} gelen kutusunda bilgilendirilir.",
+      "deactivateWarning": "Adı ve altındaki tüm adlar, engeli kaldırana kadar engellenir.",
+      "blocksTitle": "Devre dışı bırakılan adlar",
+      "noBlocks": "Engellenen ad yok.",
+      "blockedBy": "{{date}} tarihinde {{by}} engelledi",
+      "formerAdmin": "eski bir yönetici",
+      "unblock": "Engeli kaldır",
+      "unblocked": "Engel kaldırıldı",
+      "settingsTitle": "Ayarlar",
+      "saved": "Ayarlar kaydedildi",
+      "range": "{{min}} ile {{max}} arası.",
+      "outOfRange": "{{setting}}, {{min}} ile {{max}} arasında bir tam sayı olmalı.",
+      "on": "Açık",
+      "off": "Kapalı",
+      "modes": {
+        "everyone": "Herkes alan adı ekleyebilir",
+        "approve": "Yöneticiler her alan adını onaylar",
+        "off": "Kapalı"
+      },
+      "settings": {
+        "mode": "Kimler alan adı ekleyebilir",
+        "modeHint": "Kapalı yeni alan adı eklemeyi durdurur; eklenmiş olanlar çalışmaya devam eder.",
+        "catchAll": "Tümünü yakala adresleri",
+        "perAccount": "Hesap başına alan adı",
+        "addressesPerAccount": "Hesap başına adres (kullanıcı adınınki dahil tüm alan adlarında)",
+        "onServer": "Bu sunucudaki alan adları",
+        "addsPerDay": "Bir hesabın bir günde ekleyebileceği alan adı",
+        "pendingDays": "Doğrulanmamış bir alan adının tutulduğu gün",
+        "catchAllPerDay": "Bir tümünü yakala adresinin günde aldığı ileti",
+        "graceWarnDays": "Uyarılan bir alan adının çalışmaya devam ettiği gün",
+        "graceStoppedHours": "Kayıtları kaybolan bir alan adı durmadan önceki saat",
+        "refreshesAtOnce": "Aynı anda çalışan DNS denetimi",
+        "checkTimeoutSeconds": "Bir DNS denetiminin sürebileceği saniye"
+      },
+      "overrides": {
+        "title": "Posta alan adları",
+        "description": "Bu hesabın sınırları sitenin sınırlarının yerine geçer; boş bırakılan sitenin değerini korur.",
+        "maxDomains": "Alan adı",
+        "maxAddresses": "Adres",
+        "catchAll": "Tümünü yakala",
+        "site": "Sitenin değeri",
+        "saved": "Sınırlar kaydedildi"
+      }
     }
   },
   "groupMembership": {
