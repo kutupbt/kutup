@@ -365,6 +365,14 @@ async fn revoke_tree(
     .bind(now)
     .execute(&mut **tx)
     .await?;
+    // A signed-out browser takes no more reminder pushes.
+    sqlx::query(
+        "DELETE FROM calendar_push_subscriptions
+          WHERE session_id IN (SELECT id FROM auth_sessions WHERE id = $1 OR parent_session_id = $1)",
+    )
+    .bind(session_id)
+    .execute(&mut **tx)
+    .await?;
     Ok(())
 }
 
@@ -444,6 +452,13 @@ pub async fn revoke_all_for_user_in(
     )
     .bind(user_id)
     .bind(keep_root)
+    .execute(&mut **tx)
+    .await?;
+    sqlx::query(
+        "DELETE FROM calendar_push_subscriptions s USING auth_sessions a
+          WHERE s.session_id = a.id AND a.user_id = $1 AND a.revoked_at IS NOT NULL",
+    )
+    .bind(user_id)
     .execute(&mut **tx)
     .await?;
     Ok(())

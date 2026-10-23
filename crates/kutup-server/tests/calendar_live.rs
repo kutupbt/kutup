@@ -1035,6 +1035,277 @@ fn repeating_events() {
     drop_calendars(&c, &base, &ada, &[&id, &other]);
 }
 
+/// Reminders (docs/plans/calendar.md, E2 §4): a member's own or their
+/// calendar's defaults, the alarms the server keeps for them (and moves
+/// with the event, the defaults and the zone), the browsers that take
+/// reminder pushes, and the job firing a due alarm then moving it on.
+/// Waits up to two minutes for `done` (a job's work), checking every two
+/// seconds.
+fn eventually(what: &str, mut done: impl FnMut() -> bool) {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(120);
+    while !done() {
+        assert!(std::time::Instant::now() < deadline, "never: {what}");
+        std::thread::sleep(std::time::Duration::from_secs(2));
+    }
+}
+
+#[test]
+fn reminders_and_alarms() {
+    let Ok(base) = std::env::var("KUTUP_LIVE_SERVER") else {
+        eprintln!("KUTUP_LIVE_SERVER not set; skipping");
+        return;
+    };
+    let base = base.trim_end_matches('/').to_string();
+    let c = crate::common::client();
+    let ada = owner(&c, &base);
+    let (id, key) = made_calendar(&c, &base, &ada, "Hatırlat");
+    let sealed = |fields: &EventFieldsV1| seal(fields, &key, &ada.secret_key);
+    let alarms = |start: &str, end: &str| -> Vec<Value> {
+        let page: Value = bearer(
+            c.get(format!(
+                "{base}/api/calendar/alarms?start={start}&end={end}"
+            )),
+            &ada.user.token,
+        )
+        .send()
+        .unwrap()
+        .json()
+        .unwrap();
+        page["alarms"].as_array().unwrap().clone()
+    };
+
+    // The defaults (15 minutes before, device and email) for a timed event:
+    // 29 October 2027 09:00 Istanbul is 06:00Z, so both fire at 05:45Z.
+    let timed = fields(
+        "timed@kutup.test",
+        "2027-10-29T09:00:00",
+        "2027-10-29T10:00:00",
+        "Timed",
+    );
+    let results = sync(&c, &base, &ada, &id, json!([create(sealed(&timed))]));
+    assert_eq!(results[0]["status"], 200, "{results:?}");
+    let event_id = results[0]["event"]["id"].as_str().unwrap().to_owned();
+    let found = alarms("2027-10-29T00:00:00Z", "2027-10-30T00:00:00Z");
+    assert_eq!(found.len(), 2, "{found:?}");
+    assert!(found
+        .iter()
+        .all(|a| a["fireAt"] == "2027-10-29T05:45:00Z" && a["eventId"] == event_id.as_str()));
+
+    // Its own: one, an hour before; out-of-bounds or after a timed start refused.
+    let update = |reminders: Value, revision: i64| {
+        sync(
+            &c,
+            &base,
+            &ada,
+            &id,
+            json!([{ "update": {
+                "id": event_id, "baseRevision": revision, "event": sealed(&timed), "reminders": reminders,
+            } }]),
+        )
+    };
+    let results = update(json!([{ "type": "email", "trigger": "PT15M" }]), 1);
+    assert_eq!(results[0]["code"], "invalidReminders", "{results:?}");
+    let results = update(json!([{ "type": "device", "trigger": "-PT1H" }]), 1);
+    assert_eq!(results[0]["status"], 200, "{results:?}");
+    let found = alarms("2027-10-29T00:00:00Z", "2027-10-30T00:00:00Z");
+    assert_eq!(found.len(), 1);
+    assert_eq!(found[0]["fireAt"], "2027-10-29T05:00:00Z");
+    assert_eq!(found[0]["action"], "device");
+    // Back to the defaults (null).
+    let results = update(Value::Null, 2);
+    assert_eq!(results[0]["status"], 200, "{results:?}");
+    assert_eq!(
+        alarms("2027-10-29T00:00:00Z", "2027-10-30T00:00:00Z").len(),
+        2
+    );
+
+    // An all-day event fires in the account's zone: 15 hours before
+    // midnight, UTC until a zone is set, then Istanbul's.
+    let mut day = fields(
+        "day@kutup.test",
+        "2027-11-05T00:00:00",
+        "2027-11-06T00:00:00",
+        "Day",
+    );
+    day.start = TimeV1::Date("2027-11-05".into());
+    day.end = Some(TimeV1::Date("2027-11-06".into()));
+    let results = sync(&c, &base, &ada, &id, json!([create(sealed(&day))]));
+    assert_eq!(results[0]["status"], 200, "{results:?}");
+    let at = |start: &str| {
+        alarms(start, "2027-11-06T00:00:00Z")
+            .iter()
+            .filter(|a| a["occurrenceStart"] == "2027-11-05T00:00:00Z")
+            .map(|a| a["fireAt"].as_str().unwrap().to_owned())
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(
+        at("2027-11-04T00:00:00Z"),
+        ["2027-11-04T09:00:00Z", "2027-11-04T09:00:00Z"]
+    );
+    let r = bearer(
+        c.put(format!("{base}/api/calendar/settings")),
+        &ada.user.token,
+    )
+    .json(&json!({ "zone": "Mars/Olympus" }))
+    .send()
+    .unwrap();
+    assert_eq!(r.status(), StatusCode::BAD_REQUEST);
+    assert_eq!(r.json::<Value>().unwrap()["code"], "unknownZone");
+    let r = bearer(
+        c.put(format!("{base}/api/calendar/settings")),
+        &ada.user.token,
+    )
+    .json(&json!({ "zone": "Europe/Istanbul" }))
+    .send()
+    .unwrap();
+    assert_eq!(r.status(), StatusCode::OK);
+    // The reminder job recomputes them (within a tick or two).
+    eventually("all-day alarms in Istanbul", || {
+        at("2027-11-04T00:00:00Z") == ["2027-11-04T06:00:00Z", "2027-11-04T06:00:00Z"]
+    });
+
+    // The member's defaults, for every event of the calendar.
+    let listed: Value = bearer(
+        c.get(format!("{base}/api/calendar/calendars")),
+        &ada.user.token,
+    )
+    .send()
+    .unwrap()
+    .json()
+    .unwrap();
+    let mine = listed["calendars"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|cal| cal["id"] == id.as_str())
+        .unwrap()
+        .clone();
+    assert_eq!(mine["defaultReminders"]["timed"][0]["trigger"], "-PT15M");
+    let r = bearer(
+        c.put(format!("{base}/api/calendar/calendars/{id}")),
+        &ada.user.token,
+    )
+    .json(&json!({
+        "defaultReminders": {
+            "timed": [{ "type": "email", "trigger": "-P1D" }],
+            "allDay": [{ "type": "device", "trigger": "PT9H" }],
+        },
+        "baseRevision": mine["revision"],
+        "revision": mine["revision"].as_i64().unwrap() + 1,
+    }))
+    .send()
+    .unwrap();
+    assert_eq!(
+        r.status(),
+        StatusCode::OK,
+        "{}",
+        r.text().unwrap_or_default()
+    );
+    eventually("the new defaults' alarms", || {
+        let found = alarms("2027-10-28T00:00:00Z", "2027-10-30T00:00:00Z");
+        // All-day: PT9H, 09:00 Istanbul on the day.
+        found.len() == 1
+            && found[0]["fireAt"] == "2027-10-28T06:00:00Z"
+            && at("2027-11-04T00:00:00Z") == ["2027-11-05T06:00:00Z"]
+    });
+
+    // A browser's subscription: Chat's push services only, real keys only
+    // (404 where this server has Web Push off).
+    let browser = p256::SecretKey::random(&mut rand::rngs::OsRng);
+    let p256dh = {
+        use p256::elliptic_curve::sec1::ToEncodedPoint;
+        base64::Engine::encode(
+            &base64::engine::general_purpose::URL_SAFE_NO_PAD,
+            browser.public_key().to_encoded_point(false).as_bytes(),
+        )
+    };
+    let subscribe = |endpoint: &str, p256dh: &str| {
+        bearer(
+            c.put(format!("{base}/api/calendar/push-subscription")),
+            &ada.user.token,
+        )
+        .json(&json!({ "endpoint": endpoint, "p256dh": p256dh, "auth": "AAAAAAAAAAAAAAAAAAAAAA" }))
+        .send()
+        .unwrap()
+        .status()
+    };
+    let fcm = format!(
+        "https://fcm.googleapis.com/fcm/send/{}",
+        uuid::Uuid::new_v4()
+    );
+    let first = subscribe(&fcm, &p256dh);
+    if first != StatusCode::NOT_FOUND {
+        assert_eq!(first, StatusCode::NO_CONTENT);
+        assert_eq!(
+            subscribe("https://push.example.com/x", &p256dh),
+            StatusCode::BAD_REQUEST
+        );
+        assert_eq!(subscribe(&fcm, "AAAA"), StatusCode::BAD_REQUEST);
+        let r = bearer(
+            c.delete(format!("{base}/api/calendar/push-subscription")),
+            &ada.user.token,
+        )
+        .send()
+        .unwrap();
+        assert_eq!(r.status(), StatusCode::NO_CONTENT);
+    }
+
+    // The job: a daily event starting two minutes from now, reminded at its
+    // start, fires then moves to the next day's (Istanbul is UTC+3).
+    let start = time::OffsetDateTime::now_utc() + time::Duration::minutes(2);
+    let start = start
+        .replace_second(0)
+        .unwrap()
+        .replace_nanosecond(0)
+        .unwrap();
+    let local = (start + time::Duration::hours(3))
+        .format(
+            &time::format_description::parse("[year]-[month]-[day]T[hour]:[minute]:00").unwrap(),
+        )
+        .unwrap();
+    let end_local = (start + time::Duration::hours(3) + time::Duration::minutes(30))
+        .format(
+            &time::format_description::parse("[year]-[month]-[day]T[hour]:[minute]:00").unwrap(),
+        )
+        .unwrap();
+    let mut soon = fields("soon@kutup.test", &local, &end_local, "Soon");
+    soon.rrule = Some("FREQ=DAILY;COUNT=2".into());
+    let results = sync(
+        &c,
+        &base,
+        &ada,
+        &id,
+        json!([{ "create": {
+            "id": uuid::Uuid::new_v4().to_string(), "event": sealed(&soon),
+            "reminders": [{ "type": "device", "trigger": "PT0S" }],
+        } }]),
+    );
+    assert_eq!(results[0]["status"], 200, "{results:?}");
+    let soon_id = results[0]["event"]["id"].as_str().unwrap().to_owned();
+    let rfc = |at: time::OffsetDateTime| {
+        at.format(&time::format_description::well_known::Rfc3339)
+            .unwrap()
+    };
+    let window_end = rfc(start + time::Duration::days(2));
+    let next = |from: time::OffsetDateTime| -> Option<String> {
+        alarms(&rfc(from), &window_end)
+            .iter()
+            .find(|a| a["eventId"] == soon_id.as_str())
+            .map(|a| a["fireAt"].as_str().unwrap().to_owned())
+    };
+    assert_eq!(next(start - time::Duration::hours(1)), Some(rfc(start)));
+    let tomorrow = rfc(start + time::Duration::days(1));
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(240);
+    while next(start - time::Duration::hours(1)) != Some(tomorrow.clone()) {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the job never fired and moved the alarm"
+        );
+        std::thread::sleep(std::time::Duration::from_secs(5));
+    }
+    drop_calendars(&c, &base, &ada, &[&id]);
+}
+
 #[test]
 fn the_calendar_limit_is_a_setting() {
     let (Ok(base), Ok(admin)) = (
