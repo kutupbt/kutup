@@ -328,10 +328,13 @@ pub async fn delete(
             "addressEnabled",
         ));
     }
-    sqlx::query("UPDATE mail_addresses SET state = 'freed', receive_until = NULL WHERE id = $1")
-        .bind(address)
-        .execute(&mut *tx)
-        .await?;
+    sqlx::query(
+        "UPDATE mail_addresses SET state = 'freed', receive_until = NULL, deleted_at = now()
+          WHERE id = $1",
+    )
+    .bind(address)
+    .execute(&mut *tx)
+    .await?;
     clear_catch_all(&mut tx, address).await?;
     tx.commit().await?;
     Ok(StatusCode::NO_CONTENT.into_response())

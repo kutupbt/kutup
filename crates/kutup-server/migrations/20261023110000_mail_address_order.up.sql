@@ -7,7 +7,10 @@ ALTER TABLE mail_addresses
     -- Disabled (Proton's Status 0): it neither receives nor sends, its keys
     -- are no longer offered to senders, and they keep opening the mail it
     -- already received.
-    ADD COLUMN disabled_at timestamptz;
+    ADD COLUMN disabled_at timestamptz,
+    -- Deleted by its account (Proton's Delete address), not freed by a
+    -- domain lost: taking it back would have to continue its key chain.
+    ADD COLUMN deleted_at timestamptz;
 
 -- Today's order: the account's own address first, then its addresses on
 -- custom domains as they were made.

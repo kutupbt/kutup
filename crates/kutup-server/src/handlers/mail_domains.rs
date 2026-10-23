@@ -501,13 +501,15 @@ pub async fn create_address(
             "addressLimit",
         ));
     }
-    // One the account deleted keeps its signed key list's chain: taking it
-    // back must continue that chain (docs/plans/mail-address-keys.md), which
-    // isn't built yet, so it is refused for now (as a rename back to a freed
-    // name is).
+    // One the account deleted itself keeps its signed key list's chain:
+    // taking it back must continue that chain
+    // (docs/plans/mail-address-keys.md), which isn't built yet, so it is
+    // refused for now (as a rename back to a freed name is). One freed by
+    // its domain lost starts again with a new key, as before.
     let deleted: bool = sqlx::query_scalar(
         "SELECT EXISTS (SELECT 1 FROM mail_addresses a
                          WHERE a.user_id = $1 AND a.folded = lower($2) AND a.state = 'freed'
+                           AND a.deleted_at IS NOT NULL
                            AND EXISTS (SELECT 1 FROM mail_key_lists l WHERE l.address_id = a.id))",
     )
     .bind(user_id)
