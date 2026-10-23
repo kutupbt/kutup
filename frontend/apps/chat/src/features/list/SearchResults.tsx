@@ -32,7 +32,7 @@ export function SearchResults({ query }: { query: string }) {
     const needle = foldSearchText(query.trim())
     if (!needle) return []
     return all.filter((item) => {
-      const title = conversationTitle(item.conversation, item.peer, item.profile, self.key, t, item.groupInfo)
+      const title = conversationTitle(item.conversation, item.peer, item.profile, self.key, t, item.chatGroup ? { name: item.chatGroup.title } : null)
       return foldSearchText(title).includes(needle) || foldSearchText((item.peer && accountName(item.peer)) ?? '').includes(needle)
     })
   }, [query, all, self.key, t])
@@ -65,11 +65,11 @@ export function SearchResults({ query }: { query: string }) {
           </h2>
           <ul>
             {conversations.map((item) => {
-              const title = conversationTitle(item.conversation, item.peer, item.profile, self.key, t, item.groupInfo)
+              const title = conversationTitle(item.conversation, item.peer, item.profile, self.key, t, item.chatGroup ? { name: item.chatGroup.title } : null)
               return (
                 <li key={item.key}>
                   <Link to={conversationPath(item.key)} className={row}>
-                    <Avatar name={title} image={item.groupInfo?.avatar?.data ?? item.profile?.avatar} contentType={item.groupInfo?.avatar?.contentType ?? item.profile?.avatarContentType} group={item.conversation.kind === 'group'} size={32} />
+                    <Avatar name={title} image={item.profile?.avatar} contentType={item.profile?.avatarContentType} group={item.conversation.kind === 'group'} size={32} />
                     <span className="truncate text-sm font-medium">{title}</span>
                   </Link>
                 </li>
@@ -88,7 +88,7 @@ export function SearchResults({ query }: { query: string }) {
               const key = conversationKey(message.conversation)
               const summary = byKey.get(key)
               const title = summary
-                ? conversationTitle(summary.conversation, summary.peer, summary.profile, self.key, t, summary.groupInfo)
+                ? conversationTitle(summary.conversation, summary.peer, summary.profile, self.key, t, summary.chatGroup ? { name: summary.chatGroup.title } : null)
                 : conversationTitle(message.conversation, null, null, self.key, t)
               const author = message.sender
               return (

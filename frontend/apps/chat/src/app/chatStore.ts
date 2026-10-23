@@ -8,12 +8,7 @@ import type {
   ConversationId,
   ChatProfile,
   ChatTypingEvent,
-  GroupJoinRequest,
   InboundAttention,
-  MlsInvitationFeedback,
-  OwnJoinRequest,
-  PendingMlsInvitation,
-  PendingMlsOwnerApprovalRequest,
 } from '@kutup/chat-core/types'
 import { privateCiphertextCacheForAccountV1, type PrivateCiphertextCacheV1 } from '@kutup/files/mediaCache'
 import type { Session } from '@kutup/session/store'
@@ -67,13 +62,6 @@ export interface ChatSelf {
 export interface ChatSnapshot extends ChatData {
   attention: InboundAttention[]
   profile: ChatProfile | null
-  invitations: PendingMlsInvitation[]
-  invitationFeedback: MlsInvitationFeedback[]
-  ownerApprovals: PendingMlsOwnerApprovalRequest[]
-  /** People asking to join groups this account administers. */
-  joinRequests: GroupJoinRequest[]
-  /** This account's own requests through group links. */
-  ownJoinRequests: OwnJoinRequest[]
   backup: ChatBackupView | null
   /** The account's contact list is full: changes (a block too) wait to be written. */
   contactListFull: boolean
@@ -105,15 +93,9 @@ const emptySnapshot: ChatSnapshot = {
   history: [],
   contacts: [],
   profiles: [],
-  groups: [],
   chatGroups: [],
   attention: [],
   profile: null,
-  invitations: [],
-  invitationFeedback: [],
-  ownerApprovals: [],
-  joinRequests: [],
-  ownJoinRequests: [],
   backup: null,
   contactListFull: false,
 }
@@ -160,12 +142,11 @@ export function useChat(): ChatState {
 }
 
 /**
- * Whether group links can be followed here: one boolean, so a message
- * re-renders only when it changes. Joining by link is the MLS groups' until
- * pairwise groups take links (docs/plans/pairwise-groups.md §10).
+ * Whether group links can be followed here (the server hosts groups): one
+ * boolean, so a message re-renders only when it changes.
  */
 export function useGroupLinksEnabled(): boolean {
-  return useSyncExternalStore(subscribe, () => state.capabilities?.mlsGroups === true)
+  return useSyncExternalStore(subscribe, () => state.capabilities?.pairwiseGroups === true)
 }
 
 /** The open service; only for components rendered once the chat is ready. */
@@ -175,7 +156,7 @@ export function useChatService(): ChatService {
   return service
 }
 
-async function reload(service: ChatService, mlsGroups: boolean): Promise<void> {
+async function reload(service: ChatService): Promise<void> {
   const mine = ++generation
   try {
     // What needs the server keeps its last value while offline, so the local
@@ -187,7 +168,7 @@ async function reload(service: ChatService, mlsGroups: boolean): Promise<void> {
         return fallback
       })
     const pairwise = state.capabilities?.pairwiseGroups === true
-    const [history, attention, contacts, profile, profiles, groups, invitations, invitationFeedback, ownerApprovals, chatGroups] =
+    const [history, attention, contacts, profile, profiles, chatGroups] =
       await Promise.all([
         // The live window, not the whole history (Phase 2b): read again only
         // for the conversations that changed.
@@ -199,10 +180,6 @@ async function reload(service: ChatService, mlsGroups: boolean): Promise<void> {
         service.contacts(),
         orPrevious(service.profile(), previous.profile),
         orPrevious(service.profiles(), previous.profiles),
-        mlsGroups ? service.groups() : Promise.resolve([]),
-        mlsGroups ? orPrevious(service.groupInvitations(), previous.invitations) : Promise.resolve([]),
-        mlsGroups ? orPrevious(service.groupInvitationFeedback(), previous.invitationFeedback) : Promise.resolve([]),
-        mlsGroups ? orPrevious(service.pendingGroupOwnerApprovals(), previous.ownerApprovals) : Promise.resolve([]),
         pairwise ? orPrevious(service.chatGroups(), previous.chatGroups) : Promise.resolve([]),
       ])
     const contactListFull = await service.contactListFull().catch(() => previous.contactListFull)
@@ -214,13 +191,7 @@ async function reload(service: ChatService, mlsGroups: boolean): Promise<void> {
         contacts,
         profile,
         profiles,
-        groups,
         chatGroups,
-        invitations,
-        invitationFeedback,
-        ownerApprovals,
-        joinRequests: service.groupJoinRequests(),
-        ownJoinRequests: service.ownJoinRequests(),
         backup: service.backupStatus(),
         contactListFull,
       },
@@ -228,7 +199,7 @@ async function reload(service: ChatService, mlsGroups: boolean): Promise<void> {
       stale: false,
     })
     // Renames of the people here, newest conversations first (a few a pass).
-    void checkRenames(service, directPeersByRecency(history, contacts, state.self?.key ?? ''), () => void reload(service, mlsGroups))
+    void checkRenames(service, directPeersByRecency(history, contacts, state.self?.key ?? ''), () => void reload(service))
   } catch (error) {
     console.warn('chat: reload failed', error)
     if (mine === generation && state.service === service) set({ stale: true, loaded: true })
@@ -237,8 +208,8 @@ async function reload(service: ChatService, mlsGroups: boolean): Promise<void> {
 
 /** Reload now (after an action whose result should show at once). */
 export function refreshChat(): Promise<void> {
-  const { service, capabilities } = state
-  return service ? reload(service, capabilities?.mlsGroups === true) : Promise.resolve()
+  const { service } = state
+  return service ? reload(service) : Promise.resolve()
 }
 
 function onTyping(event: ChatTypingEvent): void {
@@ -331,9 +302,8 @@ export function openChat(session: Session, install?: ChatInstall): void {
       if (install.linking.typingIndicators !== undefined) setTypingIndicators(install.linking.typingIndicators)
       install.linking.free()
     }
-    const mlsGroups = capabilities.mlsGroups === true
     const unsubscribers = [
-      service.subscribe(() => void reload(service, mlsGroups)),
+      service.subscribe(() => void reload(service)),
       service.subscribeTyping(onTyping),
       service.subscribeConnection((connection) => set({ connection })),
       service.subscribeAttachmentExpiry(async (ids) => {
@@ -367,7 +337,7 @@ export function openChat(session: Session, install?: ChatInstall): void {
       mediaCache,
       connection: service.connectionStatus(),
     })
-    await reload(service, mlsGroups)
+    await reload(service)
   })()
 }
 

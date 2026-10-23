@@ -61,5 +61,5 @@ export function isDeviceBoundChatRoute(url: string | undefined, method?: string)
   const path = url.split('?')[0]
   if (path === '/chat/device' && method?.toLowerCase() === 'post') return false
   if (path === '/chat/provisioning/ticket') return false
-  return !path.startsWith('/chat/anonymous') && !path.startsWith('/chat/mls/anonymous')
+  return !path.startsWith('/chat/anonymous')
 }

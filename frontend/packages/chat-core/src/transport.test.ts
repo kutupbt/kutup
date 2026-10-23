@@ -58,38 +58,6 @@ describe('ApiChatTransport', () => {
     await expect(transport.distributeIdentity({})).rejects.toBe(refused)
   })
 
-  it('waits for a lagging ordering server before giving up on a quorum', async () => {
-    vi.useFakeTimers()
-    try {
-      const unavailable = new axios.AxiosError('quorum', '503', undefined, undefined, { status: 503 } as never)
-      const post = vi
-        .spyOn(api, 'post')
-        .mockRejectedValueOnce(unavailable)
-        .mockRejectedValueOnce(unavailable)
-        .mockResolvedValueOnce({ data: { votes: [] } } as never)
-      const votes = new ApiChatTransport().collectMlsOrderingVotes({ block: 1 })
-      await vi.advanceTimersByTimeAsync(9_000)
-      await expect(votes).resolves.toEqual({ votes: [] })
-      expect(post).toHaveBeenCalledTimes(3)
-
-      post.mockReset().mockRejectedValue(unavailable)
-      const refused = new ApiChatTransport().collectMlsOrderingVotes({ block: 2 })
-      const settled = expect(refused).rejects.toBe(unavailable)
-      await vi.advanceTimersByTimeAsync(9_000)
-      await settled
-      expect(post).toHaveBeenCalledTimes(3)
-    } finally {
-      vi.useRealTimers()
-    }
-  })
-
-  it('does not retry votes the server refused for another reason', async () => {
-    const conflict = new axios.AxiosError('conflict', '409', undefined, undefined, { status: 409 } as never)
-    const post = vi.spyOn(api, 'post').mockRejectedValue(conflict)
-    await expect(new ApiChatTransport().collectMlsOrderingVotes({})).rejects.toBe(conflict)
-    expect(post).toHaveBeenCalledTimes(1)
-  })
-
   it('maps a successful send response to the engine outcome', async () => {
     const post = vi.spyOn(api, 'post').mockResolvedValue({ data: { stored: 2 } } as never)
     const transport = new ApiChatTransport()
@@ -234,28 +202,6 @@ describe('ApiChatTransport', () => {
     })
   })
 
-  it('keeps anonymous MLS requests free of cookies and authorization', async () => {
-    await resolveApiBase()
-    const post = vi.spyOn(axios, 'post').mockResolvedValue({ data: { devices: [] } } as never)
-    const transport = new ApiChatTransport()
-
-    await expect(
-      transport.fetchAnonymousMlsKeyPackages({ recipient: { server: 'b.test', accountId: '00000000-0000-4000-8000-81b637d8fcd2' } }),
-    ).resolves.toEqual({ devices: [] })
-    expect(post).toHaveBeenCalledWith(
-      expect.stringMatching(/\/chat\/mls\/anonymous\/key-packages$/),
-      { recipient: { server: 'b.test', accountId: '00000000-0000-4000-8000-81b637d8fcd2' } },
-      { withCredentials: false, headers: { Authorization: undefined } },
-    )
-
-    await transport.submitAnonymousMlsMessage({ sendId: 'send-1' })
-    expect(post).toHaveBeenLastCalledWith(
-      expect.stringMatching(/\/chat\/mls\/anonymous\/messages$/),
-      { sendId: 'send-1' },
-      { withCredentials: false, headers: { Authorization: undefined } },
-    )
-  })
-
   it('sends sealed bundle fetches and messages to the anonymous account routes, unauthenticated', async () => {
     const base = await resolveApiBase()
     const post = vi.spyOn(axios, 'post').mockResolvedValue({ data: {} } as never)
@@ -358,95 +304,6 @@ describe('ApiChatTransport', () => {
     await expect(transport.sendSealedMessage(BOB, { sendId: 's-1' })).resolves.toEqual({ kind: 'refused' })
     await expect(transport.sendSealedMessage(BOB, { sendId: 's-2' })).rejects.toThrow('failed')
     expect(post).toHaveBeenCalledTimes(2)
-  })
-
-  it('uses authenticated routes for MLS invitation decisions', async () => {
-    const get = vi.spyOn(api, 'get').mockResolvedValue({ data: [] } as never)
-    const post = vi.spyOn(api, 'post').mockResolvedValue({
-      data: {
-        conversationId: '00000000-0000-0000-0000-000000000001',
-        incarnation: 1,
-        status: 'active',
-        idempotent: false,
-      },
-    } as never)
-    const transport = new ApiChatTransport()
-    await expect(transport.listMlsInvitations()).resolves.toEqual([])
-    expect(get).toHaveBeenCalledWith('/chat/mls/invitations')
-    await expect(transport.listMlsInvitationFeedback()).resolves.toEqual([])
-    expect(get).toHaveBeenCalledWith('/chat/mls/invitation-feedback')
-    await transport.respondMlsInvitation({
-      conversationId: '00000000-0000-0000-0000-000000000001',
-      incarnation: 1,
-      accept: true,
-    })
-    expect(post).toHaveBeenCalledWith('/chat/mls/invitations', {
-      conversationId: '00000000-0000-0000-0000-000000000001',
-      incarnation: 1,
-      accept: true,
-    })
-
-    await expect(transport.drainMlsMailbox(7, '42', 64)).resolves.toEqual([])
-    expect(get).toHaveBeenCalledWith('/chat/mls/messages/7', {
-      params: { after: '42', limit: 64 },
-    })
-    await transport.ackMlsMailbox(7, [
-      '00000000-0000-0000-0000-000000000002',
-      '00000000-0000-0000-0000-000000000001',
-    ])
-    expect(post).toHaveBeenCalledWith('/chat/mls/messages/ack', {
-      deviceId: 7,
-      envelopeIds: [
-        '00000000-0000-0000-0000-000000000001',
-        '00000000-0000-0000-0000-000000000002',
-      ],
-    })
-  })
-
-  it('retrieves MLS ordering history only through the same-origin policy route', async () => {
-    const get = vi.spyOn(api, 'get')
-    get.mockResolvedValueOnce({ data: { domain: 'authority.example' } })
-    const transport = new ApiChatTransport()
-    await expect(
-      transport.fetchMlsOrderingPolicy('authority.example'),
-    ).resolves.toEqual({ domain: 'authority.example' })
-    expect(get).toHaveBeenCalledWith(
-      '/chat/mls/domains/authority.example/policy',
-    )
-  })
-
-  it('extracts the authenticated MLS group id from canonical control history', async () => {
-    const page = {
-      protocolVersion: 1,
-      genesis: { mlsGroupId: 'BwcHBwcHBwcHBwcHBwcHBw==' },
-      commits: [{ height: 1 }],
-      nextHeight: '1',
-    }
-    const bytes = new TextEncoder().encode(JSON.stringify(page))
-    const get = vi.spyOn(api, 'get').mockResolvedValue({
-      data: bytes.buffer,
-    } as never)
-    const transport = new ApiChatTransport()
-
-    const result = await transport.fetchMlsControlHistory(
-      '00000000-0000-4000-8000-000000000001',
-      1,
-      '0',
-      64,
-    )
-    expect(result).toMatchObject({
-      entryCount: 1,
-      nextHeight: '1',
-      genesisGroupId: page.genesis.mlsGroupId,
-    })
-    expect([...result.bytes]).toEqual([...bytes])
-    expect(get).toHaveBeenCalledWith(
-      '/chat/mls/conversations/00000000-0000-4000-8000-000000000001/1/control-history',
-      {
-        params: { afterHeight: '0', limit: 64 },
-        responseType: 'arraybuffer',
-      },
-    )
   })
 
   it('reaches a group home through this account\'s relay, with the answer still sealed', async () => {

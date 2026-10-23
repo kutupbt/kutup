@@ -23,8 +23,6 @@ import type {
   ChatHistoryEntry,
   ContactRecord,
   ConversationId,
-  LocalMlsConversationRecord,
-  MlsGroupInfo,
   PeerChatProfile,
 } from '@kutup/chat-core/types'
 
@@ -146,7 +144,6 @@ export interface ChatData {
   history: ChatHistoryEntry[]
   contacts: ContactRecord[]
   profiles: PeerChatProfile[]
-  groups: LocalMlsConversationRecord[]
   /** Pairwise groups (docs/plans/pairwise-groups.md). */
   chatGroups: ChatGroupSummary[]
 }
@@ -165,21 +162,8 @@ export interface ConversationSummary {
   activityMs: number
   contact: ContactRecord | null
   profile: PeerChatProfile | null
-  /** A live group's name, description and picture. */
-  groupInfo: MlsGroupInfo | null
   /** A pairwise group: its title, and this account's standing in it. */
   chatGroup: ChatGroupSummary | null
-}
-
-/** When a group was made, in milliseconds (genesis records seconds or ms). */
-function groupCreatedMs(group: LocalMlsConversationRecord): number {
-  const at = group.request.genesis.createdAt
-  return at < 1e12 ? at * 1000 : at
-}
-
-/** A group's conversation id. */
-export function groupIdOf(group: LocalMlsConversationRecord): string {
-  return group.request.genesis.conversationId
 }
 
 /**
@@ -206,7 +190,7 @@ export function conversationList(data: ChatData, selfKey: string, nowMs: number)
   const liveChatGroups = data.chatGroups.filter(
     (group) => group.status !== 'gone' && !(group.status === 'invited' && group.inviter && contacts.get(group.inviter)?.state === 'blocked'),
   )
-  const liveGroups = new Set([...data.groups.map(groupIdOf), ...liveChatGroups.map((group) => group.groupId)])
+  const liveGroups = new Set(liveChatGroups.map((group) => group.groupId))
   const items = new Map<string, ConversationSummary>()
 
   for (const [key, message] of latest) {
@@ -225,7 +209,6 @@ export function conversationList(data: ChatData, selfKey: string, nowMs: number)
         activityMs: message.timestampMs,
         contact,
         profile: profiles.get(peer) ?? null,
-        groupInfo: null,
         chatGroup: null,
       })
     } else if (!liveGroups.has(conversation.groupId)) {
@@ -238,7 +221,6 @@ export function conversationList(data: ChatData, selfKey: string, nowMs: number)
         activityMs: message.timestampMs,
         contact: null,
         profile: null,
-        groupInfo: null,
         chatGroup: null,
       })
     }
@@ -260,24 +242,6 @@ export function conversationList(data: ChatData, selfKey: string, nowMs: number)
       activityMs: contact.updatedAtMs,
       contact,
       profile: profiles.get(contact.peer) ?? null,
-      groupInfo: null,
-      chatGroup: null,
-    })
-  }
-  for (const group of data.groups) {
-    const conversation: ConversationId = { kind: 'group', groupId: groupIdOf(group) }
-    const key = conversationKey(conversation)
-    const last = latest.get(key) ?? null
-    items.set(key, {
-      key,
-      conversation,
-      kind: 'group',
-      peer: null,
-      last,
-      activityMs: last?.timestampMs ?? groupCreatedMs(group),
-      contact: null,
-      profile: null,
-      groupInfo: group.currentGroupInfo ?? null,
       chatGroup: null,
     })
   }
@@ -294,7 +258,6 @@ export function conversationList(data: ChatData, selfKey: string, nowMs: number)
       activityMs: last?.timestampMs ?? group.knownSinceMs ?? 0,
       contact: null,
       profile: null,
-      groupInfo: null,
       chatGroup: group,
     })
   }

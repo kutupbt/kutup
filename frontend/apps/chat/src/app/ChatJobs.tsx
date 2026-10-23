@@ -57,24 +57,18 @@ export function ChatJobs() {
   useEffect(() => {
     if (!service || !self) return
     const contacts = new Map(snapshot.contacts.map((c) => [c.peer, c]))
-    const activeGroups = new Set(
-      snapshot.groups.filter((g) => g.status === 'active').map((g) => g.request.genesis.conversationId),
-    )
     const batches = new Map<string, { conversation: ConversationId; state: 'delivered' | 'read'; ids: string[] }>()
     const nowMs = Date.now()
     for (const message of snapshot.history) {
       const id = message.content.messageId
       if (message.direction !== 'incoming' || !id || !isVisibleChatMessage(message, nowMs)) continue
-      if (message.conversation.kind === 'direct') {
-        const peer = directKey(message.conversation)
-        const state = peer ? contacts.get(peer)?.state : undefined
-        if (!peer || (peer !== self.key && state !== 'accepted' && state !== 'pendingOutgoing')) continue
-      } else if (!activeGroups.has(message.conversation.groupId)) {
-        continue
-      }
+      // Pairwise groups send no receipts yet (docs/plans/pairwise-groups.md).
+      if (message.conversation.kind !== 'direct') continue
+      const peer = directKey(message.conversation)
+      const contactState = peer ? contacts.get(peer)?.state : undefined
+      if (!peer || (peer !== self.key && contactState !== 'accepted' && contactState !== 'pendingOutgoing')) continue
       const key = conversationKey(message.conversation)
       const read = readReceipts && viewed === key
-      if (message.conversation.kind === 'group' && !read) continue
       const state = read ? 'read' : 'delivered'
       const existing = ownReceipts.get(id)
       if (existing === 'read' || existing === state) continue

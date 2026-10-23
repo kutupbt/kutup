@@ -1169,8 +1169,12 @@ exists. Once pairwise groups pass their gates, one change removes MLS:
     `chat_invite_links` and `chat_invite_requests`.
 - **Web:** `mls-service.ts` (and its tests), `invite-links.ts`,
   `group-readiness.ts`, `MlsGroupSecurityDetails.tsx` and the MLS branches of
-  `service.ts` and `types.ts`. The group UI (`NewGroupDialog`, `GroupDetails`,
-  `groupLink/`, `GroupCallScreen`) is kept and rewired.
+  `service.ts` and `types.ts`. The MLS-only screens (`GroupDetails`,
+  `EditGroupInfoDialog`, `GroupInvitations`, the MLS link dialog) go: pairwise
+  groups already have their own (`ChatGroupDetails`, `ChatGroupJoinDialog`).
+  The group-call controller, ringer and screen go too, since they sent and
+  keyed calls over MLS; slice 4 rebuilds them on pairwise groups, reusing the
+  meeting stage (`CallStage`, `sfuRoom`), which stays.
 - **Specs and docs:**
   - Specs 36, 38 and the group parts of 32, 34 and 42 are rewritten for pairwise
     groups.

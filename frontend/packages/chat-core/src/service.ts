@@ -26,21 +26,10 @@ import type {
   PeerChatProfile,
   ReceiveReport,
   SendSummary,
-  LocalMlsConversationRecord,
   ChatCallEvent,
   ChatCallLog,
   ChatCallServers,
   ChatCallSignal,
-  ChatGroupCall,
-  GroupJoinRequest,
-  InviteLinkCrypto,
-  MlsGroupInfo,
-  MlsGroupInviteLink,
-  OwnJoinRequest,
-  MlsInvitationFeedback,
-  MlsAuthorityPolicyInspection,
-  PendingMlsOwnerApprovalRequest,
-  PendingMlsInvitation,
   SafetyNumberV2,
   ChatWasmModule,
   WasmChatClientHandle,
@@ -79,13 +68,6 @@ import {
   type AccountRef,
 } from './identity'
 import { matchesWords, searchableText, searchWords } from './search'
-import { MlsConversationService, MlsSendError } from './mls-service'
-import {
-  INVITE_LINK_POLL_MS,
-  InviteLinkService,
-  type InviteLinkChange,
-  type InviteLinkLookup,
-} from './invite-links'
 import { chatMediaCacheBindingV1, deliverChatMediaV1 } from './media'
 import { privateCiphertextCacheForAccountV1 } from '@kutup/files/mediaCache'
 import { ChatAttachmentLedger } from './attachment-ledger'
@@ -110,7 +92,6 @@ type TypingListener = (event: ChatTypingEvent) => void
  * drop; `offline` is the browser saying it has no network.
  */
 /** How often a tab checks for newly linked devices to add to its groups. */
-const LINKED_DEVICE_CHECK_MS = 2 * 60_000
 /**
  * How often an open tab checks its prekeys: tops up the one-time keys and
  * rotates the signed pair when due, also for a tab whose socket never drops
@@ -346,7 +327,6 @@ export class ChatService {
   >()
   /** Drafts, read positions and other small state, sealed for this account. */
   readonly sealedStorage: SealedStorage
-  private readonly mlsWorkflowLockName: string
   private readonly channel: BroadcastChannel
   private readonly listeners = new Set<UpdateListener>()
   private readonly typingListeners = new Set<TypingListener>()
@@ -374,10 +354,6 @@ export class ChatService {
   /** Peers whose server does not speak this Chat wire yet: messages to them wait. */
   private waitingPeers?: Set<string>
   private waitingPeerListeners?: Set<() => void>
-  private readonly mls: MlsConversationService | null
-  private readonly invites: InviteLinkService | null
-  private inviteTimer: ReturnType<typeof setInterval> | null = null
-  private linkedDeviceTimer: ReturnType<typeof setInterval> | null = null
   private prekeyTimer: ReturnType<typeof setInterval> | null = null
   private accountListsTimer: ReturnType<typeof setTimeout> | null = null
   private groupSyncTimer: ReturnType<typeof setTimeout> | null = null
@@ -393,7 +369,6 @@ export class ChatService {
     private readonly transport: ApiChatTransport,
     private readonly account: AccountRef,
     private readonly attachmentLedger: ChatAttachmentLedger | null,
-    inviteCrypto: InviteLinkCrypto,
     sealedStorage: SealedStorage,
   ) {
     this.client = client
@@ -426,29 +401,10 @@ export class ChatService {
     this.deviceId = client.deviceId
     this.lockName = lockName
     this.engineLock = engineLock
-    this.mlsWorkflowLockName = `${lockName}:mls-workflow`
     this.capabilities = capabilities
     // Replaced prekeys are kept as long as the server may still hold a
     // message made with them.
     client.setMailboxRetentionDays?.(capabilities.mailboxRetentionDays)
-    this.mls = capabilities.mlsGroups === true
-      ? new MlsConversationService(
-          client,
-          transport,
-          operation => this.withLock(operation),
-          this.deviceId,
-          account,
-        )
-      : null
-    this.invites = this.mls
-      ? new InviteLinkService(
-          this.mls,
-          transport,
-          inviteCrypto,
-          account,
-          localStorageOrNull(),
-        )
-      : null
     this.channel = new BroadcastChannel(channelName)
     this.channel.onmessage = (message: MessageEvent<unknown>) => {
       const event = parseTypingBroadcast(message.data)
@@ -534,7 +490,6 @@ export class ChatService {
       transport,
       options.account,
       attachmentLedger,
-      wasm,
       new SealedStorage(wasm, options.masterKey, scope),
     )
     try {
@@ -564,7 +519,7 @@ export class ChatService {
         })
         service.backupUnsubscribe = service.backup.subscribe(() => service.emitUpdate())
       }
-      await service.initializeMls()
+      await service.syncOwnManifest()
       await service.revokeReplacedDevice(options.userId)
       rememberLocalChatDevice(options.userId, service.deviceId)
       await service.reconcile()
@@ -574,8 +529,6 @@ export class ChatService {
       service.startAccountListSync()
       service.startGroupSync()
       void service.connectSocket()
-      service.startInviteLinks()
-      service.startLinkedDeviceChecks()
       return service
     } catch (error) {
       service.dispose()
@@ -896,14 +849,8 @@ export class ChatService {
     if (deviceId === this.deviceId) {
       throw new Error('the current Chat device cannot revoke itself')
     }
-    await this.withMlsWorkflow(async () => {
-      await this.transport.revokeDevice(deviceId)
-      const manifest = await this.withLock(() => this.client.revokeManifestDevice(deviceId))
-      if (!this.mls) return
-      const sequence = requireManifestSequence(manifest)
-      await this.mls.maintainKeyPackages(sequence)
-      await this.mls.reconcileLinkedDevices(requireMlsManifestDeviceIds(manifest))
-    })
+    await this.transport.revokeDevice(deviceId)
+    await this.withLock(() => this.client.revokeManifestDevice(deviceId))
     this.notifyPeers()
     return this.devices()
   }
@@ -961,17 +908,7 @@ export class ChatService {
       const sent = await this.sendChatGroupText(conversation.groupId, text, replyTo)
       return { delivered: sent.pending === 0, deduplicated: false, attempts: 1, safetyNumberChanges: [] }
     }
-    if (conversation.kind === 'group') {
-      return this.groupSend(() =>
-        this.requireMls().sendText(
-          conversation.groupId,
-          text,
-          replyTo,
-          expiresAfterSeconds,
-          extras,
-        ),
-      )
-    }
+    if (conversation.kind === 'group') throw new Error('no such group')
     const peer = accountKey(conversation.account)
     const sendId = crypto.randomUUID()
     const summary = await this.withLock(() =>
@@ -1007,17 +944,6 @@ export class ChatService {
       storageReferenceId,
     )
     this.refuseChatGroup(conversation)
-    if (conversation.kind === 'group') {
-      return this.groupSend(() =>
-        this.requireMls().sendAttachment(
-          conversation.groupId,
-          sendId,
-          descriptor,
-          expiresAfterSeconds,
-          extras,
-        ),
-      )
-    }
     const address = conversation.account
     const peer = accountKey(address)
     const self = this.selfKey()
@@ -1098,11 +1024,6 @@ export class ChatService {
     expiresAfterSeconds?: number,
   ): Promise<SendSummary> {
     this.refuseChatGroup(conversation)
-    if (conversation.kind === 'group') {
-      return this.groupSend(() =>
-        this.requireMls().sendPollContent(conversation.groupId, kind, body, expiresAfterSeconds),
-      )
-    }
     const peer = accountKey(conversation.account)
     const summary = await this.withLock(() =>
       this.client.sendPollContent(crypto.randomUUID(), peer, new Date().toISOString(), kind, body, expiresAfterSeconds),
@@ -1118,16 +1039,6 @@ export class ChatService {
     active: boolean,
   ): Promise<SendSummary> {
     this.refuseChatGroup(conversation)
-    if (conversation.kind === 'group') {
-      return this.groupSend(() =>
-        this.requireMls().sendReaction(
-          conversation.groupId,
-          targetMessageId,
-          emoji,
-          active,
-        ),
-      )
-    }
     const peer = accountKey(conversation.account)
     const summary = await this.withLock(() => this.client.sendReaction(
       crypto.randomUUID(),
@@ -1148,18 +1059,6 @@ export class ChatService {
     replacementText?: string,
   ): Promise<SendSummary> {
     this.refuseChatGroup(conversation)
-    if (conversation.kind === 'group') {
-      const summary = await this.withMlsWorkflow(() =>
-        this.requireMls().mutateMessage(
-          conversation.groupId,
-          targetMessageId,
-          operation,
-          replacementText,
-        ),
-      )
-      this.notifyPeers()
-      return { ...summary, safetyNumberChanges: [] }
-    }
     const peer = accountKey(conversation.account)
     const summary = await this.withLock(() => this.client.sendMessageMutation(
       crypto.randomUUID(),
@@ -1178,16 +1077,9 @@ export class ChatService {
     messageIds: string[],
     state: 'delivered' | 'read',
   ): Promise<SendSummary> {
-    // Receipts in pairwise groups come with a later slice: nothing is sent.
-    if (conversation.kind === 'group' && isChatGroupId(conversation.groupId)) {
-      return { delivered: true, deduplicated: false, attempts: 0, safetyNumberChanges: [] }
-    }
+    // Receipts in groups come with a later slice: nothing is sent.
     if (conversation.kind === 'group') {
-      const summary = await this.withMlsWorkflow(() =>
-        this.requireMls().sendReceipt(conversation.groupId, messageIds, state),
-      )
-      this.notifyPeers()
-      return { ...summary, safetyNumberChanges: [] }
+      return { delivered: true, deduplicated: false, attempts: 0, safetyNumberChanges: [] }
     }
     const peer = accountKey(conversation.account)
     const summary = await this.withLock(() => this.client.sendReceipt(
@@ -1202,14 +1094,8 @@ export class ChatService {
   }
 
   async sendTyping(conversation: ConversationId, active: boolean): Promise<void> {
-    // Typing in pairwise groups comes with a later slice.
-    if (conversation.kind === 'group' && isChatGroupId(conversation.groupId)) return
-    if (conversation.kind === 'group') {
-      await this.withMlsWorkflow(() =>
-        this.requireMls().sendTyping(conversation.groupId, active),
-      )
-      return
-    }
+    // Typing in groups comes with a later slice.
+    if (conversation.kind === 'group') return
     const peer = accountKey(conversation.account)
     const self = this.selfKey()
     if (peer === self) return
@@ -1227,30 +1113,6 @@ export class ChatService {
    */
   async retrySends(): Promise<void> {
     await this.reconcile()
-  }
-
-  /**
-   * A group send. Once the message is encrypted into the durable MLS outbox
-   * it will go out (every reconcile retries it), so a failure after that is
-   * "not delivered yet", not "not sent": the message shows as pending with a
-   * retry instead of coming back to the composer, where sending it again
-   * would duplicate it.
-   */
-  private async groupSend(
-    work: () => Promise<{ delivered: boolean; deduplicated: boolean; attempts: number }>,
-  ): Promise<SendSummary> {
-    try {
-      const summary = await this.withMlsWorkflow(work)
-      return { ...summary, safetyNumberChanges: [] }
-    } catch (error) {
-      if (error instanceof MlsSendError && error.stage !== 'conversation' && error.stage !== 'encryption') {
-        console.warn('chat: group message queued; delivery failed at', error.stage, error.cause)
-        return { delivered: false, deduplicated: false, attempts: 0, safetyNumberChanges: [] }
-      }
-      throw error
-    } finally {
-      this.notifyPeers()
-    }
   }
 
   /** Send one call signal to `peer` (its devices; see docs/chat-calls.md). */
@@ -1313,17 +1175,6 @@ export class ChatService {
     return response.data
   }
 
-  /** Announce a group call starting or ending to the group. */
-  async sendGroupCall(groupId: string, body: ChatGroupCall): Promise<void> {
-    await this.withMlsWorkflow(() => this.requireMls().sendPollContent(groupId, 'groupCall', body))
-    this.notifyPeers()
-  }
-
-  /** A group call's frame key in the group's current epoch. */
-  async groupCallKey(groupId: string, callId: string): Promise<{ epoch: number; key: Uint8Array }> {
-    return this.requireMls().callKey(groupId, callId)
-  }
-
   /** An SFU token for a group call's room, from its host (through this server). */
   async groupCallToken(host: string, roomId: string, participantId: string): Promise<{ url: string; token: string }> {
     const response = await api.post<{ url: string; token: string }>('/chat/group-calls/token', {
@@ -1349,13 +1200,6 @@ export class ChatService {
     durationSeconds?: number,
   ): Promise<SendSummary> {
     this.refuseChatGroup(conversation)
-    if (conversation.kind === 'group') {
-      const summary = await this.withMlsWorkflow(() =>
-        this.requireMls().sendDisappearingTimer(conversation.groupId, durationSeconds),
-      )
-      this.notifyPeers()
-      return { ...summary, safetyNumberChanges: [] }
-    }
     const peer = accountKey(conversation.account)
     const summary = await this.withLock(() => this.client.sendDisappearingTimer(
       crypto.randomUUID(),
@@ -1582,17 +1426,6 @@ export class ChatService {
     })
       .then(async ({ commits, expiry, report }) => {
         await this.releaseExpiredAttachments(expiry)
-        // MLS groups go their own way: a failure there (an MLS device the
-        // server no longer has, say after an identity reset) never holds
-        // back what this pass took for direct conversations.
-        let mlsTyping: ChatTypingEvent[] = []
-        try {
-          mlsTyping = await this.withMlsWorkflow(async () => {
-            return await this.mls?.reconcile() ?? []
-          })
-        } catch (error) {
-          reportBackgroundFailure(error)
-        }
         // A queued message the server would not take stays queued, behind
         // nothing but its own conversation; it is tried again on every pass.
         const waiting = new Set<string>()
@@ -1635,7 +1468,7 @@ export class ChatService {
             active: message.content.typing?.active ?? false,
           }]
         })
-        for (const event of [...directTyping, ...mlsTyping]) this.emitTyping(event, true)
+        for (const event of directTyping) this.emitTyping(event, true)
         // Most passes (a poll, a socket hint) find nothing: then nothing was
         // written, and neither this tab nor the others reload anything.
         const after = await this.withLock(async () => this.client.storeCommits?.())
@@ -1649,9 +1482,7 @@ export class ChatService {
           // waiting for the next local write could leave it unrecorded for
           // long.
           const entered = this.pendingAttachments.size > 0 && await this.reconcileAttachmentLedger()
-          // Invitations are kept on the server: a new one wrote nothing
-          // here, but the list shows it. Other tabs list it on their own pass.
-          if (this.mls?.takeInvitationsChanged() || entered) this.emitUpdate()
+          if (entered) this.emitUpdate()
         }
         return report
       })
@@ -1677,9 +1508,13 @@ export class ChatService {
   // ----- pairwise groups (docs/plans/pairwise-groups.md) -----
 
   /** What pairwise groups don't take yet (slice 1 sends text and replies). */
-  private refuseChatGroup(conversation: ConversationId): void {
-    if (conversation.kind === 'group' && isChatGroupId(conversation.groupId)) {
-      throw new Error('this group takes text and replies only for now')
+  private refuseChatGroup(
+    conversation: ConversationId,
+  ): asserts conversation is Extract<ConversationId, { kind: 'direct' }> {
+    if (conversation.kind === 'group') {
+      throw new Error(isChatGroupId(conversation.groupId)
+        ? 'this group takes text and replies only for now'
+        : 'no such group')
     }
   }
 
@@ -1982,170 +1817,6 @@ export class ChatService {
     this.notifyPeers()
   }
 
-  async groups(): Promise<LocalMlsConversationRecord[]> {
-    return this.requireMls().conversations()
-  }
-
-  async groupAuthorityPolicyDetails(
-    conversationId: string,
-  ): Promise<MlsAuthorityPolicyInspection[]> {
-    return this.requireMls().authorityPolicyDetails(conversationId)
-  }
-
-  async groupInvitations(): Promise<PendingMlsInvitation[]> {
-    return this.requireMls().invitations()
-  }
-
-  async groupInvitationFeedback(): Promise<MlsInvitationFeedback[]> {
-    return this.requireMls().invitationFeedback()
-  }
-
-  /** A new group, named from the start when `name` is given (Signal asks for one). */
-  async createGroup(initialMember?: AccountRef, name?: string): Promise<LocalMlsConversationRecord> {
-    const result = await this.withMlsWorkflow(async () => {
-      const mls = this.requireMls()
-      const self = this.account
-      const authorities = new Set([self.server])
-      if (initialMember) authorities.add(initialMember.server)
-      const created = await mls.createGroup(self, [...authorities].sort(), name)
-      return initialMember
-        ? await mls.addMember(created.conversation.request.genesis.conversationId, initialMember)
-        : created
-    })
-    this.notifyPeers()
-    return result.conversation
-  }
-
-  async acceptGroupInvitation(invitation: PendingMlsInvitation): Promise<void> {
-    await this.withMlsWorkflow(() => this.requireMls().acceptInvitation(invitation))
-    this.notifyPeers()
-  }
-
-  async rejectGroupInvitation(invitation: PendingMlsInvitation): Promise<void> {
-    await this.withMlsWorkflow(() => this.requireMls().rejectInvitation(invitation))
-    this.notifyPeers()
-  }
-
-  async addGroupMember(conversationId: string, member: AccountRef): Promise<void> {
-    await this.withMlsWorkflow(() =>
-      this.requireMls().addMember(
-        conversationId,
-        member,
-      ),
-    )
-    this.notifyPeers()
-  }
-
-  async removeGroupMember(conversationId: string, member: AccountRef): Promise<void> {
-    await this.withMlsWorkflow(() =>
-      this.requireMls().removeMember(
-        conversationId,
-        member,
-      ),
-    )
-    this.notifyPeers()
-  }
-
-  async setGroupAdministrator(
-    conversationId: string,
-    member: AccountRef,
-    isAdmin: boolean,
-  ): Promise<void> {
-    await this.withMlsWorkflow(() =>
-      this.requireMls().setAdministrator(
-        conversationId,
-        member,
-        isAdmin,
-      ),
-    )
-    this.notifyPeers()
-  }
-
-  async setGroupAuthorities(
-    conversationId: string,
-    authorityDomains: string[],
-  ): Promise<void> {
-    await this.withMlsWorkflow(() =>
-      this.requireMls().setAuthorities(conversationId, authorityDomains),
-    )
-    this.notifyPeers()
-  }
-
-  async publishGroupOwnerCandidate(conversationId: string): Promise<void> {
-    await this.withMlsWorkflow(() =>
-      this.requireMls().publishOwnerCandidate(conversationId),
-    )
-    this.notifyPeers()
-  }
-
-  async setGroupOwner(
-    conversationId: string,
-    member: AccountRef,
-    isOwner: boolean,
-  ): Promise<boolean> {
-    const finalized = await this.withMlsWorkflow(() =>
-      this.requireMls().setOwnerRole(
-        conversationId,
-        member,
-        isOwner,
-      ),
-    )
-    this.notifyPeers()
-    return finalized !== null
-  }
-
-  async pendingGroupOwnerApprovals(): Promise<PendingMlsOwnerApprovalRequest[]> {
-    return this.requireMls().pendingOwnerApprovalRequests()
-  }
-
-  async approveGroupOwnerGovernance(conversationId: string): Promise<void> {
-    await this.withMlsWorkflow(() =>
-      this.requireMls().approveOwnerGovernance(conversationId),
-    )
-    this.notifyPeers()
-  }
-
-  async rejectGroupOwnerGovernance(conversationId: string): Promise<void> {
-    await this.withMlsWorkflow(() =>
-      this.requireMls().rejectOwnerGovernance(conversationId),
-    )
-    this.notifyPeers()
-  }
-
-  async closeGroup(conversationId: string): Promise<boolean> {
-    const finalized = await this.withMlsWorkflow(() =>
-      this.requireMls().closeConversation(conversationId),
-    )
-    this.notifyPeers()
-    return finalized !== null
-  }
-
-  async setGroupApplicationSenders(
-    conversationId: string,
-    applicationSenders: 'members' | 'administrators',
-  ): Promise<boolean> {
-    const finalized = await this.withMlsWorkflow(() =>
-      this.requireMls().setApplicationSenderPolicy(conversationId, applicationSenders),
-    )
-    this.notifyPeers()
-    return finalized !== null
-  }
-
-  /** Leave the group (see MlsConversationService.leaveGroup). */
-  async leaveGroup(conversationId: string): Promise<void> {
-    await this.withMlsWorkflow(() => this.requireMls().leaveGroup(conversationId))
-    this.notifyPeers()
-  }
-
-  /** Rename the group, or change its description or picture. */
-  async setGroupInfo(
-    conversationId: string,
-    info: Omit<MlsGroupInfo, 'sequence' | 'inviteLink'>,
-  ): Promise<void> {
-    await this.withMlsWorkflow(() => this.requireMls().setGroupInfo(conversationId, info))
-    this.notifyPeers()
-  }
-
   /**
    * Wake this device through a browser push subscription while Chat is
    * closed (`null` stops it). The push carries nothing: see docs/chat-notifications.md.
@@ -2153,75 +1824,6 @@ export class ChatService {
   async setPushSubscription(endpoint: string | null): Promise<void> {
     if (endpoint) await api.put('/chat/push-subscription', { deviceId: this.deviceId, endpoint })
     else await api.delete('/chat/push-subscription', { params: { deviceId: this.deviceId } })
-  }
-
-  /** Turn a group's link on or off, reset it, or change whether joining needs approval. */
-  async changeInviteLink(conversationId: string, change: InviteLinkChange): Promise<void> {
-    await this.withMlsWorkflow(() => this.requireInvites().change(conversationId, change))
-    this.notifyPeers()
-  }
-
-  /** The URL to share for a group's link. */
-  inviteLinkUrl(link: MlsGroupInviteLink): string {
-    return this.requireInvites().url(link, window.location.origin)
-  }
-
-  /** People waiting for an administrator of this account's groups (no network). */
-  groupJoinRequests(): GroupJoinRequest[] {
-    return this.invites?.joinRequests() ?? []
-  }
-
-  /** Look for new requests now (opening a group's details). */
-  async refreshGroupJoinRequests(): Promise<void> {
-    if (!this.invites) return
-    const changed = await this.withMlsWorkflow(() => this.invites!.reconcileRequests(true))
-    if (changed) this.emitUpdate()
-  }
-
-  async decideGroupJoinRequest(
-    conversationId: string,
-    requester: string,
-    approve: boolean,
-  ): Promise<void> {
-    await this.withMlsWorkflow(() =>
-      this.requireInvites().decide(conversationId, requester, approve))
-    this.notifyPeers()
-  }
-
-  /** What a group link leads to; throws an {@link InviteLinkError} when nowhere. */
-  async lookUpInviteLink(url: string): Promise<InviteLinkLookup> {
-    return this.requireInvites().lookUp(url)
-  }
-
-  async requestToJoin(lookup: InviteLinkLookup): Promise<OwnJoinRequest> {
-    const request = await this.requireInvites().requestToJoin(lookup)
-    this.notifyPeers()
-    // An administrator may add at once when no approval is needed.
-    setTimeout(() => void this.reconcileInviteLinks(true), 5_000)
-    return request
-  }
-
-  ownJoinRequests(): OwnJoinRequest[] {
-    return this.invites?.ownRequests() ?? []
-  }
-
-  async cancelJoinRequest(linkId: string): Promise<void> {
-    await this.requireInvites().cancel(linkId)
-    this.notifyPeers()
-  }
-
-  /**
-   * Bring this account's newly linked devices into its groups without
-   * waiting for this tab to be reopened (the manifest check is one request).
-   */
-  private startLinkedDeviceChecks(): void {
-    if (!this.mls || this.linkedDeviceTimer) return
-    this.linkedDeviceTimer = setInterval(() => {
-      if (this.disposed) return
-      void this.initializeMls().catch((error: unknown) =>
-        console.warn('chat: linked device check failed', error))
-      void this.refreshOwnProfile()
-    }, LINKED_DEVICE_CHECK_MS)
   }
 
   /**
@@ -2294,68 +1896,6 @@ export class ChatService {
     }, PREKEY_CHECK_MS)
   }
 
-  private startInviteLinks(): void {
-    if (!this.invites || this.inviteTimer) return
-    void this.reconcileInviteLinks()
-    this.inviteTimer = setInterval(() => void this.reconcileInviteLinks(), INVITE_LINK_POLL_MS)
-  }
-
-  private async reconcileInviteLinks(force = false): Promise<void> {
-    if (!this.invites || this.disposed) return
-    try {
-      const changed = await this.withMlsWorkflow(async () => {
-        const requests = await this.invites!.reconcileRequests(force)
-        const own = await this.invites!.reconcileOwnRequests(force)
-        return requests || own
-      })
-      if (changed) this.notifyPeers()
-    } catch (error) {
-      console.warn('chat: group link check failed', error)
-    }
-  }
-
-  private requireInvites(): InviteLinkService {
-    if (!this.invites) throw new Error('MLS groups are not enabled by this server')
-    return this.invites
-  }
-
-  /** Who may change the group's information; false when it waits for other owners. */
-  async setGroupInfoEditors(
-    conversationId: string,
-    editors: 'members' | 'administrators',
-  ): Promise<boolean> {
-    const finalized = await this.withMlsWorkflow(() =>
-      this.requireMls().setGroupInfoEditors(conversationId, editors),
-    )
-    this.notifyPeers()
-    return finalized !== null
-  }
-
-  async tightenGroupMaximumPlaintext(
-    conversationId: string,
-    maximumBytes: number,
-  ): Promise<boolean> {
-    const finalized = await this.withMlsWorkflow(() =>
-      this.requireMls().tightenMaximumApplicationPlaintext(conversationId, maximumBytes),
-    )
-    this.notifyPeers()
-    return finalized !== null
-  }
-
-  async recoverGroup(
-    conversationId: string,
-    authorityDomains?: string[],
-  ): Promise<boolean> {
-    const finalized = await this.withMlsWorkflow(() =>
-      this.requireMls().recoverConversation(
-        conversationId,
-        authorityDomains,
-      ),
-    )
-    this.notifyPeers()
-    return finalized !== null
-  }
-
   async maintainPrekeys(): Promise<void> {
     try {
       await this.withLock(() => this.client.maintainPrekeys())
@@ -2424,8 +1964,6 @@ export class ChatService {
     if (this.socketRetry) clearTimeout(this.socketRetry)
     if (this.heldRetry) clearTimeout(this.heldRetry)
     this.stopPolling()
-    if (this.inviteTimer) clearInterval(this.inviteTimer)
-    if (this.linkedDeviceTimer) clearInterval(this.linkedDeviceTimer)
     if (this.prekeyTimer) clearInterval(this.prekeyTimer)
     if (this.accountListsTimer) clearTimeout(this.accountListsTimer)
     if (this.groupSyncTimer) clearTimeout(this.groupSyncTimer)
@@ -2576,25 +2114,6 @@ export class ChatService {
     }
   }
 
-  /**
-   * Serialize complete MLS workflows, including their network phases, across
-   * tabs. The engine lock above still protects each durable cryptographic
-   * transaction; this separate lock prevents reconciliation from observing a
-   * prepared workflow and racing its order/finalize steps.
-   */
-  private async withMlsWorkflow<T>(operation: () => Promise<T>): Promise<T> {
-    return await navigator.locks.request(
-      this.mlsWorkflowLockName,
-      { mode: 'exclusive' },
-      async () => await operation(),
-    )
-  }
-
-  private requireMls(): MlsConversationService {
-    if (!this.mls) throw new Error('MLS groups are not enabled by this server')
-    return this.mls
-  }
-
   /** This account's key, `aci:<uuid>@<server>` (Note to Self's peer). */
   private selfKey(): string {
     return accountKey(this.account)
@@ -2608,15 +2127,9 @@ export class ChatService {
     }))
   }
 
-  private async initializeMls(): Promise<void> {
-    await this.withMlsWorkflow(async () => {
-      const manifest = await this.withLock(() => this.client.syncManifest())
-      if (!this.mls) return
-      const sequence = requireManifestSequence(manifest)
-      await this.mls.maintainKeyPackages(sequence)
-      await this.mls.reconcileLinkedDevices(requireMlsManifestDeviceIds(manifest))
-      await this.mls.reconcileMemberDevices()
-    })
+  /** This device's entry in the account's signed manifest, published when it changed. */
+  private async syncOwnManifest(): Promise<void> {
+    await this.withLock(() => this.client.syncManifest())
   }
 
   private notifyPeers(): void {
@@ -2652,7 +2165,7 @@ export class ChatService {
 
   private wentOnline(): void {
     this.backup?.online()
-    void this.initializeMls().catch(reportBackgroundFailure).then(() => this.reconcileInBackground())
+    void this.syncOwnManifest().catch(reportBackgroundFailure).then(() => this.reconcileInBackground())
     this.reconnect()
   }
 
@@ -2691,7 +2204,7 @@ export class ChatService {
   private readonly handleVisibilityChange = (): void => {
     this.backup?.pageHidden()
     if (document.visibilityState === 'visible') {
-      void this.initializeMls().catch(reportBackgroundFailure).then(() => this.reconcileInBackground())
+      void this.syncOwnManifest().catch(reportBackgroundFailure).then(() => this.reconcileInBackground())
       void this.refreshOwnProfile()
     }
   }
@@ -2730,7 +2243,7 @@ export class ChatService {
         this.setConnection('connected')
         this.startHeartbeat(socket)
         void this.maintainPrekeys()
-        void this.initializeMls().catch(reportBackgroundFailure).then(() => this.reconcileInBackground())
+        void this.syncOwnManifest().catch(reportBackgroundFailure).then(() => this.reconcileInBackground())
       }
       socket.onmessage = (event: MessageEvent<unknown>) => {
         if (isPong(event.data)) {
@@ -2910,55 +2423,6 @@ function requireManifestSequence(value: unknown): number {
     throw new Error('signed account manifest returned an invalid sequence')
   }
   return value.sequence
-}
-
-function requireMlsManifestDeviceIds(value: unknown): number[] {
-  if (
-    typeof value !== 'object'
-    || value === null
-    || !('devices' in value)
-    || !Array.isArray(value.devices)
-    || value.devices.length < 1
-    || value.devices.length > 10
-  ) {
-    throw new Error('signed device manifest returned an invalid MLS device set')
-  }
-  const manifestIds: number[] = []
-  const mlsIds: number[] = []
-  for (const entry of value.devices) {
-    if (
-      typeof entry !== 'object'
-      || entry === null
-      || !('deviceId' in entry)
-      || typeof entry.deviceId !== 'number'
-      || !Number.isSafeInteger(entry.deviceId)
-      || entry.deviceId < 1
-      || entry.deviceId > 127
-    ) {
-      throw new Error('signed device manifest contains an invalid device id')
-    }
-    manifestIds.push(entry.deviceId)
-    if (!('mls' in entry) || entry.mls === null || entry.mls === undefined) continue
-    if (typeof entry.mls !== 'object') {
-      throw new Error('signed device manifest contains invalid MLS keys')
-    }
-    mlsIds.push(entry.deviceId)
-  }
-  if (new Set(manifestIds).size !== manifestIds.length) {
-    throw new Error('signed device manifest repeats a device id')
-  }
-  if (mlsIds.length < 1) {
-    throw new Error('signed device manifest has no MLS-capable device')
-  }
-  return mlsIds.sort((left, right) => left - right)
-}
-
-function localStorageOrNull(): Storage | null {
-  try {
-    return window.localStorage
-  } catch {
-    return null
-  }
 }
 
 function parseCallBroadcast(value: unknown): ChatCallEvent | null {

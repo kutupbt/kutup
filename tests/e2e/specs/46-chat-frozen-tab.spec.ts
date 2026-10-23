@@ -29,7 +29,7 @@ test('a tab frozen while holding the chat lock does not stall the other tabs', a
     const request = locks.request.bind(locks) as (...args: unknown[]) => Promise<unknown>
     window.__chatEngineLocks = new Set()
     locks.request = ((name: string, ...rest: unknown[]) => {
-      if (/^kutup-chat-engine:/.test(name) && !/:(mls-workflow|attachment-ledger)$/.test(name)) {
+      if (/^kutup-chat-engine:/.test(name) && !/:attachment-ledger$/.test(name)) {
         window.__chatEngineLocks!.add(name)
       }
       return request(name, ...rest)
