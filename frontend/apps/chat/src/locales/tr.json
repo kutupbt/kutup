@@ -137,7 +137,7 @@
     "chooseConversation": "Bir konuşma seçin veya başlatın.",
     "timeline": "Konuşma zaman çizelgesi",
     "jumpToLatest": "En yeniye git",
-    "safetyNumberChanged": "Bir alıcı cihazın kimliği değişti. Güvenlik numarasını doğrulayın.",
+    "safetyNumberChanged": "Bir kişinin güvenlik numarası değişti. Hassas bir şey paylaşmadan önce yeniden doğrulayın.",
     "device": "Cihaz {{device}}",
     "backup": {
       "title": "Şifreli sohbet geçmişi",
@@ -177,14 +177,14 @@
     "deviceRecovery": {
       "action": "Bu tarayıcıyı onar",
       "title": "Bu tarayıcının İleti cihazı sıfırlansın mı?",
-      "description": "Kutup bu tarayıcıdaki geçersiz şifreleme cihazı durumunu kaldıracak, yeni bir cihaz kaydedecek ve sunucunun onayladığı şifreli geçmişi geri yükleyecek. Hesabınız ve sunucu yedeğiniz silinmez.",
+      "description": "Kutup bu tarayıcıdaki geçersiz İleti cihazı durumunu kaldıracak. Ardından bu tarayıcıyı diğer cihazlarınızdan birinden yeniden bağlarsınız ve sunucunun onayladığı şifreli geçmişiniz geri yüklenir. Hesabınız ve sunucu yedeğiniz silinmez.",
       "warning": "Yalnızca bu tarayıcıda bulunan ve sunucu tarafından hiç onaylanmamış İleti değişiklikleri kaybolabilir. Devam etmeden önce diğer Kutup sekmelerini kapatın.",
       "confirm": "Sıfırla ve geri yükle",
       "failed": "Bu tarayıcının İleti cihazı sıfırlanamadı."
     },
     "devices": {
-      "title": "Etkin İleti kurulumları",
-      "description": "Her tarayıcı profili, gizli pencere veya temizlenmiş site verisi ayrı bir uçtan uca şifreli kurulumdur. Adlar hesabınıza özeldir ve şifreleme anahtarlarını değiştirmez.",
+      "title": "Bağlı cihazlar",
+      "description": "Hesabınızın her cihazı aynı İleti kimliğini paylaşır. Yeni bir cihazı buradan bağlayın; adlar yalnızca hesabınıza özeldir ve hiçbir anahtarı değiştirmez.",
       "loading": "İleti cihazları yükleniyor…",
       "current": "Bu cihaz",
       "id": "Cihaz kimliği {{device}}",
@@ -194,12 +194,16 @@
       "created": "Eklendi: {{time}}",
       "lastSeen": "Son etkinlik: {{time}}",
       "neverSeen": "Henüz etkinlik yok",
-      "revoke": "İptal et",
-      "confirm": "{{device}} iptal edilsin mi? Gelecekteki mesajları artık almayacak.",
-      "revoked": "İleti cihazı iptal edildi",
-      "historyWarning": "İptal etmek gelecekteki teslimatı durdurur. Cihazın yerel mesaj geçmişini kopyalamaz.",
+      "revoke": "Kaldır",
+      "confirm": "{{device}} kaldırılsın mı? Artık mesaj almayacak.",
+      "revoked": "Cihaz kaldırıldı",
+      "historyWarning": "Bir cihazı kaldırmak ona yeni mesaj gitmesini durdurur. O cihazdaki yerel mesaj geçmişini kopyalamaz.",
       "thisOne": "Bu tarayıcı {{device}} numaralı sohbet cihazı.",
-      "revokeTitle": "Bu cihazın erişimi kaldırılsın mı?"
+      "revokeTitle": "Bu cihaz kaldırılsın mı?",
+      "resetIdentity": "İleti kimliğimi de sıfırla (cihaz kaybolduysa ya da çalındıysa önerilir)",
+      "resetIdentityHint": "Diğer cihazlarınız yeni bir kimlikle çalışmaya devam eder. Kişileriniz güvenlik numaranızın bir kez değiştiğini görür ve sizi doğrulamışlarsa yeniden doğrular.",
+      "revokeAndReset": "Kaldır ve kimliği sıfırla",
+      "revokedAndReset": "Cihaz kaldırıldı ve İleti kimliğiniz sıfırlandı"
     },
     "disappearing": {
       "setting": "Kaybolan mesajlar",
@@ -665,7 +669,7 @@
       "title": "İleti ayarları",
       "profile": "Profil",
       "privacy": "Gizlilik",
-      "devices": "Cihazlar",
+      "devices": "Bağlı cihazlar",
       "backup": "Geçmiş yedeği",
       "storage": "Depolama",
       "notifications": "Bildirimler"
@@ -691,8 +695,8 @@
       "queued": "Yeni mesajlar bağlantı kurulunca görünecek. Gönderdiğiniz mesajlar da o zaman gönderilecek.",
       "retry": "Yeniden dene",
       "deviceRemoved": "Bu tarayıcı artık İleti cihazlarınızdan biri değil",
-      "deviceRemovedBody": "Başka bir cihazdan ya da uzun süre kullanılmadığı için hesabınızdan kaldırıldı. Mesajlar buraya ulaşmıyor. Yeniden kurmak onu baştan kaydeder ve geçmişinizi şifreli yedekten geri yükler; bu tarayıcıdan gönderilmeyi bekleyen mesajlar kaybolur.",
-      "setUpAgain": "Yeniden kur"
+      "deviceRemovedBody": "Başka bir cihazdan ya da uzun süre kullanılmadığı için hesabınızdan kaldırıldı veya Chat kimliğinizdeki bir değişikliği kaçırdı. Mesajlar buraya ulaşmıyor. Cihazlarınızdan birinden yeniden bağlayın; bu tarayıcıdaki geçmiş korunur.",
+      "linkAgain": "Yeniden bağla"
     },
     "groupUpdates": {
       "nameChanged": "{{actor}} grubun adını “{{name}}” olarak değiştirdi.",
@@ -1268,6 +1272,45 @@
       "withdraw": "İsteği geri çek",
       "withdrawn": "İstek geri çekildi.",
       "denied": "Katılma isteğiniz reddedildi."
+    },
+    "link": {
+      "title": "Bu cihazı bağla",
+      "body": "Hesabınız İleti'yi zaten başka bir cihazda kullanıyor. İleti kimliğinizi buraya getirmek için bu cihazı o cihazdan bağlayın.",
+      "starting": "Bağlantı kodu hazırlanıyor…",
+      "stepOpen": "Kullandığınız bir cihazda Kutup İleti'yi açın.",
+      "stepSettings": "Ayarlar → Bağlı cihazlar → Yeni cihaz bağla'ya gidin.",
+      "stepScan": "Bu QR kodunu tarayın ya da aşağıdaki kodu yapıştırın.",
+      "qrLabel": "Bu cihazın bağlantı kodu",
+      "codeLabel": "Bağlantı kodu",
+      "copied": "Bağlantı kodu kopyalandı",
+      "copyFailed": "Bağlantı kodu kopyalanamadı.",
+      "codeAdvice": "Bu kodu yalnızca kendi diğer cihazınıza kopyalayın: elle yazarak ya da Kutup İleti veya Posta ile kendinize göndererek. Kimseyle ve başka bir uygulama üzerinden asla paylaşmayın: bu kodla bağlanan, İleti kimliğinizi alır.",
+      "waiting": "Diğer cihazınız bekleniyor…",
+      "expired": "Bu kodun süresi doldu. Yeni bir kod alın ve yeniden bağlayın.",
+      "failed": "Bağlantı tamamlanamadı. Yeni bir kod alın ve yeniden deneyin.",
+      "newCode": "Yeni kod al",
+      "noDevices": "Diğer cihazlarım yanımda değil",
+      "startOverTitle": "İleti bu cihazda baştan başlasın mı?",
+      "startOverDescription": "Bu cihaz yeni bir İleti kimliği alır. Hesabınızın diğer İleti cihazlarının İleti oturumu kapanır ve sunucunun onayladığı geçmişiniz burada geri yüklenir.",
+      "startOverWarning": "Kişileriniz güvenlik numaranızın değiştiğini görür ve sizi doğrulamışlarsa yeniden doğrular. Diğer cihazlarınıza henüz ulaşmamış mesajlar kaybolur.",
+      "startOverConfirm": "Baştan başla"
+    },
+    "linkNew": {
+      "action": "Yeni cihaz bağla",
+      "title": "Yeni cihaz bağla",
+      "description": "Yeni cihazda Kutup İleti'yi açın ve Bu cihazı bağla'yı seçin. Sonra onun QR kodunu tarayın ya da kodunu buraya yapıştırın.",
+      "scan": "QR kodunu tara",
+      "scanning": "Taranıyor…",
+      "scanUnsupported": "Bu tarayıcı QR kodu tarayamıyor. Onun yerine kodu yapıştırın.",
+      "cameraUnavailable": "Kameraya erişilemedi. Onun yerine kodu yapıştırın.",
+      "pasteLabel": "Ya da kodunu yapıştırın",
+      "warning": "Yalnızca size ait ve önünüzde duran bir cihazı bağlayın: İleti kimliğinizi alır.",
+      "submit": "Cihazı bağla",
+      "confirmTitle": "Bu cihaz bağlansın mı?",
+      "confirmBody": "İleti kimliğinizi alır: bundan sonra gelen mesajları okuyabilir, kişilerinizi ve gruplarınızı görebilir ve sizin adınıza mesaj gönderebilir. Yalnızca sizinse ve üzerinde az önce Bu cihazı bağla'yı seçtiyseniz bağlayın.",
+      "confirm": "Bağla",
+      "sent": "Gönderildi. Yeni cihaz bağlanmayı kendisi tamamlar.",
+      "expired": "O kodun süresi dolmuş. Yeni cihazdan yeni bir kod isteyin."
     }
   },
   "boot": {

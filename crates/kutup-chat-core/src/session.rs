@@ -27,7 +27,7 @@ use sha2::{Digest, Sha256};
 
 use crate::address::ChatAddress;
 use crate::db::{
-    AccountManifestHistoryRecordV1, AuthorityTrust, ChatDb, ContactRecord, InboundEnvelope,
+    AccountManifestHistoryRecord, AuthorityTrust, ChatDb, ContactRecord, InboundEnvelope,
     InboundFailureKind, InboundState, InboxMessage, LocalIdentity, LocalProfile, ManifestTrust,
     OutboxEntry, OutboxLeg, OutboxSyncLeg, PeerProfile, SentMessage,
 };
@@ -37,10 +37,10 @@ use crate::manifest::{verify_bundle_trust, verify_manifest_evidence, ManifestPol
 use crate::store::ChatStore;
 use crate::wire::{decode_ciphertext, decode_identity_key, encode_ciphertext, to_prekey_bundle};
 use kutup_chat_proto::{
-    AccountManifestDeviceV1, AccountManifestV1, ChatContent, ContactControlBody, ContactState,
-    DeliveredEnvelope, DeviceListMismatch, DevicePreKeyBundle, DirectChatSuiteId,
-    DisappearingExpiryStartBody, OutgoingEnvelope, RegisterChatDeviceRequest, ReplenishKeysRequest,
-    SealedOutgoingEnvelopeV1, UserPreKeyBundlesResponse,
+    AccountManifestDeviceV2, AccountManifestV2, AccountPreKeyBundlesResponse, ChatContent,
+    ContactControlBody, ContactState, DeliveredEnvelope, DeviceListMismatch, DevicePreKeyBundle,
+    DirectChatSuiteId, DisappearingExpiryStartBody, OutgoingEnvelope, RegisterChatDeviceRequestV2,
+    ReplenishKeysRequest, SealedOutgoingEnvelopeV1,
 };
 
 /// What a [`Engine::send`](crate::Engine::send) did: whether it landed, and any
@@ -221,6 +221,9 @@ pub(crate) enum ReceiveOutcome {
     /// Group content that can't be confirmed now: nothing was kept, and the
     /// envelope stays queued for a later pass.
     GroupHeld { group_id: String, sender: String },
+    /// An identity distribution's message from another device of this
+    /// account, kept to be applied (`Engine::apply_account_identity`).
+    AccountIdentity { id: String },
     /// Decrypted but the plaintext wasn't a valid content document (a buggy/newer
     /// sender). Stored raw so it's never dropped; the app renders a placeholder.
     Undecodable { id: String },
@@ -240,7 +243,9 @@ pub struct Session {
     store: ChatStore,
     /// The registration payload to publish — `Some` right after [`Session::generate`],
     /// `None` for a device reloaded via [`Session::open`] (already registered).
-    registration: Option<RegisterChatDeviceRequest>,
+    registration: Option<RegisterChatDeviceRequestV2>,
+    /// What this device publishes, right after it was generated.
+    published: Option<keys::PublishedKeys>,
     /// This account's key (`aci:<uuid>@<server>`), used by every account-level comparison.
     /// `address` is the same account with this device's id: its libsignal address.
     account: String,
@@ -249,6 +254,10 @@ pub struct Session {
     /// `(group id, sender account)`, for the second read of an envelope
     /// (`ReceiveOutcome::GroupCheck`).
     group_decisions: std::collections::BTreeMap<(String, String), GroupGate>,
+    /// Peer accounts whose identity moved with a verified manifest since the
+    /// engine last looked (`take_identity_changes`): each has had its
+    /// "safety number changed" line written.
+    identity_changes: Vec<String>,
 }
 
 impl Session {
@@ -256,6 +265,8 @@ impl Session {
     /// Returns the session; publish [`Session::registration`] to `POST
     /// /api/chat/device`, then apply the server-assigned id via
     /// [`Session::complete_registration`].
+    /// A device with a new identity and no registration request: for tests
+    /// and tools that serve its bundle themselves ([`Self::published_keys`]).
     pub async fn generate<R: Rng + CryptoRng>(
         db: Rc<dyn ChatDb>,
         user: impl Into<String>,
@@ -263,18 +274,71 @@ impl Session {
         num_one_time: usize,
         rng: &mut R,
     ) -> Result<Self> {
+        Self::generate_device(
+            db,
+            user,
+            device_id,
+            num_one_time,
+            keys::NewDevice::Standalone { identity: None },
+            rng,
+        )
+        .await
+    }
+
+    /// Another device of `from`'s account, with its identity: the local half
+    /// of linking, for tests and tools.
+    pub async fn generate_linked<R: Rng + CryptoRng>(
+        db: Rc<dyn ChatDb>,
+        from: &Session,
+        device_id: u32,
+        num_one_time: usize,
+        rng: &mut R,
+    ) -> Result<Self> {
+        let user = from.user().to_string();
+        Self::generate_device(
+            db,
+            user,
+            device_id,
+            num_one_time,
+            keys::NewDevice::Standalone {
+                identity: Some(from.local_identity_key_pair()),
+            },
+            rng,
+        )
+        .await
+    }
+
+    /// What this device publishes for its bundle, right after it was
+    /// generated.
+    pub fn published_keys(&self) -> Option<&keys::PublishedKeys> {
+        self.published.as_ref()
+    }
+
+    pub(crate) async fn generate_device<R: Rng + CryptoRng>(
+        db: Rc<dyn ChatDb>,
+        user: impl Into<String>,
+        device_id: u32,
+        num_one_time: usize,
+        new_device: keys::NewDevice<'_>,
+        rng: &mut R,
+    ) -> Result<Self> {
         let address = ChatAddress::from_sender(&user.into(), device_id)?;
         let account = address.name();
-        let material = keys::generate("kutup device", num_one_time, rng)?;
+        let mut material = keys::generate("kutup device", num_one_time, new_device, rng)?;
+        // This account's own chain starts again with this device; contacts'
+        // pins and verified state stay.
+        material.seed.forget_manifests_of.insert(account.clone());
         // Install the whole device (identity + every prekey) in one transaction.
         db.apply(&material.seed).await?;
         let store = ChatStore::attach(db, material.local)?;
         Ok(Session {
             store,
-            registration: Some(material.registration),
+            registration: material.registration,
             account,
             address,
             group_decisions: Default::default(),
+            identity_changes: Vec::new(),
+            published: Some(material.published),
         })
     }
 
@@ -307,6 +371,8 @@ impl Session {
             account,
             address,
             group_decisions: Default::default(),
+            identity_changes: Vec::new(),
+            published: None,
         })
     }
 
@@ -336,11 +402,13 @@ impl Session {
             account,
             address,
             group_decisions: Default::default(),
+            identity_changes: Vec::new(),
+            published: None,
         })
     }
 
     /// The registration request to publish, if this session was just generated.
-    pub fn registration(&self) -> Option<&RegisterChatDeviceRequest> {
+    pub fn registration(&self) -> Option<&RegisterChatDeviceRequestV2> {
         self.registration.as_ref()
     }
 
@@ -457,22 +525,41 @@ impl Session {
                 "manifest history contradicts the current trust pin".into(),
             ));
         }
-        let Some(device) = history
-            .manifest
-            .devices
-            .iter()
-            .find(|device| device.device_id == device_id)
-        else {
+        // Every listed device has the account's identity.
+        if history.manifest.device(device_id).is_none() {
             return Ok(None);
-        };
+        }
         Ok(Some(
-            *decode_identity_key(&device.identity_key)?.public_key(),
+            *decode_identity_key(&history.manifest.identity_key)?.public_key(),
         ))
     }
 
     /// Public identity and registration id for this local device, suitable for
     /// inclusion in the account-signed device manifest.
-    pub fn manifest_device(&self) -> AccountManifestDeviceV1 {
+    /// The device's credential (`None` only in a store from before the
+    /// account identity).
+    pub(crate) fn credential(&self) -> Option<&str> {
+        self.store.credential()
+    }
+
+    pub(crate) fn local_identity_key_pair(&self) -> libsignal_protocol::IdentityKeyPair {
+        self.store.local_identity_key_pair()
+    }
+
+    /// This device's account identity bound to `authority` (the manifest's
+    /// `identityBinding`), signed with the identity key it holds; the key
+    /// itself never leaves the session.
+    pub fn identity_binding(&self, authority: &crate::AccountAuthority) -> Result<String> {
+        authority.identity_binding(self.account_ref(), &self.local_identity_key_pair())
+    }
+
+    /// The account's identity key, as this device holds it and the manifest
+    /// lists it.
+    pub fn account_identity_key(&self) -> String {
+        self.store.local_identity_key_base64()
+    }
+
+    pub fn manifest_device(&self) -> AccountManifestDeviceV2 {
         self.store.local_manifest_device(self.device_id())
     }
 
@@ -481,7 +568,7 @@ impl Session {
     pub fn manifest_device_with_mls(
         &self,
         mls: kutup_chat_proto::MlsManifestDeviceV1,
-    ) -> AccountManifestDeviceV1 {
+    ) -> AccountManifestDeviceV2 {
         self.store
             .local_manifest_device_with_mls(self.device_id(), Some(mls))
     }
@@ -498,6 +585,13 @@ impl Session {
         self.address.device_id = device_id;
         self.registration = None;
         Ok(())
+    }
+
+    /// This device missed the account's identity: forget its registration
+    /// (its history stays) so it is linked again.
+    pub(crate) async fn forget_registration(&mut self) -> Result<()> {
+        self.store.stage_registration_forgotten();
+        self.store.commit().await
     }
 
     // ----- single-op public API (each commits atomically) -----
@@ -1396,6 +1490,37 @@ impl Session {
     ) -> Result<ReceiveOutcome> {
         let mut plaintext = plaintext;
         let mut parsed = serde_json::from_slice::<ChatContent>(&plaintext).ok();
+        // An identity distribution's message to this device: only from
+        // another device of this account. Kept, sealed in the store, in the
+        // commit that acknowledges it; the engine checks it against the
+        // account's manifest and installs it (`apply_account_identity`).
+        if parsed.as_ref().is_some_and(|content| {
+            content.kind == kutup_chat_proto::content::kind::ACCOUNT_IDENTITY
+        }) {
+            let body = parsed
+                .as_ref()
+                .and_then(ChatContent::as_account_identity)
+                .filter(|_| sender == self.user() && sender_device_id != self.device_id());
+            let Some(body) = body else {
+                self.store.discard();
+                self.ack_dropped(envelope).await?;
+                return Ok(ReceiveOutcome::Suppressed {
+                    id: envelope.id.clone(),
+                });
+            };
+            // The plaintext carries the identity's private key.
+            zeroize::Zeroize::zeroize(&mut plaintext);
+            let mut encoded = zeroize::Zeroizing::new(
+                serde_json::to_vec(&body).map_err(|e| ChatError::Content(e.to_string()))?,
+            );
+            self.store
+                .stage_pending_account_identity(Some(std::mem::take(&mut *encoded)));
+            self.stage_inbound_ack(envelope)?;
+            self.store.commit().await?;
+            return Ok(ReceiveOutcome::AccountIdentity {
+                id: envelope.id.clone(),
+            });
+        }
         // A group's content never opens a direct conversation or a message
         // request. Apart from an invitation, nothing of it is kept before the
         // engine decided about its sender (docs/plans/pairwise-groups.md §3):
@@ -2423,7 +2548,7 @@ impl Session {
         peer: &str,
         incarnation_id: &str,
         sequence: u64,
-    ) -> Result<Option<AccountManifestHistoryRecordV1>> {
+    ) -> Result<Option<AccountManifestHistoryRecord>> {
         self.store
             .db()
             .load_manifest_history(peer, incarnation_id, sequence)
@@ -2433,8 +2558,8 @@ impl Session {
     pub(crate) async fn accept_manifest_evidence(
         &mut self,
         account: &str,
-        manifest: &AccountManifestV1,
-    ) -> Result<AccountManifestV1> {
+        manifest: &AccountManifestV2,
+    ) -> Result<AccountManifestV2> {
         let prior_manifest = self.store.db().load_manifest_trust(account).await?;
         let trust = verify_manifest_evidence(account, manifest, prior_manifest.as_ref())?;
         if trust.continuity_gap {
@@ -2442,9 +2567,16 @@ impl Session {
                 "current manifest requires complete history recovery".into(),
             ));
         }
+        self.stage_identity_change(
+            account,
+            prior_manifest.as_ref(),
+            &trust,
+            &device_ids(manifest),
+        )
+        .await?;
         self.store.stage_manifest_trust(trust);
         self.store
-            .stage_manifest_history(AccountManifestHistoryRecordV1 {
+            .stage_manifest_history(AccountManifestHistoryRecord {
                 peer: account.to_string(),
                 sequence: manifest.sequence,
                 manifest: manifest.clone(),
@@ -2456,10 +2588,10 @@ impl Session {
     pub(crate) async fn accept_manifest_evidence_with_history(
         &mut self,
         account: &str,
-        pending: &AccountManifestV1,
+        pending: &AccountManifestV2,
         trust: ManifestTrust,
-        history: Vec<AccountManifestHistoryRecordV1>,
-    ) -> Result<AccountManifestV1> {
+        history: Vec<AccountManifestHistoryRecord>,
+    ) -> Result<AccountManifestV2> {
         let last = history.last().ok_or_else(|| {
             ChatError::Trust("manifest history recovery returned no complete history".into())
         })?;
@@ -2481,9 +2613,132 @@ impl Session {
             }
             self.store.stage_manifest_history(record);
         }
+        let prior_manifest = self.store.db().load_manifest_trust(account).await?;
+        self.stage_identity_change(
+            account,
+            prior_manifest.as_ref(),
+            &trust,
+            &device_ids(pending),
+        )
+        .await?;
         self.store.stage_manifest_trust(trust);
         self.store.commit().await?;
         Ok(pending.clone())
+    }
+
+    /// The peer accounts whose identity moved since the last call.
+    pub(crate) fn take_identity_changes(&mut self) -> Vec<String> {
+        std::mem::take(&mut self.identity_changes)
+    }
+
+    /// When a verified manifest gives a peer account another identity than
+    /// the one pinned (`prior`): stage what Signal does on a key change. Every
+    /// session with the account's devices (as `prior_devices` and the new
+    /// manifest list them) is archived, so the next message starts a new one
+    /// under the new identity, and the thread gets its "safety number
+    /// changed" line, once per identity. Staged in the caller's unit of work;
+    /// nothing for this account itself (its own identity moves by a
+    /// distribution, applied elsewhere) or a first pin.
+    pub(crate) async fn stage_identity_change(
+        &mut self,
+        peer: &str,
+        prior: Option<&ManifestTrust>,
+        next: &ManifestTrust,
+        next_devices: &[u32],
+    ) -> Result<()> {
+        let Some(prior) = prior else {
+            return Ok(());
+        };
+        if prior.identity_key.is_empty() || prior.identity_key == next.identity_key {
+            return Ok(());
+        }
+        if next.account == self.account {
+            return Ok(());
+        }
+        let mut devices: std::collections::BTreeSet<u32> = next_devices.iter().copied().collect();
+        if let Some(record) = self
+            .manifest_history(peer, &prior.incarnation_id, prior.highest_sequence)
+            .await?
+        {
+            devices.extend(
+                record
+                    .manifest
+                    .devices
+                    .iter()
+                    .map(|device| device.device_id),
+            );
+        }
+        for device_id in devices {
+            let address = ChatAddress::from_sender(&next.account, device_id)?
+                .to_protocol()?
+                .to_string();
+            self.store.archive_session(&address).await?;
+        }
+        let now = now_millis();
+        let content = ChatContent::safety_number_changed_with_id(
+            safety_line_id(&next.identity_key),
+            crate::clock::rfc3339(now),
+        );
+        self.store.stage_sent_message(SentMessage {
+            send_id: content.message_id.clone(),
+            peer: peer.to_string(),
+            sender_device_id: self.device_id(),
+            content: serde_json::to_vec(&content).map_err(|e| ChatError::Content(e.to_string()))?,
+            created_at: now,
+            delivered_at: Some(now),
+            delivered: true,
+            deduplicated: false,
+            failed_recipients: 0,
+            waiting_recipients: None,
+        });
+        self.identity_changes.push(peer.to_string());
+        Ok(())
+    }
+
+    /// Another device of the account verified an identity of `peer` that
+    /// isn't the one pinned here (`pinned_identity`, which the account's
+    /// manifest lists): as Signal does when a storage record's verified
+    /// identity key differs, the thread says the safety number changed,
+    /// once per pinned identity, so the person compares it again.
+    pub(crate) async fn note_verified_elsewhere_for_another_identity(
+        &mut self,
+        peer: &str,
+        pinned_identity: &str,
+    ) -> Result<bool> {
+        let id = safety_line_id(pinned_identity);
+        if self.sent_message(&id).await?.is_some() {
+            return Ok(false);
+        }
+        let content =
+            ChatContent::safety_number_changed_with_id(id, crate::clock::rfc3339(now_millis()));
+        self.record_local_notice(peer, &content).await?;
+        self.identity_changes.push(peer.to_string());
+        Ok(true)
+    }
+
+    /// Set whether the peer's pinned identity is verified, if it is still
+    /// `identity_key`.
+    pub(crate) async fn set_identity_verified(
+        &mut self,
+        peer: &str,
+        identity_key: &str,
+        verified: bool,
+        now_ms: i64,
+    ) -> Result<ManifestTrust> {
+        let mut trust = self
+            .manifest_trust(peer)
+            .await?
+            .ok_or_else(|| ChatError::Trust(format!("no identity is pinned for {peer}")))?;
+        if trust.identity_key != identity_key {
+            return Err(ChatError::Trust(
+                "the safety number changed while it was being compared".into(),
+            ));
+        }
+        trust.identity_verified = verified;
+        trust.identity_verified_at_ms = now_ms;
+        self.store.stage_manifest_trust(trust.clone());
+        self.store.commit().await?;
+        Ok(trust)
     }
 
     /// Mark the current TOFU authority as verified after the application has
@@ -2649,12 +2904,11 @@ impl Session {
     pub(crate) async fn accept_bundle_response(
         &mut self,
         peer: &str,
-        response: UserPreKeyBundlesResponse,
+        response: AccountPreKeyBundlesResponse,
         policy: ManifestPolicy,
     ) -> Result<Vec<DevicePreKeyBundle>> {
         let prior_manifest = self.store.db().load_manifest_trust(peer).await?;
         let next = verify_bundle_trust(peer, &response, policy, prior_manifest.as_ref())?;
-        let mut changed = false;
         if let Some(manifest) = next.manifest {
             if manifest.continuity_gap {
                 return Err(ChatError::Trust(
@@ -2662,23 +2916,25 @@ impl Session {
                 ));
             }
             if prior_manifest.as_ref() != Some(&manifest) {
+                self.stage_identity_change(
+                    peer,
+                    prior_manifest.as_ref(),
+                    &manifest,
+                    &device_ids(&response.manifest),
+                )
+                .await?;
                 self.store.stage_manifest_trust(manifest);
-                changed = true;
             }
         }
-        if let Some(manifest) = response.manifest.as_ref() {
-            self.store
-                .stage_manifest_history(AccountManifestHistoryRecordV1 {
-                    peer: peer.to_string(),
-                    sequence: manifest.sequence,
-                    manifest: manifest.clone(),
-                });
-            changed = true;
-        }
-        if changed {
-            self.store.commit().await?;
-        }
-        Ok(response.devices)
+        let manifest = &response.manifest;
+        self.store
+            .stage_manifest_history(AccountManifestHistoryRecord {
+                peer: peer.to_string(),
+                sequence: manifest.sequence,
+                manifest: manifest.clone(),
+            });
+        self.store.commit().await?;
+        Ok(crate::manifest::account_bundles(&response))
     }
 
     /// Atomically accept a bundle only after the engine has fetched and
@@ -2686,17 +2942,14 @@ impl Session {
     pub(crate) async fn accept_bundle_response_with_history(
         &mut self,
         peer: &str,
-        response: UserPreKeyBundlesResponse,
+        response: AccountPreKeyBundlesResponse,
         trust: ManifestTrust,
-        history: Vec<AccountManifestHistoryRecordV1>,
+        history: Vec<AccountManifestHistoryRecord>,
         policy: ManifestPolicy,
     ) -> Result<Vec<DevicePreKeyBundle>> {
         let prior_manifest = self.store.db().load_manifest_trust(peer).await?;
         let next = verify_bundle_trust(peer, &response, policy, prior_manifest.as_ref())?;
-        let served = response
-            .manifest
-            .as_ref()
-            .ok_or_else(|| ChatError::Trust("range recovery requires a signed manifest".into()))?;
+        let served = &response.manifest;
         let last = history.last().ok_or_else(|| {
             ChatError::Trust("manifest range recovery returned no complete history".into())
         })?;
@@ -2724,9 +2977,16 @@ impl Session {
             }
             self.store.stage_manifest_history(record);
         }
+        self.stage_identity_change(
+            peer,
+            prior_manifest.as_ref(),
+            &trust,
+            &device_ids(&response.manifest),
+        )
+        .await?;
         self.store.stage_manifest_trust(trust);
         self.store.commit().await?;
-        Ok(response.devices)
+        Ok(crate::manifest::account_bundles(&response))
     }
 
     /// Decrypt to raw plaintext bytes without committing (the staged core shared by
@@ -3573,6 +3833,66 @@ impl Session {
         Ok(matches!(change, IdentityChange::ReplacedExisting))
     }
 
+    /// Seal one plaintext to each of this account's other devices, under
+    /// the sessions this (old) identity has with them, for an identity
+    /// distribution's request. Nothing is kept: the identity changes once the
+    /// request is taken, and every session goes with it.
+    pub(crate) async fn seal_to_own_devices<R: Rng + CryptoRng>(
+        &mut self,
+        messages: &[(&DevicePreKeyBundle, Vec<u8>)],
+        rng: &mut R,
+    ) -> Result<Vec<OutgoingEnvelope>> {
+        let mut summary = SendSummary::default();
+        let mut envelopes = Vec::with_capacity(messages.len());
+        let result = async {
+            for (bundle, plaintext) in messages {
+                let peer =
+                    ChatAddress::from_account(self.address.account.clone(), bundle.device_id);
+                envelopes.push(
+                    self.seal_device(&peer, bundle, plaintext, &mut summary, rng)
+                        .await?,
+                );
+            }
+            Ok::<_, ChatError>(())
+        }
+        .await;
+        self.store.discard();
+        result?;
+        Ok(envelopes)
+    }
+
+    /// Install this device's part of an account identity change in one
+    /// commit (`ChatStore::stage_identity_install`), clearing a kept
+    /// `accountIdentity` sync with it. The caller opens the session again.
+    pub(crate) async fn install_identity(
+        &mut self,
+        identity: &libsignal_protocol::IdentityKeyPair,
+        registration_id: u32,
+        signed_pre_key: (u32, Vec<u8>),
+        last_resort_kyber_pre_key: (u32, Vec<u8>),
+    ) -> Result<()> {
+        self.store.discard();
+        self.store.stage_identity_install(
+            LocalIdentity {
+                identity_key_pair: identity.serialize().to_vec(),
+                registration_id,
+                device_id: Some(self.device_id()),
+                credential: self.credential().map(str::to_string),
+            },
+            signed_pre_key,
+            last_resort_kyber_pre_key,
+        );
+        self.store.stage_pending_account_identity(None);
+        self.store.commit().await
+    }
+
+    /// Drop a kept `accountIdentity` sync that can no longer apply.
+    pub(crate) async fn drop_pending_account_identity(&mut self) -> Result<()> {
+        self.store.discard();
+        self.store.stage_pending_account_identity(None);
+        self.store.commit().await
+    }
+
     fn is_self(&self, peer: &ChatAddress) -> bool {
         peer.account == self.address.account && peer.device_id == self.address.device_id
     }
@@ -3896,6 +4216,15 @@ fn now() -> SystemTime {
 }
 
 /// Unix-epoch millis, saturating to 0 before the epoch (never in practice).
+/// The devices a manifest lists.
+fn device_ids(manifest: &AccountManifestV2) -> Vec<u32> {
+    manifest
+        .devices
+        .iter()
+        .map(|device| device.device_id)
+        .collect()
+}
+
 fn now_millis() -> i64 {
     crate::clock::unix_millis()
 }
@@ -4412,7 +4741,7 @@ mod sealed_tests {
     use kutup_chat_proto::{DeliveredEnvelope, DevicePreKeyBundle, EnvelopeType};
 
     fn bundle(session: &Session) -> DevicePreKeyBundle {
-        let registration = session.registration().expect("fresh registration");
+        let registration = session.published_keys().expect("fresh keys");
         DevicePreKeyBundle {
             device_id: session.device_id(),
             registration_id: registration.registration_id,
@@ -5433,4 +5762,14 @@ fn refuse_group_only(content: &ChatContent) -> std::result::Result<(), String> {
         return Err("a group call is not Direct content".into());
     }
     Ok(())
+}
+
+/// The id of the "safety number changed" line for a peer's identity: one
+/// line per identity, however often it is met.
+fn safety_line_id(identity_key: &str) -> String {
+    use sha2::{Digest as _, Sha256};
+    format!(
+        "safety:identity:{}",
+        hex::encode(&Sha256::digest(identity_key.as_bytes())[..16])
+    )
 }

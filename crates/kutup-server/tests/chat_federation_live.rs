@@ -10,11 +10,10 @@ use std::time::{Duration, Instant};
 
 use base64::engine::general_purpose::STANDARD;
 use base64::Engine;
-use ed25519_dalek::Signer as _;
+use common::chat_identity::{ChatAccount, ChatDevice};
 use kutup_chat_proto::{
-    AccountIdentitySuiteId, AccountManifestDeviceV1, AccountManifestDriveKeysV1,
-    AccountManifestHistoryPageV1, AccountManifestV1, DirectChatSuiteId, ProfileEnvelopeContextV1,
-    ProfileEnvelopePurpose, ProfileSuiteId, PutChatProfileRequest, UserPreKeyBundlesResponse,
+    AccountManifestHistoryPageV2, AccountPreKeyBundlesResponse, ProfileEnvelopeContextV1,
+    ProfileEnvelopePurpose, ProfileSuiteId, PutChatProfileRequest,
 };
 use kutup_crypto::account_ref::AccountRef;
 use kutup_crypto::chat_media::{self, ChatMediaObjectContextV1};
@@ -87,6 +86,7 @@ fn publish_direct_delivery_capability(
     c: &Client,
     base: &str,
     token: &str,
+    device: &ChatDevice,
     account: &AccountRef,
     capability: &[u8; 16],
 ) {
@@ -96,7 +96,7 @@ fn publish_direct_delivery_capability(
         account: account.clone(),
         version: version.clone(),
         revision: 1,
-        source_device_id: 1,
+        source_device_id: device.id,
         name: opaque_profile_envelope(
             account,
             &version,
@@ -115,7 +115,8 @@ fn publish_direct_delivery_capability(
         delivery_capability_verifier: hex::encode(Sha256::digest(capability)),
     };
     json_response(
-        c.put(format!("{base}/api/chat/profile"))
+        device
+            .auth(c.put(format!("{base}/api/chat/profile")))
             .bearer_auth(token)
             .json(&profile)
             .send()
@@ -133,7 +134,14 @@ fn chat_media_round_trip(
     admin_b: &str,
 ) {
     let capability = [0x6a; 16];
-    publish_direct_delivery_capability(c, b, bob_token, &account_of(c, b, bob_token), &capability);
+    publish_direct_delivery_capability(
+        c,
+        b,
+        bob_token,
+        &bob_device(1),
+        &account_of(c, b, bob_token),
+        &capability,
+    );
     let attachment_id = "50000000-0000-4000-8000-000000000001";
     let attachment_key = [0x51; 32];
     let retrieval_token = [0x52; 32];
@@ -741,94 +749,38 @@ fn login(c: &Client, base: &str, name: &str) -> String {
         .to_string()
 }
 
-fn register_device(c: &Client, base: &str, token: &str, registration_id: u32, seed: u8) -> u32 {
-    let key = |offset: u8| b64(&[seed.wrapping_add(offset); 33]);
-    let response = json_response(
-        c.post(format!("{base}/api/chat/device"))
-            .bearer_auth(token)
-            .json(&json!({
-                "suite": 1,
-                "registrationId": registration_id,
-                "identityKey": key(1),
-                "signedPreKey": {
-                    "keyId": 1,
-                    "publicKey": key(2),
-                    "signature": key(3)
-                },
-                "lastResortKyberPreKey": {
-                    "keyId": 1,
-                    "publicKey": key(4),
-                    "signature": key(5)
-                },
-                "oneTimePreKeys": [{"keyId": 10, "publicKey": key(6)}],
-                "oneTimeKyberPreKeys": [{
-                    "keyId": 20,
-                    "publicKey": key(7),
-                    "signature": key(8)
-                }],
-                "name": format!("federation-test-{seed}")
-            }))
-            .send()
-            .unwrap(),
-        "register chat device",
-    );
-    response["deviceId"].as_u64().unwrap() as u32
+/// The Chat credential of the account seeded by `email`'s device `device`,
+/// the same in every phase.
+fn test_credential(email: &str, device: u32) -> [u8; 32] {
+    test_master_key(&format!("chat-credential:{email}:{device}"))
 }
 
-fn manifest_device(device_id: u32, registration_id: u32, seed: u8) -> AccountManifestDeviceV1 {
-    AccountManifestDeviceV1 {
-        device_id,
-        direct_chat_suite: DirectChatSuiteId::PqxdhTripleRatchetV1,
-        registration_id,
-        identity_key: b64(&[seed.wrapping_add(1); 33]),
-        mls: None,
+/// The Chat side of the account seeded by `email`, signed in with `token`,
+/// before its first device.
+fn chat_account(c: &Client, base: &str, token: &str, email: &str) -> ChatAccount {
+    let keys = AccountIdentityKeysV1::derive(&test_master_key(email)).unwrap();
+    ChatAccount::from_keys(account_of(c, base, token), token, &keys)
+}
+
+/// Alice's one Chat device, as the setup phase registered it.
+fn alice_device() -> ChatDevice {
+    ChatDevice {
+        id: 1,
+        registration_id: ALICE_REGISTRATION_ID,
+        credential: test_credential(ALICE_EMAIL, 1),
     }
 }
 
-#[allow(clippy::too_many_arguments)]
-fn publish_manifest(
-    c: &Client,
-    base: &str,
-    token: &str,
-    identity: &AccountIdentityKeysV1,
-    account: &AccountRef,
-    drive_public_key: &str,
-    sequence: u64,
-    previous_hash: Option<String>,
-    devices: Vec<AccountManifestDeviceV1>,
-) -> AccountManifestV1 {
-    let public = identity.authority_signing_key().verifying_key();
-    let mut manifest = AccountManifestV1 {
-        manifest_version: 1,
-        account: account.clone(),
-        incarnation_id: identity.incarnation_id(),
-        sequence,
-        previous_hash,
-        drive: AccountManifestDriveKeysV1 {
-            suite: AccountIdentitySuiteId::XWingEd25519V2,
-            hpke_public_key: drive_public_key.into(),
-            share_signing_public_key: b64(&identity.drive_signing_public_key()),
+/// Bob's Chat device `id` (1 or 2), as the setup phase registered it.
+fn bob_device(id: u32) -> ChatDevice {
+    ChatDevice {
+        id,
+        registration_id: match id {
+            1 => BOB_REGISTRATION_ID_1,
+            _ => BOB_REGISTRATION_ID_2,
         },
-        devices,
-        issued_at: time::OffsetDateTime::now_utc()
-            .format(&time::format_description::well_known::Rfc3339)
-            .unwrap(),
-        authority_key_id: hex::encode(Sha256::digest(public.as_bytes())),
-        self_authority_key: b64(public.as_bytes()),
-        signature: String::new(),
-    };
-    manifest.signature = b64(&identity
-        .authority_signing_key()
-        .sign(&manifest.signing_bytes().unwrap())
-        .to_bytes());
-    let response = c
-        .post(format!("{base}/api/chat/manifest"))
-        .bearer_auth(token)
-        .json(&manifest)
-        .send()
-        .unwrap();
-    assert!(response.status().is_success());
-    manifest
+        credential: test_credential(BOB_EMAIL, id),
+    }
 }
 
 fn envelope(device_id: u32, registration_id: u32, content: &[u8]) -> Value {
@@ -888,28 +840,31 @@ fn send(
     send_id: &str,
     envelopes: Vec<Value>,
 ) -> Response {
-    c.post(format!(
-        "{base}/api/chat/accounts/{}/messages?server={}",
-        recipient.account_id, recipient.server
-    ))
-    .bearer_auth(token)
-    .json(&json!({
-        "senderDeviceId": 1,
-        "sendId": send_id,
-        "envelopes": envelopes
-    }))
-    .send()
-    .unwrap()
+    let sender = alice_device();
+    sender
+        .auth(c.post(format!(
+            "{base}/api/chat/accounts/{}/messages?server={}",
+            recipient.account_id, recipient.server
+        )))
+        .bearer_auth(token)
+        .json(&json!({
+            "senderDeviceId": sender.id,
+            "sendId": send_id,
+            "envelopes": envelopes
+        }))
+        .send()
+        .unwrap()
 }
 
 fn mailbox(c: &Client, base: &str, token: &str, device_id: u32) -> Vec<Value> {
     let page = json_response(
-        c.get(format!(
-            "{base}/api/chat/messages?deviceId={device_id}&limit=100"
-        ))
-        .bearer_auth(token)
-        .send()
-        .unwrap(),
+        bob_device(device_id)
+            .auth(c.get(format!(
+                "{base}/api/chat/messages?deviceId={device_id}&limit=100"
+            )))
+            .bearer_auth(token)
+            .send()
+            .unwrap(),
         "drain mailbox",
     );
     page["envelopes"].as_array().unwrap().clone()
@@ -2001,7 +1956,7 @@ fn setup_phase(c: &Client, a: &str, b: &str) {
     update_feature_mode(c, b, &admin_b, "drive", "open");
 
     let (alice_token, _alice_drive_public) = register_account(c, a, ALICE_EMAIL, ALICE_USERNAME);
-    let (bob_token, bob_drive_public) = register_account(c, b, BOB_EMAIL, BOB_USERNAME);
+    let (bob_token, _bob_drive_public) = register_account(c, b, BOB_EMAIL, BOB_USERNAME);
     drive_round_trip(c, a, b, &alice_token, &bob_token);
     live_location_across_servers(c, a, b, &alice_token, &bob_token);
 
@@ -2036,31 +1991,19 @@ fn setup_phase(c: &Client, a: &str, b: &str) {
         drive_evidence["currentDocumentHash"]
     );
 
+    let mut alice_chat = chat_account(c, a, &alice_token, ALICE_EMAIL);
+    let alice = alice_device();
+    alice_chat.reregister_as(c, a, alice.registration_id, alice.credential);
+    let mut bob_chat = chat_account(c, b, &bob_token, BOB_EMAIL);
+    let bob_1 = bob_device(1);
+    bob_chat.reregister_as(c, b, bob_1.registration_id, bob_1.credential);
     assert_eq!(
-        register_device(c, a, &alice_token, ALICE_REGISTRATION_ID, 10),
-        1
-    );
-    assert_eq!(
-        register_device(c, b, &bob_token, BOB_REGISTRATION_ID_1, 20),
-        1
-    );
-    assert_eq!(
-        register_device(c, b, &bob_token, 4299, 21),
+        bob_chat.link_unlisted(c, b, &bob_1).id,
         2,
         "interrupted registration occupies a pending device id"
     );
-    let bob_identity = AccountIdentityKeysV1::derive(&test_master_key(BOB_EMAIL)).unwrap();
-    let bob_manifest_v1 = publish_manifest(
-        c,
-        b,
-        &bob_token,
-        &bob_identity,
-        &account_of(c, b, &bob_token),
-        &bob_drive_public,
-        1,
-        None,
-        vec![manifest_device(1, BOB_REGISTRATION_ID_1, 20)],
-    );
+    // The next manifest lists device 1 alone: the unlisted row goes.
+    bob_chat.publish(c, b, &bob_1);
     let bob_devices_after_manifest = json_response(
         c.get(format!("{b}/api/chat/device"))
             .bearer_auth(&bob_token)
@@ -2420,12 +2363,11 @@ fn setup_phase(c: &Client, a: &str, b: &str) {
         .iter()
         .any(|entry| entry["action"] == "federation.rule.upsert"));
 
-    let typed_first: UserPreKeyBundlesResponse =
+    let typed_first: AccountPreKeyBundlesResponse =
         serde_json::from_value(bundles_first.clone()).unwrap();
-    assert_eq!(
-        typed_first.manifest.as_ref().unwrap().account,
-        remote_address
-    );
+    typed_first.check_against_manifest().unwrap();
+    assert_eq!(typed_first.account, remote_address);
+    assert_eq!(typed_first.identity_key, bob_chat.identity_key());
 
     let direct_content = b"federated-direct";
     let direct_id = "10000000-0000-4000-8000-000000000001";
@@ -2463,24 +2405,14 @@ fn setup_phase(c: &Client, a: &str, b: &str) {
         .unwrap();
     assert_eq!(direct["sender"], json!(account_of(c, a, &alice_token)));
 
+    let bob_2 = bob_device(2);
     assert_eq!(
-        register_device(c, b, &bob_token, BOB_REGISTRATION_ID_2, 30),
+        bob_chat
+            .link_as(c, b, &bob_1, bob_2.registration_id, bob_2.credential)
+            .id,
         2
     );
-    let bob_manifest_v2 = publish_manifest(
-        c,
-        b,
-        &bob_token,
-        &bob_identity,
-        &account_of(c, b, &bob_token),
-        &bob_drive_public,
-        2,
-        Some(bob_manifest_v1.manifest_hash().unwrap()),
-        vec![
-            manifest_device(1, BOB_REGISTRATION_ID_1, 20),
-            manifest_device(2, BOB_REGISTRATION_ID_2, 30),
-        ],
-    );
+    let bob_manifest_v2 = bob_chat.head.clone().unwrap();
     let refreshed_bundles = json_response(
         c.get(format!(
             "{a}/api/chat/accounts/{}/keys?server=b.test",
@@ -2491,37 +2423,25 @@ fn setup_phase(c: &Client, a: &str, b: &str) {
         .unwrap(),
         "remote bundle manifest refresh",
     );
-    let typed_refreshed: UserPreKeyBundlesResponse =
+    let typed_refreshed: AccountPreKeyBundlesResponse =
         serde_json::from_value(refreshed_bundles).unwrap();
-    assert_eq!(typed_refreshed.manifest.as_ref(), Some(&bob_manifest_v2));
+    typed_refreshed.check_against_manifest().unwrap();
+    assert_eq!(typed_refreshed.manifest, bob_manifest_v2);
+    assert_eq!(typed_refreshed.devices.len(), 2);
 
     // Materialize enough complete, signed account history to cross the
     // protocol's 64-entry page boundary. Fetch it through A's same-origin
     // route, which in turn uses the signed federation route on B. Both pages
     // must describe one immutable checkpoint snapshot and an exact chain.
-    let bob_devices = vec![
-        manifest_device(1, BOB_REGISTRATION_ID_1, 20),
-        manifest_device(2, BOB_REGISTRATION_ID_2, 30),
-    ];
-    let mut latest_manifest = bob_manifest_v2.clone();
-    for version in 3..=66 {
-        latest_manifest = publish_manifest(
-            c,
-            b,
-            &bob_token,
-            &bob_identity,
-            &account_of(c, b, &bob_token),
-            &bob_drive_public,
-            version,
-            Some(latest_manifest.manifest_hash().unwrap()),
-            bob_devices.clone(),
-        );
+    let mut latest_manifest = bob_manifest_v2;
+    while latest_manifest.sequence < 66 {
+        latest_manifest = bob_chat.publish(c, b, &bob_1);
     }
     let history_url = format!(
         "{a}/api/chat/accounts/{}/manifest-history?server=b.test",
         remote_address.account_id
     );
-    let first_page: AccountManifestHistoryPageV1 = serde_json::from_value(json_response(
+    let first_page: AccountManifestHistoryPageV2 = serde_json::from_value(json_response(
         c.get(&history_url)
             .bearer_auth(&alice_token)
             .query(&[
@@ -2537,7 +2457,7 @@ fn setup_phase(c: &Client, a: &str, b: &str) {
     assert_eq!(first_page.manifests.len(), 64);
     first_page.validate().unwrap();
     assert_eq!(first_page.next_sequence, Some(65));
-    let second_page: AccountManifestHistoryPageV1 = serde_json::from_value(json_response(
+    let second_page: AccountManifestHistoryPageV2 = serde_json::from_value(json_response(
         c.get(&history_url)
             .bearer_auth(&alice_token)
             .query(&[

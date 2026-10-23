@@ -1,9 +1,9 @@
 # One identity key per account (Signal's ACI model)
 
-Status: design note for approval (2026-10-22), revised after the main
-session's review against Signal-Desktop and Signal-Server. Docs only:
-nothing is built before the main session and the user approve it. Client
-sections by the third session, server and key endpoints by the second.
+Status: approved by the user (2026-10-22) and being built. The wire types
+are #314; the client (kutup-crypto's provisioning cipher, chat-core, the web
+app, client-ffi) and the server land together with one combined browser gate.
+Client sections by the third session, server and key endpoints by the second.
 
 ## Why
 
@@ -97,6 +97,7 @@ the identity moved up to the account:
 | Drive keys (as V1) | yes | unchanged |
 | `issuedAt`, `authorityKeyId`, `selfAuthorityKey`, `signature` | yes | as V1, under the V2 domain |
 | **`identityKey`** | new | the account's libsignal identity key (33 bytes) itself, not a hash |
+| **`identityBinding`** | new (review) | the identity key's signature over the authority key id, incarnation, account and identity key: an authority can list only an identity that named it |
 | `devices[]`: `deviceId`, `directChatSuite`, **`registrationId`** | yes, without `identityKey` | the registration id is now part of what the authority vouches for |
 | `devices[].mls` | yes | dropped if the MLS removal lands first |
 
@@ -462,9 +463,9 @@ and prekeys (Signal's `/v2/keys`).
 
 **Federation:** `fetch_remote_bundles` verifies the attached manifest (as
 `fetch_remote_manifest` does) and the bundles against it. A distribution or
-a reset is pushed to peer servers as a device revocation is (the
-manifest-changed notice to the peers that serve this account's contacts),
-so their clients fetch it. A remote account's sender certificates carry its
+a reset isn't pushed to peer servers: their clients learn it lazily, as
+they learn of a revoked device, when their next send answers `409` or `410`
+and they fetch the account's manifest and bundles again. A remote account's sender certificates carry its
 identity key; receiving clients check them against the account's federated
 manifest (client section); a server checks only that its own certificates
 match the issuing account's current identity.

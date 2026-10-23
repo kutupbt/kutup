@@ -35,6 +35,10 @@ pub enum KutupChatError {
     MissingBundle { device_id: u32 },
     #[error("chat client is closed")]
     Closed,
+    /// Another device of the account holds its Chat identity: link this one
+    /// from it (`NativeLinkingDevice`), or re-register.
+    #[error("this device must be linked from one of the account's devices")]
+    LinkRequired,
 }
 
 impl From<ChatError> for KutupChatError {
@@ -62,6 +66,7 @@ impl From<ChatError> for KutupChatError {
             },
             ChatError::SendNotConverged(attempts) => Self::SendNotConverged { attempts },
             ChatError::MissingBundle(device_id) => Self::MissingBundle { device_id },
+            ChatError::LinkRequired => Self::LinkRequired,
         }
     }
 }
@@ -88,6 +93,16 @@ pub struct ChatHttpRequest {
     pub method: ChatHttpMethod,
     pub path: String,
     pub body_json: Option<String>,
+    /// The `X-Kutup-Chat-Device` header (`<deviceId>.<credential>`), sent
+    /// beside the session token once the device is registered.
+    pub chat_device: Option<String>,
+}
+
+/// The account settings a linking device sent along.
+#[derive(Debug, Clone, Copy, uniffi::Record)]
+pub struct ChatProvisionedSettings {
+    pub read_receipts: bool,
+    pub typing_indicators: bool,
 }
 
 #[derive(Debug, Clone, uniffi::Record)]
@@ -334,6 +349,8 @@ pub struct ChatSafetyNumber {
     pub peer_account: String,
     pub fingerprint: String,
     pub qr_payload: String,
+    /// The peer's account identity key the number covers.
+    pub identity_key: String,
     pub authority_key_id: String,
     pub retained_authority_key_id: Option<String>,
     pub trust: ChatTrustLevel,
@@ -341,13 +358,14 @@ pub struct ChatSafetyNumber {
     pub quarantine_reason: Option<String>,
 }
 
-impl From<kutup_chat_core::SafetyNumberV1> for ChatSafetyNumber {
-    fn from(value: kutup_chat_core::SafetyNumberV1) -> Self {
+impl From<kutup_chat_core::SafetyNumberV2> for ChatSafetyNumber {
+    fn from(value: kutup_chat_core::SafetyNumberV2) -> Self {
         Self {
             local_account: value.local_account,
             peer_account: value.peer_account,
             fingerprint: value.fingerprint,
             qr_payload: value.qr_payload,
+            identity_key: value.identity_key,
             authority_key_id: value.authority_key_id,
             retained_authority_key_id: value.retained_authority_key_id,
             trust: match value.trust {

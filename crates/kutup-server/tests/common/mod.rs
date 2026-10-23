@@ -16,6 +16,8 @@ use serde_json::{json, Value};
 use std::collections::HashMap;
 use std::sync::{Mutex, OnceLock};
 
+pub mod chat_identity;
+
 /// A client builder on the server's TLS provider: reqwest is built without
 /// one of its own (rustls with aws-lc-rs, X25519MLKEM768 first; the
 /// server's `tls` module), so it is installed as the process default first.

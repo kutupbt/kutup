@@ -459,9 +459,81 @@ pub const CALENDAR_SETTINGS: [NumericSetting; 5] = [
     CALENDAR_EVENTS_PAGE,
 ];
 
+/// How long a Chat link token, and the provisioning socket of the device
+/// it links, stay usable (docs/plans/account-identity-key.md).
+pub const CHAT_LINK_TOKEN_SECONDS: NumericSetting = NumericSetting {
+    key: "chat_link_token_seconds",
+    field: "chatLinkTokenSeconds",
+    default: 600,
+    min: 60,
+    max: 3600,
+};
+/// Link tokens one account may hold unused at once.
+pub const CHAT_LINK_TOKENS_PER_ACCOUNT: NumericSetting = NumericSetting {
+    key: "chat_link_tokens_per_account",
+    field: "chatLinkTokensPerAccount",
+    default: 3,
+    min: 1,
+    max: 20,
+};
+/// The largest provisioning message body relayed, in bytes (at most the
+/// format's own, `MAX_PROVISION_BODY_BYTES`).
+pub const CHAT_PROVISION_BODY_BYTES: NumericSetting = NumericSetting {
+    key: "chat_provision_body_bytes",
+    field: "chatProvisionBodyBytes",
+    default: kutup_chat_proto::MAX_PROVISION_BODY_BYTES as i64,
+    min: 4 * 1024,
+    max: kutup_chat_proto::MAX_PROVISION_BODY_BYTES as i64,
+};
+/// Chat installations one account may have (Chat V1's hard cap is 10).
+pub const CHAT_MAX_ACTIVE_DEVICES: NumericSetting = NumericSetting {
+    key: "chat_max_active_devices",
+    field: "chatMaxActiveDevices",
+    default: 10,
+    min: 1,
+    max: 10,
+};
+/// How long a provisioning socket's ticket stays usable, in seconds.
+pub const CHAT_PROVISIONING_TICKET_SECONDS: NumericSetting = NumericSetting {
+    key: "chat_provisioning_ticket_seconds",
+    field: "chatProvisioningTicketSeconds",
+    default: 60,
+    min: 10,
+    max: 600,
+};
+/// Provisioning sockets one account may hold open at once.
+pub const CHAT_PROVISIONING_SOCKETS_PER_ACCOUNT: NumericSetting = NumericSetting {
+    key: "chat_provisioning_sockets_per_account",
+    field: "chatProvisioningSocketsPerAccount",
+    default: 3,
+    min: 1,
+    max: 20,
+};
+/// The largest sync one identity distribution carries to one device, in
+/// bytes (its ciphertext).
+pub const CHAT_DISTRIBUTION_MESSAGE_BYTES: NumericSetting = NumericSetting {
+    key: "chat_distribution_message_bytes",
+    field: "chatDistributionMessageBytes",
+    default: 64 * 1024,
+    min: 1024,
+    max: 1024 * 1024,
+};
+pub const CHAT_IDENTITY_SETTINGS: [NumericSetting; 7] = [
+    CHAT_LINK_TOKEN_SECONDS,
+    CHAT_LINK_TOKENS_PER_ACCOUNT,
+    CHAT_PROVISION_BODY_BYTES,
+    CHAT_MAX_ACTIVE_DEVICES,
+    CHAT_PROVISIONING_TICKET_SECONDS,
+    CHAT_PROVISIONING_SOCKETS_PER_ACCOUNT,
+    CHAT_DISTRIBUTION_MESSAGE_BYTES,
+];
+
 /// Every whole-number setting `/api/admin/settings` lists by field.
 pub fn numeric_settings() -> impl Iterator<Item = &'static NumericSetting> {
-    CHAT_MULTI_SETTINGS.iter().chain(CALENDAR_SETTINGS.iter())
+    CHAT_MULTI_SETTINGS
+        .iter()
+        .chain(CALENDAR_SETTINGS.iter())
+        .chain(CHAT_IDENTITY_SETTINGS.iter())
 }
 
 /// The multi-recipient limits now.

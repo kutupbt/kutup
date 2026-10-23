@@ -1,15 +1,16 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { describe, expect, it, vi } from 'vitest'
 import '../media/testI18n'
-import type { SafetyNumberV1 } from '@kutup/chat-core/types'
+import type { SafetyNumberV2 } from '@kutup/chat-core/types'
 import { SafetyVerificationDialog } from './SafetyVerificationDialog'
 
-function safety(trust: SafetyNumberV1['trust'] = 'Tofu'): SafetyNumberV1 {
+function safety(trust: SafetyNumberV2['trust'] = 'Tofu'): SafetyNumberV2 {
   return {
     localAccount: 'aci:00000000-0000-4000-8000-2bd806c97f0e@alpha.example',
     peerAccount: 'aci:00000000-0000-4000-8000-81b637d8fcd2@beta.example',
     fingerprint: Array.from({ length: 16 }, (_, index) => String(index).padStart(5, '0')).join(' '),
-    qrPayload: 'kutup://verify/v3/CAISA-this-side-first',
+    qrPayload: 'kutup://verify/v4/CAISA-this-side-first',
+    identityKey: 'BQ' + 'A'.repeat(42),
     authorityKeyId: '11'.repeat(32),
     trust,
     continuityGap: false,
@@ -32,15 +33,15 @@ describe('SafetyVerificationDialog', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Verify bob@beta.example' }))
     expect(screen.getByText(/not verified face to face/i)).toBeVisible()
     expect(screen.getByTestId('chat-safety-qr'))
-      .toHaveAttribute('data-value', 'kutup://verify/v3/CAISA-this-side-first')
+      .toHaveAttribute('data-value', 'kutup://verify/v4/CAISA-this-side-first')
     expect(screen.getByTestId('chat-safety-number')).toHaveTextContent('00000 00001')
-    fireEvent.change(screen.getByPlaceholderText('kutup://verify/v3/…'), {
-      target: { value: 'kutup://verify/v3/CAISA-bob-side-first' },
+    fireEvent.change(screen.getByPlaceholderText('kutup://verify/v4/…'), {
+      target: { value: 'kutup://verify/v4/CAISA-bob-side-first' },
     })
     fireEvent.click(screen.getByRole('button', { name: 'Verify exact match' }))
 
     await waitFor(() => {
-      expect(onVerify).toHaveBeenCalledWith('kutup://verify/v3/CAISA-bob-side-first')
+      expect(onVerify).toHaveBeenCalledWith('kutup://verify/v4/CAISA-bob-side-first')
     })
   })
 
