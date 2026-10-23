@@ -9,7 +9,9 @@ import {
   saveEvent,
   useCalendarMutation,
   useCalendars,
+  type Calendar,
   type CalendarEvent,
+  type Reminder,
 } from '@kutup/calendar-core/api'
 import { addDays, timeOf, type CivilDate } from '@kutup/calendar-core/time'
 import { timeZones, type EventFields } from '@kutup/crypto/calendar'
@@ -24,17 +26,22 @@ import { Input } from '@kutup/ui/components/input'
 import { Label } from '@kutup/ui/components/label'
 import { Textarea } from '@kutup/ui/components/textarea'
 import { apiErrorMessage } from '@kutup/ui/lib/apiError'
+import { notificationStatus, requestNotifications } from '@kutup/ui/lib/desktopNotifications'
 import { cn } from '@kutup/ui/lib/cn'
 import { Choice } from './Choice'
 import { DEFAULT_DURATION_MINUTES } from './gridInteraction'
 import { zoneOptions } from './format'
 import { openEditor, useEditorTarget, type EditorTarget } from './editorState'
 import { useCalendarPrefs } from './prefs'
+import { ReminderList } from './reminders/ReminderList'
+import { hasRepeats } from './reminders/triggers'
 
 /** Kutup-crypto's limits (`calendar_event`), as Proton's. */
 const MAX_TITLE = 255
 const MAX_LOCATION = 255
 const MAX_DESCRIPTION = 3000
+/** Proton's reminders per event (`MAX_NOTIFICATIONS`); the server holds its own limit (`calendarRemindersPerEvent`). */
+const MAX_REMINDERS = 10
 
 
 interface Draft {
@@ -48,6 +55,18 @@ interface Draft {
   tzid: string
   location: string
   description: string
+  /**
+   * Proton's notifications: the calendar's defaults until edited
+   * (`custom`); a timed and an all-day list, the one that applies saved.
+   */
+  reminders: { custom: boolean; timed: Reminder[]; allDay: Reminder[] }
+}
+
+/** The editor's reminders: the event's own (for its kind), else the calendar's defaults. */
+function remindersOf(calendar: Calendar | undefined, own: Reminder[] | null | undefined, allDay: boolean): Draft['reminders'] {
+  const defaults = calendar?.defaultReminders ?? { timed: [], allDay: [] }
+  if (!own) return { custom: false, timed: defaults.timed, allDay: defaults.allDay }
+  return { custom: true, timed: allDay ? defaults.timed : own, allDay: allDay ? own : defaults.allDay }
 }
 
 function pad(n: number): string {
@@ -59,7 +78,7 @@ function hhmm(minutes: number): string {
   return `${pad(Math.floor(minutes / 60) % 24)}:${pad(minutes % 60)}`
 }
 
-function draftOf(target: EditorTarget, zone: string, defaultCalendar: string): Draft {
+function draftOf(target: EditorTarget, zone: string, defaultCalendar: string): Omit<Draft, 'reminders'> {
   if (target.kind === 'new') {
     const start = target.minutes ?? 9 * 60
     const end = target.endMinutes ?? start + DEFAULT_DURATION_MINUTES
@@ -143,7 +162,9 @@ export function EventDialog() {
 
   useEffect(() => {
     if (!target) return
-    setDraft(draftOf(target, prefs.zone, writable[0]?.id ?? ''))
+    const base = draftOf(target, prefs.zone, writable[0]?.id ?? '')
+    const calendar = writable.find((c) => c.id === base.calendarId)
+    setDraft({ ...base, reminders: remindersOf(calendar, target.kind === 'edit' ? target.event.reminders : null, base.allDay) })
     save.reset()
     // eslint-disable-next-line react-hooks/exhaustive-deps -- once per opening
   }, [target])
@@ -151,7 +172,13 @@ export function EventDialog() {
   const save = useCalendarMutation(async (next: Draft) => {
     const calendar = writable.find((c) => c.id === next.calendarId)
     if (!account.data || !calendar) throw new Error('no calendar')
-    return saveEvent(session, account.data, calendar, fieldsOf(next, account.data.serverDomain, existing), existing)
+    // Own reminders when edited; back to the defaults when they were own; else as they are.
+    const reminders = next.reminders.custom ? (next.allDay ? next.reminders.allDay : next.reminders.timed) : existing?.reminders ? null : undefined
+    const id = await saveEvent(session, account.data, calendar, fieldsOf(next, account.data.serverDomain, existing), existing, reminders)
+    // Proton asks for the browser's permission with the first device reminder.
+    const applied = next.allDay ? next.reminders.allDay : next.reminders.timed
+    if (applied.some((r) => r.type === 'device') && notificationStatus() === 'default') void requestNotifications()
+    return id
   })
   const remove = useCalendarMutation(async () => {
     const calendar = writable.find((c) => c.id === existing?.calendarId)
@@ -160,8 +187,17 @@ export function EventDialog() {
   })
 
   const close = () => openEditor(null)
-  const set = (change: Partial<Draft>) => setDraft((d) => (d ? { ...d, ...change } : d))
-  const valid = draft !== null && draft.calendarId !== '' && endsAfterStart(draft)
+  const set = (change: Partial<Draft>) =>
+    setDraft((d) => {
+      if (!d) return d
+      const next = { ...d, ...change }
+      // Another calendar's defaults, until the person sets the event's own.
+      if (change.calendarId !== undefined && !d.reminders.custom) next.reminders = remindersOf(writable.find((c) => c.id === change.calendarId), null, next.allDay)
+      return next
+    })
+  const shownReminders = draft ? (draft.allDay ? draft.reminders.allDay : draft.reminders.timed) : []
+  const repeated = hasRepeats(shownReminders)
+  const valid = draft !== null && draft.calendarId !== '' && endsAfterStart(draft) && !repeated
   const saveError =
     save.error instanceof EventRefusedError
       ? t(save.error.code === 'eventLimit' ? 'events.limit' : save.error.code === 'revision_conflict' ? 'events.changedElsewhere' : 'events.refused')
@@ -252,6 +288,21 @@ export function EventDialog() {
                   disabled={existing !== undefined}
                   onChange={(calendarId) => set({ calendarId })}
                 />
+              </div>
+              <div className="space-y-1.5">
+                <Label>{t('reminders.field')}</Label>
+                <ReminderList
+                  id="event"
+                  allDay={draft.allDay}
+                  reminders={shownReminders}
+                  max={MAX_REMINDERS}
+                  onChange={(list) => set({ reminders: { ...draft.reminders, custom: true, [draft.allDay ? 'allDay' : 'timed']: list } })}
+                />
+                {repeated ? (
+                  <p className="text-xs text-destructive" role="alert">
+                    {t('reminders.picker.repeats')}
+                  </p>
+                ) : null}
               </div>
               <div className="space-y-1.5">
                 <Label htmlFor="event-location">{t('events.location')}</Label>

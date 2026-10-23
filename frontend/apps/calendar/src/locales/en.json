@@ -113,6 +113,26 @@
     "banner": "Kutup Calendar needs your permission to show desktop notifications for event reminders.",
     "bannerLabel": "Desktop notifications",
     "enable": "Enable desktop notifications",
-    "dismiss": "Not now"
+    "dismiss": "Not now",
+    "picker": {
+      "type": "Reminder type",
+      "device": "Notification",
+      "email": "Email",
+      "amount": "How many",
+      "when": "When",
+      "atTime": "at time of event",
+      "sameDay": "on the same day",
+      "minutesBefore": "minutes before",
+      "hoursBefore": "hours before",
+      "daysBefore": "days before",
+      "weeksBefore": "weeks before",
+      "at": "at",
+      "timeOfDay": "Time of day",
+      "remove": "Remove this notification",
+      "add": "Add notification",
+      "other": "A reminder set elsewhere ({{trigger}})",
+      "repeats": "The same notification twice: change or remove one."
+    },
+    "field": "Notifications"
   }
 }

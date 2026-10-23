@@ -8,6 +8,7 @@ export function Choice({
   onChange,
   disabled,
   testId,
+  label,
 }: {
   id: string
   value: string
@@ -15,10 +16,12 @@ export function Choice({
   onChange: (value: string) => void
   disabled?: boolean
   testId?: string
+  /** Its name, where no visible label names it. */
+  label?: string
 }) {
   return (
     <Select value={value} onValueChange={onChange} disabled={disabled}>
-      <SelectTrigger id={id} className="w-full" data-testid={testId}>
+      <SelectTrigger id={id} className="w-full" data-testid={testId} aria-label={label}>
         <SelectValue />
       </SelectTrigger>
       <SelectContent className="max-h-72">

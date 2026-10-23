@@ -113,6 +113,26 @@
     "banner": "Kutup Takvim'in etkinlik hatırlatıcıları için masaüstü bildirimleri gösterebilmesi için izninize ihtiyacı var.",
     "bannerLabel": "Masaüstü bildirimleri",
     "enable": "Masaüstü bildirimlerini aç",
-    "dismiss": "Şimdi değil"
+    "dismiss": "Şimdi değil",
+    "picker": {
+      "type": "Hatırlatıcı türü",
+      "device": "Bildirim",
+      "email": "E-posta",
+      "amount": "Kaç",
+      "when": "Ne zaman",
+      "atTime": "etkinlik saatinde",
+      "sameDay": "aynı gün",
+      "minutesBefore": "dakika önce",
+      "hoursBefore": "saat önce",
+      "daysBefore": "gün önce",
+      "weeksBefore": "hafta önce",
+      "at": "saat",
+      "timeOfDay": "Günün saati",
+      "remove": "Bu bildirimi kaldır",
+      "add": "Bildirim ekle",
+      "other": "Başka yerde kurulmuş bir hatırlatıcı ({{trigger}})",
+      "repeats": "Aynı bildirim iki kez var: birini değiştirin ya da kaldırın."
+    },
+    "field": "Bildirimler"
   }
 }
