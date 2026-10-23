@@ -87,5 +87,10 @@
     "clock24": "24 saat",
     "clock12": "12 saat",
     "thisDevice": "Bu ayarlar bu cihazda tutulur."
+  },
+  "grid": {
+    "slot": "{{day}}, {{time}}",
+    "span": "{{day}}, {{start}} ile {{end}} arası. Oluşturmak için Enter.",
+    "moved": "{{start}} ile {{end}} arasına taşınıyor. Açmak için Enter, vazgeçmek için Escape."
   }
 }

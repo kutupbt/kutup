@@ -1,58 +1,40 @@
 import { useQuery } from '@tanstack/react-query'
-import { ChevronLeft, ChevronRight, ShieldAlert } from 'lucide-react'
-import { useEffect, useMemo, useRef } from 'react'
+import { ChevronLeft, ChevronRight } from 'lucide-react'
+import { useEffect, useMemo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useSearchParams } from 'react-router-dom'
-import { useCalendars, useEvents, type Calendar, type CalendarEvent } from '@kutup/calendar-core/api'
-import { addDays, isCivilDate, minutesOf, step, viewDays, type CivilDate } from '@kutup/calendar-core/time'
-import { localToUtc, utcToLocal } from '@kutup/crypto/calendar'
+import { useCalendars, useEvents, type Calendar } from '@kutup/calendar-core/api'
+import { addDays, isCivilDate, step, viewDays, type CivilDate } from '@kutup/calendar-core/time'
+import { localToUtc } from '@kutup/crypto/calendar'
 import { Alert } from '@kutup/ui/components/alert'
 import { Button } from '@kutup/ui/components/button'
 import { LoadingPanel } from '@kutup/ui/components/states'
 import { apiErrorMessage } from '@kutup/ui/lib/apiError'
 import { cn } from '@kutup/ui/lib/cn'
+import { ghostCovers, pressDays, pressShiftDays, type DaySpanGhost } from './DaySpan'
+import { EventChip } from './EventChip'
 import { openEditor } from './editorState'
-import { formatDayNumber, formatHour, formatTime, formatTitle, formatWeekday } from './format'
+import { formatDayNumber, formatTitle, formatWeekday } from './format'
+import { newEventStart } from './gridInteraction'
+import { openMoved, openNew } from './moves'
+import { covers, place, type Placed } from './placement'
+import { holdTouches, pressActive } from './press'
 import { useCalendarPrefs } from './prefs'
-import { useToday } from './today'
+import { TimeGrid } from './TimeGrid'
+import { useNowMinutes, useToday } from './today'
 
 type View = 'day' | 'week' | 'month'
 const VIEWS: readonly View[] = ['day', 'week', 'month']
-const HOUR_PX = 48
-
-/** An event where the view's zone puts it. */
-interface Placed {
-  event: CalendarEvent
-  color: string
-  allDay: boolean
-  /** Local date-times in the view's zone (`2026-10-29T09:30:00`); dates for all-day events. */
-  start: string
-  end: string
-  /** The first day it covers and the day after its last. */
-  firstDay: CivilDate
-  afterLastDay: CivilDate
-}
-
-async function place(event: CalendarEvent, color: string, zone: string): Promise<Placed> {
-  const { start, end } = event.fields
-  if ('date' in start) {
-    const after = end && 'date' in end ? end.date : addDays(start.date, 1)
-    return { event, color, allDay: true, start: start.date, end: after, firstDay: start.date, afterLastDay: after }
-  }
-  const [startLocal, endLocal] = await Promise.all([utcToLocal(event.startUtc, zone), utcToLocal(event.endUtc, zone)])
-  const lastDay = endLocal.slice(11) === '00:00:00' && endLocal > startLocal ? addDays(endLocal.slice(0, 10), -1) : endLocal.slice(0, 10)
-  return { event, color, allDay: false, start: startLocal, end: endLocal, firstDay: startLocal.slice(0, 10), afterLastDay: addDays(lastDay, 1) }
-}
-
-function covers(placed: Placed, day: CivilDate): boolean {
-  return placed.firstDay <= day && day < placed.afterLastDay
-}
 
 /** The calendar: a day, a week or a month of the shown calendars' events. */
 export function CalendarPage() {
   const { t, i18n } = useTranslation()
   const prefs = useCalendarPrefs()
   const today = useToday(prefs.zone)
+  const nowMinutes = useNowMinutes(prefs.zone)
+  // An armed touch holds the page still wherever it is: the time grid, the
+  // all-day row, the month's cells.
+  useEffect(() => holdTouches(document.documentElement), [])
   const [params, setParams] = useSearchParams()
   const view: View = VIEWS.includes(params.get('view') as View) ? (params.get('view') as View) : 'week'
   const requested = params.get('date')
@@ -83,14 +65,24 @@ export function CalendarPage() {
     queryFn: () => Promise.all(events.data!.events.map((event) => place(event, colors.get(event.calendarId) ?? '#8080ff', prefs.zone))),
   })
 
-  // Arrow keys move through time, "t" comes back to today.
+  // Proton's shortcuts: ← → through time, T today, 1 2 3 the views, N a new event.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.target instanceof HTMLElement && e.target.closest('input, textarea, select, [role="dialog"]')) return
-      if (!date) return
+      if (e.altKey || e.ctrlKey || e.metaKey || !date || pressActive()) return
       if (e.key === 'ArrowLeft') go({ date: step(view, date, -1) })
       else if (e.key === 'ArrowRight') go({ date: step(view, date, 1) })
-      else if (e.key === 't' && today) go({ date: today })
+      else if ((e.key === 't' || e.key === 'T') && today) go({ date: today })
+      else if (e.key === '1') go({ view: 'day' })
+      else if (e.key === '2') go({ view: 'week' })
+      else if (e.key === '3') go({ view: 'month' })
+      else if ((e.key === 'n' || e.key === 'N') && today) {
+        // At the next half hour from now in the calendar's zone, as
+        // Proton's new event: tomorrow's first once today's last has begun.
+        const next = newEventStart(nowMinutes)
+        void openNew(addDays(today, next.dayOffset), next.start, next.end, prefs.zone)
+      } else return
+      e.preventDefault()
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
@@ -142,39 +134,20 @@ export function CalendarPage() {
       ) : view === 'month' ? (
         <MonthView days={days} month={date.slice(0, 7)} today={today} placed={placed.data ?? []} />
       ) : (
-        <TimeGrid days={days} today={today} placed={placed.data ?? []} />
+        <TimeGrid days={days} today={today} placed={placed.data ?? []} scrollKey={`${view}-${date}`} />
       )}
     </div>
   )
 }
 
-function EventChip({ placed, showTime }: { placed: Placed; showTime: boolean }) {
-  const { t, i18n } = useTranslation()
-  const prefs = useCalendarPrefs()
-  const title = placed.event.fields.summary ?? t('events.untitled')
-  return (
-    <button
-      type="button"
-      onClick={(e) => {
-        e.stopPropagation()
-        openEditor({ kind: 'edit', event: placed.event })
-      }}
-      className="flex w-full min-w-0 items-center gap-1 truncate rounded px-1.5 py-0.5 text-left text-xs hover:brightness-95"
-      style={{ background: `${placed.color}26`, borderLeft: `3px solid ${placed.color}` }}
-      data-testid="calendar-event"
-    >
-      {!placed.event.verified ? <ShieldAlert className="size-3 shrink-0 text-destructive" aria-label={t('events.unverifiedShort')} /> : null}
-      {showTime && !placed.allDay ? <span className="shrink-0 tabular-nums text-muted-foreground">{formatTime(placed.start, i18n.language, prefs.hour12)}</span> : null}
-      <span className="truncate">{title}</span>
-    </button>
-  )
-}
 
 function MonthView({ days, month, today, placed }: { days: CivilDate[]; month: string; today?: CivilDate; placed: Placed[] }) {
   const { t, i18n } = useTranslation()
+  const prefs = useCalendarPrefs()
+  const [ghost, setGhost] = useState<DaySpanGhost | null>(null)
   const shown = 3
   return (
-    <div className="grid min-h-0 flex-1 grid-cols-7 grid-rows-[auto_repeat(6,minmax(0,1fr))]" data-testid="calendar-month">
+    <div className="grid min-h-0 flex-1 select-none grid-cols-7 grid-rows-[auto_repeat(6,minmax(0,1fr))]" data-testid="calendar-month">
       {days.slice(0, 7).map((day) => (
         <div key={`head-${day}`} className="border-b border-border px-2 py-1 text-xs font-medium text-muted-foreground">
           {formatWeekday(day, i18n.language)}
@@ -189,149 +162,36 @@ function MonthView({ days, month, today, placed }: { days: CivilDate[]; month: s
             key={day}
             role="button"
             tabIndex={0}
-            onClick={() => openEditor({ kind: 'new', date: day, allDay: true })}
+            data-day={day}
+            // Proton's day grid: drag across days for a multi-day all-day event, click for one.
+            onPointerDown={(e) => {
+              if (e.target instanceof Element && e.target.closest('[data-testid="calendar-event"]')) return
+              pressDays(e, day, setGhost, null)
+            }}
             onKeyDown={(e) => e.key === 'Enter' && openEditor({ kind: 'new', date: day, allDay: true })}
-            className={cn('min-h-24 space-y-0.5 overflow-hidden border-b border-r border-border p-1', !day.startsWith(month) && 'bg-muted/40 text-muted-foreground')}
+            className={cn(
+              'min-h-24 touch-pan-y space-y-0.5 overflow-hidden border-b border-r border-border p-1',
+              !day.startsWith(month) && 'bg-muted/40 text-muted-foreground',
+              ghostCovers(ghost, day) && 'bg-primary/15',
+            )}
             data-testid={`calendar-day-${day}`}
           >
             <div className={cn('ml-auto grid size-6 place-items-center rounded-full text-xs', day === today && 'bg-primary text-primary-foreground')}>
               {formatDayNumber(day, i18n.language)}
             </div>
             {here.slice(0, shown).map((p) => (
-              <EventChip key={p.event.id} placed={p} showTime />
+              <EventChip
+                key={p.event.id}
+                placed={p}
+                showTime
+                faded={ghost?.kind === 'shift' && ghost.placed === p}
+                onPointerDown={(e) => pressShiftDays(e, p, day, setGhost, (q, d, m) => void openMoved(q, d, m, prefs.zone), null)}
+              />
             ))}
             {here.length > shown ? <div className="px-1.5 text-xs text-muted-foreground">{t('view.more', { count: here.length - shown })}</div> : null}
           </div>
         )
       })}
     </div>
-  )
-}
-
-/** Timed events of one day laid out in columns where they overlap. */
-function columns(segments: { placed: Placed; top: number; bottom: number }[]) {
-  const sorted = [...segments].sort((a, b) => a.top - b.top || b.bottom - a.bottom)
-  const out: { placed: Placed; top: number; bottom: number; column: number; columns: number }[] = []
-  let cluster: typeof out = []
-  let clusterEnd = -1
-  const flush = () => {
-    const count = Math.max(1, ...cluster.map((s) => s.column + 1))
-    for (const s of cluster) out.push({ ...s, columns: count })
-    cluster = []
-  }
-  for (const segment of sorted) {
-    if (segment.top >= clusterEnd) {
-      flush()
-      clusterEnd = -1
-    }
-    const used = new Set(cluster.filter((s) => s.bottom > segment.top).map((s) => s.column))
-    let column = 0
-    while (used.has(column)) column++
-    cluster.push({ ...segment, column, columns: 1 })
-    clusterEnd = Math.max(clusterEnd, segment.bottom)
-  }
-  flush()
-  return out
-}
-
-function TimeGrid({ days, today, placed }: { days: CivilDate[]; today?: CivilDate; placed: Placed[] }) {
-  const { i18n } = useTranslation()
-  const prefs = useCalendarPrefs()
-  const scroller = useRef<HTMLDivElement>(null)
-  useEffect(() => {
-    scroller.current?.scrollTo({ top: 7 * HOUR_PX })
-  }, [])
-  const allDay = (day: CivilDate) => placed.filter((p) => p.allDay && covers(p, day))
-  return (
-    <div className="flex min-h-0 flex-1 flex-col" data-testid="calendar-week">
-      <div className="grid border-b border-border" style={{ gridTemplateColumns: `3.5rem repeat(${days.length}, minmax(0, 1fr))` }}>
-        <div />
-        {days.map((day) => (
-          <div key={day} className="border-l border-border px-2 py-1 text-center">
-            <div className="text-xs text-muted-foreground">{formatWeekday(day, i18n.language)}</div>
-            <div className={cn('mx-auto grid size-7 place-items-center rounded-full text-sm', day === today && 'bg-primary text-primary-foreground')}>
-              {formatDayNumber(day, i18n.language)}
-            </div>
-            <div className="mt-1 space-y-0.5">
-              {allDay(day).map((p) => (
-                <EventChip key={p.event.id} placed={p} showTime={false} />
-              ))}
-            </div>
-          </div>
-        ))}
-      </div>
-      <div ref={scroller} className="min-h-0 flex-1 overflow-y-auto">
-        <div className="relative grid" style={{ gridTemplateColumns: `3.5rem repeat(${days.length}, minmax(0, 1fr))`, height: 24 * HOUR_PX }}>
-          <div>
-            {Array.from({ length: 24 }, (_, hour) => (
-              <div key={hour} className="h-12 pr-2 text-right text-[11px] text-muted-foreground" style={{ height: HOUR_PX }}>
-                {hour === 0 ? null : formatHour(hour, i18n.language, prefs.hour12)}
-              </div>
-            ))}
-          </div>
-          {days.map((day) => {
-            const dayStart = `${day}T00:00:00`
-            const dayEnd = `${addDays(day, 1)}T00:00:00`
-            const segments = placed
-              .filter((p) => !p.allDay && p.start < dayEnd && (p.end > dayStart || (p.end === p.start && p.start >= dayStart)))
-              .map((p) => {
-                const from = p.start < dayStart ? 0 : minutesOf(p.start)
-                const to = p.end >= dayEnd ? 24 * 60 : minutesOf(p.end)
-                return { placed: p, top: from, bottom: Math.max(to, from + 20) }
-              })
-            return (
-              <div key={day} className="relative border-l border-border" data-testid={`calendar-column-${day}`}>
-                {Array.from({ length: 24 }, (_, hour) => (
-                  <button
-                    key={hour}
-                    type="button"
-                    aria-label={`${day} ${formatHour(hour, i18n.language, prefs.hour12)}`}
-                    onClick={() => openEditor({ kind: 'new', date: day, minutes: hour * 60 })}
-                    className="block w-full border-b border-border/60 hover:bg-accent/40"
-                    style={{ height: HOUR_PX }}
-                  />
-                ))}
-                {columns(segments).map((s) => (
-                  <div
-                    key={s.placed.event.id}
-                    className="absolute px-0.5"
-                    style={{
-                      top: (s.top / 60) * HOUR_PX,
-                      height: ((s.bottom - s.top) / 60) * HOUR_PX,
-                      left: `${(s.column / s.columns) * 100}%`,
-                      width: `${100 / s.columns}%`,
-                    }}
-                  >
-                    <TimedBlock placed={s.placed} />
-                  </div>
-                ))}
-              </div>
-            )
-          })}
-        </div>
-      </div>
-    </div>
-  )
-}
-
-function TimedBlock({ placed }: { placed: Placed }) {
-  const { t, i18n } = useTranslation()
-  const prefs = useCalendarPrefs()
-  return (
-    <button
-      type="button"
-      onClick={() => openEditor({ kind: 'edit', event: placed.event })}
-      className="flex h-full w-full flex-col overflow-hidden rounded px-1.5 py-0.5 text-left text-xs hover:brightness-95"
-      style={{ background: `${placed.color}33`, borderLeft: `3px solid ${placed.color}` }}
-      data-testid="calendar-event"
-    >
-      <span className="flex items-center gap-1 truncate font-medium">
-        {!placed.event.verified ? <ShieldAlert className="size-3 shrink-0 text-destructive" aria-label={t('events.unverifiedShort')} /> : null}
-        <span className="truncate">{placed.event.fields.summary ?? t('events.untitled')}</span>
-      </span>
-      <span className="truncate tabular-nums text-muted-foreground">
-        {formatTime(placed.start, i18n.language, prefs.hour12)} – {formatTime(placed.end, i18n.language, prefs.hour12)}
-      </span>
-    </button>
   )
 }

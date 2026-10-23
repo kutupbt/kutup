@@ -2,7 +2,7 @@
 //! as Proton's Identity settings: the name outgoing mail carries in From,
 //! and the signature the composer starts with.
 
-use axum::extract::State;
+use axum::extract::{Query, State};
 use axum::Json;
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
@@ -26,19 +26,55 @@ pub struct MailIdentity {
     pub signature: String,
 }
 
-async fn own_address(state: &AppState, user_id: Uuid) -> AppResult<(Uuid, String, String)> {
+/// Which address: `addressId` (one of the caller's current addresses), or
+/// the default address when none is named (Proton's identity is per
+/// address; clients that name none keep the account's).
+#[derive(Debug, Default, Deserialize, utoipa::IntoParams)]
+#[serde(rename_all = "camelCase")]
+pub struct IdentityQuery {
+    pub address_id: Option<String>,
+}
+
+async fn own_address(
+    state: &AppState,
+    user_id: Uuid,
+    address_id: Option<&str>,
+) -> AppResult<(Uuid, String, String)> {
+    let not_found = || AppError::not_found("this account has no mail address yet");
+    let address_id = match address_id {
+        Some(id) => Uuid::parse_str(id).map_err(|_| not_found())?,
+        None => {
+            match crate::handlers::mail_addresses::default_address(state, user_id).await? {
+                Some((id, _)) => id,
+                // No address with a key yet: the account's own address.
+                None => sqlx::query_scalar(
+                    "SELECT id FROM mail_addresses
+                      WHERE user_id = $1 AND state = 'active' AND domain_id IS NULL",
+                )
+                .bind(user_id)
+                .fetch_optional(&state.pool)
+                .await?
+                .ok_or_else(not_found)?,
+            }
+        }
+    };
     sqlx::query_as(
         "SELECT a.id, a.address, u.username FROM mail_addresses a JOIN users u ON u.id = a.user_id
-          WHERE a.user_id = $1 AND a.state = 'active'",
+          WHERE a.id = $1 AND a.user_id = $2 AND a.state = 'active'",
     )
+    .bind(address_id)
     .bind(user_id)
     .fetch_optional(&state.pool)
     .await?
-    .ok_or_else(|| AppError::not_found("this account has no mail address yet"))
+    .ok_or_else(not_found)
 }
 
-async fn identity(state: &AppState, user_id: Uuid) -> AppResult<MailIdentity> {
-    let (address_id, address, username) = own_address(state, user_id).await?;
+async fn identity(
+    state: &AppState,
+    user_id: Uuid,
+    address_id: Option<&str>,
+) -> AppResult<MailIdentity> {
+    let (address_id, address, username) = own_address(state, user_id, address_id).await?;
     let row: Option<(String, String)> =
         sqlx::query_as("SELECT display_name, signature FROM mail_identities WHERE address_id = $1")
             .bind(address_id)
@@ -62,11 +98,18 @@ async fn identity(state: &AppState, user_id: Uuid) -> AppResult<MailIdentity> {
     path = "/api/mail/identity",
     tag = "mail",
     security(("BearerAuth" = [])),
+    params(IdentityQuery),
     responses((status = 200, description = "Display name and signature", body = MailIdentity))
 )]
-pub async fn get(State(state): State<AppState>, user: AuthUser) -> AppResult<Json<MailIdentity>> {
+pub async fn get(
+    State(state): State<AppState>,
+    user: AuthUser,
+    Query(query): Query<IdentityQuery>,
+) -> AppResult<Json<MailIdentity>> {
     let user_id = trusted_uuid(&user.user_id)?;
-    Ok(Json(identity(&state, user_id).await?))
+    Ok(Json(
+        identity(&state, user_id, query.address_id.as_deref()).await?,
+    ))
 }
 
 #[derive(Debug, Deserialize, ToSchema)]
@@ -82,6 +125,7 @@ pub struct UpdateMailIdentity {
     path = "/api/mail/identity",
     tag = "mail",
     security(("BearerAuth" = [])),
+    params(IdentityQuery),
     request_body = UpdateMailIdentity,
     responses(
         (status = 200, description = "Saved", body = MailIdentity),
@@ -91,6 +135,7 @@ pub struct UpdateMailIdentity {
 pub async fn update(
     State(state): State<AppState>,
     user: AuthUser,
+    Query(query): Query<IdentityQuery>,
     Json(request): Json<UpdateMailIdentity>,
 ) -> AppResult<Json<MailIdentity>> {
     let user_id = trusted_uuid(&user.user_id)?;
@@ -109,7 +154,7 @@ pub async fn update(
     {
         return Err(AppError::bad_request("a signature is 10 KB at most"));
     }
-    let (address_id, _, _) = own_address(&state, user_id).await?;
+    let (address_id, _, _) = own_address(&state, user_id, query.address_id.as_deref()).await?;
     sqlx::query(
         "INSERT INTO mail_identities (address_id, display_name, signature)
          VALUES ($1, COALESCE($2, ''), COALESCE($3, ''))
@@ -123,5 +168,7 @@ pub async fn update(
     .bind(request.signature.as_deref())
     .execute(&state.pool)
     .await?;
-    Ok(Json(identity(&state, user_id).await?))
+    Ok(Json(
+        identity(&state, user_id, query.address_id.as_deref()).await?,
+    ))
 }

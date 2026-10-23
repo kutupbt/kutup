@@ -28,7 +28,7 @@ vi.mock('@kutup/drive-core/identityPins', () => ({
   }),
 }))
 vi.mock('@kutup/drive-core/identity', () => ({ driveIdentityOf: vi.fn(() => Promise.resolve({})) }))
-vi.mock('@kutup/session/store', () => ({ getSession: () => ({ username: 'me' }) }))
+vi.mock('@kutup/session/store', () => ({ getSession: () => ({ username: 'me', address: 'me@kutup.dev' }) }))
 // The device's revision guard, in memory: the highest key-list sequence seen per address and signer.
 const seen = vi.hoisted(() => new Map<string, number>())
 vi.mock('@kutup/crypto/revisionGuard', async (importActual) => {
@@ -57,7 +57,7 @@ import {
   type GroupSignerHolder,
   type SignedMailKeyList,
 } from '@kutup/crypto'
-import { acceptGroupKeys, addressKeys, forgetKeys, groupMembers, GroupKeysChanged, KeysIdentityChanged, UnverifiedKeys, verified } from './keys'
+import { acceptGroupKeys, AddressDisabled, addressKeys, forgetKeys, groupMembers, GroupKeysChanged, KeysIdentityChanged, UnverifiedKeys, verified } from './keys'
 
 /** What `GET /api/mail/keys` answers for `address` (as stored), its newest list naming `listed`. */
 async function lookupOf(master: string, binding: string, address: string, listed = address, flags: number = MAIL_KEY_FLAGS.notCompromised | MAIL_KEY_FLAGS.notObsolete) {
@@ -106,6 +106,14 @@ describe('an address’s keys', () => {
     await expect(verified('ada_l@kutup.dev', { ...lookup, server: 'other.dev' })).rejects.toBeInstanceOf(UnverifiedKeys)
     await expect(verified('bob@kutup.dev', lookup)).rejects.toBeInstanceOf(UnverifiedKeys)
     await expect(verified('ada_l@other.dev', lookup)).rejects.toBeInstanceOf(UnverifiedKeys)
+  })
+
+  it('are a Kutup user’s on a custom domain when this server answers for it, never another server', async () => {
+    // A domain this server holds: the account is this server's (kutup.dev).
+    const lookup = await lookupOf(master, binding, 'ada@work.example')
+    await expect(verified('ada@work.example', lookup)).resolves.toMatchObject({ address: 'ada@work.example' })
+    // Another server can't answer for a domain that isn't its own.
+    await expect(verified('ada@work.example', { ...lookup, server: 'other.dev' })).rejects.toBeInstanceOf(UnverifiedKeys)
   })
 
   it('say encryption is off only when the signed list does', async () => {
@@ -189,6 +197,57 @@ describe('an address’s key lists against what this device has seen', () => {
     // Nor as a member of a list: a member's mail never goes by a replayed list.
     get.mockResolvedValueOnce({ data: { members: [first] } })
     await expect(groupMembers('team@kutup.dev')).rejects.toBeInstanceOf(UnverifiedKeys)
+  })
+})
+
+describe('a disabled address (its owner’s list encrypts to nothing)', () => {
+  const master = toBase64(crypto.getRandomValues(new Uint8Array(32)))
+  const binding = crypto.randomUUID()
+
+  it('takes no mail: the lookup’s 404, or a list with no key to encrypt to', async () => {
+    pins.verdict = { kind: 'unknown' }
+    forgetKeys()
+    get.mockRejectedValueOnce({ response: { status: 404, data: { code: 'addressDisabled' } } })
+    await expect(addressKeys('off@kutup.dev')).rejects.toBeInstanceOf(AddressDisabled)
+    forgetKeys()
+    get.mockResolvedValueOnce({ data: await lookupOf(master, binding, 'off_list@kutup.dev', 'off_list@kutup.dev', MAIL_KEY_FLAGS.notCompromised) })
+    await expect(addressKeys('off_list@kutup.dev')).rejects.toBeInstanceOf(AddressDisabled)
+  })
+
+  it('never goes back to a list from before it was disabled', async () => {
+    pins.verdict = { kind: 'unknown' }
+    forgetKeys()
+    const address = 'was_on@kutup.dev'
+    const first = await lookupOf(master, binding, address)
+    const { verifyMailKeyList } = await import('@kutup/crypto')
+    const one = await verifyMailKeyList(first.keyLists[0], first.accountAuthorityPublicKey)
+    get.mockResolvedValueOnce({ data: first })
+    await expect(addressKeys(address)).resolves.toMatchObject({ sequence: 1, disabled: false })
+    // Disabled: the next list keeps the key, no longer encrypted to.
+    const off = await signMailKeyList(master, {
+      address,
+      sequence: 2,
+      previousHash: one.hash,
+      issuedAt: '2026-10-22T12:00:00Z',
+      keys: [{ ...one.keys[0], flags: MAIL_KEY_FLAGS.notCompromised }],
+    })
+    forgetKeys()
+    get.mockResolvedValueOnce({ data: { ...first, keyLists: [...first.keyLists, { data: off.data, signature: off.signature }] } })
+    await expect(addressKeys(address)).rejects.toBeInstanceOf(AddressDisabled)
+    // The server hands back the list from before: refused, never encrypted to.
+    forgetKeys()
+    get.mockResolvedValueOnce({ data: first })
+    await expect(addressKeys(address)).rejects.toBeInstanceOf(UnverifiedKeys)
+  })
+
+  it('is left out of a list’s members, the rest still sent to', async () => {
+    pins.verdict = { kind: 'unknown' }
+    forgetKeys()
+    const on = await lookupOf(master, binding, 'member_on@kutup.dev')
+    const off = await lookupOf(master, binding, 'member_off@kutup.dev', 'member_off@kutup.dev', MAIL_KEY_FLAGS.notCompromised)
+    get.mockResolvedValueOnce({ data: { members: [on, off] } })
+    const members = await groupMembers('list@kutup.dev')
+    expect(members.map((m) => m.address)).toEqual(['member_on@kutup.dev'])
   })
 })
 

@@ -14,6 +14,8 @@ export type ComposerTarget = (
 ) & {
   /** Write as this shared mailbox (its group id) when allowed: replies from inside it. */
   fromGroup?: string
+  /** Write from this address of the account's (its id) while it can send. */
+  fromAddressId?: string
 }
 
 let target: ComposerTarget | null = null

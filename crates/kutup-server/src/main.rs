@@ -1158,6 +1158,22 @@ fn build_router(state: AppState) -> Router {
             put(handlers::mail_keys::update_key_list),
         )
         .route(
+            "/api/mail/addresses/order",
+            put(handlers::mail_addresses::order),
+        )
+        .route(
+            "/api/mail/addresses/:id/disable",
+            put(handlers::mail_addresses::disable),
+        )
+        .route(
+            "/api/mail/addresses/:id/enable",
+            put(handlers::mail_addresses::enable),
+        )
+        .route(
+            "/api/mail/addresses/:id/delete",
+            put(handlers::mail_addresses::delete),
+        )
+        .route(
             "/api/user/storage/versions",
             get(handlers::storage::version_ages),
         )

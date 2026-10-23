@@ -34,7 +34,8 @@
     "feedback": "Feedback",
     "referralCodes": "Referral codes",
     "groupMembership": "Group membership",
-    "rateLimits": "Rate limits"
+    "rateLimits": "Rate limits",
+    "mailDomains": "Mail domains"
   },
   "auth": {
     "fields": {
@@ -1441,6 +1442,84 @@
       "countsAtOnce": "At once, per {{per}}",
       "countsBytesAtOnce": "Bytes at once, per {{per}}",
       "bytesHint": "= {{size}}"
+    },
+    "mailDomains": {
+      "title": "Mail domains",
+      "description": "Custom domains people on this server send and receive mail at: their owners, their states, and the records this server publishes for them.",
+      "notConfigured": "Custom domains can't work on this server yet: Stalwart's management key or MAIL_DKIM_KEYS isn't set.",
+      "drift": "Stalwart's own objects (outside the custom domains) changed on {{date}}. Look into it.",
+      "recordsTitle": "Records to publish",
+      "recordsHint": "Publish these in this server's own DNS: customers' SPF includes the first, and their DKIM records point to the others. Keep a key published while it is pending or retiring.",
+      "host": "Host name",
+      "value": "Value",
+      "state": "State",
+      "keyStates": {
+        "pending": "Publish it",
+        "active": "Active",
+        "retiring": "Retiring"
+      },
+      "domainsTitle": "Domains",
+      "empty": "No custom domain yet",
+      "emptyHint": "Domains people add show here.",
+      "domain": "Domain",
+      "owner": "Owner",
+      "actions": "Actions",
+      "states": {
+        "pending": "Not verified",
+        "verified": "Verified",
+        "warn": "Warned"
+      },
+      "awaiting": "Awaiting approval",
+      "stopped": "Stopped",
+      "blocked": "Deactivated",
+      "approve": "Approve",
+      "approved": "Domain approved",
+      "deactivate": "Deactivate",
+      "deactivated": "Domain deactivated",
+      "deactivateTitle": "Deactivate {{domain}}?",
+      "deactivateBody": "{{domain}} stops at once: its addresses are freed and {{owner}} is told in their inbox.",
+      "deactivateWarning": "Its name, and every name under it, is blocked until you lift the block.",
+      "blocksTitle": "Deactivated names",
+      "noBlocks": "No name is blocked.",
+      "blockedBy": "blocked {{date}} by {{by}}",
+      "formerAdmin": "a former administrator",
+      "unblock": "Lift the block",
+      "unblocked": "Block lifted",
+      "settingsTitle": "Settings",
+      "saved": "Settings saved",
+      "range": "From {{min}} to {{max}}.",
+      "outOfRange": "{{setting}} must be a whole number from {{min}} to {{max}}.",
+      "on": "On",
+      "off": "Off",
+      "modes": {
+        "everyone": "Everyone may add domains",
+        "approve": "Administrators approve each domain",
+        "off": "Off"
+      },
+      "settings": {
+        "mode": "Who may add domains",
+        "modeHint": "Off stops adding new domains; domains already held keep working.",
+        "catchAll": "Catch-all addresses",
+        "perAccount": "Domains per account",
+        "addressesPerAccount": "Addresses per account (every domain, the username's included)",
+        "onServer": "Domains on this server",
+        "addsPerDay": "Domains one account may add in a day",
+        "pendingDays": "Days an unverified domain is kept",
+        "catchAllPerDay": "Messages a catch-all takes in a day",
+        "graceWarnDays": "Days a warned domain keeps working",
+        "graceStoppedHours": "Hours before a domain whose records are gone stops",
+        "refreshesAtOnce": "DNS checks running at once",
+        "checkTimeoutSeconds": "Seconds a DNS check may take"
+      },
+      "overrides": {
+        "title": "Mail domains",
+        "description": "This account's limits over the site's; empty keeps the site's.",
+        "maxDomains": "Domains",
+        "maxAddresses": "Addresses",
+        "catchAll": "Catch-all",
+        "site": "The site's",
+        "saved": "Limits saved"
+      }
     }
   },
   "groupMembership": {

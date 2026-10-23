@@ -76,16 +76,24 @@ pub async fn find<'e, E: PgExecutor<'e>>(
 }
 
 /// Who receives `group`'s mail now: its active members with a key; for a
-/// system group without any, every active administrator with a key.
+/// system group without any, every active administrator with a key. Each
+/// once, at their first enabled address with a key, in their order: never a
+/// disabled one. Whether that address's custom domain takes mail now isn't
+/// asked: the copy is stored in the member's account here, never sent
+/// through the domain, and the address only names the key that opens it
+/// (the domain's state decides sending from it, not this).
 pub async fn receivers(pool: &PgPool, group: &Group) -> sqlx::Result<Vec<Receiver>> {
     let members: Vec<Receiver> = sqlx::query_as(
-        "SELECT u.id AS user_id, a.id AS address_id, a.address, k.public_key
-           FROM mail_group_members m
-           JOIN users u ON u.id = m.user_id AND u.is_active
-           JOIN mail_addresses a ON a.user_id = u.id AND a.state = 'active'
-           JOIN mail_address_keys k ON k.address_id = a.id AND k.is_primary
-          WHERE m.group_id = $1
-          ORDER BY a.address",
+        "SELECT * FROM (
+           SELECT DISTINCT ON (u.id) u.id AS user_id, a.id AS address_id, a.address, k.public_key
+             FROM mail_group_members m
+             JOIN users u ON u.id = m.user_id AND u.is_active
+             JOIN mail_addresses a ON a.user_id = u.id AND a.state = 'active'
+                                  AND a.disabled_at IS NULL
+             JOIN mail_address_keys k ON k.address_id = a.id AND k.is_primary
+            WHERE m.group_id = $1
+            ORDER BY u.id, a.position, a.created_at
+         ) r ORDER BY r.address",
     )
     .bind(group.id)
     .fetch_all(pool)
@@ -94,12 +102,15 @@ pub async fn receivers(pool: &PgPool, group: &Group) -> sqlx::Result<Vec<Receive
         return Ok(members);
     }
     sqlx::query_as(
-        "SELECT u.id AS user_id, a.id AS address_id, a.address, k.public_key
-           FROM users u
-           JOIN mail_addresses a ON a.user_id = u.id AND a.state = 'active'
-           JOIN mail_address_keys k ON k.address_id = a.id AND k.is_primary
-          WHERE u.is_admin AND u.is_active
-          ORDER BY a.address",
+        "SELECT * FROM (
+           SELECT DISTINCT ON (u.id) u.id AS user_id, a.id AS address_id, a.address, k.public_key
+             FROM users u
+             JOIN mail_addresses a ON a.user_id = u.id AND a.state = 'active'
+                                  AND a.disabled_at IS NULL
+             JOIN mail_address_keys k ON k.address_id = a.id AND k.is_primary
+            WHERE u.is_admin AND u.is_active
+            ORDER BY u.id, a.position, a.created_at
+         ) r ORDER BY r.address",
     )
     .fetch_all(pool)
     .await
