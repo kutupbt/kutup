@@ -77,8 +77,11 @@ pub async fn find<'e, E: PgExecutor<'e>>(
 
 /// Who receives `group`'s mail now: its active members with a key; for a
 /// system group without any, every active administrator with a key. Each
-/// once, at their default address (the first enabled one with a key, in
-/// their order): never a disabled one.
+/// once, at their first enabled address with a key, in their order: never a
+/// disabled one. Whether that address's custom domain takes mail now isn't
+/// asked: the copy is stored in the member's account here, never sent
+/// through the domain, and the address only names the key that opens it
+/// (the domain's state decides sending from it, not this).
 pub async fn receivers(pool: &PgPool, group: &Group) -> sqlx::Result<Vec<Receiver>> {
     let members: Vec<Receiver> = sqlx::query_as(
         "SELECT * FROM (

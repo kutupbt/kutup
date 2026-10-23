@@ -65,6 +65,14 @@ describe('protection with several trusted keys', () => {
     expect(lookup).not.toHaveBeenCalled()
   })
 
+  it('never takes this server’s word for an address on another domain over keys Contacts trust', async () => {
+    kutupKeys.mockResolvedValue({ encryptionDisabled: false })
+    expect(await protectionFor('bob@gmail.test', 'kutup.dev', { keys: [key('new')], pgp: {} })).toEqual({ kind: 'pinnedConflict', fingerprint: 'fp-new' })
+    // Its own domain is the server's to say.
+    expect(await protectionFor('ayse@kutup.dev', 'kutup.dev', { keys: [key('new')], pgp: {} })).toEqual({ kind: 'kutup' })
+    expect(lookup).not.toHaveBeenCalled()
+  })
+
   it('says when a Kutup address forwards outside, as its key list does', async () => {
     kutupKeys.mockResolvedValue({ encryptionDisabled: true })
     expect(await protectionFor('ayse@kutup.dev', 'kutup.dev', undefined)).toEqual({ kind: 'kutup', encryptionDisabled: true })

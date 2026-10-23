@@ -37,7 +37,7 @@ import { sanitizeSignature } from './sanitize'
 import { searchText } from './searchText'
 import { attachmentPart, buildBody, buildInlineMessage, buildMessage, buildPgpMessage, buildSignedMessage, describePart, inlineContentId, newMessageId, parseMessage, partContent, type Mailbox, type ParsedMessage, type Receipt } from './mime'
 import { autocryptKey, openPgp } from './pgp'
-import { PinnedKeyUnusable, pgpKey, protectionFor } from './protection'
+import { PinnedKeyConflict, PinnedKeyUnusable, pgpKey, protectionFor } from './protection'
 
 // Mail (docs/plans/mail.md): the folders' readable fields from the server,
 // each message opened here with the address key, and messages written here,
@@ -1443,8 +1443,11 @@ export async function sendDraft(
       if (onServer(account, address)) return true
       try {
         await addressKeys(address)
+        // This server's word never outranks keys Contacts trust for it.
+        if ((pinned(address)?.keys.length ?? 0) > 0) throw new PinnedKeyConflict(address)
         return true
       } catch (error) {
+        if (error instanceof PinnedKeyConflict) throw error
         if (error instanceof AddressDisabled) throw new RecipientDisabled(address)
         if (error instanceof NoKutupAddress) return false
         throw error

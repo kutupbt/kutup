@@ -9,6 +9,8 @@ use std::sync::OnceLock;
 use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
 use axum::Json;
+use base64::engine::general_purpose::STANDARD;
+use base64::Engine as _;
 use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;
 use utoipa::ToSchema;
@@ -432,12 +434,18 @@ pub struct NewAddress {
 pub struct CreatedAddress {
     pub id: String,
     pub address: String,
+    /// An address the account held before, back with its keys and key
+    /// list, disabled: the client enables it with the chain's next list
+    /// (`PUT /api/mail/addresses/{id}/enable`), never a first key.
+    pub continues: bool,
 }
 
 /// `POST /api/mail/domains/addresses` — a new address on one of the
 /// caller's verified domains, within its address limit (every address
-/// counts, the username's included). It has no key yet: the client makes
-/// one and adds it (`POST /api/mail/addresses/{id}/keys`), as for any address.
+/// counts, the username's included). A new one has no key yet: the client
+/// makes one and adds it (`POST /api/mail/addresses/{id}/keys`), as for any
+/// address; one the account held before comes back with its chain
+/// (`continues`).
 #[utoipa::path(
     post,
     path = "/api/mail/domains/addresses",
@@ -448,7 +456,7 @@ pub struct CreatedAddress {
         (status = 201, body = CreatedAddress),
         (status = 400, description = "invalidAddress"),
         (status = 404, description = "No such domain of the caller's"),
-        (status = 409, description = "addressLimit, addressTaken, addressDeleted or domainNotVerified"),
+        (status = 409, description = "addressLimit, addressTaken or domainNotVerified"),
     )
 )]
 pub async fn create_address(
@@ -501,40 +509,83 @@ pub async fn create_address(
             "addressLimit",
         ));
     }
-    // One the account deleted itself keeps its signed key list's chain:
-    // taking it back must continue that chain
-    // (docs/plans/mail-address-keys.md), which isn't built yet, so it is
-    // refused for now (as a rename back to a freed name is). One freed by
-    // its domain lost starts again with a new key, as before.
-    let deleted: bool = sqlx::query_scalar(
-        "SELECT EXISTS (SELECT 1 FROM mail_addresses a
-                         WHERE a.user_id = $1 AND a.folded = lower($2) AND a.state = 'freed'
-                           AND a.deleted_at IS NOT NULL
-                           AND EXISTS (SELECT 1 FROM mail_key_lists l WHERE l.address_id = a.id))",
+    // An address this account held before (deleted, or freed with a domain
+    // lost) comes back as it was, its keys and its signed key list's chain
+    // with it (Proton's): disabled, so its owner's client signs the chain's
+    // next list to enable it (sequence + 1). A new first list would read as
+    // a rollback to the devices that saw the old chain. Only a chain the
+    // account's current authority signed continues; after an account reset
+    // the address starts a new one.
+    let authority: String =
+        sqlx::query_scalar("SELECT account_authority_public_key FROM users WHERE id = $1")
+            .bind(user_id)
+            .fetch_one(&mut *tx)
+            .await?;
+    let freed: Option<(Uuid, Vec<u8>, Vec<u8>)> = sqlx::query_as(
+        "SELECT a.id, l.data, l.signature FROM mail_addresses a
+           JOIN LATERAL (SELECT data, signature FROM mail_key_lists
+                          WHERE address_id = a.id ORDER BY sequence DESC LIMIT 1) l ON true
+          WHERE a.user_id = $1 AND a.folded = lower($2) AND a.state = 'freed'
+          ORDER BY a.created_at DESC LIMIT 1",
     )
     .bind(user_id)
-    .bind(&address)
-    .fetch_one(&mut *tx)
-    .await?;
-    if deleted {
-        return Err(coded(
-            AppError::conflict("an address you deleted can't be added again yet"),
-            "addressDeleted",
-        ));
-    }
-    // One of the account's own addresses closed by an account reset comes
-    // back as it is (its mail with it), to take a new first key; any other
-    // is a new row.
-    let reopened: Option<Uuid> = sqlx::query_scalar(
-        "UPDATE mail_addresses SET state = 'active'
-          WHERE user_id = $1 AND domain_id = $2 AND folded = lower($3) AND state = 'closed'
-          RETURNING id",
-    )
-    .bind(user_id)
-    .bind(domain_id)
     .bind(&address)
     .fetch_optional(&mut *tx)
     .await?;
+    let continued = freed.filter(|(_, data, signature)| {
+        STANDARD
+            .decode(&authority)
+            .ok()
+            .and_then(|bytes| <[u8; 32]>::try_from(bytes).ok())
+            .is_some_and(|authority| {
+                kutup_crypto::mail_key::SignedMailKeyListV1::verify(data, signature, &authority)
+                    .is_ok()
+            })
+    });
+    let continues = continued.is_some();
+    let reopened: Option<Uuid> = match continued {
+        Some((freed_id, _, _)) => {
+            let taken_back = sqlx::query_scalar(
+                "UPDATE mail_addresses
+                    SET state = 'active', domain_id = $2, receive_until = NULL,
+                        disabled_at = now(),
+                        position = (SELECT COALESCE(max(position) + 1, 0) FROM mail_addresses
+                                     WHERE user_id = $3 AND state = 'active')
+                  WHERE id = $1
+                  RETURNING id",
+            )
+            .bind(freed_id)
+            .bind(domain_id)
+            .bind(user_id)
+            .fetch_one(&mut *tx)
+            .await;
+            match taken_back {
+                Ok(id) => Some(id),
+                // Someone else holds the name now.
+                Err(sqlx::Error::Database(db)) if db.is_unique_violation() => {
+                    return Err(coded(
+                        AppError::conflict("the address is taken"),
+                        "addressTaken",
+                    ))
+                }
+                Err(error) => return Err(error.into()),
+            }
+        }
+        // One of the account's own addresses closed by an account reset comes
+        // back as it is (its mail with it), to take a new first key.
+        None => {
+            sqlx::query_scalar(
+                "UPDATE mail_addresses SET state = 'active'
+              WHERE user_id = $1 AND domain_id = $2 AND folded = lower($3) AND state = 'closed'
+              RETURNING id",
+            )
+            .bind(user_id)
+            .bind(domain_id)
+            .bind(&address)
+            .fetch_optional(&mut *tx)
+            .await?
+        }
+    };
     let id: Option<Uuid> = match reopened {
         Some(id) => Some(id),
         None => {
@@ -561,6 +612,7 @@ pub async fn create_address(
         Json(CreatedAddress {
             id: id.to_string(),
             address,
+            continues,
         }),
     ))
 }

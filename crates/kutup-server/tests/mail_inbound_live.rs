@@ -1230,6 +1230,34 @@ fn next_list(
     json!({ "data": b64(&list.data), "signature": b64(&list.signature) })
 }
 
+/// Enables the user's disabled address `id` with its chain's next list (its
+/// primary key to be encrypted to again); the new list's sequence.
+fn enable_again(c: &Client, base: &str, user: &User, id: &str) -> u64 {
+    let previous = list_for(c, base, user, id);
+    let keys = previous
+        .list
+        .keys
+        .iter()
+        .map(|key| MailKeyEntryV1 {
+            flags: if key.primary {
+                key.flags | mail_key::FLAG_NOT_OBSOLETE
+            } else {
+                key.flags
+            },
+            ..key.clone()
+        })
+        .collect();
+    let r = bearer(
+        c.put(format!("{base}/api/mail/addresses/{id}/enable")),
+        &user.token,
+    )
+    .json(&json!({ "keyList": next_list(user, &previous, keys) }))
+    .send()
+    .unwrap();
+    assert_eq!(r.status().as_u16(), 200, "{}", r.text().unwrap_or_default());
+    previous.list.sequence + 1
+}
+
 #[test]
 fn address_keys_rotate_and_change_flags() {
     let Ok(base) = std::env::var("KUTUP_LIVE_SERVER") else {
@@ -7850,7 +7878,9 @@ fn custom_domains() {
             .sum()
     };
     assert_eq!(held, 1, "a deleted address's key stays with the account");
-    // Taking it back would have to continue its key chain: refused for now.
+    // Taken back: the same row, its keys and its chain, disabled until the
+    // chain's next list enables it (devices that saw the old chain never see
+    // it start over).
     let add = |local: &str| {
         let r = bearer(
             c.post(format!("{base}/api/mail/domains/addresses")),
@@ -7862,12 +7892,27 @@ fn custom_domains() {
         let status = r.status().as_u16();
         (status, r.json::<Value>().unwrap_or(Value::Null))
     };
+    let before = list_for(&c, &base, &alice, &sales_id).list.sequence;
     let (status, body) = add("sales");
+    assert_eq!(status, 201, "{body}");
     assert_eq!(
-        (status, &body["code"]),
-        (409, &json!("addressDeleted")),
-        "{body}"
+        (&body["id"], &body["continues"]),
+        (&json!(sales_id), &json!(true))
     );
+    let row = rows()
+        .into_iter()
+        .find(|row| row["id"] == sales_id.as_str())
+        .unwrap();
+    assert_eq!(row["disabled"], true);
+    assert_eq!(enable_again(&c, &base, &alice, &sales_id), before + 1);
+    assert_eq!(lookup("sales@customer.test").0, 200);
+    // Deleted again, for what follows.
+    let (status, _) = put_list(
+        "disable",
+        disable_list(&list_for(&c, &base, &alice, &sales_id)),
+    );
+    assert_eq!(status, 200);
+    assert_eq!(delete().status().as_u16(), 204);
     // One that never had a key (nothing to disable) is deleted at once.
     let (status, body) = add("temp");
     assert_eq!(status, 201, "{body}");
@@ -8060,7 +8105,9 @@ fn custom_domains() {
         || domain(&c, &base, &bob, &bob_id, true),
         |d| d["state"] == 1,
     );
-    let make_info = |user: &User| -> (String, Address) {
+    // An address the user held before continues its chain (`None`: no new
+    // key); a new one gets its first key.
+    let make_info = |user: &User| -> (String, Option<Address>) {
         let r = bearer(
             c.post(format!("{base}/api/mail/domains/addresses")),
             &user.token,
@@ -8069,12 +8116,15 @@ fn custom_domains() {
         .send()
         .unwrap();
         assert_eq!(r.status().as_u16(), 201, "{}", r.text().unwrap_or_default());
-        let id = r.json::<Value>().unwrap()["id"]
-            .as_str()
-            .unwrap()
-            .to_owned();
-        let key = add_address_key(&c, &base, user, &id, "info@customer.test");
-        (id, key)
+        let body: Value = r.json().unwrap();
+        let id = body["id"].as_str().unwrap().to_owned();
+        if body["continues"] == true {
+            enable_again(&c, &base, user, &id);
+            (id, None)
+        } else {
+            let key = add_address_key(&c, &base, user, &id, "info@customer.test");
+            (id, Some(key))
+        }
     };
     let (bob_info_id, _) = make_info(&bob);
     let lookup = |token: &str| {
@@ -8157,6 +8207,7 @@ fn custom_domains() {
         |rcpt| *rcpt >= 500,
     );
     let (reopened_id, new_key) = make_info(&bob);
+    let new_key = new_key.expect("after a reset, a new first key");
     assert_eq!(reopened_id, bob_info_id, "the same address, reopened");
     let after_reset = format!("{}@sender.test", uuid::Uuid::new_v4().simple());
     assert_eq!(
