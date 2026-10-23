@@ -720,35 +720,34 @@ fn local_devices_extend_only_the_prior_account_signed_manifest() {
         .borrow_mut()
         .push(registered.clone());
 
+    // Its own entry is already there: nothing to publish.
     let mut first = Engine::new(first_session, server.clone());
-    let v2 = block_on(first.sync_own_manifest(&authority, "2026-07-15T12:00:30Z")).unwrap();
-    assert_eq!(v2.sequence, 2);
-    assert_eq!(v2.identity_key, registered.identity_key);
-    assert_eq!(v2.devices.len(), 1);
-    assert!(v2.devices[0].mls.is_some());
+    let v1 = block_on(first.sync_own_manifest(&authority, "2026-07-15T12:00:30Z")).unwrap();
+    assert_eq!(v1, registered);
+    assert_eq!(server.manifest_history.borrow().len(), 1);
 
     let mut second = Engine::new(device(account, 2, &mut rng), server.clone());
-    let v3 = block_on(second.sync_own_manifest(&authority, "2026-07-15T12:01:00Z")).unwrap();
+    let v2 = block_on(second.sync_own_manifest(&authority, "2026-07-15T12:01:00Z")).unwrap();
+    assert_eq!(v2.sequence, 2);
+    assert_eq!(
+        v2.previous_hash.as_deref(),
+        Some(v1.manifest_hash().unwrap().as_str())
+    );
+    assert_eq!(v2.identity_key, registered.identity_key);
+    assert_eq!(v2.devices.len(), 2);
+    assert_eq!(v2.devices[0], v1.devices[0]);
+    assert_eq!(v2.devices[1].device_id, 2);
+    assert!(v2.devices[1].mls.is_none());
+
+    let v3 =
+        block_on(second.revoke_manifest_device(&authority, 1, "2026-07-15T12:02:00Z")).unwrap();
     assert_eq!(v3.sequence, 3);
     assert_eq!(
         v3.previous_hash.as_deref(),
         Some(v2.manifest_hash().unwrap().as_str())
     );
-    assert_eq!(v3.identity_key, registered.identity_key);
-    assert_eq!(v3.devices.len(), 2);
-    assert_eq!(v3.devices[0], v2.devices[0]);
-    assert_eq!(v3.devices[1].device_id, 2);
-    assert!(v3.devices[1].mls.is_some());
-
-    let v4 =
-        block_on(second.revoke_manifest_device(&authority, 1, "2026-07-15T12:02:00Z")).unwrap();
-    assert_eq!(v4.sequence, 4);
-    assert_eq!(
-        v4.previous_hash.as_deref(),
-        Some(v3.manifest_hash().unwrap().as_str())
-    );
-    assert_eq!(v4.devices.len(), 1);
-    assert_eq!(v4.devices[0].device_id, 2);
+    assert_eq!(v3.devices.len(), 1);
+    assert_eq!(v3.devices[0].device_id, 2);
 
     // A device of another identity (reset away from the account) may not
     // sign the account's manifest.
@@ -758,6 +757,59 @@ fn local_devices_extend_only_the_prior_account_signed_manifest() {
         block_on(stranger.sync_own_manifest(&authority, "2026-07-15T12:03:00Z")),
         Err(ChatError::Trust(_))
     ));
+}
+
+/// A manifest whose device entry still carries the keys of the MLS groups
+/// Kutup no longer has reads and verifies; the device's next manifest drops
+/// them.
+#[test]
+fn a_legacy_mls_entry_verifies_and_the_next_manifest_drops_it() {
+    use base64::Engine as _;
+    let mut rng = test_rng();
+    let server = Rc::new(MockServer::default());
+    let authority = AccountAuthority::derive(&[13; 32]).unwrap();
+    let account = "aci:00000000-0000-4000-8000-2bd806c97f0e@example.test";
+    let session = device(account, 1, &mut rng);
+    let b64 = |bytes: &[u8]| base64::engine::general_purpose::STANDARD.encode(bytes);
+    let legacy = kutup_chat_proto::LegacyMlsDeviceV1 {
+        suite: 0x0003,
+        credential_public_key: b64(ed25519_dalek::SigningKey::from_bytes(&[5; 32])
+            .verifying_key()
+            .as_bytes()),
+        anonymous_delivery_public_key: b64(&[6; 32]),
+    };
+    let registered = sign(
+        &authority,
+        account,
+        1,
+        None,
+        session.account_identity_key(),
+        vec![AccountManifestDeviceV2 {
+            device_id: 1,
+            direct_chat_suite: DirectChatSuiteId::PqxdhTripleRatchetV1,
+            registration_id: reg_id(&session),
+            mls: Some(legacy),
+        }],
+        "2026-07-15T12:00:00Z",
+    );
+    let read: AccountManifestV2 =
+        serde_json::from_str(&serde_json::to_string(&registered).unwrap()).unwrap();
+    assert_eq!(read, registered);
+    kutup_chat_core::verify_manifest(&read).unwrap();
+    *server.own_manifest.borrow_mut() = Some(registered.clone());
+    server
+        .manifest_history
+        .borrow_mut()
+        .push(registered.clone());
+
+    let mut engine = Engine::new(session, server);
+    let next = block_on(engine.sync_own_manifest(&authority, "2026-07-15T12:00:30Z")).unwrap();
+    assert_eq!(next.sequence, 2);
+    assert!(next.devices[0].mls.is_none());
+    assert_eq!(
+        next.previous_hash.as_deref(),
+        Some(registered.manifest_hash().unwrap().as_str())
+    );
 }
 
 #[test]
@@ -771,10 +823,7 @@ fn a_manifest_from_before_x_wing_moves_on_to_the_accounts_new_drive_keys() {
     let account = "aci:00000000-0000-4000-8000-2bd806c97f0e@example.test";
     let db = Rc::new(SqliteChatDb::open_in_memory().unwrap());
     let session = device_in(db.clone(), account, 1, &mut rng);
-    let mls = block_on(kutup_chat_core::MlsClient::new(db).initialize(&format!("{account}#1")))
-        .unwrap()
-        .manifest_binding();
-    let local = session.manifest_device_with_mls(mls);
+    let local = session.manifest_device();
     // The account's manifest from before its upgrade: this very device, and
     // the old X25519 Drive key (suite 1).
     let mut before = sign(

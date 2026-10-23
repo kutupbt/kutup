@@ -461,13 +461,11 @@ impl Session {
                 }
                 found
             }
-            kutup_chat_proto::ConversationId::Group { group_id } => {
-                let group_id = uuid::Uuid::parse_str(group_id)
-                    .map_err(|_| ChatError::Invalid("expiry-start group is invalid".into()))?;
+            // A group's messages sit in the same store, under their group.
+            group @ kutup_chat_proto::ConversationId::Group { .. } => {
                 let mut found = false;
-                for message in db.list_mls_messages().await? {
-                    if !message.outgoing
-                        && message.conversation_id == *group_id.as_bytes()
+                for message in db.list_messages().await? {
+                    if crate::timeline::conversation_of(&message.peer, &message.content)? == *group
                         && target_matches(&message.content)?
                     {
                         found = true;
@@ -561,16 +559,6 @@ impl Session {
 
     pub fn manifest_device(&self) -> AccountManifestDeviceV2 {
         self.store.local_manifest_device(self.device_id())
-    }
-
-    /// Local device manifest entry with the MLS credential and independent
-    /// anonymous-delivery key authenticated alongside the Signal identity.
-    pub fn manifest_device_with_mls(
-        &self,
-        mls: kutup_chat_proto::MlsManifestDeviceV1,
-    ) -> AccountManifestDeviceV2 {
-        self.store
-            .local_manifest_device_with_mls(self.device_id(), Some(mls))
     }
 
     pub(crate) fn db(&self) -> &Rc<dyn ChatDb> {
@@ -2151,7 +2139,6 @@ impl Session {
         }
         let incoming = self.store.db().list_messages().await?;
         let outgoing = self.store.db().list_sent_messages().await?;
-        let mls = self.store.db().list_mls_messages().await?;
         let starts = collect_disappearing_expiry_starts(&outgoing, self.user())?;
         let controls = collect_account_controls(&outgoing, self.user());
         let mut expired_ids = std::collections::BTreeSet::new();
@@ -2195,25 +2182,6 @@ impl Session {
                 self.store.delete_sent_message(&message.send_id);
             }
         }
-        for message in &mls {
-            let conversation = kutup_chat_proto::ConversationId::Group {
-                group_id: uuid::Uuid::from_bytes(message.conversation_id).to_string(),
-            };
-            if let Some(expired) = expired_content(
-                &message.content,
-                &conversation,
-                message.outgoing,
-                message.timestamp_ms,
-                &starts,
-                now_ms,
-            )?
-            .or_else(|| controls.deleted_content(&message.content, &conversation))
-            {
-                self.store.delete_mls_message(&message.record_id);
-                collect_expired(expired, &mut expired_ids, &mut attachment_ids);
-                expired_messages = expired_messages.saturating_add(1);
-            }
-        }
 
         // Once a target is gone, retaining its reaction/edit operation keeps
         // no product value and unnecessarily preserves its stable identifier.
@@ -2225,11 +2193,6 @@ impl Session {
         for message in &outgoing {
             if content_targets_any(&message.content, &expired_ids)? {
                 self.store.delete_sent_message(&message.send_id);
-            }
-        }
-        for message in &mls {
-            if content_targets_any(&message.content, &expired_ids)? {
-                self.store.delete_mls_message(&message.record_id);
             }
         }
         for entry in self.store.db().list_outbox().await? {
@@ -2293,24 +2256,6 @@ impl Session {
                     }
                 }
                 self.store.delete_group_outbox(&entry.send_id);
-            }
-        }
-        for entry in self.store.db().list_mls_outbox().await? {
-            let conversation = kutup_chat_proto::ConversationId::Group {
-                group_id: uuid::Uuid::from_bytes(entry.conversation_id).to_string(),
-            };
-            if expired_content(
-                &entry.content,
-                &conversation,
-                true,
-                entry.created_at,
-                &starts,
-                now_ms,
-            )?
-            .is_some()
-                || content_targets_any(&entry.content, &expired_ids)?
-            {
-                self.store.delete_mls_outbox(&entry.send_id);
             }
         }
         self.store.commit().await?;
@@ -4775,10 +4720,10 @@ mod sealed_tests {
         const KEPT: &str = "11111111-1111-4111-8111-111111111111";
         const GONE: &str = "22222222-2222-4222-8222-222222222222";
         const GROUP_GONE: &str = "33333333-3333-4333-8333-333333333333";
-        const GROUP: &str = "44444444-4444-4444-8444-444444444444";
+        let group_context = crate::group::test_context(4);
         let bob = direct_conversation("aci:00000000-0000-4000-8000-81b637d8fcd2@b.test").unwrap();
         let group = kutup_chat_proto::ConversationId::Group {
-            group_id: GROUP.into(),
+            group_id: group_context.group_id.clone(),
         };
         let text = |id: &str, seq| {
             serde_json::to_vec(&ChatContent::text_with_id(
@@ -4818,26 +4763,19 @@ mod sealed_tests {
             content: serde_json::to_vec(&reaction).unwrap(),
             received_at: 103,
         });
-        pending.mls_messages.insert(
-            "in:mls-1".into(),
-            crate::MlsHistoryMessage {
-                record_id: "in:mls-1".into(),
-                message_id: GROUP_GONE.into(),
-                conversation_id: *uuid::Uuid::parse_str(GROUP).unwrap().as_bytes(),
-                incarnation: 1,
-                mls_group_id: vec![5; 16],
-                epoch: 1,
-                sender: "aci:00000000-0000-4000-8000-61ea0803f885@d.test".into(),
-                sender_device_id: 1,
-                outgoing: false,
-                cursor: Some(2),
-                transport_digest: [6; 32],
-                content: text(GROUP_GONE, 4),
-                timestamp_ms: 400,
-                delivered: true,
-                deduplicated: false,
-            },
-        );
+        // A pairwise group's message: in the inbox, under its group.
+        pending.messages.push(InboxMessage {
+            id: "mailbox-group".into(),
+            peer: "aci:00000000-0000-4000-8000-61ea0803f885@d.test".into(),
+            sender_device_id: 1,
+            cursor: 4,
+            content: serde_json::to_vec(
+                &ChatContent::text_with_id(GROUP_GONE, "2026-09-25T00:00:00Z", 4, "group")
+                    .with_group_context(&group_context),
+            )
+            .unwrap(),
+            received_at: 400,
+        });
         let note = |n: u32, content: ChatContent| {
             let send_id = control_id(n);
             (
@@ -4938,7 +4876,6 @@ mod sealed_tests {
             vec!["mailbox-1".to_string()],
             "the deleted message and the reaction to it are gone"
         );
-        assert!(block_on(db.list_mls_messages()).unwrap().is_empty());
         let mut kept: Vec<_> = block_on(db.list_sent_messages())
             .unwrap()
             .into_iter()
@@ -5105,7 +5042,7 @@ mod sealed_tests {
                 "72000000-0000-4000-8000-000000000002",
                 8,
                 kutup_chat_proto::ConversationId::Group {
-                    group_id: uuid::Uuid::from_bytes([4; 16]).to_string(),
+                    group_id: crate::group::test_context(4).group_id.clone(),
                 },
                 mls_id,
             ),
@@ -5141,43 +5078,18 @@ mod sealed_tests {
                 sync: None,
             }),
         );
-        pending.mls_outbox.insert(
-            "mls-derived".into(),
-            Some(crate::MlsOutboxEntry {
-                send_id: "mls-derived".into(),
-                conversation_id: [4; 16],
-                incarnation: 1,
-                mls_group_id: vec![5; 16],
-                epoch: 1,
-                content_digest: [7; 32],
-                content: reaction,
-                ciphertext: vec![8],
-                expected_recipients: Vec::new(),
-                deliveries: Vec::new(),
-                created_at: 2_000,
-                attempts: 0,
-            }),
-        );
-        pending.mls_messages.insert(
-            "in:mls-expiring".into(),
-            crate::MlsHistoryMessage {
-                record_id: "in:mls-expiring".into(),
-                message_id: mls_id.into(),
-                conversation_id: [4; 16],
-                incarnation: 1,
-                mls_group_id: vec![5; 16],
-                epoch: 1,
-                sender: "aci:00000000-0000-4000-8000-81b637d8fcd2@b.test".into(),
-                sender_device_id: 1,
-                outgoing: false,
-                cursor: Some(4),
-                transport_digest: [6; 32],
-                content: expiring(mls_id, 3, "group"),
-                timestamp_ms: 1_000,
-                delivered: true,
-                deduplicated: false,
-            },
-        );
+        // A pairwise group's message: in the inbox, under its group.
+        let group_content = serde_json::from_slice::<ChatContent>(&expiring(mls_id, 3, "group"))
+            .unwrap()
+            .with_group_context(&crate::group::test_context(4));
+        pending.messages.push(InboxMessage {
+            id: "mailbox-group-expiring".into(),
+            peer: "aci:00000000-0000-4000-8000-81b637d8fcd2@b.test".into(),
+            sender_device_id: 1,
+            cursor: 5,
+            content: serde_json::to_vec(&group_content).unwrap(),
+            received_at: 1_000,
+        });
         block_on(db.apply(&pending)).unwrap();
 
         assert_eq!(
@@ -5192,11 +5104,7 @@ mod sealed_tests {
         assert_eq!(remaining[0].id, "mailbox-live");
         assert_eq!(remaining[1].id, "mailbox-future-content");
         assert!(block_on(db.list_sent_messages()).unwrap().is_empty());
-        assert!(block_on(db.list_mls_messages()).unwrap().is_empty());
         assert!(block_on(db.load_outbox("direct-derived"))
-            .unwrap()
-            .is_none());
-        assert!(block_on(db.load_mls_outbox("mls-derived"))
             .unwrap()
             .is_none());
     }
