@@ -351,7 +351,7 @@ impl AnonymousMlsKeyPackageRequestV1 {
 pub struct MlsKeyPackageBundleV1 {
     #[cfg_attr(feature = "openapi", schema(value_type = crate::AccountRefSchema))]
     pub recipient: AccountRef,
-    pub manifest: AccountManifestV1,
+    pub manifest: AccountManifestV2,
     pub key_packages: Vec<MlsKeyPackageV1>,
 }
 

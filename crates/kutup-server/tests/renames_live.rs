@@ -8,6 +8,7 @@
 
 mod common;
 
+use common::chat_identity::ChatAccount;
 use common::*;
 use rand::RngCore;
 use reqwest::blocking::Client;
@@ -676,25 +677,9 @@ fn a_renamed_account_keeps_its_chat_profile() {
     let mut user = register(&c, &base);
     let reader = register(&c, &base);
     let domain = server_domain(&c, &base);
-    // A Chat device (synthetic keys) to publish from.
-    let key = |n: u8| {
-        let mut bytes = [n; 33];
-        bytes[1..].copy_from_slice(&rand::random::<[u8; 32]>());
-        b64(&bytes)
-    };
-    let r = bearer(c.post(format!("{base}/api/chat/device")), &user.token)
-        .json(&json!({
-            "suite": 1, "registrationId": 4242, "identityKey": key(1),
-            "signedPreKey": { "keyId": 1, "publicKey": key(2), "signature": key(3) },
-            "lastResortKyberPreKey": { "keyId": 1, "publicKey": key(4), "signature": key(5) },
-            "oneTimePreKeys": [ { "keyId": 10, "publicKey": key(6) } ],
-            "oneTimeKyberPreKeys": [ { "keyId": 20, "publicKey": key(7), "signature": key(8) } ],
-            "name": "rename-test"
-        }))
-        .send()
-        .unwrap();
-    assert!(r.status().is_success(), "device: {}", r.status());
-    let device = r.json::<Value>().unwrap()["deviceId"].as_u64().unwrap() as u32;
+    // A Chat device to publish from.
+    let chat_device = ChatAccount::of(&user, &user.token).reregister(&c, &base);
+    let device = chat_device.id;
     let access = [5u8; 16];
     let profile = |account: &kutup_chat_proto::AccountRef, version: &str, revision: u64| {
         json!({
@@ -707,10 +692,13 @@ fn a_renamed_account_keeps_its_chat_profile() {
         })
     };
     let put = |body: Value| {
-        bearer(c.put(format!("{base}/api/chat/profile")), &user.token)
-            .json(&body)
-            .send()
-            .unwrap()
+        bearer(
+            chat_device.auth(c.put(format!("{base}/api/chat/profile"))),
+            &user.token,
+        )
+        .json(&body)
+        .send()
+        .unwrap()
     };
     let account = user.person.clone();
     assert_eq!(account.server, domain);

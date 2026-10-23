@@ -1,6 +1,6 @@
 import { expect, test } from '@playwright/test'
 import { newAccount, registerAccount, signIn } from '../fixtures/apps'
-import { closeDetails, message, openChat, openConversationWith, openDetails, openDirectChat, revokeOtherDevices, send } from '../fixtures/chat'
+import { closeDetails, message, openChat, openConversationWith, openDetails, openDirectChat, send } from '../fixtures/chat'
 
 const PASSWORD = 'Deneme123*ContactListPassword'
 
@@ -31,12 +31,13 @@ test('a block made before the only browser was lost still holds on a new one', a
   await expect(pageA.getByRole('button', { name: 'Unblock', exact: true }).first()).toBeVisible({ timeout: 30_000 })
   await closeDetails(pageA)
 
-  // Alice's only browser is gone; she signs in on a new one.
+  // Alice's only browser is gone; she signs in on a new one, which starts
+  // her Chat over (she has no other device to link it from): the old device
+  // leaves the account with it.
   await contextA.close()
   const contextA2 = await browser.newContext()
   await signIn(contextA2, alice)
   const pageA2 = await openChat(contextA2)
-  await revokeOtherDevices(pageA2, 1)
 
   // Carol writes again. The new browser has Carol blocked, from the list:
   // her conversation offers Unblock, and her new message never shows.

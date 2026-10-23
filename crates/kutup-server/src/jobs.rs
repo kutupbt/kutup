@@ -202,9 +202,15 @@ pub async fn chat_maintenance_once(
         }
     }
     if policy.device_expiry_days > 0 {
+        // Marked, not deleted: an expired device leaves sends and bundles at
+        // once, and the account's next manifest (any of its devices publishes
+        // one on DevicesChanged) drops the row, so the server never drops a
+        // device the account's authority still lists
+        // (docs/plans/account-identity-key.md).
         match sqlx::query_as::<_, (Uuid, i32)>(
-            "DELETE FROM chat_devices
-             WHERE COALESCE(last_seen_at, created_at) < now() - ($1 * interval '1 day')
+            "UPDATE chat_devices SET expired_at = now()
+             WHERE expired_at IS NULL
+               AND COALESCE(last_seen_at, created_at) < now() - ($1 * interval '1 day')
              RETURNING user_id, device_id",
         )
         .bind(policy.device_expiry_days)
@@ -1361,8 +1367,14 @@ mod tests {
             .connect(&database_url)
             .await
             .unwrap();
+        // A device the earlier live tests left a Direct envelope for (the
+        // newest device needn't have one).
         let (user_id, device_id): (uuid::Uuid, i32) = sqlx::query_as(
-            "SELECT user_id,device_id FROM chat_devices ORDER BY created_at DESC LIMIT 1",
+            "SELECT m.recipient_user_id, m.recipient_device_id
+               FROM chat_mailbox m
+               JOIN chat_devices d ON d.user_id = m.recipient_user_id
+                                  AND d.device_id = m.recipient_device_id
+              ORDER BY m.server_ts DESC LIMIT 1",
         )
         .fetch_one(&pool)
         .await
@@ -1414,10 +1426,25 @@ mod tests {
             .execute(&pool)
             .await
             .unwrap();
-        assert_eq!(
-            sweep_chat_mailboxes_before(&pool, cutoff).await.unwrap(),
-            (0, 0)
-        );
+        // The sweep is server-wide (other live tests leave mail behind):
+        // what matters is that rows at the cutoff stay and older ones go.
+        let alive = |pool: sqlx::PgPool| async move {
+            let direct: bool =
+                sqlx::query_scalar("SELECT EXISTS (SELECT 1 FROM chat_mailbox WHERE id = $1)")
+                    .bind(direct_id)
+                    .fetch_one(&pool)
+                    .await
+                    .unwrap();
+            let mls: bool =
+                sqlx::query_scalar("SELECT EXISTS (SELECT 1 FROM chat_mls_mailbox WHERE id = $1)")
+                    .bind(mls_id)
+                    .fetch_one(&pool)
+                    .await
+                    .unwrap();
+            (direct, mls)
+        };
+        sweep_chat_mailboxes_before(&pool, cutoff).await.unwrap();
+        assert_eq!(alive(pool.clone()).await, (true, true));
         sqlx::query("UPDATE chat_mailbox SET server_ts=$1 WHERE id=$2")
             .bind(cutoff - time::Duration::SECOND)
             .bind(direct_id)
@@ -1430,10 +1457,9 @@ mod tests {
             .execute(&pool)
             .await
             .unwrap();
-        assert_eq!(
-            sweep_chat_mailboxes_before(&pool, cutoff).await.unwrap(),
-            (1, 1)
-        );
+        let (direct, mls) = sweep_chat_mailboxes_before(&pool, cutoff).await.unwrap();
+        assert!(direct >= 1 && mls >= 1, "{direct} {mls}");
+        assert_eq!(alive(pool.clone()).await, (false, false));
         pool.close().await;
     }
 

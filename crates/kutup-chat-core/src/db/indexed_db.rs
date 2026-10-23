@@ -26,7 +26,7 @@ use wasm_bindgen::JsValue;
 
 use crate::db::store_cipher::{keys, StoreCipher};
 use crate::db::{
-    AccountManifestHistoryRecordV1, ChatDb, ContactRecord, InboundEnvelope, InboxMessage,
+    AccountManifestHistoryRecord, ChatDb, ContactRecord, InboundEnvelope, InboxMessage,
     LocalIdentity, LocalProfile, ManifestTrust, MlsHistoryMessage, MlsOutboxEntry, OutboxEntry,
     PeerProfile, Pending, SentMessage,
 };
@@ -97,6 +97,7 @@ const PREKEY_ROTATION: &str = "prekey_rotation";
 const REPAIR_LIMITS: &str = "repair_limits";
 const WRITER_GENERATION: &str = "writer_generation";
 const PENDING_REGISTRATION: &str = "pending_registration";
+const PENDING_ACCOUNT_IDENTITY: &str = "pending_account_identity";
 /// Kept in `meta` under these plain names (not hashed, not sealed): the
 /// wrapped store key, and the format the records are in.
 const STORE_KEY: &str = "store_key";
@@ -592,7 +593,7 @@ impl ChatDb for IndexedDbChatDb {
         peer: &str,
         incarnation_id: &str,
         version: u64,
-    ) -> Result<Option<AccountManifestHistoryRecordV1>> {
+    ) -> Result<Option<AccountManifestHistoryRecord>> {
         self.get(
             MANIFEST_HISTORY,
             triple_key(peer, incarnation_id, &version.to_string()),
@@ -688,6 +689,10 @@ impl ChatDb for IndexedDbChatDb {
         Ok(next)
     }
 
+    async fn load_pending_account_identity(&self) -> Result<Option<Vec<u8>>> {
+        self.get(META, string_key(PENDING_ACCOUNT_IDENTITY)).await
+    }
+
     async fn load_pending_registration(&self) -> Result<Option<Vec<u8>>> {
         self.get(META, string_key(PENDING_REGISTRATION)).await
     }
@@ -705,6 +710,24 @@ impl ChatDb for IndexedDbChatDb {
                 .into_iter()
                 .filter(|message| pending.delete_messages_for_peers.contains(&message.peer))
                 .map(|message| message.id)
+                .collect()
+        };
+        // The history of the accounts whose pins go (`forget_manifests_of`),
+        // found before the write transaction opens.
+        let forgotten_history: Vec<Vec<u8>> = if pending.forget_manifests_of.is_empty() {
+            Vec::new()
+        } else {
+            self.all::<AccountManifestHistoryRecord>(MANIFEST_HISTORY)
+                .await?
+                .into_iter()
+                .filter(|record| pending.forget_manifests_of.contains(&record.peer))
+                .map(|record| {
+                    triple_key(
+                        &record.peer,
+                        &record.manifest.incarnation_id,
+                        &record.sequence.to_string(),
+                    )
+                })
                 .collect()
         };
         // IndexedDB has one writer in this engine. Check immutable records
@@ -774,6 +797,44 @@ impl ChatDb for IndexedDbChatDb {
         let index = store(INDEX)?;
 
         let mut operations = Vec::new();
+        // Issued first, so the rest of the batch writes onto the cleared
+        // stores (requests in one transaction run in order).
+        if pending.reset_transport || pending.reset_identity {
+            for target in [
+                &sessions,
+                &identities,
+                &pre_keys,
+                &used_pre_keys,
+                &signed_pre_keys,
+                &kyber_pre_keys,
+                &kyber_seen,
+                &sender_keys,
+            ] {
+                operations.push(clear_op(&target.store));
+            }
+            for key in [PENDING_PREKEY_UPLOAD, PREKEY_ROTATION] {
+                operations.push(self.delete(&meta, string_key(key)));
+            }
+        }
+        if pending.reset_transport {
+            for target in [&local_identity, &mls_state, &mls_outbox, &inbound] {
+                operations.push(clear_op(&target.store));
+            }
+            for key in [
+                LAST_CURSOR,
+                REPAIR_LIMITS,
+                PENDING_REGISTRATION,
+                PENDING_ACCOUNT_IDENTITY,
+            ] {
+                operations.push(self.delete(&meta, string_key(key)));
+            }
+        }
+        for peer in &pending.forget_manifests_of {
+            operations.push(self.delete(&manifest_trust, string_key(peer)));
+        }
+        for key in forgotten_history {
+            operations.push(self.delete(&manifest_history, key));
+        }
         for (key, value) in &index_values {
             match value {
                 Some(value) => operations.push(self.put(&index, key.clone(), &encode(value)?)?),
@@ -878,6 +939,16 @@ impl ChatDb for IndexedDbChatDb {
                 None => operations.push(self.delete(&meta, string_key(PENDING_REGISTRATION))),
             }
         }
+        if let Some(value) = writes.pending_account_identity {
+            match value {
+                Some(value) => operations.push(self.put(
+                    &meta,
+                    string_key(PENDING_ACCOUNT_IDENTITY),
+                    &value,
+                )?),
+                None => operations.push(self.delete(&meta, string_key(PENDING_ACCOUNT_IDENTITY))),
+            }
+        }
         if let Some(cursor) = writes.last_cursor {
             operations.push(self.put(&meta, string_key(LAST_CURSOR), &cursor)?);
         }
@@ -916,6 +987,10 @@ fn put_op(store: &idb::ObjectStore, value: JsValue, key: JsValue) -> Operation<'
 
 fn delete_op(store: &idb::ObjectStore, key: JsValue) -> Operation<'_> {
     Box::pin(async move { store.delete(idb::Query::Key(key))?.await })
+}
+
+fn clear_op(store: &idb::ObjectStore) -> Operation<'_> {
+    Box::pin(async move { store.clear()?.await })
 }
 
 #[wasm_bindgen::prelude::wasm_bindgen]
@@ -1010,6 +1085,7 @@ struct PreparedWrites {
     delete_signed_pre_keys: Vec<u32>,
     delete_kyber_pre_keys: Vec<u32>,
     registration_upload: Option<Option<Vec<u8>>>,
+    pending_account_identity: Option<Option<Vec<u8>>>,
     last_cursor: Option<Vec<u8>>,
     last_sent_seq: Option<Vec<u8>>,
     contact_list_followed: Option<Vec<u8>>,
@@ -1066,6 +1142,11 @@ impl PreparedWrites {
             delete_kyber_pre_keys: pending.delete_kyber_pre_keys.iter().copied().collect(),
             registration_upload: pending
                 .registration_upload
+                .as_ref()
+                .map(|value| value.as_ref().map(encode).transpose())
+                .transpose()?,
+            pending_account_identity: pending
+                .pending_account_identity
                 .as_ref()
                 .map(|value| value.as_ref().map(encode).transpose())
                 .transpose()?,
@@ -1164,6 +1245,7 @@ mod tests {
             identity_key_pair: vec![1, 2, 3],
             registration_id: 42,
             device_id: Some(3),
+            credential: Some("credential".into()),
         });
         pending.sessions.insert("alice.1".into(), Some(vec![4]));
         pending.identities.insert("alice.1".into(), vec![5]);
@@ -1235,6 +1317,9 @@ mod tests {
                 drive_share_signing_public_key: "share".into(),
                 highest_sequence: u64::MAX,
                 manifest_hash: "hash".into(),
+                identity_key: "identity".into(),
+                identity_verified: true,
+                identity_verified_at_ms: 7,
                 trust: AuthorityTrust::Verified,
                 continuity_gap: false,
                 quarantine_reason: None,

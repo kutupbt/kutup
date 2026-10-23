@@ -13,12 +13,13 @@ import {
   enableReadReceipts,
   message,
   openChat,
+  openChats,
   openConversationWith,
   openDirectChat,
+  openSettings,
   reactTo,
   reaction,
   replyTo,
-  revokeOtherDevices,
   send,
   sendAttachment,
   setDisappearing,
@@ -322,11 +323,15 @@ test.describe('two-server continuous backup recovery', () => {
     expect(backupFacts('postgres-a', bob.username)).toEqual({ backups: 0, objects: 0, media: 0 })
     expect(backupFacts('postgres-b', alice.username)).toEqual({ backups: 0, objects: 0, media: 0 })
 
-    // A closed browser remains a signed account device until the recovered
-    // account explicitly revokes it: retire both lost devices before proving
-    // that the recovered devices can start a new group.
-    await revokeOtherDevices(restoredA, 1)
-    await revokeOtherDevices(restoredB, 1)
+    // With no device left to link from, each clean browser started its
+    // account's Chat over (a new identity), which dropped the lost devices;
+    // each side saw the other's safety number change once.
+    for (const page of [restoredA, restoredB]) {
+      await openSettings(page, 'Linked devices')
+      await expect(page.getByTestId('chat-devices-list').locator('li')).toHaveCount(1, { timeout: 45_000 })
+      await expect(page.locator('[data-testid^="chat-device-revoke-"]')).toHaveCount(0)
+      await openChats(page)
+    }
 
     await openConversationWith(restoredA, bob.username)
     await openConversationWith(restoredB, alice.username)

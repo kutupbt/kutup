@@ -73,7 +73,7 @@ The release wiped kutup.dev (database and bucket) and shipped:
 - safety numbers v3, copied from Signal;
 - rollback protection ([`plans/rollback-protection.md`](plans/rollback-protection.md));
 - device limits: Chat installations 1–10 per account
-  (`CHAT_MAX_ACTIVE_DEVICES`, default 10, the protocol's hard cap; a new
+  (the site setting `chatMaxActiveDevices`, default 10, the protocol's hard cap; a new
   installation past it is refused) and at most 20 collaboration devices in
   use per account, fixed ([`plans/device-registration.md`](plans/device-registration.md));
 - username renames: names folded (dots, `_` and `-` ignored), freed after an
@@ -94,7 +94,9 @@ format rather than preserve development-only ciphertexts or trust machinery.
 This destructive-change permission expires at the first stable `v*` tag;
 afterward `docs/crypto-agility.md` requires versioned readers, authenticated
 migrations, peer capability windows and no silent downgrade. No second wipe of
-kutup.dev is planned: what is left must land without one.
+kutup.dev was planned; the user has since allowed one for the block format
+(2026-10-22, [`plans/drive-block-format.md`](plans/drive-block-format.md)),
+with the items bundled there.
 
 State against the normative checklist,
 [`docs/draft/v1/security-review-follow-ups.md`](draft/v1/security-review-follow-ups.md).
@@ -129,6 +131,19 @@ Left before the tag:
   `specs/161-chat-groups-two-server.spec.ts`) is built, with request status,
   withdrawal and the avatar on the server's #285 and #288. Slices 2 (sending once), 4 (calls) and 5 (MLS out)
   follow; groups stay off until all are done.
+- **Master-key rotation.** Every device holds the account master key, so a
+  lost or stolen device keeps it: removing the device and resetting the Chat
+  identity (docs/plans/account-identity-key.md) leaves it able to sign
+  manifests and re-register, visibly. Full revocation is a new master key that
+  re-wraps the account's data and derives a new authority, which contacts
+  verify as an authority change. Its own plan comes first; until then the
+  removal screen and the CLI's password change say so.
+- **libsignal ≥ 0.99 with hpke-rs 0.7**, with or after the MLS removal.
+  hpke-rs 0.6.1 is pinned by libsignal v0.97.2, chat-core and kutup-crypto,
+  and its optional libcrux backend (never compiled) keeps
+  `libcrux-chacha20poly1305` 0.0.7 in the chat-core and client-ffi lockfiles
+  (GHSA-hc3c-63hc-2r9f, dismissed as not used on 2026-10-22). The upgrade
+  also takes openmls_rust_crypto 0.6, unless MLS is gone by then.
 - **An independent security review** of the V1 formats and protocols, with a
   review bundle prepared for it.
 - **The remaining libsodium primitives.** Formats are sealed in WASM, but the
@@ -139,6 +154,22 @@ Left before the tag:
   [`docs/cryptographic-dependencies.md`](cryptographic-dependencies.md) or
   moves to WASM. The Android Worker benchmark is still open; with OPAQUE's
   KSF it may be moot.
+- **Block format for large objects, so films and long recordings stream with
+  seeking** ([`plans/drive-block-format.md`](plans/drive-block-format.md),
+  plan 2026-10-22, not built). It follows Proton Drive's block format:
+  - 4 MiB blocks, each AEAD-sealed on its own and bound to its index and
+    the file's revision;
+  - a sealed manifest of block hashes signed by the uploader;
+  - a service worker that answers the `<video>`/`<audio>` element's Range
+    requests while the page decrypts only the blocks needed.
+
+  One framing serves Drive files, snapshots, Chat attachments and Chat
+  backup media, and secretstream and the browser's libsodium stream code
+  then go. The same change binds the sealed metadata and thumbnails to the
+  current revision, so the server cannot serve an older version as the
+  current one. The plan recommends shipping it with a wipe of kutup.dev,
+  together with the Chat identity change, rather than converting files in
+  the background.
 - **Remove the leftover Argon2id KEK/login root** in `kutup-crypto`'s
   `kdf.rs` and its WASM export: OPAQUE replaced it and the frontend no longer
   calls it (small).
@@ -188,12 +219,6 @@ has Chat's link uses it.
 ## Important (should-have, can ship after v1)
 
 These aren't blockers — kutup can release without them — but they're real production gaps and should land in v1.1 or shortly after.
-
-### Admin · Chat device limit as a setting
-
-`CHAT_MAX_ACTIVE_DEVICES` is an environment setting only. Wanted: a durable
-administrator setting with its UI in Administration and an audit event when
-it changes, within the same 1–10 bounds.
 
 ### Operations · runbook and alerting
 
@@ -748,7 +773,10 @@ albums) is the second reference.
 - **Albums are views:** an album lists photos without copying them, so one
   photo can be in several albums and still count once.
 - **Photo handling:** dates and locations kept per photo (encrypted),
-  thumbnails at several sizes, video streaming.
+  thumbnails at several sizes, video streaming. Streaming with seeking
+  needs the block format in
+  [`plans/drive-block-format.md`](plans/drive-block-format.md) (Proton
+  Drive's model); until then videos play once downloaded, up to 1 GiB.
 - **Sharing:** one photo with single-file sharing
   (docs/plans/drive-file-sharing.md); albums shared with people here and on
   other servers, collaborative albums, and public album links with the key

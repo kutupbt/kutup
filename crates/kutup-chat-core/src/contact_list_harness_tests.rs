@@ -116,7 +116,7 @@ fn contacts_a_device_that_lost_everything_gets_its_accepts_and_blocks_back() {
 
     // Every device lost: a new one starts clean, reads the list before its
     // mailbox, and has both back, with Bob's profile key.
-    let mut alice2 = world.link_device(&alice);
+    let mut alice2 = world.link_device(&mut alice);
     drop(alice);
     assert!(block_on(alice2.engine.session().contacts())
         .unwrap()
@@ -137,7 +137,7 @@ fn contacts_the_mailbox_waits_for_the_list_so_a_blocked_person_is_never_taken() 
     say(&mut carol, &alice, "first");
     alice.receive();
     block(&mut alice, &carol);
-    let mut alice2 = world.link_device(&alice);
+    let mut alice2 = world.link_device(&mut alice);
     drop(alice);
     // Carol writes again; the clean device can't read the list yet.
     say(&mut carol, &alice2, "let me in");
@@ -164,7 +164,7 @@ fn contacts_the_mailbox_waits_for_the_list_so_a_blocked_person_is_never_taken() 
 fn contacts_a_block_wins_a_tie_with_an_accept_in_the_list_and_between_devices() {
     let world = World::new();
     let mut alice = world.person(0xa1);
-    let mut alice2 = world.link_device(&alice);
+    let mut alice2 = world.link_device(&mut alice);
     let mut carol = world.person(0xc3);
     say(&mut carol, &alice, "hello?");
     alice.receive();
@@ -416,7 +416,7 @@ fn contacts_an_older_entry_served_under_the_listed_revision_is_refused() {
         .get_mut(&alice.account)
         .unwrap()
         .insert(id.clone(), (listed_revision, accepted));
-    let mut alice2 = world.link_device(&alice);
+    let mut alice2 = world.link_device(&mut alice);
     assert!(block_on(alice2.engine.sync_contact_list()).is_err());
     // And a clean device holds its mailbox rather than take the old accept.
     assert!(block_on(alice2.engine.receive(&mut rng())).is_err());
@@ -444,7 +444,7 @@ fn contacts_a_listed_entry_that_does_not_open_fails_the_read() {
         .get_mut(&id)
         .unwrap()
         .1 = STANDARD.encode([0u8; chat_contact_list::SEALED_LEN]);
-    let mut alice2 = world.link_device(&alice);
+    let mut alice2 = world.link_device(&mut alice);
     assert!(block_on(alice2.engine.sync_contact_list()).is_err());
 }
 
@@ -496,7 +496,7 @@ fn contacts_the_mailbox_waits_until_the_list_was_followed_even_with_contacts_her
     say(&mut carol, &alice, "hi");
     alice.receive();
     block(&mut alice, &carol);
-    let mut alice2 = world.link_device(&alice);
+    let mut alice2 = world.link_device(&mut alice);
     drop(alice);
     // The new device writes to someone first: it has a contact now, but it
     // never followed the list, so its mailbox still waits for it.

@@ -35,7 +35,7 @@ test.describe('Signal-backed chat', () => {
 
     // Device labels are account-private metadata. Renaming the current
     // installation keeps its immutable numeric protocol id.
-    await openSettings(pageA, 'Devices')
+    await openSettings(pageA, 'Linked devices')
     const deviceA = await pageA.getByTestId('chat-device-status').getAttribute('data-device-id')
     expect(deviceA).toMatch(/^\d+$/)
     await pageA.getByTestId(`chat-device-rename-${deviceA}`).click()
@@ -52,8 +52,8 @@ test.describe('Signal-backed chat', () => {
     // as outgoing history via an encrypted sent transcript.
     const contextA2 = await browser.newContext()
     await signIn(contextA2, alice)
-    const pageA2 = await openChat(contextA2)
-    await openSettings(pageA2, 'Devices')
+    const pageA2 = await openChat(contextA2, 'primary', undefined, { linkFrom: pageA })
+    await openSettings(pageA2, 'Linked devices')
     await expect(pageA2.getByTestId('chat-device-status')).not.toHaveAttribute('data-device-id', deviceA!)
     await expect(pageA2.getByTestId(`chat-device-${deviceA}`)).toContainText('Alice laptop')
     await openChats(pageA2)

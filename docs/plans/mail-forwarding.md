@@ -95,7 +95,7 @@ States: `Pending`, `Active`, `Outdated`, `Paused`, `Rejected`.
 
 | State | Forwarder can | Forwardee can |
 |---|---|---|
-| Pending | edit conditions; re-send the confirmation (outside); delete | accept, decline |
+| Pending | enter the code while unverified; edit conditions; ask again (outside); delete | accept, decline (once verified) |
 | Active | edit conditions, pause, delete | delete |
 | Paused | resume, delete | delete |
 | Outdated (end-to-end only) | re-enable: new material, `PUT mail/v4/forwardings/{id}` | delete |
@@ -401,12 +401,53 @@ without changing any key.
   - the forwarder's client chooses the forwarding's id (a UUID v4), so the
     activation can bind it before anything is stored (as built; see
     `docs/api.md`, "Mail forwarding").
-  - The outside confirmation goes through `GET|PUT|DELETE
-    /api/mail/forwardings/external/{token}`. That token is single-use and
-    lives 7 days; an expired one sends a new link.
-  - Outside confirmation needs the server to send its own mail. Our
-    `submit` path can (auto-replies use it), so this doesn't wait on the
-    roadmap's system-email item.
+  - Outside, the code mail carries a stop link to
+    `/email-forwarding#<token>` (`POST /api/mail/forwardings/external` and
+    `/external/decline`): it can only refuse a forwarding, pending or
+    active, never start one, and it doesn't expire. Superseded by
+    "Verification" below: the earlier link that confirmed on click is gone.
+  - The server sends its own mail for this through the `submit` path
+    (auto-replies use it), so it doesn't wait on the roadmap's system-email
+    item.
+
+### Verification (user, 2026-10-22)
+
+Before a destination receives anything, the forwarder proves it can read
+mail there: a 6-digit code is mailed to it and entered in the forwarding
+settings. It closed an abuse path on the live feature: anyone could point a
+forwarding at an address they don't control.
+
+- **Both kinds.** To a Kutup address the code arrives in that inbox as a
+  notice from `postmaster@` the server, and the forwardee sees the
+  forwarding (its activation, accept and decline) only once it is verified;
+  then they accept it in the app as before, with the end-to-end and
+  post-quantum notices unchanged. Outside, the code mail goes through
+  submission, from `postmaster@`, with the stop link above; entering the
+  code makes the forwarding active.
+- **Nothing is forwarded until verified.** Delivery, and the check whether
+  an address forwards at all, require `verified_at`. Renewing an Outdated
+  or declined forwarding, or asking an outside one again, makes it
+  unverified and sends a new code.
+- **The code:** six digits from the OS random generator, uniform. Kept as
+  HMAC-SHA256 under a key derived from `MAIL_FORWARDING_KEYS` with the label
+  `kutup mail forwarding code v1` (its key version beside it, so a rotation
+  in the meantime doesn't void it), compared in constant time, single use.
+  A leaked row doesn't give it away by trying the million values.
+- **The mail,** in the forwarder's language (en/tr): who asks, the code,
+  when it expires, and to ignore it if unexpected. No link verifies on
+  click.
+- **Limits** (Administration → Rate limits, site-wide):
+  `forwarding_code_minutes` 15; `forwarding_code_attempts` 5 (then the code
+  is void and a new one is needed); `forwarding_code_resends` 1 a minute;
+  `forwarding_invites` 10 a day per forwarding; and the account's
+  `forwarding_confirmations_sent` 10 a day across its forwardings, so many
+  forwardings can't multiply the mail.
+- **Forwardings that existed before** start unverified (the migration adds
+  the columns with nothing verified): they pause until their forwarder
+  enters a code, and the settings page says so.
+- **UI:** "Pending verification" on the forwarder's row with "Enter code";
+  the code dialog opens right after a forwarding is set up, shows when the
+  code expires and the tries left, and sends a new code.
 
 ### The post-quantum hook, for later
 

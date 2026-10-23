@@ -2296,6 +2296,18 @@ pub async fn wipe_user(
         .bind(target)
         .execute(&state.pool)
         .await?;
+    // The account identity (docs/plans/account-identity-key.md) and what
+    // hangs on it: the next device re-registers under a new one.
+    for table in [
+        "chat_account_identities",
+        "chat_link_tokens",
+        "chat_mls_devices",
+    ] {
+        sqlx::query(&format!("DELETE FROM {table} WHERE user_id = $1"))
+            .bind(target)
+            .execute(&state.pool)
+            .await?;
+    }
 
     // 3. Erase the key bundle + TOTP and reset to first-login with the new temp password,
     //    and with them the old incarnation's collab devices, in one step. Revoked

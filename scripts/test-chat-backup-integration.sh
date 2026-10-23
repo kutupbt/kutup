@@ -65,6 +65,11 @@ curl --fail --silent --show-error --retry 30 --retry-delay 1 \
 KUTUP_LIVE_SERVER="http://127.0.0.1:$port" \
   KUTUP_LIVE_ADMIN="$test_admin_username:$test_admin_password" \
   cargo test -p kutup-server --test chat_live chat_v1_contract -- --exact --nocapture
+# One libsignal identity per account (docs/plans/account-identity-key.md):
+# re-registration, credentials, linking, keys/check, the identity distribution.
+KUTUP_LIVE_SERVER="http://127.0.0.1:$port" \
+  KUTUP_LIVE_DATABASE_URL="postgres://$POSTGRES_USER:$POSTGRES_PASSWORD@127.0.0.1:$db_port/$POSTGRES_DB" \
+  cargo test -p kutup-server --test chat_identity_live -- --nocapture
 # Groups off by default (CHAT_GROUPS unset on this stack): no groups, no
 # group calls (though an SFU is configured), every group and MLS route refused.
 KUTUP_LIVE_SERVER="http://127.0.0.1:$port" \
