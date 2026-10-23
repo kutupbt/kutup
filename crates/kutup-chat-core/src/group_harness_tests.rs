@@ -154,6 +154,11 @@ pub(crate) struct World {
     /// A server without the multi-recipient route (an older one): it takes
     /// no group capabilities, so every group message goes pairwise.
     pub(crate) no_multi_route: Cell<bool>,
+    /// Answers the multi-recipient route gives next, before looking at the
+    /// request (a destination that didn't answer, a request too large, a
+    /// budget spent).
+    pub(crate) multi_answers:
+        RefCell<std::collections::VecDeque<crate::transport::MultiSendOutcome>>,
     pub(crate) group_capabilities: RefCell<BTreeMap<String, Vec<[u8; 32]>>>,
     /// How many whole states the group home was asked for.
     pub(crate) state_requests: Cell<usize>,
@@ -269,6 +274,7 @@ impl World {
             batches: Cell::new(0),
             multi_requests: Cell::new(0),
             no_multi_route: Cell::new(false),
+            multi_answers: RefCell::new(Default::default()),
             group_capabilities: RefCell::new(BTreeMap::new()),
             state_requests: Cell::new(0),
             group_changes: Cell::new(0),
@@ -1551,6 +1557,9 @@ impl ChatTransport for Client {
         self.world
             .multi_requests
             .set(self.world.multi_requests.get() + 1);
+        if let Some(answer) = self.world.multi_answers.borrow_mut().pop_front() {
+            return Ok(answer);
+        }
         let payload = STANDARD
             .decode(&submission.payload)
             .map_err(|_| ChatError::Transport("malformed payload".into()))?;
@@ -3131,6 +3140,212 @@ fn group_third_a_disappearing_group_message_leaves_the_send_log() {
     let later = crate::clock::unix_millis() + 61_000;
     block_on(alice.engine.session.purge_expired_history(later)).unwrap();
     assert!(!in_log(&alice));
+}
+
+// ----- the multi-recipient route (slice 2) -----
+
+/// The hash of a capability, as the server keeps it.
+fn capability_hash(capability: &[u8; 16]) -> [u8; 32] {
+    sha2::Sha256::digest(capability).into()
+}
+
+/// The capability `holder` holds for `member` in the group.
+fn held_by(holder: &Person, group_id: &str, member: &Person) -> Option<[u8; 16]> {
+    let record = block_on(holder.engine.load_group_record(group_id)).unwrap();
+    Engine::held_capability(&record, &member.account)
+}
+
+/// A group of four on one server whose members each sent once, so every
+/// member holds the others' capabilities.
+fn exchanged_group(world: &Rc<World>) -> (Person, Person, Person, Person, String) {
+    let mut alice = world.person(0xa1);
+    let mut bob = world.person(0xb2);
+    let mut carol = world.person(0xc3);
+    let mut dave = world.person(0xd4);
+    let group_id = group_of(&mut alice, &mut [&mut bob, &mut carol, &mut dave]);
+    deliver_all(&mut [&mut alice, &mut bob, &mut carol, &mut dave]);
+    for person in [&mut alice, &mut bob, &mut carol, &mut dave] {
+        person.send_text(&group_id, "hello");
+    }
+    deliver_all(&mut [&mut alice, &mut bob, &mut carol, &mut dave]);
+    (alice, bob, carol, dave, group_id)
+}
+
+#[test]
+fn group_multi_one_request_reaches_every_member_once_they_hold_capabilities() {
+    let world = World::new();
+    let (mut alice, mut bob, mut carol, mut dave, group_id) = exchanged_group(&world);
+    for member in [&bob, &carol, &dave] {
+        let held = held_by(&alice, &group_id, member).expect("a capability held");
+        let published = world.group_capabilities.borrow()[&member.account].clone();
+        assert!(published.contains(&capability_hash(&held)));
+        assert_eq!(published.len() % 8, 0, "padded");
+    }
+    let (multi, batches) = (world.multi_requests.get(), world.batches.get());
+    alice.send_text(&group_id, "once for all");
+    assert_eq!(world.multi_requests.get() - multi, 1, "one request");
+    assert_eq!(world.batches.get() - batches, 0, "nothing pairwise");
+    deliver_all(&mut [&mut alice, &mut bob, &mut carol, &mut dave]);
+    for person in [&bob, &carol, &dave] {
+        assert!(person
+            .group_texts(&group_id)
+            .contains(&"once for all".to_string()));
+    }
+}
+
+/// This account's own other devices get their copy pairwise (a sync copy,
+/// as Signal), never on the multi-recipient route; the members' go there.
+#[test]
+fn group_multi_own_devices_get_their_copy_pairwise() {
+    let world = World::new();
+    let (mut alice, mut bob, mut carol, mut dave, group_id) = exchanged_group(&world);
+    let mut alice2 = world.link_device(&mut alice);
+    deliver_all(&mut [&mut alice, &mut alice2, &mut bob, &mut carol, &mut dave]);
+    // The new device takes the group from the account's group list, and
+    // the server said the account's devices changed.
+    alice.flush_list();
+    block_on(alice2.engine.sync_group_list(&mut rng())).unwrap();
+    assert_eq!(alice2.status(&group_id), GroupStatus::Member);
+    alice.engine.forget_known_devices();
+    let send_id = alice.send_text(&group_id, "mine too");
+    assert!(
+        reached(&world, &send_id).contains(&alice.account),
+        "pairwise to Alice's other device"
+    );
+    let entry = block_on(alice.engine.session().db().list_group_outbox())
+        .unwrap()
+        .into_iter()
+        .find(|entry| entry.send_id == send_id)
+        .unwrap();
+    let own = entry
+        .legs
+        .iter()
+        .find(|leg| leg.account == alice.account)
+        .unwrap();
+    assert!(!own.multi && own.delivered);
+    assert!(own.devices.contains(&alice2.device()), "{:?}", own.devices);
+    assert!(entry
+        .legs
+        .iter()
+        .filter(|leg| leg.account != alice.account)
+        .all(|leg| leg.multi && leg.delivered));
+}
+
+/// A member who leaves takes the group's capability off its server, and the
+/// others draw new ones: what it held reaches nobody any more.
+#[test]
+fn group_multi_leaving_unpublishes_and_the_others_draw_anew() {
+    let world = World::new();
+    let (mut alice, mut bob, mut carol, mut dave, group_id) = exchanged_group(&world);
+    let bobs = held_by(&alice, &group_id, &bob).unwrap();
+    let alices_held_by_bob = held_by(&bob, &group_id, &alice).unwrap();
+    block_on(bob.engine.leave_group(&group_id, &mut rng())).unwrap();
+    deliver_all(&mut [&mut alice, &mut bob, &mut carol, &mut dave]);
+    assert!(!world.group_capabilities.borrow()[&bob.account].contains(&capability_hash(&bobs)));
+    alice.send_text(&group_id, "after bob");
+    deliver_all(&mut [&mut alice, &mut carol, &mut dave]);
+    let published = world.group_capabilities.borrow()[&alice.account].clone();
+    assert!(!published.contains(&capability_hash(&alices_held_by_bob)));
+    let new = held_by(&carol, &group_id, &alice).unwrap();
+    assert_ne!(new, alices_held_by_bob);
+    assert!(published.contains(&capability_hash(&new)));
+}
+
+/// A capability the server refuses (the member drew a new one this device
+/// didn't get): that copy goes pairwise at once, the member is asked for its
+/// current one, and the next message goes on the route again.
+#[test]
+fn group_multi_a_refused_capability_goes_pairwise_and_is_asked_for_again() {
+    let world = World::new();
+    let (mut alice, mut bob, mut carol, mut dave, group_id) = exchanged_group(&world);
+    // Alice holds a capability of Bob's that isn't his any more (a redraw
+    // whose hand-out she missed).
+    let mut record = block_on(alice.engine.load_group_record(&group_id)).unwrap();
+    record.member_capabilities.insert(
+        bob.account.clone(),
+        crate::group::HeldCapability {
+            capability: crate::group::SecretText(STANDARD.encode([9u8; 16])),
+            drawn_at_ms: 1,
+        },
+    );
+    block_on(alice.engine.save_group(&record)).unwrap();
+    let send_id = alice.send_text(&group_id, "refused once");
+    assert!(
+        reached(&world, &send_id).contains(&bob.account),
+        "pairwise to Bob"
+    );
+    deliver_all(&mut [&mut alice, &mut bob, &mut carol, &mut dave]);
+    assert!(bob
+        .group_texts(&group_id)
+        .contains(&"refused once".to_string()));
+    // Bob answered the request with his next message's hand-out.
+    bob.send_text(&group_id, "here it is");
+    deliver_all(&mut [&mut alice, &mut bob, &mut carol, &mut dave]);
+    let held = held_by(&alice, &group_id, &bob).expect("asked for and given again");
+    assert!(world.group_capabilities.borrow()[&bob.account].contains(&capability_hash(&held)));
+    let (multi, batches) = (world.multi_requests.get(), world.batches.get());
+    alice.send_text(&group_id, "back on the route");
+    assert_eq!(world.multi_requests.get() - multi, 1);
+    assert_eq!(world.batches.get() - batches, 0);
+}
+
+/// A destination that doesn't answer, or a request too large: the copies go
+/// pairwise in the same send; a spent budget makes them wait.
+#[test]
+fn group_multi_unavailable_or_too_large_goes_pairwise_and_a_budget_waits() {
+    use crate::transport::MultiSendOutcome;
+    let world = World::new();
+    let (mut alice, mut bob, mut carol, mut dave, group_id) = exchanged_group(&world);
+    for answer in [
+        MultiSendOutcome::PeerUnavailable,
+        MultiSendOutcome::TooLarge,
+    ] {
+        world.multi_answers.borrow_mut().push_back(answer);
+        let send_id = alice.send_text(&group_id, "still arrives");
+        assert_eq!(reached(&world, &send_id).len(), 3, "pairwise to all three");
+    }
+    deliver_all(&mut [&mut alice, &mut bob, &mut carol, &mut dave]);
+    world
+        .multi_answers
+        .borrow_mut()
+        .push_back(MultiSendOutcome::RateLimited);
+    let send_id = uuid::Uuid::new_v4().to_string();
+    let seq = block_on(alice.engine.session().next_sent_seq()).unwrap();
+    let content = ChatContent::text_with_id(
+        &send_id,
+        crate::clock::rfc3339(crate::clock::unix_millis()),
+        seq,
+        "later",
+    );
+    let summary = block_on(alice.engine.send_group_message(
+        &group_id,
+        &send_id,
+        content,
+        &mut rng(),
+    ))
+    .unwrap();
+    assert_eq!(summary.pending, 3, "the three wait for the budget");
+}
+
+/// A member's device the sender key hasn't reached (one the account gained
+/// since): the shared copy would be unreadable there, so its copy goes
+/// pairwise and names the member, and it finds the group again.
+#[test]
+fn group_multi_a_members_new_device_gets_a_pairwise_copy_naming_the_member() {
+    let world = World::new();
+    let (mut alice, bob, mut carol, mut dave, group_id) = exchanged_group(&world);
+    let mut bob2 = bob_replaced_before_his_list_write(&world, bob);
+    let multi = world.multi_requests.get();
+    alice.send_text(&group_id, "to the new device");
+    assert!(
+        world.multi_requests.get() > multi,
+        "the others on the route"
+    );
+    deliver_all(&mut [&mut alice, &mut bob2, &mut carol, &mut dave]);
+    assert_eq!(bob2.status(&group_id), GroupStatus::Member);
+    assert!(bob2
+        .group_texts(&group_id)
+        .contains(&"to the new device".to_string()));
 }
 
 // ----- sealed batches (#244) -----

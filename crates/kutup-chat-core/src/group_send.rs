@@ -750,7 +750,8 @@ impl Engine {
         let (mut again, mut book_news) = if multi.is_empty() {
             (Vec::new(), Vec::new())
         } else {
-            self.deliver_multi(entry, &multi, targets, now, rng).await
+            self.deliver_multi(entry, &multi, targets, content, now, rng)
+                .await
         };
         let mut sends = Vec::with_capacity(retry.len());
         let mut places = Vec::with_capacity(retry.len());
@@ -878,12 +879,16 @@ impl Engine {
     /// next round: a member whose capability was refused (asked for its
     /// current one), one over its budget (later), a destination that didn't
     /// answer (`503`) or a request too large. A device set that moved on
-    /// (`409`, `410`) is fetched again and the leg tried again.
+    /// (`409`, `410`) is fetched again and the leg tried again. A member
+    /// device the sender key hasn't reached (one the account gained since
+    /// the distribution) can't read a shared copy: that leg goes on as an
+    /// ordinary one, the new device's copy pairwise and naming the member.
     async fn deliver_multi<R: Rng + CryptoRng>(
         &mut self,
         entry: &mut GroupOutboxEntry,
         multi: &[usize],
         targets: &BTreeMap<String, MemberTarget>,
+        content: &ChatContent,
         now: i64,
         rng: &mut R,
     ) -> (Vec<usize>, Vec<BookNews>) {
@@ -921,6 +926,9 @@ impl Engine {
         // which a shared multi-recipient copy can't.
         let mut sealed_for: BTreeMap<usize, Vec<DevicePreKeyBundle>> = BTreeMap::new();
         let mut moved_on: Vec<usize> = Vec::new();
+        // Legs with a device the sender key hasn't reached, with the devices
+        // it has.
+        let mut uncovered: Vec<(usize, Vec<DevicePreKeyBundle>)> = Vec::new();
         for &index in multi {
             let account = entry.legs[index].account.clone();
             match (
@@ -954,6 +962,24 @@ impl Engine {
                     .await
                 {
                     Ok(bundles) if !bundles.is_empty() => {
+                        let reached = |bundle: &DevicePreKeyBundle| {
+                            record.sender_book.as_ref().is_some_and(|book| {
+                                book.missing(
+                                    &[BookDevice {
+                                        account: account.clone(),
+                                        device_id: bundle.device_id,
+                                        registration_id: bundle.registration_id,
+                                    }],
+                                    now,
+                                )
+                                .is_empty()
+                            })
+                        };
+                        if !bundles.iter().all(reached) {
+                            let covered = bundles.into_iter().filter(reached).collect();
+                            uncovered.push((index, covered));
+                            continue;
+                        }
                         capabilities.insert(parsed.account_id.clone(), STANDARD.encode(capability));
                         entry.legs[index].devices =
                             bundles.iter().map(|bundle| bundle.device_id).collect();
@@ -1069,6 +1095,46 @@ impl Engine {
                         wait(&mut entry.legs[index], now);
                     }
                 }
+            }
+        }
+        for (index, covered) in uncovered {
+            let account = entry.legs[index].account.clone();
+            let Some(target) = targets.get(&account) else {
+                wait(&mut entry.legs[index], now);
+                continue;
+            };
+            let sealed = if covered.is_empty() {
+                Ok(Vec::new())
+            } else {
+                self.session
+                    .seal_group_message(
+                        &account,
+                        &covered,
+                        &certificate,
+                        &group_bytes,
+                        &message,
+                        hint,
+                        rng,
+                    )
+                    .await
+                    .map(|sealed| self.sealed_envelopes(sealed))
+            };
+            let amended = match sealed {
+                Ok(envelopes) => {
+                    self.amend_leg(&account, target, envelopes, content, rng)
+                        .await
+                }
+                Err(error) => Err(error),
+            };
+            match amended {
+                Ok((devices, envelopes)) => {
+                    let leg = &mut entry.legs[index];
+                    leg.devices = devices;
+                    leg.envelopes = envelopes;
+                    leg.multi = false;
+                    again.push(index);
+                }
+                Err(_) => wait(&mut entry.legs[index], now),
             }
         }
         for index in moved_on {

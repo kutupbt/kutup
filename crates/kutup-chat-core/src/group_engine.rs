@@ -151,13 +151,31 @@ pub(crate) fn accepted_body(response: GroupResponseV1) -> Result<Vec<u8>> {
 
 impl Engine {
     pub(crate) async fn save_group(&mut self, record: &GroupRecordV1) -> Result<()> {
+        // A group this account stops being in whose capability it published
+        // (it left, was removed, the group ended): the capability comes off
+        // its server, so what the others held reaches it no more.
+        let ended = record.status != GroupStatus::Member
+            && record.delivery.is_some()
+            && self
+                .session
+                .db()
+                .load_group(&record.group_id)
+                .await?
+                .is_some_and(|stored| stored.status == GroupStatus::Member);
         let mut pending = Pending::default();
         pending
             .groups
             .insert(record.group_id.clone(), record.clone());
         // Who is a member is looked at again when the state's head moves
         // (`group_membership`).
-        self.session.db().apply(&pending).await
+        self.session.db().apply(&pending).await?;
+        if ended {
+            self.group_capabilities_due = true;
+            // Best effort: it is tried again with the next capability
+            // change.
+            let _ = self.publish_group_capabilities().await;
+        }
+        Ok(())
     }
 
     pub(crate) async fn load_group_record(&self, group_id: &str) -> Result<GroupRecordV1> {
