@@ -56,17 +56,29 @@ async fn deliver(state: &AppState, user: Uuid, subject: &str, body: &str) -> any
     let Some(address) = address else {
         return Ok(());
     };
-    let recipient = super::resolve(state, &address)
+    deliver_to(state, &address, subject, body).await
+}
+
+/// Delivers a notice to the Kutup address `address` (on this server), as
+/// mail from `postmaster@` into its owner's inbox.
+pub async fn deliver_to(
+    state: &AppState,
+    address: &str,
+    subject: &str,
+    body: &str,
+) -> anyhow::Result<()> {
+    let recipient = super::resolve(state, address)
         .await
         .map_err(|reply| anyhow::anyhow!("{} {}", reply.code, reply.text))?;
     let server = &state.config.chat_server_name;
     let date =
         time::OffsetDateTime::now_utc().format(&time::format_description::well_known::Rfc2822)?;
     let raw = format!(
-        "From: {server} <postmaster@{server}>\r\nTo: <{address}>\r\nSubject: {subject}\r\n\
+        "From: {server} <postmaster@{server}>\r\nTo: <{address}>\r\nSubject: {}\r\n\
          Date: {date}\r\nMessage-ID: <{}@{server}>\r\nMIME-Version: 1.0\r\n\
          Content-Type: text/plain; charset=utf-8\r\nContent-Transfer-Encoding: 8bit\r\n\
          Auto-Submitted: auto-generated\r\n\r\n{body}",
+        super::auto_reply::header_text(subject),
         Uuid::new_v4().simple()
     );
     let reply = super::store(state, &recipient, raw.as_bytes()).await;

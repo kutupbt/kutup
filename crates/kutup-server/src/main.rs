@@ -1061,8 +1061,12 @@ fn build_router(state: AppState) -> Router {
             post(handlers::mail_forwardings::external),
         )
         .route(
-            "/api/mail/forwardings/external/accept",
-            post(handlers::mail_forwardings::external_accept),
+            "/api/mail/forwardings/:id/code",
+            post(handlers::mail_forwardings::send_code),
+        )
+        .route(
+            "/api/mail/forwardings/:id/verify",
+            post(handlers::mail_forwardings::verify),
         )
         .route(
             "/api/mail/forwardings/external/decline",

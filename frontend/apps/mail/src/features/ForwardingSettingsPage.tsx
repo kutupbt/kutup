@@ -3,6 +3,7 @@ import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 import {
+  awaitsCode,
   forwardeeActions,
   forwarderActions,
   useAcceptForwarding,
@@ -20,6 +21,7 @@ import { ConfirmDestructive } from '@kutup/ui/components/confirm-destructive'
 import { PageBody, PageHeader } from '@kutup/ui/components/page'
 import { EmptyState, LoadingPanel } from '@kutup/ui/components/states'
 import { Tabs, TabsList, TabsTrigger } from '@kutup/ui/components/tabs'
+import { ForwardingCodeDialog } from './ForwardingCodeDialog'
 import { ForwardingDialog } from './ForwardingDialog'
 import { describeForwarding, forwardingErrorMessage } from './forwardingText'
 
@@ -42,6 +44,7 @@ export function ForwardingSettingsPage() {
   const addresses = useOwnAddresses()
   const [tab, setTab] = useState<'outgoing' | 'incoming'>('outgoing')
   const [editing, setEditing] = useState<MailForwarding | 'new' | null>(null)
+  const [verifying, setVerifying] = useState<MailForwarding | null>(null)
 
   if (forwardings.isPending || addresses.isPending) return <LoadingPanel label={t('common.loading')} />
   if (forwardings.isError || addresses.isError) {
@@ -51,6 +54,8 @@ export function ForwardingSettingsPage() {
   const current = addresses.data.find((address) => address.state === 'active')
   const offFor = addresses.data.filter((address) => address.state === 'active' && encryptionOff(address))
   const list = forwardings.data[tab]
+  // Set up before verification existed, or asked again: paused until their code is entered.
+  const waiting = forwardings.data.outgoing.filter((forwarding) => awaitsCode(forwarding) && forwarding.state !== 'pending')
 
   return (
     <PageBody>
@@ -71,6 +76,11 @@ export function ForwardingSettingsPage() {
           {t('forwarding.encryptionOff', { address: address.address })}
         </Alert>
       ))}
+      {waiting.length > 0 ? (
+        <Alert variant="warn" data-testid="forwarding-unverified">
+          {t('forwarding.code.waiting', { count: waiting.length })}
+        </Alert>
+      ) : null}
       <Tabs value={tab} onValueChange={(value) => setTab(value as typeof tab)}>
         <TabsList>
           <TabsTrigger value="outgoing">{t('forwarding.fromMe')}</TabsTrigger>
@@ -86,7 +96,13 @@ export function ForwardingSettingsPage() {
         <ul className="rounded-lg border border-border" data-testid={`forwarding-list-${tab}`}>
           {list.map((forwarding) =>
             tab === 'outgoing' ? (
-              <OutgoingRow key={forwarding.id} forwarding={forwarding} from={current} onEdit={() => setEditing(forwarding)} />
+              <OutgoingRow
+                key={forwarding.id}
+                forwarding={forwarding}
+                from={current}
+                onEdit={() => setEditing(forwarding)}
+                onVerify={() => setVerifying(forwarding)}
+              />
             ) : (
               <IncomingRow key={forwarding.id} forwarding={forwarding} addresses={addresses.data} />
             ),
@@ -94,14 +110,35 @@ export function ForwardingSettingsPage() {
         </ul>
       )}
       {editing && current ? (
-        <ForwardingDialog from={current} forwarding={editing === 'new' ? undefined : editing} onClose={() => setEditing(null)} />
+        <ForwardingDialog
+          from={current}
+          forwarding={editing === 'new' ? undefined : editing}
+          onClose={(made) => {
+            setEditing(null)
+            if (made) setVerifying(made)
+          }}
+        />
       ) : null}
+      {verifying ? <ForwardingCodeDialog forwarding={verifying} onClose={() => setVerifying(null)} /> : null}
     </PageBody>
   )
 }
 
-function Row({ forwarding, from, to, children }: { forwarding: MailForwarding; from: string; to: string; children: React.ReactNode }) {
+function Row({
+  forwarding,
+  from,
+  to,
+  outgoing,
+  children,
+}: {
+  forwarding: MailForwarding
+  from: string
+  to: string
+  outgoing?: boolean
+  children: React.ReactNode
+}) {
   const { t } = useTranslation()
+  const unverified = outgoing && awaitsCode(forwarding)
   return (
     <li className="flex flex-wrap items-start gap-3 border-b border-border px-3 py-3 last:border-b-0" data-testid="forwarding-row" data-state={forwarding.state}>
       <Forward className="mt-0.5 size-4 shrink-0 text-muted-foreground" aria-hidden />
@@ -110,7 +147,11 @@ function Row({ forwarding, from, to, children }: { forwarding: MailForwarding; f
           <span className="truncate">{from}</span>
           <ArrowRight className="size-3.5 text-muted-foreground" aria-label={t('forwarding.to')} />
           <span className="truncate">{to}</span>
-          <Badge variant={STATE_BADGE[forwarding.state]}>{t(`forwarding.state.${forwarding.state}`)}</Badge>
+          {unverified ? (
+            <Badge variant="warn">{t('forwarding.state.unverified')}</Badge>
+          ) : (
+            <Badge variant={STATE_BADGE[forwarding.state]}>{t(`forwarding.state.${forwarding.state}`)}</Badge>
+          )}
           <Badge variant={forwarding.kind === 'end_to_end' ? 'ok' : 'warn'}>{t(`forwarding.kind.${forwarding.kind}`)}</Badge>
         </p>
         <p className="text-xs text-muted-foreground">{describeForwarding(forwarding, t)}</p>
@@ -122,7 +163,17 @@ function Row({ forwarding, from, to, children }: { forwarding: MailForwarding; f
   )
 }
 
-function OutgoingRow({ forwarding, from, onEdit }: { forwarding: MailForwarding; from: CheckedAddress | undefined; onEdit: () => void }) {
+function OutgoingRow({
+  forwarding,
+  from,
+  onEdit,
+  onVerify,
+}: {
+  forwarding: MailForwarding
+  from: CheckedAddress | undefined
+  onEdit: () => void
+  onVerify: () => void
+}) {
   const { t } = useTranslation()
   const action = useForwardingAction()
   const renew = useRenewForwarding()
@@ -134,9 +185,13 @@ function OutgoingRow({ forwarding, from, onEdit }: { forwarding: MailForwarding;
     )
   const busy = action.isPending || renew.isPending
   return (
-    <Row forwarding={forwarding} from={forwarding.forwarderAddress} to={forwarding.forwardeeEmail}>
+    <Row forwarding={forwarding} from={forwarding.forwarderAddress} to={forwarding.forwardeeEmail} outgoing>
       {forwarderActions(forwarding).map((kind) =>
-        kind === 'edit' ? (
+        kind === 'verify' ? (
+          <Button key={kind} size="sm" onClick={onVerify} disabled={busy} data-testid="forwarding-verify">
+            {t('forwarding.code.enter')}
+          </Button>
+        ) : kind === 'edit' ? (
           <Button key={kind} variant="outline" size="sm" onClick={onEdit} disabled={busy}>
             {t('forwarding.edit')}
           </Button>

@@ -1291,7 +1291,13 @@
         "forwarding_outside": "Dışarıya yönlendirilen iletiler",
         "forwarding_outside_account": "Dışarıya yönlendirilen iletiler, hesap başına",
         "pass_pin_attempts": "Oturum kapanmadan önceki yanlış Pass PIN'leri",
-        "calendar_writes": "Takvim değişiklikleri"
+        "calendar_writes": "Takvim değişiklikleri",
+        "forwarding_code_minutes": "Yönlendirme kodunun ömrü",
+        "forwarding_code_attempts": "Yanlış yönlendirme kodları",
+        "forwarding_code_resends": "Gönderilen yönlendirme kodları",
+        "forwarding_codes_per_destination": "Hedef başına kod",
+        "forwarding_unverified_pending": "Kod bekleyen yönlendirmeler",
+        "forwarding_unverified_minutes": "Doğrulanmamış yönlendirmenin ömrü"
       },
       "accountTitle": "Hız sınırları",
       "accountHint": "Hesap başına sayılan sınırlarda bu hesabın kendi değerleri. Kendi değeri yoksa hesap sunucunun değerini alır.",
@@ -1360,8 +1366,8 @@
         "mail_images_server_at_once": "Sunucunun herkes için aynı anda aldığı uzak görseller.",
         "forwarding_confirmations": "Herkese açık yönlendirme onay sayfasına istekler.",
         "forwardings_created": "Bir hesabın oluşturduğu yönlendirmeler.",
-        "forwarding_confirmations_sent": "Bir hesabın tüm yönlendirmeleriyle yol açtığı onay e-postaları.",
-        "forwarding_invites": "Bir dış yönlendirmenin gönderdiği onay e-postaları.",
+        "forwarding_confirmations_sent": "Bir hesabın tüm yönlendirmeleriyle yol açtığı doğrulama kodu e-postaları.",
+        "forwarding_invites": "Bir yönlendirmenin bir günde gönderdiği doğrulama kodları.",
         "forwarding_bounces": "Bir dış yönlendirmeyi duraklatan geri dönmeler.",
         "forwarding_outside": "Bir yönlendirmenin dışarıya yeniden gönderdiği iletiler.",
         "forwarding_outside_account": "Bir hesabın yönlendirmelerinin dışarıya yeniden gönderdiği iletiler.",
@@ -1379,7 +1385,13 @@
         "rename_announces": "Bir sunucudan alınan ad değişikliği duyuruları.",
         "collab_device_announces": "Başka bir sunucudan bir paylaşım için cihaz duyuruları.",
         "admin": "Yönetim API istekleri: bir betik için duvar.",
-        "calendar_writes": "Takvim değişiklikleri: oluşturulan veya değiştirilen takvimler ve etkinlik eşitlemeleri."
+        "calendar_writes": "Takvim değişiklikleri: oluşturulan veya değiştirilen takvimler ve etkinlik eşitlemeleri.",
+        "forwarding_code_minutes": "Bir yönlendirmenin doğrulama kodunun ne kadar geçerli olduğu.",
+        "forwarding_code_attempts": "Kod geçersiz olup yenisi gerekmeden önceki yanlış doğrulama kodları.",
+        "forwarding_code_resends": "Bir yönlendirmenin bir dakikada gönderebileceği doğrulama kodları.",
+        "forwarding_codes_per_destination": "Bir hedef adresin tüm hesaplardan bir günde aldığı doğrulama kodları.",
+        "forwarding_unverified_pending": "Bir hesabın aynı anda kodunu bekleyen yönlendirmeleri.",
+        "forwarding_unverified_minutes": "Doğrulanmamış bir yönlendirmenin son kodundan ne kadar sonra düştüğü."
       },
       "countsBytes": "{{per}} başına bayt, {{window}}",
       "countsAtOnce": "Aynı anda, {{per}} başına",
@@ -1396,15 +1408,11 @@
   "emailForwarding": {
     "title": "E-posta yönlendirme",
     "request": "{{from}}, e-postalarını {{to}} adresine yönlendirmek istiyor.",
-    "notEncrypted": "Yönlendirilen e-postalar size gelirken uçtan uca şifreli değildir. Reddedebilirsiniz; {{from}} de yönlendirmeyi istediği zaman durdurabilir.",
-    "accept": "Kabul et",
-    "decline": "Reddet",
-    "accepted": "Yönlendirme kabul edildi. {{from}} adresinden yönlendirilen e-postaları alacaksınız.",
+    "notEncrypted": "Yönlendirilen e-postalar size gelirken uçtan uca şifreli değildir. Size gönderilen kod girilmedikçe hiçbir şey yönlendirilmez. Yönlendirmeyi burada istediğiniz zaman durdurabilirsiniz.",
+    "decline": "Yönlendirmeyi durdur",
     "declined": "Yönlendirme reddedildi. {{from}} adresinden yönlendirilen e-postaları almayacaksınız.",
-    "alreadyAnswered": "Bu yönlendirme zaten yanıtlandı.",
     "alreadyDeclined": "Bu yönlendirme reddedildi.",
-    "invalid": "Bu bağlantı geçerli değil ya da zaten kullanıldı.",
-    "expired": "Bu bağlantının süresi doldu. Yenisi e-postayla size gönderiliyor.",
+    "invalid": "Bu bağlantı geçerli değil ya da yönlendirme zaten durduruldu.",
     "rateLimited": "Çok fazla deneme. Bir dakika sonra yeniden deneyin."
   }
 }
