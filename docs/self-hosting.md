@@ -1218,8 +1218,11 @@ not a requirement.
 Two differences between stores are handled by the server, so no client has
 to know which one is behind it: resumable uploads are stored as equal-sized
 parts (Cloudflare R2 refuses parts of different lengths), and objects are
-deleted by version only where the store supports that. Checked with
-`storage-check` against SeaweedFS and Cloudflare R2.
+read and deleted by version only where the store supports that (R2 returns a
+version id for every upload but refuses to read or delete by it, so the
+server reads and deletes those objects by key, which it writes only once).
+`storage-check` reads back by version and says which way the store goes.
+Checked with `storage-check` against SeaweedFS and Cloudflare R2.
 
 To run on a store you already have (Cloudflare R2, Backblaze B2, Hetzner
 Object Storage, MinIO, AWS S3, …):

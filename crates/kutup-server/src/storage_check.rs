@@ -71,11 +71,24 @@ async fn version_ids(storage: &StorageService, key: &str) -> Result<Option<Strin
         read(storage, key).await? == bytes,
         "read back different bytes"
     );
+    // How mail and held sends are read: by the version their upload
+    // returned where the store reads by version, otherwise by key.
+    let (body, _) = storage.get_stored(key, &id).await?;
+    ensure!(
+        body.collect().await.context("read body")?.to_vec() == bytes,
+        "read back different bytes by the upload's version"
+    );
     // How thumbnails are removed: by the version their upload returned
     // where the store can, otherwise as a plain object.
     storage.delete_stored(key, &id).await?;
     gone(storage, key).await?;
-    Ok(None)
+    Ok(Some(if id.is_empty() {
+        "no version ids: reads and deletes by key".to_owned()
+    } else if storage.reads_versions() {
+        "reads by version id".to_owned()
+    } else {
+        "returns version ids but doesn't read by them (as R2): reads by key".to_owned()
+    }))
 }
 
 async fn listing(
