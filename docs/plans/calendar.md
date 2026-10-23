@@ -658,9 +658,12 @@ language the app put in its registration URL. Its tag is the tab's, so a
 push and a tab's notification for one alarm are one notification; and when
 a calendar window is open, the SW shows nothing (the tab fires it). A click
 focuses an open Calendar or opens `/?event=<id>`. The `account` tag is
-checked against the account the app last registered (its own HMAC of the
-subscription secret and account id, kept by the SW): another account's push
-in this browser opens Calendar's start page, not an event.
+checked against the account that registered the worker (its id in the
+registration URL): the worker computes the tag from its subscription's own
+secret (`getKey('auth')`), so nothing account-identifying is stored in
+clear; another account's push in this browser opens Calendar's start page,
+not an event. A reminder the open app fires goes through the worker's
+registration too, so a later push for it finds it and stays quiet.
 
 **3. Settings (Proton's).**
 - Each calendar's default reminders, timed and all-day (Proton's
