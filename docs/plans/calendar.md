@@ -651,19 +651,24 @@ focuses the tab and opens the event.
 
 **2. Firing with the app closed (Kutup's push).** The calendar app's own
 service worker (`apps/calendar/public/push-sw.js`, Chat's shape) takes the
-reminder push. It holds no keys: the payload (`{ eventId, startUtc, allDay,
-account }`) gives only when, so it shows "Event at 09:30" (or "Event today",
-"Event on Friday, 30 October" for all-day), formatted with the zone and
-language the app put in its registration URL. Its tag is the tab's, so a
-push and a tab's notification for one alarm are one notification; and when
-a calendar window is open, the SW shows nothing (the tab fires it). A click
-focuses an open Calendar or opens `/?event=<id>`. The `account` tag is
-checked against the account that registered the worker (its id in the
-registration URL): the worker computes the tag from its subscription's own
-secret (`getKey('auth')`), so nothing account-identifying is stored in
-clear; another account's push in this browser opens Calendar's start page,
-not an event. A reminder the open app fires goes through the worker's
-registration too, so a later push for it finds it and stays quiet.
+reminder push. It holds no keys: the payload (`{ eventId, startUtc, fireAt,
+allDay, account }`) gives only when, so it shows "Event at 09:30" (or "Event
+today", "Event on Friday, 30 October" for all-day), formatted with the zone
+and language the app put in its registration URL. Its tag is the tab's, per
+reminder (`<event>:<start>:<fire time>`, as Proton tags per alarm), so a
+push and a tab's notification for one reminder are one notification. The
+open app shows its reminders through the worker's registration, so a push
+can find them. A browser wants every push to show a notification
+(`userVisibleOnly`): with a Calendar window open, a push for one the tab
+showed shows that one again, silently, and one the tab hasn't shown yet
+comes silently with its time only, for the tab's to replace by its title.
+The push's ids and times are checked (an event id is a UUID, the times
+parse). A click focuses an open Calendar or opens `/?event=<id>`, only ever
+Calendar's own pages. The `account` tag is checked against the account that
+registered the worker (its id in the registration URL): the worker computes
+the tag from its subscription's own secret (`getKey('auth')`), so nothing
+account-identifying is stored in clear; another account's push in this
+browser opens Calendar's start page, not an event.
 
 **3. Settings (Proton's).**
 - Each calendar's default reminders, timed and all-day (Proton's
@@ -683,8 +688,10 @@ registration too, so a later push for it finds it and stays quiet.
   is saved. Kutup's addition: "Remind me when Calendar is closed" in the
   settings (the push subscription, with the browser's keys), on by default
   once permission is given.
-- The calendar's zone in the settings is the account's
-  (`PUT /api/calendar/settings`), so all-day reminders fire in it.
+- The calendar's zone is the account's (`PUT /api/calendar/settings`,
+  Proton's primary zone), so all-day reminders fire in it: a device shows
+  it unless it chose its own in the settings, which is also the only time a
+  device writes it (an account without one takes the first device's).
 
 **4. Server changes:** the caller's `reminders` in the event view; `allDay`
 in the push payload; one `now` per batch from the database (done in the
