@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { asSender, mailAccountOf, NoAddressKey, UnverifiedOwnKeys, type CheckedOwnAddress } from './api'
+import { asSender, mailAccountOf, NoAddressKey, onServer, UnverifiedOwnKeys, type CheckedOwnAddress } from './api'
 
 // As `kutup_crypto::names::fold_address` (whose vectors are Rust's): the
 // local part without `.`, `_` and `-`, all lowercase.
@@ -7,7 +7,7 @@ const fold = (address: string) => {
   const at = address.lastIndexOf('@')
   return at > 0 ? `${address.slice(0, at).replace(/[._-]/g, '').toLowerCase()}@${address.slice(at + 1).toLowerCase()}` : null
 }
-const self = { server: 'kutup.test', accountId: '3f1c9a52-6b7e-4f0e-9d1a-2c3b4d5e6f70' }
+const self = { server: 'kutup.test', accountId: '3f1c9a52-6b7e-4f0e-9d1a-2c3b4d5e6f70', domain: 'kutup.test' }
 const session = {
   masterKey: new Uint8Array(32),
   privateKey: new Uint8Array(32),
@@ -143,6 +143,23 @@ describe('the account\'s addresses (Proton\'s Identity and addresses)', () => {
     expect(account.senders[1].name).toBe('Ada')
   })
 
+  it("judges who is a Kutup user by this server's domain, never by the From's", () => {
+    // A custom default, and writing as another custom address.
+    const account = mailAccountOf([work, own], null, session, fold, { ...self, domain: 'KUTUP.test' })
+    expect(account.serverDomain).toBe('kutup.test')
+    const asWork = asSender(mailAccountOf([own, work], null, session, fold, self), account.senders[0])
+    expect(asWork.address).toBe('ada@work.test')
+    for (const writing of [account, asWork]) {
+      expect(writing.serverDomain).toBe('kutup.test')
+      expect(onServer(writing, 'bob@kutup.test')).toBe(true)
+      expect(onServer(writing, ' Bob@KUTUP.test')).toBe(true)
+      // The From's domain is not this server's: its people are found by
+      // their keys (a custom domain this server holds), not by the domain.
+      expect(onServer(writing, 'bob@work.test')).toBe(false)
+      expect(onServer(writing, 'bob@notkutup.test')).toBe(false)
+    }
+  })
+
   it('skips a disabled default and keeps every key for reading', () => {
     const account = mailAccountOf([{ ...work, disabled: true }, own], null, session, fold, self)
     expect(account.addressId).toBe('own')
@@ -154,7 +171,7 @@ describe('the account\'s addresses (Proton\'s Identity and addresses)', () => {
     const asOwn = asSender(account, account.senders[1])
     expect(asOwn.addressId).toBe('own')
     expect(asOwn.address).toBe('ada@kutup.test')
-    expect(asOwn.domain).toBe('kutup.test')
+    expect(asOwn.serverDomain).toBe('kutup.test')
     expect(asOwn.key.fingerprint).toBe('fp-own')
     expect(asOwn.name).toBe('Ada L')
   })

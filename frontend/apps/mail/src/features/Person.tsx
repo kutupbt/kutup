@@ -33,7 +33,7 @@ export function PersonAvatar({ mailbox, contact, size = 32 }: { mailbox: Mailbox
  */
 function useKutupAccount(address: string, enabled: boolean) {
   const account = useMailAccount()
-  const domain = account.data?.domain
+  const domain = account.data?.serverDomain
   const local = !!domain && address.toLowerCase().endsWith(`@${domain.toLowerCase()}`)
   return useQuery({
     queryKey: ['mail', 'kutup-account', address.toLowerCase()],

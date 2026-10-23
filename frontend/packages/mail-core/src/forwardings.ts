@@ -128,7 +128,7 @@ export class ForwardeeRefused extends Error {
  * one whose forwarding turns end-to-end encryption off.
  */
 export async function forwardingKindOf(
-  account: Pick<MailAccount, 'domain' | 'isOwnAddress'>,
+  account: Pick<MailAccount, 'serverDomain' | 'isOwnAddress' | 'groupHolder'>,
   email: string,
 ): Promise<{ kind: 'end_to_end'; keys: AddressKeys } | { kind: 'outside' }> {
   if (account.isOwnAddress(email)) throw new ForwardeeRefused('ownAddress')
@@ -137,7 +137,7 @@ export async function forwardingKindOf(
     keys = await addressKeys(email)
   } catch (error) {
     if (error instanceof NoKutupAddress) {
-      if (domainOf(email) === account.domain.toLowerCase()) throw new ForwardeeRefused('unknown')
+      if (domainOf(email) === account.serverDomain) throw new ForwardeeRefused('unknown')
       return { kind: 'outside' }
     }
     if (error instanceof GroupAddress) throw new ForwardeeRefused('group')
@@ -145,7 +145,9 @@ export async function forwardingKindOf(
     throw new ForwardeeRefused('unverified')
   }
   if (keys.group) throw new ForwardeeRefused('group')
-  if (keys.accountRef?.server !== account.domain.toLowerCase()) return { kind: 'outside' }
+  // A person on this server: their account names this server, as the
+  // account's own does (`/user/me`).
+  if (keys.accountRef?.server !== account.groupHolder.account.server) return { kind: 'outside' }
   return { kind: 'end_to_end', keys }
 }
 
