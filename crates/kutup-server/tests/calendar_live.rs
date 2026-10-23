@@ -160,6 +160,22 @@ fn sync(c: &Client, base: &str, owner: &Owner, calendar: &str, changes: Value) -
         .clone()
 }
 
+/// Deletes the owner's calendars (their events with them): nothing stays
+/// charged after a test (the gate checks every account comes back to zero).
+fn drop_calendars(c: &Client, base: &str, owner: &Owner, ids: &[&str]) {
+    for id in ids {
+        let r = bearer(
+            c.delete(format!("{base}/api/calendar/calendars/{id}")),
+            &owner.user.token,
+        )
+        .json(&json!({}))
+        .send()
+        .unwrap();
+        assert_eq!(r.status(), StatusCode::NO_CONTENT);
+    }
+    assert_eq!(storage(c, base, &owner.user), 0);
+}
+
 fn storage(c: &Client, base: &str, user: &User) -> i64 {
     let usage: Value = bearer(c.get(format!("{base}/api/user/storage")), &user.token)
         .send()
@@ -1016,6 +1032,7 @@ fn repeating_events() {
     );
     assert!(window("2026-12-02T06:00:00Z", "2026-12-02T07:00:00Z")
         .contains(&"zero@kutup.test".to_owned()));
+    drop_calendars(&c, &base, &ada, &[&id, &other]);
 }
 
 #[test]
