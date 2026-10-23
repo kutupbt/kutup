@@ -357,10 +357,18 @@ function ComposerPanel({ base, target }: { base: MailAccount; target: ComposerTa
   // Kutup users: on this server's domain, or on a custom domain it holds
   // (their key lookup says so). Before the server's mail setup is checked,
   // only Kutup addresses are reachable.
-  const elsewhere = useKutupElsewhere([...to, ...cc, ...bcc].filter((m) => isAddress(m.address) && !onServer(account, m.address)).map((m) => m.address))
+  const elsewhere = useKutupElsewhere(
+    [...to, ...cc, ...bcc].filter((m) => isAddress(m.address) && !onServer(account, m.address)).map((m) => m.address),
+    pinned,
+  )
   const isKutup = (address: string) => onServer(account, address) || elsewhere.kutup.has(address.trim().toLowerCase())
   const outsideRecipients = [...to, ...cc, ...bcc].filter((m) => isAddress(m.address) && !isKutup(m.address))
-  const outsideBlocked = sendingStatus.data?.outsideAllowed === false && outsideRecipients.length > 0
+  // Never said while a recipient is still being looked up.
+  // Recipients still being looked up, or Contacts' trusted keys still
+  // loading: nothing is sent, and nothing said about outside sending, until
+  // both are known.
+  const lookingUp = elsewhere.pending || pinned === undefined
+  const outsideBlocked = !lookingUp && sendingStatus.data?.outsideAllowed === false && outsideRecipients.length > 0
   const [showCopies, setShowCopies] = useState(start.draft.cc.length > 0 || start.draft.bcc.length > 0)
   const [subject, setSubject] = useState(start.draft.subject)
   const [attachments, setAttachments] = useState<Attachment[]>(start.attachments)
@@ -641,6 +649,8 @@ function ComposerPanel({ base, target }: { base: MailAccount; target: ComposerTa
 
   /** Sends now (held for undo send), or at `scheduleAt` (scheduled send). */
   async function send(scheduleAt?: Date) {
+    // Every way to send (the button, Ctrl/Cmd+Enter, a send queued behind uploads) waits.
+    if (lookingUp) return
     const everyone = [...to, ...cc, ...bcc]
     if (everyone.length === 0) {
       toast.error(t('compose.noRecipients'))
@@ -678,7 +688,7 @@ function ComposerPanel({ base, target }: { base: MailAccount; target: ComposerTa
           .filter((a) => !a.cid || draft.html.includes(`cid:${a.cid}`))
           .map((a) => (a.part ? Promise.resolve(a.part) : draftAttachmentPart(account, draftId.current!, a.id!))),
       )
-      const outcome = await sendDraft(account, draft, parts, pinned ?? (() => undefined), from ? await sendAs(account, from) : undefined, { encrypt, sign, pgpScheme: mailSettings.data?.pgpScheme })
+      const outcome = await sendDraft(account, draft, parts, pinned, from ? await sendAs(account, from) : undefined, { encrypt, sign, pgpScheme: mailSettings.data?.pgpScheme })
       if (isHeld(outcome)) followHeld(outcome, draft, { fromGroup, fromAddressId: senderId }, t, refresh, scheduleAt)
       else reportSent(outcome, t, true)
       refresh()
@@ -758,7 +768,8 @@ function ComposerPanel({ base, target }: { base: MailAccount; target: ComposerTa
   // A queued send goes when the last upload is done (this render's state, so
   // the draft names every file).
   useEffect(() => {
-    if (!queued || attachments.some((a) => a.status === 'uploading')) return
+    // A send queued behind uploads goes once they are up and the recipients are known.
+    if (!queued || lookingUp || attachments.some((a) => a.status === 'uploading')) return
     setQueued(null)
     if (attachments.some((a) => a.status === 'failed')) {
       setSending(false)
@@ -767,7 +778,7 @@ function ComposerPanel({ base, target }: { base: MailAccount; target: ComposerTa
     }
     void send(queued.scheduleAt)
     // eslint-disable-next-line react-hooks/exhaustive-deps -- send reads this render's state
-  }, [queued, attachments])
+  }, [queued, attachments, lookingUp])
 
   const title = subject.trim() || t('compose.newMessage')
   return (
@@ -985,11 +996,12 @@ function ComposerPanel({ base, target }: { base: MailAccount; target: ComposerTa
           ) : null}
           <footer className="flex shrink-0 items-center gap-2 border-t border-border px-3 py-2">
             <span className="flex">
-              <Button onClick={() => void send()} disabled={sending} className="rounded-r-none">
+              {/* Send waits until every recipient is known as Kutup or outside. */}
+              <Button onClick={() => void send()} disabled={sending || lookingUp} className="rounded-r-none">
                 {sending ? <Loader2 className="animate-spin" /> : <Send />}
                 {sending ? t('compose.sending') : t('compose.send')}
               </Button>
-              <ScheduleSend disabled={sending} onSchedule={(at) => void send(at)} />
+              <ScheduleSend disabled={sending || lookingUp} onSchedule={(at) => void send(at)} />
             </span>
             <input ref={files} type="file" multiple hidden onChange={(e) => void addFiles(e.target.files).finally(() => (e.target.value = ''))} />
             {pendingImages ? (

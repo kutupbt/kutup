@@ -71,7 +71,11 @@ export function TimeGrid({ days, today, placed, scrollKey }: { days: CivilDate[]
     if (el) el.scrollTop = Math.max(0, (now / 60) * HOUR_PX - el.clientHeight / 2)
     // eslint-disable-next-line react-hooks/exhaustive-deps -- only when the view or date changes
   }, [scrollKey])
+  // An armed touch (or a pen) over the grid or the all-day row drags, never
+  // scrolls; the rest of the page scrolls as ever.
+  const dayRow = useRef<HTMLDivElement>(null)
   useEffect(() => (scroller.current ? holdTouches(scroller.current) : undefined), [])
+  useEffect(() => (dayRow.current ? holdTouches(dayRow.current) : undefined), [])
 
   /** The day column and minute of the day under a point. */
   const at = (point: Point): { day: number; minutes: number } => {
@@ -173,7 +177,8 @@ export function TimeGrid({ days, today, placed, scrollKey }: { days: CivilDate[]
         slot: Math.min(Math.max(next.slot ?? slot, 0), SLOTS - 1),
         anchor: extend ? (focus.anchor ?? slot) : null,
       }
-      keyMoved.current = true
+      // Focus follows only a key that moved it (an arrow at the edge moves nothing).
+      keyMoved.current = f.day !== focusDay || f.slot !== focus.slot
       setFocus(f)
       if (f.anchor !== null) {
         const span = keySpan(f)
@@ -243,7 +248,7 @@ export function TimeGrid({ days, today, placed, scrollKey }: { days: CivilDate[]
       <div className="sr-only" role="status" aria-live="polite" data-testid="calendar-announce">
         {said}
       </div>
-      <div className="grid border-b border-border" style={{ gridTemplateColumns: `3.5rem repeat(${days.length}, minmax(0, 1fr))` }}>
+      <div ref={dayRow} className="grid border-b border-border" style={{ gridTemplateColumns: `3.5rem repeat(${days.length}, minmax(0, 1fr))` }}>
         <div />
         {days.map((day) => (
           <div
