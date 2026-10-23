@@ -357,10 +357,14 @@ function ComposerPanel({ base, target }: { base: MailAccount; target: ComposerTa
   // Kutup users: on this server's domain, or on a custom domain it holds
   // (their key lookup says so). Before the server's mail setup is checked,
   // only Kutup addresses are reachable.
-  const elsewhere = useKutupElsewhere([...to, ...cc, ...bcc].filter((m) => isAddress(m.address) && !onServer(account, m.address)).map((m) => m.address))
+  const elsewhere = useKutupElsewhere(
+    [...to, ...cc, ...bcc].filter((m) => isAddress(m.address) && !onServer(account, m.address)).map((m) => m.address),
+    pinned,
+  )
   const isKutup = (address: string) => onServer(account, address) || elsewhere.kutup.has(address.trim().toLowerCase())
   const outsideRecipients = [...to, ...cc, ...bcc].filter((m) => isAddress(m.address) && !isKutup(m.address))
-  const outsideBlocked = sendingStatus.data?.outsideAllowed === false && outsideRecipients.length > 0
+  // Never said while a recipient is still being looked up.
+  const outsideBlocked = !elsewhere.pending && sendingStatus.data?.outsideAllowed === false && outsideRecipients.length > 0
   const [showCopies, setShowCopies] = useState(start.draft.cc.length > 0 || start.draft.bcc.length > 0)
   const [subject, setSubject] = useState(start.draft.subject)
   const [attachments, setAttachments] = useState<Attachment[]>(start.attachments)
@@ -985,11 +989,12 @@ function ComposerPanel({ base, target }: { base: MailAccount; target: ComposerTa
           ) : null}
           <footer className="flex shrink-0 items-center gap-2 border-t border-border px-3 py-2">
             <span className="flex">
-              <Button onClick={() => void send()} disabled={sending} className="rounded-r-none">
+              {/* Send waits until every recipient is known as Kutup or outside. */}
+              <Button onClick={() => void send()} disabled={sending || elsewhere.pending} className="rounded-r-none">
                 {sending ? <Loader2 className="animate-spin" /> : <Send />}
                 {sending ? t('compose.sending') : t('compose.send')}
               </Button>
-              <ScheduleSend disabled={sending} onSchedule={(at) => void send(at)} />
+              <ScheduleSend disabled={sending || elsewhere.pending} onSchedule={(at) => void send(at)} />
             </span>
             <input ref={files} type="file" multiple hidden onChange={(e) => void addFiles(e.target.files).finally(() => (e.target.value = ''))} />
             {pendingImages ? (

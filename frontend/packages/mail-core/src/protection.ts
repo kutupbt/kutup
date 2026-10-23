@@ -103,25 +103,28 @@ export async function protectionFor(address: string, domain: string, pinned: Pin
 
 /**
  * Whether an address on another domain is a Kutup user's (a custom domain
- * this server holds), as its key lookup says: a disabled one or a shared
- * mailbox is too (sending then refuses it, or goes as it does). Not one: no
- * Kutup key there; a lookup that fails is taken as outside.
+ * this server holds): only a verified lookup (its signed key list) says so.
+ * The server's bare "disabled" or "shared mailbox" answers aren't verified,
+ * so they count as outside here (sending still refuses a disabled one); a
+ * lookup that fails is outside too.
  */
 export async function isKutupElsewhere(address: string): Promise<boolean> {
   try {
     await addressKeys(address.toLowerCase())
     return true
-  } catch (error) {
-    return error instanceof AddressDisabled || error instanceof GroupAddress
+  } catch {
+    return false
   }
 }
 
 /**
  * The addresses (lowercased) of `addresses` that are Kutup users' on other
- * domains, and whether any is still being looked up.
+ * domains, and whether any is still being looked up. One whose contact
+ * trusts other keys (`pinned`) is outside: this server's word never
+ * outranks them (sending refuses it, `PinnedKeyConflict`).
  */
-export function useKutupElsewhere(addresses: string[]): { kutup: Set<string>; pending: boolean } {
-  const lower = [...new Set(addresses.map((a) => a.trim().toLowerCase()))]
+export function useKutupElsewhere(addresses: string[], pinned?: (address: string) => Pinned | undefined): { kutup: Set<string>; pending: boolean } {
+  const lower = [...new Set(addresses.map((a) => a.trim().toLowerCase()))].filter((address) => !(pinned?.(address)?.keys.length ?? 0))
   const results = useQueries({
     queries: lower.map((address) => ({
       queryKey: ['mail', 'kutup-elsewhere', address],

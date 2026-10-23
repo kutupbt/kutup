@@ -76,8 +76,11 @@ describe('protection with several trusted keys', () => {
   it('knows a Kutup user on a custom domain from an outside address, for the composer', async () => {
     kutupKeys.mockResolvedValue({ encryptionDisabled: false })
     expect(await isKutupElsewhere('Info@Customer.test')).toBe(true)
+    // The server's bare answers aren't verified: outside here.
     kutupKeys.mockRejectedValue(new keyErrors.AddressDisabled())
-    expect(await isKutupElsewhere('info@customer.test')).toBe(true)
+    expect(await isKutupElsewhere('info@customer.test')).toBe(false)
+    kutupKeys.mockRejectedValue(new keyErrors.GroupAddress())
+    expect(await isKutupElsewhere('team@customer.test')).toBe(false)
     kutupKeys.mockRejectedValue(new keyErrors.NoKutupAddress())
     expect(await isKutupElsewhere('dave@example.org')).toBe(false)
     kutupKeys.mockRejectedValue(new Error('network'))
