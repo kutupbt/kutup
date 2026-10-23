@@ -1308,7 +1308,7 @@ pub struct GroupRemovalBody {
 /// group and when it was drawn (the newest a recipient holds wins), or a
 /// request for it (`capability` absent) from a member whose copy the
 /// sender's server refused.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct GroupDeliveryBody {
     pub group_id: String,
@@ -1318,6 +1318,21 @@ pub struct GroupDeliveryBody {
     /// When the capability was drawn (unix milliseconds); 0 in a request.
     #[serde(default)]
     pub drawn_at_ms: i64,
+}
+
+/// The capability is a secret (it lets anyone send to the account on the
+/// multi-recipient route): never in a log.
+impl std::fmt::Debug for GroupDeliveryBody {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("GroupDeliveryBody")
+            .field("group_id", &self.group_id)
+            .field(
+                "capability",
+                &self.capability.as_ref().map(|_| "<redacted>"),
+            )
+            .field("drawn_at_ms", &self.drawn_at_ms)
+            .finish()
+    }
 }
 
 impl GroupDeliveryBody {
@@ -2024,6 +2039,18 @@ pub struct SentTranscriptBody {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_group_delivery_never_shows_its_capability_in_debug() {
+        let body = GroupDeliveryBody {
+            group_id: "g".into(),
+            capability: Some("c2VjcmV0LWNhcGFiaWxpdHk=".into()),
+            drawn_at_ms: 1,
+        };
+        let shown = format!("{body:?}");
+        assert!(!shown.contains("c2VjcmV0"), "{shown}");
+        assert!(shown.contains("<redacted>"), "{shown}");
+    }
 
     #[test]
     fn a_group_delivery_carries_a_capability_or_asks_for_one() {

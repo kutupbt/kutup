@@ -91,6 +91,7 @@ const SINGLETON: &str = "value";
 const LAST_CURSOR: &str = "last_cursor";
 const CONTACT_LIST_FOLLOWED: &str = "contact_list_followed";
 const PINS_DUE: &str = "pins_due";
+const GROUP_CAPABILITIES: &str = "group_capabilities";
 const LAST_SENT_SEQ: &str = "last_sent_seq";
 const PENDING_PREKEY_UPLOAD: &str = "pending_prekey_upload";
 const PREKEY_ROTATION: &str = "prekey_rotation";
@@ -531,6 +532,11 @@ impl ChatDb for IndexedDbChatDb {
         self.get::<Vec<u8>>(META, string_key(PINS_DUE)).await
     }
 
+    async fn load_group_capabilities(&self) -> Result<Option<Vec<u8>>> {
+        self.get::<Vec<u8>>(META, string_key(GROUP_CAPABILITIES))
+            .await
+    }
+
     async fn load_contact_list_followed(&self) -> Result<bool> {
         Ok(self
             .get::<bool>(META, string_key(CONTACT_LIST_FOLLOWED))
@@ -955,6 +961,9 @@ impl ChatDb for IndexedDbChatDb {
         if let Some(state) = writes.pins_due {
             operations.push(self.put(&meta, string_key(PINS_DUE), &state)?);
         }
+        if let Some(state) = writes.group_capabilities {
+            operations.push(self.put(&meta, string_key(GROUP_CAPABILITIES), &state)?);
+        }
         if let Some(followed) = writes.contact_list_followed {
             operations.push(self.put(&meta, string_key(CONTACT_LIST_FOLLOWED), &followed)?);
         }
@@ -1090,6 +1099,7 @@ struct PreparedWrites {
     last_sent_seq: Option<Vec<u8>>,
     contact_list_followed: Option<Vec<u8>>,
     pins_due: Option<Vec<u8>>,
+    group_capabilities: Option<Vec<u8>>,
 }
 
 impl PreparedWrites {
@@ -1157,6 +1167,11 @@ impl PreparedWrites {
                 .then(|| encode(&true))
                 .transpose()?,
             pins_due: pending.pins_due.as_ref().map(encode).transpose()?,
+            group_capabilities: pending
+                .group_capabilities
+                .as_ref()
+                .map(encode)
+                .transpose()?,
         })
     }
 }

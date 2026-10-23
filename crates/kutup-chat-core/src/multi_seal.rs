@@ -73,7 +73,22 @@ impl<S: IdentityKeyStore> IdentityKeyStore for NamedIdentities<'_, S> {
             .await
     }
 
+    /// The stored identity, only when the account's verified manifest still
+    /// lists it: libsignal's multi-recipient encrypt reads identities here
+    /// and never asks `is_trusted_identity`, so the check that a pairwise
+    /// send makes is made here, failing closed.
     async fn get_identity(&self, address: &ProtocolAddress) -> SignalResult<Option<IdentityKey>> {
-        self.inner.get_identity(&self.full(address)?).await
+        let full = self.full(address)?;
+        let Some(identity) = self.inner.get_identity(&full).await? else {
+            return Ok(None);
+        };
+        if !self
+            .inner
+            .is_trusted_identity(&full, &identity, Direction::Sending)
+            .await?
+        {
+            return Err(SignalProtocolError::UntrustedIdentity(full));
+        }
+        Ok(Some(identity))
     }
 }

@@ -6,22 +6,34 @@
 //! multiple of 8 so the count doesn't tell how many groups it is in), and
 //! hands it to the other members pairwise in a hidden `groupDelivery`. A
 //! member sends group messages to the account on the multi-recipient route
-//! with it; one who doesn't hold it sends pairwise. The capability is drawn
-//! again whenever a member who holds it is no longer one, so a removed
-//! member's copy stops working at once. This account's other devices learn
-//! it from the account's group list.
+//! with it; one who doesn't hold it sends pairwise. This account's other
+//! devices learn it from the account's group list.
+//!
+//! A capability is retired as soon as an account that may hold it is no
+//! longer a member (`group::settle_delivery`, run as each change is
+//! accepted, on every device of the account), and the next send draws
+//! another. What the server keeps changes only by deltas (`PUT { add, remove
+//! }`), kept in a durable ledger until the server takes them: a device that
+//! is behind never sets the whole set back to what it last saw. Only the
+//! device that drew a capability adds it; any device retires one. The
+//! dummies are one per slot, the same for as long as the account keeps
+//! them, so two published sets differ only where a real capability changed.
+
+use std::collections::{BTreeSet, VecDeque};
 
 use base64::engine::general_purpose::STANDARD;
 use base64::Engine as _;
 use rand::{CryptoRng, Rng};
+use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 use kutup_chat_proto::content::GroupDeliveryBody;
 use kutup_chat_proto::{ChatContent, SealedBatchOutcomeV1, SealedMessageSubmissionV1};
 
 use crate::clock::unix_millis;
+use crate::db::Pending;
 use crate::engine::Engine;
-use crate::error::Result;
+use crate::error::{ChatError, Result};
 use crate::group::{DeliveryBook, GroupRecordV1, GroupStatus, HeldCapability, SecretText};
 use crate::group_send::Recipient;
 use crate::transport::GroupCapabilitiesOutcome;
@@ -29,17 +41,224 @@ use crate::transport::GroupCapabilitiesOutcome;
 /// Published capability hashes are padded to a multiple of this.
 pub(crate) const CAPABILITY_BUCKET: usize = 8;
 
+/// How many retired capabilities a device remembers, so a stale copy of a
+/// record can't bring one back.
+const RETIRED_KEPT: usize = 256;
+
+/// While the server holds the account at its limit, new capabilities are
+/// offered again at most this often (removals go at once).
+pub(crate) const LIMIT_RETRY_MS: i64 = 60 * 60 * 1000;
+
 /// `count` hashes rounded up to the next bucket (at least one bucket, so no
 /// groups and a few look the same).
 pub(crate) fn padded_len(count: usize) -> usize {
     count.max(1).div_ceil(CAPABILITY_BUCKET) * CAPABILITY_BUCKET
 }
 
+/// The dummies `count` real capabilities are padded with.
+fn dummies_for(count: usize) -> usize {
+    padded_len(count) - count
+}
+
+/// A capability's published form: its SHA-256, canonical base64.
+pub(crate) fn capability_hash(capability: &[u8; 16]) -> String {
+    STANDARD.encode(Sha256::digest(capability))
+}
+
+/// The hash this account publishes for `record`'s group: its capability
+/// while it is a member.
+pub(crate) fn published_hash(record: &GroupRecordV1) -> Option<String> {
+    if record.status != GroupStatus::Member {
+        return None;
+    }
+    record
+        .delivery
+        .as_ref()
+        .and_then(DeliveryBook::bytes)
+        .map(|capability| capability_hash(&capability))
+}
+
+/// The account's group capability changes this device owes its server, and
+/// the capabilities it retired (`Pending::group_capabilities`).
+#[derive(Debug, Default, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(crate) struct CapabilityLedger {
+    #[serde(default)]
+    pub add: BTreeSet<String>,
+    #[serde(default)]
+    pub remove: BTreeSet<String>,
+    /// Retired here, newest last: never kept in a record again.
+    #[serde(default)]
+    pub retired: VecDeque<String>,
+    /// The server refused the adds as more than it takes for one account:
+    /// those groups stay on the pairwise route.
+    #[serde(default)]
+    pub limit: bool,
+    /// The count of real capabilities the published dummies pad (`None`
+    /// before this device padded any).
+    #[serde(default)]
+    pub padded_for: Option<usize>,
+}
+
+impl CapabilityLedger {
+    fn added(&mut self, hash: String) {
+        self.remove.remove(&hash);
+        self.add.insert(hash);
+    }
+
+    fn removed(&mut self, hash: String) {
+        self.add.remove(&hash);
+        self.remove.insert(hash);
+    }
+
+    fn retire(&mut self, hash: String) {
+        if !self.retired.contains(&hash) {
+            self.retired.push_back(hash.clone());
+            while self.retired.len() > RETIRED_KEPT {
+                self.retired.pop_front();
+            }
+        }
+        self.removed(hash);
+    }
+
+    pub(crate) fn is_retired(&self, hash: &str) -> bool {
+        self.retired.iter().any(|retired| retired == hash)
+    }
+
+    fn is_empty(&self) -> bool {
+        self.add.is_empty() && self.remove.is_empty()
+    }
+
+    fn bytes(&self) -> Result<Vec<u8>> {
+        serde_json::to_vec(self)
+            .map_err(|error| ChatError::Db(format!("encode group capabilities: {error}")))
+    }
+}
+
+/// The dummy in `slot`, as published.
+fn dummy_hash(keys: &crate::group::GroupAccountKeys, slot: usize) -> String {
+    let slot = u32::try_from(slot).unwrap_or(u32::MAX);
+    STANDARD.encode(keys.delivery_padding.dummy(slot))
+}
+
 impl Engine {
+    /// The ledger as stored (a fresh read: another tab's engine may have
+    /// written it).
+    pub(crate) async fn capability_ledger(&self) -> Result<CapabilityLedger> {
+        match self.session.db().load_group_capabilities().await? {
+            Some(bytes) => serde_json::from_slice(&bytes)
+                .map_err(|error| ChatError::Db(format!("decode group capabilities: {error}"))),
+            None => Ok(CapabilityLedger::default()),
+        }
+    }
+
+    /// What saving `record` changes in the account's published capabilities,
+    /// staged in `pending` with the record (one write): the capability it
+    /// replaces or ends is retired, one this device drew is added, and the
+    /// padding follows the count. `record`'s capability is dropped when this
+    /// device retired it already. True when the ledger changed.
+    pub(crate) async fn stage_capability_change(
+        &mut self,
+        stored: Option<&GroupRecordV1>,
+        record: &mut GroupRecordV1,
+        pending: &mut Pending,
+    ) -> Result<bool> {
+        let old = stored.and_then(published_hash);
+        let mut ledger = self.capability_ledger().await?;
+        if published_hash(record).is_some_and(|hash| ledger.is_retired(&hash)) {
+            record.delivery = None;
+        }
+        let new = published_hash(record);
+        if old == new {
+            return Ok(false);
+        }
+        let before = self
+            .session
+            .db()
+            .list_groups()
+            .await?
+            .iter()
+            .filter(|group| published_hash(group).is_some())
+            .count();
+        let after = before - usize::from(old.is_some()) + usize::from(new.is_some());
+        if let Some(old) = old {
+            ledger.retire(old);
+        }
+        if let (Some(new), Some(book)) = (new, record.delivery.as_ref()) {
+            if book.drawn_here {
+                ledger.added(new);
+            }
+        }
+        if let Some(keys) = self.group_keys.as_ref() {
+            // Only the slots whose dummy comes or goes: a dummy sent again
+            // would tell the server it is one.
+            let from = ledger.padded_for.map_or(0, dummies_for);
+            let to = dummies_for(after);
+            for slot in to..from {
+                ledger.removed(dummy_hash(keys, slot));
+            }
+            for slot in from..to {
+                ledger.added(dummy_hash(keys, slot));
+            }
+            ledger.padded_for = Some(after);
+        }
+        pending.group_capabilities = Some(ledger.bytes()?);
+        Ok(true)
+    }
+
+    /// Sends the server what the ledger owes it, best effort: what it
+    /// doesn't take now waits for the next change, send or list read. Over
+    /// the account's limit, the removals still go (alone), and new
+    /// capabilities are offered again at most hourly.
+    pub async fn flush_group_capabilities(&mut self) -> Result<()> {
+        let mut ledger = self.capability_ledger().await?;
+        if ledger.is_empty() {
+            return Ok(());
+        }
+        let now = self.now_ms();
+        if ledger.remove.is_empty() && ledger.limit && now < self.capability_retry_at_ms {
+            return Ok(());
+        }
+        let add: Vec<String> = ledger.add.iter().cloned().collect();
+        let remove: Vec<String> = ledger.remove.iter().cloned().collect();
+        match self
+            .transport
+            .change_group_capabilities(&add, &remove)
+            .await?
+        {
+            GroupCapabilitiesOutcome::Changed { .. } => {
+                ledger.add.clear();
+                ledger.remove.clear();
+                ledger.limit = false;
+            }
+            GroupCapabilitiesOutcome::LimitReached => {
+                // A retired capability never waits on room for new ones.
+                if !remove.is_empty()
+                    && matches!(
+                        self.transport
+                            .change_group_capabilities(&[], &remove)
+                            .await?,
+                        GroupCapabilitiesOutcome::Changed { .. }
+                    )
+                {
+                    ledger.remove.clear();
+                }
+                ledger.limit = true;
+                self.capability_retry_at_ms = now.saturating_add(LIMIT_RETRY_MS);
+            }
+        }
+        let pending = Pending {
+            group_capabilities: Some(ledger.bytes()?),
+            ..Pending::default()
+        };
+        self.session.db().apply(&pending).await
+    }
+
     /// Gives this account's capability for the group to every member who
-    /// doesn't hold it, drawing a new one first when there is none or a
-    /// holder left. Best effort: a member not reached now is tried with the
-    /// next message, and sends to this account pairwise meanwhile.
+    /// doesn't hold it, drawing a new one first when there is none (never
+    /// drawn, or retired). Handed out only once the server took it. Best
+    /// effort: a member not reached now is tried with the next message, and
+    /// sends to this account pairwise meanwhile.
     pub(crate) async fn hand_out_delivery<R: Rng + CryptoRng>(
         &mut self,
         record: &mut GroupRecordV1,
@@ -56,25 +275,32 @@ impl Engine {
             .map(|recipient| recipient.account.clone())
             .filter(|account| account != &me)
             .collect();
-        if record
-            .delivery
-            .as_ref()
-            .is_none_or(|book| book.must_rotate(&members))
-        {
-            record.delivery = Some(DeliveryBook::draw(unix_millis(), rng));
-            self.group_capabilities_due = true;
+        let retired = match published_hash(record) {
+            Some(hash) => self.capability_ledger().await?.is_retired(&hash),
+            None => false,
+        };
+        if record.delivery.is_none() || retired {
+            let after = record.listed_delivery_ms.unwrap_or(0);
+            record.delivery = Some(DeliveryBook::draw(
+                unix_millis(),
+                after,
+                members.clone(),
+                rng,
+            ));
+            // Its add goes to the server here, with the record.
+            self.save_group(record).await?;
             // This account's other devices take it from the group list.
             self.schedule_group_entry(&record.group_id).await?;
+        } else {
+            self.flush_group_capabilities().await?;
         }
-        // Handed out only once its server has it: a member sending with an
-        // unpublished capability would only be refused. A server without the
-        // route, or one over its limit, keeps this account pairwise.
-        if self.group_capabilities_due {
-            // Saved first: the published set is read from the stored records.
-            self.save_group(record).await?;
-            self.publish_group_capabilities().await?;
-        }
-        if self.group_capabilities_due || self.group_capability_limit {
+        let Some(hash) = published_hash(record) else {
+            return Ok(());
+        };
+        let ledger = self.capability_ledger().await?;
+        if ledger.add.contains(&hash) {
+            // Not on the server yet (unreachable, or the account is at its
+            // limit): members would only be refused.
             return Ok(());
         }
         let book = record.delivery.clone().expect("drawn above");
@@ -129,15 +355,12 @@ impl Engine {
             if matches!(
                 outcome,
                 Some(SealedBatchOutcomeV1::Delivered { .. } | SealedBatchOutcomeV1::Pending)
-            ) && !book.holders.contains(account)
-            {
-                book.holders.push(account.clone());
+            ) {
+                book.handed_to(account);
             }
         }
-        book.holders.sort();
         self.save_group(record).await
     }
-
     /// A member's `groupDelivery`, from `sender`: its capability kept (the
     /// newest), or, asked for this account's, handed out again with the next
     /// message. Taken only from a verified member of the group.
@@ -191,55 +414,10 @@ impl Engine {
         record.member_capabilities.get(account)?.bytes()
     }
 
-    /// Sets this account's published group capabilities to every group it
-    /// is in, padded: when one was drawn or a group left. Best effort; a
-    /// limit the server refuses leaves groups on the pairwise route.
-    pub async fn publish_group_capabilities(&mut self) -> Result<()> {
-        if !self.group_capabilities_due {
-            return Ok(());
-        }
-        let Some(keys) = self.group_keys.as_ref() else {
-            return Ok(());
-        };
-        let mut hashes = Vec::new();
-        let mut epoch = 0i64;
-        for record in self.session.db().list_groups().await? {
-            if record.status != GroupStatus::Member {
-                continue;
-            }
-            let Some(book) = record.delivery.as_ref() else {
-                continue;
-            };
-            let Some(capability) = book.bytes() else {
-                continue;
-            };
-            epoch = epoch.max(book.drawn_at_ms);
-            hashes.push(STANDARD.encode(Sha256::digest(capability)));
-        }
-        let epoch = u64::try_from(epoch).unwrap_or(0);
-        let mut slot = 0u32;
-        while hashes.len() < padded_len(hashes.len()) {
-            hashes.push(STANDARD.encode(keys.delivery_padding.dummy(epoch, slot)));
-            slot += 1;
-        }
-        hashes.sort();
-        match self.transport.set_group_capabilities(&hashes).await? {
-            GroupCapabilitiesOutcome::Set { .. } => {
-                self.group_capabilities_due = false;
-                self.group_capability_limit = false;
-            }
-            GroupCapabilitiesOutcome::LimitReached => {
-                self.group_capabilities_due = false;
-                self.group_capability_limit = true;
-            }
-        }
-        Ok(())
-    }
-
-    /// Whether the server refused this account's group capabilities as too
-    /// many (its groups then stay on the pairwise route).
-    pub fn group_capability_limit_reached(&self) -> bool {
-        self.group_capability_limit
+    /// Whether the server refused this account's new group capabilities as
+    /// too many (those groups then stay on the pairwise route).
+    pub async fn group_capability_limit_reached(&self) -> Result<bool> {
+        Ok(self.capability_ledger().await?.limit)
     }
 
     /// Asks `account` for its capability in the group (the one this device

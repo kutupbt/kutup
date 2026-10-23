@@ -521,6 +521,17 @@ impl ChatDb for SqliteChatDb {
             .optional())
     }
 
+    async fn load_group_capabilities(&self) -> Result<Option<Vec<u8>>> {
+        let conn = self.conn.borrow();
+        db(conn
+            .query_row(
+                "SELECT value FROM meta WHERE key = 'group_capabilities'",
+                [],
+                |row| row.get(0),
+            )
+            .optional())
+    }
+
     async fn load_contact_list_followed(&self) -> Result<bool> {
         let conn = self.conn.borrow();
         let value: Option<i64> = db(conn
@@ -1401,6 +1412,13 @@ impl ChatDb for SqliteChatDb {
         if let Some(state) = &pending.pins_due {
             db(tx.execute(
                 "INSERT INTO meta (key, value) VALUES ('pins_due', ?1) \
+                 ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+                [state],
+            ))?;
+        }
+        if let Some(state) = &pending.group_capabilities {
+            db(tx.execute(
+                "INSERT INTO meta (key, value) VALUES ('group_capabilities', ?1) \
                  ON CONFLICT(key) DO UPDATE SET value = excluded.value",
                 [state],
             ))?;

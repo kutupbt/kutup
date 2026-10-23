@@ -1,8 +1,8 @@
 //! Checked-in vector for an account's group delivery padding
 //! (docs/plans/pairwise-groups.md, "Slice 2"): every device of an account
-//! must derive the same dummy capability hashes from the account master key,
-//! the epoch and the slot, or two devices would publish different sets and
-//! undo each other's.
+//! must derive the same dummy capability hashes from the account master key
+//! and the slot, or two devices would publish different sets and undo each
+//! other's.
 //! Regenerate only for a deliberate format change:
 //! `KUTUP_WRITE_GROUP_DELIVERY_PADDING_VECTORS=1 cargo test -p kutup-crypto --test chat_group_delivery_padding_vectors -- --ignored`.
 
@@ -20,7 +20,6 @@ const PATH: &str = concat!(
 #[derive(Serialize, Deserialize, PartialEq, Debug)]
 #[serde(rename_all = "camelCase")]
 struct Case {
-    epoch: u64,
     slot: u32,
     dummy: String,
 }
@@ -35,18 +34,12 @@ struct Vectors {
 fn computed() -> Vectors {
     let master = [0x11u8; 32];
     let key = DeliveryPaddingKey::derive(&master);
-    let cases = [
-        (0u64, 0u32),
-        (1_790_000_000_000, 0),
-        (1_790_000_000_000, 7),
-        (u64::MAX, 0x0102_0304),
-    ]
-    .into_iter()
-    .map(|(epoch, slot)| Case {
-        epoch,
-        slot,
-        dummy: STANDARD.encode(key.dummy(epoch, slot)),
-    })
+    let cases = [0u32, 1, 7, 0x0102_0304]
+        .into_iter()
+        .map(|slot| Case {
+            slot,
+            dummy: STANDARD.encode(key.dummy(slot)),
+        })
     .collect();
     Vectors {
         account_master_key: STANDARD.encode(master),

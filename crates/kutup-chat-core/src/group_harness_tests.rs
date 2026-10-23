@@ -160,6 +160,11 @@ pub(crate) struct World {
     pub(crate) multi_answers:
         RefCell<std::collections::VecDeque<crate::transport::MultiSendOutcome>>,
     pub(crate) group_capabilities: RefCell<BTreeMap<String, Vec<[u8; 32]>>>,
+    /// The most capability hashes the server keeps for one account (`None`:
+    /// no limit); a change past it is refused whole.
+    pub(crate) capability_limit: Cell<Option<usize>>,
+    /// Every capability change an account made: (account, added, removed).
+    pub(crate) capability_changes: RefCell<Vec<(String, Vec<[u8; 32]>, Vec<[u8; 32]>)>>,
     /// How many whole states the group home was asked for.
     pub(crate) state_requests: Cell<usize>,
     /// How many changes the group home took.
@@ -276,6 +281,8 @@ impl World {
             no_multi_route: Cell::new(false),
             multi_answers: RefCell::new(Default::default()),
             group_capabilities: RefCell::new(BTreeMap::new()),
+            capability_changes: RefCell::new(Vec::new()),
+            capability_limit: Cell::new(None),
             state_requests: Cell::new(0),
             group_changes: Cell::new(0),
             group_list_down: Cell::new(false),
@@ -1517,31 +1524,55 @@ impl ChatTransport for Client {
         Ok(true)
     }
 
-    /// The account's published group capabilities, as the server keeps them.
-    async fn set_group_capabilities(
+    /// The account's published group capabilities, changed as the server
+    /// changes them: both lists in one step, adding one there or removing
+    /// one not there changing nothing.
+    async fn change_group_capabilities(
         &self,
-        hashes: &[String],
+        add: &[String],
+        remove: &[String],
     ) -> Result<crate::transport::GroupCapabilitiesOutcome> {
         if self.world.no_multi_route.get() {
             return Err(ChatError::Transport("404 Not Found".into()));
         }
-        let hashes: Vec<[u8; 32]> = hashes
-            .iter()
-            .map(|hash| {
-                STANDARD
-                    .decode(hash)
-                    .ok()
-                    .and_then(|bytes| bytes.try_into().ok())
-                    .ok_or_else(|| ChatError::Transport("malformed capability hash".into()))
-            })
-            .collect::<Result<_>>()?;
-        assert_eq!(hashes.len() % 8, 0, "padded to a multiple of 8");
-        let count = u32::try_from(hashes.len()).unwrap_or(u32::MAX);
-        self.world
-            .group_capabilities
-            .borrow_mut()
-            .insert(self.account.clone(), hashes);
-        Ok(crate::transport::GroupCapabilitiesOutcome::Set { count })
+        let decode = |hashes: &[String]| -> Result<Vec<[u8; 32]>> {
+            hashes
+                .iter()
+                .map(|hash| {
+                    STANDARD
+                        .decode(hash)
+                        .ok()
+                        .and_then(|bytes| bytes.try_into().ok())
+                        .ok_or_else(|| ChatError::Transport("malformed capability hash".into()))
+                })
+                .collect()
+        };
+        let (add, remove) = (decode(add)?, decode(remove)?);
+        self.world.capability_changes.borrow_mut().push((
+            self.account.clone(),
+            add.clone(),
+            remove.clone(),
+        ));
+        let mut all = self.world.group_capabilities.borrow_mut();
+        let published = all.entry(self.account.clone()).or_default();
+        let mut next = published.clone();
+        next.retain(|hash| !remove.contains(hash));
+        for hash in add {
+            if !next.contains(&hash) {
+                next.push(hash);
+            }
+        }
+        if self
+            .world
+            .capability_limit
+            .get()
+            .is_some_and(|limit| next.len() > limit)
+        {
+            return Ok(crate::transport::GroupCapabilitiesOutcome::LimitReached);
+        }
+        *published = next;
+        let count = u32::try_from(published.len()).unwrap_or(u32::MAX);
+        Ok(crate::transport::GroupCapabilitiesOutcome::Changed { count })
     }
 
     /// The multi-recipient route as the server applies it: capabilities
@@ -6075,4 +6106,203 @@ fn group_removal_a_forged_or_misplaced_removal_is_not_taken() {
     // The real one is taken.
     deliver(&mut carol, &real, &notary);
     assert_eq!(carol.status(&group_id), GroupStatus::Gone);
+}
+// Capability lifecycle (security review of #334).
+
+/// A device that took the capability from the list never rotates it when a
+/// holder is removed: its holders list is empty.
+#[test]
+fn group_multi_a_removal_retires_the_capability_on_every_device() {
+    let world = World::new();
+    let (mut alice, mut bob, mut carol, mut dave, group_id) = exchanged_group(&world);
+    let mut alice2 = world.link_device(&mut alice);
+    deliver_all(&mut [&mut alice, &mut alice2, &mut bob, &mut carol, &mut dave]);
+    alice.flush_list();
+    block_on(alice2.engine.sync_group_list(&mut rng())).unwrap();
+    assert_eq!(alice2.status(&group_id), GroupStatus::Member);
+    let alices = held_by(&bob, &group_id, &alice).unwrap();
+    let bobs = pseudonym_of(&mut alice, &group_id, &bob);
+    block_on(
+        alice
+            .engine
+            .remove_group_member(&group_id, &bobs, &mut rng()),
+    )
+    .unwrap();
+    deliver_all(&mut [&mut alice, &mut alice2, &mut carol, &mut dave]);
+    alice2.send_text(&group_id, "from the second device");
+    deliver_all(&mut [&mut alice, &mut alice2, &mut carol, &mut dave]);
+    let published = world.group_capabilities.borrow()[&alice.account].clone();
+    assert!(
+        !published.contains(&capability_hash(&alices)),
+        "removed Bob's copy of Alice's capability is still published"
+    );
+}
+
+/// A device with a stale record republishes a capability another device
+/// rotated out.
+#[test]
+fn group_multi_a_stale_device_never_brings_back_a_retired_capability() {
+    let world = World::new();
+    let (mut alice, mut bob, mut carol, mut dave, group_id) = exchanged_group(&world);
+    let mut alice2 = world.link_device(&mut alice);
+    deliver_all(&mut [&mut alice, &mut alice2, &mut bob, &mut carol, &mut dave]);
+    alice.flush_list();
+    block_on(alice2.engine.sync_group_list(&mut rng())).unwrap();
+    // alice2 publishes once now (its own send), so its "due" flag is clear
+    // only if the publish happened.
+    let alices = held_by(&bob, &group_id, &alice).unwrap();
+    let bobs = pseudonym_of(&mut alice, &group_id, &bob);
+    block_on(
+        alice
+            .engine
+            .remove_group_member(&group_id, &bobs, &mut rng()),
+    )
+    .unwrap();
+    deliver_all(&mut [&mut alice, &mut alice2, &mut carol, &mut dave]);
+    // Device 1 sends: rotates (it handed the old one to Bob).
+    alice.send_text(&group_id, "after bob");
+    let published = world.group_capabilities.borrow()[&alice.account].clone();
+    assert!(
+        !published.contains(&capability_hash(&alices)),
+        "device 1 rotated"
+    );
+    // Device 2 sends before reading the list again.
+    alice2.send_text(&group_id, "from the stale device");
+    let published = world.group_capabilities.borrow()[&alice.account].clone();
+    assert!(
+        !published.contains(&capability_hash(&alices)),
+        "the stale device brought back the capability removed Bob holds"
+    );
+}
+
+/// Dummies change with every draw, so diffing two published sets tells the
+/// real hashes (the ones that stay) from the dummies.
+#[test]
+fn group_multi_padding_survives_set_diffing() {
+    let world = World::new();
+    let (mut alice, mut bob, mut carol, mut dave, group_id) = exchanged_group(&world);
+    let second = group_of(&mut alice, &mut [&mut carol]);
+    deliver_all(&mut [&mut alice, &mut bob, &mut carol, &mut dave]);
+    alice.send_text(&second, "second group");
+    carol.send_text(&second, "second group");
+    deliver_all(&mut [&mut alice, &mut bob, &mut carol, &mut dave]);
+    let before = world.group_capabilities.borrow()[&alice.account].clone();
+    block_on(bob.engine.leave_group(&group_id, &mut rng())).unwrap();
+    deliver_all(&mut [&mut alice, &mut bob, &mut carol, &mut dave]);
+    alice.send_text(&group_id, "redraw");
+    let after = world.group_capabilities.borrow()[&alice.account].clone();
+    let kept: Vec<_> = before.iter().filter(|hash| after.contains(hash)).collect();
+    let record = block_on(alice.engine.load_group_record(&second)).unwrap();
+    let real = capability_hash(&record.delivery.unwrap().bytes().unwrap());
+    assert!(
+        !(kept.len() == 1 && *kept[0] == real),
+        "the only hash kept across two sets is the second group's real one"
+    );
+}
+
+/// A leave made while the account's server can't be reached comes off it
+/// later: the removal is kept in the store until the server takes it.
+#[test]
+fn group_multi_a_leave_while_the_server_is_away_comes_off_later() {
+    let world = World::new();
+    let (mut alice, mut bob, mut carol, mut dave, group_id) = exchanged_group(&world);
+    let bobs = held_by(&alice, &group_id, &bob).unwrap();
+    world.no_multi_route.set(true);
+    block_on(bob.engine.leave_group(&group_id, &mut rng())).unwrap();
+    assert!(world.group_capabilities.borrow()[&bob.account].contains(&capability_hash(&bobs)));
+    let owed = block_on(bob.engine.capability_ledger()).unwrap();
+    assert!(owed
+        .remove
+        .contains(&STANDARD.encode(capability_hash(&bobs))));
+    world.no_multi_route.set(false);
+    block_on(bob.engine.flush_group_capabilities()).unwrap();
+    assert!(!world.group_capabilities.borrow()[&bob.account].contains(&capability_hash(&bobs)));
+    assert!(block_on(bob.engine.capability_ledger())
+        .unwrap()
+        .remove
+        .is_empty());
+    deliver_all(&mut [&mut alice, &mut bob, &mut carol, &mut dave]);
+}
+
+/// Over the account's limit, a retired capability still comes off the
+/// server; the new one waits, and isn't handed out meanwhile.
+#[test]
+fn group_multi_at_the_limit_removals_still_go_and_new_capabilities_wait() {
+    let world = World::new();
+    let (mut alice, mut bob, mut carol, mut dave, group_id) = exchanged_group(&world);
+    let alices = held_by(&carol, &group_id, &alice).unwrap();
+    let published = world.group_capabilities.borrow()[&alice.account].len();
+    world.capability_limit.set(Some(published - 1));
+    block_on(bob.engine.leave_group(&group_id, &mut rng())).unwrap();
+    deliver_all(&mut [&mut alice, &mut bob, &mut carol, &mut dave]);
+    assert!(
+        !world.group_capabilities.borrow()[&alice.account].contains(&capability_hash(&alices)),
+        "the retired one came off"
+    );
+    alice.send_text(&group_id, "after bob");
+    deliver_all(&mut [&mut alice, &mut carol, &mut dave]);
+    assert!(block_on(alice.engine.group_capability_limit_reached()).unwrap());
+    let record = block_on(alice.engine.load_group_record(&group_id)).unwrap();
+    let new = record.delivery.unwrap().bytes().unwrap();
+    assert!(!world.group_capabilities.borrow()[&alice.account].contains(&capability_hash(&new)));
+    assert_ne!(
+        held_by(&carol, &group_id, &alice),
+        Some(new),
+        "not handed out unpublished"
+    );
+    assert!(carol
+        .group_texts(&group_id)
+        .contains(&"after bob".to_string()));
+}
+
+/// A 409 that names only other accounts' devices stored nothing for these
+/// legs either: they wait and count it, never going round at once.
+#[test]
+fn group_multi_a_conflict_naming_no_leg_waits_and_counts() {
+    use crate::transport::MultiSendOutcome;
+    let world = World::new();
+    let (mut alice, _bob, _carol, _dave, group_id) = exchanged_group(&world);
+    let response: kutup_chat_proto::SealedMultiResponseV1 =
+        serde_json::from_value(serde_json::json!({
+            "refused": [],
+            "rateLimited": [],
+            "devices": [{
+                "accountId": "00000000-0000-4000-8000-000000000099",
+                "missingDevices": [1],
+                "extraDevices": []
+            }]
+        }))
+        .unwrap();
+    world
+        .multi_answers
+        .borrow_mut()
+        .push_back(MultiSendOutcome::Answered {
+            status: 409,
+            response,
+        });
+    let send_id = uuid::Uuid::new_v4().to_string();
+    let seq = block_on(alice.engine.session().next_sent_seq()).unwrap();
+    let content = ChatContent::text_with_id(
+        &send_id,
+        crate::clock::rfc3339(crate::clock::unix_millis()),
+        seq,
+        "conflict",
+    );
+    let summary = block_on(alice.engine.send_group_message(
+        &group_id,
+        &send_id,
+        content,
+        &mut rng(),
+    ))
+    .unwrap();
+    assert_eq!(summary.pending, 3, "the three wait");
+    let entry = block_on(alice.engine.session().db().list_group_outbox())
+        .unwrap()
+        .into_iter()
+        .find(|entry| entry.send_id == send_id)
+        .unwrap();
+    for leg in entry.legs.iter().filter(|leg| leg.multi) {
+        assert_eq!(leg.mismatches, 1);
+        assert!(leg.retry_at_ms.is_some() && !leg.delivered);
+    }
 }

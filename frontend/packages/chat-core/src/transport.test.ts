@@ -330,20 +330,23 @@ describe('ApiChatTransport', () => {
     }
     post.mockRejectedValueOnce(new Error('offline'))
     await expect(transport.sendSealedMulti('b.test', {})).rejects.toBeTruthy()
+    // Only a 200 stores: another success status is no answer.
+    post.mockResolvedValueOnce({ status: 202, data: response } as never)
+    await expect(transport.sendSealedMulti('b.test', {})).rejects.toBeTruthy()
   })
 
-  it('sets the published group capabilities and says when the server takes no more', async () => {
-    const post = vi.spyOn(api, 'post').mockResolvedValueOnce({ data: { count: 8 } } as never)
+  it('changes the published group capabilities by deltas and says when the server takes no more', async () => {
+    const put = vi.spyOn(api, 'put').mockResolvedValueOnce({ data: { count: 8 } } as never)
     const transport = new ApiChatTransport()
-    const hashes = Array.from({ length: 8 }, (_, index) => `h${index}`)
-    await expect(transport.setGroupCapabilities(hashes)).resolves.toEqual({ kind: 'set', count: 8 })
-    expect(post).toHaveBeenCalledWith('/chat/group-capabilities/set', { hashes })
-    post.mockRejectedValueOnce(new axios.AxiosError('full', '409', undefined, undefined,
+    const changes = { add: ['h1'], remove: ['h0'] }
+    await expect(transport.changeGroupCapabilities(changes)).resolves.toEqual({ kind: 'changed', count: 8 })
+    expect(put).toHaveBeenCalledWith('/chat/group-capabilities', changes)
+    put.mockRejectedValueOnce(new axios.AxiosError('full', '409', undefined, undefined,
       { status: 409, data: { error: 'too many', code: 'capabilityLimit' } } as never))
-    await expect(transport.setGroupCapabilities(hashes)).resolves.toEqual({ kind: 'limitReached' })
+    await expect(transport.changeGroupCapabilities(changes)).resolves.toEqual({ kind: 'limitReached' })
     const other = new axios.AxiosError('conflict', '409', undefined, undefined, { status: 409, data: {} } as never)
-    post.mockRejectedValueOnce(other)
-    await expect(transport.setGroupCapabilities(hashes)).rejects.toBe(other)
+    put.mockRejectedValueOnce(other)
+    await expect(transport.changeGroupCapabilities(changes)).rejects.toBe(other)
   })
 
   it('reports only the server\'s own sealed refusal as refused', async () => {

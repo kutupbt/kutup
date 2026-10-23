@@ -412,7 +412,6 @@ impl Engine {
                         member_capabilities: Default::default(),
                         listed_delivery_ms: Some(delivery_at(&entry)),
                     };
-                    self.group_capabilities_due = true;
                     self.save_group(&record).await?;
                     // Its state, and this device's binding where needed; a
                     // home that can't be reached now is tried at the next
@@ -452,11 +451,11 @@ impl Engine {
                         changed = true;
                     }
                     // Another device of this account drew a newer capability:
-                    // this one hands out and publishes that one.
+                    // this one hands that one out, and retires its own (the
+                    // device that drew the new one published it).
                     let held = record.delivery.as_ref().map_or(0, |book| book.drawn_at_ms);
                     if delivery_at(&entry) > held {
                         record.delivery = listed_delivery(&entry);
-                        self.group_capabilities_due = true;
                         changed = true;
                     }
                     if record.listed_delivery_ms != Some(delivery_at(&entry)) {
@@ -501,6 +500,9 @@ impl Engine {
             Vec::new()
         };
         let _ = self.flush_group_list(false).await;
+        // Capability changes the server didn't take before (offline, or a
+        // reload): tried again with this periodic look.
+        let _ = self.flush_group_capabilities().await;
         Ok(taken_up)
     }
 
@@ -514,7 +516,9 @@ impl Engine {
 
 /// The delivery book a listed entry gives this device: the capability, held
 /// by no member yet as far as this device knows (it hands it out again; a
-/// member that holds it already takes it as the same).
+/// member that holds it already takes it as the same), and held by every
+/// member of the first state this device sees with it (`exposed` unknown
+/// until then: `group::settle_delivery`).
 fn listed_delivery(entry: &GroupListEntryV1) -> Option<crate::group::DeliveryBook> {
     entry
         .delivery
@@ -523,5 +527,7 @@ fn listed_delivery(entry: &GroupListEntryV1) -> Option<crate::group::DeliveryBoo
             capability: SecretText(delivery.capability.clone()),
             drawn_at_ms: delivery.drawn_at_ms,
             holders: Vec::new(),
+            exposed: None,
+            drawn_here: false,
         })
 }

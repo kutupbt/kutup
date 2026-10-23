@@ -1773,6 +1773,17 @@ export class ChatService {
    * and leaves still waiting for their delayed write
    * (docs/plans/pairwise-groups.md §5). Best effort, at most `waitMs`.
    */
+  /**
+   * Whether this account's server refused its newer group capabilities as
+   * too many (docs/plans/pairwise-groups.md, "Slice 2"): those groups'
+   * messages still arrive, each member's copy sent on its own.
+   */
+  async groupCapabilityLimitReached(): Promise<boolean> {
+    const client = this.client
+    if (this.capabilities.pairwiseGroups !== true || !client.groupCapabilityLimitReached) return false
+    return await this.withLock(() => client.groupCapabilityLimitReached!())
+  }
+
   async flushGroupList(waitMs = 3000): Promise<void> {
     const client = this.client
     if (this.capabilities.pairwiseGroups !== true || !client.flushGroupList) return

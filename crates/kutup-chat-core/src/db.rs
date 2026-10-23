@@ -715,6 +715,10 @@ pub struct Pending {
     /// First-seen identity pins waiting for their delayed write, as JSON
     /// (peer → due ms), so a reload doesn't lose them.
     pub(crate) pins_due: Option<Vec<u8>>,
+    /// The account's group capability changes not yet taken by its server,
+    /// as JSON (`group_delivery::CapabilityLedger`), so a leave or a
+    /// rotation survives a reload.
+    pub(crate) group_capabilities: Option<Vec<u8>>,
 }
 
 impl Pending {
@@ -762,6 +766,7 @@ impl Pending {
             && self.last_sent_seq.is_none()
             && !self.contact_list_followed
             && self.pins_due.is_none()
+            && self.group_capabilities.is_none()
     }
 
     pub(crate) fn clear(&mut self) {
@@ -845,6 +850,8 @@ pub trait ChatDb {
     async fn load_contact_list_followed(&self) -> Result<bool>;
     /// The first-seen identity pins waiting for their write (JSON), if any.
     async fn load_pins_due(&self) -> Result<Option<Vec<u8>>>;
+    /// The pending group capability changes (`Pending::group_capabilities`).
+    async fn load_group_capabilities(&self) -> Result<Option<Vec<u8>>>;
     /// Every persisted inbound message (oldest first, by cursor) — the local history.
     async fn list_messages(&self) -> Result<Vec<InboxMessage>>;
 

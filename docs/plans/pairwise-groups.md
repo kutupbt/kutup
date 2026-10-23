@@ -1766,11 +1766,22 @@ libsignal's sealed sender v2 is used as it is: one key share per account.
 The contract is in docs/chat-protocol.md §7 ("The client side"). What
 building it settled:
 - **Capability per group** (`DeliveryBook` in the group record): drawn on
-  the first send that needs it, published in one padded set of all groups
-  (multiples of 8, dummies from `kutup_crypto::chat_group::DeliveryPaddingKey`,
-  the epoch the newest draw), handed out only after the set was taken, kept in
-  the group list entry; redrawn when a holder is no longer a member;
-  unpublished when this account's membership ends (any path: `save_group`).
+  the first send that needs it, published by deltas from a durable ledger
+  (`group_delivery::CapabilityLedger`, in the store's meta), padded to
+  multiples of 8 with one dummy per slot
+  (`kutup_crypto::chat_group::DeliveryPaddingKey`, stable, so diffing two
+  sets doesn't tell them apart), handed out only once the server took it,
+  kept in the group list entry. Retired when an account that may hold it is
+  no longer a member (`group::settle_delivery`, at each accepted change, on
+  every device of the account; one taken from the list counts as held by the
+  members of the first state seen with it), and when this account's
+  membership ends (any path: `save_group`); the next send draws another.
+  Only the drawing device adds; `POST …/set` isn't used by clients (after an
+  account reset, recovered groups draw new capabilities).
+  - Known limit: a device that takes a capability from the list after it
+    applied a removal, while the device that drew it is unlinked before
+    applying that removal itself, keeps it published. Closing that needs the
+    exposure in the list entry.
 - **Legs:** a member whose capability is held goes on the multi route; own
   devices and the rest go pairwise. A leg whose account has devices the sender
   key hasn't reached goes on as an ordinary leg (sender-key copies for the
