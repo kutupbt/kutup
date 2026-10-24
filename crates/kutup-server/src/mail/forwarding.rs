@@ -12,6 +12,7 @@
 
 use aws_sdk_s3::primitives::ByteStream;
 use kutup_crypto::mail_forwarding::{self, ProxyInstance};
+use kutup_crypto::primitives::{mac, Suite};
 use uuid::Uuid;
 
 use super::filters::{self, Condition, Match, Subject};
@@ -322,20 +323,21 @@ const MARKER_DOMAIN: &[u8] = b"kutup/mail-forwarding/marker/v1\0";
 
 /// The loop marker's MAC: its own label, over the forwarding alone.
 fn marker_mac(key: &[u8; 32], forwarding: Uuid) -> String {
-    use hmac::{Hmac, Mac as _};
-    let mut mac = <Hmac<sha2::Sha256> as hmac::Mac>::new_from_slice(key).expect("any key length");
-    mac.update(MARKER_DOMAIN);
-    mac.update(forwarding.as_bytes());
-    hex::encode(&mac.finalize().into_bytes()[..8])
+    let tag = mac(Suite::V1, key, &[MARKER_DOMAIN, forwarding.as_bytes()]);
+    hex::encode(&tag.as_bytes()[..8])
 }
 
 fn return_path_mac(key: &[u8; 32], forwarding: Uuid, day: i64) -> String {
-    use hmac::{Hmac, Mac as _};
-    let mut mac = <Hmac<sha2::Sha256> as hmac::Mac>::new_from_slice(key).expect("any key length");
-    mac.update(RETURN_PATH_DOMAIN);
-    mac.update(forwarding.as_bytes());
-    mac.update(&day.to_be_bytes());
-    hex::encode(&mac.finalize().into_bytes()[..8])
+    let tag = mac(
+        Suite::V1,
+        key,
+        &[
+            RETURN_PATH_DOMAIN,
+            forwarding.as_bytes(),
+            &day.to_be_bytes(),
+        ],
+    );
+    hex::encode(&tag.as_bytes()[..8])
 }
 
 fn today() -> i64 {

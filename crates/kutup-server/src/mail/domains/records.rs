@@ -112,9 +112,8 @@ fn base32(bytes: &[u8]) -> String {
 
 /// A fresh ownership code: 16 random bytes in base32.
 pub fn new_verify_code() -> String {
-    use rand::RngCore as _;
     let mut bytes = [0u8; 16];
-    rand::thread_rng().fill_bytes(&mut bytes);
+    kutup_crypto::primitives::random(&mut bytes);
     format!("{VERIFY_PREFIX}{}", base32(&bytes))
 }
 

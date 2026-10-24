@@ -738,25 +738,25 @@ pub trait MlsControlSigner {
     fn sign_mls_control(&self, message: &[u8]) -> Result<[u8; 64], String>;
 }
 
-pub struct Ed25519MlsControlSigner(SigningKey);
+pub struct Ed25519MlsControlSigner(kutup_crypto::primitives::SigningKey);
 
 impl Ed25519MlsControlSigner {
-    pub fn new(signing_key: SigningKey) -> Self {
+    pub fn new(signing_key: kutup_crypto::primitives::SigningKey) -> Self {
         Self(signing_key)
     }
 }
 
 impl MlsControlSigner for Ed25519MlsControlSigner {
     fn key_id(&self) -> String {
-        hex::encode(Sha256::digest(self.0.verifying_key().as_bytes()))
+        hex::encode(Sha256::digest(self.0.verifying_key().to_bytes()))
     }
 
     fn public_key(&self) -> String {
-        base64::engine::general_purpose::STANDARD.encode(self.0.verifying_key().as_bytes())
+        base64::engine::general_purpose::STANDARD.encode(self.0.verifying_key().to_bytes())
     }
 
     fn sign_mls_control(&self, message: &[u8]) -> Result<[u8; 64], String> {
-        Ok(self.0.sign(message).to_bytes())
+        Ok(self.0.sign_array(message))
     }
 }
 

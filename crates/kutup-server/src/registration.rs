@@ -10,9 +10,6 @@
 //! conditional update, so a code with N uses admits N accounts however many
 //! sign up at once.
 
-use hmac::{Hmac, Mac};
-use rand::Rng as _;
-use sha2::Sha256;
 use sqlx::{PgPool, Postgres, Transaction};
 use uuid::Uuid;
 
@@ -112,9 +109,8 @@ const HINT_LEN: usize = 4;
 
 /// A new code, as shown: `7KQ2M-9XD4T-PAV3W-8HCNR`.
 pub fn generate() -> String {
-    let mut rng = rand::rngs::OsRng;
     let chars: Vec<u8> = (0..CODE_LEN)
-        .map(|_| ALPHABET[rng.gen_range(0..ALPHABET.len())])
+        .map(|_| ALPHABET[kutup_crypto::primitives::random_below(ALPHABET.len() as u64) as usize])
         .collect();
     chars
         .chunks(GROUP)
@@ -147,10 +143,12 @@ pub fn canonical(input: &str) -> Option<String> {
 
 /// What a code's row is found by: its HMAC under the server's key.
 pub fn hash(key: &[u8; 32], canonical: &str) -> [u8; 32] {
-    let mut mac = <Hmac<Sha256> as Mac>::new_from_slice(key).expect("HMAC takes any key length");
-    mac.update(b"kutup/registration-code/v1\0");
-    mac.update(canonical.as_bytes());
-    mac.finalize().into_bytes().into()
+    kutup_crypto::primitives::mac(
+        kutup_crypto::primitives::Suite::V1,
+        key,
+        &[b"kutup/registration-code/v1\0", canonical.as_bytes()],
+    )
+    .to_array()
 }
 
 /// What the administrator sees of a code after it is made.

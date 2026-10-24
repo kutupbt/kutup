@@ -597,16 +597,15 @@ async fn push(
     Ok(())
 }
 
-/// base64url(HMAC-SHA256(auth, label ‖ value)), cut to `length` characters.
+/// base64url(MAC(auth, label ‖ 0 ‖ value)), cut to `length` characters.
 fn subscription_tag(auth: &[u8], label: &[u8], value: &[u8], length: usize) -> String {
     use base64::Engine as _;
-    use hmac::Mac as _;
-    let mut mac = hmac::Hmac::<sha2::Sha256>::new_from_slice(auth).expect("HMAC takes any key");
-    mac.update(label);
-    mac.update(&[0]);
-    mac.update(value);
     let mut tag =
-        base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(mac.finalize().into_bytes());
+        base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(kutup_crypto::primitives::mac(
+            kutup_crypto::primitives::Suite::V1,
+            auth,
+            &[label, &[0], value],
+        ));
     tag.truncate(length);
     tag
 }

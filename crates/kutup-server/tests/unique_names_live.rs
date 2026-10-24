@@ -12,7 +12,6 @@
 use kutup_crypto::collection_epoch::CollectionEpochStatementV1;
 use kutup_crypto::drive_envelope;
 use kutup_crypto::drive_names;
-use rand::RngCore;
 use reqwest::blocking::{multipart, Client, Response};
 use reqwest::StatusCode;
 use serde_json::{json, Value};
@@ -64,7 +63,7 @@ fn folder_named(
 ) -> (StatusCode, Value, Folder) {
     let id = uuid();
     let mut key = [0u8; 32];
-    rand::thread_rng().fill_bytes(&mut key);
+    kutup_crypto::primitives::random(&mut key);
     use kutup_crypto::drive_envelope::DriveEnvelopePurpose;
     let r = bearer(c.post(format!("{base}/api/collections")), &owner.token)
         .json(&json!({

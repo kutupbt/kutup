@@ -4,6 +4,7 @@
 //! grant. The signed transaction, destination receipt, destination object,
 //! quota rows, and logs never contain the sender account or device.
 
+use kutup_crypto::primitives::{hash, Suite};
 use std::time::Duration;
 
 use aws_sdk_s3::primitives::{ByteStream, Length};
@@ -21,7 +22,6 @@ use kutup_federation_proto::{content_digest_sha256_from_digest, FederationFeatur
 use reqwest::Method;
 use serde::Serialize;
 use serde_json::Value;
-use sha2::{Digest as _, Sha256};
 use time::OffsetDateTime;
 use tokio_util::io::ReaderStream;
 use uuid::Uuid;
@@ -47,7 +47,7 @@ fn decode_token_hash(value: &str) -> Option<[u8; 32]> {
     if decoded.len() != 32 || STANDARD.encode(&decoded) != value {
         return None;
     }
-    Some(Sha256::digest(decoded).into())
+    Some(hash(Suite::V1, decoded).into())
 }
 
 fn retryable_status(status: StatusCode) -> bool {
@@ -458,7 +458,7 @@ async fn receive_offer_inner(
         .ok_or_else(|| AppError::bad_request("invalid Chat-media operation"))?;
     let attachment_id = canonical_uuid(&transaction.offer.attachment_id)
         .ok_or_else(|| AppError::bad_request("invalid Chat-media attachment"))?;
-    let transaction_digest = hex::encode(Sha256::digest(body));
+    let transaction_digest = hex::encode(hash(Suite::V1, body));
     let recipient =
         recipient_account_id(&transaction.offer).map_err(|_| chat_media::unavailable())?;
     let reservation = reserve_inbound_offer(
@@ -651,7 +651,8 @@ async fn reserve_inbound_offer(
     chat_media::consume_media_rate(
         &mut tx,
         "federation_origin",
-        &Sha256::digest(
+        &hash(
+            Suite::V1,
             [
                 b"kutup/chat-media/federation-origin-rate/v1\0".as_slice(),
                 transaction.origin_domain.as_bytes(),

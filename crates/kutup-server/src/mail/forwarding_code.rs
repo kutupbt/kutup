@@ -10,8 +10,7 @@
 //! `forwarding_code_resends` a minute and `forwarding_invites` a day, inside
 //! the account's `forwarding_confirmations_sent` a day.
 
-use hmac::{Hmac, Mac as _};
-use rand::RngCore as _;
+use kutup_crypto::primitives::{hash, mac, mac_verify, subkey, Suite, Tag};
 use time::OffsetDateTime;
 use uuid::Uuid;
 
@@ -19,8 +18,6 @@ use super::forwarding::{self, Charge};
 use crate::opaque_setup::OpaqueSetupKeys;
 use crate::ratelimit::{Limit, RateLimiter};
 use crate::AppState;
-
-type HmacSha256 = Hmac<sha2::Sha256>;
 
 /// The label the code key is derived under, apart from every other use of
 /// `MAIL_FORWARDING_KEYS`.
@@ -33,28 +30,16 @@ static RESENDS: std::sync::LazyLock<RateLimiter> =
 /// The code key of `MAIL_FORWARDING_KEYS` version `version`.
 fn code_key(keys: &OpaqueSetupKeys, version: u16) -> Option<[u8; 32]> {
     let key = keys.get(version)?;
-    let mut mac = HmacSha256::new_from_slice(key).expect("any key length");
-    mac.update(CODE_KEY_LABEL);
-    Some(mac.finalize().into_bytes().into())
+    Some(*subkey(Suite::V1, key, CODE_KEY_LABEL))
 }
 
-fn code_mac(key: &[u8; 32], forwarding: Uuid, code: &str) -> HmacSha256 {
-    let mut mac = HmacSha256::new_from_slice(key).expect("any key length");
-    mac.update(forwarding.as_bytes());
-    mac.update(code.as_bytes());
-    mac
+fn code_mac(key: &[u8; 32], forwarding: Uuid, code: &str) -> Tag {
+    mac(Suite::V1, key, &[forwarding.as_bytes(), code.as_bytes()])
 }
 
-/// A new code: six decimal digits, uniform (draws past the last whole
-/// million of `u32` are drawn again).
+/// A new code: six decimal digits, uniform.
 fn new_code() -> String {
-    const LIMIT: u32 = u32::MAX - u32::MAX % 1_000_000;
-    loop {
-        let draw = rand::rngs::OsRng.next_u32();
-        if draw < LIMIT {
-            return format!("{:06}", draw % 1_000_000);
-        }
-    }
+    format!("{:06}", kutup_crypto::primitives::random_below(1_000_000))
 }
 
 /// Whether `code` looks like one: six ASCII digits.
@@ -71,8 +56,15 @@ pub fn matches(
     code: &str,
     kept: &[u8],
 ) -> bool {
-    code_key(keys, version)
-        .is_some_and(|key| code_mac(&key, forwarding, code).verify_slice(kept).is_ok())
+    code_key(keys, version).is_some_and(|key| {
+        mac_verify(
+            Suite::V1,
+            &key,
+            &[forwarding.as_bytes(), code.as_bytes()],
+            kept,
+        )
+        .is_ok()
+    })
 }
 
 /// The label an outside forwarding's stop link is derived under.
@@ -85,15 +77,11 @@ const STOP_LABEL: &[u8] = b"kutup mail forwarding stop v1";
 pub fn stop_token(keys: &OpaqueSetupKeys, forwarding: Uuid) -> Option<(String, Vec<u8>)> {
     use base64::engine::general_purpose::URL_SAFE_NO_PAD;
     use base64::Engine as _;
-    use sha2::Digest as _;
     let (_, key) = keys.current()?;
-    let mut mac = HmacSha256::new_from_slice(key).expect("any key length");
-    mac.update(STOP_LABEL);
-    mac.update(forwarding.as_bytes());
-    let token: [u8; 32] = mac.finalize().into_bytes().into();
+    let token: [u8; 32] = mac(Suite::V1, key, &[STOP_LABEL, forwarding.as_bytes()]).to_array();
     Some((
         URL_SAFE_NO_PAD.encode(token),
-        sha2::Sha256::digest(token).to_vec(),
+        hash(Suite::V1, token).to_vec(),
     ))
 }
 
@@ -166,10 +154,7 @@ pub async fn issue(
     ))
     .max(1);
     let code = new_code();
-    let kept = code_mac(&key, forwarding, &code)
-        .finalize()
-        .into_bytes()
-        .to_vec();
+    let kept = code_mac(&key, forwarding, &code).as_bytes().to_vec();
     let issued = sqlx::query(
         "UPDATE mail_forwardings SET
                 invites_today = CASE WHEN day = current_date THEN invites_today + 1 ELSE 1 END,
@@ -358,8 +343,7 @@ mod tests {
         let keys = keys();
         let forwarding = Uuid::new_v4();
         let kept = code_mac(&code_key(&keys, 2).unwrap(), forwarding, "042137")
-            .finalize()
-            .into_bytes()
+            .as_bytes()
             .to_vec();
         assert!(matches(&keys, 2, forwarding, "042137", &kept));
         assert!(!matches(&keys, 2, forwarding, "042138", &kept));

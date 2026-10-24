@@ -16,7 +16,7 @@ use kutup_chat_proto::{
     ChatKeysCheckRequest, DeviceListMismatch, DistributionError, EcPreKey, KemPreKey,
     CHAT_DEVICE_HEADER, DEVICE_CREDENTIAL_LEN,
 };
-use sha2::{Digest, Sha256};
+use kutup_crypto::primitives::{Hasher, Suite};
 use sqlx::{Postgres, Transaction};
 use time::format_description::well_known::Rfc3339;
 use time::OffsetDateTime;
@@ -29,17 +29,17 @@ const CREDENTIAL_DOMAIN: &[u8] = b"kutup/chat-device-credential/v1\0";
 /// SHA-256 over the domain, the row's salt and the device's credential: a
 /// 32-byte random credential needs no slow hash (Signal's `SaltedTokenHash`).
 pub(crate) fn credential_hash(salt: &[u8], credential: &[u8; DEVICE_CREDENTIAL_LEN]) -> [u8; 32] {
-    let mut hasher = Sha256::new();
+    let mut hasher = Hasher::new(Suite::V1);
     hasher.update(CREDENTIAL_DOMAIN);
     hasher.update(salt);
     hasher.update(credential);
-    hasher.finalize().into()
+    hasher.finish().into()
 }
 
 /// A new row's salt and the hash of `credential` under it.
 pub(crate) fn new_credential(credential: &[u8; DEVICE_CREDENTIAL_LEN]) -> ([u8; 16], [u8; 32]) {
     let mut salt = [0u8; 16];
-    rand::RngCore::fill_bytes(&mut rand::rngs::OsRng, &mut salt);
+    kutup_crypto::primitives::random(&mut salt);
     (salt, credential_hash(&salt, credential))
 }
 
@@ -94,7 +94,7 @@ pub(crate) async fn credential_holds<'e>(
         return Err(unauthorized());
     };
     let presented = credential_hash(&salt, &credential);
-    if !crate::handlers::chat::constant_time_eq(&presented, &hash) {
+    if !kutup_crypto::primitives::ct_eq(&presented, &hash) {
         return Err(unauthorized());
     }
     Ok(device_id)
@@ -280,7 +280,7 @@ pub async fn check_keys(
         lrk_id as u32,
         &decode(&lrk),
     );
-    if crate::handlers::chat::constant_time_eq(&held, &presented) {
+    if kutup_crypto::primitives::ct_eq(&held, &presented) {
         Ok(axum::http::StatusCode::NO_CONTENT.into_response())
     } else {
         Err(
@@ -554,7 +554,7 @@ mod tests {
     #[test]
     fn prekeys_verify_only_under_the_account_identity() {
         use libsignal_protocol::{kem, IdentityKeyPair, KeyPair};
-        let mut rng = rand09::rng();
+        let mut rng = kutup_crypto::primitives::Rng;
         let account = IdentityKeyPair::generate(&mut rng);
         let other = IdentityKeyPair::generate(&mut rng);
         let signed = KeyPair::generate(&mut rng).public_key.serialize();
@@ -564,7 +564,7 @@ mod tests {
             signature: Some(
                 STANDARD.encode(
                     by.private_key()
-                        .calculate_signature(&signed, &mut rand09::rng())
+                        .calculate_signature(&signed, &mut kutup_crypto::primitives::Rng)
                         .unwrap(),
                 ),
             ),
@@ -577,7 +577,7 @@ mod tests {
             public_key: STANDARD.encode(&kyber),
             signature: STANDARD.encode(
                 by.private_key()
-                    .calculate_signature(&kyber, &mut rand09::rng())
+                    .calculate_signature(&kyber, &mut kutup_crypto::primitives::Rng)
                     .unwrap(),
             ),
         };

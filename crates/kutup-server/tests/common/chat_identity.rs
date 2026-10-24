@@ -18,12 +18,11 @@ use kutup_chat_proto::{
 };
 use kutup_crypto::identity::AccountIdentityKeysV1;
 use kutup_crypto::primitives::SigningKey;
+use kutup_crypto::primitives::{hash, Hasher, Suite};
 use libsignal_protocol::{kem, IdentityKeyPair, KeyPair};
-use rand::RngCore;
 use reqwest::blocking::{Client, RequestBuilder, Response};
 use reqwest::StatusCode;
 use serde_json::Value;
-use sha2::{Digest, Sha256};
 
 use super::User;
 
@@ -68,11 +67,11 @@ fn b64(bytes: &[u8]) -> String {
 pub fn device_keys(
     identity: &IdentityKeyPair,
 ) -> (EcPreKey, KemPreKey, Vec<EcPreKey>, Vec<KemPreKey>) {
-    let mut rng = rand09::rng();
+    let mut rng = kutup_crypto::primitives::Rng;
     let sign = |message: &[u8]| {
         b64(&identity
             .private_key()
-            .calculate_signature(message, &mut rand09::rng())
+            .calculate_signature(message, &mut kutup_crypto::primitives::Rng)
             .unwrap())
     };
     let signed = KeyPair::generate(&mut rng).public_key.serialize();
@@ -108,10 +107,12 @@ pub fn device_keys(
 }
 
 fn new_device_secrets() -> (u32, [u8; 32]) {
-    let mut rng = rand::thread_rng();
     let mut credential = [0u8; 32];
-    rng.fill_bytes(&mut credential);
-    ((rng.next_u32() % 16383) + 1, credential)
+    kutup_crypto::primitives::random(&mut credential);
+    (
+        (kutup_crypto::primitives::random_below(16383) as u32) + 1,
+        credential,
+    )
 }
 
 impl ChatAccount {
@@ -136,7 +137,7 @@ impl ChatAccount {
                 hpke_public_key: b64(&keys.drive_hpke_public_key()),
                 share_signing_public_key: b64(&keys.drive_signing_public_key()),
             },
-            identity: IdentityKeyPair::generate(&mut rand09::rng()),
+            identity: IdentityKeyPair::generate(&mut kutup_crypto::primitives::Rng),
             devices: Vec::new(),
             head: None,
         }
@@ -149,7 +150,7 @@ impl ChatAccount {
     /// The account's next manifest listing `devices`, signed by its authority.
     pub fn next_manifest(&self, devices: &[&ChatDevice]) -> AccountManifestV2 {
         let public = self.authority.verifying_key();
-        let mut incarnation = Sha256::new();
+        let mut incarnation = Hasher::new(Suite::V1);
         incarnation.update(b"kutup/account-incarnation/v1\0");
         incarnation.update(public.to_bytes());
         let mut listed: Vec<AccountManifestDeviceV2> = devices
@@ -165,7 +166,7 @@ impl ChatAccount {
         let mut manifest = AccountManifestV2 {
             manifest_version: 2,
             account: self.account.clone(),
-            incarnation_id: hex::encode(incarnation.finalize()),
+            incarnation_id: hex::encode(incarnation.finish()),
             sequence: self.head.as_ref().map_or(1, |head| head.sequence + 1),
             previous_hash: self.head.as_ref().map(|head| head.manifest_hash().unwrap()),
             identity_key: self.identity_key(),
@@ -175,7 +176,7 @@ impl ChatAccount {
             issued_at: time::OffsetDateTime::now_utc()
                 .format(&time::format_description::well_known::Rfc3339)
                 .unwrap(),
-            authority_key_id: hex::encode(Sha256::digest(public.to_bytes())),
+            authority_key_id: hex::encode(hash(Suite::V1, public.to_bytes())),
             self_authority_key: b64(&public.to_bytes()),
             signature: String::new(),
         };
@@ -193,7 +194,7 @@ impl ChatAccount {
             .private_key()
             .calculate_signature(
                 &manifest.identity_binding_bytes().unwrap(),
-                &mut rand09::rng(),
+                &mut kutup_crypto::primitives::Rng,
             )
             .unwrap());
     }

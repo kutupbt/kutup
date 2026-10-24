@@ -512,7 +512,7 @@ async fn main() -> anyhow::Result<()> {
 async fn run_federation_identity_rotation(pool: &PgPool, config: &Config) -> anyhow::Result<()> {
     let runtime = federation::FederationRuntimeConfig::from_server_config(config)?
         .ok_or_else(|| anyhow::anyhow!("unified federation is not configured"))?;
-    let previous_fingerprint = runtime.signing_key.verifying_key().to_bytes();
+    let previous_fingerprint = runtime.signing_key.verifying_key().to_array::<32>();
     let previous_fingerprint = kutup_federation_proto::federation_key_id(&previous_fingerprint);
     let result =
         federation::rotate_local_identity(pool, &runtime, time::OffsetDateTime::now_utc()).await?;

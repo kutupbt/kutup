@@ -17,8 +17,7 @@
 
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use base64::Engine;
-use rand::RngCore;
-use sha2::{Digest, Sha256};
+use kutup_crypto::primitives::{hash, Suite};
 use sqlx::PgPool;
 use time::{Duration, OffsetDateTime};
 use uuid::Uuid;
@@ -114,12 +113,12 @@ impl ClientType {
 /// A 32-byte random secret, base64url without padding (43 chars).
 fn new_secret() -> String {
     let mut bytes = [0u8; 32];
-    rand::thread_rng().fill_bytes(&mut bytes);
+    kutup_crypto::primitives::random(&mut bytes);
     URL_SAFE_NO_PAD.encode(bytes)
 }
 
 fn hash_secret(secret: &str) -> Vec<u8> {
-    Sha256::digest(secret.as_bytes()).to_vec()
+    hash(Suite::V1, secret.as_bytes()).to_vec()
 }
 
 /// Parse a presented secret; anything that is not 32 base64url bytes is

@@ -3510,6 +3510,7 @@ dependencies = [
  "rand 0.8.6",
  "rand_chacha 0.3.1",
  "rand_core 0.6.4",
+ "rand_core 0.9.5",
  "rsa",
  "serde",
  "serde_json",
@@ -3546,8 +3547,8 @@ name = "kutup-federation-proto"
 version = "0.1.0"
 dependencies = [
  "base64 0.22.1",
- "ed25519-dalek",
  "hex",
+ "kutup-crypto",
  "serde",
  "serde_json",
  "sha2 0.10.9",
@@ -3655,8 +3656,6 @@ dependencies = [
  "opentelemetry_sdk",
  "p256",
  "psl",
- "rand 0.8.6",
- "rand 0.9.4",
  "reqwest",
  "rustls",
  "serde",

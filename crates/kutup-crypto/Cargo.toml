@@ -41,6 +41,8 @@ subtle = "2"
 # primitives::Rng: the one random source, for adapters that take an RNG
 # value (rPGP, rsa, OPAQUE; all on rand_core 0.6).
 rand_core = "0.6"
+# libsignal's generators take rand_core 0.9's traits.
+rand_core09 = { package = "rand_core", version = "0.9" }
 # Signal's ProvisioningCipher (AES-256-CBC + HMAC-SHA256) for linking a Chat
 # device (`provisioning`); the versions libsignal already brings.
 aes = "=0.8.4"

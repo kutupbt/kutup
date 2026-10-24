@@ -9,6 +9,7 @@
 //! secrets, the latest 88-byte update and the times. Readers on other servers
 //! read through their own server over signed federation.
 
+use kutup_crypto::primitives::{hash, Suite};
 use std::sync::LazyLock;
 use std::time::Duration;
 
@@ -21,7 +22,6 @@ use base64::Engine as _;
 use kutup_federation_proto::FederationFeature;
 use reqwest::Method;
 use serde::{Deserialize, Serialize};
-use sha2::{Digest as _, Sha256};
 use sqlx::PgPool;
 use time::OffsetDateTime;
 use utoipa::ToSchema;
@@ -80,16 +80,7 @@ fn hashed_secret(headers: &HeaderMap, name: &str) -> AppResult<Vec<u8>> {
         .and_then(|value| value.to_str().ok())
         .and_then(secret_of)
         .ok_or_else(gone)?;
-    Ok(Sha256::digest(secret).to_vec())
-}
-
-fn constant_time_eq(left: &[u8], right: &[u8]) -> bool {
-    left.len() == right.len()
-        && left
-            .iter()
-            .zip(right)
-            .fold(0u8, |acc, (a, b)| acc | (a ^ b))
-            == 0
+    Ok(hash(Suite::V1, secret).to_vec())
 }
 
 #[derive(Debug, Deserialize, ToSchema)]
@@ -175,8 +166,8 @@ pub async fn create(
          VALUES ($1, $2, $3, $4) ON CONFLICT (stream_id) DO NOTHING",
     )
     .bind(&stream_id)
-    .bind(Sha256::digest(write).to_vec())
-    .bind(Sha256::digest(read).to_vec())
+    .bind(hash(Suite::V1, write).to_vec())
+    .bind(hash(Suite::V1, read).to_vec())
     .bind(expires_at)
     .execute(&state.pool)
     .await?;
@@ -233,7 +224,7 @@ pub async fn write(
     let Some((stored, stored_counter, updated_at, expires_at)) = row else {
         return Err(gone());
     };
-    if !constant_time_eq(&stored, &verifier) || expires_at <= now {
+    if !kutup_crypto::primitives::ct_eq(&stored, &verifier) || expires_at <= now {
         return Err(gone());
     }
     if counter <= stored_counter {
@@ -280,7 +271,7 @@ pub async fn delete(
             .bind(&stream_id)
             .fetch_optional(&state.pool)
             .await?;
-    if !stored.is_some_and(|stored| constant_time_eq(&stored, &verifier)) {
+    if !stored.is_some_and(|stored| kutup_crypto::primitives::ct_eq(&stored, &verifier)) {
         return Err(gone());
     }
     sqlx::query("DELETE FROM live_location_streams WHERE stream_id = $1")
@@ -313,7 +304,9 @@ async fn read_local(
     let Some((stored, update, updated_at, expires_at)) = row else {
         return Err(gone());
     };
-    if !constant_time_eq(&stored, verifier) || expires_at <= OffsetDateTime::now_utc() {
+    if !kutup_crypto::primitives::ct_eq(&stored, verifier)
+        || expires_at <= OffsetDateTime::now_utc()
+    {
         return Err(gone());
     }
     Ok(LiveLocationResponse {
@@ -512,8 +505,5 @@ mod tests {
         assert!(secret_of("AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=").is_some());
         assert!(secret_of("AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8").is_none());
         assert!(secret_of("AAEC").is_none());
-        assert!(constant_time_eq(b"abc", b"abc"));
-        assert!(!constant_time_eq(b"abc", b"abd"));
-        assert!(!constant_time_eq(b"abc", b"ab"));
     }
 }

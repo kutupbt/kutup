@@ -118,11 +118,11 @@ pub fn verify_mls_ordering_policy_history_details(
 mod tests {
     use base64::engine::general_purpose::STANDARD as BASE64;
     use base64::Engine as _;
-    use ed25519_dalek::SigningKey;
     use kutup_chat_proto::{
         MlsAbuseLimitsV1, MlsAnonymousDeliverySuiteV1, MlsCipherSuiteId,
         PendingMessageRequestPolicyV1, MLS_ORDERING_SERVICE_POLICY_VERSION,
     };
+    use kutup_crypto::primitives::{SigningKey, Suite};
     use kutup_federation_proto::{
         FederatedFeaturePolicyEnvelopeV1, FederatedFeaturePolicyHistoryV1,
         FederatedFeaturePolicyTypeV1, FederationIdentityDocumentV1,
@@ -132,8 +132,8 @@ mod tests {
     use super::*;
 
     fn policy(domain: &str) -> MlsOrderingServicePolicyV1 {
-        let control_key = SigningKey::from_bytes(&[44; 32]);
-        let public_key = control_key.verifying_key().to_bytes();
+        let control_key = SigningKey::from_seed(Suite::V1, &[44; 32]);
+        let public_key = control_key.verifying_key().to_array::<32>();
         MlsOrderingServicePolicyV1 {
             policy_version: MLS_ORDERING_SERVICE_POLICY_VERSION,
             canonical_domain: domain.into(),
@@ -156,7 +156,7 @@ mod tests {
         payload_domain: &str,
         feature_type: FederatedFeaturePolicyTypeV1,
     ) -> FederatedFeaturePolicyHistoryV1 {
-        let identity_key = SigningKey::from_bytes(&[33; 32]);
+        let identity_key = SigningKey::from_seed(Suite::V1, &[33; 32]);
         let identity =
             FederationIdentityDocumentV1::genesis(domain, 1_700_000_000, &identity_key).unwrap();
         let envelope = FederatedFeaturePolicyEnvelopeV1::sign(
@@ -237,7 +237,7 @@ mod tests {
 
     #[test]
     fn rejects_an_authenticated_history_with_an_unparseable_old_feature_payload() {
-        let identity_key = SigningKey::from_bytes(&[33; 32]);
+        let identity_key = SigningKey::from_seed(Suite::V1, &[33; 32]);
         let identity =
             FederationIdentityDocumentV1::genesis("alpha.example", 1_700_000_000, &identity_key)
                 .unwrap();

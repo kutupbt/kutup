@@ -9,7 +9,6 @@ use kutup_crypto::drive_envelope::{self, DriveEnvelopeContextV1, DriveEnvelopePu
 use kutup_crypto::drive_object::{self, DriveFileBlobContextV1};
 use kutup_crypto::identity::AccountIdentityKeysV1;
 use kutup_crypto::named_share::NamedShareEnvelopeV1;
-use rand::RngCore;
 use reqwest::blocking::{multipart, Client, RequestBuilder, Response};
 use reqwest::StatusCode;
 use serde_json::{json, Value};
@@ -126,7 +125,7 @@ pub fn register_as(c: &Client, base: &str, username: &str) -> Result<User, Statu
 }
 
 fn register_with(c: &Client, base: &str, binding: bool) -> Result<User, StatusCode> {
-    let tag = rand::thread_rng().next_u64() % 1_000_000_000;
+    let tag = kutup_crypto::primitives::random_below(1_000_000_000);
     register_attempt(c, base, binding, format!("int{tag}"))
 }
 
@@ -146,7 +145,7 @@ pub fn register_coded(
     base: &str,
     code: Option<&str>,
 ) -> Result<User, (StatusCode, Value)> {
-    let tag = rand::thread_rng().next_u64() % 1_000_000_000;
+    let tag = kutup_crypto::primitives::random_below(1_000_000_000);
     register_full(c, base, true, format!("ref{tag}"), code)
 }
 
@@ -424,13 +423,12 @@ fn sign_up_sent(
     tweak: impl FnOnce(&mut Value),
     sent: &mut Option<SignUp>,
 ) -> Result<User, (StatusCode, Value)> {
-    let mut rng = rand::thread_rng();
     let key_binding = key_binding.unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
     let password = PASSWORD;
     let mut master_key = [0u8; 32];
     let mut recovery_entropy = [0u8; 32];
-    rng.fill_bytes(&mut master_key);
-    rng.fill_bytes(&mut recovery_entropy);
+    kutup_crypto::primitives::random(&mut master_key);
+    kutup_crypto::primitives::random(&mut recovery_entropy);
     // Sign-ups closed refuse already here (registrationClosed).
     let (opaque_record, server_key_id, export_key, started) =
         try_opaque_register_answer(c, base, password, &key_binding, None, None)?;
@@ -546,7 +544,7 @@ pub fn create_folder(c: &Client, base: &str, owner: &User) -> Folder {
 pub fn create_folder_in(c: &Client, base: &str, owner: &User, parent: Option<&str>) -> Folder {
     let id = uuid();
     let mut key = [0u8; 32];
-    rand::thread_rng().fill_bytes(&mut key);
+    kutup_crypto::primitives::random(&mut key);
     let r = bearer(c.post(format!("{base}/api/collections")), &owner.token)
         .json(&json!({
             "id": id,
@@ -604,7 +602,7 @@ pub struct Sealed {
 
 pub fn seal_file(folder: &Folder, id: &str, plain: &[u8]) -> Sealed {
     let mut key = [0u8; 32];
-    rand::thread_rng().fill_bytes(&mut key);
+    kutup_crypto::primitives::random(&mut key);
     Sealed {
         id: id.to_string(),
         key,
@@ -862,11 +860,10 @@ fn setup_keys(
         first_login["userId"].as_str().unwrap(),
     )
     .unwrap();
-    let mut rng = rand::thread_rng();
     let mut master_key = [0u8; 32];
     let mut recovery_entropy = [0u8; 32];
-    rng.fill_bytes(&mut master_key);
-    rng.fill_bytes(&mut recovery_entropy);
+    kutup_crypto::primitives::random(&mut master_key);
+    kutup_crypto::primitives::random(&mut recovery_entropy);
     let binding = uuid::Uuid::new_v4().to_string();
     let (opaque_record, server_key_id, export_key) =
         opaque_register(c, base, password, &binding, None, Some(setup_token));
@@ -1065,10 +1062,11 @@ pub fn sign_in_again(c: &Client, base: &str, user: &User) -> String {
 /// account's own authority.
 pub fn register_device(c: &Client, base: &str, user: &User) -> Device {
     let mut seed = [0u8; 32];
-    rand::thread_rng().fill_bytes(&mut seed);
-    let key = ed25519_dalek::SigningKey::from_bytes(&seed)
-        .verifying_key()
-        .to_bytes();
+    kutup_crypto::primitives::random(&mut seed);
+    let key =
+        kutup_crypto::primitives::SigningKey::from_seed(kutup_crypto::primitives::Suite::V1, &seed)
+            .verifying_key()
+            .to_array::<32>();
     let challenge = device_challenge(c, base, user);
     let r = bearer(c.post(format!("{base}/api/devices")), &user.token)
         .json(&device_registration_body(

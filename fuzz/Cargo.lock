@@ -1549,6 +1549,7 @@ dependencies = [
  "pgp",
  "rand 0.8.7",
  "rand_core 0.6.4",
+ "rand_core 0.9.5",
  "rsa",
  "serde",
  "serde_json",
@@ -1565,8 +1566,8 @@ name = "kutup-federation-proto"
 version = "0.1.0"
 dependencies = [
  "base64",
- "ed25519-dalek",
  "hex",
+ "kutup-crypto",
  "serde",
  "sha2",
  "thiserror",

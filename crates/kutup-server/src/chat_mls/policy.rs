@@ -45,7 +45,11 @@ impl MlsOrderingService {
                 crate::server_keys::GeneratedKey::MlsControl,
             )
             .await?;
-            let signer = Ed25519MlsControlSigner::new(ed25519_dalek::SigningKey::from_bytes(&seed));
+            let signer =
+                Ed25519MlsControlSigner::new(kutup_crypto::primitives::SigningKey::from_seed(
+                    kutup_crypto::primitives::Suite::V1,
+                    &seed,
+                ));
             seed.fill(0);
             let policy = MlsOrderingServicePolicyV1::standard(
                 federation.server_name(),
@@ -72,7 +76,10 @@ impl MlsOrderingService {
         let seed: [u8; 32] = seed
             .try_into()
             .map_err(|_| anyhow::anyhow!("CHAT_MLS_CONTROL_SIGNING_KEY must be 32 bytes"))?;
-        let signer = Ed25519MlsControlSigner::new(ed25519_dalek::SigningKey::from_bytes(&seed));
+        let signer = Ed25519MlsControlSigner::new(kutup_crypto::primitives::SigningKey::from_seed(
+            kutup_crypto::primitives::Suite::V1,
+            &seed,
+        ));
         if signer.key_id() != policy.control_signing_key_id
             || signer.public_key() != policy.control_signing_public_key
         {

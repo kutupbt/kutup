@@ -9,6 +9,7 @@
 //! server each request came through, so administrators can check that the
 //! sealed requester belongs to it.
 
+use kutup_crypto::primitives::{hash, Suite};
 use std::sync::LazyLock;
 
 use axum::body::Bytes;
@@ -24,7 +25,6 @@ use kutup_chat_proto::{
 };
 use kutup_federation_proto::FederationFeature;
 use reqwest::Method;
-use sha2::{Digest, Sha256};
 use sqlx::PgPool;
 use time::OffsetDateTime;
 use uuid::Uuid;
@@ -53,7 +53,7 @@ fn token_hash(token: &str) -> AppResult<Vec<u8>> {
     let bytes = STANDARD
         .decode(token)
         .map_err(|_| AppError::bad_request("invite link token must be base64"))?;
-    Ok(Sha256::digest(bytes).to_vec())
+    Ok(hash(Suite::V1, bytes).to_vec())
 }
 
 fn status_code(status: InviteRequestStatusV1) -> i16 {
@@ -511,7 +511,7 @@ mod tests {
         let token = STANDARD.encode([3u8; 32]);
         assert_eq!(
             token_hash(&token).unwrap(),
-            Sha256::digest([3u8; 32]).to_vec()
+            hash(Suite::V1, [3u8; 32]).to_vec()
         );
         assert!(token_hash("not base64!").is_err());
     }

@@ -160,6 +160,17 @@ tests) prove nothing on the wire changed.
 6. **kutup-pass** (random only; KDBX and SSH stay adapters).
 7. **deny `[bans]`** last, once nothing outside the wrappers uses the crates.
 
+Step 3 notes: an object's stored SHA-256 that is also served as an RFC 9530
+`Content-Digest` (Drive versions and uploads, Chat media, album thumbnails,
+federation response bodies) goes through federation-proto's `ContentDigest`,
+since the header names `sha-256` whatever the suite is; every other server
+hash is the suite's. The server's RNG uses (rand 0.8, rand 0.9 for
+libsignal, p256's `OsRng`) are all `primitives::Rng`/`random*` now, and the
+server no longer depends on `rand`; `random_below` serves codes, digits and
+jitter. kutup-chat-proto's group-route and MLS-control signers take
+`primitives::SigningKey`, as the server hands them one; the rest of that
+crate moves with chat-core.
+
 After that, **block format slices 1-2** build their framing on `Aead::new`
 and `hash`, and the wipe branch sets every header's suite to 1.
 
@@ -178,10 +189,10 @@ on `fuzz` as on the other standalone roots.
 |---|---|
 | ~~`crates/kutup-crypto`~~ | step 2: done |
 | ~~`crates/kutup-crypto-wasm`~~ | step 2: done |
-| `crates/kutup-server` | step 3 |
+| ~~`crates/kutup-server`~~ | step 3: done |
 | `crates/kutup-cli` | step 4 |
 | `crates/kutup-pass` | step 6 (KDBX and the SSH agent become adapters) |
-| `crates/kutup-federation-proto` | step 3 |
+| ~~`crates/kutup-federation-proto`~~ | step 3: done |
 | `crates/kutup-chat-proto` | with chat-core's crypto (wipe plan, code item 1) |
 | `crates/kutup-chat-core`, `crates/kutup-client-ffi`, `fuzz` | with chat-core's crypto |
 
@@ -217,6 +228,10 @@ adapter adds its row here, in the PR that adds it.
 | `crates/kutup-server/src/tls.rs` | the `reqwest` rule: the one place a client is built |
 | `crates/kutup-server/tests/common/mod.rs` | the `reqwest` rule, for the tests |
 | `crates/kutup-cli/src/tls.rs` | the `reqwest` rule: the one place a client is built |
+| `crates/kutup-federation-proto/src/http_signatures.rs` | RFC 9530's `sha-256` Content-Digest (`ContentDigest`) |
+| `crates/kutup-server/src/calls.rs` | coturn's REST-API credential (HMAC-SHA1) |
+| `crates/kutup-server/src/web_push_payload.rs` | RFC 8291 Web Push encryption (HKDF-SHA256) |
+| `crates/kutup-server/src/web_push.rs` | RFC 8292's ES256 signature, checked in a test |
 
 ## Not in this note
 

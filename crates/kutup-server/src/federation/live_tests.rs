@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use ed25519_dalek::SigningKey;
+use kutup_crypto::primitives::SigningKey;
 use kutup_federation_proto::{
     FederationCapabilityId, FederationDiscoveryV2, FederationFeature, FederationHttpRequest,
     FederationIdentityDocumentV1, FederationProtocolVersion, FederationReplayMetadata,
@@ -53,8 +53,8 @@ async fn live_identity_trust_policy_and_replay_invariants() {
         .unwrap();
 
     let now = OffsetDateTime::from_unix_timestamp(1_800_000_000).unwrap();
-    let local_current = SigningKey::from_bytes(&[1; 32]);
-    let local_next = SigningKey::from_bytes(&[2; 32]);
+    let local_current = SigningKey::from_seed(kutup_crypto::primitives::Suite::V1, &[1; 32]);
+    let local_next = SigningKey::from_seed(kutup_crypto::primitives::Suite::V1, &[2; 32]);
     let local_config = runtime_config("local.example", local_current.clone(), None);
     let genesis = LocalFederationIdentity::load_or_create(&pool, &local_config, now)
         .await
@@ -135,14 +135,14 @@ async fn live_identity_trust_policy_and_replay_invariants() {
         .unwrap()
         .is_none());
 
-    let peer_current = SigningKey::from_bytes(&[11; 32]);
-    let peer_next = SigningKey::from_bytes(&[12; 32]);
+    let peer_current = SigningKey::from_seed(kutup_crypto::primitives::Suite::V1, &[11; 32]);
+    let peer_next = SigningKey::from_seed(kutup_crypto::primitives::Suite::V1, &[12; 32]);
     let peer_genesis =
         FederationIdentityDocumentV1::genesis("peer.example", now.unix_timestamp(), &peer_current)
             .unwrap();
     let trust_store = trust::FederationTrustStore::new(pool.clone());
 
-    let convergent_key = SigningKey::from_bytes(&[31; 32]);
+    let convergent_key = SigningKey::from_seed(kutup_crypto::primitives::Suite::V1, &[31; 32]);
     let convergent_identity = FederationIdentityDocumentV1::genesis(
         "convergent.example",
         now.unix_timestamp(),
@@ -183,8 +183,9 @@ async fn live_identity_trust_policy_and_replay_invariants() {
         1
     );
 
-    let competing_first_key = SigningKey::from_bytes(&[41; 32]);
-    let competing_second_key = SigningKey::from_bytes(&[42; 32]);
+    let competing_first_key = SigningKey::from_seed(kutup_crypto::primitives::Suite::V1, &[41; 32]);
+    let competing_second_key =
+        SigningKey::from_seed(kutup_crypto::primitives::Suite::V1, &[42; 32]);
     let competing_first_identity = FederationIdentityDocumentV1::genesis(
         "competing.example",
         now.unix_timestamp(),
@@ -364,7 +365,7 @@ async fn live_identity_trust_policy_and_replay_invariants() {
 
     // A fully self-consistent alternate history is evidence of replacement,
     // so retain the old key and quarantine globally.
-    let replacement_key = SigningKey::from_bytes(&[21; 32]);
+    let replacement_key = SigningKey::from_seed(kutup_crypto::primitives::Suite::V1, &[21; 32]);
     let replacement = FederationIdentityDocumentV1::genesis(
         "peer.example",
         (now + Duration::seconds(4)).unix_timestamp(),
@@ -554,7 +555,7 @@ fn replay_metadata(
     FederationVerifiedRequest::verify(
         signed.request,
         signed.headers,
-        &signing_key.verifying_key().to_bytes(),
+        &signing_key.verifying_key().to_array::<32>(),
         now.unix_timestamp(),
     )
     .unwrap()

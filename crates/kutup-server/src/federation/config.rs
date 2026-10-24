@@ -1,6 +1,6 @@
 use base64::engine::general_purpose::STANDARD;
 use base64::Engine as _;
-use ed25519_dalek::SigningKey;
+use kutup_crypto::primitives::SigningKey;
 use kutup_federation_proto::validate_server_name;
 use url::Url;
 
@@ -159,7 +159,10 @@ fn decode_signing_key(name: &str, encoded: &str) -> anyhow::Result<SigningKey> {
     let seed: [u8; 32] = decoded
         .try_into()
         .map_err(|_| anyhow::anyhow!("{name} must decode to exactly 32 bytes"))?;
-    Ok(SigningKey::from_bytes(&seed))
+    Ok(SigningKey::from_seed(
+        kutup_crypto::primitives::Suite::V1,
+        &seed,
+    ))
 }
 
 fn canonical_api_base(value: &str, allow_http_for_test: bool) -> anyhow::Result<String> {

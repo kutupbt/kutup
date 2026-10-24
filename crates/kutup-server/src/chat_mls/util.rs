@@ -1,12 +1,12 @@
 //! Shared validation helpers for MLS HTTP and repository boundaries.
 
+use kutup_crypto::primitives::{Hasher, Suite};
 use std::collections::BTreeSet;
 
 use axum::http::header::{AUTHORIZATION, COOKIE};
 use axum::http::HeaderMap;
 use base64::engine::general_purpose::STANDARD;
 use base64::Engine as _;
-use sha2::{Digest as _, Sha256};
 
 use crate::error::{AppError, AppResult};
 
@@ -80,8 +80,8 @@ pub(super) fn unavailable() -> AppError {
 }
 
 pub(super) fn scoped_digest(context: &[u8], value: &[u8]) -> Vec<u8> {
-    let mut hash = Sha256::new();
+    let mut hash = Hasher::new(Suite::V1);
     hash.update(context);
     hash.update(value);
-    hash.finalize().to_vec()
+    hash.finish().to_vec()
 }

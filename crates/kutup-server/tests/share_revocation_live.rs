@@ -17,7 +17,6 @@ use kutup_crypto::drive_envelope::{self, DriveEnvelopeContextV1, DriveEnvelopePu
 use kutup_crypto::drive_object::{self, DriveFileBlobContextV1};
 use kutup_crypto::file_keyring::{self, FileKeyLinkV1};
 use kutup_crypto::named_share::NamedShareEnvelopeV1;
-use rand::RngCore;
 use reqwest::StatusCode;
 use serde_json::{json, Value};
 
@@ -77,7 +76,7 @@ fn share_revocation_contract() {
 
     // A public link, with the owner's copy of its key.
     let mut link_key = [0u8; 32];
-    rand::thread_rng().fill_bytes(&mut link_key);
+    kutup_crypto::primitives::random(&mut link_key);
     let link_id = uuid();
     let link = bearer(c.post(format!("{base}/api/share")), &owner.token)
         .json(&json!({
@@ -123,7 +122,7 @@ fn share_revocation_contract() {
 
     // The rotation that removes Bob.
     let mut key2 = [0u8; 32];
-    rand::thread_rng().fill_bytes(&mut key2);
+    kutup_crypto::primitives::random(&mut key2);
     let statement = CollectionEpochStatementV1::create(
         &folder.id,
         &owner.id,
@@ -294,7 +293,7 @@ fn share_revocation_contract() {
 
     // Re-key the file: generation 2, wrapped at epoch 2, sealing generation 1.
     let mut file_key2 = [0u8; 32];
-    rand::thread_rng().fill_bytes(&mut file_key2);
+    kutup_crypto::primitives::random(&mut file_key2);
     let rekey = |from: i32| {
         bearer(c.post(format!("{base}/api/files/{}/rekey", file.id)), &alice.token)
             .json(&json!({
