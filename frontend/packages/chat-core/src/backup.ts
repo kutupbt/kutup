@@ -400,6 +400,8 @@ export class ChatBackupCoordinator {
   private viewValue: ChatBackupView
   private timer: BackupScheduledTask | null = null
   private running: Promise<void> | null = null
+  /** A cycle was asked for while one ran: that one collected before the change, so another follows. */
+  private again = false
   private disposed = false
   private compactionRequested = false
   private messageStorageFull = false
@@ -607,15 +609,36 @@ export class ChatBackupCoordinator {
   }
 
   schedule(): void {
-    if (this.disposed || this.timer !== null) return
+    if (this.disposed) return
+    // A change not collected yet isn't protected: the view says so at once,
+    // not only after the cycle (a browser closed in between would lose it).
+    if (this.viewValue.state === 'protected') {
+      this.viewValue = { ...this.viewValue, state: 'backingUp' }
+      for (const listener of this.listeners) listener()
+    }
+    if (this.timer !== null) return
     this.timer = this.runtime.scheduler.schedule(900, () => {
       this.timer = null
       void this.runCycle()
     })
   }
 
-  pageHidden(): void {
-    if (document.visibilityState === 'hidden') void this.runCycle()
+  /**
+   * The page went hidden, or is going away (`pagehide`): what is scheduled
+   * goes now, not after the debounce the page may not outlive.
+   */
+  pageHidden(goingAway = false): void {
+    if (goingAway || document.visibilityState === 'hidden') void this.flushScheduled()
+  }
+
+  /**
+   * Collects and uploads everything scheduled now, even a change that came
+   * in while a cycle was already running (that cycle didn't collect it).
+   */
+  private async flushScheduled(): Promise<void> {
+    if (this.timer !== null) this.runtime.scheduler.cancel(this.timer)
+    this.timer = null
+    await this.runCycle()
   }
 
   online(): void {
@@ -645,10 +668,19 @@ export class ChatBackupCoordinator {
   }
 
   private runCycle(): Promise<void> {
-    if (this.running) return this.running
+    if (this.running) {
+      // The running cycle may have collected before what asked for this one
+      // (a message that came in while a segment was uploading): one more runs
+      // after it, or that change would wait for the next one.
+      this.again = true
+      return this.running
+    }
     this.running = (async () => {
-      await this.collectAndQueue()
-      await this.flush()
+      do {
+        this.again = false
+        await this.collectAndQueue()
+        await this.flush()
+      } while (this.again && !this.disposed)
     })().finally(() => { this.running = null })
     return this.running
   }
@@ -1560,10 +1592,12 @@ export class ChatBackupCoordinator {
       loadState(this.db, this.runtime.clock.now()),
     ])
     const pendingMedia = Array.from(this.media.values()).filter(value => !value.protected)
+    const computed = preferred ?? (!this.runtime.connectivity.isOnline() ? 'offline'
+      : outbox.length > 0 ? 'backingUp'
+        : this.mediaViewState())
     this.viewValue = {
-      state: preferred ?? (!this.runtime.connectivity.isOnline() ? 'offline'
-        : outbox.length > 0 ? 'backingUp'
-          : this.mediaViewState()),
+      // A cycle still scheduled has changes it hasn't collected yet.
+      state: computed === 'protected' && (this.timer !== null || this.again) ? 'backingUp' : computed,
       storageFull: this.messageStorageFull || pendingMedia.some(value => value.storageFull),
       currentCursor: this.status.currentCursor,
       latestProtectedAt: state.latestProtectedAt ?? this.viewValue.latestProtectedAt,

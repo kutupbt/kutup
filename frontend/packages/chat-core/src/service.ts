@@ -465,6 +465,7 @@ export class ChatService {
     window.addEventListener('online', this.handleOnline)
     window.addEventListener('offline', this.handleOffline)
     document.addEventListener('visibilitychange', this.handleVisibilityChange)
+    window.addEventListener('pagehide', this.handlePageHide)
   }
 
   static async open(options: ChatServiceOptions): Promise<ChatService> {
@@ -2435,6 +2436,7 @@ export class ChatService {
     window.removeEventListener('online', this.handleOnline)
     window.removeEventListener('offline', this.handleOffline)
     document.removeEventListener('visibilitychange', this.handleVisibilityChange)
+    window.removeEventListener('pagehide', this.handlePageHide)
     this.channel.close()
     this.listeners.clear()
     this.typingListeners.clear()
@@ -2686,6 +2688,11 @@ export class ChatService {
     if (this.pongDeadline) clearTimeout(this.pongDeadline)
     this.heartbeat = null
     this.pongDeadline = null
+  }
+
+  /** The page is going away (closed, navigated, frozen): back up what waits. */
+  private readonly handlePageHide = (): void => {
+    this.backup?.pageHidden(true)
   }
 
   private readonly handleVisibilityChange = (): void => {
