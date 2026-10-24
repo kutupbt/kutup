@@ -1612,6 +1612,85 @@ pub fn canonical_file_metadata(json: &str) -> Result<String, JsValue> {
     String::from_utf8(bytes).map_err(|_| js_error("file metadata is not UTF-8"))
 }
 
+/// The suite's hash, fed in parts (`kutup_crypto::primitives::Hasher`):
+/// the web apps' one streaming hash (docs/plans/crypto-primitives.md, step 5).
+#[wasm_bindgen(js_name = SuiteHasher)]
+pub struct SuiteHasherJs(Option<kutup_crypto::primitives::Hasher>);
+
+#[wasm_bindgen(js_class = SuiteHasher)]
+impl SuiteHasherJs {
+    #[wasm_bindgen(constructor)]
+    pub fn new() -> Self {
+        Self(Some(kutup_crypto::primitives::Hasher::new(
+            kutup_crypto::primitives::Suite::V1,
+        )))
+    }
+
+    pub fn update(&mut self, chunk: &[u8]) -> Result<(), JsValue> {
+        self.0
+            .as_mut()
+            .ok_or_else(|| js_error("hash already finished"))?
+            .update(chunk);
+        Ok(())
+    }
+
+    /// The digest; the hasher is spent.
+    pub fn finish(&mut self) -> Result<Vec<u8>, JsValue> {
+        self.0
+            .take()
+            .map(|hasher| hasher.finish().to_vec())
+            .ok_or_else(|| js_error("hash already finished"))
+    }
+}
+
+impl Default for SuiteHasherJs {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+/// A new signing key of the suite, as `seed ‖ public key` (64 bytes:
+/// libsodium's form, which stored collaboration device keys use).
+#[wasm_bindgen(js_name = signingKeyGenerate)]
+pub fn signing_key_generate() -> Vec<u8> {
+    let (key, seed) =
+        kutup_crypto::primitives::SigningKey::generate(kutup_crypto::primitives::Suite::V1);
+    [seed.as_slice(), &key.verifying_key().to_bytes()].concat()
+}
+
+fn signing_key_of(private_key: &[u8]) -> Result<kutup_crypto::primitives::SigningKey, JsValue> {
+    let seed: [u8; 32] = private_key
+        .get(..32)
+        .filter(|_| private_key.len() == 32 || private_key.len() == 64)
+        .and_then(|seed| seed.try_into().ok())
+        .ok_or_else(|| js_error("a signing key is a 32-byte seed or seed ‖ public key"))?;
+    let key = kutup_crypto::primitives::SigningKey::from_seed(
+        kutup_crypto::primitives::Suite::V1,
+        &seed,
+    );
+    if private_key.len() == 64 && key.verifying_key().to_bytes() != private_key[32..] {
+        return Err(js_error("the signing key's public half does not match its seed"));
+    }
+    Ok(key)
+}
+
+/// A signature by `private_key` (a seed, or `seed ‖ public key`) over `message`.
+#[wasm_bindgen(js_name = signingKeySign)]
+pub fn signing_key_sign(private_key: &[u8], message: &[u8]) -> Result<Vec<u8>, JsValue> {
+    Ok(signing_key_of(private_key)?.sign(message))
+}
+
+/// Whether `signature` is `public_key`'s over `message`, checked strictly
+/// (the suite's verification).
+#[wasm_bindgen(js_name = signingKeyVerify)]
+pub fn signing_key_verify(public_key: &[u8], message: &[u8], signature: &[u8]) -> bool {
+    kutup_crypto::primitives::VerifyingKey::from_bytes(
+        kutup_crypto::primitives::Suite::V1,
+        public_key,
+    )
+    .is_ok_and(|key| key.verify(message, signature).is_ok())
+}
+
 /// A photo's content hash, fed chunk by chunk as the file is read.
 #[wasm_bindgen(js_name = ContentHasher)]
 pub struct ContentHasherJs(Option<kutup_crypto::file_metadata::ContentHasher>);

@@ -179,14 +179,33 @@ uploads, whiteboard assets) are the suite's hash, as on the server; under V1
 it is the same SHA-256 as the served `ContentDigest`, and a suite with
 another hash renames those fields (a format change, not a silent swap).
 
-Step 5 notes: `@kutup/crypto/random` (`randomBytes`, `fillRandom`, over
-`crypto.getRandomValues`) and `@kutup/crypto/hash` (the suite's hash, over
-Web Crypto's SHA-256, as `primitives::hash` in Rust) are the frontend's one
-random source and one hash. ESLint refuses `getRandomValues` and `subtle`
-(as members or taken apart) and libsodium imports (static or dynamic)
-anywhere outside `packages/crypto`, tests included. `crypto.randomUUID`
-stays allowed: it makes ids, never keys. Nothing else called Web Crypto
-directly (no HMAC or Ed25519 left outside the package).
+Step 5 notes: the frontend's one random source, hash and signature live in
+`@kutup/crypto`:
+- `random` (`randomBytes`, `fillRandom`, over `crypto.getRandomValues`);
+- `hash` (`hash` over Web Crypto's SHA-256, and `createHasher`, the suite's
+  streaming hash through kutup-crypto's WASM `SuiteHasher`, for Chat's media
+  and backup streams);
+- `signing` (Ed25519 through the WASM `signingKey*` functions, verified
+  strictly as the server verifies; collaboration device keys keep
+  libsodium's `seed ‖ public key` form, so stored keys still sign).
+
+Nothing outside the package reaches libsodium: `@kutup/crypto/sodium` is
+refused like the libsodium packages. ESLint refuses Web Crypto and libsodium
+everywhere else, tests and the apps' public scripts included, in every
+form: a member by name or computed (`crypto['subtle']`, `crypto[k]`), a
+destructured property (named, quoted or computed), `Reflect` on `crypto`,
+static imports and subpaths, and dynamic imports. A dynamic import of a
+computed name is refused too. The static gate refuses `eslint-disable` or
+inline config for these rules (`check-crypto-exceptions.py`). Named
+exceptions in `eslint.config.js`:
+- the calendar's push worker (`apps/calendar/public/push-sw.js`), which
+  checks a push's account tag with Web Crypto's HMAC, as a service worker
+  can't load the WASM first;
+- the three WASM loaders that import their own glue by URL (Chat's
+  libsignal module, the Pass worker, mail search), for computed dynamic
+  imports only.
+
+`crypto.randomUUID` stays allowed: it makes ids, never keys.
 
 After that, **block format slices 1-2** build their framing on `Aead::new`
 and `hash`, and the wipe branch sets every header's suite to 1.

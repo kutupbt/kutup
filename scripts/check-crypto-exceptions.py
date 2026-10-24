@@ -26,6 +26,10 @@ LINTS = re.compile(r"clippy\s*::\s*disallowed[-_](?:types|methods)\b")
 # Lints or groups whose allowing also switches the disallowed_* rules off.
 GROUPS = {"clippy::style", "clippy::all", "warnings"}
 TOML_GROUPS = {"disallowed_types", "disallowed_methods", "style", "all"}
+# The ESLint rules that carry the frontend's crypto lint, and the comments
+# that could switch them off.
+FRONTEND_LINTS = {"no-restricted-syntax", "no-restricted-imports"}
+ESLINT_COMMENT = re.compile(r"(?:/[/*]|^\s*\*)\s*eslint(-disable(?:-next-line|-line)?|\s)([^*\n]*)")
 # Cargo takes a lint name in a [lints] table with dashes as well.
 ATTRIBUTE = re.compile(r"#!?\[\s*(?:allow|expect)\s*\(([^\]]*)\)\s*\]|cfg_attr\([^\]]*?\b(?:allow|expect)\s*\(([^)]*)\)")
 FLAG = re.compile(
@@ -121,6 +125,22 @@ def other_switches() -> list[str]:
             errors.append(f"{rel}: sets CLIPPY_CONF_DIR")
         if any(FLAG.search(flags) for flags in rustflags(config)):
             errors.append(f"{rel}: rustflags switch the crypto lint off")
+    # The frontend's crypto lint (eslint.config.js, step 5) is switched off
+    # by no comment: no eslint-disable naming its rules or naming none, and
+    # no inline config for them.
+    for pattern in ("frontend/**/*.ts", "frontend/**/*.tsx", "frontend/**/*.js", "frontend/**/*.mjs"):
+        for path in walk(pattern):
+            if "dist" in path.parts or "wasm" in path.relative_to(ROOT / "frontend").parts[:1]:
+                continue
+            rel = path.relative_to(ROOT).as_posix()
+            for number, line in enumerate(path.read_text(encoding="utf-8", errors="replace").splitlines(), 1):
+                found = ESLINT_COMMENT.search(line)
+                if not found:
+                    continue
+                rules = found.group(2) or ""
+                named = {rule.split("--")[0].split(":")[0].strip() for rule in rules.split(",")} - {""}
+                if not named or named & FRONTEND_LINTS:
+                    errors.append(f"{rel}:{number}: switches the frontend crypto lint off ({line.strip()[:80]})")
     for pattern in ("scripts/**/*", ".github/**/*.yml", "**/Dockerfile*", "Makefile", "justfile"):
         for path in walk(pattern):
             if not path.is_file() or path.name == "check-crypto-exceptions.py":

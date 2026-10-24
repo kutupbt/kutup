@@ -13,7 +13,8 @@ import {
 } from '@kutup/crypto/chatMedia'
 import { toBase64 } from '@kutup/crypto/base64'
 import { exactBytes } from '@kutup/crypto/bytes'
-import { getSodium } from '@kutup/crypto/sodium'
+import { createHasher, toHex } from '@kutup/crypto/hash'
+import { randomBytes } from '@kutup/crypto/random'
 import { PLAIN_CHUNK } from '@kutup/crypto/streamEncryptor'
 import { resolveApiBase } from '@kutup/session/apiBase'
 import { openDownloadSink } from '@kutup/files/download/streamDownload'
@@ -157,17 +158,12 @@ export async function uploadChatMediaV1(
         CHAT_PREVIEW_GENERATION_LIMITS_V1,
         options.signal,
       ).catch(() => null)
-  const sodium = await getSodium()
   const attachmentId = crypto.randomUUID()
-  const attachmentKey = sodium.randombytes_buf(32)
-  const retrievalToken = sodium.randombytes_buf(32)
+  const attachmentKey = randomBytes(32)
+  const retrievalToken = randomBytes(32)
   const encryptor = await newChatMediaStreamEncryptorV1(attachmentKey, attachmentId)
   const ciphertextBytes = chatMediaCipherSize(options.file.size)
-  // DefinitelyTyped's sumo declaration currently returns `number` from init
-  // but imports the newer branded StateAddress for update/final.
-  const hashState = sodium.crypto_hash_sha256_init() as unknown as Parameters<
-    typeof sodium.crypto_hash_sha256_update
-  >[0]
+  const hasher = await createHasher()
   let hashFinalized = false
   let position = 0
   let prefixSent = false
@@ -177,7 +173,7 @@ export async function uploadChatMediaV1(
     controller: ReadableStreamDefaultController<Uint8Array>,
     bytes: Uint8Array,
   ) => {
-    sodium.crypto_hash_sha256_update(hashState, bytes)
+    hasher.update(bytes)
     controller.enqueue(bytes)
   }
   const stream = new ReadableStream<Uint8Array>({
@@ -273,7 +269,7 @@ export async function uploadChatMediaV1(
       try {
         if (hashFinalized) throw new Error('Chat-media hash was finalized twice')
         hashFinalized = true
-        localDigest = sodium.crypto_hash_sha256_final(hashState, 'hex')
+        localDigest = toHex(hasher.digest())
       } catch (error) {
         fail(error)
         return
@@ -382,10 +378,7 @@ export async function* decryptChatMediaCiphertextV1(
   descriptor: ChatAttachmentDescriptorV1,
   signal?: AbortSignal,
 ): AsyncGenerator<ChatMediaPlainChunk, void, void> {
-  const sodium = await getSodium()
-  const digestState = sodium.crypto_hash_sha256_init() as unknown as Parameters<
-    typeof sodium.crypto_hash_sha256_update
-  >[0]
+  const digestState = await createHasher()
   let buffer: Uint8Array<ArrayBufferLike> = new Uint8Array()
   let decryptor: Awaited<ReturnType<typeof openChatMediaStreamV1>> | null = null
   let ciphertextRead = 0
@@ -400,7 +393,7 @@ export async function* decryptChatMediaCiphertextV1(
     if (ciphertextRead > descriptor.ciphertextBytes) {
       throw new Error('Chat-media object exceeds its authenticated length')
     }
-    sodium.crypto_hash_sha256_update(digestState, value)
+    digestState.update(value)
     buffer = appendBytes(buffer, value)
     while (true) {
       if (!decryptor) {
@@ -434,7 +427,7 @@ export async function* decryptChatMediaCiphertextV1(
     sawFinal = result.isFinal
   }
   if (!sawFinal) throw new Error('Chat-media object ended before FINAL')
-  const digest = sodium.crypto_hash_sha256_final(digestState, 'hex')
+  const digest = toHex(digestState.digest())
   if (ciphertextRead !== descriptor.ciphertextBytes ||
       plaintextRead !== descriptor.plaintextBytes ||
       digest !== descriptor.ciphertextSha256) {
