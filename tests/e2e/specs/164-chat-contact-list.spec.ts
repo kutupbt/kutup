@@ -1,6 +1,16 @@
 import { expect, test } from '@playwright/test'
 import { newAccount, registerAccount, signIn } from '../fixtures/apps'
-import { closeDetails, message, openChat, openConversationWith, openDetails, openDirectChat, send } from '../fixtures/chat'
+import {
+  backupCursor,
+  closeDetails,
+  message,
+  openChat,
+  openConversationWith,
+  openDetails,
+  openDirectChat,
+  send,
+  waitForProtection,
+} from '../fixtures/chat'
 
 const PASSWORD = 'Deneme123*ContactListPassword'
 
@@ -21,6 +31,7 @@ test('a block made before the only browser was lost still holds on a new one', a
   const pageC = await openChat(contextC)
 
   // Carol writes; Alice blocks her from the request.
+  const cursorBefore = await backupCursor(pageA)
   await openDirectChat(pageC, alice.username)
   const first = `first-${tag}`
   await send(pageC, first)
@@ -30,6 +41,9 @@ test('a block made before the only browser was lost still holds on a new one', a
   await pageA.getByRole('button', { name: /^Block / }).click()
   await expect(pageA.getByRole('button', { name: 'Unblock', exact: true }).first()).toBeVisible({ timeout: 30_000 })
   await closeDetails(pageA)
+  // Carol's message is in Alice's history backup before her browser goes,
+  // so the new one restores the conversation.
+  await waitForProtection(pageA, cursorBefore)
 
   // Alice's only browser is gone; she signs in on a new one, which starts
   // her Chat over (she has no other device to link it from): the old device
