@@ -11,6 +11,8 @@ use std::path::{Path, PathBuf};
 
 use kutup_pass::keepass::Database;
 use kutup_pass::{merge, open, save, VaultKey};
+// KeePass's composite key hashes the password with SHA-256 (the reference).
+#[allow(clippy::disallowed_types)]
 use sha2::{Digest, Sha256};
 
 /// The passwords KeePassXC's tests use for these vaults.
@@ -54,6 +56,8 @@ fn corpus() -> Option<PathBuf> {
 
 /// The keys to try, each with the same key as Kutup Pass keeps it (the
 /// password as its SHA-256), when it has a password.
+// KeePass's composite key hashes the password with SHA-256 (the reference).
+#[allow(clippy::disallowed_types)]
 fn keys(dir: &Path, name: &str) -> Vec<(VaultKey, Option<VaultKey>)> {
     let stem = name.trim_end_matches(".kdbx");
     let key_file = ["key", "keyx"]
