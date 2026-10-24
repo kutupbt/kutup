@@ -129,6 +129,10 @@ hex = "0.4"
 # in place of crates.io's: zkgroup names the fork, zkcredential the crates.io
 # name, and libsignal patches one onto the other in its own workspace, which
 # doesn't reach a dependent. The fork is upstream 4.1.3 plus Lizard encoding.
+# Named by the tag, not a rev: the source must be exactly the one libsignal's
+# crates use for the fork (`curve25519-dalek-signal`), or Cargo builds two
+# copies and zkgroup's types don't match. Cargo.lock pins the tag to commit
+# 7c6d34756355a3566a704da84dce7b1c039a6572, and every check runs --locked.
 [patch.crates-io]
 curve25519-dalek = { git = "https://github.com/signalapp/curve25519-dalek", tag = "signal-curve25519-4.1.3" }
 
