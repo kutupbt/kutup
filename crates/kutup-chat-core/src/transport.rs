@@ -21,6 +21,33 @@ use kutup_chat_proto::{
 };
 use kutup_federation_proto::FederatedFeaturePolicyHistoryV1;
 
+/// The result of a `POST /api/chat/anonymous/messages/multi`: one
+/// multi-recipient group send to one destination server
+/// (docs/plans/pairwise-groups.md, "Slice 2"). Every answer but `Answered`
+/// stored nothing.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase", tag = "kind")]
+pub enum MultiSendOutcome {
+    /// `200` (stored for every recipient but those `refused` or
+    /// `rateLimited`), or `409` / `410` (nothing stored: `devices` or
+    /// `stale` say what changed).
+    Answered {
+        status: u16,
+        response: kutup_chat_proto::SealedMultiResponseV1,
+    },
+    /// `503 peerUnavailable`: the destination didn't answer in time; its
+    /// members' copies go pairwise.
+    PeerUnavailable,
+    /// `413`: too large or too many recipients for one request.
+    TooLarge,
+    /// `429`: this address's budget for the route is spent; later.
+    RateLimited,
+    /// `401 groupSendTokenInvalid`: the destination didn't take the group
+    /// send token (an endorsement expired or replaced, a recipient it doesn't
+    /// cover); nothing stored, the copies go pairwise.
+    TokenInvalid,
+}
+
 /// The result of a `POST …/messages`. A `409 DeviceListMismatch` is modeled as a
 /// value (not an error) because it is the expected, recoverable fan-out signal.
 pub enum SendOutcome {
@@ -288,6 +315,41 @@ pub trait ChatTransport {
     ) -> Result<kutup_chat_proto::SealedBatchResponseV1> {
         Err(crate::ChatError::Transport(
             "transport does not implement sealed batches".into(),
+        ))
+    }
+
+    /// `POST /api/chat/anonymous/messages/multi?server={server}`: one group
+    /// message to every listed account of one server, sealed once.
+    async fn send_sealed_multi(
+        &self,
+        _server: &str,
+        _submission: &kutup_chat_proto::SealedMultiSubmissionV1,
+    ) -> Result<MultiSendOutcome> {
+        Err(crate::ChatError::Transport(
+            "transport does not implement multi-recipient sends".into(),
+        ))
+    }
+
+    /// `GET /api/chat/group-send/endorsement`: this account's group send
+    /// endorsement for today, from its own server
+    /// (docs/plans/group-send-endorsements.md §3.2).
+    async fn fetch_group_send_endorsement(
+        &self,
+    ) -> Result<kutup_chat_proto::group_send::GroupSendEndorsementResponseV1> {
+        Err(crate::ChatError::Transport(
+            "transport does not implement group send endorsements".into(),
+        ))
+    }
+
+    /// `GET /api/chat/group-send/params[?server={server}]`: the endorsement
+    /// keys of this account's server (`None`), or of another one from its
+    /// verified discovery; `Ok(None)` when that server publishes none.
+    async fn fetch_group_send_params(
+        &self,
+        _server: Option<&str>,
+    ) -> Result<Option<kutup_chat_proto::group_send::GroupSendParamsV1>> {
+        Err(crate::ChatError::Transport(
+            "transport does not implement group send endorsements".into(),
         ))
     }
 

@@ -33,6 +33,7 @@ mod group;
 mod group_avatar;
 #[cfg_attr(not(feature = "wasm"), allow(dead_code))]
 mod group_client;
+mod group_endorse;
 #[cfg_attr(not(feature = "wasm"), allow(dead_code))]
 mod group_engine;
 #[cfg_attr(not(feature = "wasm"), allow(dead_code))]
@@ -57,6 +58,7 @@ pub use keys::PublishedKeys;
 mod manifest;
 mod mls_engine;
 mod mls_policy;
+mod multi_seal;
 mod padding;
 mod prekey_rotation;
 mod profile;

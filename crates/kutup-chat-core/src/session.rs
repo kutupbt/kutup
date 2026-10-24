@@ -4682,6 +4682,113 @@ impl Session {
         }
     }
 
+    /// Seals one sender-key message once for every device of `recipients`
+    /// on one destination server: libsignal's multi-recipient sealed sender
+    /// (v2, version `0x23`), which that server splits per device. Sessions
+    /// and identities are checked and set up per device as for
+    /// [`Self::seal_group_message`]; the payload names each account by its
+    /// bare id (see `multi_seal`).
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) async fn seal_group_multi<R: Rng + CryptoRng>(
+        &mut self,
+        recipients: &[(
+            kutup_crypto::account_ref::AccountRef,
+            Vec<DevicePreKeyBundle>,
+        )],
+        sender_certificate: &SenderCertificate,
+        group_id: &[u8; 32],
+        sender_key_message: &[u8],
+        hint: libsignal_protocol::ContentHint,
+        rng: &mut R,
+    ) -> Result<SealedGroupMulti> {
+        let mut summary = SendSummary::default();
+        let result = async {
+            let usmc = libsignal_protocol::UnidentifiedSenderMessageContent::new(
+                libsignal_protocol::CiphertextMessageType::SenderKey,
+                sender_certificate.clone(),
+                sender_key_message.to_vec(),
+                hint,
+                Some(group_id.to_vec()),
+            )?;
+            let mut full_names = std::collections::HashMap::new();
+            let mut destinations = Vec::new();
+            let mut sessions = Vec::new();
+            for (account, bundles) in recipients {
+                let full = account.to_string();
+                if full_names
+                    .insert(account.account_id.clone(), full.clone())
+                    .is_some()
+                {
+                    return Err(ChatError::Invalid(format!(
+                        "account {} named twice in one send",
+                        account.account_id
+                    )));
+                }
+                let mut bundles: Vec<&DevicePreKeyBundle> = bundles.iter().collect();
+                bundles.sort_by_key(|bundle| bundle.device_id);
+                for bundle in bundles {
+                    let peer = ChatAddress::from_sender(&full, bundle.device_id)?;
+                    if self.is_self(&peer) {
+                        continue;
+                    }
+                    self.prepare_sealed_session(&peer, bundle, &mut summary, rng)
+                        .await?;
+                    let session = libsignal_protocol::SessionStore::load_session(
+                        &self.store.session_store,
+                        &peer.to_protocol()?,
+                    )
+                    .await?
+                    .ok_or_else(|| {
+                        ChatError::Invalid(format!(
+                            "no session with {}.{}",
+                            peer.name(),
+                            peer.device_id
+                        ))
+                    })?;
+                    destinations.push(libsignal_protocol::ProtocolAddress::new(
+                        account.account_id.clone(),
+                        crate::address::device_id_u8(bundle.device_id)?,
+                    ));
+                    sessions.push(session);
+                }
+            }
+            if destinations.is_empty() {
+                return Err(ChatError::Invalid(
+                    "a multi-recipient send names no device".into(),
+                ));
+            }
+            let identities =
+                crate::multi_seal::NamedIdentities::new(&self.store.identity_store, full_names);
+            let destinations: Vec<&libsignal_protocol::ProtocolAddress> =
+                destinations.iter().collect();
+            let sessions: Vec<&libsignal_protocol::SessionRecord> = sessions.iter().collect();
+            let payload = libsignal_protocol::sealed_sender_multi_recipient_encrypt(
+                &destinations,
+                &sessions,
+                std::iter::empty(),
+                &usmc,
+                &identities,
+                rng,
+            )
+            .await?;
+            Ok::<_, ChatError>(payload)
+        }
+        .await;
+        match result {
+            Ok(payload) => {
+                self.store.commit().await?;
+                Ok(SealedGroupMulti {
+                    payload,
+                    safety_number_changes: summary.safety_number_changes,
+                })
+            }
+            Err(error) => {
+                self.store.discard();
+                Err(error)
+            }
+        }
+    }
+
     /// Seals `content` pairwise for each of `peer_user`'s `bundles`: a group's
     /// hidden kinds (a sender key, an invitation, a group resend) and its
     /// pairwise fallback. Nothing is written to the direct outbox or history.
@@ -4726,6 +4833,13 @@ impl Session {
 /// on the way (a safety-number change to show).
 pub(crate) struct SealedGroupSend {
     pub envelopes: Vec<SealedOutgoingEnvelopeV1>,
+    pub safety_number_changes: Vec<ChatAddress>,
+}
+
+/// One multi-recipient sealed message for one destination server: the
+/// libsignal payload (`0x23`), sent once, split per device by that server.
+pub(crate) struct SealedGroupMulti {
+    pub payload: Vec<u8>,
     pub safety_number_changes: Vec<ChatAddress>,
 }
 
@@ -5398,6 +5512,147 @@ mod sealed_tests {
             message.content.as_text().map(|body| body.text),
             Some("sealed hello".into())
         );
+    }
+
+    #[test]
+    fn a_group_message_is_sealed_once_for_every_member_on_one_server() {
+        let mut rng = OsRng.unwrap_err();
+        let alice_name = "aci:00000000-0000-4000-8000-2bd806c97f0e@chat.example";
+        let names = [
+            "aci:00000000-0000-4000-8000-81b637d8fcd2@chat.example",
+            "aci:00000000-0000-4000-8000-c0c0c0c0c0c0@chat.example",
+        ];
+        let session = |name: &str, rng: &mut _| {
+            block_on(Session::generate(
+                Rc::new(SqliteChatDb::open_in_memory().unwrap()),
+                name,
+                1,
+                4,
+                rng,
+            ))
+            .unwrap()
+        };
+        let mut alice = session(alice_name, &mut rng);
+        let mut members: Vec<Session> = names.iter().map(|name| session(name, &mut rng)).collect();
+        let trust_root = KeyPair::generate(&mut rng);
+        let server_key = KeyPair::generate(&mut rng);
+        let server_certificate =
+            ServerCertificate::new(1, server_key.public_key, &trust_root.private_key, &mut rng)
+                .unwrap();
+        let expiration =
+            Timestamp::from_epoch_millis(u64::try_from(now_millis()).unwrap() + 60 * 60 * 1000);
+        let certificate = SenderCertificate::new(
+            alice_name.into(),
+            None,
+            alice.local_identity_public_key(),
+            crate::address::device_id_u8(1).unwrap(),
+            expiration,
+            server_certificate,
+            &server_key.private_key,
+            &mut rng,
+        )
+        .unwrap();
+        let group_id = [5u8; 32];
+        let group = kutup_chat_proto::group::encode_group_id(&group_id);
+        let delivered = |id: &str, content: Vec<u8>| DeliveredEnvelope {
+            id: id.into(),
+            cursor: 1,
+            sender: None,
+            sealed_sender: true,
+            sender_device_id: 0,
+            envelope_type: EnvelopeType::Message,
+            suite: DirectChatSuiteId::PqxdhTripleRatchetV1,
+            content: STANDARD.encode(content),
+            server_timestamp: "2026-10-18T00:00:01Z".into(),
+            send_id: None,
+        };
+
+        // Every member holds Alice's sender key (handed over pairwise).
+        let distribution_id = uuid::Uuid::new_v4();
+        let distribution =
+            block_on(alice.sender_key_distribution(distribution_id, &mut rng)).unwrap();
+        for member in members.iter_mut() {
+            let from = ChatAddress::from_sender(alice_name, 1).unwrap();
+            // The pairwise hand-over itself is covered by the test below;
+            // here the key is taken in directly.
+            block_on(member.process_sender_key_distribution(&from, &distribution)).unwrap();
+        }
+
+        // One payload for both, sealed once.
+        let context = kutup_chat_proto::group::GroupContextV1 {
+            version: 1,
+            group_id: group.clone(),
+            master_key: kutup_chat_proto::group::encode(&[6u8; 32]),
+            home: kutup_chat_proto::group_route::GroupHomePinV1 {
+                server: "chat.example".into(),
+                identity_sequence: 0,
+                identity_document_hash: "9".repeat(64),
+            },
+            revision: 1,
+            chain_hash: kutup_chat_proto::group::encode(&[7u8; 32]),
+            recipient_pseudonym: None,
+        };
+        let plaintext = serde_json::to_vec(
+            &ChatContent::text_with_id(
+                "00000000-0000-4000-8000-000000000031",
+                "2026-10-18T00:00:02Z",
+                1,
+                "merhaba ikinize",
+            )
+            .with_group_context(&context),
+        )
+        .unwrap();
+        let encrypted =
+            block_on(alice.group_encrypt(distribution_id, &plaintext, &mut rng)).unwrap();
+        let recipients: Vec<_> = members
+            .iter()
+            .map(|member| (member.account_ref().clone(), vec![bundle(member)]))
+            .collect();
+        let sealed = block_on(alice.seal_group_multi(
+            &recipients,
+            &certificate,
+            &group_id,
+            &encrypted,
+            libsignal_protocol::ContentHint::Resendable,
+            &mut rng,
+        ))
+        .unwrap();
+        assert_eq!(sealed.payload[0], 0x23, "sealed sender v2, service ids");
+
+        // The server's split (Signal-Server's, as kutup-server does it): one
+        // received message per recipient, each opened by its own device only.
+        let sent = libsignal_protocol::SealedSenderV2SentMessage::parse(&sealed.payload).unwrap();
+        assert_eq!(sent.recipients.len(), 2);
+        let mut copies = Vec::new();
+        for (service_id, recipient) in &sent.recipients {
+            let parts = sent.received_message_parts_for_recipient(recipient);
+            copies.push((service_id.service_id_string(), parts.as_ref().concat()));
+        }
+        for (member, name) in members.iter_mut().zip(names) {
+            let uuid = name.trim_start_matches("aci:").split('@').next().unwrap();
+            let (_, copy) = copies.iter().find(|(id, _)| id == uuid).unwrap();
+            let envelope = delivered(uuid, copy.clone());
+            let inspection = block_on(member.inspect_sealed_envelope(&envelope)).unwrap();
+            assert_eq!(inspection.group_id, Some(group_id));
+            let ReceiveOutcome::Message(message) = block_on(member.receive_sealed_group_envelope(
+                &envelope,
+                &inspection,
+                &trust_root.public_key,
+                &|_, _| GroupGate::Accept,
+            ))
+            .unwrap_or_else(|e| panic!("{name}: {e}")) else {
+                panic!("a group message")
+            };
+            assert_eq!(message.content.as_text().unwrap().text, "merhaba ikinize");
+            assert_eq!(message.content.group_context().unwrap(), context);
+        }
+        // Another member's copy opens for no one else.
+        let (_, carols) = copies
+            .iter()
+            .find(|(id, _)| names[1].contains(id.as_str()))
+            .unwrap();
+        let envelope = delivered("wrong", carols.clone());
+        assert!(block_on(members[0].inspect_sealed_envelope(&envelope)).is_err());
     }
 
     #[test]

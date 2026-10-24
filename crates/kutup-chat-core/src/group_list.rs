@@ -381,6 +381,7 @@ impl Engine {
                         listed_status: Some(GroupListStatus::Member),
                         list_due_at_ms: None,
                         join_epoch: entry.join_epoch,
+                        endorsements: Default::default(),
                     };
                     self.save_group(&record).await?;
                     // Its state, and this device's binding where needed; a
@@ -458,6 +459,9 @@ impl Engine {
             Vec::new()
         };
         let _ = self.flush_group_list(false).await;
+        // Each group gets this account's current endorsement, and the
+        // members' new ones are read, with this periodic look.
+        let _ = self.refresh_all_group_send_endorsements().await;
         Ok(taken_up)
     }
 

@@ -521,6 +521,17 @@ impl ChatDb for SqliteChatDb {
             .optional())
     }
 
+    async fn load_group_send_endorsement(&self) -> Result<Option<Vec<u8>>> {
+        let conn = self.conn.borrow();
+        db(conn
+            .query_row(
+                "SELECT value FROM meta WHERE key = 'group_send_endorsement'",
+                [],
+                |row| row.get(0),
+            )
+            .optional())
+    }
+
     async fn load_contact_list_followed(&self) -> Result<bool> {
         let conn = self.conn.borrow();
         let value: Option<i64> = db(conn
@@ -1405,6 +1416,13 @@ impl ChatDb for SqliteChatDb {
                 [state],
             ))?;
         }
+        if let Some(state) = &pending.group_send_endorsement {
+            db(tx.execute(
+                "INSERT INTO meta (key, value) VALUES ('group_send_endorsement', ?1) \
+                 ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+                [state],
+            ))?;
+        }
         if pending.contact_list_followed {
             db(tx.execute(
                 "INSERT INTO meta (key, value) VALUES ('contact_list_followed', 1) \
@@ -1764,6 +1782,7 @@ mod tests {
             listed_status: None,
             list_due_at_ms: None,
             join_epoch: 0,
+            endorsements: Default::default(),
         };
         let db = SqliteChatDb::open_in_memory().unwrap();
         let mut first = Pending::default();

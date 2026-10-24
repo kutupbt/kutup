@@ -61,6 +61,9 @@ fn now() -> i64 {
     crate::clock::unix_millis() / 1000
 }
 
+/// The home's endorsement page size in these tests (small, so paging runs).
+const ENDORSEMENT_PAGE: u16 = 3;
+
 /// One device's published keys; one-time prekeys are handed out once each.
 struct HostedDevice {
     registration: RegisterChatDeviceRequestV2,
@@ -112,13 +115,16 @@ pub(crate) struct HostedGroup {
     seen: HashSet<String>,
     /// Avatar blobs by their SHA-256 (base64): the current one and uploads.
     avatars: BTreeMap<String, Vec<u8>>,
+    /// The members' endorsement blobs: (seq, pseudonym, expiration, sealed),
+    /// at most two per pseudonym.
+    endorsements: Vec<(u64, String, u64, String)>,
 }
 
-/// The one server of these tests.
 /// One account's group list as its server keeps it: entry id → (revision,
 /// envelope).
 pub(crate) type GroupList = BTreeMap<String, (u64, String)>;
 
+/// The one server of these tests.
 pub(crate) struct World {
     identity: FederationIdentityDocumentV1,
     key: SigningKey,
@@ -148,6 +154,25 @@ pub(crate) struct World {
     pub(crate) pin_writes: Cell<usize>,
     /// How many sealed batches were sent.
     pub(crate) batches: Cell<usize>,
+    /// Multi-recipient requests taken (slice 2).
+    pub(crate) multi_requests: Cell<usize>,
+    /// A server without the multi-recipient route (an older one): it issues
+    /// no group send endorsements, so every group message goes pairwise.
+    pub(crate) no_multi_route: Cell<bool>,
+    /// Answers the multi-recipient route gives next, before looking at the
+    /// request (a destination that didn't answer, a request too large, a
+    /// budget spent).
+    pub(crate) multi_answers:
+        RefCell<std::collections::VecDeque<crate::transport::MultiSendOutcome>>,
+    /// The server's group send endorsement key (key id 1), and the one it
+    /// rotated from (key id 0) while that still verifies.
+    pub(crate) group_send_key: RefCell<kutup_group_send::ServerKey>,
+    pub(crate) previous_group_send_key: RefCell<Option<kutup_group_send::ServerKey>>,
+    /// Endorsements issued, and blobs the group home took.
+    pub(crate) endorsements_issued: Cell<usize>,
+    pub(crate) endorsement_uploads: Cell<usize>,
+    /// The home's upload order of endorsement blobs.
+    pub(crate) endorsement_seq: Cell<u64>,
     /// How many whole states the group home was asked for.
     pub(crate) state_requests: Cell<usize>,
     /// How many changes the group home took.
@@ -260,6 +285,14 @@ impl World {
             cursor: Cell::new(0),
             sealed_sent: RefCell::new(Vec::new()),
             batches: Cell::new(0),
+            multi_requests: Cell::new(0),
+            no_multi_route: Cell::new(false),
+            multi_answers: RefCell::new(Default::default()),
+            group_send_key: RefCell::new(kutup_group_send::ServerKey::generate()),
+            previous_group_send_key: RefCell::new(None),
+            endorsements_issued: Cell::new(0),
+            endorsement_uploads: Cell::new(0),
+            endorsement_seq: Cell::new(0),
             state_requests: Cell::new(0),
             group_changes: Cell::new(0),
             group_list_down: Cell::new(false),
@@ -781,6 +814,7 @@ impl World {
                             .map(|member| member.pseudonym.clone())
                             .collect(),
                         avatars: BTreeMap::new(),
+                        endorsements: Vec::new(),
                     },
                 );
                 Self::ok(
@@ -788,6 +822,106 @@ impl World {
                         state: STANDARD.encode(genesis.canonical_bytes().unwrap()),
                         change: STANDARD.encode(change.canonical_bytes().unwrap()),
                         notary,
+                    }
+                    .canonical_bytes()
+                    .unwrap(),
+                )
+            }
+            // The members' endorsement blobs, as the home keeps them
+            // (docs/plans/group-send-endorsements.md §3.3).
+            GroupOperationV1::PutEndorsement => {
+                use kutup_chat_proto::group_send::{
+                    GroupEndorsementUploadV1, ENDORSEMENT_EXPIRATION, ENDORSEMENT_SIZE,
+                };
+                let Some(group) = groups.get_mut(&group_id) else {
+                    return Self::status(GroupResponseStatusV1::NotFound);
+                };
+                if group.state.member(pseudonym).is_none() {
+                    return Self::status(GroupResponseStatusV1::NotFound);
+                }
+                let Some(upload) = request
+                    .body()
+                    .ok()
+                    .and_then(|body| GroupEndorsementUploadV1::from_canonical_bytes(&body).ok())
+                else {
+                    return GroupResponseV1::refused("malformed", now());
+                };
+                if kutup_group_send::check_expiration(upload.expiration, now() as u64).is_err() {
+                    return GroupResponseV1::refused(ENDORSEMENT_EXPIRATION, now());
+                }
+                if upload.sealed_bytes().is_err() {
+                    return GroupResponseV1::refused(ENDORSEMENT_SIZE, now());
+                }
+                self.endorsement_uploads
+                    .set(self.endorsement_uploads.get() + 1);
+                let seq = self.endorsement_seq.get() + 1;
+                self.endorsement_seq.set(seq);
+                group.endorsements.retain(|(_, owner, expiration, _)| {
+                    !(owner == pseudonym && *expiration == upload.expiration)
+                });
+                group
+                    .endorsements
+                    .push((seq, pseudonym.clone(), upload.expiration, upload.sealed));
+                // Two per pseudonym: a third replaces the oldest.
+                loop {
+                    let mine: Vec<u64> = group
+                        .endorsements
+                        .iter()
+                        .filter(|(_, owner, _, _)| owner == pseudonym)
+                        .map(|(_, _, expiration, _)| *expiration)
+                        .collect();
+                    if mine.len() <= 2 {
+                        break;
+                    }
+                    let oldest = *mine.iter().min().unwrap();
+                    group.endorsements.retain(|(_, owner, expiration, _)| {
+                        !(owner == pseudonym && *expiration == oldest)
+                    });
+                }
+                Self::ok(Vec::new())
+            }
+            GroupOperationV1::GetEndorsements => {
+                use kutup_chat_proto::group_send::{
+                    GroupEndorsementPageV1, GroupEndorsementQueryV1, GroupEndorsementV1,
+                };
+                let Some(group) = groups.get(&group_id) else {
+                    return Self::status(GroupResponseStatusV1::NotFound);
+                };
+                if group.state.member(pseudonym).is_none() {
+                    return Self::status(GroupResponseStatusV1::NotFound);
+                }
+                let Some(query) = request
+                    .body()
+                    .ok()
+                    .and_then(|body| GroupEndorsementQueryV1::from_canonical_bytes(&body).ok())
+                else {
+                    return GroupResponseV1::refused("malformed", now());
+                };
+                // The home's page size (a site setting there).
+                let limit = usize::from(query.limit.min(ENDORSEMENT_PAGE));
+                // A member's blobs go when it leaves (in the removal there).
+                let mut endorsements: Vec<GroupEndorsementV1> = group
+                    .endorsements
+                    .iter()
+                    .filter(|(seq, owner, _, _)| {
+                        *seq > query.after && group.state.member(owner).is_some()
+                    })
+                    .map(|(seq, owner, expiration, sealed)| GroupEndorsementV1 {
+                        pseudonym: owner.clone(),
+                        expiration: *expiration,
+                        sealed: sealed.clone(),
+                        seq: *seq,
+                    })
+                    .collect();
+                endorsements.sort_by_key(|endorsement| endorsement.seq);
+                let more = endorsements.len() > limit;
+                endorsements.truncate(limit);
+                let next_after = endorsements.last().map_or(query.after, |last| last.seq);
+                Self::ok(
+                    GroupEndorsementPageV1 {
+                        endorsements,
+                        more,
+                        next_after,
                     }
                     .canonical_bytes()
                     .unwrap(),
@@ -1499,6 +1633,179 @@ impl ChatTransport for Client {
         }
         entries.remove(id);
         Ok(true)
+    }
+
+    /// This account's endorsement for today, as its server issues it.
+    async fn fetch_group_send_endorsement(
+        &self,
+    ) -> Result<kutup_chat_proto::group_send::GroupSendEndorsementResponseV1> {
+        if self.world.no_multi_route.get() {
+            return Err(ChatError::Transport("404 Not Found".into()));
+        }
+        let account = crate::address::parse_account(&self.account)?;
+        let issued = self.world.group_send_key.borrow().issue(
+            uuid::Uuid::parse_str(&account.account_id).unwrap(),
+            now() as u64,
+        );
+        self.world
+            .endorsements_issued
+            .set(self.world.endorsements_issued.get() + 1);
+        Ok(
+            kutup_chat_proto::group_send::GroupSendEndorsementResponseV1 {
+                key_id: 1,
+                expiration: issued.expiration,
+                response: STANDARD.encode(issued.response),
+            },
+        )
+    }
+
+    /// The server's keys: the current one (id 1), and the previous one (id
+    /// 0) while it still verifies.
+    async fn fetch_group_send_params(
+        &self,
+        server: Option<&str>,
+    ) -> Result<Option<kutup_chat_proto::group_send::GroupSendParamsV1>> {
+        use kutup_chat_proto::group_send::{GroupSendKeyV1, GroupSendParamsV1};
+        if self.world.no_multi_route.get() {
+            return Err(ChatError::Transport("404 Not Found".into()));
+        }
+        if server.is_some_and(|server| server != SERVER) {
+            return Ok(None);
+        }
+        let key = |key_id, key: &kutup_group_send::ServerKey| GroupSendKeyV1 {
+            key_id,
+            endorsement_public_key: STANDARD.encode(key.public_key().to_bytes()),
+            issues_until: u64::MAX,
+        };
+        let mut keys = vec![key(1, &self.world.group_send_key.borrow())];
+        if let Some(previous) = self.world.previous_group_send_key.borrow().as_ref() {
+            keys.push(key(0, previous));
+        }
+        Ok(Some(GroupSendParamsV1 { keys }))
+    }
+
+    /// The multi-recipient route as the server applies it: the token over
+    /// every recipient first (401 `groupSendTokenInvalid`), then devices
+    /// (409, 410: nothing stored), then each device's copy, assembled from
+    /// the payload as Signal-Server does.
+    async fn send_sealed_multi(
+        &self,
+        server: &str,
+        submission: &kutup_chat_proto::SealedMultiSubmissionV1,
+    ) -> Result<crate::transport::MultiSendOutcome> {
+        use crate::transport::MultiSendOutcome;
+        use kutup_chat_proto::{SealedMultiDevicesV1, SealedMultiResponseV1, SealedMultiStaleV1};
+        self.world
+            .multi_requests
+            .set(self.world.multi_requests.get() + 1);
+        if let Some(answer) = self.world.multi_answers.borrow_mut().pop_front() {
+            return Ok(answer);
+        }
+        let payload = STANDARD
+            .decode(&submission.payload)
+            .map_err(|_| ChatError::Transport("malformed payload".into()))?;
+        let sent = libsignal_protocol::SealedSenderV2SentMessage::parse(&payload)
+            .map_err(|error| ChatError::Transport(error.to_string()))?;
+        assert_eq!(sent.version, 0x23);
+        assert!(
+            submission.capabilities.is_empty(),
+            "a token, not capabilities"
+        );
+        let recipients: Vec<uuid::Uuid> = sent
+            .recipients
+            .keys()
+            .map(|service_id| uuid::Uuid::parse_str(&service_id.service_id_string()).unwrap())
+            .collect();
+        let token = submission
+            .group_send_token_bytes()
+            .map_err(ChatError::Transport)?;
+        let current = self.world.group_send_key.borrow().clone();
+        let previous = self.world.previous_group_send_key.borrow().clone();
+        let mut keys = vec![&current];
+        keys.extend(previous.as_ref());
+        if kutup_group_send::verify_token(&keys, &token, &recipients, now() as u64).is_err() {
+            return Ok(MultiSendOutcome::TokenInvalid);
+        }
+        let mut response = SealedMultiResponseV1::default();
+        let mut deliver = Vec::new();
+        for (service_id, recipient) in &sent.recipients {
+            let account_id = service_id.service_id_string();
+            let account = format!("aci:{account_id}@{server}");
+            let devices: Vec<(u32, u32)> = recipient
+                .devices
+                .iter()
+                .map(|(device, registration)| {
+                    (u32::from(u8::from(*device)), u32::from(*registration))
+                })
+                .collect();
+            if let Some(mismatch) = self.world.device_check(&account, &devices, None) {
+                if !mismatch.missing_devices.is_empty() || !mismatch.extra_devices.is_empty() {
+                    response.devices.push(SealedMultiDevicesV1 {
+                        account_id: account_id.clone(),
+                        missing_devices: mismatch.missing_devices,
+                        extra_devices: mismatch.extra_devices,
+                    });
+                }
+                if !mismatch.stale_devices.is_empty() {
+                    response.stale.push(SealedMultiStaleV1 {
+                        account_id,
+                        stale_devices: mismatch.stale_devices,
+                    });
+                }
+                continue;
+            }
+            let content = STANDARD.encode(
+                sent.received_message_parts_for_recipient(recipient)
+                    .as_ref()
+                    .concat(),
+            );
+            deliver.push((account, devices, content));
+        }
+        if !response.devices.is_empty() {
+            return Ok(MultiSendOutcome::Answered {
+                status: 409,
+                response,
+            });
+        }
+        if !response.stale.is_empty() {
+            return Ok(MultiSendOutcome::Answered {
+                status: 410,
+                response,
+            });
+        }
+        for (account, devices, content) in deliver {
+            // Recorded as the pairwise route records a send: who it reached.
+            self.world.sealed_sent.borrow_mut().push((
+                account.clone(),
+                SealedMessageSubmissionV1 {
+                    send_id: submission.send_id.clone(),
+                    capability: String::new(),
+                    envelopes: Vec::new(),
+                },
+            ));
+            for (device, _) in devices {
+                self.world.deposit(
+                    &account,
+                    device,
+                    DeliveredEnvelope {
+                        id: String::new(),
+                        cursor: 0,
+                        sender: None,
+                        sealed_sender: true,
+                        sender_device_id: 0,
+                        envelope_type: EnvelopeType::Message,
+                        suite: kutup_chat_proto::DirectChatSuiteId::PqxdhTripleRatchetV1,
+                        content: content.clone(),
+                        server_timestamp: crate::clock::rfc3339(crate::clock::unix_millis()),
+                        send_id: Some(submission.send_id.clone()),
+                    },
+                );
+            }
+        }
+        Ok(MultiSendOutcome::Answered {
+            status: 200,
+            response,
+        })
     }
 
     /// The batch route, recipient by recipient as the server applies it.
@@ -2974,11 +3281,317 @@ fn group_third_a_disappearing_group_message_leaves_the_send_log() {
     assert!(!in_log(&alice));
 }
 
+// ----- the multi-recipient route (slice 2) -----
+
+/// Whether `holder` keeps a usable endorsement of `member` for the group.
+fn endorsed_by(holder: &Person, group_id: &str, member: &Person) -> bool {
+    let record = block_on(holder.engine.load_group_record(group_id)).unwrap();
+    record
+        .endorsements
+        .usable(&member.account, now() as u64)
+        .is_some()
+}
+
+/// Each of `people` shares its endorsement with the group and reads the
+/// others' now, as the periodic look does (the throttles reset).
+fn refresh_endorsements(people: &mut [&mut Person], group_id: &str) {
+    for person in people.iter_mut() {
+        person.engine.endorsement_cache = Default::default();
+        block_on(
+            person
+                .engine
+                .refresh_group_send_endorsements(group_id, true),
+        )
+        .unwrap();
+    }
+}
+
+/// A group of four on one server whose members each sent once and read the
+/// others' endorsements, so every member holds the others'.
+fn exchanged_group(world: &Rc<World>) -> (Person, Person, Person, Person, String) {
+    let mut alice = world.person(0xa1);
+    let mut bob = world.person(0xb2);
+    let mut carol = world.person(0xc3);
+    let mut dave = world.person(0xd4);
+    let group_id = group_of(&mut alice, &mut [&mut bob, &mut carol, &mut dave]);
+    deliver_all(&mut [&mut alice, &mut bob, &mut carol, &mut dave]);
+    for person in [&mut alice, &mut bob, &mut carol, &mut dave] {
+        person.send_text(&group_id, "hello");
+    }
+    deliver_all(&mut [&mut alice, &mut bob, &mut carol, &mut dave]);
+    refresh_endorsements(
+        &mut [&mut alice, &mut bob, &mut carol, &mut dave],
+        &group_id,
+    );
+    (alice, bob, carol, dave, group_id)
+}
+
+#[test]
+fn group_multi_one_request_reaches_every_member_once_they_hold_endorsements() {
+    let world = World::new();
+    let (mut alice, mut bob, mut carol, mut dave, group_id) = exchanged_group(&world);
+    for member in [&bob, &carol, &dave] {
+        assert!(endorsed_by(&alice, &group_id, member));
+    }
+    // Each account's server issued one endorsement, shared once per group
+    // (four blobs, read in pages of three).
+    assert_eq!(world.endorsements_issued.get(), 4);
+    assert_eq!(world.endorsement_uploads.get(), 4);
+    let (multi, batches) = (world.multi_requests.get(), world.batches.get());
+    alice.send_text(&group_id, "once for all");
+    assert_eq!(world.multi_requests.get() - multi, 1, "one request");
+    assert_eq!(world.batches.get() - batches, 0, "nothing pairwise");
+    deliver_all(&mut [&mut alice, &mut bob, &mut carol, &mut dave]);
+    for person in [&bob, &carol, &dave] {
+        assert!(person
+            .group_texts(&group_id)
+            .contains(&"once for all".to_string()));
+    }
+}
+
+/// This account's own other devices get their copy pairwise (a sync copy,
+/// as Signal), never on the multi-recipient route; the members' go there.
+#[test]
+fn group_multi_own_devices_get_their_copy_pairwise() {
+    let world = World::new();
+    let (mut alice, mut bob, mut carol, mut dave, group_id) = exchanged_group(&world);
+    let mut alice2 = world.link_device(&mut alice);
+    deliver_all(&mut [&mut alice, &mut alice2, &mut bob, &mut carol, &mut dave]);
+    // The new device takes the group from the account's group list, and
+    // the server said the account's devices changed.
+    alice.flush_list();
+    block_on(alice2.engine.sync_group_list(&mut rng())).unwrap();
+    assert_eq!(alice2.status(&group_id), GroupStatus::Member);
+    alice.engine.forget_known_devices();
+    let send_id = alice.send_text(&group_id, "mine too");
+    assert!(
+        reached(&world, &send_id).contains(&alice.account),
+        "pairwise to Alice's other device"
+    );
+    let entry = block_on(alice.engine.session().db().list_group_outbox())
+        .unwrap()
+        .into_iter()
+        .find(|entry| entry.send_id == send_id)
+        .unwrap();
+    let own = entry
+        .legs
+        .iter()
+        .find(|leg| leg.account == alice.account)
+        .unwrap();
+    assert!(!own.multi && own.delivered);
+    assert!(own.devices.contains(&alice2.device()), "{:?}", own.devices);
+    assert!(entry
+        .legs
+        .iter()
+        .filter(|leg| leg.account != alice.account)
+        .all(|leg| leg.multi && leg.delivered));
+}
+
+/// A member who leaves is read no more: its blob goes with it, the others
+/// drop its endorsement, and it can't read theirs any more.
+#[test]
+fn group_multi_a_member_who_leaves_is_read_no_more() {
+    let world = World::new();
+    let (mut alice, mut bob, mut carol, mut dave, group_id) = exchanged_group(&world);
+    block_on(bob.engine.leave_group(&group_id, &mut rng())).unwrap();
+    deliver_all(&mut [&mut alice, &mut bob, &mut carol, &mut dave]);
+    refresh_endorsements(&mut [&mut alice], &group_id);
+    assert!(!endorsed_by(&alice, &group_id, &bob));
+    assert!(endorsed_by(&alice, &group_id, &carol));
+    let multi = world.multi_requests.get();
+    let send_id = alice.send_text(&group_id, "after bob");
+    assert_eq!(world.multi_requests.get() - multi, 1);
+    assert!(!reached(&world, &send_id).contains(&bob.account));
+    deliver_all(&mut [&mut alice, &mut carol, &mut dave]);
+    assert!(carol
+        .group_texts(&group_id)
+        .contains(&"after bob".to_string()));
+}
+
+/// A token the destination refuses: the copies go pairwise in the same
+/// send, and the endorsements it was made of are dropped.
+#[test]
+fn group_multi_a_refused_token_goes_pairwise_and_drops_its_endorsements() {
+    use crate::transport::MultiSendOutcome;
+    let world = World::new();
+    let (mut alice, mut bob, mut carol, mut dave, group_id) = exchanged_group(&world);
+    world
+        .multi_answers
+        .borrow_mut()
+        .push_back(MultiSendOutcome::TokenInvalid);
+    let send_id = alice.send_text(&group_id, "refused once");
+    assert_eq!(reached(&world, &send_id).len(), 3, "pairwise to all three");
+    deliver_all(&mut [&mut alice, &mut bob, &mut carol, &mut dave]);
+    assert!(bob
+        .group_texts(&group_id)
+        .contains(&"refused once".to_string()));
+    for member in [&bob, &carol, &dave] {
+        assert!(!endorsed_by(&alice, &group_id, member));
+    }
+    let (multi, batches) = (world.multi_requests.get(), world.batches.get());
+    alice.send_text(&group_id, "pairwise meanwhile");
+    assert_eq!(world.multi_requests.get() - multi, 0);
+    assert!(world.batches.get() > batches);
+}
+
+/// The server rotates its key: tokens from endorsements of the old one
+/// verify while it is in its window; after, the destination refuses them
+/// and the copies go pairwise.
+#[test]
+fn group_multi_a_rotated_key_verifies_in_its_window_only() {
+    let world = World::new();
+    let (mut alice, mut bob, mut carol, mut dave, group_id) = exchanged_group(&world);
+    let old = world
+        .group_send_key
+        .replace(kutup_group_send::ServerKey::generate());
+    *world.previous_group_send_key.borrow_mut() = Some(old);
+    let (multi, batches) = (world.multi_requests.get(), world.batches.get());
+    alice.send_text(&group_id, "in the window");
+    assert_eq!(world.multi_requests.get() - multi, 1);
+    assert_eq!(world.batches.get(), batches, "nothing pairwise");
+    *world.previous_group_send_key.borrow_mut() = None;
+    let send_id = alice.send_text(&group_id, "after the window");
+    assert!(world.batches.get() > batches, "pairwise");
+    assert_eq!(reached(&world, &send_id).len(), 3, "to all three");
+    deliver_all(&mut [&mut alice, &mut bob, &mut carol, &mut dave]);
+    for person in [&bob, &carol, &dave] {
+        let texts = person.group_texts(&group_id);
+        assert!(texts.contains(&"in the window".to_string()));
+        assert!(texts.contains(&"after the window".to_string()));
+    }
+}
+
+/// A blob under a member's pseudonym that isn't that member's endorsement
+/// (junk, or another account's response) is never used.
+#[test]
+fn group_multi_a_blob_that_isnt_its_members_is_dropped() {
+    use kutup_crypto::chat_group::SealedField;
+    let world = World::new();
+    let mut alice = world.person(0xa1);
+    let mut bob = world.person(0xb2);
+    let mut carol = world.person(0xc3);
+    let group_id = group_of(&mut alice, &mut [&mut bob, &mut carol]);
+    deliver_all(&mut [&mut alice, &mut bob, &mut carol]);
+    // Bob uploads Carol's endorsement as his own, and then junk.
+    let carols = world.group_send_key.borrow().issue(
+        uuid::Uuid::parse_str(
+            &crate::address::parse_account(&carol.account)
+                .unwrap()
+                .account_id,
+        )
+        .unwrap(),
+        now() as u64,
+    );
+    let mut record = block_on(bob.engine.load_group_record(&group_id)).unwrap();
+    let pseudonym = record.pseudonym().unwrap().public_key();
+    let blob = kutup_group_send::EndorsementBlob {
+        server: SERVER.to_string(),
+        key_id: 1,
+        response: carols.response,
+    }
+    .encode()
+    .unwrap();
+    let state_key = record.master().unwrap().state_key();
+    for plain in [
+        blob.to_vec(),
+        vec![7u8; kutup_group_send::ENDORSEMENT_BLOB_BYTES],
+    ] {
+        let sealed = state_key
+            .seal(SealedField::Endorsement, &pseudonym, &plain)
+            .unwrap();
+        let body = kutup_chat_proto::group_send::GroupEndorsementUploadV1 {
+            expiration: carols.expiration,
+            sealed: STANDARD.encode(sealed),
+        }
+        .canonical_bytes()
+        .unwrap();
+        let answer = block_on(bob.engine.group_request(
+            &mut record,
+            GroupOperationV1::PutEndorsement,
+            &body,
+        ))
+        .unwrap()
+        .unwrap();
+        assert_eq!(answer.status, GroupResponseStatusV1::Ok);
+    }
+    alice.engine.endorsement_cache = Default::default();
+    block_on(
+        alice
+            .engine
+            .refresh_group_send_endorsements(&group_id, true),
+    )
+    .unwrap();
+    assert!(!endorsed_by(&alice, &group_id, &bob));
+    // Carol's own blob is hers, and taken.
+    assert!(endorsed_by(&alice, &group_id, &carol));
+}
+
+/// A destination that doesn't answer, or a request too large: the copies go
+/// pairwise in the same send; a spent budget makes them wait.
+#[test]
+fn group_multi_unavailable_or_too_large_goes_pairwise_and_a_budget_waits() {
+    use crate::transport::MultiSendOutcome;
+    let world = World::new();
+    let (mut alice, mut bob, mut carol, mut dave, group_id) = exchanged_group(&world);
+    for answer in [
+        MultiSendOutcome::PeerUnavailable,
+        MultiSendOutcome::TooLarge,
+    ] {
+        world.multi_answers.borrow_mut().push_back(answer);
+        let send_id = alice.send_text(&group_id, "still arrives");
+        assert_eq!(reached(&world, &send_id).len(), 3, "pairwise to all three");
+    }
+    deliver_all(&mut [&mut alice, &mut bob, &mut carol, &mut dave]);
+    world
+        .multi_answers
+        .borrow_mut()
+        .push_back(MultiSendOutcome::RateLimited);
+    let send_id = uuid::Uuid::new_v4().to_string();
+    let seq = block_on(alice.engine.session().next_sent_seq()).unwrap();
+    let content = ChatContent::text_with_id(
+        &send_id,
+        crate::clock::rfc3339(crate::clock::unix_millis()),
+        seq,
+        "later",
+    );
+    let summary = block_on(alice.engine.send_group_message(
+        &group_id,
+        &send_id,
+        content,
+        &mut rng(),
+    ))
+    .unwrap();
+    assert_eq!(summary.pending, 3, "the three wait for the budget");
+}
+
+/// A member's device the sender key hasn't reached (one the account gained
+/// since): the shared copy would be unreadable there, so its copy goes
+/// pairwise and names the member, and it finds the group again.
+#[test]
+fn group_multi_a_members_new_device_gets_a_pairwise_copy_naming_the_member() {
+    let world = World::new();
+    let (mut alice, bob, mut carol, mut dave, group_id) = exchanged_group(&world);
+    let mut bob2 = bob_replaced_before_his_list_write(&world, bob);
+    let multi = world.multi_requests.get();
+    alice.send_text(&group_id, "to the new device");
+    assert!(
+        world.multi_requests.get() > multi,
+        "the others on the route"
+    );
+    deliver_all(&mut [&mut alice, &mut bob2, &mut carol, &mut dave]);
+    assert_eq!(bob2.status(&group_id), GroupStatus::Member);
+    assert!(bob2
+        .group_texts(&group_id)
+        .contains(&"to the new device".to_string()));
+}
+
 // ----- sealed batches (#244) -----
 
 #[test]
 fn group_batches_a_message_goes_to_all_member_accounts_in_one_request() {
     let world = World::new();
+    // The pairwise batch route, as an older server has only it.
+    world.no_multi_route.set(true);
     let mut alice = world.person(0xa1);
     let mut bob = world.person(0xb2);
     let mut carol = world.person(0xc3);
@@ -3008,6 +3621,8 @@ fn group_batches_a_message_goes_to_all_member_accounts_in_one_request() {
 fn group_batches_a_limited_leg_waits_and_a_refused_one_fails() {
     use kutup_chat_proto::SealedBatchOutcomeV1 as Outcome;
     let world = World::new();
+    // The pairwise batch route, as an older server has only it.
+    world.no_multi_route.set(true);
     let mut alice = world.person(0xa1);
     let mut bob = world.person(0xb2);
     let mut carol = world.person(0xc3);
@@ -3217,6 +3832,8 @@ fn group_followup_an_evicted_envelope_is_acknowledged_and_reported() {
 fn group_batches_a_conflicting_leg_waits_for_its_queued_copy() {
     use kutup_chat_proto::SealedBatchOutcomeV1 as Outcome;
     let world = World::new();
+    // The pairwise batch route, as an older server has only it.
+    world.no_multi_route.set(true);
     let mut alice = world.person(0xa1);
     let mut bob = world.person(0xb2);
     let group_id = group_of(&mut alice, &mut [&mut bob]);
@@ -3249,6 +3866,8 @@ fn group_batches_a_conflicting_leg_waits_for_its_queued_copy() {
 fn group_batches_a_queued_leg_waits_and_reaches_a_device_linked_meanwhile() {
     use kutup_chat_proto::SealedBatchOutcomeV1 as Outcome;
     let world = World::new();
+    // The pairwise batch route, as an older server has only it.
+    world.no_multi_route.set(true);
     let mut alice = world.person(0xa1);
     let mut bob = world.person(0xb2);
     let group_id = group_of(&mut alice, &mut [&mut bob]);
@@ -3296,6 +3915,8 @@ fn group_batches_a_queued_leg_waits_and_reaches_a_device_linked_meanwhile() {
 #[test]
 fn group_batches_a_failed_batch_goes_again_with_the_same_send_ids() {
     let world = World::new();
+    // The pairwise batch route, as an older server has only it.
+    world.no_multi_route.set(true);
     let mut alice = world.person(0xa1);
     let mut bob = world.person(0xb2);
     let group_id = group_of(&mut alice, &mut [&mut bob]);
@@ -3324,6 +3945,8 @@ fn group_batches_a_failed_batch_goes_again_with_the_same_send_ids() {
 fn group_batches_a_leg_not_taken_in_a_week_fails_and_says_so() {
     use kutup_chat_proto::SealedBatchOutcomeV1 as Outcome;
     let world = World::new();
+    // The pairwise batch route, as an older server has only it.
+    world.no_multi_route.set(true);
     let mut alice = world.person(0xa1);
     let mut bob = world.person(0xb2);
     let group_id = group_of(&mut alice, &mut [&mut bob]);
@@ -3353,6 +3976,8 @@ fn group_batches_a_leg_not_taken_in_a_week_fails_and_says_so() {
 fn group_batches_a_queued_sender_key_is_not_in_the_book_nor_queued_again_within_the_hour() {
     use kutup_chat_proto::SealedBatchOutcomeV1 as Outcome;
     let world = World::new();
+    // The pairwise batch route, as an older server has only it.
+    world.no_multi_route.set(true);
     let mut alice = world.person(0xa1);
     let mut bob = world.person(0xb2);
     let group_id = group_of(&mut alice, &mut [&mut bob]);
@@ -3401,6 +4026,8 @@ fn group_batches_a_queued_sender_key_is_not_in_the_book_nor_queued_again_within_
 fn group_batches_a_message_is_sent_once_its_server_has_every_leg() {
     use kutup_chat_proto::SealedBatchOutcomeV1 as Outcome;
     let world = World::new();
+    // The pairwise batch route, as an older server has only it.
+    world.no_multi_route.set(true);
     let mut alice = world.person(0xa1);
     let mut bob = world.person(0xb2);
     let mut carol = world.person(0xc3);
@@ -3470,6 +4097,8 @@ fn group_batches_a_message_is_sent_once_its_server_has_every_leg() {
 fn group_batches_a_leg_whose_devices_changed_after_queueing_is_sending_again() {
     use kutup_chat_proto::{DeviceListMismatch, SealedBatchOutcomeV1 as Outcome};
     let world = World::new();
+    // The pairwise batch route, as an older server has only it.
+    world.no_multi_route.set(true);
     let mut alice = world.person(0xa1);
     let mut bob = world.person(0xb2);
     let group_id = group_of(&mut alice, &mut [&mut bob]);
@@ -3511,6 +4140,8 @@ fn group_batches_a_leg_whose_devices_changed_after_queueing_is_sending_again() {
 fn group_batches_a_queued_key_is_held_once_a_message_after_it_arrives() {
     use kutup_chat_proto::{DeviceListMismatch, SealedBatchOutcomeV1 as Outcome};
     let world = World::new();
+    // The pairwise batch route, as an older server has only it.
+    world.no_multi_route.set(true);
     let mut alice = world.person(0xa1);
     let mut bob = world.person(0xb2);
     let mut carol = world.person(0xc3);
@@ -5681,4 +6312,55 @@ fn group_removal_a_forged_or_misplaced_removal_is_not_taken() {
     // The real one is taken.
     deliver(&mut carol, &real, &notary);
     assert_eq!(carol.status(&group_id), GroupStatus::Gone);
+}
+/// A 409 that names only other accounts' devices stored nothing for these
+/// legs either: they wait and count it, never going round at once.
+#[test]
+fn group_multi_a_conflict_naming_no_leg_waits_and_counts() {
+    use crate::transport::MultiSendOutcome;
+    let world = World::new();
+    let (mut alice, _bob, _carol, _dave, group_id) = exchanged_group(&world);
+    let response: kutup_chat_proto::SealedMultiResponseV1 =
+        serde_json::from_value(serde_json::json!({
+            "refused": [],
+            "rateLimited": [],
+            "devices": [{
+                "accountId": "00000000-0000-4000-8000-000000000099",
+                "missingDevices": [1],
+                "extraDevices": []
+            }]
+        }))
+        .unwrap();
+    world
+        .multi_answers
+        .borrow_mut()
+        .push_back(MultiSendOutcome::Answered {
+            status: 409,
+            response,
+        });
+    let send_id = uuid::Uuid::new_v4().to_string();
+    let seq = block_on(alice.engine.session().next_sent_seq()).unwrap();
+    let content = ChatContent::text_with_id(
+        &send_id,
+        crate::clock::rfc3339(crate::clock::unix_millis()),
+        seq,
+        "conflict",
+    );
+    let summary = block_on(alice.engine.send_group_message(
+        &group_id,
+        &send_id,
+        content,
+        &mut rng(),
+    ))
+    .unwrap();
+    assert_eq!(summary.pending, 3, "the three wait");
+    let entry = block_on(alice.engine.session().db().list_group_outbox())
+        .unwrap()
+        .into_iter()
+        .find(|entry| entry.send_id == send_id)
+        .unwrap();
+    for leg in entry.legs.iter().filter(|leg| leg.multi) {
+        assert_eq!(leg.mismatches, 1);
+        assert!(leg.retry_at_ms.is_some() && !leg.delivered);
+    }
 }
