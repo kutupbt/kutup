@@ -53,6 +53,8 @@ pub struct StreamEncryptor {
     aad: Vec<u8>,
 }
 
+// Adapter: libsodium's secretstream, the legacy stream format.
+#[allow(clippy::disallowed_methods)]
 impl StreamEncryptor {
     /// Initializes a new stream, returning the encryptor and the 24-byte header
     /// that must be written first.
@@ -124,6 +126,8 @@ pub struct StreamDecryptor {
     aad: Vec<u8>,
 }
 
+// Adapter: libsodium's secretstream, the legacy stream format.
+#[allow(clippy::disallowed_methods)]
 impl StreamDecryptor {
     /// Initializes a decryptor from `key` and the 24-byte stream `header`.
     pub fn new(key: &[u8], header: &[u8]) -> Result<Self> {

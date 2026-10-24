@@ -18,7 +18,6 @@ use kutup_crypto::drive_envelope::{self, DriveEnvelopeContextV1, DriveEnvelopePu
 use kutup_crypto::drive_object::{self, DriveFileBlobContextV1};
 use kutup_crypto::file_keyring;
 use kutup_crypto::named_share::FileShareEnvelopeV1;
-use rand::RngCore;
 use reqwest::blocking::Client;
 use reqwest::StatusCode;
 use serde_json::{json, Value};
@@ -218,7 +217,7 @@ fn file_share_contract() {
 
     // Removing Bob: a new key, re-sealed for Carol only, in one request.
     let mut next_key = [0u8; 32];
-    rand::thread_rng().fill_bytes(&mut next_key);
+    kutup_crypto::primitives::random(&mut next_key);
     let rotate = |members: Value, removed: Value| {
         bearer(c.post(format!("{base}/api/files/{}/rotate", file.id)), &alice.token)
             .json(&json!({
@@ -392,7 +391,7 @@ fn stale_file_shares_wait_for_the_owner() {
         &alice.token,
     );
     let mut folder2 = [0u8; 32];
-    rand::thread_rng().fill_bytes(&mut folder2);
+    kutup_crypto::primitives::random(&mut folder2);
     let statement = CollectionEpochStatementV1::create(
         &folder.id,
         &alice.id,
@@ -461,7 +460,7 @@ fn stale_file_shares_wait_for_the_owner() {
 
     // The folder's editor re-keys the file; they cannot seal for the owner.
     let mut key2 = [0u8; 32];
-    rand::thread_rng().fill_bytes(&mut key2);
+    kutup_crypto::primitives::random(&mut key2);
     let r = bearer(c.post(format!("{base}/api/files/{}/rekey", file.id)), &editor.token)
         .json(&json!({
             "fromGeneration": 1,
@@ -632,7 +631,7 @@ fn editors_share_and_rename_when_allowed() {
     // re-seals is theirs.
     let rotate = |by: &User| {
         let mut next = [0u8; 32];
-        rand::thread_rng().fill_bytes(&mut next);
+        kutup_crypto::primitives::random(&mut next);
         let members: Vec<Value> = [&carol, &erin]
             .iter()
             .map(|m| json!({ "userId": m.id, "shareEnvelope": file_share(&alice, &file.id, &next, 2, m) }))
@@ -859,7 +858,7 @@ fn a_public_link_to_one_file() {
         .status();
     assert_eq!(status, StatusCode::NO_CONTENT);
     let mut next = [0u8; 32];
-    rand::thread_rng().fill_bytes(&mut next);
+    kutup_crypto::primitives::random(&mut next);
     let link_id = link["id"].as_str().unwrap();
     let rotate = |from: u32,
                   key: &[u8; 32],
@@ -917,7 +916,7 @@ fn a_public_link_to_one_file() {
 
     // Removing the link: a new key, and the link is gone.
     let mut third = [0u8; 32];
-    rand::thread_rng().fill_bytes(&mut third);
+    kutup_crypto::primitives::random(&mut third);
     assert_eq!(
         rotate(2, &next, &third, json!([]), json!([]), json!([link_id])),
         StatusCode::OK

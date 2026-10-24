@@ -14,6 +14,7 @@
 //! one; renewal runs under a database lock, and publishing an unchanged policy
 //! is a no-op.
 
+use kutup_crypto::primitives::{hash, Suite};
 use std::collections::BTreeSet;
 use std::time::Duration;
 
@@ -25,9 +26,6 @@ use kutup_chat_proto::{
 };
 use kutup_federation_proto::FederatedFeaturePolicyTypeV1;
 use libsignal_protocol::{KeyPair, PrivateKey, ServerCertificate};
-use rand09::rngs::OsRng;
-use rand09::{RngCore as _, TryRngCore as _};
-use sha2::{Digest as _, Sha256};
 use time::OffsetDateTime;
 
 use crate::federation::{FederationStack, PolicyRotation};
@@ -141,10 +139,10 @@ fn generate(
     now: i64,
     activates_at: i64,
 ) -> anyhow::Result<GeneratedCertificate> {
-    let mut rng = OsRng.unwrap_err();
+    let mut rng = kutup_crypto::primitives::Rng;
     let taken: BTreeSet<i64> = rows.iter().map(|row| row.certificate_id).collect();
     let certificate_id = loop {
-        let id = rng.next_u32();
+        let id = u32::from_le_bytes(kutup_crypto::primitives::random_array());
         if id != 0 && id != LIBSIGNAL_REVOKED_TEST_CERTIFICATE_ID && !taken.contains(&i64::from(id))
         {
             break id;
@@ -164,7 +162,7 @@ fn generate(
     let root_public = root.public_key.serialize();
     Ok(GeneratedCertificate {
         certificate_id: i64::from(certificate_id),
-        root_id: hex::encode(Sha256::digest(&root_public)),
+        root_id: hex::encode(hash(Suite::V1, &root_public)),
         root_public_key: STANDARD.encode(&root_public),
         certificate: STANDARD.encode(certificate.serialized()?),
         online_private_key: Some(online.private_key.serialize().to_vec()),

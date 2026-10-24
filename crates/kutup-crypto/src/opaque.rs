@@ -34,6 +34,8 @@ use opaque_ke::{
     CredentialResponse, RegistrationRequest, RegistrationResponse, RegistrationUpload,
     Ristretto255, ServerLogin, ServerLoginParameters, ServerRegistration, ServerSetup, TripleDh,
 };
+// Adapter: OPAQUE's key exchange hash (RFC 9807 ciphersuite).
+#[allow(clippy::disallowed_types)]
 use sha2::Sha512;
 use zeroize::{Zeroize, Zeroizing};
 
@@ -85,6 +87,8 @@ impl Ksf for Argon2idV1 {
 /// Suite 1.
 pub struct Suite1;
 
+// Adapter: OPAQUE's key exchange hash (RFC 9807 ciphersuite).
+#[allow(clippy::disallowed_types)]
 impl opaque_ke::CipherSuite for Suite1 {
     type OprfCs = Ristretto255;
     type KeyExchange = TripleDh<Ristretto255, Sha512>;

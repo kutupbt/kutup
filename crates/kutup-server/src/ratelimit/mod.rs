@@ -13,12 +13,11 @@
 //!
 //! `spawn_cleanup` runs the periodic pruning for all of the above.
 
+use kutup_crypto::primitives::{hash, Suite};
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{LazyLock, Mutex, OnceLock, RwLock};
 use std::time::{Duration, Instant};
-
-use sha2::{Digest, Sha256};
 
 mod registry;
 
@@ -777,7 +776,7 @@ impl WindowCounter {
     }
 
     fn slot(key: &str) -> usize {
-        let digest = Sha256::digest(key.as_bytes());
+        let digest = hash(Suite::V1, key.as_bytes());
         (u32::from_be_bytes([digest[0], digest[1], digest[2], digest[3]]) as usize)
             % WINDOW_COUNTER_SLOTS
     }
@@ -880,7 +879,7 @@ static TOTP_TRACKER: LazyLock<Mutex<TotpTracker>> = LazyLock::new(|| {
 
 /// SHA-256 hex of a token — mirrors `hashToken` (tokens are never stored in the clear).
 pub(crate) fn hash_token(token: &str) -> String {
-    let digest = Sha256::digest(token.as_bytes());
+    let digest = hash(Suite::V1, token.as_bytes());
     hex::encode(digest)
 }
 

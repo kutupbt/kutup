@@ -9,10 +9,13 @@
 
 use aes_gcm::aead::{Aead, KeyInit};
 use aes_gcm::{Aes128Gcm, Nonce};
+// Adapter: RFC 8291's key derivation is HKDF-SHA256.
+#[allow(clippy::disallowed_types)]
 use hkdf::Hkdf;
 use p256::elliptic_curve::sec1::ToEncodedPoint;
 use p256::{PublicKey, SecretKey};
-use rand::RngCore as _;
+// Adapter: RFC 8291's key derivation is HKDF-SHA256.
+#[allow(clippy::disallowed_types)]
 use sha2::Sha256;
 
 /// RFC 8188's record size, as RFC 8291 §4 writes it; a reminder is far
@@ -37,11 +40,13 @@ pub enum PayloadError {
 /// with `Content-Encoding: aes128gcm`.
 pub fn encrypt(p256dh: &[u8], auth: &[u8], plaintext: &[u8]) -> Result<Vec<u8>, PayloadError> {
     let mut salt = [0u8; 16];
-    rand::rngs::OsRng.fill_bytes(&mut salt);
-    let ephemeral = SecretKey::random(&mut rand::rngs::OsRng);
+    kutup_crypto::primitives::random(&mut salt);
+    let ephemeral = SecretKey::random(&mut kutup_crypto::primitives::Rng);
     encrypt_with(&ephemeral, salt, p256dh, auth, plaintext)
 }
 
+// Adapter: RFC 8291 (aes128gcm Web Push encryption).
+#[allow(clippy::disallowed_types)]
 fn encrypt_with(
     ephemeral: &SecretKey,
     salt: [u8; 16],
@@ -131,7 +136,7 @@ mod tests {
 
     #[test]
     fn every_message_has_its_own_key_and_salt() {
-        let browser = SecretKey::random(&mut rand::rngs::OsRng);
+        let browser = SecretKey::random(&mut kutup_crypto::primitives::Rng);
         let p256dh = browser.public_key().to_encoded_point(false);
         let auth = [7u8; 16];
         let one = encrypt(p256dh.as_bytes(), &auth, b"same").unwrap();
@@ -144,7 +149,7 @@ mod tests {
 
     #[test]
     fn refuses_bad_keys_and_long_payloads() {
-        let browser = SecretKey::random(&mut rand::rngs::OsRng);
+        let browser = SecretKey::random(&mut kutup_crypto::primitives::Rng);
         let p256dh = browser.public_key().to_encoded_point(false);
         assert!(matches!(
             encrypt(&[4; 65], &[0; 16], b"x"),

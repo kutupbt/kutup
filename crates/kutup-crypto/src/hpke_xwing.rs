@@ -10,6 +10,8 @@
 //! hashes its input first, so its keys are not the seed's.
 
 use hpke_rs::hpke_types::{AeadAlgorithm, KdfAlgorithm, KemAlgorithm};
+// Adapter: the HPKE backend behind primitives::hpke_*.
+#[allow(clippy::disallowed_types)]
 use hpke_rs::{Hpke, Mode};
 use hpke_rs_rust_crypto::HpkeRustCrypto;
 
@@ -23,6 +25,8 @@ pub const SEED_LEN: usize = 32;
 pub const ENCAPSULATED_KEY_LEN: usize = 1120;
 
 /// The suite, in HPKE's base mode.
+// Adapter: the HPKE backend behind primitives::hpke_*.
+#[allow(clippy::disallowed_types)]
 pub(crate) fn suite() -> Hpke<HpkeRustCrypto> {
     Hpke::new(
         Mode::Base,

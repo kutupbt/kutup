@@ -5,7 +5,6 @@
 //! every instance uses the stored copy. Configured keys take precedence and
 //! never pass through here.
 
-use rand::RngCore as _;
 use sqlx::PgPool;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -37,7 +36,7 @@ pub(crate) async fn load_or_create(pool: &PgPool, key: GeneratedKey) -> anyhow::
         return Ok(seed);
     }
     let mut created = [0u8; 32];
-    rand::rngs::OsRng.fill_bytes(&mut created);
+    kutup_crypto::primitives::random(&mut created);
     sqlx::query("INSERT INTO server_generated_keys (purpose, private_key) VALUES ($1, $2) ON CONFLICT DO NOTHING")
         .bind(key.purpose())
         .bind(created.to_vec())

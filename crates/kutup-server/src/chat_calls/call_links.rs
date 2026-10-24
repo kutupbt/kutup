@@ -23,8 +23,8 @@ use axum::http::{HeaderMap, StatusCode};
 use axum::Json;
 use base64::engine::general_purpose::STANDARD;
 use base64::Engine as _;
+use kutup_crypto::primitives::{hash, Suite};
 use serde::{Deserialize, Serialize};
-use sha2::{Digest as _, Sha256};
 use time::OffsetDateTime;
 use uuid::Uuid;
 
@@ -142,7 +142,7 @@ pub struct CallLinkTokenRequest {
 
 /// The SHA-256 of a seat secret.
 pub(super) fn seat_hash(seat: &str) -> AppResult<[u8; 32]> {
-    Ok(Sha256::digest(base64_exact("seat", seat, 32)?).into())
+    Ok(hash(Suite::V1, base64_exact("seat", seat, 32)?).into())
 }
 
 /// The account this server vouches for, when the request carries a signed-in
@@ -441,7 +441,7 @@ impl Admitted {
         let Some(token) = host_token else {
             return Ok(false);
         };
-        let presented: [u8; 32] = Sha256::digest(base64_exact("hostToken", token, 32)?).into();
+        let presented: [u8; 32] = hash(Suite::V1, base64_exact("hostToken", token, 32)?).into();
         let stored: [u8; 32] = self
             .host_token_hash
             .as_slice()
@@ -481,7 +481,7 @@ pub(super) async fn admitted(
     .bind(room_id)
     .fetch_optional(&state.pool)
     .await?;
-    let presented_hash: [u8; 32] = Sha256::digest(&presented).into();
+    let presented_hash: [u8; 32] = hash(Suite::V1, &presented).into();
     let stored_hash: [u8; 32] = stored
         .as_ref()
         .and_then(|(hash, ..)| hash.as_slice().try_into().ok())

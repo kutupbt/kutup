@@ -1,7 +1,6 @@
 use base64::Engine as _;
-use ed25519_dalek::{Signature, Signer as _, SigningKey, VerifyingKey};
+use kutup_crypto::primitives::{hash, SigningKey, Suite, VerifyingKey};
 use serde::{Deserialize, Serialize};
-use sha2::{Digest as _, Sha256};
 
 use crate::{
     decode_base64, federation_key_id, push_string, validate_hash, validate_server_name,
@@ -68,7 +67,7 @@ pub struct FederationIdentityKeyV1 {
 
 impl FederationIdentityKeyV1 {
     pub fn from_signing_key(signing_key: &SigningKey) -> Self {
-        let public_key = signing_key.verifying_key().to_bytes();
+        let public_key = signing_key.verifying_key().to_array::<32>();
         Self {
             algorithm: FederationIdentityKeyAlgorithm::Ed25519,
             key_id: federation_key_id(&public_key),
@@ -85,7 +84,7 @@ impl FederationIdentityKeyV1 {
     }
 
     pub fn verifying_key(&self) -> Result<VerifyingKey, FederationProtocolError> {
-        VerifyingKey::from_bytes(&self.public_key_bytes()?)
+        VerifyingKey::from_bytes(Suite::V1, &self.public_key_bytes()?)
             .map_err(|_| crate::error::invalid_field("publicKey", "is not an Ed25519 public key"))
     }
 
@@ -146,7 +145,9 @@ impl FederationIdentityDocumentV1 {
         current_signing_key: &SigningKey,
     ) -> Result<Self, FederationProtocolError> {
         previous.verify_current()?;
-        if previous_signing_key.verifying_key().to_bytes() != previous.key.public_key_bytes()? {
+        if previous_signing_key.verifying_key().to_array::<32>()
+            != previous.key.public_key_bytes()?
+        {
             return Err(FederationProtocolError::InvalidIdentityChain(
                 "the previous signing key does not match the predecessor document",
             ));
@@ -209,14 +210,14 @@ impl FederationIdentityDocumentV1 {
         let mut bytes = Vec::with_capacity(320);
         bytes.extend_from_slice(IDENTITY_HASH_DOMAIN);
         bytes.extend_from_slice(&self.signing_bytes()?);
-        Ok(hex::encode(Sha256::digest(bytes)))
+        Ok(hex::encode(hash(Suite::V1, bytes)))
     }
 
     pub fn verify_current(&self) -> Result<(), FederationProtocolError> {
         self.validate_shape()?;
         let key = self.key.verifying_key()?;
         let signature = decode_signature("currentSignature", &self.current_signature)?;
-        key.verify_strict(&self.signing_bytes()?, &signature)
+        key.verify(&self.signing_bytes()?, &signature)
             .map_err(|_| FederationProtocolError::InvalidIdentitySignature("current key signature"))
     }
 
@@ -284,7 +285,7 @@ impl FederationIdentityDocumentV1 {
         previous
             .key
             .verifying_key()?
-            .verify_strict(&self.signing_bytes()?, &signature)
+            .verify(&self.signing_bytes()?, &signature)
             .map_err(|_| {
                 FederationProtocolError::InvalidIdentitySignature("previous key signature")
             })
@@ -354,15 +355,12 @@ pub fn verify_identity_chain(
     Ok(())
 }
 
-fn encode_signature(signature: &Signature) -> String {
-    base64::engine::general_purpose::STANDARD.encode(signature.to_bytes())
+fn encode_signature(signature: &[u8]) -> String {
+    base64::engine::general_purpose::STANDARD.encode(signature)
 }
 
-fn decode_signature(
-    field: &'static str,
-    value: &str,
-) -> Result<Signature, FederationProtocolError> {
-    Ok(Signature::from_bytes(&decode_base64::<64>(field, value)?))
+fn decode_signature(field: &'static str, value: &str) -> Result<[u8; 64], FederationProtocolError> {
+    decode_base64::<64>(field, value)
 }
 
 #[cfg(test)]
@@ -370,7 +368,7 @@ mod tests {
     use super::*;
 
     fn key(byte: u8) -> SigningKey {
-        SigningKey::from_bytes(&[byte; 32])
+        SigningKey::from_seed(Suite::V1, &[byte; 32])
     }
 
     #[test]

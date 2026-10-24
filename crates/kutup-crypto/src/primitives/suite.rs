@@ -68,7 +68,6 @@ pub const V1: SuiteParams = SuiteParams {
     aead_tag_len: 16,
     signature: "Ed25519 (RFC 8032), pure",
     signature_verification: "strict (ed25519-dalek verify_strict): S canonical (below the group order), A and R not of small order",
-
     signing_seed_len: 32,
     verifying_key_len: 32,
     signature_len: 64,
@@ -81,7 +80,6 @@ pub const V1: SuiteParams = SuiteParams {
     hpke_encapsulated_len: 1120,
     pwhash: "Argon2id v1.3 as libsodium's crypto_pwhash (one lane); operations and memory stored with the hash",
     random: "the operating system's (getrandom; in the browser, crypto.getRandomValues); HPKE's ephemeral keys come from hpke-rs's own ChaCha20 generator, which it seeds from the same source",
-
 };
 
 impl Suite {

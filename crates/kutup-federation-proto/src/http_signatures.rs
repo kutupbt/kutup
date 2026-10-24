@@ -1,9 +1,8 @@
 use std::{fmt, str::FromStr};
 
 use base64::Engine as _;
-use ed25519_dalek::{Signature, Signer as _, SigningKey, VerifyingKey};
+use kutup_crypto::primitives::{hash, SigningKey, Suite, VerifyingKey};
 use serde::{Deserialize, Serialize};
-use sha2::{Digest as _, Sha256};
 use url::Url;
 
 use crate::{
@@ -205,7 +204,7 @@ impl FederationSignedRequest {
             REQUEST_COMPONENTS,
             created,
             expires,
-            &federation_key_id(&signing_key.verifying_key().to_bytes()),
+            &federation_key_id(&signing_key.verifying_key().to_array::<32>()),
             &nonce,
         );
         let base = request_signature_base(&request, &content_digest, &parameters);
@@ -382,7 +381,7 @@ impl FederationVerifiedRequest {
             RESPONSE_COMPONENTS,
             created,
             expires,
-            &federation_key_id(&signing_key.verifying_key().to_bytes()),
+            &federation_key_id(&signing_key.verifying_key().to_array::<32>()),
             &self.context.nonce,
         );
         let base = response_signature_base(response, &content_digest, &self.context, &parameters);
@@ -411,7 +410,7 @@ impl FederationVerifiedRequest {
             RESPONSE_COMPONENTS,
             created,
             expires,
-            &federation_key_id(&signing_key.verifying_key().to_bytes()),
+            &federation_key_id(&signing_key.verifying_key().to_array::<32>()),
             &self.context.nonce,
         );
         let base = response_signature_base(response, content_digest, &self.context, &parameters);
@@ -449,7 +448,37 @@ impl FederationVerifiedRequest {
 }
 
 pub fn content_digest_sha256(body: &[u8]) -> String {
-    content_digest_sha256_from_digest(&Sha256::digest(body).into())
+    content_digest_sha256_from_digest(&ContentDigest::of(body))
+}
+
+/// RFC 9530's `sha-256` content digest, fed in parts (a streamed body). The
+/// header names its algorithm, so it is SHA-256 whatever Kutup's suite is.
+// Adapter: RFC 9530 Content-Digest.
+#[allow(clippy::disallowed_types)]
+#[derive(Clone, Default)]
+pub struct ContentDigest(sha2::Sha256);
+
+// Adapter: RFC 9530 Content-Digest.
+#[allow(clippy::disallowed_types)]
+impl ContentDigest {
+    pub fn new() -> Self {
+        Self(sha2::Sha256::default())
+    }
+
+    /// The digest of a whole body.
+    pub fn of(body: &[u8]) -> [u8; 32] {
+        let mut digest = Self::new();
+        digest.update(body);
+        digest.finish()
+    }
+
+    pub fn update(&mut self, data: &[u8]) {
+        sha2::Digest::update(&mut self.0, data);
+    }
+
+    pub fn finish(self) -> [u8; 32] {
+        sha2::Digest::finalize(self.0).into()
+    }
 }
 
 /// Format an already-computed raw SHA-256 digest as RFC 9530 content digest.
@@ -484,7 +513,7 @@ fn request_replay_hash(
     )?;
     push_string(&mut bytes, "kutup-origin", &request.origin)?;
     push_string(&mut bytes, "kutup-destination", &request.destination)?;
-    Ok(hex::encode(Sha256::digest(bytes)))
+    Ok(hex::encode(hash(Suite::V1, bytes)))
 }
 
 fn verify_response(
@@ -856,10 +885,10 @@ fn response_signature_base(
     .join("\n")
 }
 
-fn encode_signature_header(signature: &Signature) -> String {
+fn encode_signature_header(signature: &[u8]) -> String {
     format!(
         "{FEDERATION_SIGNATURE_LABEL}=:{}:",
-        base64::engine::general_purpose::STANDARD.encode(signature.to_bytes())
+        base64::engine::general_purpose::STANDARD.encode(signature)
     )
 }
 
@@ -875,11 +904,11 @@ fn verify_signature_header(
         .ok_or(FederationProtocolError::InvalidHttpSignature(
             "Signature is not the required single binary member",
         ))?;
-    let signature = Signature::from_bytes(&decode_base64::<64>("Signature", encoded)?);
-    let key = VerifyingKey::from_bytes(public_key).map_err(|_| {
+    let signature = decode_base64::<64>("Signature", encoded)?;
+    let key = VerifyingKey::from_bytes(Suite::V1, public_key).map_err(|_| {
         FederationProtocolError::InvalidHttpSignature("pinned key is not a valid Ed25519 key")
     })?;
-    key.verify_strict(message, &signature)
+    key.verify(message, &signature)
         .map_err(|_| FederationProtocolError::InvalidHttpSignature("signature verification failed"))
 }
 
@@ -900,7 +929,7 @@ mod tests {
     }
 
     fn key(byte: u8) -> SigningKey {
-        SigningKey::from_bytes(&[byte; 32])
+        SigningKey::from_seed(Suite::V1, &[byte; 32])
     }
 
     fn request(feature: FederationFeature) -> FederationHttpRequest {
@@ -945,7 +974,7 @@ mod tests {
         let verified = FederationVerifiedRequest::verify(
             signed.request.clone(),
             signed.headers.clone(),
-            &client.verifying_key().to_bytes(),
+            &client.verifying_key().to_array::<32>(),
             1_700_000_100,
         )
         .unwrap();
@@ -957,7 +986,7 @@ mod tests {
             .verify_response(
                 response,
                 &headers,
-                &server.verifying_key().to_bytes(),
+                &server.verifying_key().to_array::<32>(),
                 1_700_000_150,
             )
             .unwrap();
@@ -993,7 +1022,7 @@ mod tests {
         let verified = FederationVerifiedRequest::verify_streamed(
             headless.clone(),
             streamed.headers.clone(),
-            &client.verifying_key().to_bytes(),
+            &client.verifying_key().to_array::<32>(),
             1_700_000_100,
         )
         .unwrap();
@@ -1006,7 +1035,7 @@ mod tests {
         let buffered_verified = FederationVerifiedRequest::verify(
             full,
             buffered.headers,
-            &client.verifying_key().to_bytes(),
+            &client.verifying_key().to_array::<32>(),
             1_700_000_100,
         )
         .unwrap();
@@ -1020,14 +1049,14 @@ mod tests {
         assert!(FederationVerifiedRequest::verify_streamed(
             headless,
             forged,
-            &client.verifying_key().to_bytes(),
+            &client.verifying_key().to_array::<32>(),
             1_700_000_100,
         )
         .is_err());
         assert!(FederationVerifiedRequest::verify_streamed(
             request(FederationFeature::DriveV1),
             streamed.headers,
-            &client.verifying_key().to_bytes(),
+            &client.verifying_key().to_array::<32>(),
             1_700_000_100,
         )
         .is_err());
@@ -1048,7 +1077,7 @@ mod tests {
         let verified = FederationVerifiedRequest::verify(
             signed.request.clone(),
             signed.headers.clone(),
-            &client.verifying_key().to_bytes(),
+            &client.verifying_key().to_array::<32>(),
             1_700_000_100,
         )
         .unwrap();
@@ -1071,7 +1100,7 @@ mod tests {
                 metadata.clone(),
                 &headers,
                 &digest,
-                &server.verifying_key().to_bytes(),
+                &server.verifying_key().to_array::<32>(),
                 1_700_000_150,
             )
             .unwrap();
@@ -1083,7 +1112,7 @@ mod tests {
                     metadata,
                     &headers,
                     &altered,
-                    &server.verifying_key().to_bytes(),
+                    &server.verifying_key().to_array::<32>(),
                     1_700_000_150,
                 )
                 .unwrap_err(),
@@ -1113,7 +1142,7 @@ mod tests {
         let first = FederationVerifiedRequest::verify(
             first.request,
             first.headers,
-            &signing_key.verifying_key().to_bytes(),
+            &signing_key.verifying_key().to_array::<32>(),
             150,
         )
         .unwrap()
@@ -1135,7 +1164,7 @@ mod tests {
         let resigned = FederationVerifiedRequest::verify(
             resigned.request,
             resigned.headers,
-            &signing_key.verifying_key().to_bytes(),
+            &signing_key.verifying_key().to_array::<32>(),
             150,
         )
         .unwrap()
@@ -1156,7 +1185,7 @@ mod tests {
         let changed = FederationVerifiedRequest::verify(
             changed.request,
             changed.headers,
-            &signing_key.verifying_key().to_bytes(),
+            &signing_key.verifying_key().to_array::<32>(),
             150,
         )
         .unwrap()
@@ -1190,7 +1219,7 @@ mod tests {
             assert!(FederationVerifiedRequest::verify(
                 signed.request.clone(),
                 headers,
-                &signing_key.verifying_key().to_bytes(),
+                &signing_key.verifying_key().to_array::<32>(),
                 150,
             )
             .is_err());
@@ -1232,7 +1261,7 @@ mod tests {
             FederationVerifiedRequest::verify(
                 request,
                 signed.headers.clone(),
-                &signing_key.verifying_key().to_bytes(),
+                &signing_key.verifying_key().to_array::<32>(),
                 150,
             )
             .unwrap_err(),
@@ -1247,14 +1276,14 @@ mod tests {
         assert!(FederationVerifiedRequest::verify(
             signed.request.clone(),
             headers,
-            &signing_key.verifying_key().to_bytes(),
+            &signing_key.verifying_key().to_array::<32>(),
             150,
         )
         .is_err());
         assert!(FederationVerifiedRequest::verify(
             signed.request,
             signed.headers,
-            &key(9).verifying_key().to_bytes(),
+            &key(9).verifying_key().to_array::<32>(),
             150,
         )
         .is_err());
@@ -1275,7 +1304,7 @@ mod tests {
             FederationVerifiedRequest::verify(
                 signed.request.clone(),
                 signed.headers.clone(),
-                &signing_key.verifying_key().to_bytes(),
+                &signing_key.verifying_key().to_array::<32>(),
                 261,
             )
             .unwrap_err(),
@@ -1292,7 +1321,7 @@ mod tests {
             assert!(FederationVerifiedRequest::verify(
                 signed.request.clone(),
                 headers,
-                &signing_key.verifying_key().to_bytes(),
+                &signing_key.verifying_key().to_array::<32>(),
                 150,
             )
             .is_err());
@@ -1314,7 +1343,7 @@ mod tests {
         let verified = FederationVerifiedRequest::verify(
             signed.request.clone(),
             signed.headers.clone(),
-            &client.verifying_key().to_bytes(),
+            &client.verifying_key().to_array::<32>(),
             150,
         )
         .unwrap();
@@ -1329,7 +1358,7 @@ mod tests {
             .verify_response(
                 wrong_feature,
                 &headers,
-                &server.verifying_key().to_bytes(),
+                &server.verifying_key().to_array::<32>(),
                 170,
             )
             .is_err());
@@ -1349,7 +1378,7 @@ mod tests {
             .verify_response(
                 valid_response,
                 &headers,
-                &server.verifying_key().to_bytes(),
+                &server.verifying_key().to_array::<32>(),
                 170,
             )
             .is_err());
@@ -1370,7 +1399,7 @@ mod tests {
         let verified = FederationVerifiedRequest::verify(
             signed.request.clone(),
             signed.headers.clone(),
-            &client.verifying_key().to_bytes(),
+            &client.verifying_key().to_array::<32>(),
             150,
         )
         .unwrap();
@@ -1397,7 +1426,7 @@ mod tests {
                 .verify_response(
                     response.clone(),
                     &headers,
-                    &server.verifying_key().to_bytes(),
+                    &server.verifying_key().to_array::<32>(),
                     170,
                 )
                 .is_err());
@@ -1409,7 +1438,12 @@ mod tests {
             signature: valid_headers.signature,
         };
         assert!(signed
-            .verify_response(response, &legacy, &server.verifying_key().to_bytes(), 170,)
+            .verify_response(
+                response,
+                &legacy,
+                &server.verifying_key().to_array::<32>(),
+                170,
+            )
             .is_err());
     }
 

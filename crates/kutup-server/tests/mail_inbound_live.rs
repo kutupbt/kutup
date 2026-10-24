@@ -5159,7 +5159,10 @@ fn an_old_addresss_keys_stay_its_accounts_to_manage() {
         &c,
         &base,
         &alice,
-        &format!("moved{}", rand::random::<u32>() % 1_000_000_000),
+        &format!(
+            "moved{}",
+            kutup_crypto::primitives::random_below(1_000_000_000)
+        ),
         false,
     );
     assert!(renamed.status.is_success(), "rename: {}", renamed.body);
@@ -5917,18 +5920,19 @@ fn send_readable(
 /// (`KUTUP_LIVE_FORWARDING_KEY`, its base64), as `mail::forwarding` makes
 /// it. Without the key, a forged one, which must not count.
 fn our_marker(forwarding: &str) -> String {
-    use hmac::Mac as _;
     let forwarding = uuid::Uuid::parse_str(forwarding).unwrap();
     let key = std::env::var("KUTUP_LIVE_FORWARDING_KEY")
         .expect("the mail gate sets KUTUP_LIVE_FORWARDING_KEY");
     let key = base64::Engine::decode(&base64::engine::general_purpose::STANDARD, key).unwrap();
-    let mut mac = <hmac::Hmac<sha2::Sha256> as hmac::Mac>::new_from_slice(&key).unwrap();
-    mac.update(b"kutup/mail-forwarding/marker/v1\0");
-    mac.update(forwarding.as_bytes());
+    let tag = kutup_crypto::primitives::mac(
+        kutup_crypto::primitives::Suite::V1,
+        &key,
+        &[b"kutup/mail-forwarding/marker/v1\0", forwarding.as_bytes()],
+    );
     format!(
         "X-Kutup-Forwarded: {}-{}\r\n",
         forwarding.simple(),
-        hex::encode(&mac.finalize().into_bytes()[..8])
+        hex::encode(&tag.as_bytes()[..8])
     )
 }
 

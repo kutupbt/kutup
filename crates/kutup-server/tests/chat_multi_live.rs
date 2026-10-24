@@ -17,10 +17,10 @@ use base64::engine::general_purpose::STANDARD;
 use base64::Engine as _;
 use common::chat_identity::{ChatAccount, ChatDevice};
 use common::*;
+use kutup_crypto::primitives::{hash, Suite};
 use reqwest::blocking::Client;
 use reqwest::StatusCode;
 use serde_json::{json, Value};
-use sha2::{Digest as _, Sha256};
 use uuid::Uuid;
 
 fn base() -> Option<String> {
@@ -66,7 +66,7 @@ fn member(c: &Client, base: &str, seeds: &[u8]) -> Member {
         c.put(format!("{base}/api/chat/group-capabilities")),
         &user.token,
     )
-    .json(&json!({ "add": [STANDARD.encode(Sha256::digest(capability))] }))
+    .json(&json!({ "add": [STANDARD.encode(hash(Suite::V1, capability))] }))
     .send()
     .unwrap();
     assert_eq!(r.status(), StatusCode::OK, "publish the capability");

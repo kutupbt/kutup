@@ -11,7 +11,6 @@
 //! ([`GatewayCache::named_by`]).
 
 use base64::Engine as _;
-use ed25519_dalek::SigningKey;
 use kutup_chat_proto::group_route::{
     GroupGatewayKeyConfigV1, GroupHomePinV1, GroupNotaryV1, GroupOperationV1, GroupRequestV1,
     GroupResponseStatusV1, GroupResponseV1,
@@ -159,7 +158,10 @@ impl RequestSigner<'_> {
                 timestamp,
                 nonce,
                 body,
-                &SigningKey::from_bytes(seed),
+                &kutup_crypto::primitives::SigningKey::from_seed(
+                    kutup_crypto::primitives::Suite::V1,
+                    seed,
+                ),
             ),
             Self::LinkPassword(password) => {
                 if !body.is_empty() {
@@ -275,13 +277,13 @@ mod tests {
     use std::cell::{Cell, RefCell};
 
     use async_trait::async_trait;
-    use ed25519_dalek::SigningKey;
     use futures_executor::block_on;
     use kutup_chat_proto::group_route::{GroupGatewayKeyConfigV1, GroupHomePinV1};
     use kutup_chat_proto::{
         AccountPreKeyBundlesResponse, MailboxPage, RegisterChatDeviceRequestV2, SendMessagesRequest,
     };
     use kutup_crypto::oblivious::GatewayKey;
+    use kutup_crypto::primitives::{SigningKey, Suite};
     use kutup_federation_proto::FederationIdentityDocumentV1;
 
     use super::*;
@@ -305,7 +307,7 @@ mod tests {
 
     impl Home {
         fn new() -> Self {
-            let key = SigningKey::from_bytes(&[1u8; 32]);
+            let key = SigningKey::from_seed(Suite::V1, &[1u8; 32]);
             let identity = FederationIdentityDocumentV1::genesis("home.example", 10, &key).unwrap();
             let gateway = GatewayKey::generate(1).unwrap();
             let served = Self::config(&identity, &key, &gateway, NOW - 10);
@@ -449,7 +451,7 @@ mod tests {
     fn a_key_not_signed_by_the_pinned_identity_is_refused() {
         let home = Home::new();
         // A relay hands over a config signed by its own identity.
-        let relay_key = SigningKey::from_bytes(&[2u8; 32]);
+        let relay_key = SigningKey::from_seed(Suite::V1, &[2u8; 32]);
         let relay = FederationIdentityDocumentV1::genesis("home.example", 10, &relay_key).unwrap();
         let gateway = GatewayKey::generate(1).unwrap();
         *home.served.borrow_mut() = Home::config(&relay, &relay_key, &gateway, NOW - 10);

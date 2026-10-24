@@ -8,14 +8,13 @@ use axum::http::{header, HeaderMap, HeaderName, HeaderValue, StatusCode};
 use axum::response::Response;
 use futures_util::StreamExt as _;
 use kutup_federation_proto::{
-    content_digest_sha256_from_digest, validate_server_name, FederationCapabilityId,
+    content_digest_sha256_from_digest, validate_server_name, ContentDigest, FederationCapabilityId,
     FederationDiscoveryTransportPolicy, FederationDiscoveryV2, FederationFeature,
     FederationHttpRequest, FederationHttpResponse, FederationIdentityDocumentV1,
     FederationProtocolVersion, FederationSignatureHeaders, FederationSignedRequest,
     FederationVerifiedRequest, MAX_SIGNATURE_LIFETIME_SECONDS,
 };
 use reqwest::{Method, Url};
-use sha2::{Digest as _, Sha256};
 use time::OffsetDateTime;
 use tokio::io::{AsyncSeekExt as _, AsyncWriteExt as _};
 use tokio::sync::Mutex;
@@ -570,7 +569,7 @@ impl FederationStack {
         let mut file = tokio::fs::File::from_std(std_file);
         let mut stream = response.bytes_stream();
         let mut length = 0_u64;
-        let mut digest = Sha256::new();
+        let mut digest = ContentDigest::new();
         while let Some(chunk) = stream.next().await {
             let chunk = chunk?;
             length = length.saturating_add(chunk.len() as u64);
@@ -581,7 +580,7 @@ impl FederationStack {
             file.write_all(&chunk).await?;
         }
         file.flush().await?;
-        let digest: [u8; 32] = digest.finalize().into();
+        let digest: [u8; 32] = digest.finish();
         let actual_content_digest = content_digest_sha256_from_digest(&digest);
         let federation_response = FederationHttpResponse {
             status: status.as_u16(),
@@ -1145,7 +1144,10 @@ mod tests {
 
     #[test]
     fn a_peer_on_the_retired_chat_wire_lacks_chat_v2() {
-        let key = ed25519_dalek::SigningKey::from_bytes(&[7; 32]);
+        let key = kutup_crypto::primitives::SigningKey::from_seed(
+            kutup_crypto::primitives::Suite::V1,
+            &[7; 32],
+        );
         let identity =
             kutup_federation_proto::FederationIdentityDocumentV1::genesis("old.example", 100, &key)
                 .unwrap();

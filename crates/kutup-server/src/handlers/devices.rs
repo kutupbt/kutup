@@ -13,9 +13,8 @@ use axum::response::{IntoResponse, Response};
 use axum::Json;
 use base64::engine::general_purpose::STANDARD;
 use base64::Engine;
-use rand::RngCore;
+use kutup_crypto::primitives::{hash, Suite};
 use serde::{Deserialize, Serialize};
-use sha2::{Digest, Sha256};
 use sqlx::{Postgres, Transaction};
 use time::OffsetDateTime;
 use utoipa::ToSchema;
@@ -112,7 +111,7 @@ pub async fn challenge(State(state): State<AppState>, user: AuthUser) -> AppResu
             .with_details(serde_json::json!({ "code": "rateLimited" })));
     }
     let mut challenge = [0u8; CHALLENGE_LEN];
-    rand::rngs::OsRng.fill_bytes(&mut challenge);
+    kutup_crypto::primitives::random(&mut challenge);
     let mut tx = state.pool.begin().await?;
     // Expired ones go as new ones are made.
     sqlx::query("DELETE FROM device_registration_challenges WHERE expires_at < now()")
@@ -122,7 +121,7 @@ pub async fn challenge(State(state): State<AppState>, user: AuthUser) -> AppResu
         "INSERT INTO device_registration_challenges (challenge_hash, user_id, expires_at)
          VALUES ($1, $2, now() + make_interval(mins => $3))",
     )
-    .bind(Sha256::digest(challenge).to_vec())
+    .bind(hash(Suite::V1, challenge).to_vec())
     .bind(user_id)
     .bind(CHALLENGE_MINUTES as i32)
     .execute(&mut *tx)
@@ -259,7 +258,7 @@ async fn check_statement(
          WHERE challenge_hash = $1 AND user_id = $2
          RETURNING expires_at >= now()",
     )
-    .bind(Sha256::digest(challenge).to_vec())
+    .bind(hash(Suite::V1, challenge).to_vec())
     .bind(user_id)
     .fetch_optional(&state.pool)
     .await?;

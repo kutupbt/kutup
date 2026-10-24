@@ -13,6 +13,7 @@
 //! - `PUT /api/chat/provisioning/{address}` (device-authenticated): the
 //!   envelope, to a socket of the same account; any other address is `404`.
 
+use kutup_crypto::primitives::{hash, Suite};
 use std::collections::HashMap;
 use std::sync::{LazyLock, Mutex};
 use std::time::{Duration, Instant};
@@ -29,9 +30,7 @@ use kutup_chat_proto::{
     decode_provisioning_address, ChatLinkTokenResponse, ProvisionEnvelopeV1,
     ProvisioningRelayRequest, ProvisioningSocketMessage, PROVISIONING_ADDRESS_LEN,
 };
-use rand::RngCore as _;
 use serde::{Deserialize, Serialize};
-use sha2::{Digest, Sha256};
 use time::format_description::well_known::Rfc3339;
 use tokio::sync::oneshot;
 use uuid::Uuid;
@@ -73,7 +72,7 @@ static TICKETS: LazyLock<Mutex<HashMap<[u8; 32], Ticket>>> =
 
 fn random<const N: usize>() -> [u8; N] {
     let mut bytes = [0u8; N];
-    rand::rngs::OsRng.fill_bytes(&mut bytes);
+    kutup_crypto::primitives::random(&mut bytes);
     bytes
 }
 
@@ -140,7 +139,7 @@ pub async fn create_link_token(
         "INSERT INTO chat_link_tokens (token_hash, user_id, issued_by_device, expires_at)
          VALUES ($1, $2, $3, $4)",
     )
-    .bind(Sha256::digest(token).as_slice())
+    .bind(hash(Suite::V1, token).to_vec())
     .bind(user_id)
     .bind(device_id)
     .bind(expires_at)
@@ -196,7 +195,7 @@ pub async fn create_ticket(State(state): State<AppState>, auth: AuthUser) -> App
     }
     let ticket: [u8; 32] = random();
     tickets.insert(
-        Sha256::digest(ticket).into(),
+        hash(Suite::V1, ticket).into(),
         (
             user_id,
             now + Duration::from_secs(u64::try_from(lifetime).unwrap_or(60)),
@@ -241,7 +240,7 @@ pub async fn socket(
         .ok_or_else(|| AppError::unauthorized("invalid provisioning ticket"))?;
     let user_id = {
         let mut tickets = TICKETS.lock().expect("provisioning tickets");
-        match tickets.remove(&<[u8; 32]>::from(Sha256::digest(ticket))) {
+        match tickets.remove(&<[u8; 32]>::from(hash(Suite::V1, ticket))) {
             Some((user_id, lapses)) if lapses > Instant::now() => user_id,
             _ => return Err(AppError::unauthorized("invalid provisioning ticket")),
         }

@@ -6,13 +6,13 @@ use axum::http::{HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::Json;
 use kutup_chat_proto::SealedSenderServicePolicyV1;
+use kutup_crypto::primitives::{hash, Suite};
 use kutup_federation_proto::{
     FederatedFeaturePolicyEnvelopeV1, FederatedFeaturePolicyHistoryV1,
     FederatedFeaturePolicyTypeV1, FederationIdentityDocumentV1,
 };
 use serde::Deserialize;
 use serde_json::json;
-use sha2::{Digest as _, Sha256};
 use sqlx::{PgPool, Postgres, Transaction};
 use time::OffsetDateTime;
 use uuid::Uuid;
@@ -345,7 +345,7 @@ impl FeaturePolicyStore {
         failure_class: &str,
     ) -> anyhow::Result<()> {
         let value = serde_json::to_value(envelope)?;
-        let digest = hex::encode(Sha256::digest(serde_json::to_vec(&value)?));
+        let digest = hex::encode(hash(Suite::V1, serde_json::to_vec(&value)?));
         sqlx::query(
             "INSERT INTO federation_feature_policy_failures
              (domain, feature_type, failure_class, evidence_digest, received_value)

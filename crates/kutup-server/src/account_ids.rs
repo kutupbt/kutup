@@ -2,6 +2,7 @@
 //! server and their account id (`users.id`), never their name.
 
 use kutup_crypto::account_ref::AccountRef;
+use kutup_crypto::primitives::{mac, mac_verify, subkey, Suite};
 use uuid::Uuid;
 
 use crate::error::{AppError, AppResult};
@@ -65,37 +66,29 @@ pub fn from_peer(server: &str, account_id: &str) -> AppResult<AccountRef> {
 /// minted account id, so that `register` takes back only an id this server
 /// minted for that key binding (stateless, like the registration answer).
 async fn proof_key(state: &crate::AppState) -> AppResult<[u8; 32]> {
-    use hmac::{Hmac, Mac};
     static KEY: tokio::sync::OnceCell<[u8; 32]> = tokio::sync::OnceCell::const_new();
     KEY.get_or_try_init(|| async {
         let root = crate::handlers::auth::fake_accounts_key(state).await?;
-        let mut mac = <Hmac<sha2::Sha256> as Mac>::new_from_slice(&root).expect("any key length");
-        mac.update(b"kutup/account-id-proof/v1\0");
-        Ok::<_, AppError>(mac.finalize().into_bytes().into())
+        Ok::<_, AppError>(*subkey(Suite::V1, &root, b"kutup/account-id-proof/v1\0"))
     })
     .await
     .copied()
 }
 
-fn proof_tag(key: &[u8; 32], key_binding: &str, account_id: Uuid) -> hmac::Hmac<sha2::Sha256> {
-    use hmac::Mac;
-    let mut mac = <hmac::Hmac<sha2::Sha256> as Mac>::new_from_slice(key).expect("any key length");
-    mac.update(key_binding.as_bytes());
-    mac.update(&[0]);
-    mac.update(account_id.as_bytes());
-    mac
+/// What a proof is the MAC of: the key binding and the id.
+fn proof_parts<'a>(key_binding: &'a str, account_id: &'a Uuid) -> [&'a [u8]; 3] {
+    [key_binding.as_bytes(), &[0], account_id.as_bytes()]
 }
 
 /// A new account id for a sign-up under `key_binding`, and its proof (hex).
 /// The id is random, as Signal mints an ACI at registration; the client signs
 /// its Drive key binding for it before the account exists.
 pub async fn mint(state: &crate::AppState, key_binding: &str) -> AppResult<(Uuid, String)> {
-    use hmac::Mac;
     let id = Uuid::new_v4();
     let key = proof_key(state).await?;
     Ok((
         id,
-        hex::encode(proof_tag(&key, key_binding, id).finalize().into_bytes()),
+        hex::encode(mac(Suite::V1, &key, &proof_parts(key_binding, &id))),
     ))
 }
 
@@ -109,7 +102,6 @@ pub async fn redeem(
     account_id: &str,
     proof: &str,
 ) -> AppResult<Uuid> {
-    use hmac::Mac;
     let invalid = || {
         AppError::bad_request("the account id was not given by this server")
             .with_details(serde_json::json!({ "code": "accountIdInvalid" }))
@@ -120,9 +112,7 @@ pub async fn redeem(
         .ok_or_else(invalid)?;
     let tag = hex::decode(proof).map_err(|_| invalid())?;
     let key = proof_key(state).await?;
-    proof_tag(&key, key_binding, id)
-        .verify_slice(&tag)
-        .map_err(|_| invalid())?;
+    mac_verify(Suite::V1, &key, &proof_parts(key_binding, &id), &tag).map_err(|_| invalid())?;
     let used: bool = sqlx::query_scalar(
         "SELECT EXISTS (SELECT 1 FROM users WHERE id = $1)
              OR EXISTS (SELECT 1 FROM retired_account_ids WHERE id = $1)",

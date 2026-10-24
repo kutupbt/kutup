@@ -11,6 +11,7 @@
 //! lock, so two never interleave.
 
 use axum::async_trait;
+use kutup_crypto::primitives::{hash, Suite};
 
 /// The description every object of ours carries, with the domain row's id.
 pub const TAG: &str = "kutup-custom-domain:";
@@ -191,7 +192,6 @@ pub fn untagged_fingerprint(
     domains: &[StalwartDomain],
     signatures: &[StalwartSignature],
 ) -> String {
-    use sha2::Digest as _;
     let untagged: Vec<&StalwartDomain> = domains
         .iter()
         .filter(|d| tagged_id(&d.description).is_none())
@@ -217,7 +217,7 @@ pub fn untagged_fingerprint(
         )
         .collect();
     lines.sort();
-    hex::encode(sha2::Sha256::digest(lines.join("\n").as_bytes()))
+    hex::encode(hash(Suite::V1, lines.join("\n").as_bytes()))
 }
 
 /// Stalwart's management API, as the reconcile needs it.

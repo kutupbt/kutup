@@ -9,6 +9,7 @@
 //! verify (that's where verification is meaningful under E2EE — a malicious server
 //! could serve garbage regardless, and clients must not trust server-side checks).
 
+use kutup_crypto::primitives::{hash, Suite};
 use std::collections::HashSet;
 
 use axum::extract::{ConnectInfo, Path, Query, State};
@@ -21,7 +22,6 @@ use base64::Engine;
 use futures_util::{SinkExt, StreamExt};
 use serde::Deserialize;
 use serde_json::json;
-use sha2::{Digest, Sha256};
 use time::format_description::well_known::Rfc3339;
 use time::OffsetDateTime;
 use uuid::Uuid;
@@ -361,16 +361,6 @@ pub(crate) fn canonical_profile_version(value: &str) -> bool {
     hex::decode(value).is_ok_and(|decoded| decoded.len() == 32 && hex::encode(decoded) == value)
 }
 
-pub(crate) fn constant_time_eq(left: &[u8], right: &[u8]) -> bool {
-    if left.len() != right.len() {
-        return false;
-    }
-    left.iter()
-        .zip(right)
-        .fold(0u8, |difference, (left, right)| difference | (left ^ right))
-        == 0
-}
-
 /// `POST /api/chat/device` — register this client as a chat device. The server assigns
 /// the lowest free device id while enforcing the configured 1..=10 active
 /// device limit.
@@ -448,7 +438,7 @@ pub async fn register_device(
     .fetch_all(&mut *tx)
     .await?;
     if let Some((device_id, _, _)) = rows.iter().find(|(_, salt, hash)| {
-        constant_time_eq(&identity::credential_hash(salt, &credential), hash)
+        kutup_crypto::primitives::ct_eq(&identity::credential_hash(salt, &credential), hash)
     }) {
         tx.commit().await?;
         return Ok(Json(RegisterChatDeviceResponse {
@@ -516,7 +506,7 @@ pub async fn register_device(
                                AND d.expired_at IS NULL)
               RETURNING 1",
             )
-            .bind(Sha256::digest(token).as_slice())
+            .bind(hash(Suite::V1, token).to_vec())
             .bind(user_id)
             .fetch_optional(&mut *tx)
             .await?;
@@ -1246,8 +1236,8 @@ pub(crate) async fn load_public_profile(
     else {
         return Ok(None);
     };
-    let presented = Sha256::digest(access_key);
-    if !constant_time_eq(&verifier, &presented) {
+    let presented = hash(Suite::V1, access_key);
+    if !kutup_crypto::primitives::ct_eq(&verifier, &presented) {
         return Ok(None);
     }
     // Sealed for the account's permanent id: a rename leaves it valid.
@@ -2206,9 +2196,11 @@ pub async fn send_sealed_batch(
     // starved by a recipient count.
     let address =
         crate::middleware::client_key(crate::middleware::client_ip_from_headers(&headers), peer);
-    let address_digest: [u8; 32] =
-        Sha256::digest([b"kutup/multi-ip-bytes/v1\0".as_slice(), address.as_bytes()].concat())
-            .into();
+    let address_digest: [u8; 32] = hash(
+        Suite::V1,
+        [b"kutup/multi-ip-bytes/v1\0".as_slice(), address.as_bytes()].concat(),
+    )
+    .into();
     let bytes: usize = batch
         .recipients
         .iter()
@@ -2472,7 +2464,8 @@ pub(crate) async fn store_sealed_messages(
         crate::ratelimit::Limit::SealedCapabilityDay,
     )
     .await?;
-    let recipient_digest: [u8; 32] = Sha256::digest(
+    let recipient_digest: [u8; 32] = hash(
+        Suite::V1,
         [
             b"kutup/sealed-recipient-rate/v1\0".as_slice(),
             recipient_id.as_bytes(),
@@ -2488,7 +2481,8 @@ pub(crate) async fn store_sealed_messages(
     )
     .await?;
     if let Some(origin) = federation_origin {
-        let origin_digest: [u8; 32] = Sha256::digest(
+        let origin_digest: [u8; 32] = hash(
+            Suite::V1,
             [
                 b"kutup/sealed-origin-rate/v1\0".as_slice(),
                 origin.as_bytes(),
@@ -3118,7 +3112,7 @@ pub async fn ack_messages(
 }
 
 fn ws_ticket_hash(ticket: &str) -> String {
-    hex::encode(Sha256::digest(ticket.as_bytes()))
+    hex::encode(hash(Suite::V1, ticket.as_bytes()))
 }
 
 /// `POST /api/chat/ws-ticket?deviceId=N` — mint a single-use, short-lived
@@ -3540,12 +3534,5 @@ mod tests {
                 .status,
             StatusCode::BAD_REQUEST
         );
-    }
-
-    #[test]
-    fn profile_capability_comparison_is_constant_time_for_equal_lengths() {
-        assert!(constant_time_eq(&[3u8; 32], &[3u8; 32]));
-        assert!(!constant_time_eq(&[3u8; 32], &[4u8; 32]));
-        assert!(!constant_time_eq(&[3u8; 31], &[3u8; 32]));
     }
 }
