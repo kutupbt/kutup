@@ -151,8 +151,8 @@ pub struct Config {
     /// read after that: the stored mode is the only source
     /// (docs/plans/registration-codes.md).
     pub registration_mode: crate::registration::RegistrationMode,
-    /// Offer group chats and group calls (`CHAT_GROUPS`, default off: groups
-    /// return with the pairwise group design that replaces MLS, roadmap).
+    /// Offer group chats and group calls (`CHAT_GROUPS`, default off until
+    /// every pairwise-groups slice is done, docs/plans/pairwise-groups.md §10).
     /// Off, the server reports no groups, refuses the group routes, and the
     /// apps show direct chats only; groups made earlier stay stored,
     /// unreachable.
@@ -209,11 +209,6 @@ pub struct Config {
     /// Canonical base64 raw libsignal private key for the active online server
     /// certificate. This purpose-specific key issues only sender certificates.
     pub chat_sealed_sender_online_private_key: String,
-    /// Complete canonical MLS ordering-service policy JSON. It is authenticated
-    /// through the common federation policy chain before any MLS route opens.
-    pub chat_mls_ordering_policy: String,
-    /// Base64 raw 32-byte Ed25519 seed used only for MLS control-log votes.
-    pub chat_mls_control_signing_key: String,
     /// Where each web app lives. Published by `/api/auth/settings` and enforced
     /// for session forks (a fork for `web-drive` is only consumable from `drive`).
     pub apps: AppOrigins,
@@ -608,8 +603,6 @@ impl Config {
                 "CHAT_SEALED_SENDER_ONLINE_PRIVATE_KEY",
                 "",
             ),
-            chat_mls_ordering_policy: get_env("CHAT_MLS_ORDERING_POLICY", ""),
-            chat_mls_control_signing_key: get_env("CHAT_MLS_CONTROL_SIGNING_KEY", ""),
             apps: resolve_app_origins(|k| env.raw(k), &app_env_for_apps).unwrap_or_else(|error| {
                 env.error(format!("app origins: {error}"));
                 AppOrigins::unset()

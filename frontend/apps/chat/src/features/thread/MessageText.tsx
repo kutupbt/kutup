@@ -1,5 +1,5 @@
 import type { ChatMentionV1 } from '@kutup/chat-core/types'
-import { inviteFragmentFromUrl } from '@kutup/chat-core/invite-links'
+import { groupLinkFragmentFromUrl } from '../../lib/chatGroupLink'
 import { cn } from '@kutup/ui/lib/cn'
 import { useGroupLinksEnabled } from '../../app/chatStore'
 import { openJoinLink } from '../../lib/joinLink'
@@ -49,7 +49,7 @@ export function MessageText({
           </span>
         ) : (
           linkify(part.value).map((piece, pieceIndex) =>
-            piece.kind === 'link' && (groups || !inviteFragmentFromUrl(piece.href)) ? (
+            piece.kind === 'link' && (groups || !groupLinkFragmentFromUrl(piece.href)) ? (
               <a
                 key={`${index}:${pieceIndex}`}
                 href={piece.href}
@@ -57,7 +57,7 @@ export function MessageText({
                 rel="noopener noreferrer nofollow"
                 onClick={(event) => {
                   // A group link opens here, whichever server's app it names.
-                  if (inviteFragmentFromUrl(piece.href)) {
+                  if (groupLinkFragmentFromUrl(piece.href)) {
                     event.preventDefault()
                     openJoinLink(piece.href)
                   }

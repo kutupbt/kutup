@@ -100,8 +100,8 @@ export function StorageSettings() {
     if (reference === self!.key) return t('chat.noteToSelf')
     const profile = profiles.get(reference)?.displayName
     if (profile) return profile
-    const group = snapshot.groups.find((g) => g.request.genesis.conversationId === reference)
-    return group ? groupTitle(reference, t, group.currentGroupInfo) : personName(reference, profiles, self!.key, t)
+    const group = snapshot.chatGroups.find((g) => g.groupId === reference)
+    return group ? groupTitle(reference, t, { name: group.title }) : personName(reference, profiles, self!.key, t)
   }
 
   return (

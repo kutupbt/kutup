@@ -5,7 +5,7 @@
 use sqlx::postgres::PgPoolOptions;
 
 #[tokio::test]
-async fn all_migrations_build_the_exact_v1_manifest_and_mls_schema() {
+async fn all_migrations_build_the_exact_v1_manifest_schema_without_mls() {
     let Ok(database_url) = std::env::var("KUTUP_TEST_DB") else {
         return;
     };
@@ -209,21 +209,17 @@ async fn all_migrations_build_the_exact_v1_manifest_and_mls_schema() {
         ["user_id", "incarnation_id", "version"]
     );
 
-    let constraints: Vec<String> = sqlx::query_scalar(
-        "SELECT pg_get_constraintdef(oid)
-         FROM pg_constraint
-         WHERE conrelid IN (
-           'chat_mls_devices'::regclass,
-           'chat_mls_incarnations'::regclass
-         )",
+    // MLS groups are gone (docs/plans/pairwise-groups.md §9): no table of
+    // theirs is left.
+    let mls_tables: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM information_schema.tables
+         WHERE table_schema = 'public'
+           AND (table_name LIKE 'chat\\_mls\\_%' OR table_name LIKE 'chat\\_invite\\_%')",
     )
-    .fetch_all(&pool)
+    .fetch_one(&pool)
     .await
     .unwrap();
-    let constraints = constraints.join("\n").replace(' ', "");
-    assert!(constraints.contains("suite=3"));
-    assert!(constraints.contains("member_count>=1"));
-    assert!(constraints.contains("member_count<=256"));
+    assert_eq!(mls_tables, 0);
 
     let profile_suite_constraint: String = sqlx::query_scalar(
         "SELECT pg_get_constraintdef(oid)

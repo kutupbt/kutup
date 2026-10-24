@@ -7,7 +7,7 @@
 //! - **who a name is** (keys, manifests, profiles, identities): only a
 //!   current name answers; a held one is [`renamed`], with the chains, never
 //!   another account's keys;
-//! - **where a delivery goes** (Chat and MLS traffic): a held name still
+//! - **where a delivery goes** (Chat traffic): a held name still
 //!   reaches its account (the delivery queries select through
 //!   `account_names` by the folded name, any state), so nothing in flight is
 //!   lost.

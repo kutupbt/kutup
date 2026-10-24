@@ -1,21 +1,17 @@
 // Calls in the browser, with a synthetic camera, microphone and screen
-// (playwright.config.ts): a one-to-one call and a group call, each with the
-// People panel, the conversation's chat beside the video, and screen sharing.
-// The group call needs an SFU (`docker compose --profile sfu`), so that test
-// skips on a stack without one.
+// (playwright.config.ts): a one-to-one call with the People panel, the
+// conversation's chat beside the video, and screen sharing. Group calls come
+// to pairwise groups in slice 4 (docs/plans/pairwise-groups.md).
 
 import { expect, test, type Page } from '@playwright/test'
 import { apiUrl, newAccount, registerAccount } from '../fixtures/apps'
 import {
-  acceptGroup,
   acceptRequest,
   composer,
-  createGroup,
   message,
   openChat,
   openConversationWith,
   openDirectChat,
-  openGroup,
   send,
 } from '../fixtures/chat'
 
@@ -104,72 +100,6 @@ test('a one-to-one video call has people, chat and screen sharing', async ({ bro
   await expect(screenB).toHaveCount(0, { timeout: 30_000 })
   // The page's own conversation is usable again.
   await expect(composer(pageA)).toBeVisible()
-
-  await contextA.close()
-  await contextB.close()
-})
-
-test('a group call shows a shared screen to the others', async ({ browser }) => {
-  // Group calls were MLS groups'; they come to pairwise groups in slice 3
-  // (docs/plans/pairwise-groups.md §6, §10).
-  test.skip(true, 'group calls come to pairwise groups in slice 3')
-  test.slow()
-  const tag = Date.now()
-  const alice = newAccount('gcallalice', PASSWORD)
-  const bob = newAccount('gcallbob', PASSWORD)
-  const contextA = await browser.newContext()
-  const contextB = await browser.newContext()
-  await registerAccount(contextA, alice)
-  await registerAccount(contextB, bob)
-  const pageA = await openChat(contextA)
-  const pageB = await openChat(contextB)
-  const { chat } = await settings(pageA)
-  test.skip(!chat.groupCalls, 'this stack has no SFU (docker compose --profile sfu)')
-
-  const groupId = await createGroup(pageA, `${bob.username}@${chat.serverName}`, `Call group ${tag}`)
-  await acceptGroup(pageB, groupId)
-  await openGroup(pageA, groupId)
-
-  await pageA.getByRole('button', { name: 'Start a group video call', exact: true }).click()
-  const screenA = pageA.getByTestId('chat-group-call-screen')
-  await expect(screenA).toHaveAttribute('data-phase', 'active', { timeout: 60_000 })
-  // Bob is rung (a small group) or sees Join in the conversation.
-  const ring = pageB.getByTestId('chat-group-call-answer-video')
-  const join = pageB.getByTestId('chat-group-call-join')
-  await expect(ring.or(join).first()).toBeVisible({ timeout: 60_000 })
-  // The ringing screen covers the conversation's own Join button.
-  await ((await ring.isVisible()) ? ring : join).click()
-  const screenB = pageB.getByTestId('chat-group-call-screen')
-  await expect(screenB).toHaveAttribute('data-phase', 'active', { timeout: 60_000 })
-  await expect(screenA.getByTestId('chat-group-call-tile')).toHaveCount(2, { timeout: 45_000 })
-  await expect(screenB.getByTestId('chat-group-call-tile')).toHaveCount(2, { timeout: 45_000 })
-  await expect(screenA.getByTestId('chat-call-brand')).toContainText('Kutup')
-
-  // Alice shares her screen: it takes the stage on both sides.
-  await pageA.getByTestId('chat-group-call-screen-share').click()
-  await expect(screenA.getByTestId('chat-group-call-screen-tile')).toBeVisible({ timeout: 45_000 })
-  await expect(screenB.getByTestId('chat-group-call-screen-tile')).toBeVisible({ timeout: 45_000 })
-  await expect
-    .poll(() => screenB.getByTestId('chat-group-call-screen-tile').locator('video').evaluate((video) => (video as HTMLVideoElement).videoWidth), { timeout: 45_000 })
-    .toBeGreaterThan(0)
-  await pageB.getByTestId('chat-call-people-button').click()
-  await expect(pageB.getByTestId('chat-call-person')).toHaveCount(2)
-  await expect(pageB.getByTestId('chat-call-people').getByLabel('Sharing a screen')).toHaveCount(1)
-
-  // The group's chat, inside the call.
-  await pageB.getByTestId('chat-call-tab-chat').click()
-  await panelComposer(pageB).fill(`group-in-call-${tag}`)
-  await panelComposer(pageB).press('Enter')
-  await pageA.getByTestId('chat-call-chat-button').click()
-  await expect(pageA.getByTestId('chat-call-panel').getByText(`group-in-call-${tag}`)).toBeVisible({ timeout: 45_000 })
-
-  await pageA.getByTestId('chat-group-call-screen-share').click()
-  await expect(screenB.getByTestId('chat-group-call-screen-tile')).toHaveCount(0, { timeout: 45_000 })
-
-  await pageB.getByTestId('chat-group-call-leave').click()
-  await pageA.getByTestId('chat-group-call-leave').click()
-  await expect(screenA).toHaveCount(0, { timeout: 30_000 })
-  await expect(screenB).toHaveCount(0, { timeout: 30_000 })
 
   await contextA.close()
   await contextB.close()

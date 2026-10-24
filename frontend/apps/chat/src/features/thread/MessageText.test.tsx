@@ -5,13 +5,18 @@ import { fireEvent, render, screen } from '@testing-library/react'
 let groups = false
 vi.mock('../../app/chatStore', () => ({
   useGroupLinksEnabled: () => groups,
-  getChatState: () => ({ capabilities: { mlsGroups: groups } }),
+  getChatState: () => ({ capabilities: { pairwiseGroups: groups } }),
 }))
 
 const { MessageText } = await import('./MessageText')
 const { closeJoinLink, openJoinLink, useJoinLink } = await import('../../lib/joinLink')
 
-const LINK = `https://chat.example/join#${'a'.repeat(44)}`
+// Version 1, then the master key, password, identity and a server name.
+const FRAGMENT = btoa(String.fromCharCode(1, ...new Array<number>(99).fill(7)))
+  .replace(/\+/g, '-')
+  .replace(/\//g, '_')
+  .replace(/=+$/, '')
+const LINK = `https://chat.example/join#${FRAGMENT}`
 
 function Shown() {
   return <output data-testid="join">{useJoinLink() ?? ''}</output>

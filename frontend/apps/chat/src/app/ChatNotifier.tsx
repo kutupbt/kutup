@@ -35,7 +35,6 @@ export function ChatNotifier({ unread }: { unread: number }) {
   const baseTitle = useRef(document.title)
   const seenEntries = useRef<Set<string> | null>(null)
   const seenInvitations = useRef<Set<string> | null>(null)
-  const seenJoinRequests = useRef<Set<string> | null>(null)
 
   useEffect(() => {
     if (!address) return
@@ -113,10 +112,9 @@ export function ChatNotifier({ unread }: { unread: number }) {
   const groupInfo = useMemo(
     () =>
       new Map<string, { name?: string | null } | null | undefined>([
-        ...chat.snapshot.groups.map((group) => [group.request.genesis.conversationId, group.currentGroupInfo] as const),
         ...chat.snapshot.chatGroups.map((group) => [group.groupId, { name: group.title }] as const),
       ]),
-    [chat.snapshot.groups, chat.snapshot.chatGroups],
+    [chat.snapshot.chatGroups],
   )
 
   function describe(notice: Notice): { title: string; body: string } {
@@ -182,58 +180,24 @@ export function ChatNotifier({ unread }: { unread: number }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [history, chat.loaded, tabs])
 
-  // Group invitations.
-  const invitations = chat.snapshot.invitations
+  // Group invitations: pairwise groups this account was invited to.
+  const invitations = chat.snapshot.chatGroups
   useEffect(() => {
     if (!chat.loaded || !tabs) return
-    const ids = invitations.map((invitation) => `${invitation.conversationId}:${invitation.incarnation}`)
+    const ids = invitations.filter((group) => group.status === 'invited').map((group) => group.groupId)
     if (seenInvitations.current === null) {
       seenInvitations.current = new Set(ids)
       return
     }
     const seen = seenInvitations.current
-    const fresh = ids.filter((id) => !seen.has(id))
-    for (const id of fresh) seen.add(id)
-    // One this account asked for through a link is accepted by itself.
-    const requested = new Set(chat.snapshot.ownJoinRequests.map((request) => request.conversationId))
-    const news = invitations.filter((invitation) =>
-      fresh.includes(`${invitation.conversationId}:${invitation.incarnation}`) && !requested.has(invitation.conversationId))
+    const news = ids.filter((id) => !seen.has(id))
+    for (const id of news) seen.add(id)
     if (news.length === 0 || !tabs.isNotifier) return
     if (getNotifications() && getNotificationSound()) playNotificationSound()
     if (tabs.anyFocused()) return
     show(t('chat.notifications.appName'), t('chat.notifications.invited', { count: news.length }), 'kutup-chat-invitations', '/')
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [invitations, chat.loaded, tabs])
-
-  // People asking to join groups this account administers.
-  const joinRequests = chat.snapshot.joinRequests
-  useEffect(() => {
-    if (!chat.loaded || !tabs) return
-    const ids = joinRequests.map((request) => `${request.conversationId}:${request.requester}`)
-    if (seenJoinRequests.current === null) {
-      seenJoinRequests.current = new Set(ids)
-      return
-    }
-    const seen = seenJoinRequests.current
-    const news = joinRequests.filter((request) => !seen.has(`${request.conversationId}:${request.requester}`))
-    for (const id of ids) seen.add(id)
-    if (news.length === 0 || !tabs.isNotifier) return
-    if (getNotifications() && getNotificationSound()) playNotificationSound()
-    if (tabs.anyFocused()) return
-    const hidden = getNotificationContent() === 'none'
-    for (const request of news.slice(0, MAX_AT_ONCE)) {
-      const key = `group:${request.conversationId}`
-      show(
-        hidden ? t('chat.notifications.appName') : groupTitle(request.conversationId, t, groupInfo.get(request.conversationId)),
-        hidden
-          ? t('chat.notifications.joinRequestHidden')
-          : t('chat.notifications.joinRequest', { name: personName(request.requester, profiles, address, t) }),
-        `kutup-chat-join:${request.conversationId}`,
-        pathForKey(key),
-      )
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [joinRequests, chat.loaded, tabs])
 
   return null
 }

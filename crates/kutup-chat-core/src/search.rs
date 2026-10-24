@@ -40,7 +40,7 @@ use std::rc::Rc;
 use kutup_chat_proto::ChatContent;
 use serde::{Deserialize, Serialize};
 
-use crate::db::{ChatDb, InboxMessage, MlsHistoryMessage, Pending, SentMessage};
+use crate::db::{ChatDb, InboxMessage, Pending, SentMessage};
 use crate::error::{ChatError, Result};
 use crate::timeline::{self, EntryRef, Indexed, Source, ROUTED};
 
@@ -296,10 +296,6 @@ fn sent_document(message: &SentMessage) -> Result<Option<Document>> {
     Ok(document(timeline::place_sent(message)?, &message.content))
 }
 
-fn mls_document(message: &MlsHistoryMessage) -> Option<Document> {
-    document(timeline::place_mls(message), &message.content)
-}
-
 /// Shards and document chunks read and changed for one commit.
 struct Writer<'a> {
     db: &'a dyn ChatDb,
@@ -537,13 +533,9 @@ pub(crate) async fn changes(
     for message in pending.sent_messages.values() {
         added.extend(sent_document(message)?);
     }
-    for message in pending.mls_messages.values() {
-        added.extend(mls_document(message));
-    }
     let nothing_removed = pending.delete_message_ids.is_empty()
         && pending.delete_messages_for_peers.is_empty()
-        && pending.delete_sent_message_ids.is_empty()
-        && pending.delete_mls_message_ids.is_empty();
+        && pending.delete_sent_message_ids.is_empty();
     if added.is_empty() && nothing_removed {
         return Ok(HashMap::new());
     }
@@ -571,11 +563,6 @@ pub(crate) async fn changes(
     for id in &pending.delete_sent_message_ids {
         if let Some(message) = db.load_sent_message(id).await? {
             removed.extend(sent_document(&message)?);
-        }
-    }
-    for id in &pending.delete_mls_message_ids {
-        if let Some(message) = db.load_mls_message(id).await? {
-            removed.extend(mls_document(&message));
         }
     }
     let mut writer = Writer::new(db, directory);
@@ -610,9 +597,6 @@ pub(crate) async fn ensure_built(db: &dyn ChatDb) -> Result<()> {
     }
     for message in db.list_sent_messages().await? {
         documents.extend(sent_document(&message)?);
-    }
-    for message in db.list_mls_messages().await? {
-        documents.extend(mls_document(&message));
     }
     documents.sort_by(|left, right| {
         (left.posting.ts, left.posting.source, &left.posting.id).cmp(&(
@@ -1211,23 +1195,19 @@ mod tests {
         }
     }
 
-    fn group(id: &str, ts: i64, content: Vec<u8>) -> MlsHistoryMessage {
-        MlsHistoryMessage {
-            record_id: id.into(),
-            message_id: id.into(),
-            conversation_id: [7; 16],
-            incarnation: 1,
-            mls_group_id: vec![1; 16],
-            epoch: 1,
-            sender: "aci:00000000-0000-4000-8000-4c26d9074c27@a.test".into(),
+    /// A pairwise group's message: in the inbox, under its group.
+    fn group(id: &str, ts: i64, content: Vec<u8>) -> InboxMessage {
+        let context = crate::group::test_context(7);
+        let content = serde_json::from_slice::<ChatContent>(&content)
+            .unwrap()
+            .with_group_context(&context);
+        InboxMessage {
+            id: id.into(),
+            peer: "aci:00000000-0000-4000-8000-4c26d9074c27@a.test".into(),
             sender_device_id: 1,
-            outgoing: false,
-            cursor: Some(ts as u64),
-            transport_digest: [0; 32],
-            content,
-            timestamp_ms: ts,
-            delivered: true,
-            deduplicated: false,
+            cursor: ts as u64,
+            content: serde_json::to_vec(&content).unwrap(),
+            received_at: ts,
         }
     }
 
@@ -1303,9 +1283,6 @@ mod tests {
         for message in block_on(db.list_sent_messages()).unwrap() {
             documents.extend(sent_document(&message).unwrap());
         }
-        for message in block_on(db.list_mls_messages()).unwrap() {
-            documents.extend(mls_document(&message));
-        }
         let mut out = Snapshot::new();
         for document in documents {
             for term in document.terms {
@@ -1361,14 +1338,11 @@ mod tests {
             ));
         }
         for i in 0..20i64 {
-            pending.mls_messages.insert(
-                format!("g-{i}"),
-                group(
-                    &format!("g-{i}"),
-                    2_000 + i,
-                    text(&format!("m-g-{i}"), "grup toplantısı"),
-                ),
-            );
+            pending.messages.push(group(
+                &format!("g-{i}"),
+                2_000 + i,
+                text(&format!("m-g-{i}"), "grup toplantısı"),
+            ));
         }
         block_on(db.apply(&pending)).unwrap();
         assert_eq!(indexed(&db), expected(&db));
@@ -1412,7 +1386,7 @@ mod tests {
         pending
             .delete_message_ids
             .extend(["in-0".to_string(), "in-2".to_string()]);
-        pending.delete_mls_message_ids.insert("g-3".into());
+        pending.delete_message_ids.insert("g-3".into());
         pending.delete_sent_message_ids.insert("edit-1".into());
         block_on(db.apply(&pending)).unwrap();
         assert_eq!(indexed(&db), expected(&db));

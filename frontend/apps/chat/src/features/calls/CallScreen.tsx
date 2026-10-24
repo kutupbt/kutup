@@ -2,7 +2,7 @@ import { Mic, MicOff, MonitorOff, MonitorUp, Phone, PhoneOff, Video, VideoOff } 
 import { useEffect, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { cn } from '@kutup/ui/lib/cn'
-import { getChatState, useChat } from '../../app/chatStore'
+import { useChat } from '../../app/chatStore'
 import { Avatar } from '@kutup/ui/components/avatar'
 import { formatDuration } from '../../lib/callText'
 import { personName } from '../../lib/names'
@@ -15,10 +15,7 @@ import type { ConversationId } from '@kutup/chat-core/types'
 import { ConversationView } from '../thread/ConversationView'
 import { CallFrame, PanelButtons, RoundButton, type CallPanel, type CallPerson } from './CallFrame'
 import { CallController, canShareScreen, reportShareFailure, type CallState } from './callController'
-import { callController, setCallController, setGroupCallController, useCall } from './callStore'
-import { GroupCallController } from './groupCallController'
-import { GroupCallRinger } from './GroupCallRinger'
-import { GroupCallScreen } from './GroupCallScreen'
+import { callController, setCallController, useCall } from './callStore'
 
 /**
  * The chat's call controller and, while a call rings or runs, the call
@@ -30,24 +27,14 @@ export function CallHost() {
   useEffect(() => {
     if (!service || !address) return
     const controller = new CallController(service, address, () => ({ alwaysRelay: getAlwaysRelayCalls() }))
-    const group = new GroupCallController(service, address, () => getChatState().snapshot.groups)
     setCallController(controller)
-    setGroupCallController(group)
     return () => {
       setCallController(null)
-      setGroupCallController(null)
       controller.dispose()
-      group.dispose()
     }
   }, [service, address])
   const call = useCall()
-  return (
-    <>
-      {call ? <CallScreen call={call} /> : null}
-      <GroupCallScreen />
-      <GroupCallRinger />
-    </>
-  )
+  return call ? <CallScreen call={call} /> : null
 }
 
 function CallScreen({ call }: { call: CallState }) {

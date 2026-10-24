@@ -1,11 +1,11 @@
-import { ArrowLeft, BarChart3, Check, Download, Info, Loader2, MoreVertical, Phone, ShieldAlert, Timer, UserPlus, Users, Video } from 'lucide-react'
+import { ArrowLeft, BarChart3, Check, Download, Info, Loader2, MoreVertical, Phone, ShieldAlert, Timer, Users, Video } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 import { Link, useNavigate, useSearchParams } from 'react-router-dom'
-import { accountKey, parseAccount } from '@kutup/chat-core/identity'
+import { parseAccount } from '@kutup/chat-core/identity'
 import { downloadChatMediaToCacheV1, openCachedChatMediaV1 } from '@kutup/chat-core/media'
-import type { ChatAttachmentDescriptorV1, ChatCallMedia, ChatGroupCall, ConversationId } from '@kutup/chat-core/types'
+import type { ChatAttachmentDescriptorV1, ChatCallMedia, ConversationId } from '@kutup/chat-core/types'
 import { freshAccessToken } from '@kutup/session/client'
 import { Button } from '@kutup/ui/components/button'
 import { ConfirmDestructive } from '@kutup/ui/components/confirm-destructive'
@@ -27,9 +27,8 @@ import { callLogText } from '../../lib/callText'
 import { chatTranscript, downloadText, transcriptFileName } from '../../lib/exportChat'
 import { pendingDefaultTimer, settlePendingDefaultTimer } from '../../lib/pendingTimers'
 import { groupUpdateSentences } from '../../lib/groupUpdate'
-import { callController, groupCallController, useCall, useGroupCall } from '../calls/callStore'
+import { callController, useCall } from '../calls/callStore'
 import { personName } from '../../lib/names'
-import { accountName } from '../../state/accountNames'
 import { formatDayHeader } from '../../lib/time'
 import { useNow } from '../../lib/useNow'
 import { apiErrorCode } from '@kutup/ui/lib/apiError'
@@ -130,31 +129,6 @@ export function ConversationView({
   const [details, setDetails] = useState(false)
   const chatGroupPicture = useChatGroupAvatar(model.chatGroup)
   const call = useCall()
-  const groupCall = useGroupCall()
-  const inAnyCall = call !== null || groupCall !== null
-  async function joinGroupCall(target: ChatGroupCall, withVideo: boolean) {
-    const controller = groupCallController()
-    if (!controller || conversation.kind !== 'group') return
-    try {
-      await controller.join(conversation.groupId, target, withVideo)
-    } catch (error) {
-      toast.error(error instanceof DOMException && error.name === 'NotAllowedError'
-        ? t('chat.calls.noDevices')
-        : t('chat.calls.joinFailed'))
-    }
-  }
-  async function startGroupCall(media: ChatCallMedia) {
-    const controller = groupCallController()
-    const host = chat.capabilities?.serverName
-    if (!controller || conversation.kind !== 'group' || !host) return
-    try {
-      await controller.start(conversation.groupId, media, host)
-    } catch (error) {
-      toast.error(error instanceof DOMException && error.name === 'NotAllowedError'
-        ? t('chat.calls.noDevices')
-        : t('chat.calls.startFailed'))
-    }
-  }
   async function placeCall(media: ChatCallMedia) {
     const controller = callController()
     const peer = conversation.kind === 'direct' ? conversation.account : null
@@ -181,9 +155,6 @@ export function ConversationView({
       { replace: true },
     )
   }
-  const joinRequests = model.group
-    ? chat.snapshot.joinRequests.filter((request) => request.conversationId === model.group!.request.genesis.conversationId).length
-    : 0
   const [replyingTo, setReplyingTo] = useState<MessageView | null>(null)
   const [editing, setEditing] = useState<MessageView | null>(null)
   const [deleting, setDeleting] = useState<MessageView | null>(null)
@@ -264,16 +235,6 @@ export function ConversationView({
   const typing = typingIndicators
     ? [...(chat.typing.get(model.key)?.keys() ?? [])].filter((sender) => sender !== self.key)
     : []
-  const members = useMemo(
-    () =>
-      (model.group?.currentRoster ?? [])
-        .map((member) => ({ account: member.account, key: accountKey(member.account) }))
-        .filter(({ key }) => key !== self.key)
-        .map(({ account, key }) => ({ account, key, name: personName(key, profiles, self.key, t), address: accountName(key) })),
-    // A name that arrives later shows when the store says so.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [model.group, profiles, self.key, t, chat.namesRevision],
-  )
   const writable = !model.readOnly
   // In a direct chat, files, voice messages and stickers travel by sealed
   // delivery, which needs the other person's profile key: it arrives once
@@ -322,9 +283,7 @@ export function ConversationView({
 
   const subtitle = model.note
     ? t('chat.noteToSelfDescription')
-    : model.group
-      ? t('chat.group.members', { count: model.group.currentRoster.length })
-      : model.timerSeconds !== undefined
+    : model.timerSeconds !== undefined
         ? t('chat.disappearing.active', { duration: disappearingLabel(model.timerSeconds, t) })
         : model.address && model.profile?.displayName
           ? model.address
@@ -344,7 +303,7 @@ export function ConversationView({
           onClick={() => setDetails(true)}
           className="flex min-w-0 flex-1 items-center gap-3 rounded-lg px-1 py-1 text-left outline-none hover:bg-muted focus-visible:ring-2 focus-visible:ring-ring"
         >
-          <Avatar name={model.title} image={chatGroupPicture?.data ?? model.group?.currentGroupInfo?.avatar?.data ?? model.profile?.avatar} contentType={chatGroupPicture?.contentType ?? model.group?.currentGroupInfo?.avatar?.contentType ?? model.profile?.avatarContentType} group={conversation.kind === 'group'} size={32} />
+          <Avatar name={model.title} image={chatGroupPicture?.data ?? model.profile?.avatar} contentType={chatGroupPicture?.contentType ?? model.profile?.avatarContentType} group={conversation.kind === 'group'} size={32} />
           <span className="min-w-0">
             <span className="block truncate text-sm font-semibold" dir="auto">{model.title}</span>
             {subtitle ? (
@@ -384,21 +343,6 @@ export function ConversationView({
             </DropdownMenuContent>
           </DropdownMenu>
         ) : null}
-        {model.groupCall ? (
-          <Button variant="default" size="sm" onClick={() => void joinGroupCall(model.groupCall!, false)} disabled={inAnyCall} data-testid="chat-group-call-join">
-            <Phone />
-            {t('chat.calls.join')}
-          </Button>
-        ) : model.canStartGroupCall ? (
-          <>
-            <Button variant="ghost" size="icon" onClick={() => void startGroupCall('audio')} disabled={inAnyCall} aria-label={t('chat.calls.groupVoice')} title={t('chat.calls.groupVoice')} data-testid="chat-group-call-voice">
-              <Phone />
-            </Button>
-            <Button variant="ghost" size="icon" onClick={() => void startGroupCall('video')} disabled={inAnyCall} aria-label={t('chat.calls.groupVideo')} title={t('chat.calls.groupVideo')} data-testid="chat-group-call-video">
-              <Video />
-            </Button>
-          </>
-        ) : null}
         {model.canCall ? (
           <>
             <Button variant="ghost" size="icon" onClick={() => void placeCall('audio')} disabled={call !== null} aria-label={t('chat.calls.voice')} title={t('chat.calls.voice')} data-testid="chat-call-voice">
@@ -409,7 +353,7 @@ export function ConversationView({
             </Button>
           </>
         ) : null}
-        <Button variant="ghost" size="icon" onClick={() => setDetails(true)} aria-label={t('chat.details.open')} data-testid={model.group ? 'chat-group-members' : undefined}>
+        <Button variant="ghost" size="icon" onClick={() => setDetails(true)} aria-label={t('chat.details.open')}>
           <Info />
         </Button>
         <DropdownMenu>
@@ -442,17 +386,6 @@ export function ConversationView({
         </DropdownMenu>
       </header>
       )}
-      {joinRequests > 0 ? (
-        <button
-          type="button"
-          onClick={() => setDetails(true)}
-          className="flex w-full items-center justify-center gap-2 border-b border-border bg-accent/50 px-4 py-2 text-sm hover:bg-accent"
-          data-testid="chat-join-requests-banner"
-        >
-          <UserPlus className="size-4" aria-hidden />
-          {t('chat.groupLink.bannerRequests', { count: joinRequests })}
-        </button>
-      ) : null}
       {!embedded && model.peer ? <PeerWaitingBanner peer={model.peer} /> : null}
       {/* Not for a request: it is accepted (or blocked) first, then saved. */}
       {!embedded && model.peer && model.address && !model.note && !model.readOnly ? (
@@ -545,7 +478,6 @@ export function ConversationView({
           }
           if (row.kind === 'notice' && row.view.groupCall) {
             const started = row.view.groupCall
-            const live = model.groupCall?.callId === started.callId
             return (
               <div key={row.key} className={cn(TIMELINE_ROW, 'mx-auto flex max-w-sm items-center justify-center gap-2 px-4 py-2.5 text-center text-xs text-muted-foreground')} data-testid="chat-group-call-notice">
                 {started.media === 'video' ? <Video className="size-4 shrink-0" aria-hidden /> : <Phone className="size-4 shrink-0" aria-hidden />}
@@ -554,11 +486,6 @@ export function ConversationView({
                     ? t('chat.calls.groupStarted_you')
                     : t('chat.calls.groupStarted', { name: nameOf(row.view) })}
                 </span>
-                {live && !inAnyCall ? (
-                  <Button variant="link" size="sm" className="h-auto p-0 text-xs" onClick={() => void joinGroupCall(started, false)}>
-                    {t('chat.calls.join')}
-                  </Button>
-                ) : null}
               </div>
             )
           }
@@ -727,7 +654,6 @@ export function ConversationView({
             setEditing(view)
           }}
           send={actions.send}
-          members={conversation.kind === 'group' && !model.textOnly ? members : undefined}
           linkPreviews={linkPreviewsOn && !model.textOnly && chat.capabilities?.linkPreviews === true}
           // Beside a call there is room for the message box and attachments;
           // polls, places and stickers stay in the conversation itself.
@@ -754,9 +680,9 @@ export function ConversationView({
           }
           mediaUnavailable={mediaUnavailable}
           mediaLimit={chat.capabilities?.media?.maximumPlaintextBytes ?? 0}
-          maxTextBytes={model.group ? model.group.currentCryptographicPolicy.maximumApplicationPlaintextBytes : DIRECT_TEXT_MAX_BYTES}
-          tooLongText={model.group ? undefined : t('chat.composer.tooLongDirect')}
-          maxEncodedBytes={model.group ? undefined : DIRECT_ENCODED_MAX_BYTES}
+          maxTextBytes={DIRECT_TEXT_MAX_BYTES}
+          tooLongText={t('chat.composer.tooLongDirect')}
+          maxEncodedBytes={DIRECT_ENCODED_MAX_BYTES}
           onTyping={
             model.canSendTyping && typingIndicators
               ? () => void service.sendTyping(conversation, true).catch((error: unknown) => console.warn('chat: typing not sent', error))
@@ -798,7 +724,7 @@ export function ConversationView({
         }}
       />
 
-      <Dialog open={offeredCall !== null && !inAnyCall} onOpenChange={(open) => !open && dropCallParam()}>
+      <Dialog open={offeredCall !== null && call === null} onOpenChange={(open) => !open && dropCallParam()}>
         <DialogContent className="sm:max-w-sm">
           <DialogHeader>
             <DialogTitle>{t(offeredCall === 'video' ? 'chat.calls.offerVideo' : 'chat.calls.offerVoice', { name: model.title })}</DialogTitle>

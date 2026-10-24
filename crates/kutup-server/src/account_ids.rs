@@ -33,12 +33,6 @@ pub fn named(local_server: &str, account_id: &str, server: Option<&str>) -> AppR
     remote(server.unwrap_or(local_server), account_id)
 }
 
-/// The account id of `account` (canonical, so a UUID).
-pub fn id_of(account: &AccountRef) -> AppResult<Uuid> {
-    Uuid::parse_str(&account.account_id)
-        .map_err(|_| AppError::internal("a canonical account id is a UUID"))
-}
-
 /// The active user `account` is on this server, if it is one of ours.
 pub async fn local_user<'e, E: sqlx::PgExecutor<'e>>(
     executor: E,

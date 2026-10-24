@@ -231,7 +231,8 @@ capability advertisement, and where each web app lives (`apps`, from
     "profiles": true,
     "federation": true,
     "sealedSender": true,
-    "mlsGroups": true
+    "pairwiseGroups": false,
+    "groupCalls": false
   },
   "apps": {
     "account": "https://account.example.org",
@@ -3511,8 +3512,8 @@ unknown asset, `410` if the share has expired.
 
 The current Chat protocol is described in `docs/chat-protocol.md`, media in
 `docs/chat-media.md`, and continuous display-history recovery in
-`docs/chat-backup.md`. Clients run libsignal Direct Chat and OpenMLS private
-groups; servers retain public routing/identity material, operational metadata,
+`docs/chat-backup.md`. Clients run libsignal Direct Chat and pairwise groups
+(docs/plans/pairwise-groups.md); servers retain public routing/identity material, operational metadata,
 and opaque ciphertext rather than protected plaintext. All endpoints require a
 Bearer JWT unless noted. Wire types live in `crates/kutup-chat-proto` and are
 fully described by the OpenAPI document.
@@ -3530,7 +3531,7 @@ a device makes as itself carries `X-Kutup-Chat-Device: <deviceId>.<credential>`
 beside the JWT: keys, `keys/check`, the manifest, link tokens and relays, the
 identity distribution, sends and syncs, the mailbox, socket tickets, the
 sender certificate, push subscriptions, profile writes as a device, backup
-segments, device rename and removal, and the MLS device routes. A missing or
+segments, and device rename and removal. A missing or
 wrong credential, or one of a removed or expired device, is `401
 deviceCredential`.
 
@@ -3607,7 +3608,7 @@ protected; clients must show the latest acknowledged time and storage action.
 ### GET /api/chat/backup/segments?after=N&limit=N
 
 Page the complete ordered encrypted event tail. Restoring it does not advance a
-mailbox cursor or establish Direct/MLS protocol state.
+mailbox cursor or establish Direct Chat or group protocol state.
 
 ### POST /api/chat/backup/bases
 
@@ -4243,17 +4244,6 @@ is then absent) or the device is not the caller's.
 
 `204`: stop waking the device.
 
-### POST /api/chat/invite-links
-
-One operation on a group link's mailbox ([`chat-invite-links.md`](chat-invite-links.md)):
-`{ "host": "<domain>", "operation": { "op": "put" | "delete" | "preview" |
-"request" | "requests" | "decide" | "status" | "cancel", … } }` →
-`{ "result": "done" | "preview" | "requested" | "requests" | "status", … }`.
-The server carries it out when it is the host, and otherwise forwards it
-over signed federation. `404` when groups are off here or the link or request
-no longer exists, `403` for a token that does not match, `429` over the rate
-or waiting-request limits, `502` when the host cannot be reached.
-
 ### POST /api/chat/ws-ticket?deviceId=N
 
 Mint a random, one-time browser WebSocket ticket bound to the authenticated user and chat device. The ticket expires in 60 seconds and is returned as `{ "ticket", "expiresAt" }`.
@@ -4356,13 +4346,6 @@ safety. Mailbox rows, the stored idempotent response, and the sequence
 high-water mark commit atomically. Exact replay returns the stored response;
 device mismatch or sequence gap returns typed `409` data so the origin can
 refresh/re-encrypt or replay the missing retained transaction.
-
-### POST /api/fed/chat/invite-links
-
-One signed `InviteLinkOperationV1` for a group link this server hosts, from
-an account of the origin server; answered like `POST /api/chat/invite-links`
-in a signed response. The authenticated origin is recorded as a request's
-server.
 
 ---
 

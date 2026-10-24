@@ -142,7 +142,7 @@ address or federation identity is a protocol migration, not a DNS-only edit.
 `CHAT_MAILBOX_RETENTION_DAYS` and `CHAT_MEDIA_DELIVERY_RETENTION_DAYS` are startup
 fallbacks. An administrator can change both at runtime under **Admin → Settings →
 Chat storage**; persisted values take precedence without a server restart.
-Mailbox retention covers unread Direct and MLS delivery ciphertext. Media retention
+Mailbox retention covers unread Chat delivery ciphertext. Media retention
 covers only temporary delivery copies and never deletes protected history-media
 copies.
 
@@ -465,7 +465,7 @@ cleared is a separate Chat installation. Users can rename an installation from
 Messages to an account-private label such as “Work laptop”. The immutable
 numeric ID from 1 through 10 remains visible as secondary protocol-routing
 metadata. Renaming does not rotate device keys, change manifest membership,
-replace Direct/MLS sessions, or migrate protected history.
+replace Direct Chat sessions or group sender keys, or migrate protected history.
 
 `CHAT_MEDIA_MAX_PLAINTEXT_BYTES` is the per-attachment plaintext-class ceiling.
 It defaults to the V1 hard cap of 2 GiB; an operator may lower it, but cannot
@@ -490,7 +490,7 @@ not recovery: it creates a new authority and requires contacts to re-verify.
 After unified recovery setup, Chat automatically protects display history and
 eligible media in an account-local E2EE backup. There is no backup-disable or
 device-transfer fallback. A clean browser restores verified history from the
-account homeserver, but creates fresh device, Direct, and MLS protocol state.
+account homeserver, but creates fresh device, Direct Chat and group protocol state.
 See [`chat-backup.md`](chat-backup.md) for the lifecycle and
 [`chat-backup-security-threat-model.md`](chat-backup-security-threat-model.md)
 for the trust boundary.

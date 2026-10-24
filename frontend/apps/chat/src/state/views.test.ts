@@ -40,7 +40,7 @@ function contact(peer: string, state: ContactRecord['state'], updatedAtMs = 0): 
 }
 
 function data(history: ChatHistoryEntry[], contacts: ContactRecord[] = []): ChatData {
-  return { history, contacts, profiles: [], groups: [], chatGroups: [] }
+  return { history, contacts, profiles: [], chatGroups: [] }
 }
 
 describe('conversationList', () => {

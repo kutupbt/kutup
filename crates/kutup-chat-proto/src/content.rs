@@ -1539,14 +1539,10 @@ fn validate_control_conversation(conversation: &ConversationId, what: &str) -> R
     match conversation {
         // An account reference is checked whole when it is read.
         ConversationId::Direct { .. } => {}
+        // A pairwise group's id (docs/plans/pairwise-groups.md).
         ConversationId::Group { group_id } => {
-            let parsed = Uuid::parse_str(group_id)
-                .map_err(|_| format!("Chat {what} group must be a UUID"))?;
-            if parsed.is_nil() || parsed.to_string() != *group_id {
-                return Err(format!(
-                    "Chat {what} group must be a canonical non-nil UUID"
-                ));
-            }
+            crate::group_route::decode_group_id(group_id)
+                .map_err(|error| format!("Chat {what} group: {error}"))?;
         }
     }
     Ok(())
@@ -2175,7 +2171,7 @@ mod tests {
         assert!(malformed.disappearing_after_seconds().is_err());
 
         let conversation = ConversationId::Group {
-            group_id: "11111111-1111-4111-8111-111111111111".into(),
+            group_id: crate::group_route::encode_group_id(&[0x11; 32]),
         };
         let start = ChatContent::disappearing_expiry_start_with_id(
             "22222222-2222-4222-8222-222222222222",
@@ -2367,7 +2363,7 @@ mod tests {
     fn read_position_needs_a_canonical_anchor() {
         let body = ReadPositionBody {
             conversation: ConversationId::Group {
-                group_id: OTHER.into(),
+                group_id: crate::group_route::encode_group_id(&[0x6c; 32]),
             },
             through_message_id: MESSAGE.into(),
             read_through_ms: 5_000,

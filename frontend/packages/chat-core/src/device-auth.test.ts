@@ -23,7 +23,7 @@ describe('isDeviceBoundChatRoute', () => {
     expect(isDeviceBoundChatRoute('/chat/provisioning/ticket', 'post')).toBe(false)
     expect(isDeviceBoundChatRoute('/chat/anonymous/messages', 'post')).toBe(false)
     expect(isDeviceBoundChatRoute('/chat/anonymous/accounts/x/keys?server=a', 'post')).toBe(false)
-    expect(isDeviceBoundChatRoute('/chat/mls/anonymous/messages', 'post')).toBe(false)
+    expect(isDeviceBoundChatRoute('/chat/anonymous/messages/multi', 'post')).toBe(false)
     expect(isDeviceBoundChatRoute('/drive/files', 'get')).toBe(false)
     expect(isDeviceBoundChatRoute(undefined, 'get')).toBe(false)
   })

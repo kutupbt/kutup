@@ -1,6 +1,6 @@
 //! Online signing keys a server makes for itself when its operator configures
-//! none: its federation identity key, its MLS ordering control key, and the
-//! key that signs shared mailboxes' key lists. Each
+//! none: its federation identity key and the key that signs shared
+//! mailboxes' key lists. Each
 //! is a 32-byte Ed25519 seed, made once and kept in `server_generated_keys`;
 //! every instance uses the stored copy. Configured keys take precedence and
 //! never pass through here.
@@ -10,7 +10,6 @@ use sqlx::PgPool;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum GeneratedKey {
     FederationIdentity,
-    MlsControl,
     /// The HMAC key of the answers for names that are no account
     /// (docs/plans/account-identity.md): its own, so rotating any other
     /// secret changes none of them.
@@ -25,7 +24,6 @@ impl GeneratedKey {
     fn purpose(self) -> &'static str {
         match self {
             Self::FederationIdentity => "federation-identity",
-            Self::MlsControl => "mls-control",
             Self::FakeAccounts => "fake-accounts",
             Self::RegistrationCodes => "registration-codes",
         }

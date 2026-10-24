@@ -3,8 +3,8 @@
 use kutup_chat_proto::{
     parse_device_header, AccountIdentityBody, AccountIdentityDistributionRequest,
     AccountManifestHistoryPageV2, AccountManifestPublicationV2, AccountManifestV2,
-    AccountPreKeyBundlesResponse, ChatProvisionV1, MlsOrderingServicePolicyV1, ProvisionEnvelopeV1,
-    ProvisioningLinkCodeV1, RegisterChatDeviceRequestV2, SealedSenderServicePolicyV1,
+    AccountPreKeyBundlesResponse, ChatProvisionV1, ProvisionEnvelopeV1, ProvisioningLinkCodeV1,
+    RegisterChatDeviceRequestV2, SealedSenderServicePolicyV1,
 };
 use kutup_federation_proto::{FederatedFeaturePolicyEnvelopeV1, FederatedFeaturePolicyHistoryV1};
 use libfuzzer_sys::fuzz_target;
@@ -64,11 +64,6 @@ fuzz_target!(|data: &[u8]| {
 
     let _ = SealedSenderServicePolicyV1::from_canonical_bytes(data);
     if let Ok(policy) = serde_json::from_slice::<SealedSenderServicePolicyV1>(data) {
-        let _ = policy.validate();
-        let _ = policy.canonical_bytes();
-    }
-    let _ = MlsOrderingServicePolicyV1::from_canonical_bytes(data);
-    if let Ok(policy) = serde_json::from_slice::<MlsOrderingServicePolicyV1>(data) {
         let _ = policy.validate();
         let _ = policy.canonical_bytes();
     }

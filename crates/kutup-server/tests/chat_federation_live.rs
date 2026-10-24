@@ -1933,22 +1933,16 @@ fn setup_phase(c: &Client, a: &str, b: &str) {
     assert_eq!(initial_policy["features"][0]["mode"], "allowlist");
     update_federation_mode(c, a, &admin_a, "open");
     update_federation_mode(c, b, &admin_b, "open");
-    for (base, admin, domain) in [(a, &admin_a, "a.test"), (b, &admin_b, "b.test")] {
+    for base in [a, b] {
         let settings = json_response(
             c.get(format!("{base}/api/auth/settings")).send().unwrap(),
-            "advertised MLS browser capability",
+            "advertised group capability",
         );
-        assert_eq!(settings["chat"]["mlsGroups"], true);
-        let status = json_response(
-            c.get(format!("{base}/api/admin/chat/mls/status"))
-                .bearer_auth(admin)
-                .send()
-                .unwrap(),
-            "advertised MLS administrative status",
+        assert_eq!(settings["chat"]["pairwiseGroups"], true);
+        assert!(
+            settings["chat"].get("mlsGroups").is_none(),
+            "MLS groups are gone"
         );
-        assert_eq!(status["enabled"], true);
-        assert_eq!(status["advertised"], true);
-        assert_eq!(status["policy"]["canonicalDomain"], domain);
     }
     update_feature_mode(c, a, &admin_a, "drive", "open");
     update_feature_mode(c, b, &admin_b, "drive", "open");
@@ -2242,16 +2236,7 @@ fn setup_phase(c: &Client, a: &str, b: &str) {
     assert_eq!(disabled_capabilities["chat"]["federation"], false);
     // Groups among local accounts outlive a closed federation: admission
     // decides only which other servers members may come from.
-    assert_eq!(disabled_capabilities["chat"]["mlsGroups"], true);
-    let disabled_mls_status = json_response(
-        c.get(format!("{a}/api/admin/chat/mls/status"))
-            .bearer_auth(&admin_a)
-            .send()
-            .unwrap(),
-        "disabled MLS administrative status",
-    );
-    assert_eq!(disabled_mls_status["enabled"], true);
-    assert_eq!(disabled_mls_status["advertised"], true);
+    assert_eq!(disabled_capabilities["chat"]["pairwiseGroups"], true);
     json_response(
         drive_remote_user(c, a, &alice_token),
         "Drive remains enabled while Chat is disabled",
@@ -2275,9 +2260,9 @@ fn setup_phase(c: &Client, a: &str, b: &str) {
     );
     let reenabled_capabilities = json_response(
         c.get(format!("{a}/api/auth/settings")).send().unwrap(),
-        "re-enabled MLS browser capability",
+        "re-enabled group capability",
     );
-    assert_eq!(reenabled_capabilities["chat"]["mlsGroups"], true);
+    assert_eq!(reenabled_capabilities["chat"]["pairwiseGroups"], true);
     assert_eq!(
         c.get(format!(
             "{a}/api/chat/accounts/{}/keys?server=b.test",
@@ -2632,79 +2617,6 @@ fn calls_phase(c: &Client, a: &str, b: &str) {
         StatusCode::BAD_REQUEST
     );
     println!("GROUP CALL TOKENS ACROSS SERVERS VERIFIED");
-
-    // A group link hosted on A, used from B.
-    let token32 = |byte: u8| b64(&[byte; 32]);
-    let link_id = token32(11);
-    let manage = token32(12);
-    let sealed = |byte: u8, len: usize| b64(&vec![byte; len]);
-    let call = |base: &str, token: &str, operation: Value| {
-        c.post(format!("{base}/api/chat/invite-links"))
-            .bearer_auth(token)
-            .json(&json!({"host": "a.test", "operation": operation}))
-            .send()
-            .unwrap()
-    };
-    json_response(
-        call(
-            a,
-            &cara,
-            json!({"op": "put", "linkId": link_id, "manageToken": manage, "preview": sealed(1, 4136)}),
-        ),
-        "put link mailbox on A",
-    );
-    let preview = json_response(
-        call(b, &dora, json!({"op": "preview", "linkId": link_id})),
-        "preview through B",
-    );
-    assert_eq!(preview["preview"], sealed(1, 4136));
-    let requested = json_response(
-        call(
-            b,
-            &dora,
-            json!({"op": "request", "linkId": link_id, "request": sealed(2, 296), "statusToken": token32(13)}),
-        ),
-        "request through B",
-    );
-    let request_id = requested["requestId"].as_str().unwrap().to_owned();
-    let requests = json_response(
-        call(
-            a,
-            &cara,
-            json!({"op": "requests", "linkId": link_id, "manageToken": manage}),
-        ),
-        "requests on A",
-    );
-    assert_eq!(requests["requests"][0]["originDomain"], "b.test");
-    assert_eq!(requests["requests"][0]["requestId"], request_id);
-    // A wrong manage token reads nothing.
-    assert_eq!(
-        call(
-            b,
-            &dora,
-            json!({"op": "requests", "linkId": link_id, "manageToken": token32(99)})
-        )
-        .status(),
-        StatusCode::FORBIDDEN
-    );
-    json_response(
-        call(
-            a,
-            &cara,
-            json!({"op": "decide", "linkId": link_id, "manageToken": manage, "requestId": request_id, "approve": true}),
-        ),
-        "approve on A",
-    );
-    let status = json_response(
-        call(
-            b,
-            &dora,
-            json!({"op": "status", "linkId": link_id, "requestId": request_id, "statusToken": token32(13)}),
-        ),
-        "status through B",
-    );
-    assert_eq!(status["status"], "approved");
-    println!("GROUP LINKS ACROSS SERVERS VERIFIED");
 }
 
 fn queue_phase(c: &Client, a: &str) {

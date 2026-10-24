@@ -4,7 +4,6 @@ import { useParams, useSearchParams } from 'react-router-dom'
 import { cn } from '@kutup/ui/lib/cn'
 import { ConnectionBanner } from '../features/list/ConnectionBanner'
 import { ConversationList } from '../features/list/ConversationList'
-import { GroupInvitations } from '../features/list/GroupInvitations'
 import { NotificationPrompt } from '../features/list/NotificationPrompt'
 import { parseConversationKey } from '../features/list/paths'
 import { SearchResults } from '../features/list/SearchResults'
@@ -39,7 +38,6 @@ export function ChatsPage() {
           ) : (
             <>
               <NotificationPrompt />
-              <GroupInvitations />
               <ConversationList selectedKey={conversation ? selectedKey : null} />
             </>
           )}
