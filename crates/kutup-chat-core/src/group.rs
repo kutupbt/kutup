@@ -134,7 +134,10 @@ pub struct GroupRecordV1 {
     pub join_epoch: u32,
     /// The group send endorsements this device keeps for the group: its own
     /// upload and the members' it read (docs/plans/group-send-endorsements.md).
-    #[serde(default, skip_serializing_if = "crate::group_endorse::GroupEndorsements::is_empty")]
+    #[serde(
+        default,
+        skip_serializing_if = "crate::group_endorse::GroupEndorsements::is_empty"
+    )]
     pub endorsements: crate::group_endorse::GroupEndorsements,
 }
 

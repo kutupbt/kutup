@@ -1030,8 +1030,7 @@ impl Engine {
             }
             for (expiration, legs) in by_expiration {
                 let going: Vec<usize> = legs.iter().map(|leg| leg.index).collect();
-                let endorsements: Vec<_> =
-                    legs.iter().map(|leg| leg.endorsement.clone()).collect();
+                let endorsements: Vec<_> = legs.iter().map(|leg| leg.endorsement.clone()).collect();
                 let recipients: Vec<_> = legs
                     .into_iter()
                     .map(|leg| (leg.parsed, leg.bundles))

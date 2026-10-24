@@ -859,12 +859,9 @@ impl World {
                 group.endorsements.retain(|(_, owner, expiration, _)| {
                     !(owner == pseudonym && *expiration == upload.expiration)
                 });
-                group.endorsements.push((
-                    seq,
-                    pseudonym.clone(),
-                    upload.expiration,
-                    upload.sealed,
-                ));
+                group
+                    .endorsements
+                    .push((seq, pseudonym.clone(), upload.expiration, upload.sealed));
                 // Two per pseudonym: a third replaces the oldest.
                 loop {
                     let mine: Vec<u64> = group
@@ -1653,11 +1650,13 @@ impl ChatTransport for Client {
         self.world
             .endorsements_issued
             .set(self.world.endorsements_issued.get() + 1);
-        Ok(kutup_chat_proto::group_send::GroupSendEndorsementResponseV1 {
-            key_id: 1,
-            expiration: issued.expiration,
-            response: STANDARD.encode(issued.response),
-        })
+        Ok(
+            kutup_chat_proto::group_send::GroupSendEndorsementResponseV1 {
+                key_id: 1,
+                expiration: issued.expiration,
+                response: STANDARD.encode(issued.response),
+            },
+        )
     }
 
     /// The server's keys: the current one (id 1), and the previous one (id
@@ -1708,7 +1707,10 @@ impl ChatTransport for Client {
         let sent = libsignal_protocol::SealedSenderV2SentMessage::parse(&payload)
             .map_err(|error| ChatError::Transport(error.to_string()))?;
         assert_eq!(sent.version, 0x23);
-        assert!(submission.capabilities.is_empty(), "a token, not capabilities");
+        assert!(
+            submission.capabilities.is_empty(),
+            "a token, not capabilities"
+        );
         let recipients: Vec<uuid::Uuid> = sent
             .recipients
             .keys()
@@ -3317,7 +3319,10 @@ fn exchanged_group(world: &Rc<World>) -> (Person, Person, Person, Person, String
         person.send_text(&group_id, "hello");
     }
     deliver_all(&mut [&mut alice, &mut bob, &mut carol, &mut dave]);
-    refresh_endorsements(&mut [&mut alice, &mut bob, &mut carol, &mut dave], &group_id);
+    refresh_endorsements(
+        &mut [&mut alice, &mut bob, &mut carol, &mut dave],
+        &group_id,
+    );
     (alice, bob, carol, dave, group_id)
 }
 
@@ -3436,7 +3441,9 @@ fn group_multi_a_refused_token_goes_pairwise_and_drops_its_endorsements() {
 fn group_multi_a_rotated_key_verifies_in_its_window_only() {
     let world = World::new();
     let (mut alice, mut bob, mut carol, mut dave, group_id) = exchanged_group(&world);
-    let old = world.group_send_key.replace(kutup_group_send::ServerKey::generate());
+    let old = world
+        .group_send_key
+        .replace(kutup_group_send::ServerKey::generate());
     *world.previous_group_send_key.borrow_mut() = Some(old);
     let (multi, batches) = (world.multi_requests.get(), world.batches.get());
     alice.send_text(&group_id, "in the window");
@@ -3467,8 +3474,12 @@ fn group_multi_a_blob_that_isnt_its_members_is_dropped() {
     deliver_all(&mut [&mut alice, &mut bob, &mut carol]);
     // Bob uploads Carol's endorsement as his own, and then junk.
     let carols = world.group_send_key.borrow().issue(
-        uuid::Uuid::parse_str(&crate::address::parse_account(&carol.account).unwrap().account_id)
-            .unwrap(),
+        uuid::Uuid::parse_str(
+            &crate::address::parse_account(&carol.account)
+                .unwrap()
+                .account_id,
+        )
+        .unwrap(),
         now() as u64,
     );
     let mut record = block_on(bob.engine.load_group_record(&group_id)).unwrap();
@@ -3481,7 +3492,10 @@ fn group_multi_a_blob_that_isnt_its_members_is_dropped() {
     .encode()
     .unwrap();
     let state_key = record.master().unwrap().state_key();
-    for plain in [blob.to_vec(), vec![7u8; kutup_group_send::ENDORSEMENT_BLOB_BYTES]] {
+    for plain in [
+        blob.to_vec(),
+        vec![7u8; kutup_group_send::ENDORSEMENT_BLOB_BYTES],
+    ] {
         let sealed = state_key
             .seal(SealedField::Endorsement, &pseudonym, &plain)
             .unwrap();

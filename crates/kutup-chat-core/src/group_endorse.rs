@@ -430,7 +430,14 @@ impl Engine {
                     continue;
                 }
                 if let Ok(endorsement) = self
-                    .check_member_blob(&state_key, &pseudonym, account, item.expiration, &item.sealed, now)
+                    .check_member_blob(
+                        &state_key,
+                        &pseudonym,
+                        account,
+                        item.expiration,
+                        &item.sealed,
+                        now,
+                    )
                     .await
                 {
                     record.endorsements.keep(account, &endorsement);
@@ -471,8 +478,9 @@ impl Engine {
             ));
         }
         let key = self.group_send_key(&blob.server, blob.key_id).await?;
-        let endorsement = kutup_group_send::receive(&blob.response, account_uuid(account)?, now, &key)
-            .map_err(zk_error)?;
+        let endorsement =
+            kutup_group_send::receive(&blob.response, account_uuid(account)?, now, &key)
+                .map_err(zk_error)?;
         if endorsement.expiration != expiration {
             return Err(ChatError::Trust(
                 "an endorsement blob's expiration isn't its response's".into(),
@@ -491,7 +499,9 @@ impl Engine {
     ) -> Result<()> {
         let mut record = self.load_group_record(group_id).await?;
         let shared = self.share_group_send_endorsement(&mut record).await?;
-        let read = self.read_group_send_endorsements(&mut record, eager).await?;
+        let read = self
+            .read_group_send_endorsements(&mut record, eager)
+            .await?;
         if shared || read {
             self.save_group(&record).await?;
         }
@@ -558,10 +568,7 @@ mod tests {
         assert_eq!(endorsements.usable(account, now), Some(third.clone()));
         // Within the margin of its expiry, one isn't used.
         endorsements.forget(account, third.expiration);
-        assert_eq!(
-            endorsements.usable(account, MIDNIGHT + DAY - 60),
-            None
-        );
+        assert_eq!(endorsements.usable(account, MIDNIGHT + DAY - 60), None);
         assert_eq!(endorsements.usable(account, now), Some(second));
     }
 
