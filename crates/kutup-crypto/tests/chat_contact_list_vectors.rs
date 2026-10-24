@@ -5,6 +5,9 @@
 //! derive the same id and open the same bytes, and the server must read the
 //! same revision. Regenerate only for a deliberate format change:
 //! `KUTUP_WRITE_CONTACT_LIST_VECTORS=1 cargo test -p kutup-crypto --test chat_contact_list_vectors -- --ignored`.
+// Vector tests compute expected values with reference implementations,
+// independently of kutup_crypto::primitives.
+#![allow(clippy::disallowed_types, clippy::disallowed_methods)]
 
 use base64::engine::general_purpose::STANDARD;
 use base64::Engine as _;

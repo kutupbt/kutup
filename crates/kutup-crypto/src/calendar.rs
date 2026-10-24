@@ -28,7 +28,6 @@ use pgp::{
     ser::Serialize as _,
     types::{DecryptionKey as _, EskType, KeyDetails as _, Password},
 };
-use rand::RngCore as _;
 use zeroize::Zeroizing;
 
 use crate::calendar_event::{CalendarEncrypted, CalendarSigned, SharedEncrypted, SharedSigned};
@@ -58,7 +57,7 @@ impl SessionKey {
     /// A fresh random session key.
     pub fn generate() -> Self {
         let mut key = Zeroizing::new([0u8; SESSION_KEY_LEN]);
-        rand::rngs::OsRng.fill_bytes(key.as_mut());
+        crate::primitives::random(key.as_mut());
         SessionKey(key)
     }
 
@@ -88,7 +87,7 @@ pub struct Passphrase(Zeroizing<String>);
 impl Passphrase {
     pub fn generate() -> Self {
         let mut bytes = Zeroizing::new([0u8; PASSPHRASE_BYTES]);
-        rand::rngs::OsRng.fill_bytes(bytes.as_mut());
+        crate::primitives::random(bytes.as_mut());
         Passphrase(Zeroizing::new(STANDARD.encode(bytes.as_ref())))
     }
 
@@ -274,12 +273,12 @@ pub fn generate_calendar_key(passphrase: &Passphrase, created_at_secs: u32) -> R
     let mut key = SignedSecretKey::from_bytes(generated.secret_key.as_slice()).map_err(backend)?;
     let password = Password::from(passphrase.as_str());
     key.primary_key
-        .set_password(rand::rngs::OsRng, &password)
+        .set_password(crate::primitives::Rng, &password)
         .map_err(backend)?;
     for subkey in &mut key.secret_subkeys {
         subkey
             .key
-            .set_password(rand::rngs::OsRng, &password)
+            .set_password(crate::primitives::Rng, &password)
             .map_err(backend)?;
     }
     Ok(CalendarKey {
@@ -405,7 +404,7 @@ pub(crate) fn key_packet_to(session_key: &SessionKey, public_key: &[u8]) -> Resu
     let subkey = encryption_subkey(&recipient)?;
     let raw = session_key.0.to_vec().into();
     let pkesk = PublicKeyEncryptedSessionKey::from_session_key_v3(
-        rand::rngs::OsRng,
+        crate::primitives::Rng,
         &raw,
         SymmetricKeyAlgorithm::AES256,
         subkey,
@@ -457,11 +456,11 @@ pub fn open_key_packet(key_packet: &[u8], secret_key: &[u8]) -> Result<SessionKe
 /// `session_key` (SEIPDv1, AES-256), and nothing else.
 pub(crate) fn encrypt_data_packet(session_key: &SessionKey, plaintext: &[u8]) -> Result<Vec<u8>> {
     let mut builder = MessageBuilder::from_bytes("", plaintext.to_vec())
-        .seipd_v1(rand::rngs::OsRng, SymmetricKeyAlgorithm::AES256);
+        .seipd_v1(crate::primitives::Rng, SymmetricKeyAlgorithm::AES256);
     builder
         .set_session_key(session_key.0.to_vec().into())
         .map_err(backend)?;
-    let packet = builder.to_vec(rand::rngs::OsRng).map_err(backend)?;
+    let packet = builder.to_vec(crate::primitives::Rng).map_err(backend)?;
     let (tag, _, length) = packet_extent(&packet)?;
     if tag != TAG_SEIPD || length != packet.len() {
         return Err(CryptoError::Backend("expected one data packet".into()));

@@ -16,14 +16,9 @@
 //!   an entry opens only under its own id and revision, for this incarnation
 //!   of the account.
 
+use crate::primitives::{Aead, Kdf, Mac, Suite};
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use base64::Engine as _;
-use chacha20poly1305::aead::{Aead, KeyInit, Payload};
-use chacha20poly1305::{XChaCha20Poly1305, XNonce};
-use dryoc::rng::copy_randombytes;
-use hkdf::Hkdf;
-use hmac::{Hmac, Mac};
-use sha2::Sha256;
 use zeroize::Zeroizing;
 
 use crate::account_ref::AccountRef;
@@ -61,7 +56,7 @@ pub struct OpenedEntry {
 
 impl ContactListKey {
     pub fn derive(account_master_key: &[u8; 32]) -> Self {
-        let hkdf = Hkdf::<Sha256>::new(Some(SALT), account_master_key);
+        let hkdf = Kdf::new(Suite::V1, SALT, account_master_key);
         let mut id_key = Zeroizing::new([0u8; 32]);
         let mut seal_key = Zeroizing::new([0u8; 32]);
         hkdf.expand(ID_KEY_INFO, id_key.as_mut())
@@ -73,11 +68,10 @@ impl ContactListKey {
 
     /// The entry id of `contact` in this account's list.
     pub fn entry_id(&self, contact: &AccountRef) -> [u8; ENTRY_ID_LEN] {
-        let mut mac = <Hmac<Sha256> as Mac>::new_from_slice(self.id_key.as_ref())
-            .expect("HMAC takes any key length");
+        let mut mac = Mac::new(Suite::V1, self.id_key.as_ref());
         mac.update(ID_DOMAIN);
-        mac.update(&contact.bytes());
-        mac.finalize().into_bytes().into()
+        mac.update(contact.bytes());
+        mac.finish().to_array()
     }
 
     /// Seals an entry's plaintext for `entry_id` at `revision`, bound to the
@@ -90,7 +84,7 @@ impl ContactListKey {
         plain: &[u8],
     ) -> Result<Vec<u8>> {
         let mut nonce = [0u8; NONCE_LEN];
-        copy_randombytes(&mut nonce);
+        crate::primitives::random(&mut nonce);
         self.seal_with_nonce(binding, entry_id, revision, plain, &nonce)
     }
 
@@ -133,13 +127,11 @@ impl ContactListKey {
         sealed.extend_from_slice(&SUITE_V1.to_be_bytes());
         sealed.extend_from_slice(&revision.to_be_bytes());
         sealed.extend_from_slice(nonce);
-        let ciphertext = XChaCha20Poly1305::new(self.seal_key.as_slice().into())
-            .encrypt(
-                XNonce::from_slice(nonce),
-                Payload {
-                    msg: &padded,
-                    aad: &aad(&sealed[..MAGIC.len() + 10], binding, entry_id)?,
-                },
+        let ciphertext = Aead::new(Suite::V1, self.seal_key.as_ref())?
+            .seal_with_nonce(
+                nonce,
+                &aad(&sealed[..MAGIC.len() + 10], binding, entry_id)?,
+                &padded,
             )
             .map_err(|_| CryptoError::Backend("contact list entry seal".into()))?;
         sealed.extend_from_slice(&ciphertext);
@@ -165,13 +157,11 @@ impl ContactListKey {
     ) -> Result<OpenedEntry> {
         let revision = inspect(sealed).map_err(|_| CryptoError::AuthFailed)?;
         let nonce = &sealed[MAGIC.len() + 10..HEADER_LEN];
-        let padded = XChaCha20Poly1305::new(self.seal_key.as_slice().into())
-            .decrypt(
-                XNonce::from_slice(nonce),
-                Payload {
-                    msg: &sealed[HEADER_LEN..],
-                    aad: &aad(&sealed[..MAGIC.len() + 10], binding, entry_id)?,
-                },
+        let padded = Aead::new(Suite::V1, self.seal_key.as_ref())?
+            .open_with_nonce(
+                nonce,
+                &aad(&sealed[..MAGIC.len() + 10], binding, entry_id)?,
+                &sealed[HEADER_LEN..],
             )
             .map_err(|_| CryptoError::AuthFailed)?;
         let padded = Zeroizing::new(padded);
@@ -309,13 +299,12 @@ mod tests {
             &nonce,
         ]
         .concat();
-        let ciphertext = XChaCha20Poly1305::new(key.seal_key.as_slice().into())
-            .encrypt(
-                XNonce::from_slice(&nonce),
-                Payload {
-                    msg: padded,
-                    aad: &aad(&sealed[..MAGIC.len() + 10], BINDING, id).unwrap(),
-                },
+        let ciphertext = Aead::new(Suite::V1, key.seal_key.as_ref())
+            .unwrap()
+            .seal_with_nonce(
+                &nonce,
+                &aad(&sealed[..MAGIC.len() + 10], BINDING, id).unwrap(),
+                padded,
             )
             .unwrap();
         sealed.extend_from_slice(&ciphertext);

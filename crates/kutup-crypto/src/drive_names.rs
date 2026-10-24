@@ -25,9 +25,7 @@
 //! combining dot above, so `İstanbul` and `istanbul` stay different names
 //! while `ISTANBUL` and `istanbul` do not.
 
-use hkdf::Hkdf;
-use hmac::{Hmac, Mac};
-use sha2::{Digest, Sha256};
+use crate::primitives::{hash, Kdf, Mac, Suite};
 use unicode_normalization::UnicodeNormalization;
 
 use crate::error::{CryptoError, Result};
@@ -47,7 +45,7 @@ pub fn folder_hash_key(first_folder_key: &[u8], collection_id: &str) -> Result<[
     if collection_id.is_empty() {
         return Err(CryptoError::InvalidInput("folder id is empty".into()));
     }
-    let hkdf = Hkdf::<Sha256>::new(Some(collection_id.as_bytes()), first_folder_key);
+    let hkdf = Kdf::new(Suite::V1, collection_id.as_bytes(), first_folder_key);
     let mut key = [0u8; 32];
     hkdf.expand(HASH_KEY_INFO, &mut key)
         .map_err(|_| CryptoError::InvalidInput("folder hash key derivation failed".into()))?;
@@ -62,7 +60,7 @@ pub fn top_level_hash_key(master_key: &[u8]) -> Result<[u8; 32]> {
             "master key must be 32 bytes".into(),
         ));
     }
-    let hkdf = Hkdf::<Sha256>::new(None, master_key);
+    let hkdf = Kdf::new(Suite::V1, &[], master_key);
     let mut key = [0u8; 32];
     hkdf.expand(TOP_LEVEL_INFO, &mut key)
         .map_err(|_| CryptoError::InvalidInput("top-level hash key derivation failed".into()))?;
@@ -82,11 +80,10 @@ fn mac(hash_key: &[u8], label: &[u8], value: &[u8]) -> Result<String> {
             "folder hash key must be 32 bytes".into(),
         ));
     }
-    let mut mac = <Hmac<Sha256> as Mac>::new_from_slice(hash_key)
-        .map_err(|_| CryptoError::InvalidInput("folder hash key must be 32 bytes".into()))?;
+    let mut mac = Mac::new(Suite::V1, hash_key);
     mac.update(label);
     mac.update(value);
-    Ok(hex::encode(mac.finalize().into_bytes()))
+    Ok(hex::encode(mac.finish()))
 }
 
 /// The hash a name is kept unique by in its folder.
@@ -111,7 +108,7 @@ pub fn content_hash(hash_key: &[u8], content_sha256: &[u8]) -> Result<String> {
 /// SHA-256 of a whole plaintext held in memory (small files, tests); large
 /// files are hashed a chunk at a time by the client.
 pub fn content_sha256(plaintext: &[u8]) -> [u8; 32] {
-    Sha256::digest(plaintext).into()
+    hash(Suite::V1, plaintext).to_array()
 }
 
 #[cfg(test)]

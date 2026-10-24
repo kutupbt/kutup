@@ -12,10 +12,8 @@
 //! expands independent KEK and login subkeys. The server-visible login key can
 //! therefore never decrypt the account master-key envelope.
 
+use crate::primitives::{pwhash, Kdf, PwhashParams, Suite};
 use base64::Engine;
-use dryoc::classic::crypto_pwhash::{crypto_pwhash, PasswordHashAlgorithm};
-use hkdf::Hkdf;
-use sha2::Sha256;
 use zeroize::Zeroizing;
 
 use crate::error::{CryptoError, Result};
@@ -99,16 +97,17 @@ fn argon2id(
             "account-protection salt must be {ACCOUNT_PROTECTION_SALT_LEN} bytes"
         )));
     }
+    let salt: &[u8; ACCOUNT_PROTECTION_SALT_LEN] = salt.try_into().expect("checked above");
     let mut out = Zeroizing::new([0u8; KEY_LEN]);
-    crypto_pwhash(
-        out.as_mut_slice(),
+    pwhash(
+        &PwhashParams {
+            operations: u64::from(parameters.iterations),
+            memory: parameters.memory_kib as usize * 1024,
+        },
         password,
         salt,
-        u64::from(parameters.iterations),
-        parameters.memory_kib as usize * 1024,
-        PasswordHashAlgorithm::Argon2id13,
-    )
-    .map_err(|e| CryptoError::Backend(format!("argon2id: {e}")))?;
+        out.as_mut_slice(),
+    )?;
     Ok(out)
 }
 
@@ -120,7 +119,7 @@ pub fn derive_account_protection_keys(
     parameters: AccountProtectionParameters,
 ) -> Result<AccountProtectionKeys> {
     let root = argon2id(password.as_bytes(), salt, parameters)?;
-    let hkdf = Hkdf::<Sha256>::new(Some(ACCOUNT_PROTECTION_HKDF_SALT), root.as_slice());
+    let hkdf = Kdf::new(Suite::V1, ACCOUNT_PROTECTION_HKDF_SALT, root.as_slice());
     let mut key_encryption_key = Zeroizing::new([0u8; KEY_LEN]);
     let mut login_key = Zeroizing::new([0u8; KEY_LEN]);
     hkdf.expand(ACCOUNT_KEK_INFO, key_encryption_key.as_mut_slice())
@@ -157,7 +156,7 @@ pub fn derive_recovery_auth_proof(
     }
     let canonical = crate::key_binding::check(binding)
         .map_err(|_| CryptoError::InvalidInput("recovery binding is not a key binding".into()))?;
-    let hkdf = Hkdf::<Sha256>::new(Some(RECOVERY_AUTH_SALT), recovery_entropy);
+    let hkdf = Kdf::new(Suite::V1, RECOVERY_AUTH_SALT, recovery_entropy);
     let mut proof = Zeroizing::new([0u8; KEY_LEN]);
     hkdf.expand(canonical.as_bytes(), proof.as_mut_slice())
         .map_err(|_| CryptoError::Backend("recovery proof HKDF expand".into()))?;

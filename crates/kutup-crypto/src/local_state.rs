@@ -16,11 +16,8 @@
 //! exact ciphertext length. Moving a cache blob between profiles therefore
 //! fails closed even when both profiles were configured with the same key.
 
-use chacha20poly1305::aead::{Aead, KeyInit, Payload};
-use chacha20poly1305::{XChaCha20Poly1305, XNonce};
-use dryoc::rng::copy_randombytes;
-
 use crate::error::{CryptoError, Result};
+use crate::primitives::{Aead, Suite};
 
 const MAGIC: &[u8; 8] = b"KUTPLS1\0";
 const NONCE_LEN: usize = 24;
@@ -136,7 +133,7 @@ pub fn seal(
     profile: &str,
 ) -> Result<Vec<u8>> {
     let mut nonce = [0u8; NONCE_LEN];
-    copy_randombytes(&mut nonce);
+    crate::primitives::random(&mut nonce);
     seal_with_nonce(plaintext, key, purpose, profile, &nonce)
 }
 
@@ -166,19 +163,12 @@ pub fn seal_with_nonce(
     let ciphertext_len = u32::try_from(plaintext.len() + TAG_LEN)
         .map_err(|_| CryptoError::InvalidInput("local-state plaintext is too long".into()))?;
     let aad = header(purpose, profile, &nonce, ciphertext_len)?;
-    let cipher =
-        XChaCha20Poly1305::new_from_slice(key).map_err(|_| CryptoError::InvalidLength {
-            expected: 32,
-            got: key.len(),
-        })?;
+    let cipher = Aead::new(Suite::V1, key).map_err(|_| CryptoError::InvalidLength {
+        expected: 32,
+        got: key.len(),
+    })?;
     let ciphertext = cipher
-        .encrypt(
-            XNonce::from_slice(&nonce),
-            Payload {
-                msg: plaintext,
-                aad: &aad,
-            },
-        )
+        .seal_with_nonce(&nonce, &aad, plaintext)
         .map_err(|_| CryptoError::Backend("local-state seal".into()))?;
     let mut envelope = aad;
     envelope.extend_from_slice(&ciphertext);
@@ -259,20 +249,14 @@ pub fn open(
     if parsed.purpose != expected_purpose || parsed.profile != validate_profile(expected_profile)? {
         return Err(CryptoError::AuthFailed);
     }
-    let cipher =
-        XChaCha20Poly1305::new_from_slice(key).map_err(|_| CryptoError::InvalidLength {
-            expected: 32,
-            got: key.len(),
-        })?;
+    let cipher = Aead::new(Suite::V1, key).map_err(|_| CryptoError::InvalidLength {
+        expected: 32,
+        got: key.len(),
+    })?;
     cipher
-        .decrypt(
-            XNonce::from_slice(parsed.nonce),
-            Payload {
-                msg: parsed.ciphertext,
-                aad: parsed.aad,
-            },
-        )
+        .open_with_nonce(parsed.nonce, parsed.aad, parsed.ciphertext)
         .map_err(|_| CryptoError::AuthFailed)
+        .map(crate::primitives::into_vec)
 }
 
 #[cfg(test)]
