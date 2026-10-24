@@ -43,11 +43,11 @@ pub fn run(json: bool, server_flag: Option<&str>, username_flag: Option<&str>) -
     // Password: KUTUP_PASSWORD env (non-interactive), else a hidden prompt confirmed twice
     // (a typo here would set an unknown password on a brand-new account).
     let password = match std::env::var("KUTUP_PASSWORD") {
-        Ok(p) if !p.is_empty() => p,
+        Ok(p) if !p.is_empty() => Zeroizing::new(p),
         _ => {
-            let p1 = rpassword::prompt_password("Password: ")?;
-            let p2 = rpassword::prompt_password("Confirm password: ")?;
-            if p1 != p2 {
+            let p1 = Zeroizing::new(rpassword::prompt_password("Password: ")?);
+            let p2 = Zeroizing::new(rpassword::prompt_password("Confirm password: ")?);
+            if *p1 != *p2 {
                 anyhow::bail!("passwords do not match");
             }
             p1
@@ -139,13 +139,13 @@ pub fn run(json: bool, server_flag: Option<&str>, username_flag: Option<&str>) -
         // Machine-readable: include the phrase so automation can capture it once.
         crate::output::print_json(&serde_json::json!({
             "username": username,
-            "recoveryPhrase": phrase,
+            "recoveryPhrase": phrase.as_str(),
         }))?;
     } else {
         println!("\nAccount created: {username}.\n");
         println!("RECOVERY PHRASE — write this down and store it safely. It is shown ONCE and");
         println!("is the ONLY way to recover your account if you forget your password:\n");
-        println!("    {phrase}\n");
+        println!("    {}\n", phrase.as_str());
         println!("Then log in with:  kutup login --server {server} --username {username}");
     }
     Ok(())

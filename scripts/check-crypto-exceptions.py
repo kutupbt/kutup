@@ -22,13 +22,14 @@ import tomllib
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 MARKER = "# W2: moving"
 PLAN = ROOT / "docs/plans/crypto-primitives.md"
-LINTS = re.compile(r"clippy::disallowed_(?:types|methods)\b")
+LINTS = re.compile(r"clippy\s*::\s*disallowed[-_](?:types|methods)\b")
 # Lints or groups whose allowing also switches the disallowed_* rules off.
 GROUPS = {"clippy::style", "clippy::all", "warnings"}
 TOML_GROUPS = {"disallowed_types", "disallowed_methods", "style", "all"}
+# Cargo takes a lint name in a [lints] table with dashes as well.
 ATTRIBUTE = re.compile(r"#!?\[\s*(?:allow|expect)\s*\(([^\]]*)\)\s*\]|cfg_attr\([^\]]*?\b(?:allow|expect)\s*\(([^)]*)\)")
 FLAG = re.compile(
-    r"(?:-A|--allow|--cap-lints|-W|--warn)[\s=]*(?:clippy::(?:disallowed_\w+|style|all)|warnings|allow)\b"
+    r"(?:-A|--allow|--cap-lints|-W|--warn)[\s=]*(?:clippy\s*::\s*(?:disallowed[-_]\w+|style|all)|warnings|allow)\b"
 )
 SKIP = {"node_modules", "target", ".git"}
 
@@ -100,7 +101,7 @@ def other_switches() -> list[str]:
     for path in walk("**/*.rs"):
         rel = path.relative_to(ROOT).as_posix()
         for match in ATTRIBUTE.finditer(path.read_text(encoding="utf-8", errors="replace")):
-            names = {n.strip() for n in (match.group(1) or match.group(2) or "").split(",")}
+            names = {re.sub(r"\s+", "", n) for n in (match.group(1) or match.group(2) or "").split(",")}
             for name in sorted(names & GROUPS):
                 errors.append(f"{rel}: allows `{name}`, which switches the crypto lint off too")
     for path in walk("**/Cargo.toml"):
@@ -108,7 +109,7 @@ def other_switches() -> list[str]:
         config = tomllib.loads(path.read_text(encoding="utf-8"))
         for table in (config.get("lints", {}), config.get("workspace", {}).get("lints", {})):
             for name, value in table.get("clippy", {}).items():
-                if name in TOML_GROUPS and allowed_level(value):
+                if name.replace("-", "_") in TOML_GROUPS and allowed_level(value):
                     errors.append(f"{rel}: [lints] allows clippy::{name}")
             if allowed_level(table.get("rust", {}).get("warnings", "warn")):
                 errors.append(f"{rel}: [lints] allows warnings")
