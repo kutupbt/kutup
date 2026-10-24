@@ -5,9 +5,9 @@ use axum::extract::State;
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::Response;
 use kutup_chat_proto::{AnonymousMlsKeyPackageRequestV1, FederatedAnonymousMlsTransactionV1};
+use kutup_crypto::primitives::{hash, Suite};
 use kutup_federation_proto::FederationFeature;
 use serde_json::Value;
-use sha2::{Digest, Sha256};
 use time::OffsetDateTime;
 
 use super::{
@@ -128,7 +128,7 @@ pub(crate) async fn federated_submit_anonymous_message(
             )
         }
     };
-    let transaction_digest = hex::encode(Sha256::digest(&body));
+    let transaction_digest = hex::encode(hash(Suite::V1, &body));
     let now = OffsetDateTime::now_utc();
     let mut tx = state.pool.begin().await?;
     sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1, 693071))")

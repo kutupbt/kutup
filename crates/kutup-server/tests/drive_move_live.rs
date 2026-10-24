@@ -15,7 +15,6 @@ use kutup_crypto::collection_keyring;
 use kutup_crypto::drive_envelope::{self, DriveEnvelopeContextV1, DriveEnvelopePurpose};
 use kutup_crypto::drive_object::{self, DriveFileBlobContextV1};
 use kutup_crypto::file_keyring::{self, FileKeyLinkV1};
-use rand::RngCore;
 use reqwest::blocking::Client;
 use reqwest::StatusCode;
 use serde_json::{json, Value};
@@ -260,7 +259,7 @@ fn drive_move_contract() {
     .json()
     .unwrap();
     let mut a2 = [0u8; 32];
-    rand::thread_rng().fill_bytes(&mut a2);
+    kutup_crypto::primitives::random(&mut a2);
     let statement = CollectionEpochStatementV1::create(
         &a.id,
         &owner.id,
@@ -321,7 +320,7 @@ fn drive_move_contract() {
 
     // Re-key: generation 2 at epoch 2, sealing generation 1.
     let mut second_key2 = [0u8; 32];
-    rand::thread_rng().fill_bytes(&mut second_key2);
+    kutup_crypto::primitives::random(&mut second_key2);
     let r = bearer(
         c.post(format!("{base}/api/files/{}/rekey", second.id)),
         &owner.token,

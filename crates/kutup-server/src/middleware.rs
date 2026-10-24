@@ -73,19 +73,15 @@ static SESSION_VERSION_KEY: tokio::sync::OnceCell<[u8; 32]> = tokio::sync::OnceC
 /// nothing else to anyone who sees headers: not the password hash, not
 /// which of 2FA or role changed, and nothing linkable across servers.
 async fn session_version(state: &AppState, digest: &str) -> Result<String, AppError> {
-    use hmac::{Hmac, Mac};
-    let key = SESSION_VERSION_KEY
+    use kutup_crypto::primitives::{mac, subkey, Suite};
+    let key: &[u8; 32] = SESSION_VERSION_KEY
         .get_or_try_init(|| async {
             let root = crate::handlers::auth::fake_accounts_key(state).await?;
-            let mut mac =
-                <Hmac<sha2::Sha256> as Mac>::new_from_slice(&root).expect("any key length");
-            mac.update(b"kutup/session-version/v1\0");
-            Ok::<_, AppError>(mac.finalize().into_bytes().into())
+            Ok::<_, AppError>(*subkey(Suite::V1, &root, b"kutup/session-version/v1\0"))
         })
         .await?;
-    let mut mac = <Hmac<sha2::Sha256> as Mac>::new_from_slice(key).expect("any key length");
-    mac.update(digest.as_bytes());
-    Ok(hex::encode(&mac.finalize().into_bytes()[..8]))
+    let tag = mac(Suite::V1, key, &[digest.as_bytes()]);
+    Ok(hex::encode(&tag.as_bytes()[..8]))
 }
 
 /// Where an authenticated request leaves its account's session version for

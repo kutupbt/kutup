@@ -28,13 +28,12 @@
 //! Names that are no account get the same lockout and a ceiling keyed on the
 //! canonical name, so a 429 tells nothing about whether one exists.
 
+use kutup_crypto::primitives::{ct_eq, hash, mac, subkey, Suite};
 use std::net::SocketAddr;
 
 use axum::http::HeaderMap;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use base64::Engine;
-use hmac::{Hmac, Mac};
-use sha2::Digest;
 use uuid::Uuid;
 
 use crate::error::{AppError, AppResult};
@@ -126,7 +125,7 @@ impl Client {
 /// What a known-client mark is bound to besides the account: its current
 /// OPAQUE record, so a new password (or a recovery) retires every mark.
 pub(crate) fn credential_epoch(opaque_record: &[u8]) -> [u8; 16] {
-    let digest = sha2::Sha256::digest(opaque_record);
+    let digest = hash(Suite::V1, opaque_record);
     let mut epoch = [0u8; 16];
     epoch.copy_from_slice(&digest[..16]);
     epoch
@@ -250,10 +249,7 @@ async fn known_client_key(state: &AppState) -> AppResult<[u8; 32]> {
     KNOWN_CLIENT_KEY
         .get_or_try_init(|| async {
             let root = crate::handlers::auth::fake_accounts_key(state).await?;
-            let mut mac =
-                <Hmac<sha2::Sha256> as Mac>::new_from_slice(&root).expect("any key length");
-            mac.update(b"kutup/known-client/v1\0");
-            Ok::<_, AppError>(mac.finalize().into_bytes().into())
+            Ok::<_, AppError>(*subkey(Suite::V1, &root, b"kutup/known-client/v1\0"))
         })
         .await
         .copied()
@@ -287,7 +283,7 @@ impl KnownClient {
             None => false,
         };
         fresh
-            && subtle_eq(
+            && ct_eq(
                 &known_client_tag(key, self.user_id, self.issued_at, epoch),
                 &self.tag,
             )
@@ -295,13 +291,14 @@ impl KnownClient {
 }
 
 fn known_client_tag(key: &[u8; 32], user_id: Uuid, issued_at: i64, epoch: &[u8]) -> [u8; 16] {
-    let mut mac = <Hmac<sha2::Sha256> as Mac>::new_from_slice(key).expect("any key length");
-    mac.update(user_id.as_bytes());
-    mac.update(&issued_at.to_be_bytes());
-    mac.update(epoch);
-    let mut tag = [0u8; 16];
-    tag.copy_from_slice(&mac.finalize().into_bytes()[..16]);
-    tag
+    let tag = mac(
+        Suite::V1,
+        key,
+        &[user_id.as_bytes(), &issued_at.to_be_bytes(), epoch],
+    );
+    tag.as_bytes()[..16]
+        .try_into()
+        .expect("16 of the tag's bytes")
 }
 
 fn seal_known_client(key: &[u8; 32], user_id: Uuid, issued_at: i64, epoch: &[u8]) -> String {
@@ -310,10 +307,6 @@ fn seal_known_client(key: &[u8; 32], user_id: Uuid, issued_at: i64, epoch: &[u8]
     bytes.extend_from_slice(&issued_at.to_be_bytes());
     bytes.extend_from_slice(&known_client_tag(key, user_id, issued_at, epoch));
     URL_SAFE_NO_PAD.encode(bytes)
-}
-
-fn subtle_eq(a: &[u8], b: &[u8]) -> bool {
-    a.len() == b.len() && a.iter().zip(b).fold(0u8, |acc, (x, y)| acc | (x ^ y)) == 0
 }
 
 /// The `Set-Cookie` value marking this client as one `user_id` signed in

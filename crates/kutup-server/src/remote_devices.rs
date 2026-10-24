@@ -14,8 +14,8 @@
 use base64::{engine::general_purpose::STANDARD, Engine as _};
 use kutup_crypto::device_registration::{self, DeviceStatement, PURPOSE_COLLAB_FRAMES};
 use kutup_crypto::envelope::{self, Frame};
+use kutup_crypto::primitives::{hash, Suite};
 use serde::{Deserialize, Serialize};
-use sha2::{Digest, Sha256};
 use time::OffsetDateTime;
 
 use crate::error::{AppError, AppResult};
@@ -91,7 +91,7 @@ fn key32(value: &str) -> Option<[u8; 32]> {
 }
 
 fn key_hash(key: &[u8; 32]) -> Vec<u8> {
-    Sha256::digest(key).to_vec()
+    hash(Suite::V1, key).to_vec()
 }
 
 /// Takes in an announce for the share's recipient (`incarnation`, and the
@@ -525,9 +525,12 @@ mod tests {
         key_seed: u8,
         issued_at_ms: i64,
     ) -> AnnouncedDevice {
-        let key = ed25519_dalek::SigningKey::from_bytes(&[key_seed; 32])
-            .verifying_key()
-            .to_bytes();
+        let key = kutup_crypto::primitives::SigningKey::from_seed(
+            kutup_crypto::primitives::Suite::V1,
+            &[key_seed; 32],
+        )
+        .verifying_key()
+        .to_array::<32>();
         let challenge = [id as u8; 32];
         let user = "33333333-3333-4333-8333-333333333333";
         let statement = DeviceStatement {
@@ -550,9 +553,12 @@ mod tests {
     }
 
     fn revocation(who: &AccountIdentityKeysV1, key_seed: u8, at: i64) -> AnnouncedRevocation {
-        let key = ed25519_dalek::SigningKey::from_bytes(&[key_seed; 32])
-            .verifying_key()
-            .to_bytes();
+        let key = kutup_crypto::primitives::SigningKey::from_seed(
+            kutup_crypto::primitives::Suite::V1,
+            &[key_seed; 32],
+        )
+        .verifying_key()
+        .to_array::<32>();
         // The bridge's order: one sequence for the tests, as for a server.
         static SEQ: std::sync::atomic::AtomicI64 = std::sync::atomic::AtomicI64::new(1);
         AnnouncedRevocation {
@@ -602,9 +608,12 @@ mod tests {
         let mut foreign = device(&mallory, 2, 2, now);
         let mut elsewhere = device(&alice, 3, 3, now);
         elsewhere.signature = {
-            let key = ed25519_dalek::SigningKey::from_bytes(&[3; 32])
-                .verifying_key()
-                .to_bytes();
+            let key = kutup_crypto::primitives::SigningKey::from_seed(
+                kutup_crypto::primitives::Suite::V1,
+                &[3; 32],
+            )
+            .verifying_key()
+            .to_array::<32>();
             let challenge = [3u8; 32];
             device_registration::sign(
                 &alice,
@@ -845,9 +854,12 @@ mod tests {
         .unwrap();
         let now = now_ms();
         for i in 0..65_i64 {
-            let key = ed25519_dalek::SigningKey::from_bytes(&[130 + i as u8; 32])
-                .verifying_key()
-                .to_bytes();
+            let key = kutup_crypto::primitives::SigningKey::from_seed(
+                kutup_crypto::primitives::Suite::V1,
+                &[130 + i as u8; 32],
+            )
+            .verifying_key()
+            .to_array::<32>();
             // Clients' clocks: every third from a laptop two hours fast, the
             // rest from one that agrees, all in the same millisecond. The
             // fast ones come first: a mark by time would skip the rest.
@@ -965,9 +977,12 @@ mod tests {
         // Another server "revoking" the same key under its own account
         // blocks nothing here.
         let mallory = identity(72);
-        let key = ed25519_dalek::SigningKey::from_bytes(&[241; 32])
-            .verifying_key()
-            .to_bytes();
+        let key = kutup_crypto::primitives::SigningKey::from_seed(
+            kutup_crypto::primitives::Suite::V1,
+            &[241; 32],
+        )
+        .verifying_key()
+        .to_array::<32>();
         let at = now;
         let forged = AnnouncedRevocation {
             seq: 1,
@@ -1037,9 +1052,12 @@ mod tests {
         let now = now_ms();
         let mut ids = Vec::new();
         for seed in [196u8, 197] {
-            let key = ed25519_dalek::SigningKey::from_bytes(&[seed; 32])
-                .verifying_key()
-                .to_bytes();
+            let key = kutup_crypto::primitives::SigningKey::from_seed(
+                kutup_crypto::primitives::Suite::V1,
+                &[seed; 32],
+            )
+            .verifying_key()
+            .to_array::<32>();
             let id: i64 = sqlx::query_scalar(
                 "INSERT INTO user_devices (user_id, public_signing, incarnation_id, registration_challenge,
                     registration_issued_at_ms, registration_signature)

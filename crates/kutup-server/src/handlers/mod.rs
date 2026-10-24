@@ -77,9 +77,8 @@ use crate::error::{AppError, AppResult};
 /// A random URL-safe token (base64, no padding) — mirrors `utils.RandomToken`.
 pub(crate) fn random_token(byte_len: usize) -> String {
     use base64::Engine;
-    use rand::RngCore;
     let mut b = vec![0u8; byte_len];
-    rand::thread_rng().fill_bytes(&mut b);
+    kutup_crypto::primitives::random(&mut b);
     base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(b)
 }
 

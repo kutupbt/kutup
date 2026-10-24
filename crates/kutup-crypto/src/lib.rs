@@ -71,7 +71,6 @@ pub mod error;
 pub mod file_keyring;
 pub mod file_metadata;
 // The HPKE suite's backend (hpke-rs, X-Wing), which primitives::hpke calls.
-#[allow(clippy::disallowed_types, clippy::disallowed_methods)]
 pub mod hpke_xwing;
 pub mod identity;
 pub mod identity_pins;
@@ -86,7 +85,6 @@ pub mod mail_forwarding;
 pub mod mail_group;
 #[cfg(feature = "mail")]
 // Adapter (docs/plans/crypto-primitives.md): OpenPGP (RFC 9580, rPGP) names its own algorithms.
-#[allow(clippy::disallowed_types, clippy::disallowed_methods)]
 pub mod mail_key;
 pub mod mail_names;
 pub mod mail_search;
@@ -95,31 +93,25 @@ pub mod mnemonic;
 pub mod named_share;
 pub mod names;
 // Adapter: Oblivious HTTP (RFC 9458) on the HPKE suite, with its own response AEAD.
-#[allow(clippy::disallowed_types, clippy::disallowed_methods)]
 pub mod oblivious;
 // Adapter: OPAQUE (RFC 9807, opaque-ke) and its ciphersuite.
-#[allow(clippy::disallowed_types, clippy::disallowed_methods)]
 pub mod opaque;
 pub mod opaque_login_state;
 pub mod padding;
-// The one module that names algorithms (docs/plans/crypto-primitives.md).
 // Adapter: KeePass KDBX's composite key.
-#[allow(clippy::disallowed_types, clippy::disallowed_methods)]
 pub mod pass_vault;
 pub mod photos_library;
+// The one module that names algorithms (docs/plans/crypto-primitives.md).
 #[allow(clippy::disallowed_types, clippy::disallowed_methods)]
 pub mod primitives;
 pub mod profile_key_share;
 // Adapter: Signal's ProvisioningCipher (AES-256-CBC + HMAC-SHA256).
-#[allow(clippy::disallowed_types, clippy::disallowed_methods)]
 pub mod provisioning;
 pub mod revision_guard;
 // Adapter: Signal's safety number (iterated SHA-512).
-#[allow(clippy::disallowed_types, clippy::disallowed_methods)]
 pub mod safety_number;
 // Legacy: libsodium's secretstream, until the block format replaces it
 // (docs/plans/drive-block-format.md).
-#[allow(clippy::disallowed_types, clippy::disallowed_methods)]
 pub mod stream;
 pub mod thumbnail;
 pub mod yjs_seed;

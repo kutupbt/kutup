@@ -19,9 +19,8 @@ use axum::http::{HeaderMap, StatusCode};
 use axum::Json;
 use base64::engine::general_purpose::STANDARD;
 use base64::Engine as _;
-use rand::RngCore as _;
+use kutup_crypto::primitives::{hash, Suite};
 use serde::{Deserialize, Serialize};
-use sha2::{Digest as _, Sha256};
 use time::OffsetDateTime;
 use uuid::Uuid;
 
@@ -229,8 +228,8 @@ pub(crate) async fn knock(
     }
     let account = vouched_account(&state, &headers).await;
     let mut ticket = [0u8; 32];
-    rand::thread_rng().fill_bytes(&mut ticket);
-    let ticket_hash: [u8; 32] = Sha256::digest(ticket).into();
+    kutup_crypto::primitives::random(&mut ticket);
+    let ticket_hash: [u8; 32] = hash(Suite::V1, ticket).into();
 
     let mut tx = state.pool.begin().await?;
     // One meeting's knocks in turn, so the count below holds.
@@ -302,7 +301,7 @@ pub(crate) async fn leave_knock(
     State(state): State<AppState>,
     Json(request): Json<KnockStatusRequest>,
 ) -> AppResult<StatusCode> {
-    let presented: [u8; 32] = Sha256::digest(base64_exact("ticket", &request.ticket, 32)?).into();
+    let presented: [u8; 32] = hash(Suite::V1, base64_exact("ticket", &request.ticket, 32)?).into();
     admitted(&state, &request.room_id, &request.access_token).await?;
     let stored: Option<Vec<u8>> = sqlx::query_scalar(
         "SELECT ticket_hash FROM chat_call_link_knocks WHERE id = $1 AND room_id = $2",
@@ -349,7 +348,7 @@ pub(crate) async fn knock_status(
     Json(request): Json<KnockStatusRequest>,
 ) -> AppResult<Json<KnockStatusResponse>> {
     require_sfu(&state)?;
-    let presented: [u8; 32] = Sha256::digest(base64_exact("ticket", &request.ticket, 32)?).into();
+    let presented: [u8; 32] = hash(Suite::V1, base64_exact("ticket", &request.ticket, 32)?).into();
     let meeting = admitted(&state, &request.room_id, &request.access_token).await?;
     // ticket_hash, status, participant_id, label, seat_hash, account_id
     type Row = (Vec<u8>, i16, String, Vec<u8>, Vec<u8>, Option<Uuid>);

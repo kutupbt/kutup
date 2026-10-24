@@ -4,6 +4,7 @@
 //! authenticated HTTP. This feature adapter owns the remote Chat directory,
 //! encrypted-profile boundary, and durable in-order ciphertext delivery.
 
+use kutup_crypto::primitives::{hash, Suite};
 use std::time::Duration;
 
 use axum::body::Bytes;
@@ -21,10 +22,8 @@ use kutup_chat_proto::{
     SealedDeliveryResponseV1, SealedMessageSubmissionV1, SendMessagesRequest,
     MAX_SEALED_BATCH_BYTES, MAX_SEALED_BATCH_ITEMS,
 };
-use rand::Rng as _;
 use reqwest::Method;
 use serde_json::Value;
-use sha2::{Digest as _, Sha256};
 use time::format_description::well_known::Rfc3339;
 use time::OffsetDateTime;
 use uuid::Uuid;
@@ -1736,7 +1735,7 @@ async fn attempt_outbox(state: &AppState, id: Uuid) -> AppResult<FederatedSendOu
 }
 
 fn delivery_request_id(transaction_id: Uuid, body: &[u8]) -> String {
-    format!("{transaction_id}.{}", hex::encode(Sha256::digest(body)))
+    format!("{transaction_id}.{}", hex::encode(hash(Suite::V1, body)))
 }
 
 async fn flush_due(state: &AppState) -> AppResult<usize> {
@@ -1814,7 +1813,7 @@ async fn park_for_upgrade(
 async fn mark_retry(state: &AppState, row: &FederationOutboxRow, error: &str) -> AppResult<()> {
     let attempt = row.attempts.saturating_add(1).clamp(1, 30);
     let exponential_seconds = 1_i64 << attempt.min(8);
-    let jitter_ms = rand::thread_rng().gen_range(0_i64..=1000);
+    let jitter_ms = kutup_crypto::primitives::random_below(1001) as i64;
     let delay_ms = exponential_seconds.min(300) * 1000 + jitter_ms;
     let error: String = error.chars().take(500).collect();
     sqlx::query(
@@ -2921,7 +2920,8 @@ async fn charge_sealed_origin(
     tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
     origin: &str,
 ) -> AppResult<()> {
-    let origin_digest: [u8; 32] = sha2::Sha256::digest(
+    let origin_digest: [u8; 32] = hash(
+        Suite::V1,
         [
             b"kutup/sealed-origin-rate/v1\0".as_slice(),
             origin.as_bytes(),

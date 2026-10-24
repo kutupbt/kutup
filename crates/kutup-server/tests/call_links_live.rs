@@ -10,15 +10,14 @@ mod common;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use base64::Engine as _;
 use common::*;
-use rand::RngCore;
+use kutup_crypto::primitives::{hash, Suite};
 use reqwest::blocking::Client;
 use reqwest::StatusCode;
 use serde_json::{json, Value};
-use sha2::{Digest, Sha256};
 
 fn random<const N: usize>() -> [u8; N] {
     let mut bytes = [0u8; N];
-    rand::thread_rng().fill_bytes(&mut bytes);
+    kutup_crypto::primitives::random(&mut bytes);
     bytes
 }
 
@@ -45,9 +44,9 @@ fn create_link(c: &Client, base: &str, owner: &User, waiting_room: bool) -> Link
         .json(&json!({
             "roomId": link.room_id,
             "nonce": hex(&random::<16>()),
-            "accessTokenHash": b64(&Sha256::digest(access)),
+            "accessTokenHash": b64(&hash(Suite::V1, access)),
             "info": b64(&[7u8; 552]),
-            "hostTokenHash": b64(&Sha256::digest(host)),
+            "hostTokenHash": b64(&hash(Suite::V1, host)),
             "waitingRoom": waiting_room,
         }))
         .send()
@@ -64,7 +63,10 @@ fn shown_name(token: &str) -> Option<String> {
 }
 
 fn renamed(c: &Client, base: &str, user: &mut User) -> String {
-    let to = format!("meet_{}", rand::thread_rng().next_u32() % 1_000_000_000);
+    let to = format!(
+        "meet_{}",
+        kutup_crypto::primitives::random_below(1_000_000_000)
+    );
     let check: Value = bearer(
         c.get(format!("{base}/api/user/rename/check?name={to}")),
         &user.token,

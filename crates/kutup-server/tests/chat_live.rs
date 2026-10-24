@@ -25,10 +25,9 @@ use kutup_chat_proto::{
     ReconcileChatBackupMediaRequestV1, StageChatBackupBaseRequestV1,
     UploadChatBackupMediaRequestV1, CHAT_DEVICE_HEADER,
 };
-use kutup_crypto::primitives::{SigningKey, Suite};
+use kutup_crypto::primitives::{hash, SigningKey, Suite};
 use reqwest::{blocking::Client, StatusCode};
 use serde_json::{json, Value};
-use sha2::{Digest, Sha256};
 use uuid::Uuid;
 
 fn b64(b: &[u8]) -> String {
@@ -93,7 +92,7 @@ fn register_chat_device(c: &Client, base: &str, chat: &mut ChatAccount) -> ChatD
     let probe = ChatDevice {
         id: 1,
         registration_id: 7,
-        credential: rand::random(),
+        credential: kutup_crypto::primitives::random_array(),
     };
     let mut unsupported_body = serde_json::to_value(chat.registration(
         probe.registration_id,
@@ -277,7 +276,7 @@ fn chat_backup_lifecycle(
         account_incarnation_id: identity.incarnation_id(),
         suite: ChatBackupSuiteId::HkdfSha256XChaCha20Poly1305V1,
         protection_domain: ChatBackupProtectionDomainV1::StandardChat,
-        manifest_signing_public_key: b64(&signer.verifying_key().to_bytes()),
+        manifest_signing_public_key: b64(&signer.verifying_key().to_array::<32>()),
         account_authority_key_id: identity.authority_key_id(),
         created_at_unix: time::OffsetDateTime::now_utc().unix_timestamp(),
         account_authority_signature: String::new(),
@@ -351,7 +350,7 @@ fn chat_backup_lifecycle(
         previous_segment_digest: "00".repeat(32),
         account_manifest_sequence: manifest_sequence,
         ciphertext_bytes: ciphertext.len() as u32,
-        ciphertext_sha256: hex::encode(Sha256::digest(&ciphertext)),
+        ciphertext_sha256: hex::encode(hash(Suite::V1, &ciphertext)),
         ciphertext: b64(&ciphertext),
     };
     let receipt: Value = owner
@@ -459,7 +458,7 @@ fn chat_backup_lifecycle(
                 previous_segment_digest: previous_digest.clone(),
                 account_manifest_sequence: manifest_sequence,
                 ciphertext_bytes: ciphertext.len() as u32,
-                ciphertext_sha256: hex::encode(Sha256::digest(&ciphertext)),
+                ciphertext_sha256: hex::encode(hash(Suite::V1, &ciphertext)),
                 ciphertext: b64(&ciphertext),
             }
         };
@@ -510,7 +509,7 @@ fn chat_backup_lifecycle(
     // upload fallback. This exercises typed framing, deterministic padding,
     // exact replay, changed-content conflict, lazy download, and isolation.
     let source_media = b"already encrypted Chat attachment ciphertext";
-    let media_id_bytes: [u8; 32] = Sha256::digest(source_media).into();
+    let media_id_bytes: [u8; 32] = hash(Suite::V1, source_media).into();
     let media_id = hex::encode(media_id_bytes);
     let media_reference_id = Uuid::new_v4();
     let media_header = chat_backup_media::build_media_header(
@@ -545,7 +544,7 @@ fn chat_backup_lifecycle(
         reference_id: media_reference_id.to_string(),
         source_ciphertext_bytes: source_media.len() as u64,
         ciphertext_bytes: media_ciphertext.len() as u64,
-        ciphertext_sha256: hex::encode(Sha256::digest(&media_ciphertext)),
+        ciphertext_sha256: hex::encode(hash(Suite::V1, &media_ciphertext)),
     };
     let upload_media = |metadata: &UploadChatBackupMediaRequestV1,
                         ciphertext: Vec<u8>,
@@ -631,7 +630,7 @@ fn chat_backup_lifecycle(
         generation: 1,
         covered_cursor: 21,
         ciphertext_bytes: base_ciphertext.len() as u64,
-        ciphertext_sha256: hex::encode(Sha256::digest(&base_ciphertext)),
+        ciphertext_sha256: hex::encode(hash(Suite::V1, &base_ciphertext)),
     };
     let stage = |metadata: &StageChatBackupBaseRequestV1, ciphertext: Vec<u8>| {
         let form = reqwest::blocking::multipart::Form::new()
@@ -880,7 +879,7 @@ fn chat_backup_lifecycle(
                 previous_segment_digest: head_digest.clone(),
                 account_manifest_sequence: manifest_sequence,
                 ciphertext_bytes: ciphertext.len() as u32,
-                ciphertext_sha256: hex::encode(Sha256::digest(&ciphertext)),
+                ciphertext_sha256: hex::encode(hash(Suite::V1, &ciphertext)),
                 ciphertext: b64(&ciphertext),
             };
             let response = owner
@@ -961,7 +960,7 @@ fn chat_backup_lifecycle(
             generation: 2,
             covered_cursor: cursor,
             ciphertext_bytes: second_base.len() as u64,
-            ciphertext_sha256: hex::encode(Sha256::digest(&second_base)),
+            ciphertext_sha256: hex::encode(hash(Suite::V1, &second_base)),
         };
         assert_eq!(
             stage(&second_metadata, second_base.clone()).status(),
@@ -1188,8 +1187,8 @@ fn chat_v1_contract() {
         "sourceDeviceId": dev_a.id,
         "name": opaque_profile_envelope(&account_a, &profile_v1_version, 1, dev_a.id, ProfileEnvelopePurpose::DisplayName, 53 + 16, 31),
         "wrappedKey": opaque_profile_envelope(&account_a, &profile_v1_version, 1, dev_a.id, ProfileEnvelopePurpose::WrappedProfileKey, 32 + 16, 41),
-        "accessKeyVerifier": hex::encode(Sha256::digest(access_v1)),
-        "deliveryCapabilityVerifier": hex::encode(Sha256::digest(delivery_v1)),
+        "accessKeyVerifier": hex::encode(hash(Suite::V1, access_v1)),
+        "deliveryCapabilityVerifier": hex::encode(hash(Suite::V1, delivery_v1)),
     });
     let put = dev_a
         .auth(c.put(format!("{base}/api/chat/profile")))
@@ -1240,8 +1239,8 @@ fn chat_v1_contract() {
         "sourceDeviceId": dev_a.id,
         "name": opaque_profile_envelope(&account_a, &profile_v2_version, 2, dev_a.id, ProfileEnvelopePurpose::DisplayName, 53 + 16, 32),
         "wrappedKey": opaque_profile_envelope(&account_a, &profile_v2_version, 2, dev_a.id, ProfileEnvelopePurpose::WrappedProfileKey, 32 + 16, 42),
-        "accessKeyVerifier": hex::encode(Sha256::digest(access_v2)),
-        "deliveryCapabilityVerifier": hex::encode(Sha256::digest(delivery_v2)),
+        "accessKeyVerifier": hex::encode(hash(Suite::V1, access_v2)),
+        "deliveryCapabilityVerifier": hex::encode(hash(Suite::V1, delivery_v2)),
     });
     let rotated = dev_a
         .auth(c.put(format!("{base}/api/chat/profile")))

@@ -14,9 +14,15 @@
 //! can't tell operations apart by length.
 
 use chacha20poly1305::aead::{Aead, KeyInit, Payload};
+// Adapter: RFC 9458's response AEAD.
+#[allow(clippy::disallowed_types)]
 use chacha20poly1305::{ChaCha20Poly1305, Key, Nonce};
+// Adapter: RFC 9458's response key derivation.
+#[allow(clippy::disallowed_types)]
 use hkdf::Hkdf;
 use hpke_rs::{HpkePrivateKey, HpkePublicKey};
+// Adapter: RFC 9458's response key derivation.
+#[allow(clippy::disallowed_types)]
 use sha2::Sha256;
 use zeroize::Zeroizing;
 
@@ -54,6 +60,8 @@ pub const MAX_BODY: usize = SIZES[SIZES.len() - 1] - 1;
 /// size and the tag); an answer (response nonce, size, tag) is smaller.
 pub const MAX_SEALED: usize = HEADER_LEN + ENC_LEN + SIZES[SIZES.len() - 1] + TAG_LEN;
 
+// Adapter: RFC 9458 drives HPKE's context API.
+#[allow(clippy::disallowed_types)]
 fn hpke_suite() -> hpke_rs::Hpke<hpke_rs_rust_crypto::HpkeRustCrypto> {
     crate::hpke_xwing::suite()
 }
@@ -238,6 +246,8 @@ struct ExchangeSecret {
 impl ExchangeSecret {
     /// RFC 9458 §4.4: the response key and nonce from the exported secret,
     /// salted with the request's `enc` and the response nonce.
+    // Adapter: RFC 9458 §4.4, fixed by the RFC.
+    #[allow(clippy::disallowed_types)]
     fn aead(&self, response_nonce: &[u8]) -> Result<(ChaCha20Poly1305, Nonce)> {
         let mut salt = Vec::with_capacity(self.enc.len() + response_nonce.len());
         salt.extend_from_slice(&self.enc);

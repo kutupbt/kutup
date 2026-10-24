@@ -124,7 +124,7 @@ fn a_first_device_reregisters_and_a_second_links() {
             }])),
         },
     );
-    let other = IdentityKeyPair::generate(&mut rand09::rng());
+    let other = IdentityKeyPair::generate(&mut kutup_crypto::primitives::Rng);
     forged.signed_pre_key = device_keys(&other).0;
     let (status, answer) = code(ada.post_registration(&c, &base, &forged));
     assert_eq!(status, StatusCode::BAD_REQUEST, "{answer}");
@@ -204,7 +204,7 @@ fn a_first_device_reregisters_and_a_second_links() {
 
     // A manifest naming another identity: only a distribution changes it.
     let mut stray = ChatAccount {
-        identity: IdentityKeyPair::generate(&mut rand09::rng()),
+        identity: IdentityKeyPair::generate(&mut kutup_crypto::primitives::Rng),
         account: ada.account.clone(),
         token: ada.token.clone(),
         authority: ada.authority.clone(),
@@ -256,7 +256,7 @@ fn keys_check_agrees_with_what_was_uploaded() {
         .unwrap();
     assert_eq!(r.status(), StatusCode::NO_CONTENT);
     // A replenished key under another identity: refused.
-    let other = IdentityKeyPair::generate(&mut rand09::rng());
+    let other = IdentityKeyPair::generate(&mut kutup_crypto::primitives::Rng);
     let (foreign, _, _, _) = device_keys(&other);
     let (status, answer) = code(
         first
@@ -341,7 +341,7 @@ fn a_distribution_gives_the_kept_devices_a_new_identity() {
         bob.reregister(&c, &base);
         bob
     };
-    let new_identity = IdentityKeyPair::generate(&mut rand09::rng());
+    let new_identity = IdentityKeyPair::generate(&mut kutup_crypto::primitives::Rng);
     let put = |request: &AccountIdentityDistributionRequest| {
         first
             .auth(c.put(format!("{base}/api/chat/account-identity")))
@@ -441,13 +441,13 @@ fn a_manifest_without_its_identitys_binding_is_refused() {
         credential,
     };
     let mut forged = ada.next_manifest(&[&device]);
-    let other = IdentityKeyPair::generate(&mut rand09::rng());
+    let other = IdentityKeyPair::generate(&mut kutup_crypto::primitives::Rng);
     forged.identity_binding = STANDARD.encode(
         other
             .private_key()
             .calculate_signature(
                 &forged.identity_binding_bytes().unwrap(),
-                &mut rand09::rng(),
+                &mut kutup_crypto::primitives::Rng,
             )
             .unwrap(),
     );
@@ -489,7 +489,7 @@ fn a_reregistration_drops_every_other_device() {
     let first = ada.reregister(&c, &base);
     let second = ada.link(&c, &base, &first);
     // Every device lost: a new device takes a new identity as device 1.
-    ada.identity = IdentityKeyPair::generate(&mut rand09::rng());
+    ada.identity = IdentityKeyPair::generate(&mut kutup_crypto::primitives::Rng);
     let again = ada.reregister(&c, &base);
     assert_eq!(again.id, 1);
     for gone in [&first, &second] {
@@ -536,7 +536,7 @@ fn a_provisioning_message_reaches_the_new_device_once() {
     );
     let envelope = ProvisionEnvelopeV1 {
         public_key: STANDARD.encode(
-            libsignal_protocol::KeyPair::generate(&mut rand09::rng())
+            libsignal_protocol::KeyPair::generate(&mut kutup_crypto::primitives::Rng)
                 .public_key
                 .serialize(),
         ),
@@ -727,7 +727,7 @@ fn replays_of_identity_changes_change_nothing() {
     let mut ada = account(&c, &base);
     let first = ada.reregister(&c, &base);
     let second = ada.link(&c, &base, &first);
-    let new_identity = IdentityKeyPair::generate(&mut rand09::rng());
+    let new_identity = IdentityKeyPair::generate(&mut kutup_crypto::primitives::Rng);
     let (request, _) = distribution(
         &ada,
         &new_identity,
@@ -814,7 +814,7 @@ fn racing_distributions_apply_once() {
     let second = ada.link(&c, &base, &first);
     let requests: Vec<AccountIdentityDistributionRequest> = (0..2)
         .map(|n| {
-            let identity = IdentityKeyPair::generate(&mut rand09::rng());
+            let identity = IdentityKeyPair::generate(&mut kutup_crypto::primitives::Rng);
             distribution(
                 &ada,
                 &identity,

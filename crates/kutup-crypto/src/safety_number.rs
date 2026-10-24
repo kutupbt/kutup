@@ -21,6 +21,8 @@
 
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use base64::Engine as _;
+// Adapter: Signal's safety number (iterated SHA-512).
+#[allow(clippy::disallowed_types)]
 use sha2::{Digest as _, Sha512};
 
 use crate::account_ref::AccountRef;
@@ -112,6 +114,8 @@ pub mod signal {
 
     /// One side's half: `SHA-512(0x0000 ‖ key ‖ stable id ‖ key)`, then
     /// `iterations − 1` times `SHA-512(previous ‖ key)`.
+    // Adapter: Signal's safety number (iterated SHA-512).
+    #[allow(clippy::disallowed_types)]
     pub fn half(iterations: u32, stable_id: &[u8], key: &[u8]) -> Result<[u8; 64]> {
         if iterations <= 1 || iterations > 1_000_000 {
             return Err(CryptoError::InvalidInput(

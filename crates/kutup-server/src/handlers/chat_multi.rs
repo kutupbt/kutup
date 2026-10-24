@@ -8,6 +8,7 @@
 //! It never learns the sender. What it learns is that these of its accounts
 //! share one send (as Signal's server does).
 
+use kutup_crypto::primitives::{hash, Suite};
 use std::collections::BTreeMap;
 
 use axum::extract::{ConnectInfo, Query, State};
@@ -21,7 +22,6 @@ use kutup_chat_proto::{
     SealedMultiResponseV1, SealedMultiStaleV1, SealedMultiSubmissionV1,
 };
 use libsignal_protocol::{SealedSenderV2SentMessage, ServiceId};
-use sha2::{Digest as _, Sha256};
 use uuid::Uuid;
 
 use crate::chat_hub::ChatWsOut;
@@ -223,9 +223,11 @@ pub async fn send_multi(
     // anonymous route's per-address limit), charged whatever the answer.
     let address =
         crate::middleware::client_key(crate::middleware::client_ip_from_headers(&headers), peer);
-    let address_digest: [u8; 32] =
-        Sha256::digest([b"kutup/multi-ip-bytes/v1\0".as_slice(), address.as_bytes()].concat())
-            .into();
+    let address_digest: [u8; 32] = hash(
+        Suite::V1,
+        [b"kutup/multi-ip-bytes/v1\0".as_slice(), address.as_bytes()].concat(),
+    )
+    .into();
     let bytes = i64::try_from(submission.payload.len()).unwrap_or(i64::MAX);
     if charge(&state, "ip_bytes", &address_digest, bytes, 60).await? > limits.ip_bytes_per_min {
         crate::telemetry::rate_limit_rejection("anonymous_ip");
@@ -532,7 +534,8 @@ pub async fn deliver_federated(
     // The origin's budgets, before anything is checked: a malformed or too
     // large send counts as well.
     let limits = crate::site_settings::chat_multi_limits(&state.pool).await?;
-    let origin: [u8; 32] = Sha256::digest(
+    let origin: [u8; 32] = hash(
+        Suite::V1,
         [
             b"kutup/multi-origin/v1\0".as_slice(),
             authenticated.origin().as_bytes(),

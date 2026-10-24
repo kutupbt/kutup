@@ -1,8 +1,8 @@
+use kutup_crypto::primitives::{Hasher, Suite};
 use kutup_federation_proto::{
     validate_server_name, FederationReplayMetadata, CLOCK_SKEW_SECONDS,
     MAX_SIGNATURE_LIFETIME_SECONDS,
 };
-use sha2::{Digest as _, Sha256};
 use sqlx::{PgPool, Postgres, Transaction};
 use time::{Duration, OffsetDateTime};
 
@@ -135,12 +135,12 @@ async fn lock_reservation(
     origin: &str,
     request_id: &str,
 ) -> Result<(), sqlx::Error> {
-    let mut digest = Sha256::new();
+    let mut digest = Hasher::new(Suite::V1);
     digest.update(b"kutup-federation-replay-v1\0");
     digest.update(origin.as_bytes());
     digest.update([0]);
     digest.update(request_id.as_bytes());
-    let digest = digest.finalize();
+    let digest = digest.finish();
     let key = i64::from_be_bytes(
         digest[..8]
             .try_into()

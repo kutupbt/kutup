@@ -1320,7 +1320,6 @@ mod tests {
     };
     use crate::storage::StorageService;
     use aws_sdk_s3::primitives::ByteStream;
-    use sha2::Digest;
 
     #[test]
     fn key_shape() {
@@ -1534,7 +1533,10 @@ mod tests {
             .bind(attachment_id)
             .bind(user_id)
             .bind(i64::try_from(bytes.len()).unwrap())
-            .bind(hex::encode(sha2::Sha256::digest(bytes)))
+            .bind(hex::encode(kutup_crypto::primitives::hash(
+                kutup_crypto::primitives::Suite::V1,
+                bytes,
+            )))
             .bind(vec![0x51u8; 32])
             .bind(path)
             .bind(cutoff)
@@ -1572,7 +1574,10 @@ mod tests {
         .bind(user_id)
         .bind(&protected_media_id)
         .bind(i64::try_from(protected_bytes.len()).unwrap())
-        .bind(hex::encode(sha2::Sha256::digest(&protected_bytes)))
+        .bind(hex::encode(kutup_crypto::primitives::hash(
+            kutup_crypto::primitives::Suite::V1,
+            &protected_bytes,
+        )))
         .bind(&protected_path)
         .bind(cutoff - time::Duration::DAY)
         .execute(&pool)

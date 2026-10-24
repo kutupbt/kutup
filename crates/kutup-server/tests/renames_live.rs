@@ -10,7 +10,7 @@ mod common;
 
 use common::chat_identity::ChatAccount;
 use common::*;
-use rand::RngCore;
+use kutup_crypto::primitives::{hash, Suite};
 use reqwest::blocking::Client;
 use reqwest::StatusCode;
 use serde_json::{json, Value};
@@ -24,7 +24,10 @@ fn client() -> Client {
 
 /// A fresh name, `prefix` and digits.
 fn name(prefix: &str) -> String {
-    format!("{prefix}{}", rand::thread_rng().next_u32() % 1_000_000_000)
+    format!(
+        "{prefix}{}",
+        kutup_crypto::primitives::random_below(1_000_000_000)
+    )
 }
 
 fn get(c: &Client, base: &str, token: &str, path: &str) -> reqwest::blocking::Response {
@@ -668,7 +671,6 @@ fn profile_envelope(
 #[test]
 fn a_renamed_account_keeps_its_chat_profile() {
     use kutup_chat_proto::ProfileEnvelopePurpose as Purpose;
-    use sha2::Digest as _;
     let Ok(base) = std::env::var("KUTUP_LIVE_SERVER") else {
         eprintln!("KUTUP_LIVE_SERVER not set; skipping");
         return;
@@ -687,8 +689,8 @@ fn a_renamed_account_keeps_its_chat_profile() {
             "sourceDeviceId": device,
             "name": profile_envelope(account, version, revision, device, Purpose::DisplayName, 53 + 16),
             "wrappedKey": profile_envelope(account, version, revision, device, Purpose::WrappedProfileKey, 32 + 16),
-            "accessKeyVerifier": hex::encode(sha2::Sha256::digest(access)),
-            "deliveryCapabilityVerifier": hex::encode(sha2::Sha256::digest([6u8; 16])),
+            "accessKeyVerifier": hex::encode(hash(Suite::V1, access)),
+            "deliveryCapabilityVerifier": hex::encode(hash(Suite::V1, [6u8; 16])),
         })
     };
     let put = |body: Value| {

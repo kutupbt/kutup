@@ -4,6 +4,8 @@
 //! compare-and-swap metadata. Filenames, MIME types, conversations, messages
 //! and attachment keys remain inside Direct/MLS ciphertext and ledger AEAD.
 
+use kutup_crypto::primitives::{hash, Hasher, Suite};
+use kutup_federation_proto::ContentDigest;
 use std::io::ErrorKind;
 
 use axum::body::Bytes;
@@ -24,7 +26,6 @@ use kutup_crypto::chat_media::{
     self, ChatMediaObjectContextV1, ChatMediaSuiteId, CHAT_MEDIA_OBJECT_HEADER_BYTES,
 };
 use serde::{Deserialize, Serialize};
-use sha2::{Digest as _, Sha256};
 use tokio::io::AsyncReadExt as _;
 use utoipa::ToSchema;
 use uuid::Uuid;
@@ -70,10 +71,10 @@ pub(crate) fn unavailable() -> AppError {
 pub(crate) fn delivery_offer_digest(offer: &ChatMediaDeliveryOfferV1) -> AppResult<String> {
     let encoded = serde_json::to_vec(offer)
         .map_err(|error| AppError::internal(format!("encode Chat-media offer: {error}")))?;
-    let mut digest = Sha256::new();
+    let mut digest = Hasher::new(Suite::V1);
     digest.update(b"kutup/chat-media/delivery-offer-digest/v1\0");
     digest.update(encoded);
-    Ok(hex::encode(digest.finalize()))
+    Ok(hex::encode(digest.finish()))
 }
 
 pub(crate) async fn consume_media_rate(
@@ -183,7 +184,7 @@ fn canonical_token_hash(value: &str) -> Option<[u8; 32]> {
     if decoded.len() != 32 || STANDARD.encode(&decoded) != value {
         return None;
     }
-    Some(Sha256::digest(decoded).into())
+    Some(hash(Suite::V1, decoded).into())
 }
 
 fn media_context(attachment_id: Uuid) -> Option<ChatMediaObjectContextV1> {
@@ -207,7 +208,7 @@ async fn hash_stored_object(
         ));
     }
     let mut reader = body.into_async_read();
-    let mut hasher = Sha256::new();
+    let mut hasher = ContentDigest::new();
     let mut read_bytes = 0_i64;
     let mut buffer = vec![0_u8; 1024 * 1024];
     loop {
@@ -232,7 +233,7 @@ async fn hash_stored_object(
             "stored Chat-media is truncated",
         ));
     }
-    Ok(hex::encode(hasher.finalize()))
+    Ok(hex::encode(hasher.finish()))
 }
 
 /// Create a resumable immutable Chat-media upload. Metadata contains only
@@ -760,7 +761,7 @@ pub async fn deliver_local(
         .and_then(|value| value.try_into().ok())
         .ok_or_else(unavailable)?;
     let presented_capability_hash = capability_hash(&capability);
-    let presented_token_hash: [u8; 32] = Sha256::digest(retrieval_token).into();
+    let presented_token_hash: [u8; 32] = hash(Suite::V1, retrieval_token).into();
     let offer_digest = delivery_offer_digest(&offer)?;
 
     let mut transaction = state.pool.begin().await?;
@@ -850,7 +851,8 @@ pub async fn deliver_local(
         crate::ratelimit::Limit::MediaCapabilityDay,
     )
     .await?;
-    let recipient_rate_digest: [u8; 32] = Sha256::digest(
+    let recipient_rate_digest: [u8; 32] = hash(
+        Suite::V1,
         [
             b"kutup/chat-media/recipient-rate/v1\0".as_slice(),
             recipient_user_id.as_bytes(),
