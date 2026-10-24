@@ -89,10 +89,7 @@ everything on one machine:
   --expires-at 4102444800 > policy.json`, then set
   `CHAT_SEALED_SENDER_POLICY` to the compact JSON and
   `CHAT_SEALED_SENDER_ONLINE_PRIVATE_KEY` to the contents of `online.key`;
-- MLS groups: nothing to set. To pin a custom policy, set
-  `CHAT_MLS_CONTROL_SIGNING_KEY` and `CHAT_MLS_ORDERING_POLICY`, e.g. the test
-  pair in `docker-compose.chat-federation.yml` with `canonicalDomain` changed
-  to your name.
+- groups: `CHAT_GROUPS=true`, with federation and sealed sender on.
 
 JSON values need single quotes when the file is sourced by a shell.
 `GET /api/auth/settings` → `chat` shows what is advertised.
@@ -339,7 +336,7 @@ kutup/
 │   ├── kutup-pass/          # Kutup Pass core: KeePass (KDBX) vaults, their edits and three-way merge
 │   │   └── vendor/keepass/  # Patched copy of the `keepass` crate (see its KUTUP.md)
 │   ├── kutup-pass-wasm/     # Browser bindings for Kutup Pass (frontend/wasm/pass-wasm)
-│   ├── kutup-chat-core/     # Standalone libsignal/OpenMLS engine; native + WASM
+│   ├── kutup-chat-core/     # Standalone libsignal engine; native + WASM
 │   └── kutup-client-ffi/    # Standalone UniFFI Swift/Kotlin boundary
 ├── frontend/
 │   ├── src/

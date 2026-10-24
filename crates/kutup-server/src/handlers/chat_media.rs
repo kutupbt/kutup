@@ -2,7 +2,7 @@
 //!
 //! The server validates only public suite framing, lengths, digests, quota and
 //! compare-and-swap metadata. Filenames, MIME types, conversations, messages
-//! and attachment keys remain inside Direct/MLS ciphertext and ledger AEAD.
+//! and attachment keys remain inside Chat ciphertext and ledger AEAD.
 
 use kutup_crypto::primitives::{hash, Hasher, Suite};
 use kutup_federation_proto::ContentDigest;
@@ -133,37 +133,9 @@ pub(crate) async fn match_delivery_capability(
     .bind(recipient_user_id)
     .fetch_optional(&mut **transaction)
     .await?;
-    let mut matched = direct
+    Ok(direct
         .and_then(|value| <[u8; 32]>::try_from(value).ok())
-        .is_some_and(|candidate| constant_time_capability_hash_eq(&candidate, presented));
-
-    // Scan every current active MLS capability for the recipient so matching
-    // time does not reveal which private conversation authorized delivery.
-    let group_candidates: Vec<Vec<u8>> = sqlx::query_scalar(
-        "SELECT d.capability_hash
-         FROM chat_mls_delivery_capabilities d
-         JOIN chat_mls_conversations c
-           ON c.conversation_id=d.conversation_id AND c.current_incarnation=d.incarnation
-         JOIN chat_mls_incarnations i
-           ON i.conversation_id=d.conversation_id AND i.incarnation=d.incarnation
-          AND i.last_finalized_epoch=d.epoch AND i.status='active'
-         JOIN chat_mls_local_members m
-           ON m.conversation_id=d.conversation_id AND m.incarnation=d.incarnation
-          AND m.user_id=d.recipient_user_id AND m.removed_epoch IS NULL
-          AND m.membership_status='active'
-         WHERE d.recipient_user_id=$1 AND c.status='active'
-         ORDER BY d.conversation_id",
-    )
-    .bind(recipient_user_id)
-    .fetch_all(&mut **transaction)
-    .await?;
-    for candidate in group_candidates {
-        let candidate: [u8; 32] = candidate
-            .try_into()
-            .map_err(|_| AppError::internal("stored media capability is malformed"))?;
-        matched |= constant_time_capability_hash_eq(&candidate, presented);
-    }
-    Ok(matched)
+        .is_some_and(|candidate| constant_time_capability_hash_eq(&candidate, presented)))
 }
 
 #[derive(Debug, Default, Deserialize)]

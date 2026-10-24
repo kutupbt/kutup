@@ -14,8 +14,7 @@ use crate::error::Result;
 use async_trait::async_trait;
 use kutup_chat_proto::{
     AccountManifestHistoryPageV2, AccountManifestPublicationV2, AccountManifestV2,
-    AccountPreKeyBundlesResponse, AnonymousMlsKeyPackageRequestV1, ChatProfileResponse,
-    DeviceListMismatch, IdentifiedMlsKeyPackageRequestV1, MailboxPage, MlsKeyPackageBundleV1,
+    AccountPreKeyBundlesResponse, ChatProfileResponse, DeviceListMismatch, MailboxPage,
     OwnChatProfileResponse, PreKeyCountResponse, PutChatProfileRequest,
     RegisterChatDeviceRequestV2, ReplenishKeysRequest, SendMessagesRequest,
 };
@@ -215,18 +214,6 @@ pub trait ChatTransport {
         ))
     }
 
-    /// Complete authenticated feature-policy history for an MLS ordering
-    /// authority. Clients verify the federation identity and contiguous typed
-    /// policy chain before accepting the authority's purpose-scoped key.
-    async fn fetch_mls_ordering_policy(
-        &self,
-        _domain: &str,
-    ) -> Result<FederatedFeaturePolicyHistoryV1> {
-        Err(crate::ChatError::Transport(
-            "transport does not implement MLS ordering policy retrieval".into(),
-        ))
-    }
-
     /// Latest account-signed device manifest. `None` maps the endpoint's 404.
     async fn fetch_manifest(&self, _account: &str) -> Result<Option<AccountManifestV2>> {
         Err(crate::ChatError::Transport(
@@ -244,26 +231,6 @@ pub trait ChatTransport {
     ) -> Result<AccountManifestHistoryPageV2> {
         Err(crate::ChatError::Transport(
             "transport does not implement account manifest history".into(),
-        ))
-    }
-
-    /// Anonymous, capability-authenticated MLS KeyPackage retrieval. Browser
-    /// implementations must omit bearer tokens, cookies, and session context.
-    async fn fetch_anonymous_mls_key_packages(
-        &self,
-        _request: &AnonymousMlsKeyPackageRequestV1,
-    ) -> Result<MlsKeyPackageBundleV1> {
-        Err(crate::ChatError::Transport(
-            "transport does not implement anonymous MLS KeyPackage retrieval".into(),
-        ))
-    }
-
-    async fn fetch_identified_mls_key_packages(
-        &self,
-        _request: &IdentifiedMlsKeyPackageRequestV1,
-    ) -> Result<MlsKeyPackageBundleV1> {
-        Err(crate::ChatError::Transport(
-            "transport does not implement identified MLS KeyPackage retrieval".into(),
         ))
     }
 

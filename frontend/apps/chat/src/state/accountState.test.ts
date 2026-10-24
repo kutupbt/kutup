@@ -136,6 +136,6 @@ describe('list state rules', () => {
         deleteForMe: { conversation: bob, messageIds: ['0b0f6a8e-35f5-4a8e-9f5a-0a8f3c2d1e4b'] },
       }),
     ]
-    expect(conversationList({ history, contacts: [], profiles: [], groups: [], chatGroups: [] }, SELF, 10)).toEqual([])
+    expect(conversationList({ history, contacts: [], profiles: [], chatGroups: [] }, SELF, 10)).toEqual([])
   })
 })

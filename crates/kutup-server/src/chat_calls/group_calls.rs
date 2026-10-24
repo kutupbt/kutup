@@ -4,7 +4,7 @@
 //! started it (its host), end-to-end encrypted with a key only the group's
 //! members can derive. Joining takes a LiveKit access token for the call's
 //! room, which the host mints. The room id (128 random bits, known only to
-//! the group through MLS) is the capability. Accounts of other servers get
+//! the group) is the capability. Accounts of other servers get
 //! their token through their own server, which forwards the request over
 //! signed federation. The participant identity is an opaque tag the members
 //! can map to a person and the SFU cannot.
@@ -21,7 +21,9 @@ use reqwest::Method;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use super::{signed_federation_error, signed_federation_json};
+use crate::chat_federation::{
+    signed_app_error as signed_federation_error, signed_json as signed_federation_json,
+};
 use crate::error::{AppError, AppResult};
 use crate::federation::FederationRequestSpec;
 use crate::middleware::AuthUser;
@@ -68,16 +70,16 @@ fn validate_hex32(name: &str, value: &str) -> AppResult<()> {
         .map_err(|_| AppError::bad_request(format!("{name} is 32 lowercase hex characters")))
 }
 
-/// Whether this server hosts group calls (an SFU is configured).
-/// Group calls are a group feature: with groups off (`CHAT_GROUPS`, no
-/// ordering service) there are none, as every other group route answers.
+/// Group calls are a group feature: with groups off (`CHAT_GROUPS`) there
+/// are none, as every other group route answers.
 fn groups_on(state: &AppState) -> AppResult<()> {
-    if state.mls_ordering.is_none() {
-        return Err(AppError::not_found("MLS service unavailable"));
+    if !state.config.chat_groups {
+        return Err(AppError::not_found("groups are off on this server"));
     }
     Ok(())
 }
 
+/// Whether this server hosts group calls (an SFU is configured).
 pub(crate) fn hosts_group_calls(state: &AppState) -> bool {
     let config = &state.config;
     !config.chat_sfu_url.is_empty()

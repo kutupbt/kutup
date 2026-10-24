@@ -171,6 +171,14 @@ jitter. kutup-chat-proto's group-route and MLS-control signers take
 `primitives::SigningKey`, as the server hands them one; the rest of that
 crate moves with chat-core.
 
+Step 4 notes: the CLI's master key and recovery entropy are
+`primitives::random_key()` (`register::account_secrets`), and the CLI no
+longer depends on rand, sha2 or ed25519-dalek, so the lint leaves it no
+other generator to name. Drive's `sha256`-named fields (version and file
+uploads, whiteboard assets) are the suite's hash, as on the server; under V1
+it is the same SHA-256 as the served `ContentDigest`, and a suite with
+another hash renames those fields (a format change, not a silent swap).
+
 After that, **block format slices 1-2** build their framing on `Aead::new`
 and `hash`, and the wipe branch sets every header's suite to 1.
 
@@ -190,7 +198,7 @@ on `fuzz` as on the other standalone roots.
 | ~~`crates/kutup-crypto`~~ | step 2: done |
 | ~~`crates/kutup-crypto-wasm`~~ | step 2: done |
 | ~~`crates/kutup-server`~~ | step 3: done |
-| `crates/kutup-cli` | step 4 |
+| ~~`crates/kutup-cli`~~ | step 4: done |
 | `crates/kutup-pass` | step 6 (KDBX and the SSH agent become adapters) |
 | ~~`crates/kutup-federation-proto`~~ | step 3: done |
 | `crates/kutup-chat-proto` | with chat-core's crypto (wipe plan, code item 1) |
@@ -208,7 +216,11 @@ Each rule has `allow-invalid`, as a crate without the dependency can't name
 the type anyway.
 
 The check also fails on any `clippy::disallowed_types` or
-`clippy::disallowed_methods` in a Rust file this table doesn't list. A new
+`clippy::disallowed_methods` in a Rust file this table doesn't list, and on
+every other way to switch them off: an allow or expect of `clippy::style`,
+`clippy::all` or `warnings` anywhere, a `[lints]` table allowing them in a
+Cargo.toml, rustflags with `-A` or `--cap-lints` for them in a
+`.cargo/config`, such a flag in a script or workflow, and `CLIPPY_CONF_DIR`. A new
 adapter adds its row here, in the PR that adds it.
 
 | File | Allowed for |

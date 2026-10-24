@@ -512,9 +512,6 @@ pub async fn get_public_settings(State(state): State<AppState>) -> AppResult<Res
     } else {
         None
     };
-    let mls_groups = crate::chat_mls::policy::advertised_policy(&state)
-        .await?
-        .is_some();
     // Chat has no storage of its own: its backup and media count against the
     // account's one pool (crate::storage_pool), whose default this advertises.
     let account_default_quota_bytes = crate::storage_pool::default_quota(&state.pool).await? as u64;
@@ -543,7 +540,6 @@ pub async fn get_public_settings(State(state): State<AppState>) -> AppResult<Res
         server_name: Some(state.config.chat_server_name.clone()),
         federation: federation_enabled,
         sealed_sender: sealed_sender_policy.is_some(),
-        mls_groups,
         pairwise_groups: state.config.chat_groups
             && state.federation.is_some()
             && sealed_sender_policy.is_some(),
@@ -552,8 +548,9 @@ pub async fn get_public_settings(State(state): State<AppState>) -> AppResult<Res
             .web_push
             .as_ref()
             .map(|push| push.public_key().to_owned()),
-        group_calls: mls_groups && crate::chat_mls::hosts_group_calls(&state),
-        call_links: crate::chat_mls::hosts_group_calls(&state),
+        // Pairwise groups' calls are not built yet (pairwise-groups.md §6).
+        group_calls: false,
+        call_links: crate::chat_calls::hosts_group_calls(&state),
         media: Some(
             kutup_chat_proto::ChatMediaCapabilitiesV1::v1(
                 state.config.chat_media_max_plaintext_bytes,

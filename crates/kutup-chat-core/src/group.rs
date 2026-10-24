@@ -1478,5 +1478,24 @@ pub fn seal_attribute(
     Ok(encode(&key.seal(field, b"", plain).map_err(record_error)?))
 }
 
+/// A valid context of a test group (`seed` makes its id): what a pairwise
+/// group's content carries.
+#[cfg(test)]
+pub(crate) fn test_context(seed: u8) -> kutup_chat_proto::group::GroupContextV1 {
+    kutup_chat_proto::group::GroupContextV1 {
+        version: 1,
+        group_id: kutup_chat_proto::group_route::encode_group_id(&[seed; 32]),
+        master_key: kutup_chat_proto::group::encode(&[6u8; 32]),
+        home: kutup_chat_proto::group_route::GroupHomePinV1 {
+            server: "a.test".into(),
+            identity_sequence: 0,
+            identity_document_hash: "9".repeat(64),
+        },
+        revision: 1,
+        chain_hash: kutup_chat_proto::group::encode(&[7u8; 32]),
+        recipient_pseudonym: None,
+    }
+}
+
 #[cfg(test)]
 mod tests;

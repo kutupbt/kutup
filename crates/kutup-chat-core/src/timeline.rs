@@ -20,7 +20,7 @@ use kutup_chat_proto::content::kind;
 use kutup_chat_proto::{ChatContent, ConversationId};
 use serde::{Deserialize, Serialize};
 
-use crate::db::{ChatDb, InboxMessage, MlsHistoryMessage, Pending, SentMessage};
+use crate::db::{ChatDb, InboxMessage, Pending, SentMessage};
 use crate::error::{ChatError, Result};
 
 /// Raised whenever what is indexed or how changes; a store with an older
@@ -35,7 +35,6 @@ const DIRECTORY_KEY: &[u8] = b"timeline/directory";
 pub enum Source {
     Inbox,
     Sent,
-    Mls,
 }
 
 /// From someone else.
@@ -145,17 +144,12 @@ pub(crate) fn direct(peer: &str) -> Result<ConversationId> {
     Ok(ConversationId::direct(account))
 }
 
-/// Kinds left out of the history of direct messages (as the full history
-/// does), and the wider set left out of group history.
+/// Kinds left out of history (as the full history does).
 fn hidden_direct(kind_name: &str) -> bool {
     matches!(
         kind_name,
         kind::CONTACT_CONTROL | kind::PROFILE_KEY_UPDATE | kind::TYPING | kind::CALL
     )
-}
-
-fn hidden_other(kind_name: &str) -> bool {
-    hidden_direct(kind_name) || kind_name == kind::GROUP_CONTROL
 }
 
 /// The UI's rule (`isVisibleChatMessage`), without the deadline.
@@ -336,20 +330,6 @@ pub(crate) fn place_sent(message: &SentMessage) -> Result<Vec<Indexed>> {
     ))
 }
 
-pub(crate) fn place_mls(message: &MlsHistoryMessage) -> Vec<Indexed> {
-    place(
-        ConversationId::Group {
-            group_id: uuid::Uuid::from_bytes(message.conversation_id).to_string(),
-        },
-        Source::Mls,
-        message.record_id.clone(),
-        message.timestamp_ms,
-        !message.outgoing,
-        &message.content,
-        hidden_other,
-    )
-}
-
 /// Index writes for `pending`, to commit with it. Nothing while the store
 /// has no current directory (it is indexed whole on open, [`ensure_built`]).
 /// The index writes for one commit, and the conversations it touched.
@@ -378,33 +358,11 @@ async fn timeline_changes(db: &dyn ChatDb, pending: &Pending) -> Result<Changes>
     for message in pending.sent_messages.values() {
         added.extend(place_sent(message)?);
     }
-    for message in pending.mls_messages.values() {
-        added.extend(place_mls(message));
-    }
-    // A group message still being sent shows on its conversation's newest
-    // page without being indexed: its conversation changes all the same.
-    let mut queued = HashSet::new();
-    for (send_id, entry) in &pending.mls_outbox {
-        let conversation_id = match entry {
-            Some(entry) => Some(entry.conversation_id),
-            None => db
-                .load_mls_outbox(send_id)
-                .await?
-                .map(|entry| entry.conversation_id),
-        };
-        if let Some(conversation_id) = conversation_id {
-            queued.insert(format!("group:{}", uuid::Uuid::from_bytes(conversation_id)));
-        }
-    }
     let nothing_removed = pending.delete_message_ids.is_empty()
         && pending.delete_messages_for_peers.is_empty()
-        && pending.delete_sent_message_ids.is_empty()
-        && pending.delete_mls_message_ids.is_empty();
+        && pending.delete_sent_message_ids.is_empty();
     if added.is_empty() && nothing_removed {
-        return Ok(Changes {
-            writes: HashMap::new(),
-            conversations: queued,
-        });
+        return Ok(Changes::default());
     }
     let Some(mut directory) = load_directory(db).await? else {
         return Ok(Changes::default());
@@ -422,11 +380,6 @@ async fn timeline_changes(db: &dyn ChatDb, pending: &Pending) -> Result<Changes>
             removed.extend(place_sent(&message)?);
         }
     }
-    for id in &pending.delete_mls_message_ids {
-        if let Some(message) = db.load_mls_message(id).await? {
-            removed.extend(place_mls(&message));
-        }
-    }
     let mut writer = Writer::new(db, &mut directory);
     for peer in &pending.delete_messages_for_peers {
         writer
@@ -440,9 +393,7 @@ async fn timeline_changes(db: &dyn ChatDb, pending: &Pending) -> Result<Changes>
         writer.add(indexed).await?;
     }
     writer.refresh_timers().await?;
-    let mut changes = writer.finish()?;
-    changes.conversations.extend(queued);
-    Ok(changes)
+    writer.finish()
 }
 
 /// Index the whole store when it has no current directory: on first open
@@ -475,9 +426,6 @@ async fn ensure_timeline_built(db: &dyn ChatDb) -> Result<()> {
     }
     for message in db.list_sent_messages().await? {
         placed.extend(place_sent(&message)?);
-    }
-    for message in db.list_mls_messages().await? {
-        placed.extend(place_mls(&message));
     }
     let mut directory = Directory {
         version: TIMELINE_VERSION,
@@ -984,23 +932,18 @@ mod tests {
         }
     }
 
-    fn group(id: &str, ts: i64) -> MlsHistoryMessage {
-        MlsHistoryMessage {
-            record_id: id.into(),
-            message_id: id.into(),
-            conversation_id: [7; 16],
-            incarnation: 1,
-            mls_group_id: vec![1; 16],
-            epoch: 1,
-            sender: "aci:00000000-0000-4000-8000-4c26d9074c27@a.test".into(),
+    /// A pairwise group's message: in the inbox, under its group.
+    fn group(id: &str, ts: i64) -> InboxMessage {
+        let context = crate::group::test_context(7);
+        let content = ChatContent::text_with_id(id, "2026-10-08T10:00:00Z", 1, id)
+            .with_group_context(&context);
+        InboxMessage {
+            id: id.into(),
+            peer: "aci:00000000-0000-4000-8000-4c26d9074c27@a.test".into(),
             sender_device_id: 1,
-            outgoing: false,
-            cursor: Some(ts as u64),
-            transport_digest: [0; 32],
-            content: text(id),
-            timestamp_ms: ts,
-            delivered: true,
-            deduplicated: false,
+            cursor: ts as u64,
+            content: serde_json::to_vec(&content).unwrap(),
+            received_at: ts,
         }
     }
 
@@ -1037,9 +980,6 @@ mod tests {
         }
         for message in block_on(db.list_sent_messages()).unwrap() {
             placed.extend(place_sent(&message).unwrap());
-        }
-        for message in block_on(db.list_mls_messages()).unwrap() {
-            placed.extend(place_mls(&message));
         }
         let mut out: BTreeMap<String, Vec<EntryRef>> = BTreeMap::new();
         for indexed in placed {
@@ -1119,9 +1059,7 @@ mod tests {
             ),
         );
         for i in 0..5 {
-            pending
-                .mls_messages
-                .insert(format!("g-{i}"), group(&format!("g-{i}"), 2_000 + i));
+            pending.messages.push(group(&format!("g-{i}"), 2_000 + i));
         }
         block_on(db.apply(&pending)).unwrap();
         let mut again = Pending::default();
@@ -1162,7 +1100,7 @@ mod tests {
             deletes.delete_message_ids.insert(format!("in-{i}"));
         }
         deletes.delete_sent_message_ids.insert("read-1".into());
-        deletes.delete_mls_message_ids.insert("g-2".into());
+        deletes.delete_message_ids.insert("g-2".into());
         block_on(db.apply(&deletes)).unwrap();
         assert_eq!(indexed(&db), expected(&db));
         let mut peer = Pending::default();
@@ -1176,24 +1114,11 @@ mod tests {
         );
 
         // Pages, newest first, continue where the last one stopped.
+        let group_key = format!("group:{}", crate::group::test_context(7).group_id);
         let directory = block_on(load_directory(&db)).unwrap().unwrap();
-        let all = &indexed(&db)["group:07070707-0707-0707-0707-070707070707"];
-        let first_page = block_on(page(
-            &db,
-            &directory,
-            "group:07070707-0707-0707-0707-070707070707",
-            None,
-            3,
-        ))
-        .unwrap();
-        let rest = block_on(page(
-            &db,
-            &directory,
-            "group:07070707-0707-0707-0707-070707070707",
-            first_page.last(),
-            10,
-        ))
-        .unwrap();
+        let all = &indexed(&db)[&group_key];
+        let first_page = block_on(page(&db, &directory, &group_key, None, 3)).unwrap();
+        let rest = block_on(page(&db, &directory, &group_key, first_page.last(), 10)).unwrap();
         let mut newest_first: Vec<EntryRef> = all.iter().rev().cloned().collect();
         let tail = newest_first.split_off(3);
         assert_eq!(first_page, newest_first);

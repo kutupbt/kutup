@@ -8,7 +8,6 @@
 
 use anyhow::{bail, Context, Result};
 use base64::Engine as _;
-use rand::RngCore as _;
 use serde::{Deserialize, Serialize};
 
 use crate::api::Collection;
@@ -165,7 +164,7 @@ pub fn remove(profile: &str, json: bool, collection_id: &str, who: &str, yes: bo
     // The next epoch.
     let next = col.key_epoch + 1;
     let mut new_key = [0u8; 32];
-    rand::rngs::OsRng.fill_bytes(&mut new_key);
+    kutup_crypto::primitives::random(&mut new_key);
     let owner = &col.owner_user_id;
     let context =
         |purpose, revision| DriveEnvelopeContextV1::new(purpose, next, revision, &col.id, owner);

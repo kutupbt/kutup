@@ -1,6 +1,6 @@
 # Chat security threat model
 
-This document is normative for V1 Direct Chat, Note to Self, private MLS
+This document is normative for V1 Direct Chat, Note to Self, pairwise
 groups, signed account manifests, contacts-only sealed delivery, and the common
 identity/delivery foundation used by Chat media. Attachment-specific storage,
 quota and parser threats are defined in `chat-media-security-threat-model.md`.
@@ -25,19 +25,27 @@ anonymity relays, and traffic-shape protection are separate milestones.
 - First observation is explicit TOFU. Face-to-face safety-number/QR comparison
   binds both canonical accounts and both authority keys. Gray means valid TOFU,
   green means user-verified, and red means a durable quarantine.
-- Direct Chat and Note to Self use pinned libsignal. Private groups use pinned
-  OpenMLS. Kutup does not fork either implementation.
-- MLS credentials are Ed25519; anonymous group delivery keys are X25519. Both
-  are exact device fields in the signed account manifest.
-- Federation identity authenticates transport, endpoint discovery, sealed
-  sender policy, and MLS ordering-policy chains. It does not authenticate an
-  end-user identity.
+- Direct Chat and Note to Self use pinned libsignal; groups use its sender
+  keys and sealed sender v2. Kutup does not fork libsignal. (The MLS groups of
+  earlier builds are removed; a manifest's legacy `mls` device entry still
+  verifies and is never written.)
+- Federation identity authenticates transport, endpoint discovery and the
+  sealed sender policy chain. It does not authenticate an end-user identity.
 - The sealed-sender root remains offline. An online server key issues 24-hour
   sender certificates under a root-signed server certificate.
 - A profile key grants encrypted-profile reads and derives the recipient-bound
   16-byte delivery capability. Servers store only its SHA-256 verifier.
-- A private group chooses 1-64 ordering authorities. They see participant
-  domains and group-scoped pseudonyms, not the encrypted account roster.
+- A group lives on its home server (the group id binds it), which knows the
+  members only as per-group pseudonyms and serves the encrypted group state.
+  Members reach it through their own server's relay and its anonymous
+  gateway. **Hidden membership has limits, stated plainly:** it fully holds
+  for members on other servers; for members on the group's own server, it
+  holds only against an operator who doesn't correlate its relay with its
+  gateway; and a member's own server can statistically infer that two of its
+  users share a group (their messages arrive together, their requests go to
+  the same home at the same times), more easily in small, busy groups. Timing
+  jitter, padded sizes and relaying through one path with no per-request log
+  reduce this; nothing known removes it (`docs/plans/pairwise-groups.md` §3).
 - In a pairwise group (`docs/plans/pairwise-groups.md`, not yet on), a
   member's per-group pseudonym is derived from the account master key, the
   group id and a join epoch, and the binding of pseudonym to account is
@@ -92,7 +100,7 @@ hide IP addresses from the origin, timing, size, origin domain, or recipient.
 
 | Threat | Required control | Result |
 |---|---|---|
-| Homeserver adds or replaces a device | Account signature, exact complete manifest, stable authority/incarnation pin | Reject before session, MLS, or Drive-key mutation. |
+| Homeserver adds or replaces a device | Account signature, exact complete manifest, stable authority/incarnation pin | Reject before session, group, or Drive-key mutation. |
 | Rollback, skipped update, or same-sequence equivocation | Monotonic sequence, `previousHash`, append-only complete history, atomic pin/history commit | Retrieve every missing version. Missing, reordered, duplicated, rolled-back, or conflicting history blocks sensitive operations. |
 | Signed authority/incarnation replacement | Durable retained pin plus separately stored complete candidate history | Red quarantine. No send/share proceeds. Exact pair-bound QR verification atomically accepts the replacement while retaining old history. |
 | Homeserver swaps an account's identity key | The identity key is in the authority-signed manifest; the identity store refuses any other key for the account; an identity change comes only with a signed manifest | Reject. A signed change (a distribution, a re-registration) shows "safety number changed" once and clears verified. |
@@ -103,38 +111,20 @@ hide IP addresses from the origin, timing, size, origin domain, or recipient.
 | Stolen delivery capability | Recipient-bound HKDF capability, database limits, profile-key rotation on block | Bounded anonymous attempts only. Blocking publishes a new verifier before the new profile key is redistributed. |
 | Recipient enumeration | Uniform status/body for unknown recipient and invalid capability | Network caller cannot distinguish the two through the defined response. Timing remains an operational concern. |
 | Forged sealed envelope or certificate | Libsignal sealed envelope, authenticated root/service policy, 24-hour certificate, manifest identity/device match | Inner ratchet is untouched until every outer check succeeds. |
-| Anonymous-delivery replay | Recipient/capability/send-ID deduplication locally; signed origin sequence remotely; Signal/MLS replay checks at the client | Exact retry is idempotent; changed content under an existing ID is rejected. |
+| Anonymous-delivery replay | Recipient/capability/send-ID deduplication locally; signed origin sequence remotely; libsignal replay checks at the client | Exact retry is idempotent; changed content under an existing ID is rejected. |
 | Downgrade after sealed delivery | Capability advertisement plus durable sealed outbox/delivery mode | First contact remains identified. Established sealed traffic never falls back to identified delivery. |
 | Capability or profile revocation race | Capability verifier and encrypted-profile revision change atomically | The old capability stops before remaining contacts receive the new profile key. |
 | Oversized or high-rate anonymous traffic | Process-local IP outer limit, database capability/recipient/origin counters, 32-envelope and 1 MiB limits | Uniform bounded rejection. Denial of service cannot be eliminated. |
 | Destination sender-metadata collection | Sender-free federated transaction, mailbox and audit schema; identifier-free metrics | Schema and two-server tests reject sender fields and scan destination logs. |
-| Forged MLS KeyPackage, Welcome, Commit, or sender leaf | Suite/key/lifetime/identity binding to the exact signed device manifest plus OpenMLS validation | No join, merge, decrypt, acknowledgement, or durable epoch advance. |
-| More than ten devices or 256 group accounts | Shared constants: 10 devices/account, 256 accounts/group, 2,560 leaves/tree | Server, protocol, Rust, WASM and browser validators reject excess independently. |
-| Browser storage is cleared or a disposable profile is abandoned | A replacement installation gets independent device keys; active-device review/revocation and the always-on account-local E2EE Chat backup are mandatory | After unified recovery, the client verifies and restores the encrypted server-hosted base plus event tail. Device keys, ratchets and MLS epochs are never restored; a missing or invalid backup produces an explicit history-loss warning. |
-| Group ordering fork | Hash-linked control log, exact previous block/epoch/roster commitment, authority certificate, encrypted private control state | A conflicting branch cannot advance an honest client. Signed evidence remains inspectable. |
-| One ordering authority fails | `q=floor(2N/3)+1`; owner-approved joint authority changes | Writes continue only while quorum exists. Loss of quorum stops control changes without inventing a home server. |
-| Malicious or unavailable authority majority | Client verifies MLS Commit and private state independently | Authorities can halt the group but cannot decrypt it or cause acceptance of unauthenticated state. |
-| Invitation without consent | Creator-only genesis, identified pending invite, expiry, explicit accept/reject, no capability before acceptance | Invitee does not join or receive established anonymous traffic without acceptance. |
-| Removed/re-added member reuses old acceptance | Acceptance binds incarnation and exact join epoch | Old acceptance cannot authorize a new leaf or later membership. |
-| Linked device is cloned, stale, or removed | Independent MLS leaf per installation; exact manifest-bound `DeviceSync` Commit | No provider snapshot or group secret is copied. Partial sync leaves the old epoch pinned. |
-| A member's only device is replaced, leaving a dead leaf | A fellow member commits the manifest-bound `DeviceSync`; the destination server and every member check each leaf against the account's signed manifest | A member can neither admit a device the account did not sign nor remove one it still lists. The replaced device's unreadable messages are not recoverable. |
+| More than ten devices or 256 group accounts | Shared limits: 10 devices/account, 256 accounts/group (`CHAT_GROUP_MAX_MEMBERS`) | Server, protocol, Rust, WASM and browser validators reject excess independently. |
+| Group home forges or rolls back the group's state | Hash-chained group log signed by members' pseudonyms, notarized by the home; clients keep the head they verified | A change no member signed, or an older head, is refused (pairwise-groups.md §3). |
+| Group home or relay learns membership | Per-group pseudonyms, anonymous gateway, uniform answers for non-members | Limits as stated above (trust boundaries). |
+| Member's device gains a new device the sender key didn't reach | That member's copy goes pairwise, naming the member | The new device finds the group again; nothing is sent to a device the account didn't sign. |
+| Browser storage is cleared or a disposable profile is abandoned | A replacement installation gets independent device keys; active-device review/revocation and the always-on account-local E2EE Chat backup are mandatory | After unified recovery, the client verifies and restores the encrypted server-hosted base plus event tail. Device keys, ratchets and sender keys are never restored; a missing or invalid backup produces an explicit history-loss warning. |
 | Compromised online sealed signer | Offline root or a generated root whose private key is dropped after one signature, short sender-certificate lifetime, staged root policy | Root rotation is policy-versioned; normal operation cannot export or use a root key. A stolen online key signs sender certificates until its server certificate expires (90 days for a generated one), and those certificates still cannot pass the recipient's manifest identity check for an account the thief does not control. |
 | Compromised account authority/master key | Safety-number change, quarantine, recovery phrase preserves the same key | An attacker with the master key can impersonate the account. Contacts must re-verify after a destructive reset. |
 | Destructive admin wipe | Wipe deletes mutable device/profile/capability state, retains old signed history, and starts a new incarnation at sequence 1 | Prior contacts quarantine the signed replacement until explicit safety verification. |
-| Crash during security state change | One database transaction for manifest history+pin, ratchet+outbox, MLS snapshot+receipt, capability+profile revision | Restart observes either the old state or the complete new state, never a partial transition. |
-
-## Group authority availability
-
-The BFT quorum formula protects safety only when the deployment size can
-tolerate a fault. `N=1` is the simple local mode. `N=2` and `N=3` require every
-authority and therefore add no failure tolerance. Fault-tolerant choices begin
-at `N=4` (`q=3`) and then `N=7` (`q=5`). The administrative UI must show this
-availability consequence; it must not market three authorities as redundancy.
-
-Group owners authorize changes to the authority set, group cryptographic or
-authorization policy, protocol-suite upgrades, and permanent closure. Routine
-member administration remains an administrator action. Ordering servers relay
-owner approvals but cannot cast them.
+| Crash during security state change | One database transaction for manifest history+pin, ratchet+outbox, sender-key advance+group message+receipt, capability+profile revision | Restart observes either the old state or the complete new state, never a partial transition. |
 
 ## Recovery and verification rules
 
@@ -162,14 +152,6 @@ Implemented instruments include:
 - `kutup.chat.sealed_sender.certificate.events`
 - `kutup.chat.sealed_sender.send.events`
 - `kutup.chat.sealed_sender.send.envelopes`
-- `kutup.chat.mls.control.events`
-- `kutup.chat.mls.quorum.events`
-- `kutup.chat.mls.quorum.available`
-- `kutup.chat.mls.quorum.required`
-- `kutup.chat.mls.bootstrap.events`
-- `kutup.chat.mls.bootstrap.pages`
-- `kutup.chat.mls.anonymous_delivery.events`
-- `kutup.chat.mls.anonymous_delivery.envelopes`
 - `kutup.chat.rate_limit.rejections`
 
 Administrative audit records cover bootstrap, explicit rotation, quarantine,
@@ -179,7 +161,7 @@ exact fingerprints/evidence, never secrets or message content.
 ## Parser and test obligations
 
 Every public policy, manifest, history page, certificate, sealed transaction,
-MLS control structure, and anonymous envelope has deterministic vectors,
+group state structure, and anonymous envelope has deterministic vectors,
 strict size limits, malformed-input tests and a fuzz entry point. Release gates
 also cover restart atomicity, two-server federation, no destination sender
 metadata, capability invalidation, no sealed fallback, skipped manifest

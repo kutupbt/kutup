@@ -3,7 +3,7 @@
 
 use anyhow::{Context, Result};
 use clap::Subcommand;
-use sha2::Digest;
+use kutup_crypto::primitives::{hash, Suite};
 use time::format_description::well_known::Rfc3339;
 use time::OffsetDateTime;
 
@@ -213,7 +213,7 @@ fn restore(profile: &str, json: bool, file_id: &str, version_id: &str) -> Result
 
     let followed =
         crate::names::folder_hash_key(&found.keys, &found.collection.id).and_then(|hash_key| {
-            let sha256: [u8; 32] = sha2::Sha256::digest(&old).into();
+            let sha256: [u8; 32] = hash(Suite::V1, &old).into();
             crate::uploader::follow_new_content(
                 &ctx.client,
                 row,

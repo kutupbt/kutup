@@ -1,15 +1,14 @@
 //! `kutup share` — folder/federated/public sharing + federated browse/upload.
 //! Mirrors `cmd/share.go`, `share_files.go`, `share_incoming.go`, `share_upload.go`.
 
+use kutup_crypto::primitives::{hash, Suite};
 use std::path::Path;
 
 use crate::keyring::Keyring;
 use anyhow::{anyhow, bail, Context, Result};
 use base64::Engine;
 use clap::Subcommand;
-use rand::RngCore;
 use serde::Serialize;
-use sha2::{Digest, Sha256};
 
 use crate::api::federation::IncomingShare;
 use crate::api::{
@@ -365,7 +364,7 @@ fn share_public(profile: &str, json: bool, collection_id: &str) -> Result<()> {
 
     // Random link key — never sent to the server (lives in the URL fragment).
     let mut link_key = [0u8; 32];
-    rand::rngs::OsRng.fill_bytes(&mut link_key);
+    kutup_crypto::primitives::random(&mut link_key);
     let envelope_context = DriveEnvelopeContextV1::new(
         DriveEnvelopePurpose::PublicLinkCollectionKey,
         collection.key_epoch,
@@ -604,7 +603,7 @@ fn share_upload(profile: &str, json: bool, share_id: &str, path: &str) -> Result
         name: name.clone(),
         mime_type: crate::mimetype::guess_mime(Path::new(path)),
         size: data.len() as u64,
-        sha256: Some(base64::engine::general_purpose::STANDARD.encode(Sha256::digest(&data))),
+        sha256: Some(base64::engine::general_purpose::STANDARD.encode(hash(Suite::V1, &data))),
         media: None,
     };
     // Its name's hash in the shared folder (docs/plans/drive-unique-names.md).

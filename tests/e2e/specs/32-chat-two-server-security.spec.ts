@@ -105,20 +105,6 @@ function posted(page: Page, pathname: string | RegExp): Promise<Response> {
   }, { timeout: 60_000 })
 }
 
-const CONTROL = '/api/chat/mls/control/blocks'
-const ANONYMOUS_MLS = '/api/chat/mls/anonymous/messages'
-
-/** The anonymous MLS submission for a recipient on `server`. One group send
- * posts one submission per recipient, and they may answer in any order. */
-function postedAnonymousTo(page: Page, server: string): Promise<Response> {
-  return page.waitForResponse((response) => {
-    const request = response.request()
-    if (request.method() !== 'POST' || new URL(response.url()).pathname !== ANONYMOUS_MLS) return false
-    const submission = request.postDataJSON() as { recipient?: { server?: string } } | null
-    return submission?.recipient?.server === server
-  }, { timeout: 60_000 })
-}
-
 async function sendCapturedMedia(page: Page, filename: string, plaintext: string): Promise<void> {
   const input = page.getByTestId('chat-capture-input')
   await expect(input).toHaveAttribute('accept', 'image/*,video/*')
@@ -250,32 +236,7 @@ async function downloadAttachment(page: Page, filename: string): Promise<string>
   })
 }
 
-/**
- * Resolves with the response, or fails with the UI's error toast. The
- * orderer acknowledgement precedes the initiating client's durable OpenMLS
- * merge, so the UI is watched a little longer: a post-ack failure must not
- * pass as success.
- */
-async function requireResponseOrUiError(page: Page, response: Promise<Response>): Promise<Response> {
-  const uiError = page.locator('[data-sonner-toast][data-type="error"]')
-  // Settles only when an error toast actually shows; the response wait has
-  // its own timeout.
-  const errorText = uiError
-    .waitFor({ state: 'visible', timeout: 90_000 })
-    .then(async () => (await uiError.textContent())?.trim() || 'unknown error')
-    .catch(() => new Promise<never>(() => {}))
-  const first = await Promise.race([
-    response.then((value) => ({ kind: 'response' as const, value })),
-    errorText.then((value) => ({ kind: 'error' as const, value })),
-  ])
-  if (first.kind === 'error') throw new Error(`browser operation failed: ${first.value ?? 'unknown error'}`)
-  const lateError = await Promise.race([errorText, page.waitForTimeout(1_000).then(() => undefined)])
-  if (lateError) throw new Error(`browser operation failed: ${lateError}`)
-  return first.value
-}
-
-
-/** Confirms a destructive group action in its alert dialog. */
+/** Confirms a destructive action in its alert dialog. */
 async function confirmAction(page: Page, submit: string): Promise<void> {
   await page.getByRole('alertdialog').getByRole('button', { name: submit, exact: true }).click()
 }

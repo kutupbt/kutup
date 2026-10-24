@@ -27,8 +27,7 @@ use wasm_bindgen::JsValue;
 use crate::db::store_cipher::{keys, StoreCipher};
 use crate::db::{
     AccountManifestHistoryRecord, ChatDb, ContactRecord, InboundEnvelope, InboxMessage,
-    LocalIdentity, LocalProfile, ManifestTrust, MlsHistoryMessage, MlsOutboxEntry, OutboxEntry,
-    PeerProfile, Pending, SentMessage,
+    LocalIdentity, LocalProfile, ManifestTrust, OutboxEntry, PeerProfile, Pending, SentMessage,
 };
 use crate::error::{ChatError, Result};
 
@@ -42,9 +41,6 @@ const KYBER_PRE_KEYS: &str = "kyber_pre_keys";
 const KYBER_SEEN: &str = "kyber_seen";
 const SENDER_KEYS: &str = "sender_keys";
 const OUTBOX: &str = "outbox";
-const MLS_STATE: &str = "mls_state";
-const MLS_OUTBOX: &str = "mls_outbox";
-const MLS_MESSAGES: &str = "mls_messages";
 const MESSAGES: &str = "messages";
 const SENT_MESSAGES: &str = "sent_messages";
 const INBOUND: &str = "inbound";
@@ -59,7 +55,7 @@ const META: &str = "meta";
 /// Derived index records (conversation timelines), sealed like the rest.
 const INDEX: &str = "index_values";
 
-const ALL_STORES: [&str; 25] = [
+const ALL_STORES: [&str; 22] = [
     LOCAL_IDENTITY,
     SESSIONS,
     IDENTITIES,
@@ -70,9 +66,6 @@ const ALL_STORES: [&str; 25] = [
     KYBER_SEEN,
     SENDER_KEYS,
     OUTBOX,
-    MLS_STATE,
-    MLS_OUTBOX,
-    MLS_MESSAGES,
     MESSAGES,
     SENT_MESSAGES,
     INBOUND,
@@ -135,9 +128,9 @@ impl IndexedDbChatDb {
         }
 
         // Version 13 dropped the device-to-device history-transfer stores;
-        // 14 added the groups store and 15 the group outbox. An upgrade
-        // deletes every object store not listed here.
-        let mut builder = Rexie::builder(name).version(15);
+        // 14 added the groups store, 15 the group outbox, and 16 dropped the
+        // MLS stores. An upgrade deletes every object store not listed here.
+        let mut builder = Rexie::builder(name).version(16);
         for store in ALL_STORES {
             builder = builder.add_object_store(ObjectStore::new(store));
         }
@@ -492,38 +485,6 @@ impl ChatDb for IndexedDbChatDb {
         Ok(entries)
     }
 
-    async fn load_mls_outbox(&self, send_id: &str) -> Result<Option<MlsOutboxEntry>> {
-        self.get(MLS_OUTBOX, string_key(send_id)).await
-    }
-
-    async fn list_mls_outbox(&self) -> Result<Vec<MlsOutboxEntry>> {
-        let mut entries = self.all::<MlsOutboxEntry>(MLS_OUTBOX).await?;
-        entries.sort_by(|left, right| {
-            left.created_at
-                .cmp(&right.created_at)
-                .then_with(|| left.send_id.cmp(&right.send_id))
-        });
-        Ok(entries)
-    }
-
-    async fn load_mls_message(&self, record_id: &str) -> Result<Option<MlsHistoryMessage>> {
-        self.get(MLS_MESSAGES, string_key(record_id)).await
-    }
-
-    async fn list_mls_messages(&self) -> Result<Vec<MlsHistoryMessage>> {
-        let mut messages = self.all::<MlsHistoryMessage>(MLS_MESSAGES).await?;
-        messages.sort_by(|left, right| {
-            left.timestamp_ms
-                .cmp(&right.timestamp_ms)
-                .then_with(|| left.record_id.cmp(&right.record_id))
-        });
-        Ok(messages)
-    }
-
-    async fn load_mls_state(&self) -> Result<Option<Vec<u8>>> {
-        self.get(MLS_STATE, string_key(SINGLETON)).await
-    }
-
     async fn load_last_cursor(&self) -> Result<Option<u64>> {
         self.get(META, string_key(LAST_CURSOR)).await
     }
@@ -786,9 +747,6 @@ impl ChatDb for IndexedDbChatDb {
         let kyber_seen = store(KYBER_SEEN)?;
         let sender_keys = store(SENDER_KEYS)?;
         let outbox = store(OUTBOX)?;
-        let mls_state = store(MLS_STATE)?;
-        let mls_outbox = store(MLS_OUTBOX)?;
-        let mls_messages = store(MLS_MESSAGES)?;
         let messages = store(MESSAGES)?;
         let sent_messages = store(SENT_MESSAGES)?;
         let inbound = store(INBOUND)?;
@@ -823,7 +781,7 @@ impl ChatDb for IndexedDbChatDb {
             }
         }
         if pending.reset_transport {
-            for target in [&local_identity, &mls_state, &mls_outbox, &inbound] {
+            for target in [&local_identity, &inbound] {
                 operations.push(clear_op(&target.store));
             }
             for key in [
@@ -886,14 +844,6 @@ impl ChatDb for IndexedDbChatDb {
             )?);
         }
         self.stage_map(&mut operations, &outbox, writes.outbox)?;
-        if let Some(value) = writes.mls_state.take() {
-            operations.push(self.put(&mls_state, string_key(SINGLETON), &value)?);
-        }
-        self.stage_map(&mut operations, &mls_outbox, writes.mls_outbox)?;
-        self.stage_puts(&mut operations, &mls_messages, writes.mls_messages)?;
-        for record_id in &pending.delete_mls_message_ids {
-            operations.push(self.delete(&mls_messages, string_key(record_id)));
-        }
         for (id, value) in writes.messages {
             operations.push(self.put(&messages, string_key(&id), &value)?);
         }
@@ -1075,9 +1025,6 @@ struct PreparedWrites {
     kyber_seen: Vec<(String, Vec<u8>)>,
     sender_keys: Vec<((String, String), Vec<u8>)>,
     outbox: Vec<(String, Option<Vec<u8>>)>,
-    mls_state: Option<Vec<u8>>,
-    mls_outbox: Vec<(String, Option<Vec<u8>>)>,
-    mls_messages: Vec<(String, Vec<u8>)>,
     messages: Vec<(String, Vec<u8>)>,
     sent_messages: Vec<(String, Vec<u8>)>,
     inbound: Vec<(String, Option<Vec<u8>>)>,
@@ -1124,9 +1071,6 @@ impl PreparedWrites {
                 .map(|(key, value)| Ok((key.clone(), encode(value)?)))
                 .collect::<Result<_>>()?,
             outbox: serialize_optional_map(&pending.outbox)?,
-            mls_state: pending.mls_state.as_ref().map(encode).transpose()?,
-            mls_outbox: serialize_optional_map(&pending.mls_outbox)?,
-            mls_messages: serialize_map(&pending.mls_messages)?,
             messages: pending
                 .messages
                 .iter()

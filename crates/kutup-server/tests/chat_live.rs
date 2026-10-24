@@ -1070,7 +1070,7 @@ fn chat_v1_contract() {
     let max = chat["maxContentBytes"].as_u64().unwrap();
     assert_eq!(max, 65536);
     assert!(chat["sealedSender"].is_boolean());
-    assert!(chat["mlsGroups"].is_boolean());
+    assert!(chat.get("mlsGroups").is_none(), "MLS groups are gone");
     assert_eq!(chat["manifests"], true);
     assert_eq!(chat["profiles"], true);
     assert!(chat.get("keyTransparency").is_none());
