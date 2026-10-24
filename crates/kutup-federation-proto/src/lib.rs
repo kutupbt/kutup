@@ -13,15 +13,15 @@ mod policy;
 use std::net::IpAddr;
 
 use base64::Engine as _;
+use kutup_crypto::primitives::{hash, Suite};
 use serde::{Deserialize, Serialize};
-use sha2::{Digest as _, Sha256};
 
 pub use discovery::{
     FederationCapabilityId, FederationDiscoveryTransportPolicy, FederationDiscoveryV2,
 };
 pub use error::FederationProtocolError;
 pub use http_signatures::{
-    content_digest_sha256, content_digest_sha256_from_digest, FederationFeature,
+    content_digest_sha256, content_digest_sha256_from_digest, ContentDigest, FederationFeature,
     FederationHttpRequest, FederationHttpResponse, FederationReplayMetadata,
     FederationSignatureHeaders, FederationSignedRequest, FederationVerifiedRequest,
 };
@@ -124,7 +124,7 @@ pub fn auth_profile_for_version(
 
 /// Lowercase SHA-256 fingerprint of a raw Ed25519 public key.
 pub fn federation_key_id(public_key: &[u8; 32]) -> String {
-    hex::encode(Sha256::digest(public_key))
+    hex::encode(hash(Suite::V1, public_key))
 }
 
 /// Human-readable full fingerprint. No abbreviated fingerprint is accepted by

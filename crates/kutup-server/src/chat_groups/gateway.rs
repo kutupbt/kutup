@@ -19,7 +19,7 @@ use kutup_chat_proto::group_route::{
     GroupResponseV1, GroupStateAnswerV1, NONCE_MEMORY_SECS, PSEUDONYM_USED,
 };
 use kutup_crypto::oblivious::ResponseContext;
-use sha2::{Digest, Sha256};
+use kutup_crypto::primitives::{hash, Hasher, Suite};
 use time::OffsetDateTime;
 
 use super::keys;
@@ -177,6 +177,11 @@ async fn answer_checked(
         GroupOperationV1::PutAvatar => put_avatar(state, request, &group_id, &pseudonym, now).await,
         // Calls come with slice 4.
         GroupOperationV1::CallToken => Ok(status(GroupResponseStatusV1::Unavailable, now)),
+        // Group send endorsements come with their server part
+        // (docs/plans/group-send-endorsements.md §3.3).
+        GroupOperationV1::PutEndorsement | GroupOperationV1::GetEndorsements => {
+            Ok(status(GroupResponseStatusV1::Unavailable, now))
+        }
     }
 }
 
@@ -336,7 +341,7 @@ async fn put_avatar(
     if size > largest {
         return Ok(GroupResponseV1::refused("avatarTooLarge", now));
     }
-    let hash: [u8; 32] = Sha256::digest(&blob).into();
+    let hash: [u8; 32] = hash(Suite::V1, &blob).into();
     let current: Option<(Vec<u8>, i32)> = sqlx::query_as(
         "SELECT hash, octet_length(blob) FROM chat_group_avatars
          WHERE group_id = $1 AND expires_at IS NULL",
@@ -918,13 +923,7 @@ fn link_password_holds(state: &GroupStateV1, offered: &str) -> bool {
     ) else {
         return false;
     };
-    current.len() == offered.len()
-        && std::hint::black_box(
-            current
-                .iter()
-                .zip(&offered)
-                .fold(0u8, |difference, (a, b)| difference | (a ^ b)),
-        ) == 0
+    kutup_crypto::primitives::ct_eq(&current, &offered)
 }
 
 /// Whether `change` is a newcomer's way in: a claim, a join from the link or
@@ -948,10 +947,10 @@ fn from_link(change: &GroupChangeV1) -> bool {
 
 fn seen_hash(pseudonym: &str) -> AppResult<[u8; 32]> {
     let key = decode_exact::<32>(pseudonym).ok_or_else(|| AppError::internal("pseudonym"))?;
-    Ok(Sha256::new()
-        .chain_update(SEEN_PSEUDONYM_DOMAIN)
-        .chain_update(key)
-        .finalize()
+    Ok(Hasher::new(Suite::V1)
+        .chain(SEEN_PSEUDONYM_DOMAIN)
+        .chain(key)
+        .finish()
         .into())
 }
 

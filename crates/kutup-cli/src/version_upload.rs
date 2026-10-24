@@ -572,6 +572,7 @@ const MAX_RESYNCS: u32 = 3;
 mod tests {
     use super::*;
     use crate::api::FileMetadata;
+    use kutup_crypto::primitives::{hash, Suite};
     use kutup_crypto::stream::CHUNK_SIZE;
     use std::cell::{Cell, RefCell};
     use std::collections::HashMap;
@@ -753,10 +754,9 @@ mod tests {
         content: Content<'a>,
         hash_key: &'a [u8; 32],
     ) -> VersionRequest<'a> {
-        use sha2::Digest;
         let sha256 = match &content {
-            Content::Path(path) => sha2::Sha256::digest(std::fs::read(path).unwrap()).into(),
-            Content::Bytes(bytes) => sha2::Sha256::digest(bytes).into(),
+            Content::Path(path) => hash(Suite::V1, std::fs::read(path).unwrap()).into(),
+            Content::Bytes(bytes) => hash(Suite::V1, bytes).into(),
         };
         VersionRequest {
             file,
@@ -819,12 +819,9 @@ mod tests {
         assert_eq!(
             meta.content_hash.as_deref(),
             Some(
-                crate::names::content_hash(&hash_key, &{
-                    use sha2::Digest;
-                    sha2::Sha256::digest(&plain).into()
-                })
-                .unwrap()
-                .as_str()
+                crate::names::content_hash(&hash_key, &{ hash(Suite::V1, &plain).into() })
+                    .unwrap()
+                    .as_str()
             )
         );
         let next = File {

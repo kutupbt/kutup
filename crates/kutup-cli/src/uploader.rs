@@ -9,6 +9,7 @@
 //! sit on chunk boundaries because the CLI ships one chunk per PATCH and the
 //! server advances by whole PATCH bodies.
 
+use kutup_crypto::primitives::{Hasher, Suite};
 use std::fs::File;
 use std::io::Read;
 use std::path::Path;
@@ -17,7 +18,6 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use anyhow::{bail, Context, Result};
 use base64::Engine;
 use indicatif::ProgressBar;
-use sha2::{Digest, Sha256};
 
 use crate::api::{ApiError, Client, FileMetadata};
 use crate::file_crypto;
@@ -69,7 +69,7 @@ pub struct Uploaded {
 /// A local file's SHA-256, read in 1 MiB pieces.
 pub(crate) fn sha256_file(path: &Path) -> Result<[u8; 32]> {
     let mut file = File::open(path).with_context(|| format!("open {}", path.display()))?;
-    let mut digest = Sha256::new();
+    let mut digest = Hasher::new(Suite::V1);
     let mut buf = vec![0u8; 1 << 20];
     loop {
         let n = file.read(&mut buf)?;
@@ -78,7 +78,7 @@ pub(crate) fn sha256_file(path: &Path) -> Result<[u8; 32]> {
         }
         digest.update(&buf[..n]);
     }
-    Ok(digest.finalize().into())
+    Ok(digest.finish().into())
 }
 
 /// Records the finished file's content hash; best effort (without it, the

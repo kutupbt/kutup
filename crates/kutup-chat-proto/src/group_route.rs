@@ -10,8 +10,9 @@
 
 use base64::engine::general_purpose::{STANDARD, URL_SAFE_NO_PAD};
 use base64::Engine as _;
-use ed25519_dalek::{Signature, Signer as _, SigningKey, VerifyingKey};
+use ed25519_dalek::{Signature, VerifyingKey};
 use hmac::{Hmac, Mac};
+use kutup_crypto::primitives::SigningKey;
 use kutup_federation_proto::FederationIdentityDocumentV1;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -101,7 +102,7 @@ const KEY_CONFIG_HASH_DOMAIN: &[u8] = b"kutup/chat-group/gateway-key-config-hash
 
 // --- encoding ----------------------------------------------------------------
 
-fn decode_fixed<const N: usize>(name: &str, value: &str) -> Result<[u8; N], String> {
+pub(crate) fn decode_fixed<const N: usize>(name: &str, value: &str) -> Result<[u8; N], String> {
     let bytes = STANDARD
         .decode(value)
         .map_err(|_| format!("{name} must be canonical padded base64"))?;
@@ -113,7 +114,7 @@ fn decode_fixed<const N: usize>(name: &str, value: &str) -> Result<[u8; N], Stri
         .map_err(|_| format!("{name} must be {N} bytes"))
 }
 
-fn decode_bounded(name: &str, value: &str, maximum: usize) -> Result<Vec<u8>, String> {
+pub(crate) fn decode_bounded(name: &str, value: &str, maximum: usize) -> Result<Vec<u8>, String> {
     let bytes = STANDARD
         .decode(value)
         .map_err(|_| format!("{name} must be canonical padded base64"))?;
@@ -147,11 +148,11 @@ fn verifying_key(name: &str, encoded: &str) -> Result<VerifyingKey, String> {
     VerifyingKey::from_bytes(&bytes).map_err(|_| format!("{name} is not an Ed25519 key"))
 }
 
-fn canonical<T: Serialize>(value: &T) -> Result<Vec<u8>, String> {
+pub(crate) fn canonical<T: Serialize>(value: &T) -> Result<Vec<u8>, String> {
     serde_json::to_vec(value).map_err(|error| error.to_string())
 }
 
-fn from_canonical<T>(bytes: &[u8], maximum: usize, name: &str) -> Result<T, String>
+pub(crate) fn from_canonical<T>(bytes: &[u8], maximum: usize, name: &str) -> Result<T, String>
 where
     T: Serialize + for<'de> Deserialize<'de>,
 {
@@ -282,7 +283,7 @@ impl GroupGatewayKeyConfigV1 {
         expires_at: i64,
     ) -> Result<Self, String> {
         if document.key.public_key_bytes().map_err(|e| e.to_string())?
-            != signing_key.verifying_key().to_bytes()
+            != signing_key.verifying_key().to_array::<32>()
         {
             return Err("signing key is not the identity document's key".into());
         }
@@ -301,7 +302,7 @@ impl GroupGatewayKeyConfigV1 {
         };
         config.validate_shape()?;
         let signature = signing_key.sign(&config.signing_input()?);
-        config.signature = STANDARD.encode(signature.to_bytes());
+        config.signature = STANDARD.encode(signature);
         Ok(config)
     }
 
@@ -360,11 +361,8 @@ impl GroupGatewayKeyConfigV1 {
             }
         }
         let key = identity.key.verifying_key().map_err(|e| e.to_string())?;
-        let signature = Signature::from_bytes(&decode_fixed::<SIGNATURE_LEN>(
-            "signature",
-            &self.signature,
-        )?);
-        key.verify_strict(&self.signing_input()?, &signature)
+        let signature = decode_fixed::<SIGNATURE_LEN>("signature", &self.signature)?;
+        key.verify(&self.signing_input()?, &signature)
             .map_err(|_| "gateway key config signature is invalid".to_string())?;
         Ok((
             self.key_id,
@@ -434,6 +432,14 @@ pub enum GroupOperationV1 {
     /// Where the signer's own request to join stands: no body, signed by
     /// the requesting pseudonym; the answer is a [`GroupRequestStatusV1`].
     GetRequestStatus,
+    /// The signer's group send endorsement for one expiration
+    /// (docs/plans/group-send-endorsements.md §3.3): the body is a
+    /// [`GroupEndorsementUploadV1`]. A pseudonym keeps at most two; a third
+    /// replaces the oldest.
+    PutEndorsement,
+    /// The members' endorsements uploaded after a cursor: the body is a
+    /// [`GroupEndorsementQueryV1`], the answer a [`GroupEndorsementPageV1`].
+    GetEndorsements,
 }
 
 impl GroupOperationV1 {
@@ -448,6 +454,8 @@ impl GroupOperationV1 {
             Self::GetAvatar => 7,
             Self::PutAvatar => 8,
             Self::GetRequestStatus => 9,
+            Self::PutEndorsement => 10,
+            Self::GetEndorsements => 11,
         }
     }
 
@@ -458,6 +466,10 @@ impl GroupOperationV1 {
         matches!(self, Self::GetJoinInfo | Self::GetAvatar)
     }
 }
+
+pub use crate::group_send::{
+    GroupEndorsementPageV1, GroupEndorsementQueryV1, GroupEndorsementUploadV1, GroupEndorsementV1,
+};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -525,6 +537,8 @@ impl GroupRequestV1 {
                 | GroupOperationV1::GetLogs
                 | GroupOperationV1::SubmitChange
                 | GroupOperationV1::PutAvatar
+                | GroupOperationV1::PutEndorsement
+                | GroupOperationV1::GetEndorsements
         );
         if needs_body == body.is_empty() {
             return Err("request body does not fit its operation".into());
@@ -594,7 +608,7 @@ impl GroupRequestV1 {
         body: &[u8],
         pseudonym: &SigningKey,
     ) -> Result<Self, String> {
-        let public = pseudonym.verifying_key().to_bytes();
+        let public = pseudonym.verifying_key().to_array::<32>();
         let mut request = Self {
             version: GROUP_ROUTE_VERSION,
             home: home.to_owned(),
@@ -611,7 +625,7 @@ impl GroupRequestV1 {
         let signature = pseudonym.sign(&request.pseudonym_input(&public)?);
         request.auth = GroupRequestAuthV1::Pseudonym {
             pseudonym: STANDARD.encode(public),
-            signature: STANDARD.encode(signature.to_bytes()),
+            signature: STANDARD.encode(signature),
         };
         request.validate_shape()?;
         Ok(request)
@@ -816,7 +830,7 @@ impl GroupNotaryV1 {
         state_hash: &[u8; HASH_LEN],
     ) -> Result<Self, String> {
         if document.key.public_key_bytes().map_err(|e| e.to_string())?
-            != signing_key.verifying_key().to_bytes()
+            != signing_key.verifying_key().to_array::<32>()
         {
             return Err("signing key is not the identity document's key".into());
         }
@@ -834,7 +848,7 @@ impl GroupNotaryV1 {
         Ok(Self {
             identity_sequence: document.sequence,
             key_config_hash: STANDARD.encode(key_config_hash),
-            signature: STANDARD.encode(signature.to_bytes()),
+            signature: STANDARD.encode(signature),
         })
     }
 
@@ -860,11 +874,8 @@ impl GroupNotaryV1 {
         let (identity, _) = signer_in(history, self.identity_sequence)?;
         let key = identity.key.verifying_key().map_err(|e| e.to_string())?;
         let key_config_hash = decode_fixed::<HASH_LEN>("keyConfigHash", &self.key_config_hash)?;
-        let signature = Signature::from_bytes(&decode_fixed::<SIGNATURE_LEN>(
-            "signature",
-            &self.signature,
-        )?);
-        key.verify_strict(
+        let signature = decode_fixed::<SIGNATURE_LEN>("signature", &self.signature)?;
+        key.verify(
             &notary_input(
                 group_id,
                 revision,
@@ -1018,13 +1029,14 @@ canonical_answer!(GroupLogPageV1, "group log page");
 #[cfg(test)]
 mod tests {
     use super::*;
+    use kutup_crypto::primitives::Suite;
 
     const HOME: &str = "home.example";
     const GROUP: [u8; 32] = [5; 32];
     const NONCE: [u8; 16] = [6; 16];
 
     fn key(byte: u8) -> SigningKey {
-        SigningKey::from_bytes(&[byte; 32])
+        SigningKey::from_seed(Suite::V1, &[byte; 32])
     }
 
     fn genesis() -> FederationIdentityDocumentV1 {
@@ -1240,7 +1252,7 @@ mod tests {
             GroupRequestV1::from_canonical_bytes(&request.canonical_bytes().unwrap()).unwrap();
         assert_eq!(
             back.verify_pseudonym().unwrap(),
-            pseudonym.verifying_key().to_bytes()
+            pseudonym.verifying_key().to_array::<32>()
         );
         let tampered: Vec<GroupRequestV1> = vec![
             GroupRequestV1 {
@@ -1432,7 +1444,7 @@ mod tests {
         assert_eq!(
             hex::encode(
                 request
-                    .pseudonym_input(&key(4).verifying_key().to_bytes())
+                    .pseudonym_input(&key(4).verifying_key().to_array::<32>())
                     .unwrap()
             ),
             include_str!("../tests/vectors/group-route-v1/request-input.hex").trim()

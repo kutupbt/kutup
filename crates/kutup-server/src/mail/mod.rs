@@ -25,6 +25,7 @@ pub mod snooze;
 pub mod submit;
 pub mod unsubscribe;
 
+use kutup_crypto::primitives::{hash, Suite};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -35,7 +36,6 @@ use axum::response::{IntoResponse, Response};
 use axum::Json;
 use serde::Deserialize;
 use serde_json::json;
-use sha2::{Digest as _, Sha256};
 use uuid::Uuid;
 
 use crate::AppState;
@@ -57,12 +57,8 @@ pub(crate) fn object_key(user_id: Uuid, message_id: Uuid) -> String {
 
 /// Compares secrets without leaking where they differ or how long they are.
 pub(crate) fn secret_matches(given: &[u8], expected: &[u8]) -> bool {
-    let (given, expected) = (Sha256::digest(given), Sha256::digest(expected));
-    given
-        .iter()
-        .zip(expected.iter())
-        .fold(0u8, |acc, (a, b)| acc | (a ^ b))
-        == 0
+    // Hashed first, so the comparison is over equal lengths.
+    kutup_crypto::primitives::ct_eq(&hash(Suite::V1, given), &hash(Suite::V1, expected))
 }
 
 /// `name@server` (any case, an optional `+tag`) as the stored address, or

@@ -11,7 +11,6 @@ use std::sync::atomic::{AtomicI64, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
-use rand::Rng as _;
 use tokio::sync::Semaphore;
 use uuid::Uuid;
 
@@ -128,7 +127,7 @@ async fn check_due(state: &AppState, settings: &Settings) -> AppResult<()> {
         let (state, server, settings) = (state.clone(), server.clone(), *settings);
         tasks.spawn(async move {
             // A small random wait, so a tick's checks don't all start at once.
-            let wait = rand::thread_rng().gen_range(0..2000);
+            let wait = kutup_crypto::primitives::random_below(2000);
             tokio::time::sleep(Duration::from_millis(wait)).await;
             let user_settings = match settings.for_user(&state.pool, row.user_id).await {
                 Ok(settings) => settings,

@@ -1,7 +1,7 @@
 use std::{fmt, str::FromStr};
 
 use base64::Engine as _;
-use ed25519_dalek::{Signature, Signer as _, SigningKey};
+use kutup_crypto::primitives::SigningKey;
 use serde::{Deserialize, Serialize};
 use url::Url;
 
@@ -153,15 +153,15 @@ impl FederationDiscoveryV2 {
                 "embedded identity belongs to a different server",
             ));
         }
-        if discovery.identity.key.public_key_bytes()? != signing_key.verifying_key().to_bytes() {
+        if discovery.identity.key.public_key_bytes()?
+            != signing_key.verifying_key().to_array::<32>()
+        {
             return Err(FederationProtocolError::InvalidDiscovery(
                 "signing key does not match the embedded identity",
             ));
         }
         discovery.signature = base64::engine::general_purpose::STANDARD.encode(
-            signing_key
-                .sign(&discovery.signing_bytes_with_transport_policy(transport_policy)?)
-                .to_bytes(),
+            signing_key.sign(&discovery.signing_bytes_with_transport_policy(transport_policy)?),
         );
         Ok(discovery)
     }
@@ -210,11 +210,11 @@ impl FederationDiscoveryV2 {
                 "document has expired",
             ));
         }
-        let signature = Signature::from_bytes(&decode_base64::<64>("signature", &self.signature)?);
+        let signature = decode_base64::<64>("signature", &self.signature)?;
         self.identity
             .key
             .verifying_key()?
-            .verify_strict(
+            .verify(
                 &self.signing_bytes_with_transport_policy(transport_policy)?,
                 &signature,
             )
@@ -382,11 +382,10 @@ fn normalize_api_base(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use ed25519_dalek::SigningKey;
-    use sha2::{Digest as _, Sha256};
+    use kutup_crypto::primitives::{hash, Suite};
 
     fn identity() -> (SigningKey, FederationIdentityDocumentV1) {
-        let key = SigningKey::from_bytes(&[7; 32]);
+        let key = SigningKey::from_seed(Suite::V1, &[7; 32]);
         let identity = FederationIdentityDocumentV1::genesis("alpha.example", 100, &key).unwrap();
         (key, identity)
     }
@@ -553,7 +552,7 @@ mod tests {
             identity,
             200,
             3_800,
-            &SigningKey::from_bytes(&[9; 32]),
+            &SigningKey::from_seed(Suite::V1, &[9; 32]),
         )
         .is_err());
     }
@@ -572,6 +571,6 @@ mod tests {
         let encoded = serde_json::to_string_pretty(&document).unwrap();
         let decoded: FederationDiscoveryV2 = serde_json::from_str(&encoded).unwrap();
         assert_eq!(first, decoded.signing_bytes().unwrap());
-        assert_eq!(hex::encode(Sha256::digest(first)).len(), 64);
+        assert_eq!(hex::encode(hash(Suite::V1, first)).len(), 64);
     }
 }

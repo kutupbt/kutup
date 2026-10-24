@@ -5,7 +5,6 @@
 //!
 //! Gated on `KUTUP_LIVE_SERVER` (and `KUTUP_LIVE_ADMIN` to purge its accounts).
 
-use rand::RngCore;
 use reqwest::blocking::Client;
 use reqwest::StatusCode;
 use serde_json::{json, Value};
@@ -15,10 +14,10 @@ use common::*;
 
 fn device_key() -> [u8; 32] {
     let mut seed = [0u8; 32];
-    rand::thread_rng().fill_bytes(&mut seed);
-    ed25519_dalek::SigningKey::from_bytes(&seed)
+    kutup_crypto::primitives::random(&mut seed);
+    kutup_crypto::primitives::SigningKey::from_seed(kutup_crypto::primitives::Suite::V1, &seed)
         .verifying_key()
-        .to_bytes()
+        .to_array::<32>()
 }
 
 fn post_device(c: &Client, base: &str, user: &User, body: &Value) -> (StatusCode, Value) {
@@ -208,9 +207,12 @@ fn a_device_lives_with_its_sign_in() {
     let c = crate::common::client();
     let mut alice = register(&c, &base);
     let device = register_device(&c, &base, &alice);
-    let key = ed25519_dalek::SigningKey::from_bytes(&device.seed)
-        .verifying_key()
-        .to_bytes();
+    let key = kutup_crypto::primitives::SigningKey::from_seed(
+        kutup_crypto::primitives::Suite::V1,
+        &device.seed,
+    )
+    .verifying_key()
+    .to_array::<32>();
     let folder = create_folder(&c, &base, &alice);
     let file = seal_file(&folder, &uuid(), b"x");
     assert!(upload(&c, &base, &alice.token, &folder, &file)
@@ -390,9 +392,12 @@ fn times_challenges_and_a_wipe() {
 
     // A revocation dated a day ahead: refused; one now: taken.
     let revoked = register_device(&c, &base, &alice);
-    let revoked_key = ed25519_dalek::SigningKey::from_bytes(&revoked.seed)
-        .verifying_key()
-        .to_bytes();
+    let revoked_key = kutup_crypto::primitives::SigningKey::from_seed(
+        kutup_crypto::primitives::Suite::V1,
+        &revoked.seed,
+    )
+    .verifying_key()
+    .to_array::<32>();
     let revoke = |body: Value| {
         bearer(
             c.delete(format!("{base}/api/devices/{}", revoked.id)),
@@ -415,9 +420,12 @@ fn times_challenges_and_a_wipe() {
     assert_eq!(revoke(late), StatusCode::FORBIDDEN);
     assert!(revoke(device_revocation_body(&c, &base, &alice, &revoked_key)).is_success());
     let kept = register_device(&c, &base, &alice);
-    let kept_key = ed25519_dalek::SigningKey::from_bytes(&kept.seed)
-        .verifying_key()
-        .to_bytes();
+    let kept_key = kutup_crypto::primitives::SigningKey::from_seed(
+        kutup_crypto::primitives::Suite::V1,
+        &kept.seed,
+    )
+    .verifying_key()
+    .to_array::<32>();
 
     // The administrator wipes the account; it is set up again.
     let (admin_name, admin_password) = admin.split_once(':').expect("username:password");

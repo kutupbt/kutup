@@ -6,6 +6,7 @@
 //! itself with roots it generates, uses once and drops
 //! (`crate::sealed_sender_provision`).
 
+use kutup_crypto::primitives::{hash, Suite};
 use std::sync::{Arc, RwLock};
 
 use axum::extract::{Path, Query, State};
@@ -20,10 +21,7 @@ use kutup_federation_proto::FederatedFeaturePolicyTypeV1;
 use libsignal_protocol::{
     DeviceId, PrivateKey, PublicKey, SenderCertificate, ServerCertificate, Timestamp,
 };
-use rand09::rngs::OsRng;
-use rand09::TryRngCore as _;
 use serde::Deserialize;
-use sha2::{Digest as _, Sha256};
 use time::OffsetDateTime;
 
 use crate::config::Config;
@@ -165,7 +163,7 @@ impl SealedSenderService {
             }
             let root_bytes = STANDARD.decode(&root.public_key)?;
             let root_public = PublicKey::deserialize(&root_bytes)?;
-            if hex::encode(Sha256::digest(&root_bytes)) != root.root_id
+            if hex::encode(hash(Suite::V1, &root_bytes)) != root.root_id
                 || !certificate.validate(&root_public)?
             {
                 anyhow::bail!("sealed sender server certificate does not validate under its root");
@@ -274,7 +272,7 @@ impl SealedSenderService {
             .ok()
             .and_then(|value| value.checked_mul(1000))
             .ok_or_else(|| AppError::internal("sender certificate expiry is invalid"))?;
-        let mut rng = OsRng.unwrap_err();
+        let mut rng = kutup_crypto::primitives::Rng;
         let certificate = SenderCertificate::new(
             sender,
             None,

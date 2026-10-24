@@ -66,8 +66,6 @@ multer.workspace = true
 # Unified federation transport and storage capacity probe.
 reqwest.workspace = true
 rustls.workspace = true
-rand.workspace = true
-rand09 = { package = "rand", version = "0.9" }
 # Direct use of the pinned libsignal sealed-sender certificate primitives. The
 # offline root is never configured here; only a root-signed server certificate
 # and its online private key are loaded by the service.

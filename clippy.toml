@@ -33,6 +33,7 @@ disallowed-methods = [
     { path = "dryoc::classic::crypto_generichash::crypto_generichash", reason = "use kutup_crypto::primitives::hash", allow-invalid = true },
     { path = "ed25519_dalek::Verifier::verify", reason = "use kutup_crypto::primitives::VerifyingKey (strict)", allow-invalid = true },
     { path = "rand::rng", reason = "use kutup_crypto::primitives::random", allow-invalid = true },
+    { path = "rand::random", reason = "use kutup_crypto::primitives::{random_array, random_below}", allow-invalid = true },
 ]
 disallowed-types = [
     { path = "chacha20poly1305::XChaCha20Poly1305", reason = "use kutup_crypto::primitives::Aead", allow-invalid = true },

@@ -2,7 +2,7 @@
 //! seeds. Review changes to that file as protocol wire-format changes.
 
 use base64::Engine as _;
-use ed25519_dalek::SigningKey;
+use kutup_crypto::primitives::{SigningKey, Suite};
 use kutup_federation_proto::{
     federation_key_id, grouped_fingerprint, FederationCapabilityId, FederationDiscoveryV2,
     FederationFeature, FederationHttpRequest, FederationHttpResponse, FederationIdentityDocumentV1,
@@ -14,9 +14,9 @@ fn main() {
     let identity_seed = [11; 32];
     let rotated_seed = [12; 32];
     let response_seed = [13; 32];
-    let identity_key = SigningKey::from_bytes(&identity_seed);
-    let rotated_key = SigningKey::from_bytes(&rotated_seed);
-    let response_key = SigningKey::from_bytes(&response_seed);
+    let identity_key = SigningKey::from_seed(Suite::V1, &identity_seed);
+    let rotated_key = SigningKey::from_seed(Suite::V1, &rotated_seed);
+    let response_key = SigningKey::from_seed(Suite::V1, &response_seed);
 
     let genesis =
         FederationIdentityDocumentV1::genesis("alpha.example", 1_700_000_000, &identity_key)
@@ -62,7 +62,7 @@ fn main() {
     let verified_request = FederationVerifiedRequest::verify(
         signed_request.request.clone(),
         signed_request.headers.clone(),
-        &rotated_key.verifying_key().to_bytes(),
+        &rotated_key.verifying_key().to_array::<32>(),
         1_700_000_400,
     )
     .unwrap();
@@ -98,8 +98,8 @@ fn main() {
         },
         "discovery": discovery,
         "httpSignature": {
-            "requestSignerPublicKeyBase64": base64::engine::general_purpose::STANDARD.encode(rotated_key.verifying_key().to_bytes()),
-            "requestSignerKeyId": federation_key_id(&rotated_key.verifying_key().to_bytes()),
+            "requestSignerPublicKeyBase64": base64::engine::general_purpose::STANDARD.encode(rotated_key.verifying_key().to_array::<32>()),
+            "requestSignerKeyId": federation_key_id(&rotated_key.verifying_key().to_array::<32>()),
             "request": {
                 "method": signed_request.request.method,
                 "authority": signed_request.request.authority,
@@ -115,8 +115,8 @@ fn main() {
             "requestHeaders": signed_request.headers,
             "requestSignatureBase": request_signature_base,
             "responseSignerSeedBase64": base64::engine::general_purpose::STANDARD.encode(response_seed),
-            "responseSignerPublicKeyBase64": base64::engine::general_purpose::STANDARD.encode(response_key.verifying_key().to_bytes()),
-            "responseSignerKeyId": federation_key_id(&response_key.verifying_key().to_bytes()),
+            "responseSignerPublicKeyBase64": base64::engine::general_purpose::STANDARD.encode(response_key.verifying_key().to_array::<32>()),
+            "responseSignerKeyId": federation_key_id(&response_key.verifying_key().to_array::<32>()),
             "response": {
                 "status": response.status,
                 "contentType": response.content_type,

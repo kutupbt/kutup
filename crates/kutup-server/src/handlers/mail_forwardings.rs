@@ -15,6 +15,7 @@ use base64::Engine as _;
 use kutup_crypto::account_envelope::{self, AccountEnvelopePurpose};
 use kutup_crypto::mail_forwarding::{self as crypto, ProxyInstance};
 use kutup_crypto::mail_key;
+use kutup_crypto::primitives::{hash, Suite};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use time::OffsetDateTime;
@@ -610,9 +611,8 @@ async fn prepare(
 /// isn't one.
 fn token_hash(token: &str) -> Option<Vec<u8>> {
     use base64::engine::general_purpose::URL_SAFE_NO_PAD;
-    use sha2::Digest as _;
     let bytes = URL_SAFE_NO_PAD.decode(token).ok()?;
-    (bytes.len() == 32).then(|| sha2::Sha256::digest(bytes).to_vec())
+    (bytes.len() == 32).then(|| hash(Suite::V1, bytes).to_vec())
 }
 
 fn not_issued(error: forwarding_code::NotIssued) -> AppError {

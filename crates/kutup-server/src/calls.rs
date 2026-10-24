@@ -8,16 +8,18 @@
 //! (username `<expiry>:<opaque id>`, password `base64(HMAC-SHA1(secret,
 //! username))`), so the relay needs no account database.
 
+use kutup_crypto::primitives::{hash, Suite};
 use std::sync::LazyLock;
 
 use axum::extract::State;
 use axum::Json;
 use base64::engine::general_purpose::STANDARD;
 use base64::Engine as _;
+// Adapter: coturn's REST-API credential is HMAC-SHA1.
+#[allow(clippy::disallowed_types)]
 use hmac::{Hmac, Mac};
 use serde::Serialize;
 use sha1::Sha1;
-use sha2::{Digest, Sha256};
 
 use crate::error::{AppError, AppResult};
 use crate::middleware::AuthUser;
@@ -64,8 +66,10 @@ fn split_urls(value: &str) -> Vec<String> {
 
 /// The coturn REST-API credential for `user_id` until `expires_at`. The
 /// username names a pseudonym, not the account, so the relay's logs don't.
+// Adapter: coturn's REST-API credential is HMAC-SHA1.
+#[allow(clippy::disallowed_types)]
 fn turn_credential(secret: &str, user_id: &str, expires_at: i64) -> (String, String) {
-    let pseudonym = hex::encode(&Sha256::digest(format!("kutup-turn:{secret}:{user_id}"))[..12]);
+    let pseudonym = hex::encode(&hash(Suite::V1, format!("kutup-turn:{secret}:{user_id}"))[..12]);
     let username = format!("{expires_at}:{pseudonym}");
     let mut mac =
         Hmac::<Sha1>::new_from_slice(secret.as_bytes()).expect("HMAC accepts any key length");
@@ -127,6 +131,7 @@ mod tests {
     use super::*;
 
     #[test]
+    #[allow(clippy::disallowed_types)] // coturn's HMAC-SHA1
     fn turn_credentials_follow_the_coturn_rest_scheme() {
         let (username, password) = turn_credential("north-secret", "user-1", 1_700_000_000);
         let (prefix, pseudonym) = username.split_once(':').unwrap();

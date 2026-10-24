@@ -160,6 +160,25 @@ tests) prove nothing on the wire changed.
 6. **kutup-pass** (random only; KDBX and SSH stay adapters).
 7. **deny `[bans]`** last, once nothing outside the wrappers uses the crates.
 
+Step 3 notes: an object's stored SHA-256 that is also served as an RFC 9530
+`Content-Digest` (Drive versions and uploads, Chat media, album thumbnails,
+federation response bodies) goes through federation-proto's `ContentDigest`,
+since the header names `sha-256` whatever the suite is; every other server
+hash is the suite's. The server's RNG uses (rand 0.8, rand 0.9 for
+libsignal, p256's `OsRng`) are all `primitives::Rng`/`random*` now, and the
+server no longer depends on `rand`; `random_below` serves codes, digits and
+jitter. kutup-chat-proto's group-route and MLS-control signers take
+`primitives::SigningKey`, as the server hands them one; the rest of that
+crate moves with chat-core.
+
+Step 4 notes: the CLI's master key and recovery entropy are
+`primitives::random_key()` (`register::account_secrets`), and the CLI no
+longer depends on rand, sha2 or ed25519-dalek, so the lint leaves it no
+other generator to name. Drive's `sha256`-named fields (version and file
+uploads, whiteboard assets) are the suite's hash, as on the server; under V1
+it is the same SHA-256 as the served `ContentDigest`, and a suite with
+another hash renames those fields (a format change, not a silent swap).
+
 After that, **block format slices 1-2** build their framing on `Aead::new`
 and `hash`, and the wipe branch sets every header's suite to 1.
 
@@ -178,21 +197,53 @@ on `fuzz` as on the other standalone roots.
 |---|---|
 | ~~`crates/kutup-crypto`~~ | step 2: done |
 | ~~`crates/kutup-crypto-wasm`~~ | step 2: done |
-| `crates/kutup-server` | step 3 |
-| `crates/kutup-cli` | step 4 |
+| ~~`crates/kutup-server`~~ | step 3: done |
+| ~~`crates/kutup-cli`~~ | step 4: done |
 | `crates/kutup-pass` | step 6 (KDBX and the SSH agent become adapters) |
-| `crates/kutup-federation-proto` | step 3 |
+| ~~`crates/kutup-federation-proto`~~ | step 3: done |
 | `crates/kutup-chat-proto` | with chat-core's crypto (wipe plan, code item 1) |
 | `crates/kutup-chat-core`, `crates/kutup-client-ffi`, `fuzz` | with chat-core's crypto |
 
+Every other `clippy.toml` (or `.clippy.toml`) must carry the root's rules
+unchanged; one without the marker that drops a rule fails the check, as
+does a marker file anywhere the table doesn't list.
+
 `kutup_crypto::primitives` itself carries `#[allow]` for the rules, as do
-the adapters once their crates move. In kutup-crypto those are `mail_key`
-(OpenPGP), `oblivious` (RFC 9458 on the HPKE suite), `opaque` (RFC 9807),
-`pass_vault` (KeePass's composite key), `provisioning` (Signal's
-ProvisioningCipher) and `safety_number` (Signal's); vector tests that check
-against reference implementations allow it too. `stream.rs` (secretstream)
-stays until the block format replaces it. Each rule has `allow-invalid`, as
-a crate without the dependency can't name the type anyway.
+the adapters once their crates move. An adapter's `#[allow]` sits on the
+items that speak the standard (a `use`, a function, an `impl`), never on the
+whole module, so Kutup's own formats inside an adapter's file stay linted.
+Each rule has `allow-invalid`, as a crate without the dependency can't name
+the type anyway.
+
+The check also fails on any `clippy::disallowed_types` or
+`clippy::disallowed_methods` in a Rust file this table doesn't list, and on
+every other way to switch them off: an allow or expect of `clippy::style`,
+`clippy::all` or `warnings` anywhere, a `[lints]` table allowing them in a
+Cargo.toml, rustflags with `-A` or `--cap-lints` for them in a
+`.cargo/config`, such a flag in a script or workflow, and `CLIPPY_CONF_DIR`. A new
+adapter adds its row here, in the PR that adds it.
+
+| File | Allowed for |
+|---|---|
+| `crates/kutup-crypto/src/lib.rs` | `primitives`, the one module that names algorithms |
+| `crates/kutup-crypto/src/hpke_xwing.rs` | the HPKE backend behind `primitives::hpke_*` |
+| `crates/kutup-crypto/src/mail_key.rs` | OpenPGP's SHA-256 key imprint (rPGP) |
+| `crates/kutup-crypto/src/oblivious.rs` | Oblivious HTTP (RFC 9458): HPKE's context API and the response AEAD |
+| `crates/kutup-crypto/src/opaque.rs` | OPAQUE's ciphersuite (RFC 9807) |
+| `crates/kutup-crypto/src/pass_vault.rs` | KeePass's composite key (SHA-256 of the password) |
+| `crates/kutup-crypto/src/provisioning.rs` | Signal's ProvisioningCipher |
+| `crates/kutup-crypto/src/safety_number.rs` | Signal's safety number (iterated SHA-512) |
+| `crates/kutup-crypto/src/stream.rs` | secretstream, until the block format replaces it |
+| `crates/kutup-crypto/tests/vectors.rs` | reference implementations for the vectors |
+| `crates/kutup-crypto/tests/chat_contact_list_vectors.rs` | reference implementations for the vectors |
+| `crates/kutup-crypto/tests/chat_group_list_vectors.rs` | reference implementations for the vectors |
+| `crates/kutup-server/src/tls.rs` | the `reqwest` rule: the one place a client is built |
+| `crates/kutup-server/tests/common/mod.rs` | the `reqwest` rule, for the tests |
+| `crates/kutup-cli/src/tls.rs` | the `reqwest` rule: the one place a client is built |
+| `crates/kutup-federation-proto/src/http_signatures.rs` | RFC 9530's `sha-256` Content-Digest (`ContentDigest`) |
+| `crates/kutup-server/src/calls.rs` | coturn's REST-API credential (HMAC-SHA1) |
+| `crates/kutup-server/src/web_push_payload.rs` | RFC 8291 Web Push encryption (HKDF-SHA256) |
+| `crates/kutup-server/src/web_push.rs` | RFC 8292's ES256 signature, checked in a test |
 
 ## Not in this note
 

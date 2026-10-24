@@ -13,7 +13,6 @@ use std::rc::Rc;
 use async_trait::async_trait;
 use base64::engine::general_purpose::STANDARD;
 use base64::Engine as _;
-use ed25519_dalek::SigningKey;
 use futures_executor::block_on;
 use kutup_chat_proto::group::{
     check_change, check_genesis, decode_exact, AccessRequired, GroupActionV1, GroupChangeError,
@@ -33,6 +32,7 @@ use kutup_chat_proto::{
     SendMessagesRequest, SenderCertificateResponseV1,
 };
 use kutup_crypto::oblivious::GatewayKey;
+use kutup_crypto::primitives::{SigningKey, Suite};
 use kutup_federation_proto::{
     FederatedFeaturePolicyEnvelopeV1, FederatedFeaturePolicyHistoryV1,
     FederatedFeaturePolicyTypeV1, FederationIdentityDocumentV1,
@@ -186,7 +186,7 @@ pub(crate) struct World {
 impl World {
     pub(crate) fn new() -> Rc<Self> {
         let mut rng = rng();
-        let key = SigningKey::from_bytes(&[1u8; 32]);
+        let key = SigningKey::from_seed(Suite::V1, &[1u8; 32]);
         let identity = FederationIdentityDocumentV1::genesis(SERVER, now() - 3600, &key).unwrap();
         let gateway = GatewayKey::generate(1).unwrap();
         let config = GroupGatewayKeyConfigV1::sign(

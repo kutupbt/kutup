@@ -12,6 +12,7 @@
 
 use aws_sdk_s3::primitives::ByteStream;
 use kutup_crypto::mail_forwarding::{self, ProxyInstance};
+use kutup_crypto::primitives::{ct_eq, mac, Suite};
 use uuid::Uuid;
 
 use super::filters::{self, Condition, Match, Subject};
@@ -322,20 +323,21 @@ const MARKER_DOMAIN: &[u8] = b"kutup/mail-forwarding/marker/v1\0";
 
 /// The loop marker's MAC: its own label, over the forwarding alone.
 fn marker_mac(key: &[u8; 32], forwarding: Uuid) -> String {
-    use hmac::{Hmac, Mac as _};
-    let mut mac = <Hmac<sha2::Sha256> as hmac::Mac>::new_from_slice(key).expect("any key length");
-    mac.update(MARKER_DOMAIN);
-    mac.update(forwarding.as_bytes());
-    hex::encode(&mac.finalize().into_bytes()[..8])
+    let tag = mac(Suite::V1, key, &[MARKER_DOMAIN, forwarding.as_bytes()]);
+    hex::encode(&tag.as_bytes()[..8])
 }
 
 fn return_path_mac(key: &[u8; 32], forwarding: Uuid, day: i64) -> String {
-    use hmac::{Hmac, Mac as _};
-    let mut mac = <Hmac<sha2::Sha256> as hmac::Mac>::new_from_slice(key).expect("any key length");
-    mac.update(RETURN_PATH_DOMAIN);
-    mac.update(forwarding.as_bytes());
-    mac.update(&day.to_be_bytes());
-    hex::encode(&mac.finalize().into_bytes()[..8])
+    let tag = mac(
+        Suite::V1,
+        key,
+        &[
+            RETURN_PATH_DOMAIN,
+            forwarding.as_bytes(),
+            &day.to_be_bytes(),
+        ],
+    );
+    hex::encode(&tag.as_bytes()[..8])
 }
 
 fn today() -> i64 {
@@ -377,13 +379,10 @@ pub fn bounce_forwarding(keys: &OpaqueSetupKeys, local: &str) -> Option<Uuid> {
     keys.ids()
         .filter_map(|id| keys.get(id))
         .any(|key| {
-            let expected = return_path_mac(key, forwarding, day);
-            expected.len() == mac.len()
-                && expected
-                    .bytes()
-                    .zip(mac.bytes())
-                    .fold(0u8, |acc, (a, b)| acc | (a ^ b))
-                    == 0
+            ct_eq(
+                return_path_mac(key, forwarding, day).as_bytes(),
+                mac.as_bytes(),
+            )
         })
         .then_some(forwarding)
 }
@@ -549,15 +548,9 @@ fn ours(keys: &OpaqueSetupKeys, marker: &str) -> bool {
     let Ok(forwarding) = Uuid::parse_str(id) else {
         return false;
     };
-    keys.ids().filter_map(|id| keys.get(id)).any(|key| {
-        let expected = marker_mac(key, forwarding);
-        expected.len() == mac.len()
-            && expected
-                .bytes()
-                .zip(mac.bytes())
-                .fold(0u8, |acc, (a, b)| acc | (a ^ b))
-                == 0
-    })
+    keys.ids()
+        .filter_map(|id| keys.get(id))
+        .any(|key| ct_eq(marker_mac(key, forwarding).as_bytes(), mac.as_bytes()))
 }
 
 /// Forwards a copy just stored for an address to each of the address's

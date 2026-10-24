@@ -6,6 +6,7 @@
 
 mod common;
 
+use kutup_crypto::primitives::{hash, Hasher, Suite};
 use std::time::{Duration, Instant};
 
 use base64::engine::general_purpose::STANDARD;
@@ -23,11 +24,9 @@ use kutup_crypto::drive_object::{self, DriveFileBlobContextV1};
 use kutup_crypto::identity::AccountIdentityKeysV1;
 use kutup_crypto::named_share::NamedShareEnvelopeV1;
 use kutup_crypto::profile_key_share::{ProfileKeyEnvelopeV1, ProfileKeyParties};
-use rand::RngCore;
 use reqwest::blocking::{Client, Response};
 use reqwest::StatusCode;
 use serde_json::{json, Value};
-use sha2::{Digest as _, Sha256};
 use time::OffsetDateTime;
 use uuid::Uuid;
 
@@ -112,7 +111,7 @@ fn publish_direct_delivery_capability(
             48,
         ),
         access_key_verifier: "72".repeat(32),
-        delivery_capability_verifier: hex::encode(Sha256::digest(capability)),
+        delivery_capability_verifier: hex::encode(hash(Suite::V1, capability)),
     };
     json_response(
         device
@@ -479,10 +478,10 @@ fn client() -> Client {
 }
 
 fn test_master_key(email: &str) -> [u8; 32] {
-    let mut hasher = Sha256::new();
+    let mut hasher = Hasher::new(Suite::V1);
     hasher.update(b"kutup/two-server-live/account-master/v1\0");
     hasher.update(email.as_bytes());
-    hasher.finalize().into()
+    hasher.finish().into()
 }
 
 /// The key binding the account seeded by `email` registers with, the same
@@ -539,11 +538,10 @@ fn registration_payload(
     setup: Option<&Value>,
 ) -> Value {
     let setup_bearer = setup.map(|first| first["setupToken"].as_str().unwrap());
-    let mut rng = rand::thread_rng();
     let master_key = test_master_key(email);
     let binding = test_binding(email);
     let mut recovery_entropy = [0u8; 32];
-    rng.fill_bytes(&mut recovery_entropy);
+    kutup_crypto::primitives::random(&mut recovery_entropy);
 
     let (opaque_record, opaque_server_key_id, export_key, started) =
         common::try_opaque_register_answer(c, base, PASSWORD, &binding, None, setup_bearer)

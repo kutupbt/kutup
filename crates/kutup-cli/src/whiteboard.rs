@@ -17,8 +17,8 @@
 //! unknown fields.
 
 use anyhow::{Context, Result};
+use kutup_crypto::primitives::{hash, Suite};
 use serde_json::Value;
-use sha2::{Digest, Sha256};
 
 use crate::api::Client;
 use kutup_crypto::asset;
@@ -75,7 +75,7 @@ pub fn extract_and_upload(
             file: &file,
             file_key,
             content: crate::version_upload::Content::Bytes(&out),
-            sha256: Sha256::digest(&out).into(),
+            sha256: hash(Suite::V1, &out).into(),
             hash_key: Some(hash_key),
             based_on: None,
             progress: crate::uploader::Progress::Quiet,

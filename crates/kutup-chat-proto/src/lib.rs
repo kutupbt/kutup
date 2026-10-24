@@ -25,6 +25,7 @@ mod extras;
 pub mod federation;
 pub mod group;
 pub mod group_route;
+pub mod group_send;
 mod identity;
 mod locations;
 mod media;

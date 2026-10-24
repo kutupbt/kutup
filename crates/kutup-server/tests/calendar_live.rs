@@ -1220,7 +1220,7 @@ fn reminders_and_alarms() {
 
     // A browser's subscription: Chat's push services only, real keys only
     // (404 where this server has Web Push off).
-    let browser = p256::SecretKey::random(&mut rand::rngs::OsRng);
+    let browser = p256::SecretKey::random(&mut kutup_crypto::primitives::Rng);
     let p256dh = {
         use p256::elliptic_curve::sec1::ToEncodedPoint;
         base64::Engine::encode(

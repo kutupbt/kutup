@@ -1,5 +1,5 @@
 use base64::Engine as _;
-use ed25519_dalek::SigningKey;
+use kutup_crypto::primitives::{SigningKey, Suite};
 use kutup_federation_proto::{
     grouped_fingerprint, verify_identity_chain, FederationCapabilityId, FederationDiscoveryV2,
     FederationFeature, FederationHttpRequest, FederationHttpResponse, FederationIdentityDocumentV1,
@@ -14,7 +14,7 @@ fn seed(value: &Value, field: &str) -> SigningKey {
     let decoded = base64::engine::general_purpose::STANDARD
         .decode(value[field].as_str().unwrap())
         .unwrap();
-    SigningKey::from_bytes(&decoded.try_into().unwrap())
+    SigningKey::from_seed(Suite::V1, &decoded.try_into().unwrap())
 }
 
 fn body(value: &Value) -> Vec<u8> {
@@ -111,7 +111,7 @@ fn published_vector_is_byte_for_byte_reproducible_and_verifiable() {
     let verified_request = FederationVerifiedRequest::verify(
         signed_request.request.clone(),
         expected_request_headers,
-        &rotated_key.verifying_key().to_bytes(),
+        &rotated_key.verifying_key().to_array::<32>(),
         1_700_000_400,
     )
     .unwrap();
@@ -123,7 +123,7 @@ fn published_vector_is_byte_for_byte_reproducible_and_verifiable() {
     assert!(FederationVerifiedRequest::verify(
         other_feature,
         serde_json::from_value(http["requestHeaders"].clone()).unwrap(),
-        &rotated_key.verifying_key().to_bytes(),
+        &rotated_key.verifying_key().to_array::<32>(),
         1_700_000_400,
     )
     .is_err());
@@ -158,7 +158,7 @@ fn published_vector_is_byte_for_byte_reproducible_and_verifiable() {
         .verify_response(
             response,
             &response_headers,
-            &response_key.verifying_key().to_bytes(),
+            &response_key.verifying_key().to_array::<32>(),
             1_700_000_500,
         )
         .unwrap();

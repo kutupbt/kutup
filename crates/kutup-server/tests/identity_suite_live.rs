@@ -129,20 +129,23 @@ fn a_suite_1_account_upgrades_once_and_is_shared_with_only_after() {
 /// tell from a real old account.
 mod legacy_suite1 {
     use super::*;
-    use hkdf::Hkdf;
     use kutup_chat_proto::{AccountIdentitySuiteId, AccountManifestV2};
     use kutup_crypto::account_envelope::{self, AccountEnvelopePurpose};
     use kutup_crypto::account_ref::AccountRef;
     use kutup_crypto::identity::{incarnation_id_from_authority_public, AccountIdentityKeysV1};
-    use sha2::Sha256;
 
     /// The suite-1 Drive key pair: HKDF as `AccountIdentityKeysV1` did, then
     /// libsodium's `crypto_box_seed_keypair`.
     pub fn drive_keys(master_key: &[u8; 32]) -> ([u8; 32], [u8; 32]) {
-        let hkdf = Hkdf::<Sha256>::new(Some(b"kutup/account-identity/v1\0"), master_key);
         let mut seed = [0u8; 32];
-        hkdf.expand(b"kutup/account-identity/drive-hpke-x25519/v1\0", &mut seed)
-            .unwrap();
+        kutup_crypto::primitives::kdf(
+            kutup_crypto::primitives::Suite::V1,
+            master_key,
+            b"kutup/account-identity/v1\0",
+            b"kutup/account-identity/drive-hpke-x25519/v1\0",
+            &mut seed,
+        )
+        .unwrap();
         let (public, secret) = dryoc::classic::crypto_box::crypto_box_seed_keypair(&seed);
         (public, secret)
     }

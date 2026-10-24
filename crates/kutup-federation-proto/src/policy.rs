@@ -5,9 +5,8 @@
 //! does not parse the feature-owned payload.
 
 use base64::Engine as _;
-use ed25519_dalek::{Signature, Signer as _, SigningKey};
+use kutup_crypto::primitives::{hash, SigningKey, Suite};
 use serde::{Deserialize, Serialize};
-use sha2::{Digest as _, Sha256};
 
 use crate::{
     decode_base64, federation_key_id, push_string, validate_hash, validate_server_name,
@@ -126,7 +125,7 @@ impl Ed25519FederationAuthSigner {
     }
 
     pub fn verifying_key_bytes(&self) -> [u8; 32] {
-        self.0.verifying_key().to_bytes()
+        self.0.verifying_key().to_array()
     }
 }
 
@@ -136,17 +135,17 @@ impl FederationAuthSigner for Ed25519FederationAuthSigner {
     }
 
     fn sign_federation_auth(&self, message: &[u8]) -> Result<[u8; 64], FederationProtocolError> {
-        Ok(self.0.sign(message).to_bytes())
+        Ok(self.0.sign_array(message))
     }
 }
 
 impl FederationAuthSigner for SigningKey {
     fn key_id(&self) -> String {
-        federation_key_id(&self.verifying_key().to_bytes())
+        federation_key_id(&self.verifying_key().to_array::<32>())
     }
 
     fn sign_federation_auth(&self, message: &[u8]) -> Result<[u8; 64], FederationProtocolError> {
-        Ok(self.sign(message).to_bytes())
+        Ok(self.sign_array(message))
     }
 }
 
@@ -190,7 +189,7 @@ impl FederatedFeaturePolicyEnvelopeV1 {
             previous_policy_hash,
             federation_identity_generation: identity.sequence,
             payload: base64::engine::general_purpose::STANDARD.encode(payload),
-            payload_digest: hex::encode(Sha256::digest(payload)),
+            payload_digest: hex::encode(hash(Suite::V1, payload)),
             issued_at,
             signer_key_id: signer.key_id(),
             signature: String::new(),
@@ -222,7 +221,7 @@ impl FederatedFeaturePolicyEnvelopeV1 {
                 "is too large or not canonical padded base64",
             ));
         }
-        if Sha256::digest(&bytes).as_slice()
+        if hash(Suite::V1, &bytes).as_bytes()
             != validate_hash("payloadDigest", &self.payload_digest)?.as_slice()
         {
             return Err(FederationProtocolError::ContentDigestMismatch);
@@ -262,7 +261,7 @@ impl FederatedFeaturePolicyEnvelopeV1 {
         bytes.extend_from_slice(POLICY_HASH_DOMAIN);
         bytes.extend_from_slice(&self.signing_bytes()?);
         bytes.extend_from_slice(&decode_base64::<64>("signature", &self.signature)?);
-        Ok(hex::encode(Sha256::digest(bytes)))
+        Ok(hex::encode(hash(Suite::V1, bytes)))
     }
 
     /// `identity` must already have been accepted by the federation identity
@@ -282,11 +281,11 @@ impl FederatedFeaturePolicyEnvelopeV1 {
                 "policy does not match the authenticated federation identity",
             ));
         }
-        let signature = Signature::from_bytes(&decode_base64::<64>("signature", &self.signature)?);
+        let signature = decode_base64::<64>("signature", &self.signature)?;
         identity
             .key
             .verifying_key()?
-            .verify_strict(&self.signing_bytes()?, &signature)
+            .verify(&self.signing_bytes()?, &signature)
             .map_err(|_| FederationProtocolError::InvalidIdentitySignature("feature policy"))
     }
 
@@ -384,7 +383,7 @@ mod tests {
 
     #[test]
     fn deterministic_vector_and_contiguous_chain() {
-        let key = SigningKey::from_bytes(&[7; 32]);
+        let key = SigningKey::from_seed(Suite::V1, &[7; 32]);
         let identity = identity(&key);
         let first = FederatedFeaturePolicyEnvelopeV1::sign(
             "alpha.example",
@@ -418,7 +417,7 @@ mod tests {
 
     #[test]
     fn rollback_gap_wrong_domain_type_digest_and_signature_fail() {
-        let key = SigningKey::from_bytes(&[8; 32]);
+        let key = SigningKey::from_seed(Suite::V1, &[8; 32]);
         let identity = identity(&key);
         let first = FederatedFeaturePolicyEnvelopeV1::sign(
             "alpha.example",

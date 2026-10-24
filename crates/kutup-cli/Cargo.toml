@@ -14,7 +14,6 @@ path = "src/main.rs"
 [dependencies]
 kutup-crypto = { path = "../kutup-crypto", features = ["mail"] }
 kutup-collab = { path = "../kutup-collab" }
-ed25519-dalek.workspace = true
 clap.workspace = true
 reqwest.workspace = true
 rustls.workspace = true
@@ -27,8 +26,6 @@ zeroize.workspace = true
 dirs.workspace = true
 redb.workspace = true
 rpassword.workspace = true
-rand.workspace = true
-sha2.workspace = true
 indicatif.workspace = true
 mime_guess.workspace = true
 qrcode.workspace = true
@@ -51,8 +48,7 @@ keyring.workspace = true
 
 [dev-dependencies]
 # Agent tests make their keys at run time.
-ssh-key = { version = "0.6", features = ["std", "ed25519", "rand_core", "getrandom"] }
-rand_core = { version = "0.6", features = ["getrandom"] }
+ssh-key = { version = "0.6", features = ["std", "ed25519", "rand_core"] }
 tempfile.workspace = true
 
 [features]

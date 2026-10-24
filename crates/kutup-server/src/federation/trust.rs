@@ -1,3 +1,4 @@
+use kutup_crypto::primitives::{hash, Suite};
 use std::{fmt, str::FromStr};
 
 use base64::engine::general_purpose::STANDARD;
@@ -7,7 +8,6 @@ use kutup_federation_proto::{
     FederationDiscoveryTransportPolicy, FederationDiscoveryV2, FederationIdentityDocumentV1,
 };
 use serde_json::json;
-use sha2::{Digest as _, Sha256};
 use sqlx::{PgPool, Postgres, Transaction};
 use time::OffsetDateTime;
 use uuid::Uuid;
@@ -696,7 +696,7 @@ async fn lock_domain(
     transaction: &mut Transaction<'_, Postgres>,
     domain: &str,
 ) -> Result<(), sqlx::Error> {
-    let digest = Sha256::digest(domain.as_bytes());
+    let digest = hash(Suite::V1, domain.as_bytes());
     let key = i64::from_be_bytes(
         digest[..8]
             .try_into()

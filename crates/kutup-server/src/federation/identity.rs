@@ -1,4 +1,4 @@
-use ed25519_dalek::SigningKey;
+use kutup_crypto::primitives::SigningKey;
 use kutup_federation_proto::{
     grouped_fingerprint, verify_identity_chain, FederationIdentityDocumentV1,
 };
@@ -54,7 +54,7 @@ impl LocalFederationIdentity {
                 .expect("non-empty identity history has a last document")
                 .clone()
         };
-        if document.key.public_key_bytes()? != config.signing_key.verifying_key().to_bytes() {
+        if document.key.public_key_bytes()? != config.signing_key.verifying_key().to_array::<32>() {
             if config.generated {
                 anyhow::bail!(
                     "this server's identity (sequence {}, key {}) was made with a configured FEDERATION_SIGNING_KEY; \
@@ -117,8 +117,8 @@ pub(crate) async fn rotate_local_identity(
     let latest = documents
         .last()
         .expect("non-empty identity history has a last document");
-    let configured_current = config.signing_key.verifying_key().to_bytes();
-    let configured_next = next_signing_key.verifying_key().to_bytes();
+    let configured_current = config.signing_key.verifying_key().to_array::<32>();
+    let configured_next = next_signing_key.verifying_key().to_array::<32>();
     let persisted_current = latest.key.public_key_bytes()?;
 
     if persisted_current == configured_next {

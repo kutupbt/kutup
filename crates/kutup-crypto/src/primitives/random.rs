@@ -19,8 +19,23 @@ pub fn random_key() -> Zeroizing<[u8; 32]> {
     key
 }
 
+/// A uniform number below `bound` (not zero), for choices that aren't keys:
+/// code characters, digits, jitter. Draws past the last whole multiple of
+/// `bound` are drawn again, so no value is likelier than another.
+pub fn random_below(bound: u64) -> u64 {
+    assert!(bound > 0, "random_below needs a bound above zero");
+    let limit = u64::MAX - u64::MAX % bound;
+    loop {
+        let draw = u64::from_le_bytes(random_array());
+        if draw < limit {
+            return draw % bound;
+        }
+    }
+}
+
 /// The one random source as an RNG value, for the adapters that take one
-/// (OpenPGP, DKIM's RSA keys, OPAQUE).
+/// (OpenPGP, DKIM's RSA keys, OPAQUE, P-256; libsignal through rand_core
+/// 0.9's traits).
 #[derive(Clone, Copy, Debug, Default)]
 pub struct Rng;
 
@@ -41,3 +56,17 @@ impl rand_core::RngCore for Rng {
 }
 
 impl rand_core::CryptoRng for Rng {}
+
+impl rand_core09::RngCore for Rng {
+    fn next_u32(&mut self) -> u32 {
+        u32::from_le_bytes(random_array())
+    }
+    fn next_u64(&mut self) -> u64 {
+        u64::from_le_bytes(random_array())
+    }
+    fn fill_bytes(&mut self, dest: &mut [u8]) {
+        random(dest);
+    }
+}
+
+impl rand_core09::CryptoRng for Rng {}

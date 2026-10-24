@@ -7,6 +7,7 @@
 
 use anyhow::{anyhow, bail, Context, Result};
 use axum::async_trait;
+use kutup_crypto::primitives::{hash, Suite};
 use serde_json::{json, Value};
 
 use super::reconcile::{Stalwart, StalwartDomain, StalwartSignature};
@@ -243,6 +244,5 @@ fn digest(value: &Value) -> String {
             other => other.clone(),
         }
     }
-    use sha2::Digest as _;
-    hex::encode(sha2::Sha256::digest(sorted(value).to_string().as_bytes()))
+    hex::encode(hash(Suite::V1, sorted(value).to_string().as_bytes()))
 }

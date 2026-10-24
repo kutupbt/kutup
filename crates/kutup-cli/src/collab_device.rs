@@ -8,7 +8,6 @@ use base64::engine::general_purpose::STANDARD;
 use base64::Engine as _;
 use kutup_crypto::device_registration::{self, DeviceStatement, PURPOSE_COLLAB_FRAMES};
 use kutup_crypto::identity::AccountIdentityKeysV1;
-use rand::RngCore;
 use zeroize::Zeroizing;
 
 use crate::api::collab;
@@ -135,9 +134,12 @@ impl<'a> Signer<'a> {
         let seed = Zeroizing::new(seed);
         let now = now_ms();
         if now - kept.issued_at_ms > RENEW_AFTER_MS {
-            let public = ed25519_dalek::SigningKey::from_bytes(&seed)
-                .verifying_key()
-                .to_bytes();
+            let public = kutup_crypto::primitives::SigningKey::from_seed(
+                kutup_crypto::primitives::Suite::V1,
+                &seed,
+            )
+            .verifying_key()
+            .to_array::<32>();
             let (challenge, signature) = self.statement(&public, now)?;
             self.client.renew_device(
                 kept.device_id,
@@ -159,10 +161,13 @@ impl<'a> Signer<'a> {
     /// Registers a new device and keeps it.
     pub fn register(&self) -> Result<Device> {
         let mut seed = Zeroizing::new([0u8; 32]);
-        rand::thread_rng().fill_bytes(seed.as_mut());
-        let public = ed25519_dalek::SigningKey::from_bytes(&seed)
-            .verifying_key()
-            .to_bytes();
+        kutup_crypto::primitives::random(seed.as_mut());
+        let public = kutup_crypto::primitives::SigningKey::from_seed(
+            kutup_crypto::primitives::Suite::V1,
+            &seed,
+        )
+        .verifying_key()
+        .to_array::<32>();
         let now = now_ms();
         let (challenge, signature) = self.statement(&public, now)?;
         let id = self

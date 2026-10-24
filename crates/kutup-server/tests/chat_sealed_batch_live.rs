@@ -17,10 +17,10 @@ use kutup_chat_proto::{
     ProfileEnvelopeContextV1, ProfileEnvelopePurpose, ProfileSuiteId, PutChatProfileRequest,
 };
 use kutup_crypto::account_ref::AccountRef;
+use kutup_crypto::primitives::{hash, Suite};
 use reqwest::blocking::Client;
 use reqwest::StatusCode;
 use serde_json::{json, Value};
-use sha2::{Digest as _, Sha256};
 use uuid::Uuid;
 
 fn opaque_profile_envelope(
@@ -72,7 +72,7 @@ fn recipient(c: &Client, base: &str, seed: u8) -> Recipient {
             48,
         ),
         access_key_verifier: "72".repeat(32),
-        delivery_capability_verifier: hex::encode(Sha256::digest(capability)),
+        delivery_capability_verifier: hex::encode(hash(Suite::V1, capability)),
     };
     let r = bearer(
         device.auth(c.put(format!("{base}/api/chat/profile"))),
