@@ -32,4 +32,3 @@ export function useCall(): CallState | null {
     () => controller?.current ?? null,
   )
 }
-
