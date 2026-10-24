@@ -1664,12 +1664,12 @@ fn signing_key_of(private_key: &[u8]) -> Result<kutup_crypto::primitives::Signin
         .filter(|_| private_key.len() == 32 || private_key.len() == 64)
         .and_then(|seed| seed.try_into().ok())
         .ok_or_else(|| js_error("a signing key is a 32-byte seed or seed ‖ public key"))?;
-    let key = kutup_crypto::primitives::SigningKey::from_seed(
-        kutup_crypto::primitives::Suite::V1,
-        &seed,
-    );
+    let key =
+        kutup_crypto::primitives::SigningKey::from_seed(kutup_crypto::primitives::Suite::V1, &seed);
     if private_key.len() == 64 && key.verifying_key().to_bytes() != private_key[32..] {
-        return Err(js_error("the signing key's public half does not match its seed"));
+        return Err(js_error(
+            "the signing key's public half does not match its seed",
+        ));
     }
     Ok(key)
 }
