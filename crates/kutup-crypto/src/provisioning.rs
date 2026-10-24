@@ -22,8 +22,14 @@ use aes::Aes256;
 use cbc::cipher::block_padding::Pkcs7;
 use cbc::cipher::{BlockDecryptMut, BlockEncryptMut, KeyIvInit};
 use dryoc::classic::crypto_core::{crypto_scalarmult, crypto_scalarmult_base};
+// Adapter: Signal's ProvisioningCipher.
+#[allow(clippy::disallowed_types)]
 use hkdf::Hkdf;
+// Adapter: Signal's ProvisioningCipher.
+#[allow(clippy::disallowed_types)]
 use hmac::{Hmac, Mac};
+// Adapter: Signal's ProvisioningCipher.
+#[allow(clippy::disallowed_types)]
 use sha2::Sha256;
 use zeroize::Zeroizing;
 
@@ -93,6 +99,8 @@ pub fn seal(recipient_public: &[u8], message: &[u8]) -> Result<Sealed> {
     seal_with_info(INFO, &ephemeral, &iv, recipient_public, message)
 }
 
+// Adapter: Signal's ProvisioningCipher (X25519).
+#[allow(clippy::disallowed_methods)]
 fn public_key(private: &[u8; 32]) -> [u8; PUBLIC_KEY_LEN] {
     let mut point = [0u8; 32];
     crypto_scalarmult_base(&mut point, private);
@@ -118,6 +126,8 @@ fn decode_public(public: &[u8]) -> Result<[u8; 32]> {
 }
 
 /// The AES key and the MAC key from the agreement.
+// Adapter: Signal's ProvisioningCipher (X25519, HKDF-SHA256).
+#[allow(clippy::disallowed_types, clippy::disallowed_methods)]
 fn derive(info: &[u8], private: &[u8; 32], public: &[u8]) -> Result<Zeroizing<[u8; 64]>> {
     let point = decode_public(public)?;
     let mut shared = Zeroizing::new([0u8; 32]);
@@ -136,6 +146,8 @@ fn derive(info: &[u8], private: &[u8; 32], public: &[u8]) -> Result<Zeroizing<[u
     Ok(keys)
 }
 
+// Adapter: Signal's ProvisioningCipher (HMAC-SHA256).
+#[allow(clippy::disallowed_types)]
 fn mac(key: &[u8], data: &[u8]) -> Hmac<Sha256> {
     let mut mac = <Hmac<Sha256> as Mac>::new_from_slice(key).expect("HMAC takes any key length");
     mac.update(data);

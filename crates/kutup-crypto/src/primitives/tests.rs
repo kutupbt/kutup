@@ -210,6 +210,20 @@ fn hpke_opens_the_libcrux_message_and_round_trips() {
         &sealed.ciphertext
     )
     .is_err());
+    assert!(matches!(
+        hpke_open(
+            S,
+            &seed[..31],
+            &sealed.encapsulated,
+            b"info",
+            b"aad",
+            &sealed.ciphertext
+        ),
+        Err(crate::error::CryptoError::InvalidLength {
+            expected: 32,
+            got: 31
+        })
+    ));
 }
 
 #[test]

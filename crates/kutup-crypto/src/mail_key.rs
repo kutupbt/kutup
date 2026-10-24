@@ -12,7 +12,7 @@
 //!   its keys, which is primary, and their flags, hash-chained and signed by
 //!   the account authority. Whoever has pinned the account (Chat, Drive)
 //!   therefore trusts its mail keys too.
-use crate::primitives::{SigningKey, Suite, VerifyingKey};
+use crate::primitives::{Hasher, SigningKey, Suite, VerifyingKey};
 use pgp::{
     composed::{
         ArmorOptions, Deserializable, EncryptionCaps, KeyType, Message, MessageBuilder,
@@ -26,7 +26,9 @@ use pgp::{
     ser::Serialize as _,
     types::{CompressionAlgorithm, Imprint as _, KeyDetails as _, Password, Timestamp},
 };
-use sha2::{Digest as _, Sha256};
+// Adapter: OpenPGP's SHA-256 key imprint (rPGP).
+#[allow(clippy::disallowed_types)]
+use sha2::Sha256;
 use zeroize::Zeroizing;
 
 use crate::account_envelope::{self, AccountEnvelopePurpose};
@@ -252,6 +254,8 @@ pub(crate) fn fingerprint_of(key: &SignedPublicKey) -> Result<[u8; FINGERPRINT_L
         .map_err(|_| CryptoError::InvalidInput("not a v4 key".into()))
 }
 
+// Adapter: OpenPGP's SHA-256 key imprint (rPGP).
+#[allow(clippy::disallowed_types)]
 fn sha256_fingerprint_of(key: &SignedPublicKey) -> Result<[u8; 32]> {
     let imprint = key.primary_key.imprint::<Sha256>().map_err(backend)?;
     Ok(imprint.into())
@@ -1661,10 +1665,11 @@ impl SignedMailKeyListV1 {
 
     /// What the next list's `previous_hash` must be: the list and its signature.
     pub fn hash(&self) -> [u8; 32] {
-        let mut hasher = Sha256::new();
-        hasher.update(&self.data);
-        hasher.update(self.signature);
-        hasher.finalize().into()
+        Hasher::new(Suite::V1)
+            .chain(&self.data)
+            .chain(self.signature)
+            .finish()
+            .into()
     }
 
     /// Checks that `next` directly follows `self` in the same chain.

@@ -185,14 +185,38 @@ on `fuzz` as on the other standalone roots.
 | `crates/kutup-chat-proto` | with chat-core's crypto (wipe plan, code item 1) |
 | `crates/kutup-chat-core`, `crates/kutup-client-ffi`, `fuzz` | with chat-core's crypto |
 
+Every other `clippy.toml` (or `.clippy.toml`) must carry the root's rules
+unchanged; one without the marker that drops a rule fails the check, as
+does a marker file anywhere the table doesn't list.
+
 `kutup_crypto::primitives` itself carries `#[allow]` for the rules, as do
-the adapters once their crates move. In kutup-crypto those are `mail_key`
-(OpenPGP), `oblivious` (RFC 9458 on the HPKE suite), `opaque` (RFC 9807),
-`pass_vault` (KeePass's composite key), `provisioning` (Signal's
-ProvisioningCipher) and `safety_number` (Signal's); vector tests that check
-against reference implementations allow it too. `stream.rs` (secretstream)
-stays until the block format replaces it. Each rule has `allow-invalid`, as
-a crate without the dependency can't name the type anyway.
+the adapters once their crates move. An adapter's `#[allow]` sits on the
+items that speak the standard (a `use`, a function, an `impl`), never on the
+whole module, so Kutup's own formats inside an adapter's file stay linted.
+Each rule has `allow-invalid`, as a crate without the dependency can't name
+the type anyway.
+
+The check also fails on any `clippy::disallowed_types` or
+`clippy::disallowed_methods` in a Rust file this table doesn't list. A new
+adapter adds its row here, in the PR that adds it.
+
+| File | Allowed for |
+|---|---|
+| `crates/kutup-crypto/src/lib.rs` | `primitives`, the one module that names algorithms |
+| `crates/kutup-crypto/src/hpke_xwing.rs` | the HPKE backend behind `primitives::hpke_*` |
+| `crates/kutup-crypto/src/mail_key.rs` | OpenPGP's SHA-256 key imprint (rPGP) |
+| `crates/kutup-crypto/src/oblivious.rs` | Oblivious HTTP (RFC 9458): HPKE's context API and the response AEAD |
+| `crates/kutup-crypto/src/opaque.rs` | OPAQUE's ciphersuite (RFC 9807) |
+| `crates/kutup-crypto/src/pass_vault.rs` | KeePass's composite key (SHA-256 of the password) |
+| `crates/kutup-crypto/src/provisioning.rs` | Signal's ProvisioningCipher |
+| `crates/kutup-crypto/src/safety_number.rs` | Signal's safety number (iterated SHA-512) |
+| `crates/kutup-crypto/src/stream.rs` | secretstream, until the block format replaces it |
+| `crates/kutup-crypto/tests/vectors.rs` | reference implementations for the vectors |
+| `crates/kutup-crypto/tests/chat_contact_list_vectors.rs` | reference implementations for the vectors |
+| `crates/kutup-crypto/tests/chat_group_list_vectors.rs` | reference implementations for the vectors |
+| `crates/kutup-server/src/tls.rs` | the `reqwest` rule: the one place a client is built |
+| `crates/kutup-server/tests/common/mod.rs` | the `reqwest` rule, for the tests |
+| `crates/kutup-cli/src/tls.rs` | the `reqwest` rule: the one place a client is built |
 
 ## Not in this note
 
