@@ -24,7 +24,7 @@ fn keys() -> (Vec<LoadedKey>, PrivateKey) {
         .unwrap()
         .naive_utc();
     let mut db = new_vault("Keys", now).unwrap();
-    let key = PrivateKey::random(&mut rand_core::OsRng, Algorithm::Ed25519).unwrap();
+    let key = PrivateKey::random(&mut kutup_crypto::primitives::Rng, Algorithm::Ed25519).unwrap();
     let root = view::view(&db).root_group_id;
     let id = apply(
         &mut db,
@@ -136,7 +136,7 @@ fn lists_keys_and_signs_only_when_allowed() {
     assert_eq!(signed[0], proto::SIGN_RESPONSE);
 
     // Unknown keys fail without asking.
-    let other = PrivateKey::random(&mut rand_core::OsRng, Algorithm::Ed25519).unwrap();
+    let other = PrivateKey::random(&mut kutup_crypto::primitives::Rng, Algorithm::Ed25519).unwrap();
     let ask = Answer(Decision::Once, Mutex::new(0));
     assert_eq!(
         handle(
@@ -214,7 +214,7 @@ fn no_confirm_still_asks_for_forwarded_requests_and_host_approvals_last_until_lo
 
 #[test]
 fn a_session_bind_with_a_bad_signature_is_refused() {
-    let host = PrivateKey::random(&mut rand_core::OsRng, Algorithm::Ed25519).unwrap();
+    let host = PrivateKey::random(&mut kutup_crypto::primitives::Rng, Algorithm::Ed25519).unwrap();
     let state = Mutex::new(State::new(Vec::new()));
     let quiet = |_: String| {};
     let mut connection = Connection::default();

@@ -3,7 +3,6 @@
 use anyhow::{anyhow, bail, Context, Result};
 use base64::engine::general_purpose::STANDARD;
 use base64::Engine as _;
-use rand::RngCore as _;
 use uuid::Uuid;
 
 use crate::api::{Collection, CreateCollectionRequest, RenameCollectionRequest};
@@ -25,7 +24,7 @@ pub fn create_owned(
         .context("master key must be 32 bytes")?;
     let id = Uuid::new_v4().to_string();
     let mut collection_key = [0u8; 32];
-    rand::rngs::OsRng.fill_bytes(&mut collection_key);
+    kutup_crypto::primitives::random(&mut collection_key);
     let owner_key_envelope = drive_envelope::seal_b64(
         &collection_key,
         master_key,

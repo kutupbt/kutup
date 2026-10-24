@@ -7,10 +7,10 @@
 //! phrase. The 24-word recovery phrase is shown once and never stored; the user must save it.
 
 use std::io::IsTerminal;
+use zeroize::Zeroizing;
 
 use anyhow::{Context, Result};
 use base64::Engine;
-use rand::RngCore;
 
 use crate::api::{Client, RegisterRequest};
 use crate::commands::prompt_line;
@@ -58,11 +58,7 @@ pub fn run(json: bool, server_flag: Option<&str>, username_flag: Option<&str>) -
     // Mirror generateRegistrationKeys: random master/recovery keys, the
     // password registered with OPAQUE (its export key seals the master key),
     // purpose-separated account identity keys and three encrypted envelopes.
-    let mut rng = rand::thread_rng();
-    let mut master_key = [0u8; 32];
-    let mut recovery_entropy = [0u8; 32];
-    rng.fill_bytes(&mut master_key);
-    rng.fill_bytes(&mut recovery_entropy);
+    let (master_key, recovery_entropy) = account_secrets();
 
     // The account's key binding: drawn here, what its keys are bound to for
     // good (docs/plans/account-identity.md), never a name.
@@ -75,7 +71,7 @@ pub fn run(json: bool, server_flag: Option<&str>, username_flag: Option<&str>) -
     let registered = registering
         .finish(&started.response()?)
         .context("the server's registration answer")?;
-    let recovery_proof = kdf::derive_recovery_auth_proof(&recovery_entropy, &key_binding)
+    let recovery_proof = kdf::derive_recovery_auth_proof(&*recovery_entropy, &key_binding)
         .context("derive recovery authorization proof")?;
     let account_identity =
         AccountIdentityKeysV1::derive(&master_key).context("derive account identity")?;
@@ -85,20 +81,20 @@ pub fn run(json: bool, server_flag: Option<&str>, username_flag: Option<&str>) -
         .seal_master_key(&master_key, &key_binding)
         .context("seal master-key envelope")?;
     let recovery_key_envelope = account_envelope::seal_b64(
-        &master_key,
-        &recovery_entropy,
+        &*master_key,
+        &*recovery_entropy,
         AccountEnvelopePurpose::RecoveryMasterKey,
         &key_binding,
     )
     .context("seal recovery envelope")?;
     let drive_private_key_envelope = account_envelope::seal_b64(
         account_identity.drive_hpke_private_key(),
-        &master_key,
+        &*master_key,
         AccountEnvelopePurpose::DriveHpkePrivateKey,
         &key_binding,
     )
     .context("seal Drive private-key envelope")?;
-    let phrase = mnemonic::encode(&recovery_entropy).context("encode mnemonic")?;
+    let phrase = mnemonic::encode(&*recovery_entropy).context("encode mnemonic")?;
 
     // The account the server minted for this sign-up (its permanent id),
     // which its authority vouches for together with its Drive keys
@@ -190,4 +186,30 @@ fn registration_code(client: &Client, mode: &str) -> Result<Option<String>> {
     // sets the exit code).
     client.check_registration_code(&code)?;
     Ok(Some(code))
+}
+
+/// A new account's master key and recovery entropy: two keys from the one
+/// random source (`kutup_crypto::primitives::random_key`). The crate is under
+/// the crypto lint (docs/plans/crypto-primitives.md), so no other generator
+/// can be named here.
+fn account_secrets() -> (Zeroizing<[u8; 32]>, Zeroizing<[u8; 32]>) {
+    (
+        kutup_crypto::primitives::random_key(),
+        kutup_crypto::primitives::random_key(),
+    )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn account_secrets_are_two_fresh_keys() {
+        let (master, recovery) = account_secrets();
+        let (again, _) = account_secrets();
+        assert_ne!(*master, *recovery);
+        assert_ne!(*master, *again);
+        assert_ne!(*master, [0u8; 32]);
+        assert_ne!(*recovery, [0u8; 32]);
+    }
 }

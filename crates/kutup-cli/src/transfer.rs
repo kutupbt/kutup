@@ -5,10 +5,10 @@
 //! header followed by 5 MiB plaintext chunks, each producing `5 MiB + 17 B`
 //! ciphertext. The final chunk carries `TAG_FINAL`.
 
+use kutup_crypto::primitives::{Hasher, Suite};
 use std::io::{self, ErrorKind, Read, Write};
 
 use anyhow::{bail, Result};
-use sha2::{Digest, Sha256};
 
 use kutup_crypto::drive_object::{
     self, DriveFileBlobContextV1, FILE_BLOB_HEADER_BYTES, FILE_BLOB_PREFIX_BYTES,
@@ -83,7 +83,7 @@ pub struct StreamUploader<R: Read> {
     buf: Vec<u8>,
     done: bool,
     /// SHA-256 of the plaintext read so far: what is actually sealed.
-    digest: Sha256,
+    digest: Hasher,
 }
 
 /// The file changed while it was being uploaded: what was read is not what
@@ -112,7 +112,7 @@ impl<R: Read> StreamUploader<R> {
             plain_read: 0,
             buf: vec![0u8; CHUNK_SIZE],
             done: false,
-            digest: Sha256::new(),
+            digest: Hasher::new(Suite::V1),
         })
     }
 
@@ -139,7 +139,7 @@ impl<R: Read> StreamUploader<R> {
             StreamEncryptor::resume_with_aad(stream_key.as_slice(), header, &object_header)?;
         let mut buf = vec![0u8; CHUNK_SIZE];
         let mut replayed = 0i64;
-        let mut digest = Sha256::new();
+        let mut digest = Hasher::new(Suite::V1);
         for _ in 0..k {
             let to_read = (plain_total - replayed).min(CHUNK_SIZE as i64) as usize;
             if to_read == 0 {
@@ -195,7 +195,7 @@ impl<R: Read> StreamUploader<R> {
     /// (`expected`, the SHA-256 the metadata carries): a change of the same
     /// size between the two reads is [`ChangedWhileUploading`].
     pub fn check_sha256(&self, expected: &[u8; 32]) -> Result<()> {
-        let sealed: [u8; 32] = self.digest.clone().finalize().into();
+        let sealed: [u8; 32] = self.digest.clone().finish().into();
         if &sealed != expected {
             return Err(ChangedWhileUploading.into());
         }

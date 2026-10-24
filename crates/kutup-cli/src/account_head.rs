@@ -10,6 +10,7 @@
 //! - A head that rolled back or forked stops listed writes with exit code 6,
 //!   until `kutup account reanchor`.
 
+use kutup_crypto::primitives::{hash, Suite};
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -21,7 +22,6 @@ use kutup_crypto::account_head::{
     self, HeadKeys, HeadStatus, IndexCheck, LocalHeadStateV1, VerifiedHead,
 };
 use kutup_crypto::revision_guard::GuardKeys;
-use sha2::{Digest as _, Sha256};
 
 use crate::api::Client;
 use crate::errors::HeadBlocked;
@@ -417,7 +417,7 @@ impl<'a> CliHead<'a> {
             .decode(current)
             .context("the account head is not base64")?;
         let segment = match &state.anchor {
-            Some(anchor) if hex::encode(Sha256::digest(&current)) != anchor.digest => self
+            Some(anchor) if hex::encode(hash(Suite::V1, &current)) != anchor.digest => self
                 .client
                 .get_account_heads(anchor.sequence)?
                 .map(|heads| {

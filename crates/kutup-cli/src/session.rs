@@ -9,7 +9,7 @@
 //! switching binaries simply requires `kutup login` again.
 
 use anyhow::{anyhow, Context, Result};
-use rand::RngCore;
+use kutup_crypto::primitives::{Hasher, Suite};
 use redb::{Database, ReadableTable, TableDefinition};
 use serde::{Deserialize, Serialize};
 use zeroize::Zeroize;
@@ -154,7 +154,7 @@ impl Store {
     /// Generates and persists a new device key (keyring, else chmod-600 file).
     fn create_device_key(&mut self) -> Result<()> {
         let mut key = [0u8; 32];
-        rand::rngs::OsRng.fill_bytes(&mut key);
+        kutup_crypto::primitives::random(&mut key);
         use base64::Engine;
         let encoded = base64::engine::general_purpose::STANDARD.encode(key);
 
@@ -470,12 +470,11 @@ pub struct ResumeState {
 
 /// Sync pair id: one synced (collection, local dir) combination.
 pub fn sync_pair_id(collection_id: &str, canonical_root: &str) -> String {
-    use sha2::{Digest, Sha256};
-    let mut h = Sha256::new();
+    let mut h = Hasher::new(Suite::V1);
     h.update(collection_id.as_bytes());
     h.update([0u8]);
     h.update(canonical_root.as_bytes());
-    hex_lower(&h.finalize())
+    hex_lower(&h.finish())
 }
 
 fn hex_lower(bytes: &[u8]) -> String {
