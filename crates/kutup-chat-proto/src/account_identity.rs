@@ -167,8 +167,10 @@ pub struct AccountManifestDeviceV2 {
     /// Bundles, `409`s and `410`s that disagree with it are refused.
     pub registration_id: u32,
     /// A device's keys for the MLS groups Kutup no longer has: never
-    /// written now, kept only so a manifest that carries it still reads and
-    /// verifies (its bytes are signed). Goes with the next manifest format.
+    /// written now (a manifest signed now clears it on every device, so it
+    /// fades out with each re-sign), kept only so a manifest that carries it
+    /// still reads and verifies (its bytes are signed). Goes with the next
+    /// manifest format.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub mls: Option<LegacyMlsDeviceV1>,
 }

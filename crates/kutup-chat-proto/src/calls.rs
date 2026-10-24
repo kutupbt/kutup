@@ -184,10 +184,12 @@ pub enum GroupCallEventV1 {
     Ended,
 }
 
-/// A group call starting or ending, sent to the group over MLS. The room on
-/// `host`'s SFU is joined with a token from that server; `room_id` is the
-/// capability, known only to the group's members. Media frames are
-/// encrypted with a key derived from the MLS epoch (docs/chat-calls.md).
+/// A group call starting or ending, sent to the group. The room on `host`'s
+/// SFU is joined with a token from that server; `room_id` is the capability,
+/// known only to the group's members. Kept for pairwise group calls
+/// (pairwise-groups.md §6, slice 4), which replace the room-id capability
+/// with a membership token and the shared frame key with per-sender keys;
+/// nothing sends it now (the MLS group calls it served were removed).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct GroupCallBody {

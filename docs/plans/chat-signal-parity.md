@@ -29,16 +29,14 @@ Done:
    message unless muted), mute (Signal's durations), mark unread, delete for
    me (a message or a whole chat), all synced through hidden Note-to-Self
    controls and kept in the backup.
-3. **Group info** (docs/chat-mls.md "Group information"). Name at creation,
-   description and picture in the MLS private control state, changed by a
-   `GroupInfoChange` Commit; the owners' "who can edit" rule.
-
-4. **Group timeline notices** (docs/chat-mls.md "Timeline notices"),
-   written locally from each applied Commit; a local-only content kind that
-   no path can send or accept.
-5. **Leave group** (docs/chat-mls.md "Leaving"): a `leaveRequest` control,
-   removal committed by the first staying administrator, successor choice
-   for the last administrator.
+3. **Group info** ([`pairwise-groups.md`](pairwise-groups.md)): name,
+   description and picture sealed in the group state on its home, changed by
+   a signed change; the "who can edit" access rule. (Built first for MLS
+   groups, removed with them.)
+4. **Group timeline notices**, written locally from each accepted group
+   change; a local-only content kind that no path can send or accept.
+5. **Leave group**: a member's own `Leave` change; the last administrator
+   names a successor first.
 
 Next, in order:
 
@@ -60,14 +58,14 @@ Next, in order:
 9. **Calls.** 1:1 voice and video (done, [`chat-calls.md`](../chat-calls.md)):
    WebRTC with signals over the Direct session, coturn shared-secret TURN,
    "always relay", call history, ringing across devices and tabs. Group
-   calls (done) through the starter's LiveKit SFU, frames encrypted with an
-   MLS-epoch exporter key, participants known to the SFU only by HMAC tags,
-   tokens across servers over federation.
+   calls through the starter's LiveKit SFU were done for MLS groups and
+   removed with them; for pairwise groups they are slice 4 of
+   pairwise-groups.md.
 10. **Smaller things** (done):
     - **Drafts:** they persist per conversation in the browser, show as
       "Draft:" in the list, and are cleared on sign-out.
     - **Sending:** a message still going out shows a clock, then "Not sent"
-      with Retry. Group messages already encrypted into the MLS outbox count
+      with Retry. Group messages already encrypted into the group outbox count
       as queued, not failed, so the composer is not refilled (resending it
       would duplicate the message), and they show in the thread until
       delivered.

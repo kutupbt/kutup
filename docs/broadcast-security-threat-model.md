@@ -1,6 +1,9 @@
 # Confidential broadcast V1 threat model
 
-**Status:** normative V1 completion gate
+**Status:** superseded, not built. This design depended on an MLS
+administrator group, and MLS is gone; broadcast is reconsidered after pairwise
+groups (docs/roadmap.md, 5b). Kept as the record of the requirements a new
+design has to meet.
 
 Broadcast channels are one-way encrypted feeds for up to 1,000,000 subscribed
 accounts and ten devices per account. Subscribers are not members of the MLS

@@ -542,7 +542,7 @@ impl Engine {
                     device_id: device.device_id,
                     direct_chat_suite: device.direct_chat_suite,
                     registration_id,
-                    mls: device.mls.clone(),
+                    mls: None,
                 });
                 private.push((device.device_id, registration_id, rotation));
             }

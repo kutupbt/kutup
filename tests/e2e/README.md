@@ -162,8 +162,8 @@ topology, exercises API setup and durable retry across restart, scans
 destination metadata, and then runs:
 
 - spec 25: resumable encrypted tus upload;
-- spec 32: Direct and exhaustive MLS security/media scenarios; and
-- spec 34: two-account Direct/MLS/media browser-loss recovery, server restart,
+- spec 32: Direct security and media scenarios; and
+- spec 34: two-account Direct/media browser-loss recovery, server restart,
   account-local backup proof, lazy media, and new post-restore protocol state.
 
 Spec 33 is the required single-server clean-browser recovery gate. It uses a
@@ -229,7 +229,7 @@ reproduce locally; do not enable secret-bearing raw artifacts.
 - spec 31: local Chat, linked-device transcripts, Note to Self, active
   installation review/rename/revoke, immutable numeric routing IDs, and
   durable IndexedDB reload.
-- spec 32: two-server Direct/MLS, governance, anonymous media, linked device,
+- spec 32: two-server Direct, governance, anonymous media, linked device,
   replay, metadata, and restart security.
 - spec 33: single-server automatic clean-browser Chat backup recovery and
   focused protected/unavailable media.

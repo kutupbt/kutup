@@ -297,6 +297,59 @@ impl AccountAuthority {
         mut devices: Vec<AccountManifestDeviceV2>,
         issued_at: impl Into<String>,
     ) -> Result<AccountManifestV2> {
+        // Kutup has no MLS groups any more: a manifest signed now carries no
+        // device's MLS keys, so the legacy field fades out with each re-sign.
+        for device in &mut devices {
+            device.mls = None;
+        }
+        self.sign_devices_as_given(
+            account,
+            sequence,
+            previous_hash,
+            identity_key,
+            identity_binding,
+            devices,
+            issued_at,
+        )
+    }
+
+    /// A manifest signed as one from before the MLS removal: its devices'
+    /// legacy MLS keys kept, as an account may still hold it. Only for tests
+    /// of how the next manifest drops them.
+    #[doc(hidden)]
+    #[allow(clippy::too_many_arguments)]
+    pub fn sign_legacy_manifest_for_testing(
+        &self,
+        account: AccountRef,
+        sequence: u64,
+        previous_hash: Option<String>,
+        identity_key: String,
+        identity_binding: String,
+        devices: Vec<AccountManifestDeviceV2>,
+        issued_at: impl Into<String>,
+    ) -> Result<AccountManifestV2> {
+        self.sign_devices_as_given(
+            account,
+            sequence,
+            previous_hash,
+            identity_key,
+            identity_binding,
+            devices,
+            issued_at,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn sign_devices_as_given(
+        &self,
+        account: AccountRef,
+        sequence: u64,
+        previous_hash: Option<String>,
+        identity_key: String,
+        identity_binding: String,
+        mut devices: Vec<AccountManifestDeviceV2>,
+        issued_at: impl Into<String>,
+    ) -> Result<AccountManifestV2> {
         devices.sort_by_key(|device| device.device_id);
         let mut manifest = AccountManifestV2 {
             manifest_version: ACCOUNT_MANIFEST_V2_VERSION,
@@ -752,6 +805,32 @@ mod tests {
         assert!(verify_manifest_trust(peer, &much_later, Some(&xwing_pin)).is_err());
         // The same key at the next sequence stays fine.
         assert!(verify_manifest_trust(peer, &after, Some(&risen)).is_ok());
+    }
+
+    /// A device entry still carrying the legacy MLS keys loses them when the
+    /// manifest is signed again: nothing writes them any more.
+    #[test]
+    fn a_signed_manifest_carries_no_legacy_mls_keys() {
+        let authority = AccountAuthority::derive(&[5u8; 32]).unwrap();
+        let mut legacy = device(2, 8);
+        legacy.mls = Some(kutup_chat_proto::LegacyMlsDeviceV1 {
+            suite: 0x0003,
+            credential_public_key: STANDARD.encode([1u8; 32]),
+            anonymous_delivery_public_key: STANDARD.encode([2u8; 32]),
+        });
+        let manifest = authority
+            .sign_manifest(
+                BOB.parse().unwrap(),
+                3,
+                Some("22".repeat(32)),
+                &pair(BOB_IDENTITY),
+                vec![device(1, 7), legacy],
+                "2026-10-24T00:00:00Z",
+            )
+            .unwrap();
+        assert_eq!(manifest.devices.len(), 2);
+        assert!(manifest.devices.iter().all(|device| device.mls.is_none()));
+        assert!(verify_manifest_trust(BOB, &manifest, None).is_ok());
     }
 
     /// A peer's pin, as a verified manifest of `account` with `identity`

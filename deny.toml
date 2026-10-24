@@ -104,8 +104,8 @@ confidence-threshold = 0.9
 ignore = true
 
 [bans]
-# Duplicate versions are reported, not refused: most come from libsignal's and
-# OpenMLS's exact pins.
+# Duplicate versions are reported, not refused: most come from libsignal's
+# exact pins.
 multiple-versions = "warn"
 wildcards = "deny"
 allow-wildcard-paths = true

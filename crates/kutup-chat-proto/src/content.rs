@@ -86,8 +86,9 @@ pub mod kind {
     /// Encrypted group-state operation. [RSV] (phase 4)
     pub const GROUP_CONTROL: &str = "groupControl";
     /// A timeline notice of an applied group change ("Alice renamed the
-    /// group"). Written only by the local engine from an authenticated,
-    /// ordered MLS Commit; never sent, and refused if it ever arrives. [IMPL]
+    /// group"). Written only by the local engine from a group change it
+    /// accepted from the home's log; never sent, and refused if it ever
+    /// arrives. [IMPL]
     pub const GROUP_UPDATE: &str = "groupUpdate";
     /// A 1:1 call's signaling (offer, answer, ICE, hang-up, busy);
     /// ephemeral like typing: never history, never a transcript. [IMPL]
@@ -95,8 +96,10 @@ pub mod kind {
     /// A call in the timeline ("Missed voice call"), written by each device
     /// for itself; never sent, and refused if it ever arrives. [IMPL]
     pub const CALL_LOG: &str = "callLog";
-    /// A group call started or ended (MLS only); the start shows in the
-    /// timeline with a way to join. [IMPL]
+    /// A group call started or ended; the start shows in the timeline with a
+    /// way to join. Kept for pairwise group calls (pairwise-groups.md §6,
+    /// slice 4): nothing sends it now (MLS group calls were removed), and a
+    /// Direct copy is refused. [IMPL]
     pub const GROUP_CALL: &str = "groupCall";
     /// An invisible message whose only job is to carry a fresh session to a
     /// device whose messages this one could no longer read. [IMPL]
@@ -273,7 +276,7 @@ impl ChatContent {
     }
 
     /// Builds an attachment message whose descriptor stays inside the Direct
-    /// Chat or MLS application ciphertext. The immutable blob is transferred
+    /// Chat or group sender-key ciphertext. The immutable blob is transferred
     /// separately through the authenticated Chat-media service.
     pub fn attachment_with_id(
         message_id: impl Into<String>,
@@ -1631,8 +1634,8 @@ impl ReadPositionBody {
     }
 }
 
-/// One visible change an applied group change made (an MLS Commit, or a
-/// pairwise group's change from its home's log). Members are accounts, never
+/// One visible change an applied group change made (a pairwise group's
+/// change from its home's log). Members are accounts, never
 /// addresses or pseudonyms.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", tag = "type", deny_unknown_fields)]
