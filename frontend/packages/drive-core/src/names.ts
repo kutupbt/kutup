@@ -10,6 +10,7 @@ import { UploadNameTaken } from '@kutup/files/upload/streamUpload'
 import api from '@kutup/session/client'
 import { folderKeyAt, type KeyringFolder } from './keyring'
 import { folderLocation, type DriveFile, type Folder } from './model'
+import { randomBytes } from '@kutup/crypto/random'
 
 /**
  * Names unique in a folder (docs/plans/drive-unique-names.md). Every write
@@ -58,7 +59,7 @@ export async function nameHashIn(place: NamePlace, name: string): Promise<string
  * items with the same name meanwhile, as Proton's keyless renames do.
  */
 export function randomNameHash(): string {
-  const bytes = crypto.getRandomValues(new Uint8Array(32))
+  const bytes = randomBytes(32)
   return Array.from(bytes, (b) => b.toString(16).padStart(2, '0')).join('')
 }
 

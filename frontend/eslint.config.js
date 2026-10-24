@@ -16,7 +16,8 @@ import tseslint from 'typescript-eslint'
  * The new UI code (apps/*, packages/ui, packages/i18n, packages/config, packages/map, packages/drive-core, packages/drive-ui, packages/editors, packages/contacts-core, packages/mail-core, packages/calendar-core) gets
  * the type-checked rule set. The logic packages moved from the old SPA
  * (crypto, session, files, collab, chat-core) get the untyped recommended set
- * until they are tightened on their own.
+ * until they are tightened on their own. Both refuse Web Crypto and libsodium
+ * outside packages/crypto.
  */
 const PALETTE =
   'slate|gray|zinc|neutral|stone|red|orange|amber|yellow|lime|green|emerald|teal|cyan|sky|blue|indigo|violet|purple|fuchsia|pink|rose'
@@ -69,8 +70,42 @@ const bufferSinks = [
 
 restricted.push(...bufferSinks)
 
+/*
+ * One random source and one hash (docs/plans/crypto-primitives.md, step 5):
+ * outside @kutup/crypto nothing calls Web Crypto or libsodium directly; it
+ * takes randomBytes/fillRandom from @kutup/crypto/random and the suite's
+ * hash from @kutup/crypto/hash, as Rust takes kutup_crypto::primitives.
+ */
+const WEB_CRYPTO_MESSAGE =
+  'Web Crypto outside @kutup/crypto. Use randomBytes/fillRandom (@kutup/crypto/random) or hash (@kutup/crypto/hash).'
+const webCrypto = [
+  { selector: "MemberExpression[property.name='getRandomValues']", message: WEB_CRYPTO_MESSAGE },
+  { selector: "MemberExpression[property.name='subtle']", message: WEB_CRYPTO_MESSAGE },
+  // Taken apart instead: `const { subtle } = crypto`.
+  {
+    selector: "ObjectPattern > Property[key.name=/^(subtle|getRandomValues)$/]",
+    message: WEB_CRYPTO_MESSAGE,
+  },
+  // A dynamic import, which no-restricted-imports doesn't see.
+  {
+    selector: "ImportExpression[source.value=/^libsodium-wrappers/]",
+    message: 'libsodium outside @kutup/crypto. Use its functions, which call kutup-crypto (WASM).',
+  },
+]
+restricted.push(...webCrypto)
+const sodiumImports = [
+  'error',
+  {
+    paths: ['libsodium-wrappers-sumo', 'libsodium-wrappers'].map((name) => ({
+      name,
+      message: 'libsodium outside @kutup/crypto. Use its functions, which call kutup-crypto (WASM).',
+    })),
+  },
+]
+
 const UI_CODE = ['apps/*/src/**/*.{ts,tsx}', 'packages/{ui,i18n,config,map,drive-core,drive-ui,editors,contacts-core,mail-core,calendar-core}/**/*.{ts,tsx}']
-const LOGIC_CODE = ['packages/{crypto,session,files,collab,chat-core}/src/**/*.ts']
+const LOGIC_CODE = ['packages/{session,files,collab,chat-core}/src/**/*.ts']
+const CRYPTO_CODE = ['packages/crypto/src/**/*.ts']
 
 export default tseslint.config(
   { ignores: ['**/dist', '**/node_modules', 'wasm', 'apps/editor/public'] },
@@ -88,10 +123,23 @@ export default tseslint.config(
       'react-refresh/only-export-components': ['warn', { allowConstantExport: true }],
       '@typescript-eslint/no-unused-vars': ['error', { argsIgnorePattern: '^_' }],
       'no-restricted-syntax': restricted,
+      'no-restricted-imports': sodiumImports,
     },
   },
   {
     files: LOGIC_CODE,
+    extends: [js.configs.recommended, ...tseslint.configs.recommended],
+    languageOptions: { ecmaVersion: 2022, globals: { ...globals.browser, ...globals.worker } },
+    rules: {
+      '@typescript-eslint/no-explicit-any': 'off',
+      '@typescript-eslint/no-unused-vars': ['error', { argsIgnorePattern: '^_', varsIgnorePattern: '^_' }],
+      'no-restricted-syntax': ['error', ...bufferSinks, ...webCrypto],
+      'no-restricted-imports': sodiumImports,
+    },
+  },
+  {
+    // The one place that calls Web Crypto and libsodium.
+    files: CRYPTO_CODE,
     extends: [js.configs.recommended, ...tseslint.configs.recommended],
     languageOptions: { ecmaVersion: 2022, globals: { ...globals.browser, ...globals.worker } },
     rules: {

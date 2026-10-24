@@ -15,6 +15,7 @@ import {
   sealChatAttachmentLedger,
 } from '@kutup/crypto/chatMedia'
 import type { ChatAttachmentLedgerEntryV1 } from './types'
+import { hash as suiteHash } from '@kutup/crypto/hash'
 
 interface LedgerWireEntity {
   entityId: string
@@ -347,7 +348,7 @@ async function advanceLocalPin(
   new DataView(input.buffer).setBigUint64(offset, revision, false)
   offset += 8
   input.set(hexBytes(envelopeDigest), offset)
-  return new Uint8Array(await crypto.subtle.digest('SHA-256', input))
+  return suiteHash(input)
 }
 
 function uuidBytes(value: string): Uint8Array {
@@ -383,7 +384,7 @@ async function ledgerOperationId(
   const bytes = new TextEncoder().encode(
     `kutup/chat-attachment-ledger/operation/v1\0${entityId}\0${revision}\0${digest}`,
   )
-  const hash = new Uint8Array(await crypto.subtle.digest('SHA-256', bytes)).slice(0, 16)
+  const hash = (await suiteHash(bytes)).slice(0, 16)
   hash[6] = (hash[6] & 0x0f) | 0x80
   hash[8] = (hash[8] & 0x3f) | 0x80
   const hex = Array.from(hash, byte => byte.toString(16).padStart(2, '0')).join('')
