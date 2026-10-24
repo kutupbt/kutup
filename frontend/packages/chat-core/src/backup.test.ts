@@ -741,6 +741,36 @@ describe('ChatBackupCoordinator durable retry', () => {
     await vi.waitFor(() => expect(coordinator.view().state).toBe('protected'))
   })
 
+  it('runs again for a change that arrives while a cycle runs', async () => {
+    const transport = new ScriptedTransport()
+    const databaseName = `backup-coordinator:${crypto.randomUUID()}`
+    databaseNames.push(databaseName)
+    const entries = [historyEntry()]
+    let arrive = false
+    let coordinator: Awaited<ReturnType<typeof open>> | null = null
+    const coordinatorReady = await open(transport, databaseName, async () => {
+      const read = [...entries]
+      if (arrive) {
+        // A message lands just after this cycle read the history, and its
+        // own cycle is asked for while this one still runs.
+        arrive = false
+        entries.push({ ...historyEntry(), id: '55555555-5555-4555-8555-555555555551', timestampMs: 1_700_000_002_000 })
+        void coordinator!.flushNow()
+      }
+      return read
+    })
+    coordinator = coordinatorReady
+    await coordinator.settled()
+    expect(transport.segments).toHaveLength(1)
+
+    arrive = true
+    entries.push({ ...historyEntry(), id: '55555555-5555-4555-8555-555555555550', timestampMs: 1_700_000_001_000 })
+    await coordinator.flushNow()
+    await coordinator.settled()
+    expect(transport.segments).toHaveLength(3)
+    expect(coordinator.view().state).toBe('protected')
+  })
+
   it('returns one promise for overlapping manual flush triggers', async () => {
     const transport = new ScriptedTransport()
     const databaseName = `backup-coordinator:${crypto.randomUUID()}`

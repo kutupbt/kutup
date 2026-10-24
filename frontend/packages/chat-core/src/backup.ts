@@ -400,6 +400,8 @@ export class ChatBackupCoordinator {
   private viewValue: ChatBackupView
   private timer: BackupScheduledTask | null = null
   private running: Promise<void> | null = null
+  /** A cycle was asked for while one ran: that one collected before the change, so another follows. */
+  private again = false
   private disposed = false
   private compactionRequested = false
   private messageStorageFull = false
@@ -634,8 +636,6 @@ export class ChatBackupCoordinator {
    * in while a cycle was already running (that cycle didn't collect it).
    */
   private async flushScheduled(): Promise<void> {
-    if (this.running) await this.running.catch(() => undefined)
-    if (this.disposed) return
     if (this.timer !== null) this.runtime.scheduler.cancel(this.timer)
     this.timer = null
     await this.runCycle()
@@ -668,10 +668,19 @@ export class ChatBackupCoordinator {
   }
 
   private runCycle(): Promise<void> {
-    if (this.running) return this.running
+    if (this.running) {
+      // The running cycle may have collected before what asked for this one
+      // (a message that came in while a segment was uploading): one more runs
+      // after it, or that change would wait for the next one.
+      this.again = true
+      return this.running
+    }
     this.running = (async () => {
-      await this.collectAndQueue()
-      await this.flush()
+      do {
+        this.again = false
+        await this.collectAndQueue()
+        await this.flush()
+      } while (this.again && !this.disposed)
     })().finally(() => { this.running = null })
     return this.running
   }
@@ -1588,7 +1597,7 @@ export class ChatBackupCoordinator {
         : this.mediaViewState())
     this.viewValue = {
       // A cycle still scheduled has changes it hasn't collected yet.
-      state: computed === 'protected' && this.timer !== null ? 'backingUp' : computed,
+      state: computed === 'protected' && (this.timer !== null || this.again) ? 'backingUp' : computed,
       storageFull: this.messageStorageFull || pendingMedia.some(value => value.storageFull),
       currentCursor: this.status.currentCursor,
       latestProtectedAt: state.latestProtectedAt ?? this.viewValue.latestProtectedAt,
