@@ -1,9 +1,10 @@
 //! Multi-recipient sealed sends (docs/plans/pairwise-groups.md, slice 2;
 //! Signal-Server's `PUT /v1/messages/multi_recipient`): one group message to
 //! member accounts of one server, sent once. The body is libsignal's sent
-//! sealed-sender v2 message and each recipient account's group capability;
-//! the server checks capabilities, then budgets, then devices, and stores the
-//! shared part once, with each recipient device's mailbox row naming it.
+//! sealed-sender v2 message and a group send token over its recipient
+//! accounts (docs/plans/group-send-endorsements.md); the server checks the
+//! token, then budgets, then devices, and stores the shared part once, with
+//! each recipient device's mailbox row naming it.
 //!
 //! It never learns the sender. What it learns is that these of its accounts
 //! share one send (as Signal's server does).
@@ -17,9 +18,10 @@ use axum::response::{IntoResponse, Response};
 use axum::Json;
 use base64::engine::general_purpose::STANDARD;
 use base64::Engine as _;
+use kutup_chat_proto::group_send::GROUP_SEND_TOKEN_INVALID;
 use kutup_chat_proto::{
-    capability_hash, ChatWsServerMessage, EnvelopeType, SealedMultiDevicesV1,
-    SealedMultiResponseV1, SealedMultiStaleV1, SealedMultiSubmissionV1,
+    ChatWsServerMessage, EnvelopeType, SealedMultiDevicesV1, SealedMultiResponseV1,
+    SealedMultiStaleV1, SealedMultiSubmissionV1,
 };
 use libsignal_protocol::{SealedSenderV2SentMessage, ServiceId};
 use uuid::Uuid;
@@ -78,27 +80,45 @@ fn too_large(message: &str) -> AppError {
     AppError::new(StatusCode::PAYLOAD_TOO_LARGE, message.to_owned())
 }
 
-/// Parses and sizes the payload against the request's capabilities and the
-/// administrators' limits (`400`, `413`).
+fn token_invalid() -> AppError {
+    AppError::unauthorized("the group send token is invalid")
+        .with_details(serde_json::json!({ "code": GROUP_SEND_TOKEN_INVALID }))
+}
+
+/// Parses and sizes the payload against the administrators' limits (`400`,
+/// `413`): the recipient count and the size ceiling come from the payload's
+/// own recipients.
 fn parse(submission: &SealedMultiSubmissionV1, limits: &MultiLimits) -> AppResult<Parsed> {
     submission.validate().map_err(|error| malformed(&error))?;
-    let accounts = i64::try_from(submission.capabilities.len()).unwrap_or(i64::MAX);
-    if accounts > limits.max_recipients {
-        return Err(too_large("too many recipients in one send"));
-    }
     let payload = submission
         .payload_bytes()
         .map_err(|error| malformed(&error))?;
-    let ceiling = limits
+    // What no allowed recipient count could make fit, before parsing.
+    let largest = limits
         .base_bytes
-        .saturating_add(PER_RECIPIENT_BYTES.saturating_mul(accounts));
-    if i64::try_from(payload.len()).unwrap_or(i64::MAX) > ceiling {
+        .saturating_add(PER_RECIPIENT_BYTES.saturating_mul(limits.max_recipients));
+    if i64::try_from(payload.len()).unwrap_or(i64::MAX) > largest {
         return Err(too_large("the send is too large"));
     }
     let sent = SealedSenderV2SentMessage::parse(&payload)
         .map_err(|_| malformed("payload is not a sealed sender v2 message"))?;
     if sent.version != SENT_VERSION {
         return Err(malformed("payload must be version 0x23"));
+    }
+    let accounts = i64::try_from(sent.recipients.len()).unwrap_or(i64::MAX);
+    if accounts == 0 {
+        return Err(malformed(
+            "a multi-recipient send names at least one account",
+        ));
+    }
+    if accounts > limits.max_recipients {
+        return Err(too_large("too many recipients in one send"));
+    }
+    let ceiling = limits
+        .base_bytes
+        .saturating_add(PER_RECIPIENT_BYTES.saturating_mul(accounts));
+    if i64::try_from(payload.len()).unwrap_or(i64::MAX) > ceiling {
+        return Err(too_large("the send is too large"));
     }
     let shared = payload[sent.offset_of_shared_bytes()..].to_vec();
     let received_len = 1 + KEY_MATERIAL_LEN + shared.len();
@@ -126,6 +146,9 @@ fn parse(submission: &SealedMultiSubmissionV1, limits: &MultiLimits) -> AppResul
         if key_material.len() != KEY_MATERIAL_LEN {
             return Err(malformed("a recipient's key material is malformed"));
         }
+        // libsignal's parse joins an account's entries into one, so each
+        // account is here once and the token is checked over each once
+        // (§3.5).
         recipients.insert(
             account_id.clone(),
             Recipient {
@@ -136,19 +159,55 @@ fn parse(submission: &SealedMultiSubmissionV1, limits: &MultiLimits) -> AppResul
             },
         );
     }
-    if recipients.len() != submission.capabilities.len()
-        || !recipients
-            .keys()
-            .all(|account| submission.capabilities.contains_key(account))
-    {
-        return Err(malformed(
-            "capabilities name exactly the payload's recipient accounts",
-        ));
-    }
     Ok(Parsed {
         recipients: recipients.into_values().collect(),
         shared,
     })
+}
+
+/// Checks the send's token over the payload's accounts with this server's
+/// keys (§3.5), before any account is looked up: one answer, `401
+/// groupSendTokenInvalid`, for every way it fails, so it is no oracle for
+/// which accounts exist.
+async fn check_token(
+    state: &AppState,
+    submission: &SealedMultiSubmissionV1,
+    parsed: &Parsed,
+) -> AppResult<()> {
+    let keys = state
+        .group_send
+        .as_deref()
+        .ok_or_else(|| AppError::not_found("not found"))?
+        .keys()
+        .await?;
+    let token = submission
+        .group_send_token_bytes()
+        .map_err(|error| malformed(&error))?;
+    let accounts: Vec<Uuid> = parsed.recipients.iter().map(|r| r.user_id).collect();
+    let now = u64::try_from(time::OffsetDateTime::now_utc().unix_timestamp())
+        .map_err(|_| AppError::internal("clock"))?;
+    let verified = tokio::task::spawn_blocking(move || {
+        // A retired key verifies only tokens within its window (§4).
+        let keys: Vec<(&kutup_group_send::ServerKey, Option<u64>)> = keys
+            .iter()
+            .map(|key| {
+                let until = key
+                    .verifies_until
+                    .map(|until| u64::try_from(until).unwrap_or(0));
+                (&key.key, until)
+            })
+            .collect();
+        kutup_group_send::verify_token_within(&keys, &token, &accounts, now)
+    })
+    .await
+    .map_err(|error| AppError::internal(format!("check a group send token: {error}")))?;
+    match verified {
+        Ok(()) => Ok(()),
+        Err(
+            kutup_group_send::Error::DuplicateRecipient | kutup_group_send::Error::NoRecipients,
+        ) => Err(malformed("the token's accounts are malformed")),
+        Err(_) => Err(token_invalid()),
+    }
 }
 
 /// The device answers for one recipient: missing and extra devices (`409`),
@@ -201,11 +260,12 @@ fn device_answers(
     request_body = SealedMultiSubmissionV1,
     responses(
         (status = 200, description = "Delivered to all but `refused` and `rateLimited`", body = SealedMultiResponseV1),
-        (status = 400, description = "Malformed: the payload, a device listed twice, capabilities not matching the recipients"),
+        (status = 400, description = "Malformed: the payload, an account or a device named twice"),
+        (status = 401, description = "groupSendTokenInvalid: the token doesn't hold for the payload's accounts (expired, an account added or missing, another server's); nothing is looked up"),
         (status = 409, description = "Devices missing or extra (`devices`); nothing stored", body = SealedMultiResponseV1),
         (status = 410, description = "Devices whose registration changed (`stale`); nothing stored", body = SealedMultiResponseV1),
         (status = 413, description = "Too many recipients, or too large"),
-        (status = 429, description = "Over this address's budget"),
+        (status = 429, description = "Over this address's or this token's budget"),
         (status = 503, description = "peerUnavailable: the recipients' server didn't answer; send their copies one by one"),
     )
 )]
@@ -238,6 +298,7 @@ pub async fn send_multi(
     let local = &state.config.chat_server_name;
     let server = query.server.as_deref().unwrap_or(local);
     let (status, answer) = if server == local {
+        check_token(&state, &submission, &parsed).await?;
         deliver(&state, &submission, parsed, &limits).await?
     } else {
         match forward(&state, server, &submission).await? {
@@ -264,53 +325,66 @@ async fn charge(
     Ok(count)
 }
 
-/// Delivers a checked send to this server's accounts: capabilities, then
-/// each capability's budget, then devices, then the store. The answer's
-/// status is `200`, `409` or `410`.
+/// Delivers a send whose token held to this server's accounts: the token's
+/// budget, then each recipient's, then devices, then the store. The
+/// answer's status is `200`, `409` or `410`.
 async fn deliver(
     state: &AppState,
     submission: &SealedMultiSubmissionV1,
     parsed: Parsed,
     limits: &MultiLimits,
 ) -> AppResult<(StatusCode, SealedMultiResponseV1)> {
+    // 1. The token's budget (§3.6): weak, as anyone holding endorsements can
+    // combine other subsets, but it caps replays of one send. Charged on its
+    // own, so a send answered 409 or 410 counts too.
+    let token_digest: [u8; 32] = hash(
+        Suite::V1,
+        [
+            b"kutup/multi-token/v1\0".as_slice(),
+            submission.group_send_token.as_bytes(),
+        ]
+        .concat(),
+    )
+    .into();
+    if charge(state, "group_send_token", &token_digest, 1, 60).await? > limits.per_token_per_min {
+        crate::telemetry::rate_limit_rejection("group_send_token");
+        return Err(AppError::too_many_requests(
+            "this group send token's budget is spent",
+        ));
+    }
     let mut tx = state.pool.begin().await?;
     let mut answer = SealedMultiResponseV1::default();
-    // 1. Capabilities: an account that isn't an active one here and a
-    // capability that doesn't hold get one answer.
     let mut passing = Vec::new();
     for recipient in parsed.recipients {
-        let hash = capability_hash(
-            &submission
-                .capability_for(&recipient.account_id)
-                .ok_or_else(|| malformed("a recipient has no capability"))?,
-        );
-        let holds: Option<Uuid> = sqlx::query_scalar(
-            "SELECT u.id FROM users u
-               JOIN chat_group_capabilities c ON c.user_id = u.id
-              WHERE u.id = $1 AND u.is_active AND c.capability_hash = $2
-              FOR SHARE OF u, c",
-        )
-        .bind(recipient.user_id)
-        .bind(&hash[..])
-        .fetch_optional(&mut *tx)
-        .await?;
-        if holds.is_none() {
+        // 2. An account that isn't an active one here is refused.
+        let active: Option<Uuid> =
+            sqlx::query_scalar("SELECT id FROM users WHERE id = $1 AND is_active FOR SHARE")
+                .bind(recipient.user_id)
+                .fetch_optional(&mut *tx)
+                .await?;
+        if active.is_none() {
             answer.refused.push(recipient.account_id);
             continue;
         }
-        // 2. Budgets per capability: one member's capability drains only
-        // its own group's, never the member's direct sealed route. Charged
-        // on their own, so a send answered 409 or 410 counts too.
-        let minute = charge(state, "group_capability_minute", &hash, 1, 60).await?;
-        let day = charge(state, "group_capability_day", &hash, 1, 86_400).await?;
-        if minute > limits.capability_sends_per_min || day > limits.capability_sends_per_day {
+        // 3. Each recipient's budget across every sender (§3.6): the real
+        // limit. One over it gets its copy pairwise, never dropped.
+        let digest: [u8; 32] = hash(
+            Suite::V1,
+            [
+                b"kutup/multi-recipient/v1\0".as_slice(),
+                recipient.user_id.as_bytes(),
+            ]
+            .concat(),
+        )
+        .into();
+        if charge(state, "multi_recipient", &digest, 1, 60).await? > limits.per_recipient_per_min {
             answer.rate_limited.push(recipient.account_id);
             continue;
         }
         passing.push(recipient);
     }
 
-    // 3. Devices, for those that passed: missing or extra (409) before a
+    // 4. Devices, for those that passed: missing or extra (409) before a
     // changed registration (410); nothing is stored on either.
     for recipient in &passing {
         let current: Vec<(i32, i64)> =
@@ -342,7 +416,7 @@ async fn deliver(
         return Ok((StatusCode::GONE, answer));
     }
 
-    // 4. Store: the shared part once (only if a device gets a new row), and
+    // 5. Store: the shared part once (only if a device gets a new row), and
     // a row per device naming it.
     let send_id = Uuid::parse_str(&submission.send_id)
         .map_err(|_| malformed("sendId must be a lowercase hyphenated UUID"))?;
@@ -460,6 +534,16 @@ async fn forward(
         StatusCode::PAYLOAD_TOO_LARGE => Err(too_large(
             "the recipients' server refused the send as too large",
         )),
+        // A token the destination refused passes back as it is (§3.5): the
+        // client sends those copies pairwise and fetches anew.
+        StatusCode::UNAUTHORIZED
+            if serde_json::from_slice::<serde_json::Value>(&response.body)
+                .ok()
+                .and_then(|body| body.get("code").cloned())
+                == Some(serde_json::Value::from(GROUP_SEND_TOKEN_INVALID)) =>
+        {
+            Err(token_invalid())
+        }
         _ => Ok(None),
     }
 }
@@ -469,12 +553,13 @@ pub(crate) const FEDERATED_PATH: &str = "/api/fed/chat/sealed/multi";
 
 /// The largest send body either route reads: the largest request the
 /// settings can allow (their highest base size and recipient count), base64,
-/// with a capability per recipient and the rest of the JSON.
+/// with the token and the rest of the JSON.
 pub(crate) const MAX_BODY: usize = {
     let base = crate::site_settings::CHAT_MULTI_BASE_BYTES.max as usize;
     let recipients = crate::site_settings::CHAT_MULTI_MAX_RECIPIENTS.max as usize;
     let payload = base + PER_RECIPIENT_BYTES as usize * recipients;
-    payload * 4 / 3 + recipients * 80 + 4096
+    let token = kutup_chat_proto::group_send::MAX_GROUP_SEND_TOKEN_BYTES;
+    payload * 4 / 3 + token * 4 / 3 + 4096
 };
 
 /// `POST /api/fed/chat/sealed/multi` — a multi-recipient send another
@@ -489,7 +574,7 @@ pub(crate) const MAX_BODY: usize = {
     responses(
         (status = 200, body = SealedMultiResponseV1),
         (status = 400, description = "Malformed"),
-        (status = 401, description = "Invalid federation request signature or destination"),
+        (status = 401, description = "Invalid federation request signature or destination, or groupSendTokenInvalid"),
         (status = 409, body = SealedMultiResponseV1),
         (status = 410, body = SealedMultiResponseV1),
         (status = 413, description = "Too large"),
@@ -565,6 +650,11 @@ pub async fn deliver_federated(
         Ok(parsed) => parsed,
         Err(error) => return signed_error(error),
     };
+    // This server's own keys verify the token (§4): the origin only passed
+    // it on.
+    if let Err(error) = check_token(&state, &submission, &parsed).await {
+        return signed_error(error);
+    }
     match deliver(&state, &submission, parsed, &limits).await {
         Ok((status, answer)) => {
             crate::chat_federation::signed_json(federation, &authenticated, status, &answer)
@@ -657,8 +747,8 @@ mod tests {
         base_bytes: 256 * 1024,
         max_recipients: 256,
         ip_bytes_per_min: 32 * 1024 * 1024,
-        capability_sends_per_min: 120,
-        capability_sends_per_day: 10_000,
+        per_recipient_per_min: 1_200,
+        per_token_per_min: 60,
         origin_requests_per_min: 6_000,
         origin_bytes_per_min: 512 * 1024 * 1024,
     };
@@ -686,15 +776,13 @@ mod tests {
         message
     }
 
-    fn submission(payload: &[u8], accounts: &[Uuid]) -> SealedMultiSubmissionV1 {
+    /// A send of `payload`; the token's shape only (parsing doesn't check
+    /// it, the keys do).
+    fn submission(payload: &[u8]) -> SealedMultiSubmissionV1 {
         SealedMultiSubmissionV1 {
             send_id: "0a0a0a0a-0000-4000-8000-000000000001".into(),
             payload: STANDARD.encode(payload),
-            capabilities: accounts
-                .iter()
-                .map(|account| (account.hyphenated().to_string(), STANDARD.encode([9u8; 16])))
-                .collect(),
-            group_send_token: None,
+            group_send_token: STANDARD.encode([9u8; 64]),
             urgent: true,
         }
     }
@@ -704,7 +792,7 @@ mod tests {
         let (a, b) = (Uuid::new_v4(), Uuid::new_v4());
         let shared = [7u8; 64];
         let payload = sent(&[(b, &[(1, 100)], 2), (a, &[(1, 10), (2, 20)], 1)], &shared);
-        let parsed = parse(&submission(&payload, &[a, b]), &LIMITS).unwrap();
+        let parsed = parse(&submission(&payload), &LIMITS).unwrap();
         assert_eq!(parsed.shared, shared);
         // In account-id order, whatever order the payload has.
         let mut expected = [a, b];
@@ -736,63 +824,53 @@ mod tests {
     }
 
     #[test]
-    fn a_send_that_doesnt_fit_its_capabilities_or_limits_is_refused() {
+    fn a_send_that_doesnt_fit_its_limits_is_refused() {
         let (a, b) = (Uuid::new_v4(), Uuid::new_v4());
-        let payload = sent(&[(a, &[(1, 10)], 1)], &[7u8; 64]);
-        // A capability for an account the payload doesn't name, or none for
-        // one it does.
-        assert_eq!(
-            parse(&submission(&payload, &[a, b]), &LIMITS)
+        let status = |payload: &[u8], limits: &MultiLimits| {
+            parse(&submission(payload), limits)
                 .err()
-                .unwrap()
-                .status,
-            400
-        );
-        assert_eq!(
-            parse(&submission(&payload, &[b]), &LIMITS)
-                .err()
-                .unwrap()
-                .status,
-            400
-        );
-        // A device listed twice.
+                .map(|error| error.status.as_u16())
+        };
+        // A device listed twice, also across an account's two entries.
         let twice = sent(&[(a, &[(1, 10), (1, 10)], 1)], &[7u8; 64]);
-        assert_eq!(
-            parse(&submission(&twice, &[a]), &LIMITS)
-                .err()
-                .unwrap()
-                .status,
-            400
-        );
-        // Not a sent message at all.
-        assert_eq!(
-            parse(&submission(&[0x23, 0xff], &[a]), &LIMITS)
-                .err()
-                .unwrap()
-                .status,
-            400
-        );
-        // Too large for one recipient's message, or too many recipients.
+        assert_eq!(status(&twice, &LIMITS), Some(400));
+        let split_twice = sent(&[(a, &[(1, 10)], 1), (a, &[(1, 10)], 1)], &[7u8; 64]);
+        assert_eq!(status(&split_twice, &LIMITS), Some(400));
+        // An account's devices in two entries are one recipient (libsignal
+        // joins them), so the token is over it once.
+        let split = sent(&[(a, &[(1, 10)], 1), (a, &[(2, 20)], 1)], &[7u8; 64]);
+        let parsed = parse(&submission(&split), &LIMITS).unwrap();
+        assert_eq!(parsed.recipients.len(), 1);
+        assert_eq!(parsed.recipients[0].devices, vec![(1, 10), (2, 20)]);
+        // Not a sent message at all, or one naming nobody.
+        assert_eq!(status(&[0x23, 0xff], &LIMITS), Some(400));
+        assert_eq!(status(&sent(&[], &[7u8; 64]), &LIMITS), Some(400));
+        // Too large for one recipient's message.
         let big = sent(&[(a, &[(1, 10)], 1)], &vec![7u8; 97 * 1024]);
-        assert_eq!(
-            parse(&submission(&big, &[a]), &LIMITS)
-                .err()
-                .unwrap()
-                .status,
-            413
-        );
+        assert_eq!(status(&big, &LIMITS), Some(413));
+        // Too many recipients, counted in the payload.
         let few = MultiLimits {
             max_recipients: 1,
             ..LIMITS
         };
         let two = sent(&[(a, &[(1, 10)], 1), (b, &[(1, 10)], 2)], &[7u8; 64]);
-        assert_eq!(
-            parse(&submission(&two, &[a, b]), &few)
-                .err()
-                .unwrap()
-                .status,
-            413
-        );
+        assert_eq!(status(&two, &few), Some(413));
+        assert!(parse(&submission(&two), &LIMITS).is_ok());
+        // The size ceiling grows with the payload's recipients, not more.
+        let tight = MultiLimits {
+            base_bytes: 4 * 1024,
+            ..LIMITS
+        };
+        // base + 132 for one recipient: a 4 KiB shared part fits, 200 more
+        // bytes don't.
+        let fits = sent(&[(a, &[(1, 10)], 1)], &vec![7u8; 4 * 1024]);
+        assert!(parse(&submission(&fits), &tight).is_ok());
+        let one = sent(&[(a, &[(1, 10)], 1)], &vec![7u8; 4 * 1024 + 200]);
+        assert_eq!(status(&one, &tight), Some(413));
+        // A token of the wrong shape is malformed before anything else.
+        let mut bad = submission(&sent(&[(a, &[(1, 10)], 1)], &[7u8; 64]));
+        bad.group_send_token = "AQ".into();
+        assert_eq!(parse(&bad, &LIMITS).err().unwrap().status, 400);
     }
 
     #[test]

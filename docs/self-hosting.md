@@ -1133,6 +1133,19 @@ if any.
     that.
   - **Never derived from `JWT_SECRET`:** rotating that one leaves passwords
     alone.
+  - **Group send keys are sealed under it too** (Chat groups,
+    docs/plans/group-send-endorsements.md §4). Each start seals them again
+    under the current key, so after adding a key, start the server once
+    before you remove the old id; a key whose id is gone stops the server at
+    start.
+- **Group send endorsement keys:** made on first start when `CHAT_GROUPS`
+  and federation are on, stored sealed (above). `kutup-server chat-zk-keys
+  rotate` makes a new key that issues from then on; the old one keeps
+  verifying until the last endorsement it issued expires (at most about two
+  days), then goes. Run it if a database dump with `OPAQUE_SETUP_KEYS` may
+  have leaked; a second rotation waits until the first one's old key is
+  gone. Group sends that fail meanwhile fall back to one copy per member, so
+  nothing is lost.
 - **Referral codes:** stored only as HMACs under a key the server makes once and keeps in its database (`server_generated_keys`), so rotating `JWT_SECRET` leaves open codes working and a database restore keeps them; a new, empty database voids them.
 - **ADMIN_ACCOUNT:** Keep this set — it defines the protected break-glass admin (never demotable/deletable). Rotate its password after first login, but don't remove the variable, or the break-glass protection lapses.
 - **Quotas:** Set each account's storage quota (one pool for every app) in the admin dashboard to prevent abuse.

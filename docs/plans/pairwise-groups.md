@@ -1639,6 +1639,11 @@ Limits, each an admin-editable site setting with Signal's values as defaults:
 - too large is `413`; a malformed payload, a device listed twice, a
   recipient missing from `capabilities` or the other way round is `400`.
 
+*Replaced by group send endorsements
+([`group-send-endorsements.md`](group-send-endorsements.md)): the capability
+table, routes and budgets below are gone; the multi-recipient route takes a
+token instead.*
+
 **2. Capabilities.** A new table, because today's `chat_delivery_capabilities`
 holds one profile-derived capability per account: `chat_group_capabilities
 (user_id, capability_hash bytea(32), created_at)`, no group id.

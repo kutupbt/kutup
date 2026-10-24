@@ -1,8 +1,9 @@
 # Group send endorsements for the multi-recipient route
 
-Status: **design note for approval** (third session, client and crypto parts;
-second session, the server and federation parts marked *(server)*;
-2026-10-24). Nothing here is built yet.
+Status: **approved** (the user, 2026-10-24). Built: the shared crate and
+wire types (#343, third session); the server and federation parts marked
+*(server)* (second session, 2026-10-24); the client is #334. Where the build
+settled a detail, the section says so.
 
 **Decision being implemented (the user, 2026-10-24):** "do it Signal's way".
 Replace the per-group delivery capabilities of slice 2
@@ -114,7 +115,9 @@ every sync instead, so even the fetch says nothing; every account asks once a
 day whatever it is in, so the request itself carries no group information.
 - **What D learns:** nothing about groups: that its user fetched its daily
   endorsement (or nothing at all, pushed).
-- Limits: requests per account and day (site setting, `429` past it).
+- Limits: requests per account and day (`chatGroupSendEndorsementsPerDay`,
+  48 at first, `429` past it). Built without the cache: each fetch issues
+  anew (a response is randomised; any of them verifies).
 
 **3.3 Sharing it with each group** *(server, the home)*. The member checks
 the response (`receive_with_service_ids([ACI], now, &P0, D's endorsement
@@ -171,8 +174,9 @@ response, with its proof**, sealed, to the home of each of its groups:
 - Own devices go pairwise, as now.
 
 **3.5 Verifying** *(server)*. D recomputes the token over the
-**deduplicated** recipient account ids of the payload (a request naming an id
-twice is `400`, and the token is checked over each id once) with its derived
+**deduplicated** recipient account ids of the payload (libsignal's parse
+joins an account's entries into one, as Signal clients split an account's
+devices that way, so the token is checked over each id once) with its derived
 key for the token's expiration (`GroupSendFullToken::verify`), before devices
 are looked at (Signal's order, access first).
 - **Which key:** the token carries no key id. D tries its current key, then
@@ -185,11 +189,11 @@ are looked at (Signal's order, access first).
   back unchanged.
 
 **3.6 Budgets on the multi route** *(server, site settings)*:
-- **per recipient account,** `chatMultiPerRecipientPerMinute`, across all
+- **per recipient account,** `chatMultiPerRecipientPerMin` (1200 at first), across all
   senders: **the real limit**. A recipient over it is `rateLimited` in the
   answer, and the client sends that recipient's copy pairwise (with back-off),
   never dropping it;
-- per token, `chatMultiPerTokenPerMinute`, keyed by the full token's hash:
+- per token, `chatMultiPerTokenPerMin` (60 at first), keyed by the full token's hash:
   **weak**, as anyone holding n endorsements can combine 2^n − 1 different
   subsets, each a different token; it only caps replays of one request;
 - the existing per-request, per-origin and payload-size limits stay.
@@ -225,13 +229,24 @@ are looked at (Signal's order, access first).
   - **Rotation** is an admin command, `kutup-server chat-zk-keys rotate`: the
     new key issues from then on; the old one stops issuing at once and keeps
     verifying until the latest expiration it issued (at most 49 hours, the
-    window being `MAX_ENDORSEMENT_LIFETIME`), then its row is deleted.
+    window being `MAX_ENDORSEMENT_LIFETIME`), then its row is deleted. Built:
+    a second rotation is refused while the retired key still verifies, so a
+    server never has more than two keys; the window counts from a minute
+    after the rotation (instances keep the keys they read that long), and a
+    retired key verifies no token expiring after it. Each start seals every
+    key again under the current `OPAQUE_SETUP_KEYS` entry, so an operator
+    can drop an old entry after one start.
 - **Discovery.** The signed federation identity document gains
   `chatGroupSend: [{ keyId, endorsementPublicKey, issuesUntil }]`: **only the
   `EndorsementPublicKey`**, the current one and, during its window, the
   previous one. Senders check other servers' endorsements with it, and
   members their own server's; a local client reads the same from `GET
-  /api/chat/group-send/params`. Verification never needs another server's
+  /api/chat/group-send/params`, and another server's from `GET
+  …/params?server=<host>`, which its own server answers from that server's
+  verified discovery (a wrong key costs only availability). Built:
+  `issuesUntil` of the issuing key is 9007199254740991 ("until rotated",
+  the largest integer every client reads exactly); the section is signed
+  only when present, so a document without keys signs as before. Verification never needs another server's
   key: D verifies only tokens it issued itself.
 - **The federated route.** The origin forwards `groupSendToken` with the
   multi-recipient body to the destination's `/api/fed/chat/sealed/multi`

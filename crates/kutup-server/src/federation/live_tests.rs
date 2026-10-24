@@ -102,6 +102,7 @@ async fn live_identity_trust_policy_and_replay_invariants() {
                 FederationCapabilityId::identity_v1(),
                 FederationCapabilityId::chat_v2(),
             ],
+            Vec::new(),
             now + Duration::seconds(3),
         )
         .unwrap();

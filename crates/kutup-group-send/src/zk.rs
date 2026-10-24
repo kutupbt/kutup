@@ -255,6 +255,19 @@ pub fn verify_token(
     recipients: &[Uuid],
     now: u64,
 ) -> Result<()> {
+    let keys: Vec<(&ServerKey, Option<u64>)> = keys.iter().map(|key| (*key, None)).collect();
+    verify_token_within(&keys, token, recipients, now)
+}
+
+/// [`verify_token`], each key with the latest token expiration it may
+/// verify (`None` for the issuing key): a retired key holds only for what it
+/// can have issued (§4), so it verifies no token expiring after its window.
+pub fn verify_token_within(
+    keys: &[(&ServerKey, Option<u64>)],
+    token: &[u8],
+    recipients: &[Uuid],
+    now: u64,
+) -> Result<()> {
     if recipients.is_empty() {
         return Err(Error::NoRecipients);
     }
@@ -263,8 +276,11 @@ pub fn verify_token(
         return Err(Error::DuplicateRecipient);
     }
     let token: GroupSendFullToken = zkgroup::deserialize(token).map_err(|_| Error::Invalid)?;
-    check_expiration(token.expiration().epoch_seconds(), now).map_err(|_| Error::Invalid)?;
-    if keys.iter().any(|key| key.verifies(&token, recipients, now)) {
+    let expiration = token.expiration().epoch_seconds();
+    check_expiration(expiration, now).map_err(|_| Error::Invalid)?;
+    if keys.iter().any(|(key, until)| {
+        until.is_none_or(|until| expiration <= until) && key.verifies(&token, recipients, now)
+    }) {
         Ok(())
     } else {
         Err(Error::Invalid)

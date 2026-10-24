@@ -3,7 +3,7 @@ use axum::response::{IntoResponse, Response};
 use axum::Json;
 use kutup_federation_proto::{
     verify_identity_chain, FederationCapabilityId, FederationDiscoveryTransportPolicy,
-    FederationDiscoveryV2, FederationIdentityDocumentV1,
+    FederationDiscoveryV2, FederationGroupSendKeyV1, FederationIdentityDocumentV1,
 };
 use time::{Duration, OffsetDateTime};
 
@@ -18,6 +18,7 @@ impl FederationStack {
     pub fn signed_discovery(
         &self,
         capabilities: Vec<FederationCapabilityId>,
+        chat_group_send: Vec<FederationGroupSendKeyV1>,
         now: OffsetDateTime,
     ) -> anyhow::Result<FederationDiscoveryV2> {
         let expires_at = now
@@ -35,6 +36,7 @@ impl FederationStack {
             self.local_identity.document().clone(),
             now.unix_timestamp(),
             expires_at.unix_timestamp(),
+            chat_group_send,
             self.local_identity.signing_key(),
             transport_policy,
         )?)
@@ -141,7 +143,13 @@ pub(crate) async fn public_discovery(State(state): State<AppState>) -> AppResult
     if capabilities.is_empty() {
         return Err(AppError::not_found("federation is disabled by policy"));
     }
-    let document = federation.signed_discovery(capabilities, OffsetDateTime::now_utc())?;
+    // The group send keys, where this server delivers group sends (§4).
+    let chat_group_send = match state.group_send.as_deref() {
+        Some(keys) if state.config.chat_groups => keys.published().await?,
+        _ => Vec::new(),
+    };
+    let document =
+        federation.signed_discovery(capabilities, chat_group_send, OffsetDateTime::now_utc())?;
     Ok(Json(document).into_response())
 }
 
