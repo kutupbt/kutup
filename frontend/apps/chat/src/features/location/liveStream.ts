@@ -1,6 +1,7 @@
 import axios from 'axios'
 import { openLiveLocationUpdate, sealLiveLocationUpdate, type LiveLocationPosition, type LiveLocationUpdate } from '@kutup/crypto/liveLocation'
 import api from '@kutup/session/client'
+import { randomBytes } from '@kutup/crypto/random'
 
 // A live location's stream on the sharer's server (docs/plans/maps.md): the
 // server keeps only the latest sealed update; writing needs the write
@@ -17,12 +18,12 @@ export interface StreamSecrets {
 }
 
 function randomBase64(bytes: number): string {
-  const buffer = crypto.getRandomValues(new Uint8Array(bytes))
+  const buffer = randomBytes(bytes)
   return btoa(String.fromCharCode(...buffer))
 }
 
 function randomHex(bytes: number): string {
-  return [...crypto.getRandomValues(new Uint8Array(bytes))].map((b) => b.toString(16).padStart(2, '0')).join('')
+  return [...randomBytes(bytes)].map((b) => b.toString(16).padStart(2, '0')).join('')
 }
 
 /** A new stream on this account's server, open until `untilMs`. */

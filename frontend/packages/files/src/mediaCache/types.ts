@@ -1,4 +1,5 @@
 export type CiphertextCacheProductV1 = 'chat' | 'drive'
+import { hash } from '@kutup/crypto/hash'
 export type CiphertextCacheStateV1 = 'partial' | 'verified'
 
 export interface CiphertextCacheBindingV1 {
@@ -90,7 +91,6 @@ export async function ciphertextCacheBindingKeyV1(
 }
 
 async function digestText(value: string): Promise<string> {
-  if (!globalThis.crypto?.subtle) throw new Error('Web Crypto is unavailable')
-  const digest = await globalThis.crypto.subtle.digest('SHA-256', new TextEncoder().encode(value))
-  return Array.from(new Uint8Array(digest), byte => byte.toString(16).padStart(2, '0')).join('')
+  const digest = await hash(new TextEncoder().encode(value))
+  return Array.from(digest, byte => byte.toString(16).padStart(2, '0')).join('')
 }

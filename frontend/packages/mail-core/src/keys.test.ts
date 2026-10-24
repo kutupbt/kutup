@@ -58,6 +58,7 @@ import {
   type SignedMailKeyList,
 } from '@kutup/crypto'
 import { acceptGroupKeys, AddressDisabled, addressKeys, forgetKeys, groupMembers, GroupKeysChanged, KeysIdentityChanged, UnverifiedKeys, verified } from './keys'
+import { randomBytes } from '@kutup/crypto/random'
 
 /** What `GET /api/mail/keys` answers for `address` (as stored), its newest list naming `listed`. */
 async function lookupOf(master: string, binding: string, address: string, listed = address, flags: number = MAIL_KEY_FLAGS.notCompromised | MAIL_KEY_FLAGS.notObsolete) {
@@ -80,7 +81,7 @@ async function lookupOf(master: string, binding: string, address: string, listed
 }
 
 describe('an address’s keys', () => {
-  const master = toBase64(crypto.getRandomValues(new Uint8Array(32)))
+  const master = toBase64(randomBytes(32))
   const binding = crypto.randomUUID()
 
   it('are the current address’s, asked in any spelling', async () => {
@@ -128,7 +129,7 @@ describe('an address’s keys', () => {
 })
 
 describe('an address’s keys against the pin list', () => {
-  const master = toBase64(crypto.getRandomValues(new Uint8Array(32)))
+  const master = toBase64(randomBytes(32))
   const binding = crypto.randomUUID()
 
   async function lookedUp(verdict: { kind: string; now?: string; name?: string }) {
@@ -161,7 +162,7 @@ describe('an address’s keys against the pin list', () => {
 })
 
 describe('an address’s key lists against what this device has seen', () => {
-  const master = toBase64(crypto.getRandomValues(new Uint8Array(32)))
+  const master = toBase64(randomBytes(32))
   const binding = crypto.randomUUID()
 
   it('refuses a chain shorter than one seen before (a rollback)', async () => {
@@ -201,7 +202,7 @@ describe('an address’s key lists against what this device has seen', () => {
 })
 
 describe('a disabled address (its owner’s list encrypts to nothing)', () => {
-  const master = toBase64(crypto.getRandomValues(new Uint8Array(32)))
+  const master = toBase64(randomBytes(32))
   const binding = crypto.randomUUID()
 
   it('takes no mail: the lookup’s 404, or a list with no key to encrypt to', async () => {
@@ -253,7 +254,7 @@ describe('a disabled address (its owner’s list encrypts to nothing)', () => {
 
 describe('a shared mailbox’s keys against the pin list', () => {
   // Real chains, signed in WASM by the mailbox's own signers.
-  const master = toBase64(crypto.getRandomValues(new Uint8Array(32)))
+  const master = toBase64(randomBytes(32))
   const binding = crypto.randomUUID()
   const groupId = '2b3c4d5e-6f70-4182-93a4-b5c6d7e8f901'
   const manager = { server: 'kutup.dev', accountId: '3f1c9a52-6b7e-4f0e-9d1a-2c3b4d5e6f70' }
@@ -384,7 +385,7 @@ describe('a shared mailbox’s key lists', () => {
     forgetKeys()
     const groupId = crypto.randomUUID()
     const address = 'hr_team@kutup.dev'
-    const master = toBase64(crypto.getRandomValues(new Uint8Array(32)))
+    const master = toBase64(randomBytes(32))
     const owner = await derive(master)
     const account = { server: 'kutup.dev', accountId: crypto.randomUUID() }
     const member = { account, incarnationId: owner.incarnationId, hpkePublicKey: owner.driveHpkePublicKey }

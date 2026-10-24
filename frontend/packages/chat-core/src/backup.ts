@@ -29,6 +29,8 @@ import type {
 } from './backup-store'
 import { accountKey, conversationKey, parseAccount, type AccountRef } from './identity'
 import type { ChangeMark, ChatAttachmentDescriptorV1, ChatHistoryEntry } from './types'
+import { randomBytes } from '@kutup/crypto/random'
+import { hash } from '@kutup/crypto/hash'
 
 type ChatContent = ChatHistoryEntry['content']
 
@@ -373,7 +375,7 @@ export function browserChatBackupRuntime(): ChatBackupRuntime {
     },
     ids: {
       randomUuid: () => crypto.randomUUID(),
-      randomBytes: length => crypto.getRandomValues(new Uint8Array(length)),
+      randomBytes: length => randomBytes(length),
     },
     checkpoint: () => undefined,
   }
@@ -1832,14 +1834,12 @@ async function fingerprint(value: unknown): Promise<string> {
 }
 
 async function sha256Hex(bytes: Uint8Array): Promise<string> {
-  const digest = new Uint8Array(await crypto.subtle.digest(
-    'SHA-256', bytes.slice().buffer as ArrayBuffer,
-  ))
+  const digest = await hash(bytes)
   return Array.from(digest, byte => byte.toString(16).padStart(2, '0')).join('')
 }
 
 async function deterministicUuid(value: string): Promise<string> {
-  const digest = new Uint8Array(await crypto.subtle.digest('SHA-256', encoder.encode(value)))
+  const digest = await hash(encoder.encode(value))
   digest[6] = (digest[6] & 0x0f) | 0x50
   digest[8] = (digest[8] & 0x3f) | 0x80
   const hex = Array.from(digest.subarray(0, 16), byte => byte.toString(16).padStart(2, '0')).join('')

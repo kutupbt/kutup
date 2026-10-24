@@ -14,6 +14,7 @@ vi.mock('@kutup/session/client', () => ({ default: {} }))
 import { generateMailAddressKey, MAIL_KEY_FLAGS, signMailKeyList, toBase64 } from '@kutup/crypto'
 import { resetRevisionGuardsForTesting } from '@kutup/crypto/revisionGuard'
 import { checkedAddresses, missingKeys, OwnKeyListRolledBack } from './keyList'
+import { randomBytes } from '@kutup/crypto/random'
 
 const both = MAIL_KEY_FLAGS.notCompromised | MAIL_KEY_FLAGS.notObsolete
 const BINDING = crypto.randomUUID()
@@ -46,7 +47,7 @@ async function ownRow(masterKey: Uint8Array, address: string, sequence = 1, list
 beforeEach(() => resetRevisionGuardsForTesting())
 
 describe('the account’s own addresses, checked against its own authority', () => {
-  const masterKey = crypto.getRandomValues(new Uint8Array(32))
+  const masterKey = randomBytes(32)
   const session = { masterKey, userId: 'me' }
 
   it('names a key the account only when its public key has the signed fingerprints', async () => {
@@ -56,14 +57,14 @@ describe('the account’s own addresses, checked against its own authority', () 
     expect(checked.keys[0].listed).toBe(true)
     expect(missingKeys(checked)).toEqual([])
     // The server swaps in a key of its own under the signed fingerprints.
-    const other = await generateMailAddressKey(toBase64(crypto.getRandomValues(new Uint8Array(32))), BINDING, 'ada@kutup.test')
+    const other = await generateMailAddressKey(toBase64(randomBytes(32)), BINDING, 'ada@kutup.test')
     const [swapped] = await checkedAddresses(session, [{ ...row, keys: [{ ...row.keys[0], publicKey: other.publicKey }] }])
     expect(swapped.keys[0].listed).toBe(false)
     expect(missingKeys(swapped).map((entry) => entry.fingerprint)).toEqual([row.keys[0].fingerprint])
   })
 
   it('trusts no list another account signed, nor one for another address', async () => {
-    const { row } = await ownRow(crypto.getRandomValues(new Uint8Array(32)), 'bob@kutup.test')
+    const { row } = await ownRow(randomBytes(32), 'bob@kutup.test')
     expect((await checkedAddresses(session, [row]))[0].verifiedList).toBeNull()
     const { row: elsewhere } = await ownRow(masterKey, 'adal2@kutup.test', 1, 'grace@kutup.test')
     const [checked] = await checkedAddresses(session, [elsewhere])
@@ -84,7 +85,7 @@ describe('the account’s own addresses, checked against its own authority', () 
     await checkedAddresses(session, [seen])
     // After a reset the account has another master key, so another authority: its
     // first list at sequence 1 is no rollback of the old one's 5.
-    const reset = crypto.getRandomValues(new Uint8Array(32))
+    const reset = randomBytes(32)
     const { row: fresh } = await ownRow(reset, 'max@kutup.test', 1)
     const [checked] = await checkedAddresses({ masterKey: reset, userId: 'me' }, [fresh], { strict: true })
     expect(checked.verifiedList?.sequence).toBe(1)

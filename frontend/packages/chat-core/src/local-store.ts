@@ -1,4 +1,5 @@
 import { resolveApiBase } from '@kutup/session/apiBase'
+import { hash } from '@kutup/crypto/hash'
 
 const CHAT_DEVICE_DATABASE_VERSION = 'v2'
 const CHAT_DEVICE_RESET_REQUEST = 'kutup:chat:reset-device'
@@ -83,11 +84,8 @@ function writeStored(storage: Storage, key: string, value: string): void {
 async function chatAccountScope(userId: string): Promise<string> {
   const apiBase = await resolveApiBase()
   const canonicalServer = new URL(apiBase, window.location.href).href
-  const digest = await crypto.subtle.digest(
-    'SHA-256',
-    new TextEncoder().encode(`${canonicalServer}\0${userId}`),
-  )
-  return Array.from(new Uint8Array(digest).slice(0, 16), byte =>
+  const digest = await hash(new TextEncoder().encode(`${canonicalServer}\0${userId}`))
+  return Array.from(digest.slice(0, 16), byte =>
     byte.toString(16).padStart(2, '0'),
   ).join('')
 }

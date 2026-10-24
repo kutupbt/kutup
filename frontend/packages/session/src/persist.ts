@@ -17,6 +17,7 @@ import { decodeKeys, encodeKeys, type DeviceKeys, type SessionKeys } from './key
 import { activateSession, fetchProfile, KeyBindingMismatchError } from './profile'
 import { getSession, updateSession } from './store'
 import { clearPersisted, readPersisted, writePersisted } from './persistedStore'
+import { randomBytes } from '@kutup/crypto/random'
 
 function profileFor(sessionId: string): string {
   return `${getClientType()}:${sessionId}`
@@ -24,7 +25,7 @@ function profileFor(sessionId: string): string {
 
 /** Seal and store `keys` for this origin's current session. */
 export async function persistKeys(sessionId: string, keys: SessionKeys): Promise<void> {
-  const localKey = crypto.getRandomValues(new Uint8Array(32))
+  const localKey = randomBytes(32)
   try {
     await api.put('/auth/sessions/current/local-key', { key: toBase64(localKey) })
     const blob = await sealLocalState(

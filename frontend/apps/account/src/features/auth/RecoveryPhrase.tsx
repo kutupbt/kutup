@@ -8,6 +8,7 @@ import { Field } from '@kutup/ui/components/field'
 import { Input } from '@kutup/ui/components/input'
 import { copyText } from '@kutup/ui/lib/clipboard'
 import { normalizeMnemonic } from './flows'
+import { fillRandom } from '@kutup/crypto/random'
 
 /**
  * Step 1: the 24 words, shown once. The phrase is the only way back into the
@@ -80,7 +81,7 @@ function pickPositions(count: number, total: number): number[] {
   const picked = new Set<number>()
   const random = new Uint32Array(1)
   while (picked.size < count) {
-    crypto.getRandomValues(random)
+    fillRandom(random)
     picked.add(random[0] % total)
   }
   return [...picked].sort((a, b) => a - b)

@@ -179,6 +179,15 @@ uploads, whiteboard assets) are the suite's hash, as on the server; under V1
 it is the same SHA-256 as the served `ContentDigest`, and a suite with
 another hash renames those fields (a format change, not a silent swap).
 
+Step 5 notes: `@kutup/crypto/random` (`randomBytes`, `fillRandom`, over
+`crypto.getRandomValues`) and `@kutup/crypto/hash` (the suite's hash, over
+Web Crypto's SHA-256, as `primitives::hash` in Rust) are the frontend's one
+random source and one hash. ESLint refuses `getRandomValues` and `subtle`
+(as members or taken apart) and libsodium imports (static or dynamic)
+anywhere outside `packages/crypto`, tests included. `crypto.randomUUID`
+stays allowed: it makes ids, never keys. Nothing else called Web Crypto
+directly (no HMAC or Ed25519 left outside the package).
+
 After that, **block format slices 1-2** build their framing on `Aead::new`
 and `hash`, and the wipe branch sets every header's suite to 1.
 

@@ -35,6 +35,7 @@ import api from '@kutup/session/client'
 import { accountKey, type AccountRef } from './identity'
 import type { ChatAttachmentDescriptorV1, ChatMediaClassV1 } from './types'
 import { encodeChatMediaPreviewV1 } from './media-preview'
+import { hash } from '@kutup/crypto/hash'
 
 const SHA256_HEX_BYTES = 64
 const chatMediaCacheRequestsV1 = new CiphertextCacheRequestCoordinatorV1()
@@ -725,7 +726,7 @@ async function chatMediaDeliveryOperationId(
   const input = new TextEncoder().encode(
     `kutup/chat-media/delivery-operation/v1\0${attachmentId}\0${recipient}`,
   )
-  const digest = new Uint8Array(await crypto.subtle.digest('SHA-256', input))
+  const digest = await hash(input)
   const uuid = digest.slice(0, 16)
   // RFC 9562 variant with the application-defined UUIDv8 version. The full
   // derivation is domain separated and deterministic for retry safety.
