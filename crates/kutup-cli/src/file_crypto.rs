@@ -5,7 +5,6 @@
 //! (docs/plans/drive-move.md). Moving a file re-seals that one envelope.
 
 use anyhow::{anyhow, bail, Context, Result};
-use rand::RngCore as _;
 use uuid::Uuid;
 
 use crate::api::{File, FileMetadata, MoveFileRequest, RekeyRequest, UpdateFileMetadataRequest};
@@ -36,7 +35,7 @@ pub fn create(
     validate_metadata(metadata)?;
     let id = Uuid::new_v4().to_string();
     let mut file_key = [0u8; 32];
-    rand::rngs::OsRng.fill_bytes(&mut file_key);
+    kutup_crypto::primitives::random(&mut file_key);
     let file_key_envelope = seal_file_key(
         &file_key,
         &id,
@@ -220,7 +219,7 @@ pub fn rekey_request(
         .checked_add(1)
         .ok_or_else(|| anyhow!("file key generation exhausted"))?;
     let mut new_key = [0u8; 32];
-    rand::rngs::OsRng.fill_bytes(&mut new_key);
+    kutup_crypto::primitives::random(&mut new_key);
     let file_key_envelope = seal_file_key(
         &new_key,
         &file.id,

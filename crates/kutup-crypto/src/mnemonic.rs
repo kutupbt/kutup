@@ -7,11 +7,12 @@
 //! has no mnemonic, so this is a frontend↔Rust mirror only.
 
 use bip39::Mnemonic;
+use zeroize::Zeroizing;
 
 use crate::error::{CryptoError, Result};
 
 /// Encodes 32 bytes of entropy as a 24-word BIP39 phrase. Mirrors `encodeMnemonic`.
-pub fn encode(entropy: &[u8]) -> Result<String> {
+pub fn encode(entropy: &[u8]) -> Result<Zeroizing<String>> {
     if entropy.len() != 32 {
         return Err(CryptoError::InvalidLength {
             expected: 32,
@@ -20,7 +21,7 @@ pub fn encode(entropy: &[u8]) -> Result<String> {
     }
     let m =
         Mnemonic::from_entropy(entropy).map_err(|e| CryptoError::Backend(format!("bip39: {e}")))?;
-    Ok(m.to_string())
+    Ok(Zeroizing::new(m.to_string()))
 }
 
 /// Decodes a BIP39 phrase back to its entropy. Mirrors `decodeMnemonic` (validates the
@@ -41,7 +42,7 @@ mod tests {
     fn zero_entropy_vector() {
         let phrase = encode(&[0u8; 32]).unwrap();
         assert_eq!(
-            phrase,
+            *phrase,
             "abandon abandon abandon abandon abandon abandon abandon abandon \
              abandon abandon abandon abandon abandon abandon abandon abandon \
              abandon abandon abandon abandon abandon abandon abandon art"

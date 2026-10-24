@@ -57,12 +57,8 @@ pub(crate) fn object_key(user_id: Uuid, message_id: Uuid) -> String {
 
 /// Compares secrets without leaking where they differ or how long they are.
 pub(crate) fn secret_matches(given: &[u8], expected: &[u8]) -> bool {
-    let (given, expected) = (hash(Suite::V1, given), hash(Suite::V1, expected));
-    given
-        .iter()
-        .zip(expected.iter())
-        .fold(0u8, |acc, (a, b)| acc | (a ^ b))
-        == 0
+    // Hashed first, so the comparison is over equal lengths.
+    kutup_crypto::primitives::ct_eq(&hash(Suite::V1, given), &hash(Suite::V1, expected))
 }
 
 /// `name@server` (any case, an optional `+tag`) as the stored address, or
