@@ -28,10 +28,7 @@ pub fn capability_hash(capability: &[u8; 16]) -> [u8; 32] {
 }
 
 pub fn constant_time_capability_hash_eq(left: &[u8; 32], right: &[u8; 32]) -> bool {
-    left.iter()
-        .zip(right)
-        .fold(0u8, |difference, (left, right)| difference | (left ^ right))
-        == 0
+    kutup_crypto::primitives::ct_eq(left, right)
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

@@ -216,7 +216,11 @@ Each rule has `allow-invalid`, as a crate without the dependency can't name
 the type anyway.
 
 The check also fails on any `clippy::disallowed_types` or
-`clippy::disallowed_methods` in a Rust file this table doesn't list. A new
+`clippy::disallowed_methods` in a Rust file this table doesn't list, and on
+every other way to switch them off: an allow or expect of `clippy::style`,
+`clippy::all` or `warnings` anywhere, a `[lints]` table allowing them in a
+Cargo.toml, rustflags with `-A` or `--cap-lints` for them in a
+`.cargo/config`, such a flag in a script or workflow, and `CLIPPY_CONF_DIR`. A new
 adapter adds its row here, in the PR that adds it.
 
 | File | Allowed for |

@@ -9,6 +9,10 @@ says so ("Lint exceptions").
   drop the crypto rules without the marker.
 - `clippy::disallowed_types` / `clippy::disallowed_methods` appear only in the
   Rust files the plan's "File" table lists.
+- Nothing switches the rules off another way: no allow/expect of
+  `clippy::style`, `clippy::all` or `warnings` in Rust code, no allowing
+  `[lints]` table in a Cargo.toml, no rustflags or scripts passing
+  `-A`/`--cap-lints` for them, and no `CLIPPY_CONF_DIR`.
 """
 import pathlib
 import re
@@ -19,6 +23,13 @@ ROOT = pathlib.Path(__file__).resolve().parent.parent
 MARKER = "# W2: moving"
 PLAN = ROOT / "docs/plans/crypto-primitives.md"
 LINTS = re.compile(r"clippy::disallowed_(?:types|methods)\b")
+# Lints or groups whose allowing also switches the disallowed_* rules off.
+GROUPS = {"clippy::style", "clippy::all", "warnings"}
+TOML_GROUPS = {"disallowed_types", "disallowed_methods", "style", "all"}
+ATTRIBUTE = re.compile(r"#!?\[\s*(?:allow|expect)\s*\(([^\]]*)\)\s*\]|cfg_attr\([^\]]*?\b(?:allow|expect)\s*\(([^)]*)\)")
+FLAG = re.compile(
+    r"(?:-A|--allow|--cap-lints|-W|--warn)[\s=]*(?:clippy::(?:disallowed_\w+|style|all)|warnings|allow)\b"
+)
 SKIP = {"node_modules", "target", ".git"}
 
 
@@ -67,6 +78,61 @@ def allowed_files() -> set[str]:
     return {f for cell in table("File") for f in re.findall(r"`([^`]+)`", cell)}
 
 
+def allowed_level(value) -> bool:
+    level = value.get("level") if isinstance(value, dict) else value
+    return level in ("allow", "expect")
+
+
+def rustflags(config) -> list[str]:
+    """Every `rustflags` value in a .cargo/config, each as one string."""
+    found = []
+    if isinstance(config, dict):
+        for key, value in config.items():
+            if key in ("rustflags", "rustdocflags"):
+                found.append(" ".join(value) if isinstance(value, list) else str(value))
+            else:
+                found.extend(rustflags(value))
+    return found
+
+
+def other_switches() -> list[str]:
+    errors = []
+    for path in walk("**/*.rs"):
+        rel = path.relative_to(ROOT).as_posix()
+        for match in ATTRIBUTE.finditer(path.read_text(encoding="utf-8", errors="replace")):
+            names = {n.strip() for n in (match.group(1) or match.group(2) or "").split(",")}
+            for name in sorted(names & GROUPS):
+                errors.append(f"{rel}: allows `{name}`, which switches the crypto lint off too")
+    for path in walk("**/Cargo.toml"):
+        rel = path.relative_to(ROOT).as_posix()
+        config = tomllib.loads(path.read_text(encoding="utf-8"))
+        for table in (config.get("lints", {}), config.get("workspace", {}).get("lints", {})):
+            for name, value in table.get("clippy", {}).items():
+                if name in TOML_GROUPS and allowed_level(value):
+                    errors.append(f"{rel}: [lints] allows clippy::{name}")
+            if allowed_level(table.get("rust", {}).get("warnings", "warn")):
+                errors.append(f"{rel}: [lints] allows warnings")
+    for path in [*walk("**/.cargo/config"), *walk("**/.cargo/config.toml")]:
+        rel = path.relative_to(ROOT).as_posix()
+        text = path.read_text(encoding="utf-8")
+        config = tomllib.loads(text)
+        if "CLIPPY_CONF_DIR" in config.get("env", {}):
+            errors.append(f"{rel}: sets CLIPPY_CONF_DIR")
+        if any(FLAG.search(flags) for flags in rustflags(config)):
+            errors.append(f"{rel}: rustflags switch the crypto lint off")
+    for pattern in ("scripts/**/*", ".github/**/*.yml", "**/Dockerfile*", "Makefile", "justfile"):
+        for path in walk(pattern):
+            if not path.is_file() or path.name == "check-crypto-exceptions.py":
+                continue
+            rel = path.relative_to(ROOT).as_posix()
+            text = path.read_text(encoding="utf-8", errors="replace")
+            if "CLIPPY_CONF_DIR" in text:
+                errors.append(f"{rel}: sets CLIPPY_CONF_DIR")
+            if FLAG.search(text):
+                errors.append(f"{rel}: passes a flag that switches the crypto lint off")
+    return errors
+
+
 def main() -> int:
     errors = []
     root_rules = rules(ROOT / "clippy.toml")
@@ -103,6 +169,8 @@ def main() -> int:
                 errors.append(f"{rel}: allows a crypto lint but the plan doesn't list the file")
     for rel in sorted(allowed - used):
         errors.append(f"{rel}: the plan lists it but it allows no crypto lint (strike the row)")
+
+    errors.extend(other_switches())
 
     for error in errors:
         print(error, file=sys.stderr)
