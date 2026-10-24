@@ -170,14 +170,10 @@ impl EndorsementBlob {
     }
 }
 
-/// A server name as blobs carry it: 1 to 253 bytes of lowercase DNS
-/// characters (and a port, for test stacks).
+/// A server name as blobs carry it: an account's canonical server name
+/// (`kutup_crypto::account_ref::valid_server`).
 fn valid_server(server: &str) -> bool {
-    !server.is_empty()
-        && server.len() <= MAX_SERVER_LEN
-        && server
-            .bytes()
-            .all(|byte| matches!(byte, b'a'..=b'z' | b'0'..=b'9' | b'.' | b'-' | b':'))
+    kutup_crypto::account_ref::valid_server(server)
 }
 
 /// Fresh randomness for one zkgroup operation.

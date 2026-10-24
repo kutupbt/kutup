@@ -216,6 +216,19 @@ fn blob(server: &str) -> EndorsementBlob {
     }
 }
 
+/// A canonical server name of the longest length: four labels, 253 bytes.
+fn longest_server() -> String {
+    let name = [
+        "a".repeat(63),
+        "b".repeat(63),
+        "c".repeat(63),
+        "d".repeat(61),
+    ]
+    .join(".");
+    assert_eq!(name.len(), MAX_SERVER_LEN);
+    name
+}
+
 #[test]
 fn a_blob_round_trips_at_one_size() {
     let short = blob("kutup.dev");
@@ -223,7 +236,7 @@ fn a_blob_round_trips_at_one_size() {
     assert_eq!(encoded.len(), ENDORSEMENT_BLOB_BYTES);
     assert_eq!(EndorsementBlob::decode(&encoded).unwrap(), short);
     // The longest server name still fits beside a response.
-    let longest = blob(&"a".repeat(MAX_SERVER_LEN));
+    let longest = blob(&longest_server());
     assert_eq!(
         EndorsementBlob::decode(&longest.encode().unwrap()).unwrap(),
         longest
