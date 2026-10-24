@@ -51,7 +51,9 @@ pub fn spawn_all(
         }
     });
     // Group request nonces past their window (docs/plans/pairwise-groups.md §3),
-    // and avatar uploads no change named within their day.
+    // avatar uploads no change named within their day, members' endorsement
+    // blobs an hour past their expiration and endorsement keys past their
+    // window (docs/plans/group-send-endorsements.md §3.3, §4).
     let nonces = pool.clone();
     tokio::spawn(async move {
         let mut tick = tokio::time::interval(std::time::Duration::from_secs(5 * 60));
@@ -62,6 +64,12 @@ pub fn spawn_all(
             }
             if let Err(error) = crate::chat_groups::gateway::sweep_avatars(&nonces).await {
                 tracing::warn!(error = %error.message, "group avatar sweep failed");
+            }
+            if let Err(error) = crate::chat_groups::gateway::sweep_endorsements(&nonces).await {
+                tracing::warn!(error = %error.message, "group endorsement sweep failed");
+            }
+            if let Err(error) = crate::chat_group_send::sweep_keys(&nonces).await {
+                tracing::warn!(error = %error.message, "group send key sweep failed");
             }
         }
     });

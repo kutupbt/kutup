@@ -12,7 +12,7 @@
 //! Times are Unix seconds, as zkgroup's `Timestamp`. Randomness comes from
 //! `kutup_crypto::primitives::random`, the one random source.
 
-use kutup_crypto::primitives::{hash, random_array, Suite};
+use kutup_crypto::primitives::{hash, random_array, Aead, Suite};
 use uuid::Uuid;
 
 mod zk;
@@ -184,6 +184,48 @@ fn randomness() -> [u8; 32] {
 /// An account id as libsignal's service id.
 fn aci(account: Uuid) -> libsignal_core::ServiceId {
     libsignal_core::Aci::from(account).into()
+}
+
+/// The domain a stored server key is sealed under.
+const SERVER_KEY_SEAL_DOMAIN: &[u8] = b"kutup/chat-group-send/server-key/v1\0";
+
+fn server_key_aad(sealing_key_id: u16, key_id: u32) -> Vec<u8> {
+    [
+        SERVER_KEY_SEAL_DOMAIN,
+        &sealing_key_id.to_be_bytes(),
+        &key_id.to_be_bytes(),
+    ]
+    .concat()
+}
+
+/// Seals a server key for storage (§4) under the server's sealing key
+/// (`OPAQUE_SETUP_KEYS`' entry `sealing_key_id`), bound to its key id, so a
+/// database dump alone issues nothing and a sealed key can't take another
+/// id.
+pub fn seal_server_key(
+    key: &ServerKey,
+    sealing_key: &[u8; 32],
+    sealing_key_id: u16,
+    key_id: u32,
+) -> Result<Vec<u8>> {
+    let secret = zeroize::Zeroizing::new(key.to_bytes());
+    Aead::new(Suite::V1, sealing_key)
+        .and_then(|aead| aead.seal(&server_key_aad(sealing_key_id, key_id), &secret))
+        .map_err(|_| Error::Malformed("sealing key"))
+}
+
+/// Opens what [`seal_server_key`] sealed; fails for another sealing key or
+/// key id.
+pub fn open_server_key(
+    sealed: &[u8],
+    sealing_key: &[u8; 32],
+    sealing_key_id: u16,
+    key_id: u32,
+) -> Result<ServerKey> {
+    let secret = Aead::new(Suite::V1, sealing_key)
+        .and_then(|aead| aead.open(&server_key_aad(sealing_key_id, key_id), sealed))
+        .map_err(|_| Error::Invalid)?;
+    ServerKey::from_bytes(&secret)
 }
 
 #[cfg(test)]

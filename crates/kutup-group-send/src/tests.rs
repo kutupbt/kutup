@@ -357,3 +357,28 @@ fn the_vectors_hold() {
         Ok(())
     );
 }
+
+#[test]
+fn a_sealed_server_key_opens_only_under_its_key_and_id() {
+    let key = ServerKey::generate();
+    let sealing = [7u8; 32];
+    let sealed = seal_server_key(&key, &sealing, 3, 9).unwrap();
+    let opened = open_server_key(&sealed, &sealing, 3, 9).unwrap();
+    assert_eq!(opened.to_bytes(), key.to_bytes());
+    assert_eq!(
+        open_server_key(&sealed, &[8u8; 32], 3, 9).unwrap_err(),
+        Error::Invalid
+    );
+    assert_eq!(
+        open_server_key(&sealed, &sealing, 4, 9).unwrap_err(),
+        Error::Invalid
+    );
+    assert_eq!(
+        open_server_key(&sealed, &sealing, 3, 10).unwrap_err(),
+        Error::Invalid
+    );
+    assert_eq!(
+        open_server_key(&sealed[..20], &sealing, 3, 9).unwrap_err(),
+        Error::Invalid
+    );
+}

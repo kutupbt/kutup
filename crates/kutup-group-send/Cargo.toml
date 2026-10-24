@@ -24,6 +24,7 @@ zkgroup = { git = "https://github.com/signalapp/libsignal", tag = "v0.97.2" }
 libsignal-core = { git = "https://github.com/signalapp/libsignal", tag = "v0.97.2" }
 thiserror.workspace = true
 uuid.workspace = true
+zeroize.workspace = true
 
 [dev-dependencies]
 hex.workspace = true

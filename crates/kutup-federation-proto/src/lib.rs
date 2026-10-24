@@ -18,6 +18,7 @@ use serde::{Deserialize, Serialize};
 
 pub use discovery::{
     FederationCapabilityId, FederationDiscoveryTransportPolicy, FederationDiscoveryV2,
+    FederationGroupSendKeyV1, MAX_GROUP_SEND_KEYS, MAX_GROUP_SEND_KEY_BYTES,
 };
 pub use error::FederationProtocolError;
 pub use http_signatures::{

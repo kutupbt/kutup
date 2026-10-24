@@ -3588,6 +3588,7 @@ dependencies = [
  "serde_json",
  "thiserror 2.0.18",
  "uuid",
+ "zeroize",
  "zkgroup",
 ]
 
@@ -3682,6 +3683,7 @@ dependencies = [
  "kutup-chat-proto",
  "kutup-crypto",
  "kutup-federation-proto",
+ "kutup-group-send",
  "libsignal-protocol",
  "mail-parser",
  "multer",

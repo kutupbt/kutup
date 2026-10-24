@@ -367,7 +367,8 @@ pub const MAX_SEALED_MULTI_PAYLOAD_BYTES: usize = 8 * 1024 * 1024;
 /// One group message to member accounts of one server, sent once
 /// (docs/plans/pairwise-groups.md, slice 2 §1; Signal's
 /// `PUT /v1/messages/multi_recipient`): libsignal's sent multi-recipient
-/// message, and each recipient account's group capability.
+/// message, and a group send token over its recipient accounts
+/// (docs/plans/group-send-endorsements.md §3.4).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -377,17 +378,10 @@ pub struct SealedMultiSubmissionV1 {
     /// libsignal's sent sealed-sender v2 message (version `0x23`),
     /// canonical padded base64.
     pub payload: String,
-    /// Each recipient account's raw 16-byte group capability (canonical
-    /// padded base64), by account id: exactly the payload's recipients.
-    /// Empty with a `groupSendToken` (being replaced by it,
-    /// docs/plans/group-send-endorsements.md).
-    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
-    pub capabilities: std::collections::BTreeMap<String, String>,
     /// The serialized `GroupSendFullToken` over the payload's recipient
     /// accounts (kutup-group-send's `token`), canonical padded base64: the
     /// destination verifies it with its own key.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub group_send_token: Option<String>,
+    pub group_send_token: String,
     /// `false` (receipts and the like) only nudges connected devices and
     /// never wakes one by web push.
     #[serde(default = "urgent_by_default")]
@@ -418,9 +412,7 @@ impl SealedMultiSubmissionV1 {
     pub fn group_send_token_bytes(&self) -> Result<Vec<u8>, String> {
         const INVALID: &str =
             "groupSendToken must be canonical padded base64 within its size limit";
-        let Some(token) = &self.group_send_token else {
-            return Err("no groupSendToken".into());
-        };
+        let token = &self.group_send_token;
         let bytes = base64::engine::general_purpose::STANDARD
             .decode(token)
             .map_err(|_| INVALID)?;
@@ -433,47 +425,14 @@ impl SealedMultiSubmissionV1 {
         Ok(bytes)
     }
 
-    /// The raw capability given for `account_id`.
-    pub fn capability_for(&self, account_id: &str) -> Option<[u8; 16]> {
-        let value = self.capabilities.get(account_id)?;
-        let bytes = base64::engine::general_purpose::STANDARD
-            .decode(value)
-            .ok()?;
-        if base64::engine::general_purpose::STANDARD.encode(&bytes) != *value {
-            return None;
-        }
-        bytes.try_into().ok()
-    }
-
-    /// Its shape: the sendId, 1 to [`MAX_SEALED_MULTI_RECIPIENTS`] accounts
-    /// by lowercase UUID, each with a 16-byte capability. The payload itself
-    /// is parsed by the server.
+    /// Its shape: the sendId, the token and the payload. The payload's
+    /// recipients (1 to the server's limit, none twice) are the server's
+    /// check, as it parses the payload.
     pub fn validate(&self) -> Result<(), String> {
         if uuid_shape(&self.send_id).is_none() {
             return Err("sendId must be a lowercase hyphenated UUID".into());
         }
-        if self.group_send_token.is_some() {
-            if !self.capabilities.is_empty() {
-                return Err(
-                    "a multi-recipient send carries a token or capabilities, not both".into(),
-                );
-            }
-            self.group_send_token_bytes()?;
-            return self.payload_bytes().map(|_| ());
-        }
-        if self.capabilities.is_empty() || self.capabilities.len() > MAX_SEALED_MULTI_RECIPIENTS {
-            return Err(format!(
-                "a multi-recipient send names 1-{MAX_SEALED_MULTI_RECIPIENTS} accounts"
-            ));
-        }
-        for account in self.capabilities.keys() {
-            if uuid_shape(account).is_none() {
-                return Err("a recipient's accountId must be a lowercase UUID".into());
-            }
-            if self.capability_for(account).is_none() {
-                return Err("a group capability is 16 bytes, canonical padded base64".into());
-            }
-        }
+        self.group_send_token_bytes()?;
         self.payload_bytes().map(|_| ())
     }
 }
@@ -508,11 +467,11 @@ pub struct SealedMultiStaleV1 {
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[serde(rename_all = "camelCase")]
 pub struct SealedMultiResponseV1 {
-    /// Accounts not delivered to: not an active account here, or a
-    /// capability that doesn't hold (one answer for all).
+    /// Accounts not delivered to: not an active account here.
     #[serde(default)]
     pub refused: Vec<String>,
-    /// Accounts over their capability's budget: send them later.
+    /// Accounts over their budget (`chatMultiPerRecipientPerMin`): send
+    /// them their copies pairwise.
     #[serde(default)]
     pub rate_limited: Vec<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -538,81 +497,55 @@ fn uuid_shape(value: &str) -> Option<()> {
 mod tests {
     use super::*;
 
-    fn multi(capabilities: &[(&str, [u8; 16])]) -> SealedMultiSubmissionV1 {
+    fn multi() -> SealedMultiSubmissionV1 {
         SealedMultiSubmissionV1 {
             send_id: "0a0a0a0a-0000-4000-8000-000000000001".into(),
             payload: base64::engine::general_purpose::STANDARD.encode([0x23, 1, 2, 3]),
-            capabilities: capabilities
-                .iter()
-                .map(|(account, capability)| {
-                    (
-                        (*account).to_owned(),
-                        base64::engine::general_purpose::STANDARD.encode(capability),
-                    )
-                })
-                .collect(),
-            group_send_token: None,
+            group_send_token: base64::engine::general_purpose::STANDARD.encode([1u8; 41]),
             urgent: true,
         }
     }
 
     #[test]
-    fn a_multi_recipient_send_carries_a_token_or_capabilities() {
-        let token = base64::engine::general_purpose::STANDARD.encode([1u8; 41]);
-        let with_token = SealedMultiSubmissionV1 {
-            group_send_token: Some(token.clone()),
-            ..multi(&[])
-        };
-        assert!(with_token.validate().is_ok());
-        assert_eq!(with_token.group_send_token_bytes().unwrap(), vec![1u8; 41]);
-        let json = serde_json::to_string(&with_token).unwrap();
-        assert!(!json.contains("capabilities"), "{json}");
+    fn a_multi_recipient_send_carries_a_token() {
+        let ok = multi();
+        assert!(ok.validate().is_ok());
+        assert_eq!(ok.group_send_token_bytes().unwrap(), vec![1u8; 41]);
+        assert_eq!(ok.payload_bytes().unwrap(), vec![0x23, 1, 2, 3]);
+        let json = serde_json::to_string(&ok).unwrap();
         assert!(json.contains(r#""groupSendToken":"#), "{json}");
-        let both = SealedMultiSubmissionV1 {
-            group_send_token: Some(token),
-            ..multi(&[("6f1e2d3c-4b5a-4978-8a6b-5c4d3e2f1a0b", [7; 16])])
-        };
-        assert!(both.validate().is_err());
         for bad in [
             String::new(),
             "AQ".into(),
             base64::engine::general_purpose::STANDARD.encode([1u8; 257]),
         ] {
             let submission = SealedMultiSubmissionV1 {
-                group_send_token: Some(bad),
-                ..multi(&[])
+                group_send_token: bad,
+                ..multi()
             };
             assert!(submission.validate().is_err());
         }
-        // Neither: refused, as before.
-        assert!(multi(&[]).validate().is_err());
-    }
-
-    #[test]
-    fn a_multi_recipient_send_is_checked_for_shape() {
-        let account = "6f1e2d3c-4b5a-4978-8a6b-5c4d3e2f1a0b";
-        let ok = multi(&[(account, [7; 16])]);
-        assert!(ok.validate().is_ok());
-        assert_eq!(ok.capability_for(account), Some([7; 16]));
-        assert_eq!(ok.payload_bytes().unwrap(), vec![0x23, 1, 2, 3]);
-        assert!(multi(&[]).validate().is_err(), "no recipients");
-        assert!(multi(&[("Not-A-Uuid", [7; 16])]).validate().is_err());
-        let mut short = ok.clone();
-        short.capabilities.insert(
-            account.into(),
-            base64::engine::general_purpose::STANDARD.encode([7u8; 15]),
-        );
-        assert!(short.validate().is_err(), "a 15-byte capability");
         let mut empty = ok.clone();
         empty.payload = String::new();
         assert!(empty.validate().is_err());
         let mut send = ok.clone();
         send.send_id = "nope".into();
         assert!(send.validate().is_err());
+        // The token is required; capabilities are no field any more.
+        let without: Result<SealedMultiSubmissionV1, _> = serde_json::from_str(&format!(
+            r#"{{"sendId":"{}","payload":"{}"}}"#,
+            ok.send_id, ok.payload
+        ));
+        assert!(without.is_err());
+        let with_capabilities: Result<SealedMultiSubmissionV1, _> = serde_json::from_str(&format!(
+            r#"{{"sendId":"{}","payload":"{}","groupSendToken":"{}","capabilities":{{}}}}"#,
+            ok.send_id, ok.payload, ok.group_send_token
+        ));
+        assert!(with_capabilities.is_err());
         // urgent defaults to true on the wire.
         let parsed: SealedMultiSubmissionV1 = serde_json::from_str(&format!(
-            r#"{{"sendId":"{}","payload":"{}","capabilities":{{}}}}"#,
-            ok.send_id, ok.payload
+            r#"{{"sendId":"{}","payload":"{}","groupSendToken":"{}"}}"#,
+            ok.send_id, ok.payload, ok.group_send_token
         ))
         .unwrap();
         assert!(parsed.urgent);
