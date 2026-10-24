@@ -1707,10 +1707,6 @@ impl ChatTransport for Client {
         let sent = libsignal_protocol::SealedSenderV2SentMessage::parse(&payload)
             .map_err(|error| ChatError::Transport(error.to_string()))?;
         assert_eq!(sent.version, 0x23);
-        assert!(
-            submission.capabilities.is_empty(),
-            "a token, not capabilities"
-        );
         let recipients: Vec<uuid::Uuid> = sent
             .recipients
             .keys()

@@ -1332,6 +1332,7 @@ dependencies = [
  "libsignal-core",
  "thiserror 2.0.18",
  "uuid",
+ "zeroize",
  "zkgroup",
 ]
 

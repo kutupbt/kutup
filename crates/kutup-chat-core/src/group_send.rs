@@ -1064,8 +1064,7 @@ impl Engine {
                 let submission = kutup_chat_proto::SealedMultiSubmissionV1 {
                     send_id: entry.send_id.clone(),
                     payload: STANDARD.encode(&sealed.payload),
-                    capabilities: BTreeMap::new(),
-                    group_send_token: Some(token),
+                    group_send_token: token,
                     urgent: true,
                 };
                 let outcome = Rc::clone(&self.transport)
