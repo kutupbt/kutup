@@ -297,12 +297,60 @@ impl AccountAuthority {
         mut devices: Vec<AccountManifestDeviceV2>,
         issued_at: impl Into<String>,
     ) -> Result<AccountManifestV2> {
-        devices.sort_by_key(|device| device.device_id);
         // Kutup has no MLS groups any more: a manifest signed now carries no
         // device's MLS keys, so the legacy field fades out with each re-sign.
         for device in &mut devices {
             device.mls = None;
         }
+        self.sign_devices_as_given(
+            account,
+            sequence,
+            previous_hash,
+            identity_key,
+            identity_binding,
+            devices,
+            issued_at,
+        )
+    }
+
+    /// A manifest signed as one from before the MLS removal: its devices'
+    /// legacy MLS keys kept, as an account may still hold it. Only for tests
+    /// of how the next manifest drops them.
+    #[doc(hidden)]
+    #[allow(clippy::too_many_arguments)]
+    pub fn sign_legacy_manifest_for_testing(
+        &self,
+        account: AccountRef,
+        sequence: u64,
+        previous_hash: Option<String>,
+        identity_key: String,
+        identity_binding: String,
+        devices: Vec<AccountManifestDeviceV2>,
+        issued_at: impl Into<String>,
+    ) -> Result<AccountManifestV2> {
+        self.sign_devices_as_given(
+            account,
+            sequence,
+            previous_hash,
+            identity_key,
+            identity_binding,
+            devices,
+            issued_at,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn sign_devices_as_given(
+        &self,
+        account: AccountRef,
+        sequence: u64,
+        previous_hash: Option<String>,
+        identity_key: String,
+        identity_binding: String,
+        mut devices: Vec<AccountManifestDeviceV2>,
+        issued_at: impl Into<String>,
+    ) -> Result<AccountManifestV2> {
+        devices.sort_by_key(|device| device.device_id);
         let mut manifest = AccountManifestV2 {
             manifest_version: ACCOUNT_MANIFEST_V2_VERSION,
             account,
