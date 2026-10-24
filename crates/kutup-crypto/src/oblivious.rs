@@ -15,7 +15,6 @@
 
 use chacha20poly1305::aead::{Aead, KeyInit, Payload};
 use chacha20poly1305::{ChaCha20Poly1305, Key, Nonce};
-use dryoc::rng::copy_randombytes;
 use hkdf::Hkdf;
 use hpke_rs::{HpkePrivateKey, HpkePublicKey};
 use sha2::Sha256;
@@ -109,7 +108,7 @@ impl GatewayKey {
     /// A new random key pair.
     pub fn generate(key_id: u8) -> Result<Self> {
         let mut private_key = Zeroizing::new([0u8; PRIVATE_KEY_LEN]);
-        copy_randombytes(private_key.as_mut());
+        crate::primitives::random(private_key.as_mut());
         Self::from_private_key(key_id, private_key.as_ref())
     }
 
@@ -284,7 +283,7 @@ pub struct ResponseContext(ExchangeSecret);
 impl ResponseContext {
     pub fn seal_response(&self, body: &[u8]) -> Result<Vec<u8>> {
         let mut response_nonce = [0u8; RESPONSE_NONCE_LEN];
-        copy_randombytes(&mut response_nonce);
+        crate::primitives::random(&mut response_nonce);
         self.seal_response_with_nonce(body, &response_nonce)
     }
 

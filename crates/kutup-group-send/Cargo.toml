@@ -1,0 +1,31 @@
+# kutup-group-send — group send endorsements for Chat's multi-recipient route
+# (docs/plans/group-send-endorsements.md).
+#
+# The one place that calls libsignal's zkgroup: the fixed public params P0,
+# the expiry rules, the endorsement blob a member shares with each group, and
+# issuing, checking, combining and verifying endorsements. The server issues
+# and verifies with it; Chat core receives, combines and builds tokens. Both
+# take the protocol constants from here, so neither re-derives them.
+
+[package]
+name = "kutup-group-send"
+version = "0.1.0"
+publish = false
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+kutup-crypto = { path = "../kutup-crypto", default-features = false }
+kutup-chat-proto = { path = "../kutup-chat-proto" }
+# The same libsignal revision as libsignal-protocol in the server and Chat
+# core (AGPL-3.0, like the rest of libsignal here).
+zkgroup = { git = "https://github.com/signalapp/libsignal", tag = "v0.97.2" }
+libsignal-core = { git = "https://github.com/signalapp/libsignal", tag = "v0.97.2" }
+thiserror.workspace = true
+uuid.workspace = true
+
+[dev-dependencies]
+hex.workspace = true
+serde.workspace = true
+serde_json.workspace = true

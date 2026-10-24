@@ -40,6 +40,8 @@ static() {
   step "Documentation checks"
   python3 scripts/test-check-docs.py
   python3 scripts/check-docs.py
+  step "Crypto lint exceptions (docs/plans/crypto-primitives.md)"
+  python3 scripts/check-crypto-exceptions.py
   step "Frontend lockfile (runtime singletons resolve once)"
   python3 scripts/test-check-lockfile-singletons.py
   python3 scripts/check-lockfile-singletons.py frontend/pnpm-lock.yaml
@@ -54,6 +56,7 @@ static() {
   for crate in "${standalone_crates[@]}"; do
     cargo clippy --locked --manifest-path "$crate/Cargo.toml" --all-targets -- -D warnings
   done
+  cargo clippy --locked --manifest-path fuzz/Cargo.toml --all-targets -- -D warnings
   deny
 }
 

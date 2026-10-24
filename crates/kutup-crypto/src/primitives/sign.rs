@@ -5,6 +5,7 @@ use super::Suite;
 use crate::error::{CryptoError, Result};
 
 /// A signing key, from its seed.
+#[derive(Clone)]
 pub struct SigningKey {
     suite: Suite,
     key: ed25519_dalek::SigningKey,
@@ -28,6 +29,19 @@ impl SigningKey {
 
     pub fn sign(&self, message: &[u8]) -> Vec<u8> {
         self.key.sign(message).to_bytes().to_vec()
+    }
+
+    /// A signature as a fixed array, for a format that fixes its length
+    /// (the suite's `signature_len`).
+    pub fn sign_array<const N: usize>(&self, message: &[u8]) -> [u8; N] {
+        self.sign(message)
+            .try_into()
+            .expect("the suite's signature length")
+    }
+
+    /// The seed this key was made from (to seal and keep).
+    pub fn seed(&self) -> zeroize::Zeroizing<[u8; 32]> {
+        zeroize::Zeroizing::new(self.key.to_bytes())
     }
 
     pub fn verifying_key(&self) -> VerifyingKey {
@@ -62,6 +76,13 @@ impl VerifyingKey {
 
     pub fn to_bytes(&self) -> Vec<u8> {
         self.key.to_bytes().to_vec()
+    }
+
+    /// The key as a fixed array (the suite's `verifying_key_len`).
+    pub fn to_array<const N: usize>(&self) -> [u8; N] {
+        self.to_bytes()
+            .try_into()
+            .expect("the suite's verifying key length")
     }
 
     pub fn verify(&self, message: &[u8], signature: &[u8]) -> Result<()> {

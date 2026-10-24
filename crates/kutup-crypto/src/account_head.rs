@@ -19,13 +19,8 @@
 //! writing device are HMAC'd, so the head tells the server nothing it does not
 //! already know.
 
-use chacha20poly1305::aead::{Aead, KeyInit, Payload};
-use chacha20poly1305::{XChaCha20Poly1305, XNonce};
-use dryoc::rng::copy_randombytes;
-use hkdf::Hkdf;
-use hmac::{Hmac, Mac};
+use crate::primitives::{hash, Aead, Hasher, Kdf, Mac, Suite};
 use serde::{Deserialize, Serialize};
-use sha2::{Digest as _, Sha256};
 use zeroize::Zeroizing;
 
 use crate::error::{CryptoError, Result};
@@ -72,7 +67,7 @@ pub struct HeadKeys {
 
 impl HeadKeys {
     pub fn derive(master_key: &[u8; 32]) -> Result<Self> {
-        let hkdf = Hkdf::<Sha256>::new(Some(SALT), master_key);
+        let hkdf = Kdf::new(Suite::V1, SALT, master_key);
         let mut seal = Zeroizing::new([0u8; 32]);
         let mut id = Zeroizing::new([0u8; 32]);
         hkdf.expand(SEAL_KEY_INFO, seal.as_mut_slice())
@@ -82,14 +77,13 @@ impl HeadKeys {
     }
 
     fn mac(&self, domain: &[u8], parts: &[&[u8]]) -> [u8; 32] {
-        let mut mac = <Hmac<Sha256> as Mac>::new_from_slice(self.id.as_slice())
-            .expect("HMAC takes any key length");
+        let mut mac = Mac::new(Suite::V1, self.id.as_slice());
         mac.update(domain);
         for part in parts {
-            mac.update(&(part.len() as u32).to_be_bytes());
+            mac.update((part.len() as u32).to_be_bytes());
             mac.update(part);
         }
-        mac.finalize().into_bytes().into()
+        mac.finish().to_array()
     }
 
     /// What the head knows a value by: an HMAC of its scope and id.
@@ -144,7 +138,7 @@ impl HeadKeys {
         if pairs.windows(2).any(|pair| pair[0].0 == pair[1].0) {
             return Err(invalid("a value is listed twice"));
         }
-        let mut hasher = Sha256::new();
+        let mut hasher = Hasher::new(Suite::V1);
         hasher.update(SCOPE_DOMAIN);
         hasher.update((scope.len() as u32).to_be_bytes());
         hasher.update(scope.as_bytes());
@@ -156,7 +150,7 @@ impl HeadKeys {
         Ok(ScopeV1 {
             scope: scope.to_owned(),
             count: pairs.len() as u64,
-            digest: hex::encode(hasher.finalize()),
+            digest: hex::encode(hasher.finish()),
         })
     }
 }
@@ -267,7 +261,7 @@ impl AccountHeadV1 {
 
 /// What a head is known by: the SHA-256 of its sealed bytes.
 pub fn digest(sealed: &[u8]) -> [u8; 32] {
-    Sha256::digest(sealed).into()
+    hash(Suite::V1, sealed).to_array()
 }
 
 fn aad(binding: &str, sequence: u64) -> Result<Vec<u8>> {
@@ -288,7 +282,7 @@ fn aad(binding: &str, sequence: u64) -> Result<Vec<u8>> {
 /// (the server's compare-and-swap reads it) and authenticated.
 pub fn seal(keys: &HeadKeys, binding: &str, head: &AccountHeadV1) -> Result<Vec<u8>> {
     let mut nonce = [0u8; NONCE_LEN];
-    copy_randombytes(&mut nonce);
+    crate::primitives::random(&mut nonce);
     seal_with_nonce(keys, binding, head, &nonce)
 }
 
@@ -311,14 +305,8 @@ fn seal_with_nonce(
 ) -> Result<Vec<u8>> {
     head.validate()?;
     let plain = serde_json::to_vec(head).map_err(|_| invalid("encode"))?;
-    let ciphertext = XChaCha20Poly1305::new(keys.seal.as_slice().into())
-        .encrypt(
-            XNonce::from_slice(nonce),
-            Payload {
-                msg: &plain,
-                aad: &aad(binding, head.sequence)?,
-            },
-        )
+    let ciphertext = Aead::new(Suite::V1, keys.seal.as_ref())?
+        .seal_with_nonce(nonce, &aad(binding, head.sequence)?, &plain)
         .map_err(|_| CryptoError::Backend("account head seal".into()))?;
     let sealed = [
         MAGIC.as_slice(),
@@ -352,13 +340,11 @@ pub fn inspect(sealed: &[u8]) -> Result<u64> {
 /// Opens a sealed head of the account whose key binding is `binding`.
 pub fn open(keys: &HeadKeys, binding: &str, sealed: &[u8]) -> Result<AccountHeadV1> {
     let sequence = inspect(sealed)?;
-    let plain = XChaCha20Poly1305::new(keys.seal.as_slice().into())
-        .decrypt(
-            XNonce::from_slice(&sealed[18..HEADER_LEN]),
-            Payload {
-                msg: &sealed[HEADER_LEN..],
-                aad: &aad(binding, sequence)?,
-            },
+    let plain = Aead::new(Suite::V1, keys.seal.as_ref())?
+        .open_with_nonce(
+            &sealed[18..HEADER_LEN],
+            &aad(binding, sequence)?,
+            &sealed[HEADER_LEN..],
         )
         .map_err(|_| CryptoError::AuthFailed)?;
     let head: AccountHeadV1 = serde_json::from_slice(&plain).map_err(|_| invalid("decode"))?;
@@ -739,7 +725,7 @@ impl LocalHeadStateV1 {
     /// A device's state before it has seen any head, with a new random device id.
     pub fn new(incarnation_id: &str) -> Result<Self> {
         let mut device = [0u8; 16];
-        copy_randombytes(&mut device);
+        crate::primitives::random(&mut device);
         Self::with_device(incarnation_id, &hex::encode(device))
     }
 
@@ -858,7 +844,7 @@ pub fn seal_local_state(
     state: &LocalHeadStateV1,
 ) -> Result<Vec<u8>> {
     let mut nonce = [0u8; NONCE_LEN];
-    copy_randombytes(&mut nonce);
+    crate::primitives::random(&mut nonce);
     seal_local_with_nonce(keys, binding, state, &nonce)
 }
 
@@ -881,14 +867,8 @@ fn seal_local_with_nonce(
 ) -> Result<Vec<u8>> {
     state.validate()?;
     let plain = Zeroizing::new(serde_json::to_vec(state).map_err(|_| invalid("encode"))?);
-    let ciphertext = XChaCha20Poly1305::new(keys.seal.as_slice().into())
-        .encrypt(
-            XNonce::from_slice(nonce),
-            Payload {
-                msg: &plain,
-                aad: &local_aad(binding, &state.incarnation_id)?,
-            },
-        )
+    let ciphertext = Aead::new(Suite::V1, keys.seal.as_ref())?
+        .seal_with_nonce(nonce, &local_aad(binding, &state.incarnation_id)?, &plain)
         .map_err(|_| CryptoError::Backend("account head local seal".into()))?;
     let sealed = [
         LOCAL_MAGIC.as_slice(),
@@ -921,13 +901,11 @@ pub fn open_local_state(
         return Err(invalid("not a local head state"));
     }
     let plain = Zeroizing::new(
-        XChaCha20Poly1305::new(keys.seal.as_slice().into())
-            .decrypt(
-                XNonce::from_slice(&sealed[10..header]),
-                Payload {
-                    msg: &sealed[header..],
-                    aad: &local_aad(binding, incarnation_id)?,
-                },
+        Aead::new(Suite::V1, keys.seal.as_ref())?
+            .open_with_nonce(
+                &sealed[10..header],
+                &local_aad(binding, incarnation_id)?,
+                &sealed[header..],
             )
             .map_err(|_| CryptoError::AuthFailed)?,
     );

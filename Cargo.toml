@@ -8,6 +8,8 @@
 #   crates/kutup-cli     — the `kutup` CLI         (binary `kutup`)
 #   crates/kutup-server  — the backend API binary  (binary `kutup-server`; Axum + sqlx)
 #   crates/kutup-pass    — Kutup Pass core: KeePass (KDBX) vaults and their three-way merge
+#   crates/kutup-group-send — group send endorsements (libsignal zkgroup) for Chat's
+#                          multi-recipient route; the server and Chat core share it
 [workspace]
 resolver = "2"
 members = ["crates/*"]
@@ -122,6 +124,13 @@ totp-rs = { version = "5", default-features = false, features = ["otpauth", "gen
 
 # Dev / test.
 hex = "0.4"
+
+# libsignal's zkgroup (kutup-group-send) needs Signal's curve25519-dalek fork
+# in place of crates.io's: zkgroup names the fork, zkcredential the crates.io
+# name, and libsignal patches one onto the other in its own workspace, which
+# doesn't reach a dependent. The fork is upstream 4.1.3 plus Lizard encoding.
+[patch.crates-io]
+curve25519-dalek = { git = "https://github.com/signalapp/curve25519-dalek", tag = "signal-curve25519-4.1.3" }
 
 [profile.release]
 # Match the security-conscious, debuggable posture; tune later for the server/CLI.

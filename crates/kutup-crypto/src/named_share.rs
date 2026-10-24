@@ -1,10 +1,8 @@
 //! Authenticated HPKE envelopes for named local and federated Drive shares,
 //! sealed with X-Wing ([`crate::hpke_xwing`]; docs/plans/pq-shares.md).
 
+use crate::primitives::{SigningKey, Suite, VerifyingKey};
 use base64::Engine as _;
-use ed25519_dalek::{Signature, Signer as _, SigningKey, Verifier as _, VerifyingKey};
-use hpke_rs::{Hpke, HpkePrivateKey, HpkePublicKey};
-use hpke_rs_rust_crypto::HpkeRustCrypto;
 
 use crate::account_ref::AccountRef;
 use crate::drive_object::parse_canonical_uuid;
@@ -119,20 +117,15 @@ macro_rules! share_envelope {
                     ));
                 }
                 let aad = envelope.aad_bytes()?;
-                let mut hpke = hpke_suite();
-                let (encapsulated_key, ciphertext) = hpke
-                    .seal(
-                        &HpkePublicKey::new(recipient_hpke_public_key.to_vec()),
-                        $info,
-                        &aad,
-                        object_key,
-                        None,
-                        None,
-                        None,
-                    )
-                    .map_err(|error| {
-                        CryptoError::Backend(format!("{} HPKE seal: {error}", $what))
-                    })?;
+                let (encapsulated_key, ciphertext) = crate::primitives::hpke_seal(
+                    Suite::V1,
+                    recipient_hpke_public_key,
+                    $info,
+                    &aad,
+                    object_key,
+                )
+                .map(|sealed| (sealed.encapsulated, sealed.ciphertext))
+                .map_err(|error| CryptoError::Backend(format!("{} HPKE seal: {error}", $what)))?;
                 envelope.encapsulated_key =
                     encapsulated_key.try_into().map_err(|value: Vec<u8>| {
                         CryptoError::InvalidLength {
@@ -147,9 +140,7 @@ macro_rules! share_envelope {
                             expected: COLLECTION_KEY_CIPHERTEXT_LEN,
                             got: value.len(),
                         })?;
-                envelope.signature = sender_signing_key
-                    .sign(&envelope.signing_bytes()?)
-                    .to_bytes();
+                envelope.signature = sender_signing_key.sign_array(&envelope.signing_bytes()?);
                 Ok(envelope)
             }
 
@@ -294,19 +285,16 @@ macro_rules! share_envelope {
                         got: recipient_hpke_private_key.len(),
                     });
                 }
-                let hpke = hpke_suite();
-                let plaintext = hpke
-                    .open(
-                        &self.encapsulated_key,
-                        &HpkePrivateKey::new(recipient_hpke_private_key.to_vec()),
-                        $info,
-                        &self.aad_bytes()?,
-                        &self.ciphertext,
-                        None,
-                        None,
-                        None,
-                    )
-                    .map_err(|_| CryptoError::AuthFailed)?;
+                let plaintext = crate::primitives::hpke_open(
+                    Suite::V1,
+                    recipient_hpke_private_key,
+                    &self.encapsulated_key,
+                    $info,
+                    &self.aad_bytes()?,
+                    &self.ciphertext,
+                )
+                .map(crate::primitives::into_vec)
+                .map_err(|_| CryptoError::AuthFailed)?;
                 if plaintext.len() != 32 {
                     return Err(CryptoError::AuthFailed);
                 }
@@ -346,13 +334,10 @@ macro_rules! share_envelope {
                             got: sender_signing_public_key.len(),
                         }
                     })?;
-                let signing_public = VerifyingKey::from_bytes(&signing_public)
+                let signing_public = VerifyingKey::from_bytes(Suite::V1, &signing_public)
                     .map_err(|_| CryptoError::AuthFailed)?;
                 signing_public
-                    .verify(
-                        &self.signing_bytes()?,
-                        &Signature::from_bytes(&self.signature),
-                    )
+                    .verify(&self.signing_bytes()?, &self.signature)
                     .map_err(|_| CryptoError::AuthFailed)
             }
         }
@@ -380,11 +365,6 @@ share_envelope!(
     "file-share",
     "file share"
 );
-
-/// The suite every share envelope seals with ([`crate::hpke_xwing`]).
-pub(crate) fn hpke_suite() -> Hpke<HpkeRustCrypto> {
-    crate::hpke_xwing::suite()
-}
 
 pub(crate) fn canonical_account(value: &str) -> Result<String> {
     if value.len() < 3

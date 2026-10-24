@@ -120,15 +120,19 @@ day whatever it is in, so the request itself carries no group information.
 the response (`receive_with_service_ids([ACI], now, &P0, D's endorsement
 public key)`, and the expiration cap of §3.7), then uploads the **full
 response, with its proof**, sealed, to the home of each of its groups:
-- **The operation:** `PUT …/groups/{id}/endorsement` on the home (local or
-  through the federated group route, authenticated as the pseudonym like any
-  member operation), body `{ expiration, sealed }`:
-  - `sealed` is opaque to the home: the member's `{ server, keyId, response }`
-    under the group's state key, padded to one size before sealing
+- **The operation:** `PutEndorsement` (tag 10), an operation of the sealed
+  group route like any member operation (local, or relayed to a remote home),
+  signed by the pseudonym; body `GroupEndorsementUploadV1 { expiration,
+  sealed }` (`kutup-chat-proto::group_send`):
+  - `sealed` is opaque to the home: the member's `EndorsementBlob { server,
+    keyId, response }` (kutup-group-send), padded to one size before sealing
     (`ENDORSEMENT_BLOB_BYTES`, 512, a protocol constant), so every blob is the
-    same length;
+    same length, and sealed under the group's state key as
+    `SealedField::Endorsement` with the pseudonym as subject
+    (`ENDORSEMENT_SEALED_BYTES`, 553, the only length the home takes:
+    `endorsementSize` otherwise);
   - `expiration` is in clear (day-aligned, at most the cap of §3.7 ahead,
-    refused otherwise), so the home can drop expired blobs without reading
+    refused otherwise with `endorsementExpiration`), so the home can drop expired blobs without reading
     them;
   - at most two per pseudonym (the current and the next); a third replaces the
     oldest; uploads per pseudonym and day are limited (site setting,
@@ -137,9 +141,15 @@ response, with its proof**, sealed, to the home of each of its groups:
   sealed, uploaded_seq)`, primary key `(group_id, pseudonym, expiration)`;
   rows go when the pseudonym leaves the group (in the removal's transaction),
   when the group is deleted, and an hour after their expiration.
-- **Reading:** `GET …/groups/{id}/endorsements?after=<seq>`, for members,
-  paged, returning what was uploaded after the client's cursor. State reads
-  don't carry them.
+- **Reading:** `GetEndorsements` (tag 11), for members, body
+  `GroupEndorsementQueryV1 { after, limit }`; the answer is a
+  `GroupEndorsementPageV1 { endorsements: [{ pseudonym, expiration, sealed,
+  seq }], more, nextAfter }`, in upload order after the client's cursor.
+  `limit` is a request: the home clamps it to a site setting
+  (`chatGroupEndorsementPageSize`, default 100). The pseudonym lets the reader
+  check the response against that member's verified account. State reads
+  don't carry them. A non-member is refused with the route's usual
+  not-a-member code.
 - **What the home learns:** one opaque blob per member per day and when it
   arrives; no account, no server (sealed), and the blobs of one account in
   two groups are unrelated ciphertexts under two keys.

@@ -11,13 +11,12 @@
 //! (docs/plans/account-ids.md), and not to a folder: the same key reaches the same person
 //! for every share, in both directions (owner to member, member to owner).
 
+use crate::primitives::{SigningKey, Suite, VerifyingKey};
 use base64::Engine as _;
-use ed25519_dalek::{Signature, Signer as _, SigningKey, Verifier as _, VerifyingKey};
-use hpke_rs::{HpkePrivateKey, HpkePublicKey};
 
 use crate::account_ref::AccountRef;
 use crate::error::{CryptoError, Result};
-use crate::named_share::{hpke_suite, parse_hex_32, read_person, take};
+use crate::named_share::{parse_hex_32, read_person, take};
 
 const MAGIC: &[u8; 8] = b"KUTPPK1\0";
 const HPKE_INFO: &[u8] = b"kutup/drive/profile-key-hpke/v1\0";
@@ -85,17 +84,15 @@ impl ProfileKeyEnvelopeV1 {
             ));
         }
         let aad = envelope.header_bytes()?;
-        let (encapsulated_key, ciphertext) = hpke_suite()
-            .seal(
-                &HpkePublicKey::new(recipient_hpke_public_key.to_vec()),
-                HPKE_INFO,
-                &aad,
-                profile_key,
-                None,
-                None,
-                None,
-            )
-            .map_err(|error| CryptoError::Backend(format!("profile-key HPKE seal: {error}")))?;
+        let (encapsulated_key, ciphertext) = crate::primitives::hpke_seal(
+            Suite::V1,
+            recipient_hpke_public_key,
+            HPKE_INFO,
+            &aad,
+            profile_key,
+        )
+        .map(|sealed| (sealed.encapsulated, sealed.ciphertext))
+        .map_err(|error| CryptoError::Backend(format!("profile-key HPKE seal: {error}")))?;
         envelope.encapsulated_key =
             encapsulated_key
                 .try_into()
@@ -110,9 +107,7 @@ impl ProfileKeyEnvelopeV1 {
                     expected: CIPHERTEXT_LEN,
                     got: value.len(),
                 })?;
-        envelope.signature = sender_signing_key
-            .sign(&envelope.signing_bytes()?)
-            .to_bytes();
+        envelope.signature = sender_signing_key.sign_array(&envelope.signing_bytes()?);
         Ok(envelope)
     }
 
@@ -210,12 +205,9 @@ impl ProfileKeyEnvelopeV1 {
                     expected: 32,
                     got: sender_signing_public_key.len(),
                 })?;
-        VerifyingKey::from_bytes(&public)
+        VerifyingKey::from_bytes(Suite::V1, &public)
             .map_err(|_| CryptoError::AuthFailed)?
-            .verify(
-                &self.signing_bytes()?,
-                &Signature::from_bytes(&self.signature),
-            )
+            .verify(&self.signing_bytes()?, &self.signature)
             .map_err(|_| CryptoError::AuthFailed)
     }
 
@@ -233,18 +225,16 @@ impl ProfileKeyEnvelopeV1 {
                 got: recipient_hpke_private_key.len(),
             });
         }
-        let key = hpke_suite()
-            .open(
-                &self.encapsulated_key,
-                &HpkePrivateKey::new(recipient_hpke_private_key.to_vec()),
-                HPKE_INFO,
-                &self.header_bytes()?,
-                &self.ciphertext,
-                None,
-                None,
-                None,
-            )
-            .map_err(|_| CryptoError::AuthFailed)?;
+        let key = crate::primitives::hpke_open(
+            Suite::V1,
+            recipient_hpke_private_key,
+            &self.encapsulated_key,
+            HPKE_INFO,
+            &self.header_bytes()?,
+            &self.ciphertext,
+        )
+        .map(crate::primitives::into_vec)
+        .map_err(|_| CryptoError::AuthFailed)?;
         if key.len() != PROFILE_KEY_LEN {
             return Err(CryptoError::AuthFailed);
         }
@@ -290,7 +280,7 @@ mod tests {
         let encoded = envelope.encode_b64().unwrap();
         let decoded = ProfileKeyEnvelopeV1::decode_b64(&encoded).unwrap();
         assert_eq!(decoded, envelope);
-        let alice_signing = alice.drive_signing_key().verifying_key().to_bytes();
+        let alice_signing = alice.drive_signing_key().verifying_key().to_array::<32>();
         assert_eq!(
             decoded
                 .open(&parties, &alice_signing, bob.drive_hpke_private_key())
@@ -303,7 +293,7 @@ mod tests {
         assert!(decoded
             .open(&parties, &alice_signing, carol.drive_hpke_private_key())
             .is_err());
-        let bob_signing = bob.drive_signing_key().verifying_key().to_bytes();
+        let bob_signing = bob.drive_signing_key().verifying_key().to_array::<32>();
         assert!(decoded.verify(&parties, &bob_signing).is_err());
         let other = ProfileKeyParties {
             recipient: &carol_ref,
