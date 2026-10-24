@@ -459,8 +459,10 @@ impl Engine {
             Vec::new()
         };
         let _ = self.flush_group_list(false).await;
-        // Each group gets this account's current endorsement, and the
+        // This account's endorsement, once a day whatever its groups (so the
+        // fetch says nothing about them); then each group gets it, and the
         // members' new ones are read, with this periodic look.
+        let _ = self.refresh_own_group_send_endorsement().await;
         let _ = self.refresh_all_group_send_endorsements().await;
         Ok(taken_up)
     }

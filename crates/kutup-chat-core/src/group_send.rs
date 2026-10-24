@@ -976,15 +976,23 @@ impl Engine {
             // The legs this round can take, with their endorsements, by
             // expiration: one request and one token per expiration (§3.4).
             let mut by_expiration: BTreeMap<u64, Vec<MultiLeg>> = BTreeMap::new();
+            let accounts: Vec<String> = places
+                .iter()
+                .map(|&index| entry.legs[index].account.clone())
+                .collect();
+            let shared = record.endorsements.shared_expiration(&accounts, now_s);
             for index in places {
                 let account = entry.legs[index].account.clone();
                 let Some(target) = targets.get(&account) else {
                     continue;
                 };
-                let (Ok(parsed), Some(endorsement)) = (
-                    crate::address::parse_account(&account),
-                    record.endorsements.usable(&account, now_s),
-                ) else {
+                let endorsement = match shared {
+                    Some(expiration) => record.endorsements.usable_at(&account, expiration, now_s),
+                    None => record.endorsements.usable(&account, now_s),
+                };
+                let (Ok(parsed), Some(endorsement)) =
+                    (crate::address::parse_account(&account), endorsement)
+                else {
                     to_pairwise.push(index);
                     continue;
                 };
@@ -1076,14 +1084,14 @@ impl Engine {
                         .unwrap_or_default()
                 };
                 match outcome {
-                    // Only 200, 409 and 410 are answers; any other status is
-                    // an error, as no answer: they wait.
+                    // Only 200, 409 and 410 are answers. Any other status the
+                    // route doesn't define (a 400, a 500 that keeps coming)
+                    // would come back the same: the copies go pairwise, the
+                    // durable path, instead of waiting out the week.
                     Ok(crate::transport::MultiSendOutcome::Answered { status, .. })
                         if !matches!(status, 200 | 409 | 410) =>
                     {
-                        for index in going {
-                            wait(&mut entry.legs[index], now);
-                        }
+                        to_pairwise.extend(going);
                     }
                     Ok(crate::transport::MultiSendOutcome::Answered { status, response }) => {
                         let stored = status == 200;
@@ -1111,7 +1119,14 @@ impl Engine {
                         for index in going {
                             let id = account_id(index, entry);
                             let account = entry.legs[index].account.clone();
-                            if response.rate_limited.contains(&id) {
+                            if stored && response.refused.contains(&id) {
+                                // Not an active account there: refused for
+                                // good, as a pairwise copy would be. The leg
+                                // failed, and nobody got the sender key.
+                                let leg = &mut entry.legs[index];
+                                leg.delivered = true;
+                                leg.failed = true;
+                            } else if response.rate_limited.contains(&id) {
                                 // Over its budget: this copy pairwise, later.
                                 wait(&mut entry.legs[index], now);
                                 to_pairwise.push(index);

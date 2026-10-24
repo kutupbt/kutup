@@ -274,16 +274,19 @@ describe('ApiChatTransport', () => {
       post.mockRejectedValueOnce(answer(status, moved))
       await expect(transport.sendSealedMulti('b.test', {})).resolves.toEqual(expected)
     }
-    // A token the destination refuses; any other 401 is an error.
+    // A token the destination refuses (its own kind).
     post.mockRejectedValueOnce(answer(401, { error: 'invalid', code: 'groupSendTokenInvalid' }))
     await expect(transport.sendSealedMulti('b.test', {})).resolves.toEqual({ kind: 'tokenInvalid' })
+    // Any other status is an answer, which sends those copies pairwise.
     post.mockRejectedValueOnce(answer(401, {}))
-    await expect(transport.sendSealedMulti('b.test', {})).rejects.toBeTruthy()
+    await expect(transport.sendSealedMulti('b.test', {})).resolves.toEqual({ kind: 'answered', status: 401, response: {} })
+    post.mockRejectedValueOnce(answer(400, { error: 'bad' }))
+    await expect(transport.sendSealedMulti('b.test', {})).resolves.toEqual({ kind: 'answered', status: 400, response: {} })
     post.mockRejectedValueOnce(new Error('offline'))
     await expect(transport.sendSealedMulti('b.test', {})).rejects.toBeTruthy()
-    // Only a 200 stores: another success status is no answer.
+    // Only a 200 stores: another success status sends the copies pairwise.
     post.mockResolvedValueOnce({ status: 202, data: response } as never)
-    await expect(transport.sendSealedMulti('b.test', {})).rejects.toBeTruthy()
+    await expect(transport.sendSealedMulti('b.test', {})).resolves.toEqual({ kind: 'answered', status: 202, response: {} })
   })
 
   it('fetches this account\'s endorsement and a server\'s endorsement keys', async () => {

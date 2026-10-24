@@ -168,6 +168,12 @@ pub(crate) struct World {
     /// rotated from (key id 0) while that still verifies.
     pub(crate) group_send_key: RefCell<kutup_group_send::ServerKey>,
     pub(crate) previous_group_send_key: RefCell<Option<kutup_group_send::ServerKey>>,
+    /// The current key's id (the previous one's is one less).
+    pub(crate) group_send_key_id: Cell<u32>,
+    /// The endorsement keys can't be fetched (the server unreachable).
+    pub(crate) group_send_params_down: Cell<bool>,
+    /// The keys were fetched this many times.
+    pub(crate) group_send_params_fetched: Cell<usize>,
     /// Endorsements issued, and blobs the group home took.
     pub(crate) endorsements_issued: Cell<usize>,
     pub(crate) endorsement_uploads: Cell<usize>,
@@ -290,6 +296,9 @@ impl World {
             multi_answers: RefCell::new(Default::default()),
             group_send_key: RefCell::new(kutup_group_send::ServerKey::generate()),
             previous_group_send_key: RefCell::new(None),
+            group_send_key_id: Cell::new(1),
+            group_send_params_down: Cell::new(false),
+            group_send_params_fetched: Cell::new(0),
             endorsements_issued: Cell::new(0),
             endorsement_uploads: Cell::new(0),
             endorsement_seq: Cell::new(0),
@@ -1652,15 +1661,15 @@ impl ChatTransport for Client {
             .set(self.world.endorsements_issued.get() + 1);
         Ok(
             kutup_chat_proto::group_send::GroupSendEndorsementResponseV1 {
-                key_id: 1,
+                key_id: self.world.group_send_key_id.get(),
                 expiration: issued.expiration,
                 response: STANDARD.encode(issued.response),
             },
         )
     }
 
-    /// The server's keys: the current one (id 1), and the previous one (id
-    /// 0) while it still verifies.
+    /// The server's keys: the current one, and the previous one (its id one
+    /// less) while it still verifies.
     async fn fetch_group_send_params(
         &self,
         server: Option<&str>,
@@ -1669,17 +1678,24 @@ impl ChatTransport for Client {
         if self.world.no_multi_route.get() {
             return Err(ChatError::Transport("404 Not Found".into()));
         }
+        if self.world.group_send_params_down.get() {
+            return Err(ChatError::Transport("the server can't be reached".into()));
+        }
         if server.is_some_and(|server| server != SERVER) {
             return Ok(None);
         }
+        self.world
+            .group_send_params_fetched
+            .set(self.world.group_send_params_fetched.get() + 1);
         let key = |key_id, key: &kutup_group_send::ServerKey| GroupSendKeyV1 {
             key_id,
             endorsement_public_key: STANDARD.encode(key.public_key().to_bytes()),
             issues_until: u64::MAX,
         };
-        let mut keys = vec![key(1, &self.world.group_send_key.borrow())];
+        let id = self.world.group_send_key_id.get();
+        let mut keys = vec![key(id, &self.world.group_send_key.borrow())];
         if let Some(previous) = self.world.previous_group_send_key.borrow().as_ref() {
-            keys.push(key(0, previous));
+            keys.push(key(id - 1, previous));
         }
         Ok(Some(GroupSendParamsV1 { keys }))
     }
@@ -3279,6 +3295,18 @@ fn group_third_a_disappearing_group_message_leaves_the_send_log() {
 
 // ----- the multi-recipient route (slice 2) -----
 
+/// The server rotates its endorsement key: the old one verifies on as the
+/// previous one, under the next id.
+fn rotate_group_send_key(world: &World) {
+    let old = world
+        .group_send_key
+        .replace(kutup_group_send::ServerKey::generate());
+    *world.previous_group_send_key.borrow_mut() = Some(old);
+    world
+        .group_send_key_id
+        .set(world.group_send_key_id.get() + 1);
+}
+
 /// Whether `holder` keeps a usable endorsement of `member` for the group.
 fn endorsed_by(holder: &Person, group_id: &str, member: &Person) -> bool {
     let record = block_on(holder.engine.load_group_record(group_id)).unwrap();
@@ -3288,9 +3316,20 @@ fn endorsed_by(holder: &Person, group_id: &str, member: &Person) -> bool {
         .is_some()
 }
 
-/// Each of `people` shares its endorsement with the group and reads the
-/// others' now, as the periodic look does (the throttles reset).
+/// Each of `people` fetches its own endorsement and shares it with the
+/// group; then each reads the others', as the periodic look does (the
+/// throttles reset).
 fn refresh_endorsements(people: &mut [&mut Person], group_id: &str) {
+    for person in people.iter_mut() {
+        person.engine.endorsement_cache = Default::default();
+        block_on(person.engine.refresh_own_group_send_endorsement()).unwrap();
+        block_on(
+            person
+                .engine
+                .refresh_group_send_endorsements(group_id, true),
+        )
+        .unwrap();
+    }
     for person in people.iter_mut() {
         person.engine.endorsement_cache = Default::default();
         block_on(
@@ -3437,10 +3476,7 @@ fn group_multi_a_refused_token_goes_pairwise_and_drops_its_endorsements() {
 fn group_multi_a_rotated_key_verifies_in_its_window_only() {
     let world = World::new();
     let (mut alice, mut bob, mut carol, mut dave, group_id) = exchanged_group(&world);
-    let old = world
-        .group_send_key
-        .replace(kutup_group_send::ServerKey::generate());
-    *world.previous_group_send_key.borrow_mut() = Some(old);
+    rotate_group_send_key(&world);
     let (multi, batches) = (world.multi_requests.get(), world.batches.get());
     alice.send_text(&group_id, "in the window");
     assert_eq!(world.multi_requests.get() - multi, 1);
@@ -3510,6 +3546,14 @@ fn group_multi_a_blob_that_isnt_its_members_is_dropped() {
         .unwrap();
         assert_eq!(answer.status, GroupResponseStatusV1::Ok);
     }
+    // Carol shares her real one.
+    block_on(carol.engine.refresh_own_group_send_endorsement()).unwrap();
+    block_on(
+        carol
+            .engine
+            .refresh_group_send_endorsements(&group_id, true),
+    )
+    .unwrap();
     alice.engine.endorsement_cache = Default::default();
     block_on(
         alice
@@ -3520,6 +3564,215 @@ fn group_multi_a_blob_that_isnt_its_members_is_dropped() {
     assert!(!endorsed_by(&alice, &group_id, &bob));
     // Carol's own blob is hers, and taken.
     assert!(endorsed_by(&alice, &group_id, &carol));
+}
+
+/// An account the destination refuses (not an active account there): its
+/// leg fails for good, as a refused pairwise copy does, and it isn't counted
+/// as holding the sender key.
+#[test]
+fn group_multi_a_refused_account_fails_its_leg() {
+    use crate::transport::MultiSendOutcome;
+    let world = World::new();
+    let (mut alice, bob, _carol, _dave, group_id) = exchanged_group(&world);
+    let bob_id = crate::address::parse_account(&bob.account)
+        .unwrap()
+        .account_id;
+    let response: kutup_chat_proto::SealedMultiResponseV1 =
+        serde_json::from_value(serde_json::json!({ "refused": [bob_id], "rateLimited": [] }))
+            .unwrap();
+    world
+        .multi_answers
+        .borrow_mut()
+        .push_back(MultiSendOutcome::Answered {
+            status: 200,
+            response,
+        });
+    let send_id = uuid::Uuid::new_v4().to_string();
+    let seq = block_on(alice.engine.session().next_sent_seq()).unwrap();
+    let content = ChatContent::text_with_id(&send_id, ISSUED_AT, seq, "refused account");
+    let summary = block_on(alice.engine.send_group_message(
+        &group_id,
+        &send_id,
+        content,
+        &mut rng(),
+    ))
+    .unwrap();
+    // Bob's leg failed (the refused branch, which sends no news that his
+    // devices hold the key); Carol's and Dave's were stored.
+    assert_eq!((summary.pending, summary.failed), (0, 1));
+}
+
+/// A status the route doesn't define (a 400 that would come back the same):
+/// the copies go pairwise in the same pass, not after a week of waiting.
+#[test]
+fn group_multi_an_undefined_status_goes_pairwise() {
+    use crate::transport::MultiSendOutcome;
+    let world = World::new();
+    let (mut alice, mut bob, mut carol, mut dave, group_id) = exchanged_group(&world);
+    world
+        .multi_answers
+        .borrow_mut()
+        .push_back(MultiSendOutcome::Answered {
+            status: 400,
+            response: Default::default(),
+        });
+    let batches = world.batches.get();
+    let send_id = alice.send_text(&group_id, "after a 400");
+    assert!(world.batches.get() > batches, "pairwise");
+    assert_eq!(reached(&world, &send_id).len(), 3);
+    deliver_all(&mut [&mut alice, &mut bob, &mut carol, &mut dave]);
+    assert!(bob
+        .group_texts(&group_id)
+        .contains(&"after a 400".to_string()));
+}
+
+/// The account's endorsement comes from its periodic sync, once a day,
+/// whether or not it is in any group; a send never fetches one (its timing
+/// would tell the server about the account's groups).
+#[test]
+fn group_multi_the_own_endorsement_is_fetched_on_its_own_schedule() {
+    let world = World::new();
+    let mut loner = world.person(0xe5);
+    block_on(loner.engine.sync_group_list_if_due(&mut rng())).unwrap();
+    assert_eq!(world.endorsements_issued.get(), 1, "with no group at all");
+    block_on(loner.engine.sync_group_list_if_due(&mut rng())).unwrap();
+    assert_eq!(world.endorsements_issued.get(), 1, "once a day");
+    let (mut alice, _bob, _carol, _dave, group_id) = exchanged_group(&world);
+    let issued = world.endorsements_issued.get();
+    alice.send_text(&group_id, "no fetch");
+    assert_eq!(
+        world.endorsements_issued.get(),
+        issued,
+        "a send fetches nothing"
+    );
+}
+
+/// Near the end of the day with a clock ahead of the server's, the server
+/// hands out the same endorsement again: it is fetched at most hourly, not on
+/// every pass.
+#[test]
+fn group_multi_a_clock_ahead_fetches_at_most_hourly() {
+    let world = World::new();
+    let mut person = world.person(0xe6);
+    block_on(person.engine.refresh_own_group_send_endorsement()).unwrap();
+    let own = block_on(person.engine.own_group_send_endorsement())
+        .unwrap()
+        .expect("an endorsement");
+    // Ten hours before it expires, by this device's clock: due.
+    let ahead = (own.expiration as i64 - now() - 10 * 60 * 60) * 1000;
+    person.engine.advance_clock_for_testing(ahead);
+    block_on(person.engine.refresh_own_group_send_endorsement()).unwrap();
+    assert_eq!(world.endorsements_issued.get(), 2);
+    // The server's day hasn't turned: the same one, and no fetch on the next
+    // passes within the hour.
+    for _ in 0..3 {
+        block_on(person.engine.refresh_own_group_send_endorsement()).unwrap();
+    }
+    assert_eq!(world.endorsements_issued.get(), 2);
+}
+
+/// A blob whose check fails for a moment (its server's keys unreachable) is
+/// read again next time: the cursor doesn't move past it.
+#[test]
+fn group_multi_a_blob_checked_while_keys_are_unreachable_is_read_again() {
+    let world = World::new();
+    let mut alice = world.person(0xa1);
+    let mut bob = world.person(0xb2);
+    let group_id = group_of(&mut alice, &mut [&mut bob]);
+    deliver_all(&mut [&mut alice, &mut bob]);
+    block_on(bob.engine.refresh_own_group_send_endorsement()).unwrap();
+    block_on(bob.engine.refresh_group_send_endorsements(&group_id, true)).unwrap();
+    world.group_send_params_down.set(true);
+    alice.engine.endorsement_cache = Default::default();
+    block_on(
+        alice
+            .engine
+            .refresh_group_send_endorsements(&group_id, true),
+    )
+    .unwrap();
+    assert!(!endorsed_by(&alice, &group_id, &bob));
+    world.group_send_params_down.set(false);
+    alice.engine.endorsement_cache = Default::default();
+    block_on(
+        alice
+            .engine
+            .refresh_group_send_endorsements(&group_id, true),
+    )
+    .unwrap();
+    assert!(endorsed_by(&alice, &group_id, &bob), "read again");
+}
+
+/// A blob under a key id this device doesn't hold (the server rotated since
+/// its keys were fetched): the keys are fetched again, once, and the blob is
+/// taken; the token made from it verifies after the old key's window.
+#[test]
+fn group_multi_an_unknown_key_id_fetches_the_keys_again() {
+    use kutup_crypto::chat_group::SealedField;
+    let world = World::new();
+    let mut alice = world.person(0xa1);
+    let mut bob = world.person(0xb2);
+    let group_id = group_of(&mut alice, &mut [&mut bob]);
+    deliver_all(&mut [&mut alice, &mut bob]);
+    refresh_endorsements(&mut [&mut alice, &mut bob], &group_id);
+    assert!(endorsed_by(&alice, &group_id, &bob));
+    // Alice's sender key is with Bob already (it goes pairwise).
+    alice.send_text(&group_id, "before the rotation");
+    rotate_group_send_key(&world);
+    // Bob's endorsement under the new key, shared as his next one would be.
+    let bob_id = crate::address::parse_account(&bob.account)
+        .unwrap()
+        .account_id;
+    let issued = world
+        .group_send_key
+        .borrow()
+        .issue(uuid::Uuid::parse_str(&bob_id).unwrap(), now() as u64);
+    let mut record = block_on(bob.engine.load_group_record(&group_id)).unwrap();
+    let blob = kutup_group_send::EndorsementBlob {
+        server: SERVER.to_string(),
+        key_id: world.group_send_key_id.get(),
+        response: issued.response,
+    }
+    .encode()
+    .unwrap();
+    let pseudonym = record.pseudonym().unwrap().public_key();
+    let sealed = record
+        .master()
+        .unwrap()
+        .state_key()
+        .seal(SealedField::Endorsement, &pseudonym, &blob)
+        .unwrap();
+    let body = kutup_chat_proto::group_send::GroupEndorsementUploadV1 {
+        expiration: issued.expiration,
+        sealed: STANDARD.encode(sealed),
+    }
+    .canonical_bytes()
+    .unwrap();
+    block_on(
+        bob.engine
+            .group_request(&mut record, GroupOperationV1::PutEndorsement, &body),
+    )
+    .unwrap()
+    .unwrap();
+    let fetched = world.group_send_params_fetched.get();
+    alice.engine.endorsement_cache.forget_reads_for_testing();
+    block_on(
+        alice
+            .engine
+            .refresh_group_send_endorsements(&group_id, true),
+    )
+    .unwrap();
+    assert_eq!(
+        world.group_send_params_fetched.get(),
+        fetched + 1,
+        "fetched again, once"
+    );
+    // The old key's window ends: only the new endorsement still makes a
+    // token the server takes.
+    *world.previous_group_send_key.borrow_mut() = None;
+    let (multi, batches) = (world.multi_requests.get(), world.batches.get());
+    alice.send_text(&group_id, "under the new key");
+    assert_eq!(world.multi_requests.get() - multi, 1);
+    assert_eq!(world.batches.get(), batches, "nothing pairwise");
 }
 
 /// A destination that doesn't answer, or a request too large: the copies go

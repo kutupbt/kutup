@@ -490,8 +490,9 @@ export class ApiChatTransport implements ChatTransportPort {
    * docs/plans/group-send-endorsements.md §3.4). `200`, `409` and `410` are
    * answers (who is over a budget, whose devices moved on); a token the
    * destination refuses (`401 groupSendTokenInvalid`), a destination that
-   * didn't answer (`503`), or a server without the route (`404`), sends those
-   * members pairwise.
+   * didn't answer (`503`), a server without the route (`404`), or any status
+   * the route doesn't define, sends those members pairwise. Only no answer at
+   * all (offline) is an error.
    */
   async sendSealedMulti(
     server: string,
@@ -509,9 +510,9 @@ export class ApiChatTransport implements ChatTransportPort {
         withCredentials: false,
         headers: { Authorization: undefined },
       })
-      // Only a 200 stores; any other success status is no answer the engine knows.
-      if (response.status !== 200) throw new Error(`unexpected multi-recipient status ${response.status}`)
-      return { kind: 'answered', status: response.status, response: response.data }
+      // Only a 200 stores; the engine sends the copies of any other status
+      // pairwise.
+      return { kind: 'answered', status: response.status, response: response.status === 200 ? response.data : {} }
     } catch (error) {
       if (axios.isAxiosError(error) && error.response) {
         const status = error.response.status
@@ -520,6 +521,10 @@ export class ApiChatTransport implements ChatTransportPort {
         if (status === 503 || status === 404) return { kind: 'peerUnavailable' }
         if (status === 413) return { kind: 'tooLarge' }
         if (status === 429) return { kind: 'rateLimited' }
+        // Any other status the route doesn't define: an answer that would
+        // come back the same, so those copies go pairwise. Only no answer at
+        // all (offline) is an error, which waits.
+        return { kind: 'answered', status, response: {} }
       }
       throw peerSendError(error)
     }

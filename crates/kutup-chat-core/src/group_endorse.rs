@@ -41,6 +41,11 @@ const KEYS_KEPT_MS: i64 = 60 * 60 * 1000;
 /// a group, it is tried again at most this often.
 const RETRY_MS: i64 = 10 * 60 * 1000;
 
+/// This account's endorsement is fetched at most this often, even when it
+/// looks due: a clock ahead of the server's would otherwise refetch the same
+/// day's endorsement on every pass near the end of the day.
+const REFETCH_EVERY_MS: i64 = 60 * 60 * 1000;
+
 /// A group's endorsements are read again at most this often, unless a
 /// member lacks a usable one.
 const READ_EVERY_MS: i64 = 30 * 60 * 1000;
@@ -67,6 +72,10 @@ pub(crate) struct OwnEndorsement {
     /// The serialized response, with its proof, canonical base64: what the
     /// blob carries.
     pub response: String,
+    /// When this device fetched it (ms): the next fetch waits at least
+    /// [`REFETCH_EVERY_MS`], whatever the clocks say.
+    #[serde(default)]
+    pub fetched_at_ms: i64,
 }
 
 /// What a group's record keeps of its endorsements.
@@ -120,6 +129,50 @@ impl GroupEndorsements {
             })
     }
 
+    /// `account`'s usable endorsement of `expiration`, if it holds one.
+    pub(crate) fn usable_at(
+        &self,
+        account: &str,
+        expiration: u64,
+        now: u64,
+    ) -> Option<Endorsement> {
+        self.members
+            .get(account)?
+            .iter()
+            .filter(|held| {
+                held.expiration == expiration
+                    && held.expiration > now.saturating_add(USABLE_MARGIN_SECS)
+            })
+            .find_map(|held| {
+                let bytes = STANDARD.decode(&held.endorsement).ok()?;
+                Endorsement::from_bytes(&bytes).ok()
+            })
+    }
+
+    /// The newest expiration every one of `accounts` holds a usable
+    /// endorsement of: one request for all of them, even around the day's
+    /// rollover, when some hold tomorrow's and all hold today's.
+    pub(crate) fn shared_expiration(&self, accounts: &[String], now: u64) -> Option<u64> {
+        let mut shared: Option<Vec<u64>> = None;
+        for account in accounts {
+            let held: Vec<u64> = self
+                .members
+                .get(account)
+                .map(|held| {
+                    held.iter()
+                        .map(|kept| kept.expiration)
+                        .filter(|expiration| *expiration > now.saturating_add(USABLE_MARGIN_SECS))
+                        .collect()
+                })
+                .unwrap_or_default();
+            shared = Some(match shared {
+                None => held,
+                Some(so_far) => so_far.into_iter().filter(|e| held.contains(e)).collect(),
+            });
+        }
+        shared?.into_iter().max()
+    }
+
     /// Keeps `endorsement` for `account`: one per expiration, the newest
     /// [`KEPT_PER_MEMBER`].
     fn keep(&mut self, account: &str, endorsement: &Endorsement) {
@@ -165,6 +218,14 @@ pub(crate) struct EndorsementCache {
     upload_retry_at_ms: BTreeMap<String, i64>,
     /// Per group: when its endorsements were last read.
     read_at_ms: BTreeMap<String, i64>,
+}
+
+#[cfg(test)]
+impl EndorsementCache {
+    /// Every group may be read again at once (the server keys stay cached).
+    pub(crate) fn forget_reads_for_testing(&mut self) {
+        self.read_at_ms.clear();
+    }
 }
 
 fn now_seconds(now_ms: i64) -> u64 {
@@ -231,37 +292,50 @@ impl Engine {
         }
     }
 
-    /// This account's endorsement: the stored one while it has more than
-    /// [`kutup_group_send::REFRESH_BEFORE_SECS`] left, otherwise a new one
-    /// from its server, checked before it is kept. `None` while there is no
-    /// usable one (the server doesn't issue them, or can't be reached).
-    pub(crate) async fn own_group_send_endorsement(&mut self) -> Result<Option<OwnEndorsement>> {
-        let now_ms = self.now_ms();
-        let now = now_seconds(now_ms);
-        let stored = self
+    /// This account's endorsement as stored, while it is usable. Sending and
+    /// sharing never fetch: the fetch runs on its own schedule
+    /// ([`Self::refresh_own_group_send_endorsement`]), so its timing says
+    /// nothing about this account's groups or sends (§3.2).
+    pub(crate) async fn own_group_send_endorsement(&self) -> Result<Option<OwnEndorsement>> {
+        let now = now_seconds(self.now_ms());
+        Ok(self
             .stored_own_endorsement()
             .await?
-            .filter(|own| own.expiration > now.saturating_add(USABLE_MARGIN_SECS));
+            .filter(|own| own.expiration > now.saturating_add(USABLE_MARGIN_SECS)))
+    }
+
+    /// Fetches this account's next endorsement when the stored one has less
+    /// than [`kutup_group_send::REFRESH_BEFORE_SECS`] left: one fetch a day,
+    /// from the account's periodic sync, whether or not it is in any group.
+    /// At most once every [`REFETCH_EVERY_MS`], and after a failure once
+    /// every [`RETRY_MS`]. Checked before it is kept.
+    pub(crate) async fn refresh_own_group_send_endorsement(&mut self) -> Result<()> {
+        let now_ms = self.now_ms();
+        let now = now_seconds(now_ms);
+        let stored = self.stored_own_endorsement().await?;
         let fresh = stored.as_ref().is_some_and(|own| {
             own.expiration.saturating_sub(now) >= kutup_group_send::REFRESH_BEFORE_SECS
         });
-        if fresh || now_ms < self.endorsement_cache.own_retry_at_ms {
-            return Ok(stored);
+        let recent = stored
+            .as_ref()
+            .is_some_and(|own| now_ms.saturating_sub(own.fetched_at_ms) < REFETCH_EVERY_MS);
+        if fresh || recent || now_ms < self.endorsement_cache.own_retry_at_ms {
+            return Ok(());
         }
         match self.fetch_own_group_send_endorsement(now).await {
-            Ok(own) => {
+            Ok(mut own) => {
+                own.fetched_at_ms = now_ms;
                 let pending = Pending {
                     group_send_endorsement: Some(serde_json::to_vec(&own).map_err(|error| {
                         ChatError::Db(format!("encode group send endorsement: {error}"))
                     })?),
                     ..Pending::default()
                 };
-                self.session.db().apply(&pending).await?;
-                Ok(Some(own))
+                self.session.db().apply(&pending).await
             }
-            Err(_) => {
+            Err(error) => {
                 self.endorsement_cache.own_retry_at_ms = now_ms.saturating_add(RETRY_MS);
-                Ok(stored)
+                Err(error)
             }
         }
     }
@@ -286,6 +360,7 @@ impl Engine {
             key_id: issued.key_id,
             expiration: issued.expiration,
             response: issued.response,
+            fetched_at_ms: 0,
         })
     }
 
@@ -419,29 +494,47 @@ impl Engine {
                 },
                 Err(_) => break,
             };
+            // The cursor moves past a blob only once it is decided: kept, or
+            // refused for good. One whose check failed for a moment (its
+            // server's keys unreachable) is read again next time.
+            let mut interrupted = false;
             for item in &page.endorsements {
-                let Ok(pseudonym) = STANDARD.decode(&item.pseudonym) else {
-                    continue;
+                let pseudonym = STANDARD.decode(&item.pseudonym).ok();
+                let account = pseudonym
+                    .as_ref()
+                    .and_then(|pseudonym| by_pseudonym.get(pseudonym));
+                let decided = match (&pseudonym, account) {
+                    (Some(pseudonym), Some(account)) if account != &me => {
+                        match self
+                            .check_member_blob(
+                                &state_key,
+                                pseudonym,
+                                account,
+                                item.expiration,
+                                &item.sealed,
+                                now,
+                            )
+                            .await
+                        {
+                            Ok(endorsement) => {
+                                record.endorsements.keep(account, &endorsement);
+                                true
+                            }
+                            Err(ChatError::Transport(_)) => false,
+                            Err(_) => true,
+                        }
+                    }
+                    // Not a verified member's (now), or this account's own.
+                    _ => true,
                 };
-                let Some(account) = by_pseudonym.get(&pseudonym) else {
-                    continue;
-                };
-                if account == &me {
-                    continue;
+                if !decided {
+                    interrupted = true;
+                    break;
                 }
-                if let Ok(endorsement) = self
-                    .check_member_blob(
-                        &state_key,
-                        &pseudonym,
-                        account,
-                        item.expiration,
-                        &item.sealed,
-                        now,
-                    )
-                    .await
-                {
-                    record.endorsements.keep(account, &endorsement);
-                }
+                record.endorsements.after = record.endorsements.after.max(item.seq);
+            }
+            if interrupted {
+                break;
             }
             record.endorsements.after = record.endorsements.after.max(page.next_after);
             if !page.more {
@@ -472,8 +565,16 @@ impl Engine {
             .map_err(|_| ChatError::Trust("an endorsement blob doesn't open".into()))?;
         let blob = EndorsementBlob::decode(&blob).map_err(zk_error)?;
         let parsed = crate::address::parse_account(account)?;
-        // The member's own server's key, never one the blob points at.
-        let key = self.group_send_key(&parsed.server, blob.key_id).await?;
+        // The member's own server's key, never one the blob points at. A key
+        // id this device doesn't hold (the server rotated since its keys were
+        // fetched): its keys are fetched again, once.
+        let key = match self.group_send_key(&parsed.server, blob.key_id).await {
+            Err(ChatError::Trust(_)) => {
+                self.forget_group_send_keys(&parsed.server);
+                self.group_send_key(&parsed.server, blob.key_id).await?
+            }
+            key => key?,
+        };
         let endorsement = blob
             .receive(&parsed.server, account_uuid(account)?, now, &key)
             .map_err(zk_error)?;
@@ -566,6 +667,39 @@ mod tests {
         endorsements.forget(account, third.expiration);
         assert_eq!(endorsements.usable(account, MIDNIGHT + DAY - 60), None);
         assert_eq!(endorsements.usable(account, now), Some(second));
+    }
+
+    #[test]
+    fn the_shared_expiration_is_the_newest_all_members_hold() {
+        let mut endorsements = GroupEndorsements::default();
+        let ada = "aci:00000000-0000-4000-8000-000000000001@kutup.dev";
+        let ben = "aci:00000000-0000-4000-8000-000000000002@kutup.dev";
+        let today = held(MIDNIGHT + DAY);
+        let tomorrow = held(MIDNIGHT + 2 * DAY);
+        endorsements.keep(ada, &today);
+        endorsements.keep(ada, &tomorrow);
+        endorsements.keep(ben, &today);
+        let accounts = [ada.to_string(), ben.to_string()];
+        let now = MIDNIGHT + DAY / 2;
+        // Ada holds tomorrow's too, Ben only today's: today's, for both.
+        assert_eq!(
+            endorsements.shared_expiration(&accounts, now),
+            Some(MIDNIGHT + DAY)
+        );
+        assert_eq!(
+            endorsements.usable_at(ada, MIDNIGHT + DAY, now),
+            Some(today)
+        );
+        endorsements.keep(ben, &tomorrow);
+        assert_eq!(
+            endorsements.shared_expiration(&accounts, now),
+            Some(MIDNIGHT + 2 * DAY)
+        );
+        // Nothing in common: none, and each sends with its newest.
+        let mut apart = GroupEndorsements::default();
+        apart.keep(ada, &held(MIDNIGHT + DAY));
+        apart.keep(ben, &held(MIDNIGHT + 2 * DAY));
+        assert_eq!(apart.shared_expiration(&accounts, now), None);
     }
 
     #[test]
