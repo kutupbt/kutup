@@ -25,9 +25,34 @@ Suite identifiers are opaque code points. Their numeric values do not express
 strength or preference. Assignment is permanent: changing any
 security-relevant part of a suite requires a new identifier.
 
-Kutup will not define a universal `CryptoSuite`, accept a raw untyped suite ID
-across feature boundaries, or expose primitive selection to users,
-administrators, peers, or feature code.
+Kutup will not accept a raw untyped suite ID across feature boundaries, nor
+expose primitive selection to users, administrators, peers, or feature code.
+The one primitive table below is a library type, never a wire value: each
+format keeps its own code points and maps them onto it.
+
+## Primitive suites (amended 2026-10-23)
+
+Since W2 ([`plans/crypto-primitives.md`](plans/crypto-primitives.md)), the
+algorithms every Kutup-owned format uses are named in one place,
+`kutup_crypto::primitives`, as rows of one table (`primitives::Suite`,
+`primitives/suite.rs`). A row is a **whole tuple**: hash, MAC and KDF, AEAD
+with its nonce and tag lengths, signature and its verification rule, HPKE
+with its ids, password hashing, and the random source. Rows are never mixed.
+
+The registries below keep everything they owned: the code points, the
+layout, the labels, the policy and the migrations. What changes is that a
+format's code point now selects its algorithms by naming a row:
+
+- each format **allowlists** the rows it reads, checked on parse
+  (for example the account envelope's `[(2, Suite::V1)]`);
+- the format's code point stays in its AAD, so a downgrade fails the AEAD;
+- a format's **layout** version (its magic) stays separate from its suite;
+- **changing an algorithm** is a new row with its vectors, made the default
+  for new writes by the formats that adopt it; call sites don't change.
+
+So one protocol still cannot select or block another's cryptography, nor
+take one suite's KEM with another's KDF: what the rows add is that the same
+algorithm is implemented once, reviewed once and swapped once.
 
 ## Registries and ownership
 
