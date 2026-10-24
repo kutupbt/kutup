@@ -919,10 +919,29 @@ pub async fn login_two_fa(
         return Err(AppError::unauthorized("account disabled"));
     }
 
+    let account = Uuid::parse_str(&user_id).map_err(|_| AppError::unauthorized("unauthorized"))?;
     let valid = totp_secret
         .as_deref()
         .map(|s| totp::validate_totp(s, &req.code))
         .unwrap_or(false);
+    // A recovery code takes the second factor's place once
+    // (docs/plans/security-keys.md, D2); spent with the sign-in it allows.
+    let valid = valid || {
+        let mut tx = state.pool.begin().await?;
+        let spent = crate::two_factor::spend(&mut tx, &state.pool, account, &req.code).await?;
+        if spent {
+            crate::security_events::record(
+                &mut tx,
+                account,
+                crate::security_events::Kind::RecoveryCodeUsed,
+                None,
+                None,
+            )
+            .await?;
+            tx.commit().await?;
+        }
+        spent
+    };
     if !valid {
         if !ratelimit::record_totp_attempt(&req.pre_auth_token, false) {
             return Err(AppError::too_many_requests(
@@ -1390,7 +1409,7 @@ pub async fn setup_totp(State(state): State<AppState>, user: AuthUser) -> AppRes
     tag = "auth",
     security(("BearerAuth" = [])),
     request_body = CodeRequest,
-    responses((status = 200, description = "TOTP enabled", body = MessageResponse))
+    responses((status = 200, description = "TOTP enabled, with the recovery codes (shown once)", body = TotpEnabledResponse))
 )]
 pub async fn verify_totp(
     State(state): State<AppState>,
@@ -1416,17 +1435,125 @@ pub async fn verify_totp(
     let mut tx = state.pool.begin().await?;
     crate::grants::take_for_session(&mut *tx, &req.grant, crate::grants::Purpose::Totp, &user)
         .await?;
+    let user_id = parse_uuid(&user.user_id)?;
     sqlx::query("UPDATE users SET totp_enabled = true WHERE id = $1 AND totp_secret = $2")
-        .bind(parse_uuid(&user.user_id)?)
+        .bind(user_id)
         .bind(&secret)
         .execute(&mut *tx)
         .await?;
+    // Its recovery codes, made with it (docs/plans/security-keys.md, D2).
+    let count = crate::site_settings::TWO_FACTOR_RECOVERY_CODES
+        .load(&mut *tx)
+        .await?;
+    let recovery_codes = crate::two_factor::replace(&mut tx, &state.pool, user_id, count).await?;
+    crate::security_events::record(
+        &mut tx,
+        user_id,
+        crate::security_events::Kind::TwoFactorOn,
+        Some(user.session.session_id),
+        None,
+    )
+    .await?;
     tx.commit().await?;
 
-    Ok(Json(MessageResponse {
+    Ok(Json(TotpEnabledResponse {
         message: "TOTP enabled".to_string(),
+        recovery_codes,
     })
     .into_response())
+}
+
+/// Two-factor sign-in turned on: its recovery codes, shown once.
+#[derive(Serialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct TotpEnabledResponse {
+    message: String,
+    recovery_codes: Vec<String>,
+}
+
+/// The account's recovery codes left.
+#[derive(Serialize, ToSchema)]
+pub struct RecoveryCodesLeft {
+    remaining: i64,
+}
+
+/// New recovery codes, shown once.
+#[derive(Serialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct RecoveryCodesResponse {
+    recovery_codes: Vec<String>,
+}
+
+/// A reauth's grant for this session (`totp` purpose).
+// No Debug: it carries a one-time grant.
+#[derive(Default, Deserialize, ToSchema)]
+#[serde(default)]
+pub struct GrantRequest {
+    grant: String,
+}
+
+/// `GET /api/user/2fa/recovery-codes` — how many recovery codes are left.
+#[utoipa::path(
+    get,
+    path = "/api/user/2fa/recovery-codes",
+    tag = "auth",
+    security(("BearerAuth" = [])),
+    responses((status = 200, body = RecoveryCodesLeft))
+)]
+pub async fn recovery_codes_left(
+    State(state): State<AppState>,
+    user: AuthUser,
+) -> AppResult<Json<RecoveryCodesLeft>> {
+    let remaining = crate::two_factor::remaining(&state.pool, parse_uuid(&user.user_id)?).await?;
+    Ok(Json(RecoveryCodesLeft { remaining }))
+}
+
+/// `POST /api/user/2fa/recovery-codes` — new recovery codes in place of the
+/// old ones, with the password proved again (a `totp` grant from a reauth of
+/// this session). `409` while two-factor sign-in is off.
+#[utoipa::path(
+    post,
+    path = "/api/user/2fa/recovery-codes",
+    tag = "auth",
+    security(("BearerAuth" = [])),
+    request_body = GrantRequest,
+    responses(
+        (status = 200, description = "The new codes, shown once; the old ones stop working", body = RecoveryCodesResponse),
+        (status = 409, description = "Two-factor sign-in is off"),
+    )
+)]
+pub async fn renew_recovery_codes(
+    State(state): State<AppState>,
+    user: AuthUser,
+    body: Result<Json<GrantRequest>, JsonRejection>,
+) -> AppResult<Response> {
+    let Json(req) = body.map_err(|_| AppError::bad_request("invalid request"))?;
+    let user_id = parse_uuid(&user.user_id)?;
+    let mut tx = state.pool.begin().await?;
+    crate::grants::take_for_session(&mut *tx, &req.grant, crate::grants::Purpose::Totp, &user)
+        .await?;
+    let on: Option<bool> =
+        sqlx::query_scalar("SELECT totp_enabled FROM users WHERE id = $1 FOR UPDATE")
+            .bind(user_id)
+            .fetch_optional(&mut *tx)
+            .await?;
+    if on != Some(true) {
+        return Err(AppError::conflict("two-step sign-in is off"));
+    }
+    let count = crate::site_settings::TWO_FACTOR_RECOVERY_CODES
+        .load(&mut *tx)
+        .await?;
+    let recovery_codes = crate::two_factor::replace(&mut tx, &state.pool, user_id, count).await?;
+    crate::security_events::record(
+        &mut tx,
+        user_id,
+        crate::security_events::Kind::RecoveryCodesRenewed,
+        Some(user.session.session_id),
+        None,
+    )
+    .await?;
+    tx.commit().await?;
+    Ok(Json(RecoveryCodesResponse { recovery_codes }).into_response())
 }
 
 /// `DELETE /api/user/2fa` — mirrors `DisableTOTP`.
@@ -1461,17 +1588,25 @@ pub async fn disable_totp(
         return Err(AppError::bad_request("TOTP not enabled"));
     };
 
-    if !totp::validate_totp(&secret, &code) {
+    // The code (an authenticator's, or a recovery code when the authenticator
+    // is lost) and the password: a stolen session alone cannot turn it off.
+    let user_id = parse_uuid(&user.user_id)?;
+    let mut tx = state.pool.begin().await?;
+    if !totp::validate_totp(&secret, &code)
+        && !crate::two_factor::spend(&mut tx, &state.pool, user_id, &code).await?
+    {
         return Err(AppError::bad_request("invalid code"));
     }
-
-    // The code and the password: a stolen session alone cannot turn it off.
-    let mut tx = state.pool.begin().await?;
     crate::grants::take_for_session(&mut *tx, &grant, crate::grants::Purpose::Totp, &user).await?;
-    sqlx::query("UPDATE users SET totp_enabled = false, totp_secret = NULL WHERE id = $1")
-        .bind(parse_uuid(&user.user_id)?)
-        .execute(&mut *tx)
-        .await?;
+    crate::two_factor::turn_off(&mut tx, user_id).await?;
+    crate::security_events::record(
+        &mut tx,
+        user_id,
+        crate::security_events::Kind::TwoFactorOff,
+        Some(user.session.session_id),
+        None,
+    )
+    .await?;
     tx.commit().await?;
 
     Ok(Json(MessageResponse {

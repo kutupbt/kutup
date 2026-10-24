@@ -72,7 +72,12 @@ const CHAT_LINKING_SETTINGS = [
   { field: 'chatDistributionMessageBytes', min: 1024, max: 1_048_576 },
 ] as const satisfies readonly { field: keyof AdminSettings; min: number; max: number }[]
 /** Every whole-number setting the page edits by field. */
-const NUMERIC_SETTINGS = [...MULTI_SETTINGS, ...CALENDAR_SETTINGS, ...CHAT_LINKING_SETTINGS]
+/** Two-factor sign-in (site_settings::TWO_FACTOR_SETTINGS). */
+const TWO_FACTOR_SETTINGS = [
+  { field: 'twoFactorRecoveryCodes', min: 4, max: 64 },
+] as const satisfies readonly { field: keyof AdminSettings; min: number; max: number }[]
+/** Every whole-number setting the page edits by field. */
+const NUMERIC_SETTINGS = [...MULTI_SETTINGS, ...CALENDAR_SETTINGS, ...CHAT_LINKING_SETTINGS, ...TWO_FACTOR_SETTINGS]
 /**
  * The avatar blob lengths (kutup_chat_proto GROUP_AVATAR_BLOB_LENGTHS) and the
  * server's bounds (site_settings::AvatarLimits): storage holds two of the
@@ -255,6 +260,17 @@ export function ServerSettingsPage() {
             <CardContent className="grid gap-4 p-5 sm:grid-cols-2">
               {CHAT_LINKING_SETTINGS.map(({ field, min, max }) => (
                 <Field key={field} label={t(`admin.settings.chatLinkingLimits.${field}`)} error={errors[field]?.message} description={t(`admin.settings.chatLinkingLimits.${field}Hint`)} required>
+                  {(control) => <Input {...control} {...register(field)} type="number" min={min} max={max} step={1} inputMode="numeric" />}
+                </Field>
+              ))}
+            </CardContent>
+          </Card>
+        </Section>
+        <Section title={t('admin.settings.twoFactor')} description={t('admin.settings.twoFactorHint')}>
+          <Card>
+            <CardContent className="grid gap-4 p-5 sm:grid-cols-2">
+              {TWO_FACTOR_SETTINGS.map(({ field, min, max }) => (
+                <Field key={field} label={t(`admin.settings.twoFactorLimits.${field}`)} error={errors[field]?.message} description={t(`admin.settings.twoFactorLimits.${field}Hint`)} required>
                   {(control) => <Input {...control} {...register(field)} type="number" min={min} max={max} step={1} inputMode="numeric" />}
                 </Field>
               ))}

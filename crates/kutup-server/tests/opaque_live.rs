@@ -678,3 +678,214 @@ fn a_verify_reauth_checks_the_password_and_keeps_nothing() {
     assert_eq!(r.json::<Value>().unwrap()["code"], "setupTokenInvalid");
     purge_accounts(&c, &base, &[&user]);
 }
+
+/// Two-step sign-in turned on for `user`: its authenticator's secret and
+/// the recovery codes shown with it.
+fn turn_on_two_step(c: &Client, base: &str, user: &User) -> (String, Vec<String>) {
+    let setup: Value = bearer(c.post(format!("{base}/api/user/2fa/setup")), &user.token)
+        .send()
+        .unwrap()
+        .json()
+        .unwrap();
+    let secret = setup["secret"].as_str().unwrap().to_owned();
+    let r = bearer(c.post(format!("{base}/api/user/2fa/verify")), &user.token)
+        .json(&json!({ "code": totp_now(&secret), "grant": reauth_grant(c, base, user, "totp") }))
+        .send()
+        .unwrap();
+    assert_eq!(r.status(), StatusCode::OK);
+    let body: Value = r.json().unwrap();
+    let codes = body["recoveryCodes"]
+        .as_array()
+        .unwrap_or_else(|| panic!("recovery codes: {body}"))
+        .iter()
+        .map(|code| code.as_str().unwrap().to_owned())
+        .collect();
+    (secret, codes)
+}
+
+fn totp_now(secret: &str) -> String {
+    totp_rs::TOTP::new(
+        totp_rs::Algorithm::SHA1,
+        6,
+        1,
+        30,
+        totp_rs::Secret::Encoded(secret.to_owned())
+            .to_bytes()
+            .unwrap(),
+        None,
+        String::new(),
+    )
+    .unwrap()
+    .generate_current()
+    .unwrap()
+}
+
+fn codes_left(c: &Client, base: &str, user: &User) -> i64 {
+    let left: Value = bearer(
+        c.get(format!("{base}/api/user/2fa/recovery-codes")),
+        &user.token,
+    )
+    .send()
+    .unwrap()
+    .json()
+    .unwrap();
+    left["remaining"].as_i64().unwrap()
+}
+
+/// A sign-in's second step with `code`: its status and error code.
+fn second_step(c: &Client, base: &str, user: &User, code: &str) -> (StatusCode, Value) {
+    let first = sign_in(c, base, &user.username, &user.password);
+    let pre_auth = first["preAuthToken"].as_str().expect("the second step");
+    let r = c
+        .post(format!("{base}/api/auth/login/2fa"))
+        .header("x-kutup-client", "cli")
+        .json(&json!({ "preAuthToken": pre_auth, "code": code }))
+        .send()
+        .unwrap();
+    let status = r.status();
+    (
+        status,
+        r.json::<Value>().unwrap_or(Value::Null)["code"].clone(),
+    )
+}
+
+/// Recovery codes (docs/plans/security-keys.md, D2): made with two-step
+/// sign-in, each taking the second factor's place once however it is typed,
+/// renewed with the password (the old ones then fail), turning two-step off
+/// in the authenticator's place, and every step in the security log.
+#[test]
+fn recovery_codes_take_the_second_factors_place_once() {
+    let Ok(base) = std::env::var("KUTUP_LIVE_SERVER") else {
+        eprintln!("KUTUP_LIVE_SERVER not set; skipping");
+        return;
+    };
+    let c = client();
+    let user = register(&c, &base);
+    let (secret, codes) = turn_on_two_step(&c, &base, &user);
+    assert_eq!(codes.len(), 16);
+    assert!(codes
+        .iter()
+        .all(|code| code.len() == 11 && code.as_bytes()[5] == b'-'));
+    assert_eq!(codes_left(&c, &base, &user), 16);
+
+    // A code signs in once, typed upper case and without its dash.
+    let typed = codes[0].replace('-', "").to_uppercase();
+    assert_eq!(second_step(&c, &base, &user, &typed).0, StatusCode::OK);
+    assert_eq!(codes_left(&c, &base, &user), 15);
+    assert_eq!(
+        second_step(&c, &base, &user, &codes[0]),
+        (StatusCode::UNAUTHORIZED, json!("invalidCredentials"))
+    );
+    // The authenticator still works beside them.
+    assert_eq!(
+        second_step(&c, &base, &user, &totp_now(&secret)).0,
+        StatusCode::OK
+    );
+
+    // New codes need the password; the old ones then fail.
+    let renew = |grant: &str| {
+        bearer(
+            c.post(format!("{base}/api/user/2fa/recovery-codes")),
+            &user.token,
+        )
+        .json(&json!({ "grant": grant }))
+        .send()
+        .unwrap()
+    };
+    assert_eq!(renew("").status(), StatusCode::FORBIDDEN);
+    let renewed: Value = renew(&reauth_grant(&c, &base, &user, "totp"))
+        .json()
+        .unwrap();
+    let new_codes: Vec<String> = renewed["recoveryCodes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|code| code.as_str().unwrap().to_owned())
+        .collect();
+    assert_eq!(new_codes.len(), 16);
+    assert_eq!(
+        second_step(&c, &base, &user, &codes[1]),
+        (StatusCode::UNAUTHORIZED, json!("invalidCredentials"))
+    );
+
+    // Turned off with a recovery code in the authenticator's place.
+    let r = bearer(c.delete(format!("{base}/api/user/2fa")), &user.token)
+        .json(&json!({ "code": new_codes[0], "grant": reauth_grant(&c, &base, &user, "totp") }))
+        .send()
+        .unwrap();
+    assert_eq!(r.status(), StatusCode::OK);
+    assert_eq!(codes_left(&c, &base, &user), 0);
+    let session = sign_in(&c, &base, &user.username, &user.password);
+    assert!(
+        session["accessToken"].is_string(),
+        "no second step: {session}"
+    );
+    // While it is off there is nothing to renew.
+    assert_eq!(
+        renew(&reauth_grant(&c, &base, &user, "totp")).status(),
+        StatusCode::CONFLICT
+    );
+
+    let kinds: Vec<String> = security_events(&c, &base, &user.token, "")["events"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|event| event["kind"].as_str().unwrap().to_owned())
+        .collect();
+    for kind in [
+        "twoFactorOn",
+        "recoveryCodeUsed",
+        "recoveryCodesRenewed",
+        "twoFactorOff",
+    ] {
+        assert!(kinds.iter().any(|k| k == kind), "{kind} in {kinds:?}");
+    }
+    purge_accounts(&c, &base, &[&user]);
+}
+
+/// The recovery phrase turns every second factor off (Proton's lost-2FA
+/// path): someone who lost the authenticator signs in with the new password
+/// alone, and the old recovery codes are gone.
+#[test]
+fn the_recovery_phrase_turns_two_step_sign_in_off() {
+    let Ok(base) = std::env::var("KUTUP_LIVE_SERVER") else {
+        eprintln!("KUTUP_LIVE_SERVER not set; skipping");
+        return;
+    };
+    let c = client();
+    let mut user = register(&c, &base);
+    let (_, codes) = turn_on_two_step(&c, &base, &user);
+    let proof =
+        kutup_crypto::kdf::derive_recovery_auth_proof(&user.recovery_entropy, &user.binding)
+            .unwrap();
+    let granted: Value = c
+        .post(format!("{base}/api/auth/recover/grant"))
+        .json(&json!({ "name": user.username, "recoveryProof": b64(proof.as_slice()) }))
+        .send()
+        .unwrap()
+        .json()
+        .unwrap();
+    let grant = granted["grant"].as_str().unwrap().to_owned();
+    let new_password = "recovered-two-step-445566";
+    assert_eq!(
+        set_password(&c, &base, &user, &grant, None, new_password),
+        StatusCode::NO_CONTENT
+    );
+    user.password = new_password.to_owned();
+    let session = sign_in(&c, &base, &user.username, &user.password);
+    user.token = session["accessToken"]
+        .as_str()
+        .unwrap_or_else(|| panic!("no second step after the phrase: {session}"))
+        .to_owned();
+    assert_eq!(codes_left(&c, &base, &user), 0);
+    // Turned on again later, the old codes are not among the new ones' set.
+    let (_, fresh) = turn_on_two_step(&c, &base, &user);
+    assert_eq!(
+        second_step(&c, &base, &user, &codes[0]),
+        (StatusCode::UNAUTHORIZED, json!("invalidCredentials"))
+    );
+    assert_eq!(second_step(&c, &base, &user, &fresh[0]).0, StatusCode::OK);
+    let kinds = security_events(&c, &base, &user.token, "")["events"].to_string();
+    assert!(kinds.contains("twoFactorOff"), "{kinds}");
+    purge_accounts(&c, &base, &[&user]);
+}

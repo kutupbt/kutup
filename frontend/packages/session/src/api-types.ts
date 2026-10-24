@@ -234,6 +234,8 @@ export interface AdminSettings {
   calendarEventsPage: number
   /** Linking Chat devices (site_settings::CHAT_IDENTITY_SETTINGS). */
   chatLinkTokenSeconds: number
+  /** How many two-factor recovery codes are made at once. */
+  twoFactorRecoveryCodes: number
   chatLinkTokensPerAccount: number
   chatProvisionBodyBytes: number
   chatMaxActiveDevices: number

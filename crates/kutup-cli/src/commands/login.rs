@@ -136,7 +136,8 @@ pub(crate) fn login_with_password(
 
     // Step 2: TOTP if required.
     if resp.requires_totp {
-        let code = prompt_line("TOTP code: ")?;
+        // An authenticator code, or one of the recovery codes in its place.
+        let code = prompt_line("Authenticator or recovery code: ")?;
         resp = client
             .login_totp(&TotpRequest {
                 pre_auth_token: resp.pre_auth_token.clone(),

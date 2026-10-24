@@ -30,6 +30,15 @@ pub enum Kind {
     /// A custom mail domain the account held, lost (`old_name` is the
     /// domain): another account proved it, or its DNS stopped proving it.
     DomainLost,
+    /// Two-factor sign-in turned on (its recovery codes made).
+    TwoFactorOn,
+    /// Two-factor sign-in turned off: by the owner, an administrator, or the
+    /// recovery phrase's path.
+    TwoFactorOff,
+    /// A recovery code took the second factor's place.
+    RecoveryCodeUsed,
+    /// New recovery codes made; the old ones stopped working.
+    RecoveryCodesRenewed,
 }
 
 impl Kind {
@@ -45,6 +54,10 @@ impl Kind {
             Kind::NameClosed => "nameClosed",
             Kind::NameFreed => "nameFreed",
             Kind::DomainLost => "domainLost",
+            Kind::TwoFactorOn => "twoFactorOn",
+            Kind::TwoFactorOff => "twoFactorOff",
+            Kind::RecoveryCodeUsed => "recoveryCodeUsed",
+            Kind::RecoveryCodesRenewed => "recoveryCodesRenewed",
         }
     }
 }
