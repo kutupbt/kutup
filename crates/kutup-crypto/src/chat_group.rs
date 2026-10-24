@@ -172,6 +172,9 @@ pub enum SealedField {
     SlotEntry = 6,
     /// The banned accounts.
     BanList = 7,
+    /// A member's group send endorsement, as it shares it with the group
+    /// (kutup-group-send's blob); its subject is the member's pseudonym.
+    Endorsement = 8,
 }
 
 /// The state key, with the group it belongs to.

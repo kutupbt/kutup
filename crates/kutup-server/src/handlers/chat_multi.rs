@@ -691,6 +691,7 @@ mod tests {
                 .iter()
                 .map(|account| (account.hyphenated().to_string(), STANDARD.encode([9u8; 16])))
                 .collect(),
+            group_send_token: None,
             urgent: true,
         }
     }
