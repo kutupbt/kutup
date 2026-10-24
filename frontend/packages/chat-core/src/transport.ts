@@ -695,11 +695,13 @@ export class ApiChatTransport implements ChatTransportPort {
   }
 
   /**
-   * One group message to every listed account of `server`, sealed once
-   * (`SealedMultiSubmissionV1`; docs/plans/pairwise-groups.md, "Slice 2").
-   * `200`, `409` and `410` are answers (who was refused or over a budget,
-   * whose devices moved on); a destination that didn't answer (`503`), or a
-   * server without the route (`404`), sends those members pairwise.
+   * One group message to every listed account of `server`, sealed once, with
+   * the group send token over them (`SealedMultiSubmissionV1`;
+   * docs/plans/group-send-endorsements.md §3.4). `200`, `409` and `410` are
+   * answers (who is over a budget, whose devices moved on); a token the
+   * destination refuses (`401 groupSendTokenInvalid`), a destination that
+   * didn't answer (`503`), or a server without the route (`404`), sends those
+   * members pairwise.
    */
   async sendSealedMulti(
     server: string,
@@ -709,6 +711,7 @@ export class ApiChatTransport implements ChatTransportPort {
     | { kind: 'peerUnavailable' }
     | { kind: 'tooLarge' }
     | { kind: 'rateLimited' }
+    | { kind: 'tokenInvalid' }
   > {
     try {
       const response = await axios.post(`${apiBase()}/chat/anonymous/messages/multi`, request, {
@@ -723,6 +726,7 @@ export class ApiChatTransport implements ChatTransportPort {
       if (axios.isAxiosError(error) && error.response) {
         const status = error.response.status
         if (status === 409 || status === 410) return { kind: 'answered', status, response: error.response.data }
+        if (status === 401 && errorCode(error) === 'groupSendTokenInvalid') return { kind: 'tokenInvalid' }
         if (status === 503 || status === 404) return { kind: 'peerUnavailable' }
         if (status === 413) return { kind: 'tooLarge' }
         if (status === 429) return { kind: 'rateLimited' }
@@ -732,21 +736,28 @@ export class ApiChatTransport implements ChatTransportPort {
   }
 
   /**
-   * Adds and removes published group capability hashes in one change (the
-   * engine keeps what is owed until it is taken); `limitReached` when the
-   * server takes no more for one account and changed nothing.
+   * This account's group send endorsement for today, from its own server
+   * (`GroupSendEndorsementResponseV1`; docs/plans/group-send-endorsements.md
+   * §3.2). The engine checks it before keeping it.
    */
-  async changeGroupCapabilities(changes: {
-    add: string[]
-    remove: string[]
-  }): Promise<{ kind: 'changed'; count: number } | { kind: 'limitReached' }> {
+  async fetchGroupSendEndorsement(): Promise<unknown> {
+    const response = await api.get('/chat/group-send/endorsement')
+    return response.data
+  }
+
+  /**
+   * The endorsement keys of this account's server, or of `server` from its
+   * verified discovery (`GroupSendParamsV1`); `null` when that server
+   * publishes none (`404`).
+   */
+  async fetchGroupSendParams(server?: string | null): Promise<unknown> {
     try {
-      const response = await api.put<{ count: number }>('/chat/group-capabilities', changes)
-      return { kind: 'changed', count: response.data.count }
+      const response = await api.get('/chat/group-send/params', {
+        params: server ? { server } : undefined,
+      })
+      return response.data
     } catch (error) {
-      if (axios.isAxiosError(error) && error.response?.status === 409 && errorCode(error) === 'capabilityLimit') {
-        return { kind: 'limitReached' }
-      }
+      if (axios.isAxiosError(error) && error.response?.status === 404) return null
       throw error
     }
   }

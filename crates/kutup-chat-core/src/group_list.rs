@@ -45,17 +45,7 @@ const READ_EVERY_MS: i64 = 10 * 60 * 1000;
 #[derive(Debug, Clone, Copy)]
 struct Listed {
     revision: u64,
-    /// The entry's status, join epoch, and when its delivery capability was
-    /// drawn (0 for none).
-    said: Option<(GroupListStatus, u32, i64)>,
-}
-
-/// When `entry`'s delivery capability was drawn (0 for none).
-fn delivery_at(entry: &GroupListEntryV1) -> i64 {
-    entry
-        .delivery
-        .as_ref()
-        .map_or(0, |delivery| delivery.drawn_at_ms)
+    said: Option<(GroupListStatus, u32)>,
 }
 
 /// An entry the account head lists that can't be what it claims: the read
@@ -149,12 +139,6 @@ impl Engine {
             status,
             verified_revision: state.revision,
             chain_hash: encode(&head),
-            delivery: record.delivery.as_ref().map(|book| {
-                kutup_chat_proto::group::GroupListDeliveryV1 {
-                    capability: book.capability.0.clone(),
-                    drawn_at_ms: book.drawn_at_ms,
-                }
-            }),
         }))
     }
 
@@ -186,10 +170,7 @@ impl Engine {
     pub(crate) fn listed_join(&self, group_id: &str) -> Option<(GroupListStatus, u32)> {
         let list = self.group_list.as_ref()?;
         let id = list.entry_id(group_id).ok()?;
-        list.listed
-            .get(&id)
-            .and_then(|listed| listed.said)
-            .map(|(status, epoch, _)| (status, epoch))
+        list.listed.get(&id).and_then(|listed| listed.said)
     }
 
     /// Makes `group_id`'s entry due when the list doesn't say what the group
@@ -203,11 +184,7 @@ impl Engine {
         let Some(status) = list_status(&record.status) else {
             return Ok(());
         };
-        let delivery = record.delivery.as_ref().map_or(0, |book| book.drawn_at_ms);
-        if (record.listed_status == Some(status)
-            && record.listed_delivery_ms.unwrap_or(0) == delivery)
-            || record.list_due_at_ms.is_some()
-        {
+        if record.listed_status == Some(status) || record.list_due_at_ms.is_some() {
             return Ok(());
         }
         let delay = i64::from(OsRng.next_u32()) % (WRITE_DELAY_MAX_MS + 1);
@@ -249,16 +226,12 @@ impl Engine {
             // An entry of a later version is that version's to write.
             let later = listed.is_some_and(|listed| listed.said.is_none());
             if !later
-                && listed
-                    .and_then(|listed| listed.said)
-                    .map(|said| (said.0, said.2))
-                    != Some((entry.status, delivery_at(&entry)))
+                && listed.and_then(|listed| listed.said).map(|said| said.0) != Some(entry.status)
             {
                 self.write_group_entry(&id, &entry).await?;
                 written += 1;
             }
             record.listed_status = Some(entry.status);
-            record.listed_delivery_ms = Some(delivery_at(&entry));
             record.list_due_at_ms = None;
             self.save_group(&record).await?;
         }
@@ -290,7 +263,7 @@ impl Engine {
                     id.to_string(),
                     Listed {
                         revision,
-                        said: Some((entry.status, entry.join_epoch, delivery_at(entry))),
+                        said: Some((entry.status, entry.join_epoch)),
                     },
                 );
                 return Ok(());
@@ -353,7 +326,7 @@ impl Engine {
                 item.id,
                 Listed {
                     revision: opened.revision,
-                    said: Some((entry.status, entry.join_epoch, delivery_at(&entry))),
+                    said: Some((entry.status, entry.join_epoch)),
                 },
             );
             entries.push(entry);
@@ -408,9 +381,7 @@ impl Engine {
                         listed_status: Some(GroupListStatus::Member),
                         list_due_at_ms: None,
                         join_epoch: entry.join_epoch,
-                        delivery: listed_delivery(&entry),
-                        member_capabilities: Default::default(),
-                        listed_delivery_ms: Some(delivery_at(&entry)),
+                        endorsements: Default::default(),
                     };
                     self.save_group(&record).await?;
                     // Its state, and this device's binding where needed; a
@@ -448,18 +419,6 @@ impl Engine {
                     }
                     if record.min_revision < entry.verified_revision {
                         record.min_revision = entry.verified_revision;
-                        changed = true;
-                    }
-                    // Another device of this account drew a newer capability:
-                    // this one hands that one out, and retires its own (the
-                    // device that drew the new one published it).
-                    let held = record.delivery.as_ref().map_or(0, |book| book.drawn_at_ms);
-                    if delivery_at(&entry) > held {
-                        record.delivery = listed_delivery(&entry);
-                        changed = true;
-                    }
-                    if record.listed_delivery_ms != Some(delivery_at(&entry)) {
-                        record.listed_delivery_ms = Some(delivery_at(&entry));
                         changed = true;
                     }
                     if changed {
@@ -500,9 +459,9 @@ impl Engine {
             Vec::new()
         };
         let _ = self.flush_group_list(false).await;
-        // Capability changes the server didn't take before (offline, or a
-        // reload): tried again with this periodic look.
-        let _ = self.flush_group_capabilities().await;
+        // Each group gets this account's current endorsement, and the
+        // members' new ones are read, with this periodic look.
+        let _ = self.refresh_all_group_send_endorsements().await;
         Ok(taken_up)
     }
 
@@ -512,22 +471,4 @@ impl Engine {
             let _ = self.schedule_group_entry(group_id).await;
         }
     }
-}
-
-/// The delivery book a listed entry gives this device: the capability, held
-/// by no member yet as far as this device knows (it hands it out again; a
-/// member that holds it already takes it as the same), and held by every
-/// member of the first state this device sees with it (`exposed` unknown
-/// until then: `group::settle_delivery`).
-fn listed_delivery(entry: &GroupListEntryV1) -> Option<crate::group::DeliveryBook> {
-    entry
-        .delivery
-        .as_ref()
-        .map(|delivery| crate::group::DeliveryBook {
-            capability: SecretText(delivery.capability.clone()),
-            drawn_at_ms: delivery.drawn_at_ms,
-            holders: Vec::new(),
-            exposed: None,
-            drawn_here: false,
-        })
 }

@@ -202,30 +202,6 @@ pub struct GroupListEntryV1 {
     /// device of the account takes an older state.
     pub verified_revision: u64,
     pub chain_hash: String,
-    /// This account's delivery capability for the group's multi-recipient
-    /// route, so its other devices hold the one its server has published
-    /// (docs/plans/pairwise-groups.md, "Slice 2").
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub delivery: Option<GroupListDeliveryV1>,
-}
-
-/// This account's delivery capability for a group, as its group list keeps it.
-#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct GroupListDeliveryV1 {
-    /// 16 bytes, canonical padded base64.
-    pub capability: String,
-    /// When it was drawn (unix milliseconds): the newest wins.
-    pub drawn_at_ms: i64,
-}
-
-impl std::fmt::Debug for GroupListDeliveryV1 {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("GroupListDeliveryV1")
-            .field("capability", &"<secret>")
-            .field("drawn_at_ms", &self.drawn_at_ms)
-            .finish()
-    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -242,12 +218,6 @@ impl GroupListEntryV1 {
         decode_exact::<MASTER_KEY_LEN>("masterKey", &self.master_key)?;
         validate_home(&self.home)?;
         decode_exact::<32>("chainHash", &self.chain_hash)?;
-        if let Some(delivery) = &self.delivery {
-            decode_exact::<16>("delivery.capability", &delivery.capability)?;
-            if delivery.drawn_at_ms <= 0 {
-                return Err("delivery.drawnAtMs must be positive".into());
-            }
-        }
         Ok(())
     }
 }

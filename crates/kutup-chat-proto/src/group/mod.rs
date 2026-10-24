@@ -37,7 +37,7 @@ pub use check::{
 };
 pub use entry::{
     GroupAvatarV1, GroupBanListV1, GroupBannedAccountV1, GroupContextV1, GroupInviteV1,
-    GroupListDeliveryV1, GroupListEntryV1, GroupListStatus, GroupMemberEntryV1, GroupSlotEntryV1,
+    GroupListEntryV1, GroupListStatus, GroupMemberEntryV1, GroupSlotEntryV1,
 };
 
 pub const GROUP_FORMAT_VERSION: u16 = 1;

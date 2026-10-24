@@ -132,12 +132,6 @@ pub mod kind {
     /// hold, since the home no longer answers them. Hidden; never history.
     /// [IMPL]
     pub const GROUP_REMOVAL: &str = "groupRemoval";
-    /// A member's delivery capability for a group, pairwise to the other
-    /// members' devices, so they can send to it on the multi-recipient
-    /// route; or a request for it, from a member whose copy was refused
-    /// (docs/plans/pairwise-groups.md, "Slice 2"). Hidden; never history.
-    /// [IMPL]
-    pub const GROUP_DELIVERY: &str = "groupDelivery";
     /// An identity distribution's message to one kept device of the account
     /// (Signal's `PniChangeNumber`): the new account identity, that device's
     /// new keys and registration id (`crate::AccountIdentityBody`). Accepted
@@ -490,7 +484,6 @@ impl ChatContent {
             || self.kind == kind::SENDER_KEY_DISTRIBUTION
             || self.kind == kind::GROUP_INVITE
             || self.kind == kind::GROUP_REMOVAL
-            || self.kind == kind::GROUP_DELIVERY
     }
 
     /// Builds the invisible message that carries a fresh session to a device
@@ -648,31 +641,6 @@ impl ChatContent {
         let removal: GroupRemovalBody = serde_json::from_value(self.body.clone()).ok()?;
         crate::group::decode_group_id(&removal.group_id).ok()?;
         Some(removal)
-    }
-
-    /// A member's delivery capability for a group, or a request for it.
-    pub fn group_delivery_with_id(
-        message_id: impl Into<String>,
-        sent_at: impl Into<String>,
-        seq: u64,
-        delivery: &GroupDeliveryBody,
-    ) -> Self {
-        Self::hidden_with_id(
-            kind::GROUP_DELIVERY,
-            message_id,
-            sent_at,
-            seq,
-            serde_json::to_value(delivery).unwrap_or_default(),
-        )
-    }
-
-    pub fn as_group_delivery(&self) -> Option<GroupDeliveryBody> {
-        if self.kind != kind::GROUP_DELIVERY || self.v != Self::VERSION {
-            return None;
-        }
-        let delivery: GroupDeliveryBody = serde_json::from_value(self.body.clone()).ok()?;
-        delivery.validate().ok()?;
-        Some(delivery)
     }
 
     pub fn as_group_invite(&self) -> Option<crate::group::GroupInviteV1> {
@@ -1290,7 +1258,6 @@ impl ChatContent {
                     | kind::GROUP_INVITE
                     | kind::GROUP_CHANGE
                     | kind::GROUP_REMOVAL
-                    | kind::GROUP_DELIVERY
             )
     }
 }
@@ -1302,68 +1269,6 @@ impl ChatContent {
 pub struct GroupRemovalBody {
     pub group_id: String,
     pub entry: crate::group_route::GroupLogEntryV1,
-}
-
-/// Body of a `groupDelivery`: the sender's delivery capability for the
-/// group and when it was drawn (the newest a recipient holds wins), or a
-/// request for it (`capability` absent) from a member whose copy the
-/// sender's server refused.
-#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct GroupDeliveryBody {
-    pub group_id: String,
-    /// 16 bytes, base64; absent in a request.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub capability: Option<String>,
-    /// When the capability was drawn (unix milliseconds); 0 in a request.
-    #[serde(default)]
-    pub drawn_at_ms: i64,
-}
-
-/// The capability is a secret (it lets anyone send to the account on the
-/// multi-recipient route): never in a log.
-impl std::fmt::Debug for GroupDeliveryBody {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("GroupDeliveryBody")
-            .field("group_id", &self.group_id)
-            .field(
-                "capability",
-                &self.capability.as_ref().map(|_| "<redacted>"),
-            )
-            .field("drawn_at_ms", &self.drawn_at_ms)
-            .finish()
-    }
-}
-
-impl GroupDeliveryBody {
-    pub fn validate(&self) -> Result<(), String> {
-        use base64::Engine as _;
-        crate::group::decode_group_id(&self.group_id).map_err(|e| e.to_string())?;
-        match &self.capability {
-            Some(capability) => {
-                let bytes = base64::engine::general_purpose::STANDARD
-                    .decode(capability)
-                    .map_err(|_| "a delivery capability is base64".to_string())?;
-                if bytes.len() != 16 || self.drawn_at_ms <= 0 {
-                    return Err("a delivery capability is 16 bytes, with when it was drawn".into());
-                }
-            }
-            None if self.drawn_at_ms != 0 => {
-                return Err("a request for a delivery capability carries no time".into());
-            }
-            None => {}
-        }
-        Ok(())
-    }
-
-    /// The capability's 16 bytes (none in a request).
-    pub fn capability_bytes(&self) -> Option<[u8; 16]> {
-        use base64::Engine as _;
-        let bytes = base64::engine::general_purpose::STANDARD
-            .decode(self.capability.as_deref()?)
-            .ok()?;
-        bytes.try_into().ok()
-    }
 }
 
 /// Body of a `text` message.
@@ -2039,74 +1944,6 @@ pub struct SentTranscriptBody {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn a_group_delivery_never_shows_its_capability_in_debug() {
-        let body = GroupDeliveryBody {
-            group_id: "g".into(),
-            capability: Some("c2VjcmV0LWNhcGFiaWxpdHk=".into()),
-            drawn_at_ms: 1,
-        };
-        let shown = format!("{body:?}");
-        assert!(!shown.contains("c2VjcmV0"), "{shown}");
-        assert!(shown.contains("<redacted>"), "{shown}");
-    }
-
-    #[test]
-    fn a_group_delivery_carries_a_capability_or_asks_for_one() {
-        let group_id = crate::group::encode_group_id(&[3u8; 32]);
-        let given = GroupDeliveryBody {
-            group_id: group_id.clone(),
-            capability: Some(base64::Engine::encode(
-                &base64::engine::general_purpose::STANDARD,
-                [9u8; 16],
-            )),
-            drawn_at_ms: 1_790_000_000_000,
-        };
-        let content = ChatContent::group_delivery_with_id(
-            "00000000-0000-4000-8000-000000000001",
-            "2026-10-21T00:00:00Z",
-            0,
-            &given,
-        );
-        assert!(content.is_ephemeral(), "never history");
-        assert_eq!(content.as_group_delivery(), Some(given.clone()));
-        assert_eq!(given.capability_bytes(), Some([9u8; 16]));
-        let asked = GroupDeliveryBody {
-            group_id: group_id.clone(),
-            capability: None,
-            drawn_at_ms: 0,
-        };
-        assert!(asked.validate().is_ok());
-        assert_eq!(asked.capability_bytes(), None);
-        for bad in [
-            GroupDeliveryBody {
-                capability: Some("AAAA".into()),
-                ..given.clone()
-            },
-            GroupDeliveryBody {
-                drawn_at_ms: 0,
-                ..given.clone()
-            },
-            GroupDeliveryBody {
-                drawn_at_ms: 5,
-                ..asked.clone()
-            },
-            GroupDeliveryBody {
-                group_id: "not a group".into(),
-                ..given.clone()
-            },
-        ] {
-            assert!(bad.validate().is_err(), "{bad:?}");
-            let content = ChatContent::group_delivery_with_id(
-                "00000000-0000-4000-8000-000000000002",
-                "2026-10-21T00:00:00Z",
-                0,
-                &bad,
-            );
-            assert_eq!(content.as_group_delivery(), None);
-        }
-    }
 
     #[test]
     fn text_round_trips_with_stable_shape() {

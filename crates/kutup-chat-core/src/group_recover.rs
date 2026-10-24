@@ -128,9 +128,7 @@ impl Engine {
             listed_status: None,
             list_due_at_ms: None,
             join_epoch,
-            delivery: None,
-            member_capabilities: Default::default(),
-            listed_delivery_ms: None,
+            endorsements: Default::default(),
         };
         if !matches!(
             self.fetch_whole_state(&mut record).await?,

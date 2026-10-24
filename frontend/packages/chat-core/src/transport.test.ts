@@ -328,6 +328,11 @@ describe('ApiChatTransport', () => {
       post.mockRejectedValueOnce(answer(status, moved))
       await expect(transport.sendSealedMulti('b.test', {})).resolves.toEqual(expected)
     }
+    // A token the destination refuses; any other 401 is an error.
+    post.mockRejectedValueOnce(answer(401, { error: 'invalid', code: 'groupSendTokenInvalid' }))
+    await expect(transport.sendSealedMulti('b.test', {})).resolves.toEqual({ kind: 'tokenInvalid' })
+    post.mockRejectedValueOnce(answer(401, {}))
+    await expect(transport.sendSealedMulti('b.test', {})).rejects.toBeTruthy()
     post.mockRejectedValueOnce(new Error('offline'))
     await expect(transport.sendSealedMulti('b.test', {})).rejects.toBeTruthy()
     // Only a 200 stores: another success status is no answer.
@@ -335,18 +340,26 @@ describe('ApiChatTransport', () => {
     await expect(transport.sendSealedMulti('b.test', {})).rejects.toBeTruthy()
   })
 
-  it('changes the published group capabilities by deltas and says when the server takes no more', async () => {
-    const put = vi.spyOn(api, 'put').mockResolvedValueOnce({ data: { count: 8 } } as never)
+  it('fetches this account\'s endorsement and a server\'s endorsement keys', async () => {
+    const issued = { keyId: 1, expiration: 1793145600, response: 'AA==' }
+    const params = { keys: [{ keyId: 1, endorsementPublicKey: 'AA==', issuesUntil: 1793145600 }] }
+    const get = vi.spyOn(api, 'get')
+      .mockResolvedValueOnce({ data: issued } as never)
+      .mockResolvedValueOnce({ data: params } as never)
+      .mockResolvedValueOnce({ data: params } as never)
     const transport = new ApiChatTransport()
-    const changes = { add: ['h1'], remove: ['h0'] }
-    await expect(transport.changeGroupCapabilities(changes)).resolves.toEqual({ kind: 'changed', count: 8 })
-    expect(put).toHaveBeenCalledWith('/chat/group-capabilities', changes)
-    put.mockRejectedValueOnce(new axios.AxiosError('full', '409', undefined, undefined,
-      { status: 409, data: { error: 'too many', code: 'capabilityLimit' } } as never))
-    await expect(transport.changeGroupCapabilities(changes)).resolves.toEqual({ kind: 'limitReached' })
-    const other = new axios.AxiosError('conflict', '409', undefined, undefined, { status: 409, data: {} } as never)
-    put.mockRejectedValueOnce(other)
-    await expect(transport.changeGroupCapabilities(changes)).rejects.toBe(other)
+    await expect(transport.fetchGroupSendEndorsement()).resolves.toEqual(issued)
+    expect(get).toHaveBeenLastCalledWith('/chat/group-send/endorsement')
+    await expect(transport.fetchGroupSendParams()).resolves.toEqual(params)
+    expect(get).toHaveBeenLastCalledWith('/chat/group-send/params', { params: undefined })
+    await expect(transport.fetchGroupSendParams('b.test')).resolves.toEqual(params)
+    expect(get).toHaveBeenLastCalledWith('/chat/group-send/params', { params: { server: 'b.test' } })
+    // A server that publishes no keys; any other failure is an error.
+    get.mockRejectedValueOnce(new axios.AxiosError('none', '404', undefined, undefined, { status: 404, data: {} } as never))
+    await expect(transport.fetchGroupSendParams('c.test')).resolves.toBeNull()
+    const down = new axios.AxiosError('down', '502', undefined, undefined, { status: 502, data: {} } as never)
+    get.mockRejectedValueOnce(down)
+    await expect(transport.fetchGroupSendParams('c.test')).rejects.toBe(down)
   })
 
   it('reports only the server\'s own sealed refusal as refused', async () => {

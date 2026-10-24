@@ -324,7 +324,7 @@ extern "C" {
 
     /// `POST /api/chat/anonymous/messages/multi?server=`: a
     /// `MultiSendOutcome` (`{ kind: "answered", status, response }`,
-    /// `peerUnavailable`, `tooLarge` or `rateLimited`).
+    /// `peerUnavailable`, `tooLarge`, `rateLimited` or `tokenInvalid`).
     #[wasm_bindgen(method, catch, js_name = sendSealedMulti)]
     async fn js_send_sealed_multi(
         this: &JsChatTransport,
@@ -332,13 +332,19 @@ extern "C" {
         request: JsValue,
     ) -> std::result::Result<JsValue, JsValue>;
 
-    /// `PUT /api/chat/group-capabilities` with `{ add, remove }`: a
-    /// `GroupCapabilitiesOutcome` (`{ kind: "changed", count }` or
-    /// `limitReached`).
-    #[wasm_bindgen(method, catch, js_name = changeGroupCapabilities)]
-    async fn js_change_group_capabilities(
+    /// `GET /api/chat/group-send/endorsement`: a
+    /// `GroupSendEndorsementResponseV1`.
+    #[wasm_bindgen(method, catch, js_name = fetchGroupSendEndorsement)]
+    async fn js_fetch_group_send_endorsement(
         this: &JsChatTransport,
-        changes: JsValue,
+    ) -> std::result::Result<JsValue, JsValue>;
+
+    /// `GET /api/chat/group-send/params[?server=]`: a `GroupSendParamsV1`,
+    /// or `null` when that server publishes none.
+    #[wasm_bindgen(method, catch, js_name = fetchGroupSendParams)]
+    async fn js_fetch_group_send_params(
+        this: &JsChatTransport,
+        server: Option<String>,
     ) -> std::result::Result<JsValue, JsValue>;
 
     #[wasm_bindgen(method, catch, js_name = sendSyncMessage)]
@@ -939,23 +945,30 @@ impl ChatTransport for BrowserTransport {
         )
     }
 
-    async fn change_group_capabilities(
+    async fn fetch_group_send_endorsement(
         &self,
-        add: &[String],
-        remove: &[String],
-    ) -> Result<crate::transport::GroupCapabilitiesOutcome> {
-        #[derive(serde::Serialize)]
-        struct Changes<'a> {
-            add: &'a [String],
-            remove: &'a [String],
-        }
-        let changes = Changes { add, remove };
+    ) -> Result<kutup_chat_proto::group_send::GroupSendEndorsementResponseV1> {
         from_transport(
             self.js
-                .js_change_group_capabilities(to_transport(&changes)?)
+                .js_fetch_group_send_endorsement()
                 .await
                 .map_err(transport_error)?,
         )
+    }
+
+    async fn fetch_group_send_params(
+        &self,
+        server: Option<&str>,
+    ) -> Result<Option<kutup_chat_proto::group_send::GroupSendParamsV1>> {
+        let value = self
+            .js
+            .js_fetch_group_send_params(server.map(str::to_string))
+            .await
+            .map_err(transport_error)?;
+        if value.is_null() || value.is_undefined() {
+            return Ok(None);
+        }
+        from_transport(value).map(Some)
     }
 
     async fn send_sync(&self, req: &SendMessagesRequest) -> Result<SendOutcome> {
@@ -2368,17 +2381,6 @@ impl WasmChatClient {
                 .map(GroupSummaryView::from)
                 .collect::<Vec<_>>(),
         )
-    }
-
-    /// Whether this account's server refused its new group capabilities as
-    /// too many: those groups' messages reach it pairwise, which the page
-    /// says.
-    #[wasm_bindgen(js_name = groupCapabilityLimitReached)]
-    pub async fn group_capability_limit_reached(&self) -> std::result::Result<bool, JsValue> {
-        self.engine
-            .group_capability_limit_reached()
-            .await
-            .map_err(chat_error)
     }
 
     #[wasm_bindgen(js_name = syncManifest)]

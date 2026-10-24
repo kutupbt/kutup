@@ -878,43 +878,37 @@ The budgets are charged whatever the answer: a send answered `409` or `410`
 counts too. The shared part goes once no row names it (after an ack,
 or the maintenance sweep).
 
-**The client side.** Each member draws a random 16-byte capability per group
-(`DeliveryBook`) and publishes its hash (`PUT /api/chat/group-capabilities`,
-`{ add, remove }`). The account's set is padded to a multiple of 8 with
-dummies derived from the account's padding key, one per slot, the same for
-as long as the account keeps it, so the set's size says little about how many
-groups it is in and two sets compared don't tell the dummies apart. Only the
-slots whose dummy comes or goes are sent. A capability is handed to the other
-members only once the server took it, pairwise, in the hidden `groupDelivery`
-kind, and kept in the account's group list entry so its other devices hold it
-too; the newest draw wins everywhere (a draw is dated after the one it
-replaces, even on a clock that went back).
+**The client side** (group send endorsements,
+docs/plans/group-send-endorsements.md). Each device fetches its account's
+daily endorsement from its own server (`GET /api/chat/group-send/endorsement`)
+when the one it holds has less than 25 hours left, and checks it against the
+server's published key (`GET /api/chat/group-send/params`) before keeping it.
+It shares it with the home of each group the account is in
+(`PutEndorsement`): the response with its proof, the server and the key id,
+padded to 512 bytes and sealed under the group's state key with the
+pseudonym as subject. It reads the other members' blobs from each home
+(`GetEndorsements`, paged after a cursor) with every send that needs one and
+every periodic look, and keeps a blob only when it opens, names the member's
+own server, and holds a response for that member under that server's key
+(another server's keys come from `GET /api/chat/group-send/params?server=`).
+Each member keeps its two newest; a member that leaves is dropped, and the
+home serves its blob no more.
 
-A capability is retired as soon as an account that may hold it is no longer
-a member: every account it was drawn for or handed to, or, for one a device
-took from the group list, every member of the first state that device saw
-with it. Each device of the account checks this as it accepts each change,
-and the next send draws another. A group this account leaves (or is removed
-from, or that ends) retires its capability too. Retired hashes come off the
-server at once. Changes go as deltas from a durable ledger, never as a whole
-set, so a device that is behind can't bring back a retired capability; only
-the device that drew a capability adds it. A server over its per-account
-limit (`409 capabilityLimit`) still takes the removals; the account's new
-capabilities wait (offered again hourly), and those groups stay on the
-pairwise route meanwhile.
-
-A group message goes on this route to each member whose capability the
-sender holds, one request per destination server, the sender-key message
-sealed once (libsignal's `sealed_sender_multi_recipient_encrypt`). The
-account's own other devices get their copies pairwise, as do members whose
-capability it doesn't hold. A member device the sender key hasn't reached (one
-the account gained since the key's distribution) can't read a shared copy:
-that member's leg goes pairwise, the new device's copy naming the member so it
-finds the group again. Answers: `refused` sends that member's copy pairwise at
-once and asks it for its current capability (its next message hands it out);
-`409`/`410` refetch that account's signed device list and try again;
-`503 peerUnavailable`, `404` (a server without the route) and `413` send the
-copies pairwise in the same pass; `429` and `rateLimited` wait.
+A group message goes on this route to each member with a usable endorsement
+(more than ten minutes left), one request per destination server and
+expiration, the sender-key message sealed once (libsignal's
+`sealed_sender_multi_recipient_encrypt`) and the members' endorsements
+combined into one `groupSendToken`. The account's own other devices get their
+copies pairwise, as do members without a usable endorsement. A member device
+the sender key hasn't reached (one the account gained since the key's
+distribution) can't read a shared copy: that member's leg goes pairwise, the
+new device's copy naming the member so it finds the group again. Answers:
+`401 groupSendTokenInvalid` sends the copies pairwise at once and drops the
+endorsements that token was made of (each member's next one is read when it
+uploads it); `409`/`410` refetch that account's signed device list and try
+again; `503 peerUnavailable`, `404` (a server without the route) and `413` send
+the copies pairwise in the same pass; `rateLimited` sends that member's copy
+pairwise later, and `429` waits.
 
 For another server's members, this server forwards the send at once to that
 server's `POST /api/fed/chat/sealed/multi` (signed federation), waits for its

@@ -1764,40 +1764,36 @@ body is read and given back once a request authenticates), an env rate limit
 as the other pre-authentication limits. The server never had the 64 cap: `CHAT_GROUP_MAX_MEMBERS` is 256 and
 `GroupLimits` takes at most that; the client lifts its own once this is in.
 
-### Slice 2: as built (client, 2026-10-23)
+### Slice 2: as built (client, 2026-10-24)
 
 Built on one identity per account (docs/plans/account-identity-key.md), so
 libsignal's sealed sender v2 is used as it is: one key share per account.
-The contract is in docs/chat-protocol.md §7 ("The client side"). What
-building it settled:
-- **Capability per group** (`DeliveryBook` in the group record): drawn on
-  the first send that needs it, published by deltas from a durable ledger
-  (`group_delivery::CapabilityLedger`, in the store's meta), padded to
-  multiples of 8 with one dummy per slot
-  (`kutup_crypto::chat_group::DeliveryPaddingKey`, stable, so diffing two
-  sets doesn't tell them apart), handed out only once the server took it,
-  kept in the group list entry. Retired when an account that may hold it is
-  no longer a member (`group::settle_delivery`, at each accepted change, on
-  every device of the account; one taken from the list counts as held by the
-  members of the first state seen with it), and when this account's
-  membership ends (any path: `save_group`); the next send draws another.
-  Only the drawing device adds; `POST …/set` isn't used by clients (after an
-  account reset, recovered groups draw new capabilities).
-  - Known limit: a device that takes a capability from the list after it
-    applied a removal, while the device that drew it is unlinked before
-    applying that removal itself, keeps it published. Closing that needs the
-    exposure in the list entry.
-- **Legs:** a member whose capability is held goes on the multi route; own
+Delivery is authorised by group send endorsements, not capabilities (the
+user's decision of 2026-10-24; docs/plans/group-send-endorsements.md). The
+contract is in docs/chat-protocol.md §7 ("The client side"). What building it
+settled:
+- **Endorsements** (`group_endorse`): the account's own one in the store's
+  meta, checked against its server's key; per group, the expiration last
+  uploaded (with the join epoch, so a rejoin uploads again), the read cursor,
+  and each member's two newest checked endorsements (`GroupEndorsements` in
+  the group record). Uploads and reads ride on sends and on the periodic
+  group list look; a failure is tried again after ten minutes, and server
+  keys are kept an hour.
+- **Legs:** a member with a usable endorsement goes on the multi route; own
   devices and the rest go pairwise. A leg whose account has devices the sender
   key hasn't reached goes on as an ordinary leg (sender-key copies for the
   devices that hold the key, a pairwise copy naming the member for the rest),
   since a shared copy can't carry the member's pseudonym and the new device
-  couldn't read it.
-- **Answers:** as the protocol says; `refused` also asks the member for its
-  current capability (`groupDelivery` request).
+  couldn't read it. Members of one server with different expirations go in
+  one request per expiration.
+- **Answers:** as the protocol says; a refused token drops its endorsements
+  and forgets the server's keys.
 - **Tests:** chat-core harness (`group_multi_*`), with a server double that
-  parses the `0x23` payload and checks capabilities and devices as the server
-  does; the TS transport maps every answer.
+  issues and verifies with a real `ServerKey`, keeps the home's blobs as the
+  home does (two per pseudonym, members only, pages of three), parses the
+  `0x23` payload and checks devices as the server does; a rotated key, a
+  refused token and forged blobs are covered. The TS transport maps every
+  answer.
 
 ### Slice 4: group calls, the server design (second session, 2026-10-21)
 

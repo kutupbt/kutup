@@ -31,7 +31,6 @@ use kutup_crypto::chat_group::{
 };
 use kutup_federation_proto::FederationIdentityDocumentV1;
 use serde::{Deserialize, Serialize};
-use std::collections::BTreeMap;
 use zeroize::Zeroizing;
 
 /// The self-authority public key of an account's verified manifest, which
@@ -46,8 +45,6 @@ pub type AuthorityOf<'a> = dyn Fn(&AccountRef) -> Option<[u8; 32]> + 'a;
 pub struct GroupAccountKeys {
     pub authority: crate::manifest::AccountAuthority,
     pub pseudonyms: kutup_crypto::chat_group::GroupPseudonymKey,
-    /// The dummies its published delivery capabilities are padded with.
-    pub delivery_padding: kutup_crypto::chat_group::DeliveryPaddingKey,
 }
 
 impl GroupAccountKeys {
@@ -55,7 +52,6 @@ impl GroupAccountKeys {
         Ok(Self {
             authority: crate::manifest::AccountAuthority::derive(master_key)?,
             pseudonyms: kutup_crypto::chat_group::GroupPseudonymKey::derive(master_key),
-            delivery_padding: kutup_crypto::chat_group::DeliveryPaddingKey::derive(master_key),
         })
     }
 }
@@ -136,134 +132,10 @@ pub struct GroupRecordV1 {
     /// its pseudonym is derived at this epoch.
     #[serde(default)]
     pub join_epoch: u32,
-    /// This account's delivery capability for the group, and which member
-    /// accounts this device knows hold it (slice 2's multi-recipient route).
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub delivery: Option<DeliveryBook>,
-    /// The other members' delivery capabilities, by account: what this
-    /// device sends group messages to them with on the multi-recipient
-    /// route. A member not here gets pairwise copies.
-    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
-    pub member_capabilities: BTreeMap<String, HeldCapability>,
-    /// When the delivery capability the group list last said was drawn (0
-    /// for none): the entry is due again when this device's differs.
-    #[serde(default)]
-    pub listed_delivery_ms: Option<i64>,
-}
-
-/// This account's capability for receiving a group's messages on the
-/// multi-recipient route: published (its hash) to the account's server,
-/// handed to the members pairwise. Retired as soon as an account that may
-/// hold it is no longer a member (`settle_delivery`), so a removed member's
-/// copy stops working; the next send draws another.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct DeliveryBook {
-    pub capability: SecretText,
-    /// When it was drawn (milliseconds): the newest wins, on every device of
-    /// the account and at every member.
-    pub drawn_at_ms: i64,
-    /// The member accounts this device handed it to (their servers took it).
-    #[serde(default)]
-    pub holders: Vec<String>,
-    /// Every account that may hold it: the members when it was drawn, or,
-    /// for one taken from the group list, when this device first saw the
-    /// group's state with it (`None` until then), and everyone it was
-    /// handed to since.
-    #[serde(default)]
-    pub exposed: Option<Vec<String>>,
-    /// This device drew it, so this device publishes it (one taken from the
-    /// list was published by the device that drew it, and is never added
-    /// again from here: a stale list can't bring back a retired one).
-    #[serde(default)]
-    pub drawn_here: bool,
-}
-
-impl DeliveryBook {
-    /// A new capability, drawn here for `members`, dated after `after_ms`
-    /// (the one it replaces) even on a clock that went back.
-    pub fn draw<R: rand::Rng + rand::CryptoRng>(
-        now_ms: i64,
-        after_ms: i64,
-        members: Vec<String>,
-        rng: &mut R,
-    ) -> Self {
-        let mut capability = [0u8; 16];
-        rng.fill_bytes(&mut capability);
-        Self {
-            capability: SecretText(encode(&capability)),
-            drawn_at_ms: now_ms.max(after_ms.saturating_add(1)),
-            holders: Vec::new(),
-            exposed: Some(members),
-            drawn_here: true,
-        }
-    }
-
-    /// The capability's 16 bytes.
-    pub fn bytes(&self) -> Option<[u8; 16]> {
-        decode_exact::<16>("a delivery capability", &self.capability.0).ok()
-    }
-
-    /// The members that don't hold it yet.
-    pub fn missing<'a>(&self, members: &'a [String]) -> Vec<&'a String> {
-        members
-            .iter()
-            .filter(|member| !self.holders.contains(member))
-            .collect()
-    }
-
-    /// `account` holds it now (its server took it).
-    pub fn handed_to(&mut self, account: &str) {
-        if !self.holders.iter().any(|holder| holder == account) {
-            self.holders.push(account.to_string());
-            self.holders.sort();
-        }
-        let exposed = self.exposed.get_or_insert_with(Vec::new);
-        if !exposed.iter().any(|known| known == account) {
-            exposed.push(account.to_string());
-            exposed.sort();
-        }
-    }
-}
-
-/// After the record's verified state moved (`before`: the member accounts
-/// until then, `None` for a first state): the delivery capability is
-/// retired when an account that may hold it isn't a member now. One taken
-/// from the group list counts as held by every member of the first state
-/// this device sees with it.
-fn settle_delivery(
-    record: &mut GroupRecordV1,
-    before: Option<Vec<String>>,
-) -> Result<(), GroupError> {
-    if record.delivery.is_none() {
-        return Ok(());
-    }
-    let after: Vec<String> = member_accounts(record)?
-        .iter()
-        .map(ToString::to_string)
-        .collect();
-    let book = record.delivery.as_mut().expect("checked above");
-    let exposed = book
-        .exposed
-        .get_or_insert_with(|| before.unwrap_or_else(|| after.clone()));
-    if exposed.iter().any(|account| !after.contains(account)) {
-        record.delivery = None;
-    }
-    Ok(())
-}
-
-/// A member's capability as this device holds it.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct HeldCapability {
-    pub capability: SecretText,
-    pub drawn_at_ms: i64,
-}
-
-impl HeldCapability {
-    pub fn bytes(&self) -> Option<[u8; 16]> {
-        decode_exact::<16>("a delivery capability", &self.capability.0).ok()
-    }
+    /// The group send endorsements this device keeps for the group: its own
+    /// upload and the members' it read (docs/plans/group-send-endorsements.md).
+    #[serde(default, skip_serializing_if = "crate::group_endorse::GroupEndorsements::is_empty")]
+    pub endorsements: crate::group_endorse::GroupEndorsements,
 }
 
 /// Which member devices hold this device's current sender key for a group
@@ -627,9 +499,7 @@ pub fn create_group(new: NewGroup<'_>) -> Result<(GroupRecordV1, GroupChangeV1),
         listed_status: None,
         list_due_at_ms: None,
         join_epoch,
-        delivery: None,
-        member_capabilities: Default::default(),
-        listed_delivery_ms: None,
+        endorsements: Default::default(),
     };
     Ok((record, change))
 }
@@ -799,9 +669,7 @@ pub fn record_from_invite(
         listed_status: None,
         list_due_at_ms: None,
         join_epoch,
-        delivery: None,
-        member_capabilities: Default::default(),
-        listed_delivery_ms: None,
+        endorsements: Default::default(),
     };
     if let Some(previous) = previous {
         let replaceable = match &previous.status {
@@ -984,9 +852,7 @@ pub fn record_from_link(
         listed_status: None,
         list_due_at_ms: None,
         join_epoch,
-        delivery: None,
-        member_capabilities: Default::default(),
-        listed_delivery_ms: None,
+        endorsements: Default::default(),
     };
     if let Some(previous) = previous {
         record.state = previous.state.clone();
@@ -1106,15 +972,6 @@ pub fn accept_change(
     let change_hash = change.hash().map_err(record_error)?;
     let group_id = decode_group_id(&record.group_id).map_err(record_error)?;
     let history = record.followed_history()?;
-    let before = match record.verified()? {
-        Some(_) => Some(
-            member_accounts(record)?
-                .iter()
-                .map(ToString::to_string)
-                .collect(),
-        ),
-        None => None,
-    };
     // For a newcomer's change, this is where the notary's state hash is
     // compared with the state this device computed.
     notary
@@ -1129,7 +986,6 @@ pub fn accept_change(
         .map_err(|_| GroupError::Notary)?;
     record.set_verified(&next, change_hash)?;
     record.notary_sequence = Some(notary.identity_sequence);
-    settle_delivery(record, before)?;
     Ok(next)
 }
 
@@ -1196,12 +1052,6 @@ pub fn accept_state(
         .map_err(|_| GroupError::Notary)?;
     record.set_verified(state, change_hash)?;
     record.notary_sequence = Some(notary.identity_sequence);
-    if kept.is_some() {
-        // Joining again: the capability of the earlier membership was
-        // retired when it ended; a new one is drawn.
-        record.delivery = None;
-    }
-    settle_delivery(record, None)?;
     Ok(())
 }
 

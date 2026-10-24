@@ -61,6 +61,9 @@ fn now() -> i64 {
     crate::clock::unix_millis() / 1000
 }
 
+/// The home's endorsement page size in these tests (small, so paging runs).
+const ENDORSEMENT_PAGE: u16 = 3;
+
 /// One device's published keys; one-time prekeys are handed out once each.
 struct HostedDevice {
     registration: RegisterChatDeviceRequestV2,
@@ -112,15 +115,14 @@ pub(crate) struct HostedGroup {
     seen: HashSet<String>,
     /// Avatar blobs by their SHA-256 (base64): the current one and uploads.
     avatars: BTreeMap<String, Vec<u8>>,
+    /// The members' endorsement blobs: (seq, pseudonym, expiration, sealed),
+    /// at most two per pseudonym.
+    endorsements: Vec<(u64, String, u64, String)>,
 }
 
 /// One account's group list as its server keeps it: entry id → (revision,
 /// envelope).
 pub(crate) type GroupList = BTreeMap<String, (u64, String)>;
-
-/// One capability change an account made: the account, the hashes added,
-/// the hashes removed.
-type CapabilityChange = (String, Vec<[u8; 32]>, Vec<[u8; 32]>);
 
 /// The one server of these tests.
 pub(crate) struct World {
@@ -152,23 +154,25 @@ pub(crate) struct World {
     pub(crate) pin_writes: Cell<usize>,
     /// How many sealed batches were sent.
     pub(crate) batches: Cell<usize>,
-    /// Multi-recipient requests taken (slice 2), and each account's
-    /// published group capability hashes.
+    /// Multi-recipient requests taken (slice 2).
     pub(crate) multi_requests: Cell<usize>,
-    /// A server without the multi-recipient route (an older one): it takes
-    /// no group capabilities, so every group message goes pairwise.
+    /// A server without the multi-recipient route (an older one): it issues
+    /// no group send endorsements, so every group message goes pairwise.
     pub(crate) no_multi_route: Cell<bool>,
     /// Answers the multi-recipient route gives next, before looking at the
     /// request (a destination that didn't answer, a request too large, a
     /// budget spent).
     pub(crate) multi_answers:
         RefCell<std::collections::VecDeque<crate::transport::MultiSendOutcome>>,
-    pub(crate) group_capabilities: RefCell<BTreeMap<String, Vec<[u8; 32]>>>,
-    /// The most capability hashes the server keeps for one account (`None`:
-    /// no limit); a change past it is refused whole.
-    pub(crate) capability_limit: Cell<Option<usize>>,
-    /// Every capability change an account made: (account, added, removed).
-    pub(crate) capability_changes: RefCell<Vec<CapabilityChange>>,
+    /// The server's group send endorsement key (key id 1), and the one it
+    /// rotated from (key id 0) while that still verifies.
+    pub(crate) group_send_key: RefCell<kutup_group_send::ServerKey>,
+    pub(crate) previous_group_send_key: RefCell<Option<kutup_group_send::ServerKey>>,
+    /// Endorsements issued, and blobs the group home took.
+    pub(crate) endorsements_issued: Cell<usize>,
+    pub(crate) endorsement_uploads: Cell<usize>,
+    /// The home's upload order of endorsement blobs.
+    pub(crate) endorsement_seq: Cell<u64>,
     /// How many whole states the group home was asked for.
     pub(crate) state_requests: Cell<usize>,
     /// How many changes the group home took.
@@ -284,9 +288,11 @@ impl World {
             multi_requests: Cell::new(0),
             no_multi_route: Cell::new(false),
             multi_answers: RefCell::new(Default::default()),
-            group_capabilities: RefCell::new(BTreeMap::new()),
-            capability_changes: RefCell::new(Vec::new()),
-            capability_limit: Cell::new(None),
+            group_send_key: RefCell::new(kutup_group_send::ServerKey::generate()),
+            previous_group_send_key: RefCell::new(None),
+            endorsements_issued: Cell::new(0),
+            endorsement_uploads: Cell::new(0),
+            endorsement_seq: Cell::new(0),
             state_requests: Cell::new(0),
             group_changes: Cell::new(0),
             group_list_down: Cell::new(false),
@@ -808,6 +814,7 @@ impl World {
                             .map(|member| member.pseudonym.clone())
                             .collect(),
                         avatars: BTreeMap::new(),
+                        endorsements: Vec::new(),
                     },
                 );
                 Self::ok(
@@ -815,6 +822,109 @@ impl World {
                         state: STANDARD.encode(genesis.canonical_bytes().unwrap()),
                         change: STANDARD.encode(change.canonical_bytes().unwrap()),
                         notary,
+                    }
+                    .canonical_bytes()
+                    .unwrap(),
+                )
+            }
+            // The members' endorsement blobs, as the home keeps them
+            // (docs/plans/group-send-endorsements.md §3.3).
+            GroupOperationV1::PutEndorsement => {
+                use kutup_chat_proto::group_send::{
+                    GroupEndorsementUploadV1, ENDORSEMENT_EXPIRATION, ENDORSEMENT_SIZE,
+                };
+                let Some(group) = groups.get_mut(&group_id) else {
+                    return Self::status(GroupResponseStatusV1::NotFound);
+                };
+                if group.state.member(pseudonym).is_none() {
+                    return Self::status(GroupResponseStatusV1::NotFound);
+                }
+                let Some(upload) = request
+                    .body()
+                    .ok()
+                    .and_then(|body| GroupEndorsementUploadV1::from_canonical_bytes(&body).ok())
+                else {
+                    return GroupResponseV1::refused("malformed", now());
+                };
+                if kutup_group_send::check_expiration(upload.expiration, now() as u64).is_err() {
+                    return GroupResponseV1::refused(ENDORSEMENT_EXPIRATION, now());
+                }
+                if upload.sealed_bytes().is_err() {
+                    return GroupResponseV1::refused(ENDORSEMENT_SIZE, now());
+                }
+                self.endorsement_uploads
+                    .set(self.endorsement_uploads.get() + 1);
+                let seq = self.endorsement_seq.get() + 1;
+                self.endorsement_seq.set(seq);
+                group.endorsements.retain(|(_, owner, expiration, _)| {
+                    !(owner == pseudonym && *expiration == upload.expiration)
+                });
+                group.endorsements.push((
+                    seq,
+                    pseudonym.clone(),
+                    upload.expiration,
+                    upload.sealed,
+                ));
+                // Two per pseudonym: a third replaces the oldest.
+                loop {
+                    let mine: Vec<u64> = group
+                        .endorsements
+                        .iter()
+                        .filter(|(_, owner, _, _)| owner == pseudonym)
+                        .map(|(_, _, expiration, _)| *expiration)
+                        .collect();
+                    if mine.len() <= 2 {
+                        break;
+                    }
+                    let oldest = *mine.iter().min().unwrap();
+                    group.endorsements.retain(|(_, owner, expiration, _)| {
+                        !(owner == pseudonym && *expiration == oldest)
+                    });
+                }
+                Self::ok(Vec::new())
+            }
+            GroupOperationV1::GetEndorsements => {
+                use kutup_chat_proto::group_send::{
+                    GroupEndorsementPageV1, GroupEndorsementQueryV1, GroupEndorsementV1,
+                };
+                let Some(group) = groups.get(&group_id) else {
+                    return Self::status(GroupResponseStatusV1::NotFound);
+                };
+                if group.state.member(pseudonym).is_none() {
+                    return Self::status(GroupResponseStatusV1::NotFound);
+                }
+                let Some(query) = request
+                    .body()
+                    .ok()
+                    .and_then(|body| GroupEndorsementQueryV1::from_canonical_bytes(&body).ok())
+                else {
+                    return GroupResponseV1::refused("malformed", now());
+                };
+                // The home's page size (a site setting there).
+                let limit = usize::from(query.limit.min(ENDORSEMENT_PAGE));
+                // A member's blobs go when it leaves (in the removal there).
+                let mut endorsements: Vec<GroupEndorsementV1> = group
+                    .endorsements
+                    .iter()
+                    .filter(|(seq, owner, _, _)| {
+                        *seq > query.after && group.state.member(owner).is_some()
+                    })
+                    .map(|(seq, owner, expiration, sealed)| GroupEndorsementV1 {
+                        pseudonym: owner.clone(),
+                        expiration: *expiration,
+                        sealed: sealed.clone(),
+                        seq: *seq,
+                    })
+                    .collect();
+                endorsements.sort_by_key(|endorsement| endorsement.seq);
+                let more = endorsements.len() > limit;
+                endorsements.truncate(limit);
+                let next_after = endorsements.last().map_or(query.after, |last| last.seq);
+                Self::ok(
+                    GroupEndorsementPageV1 {
+                        endorsements,
+                        more,
+                        next_after,
                     }
                     .canonical_bytes()
                     .unwrap(),
@@ -1528,60 +1638,57 @@ impl ChatTransport for Client {
         Ok(true)
     }
 
-    /// The account's published group capabilities, changed as the server
-    /// changes them: both lists in one step, adding one there or removing
-    /// one not there changing nothing.
-    async fn change_group_capabilities(
+    /// This account's endorsement for today, as its server issues it.
+    async fn fetch_group_send_endorsement(
         &self,
-        add: &[String],
-        remove: &[String],
-    ) -> Result<crate::transport::GroupCapabilitiesOutcome> {
+    ) -> Result<kutup_chat_proto::group_send::GroupSendEndorsementResponseV1> {
         if self.world.no_multi_route.get() {
             return Err(ChatError::Transport("404 Not Found".into()));
         }
-        let decode = |hashes: &[String]| -> Result<Vec<[u8; 32]>> {
-            hashes
-                .iter()
-                .map(|hash| {
-                    STANDARD
-                        .decode(hash)
-                        .ok()
-                        .and_then(|bytes| bytes.try_into().ok())
-                        .ok_or_else(|| ChatError::Transport("malformed capability hash".into()))
-                })
-                .collect()
-        };
-        let (add, remove) = (decode(add)?, decode(remove)?);
-        self.world.capability_changes.borrow_mut().push((
-            self.account.clone(),
-            add.clone(),
-            remove.clone(),
-        ));
-        let mut all = self.world.group_capabilities.borrow_mut();
-        let published = all.entry(self.account.clone()).or_default();
-        let mut next = published.clone();
-        next.retain(|hash| !remove.contains(hash));
-        for hash in add {
-            if !next.contains(&hash) {
-                next.push(hash);
-            }
-        }
-        if self
-            .world
-            .capability_limit
-            .get()
-            .is_some_and(|limit| next.len() > limit)
-        {
-            return Ok(crate::transport::GroupCapabilitiesOutcome::LimitReached);
-        }
-        *published = next;
-        let count = u32::try_from(published.len()).unwrap_or(u32::MAX);
-        Ok(crate::transport::GroupCapabilitiesOutcome::Changed { count })
+        let account = crate::address::parse_account(&self.account)?;
+        let issued = self.world.group_send_key.borrow().issue(
+            uuid::Uuid::parse_str(&account.account_id).unwrap(),
+            now() as u64,
+        );
+        self.world
+            .endorsements_issued
+            .set(self.world.endorsements_issued.get() + 1);
+        Ok(kutup_chat_proto::group_send::GroupSendEndorsementResponseV1 {
+            key_id: 1,
+            expiration: issued.expiration,
+            response: STANDARD.encode(issued.response),
+        })
     }
 
-    /// The multi-recipient route as the server applies it: capabilities
-    /// first (refused), then devices (409, 410: nothing stored), then each
-    /// device's copy, assembled from the payload as Signal-Server does.
+    /// The server's keys: the current one (id 1), and the previous one (id
+    /// 0) while it still verifies.
+    async fn fetch_group_send_params(
+        &self,
+        server: Option<&str>,
+    ) -> Result<Option<kutup_chat_proto::group_send::GroupSendParamsV1>> {
+        use kutup_chat_proto::group_send::{GroupSendKeyV1, GroupSendParamsV1};
+        if self.world.no_multi_route.get() {
+            return Err(ChatError::Transport("404 Not Found".into()));
+        }
+        if server.is_some_and(|server| server != SERVER) {
+            return Ok(None);
+        }
+        let key = |key_id, key: &kutup_group_send::ServerKey| GroupSendKeyV1 {
+            key_id,
+            endorsement_public_key: STANDARD.encode(key.public_key().to_bytes()),
+            issues_until: u64::MAX,
+        };
+        let mut keys = vec![key(1, &self.world.group_send_key.borrow())];
+        if let Some(previous) = self.world.previous_group_send_key.borrow().as_ref() {
+            keys.push(key(0, previous));
+        }
+        Ok(Some(GroupSendParamsV1 { keys }))
+    }
+
+    /// The multi-recipient route as the server applies it: the token over
+    /// every recipient first (401 `groupSendTokenInvalid`), then devices
+    /// (409, 410: nothing stored), then each device's copy, assembled from
+    /// the payload as Signal-Server does.
     async fn send_sealed_multi(
         &self,
         server: &str,
@@ -1601,27 +1708,27 @@ impl ChatTransport for Client {
         let sent = libsignal_protocol::SealedSenderV2SentMessage::parse(&payload)
             .map_err(|error| ChatError::Transport(error.to_string()))?;
         assert_eq!(sent.version, 0x23);
+        assert!(submission.capabilities.is_empty(), "a token, not capabilities");
+        let recipients: Vec<uuid::Uuid> = sent
+            .recipients
+            .keys()
+            .map(|service_id| uuid::Uuid::parse_str(&service_id.service_id_string()).unwrap())
+            .collect();
+        let token = submission
+            .group_send_token_bytes()
+            .map_err(ChatError::Transport)?;
+        let current = self.world.group_send_key.borrow().clone();
+        let previous = self.world.previous_group_send_key.borrow().clone();
+        let mut keys = vec![&current];
+        keys.extend(previous.as_ref());
+        if kutup_group_send::verify_token(&keys, &token, &recipients, now() as u64).is_err() {
+            return Ok(MultiSendOutcome::TokenInvalid);
+        }
         let mut response = SealedMultiResponseV1::default();
         let mut deliver = Vec::new();
         for (service_id, recipient) in &sent.recipients {
             let account_id = service_id.service_id_string();
             let account = format!("aci:{account_id}@{server}");
-            let holds = submission
-                .capabilities
-                .get(&account_id)
-                .and_then(|capability| STANDARD.decode(capability).ok())
-                .is_some_and(|capability| {
-                    let hash: [u8; 32] = sha2::Sha256::digest(&capability).into();
-                    self.world
-                        .group_capabilities
-                        .borrow()
-                        .get(&account)
-                        .is_some_and(|hashes| hashes.contains(&hash))
-                });
-            if !holds {
-                response.refused.push(account_id);
-                continue;
-            }
             let devices: Vec<(u32, u32)> = recipient
                 .devices
                 .iter()
@@ -1670,12 +1777,7 @@ impl ChatTransport for Client {
                 account.clone(),
                 SealedMessageSubmissionV1 {
                     send_id: submission.send_id.clone(),
-                    capability: submission
-                        .capabilities
-                        .values()
-                        .next()
-                        .cloned()
-                        .unwrap_or_default(),
+                    capability: String::new(),
                     envelopes: Vec::new(),
                 },
             ));
@@ -3179,19 +3281,31 @@ fn group_third_a_disappearing_group_message_leaves_the_send_log() {
 
 // ----- the multi-recipient route (slice 2) -----
 
-/// The hash of a capability, as the server keeps it.
-fn capability_hash(capability: &[u8; 16]) -> [u8; 32] {
-    sha2::Sha256::digest(capability).into()
-}
-
-/// The capability `holder` holds for `member` in the group.
-fn held_by(holder: &Person, group_id: &str, member: &Person) -> Option<[u8; 16]> {
+/// Whether `holder` keeps a usable endorsement of `member` for the group.
+fn endorsed_by(holder: &Person, group_id: &str, member: &Person) -> bool {
     let record = block_on(holder.engine.load_group_record(group_id)).unwrap();
-    Engine::held_capability(&record, &member.account)
+    record
+        .endorsements
+        .usable(&member.account, now() as u64)
+        .is_some()
 }
 
-/// A group of four on one server whose members each sent once, so every
-/// member holds the others' capabilities.
+/// Each of `people` shares its endorsement with the group and reads the
+/// others' now, as the periodic look does (the throttles reset).
+fn refresh_endorsements(people: &mut [&mut Person], group_id: &str) {
+    for person in people.iter_mut() {
+        person.engine.endorsement_cache = Default::default();
+        block_on(
+            person
+                .engine
+                .refresh_group_send_endorsements(group_id, true),
+        )
+        .unwrap();
+    }
+}
+
+/// A group of four on one server whose members each sent once and read the
+/// others' endorsements, so every member holds the others'.
 fn exchanged_group(world: &Rc<World>) -> (Person, Person, Person, Person, String) {
     let mut alice = world.person(0xa1);
     let mut bob = world.person(0xb2);
@@ -3203,19 +3317,21 @@ fn exchanged_group(world: &Rc<World>) -> (Person, Person, Person, Person, String
         person.send_text(&group_id, "hello");
     }
     deliver_all(&mut [&mut alice, &mut bob, &mut carol, &mut dave]);
+    refresh_endorsements(&mut [&mut alice, &mut bob, &mut carol, &mut dave], &group_id);
     (alice, bob, carol, dave, group_id)
 }
 
 #[test]
-fn group_multi_one_request_reaches_every_member_once_they_hold_capabilities() {
+fn group_multi_one_request_reaches_every_member_once_they_hold_endorsements() {
     let world = World::new();
     let (mut alice, mut bob, mut carol, mut dave, group_id) = exchanged_group(&world);
     for member in [&bob, &carol, &dave] {
-        let held = held_by(&alice, &group_id, member).expect("a capability held");
-        let published = world.group_capabilities.borrow()[&member.account].clone();
-        assert!(published.contains(&capability_hash(&held)));
-        assert_eq!(published.len() % 8, 0, "padded");
+        assert!(endorsed_by(&alice, &group_id, member));
     }
+    // Each account's server issued one endorsement, shared once per group
+    // (four blobs, read in pages of three).
+    assert_eq!(world.endorsements_issued.get(), 4);
+    assert_eq!(world.endorsement_uploads.get(), 4);
     let (multi, batches) = (world.multi_requests.get(), world.batches.get());
     alice.send_text(&group_id, "once for all");
     assert_eq!(world.multi_requests.get() - multi, 1, "one request");
@@ -3266,62 +3382,134 @@ fn group_multi_own_devices_get_their_copy_pairwise() {
         .all(|leg| leg.multi && leg.delivered));
 }
 
-/// A member who leaves takes the group's capability off its server, and the
-/// others draw new ones: what it held reaches nobody any more.
+/// A member who leaves is read no more: its blob goes with it, the others
+/// drop its endorsement, and it can't read theirs any more.
 #[test]
-fn group_multi_leaving_unpublishes_and_the_others_draw_anew() {
+fn group_multi_a_member_who_leaves_is_read_no_more() {
     let world = World::new();
     let (mut alice, mut bob, mut carol, mut dave, group_id) = exchanged_group(&world);
-    let bobs = held_by(&alice, &group_id, &bob).unwrap();
-    let alices_held_by_bob = held_by(&bob, &group_id, &alice).unwrap();
     block_on(bob.engine.leave_group(&group_id, &mut rng())).unwrap();
     deliver_all(&mut [&mut alice, &mut bob, &mut carol, &mut dave]);
-    assert!(!world.group_capabilities.borrow()[&bob.account].contains(&capability_hash(&bobs)));
-    alice.send_text(&group_id, "after bob");
+    refresh_endorsements(&mut [&mut alice], &group_id);
+    assert!(!endorsed_by(&alice, &group_id, &bob));
+    assert!(endorsed_by(&alice, &group_id, &carol));
+    let multi = world.multi_requests.get();
+    let send_id = alice.send_text(&group_id, "after bob");
+    assert_eq!(world.multi_requests.get() - multi, 1);
+    assert!(!reached(&world, &send_id).contains(&bob.account));
     deliver_all(&mut [&mut alice, &mut carol, &mut dave]);
-    let published = world.group_capabilities.borrow()[&alice.account].clone();
-    assert!(!published.contains(&capability_hash(&alices_held_by_bob)));
-    let new = held_by(&carol, &group_id, &alice).unwrap();
-    assert_ne!(new, alices_held_by_bob);
-    assert!(published.contains(&capability_hash(&new)));
+    assert!(carol
+        .group_texts(&group_id)
+        .contains(&"after bob".to_string()));
 }
 
-/// A capability the server refuses (the member drew a new one this device
-/// didn't get): that copy goes pairwise at once, the member is asked for its
-/// current one, and the next message goes on the route again.
+/// A token the destination refuses: the copies go pairwise in the same
+/// send, and the endorsements it was made of are dropped.
 #[test]
-fn group_multi_a_refused_capability_goes_pairwise_and_is_asked_for_again() {
+fn group_multi_a_refused_token_goes_pairwise_and_drops_its_endorsements() {
+    use crate::transport::MultiSendOutcome;
     let world = World::new();
     let (mut alice, mut bob, mut carol, mut dave, group_id) = exchanged_group(&world);
-    // Alice holds a capability of Bob's that isn't his any more (a redraw
-    // whose hand-out she missed).
-    let mut record = block_on(alice.engine.load_group_record(&group_id)).unwrap();
-    record.member_capabilities.insert(
-        bob.account.clone(),
-        crate::group::HeldCapability {
-            capability: crate::group::SecretText(STANDARD.encode([9u8; 16])),
-            drawn_at_ms: 1,
-        },
-    );
-    block_on(alice.engine.save_group(&record)).unwrap();
+    world
+        .multi_answers
+        .borrow_mut()
+        .push_back(MultiSendOutcome::TokenInvalid);
     let send_id = alice.send_text(&group_id, "refused once");
-    assert!(
-        reached(&world, &send_id).contains(&bob.account),
-        "pairwise to Bob"
-    );
+    assert_eq!(reached(&world, &send_id).len(), 3, "pairwise to all three");
     deliver_all(&mut [&mut alice, &mut bob, &mut carol, &mut dave]);
     assert!(bob
         .group_texts(&group_id)
         .contains(&"refused once".to_string()));
-    // Bob answered the request with his next message's hand-out.
-    bob.send_text(&group_id, "here it is");
-    deliver_all(&mut [&mut alice, &mut bob, &mut carol, &mut dave]);
-    let held = held_by(&alice, &group_id, &bob).expect("asked for and given again");
-    assert!(world.group_capabilities.borrow()[&bob.account].contains(&capability_hash(&held)));
+    for member in [&bob, &carol, &dave] {
+        assert!(!endorsed_by(&alice, &group_id, member));
+    }
     let (multi, batches) = (world.multi_requests.get(), world.batches.get());
-    alice.send_text(&group_id, "back on the route");
+    alice.send_text(&group_id, "pairwise meanwhile");
+    assert_eq!(world.multi_requests.get() - multi, 0);
+    assert!(world.batches.get() > batches);
+}
+
+/// The server rotates its key: tokens from endorsements of the old one
+/// verify while it is in its window; after, the destination refuses them
+/// and the copies go pairwise.
+#[test]
+fn group_multi_a_rotated_key_verifies_in_its_window_only() {
+    let world = World::new();
+    let (mut alice, mut bob, mut carol, mut dave, group_id) = exchanged_group(&world);
+    let old = world.group_send_key.replace(kutup_group_send::ServerKey::generate());
+    *world.previous_group_send_key.borrow_mut() = Some(old);
+    let (multi, batches) = (world.multi_requests.get(), world.batches.get());
+    alice.send_text(&group_id, "in the window");
     assert_eq!(world.multi_requests.get() - multi, 1);
-    assert_eq!(world.batches.get() - batches, 0);
+    assert_eq!(world.batches.get(), batches, "nothing pairwise");
+    *world.previous_group_send_key.borrow_mut() = None;
+    let send_id = alice.send_text(&group_id, "after the window");
+    assert!(world.batches.get() > batches, "pairwise");
+    assert_eq!(reached(&world, &send_id).len(), 3, "to all three");
+    deliver_all(&mut [&mut alice, &mut bob, &mut carol, &mut dave]);
+    for person in [&bob, &carol, &dave] {
+        let texts = person.group_texts(&group_id);
+        assert!(texts.contains(&"in the window".to_string()));
+        assert!(texts.contains(&"after the window".to_string()));
+    }
+}
+
+/// A blob under a member's pseudonym that isn't that member's endorsement
+/// (junk, or another account's response) is never used.
+#[test]
+fn group_multi_a_blob_that_isnt_its_members_is_dropped() {
+    use kutup_crypto::chat_group::SealedField;
+    let world = World::new();
+    let mut alice = world.person(0xa1);
+    let mut bob = world.person(0xb2);
+    let mut carol = world.person(0xc3);
+    let group_id = group_of(&mut alice, &mut [&mut bob, &mut carol]);
+    deliver_all(&mut [&mut alice, &mut bob, &mut carol]);
+    // Bob uploads Carol's endorsement as his own, and then junk.
+    let carols = world.group_send_key.borrow().issue(
+        uuid::Uuid::parse_str(&crate::address::parse_account(&carol.account).unwrap().account_id)
+            .unwrap(),
+        now() as u64,
+    );
+    let mut record = block_on(bob.engine.load_group_record(&group_id)).unwrap();
+    let pseudonym = record.pseudonym().unwrap().public_key();
+    let blob = kutup_group_send::EndorsementBlob {
+        server: SERVER.to_string(),
+        key_id: 1,
+        response: carols.response,
+    }
+    .encode()
+    .unwrap();
+    let state_key = record.master().unwrap().state_key();
+    for plain in [blob.to_vec(), vec![7u8; kutup_group_send::ENDORSEMENT_BLOB_BYTES]] {
+        let sealed = state_key
+            .seal(SealedField::Endorsement, &pseudonym, &plain)
+            .unwrap();
+        let body = kutup_chat_proto::group_send::GroupEndorsementUploadV1 {
+            expiration: carols.expiration,
+            sealed: STANDARD.encode(sealed),
+        }
+        .canonical_bytes()
+        .unwrap();
+        let answer = block_on(bob.engine.group_request(
+            &mut record,
+            GroupOperationV1::PutEndorsement,
+            &body,
+        ))
+        .unwrap()
+        .unwrap();
+        assert_eq!(answer.status, GroupResponseStatusV1::Ok);
+    }
+    alice.engine.endorsement_cache = Default::default();
+    block_on(
+        alice
+            .engine
+            .refresh_group_send_endorsements(&group_id, true),
+    )
+    .unwrap();
+    assert!(!endorsed_by(&alice, &group_id, &bob));
+    // Carol's own blob is hers, and taken.
+    assert!(endorsed_by(&alice, &group_id, &carol));
 }
 
 /// A destination that doesn't answer, or a request too large: the copies go
@@ -6111,154 +6299,6 @@ fn group_removal_a_forged_or_misplaced_removal_is_not_taken() {
     deliver(&mut carol, &real, &notary);
     assert_eq!(carol.status(&group_id), GroupStatus::Gone);
 }
-// Capability lifecycle (security review of #334).
-
-/// A device that took the capability from the list never rotates it when a
-/// holder is removed: its holders list is empty.
-#[test]
-fn group_multi_a_removal_retires_the_capability_on_every_device() {
-    let world = World::new();
-    let (mut alice, mut bob, mut carol, mut dave, group_id) = exchanged_group(&world);
-    let mut alice2 = world.link_device(&mut alice);
-    deliver_all(&mut [&mut alice, &mut alice2, &mut bob, &mut carol, &mut dave]);
-    alice.flush_list();
-    block_on(alice2.engine.sync_group_list(&mut rng())).unwrap();
-    assert_eq!(alice2.status(&group_id), GroupStatus::Member);
-    let alices = held_by(&bob, &group_id, &alice).unwrap();
-    let bobs = pseudonym_of(&mut alice, &group_id, &bob);
-    block_on(
-        alice
-            .engine
-            .remove_group_member(&group_id, &bobs, &mut rng()),
-    )
-    .unwrap();
-    deliver_all(&mut [&mut alice, &mut alice2, &mut carol, &mut dave]);
-    alice2.send_text(&group_id, "from the second device");
-    deliver_all(&mut [&mut alice, &mut alice2, &mut carol, &mut dave]);
-    let published = world.group_capabilities.borrow()[&alice.account].clone();
-    assert!(
-        !published.contains(&capability_hash(&alices)),
-        "removed Bob's copy of Alice's capability is still published"
-    );
-}
-
-/// A device with a stale record republishes a capability another device
-/// rotated out.
-#[test]
-fn group_multi_a_stale_device_never_brings_back_a_retired_capability() {
-    let world = World::new();
-    let (mut alice, mut bob, mut carol, mut dave, group_id) = exchanged_group(&world);
-    let mut alice2 = world.link_device(&mut alice);
-    deliver_all(&mut [&mut alice, &mut alice2, &mut bob, &mut carol, &mut dave]);
-    alice.flush_list();
-    block_on(alice2.engine.sync_group_list(&mut rng())).unwrap();
-    // alice2 publishes once now (its own send), so its "due" flag is clear
-    // only if the publish happened.
-    let alices = held_by(&bob, &group_id, &alice).unwrap();
-    let bobs = pseudonym_of(&mut alice, &group_id, &bob);
-    block_on(
-        alice
-            .engine
-            .remove_group_member(&group_id, &bobs, &mut rng()),
-    )
-    .unwrap();
-    deliver_all(&mut [&mut alice, &mut alice2, &mut carol, &mut dave]);
-    // Device 1 sends: rotates (it handed the old one to Bob).
-    alice.send_text(&group_id, "after bob");
-    let published = world.group_capabilities.borrow()[&alice.account].clone();
-    assert!(
-        !published.contains(&capability_hash(&alices)),
-        "device 1 rotated"
-    );
-    // Device 2 sends before reading the list again.
-    alice2.send_text(&group_id, "from the stale device");
-    let published = world.group_capabilities.borrow()[&alice.account].clone();
-    assert!(
-        !published.contains(&capability_hash(&alices)),
-        "the stale device brought back the capability removed Bob holds"
-    );
-}
-
-/// Dummies change with every draw, so diffing two published sets tells the
-/// real hashes (the ones that stay) from the dummies.
-#[test]
-fn group_multi_padding_survives_set_diffing() {
-    let world = World::new();
-    let (mut alice, mut bob, mut carol, mut dave, group_id) = exchanged_group(&world);
-    let second = group_of(&mut alice, &mut [&mut carol]);
-    deliver_all(&mut [&mut alice, &mut bob, &mut carol, &mut dave]);
-    alice.send_text(&second, "second group");
-    carol.send_text(&second, "second group");
-    deliver_all(&mut [&mut alice, &mut bob, &mut carol, &mut dave]);
-    let before = world.group_capabilities.borrow()[&alice.account].clone();
-    block_on(bob.engine.leave_group(&group_id, &mut rng())).unwrap();
-    deliver_all(&mut [&mut alice, &mut bob, &mut carol, &mut dave]);
-    alice.send_text(&group_id, "redraw");
-    let after = world.group_capabilities.borrow()[&alice.account].clone();
-    let kept: Vec<_> = before.iter().filter(|hash| after.contains(hash)).collect();
-    let record = block_on(alice.engine.load_group_record(&second)).unwrap();
-    let real = capability_hash(&record.delivery.unwrap().bytes().unwrap());
-    assert!(
-        !(kept.len() == 1 && *kept[0] == real),
-        "the only hash kept across two sets is the second group's real one"
-    );
-}
-
-/// A leave made while the account's server can't be reached comes off it
-/// later: the removal is kept in the store until the server takes it.
-#[test]
-fn group_multi_a_leave_while_the_server_is_away_comes_off_later() {
-    let world = World::new();
-    let (mut alice, mut bob, mut carol, mut dave, group_id) = exchanged_group(&world);
-    let bobs = held_by(&alice, &group_id, &bob).unwrap();
-    world.no_multi_route.set(true);
-    block_on(bob.engine.leave_group(&group_id, &mut rng())).unwrap();
-    assert!(world.group_capabilities.borrow()[&bob.account].contains(&capability_hash(&bobs)));
-    let owed = block_on(bob.engine.capability_ledger()).unwrap();
-    assert!(owed
-        .remove
-        .contains(&STANDARD.encode(capability_hash(&bobs))));
-    world.no_multi_route.set(false);
-    block_on(bob.engine.flush_group_capabilities()).unwrap();
-    assert!(!world.group_capabilities.borrow()[&bob.account].contains(&capability_hash(&bobs)));
-    assert!(block_on(bob.engine.capability_ledger())
-        .unwrap()
-        .remove
-        .is_empty());
-    deliver_all(&mut [&mut alice, &mut bob, &mut carol, &mut dave]);
-}
-
-/// Over the account's limit, a retired capability still comes off the
-/// server; the new one waits, and isn't handed out meanwhile.
-#[test]
-fn group_multi_at_the_limit_removals_still_go_and_new_capabilities_wait() {
-    let world = World::new();
-    let (mut alice, mut bob, mut carol, mut dave, group_id) = exchanged_group(&world);
-    let alices = held_by(&carol, &group_id, &alice).unwrap();
-    let published = world.group_capabilities.borrow()[&alice.account].len();
-    world.capability_limit.set(Some(published - 1));
-    block_on(bob.engine.leave_group(&group_id, &mut rng())).unwrap();
-    deliver_all(&mut [&mut alice, &mut bob, &mut carol, &mut dave]);
-    assert!(
-        !world.group_capabilities.borrow()[&alice.account].contains(&capability_hash(&alices)),
-        "the retired one came off"
-    );
-    alice.send_text(&group_id, "after bob");
-    deliver_all(&mut [&mut alice, &mut carol, &mut dave]);
-    assert!(block_on(alice.engine.group_capability_limit_reached()).unwrap());
-    let record = block_on(alice.engine.load_group_record(&group_id)).unwrap();
-    let new = record.delivery.unwrap().bytes().unwrap();
-    assert!(!world.group_capabilities.borrow()[&alice.account].contains(&capability_hash(&new)));
-    assert_ne!(
-        held_by(&carol, &group_id, &alice),
-        Some(new),
-        "not handed out unpublished"
-    );
-    assert!(carol
-        .group_texts(&group_id)
-        .contains(&"after bob".to_string()));
-}
-
 /// A 409 that names only other accounts' devices stored nothing for these
 /// legs either: they wait and count it, never going round at once.
 #[test]

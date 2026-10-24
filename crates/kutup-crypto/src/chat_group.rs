@@ -345,40 +345,6 @@ impl GroupPseudonymKey {
     }
 }
 
-const DELIVERY_PADDING_SALT: &[u8] = b"kutup/chat-group-delivery-padding/v1\0";
-
-/// An account's padding for its published group delivery capabilities
-/// (docs/plans/pairwise-groups.md, "Slice 2"): its server holds the hashes of
-/// its capabilities, one per group, rounded up to a multiple of 8 with
-/// dummies, so the count doesn't tell how many groups it is in. A dummy is
-/// HKDF-SHA256 over the account master key, salt
-/// `kutup/chat-group-delivery-padding/v1\0`, info the epoch (u64 big-endian)
-/// then the slot (u32 big-endian), 32 bytes: every device of the account
-/// makes the same ones, and a new epoch (each capability drawn) changes them
-/// all. Nobody without the account key can tell a dummy from a hash.
-pub struct DeliveryPaddingKey {
-    hkdf: Hkdf<Sha256>,
-}
-
-impl DeliveryPaddingKey {
-    pub fn derive(account_master_key: &[u8; 32]) -> Self {
-        Self {
-            hkdf: Hkdf::<Sha256>::new(Some(DELIVERY_PADDING_SALT), account_master_key),
-        }
-    }
-
-    /// The dummy hash in `slot`. The same for as long as the account keeps
-    /// it, so two published sets differ only where a real capability or a
-    /// slot changed: diffing them never tells the dummies apart.
-    pub fn dummy(&self, slot: u32) -> [u8; 32] {
-        let mut out = [0u8; 32];
-        self.hkdf
-            .expand(&slot.to_be_bytes(), &mut out)
-            .expect("HKDF output length is fixed and valid");
-        out
-    }
-}
-
 /// What a change's actor signs: the domain, then the change's canonical bytes
 /// without its signature.
 pub fn change_signed_bytes(change_bytes: &[u8]) -> Vec<u8> {
@@ -593,18 +559,6 @@ pub fn avatar_blob_hash(blob: &[u8]) -> [u8; HASH_LEN] {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn delivery_padding_is_the_accounts_own_and_one_per_slot() {
-        let key = DeliveryPaddingKey::derive(&[1u8; 32]);
-        let again = DeliveryPaddingKey::derive(&[1u8; 32]);
-        assert_eq!(key.dummy(0), again.dummy(0), "every device makes the same");
-        assert_ne!(key.dummy(0), key.dummy(1));
-        assert_ne!(
-            key.dummy(0),
-            DeliveryPaddingKey::derive(&[2u8; 32]).dummy(0)
-        );
-    }
 
     const HOME: GroupHome<'static> = GroupHome {
         server: "home.example",

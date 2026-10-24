@@ -42,17 +42,10 @@ pub enum MultiSendOutcome {
     TooLarge,
     /// `429`: this address's budget for the route is spent; later.
     RateLimited,
-}
-
-/// The result of changing this account's published group capabilities.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-#[serde(rename_all = "camelCase", tag = "kind")]
-pub enum GroupCapabilitiesOutcome {
-    /// Taken: the account now publishes `count` hashes.
-    Changed { count: u32 },
-    /// `409 capabilityLimit`: more than the server takes for one account;
-    /// nothing changed.
-    LimitReached,
+    /// `401 groupSendTokenInvalid`: the destination didn't take the group
+    /// send token (an endorsement expired or replaced, a recipient it doesn't
+    /// cover); nothing stored, the copies go pairwise.
+    TokenInvalid,
 }
 
 /// The result of a `POST …/messages`. A `409 DeviceListMismatch` is modeled as a
@@ -337,16 +330,26 @@ pub trait ChatTransport {
         ))
     }
 
-    /// `PUT /api/chat/group-capabilities`: adds and removes these hashes
-    /// (canonical base64 SHA-256 of each capability, or a padding dummy) in
-    /// one change of this account's group capabilities on its server.
-    async fn change_group_capabilities(
+    /// `GET /api/chat/group-send/endorsement`: this account's group send
+    /// endorsement for today, from its own server
+    /// (docs/plans/group-send-endorsements.md §3.2).
+    async fn fetch_group_send_endorsement(
         &self,
-        _add: &[String],
-        _remove: &[String],
-    ) -> Result<GroupCapabilitiesOutcome> {
+    ) -> Result<kutup_chat_proto::group_send::GroupSendEndorsementResponseV1> {
         Err(crate::ChatError::Transport(
-            "transport does not implement group capabilities".into(),
+            "transport does not implement group send endorsements".into(),
+        ))
+    }
+
+    /// `GET /api/chat/group-send/params[?server={server}]`: the endorsement
+    /// keys of this account's server (`None`), or of another one from its
+    /// verified discovery; `Ok(None)` when that server publishes none.
+    async fn fetch_group_send_params(
+        &self,
+        _server: Option<&str>,
+    ) -> Result<Option<kutup_chat_proto::group_send::GroupSendParamsV1>> {
+        Err(crate::ChatError::Transport(
+            "transport does not implement group send endorsements".into(),
         ))
     }
 

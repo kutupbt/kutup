@@ -103,6 +103,15 @@ pub(crate) struct Recipient {
     pub(crate) pseudonym: Option<String>,
 }
 
+/// A leg on its way to the multi-recipient route: its account, devices, and
+/// the endorsement its token is combined from.
+struct MultiLeg {
+    index: usize,
+    parsed: kutup_chat_proto::AccountRef,
+    bundles: Vec<DevicePreKeyBundle>,
+    endorsement: kutup_group_send::Endorsement,
+}
+
 fn group_err(error: group::GroupError) -> ChatError {
     ChatError::Invalid(error.to_string())
 }
@@ -524,14 +533,30 @@ impl Engine {
         let distribution_id = self
             .distribute_sender_key(record, &recipients, &certificate, rng)
             .await?;
-        // This account's capability for the multi-recipient route, published
-        // (when it changed) and then handed to the members who don't hold it
-        // yet. Best effort: the message goes either way (to this account
-        // pairwise meanwhile), and it is tried again with the next one.
-        let _ = self
-            .hand_out_delivery(record, &recipients, &certificate, rng)
-            .await;
+        // This account's endorsement shared with the home, and the members'
+        // read, so each server's members get one shared copy. Best effort: a
+        // member without a usable endorsement gets a pairwise copy, and it is
+        // tried again with the next message.
+        let now_s = u64::try_from(self.now_ms() / 1000).unwrap_or(0);
         let me = self.session.account_ref().to_string();
+        let lacking = recipients.iter().any(|recipient| {
+            recipient.account != me
+                && record
+                    .endorsements
+                    .usable(&recipient.account, now_s)
+                    .is_none()
+        });
+        let shared = self
+            .share_group_send_endorsement(record)
+            .await
+            .unwrap_or(false);
+        let read = self
+            .read_group_send_endorsements(record, lacking)
+            .await
+            .unwrap_or(false);
+        if shared || read {
+            self.save_group(record).await?;
+        }
         let message = self
             .session
             .group_encrypt(distribution_id, &plaintext, rng)
@@ -548,12 +573,15 @@ impl Engine {
             if recipient.bundles.is_empty() {
                 continue;
             }
-            // A member whose capability this device holds goes on the
-            // multi-recipient route, sealed once with the others of its
-            // server when delivered; this account's own devices (sync copies,
-            // as Signal) and the rest go pairwise.
+            // A member with a usable endorsement goes on the multi-recipient
+            // route, sealed once with the others of its server when
+            // delivered; this account's own devices (sync copies, as Signal)
+            // and the rest go pairwise.
             if recipient.account != me
-                && Self::held_capability(record, &recipient.account).is_some()
+                && record
+                    .endorsements
+                    .usable(&recipient.account, now_s)
+                    .is_some()
             {
                 multi = true;
                 legs.push(GroupOutboxLeg {
@@ -894,7 +922,9 @@ impl Engine {
     ) -> (Vec<usize>, Vec<BookNews>) {
         let mut again = Vec::new();
         let mut news = Vec::new();
-        let mut refused: Vec<String> = Vec::new();
+        // Endorsements whose token was refused, by (account, expiration).
+        let mut refused: Vec<(String, u64)> = Vec::new();
+        let now_s = u64::try_from(now / 1000).unwrap_or(0);
         let hint = if entry.implicit {
             libsignal_protocol::ContentHint::Implicit
         } else {
@@ -915,8 +945,8 @@ impl Engine {
             }
             return (again, news);
         };
-        // By destination server; a member whose capability this device no
-        // longer holds goes pairwise.
+        // By destination server; a member without a usable endorsement now
+        // goes pairwise.
         let mut by_server: BTreeMap<String, Vec<usize>> = BTreeMap::new();
         let mut to_pairwise: Vec<usize> = Vec::new();
         // The devices each leg was sealed for on this route: a leg whose
@@ -933,7 +963,7 @@ impl Engine {
             let account = entry.legs[index].account.clone();
             match (
                 crate::address::parse_account(&account),
-                Self::held_capability(&record, &account),
+                record.endorsements.usable(&account, now_s),
             ) {
                 (Ok(parsed), Some(_)) => by_server
                     .entry(parsed.server.clone())
@@ -943,18 +973,19 @@ impl Engine {
             }
         }
         for (server, places) in by_server {
-            let mut recipients = Vec::new();
-            let mut capabilities = BTreeMap::new();
-            let mut going = Vec::new();
+            // The legs this round can take, with their endorsements, by
+            // expiration: one request and one token per expiration (§3.4).
+            let mut by_expiration: BTreeMap<u64, Vec<MultiLeg>> = BTreeMap::new();
             for index in places {
                 let account = entry.legs[index].account.clone();
                 let Some(target) = targets.get(&account) else {
                     continue;
                 };
-                let (Ok(parsed), Some(capability)) = (
+                let (Ok(parsed), Some(endorsement)) = (
                     crate::address::parse_account(&account),
-                    Self::held_capability(&record, &account),
+                    record.endorsements.usable(&account, now_s),
                 ) else {
+                    to_pairwise.push(index);
                     continue;
                 };
                 match self
@@ -980,146 +1011,178 @@ impl Engine {
                             uncovered.push((index, covered));
                             continue;
                         }
-                        capabilities.insert(parsed.account_id.clone(), STANDARD.encode(capability));
                         entry.legs[index].devices =
                             bundles.iter().map(|bundle| bundle.device_id).collect();
                         sealed_for.insert(index, bundles.clone());
-                        recipients.push((parsed, bundles));
-                        going.push(index);
+                        by_expiration
+                            .entry(endorsement.expiration)
+                            .or_default()
+                            .push(MultiLeg {
+                                index,
+                                parsed,
+                                bundles,
+                                endorsement,
+                            });
                     }
                     // No devices, or none readable now: it waits.
                     _ => wait(&mut entry.legs[index], now),
                 }
             }
-            if going.is_empty() {
-                continue;
-            }
-            let sealed = match self
-                .session
-                .seal_group_multi(&recipients, &certificate, &group_bytes, &message, hint, rng)
-                .await
-            {
-                Ok(sealed) => sealed,
-                Err(_) => {
-                    for index in going {
-                        wait(&mut entry.legs[index], now);
-                    }
-                    continue;
-                }
-            };
-            if !sealed.safety_number_changes.is_empty() {
-                self.events.push_back(crate::ChatEvent::IdentityChanged(
-                    sealed.safety_number_changes,
-                ));
-            }
-            let submission = kutup_chat_proto::SealedMultiSubmissionV1 {
-                send_id: entry.send_id.clone(),
-                payload: STANDARD.encode(&sealed.payload),
-                capabilities,
-                urgent: true,
-            };
-            let outcome = Rc::clone(&self.transport)
-                .send_sealed_multi(&server, &submission)
-                .await;
-            let account_id = |index: usize, entry: &GroupOutboxEntry| {
-                crate::address::parse_account(&entry.legs[index].account)
-                    .map(|parsed| parsed.account_id)
-                    .unwrap_or_default()
-            };
-            match outcome {
-                // Only 200, 409 and 410 are answers; any other status is an
-                // error, as no answer: they wait.
-                Ok(crate::transport::MultiSendOutcome::Answered { status, .. })
-                    if !matches!(status, 200 | 409 | 410) =>
-                {
-                    for index in going {
-                        wait(&mut entry.legs[index], now);
-                    }
-                }
-                Ok(crate::transport::MultiSendOutcome::Answered { status, response }) => {
-                    let stored = status == 200;
-                    // New or reinstalled devices: on as an ordinary leg (see
-                    // `sealed_for`). Only devices that are gone: again here.
-                    let gained: Vec<&String> = response
-                        .devices
-                        .iter()
-                        .filter(|devices| !devices.missing_devices.is_empty())
-                        .map(|devices| &devices.account_id)
-                        .chain(response.stale.iter().map(|stale| &stale.account_id))
-                        .collect();
-                    let moved: Vec<&String> = response
-                        .devices
-                        .iter()
-                        .map(|devices| &devices.account_id)
-                        .collect();
-                    // A 409/410 that names none of these legs answers no
-                    // request of this device's.
-                    let names_a_leg = going.iter().any(|&index| {
-                        let id = account_id(index, entry);
-                        gained.contains(&&id) || moved.contains(&&id)
-                    });
-                    for index in going {
-                        let id = account_id(index, entry);
-                        let account = entry.legs[index].account.clone();
-                        if response.refused.contains(&id) {
-                            refused.push(account);
-                            to_pairwise.push(index);
-                        } else if response.rate_limited.contains(&id) {
+            for (expiration, legs) in by_expiration {
+                let going: Vec<usize> = legs.iter().map(|leg| leg.index).collect();
+                let endorsements: Vec<_> =
+                    legs.iter().map(|leg| leg.endorsement.clone()).collect();
+                let recipients: Vec<_> = legs
+                    .into_iter()
+                    .map(|leg| (leg.parsed, leg.bundles))
+                    .collect();
+                let (sealed, token) = match (
+                    self.session
+                        .seal_group_multi(
+                            &recipients,
+                            &certificate,
+                            &group_bytes,
+                            &message,
+                            hint,
+                            rng,
+                        )
+                        .await,
+                    crate::group_endorse::group_send_token(&endorsements),
+                ) {
+                    (Ok(sealed), Ok(token)) => (sealed, token),
+                    _ => {
+                        for index in going {
                             wait(&mut entry.legs[index], now);
-                            to_pairwise.push(index);
-                        } else if gained.contains(&&id) {
-                            news.push(BookNews::Mismatch {
-                                account: account.clone(),
-                            });
-                            moved_on.push(index);
-                        } else if moved.contains(&&id) {
-                            news.push(BookNews::Mismatch {
-                                account: account.clone(),
-                            });
-                            self.forget_known_devices_of(&account);
-                            let leg = &mut entry.legs[index];
-                            leg.mismatches = leg.mismatches.saturating_add(1);
-                            if leg.mismatches >= MAX_LEG_MISMATCHES {
+                        }
+                        continue;
+                    }
+                };
+                if !sealed.safety_number_changes.is_empty() {
+                    self.events.push_back(crate::ChatEvent::IdentityChanged(
+                        sealed.safety_number_changes,
+                    ));
+                }
+                let submission = kutup_chat_proto::SealedMultiSubmissionV1 {
+                    send_id: entry.send_id.clone(),
+                    payload: STANDARD.encode(&sealed.payload),
+                    capabilities: BTreeMap::new(),
+                    group_send_token: Some(token),
+                    urgent: true,
+                };
+                let outcome = Rc::clone(&self.transport)
+                    .send_sealed_multi(&server, &submission)
+                    .await;
+                let account_id = |index: usize, entry: &GroupOutboxEntry| {
+                    crate::address::parse_account(&entry.legs[index].account)
+                        .map(|parsed| parsed.account_id)
+                        .unwrap_or_default()
+                };
+                match outcome {
+                    // Only 200, 409 and 410 are answers; any other status is
+                    // an error, as no answer: they wait.
+                    Ok(crate::transport::MultiSendOutcome::Answered { status, .. })
+                        if !matches!(status, 200 | 409 | 410) =>
+                    {
+                        for index in going {
+                            wait(&mut entry.legs[index], now);
+                        }
+                    }
+                    Ok(crate::transport::MultiSendOutcome::Answered { status, response }) => {
+                        let stored = status == 200;
+                        // New or reinstalled devices: on as an ordinary leg
+                        // (see `sealed_for`). Only devices that are gone:
+                        // again here.
+                        let gained: Vec<&String> = response
+                            .devices
+                            .iter()
+                            .filter(|devices| !devices.missing_devices.is_empty())
+                            .map(|devices| &devices.account_id)
+                            .chain(response.stale.iter().map(|stale| &stale.account_id))
+                            .collect();
+                        let moved: Vec<&String> = response
+                            .devices
+                            .iter()
+                            .map(|devices| &devices.account_id)
+                            .collect();
+                        // A 409/410 that names none of these legs answers no
+                        // request of this device's.
+                        let names_a_leg = going.iter().any(|&index| {
+                            let id = account_id(index, entry);
+                            gained.contains(&&id) || moved.contains(&&id)
+                        });
+                        for index in going {
+                            let id = account_id(index, entry);
+                            let account = entry.legs[index].account.clone();
+                            if response.rate_limited.contains(&id) {
+                                // Over its budget: this copy pairwise, later.
+                                wait(&mut entry.legs[index], now);
                                 to_pairwise.push(index);
-                            } else {
+                            } else if gained.contains(&&id) {
+                                news.push(BookNews::Mismatch {
+                                    account: account.clone(),
+                                });
+                                moved_on.push(index);
+                            } else if moved.contains(&&id) {
+                                news.push(BookNews::Mismatch {
+                                    account: account.clone(),
+                                });
+                                self.forget_known_devices_of(&account);
+                                let leg = &mut entry.legs[index];
+                                leg.mismatches = leg.mismatches.saturating_add(1);
+                                if leg.mismatches >= MAX_LEG_MISMATCHES {
+                                    to_pairwise.push(index);
+                                } else {
+                                    again.push(index);
+                                }
+                            } else if stored {
+                                let leg = &mut entry.legs[index];
+                                leg.delivered = true;
+                                leg.retry_at_ms = None;
+                                news.push(BookNews::Delivered {
+                                    account,
+                                    devices: leg.devices.clone(),
+                                });
+                            } else if names_a_leg {
+                                // A 409/410 stored nothing for anyone: again,
+                                // with the named legs' devices brought up to
+                                // date.
                                 again.push(index);
-                            }
-                        } else if stored {
-                            let leg = &mut entry.legs[index];
-                            leg.delivered = true;
-                            leg.retry_at_ms = None;
-                            news.push(BookNews::Delivered {
-                                account,
-                                devices: leg.devices.clone(),
-                            });
-                        } else if names_a_leg {
-                            // A 409/410 stored nothing for anyone: again,
-                            // with the named legs' devices brought up to date.
-                            again.push(index);
-                        } else {
-                            // One that names no leg at all: after a wait,
-                            // and counted, so such answers can't keep the
-                            // legs going round.
-                            let leg = &mut entry.legs[index];
-                            leg.mismatches = leg.mismatches.saturating_add(1);
-                            if leg.mismatches >= MAX_LEG_MISMATCHES {
-                                to_pairwise.push(index);
                             } else {
-                                wait(leg, now);
+                                // One that names no leg at all: after a wait,
+                                // and counted, so such answers can't keep the
+                                // legs going round.
+                                let leg = &mut entry.legs[index];
+                                leg.mismatches = leg.mismatches.saturating_add(1);
+                                if leg.mismatches >= MAX_LEG_MISMATCHES {
+                                    to_pairwise.push(index);
+                                } else {
+                                    wait(leg, now);
+                                }
                             }
                         }
                     }
-                }
-                // The destination didn't answer in time, or one request
-                // can't carry them: pairwise, the durable path.
-                Ok(
-                    crate::transport::MultiSendOutcome::PeerUnavailable
-                    | crate::transport::MultiSendOutcome::TooLarge,
-                ) => to_pairwise.extend(going),
-                // This address's budget, or no answer: they wait.
-                Ok(crate::transport::MultiSendOutcome::RateLimited) | Err(_) => {
-                    for index in going {
-                        wait(&mut entry.legs[index], now);
+                    // The destination didn't take the token: these
+                    // endorsements are dropped (each member's next one is
+                    // read when it uploads it), the server's keys asked
+                    // again, and the copies go pairwise.
+                    Ok(crate::transport::MultiSendOutcome::TokenInvalid) => {
+                        for &index in &going {
+                            refused.push((entry.legs[index].account.clone(), expiration));
+                        }
+                        self.forget_group_send_keys(&server);
+                        to_pairwise.extend(going);
+                    }
+                    // The destination didn't answer in time, or one request
+                    // can't carry them: pairwise, the durable path.
+                    Ok(
+                        crate::transport::MultiSendOutcome::PeerUnavailable
+                        | crate::transport::MultiSendOutcome::TooLarge,
+                    ) => to_pairwise.extend(going),
+                    // This address's budget, or no answer: they wait.
+                    Ok(crate::transport::MultiSendOutcome::RateLimited) | Err(_) => {
+                        for index in going {
+                            wait(&mut entry.legs[index], now);
+                        }
                     }
                 }
             }
@@ -1221,8 +1284,12 @@ impl Engine {
             }
         }
         if !refused.is_empty() {
-            self.ask_for_capabilities(&entry.group_id, &refused, &certificate, rng)
-                .await;
+            if let Ok(mut record) = self.load_group_record(&entry.group_id).await {
+                for (account, expiration) in &refused {
+                    record.endorsements.forget(account, *expiration);
+                }
+                let _ = self.save_group(&record).await;
+            }
         }
         (again, news)
     }
@@ -1270,69 +1337,6 @@ impl Engine {
             serde_json::to_vec(&envelopes).map_err(|e| ChatError::Content(e.to_string()))?;
         leg.multi = false;
         Ok(())
-    }
-
-    /// The members whose capability this device held was refused: dropped
-    /// here, and each asked for its current one (best effort; until then
-    /// they get pairwise copies).
-    async fn ask_for_capabilities<R: Rng + CryptoRng>(
-        &mut self,
-        group_id: &str,
-        accounts: &[String],
-        certificate: &libsignal_protocol::SenderCertificate,
-        rng: &mut R,
-    ) {
-        let Ok(mut record) = self.load_group_record(group_id).await else {
-            return;
-        };
-        for account in accounts {
-            Self::forget_member_capability(&mut record, account);
-        }
-        let _ = self.save_group(&record).await;
-        let Ok(targets) = self.group_targets(group_id).await else {
-            return;
-        };
-        let body = kutup_chat_proto::content::GroupDeliveryBody {
-            group_id: group_id.to_string(),
-            capability: None,
-            drawn_at_ms: 0,
-        };
-        let mut sends = Vec::new();
-        for account in accounts {
-            let Some(target) = targets.get(account) else {
-                continue;
-            };
-            let Ok(bundles) = self
-                .sealed_bundles_for_send(account, &target.capability)
-                .await
-            else {
-                continue;
-            };
-            let send_id = uuid::Uuid::new_v4().to_string();
-            let content = ChatContent::group_delivery_with_id(
-                send_id.clone(),
-                crate::clock::rfc3339(unix_millis()),
-                0,
-                &body,
-            );
-            let Ok(sealed) = self
-                .session
-                .seal_pairwise(account, &bundles, certificate, &content, rng)
-                .await
-            else {
-                continue;
-            };
-            let envelopes = self.sealed_envelopes(sealed);
-            sends.push((
-                account.clone(),
-                SealedMessageSubmissionV1 {
-                    send_id,
-                    capability: STANDARD.encode(target.capability),
-                    envelopes,
-                },
-            ));
-        }
-        let _ = self.send_sealed_batches(&sends).await;
     }
 
     /// The sender-key book after a message pass: a key queued for devices

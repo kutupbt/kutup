@@ -5988,7 +5988,6 @@ fn group_of_content(
                 .as_sender_key_distribution()
                 .map(|body| body.group_id)
         })
-        .or_else(|| content.as_group_delivery().map(|body| body.group_id))
         .or_else(|| {
             content
                 .as_session_control()
@@ -6002,7 +6001,6 @@ fn group_of_content(
 fn is_group_content(content: &ChatContent) -> bool {
     use kutup_chat_proto::content::kind;
     content.kind == kind::SENDER_KEY_DISTRIBUTION
-        || content.kind == kind::GROUP_DELIVERY
         || content.kind == kind::GROUP_INVITE
         || content.kind == kind::GROUP_REMOVAL
         || content.group_context().is_some()

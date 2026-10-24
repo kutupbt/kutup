@@ -151,25 +151,13 @@ pub(crate) fn accepted_body(response: GroupResponseV1) -> Result<Vec<u8>> {
 
 impl Engine {
     pub(crate) async fn save_group(&mut self, record: &GroupRecordV1) -> Result<()> {
-        let stored = self.session.db().load_group(&record.group_id).await?;
-        let mut record = record.clone();
         let mut pending = Pending::default();
-        // A capability replaced, retired, or ending with this account's
-        // membership comes off its server (written with the record, so a
-        // reload doesn't lose it), and one drawn here goes on.
-        let capabilities = self
-            .stage_capability_change(stored.as_ref(), &mut record, &mut pending)
-            .await?;
-        pending.groups.insert(record.group_id.clone(), record);
+        pending
+            .groups
+            .insert(record.group_id.clone(), record.clone());
         // Who is a member is looked at again when the state's head moves
         // (`group_membership`).
-        self.session.db().apply(&pending).await?;
-        if capabilities {
-            // Best effort: what the server doesn't take now goes with the
-            // next change, send or list read.
-            let _ = self.flush_group_capabilities().await;
-        }
-        Ok(())
+        self.session.db().apply(&pending).await
     }
 
     pub(crate) async fn load_group_record(&self, group_id: &str) -> Result<GroupRecordV1> {
