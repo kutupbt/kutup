@@ -46,63 +46,11 @@ function deferred() {
   return { promise, resolve }
 }
 
-describe('ChatService MLS workflow coordination', () => {
+describe('ChatService coordination', () => {
   afterEach(() => {
     vi.restoreAllMocks()
     Reflect.deleteProperty(navigator, 'locks')
     for (const lock of engineLocks.splice(0)) lock.close()
-  })
-
-  it('does not interleave an authority change with background reconciliation', async () => {
-    const requestLock = installQueuedWebLocks()
-    const reconciliationStarted = deferred()
-    const finishReconciliation = deferred()
-    const mls = {
-      reconcile: vi.fn(async () => {
-        reconciliationStarted.resolve()
-        await finishReconciliation.promise
-      }),
-      setAuthorities: vi.fn().mockResolvedValue(undefined),
-    }
-    const service = Object.create(ChatService.prototype) as ChatService
-    Object.assign(service, {
-      client: {
-        purgeExpiredMessages: vi.fn().mockResolvedValue({
-          expiredMessages: 0,
-          expiredAttachmentIds: [],
-        }),
-        reconcile: vi.fn().mockResolvedValue({ received: 0 }),
-      },
-      lockName: 'kutup-chat-engine:test',
-      engineLock: testEngineLock(),
-      revision: 0,
-      historyCache: new Map(),
-      ledgerMark: null,
-      remoteWrites: 0,
-      pendingAttachments: new Map(),
-      mlsWorkflowLockName: 'kutup-chat-engine:test:mls-workflow',
-      mls,
-      channel: { postMessage: vi.fn() },
-      listeners: new Set(),
-      reconcilePromise: null,
-    })
-
-    const reconciliation = service.reconcile()
-    await reconciliationStarted.promise
-    const authorityChange = service.setGroupAuthorities(
-      '11111111-1111-4111-8111-111111111111',
-      ['alpha.example'],
-    )
-    await Promise.resolve()
-
-    expect(mls.setAuthorities).not.toHaveBeenCalled()
-
-    finishReconciliation.resolve()
-    await Promise.all([reconciliation, authorityChange])
-
-    expect(mls.setAuthorities).toHaveBeenCalledOnce()
-    expect(requestLock.mock.calls.filter(([name]) =>
-      name === 'kutup-chat-engine:test:mls-workflow')).toHaveLength(2)
   })
 
   it('drains once more when a hint arrives during a drain', async () => {
@@ -128,8 +76,6 @@ describe('ChatService MLS workflow coordination', () => {
       ledgerMark: null,
       remoteWrites: 0,
       pendingAttachments: new Map(),
-      mlsWorkflowLockName: 'kutup-chat-engine:test:mls-workflow',
-      mls: null,
       channel: { postMessage: vi.fn() },
       listeners: new Set(),
       typingListeners: new Set(),
@@ -217,7 +163,6 @@ describe('ChatService MLS workflow coordination', () => {
       pendingAttachments: new Map(),
       channel: { postMessage: vi.fn() },
       listeners: new Set(),
-      mls: null,
     })
 
     await expect(service.send(
@@ -261,7 +206,6 @@ describe('ChatService MLS workflow coordination', () => {
       pendingAttachments: new Map(),
       channel: { postMessage: vi.fn() },
       listeners: new Set(),
-      mls: null,
     })
 
     await service.send(
@@ -309,7 +253,6 @@ describe('ChatService MLS workflow coordination', () => {
       pendingAttachments: new Map(),
       channel: { postMessage: vi.fn() },
       listeners: new Set(),
-      mls: null,
     })
 
     await expect(service.sendReaction(
@@ -357,7 +300,6 @@ describe('ChatService MLS workflow coordination', () => {
       pendingAttachments: new Map(),
       channel: { postMessage: vi.fn() },
       listeners: new Set(),
-      mls: null,
     })
 
     await expect(service.mutateMessage(
@@ -408,7 +350,6 @@ describe('ChatService MLS workflow coordination', () => {
       pendingAttachments: new Map(),
       channel: { postMessage: vi.fn() },
       listeners: new Set(),
-      mls: null,
     })
 
     await expect(service.sendReceipt(
@@ -443,7 +384,6 @@ describe('ChatService MLS workflow coordination', () => {
       ledgerMark: null,
       remoteWrites: 0,
       pendingAttachments: new Map(),
-      mls: null,
     })
 
     await expect(service.sendTyping(
@@ -483,7 +423,6 @@ describe('ChatService MLS workflow coordination', () => {
       ledgerMark: null,
       remoteWrites: 0,
       pendingAttachments: new Map(),
-      mls: null,
       channel,
       listeners: new Set(),
     })
@@ -532,7 +471,6 @@ describe('ChatService MLS workflow coordination', () => {
       pendingAttachments: new Map(),
       channel,
       listeners: new Set(),
-      mls: null,
     })
 
     await expect(service.startDisappearingExpiry(
@@ -636,7 +574,7 @@ describe('ChatService MLS workflow coordination', () => {
     expect(purgeLocal).toHaveBeenCalledWith(['temporary-attachment'])
   })
 
-  it('repairs the signed manifest and MLS membership after revocation', async () => {
+  it('repairs the signed manifest after revocation', async () => {
     installQueuedWebLocks()
     const calls: string[] = []
     const remainingDevices = [{
@@ -653,18 +591,8 @@ describe('ChatService MLS workflow coordination', () => {
     const client = {
       revokeManifestDevice: vi.fn(async () => {
         calls.push('manifest')
-        return {
-          sequence: 3,
-          devices: [
-            { deviceId: 2, mls: {} },
-            { deviceId: 3 },
-          ],
-        }
+        return { sequence: 3, devices: [{ deviceId: 2 }] }
       }),
-    }
-    const mls = {
-      maintainKeyPackages: vi.fn(async () => { calls.push('packages') }),
-      reconcileLinkedDevices: vi.fn(async () => { calls.push('mls') }),
     }
     const channel = { postMessage: vi.fn() }
     const service = Object.create(ChatService.prototype) as ChatService
@@ -672,7 +600,6 @@ describe('ChatService MLS workflow coordination', () => {
       deviceId: 2,
       transport,
       client,
-      mls,
       lockName: 'kutup-chat-engine:test',
       engineLock: testEngineLock(),
       revision: 0,
@@ -680,19 +607,15 @@ describe('ChatService MLS workflow coordination', () => {
       ledgerMark: null,
       remoteWrites: 0,
       pendingAttachments: new Map(),
-      mlsWorkflowLockName: 'kutup-chat-engine:test:mls-workflow',
       channel,
       listeners: new Set(),
     })
 
     await expect(service.revokeDevice(1)).resolves.toEqual(remainingDevices)
 
-    expect(calls).toEqual(['revoke', 'manifest', 'packages', 'mls'])
+    expect(calls).toEqual(['revoke', 'manifest'])
     expect(client.revokeManifestDevice).toHaveBeenCalledWith(1)
-    expect(mls.maintainKeyPackages).toHaveBeenCalledWith(3)
-    expect(mls.reconcileLinkedDevices).toHaveBeenCalledWith([2])
     expect(channel.postMessage).toHaveBeenCalledWith({ type: 'updated' })
     expect(transport.listDevices).toHaveBeenCalledOnce()
   })
-
 })

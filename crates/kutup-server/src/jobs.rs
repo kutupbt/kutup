@@ -22,7 +22,6 @@ const UPLOADS_STALE_AFTER_SECS: i64 = 24 * 3600;
 const TRASH_SWEEP_INTERVAL: Duration = Duration::from_secs(3600);
 const CHAT_SWEEP_INTERVAL: Duration = Duration::from_secs(3600);
 /// A group link's mailbox nobody has read for this long is abandoned.
-const INVITE_LINK_IDLE_DAYS: i32 = 90;
 
 #[derive(Clone, Copy)]
 pub struct ChatMaintenancePolicy {
@@ -122,13 +121,11 @@ pub fn spawn_all(
 #[derive(Debug, Default, PartialEq, Eq)]
 pub struct ChatSweepResult {
     pub mailbox_rows: u64,
-    pub mls_mailbox_rows: u64,
     pub send_rows: u64,
     pub federation_send_rows: u64,
     pub federation_transaction_rows: u64,
     pub devices: u64,
     pub ws_tickets: u64,
-    pub invite_link_rows: u64,
 }
 
 /// Bound offline-ciphertext and idempotency storage and retire abandoned chat
@@ -162,10 +159,7 @@ pub async fn chat_maintenance_once(
         let cutoff = OffsetDateTime::now_utc()
             - Duration::from_secs((mailbox_retention_days as u64).saturating_mul(86_400));
         match sweep_chat_mailboxes_before(pool, cutoff).await {
-            Ok((direct, mls)) => {
-                result.mailbox_rows = direct;
-                result.mls_mailbox_rows = mls;
-            }
+            Ok(direct) => result.mailbox_rows = direct,
             Err(error) => tracing::warn!("chat maintenance: mailbox retention failed: {error}"),
         }
     }
@@ -237,10 +231,6 @@ pub async fn chat_maintenance_once(
             Err(error) => tracing::warn!("chat maintenance: device expiry failed: {error}"),
         }
     }
-    match crate::chat_mls::sweep_invite_links(pool, INVITE_LINK_IDLE_DAYS).await {
-        Ok(rows) => result.invite_link_rows = rows,
-        Err(error) => tracing::warn!("chat maintenance: invite link cleanup failed: {error}"),
-    }
     // Multi-recipient sendIds dedupe within the mailbox's own retention: past
     // it the copies they guard are gone too.
     if mailbox_retention_days > 0 {
@@ -262,39 +252,29 @@ pub async fn chat_maintenance_once(
     if result != ChatSweepResult::default() {
         tracing::info!(
             mailbox_rows = result.mailbox_rows,
-            mls_mailbox_rows = result.mls_mailbox_rows,
             send_rows = result.send_rows,
             federation_send_rows = result.federation_send_rows,
             federation_transaction_rows = result.federation_transaction_rows,
             devices = result.devices,
             ws_tickets = result.ws_tickets,
-            invite_link_rows = result.invite_link_rows,
             "chat maintenance complete"
         );
     }
     result
 }
 
-/// Delete Direct and MLS delivery ciphertext strictly older than an explicit
-/// cutoff. Keeping cutoff calculation outside the repository operation makes
+/// Delete delivery ciphertext strictly older than an explicit cutoff.
+/// Keeping cutoff calculation outside the repository operation makes
 /// exact-boundary tests deterministic without exposing a production endpoint.
 pub async fn sweep_chat_mailboxes_before(
     pool: &PgPool,
     cutoff: OffsetDateTime,
-) -> anyhow::Result<(u64, u64)> {
-    let mut transaction = pool.begin().await?;
-    let direct = sqlx::query("DELETE FROM chat_mailbox WHERE server_ts < $1")
+) -> anyhow::Result<u64> {
+    Ok(sqlx::query("DELETE FROM chat_mailbox WHERE server_ts < $1")
         .bind(cutoff)
-        .execute(&mut *transaction)
+        .execute(pool)
         .await?
-        .rows_affected();
-    let mls = sqlx::query("DELETE FROM chat_mls_mailbox WHERE server_ts < $1")
-        .bind(cutoff)
-        .execute(&mut *transaction)
-        .await?
-        .rows_affected();
-    transaction.commit().await?;
-    Ok((direct, mls))
+        .rows_affected())
 }
 
 /// Applies version retention (docs/plans/drive-versions-v2.md,
@@ -1376,8 +1356,8 @@ mod tests {
             .unwrap();
         // A device the earlier live tests left a Direct envelope for (the
         // newest device needn't have one).
-        let (user_id, device_id): (uuid::Uuid, i32) = sqlx::query_as(
-            "SELECT m.recipient_user_id, m.recipient_device_id
+        let direct_id: uuid::Uuid = sqlx::query_scalar(
+            "SELECT m.id
                FROM chat_mailbox m
                JOIN chat_devices d ON d.user_id = m.recipient_user_id
                                   AND d.device_id = m.recipient_device_id
@@ -1385,88 +1365,34 @@ mod tests {
         )
         .fetch_one(&pool)
         .await
-        .expect("live Chat device fixture");
-        sqlx::query(
-            "INSERT INTO chat_mls_devices
-             (user_id,device_id,manifest_version,suite,credential_public_key,
-              anonymous_delivery_public_key,name)
-             VALUES ($1,$2,1,3,$3,$4,'retention fixture')
-             ON CONFLICT (user_id,device_id) DO NOTHING",
-        )
-        .bind(user_id)
-        .bind(device_id)
-        .bind(vec![0x31u8; 32])
-        .bind(vec![0x32u8; 32])
-        .execute(&pool)
-        .await
-        .unwrap();
-        let direct_id: uuid::Uuid =
-            sqlx::query_scalar("SELECT id FROM chat_mailbox WHERE recipient_user_id=$1 LIMIT 1")
-                .bind(user_id)
-                .fetch_one(&pool)
-                .await
-                .expect("live Direct mailbox fixture");
-        let mls_id = uuid::Uuid::new_v4();
-        sqlx::query(
-            "INSERT INTO chat_mls_mailbox
-             (id,recipient_user_id,recipient_device_id,delivery_kind,send_id,opaque_envelope)
-             VALUES ($1,$2,$3,'anonymous',$4,$5)",
-        )
-        .bind(mls_id)
-        .bind(user_id)
-        .bind(device_id)
-        .bind(uuid::Uuid::new_v4())
-        .bind(vec![0x41u8])
-        .execute(&pool)
-        .await
-        .unwrap();
+        .expect("live Direct mailbox fixture");
         let cutoff = time::OffsetDateTime::now_utc();
-        sqlx::query("UPDATE chat_mailbox SET server_ts=$1 WHERE id=$2")
-            .bind(cutoff)
-            .bind(direct_id)
-            .execute(&pool)
-            .await
-            .unwrap();
-        sqlx::query("UPDATE chat_mls_mailbox SET server_ts=$1 WHERE id=$2")
-            .bind(cutoff)
-            .bind(mls_id)
-            .execute(&pool)
-            .await
-            .unwrap();
-        // The sweep is server-wide (other live tests leave mail behind):
-        // what matters is that rows at the cutoff stay and older ones go.
-        let alive = |pool: sqlx::PgPool| async move {
-            let direct: bool =
-                sqlx::query_scalar("SELECT EXISTS (SELECT 1 FROM chat_mailbox WHERE id = $1)")
-                    .bind(direct_id)
-                    .fetch_one(&pool)
-                    .await
-                    .unwrap();
-            let mls: bool =
-                sqlx::query_scalar("SELECT EXISTS (SELECT 1 FROM chat_mls_mailbox WHERE id = $1)")
-                    .bind(mls_id)
-                    .fetch_one(&pool)
-                    .await
-                    .unwrap();
-            (direct, mls)
+        let set_time = |pool: sqlx::PgPool, at: time::OffsetDateTime| async move {
+            sqlx::query("UPDATE chat_mailbox SET server_ts=$1 WHERE id=$2")
+                .bind(at)
+                .bind(direct_id)
+                .execute(&pool)
+                .await
+                .unwrap();
         };
-        sweep_chat_mailboxes_before(&pool, cutoff).await.unwrap();
-        assert_eq!(alive(pool.clone()).await, (true, true));
-        sqlx::query("UPDATE chat_mailbox SET server_ts=$1 WHERE id=$2")
-            .bind(cutoff - time::Duration::SECOND)
+        // The sweep is server-wide (other live tests leave mail behind):
+        // what matters is that a row at the cutoff stays and an older one goes.
+        let alive = |pool: sqlx::PgPool| async move {
+            sqlx::query_scalar::<_, bool>(
+                "SELECT EXISTS (SELECT 1 FROM chat_mailbox WHERE id = $1)",
+            )
             .bind(direct_id)
-            .execute(&pool)
+            .fetch_one(&pool)
             .await
-            .unwrap();
-        sqlx::query("UPDATE chat_mls_mailbox SET server_ts=$1 WHERE id=$2")
-            .bind(cutoff - time::Duration::SECOND)
-            .bind(mls_id)
-            .execute(&pool)
-            .await
-            .unwrap();
-        let (direct, mls) = sweep_chat_mailboxes_before(&pool, cutoff).await.unwrap();
-        assert!(direct >= 1 && mls >= 1, "{direct} {mls}");
-        assert_eq!(alive(pool.clone()).await, (false, false));
+            .unwrap()
+        };
+        set_time(pool.clone(), cutoff).await;
+        sweep_chat_mailboxes_before(&pool, cutoff).await.unwrap();
+        assert!(alive(pool.clone()).await);
+        set_time(pool.clone(), cutoff - time::Duration::SECOND).await;
+        let swept = sweep_chat_mailboxes_before(&pool, cutoff).await.unwrap();
+        assert!(swept >= 1, "{swept}");
+        assert!(!alive(pool.clone()).await);
         pool.close().await;
     }
 

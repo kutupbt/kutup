@@ -354,12 +354,8 @@ fn check_password(state: &GroupStateV1, password: &str) -> Result<(), GroupChang
     };
     let current = decode_exact::<INVITE_LINK_PASSWORD_LEN>("inviteLinkPassword", current)
         .map_err(malformed)?;
-    let difference = offered
-        .iter()
-        .zip(current.iter())
-        .fold(0u8, |acc, (a, b)| acc | (a ^ b));
     require(
-        std::hint::black_box(difference) == 0,
+        kutup_crypto::primitives::ct_eq(&offered, &current),
         GroupChangeError::WrongPassword,
     )
 }

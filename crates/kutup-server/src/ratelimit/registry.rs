@@ -210,9 +210,6 @@ pub enum Limit {
     GroupLink,
     GroupFailuresRelay,
     GroupCreatesRelay,
-    InviteLinkAccountCalls,
-    InviteLinkAccountRequests,
-    InviteLinkOriginCalls,
     GroupCallAccountTokens,
     GroupCallOriginTokens,
     // Mail.
@@ -811,36 +808,6 @@ pub static SPECS: &[Spec] = &[
         Peer,
         Groups,
         "New groups from one relay server."
-    ),
-    spec!(
-        InviteLinkAccountCalls,
-        "invite_link_account_calls",
-        None,
-        120,
-        Events(MINUTE),
-        Account,
-        Groups,
-        "Invite-link requests by one account."
-    ),
-    spec!(
-        InviteLinkAccountRequests,
-        "invite_link_account_requests",
-        None,
-        10,
-        Events(HOUR),
-        Account,
-        Groups,
-        "Requests to join through invite links by one account."
-    ),
-    spec!(
-        InviteLinkOriginCalls,
-        "invite_link_origin_calls",
-        None,
-        600,
-        Events(MINUTE),
-        Peer,
-        Groups,
-        "Invite-link requests from one peer server."
     ),
     spec!(
         GroupCallAccountTokens,

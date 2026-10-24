@@ -3,7 +3,7 @@
 Status: final draft (2026-10-17), with the user's decisions (end of the note)
 and both sessions' reviews. Next is the main session's security review of the
 pseudonym design. No code before the user's go.
-- Replaces: [`chat-mls.md`](../chat-mls.md) and [`chat-invite-links.md`](../chat-invite-links.md). MLS groups were never enabled in the beta (`CHAT_GROUPS` is off).
+- Replaces: `chat-mls.md` and `chat-invite-links.md` (both removed with MLS groups, §9). MLS groups were never enabled in the beta (`CHAT_GROUPS` is off).
 - Background: the research report "Self healing encrypted group chat"
   (2026-10, outside the repository). It compares per-sender keys, pairwise fan-out
   and MLS, and recommends per-sender keys under a membership log that clients
@@ -1169,8 +1169,12 @@ exists. Once pairwise groups pass their gates, one change removes MLS:
     `chat_invite_links` and `chat_invite_requests`.
 - **Web:** `mls-service.ts` (and its tests), `invite-links.ts`,
   `group-readiness.ts`, `MlsGroupSecurityDetails.tsx` and the MLS branches of
-  `service.ts` and `types.ts`. The group UI (`NewGroupDialog`, `GroupDetails`,
-  `groupLink/`, `GroupCallScreen`) is kept and rewired.
+  `service.ts` and `types.ts`. The MLS-only screens (`GroupDetails`,
+  `EditGroupInfoDialog`, `GroupInvitations`, the MLS link dialog) go: pairwise
+  groups already have their own (`ChatGroupDetails`, `ChatGroupJoinDialog`).
+  The group-call controller, ringer and screen go too, since they sent and
+  keyed calls over MLS; slice 4 rebuilds them on pairwise groups, reusing the
+  meeting stage (`CallStage`, `sfuRoom`), which stays.
 - **Specs and docs:**
   - Specs 36, 38 and the group parts of 32, 34 and 42 are rewritten for pairwise
     groups.

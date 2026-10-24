@@ -465,10 +465,6 @@ pub async fn register_device(
             .bind(user_id)
             .fetch_all(&mut *tx)
             .await?;
-            sqlx::query("DELETE FROM chat_mls_devices WHERE user_id = $1")
-                .bind(user_id)
-                .execute(&mut *tx)
-                .await?;
             // Link tokens die with the device set they were asked under.
             sqlx::query("DELETE FROM chat_link_tokens WHERE user_id = $1")
                 .bind(user_id)
@@ -1520,16 +1516,6 @@ pub async fn revoke_device(
     if deleted == 0 {
         return Err(AppError::not_found("no such chat device"));
     }
-    // The destination-private group-leaf history deliberately survives until
-    // an ordered DeviceSync Commit removes it, but the revoked device must
-    // immediately stop receiving MLS mailbox entries or contributing
-    // KeyPackages. Deleting the current MLS directory row cascades those
-    // ephemeral records without erasing the group control history.
-    sqlx::query("DELETE FROM chat_mls_devices WHERE user_id = $1 AND device_id = $2")
-        .bind(user_id)
-        .bind(device_id)
-        .execute(&mut *tx)
-        .await?;
     tx.commit().await?;
     if let Err(error) = crate::handlers::chat_multi::collect_payloads(&state.pool, &shared).await {
         tracing::warn!(error = %error.message, "chat: shared payload collection after a device removal failed");

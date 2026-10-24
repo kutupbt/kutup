@@ -80,7 +80,7 @@ pub struct AdminSettingsResponse {
     pub registration_mode: crate::registration::RegistrationMode,
     /// The storage quota new accounts get. Existing accounts keep theirs.
     pub default_storage_quota_bytes: i64,
-    /// Retention for unread Direct and MLS mailbox ciphertext. Zero disables expiry.
+    /// Retention for unread Chat mailbox ciphertext. Zero disables expiry.
     pub chat_mailbox_retention_days: i64,
     /// Retention for temporary Chat-media delivery copies. Zero disables expiry.
     pub chat_media_delivery_retention_days: i64,

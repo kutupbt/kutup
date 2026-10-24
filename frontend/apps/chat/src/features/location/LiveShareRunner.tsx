@@ -1,20 +1,17 @@
-import { useEffect, useRef } from 'react'
-import { accountKey } from '@kutup/chat-core/identity'
+import { useEffect } from 'react'
 import type { ConversationId } from '@kutup/chat-core/types'
 import { useChat } from '../../app/chatStore'
-import { groupIdOf } from '../../state/views'
 import { liveShares } from './liveShares'
 
 /**
  * Connects this tab's live-location shares to the open chat: how to send
- * the share messages, this account's server, and each group's members now
- * (a share re-keys as soon as anyone leaves). A share this account stopped
- * from another device ends here too.
+ * the share messages and this account's server. Pairwise groups take text
+ * only for now, so no share runs in a group: one left from before ends at
+ * its next update, with nobody to hand a key to. A share this account
+ * stopped from another device ends here too.
  */
 export function LiveShareRunner() {
   const { service, capabilities, snapshot, self } = useChat()
-  const groups = useRef(snapshot.groups)
-  groups.current = snapshot.groups
 
   useEffect(() => {
     const server = capabilities?.serverName
@@ -24,11 +21,7 @@ export function LiveShareRunner() {
       sender: service,
       server,
       self: address,
-      rosterOf: (conversation: ConversationId) => {
-        if (conversation.kind !== 'group') return null
-        const group = groups.current.find((g) => groupIdOf(g) === conversation.groupId)
-        return group ? group.currentRoster.map((member) => accountKey(member.account)) : []
-      },
+      rosterOf: (conversation: ConversationId) => (conversation.kind === 'group' ? [] : null),
     })
     return () => liveShares.detach()
   }, [service, capabilities?.serverName, self?.key])

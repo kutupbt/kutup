@@ -7,6 +7,7 @@
 //! elsewhere since merge instead of being undone), sends it as one signed
 //! frame, and writes the merged document back to disk.
 
+use kutup_crypto::primitives::{hash, Suite};
 use std::path::Path;
 
 use anyhow::{anyhow, bail, Context, Result};
@@ -82,7 +83,7 @@ enum Doc {
 impl Doc {
     fn new(list: bool) -> Doc {
         // A fresh Yjs client id per document, as a tab has.
-        let client = u64::from(rand::random::<u32>());
+        let client = u64::from(u32::from_le_bytes(kutup_crypto::primitives::random_array()));
         if list {
             Doc::List(ListDoc::new(client))
         } else {
@@ -304,7 +305,9 @@ fn sender_prefix(must_exceed: i64) -> i64 {
     // Bounded: near the top of the range a random prefix above is rare, and
     // then the count simply goes on from the highest.
     for _ in 0..64 {
-        let candidate = i64::from(rand::random::<u32>() & 0x7FFF_FFFF) << 32;
+        let candidate =
+            i64::from(u32::from_le_bytes(kutup_crypto::primitives::random_array()) & 0x7FFF_FFFF)
+                << 32;
         if candidate > must_exceed {
             return candidate;
         }
@@ -438,8 +441,7 @@ fn base_state(base: &YjsBase) -> Result<(Vec<u8>, i64)> {
 }
 
 fn sha256_hex(bytes: &[u8]) -> String {
-    use sha2::Digest;
-    sha2::Sha256::digest(bytes)
+    hash(Suite::V1, bytes)
         .iter()
         .map(|b| format!("{b:02x}"))
         .collect()
@@ -749,7 +751,10 @@ fn write_new(dest: &Path, bytes: &[u8]) -> Result<crate::syncengine::LocalFile> 
         .ok_or_else(|| anyhow!("bad file name"))?;
     let parent = dest.parent().ok_or_else(|| anyhow!("bad file path"))?;
     std::fs::create_dir_all(parent)?;
-    let tmp = parent.join(format!(".kutup-tmp-{name}-{:016x}", rand::random::<u64>()));
+    let tmp = parent.join(format!(
+        ".kutup-tmp-{name}-{:016x}",
+        u64::from_le_bytes(kutup_crypto::primitives::random_array())
+    ));
     let written = (|| -> std::io::Result<std::fs::Metadata> {
         let mut file = std::fs::File::create(&tmp)?;
         file.write_all(bytes)?;

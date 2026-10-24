@@ -7,6 +7,7 @@
 //! `.sync-conflict` copy, saves the result the same way and writes it
 //! locally. Without the vault's key it falls back to the conflict copy.
 
+use kutup_crypto::primitives::{hash, Suite};
 use std::collections::BTreeMap;
 use std::io::IsTerminal;
 
@@ -16,7 +17,6 @@ use kutup_crypto::account_envelope;
 use kutup_crypto::drive_object::{self, DriveFileBlobContextV1};
 use kutup_pass::keepass::Database;
 use kutup_pass::{MergeReport, VaultKey};
-use sha2::Digest;
 use uuid::Uuid;
 use zeroize::Zeroizing;
 
@@ -587,7 +587,7 @@ fn save_once(
             file: &file,
             file_key: &file_key,
             content: crate::version_upload::Content::Bytes(contents),
-            sha256: sha2::Sha256::digest(contents).into(),
+            sha256: hash(Suite::V1, contents).into(),
             hash_key: hash_key.as_ref(),
             based_on: Some(based_on(based_on_version)),
             progress: crate::uploader::Progress::Quiet,

@@ -209,8 +209,9 @@ Algorithms are named directly almost everywhere:
     and Ed25519 (`fe/collab/src/sign.ts:8,14`, `devices.ts:13`). The last one
     is outside the "only if 10× faster" rule in
     `docs/cryptographic-dependencies.md:26-29`;
-  - WebCrypto SHA-256 in 10 places, and HMAC once
-    (`apps/chat/.../groupCallController.ts:292`).
+  - WebCrypto SHA-256 in 10 places, and HMAC once (the group-call
+    controller's participant tags; removed with MLS, back with slice 4's
+    group calls).
 - **Two implementations of one primitive:**
   - XChaCha: dryoc secretstream, RustCrypto and libsodium JS;
   - SHA-256: sha2, libsodium and WebCrypto;

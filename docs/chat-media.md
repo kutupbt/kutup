@@ -5,7 +5,8 @@ browser, scale, quota-recovery, metadata-privacy, and clean-browser backup gates
 passed from clean deployments through 2026-08-14.
 
 This document defines files, photos, recorded videos and voice-note objects for
-Direct Chat, Note to Self and private MLS groups. It deliberately reuses
+Direct Chat and Note to Self (groups take media in a later slice of
+pairwise groups). It deliberately reuses
 Kutup's object storage, tus transport, unified federation stack and canonical
 Rust/WASM crypto implementation. It does not make a mutable Drive file into a
 message attachment and it does not introduce a second S3 client or federation
@@ -16,7 +17,7 @@ transport.
 - A sent attachment is an immutable client-encrypted snapshot. Renaming,
   replacing or deleting a source Drive file never mutates a previously sent
   message.
-- One ciphertext is produced per logical attachment. Direct Chat, MLS groups,
+- One ciphertext is produced per logical attachment. Direct Chat, groups,
   linked devices and future broadcast distribute the random object key through
   their existing E2EE content; they never encrypt or store one blob per device.
 - The sender homeserver retains an authenticated retry copy. After federation,
@@ -39,7 +40,7 @@ transport.
 ## 2. Typed suites and keys
 
 `ChatMediaSuiteId` is a purpose-specific registry. It is not a universal
-Kutup suite and it does not reuse a Drive, Direct Chat, MLS, profile or ledger
+Kutup suite and it does not reuse a Drive, Direct Chat, group, profile or ledger
 key.
 
 | Code | Construction | New writes |
@@ -56,7 +57,7 @@ the sender's encrypted linked-device transcript.
 also uses HKDF-SHA256 and XChaCha20-Poly1305. The client derives a stable
 32-byte account ledger key from the recoverable master key under the locked
 label `kutup/chat-attachment-ledger/account-key/v1`; it never stores that key
-remotely. A Drive root, profile key, Signal session key or MLS exporter is never
+remotely. A Drive root, profile key, Signal session key or group sender key is never
 accepted as a ledger key.
 
 ## 3. `ChatMediaObjectV1`
@@ -91,8 +92,8 @@ labels or ordinary logs.
 
 ## 4. E2EE attachment descriptor
 
-Both libsignal and OpenMLS carry the same `ChatContent` kind `attachment`. The
-outer message protocol changes; the logical attachment body does not.
+Direct Chat and group messages carry the same `ChatContent` kind `attachment`.
+The outer message protocol changes; the logical attachment body does not.
 
 `ChatAttachmentDescriptorV1` contains:
 
@@ -107,7 +108,7 @@ outer message protocol changes; the logical attachment body does not.
 - an optional bounded inline E2EE preview.
 
 The retrieval token is random, single-purpose and bound at the origin to the
-attachment, exact recipient account or MLS delivery scope, destination domain,
+attachment, exact recipient account, destination domain,
 expiry and object digest. It is never accepted as a bearer URL and never sent
 to an arbitrary client-provided host. The recipient gives the descriptor only
 to its own authenticated server, which resolves the origin through the unified
@@ -165,8 +166,8 @@ then atomically commits the object/reference/quota. A disconnect or mismatch
 deletes or sweeps the temporary object and releases the reservation. Response
 bytes are never buffered in full.
 
-An established Direct Chat offer requires the contacts-only media capability;
-an MLS offer requires the recipient's current group-delivery scope. Message
+An established Direct Chat offer requires the contacts-only media capability.
+Message
 requests carry the encrypted descriptor but no destination storage offer. After
 acceptance, the recipient client authorizes its own homeserver to retrieve the
 object. An origin keeps that pending object for at most 30 days.
@@ -307,7 +308,7 @@ following passed:
 - [x] replay, changed-idempotency, stolen/rotated capability, wrong destination,
   digest/length mismatch, truncation, trailing data, oversized stream and
   storage-full tests;
-- [x] Direct Chat, Note to Self and MLS browser send/download/clear paths;
+- [x] Direct Chat and Note to Self browser send/download/clear paths;
 - [x] browser/OS photo-video capture UI through the same encrypted attachment
   path (this is not a dedicated-native-app readiness claim);
 - [x] bounded voice-note recording, cancel cleanup and two-server encrypted

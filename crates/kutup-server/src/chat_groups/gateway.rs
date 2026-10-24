@@ -1120,13 +1120,7 @@ fn link_password_holds(state: &GroupStateV1, offered: &str) -> bool {
     ) else {
         return false;
     };
-    current.len() == offered.len()
-        && std::hint::black_box(
-            current
-                .iter()
-                .zip(&offered)
-                .fold(0u8, |difference, (a, b)| difference | (a ^ b)),
-        ) == 0
+    kutup_crypto::primitives::ct_eq(&current, &offered)
 }
 
 /// Whether `change` is a newcomer's way in: a claim, a join from the link or

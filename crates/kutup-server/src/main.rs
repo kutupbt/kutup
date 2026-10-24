@@ -15,12 +15,12 @@ mod calendar_alarms;
 mod calendar_reminders;
 mod calls;
 mod change_feed;
+mod chat_calls;
 mod chat_federation;
 mod chat_group_send;
 mod chat_groups;
 mod chat_hub;
 mod chat_media_federation;
-mod chat_mls;
 mod collab_federation;
 mod config;
 mod db;
@@ -127,9 +127,6 @@ pub struct AppState {
     /// Active root-signed online sealed-sender issuer. `None` keeps the
     /// capability unadvertised and all issuance routes closed.
     pub(crate) sealed_sender: Option<Arc<sealed_sender_service::SealedSenderService>>,
-    /// Purpose-scoped MLS ordering authority. `None` keeps every MLS route
-    /// closed even if stale policy rows remain in the database.
-    pub(crate) mls_ordering: Option<Arc<chat_mls::MlsOrderingService>>,
     /// Live SeaweedFS capacity probe for the admin dashboard; `None` disables it (the admin
     /// stats then fall back to `config.storage_total_bytes`).
     pub storage_probe: Option<Arc<storage_probe::StorageProbe>>,
@@ -155,7 +152,7 @@ const USAGE: &str = "usage: kutup-server [serve]
        kutup-server orphan-sweep [--delete] [--age-floor=<dur>] [--page-sleep=<dur>] [--prefix=<p>]
        kutup-server federation-identity rotate
        kutup-server chat-zk-keys rotate
-       kutup-server feature-policy rotate <sealed-sender|mls-ordering>";
+       kutup-server feature-policy rotate sealed-sender";
 
 /// Whether `rest` (the arguments after the program name) is a command this
 /// build has. `orphan-sweep` checks its own flags.
@@ -169,7 +166,7 @@ fn known_command(rest: &[String]) -> bool {
             | ["orphan-sweep", ..]
             | ["federation-identity", "rotate"]
             | ["chat-zk-keys", "rotate"]
-            | ["feature-policy", "rotate", "sealed-sender" | "mls-ordering"]
+            | ["feature-policy", "rotate", "sealed-sender"]
     )
 }
 
@@ -221,14 +218,8 @@ async fn main() -> anyhow::Result<()> {
     let rotate_sealed_sender_policy = args
         .get(1..)
         .is_some_and(|args| args == ["feature-policy", "rotate", "sealed-sender"]);
-    let rotate_mls_ordering_policy = args
-        .get(1..)
-        .is_some_and(|args| args == ["feature-policy", "rotate", "mls-ordering"]);
-    if args.get(1).is_some_and(|value| value == "feature-policy")
-        && !rotate_sealed_sender_policy
-        && !rotate_mls_ordering_policy
-    {
-        anyhow::bail!("usage: kutup-server feature-policy rotate <sealed-sender|mls-ordering>");
+    if args.get(1).is_some_and(|value| value == "feature-policy") && !rotate_sealed_sender_policy {
+        anyhow::bail!("usage: kutup-server feature-policy rotate sealed-sender");
     }
     let federation = federation::FederationStack::from_config(
         pool.clone(),
@@ -257,15 +248,6 @@ async fn main() -> anyhow::Result<()> {
         time::OffsetDateTime::now_utc(),
     )
     .await?;
-    // Without the ordering service there are no groups: nothing is
-    // advertised and every group route answers "unavailable".
-    let mls_ordering = if config.chat_groups {
-        chat_mls::MlsOrderingService::load(&pool, &config, federation.as_deref())
-            .await?
-            .map(Arc::new)
-    } else {
-        None
-    };
     if let (Some(federation), Some(service)) = (federation.as_deref(), sealed_sender.as_ref()) {
         let envelope = federation
             .feature_policies()
@@ -309,52 +291,6 @@ async fn main() -> anyhow::Result<()> {
     } else if rotate_sealed_sender_policy {
         anyhow::bail!(
             "sealed sender policy rotation requires federation, policy JSON, and an online signer"
-        );
-    }
-    if let (Some(federation), Some(service)) = (federation.as_deref(), mls_ordering.as_ref()) {
-        let envelope = federation
-            .feature_policies()
-            .ensure_local(
-                federation,
-                kutup_federation_proto::FederatedFeaturePolicyTypeV1::MlsOrderingService,
-                &service
-                    .policy()
-                    .canonical_bytes()
-                    .map_err(anyhow::Error::msg)?,
-                if rotate_mls_ordering_policy {
-                    federation::PolicyRotation::Operator
-                } else {
-                    federation::PolicyRotation::Refuse
-                },
-                time::OffsetDateTime::now_utc(),
-            )
-            .await?;
-        tracing::info!(
-            sequence = envelope.sequence,
-            policy_hash = envelope.policy_hash()?,
-            control_key_id = service.signer().key_id(),
-            "loaded authenticated MLS ordering policy"
-        );
-        telemetry::policy_event(
-            "mls_ordering",
-            if rotate_mls_ordering_policy {
-                "rotated"
-            } else {
-                "loaded"
-            },
-        );
-        if rotate_mls_ordering_policy {
-            println!(
-                "MLS ordering policy rotated: domain={} sequence={} hash={}",
-                envelope.domain,
-                envelope.sequence,
-                envelope.policy_hash()?
-            );
-            return Ok(());
-        }
-    } else if rotate_mls_ordering_policy {
-        anyhow::bail!(
-            "MLS ordering policy rotation requires federation, policy JSON, and a control signer"
         );
     }
     // The S3-compatible object store (bundled SeaweedFS, or any other: docs/self-hosting.md).
@@ -448,7 +384,7 @@ async fn main() -> anyhow::Result<()> {
         None
     };
     live_locations::spawn_sweeper(pool.clone());
-    chat_mls::call_link_waiting::spawn_sweeper(pool.clone());
+    chat_calls::call_link_waiting::spawn_sweeper(pool.clone());
     let maps =
         Arc::new(maps::MapService::start(&pool, &config.maps_cache_dir, &config.server_url).await?);
     // Group send endorsement keys: made on first start, and every stored one
@@ -476,7 +412,6 @@ async fn main() -> anyhow::Result<()> {
         chat_hub,
         federation,
         sealed_sender,
-        mls_ordering,
         storage_probe,
         web_push,
         maps,
@@ -493,8 +428,6 @@ async fn main() -> anyhow::Result<()> {
     remote_renames::spawn_announcer(state.clone());
     chat_federation::spawn_retry_worker(state.clone());
     chat_media_federation::spawn_retry_worker(state.clone());
-    chat_mls::spawn_retry_worker(state.clone());
-    chat_mls::spawn_invitation_expiry(state.clone());
     drive_federation::spawn_digest_backfill(state.clone());
     mail::groups::ensure_system_groups(&state.pool, &state.config.chat_server_name).await?;
     site_settings::seed_mail_outside_sending(&state.pool, state.config.mail_outside_sending)
@@ -1549,84 +1482,6 @@ fn build_router(state: AppState) -> Router {
             post(handlers::chat_identity::check_keys).route_layer(DefaultBodyLimit::max(1024)),
         )
         .route(
-            "/api/chat/mls/key-packages",
-            put(chat_mls::publish_key_packages).route_layer(DefaultBodyLimit::max(8 * 1024 * 1024)),
-        )
-        .route(
-            "/api/chat/mls/domains/:domain/policy",
-            get(chat_mls::get_policy_history),
-        )
-        .route(
-            "/api/chat/mls/conversations",
-            post(chat_mls::create_conversation).route_layer(DefaultBodyLimit::max(2 * 1024 * 1024)),
-        )
-        .route(
-            "/api/chat/mls/conversations/recover",
-            post(chat_mls::recover_conversation)
-                .route_layer(DefaultBodyLimit::max(8 * 1024 * 1024)),
-        )
-        .route(
-            "/api/chat/mls/control/blocks",
-            post(chat_mls::commit_control_block)
-                .route_layer(DefaultBodyLimit::max(2 * 1024 * 1024)),
-        )
-        .route(
-            "/api/chat/mls/conversations/:conversationId/:incarnation/control-history",
-            get(chat_mls::get_control_history),
-        )
-        .route(
-            "/api/chat/mls/conversations/:conversationId/:incarnation/recovery",
-            get(chat_mls::get_recovery),
-        )
-        .route(
-            "/api/chat/mls/control/membership-deliveries",
-            put(chat_mls::stage_membership_delivery)
-                .route_layer(DefaultBodyLimit::max(8 * 1024 * 1024)),
-        )
-        .route(
-            "/api/chat/mls/invitations",
-            get(chat_mls::list_invitations).post(chat_mls::respond_invitation),
-        )
-        .route(
-            "/api/chat/mls/invitation-feedback",
-            get(chat_mls::list_invitation_feedback),
-        )
-        .route(
-            "/api/chat/mls/messages/:deviceId",
-            get(chat_mls::drain_mailbox),
-        )
-        .route("/api/chat/mls/messages/ack", post(chat_mls::ack_mailbox))
-        .route(
-            "/api/chat/mls/control/votes",
-            post(chat_mls::collect_ordering_votes)
-                .route_layer(DefaultBodyLimit::max(2 * 1024 * 1024)),
-        )
-        .route(
-            "/api/chat/mls/key-packages/identified",
-            post(chat_mls::get_identified_key_packages)
-                .route_layer(DefaultBodyLimit::max(8 * 1024)),
-        )
-        .route(
-            "/api/chat/mls/key-packages/:deviceId/count",
-            get(chat_mls::key_package_count),
-        )
-        .route(
-            "/api/chat/mls/delivery-capability",
-            put(chat_mls::publish_delivery_capability).route_layer(DefaultBodyLimit::max(8 * 1024)),
-        )
-        .route(
-            "/api/chat/mls/anonymous/key-packages",
-            post(chat_mls::get_anonymous_key_packages)
-                .route_layer(DefaultBodyLimit::max(8 * 1024))
-                .route_layer(from_fn(middleware::rate_limit_chat_anonymous)),
-        )
-        .route(
-            "/api/chat/mls/anonymous/messages",
-            post(chat_mls::submit_anonymous_message)
-                .route_layer(DefaultBodyLimit::max(2 * 1024 * 1024))
-                .route_layer(from_fn(middleware::rate_limit_chat_anonymous)),
-        )
-        .route(
             "/api/chat/accounts/:account_id/keys",
             get(chat::get_user_bundles).route_layer(from_fn(middleware::rate_limit_chat_keys)),
         )
@@ -1672,7 +1527,7 @@ fn build_router(state: AppState) -> Router {
         .route("/api/chat/call-servers", get(calls::call_servers))
         .route(
             "/api/chat/group-calls/token",
-            post(chat_mls::group_call_token).route_layer(DefaultBodyLimit::max(4 * 1024)),
+            post(chat_calls::group_call_token).route_layer(DefaultBodyLimit::max(4 * 1024)),
         )
         .route(
             "/api/chat/groups/gateway-key",
@@ -1685,127 +1540,123 @@ fn build_router(state: AppState) -> Router {
         )
         .route(
             "/api/chat/call-links",
-            post(chat_mls::call_links::create)
-                .get(chat_mls::call_links::list)
+            post(chat_calls::call_links::create)
+                .get(chat_calls::call_links::list)
                 .route_layer(DefaultBodyLimit::max(4 * 1024)),
         )
         .route(
             "/api/chat/joined-meetings",
-            get(chat_mls::call_link_history::list)
-                .post(chat_mls::call_link_history::add)
-                .delete(chat_mls::call_link_history::clear)
+            get(chat_calls::call_link_history::list)
+                .post(chat_calls::call_link_history::add)
+                .delete(chat_calls::call_link_history::clear)
                 .route_layer(DefaultBodyLimit::max(4 * 1024)),
         )
         .route(
             "/api/chat/joined-meetings/:id",
-            delete(chat_mls::call_link_history::remove),
+            delete(chat_calls::call_link_history::remove),
         )
         .route(
             "/api/chat/call-links/token",
-            post(chat_mls::call_links::token)
+            post(chat_calls::call_links::token)
                 .route_layer(DefaultBodyLimit::max(4 * 1024))
                 .route_layer(from_fn(middleware::rate_limit_call_link)),
         )
         .route(
             "/api/chat/call-links/info",
-            post(chat_mls::call_links::info)
+            post(chat_calls::call_links::info)
                 .route_layer(DefaultBodyLimit::max(4 * 1024))
                 .route_layer(from_fn(middleware::rate_limit_call_link)),
         )
         .route(
             "/api/chat/call-links/knock",
-            post(chat_mls::call_link_waiting::knock)
+            post(chat_calls::call_link_waiting::knock)
                 .route_layer(DefaultBodyLimit::max(4 * 1024))
                 .route_layer(from_fn(middleware::rate_limit_call_link)),
         )
         .route(
             "/api/chat/call-links/knock/status",
-            post(chat_mls::call_link_waiting::knock_status)
+            post(chat_calls::call_link_waiting::knock_status)
                 .route_layer(DefaultBodyLimit::max(4 * 1024))
                 .route_layer(from_fn(middleware::rate_limit_call_link_poll)),
         )
         .route(
             "/api/chat/call-links/knock/leave",
-            post(chat_mls::call_link_waiting::leave_knock)
+            post(chat_calls::call_link_waiting::leave_knock)
                 .route_layer(DefaultBodyLimit::max(4 * 1024))
                 .route_layer(from_fn(middleware::rate_limit_call_link_poll)),
         )
         .route(
             "/api/chat/call-links/knocks",
-            post(chat_mls::call_link_waiting::knocks)
+            post(chat_calls::call_link_waiting::knocks)
                 .route_layer(DefaultBodyLimit::max(4 * 1024))
                 .route_layer(from_fn(middleware::rate_limit_call_link_poll)),
         )
         .route(
             "/api/chat/call-links/knocks/decide",
-            post(chat_mls::call_link_waiting::decide)
+            post(chat_calls::call_link_waiting::decide)
                 .route_layer(DefaultBodyLimit::max(4 * 1024))
                 .route_layer(from_fn(middleware::rate_limit_call_link_poll)),
         )
         .route(
             "/api/chat/call-links/roles",
-            post(chat_mls::call_link_moderation::roles)
+            post(chat_calls::call_link_moderation::roles)
                 .route_layer(DefaultBodyLimit::max(8 * 1024))
                 .route_layer(from_fn(middleware::rate_limit_call_link_poll)),
         )
         .route(
             "/api/chat/call-links/co-hosts",
-            post(chat_mls::call_link_moderation::set_co_host)
+            post(chat_calls::call_link_moderation::set_co_host)
                 .route_layer(DefaultBodyLimit::max(8 * 1024))
                 .route_layer(from_fn(middleware::rate_limit_call_link_poll)),
         )
         .route(
             "/api/chat/call-links/participants/remove",
-            post(chat_mls::call_link_moderation::remove_participant)
+            post(chat_calls::call_link_moderation::remove_participant)
                 .route_layer(DefaultBodyLimit::max(8 * 1024))
                 .route_layer(from_fn(middleware::rate_limit_call_link_poll)),
         )
         .route(
             "/api/chat/call-links/participants/mute",
-            post(chat_mls::call_link_moderation::mute)
+            post(chat_calls::call_link_moderation::mute)
                 .route_layer(DefaultBodyLimit::max(8 * 1024))
                 .route_layer(from_fn(middleware::rate_limit_call_link_poll)),
         )
         .route(
             "/api/chat/call-links/participants/screen",
-            post(chat_mls::call_link_moderation::set_screen_share)
+            post(chat_calls::call_link_moderation::set_screen_share)
                 .route_layer(DefaultBodyLimit::max(8 * 1024))
                 .route_layer(from_fn(middleware::rate_limit_call_link_poll)),
         )
         .route(
             "/api/chat/call-links/lock",
-            post(chat_mls::call_link_moderation::lock)
+            post(chat_calls::call_link_moderation::lock)
                 .route_layer(DefaultBodyLimit::max(8 * 1024))
                 .route_layer(from_fn(middleware::rate_limit_call_link_poll)),
         )
         .route(
             "/api/chat/call-links/end",
-            post(chat_mls::call_link_moderation::end)
+            post(chat_calls::call_link_moderation::end)
                 .route_layer(DefaultBodyLimit::max(8 * 1024))
                 .route_layer(from_fn(middleware::rate_limit_call_link_poll)),
         )
         .route(
             "/api/chat/call-links/:room_id",
-            delete(chat_mls::call_links::delete),
+            delete(chat_calls::call_links::delete),
         )
         .route(
             "/api/chat/call-links/:room_id/waiting-room",
-            put(chat_mls::call_link_waiting::set_waiting_room)
+            put(chat_calls::call_link_waiting::set_waiting_room)
                 .route_layer(DefaultBodyLimit::max(4 * 1024)),
         )
         .route(
             "/api/chat/call-links/:room_id/info",
-            put(chat_mls::call_links::update_info).route_layer(DefaultBodyLimit::max(4 * 1024)),
+            put(chat_calls::call_links::update_info).route_layer(DefaultBodyLimit::max(4 * 1024)),
         )
         .route(
             "/api/chat/push-subscription",
             put(web_push::put_subscription)
                 .delete(web_push::delete_subscription)
                 .route_layer(DefaultBodyLimit::max(8 * 1024)),
-        )
-        .route(
-            "/api/chat/invite-links",
-            post(chat_mls::call_invite_link).route_layer(DefaultBodyLimit::max(128 * 1024)),
         )
         .route("/api/chat/ws", get(chat::ws))
         // Chat-media uses the same storage client and tus multipart semantics,
@@ -1978,24 +1829,6 @@ fn build_router(state: AppState) -> Router {
                 .route_layer(from_fn(middleware::rate_limit_fed_users)),
         )
         .route(
-            "/api/fed/chat/mls/key-packages/identified",
-            post(chat_mls::federated_get_identified_key_packages)
-                .route_layer(DefaultBodyLimit::max(8 * 1024))
-                .route_layer(from_fn(middleware::rate_limit_fed_users)),
-        )
-        .route(
-            "/api/fed/chat/mls/anonymous/key-packages",
-            post(chat_mls::federated_get_anonymous_key_packages)
-                .route_layer(DefaultBodyLimit::max(8 * 1024))
-                .route_layer(from_fn(middleware::rate_limit_fed_users)),
-        )
-        .route(
-            "/api/fed/chat/mls/anonymous/messages",
-            post(chat_mls::federated_submit_anonymous_message)
-                .route_layer(DefaultBodyLimit::max(2 * 1024 * 1024))
-                .route_layer(from_fn(middleware::rate_limit_fed_users)),
-        )
-        .route(
             "/api/fed/chat/groups/gateway",
             post(chat_groups::routes::fed_gateway)
                 .route_layer(DefaultBodyLimit::max(chat_groups::routes::MAX_SEALED))
@@ -2008,56 +1841,8 @@ fn build_router(state: AppState) -> Router {
         )
         .route(
             "/api/fed/chat/group-calls/token",
-            post(chat_mls::federated_group_call_token)
+            post(chat_calls::federated_group_call_token)
                 .route_layer(DefaultBodyLimit::max(4 * 1024))
-                .route_layer(from_fn(middleware::rate_limit_fed_users)),
-        )
-        .route(
-            "/api/fed/chat/invite-links",
-            post(chat_mls::federated_call_invite_link)
-                .route_layer(DefaultBodyLimit::max(128 * 1024))
-                .route_layer(from_fn(middleware::rate_limit_fed_users)),
-        )
-        .route(
-            "/api/fed/chat/mls/invitation-feedback",
-            post(chat_mls::federated_record_invitation_feedback)
-                .route_layer(DefaultBodyLimit::max(8 * 1024))
-                .route_layer(from_fn(middleware::rate_limit_fed_users)),
-        )
-        .route(
-            "/api/fed/chat/mls/control/genesis",
-            post(chat_mls::federated_replicate_genesis)
-                .route_layer(DefaultBodyLimit::max(2 * 1024 * 1024))
-                .route_layer(from_fn(middleware::rate_limit_fed_users)),
-        )
-        .route(
-            "/api/fed/chat/mls/control/votes",
-            post(chat_mls::federated_cast_ordering_vote)
-                .route_layer(DefaultBodyLimit::max(2 * 1024 * 1024))
-                .route_layer(from_fn(middleware::rate_limit_fed_users)),
-        )
-        .route(
-            "/api/fed/chat/mls/control/blocks",
-            post(chat_mls::federated_commit_control_block)
-                .route_layer(DefaultBodyLimit::max(8 * 1024 * 1024))
-                .route_layer(from_fn(middleware::rate_limit_fed_users)),
-        )
-        .route(
-            "/api/fed/chat/mls/control/recoveries",
-            post(chat_mls::federated_recover_conversation)
-                .route_layer(DefaultBodyLimit::max(8 * 1024 * 1024))
-                .route_layer(from_fn(middleware::rate_limit_fed_users)),
-        )
-        .route(
-            "/api/fed/chat/mls/control/authority-bootstrap",
-            post(chat_mls::federated_stage_authority_bootstrap)
-                .route_layer(DefaultBodyLimit::max(8 * 1024 * 1024))
-                .route_layer(from_fn(middleware::rate_limit_fed_users)),
-        )
-        .route(
-            "/api/fed/chat/mls/control/participant-bootstrap",
-            post(chat_mls::federated_stage_participant_bootstrap)
-                .route_layer(DefaultBodyLimit::max(8 * 1024 * 1024))
                 .route_layer(from_fn(middleware::rate_limit_fed_users)),
         )
         .route(
@@ -2545,11 +2330,6 @@ fn build_router(state: AppState) -> Router {
                     "/api/admin/federation/peers/:domain/repin",
                     post(admin::repin_federation_peer),
                 )
-                .route("/api/admin/chat/mls/status", get(chat_mls::admin_status))
-                .route(
-                    "/api/admin/chat/mls/conversations/:conversationId",
-                    get(chat_mls::admin_conversation),
-                )
                 .route_layer(from_fn(middleware::rate_limit_admin)),
         )
         // Layer order: with chained `.layer()` the *last* added is the outermost. The tus
@@ -2763,7 +2543,7 @@ mod command_tests {
             &["orphan-sweep"],
             &["orphan-sweep", "--delete"],
             &["federation-identity", "rotate"],
-            &["feature-policy", "rotate", "mls-ordering"],
+            &["feature-policy", "rotate", "sealed-sender"],
         ] {
             assert!(known_command(&args(ok)), "{ok:?}");
         }
@@ -2776,6 +2556,7 @@ mod command_tests {
             &["storage-check", "x"],
             &["federation-identity"],
             &["feature-policy", "rotate", "drive"],
+            &["feature-policy", "rotate", "mls-ordering"],
             &["--help"],
         ] {
             assert!(!known_command(&args(refused)), "{refused:?}");

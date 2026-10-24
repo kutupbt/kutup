@@ -5,9 +5,9 @@ Voice and video calls, as Signal has them:
 - **One-to-one calls:** media goes directly between the two browsers
   (WebRTC). Everything that sets a call up travels end-to-end encrypted
   through the existing Direct (libsignal) session.
-- **Group calls:** media goes through the SFU of the server that started the
-  call, with frames end-to-end encrypted under a key only the group's MLS
-  members can derive. See "Group calls" below.
+- **Group calls:** media goes through an SFU, with frames end-to-end
+  encrypted under a key only the group's members can derive. They come with
+  pairwise groups; see "Group calls" below.
 
 ## Signaling
 
@@ -49,7 +49,7 @@ Several tabs of one browser share a device:
 **Who can call:**
 - A call from someone who isn't an accepted contact doesn't ring. The
   engine suppresses it like typing, as Signal does.
-- Calls are refused in Note to Self and as MLS group content.
+- Calls are refused in Note to Self and as group content.
 - An offer older than 45 s doesn't ring. It is recorded as a missed call,
   for example when Chat opens after the call is over.
 
@@ -99,19 +99,12 @@ host; `CHAT_SFU_URL`, `CHAT_SFU_API_KEY`, `CHAT_SFU_API_SECRET`). Accounts of
 a server without an SFU can join calls others host but not start one (the
 capability `chat.groupCalls`).
 
-**Starting and ending:** starting a call sends one `groupCall` message
-(`GroupCallBody`) to the group over MLS. It carries:
-- `callId`;
-- `event` (`started` / `ended`);
-- `host`;
-- `media`;
-- a `roomId` of 128 random bits;
-- a 32-byte `secret`.
-
-The start shows in the timeline ("Alice started a group call") with Join,
-and the header offers Join while the call is on. The last participant to
-leave sends `ended`. A start nobody ended (a crash) stops showing after 12
-hours. `groupCall` is refused as Direct content.
+**Status:** group calls come with pairwise groups, slice 4 of
+[`plans/pairwise-groups.md`](plans/pairwise-groups.md) (§6, and "Slice 4:
+group calls, the server design"). Until then `chat.groupCalls` is off and no
+group offers a call. The group calls of the removed MLS groups (a `groupCall`
+start message to the group, a frame key from the MLS exporter) are gone with
+them. What exists already is the server's SFU token:
 
 **Joining:**
 - A member asks its own server for an SFU token
@@ -122,41 +115,10 @@ hours. `groupCall` is refused as Direct content.
   subscribe; never room admin).
 - The room id is the capability: only the group's members know it.
 
-**Frame encryption:**
-- Browsers encrypt media frames before they leave (insertable streams,
-  livekit-client's E2EE worker). The SFU forwards frames it cannot read.
-- The key is an MLS exporter secret of the group's current epoch, labelled
-  `kutup group call frame key v1` with the call id as context. Only the
-  current members can derive it.
-- A membership change advances the epoch and changes the key. Each epoch's
-  key sits at key index `epoch mod 16`, so frames from a member one step
-  behind still decrypt while the Commit reaches everyone.
-- Participants check for a new epoch every 3 s, and at once when a frame
-  fails to decrypt.
-
-**Who is who:**
-- The SFU sees each participant only as a tag: the first 12 bytes of
-  `HMAC-SHA256(secret, address)` in hex, plus 4 random bytes per join.
-- Members compute the tags of the group's roster to name the tiles. The SFU
-  cannot, without the secret.
-
-**Screen sharing:** a participant can publish its screen beside its
-camera. It is one more track through the SFU, with its frames encrypted
-under the same key as the others. While someone shares, the screen takes the
-stage and the participants move to a strip beside it.
-
-**Ringing:** in groups of up to 16 members, a start less than 45 s old rings
-the other members, with Join, Join with video and Decline, a ringtone, and
-a notification when the tab is hidden. One tab per account rings (the call
-desk). Larger groups only show the notice, as in Signal.
-
-**Members added during a call:** they never received the start. When a
-participant's key refresh finds new members in the roster, the participant
-with the lowest SFU identity (exactly one) re-sends the same `started`
-message. The timeline shows each call's start once.
-
-**Group calls in the timeline:** the start notice, and the list preview
-("Group call started" / "Group call ended").
+The SFU sees each participant only as an opaque tag the members can map to a
+person and the SFU cannot; frames are encrypted in the browser (insertable
+streams), so the SFU forwards what it cannot read. Tiles, screen sharing and
+the call view work as in a meeting (below); ringing comes with slice 4.
 
 ## Meetings
 
@@ -239,8 +201,8 @@ offers:
 **In the meeting:** media goes through the host's SFU, each frame encrypted
 under the frame key, so the SFU forwards what it cannot read. The SFU sees
 each participant as a random identity and an opaque label; the others open
-the label with the name key. Screen sharing and the People panel work as in
-a group call.
+the label with the name key. Screen sharing and the People panel work as
+they will in group calls.
 
 **Meeting chat:** the Chat panel of a meeting is the meeting's own, not a
 conversation. Each message is sealed under the chat key and sent to the

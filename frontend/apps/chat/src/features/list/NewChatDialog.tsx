@@ -2,12 +2,12 @@ import { Link2, NotebookPen, Users } from 'lucide-react'
 import { useState, type FormEvent } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useNavigate } from 'react-router-dom'
-import { inviteFragmentFromUrl } from '@kutup/chat-core/invite-links'
 import { Button } from '@kutup/ui/components/button'
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@kutup/ui/components/dialog'
 import { Field } from '@kutup/ui/components/field'
 import { ContactSuggestInput } from '@kutup/contacts-core/ui/ContactSuggestInput'
 import { useChat } from '../../app/chatStore'
+import { groupLinkFragmentFromUrl } from '../../lib/chatGroupLink'
 import { openJoinLink } from '../../lib/joinLink'
 import { NewGroupDialog } from './NewGroupDialog'
 import type { AccountRef } from '@kutup/chat-core/identity'
@@ -41,7 +41,7 @@ export function NewChatDialog({ open, onOpenChange }: { open: boolean; onOpenCha
   async function start(event: FormEvent) {
     event.preventDefault()
     if (looking) return
-    if (chat.capabilities?.mlsGroups && inviteFragmentFromUrl(value)) {
+    if (chat.capabilities?.pairwiseGroups && groupLinkFragmentFromUrl(value)) {
       close()
       openJoinLink(value.trim())
       return
@@ -121,7 +121,7 @@ export function NewChatDialog({ open, onOpenChange }: { open: boolean; onOpenCha
                   {t('chat.group.new')}
                 </Button>
               ) : null}
-              {chat.capabilities?.mlsGroups ? (
+              {chat.capabilities?.pairwiseGroups ? (
                 <Button
                   type="button"
                   variant="ghost"

@@ -111,7 +111,7 @@ export function ConversationList({ selectedKey }: { selectedKey: string | null }
                   item.profile,
                   self.key,
                   t,
-                  item.groupInfo ?? (item.chatGroup ? { name: item.chatGroup.title } : null),
+                  item.chatGroup ? { name: item.chatGroup.title } : null,
                 )}
                 snippet={snippet(item)}
                 time={item.last || item.activityMs ? formatShortTime(item.last?.timestampMs ?? item.activityMs, now, i18n.language, t) : ''}
@@ -247,8 +247,8 @@ function ConversationRow({
           >
             <Avatar
               name={title}
-              image={chatGroupPicture?.data ?? item.groupInfo?.avatar?.data ?? item.profile?.avatar}
-              contentType={chatGroupPicture?.contentType ?? item.groupInfo?.avatar?.contentType ?? item.profile?.avatarContentType}
+              image={chatGroupPicture?.data ?? item.profile?.avatar}
+              contentType={chatGroupPicture?.contentType ?? item.profile?.avatarContentType}
               group={item.conversation.kind === 'group'}
             />
             <span className="min-w-0 flex-1">

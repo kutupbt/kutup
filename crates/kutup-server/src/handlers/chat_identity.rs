@@ -464,11 +464,6 @@ pub async fn distribute_identity(
     .bind(&kept)
     .fetch_all(&mut *tx)
     .await?;
-    sqlx::query("DELETE FROM chat_mls_devices WHERE user_id = $1 AND NOT (device_id = ANY($2))")
-        .bind(user_id)
-        .bind(&kept)
-        .execute(&mut *tx)
-        .await?;
     for keys in &request.devices {
         sqlx::query(
             "UPDATE chat_devices SET identity_key = $3, registration_id = $4,

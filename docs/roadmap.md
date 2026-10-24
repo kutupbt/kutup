@@ -120,17 +120,19 @@ Left before the tag:
 
 - **Pairwise groups (Signal-style), replacing MLS.** Each member's devices
   are reached one to one, as Signal's groups before MLS, keyed by account ids
-  (design: `docs/plans/pairwise-groups.md`). When they ship, the MLS code,
-  routes and `chat_mls_*` tables are removed. The checklist's group-limit
-  split and authority-quorum UI are obsolete with them.
+  (design: `docs/plans/pairwise-groups.md`). The MLS code, routes and
+  `chat_mls_*` tables are removed (slice 5, plan §9). The checklist's
+  group-limit split and authority-quorum UI went with them.
   Slice 1 (state engine, sender keys, sealed batches, basic UI) is built,
   and a new device of a member keeps their groups (the account's
   `chatGroups` group list, `specs/38-chat-group-device-replaced.spec.ts`).
   Slice 3 (links, requests, settings, bans, ending a group, removal notices,
   timeline lines; `specs/165-chat-group-link.spec.ts` and the second test of
   `specs/161-chat-groups-two-server.spec.ts`) is built, with request status,
-  withdrawal and the avatar on the server's #285 and #288. Slices 2 (sending once), 4 (calls) and 5 (MLS out)
-  follow; groups stay off until all are done.
+  withdrawal and the avatar on the server's #285 and #288. Slice 2 (sending
+  once) and slice 5 (MLS out) are built; slice 4 (calls) follows, and the
+  kinds groups don't take yet (reactions, edits, media, receipts, typing,
+  timers). Groups stay off until all are done.
 - **Master-key rotation.** Every device holds the account master key, so a
   lost or stolen device keeps it: removing the device and resetting the Chat
   identity (docs/plans/account-identity-key.md) leaves it able to sign
@@ -138,12 +140,11 @@ Left before the tag:
   re-wraps the account's data and derives a new authority, which contacts
   verify as an authority change. Its own plan comes first; until then the
   removal screen and the CLI's password change say so.
-- **libsignal ≥ 0.99 with hpke-rs 0.7**, with or after the MLS removal.
-  hpke-rs 0.6.1 is pinned by libsignal v0.97.2, chat-core and kutup-crypto,
-  and its optional libcrux backend (never compiled) keeps
-  `libcrux-chacha20poly1305` 0.0.7 in the chat-core and client-ffi lockfiles
-  (GHSA-hc3c-63hc-2r9f, dismissed as not used on 2026-10-22). The upgrade
-  also takes openmls_rust_crypto 0.6, unless MLS is gone by then.
+- **libsignal ≥ 0.99 with hpke-rs 0.7**, now that MLS is removed.
+  hpke-rs 0.6.1 is pinned by libsignal v0.97.2 and kutup-crypto, and its
+  optional libcrux backend (never compiled) keeps `libcrux-chacha20poly1305`
+  0.0.7 in the chat-core and client-ffi lockfiles (GHSA-hc3c-63hc-2r9f,
+  dismissed as not used on 2026-10-22).
 - **An independent security review** of the V1 formats and protocols, with a
   review bundle prepared for it.
 - **The remaining libsodium primitives.** Formats are sealed in WASM, but the
@@ -401,8 +402,8 @@ The database half exists: `scripts/backup-postgres.sh` stores encrypted dumps in
 
 ## V1 major track · Federated E2EE chat ("ileti")
 
-The shipped web track provides libsignal Direct Chat/Note to Self and OpenMLS
-private groups with encrypted media over the same application edge and
+The shipped web track provides libsignal Direct Chat/Note to Self (and
+pairwise groups, off until every slice is done) with encrypted media over the same application edge and
 authenticated federation stack as Drive. Chat objects use the same SeaweedFS
 infrastructure but separate formats, references, and keys, and count against
 the same account storage pool; they are not Drive files. The current UI is part of the main responsive web app,
@@ -414,8 +415,7 @@ The normative wire contract the three clients freeze against is **`docs/chat-pro
 
 **Current group decision:** groups are off for the beta (`CHAT_GROUPS`
 false) and come back as pairwise groups (Signal-style, each member's devices
-reached one to one), replacing the MLS groups of [`chat-mls.md`](chat-mls.md);
-MLS is removed when they ship. The design is
+reached one to one), replacing the MLS groups of earlier builds, now removed (§9 of the plan). The design is
 [`plans/pairwise-groups.md`](plans/pairwise-groups.md) (decided 2026-10-17):
 - sender keys over one-to-one sessions;
 - Groups v2 state on the server where the group was created;
@@ -440,7 +440,7 @@ names unambiguous):
 | 2b | Shared core + minimal 1:1 reference web UI | **Implemented and live-stack verified.** Includes durable typed inbound journal/quarantine, SQLCipher/IndexedDB stores, crash-safe registration/prekeys, signed manifests, WASM transport, Web Locks, REST+WS reconciliation, history, Note to Self, and ordinary linked-device sent transcripts. Web remains the product client until the messaging milestone is complete; native packaging/integration is not a gate. |
 | 3 | Web federation foundation | **Implemented and two-server live verified:** canonical `username@server`, typed conversations, one persistent v2 server identity, signed `.well-known` endpoint/capability discovery, immutable identity history and authenticated rotation, strict RFC 9421/9530 request/response authentication, replay reservation, DNS-rebinding/SSRF-safe resolution, durable per-destination in-order Chat delivery, device-mismatch recovery, terminal rejection, and sequence-gap replay. Drive now uses that same stack for signed account lookup, domain-bound fragment capabilities, invite acceptance, file lists, idempotent upload/delete, persisted ciphertext digests, and verify-before-release streaming downloads. The isolated harness proves the Drive round trip, that Chat reuses a Drive-established pin, and that Chat retry survives an origin restart while the destination is offline. The generic responsive admin control plane provides a global stop, feature-scoped `disabled`/`allowlist`/`blocklist`/`open` admission and trust floors, directional domain rules, shared Chat/Drive diagnostics, peer search/trust filters, retry-one/retry-visible workflows, TOFU verification, exact immutable quarantine/history evidence, break-glass re-pin, and filtered audit presentation/CSV export. A disabled feature is omitted from discovery while the other remains available. Both old feature-specific federation stacks and raw remote URL routes were removed; there is no v1 downgrade. No alias namespace. See `docs/federation-protocol.md`. |
 | 4 | Web contact privacy and trust | **Implemented and two-server verified.** Account-signed complete manifest history, durable gray-TOFU/green-QR/red-quarantine state, explicit account-incarnation replacement, message requests/blocking, contacts-only libsignal sealed sender, offline-root/online-certificate policy, database-backed abuse limits, anonymous local/federated delivery, capability rotation on block, no identified fallback, and the shared typed XChaCha profile envelope are restart- and two-server-browser verified. |
-| 5 | MLS private groups | **Built and two-server verified, off for the beta and to be replaced.** OpenMLS groups with multi-server ordering authorities (`docs/chat-mls.md`) proved fragile when devices changed on the first live server. Pairwise groups (Signal-style) replace them; the MLS code, routes and `chat_mls_*` tables go when they ship. |
+| 5 | MLS private groups | **Removed.** OpenMLS groups with multi-server ordering authorities proved fragile when devices changed on the first live server, and were never on in the beta. Pairwise groups (Signal-style) replace them; the MLS code, routes and `chat_mls_*` tables are gone (pairwise-groups.md §9). |
 | 6 | Web messaging and media | **The currently scoped Phase 6 messaging/media slices are implemented: Chat-media is advertised and clean two-server verified; encrypted replies, reactions, author-only edits/deletions, delivery/read receipts, ephemeral typing indicators, disappearing messages, private local search, platform photo/video capture and voice-note recording are present.** Direct, Note-to-Self and MLS attachments use one immutable Rust/WASM-secretstream object, resumable tus upload, sender-free durable federation copies, the account's one administrator-controlled storage pool, manual streaming download, clearable encrypted per-conversation accounting and continuous E2EE history/media backup. Browser camera capture uses the browser/OS permission UI and feeds the resulting file into that same encrypted path without a second format, endpoint or plaintext fallback. Voice recording is browser-permission-owned, bounded to 10 minutes and 64 MiB (or the lower server limit), stops every microphone track on all terminal paths, authenticates its duration in the E2EE descriptor and uses the same immutable media path. Replies bind a canonical logical message UUID only inside the shared E2EE content and survive server-hosted backup restore. Reactions are bounded encrypted set/remove operations reduced as one deterministic latest reaction per account without server-visible metadata. Edits use deterministic author-authenticated replacement operations; irreversible deletion tombstones prevent stale-device resurrection. Batched receipt targets and state remain E2EE; read receipts are browser-local opt-in and MLS views aggregate accounts. Typing controls are E2EE, accepted only for established conversations, excluded from product history/transcripts, locally expiring and burst-throttled to limit MLS one-time KeyPackage pressure. Disappearing timers are hidden E2EE controls; every affected text/attachment authenticates its own 30-second-to-30-day duration, senders count from durable creation, and recipients count from first actual view with the earliest absolute start synchronized privately across their linked devices. Durable plaintext and derived controls are atomically purged, unsaved media references are released, and backup restore or browser replacement cannot restart expiry. Local search uses an index kept only on the device and sealed with the chat store, applies edits/deletes/expiry before showing a hit, and never emits a query or plaintext index to a server. Chat shares the account storage pool (10 GiB by default) with Drive and the other apps; administrators can change it per account. See `docs/chat-media.md` and `docs/chat-protocol.md`. |
 | 5b | Confidential broadcast | **No longer a V1 blocker.** The LKH plus small-MLS-control-group design (`docs/broadcast-security-threat-model.md`) depended on MLS; broadcast is reconsidered after pairwise groups. |
 | 7 | Web PWA completion | Generic content-free Web Push, offline/restart recovery, responsive/accessibility/browser matrix, security/load tests, and protocol freeze. |
@@ -455,8 +455,8 @@ replacement and manual storage clearing all create new cryptographic devices.
 V1 exposes active Chat installations and last activity, supports immediate
 revocation, and continuously protects display history in an account-local E2EE
 server backup. After unified recovery, a replacement browser restores the
-verified encrypted base and event tail, then establishes fresh Direct/MLS
-protocol state for new messages. The UI reports missing, invalid, offline, or
+verified encrypted base and event tail, then establishes fresh Direct Chat
+and group protocol state for new messages. The UI reports missing, invalid, offline, or
 quota-blocked backup state explicitly. Automated manual-fixture setup must not
 publish disposable headless devices unless it retains or revokes them.
 
@@ -954,17 +954,14 @@ an edit. Plan: [`plans/pass.md`](plans/pass.md); research and decisions:
   chats get the self-healing first: pushed device-list changes, healing on
   send, undecryptable messages as placeholders that fill in, automatic
   session repair.
-- **Pairwise groups replace MLS (after the wipe).** Groups come back on the
-  pairwise, self-healing design (each member's devices reached one to one,
-  as Signal's groups before MLS), keyed by account ids from the start. MLS
-  is frozen until then: it gets only what other formats need to build, no
-  new work, and its routes stay refused while `CHAT_GROUPS` is off. When the
-  pairwise design ships, the MLS code, tables and routes are removed, among
-  them `chat_mls_pending_requests` (still keyed by a sender address, and kept
-  only because `chat_mls_mailbox.request_id` references it). MLS anonymous
-  delivery to a local recipient, and at the destination, deduplicates a
-  reused send id without comparing content, so a different copy is dropped
-  silently; the pairwise design must compare a stored digest and refuse it.
+- **Pairwise groups replace MLS.** Groups come back on the pairwise,
+  self-healing design (each member's devices reached one to one, as Signal's
+  groups before MLS), keyed by account ids from the start. The MLS code,
+  tables and routes are removed (migration `20261023120000_remove_mls`),
+  `chat_mls_pending_requests` among them. MLS anonymous
+  delivery deduplicated a reused send id without comparing content, so a
+  different copy was dropped silently; the pairwise sends must compare a
+  stored digest and refuse it.
 - **Networks that block WebSockets: what is left.** Calls get out over TLS
   on port 443 (`turn.` and `sfu-turn.`), Chat reads its mailbox every few
   seconds when its socket cannot open, and a document opens read-only with
@@ -1050,7 +1047,8 @@ an edit. Plan: [`plans/pass.md`](plans/pass.md); research and decisions:
     a rolled-back device with; needs its own design); more fault-injection
     tests (killed mid-write, stale snapshot).
 - **Group device repair: what is left.** A group now recovers when a
-  member's only device is replaced (`docs/chat-mls.md`, "Linked devices").
+  member's only device is replaced (the account's group list and the
+  pairwise copy naming the member, pairwise-groups.md §2).
   Still open: it takes up to two minutes (the device check's period), plus
   three per turn if the first member in line is away, during which the
   replaced device sees the group read-only; a non-administrator cannot
@@ -1271,17 +1269,6 @@ late. The cause is inside the vendored editor build
 (`kutupbt/onlyoffice-editor`); fix it there and drop the watchdog. The office
 editing spec (`tests/e2e/specs/03-office-editing.spec.ts`) exercises reloads.
 
-### Chat · MLS changes built on a stale epoch
-
-When an administrator or owner changes a group moments after another
-member's commit, before their own client has applied it, both ordering
-servers refuse the new block (the local one with 409, a stale height) and
-the client shows "Secure chat is temporarily unavailable". It should instead
-fetch the control history it is missing, rebuild the change on the current
-epoch, and retry. The browser gate
-(`tests/e2e/specs/32-chat-two-server-security.spec.ts`) waits for the peer's
-commit before acting, as a person usually would.
-
 ### Chat · two-server browser gate: sanitized output hides start-up failures
 
 On 2026-10-03 the two-server browser gate failed twice on GitHub's runners
@@ -1343,16 +1330,15 @@ its fix is in the lockfile. Recorded 2026-10-17.
   decrypts or signs with an RSA private key.
 - **Unmaintained**, no replacement in their parents yet: `number_prefix`
   (indicatif, CLI), `proc-macro-error2` (hax-lib, under libsignal's ML-KEM),
-  `smallstr` (yrs), `instant` (OpenMLS, removed with MLS) and `basic-toml`
+  `smallstr` (yrs) and `basic-toml`
   (RUSTSEC-2026-0374, 2026-10-20: askama's compile-time config under uniffi's
   bindings generator, only with `kutup-client-ffi`'s `bindgen` feature; no
   shipped binary links it; uniffi 0.32.2 still uses askama 0.16, so revisit
   at the next uniffi release).
 - **`libcrux-chacha20poly1305` 0.0.7** (fixed in 0.0.8; a panic on an
   overlong ciphertext buffer, a crash rather than a disclosure). Not in RustSec,
-  so `cargo deny` doesn't see it. It reaches `kutup-chat-core` and
-  `kutup-client-ffi` through `hpke-rs =0.6.1`, which OpenMLS `=0.8.1` pins, and
-  goes with MLS.
+  so `cargo deny` doesn't see it. It reached `kutup-chat-core` and
+  `kutup-client-ffi` through OpenMLS's `hpke-rs`, and left with MLS.
 - **`braces` 3.0.3** (no fixed release): build time only, through
   Excalidraw's `sass` → `chokidar`.
 - **`postcss-selector-parser` 6.0.10** (fixed in 7.1.6, a major release):

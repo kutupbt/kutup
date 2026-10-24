@@ -16,6 +16,7 @@
 //! `name.sync-conflict-<ts>` copy and the local file wins the canonical name
 //! on the next pass. Deletions propagate only under `--delete`.
 
+use kutup_crypto::primitives::{hash, Suite};
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
@@ -841,7 +842,7 @@ fn execute_file_action(
             // up, the base its first edit here is made against.
             if crate::editor_kind::edits_as_yjs(split_rel(rel).1) {
                 let uploaded = std::fs::read(&abs)?;
-                if <[u8; 32]>::from(<sha2::Sha256 as sha2::Digest>::digest(&uploaded)) == sha256 {
+                if <[u8; 32]>::from(hash(Suite::V1, &uploaded)) == sha256 {
                     crate::yjs_sync::record_upload(store, pair, rel, &file_id, &uploaded)?;
                 }
             }
@@ -1481,7 +1482,10 @@ fn split_rel(rel: &str) -> (&str, &str) {
 
 fn temp_path(dest: &Path) -> PathBuf {
     let dir = dest.parent().unwrap_or(Path::new("."));
-    dir.join(format!(".kutup-tmp-{:08x}", rand::random::<u32>()))
+    dir.join(format!(
+        ".kutup-tmp-{:08x}",
+        u32::from_le_bytes(kutup_crypto::primitives::random_array())
+    ))
 }
 
 /// `report.txt` → `report.sync-conflict-20260710-153012.txt` (Syncthing-style).

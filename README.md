@@ -92,7 +92,8 @@ Chat is part of the responsive web app and is available at `/chat` after
 sign-in:
 
 - Direct conversations and Note to Self use pinned libsignal PQXDH, Triple
-  Ratchet, and SPQR state; private groups use RFC 9420 OpenMLS.
+  Ratchet, and SPQR state; groups (off until every slice is done) use Signal's
+  sender keys with group state on the group's home server.
 - `username@server` addressing, message requests, blocking, account/device
   manifests, safety QR comparison, and contacts-only sealed delivery work
   across Kutup homeservers.
@@ -106,10 +107,10 @@ sign-in:
 Every durable display-history mutation enters an IndexedDB-backed encrypted
 backup outbox. After account recovery, a genuinely empty browser automatically
 verifies and restores the latest server-acknowledged base plus event tail, then
-creates fresh Direct/MLS protocol state for new messages. Eligible protected
+creates fresh Direct Chat and group protocol state for new messages. Eligible protected
 media restores lazily. This account-local backup is always on, counts against
 the same storage pool (10 GiB by default), and does not restore device
-keys, ratchets, MLS epochs, mailbox cursors, receipts, or pending sends.
+keys, ratchets, sender keys, mailbox cursors, receipts, or pending sends.
 Device-to-device history transfer is not supported.
 
 ---
@@ -304,7 +305,7 @@ Large files go either way: the browser encrypts 5 MB at a time as each part is s
 
 ## Architecture in 30 seconds
 
-This file-collaboration example shows the common client-encryption boundary. Chat uses its own libsignal/OpenMLS protocols and an account-local encrypted backup rather than this document relay:
+This file-collaboration example shows the common client-encryption boundary. Chat uses its own libsignal protocols and an account-local encrypted backup rather than this document relay:
 
 ```mermaid
 sequenceDiagram
@@ -335,7 +336,7 @@ For the full picture (key hierarchy, login flow, federation model, storage layer
 | Frontend | React 18, TypeScript 5.4, Vite 8, [Redux Toolkit 2](https://redux-toolkit.js.org/), [TailwindCSS](https://tailwindcss.com/) + [Radix UI](https://www.radix-ui.com/) |
 | Frontend crypto | Canonical Rust via `kutup-crypto-wasm`; a narrow [libsodium-wrappers-sumo](https://github.com/jedisct1/libsodium.js) adapter streams large secretstream blobs and supplies browser CSPRNG bytes |
 | Realtime collab | Yjs 13 + `y-codemirror.next` (notes); OnlyOffice + `x2t` WASM (office); `@excalidraw/excalidraw` (whiteboards); a server relay with per-frame AEAD envelopes |
-| Chat | libsignal Direct/Note to Self, OpenMLS private groups, IndexedDB state, continuous E2EE history/media backup |
+| Chat | libsignal Direct/Note to Self, pairwise groups (sender keys), IndexedDB state, continuous E2EE history/media backup |
 | Storage | [SeaweedFS](https://github.com/seaweedfs/seaweedfs) (S3-compatible) |
 | Infrastructure | Docker Compose, Nginx (TLS termination + static asset serving) |
 | Testing | Playwright (e2e), `cargo test` (Rust unit + crypto vectors), Vitest (frontend unit), actionlint and repository documentation checks |

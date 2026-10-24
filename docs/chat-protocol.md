@@ -2,7 +2,7 @@
 
 **Status:** normative pre-v1 protocol
 
-Kutup Chat provides Direct Chat, Note to Self, private MLS groups, encrypted
+Kutup Chat provides Direct Chat, Note to Self, pairwise groups, encrypted
 profiles, signed account/device manifests, federated ciphertext delivery and
 contacts-only sealed sender, encrypted media, and continuous account-local
 display-history backup. A capability is advertised only when its complete local
@@ -18,18 +18,19 @@ is independently authenticated.
 
 - `libsignal-protocol` v0.97.2 owns PQXDH, Triple Ratchet, sealed-sender
   envelopes and sender/server certificate primitives for Direct Chat.
-- OpenMLS 0.8.1 owns the RFC 9420 group state machine and TreeKEM.
-- `hpke-rs` 0.6.1 owns RFC 9180 outer delivery encryption for MLS.
+- libsignal's sender keys and sealed sender v2 carry group messages; the
+  group state (Signal's Groups v2) is Kutup's, on the group's home server
+  (docs/plans/pairwise-groups.md).
 - `kutup-chat-proto` owns strict public DTOs, canonical signing bytes, suite
   identifiers and byte limits.
 - `kutup-chat-core` owns account-manifest verification, durable pins,
-  libsignal/OpenMLS orchestration, atomic persistence and safety numbers. It is
+  libsignal orchestration, group state, atomic persistence and safety numbers. It is
   the canonical Rust implementation used by browser WASM and native FFI.
 - Browsers own authenticated HTTP/WebSocket plumbing only. JavaScript cannot
-  approve a key, manufacture a verified roster, or mutate ratchet/MLS state.
+  approve a key, manufacture a verified roster, or mutate ratchet or group state.
 
-Kutup does not fork or copy selected pieces of libsignal or OpenMLS. Their
-types do not cross Kutup's public API boundary.
+Kutup does not fork or copy selected pieces of libsignal. Its types do not
+cross Kutup's public API boundary.
 
 ## 2. Accounts, addresses and conversation types
 
@@ -61,11 +62,11 @@ V1 conversation types are:
 - Direct: two accounts, libsignal session per device pair.
 - Note to Self: the local account addressed to itself, using Direct Chat and
   authenticated linked-device synchronization.
-- Group: RFC 9420 MLS, 1-256 accounts and at most ten active devices per
-  account, therefore at most 2,560 independent leaves.
+- Group: a pairwise group (Signal's sender keys and Groups v2, members as
+  per-group pseudonyms on the group's home server; §8), 1-256 accounts.
 
 Million-account announcement channels are a different pull/fan-out protocol.
-They are never oversized MLS groups. Calls and group calls are separate.
+They are never oversized groups. Calls and group calls are separate.
 
 ## 3. Typed suites and primitive portfolio
 
@@ -142,8 +143,8 @@ Clients provide explicit active-installation review, last-seen information and
 revocation. Chat display history is protected separately by the always-on,
 account-local E2EE backup described in [`chat-backup.md`](chat-backup.md).
 A recovered installation verifies and restores the signed encrypted base plus
-its ordered event tail; it never restores device keys, Direct ratchets, MLS
-epochs, mailbox cursors or outboxes. Device-to-device history transfer and its
+its ordered event tail; it never restores device keys, Direct ratchets, sender
+keys, mailbox cursors or outboxes. Device-to-device history transfer and its
 relay are not supported.
 
 The backup-specific trust boundary and residual fresh-device rollback risk are
@@ -160,7 +161,8 @@ normative in
 - sequence and exact predecessor hash;
 - issued-at value;
 - 1-10 strictly ordered device records: device id, Direct Chat suite,
-  registration id, and optional MLS credential/delivery keys;
+  registration id (a legacy `mls` entry from the removed MLS groups still
+  reads and verifies, and is never written);
 - Ed25519 signature by the account self-authority.
 
 A bundle, or a server's `409`/`410`, that disagrees with the verified
@@ -377,20 +379,21 @@ manifest contradiction stops rather than encrypting to an untrusted key.
 
 Note to Self is a self-addressed Direct conversation. Sent-message sync to
 linked devices is authenticated and identified. It never uses anonymous
-delivery or creates an MLS group.
+delivery or creates a group.
 
 Every content document, of every kind, carries a stable sender-generated
 `messageId` inside the ciphertext; content without it does not decode. For a
 sent message it equals the durable transport `sendId` (a UUID), and the engine
 refuses to send content whose `messageId` differs. A text reply adds an optional canonical non-nil UUID `replyTo`
 that references that logical ID. The reference uses the same encrypted content
-shape for Direct, Note to Self and MLS; it is never copied into mailbox,
+shape for Direct, Note to Self and groups; it is never copied into mailbox,
 attachment or federation metadata. Clients resolve it only within the current
 conversation and show an unavailable placeholder when bounded local history no
 longer contains the target.
 
 A reaction is a hidden `reaction` content operation encrypted by the same
-Direct, Note-to-Self or MLS channel. Its typed body contains only a canonical
+Direct or Note-to-Self channel (groups take reactions in a later slice).
+Its typed body contains only a canonical
 non-nil `targetMessageId`, one V1 emoji from `👍 ❤️ 😂 😮 😢 🙏`, and an
 `active` boolean. Setting, replacing and removing a reaction therefore reveal no reaction
 metadata to either homeserver. Clients never render these operations as
@@ -418,32 +421,28 @@ retained or downloaded under the Chat-media policy.
 
 Delivery and read state use hidden `receipt` operations. One operation contains
 an exact `delivered` or `read` state and 1–64 unique canonical logical message
-UUIDs, all inside the Direct or MLS ciphertext. Direct clients automatically
+UUIDs, all inside the Direct ciphertext. Direct clients automatically
 emit a delivery receipt after successful local decryption. Read receipts are
 disabled by default and emitted only when the user enables the per-browser
-privacy setting, the conversation is selected, and the page is visible. MLS
-groups emit only this opt-in `read` state: automatic group delivery receipts
-would consume a claimed one-time KeyPackage for every recipient device and
-double the anonymous delivery rate of an active group. `read` subsumes
-`delivered`. A receipt affects only existing outgoing targets in the same
-conversation and is attributed to its authenticated account actor; MLS views
-aggregate recipient accounts rather than devices. Receipt operations are never
-rendered or used as conversation previews, and no homeserver or MLS ordering
-authority receives the target IDs or state in plaintext.
+privacy setting, the conversation is selected, and the page is visible.
+Groups send no receipts yet (a later slice, docs/plans/pairwise-groups.md
+§10). `read` subsumes `delivered`. A receipt affects only existing outgoing
+targets in the same conversation and is attributed to its authenticated
+account actor. Receipt operations are never rendered or used as conversation
+previews, and no homeserver receives the target IDs or state in plaintext.
 
 Typing state uses a hidden `typing` operation whose strict body contains only
-an `active` boolean. It is accepted only from an already accepted contact or an
-authenticated MLS roster member, so a stranger cannot create/reopen a message
-request with typing traffic. The operation is live-only product state: it is
+an `active` boolean. It is accepted only from an already accepted contact (groups
+send no typing yet), so a stranger cannot create/reopen a message request with
+typing traffic. The operation is live-only product state: it is
 excluded from messages, previews, linked-device sent transcripts and exported
 history, and expires six seconds after local receipt. An ordinary authenticated
 application message from the same account clears it immediately. Browsers emit
 at most one active operation every four seconds while a visible composer stays
-non-empty; expiry replaces an explicit stop operation so one MLS typing burst
-does not consume a second set of claimed one-time KeyPackages. Stale durable
-typing outboxes are discarded after ten seconds rather than delivered late.
-The homeservers and MLS ordering authorities see only the ordinary padded
-ciphertext delivery, never the typing kind or state.
+non-empty; expiry replaces an explicit stop operation. Stale durable typing
+outboxes are discarded after ten seconds rather than delivered late. The
+homeservers see only the ordinary padded ciphertext delivery, never the typing
+kind or state.
 
 ### Renames
 
@@ -570,9 +569,8 @@ that is too large to wrap is not sent again; its notice waits as before.
 A hidden E2EE `disappearingTimer` operation changes the duration for future
 messages in one conversation. Its strict body is either an integer
 `durationSeconds` or an omitted value meaning off. V1 accepts 30 seconds
-through 30 days. Direct sends use the normal linked-device transcript and MLS
-sends use the normal authenticated application path, so the timer is never a
-homeserver setting.
+through 30 days. Direct sends use the normal linked-device transcript (groups
+take timers in a later slice), so the timer is never a homeserver setting.
 
 Every affected `text` or `attachment` also repeats the chosen duration as the
 authenticated top-level `expiresAfterSeconds` field. This per-message binding
@@ -612,7 +610,7 @@ A visible message (text or attachment) may carry, beside its body, Signal's
 DataMessage extras as authenticated top-level content fields — the same way
 as `expiresAfterSeconds`, so an older reader keeps the message and ignores
 them, while a present but malformed field rejects the whole message on every
-receive path (Direct, sync transcript, MLS):
+receive path (Direct, sync transcript, group):
 
 | Field | On | Rule |
 | --- | --- | --- |
@@ -627,11 +625,12 @@ receive path (Direct, sync transcript, MLS):
 `call` carries one 1:1 call signal (`CallSignalV1`: offer, answer, ICE
 batch, hang-up, busy) and is ephemeral like `typing`: never history, never
 a linked-device transcript, dropped from the outbox after 60 s, suppressed
-from people not accepted, refused in Note to Self and in MLS. `callLog` is a
+from people not accepted, refused in Note to Self and in groups. `callLog` is a
 local-only record of a finished call, like `groupUpdate`, `undecryptable`,
 `safetyNumberChanged` and `peerRenamed`:
 none of them is ever sent, and one that arrives from anyone is refused. `groupCall`
-(`GroupCallBody`) announces a group call starting or ending, MLS only. See
+(`GroupCallBody`) announces a group call starting or ending; groups' calls are
+not built yet (docs/plans/pairwise-groups.md §6), so none is sent. See
 [`chat-calls.md`](chat-calls.md).
 
 ### Polls
@@ -707,8 +706,8 @@ same-account controls on the Note-to-Self linked-device path, next to
 | `stickerRemoved` | `stickerId` | removes that sticker; the purge then drops both records |
 
 All six are rejected unless they arrive as a transcript from another device
-of the same account addressed to Note to Self, are rejected as MLS
-application content, and a device sends them only to its own Note to Self
+of the same account addressed to Note to Self, are rejected as group content,
+and a device sends them only to its own Note to Self
 (`conversationState` must name the sending device). They stay in the local
 history, hidden from every view, so the continuous backup restores them to a
 replacement browser. The purge keeps only the newest `conversationState` and
@@ -724,8 +723,7 @@ ordinary Note-to-Self sync traffic.
 
 Chat search is a client-only operation over decrypted history already present
 on that installation. Queries, result terms and plaintext indexes are never
-sent to or persisted by a homeserver, federation peer or MLS ordering
-authority.
+sent to or persisted by a homeserver or federation peer.
 
 The chat core keeps a search index beside its per-conversation timelines
 (`kutup-chat-core/src/search.rs`, `docs/research/16-browser-storage-architecture.md`):
@@ -960,24 +958,16 @@ still has, so a late answer to an old sequence changes nothing. A peer that
 answers a single send but not a batch (a server from before batches) gets
 singles for an hour. The retry worker flushes due queues the same way.
 
-## 8. Private MLS groups
+## 8. Groups
 
-The complete group protocol is specified in [`chat-mls.md`](chat-mls.md). V1
-uses OpenMLS ciphersuite `0x0003`, one independent leaf per device, a mandatory
-group-private control extension, identified consent/invitation, anonymous
-established delivery, owner-approved critical governance and replaceable
-multi-server control ordering.
-
-Account roster bounds and leaf bounds are distinct:
-
-```text
-maximum accounts             = 256
-maximum active devices/account = 10
-maximum MLS leaves           = 2,560
-```
-
-The server may set a lower active-device limit. It may not advertise a higher
-group/account/tree capacity than the compiled protocol supports.
+Groups are pairwise ([`docs/plans/pairwise-groups.md`](plans/pairwise-groups.md)),
+Signal's design: messages are sender-key ciphertexts (libsignal
+`group_encrypt`), sent once per destination server on the multi-recipient
+route (§7) or as one sealed envelope per member device; the group's state is
+Groups v2 on the group's home server, which knows members only as per-group
+pseudonyms. A group has 1-256 accounts (`CHAT_GROUP_MAX_MEMBERS`). Groups are
+off (`CHAT_GROUPS`) until every slice of that plan is done. The MLS groups of
+earlier builds are removed; they were never on in the beta.
 
 ## 9. Federation
 
@@ -986,7 +976,7 @@ DNS/SSRF admission, timeout/size limits, destination/body-bound signatures,
 contiguous inbound sequence reservation and durable retry outbox described in
 [`federation-protocol.md`](federation-protocol.md).
 
-Direct identified, sealed, manifest/profile and MLS endpoints are feature
+Direct identified, sealed, manifest/profile and group endpoints are feature
 adapters over that one transport. Clients never provide remote URLs. The local
 server derives the destination from a canonical address and performs the
 signed request.
@@ -1003,7 +993,7 @@ must be atomic:
 - ratchet mutation + plaintext history + inbound receipt/ack state;
 - exact outbox ciphertext + retry metadata;
 - manifest history + current pin/quarantine;
-- OpenMLS provider snapshot + group control pin + mailbox receipt;
+- sender-key advance + group message + mailbox receipt;
 - profile revision + delivery capability verifier;
 - contact block + profile/capability rotation state.
 
@@ -1058,7 +1048,7 @@ downgrades delivery or regenerates supposedly durable ciphertext.
 ## 11. Privacy and traffic shape
 
 V1 protects content and removes sender identity from established destination
-delivery. Direct and MLS message sizes are rounded up to 160-byte steps
+delivery. Direct and group message sizes are rounded up to 160-byte steps
 (Signal's padding), so short messages of any kind look alike; longer ones
 still reveal their approximate length. V1 does not hide timing, IP address,
 origin domain, recipient, or device fan-out.
