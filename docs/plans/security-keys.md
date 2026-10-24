@@ -1,7 +1,7 @@
 # Security keys as a second factor
 
-Status: **build note for approval** (second session, 2026-10-24). Nothing here
-is built yet.
+Status: **approved** (the user, 2026-10-24; decisions below). Nothing here is
+built yet.
 
 **The request (the user, through the main session):** security keys (WebAuthn:
 a YubiKey, a phone's or laptop's built-in authenticator used as a key) as a
@@ -223,11 +223,12 @@ does.
 About **5 days** in all, in two or three PRs. Migrations take the next
 numbers above master and the open PRs at the time.
 
-## Decisions asked
+## Decisions (the user, 2026-10-24)
 
-- **D1:** `webauthn_rp` (pure Rust, behind a kutup-crypto adapter) as
-  recommended, or `webauthn-rs` with OpenSSL linked and W2's `openssl` ban
-  lifted?
-- **D2:** add Proton's recovery codes and make the phrase path turn 2FA off,
-  before the keys (recommended)?
-- **D3:** the key limit's default: 10 (recommended) or Proton's 4?
+- **D1:** `webauthn_rp`, pure Rust, behind a kutup-crypto adapter, with
+  vectors recorded from real browsers and YubiKeys.
+- **D2:** as Proton: 16 one-time recovery codes when 2FA is turned on, and
+  the recovery phrase's path turns every second factor off. This ships first,
+  as its own PR.
+- **D3:** the key limit's default is 10, an administrators' setting, site-wide
+  and per account.
