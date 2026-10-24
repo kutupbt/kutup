@@ -49,6 +49,8 @@ const DEFAULT_HTTP_TIMEOUT: StdDuration = StdDuration::from_secs(30);
 pub(crate) struct ResolvedFederationPeer {
     pub api_base: String,
     pub public_key: [u8; 32],
+    /// Its group send endorsement keys, from the same verified discovery.
+    pub chat_group_send: Vec<kutup_federation_proto::FederationGroupSendKeyV1>,
 }
 
 #[derive(Debug, Clone)]
@@ -937,6 +939,7 @@ fn resolved_peer(
     ResolvedFederationPeer {
         api_base: discovery.api_base,
         public_key: pinned.public_key,
+        chat_group_send: discovery.chat_group_send,
     }
 }
 

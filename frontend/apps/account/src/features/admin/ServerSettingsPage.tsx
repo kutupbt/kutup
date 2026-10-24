@@ -33,10 +33,13 @@ const MULTI_SETTINGS = [
   { field: 'chatMultiMaxMessageBytes', min: 4096, max: 1_048_576 },
   { field: 'chatMultiBaseBytes', min: 4096, max: 4_194_304 },
   { field: 'chatMultiIpBytesPerMin', min: 1_048_576, max: 1_073_741_824 },
-  { field: 'chatGroupCapabilitySendsPerMin', min: 1, max: 100_000 },
-  { field: 'chatGroupCapabilitySendsPerDay', min: 1, max: 10_000_000 },
+  { field: 'chatMultiPerRecipientPerMin', min: 1, max: 1_000_000 },
+  { field: 'chatMultiPerTokenPerMin', min: 1, max: 100_000 },
   { field: 'chatMultiOriginRequestsPerMin', min: 1, max: 1_000_000 },
   { field: 'chatMultiOriginBytesPerMin', min: 1_048_576, max: 17_179_869_184 },
+  { field: 'chatGroupSendEndorsementsPerDay', min: 1, max: 10_000 },
+  { field: 'chatGroupEndorsementUploadsPerDay', min: 1, max: 1000 },
+  { field: 'chatGroupEndorsementPageSize', min: 1, max: 200 },
 ] as const satisfies readonly { field: keyof AdminSettings; min: number; max: number }[]
 /** Calendars (site_settings::CALENDAR_SETTINGS): each field with the server's range. */
 const CALENDAR_SETTINGS = [
@@ -70,9 +73,6 @@ const CHAT_LINKING_SETTINGS = [
 ] as const satisfies readonly { field: keyof AdminSettings; min: number; max: number }[]
 /** Every whole-number setting the page edits by field. */
 const NUMERIC_SETTINGS = [...MULTI_SETTINGS, ...CALENDAR_SETTINGS, ...CHAT_LINKING_SETTINGS]
-/** The server's bounds (site_settings::validate_chat_group_capabilities_per_account). */
-const MAX_GROUP_CAPABILITIES = 100_000
-const MIN_GROUP_CAPABILITIES = 16
 /**
  * The avatar blob lengths (kutup_chat_proto GROUP_AVATAR_BLOB_LENGTHS) and the
  * server's bounds (site_settings::AvatarLimits): storage holds two of the
@@ -106,7 +106,6 @@ export function ServerSettingsPage() {
         return [field, z.coerce.number<number>().int(range).min(min, range).max(max, range)]
       }),
     ) as Record<(typeof NUMERIC_SETTINGS)[number]['field'], z.ZodNumber>,
-    groupCapabilities: z.coerce.number<number>().int(t('admin.settings.groupCapabilitiesRange')).min(MIN_GROUP_CAPABILITIES, t('admin.settings.groupCapabilitiesRange')).max(MAX_GROUP_CAPABILITIES, t('admin.settings.groupCapabilitiesRange')).multipleOf(8, t('admin.settings.groupCapabilitiesRange')),
     avatarMax: z.coerce.number<number>().refine((value) => (AVATAR_LENGTHS as readonly number[]).includes(value), t('admin.settings.groupAvatarMaxRange')),
     avatarStorage: z.coerce.number<number>().int(t('admin.settings.groupAvatarStorageRange')).max(MAX_AVATAR_STORAGE, t('admin.settings.groupAvatarStorageRange')),
     avatarPending: z.coerce.number<number>().int(t('admin.settings.groupAvatarPendingRange')).min(AVATAR_PENDING_SECONDS.min, t('admin.settings.groupAvatarPendingRange')).max(AVATAR_PENDING_SECONDS.max, t('admin.settings.groupAvatarPendingRange')),
@@ -124,7 +123,6 @@ export function ServerSettingsPage() {
       mediaDays: settings.data.chatMediaDeliveryRetentionDays,
       linkJoinsGroup: settings.data.chatGroupLinkJoinsPerRelayGroupPerMin,
       linkJoinsRelay: settings.data.chatGroupLinkJoinsPerRelayPerMin,
-      groupCapabilities: settings.data.chatGroupCapabilitiesPerAccount,
       ...Object.fromEntries(NUMERIC_SETTINGS.map(({ field }) => [field, settings.data[field]])),
       avatarMax: settings.data.chatGroupAvatarMaxBytes,
       avatarStorage: settings.data.chatGroupAvatarStoragePerGroupBytes,
@@ -147,7 +145,6 @@ export function ServerSettingsPage() {
         chatMediaDeliveryRetentionDays: v.mediaDays,
         chatGroupLinkJoinsPerRelayGroupPerMin: v.linkJoinsGroup,
         chatGroupLinkJoinsPerRelayPerMin: v.linkJoinsRelay,
-        chatGroupCapabilitiesPerAccount: v.groupCapabilities,
         ...Object.fromEntries(NUMERIC_SETTINGS.map(({ field }) => [field, v[field]])),
         chatGroupAvatarMaxBytes: v.avatarMax,
         chatGroupAvatarStoragePerGroupBytes: v.avatarStorage,
@@ -206,9 +203,6 @@ export function ServerSettingsPage() {
                   {(control) => <Input {...control} {...register(field)} type="number" min={min} max={max} step={1} inputMode="numeric" />}
                 </Field>
               ))}
-              <Field label={t('admin.settings.groupCapabilities')} error={errors.groupCapabilities?.message} description={t('admin.settings.groupCapabilitiesHint')} required>
-                {(field) => <Input {...field} {...register('groupCapabilities')} type="number" min={MIN_GROUP_CAPABILITIES} max={MAX_GROUP_CAPABILITIES} step={8} inputMode="numeric" />}
-              </Field>
               <Field label={t('admin.settings.groupAvatarMax')} error={errors.avatarMax?.message} description={t('admin.settings.groupAvatarMaxHint')} required>
                 {(field) => (
                   <Controller

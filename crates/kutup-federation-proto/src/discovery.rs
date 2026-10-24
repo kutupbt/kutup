@@ -80,6 +80,47 @@ impl FromStr for FederationCapabilityId {
     }
 }
 
+/// One of a server's group send endorsement keys
+/// (docs/plans/group-send-endorsements.md §4): senders check that server's
+/// endorsements with it. A server publishes its current key and, while it
+/// still verifies, the previous one.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+pub struct FederationGroupSendKeyV1 {
+    pub key_id: u32,
+    /// The serialized zkgroup `EndorsementPublicKey`, canonical padded base64.
+    pub endorsement_public_key: String,
+    /// When it stops issuing (Unix seconds).
+    pub issues_until: u64,
+}
+
+/// The most keys `chatGroupSend` lists: the current one and the previous.
+pub const MAX_GROUP_SEND_KEYS: usize = 2;
+/// The longest endorsement public key `chatGroupSend` carries, decoded.
+pub const MAX_GROUP_SEND_KEY_BYTES: usize = 256;
+
+impl FederationGroupSendKeyV1 {
+    /// The key's bytes: canonical padded base64, 1 to
+    /// [`MAX_GROUP_SEND_KEY_BYTES`] of them.
+    pub fn public_key_bytes(&self) -> Result<Vec<u8>, FederationProtocolError> {
+        let bytes = base64::engine::general_purpose::STANDARD
+            .decode(&self.endorsement_public_key)
+            .map_err(|_| FederationProtocolError::InvalidBase64("endorsementPublicKey"))?;
+        if bytes.is_empty()
+            || bytes.len() > MAX_GROUP_SEND_KEY_BYTES
+            || base64::engine::general_purpose::STANDARD.encode(&bytes)
+                != self.endorsement_public_key
+        {
+            return Err(crate::error::invalid_field(
+                "endorsementPublicKey",
+                "must be canonical padded base64 within its size limit",
+            ));
+        }
+        Ok(bytes)
+    }
+}
+
 /// Signed discovery is the only binding between a canonical server identity,
 /// its HTTPS API endpoint, its current identity document, and feature support.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -94,6 +135,10 @@ pub struct FederationDiscoveryV2 {
     pub identity_document_hash: String,
     pub signed_at: i64,
     pub expires_at: i64,
+    /// Its group send endorsement keys, when it delivers group sends
+    /// (docs/plans/group-send-endorsements.md §4); signed with the rest.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub chat_group_send: Vec<FederationGroupSendKeyV1>,
     pub signature: String,
 }
 
@@ -115,6 +160,7 @@ impl FederationDiscoveryV2 {
             identity,
             signed_at,
             expires_at,
+            Vec::new(),
             signing_key,
             FederationDiscoveryTransportPolicy::HttpsOnly,
         )
@@ -131,6 +177,7 @@ impl FederationDiscoveryV2 {
         identity: FederationIdentityDocumentV1,
         signed_at: i64,
         expires_at: i64,
+        chat_group_send: Vec<FederationGroupSendKeyV1>,
         signing_key: &SigningKey,
         transport_policy: FederationDiscoveryTransportPolicy,
     ) -> Result<Self, FederationProtocolError> {
@@ -144,6 +191,7 @@ impl FederationDiscoveryV2 {
             identity,
             signed_at,
             expires_at,
+            chat_group_send,
             signature: String::new(),
         };
         discovery.validate_unsigned_shape(transport_policy)?;
@@ -257,6 +305,20 @@ impl FederationDiscoveryV2 {
         )?);
         output.extend_from_slice(&self.signed_at.to_be_bytes());
         output.extend_from_slice(&self.expires_at.to_be_bytes());
+        // Only when present, so a document without keys signs as before; the
+        // fixed-width fields before it keep the encoding unambiguous.
+        if !self.chat_group_send.is_empty() {
+            output.extend_from_slice(&(self.chat_group_send.len() as u16).to_be_bytes());
+            for key in &self.chat_group_send {
+                output.extend_from_slice(&key.key_id.to_be_bytes());
+                push_string(
+                    &mut output,
+                    "endorsementPublicKey",
+                    &key.endorsement_public_key,
+                )?;
+                output.extend_from_slice(&key.issues_until.to_be_bytes());
+            }
+        }
         Ok(output)
     }
 
@@ -298,6 +360,18 @@ impl FederationDiscoveryV2 {
             ));
         }
         validate_hash("identityDocumentHash", &self.identity_document_hash)?;
+        if self.chat_group_send.len() > MAX_GROUP_SEND_KEYS
+            || (self.chat_group_send.len() == 2
+                && self.chat_group_send[0].key_id == self.chat_group_send[1].key_id)
+        {
+            return Err(crate::error::invalid_field(
+                "chatGroupSend",
+                "lists at most two keys, by distinct ids",
+            ));
+        }
+        for key in &self.chat_group_send {
+            key.public_key_bytes()?;
+        }
         Ok(())
     }
 
@@ -442,6 +516,7 @@ mod tests {
             identity,
             200,
             3_800,
+            Vec::new(),
             &key,
             FederationDiscoveryTransportPolicy::AllowHttpForTesting,
         )
@@ -572,5 +647,78 @@ mod tests {
         let decoded: FederationDiscoveryV2 = serde_json::from_str(&encoded).unwrap();
         assert_eq!(first, decoded.signing_bytes().unwrap());
         assert_eq!(hex::encode(hash(Suite::V1, first)).len(), 64);
+    }
+
+    #[test]
+    fn group_send_keys_are_signed_with_the_document() {
+        let (key, identity) = identity();
+        let keys = vec![
+            FederationGroupSendKeyV1 {
+                key_id: 2,
+                endorsement_public_key: base64::engine::general_purpose::STANDARD.encode([5u8; 40]),
+                issues_until: 9_999,
+            },
+            FederationGroupSendKeyV1 {
+                key_id: 1,
+                endorsement_public_key: base64::engine::general_purpose::STANDARD.encode([6u8; 40]),
+                issues_until: 300,
+            },
+        ];
+        let sign = |keys: Vec<FederationGroupSendKeyV1>| {
+            FederationDiscoveryV2::sign_with_transport_policy(
+                "alpha.example",
+                "https://alpha.example",
+                vec![FederationCapabilityId::identity_v1()],
+                identity.clone(),
+                200,
+                3_800,
+                keys,
+                &key,
+                FederationDiscoveryTransportPolicy::HttpsOnly,
+            )
+        };
+        let document = sign(keys.clone()).unwrap();
+        document.verify_at("alpha.example", 500).unwrap();
+        let json = serde_json::to_string(&document).unwrap();
+        assert!(json.contains(r#""chatGroupSend":"#), "{json}");
+        let decoded: FederationDiscoveryV2 = serde_json::from_str(&json).unwrap();
+        decoded.verify_at("alpha.example", 500).unwrap();
+
+        // Every part of a key is signed.
+        for change in 0..3 {
+            let mut tampered = document.clone();
+            match change {
+                0 => tampered.chat_group_send[0].key_id = 3,
+                1 => tampered.chat_group_send[0].issues_until += 1,
+                _ => tampered.chat_group_send.pop().map(|_| ()).unwrap(),
+            }
+            assert!(tampered.verify_at("alpha.example", 500).is_err());
+        }
+
+        // Without keys the field is absent and the bytes are as before.
+        let plain = sign(Vec::new()).unwrap();
+        assert!(!serde_json::to_string(&plain)
+            .unwrap()
+            .contains("chatGroupSend"));
+        let mut stripped = document.clone();
+        stripped.chat_group_send.clear();
+        assert_eq!(
+            stripped.signing_bytes().unwrap(),
+            plain.signing_bytes().unwrap()
+        );
+
+        // At most two, by distinct ids, each canonical base64.
+        let mut three = keys.clone();
+        three.push(FederationGroupSendKeyV1 {
+            key_id: 7,
+            ..keys[0].clone()
+        });
+        assert!(sign(three).is_err());
+        let mut same = keys.clone();
+        same[1].key_id = 2;
+        assert!(sign(same).is_err());
+        let mut bad = keys;
+        bad[0].endorsement_public_key = "AAA".into();
+        assert!(sign(bad).is_err());
     }
 }

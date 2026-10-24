@@ -847,19 +847,27 @@ whole request, which is safe to repeat because `sendId`s dedupe.
 member accounts of one server, sent once: `SealedMultiSubmissionV1` with
 `sendId`, `payload` (libsignal's sent sealed-sender v2 message, version
 `0x23`, recipients as 17-byte account service ids, no excluded recipients),
-`capabilities` (each recipient account's raw 16-byte group capability, exactly
-the payload's accounts) and `urgent` (default `true`). The checks, in order:
-1. the payload and its size: `400 malformed` for a payload that doesn't parse,
-   a device listed twice, a recipient with no devices or capabilities that
-   don't name exactly the payload's accounts; `413` past the recipient limit
-   (256), the request size (256 KiB plus 132 bytes per recipient) or one
-   recipient's message (96 KiB), each an administrators' setting;
-2. each account's capability against its published set
-   (`/api/chat/group-capabilities`): an account that isn't an active one here
-   and a capability that doesn't hold are one answer, `refused`;
+`groupSendToken` (a libsignal `GroupSendFullToken` over the payload's
+accounts, from the recipients' endorsements, docs/plans/group-send-endorsements.md
+§3.4) and `urgent` (default `true`). The checks, in order:
+1. the payload and its size: `400 malformed` for a payload that doesn't parse
+   or names nobody, a device listed twice, a recipient with no devices, or a
+   token that isn't canonical base64 of at most 256 bytes; `413` past the
+   recipient limit (256), the request size (256 KiB plus 132 bytes per
+   recipient the payload names) or one recipient's message (96 KiB), each an
+   administrators' setting;
+2. the token, over the payload's accounts (libsignal joins an account's
+   entries into one), with this server's keys: the issuing one, then the one
+   before it while it verifies. Any failure (expired, an account added or
+   missing, another server's) is `401 groupSendTokenInvalid`, before any
+   account is looked up, so it tells nothing about which accounts exist;
 3. budgets: the address's anonymous limit counts the request once, and its
-   bytes a minute (`429` past them); each capability its sends a minute and a
-   day, `rateLimited` past them;
+   bytes a minute, and the token its requests a minute
+   (`chatMultiPerTokenPerMin`, 60; weak, it caps replays of one send), `429`
+   past them; an account that isn't an active one here is `refused`; each
+   recipient account its sends a minute from every sender together
+   (`chatMultiPerRecipientPerMin`, 1200), `rateLimited` past it (its copy goes
+   pairwise);
 4. devices, for the accounts that passed: missing or extra devices are `409`
    (`devices`), else changed registrations `410` (`stale`); nothing is stored
    on either, and both carry `refused` and `rateLimited` too.
@@ -879,7 +887,8 @@ or the maintenance sweep).
 For another server's members, this server forwards the send at once to that
 server's `POST /api/fed/chat/sealed/multi` (signed federation), waits for its
 answer (the usual federation timeout) and relays it as it is: `200`, `409`,
-`410`, or the destination's `400`/`413`. A destination that is slow,
+`410`, the destination's `400`/`413`, or its `401 groupSendTokenInvalid` (the
+destination verifies the token with its own keys; the origin never does). A destination that is slow,
 unreachable or unwilling is `503 peerUnavailable`: nothing is queued and
 nothing of the body is kept, so the client sends those members' copies over
 the pairwise path, which is durable. The destination checks and stores the

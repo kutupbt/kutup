@@ -161,15 +161,15 @@ pub fn key_file_secret(contents: &[u8]) -> Option<Vec<u8>> {
 /// written as KeePassXC writes one (`FileKey::createXMLv2`), so KeePassXC,
 /// KeePass and the mobile apps open the vault with it. It never leaves the
 /// device but as the person's download (and, kept, as its key element).
-pub fn generate_key_file() -> Result<Zeroizing<Vec<u8>>, getrandom::Error> {
-    let mut key = Zeroizing::new([0u8; 32]);
-    getrandom::fill(key.as_mut())?;
-    Ok(key_file_xml(&key))
+pub fn generate_key_file() -> Zeroizing<Vec<u8>> {
+    key_file_xml(&kutup_crypto::primitives::random_key())
 }
 
 /// The XML v2 key file of `key`: its SHA-256's first four bytes as the
 /// `Hash` check, the key in upper-case hex, eight digits a group and four
 /// groups a line, indented as KeePassXC indents it.
+// Adapter: KeePass's key file v2 checks its key with SHA-256.
+#[allow(clippy::disallowed_types)]
 fn key_file_xml(key: &[u8; 32]) -> Zeroizing<Vec<u8>> {
     use sha2::{Digest, Sha256};
     let check = hex::encode_upper(&Sha256::digest(key)[..4]);
@@ -340,8 +340,8 @@ mod tests {
         );
 
         // A random one: its key, kept as that element, opens what it saved.
-        let file = generate_key_file().unwrap();
-        let other = generate_key_file().unwrap();
+        let file = generate_key_file();
+        let other = generate_key_file();
         assert_ne!(*file, *other);
         let key = VaultKey::new().with_key_file(&file);
         let bytes = save(&sample(), &key).unwrap();
@@ -353,13 +353,13 @@ mod tests {
 
     #[test]
     fn a_key_change_keeps_the_parts_asked_for_even_a_hashed_password() {
-        let file = generate_key_file().unwrap();
+        let file = generate_key_file();
         let hashed = VaultKey::new()
             .with_password_hash(&kutup_crypto::pass_vault::password_hash("parola"))
             .with_key_file(&file);
         // The password kept, a new key file: opens with the typed password
         // and the new file.
-        let other = generate_key_file().unwrap();
+        let other = generate_key_file();
         let changed = hashed.keeping(true, false).with_key_file(&other);
         let bytes = save(&sample(), &changed).unwrap();
         let typed = VaultKey::new()
@@ -386,6 +386,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::disallowed_types)] // KeePass's composite key hashes the password with SHA-256.
     fn the_passwords_hash_opens_and_saves_as_the_password_does() {
         use sha2::{Digest, Sha256};
         let hash: [u8; 32] = Sha256::digest("parola-çğ".as_bytes()).into();
@@ -415,6 +416,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::disallowed_types)] // KeePass's composite key hashes the password with SHA-256.
     fn the_same_key_however_it_is_held() {
         use sha2::{Digest as _, Sha256};
         let hash: [u8; 32] = Sha256::digest(b"p").into();

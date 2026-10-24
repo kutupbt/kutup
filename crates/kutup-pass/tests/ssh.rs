@@ -86,7 +86,7 @@ fn add_key_entry(db: &mut Database, title: &str, passphrase: &str, key_pem: &str
 }
 
 fn random(algorithm: Algorithm) -> PrivateKey {
-    PrivateKey::random(&mut rand_core::OsRng, algorithm).unwrap()
+    PrivateKey::random(&mut kutup_crypto::primitives::Rng, algorithm).unwrap()
 }
 
 #[test]
@@ -119,12 +119,14 @@ fn keeagent_settings_read_as_keepassxc_writes_them() {
 }
 
 #[test]
+// The agent's signature, checked as an SSH server checks it.
+#[allow(clippy::disallowed_methods)]
 fn an_encrypted_key_is_listed_locked_and_signs_with_the_entry_password() {
     let mut db = new_vault("Keys", now()).unwrap();
     let mut key = random(Algorithm::Ed25519);
     key.set_comment("ayse@laptop");
     let encrypted = key
-        .encrypt(&mut rand_core::OsRng, "anahtar-parola")
+        .encrypt(&mut kutup_crypto::primitives::Rng, "anahtar-parola")
         .unwrap();
     add_key_entry(
         &mut db,
@@ -162,7 +164,7 @@ fn an_encrypted_key_is_listed_locked_and_signs_with_the_entry_password() {
 fn a_wrong_password_unusable_entries_and_the_recycle_bin() {
     let mut db = new_vault("Keys", now()).unwrap();
     let key = random(Algorithm::Ed25519)
-        .encrypt(&mut rand_core::OsRng, "right")
+        .encrypt(&mut kutup_crypto::primitives::Rng, "right")
         .unwrap();
     let pem = key.to_openssh(LineEnding::LF).unwrap();
     add_key_entry(
@@ -217,6 +219,8 @@ fn a_wrong_password_unusable_entries_and_the_recycle_bin() {
 }
 
 #[test]
+// The agent's signature, checked as an SSH server checks it.
+#[allow(clippy::disallowed_methods)]
 fn ecdsa_signs() {
     let mut db = new_vault("Keys", now()).unwrap();
     let key = random(Algorithm::Ecdsa {
@@ -239,6 +243,8 @@ fn ecdsa_signs() {
 }
 
 #[test]
+// The agent's signature, checked as an SSH server checks it.
+#[allow(clippy::disallowed_methods)]
 fn rsa_signs_with_the_hash_asked_and_refuses_sha1() {
     // Made by ssh-keygen when it is here (RSA key generation is slow in a
     // debug build); skipped otherwise.

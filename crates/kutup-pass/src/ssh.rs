@@ -340,32 +340,6 @@ fn rsa_private_key(key: &ssh_key::private::RsaKeypair) -> Result<rsa::RsaPrivate
     Ok(private)
 }
 
-/// The system's RNG (`getrandom`) for `rsa`'s blinding, through `rsa`'s own
-/// `rand_core` traits.
-struct SystemRng;
-
-impl rsa::rand_core::RngCore for SystemRng {
-    fn next_u32(&mut self) -> u32 {
-        let mut bytes = [0; 4];
-        self.fill_bytes(&mut bytes);
-        u32::from_le_bytes(bytes)
-    }
-    fn next_u64(&mut self) -> u64 {
-        let mut bytes = [0; 8];
-        self.fill_bytes(&mut bytes);
-        u64::from_le_bytes(bytes)
-    }
-    fn fill_bytes(&mut self, dest: &mut [u8]) {
-        getrandom::fill(dest).expect("the system's random source");
-    }
-    fn try_fill_bytes(&mut self, dest: &mut [u8]) -> Result<(), rsa::rand_core::Error> {
-        self.fill_bytes(dest);
-        Ok(())
-    }
-}
-
-impl rsa::rand_core::CryptoRng for SystemRng {}
-
 fn put_string(out: &mut Vec<u8>, value: &[u8]) {
     out.extend_from_slice(&(value.len() as u32).to_be_bytes());
     out.extend_from_slice(value);
@@ -373,6 +347,9 @@ fn put_string(out: &mut Vec<u8>, value: &[u8]) {
 
 /// Signs `data` as an SSH agent does (`flags` as in the sign request) and
 /// returns the signature blob (`string algorithm, string signature`).
+// Adapter: the SSH agent protocol's signatures (RFC 8332 names rsa-sha2-256
+// and rsa-sha2-512); its key types are the person's own.
+#[allow(clippy::disallowed_types)]
 pub fn sign(key: &PrivateKey, data: &[u8], flags: u32) -> Result<Vec<u8>, SshError> {
     use signature::Signer as _;
     let signature: Signature = match key.key_data() {
@@ -382,7 +359,7 @@ pub fn sign(key: &PrivateKey, data: &[u8], flags: u32) -> Result<Vec<u8>, SshErr
             // A PKCS#1 v1.5 signature is deterministic, so the bytes are
             // the same as unblinded.
             use rsa::signature::RandomizedSigner as _;
-            let mut rng = SystemRng;
+            let mut rng = kutup_crypto::primitives::Rng;
             let private = rsa_private_key(rsa_key)?;
             let (hash, bytes) = if flags & RSA_SHA2_512 != 0 {
                 let signing = rsa::pkcs1v15::SigningKey::<sha2::Sha512>::new(private);
@@ -458,6 +435,8 @@ pub fn parse_signature(blob: &[u8]) -> Option<Signature> {
 
 /// Checks OpenSSH's `session-bind@openssh.com`: the host proved it holds
 /// `host_key` by signing `session_id`. Returns the host key's fingerprint.
+// Adapter: OpenSSH's session binding, checked as SSH defines it.
+#[allow(clippy::disallowed_methods)]
 pub fn verify_session_bind(host_key: &[u8], session_id: &[u8], signature: &[u8]) -> Option<String> {
     use signature::Verifier as _;
     let key = PublicKey::from_bytes(host_key).ok()?;

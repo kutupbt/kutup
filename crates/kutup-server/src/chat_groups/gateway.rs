@@ -18,6 +18,10 @@ use kutup_chat_proto::group_route::{
     GroupRequestStateV1, GroupRequestStatusV1, GroupRequestV1, GroupResponseStatusV1,
     GroupResponseV1, GroupStateAnswerV1, NONCE_MEMORY_SECS, PSEUDONYM_USED,
 };
+use kutup_chat_proto::group_send::{
+    GroupEndorsementPageV1, GroupEndorsementQueryV1, GroupEndorsementUploadV1, GroupEndorsementV1,
+    ENDORSEMENT_EXPIRATION, ENDORSEMENT_SIZE,
+};
 use kutup_crypto::oblivious::ResponseContext;
 use kutup_crypto::primitives::{hash, Hasher, Suite};
 use time::OffsetDateTime;
@@ -177,10 +181,11 @@ async fn answer_checked(
         GroupOperationV1::PutAvatar => put_avatar(state, request, &group_id, &pseudonym, now).await,
         // Calls come with slice 4.
         GroupOperationV1::CallToken => Ok(status(GroupResponseStatusV1::Unavailable, now)),
-        // Group send endorsements come with their server part
-        // (docs/plans/group-send-endorsements.md §3.3).
-        GroupOperationV1::PutEndorsement | GroupOperationV1::GetEndorsements => {
-            Ok(status(GroupResponseStatusV1::Unavailable, now))
+        GroupOperationV1::PutEndorsement => {
+            put_endorsement(state, request, &group_id, &pseudonym, now).await
+        }
+        GroupOperationV1::GetEndorsements => {
+            get_endorsements(state, request, &group_id, &pseudonym, now).await
         }
     }
 }
@@ -473,6 +478,202 @@ pub(crate) async fn sweep_avatars(pool: &sqlx::PgPool) -> AppResult<u64> {
     .execute(pool)
     .await?
     .rows_affected())
+}
+
+/// A member's endorsement blob for one expiration
+/// (docs/plans/group-send-endorsements.md §3.3): the expiration in clear,
+/// day-aligned and within the cap (`endorsementExpiration`), the blob
+/// sealed under the group's state key and of the one length
+/// (`endorsementSize`). At most two per pseudonym, the current and the next:
+/// a third replaces the oldest, a second of one expiration the first.
+async fn put_endorsement(
+    state: &AppState,
+    request: &GroupRequestV1,
+    group_id: &[u8; 32],
+    pseudonym: &str,
+    now: i64,
+) -> AppResult<GroupResponseV1> {
+    let Some(upload) = request
+        .body()
+        .ok()
+        .and_then(|body| GroupEndorsementUploadV1::from_canonical_bytes(&body).ok())
+    else {
+        return Ok(GroupResponseV1::refused("malformed", now));
+    };
+    let Some(key) = decode_exact::<32>(pseudonym) else {
+        return Ok(GroupResponseV1::refused("malformed", now));
+    };
+    let mut tx = state.pool.begin().await?;
+    // Locked, so an upload and the member's removal don't cross.
+    let Some((group, _)) = load_state(&mut *tx, group_id, true).await? else {
+        return Ok(status(GroupResponseStatusV1::NotFound, now));
+    };
+    if group.member(pseudonym).is_none() {
+        return Ok(status(GroupResponseStatusV1::NotFound, now));
+    }
+    let clock = u64::try_from(now).map_err(|_| AppError::internal("clock"))?;
+    if kutup_group_send::check_expiration(upload.expiration, clock).is_err() {
+        return Ok(GroupResponseV1::refused(ENDORSEMENT_EXPIRATION, now));
+    }
+    let Ok(sealed) = upload.sealed_bytes() else {
+        return Ok(GroupResponseV1::refused(ENDORSEMENT_SIZE, now));
+    };
+    let expiration =
+        i64::try_from(upload.expiration).map_err(|_| AppError::internal("expiration"))?;
+    // Charged only for an upload the home takes, per member and group.
+    let allowed = crate::site_settings::CHAT_GROUP_ENDORSEMENT_UPLOADS_PER_DAY
+        .load(&mut *tx)
+        .await?;
+    let digest: [u8; 32] = Hasher::new(Suite::V1)
+        .chain(b"kutup/group-endorsement-upload/v1\0")
+        .chain(group_id)
+        .chain(key)
+        .finish()
+        .into();
+    let used = crate::handlers::chat::anonymous_count(
+        &mut tx,
+        "group_endorsement_upload",
+        &digest,
+        1,
+        86_400,
+    )
+    .await?;
+    if used > allowed {
+        return Ok(status(GroupResponseStatusV1::RateLimited, now));
+    }
+    sqlx::query(
+        "INSERT INTO chat_group_endorsements (group_id, pseudonym, expiration, sealed)
+         VALUES ($1, $2, $3, $4)
+         ON CONFLICT (group_id, pseudonym, expiration)
+         DO UPDATE SET sealed = EXCLUDED.sealed, seq = nextval('chat_group_endorsement_seq')",
+    )
+    .bind(&group_id[..])
+    .bind(&key[..])
+    .bind(expiration)
+    .bind(&sealed[..])
+    .execute(&mut *tx)
+    .await?;
+    sqlx::query(
+        "DELETE FROM chat_group_endorsements
+         WHERE group_id = $1 AND pseudonym = $2 AND expiration NOT IN (
+             SELECT expiration FROM chat_group_endorsements
+             WHERE group_id = $1 AND pseudonym = $2
+             ORDER BY expiration DESC LIMIT 2)",
+    )
+    .bind(&group_id[..])
+    .bind(&key[..])
+    .execute(&mut *tx)
+    .await?;
+    tx.commit().await?;
+    Ok(ok(now, Vec::new()))
+}
+
+/// The members' blobs uploaded after the reader's cursor, in upload order
+/// (§3.3), to a member: at most the query's `limit` and the home's page
+/// size, and none past its expiration.
+async fn get_endorsements(
+    state: &AppState,
+    request: &GroupRequestV1,
+    group_id: &[u8; 32],
+    pseudonym: &str,
+    now: i64,
+) -> AppResult<GroupResponseV1> {
+    let Some(query) = request
+        .body()
+        .ok()
+        .and_then(|body| GroupEndorsementQueryV1::from_canonical_bytes(&body).ok())
+    else {
+        return Ok(GroupResponseV1::refused("malformed", now));
+    };
+    let Ok(after) = i64::try_from(query.after) else {
+        return Ok(GroupResponseV1::refused("malformed", now));
+    };
+    let Some((group, _)) = load_state(&state.pool, group_id, false).await? else {
+        return Ok(status(GroupResponseStatusV1::NotFound, now));
+    };
+    if group.member(pseudonym).is_none() {
+        return Ok(status(GroupResponseStatusV1::NotFound, now));
+    }
+    let page_size = crate::site_settings::CHAT_GROUP_ENDORSEMENT_PAGE_SIZE
+        .load(&state.pool)
+        .await?
+        .min(i64::from(query.limit));
+    let rows: Vec<(Vec<u8>, i64, Vec<u8>, i64)> = sqlx::query_as(
+        "SELECT pseudonym, expiration, sealed, seq FROM chat_group_endorsements
+         WHERE group_id = $1 AND seq > $2 AND expiration > $3
+         ORDER BY seq LIMIT $4",
+    )
+    .bind(&group_id[..])
+    .bind(after)
+    .bind(now)
+    .bind(page_size + 1)
+    .fetch_all(&state.pool)
+    .await?;
+    let more = i64::try_from(rows.len()).unwrap_or(i64::MAX) > page_size;
+    let mut endorsements = Vec::with_capacity(rows.len());
+    // The cursor moves past every row this page scanned, returned or not,
+    // so a reader never scans a skipped one again.
+    let mut scanned = query.after;
+    for (key, expiration, sealed, seq) in rows.into_iter().take(page_size as usize) {
+        scanned = u64::try_from(seq).map_err(|_| AppError::internal("seq"))?;
+        let pseudonym = STANDARD.encode(&key);
+        // Removal deletes a member's blobs with it; this keeps a stray one
+        // from a reader all the same.
+        if group.member(&pseudonym).is_none() {
+            continue;
+        }
+        endorsements.push(GroupEndorsementV1 {
+            pseudonym,
+            expiration: u64::try_from(expiration).map_err(|_| AppError::internal("expiration"))?,
+            sealed: STANDARD.encode(&sealed),
+            seq: scanned,
+        });
+    }
+    let next_after = scanned;
+    let page = GroupEndorsementPageV1 {
+        endorsements,
+        more,
+        next_after,
+    };
+    Ok(ok(now, page.canonical_bytes().map_err(AppError::internal)?))
+}
+
+/// The blobs of members a change removed go with them, in its transaction
+/// (§3.7): a removed pseudonym's own blob is no one's to read any more.
+async fn forget_departed_endorsements(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    group_id: &[u8; 32],
+    before: &GroupStateV1,
+    after: &GroupStateV1,
+) -> AppResult<()> {
+    let departed: Vec<Vec<u8>> = before
+        .members
+        .iter()
+        .filter(|member| after.member(&member.pseudonym).is_none())
+        .filter_map(|member| decode_exact::<32>(&member.pseudonym))
+        .map(|key| key.to_vec())
+        .collect();
+    if departed.is_empty() {
+        return Ok(());
+    }
+    sqlx::query("DELETE FROM chat_group_endorsements WHERE group_id = $1 AND pseudonym = ANY($2)")
+        .bind(&group_id[..])
+        .bind(&departed)
+        .execute(&mut **tx)
+        .await?;
+    Ok(())
+}
+
+/// Blobs an hour past their expiration (§3.3).
+pub(crate) async fn sweep_endorsements(pool: &sqlx::PgPool) -> AppResult<u64> {
+    let cutoff = OffsetDateTime::now_utc().unix_timestamp() - 3_600;
+    Ok(
+        sqlx::query("DELETE FROM chat_group_endorsements WHERE expiration < $1")
+            .bind(cutoff)
+            .execute(pool)
+            .await?
+            .rows_affected(),
+    )
 }
 
 /// Join info for an invitee about to claim its slot: the revision and head
@@ -1133,6 +1334,7 @@ async fn submit(
     .await?;
     prune_log(&mut tx, group_id, &next).await?;
     remember_newcomers(&mut tx, group_id, &next).await?;
+    forget_departed_endorsements(&mut tx, group_id, &current, &next).await?;
     if let Some(avatar) = avatar {
         swap_avatar(&mut tx, group_id, avatar).await?;
     }

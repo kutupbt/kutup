@@ -182,6 +182,10 @@ KUTUP_LIVE_DATABASE_URL="postgres://$POSTGRES_USER:$POSTGRES_PASSWORD@127.0.0.1:
   cargo test -p kutup-server --bin kutup-server account_names::tests::live_ -- --nocapture
 KUTUP_LIVE_DATABASE_URL="postgres://$POSTGRES_USER:$POSTGRES_PASSWORD@127.0.0.1:$db_port/$POSTGRES_DB" \
   cargo test -p kutup-server --bin kutup-server remote_renames::tests::live_ -- --nocapture
+# Group send keys sealed again under the current OPAQUE_SETUP_KEYS entry at
+# each start (this server runs without groups, so the test owns the table).
+KUTUP_LIVE_DATABASE_URL="postgres://$POSTGRES_USER:$POSTGRES_PASSWORD@127.0.0.1:$db_port/$POSTGRES_DB" \
+  cargo test -p kutup-server --bin kutup-server chat_group_send::tests::live_ -- --nocapture
 
 # A rotation of the OPAQUE setup: an account made under key 1, the server
 # restarted with a newer key 2, the account moved at its next sign-in.

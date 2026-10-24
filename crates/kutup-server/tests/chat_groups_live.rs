@@ -23,6 +23,10 @@ use kutup_chat_proto::group_route::{
     GroupRequestStatusV1, GroupRequestV1, GroupResponseStatusV1, GroupResponseV1,
     GroupStateAnswerV1, PSEUDONYM_USED,
 };
+use kutup_chat_proto::group_send::{
+    GroupEndorsementPageV1, GroupEndorsementQueryV1, GroupEndorsementUploadV1,
+    ENDORSEMENT_EXPIRATION, ENDORSEMENT_SEALED_BYTES, ENDORSEMENT_SIZE,
+};
 use kutup_crypto::chat_group::{GroupKeyPair, GroupMasterKey, SealedField};
 use kutup_crypto::oblivious::seal_request;
 use kutup_crypto::primitives::SigningKey;
@@ -1695,4 +1699,223 @@ fn join(
     let change = claim(group, &slot_id, &claim_key, member);
     let claimed = accepted(&submit(c, user, home, group, &change, member));
     apply(group, home, &claimed);
+}
+
+/// The day-aligned expiration `days` ahead of today's start (UTC).
+fn day(days: u64) -> u64 {
+    (now() as u64 / 86_400 + days) * 86_400
+}
+
+fn put_endorsement(
+    c: &Client,
+    user: &User,
+    home: &Home,
+    group: &Group,
+    key: &GroupKeyPair,
+    expiration: u64,
+    sealed: &[u8],
+) -> GroupResponseV1 {
+    let body = GroupEndorsementUploadV1 {
+        expiration,
+        sealed: b64(sealed),
+    }
+    .canonical_bytes()
+    .unwrap();
+    let request = signed(
+        home,
+        &group.id,
+        GroupOperationV1::PutEndorsement,
+        &body,
+        key,
+    );
+    exchange(c, user, home, &request)
+}
+
+fn get_endorsements(
+    c: &Client,
+    user: &User,
+    home: &Home,
+    group: &Group,
+    key: &GroupKeyPair,
+    after: u64,
+    limit: u16,
+) -> GroupResponseV1 {
+    let body = GroupEndorsementQueryV1 { after, limit }
+        .canonical_bytes()
+        .unwrap();
+    let request = signed(
+        home,
+        &group.id,
+        GroupOperationV1::GetEndorsements,
+        &body,
+        key,
+    );
+    exchange(c, user, home, &request)
+}
+
+fn page_of(answer: &GroupResponseV1) -> GroupEndorsementPageV1 {
+    assert_eq!(answer.status, GroupResponseStatusV1::Ok, "{answer:?}");
+    GroupEndorsementPageV1::from_canonical_bytes(&answer.body().unwrap()).unwrap()
+}
+
+/// Members share their endorsement blobs through the home
+/// (docs/plans/group-send-endorsements.md §3.3): uploads by expiration, at
+/// most two per member, read in upload order with a cursor; the home's
+/// checks; strangers and removed members learn nothing, and a removed
+/// member's blobs go with it.
+#[test]
+fn members_share_endorsement_blobs_through_the_home() {
+    let Some(base) = live() else { return };
+    let c = crate::common::client();
+    let alice = register(&c, &base);
+    let bob = register(&c, &base);
+    let home = home(&c, &base, &alice);
+    let alice_key = GroupKeyPair::generate();
+    let bob_key = GroupKeyPair::generate();
+    let mut group = create(&c, &alice, &home, &alice_key);
+    join(&c, &alice, &bob, &home, &mut group, &alice_key, &bob_key);
+    let blob = || avatar_blob(ENDORSEMENT_SEALED_BYTES);
+
+    // Uploads: Ok with an empty body.
+    let answer = put_endorsement(&c, &alice, &home, &group, &alice_key, day(1), &blob());
+    assert_eq!(answer.status, GroupResponseStatusV1::Ok, "{answer:?}");
+    assert!(answer.body().unwrap().is_empty());
+    for expiration in [day(1), day(2)] {
+        let answer = put_endorsement(&c, &bob, &home, &group, &bob_key, expiration, &blob());
+        assert_eq!(answer.status, GroupResponseStatusV1::Ok, "{answer:?}");
+    }
+
+    // Read in upload order, every member's.
+    let page = page_of(&get_endorsements(&c, &bob, &home, &group, &bob_key, 0, 100));
+    assert_eq!(page.endorsements.len(), 3);
+    assert!(!page.more);
+    assert_eq!(page.next_after, page.endorsements[2].seq);
+    assert_eq!(page.endorsements[0].pseudonym, b64(&alice_key.public_key()));
+    assert_eq!(page.endorsements[1].pseudonym, b64(&bob_key.public_key()));
+    assert_eq!(
+        (
+            page.endorsements[1].expiration,
+            page.endorsements[2].expiration
+        ),
+        (day(1), day(2))
+    );
+    // A page of one, then the rest after its cursor.
+    let first = page_of(&get_endorsements(
+        &c, &alice, &home, &group, &alice_key, 0, 1,
+    ));
+    assert_eq!(first.endorsements.len(), 1);
+    assert!(first.more);
+    assert_eq!(first.next_after, first.endorsements[0].seq);
+    let rest = page_of(&get_endorsements(
+        &c,
+        &alice,
+        &home,
+        &group,
+        &alice_key,
+        first.next_after,
+        100,
+    ));
+    assert_eq!(rest.endorsements.len(), 2);
+    // Nothing new: an empty page whose cursor stays.
+    let none = page_of(&get_endorsements(
+        &c,
+        &alice,
+        &home,
+        &group,
+        &alice_key,
+        page.next_after,
+        100,
+    ));
+    assert!(none.endorsements.is_empty() && !none.more);
+    assert_eq!(none.next_after, page.next_after);
+
+    // The same expiration again replaces it, after the cursor.
+    put_endorsement(&c, &bob, &home, &group, &bob_key, day(2), &blob());
+    let replaced = page_of(&get_endorsements(
+        &c,
+        &alice,
+        &home,
+        &group,
+        &alice_key,
+        page.next_after,
+        100,
+    ));
+    assert_eq!(replaced.endorsements.len(), 1, "{replaced:?}");
+    assert_eq!(replaced.endorsements[0].expiration, day(2));
+    assert!(replaced.endorsements[0].seq > page.next_after);
+    // A third expiration replaces the oldest.
+    put_endorsement(&c, &bob, &home, &group, &bob_key, day(3), &blob());
+    let all = page_of(&get_endorsements(
+        &c, &alice, &home, &group, &alice_key, 0, 100,
+    ));
+    let bobs: Vec<u64> = all
+        .endorsements
+        .iter()
+        .filter(|e| e.pseudonym == b64(&bob_key.public_key()))
+        .map(|e| e.expiration)
+        .collect();
+    assert_eq!(bobs, vec![day(2), day(3)], "the oldest was replaced");
+
+    // The home's checks.
+    for expiration in [day(1) + 1, day(0), day(5)] {
+        assert_refused(
+            &put_endorsement(&c, &bob, &home, &group, &bob_key, expiration, &blob()),
+            ENDORSEMENT_EXPIRATION,
+        );
+    }
+    assert_refused(
+        &put_endorsement(
+            &c,
+            &bob,
+            &home,
+            &group,
+            &bob_key,
+            day(1),
+            &avatar_blob(ENDORSEMENT_SEALED_BYTES - 1),
+        ),
+        ENDORSEMENT_SIZE,
+    );
+    let junk = signed(
+        &home,
+        &group.id,
+        GroupOperationV1::PutEndorsement,
+        b"{}",
+        &bob_key,
+    );
+    assert_refused(&exchange(&c, &bob, &home, &junk), "malformed");
+
+    // A stranger meets an unknown group on both.
+    let carol = register(&c, &base);
+    let stranger = GroupKeyPair::generate();
+    assert_eq!(
+        put_endorsement(&c, &carol, &home, &group, &stranger, day(1), &blob()).status,
+        GroupResponseStatusV1::NotFound
+    );
+    assert_eq!(
+        get_endorsements(&c, &carol, &home, &group, &stranger, 0, 10).status,
+        GroupResponseStatusV1::NotFound
+    );
+
+    // Bob removed: his blobs go, and he reads no more.
+    let remove = author(
+        &group,
+        &alice_key,
+        vec![GroupActionV1::RemoveMember {
+            pseudonym: b64(&bob_key.public_key()),
+        }],
+    );
+    let removed = accepted(&submit(&c, &alice, &home, &group, &remove, &alice_key));
+    apply(&mut group, &home, &removed);
+    let left = page_of(&get_endorsements(
+        &c, &alice, &home, &group, &alice_key, 0, 100,
+    ));
+    assert!(left
+        .endorsements
+        .iter()
+        .all(|e| e.pseudonym == b64(&alice_key.public_key())));
+    assert_eq!(
+        get_endorsements(&c, &bob, &home, &group, &bob_key, 0, 10).status,
+        GroupResponseStatusV1::NotFound
+    );
+    purge_accounts(&c, &base, &[&alice, &bob, &carol]);
 }

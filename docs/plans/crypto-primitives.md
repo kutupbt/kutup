@@ -207,6 +207,17 @@ exceptions in `eslint.config.js`:
 
 `crypto.randomUUID` stays allowed: it makes ids, never keys.
 
+Step 6 notes: kutup-pass draws its randomness from the one source: new key
+files are `primitives::random_key()` (`generate_key_file` can no longer
+fail), and RSA blinding in the SSH agent uses `primitives::Rng` in place of
+its own getrandom wrapper. The crate no longer depends on getrandom or
+rand_core; kutup-pass-wasm keeps getrandom's browser backend features, which
+kutup-crypto's getrandom needs there. KeePass's and SSH's own hashes are
+item-level adapters. The vendored `keepass` crate (crates/kutup-pass/vendor/keepass) still calls
+getrandom directly for its own random values (`dump.rs`, `config.rs`,
+`kdbx4/mod.rs`): a named exception until its patch (KUTUP.md) routes them
+through `primitives::random`.
+
 After that, **block format slices 1-2** build their framing on `Aead::new`
 and `hash`, and the wipe branch sets every header's suite to 1.
 
@@ -227,7 +238,7 @@ on `fuzz` as on the other standalone roots.
 | ~~`crates/kutup-crypto-wasm`~~ | step 2: done |
 | ~~`crates/kutup-server`~~ | step 3: done |
 | ~~`crates/kutup-cli`~~ | step 4: done |
-| `crates/kutup-pass` | step 6 (KDBX and the SSH agent become adapters) |
+| ~~`crates/kutup-pass`~~ | step 6: done (KDBX and the SSH agent are adapters) |
 | ~~`crates/kutup-federation-proto`~~ | step 3: done |
 | `crates/kutup-chat-proto` | with chat-core's crypto (wipe plan, code item 1) |
 | `crates/kutup-chat-core`, `crates/kutup-client-ffi`, `fuzz` | with chat-core's crypto |
@@ -272,6 +283,10 @@ adapter adds its row here, in the PR that adds it.
 | `crates/kutup-server/src/calls.rs` | coturn's REST-API credential (HMAC-SHA1) |
 | `crates/kutup-server/src/web_push_payload.rs` | RFC 8291 Web Push encryption (HKDF-SHA256) |
 | `crates/kutup-server/src/web_push.rs` | RFC 8292's ES256 signature, checked in a test |
+| `crates/kutup-pass/src/kdbx.rs` | KeePass's key file v2 check and composite key (SHA-256 of the password), in tests |
+| `crates/kutup-pass/src/ssh.rs` | the SSH agent's signatures (RFC 8332's rsa-sha2-256/512) and OpenSSH's session binding |
+| `crates/kutup-pass/tests/corpus.rs` | KeePass's composite key, the reference for KeePassXC's vaults |
+| `crates/kutup-pass/tests/ssh.rs` | agent signatures checked as an SSH server checks them |
 
 ## Not in this note
 

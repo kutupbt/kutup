@@ -17,6 +17,7 @@ mod calls;
 mod change_feed;
 mod chat_calls;
 mod chat_federation;
+mod chat_group_send;
 mod chat_groups;
 mod chat_hub;
 mod chat_media_federation;
@@ -137,6 +138,9 @@ pub struct AppState {
     pub(crate) collab_federation: Arc<collab_federation::CollabFederation>,
     /// The OPAQUE setups (docs/plans/opaque.md §5), opened at startup.
     pub(crate) opaque: Arc<opaque_setup::OpaqueServer>,
+    /// The group send endorsement keys
+    /// (docs/plans/group-send-endorsements.md §4); `None` without groups.
+    pub(crate) group_send: Option<Arc<chat_group_send::GroupSendKeys>>,
     /// One sealed-federation flush per destination at a time
     /// (docs/chat-protocol.md §7).
     pub(crate) sealed_flush: Arc<chat_federation::SealedFlushLocks>,
@@ -147,6 +151,7 @@ const USAGE: &str = "usage: kutup-server [serve]
        kutup-server storage-check
        kutup-server orphan-sweep [--delete] [--age-floor=<dur>] [--page-sleep=<dur>] [--prefix=<p>]
        kutup-server federation-identity rotate
+       kutup-server chat-zk-keys rotate
        kutup-server feature-policy rotate sealed-sender";
 
 /// Whether `rest` (the arguments after the program name) is a command this
@@ -160,6 +165,7 @@ fn known_command(rest: &[String]) -> bool {
             | ["storage-check"]
             | ["orphan-sweep", ..]
             | ["federation-identity", "rotate"]
+            | ["chat-zk-keys", "rotate"]
             | ["feature-policy", "rotate", "sealed-sender"]
     )
 }
@@ -197,6 +203,17 @@ async fn main() -> anyhow::Result<()> {
             return Ok(());
         }
         anyhow::bail!("usage: kutup-server federation-identity rotate");
+    }
+    if args
+        .get(1..)
+        .is_some_and(|rest| rest == ["chat-zk-keys", "rotate"])
+    {
+        let key_id = chat_group_send::rotate(&pool, &config.opaque_setup_keys).await?;
+        println!(
+            "kutup-server: group send endorsement key {key_id} issues from now on; \
+             the previous one verifies until its last endorsement expires"
+        );
+        return Ok(());
     }
     let rotate_sealed_sender_policy = args
         .get(1..)
@@ -370,8 +387,19 @@ async fn main() -> anyhow::Result<()> {
     chat_calls::call_link_waiting::spawn_sweeper(pool.clone());
     let maps =
         Arc::new(maps::MapService::start(&pool, &config.maps_cache_dir, &config.server_url).await?);
+    // Group send endorsement keys: made on first start, and every stored one
+    // opened now, so a wrong OPAQUE_SETUP_KEYS stops here.
+    let group_send = if config.chat_groups && federation.is_some() {
+        let keys =
+            chat_group_send::GroupSendKeys::new(pool.clone(), config.opaque_setup_keys.clone());
+        keys.ensure().await?;
+        Some(Arc::new(keys))
+    } else {
+        None
+    };
     let state = AppState {
         opaque,
+        group_send,
         sealed_flush: Arc::new(chat_federation::SealedFlushLocks::new(
             &pool,
             config.sealed_flush_lock_connections,
@@ -792,16 +820,10 @@ fn build_router(state: AppState) -> Router {
                 )),
         )
         .route(
-            "/api/chat/group-capabilities",
-            put(handlers::chat_group_capabilities::change)
-                // Up to the limit's worth of base64 hashes each way.
-                .route_layer(DefaultBodyLimit::max(8 * 1024 * 1024)),
+            "/api/chat/group-send/endorsement",
+            get(chat_group_send::endorsement),
         )
-        .route(
-            "/api/chat/group-capabilities/set",
-            post(handlers::chat_group_capabilities::set)
-                .route_layer(DefaultBodyLimit::max(8 * 1024 * 1024)),
-        )
+        .route("/api/chat/group-send/params", get(chat_group_send::params))
         .route("/api/chat/group-list", get(handlers::chat_group_list::list))
         .route(
             "/api/chat/group-list/:id",
