@@ -17,7 +17,10 @@ use uuid::Uuid;
 
 mod zk;
 
-pub use zk::{receive, token, verify_token, Endorsement, EndorsementKey, Issued, ServerKey};
+pub use zk::{
+    receive, token, verify_token, verify_token_within, Endorsement, EndorsementKey, Issued,
+    ServerKey,
+};
 
 /// Seconds in a day: expirations are day-aligned.
 pub const SECONDS_PER_DAY: u64 = 24 * 60 * 60;

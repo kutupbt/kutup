@@ -27,6 +27,10 @@ const MAX_ZK_BYTES: usize = 1024;
 /// bytes plus its expiration).
 pub const MAX_GROUP_SEND_TOKEN_BYTES: usize = 256;
 
+/// The most blobs one `GetEndorsements` page carries, whatever a home's
+/// setting: a full page still fits one sealed group answer.
+pub const MAX_ENDORSEMENT_PAGE: u16 = 200;
+
 /// Refusal codes on the home's endorsement operations (with `Refused`).
 pub const ENDORSEMENT_EXPIRATION: &str = "endorsementExpiration";
 pub const ENDORSEMENT_SIZE: &str = "endorsementSize";
@@ -194,8 +198,9 @@ pub struct GroupEndorsementV1 {
 }
 
 /// The answer to `GetEndorsements`: blobs in `seq` order; `nextAfter` is the
-/// cursor for the next read (the last `seq`, or the query's `after` when
-/// empty), `more` when the page stopped early.
+/// cursor for the next read (past every blob the page read, returned or
+/// not; the query's `after` when it read none), `more` when the page stopped
+/// early.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct GroupEndorsementPageV1 {
@@ -244,6 +249,37 @@ mod tests {
     use base64::Engine as _;
 
     use super::*;
+
+    #[test]
+    fn a_full_page_fits_one_sealed_answer() {
+        use base64::Engine as _;
+        let b64 = |bytes: &[u8]| base64::engine::general_purpose::STANDARD.encode(bytes);
+        let page = GroupEndorsementPageV1 {
+            endorsements: (1..=u64::from(MAX_ENDORSEMENT_PAGE))
+                .map(|n| GroupEndorsementV1 {
+                    pseudonym: b64(&[7u8; 32]),
+                    expiration: 9_999_999 * SECONDS_PER_DAY,
+                    sealed: b64(&[9u8; ENDORSEMENT_SEALED_BYTES]),
+                    seq: u64::MAX - u64::from(MAX_ENDORSEMENT_PAGE) + n,
+                })
+                .collect(),
+            more: true,
+            next_after: u64::MAX,
+        };
+        let answer = crate::group_route::GroupResponseV1::new(
+            crate::group_route::GroupResponseStatusV1::Ok,
+            i64::MAX,
+            &page.canonical_bytes().unwrap(),
+        )
+        .canonical_bytes()
+        .unwrap();
+        assert!(
+            answer.len() <= kutup_crypto::oblivious::MAX_BODY,
+            "{} > {}",
+            answer.len(),
+            kutup_crypto::oblivious::MAX_BODY
+        );
+    }
 
     const DAY: u64 = 1_793_145_600;
 

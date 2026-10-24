@@ -156,6 +156,34 @@ fn a_token_verifies_under_the_previous_key_in_its_window() {
 }
 
 #[test]
+fn a_retired_key_verifies_only_within_its_window() {
+    let old = key(1);
+    let new = key(2);
+    let endorsement = endorse(&old, ADA);
+    let token = token_of(std::slice::from_ref(&endorsement));
+    // Up to the window's end, the retired key holds.
+    assert_eq!(
+        verify_token_within(
+            &[(&new, None), (&old, Some(endorsement.expiration))],
+            &token,
+            &[ADA],
+            NOW
+        ),
+        Ok(())
+    );
+    // A token expiring after it doesn't, whatever its proof.
+    assert_eq!(
+        verify_token_within(
+            &[(&new, None), (&old, Some(endorsement.expiration - 1))],
+            &token,
+            &[ADA],
+            NOW
+        ),
+        Err(Error::Invalid)
+    );
+}
+
+#[test]
 fn a_token_stops_at_its_expiration() {
     let server = key(1);
     let endorsement = endorse(&server, ADA);

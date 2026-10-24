@@ -187,8 +187,17 @@ async fn check_token(
     let now = u64::try_from(time::OffsetDateTime::now_utc().unix_timestamp())
         .map_err(|_| AppError::internal("clock"))?;
     let verified = tokio::task::spawn_blocking(move || {
-        let keys: Vec<&kutup_group_send::ServerKey> = keys.iter().map(|key| &key.key).collect();
-        kutup_group_send::verify_token(&keys, &token, &accounts, now)
+        // A retired key verifies only tokens within its window (§4).
+        let keys: Vec<(&kutup_group_send::ServerKey, Option<u64>)> = keys
+            .iter()
+            .map(|key| {
+                let until = key
+                    .verifies_until
+                    .map(|until| u64::try_from(until).unwrap_or(0));
+                (&key.key, until)
+            })
+            .collect();
+        kutup_group_send::verify_token_within(&keys, &token, &accounts, now)
     })
     .await
     .map_err(|error| AppError::internal(format!("check a group send token: {error}")))?;

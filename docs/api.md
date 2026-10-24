@@ -3940,7 +3940,7 @@ takes `GroupEndorsementQueryV1 { after, limit }` and answers
 seq }], more, nextAfter }`: the members' blobs uploaded after the cursor, in
 upload order, none past its expiration, at most `limit` and the page size
 (`chatGroupEndorsementPageSize`, 100 at first, at most 200); `nextAfter` is
-the last `seq` (or `after` when empty). A removed member's blobs go with the
+past every blob the page read (or `after` when it read none). A removed member's blobs go with the
 change that removes it, and blobs go an hour after they expire. Both answer a
 non-member `notFound`.
 `getRequestStatus` (no body, signed by the requesting pseudonym) answers

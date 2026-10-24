@@ -49,11 +49,16 @@ pub(crate) struct StoredKey {
     pub public_key: Vec<u8>,
     /// `None` while it issues.
     pub issues_until: Option<i64>,
+    /// The latest token expiration a retired key verifies (`None` while it
+    /// issues): the last endorsement it can have issued.
+    pub verifies_until: Option<i64>,
+    /// The `OPAQUE_SETUP_KEYS` entry it is sealed under.
+    sealing_key_id: u16,
 }
 
-/// A stored key's row: id, sealing key id, sealed secret, public key and
-/// when it stopped issuing.
-type KeyRow = (i32, i16, Vec<u8>, Vec<u8>, Option<i64>);
+/// A stored key's row: id, sealing key id, sealed secret, public key, and
+/// when it stopped issuing and stops verifying.
+type KeyRow = (i32, i16, Vec<u8>, Vec<u8>, Option<i64>, Option<i64>);
 
 impl StoredKey {
     fn published(&self) -> FederationGroupSendKeyV1 {
@@ -86,8 +91,11 @@ impl GroupSendKeys {
     }
 
     /// At startup: makes the first key if there is none (another instance
-    /// starting at once may win; then its key is used), and opens every
-    /// stored one, so a wrong `OPAQUE_SETUP_KEYS` stops the server here.
+    /// starting at once may win; then its key is used), opens every stored
+    /// one, so a wrong `OPAQUE_SETUP_KEYS` stops the server here, and seals
+    /// again under the current sealing key each one sealed under an older
+    /// one, so an operator who added a key may drop the old id after one
+    /// start (docs/self-hosting.md, `OPAQUE_SETUP_KEYS`).
     pub(crate) async fn ensure(&self) -> anyhow::Result<()> {
         let issuing: Option<i32> =
             sqlx::query_scalar("SELECT key_id FROM chat_zk_server_keys WHERE issues_until IS NULL")
@@ -99,6 +107,7 @@ impl GroupSendKeys {
             tracing::info!(key_id = next, "made a group send endorsement key");
         }
         let keys = self.read().await?;
+        self.reseal(&keys).await?;
         anyhow::ensure!(
             keys.iter().any(|key| key.issues_until.is_none()),
             "no group send endorsement key issues"
@@ -107,11 +116,43 @@ impl GroupSendKeys {
         Ok(())
     }
 
+    /// Seals each key held under an older `OPAQUE_SETUP_KEYS` entry under
+    /// the current one; another instance doing the same at once changes
+    /// nothing twice.
+    async fn reseal(&self, keys: &[StoredKey]) -> anyhow::Result<()> {
+        let (current, sealing_key) = self
+            .sealing
+            .current()
+            .ok_or_else(|| anyhow::anyhow!("OPAQUE_SETUP_KEYS has no key"))?;
+        for key in keys.iter().filter(|key| key.sealing_key_id != current) {
+            let sealed = seal_server_key(&key.key, sealing_key, current, key.key_id)
+                .map_err(|error| anyhow::anyhow!("seal the group send key: {error}"))?;
+            sqlx::query(
+                "UPDATE chat_zk_server_keys SET server_secret_sealed = $1, sealing_key_id = $2
+                 WHERE key_id = $3 AND sealing_key_id = $4",
+            )
+            .bind(sealed)
+            .bind(i16::try_from(current)?)
+            .bind(i32::try_from(key.key_id)?)
+            .bind(i16::try_from(key.sealing_key_id)?)
+            .execute(&self.pool)
+            .await?;
+            tracing::info!(
+                key_id = key.key_id,
+                from = key.sealing_key_id,
+                to = current,
+                "sealed a group send key under the current OPAQUE_SETUP_KEYS key"
+            );
+        }
+        Ok(())
+    }
+
     /// The stored keys that still verify, the issuing one first.
     async fn read(&self) -> anyhow::Result<Vec<StoredKey>> {
         let now = OffsetDateTime::now_utc().unix_timestamp();
         let rows: Vec<KeyRow> = sqlx::query_as(
-            "SELECT key_id, sealing_key_id, server_secret_sealed, public_key, issues_until
+            "SELECT key_id, sealing_key_id, server_secret_sealed, public_key, issues_until,
+                    verifies_until
              FROM chat_zk_server_keys
              WHERE verifies_until IS NULL OR verifies_until >= $1
              ORDER BY issues_until IS NOT NULL, key_id DESC",
@@ -123,7 +164,7 @@ impl GroupSendKeys {
     }
 
     fn open(&self, row: KeyRow) -> anyhow::Result<StoredKey> {
-        let (key_id, sealing_key_id, sealed, public_key, issues_until) = row;
+        let (key_id, sealing_key_id, sealed, public_key, issues_until, verifies_until) = row;
         let key_id = u32::try_from(key_id)?;
         let sealing_key_id = u16::try_from(sealing_key_id)?;
         let sealing = self.sealing.get(sealing_key_id).ok_or_else(|| {
@@ -143,6 +184,8 @@ impl GroupSendKeys {
             key,
             public_key,
             issues_until,
+            verifies_until,
+            sealing_key_id,
         })
     }
 
@@ -221,8 +264,10 @@ async fn insert<'e>(
 
 /// `kutup-server chat-zk-keys rotate` (§4): the new key issues from now on;
 /// the old one stops issuing at once and verifies until the latest
-/// expiration it could have issued, then goes. Refused while an earlier
-/// rotation's key still verifies, so a server never has more than two.
+/// expiration it could have issued, then goes. Instances keep the keys they
+/// read for [`CACHE_FOR`], so one may still issue with the old key that long:
+/// its window counts from then. Refused while an earlier rotation's key
+/// still verifies, so a server never has more than two.
 pub(crate) async fn rotate(pool: &PgPool, sealing: &OpaqueSetupKeys) -> anyhow::Result<u32> {
     let now = OffsetDateTime::now_utc().unix_timestamp();
     let mut tx = pool.begin().await?;
@@ -244,7 +289,8 @@ pub(crate) async fn rotate(pool: &PgPool, sealing: &OpaqueSetupKeys) -> anyhow::
              rotate again after that"
         );
     }
-    let last_issued = i64::try_from(kutup_group_send::default_expiration(u64::try_from(now)?))?;
+    let last_issue = u64::try_from(now)? + CACHE_FOR.as_secs();
+    let last_issued = i64::try_from(kutup_group_send::default_expiration(last_issue))?;
     sqlx::query(
         "UPDATE chat_zk_server_keys SET issues_until = $1, verifies_until = $2
          WHERE issues_until IS NULL",
@@ -291,7 +337,7 @@ fn enabled(state: &AppState) -> AppResult<&GroupSendKeys> {
     tag = "chat groups",
     security(("BearerAuth" = [])),
     responses(
-        (status = 200, body = GroupSendEndorsementResponseV1),
+        (status = 200, body = GroupSendEndorsementResponseV1, description = "Sent with `Cache-Control: no-store`"),
         (status = 404, description = "Groups are off"),
         (status = 429, description = "Over the account's endorsements a day"),
     )
@@ -299,7 +345,7 @@ fn enabled(state: &AppState) -> AppResult<&GroupSendKeys> {
 pub(crate) async fn endorsement(
     State(state): State<AppState>,
     user: AuthUser,
-) -> AppResult<Json<GroupSendEndorsementResponseV1>> {
+) -> AppResult<impl axum::response::IntoResponse> {
     let keys = enabled(&state)?;
     let account =
         Uuid::parse_str(&user.user_id).map_err(|_| AppError::unauthorized("unauthorized"))?;
@@ -332,11 +378,15 @@ pub(crate) async fn endorsement(
     let issued = tokio::task::spawn_blocking(move || key.issue(account, now))
         .await
         .map_err(|error| AppError::internal(format!("issue an endorsement: {error}")))?;
-    Ok(Json(GroupSendEndorsementResponseV1 {
-        key_id: issuing.key_id,
-        expiration: issued.expiration,
-        response: STANDARD.encode(issued.response),
-    }))
+    // An account's own credential: no cache keeps it.
+    Ok((
+        [(axum::http::header::CACHE_CONTROL, "no-store")],
+        Json(GroupSendEndorsementResponseV1 {
+            key_id: issuing.key_id,
+            expiration: issued.expiration,
+            response: STANDARD.encode(issued.response),
+        }),
+    ))
 }
 
 #[derive(Debug, Deserialize, IntoParams)]

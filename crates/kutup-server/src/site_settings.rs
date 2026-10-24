@@ -363,7 +363,7 @@ pub const CHAT_GROUP_ENDORSEMENT_PAGE_SIZE: NumericSetting = NumericSetting {
     field: "chatGroupEndorsementPageSize",
     default: 100,
     min: 1,
-    max: 200,
+    max: kutup_chat_proto::group_send::MAX_ENDORSEMENT_PAGE as i64,
 };
 /// What one origin server may deliver here in multi-recipient sends a
 /// minute, all its users together: requests and bytes (never counted per

@@ -611,7 +611,11 @@ async fn get_endorsements(
     .await?;
     let more = i64::try_from(rows.len()).unwrap_or(i64::MAX) > page_size;
     let mut endorsements = Vec::with_capacity(rows.len());
+    // The cursor moves past every row this page scanned, returned or not,
+    // so a reader never scans a skipped one again.
+    let mut scanned = query.after;
     for (key, expiration, sealed, seq) in rows.into_iter().take(page_size as usize) {
+        scanned = u64::try_from(seq).map_err(|_| AppError::internal("seq"))?;
         let pseudonym = STANDARD.encode(&key);
         // Removal deletes a member's blobs with it; this keeps a stray one
         // from a reader all the same.
@@ -622,10 +626,10 @@ async fn get_endorsements(
             pseudonym,
             expiration: u64::try_from(expiration).map_err(|_| AppError::internal("expiration"))?,
             sealed: STANDARD.encode(&sealed),
-            seq: u64::try_from(seq).map_err(|_| AppError::internal("seq"))?,
+            seq: scanned,
         });
     }
-    let next_after = endorsements.last().map_or(query.after, |last| last.seq);
+    let next_after = scanned;
     let page = GroupEndorsementPageV1 {
         endorsements,
         more,

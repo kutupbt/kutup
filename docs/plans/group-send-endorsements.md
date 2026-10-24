@@ -231,7 +231,11 @@ are looked at (Signal's order, access first).
     verifying until the latest expiration it issued (at most 49 hours, the
     window being `MAX_ENDORSEMENT_LIFETIME`), then its row is deleted. Built:
     a second rotation is refused while the retired key still verifies, so a
-    server never has more than two keys.
+    server never has more than two keys; the window counts from a minute
+    after the rotation (instances keep the keys they read that long), and a
+    retired key verifies no token expiring after it. Each start seals every
+    key again under the current `OPAQUE_SETUP_KEYS` entry, so an operator
+    can drop an old entry after one start.
 - **Discovery.** The signed federation identity document gains
   `chatGroupSend: [{ keyId, endorsementPublicKey, issuesUntil }]`: **only the
   `EndorsementPublicKey`**, the current one and, during its window, the
