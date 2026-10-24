@@ -12,7 +12,6 @@ mod common;
 use base64::engine::general_purpose::STANDARD;
 use base64::Engine as _;
 use common::*;
-use ed25519_dalek::SigningKey;
 use kutup_chat_proto::group::{
     check_change, check_genesis, encode_group_id, resulting_genesis_state, resulting_state,
     GroupAccessV1, GroupActionV1, GroupAttribute, GroupChangeV1, GroupLimits, GroupRole,
@@ -26,15 +25,16 @@ use kutup_chat_proto::group_route::{
 };
 use kutup_crypto::chat_group::{GroupKeyPair, GroupMasterKey, SealedField};
 use kutup_crypto::oblivious::seal_request;
+use kutup_crypto::primitives::SigningKey;
+use kutup_crypto::primitives::{hash, Suite};
 use kutup_federation_proto::FederationIdentityDocumentV1;
-use rand::RngCore;
 use reqwest::blocking::Client;
 use reqwest::StatusCode;
 use serde_json::Value;
 
 fn random<const N: usize>() -> [u8; N] {
     let mut bytes = [0u8; N];
-    rand::thread_rng().fill_bytes(&mut bytes);
+    kutup_crypto::primitives::random(&mut bytes);
     bytes
 }
 
@@ -142,7 +142,7 @@ fn signed(
         now(),
         &random::<16>(),
         body,
-        &SigningKey::from_bytes(key.seed()),
+        &SigningKey::from_seed(kutup_crypto::primitives::Suite::V1, key.seed()),
     )
     .unwrap()
 }
@@ -520,7 +520,7 @@ fn the_home_refuses_what_its_checks_refuse() {
         now() - 3600,
         &random::<16>(),
         b"",
-        &SigningKey::from_bytes(alice_key.seed()),
+        &SigningKey::from_seed(kutup_crypto::primitives::Suite::V1, alice_key.seed()),
     )
     .unwrap();
     let skewed = exchange(&c, &alice, &home, &late);
@@ -535,7 +535,7 @@ fn the_home_refuses_what_its_checks_refuse() {
         now(),
         &random::<16>(),
         b"",
-        &SigningKey::from_bytes(alice_key.seed()),
+        &SigningKey::from_seed(kutup_crypto::primitives::Suite::V1, alice_key.seed()),
     )
     .unwrap();
     assert_eq!(
@@ -1244,7 +1244,7 @@ fn link_joins_are_budgeted_per_relay_server_and_group() {
 /// and hash).
 fn avatar_blob(length: usize) -> Vec<u8> {
     let mut blob = vec![0u8; length];
-    rand::thread_rng().fill_bytes(&mut blob);
+    kutup_crypto::primitives::random(&mut blob);
     blob
 }
 
@@ -1303,8 +1303,7 @@ fn set_avatar(group: &Group, key: &GroupKeyPair, hash: Option<[u8; 32]>) -> Grou
 }
 
 fn sha256(bytes: &[u8]) -> [u8; 32] {
-    use sha2::Digest as _;
-    sha2::Sha256::digest(bytes).into()
+    hash(Suite::V1, bytes).into()
 }
 
 /// A member uploads an avatar, then names it in a change: the home refuses

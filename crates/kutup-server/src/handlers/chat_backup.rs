@@ -29,9 +29,9 @@ use kutup_crypto::chat_backup::{
 use kutup_crypto::chat_backup_media::{
     self, ChatBackupMediaContextV1, CHAT_BACKUP_MEDIA_HEADER_BYTES,
 };
+use kutup_crypto::primitives::{hash, Hasher, Suite};
 use kutup_crypto::stream::{StreamEncryptor, CHUNK_SIZE, TAG_FINAL, TAG_MESSAGE};
 use serde::Deserialize;
-use sha2::{Digest as _, Sha256};
 use std::io::{Read, Seek, SeekFrom, Write};
 use tempfile::NamedTempFile;
 use time::OffsetDateTime;
@@ -101,7 +101,7 @@ fn canonical_hex_32(field: &str, value: &str) -> AppResult<[u8; 32]> {
 fn request_digest<T: serde::Serialize>(value: &T) -> AppResult<String> {
     let encoded = serde_json::to_vec(value)
         .map_err(|error| AppError::internal(format!("encode Chat backup request: {error}")))?;
-    Ok(hex::encode(Sha256::digest(encoded)))
+    Ok(hex::encode(hash(Suite::V1, encoded)))
 }
 
 #[utoipa::path(post, path = "/api/chat/backup", tag = "chat-backup",
@@ -751,7 +751,7 @@ pub async fn stage_base(
                 let mut file = NamedTempFile::new()
                     .map_err(|_| AppError::internal("create backup base temp file"))?;
                 let mut bytes = 0u64;
-                let mut digest = Sha256::new();
+                let mut digest = Hasher::new(Suite::V1);
                 while let Some(chunk) = field
                     .chunk()
                     .await
@@ -770,7 +770,7 @@ pub async fn stage_base(
                     file.write_all(&chunk)
                         .map_err(|_| AppError::internal("write backup base temp file"))?;
                 }
-                object = Some((file, bytes, digest.finalize().into()));
+                object = Some((file, bytes, digest.finish().into()));
             }
             _ => return Err(AppError::bad_request("unknown backup base multipart field")),
         }
@@ -1345,7 +1345,7 @@ pub async fn copy_media(
 
     let mut output =
         NamedTempFile::new().map_err(|_| AppError::internal("create backup media temp file"))?;
-    let mut output_digest = Sha256::new();
+    let mut output_digest = Hasher::new(Suite::V1);
     output
         .write_all(&typed_header)
         .map_err(|_| AppError::internal("write backup media temp file"))?;
@@ -1386,7 +1386,7 @@ pub async fn copy_media(
         output_digest.update(&encrypted);
         offset += chunk_len as u64;
     }
-    let outer_digest = hex::encode(output_digest.finalize());
+    let outer_digest = hex::encode(output_digest.finish());
     let measured_outer_bytes = output
         .as_file()
         .metadata()
@@ -1583,7 +1583,7 @@ pub async fn upload_media(
                 let mut file = NamedTempFile::new()
                     .map_err(|_| AppError::internal("create backup media temp file"))?;
                 let mut bytes = 0u64;
-                let mut digest = Sha256::new();
+                let mut digest = Hasher::new(Suite::V1);
                 while let Some(chunk) = field
                     .chunk()
                     .await
@@ -1596,7 +1596,7 @@ pub async fn upload_media(
                         .map_err(|_| AppError::internal("write backup media temp file"))?;
                     digest.update(&chunk);
                 }
-                object = Some((file, bytes, digest.finalize().into()));
+                object = Some((file, bytes, digest.finish().into()));
             }
             _ => {
                 return Err(AppError::bad_request(

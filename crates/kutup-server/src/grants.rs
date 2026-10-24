@@ -9,8 +9,7 @@
 
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use base64::Engine as _;
-use rand::RngCore;
-use sha2::Digest;
+use kutup_crypto::primitives::{self, Suite};
 use uuid::Uuid;
 
 /// How long a grant may wait to be used.
@@ -76,7 +75,7 @@ pub struct Grant {
 fn hash(token: &str) -> Option<Vec<u8>> {
     let raw = token.strip_prefix(PREFIX)?;
     let bytes = URL_SAFE_NO_PAD.decode(raw).ok()?;
-    (bytes.len() == 32).then(|| sha2::Sha256::digest(token.as_bytes()).to_vec())
+    (bytes.len() == 32).then(|| primitives::hash(Suite::V1, token.as_bytes()).to_vec())
 }
 
 /// Issues a grant; the token, shown once.
@@ -89,13 +88,13 @@ pub async fn issue<'e, E: sqlx::PgExecutor<'e>>(
     minutes: i64,
 ) -> sqlx::Result<String> {
     let mut raw = [0u8; 32];
-    rand::rngs::OsRng.fill_bytes(&mut raw);
+    kutup_crypto::primitives::random(&mut raw);
     let token = format!("{PREFIX}{}", URL_SAFE_NO_PAD.encode(raw));
     sqlx::query(
         "INSERT INTO auth_grants (token_hash, user_id, purpose, session_id, target_user_id, expires_at)
          VALUES ($1, $2, $3, $4, $5, now() + make_interval(mins => $6))",
     )
-    .bind(sha2::Sha256::digest(token.as_bytes()).to_vec())
+    .bind(primitives::hash(Suite::V1, token.as_bytes()).to_vec())
     .bind(user_id)
     .bind(purpose.as_str())
     .bind(session_id)

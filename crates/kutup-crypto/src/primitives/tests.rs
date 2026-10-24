@@ -210,6 +210,20 @@ fn hpke_opens_the_libcrux_message_and_round_trips() {
         &sealed.ciphertext
     )
     .is_err());
+    assert!(matches!(
+        hpke_open(
+            S,
+            &seed[..31],
+            &sealed.encapsulated,
+            b"info",
+            b"aad",
+            &sealed.ciphertext
+        ),
+        Err(crate::error::CryptoError::InvalidLength {
+            expected: 32,
+            got: 31
+        })
+    ));
 }
 
 #[test]
@@ -235,6 +249,12 @@ fn pwhash_matches_libsodium() {
 fn random_and_ct_eq() {
     assert_ne!(random_array::<32>(), random_array::<32>());
     assert_ne!(*random_key(), *random_key());
+    assert_eq!(random_below(1), 0);
+    let mut seen = [false; 10];
+    for _ in 0..1000 {
+        seen[random_below(10) as usize] = true;
+    }
+    assert!(seen.iter().all(|s| *s));
     assert!(ct_eq(b"same", b"same"));
     assert!(!ct_eq(b"same", b"sane"));
     assert!(!ct_eq(b"same", b"same!"));

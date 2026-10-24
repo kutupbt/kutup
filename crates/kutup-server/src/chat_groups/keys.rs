@@ -3,12 +3,10 @@
 //! restart serves the same key. The key config is signed by the same
 //! identity; the previous week's key is still accepted for the overlap.
 
-use ed25519_dalek::SigningKey;
-use hkdf::Hkdf;
 use kutup_chat_proto::group_route::{GroupGatewayKeyConfigV1, KEY_OVERLAP_SECS};
 use kutup_crypto::oblivious::GatewayKey;
+use kutup_crypto::primitives::{kdf, SigningKey, Suite};
 use kutup_federation_proto::FederationIdentityDocumentV1;
-use sha2::Sha256;
 use zeroize::Zeroizing;
 
 use crate::error::{AppError, AppResult};
@@ -37,7 +35,7 @@ static KEYS: std::sync::LazyLock<std::sync::Mutex<KeyCache>> =
     std::sync::LazyLock::new(Default::default);
 
 fn cached(identity: &SigningKey, epoch: i64) -> AppResult<std::sync::Arc<GatewayKey>> {
-    let id = identity.verifying_key().to_bytes();
+    let id = identity.verifying_key().to_array::<32>();
     if let Some(key) = KEYS.lock().unwrap().get(&(id, epoch)) {
         return Ok(key.clone());
     }
@@ -49,12 +47,11 @@ fn cached(identity: &SigningKey, epoch: i64) -> AppResult<std::sync::Arc<Gateway
 }
 
 fn derive(identity: &SigningKey, epoch: i64) -> AppResult<GatewayKey> {
-    let seed = Zeroizing::new(identity.to_bytes());
+    let seed = identity.seed();
     let mut info = KEY_INFO.to_vec();
     info.extend_from_slice(&epoch.to_be_bytes());
     let mut private_key = Zeroizing::new([0u8; 32]);
-    Hkdf::<Sha256>::new(None, seed.as_ref())
-        .expand(&info, private_key.as_mut())
+    kdf(Suite::V1, seed.as_ref(), &[], &info, private_key.as_mut())
         .map_err(|_| AppError::internal("gateway key derivation"))?;
     GatewayKey::from_private_key(key_id(epoch), private_key.as_ref())
         .map_err(|error| AppError::internal(format!("gateway key: {error}")))
@@ -99,7 +96,7 @@ mod tests {
     use super::*;
 
     fn identity() -> (FederationIdentityDocumentV1, SigningKey) {
-        let key = SigningKey::from_bytes(&[3; 32]);
+        let key = SigningKey::from_seed(kutup_crypto::primitives::Suite::V1, &[3; 32]);
         (
             FederationIdentityDocumentV1::genesis("home.example", 10, &key).unwrap(),
             key,
@@ -143,7 +140,7 @@ mod tests {
     #[test]
     fn keys_differ_by_week_and_identity_and_ids_by_neighbour() {
         let (_, key) = identity();
-        let other = SigningKey::from_bytes(&[4; 32]);
+        let other = SigningKey::from_seed(kutup_crypto::primitives::Suite::V1, &[4; 32]);
         assert_ne!(
             derive(&key, 5).unwrap().public_key(),
             derive(&key, 6).unwrap().public_key()

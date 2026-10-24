@@ -4,6 +4,7 @@
 //! signatures, and SSRF-safe routing belong to `FederationStack`. This module
 //! owns only Drive account lookup and per-share capability authorization.
 
+use kutup_crypto::primitives::{hash, Hasher, Suite};
 use std::io::Write as _;
 
 use aws_sdk_s3::primitives::ByteStream;
@@ -19,11 +20,10 @@ use kutup_crypto::drive_envelope::{self, DriveEnvelopeContextV1, DriveEnvelopePu
 use kutup_crypto::drive_object::DriveFileBlobContextV1;
 use kutup_crypto::named_share::NamedShareEnvelopeV1;
 use kutup_federation_proto::{
-    content_digest_sha256_from_digest, validate_server_name, FederationFeature,
+    content_digest_sha256_from_digest, validate_server_name, ContentDigest, FederationFeature,
 };
 use reqwest::Method;
 use serde::{Deserialize, Serialize};
-use sha2::{Digest as _, Sha256};
 use tempfile::NamedTempFile;
 use time::OffsetDateTime;
 use tokio::io::AsyncReadExt as _;
@@ -384,7 +384,7 @@ pub(crate) fn validate_capability(capability: &str) -> AppResult<()> {
 }
 
 pub(crate) fn capability_hash(capability: &str) -> String {
-    hex::encode(Sha256::digest(capability.as_bytes()))
+    hex::encode(hash(Suite::V1, capability.as_bytes()))
 }
 
 pub(crate) fn gateway_error(error: anyhow::Error) -> AppError {
@@ -428,14 +428,14 @@ pub(crate) fn drive_spec(
 }
 
 fn stable_mutation_request_id(operation: &str, scope: &[&[u8]]) -> String {
-    let mut digest = Sha256::new();
+    let mut digest = Hasher::new(Suite::V1);
     digest.update(b"kutup-drive-federation-operation-v1\0");
     digest.update(operation.as_bytes());
     for value in scope {
         digest.update((value.len() as u64).to_be_bytes());
         digest.update(value);
     }
-    format!("{operation}-{}", hex::encode(digest.finalize()))
+    format!("{operation}-{}", hex::encode(digest.finish()))
 }
 
 /// Local authenticated lookup of a remote Drive account through the pinned,
@@ -2147,7 +2147,7 @@ where
                 let mut file = NamedTempFile::new()
                     .map_err(|error| AppError::internal(format!("create temp file: {error}")))?;
                 let mut size = 0_i64;
-                let mut digest = Sha256::new();
+                let mut digest = ContentDigest::new();
                 while let Some(chunk) = field
                     .chunk()
                     .await
@@ -2161,7 +2161,7 @@ where
                         AppError::internal(format!("write upload temp file: {error}"))
                     })?;
                 }
-                uploaded_file = Some((file, size, hex::encode(digest.finalize())));
+                uploaded_file = Some((file, size, hex::encode(digest.finish())));
             }
             _ => return Err(AppError::bad_request("unexpected multipart field")),
         }
@@ -2224,7 +2224,7 @@ pub(crate) async fn spool_body(body: axum::body::Body, limit: u64) -> AppResult<
         tempfile::tempfile().map_err(|error| AppError::internal(format!("temp file: {error}")))?;
     let mut file = tokio::fs::File::from_std(std_file);
     let mut stream = body.into_data_stream();
-    let mut digest = Sha256::new();
+    let mut digest = ContentDigest::new();
     let mut length = 0_u64;
     while let Some(chunk) = stream.next().await {
         let chunk = chunk.map_err(|_| AppError::bad_request("request body interrupted"))?;
@@ -2243,7 +2243,7 @@ pub(crate) async fn spool_body(body: axum::body::Body, limit: u64) -> AppResult<
     file.flush()
         .await
         .map_err(|error| AppError::internal(format!("spool body: {error}")))?;
-    let digest: [u8; 32] = digest.finalize().into();
+    let digest: [u8; 32] = digest.finish();
     Ok(SpooledBody {
         file,
         length,
@@ -2301,7 +2301,7 @@ pub(crate) async fn ensure_version_digest(
 async fn sha256_hex(object: aws_sdk_s3::primitives::ByteStream) -> AppResult<String> {
     let mut reader = object.into_async_read();
     let mut buffer = vec![0_u8; 1024 * 1024];
-    let mut digest = Sha256::new();
+    let mut digest = ContentDigest::new();
     loop {
         let read = reader
             .read(&mut buffer)
@@ -2312,7 +2312,7 @@ async fn sha256_hex(object: aws_sdk_s3::primitives::ByteStream) -> AppResult<Str
         }
         digest.update(&buffer[..read]);
     }
-    Ok(hex::encode(digest.finalize()))
+    Ok(hex::encode(digest.finish()))
 }
 
 pub(crate) async fn ensure_ciphertext_digest(
@@ -2327,7 +2327,7 @@ pub(crate) async fn ensure_ciphertext_digest(
         .map_err(|error| AppError::internal(format!("read Drive object for digest: {error}")))?;
     let mut reader = object.into_async_read();
     let mut buffer = vec![0_u8; 1024 * 1024];
-    let mut digest = Sha256::new();
+    let mut digest = ContentDigest::new();
     loop {
         let read = reader
             .read(&mut buffer)
@@ -2338,7 +2338,7 @@ pub(crate) async fn ensure_ciphertext_digest(
         }
         digest.update(&buffer[..read]);
     }
-    let digest = hex::encode(digest.finalize());
+    let digest = hex::encode(digest.finish());
     sqlx::query(
         "UPDATE files SET ciphertext_sha256 = $2
          WHERE id = $1 AND ciphertext_sha256 IS NULL",
@@ -2592,7 +2592,7 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(upload.size, ciphertext.len() as i64);
-        assert_eq!(upload.digest, hex::encode(Sha256::digest(ciphertext)));
+        assert_eq!(upload.digest, hex::encode(hash(Suite::V1, ciphertext)));
         assert_eq!(upload.file_id.to_string(), file_id);
         assert_eq!(upload.metadata_envelope, "metadata");
         assert_eq!(upload.name_hash, "ab".repeat(32));

@@ -20,6 +20,8 @@
 //! it changes, and the server stores a new one only on top of the revision
 //! the writer started from.
 
+// Adapter: KeePass KDBX's composite key hashes the password with SHA-256.
+#[allow(clippy::disallowed_types)]
 use sha2::{Digest, Sha256};
 use zeroize::Zeroizing;
 
@@ -70,6 +72,8 @@ impl std::fmt::Debug for VaultSecret {
 }
 
 /// KeePass's password part of the composite key: SHA-256 of its UTF-8.
+// Adapter: KeePass KDBX's composite key.
+#[allow(clippy::disallowed_types)]
 pub fn password_hash(password: &str) -> Zeroizing<[u8; 32]> {
     Zeroizing::new(Sha256::digest(password.as_bytes()).into())
 }
@@ -322,6 +326,8 @@ mod tests {
     }
 
     #[test]
+    // KeePass's reference hash.
+    #[allow(clippy::disallowed_types)]
     fn a_chosen_password_is_kept_only_as_keepass_hashes_it() {
         let s = VaultSecret::chosen(Some("parola-çğ"), None);
         let sealed = seal_vault_secret(&MASTER, BINDING, &VAULT, 7, &s).unwrap();

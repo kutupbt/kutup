@@ -1,10 +1,10 @@
-use ed25519_dalek::SigningKey;
 use kutup_chat_proto::group::{
     check_change, check_genesis, GroupActionV1, GroupAttribute, GroupChangeV1, GroupLimits,
     GroupRole, GroupStateV1,
 };
 use kutup_chat_proto::group_route::{GroupGatewayKeyConfigV1, GroupHomePinV1, GroupNotaryV1};
 use kutup_crypto::account_ref::AccountRef;
+use kutup_crypto::primitives::{SigningKey, Suite};
 use kutup_federation_proto::FederationIdentityDocumentV1;
 
 use super::*;
@@ -30,7 +30,7 @@ impl Home {
     }
 
     fn with_key(byte: u8, server: &str) -> Self {
-        let key = SigningKey::from_bytes(&[byte; 32]);
+        let key = SigningKey::from_seed(Suite::V1, &[byte; 32]);
         let identity = FederationIdentityDocumentV1::genesis(server, 10, &key).unwrap();
         let config = GroupGatewayKeyConfigV1::sign(
             &identity,
@@ -239,9 +239,9 @@ fn a_binding_counts_only_under_the_accounts_own_authority() {
     // Checked against any other key (another account's authority, or a
     // device's), his binding doesn't count.
     assert_eq!(bobs(&alice_record, mallory.keys.authority.public_key()), 1);
-    let device = SigningKey::from_bytes(&[2u8; 32])
+    let device = SigningKey::from_seed(Suite::V1, &[2u8; 32])
         .verifying_key()
-        .to_bytes();
+        .to_array::<32>();
     assert_eq!(bobs(&alice_record, device), 1);
 }
 

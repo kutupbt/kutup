@@ -22,7 +22,10 @@ fn live() -> Option<(Client, String)> {
 }
 
 fn name() -> String {
-    format!("aid{}", rand::random::<u32>() % 1_000_000_000)
+    format!(
+        "aid{}",
+        kutup_crypto::primitives::random_below(1_000_000_000)
+    )
 }
 
 fn by_id(

@@ -20,6 +20,7 @@
 
 use base64::engine::general_purpose::STANDARD;
 use base64::Engine as _;
+use kutup_crypto::primitives::{Hasher, Suite};
 use serde_json::json;
 use uuid::Uuid;
 
@@ -387,14 +388,13 @@ async fn values(
 /// names the basis it was made on, so a listed write without a head that
 /// landed in between (the head would not cover it) is caught, not trusted.
 async fn basis(conn: &mut sqlx::PgConnection, user_id: Uuid) -> AppResult<String> {
-    use sha2::Digest as _;
-    let mut hash = sha2::Sha256::new();
+    let mut hash = Hasher::new(Suite::V1);
     for scope in Scope::ALL {
         for (id, revision) in values(&mut *conn, user_id, scope).await? {
             hash.update(format!("{}\0{id}\0{revision}\n", scope.name()));
         }
     }
-    Ok(hex::encode(hash.finalize()))
+    Ok(hex::encode(hash.finish()))
 }
 
 /// A scope's index with the head it goes with, read in one snapshot so the

@@ -1887,22 +1887,23 @@ pub(crate) fn is_valid_hex_color(s: &str) -> bool {
 /// the same each time, and told from real ones by no one without the
 /// server's own key for them (an HMAC under a key derived from it).
 fn deterministic_fake_bytes(secret: &[u8], name: &str, purpose: &str, len: usize) -> String {
-    use hmac::{Hmac, Mac};
-    let key = {
-        let mut mac = <Hmac<sha2::Sha256> as Mac>::new_from_slice(secret).expect("any key length");
-        mac.update(b"kutup/fake-account/v1\0");
-        mac.finalize().into_bytes()
-    };
+    use kutup_crypto::primitives::{mac, subkey, Suite};
+    let key = subkey(Suite::V1, secret, b"kutup/fake-account/v1\0");
     let mut out = Vec::with_capacity(len);
     let mut counter = 0u32;
     while out.len() < len {
-        let mut mac = <Hmac<sha2::Sha256> as Mac>::new_from_slice(&key).expect("any key length");
-        mac.update(purpose.as_bytes());
-        mac.update(b"\0");
-        mac.update(name.trim().to_lowercase().as_bytes());
-        mac.update(b"\0");
-        mac.update(&counter.to_be_bytes());
-        out.extend_from_slice(&mac.finalize().into_bytes());
+        let tag = mac(
+            Suite::V1,
+            key.as_ref(),
+            &[
+                purpose.as_bytes(),
+                b"\0",
+                name.trim().to_lowercase().as_bytes(),
+                b"\0",
+                &counter.to_be_bytes(),
+            ],
+        );
+        out.extend_from_slice(tag.as_bytes());
         counter += 1;
     }
     out.truncate(len);

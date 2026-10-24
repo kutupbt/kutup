@@ -62,6 +62,12 @@ pub fn hpke_open(
     aad: &[u8],
     ciphertext: &[u8],
 ) -> Result<Zeroizing<Vec<u8>>> {
+    if seed.len() != suite.params().hpke_seed_len {
+        return Err(CryptoError::InvalidLength {
+            expected: suite.params().hpke_seed_len,
+            got: seed.len(),
+        });
+    }
     match suite {
         Suite::V1 => crate::hpke_xwing::suite()
             .open(

@@ -70,7 +70,10 @@ impl FederationStack {
                     crate::server_keys::GeneratedKey::FederationIdentity,
                 )
                 .await?;
-                let signing_key = ed25519_dalek::SigningKey::from_bytes(&seed);
+                let signing_key = kutup_crypto::primitives::SigningKey::from_seed(
+                    kutup_crypto::primitives::Suite::V1,
+                    &seed,
+                );
                 seed.fill(0);
                 FederationRuntimeConfig::with_generated_key(server_name, api_base, signing_key)
             }

@@ -10,6 +10,7 @@
 //! usage policy (no repeated fetches) and means a provider sees occasional
 //! fetches from the server rather than every view.
 
+use kutup_crypto::primitives::{hash, Suite};
 use std::collections::HashMap;
 use std::path::{Path as FsPath, PathBuf};
 use std::sync::{LazyLock, Mutex, RwLock};
@@ -21,7 +22,6 @@ use axum::http::{header, HeaderValue, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::Json;
 use serde::{Deserialize, Serialize};
-use sha2::{Digest as _, Sha256};
 use sqlx::PgPool;
 use utoipa::ToSchema;
 
@@ -800,7 +800,8 @@ pub async fn proxy(
     if !valid_relay_path(&path) {
         return Err(AppError::bad_request("invalid map path"));
     }
-    let key = hex::encode(Sha256::digest(
+    let key = hex::encode(hash(
+        Suite::V1,
         format!("{}\0{}\0{path}", id.as_str(), upstream.origin).as_bytes(),
     ));
     let cap = u64::from(settings.cache_megabytes) * 1024 * 1024;

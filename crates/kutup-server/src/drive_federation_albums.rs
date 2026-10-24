@@ -13,10 +13,9 @@ use axum::extract::{Path, State};
 use axum::http::{header, HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
 use kutup_crypto::thumbnail::ThumbnailVariant;
-use kutup_federation_proto::{content_digest_sha256_from_digest, FederationFeature};
+use kutup_federation_proto::{content_digest_sha256_from_digest, ContentDigest, FederationFeature};
 use reqwest::Method;
 use serde::Serialize;
-use sha2::{Digest as _, Sha256};
 use time::OffsetDateTime;
 use tokio_util::io::ReaderStream;
 use utoipa::ToSchema;
@@ -219,7 +218,7 @@ pub async fn thumbnail(
         if bytes.len() > MAX_THUMBNAIL_BYTES {
             return Err(AppError::internal("thumbnail too large"));
         }
-        let digest: [u8; 32] = Sha256::digest(&bytes).into();
+        let digest = ContentDigest::of(&bytes);
         federation.signed_stream_response(
             &authenticated,
             StatusCode::OK,

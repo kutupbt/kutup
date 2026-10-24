@@ -4,6 +4,7 @@
 //! a database. Secret files are created once with mode 0600 and are never
 //! printed. Only the public root description and service policy go to stdout.
 
+use kutup_crypto::primitives::{hash, Suite};
 use std::fs::{OpenOptions, Permissions};
 use std::io::Write as _;
 #[cfg(unix)]
@@ -13,9 +14,6 @@ use std::path::{Path, PathBuf};
 use base64::engine::general_purpose::STANDARD;
 use base64::Engine as _;
 use libsignal_protocol::{KeyPair, PrivateKey, ServerCertificate};
-use rand09::rngs::OsRng;
-use rand09::TryRngCore as _;
-use sha2::{Digest as _, Sha256};
 
 use kutup_chat_proto::{
     DirectChatSuiteId, SealedSenderRootV1, SealedSenderServerCertificateV1,
@@ -40,14 +38,14 @@ fn root_generate(args: &[String]) -> anyhow::Result<()> {
         anyhow::bail!(usage());
     }
     let path = Path::new(&args[0]);
-    let mut rng = OsRng.unwrap_err();
+    let mut rng = kutup_crypto::primitives::Rng;
     let root = KeyPair::generate(&mut rng);
     write_secret_once(path, &root.private_key.serialize())?;
     let public = root.public_key.serialize();
     println!(
         "{}",
         serde_json::to_string_pretty(&serde_json::json!({
-            "rootId": hex::encode(Sha256::digest(public.as_ref())),
+            "rootId": hex::encode(hash(Suite::V1, public.as_ref())),
             "publicKey": STANDARD.encode(public.as_ref()),
             "privateKeyFile": path,
         }))?
@@ -77,9 +75,9 @@ fn server_issue(args: &[String]) -> anyhow::Result<()> {
     let root_private = PrivateKey::deserialize(&root_bytes)?;
     let root_public = root_private.public_key()?;
     let root_public_bytes = root_public.serialize();
-    let root_id = hex::encode(Sha256::digest(root_public_bytes.as_ref()));
+    let root_id = hex::encode(hash(Suite::V1, root_public_bytes.as_ref()));
 
-    let mut rng = OsRng.unwrap_err();
+    let mut rng = kutup_crypto::primitives::Rng;
     let online = KeyPair::generate(&mut rng);
     let online_secret = STANDARD.encode(online.private_key.serialize());
     write_secret_once(&options.online_key, online_secret.as_bytes())?;

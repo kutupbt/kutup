@@ -29,7 +29,7 @@ use base64::engine::general_purpose::STANDARD;
 use base64::Engine as _;
 use futures_util::{SinkExt, StreamExt};
 use kutup_crypto::envelope::{self, Frame};
-use kutup_federation_proto::{content_digest_sha256_from_digest, FederationFeature};
+use kutup_federation_proto::{content_digest_sha256_from_digest, ContentDigest, FederationFeature};
 use reqwest::Method;
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
@@ -1101,7 +1101,7 @@ pub async fn asset_content(
         remote_access(&state, &authenticated, &headers, file_id).await?;
         let (bytes, _) =
             crate::handlers::file_assets::load_asset(&state, file_id, &asset_id).await?;
-        let digest: [u8; 32] = <sha2::Sha256 as sha2::Digest>::digest(&bytes).into();
+        let digest = ContentDigest::of(&bytes);
         federation.signed_stream_response(
             &authenticated,
             StatusCode::OK,

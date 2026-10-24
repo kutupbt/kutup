@@ -1166,7 +1166,7 @@ mod tests {
             .bind(device_base + offset)
             .bind(who.incarnation_id())
             .bind(&address)
-            .bind(rand::random::<[u8; 32]>().to_vec())
+            .bind(kutup_crypto::primitives::random_array::<32>().to_vec())
             .bind(vec![0u8; 32])
             .execute(&pool)
             .await

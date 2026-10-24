@@ -179,7 +179,7 @@ async fn load_or_create_key(pool: &PgPool) -> anyhow::Result<SigningKey> {
     {
         return Ok(SigningKey::from_slice(&bytes)?);
     }
-    let created = SigningKey::random(&mut p256::elliptic_curve::rand_core::OsRng);
+    let created = SigningKey::random(&mut kutup_crypto::primitives::Rng);
     sqlx::query(
         "INSERT INTO chat_web_push_key (id, private_key) VALUES (1, $1) ON CONFLICT DO NOTHING",
     )
@@ -437,8 +437,10 @@ mod tests {
     }
 
     #[test]
+    // RFC 8292's ES256 (P-256 ECDSA) signature, checked as a push service does.
+    #[allow(clippy::disallowed_methods)]
     fn vapid_header_is_a_signed_es256_token_for_the_push_origin() {
-        let signing_key = SigningKey::random(&mut p256::elliptic_curve::rand_core::OsRng);
+        let signing_key = SigningKey::random(&mut kutup_crypto::primitives::Rng);
         let point = signing_key.verifying_key().to_encoded_point(false);
         let (sender, _receiver) = mpsc::unbounded_channel();
         let push = WebPush {
