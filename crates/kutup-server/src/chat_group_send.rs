@@ -461,3 +461,112 @@ pub(crate) async fn params(
     }
     Ok(Json(params_of(published)))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn sealing(entries: &[(u16, u8)]) -> OpaqueSetupKeys {
+        let list: Vec<String> = entries
+            .iter()
+            .map(|(id, byte)| format!("{id}:{}", STANDARD.encode([*byte; 32])))
+            .collect();
+        OpaqueSetupKeys::parse(&list.join(",")).unwrap()
+    }
+
+    async fn stored(pool: &PgPool) -> Vec<(i32, i16, Vec<u8>)> {
+        sqlx::query_as(
+            "SELECT key_id, sealing_key_id, public_key FROM chat_zk_server_keys ORDER BY key_id",
+        )
+        .fetch_all(pool)
+        .await
+        .unwrap()
+    }
+
+    /// The start-up reseal (docs/self-hosting.md, `OPAQUE_SETUP_KEYS`): a key
+    /// sealed under entry 1 is sealed under 2 once 2 is added, the server
+    /// then starts with 2 alone, and two instances starting at once leave it
+    /// consistent. Needs a database whose server runs without groups (the
+    /// backup gate's), as the test owns `chat_zk_server_keys`.
+    #[tokio::test]
+    async fn live_keys_are_resealed_under_the_current_entry_at_start() {
+        let Ok(url) = std::env::var("KUTUP_LIVE_DATABASE_URL") else {
+            eprintln!("KUTUP_LIVE_DATABASE_URL unset; skipping");
+            return;
+        };
+        let pool = sqlx::postgres::PgPoolOptions::new()
+            .max_connections(4)
+            .connect(&url)
+            .await
+            .unwrap();
+        assert!(
+            stored(&pool).await.is_empty(),
+            "the gate's server runs without groups, so no key is stored yet"
+        );
+        let (one, both, two) = (
+            sealing(&[(1, 0x11)]),
+            sealing(&[(1, 0x11), (2, 0x22)]),
+            sealing(&[(2, 0x22)]),
+        );
+
+        // First start: the key is made under entry 1.
+        GroupSendKeys::new(pool.clone(), one.clone())
+            .ensure()
+            .await
+            .unwrap();
+        let first = stored(&pool).await;
+        assert_eq!(first.len(), 1);
+        assert_eq!(first[0].1, 1);
+        let public = first[0].2.clone();
+
+        // Entry 2 added: the next start seals it under 2, the same key.
+        let started = GroupSendKeys::new(pool.clone(), both.clone());
+        started.ensure().await.unwrap();
+        let resealed = stored(&pool).await;
+        assert_eq!((resealed[0].0, resealed[0].1), (first[0].0, 2));
+        assert_eq!(started.issuing().await.unwrap().public_key, public);
+
+        // Entry 1 dropped: the server still starts, with the same key.
+        let only_two = GroupSendKeys::new(pool.clone(), two.clone());
+        only_two.ensure().await.unwrap();
+        let key = only_two.issuing().await.unwrap();
+        assert_eq!(key.public_key, public);
+        let issued = key.key.issue(Uuid::new_v4(), 1_700_000_000);
+        assert!(!issued.response.is_empty());
+
+        // Back under entry 1, then two instances start at once with both.
+        let (key_id, _, _) = stored(&pool).await.remove(0);
+        let sealed = seal_server_key(&key.key, &[0x11; 32], 1, key.key_id).unwrap();
+        sqlx::query(
+            "UPDATE chat_zk_server_keys SET server_secret_sealed = $1, sealing_key_id = 1
+             WHERE key_id = $2",
+        )
+        .bind(sealed)
+        .bind(key_id)
+        .execute(&pool)
+        .await
+        .unwrap();
+        let (a, b) = (
+            GroupSendKeys::new(pool.clone(), both.clone()),
+            GroupSendKeys::new(pool.clone(), both),
+        );
+        let (first_start, second_start) = tokio::join!(a.ensure(), b.ensure());
+        first_start.unwrap();
+        second_start.unwrap();
+        let after = stored(&pool).await;
+        assert_eq!(after.len(), 1, "no second key was made");
+        assert_eq!((after[0].1, &after[0].2), (2, &public));
+        let alone = GroupSendKeys::new(pool.clone(), two);
+        alone.ensure().await.unwrap();
+        assert_eq!(alone.issuing().await.unwrap().public_key, public);
+
+        // A key whose entry is gone stops the start, as documented.
+        let wrong = GroupSendKeys::new(pool.clone(), one);
+        assert!(wrong.ensure().await.is_err());
+
+        sqlx::query("DELETE FROM chat_zk_server_keys")
+            .execute(&pool)
+            .await
+            .unwrap();
+    }
+}
