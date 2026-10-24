@@ -177,6 +177,11 @@ async fn answer_checked(
         GroupOperationV1::PutAvatar => put_avatar(state, request, &group_id, &pseudonym, now).await,
         // Calls come with slice 4.
         GroupOperationV1::CallToken => Ok(status(GroupResponseStatusV1::Unavailable, now)),
+        // Group send endorsements come with their server part
+        // (docs/plans/group-send-endorsements.md §3.3).
+        GroupOperationV1::PutEndorsement | GroupOperationV1::GetEndorsements => {
+            Ok(status(GroupResponseStatusV1::Unavailable, now))
+        }
     }
 }
 
