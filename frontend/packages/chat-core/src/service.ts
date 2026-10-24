@@ -2203,7 +2203,11 @@ export class ChatService {
     this.pongDeadline = null
   }
 
-  /** The page is going away (closed, navigated, frozen): back up what waits. */
+  /**
+   * The page is going away (closed, navigated, frozen): back up what waits.
+   * Best effort: the browser may end the page before the upload is done, and
+   * what didn't go stays queued for the next visit.
+   */
   private readonly handlePageHide = (): void => {
     this.backup?.pageHidden(true)
   }
