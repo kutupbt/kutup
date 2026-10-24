@@ -472,15 +472,11 @@ impl Engine {
             .map_err(|_| ChatError::Trust("an endorsement blob doesn't open".into()))?;
         let blob = EndorsementBlob::decode(&blob).map_err(zk_error)?;
         let parsed = crate::address::parse_account(account)?;
-        if blob.server != parsed.server {
-            return Err(ChatError::Trust(
-                "an endorsement blob names another server than its member's".into(),
-            ));
-        }
-        let key = self.group_send_key(&blob.server, blob.key_id).await?;
-        let endorsement =
-            kutup_group_send::receive(&blob.response, account_uuid(account)?, now, &key)
-                .map_err(zk_error)?;
+        // The member's own server's key, never one the blob points at.
+        let key = self.group_send_key(&parsed.server, blob.key_id).await?;
+        let endorsement = blob
+            .receive(&parsed.server, account_uuid(account)?, now, &key)
+            .map_err(zk_error)?;
         if endorsement.expiration != expiration {
             return Err(ChatError::Trust(
                 "an endorsement blob's expiration isn't its response's".into(),
