@@ -1,4 +1,5 @@
-import { useQuery } from '@tanstack/react-query'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
+import { saveCalendarZone } from '@kutup/calendar-core/api'
 import { useTranslation } from 'react-i18next'
 import { timeZones } from '@kutup/crypto/calendar'
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@kutup/ui/components/dialog'
@@ -6,6 +7,7 @@ import { Label } from '@kutup/ui/components/label'
 import { Choice } from './Choice'
 import { formatWeekday, zoneOptions } from './format'
 import { setPrefs, useCalendarPrefs } from './prefs'
+import { NotificationSettings } from './reminders/NotificationSettings'
 
 /** A Sunday, a Monday … a Saturday, to name the weekdays by. */
 const WEEK = ['2026-10-25', '2026-10-26', '2026-10-27', '2026-10-28', '2026-10-29', '2026-10-30', '2026-10-31'] as const
@@ -13,6 +15,13 @@ const WEEK = ['2026-10-25', '2026-10-26', '2026-10-27', '2026-10-28', '2026-10-2
 /** How this browser shows calendars: the zone, the week's first day, the clock. */
 export function SettingsDialog({ open, onOpenChange }: { open: boolean; onOpenChange: (open: boolean) => void }) {
   const { t, i18n } = useTranslation()
+  const queryClient = useQueryClient()
+  // A zone chosen here is this device's, and the account's (all-day reminders fire in it).
+  const chooseZone = async (zone: string) => {
+    setPrefs({ zone })
+    await saveCalendarZone(zone).catch(() => undefined)
+    await queryClient.invalidateQueries({ queryKey: ['calendar', 'settings'] })
+  }
   const prefs = useCalendarPrefs()
   const zones = useQuery({ queryKey: ['calendar', 'zones'], queryFn: timeZones, staleTime: Infinity, enabled: open })
   return (
@@ -25,7 +34,7 @@ export function SettingsDialog({ open, onOpenChange }: { open: boolean; onOpenCh
         <div className="mt-4 space-y-4">
           <div className="space-y-1.5">
             <Label htmlFor="settings-zone">{t('settings.zone')}</Label>
-            <Choice id="settings-zone" value={prefs.zone} options={zoneOptions(zones.data, prefs.zone)} onChange={(zone) => setPrefs({ zone })} testId="settings-zone" />
+            <Choice id="settings-zone" value={prefs.zone} options={zoneOptions(zones.data, prefs.zone)} onChange={(zone) => void chooseZone(zone)} testId="settings-zone" />
           </div>
           <div className="space-y-1.5">
             <Label htmlFor="settings-week">{t('settings.weekStart')}</Label>
@@ -50,6 +59,7 @@ export function SettingsDialog({ open, onOpenChange }: { open: boolean; onOpenCh
             />
           </div>
           <p className="text-xs text-muted-foreground">{t('settings.thisDevice')}</p>
+          <NotificationSettings />
         </div>
       </DialogContent>
     </Dialog>

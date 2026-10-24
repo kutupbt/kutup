@@ -92,5 +92,66 @@
     "slot": "{{day}}, {{time}}",
     "span": "{{day}}, {{start}} to {{end}}. Enter to create.",
     "moved": "Moves to {{start}} until {{end}}. Enter to open, Escape to cancel."
+  },
+  "reminders": {
+    "title": "Calendar reminder",
+    "untitled": "(no title)",
+    "text": {
+      "startsNow": "{{title}} starts now",
+      "startsToday": "{{title}} starts today",
+      "startsAt": "{{title}} starts at {{time}}",
+      "startsTomorrow": "{{title}} starts tomorrow",
+      "startsTomorrowAt": "{{title}} starts tomorrow at {{time}}",
+      "startsOn": "{{title}} starts on {{date}}",
+      "startsOnAt": "{{title}} starts on {{date}} at {{time}}",
+      "startedAt": "{{title}} started at {{time}}",
+      "startedYesterday": "{{title}} started yesterday",
+      "startedYesterdayAt": "{{title}} started yesterday at {{time}}",
+      "startedOn": "{{title}} started on {{date}}",
+      "startedOnAt": "{{title}} started on {{date}} at {{time}}"
+    },
+    "banner": "Kutup Calendar needs your permission to show desktop notifications for event reminders.",
+    "bannerLabel": "Desktop notifications",
+    "enable": "Enable desktop notifications",
+    "dismiss": "Not now",
+    "picker": {
+      "type": "Reminder type",
+      "device": "Notification",
+      "email": "Email",
+      "amount": "How many",
+      "when": "When",
+      "atTime": "at time of event",
+      "sameDay": "on the same day",
+      "minutesBefore": "minutes before",
+      "hoursBefore": "hours before",
+      "daysBefore": "days before",
+      "weeksBefore": "weeks before",
+      "at": "at",
+      "timeOfDay": "Time of day",
+      "remove": "Remove this notification",
+      "add": "Add notification",
+      "other": "A reminder set elsewhere ({{trigger}})",
+      "repeats": "The same notification twice: change or remove one."
+    },
+    "field": "Notifications",
+    "defaults": {
+      "timed": "Notifications",
+      "allDay": "All-day event notifications"
+    },
+    "push": {
+      "title": "Kutup Calendar",
+      "at": "Event at {{time}}",
+      "today": "Event today",
+      "on": "Event on {{date}}",
+      "onAt": "Event on {{date}} at {{time}}"
+    },
+    "settings": {
+      "title": "Desktop notifications",
+      "denied": "Notifications are turned off for Calendar in this browser. Allow them in the browser's site settings.",
+      "unsupported": "This browser doesn't show notifications.",
+      "allowed": "Reminders show as desktop notifications while Calendar is open.",
+      "push": "Remind me when Calendar is closed",
+      "pushHint": "The reminder says only when an event starts; its title shows once Calendar opens."
+    }
   }
 }

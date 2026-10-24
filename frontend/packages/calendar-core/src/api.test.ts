@@ -207,7 +207,7 @@ function calendarOpening(opened: EventFields): Calendar {
 }
 
 function eventRow(startUtc: string, endUtc: string, fullDay: boolean): EventRow {
-  return { id: 'e1', calendarId: 'c1', uid: 'u@kutup.test', authorAddress: 'ada@kutup.test', event: {} as EventRow['event'], startUtc, endUtc, fullDay, rangeEndUtc: endUtc, sequence: 0, revision: 1, modifiedAt: '' }
+  return { id: 'e1', calendarId: 'c1', uid: 'u@kutup.test', authorAddress: 'ada@kutup.test', event: {} as EventRow['event'], startUtc, endUtc, fullDay, rangeEndUtc: endUtc, sequence: 0, revision: 1, modifiedAt: '', reminders: null }
 }
 
 describe('opening events', () => {

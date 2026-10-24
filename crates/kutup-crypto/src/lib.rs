@@ -94,8 +94,11 @@ pub mod oblivious;
 pub mod opaque;
 pub mod opaque_login_state;
 pub mod padding;
+// The one module that names algorithms (docs/plans/crypto-primitives.md).
 pub mod pass_vault;
 pub mod photos_library;
+#[allow(clippy::disallowed_types, clippy::disallowed_methods)]
+pub mod primitives;
 pub mod profile_key_share;
 pub mod provisioning;
 pub mod revision_guard;

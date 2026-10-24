@@ -30,16 +30,32 @@ export function pressActive(): boolean {
 }
 
 /**
- * Keeps an armed or dragging touch from scrolling `element`: a listener in
- * place before any touch starts, as browsers decide then whether one can
- * stop the scroll. Returns its removal.
+ * Keeps an armed or dragging touch from scrolling `element` (a grid area,
+ * never the whole page, so the page's own scrolling stays smooth): a
+ * listener in place before any touch starts, as browsers decide then
+ * whether one can stop the scroll. A pen over it pans nothing (it drags as
+ * a mouse does): browsers fix a pointer's touch-action as it goes down, so
+ * it is set while the pen hovers. Returns its removal.
  */
 export function holdTouches(element: HTMLElement): () => void {
   const hold = (e: TouchEvent) => {
     if (holding) e.preventDefault()
   }
+  const penOver = (e: PointerEvent) => {
+    if (e.pointerType === 'pen') element.style.touchAction = 'none'
+  }
+  const penOut = (e: PointerEvent) => {
+    if (e.pointerType === 'pen') element.style.touchAction = ''
+  }
   element.addEventListener('touchmove', hold, { passive: false })
-  return () => element.removeEventListener('touchmove', hold)
+  element.addEventListener('pointerover', penOver)
+  element.addEventListener('pointerleave', penOut)
+  return () => {
+    element.removeEventListener('touchmove', hold)
+    element.removeEventListener('pointerover', penOver)
+    element.removeEventListener('pointerleave', penOut)
+    element.style.touchAction = ''
+  }
 }
 
 /** Auto-scroll: within this many pixels of the scroller's edge, this many per frame (Proton's 7 and 5, a touch more generous). */

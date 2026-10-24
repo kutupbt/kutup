@@ -62,7 +62,7 @@ envelope; no new construction.
   the right one) and the server.
 - Context:
   - `object_id` = file id
-  - `parent_id` = first 16 bytes of `SHA-256("kutup/drive/thumbnail/v1" ‖ variant)`
+  - `parent_id` = first 16 bytes of `SHA-256("kutup/drive-envelope/thumbnail/v1\0" ‖ variant)`
     (the whiteboard-asset pattern: a derived id instead of a second UUID), so
     an `sm` envelope never opens as `lg`
   - `epoch` = the file row's key epoch (as the file blob)

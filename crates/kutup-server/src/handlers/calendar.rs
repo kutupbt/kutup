@@ -655,6 +655,9 @@ pub struct EventView {
     pub revision: i64,
     #[serde(with = "time::serde::rfc3339")]
     pub modified_at: time::OffsetDateTime,
+    /// The caller's own reminders for it; null: their calendar's defaults.
+    #[schema(value_type = Option<Vec<crate::calendar_reminders::Reminder>>)]
+    pub reminders: Option<Vec<crate::calendar_reminders::Reminder>>,
 }
 
 /// Where the next page starts: after this event, by (start, id). The client
@@ -700,18 +703,26 @@ struct EventRow {
     sequence: i32,
     revision: i64,
     modified_at: time::OffsetDateTime,
+    reminders: Option<serde_json::Value>,
 }
 
-const EVENT_VIEW: &str = "SELECT e.id, e.calendar_id, e.uid, a.address AS author_address,
+/// The events as their caller sees them, with the caller's own reminders:
+/// the caller's id is bind parameter `$caller`.
+fn event_view_sql(caller: u8) -> String {
+    format!(
+        "SELECT e.id, e.calendar_id, e.uid, a.address AS author_address,
         e.shared_key_packet, e.calendar_key_packet,
         e.shared_signed, e.shared_signed_signature,
         e.shared_encrypted, e.shared_encrypted_signature,
         e.calendar_signed, e.calendar_signed_signature,
         e.calendar_encrypted, e.calendar_encrypted_signature,
         e.start_utc, e.end_utc, e.full_day, e.range_end_utc, e.sequence, e.revision,
-        e.modified_at
+        e.modified_at, r.reminders
    FROM calendar_events e
-   LEFT JOIN mail_addresses a ON a.id = e.author_address_id";
+   LEFT JOIN mail_addresses a ON a.id = e.author_address_id
+   LEFT JOIN calendar_event_reminders r ON r.event_id = e.id AND r.user_id = ${caller}"
+    )
+}
 
 fn event_view(row: EventRow) -> EventView {
     use kutup_crypto::calendar::EventPartV1;
@@ -750,6 +761,10 @@ fn event_view(row: EventRow) -> EventView {
         sequence: row.sequence,
         revision: row.revision,
         modified_at: row.modified_at,
+        // Stored as checked; one that no longer reads shows as the defaults.
+        reminders: row
+            .reminders
+            .and_then(|list| serde_json::from_value(list).ok()),
     }
 }
 
@@ -830,12 +845,13 @@ pub async fn events(
     // client keeps what meets the window). A page continues after the
     // client's cursor by (start, id).
     let mut rows: Vec<EventRow> = sqlx::query_as(&format!(
-        "{EVENT_VIEW}
+        "{}
           WHERE e.calendar_id = $1 AND e.start_utc < $3
             AND COALESCE(e.range_end_utc, 'infinity'::timestamptz) >= $2
             AND ($4::timestamptz IS NULL OR (e.start_utc, e.id) > ($4, $5))
           ORDER BY e.start_utc, e.id
-          LIMIT $6"
+          LIMIT $6",
+        event_view_sql(7)
     ))
     .bind(id)
     .bind(start)
@@ -843,6 +859,7 @@ pub async fn events(
     .bind(after.map(|(at, _)| at))
     .bind(after.map(|(_, id)| id))
     .bind(limit + 1)
+    .bind(user_id)
     .fetch_all(&mut *conn)
     .await?;
     let next = (rows.len() as i64 > limit).then(|| {
@@ -878,10 +895,12 @@ pub async fn event(
         return Err(AppError::forbidden("this calendar shows busy times only"));
     }
     let row: Option<EventRow> = sqlx::query_as(&format!(
-        "{EVENT_VIEW} WHERE e.calendar_id = $1 AND e.id = $2"
+        "{} WHERE e.calendar_id = $1 AND e.id = $2",
+        event_view_sql(3)
     ))
     .bind(id)
     .bind(event_id)
+    .bind(user_id)
     .fetch_optional(&mut *conn)
     .await?;
     row.map(event_view)
@@ -1233,10 +1252,12 @@ pub async fn sync(
         .await;
         results.push(match outcome {
             Ok(Some(event_id)) => {
-                let row: EventRow = sqlx::query_as(&format!("{EVENT_VIEW} WHERE e.id = $1"))
-                    .bind(event_id)
-                    .fetch_one(&state.pool)
-                    .await?;
+                let row: EventRow =
+                    sqlx::query_as(&format!("{} WHERE e.id = $1", event_view_sql(2)))
+                        .bind(event_id)
+                        .bind(user_id)
+                        .fetch_one(&state.pool)
+                        .await?;
                 EventResult {
                     status: 200,
                     event: Some(event_view(row)),

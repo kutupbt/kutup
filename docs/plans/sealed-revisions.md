@@ -17,7 +17,7 @@ these values therefore carries a revision.
   associated data, so the server can read it but not change it. Opening a
   value returns its revision.
   - Contact cards (`KUTCC2`), mail names (`KUTMN2`) and identity pin lists
-    (`KUTIP2`): `magic ‖ suite ‖ revision ‖ nonce ‖ ciphertext`.
+    (`KUTIP3`): `magic ‖ suite ‖ revision ‖ nonce ‖ ciphertext`.
   - A contact's summary signature binds the card's revision too, so the
     server cannot pair a summary with another card.
   - Account envelopes of a mutable purpose carry it after the object id.

@@ -81,6 +81,16 @@ pub struct MultipartUpload<'a> {
 pub struct StorageService {
     client: Client,
     bucket: String,
+    /// Whether the store reads an object by its version id: learned on the
+    /// first one it refuses (Cloudflare R2 returns a version id for every
+    /// upload, then answers `NotImplemented` to a GET by it).
+    versioned_reads: std::sync::Arc<std::sync::atomic::AtomicBool>,
+}
+
+/// Whether a GET by version id failed because the store doesn't read by
+/// version (`NotImplemented`, HTTP 501), not because of the object.
+pub(crate) fn version_reads_unsupported(code: Option<&str>, status: Option<u16>) -> bool {
+    code == Some("NotImplemented") || status == Some(501)
 }
 
 impl StorageService {
@@ -108,6 +118,7 @@ impl StorageService {
         StorageService {
             client: Client::from_conf(conf),
             bucket: bucket.to_string(),
+            versioned_reads: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true)),
         }
     }
 
@@ -229,32 +240,48 @@ impl StorageService {
     }
 
     /// Reads an object whose upload returned `version_id`: that exact version
-    /// where the store kept one (a versioned bucket), otherwise the object.
+    /// where the store reads by version (a versioned bucket), otherwise the
+    /// object. Some stores (Cloudflare R2) return a version id for every
+    /// upload and then refuse to read by it; once one does, this reads the
+    /// object, which is the same bytes: every key read this way is written
+    /// once (mail messages, held sends), as `delete_stored` deletes.
     pub async fn get_stored(&self, key: &str, version_id: &str) -> Result<(ByteStream, i64)> {
-        if version_id.is_empty() {
-            self.get_object(key).await
-        } else {
-            self.get_object_version(key, version_id).await
+        use std::sync::atomic::Ordering;
+        if version_id.is_empty() || !self.versioned_reads.load(Ordering::Relaxed) {
+            return self.get_object(key).await;
         }
-    }
-
-    /// Fetches a specific version of an object — mirrors `GetObjectVersion`.
-    pub async fn get_object_version(
-        &self,
-        path: &str,
-        version_id: &str,
-    ) -> Result<(ByteStream, i64)> {
-        let out = self
+        let read = self
             .client
             .get_object()
             .bucket(&self.bucket)
-            .key(path)
+            .key(key)
             .version_id(version_id)
             .send()
-            .await
-            .context("s3 get version")?;
-        let size = out.content_length().unwrap_or(0);
-        Ok((out.body, size))
+            .await;
+        match read {
+            Ok(out) => {
+                let size = out.content_length().unwrap_or(0);
+                Ok((out.body, size))
+            }
+            Err(error) => {
+                use aws_sdk_s3::error::ProvideErrorMetadata as _;
+                let status = error.raw_response().map(|r| r.status().as_u16());
+                if version_reads_unsupported(error.code(), status) {
+                    tracing::warn!(
+                        "storage: the store doesn't read objects by version; reading by key"
+                    );
+                    self.versioned_reads.store(false, Ordering::Relaxed);
+                    return self.get_object(key).await;
+                }
+                Err(error).context("s3 get version")
+            }
+        }
+    }
+
+    /// Whether this store reads objects by version id, as far as known.
+    pub fn reads_versions(&self) -> bool {
+        self.versioned_reads
+            .load(std::sync::atomic::Ordering::Relaxed)
     }
 
     /// Removes an object for good: every stored version of it and any delete
@@ -552,6 +579,19 @@ impl StorageService {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_store_that_does_not_read_by_version_is_told_from_a_missing_object() {
+        // Cloudflare R2's answer to a GET with versionId.
+        assert!(version_reads_unsupported(Some("NotImplemented"), Some(501)));
+        assert!(version_reads_unsupported(None, Some(501)));
+        // The object or version isn't there: an error, never a read by key
+        // (which could return another version).
+        assert!(!version_reads_unsupported(Some("NoSuchKey"), Some(404)));
+        assert!(!version_reads_unsupported(Some("NoSuchVersion"), Some(404)));
+        assert!(!version_reads_unsupported(Some("AccessDenied"), Some(403)));
+        assert!(!version_reads_unsupported(None, None));
+    }
 
     const MIB: i64 = 1024 * 1024;
 

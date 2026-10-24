@@ -1596,6 +1596,11 @@ Questions for the server design (second session):
 
 ### Slice 2: the server design (second session, 2026-10-20)
 
+> **Proposed replacement (2026-10-24):** the delivery capabilities below are
+> to be replaced by group send endorsements, issued by each recipient's own
+> server: [`group-send-endorsements.md`](group-send-endorsements.md) (awaiting
+> approval). The multi-recipient route, storage and budgets stay.
+
 Copied from Signal-Server (`MessageController` `PUT /v1/messages/multi_recipient`,
 `MessagesCache`'s shared payload, libsignal's `SealedSenderV2SentMessage`),
 with the deviations federation forces: capabilities instead of group send

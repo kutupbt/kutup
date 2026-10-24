@@ -92,5 +92,66 @@
     "slot": "{{day}}, {{time}}",
     "span": "{{day}}, {{start}} ile {{end}} arası. Oluşturmak için Enter.",
     "moved": "{{start}} ile {{end}} arasına taşınıyor. Açmak için Enter, vazgeçmek için Escape."
+  },
+  "reminders": {
+    "title": "Takvim hatırlatıcısı",
+    "untitled": "(başlıksız)",
+    "text": {
+      "startsNow": "{{title}} şimdi başlıyor",
+      "startsToday": "{{title}} bugün başlıyor",
+      "startsAt": "{{title}} {{time}} saatinde başlıyor",
+      "startsTomorrow": "{{title}} yarın başlıyor",
+      "startsTomorrowAt": "{{title}} yarın {{time}} saatinde başlıyor",
+      "startsOn": "{{title}} {{date}} tarihinde başlıyor",
+      "startsOnAt": "{{title}} {{date}} tarihinde {{time}} saatinde başlıyor",
+      "startedAt": "{{title}} {{time}} saatinde başladı",
+      "startedYesterday": "{{title}} dün başladı",
+      "startedYesterdayAt": "{{title}} dün {{time}} saatinde başladı",
+      "startedOn": "{{title}} {{date}} tarihinde başladı",
+      "startedOnAt": "{{title}} {{date}} tarihinde {{time}} saatinde başladı"
+    },
+    "banner": "Kutup Takvim'in etkinlik hatırlatıcıları için masaüstü bildirimleri gösterebilmesi için izninize ihtiyacı var.",
+    "bannerLabel": "Masaüstü bildirimleri",
+    "enable": "Masaüstü bildirimlerini aç",
+    "dismiss": "Şimdi değil",
+    "picker": {
+      "type": "Hatırlatıcı türü",
+      "device": "Bildirim",
+      "email": "E-posta",
+      "amount": "Kaç",
+      "when": "Ne zaman",
+      "atTime": "etkinlik saatinde",
+      "sameDay": "aynı gün",
+      "minutesBefore": "dakika önce",
+      "hoursBefore": "saat önce",
+      "daysBefore": "gün önce",
+      "weeksBefore": "hafta önce",
+      "at": "saat",
+      "timeOfDay": "Günün saati",
+      "remove": "Bu bildirimi kaldır",
+      "add": "Bildirim ekle",
+      "other": "Başka yerde kurulmuş bir hatırlatıcı ({{trigger}})",
+      "repeats": "Aynı bildirim iki kez var: birini değiştirin ya da kaldırın."
+    },
+    "field": "Bildirimler",
+    "defaults": {
+      "timed": "Bildirimler",
+      "allDay": "Tüm gün etkinlik bildirimleri"
+    },
+    "push": {
+      "title": "Kutup Takvim",
+      "at": "Etkinlik saat {{time}}",
+      "today": "Bugün etkinlik var",
+      "on": "{{date}} tarihinde etkinlik",
+      "onAt": "{{date}} saat {{time}} etkinlik"
+    },
+    "settings": {
+      "title": "Masaüstü bildirimleri",
+      "denied": "Bu tarayıcıda Takvim için bildirimler kapalı. Tarayıcının site ayarlarından izin verin.",
+      "unsupported": "Bu tarayıcı bildirim göstermiyor.",
+      "allowed": "Takvim açıkken hatırlatıcılar masaüstü bildirimi olarak görünür.",
+      "push": "Takvim kapalıyken de hatırlat",
+      "pushHint": "Hatırlatıcı yalnızca etkinliğin ne zaman başladığını söyler; başlığı Takvim açılınca görünür."
+    }
   }
 }

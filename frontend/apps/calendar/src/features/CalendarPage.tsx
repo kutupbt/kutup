@@ -1,6 +1,6 @@
 import { useQuery } from '@tanstack/react-query'
 import { ChevronLeft, ChevronRight } from 'lucide-react'
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useSearchParams } from 'react-router-dom'
 import { useCalendars, useEvents, type Calendar } from '@kutup/calendar-core/api'
@@ -32,9 +32,6 @@ export function CalendarPage() {
   const prefs = useCalendarPrefs()
   const today = useToday(prefs.zone)
   const nowMinutes = useNowMinutes(prefs.zone)
-  // An armed touch holds the page still wherever it is: the time grid, the
-  // all-day row, the month's cells.
-  useEffect(() => holdTouches(document.documentElement), [])
   const [params, setParams] = useSearchParams()
   const view: View = VIEWS.includes(params.get('view') as View) ? (params.get('view') as View) : 'week'
   const requested = params.get('date')
@@ -146,8 +143,11 @@ function MonthView({ days, month, today, placed }: { days: CivilDate[]; month: s
   const prefs = useCalendarPrefs()
   const [ghost, setGhost] = useState<DaySpanGhost | null>(null)
   const shown = 3
+  // An armed touch (or a pen) over the month's cells drags, never scrolls.
+  const grid = useRef<HTMLDivElement>(null)
+  useEffect(() => (grid.current ? holdTouches(grid.current) : undefined), [])
   return (
-    <div className="grid min-h-0 flex-1 select-none grid-cols-7 grid-rows-[auto_repeat(6,minmax(0,1fr))]" data-testid="calendar-month">
+    <div ref={grid} className="grid min-h-0 flex-1 select-none grid-cols-7 grid-rows-[auto_repeat(6,minmax(0,1fr))]" data-testid="calendar-month">
       {days.slice(0, 7).map((day) => (
         <div key={`head-${day}`} className="border-b border-border px-2 py-1 text-xs font-medium text-muted-foreground">
           {formatWeekday(day, i18n.language)}
