@@ -102,7 +102,7 @@ const KEY_CONFIG_HASH_DOMAIN: &[u8] = b"kutup/chat-group/gateway-key-config-hash
 
 // --- encoding ----------------------------------------------------------------
 
-fn decode_fixed<const N: usize>(name: &str, value: &str) -> Result<[u8; N], String> {
+pub(crate) fn decode_fixed<const N: usize>(name: &str, value: &str) -> Result<[u8; N], String> {
     let bytes = STANDARD
         .decode(value)
         .map_err(|_| format!("{name} must be canonical padded base64"))?;
@@ -114,7 +114,7 @@ fn decode_fixed<const N: usize>(name: &str, value: &str) -> Result<[u8; N], Stri
         .map_err(|_| format!("{name} must be {N} bytes"))
 }
 
-fn decode_bounded(name: &str, value: &str, maximum: usize) -> Result<Vec<u8>, String> {
+pub(crate) fn decode_bounded(name: &str, value: &str, maximum: usize) -> Result<Vec<u8>, String> {
     let bytes = STANDARD
         .decode(value)
         .map_err(|_| format!("{name} must be canonical padded base64"))?;
@@ -148,11 +148,11 @@ fn verifying_key(name: &str, encoded: &str) -> Result<VerifyingKey, String> {
     VerifyingKey::from_bytes(&bytes).map_err(|_| format!("{name} is not an Ed25519 key"))
 }
 
-fn canonical<T: Serialize>(value: &T) -> Result<Vec<u8>, String> {
+pub(crate) fn canonical<T: Serialize>(value: &T) -> Result<Vec<u8>, String> {
     serde_json::to_vec(value).map_err(|error| error.to_string())
 }
 
-fn from_canonical<T>(bytes: &[u8], maximum: usize, name: &str) -> Result<T, String>
+pub(crate) fn from_canonical<T>(bytes: &[u8], maximum: usize, name: &str) -> Result<T, String>
 where
     T: Serialize + for<'de> Deserialize<'de>,
 {
@@ -432,6 +432,14 @@ pub enum GroupOperationV1 {
     /// Where the signer's own request to join stands: no body, signed by
     /// the requesting pseudonym; the answer is a [`GroupRequestStatusV1`].
     GetRequestStatus,
+    /// The signer's group send endorsement for one expiration
+    /// (docs/plans/group-send-endorsements.md §3.3): the body is a
+    /// [`GroupEndorsementUploadV1`]. A pseudonym keeps at most two; a third
+    /// replaces the oldest.
+    PutEndorsement,
+    /// The members' endorsements uploaded after a cursor: the body is a
+    /// [`GroupEndorsementQueryV1`], the answer a [`GroupEndorsementPageV1`].
+    GetEndorsements,
 }
 
 impl GroupOperationV1 {
@@ -446,6 +454,8 @@ impl GroupOperationV1 {
             Self::GetAvatar => 7,
             Self::PutAvatar => 8,
             Self::GetRequestStatus => 9,
+            Self::PutEndorsement => 10,
+            Self::GetEndorsements => 11,
         }
     }
 
@@ -456,6 +466,10 @@ impl GroupOperationV1 {
         matches!(self, Self::GetJoinInfo | Self::GetAvatar)
     }
 }
+
+pub use crate::group_send::{
+    GroupEndorsementPageV1, GroupEndorsementQueryV1, GroupEndorsementUploadV1, GroupEndorsementV1,
+};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -523,6 +537,8 @@ impl GroupRequestV1 {
                 | GroupOperationV1::GetLogs
                 | GroupOperationV1::SubmitChange
                 | GroupOperationV1::PutAvatar
+                | GroupOperationV1::PutEndorsement
+                | GroupOperationV1::GetEndorsements
         );
         if needs_body == body.is_empty() {
             return Err("request body does not fit its operation".into());

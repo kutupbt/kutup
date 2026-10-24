@@ -335,6 +335,7 @@ kutup/
 │   ├── kutup-crypto-wasm/   # Browser bindings for canonical crypto (built twice: crypto, and crypto-calendar with calendars)
 │   ├── kutup-chat-proto/    # Typed Chat wire DTOs and validation
 │   ├── kutup-federation-proto/ # Shared authenticated federation types
+│   ├── kutup-group-send/    # Group send endorsements on libsignal's zkgroup (server issues/verifies, Chat core combines)
 │   ├── kutup-pass/          # Kutup Pass core: KeePass (KDBX) vaults, their edits and three-way merge
 │   │   └── vendor/keepass/  # Patched copy of the `keepass` crate (see its KUTUP.md)
 │   ├── kutup-pass-wasm/     # Browser bindings for Kutup Pass (frontend/wasm/pass-wasm)
