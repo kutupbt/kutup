@@ -1,9 +1,8 @@
 //! Padding for Direct Chat plaintext, Signal's scheme: the content, one `0x80`
 //! terminator, then zeros up to a multiple of 160 bytes, inside the Double
 //! Ratchet encryption. Servers then see a message's length only in 160-byte
-//! steps, so a reaction, a receipt and a short text look alike.
-//! (MLS groups pad their anonymous delivery payload in the same steps:
-//! `mls_engine/delivery.rs`.)
+//! steps, so a reaction, a receipt and a short text look alike. Group messages
+//! are padded the same way before their sender-key encryption.
 
 use crate::error::{ChatError, Result};
 

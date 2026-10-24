@@ -39,7 +39,6 @@ function service(history: () => ChatHistoryEntry[], commits: () => number = () =
     reconcilePromise: null,
     reportedSendFailures: new Set(),
     withLock: (work: () => Promise<unknown>) => work(),
-    withMlsWorkflow: (work: () => Promise<unknown>) => work(),
     ledgerMark: null,
     remoteWrites: 0,
     pendingAttachments: new Map(),

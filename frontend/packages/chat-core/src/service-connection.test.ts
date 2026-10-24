@@ -59,7 +59,6 @@ function socketService() {
     connectionListeners: new Set(),
     disposed: false,
     maintainPrekeys: vi.fn().mockResolvedValue(undefined),
-    initializeMls: vi.fn().mockResolvedValue(undefined),
     reconcile: vi.fn().mockResolvedValue({ received: 0 }),
     backup: null,
   })

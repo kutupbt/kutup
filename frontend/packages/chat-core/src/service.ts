@@ -937,6 +937,8 @@ export class ChatService {
     if (descriptor.originDomain !== this.capabilities.serverName) {
       throw new Error('attachment origin differs from the active homeserver')
     }
+    // Before anything is recorded: a group takes no attachments yet.
+    this.refuseChatGroup(conversation)
     const sendId = crypto.randomUUID()
     await this.recordAttachment(
       conversation,
@@ -944,7 +946,6 @@ export class ChatService {
       descriptor,
       storageReferenceId,
     )
-    this.refuseChatGroup(conversation)
     const address = conversation.account
     const peer = accountKey(address)
     const self = this.selfKey()

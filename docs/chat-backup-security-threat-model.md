@@ -6,7 +6,7 @@ This document extends [`chat-security-threat-model.md`](chat-security-threat-mod
 and [`chat-media-security-threat-model.md`](chat-media-security-threat-model.md).
 It covers server-hosted display-history backup, client compaction and import,
 protected media, quota, retention, and account purge. It does not claim to back
-up Direct/MLS transport state or provide a portable user export.
+up Direct or group transport state or provide a portable user export.
 
 ## Assets and trust boundaries
 
@@ -62,8 +62,9 @@ may be unavailable without invalidating already verified message records.
 
 Restore does not consume delivery state. It must not acknowledge a mailbox,
 advance a mailbox cursor, emit a receipt, reuse a device ID, or install a
-libsignal/MLS secret from the archive. Fresh protocol state is established only
-through the normal signed device directory, Direct session, and MLS flows.
+libsignal secret (a session or a sender key) from the archive. Fresh protocol
+state is established only through the normal signed device directory, Direct
+session, and sender-key flows.
 
 ## Retention, quota, and availability
 
@@ -104,5 +105,5 @@ manifest rollback, zero-partial-import behavior, durable retry identity,
 compaction failure checkpoints, exact quota boundaries, retention protection,
 lazy-media corruption, cross-account isolation, and zero-state account purge.
 The clean-browser and two-homeserver matrices must use empty browser contexts
-and prove new Direct/MLS communication after restore. See
+and prove new Direct communication after restore. See
 [`chat-backup.md`](chat-backup.md#required-gates) for the required CI layers.

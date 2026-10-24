@@ -72,7 +72,7 @@ blobs.
 
 **Full Chat locally.** Without further configuration the server makes its
 own identity, group ordering key and sealed-sender root, so direct messages,
-attachments to other people and MLS groups work among local accounts. To test
+attachments to other people and groups work among local accounts. To test
 everything on one machine:
 
 - federation identity (optional; needed to talk to a second local server):
@@ -187,7 +187,7 @@ docker run --rm -v "$PWD:/repo" -w /repo \
 ./scripts/audit-unified-federation.sh           # no feature-owned federation stack
 ./scripts/test-chat-backup-integration.sh        # real Postgres/SeaweedFS backup lifecycle
 ./scripts/test-chat-federation.sh               # full two-server API + browser security/recovery gate
-./scripts/dev-chat-federation-up.sh              # leave an MLS-enabled two-server stack running
+./scripts/dev-chat-federation-up.sh              # leave a two-server Chat federation stack running
 KUTUP_SERVER=… ./scripts/verify-cli.sh          # the kutup CLI's Drive round trip (registers its own account)
 KUTUP_SERVER=… ./scripts/verify-pass-sync.sh    # two machines edit one KeePass vault offline (Kutup Pass K1)
 KUTUP_SERVER=… ./scripts/verify-pass-ssh.sh     # the kutup SSH agent against OpenSSH (Kutup Pass K3b)
@@ -209,7 +209,7 @@ reuse that same identity and policy, and the suite checks the shared admin
 evidence/retry/audit control plane. It also covers the Drive share lifecycle,
 Chat delivery and durable retry, the global emergency stop, all four admission
 modes and directional domain rules independently for both features, and
-disabled feature capabilities. Its Playwright phase also covers Direct and MLS
+disabled feature capabilities. Its Playwright phase also covers Direct
 security, media, clean two-account browser-loss recovery, lazy protected-media
 restore, and fresh post-restore protocol state. It tears the topology down on
 exit and does not touch the ordinary development stack. Set `KUTUP_FEDERATION_SKIP_BUILD=1`
@@ -342,7 +342,7 @@ kutup/
 │   │   ├── api/client.ts    # Axios instance with auth interceptors
 │   │   ├── crypto/          # Thin Rust/WASM format adapters + primitive-only stream adapter
 │   │   ├── collab/          # Drive editor envelope and WebSocket layer
-│   │   ├── chat/            # Direct/MLS services, backup, media, IndexedDB state
+│   │   ├── chat/            # Direct and group services, backup, media, IndexedDB state
 │   │   ├── components/editors/
 │   │   │   ├── TextCollabEditor.tsx       # Notes / code (CodeMirror 6 + Yjs)
 │   │   │   ├── office/OfficeEditor.tsx    # .docx/.xlsx/.pptx (OnlyOffice bridge)

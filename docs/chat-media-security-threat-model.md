@@ -4,7 +4,7 @@
 
 This document extends `chat-security-threat-model.md` for immutable attachment
 objects, destination persistence, encrypted attachment ledgers and quota
-accounting. It assumes Direct Chat, MLS, account manifests, sealed delivery and
+accounting. It assumes Direct Chat, pairwise groups, account manifests, sealed delivery and
 unified federation are already valid; it does not replace their verification.
 The independently outer-encrypted history-media lifecycle is covered by
 `chat-backup-security-threat-model.md`.
