@@ -255,7 +255,7 @@ mod tests {
         let first = VaultKey::new().with_password("parola");
         let envelope = seal(&MASTER, BINDING, &VAULT, 5, &first, PasswordKind::Chosen).unwrap();
         let opened = open(&envelope, &MASTER, BINDING, &VAULT).unwrap().key;
-        let file = crate::kdbx::generate_key_file().unwrap();
+        let file = crate::kdbx::generate_key_file();
         let changed = opened.with_key_file(&file);
         let contents = vault_saved_with(&changed);
         let envelope = seal(&MASTER, BINDING, &VAULT, 6, &changed, PasswordKind::Chosen).unwrap();

@@ -80,9 +80,7 @@ pub fn reseal_kept_key(
 /// download, never sent anywhere.
 #[wasm_bindgen(js_name = generateKeyFile)]
 pub fn generate_key_file() -> Result<Vec<u8>, JsValue> {
-    Ok(kutup_pass::kdbx::generate_key_file()
-        .map_err(js_error)?
-        .to_vec())
+    Ok(kutup_pass::kdbx::generate_key_file().to_vec())
 }
 
 fn to_js<T: Serialize>(value: &T) -> Result<JsValue, JsValue> {
