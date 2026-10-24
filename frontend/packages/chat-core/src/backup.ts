@@ -619,16 +619,20 @@ export class ChatBackupCoordinator {
     if (this.timer !== null) return
     this.timer = this.runtime.scheduler.schedule(900, () => {
       this.timer = null
-      void this.runCycle()
+      this.runInBackground()
     })
   }
 
   /**
    * The page went hidden, or is going away (`pagehide`): what is scheduled
-   * goes now, not after the debounce the page may not outlive.
+   * goes now, not after the debounce the page may not outlive. Best effort:
+   * a browser may end a page that is going away before the upload is done;
+   * what didn't go stays queued and goes with the next cycle.
    */
   pageHidden(goingAway = false): void {
-    if (goingAway || document.visibilityState === 'hidden') void this.flushScheduled()
+    if (goingAway || document.visibilityState === 'hidden') {
+      this.flushScheduled().catch(() => undefined)
+    }
   }
 
   /**
@@ -642,7 +646,15 @@ export class ChatBackupCoordinator {
   }
 
   online(): void {
-    void this.runCycle()
+    this.runInBackground()
+  }
+
+  /**
+   * A cycle nobody waits for: its failure is already in the view
+   * (`needsAttention` or `offline`), and what didn't go stays queued.
+   */
+  private runInBackground(): void {
+    this.runCycle().catch(() => undefined)
   }
 
   /** Runs the same serialized cycle used by startup, debounce, visibility, and online events. */
@@ -678,8 +690,24 @@ export class ChatBackupCoordinator {
     this.running = (async () => {
       do {
         this.again = false
-        await this.collectAndQueue()
-        await this.flush()
+        try {
+          await this.collectAndQueue()
+        } catch (error) {
+          // Nothing new was queued: the view says so, instead of staying on
+          // "backing up" for a cycle that ended (the next change, visit or
+          // reconnect tries again).
+          this.again = false
+          await this.refreshView('needsAttention')
+          throw error
+        }
+        try {
+          await this.flush()
+        } catch (error) {
+          // `flush` said why in the view; a cycle asked for meanwhile is the
+          // next change's to run.
+          this.again = false
+          throw error
+        }
       } while (this.again && !this.disposed)
     })().finally(() => { this.running = null })
     return this.running

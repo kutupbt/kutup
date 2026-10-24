@@ -76,9 +76,11 @@ Specific codes, where an app does something particular (a test in
 | `head_conflict` | 409 | The account head moved (another device wrote first; `sequence` the current one, or a folder delete whose `removes` is not what it removes): read the head and index again, redo the edit |
 | `head_required` | 409 | The account keeps a head, and this listed write carried none |
 | `contactListFull` | 400 | `PUT /api/chat/contact-list/{id}`: a new entry past the 10,000 the list keeps; the client keeps the write due (a block is never dropped) and tells its person |
-| `malformed` | 400 | `POST /api/chat/anonymous/messages/multi`: the payload doesn't parse, a device is listed twice, or the capabilities don't name exactly the payload's accounts ([chat-protocol.md](chat-protocol.md) §7); also a group route's refusal code |
+| `malformed` | 400 | `POST /api/chat/anonymous/messages/multi`: the payload doesn't parse, names nobody, lists a device twice, or the token isn't canonical base64 of at most 256 bytes ([chat-protocol.md](chat-protocol.md) §7); also a group route's refusal code |
+| `groupSendTokenInvalid` | 401 | `POST /api/chat/anonymous/messages/multi`: the group send token doesn't hold for the payload's accounts (expired, an account added or missing, another server's key), checked before any account is looked up; another server's answer is relayed as it is. Send those copies one by one and fetch the endorsements anew ([plans/group-send-endorsements.md](plans/group-send-endorsements.md) §3.5) |
+| `endorsementExpiration` | — | A group route's `putEndorsement` refusal: the expiration isn't day-aligned, is past, or is more than 3 days ahead |
+| `endorsementSize` | — | A group route's `putEndorsement` refusal: the sealed blob isn't the one length |
 | `peerUnavailable` | 503 | `POST /api/chat/anonymous/messages/multi` for another server's accounts: that server didn't take the send (slow, unreachable or unwilling); send their copies one by one |
-| `capabilityLimit` | 409 | `PUT /api/chat/group-capabilities` or `POST …/set`: the account would pass its group capability limit; nothing changed |
 | `calendarExists` | 409 | `POST /api/calendar/calendars`: the id (or the calendar key) is in use; draw another |
 | `calendarLimit` | 409 | `POST /api/calendar/calendars`: the account owns as many calendars as the administrators allow (`calendarsPerAccount`) |
 | `eventLimit` | 409 | An events sync: the calendar holds as many events as the administrators allow (`calendarEventsPerCalendar`); that change only |
@@ -3924,6 +3926,23 @@ key holder can sign a request as that pseudonym, so nobody else learns it.
 It is the one refusal that spends neither the relaying server's failure
 budget nor the group's change budget: the client retries at its next join
 epoch (up to 64).
+Group send endorsements (§3.3): `putEndorsement`, signed by a member, takes
+`GroupEndorsementUploadV1 { expiration, sealed }`: the member's blob for one
+expiration, sealed under the group's state key (553 bytes, base64; the home
+never opens it). The home refuses an expiration not day-aligned, past, or more
+than 3 days ahead (`endorsementExpiration`) and any other length
+(`endorsementSize`), keeps at most two per member (a third replaces the
+oldest; the same expiration again replaces it) and counts uploads per member
+and group a day (`chatGroupEndorsementUploadsPerDay`, 8 at first;
+`rateLimited` past it); it answers `ok` with no body. `getEndorsements`
+takes `GroupEndorsementQueryV1 { after, limit }` and answers
+`GroupEndorsementPageV1 { endorsements: [{ pseudonym, expiration, sealed,
+seq }], more, nextAfter }`: the members' blobs uploaded after the cursor, in
+upload order, none past its expiration, at most `limit` and the page size
+(`chatGroupEndorsementPageSize`, 100 at first, at most 200); `nextAfter` is
+past every blob the page read (or `after` when it read none). A removed member's blobs go with the
+change that removes it, and blobs go an hour after they expire. Both answer a
+non-member `notFound`.
 `getRequestStatus` (no body, signed by the requesting pseudonym) answers
 where the signer's own request stands, as `GroupRequestStatusV1`:
 `{ "status": "pending", "revision", "head" }` while it requests (what a
@@ -3952,22 +3971,34 @@ over the storage per group (the current blob and the upload), both
 administrators' settings; `malformed` for a body not padded so. An upload
 spends the change budgets.
 
-### PUT /api/chat/group-capabilities · POST /api/chat/group-capabilities/set
+### GET /api/chat/group-send/endorsement
 
-Group delivery capabilities ([`plans/pairwise-groups.md`](plans/pairwise-groups.md),
-slice 2 §2; `404` unless `CHAT_GROUPS=true` and federation is on). Signed-in,
-the account's own. Each is the SHA-256 (32 bytes, canonical base64) of one
-random capability per group the account is in, with no group id; a sender
-presents the raw capability with a multi-recipient send. `PUT` takes `{
-"add": [hash], "remove": [hash] }` and applies both in one transaction (a
-member replacing its capability never has neither); adding one already there
-or removing one not there changes nothing. `POST …/set` takes `{ "hashes":
-[...] }` and makes the set exactly these (a device restoring from its group
-list). Both answer `{ "count" }`. `400` for a hash that isn't 32 bytes of
-canonical base64; `409 capabilityLimit` when the change would pass the
-account's limit (`chatGroupCapabilitiesPerAccount`, 4096 at first, a multiple
-of 8 as clients pad theirs to eights), refused
-whole. An account reset clears them.
+Group send endorsements ([`plans/group-send-endorsements.md`](plans/group-send-endorsements.md)
+§3.2; `404` unless `CHAT_GROUPS=true` and federation is on). Signed-in: today's
+endorsement of the account, `GroupSendEndorsementResponseV1 { keyId,
+expiration, response }`, issued with this server's issuing key for
+libsignal's default expiration (the end of the next day UTC, 25 to 49 hours
+ahead). `response` is the serialized `GroupSendEndorsementsResponse` with its
+proof; the client checks it with the key `keyId` names (`params`) and shares
+it, sealed, with each of its groups. It says nothing about groups: every
+account fetches one a day. `429` past the account's endorsements a day
+(`chatGroupSendEndorsementsPerDay`, 48 at first).
+
+### GET /api/chat/group-send/params?server={host}
+
+Signed-in (§4). `GroupSendParamsV1 { keys: [{ keyId, endorsementPublicKey,
+issuesUntil }] }`: the server's issuing key and, while it still verifies, the
+one before it. Without `server` (or with this server's name) this server's
+own; with another's, that server's keys from its signed discovery
+(`chatGroupSend`), verified and cached by this server's federation. A sender
+checks a recipient's endorsement with its server's key; a wrong key costs
+only that check, as each server verifies tokens with its own secret.
+`issuesUntil` is when a key stopped issuing, and 9007199254740991 (the
+largest integer every client reads exactly) for the issuing key. `404` when
+that server publishes none, `502` when it is unreachable. An operator rotates
+the key with `kutup-server chat-zk-keys rotate`: the new key issues at once,
+the old one verifies until the last endorsement it issued expires, and a
+second rotation waits for that.
 
 ### GET /api/chat/group-list
 

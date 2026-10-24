@@ -1210,7 +1210,8 @@ impl Engine {
                 match devices.binary_search_by_key(&local.device_id, |device| device.device_id) {
                     // Unchanged, unless the account's Drive keys moved on (an
                     // upgrade to X-Wing, docs/plans/pq-shares.md): then the
-                    // next manifest carries them.
+                    // next manifest carries them. A device entry still holding
+                    // legacy MLS keys is signed again too, which drops them.
                     Ok(index)
                         if devices[index].registration_id == local.registration_id
                             && devices[index].mls == local.mls

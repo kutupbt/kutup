@@ -741,6 +741,35 @@ describe('ChatBackupCoordinator durable retry', () => {
     await vi.waitFor(() => expect(coordinator.view().state).toBe('protected'))
   })
 
+  it('says it needs attention, not backing up, when a cycle can\'t collect', async () => {
+    const transport = new ScriptedTransport()
+    const databaseName = `backup-coordinator:${crypto.randomUUID()}`
+    databaseNames.push(databaseName)
+    const entries = [historyEntry()]
+    let unreadable = false
+    const coordinator = await open(transport, databaseName, async () => {
+      if (unreadable) throw new Error('history unreadable')
+      return entries
+    })
+    await coordinator.settled()
+    expect(coordinator.view().state).toBe('protected')
+
+    unreadable = true
+    coordinator.schedule()
+    expect(coordinator.view().state).toBe('backingUp')
+    await expect(coordinator.flushNow()).rejects.toThrow('history unreadable')
+    expect(coordinator.view().state).toBe('needsAttention')
+    // A background cycle's failure is no unhandled rejection: it is in the view.
+    coordinator.pageHidden(true)
+    await vi.waitFor(() => expect(coordinator.view().state).toBe('needsAttention'))
+
+    // The next cycle that can read the history protects it again.
+    unreadable = false
+    entries.push({ ...historyEntry(), id: '55555555-5555-4555-8555-555555555555', timestampMs: 1_700_000_002_000 })
+    await coordinator.flushNow()
+    expect(coordinator.view().state).toBe('protected')
+  })
+
   it('runs again for a change that arrives while a cycle runs', async () => {
     const transport = new ScriptedTransport()
     const databaseName = `backup-coordinator:${crypto.randomUUID()}`

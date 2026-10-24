@@ -2130,7 +2130,8 @@ impl Session {
 
     /// Remove elapsed disappearing plaintext, derived mutation/reaction rows,
     /// and undelivered ciphertexts that have outlived their usefulness. The
-    /// ratchet/MLS state remains advanced; expiry never rewinds crypto.
+    /// ratchet and sender-key state remain advanced; expiry never rewinds
+    /// crypto.
     pub async fn purge_expired_history(&mut self, now_ms: i64) -> Result<ExpiryReport> {
         if now_ms < 0 {
             return Err(ChatError::Invalid(
@@ -5850,7 +5851,6 @@ mod sealed_tests {
     }
 }
 
-/// Group calls exist only in MLS groups; a Direct copy is refused.
 /// The kinds a whole group gets under a sender key (the rest, receipts,
 /// typing and controls, go pairwise).
 fn is_group_history_kind(kind: &str) -> bool {
@@ -5920,6 +5920,8 @@ fn is_group_content(content: &ChatContent) -> bool {
             .is_some_and(|resend| resend.content.group_context().is_some())
 }
 
+/// A group call is a whole group's (kept for pairwise group calls,
+/// pairwise-groups.md §6); a Direct copy is refused.
 fn refuse_group_only(content: &ChatContent) -> std::result::Result<(), String> {
     if content.kind == kutup_chat_proto::content::kind::GROUP_CALL {
         return Err("a group call is not Direct content".into());

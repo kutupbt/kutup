@@ -267,10 +267,12 @@ purpose-specific Kutup APIs:
 - Direct Chat and sealed-sender certificate/envelope primitives use
   `libsignal-protocol` pinned to the repository tag declared in
   `crates/kutup-chat-core/Cargo.toml` and `crates/kutup-server/Cargo.toml`.
-- MLS groups use the pinned OpenMLS crates declared in
-  `crates/kutup-chat-core/Cargo.toml`. Kutup owns federation ordering, role and
-  authority policy, manifest binding and persistence; it does not fork or
-  reimplement TreeKEM.
+- Groups are pairwise (docs/plans/pairwise-groups.md): libsignal sender keys
+  over the same pinned `libsignal-protocol`, group state on the group's home
+  server, and libsignal's `zkgroup` for group send endorsements
+  (`crates/kutup-group-send`). Kutup owns the group state format and its
+  checks; it does not fork the protocol code. (MLS groups and OpenMLS were
+  removed.)
 - Kutup-owned account and Drive formats use `dryoc` for libsodium-compatible
   Argon2id/secretstream, RustCrypto `chacha20poly1305`, `ed25519-dalek`,
   `hkdf`/`sha2`, and pinned `hpke-rs` for RFC 9180 named-share envelopes.

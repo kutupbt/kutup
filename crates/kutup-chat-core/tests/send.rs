@@ -778,20 +778,26 @@ fn a_legacy_mls_entry_verifies_and_the_next_manifest_drops_it() {
             .as_bytes()),
         anonymous_delivery_public_key: b64(&[6; 32]),
     };
-    let registered = sign(
-        &authority,
-        account,
-        1,
-        None,
-        session.account_identity_key(),
-        vec![AccountManifestDeviceV2 {
-            device_id: 1,
-            direct_chat_suite: DirectChatSuiteId::PqxdhTripleRatchetV1,
-            registration_id: reg_id(&session),
-            mls: Some(legacy),
-        }],
-        "2026-07-15T12:00:00Z",
-    );
+    // A manifest from before the MLS removal (a re-sign now clears the field).
+    let identity_key = session.account_identity_key();
+    let binding = binding_for(&identity_key, &authority);
+    let registered = authority
+        .sign_legacy_manifest_for_testing(
+            account.parse().unwrap(),
+            1,
+            None,
+            identity_key,
+            binding,
+            vec![AccountManifestDeviceV2 {
+                device_id: 1,
+                direct_chat_suite: DirectChatSuiteId::PqxdhTripleRatchetV1,
+                registration_id: reg_id(&session),
+                mls: Some(legacy),
+            }],
+            "2026-07-15T12:00:00Z",
+        )
+        .unwrap();
+    assert!(registered.devices[0].mls.is_some());
     let read: AccountManifestV2 =
         serde_json::from_str(&serde_json::to_string(&registered).unwrap()).unwrap();
     assert_eq!(read, registered);

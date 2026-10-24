@@ -2,7 +2,7 @@
 
 This standalone `cargo-fuzz` package drives the untrusted account-envelope,
 Drive/collaboration/profile-envelope, account-manifest,
-authenticated service-policy, sealed-sender, and MLS-control parsers. It is
+authenticated service-policy, sealed-sender, Chat media and calendar parsers. It is
 excluded from the normal workspace so release builds do not acquire a nightly
 toolchain or libFuzzer dependency.
 

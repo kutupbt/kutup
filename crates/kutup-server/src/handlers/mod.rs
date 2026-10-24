@@ -9,7 +9,6 @@ pub mod calendar_reminders;
 pub mod chat;
 pub mod chat_backup;
 pub mod chat_contact_list;
-pub mod chat_group_capabilities;
 pub mod chat_group_list;
 pub mod chat_identity;
 pub mod chat_link_preview;

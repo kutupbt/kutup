@@ -383,6 +383,9 @@ impl FederatedChatMediaTransactionV1 {
 #[repr(u8)]
 pub enum ChatMediaConversationKindV1 {
     Direct = 1,
+    /// The removed MLS groups' attachments, by group UUID: kept so stored
+    /// ledger records still read. Pairwise groups take no attachments yet;
+    /// theirs get a kind of their own, referenced by the group id.
     MlsGroup = 2,
     NoteToSelf = 3,
 }
