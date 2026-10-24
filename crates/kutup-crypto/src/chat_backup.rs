@@ -5,12 +5,8 @@
 //! This module never accepts Direct, MLS, Drive, Chat-media, attachment-ledger,
 //! or device-transfer keys as substitutes.
 
-use chacha20poly1305::aead::{Aead, KeyInit, Payload};
-use chacha20poly1305::{XChaCha20Poly1305, XNonce};
-use dryoc::rng::copy_randombytes;
-use hkdf::Hkdf;
+use crate::primitives::{Aead, Kdf, Suite};
 use serde::{Deserialize, Serialize};
-use sha2::Sha256;
 use zeroize::Zeroizing;
 
 use crate::error::{CryptoError, Result};
@@ -220,7 +216,7 @@ fn derive_object_key(
 ) -> Result<Zeroizing<[u8; CHAT_BACKUP_KEY_BYTES]>> {
     require_root(root)?;
     context.validate()?;
-    let hkdf = Hkdf::<Sha256>::new(Some(HKDF_SALT), root);
+    let hkdf = Kdf::new(Suite::V1, HKDF_SALT, root);
     let mut key = Zeroizing::new([0u8; CHAT_BACKUP_KEY_BYTES]);
     hkdf.expand(&derivation_info(context), key.as_mut_slice())
         .map_err(|_| CryptoError::Backend("Chat backup object HKDF expand".into()))?;
@@ -234,7 +230,7 @@ fn derive_subkey(
     binding: &[u8],
 ) -> Result<Zeroizing<[u8; CHAT_BACKUP_KEY_BYTES]>> {
     require_root(root)?;
-    let hkdf = Hkdf::<Sha256>::new(Some(HKDF_SALT), root);
+    let hkdf = Kdf::new(Suite::V1, HKDF_SALT, root);
     let mut info = Vec::with_capacity(label.len() + 100 + binding.len());
     info.extend_from_slice(label);
     info.extend_from_slice(
@@ -325,19 +321,13 @@ pub fn seal_object(
     let plaintext_bytes = u32::try_from(plaintext.len())
         .map_err(|_| CryptoError::InvalidInput("Chat backup plaintext is too large".into()))?;
     let mut nonce = [0u8; NONCE_LEN];
-    copy_randombytes(&mut nonce);
+    crate::primitives::random(&mut nonce);
     let header = build_header(context, plaintext_bytes, &nonce);
     let key = derive_object_key(root, context)?;
-    let cipher = XChaCha20Poly1305::new_from_slice(key.as_slice())
+    let cipher = Aead::new(Suite::V1, key.as_slice())
         .map_err(|_| CryptoError::Backend("Chat backup AEAD key".into()))?;
     let ciphertext = cipher
-        .encrypt(
-            XNonce::from_slice(&nonce),
-            Payload {
-                msg: plaintext,
-                aad: &header,
-            },
-        )
+        .seal_with_nonce(&nonce, &header, plaintext)
         .map_err(|_| CryptoError::Backend("Chat backup encryption failed".into()))?;
     let mut out = header;
     out.extend_from_slice(&ciphertext);
@@ -463,16 +453,11 @@ pub fn open_object(
         return Err(CryptoError::AuthFailed);
     }
     let key = derive_object_key(root, expected)?;
-    XChaCha20Poly1305::new_from_slice(key.as_slice())
+    Aead::new(Suite::V1, key.as_slice())
         .map_err(|_| CryptoError::Backend("Chat backup AEAD key".into()))?
-        .decrypt(
-            XNonce::from_slice(parsed.nonce),
-            Payload {
-                msg: parsed.ciphertext,
-                aad: parsed.aad,
-            },
-        )
+        .open_with_nonce(parsed.nonce, parsed.aad, parsed.ciphertext)
         .map_err(|_| CryptoError::AuthFailed)
+        .map(crate::primitives::into_vec)
 }
 
 #[cfg(test)]

@@ -23,13 +23,8 @@
 //! address-bound version 1 of both is not read: nothing from before carries
 //! over.
 
-use chacha20poly1305::aead::{Aead, KeyInit, Payload};
-use chacha20poly1305::{XChaCha20Poly1305, XNonce};
-use dryoc::rng::copy_randombytes;
-use ed25519_dalek::{Signature, Signer as _, SigningKey, VerifyingKey};
-use hkdf::Hkdf;
+use crate::primitives::{Aead, Kdf, SigningKey, Suite, VerifyingKey};
 use serde::{Deserialize, Serialize};
-use sha2::Sha256;
 use zeroize::Zeroizing;
 
 use crate::error::{CryptoError, Result};
@@ -266,10 +261,10 @@ pub fn sign_summary(
     let signing = summary_signing_bytes(
         binding,
         revision,
-        &authority.verifying_key().to_bytes(),
+        &authority.verifying_key().to_array(),
         &bytes,
     )?;
-    Ok((bytes, authority.sign(&signing).to_bytes()))
+    Ok((bytes, authority.sign_array(&signing)))
 }
 
 /// Checks a stored summary's signature against the authority of the account
@@ -290,9 +285,9 @@ pub fn verify_summary(
             got: signature.len(),
         })?;
     let signing = summary_signing_bytes(binding, revision, authority_public, summary)?;
-    VerifyingKey::from_bytes(authority_public)
+    VerifyingKey::from_bytes(Suite::V1, authority_public)
         .map_err(|_| invalid("authority key is invalid"))?
-        .verify_strict(&signing, &Signature::from_bytes(&signature))
+        .verify(&signing, &signature)
         .map_err(|_| CryptoError::AuthFailed)?;
     Ok(parsed)
 }
@@ -300,7 +295,7 @@ pub fn verify_summary(
 /// The account's contacts key, derived from the master key.
 pub fn derive_contacts_key(master_key: &[u8; 32]) -> Result<Zeroizing<[u8; 32]>> {
     let mut key = Zeroizing::new([0u8; 32]);
-    Hkdf::<Sha256>::new(Some(CONTACTS_KEY_SALT), master_key)
+    Kdf::new(Suite::V1, CONTACTS_KEY_SALT, master_key)
         .expand(CONTACTS_KEY_INFO, key.as_mut_slice())
         .map_err(|_| CryptoError::Backend("contacts key HKDF expand".into()))?;
     Ok(key)
@@ -337,7 +332,7 @@ pub fn seal_card(
     vcard: &[u8],
 ) -> Result<Vec<u8>> {
     let mut nonce = [0u8; NONCE_LEN];
-    copy_randombytes(&mut nonce);
+    crate::primitives::random(&mut nonce);
     seal_card_with_nonce(contacts_key, binding, uid, revision, vcard, &nonce)
 }
 
@@ -355,14 +350,8 @@ pub fn seal_card_with_nonce(
     }
     let aad = card_aad(binding, uid, revision)?;
     let padded = Zeroizing::new(CARD_PADDING.pad(vcard)?);
-    let ciphertext = XChaCha20Poly1305::new(contacts_key.into())
-        .encrypt(
-            XNonce::from_slice(nonce),
-            Payload {
-                msg: &padded,
-                aad: &aad,
-            },
-        )
+    let ciphertext = Aead::new(Suite::V1, contacts_key.as_ref())?
+        .seal_with_nonce(nonce, &aad, &padded)
         .map_err(|_| CryptoError::Backend("contact card seal".into()))?;
     let mut out = Vec::with_capacity(CARD_HEADER_LEN + ciphertext.len());
     out.extend_from_slice(CARD_MAGIC);
@@ -385,15 +374,10 @@ pub fn open_card(
     let revision = inspect_card(sealed)?;
     let aad = card_aad(binding, uid, revision)?;
     let nonce = &sealed[10 + REVISION_LEN..CARD_HEADER_LEN];
-    let padded = XChaCha20Poly1305::new(contacts_key.into())
-        .decrypt(
-            XNonce::from_slice(nonce),
-            Payload {
-                msg: &sealed[CARD_HEADER_LEN..],
-                aad: &aad,
-            },
-        )
-        .map_err(|_| CryptoError::AuthFailed)?;
+    let padded = Aead::new(Suite::V1, contacts_key.as_ref())?
+        .open_with_nonce(nonce, &aad, &sealed[CARD_HEADER_LEN..])
+        .map_err(|_| CryptoError::AuthFailed)
+        .map(crate::primitives::into_vec)?;
     let vcard = Zeroizing::new(CARD_PADDING.unpad(padded)?);
     if vcard.is_empty() || vcard.len() > MAX_CARD_BYTES {
         return Err(invalid("card size is invalid"));

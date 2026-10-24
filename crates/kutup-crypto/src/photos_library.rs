@@ -13,13 +13,9 @@
 //! XChaCha20-Poly1305 ciphertext; the header is the AAD and the input of the
 //! per-envelope key.
 
+use crate::primitives::{hash, Aead, Kdf, Suite};
 use base64::Engine as _;
-use chacha20poly1305::aead::{Aead, KeyInit, Payload};
-use chacha20poly1305::{XChaCha20Poly1305, XNonce};
-use dryoc::rng::copy_randombytes;
-use hkdf::Hkdf;
 use serde::{Deserialize, Serialize};
-use sha2::{Digest, Sha256};
 use zeroize::Zeroizing;
 
 use crate::drive_object::parse_canonical_uuid;
@@ -104,7 +100,7 @@ pub fn derive_photos_library_key(master_key: &[u8]) -> Result<Zeroizing<[u8; KEY
             got: master_key.len(),
         });
     }
-    let hkdf = Hkdf::<Sha256>::new(Some(ACCOUNT_KEY_SALT), master_key);
+    let hkdf = Kdf::new(Suite::V1, ACCOUNT_KEY_SALT, master_key);
     let mut key = Zeroizing::new([0_u8; KEY_LEN]);
     hkdf.expand(ACCOUNT_KEY_INFO, key.as_mut_slice())
         .map_err(|_| CryptoError::Backend("Photos library account HKDF expand".into()))?;
@@ -138,7 +134,7 @@ fn derive_key(
             got: library_key.len(),
         });
     }
-    let hkdf = Hkdf::<Sha256>::new(Some(KEY_DERIVATION_SALT), library_key);
+    let hkdf = Kdf::new(Suite::V1, KEY_DERIVATION_SALT, library_key);
     let mut key = Zeroizing::new([0u8; KEY_LEN]);
     hkdf.expand(header, key.as_mut_slice())
         .map_err(|_| CryptoError::Backend("Photos library HKDF expand".into()))?;
@@ -151,7 +147,7 @@ pub fn seal(
     context: PhotosLibraryContextV1,
 ) -> Result<Vec<u8>> {
     let mut nonce = [0u8; NONCE_LEN];
-    copy_randombytes(&mut nonce);
+    crate::primitives::random(&mut nonce);
     seal_with_nonce(plaintext, library_key, context, &nonce)
 }
 
@@ -175,16 +171,10 @@ pub fn seal_with_nonce(
         .map_err(|_| CryptoError::InvalidInput("Photos library plaintext is too long".into()))?;
     let header = build_header(context, &nonce, ciphertext_len);
     let key = derive_key(library_key, &header)?;
-    let cipher = XChaCha20Poly1305::new_from_slice(key.as_slice())
+    let cipher = Aead::new(Suite::V1, key.as_slice())
         .map_err(|_| CryptoError::Backend("Photos library AEAD init".into()))?;
     let ciphertext = cipher
-        .encrypt(
-            XNonce::from_slice(&nonce),
-            Payload {
-                msg: plaintext,
-                aad: &header,
-            },
-        )
+        .seal_with_nonce(&nonce, &header, plaintext)
         .map_err(|_| CryptoError::Backend("Photos library seal".into()))?;
     let mut envelope = header.to_vec();
     envelope.extend_from_slice(&ciphertext);
@@ -236,7 +226,7 @@ pub fn inspect(envelope: &[u8]) -> Result<PhotosLibraryContextV1> {
 /// SHA-256 of a well-formed envelope, lowercase hex: the next one's predecessor.
 pub fn envelope_digest(envelope: &[u8]) -> Result<String> {
     inspect(envelope)?;
-    Ok(hex::encode(Sha256::digest(envelope)))
+    Ok(hex::encode(hash(Suite::V1, envelope)))
 }
 
 pub fn open(
@@ -251,17 +241,16 @@ pub fn open(
         .try_into()
         .expect("fixed header");
     let key = derive_key(library_key, header)?;
-    let cipher = XChaCha20Poly1305::new_from_slice(key.as_slice())
+    let cipher = Aead::new(Suite::V1, key.as_slice())
         .map_err(|_| CryptoError::Backend("Photos library AEAD init".into()))?;
     cipher
-        .decrypt(
-            XNonce::from_slice(&envelope[84..108]),
-            Payload {
-                msg: &envelope[PHOTOS_LIBRARY_HEADER_BYTES..],
-                aad: header,
-            },
+        .open_with_nonce(
+            &envelope[84..108],
+            header,
+            &envelope[PHOTOS_LIBRARY_HEADER_BYTES..],
         )
         .map_err(|_| CryptoError::AuthFailed)
+        .map(crate::primitives::into_vec)
 }
 
 pub fn decode_canonical_b64(value: &str) -> Result<Vec<u8>> {

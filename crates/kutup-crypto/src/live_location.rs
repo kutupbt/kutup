@@ -18,11 +18,8 @@
 //! the stream id and the counter, so an update cannot be moved to another
 //! stream or replayed in place of a newer one.
 
-use chacha20poly1305::aead::{Aead, KeyInit, Payload};
-use chacha20poly1305::{XChaCha20Poly1305, XNonce};
-use dryoc::rng::copy_randombytes;
-
 use crate::error::{CryptoError, Result};
+use crate::primitives::{Aead, Suite};
 
 const MAGIC: &[u8; 8] = b"KUTPLL1\0";
 pub const KEY_LEN: usize = 32;
@@ -93,8 +90,8 @@ fn aad(stream_id: &[u8; STREAM_ID_LEN], counter: u64) -> [u8; 8 + STREAM_ID_LEN 
     out
 }
 
-fn cipher(key: &[u8]) -> Result<XChaCha20Poly1305> {
-    XChaCha20Poly1305::new_from_slice(key).map_err(|_| CryptoError::InvalidLength {
+fn cipher(key: &[u8]) -> Result<Aead> {
+    Aead::new(Suite::V1, key).map_err(|_| CryptoError::InvalidLength {
         expected: KEY_LEN,
         got: key.len(),
     })
@@ -117,7 +114,7 @@ pub fn seal(
     point: &LiveLocationPoint,
 ) -> Result<Vec<u8>> {
     let mut nonce = [0u8; NONCE_LEN];
-    copy_randombytes(&mut nonce);
+    crate::primitives::random(&mut nonce);
     seal_with_nonce(key, stream_id, counter, point, &nonce)
 }
 
@@ -138,13 +135,7 @@ pub fn seal_with_nonce(
     point.validate()?;
     let plaintext = point.encode();
     let ciphertext = cipher(key)?
-        .encrypt(
-            XNonce::from_slice(nonce),
-            Payload {
-                msg: &plaintext,
-                aad: &aad(&stream_id, counter),
-            },
-        )
+        .seal_with_nonce(nonce, &aad(&stream_id, counter), &plaintext)
         .map_err(|_| CryptoError::Backend("live location seal".into()))?;
     let mut out = Vec::with_capacity(ENVELOPE_LEN);
     out.extend_from_slice(MAGIC);
@@ -177,12 +168,10 @@ pub fn open(key: &[u8], stream_id: &[u8], envelope: &[u8]) -> Result<(u64, LiveL
     let counter = counter_of(envelope)?;
     let nonce = &envelope[16..16 + NONCE_LEN];
     let plaintext = cipher(key)?
-        .decrypt(
-            XNonce::from_slice(nonce),
-            Payload {
-                msg: &envelope[16 + NONCE_LEN..],
-                aad: &aad(&stream_id, counter),
-            },
+        .open_with_nonce(
+            nonce,
+            &aad(&stream_id, counter),
+            &envelope[16 + NONCE_LEN..],
         )
         .map_err(|_| CryptoError::AuthFailed)?;
     Ok((counter, LiveLocationPoint::decode(&plaintext)?))

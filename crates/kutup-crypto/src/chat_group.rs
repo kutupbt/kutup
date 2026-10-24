@@ -18,12 +18,7 @@
 //!   key, so devices coming and going never touch it ([`sign_binding`],
 //!   [`verify_binding`]).
 
-use chacha20poly1305::aead::{Aead, KeyInit, Payload};
-use chacha20poly1305::{XChaCha20Poly1305, XNonce};
-use dryoc::rng::copy_randombytes;
-use ed25519_dalek::{Signature, Signer as _, SigningKey, VerifyingKey};
-use hkdf::Hkdf;
-use sha2::{Digest, Sha256};
+use crate::primitives::{hash, Aead, Hasher, Kdf, SigningKey, Suite, VerifyingKey};
 use zeroize::Zeroizing;
 
 use crate::account_ref::AccountRef;
@@ -91,14 +86,14 @@ impl GroupHome<'_> {
                 "a group home must be a canonical server name and identity hash".into(),
             ));
         }
-        let mut hash = Sha256::new();
+        let mut hash = Hasher::new(Suite::V1);
         hash.update(HOME_DOMAIN);
         for text in [self.server, self.identity_document_hash] {
             hash.update((text.len() as u16).to_be_bytes());
             hash.update(text.as_bytes());
         }
         hash.update(self.identity_sequence.to_be_bytes());
-        Ok(hash.finalize().into())
+        Ok(hash.finish().to_array())
     }
 }
 
@@ -114,7 +109,7 @@ impl GroupMasterKey {
     pub fn generate(home: GroupHome<'_>) -> Result<Self> {
         let home = home.digest()?;
         let mut key = Zeroizing::new([0u8; MASTER_KEY_LEN]);
-        copy_randombytes(key.as_mut());
+        crate::primitives::random(key.as_mut());
         Ok(Self { key, home })
     }
 
@@ -151,7 +146,7 @@ impl GroupMasterKey {
     }
 
     fn expand(&self, info: &[u8], out: &mut [u8]) {
-        Hkdf::<Sha256>::new(Some(KDF_SALT), self.key.as_ref())
+        Kdf::new(Suite::V1, KDF_SALT, self.key.as_ref())
             .expand(info, out)
             .expect("HKDF output length is fixed and valid");
     }
@@ -185,7 +180,7 @@ impl GroupStateKey {
     /// slot id, or empty for a group-wide field).
     pub fn seal(&self, field: SealedField, subject: &[u8], plain: &[u8]) -> Result<Vec<u8>> {
         let mut nonce = [0u8; NONCE_LEN];
-        copy_randombytes(&mut nonce);
+        crate::primitives::random(&mut nonce);
         self.seal_with_nonce(field, subject, plain, &nonce)
     }
 
@@ -207,14 +202,8 @@ impl GroupStateKey {
         plain: &[u8],
         nonce: &[u8; NONCE_LEN],
     ) -> Result<Vec<u8>> {
-        let ciphertext = XChaCha20Poly1305::new(self.key.as_slice().into())
-            .encrypt(
-                XNonce::from_slice(nonce),
-                Payload {
-                    msg: plain,
-                    aad: &self.aad(field, subject)?,
-                },
-            )
+        let ciphertext = Aead::new(Suite::V1, self.key.as_ref())?
+            .seal_with_nonce(nonce, &self.aad(field, subject)?, plain)
             .map_err(|_| CryptoError::Backend("group field seal".into()))?;
         Ok([&[SEAL_VERSION][..], nonce, &ciphertext].concat())
     }
@@ -231,16 +220,10 @@ impl GroupStateKey {
             return Err(CryptoError::AuthFailed);
         }
         let (nonce, ciphertext) = sealed[1..].split_at(NONCE_LEN);
-        let plain = XChaCha20Poly1305::new(self.key.as_slice().into())
-            .decrypt(
-                XNonce::from_slice(nonce),
-                Payload {
-                    msg: ciphertext,
-                    aad: &self.aad(field, subject)?,
-                },
-            )
+        let plain = Aead::new(Suite::V1, self.key.as_ref())?
+            .open_with_nonce(nonce, &self.aad(field, subject)?, ciphertext)
             .map_err(|_| CryptoError::AuthFailed)?;
-        Ok(Zeroizing::new(plain))
+        Ok(plain)
     }
 
     fn aad(&self, field: SealedField, subject: &[u8]) -> Result<Vec<u8>> {
@@ -272,12 +255,14 @@ pub struct GroupKeyPair {
 impl GroupKeyPair {
     pub fn generate() -> Self {
         let mut seed = Zeroizing::new([0u8; 32]);
-        copy_randombytes(seed.as_mut());
+        crate::primitives::random(seed.as_mut());
         Self::from_seed(&seed)
     }
 
     pub fn from_seed(seed: &[u8; 32]) -> Self {
-        let public = SigningKey::from_bytes(seed).verifying_key().to_bytes();
+        let public = SigningKey::from_seed(Suite::V1, seed)
+            .verifying_key()
+            .to_array();
         Self {
             seed: Zeroizing::new(*seed),
             public,
@@ -314,7 +299,7 @@ impl GroupKeyPair {
     }
 
     fn sign(&self, bytes: &[u8]) -> [u8; SIGNATURE_LEN] {
-        SigningKey::from_bytes(&self.seed).sign(bytes).to_bytes()
+        SigningKey::from_seed(Suite::V1, &self.seed).sign_array(bytes)
     }
 }
 
@@ -329,13 +314,13 @@ const PSEUDONYM_SALT: &[u8] = b"kutup/chat-group-pseudonym/v1\0";
 /// after leaving, so a rejoin is a new pseudonym. Without the account key,
 /// one account's pseudonyms in different groups (or epochs) are unrelated.
 pub struct GroupPseudonymKey {
-    hkdf: Hkdf<Sha256>,
+    hkdf: Kdf,
 }
 
 impl GroupPseudonymKey {
     pub fn derive(account_master_key: &[u8; 32]) -> Self {
         Self {
-            hkdf: Hkdf::<Sha256>::new(Some(PSEUDONYM_SALT), account_master_key),
+            hkdf: Kdf::new(Suite::V1, PSEUDONYM_SALT, account_master_key),
         }
     }
 
@@ -403,9 +388,7 @@ pub fn sign_binding(
     pseudonym: &[u8; PUBLIC_KEY_LEN],
     account: &AccountRef,
 ) -> [u8; SIGNATURE_LEN] {
-    authority
-        .sign(&binding_signed_bytes(group_id, pseudonym, account))
-        .to_bytes()
+    authority.sign_array(&binding_signed_bytes(group_id, pseudonym, account))
 }
 
 /// Checks a binding against the account's self-authority public key (strict).
@@ -429,9 +412,9 @@ fn verify(
     bytes: &[u8],
     signature: &[u8; SIGNATURE_LEN],
 ) -> Result<()> {
-    VerifyingKey::from_bytes(public)
+    VerifyingKey::from_bytes(Suite::V1, public)
         .map_err(|_| CryptoError::AuthFailed)?
-        .verify_strict(bytes, &Signature::from_bytes(signature))
+        .verify(bytes, signature)
         .map_err(|_| CryptoError::AuthFailed)
 }
 
@@ -463,20 +446,20 @@ pub fn verify_claim_signature(
 /// The hash a change is chained and notarised by: of its canonical bytes
 /// with its signature.
 pub fn change_hash(signed_change_bytes: &[u8]) -> [u8; HASH_LEN] {
-    Sha256::new()
-        .chain_update(CHANGE_HASH_DOMAIN)
-        .chain_update(signed_change_bytes)
-        .finalize()
+    Hasher::new(Suite::V1)
+        .chain(CHANGE_HASH_DOMAIN)
+        .chain(signed_change_bytes)
+        .finish()
         .into()
 }
 
 /// The hash of a state: of its canonical bytes, which carry the sealed
 /// fields as their ciphertext, so a server can compute it.
 pub fn state_hash(state_bytes: &[u8]) -> [u8; HASH_LEN] {
-    Sha256::new()
-        .chain_update(STATE_HASH_DOMAIN)
-        .chain_update(state_bytes)
-        .finalize()
+    Hasher::new(Suite::V1)
+        .chain(STATE_HASH_DOMAIN)
+        .chain(state_bytes)
+        .finish()
         .into()
 }
 
@@ -502,9 +485,9 @@ pub const MAX_AVATAR_IMAGE_BYTES: usize = AVATAR_BUCKETS[AVATAR_BUCKETS.len() - 
 /// Seals `image` as a group avatar: the blob, and the key that opens it.
 pub fn seal_group_avatar(image: &[u8]) -> Result<(Vec<u8>, Zeroizing<[u8; 32]>)> {
     let mut key = Zeroizing::new([0u8; 32]);
-    copy_randombytes(key.as_mut_slice());
+    crate::primitives::random(key.as_mut_slice());
     let mut nonce = [0u8; NONCE_LEN];
-    copy_randombytes(&mut nonce);
+    crate::primitives::random(&mut nonce);
     let blob = seal_group_avatar_with(image, &key, &nonce)?;
     Ok((blob, key))
 }
@@ -534,14 +517,8 @@ fn seal_group_avatar_with(
     padded.extend_from_slice(image);
     padded.push(0x80);
     padded.resize(bucket, 0);
-    let ciphertext = XChaCha20Poly1305::new(key.as_slice().into())
-        .encrypt(
-            XNonce::from_slice(nonce),
-            Payload {
-                msg: &padded,
-                aad: AVATAR_AAD,
-            },
-        )
+    let ciphertext = Aead::new(Suite::V1, key.as_ref())?
+        .seal_with_nonce(nonce, AVATAR_AAD, &padded)
         .map_err(|_| CryptoError::Backend("group avatar seal".into()))?;
     Ok([&[AVATAR_VERSION][..], nonce, &ciphertext].concat())
 }
@@ -558,14 +535,8 @@ pub fn open_group_avatar(blob: &[u8], key: &[u8; 32]) -> Result<Zeroizing<Vec<u8
     }
     let (nonce, ciphertext) = blob[1..].split_at(NONCE_LEN);
     let padded = Zeroizing::new(
-        XChaCha20Poly1305::new(key.as_slice().into())
-            .decrypt(
-                XNonce::from_slice(nonce),
-                Payload {
-                    msg: ciphertext,
-                    aad: AVATAR_AAD,
-                },
-            )
+        Aead::new(Suite::V1, key.as_ref())?
+            .open_with_nonce(nonce, AVATAR_AAD, ciphertext)
             .map_err(|_| CryptoError::AuthFailed)?,
     );
     let end = padded
@@ -579,7 +550,7 @@ pub fn open_group_avatar(blob: &[u8], key: &[u8; 32]) -> Result<Zeroizing<Vec<u8
 /// The SHA-256 of a blob as stored: what the avatar attribute names in the
 /// clear, so the home can serve and clean up blobs.
 pub fn avatar_blob_hash(blob: &[u8]) -> [u8; HASH_LEN] {
-    Sha256::digest(blob).into()
+    hash(Suite::V1, blob).to_array()
 }
 
 #[cfg(test)]
@@ -762,8 +733,7 @@ mod tests {
             // The same payload under another domain, signed by the same key.
             let other = identity
                 .authority_signing_key()
-                .sign(&[*domain, &payload].concat())
-                .to_bytes();
+                .sign_array(&[*domain, &payload].concat());
             assert!(verify_binding(&authority, &group_id, &pseudonym, &account(), &other).is_err());
         }
     }

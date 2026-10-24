@@ -23,10 +23,7 @@
 //! The server's setup (OPRF seed and key pairs) is kept sealed under a key that
 //! is not in the database ([`seal_server_setup`]).
 
-use chacha20poly1305::aead::{Aead, KeyInit, Payload};
-use chacha20poly1305::{XChaCha20Poly1305, XNonce};
-use dryoc::classic::crypto_pwhash::{crypto_pwhash, PasswordHashAlgorithm};
-use hkdf::Hkdf;
+use crate::primitives::{Aead, Kdf, Suite};
 use opaque_ke::errors::{InternalError, ProtocolError};
 use opaque_ke::generic_array::{ArrayLength, GenericArray};
 use opaque_ke::ksf::Ksf;
@@ -37,7 +34,7 @@ use opaque_ke::{
     CredentialResponse, RegistrationRequest, RegistrationResponse, RegistrationUpload,
     Ristretto255, ServerLogin, ServerLoginParameters, ServerRegistration, ServerSetup, TripleDh,
 };
-use sha2::{Sha256, Sha512};
+use sha2::Sha512;
 use zeroize::{Zeroize, Zeroizing};
 
 use crate::account_envelope::{self, AccountEnvelopePurpose};
@@ -71,13 +68,14 @@ impl Ksf for Argon2idV1 {
         input: GenericArray<u8, L>,
     ) -> std::result::Result<GenericArray<u8, L>, InternalError> {
         let mut output = GenericArray::default();
-        crypto_pwhash(
-            output.as_mut_slice(),
+        crate::primitives::pwhash(
+            &crate::primitives::PwhashParams {
+                operations: KSF_PASSES,
+                memory: KSF_MEMORY_BYTES,
+            },
             input.as_slice(),
             &[0u8; 16],
-            KSF_PASSES,
-            KSF_MEMORY_BYTES,
-            PasswordHashAlgorithm::Argon2id13,
+            output.as_mut_slice(),
         )
         .map_err(|_| InternalError::KsfError)?;
         Ok(output)
@@ -92,38 +90,6 @@ impl opaque_ke::CipherSuite for Suite1 {
     type KeyExchange = TripleDh<Ristretto255, Sha512>;
     type Ksf = Argon2idV1;
 }
-
-/// The operating system's randomness (through dryoc, which also works in the
-/// browser), for OPAQUE's blinding factors and key-exchange nonces.
-pub struct SystemRng;
-
-impl RngCore for SystemRng {
-    fn next_u32(&mut self) -> u32 {
-        let mut bytes = [0u8; 4];
-        self.fill_bytes(&mut bytes);
-        u32::from_le_bytes(bytes)
-    }
-
-    fn next_u64(&mut self) -> u64 {
-        let mut bytes = [0u8; 8];
-        self.fill_bytes(&mut bytes);
-        u64::from_le_bytes(bytes)
-    }
-
-    fn fill_bytes(&mut self, dest: &mut [u8]) {
-        dryoc::rng::copy_randombytes(dest);
-    }
-
-    fn try_fill_bytes(
-        &mut self,
-        dest: &mut [u8],
-    ) -> std::result::Result<(), opaque_ke::rand::Error> {
-        self.fill_bytes(dest);
-        Ok(())
-    }
-}
-
-impl CryptoRng for SystemRng {}
 
 fn protocol(error: ProtocolError) -> CryptoError {
     match error {
@@ -181,7 +147,7 @@ impl ExportKey {
         info.extend_from_slice(MASTER_KEY_KEK_INFO);
         info.extend_from_slice(key_binding.as_bytes());
         let mut kek = Zeroizing::new([0u8; 32]);
-        Hkdf::<Sha256>::new(Some(EXPORT_SALT), &self.0)
+        Kdf::new(Suite::V1, EXPORT_SALT, &self.0)
             .expand(&info, kek.as_mut_slice())
             .map_err(|_| CryptoError::Backend("opaque export key HKDF".into()))?;
         Ok(kek)
@@ -243,7 +209,7 @@ pub struct Registered {
 
 /// Starts registering `password`: the state, and the request for the server.
 pub fn client_registration_start(password: &str) -> Result<(ClientRegistering, Vec<u8>)> {
-    client_registration_start_with(&mut SystemRng, password)
+    client_registration_start_with(&mut crate::primitives::Rng, password)
 }
 
 pub fn client_registration_start_with<R: RngCore + CryptoRng>(
@@ -264,7 +230,7 @@ pub fn client_registration_start_with<R: RngCore + CryptoRng>(
 impl ClientRegistering {
     /// Finishes with the server's response: the record and the export key.
     pub fn finish(self, response: &[u8]) -> Result<Registered> {
-        self.finish_with(&mut SystemRng, response)
+        self.finish_with(&mut crate::primitives::Rng, response)
     }
 
     pub fn finish_with<R: RngCore + CryptoRng>(
@@ -307,7 +273,7 @@ pub struct SignedIn {
 
 /// Starts signing in with `password`: the state, and the request for the server.
 pub fn client_login_start(password: &str) -> Result<(ClientSigningIn, Vec<u8>)> {
-    client_login_start_with(&mut SystemRng, password)
+    client_login_start_with(&mut crate::primitives::Rng, password)
 }
 
 pub fn client_login_start_with<R: RngCore + CryptoRng>(
@@ -329,7 +295,7 @@ impl ClientSigningIn {
     /// wrong password (or a server other than the one registered with); the
     /// server's answer to an unknown name fails the same way.
     pub fn finish(self, response: &[u8]) -> Result<SignedIn> {
-        self.finish_with(&mut SystemRng, response)
+        self.finish_with(&mut crate::primitives::Rng, response)
     }
 
     pub fn finish_with<R: RngCore + CryptoRng>(
@@ -409,7 +375,7 @@ pub struct ServerSecrets(ServerSetup<Suite1>);
 impl ServerSecrets {
     /// New secrets, made once per setup key id.
     pub fn generate() -> Self {
-        Self(ServerSetup::<Suite1>::new(&mut SystemRng))
+        Self(ServerSetup::<Suite1>::new(&mut crate::primitives::Rng))
     }
 
     pub fn generate_with<R: RngCore + CryptoRng>(rng: &mut R) -> Self {
@@ -426,7 +392,7 @@ impl ServerSecrets {
 /// database) for setup `key_id`: `magic ‖ key id ‖ nonce ‖ ciphertext`.
 pub fn seal_server_setup(secrets: &ServerSecrets, key: &[u8; 32], key_id: u16) -> Result<Vec<u8>> {
     let mut nonce = [0u8; NONCE_LEN];
-    dryoc::rng::copy_randombytes(&mut nonce);
+    crate::primitives::random(&mut nonce);
     seal_server_setup_with_nonce(secrets, key, key_id, &nonce)
 }
 
@@ -451,14 +417,8 @@ fn seal_server_setup_with_nonce(
     let plain = Zeroizing::new(serialized.to_vec());
     serialized.as_mut_slice().zeroize();
     let aad = [SETUP_AAD, &key_id.to_be_bytes()].concat();
-    let ciphertext = XChaCha20Poly1305::new(key.into())
-        .encrypt(
-            XNonce::from_slice(nonce),
-            Payload {
-                msg: &plain,
-                aad: &aad,
-            },
-        )
+    let ciphertext = Aead::new(Suite::V1, key.as_ref())?
+        .seal_with_nonce(nonce, &aad, &plain)
         .map_err(|_| CryptoError::Backend("opaque setup seal".into()))?;
     Ok([
         SETUP_MAGIC.as_slice(),
@@ -484,13 +444,11 @@ pub fn open_server_setup(sealed: &[u8], key: &[u8; 32], key_id: u16) -> Result<S
     }
     let aad = [SETUP_AAD, &key_id.to_be_bytes()].concat();
     let plain = Zeroizing::new(
-        XChaCha20Poly1305::new(key.into())
-            .decrypt(
-                XNonce::from_slice(&sealed[SETUP_MAGIC.len() + 2..header]),
-                Payload {
-                    msg: &sealed[header..],
-                    aad: &aad,
-                },
+        Aead::new(Suite::V1, key.as_ref())?
+            .open_with_nonce(
+                &sealed[SETUP_MAGIC.len() + 2..header],
+                &aad,
+                &sealed[header..],
             )
             .map_err(|_| CryptoError::AuthFailed)?,
     );
@@ -550,7 +508,13 @@ pub fn server_login_start(
     request: &[u8],
     credential: &[u8],
 ) -> Result<ServerSigningIn> {
-    server_login_start_with(&mut SystemRng, secrets, record, request, credential)
+    server_login_start_with(
+        &mut crate::primitives::Rng,
+        secrets,
+        record,
+        request,
+        credential,
+    )
 }
 
 pub fn server_login_start_with<R: RngCore + CryptoRng>(
@@ -757,14 +721,9 @@ mod tests {
         let mut nonce = [0u8; NONCE_LEN];
         nonce[0] = 1;
         let aad = [SETUP_AAD, &1u16.to_be_bytes()].concat();
-        let ciphertext = XChaCha20Poly1305::new((&key).into())
-            .encrypt(
-                XNonce::from_slice(&nonce),
-                Payload {
-                    msg: &serialized,
-                    aad: &aad,
-                },
-            )
+        let ciphertext = Aead::new(Suite::V1, key.as_ref())
+            .unwrap()
+            .seal_with_nonce(&nonce, &aad, &serialized)
             .unwrap();
         let sealed = [
             SETUP_MAGIC.as_slice(),

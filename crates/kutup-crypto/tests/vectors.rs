@@ -1,5 +1,8 @@
 //! Checked-in canonical vectors for Kutup-owned cryptographic formats. The
 //! browser WASM bridge and native clients consume this same Rust implementation.
+// Vector tests compute expected values with reference implementations,
+// independently of kutup_crypto::primitives.
+#![allow(clippy::disallowed_types, clippy::disallowed_methods)]
 
 use base64::Engine;
 use serde::Deserialize;

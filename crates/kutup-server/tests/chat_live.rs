@@ -17,7 +17,6 @@ mod common;
 use base64::engine::general_purpose::STANDARD;
 use base64::Engine;
 use common::chat_identity::{ChatAccount, ChatDevice};
-use ed25519_dalek::{Signer as _, SigningKey};
 use kutup_chat_proto::{
     AccountManifestPublicationV2, AccountManifestV2, AccountPreKeyBundlesResponse, AccountRef,
     AppendChatBackupSegmentRequestV1, ChatBackupManifestV1, ChatBackupMediaReferenceV1,
@@ -26,6 +25,7 @@ use kutup_chat_proto::{
     ReconcileChatBackupMediaRequestV1, StageChatBackupBaseRequestV1,
     UploadChatBackupMediaRequestV1, CHAT_DEVICE_HEADER,
 };
+use kutup_crypto::primitives::{SigningKey, Suite};
 use reqwest::{blocking::Client, StatusCode};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
@@ -270,21 +270,20 @@ fn chat_backup_lifecycle(
     };
     let signer_seed =
         chat_backup::derive_manifest_signing_seed(&backup_root, backup_context).unwrap();
-    let signer = SigningKey::from_bytes(&signer_seed);
+    let signer = SigningKey::from_seed(Suite::V1, &signer_seed);
     let mut authorization = ChatBackupSignerAuthorizationV1 {
         version: 1,
         backup_incarnation_id: backup_id.to_string(),
         account_incarnation_id: identity.incarnation_id(),
         suite: ChatBackupSuiteId::HkdfSha256XChaCha20Poly1305V1,
         protection_domain: ChatBackupProtectionDomainV1::StandardChat,
-        manifest_signing_public_key: b64(signer.verifying_key().as_bytes()),
+        manifest_signing_public_key: b64(&signer.verifying_key().to_bytes()),
         account_authority_key_id: identity.authority_key_id(),
         created_at_unix: time::OffsetDateTime::now_utc().unix_timestamp(),
         account_authority_signature: String::new(),
     };
-    authorization.account_authority_signature = b64(&authority
-        .sign(&authorization.signing_bytes().unwrap())
-        .to_bytes());
+    authorization.account_authority_signature =
+        b64(&authority.sign(&authorization.signing_bytes().unwrap()));
     let operation_id = Uuid::new_v4();
     let provision = ProvisionChatBackupRequestV1 {
         operation_id: operation_id.to_string(),
@@ -707,7 +706,7 @@ fn chat_backup_lifecycle(
         created_at_unix: time::OffsetDateTime::now_utc().unix_timestamp(),
         signature: String::new(),
     };
-    manifest.signature = b64(&signer.sign(&manifest.signing_bytes().unwrap()).to_bytes());
+    manifest.signature = b64(&signer.sign(&manifest.signing_bytes().unwrap()));
     manifest.verify(&authorization).unwrap();
     let commit = CommitChatBackupManifestRequestV1 {
         expected_generation: 0,
@@ -1003,9 +1002,7 @@ fn chat_backup_lifecycle(
             created_at_unix: time::OffsetDateTime::now_utc().unix_timestamp(),
             signature: String::new(),
         };
-        second_manifest.signature = b64(&signer
-            .sign(&second_manifest.signing_bytes().unwrap())
-            .to_bytes());
+        second_manifest.signature = b64(&signer.sign(&second_manifest.signing_bytes().unwrap()));
         let second_commit = CommitChatBackupManifestRequestV1 {
             expected_generation: 1,
             expected_cursor: cursor,

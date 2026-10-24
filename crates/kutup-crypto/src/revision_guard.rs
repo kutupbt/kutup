@@ -12,12 +12,7 @@
 //! (the first revision read is trusted), or put back an older copy of one; it
 //! can no longer read them or set one to a revision it chooses.
 
-use chacha20poly1305::aead::{Aead, KeyInit, Payload};
-use chacha20poly1305::{XChaCha20Poly1305, XNonce};
-use dryoc::rng::copy_randombytes;
-use hkdf::Hkdf;
-use hmac::{Hmac, Mac};
-use sha2::Sha256;
+use crate::primitives::{Aead, Kdf, Mac, Suite};
 use zeroize::Zeroizing;
 
 use crate::error::{CryptoError, Result};
@@ -39,7 +34,7 @@ pub struct GuardKeys {
 
 impl GuardKeys {
     pub fn derive(master_key: &[u8; 32]) -> Result<Self> {
-        let hkdf = Hkdf::<Sha256>::new(Some(SALT), master_key);
+        let hkdf = Kdf::new(Suite::V1, SALT, master_key);
         let mut entry = Zeroizing::new([0u8; 32]);
         let mut seal = Zeroizing::new([0u8; 32]);
         hkdf.expand(ENTRY_KEY_INFO, entry.as_mut_slice())
@@ -59,14 +54,13 @@ impl GuardKeys {
                 "revision guard: scope or id is invalid".into(),
             ));
         }
-        let mut mac = <Hmac<Sha256> as Mac>::new_from_slice(self.entry.as_slice())
-            .expect("HMAC takes any key length");
+        let mut mac = Mac::new(Suite::V1, self.entry.as_slice());
         mac.update(ENTRY_DOMAIN);
-        mac.update(&(scope.len() as u16).to_be_bytes());
+        mac.update((scope.len() as u16).to_be_bytes());
         mac.update(scope.as_bytes());
-        mac.update(&(id.len() as u16).to_be_bytes());
+        mac.update((id.len() as u16).to_be_bytes());
         mac.update(id.as_bytes());
-        Ok(hex::encode(mac.finalize().into_bytes()))
+        Ok(hex::encode(mac.finish()))
     }
 
     fn aad(entry_id: &str) -> Vec<u8> {
@@ -76,15 +70,9 @@ impl GuardKeys {
     /// `revision`, sealed for entry `entry_id`: `nonce ‖ ciphertext`.
     pub fn seal_seen(&self, entry_id: &str, revision: u64) -> Result<Vec<u8>> {
         let mut nonce = [0u8; NONCE_LEN];
-        copy_randombytes(&mut nonce);
-        let ciphertext = XChaCha20Poly1305::new(self.seal.as_slice().into())
-            .encrypt(
-                XNonce::from_slice(&nonce),
-                Payload {
-                    msg: &revision.to_be_bytes(),
-                    aad: &Self::aad(entry_id),
-                },
-            )
+        crate::primitives::random(&mut nonce);
+        let ciphertext = Aead::new(Suite::V1, self.seal.as_ref())?
+            .seal_with_nonce(&nonce, &Self::aad(entry_id), &revision.to_be_bytes())
             .map_err(|_| CryptoError::Backend("revision guard seal".into()))?;
         Ok([nonce.as_slice(), &ciphertext].concat())
     }
@@ -95,15 +83,14 @@ impl GuardKeys {
         if sealed.len() != SEALED_LEN {
             return Err(CryptoError::AuthFailed);
         }
-        let plain = XChaCha20Poly1305::new(self.seal.as_slice().into())
-            .decrypt(
-                XNonce::from_slice(&sealed[..NONCE_LEN]),
-                Payload {
-                    msg: &sealed[NONCE_LEN..],
-                    aad: &Self::aad(entry_id),
-                },
+        let plain = Aead::new(Suite::V1, self.seal.as_ref())?
+            .open_with_nonce(
+                &sealed[..NONCE_LEN],
+                &Self::aad(entry_id),
+                &sealed[NONCE_LEN..],
             )
-            .map_err(|_| CryptoError::AuthFailed)?;
+            .map_err(|_| CryptoError::AuthFailed)
+            .map(crate::primitives::into_vec)?;
         Ok(u64::from_be_bytes(
             plain.try_into().map_err(|_| CryptoError::AuthFailed)?,
         ))

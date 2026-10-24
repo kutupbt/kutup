@@ -5,10 +5,8 @@
 //! is encrypted once and can therefore be durably copied between homeservers
 //! without teaching them a filename, MIME type, sender or conversation.
 
-use dryoc::rng::copy_randombytes;
-use hkdf::Hkdf;
+use crate::primitives::{hash, Kdf, Suite};
 use serde::{Deserialize, Serialize};
-use sha2::{Digest, Sha256};
 use zeroize::Zeroizing;
 
 use crate::drive_object::parse_canonical_uuid;
@@ -107,7 +105,7 @@ pub struct ChatMediaObjectHeaderV1 {
 
 pub fn generate_attachment_key() -> Zeroizing<[u8; KEY_LEN]> {
     let mut key = Zeroizing::new([0u8; KEY_LEN]);
-    copy_randombytes(key.as_mut_slice());
+    crate::primitives::random(key.as_mut_slice());
     key
 }
 
@@ -168,7 +166,7 @@ pub fn derive_object_key(
         });
     }
     let header = object_header(context);
-    let hkdf = Hkdf::<Sha256>::new(Some(OBJECT_KEY_SALT), attachment_key);
+    let hkdf = Kdf::new(Suite::V1, OBJECT_KEY_SALT, attachment_key);
     let mut key = Zeroizing::new([0u8; KEY_LEN]);
     hkdf.expand(&header, key.as_mut_slice())
         .map_err(|_| CryptoError::Backend("Chat-media object HKDF expand".into()))?;
@@ -216,7 +214,7 @@ pub fn validate_public_object(object: &[u8], expected: ChatMediaObjectContextV1)
 }
 
 pub fn object_sha256(object: &[u8]) -> String {
-    hex::encode(Sha256::digest(object))
+    hex::encode(hash(Suite::V1, object))
 }
 
 pub fn encrypt_object(
