@@ -8,6 +8,14 @@
 //! their token through their own server, which forwards the request over
 //! signed federation. The participant identity is an opaque tag the members
 //! can map to a person and the SFU cannot.
+//!
+//! Kept until pairwise group calls replace it (pairwise-groups.md §6, slice
+//! 4: a token only for a current member's pseudonym, issued by the group's
+//! home). No client starts a group call now (the capability says
+//! `groupCalls: false`), so this route mints tokens nobody asks for: an
+//! account, or a federated server for its accounts, can get one for a room
+//! id of its choosing on this server's SFU, within the per-account and
+//! per-origin limits.
 
 use std::sync::LazyLock;
 

@@ -46,7 +46,7 @@ KUTUP_FEDERATION_SERVER_B="http://127.0.0.1:$port_b" \
 clear_synthetic_chat_profiles
 
 printf '%s\n' \
-  "Kutup MLS development federation is ready." \
+  "Kutup Chat development federation is ready." \
   "Server A: http://127.0.0.1:$port_a" \
   "  email: federation-admin-a@example.test" \
   "  password: federation-live-password" \
