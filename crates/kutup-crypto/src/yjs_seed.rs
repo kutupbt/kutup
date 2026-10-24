@@ -10,7 +10,7 @@
 //! nothing else), so the binding is to what the seed holds, not to how the
 //! file's bytes spelled it.
 
-use sha2::{Digest, Sha256};
+use crate::primitives::{hash, Hasher, Suite};
 
 const LABEL: &[u8] = b"kutup/yjs-seed/v1\0";
 
@@ -18,12 +18,12 @@ const LABEL: &[u8] = b"kutup/yjs-seed/v1\0";
 /// SHA-256(label ‖ file id ‖ 0 ‖ SHA-256(content)), a whole number
 /// JavaScript holds exactly.
 pub fn seed_client_id(file_id: &str, content: &[u8]) -> u64 {
-    let digest = Sha256::new()
-        .chain_update(LABEL)
-        .chain_update(file_id.as_bytes())
-        .chain_update([0u8])
-        .chain_update(Sha256::digest(content))
-        .finalize();
+    let digest = Hasher::new(Suite::V1)
+        .chain(LABEL)
+        .chain(file_id.as_bytes())
+        .chain([0u8])
+        .chain(hash(Suite::V1, content))
+        .finish();
     let mut first = [0u8; 8];
     first.copy_from_slice(&digest[..8]);
     u64::from_be_bytes(first) >> 11

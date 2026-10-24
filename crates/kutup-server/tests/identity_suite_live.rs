@@ -129,7 +129,6 @@ fn a_suite_1_account_upgrades_once_and_is_shared_with_only_after() {
 /// tell from a real old account.
 mod legacy_suite1 {
     use super::*;
-    use ed25519_dalek::Signer as _;
     use hkdf::Hkdf;
     use kutup_chat_proto::{AccountIdentitySuiteId, AccountManifestV2};
     use kutup_crypto::account_envelope::{self, AccountEnvelopePurpose};
@@ -164,7 +163,7 @@ mod legacy_suite1 {
         bytes.extend_from_slice(&1u16.to_be_bytes());
         bytes.extend_from_slice(drive);
         bytes.extend_from_slice(&identity.drive_signing_public_key());
-        identity.authority_signing_key().sign(&bytes).to_bytes()
+        identity.authority_signing_key().sign_array(&bytes)
     }
 
     /// Turns the account `user_id` into a suite-1 account in one transaction.
@@ -222,8 +221,7 @@ mod legacy_suite1 {
             }
             manifest.signature = b64(&identity
                 .authority_signing_key()
-                .sign(&manifest.signing_bytes().unwrap())
-                .to_bytes());
+                .sign(&manifest.signing_bytes().unwrap()));
             manifest.verify().expect("a suite-1 manifest verifies");
             let hash = manifest.manifest_hash().unwrap();
             sqlx::query(

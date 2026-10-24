@@ -12,8 +12,7 @@
 //!   its keys, which is primary, and their flags, hash-chained and signed by
 //!   the account authority. Whoever has pinned the account (Chat, Drive)
 //!   therefore trusts its mail keys too.
-
-use ed25519_dalek::{Signature, Signer as _, SigningKey, VerifyingKey};
+use crate::primitives::{SigningKey, Suite, VerifyingKey};
 use pgp::{
     composed::{
         ArmorOptions, Deserializable, EncryptionCaps, KeyType, Message, MessageBuilder,
@@ -131,7 +130,7 @@ pub(crate) fn generate_key(user_id: String, created_at_secs: u32) -> Result<Gene
     let secret = params
         .build()
         .map_err(backend)?
-        .generate(rand::rngs::OsRng)
+        .generate(crate::primitives::Rng)
         .map_err(backend)?;
     let public = SignedPublicKey::from(secret.clone());
     Ok(GeneratedAddressKey {
@@ -401,18 +400,10 @@ pub(crate) fn seal_group_secret(
     let incarnation =
         crate::named_share::parse_hex_32(member.incarnation_id, "member incarnation")?;
     let aad = group_share_aad(domain, &group_id, bound, member.account, &incarnation);
-    let mut hpke = crate::named_share::hpke_suite();
-    let (encapsulated, ciphertext) = hpke
-        .seal(
-            &hpke_rs::HpkePublicKey::new(member_hpke_public_key.to_vec()),
-            domain,
-            &aad,
-            secret,
-            None,
-            None,
-            None,
-        )
-        .map_err(|error| CryptoError::Backend(format!("group share HPKE seal: {error}")))?;
+    let (encapsulated, ciphertext) =
+        crate::primitives::hpke_seal(Suite::V1, member_hpke_public_key, domain, &aad, secret)
+            .map(|sealed| (sealed.encapsulated, sealed.ciphertext))
+            .map_err(|error| CryptoError::Backend(format!("group share HPKE seal: {error}")))?;
     if encapsulated.len() != crate::hpke_xwing::ENCAPSULATED_KEY_LEN {
         return Err(CryptoError::Backend(
             "group share: encapsulated key length".into(),
@@ -440,18 +431,16 @@ pub(crate) fn open_group_secret(
     let group_id = crate::drive_object::parse_canonical_uuid(group_id, "group")?;
     let incarnation: [u8; 32] = share[1..33].try_into().expect("32 bytes");
     let aad = group_share_aad(domain, &group_id, bound, member, &incarnation);
-    let hpke = crate::named_share::hpke_suite();
     Ok(Zeroizing::new(
-        hpke.open(
+        crate::primitives::hpke_open(
+            Suite::V1,
+            member_hpke_private_key,
             &share[33..GROUP_SHARE_HEADER_LEN],
-            &hpke_rs::HpkePrivateKey::new(member_hpke_private_key.to_vec()),
             domain,
             &aad,
             &share[GROUP_SHARE_HEADER_LEN..],
-            None,
-            None,
-            None,
         )
+        .map(crate::primitives::into_vec)
         .map_err(|_| CryptoError::AuthFailed)?,
     ))
 }
@@ -529,12 +518,12 @@ pub fn export_address_secret_key(secret_key: &[u8], passphrase: &str) -> Result<
         .map_err(|_| CryptoError::InvalidInput("address secret key does not parse".into()))?;
     let password = Password::from(passphrase);
     key.primary_key
-        .set_password(rand::rngs::OsRng, &password)
+        .set_password(crate::primitives::Rng, &password)
         .map_err(backend)?;
     for subkey in &mut key.secret_subkeys {
         subkey
             .key
-            .set_password(rand::rngs::OsRng, &password)
+            .set_password(crate::primitives::Rng, &password)
             .map_err(backend)?;
     }
     key.to_armored_string(ArmorOptions::default())
@@ -601,9 +590,9 @@ pub fn encrypt(
     let recipient = parse_recipient(recipient_public_key)?;
     let subkey = encryption_subkey(&recipient)?;
     let mut builder = MessageBuilder::from_bytes("", plaintext.to_vec())
-        .seipd_v1(rand::rngs::OsRng, SymmetricKeyAlgorithm::AES256);
+        .seipd_v1(crate::primitives::Rng, SymmetricKeyAlgorithm::AES256);
     builder
-        .encrypt_to_key(rand::rngs::OsRng, subkey)
+        .encrypt_to_key(crate::primitives::Rng, subkey)
         .map_err(backend)?;
     let signer = match signer_secret_key {
         Some(secret) => Some(signing_key(secret)?),
@@ -617,7 +606,7 @@ pub fn encrypt(
         );
     }
     builder
-        .to_armored_string(rand::rngs::OsRng, ArmorOptions::default())
+        .to_armored_string(crate::primitives::Rng, ArmorOptions::default())
         .map_err(backend)
 }
 
@@ -629,11 +618,11 @@ pub fn encrypt_binary(recipient_public_key: &[u8], plaintext: &[u8]) -> Result<V
     let recipient = parse_recipient(recipient_public_key)?;
     let subkey = encryption_subkey(&recipient)?;
     let mut builder = MessageBuilder::from_bytes("", plaintext.to_vec())
-        .seipd_v1(rand::rngs::OsRng, SymmetricKeyAlgorithm::AES256);
+        .seipd_v1(crate::primitives::Rng, SymmetricKeyAlgorithm::AES256);
     builder
-        .encrypt_to_key(rand::rngs::OsRng, subkey)
+        .encrypt_to_key(crate::primitives::Rng, subkey)
         .map_err(backend)?;
-    builder.to_vec(rand::rngs::OsRng).map_err(backend)
+    builder.to_vec(crate::primitives::Rng).map_err(backend)
 }
 
 /// An outside correspondent's key (docs/plans/mail.md, C3), as found
@@ -1055,13 +1044,13 @@ pub fn encrypt_armored(
         .collect::<Result<Vec<_>>>()?;
     let signer = signer_secret_key.map(signing_key).transpose()?;
     let mut builder = MessageBuilder::from_bytes("", plaintext.to_vec())
-        .seipd_v1(rand::rngs::OsRng, SymmetricKeyAlgorithm::AES256);
+        .seipd_v1(crate::primitives::Rng, SymmetricKeyAlgorithm::AES256);
     for key in &keys {
         let subkey = usable_encryption_subkey(key, now_secs).ok_or_else(|| {
             CryptoError::InvalidInput("a recipient key has no usable encryption subkey".into())
         })?;
         builder
-            .encrypt_to_key(rand::rngs::OsRng, subkey)
+            .encrypt_to_key(crate::primitives::Rng, subkey)
             .map_err(backend)?;
     }
     if let Some(signer) = &signer {
@@ -1072,7 +1061,7 @@ pub fn encrypt_armored(
         );
     }
     builder
-        .to_armored_string(rand::rngs::OsRng, ArmorOptions::default())
+        .to_armored_string(crate::primitives::Rng, ArmorOptions::default())
         .map_err(backend)
 }
 
@@ -1084,7 +1073,7 @@ pub fn encrypt_armored(
 pub fn sign_detached(signer_secret_key: &[u8], content: &[u8]) -> Result<String> {
     let signer = signing_key(signer_secret_key)?;
     pgp::composed::DetachedSignature::sign_binary_data(
-        rand::rngs::OsRng,
+        crate::primitives::Rng,
         &signer.primary_key,
         &Password::empty(),
         HashAlgorithm::Sha512,
@@ -1102,7 +1091,7 @@ pub fn sign_detached(signer_secret_key: &[u8], content: &[u8]) -> Result<String>
 pub fn sign_cleartext(signer_secret_key: &[u8], text: &str) -> Result<String> {
     let signer = signing_key(signer_secret_key)?;
     pgp::composed::CleartextSignedMessage::sign(
-        rand::rngs::OsRng,
+        crate::primitives::Rng,
         text,
         &signer.primary_key,
         &Password::empty(),
@@ -1198,10 +1187,10 @@ fn split(
         .collect::<Result<Vec<_>>>()?;
     let signer = signer_secret_key.map(signing_key).transpose()?;
     let mut builder = MessageBuilder::from_bytes("", plaintext.to_vec())
-        .seipd_v1(rand::rngs::OsRng, SymmetricKeyAlgorithm::AES256);
+        .seipd_v1(crate::primitives::Rng, SymmetricKeyAlgorithm::AES256);
     for recipient in &recipients {
         builder
-            .encrypt_to_key(rand::rngs::OsRng, encryption_subkey(recipient)?)
+            .encrypt_to_key(crate::primitives::Rng, encryption_subkey(recipient)?)
             .map_err(backend)?;
     }
     if let Some(signer) = &signer {
@@ -1211,7 +1200,7 @@ fn split(
             HashAlgorithm::Sha512,
         );
     }
-    let message = builder.to_vec(rand::rngs::OsRng).map_err(backend)?;
+    let message = builder.to_vec(crate::primitives::Rng).map_err(backend)?;
     let mut rest = message.as_slice();
     let mut key_packets = Vec::with_capacity(recipients.len());
     for _ in &recipients {
@@ -1614,10 +1603,10 @@ impl MailKeyListV1 {
 
     /// Signs the list with the account authority.
     pub fn sign(&self, authority: &SigningKey) -> Result<SignedMailKeyListV1> {
-        let authority_public = authority.verifying_key().to_bytes();
+        let authority_public = authority.verifying_key().to_array();
         self.check_authority(&authority_public)?;
         let data = self.to_bytes()?;
-        let signature = authority.sign(&data).to_bytes();
+        let signature = authority.sign_array(&data);
         Ok(SignedMailKeyListV1 {
             list: self.clone(),
             data,
@@ -1659,9 +1648,9 @@ impl SignedMailKeyListV1 {
                 expected: 64,
                 got: signature.len(),
             })?;
-        VerifyingKey::from_bytes(authority_public)
+        VerifyingKey::from_bytes(Suite::V1, authority_public)
             .map_err(|_| CryptoError::InvalidInput("authority key is invalid".into()))?
-            .verify_strict(data, &Signature::from_bytes(&signature))
+            .verify(data, &signature)
             .map_err(|_| CryptoError::AuthFailed)?;
         Ok(Self {
             list,

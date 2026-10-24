@@ -20,11 +20,7 @@
 //! Suite 1 (bound to the address) is not read: nothing from before carries
 //! over.
 
-use chacha20poly1305::aead::{Aead, KeyInit, Payload};
-use chacha20poly1305::{XChaCha20Poly1305, XNonce};
-use dryoc::rng::copy_randombytes;
-use hkdf::Hkdf;
-use sha2::Sha256;
+use crate::primitives::{Aead, Kdf, Suite};
 use zeroize::Zeroizing;
 
 use crate::error::{CryptoError, Result};
@@ -75,7 +71,7 @@ fn invalid(message: &str) -> CryptoError {
 /// The account's key for mail names, derived from the master key.
 pub fn derive_names_key(master_key: &[u8; 32]) -> Result<Zeroizing<[u8; 32]>> {
     let mut key = Zeroizing::new([0u8; 32]);
-    Hkdf::<Sha256>::new(Some(KEY_SALT), master_key)
+    Kdf::new(Suite::V1, KEY_SALT, master_key)
         .expand(KEY_INFO, key.as_mut_slice())
         .map_err(|_| CryptoError::Backend("mail names key HKDF expand".into()))?;
     Ok(key)
@@ -131,7 +127,7 @@ pub fn seal_name(
     name: &str,
 ) -> Result<Vec<u8>> {
     let mut nonce = [0u8; NONCE_LEN];
-    copy_randombytes(&mut nonce);
+    crate::primitives::random(&mut nonce);
     seal_name_with_nonce(key, binding, kind, id, revision, name, &nonce)
 }
 
@@ -148,14 +144,8 @@ pub fn seal_name_with_nonce(
     let name = check_name(name)?;
     let aad = aad(binding, kind, id, revision)?;
     let padded = PADDING.pad(name.as_bytes())?;
-    let ciphertext = XChaCha20Poly1305::new(key.into())
-        .encrypt(
-            XNonce::from_slice(nonce),
-            Payload {
-                msg: &padded,
-                aad: &aad,
-            },
-        )
+    let ciphertext = Aead::new(Suite::V1, key.as_ref())?
+        .seal_with_nonce(nonce, &aad, &padded)
         .map_err(|_| CryptoError::Backend("mail name seal".into()))?;
     let mut out = Vec::with_capacity(HEADER_LEN + ciphertext.len());
     out.extend_from_slice(MAGIC);
@@ -178,15 +168,14 @@ pub fn open_name(
 ) -> Result<(String, u64)> {
     let revision = inspect_name(sealed)?;
     let aad = aad(binding, kind, id, revision)?;
-    let padded = XChaCha20Poly1305::new(key.into())
-        .decrypt(
-            XNonce::from_slice(&sealed[10 + REVISION_LEN..HEADER_LEN]),
-            Payload {
-                msg: &sealed[HEADER_LEN..],
-                aad: &aad,
-            },
+    let padded = Aead::new(Suite::V1, key.as_ref())?
+        .open_with_nonce(
+            &sealed[10 + REVISION_LEN..HEADER_LEN],
+            &aad,
+            &sealed[HEADER_LEN..],
         )
-        .map_err(|_| CryptoError::AuthFailed)?;
+        .map_err(|_| CryptoError::AuthFailed)
+        .map(crate::primitives::into_vec)?;
     let plain = PADDING.unpad(padded)?;
     let name = String::from_utf8(plain).map_err(|_| invalid("name is not UTF-8"))?;
     check_name(&name)?;

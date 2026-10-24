@@ -13,12 +13,7 @@
 //! The complete fixed header is AEAD associated data. The signature covers the
 //! header and ciphertext, but not its own trailing bytes.
 
-use chacha20poly1305::aead::{Aead, KeyInit, Payload};
-use chacha20poly1305::{XChaCha20Poly1305, XNonce};
-use dryoc::rng::copy_randombytes;
-use ed25519_dalek::{Signature, Signer, SigningKey, VerifyingKey};
-use hkdf::Hkdf;
-use sha2::Sha256;
+use crate::primitives::{Aead, Kdf, SigningKey, Suite, VerifyingKey};
 use zeroize::Zeroizing;
 
 use crate::drive_object::parse_canonical_uuid;
@@ -234,7 +229,7 @@ fn derive_key(file_key: &[u8], context: CollabFrameContextV1) -> Result<Zeroizin
     info.extend_from_slice(&context.key_generation.to_be_bytes());
     info.extend_from_slice(&context.doc_key_id.to_be_bytes());
     info.extend_from_slice(&context.file_id);
-    let hkdf = Hkdf::<Sha256>::new(Some(KEY_DERIVATION_SALT), file_key);
+    let hkdf = Kdf::new(Suite::V1, KEY_DERIVATION_SALT, file_key);
     let mut key = Zeroizing::new([0u8; KEY_LEN]);
     hkdf.expand(&info, key.as_mut_slice())
         .map_err(|_| CryptoError::Backend("collaboration frame HKDF expand".into()))?;
@@ -247,7 +242,7 @@ pub fn seal_unsigned(
     context: CollabFrameContextV1,
 ) -> Result<Vec<u8>> {
     let mut nonce = [0u8; NONCE_LEN];
-    copy_randombytes(&mut nonce);
+    crate::primitives::random(&mut nonce);
     seal_unsigned_with_nonce(plaintext, file_key, context, &nonce)
 }
 
@@ -281,16 +276,10 @@ pub fn seal_unsigned_with_nonce(
     };
     let aad = frame.header();
     let key = derive_key(file_key, context)?;
-    let cipher = XChaCha20Poly1305::new_from_slice(key.as_slice())
+    let cipher = Aead::new(Suite::V1, key.as_slice())
         .map_err(|_| CryptoError::Backend("collaboration frame AEAD init".into()))?;
     frame.ciphertext = cipher
-        .encrypt(
-            XNonce::from_slice(&nonce),
-            Payload {
-                msg: plaintext,
-                aad: &aad,
-            },
-        )
+        .seal_with_nonce(&nonce, &aad, plaintext)
         .map_err(|_| CryptoError::Backend("collaboration frame seal".into()))?;
     Ok(frame.pack())
 }
@@ -323,8 +312,8 @@ pub fn sign(frame: &Frame, signing_seed: &[u8]) -> Result<Vec<u8>> {
     let mut unsigned = frame.clone();
     unsigned.signature = [0u8; SIGNATURE_SIZE];
     let packed = unsigned.pack();
-    let signature = SigningKey::from_bytes(&seed).sign(signing_bytes(&packed)?);
-    attach_signature(&packed, &signature.to_bytes())
+    let signature = SigningKey::from_seed(Suite::V1, &seed).sign(signing_bytes(&packed)?);
+    attach_signature(&packed, &signature)
 }
 
 pub fn verify(packed: &[u8], public_key: &[u8]) -> Result<()> {
@@ -336,10 +325,9 @@ pub fn verify(packed: &[u8], public_key: &[u8]) -> Result<()> {
             got: public_key.len(),
         })?;
     let verifying_key =
-        VerifyingKey::from_bytes(&public_key).map_err(|_| CryptoError::AuthFailed)?;
-    let signature = Signature::from_bytes(&frame.signature);
+        VerifyingKey::from_bytes(Suite::V1, &public_key).map_err(|_| CryptoError::AuthFailed)?;
     verifying_key
-        .verify_strict(signing_bytes(packed)?, &signature)
+        .verify(signing_bytes(packed)?, &frame.signature)
         .map_err(|_| CryptoError::AuthFailed)
 }
 
@@ -357,17 +345,12 @@ pub fn open(
         ));
     }
     let key = derive_key(file_key, frame.context())?;
-    let cipher = XChaCha20Poly1305::new_from_slice(key.as_slice())
+    let cipher = Aead::new(Suite::V1, key.as_slice())
         .map_err(|_| CryptoError::Backend("collaboration frame AEAD init".into()))?;
     let plaintext = cipher
-        .decrypt(
-            XNonce::from_slice(&frame.nonce),
-            Payload {
-                msg: &frame.ciphertext,
-                aad: &frame.header(),
-            },
-        )
-        .map_err(|_| CryptoError::AuthFailed)?;
+        .open_with_nonce(&frame.nonce, &frame.header(), &frame.ciphertext)
+        .map_err(|_| CryptoError::AuthFailed)
+        .map(crate::primitives::into_vec)?;
     Ok((frame, plaintext))
 }
 
@@ -394,7 +377,9 @@ mod tests {
         let unsigned = seal_unsigned(b"collaboration", &file_key, context()).unwrap();
         let frame = Frame::unpack(&unsigned).unwrap();
         let signed = sign(&frame, &seed).unwrap();
-        let public = SigningKey::from_bytes(&seed).verifying_key().to_bytes();
+        let public = SigningKey::from_seed(Suite::V1, &seed)
+            .verifying_key()
+            .to_array::<32>();
         verify(&signed, &public).unwrap();
         assert_eq!(
             open(

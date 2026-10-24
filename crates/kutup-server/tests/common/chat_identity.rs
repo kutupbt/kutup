@@ -11,13 +11,13 @@
 
 use base64::engine::general_purpose::{STANDARD, URL_SAFE_NO_PAD};
 use base64::Engine;
-use ed25519_dalek::{Signer as _, SigningKey};
 use kutup_chat_proto::{
     AccountIdentitySuiteId, AccountManifestDeviceV2, AccountManifestDriveKeysV1, AccountManifestV2,
     AccountRef, DeviceRegistrationV1, DirectChatSuiteId, EcPreKey, KemPreKey,
     RegisterChatDeviceRequestV2, CHAT_DEVICE_HEADER,
 };
 use kutup_crypto::identity::AccountIdentityKeysV1;
+use kutup_crypto::primitives::SigningKey;
 use libsignal_protocol::{kem, IdentityKeyPair, KeyPair};
 use rand::RngCore;
 use reqwest::blocking::{Client, RequestBuilder, Response};
@@ -151,7 +151,7 @@ impl ChatAccount {
         let public = self.authority.verifying_key();
         let mut incarnation = Sha256::new();
         incarnation.update(b"kutup/account-incarnation/v1\0");
-        incarnation.update(public.as_bytes());
+        incarnation.update(public.to_bytes());
         let mut listed: Vec<AccountManifestDeviceV2> = devices
             .iter()
             .map(|device| AccountManifestDeviceV2 {
@@ -175,8 +175,8 @@ impl ChatAccount {
             issued_at: time::OffsetDateTime::now_utc()
                 .format(&time::format_description::well_known::Rfc3339)
                 .unwrap(),
-            authority_key_id: hex::encode(Sha256::digest(public.as_bytes())),
-            self_authority_key: b64(public.as_bytes()),
+            authority_key_id: hex::encode(Sha256::digest(public.to_bytes())),
+            self_authority_key: b64(&public.to_bytes()),
             signature: String::new(),
         };
         self.bind(&mut manifest);
@@ -200,10 +200,7 @@ impl ChatAccount {
 
     /// Signs `manifest` (again) with the account's authority.
     pub fn sign(&self, manifest: &mut AccountManifestV2) {
-        manifest.signature = b64(&self
-            .authority
-            .sign(&manifest.signing_bytes().unwrap())
-            .to_bytes());
+        manifest.signature = b64(&self.authority.sign(&manifest.signing_bytes().unwrap()));
     }
 
     /// `POST /api/chat/manifest` of `manifest` as `by`, as it is.

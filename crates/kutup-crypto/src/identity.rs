@@ -9,9 +9,7 @@
 //! its private key is the 32-byte X-Wing seed the HKDF gives, its public key
 //! the 1216-byte encapsulation key derived from that seed.
 
-use ed25519_dalek::SigningKey;
-use hkdf::Hkdf;
-use sha2::{Digest as _, Sha256};
+use crate::primitives::{hash, Hasher, Kdf, SigningKey, Suite};
 use zeroize::Zeroizing;
 
 use crate::hpke_xwing;
@@ -38,7 +36,7 @@ pub struct AccountIdentityKeysV1 {
 
 impl AccountIdentityKeysV1 {
     pub fn derive(master_key: &[u8; 32]) -> Result<Self> {
-        let hkdf = Hkdf::<Sha256>::new(Some(ACCOUNT_IDENTITY_SALT), master_key);
+        let hkdf = Kdf::new(Suite::V1, ACCOUNT_IDENTITY_SALT, master_key);
         let mut authority_seed = Zeroizing::new([0u8; 32]);
         let mut hpke_seed = Zeroizing::new([0u8; 32]);
         let mut signing_seed = Zeroizing::new([0u8; 32]);
@@ -49,9 +47,9 @@ impl AccountIdentityKeysV1 {
         hkdf.expand(DRIVE_SIGNING_INFO, signing_seed.as_mut_slice())
             .map_err(|_| CryptoError::Backend("Drive signing HKDF expand".into()))?;
 
-        let authority = SigningKey::from_bytes(&authority_seed);
+        let authority = SigningKey::from_seed(Suite::V1, &authority_seed);
         let drive_hpke_public = hpke_xwing::public_key(&hpke_seed);
-        let drive_signing = SigningKey::from_bytes(&signing_seed);
+        let drive_signing = SigningKey::from_seed(Suite::V1, &signing_seed);
 
         Ok(Self {
             authority,
@@ -66,7 +64,7 @@ impl AccountIdentityKeysV1 {
     }
 
     pub fn authority_public_key(&self) -> [u8; 32] {
-        self.authority.verifying_key().to_bytes()
+        self.authority.verifying_key().to_array()
     }
 
     pub fn authority_key_id(&self) -> String {
@@ -95,19 +93,19 @@ impl AccountIdentityKeysV1 {
     }
 
     pub fn drive_signing_public_key(&self) -> [u8; 32] {
-        self.drive_signing.verifying_key().to_bytes()
+        self.drive_signing.verifying_key().to_array()
     }
 }
 
 pub fn authority_key_id_from_public(authority_public_key: &[u8; 32]) -> String {
-    hex::encode(Sha256::digest(authority_public_key))
+    hex::encode(hash(Suite::V1, authority_public_key))
 }
 
 pub fn incarnation_id_from_authority_public(authority_public_key: &[u8; 32]) -> String {
-    let mut hasher = Sha256::new();
+    let mut hasher = Hasher::new(Suite::V1);
     hasher.update(INCARNATION_DOMAIN);
     hasher.update(authority_public_key);
-    hex::encode(hasher.finalize())
+    hex::encode(hasher.finish())
 }
 
 #[cfg(test)]
@@ -134,7 +132,7 @@ mod tests {
         );
         assert_ne!(
             first.drive_hpke_private_key().as_slice(),
-            first.drive_signing_key().to_bytes().as_slice()
+            first.drive_signing_key().seed().as_slice()
         );
     }
 

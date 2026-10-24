@@ -16,9 +16,7 @@
 //! - [`verify_group_key_chain`] checks a whole chain: what senders pin (the
 //!   signers and the list digests) and what the server checks before it
 //!   stores a list.
-
-use ed25519_dalek::{Signature, Signer as _, SigningKey, VerifyingKey};
-use rand::RngCore as _;
+use crate::primitives::{SigningKey, Suite, VerifyingKey};
 use zeroize::Zeroizing;
 
 use crate::account_ref::AccountRef;
@@ -43,12 +41,14 @@ pub struct GroupSigningKey {
 impl GroupSigningKey {
     pub fn generate() -> Self {
         let mut seed = Zeroizing::new([0u8; 32]);
-        rand::rngs::OsRng.fill_bytes(seed.as_mut());
+        crate::primitives::random(seed.as_mut());
         Self::from_seed(&seed)
     }
 
     pub fn from_seed(seed: &[u8; 32]) -> Self {
-        let public_key = SigningKey::from_bytes(seed).verifying_key().to_bytes();
+        let public_key = SigningKey::from_seed(Suite::V1, seed)
+            .verifying_key()
+            .to_array();
         Self {
             seed: Zeroizing::new(*seed),
             public_key,
@@ -56,7 +56,7 @@ impl GroupSigningKey {
     }
 
     pub fn signing_key(&self) -> SigningKey {
-        SigningKey::from_bytes(&self.seed)
+        SigningKey::from_seed(Suite::V1, &self.seed)
     }
 }
 
@@ -160,7 +160,7 @@ impl GroupSignerHandoverV1 {
             sequence,
             previous_list_hash: *previous_list_hash,
             next_signer: *next_signer,
-            signature: outgoing.signing_key().sign(&bytes).to_bytes(),
+            signature: outgoing.signing_key().sign_array(&bytes),
         })
     }
 
@@ -172,9 +172,9 @@ impl GroupSignerHandoverV1 {
             &self.previous_list_hash,
             &self.next_signer,
         );
-        VerifyingKey::from_bytes(outgoing)
+        VerifyingKey::from_bytes(Suite::V1, outgoing)
             .map_err(|_| CryptoError::InvalidInput("signer key is invalid".into()))?
-            .verify_strict(&bytes, &Signature::from_bytes(&self.signature))
+            .verify(&bytes, &self.signature)
             .map_err(|_| CryptoError::AuthFailed)
     }
 

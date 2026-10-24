@@ -25,14 +25,14 @@ mod random;
 mod sign;
 pub mod suite;
 
-pub use aead::{Aead, AeadKey};
+pub use aead::{into_vec, Aead, AeadKey};
 pub use ct::ct_eq;
 pub use hash::{hash, Digest, Hasher};
 pub use hpke::{hpke_open, hpke_public_key, hpke_seal, HpkeSealed};
-pub use kdf::kdf;
-pub use mac::{mac, mac_verify, subkey, Tag};
+pub use kdf::{kdf, Kdf};
+pub use mac::{mac, mac_verify, subkey, Mac, Tag};
 pub use pwhash::{pwhash, PwhashParams};
-pub use random::{random, random_array, random_key};
+pub use random::{random, random_array, random_key, Rng};
 pub use sign::{SigningKey, VerifyingKey};
 pub use suite::{Suite, SuiteParams};
 

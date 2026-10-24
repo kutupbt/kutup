@@ -13,8 +13,8 @@
 //! bridge withholds matters for a bounded time. The device's label is not in
 //! it: it can be renamed.
 
+use crate::primitives::{Suite, VerifyingKey};
 use base64::{engine::general_purpose::STANDARD, Engine as _};
-use ed25519_dalek::{Signature, Signer as _, VerifyingKey};
 
 use crate::drive_object::parse_canonical_uuid;
 use crate::error::{CryptoError, Result};
@@ -82,7 +82,7 @@ pub fn signing_bytes(incarnation_id: &str, statement: &DeviceStatement<'_>) -> R
 /// signature.
 pub fn sign(identity: &AccountIdentityKeysV1, statement: &DeviceStatement<'_>) -> Result<String> {
     let bytes = signing_bytes(&identity.incarnation_id(), statement)?;
-    Ok(STANDARD.encode(identity.authority_signing_key().sign(&bytes).to_bytes()))
+    Ok(STANDARD.encode(identity.authority_signing_key().sign(&bytes)))
 }
 
 /// Checks a statement against the account's authority key (whose hash is the
@@ -146,7 +146,7 @@ pub fn sign_revocation(
         device_public,
         revoked_at_ms,
     )?;
-    Ok(STANDARD.encode(identity.authority_signing_key().sign(&bytes).to_bytes()))
+    Ok(STANDARD.encode(identity.authority_signing_key().sign(&bytes)))
 }
 
 /// Checks a revocation against the account's authority key.
@@ -173,9 +173,9 @@ fn verify_signature(authority_public: &[u8; 32], bytes: &[u8], signature: &str) 
         .filter(|raw| STANDARD.encode(raw) == signature)
         .and_then(|raw| raw.try_into().ok())
         .ok_or_else(|| invalid("signature"))?;
-    VerifyingKey::from_bytes(authority_public)
+    VerifyingKey::from_bytes(Suite::V1, authority_public)
         .map_err(|_| invalid("authority key"))?
-        .verify_strict(bytes, &Signature::from_bytes(&signature))
+        .verify(bytes, &signature)
         .map_err(|_| CryptoError::AuthFailed)
 }
 

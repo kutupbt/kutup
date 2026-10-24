@@ -13,12 +13,8 @@
 //! the AEAD key, bound to the sign-in email) is no longer read or written:
 //! no account from before carries over (the private beta was reset).
 
+use crate::primitives::{Aead, Kdf, Suite};
 use base64::Engine as _;
-use chacha20poly1305::aead::{Aead, KeyInit, Payload};
-use chacha20poly1305::{XChaCha20Poly1305, XNonce};
-use dryoc::rng::copy_randombytes;
-use hkdf::Hkdf;
-use sha2::Sha256;
 use zeroize::Zeroizing;
 
 use crate::error::{CryptoError, Result};
@@ -273,7 +269,7 @@ fn aead_key(
             info.extend_from_slice(binding.as_bytes());
             info.push(object_id.len() as u8);
             info.extend_from_slice(object_id);
-            Hkdf::<Sha256>::new(Some(V2_KEY_SALT), key)
+            Kdf::new(Suite::V1, V2_KEY_SALT, key)
                 .expand(&info, out.as_mut_slice())
                 .map_err(|_| CryptoError::Backend("account-envelope key".into()))?;
         }
@@ -312,7 +308,7 @@ fn check_key(key: &[u8]) -> Result<()> {
 
 fn random_nonce() -> [u8; NONCE_LEN] {
     let mut nonce = [0u8; NONCE_LEN];
-    copy_randombytes(&mut nonce);
+    crate::primitives::random(&mut nonce);
     nonce
 }
 
@@ -426,14 +422,8 @@ pub fn seal_suite(
         ciphertext_len,
     )?;
     let aead = aead_key(suite, key, purpose, &binding, object_id)?;
-    let ciphertext = XChaCha20Poly1305::new(aead.as_slice().into())
-        .encrypt(
-            XNonce::from_slice(&nonce),
-            Payload {
-                msg: &padded,
-                aad: &header,
-            },
-        )
+    let ciphertext = Aead::new(Suite::V1, aead.as_ref())?
+        .seal_with_nonce(&nonce, &header, &padded)
         .map_err(|_| CryptoError::Backend("account-envelope seal".into()))?;
     debug_assert_eq!(ciphertext.len(), ciphertext_len as usize);
     let mut envelope = header;
@@ -468,14 +458,8 @@ pub fn seal_unchecked_for_vectors(
         ciphertext_len,
     )?;
     let aead = aead_key(suite, key, purpose, binding, object_id)?;
-    let ciphertext = XChaCha20Poly1305::new(aead.as_slice().into())
-        .encrypt(
-            XNonce::from_slice(nonce),
-            Payload {
-                msg: plaintext,
-                aad: &header,
-            },
-        )
+    let ciphertext = Aead::new(Suite::V1, aead.as_ref())?
+        .seal_with_nonce(nonce, &header, plaintext)
         .map_err(|_| CryptoError::Backend("account-envelope seal".into()))?;
     let mut envelope = header;
     envelope.extend_from_slice(&ciphertext);
@@ -687,15 +671,10 @@ fn open_any(
         &parsed.header.canonical_binding,
         &parsed.header.object_id,
     )?;
-    let padded = XChaCha20Poly1305::new(aead.as_slice().into())
-        .decrypt(
-            XNonce::from_slice(parsed.nonce),
-            Payload {
-                msg: parsed.ciphertext,
-                aad: parsed.aad,
-            },
-        )
-        .map_err(|_| CryptoError::AuthFailed)?;
+    let padded = Aead::new(Suite::V1, aead.as_ref())?
+        .open_with_nonce(parsed.nonce, parsed.aad, parsed.ciphertext)
+        .map_err(|_| CryptoError::AuthFailed)
+        .map(crate::primitives::into_vec)?;
     let plain = expected_purpose.policy().length.unpad(padded)?;
     Ok((plain, parsed.header.revision))
 }
@@ -804,15 +783,13 @@ mod tests {
             vec![0x42; 32]
         );
         // The wrapping key is never the AEAD key.
-        let raw = XChaCha20Poly1305::new((&[0x24u8; 32]).into());
+        let raw = Aead::new(Suite::V1, [0x24u8; 32].as_ref()).unwrap();
         let header_len = envelope.len() - 48;
         assert!(raw
-            .decrypt(
-                XNonce::from_slice(&[0x11; 24]),
-                Payload {
-                    msg: &envelope[header_len..],
-                    aad: &envelope[..header_len],
-                },
+            .open_with_nonce(
+                &[0x11; 24],
+                &envelope[..header_len],
+                &envelope[header_len..]
             )
             .is_err());
     }

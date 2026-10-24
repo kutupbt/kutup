@@ -4,7 +4,6 @@
 
 use base64::engine::general_purpose::STANDARD;
 use base64::Engine as _;
-use ed25519_dalek::Signer as _;
 use kutup_chat_proto::{
     AccountIdentitySuiteId, AccountManifestDeviceV2, AccountManifestDriveKeysV1,
     AccountManifestHistoryPageV2, AccountManifestV2, AccountPreKeyBundlesResponse, AccountRef,
@@ -315,12 +314,7 @@ impl AccountAuthority {
             signature: String::new(),
         };
         let bytes = manifest.signing_bytes().map_err(ChatError::Invalid)?;
-        manifest.signature = STANDARD.encode(
-            self.identity
-                .authority_signing_key()
-                .sign(&bytes)
-                .to_bytes(),
-        );
+        manifest.signature = STANDARD.encode(self.identity.authority_signing_key().sign(&bytes));
         manifest.verify().map_err(ChatError::Protocol)?;
         Ok(manifest)
     }

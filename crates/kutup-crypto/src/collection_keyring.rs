@@ -165,14 +165,14 @@ pub fn unlock(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use ed25519_dalek::SigningKey;
+    use crate::primitives::{SigningKey, Suite};
 
     const COLLECTION: &str = "11111111-1111-4111-8111-111111111111";
     const OWNER: &str = "22222222-2222-4222-8222-222222222222";
 
     /// A three-epoch history: keys, links and the authority.
     fn history() -> (Vec<[u8; 32]>, Vec<EpochLinkV1>, SigningKey) {
-        let authority = SigningKey::from_bytes(&[9u8; 32]);
+        let authority = SigningKey::from_seed(Suite::V1, &[9u8; 32]);
         let keys = [[1u8; 32], [2u8; 32], [3u8; 32]];
         let mut links = Vec::new();
         let mut previous_hash: Option<String> = None;
@@ -202,7 +202,7 @@ mod tests {
     #[test]
     fn walks_down_to_every_key() {
         let (keys, links, authority) = history();
-        let public = authority.verifying_key().to_bytes();
+        let public = authority.verifying_key().to_array::<32>();
         let unlocked = unlock(&keys[2], COLLECTION, OWNER, &public, &links).unwrap();
         assert_eq!(unlocked.len(), 3);
         for (got, want) in unlocked.iter().zip(&keys) {
@@ -216,7 +216,7 @@ mod tests {
     #[test]
     fn history_verifies_without_keys() {
         let (_, links, authority) = history();
-        let public = authority.verifying_key().to_bytes();
+        let public = authority.verifying_key().to_array::<32>();
         let hashes = verify_history(COLLECTION, OWNER, &public, &links).unwrap();
         assert_eq!(hashes.len(), 3);
         assert_eq!(
@@ -231,7 +231,7 @@ mod tests {
     #[test]
     fn refuses_a_wrong_or_stale_current_key() {
         let (keys, links, authority) = history();
-        let public = authority.verifying_key().to_bytes();
+        let public = authority.verifying_key().to_array::<32>();
         // A removed member's key (epoch 2) does not open epoch 3's history.
         assert!(unlock(&keys[1], COLLECTION, OWNER, &public, &links).is_err());
     }
@@ -239,7 +239,7 @@ mod tests {
     #[test]
     fn refuses_a_tampered_history() {
         let (keys, links, authority) = history();
-        let public = authority.verifying_key().to_bytes();
+        let public = authority.verifying_key().to_array::<32>();
         // Missing an epoch.
         let gap = vec![links[0].clone(), links[2].clone()];
         assert!(unlock(&keys[2], COLLECTION, OWNER, &public, &gap).is_err());
@@ -253,9 +253,9 @@ mod tests {
         )
         .is_err());
         // A statement from another authority.
-        let stranger = SigningKey::from_bytes(&[7u8; 32])
+        let stranger = SigningKey::from_seed(Suite::V1, &[7u8; 32])
             .verifying_key()
-            .to_bytes();
+            .to_array::<32>();
         assert!(unlock(&keys[2], COLLECTION, OWNER, &stranger, &links).is_err());
         // A substituted previous key (sealed correctly, but not the committed one).
         let mut swapped = links.clone();
@@ -285,8 +285,8 @@ mod tests {
 #[cfg(test)]
 mod vector {
     use super::*;
+    use crate::primitives::{SigningKey, Suite};
     use base64::Engine as _;
-    use ed25519_dalek::SigningKey;
 
     /// Prints the `collectionKeyring` vector for `tests/vectors/crypto.json`:
     /// `cargo test -p kutup-crypto print_keyring_vector -- --ignored --nocapture`.
@@ -297,7 +297,7 @@ mod vector {
         let collection = "11111111-1111-4111-8111-111111111111";
         let owner = "22222222-2222-4222-8222-222222222222";
         let authority_seed = [0x5au8; 32];
-        let authority = SigningKey::from_bytes(&authority_seed);
+        let authority = SigningKey::from_seed(Suite::V1, &authority_seed);
         let keys = [[0x61u8; 32], [0x62u8; 32], [0x63u8; 32]];
         let mut previous_hash: Option<String> = None;
         let mut links = Vec::new();
@@ -333,7 +333,7 @@ mod vector {
             serde_json::to_string_pretty(&serde_json::json!({
                 "collectionId": collection,
                 "ownerUserId": owner,
-                "authorityPublicKey": b64(&authority.verifying_key().to_bytes()),
+                "authorityPublicKey": b64(&authority.verifying_key().to_array::<32>()),
                 "keys": keys.iter().map(|k| b64(k)).collect::<Vec<_>>(),
                 "chain": links,
             }))
