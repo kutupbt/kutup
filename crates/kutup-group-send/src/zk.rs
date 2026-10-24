@@ -1,7 +1,7 @@
 //! The zkgroup adapter: the only module that calls libsignal's zkgroup.
-// An adapter (docs/plans/crypto-primitives.md, "Adapters"): zkgroup names its
-// own algorithms; its randomness is drawn from kutup_crypto::primitives.
-#![allow(clippy::disallowed_types, clippy::disallowed_methods)]
+//! zkgroup names its own algorithms inside libsignal; nothing here names one
+//! directly, and its randomness is drawn from kutup_crypto::primitives, so
+//! the crypto lint holds here too.
 
 use std::collections::BTreeSet;
 use std::sync::OnceLock;
