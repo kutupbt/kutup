@@ -3,6 +3,7 @@
 //! This crate contains no cryptographic construction or policy. It converts
 //! JS transport values and delegates to the canonical Rust implementation.
 
+mod blocks;
 #[cfg(feature = "calendar")]
 mod calendar;
 
@@ -107,7 +108,7 @@ struct OpenedCollabFrameView {
     plaintext: String,
 }
 
-fn chat_backup_context(
+pub(crate) fn chat_backup_context(
     account_incarnation_id: &str,
     backup_incarnation_id: &str,
 ) -> Result<ChatBackupContextV1, JsValue> {

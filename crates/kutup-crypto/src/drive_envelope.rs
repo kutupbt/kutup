@@ -29,6 +29,7 @@ const NAME_BUCKET: usize = 256;
 const KEY_DERIVATION_SALT: &[u8] = b"kutup/drive-envelope/key/v1\0";
 const WHITEBOARD_ASSET_BINDING_LABEL: &[u8] = b"kutup/drive-envelope/whiteboard-asset/v2\0";
 const THUMBNAIL_BINDING_LABEL: &[u8] = b"kutup/drive-envelope/thumbnail/v1\0";
+const THUMBNAIL_REVISION_BINDING_LABEL: &[u8] = b"kutup/drive-envelope/thumbnail/v2\0";
 pub const MAX_WHITEBOARD_ASSET_PLAINTEXT_BYTES: usize = 25 * 1024 * 1024;
 pub const MAX_WHITEBOARD_ASSET_ENVELOPE_BYTES: usize =
     HEADER_LEN + MAX_WHITEBOARD_ASSET_PLAINTEXT_BYTES + TAG_LEN;
@@ -333,6 +334,27 @@ impl DriveEnvelopeContextV1 {
             object_id: file_id,
             parent_id: digest[..16].try_into().expect("sixteen-byte digest prefix"),
         })
+    }
+
+    /// A thumbnail of one content revision (docs/plans/drive-block-format.md
+    /// §2): the parent slot commits to `SHA-256(label ‖ variant ‖ revision
+    /// id)`, so a thumbnail of older content no longer opens once the file's
+    /// metadata names a newer revision, and is drawn again.
+    pub fn thumbnail_of_revision(
+        file_id: &str,
+        revision_id: &str,
+        variant: ThumbnailVariant,
+        generation: u32,
+    ) -> Result<Self> {
+        let mut context = Self::thumbnail(file_id, variant, generation)?;
+        let revision_id = parse_canonical_uuid(revision_id, "thumbnail revision")?;
+        let mut digest = Hasher::new(Suite::V1);
+        digest.update(THUMBNAIL_REVISION_BINDING_LABEL);
+        digest.update(variant.as_str().as_bytes());
+        digest.update(revision_id);
+        let digest = digest.finish();
+        context.parent_id = digest[..16].try_into().expect("sixteen-byte digest prefix");
+        Ok(context)
     }
 }
 
