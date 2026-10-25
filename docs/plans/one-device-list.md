@@ -280,3 +280,71 @@ What the note leaves open, as built:
    crypto move, which goes to master and lands before slice 4. Slice 4 is the
    first to need it (the Account app signing removals), so slice 1 leaves it
    in chat-core.
+
+### Slice 2 (collab onto the manifest)
+
+What the note leaves open, as built:
+
+1. **Frame format V3** (`KUTPCF3\0`, in `kutup-crypto::envelope`).
+   - The 80-byte header becomes 88 bytes:
+     - `deviceId` u32 at 36 (1..=127);
+     - 4 reserved zero bytes;
+     - `manifestSequence` u64 at 44: the sender's manifest when it sealed;
+     - then `sequence`, nonce and length, as before.
+   - The signature covers `kutup/collab/frame/v3\0`, the sender's account
+     (`AccountRef::bytes`), the header and the ciphertext.
+   - The account travels beside the frame on every transport (`{ sender,
+     frame }`) rather than in it, so the frame stays fixed-size. A server
+     that lies about the sender breaks the signature.
+2. **Registering an editor or CLI device.**
+   - `POST /api/devices` with `{ kind, name, frameKey, credential }` gives a
+     row with the lowest free id under the caller's sign-in, within
+     `devicesPerAccount`.
+   - The device then publishes the account's next manifest listing itself
+     (`POST /api/chat/manifest`, device-authenticated as `X-Kutup-Device`).
+   - Signing needs only the authority key, so `AccountManifestV3::sign`
+     moves into `kutup-chat-proto`. The crypto WASM exposes "add this device
+     to this head", which builds and signs it.
+   - The editors never load the Chat runtime. The rest of the chat-core
+     crypto move is unchanged.
+3. **No leases or statements.** A device's frames count while:
+   - its row is live;
+   - its sign-in is live;
+   - the head manifest lists it with that frame key.
+   Publishing prunes an unlisted row only once it is older than
+   `deviceListingGraceSeconds` (a site setting, default 600). The grace is
+   for a device between registering and listing itself.
+4. **Sockets.** A browser can't set headers on a WebSocket, so a device asks
+   for a single-use ticket first: `POST /api/device-ticket`, as Chat's
+   `ws-ticket`.
+   - Chat's `chat_ws_tickets` becomes the one `device_tickets`, used by the
+     Chat and collab sockets.
+   - The HTTP collab routes take `X-Kutup-Device`; `?deviceId=` goes.
+5. **The home checks frames.**
+   - A local sender: its row's frame key.
+   - A remote sender: the account's manifest, cached in
+     `remote_account_manifests` (domain, account id, sequence, manifest).
+     - It is fetched through the federated manifest route the first time,
+       and again when a frame names a newer sequence or an unknown device.
+     - It goes through `verify_successor` over the history, never back to
+       an older head.
+     - It is fetched at most once a minute per account.
+   - `remote_collab_devices`, the revocation tables, the announce route and
+     its rate limit all go.
+6. **The update log** names a sender as (`sender_domain`, '' for this
+   server; `sender_account` uuid; `sender_device` 1..=127), unique with
+   `sender_seq` per file. The old `sender_device` bigint and
+   `remote_domain`/`remote_device` columns go. The log is cleared by the
+   migration, as the wipe clears every file.
+7. **Presence** keys a peer by `account#device`. The hub's peers and
+   `close_device` take (account, device).
+8. **Removing a device.**
+   - It is a manifest without the entry; the server prunes the row and
+     closes its sockets.
+   - Signing out publishes the account's manifest without its own device
+     (best effort, as the signed revocation was).
+   - Account → Devices lists every editor and CLI device
+     (`GET /api/devices`: kind, name, sign-in, last seen) and removes one the
+     same way. Slice 4 groups that list by sign-in.
+9. **The CLI** registers as a `cli` device, keeps its credential and frame
+   seed, and publishes its own entry.
