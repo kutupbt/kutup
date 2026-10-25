@@ -14,7 +14,7 @@ use axum::response::Response;
 use base64::engine::general_purpose::STANDARD;
 use base64::Engine as _;
 use kutup_chat_proto::{
-    capability_hash, AccountManifestHistoryPageV2, AccountManifestV2, AccountPreKeyBundlesResponse,
+    capability_hash, AccountManifestHistoryPageV3, AccountManifestV3, AccountPreKeyBundlesResponse,
     AccountRef, AnonymousPreKeyRequestV1, ChatProfileResponse, ChatWsServerMessage,
     DeliveredEnvelope, DeviceListMismatch, FederatedChatTransaction, FederatedSealedBatchItemV1,
     FederatedSealedBatchResponseV1, FederatedSealedBatchV1, FederatedSealedTransactionV1,
@@ -145,7 +145,7 @@ pub async fn fetch_remote_manifest_history(
     state: &AppState,
     account: &AccountRef,
     query: &crate::handlers::chat::ManifestHistoryQuery,
-) -> AppResult<AccountManifestHistoryPageV2> {
+) -> AppResult<AccountManifestHistoryPageV3> {
     let federation = configured_stack(state)?;
     let destination = account.server.as_str();
     let query_string = manifest_history_query_string(query);
@@ -180,7 +180,7 @@ pub async fn fetch_remote_manifest_history(
             format!("remote manifest history returned {}", response.status),
         ));
     }
-    let page: AccountManifestHistoryPageV2 = serde_json::from_slice(&response.body)
+    let page: AccountManifestHistoryPageV3 = serde_json::from_slice(&response.body)
         .map_err(|_| AppError::new(StatusCode::BAD_GATEWAY, "invalid remote manifest history"))?;
     if page.account != *account
         || page.from_sequence != query.page_from_sequence.unwrap_or(query.from_sequence)
@@ -199,7 +199,7 @@ pub async fn fetch_remote_manifest_history(
 pub async fn fetch_remote_manifest(
     state: &AppState,
     account: &AccountRef,
-) -> AppResult<AccountManifestV2> {
+) -> AppResult<AccountManifestV3> {
     let federation = configured_stack(state)?;
     let destination = account.server.as_str();
     let path = format!("/api/fed/chat/accounts/{}/manifest", account.account_id);
@@ -242,7 +242,7 @@ pub async fn fetch_remote_manifest(
             format!("remote manifest proof returned {}", response.status),
         ));
     }
-    let manifest: AccountManifestV2 = serde_json::from_slice(&response.body)
+    let manifest: AccountManifestV3 = serde_json::from_slice(&response.body)
         .map_err(|_| AppError::new(StatusCode::BAD_GATEWAY, "invalid remote manifest response"))?;
     manifest
         .verify()
@@ -2515,7 +2515,7 @@ pub async fn get_manifest_history(
     }
     let mut manifests = values
         .into_iter()
-        .map(serde_json::from_value::<AccountManifestV2>)
+        .map(serde_json::from_value::<AccountManifestV3>)
         .collect::<Result<Vec<_>, _>>()
         .map_err(|error| AppError::internal(format!("stored chat manifest: {error}")))?;
     let next_sequence = if manifests.len() > 64 {
@@ -2524,7 +2524,7 @@ pub async fn get_manifest_history(
     } else {
         None
     };
-    let page = AccountManifestHistoryPageV2 {
+    let page = AccountManifestHistoryPageV3 {
         account: manifests[0].account.clone(),
         from_sequence: page_from,
         to_sequence: query.to_sequence,
@@ -2572,7 +2572,7 @@ pub async fn get_manifest(
             crate::handlers::chat::no_manifest(),
         );
     };
-    let manifest: AccountManifestV2 = serde_json::from_value(value)
+    let manifest: AccountManifestV3 = serde_json::from_value(value)
         .map_err(|error| AppError::internal(format!("stored chat manifest: {error}")))?;
     signed_json(federation, &authenticated, StatusCode::OK, &manifest)
 }

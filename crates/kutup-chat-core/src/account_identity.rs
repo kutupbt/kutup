@@ -23,7 +23,7 @@ use rand::{CryptoRng, Rng};
 use zeroize::Zeroizing;
 
 use kutup_chat_proto::{
-    AccountManifestDeviceV2, AccountManifestV2, ChatProvisionV1, DirectChatSuiteId,
+    AccountManifestDeviceV3, AccountManifestV3, ChatProvisionV1, DirectChatSuiteId,
     ProvisionEnvelopeV1, ProvisioningLinkCodeV1, ProvisioningRelayRequest, PROVISIONING_VERSION,
     REREGISTRATION_DEVICE_ID,
 };
@@ -205,7 +205,7 @@ pub(crate) fn identity_from_parts(public: &str, private: &str) -> Result<Identit
 /// The account's own manifest, as the server serves it: valid, this
 /// account's, and signed by this account's authority.
 pub(crate) fn verify_own_manifest(
-    manifest: &AccountManifestV2,
+    manifest: &AccountManifestV3,
     account: &kutup_chat_proto::AccountRef,
     authority: &AccountAuthority,
 ) -> Result<()> {
@@ -286,13 +286,13 @@ impl Engine {
         };
         let issued_at = issued_at.into();
         let sign =
-            |identity: &IdentityKeyPair, registration_id: u32| -> Result<AccountManifestV2> {
+            |identity: &IdentityKeyPair, registration_id: u32| -> Result<AccountManifestV3> {
                 let manifest = authority.sign_manifest(
                     account.clone(),
                     sequence,
                     previous_hash.clone(),
                     identity,
-                    vec![AccountManifestDeviceV2 {
+                    vec![AccountManifestDeviceV3 {
                         device_id: REREGISTRATION_DEVICE_ID,
                         direct_chat_suite: DirectChatSuiteId::PqxdhTripleRatchetV1,
                         registration_id,
@@ -518,7 +518,7 @@ impl Engine {
                     "this device is not in the account's manifest".into(),
                 ));
             }
-            let kept: Vec<&AccountManifestDeviceV2> = head
+            let kept: Vec<&AccountManifestDeviceV3> = head
                 .devices
                 .iter()
                 .filter(|device| !remove.contains(&device.device_id))
@@ -538,7 +538,7 @@ impl Engine {
                     signed_pre_key: rotation.signed_pre_key.clone(),
                     last_resort_kyber_pre_key: rotation.last_resort_kyber_pre_key.clone(),
                 });
-                listed.push(AccountManifestDeviceV2 {
+                listed.push(AccountManifestDeviceV3 {
                     device_id: device.device_id,
                     direct_chat_suite: device.direct_chat_suite,
                     registration_id,
@@ -763,7 +763,7 @@ impl Engine {
     /// After this device's identity changed: open the session again on the
     /// new identity and pin the account's manifest that lists it. The server
     /// cleared the one-time keys; the next prekey maintenance refills them.
-    async fn reopen_after_identity_change(&mut self, manifest: &AccountManifestV2) -> Result<()> {
+    async fn reopen_after_identity_change(&mut self, manifest: &AccountManifestV3) -> Result<()> {
         let db = Rc::clone(self.session.db());
         let user = self.session.user().to_string();
         let device_id = self.session.device_id();
@@ -802,7 +802,7 @@ mod tests {
         AccountAuthority::derive(&[person.authority_seed; 32]).unwrap()
     }
 
-    fn head(world: &Rc<World>, account: &str) -> AccountManifestV2 {
+    fn head(world: &Rc<World>, account: &str) -> AccountManifestV3 {
         block_on(world.client(account).fetch_manifest(account))
             .unwrap()
             .unwrap()

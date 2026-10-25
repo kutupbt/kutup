@@ -13,7 +13,7 @@
 use crate::error::Result;
 use async_trait::async_trait;
 use kutup_chat_proto::{
-    AccountManifestHistoryPageV2, AccountManifestPublicationV2, AccountManifestV2,
+    AccountManifestHistoryPageV3, AccountManifestPublicationV3, AccountManifestV3,
     AccountPreKeyBundlesResponse, ChatProfileResponse, DeviceListMismatch, MailboxPage,
     OwnChatProfileResponse, PreKeyCountResponse, PutChatProfileRequest,
     RegisterChatDeviceRequestV2, ReplenishKeysRequest, SendMessagesRequest,
@@ -215,7 +215,7 @@ pub trait ChatTransport {
     }
 
     /// Latest account-signed device manifest. `None` maps the endpoint's 404.
-    async fn fetch_manifest(&self, _account: &str) -> Result<Option<AccountManifestV2>> {
+    async fn fetch_manifest(&self, _account: &str) -> Result<Option<AccountManifestV3>> {
         Err(crate::ChatError::Transport(
             "transport does not implement device manifests".into(),
         ))
@@ -228,7 +228,7 @@ pub trait ChatTransport {
         _from_sequence: u64,
         _to_sequence: u64,
         _page_from_sequence: u64,
-    ) -> Result<AccountManifestHistoryPageV2> {
+    ) -> Result<AccountManifestHistoryPageV3> {
         Err(crate::ChatError::Transport(
             "transport does not implement account manifest history".into(),
         ))
@@ -338,8 +338,8 @@ pub trait ChatTransport {
     /// Publish the caller's next account-signed manifest.
     async fn publish_manifest(
         &self,
-        _manifest: &AccountManifestV2,
-    ) -> Result<AccountManifestPublicationV2> {
+        _manifest: &AccountManifestV3,
+    ) -> Result<AccountManifestPublicationV3> {
         Err(crate::ChatError::Transport(
             "transport does not implement device manifests".into(),
         ))

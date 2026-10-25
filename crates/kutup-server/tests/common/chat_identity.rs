@@ -12,7 +12,7 @@
 use base64::engine::general_purpose::{STANDARD, URL_SAFE_NO_PAD};
 use base64::Engine;
 use kutup_chat_proto::{
-    AccountIdentitySuiteId, AccountManifestDeviceV2, AccountManifestDriveKeysV1, AccountManifestV2,
+    AccountIdentitySuiteId, AccountManifestDeviceV3, AccountManifestDriveKeysV1, AccountManifestV3,
     AccountRef, DeviceRegistrationV1, DirectChatSuiteId, EcPreKey, KemPreKey,
     RegisterChatDeviceRequestV2, CHAT_DEVICE_HEADER,
 };
@@ -55,7 +55,7 @@ pub struct ChatAccount {
     pub identity: IdentityKeyPair,
     pub devices: Vec<ChatDevice>,
     /// The account's current V2 manifest (none before its first device).
-    pub head: Option<AccountManifestV2>,
+    pub head: Option<AccountManifestV3>,
 }
 
 fn b64(bytes: &[u8]) -> String {
@@ -148,14 +148,14 @@ impl ChatAccount {
     }
 
     /// The account's next manifest listing `devices`, signed by its authority.
-    pub fn next_manifest(&self, devices: &[&ChatDevice]) -> AccountManifestV2 {
+    pub fn next_manifest(&self, devices: &[&ChatDevice]) -> AccountManifestV3 {
         let public = self.authority.verifying_key();
         let mut incarnation = Hasher::new(Suite::V1);
         incarnation.update(b"kutup/account-incarnation/v1\0");
         incarnation.update(public.to_bytes());
-        let mut listed: Vec<AccountManifestDeviceV2> = devices
+        let mut listed: Vec<AccountManifestDeviceV3> = devices
             .iter()
-            .map(|device| AccountManifestDeviceV2 {
+            .map(|device| AccountManifestDeviceV3 {
                 device_id: device.id,
                 direct_chat_suite: DirectChatSuiteId::PqxdhTripleRatchetV1,
                 registration_id: device.registration_id,
@@ -163,7 +163,7 @@ impl ChatAccount {
             })
             .collect();
         listed.sort_by_key(|device| device.device_id);
-        let mut manifest = AccountManifestV2 {
+        let mut manifest = AccountManifestV3 {
             manifest_version: 2,
             account: self.account.clone(),
             incarnation_id: hex::encode(incarnation.finish()),
@@ -188,7 +188,7 @@ impl ChatAccount {
 
     /// The account identity's signature over `manifest`'s authority,
     /// incarnation and account (its identity binding).
-    pub fn bind(&self, manifest: &mut AccountManifestV2) {
+    pub fn bind(&self, manifest: &mut AccountManifestV3) {
         manifest.identity_binding = b64(&self
             .identity
             .private_key()
@@ -200,7 +200,7 @@ impl ChatAccount {
     }
 
     /// Signs `manifest` (again) with the account's authority.
-    pub fn sign(&self, manifest: &mut AccountManifestV2) {
+    pub fn sign(&self, manifest: &mut AccountManifestV3) {
         manifest.signature = b64(&self.authority.sign(&manifest.signing_bytes().unwrap()));
     }
 
@@ -210,7 +210,7 @@ impl ChatAccount {
         c: &Client,
         base: &str,
         by: &ChatDevice,
-        manifest: &AccountManifestV2,
+        manifest: &AccountManifestV3,
     ) -> Response {
         by.auth(c.post(format!("{base}/api/chat/manifest")))
             .bearer_auth(&self.token)
@@ -363,7 +363,7 @@ impl ChatAccount {
 
     /// The next manifest listing every device in `self.devices`, published
     /// by `by`.
-    pub fn publish(&mut self, c: &Client, base: &str, by: &ChatDevice) -> AccountManifestV2 {
+    pub fn publish(&mut self, c: &Client, base: &str, by: &ChatDevice) -> AccountManifestV3 {
         let devices: Vec<&ChatDevice> = self.devices.iter().collect();
         let manifest = self.next_manifest(&devices);
         let r = self.post_manifest(c, base, by, &manifest);

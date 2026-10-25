@@ -31,7 +31,7 @@ use crate::session::{
 };
 use crate::transport::{ChatTransport, SendOutcome};
 use kutup_chat_proto::{
-    AccountManifestV2, AccountRef, ChatContent, ContactControlBody, ContactState, OutgoingEnvelope,
+    AccountManifestV3, AccountRef, ChatContent, ContactControlBody, ContactState, OutgoingEnvelope,
     PreKeyCountResponse, SealedMessageSubmissionV1, SealedOutgoingEnvelopeV1, SendMessagesRequest,
 };
 
@@ -1170,7 +1170,7 @@ impl Engine {
         &mut self,
         authority: &AccountAuthority,
         issued_at: impl Into<String>,
-    ) -> Result<AccountManifestV2> {
+    ) -> Result<AccountManifestV3> {
         let transport = Rc::clone(&self.transport);
         let current = transport.fetch_manifest(self.session.user()).await?;
         let canonical_self = self.self_account()?;
@@ -1272,7 +1272,7 @@ impl Engine {
         authority: &AccountAuthority,
         device_id: u32,
         issued_at: impl Into<String>,
-    ) -> Result<AccountManifestV2> {
+    ) -> Result<AccountManifestV3> {
         if device_id == self.session.device_id() {
             return Err(ChatError::Invalid(
                 "the current device cannot revoke itself from the account manifest".into(),
@@ -3122,8 +3122,8 @@ impl Engine {
     pub(crate) async fn accept_current_manifest_evidence(
         &mut self,
         account: &str,
-        manifest: &AccountManifestV2,
-    ) -> Result<AccountManifestV2> {
+        manifest: &AccountManifestV3,
+    ) -> Result<AccountManifestV3> {
         let prior_manifest = self.session.manifest_trust(account).await?;
         let manifest_trust =
             match verify_manifest_evidence(account, manifest, prior_manifest.as_ref()) {
@@ -3158,7 +3158,7 @@ impl Engine {
     async fn recover_manifest_history(
         &self,
         peer: &str,
-        pending_manifest: &AccountManifestV2,
+        pending_manifest: &AccountManifestV3,
         prior_trust: Option<&crate::ManifestTrust>,
     ) -> Result<(
         crate::ManifestTrust,
@@ -3205,7 +3205,7 @@ impl Engine {
     async fn quarantine_manifest_failure(
         &mut self,
         peer: &str,
-        pending_manifest: Option<&AccountManifestV2>,
+        pending_manifest: Option<&AccountManifestV3>,
         prior_trust: Option<&crate::ManifestTrust>,
         error: &ChatError,
     ) -> Result<()> {

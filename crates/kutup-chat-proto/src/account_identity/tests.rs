@@ -18,29 +18,51 @@ fn authority() -> ed25519_dalek::SigningKey {
     ed25519_dalek::SigningKey::from_bytes(&[7; 32])
 }
 
-fn device(device_id: u32, registration_id: u32) -> AccountManifestDeviceV2 {
-    AccountManifestDeviceV2 {
+fn session(byte: u8) -> String {
+    hex::encode([byte; 32])
+}
+
+fn device(device_id: u32, registration_id: u32) -> AccountManifestDeviceV3 {
+    AccountManifestDeviceV3::chat(
         device_id,
-        direct_chat_suite: DirectChatSuiteId::PqxdhTripleRatchetV1,
+        DirectChatSuiteId::PqxdhTripleRatchetV1,
         registration_id,
-        mls: None,
+        session(0x51),
+    )
+}
+
+fn frame_key(byte: u8) -> String {
+    b64(&ed25519_dalek::SigningKey::from_bytes(&[byte; 32])
+        .verifying_key()
+        .to_bytes())
+}
+
+fn editor(device_id: u32) -> AccountManifestDeviceV3 {
+    AccountManifestDeviceV3 {
+        device_id,
+        kind: DeviceKind::Editor,
+        chat: None,
+        frame_key: Some(frame_key(device_id as u8)),
+        session: session(0x51),
     }
 }
 
-fn sign(manifest: &mut AccountManifestV2) {
-    manifest.signature = b64(&authority()
-        .sign(&manifest.signing_bytes().unwrap())
-        .to_bytes());
+/// Signs the manifest; one with no signing bytes (a bad device) is left
+/// unsigned, and can't verify either way.
+fn sign(manifest: &mut AccountManifestV3) {
+    if let Ok(bytes) = manifest.signing_bytes() {
+        manifest.signature = b64(&authority().sign(&bytes).to_bytes());
+    }
 }
 
-fn manifest(devices: Vec<AccountManifestDeviceV2>) -> AccountManifestV2 {
+fn manifest(devices: Vec<AccountManifestDeviceV3>) -> AccountManifestV3 {
     let public = authority().verifying_key().to_bytes();
     let mut incarnation = Sha256::new();
     incarnation.update(b"kutup/account-incarnation/v1\0");
     incarnation.update(public);
     let drive_signing = ed25519_dalek::SigningKey::from_bytes(&[8; 32]);
-    let mut manifest = AccountManifestV2 {
-        manifest_version: ACCOUNT_MANIFEST_V2_VERSION,
+    let mut manifest = AccountManifestV3 {
+        manifest_version: ACCOUNT_MANIFEST_V3_VERSION,
         account: AccountRef::new("example.test", "0b6b5e0c-4c1e-4b8e-9c2d-6a1f3e5d7c9b").unwrap(),
         incarnation_id: hex::encode(incarnation.finalize()),
         sequence: 1,
@@ -62,15 +84,15 @@ fn manifest(devices: Vec<AccountManifestDeviceV2>) -> AccountManifestV2 {
     manifest
 }
 
-fn two_devices() -> AccountManifestV2 {
+fn two_devices() -> AccountManifestV3 {
     manifest(vec![device(1, 10), device(2, 20)])
 }
 
 #[test]
-fn manifest_v2_verifies_and_binds_every_field() {
+fn manifest_v3_verifies_and_binds_every_field() {
     let good = two_devices();
     good.verify().unwrap();
-    assert_eq!(good.device(2).unwrap().registration_id, 20);
+    assert_eq!(good.chat_device(2).unwrap().registration_id, 20);
     assert!(good.device(3).is_none());
 
     // Every vouched-for field is under the signature.
@@ -78,8 +100,23 @@ fn manifest_v2_verifies_and_binds_every_field() {
     other_identity.identity_key = identity(4);
     assert!(other_identity.verify().is_err());
     let mut other_registration = good.clone();
-    other_registration.devices[1].registration_id = 21;
+    other_registration.devices[1]
+        .chat
+        .as_mut()
+        .unwrap()
+        .registration_id = 21;
     assert!(other_registration.verify().is_err());
+    let mixed = manifest(vec![device(1, 10), editor(2)]);
+    mixed.verify().unwrap();
+    let mut other_frame_key = mixed.clone();
+    other_frame_key.devices[1].frame_key = Some(frame_key(9));
+    assert!(other_frame_key.verify().is_err());
+    let mut other_session = mixed.clone();
+    other_session.devices[1].session = session(0x52);
+    assert!(other_session.verify().is_err());
+    let mut other_kind = mixed.clone();
+    other_kind.devices[1].kind = DeviceKind::Cli;
+    assert!(other_kind.verify().is_err());
     let mut other_sequence = good.clone();
     other_sequence.sequence = 2;
     other_sequence.previous_hash = Some(good.manifest_hash().unwrap());
@@ -87,7 +124,7 @@ fn manifest_v2_verifies_and_binds_every_field() {
 }
 
 #[test]
-fn manifest_v2_refuses_bad_shapes_even_when_signed() {
+fn manifest_v3_refuses_bad_shapes_even_when_signed() {
     let mut v1 = two_devices();
     v1.manifest_version = 1;
     sign(&mut v1);
@@ -115,12 +152,83 @@ fn manifest_v2_refuses_bad_shapes_even_when_signed() {
 
     let empty = manifest(Vec::new());
     assert!(empty.verify().is_err());
+
+    // Up to 127 entries, of any kind; none need take Chat.
+    manifest(vec![editor(1)]).verify().unwrap();
+    manifest((1..=127).map(editor).collect()).verify().unwrap();
 }
 
 #[test]
-fn manifest_v2_domain_differs_from_v1() {
+fn each_kind_carries_its_keys() {
+    let cli = |chat: Option<ChatDeviceKeysV3>, frame: Option<String>| AccountManifestDeviceV3 {
+        device_id: 1,
+        kind: DeviceKind::Cli,
+        chat,
+        frame_key: frame,
+        session: session(0x51),
+    };
+    let keys = Some(ChatDeviceKeysV3 {
+        direct_chat_suite: DirectChatSuiteId::PqxdhTripleRatchetV1,
+        registration_id: 10,
+    });
+    // A Chat device with a frame key too, and a CLI that takes Chat.
+    let mut chat = device(1, 10);
+    chat.frame_key = Some(frame_key(1));
+    for good in [
+        chat,
+        cli(keys, Some(frame_key(1))),
+        cli(None, Some(frame_key(1))),
+    ] {
+        good.validate().unwrap();
+        manifest(vec![good]).verify().unwrap();
+    }
+    let mut no_chat = device(1, 10);
+    no_chat.chat = None;
+    let mut editor_with_chat = editor(1);
+    editor_with_chat.chat = keys;
+    let mut no_frame = editor(1);
+    no_frame.frame_key = None;
+    let mut not_ed25519 = editor(1);
+    // The identity point: small order.
+    let mut identity_point = [0; 32];
+    identity_point[0] = 1;
+    not_ed25519.frame_key = Some(b64(&identity_point));
+    let mut short_session = editor(1);
+    short_session.session = hex::encode([1; 31]);
+    for bad in [
+        no_chat,
+        editor_with_chat,
+        no_frame,
+        not_ed25519,
+        short_session,
+        cli(keys, None),
+    ] {
+        assert!(bad.validate().is_err(), "{bad:?}");
+        assert!(manifest(vec![bad]).signing_bytes().is_err());
+    }
+    // The kinds' names, on the wire and in the server's column.
+    for kind in [DeviceKind::Chat, DeviceKind::Editor, DeviceKind::Cli] {
+        let json = serde_json::to_value(kind).unwrap();
+        assert_eq!(json, kind.as_str());
+        assert_eq!(DeviceKind::parse(kind.as_str()).unwrap(), kind);
+    }
+    assert!(DeviceKind::parse("mls").is_err());
+}
+
+#[test]
+fn the_device_session_hash_is_pinned() {
+    assert_eq!(
+        device_session_hash(&[7; 16]),
+        hex::encode(Sha256::digest(
+            [b"kutup/account/device-session/v1\0".as_slice(), &[7; 16]].concat()
+        ))
+    );
+}
+
+#[test]
+fn manifest_v3_domain_differs_from_v2() {
     let bytes = two_devices().signing_bytes().unwrap();
-    assert!(bytes.starts_with(b"kutup/account-manifest/v2\0"));
+    assert!(bytes.starts_with(b"kutup/account/manifest/v3\0"));
 }
 
 #[test]
@@ -130,7 +238,7 @@ fn history_page_follows_the_hash_chain() {
     second.sequence = 2;
     second.previous_hash = Some(first.manifest_hash().unwrap());
     sign(&mut second);
-    let page = AccountManifestHistoryPageV2 {
+    let page = AccountManifestHistoryPageV3 {
         account: first.account.clone(),
         from_sequence: 1,
         to_sequence: 2,
@@ -142,7 +250,7 @@ fn history_page_follows_the_hash_chain() {
     let mut forked = second.clone();
     forked.previous_hash = Some(hex::encode([1; 32]));
     sign(&mut forked);
-    let page = AccountManifestHistoryPageV2 {
+    let page = AccountManifestHistoryPageV3 {
         manifests: vec![first, forked],
         ..page
     };
@@ -497,7 +605,7 @@ fn registration_is_a_link_or_a_reregistration() {
 }
 
 #[test]
-fn reregistration_lists_this_device_alone() {
+fn reregistration_lists_this_device_as_its_one_chat_device() {
     let alone = || DeviceRegistrationV1::Reregistration {
         manifest: Box::new(manifest(vec![device(1, 10)])),
     };
@@ -513,15 +621,35 @@ fn reregistration_lists_this_device_alone() {
     other_identity.identity_key = identity(4);
     assert!(other_identity.validate().is_err());
 
-    for devices in [vec![device(1, 10), device(2, 20)], vec![device(2, 10)]] {
+    // The account's other devices stay; this one takes the lowest id they
+    // leave free.
+    for devices in [
+        vec![editor(1), device(2, 10)],
+        vec![editor(1), device(2, 10), editor(3)],
+        vec![device(1, 10), editor(2)],
+    ] {
+        registration(DeviceRegistrationV1::Reregistration {
+            manifest: Box::new(manifest(devices)),
+        })
+        .validate()
+        .unwrap();
+    }
+    for devices in [
+        vec![device(1, 10), device(2, 20)],
+        vec![device(2, 10)],
+        vec![editor(1), device(3, 10)],
+        vec![editor(1)],
+    ] {
         let bad = registration(DeviceRegistrationV1::Reregistration {
             manifest: Box::new(manifest(devices)),
         });
         assert!(bad.validate().is_err());
     }
+    assert_eq!(reregistration_device_id(&[]), 1);
+    assert_eq!(reregistration_device_id(&[1, 2, 4]), 3);
 }
 
-fn successor(head: &AccountManifestV2, devices: Vec<AccountManifestDeviceV2>) -> AccountManifestV2 {
+fn successor(head: &AccountManifestV3, devices: Vec<AccountManifestDeviceV3>) -> AccountManifestV3 {
     let mut next = manifest(devices);
     next.sequence = head.sequence + 1;
     next.previous_hash = Some(head.manifest_hash().unwrap());
@@ -576,7 +704,7 @@ fn successors_continue_the_chain() {
 fn history_page_pagination_and_authority() {
     let first = two_devices();
     let second = successor(&first, vec![device(1, 10)]);
-    let page = AccountManifestHistoryPageV2 {
+    let page = AccountManifestHistoryPageV3 {
         account: first.account.clone(),
         from_sequence: 1,
         to_sequence: 3,
@@ -585,7 +713,7 @@ fn history_page_pagination_and_authority() {
     };
     page.validate().unwrap();
     for next_sequence in [None, Some(2), Some(4)] {
-        let bad = AccountManifestHistoryPageV2 {
+        let bad = AccountManifestHistoryPageV3 {
             next_sequence,
             ..page.clone()
         };
@@ -599,18 +727,24 @@ fn history_page_pagination_and_authority() {
 }
 
 #[test]
-fn manifest_v2_vector_is_pinned() {
+fn manifest_v3_vector_is_pinned() {
     // The signing bytes and hash of the fixed test manifest: a change to the
     // encoding is a deliberate format change, never an accident.
-    let manifest = two_devices();
+    let mut cli = editor(3);
+    cli.kind = DeviceKind::Cli;
+    cli.chat = Some(ChatDeviceKeysV3 {
+        direct_chat_suite: DirectChatSuiteId::PqxdhTripleRatchetV1,
+        registration_id: 30,
+    });
+    let manifest = manifest(vec![device(1, 10), editor(2), cli]);
     let bytes = manifest.signing_bytes().unwrap();
     assert_eq!(hex::encode(Sha256::digest(&bytes)), SIGNING_BYTES_SHA256);
     assert_eq!(manifest.manifest_hash().unwrap(), MANIFEST_HASH);
 }
 
 const SIGNING_BYTES_SHA256: &str =
-    "77b135457250c2cd79ae2a85224300e187ddf20cb76fb7d5ff7f82d251a27420";
-const MANIFEST_HASH: &str = "b66ce32c6f4006b607423f90734c61f1de0c59e021573050df4b3da1e5cda15c";
+    "7e1eeb0f633c38d76e02e931cc30540c01ba6fa92babcd588d2a1cde2f383381";
+const MANIFEST_HASH: &str = "172b87fd0ff206b5ec35703f8310a9ccd21b7238aa0fedfc9052b485578df6eb";
 
 #[test]
 fn account_identity_sync_body() {

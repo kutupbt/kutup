@@ -23,7 +23,7 @@ struct RegistrationServer {
     fail_next: Cell<bool>,
     assigned: u32,
     /// The account's manifest, once a re-registration published it.
-    manifest: RefCell<Option<kutup_chat_proto::AccountManifestV2>>,
+    manifest: RefCell<Option<kutup_chat_proto::AccountManifestV3>>,
 }
 
 #[async_trait(?Send)]
@@ -47,7 +47,7 @@ impl ChatTransport for RegistrationServer {
     async fn fetch_manifest(
         &self,
         _account: &str,
-    ) -> Result<Option<kutup_chat_proto::AccountManifestV2>> {
+    ) -> Result<Option<kutup_chat_proto::AccountManifestV3>> {
         Ok(self.manifest.borrow().clone())
     }
 

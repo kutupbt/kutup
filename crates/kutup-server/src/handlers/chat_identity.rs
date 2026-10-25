@@ -12,7 +12,7 @@ use base64::engine::general_purpose::STANDARD;
 use base64::Engine as _;
 use kutup_chat_proto::{
     decode_identity_key, parse_device_header, repeated_use_keys_digest,
-    AccountIdentityDistributionRequest, AccountManifestPublicationV2, AccountManifestV2,
+    AccountIdentityDistributionRequest, AccountManifestPublicationV3, AccountManifestV3,
     ChatKeysCheckRequest, DeviceListMismatch, DistributionError, EcPreKey, KemPreKey,
     CHAT_DEVICE_HEADER, DEVICE_CREDENTIAL_LEN,
 };
@@ -197,7 +197,7 @@ pub(crate) fn verify_prekey_signatures(
 /// (this authority, incarnation and account). The authority's signature
 /// alone would let anyone list someone's identity under an authority of
 /// their own.
-pub(crate) fn identity_binding_holds(manifest: &AccountManifestV2) -> bool {
+pub(crate) fn identity_binding_holds(manifest: &AccountManifestV3) -> bool {
     let Ok(bytes) = manifest.identity_binding_bytes() else {
         return false;
     };
@@ -213,7 +213,7 @@ pub(crate) fn identity_binding_holds(manifest: &AccountManifestV2) -> bool {
 
 /// The manifest's own checks, its identity binding and an `issuedAt` not
 /// from the future.
-pub(crate) fn validate_manifest_v2(manifest: &AccountManifestV2) -> AppResult<()> {
+pub(crate) fn validate_manifest_v2(manifest: &AccountManifestV3) -> AppResult<()> {
     if manifest.sequence > i64::MAX as u64 {
         return Err(AppError::bad_request("manifest sequence is too large"));
     }
@@ -307,7 +307,7 @@ pub async fn check_keys(
     operation_id = "distributeChatAccountIdentity",
     request_body = AccountIdentityDistributionRequest,
     responses(
-        (status = 200, description = "Distributed", body = AccountManifestPublicationV2),
+        (status = 200, description = "Distributed", body = AccountManifestPublicationV3),
         (status = 400, description = "Malformed, or a key not signed by the identity"),
         (status = 401, description = "Missing or wrong device credential"),
         (status = 409, description = "Devices missing or extra, or a manifest conflict", body = DeviceListMismatch),
@@ -384,7 +384,7 @@ pub async fn distribute_identity(
         )
     {
         tx.rollback().await?;
-        return Ok(Json(AccountManifestPublicationV2 {
+        return Ok(Json(AccountManifestPublicationV3 {
             manifest: request.manifest,
         })
         .into_response());
@@ -525,7 +525,7 @@ pub async fn distribute_identity(
         state.chat_hub.close_device(user_id, device_id);
     }
     state.chat_hub.notify_devices_changed(user_id);
-    Ok(Json(AccountManifestPublicationV2 {
+    Ok(Json(AccountManifestPublicationV3 {
         manifest: request.manifest,
     })
     .into_response())

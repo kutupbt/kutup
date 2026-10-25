@@ -28,8 +28,8 @@ use uuid::Uuid;
 
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
 use kutup_chat_proto::{
-    capability_hash, constant_time_capability_hash_eq, AccountManifestHistoryPageV2,
-    AccountManifestPublicationV2, AccountManifestV2, AccountPreKeyBundlesResponse, AccountRef,
+    capability_hash, constant_time_capability_hash_eq, AccountManifestHistoryPageV3,
+    AccountManifestPublicationV3, AccountManifestV3, AccountPreKeyBundlesResponse, AccountRef,
     AckRequest, AnonymousPreKeyRequestV1, ChatProfileResponse, ChatWsClientMessage,
     ChatWsServerMessage, ChatWsTicketResponse, DeliveredEnvelope, DeviceListMismatch,
     DevicePreKeyBundleV2, DirectChatSuiteId, EcPreKey, EnvelopeType, KemPreKey, MailboxPage,
@@ -627,7 +627,7 @@ pub(crate) async fn store_manifest_v2(
     tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
     state: &AppState,
     user_id: Uuid,
-    manifest: &AccountManifestV2,
+    manifest: &AccountManifestV3,
     identity: IdentityChange,
 ) -> AppResult<bool> {
     let manifest_hash = manifest.manifest_hash().map_err(AppError::bad_request)?;
@@ -672,7 +672,7 @@ pub(crate) async fn store_manifest_v2(
     .bind(user_id)
     .fetch_optional(&mut **tx)
     .await?;
-    let head: Option<AccountManifestV2> = match current {
+    let head: Option<AccountManifestV3> = match current {
         None => None,
         Some((version, current_hash, current_value)) => {
             if manifest.sequence == version as u64 && manifest_hash == current_hash {
@@ -771,10 +771,10 @@ pub(crate) async fn store_manifest_v2(
     post,
     path = "/api/chat/manifest",
     tag = "chat",
-    operation_id = "publishChatAccountManifestV2",
-    request_body = AccountManifestV2,
+    operation_id = "publishChatAccountManifestV3",
+    request_body = AccountManifestV3,
     responses(
-        (status = 200, description = "Published manifest", body = AccountManifestPublicationV2),
+        (status = 200, description = "Published manifest", body = AccountManifestPublicationV3),
         (status = 400, description = "Malformed or invalid signature"),
         (status = 401, description = "Missing or wrong device credential"),
         (status = 409, description = "Sequence, chain, authority, identity or device-set conflict"),
@@ -785,7 +785,7 @@ pub async fn publish_manifest(
     State(state): State<AppState>,
     auth: AuthUser,
     headers: HeaderMap,
-    Json(manifest): Json<AccountManifestV2>,
+    Json(manifest): Json<AccountManifestV3>,
 ) -> AppResult<Response> {
     let user_id = trusted_uuid(&auth.user_id)?;
     crate::handlers::chat_identity::authenticated_device(&state.pool, &headers, user_id).await?;
@@ -842,7 +842,7 @@ pub async fn publish_manifest(
     if stored {
         state.chat_hub.notify_devices_changed(user_id);
     }
-    Ok(Json(AccountManifestPublicationV2 { manifest }).into_response())
+    Ok(Json(AccountManifestPublicationV3 { manifest }).into_response())
 }
 
 /// `GET /api/chat/accounts/{accountId}/manifest?server=` — fetch an
@@ -852,13 +852,13 @@ pub async fn publish_manifest(
     get,
     path = "/api/chat/accounts/{accountId}/manifest",
     tag = "chat",
-    operation_id = "getChatAccountManifestV2",
+    operation_id = "getChatAccountManifestV3",
     params(
         ("accountId" = String, Path, description = "Permanent account id"),
         AccountServerQuery
     ),
     responses(
-        (status = 200, description = "Latest signed manifest", body = AccountManifestV2),
+        (status = 200, description = "Latest signed manifest", body = AccountManifestV3),
         (status = 404, description = "Unknown user or no manifest"),
     ),
     security(("bearerAuth" = []))
@@ -892,13 +892,13 @@ pub(crate) fn no_manifest() -> AppError {
 pub(crate) async fn load_account_manifest(
     state: &AppState,
     user_id: Uuid,
-) -> AppResult<AccountManifestV2> {
+) -> AppResult<AccountManifestV3> {
     let value: Option<serde_json::Value> =
         sqlx::query_scalar("SELECT manifest FROM chat_device_manifests WHERE user_id = $1")
             .bind(user_id)
             .fetch_optional(&state.pool)
             .await?;
-    let manifest: AccountManifestV2 = serde_json::from_value(value.ok_or_else(no_manifest)?)
+    let manifest: AccountManifestV3 = serde_json::from_value(value.ok_or_else(no_manifest)?)
         .map_err(|error| AppError::internal(format!("stored chat manifest is invalid: {error}")))?;
     manifest
         .verify()
@@ -963,7 +963,7 @@ pub async fn get_manifest_history(
     let mut manifests = values
         .into_iter()
         .map(|value| {
-            serde_json::from_value::<AccountManifestV2>(value)
+            serde_json::from_value::<AccountManifestV3>(value)
                 .map_err(|error| AppError::internal(format!("stored chat manifest: {error}")))
         })
         .collect::<AppResult<Vec<_>>>()?;
@@ -980,7 +980,7 @@ pub async fn get_manifest_history(
     } else {
         None
     };
-    let page = AccountManifestHistoryPageV2 {
+    let page = AccountManifestHistoryPageV3 {
         account: manifests[0].account.clone(),
         from_sequence: page_from,
         to_sequence: query.to_sequence,
@@ -1913,7 +1913,7 @@ pub(crate) async fn load_user_bundles(
             .bind(target_id)
             .fetch_optional(&mut *tx)
             .await?;
-    let manifest: AccountManifestV2 = serde_json::from_value(
+    let manifest: AccountManifestV3 = serde_json::from_value(
         manifest.ok_or_else(|| AppError::not_found("user has no chat devices"))?,
     )
     .map_err(|error| AppError::internal(format!("stored chat manifest is invalid: {error}")))?;

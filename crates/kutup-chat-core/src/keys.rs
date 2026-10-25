@@ -15,7 +15,7 @@ use rand::{CryptoRng, Rng};
 use crate::db::{LocalIdentity, Pending};
 use crate::error::{crypto, Result};
 use kutup_chat_proto::{
-    AccountManifestV2, DeviceRegistrationV1, DirectChatSuiteId, EcPreKey, KemPreKey,
+    AccountManifestV3, DeviceRegistrationV1, DirectChatSuiteId, EcPreKey, KemPreKey,
     RegisterChatDeviceRequestV2, ReplenishKeysRequest, DEVICE_CREDENTIAL_LEN,
 };
 
@@ -40,7 +40,7 @@ pub(crate) enum NewDevice<'a> {
     /// `manifest` from the new identity (which also signs its binding to the
     /// authority) and the registration id.
     Reregistration {
-        manifest: &'a dyn Fn(&IdentityKeyPair, u32) -> crate::Result<AccountManifestV2>,
+        manifest: &'a dyn Fn(&IdentityKeyPair, u32) -> crate::Result<AccountManifestV3>,
     },
     /// Keys alone, with no registration request: a new identity, or the one
     /// given (another device of the same account). For tests and tools that

@@ -37,7 +37,7 @@ use crate::manifest::{verify_bundle_trust, verify_manifest_evidence, ManifestPol
 use crate::store::ChatStore;
 use crate::wire::{decode_ciphertext, decode_identity_key, encode_ciphertext, to_prekey_bundle};
 use kutup_chat_proto::{
-    AccountManifestDeviceV2, AccountManifestV2, AccountPreKeyBundlesResponse, ChatContent,
+    AccountManifestDeviceV3, AccountManifestV3, AccountPreKeyBundlesResponse, ChatContent,
     ContactControlBody, ContactState, DeliveredEnvelope, DeviceListMismatch, DevicePreKeyBundle,
     DirectChatSuiteId, DisappearingExpiryStartBody, OutgoingEnvelope, RegisterChatDeviceRequestV2,
     ReplenishKeysRequest, SealedOutgoingEnvelopeV1,
@@ -557,7 +557,7 @@ impl Session {
         self.store.local_identity_key_base64()
     }
 
-    pub fn manifest_device(&self) -> AccountManifestDeviceV2 {
+    pub fn manifest_device(&self) -> AccountManifestDeviceV3 {
         self.store.local_manifest_device(self.device_id())
     }
 
@@ -2504,8 +2504,8 @@ impl Session {
     pub(crate) async fn accept_manifest_evidence(
         &mut self,
         account: &str,
-        manifest: &AccountManifestV2,
-    ) -> Result<AccountManifestV2> {
+        manifest: &AccountManifestV3,
+    ) -> Result<AccountManifestV3> {
         let prior_manifest = self.store.db().load_manifest_trust(account).await?;
         let trust = verify_manifest_evidence(account, manifest, prior_manifest.as_ref())?;
         if trust.continuity_gap {
@@ -2534,10 +2534,10 @@ impl Session {
     pub(crate) async fn accept_manifest_evidence_with_history(
         &mut self,
         account: &str,
-        pending: &AccountManifestV2,
+        pending: &AccountManifestV3,
         trust: ManifestTrust,
         history: Vec<AccountManifestHistoryRecord>,
-    ) -> Result<AccountManifestV2> {
+    ) -> Result<AccountManifestV3> {
         let last = history.last().ok_or_else(|| {
             ChatError::Trust("manifest history recovery returned no complete history".into())
         })?;
@@ -4163,7 +4163,7 @@ fn now() -> SystemTime {
 
 /// Unix-epoch millis, saturating to 0 before the epoch (never in practice).
 /// The devices a manifest lists.
-fn device_ids(manifest: &AccountManifestV2) -> Vec<u32> {
+fn device_ids(manifest: &AccountManifestV3) -> Vec<u32> {
     manifest
         .devices
         .iter()

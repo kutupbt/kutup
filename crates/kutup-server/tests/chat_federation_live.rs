@@ -13,7 +13,7 @@ use base64::engine::general_purpose::STANDARD;
 use base64::Engine;
 use common::chat_identity::{ChatAccount, ChatDevice};
 use kutup_chat_proto::{
-    AccountManifestHistoryPageV2, AccountPreKeyBundlesResponse, ProfileEnvelopeContextV1,
+    AccountManifestHistoryPageV3, AccountPreKeyBundlesResponse, ProfileEnvelopeContextV1,
     ProfileEnvelopePurpose, ProfileSuiteId, PutChatProfileRequest,
 };
 use kutup_crypto::account_ref::AccountRef;
@@ -2424,7 +2424,7 @@ fn setup_phase(c: &Client, a: &str, b: &str) {
         "{a}/api/chat/accounts/{}/manifest-history?server=b.test",
         remote_address.account_id
     );
-    let first_page: AccountManifestHistoryPageV2 = serde_json::from_value(json_response(
+    let first_page: AccountManifestHistoryPageV3 = serde_json::from_value(json_response(
         c.get(&history_url)
             .bearer_auth(&alice_token)
             .query(&[
@@ -2440,7 +2440,7 @@ fn setup_phase(c: &Client, a: &str, b: &str) {
     assert_eq!(first_page.manifests.len(), 64);
     first_page.validate().unwrap();
     assert_eq!(first_page.next_sequence, Some(65));
-    let second_page: AccountManifestHistoryPageV2 = serde_json::from_value(json_response(
+    let second_page: AccountManifestHistoryPageV3 = serde_json::from_value(json_response(
         c.get(&history_url)
             .bearer_auth(&alice_token)
             .query(&[

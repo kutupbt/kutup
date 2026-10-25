@@ -11,7 +11,7 @@ use async_trait::async_trait;
 use base64::engine::general_purpose::STANDARD;
 use base64::Engine as _;
 use kutup_chat_proto::{
-    AccountManifestHistoryPageV2, AccountManifestPublicationV2, AccountManifestV2,
+    AccountManifestHistoryPageV3, AccountManifestPublicationV3, AccountManifestV3,
     AccountPreKeyBundlesResponse, ChatProfileResponse, DeviceListMismatch, MailboxPage,
     OwnChatProfileResponse, PreKeyCountResponse, PutChatProfileRequest,
     RegisterChatDeviceRequestV2, RegisterChatDeviceResponse, ReplenishKeysRequest,
@@ -664,7 +664,7 @@ impl ChatTransport for BrowserTransport {
         )
     }
 
-    async fn fetch_manifest(&self, account: &str) -> Result<Option<AccountManifestV2>> {
+    async fn fetch_manifest(&self, account: &str) -> Result<Option<AccountManifestV3>> {
         from_transport(
             self.js
                 .js_fetch_manifest(account)
@@ -679,7 +679,7 @@ impl ChatTransport for BrowserTransport {
         from_sequence: u64,
         to_sequence: u64,
         page_from_sequence: u64,
-    ) -> Result<AccountManifestHistoryPageV2> {
+    ) -> Result<AccountManifestHistoryPageV3> {
         from_transport(
             self.js
                 .js_fetch_manifest_history(
@@ -732,8 +732,8 @@ impl ChatTransport for BrowserTransport {
 
     async fn publish_manifest(
         &self,
-        manifest: &AccountManifestV2,
-    ) -> Result<AccountManifestPublicationV2> {
+        manifest: &AccountManifestV3,
+    ) -> Result<AccountManifestPublicationV3> {
         from_transport(
             self.js
                 .js_publish_manifest(to_transport(manifest)?)

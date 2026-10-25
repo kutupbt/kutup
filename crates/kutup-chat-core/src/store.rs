@@ -20,7 +20,7 @@ use std::rc::Rc;
 
 use async_trait::async_trait;
 use base64::Engine as _;
-use kutup_chat_proto::AccountManifestDeviceV2;
+use kutup_chat_proto::AccountManifestDeviceV3;
 use libsignal_protocol::*;
 use uuid::Uuid;
 
@@ -299,8 +299,8 @@ impl ChatStore {
             .insert(send_id.to_string());
     }
 
-    pub(crate) fn local_manifest_device(&self, device_id: u32) -> AccountManifestDeviceV2 {
-        AccountManifestDeviceV2 {
+    pub(crate) fn local_manifest_device(&self, device_id: u32) -> AccountManifestDeviceV3 {
+        AccountManifestDeviceV3 {
             device_id,
             direct_chat_suite: kutup_chat_proto::DirectChatSuiteId::PqxdhTripleRatchetV1,
             registration_id: self.identity_store.registration_id,

@@ -2,7 +2,7 @@
 
 use kutup_chat_proto::{
     parse_device_header, AccountIdentityBody, AccountIdentityDistributionRequest,
-    AccountManifestHistoryPageV2, AccountManifestPublicationV2, AccountManifestV2,
+    AccountManifestHistoryPageV3, AccountManifestPublicationV3, AccountManifestV3,
     AccountPreKeyBundlesResponse, ChatProvisionV1, ProvisionEnvelopeV1, ProvisioningLinkCodeV1,
     RegisterChatDeviceRequestV2, SealedSenderServicePolicyV1,
 };
@@ -25,16 +25,16 @@ fuzz_target!(|data: &[u8]| {
         let _ = history.verify();
     }
 
-    if let Ok(manifest) = serde_json::from_slice::<AccountManifestV2>(data) {
+    if let Ok(manifest) = serde_json::from_slice::<AccountManifestV3>(data) {
         let _ = manifest.signing_bytes();
         let _ = manifest.manifest_hash();
         let _ = manifest.verify();
         let _ = manifest.verify_successor(Some(&manifest));
     }
-    if let Ok(publication) = serde_json::from_slice::<AccountManifestPublicationV2>(data) {
+    if let Ok(publication) = serde_json::from_slice::<AccountManifestPublicationV3>(data) {
         let _ = publication.manifest.verify();
     }
-    if let Ok(page) = serde_json::from_slice::<AccountManifestHistoryPageV2>(data) {
+    if let Ok(page) = serde_json::from_slice::<AccountManifestHistoryPageV3>(data) {
         let _ = page.validate();
     }
     if let Ok(bundles) = serde_json::from_slice::<AccountPreKeyBundlesResponse>(data) {

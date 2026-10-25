@@ -220,3 +220,56 @@ The user approved the note on 2026-10-25 with these answers:
    home and every recipient check a frame's sender against the manifest.
 3. **Device cap 32 per account by default**, a site setting an admin can
    change site-wide and per user.
+
+## 8. Build notes
+
+### Slice 1 (format and table)
+
+What the note leaves open, as built:
+
+1. **Format.** `AccountManifestV3` replaces V2 in place in
+   `kutup-chat-proto::account_identity`, with `AccountManifestDeviceV3` and
+   the V3 publication and history page; the bundle and registration types
+   keep their names. The signing domain follows the one label grammar:
+   `kutup/account/manifest/v3\0`.
+2. **Device entries.** `deviceId`; `kind` (`chat`, `editor`, `cli`);
+   `chat: { directChatSuite, registrationId }`; `frameKey` (canonical base64
+   of 32 bytes, a valid Ed25519 key); `session` (lowercase hex of 32 bytes).
+   - A `chat` entry carries `chat`.
+   - An `editor` or `cli` entry carries `frameKey`.
+   - An `editor` entry never carries `chat`.
+   - `frameKey` is optional on `chat` (for later per-device signatures), and
+     `chat` is optional on `cli` (a CLI that takes Chat).
+   - A manifest lists 1..=127 entries and may list no Chat device.
+3. **Sign-in grouping.**
+   - `session` is SHA-256 over `kutup/account/device-session/v1\0` and the
+     device's root sign-in id: an app's session's parent, or the session
+     itself for the CLI and native apps.
+   - The server works it out at registration and returns it.
+   - A publication whose entry names another session than that device's row
+     is refused.
+   - Contacts see only an unlinkable hash; the server learns nothing it
+     doesn't hold already.
+4. **Re-registration (a new Chat identity).**
+   - Every Chat device goes, but the account's non-Chat entries stay.
+   - The manifest lists the new Chat device and the head's other entries
+     unchanged.
+   - The new device takes the lowest id those entries leave free (1 while the
+     account has only Chat devices).
+5. **Table.**
+   - `chat_devices` becomes `devices`, gaining `kind`, `session_id` (the root
+     sign-in) and `frame_key`.
+   - The Chat columns become nullable, with a CHECK by kind.
+   - The account column keeps the schema's `user_id` name.
+   - Every query that reads Chat columns or lists an account's Chat devices
+     filters on `kind = 'chat'`.
+   - The device header becomes `X-Kutup-Device`.
+6. **Caps.**
+   - `devicesPerAccount` is a new `NumericSetting` (default 32, range
+     1..=127) over all entries.
+   - `chat.maxActiveDevices` stays as the Chat sub-cap, since each Chat
+     device costs every sender one more sealed copy.
+7. **Manifest signing in `kutup-crypto`.** This moves with the chat-core
+   crypto move, which goes to master and lands before slice 4. Slice 4 is the
+   first to need it (the Account app signing removals), so slice 1 leaves it
+   in chat-core.
