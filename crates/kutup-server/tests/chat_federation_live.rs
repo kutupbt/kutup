@@ -1401,7 +1401,52 @@ fn drive_round_trip(c: &Client, a: &str, b: &str, alice_token: &str, bob_token: 
         .send()
         .unwrap();
     assert_eq!(download.status().as_u16(), 200);
+    let etag = download
+        .headers()
+        .get("etag")
+        .and_then(|value| value.to_str().ok())
+        .map(str::to_owned)
+        .expect("the owner's ETag is relayed");
     assert_eq!(download.bytes().unwrap().as_ref(), ciphertext.as_slice());
+
+    // Ranged reads across servers (docs/plans/drive-block-format.md §3): the
+    // range goes in the signed query, the owner signs the part, and the
+    // relay checks it is the one asked.
+    let ranged = |range: &str, if_range: Option<&str>| {
+        let mut request = c
+            .get(format!(
+                "{b}/api/drive/federation/shares/{incoming_id}/files/{file_id}/content"
+            ))
+            .bearer_auth(bob_token)
+            .header("Range", range);
+        if let Some(tag) = if_range {
+            request = request.header("If-Range", tag);
+        }
+        request.send().unwrap()
+    };
+    let total = ciphertext.len();
+    let part = ranged("bytes=3-9", None);
+    assert_eq!(part.status().as_u16(), 206);
+    assert_eq!(
+        part.headers()["content-range"].to_str().unwrap(),
+        format!("bytes 3-9/{total}")
+    );
+    assert_eq!(part.bytes().unwrap().as_ref(), &ciphertext[3..10]);
+    let tail = ranged("bytes=-5", Some(&etag));
+    assert_eq!(tail.status().as_u16(), 206);
+    assert_eq!(tail.bytes().unwrap().as_ref(), &ciphertext[total - 5..]);
+    let other = ranged(
+        "bytes=0-1",
+        Some("\"00000000-0000-4000-8000-000000000000\""),
+    );
+    assert_eq!(
+        other.status().as_u16(),
+        200,
+        "a range of other content reads whole"
+    );
+    assert_eq!(other.bytes().unwrap().as_ref(), ciphertext.as_slice());
+    let past = ranged(&format!("bytes={total}-"), None);
+    assert_eq!(past.status().as_u16(), 416);
 
     let delete = || {
         c.delete(format!(
