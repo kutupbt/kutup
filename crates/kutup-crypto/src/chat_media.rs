@@ -31,6 +31,8 @@ pub const CHAT_MEDIA_OBJECT_PREFIX_BYTES: usize =
 #[repr(u16)]
 pub enum ChatMediaSuiteId {
     XChaCha20Poly1305SecretStreamV1 = 1,
+    /// The block format (`chat_media_blocks`).
+    KutupBlocksV1 = 2,
 }
 
 impl ChatMediaSuiteId {
@@ -51,6 +53,7 @@ impl TryFrom<u16> for ChatMediaSuiteId {
     fn try_from(value: u16) -> Result<Self> {
         match value {
             1 => Ok(Self::XChaCha20Poly1305SecretStreamV1),
+            2 => Ok(Self::KutupBlocksV1),
             _ => Err(CryptoError::InvalidInput(format!(
                 "unknown Chat-media suite {value}"
             ))),

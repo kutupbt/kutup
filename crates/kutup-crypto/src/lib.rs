@@ -43,6 +43,7 @@ pub mod account_head;
 pub mod account_ref;
 pub mod account_rename;
 pub mod asset;
+pub mod blocks;
 #[cfg(feature = "calendar")]
 pub mod calendar;
 #[cfg(feature = "calendar")]
@@ -52,16 +53,19 @@ pub mod calendar_recurrence;
 pub mod chat_attachment_ledger;
 pub mod chat_backup;
 pub mod chat_backup_media;
+pub mod chat_backup_media_blocks;
 pub mod chat_contact_list;
 pub mod chat_group;
 pub mod chat_group_list;
 pub mod chat_media;
+pub mod chat_media_blocks;
 pub mod collection_epoch;
 pub mod collection_keyring;
 pub mod contact_card;
 pub mod device_registration;
 #[cfg(feature = "mail")]
 pub mod dkim_key;
+pub mod drive_blocks;
 pub mod drive_envelope;
 pub mod drive_key_binding;
 pub mod drive_names;

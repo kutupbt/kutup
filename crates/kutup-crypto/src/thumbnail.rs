@@ -265,6 +265,53 @@ pub fn validate(
     drive_envelope::validate(envelope, context)
 }
 
+/// Encode and seal a thumbnail of content revision `revision_id`.
+pub fn seal_v2(
+    thumbnail: &Thumbnail,
+    variant: ThumbnailVariant,
+    file_key: &[u8],
+    file_id: &str,
+    revision_id: &str,
+    generation: u32,
+) -> Result<Vec<u8>> {
+    let context =
+        DriveEnvelopeContextV1::thumbnail_of_revision(file_id, revision_id, variant, generation)?;
+    drive_envelope::seal(&encode(thumbnail, variant)?, file_key, context)
+}
+
+/// Open and parse a thumbnail of exactly this file, content revision, variant
+/// and key generation: the revision the file's metadata commits to.
+pub fn open_v2(
+    envelope: &[u8],
+    variant: ThumbnailVariant,
+    file_key: &[u8],
+    file_id: &str,
+    revision_id: &str,
+    generation: u32,
+) -> Result<Thumbnail> {
+    let context =
+        DriveEnvelopeContextV1::thumbnail_of_revision(file_id, revision_id, variant, generation)?;
+    decode(&drive_envelope::open(envelope, file_key, context)?, variant)
+}
+
+/// [`validate`] for a thumbnail of content revision `revision_id`.
+pub fn validate_v2(
+    envelope: &[u8],
+    variant: ThumbnailVariant,
+    file_id: &str,
+    revision_id: &str,
+    generation: u32,
+) -> Result<()> {
+    if envelope.len() > drive_envelope::max_thumbnail_envelope_bytes(variant) {
+        return Err(CryptoError::InvalidInput(
+            "thumbnail envelope too large".into(),
+        ));
+    }
+    let context =
+        DriveEnvelopeContextV1::thumbnail_of_revision(file_id, revision_id, variant, generation)?;
+    drive_envelope::validate(envelope, context)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -313,6 +360,27 @@ mod tests {
         assert!(open(&envelope, ThumbnailVariant::Small, &[8; 32], FILE, 2).is_err());
         assert!(validate(&envelope, ThumbnailVariant::Large, FILE, 2).is_err());
         assert!(validate(&envelope, ThumbnailVariant::Small, OTHER, 2).is_err());
+    }
+
+    #[test]
+    fn a_v2_thumbnail_is_bound_to_its_content_revision() {
+        const REVISION: &str = "22222222-2222-4222-8222-222222222222";
+        const OLDER: &str = "44444444-4444-4444-8444-444444444444";
+        let t = thumb(100);
+        let v = ThumbnailVariant::Small;
+        let envelope = seal_v2(&t, v, &KEY, FILE, REVISION, 2).unwrap();
+        validate_v2(&envelope, v, FILE, REVISION, 2).unwrap();
+        assert_eq!(open_v2(&envelope, v, &KEY, FILE, REVISION, 2).unwrap(), t);
+        // An older revision's thumbnail, under metadata naming a newer one.
+        let older = seal_v2(&t, v, &KEY, FILE, OLDER, 2).unwrap();
+        assert!(open_v2(&older, v, &KEY, FILE, REVISION, 2).is_err());
+        assert!(validate_v2(&older, v, FILE, REVISION, 2).is_err());
+        // Neither binding opens as the other, nor as another variant.
+        assert!(open(&envelope, v, &KEY, FILE, 2).is_err());
+        let unbound = seal(&t, v, &KEY, FILE, 2).unwrap();
+        assert!(open_v2(&unbound, v, &KEY, FILE, REVISION, 2).is_err());
+        assert!(open_v2(&envelope, ThumbnailVariant::Large, &KEY, FILE, REVISION, 2).is_err());
+        assert!(seal_v2(&t, v, &KEY, FILE, "not-a-uuid", 2).is_err());
     }
 
     #[test]
