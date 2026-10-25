@@ -843,12 +843,13 @@ pub async fn patch(
         drop_landed(&state, &storage_path, upload_id).await;
         return tus_text(StatusCode::INTERNAL_SERVER_ERROR, "db insert file");
     }
-    if sqlx::query("UPDATE users SET storage_used_bytes = storage_used_bytes + $1 WHERE id=$2")
-        .bind(total_bytes)
-        .bind(user_id)
-        .execute(&mut *tx)
-        .await
-        .is_err()
+    if crate::storage_pool::charge(
+        &mut *tx,
+        crate::storage_pool::Payer::Account(user_id),
+        total_bytes,
+    )
+    .await
+    .is_err()
     {
         drop(tx);
         drop_landed(&state, &storage_path, upload_id).await;

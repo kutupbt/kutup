@@ -9,6 +9,12 @@
 //! overcommitted. What is promised but not stored yet counts too: open tus
 //! uploads (their whole declared length), open Chat-media uploads (what is
 //! still to come) and Chat media another server is handing over.
+//!
+//! [`charge`] is the one place the counters change (an account's, or a mail
+//! group's for its shared mailbox), in the transaction that stores or
+//! deletes the bytes; [`charge_within_quota`] adds the room check for writes
+//! that grow the pool. What fills the pool by app is summed from the tables
+//! themselves (`GET /api/user/storage`).
 
 use sqlx::{PgExecutor, Postgres, Transaction};
 use uuid::Uuid;
@@ -92,6 +98,60 @@ pub async fn lock(
     })
 }
 
+/// Whose pool a charge goes to: an account's, or a mail group's (its shared
+/// mailbox has a pool of its own; docs/plans/mail-groups.md).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Payer {
+    Account(Uuid),
+    MailGroup(Uuid),
+}
+
+/// Charges `delta` bytes to `payer`'s pool (`delta` < 0 frees them), never
+/// below zero: the one place stored bytes are counted. The write that stores
+/// or deletes them calls it in the same transaction; a write that adds bytes
+/// checks the room first (`lock` and `Pool::fits`).
+pub async fn charge<'e, E: PgExecutor<'e>>(
+    executor: E,
+    payer: Payer,
+    delta: i64,
+) -> sqlx::Result<()> {
+    let (sql, id) = match payer {
+        Payer::Account(id) => (
+            "UPDATE users SET storage_used_bytes = GREATEST(storage_used_bytes + $2, 0) WHERE id = $1",
+            id,
+        ),
+        Payer::MailGroup(id) => (
+            "UPDATE mail_groups SET storage_used_bytes = GREATEST(storage_used_bytes + $2, 0) WHERE id = $1",
+            id,
+        ),
+    };
+    sqlx::query(sql)
+        .bind(id)
+        .bind(delta)
+        .execute(executor)
+        .await?;
+    Ok(())
+}
+
+/// [`charge`] for a write that adds bytes within the account's quota:
+/// locks its row, refuses (`413`) when `delta` more bytes don't fit, and
+/// charges them. A negative `delta` always goes through.
+pub async fn charge_within_quota(
+    tx: &mut Transaction<'_, Postgres>,
+    user_id: Uuid,
+    delta: i64,
+) -> crate::error::AppResult<()> {
+    let pool = lock(tx, user_id, Leave::default()).await?;
+    if delta > 0 && !pool.fits(delta, 0) {
+        return Err(crate::error::AppError::new(
+            axum::http::StatusCode::PAYLOAD_TOO_LARGE,
+            "storage quota exceeded",
+        ));
+    }
+    charge(&mut **tx, Payer::Account(user_id), delta).await?;
+    Ok(())
+}
+
 /// Bytes promised to `user_id`'s writes still in flight, less `leave`.
 pub async fn reserved<'e, E: PgExecutor<'e>>(
     executor: E,
@@ -123,6 +183,48 @@ pub async fn reserved<'e, E: PgExecutor<'e>>(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Every write goes through [`charge`]: no other code changes the
+    /// counters, except the two recounts that set them from what is stored
+    /// (the reconciler in jobs.rs, an administrator's in admin.rs) and test
+    /// fixtures.
+    #[test]
+    fn only_this_module_charges() {
+        let src = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+        let mut found = Vec::new();
+        let mut stack = vec![src.clone()];
+        while let Some(dir) = stack.pop() {
+            for entry in std::fs::read_dir(dir).unwrap() {
+                let path = entry.unwrap().path();
+                if path.is_dir() {
+                    stack.push(path);
+                } else if path.extension().is_some_and(|ext| ext == "rs") {
+                    let text = std::fs::read_to_string(&path).unwrap();
+                    let count = text.matches("SET storage_used_bytes").count();
+                    if count > 0 {
+                        let name = path
+                            .strip_prefix(&src)
+                            .unwrap()
+                            .to_string_lossy()
+                            .into_owned();
+                        found.push((name, count));
+                    }
+                }
+            }
+        }
+        found.sort();
+        assert_eq!(
+            found,
+            [
+                // A recount from what the account stores.
+                ("handlers/admin.rs".to_owned(), 1),
+                // The reconciler's recount, and two test fixtures.
+                ("jobs.rs".to_owned(), 3),
+                // `charge`, an account's and a mail group's.
+                ("storage_pool.rs".to_owned(), 3),
+            ]
+        );
+    }
 
     #[test]
     fn headroom_and_fits_count_what_is_reserved() {

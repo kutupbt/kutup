@@ -715,15 +715,11 @@ pub(crate) async fn insert_message(
         return Ok(true);
     }
     // A shared mailbox's message is charged to its group.
-    let charge = match message.user_id {
-        Some(_) => "UPDATE users SET storage_used_bytes = storage_used_bytes + $2 WHERE id = $1",
-        None => "UPDATE mail_groups SET storage_used_bytes = storage_used_bytes + $2 WHERE id = $1",
+    let payer = match message.user_id {
+        Some(_) => crate::storage_pool::Payer::Account(owner),
+        None => crate::storage_pool::Payer::MailGroup(owner),
     };
-    sqlx::query(charge)
-        .bind(owner)
-        .bind(message.size)
-        .execute(&mut **tx)
-        .await?;
+    crate::storage_pool::charge(&mut **tx, payer, message.size).await?;
     // The account's filters, on incoming mail (distribution-list copies
     // included) and its own sent copies; never on drafts, on mail filed as
     // spam, or on a shared mailbox's copy, which has no one owner yet

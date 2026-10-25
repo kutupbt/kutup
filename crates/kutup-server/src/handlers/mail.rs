@@ -1753,18 +1753,11 @@ pub(crate) async fn delete_for_good(
         .collect();
     let freed: i64 = messages.iter().map(|(_, _, size)| size).sum::<i64>()
         + attachments.iter().map(|(_, size)| size).sum::<i64>();
-    sqlx::query(match mailbox {
-        Mailbox::Own(_) => {
-            "UPDATE users SET storage_used_bytes = GREATEST(storage_used_bytes - $2, 0) WHERE id = $1"
-        }
-        Mailbox::Shared(_) => {
-            "UPDATE mail_groups SET storage_used_bytes = GREATEST(storage_used_bytes - $2, 0) WHERE id = $1"
-        }
-    })
-    .bind(owner)
-    .bind(freed)
-    .execute(&mut *tx)
-    .await?;
+    let payer = match mailbox {
+        Mailbox::Own(_) => crate::storage_pool::Payer::Account(owner),
+        Mailbox::Shared(_) => crate::storage_pool::Payer::MailGroup(owner),
+    };
+    crate::storage_pool::charge(&mut *tx, payer, -freed).await?;
     tx.commit().await?;
     // The rows are gone; a failed object delete leaves work for the sweep.
     for (key, version) in messages

@@ -603,11 +603,7 @@ pub(crate) async fn store_version(
     .bind(remote_author.map(|author| Uuid::parse_str(&author.account_id).expect("canonical")))
     .fetch_one(&mut *tx)
     .await?;
-    sqlx::query("UPDATE users SET storage_used_bytes = storage_used_bytes + $1 WHERE id = $2")
-        .bind(size)
-        .bind(payer)
-        .execute(&mut *tx)
-        .await?;
+    crate::storage_pool::charge(&mut *tx, crate::storage_pool::Payer::Account(payer), size).await?;
     // A new version is an edit: the file (and so its folder) was modified now.
     // New content: the hash it was recognised by no longer holds; the client
     // records the new one (docs/plans/drive-unique-names.md).

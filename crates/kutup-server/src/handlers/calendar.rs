@@ -269,24 +269,6 @@ async fn address_keys(
     Ok((rows.into_iter().map(|(key, _)| key).collect(), primary))
 }
 
-async fn charge(tx: &mut Transaction<'_, Postgres>, owner: Uuid, add: i64) -> AppResult<()> {
-    let pool = crate::storage_pool::lock(tx, owner, Default::default()).await?;
-    if add > 0 && !pool.fits(add, 0) {
-        return Err(AppError::new(
-            StatusCode::PAYLOAD_TOO_LARGE,
-            "storage quota exceeded",
-        ));
-    }
-    sqlx::query(
-        "UPDATE users SET storage_used_bytes = GREATEST(storage_used_bytes + $2, 0) WHERE id = $1",
-    )
-    .bind(owner)
-    .bind(add)
-    .execute(&mut **tx)
-    .await?;
-    Ok(())
-}
-
 /// A new calendar, as `createCalendar` in the browser makes it.
 #[derive(Debug, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -379,7 +361,7 @@ pub async fn create(
         + metadata.key_packet.len()
         + metadata.data_packet.len()
         + metadata.signature.len()) as i64;
-    charge(&mut tx, user_id, bytes).await?;
+    crate::storage_pool::charge_within_quota(&mut tx, user_id, bytes).await?;
     let id: Uuid = sqlx::query_scalar(
         "INSERT INTO calendars (id, owner_id, public_key, fingerprint, locked_secret_key,
              passphrase_data_packet, passphrase_signature,
@@ -522,7 +504,8 @@ pub async fn update(
         let new_metadata = (metadata.key_packet.len()
             + metadata.data_packet.len()
             + metadata.signature.len()) as i64;
-        charge(&mut tx, owner, new_metadata - old_metadata).await?;
+        crate::storage_pool::charge_within_quota(&mut tx, owner, new_metadata - old_metadata)
+            .await?;
         sqlx::query(
             "UPDATE calendars SET metadata_key_packet = $2, metadata_data_packet = $3,
                     metadata_signature = $4, bytes = $5, updated_at = now()
@@ -620,7 +603,7 @@ pub async fn delete(
         .bind(id)
         .execute(&mut *tx)
         .await?;
-    charge(&mut tx, owner, -bytes).await?;
+    crate::storage_pool::charge_within_quota(&mut tx, owner, -bytes).await?;
     account_heads::advance(&mut tx, &locked, head.as_ref()).await?;
     tx.commit().await?;
     Ok(StatusCode::NO_CONTENT)
@@ -1383,7 +1366,7 @@ async fn apply(
                 return Err(AppError::conflict("this calendar is full")
                     .with_details(serde_json::json!({ "code": "eventLimit" })));
             }
-            charge(&mut tx, owner, checked.bytes).await?;
+            crate::storage_pool::charge_within_quota(&mut tx, owner, checked.bytes).await?;
             let id = insert(&mut tx, *id, calendar, user_id, address_id, &checked).await?;
             let change = match reminders {
                 Some(list) => RemindersChange::Own(list),
@@ -1450,7 +1433,8 @@ async fn apply(
                 return Err(AppError::conflict("an event's SEQUENCE never goes down")
                     .with_details(serde_json::json!({ "code": "sequenceBehind" })));
             }
-            charge(&mut tx, owner, checked.bytes - old_bytes).await?;
+            crate::storage_pool::charge_within_quota(&mut tx, owner, checked.bytes - old_bytes)
+                .await?;
             // Every member's own reminders outlive the rewrite below.
             let kept: Vec<(Uuid, serde_json::Value)> = sqlx::query_as(
                 "SELECT user_id, reminders FROM calendar_event_reminders WHERE event_id = $1",
@@ -1515,7 +1499,7 @@ async fn apply(
                 .bind(id)
                 .execute(&mut *tx)
                 .await?;
-            charge(&mut tx, owner, -bytes).await?;
+            crate::storage_pool::charge_within_quota(&mut tx, owner, -bytes).await?;
             None
         }
     };

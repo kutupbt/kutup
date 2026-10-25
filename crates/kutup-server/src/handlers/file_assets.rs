@@ -181,11 +181,7 @@ pub(crate) async fn store_asset(
     if inserted.is_none() {
         return Ok(());
     }
-    sqlx::query("UPDATE users SET storage_used_bytes = storage_used_bytes + $1 WHERE id = $2")
-        .bind(size)
-        .bind(payer)
-        .execute(&mut *tx)
-        .await?;
+    crate::storage_pool::charge(&mut *tx, crate::storage_pool::Payer::Account(payer), size).await?;
 
     // Stored before commit with the row lock held: a PUT failure rolls the
     // row back; a commit failure removes the object again (it is new, so
