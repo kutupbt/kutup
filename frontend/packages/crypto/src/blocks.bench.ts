@@ -76,6 +76,6 @@ describe('open one 4 MiB block', () => {
   })
   bench('libsodium secretstream pull (today)', () => {
     const state = sodium.crypto_secretstream_xchacha20poly1305_init_pull(pushed.header, keyBytes)
-    sodium.crypto_secretstream_xchacha20poly1305_pull(state, pushed.cipher)
+    sodium.crypto_secretstream_xchacha20poly1305_pull(state, pushed.cipher, null)
   })
 })
