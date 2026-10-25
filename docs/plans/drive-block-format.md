@@ -486,7 +486,8 @@ worker) and browsers with service workers disabled.
 
 **Safari and iOS.**
 - Safari probes with `bytes=0-1` and then may ask for the whole file. The
-  4 MiB cap handles both.
+  worker's per-answer cap (`drive.stream.response_max_bytes`, 5 MiB, at
+  least one sealed block) handles both.
 - It needs exact `Content-Range` and `Content-Length` on every `206`.
 - iOS gives a tab little memory, so the default cache there is 2 blocks.
 - Lock screen and background playback are best-effort: iOS may suspend the
@@ -622,7 +623,7 @@ the standing rule). The client reads them from `GET /api/drive/limits`.
 | `drive.stream.cache_blocks` (verified blocks kept per stream) | 3 (2 on iOS) | 1–16 |
 | `drive.stream.readahead_blocks` | 1 | 0–4 |
 | `drive.stream.max_concurrent` (streams per tab) | 3 | 1–8 |
-| `drive.stream.response_max_bytes` (per answer, also the federation part size) | 5 MiB (one sealed block, 4 MiB and 40 bytes, fits whole) | 256 KiB–16 MiB |
+| `drive.stream.response_max_bytes` (per answer, also the federation part size) | 5 MiB (one sealed block, 4 MiB and 40 bytes, fits whole) | 4.5 MiB (at least one sealed block)–16 MiB |
 | `drive.stream.blob_fallback_max_bytes` (no service worker) | 1 GiB | 0–4 GiB |
 
 The Drive upload and version limits are site settings too

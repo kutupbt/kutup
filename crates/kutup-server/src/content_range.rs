@@ -5,7 +5,8 @@
 //! one, or an `If-Range` that no longer matches). The ETag is the revision
 //! id, which names immutable bytes. One answer carries at most
 //! `drive_stream_response_max_bytes`: a longer range is answered in part, as
-//! `Content-Range` then says.
+//! `Content-Range` then says: its first part, or for a suffix (the end of
+//! the object) its last.
 
 use axum::body::Body;
 use axum::http::{header, HeaderMap, HeaderName, HeaderValue, StatusCode};
@@ -88,21 +89,38 @@ impl RangeSpec {
         Self::parse(&format!("bytes={value}"))
     }
 
-    /// Against an object of `total` bytes, at most `max_part` of them.
+    /// Against an object of `total` bytes, at most `max_part` of them: the
+    /// first `max_part` of a longer range, the last of a longer suffix.
     pub fn resolve(self, total: u64, max_part: u64) -> Requested {
+        let max_part = max_part.max(1);
         let (start, end) = match self {
             Self::Closed(start, end) => (start, end),
             Self::From(start) => (start, u64::MAX),
             Self::Suffix(0) => return Requested::Unsatisfiable,
-            Self::Suffix(length) => (total.saturating_sub(length), u64::MAX),
+            Self::Suffix(length) => {
+                let taken = length.min(total).min(max_part);
+                (total.saturating_sub(taken), u64::MAX)
+            }
         };
         if total == 0 || start >= total {
             return Requested::Unsatisfiable;
         }
-        let end = end
-            .min(total - 1)
-            .min(start.saturating_add(max_part.max(1) - 1));
+        let end = end.min(total - 1).min(start.saturating_add(max_part - 1));
         Requested::Part(ByteRange { start, end })
+    }
+
+    /// The same request cut to one answer's worth (`max_part` bytes), as a
+    /// relaying server asks it of the owner: it then signs only what it can
+    /// take, whatever the owner's own limit.
+    pub fn clamped(self, max_part: u64) -> Self {
+        let max_part = max_part.max(1);
+        match self {
+            Self::Closed(start, end) => {
+                Self::Closed(start, end.min(start.saturating_add(max_part - 1)))
+            }
+            Self::From(start) => Self::Closed(start, start.saturating_add(max_part - 1)),
+            Self::Suffix(length) => Self::Suffix(length.min(max_part)),
+        }
     }
 }
 
@@ -260,7 +278,28 @@ mod tests {
         assert_eq!(RangeSpec::Suffix(900).resolve(500, max), part(0, 499));
         // Longer than one answer: the first part of it.
         assert_eq!(RangeSpec::From(0).resolve(5000, max), part(0, 999));
-        assert_eq!(RangeSpec::Suffix(3000).resolve(5000, max), part(2000, 2999));
+        // A suffix longer than one answer: its end, where a reader looks.
+        assert_eq!(RangeSpec::Suffix(3000).resolve(5000, max), part(4000, 4999));
+        // Cut to one answer's worth, a request resolves the same anywhere.
+        for spec in [
+            RangeSpec::From(0),
+            RangeSpec::From(4500),
+            RangeSpec::Closed(10, 4000),
+            RangeSpec::Closed(10, 20),
+            RangeSpec::Suffix(3000),
+            RangeSpec::Suffix(12),
+        ] {
+            assert_eq!(
+                spec.clamped(max).resolve(5000, max),
+                spec.resolve(5000, max),
+                "{spec:?}"
+            );
+            assert_eq!(
+                spec.clamped(max).resolve(5000, 2 * max),
+                spec.resolve(5000, max),
+                "{spec:?}"
+            );
+        }
         // Unsatisfiable: past the end, nothing to take, an empty object.
         assert_eq!(
             RangeSpec::Closed(500, 600).resolve(500, max),

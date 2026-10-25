@@ -697,12 +697,13 @@ pub const DRIVE_STREAM_MAX_CONCURRENT: NumericSetting = NumericSetting {
     max: 8,
 };
 /// The most bytes one ranged answer carries, and so the federated part
-/// size. The default holds one sealed block (4 MiB and its 40 bytes) whole.
+/// size. At least one sealed block (4 MiB and its 40 bytes), which a reader
+/// fetches in one request; the default holds one with room to spare.
 pub const DRIVE_STREAM_RESPONSE_MAX_BYTES: NumericSetting = NumericSetting {
     key: "drive_stream_response_max_bytes",
     field: "driveStreamResponseMaxBytes",
     default: 5 * MIB,
-    min: 256 * KIB,
+    min: 4 * MIB + 512 * KIB,
     max: 16 * MIB,
 };
 /// Without a service worker, the largest file a player loads whole into

@@ -13,6 +13,7 @@ use axum::body::Body;
 use axum::http::{header, HeaderMap, HeaderValue, Method, StatusCode};
 use axum::response::Response;
 use kutup_federation_proto::{content_digest_sha256_from_digest, ContentDigest};
+use tokio::io::{AsyncSeekExt as _, AsyncWriteExt as _};
 use tokio_util::io::ReaderStream;
 use uuid::Uuid;
 
@@ -108,43 +109,54 @@ pub(crate) async fn signed_part(
     let total = u64::try_from(size).map_err(|_| AppError::internal("negative object size"))?;
     let etag = content_range::etag(revision);
     let max_part = content_range::max_part_bytes(&state.pool).await?;
-    let (status, bytes, content_range) = match read.resolve(total, &etag, max_part) {
+    let (status, range) = match read.resolve(total, &etag, max_part) {
         Requested::Whole => return Ok(None),
-        Requested::Unsatisfiable => (
-            StatusCode::RANGE_NOT_SATISFIABLE,
-            Vec::new(),
-            format!("bytes */{total}"),
-        ),
-        Requested::Part(range) => {
-            // At most one answer's worth (a site setting, 16 MiB at most):
-            // held whole to sign its digest.
-            let bytes = state
-                .storage
-                .get_object_range(path, range.start, range.end, total)
-                .await
-                .map_err(|error| AppError::internal(format!("read Drive object: {error}")))?
-                .collect()
-                .await
-                .map_err(|error| AppError::internal(format!("read Drive object: {error}")))?
-                .into_bytes()
-                .to_vec();
-            (
-                StatusCode::PARTIAL_CONTENT,
-                bytes,
-                format!("bytes {}-{}/{total}", range.start, range.end),
-            )
-        }
+        Requested::Unsatisfiable => (StatusCode::RANGE_NOT_SATISFIABLE, None),
+        Requested::Part(range) => (StatusCode::PARTIAL_CONTENT, Some(range)),
     };
+    // The part is spooled to an unnamed file while its digest is taken (the
+    // digest is signed before a byte is sent), never held in memory.
+    let std_file =
+        tempfile::tempfile().map_err(|error| AppError::internal(format!("temp file: {error}")))?;
+    let mut file = tokio::fs::File::from_std(std_file);
     let mut digest = ContentDigest::new();
-    digest.update(&bytes);
-    let length = bytes.len() as u64;
+    let mut length = 0u64;
+    if let Some(range) = range {
+        let mut body = state
+            .storage
+            .get_object_range(path, range.start, range.end, total)
+            .await
+            .map_err(|error| AppError::internal(format!("read Drive object: {error}")))?;
+        while let Some(chunk) = body
+            .try_next()
+            .await
+            .map_err(|error| AppError::internal(format!("read Drive object: {error}")))?
+        {
+            digest.update(&chunk);
+            length += chunk.len() as u64;
+            file.write_all(&chunk)
+                .await
+                .map_err(|error| AppError::internal(format!("spool part: {error}")))?;
+        }
+        if length != range.len() {
+            return Err(AppError::internal("the store answered a short part"));
+        }
+    }
+    file.flush()
+        .await
+        .and(file.rewind().await)
+        .map_err(|error| AppError::internal(format!("spool part: {error}")))?;
+    let content_range = match range {
+        Some(range) => format!("bytes {}-{}/{total}", range.start, range.end),
+        None => format!("bytes */{total}"),
+    };
     let mut response = federation.signed_stream_response(
         authenticated,
         status,
         OCTET_STREAM_CONTENT_TYPE,
         &content_digest_sha256_from_digest(&digest.finish()),
         length,
-        Body::from(bytes),
+        Body::from_stream(ReaderStream::new(file)),
     )?;
     let headers = response.headers_mut();
     headers.insert(header::CONTENT_RANGE, header_value(&content_range)?);
@@ -177,9 +189,13 @@ pub(crate) async fn relay(
     path: String,
     capability: &str,
 ) -> AppResult<Response> {
-    let read = ContentReadQuery::from_headers(headers);
+    // The range is cut to this server's part limit before it is signed, so
+    // the owner, whatever its own limit, answers at most what is taken here.
     let max_part = content_range::max_part_bytes(&state.pool).await?;
-    let limit = if read.range.is_some() {
+    let mut read = ContentReadQuery::from_headers(headers);
+    read.range = read.range.map(|range| range.clamped(max_part));
+    // A range with an If-Range may come back whole (other content now).
+    let limit = if read.range.is_some() && read.if_range.is_none() {
         usize::try_from(max_part).unwrap_or(usize::MAX)
     } else {
         crate::drive_federation::max_drive_object_bytes(&state.pool).await?

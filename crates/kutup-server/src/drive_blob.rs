@@ -36,9 +36,11 @@ impl BlobFormat {
         match revision_id {
             None => Ok(Self::Stream),
             Some(text) => {
+                // A random (v4) UUID only: the id is public, as an ETag, and
+                // a v1 or v7 id would carry a MAC address or a time.
                 let id = Uuid::parse_str(text)
                     .ok()
-                    .filter(|id| !id.is_nil() && id.hyphenated().to_string() == text)
+                    .filter(|id| id.get_version_num() == 4 && id.hyphenated().to_string() == text)
                     .ok_or_else(|| AppError::bad_request("invalid revision id"))?;
                 Ok(Self::Blocks { revision_id: id })
             }
@@ -246,6 +248,9 @@ mod tests {
             "22222222-2222-4222-8222-22222222222A",
             "{22222222-2222-4222-8222-222222222222}",
             "00000000-0000-0000-0000-000000000000",
+            // Not random: a v1 (time and MAC address) and a v7 (time).
+            "22222222-2222-1222-8222-222222222222",
+            "01890000-0000-7000-8000-000000000000",
             "",
         ] {
             assert!(BlobFormat::from_revision(Some(bad)).is_err(), "{bad}");

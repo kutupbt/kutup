@@ -2842,7 +2842,7 @@ a malformed one, are answered whole (`200`). The ETag is the revision id (an
 attachment id for Chat media) and `If-Range` is honoured: a range of other
 content gets the whole new content. One answer carries at most
 `driveStreamResponseMaxBytes`; a longer range is answered in part, as its
-`Content-Range` says.
+`Content-Range` says: its first part, or a suffix's last.
 
 **Limits** are site settings an administrator changes: the largest upload
 (`driveUploadMaxBytes`, 10 GiB) and version (`driveVersionMaxBytes`, 2 GiB),
@@ -4714,8 +4714,8 @@ nothing else may be in the query. The answer is `206`, signed over the
 content digest of that part (at most `driveStreamResponseMaxBytes`), with
 `Content-Range`, or `416`. `GET /api/fed/drive/file-content` (a file shared
 by itself) takes the same query. The receiving server forwards its client's
-`Range` and `If-Range` this way, and releases a part only once it is the one
-asked: its start, its length (which the signed digest covers) and the part
+`Range` (cut to its own part limit first) and `If-Range` this way, and
+releases a part only once it is the one asked: its start, its length (which the signed digest covers) and the part
 limit. `Content-Range`'s total is not signed; the reader's own metadata gives
 the object's length, and its manifest fixes every byte.
 
@@ -5195,8 +5195,8 @@ from `GET /api/drive/limits`): `driveUploadMaxBytes` and
 version; `driveStreamMaxBytes` (0–4 TiB, 0 never streams) the largest file a
 player streams rather than downloads first; `driveStreamCacheBlocks` (1–16),
 `driveStreamReadaheadBlocks` (0–4) and `driveStreamMaxConcurrent` (1–8) shape
-a stream; `driveStreamResponseMaxBytes` (256 KiB–16 MiB) is the most one
-ranged answer carries, across servers too; and
+a stream; `driveStreamResponseMaxBytes` (4.5 MiB–16 MiB, at least one sealed 4 MiB
+block) is the most one ranged answer carries, across servers too; and
 `driveStreamBlobFallbackMaxBytes` (0–4 GiB) the largest file played from
 memory where no service worker can stream it.
 

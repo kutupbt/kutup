@@ -79,7 +79,7 @@ const DRIVE_SETTINGS = [
   { field: 'driveStreamCacheBlocks', min: 1, max: 16 },
   { field: 'driveStreamReadaheadBlocks', min: 0, max: 4 },
   { field: 'driveStreamMaxConcurrent', min: 1, max: 8 },
-  { field: 'driveStreamResponseMaxBytes', min: 262_144, max: 16_777_216 },
+  { field: 'driveStreamResponseMaxBytes', min: 4_718_592, max: 16_777_216 },
   { field: 'driveStreamBlobFallbackMaxBytes', min: 0, max: 4_294_967_296 },
 ] as const satisfies readonly { field: keyof AdminSettings; min: number; max: number }[]
 /** Two-factor sign-in (site_settings::TWO_FACTOR_SETTINGS). */
