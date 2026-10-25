@@ -702,17 +702,26 @@ pub async fn force_disable_2fa(
     Path(id): Path<String>,
 ) -> AppResult<Response> {
     let target = Uuid::parse_str(&id).map_err(|_| AppError::not_found("not found"))?;
-    let username: Option<String> = sqlx::query_scalar(
-        "UPDATE users SET totp_enabled = false, totp_secret = NULL WHERE id = $1
-         RETURNING COALESCE(username, '')",
-    )
-    .bind(target)
-    .fetch_optional(&state.pool)
-    .await
-    .map_err(|_| AppError::internal("internal error"))?;
+    let mut tx = state.pool.begin().await?;
+    let username: Option<String> =
+        sqlx::query_scalar("SELECT COALESCE(username, '') FROM users WHERE id = $1")
+            .bind(target)
+            .fetch_optional(&mut *tx)
+            .await?;
     let Some(username) = username else {
         return Err(AppError::not_found("not found"));
     };
+    // Every second factor and its recovery codes; the owner sees it.
+    crate::two_factor::turn_off(&mut tx, target).await?;
+    crate::security_events::record(
+        &mut tx,
+        target,
+        crate::security_events::Kind::TwoFactorOff,
+        None,
+        Uuid::parse_str(&admin.user_id).ok(),
+    )
+    .await?;
+    tx.commit().await?;
     audit(
         &state.pool,
         &admin.user_id,
@@ -2299,6 +2308,9 @@ pub async fn wipe_user(
         .execute(&mut *tx)
         .await?;
     clear_account_values(&mut tx, target).await?;
+    // Every second factor and its codes, with the account's row locked, so a
+    // turn-on landing meanwhile cannot leave codes behind.
+    crate::two_factor::turn_off(&mut tx, target).await?;
     sqlx::query(
         r#"UPDATE users SET
                master_key_envelope = '', recovery_key_envelope = '',

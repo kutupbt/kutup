@@ -628,12 +628,24 @@ pub const CHAT_IDENTITY_SETTINGS: [NumericSetting; 7] = [
     CHAT_DISTRIBUTION_MESSAGE_BYTES,
 ];
 
+/// Two-factor sign-in (docs/plans/security-keys.md, D2): how many recovery
+/// codes are made at once (Proton's 16).
+pub const TWO_FACTOR_RECOVERY_CODES: NumericSetting = NumericSetting {
+    key: "two_factor_recovery_codes",
+    field: "twoFactorRecoveryCodes",
+    default: 16,
+    min: 4,
+    max: 64,
+};
+pub const TWO_FACTOR_SETTINGS: [NumericSetting; 1] = [TWO_FACTOR_RECOVERY_CODES];
+
 /// Every whole-number setting `/api/admin/settings` lists by field.
 pub fn numeric_settings() -> impl Iterator<Item = &'static NumericSetting> {
     CHAT_MULTI_SETTINGS
         .iter()
         .chain(CALENDAR_SETTINGS.iter())
         .chain(CHAT_IDENTITY_SETTINGS.iter())
+        .chain(TWO_FACTOR_SETTINGS.iter())
 }
 
 /// The multi-recipient limits now.
