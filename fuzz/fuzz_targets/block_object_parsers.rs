@@ -1,8 +1,6 @@
 #![no_main]
 
-use kutup_crypto::blocks::{
-    self, BlockFamily, BlockReader, NONCE_LEN, TRAILER_LEN,
-};
+use kutup_crypto::blocks::{self, BlockFamily, BlockReader, NONCE_LEN, TRAILER_LEN};
 use kutup_crypto::chat_backup::ChatBackupProtectionDomainV1;
 use kutup_crypto::chat_backup_media::ChatBackupMediaContextV1;
 use kutup_crypto::chat_backup_media_blocks::{
@@ -55,10 +53,12 @@ fuzz_target!(|data: &[u8]| {
         blocks::object_manifest_digest(data, DRIVE_BLOCKS_HEADER_BYTES, &DRIVE_BLOCKS)
     {
         let content = ContentCommitmentV1::new(drive.revision_id, digest);
-        let manifest = &data[data.len() - TRAILER_LEN
+        let manifest = &data[data.len()
+            - TRAILER_LEN
             - DRIVE_BLOCKS
                 .parse_trailer(&data[data.len() - TRAILER_LEN..])
-                .expect("the digest came from this trailer")..data.len() - TRAILER_LEN];
+                .expect("the digest came from this trailer")
+            ..data.len() - TRAILER_LEN];
         let size = BlockReader::open(
             &DRIVE_BLOCKS,
             &key,
@@ -92,8 +92,9 @@ fuzz_target!(|data: &[u8]| {
         (&CHAT_MEDIA_BLOCKS, chat_media_blocks::header(chat).to_vec()),
     ];
     for (family, header) in families {
-        let sealed = blocks::seal_manifest_plaintext(family, &key, &header, data, &[0x5a; NONCE_LEN])
-            .expect("any plaintext seals");
+        let sealed =
+            blocks::seal_manifest_plaintext(family, &key, &header, data, &[0x5a; NONCE_LEN])
+                .expect("any plaintext seals");
         if let Ok(reader) = BlockReader::open(
             family,
             &key,
