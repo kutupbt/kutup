@@ -207,8 +207,7 @@ pub fn open_file(
         .get(..DRIVE_BLOCKS_HEADER_BYTES)
         .ok_or(CryptoError::TooShort)?;
     validate_header(prefix, expected)?;
-    let digest =
-        blocks::trailer_manifest_digest(object, DRIVE_BLOCKS_HEADER_BYTES, &DRIVE_BLOCKS)?;
+    let digest = blocks::trailer_manifest_digest(object, DRIVE_BLOCKS_HEADER_BYTES, &DRIVE_BLOCKS)?;
     content.check(&expected.revision_id, &digest)?;
     let (plaintext, manifest) = blocks::open_object(
         &DRIVE_BLOCKS,
