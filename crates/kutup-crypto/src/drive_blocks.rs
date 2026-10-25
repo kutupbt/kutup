@@ -1,5 +1,6 @@
 //! Drive blobs in the block format (docs/plans/drive-block-format.md §2):
-//! suite 2 of `DriveObjectSuiteId`. Every original, version and editor
+//! Drive object suite 2 (`DRIVE_BLOCKS_SUITE`; `DriveObjectSuiteId` gains it
+//! when clients switch, so nothing parsing suite 1 accepts it before). Every original, version and editor
 //! snapshot is a revision with its own id, chosen by the client before it
 //! seals, so blocks can't move between versions, and the manifest is signed
 //! by the uploader's Drive signing key.
@@ -15,12 +16,14 @@
 use zeroize::Zeroizing;
 
 use crate::blocks::{self, BlockFamily, BlockReader, BlockSealer, Manifest};
-use crate::drive_object::{parse_canonical_uuid, DriveObjectPurpose, DriveObjectSuiteId};
+use crate::drive_object::{parse_canonical_uuid, DriveObjectPurpose};
 use crate::error::{CryptoError, Result};
 use crate::primitives::SigningKey;
 
 const MAGIC: &[u8; 8] = b"KUTPDB3\0";
 pub const DRIVE_BLOCKS_HEADER_BYTES: usize = 48;
+/// The Drive object suite of the block format.
+pub const DRIVE_BLOCKS_SUITE: u16 = 2;
 const KEY_LEN: usize = 32;
 
 /// The Drive family of the block construction.
@@ -60,11 +63,7 @@ impl DriveBlobContextV2 {
 pub fn header(context: DriveBlobContextV2) -> [u8; DRIVE_BLOCKS_HEADER_BYTES] {
     let mut header = [0u8; DRIVE_BLOCKS_HEADER_BYTES];
     header[..8].copy_from_slice(MAGIC);
-    header[8..10].copy_from_slice(
-        &DriveObjectSuiteId::KutupDriveBlocksV1
-            .as_u16()
-            .to_be_bytes(),
-    );
+    header[8..10].copy_from_slice(&DRIVE_BLOCKS_SUITE.to_be_bytes());
     header[10] = DriveObjectPurpose::FileBlob.as_u8();
     header[12..16].copy_from_slice(&context.generation.to_be_bytes());
     header[16..32].copy_from_slice(&context.file_id);
@@ -80,8 +79,7 @@ pub fn inspect_header(header: &[u8]) -> Result<DriveBlobContextV2> {
             "not a Drive block-format header".into(),
         ));
     }
-    if DriveObjectSuiteId::try_from(u16::from_be_bytes([header[8], header[9]]))?
-        != DriveObjectSuiteId::KutupDriveBlocksV1
+    if u16::from_be_bytes([header[8], header[9]]) != DRIVE_BLOCKS_SUITE
         || DriveObjectPurpose::try_from(header[10])? != DriveObjectPurpose::FileBlob
         || header[11] != 0
     {

@@ -6,7 +6,10 @@ crypto core) is built: `kutup-crypto` `blocks.rs`, `drive_blocks.rs`,
 the revision-bound thumbnail context, vectors (`blocks-v1.json`), the
 `block_object_parsers` fuzz target, the WASM `BlockEncryptor` and
 `BlockReader`, and the benchmark (§9). Nothing uses them yet: clients switch
-in slices 3–6. The user's decision: "follow proton drive". Reference:
+in slices 3–6. The suite id 2 is a constant of each family for now:
+`DriveObjectSuiteId` and `ChatMediaSuiteId` (a wire type in descriptors and
+federation offers) gain it in the slice that switches their protocol, so
+nothing that parses suite 1 accepts suite 2 before the server checks it. The user's decision: "follow proton drive". Reference:
 Proton's web client, `kutup-references/WebClients`. Its new
 `@protontech/drive-sdk` is not checked out there, so the in-repo upload and
 download code (`packages/drive-store`,

@@ -1,5 +1,7 @@
 //! Chat attachments in the block format (docs/plans/drive-block-format.md
-//! §2): suite 2 of `ChatMediaSuiteId`. An attachment is immutable, so its
+//! §2): Chat-media suite 2
+//! (`CHAT_MEDIA_BLOCKS_SUITE`; `ChatMediaSuiteId`, a wire type, gains it when
+//! Chat switches). An attachment is immutable, so its
 //! header names only the attachment; its manifest is unsigned, as the E2EE
 //! descriptor that carries the attachment key commits to the manifest's
 //! digest (Signal's incremental MAC in the pointer, in Kutup's framing).
@@ -11,11 +13,13 @@
 use zeroize::Zeroizing;
 
 use crate::blocks::{self, BlockFamily, BlockReader, BlockSealer, Manifest};
-use crate::chat_media::{ChatMediaObjectContextV1, ChatMediaObjectPurpose, ChatMediaSuiteId};
+use crate::chat_media::{ChatMediaObjectContextV1, ChatMediaObjectPurpose};
 use crate::error::{CryptoError, Result};
 
 const MAGIC: &[u8; 8] = b"KUTPCM2\0";
 pub const CHAT_MEDIA_BLOCKS_HEADER_BYTES: usize = 28;
+/// The Chat-media suite of the block format.
+pub const CHAT_MEDIA_BLOCKS_SUITE: u16 = 2;
 const KEY_LEN: usize = 32;
 
 /// The Chat-media family of the block construction.
@@ -31,7 +35,7 @@ pub static CHAT_MEDIA_BLOCKS: BlockFamily = BlockFamily {
 pub fn header(context: ChatMediaObjectContextV1) -> [u8; CHAT_MEDIA_BLOCKS_HEADER_BYTES] {
     let mut header = [0u8; CHAT_MEDIA_BLOCKS_HEADER_BYTES];
     header[..8].copy_from_slice(MAGIC);
-    header[8..10].copy_from_slice(&ChatMediaSuiteId::KutupBlocksV1.as_u16().to_be_bytes());
+    header[8..10].copy_from_slice(&CHAT_MEDIA_BLOCKS_SUITE.to_be_bytes());
     header[10] = ChatMediaObjectPurpose::AttachmentBlob.as_u8();
     header[12..28].copy_from_slice(&context.attachment_id);
     header
@@ -41,8 +45,7 @@ pub fn header(context: ChatMediaObjectContextV1) -> [u8; CHAT_MEDIA_BLOCKS_HEADE
 pub fn validate_header(header: &[u8], expected: ChatMediaObjectContextV1) -> Result<()> {
     if header.len() != CHAT_MEDIA_BLOCKS_HEADER_BYTES
         || header.get(..8) != Some(MAGIC)
-        || ChatMediaSuiteId::try_from(u16::from_be_bytes([header[8], header[9]]))?
-            != ChatMediaSuiteId::KutupBlocksV1
+        || u16::from_be_bytes([header[8], header[9]]) != CHAT_MEDIA_BLOCKS_SUITE
         || ChatMediaObjectPurpose::try_from(header[10])? != ChatMediaObjectPurpose::AttachmentBlob
         || header[11] != 0
         || header[12..28] != expected.attachment_id

@@ -26,8 +26,6 @@ const KEY_LEN: usize = 32;
 #[repr(u16)]
 pub enum DriveObjectSuiteId {
     KutupDriveV1 = 1,
-    /// The block format (docs/plans/drive-block-format.md, `drive_blocks`).
-    KutupDriveBlocksV1 = 2,
 }
 
 impl DriveObjectSuiteId {
@@ -42,7 +40,6 @@ impl TryFrom<u16> for DriveObjectSuiteId {
     fn try_from(value: u16) -> Result<Self> {
         match value {
             1 => Ok(Self::KutupDriveV1),
-            2 => Ok(Self::KutupDriveBlocksV1),
             _ => Err(CryptoError::InvalidInput(format!(
                 "unknown Drive object suite {value}"
             ))),
