@@ -1,30 +1,43 @@
 //! Canonical encrypted and signed collaborative-edit frame.
 //!
-//! Rust owns the complete V1 construction. Browser code receives and returns
-//! opaque packed bytes through WASM; it does not duplicate this parser, KDF or
-//! AEAD framing.
+//! Rust owns the complete construction (format V3, docs/plans/one-device-list.md
+//! §8). Browser code receives and returns opaque packed bytes through WASM; it
+//! does not duplicate this parser, KDF or AEAD framing.
 //!
 //! Wire layout (big-endian):
-//! `[80-byte header][ciphertext+tag][64-byte Ed25519 signature]`.
+//! `[88-byte header][ciphertext+tag][64-byte Ed25519 signature]`.
+//!
+//! A frame's sender is a device of an account: the header names the device
+//! (its id in the account's manifest, and the manifest sequence it sealed
+//! under), and the account travels beside the frame on every transport. The
+//! signature covers the account too, so whoever relays the frame can't name
+//! another sender.
 //!
 //! Frames are sealed under the file key and bound to the file and the key's
 //! generation; they name no folder, so a document's log survives a move
 //! (docs/plans/drive-move.md).
-//! The complete fixed header is AEAD associated data. The signature covers the
-//! header and ciphertext, but not its own trailing bytes.
+//! The complete fixed header is AEAD associated data. The signature covers its
+//! domain, the sender account, the header and the ciphertext: the file id, key
+//! generation and the device's sequence are all signed, so a frame can't be
+//! replayed into another file (a key holder could re-encrypt; it can't
+//! re-sign).
 
 use crate::primitives::{Aead, Kdf, SigningKey, Suite, VerifyingKey};
 use zeroize::Zeroizing;
 
+use crate::account_ref::AccountRef;
 use crate::drive_object::parse_canonical_uuid;
 use crate::error::{CryptoError, Result};
 
-const MAGIC: &[u8; 8] = b"KUTPCF2\0";
+const MAGIC: &[u8; 8] = b"KUTPCF3\0";
+const SIGNATURE_DOMAIN: &[u8] = b"kutup/collab/frame/v3\0";
 const KEY_DERIVATION_SALT: &[u8] = b"kutup/collab-frame/key/v1\0";
 const KEY_LEN: usize = 32;
 const NONCE_LEN: usize = 24;
 const TAG_LEN: usize = 16;
-pub const HEADER_SIZE: usize = 80;
+pub const HEADER_SIZE: usize = 88;
+/// A device id is an entry of the account's manifest: 1..=127.
+pub const MAX_DEVICE_ID: u32 = 127;
 pub const SIGNATURE_SIZE: usize = 64;
 pub const MIN_PACKED: usize = HEADER_SIZE + TAG_LEN + SIGNATURE_SIZE;
 pub const MAX_PLAINTEXT_BYTES: usize = 1024 * 1024;
@@ -72,23 +85,28 @@ pub mod kind {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct CollabFrameContextV1 {
+pub struct CollabFrameContextV3 {
     pub kind: u8,
     pub key_generation: u32,
     pub doc_key_id: u32,
     pub file_id: [u8; 16],
-    pub sender_device_id: u64,
+    /// The sender's id in its account's manifest.
+    pub device_id: u32,
+    /// The sequence of the sender account's manifest it sealed under.
+    pub manifest_sequence: u64,
+    /// The device's own frame counter in this file.
     pub sequence: u64,
 }
 
-impl CollabFrameContextV1 {
+impl CollabFrameContextV3 {
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         kind: u8,
         key_generation: u32,
         doc_key_id: u32,
         file_id: &str,
-        sender_device_id: u64,
+        device_id: u32,
+        manifest_sequence: u64,
         sequence: u64,
     ) -> Result<Self> {
         if !kind::is_supported(kind) {
@@ -96,20 +114,43 @@ impl CollabFrameContextV1 {
                 "unsupported collaboration frame kind {kind}"
             )));
         }
-        if key_generation == 0 || doc_key_id == 0 || sender_device_id == 0 || sequence == 0 {
-            return Err(CryptoError::InvalidInput(
-                "collaboration frame counters and identifiers must be non-zero".into(),
-            ));
-        }
+        check_identifiers(
+            key_generation,
+            doc_key_id,
+            device_id,
+            manifest_sequence,
+            sequence,
+        )?;
         Ok(Self {
             kind,
             key_generation,
             doc_key_id,
             file_id: parse_canonical_uuid(file_id, "collaboration file")?,
-            sender_device_id,
+            device_id,
+            manifest_sequence,
             sequence,
         })
     }
+}
+
+fn check_identifiers(
+    key_generation: u32,
+    doc_key_id: u32,
+    device_id: u32,
+    manifest_sequence: u64,
+    sequence: u64,
+) -> Result<()> {
+    if key_generation == 0 || doc_key_id == 0 || manifest_sequence == 0 || sequence == 0 {
+        return Err(CryptoError::InvalidInput(
+            "collaboration frame counters and identifiers must be non-zero".into(),
+        ));
+    }
+    if !(1..=MAX_DEVICE_ID).contains(&device_id) {
+        return Err(CryptoError::InvalidInput(
+            "collaboration frame device id must be 1-127".into(),
+        ));
+    }
+    Ok(())
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -119,7 +160,8 @@ pub struct Frame {
     pub key_generation: u32,
     pub doc_key_id: u32,
     pub file_id: [u8; 16],
-    pub sender_device_id: u64,
+    pub device_id: u32,
+    pub manifest_sequence: u64,
     pub sequence: u64,
     pub nonce: [u8; NONCE_LEN],
     pub ciphertext: Vec<u8>,
@@ -127,13 +169,14 @@ pub struct Frame {
 }
 
 impl Frame {
-    pub fn context(&self) -> CollabFrameContextV1 {
-        CollabFrameContextV1 {
+    pub fn context(&self) -> CollabFrameContextV3 {
+        CollabFrameContextV3 {
             kind: self.kind,
             key_generation: self.key_generation,
             doc_key_id: self.doc_key_id,
             file_id: self.file_id,
-            sender_device_id: self.sender_device_id,
+            device_id: self.device_id,
+            manifest_sequence: self.manifest_sequence,
             sequence: self.sequence,
         }
     }
@@ -147,10 +190,12 @@ impl Frame {
         out[12..16].copy_from_slice(&self.key_generation.to_be_bytes());
         out[16..20].copy_from_slice(&self.doc_key_id.to_be_bytes());
         out[20..36].copy_from_slice(&self.file_id);
-        out[36..44].copy_from_slice(&self.sender_device_id.to_be_bytes());
-        out[44..52].copy_from_slice(&self.sequence.to_be_bytes());
-        out[52..76].copy_from_slice(&self.nonce);
-        out[76..80].copy_from_slice(&(self.ciphertext.len() as u32).to_be_bytes());
+        out[36..40].copy_from_slice(&self.device_id.to_be_bytes());
+        // bytes 40..44 are reserved and remain zero.
+        out[44..52].copy_from_slice(&self.manifest_sequence.to_be_bytes());
+        out[52..60].copy_from_slice(&self.sequence.to_be_bytes());
+        out[60..84].copy_from_slice(&self.nonce);
+        out[84..88].copy_from_slice(&(self.ciphertext.len() as u32).to_be_bytes());
         out
     }
 
@@ -168,23 +213,26 @@ impl Frame {
         }
         let suite = CollabFrameSuiteId::try_from(u16::from_be_bytes([bytes[8], bytes[9]]))?;
         let frame_kind = bytes[10];
-        if !kind::is_supported(frame_kind) || bytes[11] != 0 {
+        if !kind::is_supported(frame_kind) || bytes[11] != 0 || bytes[40..44] != [0; 4] {
             return Err(CryptoError::InvalidInput(
                 "invalid collaboration frame kind or reserved byte".into(),
             ));
         }
         let key_generation = u32::from_be_bytes(bytes[12..16].try_into().expect("four-byte slice"));
         let doc_key_id = u32::from_be_bytes(bytes[16..20].try_into().expect("four-byte slice"));
-        let sender_device_id =
-            u64::from_be_bytes(bytes[36..44].try_into().expect("eight-byte slice"));
-        let sequence = u64::from_be_bytes(bytes[44..52].try_into().expect("eight-byte slice"));
-        if key_generation == 0 || doc_key_id == 0 || sender_device_id == 0 || sequence == 0 {
-            return Err(CryptoError::InvalidInput(
-                "collaboration frame identifiers must be non-zero".into(),
-            ));
-        }
+        let device_id = u32::from_be_bytes(bytes[36..40].try_into().expect("four-byte slice"));
+        let manifest_sequence =
+            u64::from_be_bytes(bytes[44..52].try_into().expect("eight-byte slice"));
+        let sequence = u64::from_be_bytes(bytes[52..60].try_into().expect("eight-byte slice"));
+        check_identifiers(
+            key_generation,
+            doc_key_id,
+            device_id,
+            manifest_sequence,
+            sequence,
+        )?;
         let ciphertext_len =
-            u32::from_be_bytes(bytes[76..80].try_into().expect("four-byte slice")) as usize;
+            u32::from_be_bytes(bytes[84..88].try_into().expect("four-byte slice")) as usize;
         if !(TAG_LEN..=MAX_PLAINTEXT_BYTES + TAG_LEN).contains(&ciphertext_len)
             || HEADER_SIZE
                 .checked_add(ciphertext_len)
@@ -203,16 +251,17 @@ impl Frame {
             key_generation,
             doc_key_id,
             file_id: bytes[20..36].try_into().expect("sixteen-byte slice"),
-            sender_device_id,
+            device_id,
+            manifest_sequence,
             sequence,
-            nonce: bytes[52..76].try_into().expect("twenty-four-byte slice"),
+            nonce: bytes[60..84].try_into().expect("twenty-four-byte slice"),
             ciphertext: bytes[HEADER_SIZE..HEADER_SIZE + ciphertext_len].to_vec(),
             signature,
         })
     }
 }
 
-fn derive_key(file_key: &[u8], context: CollabFrameContextV1) -> Result<Zeroizing<[u8; KEY_LEN]>> {
+fn derive_key(file_key: &[u8], context: CollabFrameContextV3) -> Result<Zeroizing<[u8; KEY_LEN]>> {
     if file_key.len() != KEY_LEN {
         return Err(CryptoError::InvalidLength {
             expected: KEY_LEN,
@@ -239,7 +288,7 @@ fn derive_key(file_key: &[u8], context: CollabFrameContextV1) -> Result<Zeroizin
 pub fn seal_unsigned(
     plaintext: &[u8],
     file_key: &[u8],
-    context: CollabFrameContextV1,
+    context: CollabFrameContextV3,
 ) -> Result<Vec<u8>> {
     let mut nonce = [0u8; NONCE_LEN];
     crate::primitives::random(&mut nonce);
@@ -250,7 +299,7 @@ pub fn seal_unsigned(
 pub fn seal_unsigned_with_nonce(
     plaintext: &[u8],
     file_key: &[u8],
-    context: CollabFrameContextV1,
+    context: CollabFrameContextV3,
     nonce: &[u8],
 ) -> Result<Vec<u8>> {
     if plaintext.len() > MAX_PLAINTEXT_BYTES {
@@ -268,7 +317,8 @@ pub fn seal_unsigned_with_nonce(
         key_generation: context.key_generation,
         doc_key_id: context.doc_key_id,
         file_id: context.file_id,
-        sender_device_id: context.sender_device_id,
+        device_id: context.device_id,
+        manifest_sequence: context.manifest_sequence,
         sequence: context.sequence,
         nonce,
         ciphertext: vec![0u8; plaintext.len() + TAG_LEN],
@@ -284,9 +334,17 @@ pub fn seal_unsigned_with_nonce(
     Ok(frame.pack())
 }
 
-pub fn signing_bytes(packed: &[u8]) -> Result<&[u8]> {
+/// What the sender's frame key signs: the domain, the sender account, and the
+/// packed frame without its signature.
+pub fn signing_bytes(packed: &[u8], sender: &AccountRef) -> Result<Vec<u8>> {
     Frame::unpack(packed)?;
-    Ok(&packed[..packed.len() - SIGNATURE_SIZE])
+    let account = sender.bytes();
+    let mut out =
+        Vec::with_capacity(SIGNATURE_DOMAIN.len() + account.len() + packed.len() - SIGNATURE_SIZE);
+    out.extend_from_slice(SIGNATURE_DOMAIN);
+    out.extend_from_slice(&account);
+    out.extend_from_slice(&packed[..packed.len() - SIGNATURE_SIZE]);
+    Ok(out)
 }
 
 pub fn attach_signature(packed: &[u8], signature: &[u8]) -> Result<Vec<u8>> {
@@ -302,7 +360,7 @@ pub fn attach_signature(packed: &[u8], signature: &[u8]) -> Result<Vec<u8>> {
     Ok(output)
 }
 
-pub fn sign(frame: &Frame, signing_seed: &[u8]) -> Result<Vec<u8>> {
+pub fn sign(frame: &Frame, sender: &AccountRef, signing_seed: &[u8]) -> Result<Vec<u8>> {
     let seed: [u8; 32] = signing_seed
         .try_into()
         .map_err(|_| CryptoError::InvalidLength {
@@ -312,11 +370,13 @@ pub fn sign(frame: &Frame, signing_seed: &[u8]) -> Result<Vec<u8>> {
     let mut unsigned = frame.clone();
     unsigned.signature = [0u8; SIGNATURE_SIZE];
     let packed = unsigned.pack();
-    let signature = SigningKey::from_seed(Suite::V1, &seed).sign(signing_bytes(&packed)?);
+    let signature = SigningKey::from_seed(Suite::V1, &seed).sign(&signing_bytes(&packed, sender)?);
     attach_signature(&packed, &signature)
 }
 
-pub fn verify(packed: &[u8], public_key: &[u8]) -> Result<()> {
+/// The frame is `sender`'s, signed with `public_key` (the frame key its
+/// account's manifest lists for the frame's device).
+pub fn verify(packed: &[u8], sender: &AccountRef, public_key: &[u8]) -> Result<()> {
     let frame = Frame::unpack(packed)?;
     let public_key: [u8; 32] = public_key
         .try_into()
@@ -327,7 +387,7 @@ pub fn verify(packed: &[u8], public_key: &[u8]) -> Result<()> {
     let verifying_key =
         VerifyingKey::from_bytes(Suite::V1, &public_key).map_err(|_| CryptoError::AuthFailed)?;
     verifying_key
-        .verify(signing_bytes(packed)?, &frame.signature)
+        .verify(&signing_bytes(packed, sender)?, &frame.signature)
         .map_err(|_| CryptoError::AuthFailed)
 }
 
@@ -358,16 +418,21 @@ pub fn open(
 mod tests {
     use super::*;
 
-    fn context() -> CollabFrameContextV1 {
-        CollabFrameContextV1::new(
+    fn context() -> CollabFrameContextV3 {
+        CollabFrameContextV3::new(
             kind::YJS_UPDATE,
             7,
             3,
             "11111111-1111-4111-8111-111111111111",
             9,
+            4,
             11,
         )
         .unwrap()
+    }
+
+    fn sender() -> AccountRef {
+        AccountRef::new("example.test", "0b6b5e0c-4c1e-4b8e-9c2d-6a1f3e5d7c9b").unwrap()
     }
 
     #[test]
@@ -376,11 +441,20 @@ mod tests {
         let seed = [0x51; 32];
         let unsigned = seal_unsigned(b"collaboration", &file_key, context()).unwrap();
         let frame = Frame::unpack(&unsigned).unwrap();
-        let signed = sign(&frame, &seed).unwrap();
+        let signed = sign(&frame, &sender(), &seed).unwrap();
         let public = SigningKey::from_seed(Suite::V1, &seed)
             .verifying_key()
             .to_array::<32>();
-        verify(&signed, &public).unwrap();
+        verify(&signed, &sender(), &public).unwrap();
+        // Another account named beside it: the signature is someone else's.
+        let other = AccountRef::new("other.test", "0b6b5e0c-4c1e-4b8e-9c2d-6a1f3e5d7c9b").unwrap();
+        assert!(verify(&signed, &other, &public).is_err());
+        // The device, manifest sequence and sequence are signed.
+        for byte in [39, 51, 59] {
+            let mut moved = signed.clone();
+            moved[byte] ^= 1;
+            assert!(verify(&moved, &sender(), &public).is_err(), "byte {byte}");
+        }
         assert_eq!(
             open(
                 &signed,
@@ -426,5 +500,21 @@ mod tests {
         )
         .is_err());
         assert!(seal_unsigned(&vec![0u8; MAX_PLAINTEXT_BYTES + 1], &file_key, context(),).is_err());
+        // Device ids are manifest entries; the reserved bytes stay zero.
+        for device_id in [0, 128] {
+            assert!(CollabFrameContextV3::new(
+                kind::YJS_UPDATE,
+                7,
+                3,
+                "11111111-1111-4111-8111-111111111111",
+                device_id,
+                4,
+                11
+            )
+            .is_err());
+        }
+        let mut reserved = unsigned.clone();
+        reserved[41] = 1;
+        assert!(Frame::unpack(&reserved).is_err());
     }
 }
