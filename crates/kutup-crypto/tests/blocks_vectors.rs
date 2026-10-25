@@ -41,6 +41,7 @@ struct Vectors {
     key: String,
     manifest_nonce: String,
     signer_seed: String,
+    signer_public_key: String,
     account_id: String,
     cases: Vec<Case>,
 }
@@ -196,6 +197,7 @@ fn computed() -> Vectors {
         key: STANDARD.encode(KEY),
         manifest_nonce: STANDARD.encode(MANIFEST_NONCE),
         signer_seed: STANDARD.encode(SIGNER_SEED),
+        signer_public_key: STANDARD.encode(signer.verifying_key().to_bytes()),
         account_id: STANDARD.encode(ACCOUNT),
         cases,
     }

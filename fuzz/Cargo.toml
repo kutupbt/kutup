@@ -65,3 +65,10 @@ path = "fuzz_targets/calendar_parsers.rs"
 test = false
 doc = false
 bench = false
+
+[[bin]]
+name = "block_object_parsers"
+path = "fuzz_targets/block_object_parsers.rs"
+test = false
+doc = false
+bench = false

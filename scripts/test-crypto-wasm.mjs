@@ -1263,4 +1263,105 @@ if (build === 'crypto') {
   assert.deepEqual(crypto.calendarSupportedUntil({ zoned: { local: '2026-12-28T22:30:00', tzid: 'Europe/Istanbul' } }, '2026-12-29'), { utc: '2026-12-29T20:59:59Z' })
 }
 
+// The block format (docs/plans/drive-block-format.md): what WASM seals block
+// by block is the Rust vectors' bytes (the nonces are synthetic), the vectors'
+// own manifests open, and every block opens only at its own index. The
+// manifest nonce is random, so a WASM manifest is checked by opening it.
+{
+  const v = JSON.parse(await readFile(`${root}/crates/kutup-crypto/tests/vectors/blocks-v1.json`, 'utf8'))
+  const b64 = (bytes) => Buffer.from(bytes).toString('base64')
+  const bytes = (text) => new Uint8Array(Buffer.from(text, 'base64'))
+  const pattern = (start, length) => Uint8Array.from({ length }, (_, i) => ((start + i) * 31) % 251)
+  const uuid = (raw) => Buffer.from(raw).toString('hex').replace(/^(.{8})(.{4})(.{4})(.{4})/, '$1-$2-$3-$4-')
+  const drive = ['11111111-1111-4111-8111-111111111111', '22222222-2222-4222-8222-222222222222', 4]
+  const attachment = '66666666-6666-4666-8666-666666666666'
+  for (const c of v.cases.filter((c) => !c.name.startsWith('chat-backup'))) {
+    const isDrive = c.name.startsWith('drive')
+    const family = isDrive ? 'drive' : 'chatMedia'
+    const encryptor = isDrive
+      ? crypto.driveBlockEncryptor(v.key, ...drive, c.size)
+      : crypto.chatMediaBlockEncryptor(v.key, attachment, c.size)
+    assert.equal(b64(encryptor.header()), c.header, c.name)
+    assert.equal(encryptor.objectLength, c.objectLen, c.name)
+    const sealed = []
+    for (let i = 0; i < encryptor.blockCount; i++) {
+      const block = encryptor.sealNext(pattern(i * 4 * 1024 * 1024, encryptor.blockLength(i)))
+      assert.equal(b64(block.subarray(0, 64)), c.blockHeads[i], `${c.name} block ${i}`)
+      sealed.push(block)
+    }
+    if (c.lastBlock) assert.equal(b64(sealed.at(-1)), c.lastBlock, c.name)
+    const tail = isDrive ? encryptor.finishSigned(identityMaster, '0b9f4c0e-6a51-4d2f-9a33-5e1f6c7d8e90') : encryptor.finish()
+    assert.throws(() => encryptor.sealNext(new Uint8Array(0)), /already finished/)
+    encryptor.free()
+
+    // The vector's manifest, then the one WASM sealed.
+    const layout = crypto.blockLayout(family)
+    const vectorTail = bytes(c.tail)
+    for (const manifestTail of [vectorTail, tail]) {
+      const length = crypto.blockTrailerManifestLength(family, manifestTail.subarray(manifestTail.length - layout.trailerBytes))
+      assert.equal(length, manifestTail.length - layout.trailerBytes)
+      const manifest = manifestTail.subarray(0, length)
+      const reader = isDrive
+        ? crypto.driveBlockReader(v.key, ...drive, bytes(c.header), manifest)
+        : crypto.chatMediaBlockReader(v.key, attachment, bytes(c.header), manifest)
+      assert.equal(reader.size, c.size)
+      assert.equal(reader.objectLength, c.objectLen)
+      if (manifestTail === vectorTail) assert.equal(reader.manifestSha256, c.manifestDigest)
+      for (let i = 0; i < sealed.length; i++) {
+        assert.equal(reader.sealedBlockLength(i), sealed[i].length)
+        assert.deepEqual(reader.openBlock(i, sealed[i]), pattern(i * 4 * 1024 * 1024, sealed[i].length - layout.blockOverhead))
+      }
+      if (sealed.length > 1) assert.throws(() => reader.openBlock(1, sealed[0]))
+      const flipped = sealed[0].slice()
+      flipped[30] ^= 1
+      assert.throws(() => reader.openBlock(0, flipped))
+      if (isDrive && manifestTail === vectorTail) {
+        assert.equal(reader.signerAccountId, uuid(bytes(v.accountId)))
+        reader.verifySigner(v.signerPublicKey)
+        assert.throws(() => reader.verifySigner(crypto.deriveAccountIdentityKeys(identityMaster).driveSigningPublicKey))
+      } else if (isDrive) {
+        assert.equal(reader.signerAccountId, '0b9f4c0e-6a51-4d2f-9a33-5e1f6c7d8e90')
+        reader.verifySigner(crypto.deriveAccountIdentityKeys(identityMaster).driveSigningPublicKey)
+      } else {
+        assert.equal(reader.signerAccountId, undefined)
+      }
+      reader.free()
+    }
+    // Another revision's or attachment's header: refused before any block.
+    const otherTail = vectorTail.subarray(0, vectorTail.length - layout.trailerBytes)
+    assert.throws(() => isDrive
+      ? crypto.driveBlockReader(v.key, drive[0], '44444444-4444-4444-8444-444444444444', drive[2], bytes(c.header), otherTail)
+      : crypto.chatMediaBlockReader(v.key, '77777777-7777-4777-8777-777777777777', bytes(c.header), otherTail))
+  }
+  assert.throws(() => crypto.blockLayout('photos'))
+  assert.throws(() => crypto.driveBlockEncryptor(v.key, ...drive, 1.5))
+
+  // Backup media: keyed from the backup root, padded, and given back without
+  // the padding, block by block.
+  const backupRoot = Buffer.alloc(32, 0x61).toString('base64')
+  const account = 'ab'.repeat(32)
+  const backup = '0b9f4c0e-6a51-4d2f-9a33-5e1f6c7d8e90'
+  const source = pattern(0, 1000)
+  const encryptor = crypto.chatBackupMediaBlockEncryptor(backupRoot, account, backup, 'attachment:1', source.length)
+  const mediaId = encryptor.mediaId
+  const padded = new Uint8Array(encryptor.size)
+  padded.set(source)
+  const blocks = []
+  for (let i = 0, at = 0; i < encryptor.blockCount; i++) {
+    const length = encryptor.blockLength(i)
+    blocks.push(encryptor.sealNext(padded.subarray(at, at + length)))
+    at += length
+  }
+  const header = encryptor.header()
+  const tail = encryptor.finish()
+  encryptor.free()
+  const length = crypto.blockTrailerManifestLength('chatBackupMedia', tail.subarray(tail.length - 12))
+  const reader = crypto.chatBackupMediaBlockReader(backupRoot, account, backup, mediaId, header, tail.subarray(0, length))
+  assert.equal(reader.sourceBytes, source.length)
+  const restored = Buffer.concat(blocks.map((block, i) => reader.openBlock(i, block)))
+  assert.deepEqual(new Uint8Array(restored), source)
+  reader.free()
+  assert.throws(() => crypto.chatBackupMediaBlockReader(backupRoot, account, backup, 'cd'.repeat(32), header, tail.subarray(0, length)))
+}
+
 console.log(`${build} WASM canonical vectors passed`)

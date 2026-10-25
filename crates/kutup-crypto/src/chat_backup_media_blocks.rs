@@ -101,14 +101,71 @@ pub fn sealer(
     BlockSealer::new(&CHAT_BACKUP_MEDIA_BLOCKS, outer_key(key)?, &header, padded)
 }
 
-pub fn reader<'a>(key: &[u8], header: &[u8], sealed_manifest: &[u8]) -> Result<BlockReader<'a>> {
-    inspect_header(header)?;
-    BlockReader::open(
-        &CHAT_BACKUP_MEDIA_BLOCKS,
-        outer_key(key)?,
-        header,
-        sealed_manifest,
-    )
+/// A media object's reader, block by block: each block's plaintext comes back
+/// without the padding, which is checked to be zeros, so a restore streams.
+pub struct MediaReader {
+    reader: BlockReader<'static>,
+    source_ciphertext_bytes: u64,
+}
+
+impl MediaReader {
+    /// Opens the manifest of the object behind `header`, which must name
+    /// `expected`, and checks the manifest's size is the header's padded size.
+    pub fn open(
+        key: &[u8],
+        expected: ChatBackupMediaContextV1,
+        header: &[u8],
+        sealed_manifest: &[u8],
+    ) -> Result<Self> {
+        let parsed = inspect_header(header)?;
+        if parsed.context != expected {
+            return Err(CryptoError::InvalidInput(
+                "Chat backup media is another object's".into(),
+            ));
+        }
+        let reader = BlockReader::open(
+            &CHAT_BACKUP_MEDIA_BLOCKS,
+            outer_key(key)?,
+            header,
+            sealed_manifest,
+        )?;
+        if reader.manifest().size != parsed.padded_plaintext_bytes {
+            return Err(CryptoError::InvalidInput(
+                "Chat backup media padding is invalid".into(),
+            ));
+        }
+        Ok(Self {
+            reader,
+            source_ciphertext_bytes: parsed.source_ciphertext_bytes,
+        })
+    }
+
+    pub fn reader(&self) -> &BlockReader<'static> {
+        &self.reader
+    }
+
+    /// The Chat-media ciphertext's length, before padding.
+    pub fn source_ciphertext_bytes(&self) -> u64 {
+        self.source_ciphertext_bytes
+    }
+
+    /// Block `index`'s share of the source: its padding checked and dropped
+    /// (empty for a block of padding only).
+    pub fn open_block(&self, index: u64, block: &[u8]) -> Result<Zeroizing<Vec<u8>>> {
+        let mut plaintext = self.reader.open_block(index, block)?;
+        let start = index * blocks::BLOCK_SIZE as u64;
+        let keep = self
+            .source_ciphertext_bytes
+            .saturating_sub(start)
+            .min(plaintext.len() as u64) as usize;
+        if plaintext[keep..].iter().any(|b| *b != 0) {
+            return Err(CryptoError::InvalidInput(
+                "Chat backup media padding is invalid".into(),
+            ));
+        }
+        plaintext.truncate(keep);
+        Ok(plaintext)
+    }
 }
 
 /// The whole object's length for `source_ciphertext_bytes` before padding.
@@ -196,6 +253,30 @@ mod tests {
             seal_media(&[], &[4; 32], context()).is_err(),
             "no empty source"
         );
+    }
+
+    #[test]
+    fn the_streaming_reader_drops_padding_per_block() {
+        let source = vec![9u8; blocks::BLOCK_SIZE + 3];
+        let object = seal_media(&source, &[4; 32], context()).unwrap();
+        let header = &object[..CHAT_BACKUP_MEDIA_BLOCKS_HEADER_BYTES];
+        let trailer = &object[object.len() - blocks::TRAILER_LEN..];
+        let len = CHAT_BACKUP_MEDIA_BLOCKS.parse_trailer(trailer).unwrap();
+        let manifest =
+            &object[object.len() - blocks::TRAILER_LEN - len..object.len() - blocks::TRAILER_LEN];
+        let reader = MediaReader::open(&[4; 32], context(), header, manifest).unwrap();
+        assert_eq!(reader.source_ciphertext_bytes(), source.len() as u64);
+        let mut restored = Vec::new();
+        for index in 0..reader.reader().manifest().count {
+            let start = blocks::block_offset(CHAT_BACKUP_MEDIA_BLOCKS_HEADER_BYTES, index) as usize;
+            let size = blocks::block_plaintext_len(reader.reader().manifest().size, index).unwrap();
+            let block = &object[start..start + size + blocks::BLOCK_OVERHEAD];
+            restored.extend_from_slice(&reader.open_block(index, block).unwrap());
+        }
+        assert_eq!(restored, source);
+        let mut other = context();
+        other.media_id = [5; 32];
+        assert!(MediaReader::open(&[4; 32], other, header, manifest).is_err());
     }
 
     #[test]
