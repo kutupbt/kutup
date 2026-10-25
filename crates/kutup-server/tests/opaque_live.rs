@@ -903,3 +903,66 @@ fn the_recovery_phrase_turns_two_step_sign_in_off() {
     assert!(kinds.contains("twoFactorOff"), "{kinds}");
     purge_accounts(&c, &base, &[&user]);
 }
+
+/// A code other than the authenticator's now (one step on; it is accepted
+/// in no window).
+fn wrong_code(secret: &str) -> String {
+    let now: u32 = totp_now(secret).parse().unwrap();
+    format!("{:06}", (now + 500_000) % 1_000_000)
+}
+
+/// A wrong code at renewal or turning off spends the grant, so each guess
+/// takes the password again, and counts against the account: the fifth
+/// wrong code blocks its second-factor checks, the right code included.
+#[test]
+fn wrong_second_factor_codes_spend_the_grant_and_block_the_account() {
+    let Ok(base) = std::env::var("KUTUP_LIVE_SERVER") else {
+        eprintln!("KUTUP_LIVE_SERVER not set; skipping");
+        return;
+    };
+    let c = client();
+    let user = register(&c, &base);
+    let (secret, _) = turn_on_two_step(&c, &base, &user);
+    let renew = |grant: &str, code: &str| {
+        bearer(
+            c.post(format!("{base}/api/user/2fa/recovery-codes")),
+            &user.token,
+        )
+        .json(&json!({ "grant": grant, "code": code }))
+        .send()
+        .unwrap()
+        .status()
+    };
+    let grant = reauth_grant(&c, &base, &user, "totp");
+    assert_eq!(renew(&grant, &wrong_code(&secret)), StatusCode::BAD_REQUEST);
+    // The grant went with the wrong code.
+    assert_eq!(renew(&grant, &totp_now(&secret)), StatusCode::FORBIDDEN);
+    for _ in 0..3 {
+        assert_eq!(
+            renew(
+                &reauth_grant(&c, &base, &user, "totp"),
+                &wrong_code(&secret)
+            ),
+            StatusCode::BAD_REQUEST
+        );
+    }
+    assert_eq!(
+        renew(
+            &reauth_grant(&c, &base, &user, "totp"),
+            &wrong_code(&secret)
+        ),
+        StatusCode::TOO_MANY_REQUESTS
+    );
+    // Blocked: the right code too, to renew or to turn it off.
+    assert_eq!(
+        renew(&reauth_grant(&c, &base, &user, "totp"), &totp_now(&secret)),
+        StatusCode::TOO_MANY_REQUESTS
+    );
+    let off = bearer(c.delete(format!("{base}/api/user/2fa")), &user.token)
+        .json(
+            &json!({ "code": totp_now(&secret), "grant": reauth_grant(&c, &base, &user, "totp") }),
+        )
+        .send()
+        .unwrap();
+    assert_eq!(off.status(), StatusCode::TOO_MANY_REQUESTS);
+}

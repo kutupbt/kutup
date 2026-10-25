@@ -885,15 +885,39 @@ pub(crate) fn hash_token(token: &str) -> String {
 
 /// Whether this pre-auth token is currently blocked — mirrors `IsTOTPBlocked`.
 pub fn is_totp_blocked(pre_auth_token: &str) -> bool {
-    let key = hash_token(pre_auth_token);
-    let tracker = TOTP_TRACKER.lock().unwrap();
-    tracker.blocked_at.contains_key(&key)
+    totp_blocked(hash_token(pre_auth_token))
 }
 
 /// Records a TOTP attempt result; returns false once the token is blocked — mirrors
 /// `RecordTOTPAttempt`. Success clears the counter; the 5th failure blocks the token.
 pub fn record_totp_attempt(pre_auth_token: &str, success: bool) -> bool {
-    let key = hash_token(pre_auth_token);
+    record_totp(hash_token(pre_auth_token), success)
+}
+
+/// The tracker's key for a signed-in account's second-factor checks
+/// (renewing recovery codes, turning two-step sign-in off): one budget per
+/// account, whichever session or grant guesses.
+fn account_totp_key(account: uuid::Uuid) -> String {
+    hash_token(&format!("account:{}", account.hyphenated()))
+}
+
+/// Whether the account's second-factor checks are blocked for now.
+pub fn is_account_totp_blocked(account: uuid::Uuid) -> bool {
+    totp_blocked(account_totp_key(account))
+}
+
+/// Records a signed-in second-factor check; false once the account is
+/// blocked (after `totp_attempts` failures, for `totp_block_minutes`).
+pub fn record_account_totp_attempt(account: uuid::Uuid, success: bool) -> bool {
+    record_totp(account_totp_key(account), success)
+}
+
+fn totp_blocked(key: String) -> bool {
+    let tracker = TOTP_TRACKER.lock().unwrap();
+    tracker.blocked_at.contains_key(&key)
+}
+
+fn record_totp(key: String, success: bool) -> bool {
     let mut tracker = TOTP_TRACKER.lock().unwrap();
 
     if tracker.blocked_at.contains_key(&key) {
@@ -1122,6 +1146,24 @@ mod tests {
         assert!(is_totp_blocked(token));
         // Once blocked, further attempts stay denied.
         assert!(!record_totp_attempt(token, true));
+    }
+
+    #[test]
+    fn an_accounts_second_factor_checks_block_after_five_failures() {
+        let (account, other) = (
+            uuid::Uuid::from_bytes([7; 16]),
+            uuid::Uuid::from_bytes([8; 16]),
+        );
+        for _ in 0..4 {
+            assert!(record_account_totp_attempt(account, false));
+            assert!(!is_account_totp_blocked(account));
+        }
+        assert!(!record_account_totp_attempt(account, false));
+        assert!(is_account_totp_blocked(account));
+        assert!(!record_account_totp_attempt(account, true));
+        // Another account, and a pre-auth token, keep their own budgets.
+        assert!(!is_account_totp_blocked(other));
+        assert!(!is_totp_blocked(&account.to_string()));
     }
 
     #[test]

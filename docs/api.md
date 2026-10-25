@@ -928,6 +928,12 @@ Disable TOTP for the current user. Requires a valid TOTP code, or a recovery
 code in its place, and a `totp` grant from a reauth of this session, so a
 stolen session cannot remove 2FA. The recovery codes go with it.
 
+A wrong code here or at `POST /api/user/2fa/recovery-codes` still uses up
+the grant, so each guess takes the password again. Wrong codes count per
+account: the `totp_attempts`-th (5) blocks both routes for
+`totp_block_minutes` (both rate-limit settings), with `429`, the right code
+included.
+
 **Auth:** Bearer JWT
 
 **Request body:**
