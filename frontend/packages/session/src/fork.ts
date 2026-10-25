@@ -19,6 +19,7 @@ import { persistKeys } from './persist'
 import { activateSession } from './profile'
 import { sanitizeNext } from './sessionSync'
 import { getSession } from './store'
+import { randomBytes } from '@kutup/crypto/random'
 
 /** The apps the account app forks for, and their session types. */
 export type ForkChild = Extract<AppId, 'drive' | 'chat' | 'maps' | 'photos' | 'office' | 'contacts' | 'mail' | 'pass' | 'calendar'>
@@ -43,7 +44,7 @@ const STATE_PREFIX = 'kutup-fork:'
 export const FORK_CONSUME_PATH = '/login'
 
 function randomToken(bytes = 24): string {
-  return toBase64(crypto.getRandomValues(new Uint8Array(bytes)))
+  return toBase64(randomBytes(bytes))
     .replace(/\+/g, '-')
     .replace(/\//g, '_')
     .replace(/=+$/, '')
@@ -97,7 +98,7 @@ async function mintFork(child: ForkChild, state: string): Promise<string> {
   if (!session) throw new Error('produceFork() needs a signed-in account session')
   if (!/^[A-Za-z0-9_-]{1,100}$/.test(state)) throw new Error('invalid fork state')
   const clientType = CHILD_CLIENT[child]
-  const key = crypto.getRandomValues(new Uint8Array(32))
+  const key = randomBytes(32)
   const payload = encodeKeys({
     userId: session.userId,
     masterKey: session.masterKey,

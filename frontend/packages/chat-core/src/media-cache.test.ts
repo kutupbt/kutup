@@ -16,7 +16,7 @@ vi.mock('@kutup/crypto/rustWasm', async () => {
 
 import { encryptChatMediaV1 } from '@kutup/crypto/chatMedia'
 import { toBase64 } from '@kutup/crypto/base64'
-import { getSodium } from '@kutup/crypto/sodium'
+import { hash, toHex } from '@kutup/crypto/hash'
 import {
   PrivateCiphertextCacheV1,
   type CiphertextCacheBackendV1,
@@ -64,7 +64,6 @@ async function fixture(): Promise<{
 }> {
   const plaintext = new TextEncoder().encode('authenticated offline Chat attachment')
   const ciphertext = await encryptChatMediaV1(plaintext, key, attachmentId)
-  const sodium = await getSodium()
   return {
     plaintext,
     ciphertext,
@@ -75,7 +74,7 @@ async function fixture(): Promise<{
       originDomain: 'a.test',
       retrievalToken: 'opaque-token',
       ciphertextBytes: ciphertext.length,
-      ciphertextSha256: sodium.crypto_hash_sha256(ciphertext, 'hex'),
+      ciphertextSha256: toHex(await hash(ciphertext)),
       attachmentKey: toBase64(key),
       plaintextBytes: plaintext.length,
       filename: 'note.txt',
@@ -187,7 +186,6 @@ describe('Chat private ciphertext cache integration', () => {
     new DataView(png.buffer).setUint32(16, 2, false)
     new DataView(png.buffer).setUint32(20, 3, false)
     const ciphertext = await encryptChatMediaV1(png, key, attachmentId)
-    const sodium = await getSodium()
     const descriptor: ChatAttachmentDescriptorV1 = {
       version: 1,
       suite: 1,
@@ -195,7 +193,7 @@ describe('Chat private ciphertext cache integration', () => {
       originDomain: 'a.test',
       retrievalToken: 'opaque-token',
       ciphertextBytes: ciphertext.length,
-      ciphertextSha256: sodium.crypto_hash_sha256(ciphertext, 'hex'),
+      ciphertextSha256: toHex(await hash(ciphertext)),
       attachmentKey: toBase64(key),
       plaintextBytes: png.length,
       filename: 'photo.png',
@@ -225,7 +223,7 @@ describe('Chat private ciphertext cache integration', () => {
       ...descriptor,
       attachmentId: pdfAttachmentId,
       ciphertextBytes: pdfCiphertext.length,
-      ciphertextSha256: sodium.crypto_hash_sha256(pdfCiphertext, 'hex'),
+      ciphertextSha256: toHex(await hash(pdfCiphertext)),
       plaintextBytes: pdf.length,
       filename: 'report.pdf',
       mimeType: 'application/pdf',

@@ -9,6 +9,7 @@
 // the note is shared with can see its images; the server sees neither.
 
 import { fetchAsset, uploadAsset } from '@kutup/collab/whiteboardAssets'
+import { hash } from '@kutup/crypto/hash'
 
 /** Pictures every browser shows. SVG is left out (it is a document, not a picture). */
 export const NOTE_IMAGE_TYPES = new Set(['image/png', 'image/jpeg', 'image/gif', 'image/webp', 'image/avif'])
@@ -35,7 +36,7 @@ export function imageMarkdown(name: string, assetId: string): string {
 
 /** Content-addressed: the same image pasted twice is stored once. */
 export async function assetIdOf(bytes: Uint8Array): Promise<string> {
-  const digest = new Uint8Array(await crypto.subtle.digest('SHA-256', bytes as BufferSource))
+  const digest = await hash(bytes)
   return 'img-' + Array.from(digest, (b) => b.toString(16).padStart(2, '0')).join('')
 }
 
