@@ -912,9 +912,12 @@ makes for itself, bound to the account.
 
 ### POST /api/user/2fa/recovery-codes
 
-New recovery codes in place of the old ones, which stop working: `{ "grant":
-"kg1_…" }` (a `totp` grant from a reauth of this session) →
-`{ "recoveryCodes": [...] }`, shown once. `409` while two-step sign-in is off.
+New recovery codes in place of the old ones, which stop working: `{ "code":
+"…", "grant": "kg1_…" }` → `{ "recoveryCodes": [...] }`, shown once. The code
+is the authenticator's or an unused recovery code (then spent), and the grant
+is a `totp` grant from a reauth of this session: as in Proton, a session and
+the password alone cannot mint codes. `400` for a wrong code, `409` while
+two-step sign-in is off.
 **Auth:** Bearer JWT.
 
 ---

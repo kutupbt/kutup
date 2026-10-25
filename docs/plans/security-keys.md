@@ -158,7 +158,9 @@ Proposed, following Proton:
 - **Recovery codes:** 16 single-use codes, generated when the account's first
   second factor is turned on (either kind), shown and downloadable once,
   stored as MACs under a key the server makes for itself (see D2 below).
-  - Regenerated on request with a `2fa` grant; the old set goes.
+  - Regenerated on request with a `2fa` grant and the second factor (an
+    authenticator code, a security key or an unused recovery code), as
+    Proton asks; the old set goes.
   - At sign-in, a code takes the second factor's place and is spent.
   - Settings show how many are left.
 - **Lost 2FA:** the recovery phrase's path (`/api/auth/recover/*`) also turns

@@ -94,13 +94,17 @@ export function useRecoveryCodesLeft(enabled: boolean) {
   })
 }
 
-/** New recovery codes in place of the old ones, with the password (a `totp` grant); the codes, to show once. */
+/**
+ * New recovery codes in place of the old ones, with the password (a `totp`
+ * grant) and the second factor (an authenticator code or an unused recovery
+ * code); the codes, to show once.
+ */
 export function useRenewRecoveryCodes() {
   const queryClient = useQueryClient()
   return useMutation({
-    mutationFn: async (password: OneUseSecret) => {
+    mutationFn: async ({ code, password }: TotpChange) => {
       const grant = await accountGrant(password.take(), 'totp')
-      const { data } = await api.post<{ recoveryCodes: string[] }>('/user/2fa/recovery-codes', { grant })
+      const { data } = await api.post<{ recoveryCodes: string[] }>('/user/2fa/recovery-codes', { code, grant })
       return data.recoveryCodes
     },
     onSuccess: async () => {

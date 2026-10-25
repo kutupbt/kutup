@@ -110,6 +110,7 @@ function RecoveryCodes({ onCodes }: { onCodes: (codes: string[]) => void }) {
   const left = useRecoveryCodesLeft(true)
   const renew = useRenewRecoveryCodes()
   const [open, setOpen] = useState(false)
+  const [code, setCode] = useState('')
   const [password, setPassword] = useState('')
 
   return (
@@ -126,16 +127,21 @@ function RecoveryCodes({ onCodes }: { onCodes: (codes: string[]) => void }) {
           className="space-y-4"
           onSubmit={(event) => {
             event.preventDefault()
-            renew.mutate(new OneUseSecret(password), {
-              onSuccess: (codes) => {
-                setOpen(false)
-                onCodes(codes)
+            renew.mutate(
+              { code: code.trim(), password: new OneUseSecret(password) },
+              {
+                onSuccess: (codes) => {
+                  setOpen(false)
+                  setCode('')
+                  onCodes(codes)
+                },
               },
-            })
+            )
             setPassword('')
           }}
         >
           <Alert variant="warn">{t('settings.security.renewWarning')}</Alert>
+          <CodeField label={t('settings.security.codeOrRecovery')} value={code} onChange={setCode} recovery />
           <PasswordField value={password} onChange={setPassword} />
           {renew.isError ? (
             <Alert variant="error">{totpFailure(renew.error, t, 'settings.security.renewFailed')}</Alert>

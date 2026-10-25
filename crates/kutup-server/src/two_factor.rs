@@ -147,7 +147,8 @@ pub(crate) async fn clear(
 }
 
 /// Turns every second factor off, in `tx` (the recovery phrase's path, and
-/// an administrator's reset); whether one was on.
+/// an administrator's reset); whether one was on. Security keys join here
+/// when they land (docs/plans/security-keys.md).
 pub(crate) async fn turn_off(
     tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
     user_id: Uuid,

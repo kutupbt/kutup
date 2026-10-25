@@ -751,7 +751,7 @@ fn second_step(c: &Client, base: &str, user: &User, code: &str) -> (StatusCode, 
 
 /// Recovery codes (docs/plans/security-keys.md, D2): made with two-step
 /// sign-in, each taking the second factor's place once however it is typed,
-/// renewed with the password (the old ones then fail), turning two-step off
+/// renewed with the password and the second factor (the old ones then fail), turning two-step off
 /// in the authenticator's place, and every step in the security log.
 #[test]
 fn recovery_codes_take_the_second_factors_place_once() {
@@ -782,18 +782,32 @@ fn recovery_codes_take_the_second_factors_place_once() {
         StatusCode::OK
     );
 
-    // New codes need the password; the old ones then fail.
-    let renew = |grant: &str| {
+    // New codes need the password and the second factor (a session and the
+    // password alone mint none); the old ones then fail.
+    let renew = |grant: &str, code: &str| {
         bearer(
             c.post(format!("{base}/api/user/2fa/recovery-codes")),
             &user.token,
         )
-        .json(&json!({ "grant": grant }))
+        .json(&json!({ "grant": grant, "code": code }))
         .send()
         .unwrap()
     };
-    assert_eq!(renew("").status(), StatusCode::FORBIDDEN);
-    let renewed: Value = renew(&reauth_grant(&c, &base, &user, "totp"))
+    assert_eq!(
+        renew("", &totp_now(&secret)).status(),
+        StatusCode::FORBIDDEN
+    );
+    assert_eq!(
+        renew(&reauth_grant(&c, &base, &user, "totp"), "").status(),
+        StatusCode::BAD_REQUEST
+    );
+    assert_eq!(
+        renew(&reauth_grant(&c, &base, &user, "totp"), "000000").status(),
+        StatusCode::BAD_REQUEST
+    );
+    // A refused renewal spends nothing.
+    assert_eq!(codes_left(&c, &base, &user), 15);
+    let renewed: Value = renew(&reauth_grant(&c, &base, &user, "totp"), &totp_now(&secret))
         .json()
         .unwrap();
     let new_codes: Vec<String> = renewed["recoveryCodes"]
@@ -822,7 +836,7 @@ fn recovery_codes_take_the_second_factors_place_once() {
     );
     // While it is off there is nothing to renew.
     assert_eq!(
-        renew(&reauth_grant(&c, &base, &user, "totp")).status(),
+        renew(&reauth_grant(&c, &base, &user, "totp"), &totp_now(&secret)).status(),
         StatusCode::CONFLICT
     );
 

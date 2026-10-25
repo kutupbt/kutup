@@ -928,6 +928,11 @@ pub async fn login_two_fa(
     // (docs/plans/security-keys.md, D2); spent with the sign-in it allows.
     let valid = valid || {
         let mut tx = state.pool.begin().await?;
+        // Still the password that was proved, before a code is spent: a
+        // sign-in that fails on a changed password keeps its code.
+        if credential_held(&mut tx, account, &epoch).await?.is_none() {
+            return Err(pre_auth_invalid());
+        }
         let spent = crate::two_factor::spend(&mut tx, &state.pool, account, &req.code).await?;
         if spent {
             crate::security_events::record(
@@ -1436,11 +1441,16 @@ pub async fn verify_totp(
     crate::grants::take_for_session(&mut *tx, &req.grant, crate::grants::Purpose::Totp, &user)
         .await?;
     let user_id = parse_uuid(&user.user_id)?;
-    sqlx::query("UPDATE users SET totp_enabled = true WHERE id = $1 AND totp_secret = $2")
-        .bind(user_id)
-        .bind(&secret)
-        .execute(&mut *tx)
-        .await?;
+    let enabled =
+        sqlx::query("UPDATE users SET totp_enabled = true WHERE id = $1 AND totp_secret = $2")
+            .bind(user_id)
+            .bind(&secret)
+            .execute(&mut *tx)
+            .await?;
+    // A new setup or a turn-off landed since the secret was read.
+    if enabled.rows_affected() != 1 {
+        return Err(AppError::conflict("two-step sign-in changed meanwhile"));
+    }
     // Its recovery codes, made with it (docs/plans/security-keys.md, D2).
     let count = crate::site_settings::TWO_FACTOR_RECOVERY_CODES
         .load(&mut *tx)
@@ -1484,14 +1494,6 @@ pub struct RecoveryCodesResponse {
     recovery_codes: Vec<String>,
 }
 
-/// A reauth's grant for this session (`totp` purpose).
-// No Debug: it carries a one-time grant.
-#[derive(Default, Deserialize, ToSchema)]
-#[serde(default)]
-pub struct GrantRequest {
-    grant: String,
-}
-
 /// `GET /api/user/2fa/recovery-codes` — how many recovery codes are left.
 #[utoipa::path(
     get,
@@ -1510,35 +1512,34 @@ pub async fn recovery_codes_left(
 
 /// `POST /api/user/2fa/recovery-codes` — new recovery codes in place of the
 /// old ones, with the password proved again (a `totp` grant from a reauth of
-/// this session). `409` while two-factor sign-in is off.
+/// this session) and the second factor too (an authenticator code, or an
+/// unused recovery code), as Proton asks: a stolen session and password
+/// alone cannot mint codes. `409` while two-factor sign-in is off.
 #[utoipa::path(
     post,
     path = "/api/user/2fa/recovery-codes",
     tag = "auth",
     security(("BearerAuth" = [])),
-    request_body = GrantRequest,
+    request_body = CodeRequest,
     responses(
         (status = 200, description = "The new codes, shown once; the old ones stop working", body = RecoveryCodesResponse),
+        (status = 400, description = "The code is wrong"),
         (status = 409, description = "Two-factor sign-in is off"),
     )
 )]
 pub async fn renew_recovery_codes(
     State(state): State<AppState>,
     user: AuthUser,
-    body: Result<Json<GrantRequest>, JsonRejection>,
+    body: Result<Json<CodeRequest>, JsonRejection>,
 ) -> AppResult<Response> {
     let Json(req) = body.map_err(|_| AppError::bad_request("invalid request"))?;
     let user_id = parse_uuid(&user.user_id)?;
     let mut tx = state.pool.begin().await?;
     crate::grants::take_for_session(&mut *tx, &req.grant, crate::grants::Purpose::Totp, &user)
         .await?;
-    let on: Option<bool> =
-        sqlx::query_scalar("SELECT totp_enabled FROM users WHERE id = $1 FOR UPDATE")
-            .bind(user_id)
-            .fetch_optional(&mut *tx)
-            .await?;
-    if on != Some(true) {
-        return Err(AppError::conflict("two-step sign-in is off"));
+    match prove_second_factor(&mut tx, &state.pool, user_id, &req.code).await? {
+        SecondFactor::Proved => {}
+        SecondFactor::Off => return Err(AppError::conflict("two-step sign-in is off")),
     }
     let count = crate::site_settings::TWO_FACTOR_RECOVERY_CODES
         .load(&mut *tx)
@@ -1554,6 +1555,39 @@ pub async fn renew_recovery_codes(
     .await?;
     tx.commit().await?;
     Ok(Json(RecoveryCodesResponse { recovery_codes }).into_response())
+}
+
+/// Whether the account's second factor is on, and if so `code` proves it.
+enum SecondFactor {
+    Off,
+    Proved,
+}
+
+/// In `tx`, with the account's row locked: [`SecondFactor::Off`] while
+/// two-step sign-in is off, [`SecondFactor::Proved`] when `code` is the
+/// authenticator's or an unused recovery code (then spent), else `400`.
+async fn prove_second_factor(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    pool: &sqlx::PgPool,
+    user_id: Uuid,
+    code: &str,
+) -> AppResult<SecondFactor> {
+    let secret: Option<Option<String>> = sqlx::query_scalar(
+        "SELECT totp_secret FROM users WHERE id = $1 AND totp_enabled = true FOR UPDATE",
+    )
+    .bind(user_id)
+    .fetch_optional(&mut **tx)
+    .await?;
+    let Some(Some(secret)) = secret else {
+        return Ok(SecondFactor::Off);
+    };
+    if code.is_empty()
+        || !(totp::validate_totp(&secret, code)
+            || crate::two_factor::spend(tx, pool, user_id, code).await?)
+    {
+        return Err(AppError::bad_request("invalid code"));
+    }
+    Ok(SecondFactor::Proved)
 }
 
 /// `DELETE /api/user/2fa` — mirrors `DisableTOTP`.
@@ -1578,26 +1612,16 @@ pub async fn disable_totp(
         return Err(AppError::bad_request("totp code required"));
     }
 
-    let secret: Option<String> =
-        sqlx::query_scalar("SELECT totp_secret FROM users WHERE id = $1 AND totp_enabled = true")
-            .bind(parse_uuid(&user.user_id)?)
-            .fetch_optional(&state.pool)
-            .await?
-            .flatten();
-    let Some(secret) = secret else {
-        return Err(AppError::bad_request("TOTP not enabled"));
-    };
-
-    // The code (an authenticator's, or a recovery code when the authenticator
-    // is lost) and the password: a stolen session alone cannot turn it off.
+    // The password (the grant, taken first) and the code (an authenticator's,
+    // or a recovery code when the authenticator is lost): a stolen session
+    // alone cannot turn it off.
     let user_id = parse_uuid(&user.user_id)?;
     let mut tx = state.pool.begin().await?;
-    if !totp::validate_totp(&secret, &code)
-        && !crate::two_factor::spend(&mut tx, &state.pool, user_id, &code).await?
-    {
-        return Err(AppError::bad_request("invalid code"));
-    }
     crate::grants::take_for_session(&mut *tx, &grant, crate::grants::Purpose::Totp, &user).await?;
+    match prove_second_factor(&mut tx, &state.pool, user_id, &code).await? {
+        SecondFactor::Proved => {}
+        SecondFactor::Off => return Err(AppError::bad_request("TOTP not enabled")),
+    }
     crate::two_factor::turn_off(&mut tx, user_id).await?;
     crate::security_events::record(
         &mut tx,
