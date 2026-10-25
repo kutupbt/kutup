@@ -886,6 +886,26 @@
       "twoFactorLimits": {
         "twoFactorRecoveryCodes": "Recovery codes per account",
         "twoFactorRecoveryCodesHint": "How many one-time codes are made when someone turns two-factor authentication on or makes new codes."
+      },
+      "drive": "Drive uploads and streaming",
+      "driveHint": "How large a file may be, and how videos and audio play while they download.",
+      "driveLimits": {
+        "driveUploadMaxBytes": "Largest upload (bytes)",
+        "driveUploadMaxBytesHint": "The largest file one upload stores, encrypted.",
+        "driveVersionMaxBytes": "Largest version (bytes)",
+        "driveVersionMaxBytesHint": "The largest saved version: an editor's save, or a new upload of a file.",
+        "driveStreamMaxBytes": "Largest file to stream (bytes)",
+        "driveStreamMaxBytesHint": "Larger files download whole before they play. 0 never streams.",
+        "driveStreamCacheBlocks": "Blocks kept per stream",
+        "driveStreamCacheBlocksHint": "Checked 4 MiB blocks a playing file keeps in memory.",
+        "driveStreamReadaheadBlocks": "Blocks read ahead",
+        "driveStreamReadaheadBlocksHint": "Blocks fetched ahead of the one playing.",
+        "driveStreamMaxConcurrent": "Streams per tab",
+        "driveStreamMaxConcurrentHint": "Files one browser tab plays at once.",
+        "driveStreamResponseMaxBytes": "Largest part per request (bytes)",
+        "driveStreamResponseMaxBytesHint": "The most one ranged download answer carries, also across servers.",
+        "driveStreamBlobFallbackMaxBytes": "Largest file played from memory (bytes)",
+        "driveStreamBlobFallbackMaxBytesHint": "Where a browser can't stream, files up to this size load whole into memory to play."
       }
     },
     "federation": {

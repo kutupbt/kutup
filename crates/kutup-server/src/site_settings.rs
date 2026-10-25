@@ -638,6 +638,92 @@ pub const TWO_FACTOR_RECOVERY_CODES: NumericSetting = NumericSetting {
     max: 64,
 };
 pub const TWO_FACTOR_SETTINGS: [NumericSetting; 1] = [TWO_FACTOR_RECOVERY_CODES];
+const KIB: i64 = 1024;
+const MIB: i64 = 1024 * KIB;
+const GIB: i64 = 1024 * MIB;
+const TIB: i64 = 1024 * GIB;
+
+/// Drive's upload limits and streaming (docs/plans/drive-block-format.md §7).
+/// The largest file one upload stores, in ciphertext bytes. A block-format
+/// object has at most 2^20 blocks of 4 MiB, so 4 TiB is the ceiling.
+pub const DRIVE_UPLOAD_MAX_BYTES: NumericSetting = NumericSetting {
+    key: "drive_upload_max_bytes",
+    field: "driveUploadMaxBytes",
+    default: 10 * GIB,
+    min: MIB,
+    max: 4 * TIB,
+};
+/// The largest saved version (an editor's snapshot or a new upload of a
+/// file), in ciphertext bytes.
+pub const DRIVE_VERSION_MAX_BYTES: NumericSetting = NumericSetting {
+    key: "drive_version_max_bytes",
+    field: "driveVersionMaxBytes",
+    default: 2 * GIB,
+    min: MIB,
+    max: 4 * TIB,
+};
+/// The largest file a player streams rather than downloads first; 0 never
+/// streams. Above the upload limit it changes nothing.
+pub const DRIVE_STREAM_MAX_BYTES: NumericSetting = NumericSetting {
+    key: "drive_stream_max_bytes",
+    field: "driveStreamMaxBytes",
+    default: 10 * GIB,
+    min: 0,
+    max: 4 * TIB,
+};
+/// Verified blocks one stream keeps (2 on iOS, where the client takes one
+/// fewer).
+pub const DRIVE_STREAM_CACHE_BLOCKS: NumericSetting = NumericSetting {
+    key: "drive_stream_cache_blocks",
+    field: "driveStreamCacheBlocks",
+    default: 3,
+    min: 1,
+    max: 16,
+};
+/// Blocks a stream reads ahead of the one playing.
+pub const DRIVE_STREAM_READAHEAD_BLOCKS: NumericSetting = NumericSetting {
+    key: "drive_stream_readahead_blocks",
+    field: "driveStreamReadaheadBlocks",
+    default: 1,
+    min: 0,
+    max: 4,
+};
+/// Streams one tab plays at once.
+pub const DRIVE_STREAM_MAX_CONCURRENT: NumericSetting = NumericSetting {
+    key: "drive_stream_max_concurrent",
+    field: "driveStreamMaxConcurrent",
+    default: 3,
+    min: 1,
+    max: 8,
+};
+/// The most bytes one ranged answer carries, and so the federated part
+/// size. The default holds one sealed block (4 MiB and its 40 bytes) whole.
+pub const DRIVE_STREAM_RESPONSE_MAX_BYTES: NumericSetting = NumericSetting {
+    key: "drive_stream_response_max_bytes",
+    field: "driveStreamResponseMaxBytes",
+    default: 5 * MIB,
+    min: 256 * KIB,
+    max: 16 * MIB,
+};
+/// Without a service worker, the largest file a player loads whole into
+/// memory instead.
+pub const DRIVE_STREAM_BLOB_FALLBACK_MAX_BYTES: NumericSetting = NumericSetting {
+    key: "drive_stream_blob_fallback_max_bytes",
+    field: "driveStreamBlobFallbackMaxBytes",
+    default: GIB,
+    min: 0,
+    max: 4 * GIB,
+};
+pub const DRIVE_SETTINGS: [NumericSetting; 8] = [
+    DRIVE_UPLOAD_MAX_BYTES,
+    DRIVE_VERSION_MAX_BYTES,
+    DRIVE_STREAM_MAX_BYTES,
+    DRIVE_STREAM_CACHE_BLOCKS,
+    DRIVE_STREAM_READAHEAD_BLOCKS,
+    DRIVE_STREAM_MAX_CONCURRENT,
+    DRIVE_STREAM_RESPONSE_MAX_BYTES,
+    DRIVE_STREAM_BLOB_FALLBACK_MAX_BYTES,
+];
 
 /// Every whole-number setting `/api/admin/settings` lists by field.
 pub fn numeric_settings() -> impl Iterator<Item = &'static NumericSetting> {
@@ -646,6 +732,7 @@ pub fn numeric_settings() -> impl Iterator<Item = &'static NumericSetting> {
         .chain(CALENDAR_SETTINGS.iter())
         .chain(CHAT_IDENTITY_SETTINGS.iter())
         .chain(TWO_FACTOR_SETTINGS.iter())
+        .chain(DRIVE_SETTINGS.iter())
 }
 
 /// The multi-recipient limits now.
