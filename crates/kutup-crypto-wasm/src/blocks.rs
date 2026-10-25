@@ -8,7 +8,7 @@
 use base64::{engine::general_purpose::STANDARD, Engine as _};
 use kutup_crypto::blocks::{
     block_count, block_offset, block_plaintext_len, BlockFamily, BlockReader, BlockSealer,
-    BLOCK_OVERHEAD, BLOCK_SIZE, TRAILER_LEN,
+    SealedTail, BLOCK_OVERHEAD, BLOCK_SIZE, TRAILER_LEN,
 };
 use kutup_crypto::chat_backup::{self, ChatBackupContextV1};
 use kutup_crypto::chat_backup_media::ChatBackupMediaContextV1;
@@ -20,6 +20,7 @@ use kutup_crypto::chat_media_blocks::{self, CHAT_MEDIA_BLOCKS, CHAT_MEDIA_BLOCKS
 use kutup_crypto::drive_blocks::{
     self, DriveBlobContextV2, DRIVE_BLOCKS, DRIVE_BLOCKS_HEADER_BYTES,
 };
+use kutup_crypto::file_metadata::ContentCommitmentV1;
 use kutup_crypto::identity::AccountIdentityKeysV1;
 use kutup_crypto::primitives::{Suite, VerifyingKey};
 use serde::Serialize;
@@ -40,6 +41,14 @@ fn byte_count(value: f64, field: &str) -> Result<u64, JsValue> {
         )));
     }
     Ok(value as u64)
+}
+
+/// A sealed manifest's SHA-256, as metadata and descriptors carry it
+/// (canonical base64).
+fn manifest_sha256(value: &str) -> Result<[u8; 32], JsValue> {
+    decode_canonical_base64(value, "manifest SHA-256")?
+        .try_into()
+        .map_err(|_| js_error("manifest SHA-256 must be 32 bytes"))
 }
 
 fn block_index(value: f64) -> Result<u64, JsValue> {
@@ -152,6 +161,8 @@ pub struct BlockEncryptorJs {
     sealer: Option<BlockSealer<'static>>,
     /// A backup media object's id (lowercase hex), derived from its source.
     media_id: Option<String>,
+    /// Once finished: the sealed manifest's digest.
+    manifest_sha256: Option<[u8; 32]>,
 }
 
 impl BlockEncryptorJs {
@@ -159,6 +170,11 @@ impl BlockEncryptorJs {
         self.sealer
             .as_mut()
             .ok_or_else(|| js_error("block encryptor already finished"))
+    }
+
+    fn finished(&mut self, tail: SealedTail) -> Vec<u8> {
+        self.manifest_sha256 = Some(tail.manifest_sha256);
+        tail.bytes
     }
 }
 
@@ -216,6 +232,14 @@ impl BlockEncryptorJs {
         self.media_id.clone()
     }
 
+    /// Once finished, SHA-256 of the sealed manifest (canonical base64): what
+    /// the metadata or descriptor commits to, and every reader requires
+    /// (`content.manifestSha256` for Drive).
+    #[wasm_bindgen(getter, js_name = manifestSha256)]
+    pub fn manifest_sha256(&self) -> Option<String> {
+        self.manifest_sha256.map(|digest| STANDARD.encode(digest))
+    }
+
     /// Seals the next block, which must be exactly its length.
     #[wasm_bindgen(js_name = sealNext)]
     pub fn seal_next(&mut self, plaintext: &[u8]) -> Result<Vec<u8>, JsValue> {
@@ -229,7 +253,8 @@ impl BlockEncryptorJs {
             .sealer
             .take()
             .ok_or_else(|| js_error("block encryptor already finished"))?;
-        sealer.finish(None).map_err(crypto_error)
+        let tail = sealer.finish(None).map_err(crypto_error)?;
+        Ok(self.finished(tail))
     }
 
     /// A Drive object's sealed manifest and trailer, signed with the
@@ -250,9 +275,10 @@ impl BlockEncryptorJs {
             .sealer
             .take()
             .ok_or_else(|| js_error("block encryptor already finished"))?;
-        sealer
+        let tail = sealer
             .finish(Some((identity.drive_signing_key(), account)))
-            .map_err(crypto_error)
+            .map_err(crypto_error)?;
+        Ok(self.finished(tail))
     }
 }
 
@@ -275,6 +301,7 @@ pub fn drive_block_encryptor(
         size,
         sealer: Some(drive_blocks::sealer(&file_key, context, size).map_err(crypto_error)?),
         media_id: None,
+        manifest_sha256: None,
     })
 }
 
@@ -294,6 +321,7 @@ pub fn chat_media_block_encryptor(
         size,
         sealer: Some(chat_media_blocks::sealer(&key, context, size).map_err(crypto_error)?),
         media_id: None,
+        manifest_sha256: None,
     })
 }
 
@@ -332,6 +360,7 @@ pub fn chat_backup_media_block_encryptor(
         size,
         sealer: Some(sealer),
         media_id: Some(hex::encode(media_id)),
+        manifest_sha256: None,
     })
 }
 
@@ -404,13 +433,6 @@ impl BlockReaderJs {
         Ok(self.blocks().object_len().map_err(crypto_error)? as f64)
     }
 
-    /// SHA-256 of the sealed manifest (canonical base64): what Drive file
-    /// metadata commits to (`content.manifestSha256`).
-    #[wasm_bindgen(getter, js_name = manifestSha256)]
-    pub fn manifest_sha256(&self) -> String {
-        STANDARD.encode(self.blocks().manifest_digest())
-    }
-
     /// The account id a Drive manifest names as its uploader.
     #[wasm_bindgen(getter, js_name = signerAccountId)]
     pub fn signer_account_id(&self) -> Option<String> {
@@ -447,34 +469,52 @@ impl BlockReaderJs {
     }
 }
 
-/// A reader of a Drive file revision.
+/// A reader of the Drive file revision its metadata commits to
+/// (`content.revisionId`, `content.manifestSha256`, and `size`): the header
+/// must name that revision and the manifest must be that one, of that size.
+#[allow(clippy::too_many_arguments)]
 #[wasm_bindgen(js_name = driveBlockReader)]
 pub fn drive_block_reader(
     file_key_base64: &str,
     expected_file_id: &str,
-    expected_revision_id: &str,
     expected_generation: u32,
+    content_revision_id: &str,
+    content_manifest_sha256: &str,
+    size: f64,
     header: &[u8],
     sealed_manifest: &[u8],
 ) -> Result<BlockReaderJs, JsValue> {
     let file_key = decode_canonical_base64(file_key_base64, "file key")?;
     let expected =
-        DriveBlobContextV2::new(expected_file_id, expected_revision_id, expected_generation)
+        DriveBlobContextV2::new(expected_file_id, content_revision_id, expected_generation)
             .map_err(crypto_error)?;
+    let content = ContentCommitmentV1::new(
+        expected.revision_id,
+        manifest_sha256(content_manifest_sha256)?,
+    );
     drive_blocks::validate_header(header, expected).map_err(crypto_error)?;
     Ok(BlockReaderJs {
         family: Family::Drive,
         reader: Reader::Blocks(
-            drive_blocks::reader(&file_key, expected, sealed_manifest).map_err(crypto_error)?,
+            drive_blocks::reader(
+                &file_key,
+                expected,
+                sealed_manifest,
+                &content,
+                byte_count(size, "file size")?,
+            )
+            .map_err(crypto_error)?,
         ),
     })
 }
 
-/// A reader of a Chat attachment.
+/// A reader of a Chat attachment whose sealed manifest is the one its
+/// descriptor names (`manifestSha256`).
 #[wasm_bindgen(js_name = chatMediaBlockReader)]
 pub fn chat_media_block_reader(
     attachment_key_base64: &str,
     expected_attachment_id: &str,
+    expected_manifest_sha256: &str,
     header: &[u8],
     sealed_manifest: &[u8],
 ) -> Result<BlockReaderJs, JsValue> {
@@ -484,18 +524,26 @@ pub fn chat_media_block_reader(
     Ok(BlockReaderJs {
         family: Family::ChatMedia,
         reader: Reader::Blocks(
-            chat_media_blocks::reader(&key, expected, sealed_manifest).map_err(crypto_error)?,
+            chat_media_blocks::reader(
+                &key,
+                expected,
+                sealed_manifest,
+                &manifest_sha256(expected_manifest_sha256)?,
+            )
+            .map_err(crypto_error)?,
         ),
     })
 }
 
-/// A reader of a backup media copy, its key derived from the backup root.
+/// A reader of a backup media copy, its key derived from the backup root,
+/// whose sealed manifest is the one the backup's index names.
 #[wasm_bindgen(js_name = chatBackupMediaBlockReader)]
 pub fn chat_backup_media_block_reader(
     backup_root_base64: &str,
     expected_account_incarnation_id: &str,
     expected_backup_incarnation_id: &str,
     expected_media_id: &str,
+    expected_manifest_sha256: &str,
     header: &[u8],
     sealed_manifest: &[u8],
 ) -> Result<BlockReaderJs, JsValue> {
@@ -515,6 +563,7 @@ pub fn chat_backup_media_block_reader(
                 backup_media_context(context, media_id),
                 header,
                 sealed_manifest,
+                &manifest_sha256(expected_manifest_sha256)?,
             )
             .map_err(crypto_error)?,
         ),

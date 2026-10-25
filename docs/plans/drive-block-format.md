@@ -9,7 +9,9 @@ the revision-bound thumbnail context, vectors (`blocks-v1.json`), the
 in slices 3–6. The suite id 2 is a constant of each family for now:
 `DriveObjectSuiteId` and `ChatMediaSuiteId` (a wire type in descriptors and
 federation offers) gain it in the slice that switches their protocol, so
-nothing that parses suite 1 accepts suite 2 before the server checks it. The user's decision: "follow proton drive". Reference:
+nothing that parses suite 1 accepts suite 2 before the server checks it.
+When they do, the suite-1 parsers must still refuse suite 2 under the old
+magics (`KUTPDB2`, `KUTPCM1`), with a test each. The user's decision: "follow proton drive". Reference:
 Proton's web client, `kutup-references/WebClients`. Its new
 `@protontech/drive-sdk` is not checked out there, so the in-repo upload and
 download code (`packages/drive-store`,
@@ -215,7 +217,7 @@ manifest plaintext:
   u32 block size ‖ u32 n ‖ u64 plaintext size ‖ h_0 … h_{n−1}
   ‖ signer: u8 kind (1 = Drive signing key) ‖ 16-byte account id
   ‖ 64-byte Ed25519 signature
-signed message = "kutup/drive-block-manifest/v1\0" ‖ header
+signed message = "kutup/drive-block-manifest/v1\0" ‖ header ‖ 16-byte account id
                  ‖ u32 block size ‖ u32 n ‖ u64 size ‖ h_0 … h_{n−1}
 sealed manifest = nonce(24 random) ‖ XChaCha20-Poly1305(manifest key, nonce,
                   AAD = header ‖ "manifest", plaintext) ‖ tag(16)
@@ -293,7 +295,13 @@ Two more bindings close that:
   saved version, a restore) seals the next metadata revision with it, in the
   same request that commits the content.
   - A reader opens the metadata first, then refuses any object whose header
-    revision or manifest digest differs.
+    revision or manifest digest differs. Every reader takes the committed
+    digest as an argument and compares it before it opens anything: the
+    Drive reader takes `content` and the metadata's size, the Chat
+    attachment reader the descriptor's digest, the backup media reader the
+    index's. None can open a manifest without one, so a key holder (a
+    co-editor, a group member) can't have the server hand others a valid
+    object of their own making under the same header.
   - Older content under newer metadata therefore fails.
   - The block hash list is thus committed twice: in the sealed metadata
     through the manifest digest, and by the uploader's signature, as Proton
@@ -616,7 +624,15 @@ site settings in slice 2 too, since streaming depends on them.
   where it was played and seeked to. Proton's server learns the same.
 
 It learns nothing of the content, the manifest or who signed it (the signer
-is inside the sealed manifest).
+is inside the sealed manifest). The signature covers the account id it
+names, so a holder of the file key can't move it onto another name.
+
+**Key commitment.** XChaCha20-Poly1305 is not key-committing: a manifest
+could be crafted to open under two keys. That gains nothing here, because a
+reader first checks the sealed manifest's SHA-256 against the digest its
+metadata or descriptor commits to (opened under the right key), and each
+block's SHA-256 against the manifest before its AEAD. The bytes are fixed by
+hashes before any key is used on them.
 
 **Integrity.** Any change to one block's bytes fails its hash and its AEAD.
 A wrong manifest fails its AEAD, its AAD (header and revision) and its

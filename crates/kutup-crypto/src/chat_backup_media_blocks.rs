@@ -6,7 +6,7 @@
 
 use zeroize::Zeroizing;
 
-use crate::blocks::{self, BlockFamily, BlockReader, BlockSealer, Manifest};
+use crate::blocks::{self, BlockFamily, BlockReader, BlockSealer, Manifest, SealedObject};
 use crate::chat_backup::ChatBackupProtectionDomainV1;
 use crate::chat_backup_media::{padded_media_plaintext_bytes, ChatBackupMediaContextV1};
 use crate::error::{CryptoError, Result};
@@ -110,12 +110,15 @@ pub struct MediaReader {
 
 impl MediaReader {
     /// Opens the manifest of the object behind `header`, which must name
-    /// `expected`, and checks the manifest's size is the header's padded size.
+    /// `expected` and be the one the backup's index commits to
+    /// (`expected_manifest_sha256`), and checks the manifest's size is the
+    /// header's padded size.
     pub fn open(
         key: &[u8],
         expected: ChatBackupMediaContextV1,
         header: &[u8],
         sealed_manifest: &[u8],
+        expected_manifest_sha256: &[u8; 32],
     ) -> Result<Self> {
         let parsed = inspect_header(header)?;
         if parsed.context != expected {
@@ -128,6 +131,7 @@ impl MediaReader {
             outer_key(key)?,
             header,
             sealed_manifest,
+            expected_manifest_sha256,
         )?;
         if reader.manifest().size != parsed.padded_plaintext_bytes {
             return Err(CryptoError::InvalidInput(
@@ -176,8 +180,13 @@ pub fn object_len(source_ciphertext_bytes: u64) -> Result<u64> {
     )
 }
 
-/// Pads `source` (the Chat-media ciphertext) to its bucket and seals it.
-pub fn seal_media(source: &[u8], key: &[u8], context: ChatBackupMediaContextV1) -> Result<Vec<u8>> {
+/// Pads `source` (the Chat-media ciphertext) to its bucket and seals it;
+/// with the digest the backup's index commits to.
+pub fn seal_media(
+    source: &[u8],
+    key: &[u8],
+    context: ChatBackupMediaContextV1,
+) -> Result<SealedObject> {
     let header = header(context, source.len() as u64)?;
     let padded = padded_media_plaintext_bytes(source.len() as u64)? as usize;
     let mut plaintext = Zeroizing::new(vec![0u8; padded]);
@@ -191,13 +200,15 @@ pub fn seal_media(source: &[u8], key: &[u8], context: ChatBackupMediaContextV1) 
     )
 }
 
-/// Opens a whole media object for `expected`: the source without its padding
-/// (the padding checked to be zeros), and the manifest's digest.
+/// Opens a whole media object for `expected` whose sealed manifest is the
+/// committed one: the source without its padding (the padding checked to be
+/// zeros), and the manifest.
 pub fn open_media(
     object: &[u8],
     key: &[u8],
     expected: ChatBackupMediaContextV1,
-) -> Result<(Zeroizing<Vec<u8>>, Manifest, [u8; 32])> {
+    expected_manifest_sha256: &[u8; 32],
+) -> Result<(Zeroizing<Vec<u8>>, Manifest)> {
     let parsed = inspect_header(
         object
             .get(..CHAT_BACKUP_MEDIA_BLOCKS_HEADER_BYTES)
@@ -208,11 +219,12 @@ pub fn open_media(
             "Chat backup media is another object's".into(),
         ));
     }
-    let (mut plaintext, manifest, digest) = blocks::open_object(
+    let (mut plaintext, manifest) = blocks::open_object(
         &CHAT_BACKUP_MEDIA_BLOCKS,
         outer_key(key)?,
         CHAT_BACKUP_MEDIA_BLOCKS_HEADER_BYTES,
         object,
+        expected_manifest_sha256,
     )?;
     let source = parsed.source_ciphertext_bytes as usize;
     if manifest.size != parsed.padded_plaintext_bytes || plaintext[source..].iter().any(|b| *b != 0)
@@ -222,7 +234,7 @@ pub fn open_media(
         ));
     }
     plaintext.truncate(source);
-    Ok((plaintext, manifest, digest))
+    Ok((plaintext, manifest))
 }
 
 #[cfg(test)]
@@ -241,14 +253,18 @@ mod tests {
     #[test]
     fn media_is_padded_sealed_and_opened_to_its_source() {
         let source = vec![9u8; 1_000];
-        let object = seal_media(&source, &[4; 32], context()).unwrap();
+        let sealed = seal_media(&source, &[4; 32], context()).unwrap();
+        let (object, digest) = (&sealed.bytes, &sealed.manifest_sha256);
         assert_eq!(object.len() as u64, object_len(1_000).unwrap());
-        let (opened, manifest, _) = open_media(&object, &[4; 32], context()).unwrap();
+        let (opened, manifest) = open_media(object, &[4; 32], context(), digest).unwrap();
         assert_eq!(*opened, source);
         assert_eq!(manifest.size, padded_media_plaintext_bytes(1_000).unwrap());
         let mut other = context();
         other.media_id = [4; 32];
-        assert!(open_media(&object, &[4; 32], other).is_err());
+        assert!(open_media(object, &[4; 32], other, digest).is_err());
+        // Other media under the same id: not the one the index commits to.
+        let swapped = seal_media(&[8u8; 1_000], &[4; 32], context()).unwrap();
+        assert!(open_media(&swapped.bytes, &[4; 32], context(), digest).is_err());
         assert!(
             seal_media(&[], &[4; 32], context()).is_err(),
             "no empty source"
@@ -258,13 +274,14 @@ mod tests {
     #[test]
     fn the_streaming_reader_drops_padding_per_block() {
         let source = vec![9u8; blocks::BLOCK_SIZE + 3];
-        let object = seal_media(&source, &[4; 32], context()).unwrap();
+        let sealed = seal_media(&source, &[4; 32], context()).unwrap();
+        let (object, digest) = (&sealed.bytes, &sealed.manifest_sha256);
         let header = &object[..CHAT_BACKUP_MEDIA_BLOCKS_HEADER_BYTES];
         let trailer = &object[object.len() - blocks::TRAILER_LEN..];
         let len = CHAT_BACKUP_MEDIA_BLOCKS.parse_trailer(trailer).unwrap();
         let manifest =
             &object[object.len() - blocks::TRAILER_LEN - len..object.len() - blocks::TRAILER_LEN];
-        let reader = MediaReader::open(&[4; 32], context(), header, manifest).unwrap();
+        let reader = MediaReader::open(&[4; 32], context(), header, manifest, digest).unwrap();
         assert_eq!(reader.source_ciphertext_bytes(), source.len() as u64);
         let mut restored = Vec::new();
         for index in 0..reader.reader().manifest().count {
@@ -276,7 +293,8 @@ mod tests {
         assert_eq!(restored, source);
         let mut other = context();
         other.media_id = [5; 32];
-        assert!(MediaReader::open(&[4; 32], other, header, manifest).is_err());
+        assert!(MediaReader::open(&[4; 32], other, header, manifest, digest).is_err());
+        assert!(MediaReader::open(&[4; 32], context(), header, manifest, &[0; 32]).is_err());
     }
 
     #[test]
@@ -285,7 +303,7 @@ mod tests {
         let padded = padded_media_plaintext_bytes(10).unwrap() as usize;
         let mut plaintext = vec![0u8; padded];
         plaintext[padded - 1] = 1;
-        let object = blocks::seal_object(
+        let sealed = blocks::seal_object(
             &CHAT_BACKUP_MEDIA_BLOCKS,
             &[4; 32],
             &header,
@@ -293,6 +311,6 @@ mod tests {
             None,
         )
         .unwrap();
-        assert!(open_media(&object, &[4; 32], context()).is_err());
+        assert!(open_media(&sealed.bytes, &[4; 32], context(), &sealed.manifest_sha256).is_err());
     }
 }

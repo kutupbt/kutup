@@ -1263,10 +1263,18 @@ if (build === 'crypto') {
   assert.deepEqual(crypto.calendarSupportedUntil({ zoned: { local: '2026-12-28T22:30:00', tzid: 'Europe/Istanbul' } }, '2026-12-29'), { utc: '2026-12-29T20:59:59Z' })
 }
 
+/** Another digest than `digest` (its first byte flipped), in canonical base64. */
+const c0Digest = (digest) => {
+  const raw = Buffer.from(digest, 'base64')
+  raw[0] ^= 1
+  return raw.toString('base64')
+}
+
 // The block format (docs/plans/drive-block-format.md): what WASM seals block
 // by block is the Rust vectors' bytes (the nonces are synthetic), the vectors'
 // own manifests open, and every block opens only at its own index. The
-// manifest nonce is random, so a WASM manifest is checked by opening it.
+// manifest nonce is random, so a WASM manifest is checked by opening it. A
+// reader opens only the manifest its metadata or descriptor commits to.
 {
   const v = JSON.parse(await readFile(`${root}/crates/kutup-crypto/tests/vectors/blocks-v1.json`, 'utf8'))
   const b64 = (bytes) => Buffer.from(bytes).toString('base64')
@@ -1290,9 +1298,14 @@ if (build === 'crypto') {
       sealed.push(block)
     }
     if (c.lastBlock) assert.equal(b64(sealed.at(-1)), c.lastBlock, c.name)
+    assert.equal(encryptor.manifestSha256, undefined)
     const tail = isDrive ? encryptor.finishSigned(identityMaster, '0b9f4c0e-6a51-4d2f-9a33-5e1f6c7d8e90') : encryptor.finish()
+    const wasmDigest = encryptor.manifestSha256
     assert.throws(() => encryptor.sealNext(new Uint8Array(0)), /already finished/)
     encryptor.free()
+    const open = (digest, manifest, header = bytes(c.header), revision = drive[1], id = attachment) => isDrive
+      ? crypto.driveBlockReader(v.key, drive[0], drive[2], revision, digest, c.size, header, manifest)
+      : crypto.chatMediaBlockReader(v.key, id, digest, header, manifest)
 
     // The vector's manifest, then the one WASM sealed.
     const layout = crypto.blockLayout(family)
@@ -1301,12 +1314,13 @@ if (build === 'crypto') {
       const length = crypto.blockTrailerManifestLength(family, manifestTail.subarray(manifestTail.length - layout.trailerBytes))
       assert.equal(length, manifestTail.length - layout.trailerBytes)
       const manifest = manifestTail.subarray(0, length)
-      const reader = isDrive
-        ? crypto.driveBlockReader(v.key, ...drive, bytes(c.header), manifest)
-        : crypto.chatMediaBlockReader(v.key, attachment, bytes(c.header), manifest)
+      const digest = manifestTail === vectorTail ? c.manifestDigest : wasmDigest
+      // Not the committed manifest (the other one has another nonce): refused.
+      assert.throws(() => open(manifestTail === vectorTail ? wasmDigest : c.manifestDigest, manifest))
+      if (isDrive) assert.throws(() => crypto.driveBlockReader(v.key, drive[0], drive[2], drive[1], digest, c.size + 1, bytes(c.header), manifest))
+      const reader = open(digest, manifest)
       assert.equal(reader.size, c.size)
       assert.equal(reader.objectLength, c.objectLen)
-      if (manifestTail === vectorTail) assert.equal(reader.manifestSha256, c.manifestDigest)
       for (let i = 0; i < sealed.length; i++) {
         assert.equal(reader.sealedBlockLength(i), sealed[i].length)
         assert.deepEqual(reader.openBlock(i, sealed[i]), pattern(i * 4 * 1024 * 1024, sealed[i].length - layout.blockOverhead))
@@ -1329,9 +1343,7 @@ if (build === 'crypto') {
     }
     // Another revision's or attachment's header: refused before any block.
     const otherTail = vectorTail.subarray(0, vectorTail.length - layout.trailerBytes)
-    assert.throws(() => isDrive
-      ? crypto.driveBlockReader(v.key, drive[0], '44444444-4444-4444-8444-444444444444', drive[2], bytes(c.header), otherTail)
-      : crypto.chatMediaBlockReader(v.key, '77777777-7777-4777-8777-777777777777', bytes(c.header), otherTail))
+    assert.throws(() => open(c.manifestDigest, otherTail, bytes(c.header), '44444444-4444-4444-8444-444444444444', '77777777-7777-4777-8777-777777777777'))
   }
   assert.throws(() => crypto.blockLayout('photos'))
   assert.throws(() => crypto.driveBlockEncryptor(v.key, ...drive, 1.5))
@@ -1354,14 +1366,16 @@ if (build === 'crypto') {
   }
   const header = encryptor.header()
   const tail = encryptor.finish()
+  const digest = encryptor.manifestSha256
   encryptor.free()
   const length = crypto.blockTrailerManifestLength('chatBackupMedia', tail.subarray(tail.length - 12))
-  const reader = crypto.chatBackupMediaBlockReader(backupRoot, account, backup, mediaId, header, tail.subarray(0, length))
+  const reader = crypto.chatBackupMediaBlockReader(backupRoot, account, backup, mediaId, digest, header, tail.subarray(0, length))
   assert.equal(reader.sourceBytes, source.length)
   const restored = Buffer.concat(blocks.map((block, i) => reader.openBlock(i, block)))
   assert.deepEqual(new Uint8Array(restored), source)
   reader.free()
-  assert.throws(() => crypto.chatBackupMediaBlockReader(backupRoot, account, backup, 'cd'.repeat(32), header, tail.subarray(0, length)))
+  assert.throws(() => crypto.chatBackupMediaBlockReader(backupRoot, account, backup, 'cd'.repeat(32), digest, header, tail.subarray(0, length)))
+  assert.throws(() => crypto.chatBackupMediaBlockReader(backupRoot, account, backup, mediaId, c0Digest(digest), header, tail.subarray(0, length)))
 }
 
 console.log(`${build} WASM canonical vectors passed`)

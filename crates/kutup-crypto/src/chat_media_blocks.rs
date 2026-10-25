@@ -12,7 +12,7 @@
 
 use zeroize::Zeroizing;
 
-use crate::blocks::{self, BlockFamily, BlockReader, BlockSealer, Manifest};
+use crate::blocks::{self, BlockFamily, BlockReader, BlockSealer, Manifest, SealedObject};
 use crate::chat_media::{ChatMediaObjectContextV1, ChatMediaObjectPurpose};
 use crate::error::{CryptoError, Result};
 
@@ -80,16 +80,22 @@ pub fn sealer(
     )
 }
 
+/// The reader of an attachment whose header was checked against `context`
+/// and whose sealed manifest is the one the descriptor commits to
+/// (`expected_manifest_sha256`): without that check, anyone holding the
+/// attachment key could have the server hand other members other content.
 pub fn reader(
     key: &[u8],
     context: ChatMediaObjectContextV1,
     sealed_manifest: &[u8],
+    expected_manifest_sha256: &[u8; 32],
 ) -> Result<BlockReader<'static>> {
     BlockReader::open(
         &CHAT_MEDIA_BLOCKS,
         attachment_key(key)?,
         &header(context),
         sealed_manifest,
+        expected_manifest_sha256,
     )
 }
 
@@ -102,7 +108,7 @@ pub fn seal_attachment(
     plaintext: &[u8],
     key: &[u8],
     context: ChatMediaObjectContextV1,
-) -> Result<Vec<u8>> {
+) -> Result<SealedObject> {
     blocks::seal_object(
         &CHAT_MEDIA_BLOCKS,
         attachment_key(key)?,
@@ -112,13 +118,14 @@ pub fn seal_attachment(
     )
 }
 
-/// Opens a whole attachment: the plaintext, the manifest, and the sealed
-/// manifest's digest (which the descriptor must name).
+/// Opens a whole attachment whose sealed manifest is the one the descriptor
+/// commits to: the plaintext and the manifest.
 pub fn open_attachment(
     object: &[u8],
     key: &[u8],
     expected: ChatMediaObjectContextV1,
-) -> Result<(Zeroizing<Vec<u8>>, Manifest, [u8; 32])> {
+    expected_manifest_sha256: &[u8; 32],
+) -> Result<(Zeroizing<Vec<u8>>, Manifest)> {
     validate_header(
         object
             .get(..CHAT_MEDIA_BLOCKS_HEADER_BYTES)
@@ -130,6 +137,7 @@ pub fn open_attachment(
         attachment_key(key)?,
         CHAT_MEDIA_BLOCKS_HEADER_BYTES,
         object,
+        expected_manifest_sha256,
     )
 }
 
@@ -138,20 +146,28 @@ mod tests {
     use super::*;
 
     #[test]
-    fn an_attachment_round_trips_and_is_bound_to_its_id() {
+    fn an_attachment_round_trips_and_is_bound_to_its_id_and_descriptor() {
         let context =
             ChatMediaObjectContextV1::new("66666666-6666-4666-8666-666666666666").unwrap();
         let plaintext = vec![5u8; crate::blocks::BLOCK_SIZE + 1];
-        let object = seal_attachment(&plaintext, &[1; 32], context).unwrap();
+        let sealed = seal_attachment(&plaintext, &[1; 32], context).unwrap();
+        let (object, digest) = (&sealed.bytes, &sealed.manifest_sha256);
         assert_eq!(
             object.len() as u64,
             object_len(plaintext.len() as u64).unwrap()
         );
-        let (opened, manifest, _) = open_attachment(&object, &[1; 32], context).unwrap();
+        let (opened, manifest) = open_attachment(object, &[1; 32], context, digest).unwrap();
         assert_eq!(*opened, plaintext);
         assert!(manifest.signer.is_none());
         let other = ChatMediaObjectContextV1::new("77777777-7777-4777-8777-777777777777").unwrap();
-        assert!(open_attachment(&object, &[1; 32], other).is_err());
-        assert!(open_attachment(&object, &[2; 32], context).is_err());
+        assert!(open_attachment(object, &[1; 32], other, digest).is_err());
+        assert!(open_attachment(object, &[2; 32], context, digest).is_err());
+        // Another attachment sealed by a key holder under the same id and key:
+        // valid, but not the one the descriptor names.
+        let swapped = seal_attachment(b"other content", &[1; 32], context).unwrap();
+        assert!(open_attachment(&swapped.bytes, &[1; 32], context, digest).is_err());
+        assert!(
+            open_attachment(&swapped.bytes, &[1; 32], context, &swapped.manifest_sha256).is_ok()
+        );
     }
 }

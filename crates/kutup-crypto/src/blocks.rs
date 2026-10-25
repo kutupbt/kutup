@@ -328,17 +328,25 @@ impl Manifest {
     }
 }
 
+/// What a signed family's uploader signs: the domain, the header, the
+/// account it names as the signer, and the manifest's fields.
 fn signed_message(
     family: &BlockFamily,
     header: &[u8],
+    account_id: &[u8; ACCOUNT_LEN],
     size: u64,
     hashes: &[[u8; HASH_LEN]],
 ) -> Vec<u8> {
     let mut message = Vec::with_capacity(
-        family.signature_domain.len() + header.len() + MANIFEST_FIXED_LEN + hashes.len() * HASH_LEN,
+        family.signature_domain.len()
+            + header.len()
+            + ACCOUNT_LEN
+            + MANIFEST_FIXED_LEN
+            + hashes.len() * HASH_LEN,
     );
     message.extend_from_slice(family.signature_domain);
     message.extend_from_slice(header);
+    message.extend_from_slice(account_id);
     message.extend_from_slice(&(BLOCK_SIZE as u32).to_be_bytes());
     message.extend_from_slice(&(hashes.len() as u32).to_be_bytes());
     message.extend_from_slice(&size.to_be_bytes());
@@ -408,7 +416,7 @@ impl<'a> BlockSealer<'a> {
 
     /// The sealed manifest and the trailer, once every block is sealed; a
     /// signed family takes the uploader's key and account.
-    pub fn finish(self, signer: Option<(&SigningKey, [u8; ACCOUNT_LEN])>) -> Result<Vec<u8>> {
+    pub fn finish(self, signer: Option<(&SigningKey, [u8; ACCOUNT_LEN])>) -> Result<SealedTail> {
         let mut nonce = [0u8; NONCE_LEN];
         crate::primitives::random(&mut nonce);
         self.finish_with_nonce(signer, &nonce)
@@ -421,7 +429,7 @@ impl<'a> BlockSealer<'a> {
         self,
         signer: Option<(&SigningKey, [u8; ACCOUNT_LEN])>,
         nonce: &[u8; NONCE_LEN],
-    ) -> Result<Vec<u8>> {
+    ) -> Result<SealedTail> {
         self.finish_with_nonce(signer, nonce)
     }
 
@@ -429,7 +437,7 @@ impl<'a> BlockSealer<'a> {
         self,
         signer: Option<(&SigningKey, [u8; ACCOUNT_LEN])>,
         nonce: &[u8; NONCE_LEN],
-    ) -> Result<Vec<u8>> {
+    ) -> Result<SealedTail> {
         if self.next_index() != self.count {
             return Err(CryptoError::InvalidInput(
                 "the manifest comes after every block".into(),
@@ -449,6 +457,7 @@ impl<'a> BlockSealer<'a> {
                 let signature: [u8; SIGNATURE_LEN] = key.sign_array(&signed_message(
                     self.family,
                     &self.header,
+                    &account_id,
                     self.size,
                     &self.hashes,
                 ));
@@ -463,18 +472,65 @@ impl<'a> BlockSealer<'a> {
                 ))
             }
         }
-        let mut tail = nonce.to_vec();
-        tail.extend_from_slice(&self.keys.manifest.seal_with_nonce(
-            nonce,
-            &manifest_aad(&self.header),
-            &plaintext,
-        )?);
+        let mut tail = seal_manifest(&self.keys, &self.header, &plaintext, nonce)?;
+        let manifest_sha256 = manifest_digest(&tail);
         let len = u32::try_from(tail.len())
             .map_err(|_| CryptoError::InvalidInput("manifest too large".into()))?;
         tail.extend_from_slice(&len.to_be_bytes());
         tail.extend_from_slice(self.family.trailer_magic);
-        Ok(tail)
+        Ok(SealedTail {
+            bytes: tail,
+            manifest_sha256,
+        })
     }
+}
+
+/// What follows the last block: the sealed manifest and the trailer, and the
+/// sealed manifest's digest, which the object's metadata or descriptor
+/// commits to and every reader requires.
+pub struct SealedTail {
+    pub bytes: Vec<u8>,
+    pub manifest_sha256: [u8; HASH_LEN],
+}
+
+/// The sealed manifest's SHA-256: what a sealed metadata or descriptor
+/// commits to.
+pub fn manifest_digest(sealed_manifest: &[u8]) -> [u8; HASH_LEN] {
+    hash(Suite::V1, sealed_manifest).to_array()
+}
+
+fn seal_manifest(
+    keys: &BlockKeys,
+    header: &[u8],
+    plaintext: &[u8],
+    nonce: &[u8; NONCE_LEN],
+) -> Result<Vec<u8>> {
+    let mut sealed = nonce.to_vec();
+    sealed.extend_from_slice(&keys.manifest.seal_with_nonce(
+        nonce,
+        &manifest_aad(header),
+        plaintext,
+    )?);
+    Ok(sealed)
+}
+
+/// Seals any `plaintext` as the manifest of the object behind `header`, for
+/// tests and the fuzz target only: a key holder's malformed manifest that
+/// still passes the AEAD.
+#[cfg(any(test, feature = "test-vectors"))]
+pub fn seal_manifest_plaintext(
+    family: &BlockFamily,
+    ikm: &[u8],
+    header: &[u8],
+    plaintext: &[u8],
+    nonce: &[u8; NONCE_LEN],
+) -> Result<Vec<u8>> {
+    seal_manifest(
+        &BlockKeys::derive(family, ikm, header)?,
+        header,
+        plaintext,
+        nonce,
+    )
 }
 
 /// An object's reader: its manifest opened and checked, then any block opened
@@ -484,20 +540,23 @@ pub struct BlockReader<'a> {
     keys: BlockKeys,
     header: Vec<u8>,
     manifest: Manifest,
-    manifest_digest: [u8; HASH_LEN],
 }
 
 impl<'a> BlockReader<'a> {
     /// Opens the manifest of the object behind `header` (the caller has
     /// checked the header against what it expects). `sealed_manifest` is
-    /// what the trailer pointed at.
+    /// what the trailer pointed at; it must be the one the caller's metadata
+    /// or descriptor commits to (`expected_manifest_sha256`), checked before
+    /// anything is opened. A key holder can seal another valid object under
+    /// the same header (an older revision, a shorter copy); only that
+    /// commitment tells them apart.
     pub fn open(
         family: &'a BlockFamily,
         ikm: &[u8],
         header: &[u8],
         sealed_manifest: &[u8],
+        expected_manifest_sha256: &[u8; HASH_LEN],
     ) -> Result<Self> {
-        let keys = BlockKeys::derive(family, ikm, header)?;
         if sealed_manifest.len() < family.sealed_manifest_len(1)?
             || sealed_manifest.len() > family.sealed_manifest_len(MAX_BLOCKS)?
         {
@@ -505,6 +564,10 @@ impl<'a> BlockReader<'a> {
                 "block object manifest length is out of range".into(),
             ));
         }
+        if !crate::primitives::ct_eq(&manifest_digest(sealed_manifest), expected_manifest_sha256) {
+            return Err(CryptoError::AuthFailed);
+        }
+        let keys = BlockKeys::derive(family, ikm, header)?;
         let plaintext = keys
             .manifest
             .open(&manifest_aad(header), sealed_manifest)
@@ -515,18 +578,11 @@ impl<'a> BlockReader<'a> {
             keys,
             header: header.to_vec(),
             manifest,
-            manifest_digest: hash(Suite::V1, sealed_manifest).to_array(),
         })
     }
 
     pub fn manifest(&self) -> &Manifest {
         &self.manifest
-    }
-
-    /// The sealed manifest's hash: what a sealed metadata or descriptor
-    /// commits to.
-    pub fn manifest_digest(&self) -> [u8; HASH_LEN] {
-        self.manifest_digest
     }
 
     /// The whole object's length, as the manifest fixes it.
@@ -594,10 +650,13 @@ fn parse_manifest(family: &BlockFamily, header: &[u8], plaintext: &[u8]) -> Resu
         (false, [SIGNER_NONE]) => None,
         _ => return Err(malformed()),
     };
+    let signed_message = signer.as_ref().map_or_else(Vec::new, |signer| {
+        signed_message(family, header, &signer.account_id, size, &hashes)
+    });
     Ok(Manifest {
         size,
         count,
-        signed_message: signed_message(family, header, size, &hashes),
+        signed_message,
         hashes,
         signer,
     })
@@ -611,7 +670,7 @@ pub fn seal_object(
     header: &[u8],
     plaintext: &[u8],
     signer: Option<(&SigningKey, [u8; ACCOUNT_LEN])>,
-) -> Result<Vec<u8>> {
+) -> Result<SealedObject> {
     let mut sealer = BlockSealer::new(family, ikm, header, plaintext.len() as u64)?;
     let mut object =
         Vec::with_capacity(family.object_len(header.len(), plaintext.len() as u64)? as usize);
@@ -622,31 +681,74 @@ pub fn seal_object(
     for chunk in plaintext.chunks(BLOCK_SIZE) {
         object.extend_from_slice(&sealer.seal_next(chunk)?);
     }
-    object.extend_from_slice(&sealer.finish(signer)?);
-    Ok(object)
+    let tail = sealer.finish(signer)?;
+    object.extend_from_slice(&tail.bytes);
+    Ok(SealedObject {
+        bytes: object,
+        manifest_sha256: tail.manifest_sha256,
+    })
+}
+
+/// A whole sealed object and its sealed manifest's digest (see
+/// [`SealedTail`]).
+#[derive(Debug)]
+pub struct SealedObject {
+    pub bytes: Vec<u8>,
+    pub manifest_sha256: [u8; HASH_LEN],
+}
+
+/// The sealed manifest's digest of a whole object, from its trailer (not yet
+/// checked against anything: a caller compares it with its commitment).
+pub fn object_manifest_digest(
+    object: &[u8],
+    header_len: usize,
+    family: &BlockFamily,
+) -> Result<[u8; HASH_LEN]> {
+    let (start, end) = manifest_range(family, header_len, object)?;
+    Ok(manifest_digest(&object[start..end]))
+}
+
+/// Where a whole object's sealed manifest sits, from its trailer.
+fn manifest_range(
+    family: &BlockFamily,
+    header_len: usize,
+    object: &[u8],
+) -> Result<(usize, usize)> {
+    if object.len() < header_len + TRAILER_LEN {
+        return Err(CryptoError::TooShort);
+    }
+    let end = object.len() - TRAILER_LEN;
+    let len = family.parse_trailer(&object[end..])?;
+    let start = end
+        .checked_sub(len)
+        .filter(|start| *start >= header_len)
+        .ok_or(CryptoError::TooShort)?;
+    Ok((start, end))
 }
 
 /// Opens a whole object whose header (`header_len` bytes, first) the caller
-/// has checked: its manifest, then every block in order. The plaintext and the
-/// manifest, for the caller's signature check and commitment.
+/// has checked and whose sealed manifest is the committed one: its
+/// manifest, then every block in order. The plaintext and the manifest, for
+/// the caller's signature check.
 pub fn open_object(
     family: &BlockFamily,
     ikm: &[u8],
     header_len: usize,
     object: &[u8],
-) -> Result<(Zeroizing<Vec<u8>>, Manifest, [u8; HASH_LEN])> {
-    if object.len() < header_len + TRAILER_LEN {
-        return Err(CryptoError::TooShort);
-    }
-    let header = &object[..header_len];
-    let manifest_len = family.parse_trailer(&object[object.len() - TRAILER_LEN..])?;
-    let count = family.check_structure(header_len, object.len() as u64, manifest_len)?;
-    let manifest_start = object.len() - TRAILER_LEN - manifest_len;
+    expected_manifest_sha256: &[u8; HASH_LEN],
+) -> Result<(Zeroizing<Vec<u8>>, Manifest)> {
+    let (manifest_start, manifest_end) = manifest_range(family, header_len, object)?;
+    let count = family.check_structure(
+        header_len,
+        object.len() as u64,
+        manifest_end - manifest_start,
+    )?;
     let reader = BlockReader::open(
         family,
         ikm,
-        header,
-        &object[manifest_start..object.len() - TRAILER_LEN],
+        &object[..header_len],
+        &object[manifest_start..manifest_end],
+        expected_manifest_sha256,
     )?;
     if reader.manifest().count != count || reader.object_len()? != object.len() as u64 {
         return Err(CryptoError::InvalidInput(
@@ -662,7 +764,197 @@ pub fn open_object(
             .ok_or(CryptoError::TooShort)?;
         plaintext.extend_from_slice(&reader.open_block(index, block)?);
     }
-    let manifest = reader.manifest().clone();
-    let digest = reader.manifest_digest();
-    Ok((plaintext, manifest, digest))
+    Ok((plaintext, reader.manifest().clone()))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::chat_media::ChatMediaObjectContextV1;
+    use crate::chat_media_blocks::{self, CHAT_MEDIA_BLOCKS};
+    use crate::drive_blocks::{self, DriveBlobContextV2, DRIVE_BLOCKS};
+
+    const KEY: [u8; 32] = [7; 32];
+    const NONCE: [u8; NONCE_LEN] = [1; NONCE_LEN];
+    const B: u64 = BLOCK_SIZE as u64;
+
+    fn chat_header() -> Vec<u8> {
+        chat_media_blocks::header(
+            ChatMediaObjectContextV1::new("66666666-6666-4666-8666-666666666666").unwrap(),
+        )
+        .to_vec()
+    }
+
+    fn drive_header() -> Vec<u8> {
+        drive_blocks::header(
+            DriveBlobContextV2::new(
+                "11111111-1111-4111-8111-111111111111",
+                "22222222-2222-4222-8222-222222222222",
+                1,
+            )
+            .unwrap(),
+        )
+        .to_vec()
+    }
+
+    /// A manifest plaintext from its fields, as a key holder could write it.
+    fn manifest(block_size: u32, count: u32, size: u64, signer: &[u8]) -> Vec<u8> {
+        let mut plaintext = Vec::new();
+        plaintext.extend_from_slice(&block_size.to_be_bytes());
+        plaintext.extend_from_slice(&count.to_be_bytes());
+        plaintext.extend_from_slice(&size.to_be_bytes());
+        for index in 0..count {
+            plaintext.extend_from_slice(&[index as u8; HASH_LEN]);
+        }
+        plaintext.extend_from_slice(signer);
+        plaintext
+    }
+
+    /// Opens `plaintext` sealed as a manifest: it passes the AEAD and the
+    /// commitment, so only the parse decides.
+    fn open(family: &BlockFamily, header: &[u8], plaintext: &[u8]) -> Result<BlockReader<'static>>
+    where
+        BlockFamily: 'static,
+    {
+        let family: &'static BlockFamily = if family.signed {
+            &DRIVE_BLOCKS
+        } else {
+            &CHAT_MEDIA_BLOCKS
+        };
+        let sealed = seal_manifest_plaintext(family, &KEY, header, plaintext, &NONCE).unwrap();
+        BlockReader::open(family, &KEY, header, &sealed, &manifest_digest(&sealed))
+    }
+
+    #[test]
+    fn a_key_holders_malformed_manifest_is_refused() {
+        let header = chat_header();
+        let none = [SIGNER_NONE];
+        assert!(open(
+            &CHAT_MEDIA_BLOCKS,
+            &header,
+            &manifest(B as u32, 2, B + 1, &none)
+        )
+        .is_ok());
+        for (why, plaintext) in [
+            (
+                "count above what the size needs",
+                manifest(B as u32, 2, 10, &none),
+            ),
+            (
+                "size shrunk at the same count",
+                manifest(B as u32, 2, B, &none),
+            ),
+            (
+                "count below what the size needs",
+                manifest(B as u32, 1, B + 1, &none),
+            ),
+            (
+                "another block size",
+                manifest(B as u32 / 2, 2, B + 1, &none),
+            ),
+            ("no blocks", manifest(B as u32, 0, 0, &none)),
+            (
+                "a signer on an unsigned family",
+                manifest(B as u32, 1, 5, &[1; 81]),
+            ),
+            (
+                "trailing bytes",
+                manifest(B as u32, 1, 5, &[SIGNER_NONE, 0]),
+            ),
+            ("no signer byte", manifest(B as u32, 1, 5, &[])),
+            ("too short for its fields", vec![0; MANIFEST_FIXED_LEN - 1]),
+        ] {
+            assert!(
+                open(&CHAT_MEDIA_BLOCKS, &header, &plaintext).is_err(),
+                "{why}"
+            );
+        }
+        let header = drive_header();
+        let mut signed = vec![SIGNER_DRIVE_SIGNING_KEY];
+        signed.extend_from_slice(&[3; ACCOUNT_LEN + SIGNATURE_LEN]);
+        assert!(open(&DRIVE_BLOCKS, &header, &manifest(B as u32, 1, 5, &signed)).is_ok());
+        for (why, signer) in [
+            ("no signer on a signed family", vec![SIGNER_NONE]),
+            ("an unknown signer kind", [&[2][..], &signed[1..]].concat()),
+            ("a short signature", signed[..signed.len() - 1].to_vec()),
+            ("trailing bytes", [&signed[..], &[0]].concat()),
+        ] {
+            assert!(
+                open(&DRIVE_BLOCKS, &header, &manifest(B as u32, 1, 5, &signer)).is_err(),
+                "{why}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_manifest_other_than_the_committed_one_is_refused_before_opening() {
+        let header = chat_header();
+        let sealed = seal_manifest_plaintext(
+            &CHAT_MEDIA_BLOCKS,
+            &KEY,
+            &header,
+            &manifest(B as u32, 1, 5, &[SIGNER_NONE]),
+            &NONCE,
+        )
+        .unwrap();
+        let digest = manifest_digest(&sealed);
+        assert!(BlockReader::open(&CHAT_MEDIA_BLOCKS, &KEY, &header, &sealed, &digest).is_ok());
+        let mut other = digest;
+        other[0] ^= 1;
+        assert!(matches!(
+            BlockReader::open(&CHAT_MEDIA_BLOCKS, &KEY, &header, &sealed, &other),
+            Err(CryptoError::AuthFailed)
+        ));
+        // Even with a wrong key: the commitment is checked first.
+        assert!(matches!(
+            BlockReader::open(&CHAT_MEDIA_BLOCKS, &[8; 32], &header, &sealed, &other),
+            Err(CryptoError::AuthFailed)
+        ));
+    }
+
+    /// The signature covers the account the manifest names: a holder of the
+    /// file key can't move your signature onto another account's name.
+    #[test]
+    fn the_signature_covers_the_signers_account() {
+        let header = drive_header();
+        let key = SigningKey::from_seed(Suite::V1, &[9; 32]);
+        let mut sealer = BlockSealer::new(&DRIVE_BLOCKS, &KEY, &header, 5).unwrap();
+        sealer.seal_next(&[1; 5]).unwrap();
+        let tail = sealer.finish(Some((&key, [3; ACCOUNT_LEN]))).unwrap();
+        let sealed = &tail.bytes[..tail.bytes.len() - TRAILER_LEN];
+        let honest =
+            BlockReader::open(&DRIVE_BLOCKS, &KEY, &header, sealed, &tail.manifest_sha256).unwrap();
+        honest
+            .manifest()
+            .verify_signer(&key.verifying_key())
+            .unwrap();
+
+        let signature = honest.manifest().signer.as_ref().unwrap().signature;
+        let mut plaintext = Vec::new();
+        plaintext.extend_from_slice(&(BLOCK_SIZE as u32).to_be_bytes());
+        plaintext.extend_from_slice(&1u32.to_be_bytes());
+        plaintext.extend_from_slice(&5u64.to_be_bytes());
+        plaintext.extend_from_slice(&honest.manifest().hashes[0]);
+        plaintext.push(SIGNER_DRIVE_SIGNING_KEY);
+        plaintext.extend_from_slice(&[4; ACCOUNT_LEN]);
+        plaintext.extend_from_slice(&signature);
+        let renamed =
+            seal_manifest_plaintext(&DRIVE_BLOCKS, &KEY, &header, &plaintext, &NONCE).unwrap();
+        let reader = BlockReader::open(
+            &DRIVE_BLOCKS,
+            &KEY,
+            &header,
+            &renamed,
+            &manifest_digest(&renamed),
+        )
+        .unwrap();
+        assert_eq!(
+            reader.manifest().signer.as_ref().unwrap().account_id,
+            [4; ACCOUNT_LEN]
+        );
+        assert!(reader
+            .manifest()
+            .verify_signer(&key.verifying_key())
+            .is_err());
+    }
 }

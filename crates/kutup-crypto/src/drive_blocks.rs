@@ -15,9 +15,10 @@
 
 use zeroize::Zeroizing;
 
-use crate::blocks::{self, BlockFamily, BlockReader, BlockSealer, Manifest};
+use crate::blocks::{self, BlockFamily, BlockReader, BlockSealer, Manifest, SealedObject};
 use crate::drive_object::{parse_canonical_uuid, DriveObjectPurpose};
 use crate::error::{CryptoError, Result};
+use crate::file_metadata::ContentCommitmentV1;
 use crate::primitives::SigningKey;
 
 const MAGIC: &[u8; 8] = b"KUTPDB3\0";
@@ -135,18 +136,38 @@ pub fn sealer(
     )
 }
 
-/// The reader of a blob whose header was checked against `context`.
+/// The reader of a blob whose header was checked against `context`: its
+/// sealed manifest must be the one `content` commits to (the file's sealed
+/// metadata, or a version's record), for `context`'s revision, and fix
+/// `size` plaintext bytes (what the metadata says), all checked before any
+/// block opens.
 pub fn reader(
     file_key_bytes: &[u8],
     context: DriveBlobContextV2,
     sealed_manifest: &[u8],
+    content: &ContentCommitmentV1,
+    size: u64,
 ) -> Result<BlockReader<'static>> {
-    BlockReader::open(
+    let digest = blocks::manifest_digest(sealed_manifest);
+    content.check(&context.revision_id, &digest)?;
+    let reader = BlockReader::open(
         &DRIVE_BLOCKS,
         file_key(file_key_bytes)?,
         &header(context),
         sealed_manifest,
-    )
+        &digest,
+    )?;
+    check_size(reader.manifest(), size)?;
+    Ok(reader)
+}
+
+fn check_size(manifest: &Manifest, size: u64) -> Result<()> {
+    if manifest.size != size {
+        return Err(CryptoError::InvalidInput(
+            "the Drive blob's size is not the one its metadata names".into(),
+        ));
+    }
+    Ok(())
 }
 
 /// The whole blob's length for `size` plaintext bytes.
@@ -155,14 +176,14 @@ pub fn blob_len(size: u64) -> Result<u64> {
 }
 
 /// Seals a whole file (snapshots, versions, small files), signed by the
-/// uploader.
+/// uploader; with the digest its metadata commits to.
 pub fn seal_file(
     plaintext: &[u8],
     file_key_bytes: &[u8],
     context: DriveBlobContextV2,
     signer: &SigningKey,
     account_id: [u8; 16],
-) -> Result<Vec<u8>> {
+) -> Result<SealedObject> {
     blocks::seal_object(
         &DRIVE_BLOCKS,
         file_key(file_key_bytes)?,
@@ -172,24 +193,31 @@ pub fn seal_file(
     )
 }
 
-/// Opens a whole file sealed for `expected`: the plaintext, the manifest (to
-/// check its signer against pins) and the sealed manifest's digest (what the
-/// file's metadata commits to).
+/// Opens a whole file sealed for `expected` whose sealed manifest is the one
+/// `content` commits to, of `size` bytes (see [`reader`]): the plaintext and
+/// the manifest (to check its signer against pins).
 pub fn open_file(
     object: &[u8],
     file_key_bytes: &[u8],
     expected: DriveBlobContextV2,
-) -> Result<(Zeroizing<Vec<u8>>, Manifest, [u8; 32])> {
+    content: &ContentCommitmentV1,
+    size: u64,
+) -> Result<(Zeroizing<Vec<u8>>, Manifest)> {
     let prefix = object
         .get(..DRIVE_BLOCKS_HEADER_BYTES)
         .ok_or(CryptoError::TooShort)?;
     validate_header(prefix, expected)?;
-    blocks::open_object(
+    let digest = blocks::object_manifest_digest(object, DRIVE_BLOCKS_HEADER_BYTES, &DRIVE_BLOCKS)?;
+    content.check(&expected.revision_id, &digest)?;
+    let (plaintext, manifest) = blocks::open_object(
         &DRIVE_BLOCKS,
         file_key(file_key_bytes)?,
         DRIVE_BLOCKS_HEADER_BYTES,
         object,
-    )
+        &digest,
+    )?;
+    check_size(&manifest, size)?;
+    Ok((plaintext, manifest))
 }
 
 #[cfg(test)]
@@ -215,8 +243,19 @@ mod tests {
         (0..len).map(|i| (i * 31 % 251) as u8).collect()
     }
 
-    fn seal(plaintext: &[u8]) -> Vec<u8> {
+    fn seal(plaintext: &[u8]) -> SealedObject {
         seal_file(plaintext, &KEY, context(), &signer(), ACCOUNT).unwrap()
+    }
+
+    /// What the file's metadata commits to for `sealed`, at `context`'s
+    /// revision.
+    fn commitment(context: DriveBlobContextV2, sealed: &SealedObject) -> ContentCommitmentV1 {
+        ContentCommitmentV1::new(context.revision_id, sealed.manifest_sha256)
+    }
+
+    fn open(object: &[u8], content: &ContentCommitmentV1, size: usize) -> Result<Vec<u8>> {
+        open_file(object, &KEY, context(), content, size as u64)
+            .map(|(plaintext, _)| plaintext.to_vec())
     }
 
     #[test]
@@ -230,13 +269,16 @@ mod tests {
             2 * BLOCK_SIZE + 17,
         ] {
             let plaintext = pattern(size);
-            let object = seal(&plaintext);
+            let sealed = seal(&plaintext);
+            let object = &sealed.bytes;
             assert_eq!(
                 object.len() as u64,
                 blob_len(size as u64).unwrap(),
                 "{size}"
             );
-            let (opened, manifest, digest) = open_file(&object, &KEY, context()).unwrap();
+            let content = commitment(context(), &sealed);
+            let (opened, manifest) =
+                open_file(object, &KEY, context(), &content, size as u64).unwrap();
             assert_eq!(*opened, plaintext, "{size}");
             assert_eq!(manifest.size, size as u64);
             assert_eq!(
@@ -246,54 +288,65 @@ mod tests {
             manifest.verify_signer(&signer().verifying_key()).unwrap();
             assert_eq!(manifest.signer.as_ref().unwrap().account_id, ACCOUNT);
             // The digest a metadata commits to is the sealed manifest's.
-            let trailer = &object[object.len() - TRAILER_LEN..];
-            let len = DRIVE_BLOCKS.parse_trailer(trailer).unwrap();
-            let sealed = &object[object.len() - TRAILER_LEN - len..object.len() - TRAILER_LEN];
             assert_eq!(
-                digest,
-                crate::primitives::hash(Suite::V1, sealed).to_array()
+                sealed_digest(object),
+                crate::primitives::hash(Suite::V1, sealed_manifest(object)).to_array()
             );
+            assert_eq!(sealed_digest(object), sealed.manifest_sha256);
+            // The metadata's size must be the manifest's.
+            assert!(open(object, &content, size + 1).is_err());
         }
     }
 
     #[test]
     fn blocks_are_deterministic_and_the_manifest_is_not() {
         let plaintext = pattern(BLOCK_SIZE + 5);
-        let (a, b) = (seal(&plaintext), seal(&plaintext));
+        let (a, b) = (seal(&plaintext).bytes, seal(&plaintext).bytes);
         let blocks_end = block_offset(DRIVE_BLOCKS_HEADER_BYTES, 1) as usize + 5 + BLOCK_OVERHEAD;
         // A resumed upload re-seals the same bytes.
         assert_eq!(a[..blocks_end], b[..blocks_end]);
         // A changed block gets a new nonce.
         let mut changed = plaintext.clone();
         changed[0] ^= 1;
-        let c = seal(&changed);
+        let c = seal(&changed).bytes;
         assert_ne!(
             a[DRIVE_BLOCKS_HEADER_BYTES..DRIVE_BLOCKS_HEADER_BYTES + 24],
             c[DRIVE_BLOCKS_HEADER_BYTES..DRIVE_BLOCKS_HEADER_BYTES + 24]
         );
     }
 
+    fn sealed_manifest(object: &[u8]) -> &[u8] {
+        let len = DRIVE_BLOCKS
+            .parse_trailer(&object[object.len() - TRAILER_LEN..])
+            .unwrap();
+        &object[object.len() - TRAILER_LEN - len..object.len() - TRAILER_LEN]
+    }
+
+    fn sealed_digest(object: &[u8]) -> [u8; 32] {
+        blocks::object_manifest_digest(object, DRIVE_BLOCKS_HEADER_BYTES, &DRIVE_BLOCKS).unwrap()
+    }
+
     /// docs/plans/drive-block-format.md §8, one row each.
     #[test]
     fn the_attacks_in_the_plan_fail() {
-        let plaintext = pattern(2 * BLOCK_SIZE + 17);
-        let object = seal(&plaintext);
+        let size = 2 * BLOCK_SIZE + 17;
+        let plaintext = pattern(size);
+        let sealed = seal(&plaintext);
+        let object = &sealed.bytes;
+        let content = commitment(context(), &sealed);
         let block = |i: u64| {
             let start = block_offset(DRIVE_BLOCKS_HEADER_BYTES, i) as usize;
             let len = if i == 2 { 17 } else { BLOCK_SIZE } + BLOCK_OVERHEAD;
             start..start + len
         };
-        let reader = {
-            let len = DRIVE_BLOCKS
-                .parse_trailer(&object[object.len() - TRAILER_LEN..])
-                .unwrap();
-            reader(
-                &KEY,
-                context(),
-                &object[object.len() - TRAILER_LEN - len..object.len() - TRAILER_LEN],
-            )
-            .unwrap()
-        };
+        let reader = reader(
+            &KEY,
+            context(),
+            sealed_manifest(object),
+            &content,
+            size as u64,
+        )
+        .unwrap();
         // Reorder or duplicate: a block at another index.
         assert!(reader.open_block(1, &object[block(0)]).is_err());
         assert!(reader.open_block(0, &object[block(0)]).is_ok());
@@ -304,52 +357,86 @@ mod tests {
             (FILE, REVISION, 5),
         ] {
             let other = DriveBlobContextV2::new(file, revision, generation).unwrap();
-            assert!(open_file(&object, &KEY, other).is_err());
+            assert!(open_file(object, &KEY, other, &content, size as u64).is_err());
             let foreign = seal_file(&plaintext, &KEY, other, &signer(), ACCOUNT).unwrap();
             assert!(
-                reader.open_block(0, &foreign[block(0)]).is_err(),
+                reader.open_block(0, &foreign.bytes[block(0)]).is_err(),
                 "{file} {revision}"
             );
         }
         // Truncate: drop the last block (and so the manifest no longer fits).
         let mut truncated = object[..block(2).start].to_vec();
         truncated.extend_from_slice(&object[block(2).end..]);
-        assert!(open_file(&truncated, &KEY, context()).is_err());
+        assert!(open(&truncated, &content, size).is_err());
+        // A key holder's truncation: a valid object of the first n − 1 blocks,
+        // sealed and signed anew. Only the metadata's commitment refuses it.
+        let shorter = seal(&plaintext[..2 * BLOCK_SIZE]);
+        assert!(open(&shorter.bytes, &content, size).is_err());
+        assert!(open(&shorter.bytes, &content, 2 * BLOCK_SIZE).is_err());
+        assert!(open(
+            &shorter.bytes,
+            &commitment(context(), &shorter),
+            2 * BLOCK_SIZE
+        )
+        .is_ok());
         // Extend: a block more before the manifest, or bytes after the trailer.
         let mut extended = object[..block(2).end].to_vec();
         extended.extend_from_slice(&object[block(1)]);
         extended.extend_from_slice(&object[block(2).end..]);
-        assert!(open_file(&extended, &KEY, context()).is_err());
+        assert!(open(&extended, &content, size).is_err());
         let mut appended = object.clone();
         appended.push(0);
-        assert!(open_file(&appended, &KEY, context()).is_err());
+        assert!(open(&appended, &content, size).is_err());
         // Swap the manifest for another revision's.
         let other =
             DriveBlobContextV2::new(FILE, "55555555-5555-4555-8555-555555555555", 4).unwrap();
         let foreign = seal_file(&plaintext, &KEY, other, &signer(), ACCOUNT).unwrap();
         let mut swapped = object[..block(2).end].to_vec();
-        swapped.extend_from_slice(&foreign[block(2).end..]);
-        assert!(open_file(&swapped, &KEY, context()).is_err());
-        // Any flipped byte anywhere: header, a block, the manifest, the trailer.
-        for at in [
-            0,
-            11,
-            40,
+        swapped.extend_from_slice(&foreign.bytes[block(2).end..]);
+        assert!(open(&swapped, &content, size).is_err());
+        // Any flipped byte: every header byte, a block, the manifest, the
+        // trailer.
+        for at in (0..DRIVE_BLOCKS_HEADER_BYTES).chain([
             block(1).start + 30,
             block(2).end + 5,
             object.len() - 1,
-        ] {
+        ]) {
             let mut flipped = object.clone();
             flipped[at] ^= 1;
-            assert!(open_file(&flipped, &KEY, context()).is_err(), "byte {at}");
+            assert!(open(&flipped, &content, size).is_err(), "byte {at}");
         }
         // Another holder of the file key: it can seal, not sign as you.
         let forger = SigningKey::from_seed(Suite::V1, &[10; 32]);
         let forged = seal_file(&plaintext, &KEY, context(), &forger, ACCOUNT).unwrap();
-        let (_, manifest, _) = open_file(&forged, &KEY, context()).unwrap();
+        let (_, manifest) = open_file(
+            &forged.bytes,
+            &KEY,
+            context(),
+            &commitment(context(), &forged),
+            size as u64,
+        )
+        .unwrap();
         assert!(manifest.verify_signer(&signer().verifying_key()).is_err());
         // A wrong key opens nothing.
-        assert!(open_file(&object, &[8; 32], context()).is_err());
+        assert!(open_file(object, &[8; 32], context(), &content, size as u64).is_err());
+    }
+
+    /// The server hands back an older revision of the file: its header names
+    /// the older revision, and its manifest is not the one the current
+    /// metadata commits to, so either check refuses it.
+    #[test]
+    fn an_older_revision_is_refused_under_newer_metadata() {
+        let old = DriveBlobContextV2::new(FILE, "88888888-8888-4888-8888-888888888888", 4).unwrap();
+        let old_sealed = seal_file(&pattern(100), &KEY, old, &signer(), ACCOUNT).unwrap();
+        let new_sealed = seal(&pattern(100));
+        let current = commitment(context(), &new_sealed);
+        // Read as the current revision: the header names another one.
+        assert!(open(&old_sealed.bytes, &current, 100).is_err());
+        // Read as what its own header names: the metadata names another
+        // revision and another manifest.
+        assert!(open_file(&old_sealed.bytes, &KEY, old, &current, 100).is_err());
+        assert!(reader(&KEY, old, sealed_manifest(&old_sealed.bytes), &current, 100).is_err());
+        assert!(open(&new_sealed.bytes, &current, 100).is_ok());
     }
 
     #[test]
@@ -382,8 +469,9 @@ mod tests {
                     .unwrap(),
                 count
             );
-            // The server never learns the size, only the shape: a last block
-            // between empty and full fits, one outside does not.
+            // The server learns the size from the length (the body less n
+            // overheads) but can check only the shape: a last block between
+            // empty and full fits, one outside does not.
             let last = size - (count - 1) * BLOCK_SIZE as u64;
             let room = BLOCK_SIZE as u64 - last;
             let fits =

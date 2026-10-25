@@ -30,8 +30,11 @@ The targets are:
 - `block_object_parsers`: the block format (docs/plans/drive-block-format.md)
   of Drive, Chat media and backup media: headers, trailers, the server's
   structure check, manifest and whole-object opens, and V2 file metadata with
-  its content commitment. Its seeds, the small objects of
-  `tests/vectors/blocks-v1.json`, are under `seeds/block_object_parsers/`.
+  its content commitment. It uses the vectors' key and contexts, so its
+  seeds, the small objects of `tests/vectors/blocks-v1.json` (under
+  `seeds/block_object_parsers/`), pass the AEAD and reach the parsers behind
+  it; it also seals each input as a manifest plaintext, as a key holder
+  could.
 
 Install `cargo-fuzz`, then run the targets with a nightly toolchain:
 

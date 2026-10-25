@@ -29,8 +29,10 @@ const tail = encryptor.finishSigned(
   Buffer.alloc(32, 7).toString('base64'),
   '0b9f4c0e-6a51-4d2f-9a33-5e1f6c7d8e90',
 )
+const manifestSha256 = encryptor.manifestSha256
 encryptor.free()
-const reader = module.driveBlockReader(key, fileId, revisionId, 1, header, tail.subarray(0, tail.length - 12))
+if (!manifestSha256) throw new Error('the encryptor gave no manifest digest')
+const reader = module.driveBlockReader(key, fileId, 1, revisionId, manifestSha256, BLOCK, header, tail.subarray(0, tail.length - 12))
 
 const nonce = new Uint8Array(24).fill(1)
 const aad = new Uint8Array(53)
