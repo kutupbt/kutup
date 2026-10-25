@@ -99,7 +99,7 @@ const webCrypto = [
   { selector: "CallExpression[callee.object.name='Reflect'][arguments.0.name='crypto']", message: WEB_CRYPTO_MESSAGE },
   { selector: "CallExpression[callee.object.name='Reflect'][arguments.0.property.name='crypto']", message: WEB_CRYPTO_MESSAGE },
   // A dynamic import, which no-restricted-imports doesn't see.
-  { selector: "ImportExpression[source.value=/^(libsodium-wrappers|@kutup\\/crypto\\/sodium)/]", message: SODIUM_MESSAGE },
+  { selector: "ImportExpression[source.value=/^(libsodium-wrappers|@kutup\\/crypto\\/sodium)|crypto\\/src\\/sodium/]", message: SODIUM_MESSAGE },
 ]
 /* A dynamic import of a computed name can reach anything; the WASM loaders
    that load their own glue by URL are named below. */
@@ -116,7 +116,7 @@ const sodiumImports = [
       name,
       message: SODIUM_MESSAGE,
     })),
-    patterns: [{ group: ['libsodium-wrappers*', 'libsodium-wrappers*/**', '@kutup/crypto/sodium/**'], message: SODIUM_MESSAGE }],
+    patterns: [{ group: ['libsodium-wrappers*', 'libsodium-wrappers*/**', '@kutup/crypto/sodium/**', '**/crypto/src/sodium', '**/crypto/src/sodium.*'], message: SODIUM_MESSAGE }],
   },
 ]
 
