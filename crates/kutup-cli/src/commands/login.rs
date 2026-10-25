@@ -136,13 +136,18 @@ pub(crate) fn login_with_password(
 
     // Step 2: TOTP if required.
     if resp.requires_totp {
-        let code = prompt_line("TOTP code: ")?;
-        resp = client
-            .login_totp(&TotpRequest {
-                pre_auth_token: resp.pre_auth_token.clone(),
-                code,
-            })
-            .context("TOTP")?;
+        // An authenticator code, or one of the recovery codes in its place.
+        // Not echoed, and wiped after use: a recovery code signs in once.
+        let code = zeroize::Zeroizing::new(rpassword::prompt_password(
+            "Authenticator or recovery code: ",
+        )?);
+        let mut request = TotpRequest {
+            pre_auth_token: resp.pre_auth_token.clone(),
+            code: code.trim().to_owned(),
+        };
+        let signed_in = client.login_totp(&request);
+        zeroize::Zeroize::zeroize(&mut request.code);
+        resp = signed_in.context("TOTP")?;
     }
 
     if resp.requires_setup {

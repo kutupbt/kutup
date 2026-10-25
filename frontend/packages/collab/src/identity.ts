@@ -1,3 +1,4 @@
+import { fillRandom } from '@kutup/crypto/random'
 // Per-tab identity for the collab editor: a stable random tabId (so two tabs
 // of the same user appear as distinct peers in awareness) and a cursor color
 // preference (random-from-palette by default, user-customizable).
@@ -18,7 +19,7 @@ const COLOR_PREF_KEY = 'kutup_cursor_color_v1'
 
 function randomHex(bytes: number): string {
   const arr = new Uint8Array(bytes)
-  crypto.getRandomValues(arr)
+  fillRandom(arr)
   return Array.from(arr, (b) => b.toString(16).padStart(2, '0')).join('')
 }
 
@@ -83,7 +84,7 @@ export function buildAwarenessName(username: string | null | undefined): string 
 export function randomSenderSeqPrefix(mustExceed: bigint = 0n): bigint {
   const buf = new Uint32Array(1)
   for (;;) {
-    crypto.getRandomValues(buf)
+    fillRandom(buf)
     // Mask to 31 bits before shifting. Postgres BIGINT is SIGNED int64;
     // a top-bit-set 32-bit prefix would shift to a value > 2^63 (negative
     // when interpreted as int64), silently breaking MAX(sender_seq)

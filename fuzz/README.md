@@ -2,7 +2,7 @@
 
 This standalone `cargo-fuzz` package drives the untrusted account-envelope,
 Drive/collaboration/profile-envelope, account-manifest,
-authenticated service-policy, sealed-sender, Chat media and calendar parsers. It is
+authenticated service-policy, sealed-sender, Chat media, calendar and block-format parsers. It is
 excluded from the normal workspace so release builds do not acquire a nightly
 toolchain or libFuzzer dependency.
 
@@ -26,9 +26,17 @@ The targets are:
   form, a calendar event's shared signed part, and the series it makes, whose
   expansion must end (docs/plans/calendar.md). Its seed corpus, from the
   recurrence and calendar vectors, is checked in under
-  `seeds/calendar_parsers/`.
+  `seeds/calendar_parsers/`;
+- `block_object_parsers`: the block format (docs/plans/drive-block-format.md)
+  of Drive, Chat media and backup media: headers, trailers, the server's
+  structure check, manifest and whole-object opens, and V2 file metadata with
+  its content commitment. It uses the vectors' key and contexts, so its
+  seeds, the small objects of `tests/vectors/blocks-v1.json` (under
+  `seeds/block_object_parsers/`), pass the AEAD and reach the parsers behind
+  it; it also seals each input as a manifest plaintext, as a key holder
+  could.
 
-Install `cargo-fuzz`, then run both targets with a nightly toolchain:
+Install `cargo-fuzz`, then run the targets with a nightly toolchain:
 
 ```sh
 cargo install cargo-fuzz
@@ -39,6 +47,7 @@ cargo +nightly fuzz run profile_envelope_parser -- -max_len=1048576
 cargo +nightly fuzz run account_policy_parsers -- -max_len=2097152
 cargo +nightly fuzz run sealed_sender_parsers -- -max_len=1048576
 cargo +nightly fuzz run calendar_parsers corpus/calendar_parsers seeds/calendar_parsers -- -max_len=65536
+cargo +nightly fuzz run block_object_parsers corpus/block_object_parsers seeds/block_object_parsers -- -max_len=65536
 ```
 
 CI and phase-gate smoke runs should add a bounded `-runs=10000`; scheduled

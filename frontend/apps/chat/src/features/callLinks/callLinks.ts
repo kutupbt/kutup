@@ -4,6 +4,7 @@ import { toBase64 } from '@kutup/crypto'
 import api from '@kutup/session/client'
 import { getSession } from '@kutup/session/store'
 import { forgetHostToken, rememberHostToken } from './hostTokens'
+import { randomBytes } from '@kutup/crypto/random'
 
 // Meetings (docs/chat-calls.md, "Meetings"): a call anyone holding the link
 // can join, with or without an account. Everything about one comes from the
@@ -212,10 +213,6 @@ export interface MeetingSeat {
 }
 
 const seatKey = (roomId: string) => `kutup-meeting-seat:${roomId}`
-
-function randomBytes(length: number): Uint8Array {
-  return crypto.getRandomValues(new Uint8Array(length))
-}
 
 export function meetingSeat(roomId: string): MeetingSeat {
   try {

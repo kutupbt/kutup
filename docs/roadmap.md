@@ -157,7 +157,8 @@ Left before the tag:
   KSF it may be moot.
 - **Block format for large objects, so films and long recordings stream with
   seeking** ([`plans/drive-block-format.md`](plans/drive-block-format.md),
-  plan 2026-10-22, not built). It follows Proton Drive's block format:
+  approved 2026-10-22; slice 1, the crypto core, built, nothing using it
+  yet). It follows Proton Drive's block format:
   - 4 MiB blocks, each AEAD-sealed on its own and bound to its index and
     the file's revision;
   - a sealed manifest of block hashes signed by the uploader;

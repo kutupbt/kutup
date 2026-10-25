@@ -1,3 +1,4 @@
+import { randomBytes } from '@kutup/crypto/random'
 // The meetings an account joined from this browser, on their way to the
 // account's list.
 //
@@ -29,7 +30,7 @@ export interface JoinedMeeting {
 }
 
 function newId(): string {
-  return Array.from(crypto.getRandomValues(new Uint8Array(16)), (byte) => byte.toString(16).padStart(2, '0')).join('')
+  return Array.from(randomBytes(16), (byte) => byte.toString(16).padStart(2, '0')).join('')
 }
 
 function isEntry(value: unknown): value is JoinedMeeting {

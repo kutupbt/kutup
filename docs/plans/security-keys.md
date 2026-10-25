@@ -157,8 +157,10 @@ account): the same second step, with either factor.
 Proposed, following Proton:
 - **Recovery codes:** 16 single-use codes, generated when the account's first
   second factor is turned on (either kind), shown and downloadable once,
-  stored as hashes (Argon2id, the account's own parameters).
-  - Regenerated on request with a `2fa` grant; the old set goes.
+  stored as MACs under a key the server makes for itself (see D2 below).
+  - Regenerated on request with a `2fa` grant and the second factor (an
+    authenticator code, a security key or an unused recovery code), as
+    Proton asks; the old set goes.
   - At sign-in, a code takes the second factor's place and is spent.
   - Settings show how many are left.
 - **Lost 2FA:** the recovery phrase's path (`/api/auth/recover/*`) also turns
@@ -229,6 +231,9 @@ numbers above master and the open PRs at the time.
   vectors recorded from real browsers and YubiKeys.
 - **D2:** as Proton: 16 one-time recovery codes when 2FA is turned on, and
   the recovery phrase's path turns every second factor off. This ships first,
-  as its own PR.
+  as its own PR. Built: codes are stored as MACs under a server-made key
+  (`server_generated_keys`), not Argon2id hashes. With a salted hash, a
+  sign-in would try every one of the account's codes; a keyed MAC finds the
+  one typed. Their count is a site setting (`twoFactorRecoveryCodes`).
 - **D3:** the key limit's default is 10, an administrators' setting, site-wide
   and per account.
