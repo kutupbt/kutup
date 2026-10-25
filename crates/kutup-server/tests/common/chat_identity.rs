@@ -64,10 +64,14 @@ pub struct ChatAccount {
 
 /// The `session` hash of an access token's sign-in (its `sid` claim).
 fn token_session(token: &str) -> String {
+    kutup_chat_proto::device_session_hash(token_sid(token).as_bytes())
+}
+
+/// An access token's sign-in id (its `sid` claim).
+pub fn token_sid(token: &str) -> uuid::Uuid {
     let payload = token.split('.').nth(1).expect("a JWT");
     let claims: Value = serde_json::from_slice(&URL_SAFE_NO_PAD.decode(payload).unwrap()).unwrap();
-    let sid = uuid::Uuid::parse_str(claims["sid"].as_str().expect("an access token")).unwrap();
-    kutup_chat_proto::device_session_hash(sid.as_bytes())
+    uuid::Uuid::parse_str(claims["sid"].as_str().expect("an access token")).unwrap()
 }
 
 fn b64(bytes: &[u8]) -> String {

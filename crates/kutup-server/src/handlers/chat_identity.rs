@@ -44,20 +44,40 @@ pub(crate) fn new_credential(credential: &[u8; DEVICE_CREDENTIAL_LEN]) -> ([u8; 
 }
 
 fn unauthorized() -> AppError {
-    AppError::unauthorized("this Chat device's credential is missing or wrong")
+    AppError::unauthorized("this device's credential is missing or wrong")
         .with_details(serde_json::json!({ "code": "deviceCredential" }))
 }
 
-/// The device the `X-Kutup-Device` header names, if its credential is
-/// that device's (a live row of the JWT's account): `401 deviceCredential`
-/// otherwise, the same answer for a wrong credential, an unknown device and
-/// an expired one. Marks the device seen.
+/// Which devices a call accepts.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum DeviceKinds {
+    /// A device that takes Chat (its row has Chat keys): every Chat route.
+    Chat,
+    /// Any device of the account: the manifest it lists itself in.
+    Any,
+}
+
+/// The Chat device the `X-Kutup-Device` header names, if its credential is
+/// that device's (a live row of the JWT's account with Chat keys): `401
+/// deviceCredential` otherwise, the same answer for a wrong credential, an
+/// unknown device, an expired one and one that doesn't take Chat (an
+/// editor's credential opens no Chat route). Marks the device seen.
 pub(crate) async fn authenticated_device(
     pool: &sqlx::PgPool,
     headers: &HeaderMap,
     user_id: Uuid,
 ) -> AppResult<i32> {
-    let device_id = credential_holds(pool, headers, user_id).await?;
+    authenticated_device_of(pool, headers, user_id, DeviceKinds::Chat).await
+}
+
+/// As [`authenticated_device`], for the devices `kinds` names.
+pub(crate) async fn authenticated_device_of(
+    pool: &sqlx::PgPool,
+    headers: &HeaderMap,
+    user_id: Uuid,
+    kinds: DeviceKinds,
+) -> AppResult<i32> {
+    let device_id = credential_holds_of(pool, headers, user_id, kinds).await?;
     sqlx::query("UPDATE devices SET last_seen_at = now() WHERE user_id = $1 AND device_id = $2")
         .bind(user_id)
         .bind(device_id)
@@ -66,13 +86,14 @@ pub(crate) async fn authenticated_device(
     Ok(device_id)
 }
 
-/// The device the header names, if its credential still holds, read through
-/// `executor` (a transaction that took the account's lock re-checks it: a
-/// re-registration or a revoke may have landed in between).
-pub(crate) async fn credential_holds<'e>(
+/// The device of `kinds` the header names, if its credential still holds,
+/// read through `executor` (a transaction that took the account's lock
+/// re-checks it: a re-registration or a revoke may have landed in between).
+pub(crate) async fn credential_holds_of<'e>(
     executor: impl sqlx::PgExecutor<'e>,
     headers: &HeaderMap,
     user_id: Uuid,
+    kinds: DeviceKinds,
 ) -> AppResult<i32> {
     let value = headers
         .get(DEVICE_HEADER)
@@ -82,10 +103,12 @@ pub(crate) async fn credential_holds<'e>(
     let device_id = device_id as i32;
     let stored: Option<(Vec<u8>, Vec<u8>)> = sqlx::query_as(
         "SELECT credential_salt, credential_hash FROM devices
-          WHERE user_id = $1 AND device_id = $2 AND expired_at IS NULL",
+          WHERE user_id = $1 AND device_id = $2 AND expired_at IS NULL
+            AND ($3 OR suite IS NOT NULL)",
     )
     .bind(user_id)
     .bind(device_id)
+    .bind(kinds == DeviceKinds::Any)
     .fetch_optional(executor)
     .await?;
     let Some((salt, hash)) = stored else {
@@ -450,6 +473,7 @@ pub async fn distribute_identity(
         &request.manifest,
         None,
         crate::account_devices::ChatKeys::Set,
+        crate::account_devices::Backing::Live,
     )
     .await?;
     // The devices left out (a lost or stolen one) go now.
