@@ -209,16 +209,16 @@ function Enrol({ onCodes }: { onCodes: (codes: string[]) => void }) {
 
   function submit(event: FormEvent) {
     event.preventDefault()
-    verify.mutate(
-      { code: code.trim(), password: new OneUseSecret(password) },
-      {
-        onSuccess: (codes) => {
-          toast.success(t('settings.security.enabled'))
-          setEnrolment(null)
-          setCode('')
-          onCodes(codes)
-        },
+    // Turning it on updates the session, which swaps this form out of the
+    // page before a per-call onSuccess would run: the codes are handed up
+    // from the promise instead, which settles whether or not this form is
+    // still there. A failure shows through `verify.error`.
+    verify.mutateAsync({ code: code.trim(), password: new OneUseSecret(password) }).then(
+      (codes) => {
+        toast.success(t('settings.security.enabled'))
+        onCodes(codes)
       },
+      () => undefined,
     )
     // Asked again for each try; the grant it buys is made at the last moment.
     setPassword('')
@@ -278,15 +278,11 @@ function Disable() {
       className="space-y-4"
       onSubmit={(event) => {
         event.preventDefault()
-        disable.mutate(
-          { code: code.trim(), password: new OneUseSecret(password) },
-          {
-            onSuccess: () => {
-              toast.success(t('settings.security.disabled'))
-              setOpen(false)
-              setCode('')
-            },
-          },
+        // As turning it on: the session update swaps this form out before a
+        // per-call onSuccess would run, so the toast follows the promise.
+        disable.mutateAsync({ code: code.trim(), password: new OneUseSecret(password) }).then(
+          () => toast.success(t('settings.security.disabled')),
+          () => undefined,
         )
         setPassword('')
       }}
