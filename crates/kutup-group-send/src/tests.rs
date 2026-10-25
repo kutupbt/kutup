@@ -276,6 +276,27 @@ fn a_blob_round_trips_at_one_size() {
 }
 
 #[test]
+fn a_blob_gives_its_endorsement_only_for_its_members_server_and_account() {
+    let server = key(1);
+    let blob = blob("kutup.dev");
+    let public = server.public_key();
+    let endorsement = blob.receive("kutup.dev", ADA, NOW, &public).unwrap();
+    assert_eq!(endorsement, endorse(&server, ADA));
+    assert_eq!(
+        blob.receive("other.example", ADA, NOW, &public),
+        Err(Error::WrongServer)
+    );
+    assert_eq!(
+        blob.receive("kutup.dev", BEN, NOW, &public),
+        Err(Error::Invalid)
+    );
+    assert_eq!(
+        blob.receive("kutup.dev", ADA, NOW, &key(2).public_key()),
+        Err(Error::Invalid)
+    );
+}
+
+#[test]
 fn a_malformed_blob_is_refused() {
     let encoded = blob("kutup.dev").encode().unwrap();
     let malformed = Err(Error::Malformed("endorsement blob"));

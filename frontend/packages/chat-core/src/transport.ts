@@ -484,6 +484,79 @@ export class ApiChatTransport implements ChatTransportPort {
     }
   }
 
+  /**
+   * One group message to every listed account of `server`, sealed once, with
+   * the group send token over them (`SealedMultiSubmissionV1`;
+   * docs/plans/group-send-endorsements.md §3.4). `200`, `409` and `410` are
+   * answers (who is over a budget, whose devices moved on); a token the
+   * destination refuses (`401 groupSendTokenInvalid`), a destination that
+   * didn't answer (`503`), a server without the route (`404`), or any status
+   * the route doesn't define, sends those members pairwise. Only no answer at
+   * all (offline) is an error.
+   */
+  async sendSealedMulti(
+    server: string,
+    request: unknown,
+  ): Promise<
+    | { kind: 'answered'; status: number; response: unknown }
+    | { kind: 'peerUnavailable' }
+    | { kind: 'tooLarge' }
+    | { kind: 'rateLimited' }
+    | { kind: 'tokenInvalid' }
+  > {
+    try {
+      const response = await axios.post(`${apiBase()}/chat/anonymous/messages/multi`, request, {
+        params: { server },
+        withCredentials: false,
+        headers: { Authorization: undefined },
+      })
+      // Only a 200 stores; the engine sends the copies of any other status
+      // pairwise.
+      return { kind: 'answered', status: response.status, response: response.status === 200 ? response.data : {} }
+    } catch (error) {
+      if (axios.isAxiosError(error) && error.response) {
+        const status = error.response.status
+        if (status === 409 || status === 410) return { kind: 'answered', status, response: error.response.data }
+        if (status === 401 && errorCode(error) === 'groupSendTokenInvalid') return { kind: 'tokenInvalid' }
+        if (status === 503 || status === 404) return { kind: 'peerUnavailable' }
+        if (status === 413) return { kind: 'tooLarge' }
+        if (status === 429) return { kind: 'rateLimited' }
+        // Any other status the route doesn't define: an answer that would
+        // come back the same, so those copies go pairwise. Only no answer at
+        // all (offline) is an error, which waits.
+        return { kind: 'answered', status, response: {} }
+      }
+      throw peerSendError(error)
+    }
+  }
+
+  /**
+   * This account's group send endorsement for today, from its own server
+   * (`GroupSendEndorsementResponseV1`; docs/plans/group-send-endorsements.md
+   * §3.2). The engine checks it before keeping it.
+   */
+  async fetchGroupSendEndorsement(): Promise<unknown> {
+    const response = await api.get('/chat/group-send/endorsement')
+    return response.data
+  }
+
+  /**
+   * The endorsement keys of this account's server, or of `server` from its
+   * verified discovery (`GroupSendParamsV1`); `null` when that server
+   * publishes none (`404`).
+   */
+  async fetchGroupSendParams(server?: string | null): Promise<unknown> {
+    try {
+      const response = await api.get('/chat/group-send/params', {
+        params: server ? { server } : undefined,
+      })
+      return response.data
+    } catch (error) {
+      if (axios.isAxiosError(error) && error.response?.status === 404) return null
+      throw error
+    }
+  }
+
   async sendSyncMessage(
     request: unknown,
   ): Promise<

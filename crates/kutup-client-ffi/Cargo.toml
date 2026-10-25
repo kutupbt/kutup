@@ -44,3 +44,9 @@ zeroize = "1"
 tempfile = "3"
 ed25519-dalek = "2"
 base64 = "0.22"
+
+# libsignal's zkgroup (kutup-group-send) needs Signal's curve25519-dalek fork
+# in place of crates.io's, as libsignal's own workspace patches it (see the
+# root Cargo.toml).
+[patch.crates-io]
+curve25519-dalek = { git = "https://github.com/signalapp/curve25519-dalek", tag = "signal-curve25519-4.1.3" }

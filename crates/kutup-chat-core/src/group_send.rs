@@ -94,13 +94,22 @@ pub(crate) fn named_for(content: &ChatContent, pseudonym: Option<&str>) -> ChatC
 
 /// A member account a group message goes to, with its devices and the
 /// capability its profile key gives.
-struct Recipient {
-    account: String,
-    capability: [u8; 16],
-    bundles: Vec<DevicePreKeyBundle>,
+pub(crate) struct Recipient {
+    pub(crate) account: String,
+    pub(crate) capability: [u8; 16],
+    pub(crate) bundles: Vec<DevicePreKeyBundle>,
     /// The account's pseudonym in the group (none for this account's own
     /// devices when it isn't a member any more).
-    pseudonym: Option<String>,
+    pub(crate) pseudonym: Option<String>,
+}
+
+/// A leg on its way to the multi-recipient route: its account, devices, and
+/// the endorsement its token is combined from.
+struct MultiLeg {
+    index: usize,
+    parsed: kutup_chat_proto::AccountRef,
+    bundles: Vec<DevicePreKeyBundle>,
+    endorsement: kutup_group_send::Endorsement,
 }
 
 fn group_err(error: group::GroupError) -> ChatError {
@@ -524,6 +533,30 @@ impl Engine {
         let distribution_id = self
             .distribute_sender_key(record, &recipients, &certificate, rng)
             .await?;
+        // This account's endorsement shared with the home, and the members'
+        // read, so each server's members get one shared copy. Best effort: a
+        // member without a usable endorsement gets a pairwise copy, and it is
+        // tried again with the next message.
+        let now_s = u64::try_from(self.now_ms() / 1000).unwrap_or(0);
+        let me = self.session.account_ref().to_string();
+        let lacking = recipients.iter().any(|recipient| {
+            recipient.account != me
+                && record
+                    .endorsements
+                    .usable(&recipient.account, now_s)
+                    .is_none()
+        });
+        let shared = self
+            .share_group_send_endorsement(record)
+            .await
+            .unwrap_or(false);
+        let read = self
+            .read_group_send_endorsements(record, lacking)
+            .await
+            .unwrap_or(false);
+        if shared || read {
+            self.save_group(record).await?;
+        }
         let message = self
             .session
             .group_encrypt(distribution_id, &plaintext, rng)
@@ -535,8 +568,38 @@ impl Engine {
             libsignal_protocol::ContentHint::Resendable
         };
         let mut legs = Vec::with_capacity(recipients.len());
+        let mut multi = false;
         for recipient in &recipients {
             if recipient.bundles.is_empty() {
+                continue;
+            }
+            // A member with a usable endorsement goes on the multi-recipient
+            // route, sealed once with the others of its server when
+            // delivered; this account's own devices (sync copies, as Signal)
+            // and the rest go pairwise.
+            if recipient.account != me
+                && record
+                    .endorsements
+                    .usable(&recipient.account, now_s)
+                    .is_some()
+            {
+                multi = true;
+                legs.push(GroupOutboxLeg {
+                    account: recipient.account.clone(),
+                    devices: recipient
+                        .bundles
+                        .iter()
+                        .map(|bundle| bundle.device_id)
+                        .collect(),
+                    envelopes: Vec::new(),
+                    delivered: false,
+                    failed: false,
+                    mismatches: 0,
+                    waits: 0,
+                    retry_at_ms: None,
+                    queued: false,
+                    multi: true,
+                });
                 continue;
             }
             let sealed = self
@@ -566,6 +629,7 @@ impl Engine {
                 waits: 0,
                 retry_at_ms: None,
                 queued: false,
+                multi: false,
             });
         }
         let created_at = unix_millis();
@@ -602,6 +666,8 @@ impl Engine {
                     content: plaintext,
                     created_at,
                     legs,
+                    sender_key_message: multi.then(|| message.clone()),
+                    implicit: notice,
                 }),
             );
         }
@@ -702,9 +768,27 @@ impl Engine {
         now: i64,
         rng: &mut R,
     ) -> (Vec<usize>, Vec<BookNews>) {
+        // The multi-recipient legs first: what that route can't take comes
+        // back as ordinary legs, for the next round.
+        let multi: Vec<usize> = retry
+            .iter()
+            .copied()
+            .filter(|&index| entry.legs[index].multi)
+            .collect();
+        let (mut again, mut book_news) = if multi.is_empty() {
+            (Vec::new(), Vec::new())
+        } else {
+            self.deliver_multi(entry, &multi, targets, content, now, rng)
+                .await
+        };
         let mut sends = Vec::with_capacity(retry.len());
         let mut places = Vec::with_capacity(retry.len());
         for &index in retry {
+            // A leg that began the round on the multi-recipient route is
+            // done for this round (sent there, or back for the next one).
+            if multi.contains(&index) {
+                continue;
+            }
             let leg = &mut entry.legs[index];
             let Ok(envelopes) =
                 serde_json::from_slice::<Vec<SealedOutgoingEnvelopeV1>>(&leg.envelopes)
@@ -725,8 +809,6 @@ impl Engine {
             places.push(index);
         }
         let outcomes = self.send_sealed_batches(&sends).await;
-        let mut again = Vec::new();
-        let mut book_news = Vec::new();
         for ((index, (account, submission)), outcome) in places.into_iter().zip(sends).zip(outcomes)
         {
             match outcome {
@@ -812,7 +894,462 @@ impl Engine {
                 Some(SealedBatchOutcomeV1::RateLimited) | None => wait(&mut entry.legs[index], now),
             }
         }
+        // Each leg once in the next round: one account is named once a batch.
+        again.sort_unstable();
+        again.dedup();
         (again, book_news)
+    }
+
+    /// One round of the legs `multi` on the multi-recipient route: one
+    /// request per destination server, the entry's sender-key message
+    /// sealed once for every device of its accounts (sealed sender v2).
+    /// What the route can't take turns into ordinary legs, returned for the
+    /// next round: a member whose capability was refused (asked for its
+    /// current one), one over its budget (later), a destination that didn't
+    /// answer (`503`) or a request too large. A device set that moved on
+    /// (`409`, `410`) is fetched again and the leg tried again. A member
+    /// device the sender key hasn't reached (one the account gained since
+    /// the distribution) can't read a shared copy: that leg goes on as an
+    /// ordinary one, the new device's copy pairwise and naming the member.
+    async fn deliver_multi<R: Rng + CryptoRng>(
+        &mut self,
+        entry: &mut GroupOutboxEntry,
+        multi: &[usize],
+        targets: &BTreeMap<String, MemberTarget>,
+        content: &ChatContent,
+        now: i64,
+        rng: &mut R,
+    ) -> (Vec<usize>, Vec<BookNews>) {
+        let mut again = Vec::new();
+        let mut news = Vec::new();
+        // Endorsements whose token was refused, by (account, expiration).
+        let mut refused: Vec<(String, u64)> = Vec::new();
+        let now_s = u64::try_from(now / 1000).unwrap_or(0);
+        let hint = if entry.implicit {
+            libsignal_protocol::ContentHint::Implicit
+        } else {
+            libsignal_protocol::ContentHint::Resendable
+        };
+        let record = self.load_group_record(&entry.group_id).await.ok();
+        let certificate = self.issue_verified_sender_certificate().await;
+        let group_bytes = decode_group_id(&entry.group_id).ok();
+        let (Some(message), Some(record), Ok(certificate), Some(group_bytes)) = (
+            entry.sender_key_message.clone(),
+            record,
+            certificate,
+            group_bytes,
+        ) else {
+            // Nothing to seal it with now: it waits.
+            for &index in multi {
+                wait(&mut entry.legs[index], now);
+            }
+            return (again, news);
+        };
+        // By destination server; a member without a usable endorsement now
+        // goes pairwise.
+        let mut by_server: BTreeMap<String, Vec<usize>> = BTreeMap::new();
+        let mut to_pairwise: Vec<usize> = Vec::new();
+        // The devices each leg was sealed for on this route: a leg whose
+        // account gained or reinstalled a device goes on as an ordinary leg
+        // for these, and the pairwise path's amendment then gives the new
+        // device a copy naming the member (how it finds the group again),
+        // which a shared multi-recipient copy can't.
+        let mut sealed_for: BTreeMap<usize, Vec<DevicePreKeyBundle>> = BTreeMap::new();
+        let mut moved_on: Vec<usize> = Vec::new();
+        // Legs with a device the sender key hasn't reached, with the devices
+        // it has.
+        let mut uncovered: Vec<(usize, Vec<DevicePreKeyBundle>)> = Vec::new();
+        for &index in multi {
+            let account = entry.legs[index].account.clone();
+            match (
+                crate::address::parse_account(&account),
+                record.endorsements.usable(&account, now_s),
+            ) {
+                (Ok(parsed), Some(_)) => by_server
+                    .entry(parsed.server.clone())
+                    .or_default()
+                    .push(index),
+                _ => to_pairwise.push(index),
+            }
+        }
+        for (server, places) in by_server {
+            // The legs this round can take, with their endorsements, by
+            // expiration: one request and one token per expiration (§3.4).
+            let mut by_expiration: BTreeMap<u64, Vec<MultiLeg>> = BTreeMap::new();
+            let accounts: Vec<String> = places
+                .iter()
+                .map(|&index| entry.legs[index].account.clone())
+                .collect();
+            let shared = record.endorsements.shared_expiration(&accounts, now_s);
+            for index in places {
+                let account = entry.legs[index].account.clone();
+                let Some(target) = targets.get(&account) else {
+                    continue;
+                };
+                let endorsement = match shared {
+                    Some(expiration) => record.endorsements.usable_at(&account, expiration, now_s),
+                    None => record.endorsements.usable(&account, now_s),
+                };
+                let (Ok(parsed), Some(endorsement)) =
+                    (crate::address::parse_account(&account), endorsement)
+                else {
+                    to_pairwise.push(index);
+                    continue;
+                };
+                match self
+                    .sealed_bundles_for_send(&account, &target.capability)
+                    .await
+                {
+                    Ok(bundles) if !bundles.is_empty() => {
+                        let reached = |bundle: &DevicePreKeyBundle| {
+                            record.sender_book.as_ref().is_some_and(|book| {
+                                book.missing(
+                                    &[BookDevice {
+                                        account: account.clone(),
+                                        device_id: bundle.device_id,
+                                        registration_id: bundle.registration_id,
+                                    }],
+                                    now,
+                                )
+                                .is_empty()
+                            })
+                        };
+                        if !bundles.iter().all(reached) {
+                            let covered = bundles.into_iter().filter(reached).collect();
+                            uncovered.push((index, covered));
+                            continue;
+                        }
+                        entry.legs[index].devices =
+                            bundles.iter().map(|bundle| bundle.device_id).collect();
+                        sealed_for.insert(index, bundles.clone());
+                        by_expiration
+                            .entry(endorsement.expiration)
+                            .or_default()
+                            .push(MultiLeg {
+                                index,
+                                parsed,
+                                bundles,
+                                endorsement,
+                            });
+                    }
+                    // No devices, or none readable now: it waits.
+                    _ => wait(&mut entry.legs[index], now),
+                }
+            }
+            for (expiration, legs) in by_expiration {
+                let going: Vec<usize> = legs.iter().map(|leg| leg.index).collect();
+                let endorsements: Vec<_> = legs.iter().map(|leg| leg.endorsement.clone()).collect();
+                let recipients: Vec<_> = legs
+                    .into_iter()
+                    .map(|leg| (leg.parsed, leg.bundles))
+                    .collect();
+                let (sealed, token) = match (
+                    self.session
+                        .seal_group_multi(
+                            &recipients,
+                            &certificate,
+                            &group_bytes,
+                            &message,
+                            hint,
+                            rng,
+                        )
+                        .await,
+                    crate::group_endorse::group_send_token(&endorsements),
+                ) {
+                    (Ok(sealed), Ok(token)) => (sealed, token),
+                    _ => {
+                        for index in going {
+                            wait(&mut entry.legs[index], now);
+                        }
+                        continue;
+                    }
+                };
+                if !sealed.safety_number_changes.is_empty() {
+                    self.events.push_back(crate::ChatEvent::IdentityChanged(
+                        sealed.safety_number_changes,
+                    ));
+                }
+                let submission = kutup_chat_proto::SealedMultiSubmissionV1 {
+                    send_id: entry.send_id.clone(),
+                    payload: STANDARD.encode(&sealed.payload),
+                    group_send_token: token,
+                    urgent: true,
+                };
+                let outcome = Rc::clone(&self.transport)
+                    .send_sealed_multi(&server, &submission)
+                    .await;
+                let account_id = |index: usize, entry: &GroupOutboxEntry| {
+                    crate::address::parse_account(&entry.legs[index].account)
+                        .map(|parsed| parsed.account_id)
+                        .unwrap_or_default()
+                };
+                match outcome {
+                    // Only 200, 409 and 410 are answers. Any other status the
+                    // route doesn't define (a 400, a 500 that keeps coming)
+                    // would come back the same: the copies go pairwise, the
+                    // durable path, instead of waiting out the week.
+                    Ok(crate::transport::MultiSendOutcome::Answered { status, .. })
+                        if !matches!(status, 200 | 409 | 410) =>
+                    {
+                        to_pairwise.extend(going);
+                    }
+                    Ok(crate::transport::MultiSendOutcome::Answered { status, response }) => {
+                        let stored = status == 200;
+                        // New or reinstalled devices: on as an ordinary leg
+                        // (see `sealed_for`). Only devices that are gone:
+                        // again here.
+                        let gained: Vec<&String> = response
+                            .devices
+                            .iter()
+                            .filter(|devices| !devices.missing_devices.is_empty())
+                            .map(|devices| &devices.account_id)
+                            .chain(response.stale.iter().map(|stale| &stale.account_id))
+                            .collect();
+                        let moved: Vec<&String> = response
+                            .devices
+                            .iter()
+                            .map(|devices| &devices.account_id)
+                            .collect();
+                        // A 409/410 that names none of these legs answers no
+                        // request of this device's.
+                        let names_a_leg = going.iter().any(|&index| {
+                            let id = account_id(index, entry);
+                            gained.contains(&&id) || moved.contains(&&id)
+                        });
+                        for index in going {
+                            let id = account_id(index, entry);
+                            let account = entry.legs[index].account.clone();
+                            if stored && response.refused.contains(&id) {
+                                // Not an active account there: refused for
+                                // good, as a pairwise copy would be. The leg
+                                // failed, and nobody got the sender key.
+                                let leg = &mut entry.legs[index];
+                                leg.delivered = true;
+                                leg.failed = true;
+                            } else if response.rate_limited.contains(&id) {
+                                // Over its budget: this copy pairwise, later.
+                                wait(&mut entry.legs[index], now);
+                                to_pairwise.push(index);
+                            } else if gained.contains(&&id) {
+                                news.push(BookNews::Mismatch {
+                                    account: account.clone(),
+                                });
+                                moved_on.push(index);
+                            } else if moved.contains(&&id) {
+                                news.push(BookNews::Mismatch {
+                                    account: account.clone(),
+                                });
+                                self.forget_known_devices_of(&account);
+                                let leg = &mut entry.legs[index];
+                                leg.mismatches = leg.mismatches.saturating_add(1);
+                                if leg.mismatches >= MAX_LEG_MISMATCHES {
+                                    to_pairwise.push(index);
+                                } else {
+                                    again.push(index);
+                                }
+                            } else if stored {
+                                let leg = &mut entry.legs[index];
+                                leg.delivered = true;
+                                leg.retry_at_ms = None;
+                                news.push(BookNews::Delivered {
+                                    account,
+                                    devices: leg.devices.clone(),
+                                });
+                            } else if names_a_leg {
+                                // A 409/410 stored nothing for anyone: again,
+                                // with the named legs' devices brought up to
+                                // date.
+                                again.push(index);
+                            } else {
+                                // One that names no leg at all: after a wait,
+                                // and counted, so such answers can't keep the
+                                // legs going round.
+                                let leg = &mut entry.legs[index];
+                                leg.mismatches = leg.mismatches.saturating_add(1);
+                                if leg.mismatches >= MAX_LEG_MISMATCHES {
+                                    to_pairwise.push(index);
+                                } else {
+                                    wait(leg, now);
+                                }
+                            }
+                        }
+                    }
+                    // The destination didn't take the token: these
+                    // endorsements are dropped (each member's next one is
+                    // read when it uploads it), the server's keys asked
+                    // again, and the copies go pairwise.
+                    Ok(crate::transport::MultiSendOutcome::TokenInvalid) => {
+                        for &index in &going {
+                            refused.push((entry.legs[index].account.clone(), expiration));
+                        }
+                        self.forget_group_send_keys(&server);
+                        to_pairwise.extend(going);
+                    }
+                    // The destination didn't answer in time, or one request
+                    // can't carry them: pairwise, the durable path.
+                    Ok(
+                        crate::transport::MultiSendOutcome::PeerUnavailable
+                        | crate::transport::MultiSendOutcome::TooLarge,
+                    ) => to_pairwise.extend(going),
+                    // This address's budget, or no answer: they wait.
+                    Ok(crate::transport::MultiSendOutcome::RateLimited) | Err(_) => {
+                        for index in going {
+                            wait(&mut entry.legs[index], now);
+                        }
+                    }
+                }
+            }
+        }
+        for (index, covered) in uncovered {
+            let account = entry.legs[index].account.clone();
+            let Some(target) = targets.get(&account) else {
+                wait(&mut entry.legs[index], now);
+                continue;
+            };
+            let sealed = if covered.is_empty() {
+                Ok(Vec::new())
+            } else {
+                self.session
+                    .seal_group_message(
+                        &account,
+                        &covered,
+                        &certificate,
+                        &group_bytes,
+                        &message,
+                        hint,
+                        rng,
+                    )
+                    .await
+                    .map(|sealed| self.sealed_envelopes(sealed))
+            };
+            let amended = match sealed {
+                Ok(envelopes) => {
+                    self.amend_leg(&account, target, envelopes, content, rng)
+                        .await
+                }
+                Err(error) => Err(error),
+            };
+            match amended {
+                Ok((devices, envelopes)) => {
+                    let leg = &mut entry.legs[index];
+                    leg.devices = devices;
+                    leg.envelopes = envelopes;
+                    leg.multi = false;
+                    again.push(index);
+                }
+                Err(_) => wait(&mut entry.legs[index], now),
+            }
+        }
+        for index in moved_on {
+            let bundles = sealed_for.remove(&index).unwrap_or_default();
+            let account = entry.legs[index].account.clone();
+            match self
+                .session
+                .seal_group_message(
+                    &account,
+                    &bundles,
+                    &certificate,
+                    &group_bytes,
+                    &message,
+                    hint,
+                    rng,
+                )
+                .await
+            {
+                Ok(sealed) => {
+                    let envelopes = self.sealed_envelopes(sealed);
+                    let leg = &mut entry.legs[index];
+                    leg.devices = envelopes
+                        .iter()
+                        .map(|envelope| envelope.device_id)
+                        .collect();
+                    match serde_json::to_vec(&envelopes) {
+                        Ok(envelopes) => {
+                            leg.envelopes = envelopes;
+                            leg.multi = false;
+                            again.push(index);
+                        }
+                        Err(_) => wait(leg, now),
+                    }
+                }
+                Err(_) => wait(&mut entry.legs[index], now),
+            }
+        }
+        for index in to_pairwise {
+            let leg_retry = entry.legs[index].retry_at_ms;
+            match self
+                .leg_to_pairwise(
+                    entry,
+                    index,
+                    targets,
+                    &message,
+                    hint,
+                    &certificate,
+                    &group_bytes,
+                    rng,
+                )
+                .await
+            {
+                // Now an ordinary leg: the next round, unless it waits.
+                Ok(()) if leg_retry.is_none_or(|at| at <= now) => again.push(index),
+                Ok(()) => {}
+                Err(_) => wait(&mut entry.legs[index], now),
+            }
+        }
+        if !refused.is_empty() {
+            if let Ok(mut record) = self.load_group_record(&entry.group_id).await {
+                for (account, expiration) in &refused {
+                    record.endorsements.forget(account, *expiration);
+                }
+                let _ = self.save_group(&record).await;
+            }
+        }
+        (again, news)
+    }
+
+    /// Turns a multi-recipient leg into an ordinary one: the entry's
+    /// sender-key message sealed per device of its account.
+    #[allow(clippy::too_many_arguments)]
+    async fn leg_to_pairwise<R: Rng + CryptoRng>(
+        &mut self,
+        entry: &mut GroupOutboxEntry,
+        index: usize,
+        targets: &BTreeMap<String, MemberTarget>,
+        message: &[u8],
+        hint: libsignal_protocol::ContentHint,
+        certificate: &libsignal_protocol::SenderCertificate,
+        group_bytes: &[u8; 32],
+        rng: &mut R,
+    ) -> Result<()> {
+        let account = entry.legs[index].account.clone();
+        let target = targets
+            .get(&account)
+            .ok_or_else(|| ChatError::Invalid("no longer a member".into()))?;
+        let bundles = self
+            .sealed_bundles_for_send(&account, &target.capability)
+            .await?;
+        let sealed = self
+            .session
+            .seal_group_message(
+                &account,
+                &bundles,
+                certificate,
+                group_bytes,
+                message,
+                hint,
+                rng,
+            )
+            .await?;
+        let envelopes = self.sealed_envelopes(sealed);
+        let leg = &mut entry.legs[index];
+        leg.devices = envelopes
+            .iter()
+            .map(|envelope| envelope.device_id)
+            .collect();
+        leg.envelopes =
+            serde_json::to_vec(&envelopes).map_err(|e| ChatError::Content(e.to_string()))?;
+        leg.multi = false;
+        Ok(())
     }
 
     /// The sender-key book after a message pass: a key queued for devices

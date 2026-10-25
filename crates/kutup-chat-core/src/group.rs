@@ -132,6 +132,13 @@ pub struct GroupRecordV1 {
     /// its pseudonym is derived at this epoch.
     #[serde(default)]
     pub join_epoch: u32,
+    /// The group send endorsements this device keeps for the group: its own
+    /// upload and the members' it read (docs/plans/group-send-endorsements.md).
+    #[serde(
+        default,
+        skip_serializing_if = "crate::group_endorse::GroupEndorsements::is_empty"
+    )]
+    pub endorsements: crate::group_endorse::GroupEndorsements,
 }
 
 /// Which member devices hold this device's current sender key for a group
@@ -495,6 +502,7 @@ pub fn create_group(new: NewGroup<'_>) -> Result<(GroupRecordV1, GroupChangeV1),
         listed_status: None,
         list_due_at_ms: None,
         join_epoch,
+        endorsements: Default::default(),
     };
     Ok((record, change))
 }
@@ -664,6 +672,7 @@ pub fn record_from_invite(
         listed_status: None,
         list_due_at_ms: None,
         join_epoch,
+        endorsements: Default::default(),
     };
     if let Some(previous) = previous {
         let replaceable = match &previous.status {
@@ -846,6 +855,7 @@ pub fn record_from_link(
         listed_status: None,
         list_due_at_ms: None,
         join_epoch,
+        endorsements: Default::default(),
     };
     if let Some(previous) = previous {
         record.state = previous.state.clone();

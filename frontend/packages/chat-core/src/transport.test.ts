@@ -249,6 +249,68 @@ describe('ApiChatTransport', () => {
     await expect(transport.sendSealedBatch('b.test', { recipients: [] })).rejects.toThrow(/peerUnsupported/)
   })
 
+  it('sends a multi-recipient group copy anonymously and maps each answer', async () => {
+    const response = { refused: [], rateLimited: [], devices: [], stale: [] }
+    const post = vi.spyOn(axios, 'post').mockResolvedValueOnce({ status: 200, data: response } as never)
+    const transport = new ApiChatTransport()
+    await expect(transport.sendSealedMulti('b.test', { sendId: 's' })).resolves
+      .toEqual({ kind: 'answered', status: 200, response })
+    expect(post).toHaveBeenCalledWith(
+      expect.stringMatching(/\/chat\/anonymous\/messages\/multi$/),
+      { sendId: 's' },
+      { params: { server: 'b.test' }, withCredentials: false, headers: { Authorization: undefined } },
+    )
+    const answer = (status: number, data: unknown = {}) =>
+      new axios.AxiosError('failed', String(status), undefined, undefined, { status, data } as never)
+    const moved = { ...response, devices: [{ accountId: 'x', missingDevices: [2], extraDevices: [] }] }
+    for (const [status, expected] of [
+      [409, { kind: 'answered', status: 409, response: moved }],
+      [410, { kind: 'answered', status: 410, response: moved }],
+      [503, { kind: 'peerUnavailable' }],
+      [404, { kind: 'peerUnavailable' }],
+      [413, { kind: 'tooLarge' }],
+      [429, { kind: 'rateLimited' }],
+    ] as const) {
+      post.mockRejectedValueOnce(answer(status, moved))
+      await expect(transport.sendSealedMulti('b.test', {})).resolves.toEqual(expected)
+    }
+    // A token the destination refuses (its own kind).
+    post.mockRejectedValueOnce(answer(401, { error: 'invalid', code: 'groupSendTokenInvalid' }))
+    await expect(transport.sendSealedMulti('b.test', {})).resolves.toEqual({ kind: 'tokenInvalid' })
+    // Any other status is an answer, which sends those copies pairwise.
+    post.mockRejectedValueOnce(answer(401, {}))
+    await expect(transport.sendSealedMulti('b.test', {})).resolves.toEqual({ kind: 'answered', status: 401, response: {} })
+    post.mockRejectedValueOnce(answer(400, { error: 'bad' }))
+    await expect(transport.sendSealedMulti('b.test', {})).resolves.toEqual({ kind: 'answered', status: 400, response: {} })
+    post.mockRejectedValueOnce(new Error('offline'))
+    await expect(transport.sendSealedMulti('b.test', {})).rejects.toBeTruthy()
+    // Only a 200 stores: another success status sends the copies pairwise.
+    post.mockResolvedValueOnce({ status: 202, data: response } as never)
+    await expect(transport.sendSealedMulti('b.test', {})).resolves.toEqual({ kind: 'answered', status: 202, response: {} })
+  })
+
+  it('fetches this account\'s endorsement and a server\'s endorsement keys', async () => {
+    const issued = { keyId: 1, expiration: 1793145600, response: 'AA==' }
+    const params = { keys: [{ keyId: 1, endorsementPublicKey: 'AA==', issuesUntil: 1793145600 }] }
+    const get = vi.spyOn(api, 'get')
+      .mockResolvedValueOnce({ data: issued } as never)
+      .mockResolvedValueOnce({ data: params } as never)
+      .mockResolvedValueOnce({ data: params } as never)
+    const transport = new ApiChatTransport()
+    await expect(transport.fetchGroupSendEndorsement()).resolves.toEqual(issued)
+    expect(get).toHaveBeenLastCalledWith('/chat/group-send/endorsement')
+    await expect(transport.fetchGroupSendParams()).resolves.toEqual(params)
+    expect(get).toHaveBeenLastCalledWith('/chat/group-send/params', { params: undefined })
+    await expect(transport.fetchGroupSendParams('b.test')).resolves.toEqual(params)
+    expect(get).toHaveBeenLastCalledWith('/chat/group-send/params', { params: { server: 'b.test' } })
+    // A server that publishes no keys; any other failure is an error.
+    get.mockRejectedValueOnce(new axios.AxiosError('none', '404', undefined, undefined, { status: 404, data: {} } as never))
+    await expect(transport.fetchGroupSendParams('c.test')).resolves.toBeNull()
+    const down = new axios.AxiosError('down', '502', undefined, undefined, { status: 502, data: {} } as never)
+    get.mockRejectedValueOnce(down)
+    await expect(transport.fetchGroupSendParams('c.test')).rejects.toBe(down)
+  })
+
   it('reports only the server\'s own sealed refusal as refused', async () => {
     await resolveApiBase()
     const refusal = (data: unknown) => new axios.AxiosError('failed', '404', undefined, undefined, { status: 404, data } as never)

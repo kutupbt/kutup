@@ -1773,6 +1773,37 @@ body is read and given back once a request authenticates), an env rate limit
 as the other pre-authentication limits. The server never had the 64 cap: `CHAT_GROUP_MAX_MEMBERS` is 256 and
 `GroupLimits` takes at most that; the client lifts its own once this is in.
 
+### Slice 2: as built (client, 2026-10-24)
+
+Built on one identity per account (docs/plans/account-identity-key.md), so
+libsignal's sealed sender v2 is used as it is: one key share per account.
+Delivery is authorised by group send endorsements, not capabilities (the
+user's decision of 2026-10-24; docs/plans/group-send-endorsements.md). The
+contract is in docs/chat-protocol.md §7 ("The client side"). What building it
+settled:
+- **Endorsements** (`group_endorse`): the account's own one in the store's
+  meta, checked against its server's key; per group, the expiration last
+  uploaded (with the join epoch, so a rejoin uploads again), the read cursor,
+  and each member's two newest checked endorsements (`GroupEndorsements` in
+  the group record). Uploads and reads ride on sends and on the periodic
+  group list look; a failure is tried again after ten minutes, and server
+  keys are kept an hour.
+- **Legs:** a member with a usable endorsement goes on the multi route; own
+  devices and the rest go pairwise. A leg whose account has devices the sender
+  key hasn't reached goes on as an ordinary leg (sender-key copies for the
+  devices that hold the key, a pairwise copy naming the member for the rest),
+  since a shared copy can't carry the member's pseudonym and the new device
+  couldn't read it. Members of one server with different expirations go in
+  one request per expiration.
+- **Answers:** as the protocol says; a refused token drops its endorsements
+  and forgets the server's keys.
+- **Tests:** chat-core harness (`group_multi_*`), with a server double that
+  issues and verifies with a real `ServerKey`, keeps the home's blobs as the
+  home does (two per pseudonym, members only, pages of three), parses the
+  `0x23` payload and checks devices as the server does; a rotated key, a
+  refused token and forged blobs are covered. The TS transport maps every
+  answer.
+
 ### Slice 4: group calls, the server design (second session, 2026-10-21)
 
 Agreed with the third session and revised after the main session's review

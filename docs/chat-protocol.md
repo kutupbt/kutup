@@ -884,6 +884,47 @@ The budgets are charged whatever the answer: a send answered `409` or `410`
 counts too. The shared part goes once no row names it (after an ack,
 or the maintenance sweep).
 
+**The client side** (group send endorsements,
+docs/plans/group-send-endorsements.md). Each device fetches its account's
+daily endorsement from its own server (`GET /api/chat/group-send/endorsement`)
+when the one it holds has less than 25 hours left, at most hourly, and checks
+it against the server's published key (`GET /api/chat/group-send/params`)
+before keeping it. The fetch runs from the account's periodic sync, whether
+or not the account is in any group, and never from a send, so its timing says
+nothing about the account's groups.
+It shares it with the home of each group the account is in
+(`PutEndorsement`): the response with its proof, the server and the key id,
+padded to 512 bytes and sealed under the group's state key with the
+pseudonym as subject. It reads the other members' blobs from each home
+(`GetEndorsements`, paged after a cursor) with every send that needs one and
+every periodic look, and keeps a blob only when it opens, names the member's
+own server, and holds a response for that member under that server's key
+(another server's keys come from `GET /api/chat/group-send/params?server=`;
+a key id this device doesn't hold fetches them again, once). The read cursor
+moves past a blob only once it is kept or refused for good; one whose check
+failed for a moment (keys unreachable) is read again.
+Each member keeps its two newest; a member that leaves is dropped, and the
+home serves its blob no more.
+
+A group message goes on this route to each member with a usable endorsement
+(more than ten minutes left), one request per destination server and
+expiration (the newest one all of that server's members share, so the
+day's rollover doesn't split them), the sender-key message sealed once (libsignal's
+`sealed_sender_multi_recipient_encrypt`) and the members' endorsements
+combined into one `groupSendToken`. The account's own other devices get their
+copies pairwise, as do members without a usable endorsement. A member device
+the sender key hasn't reached (one the account gained since the key's
+distribution) can't read a shared copy: that member's leg goes pairwise, the
+new device's copy naming the member so it finds the group again. Answers:
+`401 groupSendTokenInvalid` sends the copies pairwise at once and drops the
+endorsements that token was made of (each member's next one is read when it
+uploads it); `409`/`410` refetch that account's signed device list and try
+again; `503 peerUnavailable`, `404` (a server without the route) and `413` send
+the copies pairwise in the same pass, as does any status the route doesn't
+define; `refused` (not an active account there) fails that member's leg for
+good, as a refused pairwise copy does; `rateLimited` sends that member's copy
+pairwise later, and `429` waits.
+
 For another server's members, this server forwards the send at once to that
 server's `POST /api/fed/chat/sealed/multi` (signed federation), waits for its
 answer (the usual federation timeout) and relays it as it is: `200`, `409`,

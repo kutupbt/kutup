@@ -295,6 +295,31 @@ extern "C" {
         request: JsValue,
     ) -> std::result::Result<JsValue, JsValue>;
 
+    /// `POST /api/chat/anonymous/messages/multi?server=`: a
+    /// `MultiSendOutcome` (`{ kind: "answered", status, response }`,
+    /// `peerUnavailable`, `tooLarge`, `rateLimited` or `tokenInvalid`).
+    #[wasm_bindgen(method, catch, js_name = sendSealedMulti)]
+    async fn js_send_sealed_multi(
+        this: &JsChatTransport,
+        server: &str,
+        request: JsValue,
+    ) -> std::result::Result<JsValue, JsValue>;
+
+    /// `GET /api/chat/group-send/endorsement`: a
+    /// `GroupSendEndorsementResponseV1`.
+    #[wasm_bindgen(method, catch, js_name = fetchGroupSendEndorsement)]
+    async fn js_fetch_group_send_endorsement(
+        this: &JsChatTransport,
+    ) -> std::result::Result<JsValue, JsValue>;
+
+    /// `GET /api/chat/group-send/params[?server=]`: a `GroupSendParamsV1`,
+    /// or `null` when that server publishes none.
+    #[wasm_bindgen(method, catch, js_name = fetchGroupSendParams)]
+    async fn js_fetch_group_send_params(
+        this: &JsChatTransport,
+        server: Option<String>,
+    ) -> std::result::Result<JsValue, JsValue>;
+
     #[wasm_bindgen(method, catch, js_name = sendSyncMessage)]
     async fn js_send_sync_message(
         this: &JsChatTransport,
@@ -842,6 +867,45 @@ impl ChatTransport for BrowserTransport {
                 .await
                 .map_err(transport_error)?,
         )
+    }
+
+    async fn send_sealed_multi(
+        &self,
+        server: &str,
+        submission: &kutup_chat_proto::SealedMultiSubmissionV1,
+    ) -> Result<crate::transport::MultiSendOutcome> {
+        from_transport(
+            self.js
+                .js_send_sealed_multi(server, to_transport(submission)?)
+                .await
+                .map_err(transport_error)?,
+        )
+    }
+
+    async fn fetch_group_send_endorsement(
+        &self,
+    ) -> Result<kutup_chat_proto::group_send::GroupSendEndorsementResponseV1> {
+        from_transport(
+            self.js
+                .js_fetch_group_send_endorsement()
+                .await
+                .map_err(transport_error)?,
+        )
+    }
+
+    async fn fetch_group_send_params(
+        &self,
+        server: Option<&str>,
+    ) -> Result<Option<kutup_chat_proto::group_send::GroupSendParamsV1>> {
+        let value = self
+            .js
+            .js_fetch_group_send_params(server.map(str::to_string))
+            .await
+            .map_err(transport_error)?;
+        if value.is_null() || value.is_undefined() {
+            return Ok(None);
+        }
+        from_transport(value).map(Some)
     }
 
     async fn send_sync(&self, req: &SendMessagesRequest) -> Result<SendOutcome> {
@@ -4231,8 +4295,11 @@ pub fn account_profile_seal(
     to_output(&upload)
 }
 
+/// A request body for the browser transport, which sends it as JSON: maps as
+/// plain objects (a JS `Map` would encode as `{}`).
 fn to_transport<T: Serialize + ?Sized>(value: &T) -> Result<JsValue> {
-    serde_wasm_bindgen::to_value(value)
+    value
+        .serialize(&serde_wasm_bindgen::Serializer::new().serialize_maps_as_objects(true))
         .map_err(|error| ChatError::Transport(format!("encode transport request: {error}")))
 }
 

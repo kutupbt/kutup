@@ -63,6 +63,9 @@ pub enum Error {
     /// Endorsements of different expirations combined into one token.
     #[error("endorsements of different expirations")]
     MixedExpirations,
+    /// A blob naming another server than its member's.
+    #[error("endorsement of another server")]
+    WrongServer,
     /// A token naming one recipient twice (`400` on the multi route).
     #[error("duplicate recipient")]
     DuplicateRecipient,
@@ -137,6 +140,24 @@ impl EndorsementBlob {
         put(&response_len.to_be_bytes())?;
         put(&self.response)?;
         Ok(out)
+    }
+
+    /// The endorsement this blob carries for `account`, whose server is
+    /// `expected_server`, checked as a sender must (§3.4): the blob names that
+    /// server, and its response verifies for `account` at `now` under `key`
+    /// (that server's key [`Self::key_id`], looked up by the member's server,
+    /// never by the server the blob names).
+    pub fn receive(
+        &self,
+        expected_server: &str,
+        account: Uuid,
+        now: u64,
+        key: &EndorsementKey,
+    ) -> Result<Endorsement> {
+        if self.server != expected_server {
+            return Err(Error::WrongServer);
+        }
+        receive(&self.response, account, now, key)
     }
 
     /// The blob in `bytes`: exactly [`ENDORSEMENT_BLOB_BYTES`] long, padded

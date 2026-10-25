@@ -141,6 +141,14 @@ pub struct GroupOutboxEntry {
     pub content: Vec<u8>,
     pub created_at: i64,
     pub legs: Vec<GroupOutboxLeg>,
+    /// The message under this device's sender key, kept for the legs on the
+    /// multi-recipient route: sealed for them again at each try, against
+    /// the sessions then (slice 2).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sender_key_message: Option<Vec<u8>>,
+    /// Its content hint is implicit (a change notice), not resendable.
+    #[serde(default)]
+    pub implicit: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -173,6 +181,11 @@ pub struct GroupOutboxLeg {
     /// `pending` answer, or its own copy already queued).
     #[serde(default)]
     pub queued: bool,
+    /// Goes on the multi-recipient route (no envelopes of its own: the
+    /// entry's sender-key message is sealed for it at each try); turned
+    /// into an ordinary leg when that route can't take it.
+    #[serde(default)]
+    pub multi: bool,
 }
 
 /// Durable local history for an outbound logical message. The pending outbox
@@ -612,6 +625,9 @@ pub struct Pending {
     /// First-seen identity pins waiting for their delayed write, as JSON
     /// (peer → due ms), so a reload doesn't lose them.
     pub(crate) pins_due: Option<Vec<u8>>,
+    /// The account's own group send endorsement as its server issued it, as
+    /// JSON (`group_endorse::OwnEndorsement`): every group gets it from here.
+    pub(crate) group_send_endorsement: Option<Vec<u8>>,
 }
 
 impl Pending {
@@ -655,6 +671,7 @@ impl Pending {
             && self.last_sent_seq.is_none()
             && !self.contact_list_followed
             && self.pins_due.is_none()
+            && self.group_send_endorsement.is_none()
     }
 
     pub(crate) fn clear(&mut self) {
@@ -710,6 +727,8 @@ pub trait ChatDb {
     async fn load_contact_list_followed(&self) -> Result<bool>;
     /// The first-seen identity pins waiting for their write (JSON), if any.
     async fn load_pins_due(&self) -> Result<Option<Vec<u8>>>;
+    /// The account's own group send endorsement (`Pending::group_send_endorsement`).
+    async fn load_group_send_endorsement(&self) -> Result<Option<Vec<u8>>>;
     /// Every persisted inbound message (oldest first, by cursor) — the local history.
     async fn list_messages(&self) -> Result<Vec<InboxMessage>>;
 

@@ -46,6 +46,9 @@ bench = ["wasm"]
 kutup-chat-proto = { path = "../kutup-chat-proto" }
 kutup-federation-proto = { path = "../kutup-federation-proto" }
 kutup-crypto = { path = "../kutup-crypto", default-features = false }
+# Group send endorsements for the multi-recipient route (libsignal's zkgroup,
+# the same tag as libsignal-protocol below).
+kutup-group-send = { path = "../kutup-group-send" }
 # Pinned to the tag studied in docs/research/11-federated-chat.md and proven on
 # wasm32 by spikes/libsignal-wasm. Resolves the in-repo `spqr` git dep (SPQR
 # v1.5.1) transitively. libsignal needs protoc at build time.
@@ -124,3 +127,9 @@ inherits = "release"
 opt-level = 3
 lto = "fat"
 codegen-units = 1
+
+# libsignal's zkgroup (kutup-group-send) needs Signal's curve25519-dalek fork
+# in place of crates.io's, as libsignal's own workspace patches it (see the
+# root Cargo.toml).
+[patch.crates-io]
+curve25519-dalek = { git = "https://github.com/signalapp/curve25519-dalek", tag = "signal-curve25519-4.1.3" }

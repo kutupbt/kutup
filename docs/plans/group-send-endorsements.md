@@ -1,9 +1,11 @@
 # Group send endorsements for the multi-recipient route
 
-Status: **approved** (the user, 2026-10-24). Built: the shared crate and
-wire types (#343, third session); the server and federation parts marked
-*(server)* (second session, 2026-10-24); the client is #334. Where the build
-settled a detail, the section says so.
+Status: **built** (approved by the user, 2026-10-24). The shared crate and
+wire types are `kutup-group-send` and `kutup-chat-proto::group_send` (#343,
+third session); the server and federation parts marked *(server)* are #348
+(second session); the client is #334 (third session). Where the build settled
+a detail, the section says so. Spec 170 checks a send end to end; the three
+were checked together on one and two servers before merging.
 
 **Decision being implemented (the user, 2026-10-24):** "do it Signal's way".
 Replace the per-group delivery capabilities of slice 2
