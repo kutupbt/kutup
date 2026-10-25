@@ -627,12 +627,13 @@ It learns nothing of the content, the manifest or who signed it (the signer
 is inside the sealed manifest). The signature covers the account id it
 names, so a holder of the file key can't move it onto another name.
 
-**Key commitment.** XChaCha20-Poly1305 is not key-committing: a manifest
-could be crafted to open under two keys. That gains nothing here, because a
-reader first checks the sealed manifest's SHA-256 against the digest its
-metadata or descriptor commits to (opened under the right key), and each
-block's SHA-256 against the manifest before its AEAD. The bytes are fixed by
-hashes before any key is used on them.
+**Key commitment.** XChaCha20-Poly1305 is not key-committing: a ciphertext
+can be crafted to open under two keys. Two things make an object single-key
+here. The committed digest (in the metadata or descriptor) pins the sealed
+manifest's ciphertext. And the manifest's hash list names every block by the
+SHA-256 of its sealed bytes, checked before the block's AEAD: another object
+behind the same manifest under a second key would need blocks with those
+hashes, a SHA-256 preimage.
 
 **Integrity.** Any change to one block's bytes fails its hash and its AEAD.
 A wrong manifest fails its AEAD, its AAD (header and revision) and its
