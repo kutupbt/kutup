@@ -296,6 +296,12 @@ What the note leaves open, as built:
    - The account travels beside the frame on every transport (`{ sender,
      frame }`) rather than in it, so the frame stays fixed-size. A server
      that lies about the sender breaks the signature.
+   - The signed bytes hold the file id, the key generation and the
+     per-device `sequence` (all in the header). So a valid frame can't be
+     replayed into another file. A replay into the same file is refused,
+     because the log keeps each sender's sequence once. The AEAD binds the
+     file id too, under the file key. But a key holder can re-encrypt, so
+     the binding that counts is the signature's.
 2. **Registering an editor or CLI device.**
    - `POST /api/devices` with `{ kind, name, frameKey, credential }` gives a
      row with the lowest free id under the caller's sign-in, within
@@ -313,7 +319,9 @@ What the note leaves open, as built:
    - the head manifest lists it with that frame key.
    Publishing prunes an unlisted row only once it is older than
    `deviceListingGraceSeconds` (a site setting, default 600). The grace is
-   for a device between registering and listing itself.
+   for a device between registering and listing itself. It only delays row
+   pruning: an unlisted device's frames are refused throughout, by the home
+   (here) and by recipients (slice 3).
 4. **Sockets.** A browser can't set headers on a WebSocket, so a device asks
    for a single-use ticket first: `POST /api/device-ticket`, as Chat's
    `ws-ticket`.
@@ -348,3 +356,12 @@ What the note leaves open, as built:
      same way. Slice 4 groups that list by sign-in.
 9. **The CLI** registers as a `cli` device, keeps its credential and frame
    seed, and publishes its own entry.
+10. **Recipients verify every frame** (slice 3, the user's decision). Each
+    client checks each frame's signature against the sender's head manifest:
+    - the frame key is listed;
+    - the device id matches;
+    - the manifest sequence is not older than the one it has seen.
+    A removed device is refused at once, because the head no longer lists
+    it. Slice 3's tests include a home relaying a forged frame that the
+    recipient refuses. Slice 2 builds the frame and the home's checks that
+    this rests on.
