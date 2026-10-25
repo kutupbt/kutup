@@ -17,7 +17,7 @@ use common::chat_identity::{token_sid, ChatAccount, ChatDevice};
 use kutup_chat_proto::{
     AccountManifestDeviceV3, AccountManifestV3, DeviceKind, DeviceRegistrationV1, DEVICE_HEADER,
 };
-use kutup_crypto::primitives::{Hasher, Suite};
+use kutup_crypto::primitives::{Hasher, SigningKey, Suite};
 use reqwest::blocking::Client;
 use reqwest::StatusCode;
 use serde_json::{json, Value};
@@ -74,9 +74,9 @@ impl Live {
         hasher.update(salt);
         hasher.update(credential);
         let hash: [u8; 32] = hasher.finish().into();
-        let frame_key = ed25519_dalek::SigningKey::from_bytes(&[device_id as u8 + 100; 32])
+        let frame_key = SigningKey::from_seed(Suite::V1, &[device_id as u8 + 100; 32])
             .verifying_key()
-            .to_bytes();
+            .to_array::<32>();
         self.runtime
             .block_on(
                 sqlx::query(
@@ -199,13 +199,13 @@ fn a_published_entry_is_its_row() {
     let mut other_frame_key = editor.clone();
     other_frame_key.frame_key = Some(
         STANDARD.encode(
-            ed25519_dalek::SigningKey::from_bytes(&[9; 32])
+            SigningKey::from_seed(Suite::V1, &[9; 32])
                 .verifying_key()
-                .to_bytes(),
+                .to_array::<32>(),
         ),
     );
     for entry in [other_kind, other_session, other_frame_key] {
-        let manifest = manifest_with(&ada, &[entry.clone()]);
+        let manifest = manifest_with(&ada, std::slice::from_ref(&entry));
         let (status, answer) = publish(&live, &mut ada, &first.header(), &manifest);
         assert_eq!(status, StatusCode::CONFLICT, "{entry:?}: {answer}");
         assert_eq!(answer["code"], "devicesMismatch");
@@ -269,9 +269,9 @@ fn a_reregistration_carries_the_other_devices_over() {
     let mut changed = editor.clone();
     changed.frame_key = Some(
         STANDARD.encode(
-            ed25519_dalek::SigningKey::from_bytes(&[9; 32])
+            SigningKey::from_seed(Suite::V1, &[9; 32])
                 .verifying_key()
-                .to_bytes(),
+                .to_array::<32>(),
         ),
     );
     let mut added = editor.clone();
