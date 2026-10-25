@@ -10,7 +10,7 @@
 //! ([`Engine::group_send_token`]); a member without a usable one gets
 //! pairwise copies.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use base64::engine::general_purpose::STANDARD;
 use base64::Engine as _;
@@ -93,6 +93,24 @@ pub struct GroupEndorsements {
     /// Each member account's checked endorsements, oldest first.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub members: BTreeMap<String, Vec<HeldEndorsement>>,
+    /// Blobs read past whose check couldn't finish (their server's keys
+    /// unreachable): checked again at each read until they are decided or
+    /// expire, so one member's unreachable server never holds the cursor at
+    /// its blob and keeps the others unread. One per member pseudonym and
+    /// expiration.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub retry: Vec<RetryBlob>,
+}
+
+/// A member's blob whose check is to be tried again.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct RetryBlob {
+    /// The member's pseudonym, canonical base64.
+    pub pseudonym: String,
+    pub expiration: u64,
+    /// The sealed blob as the home holds it, canonical base64.
+    pub sealed: String,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -113,7 +131,10 @@ pub struct HeldEndorsement {
 
 impl GroupEndorsements {
     pub fn is_empty(&self) -> bool {
-        self.uploaded.is_none() && self.after == 0 && self.members.is_empty()
+        self.uploaded.is_none()
+            && self.after == 0
+            && self.members.is_empty()
+            && self.retry.is_empty()
     }
 
     /// `account`'s newest endorsement usable at `now`.
@@ -193,6 +214,14 @@ impl GroupEndorsements {
             held.retain(|kept| kept.expiration > now);
             !held.is_empty() && members.contains(account)
         });
+    }
+
+    /// Puts a blob on the retry list, in place of an older one of the same
+    /// pseudonym and expiration.
+    fn defer(&mut self, blob: RetryBlob) {
+        self.retry
+            .retain(|held| held.pseudonym != blob.pseudonym || held.expiration != blob.expiration);
+        self.retry.push(blob);
     }
 
     /// Drops `account`'s endorsement of `expiration` (its token was refused).
@@ -476,6 +505,45 @@ impl Engine {
         let me = self.session.account_ref().to_string();
         let state_key = record.master().map_err(group_error)?.state_key();
         let before = record.endorsements.clone();
+        // The servers whose keys couldn't be fetched in this read: their
+        // members' blobs wait for the next one without asking again.
+        let mut unreachable = BTreeSet::new();
+        // The blobs deferred before, first; each is kept, dropped (refused,
+        // expired, not a member's now, or one the member already holds), or
+        // deferred again.
+        for blob in std::mem::take(&mut record.endorsements.retry) {
+            let pseudonym = STANDARD.decode(&blob.pseudonym).ok();
+            let account = pseudonym
+                .as_ref()
+                .and_then(|pseudonym| by_pseudonym.get(pseudonym));
+            let (Some(pseudonym), Some(account)) = (pseudonym, account) else {
+                continue;
+            };
+            if blob.expiration <= now
+                || record
+                    .endorsements
+                    .usable_at(account, blob.expiration, now)
+                    .is_some()
+            {
+                continue;
+            }
+            match self
+                .check_blob_unless_unreachable(
+                    &state_key,
+                    &pseudonym,
+                    account,
+                    blob.expiration,
+                    &blob.sealed,
+                    now,
+                    &mut unreachable,
+                )
+                .await
+            {
+                Some(Ok(endorsement)) => record.endorsements.keep(account, &endorsement),
+                Some(Err(())) => {}
+                None => record.endorsements.defer(blob),
+            }
+        }
         for _ in 0..PAGES_PER_READ {
             let query = GroupEndorsementQueryV1 {
                 after: record.endorsements.after,
@@ -494,47 +562,43 @@ impl Engine {
                 },
                 Err(_) => break,
             };
-            // The cursor moves past a blob only once it is decided: kept, or
-            // refused for good. One whose check failed for a moment (its
-            // server's keys unreachable) is read again next time.
-            let mut interrupted = false;
+            // Each blob is decided here (kept, or refused for good) or, when
+            // its check can't finish now, deferred to the retry list; the
+            // cursor moves past it either way.
             for item in &page.endorsements {
                 let pseudonym = STANDARD.decode(&item.pseudonym).ok();
                 let account = pseudonym
                     .as_ref()
                     .and_then(|pseudonym| by_pseudonym.get(pseudonym));
-                let decided = match (&pseudonym, account) {
+                match (&pseudonym, account) {
                     (Some(pseudonym), Some(account)) if account != &me => {
                         match self
-                            .check_member_blob(
+                            .check_blob_unless_unreachable(
                                 &state_key,
                                 pseudonym,
                                 account,
                                 item.expiration,
                                 &item.sealed,
                                 now,
+                                &mut unreachable,
                             )
                             .await
                         {
-                            Ok(endorsement) => {
-                                record.endorsements.keep(account, &endorsement);
-                                true
+                            Some(Ok(endorsement)) => {
+                                record.endorsements.keep(account, &endorsement)
                             }
-                            Err(ChatError::Transport(_)) => false,
-                            Err(_) => true,
+                            Some(Err(())) => {}
+                            None => record.endorsements.defer(RetryBlob {
+                                pseudonym: item.pseudonym.clone(),
+                                expiration: item.expiration,
+                                sealed: item.sealed.clone(),
+                            }),
                         }
                     }
                     // Not a verified member's (now), or this account's own.
-                    _ => true,
-                };
-                if !decided {
-                    interrupted = true;
-                    break;
+                    _ => {}
                 }
                 record.endorsements.after = record.endorsements.after.max(item.seq);
-            }
-            if interrupted {
-                break;
             }
             record.endorsements.after = record.endorsements.after.max(page.next_after);
             if !page.more {
@@ -544,6 +608,41 @@ impl Engine {
         let accounts: Vec<String> = by_pseudonym.into_values().collect();
         record.endorsements.prune(&accounts, now);
         Ok(record.endorsements != before)
+    }
+
+    /// [`Self::check_member_blob`], unless the member's server was found
+    /// unreachable earlier in this read: `None` when the check can't finish
+    /// now (the server is then added to `unreachable`), `Some(Err(()))` when
+    /// the blob is refused for good.
+    #[allow(clippy::too_many_arguments)]
+    async fn check_blob_unless_unreachable(
+        &mut self,
+        state_key: &kutup_crypto::chat_group::GroupStateKey,
+        pseudonym: &[u8],
+        account: &str,
+        expiration: u64,
+        sealed: &str,
+        now: u64,
+        unreachable: &mut BTreeSet<String>,
+    ) -> Option<std::result::Result<Endorsement, ()>> {
+        let Ok(parsed) = crate::address::parse_account(account) else {
+            return Some(Err(()));
+        };
+        let server = parsed.server;
+        if unreachable.contains(&server) {
+            return None;
+        }
+        match self
+            .check_member_blob(state_key, pseudonym, account, expiration, sealed, now)
+            .await
+        {
+            Ok(endorsement) => Some(Ok(endorsement)),
+            Err(ChatError::Transport(_)) => {
+                unreachable.insert(server);
+                None
+            }
+            Err(_) => Some(Err(())),
+        }
     }
 
     /// One member's blob, opened and checked: its endorsement.
@@ -667,6 +766,27 @@ mod tests {
         endorsements.forget(account, third.expiration);
         assert_eq!(endorsements.usable(account, MIDNIGHT + DAY - 60), None);
         assert_eq!(endorsements.usable(account, now), Some(second));
+    }
+
+    #[test]
+    fn the_retry_list_holds_one_blob_per_pseudonym_and_expiration() {
+        let mut endorsements = GroupEndorsements::default();
+        let blob = |pseudonym: &str, expiration, sealed: &str| RetryBlob {
+            pseudonym: pseudonym.into(),
+            expiration,
+            sealed: sealed.into(),
+        };
+        endorsements.defer(blob("p1", MIDNIGHT, "a"));
+        endorsements.defer(blob("p1", MIDNIGHT + DAY, "b"));
+        endorsements.defer(blob("p2", MIDNIGHT, "c"));
+        endorsements.defer(blob("p1", MIDNIGHT, "d"));
+        let held: Vec<&str> = endorsements
+            .retry
+            .iter()
+            .map(|blob| blob.sealed.as_str())
+            .collect();
+        assert_eq!(held, vec!["b", "c", "d"]);
+        assert!(!endorsements.is_empty());
     }
 
     #[test]

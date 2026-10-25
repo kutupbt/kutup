@@ -1,9 +1,20 @@
 # Drive block format: streaming with seeking
 
-**Status:** plan, 2026-10-22, for review. Nothing is built. The user's
-decision: "follow proton drive". Reference: Proton's web client,
-`kutup-references/WebClients`. Its new `@protontech/drive-sdk` is not checked
-out there, so the in-repo upload and download code (`packages/drive-store`,
+**Status:** approved 2026-10-22 with the answers in §11. Slice 1 (the
+crypto core) is built: `kutup-crypto` `blocks.rs`, `drive_blocks.rs`,
+`chat_media_blocks.rs`, `chat_backup_media_blocks.rs`, `FileMetadataV2`,
+the revision-bound thumbnail context, vectors (`blocks-v1.json`), the
+`block_object_parsers` fuzz target, the WASM `BlockEncryptor` and
+`BlockReader`, and the benchmark (§9). Nothing uses them yet: clients switch
+in slices 3–6. The suite id 2 is a constant of each family for now:
+`DriveObjectSuiteId` and `ChatMediaSuiteId` (a wire type in descriptors and
+federation offers) gain it in the slice that switches their protocol, so
+nothing that parses suite 1 accepts suite 2 before the server checks it.
+When they do, the suite-1 parsers must still refuse suite 2 under the old
+magics (`KUTPDB2`, `KUTPCM1`), with a test each. The user's decision: "follow proton drive". Reference:
+Proton's web client, `kutup-references/WebClients`. Its new
+`@protontech/drive-sdk` is not checked out there, so the in-repo upload and
+download code (`packages/drive-store`,
 `applications/drive/src/app/modules/fileSaver`, `modals/preview`) is the
 source for what follows.
 
@@ -206,7 +217,7 @@ manifest plaintext:
   u32 block size ‖ u32 n ‖ u64 plaintext size ‖ h_0 … h_{n−1}
   ‖ signer: u8 kind (1 = Drive signing key) ‖ 16-byte account id
   ‖ 64-byte Ed25519 signature
-signed message = "kutup/drive-block-manifest/v1\0" ‖ header
+signed message = "kutup/drive-block-manifest/v1\0" ‖ header ‖ 16-byte account id
                  ‖ u32 block size ‖ u32 n ‖ u64 size ‖ h_0 … h_{n−1}
 sealed manifest = nonce(24 random) ‖ XChaCha20-Poly1305(manifest key, nonce,
                   AAD = header ‖ "manifest", plaintext) ‖ tag(16)
@@ -284,7 +295,13 @@ Two more bindings close that:
   saved version, a restore) seals the next metadata revision with it, in the
   same request that commits the content.
   - A reader opens the metadata first, then refuses any object whose header
-    revision or manifest digest differs.
+    revision or manifest digest differs. Every reader takes the committed
+    digest as an argument and compares it before it opens anything: the
+    Drive reader takes `content` and the metadata's size, the Chat
+    attachment reader the descriptor's digest, the backup media reader the
+    index's. None can open a manifest without one, so a key holder (a
+    co-editor, a group member) can't have the server hand others a valid
+    object of their own making under the same header.
   - Older content under newer metadata therefore fails.
   - The block hash list is thus committed twice: in the sealed metadata
     through the manifest digest, and by the uploader's signature, as Proton
@@ -607,7 +624,15 @@ site settings in slice 2 too, since streaming depends on them.
   where it was played and seeked to. Proton's server learns the same.
 
 It learns nothing of the content, the manifest or who signed it (the signer
-is inside the sealed manifest).
+is inside the sealed manifest). The signature covers the account id it
+names, so a holder of the file key can't move it onto another name.
+
+**Key commitment.** XChaCha20-Poly1305 is not key-committing: a manifest
+could be crafted to open under two keys. That gains nothing here, because a
+reader first checks the sealed manifest's SHA-256 against the digest its
+metadata or descriptor commits to (opened under the right key), and each
+block's SHA-256 against the manifest before its AEAD. The bytes are fixed by
+hashes before any key is used on them.
 
 **Integrity.** Any change to one block's bytes fails its hash and its AEAD.
 A wrong manifest fails its AEAD, its AAD (header and revision) and its
@@ -646,7 +671,7 @@ error. The player never shows unverified bytes.
 
 ## 9. Tests and vectors
 
-- **Rust vectors** (`tests/vectors/crypto.json`, `driveFileBlocks`):
+- **Rust vectors** (built in their own file, `tests/vectors/blocks-v1.json`):
   - the header bytes, the three derived keys and a block nonce;
   - a 3-block object (B + B + 17 bytes of plaintext from a fixed pattern),
     with full bytes for the header, the trailer, the manifest and the last
@@ -667,6 +692,27 @@ error. The player never shows unverified bytes.
   desktop Chrome, Firefox, Safari and an Android phone. If WASM is within 10×
   (the rule in docs/cryptographic-dependencies.md), libsodium's stream path
   goes.
+  - Measured 2026-10-25 (`packages/crypto/src/blocks.bench.ts`; the median
+    of 25 runs, one 4 MiB block, on the dev VM):
+
+    | | WASM block | libsodium, same work | libsodium secretstream |
+    |---|---|---|---|
+    | Seal, Node 22 (V8) | 19.6 ms | 21.6 ms | 5.5 ms |
+    | Open, Node 22 (V8) | 13.9 ms | 13.3 ms | 5.3 ms |
+    | Seal, Chromium | 20.4 ms | 21.3 ms | 5.6 ms |
+    | Open, Chromium | 14.4 ms | 13.4 ms | 5.5 ms |
+
+  - "Same work" is what a block costs in either library: SHA-256 of the
+    plaintext (the synthetic nonce), XChaCha20-Poly1305 and SHA-256 of the
+    sealed block (the manifest's hash). WASM is level with libsodium, far
+    inside 10×, so the libsodium stream path goes in slice 7.
+  - A block costs about 3× a secretstream chunk because of the two hashes:
+    about 200 MiB/s sealing and 290 MiB/s opening on one core, which is
+    above a fast connection.
+  - Still to measure: Firefox, Safari and an Android phone. WebKit doesn't
+    start on the dev VM, which lacks its system libraries. These figures
+    can't change the decision unless WASM there is 10× slower than
+    libsodium on the same engine.
 - **Server tests:**
   - Range parsing (`a-b`, `a-`, `-k`, multiple ranges refused, 416);
   - `If-Range`;
@@ -723,6 +769,9 @@ Each slice is a PR.
      go.
    - Docs: `architecture.md`, `v1-format-inventory.md`, `chat-media.md`,
      `chat-backup.md`, `cryptographic-dependencies.md`.
+   - `FileMetadataV1`, the thumbnail context without a revision
+     (`DriveEnvelopeContextV1::thumbnail`) and their callers: until the
+     switch, both sit side by side, the V2 ones unused.
    - CLAUDE.md's V1 fact "secretstream uses 5 MiB chunks and authenticated
      `TAG_FINAL`" becomes "large objects use 4 MiB AEAD blocks bound to
      their index and revision, with a sealed, signed manifest of block hashes
@@ -731,7 +780,21 @@ Each slice is a PR.
 Under (B), slices 3–7 land together with the wipe (§6). Under (A), a
 conversion slice comes between 6 and 7, and slice 7 waits for every account.
 
-## 11. Open questions
+## 11. Decisions
+
+The user's answers, 2026-10-22:
+
+1. **Wipe (B).** Slices 3–7 land with the wipe (§6).
+2. **One object per revision, read by Range.**
+3. **Ed25519 now.** A post-quantum hybrid signature comes as a new suite,
+   with the rest of Drive's signatures under the PQ plan.
+4. **4 MiB blocks**, as Proton.
+5. **MSE only if needed later**, if Chrome's fMP4 scanning proves a problem.
+6. **Chat backup media moves to suite 2 too**, so secretstream leaves
+   entirely.
+7. **Downloads through the service worker are in scope** (slice 4).
+
+The questions as asked:
 
 1. **Wipe (B) or conversion (A)?** The plan recommends (B). When: with the
    Chat identity deploy?

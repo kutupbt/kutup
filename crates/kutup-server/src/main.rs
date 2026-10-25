@@ -67,6 +67,7 @@ mod storage_probe;
 mod telemetry;
 mod tls;
 mod totp;
+mod two_factor;
 mod ui_preferences;
 mod version_retention;
 mod web_push;
@@ -1207,6 +1208,10 @@ fn build_router(state: AppState) -> Router {
         .route("/api/user/2fa/setup", post(auth::setup_totp))
         .route("/api/user/2fa/verify", post(auth::verify_totp))
         .route("/api/user/2fa", delete(auth::disable_totp))
+        .route(
+            "/api/user/2fa/recovery-codes",
+            get(auth::recovery_codes_left).post(auth::renew_recovery_codes),
+        )
         .route(
             "/api/users/by-address/:address",
             get(auth::get_user_by_address).route_layer(from_fn(middleware::rate_limit_user_lookup)),

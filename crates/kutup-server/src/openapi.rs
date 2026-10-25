@@ -196,6 +196,8 @@ All file content and metadata are encrypted client-side; the server stores only 
         crate::handlers::auth::setup_totp,
         crate::handlers::auth::verify_totp,
         crate::handlers::auth::disable_totp,
+        crate::handlers::auth::recovery_codes_left,
+        crate::handlers::auth::renew_recovery_codes,
         crate::handlers::auth::get_user_by_address,
         // --- collections ---
         crate::handlers::collections::list_collections,

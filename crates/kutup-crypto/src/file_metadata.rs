@@ -176,32 +176,162 @@ impl MediaMetadataV1 {
     }
 }
 
+/// The fields both metadata versions share, checked once.
+fn validate_fields(
+    name: &str,
+    mime_type: &str,
+    size: u64,
+    sha256: Option<&str>,
+    media: Option<&MediaMetadataV1>,
+) -> Result<()> {
+    if name.is_empty() || chars(name) > MAX_NAME_CHARS {
+        return Err(invalid("name"));
+    }
+    if chars(mime_type) > MAX_MIME_CHARS {
+        return Err(invalid("mimeType"));
+    }
+    if size > MAX_SAFE_INTEGER {
+        return Err(invalid("size"));
+    }
+    if let Some(sha256) = sha256 {
+        decode_digest(sha256).map_err(|_| invalid("sha256"))?;
+    }
+    if let Some(media) = media {
+        // An empty object says nothing: it is written as no `media`.
+        if media.is_empty() {
+            return Err(invalid("empty media"));
+        }
+        media.validate()?;
+    }
+    Ok(())
+}
+
+/// A UUID's canonical lowercase text.
+fn canonical_uuid(bytes: &[u8; 16]) -> String {
+    let mut text = String::with_capacity(36);
+    for (index, byte) in bytes.iter().enumerate() {
+        if matches!(index, 4 | 6 | 8 | 10) {
+            text.push('-');
+        }
+        text.push_str(&format!("{byte:02x}"));
+    }
+    text
+}
+
+/// A SHA-256 in canonical base64.
+fn decode_digest(value: &str) -> Result<[u8; 32]> {
+    let bytes = STANDARD.decode(value).map_err(|_| invalid("digest"))?;
+    if STANDARD.encode(&bytes) != value {
+        return Err(invalid("digest"));
+    }
+    bytes.try_into().map_err(|_| invalid("digest"))
+}
+
 impl FileMetadataV1 {
     pub fn validate(&self) -> Result<()> {
-        if self.name.is_empty() || chars(&self.name) > MAX_NAME_CHARS {
-            return Err(invalid("name"));
+        validate_fields(
+            &self.name,
+            &self.mime_type,
+            self.size,
+            self.sha256.as_deref(),
+            self.media.as_ref(),
+        )
+    }
+}
+
+/// The content a metadata revision commits to (docs/plans/drive-block-format.md
+/// §2, "Binding the current revision"): the current content revision and the
+/// SHA-256 of its sealed manifest. Older content served under newer metadata
+/// fails [`ContentCommitmentV1::check`].
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ContentCommitmentV1 {
+    /// A canonical lowercase UUID.
+    pub revision_id: String,
+    /// Canonical base64.
+    pub manifest_sha256: String,
+}
+
+impl ContentCommitmentV1 {
+    pub fn new(revision_id: [u8; 16], manifest_digest: [u8; 32]) -> Self {
+        Self {
+            revision_id: canonical_uuid(&revision_id),
+            manifest_sha256: STANDARD.encode(manifest_digest),
         }
-        if chars(&self.mime_type) > MAX_MIME_CHARS {
-            return Err(invalid("mimeType"));
-        }
-        if self.size > MAX_SAFE_INTEGER {
-            return Err(invalid("size"));
-        }
-        if let Some(sha256) = &self.sha256 {
-            let bytes = STANDARD.decode(sha256).map_err(|_| invalid("sha256"))?;
-            if bytes.len() != 32 || STANDARD.encode(&bytes) != *sha256 {
-                return Err(invalid("sha256"));
-            }
-        }
-        if let Some(media) = &self.media {
-            // An empty object says nothing: it is written as no `media`.
-            if media.is_empty() {
-                return Err(invalid("empty media"));
-            }
-            media.validate()?;
+    }
+
+    pub fn validate(&self) -> Result<()> {
+        crate::drive_object::parse_canonical_uuid(&self.revision_id, "content revision")
+            .map_err(|_| invalid("content.revisionId"))?;
+        decode_digest(&self.manifest_sha256).map_err(|_| invalid("content.manifestSha256"))?;
+        Ok(())
+    }
+
+    /// Refuses an object other than the committed one: its header's revision
+    /// and its sealed manifest's digest must both match.
+    pub fn check(&self, revision_id: &[u8; 16], manifest_digest: &[u8; 32]) -> Result<()> {
+        let committed_revision =
+            crate::drive_object::parse_canonical_uuid(&self.revision_id, "content revision")?;
+        let committed_digest = decode_digest(&self.manifest_sha256)?;
+        let same_revision = crate::primitives::ct_eq(&committed_revision, revision_id);
+        let same_manifest = crate::primitives::ct_eq(&committed_digest, manifest_digest);
+        if !(same_revision && same_manifest) {
+            return Err(CryptoError::InvalidInput(
+                "file content is not the revision its metadata commits to".into(),
+            ));
         }
         Ok(())
     }
+}
+
+/// A Drive file's metadata in the block format: V1's fields and the content
+/// it commits to, which is required.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct FileMetadataV2 {
+    pub name: String,
+    pub mime_type: String,
+    pub size: u64,
+    pub content: ContentCommitmentV1,
+    /// SHA-256 of the plaintext content, canonical base64; kept only for
+    /// Photos' duplicate check.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sha256: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub media: Option<MediaMetadataV1>,
+}
+
+impl FileMetadataV2 {
+    pub fn validate(&self) -> Result<()> {
+        validate_fields(
+            &self.name,
+            &self.mime_type,
+            self.size,
+            self.sha256.as_deref(),
+            self.media.as_ref(),
+        )?;
+        self.content.validate()
+    }
+}
+
+/// The canonical bytes of `metadata`, after checking it.
+pub fn encode_v2(metadata: &FileMetadataV2) -> Result<Vec<u8>> {
+    metadata.validate()?;
+    let bytes = serde_json::to_vec(metadata).map_err(|_| invalid("encode"))?;
+    if bytes.len() > MAX_METADATA_BYTES {
+        return Err(invalid("too large"));
+    }
+    Ok(bytes)
+}
+
+/// V2 metadata as stored, checked strictly.
+pub fn decode_v2(bytes: &[u8]) -> Result<FileMetadataV2> {
+    if bytes.len() > MAX_METADATA_BYTES {
+        return Err(invalid("too large"));
+    }
+    let metadata: FileMetadataV2 = serde_json::from_slice(bytes).map_err(|_| invalid("decode"))?;
+    metadata.validate()?;
+    Ok(metadata)
 }
 
 /// The canonical bytes of `metadata`, after checking it.
@@ -298,6 +428,58 @@ mod tests {
             br#"{"name":"a.txt","mimeType":"text/plain","size":0}"#
         );
         assert_eq!(decode(&bytes).unwrap(), plain);
+    }
+
+    const REVISION: [u8; 16] = [0x22; 16];
+
+    fn photo_v2() -> FileMetadataV2 {
+        let v1 = photo();
+        FileMetadataV2 {
+            name: v1.name,
+            mime_type: v1.mime_type,
+            size: v1.size,
+            content: ContentCommitmentV1::new(REVISION, [9; 32]),
+            sha256: v1.sha256,
+            media: v1.media,
+        }
+    }
+
+    #[test]
+    fn v2_commits_to_its_content() {
+        let bytes = encode_v2(&photo_v2()).unwrap();
+        assert!(std::str::from_utf8(&bytes).unwrap().starts_with(
+            r#"{"name":"IMG_0001.jpg","mimeType":"image/jpeg","size":2345678,"content":{"revisionId":"22222222-2222-2222-2222-222222222222","manifestSha256":"CQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQk="},"sha256":"#
+        ));
+        let decoded = decode_v2(&bytes).unwrap();
+        assert_eq!(decoded, photo_v2());
+        decoded.content.check(&REVISION, &[9; 32]).unwrap();
+        // Older content: another revision, or this one's manifest swapped.
+        assert!(decoded.content.check(&[0x23; 16], &[9; 32]).is_err());
+        assert!(decoded.content.check(&REVISION, &[8; 32]).is_err());
+        // V1 bytes have no content commitment and V1 refuses one.
+        assert!(decode_v2(&encode(&photo()).unwrap()).is_err());
+        assert!(decode(&bytes).is_err());
+    }
+
+    #[test]
+    fn v2_refuses_a_malformed_commitment() {
+        let digest = STANDARD.encode([9u8; 32]);
+        for content in [
+            format!(r#"{{"revisionId":"not-a-uuid","manifestSha256":"{digest}"}}"#),
+            format!(
+                r#"{{"revisionId":"22222222-2222-2222-2222-22222222222A","manifestSha256":"{digest}"}}"#
+            ),
+            r#"{"revisionId":"22222222-2222-2222-2222-222222222222","manifestSha256":"AAAA"}"#
+                .into(),
+            format!(
+                r#"{{"revisionId":"22222222-2222-2222-2222-222222222222","manifestSha256":"{digest}","x":1}}"#
+            ),
+            format!(r#"{{"manifestSha256":"{digest}"}}"#),
+        ] {
+            let bad = format!(r#"{{"name":"a","mimeType":"","size":1,"content":{content}}}"#);
+            assert!(decode_v2(bad.as_bytes()).is_err(), "{bad}");
+        }
+        assert!(decode_v2(br#"{"name":"a","mimeType":"","size":1}"#).is_err());
     }
 
     #[test]

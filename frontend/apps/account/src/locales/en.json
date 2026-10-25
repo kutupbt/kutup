@@ -88,7 +88,11 @@
     "totpCode": "Authentication code",
     "verify": "Verify",
     "useAnotherAccount": "Use a different account",
-    "nameHint": "Your username, or your Kutup address."
+    "nameHint": "Your username, or your Kutup address.",
+    "recoveryCode": "Recovery code",
+    "recoveryCodeDescription": "Enter one of the recovery codes you saved when you turned on two-factor authentication. Each code works once.",
+    "useRecoveryCode": "Use a recovery code",
+    "useAuthenticator": "Use your authenticator app"
   },
   "newKeys": {
     "continue": "Continue",
@@ -290,12 +294,32 @@
           "nameDropped": "Stopped receiving mail at {{oldName}}",
           "nameClosed": "Mail to {{oldName}} stopped by an administrator",
           "nameFreed": "{{oldName}} freed for others",
-          "other": "A change to your sign-in"
+          "other": "A change to your sign-in",
+          "twoFactorOn": "Two-factor authentication turned on",
+          "twoFactorOff": "Two-factor authentication turned off",
+          "recoveryCodeUsed": "Signed in with a recovery code",
+          "recoveryCodesRenewed": "New recovery codes made"
         }
       },
       "recovery": "Recovery phrase",
       "recoveryDescription": "The 24 words shown when your account was created.",
-      "recoveryNote": "Your recovery phrase is the only way to reset a forgotten password. Kutup does not store it and cannot show it again — keep your saved copy somewhere safe and offline."
+      "recoveryNote": "Your recovery phrase is the only way to reset a forgotten password. Kutup does not store it and cannot show it again — keep your saved copy somewhere safe and offline.",
+      "codeOrRecovery": "Authenticator code or recovery code",
+      "recoveryCodes": "Recovery codes",
+      "recoveryCodesDescription": "One-time codes that sign you in if you lose your authenticator app.",
+      "codesLeft_one": "{{count}} recovery code left.",
+      "codesLeft_other": "{{count}} recovery codes left.",
+      "codesNone": "No recovery codes left. Make new ones so you can still sign in without your authenticator app.",
+      "renewCodes": "Make new codes",
+      "renewWarning": "Your current recovery codes stop working.",
+      "renewFailed": "New recovery codes could not be made.",
+      "saveCodesTitle": "Save your recovery codes",
+      "saveCodesNote": "If you lose your authenticator app, each code signs you in once in its place. Keep them somewhere safe. They are not shown again.",
+      "copyCodes": "Copy",
+      "codesCopied": "Recovery codes copied",
+      "downloadCodes": "Download",
+      "codesSaved": "I have saved them",
+      "codesFileHeader": "Kutup recovery codes for {{account}}. Each code works once."
     },
     "sessions": {
       "title": "Sessions",
@@ -858,6 +882,12 @@
         "chatProvisioningSocketsPerAccountHint": "How many devices of one account may wait to be linked at once.",
         "chatDistributionMessageBytes": "Largest identity sync (bytes)",
         "chatDistributionMessageBytesHint": "The largest message a new Chat identity sends each kept device."
+      },
+      "twoFactor": "Two-factor sign-in",
+      "twoFactorHint": "Recovery codes for accounts with two-factor authentication.",
+      "twoFactorLimits": {
+        "twoFactorRecoveryCodes": "Recovery codes per account",
+        "twoFactorRecoveryCodesHint": "How many one-time codes are made when someone turns two-factor authentication on or makes new codes."
       }
     },
     "federation": {

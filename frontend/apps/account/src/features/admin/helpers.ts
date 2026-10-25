@@ -1,3 +1,4 @@
+import { fillRandom } from '@kutup/crypto/random'
 const GIB = 1024 ** 3
 
 /** Quotas are entered in GiB (what they are enforced in) and stored in bytes. */
@@ -23,7 +24,7 @@ export function generateTempPassword(length = 20): string {
   // Rejection sampling keeps every character equally likely.
   const limit = Math.floor(0x1_0000_0000 / ALPHABET.length) * ALPHABET.length
   while (out.length < length) {
-    crypto.getRandomValues(random)
+    fillRandom(random)
     if (random[0] < limit) out.push(ALPHABET[random[0] % ALPHABET.length])
   }
   return out.join('')

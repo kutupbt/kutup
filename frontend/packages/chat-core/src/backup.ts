@@ -4,7 +4,7 @@ import { fromBase64, toBase64 } from '@kutup/crypto/base64'
 import { exactBytes } from '@kutup/crypto/bytes'
 import { deriveAccountIdentityKeys } from '@kutup/crypto/identity'
 import { getCryptoWasm } from '@kutup/crypto/rustWasm'
-import { getSodium } from '@kutup/crypto/sodium'
+import { createHasher, toHex } from '@kutup/crypto/hash'
 import { newStreamDecryptor } from '@kutup/crypto/streamDecryptor'
 import { ABYTES, HEADER_BYTES, PLAIN_CHUNK, newStreamEncryptor } from '@kutup/crypto/streamEncryptor'
 import { resolveApiBase } from '@kutup/session/apiBase'
@@ -29,6 +29,8 @@ import type {
 } from './backup-store'
 import { accountKey, conversationKey, parseAccount, type AccountRef } from './identity'
 import type { ChangeMark, ChatAttachmentDescriptorV1, ChatHistoryEntry } from './types'
+import { randomBytes } from '@kutup/crypto/random'
+import { hash } from '@kutup/crypto/hash'
 
 type ChatContent = ChatHistoryEntry['content']
 
@@ -373,7 +375,7 @@ export function browserChatBackupRuntime(): ChatBackupRuntime {
     },
     ids: {
       randomUuid: () => crypto.randomUUID(),
-      randomBytes: length => crypto.getRandomValues(new Uint8Array(length)),
+      randomBytes: length => randomBytes(length),
     },
     checkpoint: () => undefined,
   }
@@ -553,13 +555,10 @@ export class ChatBackupCoordinator {
     const response = await this.runtime.transport.downloadMedia(mediaId, accessToken, signal)
     const reader = response.body.getReader()
     const buffered = new BufferedStreamReader(reader)
-    const sodium = await getSodium()
-    const digest = sodium.crypto_hash_sha256_init() as unknown as Parameters<
-      typeof sodium.crypto_hash_sha256_update
-    >[0]
+    const digest = await createHasher()
     try {
       const prefix = await buffered.readExact(BACKUP_MEDIA_HEADER_BYTES + HEADER_BYTES)
-      sodium.crypto_hash_sha256_update(digest, prefix)
+      digest.update(prefix)
       const typedHeader = prefix.subarray(0, BACKUP_MEDIA_HEADER_BYTES)
       const streamHeader = prefix.subarray(BACKUP_MEDIA_HEADER_BYTES)
       const opened = (await getCryptoWasm()).openChatBackupMediaHeader(
@@ -583,7 +582,7 @@ export class ChatBackupCoordinator {
       while (paddedRemaining > 0) {
         const plainBytes = Math.min(PLAIN_CHUNK, paddedRemaining)
         const frame = await buffered.readExact(plainBytes + ABYTES)
-        sodium.crypto_hash_sha256_update(digest, frame)
+        digest.update(frame)
         const openedFrame = decryptor.pull(frame)
         if (openedFrame.plain.length !== plainBytes
             || openedFrame.isFinal !== (plainBytes === paddedRemaining)) {
@@ -600,7 +599,7 @@ export class ChatBackupCoordinator {
       if (sourceRemaining !== 0 || await buffered.hasMore()) {
         throw new Error('protected Chat media length is inconsistent')
       }
-      if (sodium.crypto_hash_sha256_final(digest, 'hex') !== response.ciphertextSha256) {
+      if (toHex(digest.digest()) !== response.ciphertextSha256) {
         throw new Error('protected Chat media digest is invalid')
       }
     } finally {
@@ -830,14 +829,11 @@ export class ChatBackupCoordinator {
     const encryptor = await newStreamEncryptor(
       fromBase64(prepared.outerEncryptionKey), typedHeader,
     )
-    const sodium = await getSodium()
-    const hash = sodium.crypto_hash_sha256_init() as unknown as Parameters<
-      typeof sodium.crypto_hash_sha256_update
-    >[0]
+    const hash = await createHasher()
     const parts: BlobPart[] = []
     let outerBytes = 0
     const appendOuter = (bytes: Uint8Array) => {
-      sodium.crypto_hash_sha256_update(hash, bytes)
+      hash.update(bytes)
       parts.push(exactBytes(bytes))
       outerBytes += bytes.length
     }
@@ -883,7 +879,7 @@ export class ChatBackupCoordinator {
       referenceId: source.referenceId,
       sourceCiphertextBytes: source.ciphertextBytes,
       ciphertextBytes: outerBytes,
-      ciphertextSha256: sodium.crypto_hash_sha256_final(hash, 'hex'),
+      ciphertextSha256: toHex(hash.digest()),
     }
     await this.runtime.transport.uploadMedia(metadata, new Blob(parts))
   }
@@ -1832,14 +1828,12 @@ async function fingerprint(value: unknown): Promise<string> {
 }
 
 async function sha256Hex(bytes: Uint8Array): Promise<string> {
-  const digest = new Uint8Array(await crypto.subtle.digest(
-    'SHA-256', bytes.slice().buffer as ArrayBuffer,
-  ))
+  const digest = await hash(bytes)
   return Array.from(digest, byte => byte.toString(16).padStart(2, '0')).join('')
 }
 
 async function deterministicUuid(value: string): Promise<string> {
-  const digest = new Uint8Array(await crypto.subtle.digest('SHA-256', encoder.encode(value)))
+  const digest = await hash(encoder.encode(value))
   digest[6] = (digest[6] & 0x0f) | 0x50
   digest[8] = (digest[8] & 0x3f) | 0x80
   const hex = Array.from(digest.subarray(0, 16), byte => byte.toString(16).padStart(2, '0')).join('')

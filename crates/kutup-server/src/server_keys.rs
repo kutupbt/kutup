@@ -18,6 +18,9 @@ pub(crate) enum GeneratedKey {
     /// (docs/plans/registration-codes.md): its own, so rotating any other
     /// secret voids no open code.
     RegistrationCodes,
+    /// The MAC key two-factor recovery codes are stored under
+    /// (docs/plans/security-keys.md, D2): its own, as the others.
+    RecoveryCodes,
 }
 
 impl GeneratedKey {
@@ -26,6 +29,7 @@ impl GeneratedKey {
             Self::FederationIdentity => "federation-identity",
             Self::FakeAccounts => "fake-accounts",
             Self::RegistrationCodes => "registration-codes",
+            Self::RecoveryCodes => "two-factor-recovery-codes",
         }
     }
 }

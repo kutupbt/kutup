@@ -746,6 +746,19 @@ pub async fn register_finish(
         }
         Purpose::Recovery => {
             crate::sessions::revoke_all_for_user_in(&mut tx, grant.user_id, None).await?;
+            // The recovery phrase also turns every second factor off, as
+            // Proton's lost-2FA path does (docs/plans/security-keys.md, D2):
+            // a lost authenticator would otherwise lock the account out.
+            if crate::two_factor::turn_off(&mut tx, grant.user_id).await? {
+                security_events::record(
+                    &mut tx,
+                    grant.user_id,
+                    security_events::Kind::TwoFactorOff,
+                    grant.session_id,
+                    None,
+                )
+                .await?;
+            }
             security_events::Kind::Recovery
         }
         // The same password under the current setup: nobody's sign-in ends,

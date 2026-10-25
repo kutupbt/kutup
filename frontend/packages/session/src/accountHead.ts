@@ -31,6 +31,7 @@ import { deriveAccountIdentityKeys } from '@kutup/crypto/identity'
 import { indexedDbRevisionStore, type RevisionStore } from '@kutup/crypto/revisionGuard'
 import api from './client'
 import { getSession, subscribe } from './store'
+import { hash } from '@kutup/crypto/hash'
 
 /** A verified head (`@kutup/crypto/accountHead` `VerifiedHead`): each holder its own, freed when done. */
 export interface VerifiedHeadLike {
@@ -193,9 +194,8 @@ function statusOf(error: unknown): number | undefined {
 }
 
 async function sha256Hex(sealed: string): Promise<string> {
-  // A copy on its own ArrayBuffer, as Web Crypto takes.
-  const digest = await crypto.subtle.digest('SHA-256', new Uint8Array(fromBase64(sealed)))
-  return Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, '0')).join('')
+  const digest = await hash(new Uint8Array(fromBase64(sealed)))
+  return Array.from(digest, (byte) => byte.toString(16).padStart(2, '0')).join('')
 }
 
 /** The index after `changes`: new revisions set, removed ids dropped. */

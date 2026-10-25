@@ -1,4 +1,5 @@
 import PostalMime, { decodeWords, type Address } from 'postal-mime'
+import { randomBytes } from '@kutup/crypto/random'
 
 // MIME in the browser (docs/plans/mail.md): every stored message is one RFC
 // 5322 message, opened here after decryption. Parsing uses postal-mime;
@@ -142,7 +143,7 @@ function headerList(name: string, list: Mailbox[]): string[] {
 }
 
 function boundary(): string {
-  const bytes = crypto.getRandomValues(new Uint8Array(18))
+  const bytes = randomBytes(18)
   return `kutup-${base64(bytes).replace(/[+/=]/g, '')}`
 }
 

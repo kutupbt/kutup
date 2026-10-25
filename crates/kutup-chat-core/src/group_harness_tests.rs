@@ -175,6 +175,8 @@ pub(crate) struct World {
     pub(crate) group_send_key_id: Cell<u32>,
     /// The endorsement keys can't be fetched (the server unreachable).
     pub(crate) group_send_params_down: Cell<bool>,
+    /// How often the keys were asked for while unreachable.
+    pub(crate) group_send_params_down_asked: Cell<u32>,
     /// The keys were fetched this many times.
     pub(crate) group_send_params_fetched: Cell<usize>,
     /// Endorsements issued, and blobs the group home took.
@@ -301,6 +303,7 @@ impl World {
             previous_group_send_key: RefCell::new(None),
             group_send_key_id: Cell::new(1),
             group_send_params_down: Cell::new(false),
+            group_send_params_down_asked: Cell::new(0),
             group_send_params_fetched: Cell::new(0),
             endorsements_issued: Cell::new(0),
             endorsement_uploads: Cell::new(0),
@@ -1686,6 +1689,9 @@ impl ChatTransport for Client {
             return Err(ChatError::Transport("404 Not Found".into()));
         }
         if self.world.group_send_params_down.get() {
+            self.world
+                .group_send_params_down_asked
+                .set(self.world.group_send_params_down_asked.get() + 1);
             return Err(ChatError::Transport("the server can't be reached".into()));
         }
         if server.is_some_and(|server| server != SERVER) {
@@ -3679,7 +3685,7 @@ fn group_multi_a_clock_ahead_fetches_at_most_hourly() {
 }
 
 /// A blob whose check fails for a moment (its server's keys unreachable) is
-/// read again next time: the cursor doesn't move past it.
+/// checked again next time, from the retry list.
 #[test]
 fn group_multi_a_blob_checked_while_keys_are_unreachable_is_read_again() {
     let world = World::new();
@@ -3707,6 +3713,105 @@ fn group_multi_a_blob_checked_while_keys_are_unreachable_is_read_again() {
     )
     .unwrap();
     assert!(endorsed_by(&alice, &group_id, &bob), "read again");
+}
+
+/// A member whose server's keys can't be reached doesn't hold the cursor at
+/// its blob: the read moves past every blob, asks the unreachable server once,
+/// and the deferred blobs are taken from the retry list once it answers.
+#[test]
+fn group_multi_an_unreachable_server_doesnt_hold_the_cursor() {
+    let world = World::new();
+    let mut alice = world.person(0xa1);
+    let mut bob = world.person(0xb2);
+    let mut carol = world.person(0xc3);
+    let group_id = group_of(&mut alice, &mut [&mut bob, &mut carol]);
+    deliver_all(&mut [&mut alice, &mut bob, &mut carol]);
+    for person in [&mut bob, &mut carol] {
+        block_on(person.engine.refresh_own_group_send_endorsement()).unwrap();
+        block_on(
+            person
+                .engine
+                .refresh_group_send_endorsements(&group_id, true),
+        )
+        .unwrap();
+    }
+    world.group_send_params_down.set(true);
+    alice.engine.endorsement_cache = Default::default();
+    block_on(
+        alice
+            .engine
+            .refresh_group_send_endorsements(&group_id, true),
+    )
+    .unwrap();
+    assert_eq!(world.group_send_params_down_asked.get(), 1, "asked once");
+    let record = block_on(alice.engine.load_group_record(&group_id)).unwrap();
+    assert_eq!(record.endorsements.retry.len(), 2);
+    let read_up_to = record.endorsements.after;
+    assert!(read_up_to > 0, "the cursor moved past both blobs");
+    assert!(!endorsed_by(&alice, &group_id, &bob));
+    assert!(!endorsed_by(&alice, &group_id, &carol));
+    // Still unreachable: deferred again, with one more ask.
+    alice.engine.endorsement_cache = Default::default();
+    block_on(
+        alice
+            .engine
+            .refresh_group_send_endorsements(&group_id, true),
+    )
+    .unwrap();
+    assert_eq!(world.group_send_params_down_asked.get(), 2);
+    let record = block_on(alice.engine.load_group_record(&group_id)).unwrap();
+    assert_eq!(record.endorsements.retry.len(), 2);
+    assert_eq!(record.endorsements.after, read_up_to);
+    world.group_send_params_down.set(false);
+    alice.engine.endorsement_cache = Default::default();
+    block_on(
+        alice
+            .engine
+            .refresh_group_send_endorsements(&group_id, true),
+    )
+    .unwrap();
+    assert!(endorsed_by(&alice, &group_id, &bob));
+    assert!(endorsed_by(&alice, &group_id, &carol));
+    let record = block_on(alice.engine.load_group_record(&group_id)).unwrap();
+    assert!(record.endorsements.retry.is_empty());
+}
+
+/// A deferred blob that can never be checked leaves the retry list when it
+/// expires.
+#[test]
+fn group_multi_a_deferred_blob_is_dropped_when_it_expires() {
+    let world = World::new();
+    let mut alice = world.person(0xa1);
+    let mut bob = world.person(0xb2);
+    let group_id = group_of(&mut alice, &mut [&mut bob]);
+    deliver_all(&mut [&mut alice, &mut bob]);
+    block_on(bob.engine.refresh_own_group_send_endorsement()).unwrap();
+    block_on(bob.engine.refresh_group_send_endorsements(&group_id, true)).unwrap();
+    world.group_send_params_down.set(true);
+    alice.engine.endorsement_cache = Default::default();
+    block_on(
+        alice
+            .engine
+            .refresh_group_send_endorsements(&group_id, true),
+    )
+    .unwrap();
+    let record = block_on(alice.engine.load_group_record(&group_id)).unwrap();
+    assert_eq!(record.endorsements.retry.len(), 1);
+    // Past any endorsement's expiration.
+    alice
+        .engine
+        .advance_clock_for_testing(4 * 24 * 60 * 60 * 1000);
+    alice.engine.endorsement_cache = Default::default();
+    let asked = world.group_send_params_down_asked.get();
+    block_on(
+        alice
+            .engine
+            .refresh_group_send_endorsements(&group_id, true),
+    )
+    .unwrap();
+    let record = block_on(alice.engine.load_group_record(&group_id)).unwrap();
+    assert!(record.endorsements.retry.is_empty());
+    assert_eq!(world.group_send_params_down_asked.get(), asked, "not asked");
 }
 
 /// A blob under a key id this device doesn't hold (the server rotated since

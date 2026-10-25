@@ -905,8 +905,12 @@ every periodic look, and keeps a blob only when it opens, names the member's
 own server, and holds a response for that member under that server's key
 (another server's keys come from `GET /api/chat/group-send/params?server=`;
 a key id this device doesn't hold fetches them again, once). The read cursor
-moves past a blob only once it is kept or refused for good; one whose check
-failed for a moment (keys unreachable) is read again.
+moves past every blob it reads. One whose check can't finish (its server's
+keys unreachable) goes on the group's retry list, one per pseudonym and
+expiration, and is checked again at each read until it is kept, refused or
+expired; within one read, an unreachable server's other blobs wait without
+asking it again. So one member's unreachable server never keeps the others'
+blobs unread.
 Each member keeps its two newest; a member that leaves is dropped, and the
 home serves its blob no more.
 

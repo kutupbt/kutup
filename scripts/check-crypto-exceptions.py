@@ -16,6 +16,7 @@ says so ("Lint exceptions").
 """
 import pathlib
 import re
+import subprocess
 import sys
 import tomllib
 
@@ -26,6 +27,14 @@ LINTS = re.compile(r"clippy\s*::\s*disallowed[-_](?:types|methods)\b")
 # Lints or groups whose allowing also switches the disallowed_* rules off.
 GROUPS = {"clippy::style", "clippy::all", "warnings"}
 TOML_GROUPS = {"disallowed_types", "disallowed_methods", "style", "all"}
+# The ESLint rules that carry the frontend's crypto lint, and the comments
+# that could switch them off.
+FRONTEND_LINTS = {"no-restricted-syntax", "no-restricted-imports"}
+# Every comment, line or block; a string holding "//" yields a harmless extra.
+COMMENT = re.compile(r"//[^\n]*|/\*.*?\*/", re.S)
+# A directive starts the comment's text (ESLint reads it there, also on a
+# block comment's later line); leading `*`s are skipped too, to be safe.
+ESLINT_DIRECTIVE = re.compile(r"eslint(?:-disable(?:-next-line|-line)?)?(?=\s|$)(.*)", re.S)
 # Cargo takes a lint name in a [lints] table with dashes as well.
 ATTRIBUTE = re.compile(r"#!?\[\s*(?:allow|expect)\s*\(([^\]]*)\)\s*\]|cfg_attr\([^\]]*?\b(?:allow|expect)\s*\(([^)]*)\)")
 FLAG = re.compile(
@@ -38,6 +47,16 @@ def walk(pattern: str):
     for path in ROOT.glob(pattern):
         if SKIP.isdisjoint(path.relative_to(ROOT).parts):
             yield path
+
+
+def tracked(directory: str, suffixes: tuple[str, ...]) -> list[str]:
+    """The files git tracks under `directory` (so no build output or vendored
+    copy is read), relative to the root."""
+    listed = subprocess.run(
+        ["git", "-C", str(ROOT), "ls-files", "-z", "--", directory],
+        check=True, capture_output=True, text=True,
+    ).stdout
+    return [rel for rel in listed.split("\0") if rel.endswith(suffixes)]
 
 
 def rules(path: pathlib.Path) -> set[str]:
@@ -121,6 +140,27 @@ def other_switches() -> list[str]:
             errors.append(f"{rel}: sets CLIPPY_CONF_DIR")
         if any(FLAG.search(flags) for flags in rustflags(config)):
             errors.append(f"{rel}: rustflags switch the crypto lint off")
+    # The frontend's crypto lint (eslint.config.js, step 5) is switched off
+    # by no comment: no eslint-disable naming its rules or naming none, and
+    # no inline config for them.
+    for rel in tracked("frontend", (".ts", ".tsx", ".js", ".mjs")):
+        parts = pathlib.PurePosixPath(rel).parts
+        if "dist" in parts or parts[1:2] == ("wasm",):
+            continue
+        text = (ROOT / rel).read_text(encoding="utf-8", errors="replace")
+        for comment in COMMENT.finditer(text):
+            value = comment.group(0)[2:]
+            if value.endswith("*/"):
+                value = value[:-2]
+            found = ESLINT_DIRECTIVE.match(value.lstrip(" \t\r\n*"))
+            if not found:
+                continue
+            rules = found.group(1).split("--")[0]
+            named = {rule.split(":")[0].strip() for rule in rules.split(",")} - {""}
+            if not named or named & FRONTEND_LINTS:
+                number = text.count("\n", 0, comment.start()) + 1
+                line = " ".join(comment.group(0).split())
+                errors.append(f"{rel}:{number}: switches the frontend crypto lint off ({line[:80]})")
     for pattern in ("scripts/**/*", ".github/**/*.yml", "**/Dockerfile*", "Makefile", "justfile"):
         for path in walk(pattern):
             if not path.is_file() or path.name == "check-crypto-exceptions.py":

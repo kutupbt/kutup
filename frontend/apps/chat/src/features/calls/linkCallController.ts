@@ -30,6 +30,7 @@ import {
 } from '../callLinks/callLinks'
 import type { SfuParticipant, SfuRoom } from './sfuRoom'
 import { CHAT_TOPIC, ROLES_TOPIC } from './sfuTopics'
+import { randomBytes } from '@kutup/crypto/random'
 
 // A call through a link (docs/chat-calls.md): anyone holding the link joins,
 // with or without an account.
@@ -522,7 +523,7 @@ export class LinkCallController {
     const trimmed = text.trim()
     if (!room || !this.state || this.state.phase !== 'active' || !trimmed) return
     const wasm = await loadChatWasm()
-    const message = { id: hex(crypto.getRandomValues(new Uint8Array(16))), text: trimmed, sentAtMs: Date.now() }
+    const message = { id: hex(randomBytes(16)), text: trimmed, sentAtMs: Date.now() }
     const sealed = wasm.callLinkSealMessage(this.link.secret, message)
     await room.send(new TextEncoder().encode(sealed))
     this.append({ ...message, identity: room.localIdentity, own: true, name: this.ownName })
