@@ -25,7 +25,6 @@ use zeroize::Zeroizing;
 use kutup_chat_proto::{
     AccountManifestDeviceV3, AccountManifestV3, ChatProvisionV1, DirectChatSuiteId,
     ProvisionEnvelopeV1, ProvisioningLinkCodeV1, ProvisioningRelayRequest, PROVISIONING_VERSION,
-    REREGISTRATION_DEVICE_ID,
 };
 use kutup_crypto::provisioning::ProvisioningKeyPair;
 
@@ -391,11 +390,14 @@ impl Engine {
             .ok_or_else(|| ChatError::Invalid("the session carries no registration".into()))?
             .clone();
         let device_id = transport.register_device(&request).await?;
-        if let kutup_chat_proto::DeviceRegistrationV1::Reregistration { .. } = &request.registration
+        // A re-registration is answered with the id its manifest lists for
+        // this device: the lowest the account's other devices leave free.
+        if let kutup_chat_proto::DeviceRegistrationV1::Reregistration { manifest } =
+            &request.registration
         {
-            if device_id != REREGISTRATION_DEVICE_ID {
+            if manifest.chat_devices().map(|(id, _)| id).next() != Some(device_id) {
                 return Err(ChatError::Protocol(
-                    "a re-registration is answered with device 1".into(),
+                    "a re-registration is answered with the id its manifest lists".into(),
                 ));
             }
         }
@@ -851,7 +853,10 @@ mod tests {
         let mut alice = world.person(1);
         let first = head(&world, &alice.account);
         assert_eq!(first.devices.len(), 1);
-        assert_eq!(first.devices[0].device_id, REREGISTRATION_DEVICE_ID);
+        assert_eq!(
+            first.devices[0].device_id,
+            kutup_chat_proto::REREGISTRATION_DEVICE_ID
+        );
         assert_eq!(
             first.identity_key,
             alice.engine.session().account_identity_key()
@@ -875,7 +880,10 @@ mod tests {
         let reregistered = head(&world, &alice.account);
         reregistered.verify_successor(Some(&linked)).unwrap();
         assert_eq!(reregistered.devices.len(), 1);
-        assert_eq!(reregistered.devices[0].device_id, REREGISTRATION_DEVICE_ID);
+        assert_eq!(
+            reregistered.devices[0].device_id,
+            kutup_chat_proto::REREGISTRATION_DEVICE_ID
+        );
         assert_ne!(reregistered.identity_key, linked.identity_key);
         assert_eq!(
             fresh.session().account_identity_key(),

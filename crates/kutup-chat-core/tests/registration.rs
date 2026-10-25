@@ -27,6 +27,8 @@ struct RegistrationServer {
     assigned: u32,
     /// The account's manifest, once a re-registration published it.
     manifest: RefCell<Option<kutup_chat_proto::AccountManifestV3>>,
+    /// Every manifest the account has had, oldest first.
+    history: RefCell<Vec<kutup_chat_proto::AccountManifestV3>>,
 }
 
 #[async_trait(?Send)]
@@ -40,6 +42,7 @@ impl ChatTransport for RegistrationServer {
             &req.registration
         {
             *self.manifest.borrow_mut() = Some((**manifest).clone());
+            self.history.borrow_mut().push((**manifest).clone());
         }
         if self.fail_next.replace(false) {
             return Err(ChatError::Transport("ambiguous response".into()));
@@ -56,6 +59,31 @@ impl ChatTransport for RegistrationServer {
         _account: &str,
     ) -> Result<Option<kutup_chat_proto::AccountManifestV3>> {
         Ok(self.manifest.borrow().clone())
+    }
+
+    async fn fetch_manifest_history(
+        &self,
+        account: &str,
+        _from_sequence: u64,
+        to_sequence: u64,
+        page_from_sequence: u64,
+    ) -> Result<kutup_chat_proto::AccountManifestHistoryPageV3> {
+        let manifests: Vec<_> = self
+            .history
+            .borrow()
+            .iter()
+            .filter(|manifest| {
+                manifest.sequence >= page_from_sequence && manifest.sequence <= to_sequence
+            })
+            .cloned()
+            .collect();
+        Ok(kutup_chat_proto::AccountManifestHistoryPageV3 {
+            account: account.parse().unwrap(),
+            from_sequence: page_from_sequence,
+            to_sequence,
+            manifests,
+            next_sequence: None,
+        })
     }
 
     async fn fetch_bundles(&self, _username: &str) -> Result<AccountPreKeyBundlesResponse> {
@@ -93,6 +121,7 @@ fn ambiguous_registration_retries_exactly_and_persists_device_id() {
         fail_next: Cell::new(true),
         assigned: 1,
         manifest: RefCell::new(None),
+        history: RefCell::new(Vec::new()),
     });
     let authority = AccountAuthority::derive(&[9u8; 32]).unwrap();
 
@@ -185,4 +214,66 @@ fn ambiguous_registration_retries_exactly_and_persists_device_id() {
     for suffix in ["", "-wal", "-shm"] {
         let _ = std::fs::remove_file(format!("{}{suffix}", path.display()));
     }
+}
+
+/// One device list per account (docs/plans/one-device-list.md): a Chat
+/// re-registration leaves the account's other devices listed as they were,
+/// and takes the lowest id they leave free, under its sign-in's session.
+#[test]
+fn a_reregistration_keeps_the_accounts_other_devices() {
+    use kutup_chat_proto::{AccountManifestDeviceV3, DeviceKind};
+    let authority = AccountAuthority::derive(&[9u8; 32]).unwrap();
+    let editor = AccountManifestDeviceV3 {
+        device_id: 1,
+        kind: DeviceKind::Editor,
+        chat: None,
+        frame_key: Some(base64::Engine::encode(
+            &base64::engine::general_purpose::STANDARD,
+            ed25519_dalek::SigningKey::from_bytes(&[4; 32])
+                .verifying_key()
+                .to_bytes(),
+        )),
+        session: "52".repeat(32),
+    };
+    // The account's manifest from before it had Chat: an Office instance.
+    let identity = libsignal_protocol::IdentityKeyPair::generate(&mut OsRng.unwrap_err());
+    let head = authority
+        .sign_manifest(
+            ACCOUNT.parse().unwrap(),
+            1,
+            None,
+            &identity,
+            vec![editor.clone()],
+            "2026-10-24T00:00:00Z",
+        )
+        .unwrap();
+    let server = Rc::new(RegistrationServer {
+        requests: RefCell::new(Vec::new()),
+        fail_next: Cell::new(false),
+        assigned: 2,
+        manifest: RefCell::new(Some(head.clone())),
+        history: RefCell::new(vec![head.clone()]),
+    });
+    let db = Rc::new(SqliteChatDb::open_in_memory().unwrap());
+    let engine = block_on(Engine::reregister(
+        db,
+        server.clone(),
+        ACCOUNT,
+        &authority,
+        "2026-10-25T00:00:00Z",
+        10,
+        &mut OsRng.unwrap_err(),
+    ))
+    .unwrap();
+    assert_eq!(engine.session().device_id(), 2);
+    let manifest = server.manifest.borrow().clone().unwrap();
+    assert_eq!(manifest.sequence, 2);
+    assert_eq!(manifest.devices.len(), 2);
+    assert_eq!(manifest.devices[0], editor);
+    let chat = &manifest.devices[1];
+    assert_eq!(
+        (chat.device_id, chat.kind, chat.session.as_str()),
+        (2, DeviceKind::Chat, DEVICE_SESSION)
+    );
+    manifest.verify_successor(Some(&head)).unwrap();
 }

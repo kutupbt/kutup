@@ -57,9 +57,17 @@ pub struct ChatAccount {
     /// The account's current manifest (none before its first device).
     pub head: Option<AccountManifestV3>,
     /// The `session` hash of the token's sign-in, which every device of this
-    /// account lists (`GET /api/device-session`, asked at the first
-    /// registration).
-    pub session: std::sync::OnceLock<String>,
+    /// account lists: from the token's `sid` (a test signs in as a root
+    /// sign-in), checked against `GET /api/device-session` at registration.
+    pub session: String,
+}
+
+/// The `session` hash of an access token's sign-in (its `sid` claim).
+fn token_session(token: &str) -> String {
+    let payload = token.split('.').nth(1).expect("a JWT");
+    let claims: Value = serde_json::from_slice(&URL_SAFE_NO_PAD.decode(payload).unwrap()).unwrap();
+    let sid = uuid::Uuid::parse_str(claims["sid"].as_str().expect("an access token")).unwrap();
+    kutup_chat_proto::device_session_hash(sid.as_bytes())
 }
 
 fn b64(bytes: &[u8]) -> String {
@@ -144,24 +152,24 @@ impl ChatAccount {
             identity: IdentityKeyPair::generate(&mut kutup_crypto::primitives::Rng),
             devices: Vec::new(),
             head: None,
-            session: std::sync::OnceLock::new(),
+            session: token_session(token),
         }
     }
 
-    /// The token's `session` hash, asked once.
-    pub fn fetch_session(&self, c: &Client, base: &str) -> &str {
-        self.session.get_or_init(|| {
-            let r = c
-                .get(format!("{base}/api/device-session"))
-                .bearer_auth(&self.token)
-                .send()
-                .unwrap();
-            assert_eq!(r.status(), StatusCode::OK, "device session");
-            r.json::<Value>().unwrap()["session"]
-                .as_str()
-                .unwrap()
-                .to_owned()
-        })
+    /// The server's `session` hash for the token is the one this account
+    /// lists.
+    pub fn fetch_session(&self, c: &Client, base: &str) {
+        let r = c
+            .get(format!("{base}/api/device-session"))
+            .bearer_auth(&self.token)
+            .send()
+            .unwrap();
+        assert_eq!(r.status(), StatusCode::OK, "device session");
+        assert_eq!(
+            r.json::<Value>().unwrap()["session"].as_str().unwrap(),
+            self.session,
+            "the token's sign-in"
+        );
     }
 
     pub fn identity_key(&self) -> String {
@@ -181,10 +189,7 @@ impl ChatAccount {
                     device.id,
                     DirectChatSuiteId::PqxdhTripleRatchetV1,
                     device.registration_id,
-                    self.session
-                        .get()
-                        .expect("the session is asked at the first registration")
-                        .clone(),
+                    self.session.clone(),
                 )
             })
             .collect();
