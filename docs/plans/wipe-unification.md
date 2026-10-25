@@ -479,6 +479,8 @@ for the calendar list record, and nothing else for (a).
 
 ## W5. One device list per account
 
+Design note: [`one-device-list.md`](one-device-list.md) (approved 2026-10-25).
+
 ### Today
 
 There are four device registries, each with its own lifecycle:
