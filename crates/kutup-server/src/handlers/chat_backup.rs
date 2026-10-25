@@ -514,7 +514,7 @@ pub async fn append_segment(
         return Err(AppError::conflict("account manifest sequence changed"));
     }
     let device_exists: bool = sqlx::query_scalar(
-        "SELECT EXISTS(SELECT 1 FROM chat_devices WHERE user_id=$1 AND device_id=$2)",
+        "SELECT EXISTS(SELECT 1 FROM devices WHERE user_id=$1 AND device_id=$2)",
     )
     .bind(user_id)
     .bind(source_device_id)

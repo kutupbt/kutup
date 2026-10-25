@@ -207,7 +207,7 @@ api.interceptors.response.use(
       code === 'invalidCredentials' ||
       code === 'setupTokenInvalid' ||
       code === 'preAuthInvalid' ||
-      // A Chat device's own credential (X-Kutup-Chat-Device) refused: the
+      // A Chat device's own credential (X-Kutup-Device) refused: the
       // device was removed, not this session.
       code === 'deviceCredential'
     if (status === 401 && !originalRequest._retry && !skipRefresh) {

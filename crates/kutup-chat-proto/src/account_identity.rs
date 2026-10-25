@@ -73,7 +73,7 @@ pub const MAX_DEVICE_ID: u32 = 127;
 pub const DEVICE_CREDENTIAL_LEN: usize = 32;
 /// The header carrying `<deviceId>.<credential>` beside the JWT on every
 /// device-bound Chat call (Signal's `AccountAuthenticator`).
-pub const CHAT_DEVICE_HEADER: &str = "X-Kutup-Chat-Device";
+pub const DEVICE_HEADER: &str = "X-Kutup-Device";
 /// A provisioning socket's address: random bytes for the socket's life.
 pub const PROVISIONING_ADDRESS_LEN: usize = 16;
 /// A one-time link token (Signal's provisioning code).
@@ -689,13 +689,13 @@ impl AccountPreKeyBundlesResponse {
 // Device credentials
 // ---------------------------------------------------------------------------
 
-/// The `X-Kutup-Chat-Device` value: `<deviceId>.<credential>`, the credential
+/// The `X-Kutup-Device` value: `<deviceId>.<credential>`, the credential
 /// as canonical unpadded base64url.
 pub fn format_device_header(device_id: u32, credential: &[u8; DEVICE_CREDENTIAL_LEN]) -> String {
     format!("{device_id}.{}", b64url_encode(credential))
 }
 
-/// Parse an `X-Kutup-Chat-Device` value. The server then compares the
+/// Parse an `X-Kutup-Device` value. The server then compares the
 /// credential, in constant time, with the salted hash on that device's row of
 /// the JWT's account.
 pub fn parse_device_header(value: &str) -> Result<(u32, [u8; DEVICE_CREDENTIAL_LEN]), String> {
@@ -1111,7 +1111,7 @@ pub struct RegisterChatDeviceRequestV2 {
     pub name: String,
     /// The device's credential (Signal's per-device password): canonical
     /// unpadded base64url of 32 random bytes; the server stores a salted hash
-    /// and the device sends it in [`CHAT_DEVICE_HEADER`].
+    /// and the device sends it in [`DEVICE_HEADER`].
     pub credential: String,
     pub registration: DeviceRegistrationV1,
 }

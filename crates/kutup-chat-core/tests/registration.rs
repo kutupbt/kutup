@@ -18,6 +18,9 @@ use kutup_chat_proto::{
 use rand::rngs::OsRng;
 use rand::TryRngCore as _;
 
+/// The `session` hash test servers give every device.
+const DEVICE_SESSION: &str = "5151515151515151515151515151515151515151515151515151515151515151";
+
 struct RegistrationServer {
     requests: RefCell<Vec<Vec<u8>>>,
     fail_next: Cell<bool>,
@@ -42,6 +45,10 @@ impl ChatTransport for RegistrationServer {
             return Err(ChatError::Transport("ambiguous response".into()));
         }
         Ok(self.assigned)
+    }
+
+    async fn fetch_device_session(&self) -> Result<String> {
+        Ok(DEVICE_SESSION.into())
     }
 
     async fn fetch_manifest(

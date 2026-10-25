@@ -1159,6 +1159,10 @@ mod tests {
             unreachable!()
         }
         // The account's first device: no manifest yet.
+        async fn fetch_device_session(&self) -> Result<String> {
+            Ok("51".repeat(32))
+        }
+
         async fn fetch_manifest(
             &self,
             _: &str,

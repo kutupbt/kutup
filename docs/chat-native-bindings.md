@@ -86,7 +86,7 @@ provisioning socket gave its address), then call
 envelope the socket delivers. `reregisterNativeChatClient(…)` is "I don't have
 my other devices": a new identity, and the account's other devices leave.
 The HTTP adapter sends `ChatHttpRequest.chatDevice`, when present, as the
-`X-Kutup-Chat-Device` header.
+`X-Kutup-Device` header.
 
 `keyBinding` is the account's key binding (the session's `envelopeBinding`,
 a UUID v4): the account's own seals, such as its synced identity pin list,

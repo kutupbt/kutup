@@ -154,7 +154,7 @@ pub trait ChatTransport {
     /// `POST /api/chat/device` — returns the server-assigned device id.
     async fn register_device(&self, req: &RegisterChatDeviceRequestV2) -> Result<u32>;
 
-    /// This device's id and credential, sent as `X-Kutup-Chat-Device` beside
+    /// This device's id and credential, sent as `X-Kutup-Device` beside
     /// the session token on every device-bound call from now on (Signal's
     /// per-device password). Called once the device is registered or opened.
     fn set_device_auth(&self, _device_id: u32, _credential: &str) {}
@@ -211,6 +211,15 @@ pub trait ChatTransport {
     ) -> Result<AccountPreKeyBundlesResponse> {
         Err(crate::ChatError::Transport(
             "transport does not implement linked-device bundle fetches".into(),
+        ))
+    }
+
+    /// The `session` hash this device's manifest entry carries: its root
+    /// sign-in, as the server works it out
+    /// (`kutup_chat_proto::device_session_hash`).
+    async fn fetch_device_session(&self) -> Result<String> {
+        Err(crate::ChatError::Transport(
+            "transport does not implement device sessions".into(),
         ))
     }
 

@@ -1174,7 +1174,6 @@ impl Engine {
         let transport = Rc::clone(&self.transport);
         let current = transport.fetch_manifest(self.session.user()).await?;
         let canonical_self = self.self_account()?;
-        let local = self.session.manifest_device();
         let issued_at = issued_at.into();
         let candidate = match current {
             // The account's first manifest comes with its re-registration
@@ -1207,21 +1206,30 @@ impl Engine {
                     ));
                 }
                 let mut devices = current.devices.clone();
-                match devices.binary_search_by_key(&local.device_id, |device| device.device_id) {
+                let device_id = self.session.device_id();
+                let listed = devices.binary_search_by_key(&device_id, |device| device.device_id);
+                // Listed: its sign-in stays the entry's. New: the server
+                // says which sign-in this is.
+                let session = match listed {
+                    Ok(index) => devices[index].session.clone(),
+                    Err(_) => transport.fetch_device_session().await?,
+                };
+                let local = self.session.manifest_device(session);
+                match listed {
                     // Unchanged, unless the account's Drive keys moved on (an
                     // upgrade to X-Wing, docs/plans/pq-shares.md): then the
-                    // next manifest carries them. A device entry still holding
-                    // legacy MLS keys is signed again too, which drops them.
+                    // next manifest carries them.
                     Ok(index)
-                        if devices[index].registration_id == local.registration_id
-                            && devices[index].mls == local.mls
+                        if devices[index].kind == local.kind
+                            && devices[index].chat == local.chat
                             && current.drive == authority.drive_keys() =>
                     {
                         current
                     }
                     location => {
                         match location {
-                            Ok(index) => devices[index] = local,
+                            // Its Chat keys renewed; a frame key it holds stays.
+                            Ok(index) => devices[index].chat = local.chat,
                             Err(index) => devices.insert(index, local),
                         }
                         let next_sequence = current.sequence.checked_add(1).ok_or_else(|| {

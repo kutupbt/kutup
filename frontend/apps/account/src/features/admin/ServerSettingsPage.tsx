@@ -61,8 +61,9 @@ const CALENDAR_SETTINGS = [
   { field: 'calendarWindowDays', min: 1, max: 3660 },
   { field: 'calendarEventsPage', min: 10, max: 5000 },
 ] as const satisfies readonly { field: keyof AdminSettings; min: number; max: number }[]
-/** Linking Chat devices (site_settings::CHAT_IDENTITY_SETTINGS). */
+/** Devices and linking Chat devices (site_settings::DEVICES_PER_ACCOUNT, CHAT_IDENTITY_SETTINGS). */
 const CHAT_LINKING_SETTINGS = [
+  { field: 'devicesPerAccount', min: 1, max: 127 },
   { field: 'chatLinkTokenSeconds', min: 60, max: 3600 },
   { field: 'chatLinkTokensPerAccount', min: 1, max: 20 },
   { field: 'chatProvisionBodyBytes', min: 4096, max: 65_536 },

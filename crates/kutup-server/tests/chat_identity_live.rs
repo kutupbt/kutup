@@ -15,7 +15,7 @@ use futures_util::StreamExt as _;
 use kutup_chat_proto::{
     repeated_use_keys_digest, AccountIdentityDistributionRequest, AccountPreKeyBundlesResponse,
     DeviceRegistrationV1, DirectChatSuiteId, DistributedDeviceKeysV1, EnvelopeType,
-    OutgoingEnvelope, ProvisionEnvelopeV1, ProvisioningSocketMessage, CHAT_DEVICE_HEADER,
+    OutgoingEnvelope, ProvisionEnvelopeV1, ProvisioningSocketMessage, DEVICE_HEADER,
 };
 use libsignal_protocol::IdentityKeyPair;
 use reqwest::blocking::Client;
@@ -211,6 +211,7 @@ fn a_first_device_reregisters_and_a_second_links() {
         drive: ada.drive.clone(),
         devices: ada.devices.clone(),
         head: ada.head.clone(),
+        session: ada.session.clone(),
     };
     let manifest = stray.next_manifest(&[&first, &second]);
     let (status, answer) = code(
@@ -290,6 +291,7 @@ fn distribution(
             })
             .collect(),
         head: ada.head.clone(),
+        session: ada.session.clone(),
     };
     let listed: Vec<&ChatDevice> = next.devices.iter().collect();
     let manifest = next.next_manifest(&listed);
@@ -565,7 +567,7 @@ fn a_provisioning_message_reaches_the_new_device_once() {
             let body = json!({ "envelope": envelope });
             std::thread::spawn(move || {
                 c.put(url)
-                    .header(CHAT_DEVICE_HEADER, header)
+                    .header(DEVICE_HEADER, header)
                     .bearer_auth(token)
                     .json(&body)
                     .send()
@@ -891,7 +893,7 @@ fn expiry_of_tokens_and_devices() {
     runtime
         .block_on(
             sqlx::query(
-                "UPDATE chat_devices SET expired_at = now() WHERE user_id = $1 AND device_id = 2",
+                "UPDATE devices SET expired_at = now() WHERE user_id = $1 AND device_id = 2",
             )
             .bind(user_id)
             .execute(&pool),

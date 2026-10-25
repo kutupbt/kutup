@@ -93,7 +93,7 @@ pub struct ChatHttpRequest {
     pub method: ChatHttpMethod,
     pub path: String,
     pub body_json: Option<String>,
-    /// The `X-Kutup-Chat-Device` header (`<deviceId>.<credential>`), sent
+    /// The `X-Kutup-Device` header (`<deviceId>.<credential>`), sent
     /// beside the session token once the device is registered.
     pub chat_device: Option<String>,
 }

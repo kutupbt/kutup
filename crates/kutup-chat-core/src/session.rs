@@ -523,8 +523,8 @@ impl Session {
                 "manifest history contradicts the current trust pin".into(),
             ));
         }
-        // Every listed device has the account's identity.
-        if history.manifest.device(device_id).is_none() {
+        // Every listed Chat device has the account's identity.
+        if history.manifest.chat_device(device_id).is_none() {
             return Ok(None);
         }
         Ok(Some(
@@ -557,8 +557,10 @@ impl Session {
         self.store.local_identity_key_base64()
     }
 
-    pub fn manifest_device(&self) -> AccountManifestDeviceV3 {
-        self.store.local_manifest_device(self.device_id())
+    /// This device's manifest entry, under its sign-in's `session` hash
+    /// ([`crate::ChatTransport::fetch_device_session`]).
+    pub fn manifest_device(&self, session: String) -> AccountManifestDeviceV3 {
+        self.store.local_manifest_device(self.device_id(), session)
     }
 
     pub(crate) fn db(&self) -> &Rc<dyn ChatDb> {
@@ -2609,9 +2611,8 @@ impl Session {
             devices.extend(
                 record
                     .manifest
-                    .devices
-                    .iter()
-                    .map(|device| device.device_id),
+                    .chat_devices()
+                    .map(|(device_id, _)| device_id),
             );
         }
         for device_id in devices {
@@ -4162,12 +4163,11 @@ fn now() -> SystemTime {
 }
 
 /// Unix-epoch millis, saturating to 0 before the epoch (never in practice).
-/// The devices a manifest lists.
+/// The Chat devices a manifest lists: the ones messages go to.
 fn device_ids(manifest: &AccountManifestV3) -> Vec<u32> {
     manifest
-        .devices
-        .iter()
-        .map(|device| device.device_id)
+        .chat_devices()
+        .map(|(device_id, _)| device_id)
         .collect()
 }
 

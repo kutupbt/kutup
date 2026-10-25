@@ -23,7 +23,7 @@ use kutup_chat_proto::{
     ChatBackupSignerAuthorizationV1, CommitChatBackupManifestRequestV1, DeviceRegistrationV1,
     ProfileEnvelopeContextV1, ProfileEnvelopePurpose, ProvisionChatBackupRequestV1,
     ReconcileChatBackupMediaRequestV1, StageChatBackupBaseRequestV1,
-    UploadChatBackupMediaRequestV1, CHAT_DEVICE_HEADER,
+    UploadChatBackupMediaRequestV1, DEVICE_HEADER,
 };
 use kutup_crypto::primitives::{hash, SigningKey, Suite};
 use reqwest::{blocking::Client, StatusCode};
@@ -471,7 +471,7 @@ fn chat_backup_lifecycle(
             std::thread::spawn(move || {
                 client
                     .post(format!("{base}/api/chat/backup/segments"))
-                    .header(CHAT_DEVICE_HEADER, header)
+                    .header(DEVICE_HEADER, header)
                     .bearer_auth(token)
                     .json(&request)
                     .send()

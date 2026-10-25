@@ -255,8 +255,10 @@ impl Engine {
     }
 
     /// Re-register: a new account identity, and the account's next manifest
-    /// listing this device alone as device 1, sent in the registration call.
-    /// The server drops every other device of the account in the same
+    /// listing this device as its one Chat device, sent in the registration
+    /// call; the account's other (non-Chat) devices stay listed, and this one
+    /// takes the lowest id they leave free (`reregistration_device_id`). The
+    /// server drops every other Chat device of the account in the same
     /// transaction (Signal's `reclaimAccount`); peers see the safety number
     /// change once. Also how an account's first Chat device registers.
     pub async fn reregister<R: Rng + CryptoRng>(
@@ -285,19 +287,34 @@ impl Engine {
             ),
         };
         let issued_at = issued_at.into();
+        let others: Vec<AccountManifestDeviceV3> = head
+            .iter()
+            .flat_map(|head| head.devices.iter())
+            .filter(|device| device.chat.is_none())
+            .cloned()
+            .collect();
+        let device_id = kutup_chat_proto::reregistration_device_id(
+            &others
+                .iter()
+                .map(|device| device.device_id)
+                .collect::<Vec<_>>(),
+        );
+        let device_session = transport.fetch_device_session().await?;
         let sign =
             |identity: &IdentityKeyPair, registration_id: u32| -> Result<AccountManifestV3> {
+                let mut devices = others.clone();
+                devices.push(AccountManifestDeviceV3::chat(
+                    device_id,
+                    DirectChatSuiteId::PqxdhTripleRatchetV1,
+                    registration_id,
+                    device_session.clone(),
+                ));
                 let manifest = authority.sign_manifest(
                     account.clone(),
                     sequence,
                     previous_hash.clone(),
                     identity,
-                    vec![AccountManifestDeviceV3 {
-                        device_id: REREGISTRATION_DEVICE_ID,
-                        direct_chat_suite: DirectChatSuiteId::PqxdhTripleRatchetV1,
-                        registration_id,
-                        mls: None,
-                    }],
+                    devices,
                     issued_at.clone(),
                 )?;
                 manifest
@@ -308,7 +325,7 @@ impl Engine {
         let session = Session::generate_device(
             db,
             user,
-            REREGISTRATION_DEVICE_ID,
+            device_id,
             num_one_time,
             NewDevice::Reregistration { manifest: &sign },
             rng,
@@ -513,21 +530,31 @@ impl Engine {
                     "the account's identity is not this device's".into(),
                 ));
             }
-            if head.device(self.session.device_id()).is_none() {
+            if head.chat_device(self.session.device_id()).is_none() {
                 return Err(ChatError::Trust(
                     "this device is not in the account's manifest".into(),
                 ));
             }
-            let kept: Vec<&AccountManifestDeviceV3> = head
+            // Every entry not removed stays; the Chat ones get new keys.
+            let staying: Vec<&AccountManifestDeviceV3> = head
                 .devices
                 .iter()
                 .filter(|device| !remove.contains(&device.device_id))
+                .collect();
+            let kept: Vec<&AccountManifestDeviceV3> = staying
+                .iter()
+                .copied()
+                .filter(|device| device.chat.is_some())
                 .collect();
 
             let identity = IdentityKeyPair::generate(rng);
             let identity_key = STANDARD.encode(identity.identity_key().serialize());
             let mut devices = Vec::with_capacity(kept.len());
-            let mut listed = Vec::with_capacity(kept.len());
+            let mut listed: Vec<AccountManifestDeviceV3> = staying
+                .iter()
+                .filter(|device| device.chat.is_none())
+                .map(|device| (*device).clone())
+                .collect();
             let mut private = Vec::with_capacity(kept.len());
             for device in &kept {
                 let registration_id = crate::keys::random_registration_id(rng);
@@ -538,12 +565,12 @@ impl Engine {
                     signed_pre_key: rotation.signed_pre_key.clone(),
                     last_resort_kyber_pre_key: rotation.last_resort_kyber_pre_key.clone(),
                 });
-                listed.push(AccountManifestDeviceV3 {
-                    device_id: device.device_id,
-                    direct_chat_suite: device.direct_chat_suite,
+                let mut entry = (*device).clone();
+                entry.chat = device.chat.map(|chat| kutup_chat_proto::ChatDeviceKeysV3 {
                     registration_id,
-                    mls: None,
+                    ..chat
                 });
+                listed.push(entry);
                 private.push((device.device_id, registration_id, rotation));
             }
             let manifest = self.group_keys()?.authority.sign_manifest(
@@ -673,7 +700,7 @@ impl Engine {
         verify_own_manifest(&head, &account, &self.group_keys()?.authority)?;
         let current = head.identity_key == body.identity_key_public
             && head
-                .device(self.session.device_id())
+                .chat_device(self.session.device_id())
                 .is_some_and(|device| device.registration_id == body.registration_id)
             && match head.sequence.cmp(&body.manifest_sequence) {
                 std::cmp::Ordering::Less => false,
@@ -983,7 +1010,7 @@ mod tests {
         assert_eq!(
             Some(after.registration_id),
             manifest
-                .device(alice.device())
+                .chat_device(alice.device())
                 .map(|device| device.registration_id)
         );
         assert!(block_on(alice.engine.session().db().load_pre_key(100))
@@ -999,7 +1026,7 @@ mod tests {
         assert_eq!(
             Some(local2.registration_id),
             manifest
-                .device(alice2.device())
+                .chat_device(alice2.device())
                 .map(|device| device.registration_id)
         );
         assert!(

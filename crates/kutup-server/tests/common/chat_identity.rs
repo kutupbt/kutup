@@ -14,7 +14,7 @@ use base64::Engine;
 use kutup_chat_proto::{
     AccountIdentitySuiteId, AccountManifestDeviceV3, AccountManifestDriveKeysV1, AccountManifestV3,
     AccountRef, DeviceRegistrationV1, DirectChatSuiteId, EcPreKey, KemPreKey,
-    RegisterChatDeviceRequestV2, CHAT_DEVICE_HEADER,
+    RegisterChatDeviceRequestV2, DEVICE_HEADER,
 };
 use kutup_crypto::identity::AccountIdentityKeysV1;
 use kutup_crypto::primitives::SigningKey;
@@ -35,14 +35,14 @@ pub struct ChatDevice {
 }
 
 impl ChatDevice {
-    /// The `X-Kutup-Chat-Device` value.
+    /// The `X-Kutup-Device` value.
     pub fn header(&self) -> String {
         format!("{}.{}", self.id, URL_SAFE_NO_PAD.encode(self.credential))
     }
 
     /// `request` made as this device (its credential beside the JWT).
     pub fn auth(&self, request: RequestBuilder) -> RequestBuilder {
-        request.header(CHAT_DEVICE_HEADER, self.header())
+        request.header(DEVICE_HEADER, self.header())
     }
 }
 
@@ -54,8 +54,12 @@ pub struct ChatAccount {
     pub drive: AccountManifestDriveKeysV1,
     pub identity: IdentityKeyPair,
     pub devices: Vec<ChatDevice>,
-    /// The account's current V2 manifest (none before its first device).
+    /// The account's current manifest (none before its first device).
     pub head: Option<AccountManifestV3>,
+    /// The `session` hash of the token's sign-in, which every device of this
+    /// account lists (`GET /api/device-session`, asked at the first
+    /// registration).
+    pub session: std::sync::OnceLock<String>,
 }
 
 fn b64(bytes: &[u8]) -> String {
@@ -140,7 +144,24 @@ impl ChatAccount {
             identity: IdentityKeyPair::generate(&mut kutup_crypto::primitives::Rng),
             devices: Vec::new(),
             head: None,
+            session: std::sync::OnceLock::new(),
         }
+    }
+
+    /// The token's `session` hash, asked once.
+    pub fn fetch_session(&self, c: &Client, base: &str) -> &str {
+        self.session.get_or_init(|| {
+            let r = c
+                .get(format!("{base}/api/device-session"))
+                .bearer_auth(&self.token)
+                .send()
+                .unwrap();
+            assert_eq!(r.status(), StatusCode::OK, "device session");
+            r.json::<Value>().unwrap()["session"]
+                .as_str()
+                .unwrap()
+                .to_owned()
+        })
     }
 
     pub fn identity_key(&self) -> String {
@@ -155,16 +176,21 @@ impl ChatAccount {
         incarnation.update(public.to_bytes());
         let mut listed: Vec<AccountManifestDeviceV3> = devices
             .iter()
-            .map(|device| AccountManifestDeviceV3 {
-                device_id: device.id,
-                direct_chat_suite: DirectChatSuiteId::PqxdhTripleRatchetV1,
-                registration_id: device.registration_id,
-                mls: None,
+            .map(|device| {
+                AccountManifestDeviceV3::chat(
+                    device.id,
+                    DirectChatSuiteId::PqxdhTripleRatchetV1,
+                    device.registration_id,
+                    self.session
+                        .get()
+                        .expect("the session is asked at the first registration")
+                        .clone(),
+                )
             })
             .collect();
         listed.sort_by_key(|device| device.device_id);
         let mut manifest = AccountManifestV3 {
-            manifest_version: 2,
+            manifest_version: kutup_chat_proto::ACCOUNT_MANIFEST_V3_VERSION,
             account: self.account.clone(),
             incarnation_id: hex::encode(incarnation.finish()),
             sequence: self.head.as_ref().map_or(1, |head| head.sequence + 1),
@@ -274,6 +300,7 @@ impl ChatAccount {
             registration_id,
             credential,
         };
+        self.fetch_session(c, base);
         let manifest = self.next_manifest(&[&device]);
         let body = self.registration(
             registration_id,
@@ -344,6 +371,7 @@ impl ChatAccount {
         registration_id: u32,
         credential: [u8; 32],
     ) -> ChatDevice {
+        self.fetch_session(c, base);
         let token = self.link_token(c, base, by);
         let body = self.registration(
             registration_id,

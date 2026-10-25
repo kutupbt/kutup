@@ -28,16 +28,16 @@ use uuid::Uuid;
 
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
 use kutup_chat_proto::{
-    capability_hash, constant_time_capability_hash_eq, AccountManifestHistoryPageV3,
-    AccountManifestPublicationV3, AccountManifestV3, AccountPreKeyBundlesResponse, AccountRef,
-    AckRequest, AnonymousPreKeyRequestV1, ChatProfileResponse, ChatWsClientMessage,
-    ChatWsServerMessage, ChatWsTicketResponse, DeliveredEnvelope, DeviceListMismatch,
-    DevicePreKeyBundleV2, DirectChatSuiteId, EcPreKey, EnvelopeType, KemPreKey, MailboxPage,
-    OutgoingEnvelope, OwnChatProfileResponse, PreKeyCountResponse, ProfileEnvelopeContextV1,
-    ProfileEnvelopePurpose, ProfileSuiteId, PutChatProfileRequest, RegisterChatDeviceRequestV2,
-    RegisterChatDeviceResponse, RenameChatDeviceRequest, ReplenishKeysRequest,
-    SealedDeliveryResponseV1, SealedMessageSubmissionV1, SealedOutgoingEnvelopeV1,
-    SendMessagesRequest,
+    capability_hash, constant_time_capability_hash_eq, AccountManifestDeviceV3,
+    AccountManifestHistoryPageV3, AccountManifestPublicationV3, AccountManifestV3,
+    AccountPreKeyBundlesResponse, AccountRef, AckRequest, AnonymousPreKeyRequestV1,
+    ChatProfileResponse, ChatWsClientMessage, ChatWsServerMessage, ChatWsTicketResponse,
+    DeliveredEnvelope, DeviceListMismatch, DevicePreKeyBundleV2, DirectChatSuiteId, EcPreKey,
+    EnvelopeType, KemPreKey, MailboxPage, OutgoingEnvelope, OwnChatProfileResponse,
+    PreKeyCountResponse, ProfileEnvelopeContextV1, ProfileEnvelopePurpose, ProfileSuiteId,
+    PutChatProfileRequest, RegisterChatDeviceRequestV2, RegisterChatDeviceResponse,
+    RenameChatDeviceRequest, ReplenishKeysRequest, SealedDeliveryResponseV1,
+    SealedMessageSubmissionV1, SealedOutgoingEnvelopeV1, SendMessagesRequest,
 };
 
 use crate::chat_hub::ChatWsOut;
@@ -416,12 +416,12 @@ pub async fn register_device(
         .collect();
     identity::verify_prekey_signatures(&account_identity, Some(&req.signed_pre_key), &kyber)?;
     if let DeviceRegistrationV1::Reregistration { manifest } = &req.registration {
-        identity::validate_manifest_v2(manifest)?;
+        identity::validate_manifest(manifest)?;
     }
 
     let mut tx = state.pool.begin().await?;
     // Lock the account row, including when it has no chat devices yet. `FOR
-    // UPDATE` over chat_devices alone does not lock an empty key range in
+    // UPDATE` over devices alone does not lock an empty key range in
     // PostgreSQL, so two first-install requests could otherwise both choose 1.
     sqlx::query("SELECT id FROM users WHERE id = $1 FOR UPDATE")
         .bind(user_id)
@@ -429,16 +429,20 @@ pub async fn register_device(
         .await?;
 
     // A retry after an answer was lost: the credential, drawn once by the
-    // device, names the row it made.
-    let rows: Vec<(i32, Vec<u8>, Vec<u8>)> = sqlx::query_as(
-        "SELECT device_id, credential_salt, credential_hash FROM chat_devices
-          WHERE user_id = $1 AND expired_at IS NULL ORDER BY device_id",
+    // device, names the row it made. Every row of the account, of every
+    // kind, holds an id of the one id space.
+    #[allow(clippy::type_complexity)]
+    let rows: Vec<(i32, Vec<u8>, Vec<u8>, bool, bool)> = sqlx::query_as(
+        "SELECT device_id, credential_salt, credential_hash, suite IS NOT NULL,
+                expired_at IS NOT NULL
+           FROM devices WHERE user_id = $1 ORDER BY device_id",
     )
     .bind(user_id)
     .fetch_all(&mut *tx)
     .await?;
-    if let Some((device_id, _, _)) = rows.iter().find(|(_, salt, hash)| {
-        kutup_crypto::primitives::ct_eq(&identity::credential_hash(salt, &credential), hash)
+    if let Some((device_id, ..)) = rows.iter().find(|(_, salt, hash, _, expired)| {
+        !expired
+            && kutup_crypto::primitives::ct_eq(&identity::credential_hash(salt, &credential), hash)
     }) {
         tx.commit().await?;
         return Ok(Json(RegisterChatDeviceResponse {
@@ -447,17 +451,47 @@ pub async fn register_device(
         .into_response());
     }
 
+    let root_session =
+        crate::account_devices::root_session_id(&mut *tx, auth.session.session_id).await?;
     let (device_id, dropped) =
         if let DeviceRegistrationV1::Reregistration { manifest } = &req.registration {
             // A new identity (Signal's reclaimAccount): the manifest lists this
-            // device alone, and every other device of the account goes with it.
+            // device as its one Chat device, and every other Chat device of
+            // the account goes with it; its other devices stay as listed.
             // Its manifest already the head without this device's credential
             // (a retry with it answered above): a replay, never a second
             // reclaim.
-            if !store_manifest_v2(&mut tx, &state, user_id, manifest, IdentityChange::New).await? {
+            let (new_id, entry) = manifest
+                .chat_devices()
+                .next()
+                .map(|(id, _)| (id, manifest.device(id).expect("listed")))
+                .expect("validated: one Chat device");
+            if entry.session != crate::account_devices::session_hash(root_session) {
+                return Err(AppError::conflict(
+                    "the manifest lists this device under another sign-in",
+                )
+                .with_details(json!({ "code": "devicesMismatch" })));
+            }
+            if !store_manifest(
+                &mut tx,
+                &state,
+                user_id,
+                manifest,
+                IdentityChange::Reregistration,
+            )
+            .await?
+            {
                 return Err(AppError::conflict("this manifest is already the account's")
                     .with_details(json!({ "code": "manifestConflict" })));
             }
+            crate::account_devices::check_listed_rows(
+                &mut tx,
+                user_id,
+                manifest,
+                Some(new_id),
+                crate::account_devices::ChatKeys::Match,
+            )
+            .await?;
             let shared: Vec<Uuid> = sqlx::query_scalar(
                 "SELECT DISTINCT shared_payload_id FROM chat_mailbox
               WHERE recipient_user_id = $1 AND shared_payload_id IS NOT NULL",
@@ -470,15 +504,23 @@ pub async fn register_device(
                 .bind(user_id)
                 .execute(&mut *tx)
                 .await?;
-            sqlx::query("DELETE FROM chat_devices WHERE user_id = $1")
-                .bind(user_id)
-                .execute(&mut *tx)
-                .await?;
-            let dropped: Vec<i32> = rows.iter().map(|(id, _, _)| *id).collect();
-            (
-                (kutup_chat_proto::REREGISTRATION_DEVICE_ID as i32),
-                Some((dropped, shared)),
+            // Every row the manifest doesn't keep: the Chat devices, and
+            // any not listed.
+            let kept: Vec<i32> = manifest
+                .devices
+                .iter()
+                .filter(|device| device.device_id != new_id)
+                .map(|device| device.device_id as i32)
+                .collect();
+            let dropped: Vec<i32> = sqlx::query_scalar(
+                "DELETE FROM devices WHERE user_id = $1 AND NOT (device_id = ANY($2))
+                 RETURNING device_id",
             )
+            .bind(user_id)
+            .bind(&kept)
+            .fetch_all(&mut *tx)
+            .await?;
+            (new_id as i32, Some((dropped, shared)))
         } else {
             // A link: the account's identity, and a token an existing device of
             // the account asked for, unused and unexpired.
@@ -501,7 +543,7 @@ pub async fn register_device(
                 "UPDATE chat_link_tokens t SET used_at = now()
               WHERE t.token_hash = $1 AND t.user_id = $2 AND t.used_at IS NULL
                 AND t.expires_at > now()
-                AND EXISTS (SELECT 1 FROM chat_devices d
+                AND EXISTS (SELECT 1 FROM devices d
                              WHERE d.user_id = t.user_id AND d.device_id = t.issued_by_device
                                AND d.expired_at IS NULL)
               RETURNING 1",
@@ -516,34 +558,39 @@ pub async fn register_device(
                         .with_details(json!({ "code": "linkToken" })),
                 );
             }
+            // The Chat cap (each Chat device costs every sender one more
+            // sealed copy) and the account's cap over every kind.
+            let live = rows.iter().filter(|(.., expired)| !expired);
+            let chat = live.clone().filter(|(_, _, _, chat, _)| *chat).count() as i64;
             let most = crate::site_settings::CHAT_MAX_ACTIVE_DEVICES
                 .load(&state.pool)
                 .await?;
-            if rows.len() as i64 >= most {
+            if chat >= most {
                 return Err(AppError::conflict("chat active-device limit reached"));
             }
-            let mut device_id: i32 = 1;
-            for (taken, _, _) in &rows {
-                if *taken == device_id {
-                    device_id += 1;
-                } else {
-                    break;
-                }
+            let most = crate::site_settings::DEVICES_PER_ACCOUNT
+                .load(&state.pool)
+                .await?;
+            if live.count() as i64 >= most {
+                return Err(crate::account_devices::device_limit());
             }
-            if device_id > MAX_DEVICE_ID {
-                return Err(AppError::conflict("chat device limit reached"));
-            }
+            // The lowest id no row holds (an expired row keeps its id until
+            // the next manifest drops it).
+            let device_id = (1..=MAX_DEVICE_ID)
+                .find(|id| !rows.iter().any(|(taken, ..)| taken == id))
+                .ok_or_else(crate::account_devices::device_limit)?;
             (device_id, None)
         };
 
     let (salt, hash) = identity::new_credential(&credential);
     sqlx::query(
-        r#"INSERT INTO chat_devices (
+        r#"INSERT INTO devices (
                user_id, device_id, suite, registration_id, identity_key,
                signed_pre_key_id, signed_pre_key, signed_pre_key_signature,
                last_resort_kyber_pre_key_id, last_resort_kyber_pre_key,
-               last_resort_kyber_pre_key_signature, name, credential_salt, credential_hash)
-           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)"#,
+               last_resort_kyber_pre_key_signature, name, credential_salt, credential_hash,
+               kind, session_id)
+           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,'chat',$15)"#,
     )
     .bind(user_id)
     .bind(device_id)
@@ -559,6 +606,7 @@ pub async fn register_device(
     .bind(&req.name)
     .bind(&salt[..])
     .bind(&hash[..])
+    .bind(root_session)
     .execute(&mut *tx)
     .await?;
     insert_ec_pool(&mut tx, user_id, device_id, &req.one_time_pre_keys).await?;
@@ -612,18 +660,24 @@ fn drive_keys_follow(
 pub(crate) enum IdentityChange {
     /// An ordinary publish: the identity is the account's.
     Same,
-    /// A re-registration or an identity distribution: the manifest sets it.
+    /// An identity distribution: the manifest sets it.
     New,
+    /// A re-registration: the manifest sets it, and lists the head's
+    /// non-Chat devices unchanged (a new Chat identity leaves them be).
+    Reregistration,
 }
 
-/// Stores the next V2 manifest of `user_id` as head and in history, in the
+/// Stores the next V3 manifest of `user_id` as head and in history, in the
 /// caller's transaction: it names this account and its authority and Drive
 /// keys, follows the head (sequence 1 with no head, else head + 1 linked by
 /// hash; the same manifest again is a no-op), keeps the account identity
-/// unless `identity` is [`IdentityChange::New`], whose identity it records.
-/// Whether the devices it lists are the account's is the caller's check.
+/// unless `identity` is [`IdentityChange::New`] or
+/// [`IdentityChange::Reregistration`], whose identity it records, and lists
+/// no more devices than the account may have. Whether the devices it lists
+/// are the account's is the caller's check
+/// (`account_devices::check_listed_rows`).
 /// Returns false when it was already the head.
-pub(crate) async fn store_manifest_v2(
+pub(crate) async fn store_manifest(
     tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
     state: &AppState,
     user_id: Uuid,
@@ -696,6 +750,23 @@ pub(crate) async fn store_manifest_v2(
             ));
         }
     }
+    if identity == IdentityChange::Reregistration {
+        let others = |manifest: &AccountManifestV3| -> Vec<AccountManifestDeviceV3> {
+            manifest
+                .devices
+                .iter()
+                .filter(|device| device.chat.is_none())
+                .cloned()
+                .collect()
+        };
+        if others(manifest) != head.as_ref().map(others).unwrap_or_default() {
+            return Err(AppError::conflict(
+                "a re-registration lists the account's other devices unchanged",
+            )
+            .with_details(json!({ "code": "devicesMismatch" })));
+        }
+    }
+    crate::account_devices::check_device_cap(&mut **tx, manifest).await?;
 
     match identity {
         IdentityChange::Same => {
@@ -709,7 +780,7 @@ pub(crate) async fn store_manifest_v2(
                 .with_details(json!({ "code": "identityMismatch" })));
             }
         }
-        IdentityChange::New => {
+        IdentityChange::New | IdentityChange::Reregistration => {
             sqlx::query(
                 "INSERT INTO chat_account_identities (user_id, identity_key, manifest_version)
                  VALUES ($1, $2, $3)
@@ -789,36 +860,20 @@ pub async fn publish_manifest(
 ) -> AppResult<Response> {
     let user_id = trusted_uuid(&auth.user_id)?;
     crate::handlers::chat_identity::authenticated_device(&state.pool, &headers, user_id).await?;
-    crate::handlers::chat_identity::validate_manifest_v2(&manifest)?;
+    crate::handlers::chat_identity::validate_manifest(&manifest)?;
     let mut tx = state.pool.begin().await?;
-    let stored =
-        store_manifest_v2(&mut tx, &state, user_id, &manifest, IdentityChange::Same).await?;
+    let stored = store_manifest(&mut tx, &state, user_id, &manifest, IdentityChange::Same).await?;
     // The account's lock is held now: the publishing device is still one of
     // its live devices with this credential.
     crate::handlers::chat_identity::credential_holds(&mut *tx, &headers, user_id).await?;
-
-    let registered: Vec<(i32, i16, i64)> = sqlx::query_as(
-        "SELECT device_id, suite, registration_id
-         FROM chat_devices WHERE user_id = $1 AND expired_at IS NULL
-         ORDER BY device_id FOR SHARE",
+    crate::account_devices::check_listed_rows(
+        &mut tx,
+        user_id,
+        &manifest,
+        None,
+        crate::account_devices::ChatKeys::Match,
     )
-    .bind(user_id)
-    .fetch_all(&mut *tx)
     .await?;
-    let every_listed_device_is_registered = manifest.devices.iter().all(|listed| {
-        registered
-            .iter()
-            .any(|(device_id, suite, registration_id)| {
-                listed.device_id == *device_id as u32
-                    && listed.direct_chat_suite.as_u16() == *suite as u16
-                    && listed.registration_id == *registration_id as u32
-            })
-    });
-    if !every_listed_device_is_registered {
-        return Err(AppError::conflict(
-            "manifest devices do not match registered chat devices",
-        ));
-    }
     // Registration precedes publication so a device learns its id; rows the
     // authority did not list (a crash in that gap, an expired device, an
     // injected row) are pruned here.
@@ -828,7 +883,7 @@ pub async fn publish_manifest(
         .map(|d| d.device_id as i32)
         .collect();
     let pruned: Vec<i32> = sqlx::query_scalar(
-        "DELETE FROM chat_devices WHERE user_id = $1 AND NOT (device_id = ANY($2))
+        "DELETE FROM devices WHERE user_id = $1 AND NOT (device_id = ANY($2))
          RETURNING device_id",
     )
     .bind(user_id)
@@ -1040,11 +1095,14 @@ pub async fn put_profile(
         if profile.source_device_id == kutup_chat_proto::ACCOUNT_PROFILE_SOURCE {
             Some(1)
         } else {
-            sqlx::query_scalar("SELECT 1 FROM chat_devices WHERE user_id = $1 AND device_id = $2")
-                .bind(user_id)
-                .bind(profile.source_device_id as i32)
-                .fetch_optional(&mut *tx)
-                .await?
+            sqlx::query_scalar(
+                "SELECT 1 FROM devices
+                  WHERE user_id = $1 AND device_id = $2 AND suite IS NOT NULL",
+            )
+            .bind(user_id)
+            .bind(profile.source_device_id as i32)
+            .fetch_optional(&mut *tx)
+            .await?
         };
     if device_exists.is_none() {
         return Err(AppError::not_found(
@@ -1395,7 +1453,7 @@ pub async fn list_devices(State(state): State<AppState>, auth: AuthUser) -> AppR
     let user_id = trusted_uuid(&auth.user_id)?;
     let rows: Vec<(i32, i16, String, OffsetDateTime, Option<OffsetDateTime>)> = sqlx::query_as(
         "SELECT device_id, suite, name, created_at, last_seen_at
-         FROM chat_devices WHERE user_id = $1 ORDER BY device_id",
+         FROM devices WHERE user_id = $1 AND suite IS NOT NULL ORDER BY device_id",
     )
     .bind(user_id)
     .fetch_all(&state.pool)
@@ -1403,7 +1461,7 @@ pub async fn list_devices(State(state): State<AppState>, auth: AuthUser) -> AppR
     let devices: Vec<serde_json::Value> = rows
         .into_iter()
         .map(|(id, suite, name, created, seen)| {
-            let suite = direct_chat_suite_from_db(suite, "chat_devices")?;
+            let suite = direct_chat_suite_from_db(suite, "devices")?;
             Ok(json!({
                 "deviceId": id,
                 "suite": suite,
@@ -1445,7 +1503,7 @@ pub async fn rename_device(
     crate::handlers::chat_identity::authenticated_device(&state.pool, &headers, user_id).await?;
     let name = normalized_device_name(&req.name)?;
     let updated = sqlx::query(
-        "UPDATE chat_devices SET name = $3
+        "UPDATE devices SET name = $3
          WHERE user_id = $1 AND device_id = $2",
     )
     .bind(user_id)
@@ -1507,12 +1565,14 @@ pub async fn revoke_device(
         .bind(user_id)
         .execute(&mut *tx)
         .await?;
-    let deleted = sqlx::query("DELETE FROM chat_devices WHERE user_id = $1 AND device_id = $2")
-        .bind(user_id)
-        .bind(device_id)
-        .execute(&mut *tx)
-        .await?
-        .rows_affected();
+    let deleted = sqlx::query(
+        "DELETE FROM devices WHERE user_id = $1 AND device_id = $2 AND suite IS NOT NULL",
+    )
+    .bind(user_id)
+    .bind(device_id)
+    .execute(&mut *tx)
+    .await?
+    .rows_affected();
     if deleted == 0 {
         return Err(AppError::not_found("no such chat device"));
     }
@@ -1542,7 +1602,7 @@ pub struct BundleQuery {
     pub(crate) server: Option<String>,
 }
 
-/// The caller acts as its device `device_id`: the `X-Kutup-Chat-Device`
+/// The caller acts as its device `device_id`: the `X-Kutup-Device`
 /// credential is that device's (`401` otherwise); marks it seen.
 async fn require_device(
     state: &AppState,
@@ -1619,7 +1679,7 @@ pub async fn replenish_keys(
 
     if let Some(spk) = &req.signed_pre_key {
         sqlx::query(
-            "UPDATE chat_devices SET signed_pre_key_id = $3, signed_pre_key = $4,
+            "UPDATE devices SET signed_pre_key_id = $3, signed_pre_key = $4,
                  signed_pre_key_signature = $5
              WHERE user_id = $1 AND device_id = $2",
         )
@@ -1633,7 +1693,7 @@ pub async fn replenish_keys(
     }
     if let Some(lrk) = &req.last_resort_kyber_pre_key {
         sqlx::query(
-            "UPDATE chat_devices SET last_resort_kyber_pre_key_id = $3,
+            "UPDATE devices SET last_resort_kyber_pre_key_id = $3,
                  last_resort_kyber_pre_key = $4, last_resort_kyber_pre_key_signature = $5
              WHERE user_id = $1 AND device_id = $2",
         )
@@ -1894,7 +1954,7 @@ pub(crate) async fn load_user_bundles(
         .await?;
     if let Some(device_id) = sync_device_id {
         let exists: Option<i32> = sqlx::query_scalar(
-            "UPDATE chat_devices SET last_seen_at = now()
+            "UPDATE devices SET last_seen_at = now()
              WHERE user_id = $1 AND device_id = $2 RETURNING 1",
         )
         .bind(target_id)
@@ -1922,9 +1982,8 @@ pub(crate) async fn load_user_bundles(
         .ok_or_else(|| AppError::not_found("user has no chat devices"))?
         .0;
     let listed: Vec<i32> = manifest
-        .devices
-        .iter()
-        .map(|d| d.device_id as i32)
+        .chat_devices()
+        .map(|(device_id, _)| device_id as i32)
         .collect();
     #[allow(clippy::type_complexity)]
     let mut devices: Vec<(i32, i16, i64, i64, String, String, i64, String, String)> =
@@ -1933,8 +1992,9 @@ pub(crate) async fn load_user_bundles(
                     signed_pre_key_id, signed_pre_key, signed_pre_key_signature,
                     last_resort_kyber_pre_key_id, last_resort_kyber_pre_key,
                     last_resort_kyber_pre_key_signature
-             FROM chat_devices
-             WHERE user_id = $1 AND expired_at IS NULL AND device_id = ANY($2)
+             FROM devices
+             WHERE user_id = $1 AND expired_at IS NULL AND suite IS NOT NULL
+               AND device_id = ANY($2)
              ORDER BY device_id",
         )
         .bind(target_id)
@@ -1944,10 +2004,12 @@ pub(crate) async fn load_user_bundles(
     // A row whose registration id or suite isn't the listed one (a
     // re-registered device before its manifest) has no bundle.
     devices.retain(|(device_id, suite, registration_id, ..)| {
-        manifest.device(*device_id as u32).is_some_and(|listed| {
-            i64::from(listed.registration_id) == *registration_id
-                && i32::from(listed.direct_chat_suite.as_u16()) == i32::from(*suite)
-        })
+        manifest
+            .chat_device(*device_id as u32)
+            .is_some_and(|listed| {
+                i64::from(listed.registration_id) == *registration_id
+                    && i32::from(listed.direct_chat_suite.as_u16()) == i32::from(*suite)
+            })
     });
     if devices.is_empty() {
         return Err(AppError::not_found("user has no chat devices"));
@@ -1998,7 +2060,7 @@ pub(crate) async fn load_user_bundles(
         bundles.push(DevicePreKeyBundleV2 {
             device_id: device_id as u32,
             registration_id: registration_id as u32,
-            suite: direct_chat_suite_from_db(suite, "chat_devices")?,
+            suite: direct_chat_suite_from_db(suite, "devices")?,
             signed_pre_key: EcPreKey {
                 key_id: spk_id as u32,
                 public_key: spk,
@@ -2703,7 +2765,7 @@ async fn deliver_messages(
 
     // The sender must address from one of their own registered chat devices.
     let device: Option<i32> = sqlx::query_scalar(
-        "UPDATE chat_devices SET last_seen_at = now()
+        "UPDATE devices SET last_seen_at = now()
          WHERE user_id = $1 AND device_id = $2 RETURNING 1",
     )
     .bind(sender_id)
@@ -2745,8 +2807,8 @@ async fn deliver_messages(
     // A peer addresses the devices the account's manifest lists; the
     // account's own sync reaches every live device it has.
     let mut current: Vec<(i32, i64)> = sqlx::query_as(if excluded_device.is_some() {
-        "SELECT device_id, registration_id FROM chat_devices
-          WHERE user_id = $1 AND expired_at IS NULL"
+        "SELECT device_id, registration_id FROM devices
+          WHERE user_id = $1 AND expired_at IS NULL AND suite IS NOT NULL"
     } else {
         crate::handlers::chat_identity::LISTED_DEVICES
     })
@@ -3238,7 +3300,7 @@ async fn handle_connection(state: AppState, socket: WebSocket, user_id: Uuid, de
     let (conn, mut rx) = state.chat_hub.join(user_id, device_id);
 
     let _ = sqlx::query(
-        "UPDATE chat_devices SET last_seen_at = now() WHERE user_id = $1 AND device_id = $2",
+        "UPDATE devices SET last_seen_at = now() WHERE user_id = $1 AND device_id = $2",
     )
     .bind(user_id)
     .bind(device_id)

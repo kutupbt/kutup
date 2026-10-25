@@ -33,7 +33,7 @@ use crate::{
 const TRANSPORT_TYPES: &str = r#"
 export interface KutupChatTransport {
   registerDevice(request: unknown): Promise<unknown>;
-  /** This device's id and credential, for the `X-Kutup-Chat-Device` header on every device-bound call from now on. */
+  /** This device's id and credential, for the `X-Kutup-Device` header on every device-bound call from now on. */
   setDeviceAuth(deviceId: number, credential: string): void;
   createLinkToken(): Promise<unknown>;
   /** `false` is the server's 404: the new device's socket is gone. */
@@ -44,6 +44,7 @@ export interface KutupChatTransport {
   >;
   fetchBundles(account: string): Promise<unknown>;
   fetchSyncBundles(account: string, currentDeviceId: number): Promise<unknown>;
+  fetchDeviceSession(): Promise<string>;
   fetchManifest(account: string): Promise<unknown | null>;
   fetchManifestHistory(account: string, fromSequence: string, toSequence: string, pageFromSequence: string): Promise<unknown>;
   fetchSealedSenderPolicy(domain: string): Promise<unknown>;
@@ -189,6 +190,11 @@ extern "C" {
         this: &JsChatTransport,
         account: &str,
         current_device_id: u32,
+    ) -> std::result::Result<JsValue, JsValue>;
+
+    #[wasm_bindgen(method, catch, js_name = fetchDeviceSession)]
+    async fn js_fetch_device_session(
+        this: &JsChatTransport,
     ) -> std::result::Result<JsValue, JsValue>;
 
     #[wasm_bindgen(method, catch, js_name = fetchManifest)]
@@ -659,6 +665,15 @@ impl ChatTransport for BrowserTransport {
         from_transport(
             self.js
                 .js_fetch_sync_bundles(account, current_device_id)
+                .await
+                .map_err(transport_error)?,
+        )
+    }
+
+    async fn fetch_device_session(&self) -> Result<String> {
+        from_transport(
+            self.js
+                .js_fetch_device_session()
                 .await
                 .map_err(transport_error)?,
         )

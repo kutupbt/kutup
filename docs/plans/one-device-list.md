@@ -262,8 +262,15 @@ What the note leaves open, as built:
    - The Chat columns become nullable, with a CHECK by kind.
    - The account column keeps the schema's `user_id` name.
    - Every query that reads Chat columns or lists an account's Chat devices
-     filters on `kind = 'chat'`.
+     takes the rows with Chat keys (`suite IS NOT NULL`), since a CLI may
+     take Chat too.
+   - Publishing a manifest still prunes the rows it doesn't list at once.
+     Slice 2, where editors register and then list themselves, gives an
+     unlisted row a grace window first, so a concurrent publication by
+     another device doesn't drop it.
    - The device header becomes `X-Kutup-Device`.
+   - Registration picks the lowest id no row holds, expired rows included
+     (an expired row keeps its id until the next manifest drops it).
 6. **Caps.**
    - `devicesPerAccount` is a new `NumericSetting` (default 32, range
      1..=127) over all entries.

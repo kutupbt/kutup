@@ -1513,12 +1513,12 @@ mod tests {
                         private,
                     )
                 },
-                vec![kutup_chat_proto::AccountManifestDeviceV3 {
-                    device_id: 1,
-                    direct_chat_suite: kutup_chat_proto::DirectChatSuiteId::PqxdhTripleRatchetV1,
-                    registration_id: 7,
-                    mls: None,
-                }],
+                vec![kutup_chat_proto::AccountManifestDeviceV3::chat(
+                    1,
+                    kutup_chat_proto::DirectChatSuiteId::PqxdhTripleRatchetV1,
+                    7,
+                    "51".repeat(32),
+                )],
                 "2026-07-29T00:00:00Z",
             )
             .unwrap()

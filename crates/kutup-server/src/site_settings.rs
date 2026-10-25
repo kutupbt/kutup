@@ -618,6 +618,19 @@ pub const CHAT_DISTRIBUTION_MESSAGE_BYTES: NumericSetting = NumericSetting {
     min: 1024,
     max: 1024 * 1024,
 };
+/// Every device of one account, of every kind (docs/plans/one-device-list.md):
+/// the entries its manifest may list. The format's own cap is 127; one
+/// browser holds several (Chat, Office, Drive), so the default leaves room
+/// for a few browsers and the CLI.
+pub const DEVICES_PER_ACCOUNT: NumericSetting = NumericSetting {
+    key: "devices_per_account",
+    field: "devicesPerAccount",
+    default: 32,
+    min: 1,
+    max: kutup_chat_proto::MAX_ACCOUNT_MANIFEST_DEVICES as i64,
+};
+pub const DEVICE_SETTINGS: [NumericSetting; 1] = [DEVICES_PER_ACCOUNT];
+
 pub const CHAT_IDENTITY_SETTINGS: [NumericSetting; 7] = [
     CHAT_LINK_TOKEN_SECONDS,
     CHAT_LINK_TOKENS_PER_ACCOUNT,
@@ -634,6 +647,7 @@ pub fn numeric_settings() -> impl Iterator<Item = &'static NumericSetting> {
         .iter()
         .chain(CALENDAR_SETTINGS.iter())
         .chain(CHAT_IDENTITY_SETTINGS.iter())
+        .chain(DEVICE_SETTINGS.iter())
 }
 
 /// The multi-recipient limits now.

@@ -40,7 +40,7 @@ Specific codes, where an app does something particular (a test in
 
 | Code | Status | Meaning |
 |---|---|---|
-| `deviceCredential` | 401 | A Chat call made as a device without that device's `X-Kutup-Chat-Device` credential, with a wrong one, or for a removed or expired device (one answer for all) |
+| `deviceCredential` | 401 | A Chat call made as a device without that device's `X-Kutup-Device` credential, with a wrong one, or for a removed or expired device (one answer for all) |
 | `noManifest` | 404 | `GET /api/chat/accounts/{accountId}/manifest` (and its federation route): the account has no Chat manifest, since no Chat device ever registered. Clients take only this 404 for "re-register as the account's first device"; any other 404 is an error |
 | `badSignature` | 400 | A Chat prekey (signed EC, last-resort or one-time Kyber), or a manifest's `identityBinding`, not signed by the account's identity key |
 | `keysDiffer` | 409 | `POST /api/chat/keys/check`: the server holds other keys for this device; it uploads them again |
@@ -48,6 +48,8 @@ Specific codes, where an app does something particular (a test in
 | `manifestConflict` | 409 | A re-registration (`POST /api/chat/device` with `registration.type = reregistration`) or an identity distribution lost a race with another manifest change for the account: read the manifest again and retry (a replay of the current head answers 200) |
 | `linkToken` | 403 | `POST /api/chat/device` linking: the link token is used, expired, unknown or another account's |
 | `noAccountIdentity` | 409 | `POST /api/chat/device` linking: the account has no Chat identity yet; its first device re-registers |
+| `deviceLimit` | 409 | A device registration, or a manifest listing more devices than the account may have: the site setting `devicesPerAccount` (default 32) over every kind of device |
+| `devicesMismatch` | 409 | A manifest whose entries the server can't back: a listed device that isn't a live row of the account with the entry's kind, sign-in (`session`), frame key and Chat keys; or a re-registration that changes the account's non-Chat entries |
 | `identityMismatch` | 409 | A Chat registration or manifest naming another identity than the account's (it changes only by a distribution or a re-registration) |
 | `invalidCredentials` | 401 | A sign-in that does not finish: a wrong password, a name that is no account, a used or expired login id, a password changed since the sign-in started (not an expired session). At `login/2fa`: a wrong code, the token still good |
 | `preAuthInvalid` | 401 | `login/2fa`: the second step's token is expired, not one, or from a password the account no longer has: back to the password step |
@@ -3525,11 +3527,30 @@ fully described by the OpenAPI document.
 A Chat account has one libsignal identity key, as Signal's ACI: every device
 of the account holds it, and each device has its own registration id and
 prekeys, signed by that identity. The account authority's signed manifest
-(`AccountManifestV2`) names the identity and the devices.
+(`AccountManifestV3`) names the identity and every device of the account
+(docs/plans/one-device-list.md).
+
+**The manifest's devices.** Each entry is `{ deviceId, kind, chat?,
+frameKey?, session }`: `kind` is `chat` (a Chat app), `editor` (an editing
+app: Drive, Office, Maps, Pass) or `cli`; `chat: { directChatSuite,
+registrationId }` on a device that takes Chat (required on `chat`, optional
+on `cli`, never on `editor`); `frameKey`, its Ed25519 collab-frame key
+(required on `editor` and `cli`); and `session`, the hash of its sign-in
+(`GET /api/device-session`). Messages go to the Chat devices only. A manifest
+lists at most `devicesPerAccount` devices (`409 deviceLimit`; the format's cap
+is 127).
+
+### GET /api/device-session
+
+`{ "session": "<64 hex>" }`: what a device of the caller's sign-in lists as
+its manifest entry's `session`. It is SHA-256 over
+`kutup/account/device-session/v1\0` and the root sign-in's id: an app
+session's parent, or the session itself. A device asks before it signs its
+own entry.
 
 **Device credentials.** A device draws 32 random bytes at registration (its
 `credential`, unpadded base64url); the server keeps a salted hash. Every call
-a device makes as itself carries `X-Kutup-Chat-Device: <deviceId>.<credential>`
+a device makes as itself carries `X-Kutup-Device: <deviceId>.<credential>`
 beside the JWT: keys, `keys/check`, the manifest, link tokens and relays, the
 identity distribution, sends and syncs, the mailbox, socket tickets, the
 sender certificate, push subscriptions, profile writes as a device, backup
@@ -3550,23 +3571,29 @@ keys too: `400 badSignature`), optional `oneTimePreKeys[]` /
   (below). The identity is the account's (`409 identityMismatch`; `409
   noAccountIdentity` when it has none); the token is unused, unexpired and the
   account's (`403 linkToken`), consumed with the insert. The server assigns the
-  lowest free device id within `chatMaxActiveDevices` (`409`). A device of the
-  account then publishes the manifest that lists it.
+  lowest device id no row of the account holds, within `chatMaxActiveDevices`
+  Chat devices (`409`) and `devicesPerAccount` devices of every kind (`409
+  deviceLimit`). A device of the account then publishes the manifest that
+  lists it.
 - `{"type": "reregistration", "manifest"}`: a new identity (Signal's
   `reclaimAccount`): the account's first Chat device, or one restoring after
-  every device is lost. The manifest is the account's next (`verifySuccessor`:
-  sequence 1 with no manifest, else head + 1 linked by hash) and lists this
-  device alone as device 1. In one transaction the server drops every other
-  device of the account (prekeys, mailboxes, tickets and push subscriptions
-  with them), inserts this one as 1, records the identity and publishes the
-  manifest. The gate is the account authority, so the master key.
+  every Chat device is lost. The manifest is the account's next
+  (`verifySuccessor`: sequence 1 with no manifest, else head + 1 linked by
+  hash) and lists this device as its one Chat device, under this sign-in's
+  `session`, with the head's other (non-Chat) entries unchanged (`409
+  devicesMismatch`); the device takes the lowest id those leave free (1 when
+  there are none). In one transaction the server drops every other Chat
+  device of the account and every row the manifest doesn't list (prekeys,
+  mailboxes, tickets and push subscriptions with them), inserts this one,
+  records the identity and publishes the manifest. The gate is the account
+  authority, so the master key.
 
 A retry with the same credential answers the device it made. `200 OK` →
 `{ "deviceId": 1 }`.
 
 ### GET /api/chat/device
 
-The caller's chat devices: `{ "devices": [{ "deviceId", "suite", "name", "createdAt", "lastSeenAt" }] }`.
+The caller's Chat devices (the account's devices that take Chat): `{ "devices": [{ "deviceId", "suite", "name", "createdAt", "lastSeenAt" }] }`.
 
 ### PATCH /api/chat/device/{deviceId}
 
@@ -3726,7 +3753,7 @@ Remaining one-time pool sizes: `{ "oneTimePreKeys": n, "oneTimeKyberPreKeys": n 
 
 ### POST /api/chat/manifest
 
-Publish the account's next `AccountManifestV2`, signed by the account
+Publish the account's next `AccountManifestV3`, signed by the account
 self-authority (device-authenticated). It follows the head
 (`verifySuccessor`: head + 1, linked by hash, the same account, incarnation
 and authority), names the account's identity (`409 identityMismatch`: the
@@ -3734,12 +3761,13 @@ identity changes only by a distribution or a re-registration), carries
 that identity's `identityBinding` (its signature over the authority key id,
 incarnation, account and identity key; `400 badSignature` otherwise, here and
 wherever a manifest is uploaded), and every listed device is a live
-registered row with its listed registration id and
-suite. Rows it doesn't list (a crash between registration and publication, an
+registered row of the account with its listed kind, sign-in, frame key, and
+registration id and suite (`409 devicesMismatch`), at most
+`devicesPerAccount` of them (`409 deviceLimit`). Rows it doesn't list (a crash between registration and publication, an
 expired device, an injected row) are pruned atomically. The Drive HPKE and
 share-signing keys are account-scoped fields in the same manifest. Publication
 atomically updates the current head and immutable history; exact replay is
-idempotent. `AccountManifestPublicationV2`.
+idempotent. `AccountManifestPublicationV3`.
 
 ### Device expiry
 
@@ -3812,7 +3840,7 @@ indistinguishable from a missing profile and returns `404`.
 Return `AccountPreKeyBundlesResponse`: the account's `identityKey` once,
 PQXDH prekey bundles for **every** device its manifest lists that hasn't
 expired (a logical message encrypts to all of them), and the exact complete
-account-signed `AccountManifestV2`. Each bundle carries its `deviceId`,
+account-signed `AccountManifestV3`, for its Chat devices. Each bundle carries its `deviceId`,
 `registrationId`, `suite`, `signedPreKey`, `kyberPreKey` (a consumed one-time
 ML-KEM-1024 prekey, or the reusable last-resort key when the pool is empty),
 and optionally a consumed one-time EC prekey. The client checks the bundles

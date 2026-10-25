@@ -848,6 +848,8 @@
         "chatLinkTokensPerAccountHint": "How many link tokens one account may hold unused at once.",
         "chatProvisionBodyBytes": "Largest linking message (bytes)",
         "chatProvisionBodyBytesHint": "The largest provisioning message relayed to a device being linked, up to 64 KiB.",
+        "devicesPerAccount": "Devices per account",
+        "devicesPerAccountHint": "How many app installations one account may have in all (Chat, Office, Drive, the CLI), 1 to 127.",
         "chatMaxActiveDevices": "Chat devices per account",
         "chatMaxActiveDevicesHint": "How many Chat installations one account may have, 1 to 10.",
         "chatProvisioningTicketSeconds": "Linking socket ticket (seconds)",

@@ -1436,7 +1436,7 @@ pub async fn enqueue_send(
         .execute(&mut *tx)
         .await?;
     let device: Option<i32> = sqlx::query_scalar(
-        "UPDATE chat_devices SET last_seen_at = now()
+        "UPDATE devices SET last_seen_at = now()
              WHERE user_id = $1 AND device_id = $2 RETURNING 1",
     )
     .bind(sender_user_id)
@@ -3326,12 +3326,14 @@ mod sealed_live_tests {
         .await
         .unwrap();
         sqlx::query(
-            "INSERT INTO chat_devices (user_id, device_id, suite, registration_id, identity_key,
+            "INSERT INTO devices (user_id, device_id, suite, registration_id, identity_key,
                  signed_pre_key_id, signed_pre_key, signed_pre_key_signature,
                  last_resort_kyber_pre_key_id, last_resort_kyber_pre_key,
-                 last_resort_kyber_pre_key_signature, credential_salt, credential_hash)
+                 last_resort_kyber_pre_key_signature, credential_salt, credential_hash,
+                 kind, session_id)
              VALUES ($1, 1, 1, 77, 'k', 1, 'k', 's', 1, 'k', 's',
-                     decode(repeat('00', 16), 'hex'), decode(repeat('00', 32), 'hex'))",
+                     decode(repeat('00', 16), 'hex'), decode(repeat('00', 32), 'hex'),
+                     'chat', gen_random_uuid())",
         )
         .bind(id)
         .execute(pool)
@@ -3342,7 +3344,7 @@ mod sealed_live_tests {
             "INSERT INTO chat_device_manifests
                  (user_id, version, manifest_hash, authority_key_id, manifest)
              VALUES ($1, 1, repeat('a', 64), repeat('b', 64),
-                     '{\"devices\": [{\"deviceId\": 1, \"directChatSuite\": 1, \"registrationId\": 77}]}')",
+                     '{\"devices\": [{\"deviceId\": 1, \"kind\": \"chat\", \"chat\": {\"directChatSuite\": 1, \"registrationId\": 77}}]}')",
         )
         .bind(id)
         .execute(pool)

@@ -14,9 +14,11 @@ anonymity relays, and traffic-shape protection are separate milestones.
 - The recoverable account master key derives purpose-separated account
   authority, Drive X25519, and Drive share-signing Ed25519 keys. Private keys
   never leave the client.
-- `AccountManifestV2` binds the canonical account, incarnation, account-scoped
+- `AccountManifestV3` binds the canonical account, incarnation, account-scoped
   Drive keys, the account's one libsignal identity key, and every active
-  device. At most ten devices are active. Each manifest is account-authority
+  device of every kind (Chat, editing apps, the CLI), each with its keys and
+  the hash of its sign-in. At most ten Chat devices are active, and at most
+  `devicesPerAccount` devices in all. Each manifest is account-authority
   signed and hash-links its predecessor. Its `identityBinding` is the identity
   key's own signature over the authority key id, incarnation, account and
   identity key, so an authority can list only an identity that named it.

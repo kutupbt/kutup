@@ -232,6 +232,8 @@ export interface AdminSettings {
   calendarPushSubscriptionsPerAccount: number
   calendarWindowDays: number
   calendarEventsPage: number
+  /** Every device of an account, of every app (site_settings::DEVICES_PER_ACCOUNT). */
+  devicesPerAccount: number
   /** Linking Chat devices (site_settings::CHAT_IDENTITY_SETTINGS). */
   chatLinkTokenSeconds: number
   chatLinkTokensPerAccount: number

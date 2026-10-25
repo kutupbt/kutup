@@ -50,6 +50,9 @@ use crate::transport::{ChatTransport, GroupGatewayAnswer, GroupRelayOutcome, Sen
 use crate::{AccountAuthority, ChatContent, SqliteChatDb};
 
 pub(crate) const SERVER: &str = "example.test";
+/// The `session` hash the test server gives every device.
+pub(crate) const DEVICE_SESSION: &str =
+    "5151515151515151515151515151515151515151515151515151515151515151";
 use base64::engine::general_purpose::URL_SAFE_NO_PAD as STANDARD_NO_PAD_URL;
 pub(crate) const ISSUED_AT: &str = "2026-10-18T00:00:00Z";
 
@@ -1347,6 +1350,10 @@ impl ChatTransport for Client {
         current_device_id: u32,
     ) -> Result<AccountPreKeyBundlesResponse> {
         self.world.bundles(account, Some(current_device_id))
+    }
+
+    async fn fetch_device_session(&self) -> Result<String> {
+        Ok(DEVICE_SESSION.into())
     }
 
     async fn fetch_manifest(&self, account: &str) -> Result<Option<AccountManifestV3>> {

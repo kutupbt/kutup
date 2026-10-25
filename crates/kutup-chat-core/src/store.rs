@@ -299,13 +299,18 @@ impl ChatStore {
             .insert(send_id.to_string());
     }
 
-    pub(crate) fn local_manifest_device(&self, device_id: u32) -> AccountManifestDeviceV3 {
-        AccountManifestDeviceV3 {
+    /// This device's manifest entry, under its sign-in's `session` hash.
+    pub(crate) fn local_manifest_device(
+        &self,
+        device_id: u32,
+        session: String,
+    ) -> AccountManifestDeviceV3 {
+        AccountManifestDeviceV3::chat(
             device_id,
-            direct_chat_suite: kutup_chat_proto::DirectChatSuiteId::PqxdhTripleRatchetV1,
-            registration_id: self.identity_store.registration_id,
-            mls: None,
-        }
+            kutup_chat_proto::DirectChatSuiteId::PqxdhTripleRatchetV1,
+            self.identity_store.registration_id,
+            session,
+        )
     }
 
     /// The account's identity key, as the manifest lists it (canonical
