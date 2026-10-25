@@ -479,7 +479,7 @@ for the calendar list record, and nothing else for (a).
 
 ## W5. One device list per account
 
-Design note: [`one-device-list.md`](one-device-list.md) (2026-10-25).
+Design note: [`one-device-list.md`](one-device-list.md) (approved 2026-10-25).
 
 ### Today
 

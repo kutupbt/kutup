@@ -1,8 +1,8 @@
 # One device list per account (wipe W5)
 
-Status: **design note for approval** (third session, 2026-10-25). Lands on the
-wipe-2 integration branch (it changes the account manifest and the device
-tables). Nothing here is built yet. Item W5 of
+Status: **approved** (third session, 2026-10-25; decisions in section 7). Lands
+on the wipe-2 integration branch (it changes the account manifest and the
+device tables). Nothing here is built yet. Item W5 of
 [`wipe-unification.md`](wipe-unification.md); its open question 3 is settled
 by events: #320 has merged, so this is the separate PR before the wipe.
 
@@ -209,13 +209,14 @@ collab live tests and the two-server gate before it merges into `wipe-2`.
 - Browser: one Devices page lists Chat and Office instances under one sign-in;
   removing it signs the account's devices out everywhere.
 
-## 7. Questions for the user
+## 7. Decisions
 
-1. **One entry per app instance**, grouped by sign-in in Settings (3.1), as
-   proposed? The alternative, one entry per browser, needs a key store shared
-   across app origins.
-2. **Recipients verify collab senders** (3.4, slice 3): in W5, or later? It is
-   the security gain W5 makes possible; without it the manifest only tidies
-   the server side.
-3. **Device cap** default 32 per account (several app instances per browser),
-   a site setting?
+The user approved the note on 2026-10-25 with these answers:
+
+1. **One entry per app instance**, grouped by sign-in in Settings (3.1). A
+   browser with Chat and Office open has two entries under one sign-in; no key
+   store is shared across app origins.
+2. **Recipients verify collab senders in W5** (3.4, slice 3), not later: the
+   home and every recipient check a frame's sender against the manifest.
+3. **Device cap 32 per account by default**, a site setting an admin can
+   change site-wide and per user.
