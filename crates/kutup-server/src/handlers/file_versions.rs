@@ -398,8 +398,6 @@ async fn delete_original(state: &AppState, user_id: Uuid, fid: Uuid) -> AppResul
 /// The longest version name, in characters.
 const MAX_LABEL_CHARS: usize = 200;
 
-/// Where a version's object lives: its own key, never an S3 object version.
-
 /// `POST /api/files/{fileId}/versions` — store a version (multipart).
 #[utoipa::path(
     post,
