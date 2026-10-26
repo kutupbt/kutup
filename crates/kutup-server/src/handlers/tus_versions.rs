@@ -489,11 +489,12 @@ async fn record(
     .bind(doc_key_id)
     .execute(&mut **tx)
     .await?;
-    sqlx::query("UPDATE users SET storage_used_bytes = storage_used_bytes + $1 WHERE id = $2")
-        .bind(landing.total_bytes)
-        .bind(landing.user_id)
-        .execute(&mut **tx)
-        .await?;
+    crate::storage_pool::charge(
+        &mut **tx,
+        crate::storage_pool::Payer::Account(landing.user_id),
+        landing.total_bytes,
+    )
+    .await?;
     sqlx::query(
         "UPDATE files SET metadata_envelope = $2, metadata_revision = $3, content_hash = $4,
                           updated_at = NOW()

@@ -1952,12 +1952,11 @@ pub async fn upload_file(
             .execute(&mut *tx)
             .await
             .map_err(crate::drive_names::map_unique_violation)?;
-            sqlx::query(
-                "UPDATE users SET storage_used_bytes = storage_used_bytes + $1 WHERE id = $2",
+            crate::storage_pool::charge(
+                &mut *tx,
+                crate::storage_pool::Payer::Account(share.sharer_user_id),
+                parsed.size,
             )
-            .bind(parsed.size)
-            .bind(share.sharer_user_id)
-            .execute(&mut *tx)
             .await?;
             record_mutation(
                 &mut tx,

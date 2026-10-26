@@ -350,12 +350,13 @@ pub async fn upload(
         });
     }
 
-    if sqlx::query("UPDATE users SET storage_used_bytes = storage_used_bytes + $1 WHERE id = $2")
-        .bind(file_size)
-        .bind(user_id)
-        .execute(&mut *tx)
-        .await
-        .is_err()
+    if crate::storage_pool::charge(
+        &mut *tx,
+        crate::storage_pool::Payer::Account(user_id),
+        file_size,
+    )
+    .await
+    .is_err()
     {
         let _ = state.storage.delete(&storage_path).await;
         return Err(AppError::internal("update quota"));
