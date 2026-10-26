@@ -1,22 +1,14 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { useTranslation } from 'react-i18next'
 import api from '@kutup/session/client'
-import type { AccountLimits as Limits, AccountRateLimitLimit, AccountSettingLimit, SettingSection, ValueSource } from '@kutup/session/api-types'
+import type { AccountLimits as Limits, AccountRateLimitLimit, AccountSettingLimit, ValueSource } from '@kutup/session/api-types'
 import { Alert } from '@kutup/ui/components/alert'
 import { Card, CardContent } from '@kutup/ui/components/card'
 import { LoadingPanel } from '@kutup/ui/components/states'
 import { apiErrorMessage } from '@kutup/ui/lib/apiError'
 import { adminKey } from './api'
-import { countsText, RateLimitRow } from './RateLimitsPage'
-
-/** Where each section's settings are named in Server settings. */
-export const SETTING_LABELS: Record<SettingSection, string> = {
-  chatMulti: 'admin.settings.multi',
-  calendar: 'admin.settings.calendarLimits',
-  chatLinking: 'admin.settings.chatLinkingLimits',
-  twoFactor: 'admin.settings.twoFactorLimits',
-  drive: 'admin.settings.driveLimits',
-}
+import { countsText, SETTING_LABELS } from './limitLabels'
+import { RateLimitRow } from './RateLimitsPage'
 
 /**
  * One account's own values of the settings and rate limits that limit one

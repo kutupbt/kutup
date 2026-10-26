@@ -12,7 +12,7 @@ import { LoadingPanel } from '@kutup/ui/components/states'
 import { apiErrorMessage } from '@kutup/ui/lib/apiError'
 import { formatBytes } from '@kutup/ui/lib/format'
 import { adminKey } from './api'
-import { windowUnit } from './helpers'
+import { countsText } from './limitLabels'
 
 export interface RateLimit {
   key: string
@@ -78,22 +78,6 @@ export function RateLimitsPage() {
       </div>
     </PageBody>
   )
-}
-
-type TFunction = ReturnType<typeof useTranslation>['t']
-
-/** What a limit counts, per what and over which window, in words. */
-export function countsText(limit: Pick<RateLimit, 'unit' | 'windowSeconds' | 'per'>, t: TFunction): string {
-  const per = t(`admin.rateLimits.per.${limit.per}`)
-  if ((limit.unit === 'events' || limit.unit === 'bytes') && limit.windowSeconds) {
-    const unit = windowUnit(limit.windowSeconds)
-    const window = t(`admin.rateLimits.window.${unit.unit}`, { count: unit.count })
-    return t(limit.unit === 'bytes' ? 'admin.rateLimits.countsBytes' : 'admin.rateLimits.countsEvents', { per, window })
-  }
-  if (limit.unit === 'attempts') return t('admin.rateLimits.countsAttempts', { per })
-  if (limit.unit === 'atOnce') return t('admin.rateLimits.countsAtOnce', { per })
-  if (limit.unit === 'bytesAtOnce') return t('admin.rateLimits.countsBytesAtOnce', { per })
-  return t('admin.rateLimits.countsMinutes')
 }
 
 function SiteRateLimitRow({ limit }: { limit: RateLimit }) {

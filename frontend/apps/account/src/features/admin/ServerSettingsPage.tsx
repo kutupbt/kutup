@@ -14,7 +14,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { LoadingPanel } from '@kutup/ui/components/states'
 import { apiErrorMessage } from '@kutup/ui/lib/apiError'
 import type { AdminSettings, RegistrationMode, RegistrySetting, SettingSection } from '@kutup/session/api-types'
-import { SETTING_LABELS } from './AccountLimits'
+import { SETTING_LABELS } from './limitLabels'
 import { useAdminSettings, useSettingsRegistry, useUpdateAdminSettings } from './api'
 import { Choice } from './federation/Choice'
 import { bytesToGib, gibToBytes } from './helpers'

@@ -39,17 +39,17 @@ const registry = [
 
 describe('Administration → Server settings', () => {
   it("takes each whole-number field and its range from the server's registry", async () => {
-    get.mockImplementation(async (path: string) => ({
-      data: path === '/admin/settings/registry' ? { settings: registry } : settings,
-    }))
+    get.mockImplementation((path: string) =>
+      Promise.resolve({ data: path === '/admin/settings/registry' ? { settings: registry } : settings }),
+    )
     render(
       <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
         <ServerSettingsPage />
       </QueryClientProvider>,
     )
-    const field = (await screen.findByLabelText(/Blocks kept per stream/)) as HTMLInputElement
-    expect(field.min).toBe('2')
-    expect(field.max).toBe('9')
-    expect(field.value).toBe('3')
+    const field = await screen.findByLabelText(/Blocks kept per stream/)
+    expect(field.getAttribute('min')).toBe('2')
+    expect(field.getAttribute('max')).toBe('9')
+    expect((field as HTMLInputElement).value).toBe('3')
   })
 })
