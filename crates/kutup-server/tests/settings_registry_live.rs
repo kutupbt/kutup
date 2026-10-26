@@ -191,3 +191,99 @@ fn an_accounts_own_upload_limit_holds_it_alone() {
     );
     purge_accounts(&c, &base, &[&small, &other]);
 }
+
+/// Lowering an account's limit below what it already has only stops growth:
+/// its browsers' push subscriptions stay, a refresh removes none, and a new
+/// browser takes the place of one, never more. Needs Web Push on (skipped
+/// where subscribing is 404) and `KUTUP_LIVE_DATABASE_URL` to count them.
+#[test]
+fn a_lowered_limit_removes_nothing() {
+    let (Ok(base), Ok(admin), Ok(database_url)) = (
+        std::env::var("KUTUP_LIVE_SERVER"),
+        std::env::var("KUTUP_LIVE_ADMIN"),
+        std::env::var("KUTUP_LIVE_DATABASE_URL"),
+    ) else {
+        eprintln!(
+            "KUTUP_LIVE_SERVER / KUTUP_LIVE_ADMIN / KUTUP_LIVE_DATABASE_URL not set; skipping"
+        );
+        return;
+    };
+    let base = base.trim_end_matches('/').to_owned();
+    let c = client();
+    let (name, password) = admin.split_once(':').expect("username:password");
+    let admin = Admin {
+        token: admin_token(&c, &base, password, name),
+        c: client(),
+        base: base.clone(),
+    };
+    let user = register(&c, &base);
+    let id = me(&c, &base, &user.token)["id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let p256dh = {
+        use p256::elliptic_curve::sec1::ToEncodedPoint;
+        let browser = p256::SecretKey::random(&mut kutup_crypto::primitives::Rng);
+        base64::Engine::encode(
+            &base64::engine::general_purpose::URL_SAFE_NO_PAD,
+            browser.public_key().to_encoded_point(false).as_bytes(),
+        )
+    };
+    let subscribe = |token: &str| {
+        bearer(
+            c.put(format!("{base}/api/calendar/push-subscription")),
+            token,
+        )
+        .json(&json!({
+            "endpoint": format!("https://fcm.googleapis.com/fcm/send/{}", uuid()),
+            "p256dh": p256dh,
+            "auth": "AAAAAAAAAAAAAAAAAAAAAA",
+        }))
+        .send()
+        .unwrap()
+        .status()
+    };
+    let session = || {
+        sign_in(&c, &base, &user.username, &user.password)["accessToken"]
+            .as_str()
+            .unwrap()
+            .to_owned()
+    };
+    if subscribe(&user.token) == StatusCode::NOT_FOUND {
+        eprintln!("Web Push is off on this server; skipping");
+        purge_accounts(&c, &base, &[&user]);
+        return;
+    }
+    let second = session();
+    let third = session();
+    assert_eq!(subscribe(&second), StatusCode::NO_CONTENT);
+    assert_eq!(subscribe(&third), StatusCode::NO_CONTENT);
+    let runtime = tokio::runtime::Runtime::new().unwrap();
+    let pool = runtime
+        .block_on(sqlx::PgPool::connect(&database_url))
+        .unwrap();
+    let held = || -> i64 {
+        runtime
+            .block_on(
+                sqlx::query_scalar(
+                    "SELECT count(*) FROM calendar_push_subscriptions WHERE user_id = $1::uuid",
+                )
+                .bind(&id)
+                .fetch_one(&pool),
+            )
+            .unwrap()
+    };
+    assert_eq!(held(), 3);
+
+    // Lowered to one: all three stay.
+    let (status, _) = admin.put(&id, "calendar_push_subscriptions_per_account", json!(1));
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(held(), 3);
+    // A browser renewing its subscription removes none.
+    assert_eq!(subscribe(&second), StatusCode::NO_CONTENT);
+    assert_eq!(held(), 3);
+    // A new browser takes the place of the longest-held one only.
+    assert_eq!(subscribe(&session()), StatusCode::NO_CONTENT);
+    assert_eq!(held(), 3);
+    purge_accounts(&c, &base, &[&user]);
+}
