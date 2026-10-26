@@ -184,6 +184,64 @@ export interface SignedUpWith {
   usedAt: string
 }
 
+/** A whole-number setting's Server settings section (site_settings::SettingSection). */
+export type SettingSection = 'chatMulti' | 'calendar' | 'chatLinking' | 'twoFactor' | 'drive'
+/** What a whole-number setting counts. */
+export type SettingUnit = 'bytes' | 'count' | 'seconds' | 'days'
+/** Where a value in effect comes from. */
+export type ValueSource = 'account' | 'site' | 'default'
+
+/** One whole-number setting, as `GET /api/admin/settings/registry` lists it. */
+export interface RegistrySetting {
+  key: string
+  /** Its field in `/api/admin/settings`. */
+  field: keyof AdminSettings
+  section: SettingSection
+  unit: SettingUnit
+  default: number
+  min: number
+  max: number
+  /** Whether one account may have its own value. */
+  perAccount: boolean
+  value: number
+  set: boolean
+}
+
+/** A setting that limits one account, as it stands for one account. */
+export interface AccountSettingLimit {
+  key: string
+  field: keyof AdminSettings
+  section: SettingSection
+  unit: SettingUnit
+  value: number
+  source: ValueSource
+  siteValue: number
+  min: number
+  max: number
+}
+
+/** A rate limit counted per account, as it stands for one account. */
+export interface AccountRateLimitLimit {
+  /** `rate_limit.<key>`. */
+  key: string
+  /** The rate limit's own key. */
+  limit: string
+  section: string
+  unit: 'events' | 'attempts' | 'minutes' | 'bytes' | 'atOnce' | 'bytesAtOnce'
+  windowSeconds: number | null
+  value: number
+  source: ValueSource
+  siteValue: number
+  min: number
+  max: number
+}
+
+/** `GET /api/admin/users/{id}/limits`. */
+export interface AccountLimits {
+  settings: AccountSettingLimit[]
+  rateLimits: AccountRateLimitLimit[]
+}
+
 export interface AdminSettings {
   registrationMode: RegistrationMode
   /** The storage quota new accounts get; existing accounts keep theirs. */

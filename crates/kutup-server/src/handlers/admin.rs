@@ -834,7 +834,7 @@ pub async fn get_settings(State(state): State<AppState>, _admin: AdminUser) -> A
     for setting in crate::site_settings::numeric_settings() {
         numeric.insert(
             setting.field.to_owned(),
-            json!(setting.load(&state.pool).await?),
+            json!(setting.load_site(&state.pool).await?),
         );
     }
     let mut settings = json!({

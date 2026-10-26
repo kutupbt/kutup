@@ -2343,12 +2343,16 @@ fn build_router(state: AppState) -> Router {
                     put(handlers::rate_limits::update),
                 )
                 .route(
-                    "/api/admin/users/:id/rate-limits",
-                    get(handlers::rate_limits::account_list),
+                    "/api/admin/settings/registry",
+                    get(handlers::account_limits::registry),
                 )
                 .route(
-                    "/api/admin/users/:id/rate-limits/:key",
-                    put(handlers::rate_limits::account_update),
+                    "/api/admin/users/:id/limits",
+                    get(handlers::account_limits::list),
+                )
+                .route(
+                    "/api/admin/users/:id/limits/:key",
+                    put(handlers::account_limits::update),
                 )
                 .route(
                     "/api/admin/registration-codes",

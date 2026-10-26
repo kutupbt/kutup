@@ -160,7 +160,9 @@ fn administrators_set_rate_limits() {
     let own_id = me(&c, &base, &own.token)["id"].as_str().unwrap().to_owned();
     let account_put = |key: &str, value: Value| {
         let r = bearer(
-            c.put(format!("{base}/api/admin/users/{own_id}/rate-limits/{key}")),
+            c.put(format!(
+                "{base}/api/admin/users/{own_id}/limits/rate_limit.{key}"
+            )),
             &admin.token,
         )
         .json(&json!({ "value": value }))
@@ -172,7 +174,7 @@ fn administrators_set_rate_limits() {
     // An account can't set its own, even more generous, value.
     let r = bearer(
         c.put(format!(
-            "{base}/api/admin/users/{own_id}/rate-limits/{LIMIT}"
+            "{base}/api/admin/users/{own_id}/limits/rate_limit.{LIMIT}"
         )),
         &own.token,
     )
@@ -183,29 +185,29 @@ fn administrators_set_rate_limits() {
     let (status, set) = account_put(LIMIT, json!(1));
     assert_eq!(status, StatusCode::OK, "{set}");
     assert_eq!(set["value"], 1);
-    assert_eq!(set["override"], true);
+    assert_eq!(set["source"], "account");
     assert_eq!(set["siteValue"], first_value);
     assert_eq!(check(&c, &base, &own.token), StatusCode::OK);
     assert_eq!(check(&c, &base, &own.token), StatusCode::TOO_MANY_REQUESTS);
     assert_eq!(check(&c, &base, &user.token), StatusCode::OK);
     let listed: Value = bearer(
-        c.get(format!("{base}/api/admin/users/{own_id}/rate-limits")),
+        c.get(format!("{base}/api/admin/users/{own_id}/limits")),
         &admin.token,
     )
     .send()
     .unwrap()
     .json()
     .unwrap();
-    let limits = listed["limits"].as_array().unwrap();
-    assert!(limits.iter().all(|limit| limit["key"] != "reports"));
+    let limits = listed["rateLimits"].as_array().unwrap();
+    assert!(limits.iter().all(|limit| limit["limit"] != "reports"));
     assert!(limits
         .iter()
-        .any(|limit| limit["key"] == LIMIT && limit["override"] == true));
+        .any(|limit| limit["limit"] == LIMIT && limit["source"] == "account"));
     assert_eq!(account_put("reports", json!(5)).0, StatusCode::BAD_REQUEST);
     assert_eq!(account_put(LIMIT, json!(0)).0, StatusCode::BAD_REQUEST);
     let (status, taken_back) = account_put(LIMIT, Value::Null);
     assert_eq!(status, StatusCode::OK);
-    assert_eq!(taken_back["override"], false);
+    assert_ne!(taken_back["source"], "account");
     assert_eq!(check(&c, &base, &own.token), StatusCode::OK);
 
     // Audited.

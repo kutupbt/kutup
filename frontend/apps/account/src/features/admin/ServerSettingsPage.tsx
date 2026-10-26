@@ -13,8 +13,9 @@ import { PageBody, PageHeader, Section } from '@kutup/ui/components/page'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@kutup/ui/components/select'
 import { LoadingPanel } from '@kutup/ui/components/states'
 import { apiErrorMessage } from '@kutup/ui/lib/apiError'
-import type { AdminSettings, RegistrationMode } from '@kutup/session/api-types'
-import { useAdminSettings, useUpdateAdminSettings } from './api'
+import type { AdminSettings, RegistrationMode, RegistrySetting, SettingSection } from '@kutup/session/api-types'
+import { SETTING_LABELS } from './limitLabels'
+import { useAdminSettings, useSettingsRegistry, useUpdateAdminSettings } from './api'
 import { Choice } from './federation/Choice'
 import { bytesToGib, gibToBytes } from './helpers'
 
@@ -24,72 +25,6 @@ const MODES: readonly RegistrationMode[] = ['on', 'code', 'off']
 const MAX_RETENTION_DAYS = 3650
 /** The server's bounds (site_settings::validate_chat_group_link_joins_per_relay). */
 const MAX_LINK_JOINS = 1_000_000
-/**
- * Multi-recipient group sends (site_settings::CHAT_MULTI_SETTINGS): each
- * field with the server's range.
- */
-const MULTI_SETTINGS = [
-  { field: 'chatMultiMaxRecipients', min: 1, max: 1000 },
-  { field: 'chatMultiMaxMessageBytes', min: 4096, max: 1_048_576 },
-  { field: 'chatMultiBaseBytes', min: 4096, max: 4_194_304 },
-  { field: 'chatMultiIpBytesPerMin', min: 1_048_576, max: 1_073_741_824 },
-  { field: 'chatMultiPerRecipientPerMin', min: 1, max: 1_000_000 },
-  { field: 'chatMultiPerTokenPerMin', min: 1, max: 100_000 },
-  { field: 'chatMultiOriginRequestsPerMin', min: 1, max: 1_000_000 },
-  { field: 'chatMultiOriginBytesPerMin', min: 1_048_576, max: 17_179_869_184 },
-  { field: 'chatGroupSendEndorsementsPerDay', min: 1, max: 10_000 },
-  { field: 'chatGroupEndorsementUploadsPerDay', min: 1, max: 1000 },
-  { field: 'chatGroupEndorsementPageSize', min: 1, max: 200 },
-] as const satisfies readonly { field: keyof AdminSettings; min: number; max: number }[]
-/** Calendars (site_settings::CALENDAR_SETTINGS): each field with the server's range. */
-const CALENDAR_SETTINGS = [
-  { field: 'calendarsPerAccount', min: 1, max: 1000 },
-  { field: 'calendarEventsPerCalendar', min: 1, max: 1_000_000 },
-  { field: 'calendarSyncBatch', min: 1, max: 100 },
-  { field: 'calendarMaxCount', min: 1, max: 499 },
-  { field: 'calendarRemindersPerEvent', min: 1, max: 50 },
-  { field: 'calendarDefaultReminders', min: 1, max: 20 },
-  { field: 'calendarReminderLatenessSeconds', min: 10, max: 3600 },
-  { field: 'calendarAlarmTickSeconds', min: 5, max: 300 },
-  { field: 'calendarAlarmBatch', min: 10, max: 5000 },
-  { field: 'calendarAlarmBatchPerAccount', min: 1, max: 1000 },
-  { field: 'calendarAlarmSends', min: 1, max: 256 },
-  { field: 'calendarAlarmsPerAccount', min: 100, max: 1_000_000 },
-  { field: 'calendarRecomputeBatch', min: 10, max: 10_000 },
-  { field: 'calendarPushSubscriptionsPerAccount', min: 1, max: 100 },
-  { field: 'calendarAlarmsPage', min: 10, max: 1000 },
-  { field: 'calendarWindowDays', min: 1, max: 3660 },
-  { field: 'calendarEventsPage', min: 10, max: 5000 },
-] as const satisfies readonly { field: keyof AdminSettings; min: number; max: number }[]
-/** Linking Chat devices (site_settings::CHAT_IDENTITY_SETTINGS). */
-const CHAT_LINKING_SETTINGS = [
-  { field: 'chatLinkTokenSeconds', min: 60, max: 3600 },
-  { field: 'chatLinkTokensPerAccount', min: 1, max: 20 },
-  { field: 'chatProvisionBodyBytes', min: 4096, max: 65_536 },
-  { field: 'chatMaxActiveDevices', min: 1, max: 10 },
-  { field: 'chatProvisioningTicketSeconds', min: 10, max: 600 },
-  { field: 'chatProvisioningSocketsPerAccount', min: 1, max: 20 },
-  { field: 'chatDistributionMessageBytes', min: 1024, max: 1_048_576 },
-] as const satisfies readonly { field: keyof AdminSettings; min: number; max: number }[]
-/** Drive uploads and streaming (site_settings::DRIVE_SETTINGS), sizes in bytes. */
-const DRIVE_SETTINGS = [
-  { field: 'driveUploadMaxBytes', min: 1_048_576, max: 4_398_046_511_104 },
-  { field: 'driveVersionMaxBytes', min: 1_048_576, max: 4_398_046_511_104 },
-  { field: 'driveStreamMaxBytes', min: 0, max: 4_398_046_511_104 },
-  { field: 'driveStreamCacheBlocks', min: 1, max: 16 },
-  { field: 'driveStreamReadaheadBlocks', min: 0, max: 4 },
-  { field: 'driveStreamMaxConcurrent', min: 1, max: 8 },
-  { field: 'driveStreamResponseMaxBytes', min: 4_718_592, max: 16_777_216 },
-  { field: 'driveStreamBlobFallbackMaxBytes', min: 0, max: 4_294_967_296 },
-] as const satisfies readonly { field: keyof AdminSettings; min: number; max: number }[]
-/** Two-factor sign-in (site_settings::TWO_FACTOR_SETTINGS). */
-const TWO_FACTOR_SETTINGS = [
-  { field: 'twoFactorRecoveryCodes', min: 4, max: 64 },
-  { field: 'securityKeysPerAccount', min: 1, max: 50 },
-  { field: 'webauthnCeremonySeconds', min: 60, max: 600 },
-] as const satisfies readonly { field: keyof AdminSettings; min: number; max: number }[]
-/** Every whole-number setting the page edits by field. */
-const NUMERIC_SETTINGS = [...MULTI_SETTINGS, ...CALENDAR_SETTINGS, ...CHAT_LINKING_SETTINGS, ...TWO_FACTOR_SETTINGS, ...DRIVE_SETTINGS]
 /**
  * The avatar blob lengths (kutup_chat_proto GROUP_AVATAR_BLOB_LENGTHS) and the
  * server's bounds (site_settings::AvatarLimits): storage holds two of the
@@ -106,7 +41,22 @@ const MIB = 1024 * 1024
 export function ServerSettingsPage() {
   const { t } = useTranslation()
   const settings = useAdminSettings()
+  const registry = useSettingsRegistry()
+  if (settings.isPending || registry.isPending) return <LoadingPanel label={t('common.loading')} />
+  if (settings.isError || registry.isError) {
+    return <PageBody width="prose"><Alert variant="error">{apiErrorMessage(settings.error ?? registry.error, t('common.tryAgain'))}</Alert></PageBody>
+  }
+  return <ServerSettingsForm settings={settings.data} registry={registry.data} />
+}
+
+/**
+ * The form, once the settings and the registry are in: its whole-number
+ * fields, with their ranges, come from the registry.
+ */
+function ServerSettingsForm({ settings, registry }: { settings: AdminSettings; registry: RegistrySetting[] }) {
+  const { t } = useTranslation()
   const update = useUpdateAdminSettings()
+  const inSection = (section: SettingSection) => registry.filter((setting) => setting.section === section)
 
   const days = z.coerce.number<number>().int(t('admin.settings.wholeDays')).min(0, t('admin.settings.retentionRange')).max(MAX_RETENTION_DAYS, t('admin.settings.retentionRange'))
   const linkJoins = z.coerce.number<number>().int(t('admin.settings.groupLinkJoinsRange')).min(1, t('admin.settings.groupLinkJoinsRange')).max(MAX_LINK_JOINS, t('admin.settings.groupLinkJoinsRange'))
@@ -117,12 +67,14 @@ export function ServerSettingsPage() {
     mediaDays: days,
     linkJoinsGroup: linkJoins,
     linkJoinsRelay: linkJoins,
-    ...Object.fromEntries(
-      NUMERIC_SETTINGS.map(({ field, min, max }) => {
-        const range = t('admin.settings.multi.range', { min, max })
-        return [field, z.coerce.number<number>().int(range).min(min, range).max(max, range)]
-      }),
-    ) as Record<(typeof NUMERIC_SETTINGS)[number]['field'], z.ZodNumber>,
+    numeric: z.object(
+      Object.fromEntries(
+        registry.map(({ field, min, max }) => {
+          const range = t('admin.settings.multi.range', { min, max })
+          return [field, z.coerce.number<number>().int(range).min(min, range).max(max, range)]
+        }),
+      ) as Record<string, z.ZodNumber>,
+    ),
     avatarMax: z.coerce.number<number>().refine((value) => (AVATAR_LENGTHS as readonly number[]).includes(value), t('admin.settings.groupAvatarMaxRange')),
     avatarStorage: z.coerce.number<number>().int(t('admin.settings.groupAvatarStorageRange')).max(MAX_AVATAR_STORAGE, t('admin.settings.groupAvatarStorageRange')),
     avatarPending: z.coerce.number<number>().int(t('admin.settings.groupAvatarPendingRange')).min(AVATAR_PENDING_SECONDS.min, t('admin.settings.groupAvatarPendingRange')).max(AVATAR_PENDING_SECONDS.max, t('admin.settings.groupAvatarPendingRange')),
@@ -132,26 +84,20 @@ export function ServerSettingsPage() {
     resolver: zodResolver(schema),
   })
   useEffect(() => {
-    if (!settings.data) return
     reset({
-      registrationMode: settings.data.registrationMode,
-      quotaGib: bytesToGib(settings.data.defaultStorageQuotaBytes),
-      mailboxDays: settings.data.chatMailboxRetentionDays,
-      mediaDays: settings.data.chatMediaDeliveryRetentionDays,
-      linkJoinsGroup: settings.data.chatGroupLinkJoinsPerRelayGroupPerMin,
-      linkJoinsRelay: settings.data.chatGroupLinkJoinsPerRelayPerMin,
-      ...Object.fromEntries(NUMERIC_SETTINGS.map(({ field }) => [field, settings.data[field]])),
-      avatarMax: settings.data.chatGroupAvatarMaxBytes,
-      avatarStorage: settings.data.chatGroupAvatarStoragePerGroupBytes,
-      avatarPending: settings.data.chatGroupAvatarPendingSeconds,
-      passVaultMib: Math.round(settings.data.passVaultMaxBytes / MIB),
+      registrationMode: settings.registrationMode,
+      quotaGib: bytesToGib(settings.defaultStorageQuotaBytes),
+      mailboxDays: settings.chatMailboxRetentionDays,
+      mediaDays: settings.chatMediaDeliveryRetentionDays,
+      linkJoinsGroup: settings.chatGroupLinkJoinsPerRelayGroupPerMin,
+      linkJoinsRelay: settings.chatGroupLinkJoinsPerRelayPerMin,
+      numeric: Object.fromEntries(registry.map(({ field }) => [field, settings[field] as number])),
+      avatarMax: settings.chatGroupAvatarMaxBytes,
+      avatarStorage: settings.chatGroupAvatarStoragePerGroupBytes,
+      avatarPending: settings.chatGroupAvatarPendingSeconds,
+      passVaultMib: Math.round(settings.passVaultMaxBytes / MIB),
     })
-  }, [settings.data, reset])
-
-  if (settings.isPending) return <LoadingPanel label={t('common.loading')} />
-  if (settings.isError) {
-    return <PageBody width="prose"><Alert variant="error">{apiErrorMessage(settings.error, t('common.tryAgain'))}</Alert></PageBody>
-  }
+  }, [settings, registry, reset])
 
   const onSubmit = handleSubmit((v) =>
     update.mutate(
@@ -162,7 +108,7 @@ export function ServerSettingsPage() {
         chatMediaDeliveryRetentionDays: v.mediaDays,
         chatGroupLinkJoinsPerRelayGroupPerMin: v.linkJoinsGroup,
         chatGroupLinkJoinsPerRelayPerMin: v.linkJoinsRelay,
-        ...Object.fromEntries(NUMERIC_SETTINGS.map(({ field }) => [field, v[field]])),
+        ...v.numeric,
         chatGroupAvatarMaxBytes: v.avatarMax,
         chatGroupAvatarStoragePerGroupBytes: v.avatarStorage,
         chatGroupAvatarPendingSeconds: v.avatarPending,
@@ -171,6 +117,14 @@ export function ServerSettingsPage() {
       { onSuccess: () => toast.success(t('admin.settings.saved')) },
     ),
   )
+
+  /** A section's whole-number fields, as the registry lists them. */
+  const numericFields = (section: SettingSection) =>
+    inSection(section).map(({ field, min, max }) => (
+      <Field key={field} label={t(`${SETTING_LABELS[section]}.${field}`)} error={errors.numeric?.[field]?.message} description={t(`${SETTING_LABELS[section]}.${field}Hint`)} required>
+        {(control) => <Input {...control} {...register(`numeric.${field}`)} type="number" min={min} max={max} step={1} inputMode="numeric" />}
+      </Field>
+    ))
 
   return (
     <PageBody width="prose">
@@ -215,11 +169,7 @@ export function ServerSettingsPage() {
               <Field label={t('admin.settings.groupLinkJoinsRelay')} error={errors.linkJoinsRelay?.message} description={t('admin.settings.groupLinkJoinsRelayHint')} required>
                 {(field) => <Input {...field} {...register('linkJoinsRelay')} type="number" min={1} max={MAX_LINK_JOINS} step={1} inputMode="numeric" />}
               </Field>
-              {MULTI_SETTINGS.map(({ field, min, max }) => (
-                <Field key={field} label={t(`admin.settings.multi.${field}`)} error={errors[field]?.message} description={t(`admin.settings.multi.${field}Hint`)} required>
-                  {(control) => <Input {...control} {...register(field)} type="number" min={min} max={max} step={1} inputMode="numeric" />}
-                </Field>
-              ))}
+              {numericFields('chatMulti')}
               <Field label={t('admin.settings.groupAvatarMax')} error={errors.avatarMax?.message} description={t('admin.settings.groupAvatarMaxHint')} required>
                 {(field) => (
                   <Controller
@@ -259,44 +209,28 @@ export function ServerSettingsPage() {
         <Section title={t('admin.settings.calendar')} description={t('admin.settings.calendarHint')}>
           <Card>
             <CardContent className="grid gap-4 p-5 sm:grid-cols-2">
-              {CALENDAR_SETTINGS.map(({ field, min, max }) => (
-                <Field key={field} label={t(`admin.settings.calendarLimits.${field}`)} error={errors[field]?.message} description={t(`admin.settings.calendarLimits.${field}Hint`)} required>
-                  {(control) => <Input {...control} {...register(field)} type="number" min={min} max={max} step={1} inputMode="numeric" />}
-                </Field>
-              ))}
+              {numericFields('calendar')}
             </CardContent>
           </Card>
         </Section>
         <Section title={t('admin.settings.drive')} description={t('admin.settings.driveHint')}>
           <Card>
             <CardContent className="grid gap-4 p-5 sm:grid-cols-2">
-              {DRIVE_SETTINGS.map(({ field, min, max }) => (
-                <Field key={field} label={t(`admin.settings.driveLimits.${field}`)} error={errors[field]?.message} description={t(`admin.settings.driveLimits.${field}Hint`)} required>
-                  {(control) => <Input {...control} {...register(field)} type="number" min={min} max={max} step={1} inputMode="numeric" />}
-                </Field>
-              ))}
+              {numericFields('drive')}
             </CardContent>
           </Card>
         </Section>
         <Section title={t('admin.settings.chatLinking')} description={t('admin.settings.chatLinkingHint')}>
           <Card>
             <CardContent className="grid gap-4 p-5 sm:grid-cols-2">
-              {CHAT_LINKING_SETTINGS.map(({ field, min, max }) => (
-                <Field key={field} label={t(`admin.settings.chatLinkingLimits.${field}`)} error={errors[field]?.message} description={t(`admin.settings.chatLinkingLimits.${field}Hint`)} required>
-                  {(control) => <Input {...control} {...register(field)} type="number" min={min} max={max} step={1} inputMode="numeric" />}
-                </Field>
-              ))}
+              {numericFields('chatLinking')}
             </CardContent>
           </Card>
         </Section>
         <Section title={t('admin.settings.twoFactor')} description={t('admin.settings.twoFactorHint')}>
           <Card>
             <CardContent className="grid gap-4 p-5 sm:grid-cols-2">
-              {TWO_FACTOR_SETTINGS.map(({ field, min, max }) => (
-                <Field key={field} label={t(`admin.settings.twoFactorLimits.${field}`)} error={errors[field]?.message} description={t(`admin.settings.twoFactorLimits.${field}Hint`)} required>
-                  {(control) => <Input {...control} {...register(field)} type="number" min={min} max={max} step={1} inputMode="numeric" />}
-                </Field>
-              ))}
+              {numericFields('twoFactor')}
             </CardContent>
           </Card>
         </Section>

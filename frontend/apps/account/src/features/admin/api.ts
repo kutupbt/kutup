@@ -7,6 +7,7 @@ import type {
   AdminFederationPolicy,
   AdminSettings,
   AdminStats,
+  RegistrySetting,
   BulkFederationPeerRetryResponse,
   CreatedRegistrationCode,
   FederationDomainRule,
@@ -193,6 +194,14 @@ export function useAdminSettings() {
   return useQuery({
     queryKey: [...adminKey, 'settings'],
     queryFn: async () => (await api.get<AdminSettings>('/admin/settings')).data,
+  })
+}
+
+/** Every whole-number setting with its section, unit and range (the registry). */
+export function useSettingsRegistry() {
+  return useQuery({
+    queryKey: [...adminKey, 'settings', 'registry'],
+    queryFn: async () => (await api.get<{ settings: RegistrySetting[] }>('/admin/settings/registry')).data.settings,
   })
 }
 

@@ -349,7 +349,7 @@ pub async fn create(
         .bind(user_id)
         .fetch_one(&mut *tx)
         .await?;
-    if owned >= CALENDARS_PER_ACCOUNT.load(&state.pool).await? {
+    if owned >= CALENDARS_PER_ACCOUNT.load_for(&state.pool, user_id).await? {
         return Err(AppError::conflict("calendar limit reached")
             .with_details(serde_json::json!({ "code": "calendarLimit" })));
     }

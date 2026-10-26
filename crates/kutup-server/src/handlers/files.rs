@@ -164,11 +164,11 @@ pub async fn upload(
     mut multipart: Multipart,
 ) -> AppResult<Response> {
     let user_id = trusted_uuid(&user.user_id)?;
-    // The upload limit is a site setting (docs/plans/drive-block-format.md
-    // §7), counted as the file arrives.
+    // The upload limit is a setting, the site's or the account's own
+    // (docs/plans/drive-block-format.md §7), counted as the file arrives.
     let mut budget = crate::drive_blob::BodyBudget::new(
         crate::site_settings::DRIVE_UPLOAD_MAX_BYTES
-            .load(&state.pool)
+            .load_for(&state.pool, user_id)
             .await?,
     );
 
@@ -488,7 +488,8 @@ pub struct DriveLimits {
     stream_blob_fallback_max_bytes: i64,
 }
 
-/// `GET /api/drive/limits` — the upload and streaming limits.
+/// `GET /api/drive/limits` — the upload and streaming limits, as they are
+/// for this account (its own where administrators set them).
 #[utoipa::path(
     get,
     path = "/api/drive/limits",
@@ -496,21 +497,25 @@ pub struct DriveLimits {
     security(("BearerAuth" = [])),
     responses((status = 200, body = DriveLimits))
 )]
-pub async fn limits(
-    State(state): State<AppState>,
-    _user: AuthUser,
-) -> AppResult<Json<DriveLimits>> {
+pub async fn limits(State(state): State<AppState>, user: AuthUser) -> AppResult<Json<DriveLimits>> {
     use crate::site_settings as s;
     let pool = &state.pool;
+    let account = trusted_uuid(&user.user_id)?;
     Ok(Json(DriveLimits {
-        upload_max_bytes: s::DRIVE_UPLOAD_MAX_BYTES.load(pool).await?,
-        version_max_bytes: s::DRIVE_VERSION_MAX_BYTES.load(pool).await?,
-        stream_max_bytes: s::DRIVE_STREAM_MAX_BYTES.load(pool).await?,
-        stream_cache_blocks: s::DRIVE_STREAM_CACHE_BLOCKS.load(pool).await?,
-        stream_readahead_blocks: s::DRIVE_STREAM_READAHEAD_BLOCKS.load(pool).await?,
-        stream_max_concurrent: s::DRIVE_STREAM_MAX_CONCURRENT.load(pool).await?,
+        upload_max_bytes: s::DRIVE_UPLOAD_MAX_BYTES.load_for(pool, account).await?,
+        version_max_bytes: s::DRIVE_VERSION_MAX_BYTES.load_for(pool, account).await?,
+        stream_max_bytes: s::DRIVE_STREAM_MAX_BYTES.load_for(pool, account).await?,
+        stream_cache_blocks: s::DRIVE_STREAM_CACHE_BLOCKS.load_for(pool, account).await?,
+        stream_readahead_blocks: s::DRIVE_STREAM_READAHEAD_BLOCKS
+            .load_for(pool, account)
+            .await?,
+        stream_max_concurrent: s::DRIVE_STREAM_MAX_CONCURRENT
+            .load_for(pool, account)
+            .await?,
         stream_response_max_bytes: s::DRIVE_STREAM_RESPONSE_MAX_BYTES.load(pool).await?,
-        stream_blob_fallback_max_bytes: s::DRIVE_STREAM_BLOB_FALLBACK_MAX_BYTES.load(pool).await?,
+        stream_blob_fallback_max_bytes: s::DRIVE_STREAM_BLOB_FALLBACK_MAX_BYTES
+            .load_for(pool, account)
+            .await?,
     }))
 }
 

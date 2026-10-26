@@ -230,7 +230,8 @@ Returns public server settings: who may register (`registrationMode`:
 capability advertisement, and where each web app lives (`apps`, from
 `KUTUP_BASE_DOMAIN` / `KUTUP_{ACCOUNT,DRIVE,CHAT,OFFICE}_URL`).
 
-**Auth:** None
+**Auth:** None (a bearer token, if sent, makes per-account values the
+caller's own)
 
 **Response:**
 ```jsonc
@@ -271,8 +272,10 @@ a vault's own saves are never refused by it.
 
 The chat block also advertises size/retention limits, the canonical federation
 server name when enabled, and the authenticated sealed-sender service-policy
-history. `maximumActiveDevices` is the site setting `chatMaxActiveDevices`,
-from 1 through the V1 hard cap of 10. A capability is advertised only when its complete local and
+history. `maximumActiveDevices` is the setting `chatMaxActiveDevices`, from 1
+through the V1 hard cap of 10: a signed-in caller's own where administrators
+set one (that answer is `Cache-Control: private, no-store`), else the
+site's. A capability is advertised only when its complete local and
 federated path is enabled.
 
 ---
@@ -2933,14 +2936,17 @@ content gets the whole new content. One answer carries at most
 `driveStreamResponseMaxBytes`; a longer range is answered in part, as its
 `Content-Range` says: its first part, or a suffix's last.
 
-**Limits** are site settings an administrator changes: the largest upload
-(`driveUploadMaxBytes`, 10 GiB) and version (`driveVersionMaxBytes`, 2 GiB),
-counted as the body arrives (`413` past them), and the streaming settings
-`GET /api/drive/limits` lists.
+**Limits** are settings an administrator changes, for the site or for one
+account (docs/plans/settings-registry.md): the largest upload
+(`driveUploadMaxBytes`, 10 GiB) and version (`driveVersionMaxBytes`, 2 GiB)
+for the uploading account, counted as the body arrives (`413` past them),
+and the streaming settings `GET /api/drive/limits` lists.
 
 ### GET /api/drive/limits
 
-The upload and streaming limits a client works with.
+The upload and streaming limits a client works with, as they are for this
+account: its own where administrators set them, else the site's.
+`streamResponseMaxBytes` is the site's always (a transport parameter).
 
 **Auth:** Bearer JWT
 
@@ -5229,15 +5235,43 @@ answers the limit as it is now. A value outside `min`–`max` is `400`, an
 unknown key `404`. It applies at once on this backend and within 30 seconds
 on the others; each change writes a `settings.rate_limit` audit entry.
 
-### GET /api/admin/users/{id}/rate-limits · PUT /api/admin/users/{id}/rate-limits/{key}
+### GET /api/admin/users/{id}/limits · PUT /api/admin/users/{id}/limits/{key}
 
 **Auth:** Bearer JWT (admin)
 
-The limits counted per account, as they stand for one account:
-`{ "limits": [{ "key", "section", "unit", "windowSeconds", "value",
-"siteValue", "override", "min", "max" }] }`. `PUT` gives the account its own
-value (`{ "value": 3 }`) or takes it back (`null`); a limit not counted per
-account is `400`. Each change writes a `user.rate_limit` audit entry.
+The settings and rate limits that limit one account, as they stand for this
+one (docs/plans/settings-registry.md):
+
+```json
+{
+  "settings": [{ "key": "drive_upload_max_bytes", "field": "driveUploadMaxBytes",
+    "section": "drive", "unit": "bytes", "value": 1073741824, "source": "account",
+    "siteValue": 10737418240, "min": 1048576, "max": 4398046511104 }],
+  "rateLimits": [{ "key": "rate_limit.feedback", "limit": "feedback",
+    "section": "administration", "unit": "events", "windowSeconds": 3600,
+    "value": 10, "source": "default", "siteValue": 10, "min": 1, "max": 1000 }]
+}
+```
+
+`source` says where `value` comes from: `account`, `site` or `default`.
+`PUT` takes a setting's key or `rate_limit.<key>`, and gives the account its
+own value (`{ "value": 3 }`) or takes it back (`null`); it answers the entry
+as it is now. A value outside the range is `400` (never clamped), and so is a
+setting or rate limit that doesn't limit one account; an unknown key is
+`404`. Lowering a value below what the account already uses only stops new
+growth: nothing is removed. Each change writes a `user.setting` or
+`user.rate_limit` audit entry.
+
+### GET /api/admin/settings/registry
+
+**Auth:** Bearer JWT (admin)
+
+Every whole-number setting, as Server settings builds its fields from it:
+`{ "settings": [{ "key", "field", "section", "unit", "default", "min", "max",
+"perAccount", "value", "set" }] }`. `field` is its name in
+`/api/admin/settings`, `section` one of `chatMulti`, `calendar`,
+`chatLinking`, `twoFactor` and `drive`, and `perAccount` whether one account
+may have its own value.
 
 ---
 

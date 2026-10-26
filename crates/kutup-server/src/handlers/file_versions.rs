@@ -430,7 +430,7 @@ pub async fn create(
 
     let mut budget = crate::drive_blob::BodyBudget::new(
         crate::site_settings::DRIVE_VERSION_MAX_BYTES
-            .load(&state.pool)
+            .load_for(&state.pool, user_id)
             .await?,
     );
     let mut tmp: Option<(NamedTempFile, i64)> = None;

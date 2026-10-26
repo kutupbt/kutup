@@ -517,7 +517,7 @@ pub async fn register_device(
                 );
             }
             let most = crate::site_settings::CHAT_MAX_ACTIVE_DEVICES
-                .load(&state.pool)
+                .load_for(&state.pool, user_id)
                 .await?;
             if rows.len() as i64 >= most {
                 return Err(AppError::conflict("chat active-device limit reached"));

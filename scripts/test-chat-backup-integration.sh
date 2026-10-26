@@ -131,6 +131,11 @@ KUTUP_LIVE_SERVER="http://127.0.0.1:$port" \
 KUTUP_LIVE_SERVER="http://127.0.0.1:$port" \
   KUTUP_LIVE_ADMIN="$test_admin_username:$test_admin_password" \
   cargo test -p kutup-server --test rate_limits_live -- --nocapture
+# An account's own limits (docs/plans/settings-registry.md): one account's
+# upload limit holds it alone, ranges, a reset, the registry, the audit.
+KUTUP_LIVE_SERVER="http://127.0.0.1:$port" \
+  KUTUP_LIVE_ADMIN="$test_admin_username:$test_admin_password" \
+  cargo test -p kutup-server --test settings_registry_live -- --nocapture
 
 # Calendars (docs/plans/calendar.md, E1): keys and the sealed passphrase,
 # events checked against their author's keys and read only from the signed

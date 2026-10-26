@@ -258,6 +258,12 @@ pub async fn put_push_subscription(
         .ok_or_else(|| AppError::bad_request("auth is 16 bytes"))?;
     let session = user.session.session_id;
     let mut tx = state.pool.begin().await?;
+    // One subscription change per account at a time: two new browsers at
+    // once can't both take the same longest-held one's place and go over.
+    sqlx::query("SELECT id FROM users WHERE id = $1 FOR UPDATE")
+        .bind(user_id)
+        .execute(&mut *tx)
+        .await?;
     // The browser's subscription is this account's under one session: this
     // one takes it over from an earlier one (signed out, expired or still
     // signed in). Another account in the same browser has its own.
@@ -271,9 +277,11 @@ pub async fn put_push_subscription(
     .execute(&mut *tx)
     .await?;
     // At most `calendarPushSubscriptionsPerAccount` browsers: those of
-    // sessions that ended go first, then the longest-held.
+    // sessions that ended go first, then the longest-held makes room for
+    // this one. An account over a lowered limit keeps what it has: one goes
+    // for each that comes, never more.
     let most = crate::site_settings::CALENDAR_PUSH_SUBSCRIPTIONS_PER_ACCOUNT
-        .load(&mut *tx)
+        .load_for(&mut *tx, user_id)
         .await?;
     sqlx::query(
         "DELETE FROM calendar_push_subscriptions p USING auth_sessions a
@@ -287,11 +295,14 @@ pub async fn put_push_subscription(
         "DELETE FROM calendar_push_subscriptions WHERE session_id IN (
            SELECT session_id FROM calendar_push_subscriptions
             WHERE user_id = $1 AND session_id <> $2
-            ORDER BY created_at DESC OFFSET $3)",
+            ORDER BY created_at LIMIT 1)
+           AND (SELECT count(*) FROM calendar_push_subscriptions
+                 WHERE user_id = $1 AND session_id <> $2) >= $3
+           AND NOT EXISTS (SELECT 1 FROM calendar_push_subscriptions WHERE session_id = $2)",
     )
     .bind(user_id)
     .bind(session)
-    .bind(most - 1)
+    .bind(most)
     .execute(&mut *tx)
     .await?;
     sqlx::query(
