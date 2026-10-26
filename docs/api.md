@@ -3629,7 +3629,7 @@ A retry with the same credential answers the device it made. `200 OK` →
 
 ### GET /api/chat/device
 
-The caller's Chat devices (the account's devices that take Chat): `{ "devices": [{ "deviceId", "suite", "name", "createdAt", "lastSeenAt" }] }`.
+The account's Chat devices: those its manifest lists with Chat keys (a registration not yet listed isn't one): `{ "devices": [{ "deviceId", "suite", "name", "createdAt", "lastSeenAt" }] }`.
 
 ### PATCH /api/chat/device/{deviceId}
 

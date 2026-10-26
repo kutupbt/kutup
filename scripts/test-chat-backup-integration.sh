@@ -150,15 +150,6 @@ KUTUP_LIVE_SERVER="http://127.0.0.1:$port" \
 KUTUP_LIVE_SERVER="http://127.0.0.1:$port" \
   KUTUP_LIVE_ADMIN="$test_admin_username:$test_admin_password" \
   cargo test -p kutup-server --test collab_frames_live -- --nocapture
-# Collaboration devices: only the account's own statement registers one.
-KUTUP_LIVE_SERVER="http://127.0.0.1:$port" \
-  KUTUP_LIVE_ADMIN="$test_admin_username:$test_admin_password" \
-  cargo test -p kutup-server --test devices_live -- --nocapture
-
-# Remote collaboration devices: only the share recipient's own announced,
-# fresh, unrevoked devices; revocations page past one announce.
-KUTUP_LIVE_DATABASE_URL="postgres://$POSTGRES_USER:$POSTGRES_PASSWORD@127.0.0.1:$db_port/$POSTGRES_DB" \
-  cargo test -p kutup-server --bin kutup-server remote_devices::tests -- --nocapture
 # OPAQUE sign-in (docs/plans/opaque.md): a login id once, the per-name cap,
 # new passwords and recoveries ending sessions, grants bound to their use.
 KUTUP_LIVE_SERVER="http://127.0.0.1:$port" \

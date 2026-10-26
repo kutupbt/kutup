@@ -1341,7 +1341,7 @@ fn chat_v1_contract() {
     println!("ok  - encrypted transcript routed only to the linked device");
 
     let ticket: Value = dev_a
-        .auth(c.post(format!("{base}/api/chat/ws-ticket?deviceId={}", dev_a.id)))
+        .auth(c.post(format!("{base}/api/device-ticket")))
         .bearer_auth(&ta)
         .send()
         .unwrap()

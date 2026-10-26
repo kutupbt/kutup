@@ -1537,7 +1537,9 @@ async fn insert_kem_pool(
     Ok(())
 }
 
-/// `GET /api/chat/device` — the caller's registered chat devices.
+/// `GET /api/chat/device` — the account's Chat devices: those its manifest
+/// lists with Chat keys (a registration not listed yet, waiting out the
+/// listing grace, isn't one).
 #[utoipa::path(
     get,
     path = "/api/chat/device",
@@ -1555,8 +1557,13 @@ pub async fn list_devices(State(state): State<AppState>, auth: AuthUser) -> AppR
     .bind(user_id)
     .fetch_all(&state.pool)
     .await?;
+    let head = stored_manifest(&state.pool, user_id).await?;
     let devices: Vec<serde_json::Value> = rows
         .into_iter()
+        .filter(|(id, ..)| {
+            head.as_ref()
+                .is_some_and(|head| head.chat_device(*id as u32).is_some())
+        })
         .map(|(id, suite, name, created, seen)| {
             let suite = direct_chat_suite_from_db(suite, "devices")?;
             Ok(json!({
@@ -2901,17 +2908,14 @@ async fn deliver_messages(
     }
 
     // Exact device-set check (Signal's missing/stale/extra contract).
-    // A peer addresses the devices the account's manifest lists; the
-    // account's own sync reaches every live device it has.
-    let mut current: Vec<(i32, i64)> = sqlx::query_as(if excluded_device.is_some() {
-        "SELECT device_id, registration_id FROM devices
-          WHERE user_id = $1 AND expired_at IS NULL AND suite IS NOT NULL"
-    } else {
-        crate::handlers::chat_identity::LISTED_DEVICES
-    })
-    .bind(recipient_id)
-    .fetch_all(&mut *tx)
-    .await?;
+    // A peer, and the account's own sync, address the devices the account's
+    // manifest lists, as the sync bundles do: a row not listed yet (waiting
+    // out the listing grace) is no device to send to.
+    let mut current: Vec<(i32, i64)> =
+        sqlx::query_as(crate::handlers::chat_identity::LISTED_DEVICES)
+            .bind(recipient_id)
+            .fetch_all(&mut *tx)
+            .await?;
     if let Some(excluded_device) = excluded_device {
         if !current
             .iter()

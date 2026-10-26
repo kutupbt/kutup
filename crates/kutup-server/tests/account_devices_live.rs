@@ -157,7 +157,6 @@ fn an_editor_credential_opens_no_chat_route() {
     for (method, path) in [
         ("POST", "/api/chat/keys/check"),
         ("POST", "/api/chat/link-tokens"),
-        ("POST", "/api/chat/ws-ticket?deviceId=2"),
         ("GET", "/api/chat/messages?deviceId=2"),
     ] {
         let request = match method {
