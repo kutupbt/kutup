@@ -305,8 +305,13 @@ struct CollabFrameVec {
     doc_key_id: u32,
     #[serde(rename = "fileId")]
     file_id: String,
-    #[serde(rename = "senderDeviceId")]
-    sender_device_id: u64,
+    /// The sender account, beside the frame (`aci:<uuid>@<server>`).
+    #[serde(rename = "senderAccount")]
+    sender_account: String,
+    #[serde(rename = "deviceId")]
+    device_id: u32,
+    #[serde(rename = "manifestSequence")]
+    manifest_sequence: u64,
     sequence: u64,
     nonce: String,
     plaintext: String,
@@ -620,15 +625,17 @@ fn asset_tamper_and_aad_fail() {
 #[test]
 fn collaboration_frame_matches_canonical_vector() {
     let v = load_crypto().collab_frame;
-    let context = envelope::CollabFrameContextV1::new(
+    let context = envelope::CollabFrameContextV3::new(
         v.kind,
         v.key_generation,
         v.doc_key_id,
         &v.file_id,
-        v.sender_device_id,
+        v.device_id,
+        v.manifest_sequence,
         v.sequence,
     )
     .unwrap();
+    let sender: kutup_crypto::account_ref::AccountRef = v.sender_account.parse().unwrap();
     let unsigned = envelope::seal_unsigned_with_nonce(
         &b64(&v.plaintext),
         &b64(&v.file_key),
@@ -638,11 +645,12 @@ fn collaboration_frame_matches_canonical_vector() {
     .unwrap();
     let signed = envelope::sign(
         &envelope::Frame::unpack(&unsigned).unwrap(),
+        &sender,
         &b64(&v.signing_seed),
     )
     .unwrap();
     assert_eq!(signed, b64(&v.frame));
-    envelope::verify(&signed, &b64(&v.signing_public_key)).unwrap();
+    envelope::verify(&signed, &sender, &b64(&v.signing_public_key)).unwrap();
     let (parsed, plaintext) =
         envelope::open(&signed, &b64(&v.file_key), &v.file_id, v.key_generation).unwrap();
     assert_eq!(parsed.context(), context);
@@ -650,7 +658,7 @@ fn collaboration_frame_matches_canonical_vector() {
 
     let mut tampered = signed;
     tampered[100] ^= 0x01;
-    assert!(envelope::verify(&tampered, &b64(&v.signing_public_key)).is_err());
+    assert!(envelope::verify(&tampered, &sender, &b64(&v.signing_public_key)).is_err());
 }
 
 #[test]
@@ -851,10 +859,13 @@ fn print_file_bound_vectors() {
     let seed = [0x55u8; 32];
     let plaintext = b"canonical collaboration update";
     let nonce = [0x66u8; 24];
-    let context = envelope::CollabFrameContextV1::new(1, 3, 7, file_id, 42, 9).unwrap();
+    let sender_account = "aci:0b6b5e0c-4c1e-4b8e-9c2d-6a1f3e5d7c9b@example.test";
+    let sender: kutup_crypto::account_ref::AccountRef = sender_account.parse().unwrap();
+    let context = envelope::CollabFrameContextV3::new(1, 3, 7, file_id, 42, 5, 9).unwrap();
     let unsigned =
         envelope::seal_unsigned_with_nonce(plaintext, &frame_key, context, &nonce).unwrap();
-    let signed = envelope::sign(&envelope::Frame::unpack(&unsigned).unwrap(), &seed).unwrap();
+    let signed =
+        envelope::sign(&envelope::Frame::unpack(&unsigned).unwrap(), &sender, &seed).unwrap();
     let public = ed25519_dalek::SigningKey::from_bytes(&seed)
         .verifying_key()
         .to_bytes();
@@ -866,7 +877,9 @@ fn print_file_bound_vectors() {
         "keyGeneration": 3,
         "docKeyId": 7,
         "fileId": file_id,
-        "senderDeviceId": 42,
+        "senderAccount": sender_account,
+        "deviceId": 42,
+        "manifestSequence": 5,
         "sequence": 9,
         "nonce": e(&nonce),
         "plaintext": e(plaintext),
@@ -1104,93 +1117,6 @@ fn print_drive_envelope_negatives() {
     println!(
         "{}",
         serde_json::json!({ "invalidPadding": invalid_padding, "invalidSealedLength": invalid_sealed_length })
-    );
-}
-
-/// Collaboration devices (kutup-crypto/src/device_registration.rs): the
-/// account authority's statement for a device key (over a server challenge
-/// and a time) and its revocation, kept together.
-#[test]
-fn device_registration_vector() {
-    use kutup_crypto::device_registration as dr;
-    let all: serde_json::Value = serde_json::from_str(include_str!("vectors/crypto.json")).unwrap();
-    let v = &all["deviceRegistration"];
-    let key32 = |field: &str| -> [u8; 32] { b64(v[field].as_str().unwrap()).try_into().unwrap() };
-    let identity =
-        kutup_crypto::identity::AccountIdentityKeysV1::derive(&key32("masterKey")).unwrap();
-    let authority = identity.authority_public_key();
-    let (device, challenge) = (key32("devicePublicKey"), key32("challenge"));
-    let server = v["server"].as_str().unwrap();
-    let statement = dr::DeviceStatement {
-        server,
-        user_id: v["userId"].as_str().unwrap(),
-        device_public: &device,
-        purpose: dr::PURPOSE_COLLAB_FRAMES,
-        challenge: &challenge,
-        issued_at_ms: v["issuedAtMs"].as_i64().unwrap(),
-    };
-    let signature = dr::sign(&identity, &statement).unwrap();
-    assert_eq!(signature, v["signature"].as_str().unwrap());
-    assert_eq!(
-        hex::encode(dr::signing_bytes(&identity.incarnation_id(), &statement).unwrap()),
-        v["signingBytes"].as_str().unwrap()
-    );
-    dr::verify(&authority, &statement, &signature).unwrap();
-    let other = key32("otherAuthorityPublicKey");
-    assert!(dr::verify(&other, &statement, &signature).is_err());
-    let later = dr::DeviceStatement {
-        issued_at_ms: statement.issued_at_ms + 1,
-        ..statement
-    };
-    assert!(dr::verify(&authority, &later, &signature).is_err());
-    let r = &v["revocation"];
-    let revoked_at = r["revokedAtMs"].as_i64().unwrap();
-    let revocation = dr::sign_revocation(&identity, server, &device, revoked_at).unwrap();
-    assert_eq!(revocation, r["signature"].as_str().unwrap());
-    assert_eq!(
-        hex::encode(
-            dr::revocation_bytes(&identity.incarnation_id(), server, &device, revoked_at).unwrap()
-        ),
-        r["signingBytes"].as_str().unwrap()
-    );
-    dr::verify_revocation(&authority, server, &device, revoked_at, &revocation).unwrap();
-    assert!(dr::verify_revocation(&other, server, &device, revoked_at, &revocation).is_err());
-}
-
-#[test]
-#[ignore]
-fn print_device_registration_vector() {
-    use base64::Engine as _;
-    use kutup_crypto::device_registration as dr;
-    let e = |b: &[u8]| base64::engine::general_purpose::STANDARD.encode(b);
-    let identity = kutup_crypto::identity::AccountIdentityKeysV1::derive(&[0x33; 32]).unwrap();
-    let other = kutup_crypto::identity::AccountIdentityKeysV1::derive(&[0x44; 32]).unwrap();
-    let (server, user) = ("kutup.dev", "11111111-1111-4111-8111-111111111111");
-    let (device, challenge, at) = ([0x55u8; 32], [0x66u8; 32], 1_790_000_000_000i64);
-    let statement = dr::DeviceStatement {
-        server,
-        user_id: user,
-        device_public: &device,
-        purpose: dr::PURPOSE_COLLAB_FRAMES,
-        challenge: &challenge,
-        issued_at_ms: at,
-    };
-    println!(
-        "{}",
-        serde_json::json!({
-            "description": "Collaboration devices signed by their account (kutup-crypto/src/device_registration.rs): the authority signs the incarnation, the server, the account, the device key, its purpose (1: collaboration frames), the server's one-time challenge and the time; and, to revoke it, the incarnation, server, key and time.",
-            "masterKey": e(&[0x33; 32]),
-            "otherAuthorityPublicKey": e(&other.authority_public_key()),
-            "server": server, "userId": user,
-            "devicePublicKey": e(&device), "challenge": e(&challenge), "issuedAtMs": at,
-            "signingBytes": hex::encode(dr::signing_bytes(&identity.incarnation_id(), &statement).unwrap()),
-            "signature": dr::sign(&identity, &statement).unwrap(),
-            "revocation": {
-                "revokedAtMs": at + 1000,
-                "signingBytes": hex::encode(dr::revocation_bytes(&identity.incarnation_id(), server, &device, at + 1000).unwrap()),
-                "signature": dr::sign_revocation(&identity, server, &device, at + 1000).unwrap(),
-            },
-        })
     );
 }
 

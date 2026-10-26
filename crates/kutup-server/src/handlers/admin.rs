@@ -2295,18 +2295,12 @@ pub async fn wipe_user(
     }
 
     // 3. Erase the key bundle + TOTP and reset to first-login with the new temp password,
-    //    and with them the old incarnation's collab devices, in one step. Revoked
-    //    devices stay, as tombstones: their keys never register again. Their
-    //    revocations are not told to other servers any more (those take only the
-    //    current incarnation's), nor need be: a server elsewhere stops taking the
-    //    old incarnation's devices once the share is issued to the new one. Every
-    //    grant and sign-in it ends ends with it, and the owner sees it happened
-    //    (the event outlives the incarnation).
+    //    in one step (the account's devices of every kind went with its rows above). A
+    //    server elsewhere stops taking the old incarnation's devices once the share is
+    //    issued to the new one: their manifest is under the old authority. Every grant
+    //    and sign-in it ends ends with it, and the owner sees it happened (the event
+    //    outlives the incarnation).
     let mut tx = state.pool.begin().await?;
-    sqlx::query("DELETE FROM user_devices WHERE user_id = $1 AND revoked_at_ms IS NULL")
-        .bind(target)
-        .execute(&mut *tx)
-        .await?;
     clear_account_values(&mut tx, target).await?;
     // Every second factor and its codes, with the account's row locked, so a
     // turn-on landing meanwhile cannot leave codes behind.

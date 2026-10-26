@@ -103,12 +103,13 @@ pub fn spawn_all(
         loop {
             tick.tick().await;
             uploads_sweep_once(&pool, &storage, chat.media_delivery_retention_days).await;
-            // Devices of people no share here names any more (their revoked
-            // keys keep a tombstone).
-            match crate::remote_devices::sweep(&pool).await {
+            // Manifests of other servers' accounts no share here needs.
+            match crate::remote_manifests::sweep(&pool).await {
                 Ok(0) => {}
-                Ok(rows) => tracing::info!(rows, "remote collaboration devices swept"),
-                Err(error) => tracing::warn!("remote device sweep failed: {error}"),
+                Ok(rows) => tracing::info!(rows, "remote account manifests swept"),
+                Err(error) => {
+                    tracing::warn!(error = %error.message, "remote manifest sweep failed")
+                }
             }
             // Used and expired grants, and sign-ins never finished.
             if let Err(error) = crate::grants::sweep(&pool).await {
@@ -148,7 +149,7 @@ pub async fn chat_maintenance_once(
         tracing::warn!(%error, "chat maintenance: retention setting unavailable; mailbox cleanup skipped");
         0
     });
-    match sqlx::query("DELETE FROM chat_ws_tickets WHERE expires_at <= now()")
+    match sqlx::query("DELETE FROM device_tickets WHERE expires_at <= now()")
         .execute(pool)
         .await
     {

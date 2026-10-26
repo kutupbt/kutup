@@ -105,8 +105,8 @@ fn published(user: &str) -> AccountPreKeyBundlesResponse {
             user.parse().unwrap(),
             1,
             None,
-            identity_key.clone(),
-            binding,
+            Some(identity_key.clone()),
+            Some(binding),
             devices
                 .iter()
                 .map(|bundle| {
@@ -1240,8 +1240,8 @@ fn an_own_account_message_is_taken_only_from_a_device_of_the_own_verified_manife
             BOB.parse().unwrap(),
             1,
             None,
-            bundle.identity_key.clone(),
-            bob_binding.clone(),
+            Some(bundle.identity_key.clone()),
+            Some(bob_binding.clone()),
             vec![kutup_chat_proto::AccountManifestDeviceV3::chat(
                 1,
                 kutup_chat_proto::DirectChatSuiteId::PqxdhTripleRatchetV1,

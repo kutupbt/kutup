@@ -1544,7 +1544,7 @@ mod tests {
                 drive_share_signing_public_key: manifest.drive.share_signing_public_key.clone(),
                 highest_sequence: manifest.sequence,
                 manifest_hash: manifest.manifest_hash().unwrap(),
-                identity_key: manifest.identity_key.clone(),
+                identity_key: manifest.identity_key.clone().unwrap_or_default(),
                 identity_verified: false,
                 identity_verified_at_ms: 0,
                 trust,

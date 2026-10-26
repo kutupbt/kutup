@@ -629,7 +629,19 @@ pub const DEVICES_PER_ACCOUNT: NumericSetting = NumericSetting {
     min: 1,
     max: kutup_chat_proto::MAX_ACCOUNT_MANIFEST_DEVICES as i64,
 };
-pub const DEVICE_SETTINGS: [NumericSetting; 1] = [DEVICES_PER_ACCOUNT];
+/// How long a device row may wait to be listed in its account's manifest
+/// before another device's publication drops it, in seconds: a device
+/// registers, then lists itself (docs/plans/one-device-list.md §8). Its
+/// frames and messages are refused until it is listed either way.
+pub const DEVICE_LISTING_GRACE_SECONDS: NumericSetting = NumericSetting {
+    key: "device_listing_grace_seconds",
+    field: "deviceListingGraceSeconds",
+    default: 600,
+    min: 60,
+    max: 86_400,
+};
+pub const DEVICE_SETTINGS: [NumericSetting; 2] =
+    [DEVICES_PER_ACCOUNT, DEVICE_LISTING_GRACE_SECONDS];
 
 pub const CHAT_IDENTITY_SETTINGS: [NumericSetting; 7] = [
     CHAT_LINK_TOKEN_SECONDS,

@@ -72,8 +72,8 @@ fn sign(
             account.parse().unwrap(),
             sequence,
             previous_hash,
-            identity_key,
-            binding,
+            Some(identity_key),
+            Some(binding),
             devices,
             issued_at,
         )
@@ -250,7 +250,7 @@ impl MockServer {
         let manifest = manifest.unwrap_or_else(|| self.synthesize(account, &devices, current));
         AccountPreKeyBundlesResponse {
             account: manifest.account.clone(),
-            identity_key: manifest.identity_key.clone(),
+            identity_key: manifest.identity_key.clone().unwrap_or_default(),
             devices: v2(devices),
             manifest,
         }
@@ -301,7 +301,7 @@ impl MockServer {
         let mut chains = self.synthesized.borrow_mut();
         let chain = chains.entry(account.to_string()).or_default();
         if let Some(last) = chain.last() {
-            if last.identity_key == identity && last.devices == listed {
+            if last.identity_key.as_deref() == Some(identity.as_str()) && last.devices == listed {
                 return last.clone();
             }
         }
@@ -1188,8 +1188,8 @@ fn a_forged_authority_over_a_real_identity_is_never_verified_by_a_scan() {
             bob_account.parse().unwrap(),
             1,
             None,
-            bob_bundle.identity_key.clone(),
-            binding_for(&bob_bundle.identity_key, &real_authority),
+            Some(bob_bundle.identity_key.clone()),
+            Some(binding_for(&bob_bundle.identity_key, &real_authority)),
             devices.clone(),
             "2026-07-15T12:00:00Z",
         )

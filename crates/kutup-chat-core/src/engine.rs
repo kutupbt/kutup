@@ -1200,7 +1200,9 @@ impl Engine {
                 }
                 // The identity rule: this device holds the account's identity,
                 // or it has been reset away from it and must not sign.
-                if current.identity_key != self.session.account_identity_key() {
+                if current.identity_key.as_deref()
+                    != Some(self.session.account_identity_key().as_str())
+                {
                     return Err(ChatError::Trust(
                         "the account's identity is not this device's".into(),
                     ));

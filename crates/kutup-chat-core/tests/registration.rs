@@ -235,14 +235,15 @@ fn a_reregistration_keeps_the_accounts_other_devices() {
         )),
         session: "52".repeat(32),
     };
-    // The account's manifest from before it had Chat: an Office instance.
-    let identity = libsignal_protocol::IdentityKeyPair::generate(&mut OsRng.unwrap_err());
+    // The account's manifest from before it had Chat: an Office instance,
+    // and no Chat identity.
     let head = authority
-        .sign_manifest(
+        .sign_manifest_with_binding(
             ACCOUNT.parse().unwrap(),
             1,
             None,
-            &identity,
+            None,
+            None,
             vec![editor.clone()],
             "2026-10-24T00:00:00Z",
         )
@@ -254,6 +255,18 @@ fn a_reregistration_keeps_the_accounts_other_devices() {
         manifest: RefCell::new(Some(head.clone())),
         history: RefCell::new(vec![head.clone()]),
     });
+    // A Chat device here re-registers, as the account's first.
+    assert_eq!(
+        block_on(Engine::installation(
+            &SqliteChatDb::open_in_memory().unwrap(),
+            server.as_ref(),
+            ACCOUNT
+        ))
+        .unwrap(),
+        Installation::Unregistered {
+            account_has_identity: false
+        }
+    );
     let db = Rc::new(SqliteChatDb::open_in_memory().unwrap());
     let engine = block_on(Engine::reregister(
         db,

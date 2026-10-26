@@ -26,8 +26,6 @@ pub enum Per {
     Group,
     /// A peer server.
     Peer,
-    /// A peer server and one of its shares.
-    PeerAndShare,
     /// A sealed-sender capability.
     Capability,
     Recipient,
@@ -168,7 +166,7 @@ pub enum Limit {
     RegistrationCodeFailures,
     Recovery,
     UserLookup,
-    DeviceChallenges,
+    DeviceRegistrations,
     AccountHeadReads,
     RenameChecks,
     RenameLookups,
@@ -248,7 +246,6 @@ pub enum Limit {
     RenamePeerFetches,
     AccountPeerFetches,
     RenameAnnounces,
-    CollabDeviceAnnounces,
     // Administration.
     Admin,
 }
@@ -420,14 +417,14 @@ pub static SPECS: &[Spec] = &[
         "Looking users up to share with: enumerating accounts."
     ),
     spec!(
-        DeviceChallenges,
-        "device_challenges",
-        Some("RATE_LIMIT_DEVICE_CHALLENGES_PER_MIN"),
+        DeviceRegistrations,
+        "device_registrations",
+        Some("RATE_LIMIT_DEVICE_REGISTRATIONS_PER_MIN"),
         20,
         Events(MINUTE),
         Account,
         Accounts,
-        "Device registration challenges."
+        "Device registrations (an editor app or the CLI registering itself)."
     ),
     spec!(
         AccountHeadReads,
@@ -1138,16 +1135,6 @@ pub static SPECS: &[Spec] = &[
         Peer,
         Federation,
         "Rename announces taken from one peer."
-    ),
-    spec!(
-        CollabDeviceAnnounces,
-        "collab_device_announces",
-        Some("RATE_LIMIT_COLLAB_DEVICE_ANNOUNCES_PER_MIN"),
-        60,
-        Events(MINUTE),
-        PeerAndShare,
-        Federation,
-        "Device announces from another server for one share."
     ),
     spec!(
         Admin,

@@ -984,72 +984,6 @@ pub fn admin_reset_grant(
         .to_owned()
 }
 
-/// A collaboration device: its id and the seed of the key it signs frames with.
-pub struct Device {
-    pub id: i64,
-    pub seed: [u8; 32],
-}
-
-/// A one-time device registration challenge (base64).
-pub fn device_challenge(c: &Client, base: &str, user: &User) -> String {
-    let r: Value = bearer(c.post(format!("{base}/api/devices/challenge")), &user.token)
-        .send()
-        .unwrap()
-        .json()
-        .unwrap();
-    r["challenge"].as_str().unwrap().to_string()
-}
-
-/// The registration body for `device_key`, signed by `signer`'s authority for
-/// `user`'s account over `challenge`, now (docs/plans/device-registration.md).
-pub fn device_registration_body(
-    c: &Client,
-    base: &str,
-    user: &User,
-    signer: &User,
-    device_key: &[u8; 32],
-    challenge: &str,
-) -> Value {
-    let raw: [u8; 32] = STANDARD.decode(challenge).unwrap().try_into().unwrap();
-    let server = server_domain(c, base);
-    let issued_at_ms = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap()
-        .as_millis() as i64;
-    let statement = kutup_crypto::device_registration::DeviceStatement {
-        server: &server,
-        user_id: &user.id,
-        device_public: device_key,
-        purpose: kutup_crypto::device_registration::PURPOSE_COLLAB_FRAMES,
-        challenge: &raw,
-        issued_at_ms,
-    };
-    let signature = kutup_crypto::device_registration::sign(&signer.identity, &statement).unwrap();
-    json!({
-        "publicSigning": STANDARD.encode(device_key),
-        "label": "test device",
-        "challenge": challenge,
-        "issuedAtMs": issued_at_ms,
-        "signature": signature,
-    })
-}
-
-/// The account's signed revocation body for `device_key`.
-pub fn device_revocation_body(c: &Client, base: &str, user: &User, device_key: &[u8; 32]) -> Value {
-    let revoked_at_ms = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap()
-        .as_millis() as i64;
-    let signature = kutup_crypto::device_registration::sign_revocation(
-        &user.identity,
-        &server_domain(c, base),
-        device_key,
-        revoked_at_ms,
-    )
-    .unwrap();
-    json!({ "revokedAtMs": revoked_at_ms, "signature": signature })
-}
-
 /// Signs `user` in again: a new session (token) of the same account.
 pub fn sign_in_again(c: &Client, base: &str, user: &User) -> String {
     sign_in(c, base, &user.username, &user.password)["accessToken"]
@@ -1058,26 +992,168 @@ pub fn sign_in_again(c: &Client, base: &str, user: &User) -> String {
         .to_string()
 }
 
-/// A device registered the proper way: a fresh challenge, signed by the
-/// account's own authority.
+/// An editing device of an account (docs/plans/one-device-list.md): its id
+/// in the account's manifest, the seed of its frame key, its credential, and
+/// the manifest sequence that lists it.
+pub struct Device {
+    pub id: u32,
+    pub seed: [u8; 32],
+    pub credential: [u8; 32],
+    pub account: AccountRef,
+    pub manifest_sequence: u64,
+}
+
+impl Device {
+    /// The `X-Kutup-Device` value.
+    pub fn header(&self) -> String {
+        format!(
+            "{}.{}",
+            self.id,
+            base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(self.credential)
+        )
+    }
+}
+
+/// `user`'s account manifest as its server holds it, if it has one.
+pub fn account_manifest(
+    c: &Client,
+    base: &str,
+    user: &User,
+) -> Option<kutup_chat_proto::AccountManifestV3> {
+    let r = bearer(
+        c.get(format!(
+            "{base}/api/chat/accounts/{}/manifest",
+            user.person.account_id
+        )),
+        &user.token,
+    )
+    .send()
+    .unwrap();
+    if r.status() == StatusCode::NOT_FOUND {
+        return None;
+    }
+    assert_eq!(r.status(), StatusCode::OK, "account manifest");
+    Some(r.json().unwrap())
+}
+
+/// The account's next manifest listing `devices` in place of the head's
+/// entries of their ids (the first, with no Chat identity, when it has none),
+/// signed by its authority.
+pub fn next_manifest(
+    c: &Client,
+    base: &str,
+    user: &User,
+    change: impl FnOnce(&mut Vec<kutup_chat_proto::AccountManifestDeviceV3>),
+) -> kutup_chat_proto::AccountManifestV3 {
+    let issued_at = time::OffsetDateTime::now_utc()
+        .format(&time::format_description::well_known::Rfc3339)
+        .unwrap();
+    let mut manifest = match account_manifest(c, base, user) {
+        Some(head) => {
+            let mut devices = head.devices.clone();
+            change(&mut devices);
+            head.successor(devices, issued_at).unwrap()
+        }
+        None => {
+            let public = user.identity.authority_public_key();
+            let mut devices = Vec::new();
+            change(&mut devices);
+            devices.sort_by_key(|device| device.device_id);
+            kutup_chat_proto::AccountManifestV3 {
+                manifest_version: kutup_chat_proto::ACCOUNT_MANIFEST_V3_VERSION,
+                account: user.person.clone(),
+                incarnation_id: user.identity.incarnation_id(),
+                sequence: 1,
+                previous_hash: None,
+                identity_key: None,
+                identity_binding: None,
+                drive: kutup_chat_proto::AccountManifestDriveKeysV1 {
+                    suite: kutup_chat_proto::AccountIdentitySuiteId::XWingEd25519V2,
+                    hpke_public_key: STANDARD.encode(user.identity.drive_hpke_public_key()),
+                    share_signing_public_key: STANDARD
+                        .encode(user.identity.drive_signing_public_key()),
+                },
+                devices,
+                issued_at,
+                authority_key_id: hex::encode(kutup_crypto::primitives::hash(
+                    kutup_crypto::primitives::Suite::V1,
+                    public,
+                )),
+                self_authority_key: STANDARD.encode(public),
+                signature: String::new(),
+            }
+        }
+    };
+    manifest
+        .sign(user.identity.authority_signing_key())
+        .unwrap();
+    manifest
+}
+
+/// Publishes `manifest` as `by` (any device of the account).
+pub fn publish_manifest(
+    c: &Client,
+    base: &str,
+    user: &User,
+    by: &str,
+    manifest: &kutup_chat_proto::AccountManifestV3,
+) -> reqwest::blocking::Response {
+    bearer(c.post(format!("{base}/api/chat/manifest")), &user.token)
+        .header(kutup_chat_proto::DEVICE_HEADER, by)
+        .json(manifest)
+        .send()
+        .unwrap()
+}
+
+/// An editing device of `user`'s, registered and listed in the account's
+/// manifest by itself, as an editor app does.
 pub fn register_device(c: &Client, base: &str, user: &User) -> Device {
     let mut seed = [0u8; 32];
     kutup_crypto::primitives::random(&mut seed);
+    let mut credential = [0u8; 32];
+    kutup_crypto::primitives::random(&mut credential);
     let key =
         kutup_crypto::primitives::SigningKey::from_seed(kutup_crypto::primitives::Suite::V1, &seed)
             .verifying_key()
             .to_array::<32>();
-    let challenge = device_challenge(c, base, user);
     let r = bearer(c.post(format!("{base}/api/devices")), &user.token)
-        .json(&device_registration_body(
-            c, base, user, user, &key, &challenge,
-        ))
+        .json(&json!({
+            "kind": "editor",
+            "name": "live-test editor",
+            "frameKey": STANDARD.encode(key),
+            "credential": base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(credential),
+        }))
         .send()
         .unwrap();
-    assert_eq!(r.status(), StatusCode::CREATED, "register a device");
+    assert_eq!(r.status(), StatusCode::OK, "register a device");
     let body: Value = r.json().unwrap();
-    Device {
-        id: body["deviceId"].as_i64().unwrap(),
+    let id = body["deviceId"].as_u64().unwrap() as u32;
+    let entry = kutup_chat_proto::AccountManifestDeviceV3 {
+        device_id: id,
+        kind: kutup_chat_proto::DeviceKind::Editor,
+        chat: None,
+        frame_key: Some(STANDARD.encode(key)),
+        session: body["session"].as_str().unwrap().to_owned(),
+    };
+    let manifest = next_manifest(c, base, user, |devices| {
+        devices.retain(|device| device.device_id != id);
+        devices.push(entry);
+    });
+    let mut device = Device {
+        id,
         seed,
-    }
+        credential,
+        account: user.person.clone(),
+        manifest_sequence: manifest.sequence,
+    };
+    let r = publish_manifest(c, base, user, &device.header(), &manifest);
+    let status = r.status();
+    assert_eq!(
+        status,
+        StatusCode::OK,
+        "list the device: {}",
+        r.text().unwrap()
+    );
+    device.manifest_sequence = manifest.sequence;
+    device
 }

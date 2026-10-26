@@ -142,7 +142,7 @@ impl LinkingDevice {
             .await?
             .ok_or_else(|| ChatError::Trust("the account has no manifest to link to".into()))?;
         verify_own_manifest(&head, &account, authority)?;
-        if head.identity_key != message.identity_key_public {
+        if head.identity_key.as_deref() != Some(message.identity_key_public.as_str()) {
             return Err(ChatError::Trust(
                 "the account's manifest lists another identity".into(),
             ));
@@ -247,7 +247,12 @@ impl Engine {
             }
             _ => {}
         }
-        let account_has_identity = transport.fetch_manifest(user).await?.is_some();
+        // A manifest of an account that never used Chat lists its editing
+        // devices and no identity: this device re-registers, as the first.
+        let account_has_identity = transport
+            .fetch_manifest(user)
+            .await?
+            .is_some_and(|manifest| manifest.identity_key.is_some());
         Ok(Installation::Unregistered {
             account_has_identity,
         })
@@ -450,7 +455,7 @@ impl Engine {
             .ok_or_else(|| ChatError::Trust("the account has no manifest".into()))?;
         verify_own_manifest(&head, &account, authority)?;
         let identity_key = self.session.account_identity_key();
-        if head.identity_key != identity_key {
+        if head.identity_key.as_deref() != Some(identity_key.as_str()) {
             return Err(ChatError::Trust(
                 "the account's identity is not this device's".into(),
             ));
@@ -527,7 +532,7 @@ impl Engine {
                 .await?
                 .ok_or_else(|| ChatError::Trust("the account has no manifest".into()))?;
             verify_own_manifest(&head, &account, &self.group_keys()?.authority)?;
-            if head.identity_key != self.session.account_identity_key() {
+            if head.identity_key.as_deref() != Some(self.session.account_identity_key().as_str()) {
                 return Err(ChatError::Trust(
                     "the account's identity is not this device's".into(),
                 ));
@@ -700,7 +705,7 @@ impl Engine {
             .await?
             .ok_or_else(|| ChatError::Trust("the account has no manifest".into()))?;
         verify_own_manifest(&head, &account, &self.group_keys()?.authority)?;
-        let current = head.identity_key == body.identity_key_public
+        let current = head.identity_key.as_deref() == Some(body.identity_key_public.as_str())
             && head
                 .chat_device(self.session.device_id())
                 .is_some_and(|device| device.registration_id == body.registration_id)
@@ -773,7 +778,7 @@ impl Engine {
                 .await?
                 .ok_or_else(|| ChatError::Trust("the account has no manifest".into()))?;
             verify_own_manifest(&head, &account, &self.group_keys()?.authority)?;
-            if head.identity_key == self.session.account_identity_key() {
+            if head.identity_key.as_deref() == Some(self.session.account_identity_key().as_str()) {
                 return Ok(());
             }
             let hash = head.manifest_hash().map_err(ChatError::Trust)?;
@@ -859,7 +864,7 @@ mod tests {
         );
         assert_eq!(
             first.identity_key,
-            alice.engine.session().account_identity_key()
+            Some(alice.engine.session().account_identity_key())
         );
         let _alice2 = world.link_device(&mut alice);
         let linked = head(&world, &alice.account);
@@ -886,7 +891,7 @@ mod tests {
         );
         assert_ne!(reregistered.identity_key, linked.identity_key);
         assert_eq!(
-            fresh.session().account_identity_key(),
+            Some(fresh.session().account_identity_key()),
             reregistered.identity_key
         );
     }
@@ -907,7 +912,7 @@ mod tests {
         assert!(manifest.device(alice2.device()).is_some());
         assert_eq!(
             manifest.identity_key,
-            alice.engine.session().account_identity_key()
+            Some(alice.engine.session().account_identity_key())
         );
         // The new device holds a credential of its own.
         let local = block_on(alice2.engine.session().db().load_local_identity())
@@ -1009,7 +1014,10 @@ mod tests {
         let manifest = head(&world, &alice.account);
         let new_identity = alice.engine.session().account_identity_key();
         assert_ne!(new_identity, old_identity);
-        assert_eq!(manifest.identity_key, new_identity);
+        assert_eq!(
+            manifest.identity_key.as_deref(),
+            Some(new_identity.as_str())
+        );
         let after = block_on(alice.engine.session().db().load_local_identity())
             .unwrap()
             .unwrap();
@@ -1354,7 +1362,7 @@ mod tests {
                 .is_none()
         );
         assert_ne!(
-            alice2.engine.session().account_identity_key(),
+            Some(alice2.engine.session().account_identity_key()),
             head(&world, &alice.account).identity_key
         );
     }

@@ -528,7 +528,13 @@ impl Session {
             return Ok(None);
         }
         Ok(Some(
-            *decode_identity_key(&history.manifest.identity_key)?.public_key(),
+            *decode_identity_key(
+                history
+                    .manifest
+                    .chat_identity_key()
+                    .map_err(ChatError::Trust)?,
+            )?
+            .public_key(),
         ))
     }
 

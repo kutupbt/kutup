@@ -204,8 +204,8 @@ impl ChatAccount {
             incarnation_id: hex::encode(incarnation.finish()),
             sequence: self.head.as_ref().map_or(1, |head| head.sequence + 1),
             previous_hash: self.head.as_ref().map(|head| head.manifest_hash().unwrap()),
-            identity_key: self.identity_key(),
-            identity_binding: String::new(),
+            identity_key: Some(self.identity_key()),
+            identity_binding: Some(String::new()),
             drive: self.drive.clone(),
             devices: listed,
             issued_at: time::OffsetDateTime::now_utc()
@@ -224,14 +224,14 @@ impl ChatAccount {
     /// The account identity's signature over `manifest`'s authority,
     /// incarnation and account (its identity binding).
     pub fn bind(&self, manifest: &mut AccountManifestV3) {
-        manifest.identity_binding = b64(&self
+        manifest.identity_binding = Some(b64(&self
             .identity
             .private_key()
             .calculate_signature(
                 &manifest.identity_binding_bytes().unwrap(),
                 &mut kutup_crypto::primitives::Rng,
             )
-            .unwrap());
+            .unwrap()));
     }
 
     /// Signs `manifest` (again) with the account's authority.

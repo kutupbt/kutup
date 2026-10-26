@@ -825,10 +825,10 @@ pub static AVAILABLE_HASHES: LazyLock<RateLimiter> =
 pub static COLLAB_FRAME_POSTS: LazyLock<RateLimiter> =
     LazyLock::new(|| RateLimiter::registered(Limit::CollabFramePosts));
 
-/// Device registration challenges: 20 a minute per account (a tab or the
-/// CLI asks for one each time it registers a device).
-pub static DEVICE_CHALLENGES: LazyLock<RateLimiter> =
-    LazyLock::new(|| RateLimiter::registered(Limit::DeviceChallenges));
+/// Device registrations: 20 a minute per account (an editor app or the CLI
+/// registering itself, docs/plans/one-device-list.md).
+pub static DEVICE_REGISTRATIONS: LazyLock<RateLimiter> =
+    LazyLock::new(|| RateLimiter::registered(Limit::DeviceRegistrations));
 
 /// Account head reads (the head, its chain, a scope's index): 300 a minute
 /// per account, far above what a device checking before each listed write
@@ -858,10 +858,6 @@ pub static RENAME_ANNOUNCES: LazyLock<RateLimiter> =
 /// already says whether a name is taken).
 pub static RENAME_CHECKS: LazyLock<RateLimiter> =
     LazyLock::new(|| RateLimiter::registered(Limit::RenameChecks));
-
-/// Device announces from another server: 60 a minute per (server, share).
-pub static COLLAB_DEVICE_ANNOUNCES: LazyLock<RateLimiter> =
-    LazyLock::new(|| RateLimiter::registered(Limit::CollabDeviceAnnounces));
 
 // --- TOTP brute-force tracker (mirrors the `totpTracker` struct) ---
 
@@ -983,8 +979,7 @@ pub fn spawn_cleanup() {
             LOGIN_CEILING.cleanup();
             AVAILABLE_HASHES.cleanup();
             COLLAB_FRAME_POSTS.cleanup();
-            DEVICE_CHALLENGES.cleanup();
-            COLLAB_DEVICE_ANNOUNCES.cleanup();
+            DEVICE_REGISTRATIONS.cleanup();
             CHAT_GROUP_RELAY.cleanup();
             CHAT_GROUP_GATEWAY_RELAY.cleanup();
             CHAT_GROUP_PSEUDONYM.cleanup();

@@ -67,8 +67,8 @@ fn manifest(devices: Vec<AccountManifestDeviceV3>) -> AccountManifestV3 {
         incarnation_id: hex::encode(incarnation.finalize()),
         sequence: 1,
         previous_hash: None,
-        identity_key: identity(3),
-        identity_binding: b64(&[0x5b; 64]),
+        identity_key: Some(identity(3)),
+        identity_binding: Some(b64(&[0x5b; 64])),
         drive: AccountManifestDriveKeysV1 {
             suite: AccountIdentitySuiteId::XWingEd25519V2,
             hpke_public_key: b64(&[9; 1216]),
@@ -97,7 +97,7 @@ fn manifest_v3_verifies_and_binds_every_field() {
 
     // Every vouched-for field is under the signature.
     let mut other_identity = good.clone();
-    other_identity.identity_key = identity(4);
+    other_identity.identity_key = Some(identity(4));
     assert!(other_identity.verify().is_err());
     let mut other_registration = good.clone();
     other_registration.devices[1]
@@ -142,7 +142,7 @@ fn manifest_v3_refuses_bad_shapes_even_when_signed() {
     }
 
     let mut not_curve = two_devices();
-    not_curve.identity_key = b64(&[3; 33]);
+    not_curve.identity_key = Some(b64(&[3; 33]));
     assert!(not_curve.signing_bytes().is_err());
 
     let mut no_link = two_devices();
@@ -213,6 +213,35 @@ fn each_kind_carries_its_keys() {
         assert_eq!(DeviceKind::parse(kind.as_str()).unwrap(), kind);
     }
     assert!(DeviceKind::parse("mls").is_err());
+}
+
+/// An account that never used Chat has a manifest too: its editing devices
+/// and no identity. A Chat device needs the identity listed.
+#[test]
+fn a_manifest_without_a_chat_identity_lists_no_chat_device() {
+    let without = |devices| {
+        let mut manifest = manifest(devices);
+        manifest.identity_key = None;
+        manifest.identity_binding = None;
+        sign(&mut manifest);
+        manifest
+    };
+    let editors = without(vec![editor(1), editor(2)]);
+    editors.verify().unwrap();
+    assert!(editors.chat_identity_key().is_err());
+    assert!(editors.identity_binding_bytes().is_err());
+    let json = serde_json::to_value(&editors).unwrap();
+    assert!(json.get("identityKey").is_none());
+    assert!(without(vec![editor(1), device(2, 20)]).verify().is_err());
+    // Both or neither.
+    let mut half = manifest(vec![editor(1)]);
+    half.identity_binding = None;
+    assert!(half.signing_bytes().is_err());
+    // The identity is signed in: dropping it breaks the signature.
+    let mut dropped = manifest(vec![editor(1)]);
+    dropped.identity_key = None;
+    dropped.identity_binding = None;
+    assert!(dropped.verify().is_err());
 }
 
 #[test]
@@ -289,7 +318,7 @@ fn bundles_must_agree_with_the_manifest() {
     let manifest = two_devices();
     let good = AccountPreKeyBundlesResponse {
         account: manifest.account.clone(),
-        identity_key: manifest.identity_key.clone(),
+        identity_key: manifest.identity_key.clone().unwrap(),
         devices: vec![bundle(1, 10), bundle(2, 20)],
         manifest,
     };
@@ -479,7 +508,7 @@ fn distribution() -> AccountIdentityDistributionRequest {
     manifest.previous_hash = Some(hex::encode([7; 32]));
     sign(&mut manifest);
     AccountIdentityDistributionRequest {
-        identity_key: manifest.identity_key.clone(),
+        identity_key: manifest.identity_key.clone().unwrap(),
         devices: vec![keys(1, 11), keys(3, 31)],
         // The message carries device 3's current registration id.
         device_messages: vec![sync_envelope(3, 30)],
@@ -743,8 +772,8 @@ fn manifest_v3_vector_is_pinned() {
 }
 
 const SIGNING_BYTES_SHA256: &str =
-    "7e1eeb0f633c38d76e02e931cc30540c01ba6fa92babcd588d2a1cde2f383381";
-const MANIFEST_HASH: &str = "172b87fd0ff206b5ec35703f8310a9ccd21b7238aa0fedfc9052b485578df6eb";
+    "4df9d81e6392f894d842fd784e2a93be5ed47ad95e5c56d501100d350682f19f";
+const MANIFEST_HASH: &str = "b7ee11e87ce4e3033173b5f5939feff90474cbcf7b7600d1488f1dff3dba8760";
 
 #[test]
 fn account_identity_sync_body() {
@@ -807,7 +836,7 @@ fn the_identity_binding_is_signed_and_names_authority_incarnation_account_and_id
             &manifest.authority_key_id,
             &manifest.incarnation_id,
             &manifest.account,
-            &manifest.identity_key
+            manifest.identity_key.as_deref().unwrap()
         )
         .unwrap()
     );
@@ -818,8 +847,8 @@ fn the_identity_binding_is_signed_and_names_authority_incarnation_account_and_id
     // The binding itself is under the authority's signature, and its length
     // is checked.
     let mut other = manifest.clone();
-    other.identity_binding = b64(&[0x5c; 64]);
+    other.identity_binding = Some(b64(&[0x5c; 64]));
     assert!(other.verify().is_err());
-    other.identity_binding = b64(&[0x5c; 63]);
+    other.identity_binding = Some(b64(&[0x5c; 63]));
     assert!(other.signing_bytes().is_err());
 }

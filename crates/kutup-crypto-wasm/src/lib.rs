@@ -14,6 +14,7 @@ use kutup_chat_proto::{
     ChatBackupSegmentPlaintextV1, ChatBackupSignerAuthorizationV1,
 };
 use kutup_crypto::account_envelope::{self, AccountEnvelopePurpose};
+use kutup_crypto::account_ref::AccountRef;
 use kutup_crypto::chat_attachment_ledger::{self, ChatAttachmentLedgerContextV1};
 use kutup_crypto::chat_backup::{
     self, ChatBackupContextV1, ChatBackupObjectContextV1, ChatBackupObjectPurposeV1,
@@ -22,7 +23,7 @@ use kutup_crypto::chat_backup::{
 use kutup_crypto::chat_media::{self, ChatMediaObjectContextV1};
 use kutup_crypto::drive_envelope::{self, DriveEnvelopeContextV1, DriveEnvelopePurpose};
 use kutup_crypto::drive_object::{self, DriveFileBlobContextV1};
-use kutup_crypto::envelope::{self, CollabFrameContextV1};
+use kutup_crypto::envelope::{self, CollabFrameContextV3};
 use kutup_crypto::kdf::{self, AccountProtectionParameters, AccountProtectionSuiteId};
 use kutup_crypto::local_state::{self, LocalStatePurpose};
 use kutup_crypto::primitives::{SigningKey, Suite};
@@ -103,7 +104,8 @@ struct OpenedCollabFrameView {
     kind: u8,
     key_generation: u32,
     doc_key_id: u32,
-    sender_device_id: String,
+    device_id: u32,
+    manifest_sequence: String,
     sequence: String,
     plaintext: String,
 }
@@ -1003,23 +1005,25 @@ pub fn seal_collab_frame(
     key_generation: u32,
     doc_key_id: u32,
     file_id: &str,
-    sender_device_id: &str,
+    device_id: u32,
+    manifest_sequence: &str,
     sequence: &str,
 ) -> Result<String, JsValue> {
     let plaintext = decode_canonical_base64(plaintext_base64, "collaboration plaintext")?;
     let file_key = decode_canonical_base64(file_key_base64, "file key")?;
-    let sender_device_id = sender_device_id
+    let manifest_sequence = manifest_sequence
         .parse::<u64>()
-        .map_err(|_| js_error("sender device id must be canonical u64"))?;
+        .map_err(|_| js_error("manifest sequence must be canonical u64"))?;
     let sequence = sequence
         .parse::<u64>()
         .map_err(|_| js_error("sequence must be canonical u64"))?;
-    let context = CollabFrameContextV1::new(
+    let context = CollabFrameContextV3::new(
         kind,
         key_generation,
         doc_key_id,
         file_id,
-        sender_device_id,
+        device_id,
+        manifest_sequence,
         sequence,
     )
     .map_err(|error| js_error(&error.to_string()))?;
@@ -1028,12 +1032,54 @@ pub fn seal_collab_frame(
         .map_err(|error| js_error(&error.to_string()))
 }
 
+fn sender_account(value: &str) -> Result<AccountRef, JsValue> {
+    value
+        .parse::<AccountRef>()
+        .map_err(|_| js_error("the frame's sender must be an account reference"))
+}
+
+/// What the device's frame key signs: the frame under its sender account.
 #[wasm_bindgen(js_name = collabFrameSigningBytes)]
-pub fn collab_frame_signing_bytes(frame_base64: &str) -> Result<String, JsValue> {
+pub fn collab_frame_signing_bytes(frame_base64: &str, sender: &str) -> Result<String, JsValue> {
     let frame = decode_canonical_base64(frame_base64, "collaboration frame")?;
-    envelope::signing_bytes(&frame)
+    envelope::signing_bytes(&frame, &sender_account(sender)?)
         .map(|bytes| STANDARD.encode(bytes))
         .map_err(|error| js_error(&error.to_string()))
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct DeliveredCollabFrameView {
+    sender: String,
+    frame: String,
+}
+
+/// A frame as a server delivers it (its sender account, then the packed
+/// frame): `{ sender, frame }`, the frame canonical base64. Whether the
+/// sender signed it is `verifyCollabFrame`'s question.
+#[wasm_bindgen(js_name = deliveredCollabFrame)]
+pub fn delivered_collab_frame(delivered_base64: &str) -> Result<JsValue, JsValue> {
+    let bytes = decode_canonical_base64(delivered_base64, "delivered collaboration frame")?;
+    let (sender, frame) =
+        envelope::delivered(&bytes).map_err(|error| js_error(&error.to_string()))?;
+    serde_wasm_bindgen::to_value(&DeliveredCollabFrameView {
+        sender: sender.to_string(),
+        frame: STANDARD.encode(frame),
+    })
+    .map_err(|error| js_error(&format!("encode delivered frame: {error}")))
+}
+
+/// Whether `sender` signed the frame with `frameKey` (canonical base64 of
+/// the Ed25519 key its account's manifest lists for the frame's device).
+#[wasm_bindgen(js_name = verifyCollabFrame)]
+pub fn verify_collab_frame(
+    frame_base64: &str,
+    sender: &str,
+    frame_key_base64: &str,
+) -> Result<bool, JsValue> {
+    let frame = decode_canonical_base64(frame_base64, "collaboration frame")?;
+    let key = decode_canonical_base64(frame_key_base64, "frame key")?;
+    Ok(envelope::verify(&frame, &sender_account(sender)?, &key).is_ok())
 }
 
 #[wasm_bindgen(js_name = attachCollabFrameSignature)]
@@ -1064,11 +1110,80 @@ pub fn open_collab_frame(
         kind: parsed.kind,
         key_generation: parsed.key_generation,
         doc_key_id: parsed.doc_key_id,
-        sender_device_id: parsed.sender_device_id.to_string(),
+        device_id: parsed.device_id,
+        manifest_sequence: parsed.manifest_sequence.to_string(),
         sequence: parsed.sequence.to_string(),
         plaintext: STANDARD.encode(plaintext),
     })
     .map_err(|error| js_error(&format!("encode collaboration frame: {error}")))
+}
+
+fn signed_successor(
+    head: JsValue,
+    master_key_base64: &str,
+    issued_at: &str,
+    change: impl FnOnce(&mut Vec<kutup_chat_proto::AccountManifestDeviceV3>) -> Result<(), JsValue>,
+) -> Result<JsValue, JsValue> {
+    let head: kutup_chat_proto::AccountManifestV3 = serde_wasm_bindgen::from_value(head)
+        .map_err(|error| js_error(&format!("account manifest: {error}")))?;
+    head.verify().map_err(|error| js_error(&error))?;
+    let master_key: [u8; 32] = decode_canonical_base64(master_key_base64, "master key")?
+        .try_into()
+        .map_err(|_| js_error("master key must be 32 bytes"))?;
+    let identity = kutup_crypto::identity::AccountIdentityKeysV1::derive(&master_key)
+        .map_err(|error| js_error(&error.to_string()))?;
+    let mut devices = head.devices.clone();
+    change(&mut devices)?;
+    let mut next = head
+        .successor(devices, issued_at)
+        .map_err(|error| js_error(&error))?;
+    // Signing checks the head names this account's authority.
+    next.sign(identity.authority_signing_key())
+        .map_err(|error| js_error(&error))?;
+    next.verify_successor(Some(&head))
+        .map_err(|error| js_error(&error))?;
+    serde_wasm_bindgen::to_value(&next)
+        .map_err(|error| js_error(&format!("encode account manifest: {error}")))
+}
+
+/// The account's next manifest: `head` (as the server gave it) with
+/// `entry` listed (in place of any entry of its id), signed with the
+/// authority the master key derives (docs/plans/one-device-list.md). The
+/// head must name that authority.
+#[wasm_bindgen(js_name = listDeviceInManifest)]
+pub fn list_device_in_manifest(
+    head: JsValue,
+    entry: JsValue,
+    issued_at: &str,
+    master_key_base64: &str,
+) -> Result<JsValue, JsValue> {
+    let entry: kutup_chat_proto::AccountManifestDeviceV3 = serde_wasm_bindgen::from_value(entry)
+        .map_err(|error| js_error(&format!("manifest entry: {error}")))?;
+    entry.validate().map_err(|error| js_error(&error))?;
+    signed_successor(head, master_key_base64, issued_at, |devices| {
+        devices.retain(|device| device.device_id != entry.device_id);
+        devices.push(entry);
+        Ok(())
+    })
+}
+
+/// The account's next manifest without the devices `device_ids` names (a
+/// removal, or this device signing out), signed as
+/// [`list_device_in_manifest`]. It must keep at least one device.
+#[wasm_bindgen(js_name = removeDevicesFromManifest)]
+pub fn remove_devices_from_manifest(
+    head: JsValue,
+    device_ids: Vec<u32>,
+    issued_at: &str,
+    master_key_base64: &str,
+) -> Result<JsValue, JsValue> {
+    signed_successor(head, master_key_base64, issued_at, |devices| {
+        devices.retain(|device| !device_ids.contains(&device.device_id));
+        if devices.is_empty() {
+            return Err(js_error("a manifest keeps at least one device"));
+        }
+        Ok(())
+    })
 }
 
 /// The file-key generation a frame names in its public header, so a
@@ -4308,67 +4423,6 @@ impl AccountHeadKeys {
         }
         Ok(VerifiedAccountHead { inner })
     }
-}
-
-/// The account's statement for a collaboration device key
-/// (docs/plans/device-registration.md): the authority (from the master key)
-/// signs the incarnation, the server, the account, the device key, its
-/// purpose, the server's one-time challenge and the time. Returns the
-/// canonical base64 signature.
-#[wasm_bindgen(js_name = signDeviceRegistration)]
-pub fn sign_device_registration(
-    master_key_base64: &str,
-    server: &str,
-    user_id: &str,
-    device_public_base64: &str,
-    challenge_base64: &str,
-    issued_at_ms: f64,
-) -> Result<String, JsValue> {
-    let master = master_key_32(master_key_base64)?;
-    let identity = kutup_crypto::identity::AccountIdentityKeysV1::derive(&master)
-        .map_err(|error| js_error(&error.to_string()))?;
-    let device = public_key_32(device_public_base64, "device key")?;
-    let challenge = public_key_32(challenge_base64, "challenge")?;
-    let statement = kutup_crypto::device_registration::DeviceStatement {
-        server,
-        user_id,
-        device_public: &device,
-        purpose: kutup_crypto::device_registration::PURPOSE_COLLAB_FRAMES,
-        challenge: &challenge,
-        issued_at_ms: millis(issued_at_ms)?,
-    };
-    kutup_crypto::device_registration::sign(&identity, &statement)
-        .map_err(|error| js_error(&error.to_string()))
-}
-
-/// The account's revocation of a device key, signed with its authority.
-/// Returns the canonical base64 signature.
-#[wasm_bindgen(js_name = signDeviceRevocation)]
-pub fn sign_device_revocation(
-    master_key_base64: &str,
-    server: &str,
-    device_public_base64: &str,
-    revoked_at_ms: f64,
-) -> Result<String, JsValue> {
-    let master = master_key_32(master_key_base64)?;
-    let identity = kutup_crypto::identity::AccountIdentityKeysV1::derive(&master)
-        .map_err(|error| js_error(&error.to_string()))?;
-    let device = public_key_32(device_public_base64, "device key")?;
-    kutup_crypto::device_registration::sign_revocation(
-        &identity,
-        server,
-        &device,
-        millis(revoked_at_ms)?,
-    )
-    .map_err(|error| js_error(&error.to_string()))
-}
-
-/// A time from JavaScript: positive whole milliseconds.
-fn millis(value: f64) -> Result<i64, JsValue> {
-    if value.fract() != 0.0 || !(1.0..=9_007_199_254_740_991.0).contains(&value) {
-        return Err(js_error("time must be positive whole milliseconds"));
-    }
-    Ok(value as i64)
 }
 
 /// The Yjs client id a file's first content is made under, from the file id

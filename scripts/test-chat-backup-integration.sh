@@ -21,7 +21,7 @@ export RATE_LIMIT_RECOVERY_PER_HOUR=500
 # The live tests register their own accounts.
 export REGISTRATION_MODE=on
 # The device tests register more than 20 devices on one account in a minute.
-export RATE_LIMIT_DEVICE_CHALLENGES_PER_MIN=1000
+export RATE_LIMIT_DEVICE_REGISTRATIONS_PER_MIN=1000
 # Held names freed within seconds of their date, for the renames test.
 export NAME_SWEEP_SECONDS=2
 export POSTGRES_DB="kutup_backup_test"

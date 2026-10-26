@@ -34,8 +34,11 @@ pub enum WsOut {
 /// One live WebSocket connection in a room. Mirrors the fields of `wsConn` the hub needs.
 pub struct Peer {
     pub conn_id: u64,
-    pub device_id: i64,
+    /// The device's id in its account's manifest.
+    pub device_id: u32,
     pub user_id: String,
+    /// The account its frames name (`aci:<uuid>@<server>`).
+    pub account: String,
     pub username: String,
     pub color: String,
     tx: mpsc::Sender<WsOut>,
@@ -245,16 +248,16 @@ impl Hub {
         }
     }
 
-    /// Forces every connection from a device to close, across all rooms — mirrors
-    /// `CloseDevice` (device revocation). The connections' own read loops call `leave` as
-    /// they exit, so this only signals; it doesn't mutate room state.
-    pub fn close_device(&self, device_id: i64) {
+    /// Forces every connection from a device of an account to close, across all rooms (the
+    /// account's manifest dropped it). The connections' own read loops call `leave` as they
+    /// exit, so this only signals; it doesn't mutate room state.
+    pub fn close_device(&self, user_id: &str, device_id: u32) {
         let victims: Vec<Arc<Peer>> = {
             let rooms = self.rooms.lock().unwrap();
             rooms
                 .values()
                 .flat_map(|r| r.peers.values())
-                .filter(|p| p.device_id == device_id)
+                .filter(|p| p.user_id == user_id && p.device_id == device_id)
                 .cloned()
                 .collect()
         };
@@ -268,8 +271,9 @@ impl Hub {
 /// Builds a peer + its outbound channel. The caller spawns a writer task draining `rx`.
 pub fn new_peer(
     hub: &Hub,
-    device_id: i64,
+    device_id: u32,
     user_id: String,
+    account: String,
     username: String,
     color: String,
 ) -> (Arc<Peer>, mpsc::Receiver<WsOut>) {
@@ -278,6 +282,7 @@ pub fn new_peer(
         conn_id: hub.next_conn_id(),
         device_id,
         user_id,
+        account,
         username,
         color,
         tx,
@@ -290,8 +295,15 @@ pub fn new_peer(
 mod tests {
     use super::*;
 
-    fn peer(hub: &Hub, device_id: i64) -> (Arc<Peer>, mpsc::Receiver<WsOut>) {
-        new_peer(hub, device_id, String::new(), String::new(), String::new())
+    fn peer(hub: &Hub, device_id: u32) -> (Arc<Peer>, mpsc::Receiver<WsOut>) {
+        new_peer(
+            hub,
+            device_id,
+            String::new(),
+            String::new(),
+            String::new(),
+            String::new(),
+        )
     }
 
     #[test]
@@ -333,7 +345,7 @@ mod tests {
         h.join("f1", c1);
         h.join("f2", c2);
         h.join("f3", c1b);
-        h.close_device(1);
+        h.close_device("", 1);
         // close_device only signals; the conns' read loops call leave. Smoke check: it
         // doesn't panic or mutate other rooms.
         assert_eq!(h.peers("f2").len(), 1);

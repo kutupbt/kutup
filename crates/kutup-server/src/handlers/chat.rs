@@ -31,18 +31,18 @@ use kutup_chat_proto::{
     capability_hash, constant_time_capability_hash_eq, AccountManifestDeviceV3,
     AccountManifestHistoryPageV3, AccountManifestPublicationV3, AccountManifestV3,
     AccountPreKeyBundlesResponse, AccountRef, AckRequest, AnonymousPreKeyRequestV1,
-    ChatProfileResponse, ChatWsClientMessage, ChatWsServerMessage, ChatWsTicketResponse,
-    DeliveredEnvelope, DeviceListMismatch, DevicePreKeyBundleV2, DirectChatSuiteId, EcPreKey,
-    EnvelopeType, KemPreKey, MailboxPage, OutgoingEnvelope, OwnChatProfileResponse,
-    PreKeyCountResponse, ProfileEnvelopeContextV1, ProfileEnvelopePurpose, ProfileSuiteId,
-    PutChatProfileRequest, RegisterChatDeviceRequestV2, RegisterChatDeviceResponse,
-    RenameChatDeviceRequest, ReplenishKeysRequest, SealedDeliveryResponseV1,
-    SealedMessageSubmissionV1, SealedOutgoingEnvelopeV1, SendMessagesRequest,
+    ChatProfileResponse, ChatWsClientMessage, ChatWsServerMessage, DeliveredEnvelope,
+    DeviceListMismatch, DevicePreKeyBundleV2, DirectChatSuiteId, EcPreKey, EnvelopeType, KemPreKey,
+    MailboxPage, OutgoingEnvelope, OwnChatProfileResponse, PreKeyCountResponse,
+    ProfileEnvelopeContextV1, ProfileEnvelopePurpose, ProfileSuiteId, PutChatProfileRequest,
+    RegisterChatDeviceRequestV2, RegisterChatDeviceResponse, RenameChatDeviceRequest,
+    ReplenishKeysRequest, SealedDeliveryResponseV1, SealedMessageSubmissionV1,
+    SealedOutgoingEnvelopeV1, SendMessagesRequest,
 };
 
 use crate::chat_hub::ChatWsOut;
 use crate::error::{AppError, AppResult};
-use crate::handlers::{random_token, trusted_uuid};
+use crate::handlers::trusted_uuid;
 use crate::middleware::AuthUser;
 use crate::{ratelimit, AppState};
 
@@ -106,7 +106,6 @@ const DEFAULT_DRAIN_LIMIT: i64 = 100;
 /// Max decoded ciphertext bytes per envelope (advertised as `maxContentBytes`).
 /// Kilobyte-scale headroom over a `PreKeySignalMessage` (~1.8 KB with the PQ KEM).
 pub(crate) const MAX_CONTENT_BYTES: usize = 65536;
-const WS_TICKET_TTL_SECONDS: i64 = 60;
 const MAX_PREKEY_BATCH: usize = 100;
 pub(crate) const PROFILE_ACCESS_KEY_HEADER: &str = "x-kutup-profile-access-key";
 const PROFILE_ACCESS_KEY_BYTES: usize = 16;
@@ -621,7 +620,7 @@ pub async fn register_device(
             tracing::warn!(error = %error.message, "chat: shared payload collection after a re-registration failed");
         }
         for id in dropped {
-            state.chat_hub.close_device(user_id, id);
+            crate::account_devices::close_device(&state, user_id, id);
         }
     }
     state.chat_hub.notify_devices_changed(user_id);
@@ -776,10 +775,10 @@ pub(crate) async fn store_manifest(
 
     match identity {
         IdentityChange::Same => {
-            let current = crate::handlers::chat_identity::account_identity(tx, user_id)
-                .await?
-                .ok_or_else(|| AppError::conflict("the account has no Chat identity"))?;
-            if current.0 != manifest.identity_key {
+            // The account's identity as it is, or none while it has none
+            // (an account that never used Chat: its editors list themselves).
+            let current = crate::handlers::chat_identity::account_identity(tx, user_id).await?;
+            if current.map(|(identity, _)| identity) != manifest.identity_key {
                 return Err(AppError::conflict(
                     "the identity changes only by a distribution or a re-registration",
                 )
@@ -787,6 +786,11 @@ pub(crate) async fn store_manifest(
             }
         }
         IdentityChange::New | IdentityChange::Reregistration => {
+            if manifest.identity_key.is_none() {
+                return Err(AppError::bad_request(
+                    "a re-registration or a distribution names the new identity",
+                ));
+            }
             sqlx::query(
                 "INSERT INTO chat_account_identities (user_id, identity_key, manifest_version)
                  VALUES ($1, $2, $3)
@@ -876,6 +880,13 @@ pub async fn publish_manifest(
     .await?;
     crate::handlers::chat_identity::validate_manifest(&manifest)?;
     let mut tx = state.pool.begin().await?;
+    // The account's lock, then the head this publication follows: the devices
+    // it leaves out are removed at once, not after the listing grace.
+    sqlx::query("SELECT id FROM users WHERE id = $1 FOR UPDATE")
+        .bind(user_id)
+        .execute(&mut *tx)
+        .await?;
+    let head_before = stored_manifest(&mut *tx, user_id).await?;
     let stored = store_manifest(&mut tx, &state, user_id, &manifest, IdentityChange::Same).await?;
     // The account's lock is held now: the publishing device is still one of
     // its live devices with this credential.
@@ -896,24 +907,44 @@ pub async fn publish_manifest(
     )
     .await?;
     // Registration precedes publication so a device learns its id; rows the
-    // authority did not list (a crash in that gap, an expired device, an
-    // injected row) are pruned here.
+    // authority did not list (a device it removed, a crash in that gap, an
+    // expired device, an injected row) are pruned here. A row younger than
+    // the listing grace stays a while (it may be a device between registering
+    // and listing itself); an unlisted row's frames and messages are refused
+    // meanwhile all the same.
     let listed: Vec<i32> = manifest
         .devices
         .iter()
         .map(|d| d.device_id as i32)
         .collect();
+    let grace = crate::site_settings::DEVICE_LISTING_GRACE_SECONDS
+        .load(&mut *tx)
+        .await?;
+    let removed: Vec<i32> = head_before
+        .as_ref()
+        .map(|head| {
+            head.devices
+                .iter()
+                .map(|d| d.device_id as i32)
+                .filter(|id| !listed.contains(id))
+                .collect()
+        })
+        .unwrap_or_default();
     let pruned: Vec<i32> = sqlx::query_scalar(
         "DELETE FROM devices WHERE user_id = $1 AND NOT (device_id = ANY($2))
+           AND (device_id = ANY($3) OR expired_at IS NOT NULL
+                OR created_at < now() - ($4 * interval '1 second'))
          RETURNING device_id",
     )
     .bind(user_id)
     .bind(&listed)
+    .bind(&removed)
+    .bind(grace)
     .fetch_all(&mut *tx)
     .await?;
     tx.commit().await?;
     for device_id in pruned {
-        state.chat_hub.close_device(user_id, device_id);
+        crate::account_devices::close_device(&state, user_id, device_id);
     }
     if stored {
         state.chat_hub.notify_devices_changed(user_id);
@@ -963,6 +994,23 @@ pub async fn get_user_manifest(
 pub(crate) fn no_manifest() -> AppError {
     AppError::not_found("chat manifest not found")
         .with_details(serde_json::json!({ "code": "noManifest" }))
+}
+
+/// The account's head manifest as stored, if it has one (unverified: the
+/// server checked it when it was published).
+pub(crate) async fn stored_manifest<'e>(
+    executor: impl sqlx::PgExecutor<'e>,
+    user_id: Uuid,
+) -> AppResult<Option<AccountManifestV3>> {
+    let value: Option<serde_json::Value> =
+        sqlx::query_scalar("SELECT manifest FROM chat_device_manifests WHERE user_id = $1")
+            .bind(user_id)
+            .fetch_optional(executor)
+            .await?;
+    value
+        .map(serde_json::from_value)
+        .transpose()
+        .map_err(|error| AppError::internal(format!("stored manifest is invalid: {error}")))
 }
 
 pub(crate) async fn load_account_manifest(
@@ -3194,66 +3242,6 @@ pub async fn ack_messages(
     Ok(Json(json!({ "acked": deleted })).into_response())
 }
 
-fn ws_ticket_hash(ticket: &str) -> String {
-    hex::encode(hash(Suite::V1, ticket.as_bytes()))
-}
-
-/// `POST /api/chat/ws-ticket?deviceId=N` — mint a single-use, short-lived
-/// browser WebSocket credential. Only its hash is stored server-side.
-#[utoipa::path(
-    post,
-    path = "/api/chat/ws-ticket",
-    tag = "chat",
-    operation_id = "createChatWsTicket",
-    params(("deviceId" = u32, Query, description = "Chat device id")),
-    responses(
-        (status = 200, description = "One-time ticket", body = ChatWsTicketResponse),
-        (status = 404, description = "No such chat device"),
-    ),
-    security(("bearerAuth" = []))
-)]
-pub async fn create_ws_ticket(
-    State(state): State<AppState>,
-    auth: AuthUser,
-    headers: HeaderMap,
-    Query(q): Query<DeviceQuery>,
-) -> AppResult<Response> {
-    let user_id = trusted_uuid(&auth.user_id)?;
-    require_device(&state, &headers, user_id, q.device_id).await?;
-    let ticket = random_token(32);
-    let expires_at: OffsetDateTime = sqlx::query_scalar(
-        "INSERT INTO chat_ws_tickets (token_hash, user_id, device_id, expires_at)
-         VALUES ($1, $2, $3, now() + ($4 * interval '1 second'))
-         RETURNING expires_at",
-    )
-    .bind(ws_ticket_hash(&ticket))
-    .bind(user_id)
-    .bind(q.device_id)
-    .bind(WS_TICKET_TTL_SECONDS)
-    .fetch_one(&state.pool)
-    .await?;
-    Ok(Json(ChatWsTicketResponse {
-        ticket,
-        expires_at: expires_at.format(&Rfc3339).unwrap_or_default(),
-    })
-    .into_response())
-}
-
-async fn consume_ws_ticket(state: &AppState, ticket: &str) -> AppResult<(Uuid, i32)> {
-    if ticket.is_empty() || ticket.len() > 128 {
-        return Err(AppError::unauthorized("invalid WebSocket ticket"));
-    }
-    sqlx::query_as(
-        "DELETE FROM chat_ws_tickets
-         WHERE token_hash = $1 AND expires_at > now()
-         RETURNING user_id, device_id",
-    )
-    .bind(ws_ticket_hash(ticket))
-    .fetch_optional(&state.pool)
-    .await?
-    .ok_or_else(|| AppError::unauthorized("invalid or expired WebSocket ticket"))
-}
-
 #[derive(Debug, Default, Deserialize)]
 pub struct ChatWsQuery {
     ticket: Option<String>,
@@ -3264,7 +3252,7 @@ pub struct ChatWsQuery {
 /// `GET /api/chat/ws` — authenticates, then upgrades. Pushes newly arrived envelopes to
 /// this device; the mailbox remains the source of truth (clients ack over REST). Auth
 /// uses `Authorization: Bearer` for native clients or a single-use `?ticket=`
-/// minted by `POST /api/chat/ws-ticket` for browsers.
+/// minted by `POST /api/device-ticket` for browsers.
 #[utoipa::path(
     get,
     path = "/api/chat/ws",
@@ -3305,7 +3293,23 @@ pub async fn ws(
             (user_uuid, device_id)
         }
         None => match q.ticket.as_deref() {
-            Some(ticket) => consume_ws_ticket(&state, ticket).await?,
+            Some(ticket) => {
+                let (user_uuid, device_id) =
+                    crate::account_devices::consume_ticket(&state, ticket).await?;
+                // A ticket of any device: this socket is a Chat device's.
+                let takes_chat: Option<i32> = sqlx::query_scalar(
+                    "SELECT 1 FROM devices WHERE user_id = $1 AND device_id = $2
+                        AND suite IS NOT NULL AND expired_at IS NULL",
+                )
+                .bind(user_uuid)
+                .bind(device_id)
+                .fetch_optional(&state.pool)
+                .await?;
+                if takes_chat.is_none() {
+                    return Err(AppError::unauthorized("not a Chat device's ticket"));
+                }
+                (user_uuid, device_id)
+            }
             None => return Err(AppError::unauthorized("missing WebSocket credentials")),
         },
     };

@@ -287,6 +287,72 @@ impl AccountManifestDeviceV3 {
     }
 }
 
+/// `POST /api/devices`: an editor or CLI device of the account registers
+/// (a Chat device registers by `POST /api/chat/device`). The server issues
+/// its id; the device then lists itself in the account's manifest.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct RegisterDeviceRequestV1 {
+    pub kind: DeviceKind,
+    /// Shown in device management ("Office · Firefox on Linux").
+    #[serde(default)]
+    pub name: String,
+    /// The device's Ed25519 frame key, as its manifest entry lists it.
+    pub frame_key: String,
+    /// The device's credential, as a Chat device's: canonical unpadded
+    /// base64url of 32 random bytes, sent in [`DEVICE_HEADER`].
+    pub credential: String,
+}
+
+/// The longest device name, in characters.
+pub const MAX_DEVICE_NAME_CHARS: usize = 120;
+
+impl RegisterDeviceRequestV1 {
+    pub fn validate(&self) -> Result<(), String> {
+        if self.kind == DeviceKind::Chat {
+            return Err("a Chat device registers through /api/chat/device".into());
+        }
+        if self.name.chars().count() > MAX_DEVICE_NAME_CHARS {
+            return Err("a device name is at most 120 characters".into());
+        }
+        decode_frame_key(&self.frame_key)?;
+        decode_device_credential(&self.credential)?;
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[serde(rename_all = "camelCase")]
+pub struct RegisterDeviceResponseV1 {
+    pub device_id: u32,
+    /// What its manifest entry lists as `session`.
+    pub session: String,
+}
+
+/// One device of the account, as `GET /api/devices` lists it.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[serde(rename_all = "camelCase")]
+pub struct AccountDeviceV1 {
+    pub device_id: u32,
+    pub kind: DeviceKind,
+    pub name: String,
+    /// The hash of its sign-in, as its manifest entry carries it.
+    pub session: String,
+    /// It belongs to the caller's sign-in.
+    pub this_sign_in: bool,
+    /// The account's manifest lists it (a device between registering and
+    /// listing itself isn't yet).
+    pub listed: bool,
+    /// Idle too long: the next manifest drops it.
+    pub expired: bool,
+    pub created_at: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_seen_at: Option<String>,
+}
+
 /// A device's frame key: canonical base64 of a valid Ed25519 public key.
 pub fn decode_frame_key(value: &str) -> Result<[u8; 32], String> {
     let bytes: [u8; 32] = decode_canonical_base64_exact("frameKey", value, 32)?
@@ -329,8 +395,12 @@ pub struct AccountManifestV3 {
     pub previous_hash: Option<String>,
     /// The account's libsignal identity key itself (canonical base64 of 33
     /// bytes). It changes only with an identity distribution or a
-    /// re-registration (the identity rule).
-    pub identity_key: String,
+    /// re-registration (the identity rule). None while the account has no
+    /// Chat identity (no Chat device ever registered): its manifest then
+    /// lists only devices that don't take Chat, and the first Chat device
+    /// sets it by re-registration.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub identity_key: Option<String>,
     /// The identity key's signature (XEdDSA, as libsignal signs prekeys) over
     /// [`AccountManifestV3::identity_binding_bytes`]: the identity vouches for
     /// this authority, incarnation and account, as the authority vouches for
@@ -338,8 +408,9 @@ pub struct AccountManifestV3 {
     /// under an authority of its own, and comparing safety numbers (which
     /// cover the identity) would wrongly vouch for that authority. Canonical
     /// base64 of 64 bytes; libsignal checks it (clients and server), since
-    /// this crate has no XEdDSA.
-    pub identity_binding: String,
+    /// this crate has no XEdDSA. Present exactly when `identityKey` is.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub identity_binding: Option<String>,
     pub drive: AccountManifestDriveKeysV1,
     /// Strictly ordered by `deviceId`.
     pub devices: Vec<AccountManifestDeviceV3>,
@@ -371,12 +442,19 @@ impl AccountManifestV3 {
             &self.self_authority_key,
             32,
         )?);
-        out.extend_from_slice(&decode_identity_key("identityKey", &self.identity_key)?);
-        out.extend_from_slice(&decode_canonical_base64_exact(
-            "identityBinding",
-            &self.identity_binding,
-            IDENTITY_BINDING_LEN,
-        )?);
+        match (&self.identity_key, &self.identity_binding) {
+            (Some(identity_key), Some(identity_binding)) => {
+                out.push(1);
+                out.extend_from_slice(&decode_identity_key("identityKey", identity_key)?);
+                out.extend_from_slice(&decode_canonical_base64_exact(
+                    "identityBinding",
+                    identity_binding,
+                    IDENTITY_BINDING_LEN,
+                )?);
+            }
+            (None, None) => out.push(0),
+            _ => return Err("identityKey and identityBinding come together".into()),
+        }
         out.extend_from_slice(&u16::from(self.drive.suite).to_be_bytes());
         out.extend_from_slice(&decode_canonical_base64_exact(
             "drive.hpkePublicKey",
@@ -428,8 +506,16 @@ impl AccountManifestV3 {
             &self.authority_key_id,
             &self.incarnation_id,
             &self.account,
-            &self.identity_key,
+            self.chat_identity_key()?,
         )
+    }
+
+    /// The account's Chat identity key: an error naming its absence when the
+    /// account has none.
+    pub fn chat_identity_key(&self) -> Result<&str, String> {
+        self.identity_key
+            .as_deref()
+            .ok_or_else(|| "the account has no Chat identity".to_string())
     }
 
     /// What the next manifest's `previousHash`, and a provisioning message's
@@ -448,6 +534,42 @@ impl AccountManifestV3 {
             .binary_search_by_key(&device_id, |device| device.device_id)
             .ok()
             .map(|index| &self.devices[index])
+    }
+
+    /// The head's successor, unsigned: the same account, authority, identity
+    /// and Drive keys, the next sequence linked by hash, listing `devices`
+    /// (ordered here). Sign it with [`Self::sign`].
+    pub fn successor(
+        &self,
+        mut devices: Vec<AccountManifestDeviceV3>,
+        issued_at: impl Into<String>,
+    ) -> Result<Self, String> {
+        devices.sort_by_key(|device| device.device_id);
+        Ok(Self {
+            sequence: self
+                .sequence
+                .checked_add(1)
+                .ok_or("manifest sequence is exhausted")?,
+            previous_hash: Some(self.manifest_hash()?),
+            devices,
+            issued_at: issued_at.into(),
+            signature: String::new(),
+            ..self.clone()
+        })
+    }
+
+    /// Signs the manifest with the account authority's key, which must be
+    /// the one it names; the result verifies.
+    pub fn sign(&mut self, authority: &kutup_crypto::primitives::SigningKey) -> Result<(), String> {
+        use base64::Engine as _;
+        let public = base64::engine::general_purpose::STANDARD
+            .encode(authority.verifying_key().to_array::<32>());
+        if public != self.self_authority_key {
+            return Err("the manifest names another authority".into());
+        }
+        let signature = authority.sign(&self.signing_bytes()?);
+        self.signature = base64::engine::general_purpose::STANDARD.encode(signature);
+        self.verify()
     }
 
     /// The listed device's Chat keys, if it takes Chat.
@@ -486,6 +608,10 @@ impl AccountManifestV3 {
         }
         if self.devices.is_empty() || self.devices.len() > MAX_ACCOUNT_MANIFEST_DEVICES {
             return Err("account manifest requires 1-127 devices".into());
+        }
+        // A device that takes Chat holds the account's Chat identity.
+        if self.identity_key.is_none() && self.devices.iter().any(|device| device.chat.is_some()) {
+            return Err("a manifest listing a Chat device names the account's identity".into());
         }
 
         let public =
@@ -663,7 +789,7 @@ impl AccountPreKeyBundlesResponse {
         if self.manifest.account != self.account {
             return Err("bundles name another account than their manifest".into());
         }
-        if self.identity_key != self.manifest.identity_key {
+        if self.manifest.identity_key.as_deref() != Some(self.identity_key.as_str()) {
             return Err("bundles carry another identity than their manifest".into());
         }
         let mut seen = std::collections::BTreeSet::new();
@@ -1009,7 +1135,7 @@ impl AccountIdentityDistributionRequest {
     pub fn validate(&self, sender_device_id: u32) -> Result<(), DistributionError> {
         self.manifest.verify()?;
         decode_identity_key("identityKey", &self.identity_key)?;
-        if self.identity_key != self.manifest.identity_key {
+        if self.manifest.identity_key.as_deref() != Some(self.identity_key.as_str()) {
             return Err("the manifest lists another identity".into());
         }
         if self.manifest.chat_device(sender_device_id).is_none() {
@@ -1138,7 +1264,7 @@ impl RegisterChatDeviceRequestV2 {
             }
             DeviceRegistrationV1::Reregistration { manifest } => {
                 manifest.verify()?;
-                if manifest.identity_key != self.identity_key {
+                if manifest.identity_key.as_deref() != Some(self.identity_key.as_str()) {
                     return Err("the manifest lists another identity".into());
                 }
                 let chat: Vec<&AccountManifestDeviceV3> = manifest

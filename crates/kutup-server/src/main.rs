@@ -50,7 +50,7 @@ mod photos;
 mod public_fetch;
 mod ratelimit;
 mod registration;
-mod remote_devices;
+mod remote_manifests;
 mod remote_renames;
 mod revisions;
 mod sealed_sender_provision;
@@ -648,7 +648,7 @@ fn build_router(state: AppState) -> Router {
     let cors = build_cors(&state.config.allowed_origins);
 
     use handlers::{
-        admin, auth, chat, chat_link_preview, chat_media, collab, collections, devices, drive_move,
+        admin, auth, chat, chat_link_preview, chat_media, collab, collections, drive_move,
         feedback, file_assets, file_shares, file_thumbnails, file_versions, files, folder_access,
         identity, link_reports, sessions as session_routes, shares, trash, tus,
     };
@@ -1369,10 +1369,14 @@ fn build_router(state: AppState) -> Router {
             post(drive_move::move_collection),
         )
         // --- Devices (authenticated) ---
-        .route("/api/devices", post(devices::register).get(devices::list))
-        .route("/api/devices/challenge", post(devices::challenge))
-        .route("/api/devices/:id/renew", post(devices::renew))
-        .route("/api/devices/:id", delete(devices::revoke))
+        .route(
+            "/api/devices",
+            post(account_devices::register_device).get(account_devices::list_devices),
+        )
+        .route(
+            "/api/device-ticket",
+            post(account_devices::create_device_ticket),
+        )
         // --- Chat (E2EE messaging; authenticated via AuthUser except the WS, which
         // validates its token pre-upgrade like the collab WS) ---
         .route(
@@ -1532,7 +1536,6 @@ fn build_router(state: AppState) -> Router {
         )
         .route("/api/chat/messages", get(chat::drain_mailbox))
         .route("/api/chat/messages/ack", post(chat::ack_messages))
-        .route("/api/chat/ws-ticket", post(chat::create_ws_ticket))
         .route("/api/chat/link-preview", post(chat_link_preview::fetch))
         .route("/api/chat/call-servers", get(calls::call_servers))
         .route(
@@ -1967,12 +1970,6 @@ fn build_router(state: AppState) -> Router {
             "/api/fed/drive/collab/frames",
             post(collab_federation::frames)
                 .route_layer(DefaultBodyLimit::max(8 * 1024 * 1024))
-                .route_layer(from_fn(middleware::rate_limit_fed_users)),
-        )
-        .route(
-            "/api/fed/drive/collab/devices",
-            post(collab_federation::devices)
-                .route_layer(DefaultBodyLimit::max(256 * 1024))
                 .route_layer(from_fn(middleware::rate_limit_fed_users)),
         )
         .route(

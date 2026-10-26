@@ -631,7 +631,7 @@ impl World {
             .collect();
         Ok(AccountPreKeyBundlesResponse {
             account: account.parse().unwrap(),
-            identity_key: manifest.identity_key.clone(),
+            identity_key: manifest.identity_key.clone().unwrap_or_default(),
             devices,
             manifest,
         })
@@ -1209,7 +1209,12 @@ impl ChatTransport for Client {
                 if owner.as_deref() != Some(self.account.as_str()) {
                     return Err(ChatError::Transport("no such link token".into()));
                 }
-                if hosted.manifests.last().map(|m| &m.identity_key) != Some(&request.identity_key) {
+                if hosted
+                    .manifests
+                    .last()
+                    .and_then(|m| m.identity_key.as_deref())
+                    != Some(request.identity_key.as_str())
+                {
                     return Err(ChatError::Transport("not the account's identity".into()));
                 }
                 (1..).find(|id| !hosted.devices.contains_key(id)).unwrap()

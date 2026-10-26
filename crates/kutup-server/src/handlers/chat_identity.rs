@@ -218,13 +218,19 @@ pub(crate) fn verify_prekey_signatures(
 /// (this authority, incarnation and account). The authority's signature
 /// alone would let anyone list someone's identity under an authority of
 /// their own.
+/// A manifest of an account with no Chat identity has none to check.
 pub(crate) fn identity_binding_holds(manifest: &AccountManifestV3) -> bool {
+    let (Some(identity_key), Some(identity_binding)) =
+        (&manifest.identity_key, &manifest.identity_binding)
+    else {
+        return manifest.identity_key.is_none() && manifest.identity_binding.is_none();
+    };
     let Ok(bytes) = manifest.identity_binding_bytes() else {
         return false;
     };
     let (Ok(key), Ok(signature)) = (
-        STANDARD.decode(&manifest.identity_key),
-        STANDARD.decode(&manifest.identity_binding),
+        STANDARD.decode(identity_key),
+        STANDARD.decode(identity_binding),
     ) else {
         return false;
     };
@@ -554,7 +560,7 @@ pub async fn distribute_identity(
     tx.commit().await?;
 
     for device_id in dropped {
-        state.chat_hub.close_device(user_id, device_id);
+        crate::account_devices::close_device(&state, user_id, device_id);
     }
     state.chat_hub.notify_devices_changed(user_id);
     Ok(Json(AccountManifestPublicationV3 {

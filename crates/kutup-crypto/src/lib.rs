@@ -62,7 +62,6 @@ pub mod chat_media_blocks;
 pub mod collection_epoch;
 pub mod collection_keyring;
 pub mod contact_card;
-pub mod device_registration;
 #[cfg(feature = "mail")]
 pub mod dkim_key;
 pub mod drive_blocks;

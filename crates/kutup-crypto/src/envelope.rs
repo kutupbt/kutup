@@ -391,6 +391,24 @@ pub fn verify(packed: &[u8], sender: &AccountRef, public_key: &[u8]) -> Result<(
         .map_err(|_| CryptoError::AuthFailed)
 }
 
+/// A frame as a server delivers it: its sender account
+/// ([`AccountRef::bytes`]) then the packed frame. Senders send the bare
+/// frame; the server that authenticated them names them.
+pub fn deliver(sender: &AccountRef, packed: &[u8]) -> Vec<u8> {
+    let mut out = sender.bytes();
+    out.extend_from_slice(packed);
+    out
+}
+
+/// The sender and the packed frame of a [`deliver`]ed frame. Whether the
+/// sender signed it is [`verify`]'s question.
+pub fn delivered(bytes: &[u8]) -> Result<(AccountRef, &[u8])> {
+    let (sender, used) = AccountRef::read(bytes)?;
+    let packed = &bytes[used..];
+    Frame::unpack(packed)?;
+    Ok((sender, packed))
+}
+
 pub fn open(
     packed: &[u8],
     file_key: &[u8],
@@ -466,6 +484,17 @@ mod tests {
             .1,
             b"collaboration"
         );
+    }
+
+    #[test]
+    fn a_delivered_frame_names_its_sender() {
+        let unsigned = seal_unsigned(b"frame", &[0x41; 32], context()).unwrap();
+        let delivered_bytes = deliver(&sender(), &unsigned);
+        let (named, packed) = delivered(&delivered_bytes).unwrap();
+        assert_eq!(named, sender());
+        assert_eq!(packed, unsigned.as_slice());
+        assert!(delivered(&unsigned).is_err());
+        assert!(delivered(&delivered_bytes[..delivered_bytes.len() - 1]).is_err());
     }
 
     #[test]
