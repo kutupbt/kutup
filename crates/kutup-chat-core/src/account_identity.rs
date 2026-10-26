@@ -1214,6 +1214,88 @@ mod tests {
         assert!(!trust.identity_verified);
     }
 
+    /// One device list per account (docs/plans/one-device-list.md §8, item
+    /// 11): an account that only used editing apps has a manifest with no
+    /// Chat identity. A contact who pinned it, then meets the account's first
+    /// Chat device (a re-registration that keeps the editor listed), sees no
+    /// "safety number changed": a first identity is not a change.
+    #[test]
+    fn a_first_identity_after_editors_alone_is_no_change() {
+        use crate::group_harness_tests::befriend;
+        use kutup_chat_proto::{AccountManifestDeviceV3, DeviceKind};
+        let world = World::new();
+        let mut bob = world.person(2);
+        let carol = format!(
+            "aci:00000000-0000-4000-8000-000000000003@{}",
+            crate::group_harness_tests::SERVER
+        );
+        let authority = AccountAuthority::derive(&[3; 32]).unwrap();
+        let editor = AccountManifestDeviceV3 {
+            device_id: 1,
+            kind: DeviceKind::Editor,
+            chat: None,
+            frame_key: Some(
+                STANDARD.encode(
+                    ed25519_dalek::SigningKey::from_bytes(&[7; 32])
+                        .verifying_key()
+                        .to_bytes(),
+                ),
+            ),
+            session: "52".repeat(32),
+        };
+        let editors_only = authority
+            .sign_manifest_with_binding(
+                carol.parse().unwrap(),
+                1,
+                None,
+                None,
+                None,
+                vec![editor.clone()],
+                ISSUED_AT,
+            )
+            .unwrap();
+        block_on(world.client(&carol).publish_manifest(&editors_only)).unwrap();
+        block_on(
+            bob.engine
+                .accept_current_manifest_evidence(&carol, &editors_only),
+        )
+        .unwrap();
+        let pinned = block_on(bob.engine.session().manifest_trust(&carol))
+            .unwrap()
+            .unwrap();
+        assert!(pinned.identity_key.is_empty());
+
+        // Carol's first Chat device: the editor stays, the device takes id 2.
+        let mut carol_chat = world.person(3);
+        assert_eq!(carol_chat.account, carol);
+        let head = head(&world, &carol);
+        assert_eq!(head.sequence, 2);
+        assert_eq!(head.device(1), Some(&editor));
+        assert_eq!(carol_chat.device(), 2);
+        assert!(head.identity_key.is_some());
+
+        befriend(&mut bob, &mut carol_chat);
+        let changed = bob
+            .engine
+            .take_events()
+            .into_iter()
+            .filter(|event| {
+                matches!(event, crate::ChatEvent::SafetyNumberChanged { peer } if *peer == carol)
+            })
+            .count();
+        assert_eq!(changed, 0);
+        let lines = block_on(bob.engine.session().sent_history())
+            .unwrap()
+            .into_iter()
+            .filter(|message| {
+                message.peer == carol
+                    && serde_json::from_slice::<kutup_chat_proto::ChatContent>(&message.content)
+                        .is_ok_and(|content| content.is_safety_number_changed())
+            })
+            .count();
+        assert_eq!(lines, 0, "a first identity is not a change");
+    }
+
     /// A contact reads a message sent under the account's new identity
     /// (sealed, before they saw the manifest that lists it): they fetch the
     /// account's signed manifest, take the new identity, see one "safety

@@ -536,6 +536,42 @@ impl AccountManifestV3 {
             .map(|index| &self.devices[index])
     }
 
+    /// The account's first manifest, unsigned, when it has none: its
+    /// authority, incarnation and Drive keys (from `keys`), no Chat identity
+    /// (a Chat device's re-registration sets one), listing `devices`. Sign it
+    /// with [`Self::sign`].
+    pub fn first(
+        account: AccountRef,
+        keys: &kutup_crypto::identity::AccountIdentityKeysV1,
+        mut devices: Vec<AccountManifestDeviceV3>,
+        issued_at: impl Into<String>,
+    ) -> Self {
+        use base64::Engine as _;
+        use sha2::{Digest, Sha256};
+        let b64 = |bytes: &[u8]| base64::engine::general_purpose::STANDARD.encode(bytes);
+        let public = keys.authority_public_key();
+        devices.sort_by_key(|device| device.device_id);
+        Self {
+            manifest_version: ACCOUNT_MANIFEST_V3_VERSION,
+            account,
+            incarnation_id: keys.incarnation_id(),
+            sequence: 1,
+            previous_hash: None,
+            identity_key: None,
+            identity_binding: None,
+            drive: AccountManifestDriveKeysV1 {
+                suite: crate::AccountIdentitySuiteId::XWingEd25519V2,
+                hpke_public_key: b64(&keys.drive_hpke_public_key()),
+                share_signing_public_key: b64(&keys.drive_signing_public_key()),
+            },
+            devices,
+            issued_at: issued_at.into(),
+            authority_key_id: hex::encode(Sha256::digest(public)),
+            self_authority_key: b64(&public),
+            signature: String::new(),
+        }
+    }
+
     /// The head's successor, unsigned: the same account, authority, identity
     /// and Drive keys, the next sequence linked by hash, listing `devices`
     /// (ordered here). Sign it with [`Self::sign`].

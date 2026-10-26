@@ -244,6 +244,28 @@ fn a_manifest_without_a_chat_identity_lists_no_chat_device() {
     assert!(dropped.verify().is_err());
 }
 
+/// An editor's first manifest for an account: its keys, no identity, and a
+/// successor that adds a device.
+#[test]
+fn an_accounts_first_manifest_and_its_successor() {
+    let keys = kutup_crypto::identity::AccountIdentityKeysV1::derive(&[5; 32]).unwrap();
+    let account = AccountRef::new("example.test", "0b6b5e0c-4c1e-4b8e-9c2d-6a1f3e5d7c9b").unwrap();
+    let mut first =
+        AccountManifestV3::first(account, &keys, vec![editor(2)], "2026-10-26T00:00:00Z");
+    first.sign(keys.authority_signing_key()).unwrap();
+    first.verify_successor(None).unwrap();
+    assert_eq!(first.incarnation_id, keys.incarnation_id());
+    let mut next = first
+        .successor(vec![editor(2), editor(1)], "2026-10-26T00:01:00Z")
+        .unwrap();
+    assert_eq!(next.devices[0].device_id, 1, "ordered");
+    next.sign(keys.authority_signing_key()).unwrap();
+    next.verify_successor(Some(&first)).unwrap();
+    // Another account's authority can't sign it.
+    let other = kutup_crypto::identity::AccountIdentityKeysV1::derive(&[6; 32]).unwrap();
+    assert!(next.clone().sign(other.authority_signing_key()).is_err());
+}
+
 #[test]
 fn the_device_session_hash_is_pinned() {
     assert_eq!(

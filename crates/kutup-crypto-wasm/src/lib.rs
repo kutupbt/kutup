@@ -1118,53 +1118,77 @@ pub fn open_collab_frame(
     .map_err(|error| js_error(&format!("encode collaboration frame: {error}")))
 }
 
-fn signed_successor(
-    head: JsValue,
+fn account_keys(
     master_key_base64: &str,
-    issued_at: &str,
-    change: impl FnOnce(&mut Vec<kutup_chat_proto::AccountManifestDeviceV3>) -> Result<(), JsValue>,
-) -> Result<JsValue, JsValue> {
-    let head: kutup_chat_proto::AccountManifestV3 = serde_wasm_bindgen::from_value(head)
-        .map_err(|error| js_error(&format!("account manifest: {error}")))?;
-    head.verify().map_err(|error| js_error(&error))?;
+) -> Result<kutup_crypto::identity::AccountIdentityKeysV1, JsValue> {
     let master_key: [u8; 32] = decode_canonical_base64(master_key_base64, "master key")?
         .try_into()
         .map_err(|_| js_error("master key must be 32 bytes"))?;
-    let identity = kutup_crypto::identity::AccountIdentityKeysV1::derive(&master_key)
-        .map_err(|error| js_error(&error.to_string()))?;
-    let mut devices = head.devices.clone();
-    change(&mut devices)?;
-    let mut next = head
-        .successor(devices, issued_at)
+    kutup_crypto::identity::AccountIdentityKeysV1::derive(&master_key)
+        .map_err(|error| js_error(&error.to_string()))
+}
+
+/// Signs `next` with the authority of `keys` (which checks `next` names
+/// it), checks it follows `head`, and hands it to JavaScript.
+fn signed(
+    mut next: kutup_chat_proto::AccountManifestV3,
+    head: Option<&kutup_chat_proto::AccountManifestV3>,
+    keys: &kutup_crypto::identity::AccountIdentityKeysV1,
+) -> Result<JsValue, JsValue> {
+    next.sign(keys.authority_signing_key())
         .map_err(|error| js_error(&error))?;
-    // Signing checks the head names this account's authority.
-    next.sign(identity.authority_signing_key())
-        .map_err(|error| js_error(&error))?;
-    next.verify_successor(Some(&head))
+    next.verify_successor(head)
         .map_err(|error| js_error(&error))?;
     serde_wasm_bindgen::to_value(&next)
         .map_err(|error| js_error(&format!("encode account manifest: {error}")))
 }
 
-/// The account's next manifest: `head` (as the server gave it) with
-/// `entry` listed (in place of any entry of its id), signed with the
-/// authority the master key derives (docs/plans/one-device-list.md). The
-/// head must name that authority.
+fn head_manifest(head: JsValue) -> Result<Option<kutup_chat_proto::AccountManifestV3>, JsValue> {
+    if head.is_null() || head.is_undefined() {
+        return Ok(None);
+    }
+    let head: kutup_chat_proto::AccountManifestV3 = serde_wasm_bindgen::from_value(head)
+        .map_err(|error| js_error(&format!("account manifest: {error}")))?;
+    head.verify().map_err(|error| js_error(&error))?;
+    Ok(Some(head))
+}
+
+/// The account's next manifest: `head` (as the server gave it; null when the
+/// account has none yet) with `entry` listed in place of any entry of its id,
+/// signed with the authority the master key derives
+/// (docs/plans/one-device-list.md). The head must name that authority; an
+/// account's first manifest names `account` and no Chat identity.
 #[wasm_bindgen(js_name = listDeviceInManifest)]
 pub fn list_device_in_manifest(
     head: JsValue,
     entry: JsValue,
     issued_at: &str,
     master_key_base64: &str,
+    account: &str,
 ) -> Result<JsValue, JsValue> {
     let entry: kutup_chat_proto::AccountManifestDeviceV3 = serde_wasm_bindgen::from_value(entry)
         .map_err(|error| js_error(&format!("manifest entry: {error}")))?;
     entry.validate().map_err(|error| js_error(&error))?;
-    signed_successor(head, master_key_base64, issued_at, |devices| {
-        devices.retain(|device| device.device_id != entry.device_id);
-        devices.push(entry);
-        Ok(())
-    })
+    let keys = account_keys(master_key_base64)?;
+    let head = head_manifest(head)?;
+    let next = match &head {
+        Some(head) => {
+            let mut devices = head.devices.clone();
+            devices.retain(|device| device.device_id != entry.device_id);
+            devices.push(entry);
+            head.successor(devices, issued_at)
+                .map_err(|error| js_error(&error))?
+        }
+        None => kutup_chat_proto::AccountManifestV3::first(
+            account
+                .parse()
+                .map_err(|_| js_error("an account reference is malformed"))?,
+            &keys,
+            vec![entry],
+            issued_at,
+        ),
+    };
+    signed(next, head.as_ref(), &keys)
 }
 
 /// The account's next manifest without the devices `device_ids` names (a
@@ -1177,13 +1201,17 @@ pub fn remove_devices_from_manifest(
     issued_at: &str,
     master_key_base64: &str,
 ) -> Result<JsValue, JsValue> {
-    signed_successor(head, master_key_base64, issued_at, |devices| {
-        devices.retain(|device| !device_ids.contains(&device.device_id));
-        if devices.is_empty() {
-            return Err(js_error("a manifest keeps at least one device"));
-        }
-        Ok(())
-    })
+    let keys = account_keys(master_key_base64)?;
+    let head = head_manifest(head)?.ok_or_else(|| js_error("the account has no manifest"))?;
+    let mut devices = head.devices.clone();
+    devices.retain(|device| !device_ids.contains(&device.device_id));
+    if devices.is_empty() {
+        return Err(js_error("a manifest keeps at least one device"));
+    }
+    let next = head
+        .successor(devices, issued_at)
+        .map_err(|error| js_error(&error))?;
+    signed(next, Some(&head), &keys)
 }
 
 /// The file-key generation a frame names in its public header, so a

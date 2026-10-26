@@ -365,3 +365,23 @@ What the note leaves open, as built:
     it. Slice 3's tests include a home relaying a forged frame that the
     recipient refuses. Slice 2 builds the frame and the home's checks that
     this rests on.
+11. **An account without Chat has a manifest too.**
+    - `identityKey` and `identityBinding` are optional and come together.
+      The signed bytes carry a presence flag.
+    - A manifest without them lists only devices that don't take Chat; an
+      editor of an account that never used Chat publishes the account's
+      first one.
+    - The first Chat device sets the identity by re-registration, which
+      continues that chain and keeps the editors' entries.
+    - A publication keeps the identity the account has, or none while it
+      has none; a distribution or a re-registration names one.
+12. **A device's frames go through one gate everywhere.** The server names
+    the sender of every delivered frame (`envelope::deliver`): on its
+    sockets, in the log, and on the federation wire as `{ sender, frame }`.
+    - The home takes a remote frame only from the share's recipient and
+      from that recipient's server.
+    - Signing is by a frame key that the recipient's cached manifest lists,
+      under the incarnation the share was made to.
+    - The old `remote_collab_devices` route, its announce and its rate limit
+      go; `device_challenges` becomes `device_registrations` (20 a minute
+      per account).

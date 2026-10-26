@@ -1195,14 +1195,19 @@ impl ChatTransport for Client {
         let hosted = accounts.entry(self.account.clone()).or_default();
         let device_id = match &request.registration {
             kutup_chat_proto::DeviceRegistrationV1::Reregistration { manifest } => {
-                // The account authority's next manifest, this device alone:
-                // every other device goes, as Signal's reclaimAccount.
+                // The account authority's next manifest, this device its one
+                // Chat device: every other Chat device goes, as Signal's
+                // reclaimAccount; the account's other devices stay listed.
                 manifest
                     .verify_successor(hosted.manifests.last())
                     .map_err(ChatError::Transport)?;
                 hosted.devices.clear();
                 hosted.manifests.push((**manifest).clone());
-                kutup_chat_proto::REREGISTRATION_DEVICE_ID
+                manifest
+                    .chat_devices()
+                    .map(|(id, _)| id)
+                    .next()
+                    .expect("validated: one Chat device")
             }
             kutup_chat_proto::DeviceRegistrationV1::Link { link_token } => {
                 let owner = self.world.link_tokens.borrow_mut().remove(link_token);

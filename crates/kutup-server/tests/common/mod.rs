@@ -1055,33 +1055,14 @@ pub fn next_manifest(
             head.successor(devices, issued_at).unwrap()
         }
         None => {
-            let public = user.identity.authority_public_key();
             let mut devices = Vec::new();
             change(&mut devices);
-            devices.sort_by_key(|device| device.device_id);
-            kutup_chat_proto::AccountManifestV3 {
-                manifest_version: kutup_chat_proto::ACCOUNT_MANIFEST_V3_VERSION,
-                account: user.person.clone(),
-                incarnation_id: user.identity.incarnation_id(),
-                sequence: 1,
-                previous_hash: None,
-                identity_key: None,
-                identity_binding: None,
-                drive: kutup_chat_proto::AccountManifestDriveKeysV1 {
-                    suite: kutup_chat_proto::AccountIdentitySuiteId::XWingEd25519V2,
-                    hpke_public_key: STANDARD.encode(user.identity.drive_hpke_public_key()),
-                    share_signing_public_key: STANDARD
-                        .encode(user.identity.drive_signing_public_key()),
-                },
+            kutup_chat_proto::AccountManifestV3::first(
+                user.person.clone(),
+                &user.identity,
                 devices,
                 issued_at,
-                authority_key_id: hex::encode(kutup_crypto::primitives::hash(
-                    kutup_crypto::primitives::Suite::V1,
-                    public,
-                )),
-                self_authority_key: STANDARD.encode(public),
-                signature: String::new(),
-            }
+            )
         }
     };
     manifest
