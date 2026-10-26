@@ -3073,7 +3073,8 @@ folder) and `basedOn` (a version id or `original`, as a multipart save). The
 blob is sealed for the file at its current key generation. In the block
 format `revisionId` names the blob's revision, which becomes the version's
 id; its structure is checked when the last part lands. Answers `201` with
-`{ "fileId", "versionId" }`. At most `driveVersionMaxBytes` (`413`).
+`{ "fileId", "versionId" }` (the upload's id is the version's). At most
+`driveVersionMaxBytes` (`413`).
 
 Checked when the upload starts, so a conflict fails before the content is
 sent, and again when its last part lands: the caller may write the file

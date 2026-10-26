@@ -208,10 +208,12 @@ async fn open(
         .fetch_one(&mut *tx)
         .await?;
 
-    // The revision is the version's id: the client's for the block format.
+    // The revision is the version's id (the client's, for the block
+    // format), and the upload's id too: clients address the upload by the
+    // `versionId` this answers (docs/api.md).
     let revision = format.revision_id();
     crate::drive_blob::ensure_revision_free(&mut tx, revision, None).await?;
-    let upload_id = Uuid::new_v4();
+    let upload_id = revision;
     let storage_path = crate::file_content::revision_path(file_id, revision);
     let s3_upload_id = state
         .storage
