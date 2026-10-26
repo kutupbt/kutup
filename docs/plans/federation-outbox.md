@@ -1,6 +1,16 @@
 # One federation outbox
 
-Status: **proposed** (second session, 2026-10-26). This is a build note for
+Status: **approved** (main session, 2026-10-26): build on master now, in the
+two PRs below, with these conditions:
+- A rejected (final) row reaches the sender's client as a failed delivery of
+  that message (Signal's "not delivered"), never a silent drop. Live tests for
+  chat and for media.
+- Order within a kind and destination is unchanged: a rejected row never lets
+  a later row overtake an earlier pending one.
+- The migration's sequence high-water marks are tested with rows mid-flight
+  (pending and rejected) on both sides, in the two-server gate.
+- Both servers deploy together: a receiver on the old code still answers 409
+  to the gaps it doesn't record. The PRs say so. This is a build note for
 docs/plans/wipe-unification.md, "Not needing the wipe", item 6. The survey
 behind it reads master at b2b086a3.
 
