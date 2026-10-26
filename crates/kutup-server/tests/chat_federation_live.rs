@@ -1318,18 +1318,32 @@ fn drive_round_trip(
         &file_key_envelope,
         &ciphertext,
     );
-    let upload = |body: Vec<u8>| {
-        c.post(format!(
-            "{b}/api/drive/federation/shares/{incoming_id}/files"
-        ))
-        .bearer_auth(bob_token)
-        .header(
-            reqwest::header::CONTENT_TYPE,
-            format!("multipart/form-data; boundary={boundary}"),
-        )
-        .body(body)
-        .send()
-        .unwrap()
+    // Each call names itself, with how long it took, so a hang says which.
+    let upload = |body: Vec<u8>, what: &str| {
+        let started = std::time::Instant::now();
+        let response = c
+            .post(format!(
+                "{b}/api/drive/federation/shares/{incoming_id}/files"
+            ))
+            .bearer_auth(bob_token)
+            .header(
+                reqwest::header::CONTENT_TYPE,
+                format!("multipart/form-data; boundary={boundary}"),
+            )
+            .body(body)
+            .send()
+            .unwrap_or_else(|error| {
+                panic!(
+                    "federated Drive upload ({what}) after {:?}: {error}",
+                    started.elapsed()
+                )
+            });
+        eprintln!(
+            "federated Drive upload ({what}): {} in {:?}",
+            response.status(),
+            started.elapsed()
+        );
+        response
     };
     let relocated = drive_upload_body(
         boundary,
@@ -1338,7 +1352,10 @@ fn drive_round_trip(
         &file_key_envelope,
         &ciphertext,
     );
-    assert_eq!(upload(relocated).status().as_u16(), 400);
+    assert_eq!(
+        upload(relocated, "relocated file id").status().as_u16(),
+        400
+    );
     let blob_relocation_id = uuid::Uuid::new_v4().to_string();
     let blob_relocation_file_key = drive_envelope::seal_b64(
         &file_key,
@@ -1359,9 +1376,18 @@ fn drive_round_trip(
         &blob_relocation_file_key,
         &ciphertext,
     );
-    assert_eq!(upload(relocated_blob).status().as_u16(), 400);
-    let first_upload = json_response(upload(upload_body.clone()), "federated Drive upload");
-    let retried_upload = json_response(upload(upload_body), "idempotent Drive upload retry");
+    assert_eq!(
+        upload(relocated_blob, "relocated blob").status().as_u16(),
+        400
+    );
+    let first_upload = json_response(
+        upload(upload_body.clone(), "first upload"),
+        "federated Drive upload",
+    );
+    let retried_upload = json_response(
+        upload(upload_body, "idempotent retry"),
+        "idempotent Drive upload retry",
+    );
     assert_eq!(first_upload["id"], retried_upload["id"]);
     let file_id = first_upload["id"].as_str().unwrap();
     assert_eq!(file_id, proposed_file_id);

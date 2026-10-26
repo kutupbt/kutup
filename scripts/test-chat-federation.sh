@@ -80,6 +80,10 @@ cleanup() {
   if (( status != 0 )); then
     KUTUP_E2E_DIAGNOSTICS_DIR="${KUTUP_E2E_DIAGNOSTICS_DIR:-$root_dir/tests/e2e/sanitized-results}" \
       "$root_dir/scripts/collect-chat-e2e-diagnostics.sh" federation "$project" || true
+    # The backends' own account of a failure, in the job's output only (not
+    # the uploaded artifact): these stacks hold synthetic test accounts.
+    echo "--- backend logs (last 400 lines each) ---"
+    compose logs --no-color --timestamps --tail 400 backend-a backend-b || true
   fi
   compose down --volumes --remove-orphans
   rm -f "$state_file"
