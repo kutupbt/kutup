@@ -697,15 +697,28 @@ pub struct SealedObject {
     pub manifest_sha256: [u8; HASH_LEN],
 }
 
-/// The sealed manifest's digest of a whole object, from its trailer (not yet
-/// checked against anything: a caller compares it with its commitment).
-pub fn object_manifest_digest(
+/// The sealed manifest's digest of a whole object, from its trailer: not
+/// checked against anything, so never an "expected" digest. Inside the
+/// crate a reader compares it with its commitment first (see
+/// `drive_blocks::open_file`).
+pub(crate) fn trailer_manifest_digest(
     object: &[u8],
     header_len: usize,
     family: &BlockFamily,
 ) -> Result<[u8; HASH_LEN]> {
     let (start, end) = manifest_range(family, header_len, object)?;
     Ok(manifest_digest(&object[start..end]))
+}
+
+/// [`trailer_manifest_digest`] for tests and the fuzz target, which read an
+/// object as if its metadata committed to its own manifest.
+#[cfg(any(test, feature = "test-vectors"))]
+pub fn object_manifest_digest(
+    object: &[u8],
+    header_len: usize,
+    family: &BlockFamily,
+) -> Result<[u8; HASH_LEN]> {
+    trailer_manifest_digest(object, header_len, family)
 }
 
 /// Where a whole object's sealed manifest sits, from its trailer.

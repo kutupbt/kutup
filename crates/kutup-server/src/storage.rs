@@ -171,6 +171,35 @@ impl StorageService {
         Ok((out.body, size))
     }
 
+    /// Bytes `start..=end` of an object `total` bytes long (as recorded): the
+    /// store must answer exactly that part of an object of that length, or
+    /// this fails, so a changed or short object is never served as a part.
+    pub async fn get_object_range(
+        &self,
+        path: &str,
+        start: u64,
+        end: u64,
+        total: u64,
+    ) -> Result<ByteStream> {
+        anyhow::ensure!(start <= end && end < total, "range outside the object");
+        let out = self
+            .client
+            .get_object()
+            .bucket(&self.bucket)
+            .key(path)
+            .range(format!("bytes={start}-{end}"))
+            .send()
+            .await
+            .context("s3 get range")?;
+        let expected = format!("bytes {start}-{end}/{total}");
+        anyhow::ensure!(
+            out.content_range() == Some(expected.as_str())
+                && out.content_length() == Some((end - start + 1) as i64),
+            "the store answered another range than {expected}"
+        );
+        Ok(out.body)
+    }
+
     /// Deletes a specific (noncurrent) object version — mirrors `DeleteObjectVersion`.
     /// Used by the version-cleanup job.
     pub async fn delete_object_version(&self, key: &str, version_id: &str) -> Result<()> {

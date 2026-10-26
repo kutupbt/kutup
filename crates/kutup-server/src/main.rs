@@ -23,10 +23,13 @@ mod chat_hub;
 mod chat_media_federation;
 mod collab_federation;
 mod config;
+mod content_range;
 mod db;
+mod drive_blob;
 mod drive_federation;
 mod drive_federation_albums;
 mod drive_federation_files;
+mod drive_federation_ranges;
 mod drive_names;
 mod drive_profile_keys;
 mod drive_writes;
@@ -100,16 +103,8 @@ const BUILD_VERSION: &str = "dev";
 /// whole body in memory, so the default is small; the upload routes that
 /// need more raise it on their own route (and stream to disk).
 const BODY_LIMIT_BYTES: usize = 4 * 1024 * 1024;
-/// A whole-file multipart upload, streamed to a temp file.
-const DRIVE_UPLOAD_LIMIT_BYTES: usize = 10 * 1024 * 1024 * 1024;
-/// A saved version (streamed to a temp file): an office document or
-/// whiteboard, or a restored copy of one.
-const DRIVE_VERSION_LIMIT_BYTES: usize = 2 * 1024 * 1024 * 1024;
 /// One tus PATCH is one encryption chunk (5 MiB plus overhead); room to spare.
 const TUS_PATCH_LIMIT_BYTES: usize = 64 * 1024 * 1024;
-/// A federated Drive upload (streamed to disk, its signed digest checked
-/// there): one file blob of the same bound as an upload, plus framing.
-const FEDERATED_DRIVE_UPLOAD_LIMIT_BYTES: usize = 10 * 1024 * 1024 * 1024 + 16 * 1024 * 1024;
 const FED_CHAT_BODY_LIMIT_BYTES: usize = 16 * 1024 * 1024;
 
 /// Shared application state.
@@ -1707,8 +1702,11 @@ fn build_router(state: AppState) -> Router {
         // --- Files (authenticated) ---
         .route(
             "/api/files/upload",
-            post(files::upload).route_layer(DefaultBodyLimit::max(DRIVE_UPLOAD_LIMIT_BYTES)),
+            // The upload limit is a site setting the handler counts against
+            // as the body arrives (driveUploadMaxBytes).
+            post(files::upload).route_layer(DefaultBodyLimit::disable()),
         )
+        .route("/api/drive/limits", get(files::limits))
         .route("/api/files/:id/download", get(files::download))
         .route("/api/files/:id/original", get(files::download_original))
         .route(
@@ -1724,7 +1722,8 @@ fn build_router(state: AppState) -> Router {
             "/api/files/:fileId/versions",
             get(file_versions::list)
                 .post(file_versions::create)
-                .route_layer(DefaultBodyLimit::max(DRIVE_VERSION_LIMIT_BYTES)),
+                // Counted by the handler (driveVersionMaxBytes).
+                .route_layer(DefaultBodyLimit::disable()),
         )
         .route(
             "/api/files/:fileId/versions/:vid/download",
@@ -1935,7 +1934,8 @@ fn build_router(state: AppState) -> Router {
             "/api/fed/drive/files",
             get(drive_federation::list_files)
                 .post(drive_federation::upload_file)
-                .route_layer(DefaultBodyLimit::max(FEDERATED_DRIVE_UPLOAD_LIMIT_BYTES))
+                // Spooled against the upload limit, a site setting.
+                .route_layer(DefaultBodyLimit::disable())
                 .route_layer(from_fn(middleware::rate_limit_fed_users)),
         )
         .route(
@@ -2164,7 +2164,8 @@ fn build_router(state: AppState) -> Router {
             "/api/drive/federation/shares/:shareId/files",
             get(drive_federation::proxy_list_files)
                 .post(drive_federation::proxy_upload)
-                .route_layer(DefaultBodyLimit::max(FEDERATED_DRIVE_UPLOAD_LIMIT_BYTES)),
+                // Spooled against the upload limit, a site setting.
+                .route_layer(DefaultBodyLimit::disable()),
         )
         .route(
             "/api/drive/federation/shares/:shareId/refresh",

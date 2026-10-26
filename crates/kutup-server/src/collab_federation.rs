@@ -39,7 +39,7 @@ use uuid::Uuid;
 
 use crate::drive_federation::{
     capability_hash, configured_stack, drive_spec, ensure_version_digest, gateway_error,
-    signed_app_error, signed_json, validate_capability, JSON_CONTENT_TYPE, MAX_DRIVE_OBJECT_BYTES,
+    signed_app_error, signed_json, validate_capability, JSON_CONTENT_TYPE,
     OCTET_STREAM_CONTENT_TYPE, SHARE_CAPABILITY_HEADER,
 };
 use crate::error::{AppError, AppResult};
@@ -917,6 +917,7 @@ pub async fn version_content(
             path,
             size,
             version: Some(vid),
+            revision: vid,
         };
         let digest = ensure_version_digest(&state, vid, &content).await?;
         let digest: [u8; 32] = hex::decode(&digest)
@@ -2050,7 +2051,7 @@ async fn relay_version_download(
                 JSON_CONTENT_TYPE.into(),
                 Vec::new(),
                 Some(&target.capability),
-                MAX_DRIVE_OBJECT_BYTES,
+                crate::drive_federation::max_drive_object_bytes(&state.pool).await?,
             )?,
         )
         .await

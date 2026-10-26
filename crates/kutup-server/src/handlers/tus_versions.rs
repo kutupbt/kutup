@@ -14,22 +14,22 @@ use kutup_crypto::drive_envelope::DriveEnvelopeContextV1;
 use sqlx::{Postgres, Transaction};
 use uuid::Uuid;
 
-use super::file_versions::{
-    check_based_on, current_whole_version, parse_based_on, version_storage_path,
-};
+use super::file_versions::{check_based_on, current_whole_version, parse_based_on};
 use super::files::{canonical_uuid, validate_envelope};
 use super::tus::{tus_error, TUS_VERSION};
+use crate::drive_blob::BlobFormat;
 use crate::error::{AppError, AppResult};
 use crate::storage::CompletedPart;
 use crate::AppState;
 
 /// The `Upload-Metadata` keys of a version upload.
-const KEYS: [&str; 5] = [
+const KEYS: [&str; 6] = [
     "versionOf",
     "metadataEnvelope",
     "metadataRevision",
     "contentHash",
     "basedOn",
+    "revisionId",
 ];
 
 /// The file a version upload may still be written to, read under its row lock:
@@ -109,9 +109,10 @@ pub(super) async fn create(
     state: &AppState,
     user_id: Uuid,
     total_bytes: i64,
+    format: BlobFormat,
     meta: &HashMap<String, String>,
 ) -> Response {
-    match open(state, user_id, total_bytes, meta).await {
+    match open(state, user_id, total_bytes, format, meta).await {
         Ok(response) => response,
         Err(error) => tus_error(error),
     }
@@ -121,12 +122,23 @@ async fn open(
     state: &AppState,
     user_id: Uuid,
     total_bytes: i64,
+    format: BlobFormat,
     meta: &HashMap<String, String>,
 ) -> AppResult<Response> {
     if meta.keys().any(|key| !KEYS.contains(&key.as_str())) {
         return Err(AppError::bad_request(
             "a version's Upload-Metadata holds only versionOf, metadataEnvelope, \
-             metadataRevision, contentHash and basedOn",
+             metadataRevision, contentHash, basedOn and revisionId",
+        ));
+    }
+    // The version limit is a site setting.
+    if total_bytes
+        > crate::site_settings::DRIVE_VERSION_MAX_BYTES
+            .load(&state.pool)
+            .await?
+    {
+        return Err(AppError::payload_too_large(
+            "larger than this server's version limit",
         ));
     }
     let file_id = meta
@@ -196,9 +208,13 @@ async fn open(
         .fetch_one(&mut *tx)
         .await?;
 
-    // The upload's id is the version's.
-    let upload_id = Uuid::new_v4();
-    let storage_path = version_storage_path(file_id, upload_id);
+    // The revision is the version's id (the client's, for the block
+    // format), and the upload's id too: clients address the upload by the
+    // `versionId` this answers (docs/api.md).
+    let revision = format.revision_id();
+    crate::drive_blob::ensure_revision_free(&mut tx, revision, None).await?;
+    let upload_id = revision;
+    let storage_path = crate::file_content::revision_path(file_id, revision);
     let s3_upload_id = state
         .storage
         .create_multipart(&storage_path)
@@ -208,8 +224,8 @@ async fn open(
         "INSERT INTO uploads
             (id, user_id, collection_id, file_id, total_bytes, metadata_envelope,
              key_epoch, metadata_revision, storage_path, s3_upload_id,
-             kind, key_generation, content_hash, based_on)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,'version',$11,$12,$13)",
+             kind, key_generation, content_hash, based_on, revision_id, blob_suite)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,'version',$11,$12,$13,$14,$15)",
     )
     .bind(upload_id)
     .bind(user_id)
@@ -224,6 +240,8 @@ async fn open(
     .bind(key_generation)
     .bind(content_hash)
     .bind(based_on)
+    .bind(revision)
+    .bind(format.suite())
     .execute(&mut *tx)
     .await;
     let committed = match inserted {
@@ -245,7 +263,7 @@ async fn open(
             ("Upload-Offset", "0".to_string()),
             ("Content-Type", "application/json".to_string()),
         ],
-        format!("{{\"fileId\":\"{file_id}\",\"versionId\":\"{upload_id}\"}}"),
+        format!("{{\"fileId\":\"{file_id}\",\"versionId\":\"{revision}\"}}"),
     )
         .into_response())
 }
@@ -266,6 +284,9 @@ pub(super) struct Landing {
     pub key_generation: i32,
     pub content_hash: Option<String>,
     pub based_on: Option<String>,
+    /// The version's id.
+    pub revision_id: Uuid,
+    pub format: BlobFormat,
 }
 
 /// Stores the version, its metadata and content hash, in the transaction
@@ -324,6 +345,23 @@ pub(super) async fn finish(
         )
             .into_response();
     }
+    // The block format's structure, from the stored object's trailer.
+    if let Err(error) = super::tus::check_stored_tail(
+        state,
+        &landing.storage_path,
+        landing.total_bytes,
+        landing.format,
+    )
+    .await
+    {
+        drop(tx);
+        let _ = state.storage.delete(&landing.storage_path).await;
+        let _ = sqlx::query("DELETE FROM uploads WHERE id = $1")
+            .bind(landing.upload_id)
+            .execute(&state.pool)
+            .await;
+        return tus_error(error);
+    }
     // Moved meanwhile: the content hash was keyed for the folder it left.
     let content_hash = landing
         .content_hash
@@ -334,7 +372,7 @@ pub(super) async fn finish(
             Ok(()) => Ok(seq),
             // A commit can fail in the reporting after it took effect: look
             // before deleting the object of a version that landed.
-            Err(error) => match landed_version(state, landing.upload_id).await {
+            Err(error) => match landed_version(state, landing.revision_id).await {
                 Ok(Some(seq)) => Ok(seq),
                 Ok(None) => Err(AppError::from(error)),
                 // Not known whether it landed: keep everything (the object
@@ -356,7 +394,7 @@ pub(super) async fn finish(
             super::collab::replace_base(
                 state,
                 landing.file_id,
-                &landing.upload_id.to_string(),
+                &landing.revision_id.to_string(),
                 seq,
             )
             .await;
@@ -366,7 +404,7 @@ pub(super) async fn finish(
                     ("Tus-Resumable", TUS_VERSION.to_string()),
                     ("Upload-Offset", landing.total_bytes.to_string()),
                     ("X-Kutup-File-Id", landing.file_id.to_string()),
-                    ("X-Kutup-Version-Id", landing.upload_id.to_string()),
+                    ("X-Kutup-Version-Id", landing.revision_id.to_string()),
                 ],
             )
                 .into_response()
@@ -440,7 +478,7 @@ async fn record(
                                       key_generation, parent_version_id, created_at)
            VALUES ($1, $2, $3, $8, $9, $4, $5, false, 'file', $6, $7, clock_timestamp())"#,
     )
-    .bind(landing.upload_id)
+    .bind(landing.revision_id)
     .bind(landing.file_id)
     .bind(&landing.storage_path)
     .bind(landing.user_id)
