@@ -48,6 +48,23 @@ fn enable(profile: &str, json: bool) -> Result<()> {
     // Turning it on takes the password as well (a stolen session alone must
     // not be able to lock the owner out).
     let password = super::login::current_password()?;
+    // Beside security keys (two-step sign-in already on), the factor the
+    // account has is proved too: the CLI can't use a key, so one of the
+    // recovery codes. Not echoed, and wiped after use.
+    let has_keys = ctx.client.me()?.security_keys > 0;
+    let recovery_code = zeroize::Zeroizing::new(if has_keys {
+        rpassword::prompt_password(
+            "This account has security keys, which the CLI can't use: type one of its \
+             recovery codes to add the authenticator app: ",
+        )?
+        .trim()
+        .to_owned()
+    } else {
+        String::new()
+    });
+    if has_keys && recovery_code.is_empty() {
+        bail!("aborted (no recovery code entered)");
+    }
     let res = ctx.client.setup_totp()?;
 
     // Render the otpauth:// URI as a terminal QR (most authenticator apps scan it directly).
@@ -65,7 +82,7 @@ fn enable(profile: &str, json: bool) -> Result<()> {
         bail!("aborted (no code entered)");
     }
     let grant = super::login::reauth_grant(&ctx.client, &password, "totp")?;
-    ctx.client.verify_totp(&code, &grant)?;
+    ctx.client.verify_totp(&code, &grant, &recovery_code)?;
 
     if json {
         crate::output::print_json(&serde_json::json!({ "totpEnabled": true }))?;

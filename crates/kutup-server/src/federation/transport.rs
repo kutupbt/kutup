@@ -100,6 +100,10 @@ pub(crate) struct AuthenticatedFederationStreamResponse {
     /// pinned peer response signature.
     pub content_sha256: [u8; 32],
     pub file: tokio::fs::File,
+    /// A ranged answer's `Content-Range` (not signed: the reader checks it
+    /// against what it asked) and the content's ETag.
+    pub content_range: Option<String>,
+    pub etag: Option<String>,
 }
 
 pub(crate) struct AuthenticatedFederationRequest {
@@ -604,12 +608,20 @@ impl FederationStack {
             return Err(error.into());
         }
         file.rewind().await?;
+        let text = |name: header::HeaderName| {
+            response_headers
+                .get(name)
+                .and_then(|value| value.to_str().ok())
+                .map(str::to_owned)
+        };
         Ok(AuthenticatedFederationStreamResponse {
             status,
             content_type,
             content_length: length,
             content_sha256: digest,
             file,
+            content_range: text(header::CONTENT_RANGE),
+            etag: text(header::ETAG),
         })
     }
 

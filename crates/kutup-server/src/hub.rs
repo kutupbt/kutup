@@ -36,6 +36,8 @@ pub struct Peer {
     pub conn_id: u64,
     /// The device's id in its account's manifest.
     pub device_id: u32,
+    /// The tab's id: tabs of one browser share a device.
+    pub tab: String,
     pub user_id: String,
     /// The account its frames name (`aci:<uuid>@<server>`).
     pub account: String,
@@ -272,6 +274,7 @@ impl Hub {
 pub fn new_peer(
     hub: &Hub,
     device_id: u32,
+    tab: String,
     user_id: String,
     account: String,
     username: String,
@@ -281,6 +284,7 @@ pub fn new_peer(
     let peer = Arc::new(Peer {
         conn_id: hub.next_conn_id(),
         device_id,
+        tab,
         user_id,
         account,
         username,
@@ -299,6 +303,7 @@ mod tests {
         new_peer(
             hub,
             device_id,
+            String::new(),
             String::new(),
             String::new(),
             String::new(),

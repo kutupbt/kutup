@@ -1,0 +1,3 @@
+# Office collaboration: two tabs of one account and two accounts editing one
+# document together, cursors drawn both ways.
+specs/04-office-collaboration.spec.ts

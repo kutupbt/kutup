@@ -91,6 +91,10 @@ pub struct LoginResponse {
     pub identity_suite: Option<i16>,
     #[serde(default)]
     pub requires_totp: bool,
+    /// The second steps the account has: `securityKey`, `totp`,
+    /// `recoveryCode`.
+    #[serde(default)]
+    pub second_factors: Vec<String>,
     #[serde(default)]
     pub pre_auth_token: String,
     #[serde(default)]
@@ -158,6 +162,9 @@ pub struct UserMe {
     pub is_admin: bool,
     #[serde(default)]
     pub totp_enabled: bool,
+    /// Security keys the account has: two-step sign-in is on with them too.
+    #[serde(default)]
+    pub security_keys: i64,
     #[serde(default)]
     pub storage_quota_bytes: i64,
     #[serde(default)]

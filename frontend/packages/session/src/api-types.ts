@@ -240,12 +240,23 @@ export interface AdminSettings {
   chatLinkTokenSeconds: number
   /** How many two-factor recovery codes are made at once. */
   twoFactorRecoveryCodes: number
+  securityKeysPerAccount: number
+  webauthnCeremonySeconds: number
   chatLinkTokensPerAccount: number
   chatProvisionBodyBytes: number
   chatMaxActiveDevices: number
   chatProvisioningTicketSeconds: number
   chatProvisioningSocketsPerAccount: number
   chatDistributionMessageBytes: number
+  /** Drive uploads and streaming (site_settings::DRIVE_SETTINGS), sizes in bytes. */
+  driveUploadMaxBytes: number
+  driveVersionMaxBytes: number
+  driveStreamMaxBytes: number
+  driveStreamCacheBlocks: number
+  driveStreamReadaheadBlocks: number
+  driveStreamMaxConcurrent: number
+  driveStreamResponseMaxBytes: number
+  driveStreamBlobFallbackMaxBytes: number
 }
 
 export type FederationMode = 'disabled' | 'allowlist' | 'blocklist' | 'open'

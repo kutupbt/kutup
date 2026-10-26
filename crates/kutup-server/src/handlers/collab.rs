@@ -30,6 +30,28 @@ use kutup_crypto::account_ref::AccountRef;
 #[derive(Debug, Deserialize)]
 pub struct CollabQuery {
     pub(crate) ticket: Option<String>,
+    /// The tab's own random id (lowercase hex, at most 6 digits): the tabs
+    /// of one browser share a device, and the room tells them apart by it
+    /// (an office editor keys its participants on it).
+    #[serde(default)]
+    pub(crate) tab: Option<String>,
+}
+
+impl CollabQuery {
+    /// The tab id, if well formed (1 to 6 lowercase hex digits, the 24 bits a client
+    /// draws): empty otherwise (an older client).
+    pub(crate) fn tab(&self) -> String {
+        self.tab
+            .as_deref()
+            .filter(|tab| {
+                (1..=6).contains(&tab.len())
+                    && tab
+                        .bytes()
+                        .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+            })
+            .unwrap_or_default()
+            .to_owned()
+    }
 }
 
 /// One participant in the room's peer-list. Keys are emitted in the alphabetical order Go's
@@ -44,6 +66,9 @@ pub(crate) struct PeerSummary {
     color: String,
     #[serde(rename = "deviceId")]
     device_id: u32,
+    /// The tab's id (see `CollabQuery::tab`); omitted for an older client.
+    #[serde(skip_serializing_if = "String::is_empty")]
+    tab: String,
     #[serde(rename = "userId")]
     user_id: String,
     #[serde(skip_serializing_if = "String::is_empty")]
@@ -110,6 +135,7 @@ pub async fn ws(
         file_id,
         file_uuid,
         device,
+        tab: q.tab(),
     };
     // One frame carries at most one envelope's plaintext.
     let max_frame = envelope::MAX_PLAINTEXT_BYTES + envelope::MIN_PACKED;
@@ -185,6 +211,7 @@ struct Conn {
     file_id: String,
     file_uuid: Uuid,
     device: FrameDevice,
+    tab: String,
 }
 
 /// How often an open connection re-checks its session and file access, so
@@ -296,6 +323,7 @@ async fn handle_connection(state: AppState, socket: WebSocket, conn: Conn) {
     let (peer, mut rx) = hub::new_peer(
         &hub,
         device.device_id,
+        conn.tab.clone(),
         user_uuid.to_string(),
         device.account.to_string(),
         username,
@@ -371,6 +399,7 @@ pub(crate) fn peer_summaries(hub: &Hub, file_id: &str) -> Vec<PeerSummary> {
             account: p.account.clone(),
             color: p.color.clone(),
             device_id: p.device_id,
+            tab: p.tab.clone(),
             user_id: p.user_id.clone(),
             username: p.username.clone(),
         })
@@ -1082,5 +1111,28 @@ pub async fn post_frame(
             "the frame was not kept: read the log again",
         )
         .with_details(serde_json::json!({ "code": "frameRefused" }))),
+    }
+}
+
+#[cfg(test)]
+mod tab_tests {
+    use super::CollabQuery;
+
+    fn tab(value: Option<&str>) -> String {
+        CollabQuery {
+            ticket: None,
+            tab: value.map(str::to_owned),
+        }
+        .tab()
+    }
+
+    #[test]
+    fn a_tab_id_is_short_lowercase_hex_or_nothing() {
+        assert_eq!(tab(Some("0a1b2c")), "0a1b2c");
+        assert_eq!(tab(Some("f")), "f");
+        for bad in ["", "DEAD", "1234567", "deadbeef", "xyz", "<script>"] {
+            assert_eq!(tab(Some(bad)), "", "{bad}");
+        }
+        assert_eq!(tab(None), "");
     }
 }

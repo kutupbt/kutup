@@ -8,9 +8,11 @@ All authenticated endpoints require `Authorization: Bearer <accessToken>`.
 > **Note:** File content and metadata are end-to-end encrypted by the client. Account secrets use one canonical, suite-bearing envelope per value; the server validates only its public framing and never sees the plaintext or key.
 
 **Request bodies** are capped at 4 MiB unless a route says otherwise; the
-upload routes raise it (whole-file upload 10 GiB, a multipart version 2 GiB
-(a version of any size goes over tus), a tus chunk 64 MiB, a whiteboard asset one envelope, a federated Drive upload
-10 GiB, streamed to disk). A larger body gets `413`.
+upload routes raise it (a whole-file upload up to `driveUploadMaxBytes`, a
+multipart version up to `driveVersionMaxBytes`, both site settings, 10 GiB
+and 2 GiB at first; a tus chunk 64 MiB, a whiteboard asset one envelope, a
+federated Drive upload the upload limit plus 16 MiB, streamed to disk). A
+larger body gets `413`.
 
 ## Errors
 
@@ -57,6 +59,16 @@ Specific codes, where an app does something particular (a test in
 | `wrongPin`, `signedOut`, `noPin` | 403/404 | Kutup Pass's PIN: wrong (with `attemptsLeft`), the last try ended the sign-in, none set |
 | `accountLocked` | 429 | The sign-in lockout or ceiling (a while) |
 | `accountIdInvalid` | 400 | `register`: no account id given back, or one this server did not mint for the sign-up's key binding (start the sign-up again) |
+| `revisionTaken` | 409 | A Drive upload or version naming a `revisionId` the file, another file or an open upload already has (a revision names one content: choose a new one) |
+| `securityKeysOff` | 503 | This server can't offer security keys (its account app isn't on https) |
+| `securityKeyLimit` | 409 | `POST /api/auth/security-keys/register/*`: the account has `limit` keys already |
+| `securityKeyExists` | 409 | That security key is already added |
+| `securityKeyRefused` | 400 | The key's answer was not accepted (another origin or RP, user verification missing when required, a bad attestation) |
+| `securityKeyCeremony` | 400 | The security key prompt expired, or was answered already: start again |
+| `securityKeyCompromised` | 401 | The key's counter did not move on, with no other use of it in flight: it may have been copied, and is no longer used (remove it; add it again if it is yours) |
+| `securityKeyRetry` | 409 | The key's counter is behind because it was used elsewhere (another tab) since this sign-in started: start again |
+| `secondFactorRequired` | 403 | Adding a factor (a security key, the authenticator app beside keys) or turning "Require PIN" off while two-step sign-in is on: prove a factor the account has (`code`, `recoveryCode` or `securityKey`) |
+| `noSecurityKeys` | 409 | A security key step for an account without a usable key |
 | `accountIdTaken` | 409 | `register`: the account id is some account's, or was a deleted account's (ids are never reused): start again |
 | `keyListInvalid` | 400 | A shared mailbox's next key list the chain refuses: not signed by its signer in force, an old signer after its handover, a gap, or other keys than the group's |
 | `handoverNeeded` | 403 | A shared mailbox's new signer without a handover from the one in force: only an administrator starts a group's key lists over |
@@ -487,6 +499,32 @@ dash are ignored, and I/L read as 1, O as 0.
 `rotate` and `grant` when due). The client keeps the export key across this
 step.
 
+The sign-in's answer asks for this step (`requiresTotp: true`) whenever the
+account has a second factor, and `secondFactors` lists the steps it may
+take, a security key first: `securityKey`, `totp`, `recoveryCode`. Only an
+authenticator app that is turned on counts here; a secret still being set
+up never signs in.
+
+### POST /api/auth/login/security-key/start, …/finish
+
+The second step with a security key (docs/plans/security-keys.md).
+- `start` `{ "preAuthToken" }` answers `PublicKeyCredentialRequestOptions` in
+  its JSON form, naming the account's usable keys (only someone past the
+  password step learns them); `409 noSecurityKeys` without one.
+- `finish` `{ "preAuthToken", "credential" }`, `credential` being the
+  browser's `PublicKeyCredential.toJSON()` from `get()`, answers the same
+  session as `login/2fa`. The ceremony is single use, bound to the
+  pre-auth token, and lasts `webauthnCeremonySeconds`. Failures share
+  `login/2fa`'s attempt budget (`401 invalidCredentials`, then `429`). A key
+  whose counter did not move on may have been cloned: it is marked
+  compromised, logged, and refused (`401 securityKeyCompromised`); it is
+  never offered again (Proton's flag: remove it, and add it again if it is
+  yours). When the key was used after this sign-in started (another tab),
+  a counter behind is that use, not a clone: refused only (`409
+  securityKeyRetry`), as Signal restarts the ceremony.
+
+**Auth:** None · **Header:** `X-Kutup-Client` (on `finish`)
+
 ---
 
 ### GET /api/auth/recover/preflight
@@ -888,7 +926,10 @@ The secret is stored as *pending* and only becomes active after `POST /api/user/
 ### POST /api/user/2fa/verify
 
 Confirm TOTP setup by providing the first valid code, with the password proved
-again: a `totp` grant from a reauth of this session.
+again: a `totp` grant from a reauth of this session. Beside security keys
+(two-step sign-in already on), a factor the account has is proved too:
+`recoveryCode` or `securityKey` (`403 secondFactorRequired` without), and
+the response's `recoveryCodes` is empty (the account's codes stay).
 
 **Auth:** Bearer JWT
 
@@ -926,9 +967,12 @@ two-step sign-in is off.
 
 ### DELETE /api/user/2fa
 
-Disable TOTP for the current user. Requires a valid TOTP code, or a recovery
-code in its place, and a `totp` grant from a reauth of this session, so a
-stolen session cannot remove 2FA. The recovery codes go with it.
+Turn the authenticator app off. Requires a valid TOTP code (or a recovery
+code, or `securityKey`: a key's answer to `POST
+/api/auth/security-keys/proof/start`) and a `totp` grant from a reauth of
+this session, so a stolen session cannot remove 2FA. With security keys left
+two-step sign-in stays on, with its recovery codes; otherwise they go with
+it.
 
 A wrong code here or at `POST /api/user/2fa/recovery-codes` still uses up
 the grant, so each guess takes the password again. Wrong codes count per
@@ -945,6 +989,54 @@ included.
   "grant": "kg1_…"
 }
 ```
+
+---
+
+### Security keys: `/api/auth/security-keys`
+
+Security keys (WebAuthn: a YubiKey, or a phone's or computer's built-in
+authenticator used as a key) as a second factor beside the authenticator app,
+as Proton has them (docs/plans/security-keys.md): several per account, each
+named; not passkeys (no passwordless sign-in). The relying party is the
+account app's origin and the RP id (`KUTUP_WEBAUTHN_RP_ID`, else
+`KUTUP_BASE_DOMAIN`, else the account app's host); where WebAuthn can't work (plain http off localhost) keys are
+off: `available: false`, and the routes answer `503 securityKeysOff`.
+
+- `GET` → `{ keys: [{ id, name, createdAt, lastUsedAt, compromised }],
+  requireUv, limit, available }`.
+- `POST register/start` `{ grant, code | securityKey }` (a `totp` grant
+  from a reauth of this session; while two-step sign-in is on, a factor the
+  account has proved again, as `DELETE` takes it, else `403
+  secondFactorRequired`) → `PublicKeyCredentialCreationOptions` (JSON form): attestation
+  `none`, not discoverable, the account's keys excluded, user verification
+  from "Require PIN". `409 securityKeyLimit` at `securityKeysPerAccount`
+  (10).
+- `POST register/finish` `{ name, credential }` (1–128 characters; the
+  browser's `toJSON()` from `create()`) → `{ key, recoveryCodes? }`.
+  The account's first second factor turns two-step sign-in on, with its
+  recovery codes (shown once). A start that proved no factor can't finish
+  once one is on (`403 secondFactorRequired`). Names refuse control and
+  format characters (bidi overrides). `409 securityKeyExists` (on this or
+  any account: a credential is unique), `400
+  securityKeyRefused` (another origin or RP, a wrong answer), `400
+  securityKeyCeremony` (expired or answered).
+- `PATCH {id}` `{ name }` renames it (`204`).
+- `DELETE {id}` `{ grant, code | securityKey }`: the password and the second
+  factor proved again, as `DELETE /api/user/2fa` takes them → `{
+  twoFactorOff }`. Removing the last factor turns two-step sign-in off and
+  drops the recovery codes.
+- `POST proof/start` → options for proving the second factor with a key for
+  this session: the answer goes in `securityKey` (removing a key or the
+  authenticator app, renewing recovery codes).
+- `PUT require-uv` `{ grant, requireUv, code | securityKey }`: Proton's
+  "Require PIN", user verification when adding and signing in (`204`).
+  Turning it off takes the second factor too.
+
+Every change is in the security log (`securityKeyAdded`, `securityKeyRemoved`,
+`securityKeyCompromised`, each with the key's name in `oldName`;
+`authenticatorOn`, `authenticatorOff`, and `twoFactorOn`/`twoFactorOff`
+when two-step sign-in turns on or off), and the account's other sessions
+see a new session version.
 
 ---
 
@@ -2822,6 +2914,51 @@ them and counts against the share's `uploadQuotaBytes`.
 declared length of the user's open tus uploads (an upload reserves its whole
 length until it is finalised).
 
+**Revisions and the block format** (docs/plans/drive-block-format.md §3).
+Each stored content of a file — its first upload and every version — is a
+revision with its own id, stored at `files/{fileId}/revisions/{revisionId}`.
+An upload in the block format (suite 2) names its revision with
+`revisionId`: the client chooses it before it seals, and the blob's header
+binds it, so the server checks the two agree. It also checks the blob's
+structure from its length and trailer (the manifest length fits the block
+count, and the count the length); it can't check the AEAD. An upload without
+`revisionId` is the streaming format (suite 1) and gets a new revision id. A
+revision id already used is `409 revisionTaken`.
+
+**Ranges.** Every content route (download, original, version, public link,
+Chat media and the federated reads) takes one `Range: bytes=a-b`, `a-` or
+`-k` and answers `206` with `Content-Range`, or `416` with
+`Content-Range: bytes */<length>` for a range past the end. Several ranges, or
+a malformed one, are answered whole (`200`). The ETag is the revision id (an
+attachment id for Chat media) and `If-Range` is honoured: a range of other
+content gets the whole new content. One answer carries at most
+`driveStreamResponseMaxBytes`; a longer range is answered in part, as its
+`Content-Range` says: its first part, or a suffix's last.
+
+**Limits** are site settings an administrator changes: the largest upload
+(`driveUploadMaxBytes`, 10 GiB) and version (`driveVersionMaxBytes`, 2 GiB),
+counted as the body arrives (`413` past them), and the streaming settings
+`GET /api/drive/limits` lists.
+
+### GET /api/drive/limits
+
+The upload and streaming limits a client works with.
+
+**Auth:** Bearer JWT
+
+```json
+{
+  "uploadMaxBytes": 10737418240,
+  "versionMaxBytes": 2147483648,
+  "streamMaxBytes": 10737418240,
+  "streamCacheBlocks": 3,
+  "streamReadaheadBlocks": 1,
+  "streamMaxConcurrent": 3,
+  "streamResponseMaxBytes": 5242880,
+  "streamBlobFallbackMaxBytes": 1073741824
+}
+```
+
 ### POST /api/files/upload
 
 Upload an encrypted file to a collection. Multipart form.
@@ -2838,6 +2975,7 @@ Upload an encrypted file to a collection. Multipart form.
 | `fileKeyEnvelope` | string (canonical base64) | `DriveEnvelopeV1` file-key record under the collection key, bound to file, collection, the collection's current epoch and key generation 1 (the revision slot) |
 | `nameHash` | string | The name's hash in the folder ("Names in a folder"); required, checked before anything is stored |
 | `contentHash` | string (optional) | The content's hash in the folder, when known before the upload |
+| `revisionId` | string (canonical UUID, optional) | The block-format blob's revision (see "Revisions and the block format") |
 | `file` | binary | Complete typed Drive file blob (`application/octet-stream`) |
 
 The server obtains the current collection epoch itself and rejects malformed,
@@ -2947,7 +3085,8 @@ bytes as the file is now: its latest `kind = file` version when it has one
 Public links and federated reads serve the same. The `X-Kutup-Version` header
 names what was served: the version id, or `original` for the upload. A client
 that saves its edit with `basedOn` passes it on (see
-`POST /api/files/:fileId/versions`).
+`POST /api/files/:fileId/versions`). The ETag is the content's revision id,
+and one `Range` is served (see "Ranges").
 
 ---
 
@@ -3022,8 +3161,11 @@ resumable (tus `HEAD`/`PATCH` as for a new file) and of any size. The
 `metadataRevision` (the file's next metadata revision: its new size and
 `sha256`), and optionally `contentHash` (the new content's hash in its
 folder) and `basedOn` (a version id or `original`, as a multipart save). The
-blob is sealed for the file at its current key generation. Answers `201`
-with `{ "fileId", "versionId" }` (the upload's id is the version's).
+blob is sealed for the file at its current key generation. In the block
+format `revisionId` names the blob's revision, which becomes the version's
+id; its structure is checked when the last part lands. Answers `201` with
+`{ "fileId", "versionId" }` (the upload's id is the version's). At most
+`driveVersionMaxBytes` (`413`).
 
 Checked when the upload starts, so a conflict fails before the content is
 sent, and again when its last part lands: the caller may write the file
@@ -4684,7 +4826,18 @@ A file (or its folder) in the trash answers `404`.
 
 ### GET /api/fed/drive/files/:fileId/content
 
-Stream ciphertext with its precomputed signed content digest and exact length.
+Stream ciphertext with its precomputed signed content digest and exact length;
+the ETag is the content's revision id. A ranged read
+(docs/plans/drive-block-format.md §3) names its one range in the signed
+query, `?range=a-b` (or `a-`, `-k`) and optionally `&ifRange=<etag>`;
+nothing else may be in the query. The answer is `206`, signed over the
+content digest of that part (at most `driveStreamResponseMaxBytes`), with
+`Content-Range`, or `416`. `GET /api/fed/drive/file-content` (a file shared
+by itself) takes the same query. The receiving server forwards its client's
+`Range` (cut to its own part limit first) and `If-Range` this way, and
+releases a part only once it is the one asked: its start, its length (which the signed digest covers) and the part
+limit. `Content-Range`'s total is not signed; the reader's own metadata gives
+the object's length, and its manifest fixes every byte.
 
 ### POST /api/fed/drive/files
 
@@ -4695,7 +4848,9 @@ owner pays: the upload must fit their quota (less their open uploads) and the
 share's `uploadQuotaBytes`, measured from the files the share uploaded. A
 `fileId` already in use is `409`. The request is signed over its content
 digest: the server verifies the signature first, spools and hashes the body,
-and parses nothing until the digest matches. Body cap 10 GiB.
+and parses nothing until the digest matches. Body cap: the upload limit
+(`driveUploadMaxBytes`) plus 16 MiB. A block-format blob names its
+`revisionId`, checked as a local upload's.
 
 ### DELETE /api/fed/drive/files/:fileId
 
@@ -5132,9 +5287,28 @@ Return current global server settings.
   "calendarEventsPerCalendar": 25000,
   "calendarSyncBatch": 10,
   "calendarWindowDays": 400,
-  "calendarEventsPage": 1000
+  "calendarEventsPage": 1000,
+  "driveUploadMaxBytes": 10737418240,
+  "driveVersionMaxBytes": 2147483648,
+  "driveStreamMaxBytes": 10737418240,
+  "driveStreamCacheBlocks": 3,
+  "driveStreamReadaheadBlocks": 1,
+  "driveStreamMaxConcurrent": 3,
+  "driveStreamResponseMaxBytes": 5242880,
+  "driveStreamBlobFallbackMaxBytes": 1073741824
 }
 ```
+
+The Drive settings (docs/plans/drive-block-format.md §7; clients read them
+from `GET /api/drive/limits`): `driveUploadMaxBytes` and
+`driveVersionMaxBytes` (1 MiB–4 TiB) are the largest upload and saved
+version; `driveStreamMaxBytes` (0–4 TiB, 0 never streams) the largest file a
+player streams rather than downloads first; `driveStreamCacheBlocks` (1–16),
+`driveStreamReadaheadBlocks` (0–4) and `driveStreamMaxConcurrent` (1–8) shape
+a stream; `driveStreamResponseMaxBytes` (4.5 MiB–16 MiB, at least one sealed 4 MiB
+block) is the most one ranged answer carries, across servers too; and
+`driveStreamBlobFallbackMaxBytes` (0–4 GiB) the largest file played from
+memory where no service worker can stream it.
 
 The Calendar settings: `calendarsPerAccount` (1–1000) is how many calendars
 one account may own, `calendarEventsPerCalendar` how many events one

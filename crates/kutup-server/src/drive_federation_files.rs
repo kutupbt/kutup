@@ -10,7 +10,7 @@
 //! editing relay to federate.
 
 use axum::body::Body;
-use axum::extract::{Path, State};
+use axum::extract::{Path, RawQuery, State};
 use axum::http::{header, HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::Json;
@@ -29,8 +29,9 @@ use crate::drive_federation::{
     canonical_domain, canonical_public_key, capability_hash, configured_stack, drive_spec,
     ensure_ciphertext_digest, ensure_version_digest, gateway_error, signed_app_error, signed_json,
     validate_capability, FederatedDriveFile, JSON_CONTENT_TYPE, MAX_DIRECTORY_RESPONSE_BYTES,
-    MAX_DRIVE_OBJECT_BYTES, OCTET_STREAM_CONTENT_TYPE, SHARE_CAPABILITY_HEADER,
+    OCTET_STREAM_CONTENT_TYPE, SHARE_CAPABILITY_HEADER,
 };
+use crate::drive_federation_ranges::ContentReadQuery;
 use crate::error::{AppError, AppResult};
 use crate::federation::{AuthenticatedFederationRequest, FederationDirection, FederationStack};
 use crate::handlers::{random_token, trusted_uuid};
@@ -378,50 +379,84 @@ pub async fn get_file_invite(
 }
 
 /// `GET /api/fed/drive/file-content` — the file as it is now (its latest
-/// whole-file version, else the upload), as a signed encrypted stream.
+/// whole-file version, else the upload), as a signed encrypted stream; or
+/// the one range the signed query asks (`range`, `ifRange`):
+/// docs/plans/drive-block-format.md §3.
 #[utoipa::path(
     get,
     path = "/api/fed/drive/file-content",
     tag = "drive federation",
-    responses((status = 200, description = "Signed encrypted file stream"))
+    params(
+        ("range" = Option<String>, Query, description = "One range: `a-b`, `a-` or `-k`"),
+        ("ifRange" = Option<String>, Query, description = "The ETag the range is of")
+    ),
+    responses(
+        (status = 200, description = "Signed encrypted file stream; the ETag is its revision id"),
+        (status = 206, description = "The range, signed over its own content-digest"),
+        (status = 416, description = "The range starts past the end")
+    )
 )]
 pub async fn get_file_content(
     State(state): State<AppState>,
+    RawQuery(query): RawQuery,
     headers: HeaderMap,
 ) -> AppResult<Response> {
-    signed_read!(
-        state,
-        headers,
-        "/api/fed/drive/file-content",
-        |federation, authenticated, share| {
-            let stored_digest: Option<String> =
-                sqlx::query_scalar("SELECT ciphertext_sha256 FROM files WHERE id = $1")
-                    .bind(share.file_id)
-                    .fetch_one(&state.pool)
-                    .await?;
-            let content = crate::file_content::current_content(&state.pool, share.file_id)
-                .await?
-                .ok_or_else(|| AppError::not_found("file not found"))?;
-            let digest = match content.version {
-                None => match stored_digest {
-                    Some(digest) => digest,
-                    None => ensure_ciphertext_digest(&state, share.file_id, &content.path).await?,
-                },
-                Some(version) => ensure_version_digest(&state, version, &content).await?,
-            };
-            let digest: [u8; 32] = hex::decode(&digest)
-                .ok()
-                .and_then(|bytes| bytes.try_into().ok())
-                .ok_or_else(|| AppError::internal("invalid stored digest"))?;
-            let (object, size) = content
-                .open(&state.storage)
-                .await
-                .map_err(|error| AppError::internal(format!("read Drive object: {error}")))?;
-            if size != content.size {
-                return Err(AppError::internal(
-                    "Drive object size does not match metadata",
-                ));
-            }
+    let federation = configured_stack(&state)?;
+    let authenticated = federation
+        .authenticate_inbound(
+            &headers,
+            "GET",
+            "/api/fed/drive/file-content",
+            query.as_deref(),
+            &[],
+            FederationFeature::DriveV1,
+        )
+        .await?;
+    let result: AppResult<Response> = async {
+        let read = ContentReadQuery::parse(query.as_deref())?;
+        let share = outgoing_file_share(&state, &authenticated, &headers).await?;
+        let content = crate::file_content::current_content(&state.pool, share.file_id)
+            .await?
+            .ok_or_else(|| AppError::not_found("file not found"))?;
+        if let Some(part) = crate::drive_federation_ranges::signed_part(
+            &state,
+            federation,
+            &authenticated,
+            &content.path,
+            content.size,
+            content.revision,
+            &read,
+        )
+        .await?
+        {
+            return Ok(part);
+        }
+        let stored_digest: Option<String> =
+            sqlx::query_scalar("SELECT ciphertext_sha256 FROM files WHERE id = $1")
+                .bind(share.file_id)
+                .fetch_one(&state.pool)
+                .await?;
+        let digest = match content.version {
+            None => match stored_digest {
+                Some(digest) => digest,
+                None => ensure_ciphertext_digest(&state, share.file_id, &content.path).await?,
+            },
+            Some(version) => ensure_version_digest(&state, version, &content).await?,
+        };
+        let digest: [u8; 32] = hex::decode(&digest)
+            .ok()
+            .and_then(|bytes| bytes.try_into().ok())
+            .ok_or_else(|| AppError::internal("invalid stored digest"))?;
+        let (object, size) = content
+            .open(&state.storage)
+            .await
+            .map_err(|error| AppError::internal(format!("read Drive object: {error}")))?;
+        if size != content.size {
+            return Err(AppError::internal(
+                "Drive object size does not match metadata",
+            ));
+        }
+        crate::drive_federation_ranges::with_etag(
             federation.signed_stream_response(
                 &authenticated,
                 StatusCode::OK,
@@ -429,9 +464,15 @@ pub async fn get_file_content(
                 &content_digest_sha256_from_digest(&digest),
                 size as u64,
                 Body::from_stream(ReaderStream::new(object.into_async_read())),
-            )
-        }
-    )
+            )?,
+            content.revision,
+        )
+    }
+    .await;
+    match result {
+        Ok(response) => Ok(response),
+        Err(error) => signed_app_error(federation, &authenticated, error),
+    }
 }
 
 /// `GET /api/fed/drive/file-state` — a note's or place list's latest saved
@@ -720,34 +761,27 @@ pub async fn get_file_share(
     tag = "drive federation",
     security(("BearerAuth" = [])),
     params(("id" = String, Path)),
-    responses((status = 200, description = "The encrypted content"))
+    responses(
+        (status = 200, description = "The encrypted content"),
+        (status = 206, description = "The one `Range` asked, checked against the owner's signed part"),
+        (status = 416, description = "The range starts past the end")
+    )
 )]
 pub async fn proxy_file_content(
     State(state): State<AppState>,
     user: AuthUser,
     Path(id): Path<String>,
+    headers: HeaderMap,
 ) -> AppResult<Response> {
     let share = incoming(&state, &user, &id).await?;
-    let response = configured_stack(&state)?
-        .send_streamed(
-            &share.remote_domain,
-            drive_spec(
-                Method::GET,
-                "/api/fed/drive/file-content".into(),
-                JSON_CONTENT_TYPE.into(),
-                Vec::new(),
-                Some(&share.remote_capability),
-                MAX_DRIVE_OBJECT_BYTES,
-            )?,
-        )
-        .await
-        .map_err(gateway_error)?;
-    Response::builder()
-        .status(response.status)
-        .header(header::CONTENT_TYPE, response.content_type)
-        .header(header::CONTENT_LENGTH, response.content_length)
-        .body(Body::from_stream(ReaderStream::new(response.file)))
-        .map_err(|error| AppError::internal(error.to_string()))
+    crate::drive_federation_ranges::relay(
+        &state,
+        &headers,
+        &share.remote_domain,
+        "/api/fed/drive/file-content".into(),
+        &share.remote_capability,
+    )
+    .await
 }
 
 /// `GET /api/drive/federation/file-shares/{id}/state` — a note's or place

@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { randomSenderSeqPrefix } from './identity'
+import { getOrCreateTabId, randomSenderSeqPrefix } from './identity'
 
 describe('randomSenderSeqPrefix', () => {
   it('returns a BigInt with the lower 32 bits zero (counter slot)', () => {
@@ -51,5 +51,15 @@ describe('randomSenderSeqPrefix', () => {
     // iteration.
     const p = randomSenderSeqPrefix(0n)
     expect(p).toBeGreaterThan(0n)
+  })
+})
+
+describe('getOrCreateTabId', () => {
+  it('is one lowercase hex id per page load, kept in memory only', () => {
+    const tab = getOrCreateTabId()
+    expect(tab).toMatch(/^[0-9a-f]{6}$/)
+    expect(getOrCreateTabId()).toBe(tab)
+    // A duplicated tab copies sessionStorage: nothing of the id is there.
+    expect(Object.keys(sessionStorage).some((key) => sessionStorage.getItem(key) === tab)).toBe(false)
   })
 })

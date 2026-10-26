@@ -73,13 +73,25 @@ const CHAT_LINKING_SETTINGS = [
   { field: 'chatProvisioningSocketsPerAccount', min: 1, max: 20 },
   { field: 'chatDistributionMessageBytes', min: 1024, max: 1_048_576 },
 ] as const satisfies readonly { field: keyof AdminSettings; min: number; max: number }[]
-/** Every whole-number setting the page edits by field. */
+/** Drive uploads and streaming (site_settings::DRIVE_SETTINGS), sizes in bytes. */
+const DRIVE_SETTINGS = [
+  { field: 'driveUploadMaxBytes', min: 1_048_576, max: 4_398_046_511_104 },
+  { field: 'driveVersionMaxBytes', min: 1_048_576, max: 4_398_046_511_104 },
+  { field: 'driveStreamMaxBytes', min: 0, max: 4_398_046_511_104 },
+  { field: 'driveStreamCacheBlocks', min: 1, max: 16 },
+  { field: 'driveStreamReadaheadBlocks', min: 0, max: 4 },
+  { field: 'driveStreamMaxConcurrent', min: 1, max: 8 },
+  { field: 'driveStreamResponseMaxBytes', min: 4_718_592, max: 16_777_216 },
+  { field: 'driveStreamBlobFallbackMaxBytes', min: 0, max: 4_294_967_296 },
+] as const satisfies readonly { field: keyof AdminSettings; min: number; max: number }[]
 /** Two-factor sign-in (site_settings::TWO_FACTOR_SETTINGS). */
 const TWO_FACTOR_SETTINGS = [
   { field: 'twoFactorRecoveryCodes', min: 4, max: 64 },
+  { field: 'securityKeysPerAccount', min: 1, max: 50 },
+  { field: 'webauthnCeremonySeconds', min: 60, max: 600 },
 ] as const satisfies readonly { field: keyof AdminSettings; min: number; max: number }[]
 /** Every whole-number setting the page edits by field. */
-const NUMERIC_SETTINGS = [...MULTI_SETTINGS, ...CALENDAR_SETTINGS, ...CHAT_LINKING_SETTINGS, ...TWO_FACTOR_SETTINGS]
+const NUMERIC_SETTINGS = [...MULTI_SETTINGS, ...CALENDAR_SETTINGS, ...CHAT_LINKING_SETTINGS, ...TWO_FACTOR_SETTINGS, ...DRIVE_SETTINGS]
 /**
  * The avatar blob lengths (kutup_chat_proto GROUP_AVATAR_BLOB_LENGTHS) and the
  * server's bounds (site_settings::AvatarLimits): storage holds two of the
@@ -251,6 +263,17 @@ export function ServerSettingsPage() {
             <CardContent className="grid gap-4 p-5 sm:grid-cols-2">
               {CALENDAR_SETTINGS.map(({ field, min, max }) => (
                 <Field key={field} label={t(`admin.settings.calendarLimits.${field}`)} error={errors[field]?.message} description={t(`admin.settings.calendarLimits.${field}Hint`)} required>
+                  {(control) => <Input {...control} {...register(field)} type="number" min={min} max={max} step={1} inputMode="numeric" />}
+                </Field>
+              ))}
+            </CardContent>
+          </Card>
+        </Section>
+        <Section title={t('admin.settings.drive')} description={t('admin.settings.driveHint')}>
+          <Card>
+            <CardContent className="grid gap-4 p-5 sm:grid-cols-2">
+              {DRIVE_SETTINGS.map(({ field, min, max }) => (
+                <Field key={field} label={t(`admin.settings.driveLimits.${field}`)} error={errors[field]?.message} description={t(`admin.settings.driveLimits.${field}Hint`)} required>
                   {(control) => <Input {...control} {...register(field)} type="number" min={min} max={max} step={1} inputMode="numeric" />}
                 </Field>
               ))}

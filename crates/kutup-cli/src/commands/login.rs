@@ -136,11 +136,33 @@ pub(crate) fn login_with_password(
 
     // Step 2: TOTP if required.
     if resp.requires_totp {
+        // The CLI can't use a security key: an account with only keys signs
+        // in here with one of its recovery codes.
+        let has_app = resp.second_factors.is_empty()
+            || resp.second_factors.iter().any(|factor| factor == "totp");
+        if !has_app {
+            if !resp
+                .second_factors
+                .iter()
+                .any(|factor| factor == "recoveryCode")
+            {
+                bail!(
+                    "this account signs in with a security key, which the CLI can't use; \
+                     turn on the authenticator app in Account settings to sign in here"
+                );
+            }
+            eprintln!(
+                "This account signs in with a security key, which the CLI can't use: \
+                 type one of its recovery codes instead."
+            );
+        }
         // An authenticator code, or one of the recovery codes in its place.
         // Not echoed, and wiped after use: a recovery code signs in once.
-        let code = zeroize::Zeroizing::new(rpassword::prompt_password(
-            "Authenticator or recovery code: ",
-        )?);
+        let code = zeroize::Zeroizing::new(rpassword::prompt_password(if has_app {
+            "Authenticator or recovery code: "
+        } else {
+            "Recovery code: "
+        })?);
         let mut request = TotpRequest {
             pre_auth_token: resp.pre_auth_token.clone(),
             code: code.trim().to_owned(),

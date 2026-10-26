@@ -298,7 +298,12 @@
           "twoFactorOn": "Two-factor authentication turned on",
           "twoFactorOff": "Two-factor authentication turned off",
           "recoveryCodeUsed": "Signed in with a recovery code",
-          "recoveryCodesRenewed": "New recovery codes made"
+          "recoveryCodesRenewed": "New recovery codes made",
+          "securityKeyAdded": "Security key “{{oldName}}” added",
+          "securityKeyRemoved": "Security key “{{oldName}}” removed",
+          "securityKeyCompromised": "Security key “{{oldName}}” may have been copied (no longer used)",
+          "authenticatorOn": "Authenticator app turned on",
+          "authenticatorOff": "Authenticator app turned off"
         }
       },
       "recovery": "Recovery phrase",
@@ -888,10 +893,34 @@
         "chatDistributionMessageBytesHint": "The largest message a new Chat identity sends each kept device."
       },
       "twoFactor": "Two-factor sign-in",
-      "twoFactorHint": "Recovery codes for accounts with two-factor authentication.",
+      "twoFactorHint": "Recovery codes and security keys for accounts with two-factor authentication.",
       "twoFactorLimits": {
         "twoFactorRecoveryCodes": "Recovery codes per account",
-        "twoFactorRecoveryCodesHint": "How many one-time codes are made when someone turns two-factor authentication on or makes new codes."
+        "twoFactorRecoveryCodesHint": "How many one-time codes are made when someone turns two-factor authentication on or makes new codes.",
+        "securityKeysPerAccount": "Security keys per account",
+        "securityKeysPerAccountHint": "How many security keys one account may add.",
+        "webauthnCeremonySeconds": "Security key prompt (seconds)",
+        "webauthnCeremonySecondsHint": "How long a prompt to touch a security key stays open, when adding one or signing in."
+      },
+      "drive": "Drive uploads and streaming",
+      "driveHint": "How large a file may be, and how videos and audio play while they download.",
+      "driveLimits": {
+        "driveUploadMaxBytes": "Largest upload (bytes)",
+        "driveUploadMaxBytesHint": "The largest file one upload stores, encrypted.",
+        "driveVersionMaxBytes": "Largest version (bytes)",
+        "driveVersionMaxBytesHint": "The largest saved version: an editor's save, or a new upload of a file.",
+        "driveStreamMaxBytes": "Largest file to stream (bytes)",
+        "driveStreamMaxBytesHint": "Larger files download whole before they play. 0 never streams.",
+        "driveStreamCacheBlocks": "Blocks kept per stream",
+        "driveStreamCacheBlocksHint": "Checked 4 MiB blocks a playing file keeps in memory.",
+        "driveStreamReadaheadBlocks": "Blocks read ahead",
+        "driveStreamReadaheadBlocksHint": "Blocks fetched ahead of the one playing.",
+        "driveStreamMaxConcurrent": "Streams per tab",
+        "driveStreamMaxConcurrentHint": "Files one browser tab plays at once.",
+        "driveStreamResponseMaxBytes": "Largest part per request (bytes)",
+        "driveStreamResponseMaxBytesHint": "The most one ranged download answer carries, also across servers.",
+        "driveStreamBlobFallbackMaxBytes": "Largest file played from memory (bytes)",
+        "driveStreamBlobFallbackMaxBytesHint": "Where a browser can't stream, files up to this size load whole into memory to play."
       }
     },
     "federation": {

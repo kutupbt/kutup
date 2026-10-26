@@ -925,7 +925,14 @@ fn drive_upload_body(
     body
 }
 
-fn drive_round_trip(c: &Client, a: &str, b: &str, alice_token: &str, bob_token: &str) {
+fn drive_round_trip(
+    c: &Client,
+    a: &str,
+    b: &str,
+    alice_token: &str,
+    bob_token: &str,
+    admins: (&str, &str),
+) {
     let alice_master = test_master_key(ALICE_EMAIL);
     let bob_master = test_master_key(BOB_EMAIL);
     let alice_identity = AccountIdentityKeysV1::derive(&alice_master).unwrap();
@@ -1412,7 +1419,150 @@ fn drive_round_trip(c: &Client, a: &str, b: &str, alice_token: &str, bob_token: 
         .send()
         .unwrap();
     assert_eq!(download.status().as_u16(), 200);
+    let etag = download
+        .headers()
+        .get("etag")
+        .and_then(|value| value.to_str().ok())
+        .map(str::to_owned)
+        .expect("the owner's ETag is relayed");
     assert_eq!(download.bytes().unwrap().as_ref(), ciphertext.as_slice());
+
+    // Ranged reads across servers (docs/plans/drive-block-format.md §3): the
+    // range goes in the signed query, the owner signs the part, and the
+    // relay checks it is the one asked.
+    let ranged_of = |file_id: &str, range: &str, if_range: Option<&str>| {
+        let mut request = c
+            .get(format!(
+                "{b}/api/drive/federation/shares/{incoming_id}/files/{file_id}/content"
+            ))
+            .bearer_auth(bob_token)
+            .header("Range", range);
+        if let Some(tag) = if_range {
+            request = request.header("If-Range", tag);
+        }
+        request.send().unwrap()
+    };
+    let ranged = |range: &str, if_range: Option<&str>| ranged_of(file_id, range, if_range);
+    let total = ciphertext.len();
+    let part = ranged("bytes=3-9", None);
+    assert_eq!(part.status().as_u16(), 206);
+    assert_eq!(
+        part.headers()["content-range"].to_str().unwrap(),
+        format!("bytes 3-9/{total}")
+    );
+    assert_eq!(part.bytes().unwrap().as_ref(), &ciphertext[3..10]);
+    let tail = ranged("bytes=-5", Some(&etag));
+    assert_eq!(tail.status().as_u16(), 206);
+    assert_eq!(tail.bytes().unwrap().as_ref(), &ciphertext[total - 5..]);
+    let other = ranged(
+        "bytes=0-1",
+        Some("\"00000000-0000-4000-8000-000000000000\""),
+    );
+    assert_eq!(
+        other.status().as_u16(),
+        200,
+        "a range of other content reads whole"
+    );
+    assert_eq!(other.bytes().unwrap().as_ref(), ciphertext.as_slice());
+    let past = ranged(&format!("bytes={total}-"), None);
+    assert_eq!(past.status().as_u16(), 416);
+
+    // A file larger than one part, read through peers whose part limits
+    // differ: the relay cuts the range to its own limit before it signs it,
+    // takes a suffix's last part, and takes a whole answer back when its
+    // If-Range names other content.
+    let part_limit = |base: &str, admin: &str, bytes: i64| {
+        let r = c
+            .put(format!("{base}/api/admin/settings"))
+            .bearer_auth(admin)
+            .json(&json!({ "driveStreamResponseMaxBytes": bytes }))
+            .send()
+            .unwrap();
+        assert_eq!(r.status().as_u16(), 200, "part limit {bytes} on {base}");
+    };
+    let (admin_a, admin_b) = admins;
+    let relay_part = 4_718_592usize;
+    part_limit(a, admin_a, 16 * 1024 * 1024);
+    part_limit(b, admin_b, relay_part as i64);
+    let big_id = uuid::Uuid::new_v4().to_string();
+    let big_plain: Vec<u8> = (0..10 * 1024 * 1024u32).map(|i| (i % 251) as u8).collect();
+    let big = drive_object::encrypt_file_blob(
+        &big_plain,
+        &file_key,
+        DriveFileBlobContextV1::new(&big_id, 1).unwrap(),
+    )
+    .unwrap();
+    let big_upload = drive_upload_body(
+        boundary,
+        &big_id,
+        &drive_envelope::seal_b64(
+            metadata_plaintext,
+            &file_key,
+            DriveEnvelopeContextV1::file_metadata(&big_id, 1, 1).unwrap(),
+        )
+        .unwrap(),
+        &drive_envelope::seal_b64(
+            &file_key,
+            &collection_key,
+            DriveEnvelopeContextV1::file_key(&big_id, &collection_id, 1, 1).unwrap(),
+        )
+        .unwrap(),
+        &big,
+    );
+    // Past the share's 1 MiB upload quota: the owner stores it on her own
+    // server, in the shared folder.
+    let mut owner_upload = format!(
+        "--{boundary}\r\nContent-Disposition: form-data; name=\"collectionId\"\r\n\r\n{collection_id}\r\n"
+    )
+    .into_bytes();
+    owner_upload.extend_from_slice(&big_upload);
+    json_response(
+        c.post(format!("{a}/api/files/upload"))
+            .bearer_auth(alice_token)
+            .header(
+                "Content-Type",
+                format!("multipart/form-data; boundary={boundary}"),
+            )
+            .body(owner_upload)
+            .send()
+            .unwrap(),
+        "large Drive upload by the owner",
+    );
+    let big_total = big.len();
+    let first = ranged_of(&big_id, "bytes=0-", None);
+    assert_eq!(
+        first.status().as_u16(),
+        206,
+        "an open range through a smaller relay"
+    );
+    assert_eq!(
+        first.headers()["content-range"].to_str().unwrap(),
+        format!("bytes 0-{}/{big_total}", relay_part - 1)
+    );
+    assert_eq!(first.bytes().unwrap().as_ref(), &big[..relay_part]);
+    let end = ranged_of(&big_id, "bytes=-6000000", None);
+    assert_eq!(end.status().as_u16(), 206, "a suffix longer than one part");
+    assert_eq!(
+        end.headers()["content-range"].to_str().unwrap(),
+        format!(
+            "bytes {}-{}/{big_total}",
+            big_total - relay_part,
+            big_total - 1
+        )
+    );
+    assert_eq!(
+        end.bytes().unwrap().as_ref(),
+        &big[big_total - relay_part..]
+    );
+    let stale = ranged_of(
+        &big_id,
+        "bytes=0-1",
+        Some("\"00000000-0000-4000-8000-000000000000\""),
+    );
+    assert_eq!(stale.status().as_u16(), 200, "a stale If-Range reads whole");
+    assert_eq!(stale.bytes().unwrap().len(), big_total);
+    part_limit(a, admin_a, 5 * 1024 * 1024);
+    part_limit(b, admin_b, 5 * 1024 * 1024);
 
     let delete = || {
         c.delete(format!(
@@ -1960,7 +2110,7 @@ fn setup_phase(c: &Client, a: &str, b: &str) {
 
     let (alice_token, _alice_drive_public) = register_account(c, a, ALICE_EMAIL, ALICE_USERNAME);
     let (bob_token, _bob_drive_public) = register_account(c, b, BOB_EMAIL, BOB_USERNAME);
-    drive_round_trip(c, a, b, &alice_token, &bob_token);
+    drive_round_trip(c, a, b, &alice_token, &bob_token, (&admin_a, &admin_b));
     live_location_across_servers(c, a, b, &alice_token, &bob_token);
 
     // Drive is deliberately the first feature to contact B. Capture the one

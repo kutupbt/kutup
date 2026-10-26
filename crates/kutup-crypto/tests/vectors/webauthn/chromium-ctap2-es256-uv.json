@@ -1,0 +1,44 @@
+{
+  "name": "chromium-ctap2-es256-uv",
+  "source": "Chromium virtual authenticator (CTAP2, USB), recorded with Playwright",
+  "rpId": "kutup.test",
+  "origin": "https://account.kutup.test",
+  "account": "DVXKcvsSapgv4Q3yuyArOA",
+  "registration": {
+    "challenge": "AGEaux6ymyLJcs3DJlkEqg",
+    "requireUv": true,
+    "response": {
+      "authenticatorAttachment": "cross-platform",
+      "clientExtensionResults": {},
+      "id": "ft9CVJCCAtd6JS62Oubbiz-8X-Y8Klbjq9pkzwPzWTw",
+      "rawId": "ft9CVJCCAtd6JS62Oubbiz-8X-Y8Klbjq9pkzwPzWTw",
+      "response": {
+        "attestationObject": "o2NmbXRkbm9uZWdhdHRTdG10oGhhdXRoRGF0YViB4i5FF1IbTnoKF7mw_MibXLqT7Kvs7y3NWy59sdAMicNFAAAAAQAAAAAAAAAAAAAAAAAAAAAAIH7fQlSQggLXeiUutjrm24s_vF_mPCpW46vaZM8D81k8pAEBAycgBiFYIKC3Xtbm96l_eSZdUsgMZMnSa3vkh6TAZzkOJWYx5Yfn",
+        "authenticatorData": "4i5FF1IbTnoKF7mw_MibXLqT7Kvs7y3NWy59sdAMicNFAAAAAQAAAAAAAAAAAAAAAAAAAAAAIH7fQlSQggLXeiUutjrm24s_vF_mPCpW46vaZM8D81k8pAEBAycgBiFYIKC3Xtbm96l_eSZdUsgMZMnSa3vkh6TAZzkOJWYx5Yfn",
+        "clientDataJSON": "eyJ0eXBlIjoid2ViYXV0aG4uY3JlYXRlIiwiY2hhbGxlbmdlIjoiQUdFYXV4NnlteUxKY3MzREpsa0VxZyIsIm9yaWdpbiI6Imh0dHBzOi8vYWNjb3VudC5rdXR1cC50ZXN0IiwiY3Jvc3NPcmlnaW4iOmZhbHNlLCJvdGhlcl9rZXlzX2Nhbl9iZV9hZGRlZF9oZXJlIjoiZG8gbm90IGNvbXBhcmUgY2xpZW50RGF0YUpTT04gYWdhaW5zdCBhIHRlbXBsYXRlLiBTZWUgaHR0cHM6Ly9nb28uZ2wveWFiUGV4In0",
+        "publicKey": "MCowBQYDK2VwAyEAoLde1ub3qX95Jl1SyAxkydJre-SHpMBnOQ4lZjHlh-c",
+        "publicKeyAlgorithm": -8,
+        "transports": [
+          "usb"
+        ]
+      },
+      "type": "public-key"
+    }
+  },
+  "authentication": {
+    "challenge": "Gjvq5oNlB1h-Q9LvpImYcw",
+    "requireUv": true,
+    "response": {
+      "authenticatorAttachment": "cross-platform",
+      "clientExtensionResults": {},
+      "id": "ft9CVJCCAtd6JS62Oubbiz-8X-Y8Klbjq9pkzwPzWTw",
+      "rawId": "ft9CVJCCAtd6JS62Oubbiz-8X-Y8Klbjq9pkzwPzWTw",
+      "response": {
+        "authenticatorData": "4i5FF1IbTnoKF7mw_MibXLqT7Kvs7y3NWy59sdAMicMFAAAAAg",
+        "clientDataJSON": "eyJ0eXBlIjoid2ViYXV0aG4uZ2V0IiwiY2hhbGxlbmdlIjoiR2p2cTVvTmxCMWgtUTlMdnBJbVljdyIsIm9yaWdpbiI6Imh0dHBzOi8vYWNjb3VudC5rdXR1cC50ZXN0IiwiY3Jvc3NPcmlnaW4iOmZhbHNlfQ",
+        "signature": "S0qVqQWdfFovC0iQqiohQ5r1uym4OxLqd0lhd0Bez3dALagPoHZc3JEImU0zBkbFjF6E7dWEharan_B-H8REDQ"
+      },
+      "type": "public-key"
+    }
+  }
+}

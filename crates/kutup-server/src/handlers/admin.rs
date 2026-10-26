@@ -642,7 +642,7 @@ async fn purge_owned_drive(state: &AppState, target: Uuid) -> AppResult<()> {
 /// nothing more until they free space, as after any quota cut.)
 async fn hand_over_contributions(pool: &PgPool, target: Uuid) -> AppResult<()> {
     let mut tx = pool.begin().await?;
-    sqlx::query(
+    let moved: Vec<(Uuid, i64)> = sqlx::query_as(
         r#"WITH moved AS (
               SELECT c.owner_user_id AS owner, SUM(x.bytes) AS total FROM (
                   SELECT f.collection_id, (CASE WHEN f.original_pruned THEN 0 ELSE f.encrypted_size_bytes END) AS bytes
@@ -659,12 +659,15 @@ async fn hand_over_contributions(pool: &PgPool, target: Uuid) -> AppResult<()> {
               JOIN collections c ON c.id = x.collection_id
               WHERE c.owner_user_id <> $1
               GROUP BY c.owner_user_id)
-           UPDATE users u SET storage_used_bytes = u.storage_used_bytes + moved.total
-           FROM moved WHERE u.id = moved.owner"#,
+           SELECT owner, total::bigint FROM moved ORDER BY owner"#,
     )
     .bind(target)
-    .execute(&mut *tx)
+    .fetch_all(&mut *tx)
     .await?;
+    for (owner, total) in moved {
+        crate::storage_pool::charge(&mut *tx, crate::storage_pool::Payer::Account(owner), total)
+            .await?;
+    }
     for (table, column) in [
         ("files", "uploader_user_id"),
         ("file_versions", "author_user_id"),

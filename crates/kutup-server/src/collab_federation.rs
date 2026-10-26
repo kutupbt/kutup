@@ -39,7 +39,7 @@ use uuid::Uuid;
 
 use crate::drive_federation::{
     capability_hash, configured_stack, drive_spec, ensure_version_digest, gateway_error,
-    signed_app_error, signed_json, validate_capability, JSON_CONTENT_TYPE, MAX_DRIVE_OBJECT_BYTES,
+    signed_app_error, signed_json, validate_capability, JSON_CONTENT_TYPE,
     OCTET_STREAM_CONTENT_TYPE, SHARE_CAPABILITY_HEADER,
 };
 use crate::error::{AppError, AppResult};
@@ -887,6 +887,7 @@ pub async fn version_content(
             path,
             size,
             version: Some(vid),
+            revision: vid,
         };
         let digest = ensure_version_digest(&state, vid, &content).await?;
         let digest: [u8; 32] = hex::decode(&digest)
@@ -1675,6 +1676,7 @@ async fn bridge_ws(
     upgrade: WebSocketUpgrade,
 ) -> AppResult<Response> {
     let device = authenticate_socket(&state, &headers, &q).await?;
+    let tab = q.tab();
     let target = target_for(&state, device.user_id, &route).await?;
     // Subscribed before the upgrade: a share gone or not reachable answers here.
     let (bridge, subscribed) = bridge_join(&state, &target).await?;
@@ -1683,7 +1685,7 @@ async fn bridge_ws(
         .max_message_size(max_frame)
         .max_frame_size(max_frame)
         .on_upgrade(move |socket| async move {
-            bridge_connection(state, socket, bridge, subscribed, route, device).await;
+            bridge_connection(state, socket, bridge, subscribed, route, device, tab).await;
         }))
 }
 
@@ -1694,6 +1696,7 @@ async fn bridge_connection(
     subscribed: SubscribeResponse,
     route: RemoteRoute,
     device: crate::account_devices::FrameDevice,
+    tab: String,
 ) {
     let user_uuid = device.user_id;
     let hub = state.hub.clone();
@@ -1719,6 +1722,7 @@ async fn bridge_connection(
     let (peer, mut rx) = hub::new_peer(
         &hub,
         device.device_id,
+        tab,
         user_uuid.to_string(),
         device.account.to_string(),
         username,
@@ -1888,7 +1892,7 @@ async fn relay_version_download(
                 JSON_CONTENT_TYPE.into(),
                 Vec::new(),
                 Some(&target.capability),
-                MAX_DRIVE_OBJECT_BYTES,
+                crate::drive_federation::max_drive_object_bytes(&state.pool).await?,
             )?,
         )
         .await

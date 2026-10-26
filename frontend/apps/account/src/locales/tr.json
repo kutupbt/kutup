@@ -298,7 +298,12 @@
           "twoFactorOn": "İki adımlı doğrulama açıldı",
           "twoFactorOff": "İki adımlı doğrulama kapatıldı",
           "recoveryCodeUsed": "Kurtarma koduyla oturum açıldı",
-          "recoveryCodesRenewed": "Yeni kurtarma kodları oluşturuldu"
+          "recoveryCodesRenewed": "Yeni kurtarma kodları oluşturuldu",
+          "securityKeyAdded": "“{{oldName}}” güvenlik anahtarı eklendi",
+          "securityKeyRemoved": "“{{oldName}}” güvenlik anahtarı kaldırıldı",
+          "securityKeyCompromised": "“{{oldName}}” güvenlik anahtarı kopyalanmış olabilir (artık kullanılmıyor)",
+          "authenticatorOn": "Doğrulama uygulaması açıldı",
+          "authenticatorOff": "Doğrulama uygulaması kapatıldı"
         }
       },
       "recovery": "Kurtarma ifadesi",
@@ -888,10 +893,34 @@
         "chatDistributionMessageBytesHint": "Yeni bir Sohbet kimliğinin tutulan her cihaza gönderdiği en büyük ileti."
       },
       "twoFactor": "İki adımlı oturum açma",
-      "twoFactorHint": "İki adımlı doğrulaması açık hesaplar için kurtarma kodları.",
+      "twoFactorHint": "İki adımlı doğrulaması açık hesaplar için kurtarma kodları ve güvenlik anahtarları.",
       "twoFactorLimits": {
         "twoFactorRecoveryCodes": "Hesap başına kurtarma kodu",
-        "twoFactorRecoveryCodesHint": "İki adımlı doğrulama açıldığında veya yeni kodlar istendiğinde kaç tek kullanımlık kod oluşturulduğu."
+        "twoFactorRecoveryCodesHint": "İki adımlı doğrulama açıldığında veya yeni kodlar istendiğinde kaç tek kullanımlık kod oluşturulduğu.",
+        "securityKeysPerAccount": "Hesap başına güvenlik anahtarı",
+        "securityKeysPerAccountHint": "Bir hesabın ekleyebileceği en fazla güvenlik anahtarı sayısı.",
+        "webauthnCeremonySeconds": "Güvenlik anahtarı istemi (saniye)",
+        "webauthnCeremonySecondsHint": "Anahtar eklerken ya da oturum açarken güvenlik anahtarına dokunma isteminin açık kaldığı süre."
+      },
+      "drive": "Drive yüklemeleri ve akış",
+      "driveHint": "Bir dosyanın en fazla ne kadar büyük olabileceği ve video ile seslerin inerken nasıl oynatıldığı.",
+      "driveLimits": {
+        "driveUploadMaxBytes": "En büyük yükleme (bayt)",
+        "driveUploadMaxBytesHint": "Tek bir yüklemenin şifreli olarak saklayabileceği en büyük dosya.",
+        "driveVersionMaxBytes": "En büyük sürüm (bayt)",
+        "driveVersionMaxBytesHint": "Kaydedilen en büyük sürüm: bir düzenleyicinin kaydı ya da bir dosyanın yeniden yüklenmesi.",
+        "driveStreamMaxBytes": "Akışla oynatılacak en büyük dosya (bayt)",
+        "driveStreamMaxBytesHint": "Daha büyük dosyalar oynatılmadan önce tamamen indirilir. 0 hiç akış yapmaz.",
+        "driveStreamCacheBlocks": "Akış başına tutulan blok",
+        "driveStreamCacheBlocksHint": "Oynatılan bir dosyanın bellekte tuttuğu doğrulanmış 4 MiB'lık bloklar.",
+        "driveStreamReadaheadBlocks": "Önceden okunan blok",
+        "driveStreamReadaheadBlocksHint": "Oynatılan bloğun ilerisinden getirilen bloklar.",
+        "driveStreamMaxConcurrent": "Sekme başına akış",
+        "driveStreamMaxConcurrentHint": "Bir tarayıcı sekmesinin aynı anda oynattığı dosyalar.",
+        "driveStreamResponseMaxBytes": "İstek başına en büyük parça (bayt)",
+        "driveStreamResponseMaxBytesHint": "Aralıklı bir indirme yanıtının taşıdığı en fazla bayt; sunucular arasında da.",
+        "driveStreamBlobFallbackMaxBytes": "Bellekten oynatılan en büyük dosya (bayt)",
+        "driveStreamBlobFallbackMaxBytesHint": "Tarayıcının akış yapamadığı yerde, bu boyuta kadar dosyalar oynatmak için tamamen belleğe yüklenir."
       }
     },
     "federation": {

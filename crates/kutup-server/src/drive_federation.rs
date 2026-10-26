@@ -17,7 +17,6 @@ use base64::engine::general_purpose::STANDARD;
 use base64::Engine as _;
 use kutup_crypto::collection_epoch::CollectionEpochStatementV1;
 use kutup_crypto::drive_envelope::{self, DriveEnvelopeContextV1, DriveEnvelopePurpose};
-use kutup_crypto::drive_object::DriveFileBlobContextV1;
 use kutup_crypto::named_share::NamedShareEnvelopeV1;
 use kutup_federation_proto::{
     content_digest_sha256_from_digest, validate_server_name, ContentDigest, FederationFeature,
@@ -35,7 +34,7 @@ use crate::error::{AppError, AppResult};
 use crate::federation::{
     AuthenticatedFederationRequest, FederationDirection, FederationRequestSpec, FederationStack,
 };
-use crate::handlers::files::{canonical_uuid, validate_envelope, validate_file_blob_file};
+use crate::handlers::files::{canonical_uuid, validate_envelope};
 use crate::handlers::{random_token, trusted_uuid};
 use crate::middleware::AuthUser;
 use crate::AppState;
@@ -45,7 +44,14 @@ pub(crate) const OCTET_STREAM_CONTENT_TYPE: &str = "application/octet-stream";
 pub(crate) const SHARE_CAPABILITY_HEADER: &str = "kutup-share-capability";
 pub(crate) const MAX_DIRECTORY_RESPONSE_BYTES: usize = 256 * 1024;
 pub(crate) const MAX_LIST_RESPONSE_BYTES: usize = 16 * 1024 * 1024;
-pub(crate) const MAX_DRIVE_OBJECT_BYTES: usize = 10 * 1024 * 1024 * 1024;
+/// The largest whole Drive object read from a peer: this server's upload
+/// limit (a site setting), the largest file it would store itself.
+pub(crate) async fn max_drive_object_bytes(pool: &sqlx::PgPool) -> AppResult<usize> {
+    let limit = crate::site_settings::DRIVE_UPLOAD_MAX_BYTES
+        .load(pool)
+        .await?;
+    Ok(usize::try_from(limit).unwrap_or(usize::MAX))
+}
 const MAX_MULTIPART_FIELD_BYTES: usize = 4 * 1024 * 1024;
 
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
@@ -224,6 +230,8 @@ struct ParsedUpload {
     file_key_envelope: String,
     /// The name's hash under the folder's hash key (docs/plans/drive-unique-names.md).
     name_hash: String,
+    /// The block format's revision, when the blob is in it.
+    format: crate::drive_blob::BlobFormat,
     file: NamedTempFile,
     size: i64,
     digest: String,
@@ -1256,36 +1264,28 @@ pub async fn proxy_list_files(
     tag = "drive federation",
     security(("BearerAuth" = [])),
     params(("shareId" = String, Path), ("fileId" = String, Path)),
-    responses((status = 200, description = "Digest-verified encrypted file stream"))
+    responses(
+        (status = 200, description = "Digest-verified encrypted file stream"),
+        (status = 206, description = "The one `Range` asked, checked against the owner's signed part"),
+        (status = 416, description = "The range starts past the end")
+    )
 )]
 pub async fn proxy_download(
     State(state): State<AppState>,
     user: AuthUser,
     Path((share_id, file_id)): Path<(String, String)>,
+    headers: HeaderMap,
 ) -> AppResult<Response> {
     let share = incoming_share(&state, &user, &share_id).await?;
     let file_id = Uuid::parse_str(&file_id).map_err(|_| AppError::not_found("file not found"))?;
-    let response = configured_stack(&state)?
-        .send_streamed(
-            &share.remote_domain,
-            drive_spec(
-                Method::GET,
-                format!("/api/fed/drive/files/{file_id}/content"),
-                JSON_CONTENT_TYPE.into(),
-                Vec::new(),
-                Some(&share.remote_capability),
-                MAX_DRIVE_OBJECT_BYTES,
-            )?,
-        )
-        .await
-        .map_err(gateway_error)?;
-    let stream = ReaderStream::new(response.file);
-    Response::builder()
-        .status(response.status)
-        .header(header::CONTENT_TYPE, response.content_type)
-        .header(header::CONTENT_LENGTH, response.content_length)
-        .body(Body::from_stream(stream))
-        .map_err(|error| AppError::internal(error.to_string()))
+    crate::drive_federation_ranges::relay(
+        &state,
+        &headers,
+        &share.remote_domain,
+        format!("/api/fed/drive/files/{file_id}/content"),
+        &share.remote_capability,
+    )
+    .await
 }
 
 #[utoipa::path(
@@ -1315,7 +1315,7 @@ pub async fn proxy_upload(
     }
     let content_type = canonical_multipart_content_type(&content_type)?;
     // Held on disk, never in memory, and streamed on with its digest signed.
-    let spooled = spool_body(body, MAX_FEDERATED_UPLOAD_BYTES).await?;
+    let spooled = spool_body(body, max_federated_upload_bytes(&state.pool).await?).await?;
     let request_id = stable_mutation_request_id(
         "upload",
         &[
@@ -1620,12 +1620,21 @@ pub async fn list_epochs(State(state): State<AppState>, headers: HeaderMap) -> A
     get,
     path = "/api/fed/drive/files/{fileId}/content",
     tag = "drive federation",
-    params(("fileId" = String, Path)),
-    responses((status = 200, description = "Signed encrypted file stream"))
+    params(
+        ("fileId" = String, Path),
+        ("range" = Option<String>, Query, description = "One range: `a-b`, `a-` or `-k`"),
+        ("ifRange" = Option<String>, Query, description = "The ETag the range is of")
+    ),
+    responses(
+        (status = 200, description = "Signed encrypted file stream; the ETag is its revision id"),
+        (status = 206, description = "The range, signed over its own content-digest"),
+        (status = 416, description = "The range starts past the end")
+    )
 )]
 pub async fn download_file(
     State(state): State<AppState>,
     Path(file_id): Path<String>,
+    axum::extract::RawQuery(query): axum::extract::RawQuery,
     headers: HeaderMap,
 ) -> AppResult<Response> {
     let federation = configured_stack(&state)?;
@@ -1635,12 +1644,13 @@ pub async fn download_file(
             &headers,
             "GET",
             &path,
-            None,
+            query.as_deref(),
             &[],
             FederationFeature::DriveV1,
         )
         .await?;
     let result: AppResult<Response> = async {
+        let read = crate::drive_federation_ranges::ContentReadQuery::parse(query.as_deref())?;
         let share = match outgoing_share(&state, &authenticated, &headers, false).await {
             Ok(share) => share,
             Err(error) => return signed_app_error(federation, &authenticated, error),
@@ -1680,6 +1690,19 @@ pub async fn download_file(
                 AppError::not_found("file not found"),
             );
         };
+        if let Some(part) = crate::drive_federation_ranges::signed_part(
+            &state,
+            federation,
+            &authenticated,
+            &content.path,
+            content.size,
+            content.revision,
+            &read,
+        )
+        .await?
+        {
+            return Ok(part);
+        }
         let size = content.size;
         let storage_path = content.path.clone();
         let digest = match content.version {
@@ -1713,13 +1736,16 @@ pub async fn download_file(
             );
         }
         let stream = ReaderStream::new(object.into_async_read());
-        federation.signed_stream_response(
-            &authenticated,
-            StatusCode::OK,
-            OCTET_STREAM_CONTENT_TYPE,
-            &content_digest,
-            object_size as u64,
-            Body::from_stream(stream),
+        crate::drive_federation_ranges::with_etag(
+            federation.signed_stream_response(
+                &authenticated,
+                StatusCode::OK,
+                OCTET_STREAM_CONTENT_TYPE,
+                &content_digest,
+                object_size as u64,
+                Body::from_stream(stream),
+            )?,
+            content.revision,
         )
     }
     .await;
@@ -1780,7 +1806,7 @@ pub async fn upload_file(
         };
         // Spooled and hashed whole before anything is parsed: no byte the
         // peer did not sign is looked at.
-        let spooled = match spool_body(body, MAX_FEDERATED_UPLOAD_BYTES).await {
+        let spooled = match spool_body(body, max_federated_upload_bytes(&state.pool).await?).await {
             Ok(spooled) => spooled,
             Err(error) => return signed_app_error(federation, &authenticated, error),
         };
@@ -1801,9 +1827,10 @@ pub async fn upload_file(
             .map_err(|_| AppError::bad_request("invalid Drive envelope"))?;
         validate_envelope(&parsed.file_key_envelope, file_key_context)?;
         validate_envelope(&parsed.metadata_envelope, metadata_context)?;
-        let blob_context = DriveFileBlobContextV1::new(&file_id_text, 1)
-            .map_err(|_| AppError::bad_request("invalid Drive file blob"))?;
-        validate_file_blob_file(&parsed.file, blob_context)?;
+        // A new file's key is generation 1.
+        parsed
+            .format
+            .check_file(&parsed.file, parsed.size as u64, parsed.file_id, 1)?;
         let metadata = authenticated.replay_metadata()?;
         let operation = "upload";
         let mut tx = state.pool.begin().await?;
@@ -1884,7 +1911,12 @@ pub async fn upload_file(
         }
 
         let file_id = parsed.file_id;
-        let storage_path = crate::handlers::files::original_storage_path(file_id);
+        let revision = parsed.format.revision_id();
+        if let Err(error) = crate::drive_blob::ensure_revision_free(&mut tx, revision, None).await {
+            tx.rollback().await?;
+            return signed_app_error(federation, &authenticated, error);
+        }
+        let storage_path = crate::file_content::revision_path(file_id, revision);
         let object = ByteStream::from_path(parsed.file.path())
             .await
             .map_err(|error| AppError::internal(format!("read upload: {error}")))?;
@@ -1901,8 +1933,8 @@ pub async fn upload_file(
                 (id, collection_id, uploader_user_id, metadata_envelope,
                  file_key_envelope, key_epoch, key_generation, metadata_revision,
                  storage_path, encrypted_size_bytes, ciphertext_sha256, fed_share_id,
-                 original_key_generation, name_hash)
-             VALUES ($1,$2,$3,$4,$5,$6,1,$7,$8,$9,$10,$11,1,$12)",
+                 original_key_generation, name_hash, content_revision_id)
+             VALUES ($1,$2,$3,$4,$5,$6,1,$7,$8,$9,$10,$11,1,$12,$13)",
             )
             .bind(file_id)
             .bind(share.collection_id)
@@ -1916,15 +1948,15 @@ pub async fn upload_file(
             .bind(&parsed.digest)
             .bind(share.id)
             .bind(&parsed.name_hash)
+            .bind(revision)
             .execute(&mut *tx)
             .await
             .map_err(crate::drive_names::map_unique_violation)?;
-            sqlx::query(
-                "UPDATE users SET storage_used_bytes = storage_used_bytes + $1 WHERE id = $2",
+            crate::storage_pool::charge(
+                &mut *tx,
+                crate::storage_pool::Payer::Account(share.sharer_user_id),
+                parsed.size,
             )
-            .bind(parsed.size)
-            .bind(share.sharer_user_id)
-            .execute(&mut *tx)
             .await?;
             record_mutation(
                 &mut tx,
@@ -2109,6 +2141,7 @@ where
     let mut metadata_envelope = None;
     let mut file_key_envelope = None;
     let mut name_hash = None;
+    let mut revision_id = None;
     let mut uploaded_file = None;
     while let Some(mut field) = multipart
         .next_field()
@@ -2139,6 +2172,12 @@ where
                     return Err(AppError::bad_request("duplicate nameHash"));
                 }
                 name_hash = Some(limited_field_text(field).await?);
+            }
+            Some("revisionId") => {
+                if revision_id.is_some() {
+                    return Err(AppError::bad_request("duplicate revisionId"));
+                }
+                revision_id = Some(limited_field_text(field).await?);
             }
             Some("file") => {
                 if uploaded_file.is_some() {
@@ -2179,6 +2218,7 @@ where
         metadata_envelope: required(metadata_envelope, "metadataEnvelope")?,
         file_key_envelope: required(file_key_envelope, "fileKeyEnvelope")?,
         name_hash: crate::drive_names::require_name_hash(name_hash.as_deref())?,
+        format: crate::drive_blob::BlobFormat::from_revision(revision_id.as_deref())?,
         file,
         size,
         digest,
@@ -2203,9 +2243,11 @@ async fn limited_field_text(mut field: multer::Field<'_>) -> AppResult<String> {
     String::from_utf8(bytes).map_err(|_| AppError::bad_request("multipart metadata must be UTF-8"))
 }
 
-/// The largest federated Drive upload body: one file blob (the same bound as
-/// a download) plus its multipart framing and envelopes.
-const MAX_FEDERATED_UPLOAD_BYTES: u64 = MAX_DRIVE_OBJECT_BYTES as u64 + 16 * 1024 * 1024;
+/// The largest federated Drive upload body: one file blob (this server's
+/// upload limit, a site setting) plus its multipart framing and envelopes.
+async fn max_federated_upload_bytes(pool: &sqlx::PgPool) -> AppResult<u64> {
+    Ok(max_drive_object_bytes(pool).await? as u64 + 16 * 1024 * 1024)
+}
 
 /// A request body written to an unnamed temporary file, with its length and
 /// RFC 9530 SHA-256 digest.

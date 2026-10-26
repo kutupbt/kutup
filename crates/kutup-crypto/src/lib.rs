@@ -117,6 +117,8 @@ pub mod safety_number;
 // (docs/plans/drive-block-format.md).
 pub mod stream;
 pub mod thumbnail;
+#[cfg(feature = "webauthn")]
+pub mod webauthn;
 pub mod yjs_seed;
 
 pub use error::{CryptoError, Result};

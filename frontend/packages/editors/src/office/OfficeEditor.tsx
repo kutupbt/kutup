@@ -29,7 +29,7 @@ import type { LogPosition } from '../snapshots'
 import { KIND } from '@kutup/collab/envelope'
 import { encryptCollabFrame, openCollabFrame } from '@kutup/collab/cryptoFrame'
 import { currentDevice, deviceRefused, stillListed, TooManyDevicesError, type CurrentDevice } from '@kutup/session/currentDevice'
-import { randomSenderSeqPrefix } from '@kutup/collab/identity'
+import { getOrCreateTabId, randomSenderSeqPrefix } from '@kutup/collab/identity'
 import { localBase } from '@kutup/collab/api'
 import { peerKey } from '@kutup/collab/envelope'
 import { useResolvedTheme } from '../useResolvedTheme'
@@ -72,7 +72,7 @@ interface Props {
 }
 
 /** Who the editor is when nobody is signed in (`live` false): one viewer. */
-const VIEWER = { deviceId: 1, userId: '00000000-0000-0000-0000-000000000000', account: '' }
+const VIEWER = { deviceId: 1, tab: '0', userId: '00000000-0000-0000-0000-000000000000', account: '' }
 
 /** Where an office editing session started (docs/onlyoffice.md). */
 export interface SessionBase {
@@ -124,9 +124,9 @@ type ToBridge =
   | { type: 'oo-remote-op'; payload: string }
   /** `sender`: the peer's `account#deviceId` (see `peerKey`). */
   | { type: 'oo-remote-cursor'; sender: string; payload: string }
-  | { type: 'oo-peers'; list: { account: string; deviceId: number; userId: string; username?: string; color?: string }[]; ts: number }
-  /** Device ids are per account: the bridge tells peers apart by account and device. */
-  | { type: 'oo-self'; deviceId: number; userId: string; account: string }
+  | { type: 'oo-peers'; list: { account: string; deviceId: number; tab?: string; userId: string; username?: string; color?: string }[]; ts: number }
+  /** Device ids are per account, and the tabs of a browser share its device: the bridge tells peers apart by account, device and tab. */
+  | { type: 'oo-self'; deviceId: number; tab: string; userId: string; account: string }
   | { type: 'oo-color-update'; userId: string; color: string | null }
   | { type: 'oo-theme'; theme: 'dark' | 'light' }
 
@@ -334,7 +334,7 @@ function OfficeEditorBase(
           } else {
             const device = deviceRef.current
             if (device && userId) {
-              send({ type: 'oo-self', deviceId: device.deviceId, userId, account: device.account })
+              send({ type: 'oo-self', deviceId: device.deviceId, tab: getOrCreateTabId(), userId, account: device.account })
             }
           }
           send({
@@ -453,7 +453,7 @@ function OfficeEditorBase(
       // OnlyOffice's connectState. Without this OO rejects remote
       // saveChanges from peers it never learned about, producing the
       // "second-direction sync stalls" bug user-reported on 2026-05-07.
-      function forwardPeers(list: { account: string; deviceId: number; userId: string; username?: string; color?: string }[], ts: number) {
+      function forwardPeers(list: { account: string; deviceId: number; tab?: string; userId: string; username?: string; color?: string }[], ts: number) {
         const iframe = iframeRef.current
         if (!iframe || !iframe.contentWindow) return
         iframe.contentWindow.postMessage(
@@ -468,7 +468,7 @@ function OfficeEditorBase(
       const iframeForSelf = iframeRef.current
       if (iframeForSelf && iframeForSelf.contentWindow && did && userId) {
         iframeForSelf.contentWindow.postMessage(
-          { type: 'oo-self', deviceId: did, userId, account: device.account } satisfies ToBridge,
+          { type: 'oo-self', deviceId: did, tab: getOrCreateTabId(), userId, account: device.account } satisfies ToBridge,
           officeOrigin(),
         )
       }
