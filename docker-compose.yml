@@ -107,6 +107,9 @@ services:
       KUTUP_MAIL_URL: ${KUTUP_MAIL_URL:-}
       KUTUP_PASS_URL: ${KUTUP_PASS_URL:-}
       KUTUP_CALENDAR_URL: ${KUTUP_CALENDAR_URL:-}
+      # Security keys' relying party id (default: KUTUP_BASE_DOMAIN, else
+      # the account app's host).
+      KUTUP_WEBAUTHN_RP_ID: ${KUTUP_WEBAUTHN_RP_ID:-}
       # Who may send mail to outside addresses: off, admins or on
       # (docs/self-hosting.md, "Mail").
       MAIL_OUTSIDE_SENDING: ${MAIL_OUTSIDE_SENDING:-off}

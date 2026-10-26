@@ -231,44 +231,6 @@ fn a_recovery_sets_a_new_password_and_ends_every_sign_in() {
     purge_accounts(&c, &base, &[&user]);
 }
 
-/// A new password for `user` with `grant` from `token`'s session: its status.
-fn set_password(
-    c: &Client,
-    base: &str,
-    user: &User,
-    grant: &str,
-    token: Option<&str>,
-    password: &str,
-) -> StatusCode {
-    let (record, key_id, export_key) =
-        match try_opaque_register(c, base, password, &user.binding, Some(grant), None) {
-            Ok(registered) => registered,
-            Err((status, _)) => return status,
-        };
-    let mut request = c
-        .post(format!("{base}/api/auth/opaque/register/finish"))
-        .json(&json!({
-            "grant": grant, "keyBinding": user.binding,
-            "opaqueRecord": record, "opaqueServerKeyId": key_id,
-            "masterKeyEnvelope": export_key.seal_master_key(&user.master_key, &user.binding).unwrap(),
-        }));
-    if let Some(token) = token {
-        request = request.bearer_auth(token);
-    }
-    request.send().unwrap().status()
-}
-
-fn security_events(c: &Client, base: &str, token: &str, query: &str) -> Value {
-    let r = bearer(
-        c.get(format!("{base}/api/user/security-events{query}")),
-        token,
-    )
-    .send()
-    .unwrap();
-    assert_eq!(r.status(), StatusCode::OK);
-    r.json().unwrap()
-}
-
 #[test]
 fn a_sign_in_that_straddles_a_new_password_gets_nothing() {
     let Ok(base) = std::env::var("KUTUP_LIVE_SERVER") else {
@@ -701,23 +663,6 @@ fn turn_on_two_step(c: &Client, base: &str, user: &User) -> (String, Vec<String>
         .map(|code| code.as_str().unwrap().to_owned())
         .collect();
     (secret, codes)
-}
-
-fn totp_now(secret: &str) -> String {
-    totp_rs::TOTP::new(
-        totp_rs::Algorithm::SHA1,
-        6,
-        1,
-        30,
-        totp_rs::Secret::Encoded(secret.to_owned())
-            .to_bytes()
-            .unwrap(),
-        None,
-        String::new(),
-    )
-    .unwrap()
-    .generate_current()
-    .unwrap()
 }
 
 fn codes_left(c: &Client, base: &str, user: &User) -> i64 {

@@ -298,7 +298,12 @@
           "twoFactorOn": "İki adımlı doğrulama açıldı",
           "twoFactorOff": "İki adımlı doğrulama kapatıldı",
           "recoveryCodeUsed": "Kurtarma koduyla oturum açıldı",
-          "recoveryCodesRenewed": "Yeni kurtarma kodları oluşturuldu"
+          "recoveryCodesRenewed": "Yeni kurtarma kodları oluşturuldu",
+          "securityKeyAdded": "“{{oldName}}” güvenlik anahtarı eklendi",
+          "securityKeyRemoved": "“{{oldName}}” güvenlik anahtarı kaldırıldı",
+          "securityKeyCompromised": "“{{oldName}}” güvenlik anahtarı kopyalanmış olabilir (artık kullanılmıyor)",
+          "authenticatorOn": "Doğrulama uygulaması açıldı",
+          "authenticatorOff": "Doğrulama uygulaması kapatıldı"
         }
       },
       "recovery": "Kurtarma ifadesi",
@@ -882,10 +887,14 @@
         "chatDistributionMessageBytesHint": "Yeni bir Sohbet kimliğinin tutulan her cihaza gönderdiği en büyük ileti."
       },
       "twoFactor": "İki adımlı oturum açma",
-      "twoFactorHint": "İki adımlı doğrulaması açık hesaplar için kurtarma kodları.",
+      "twoFactorHint": "İki adımlı doğrulaması açık hesaplar için kurtarma kodları ve güvenlik anahtarları.",
       "twoFactorLimits": {
         "twoFactorRecoveryCodes": "Hesap başına kurtarma kodu",
-        "twoFactorRecoveryCodesHint": "İki adımlı doğrulama açıldığında veya yeni kodlar istendiğinde kaç tek kullanımlık kod oluşturulduğu."
+        "twoFactorRecoveryCodesHint": "İki adımlı doğrulama açıldığında veya yeni kodlar istendiğinde kaç tek kullanımlık kod oluşturulduğu.",
+        "securityKeysPerAccount": "Hesap başına güvenlik anahtarı",
+        "securityKeysPerAccountHint": "Bir hesabın ekleyebileceği en fazla güvenlik anahtarı sayısı.",
+        "webauthnCeremonySeconds": "Güvenlik anahtarı istemi (saniye)",
+        "webauthnCeremonySecondsHint": "Anahtar eklerken ya da oturum açarken güvenlik anahtarına dokunma isteminin açık kaldığı süre."
       },
       "drive": "Drive yüklemeleri ve akış",
       "driveHint": "Bir dosyanın en fazla ne kadar büyük olabileceği ve video ile seslerin inerken nasıl oynatıldığı.",

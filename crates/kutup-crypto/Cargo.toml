@@ -17,6 +17,8 @@ calendar = ["mail", "dep:jiff", "dep:jiff-tzdb"]
 # Builders of malformed values for negative vectors; on for this crate's own
 # tests only (the dev-dependency on itself below), never for a client.
 test-vectors = []
+# Security keys' relying-party checks (`webauthn`); the server only.
+webauthn = ["dep:webauthn_rp"]
 
 [dependencies]
 dryoc.workspace = true
@@ -57,6 +59,10 @@ hpke-rs-rust-crypto = { version = "=0.6.1", features = ["experimental"] }
 # candidate (hpke-rs-rust-crypto 0.6.1 asks for ^0.1.0-rc.0 / ^0.3.0-rc.0).
 x-wing = { version = "=0.1.1", features = ["zeroize"] }
 ml-kem = { version = "=0.3.3" }
+# Security keys as a second factor (docs/plans/security-keys.md, D1): the
+# relying party's checks, server side only (the `webauthn` feature), behind
+# the `webauthn` adapter. Pure Rust on the curves already here.
+webauthn_rp = { version = "=0.3.0", default-features = false, features = ["serde_relaxed", "serializable_server_state"], optional = true }
 # OPAQUE sign-in (docs/plans/opaque.md): RFC 9807, ristretto255 + 3DH. The KSF
 # is ours (Argon2id at the V1 cost, through dryoc), so no `argon2` feature.
 opaque-ke = { version = "=4.0.1", default-features = false, features = ["ristretto255"] }
@@ -127,3 +133,7 @@ required-features = ["calendar"]
 [[test]]
 name = "calendar_recurrence_vectors"
 required-features = ["calendar"]
+
+[[test]]
+name = "webauthn_vectors"
+required-features = ["webauthn", "test-vectors"]

@@ -176,8 +176,8 @@ pub struct LiveSession {
     pub user_id: Uuid,
     pub client: ClientType,
     pub is_admin: bool,
-    /// A digest of the account's security state (its password hash, 2FA,
-    /// role, username and key binding). Never sent as is: the session
+    /// A digest of the account's security state (its password hash, 2FA
+    /// with its security keys, role, username and key binding). Never sent as is: the session
     /// version header is an HMAC of it (`middleware::session_version`).
     pub version: String,
 }
@@ -190,7 +190,10 @@ pub async fn live(pool: &PgPool, session_id: Uuid, user_id: Uuid) -> AppResult<L
                 encode(sha256(convert_to(
                     length(COALESCE(encode(u.opaque_record, 'hex'), '')) || ':' ||
                     COALESCE(encode(u.opaque_record, 'hex'), '') ||
-                    u.totp_enabled::text || ',' || u.is_admin::text || ',' ||
+                    u.totp_enabled::text || ',' ||
+                    (SELECT count(*) || '/' || count(*) FILTER (WHERE NOT k.compromised)
+                     FROM user_security_keys k WHERE k.user_id = u.id) || ',' ||
+                    u.is_admin::text || ',' ||
                     length(COALESCE(u.username, '')) || ':' || COALESCE(u.username, '') ||
                     length(COALESCE(u.key_binding, '')) || ':' || COALESCE(u.key_binding, ''),
                     'UTF8')), 'hex')

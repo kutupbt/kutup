@@ -236,6 +236,8 @@ export interface AdminSettings {
   chatLinkTokenSeconds: number
   /** How many two-factor recovery codes are made at once. */
   twoFactorRecoveryCodes: number
+  securityKeysPerAccount: number
+  webauthnCeremonySeconds: number
   chatLinkTokensPerAccount: number
   chatProvisionBodyBytes: number
   chatMaxActiveDevices: number

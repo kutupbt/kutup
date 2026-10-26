@@ -637,7 +637,30 @@ pub const TWO_FACTOR_RECOVERY_CODES: NumericSetting = NumericSetting {
     min: 4,
     max: 64,
 };
-pub const TWO_FACTOR_SETTINGS: [NumericSetting; 1] = [TWO_FACTOR_RECOVERY_CODES];
+/// Security keys one account may add (docs/plans/security-keys.md, D3;
+/// Proton allows 4): room for a backup key per device.
+pub const SECURITY_KEYS_PER_ACCOUNT: NumericSetting = NumericSetting {
+    key: "security_keys_per_account",
+    field: "securityKeysPerAccount",
+    default: 10,
+    min: 1,
+    max: 50,
+};
+/// How long a security key prompt (adding a key, or signing in with one)
+/// stays open, in seconds.
+pub const WEBAUTHN_CEREMONY_SECONDS: NumericSetting = NumericSetting {
+    key: "webauthn_ceremony_seconds",
+    field: "webauthnCeremonySeconds",
+    default: 300,
+    min: 60,
+    max: 600,
+};
+pub const TWO_FACTOR_SETTINGS: [NumericSetting; 3] = [
+    TWO_FACTOR_RECOVERY_CODES,
+    SECURITY_KEYS_PER_ACCOUNT,
+    WEBAUTHN_CEREMONY_SECONDS,
+];
+
 const KIB: i64 = 1024;
 const MIB: i64 = 1024 * KIB;
 const GIB: i64 = 1024 * MIB;
