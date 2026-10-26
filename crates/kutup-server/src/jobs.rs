@@ -1297,6 +1297,10 @@ mod tests {
         let file = Some(uuid::Uuid::parse_str(uuid).unwrap());
         // Everything of a file is under files/{id}/…
         assert_eq!(drive_file_of_key(&format!("files/{uuid}/original")), file);
+        assert_eq!(
+            drive_file_of_key(&format!("files/{uuid}/revisions/{other}")),
+            file
+        );
         assert_eq!(drive_file_of_key(&format!("files/{uuid}/snapshot")), file);
         assert_eq!(drive_file_of_key(&format!("files/{uuid}/assets/x")), file);
         assert_eq!(

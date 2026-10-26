@@ -6,34 +6,27 @@
 //! children atomically, then wipe the S3 prefix.
 
 use std::collections::HashMap;
-use std::io::{Read, Write};
+use std::io::Write;
 
 use aws_sdk_s3::primitives::ByteStream;
 use axum::extract::{Multipart, Path, State};
-use axum::http::{HeaderName, StatusCode};
+use axum::http::{HeaderMap, HeaderName, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::Json;
 use base64::engine::general_purpose::STANDARD;
 use base64::Engine as _;
 use kutup_crypto::drive_envelope::{self, DriveEnvelopeContextV1};
-use kutup_crypto::drive_object::{self, DriveFileBlobContextV1, FILE_BLOB_HEADER_BYTES};
 use serde::{Deserialize, Serialize};
 use tempfile::NamedTempFile;
 use utoipa::ToSchema;
 use uuid::Uuid;
 
 use crate::error::{AppError, AppResult};
-use crate::handlers::{can_access_collection, octet_stream_response, trusted_uuid};
+use crate::handlers::{can_access_collection, trusted_uuid};
 use crate::middleware::AuthUser;
 use crate::models::{FileRow, FileThumbnails, MessageResponse, UploadResult};
 use crate::AppState;
 
-/// Where a file's original upload is stored: under the file's own prefix,
-/// beside its versions, assets and thumbnails (`files/{id}/…`), whoever
-/// uploaded it and from wherever (a peer's upload too).
-pub(crate) fn original_storage_path(file_id: Uuid) -> String {
-    format!("files/{file_id}/original")
-}
 /// The largest non-file form field: ids and sealed metadata / key envelopes.
 pub(crate) const MAX_TEXT_FIELD_BYTES: usize = 1024 * 1024;
 
@@ -90,30 +83,6 @@ pub(crate) fn validate_envelope(value: &str, expected: DriveEnvelopeContextV1) -
         });
     }
     Ok(())
-}
-
-pub(crate) fn validate_file_blob_prefix(
-    bytes: &[u8],
-    expected: DriveFileBlobContextV1,
-) -> AppResult<()> {
-    if bytes.len() < FILE_BLOB_HEADER_BYTES
-        || drive_object::validate_file_blob_header(&bytes[..FILE_BLOB_HEADER_BYTES], expected)
-            .is_err()
-    {
-        return Err(AppError::bad_request("invalid Drive file blob"));
-    }
-    Ok(())
-}
-
-pub(crate) fn validate_file_blob_file(
-    file: &NamedTempFile,
-    expected: DriveFileBlobContextV1,
-) -> AppResult<()> {
-    let mut prefix = [0u8; FILE_BLOB_HEADER_BYTES];
-    std::fs::File::open(file.path())
-        .and_then(|mut source| source.read_exact(&mut prefix))
-        .map_err(|_| AppError::bad_request("invalid Drive file blob"))?;
-    validate_file_blob_prefix(&prefix, expected)
 }
 
 #[derive(Debug, Serialize, ToSchema)]
@@ -195,6 +164,13 @@ pub async fn upload(
     mut multipart: Multipart,
 ) -> AppResult<Response> {
     let user_id = trusted_uuid(&user.user_id)?;
+    // The upload limit is a site setting (docs/plans/drive-block-format.md
+    // §7), counted as the file arrives.
+    let mut budget = crate::drive_blob::BodyBudget::new(
+        crate::site_settings::DRIVE_UPLOAD_MAX_BYTES
+            .load(&state.pool)
+            .await?,
+    );
 
     // Collect text fields into a map and stream the file part to a temp file (so we know
     // its size before the S3 PUT, like Go's parsed multipart form). Handles any field order.
@@ -215,6 +191,7 @@ pub async fn upload(
                 .await
                 .map_err(|_| AppError::bad_request("invalid multipart form"))?
             {
+                budget.take(chunk.len())?;
                 file.write_all(&chunk)
                     .map_err(|_| AppError::internal("temp write"))?;
                 size += chunk.len() as i64;
@@ -297,10 +274,13 @@ pub async fn upload(
         DriveEnvelopeContextV1::file_metadata(&file_id_str, 1, 1)
             .map_err(|_| AppError::bad_request("invalid Drive envelope"))?,
     )?;
-    let blob_context = DriveFileBlobContextV1::new(&file_id_str, 1)
-        .map_err(|_| AppError::bad_request("invalid Drive file blob"))?;
-    validate_file_blob_file(&tmp_file, blob_context)?;
-    let storage_path = original_storage_path(file_id);
+    // A new file's key is generation 1. With `revisionId` the blob is in the
+    // block format, bound to that revision; without, the streaming format.
+    let format =
+        crate::drive_blob::BlobFormat::from_revision(fields.get("revisionId").map(String::as_str))?;
+    format.check_file(&tmp_file, file_size as u64, file_id, 1)?;
+    let revision = format.revision_id();
+    let storage_path = crate::file_content::revision_path(file_id, revision);
 
     // Claim the id, then check room — both held until commit, so neither a
     // retry with the same id nor a concurrent write can slip past.
@@ -326,6 +306,7 @@ pub async fn upload(
     crate::drive_writes::check_room(&mut tx, user_id, coll_id, file_size, None)
         .await?
         .into_result()?;
+    crate::drive_blob::ensure_revision_free(&mut tx, revision, None).await?;
 
     // Stream the temp file to S3 (still holding the row lock, like Go).
     let body = ByteStream::from_path(tmp_file.path())
@@ -345,8 +326,8 @@ pub async fn upload(
                               metadata_envelope, file_key_envelope,
                               key_epoch, key_generation, metadata_revision,
                               storage_path, encrypted_size_bytes, original_key_generation,
-                              name_hash, content_hash)
-           VALUES ($1,$2,$3,$4,$5,$6,1,1,$7,$8,1,$9,$10)"#,
+                              name_hash, content_hash, content_revision_id)
+           VALUES ($1,$2,$3,$4,$5,$6,1,1,$7,$8,1,$9,$10,$11)"#,
     )
     .bind(file_id)
     .bind(coll_id)
@@ -358,6 +339,7 @@ pub async fn upload(
     .bind(file_size)
     .bind(&name_hash)
     .bind(&content_hash)
+    .bind(revision)
     .execute(&mut *tx)
     .await;
     if let Err(error) = insert {
@@ -402,12 +384,17 @@ pub async fn upload(
     operation_id = "downloadFile",
     security(("BearerAuth" = [])),
     params(("id" = String, Path, description = "File id")),
-    responses((status = 200, description = "The encrypted current content (application/octet-stream); `x-kutup-version` names it: a version id, or `original`"))
+    responses(
+        (status = 200, description = "The encrypted current content (application/octet-stream); `x-kutup-version` names it: a version id, or `original`. The ETag is its revision id"),
+        (status = 206, description = "The one `Range` asked (`Content-Range`), at most `driveStreamResponseMaxBytes`"),
+        (status = 416, description = "The range starts past the end")
+    )
 )]
 pub async fn download(
     State(state): State<AppState>,
     user: AuthUser,
     Path(id): Path<String>,
+    headers: HeaderMap,
 ) -> AppResult<Response> {
     let user_id = trusted_uuid(&user.user_id)?;
     let file_id = Uuid::parse_str(&id).map_err(|_| AppError::not_found("not found"))?;
@@ -429,20 +416,19 @@ pub async fn download(
     let content = crate::file_content::current_content(&state.pool, file_id)
         .await?
         .ok_or_else(|| AppError::not_found("not found"))?;
-    let (body, size) = content
-        .open(&state.storage)
-        .await
-        .map_err(|_| AppError::internal("storage"))?;
     // Which content this is, for a later save's `basedOn`
     // (docs/plans/pass.md, "Saving without overwriting").
     let version = content
         .version
         .map_or_else(|| ORIGINAL.to_owned(), |id| id.to_string());
-    Ok(octet_stream_response(
-        body,
-        size,
-        &[(HeaderName::from_static(VERSION_HEADER), version)],
-    ))
+    content
+        .serve(
+            &state.pool,
+            &state.storage,
+            &headers,
+            &[(HeaderName::from_static(VERSION_HEADER), version)],
+        )
+        .await
 }
 
 /// The download header naming the content served: a version id, or
@@ -462,14 +448,17 @@ pub(crate) const ORIGINAL: &str = "original";
     security(("BearerAuth" = [])),
     params(("id" = String, Path, description = "File id")),
     responses(
-        (status = 200, description = "The encrypted original upload (application/octet-stream)"),
-        (status = 404, description = "No such file, or its original was pruned")
+        (status = 200, description = "The encrypted original upload (application/octet-stream); the ETag is its revision id"),
+        (status = 206, description = "The one `Range` asked"),
+        (status = 404, description = "No such file, or its original was pruned"),
+        (status = 416, description = "The range starts past the end")
     )
 )]
 pub async fn download_original(
     State(state): State<AppState>,
     user: AuthUser,
     Path(id): Path<String>,
+    headers: HeaderMap,
 ) -> AppResult<Response> {
     let user_id = trusted_uuid(&user.user_id)?;
     let file_id = Uuid::parse_str(&id).map_err(|_| AppError::not_found("not found"))?;
@@ -479,11 +468,50 @@ pub async fn download_original(
     let content = crate::file_content::original_content(&state.pool, file_id)
         .await?
         .ok_or_else(|| AppError::not_found("not found"))?;
-    let (body, size) = content
-        .open(&state.storage)
+    content
+        .serve(&state.pool, &state.storage, &headers, &[])
         .await
-        .map_err(|_| AppError::internal("storage"))?;
-    Ok(octet_stream_response(body, size, &[]))
+}
+
+/// Drive's limits, as a client reads them (docs/plans/drive-block-format.md
+/// §7): each an administrator's site setting.
+#[derive(Debug, Serialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct DriveLimits {
+    upload_max_bytes: i64,
+    version_max_bytes: i64,
+    stream_max_bytes: i64,
+    stream_cache_blocks: i64,
+    stream_readahead_blocks: i64,
+    stream_max_concurrent: i64,
+    stream_response_max_bytes: i64,
+    stream_blob_fallback_max_bytes: i64,
+}
+
+/// `GET /api/drive/limits` — the upload and streaming limits.
+#[utoipa::path(
+    get,
+    path = "/api/drive/limits",
+    tag = "files",
+    security(("BearerAuth" = [])),
+    responses((status = 200, body = DriveLimits))
+)]
+pub async fn limits(
+    State(state): State<AppState>,
+    _user: AuthUser,
+) -> AppResult<Json<DriveLimits>> {
+    use crate::site_settings as s;
+    let pool = &state.pool;
+    Ok(Json(DriveLimits {
+        upload_max_bytes: s::DRIVE_UPLOAD_MAX_BYTES.load(pool).await?,
+        version_max_bytes: s::DRIVE_VERSION_MAX_BYTES.load(pool).await?,
+        stream_max_bytes: s::DRIVE_STREAM_MAX_BYTES.load(pool).await?,
+        stream_cache_blocks: s::DRIVE_STREAM_CACHE_BLOCKS.load(pool).await?,
+        stream_readahead_blocks: s::DRIVE_STREAM_READAHEAD_BLOCKS.load(pool).await?,
+        stream_max_concurrent: s::DRIVE_STREAM_MAX_CONCURRENT.load(pool).await?,
+        stream_response_max_bytes: s::DRIVE_STREAM_RESPONSE_MAX_BYTES.load(pool).await?,
+        stream_blob_fallback_max_bytes: s::DRIVE_STREAM_BLOB_FALLBACK_MAX_BYTES.load(pool).await?,
+    }))
 }
 
 /// `PUT /api/files/{id}` — mirrors `UpdateMetadata` (rename).

@@ -628,22 +628,25 @@ pub async fn public_share_asset(
         ("token" = String, Path, description = "Share token (the capability)"),
         ("fileId" = String, Path, description = "File id")
     ),
-    responses((status = 200, description = "The encrypted blob (application/octet-stream)"))
+    responses(
+        (status = 200, description = "The encrypted blob (application/octet-stream); the ETag is its revision id"),
+        (status = 206, description = "The one `Range` asked"),
+        (status = 416, description = "The range starts past the end")
+    )
 )]
 pub async fn download_public_share_file(
     State(state): State<AppState>,
     Path((token, file_id)): Path<(String, String)>,
+    headers: axum::http::HeaderMap,
 ) -> AppResult<Response> {
     let fid = link_reaches(&state, &token, &file_id).await?;
     // A public link shows the file as it is now, edits included.
     let content = crate::file_content::current_content(&state.pool, fid)
         .await?
         .ok_or_else(|| AppError::not_found("not found"))?;
-    let (body, size) = content
-        .open(&state.storage)
+    content
+        .serve(&state.pool, &state.storage, &headers, &[])
         .await
-        .map_err(|_| AppError::internal("storage"))?;
-    Ok(octet_stream_response(body, size, &[]))
 }
 
 /// A photo in an album, as its public link shows it.
