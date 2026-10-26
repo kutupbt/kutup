@@ -29,7 +29,7 @@ import type { LogPosition } from '../snapshots'
 import { KIND } from '@kutup/collab/envelope'
 import { encryptCollabFrameV1, openCollabFrameV1 } from '@kutup/collab/cryptoFrame'
 import { currentDevice, deviceRefused, renewRequested, TooManyDevicesError } from '@kutup/collab/currentDevice'
-import { randomSenderSeqPrefix } from '@kutup/collab/identity'
+import { getOrCreateTabId, randomSenderSeqPrefix } from '@kutup/collab/identity'
 import { listDevices } from '@kutup/collab/api'
 import { useResolvedTheme } from '../useResolvedTheme'
 import { DeviceLimitNotice } from '../DeviceLimitNotice'
@@ -71,7 +71,7 @@ interface Props {
 }
 
 /** Who the editor is when nobody is signed in (`live` false): one viewer. */
-const VIEWER = { deviceId: 1, userId: '00000000-0000-0000-0000-000000000000' }
+const VIEWER = { deviceId: 1, tab: '0', userId: '00000000-0000-0000-0000-000000000000' }
 
 /** Where an office editing session started (docs/onlyoffice.md). */
 export interface SessionBase {
@@ -122,8 +122,8 @@ type ToBridge =
   | { type: 'thumbnail-request'; requestId: number }
   | { type: 'oo-remote-op'; payload: string }
   | { type: 'oo-remote-cursor'; senderDeviceId: number; payload: string }
-  | { type: 'oo-peers'; list: { deviceId: number; userId: string; username?: string; color?: string }[]; ts: number }
-  | { type: 'oo-self'; deviceId: number; userId: string }
+  | { type: 'oo-peers'; list: { deviceId: number; tab?: string; userId: string; username?: string; color?: string }[]; ts: number }
+  | { type: 'oo-self'; deviceId: number; tab: string; userId: string }
   | { type: 'oo-color-update'; userId: string; color: string | null }
   | { type: 'oo-theme'; theme: 'dark' | 'light' }
 
@@ -339,7 +339,7 @@ function OfficeEditorBase(
           } else {
             const did = deviceIdRef.current ?? storedDeviceId
             if (did != null && userId) {
-              send({ type: 'oo-self', deviceId: did, userId })
+              send({ type: 'oo-self', deviceId: did, tab: getOrCreateTabId(), userId })
             }
           }
           send({
@@ -458,7 +458,7 @@ function OfficeEditorBase(
       // OnlyOffice's connectState. Without this OO rejects remote
       // saveChanges from peers it never learned about, producing the
       // "second-direction sync stalls" bug user-reported on 2026-05-07.
-      function forwardPeers(list: { deviceId: number; userId: string; username?: string; color?: string }[], ts: number) {
+      function forwardPeers(list: { deviceId: number; tab?: string; userId: string; username?: string; color?: string }[], ts: number) {
         const iframe = iframeRef.current
         if (!iframe || !iframe.contentWindow) return
         iframe.contentWindow.postMessage(
@@ -473,7 +473,7 @@ function OfficeEditorBase(
       const iframeForSelf = iframeRef.current
       if (iframeForSelf && iframeForSelf.contentWindow && did && userId) {
         iframeForSelf.contentWindow.postMessage(
-          { type: 'oo-self', deviceId: did, userId } satisfies ToBridge,
+          { type: 'oo-self', deviceId: did, tab: getOrCreateTabId(), userId } satisfies ToBridge,
           officeOrigin(),
         )
       }

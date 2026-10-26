@@ -5,6 +5,9 @@ import { reportCollabSocket, trackCollabTransport } from './connectivity'
 
 export interface PeerInfo {
   deviceId: number
+  /** The peer's tab (its socket's `tab`): the tabs of one browser share a
+   *  device. Absent from an older client. */
+  tab?: string
   userId: string
   username?: string
   /** Per-user presence color (hex '#rrggbb'). Drives the foreign-selection
