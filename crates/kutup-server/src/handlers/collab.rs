@@ -36,12 +36,13 @@ pub struct CollabQuery {
 }
 
 impl CollabQuery {
-    /// The tab id, if well formed: empty otherwise (an older client).
+    /// The tab id, if well formed (1 to 6 lowercase hex digits, the 24 bits a client
+    /// draws): empty otherwise (an older client).
     pub(crate) fn tab(&self) -> String {
         self.tab
             .as_deref()
             .filter(|tab| {
-                (1..=8).contains(&tab.len())
+                (1..=6).contains(&tab.len())
                     && tab
                         .bytes()
                         .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
@@ -1124,8 +1125,8 @@ mod tab_tests {
     #[test]
     fn a_tab_id_is_short_lowercase_hex_or_nothing() {
         assert_eq!(tab(Some("0a1b2c")), "0a1b2c");
-        assert_eq!(tab(Some("deadbeef")), "deadbeef");
-        for bad in ["", "DEAD", "123456789", "xyz", "<script>"] {
+        assert_eq!(tab(Some("f")), "f");
+        for bad in ["", "DEAD", "1234567", "deadbeef", "xyz", "<script>"] {
             assert_eq!(tab(Some(bad)), "", "{bad}");
         }
         assert_eq!(tab(None), "");

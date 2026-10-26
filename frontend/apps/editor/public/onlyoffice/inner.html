@@ -342,20 +342,22 @@
         //   _getUserColorById: if window.parent.APP.getUserColor(id) returns
         //                      {r,g,b,a}, OO uses it; else auto-palette.
         //
-        // Scheme: one OnlyOffice participant per TAB. The tabs of one
-        // browser share a device (one per sign-in and app), so the device
-        // can't tell them apart; each tab names its own random id (`tab`,
-        // lowercase hex) on its socket, and the room's peer list carries it.
+        // Scheme: one OnlyOffice participant per TAB of a device. The tabs
+        // of one browser share a device (one per sign-in and app), so the
+        // device can't tell them apart; each tab names its own random id
+        // (`tab`, lowercase hex) on its socket, and the room's peer list
+        // carries it. The index takes both, so two devices of one account
+        // never collide whatever ids their tabs draw.
         //   - user.id            = userId       (UUID; same across user's tabs)
-        //   - indexUser          = indexOfTab(tab)   (per tab; past the
-        //                                             reserved indexes)
+        //   - indexUser          = indexOf(deviceId, tab)  (per tab; past
+        //                                             the reserved indexes)
         //   - _userId            = userId + String(indexUser)
-        //   - participant.id     = ooUserIdFor(peerUserId, indexOfTab(peerTab))
+        //   - participant.id     = ooUserIdFor(peerUserId, indexOf(peerDevice, peerTab))
         //                          — must EQUAL the peer's _userId, so a
         //                            direct concat, no separator.
         // idOriginal = userId so OO's per-USER color cache is keyed per-user.
         var myOOId = null            // = selfUserId (UUID string)
-        var myIndex = null           // = indexOfTab(selfTab)
+        var myIndex = null           // = indexOf(selfDeviceId, selfTab)
         var myUniqueOOId = null      // = ooUserIdFor(myOOId, myIndex)
         function ooUserIdFor(userId, index) { return String(userId) + String(index) }
         // Self-held cell-edit locks. Cleared on releaseLock or
@@ -387,27 +389,44 @@
         // every wire-format peer entry maps to a stable {id, indexUser,
         // username, connectionId} that OnlyOffice expects in its
         // connectState message.
-        // peerByDevice['<deviceId>:<tab>'] = oo participant entry (see makePeer).
-        var peerByDevice = Object.create(null)
+        // peerByTab['<deviceId>:<tab>'] = oo participant entry (see makePeer).
+        var peerByTab = Object.create(null)
         var lastConnectStateTs = 0
         var selfDeviceId = null  // set in oo-self handler from msg.deviceId
         var selfTab      = null  // set in oo-self handler from msg.tab
         var selfUserId   = null  // set in oo-self handler from msg.userId
 
         // Per-peer cursor identity, keyed by the peer's OnlyOffice user id
-        // (its participant id). Captured from each oo-remote-cursor frame so
-        // we can address the right user when a peer leaves and we need to
-        // clear their foreign-selection rect.
+        // (its participant id). Captured from each oo-remote-cursor frame
+        // whose user is a participant of the sending device (see
+        // isParticipantOf), so we can address the right user when a peer
+        // leaves and we need to clear their foreign-selection rect.
         // peerCursorIdentity[user] = { user: '<user>', useridoriginal: '<myOOId>' }.
         var peerCursorIdentity = Object.create(null)
 
-        // A tab's OnlyOffice index: its id (hex, up to 24 bits) past the
-        // indexes this bridge reserves (the history keeper's and the pre-init
-        // self placeholder's), computed alike on every tab, so a sender's
-        // _userId (user.id + index) is what its peers compute for it.
-        function indexOfTab(tab) {
+        // A tab's OnlyOffice index: its device id above its tab id (hex, up
+        // to 24 bits), past the indexes this bridge reserves (the history
+        // keeper's and the pre-init self placeholder's), computed alike on
+        // every tab, so a sender's _userId (user.id + index) is what its
+        // peers compute for it.
+        var TAB_SPAN = 0x1000000
+        function indexOf(deviceId, tab) {
           var n = parseInt(String(tab), 16)
-          return SELF_INDEX_USER + 1 + (isFinite(n) && n >= 0 ? n : 0)
+          var t = isFinite(n) && n >= 0 && n < TAB_SPAN ? n : 0
+          var d = Number(deviceId)
+          var index = SELF_INDEX_USER + 1 + (Number.isSafeInteger(d) && d >= 0 ? d : 0) * TAB_SPAN + t
+          return Number.isSafeInteger(index) ? index : SELF_INDEX_USER + 1 + t
+        }
+
+        // Whether `user` (an OnlyOffice user id from a frame) is a participant
+        // of the device that sent it: a device speaks only for its own tabs.
+        function isParticipantOf(deviceId, user) {
+          var keys = Object.keys(peerByTab)
+          for (var i = 0; i < keys.length; i++) {
+            var peer = peerByTab[keys[i]]
+            if (peer.deviceId === deviceId && peer.id === user) return true
+          }
+          return false
         }
 
         // Tab differentiator suffix — the last 4 hex digits of the tab id.
@@ -425,7 +444,7 @@
 
         function makePeer(deviceId, tab, userId, username) {
           // Identity must satisfy:
-          //   participant.id     = ooUserIdFor(peerUserId, indexOfTab(peerTab))
+          //   participant.id     = ooUserIdFor(peerUserId, indexOf(deviceId, tab))
           //                        — equals sender's myUniqueOOId so cross-tab
           //                        change.user attribution and lock-grant
           //                        lookups resolve to this entry.
@@ -433,13 +452,15 @@
           //                        — keys per-USER color in
           //                        window.APP.getUserColor and OO's color cache.
           return {
-            id: ooUserIdFor(userId, indexOfTab(tab)),
+            id: ooUserIdFor(userId, indexOf(deviceId, tab)),
             idOriginal: String(userId),
             username: withTabSuffix(username, tab),
-            indexUser: indexOfTab(tab),
+            indexUser: indexOf(deviceId, tab),
             connectionId: 'dev-' + deviceId + '-' + tab,
             isCloseCoAuthoring: false,
             view: false,
+            // Not OnlyOffice's: the bridge's own, for isParticipantOf.
+            deviceId: deviceId,
           }
         }
 
@@ -474,8 +495,8 @@
         function buildParticipantList() {
           var peers = [historyKeeperPeer]
           if (selfPlaceholder) peers.push(selfPlaceholder)
-          var keys = Object.keys(peerByDevice)
-          for (var i = 0; i < keys.length; i++) peers.push(peerByDevice[keys[i]])
+          var keys = Object.keys(peerByTab)
+          for (var i = 0; i < keys.length; i++) peers.push(peerByTab[keys[i]])
           return peers
         }
 
@@ -852,12 +873,12 @@
         var initReceived = false
         var maybeStart = function () {
           if (selfDeviceId == null || selfUserId == null || pendingInitPayload == null) return
-          // Bind OO identity from (selfUserId, selfTab). Must happen before
+          // Bind OO identity from (selfUserId, selfDeviceId, selfTab). Must happen before
           // the editor mounts because user.id is read from the config at
           // construction time.
           if (myOOId == null) {
             myOOId = selfUserId
-            myIndex = indexOfTab(selfTab)
+            myIndex = indexOf(selfDeviceId, selfTab)
             myUniqueOOId = ooUserIdFor(selfUserId, myIndex)
             selfUsername = pendingInitPayload.username || null
             if (pendingInitPayload.color) userColors[selfUserId] = pendingInitPayload.color
@@ -1174,17 +1195,22 @@
               // in messages[].cursor and the userid in messages[].user.
               try {
                 var cursorPayload = JSON.parse(msg.payload)
+                var first = cursorPayload && Array.isArray(cursorPayload.messages)
+                  && cursorPayload.messages.length === 1 ? cursorPayload.messages[0] : null
+                // A caret only for a participant of the sending device: a
+                // device can't draw (or, leaving, strand) a caret under
+                // another participant's id.
+                if (!first || typeof first.user !== 'string'
+                    || !isParticipantOf(msg.senderDeviceId, first.user)) {
+                  console.warn('[kutup-bridge] dropped remote cursor sender=' + msg.senderDeviceId)
+                  return
+                }
                 // Track the sender's OnlyOffice user id so we can clear the
                 // rectangle when this peer leaves the room (see 'oo-peers'
                 // below).
-                if (cursorPayload && cursorPayload.messages && cursorPayload.messages[0]
-                    && typeof cursorPayload.messages[0].user === 'string') {
-                  var first = cursorPayload.messages[0]
-                  peerCursorIdentity[first.user] = {
-                    user: first.user,
-                    useridoriginal: first.useridoriginal,
-                  }
-                  console.log('[kutup-bridge] applying remote cursor sender=' + msg.senderDeviceId + ' user=' + first.user)
+                peerCursorIdentity[first.user] = {
+                  user: first.user,
+                  useridoriginal: first.useridoriginal,
                 }
                 sendToOO(cursorPayload)
                 if (docType === 'docx') {
@@ -1257,7 +1283,7 @@
             case 'oo-self':
               // Parent tells us which (deviceId, userId) is OUR tab. Used
               // to filter self out of peer rosters AND to derive our OO
-              // identity (myUniqueOOId = userId+deviceId, idOriginal = userId
+              // identity (myUniqueOOId = userId+indexOf(deviceId, tab), idOriginal = userId
               // for stable per-user color). The init flow waits on this
               // — see maybeStart().
               if (typeof msg.deviceId === 'number') {
@@ -1303,7 +1329,7 @@
                   nextById[String(did) + ':' + tab] = makePeer(did, tab, entryUserId, entry.username)
                   if (entry.color) userColors[entryUserId] = entry.color
                 }
-                peerByDevice = nextById
+                peerByTab = nextById
                 console.log('[kutup-bridge] peers updated count=' + (Object.keys(nextById).length + 1))
                 emitConnectState()
                 // Clear foreign-selection rectangles for peers that have
