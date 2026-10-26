@@ -18,12 +18,12 @@ use base64::engine::general_purpose::STANDARD;
 use base64::Engine;
 use common::chat_identity::{ChatAccount, ChatDevice};
 use kutup_chat_proto::{
-    AccountManifestPublicationV2, AccountManifestV2, AccountPreKeyBundlesResponse, AccountRef,
+    AccountManifestPublicationV3, AccountManifestV3, AccountPreKeyBundlesResponse, AccountRef,
     AppendChatBackupSegmentRequestV1, ChatBackupManifestV1, ChatBackupMediaReferenceV1,
     ChatBackupSignerAuthorizationV1, CommitChatBackupManifestRequestV1, DeviceRegistrationV1,
     ProfileEnvelopeContextV1, ProfileEnvelopePurpose, ProvisionChatBackupRequestV1,
     ReconcileChatBackupMediaRequestV1, StageChatBackupBaseRequestV1,
-    UploadChatBackupMediaRequestV1, CHAT_DEVICE_HEADER,
+    UploadChatBackupMediaRequestV1, DEVICE_HEADER,
 };
 use kutup_crypto::primitives::{hash, SigningKey, Suite};
 use reqwest::{blocking::Client, StatusCode};
@@ -192,7 +192,7 @@ fn publish_manifest(
     base: &str,
     chat: &mut ChatAccount,
     by: &ChatDevice,
-) -> AccountManifestV2 {
+) -> AccountManifestV3 {
     let devices: Vec<&ChatDevice> = chat.devices.iter().collect();
     let manifest = chat.next_manifest(&devices);
     // Publication is idempotent, so a transient transport failure can retry
@@ -214,7 +214,7 @@ fn publish_manifest(
         "publish manifest sequence {}: {response_status}: {response_body}",
         manifest.sequence,
     );
-    let published = serde_json::from_str::<AccountManifestPublicationV2>(&response_body).unwrap();
+    let published = serde_json::from_str::<AccountManifestPublicationV3>(&response_body).unwrap();
     assert_eq!(published.manifest, manifest);
     chat.head = Some(manifest.clone());
     manifest
@@ -471,7 +471,7 @@ fn chat_backup_lifecycle(
             std::thread::spawn(move || {
                 client
                     .post(format!("{base}/api/chat/backup/segments"))
-                    .header(CHAT_DEVICE_HEADER, header)
+                    .header(DEVICE_HEADER, header)
                     .bearer_auth(token)
                     .json(&request)
                     .send()
@@ -1136,7 +1136,7 @@ fn chat_v1_contract() {
             assert_eq!(r.status(), StatusCode::BAD_REQUEST, "{url}");
         } else {
             assert_eq!(r.status(), StatusCode::OK, "{url}");
-            assert_eq!(r.json::<AccountManifestV2>().unwrap(), manifest_a1, "{url}");
+            assert_eq!(r.json::<AccountManifestV3>().unwrap(), manifest_a1, "{url}");
         }
     }
     println!("ok  - ?server= with this server's name resolves here");

@@ -1,11 +1,13 @@
 //! One libsignal identity per account, as Signal's ACI
-//! (docs/plans/account-identity-key.md): the V2 account manifest, linking a
+//! (docs/plans/account-identity-key.md), and one device list per account
+//! (docs/plans/one-device-list.md): the V3 account manifest, linking a
 //! device (Signal's provisioning), the identity distribution (Signal's PNI
 //! distribution, for the account identity), re-registration, per-device
 //! credentials, and the `accountIdentity` sync a distribution sends.
 //!
-//! These types replaced the V1 manifest, bundles and registration request,
-//! which nothing accepts any more: there is no legacy path.
+//! These types replaced the V1 and V2 manifests, the V1 bundles and the V1
+//! registration request, which nothing accepts any more: there is no legacy
+//! path.
 //!
 //! Limits (envelope sizes, token lifetimes, rates) are site settings and live
 //! in the server; the bounds here are the formats' own.
@@ -26,17 +28,20 @@ use crate::AccountRefSchema;
 use crate::{
     decode_canonical_base64_exact, decode_lower_hex_32, push_optional, push_string,
     AccountManifestDriveKeysV1, AccountRef, DeviceListMismatch, DirectChatSuiteId, EcPreKey,
-    KemPreKey, OutgoingEnvelope, ProfileSuiteId, MAX_ACCOUNT_MANIFEST_DEVICES,
-    MAX_ACCOUNT_MANIFEST_HISTORY_PAGE,
+    KemPreKey, OutgoingEnvelope, ProfileSuiteId, MAX_ACCOUNT_MANIFEST_HISTORY_PAGE,
 };
 
-pub const ACCOUNT_MANIFEST_V2_VERSION: u16 = 2;
+pub const ACCOUNT_MANIFEST_V3_VERSION: u16 = 3;
+
+/// The most entries one manifest lists (the device id space). How many an
+/// account may have is the server's site setting, below this.
+pub const MAX_ACCOUNT_MANIFEST_DEVICES: usize = MAX_DEVICE_ID as usize;
 
 /// An XEdDSA signature by the account identity key (`identityBinding`).
 pub const IDENTITY_BINDING_LEN: usize = 64;
 
 /// The bytes an account identity key signs to bind itself to its authority
-/// ([`AccountManifestV2::identity_binding`]), for a manifest not built yet.
+/// ([`AccountManifestV3::identity_binding`]), for a manifest not built yet.
 pub fn identity_binding_bytes(
     authority_key_id: &str,
     incarnation_id: &str,
@@ -68,7 +73,7 @@ pub const MAX_DEVICE_ID: u32 = 127;
 pub const DEVICE_CREDENTIAL_LEN: usize = 32;
 /// The header carrying `<deviceId>.<credential>` beside the JWT on every
 /// device-bound Chat call (Signal's `AccountAuthenticator`).
-pub const CHAT_DEVICE_HEADER: &str = "X-Kutup-Chat-Device";
+pub const DEVICE_HEADER: &str = "X-Kutup-Device";
 /// A provisioning socket's address: random bytes for the socket's life.
 pub const PROVISIONING_ADDRESS_LEN: usize = 16;
 /// A one-time link token (Signal's provisioning code).
@@ -77,6 +82,15 @@ pub const PROVISIONING_VERSION: u16 = 1;
 /// The device a re-registration takes: every other row is dropped in the same
 /// transaction, so it is the lowest free id (Signal's primary device id).
 pub const REREGISTRATION_DEVICE_ID: u32 = 1;
+
+/// The id a re-registering Chat device takes: the lowest the account's other
+/// (non-Chat) devices leave free, [`REREGISTRATION_DEVICE_ID`] while it has
+/// none.
+pub fn reregistration_device_id(others: &[u32]) -> u32 {
+    (REREGISTRATION_DEVICE_ID..)
+        .find(|id| !others.contains(id))
+        .expect("an unbounded range")
+}
 /// A serialized libsignal `SignedPreKeyRecord` or `KyberPreKeyRecord` inside a
 /// sync (a Kyber1024 record is about 4.8 KiB).
 pub const MAX_PREKEY_RECORD_BYTES: usize = 16 * 1024;
@@ -153,79 +167,159 @@ fn check_registration_id(registration_id: u32) -> Result<(), String> {
 }
 
 // ---------------------------------------------------------------------------
-// The V2 manifest
+// The V3 manifest
 // ---------------------------------------------------------------------------
 
-/// One device in an [`AccountManifestV2`]: no identity of its own (the
-/// account has one), and the registration id the authority vouches for.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+/// What a device of the account is: a Chat app instance, an editing app
+/// instance (Drive, Office, Maps, Pass), or the CLI.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[serde(rename_all = "camelCase")]
+pub enum DeviceKind {
+    Chat,
+    Editor,
+    Cli,
+}
+
+impl DeviceKind {
+    /// The byte the manifest signs.
+    pub fn as_u8(self) -> u8 {
+        match self {
+            Self::Chat => 1,
+            Self::Editor => 2,
+            Self::Cli => 3,
+        }
+    }
+
+    /// The name the server's `devices.kind` column holds.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Chat => "chat",
+            Self::Editor => "editor",
+            Self::Cli => "cli",
+        }
+    }
+
+    pub fn parse(value: &str) -> Result<Self, String> {
+        match value {
+            "chat" => Ok(Self::Chat),
+            "editor" => Ok(Self::Editor),
+            "cli" => Ok(Self::Cli),
+            _ => Err(format!("unknown device kind {value:?}")),
+        }
+    }
+}
+
+/// What a device that takes Chat messages carries in the manifest: its
+/// suite and the registration id the authority vouches for.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct AccountManifestDeviceV2 {
-    pub device_id: u32,
+pub struct ChatDeviceKeysV3 {
     pub direct_chat_suite: DirectChatSuiteId,
     /// Bundles, `409`s and `410`s that disagree with it are refused.
     pub registration_id: u32,
-    /// A device's keys for the MLS groups Kutup no longer has: never
-    /// written now (a manifest signed now clears it on every device, so it
-    /// fades out with each re-sign), kept only so a manifest that carries it
-    /// still reads and verifies (its bytes are signed). Goes with the next
-    /// manifest format.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub mls: Option<LegacyMlsDeviceV1>,
 }
 
-/// What an [`AccountManifestDeviceV2`] carried for MLS: its ciphersuite (only
-/// `0x0003`), Ed25519 credential key and X25519 anonymous delivery key.
+/// One device in an [`AccountManifestV3`]: no identity of its own (the
+/// account has one), its Chat keys if it takes Chat, its frame key if it
+/// edits, and the sign-in it belongs to.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct LegacyMlsDeviceV1 {
-    pub suite: u16,
-    pub credential_public_key: String,
-    pub anonymous_delivery_public_key: String,
+pub struct AccountManifestDeviceV3 {
+    pub device_id: u32,
+    pub kind: DeviceKind,
+    /// Required on a `chat` device, optional on `cli`, never on `editor`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub chat: Option<ChatDeviceKeysV3>,
+    /// The device's Ed25519 key for collab frames (and later any other
+    /// per-device signature), canonical base64 of 32 bytes. Required on
+    /// `editor` and `cli`, optional on `chat`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub frame_key: Option<String>,
+    /// [`device_session_hash`] of the device's sign-in, lowercase hex: the
+    /// account's devices group by sign-in without naming it.
+    pub session: String,
 }
 
-/// The one MLS ciphersuite a [`LegacyMlsDeviceV1`] names (X25519,
-/// ChaCha20-Poly1305, SHA-256, Ed25519).
-const LEGACY_MLS_CIPHERSUITE: u16 = 0x0003;
+impl AccountManifestDeviceV3 {
+    /// A Chat device of `suite` and `registration_id`.
+    pub fn chat(
+        device_id: u32,
+        suite: DirectChatSuiteId,
+        registration_id: u32,
+        session: String,
+    ) -> Self {
+        Self {
+            device_id,
+            kind: DeviceKind::Chat,
+            chat: Some(ChatDeviceKeysV3 {
+                direct_chat_suite: suite,
+                registration_id,
+            }),
+            frame_key: None,
+            session,
+        }
+    }
 
-impl LegacyMlsDeviceV1 {
+    /// The id, the kind's required and allowed keys, and their encodings.
     pub fn validate(&self) -> Result<(), String> {
-        if self.suite != LEGACY_MLS_CIPHERSUITE {
-            return Err(format!("unknown MLS ciphersuite {:#06x}", self.suite));
+        check_device_id(self.device_id)?;
+        match (self.kind, &self.chat, &self.frame_key) {
+            (DeviceKind::Chat, None, _) => return Err("a chat device carries chat keys".into()),
+            (DeviceKind::Editor | DeviceKind::Cli, _, None) => {
+                return Err("an editor or CLI device carries a frame key".into())
+            }
+            (DeviceKind::Editor, Some(_), _) => {
+                return Err("an editor device carries no chat keys".into())
+            }
+            _ => {}
         }
-        let credential: [u8; 32] = decode_canonical_base64_exact(
-            "MLS credentialPublicKey",
-            &self.credential_public_key,
-            32,
-        )?
-        .try_into()
-        .map_err(|_| "MLS credentialPublicKey must be 32 bytes".to_string())?;
-        ed25519_dalek::VerifyingKey::from_bytes(&credential)
-            .map_err(|_| "MLS credentialPublicKey must be a valid Ed25519 public key")?;
-        let delivery = decode_canonical_base64_exact(
-            "MLS anonymousDeliveryPublicKey",
-            &self.anonymous_delivery_public_key,
-            32,
-        )?;
-        if delivery.iter().all(|byte| *byte == 0) {
-            return Err(
-                "MLS anonymousDeliveryPublicKey must not be the all-zero X25519 key".into(),
-            );
+        if let Some(chat) = &self.chat {
+            check_registration_id(chat.registration_id)?;
         }
+        if let Some(frame_key) = &self.frame_key {
+            decode_frame_key(frame_key)?;
+        }
+        decode_lower_hex_32("session", &self.session)?;
         Ok(())
     }
 }
 
-/// The account manifest with one libsignal identity for the account, signed
-/// by the same account authority as V1, under its own domain. Its chain
-/// starts again at sequence 1: the cutover clears every V1 manifest, and a
-/// client pins V2 sequences apart from what it pinned of V1.
+/// A device's frame key: canonical base64 of a valid Ed25519 public key.
+pub fn decode_frame_key(value: &str) -> Result<[u8; 32], String> {
+    let bytes: [u8; 32] = decode_canonical_base64_exact("frameKey", value, 32)?
+        .try_into()
+        .map_err(|_| "frameKey must be 32 bytes".to_string())?;
+    let key = ed25519_dalek::VerifyingKey::from_bytes(&bytes)
+        .map_err(|_| "frameKey must be a valid Ed25519 public key".to_string())?;
+    if key.is_weak() {
+        return Err("frameKey must not be a small-order Ed25519 point".into());
+    }
+    Ok(bytes)
+}
+
+/// A device entry's `session`: SHA-256 over its domain and the id of the
+/// device's root sign-in (an app's session's parent, or the session itself
+/// for the CLI and native apps), lowercase hex. The server works it out at
+/// registration; contacts see only the hash.
+pub fn device_session_hash(root_session_id: &[u8; 16]) -> String {
+    use sha2::{Digest, Sha256};
+    let mut hasher = Sha256::new();
+    hasher.update(b"kutup/account/device-session/v1\0");
+    hasher.update(root_session_id);
+    hex::encode(hasher.finalize())
+}
+
+/// The account manifest: the account's one libsignal identity and its one
+/// device list (Chat, editing and CLI devices), signed by the account
+/// authority. The wipe that brought V3 cleared every V2 manifest, so its
+/// chain starts at sequence 1.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct AccountManifestV2 {
+pub struct AccountManifestV3 {
     pub manifest_version: u16,
     #[cfg_attr(feature = "openapi", schema(value_type = AccountRefSchema))]
     pub account: AccountRef,
@@ -238,7 +332,7 @@ pub struct AccountManifestV2 {
     /// re-registration (the identity rule).
     pub identity_key: String,
     /// The identity key's signature (XEdDSA, as libsignal signs prekeys) over
-    /// [`AccountManifestV2::identity_binding_bytes`]: the identity vouches for
+    /// [`AccountManifestV3::identity_binding_bytes`]: the identity vouches for
     /// this authority, incarnation and account, as the authority vouches for
     /// the identity. Without it a server could list someone's real identity
     /// under an authority of its own, and comparing safety numbers (which
@@ -248,19 +342,19 @@ pub struct AccountManifestV2 {
     pub identity_binding: String,
     pub drive: AccountManifestDriveKeysV1,
     /// Strictly ordered by `deviceId`.
-    pub devices: Vec<AccountManifestDeviceV2>,
+    pub devices: Vec<AccountManifestDeviceV3>,
     pub issued_at: String,
     pub authority_key_id: String,
     pub self_authority_key: String,
     pub signature: String,
 }
 
-impl AccountManifestV2 {
+impl AccountManifestV3 {
     /// Deterministic, domain-separated encoding the authority signs. Devices
     /// MUST be strictly ordered by `deviceId`.
     pub fn signing_bytes(&self) -> Result<Vec<u8>, String> {
-        const DOMAIN: &[u8] = b"kutup/account-manifest/v2\0";
-        let mut out = Vec::with_capacity(320 + self.devices.len() * 16);
+        const DOMAIN: &[u8] = b"kutup/account/manifest/v3\0";
+        let mut out = Vec::with_capacity(320 + self.devices.len() * 80);
         out.extend_from_slice(DOMAIN);
         out.extend_from_slice(&self.manifest_version.to_be_bytes());
         out.extend_from_slice(&self.account.bytes());
@@ -302,19 +396,25 @@ impl AccountManifestV2 {
                 return Err("manifest devices must be strictly ordered by deviceId".into());
             }
             prior = Some(device.device_id);
+            device.validate()?;
             out.extend_from_slice(&device.device_id.to_be_bytes());
-            out.extend_from_slice(&device.registration_id.to_be_bytes());
-            out.extend_from_slice(&u16::from(device.direct_chat_suite).to_be_bytes());
-            match &device.mls {
-                Some(mls) => {
+            out.push(device.kind.as_u8());
+            match &device.chat {
+                Some(chat) => {
                     out.push(1);
-                    mls.validate()?;
-                    out.extend_from_slice(&mls.suite.to_be_bytes());
-                    push_string(&mut out, &mls.credential_public_key)?;
-                    push_string(&mut out, &mls.anonymous_delivery_public_key)?;
+                    out.extend_from_slice(&u16::from(chat.direct_chat_suite).to_be_bytes());
+                    out.extend_from_slice(&chat.registration_id.to_be_bytes());
                 }
                 None => out.push(0),
             }
+            match &device.frame_key {
+                Some(frame_key) => {
+                    out.push(1);
+                    out.extend_from_slice(&decode_frame_key(frame_key)?);
+                }
+                None => out.push(0),
+            }
+            out.extend_from_slice(&decode_lower_hex_32("session", &device.session)?);
         }
         Ok(out)
     }
@@ -343,11 +443,23 @@ impl AccountManifestV2 {
     }
 
     /// The listed device, if any.
-    pub fn device(&self, device_id: u32) -> Option<&AccountManifestDeviceV2> {
+    pub fn device(&self, device_id: u32) -> Option<&AccountManifestDeviceV3> {
         self.devices
             .binary_search_by_key(&device_id, |device| device.device_id)
             .ok()
             .map(|index| &self.devices[index])
+    }
+
+    /// The listed device's Chat keys, if it takes Chat.
+    pub fn chat_device(&self, device_id: u32) -> Option<&ChatDeviceKeysV3> {
+        self.device(device_id)?.chat.as_ref()
+    }
+
+    /// The devices that take Chat, by id, with their Chat keys.
+    pub fn chat_devices(&self) -> impl Iterator<Item = (u32, &ChatDeviceKeysV3)> {
+        self.devices
+            .iter()
+            .filter_map(|device| Some((device.device_id, device.chat.as_ref()?)))
     }
 
     /// Verify the authority binding, the chain shape, the device bounds and
@@ -357,7 +469,7 @@ impl AccountManifestV2 {
         use ed25519_dalek::{Signature, VerifyingKey};
         use sha2::{Digest, Sha256};
 
-        if self.manifest_version != ACCOUNT_MANIFEST_V2_VERSION {
+        if self.manifest_version != ACCOUNT_MANIFEST_V3_VERSION {
             return Err("unsupported account manifest version".into());
         }
         if self.sequence == 0 {
@@ -373,11 +485,7 @@ impl AccountManifestV2 {
             return Err("manifest issuedAt must be 1-64 bytes".into());
         }
         if self.devices.is_empty() || self.devices.len() > MAX_ACCOUNT_MANIFEST_DEVICES {
-            return Err("account manifest requires 1-10 active devices".into());
-        }
-        for device in &self.devices {
-            check_device_id(device.device_id)?;
-            check_registration_id(device.registration_id)?;
+            return Err("account manifest requires 1-127 devices".into());
         }
 
         let public =
@@ -411,7 +519,8 @@ impl AccountManifestV2 {
             .map_err(|_| "manifest signature must be 64 bytes".to_string())?;
         let verifying = VerifyingKey::from_bytes(&public)
             .map_err(|_| "selfAuthorityKey is not a valid Ed25519 key".to_string())?;
-        // signing_bytes checks the identity key, the Drive keys and the order.
+        // signing_bytes checks the identity key, the Drive keys, and each
+        // device and their order.
         verifying
             .verify_strict(&self.signing_bytes()?, &signature)
             .map_err(|_| "manifest signature is invalid".to_string())
@@ -423,7 +532,7 @@ impl AccountManifestV2 {
     /// starts the chain (sequence 1, no `previousHash`) or continues `head`
     /// (the same account, incarnation and authority, sequence + 1, and
     /// `previousHash` the head's [`Self::manifest_hash`]).
-    pub fn verify_successor(&self, head: Option<&AccountManifestV2>) -> Result<(), String> {
+    pub fn verify_successor(&self, head: Option<&AccountManifestV3>) -> Result<(), String> {
         self.verify()?;
         let Some(head) = head else {
             if self.sequence != 1 {
@@ -448,30 +557,29 @@ impl AccountManifestV2 {
     }
 }
 
-/// Successful publication of one signed V2 manifest.
+/// Successful publication of one signed V3 manifest.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[serde(rename_all = "camelCase")]
-pub struct AccountManifestPublicationV2 {
-    pub manifest: AccountManifestV2,
+pub struct AccountManifestPublicationV3 {
+    pub manifest: AccountManifestV3,
 }
 
-/// A bounded run of the V2 chain, by exact sequence cursor, as
-/// the V1 page it replaced.
+/// A bounded run of the V3 chain, by exact sequence cursor.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[serde(rename_all = "camelCase")]
-pub struct AccountManifestHistoryPageV2 {
+pub struct AccountManifestHistoryPageV3 {
     #[cfg_attr(feature = "openapi", schema(value_type = AccountRefSchema))]
     pub account: AccountRef,
     pub from_sequence: u64,
     pub to_sequence: u64,
-    pub manifests: Vec<AccountManifestV2>,
+    pub manifests: Vec<AccountManifestV3>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub next_sequence: Option<u64>,
 }
 
-impl AccountManifestHistoryPageV2 {
+impl AccountManifestHistoryPageV3 {
     /// Each manifest verifies, names the account and follows the one before
     /// it by sequence and hash.
     pub fn validate(&self) -> Result<(), String> {
@@ -542,7 +650,7 @@ pub struct AccountPreKeyBundlesResponse {
     pub account: AccountRef,
     pub identity_key: String,
     pub devices: Vec<DevicePreKeyBundleV2>,
-    pub manifest: AccountManifestV2,
+    pub manifest: AccountManifestV3,
 }
 
 impl AccountPreKeyBundlesResponse {
@@ -562,8 +670,8 @@ impl AccountPreKeyBundlesResponse {
         for bundle in &self.devices {
             let listed = self
                 .manifest
-                .device(bundle.device_id)
-                .ok_or("a bundle names a device the manifest does not list")?;
+                .chat_device(bundle.device_id)
+                .ok_or("a bundle names a device the manifest does not list for Chat")?;
             if listed.registration_id != bundle.registration_id
                 || listed.direct_chat_suite != bundle.suite
             {
@@ -581,13 +689,13 @@ impl AccountPreKeyBundlesResponse {
 // Device credentials
 // ---------------------------------------------------------------------------
 
-/// The `X-Kutup-Chat-Device` value: `<deviceId>.<credential>`, the credential
+/// The `X-Kutup-Device` value: `<deviceId>.<credential>`, the credential
 /// as canonical unpadded base64url.
 pub fn format_device_header(device_id: u32, credential: &[u8; DEVICE_CREDENTIAL_LEN]) -> String {
     format!("{device_id}.{}", b64url_encode(credential))
 }
 
-/// Parse an `X-Kutup-Chat-Device` value. The server then compares the
+/// Parse an `X-Kutup-Device` value. The server then compares the
 /// credential, in constant time, with the salted hash on that device's row of
 /// the JWT's account.
 pub fn parse_device_header(value: &str) -> Result<(u32, [u8; DEVICE_CREDENTIAL_LEN]), String> {
@@ -829,17 +937,17 @@ pub struct DistributedDeviceKeysV1 {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct AccountIdentityDistributionRequest {
     pub identity_key: String,
-    /// Every device the manifest lists, the sender included, strictly ordered
-    /// by `deviceId`.
+    /// Every Chat device the manifest lists, the sender included, strictly
+    /// ordered by `deviceId`.
     pub devices: Vec<DistributedDeviceKeysV1>,
-    /// One `accountIdentity` sync per other listed device, sealed on its
+    /// One `accountIdentity` sync per other listed Chat device, sealed on its
     /// current session; `registrationId` is the device's **current** one (a
     /// mismatch is `410`). Strictly ordered by `deviceId`.
     pub device_messages: Vec<OutgoingEnvelope>,
-    /// The account's next V2 manifest (sequence + 1, `previousHash` the
-    /// head's hash: [`AccountManifestV2::verify_successor`]): this identity,
-    /// exactly these devices with these registration ids.
-    pub manifest: AccountManifestV2,
+    /// The account's next V3 manifest (sequence + 1, `previousHash` the
+    /// head's hash: [`AccountManifestV3::verify_successor`]): this identity,
+    /// exactly these Chat devices with these registration ids.
+    pub manifest: AccountManifestV3,
 }
 
 /// Why a distribution (or a re-registration) is refused before the server
@@ -892,9 +1000,9 @@ fn compare_sets(want: &[u32], have: &[u32]) -> DeviceListMismatch {
 
 impl AccountIdentityDistributionRequest {
     /// Everything that needs no rows and no libsignal: the manifest verifies
-    /// and names this identity; `devices` names exactly the manifest's
+    /// and names this identity; `devices` names exactly the manifest's Chat
     /// devices with its registration ids; `deviceMessages` names exactly the
-    /// other listed devices. The server then checks the rows (`409` for a
+    /// other listed Chat devices. The server then checks the rows (`409` for a
     /// device not the account's, `410` for a stale registration id), the
     /// prekey signatures (`400 badSignature`), and that the manifest is the
     /// next sequence.
@@ -904,13 +1012,13 @@ impl AccountIdentityDistributionRequest {
         if self.identity_key != self.manifest.identity_key {
             return Err("the manifest lists another identity".into());
         }
-        if self.manifest.device(sender_device_id).is_none() {
+        if self.manifest.chat_device(sender_device_id).is_none() {
             return Err("the sending device must keep itself".into());
         }
         strictly_ordered(&self.devices, |d| d.device_id, "devices")?;
         strictly_ordered(&self.device_messages, |m| m.device_id, "deviceMessages")?;
 
-        let listed: Vec<u32> = self.manifest.devices.iter().map(|d| d.device_id).collect();
+        let listed: Vec<u32> = self.manifest.chat_devices().map(|(id, _)| id).collect();
         let keyed: Vec<u32> = self.devices.iter().map(|d| d.device_id).collect();
         let mismatch = compare_sets(&listed, &keyed);
         if !mismatch.missing_devices.is_empty() || !mismatch.extra_devices.is_empty() {
@@ -928,7 +1036,10 @@ impl AccountIdentityDistributionRequest {
         }
 
         for keys in &self.devices {
-            let listed = self.manifest.device(keys.device_id).expect("sets compared");
+            let listed = self
+                .manifest
+                .chat_device(keys.device_id)
+                .expect("sets compared");
             if listed.registration_id != keys.registration_id {
                 return Err("a device's registration id disagrees with the manifest".into());
             }
@@ -952,17 +1063,19 @@ pub enum DeviceRegistrationV1 {
     #[serde(rename_all = "camelCase")]
     Link { link_token: String },
     /// A re-registration: this device takes a new identity and every other
-    /// device of the account is dropped (Signal's `reclaimAccount`); the
+    /// Chat device of the account is dropped (Signal's `reclaimAccount`); the
     /// account's first Chat device registers this way too. The gate is the
-    /// account authority. `manifest` is the account's next V2 manifest,
-    /// listing this device alone as [`REREGISTRATION_DEVICE_ID`] with the
-    /// request's identity and registration id; it continues the chain
-    /// ([`AccountManifestV2::verify_successor`]): sequence 1 with no
-    /// `previousHash` when the account has no V2 manifest, otherwise the
-    /// head's sequence + 1 with `previousHash` the head's hash. The server
-    /// inserts the device as 1 in the transaction that drops the others and
+    /// account authority. `manifest` is the account's next V3 manifest,
+    /// listing this device as its one Chat device, as
+    /// [`reregistration_device_id`] of the others, with the request's
+    /// identity and registration id, and the head's other (non-Chat) entries
+    /// unchanged; it continues the chain
+    /// ([`AccountManifestV3::verify_successor`]): sequence 1 with no
+    /// `previousHash` when the account has no manifest, otherwise the head's
+    /// sequence + 1 with `previousHash` the head's hash. The server inserts
+    /// the device in the transaction that drops the other Chat devices and
     /// publishes the manifest.
-    Reregistration { manifest: Box<AccountManifestV2> },
+    Reregistration { manifest: Box<AccountManifestV3> },
 }
 
 /// The link token is single-use, but wiped all the same once the request is
@@ -998,7 +1111,7 @@ pub struct RegisterChatDeviceRequestV2 {
     pub name: String,
     /// The device's credential (Signal's per-device password): canonical
     /// unpadded base64url of 32 random bytes; the server stores a salted hash
-    /// and the device sends it in [`CHAT_DEVICE_HEADER`].
+    /// and the device sends it in [`DEVICE_HEADER`].
     pub credential: String,
     pub registration: DeviceRegistrationV1,
 }
@@ -1007,7 +1120,8 @@ impl RegisterChatDeviceRequestV2 {
     /// Everything that needs no rows and no libsignal: the identity's and
     /// the credential's encodings, the registration id, the link token's
     /// encoding, and a re-registration manifest that verifies and lists this
-    /// device alone with this identity, registration id and suite. The
+    /// device as its one Chat device, with this identity, registration id
+    /// and suite. The
     /// server then checks the prekey signatures (`400 badSignature`), the
     /// token, and the manifest's place in the chain.
     pub fn validate(&self) -> Result<(), String> {
@@ -1027,15 +1141,33 @@ impl RegisterChatDeviceRequestV2 {
                 if manifest.identity_key != self.identity_key {
                     return Err("the manifest lists another identity".into());
                 }
-                match manifest.devices.as_slice() {
+                let chat: Vec<&AccountManifestDeviceV3> = manifest
+                    .devices
+                    .iter()
+                    .filter(|device| device.chat.is_some())
+                    .collect();
+                let others: Vec<u32> = manifest
+                    .devices
+                    .iter()
+                    .filter(|device| device.chat.is_none())
+                    .map(|device| device.device_id)
+                    .collect();
+                match chat.as_slice() {
                     [device]
-                        if device.device_id == REREGISTRATION_DEVICE_ID
-                            && device.registration_id == self.registration_id
-                            && device.direct_chat_suite == self.suite =>
+                        if device.kind == DeviceKind::Chat
+                            && device.device_id == reregistration_device_id(&others)
+                            && device.chat
+                                == Some(ChatDeviceKeysV3 {
+                                    direct_chat_suite: self.suite,
+                                    registration_id: self.registration_id,
+                                }) =>
                     {
                         Ok(())
                     }
-                    _ => Err("a re-registration manifest lists this device alone".into()),
+                    _ => Err(
+                        "a re-registration manifest lists this device as its one Chat device"
+                            .into(),
+                    ),
                 }
             }
         }

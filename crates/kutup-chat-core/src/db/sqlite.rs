@@ -1497,7 +1497,7 @@ mod tests {
     }
 
     /// A signed manifest of a test account, its authority and identity from `seed`.
-    fn test_manifest(seed: u8) -> kutup_chat_proto::AccountManifestV2 {
+    fn test_manifest(seed: u8) -> kutup_chat_proto::AccountManifestV3 {
         crate::AccountAuthority::derive(&[seed; 32])
             .unwrap()
             .sign_manifest(
@@ -1513,12 +1513,12 @@ mod tests {
                         private,
                     )
                 },
-                vec![kutup_chat_proto::AccountManifestDeviceV2 {
-                    device_id: 1,
-                    direct_chat_suite: kutup_chat_proto::DirectChatSuiteId::PqxdhTripleRatchetV1,
-                    registration_id: 7,
-                    mls: None,
-                }],
+                vec![kutup_chat_proto::AccountManifestDeviceV3::chat(
+                    1,
+                    kutup_chat_proto::DirectChatSuiteId::PqxdhTripleRatchetV1,
+                    7,
+                    "51".repeat(32),
+                )],
                 "2026-07-29T00:00:00Z",
             )
             .unwrap()
@@ -1527,13 +1527,13 @@ mod tests {
     #[test]
     fn quarantined_replacement_and_both_incarnation_histories_round_trip_atomically() {
         use futures_executor::block_on;
-        use kutup_chat_proto::AccountManifestV2;
+        use kutup_chat_proto::AccountManifestV3;
 
-        fn manifest(seed: u8) -> AccountManifestV2 {
+        fn manifest(seed: u8) -> AccountManifestV3 {
             test_manifest(seed)
         }
 
-        fn pin(manifest: &AccountManifestV2, trust: AuthorityTrust) -> ManifestTrust {
+        fn pin(manifest: &AccountManifestV3, trust: AuthorityTrust) -> ManifestTrust {
             ManifestTrust {
                 peer: manifest.account.to_string(),
                 account: manifest.account.to_string(),

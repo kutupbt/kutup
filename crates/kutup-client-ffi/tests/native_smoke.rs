@@ -2,7 +2,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
 use async_trait::async_trait;
-use kutup_chat_proto::{AccountManifestPublicationV2, AccountManifestV2};
+use kutup_chat_proto::{AccountManifestPublicationV3, AccountManifestV3};
 use kutup_client_ffi::{
     open_native_chat_client, ChatHttpClient, ChatHttpMethod, ChatHttpRequest, ChatHttpResponse,
     KutupChatError,
@@ -76,8 +76,8 @@ impl ChatHttpClient for MockHttp {
                 self.authenticated.fetch_add(1, Ordering::Relaxed);
                 let body_json = request.body_json.expect("manifest body");
                 *self.manifest.lock().unwrap() = Some(body_json.clone());
-                let manifest: AccountManifestV2 = serde_json::from_str(&body_json).unwrap();
-                let response = AccountManifestPublicationV2 { manifest };
+                let manifest: AccountManifestV3 = serde_json::from_str(&body_json).unwrap();
+                let response = AccountManifestPublicationV3 { manifest };
                 Ok(ChatHttpResponse {
                     status: 200,
                     body_json: serde_json::to_string(&response).unwrap(),
@@ -85,7 +85,7 @@ impl ChatHttpClient for MockHttp {
             }
             (ChatHttpMethod::Get, "/chat/accounts/00000000-0000-4000-8000-2bd806c97f0e/keys?syncDeviceId=1&server=chat.test") => {
                 let registration = self.registration.lock().unwrap().clone().unwrap();
-                let manifest: AccountManifestV2 = serde_json::from_str(
+                let manifest: AccountManifestV3 = serde_json::from_str(
                     self.manifest
                         .lock()
                         .unwrap()

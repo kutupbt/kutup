@@ -24,7 +24,7 @@ use kutup_chat_proto::group_route::{
     GroupResponseStatusV1, GroupResponseV1, GroupStateAnswerV1,
 };
 use kutup_chat_proto::{
-    AccountManifestHistoryPageV2, AccountManifestPublicationV2, AccountManifestV2,
+    AccountManifestHistoryPageV3, AccountManifestPublicationV3, AccountManifestV3,
     AccountPreKeyBundlesResponse, DeliveredEnvelope, DeviceListMismatch, DevicePreKeyBundle,
     DirectChatSuiteId, EnvelopeType, MailboxPage, OwnChatProfileResponse, PutChatProfileRequest,
     RegisterChatDeviceRequestV2, SealedMessageSubmissionV1, SealedSenderRootV1,
@@ -50,6 +50,9 @@ use crate::transport::{ChatTransport, GroupGatewayAnswer, GroupRelayOutcome, Sen
 use crate::{AccountAuthority, ChatContent, SqliteChatDb};
 
 pub(crate) const SERVER: &str = "example.test";
+/// The `session` hash the test server gives every device.
+pub(crate) const DEVICE_SESSION: &str =
+    "5151515151515151515151515151515151515151515151515151515151515151";
 use base64::engine::general_purpose::URL_SAFE_NO_PAD as STANDARD_NO_PAD_URL;
 pub(crate) const ISSUED_AT: &str = "2026-10-18T00:00:00Z";
 
@@ -101,7 +104,7 @@ impl HostedDevice {
 #[derive(Default)]
 struct HostedAccount {
     devices: BTreeMap<u32, HostedDevice>,
-    manifests: Vec<AccountManifestV2>,
+    manifests: Vec<AccountManifestV3>,
     profile: Option<PutChatProfileRequest>,
 }
 
@@ -1352,7 +1355,11 @@ impl ChatTransport for Client {
         self.world.bundles(account, Some(current_device_id))
     }
 
-    async fn fetch_manifest(&self, account: &str) -> Result<Option<AccountManifestV2>> {
+    async fn fetch_device_session(&self) -> Result<String> {
+        Ok(DEVICE_SESSION.into())
+    }
+
+    async fn fetch_manifest(&self, account: &str) -> Result<Option<AccountManifestV3>> {
         if self.world.manifests_down.borrow().contains(account) {
             return Err(ChatError::Transport(
                 "the manifest can't be fetched now".into(),
@@ -1372,7 +1379,7 @@ impl ChatTransport for Client {
         _from_sequence: u64,
         to_sequence: u64,
         page_from_sequence: u64,
-    ) -> Result<AccountManifestHistoryPageV2> {
+    ) -> Result<AccountManifestHistoryPageV3> {
         let manifests = self
             .world
             .accounts
@@ -1387,7 +1394,7 @@ impl ChatTransport for Client {
                     .collect()
             })
             .unwrap_or_default();
-        Ok(AccountManifestHistoryPageV2 {
+        Ok(AccountManifestHistoryPageV3 {
             account: account.parse().unwrap(),
             from_sequence: page_from_sequence,
             to_sequence,
@@ -1398,8 +1405,8 @@ impl ChatTransport for Client {
 
     async fn publish_manifest(
         &self,
-        manifest: &AccountManifestV2,
-    ) -> Result<AccountManifestPublicationV2> {
+        manifest: &AccountManifestV3,
+    ) -> Result<AccountManifestPublicationV3> {
         let mut accounts = self.world.accounts.borrow_mut();
         let hosted = accounts.entry(self.account.clone()).or_default();
         if hosted
@@ -1417,7 +1424,7 @@ impl ChatTransport for Client {
             hosted.devices.retain(|id, _| listed.contains(id));
             hosted.manifests.push(manifest.clone());
         }
-        Ok(AccountManifestPublicationV2 {
+        Ok(AccountManifestPublicationV3 {
             manifest: hosted.manifests.last().cloned().unwrap(),
         })
     }

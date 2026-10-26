@@ -872,6 +872,8 @@
         "chatLinkTokensPerAccountHint": "Bir hesabın aynı anda kullanılmamış tutabileceği bağlama belirteci sayısı.",
         "chatProvisionBodyBytes": "En büyük bağlama iletisi (bayt)",
         "chatProvisionBodyBytesHint": "Bağlanan cihaza iletilen en büyük bağlama iletisi, en çok 64 KiB.",
+        "devicesPerAccount": "Hesap başına cihaz",
+        "devicesPerAccountHint": "Bir hesabın toplamda sahip olabileceği uygulama kurulumu sayısı (Sohbet, Ofis, Drive, komut satırı), 1 ile 127 arası.",
         "chatMaxActiveDevices": "Hesap başına Sohbet cihazı",
         "chatMaxActiveDevicesHint": "Bir hesabın sahip olabileceği Sohbet kurulumu sayısı, 1 ile 10 arası.",
         "chatProvisioningTicketSeconds": "Bağlama bağlantısı bileti (saniye)",

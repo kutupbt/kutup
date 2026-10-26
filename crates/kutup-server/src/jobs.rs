@@ -210,7 +210,7 @@ pub async fn chat_maintenance_once(
         // device the account's authority still lists
         // (docs/plans/account-identity-key.md).
         match sqlx::query_as::<_, (Uuid, i32)>(
-            "UPDATE chat_devices SET expired_at = now()
+            "UPDATE devices SET expired_at = now()
              WHERE expired_at IS NULL
                AND COALESCE(last_seen_at, created_at) < now() - ($1 * interval '1 day')
              RETURNING user_id, device_id",
@@ -1359,7 +1359,7 @@ mod tests {
         let direct_id: uuid::Uuid = sqlx::query_scalar(
             "SELECT m.id
                FROM chat_mailbox m
-               JOIN chat_devices d ON d.user_id = m.recipient_user_id
+               JOIN devices d ON d.user_id = m.recipient_user_id
                                   AND d.device_id = m.recipient_device_id
               ORDER BY m.server_ts DESC LIMIT 1",
         )
@@ -1418,7 +1418,7 @@ mod tests {
             .await
             .unwrap();
         let user_id: uuid::Uuid =
-            sqlx::query_scalar("SELECT user_id FROM chat_devices ORDER BY created_at DESC LIMIT 1")
+            sqlx::query_scalar("SELECT user_id FROM devices ORDER BY created_at DESC LIMIT 1")
                 .fetch_one(&pool)
                 .await
                 .expect("live Chat user fixture");

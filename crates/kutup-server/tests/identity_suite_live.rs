@@ -129,7 +129,7 @@ fn a_suite_1_account_upgrades_once_and_is_shared_with_only_after() {
 /// tell from a real old account.
 mod legacy_suite1 {
     use super::*;
-    use kutup_chat_proto::{AccountIdentitySuiteId, AccountManifestV2};
+    use kutup_chat_proto::{AccountIdentitySuiteId, AccountManifestV3};
     use kutup_crypto::account_envelope::{self, AccountEnvelopePurpose};
     use kutup_crypto::account_ref::AccountRef;
     use kutup_crypto::identity::{incarnation_id_from_authority_public, AccountIdentityKeysV1};
@@ -214,9 +214,9 @@ mod legacy_suite1 {
         .await
         .unwrap();
         let mut previous: Option<String> = None;
-        let mut last: Option<(i64, AccountManifestV2, String)> = None;
+        let mut last: Option<(i64, AccountManifestV3, String)> = None;
         for (version, value) in history {
-            let mut manifest: AccountManifestV2 = serde_json::from_value(value).unwrap();
+            let mut manifest: AccountManifestV3 = serde_json::from_value(value).unwrap();
             manifest.drive.suite = AccountIdentitySuiteId::X25519Ed25519V1;
             manifest.drive.hpke_public_key = b64(&drive_public);
             if manifest.sequence > 1 {
@@ -318,7 +318,7 @@ fn a_suite_1_account_with_chat_manifests_publishes_its_next_one_after_the_upgrad
     // Manifest 1 with the re-registration, then 2.
     let device = chat.reregister(&c, &base);
     chat.publish(&c, &base, &device);
-    let publish = |chat: &ChatAccount, manifest: &kutup_chat_proto::AccountManifestV2| {
+    let publish = |chat: &ChatAccount, manifest: &kutup_chat_proto::AccountManifestV3| {
         chat.post_manifest(&c, &base, &device, manifest)
     };
 

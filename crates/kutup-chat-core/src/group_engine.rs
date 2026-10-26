@@ -1159,10 +1159,14 @@ mod tests {
             unreachable!()
         }
         // The account's first device: no manifest yet.
+        async fn fetch_device_session(&self) -> Result<String> {
+            Ok("51".repeat(32))
+        }
+
         async fn fetch_manifest(
             &self,
             _: &str,
-        ) -> Result<Option<kutup_chat_proto::AccountManifestV2>> {
+        ) -> Result<Option<kutup_chat_proto::AccountManifestV3>> {
             Ok(None)
         }
         async fn send(&self, _: &str, _: &SendMessagesRequest) -> Result<SendOutcome> {

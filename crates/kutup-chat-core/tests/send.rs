@@ -15,13 +15,16 @@ use kutup_chat_core::{
     ContactState, Engine, Result, SendOutcome, Session, SqliteChatDb,
 };
 use kutup_chat_proto::{
-    AccountManifestDeviceV2, AccountManifestHistoryPageV2, AccountManifestPublicationV2,
-    AccountManifestV2, AccountPreKeyBundlesResponse, DeliveredEnvelope, DeviceListMismatch,
+    AccountManifestDeviceV3, AccountManifestHistoryPageV3, AccountManifestPublicationV3,
+    AccountManifestV3, AccountPreKeyBundlesResponse, DeliveredEnvelope, DeviceListMismatch,
     DevicePreKeyBundle, DirectChatSuiteId, MailboxPage, OwnChatProfileResponse,
     PutChatProfileRequest, ReceiptState, RegisterChatDeviceRequestV2, SendMessagesRequest,
 };
 use rand::rngs::OsRng;
 use rand::{CryptoRng, Rng, TryRngCore as _};
+
+/// The `session` hash test servers give every device.
+const DEVICE_SESSION: &str = "5151515151515151515151515151515151515151515151515151515151515151";
 
 // ----- test helpers -----
 
@@ -60,9 +63,9 @@ fn sign(
     sequence: u64,
     previous_hash: Option<String>,
     identity_key: String,
-    devices: Vec<AccountManifestDeviceV2>,
+    devices: Vec<AccountManifestDeviceV3>,
     issued_at: &str,
-) -> AccountManifestV2 {
+) -> AccountManifestV3 {
     let binding = binding_for(&identity_key, authority);
     authority
         .sign_manifest_with_binding(
@@ -211,11 +214,11 @@ fn wrap(env: &kutup_chat_proto::OutgoingEnvelope, sender: &str) -> DeliveredEnve
 struct MockServer {
     /// Each `fetch_bundles` pops the front; the last entry repeats.
     fetch_script: RefCell<Vec<Vec<DevicePreKeyBundle>>>,
-    manifest_script: RefCell<Vec<Option<AccountManifestV2>>>,
+    manifest_script: RefCell<Vec<Option<AccountManifestV3>>>,
     sync_fetch_script: RefCell<Vec<Vec<DevicePreKeyBundle>>>,
-    sync_manifest_script: RefCell<Vec<Option<AccountManifestV2>>>,
-    own_manifest: RefCell<Option<AccountManifestV2>>,
-    manifest_history: RefCell<Vec<AccountManifestV2>>,
+    sync_manifest_script: RefCell<Vec<Option<AccountManifestV3>>>,
+    own_manifest: RefCell<Option<AccountManifestV3>>,
+    manifest_history: RefCell<Vec<AccountManifestV3>>,
     active: RefCell<Vec<(u32, u32)>>,
     sync_active: RefCell<Vec<(u32, u32)>>,
     fail_sends: RefCell<u32>,
@@ -231,7 +234,7 @@ struct MockServer {
     /// The manifests the server's own authority keeps for an account whose
     /// test scripts none: a new linked sequence whenever its devices or its
     /// identity change.
-    synthesized: RefCell<std::collections::BTreeMap<String, Vec<AccountManifestV2>>>,
+    synthesized: RefCell<std::collections::BTreeMap<String, Vec<AccountManifestV3>>>,
 }
 
 impl MockServer {
@@ -241,7 +244,7 @@ impl MockServer {
         &self,
         account: &str,
         devices: Vec<DevicePreKeyBundle>,
-        manifest: Option<AccountManifestV2>,
+        manifest: Option<AccountManifestV3>,
         current: Option<(u32, u32)>,
     ) -> AccountPreKeyBundlesResponse {
         let manifest = manifest.unwrap_or_else(|| self.synthesize(account, &devices, current));
@@ -258,39 +261,41 @@ impl MockServer {
         account: &str,
         devices: &[DevicePreKeyBundle],
         current: Option<(u32, u32)>,
-    ) -> AccountManifestV2 {
+    ) -> AccountManifestV3 {
         let identity = devices
             .first()
             .map(|bundle| bundle.identity_key.clone())
             .or_else(|| identity_of(account))
             .expect("a test account has an identity");
-        let mut listed: Vec<AccountManifestDeviceV2> = devices
+        let mut listed: Vec<AccountManifestDeviceV3> = devices
             .iter()
-            .map(|bundle| AccountManifestDeviceV2 {
-                device_id: bundle.device_id,
-                direct_chat_suite: DirectChatSuiteId::PqxdhTripleRatchetV1,
-                registration_id: bundle.registration_id,
-                mls: None,
+            .map(|bundle| {
+                AccountManifestDeviceV3::chat(
+                    bundle.device_id,
+                    DirectChatSuiteId::PqxdhTripleRatchetV1,
+                    bundle.registration_id,
+                    "51".repeat(32),
+                )
             })
             .collect();
         if let Some((device_id, registration_id)) = current {
             if !listed.iter().any(|device| device.device_id == device_id) {
-                listed.push(AccountManifestDeviceV2 {
+                listed.push(AccountManifestDeviceV3::chat(
                     device_id,
-                    direct_chat_suite: DirectChatSuiteId::PqxdhTripleRatchetV1,
+                    DirectChatSuiteId::PqxdhTripleRatchetV1,
                     registration_id,
-                    mls: None,
-                });
+                    "51".repeat(32),
+                ));
             }
         }
         // An account the test serves no device of still has its one.
         if listed.is_empty() {
-            listed.push(AccountManifestDeviceV2 {
-                device_id: 1,
-                direct_chat_suite: DirectChatSuiteId::PqxdhTripleRatchetV1,
-                registration_id: 1,
-                mls: None,
-            });
+            listed.push(AccountManifestDeviceV3::chat(
+                1,
+                DirectChatSuiteId::PqxdhTripleRatchetV1,
+                1,
+                "51".repeat(32),
+            ));
         }
         listed.sort_by_key(|device| device.device_id);
         let mut chains = self.synthesized.borrow_mut();
@@ -325,10 +330,10 @@ impl MockServer {
     fn set_sync_active(&self, active: Vec<(u32, u32)>) {
         *self.sync_active.borrow_mut() = active;
     }
-    fn script_manifests(&self, manifests: Vec<Option<AccountManifestV2>>) {
+    fn script_manifests(&self, manifests: Vec<Option<AccountManifestV3>>) {
         *self.manifest_script.borrow_mut() = manifests;
     }
-    fn script_sync_manifests(&self, manifests: Vec<Option<AccountManifestV2>>) {
+    fn script_sync_manifests(&self, manifests: Vec<Option<AccountManifestV3>>) {
         *self.sync_manifest_script.borrow_mut() = manifests;
     }
     /// The envelopes of the most recent accepted send.
@@ -420,7 +425,11 @@ impl ChatTransport for MockServer {
         Ok(self.respond(username, devices, manifest, Some(current)))
     }
 
-    async fn fetch_manifest(&self, _username: &str) -> Result<Option<AccountManifestV2>> {
+    async fn fetch_device_session(&self) -> Result<String> {
+        Ok(DEVICE_SESSION.into())
+    }
+
+    async fn fetch_manifest(&self, _username: &str) -> Result<Option<AccountManifestV3>> {
         Ok(self.own_manifest.borrow().clone())
     }
 
@@ -430,7 +439,7 @@ impl ChatTransport for MockServer {
         _from_sequence: u64,
         to_sequence: u64,
         page_from_sequence: u64,
-    ) -> Result<AccountManifestHistoryPageV2> {
+    ) -> Result<AccountManifestHistoryPageV3> {
         let synthesized = self
             .synthesized
             .borrow()
@@ -447,7 +456,7 @@ impl ChatTransport for MockServer {
             })
             .cloned()
             .collect::<Vec<_>>();
-        Ok(AccountManifestHistoryPageV2 {
+        Ok(AccountManifestHistoryPageV3 {
             account: manifests
                 .first()
                 .map(|manifest| manifest.account.clone())
@@ -461,8 +470,8 @@ impl ChatTransport for MockServer {
 
     async fn publish_manifest(
         &self,
-        manifest: &AccountManifestV2,
-    ) -> Result<AccountManifestPublicationV2> {
+        manifest: &AccountManifestV3,
+    ) -> Result<AccountManifestPublicationV3> {
         *self.own_manifest.borrow_mut() = Some(manifest.clone());
         let mut history = self.manifest_history.borrow_mut();
         if history
@@ -471,7 +480,7 @@ impl ChatTransport for MockServer {
         {
             history.push(manifest.clone());
         }
-        Ok(AccountManifestPublicationV2 {
+        Ok(AccountManifestPublicationV3 {
             manifest: manifest.clone(),
         })
     }
@@ -657,7 +666,7 @@ fn decrypt_for<R: Rng + CryptoRng>(
     block_on(dst.decrypt(from, &wrap(env, &from.name()), rng)).unwrap()
 }
 
-fn signed_manifest(account: &str, bundle: &DevicePreKeyBundle) -> AccountManifestV2 {
+fn signed_manifest(account: &str, bundle: &DevicePreKeyBundle) -> AccountManifestV3 {
     signed_manifest_with_authority(
         account,
         bundle,
@@ -669,19 +678,19 @@ fn signed_manifest_with_authority(
     account: &str,
     bundle: &DevicePreKeyBundle,
     authority: &AccountAuthority,
-) -> AccountManifestV2 {
+) -> AccountManifestV3 {
     sign(
         authority,
         account,
         1,
         None,
         bundle.identity_key.clone(),
-        vec![AccountManifestDeviceV2 {
-            device_id: bundle.device_id,
-            direct_chat_suite: DirectChatSuiteId::PqxdhTripleRatchetV1,
-            registration_id: bundle.registration_id,
-            mls: None,
-        }],
+        vec![AccountManifestDeviceV3::chat(
+            bundle.device_id,
+            DirectChatSuiteId::PqxdhTripleRatchetV1,
+            bundle.registration_id,
+            "51".repeat(32),
+        )],
         "2026-07-15T12:00:00Z",
     )
 }
@@ -706,12 +715,12 @@ fn local_devices_extend_only_the_prior_account_signed_manifest() {
         1,
         None,
         first_session.account_identity_key(),
-        vec![AccountManifestDeviceV2 {
-            device_id: 1,
-            direct_chat_suite: DirectChatSuiteId::PqxdhTripleRatchetV1,
-            registration_id: reg_id(&first_session),
-            mls: None,
-        }],
+        vec![AccountManifestDeviceV3::chat(
+            1,
+            DirectChatSuiteId::PqxdhTripleRatchetV1,
+            reg_id(&first_session),
+            "51".repeat(32),
+        )],
         "2026-07-15T12:00:00Z",
     );
     *server.own_manifest.borrow_mut() = Some(registered.clone());
@@ -737,7 +746,8 @@ fn local_devices_extend_only_the_prior_account_signed_manifest() {
     assert_eq!(v2.devices.len(), 2);
     assert_eq!(v2.devices[0], v1.devices[0]);
     assert_eq!(v2.devices[1].device_id, 2);
-    assert!(v2.devices[1].mls.is_none());
+    // A new entry's sign-in, as the server says.
+    assert_eq!(v2.devices[1].session, DEVICE_SESSION);
 
     let v3 =
         block_on(second.revoke_manifest_device(&authority, 1, "2026-07-15T12:02:00Z")).unwrap();
@@ -759,65 +769,6 @@ fn local_devices_extend_only_the_prior_account_signed_manifest() {
     ));
 }
 
-/// A manifest whose device entry still carries the keys of the MLS groups
-/// Kutup no longer has reads and verifies; the device's next manifest drops
-/// them.
-#[test]
-fn a_legacy_mls_entry_verifies_and_the_next_manifest_drops_it() {
-    use base64::Engine as _;
-    let mut rng = test_rng();
-    let server = Rc::new(MockServer::default());
-    let authority = AccountAuthority::derive(&[13; 32]).unwrap();
-    let account = "aci:00000000-0000-4000-8000-2bd806c97f0e@example.test";
-    let session = device(account, 1, &mut rng);
-    let b64 = |bytes: &[u8]| base64::engine::general_purpose::STANDARD.encode(bytes);
-    let legacy = kutup_chat_proto::LegacyMlsDeviceV1 {
-        suite: 0x0003,
-        credential_public_key: b64(ed25519_dalek::SigningKey::from_bytes(&[5; 32])
-            .verifying_key()
-            .as_bytes()),
-        anonymous_delivery_public_key: b64(&[6; 32]),
-    };
-    // A manifest from before the MLS removal (a re-sign now clears the field).
-    let identity_key = session.account_identity_key();
-    let binding = binding_for(&identity_key, &authority);
-    let registered = authority
-        .sign_legacy_manifest_for_testing(
-            account.parse().unwrap(),
-            1,
-            None,
-            identity_key,
-            binding,
-            vec![AccountManifestDeviceV2 {
-                device_id: 1,
-                direct_chat_suite: DirectChatSuiteId::PqxdhTripleRatchetV1,
-                registration_id: reg_id(&session),
-                mls: Some(legacy),
-            }],
-            "2026-07-15T12:00:00Z",
-        )
-        .unwrap();
-    assert!(registered.devices[0].mls.is_some());
-    let read: AccountManifestV2 =
-        serde_json::from_str(&serde_json::to_string(&registered).unwrap()).unwrap();
-    assert_eq!(read, registered);
-    kutup_chat_core::verify_manifest(&read).unwrap();
-    *server.own_manifest.borrow_mut() = Some(registered.clone());
-    server
-        .manifest_history
-        .borrow_mut()
-        .push(registered.clone());
-
-    let mut engine = Engine::new(session, server);
-    let next = block_on(engine.sync_own_manifest(&authority, "2026-07-15T12:00:30Z")).unwrap();
-    assert_eq!(next.sequence, 2);
-    assert!(next.devices[0].mls.is_none());
-    assert_eq!(
-        next.previous_hash.as_deref(),
-        Some(registered.manifest_hash().unwrap().as_str())
-    );
-}
-
 #[test]
 fn a_manifest_from_before_x_wing_moves_on_to_the_accounts_new_drive_keys() {
     use base64::Engine as _;
@@ -828,7 +779,7 @@ fn a_manifest_from_before_x_wing_moves_on_to_the_accounts_new_drive_keys() {
     let account = "aci:00000000-0000-4000-8000-2bd806c97f0e@example.test";
     let db = Rc::new(SqliteChatDb::open_in_memory().unwrap());
     let session = device_in(db.clone(), account, 1, &mut rng);
-    let local = session.manifest_device();
+    let local = session.manifest_device(DEVICE_SESSION.into());
     // The account's manifest from before its upgrade: this very device, and
     // the old X25519 Drive key (suite 1).
     let mut before = sign(
@@ -1226,12 +1177,12 @@ fn a_forged_authority_over_a_real_identity_is_never_verified_by_a_scan() {
     let forged_authority = AccountAuthority::derive(&[66; 32]).unwrap();
     let bob = device(bob_account, 1, &mut rng);
     let bob_bundle = bundle_of(&bob, 1);
-    let devices = vec![AccountManifestDeviceV2 {
-        device_id: 1,
-        direct_chat_suite: DirectChatSuiteId::PqxdhTripleRatchetV1,
-        registration_id: bob_bundle.registration_id,
-        mls: None,
-    }];
+    let devices = vec![AccountManifestDeviceV3::chat(
+        1,
+        DirectChatSuiteId::PqxdhTripleRatchetV1,
+        bob_bundle.registration_id,
+        "51".repeat(32),
+    )];
     let forged = forged_authority
         .sign_manifest_with_binding(
             bob_account.parse().unwrap(),

@@ -23,6 +23,9 @@ use kutup_chat_proto::{
 use rand::rngs::OsRng;
 use rand::{CryptoRng, Rng, TryRngCore as _};
 
+/// The `session` hash test servers give every device.
+const DEVICE_SESSION: &str = "5151515151515151515151515151515151515151515151515151515151515151";
+
 // ----- helpers -----
 
 fn test_rng() -> impl Rng + CryptoRng {
@@ -106,11 +109,13 @@ fn published(user: &str) -> AccountPreKeyBundlesResponse {
             binding,
             devices
                 .iter()
-                .map(|bundle| kutup_chat_proto::AccountManifestDeviceV2 {
-                    device_id: bundle.device_id,
-                    direct_chat_suite: kutup_chat_proto::DirectChatSuiteId::PqxdhTripleRatchetV1,
-                    registration_id: bundle.registration_id,
-                    mls: None,
+                .map(|bundle| {
+                    kutup_chat_proto::AccountManifestDeviceV3::chat(
+                        bundle.device_id,
+                        kutup_chat_proto::DirectChatSuiteId::PqxdhTripleRatchetV1,
+                        bundle.registration_id,
+                        "51".repeat(32),
+                    )
                 })
                 .collect(),
             "2026-10-15T10:00:00Z",
@@ -195,9 +200,9 @@ struct Mailbox {
     acked: RefCell<Vec<String>>,
     /// The manifest this account's device published (its own, signed with
     /// its own authority).
-    own_manifest: RefCell<Option<kutup_chat_proto::AccountManifestV2>>,
+    own_manifest: RefCell<Option<kutup_chat_proto::AccountManifestV3>>,
     /// Every manifest of this account's chain, as the server keeps them.
-    own_history: RefCell<Vec<kutup_chat_proto::AccountManifestV2>>,
+    own_history: RefCell<Vec<kutup_chat_proto::AccountManifestV3>>,
     /// The accounts whose current manifest was asked for, in order.
     manifest_fetches: RefCell<Vec<String>>,
 }
@@ -228,20 +233,24 @@ impl ChatTransport for Mailbox {
         // What this server claims about the account's own devices.
         Ok(published(account))
     }
+    async fn fetch_device_session(&self) -> Result<String> {
+        Ok(DEVICE_SESSION.into())
+    }
+
     async fn fetch_manifest(
         &self,
         account: &str,
-    ) -> Result<Option<kutup_chat_proto::AccountManifestV2>> {
+    ) -> Result<Option<kutup_chat_proto::AccountManifestV3>> {
         self.manifest_fetches.borrow_mut().push(account.to_string());
         Ok(self.own_manifest.borrow().clone())
     }
     async fn publish_manifest(
         &self,
-        manifest: &kutup_chat_proto::AccountManifestV2,
-    ) -> Result<kutup_chat_proto::AccountManifestPublicationV2> {
+        manifest: &kutup_chat_proto::AccountManifestV3,
+    ) -> Result<kutup_chat_proto::AccountManifestPublicationV3> {
         *self.own_manifest.borrow_mut() = Some(manifest.clone());
         self.own_history.borrow_mut().push(manifest.clone());
-        Ok(kutup_chat_proto::AccountManifestPublicationV2 {
+        Ok(kutup_chat_proto::AccountManifestPublicationV3 {
             manifest: manifest.clone(),
         })
     }
@@ -251,7 +260,7 @@ impl ChatTransport for Mailbox {
         _from_sequence: u64,
         to_sequence: u64,
         page_from_sequence: u64,
-    ) -> Result<kutup_chat_proto::AccountManifestHistoryPageV2> {
+    ) -> Result<kutup_chat_proto::AccountManifestHistoryPageV3> {
         let manifests: Vec<_> = self
             .own_history
             .borrow()
@@ -261,7 +270,7 @@ impl ChatTransport for Mailbox {
             })
             .cloned()
             .collect();
-        Ok(kutup_chat_proto::AccountManifestHistoryPageV2 {
+        Ok(kutup_chat_proto::AccountManifestHistoryPageV3 {
             account: account.parse().unwrap(),
             from_sequence: page_from_sequence,
             to_sequence,
@@ -1233,12 +1242,12 @@ fn an_own_account_message_is_taken_only_from_a_device_of_the_own_verified_manife
             None,
             bundle.identity_key.clone(),
             bob_binding.clone(),
-            vec![kutup_chat_proto::AccountManifestDeviceV2 {
-                device_id: 1,
-                direct_chat_suite: kutup_chat_proto::DirectChatSuiteId::PqxdhTripleRatchetV1,
-                registration_id: bundle.registration_id,
-                mls: None,
-            }],
+            vec![kutup_chat_proto::AccountManifestDeviceV3::chat(
+                1,
+                kutup_chat_proto::DirectChatSuiteId::PqxdhTripleRatchetV1,
+                bundle.registration_id,
+                "51".repeat(32),
+            )],
             "2026-10-16T10:00:00Z",
         )
         .unwrap();

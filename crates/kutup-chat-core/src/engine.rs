@@ -31,7 +31,7 @@ use crate::session::{
 };
 use crate::transport::{ChatTransport, SendOutcome};
 use kutup_chat_proto::{
-    AccountManifestV2, AccountRef, ChatContent, ContactControlBody, ContactState, OutgoingEnvelope,
+    AccountManifestV3, AccountRef, ChatContent, ContactControlBody, ContactState, OutgoingEnvelope,
     PreKeyCountResponse, SealedMessageSubmissionV1, SealedOutgoingEnvelopeV1, SendMessagesRequest,
 };
 
@@ -1170,11 +1170,10 @@ impl Engine {
         &mut self,
         authority: &AccountAuthority,
         issued_at: impl Into<String>,
-    ) -> Result<AccountManifestV2> {
+    ) -> Result<AccountManifestV3> {
         let transport = Rc::clone(&self.transport);
         let current = transport.fetch_manifest(self.session.user()).await?;
         let canonical_self = self.self_account()?;
-        let local = self.session.manifest_device();
         let issued_at = issued_at.into();
         let candidate = match current {
             // The account's first manifest comes with its re-registration
@@ -1207,21 +1206,30 @@ impl Engine {
                     ));
                 }
                 let mut devices = current.devices.clone();
-                match devices.binary_search_by_key(&local.device_id, |device| device.device_id) {
+                let device_id = self.session.device_id();
+                let listed = devices.binary_search_by_key(&device_id, |device| device.device_id);
+                // Listed: its sign-in stays the entry's. New: the server
+                // says which sign-in this is.
+                let session = match listed {
+                    Ok(index) => devices[index].session.clone(),
+                    Err(_) => transport.fetch_device_session().await?,
+                };
+                let local = self.session.manifest_device(session);
+                match listed {
                     // Unchanged, unless the account's Drive keys moved on (an
                     // upgrade to X-Wing, docs/plans/pq-shares.md): then the
-                    // next manifest carries them. A device entry still holding
-                    // legacy MLS keys is signed again too, which drops them.
+                    // next manifest carries them.
                     Ok(index)
-                        if devices[index].registration_id == local.registration_id
-                            && devices[index].mls == local.mls
+                        if devices[index].kind == local.kind
+                            && devices[index].chat == local.chat
                             && current.drive == authority.drive_keys() =>
                     {
                         current
                     }
                     location => {
                         match location {
-                            Ok(index) => devices[index] = local,
+                            // Its Chat keys renewed; a frame key it holds stays.
+                            Ok(index) => devices[index].chat = local.chat,
                             Err(index) => devices.insert(index, local),
                         }
                         let next_sequence = current.sequence.checked_add(1).ok_or_else(|| {
@@ -1272,7 +1280,7 @@ impl Engine {
         authority: &AccountAuthority,
         device_id: u32,
         issued_at: impl Into<String>,
-    ) -> Result<AccountManifestV2> {
+    ) -> Result<AccountManifestV3> {
         if device_id == self.session.device_id() {
             return Err(ChatError::Invalid(
                 "the current device cannot revoke itself from the account manifest".into(),
@@ -3122,8 +3130,8 @@ impl Engine {
     pub(crate) async fn accept_current_manifest_evidence(
         &mut self,
         account: &str,
-        manifest: &AccountManifestV2,
-    ) -> Result<AccountManifestV2> {
+        manifest: &AccountManifestV3,
+    ) -> Result<AccountManifestV3> {
         let prior_manifest = self.session.manifest_trust(account).await?;
         let manifest_trust =
             match verify_manifest_evidence(account, manifest, prior_manifest.as_ref()) {
@@ -3158,7 +3166,7 @@ impl Engine {
     async fn recover_manifest_history(
         &self,
         peer: &str,
-        pending_manifest: &AccountManifestV2,
+        pending_manifest: &AccountManifestV3,
         prior_trust: Option<&crate::ManifestTrust>,
     ) -> Result<(
         crate::ManifestTrust,
@@ -3205,7 +3213,7 @@ impl Engine {
     async fn quarantine_manifest_failure(
         &mut self,
         peer: &str,
-        pending_manifest: Option<&AccountManifestV2>,
+        pending_manifest: Option<&AccountManifestV3>,
         prior_trust: Option<&crate::ManifestTrust>,
         error: &ChatError,
     ) -> Result<()> {

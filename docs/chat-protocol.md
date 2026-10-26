@@ -103,9 +103,11 @@ HKDF-SHA256(
 Purposes are self-authority Ed25519, Drive HPKE X25519 and Drive named-share
 Ed25519. Keys are never reused across purposes.
 
-An account may have 1-10 active devices. The site setting
-`chatMaxActiveDevices` may lower the local limit but cannot exceed ten. Device wire IDs remain 1-127 and are not
-reused as an assertion of active-device capacity.
+An account may have 1-10 active Chat devices. The site setting
+`chatMaxActiveDevices` may lower that limit but cannot exceed ten. Its
+devices of every kind (Chat, editing apps, the CLI) share one id space
+(1-127) and are at most `devicesPerAccount` (default 32); see
+[`plans/one-device-list.md`](plans/one-device-list.md).
 
 ### 4.1 One identity per account, and web installations
 
@@ -114,7 +116,7 @@ Chat device and shared by all of them, as Signal's ACI identity
 (docs/plans/account-identity-key.md). Each device has its own registration id,
 prekeys (signed by the account identity key), sessions and a device
 credential: 32 random bytes the server keeps salted and hashed, sent as
-`X-Kutup-Chat-Device: <deviceId>.<credential>` beside the session token on
+`X-Kutup-Device: <deviceId>.<credential>` beside the session token on
 every device-bound call, never on the anonymous routes.
 
 A browser installation is a device, not merely a login session. IndexedDB or
@@ -151,7 +153,7 @@ The backup-specific trust boundary and residual fresh-device rollback risk are
 normative in
 [`chat-backup-security-threat-model.md`](chat-backup-security-threat-model.md).
 
-`AccountManifestV2` contains:
+`AccountManifestV3` contains:
 
 - canonical account and account-identity suite;
 - authority key ID and public key;
@@ -160,14 +162,16 @@ normative in
 - account-scoped Drive public keys;
 - sequence and exact predecessor hash;
 - issued-at value;
-- 1-10 strictly ordered device records: device id, Direct Chat suite,
-  registration id (a legacy `mls` entry from the removed MLS groups still
-  reads and verifies, and is never written);
+- 1-127 strictly ordered device records, one per device of the account of
+  every kind: device id; kind (`chat`, `editor`, `cli`); for a device that
+  takes Chat, its Direct Chat suite and registration id; for one that edits,
+  its Ed25519 frame key; and the hash of its sign-in (`session`). Messages go
+  to the devices with Chat keys only;
 - Ed25519 signature by the account self-authority.
 
 A bundle, or a server's `409`/`410`, that disagrees with the verified
 manifest's registration ids is refused, never answered with a new session.
-`AccountManifestV2::verify_successor` is the one chain check: sequence 1 with
+`AccountManifestV3::verify_successor` is the one chain check: sequence 1 with
 no predecessor, or the head's sequence + 1 linked to its hash under the same
 account, incarnation and authority.
 

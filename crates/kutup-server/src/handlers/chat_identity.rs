@@ -1,6 +1,6 @@
 //! One libsignal identity per account, as Signal's ACI
 //! (docs/plans/account-identity-key.md): device credentials, the account
-//! identity row, prekey signature checks and the V2 manifest rules the Chat
+//! identity row, prekey signature checks and the V3 manifest rules the Chat
 //! handlers share.
 //!
 //! Signal's server checks a device's credential on every call and a signed
@@ -12,9 +12,9 @@ use base64::engine::general_purpose::STANDARD;
 use base64::Engine as _;
 use kutup_chat_proto::{
     decode_identity_key, parse_device_header, repeated_use_keys_digest,
-    AccountIdentityDistributionRequest, AccountManifestPublicationV2, AccountManifestV2,
+    AccountIdentityDistributionRequest, AccountManifestPublicationV3, AccountManifestV3,
     ChatKeysCheckRequest, DeviceListMismatch, DistributionError, EcPreKey, KemPreKey,
-    CHAT_DEVICE_HEADER, DEVICE_CREDENTIAL_LEN,
+    DEVICE_CREDENTIAL_LEN, DEVICE_HEADER,
 };
 use kutup_crypto::primitives::{Hasher, Suite};
 use sqlx::{Postgres, Transaction};
@@ -44,50 +44,71 @@ pub(crate) fn new_credential(credential: &[u8; DEVICE_CREDENTIAL_LEN]) -> ([u8; 
 }
 
 fn unauthorized() -> AppError {
-    AppError::unauthorized("this Chat device's credential is missing or wrong")
+    AppError::unauthorized("this device's credential is missing or wrong")
         .with_details(serde_json::json!({ "code": "deviceCredential" }))
 }
 
-/// The device the `X-Kutup-Chat-Device` header names, if its credential is
-/// that device's (a live row of the JWT's account): `401 deviceCredential`
-/// otherwise, the same answer for a wrong credential, an unknown device and
-/// an expired one. Marks the device seen.
+/// Which devices a call accepts.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum DeviceKinds {
+    /// A device that takes Chat (its row has Chat keys): every Chat route.
+    Chat,
+    /// Any device of the account: the manifest it lists itself in.
+    Any,
+}
+
+/// The Chat device the `X-Kutup-Device` header names, if its credential is
+/// that device's (a live row of the JWT's account with Chat keys): `401
+/// deviceCredential` otherwise, the same answer for a wrong credential, an
+/// unknown device, an expired one and one that doesn't take Chat (an
+/// editor's credential opens no Chat route). Marks the device seen.
 pub(crate) async fn authenticated_device(
     pool: &sqlx::PgPool,
     headers: &HeaderMap,
     user_id: Uuid,
 ) -> AppResult<i32> {
-    let device_id = credential_holds(pool, headers, user_id).await?;
-    sqlx::query(
-        "UPDATE chat_devices SET last_seen_at = now() WHERE user_id = $1 AND device_id = $2",
-    )
-    .bind(user_id)
-    .bind(device_id)
-    .execute(pool)
-    .await?;
+    authenticated_device_of(pool, headers, user_id, DeviceKinds::Chat).await
+}
+
+/// As [`authenticated_device`], for the devices `kinds` names.
+pub(crate) async fn authenticated_device_of(
+    pool: &sqlx::PgPool,
+    headers: &HeaderMap,
+    user_id: Uuid,
+    kinds: DeviceKinds,
+) -> AppResult<i32> {
+    let device_id = credential_holds_of(pool, headers, user_id, kinds).await?;
+    sqlx::query("UPDATE devices SET last_seen_at = now() WHERE user_id = $1 AND device_id = $2")
+        .bind(user_id)
+        .bind(device_id)
+        .execute(pool)
+        .await?;
     Ok(device_id)
 }
 
-/// The device the header names, if its credential still holds, read through
-/// `executor` (a transaction that took the account's lock re-checks it: a
-/// re-registration or a revoke may have landed in between).
-pub(crate) async fn credential_holds<'e>(
+/// The device of `kinds` the header names, if its credential still holds,
+/// read through `executor` (a transaction that took the account's lock
+/// re-checks it: a re-registration or a revoke may have landed in between).
+pub(crate) async fn credential_holds_of<'e>(
     executor: impl sqlx::PgExecutor<'e>,
     headers: &HeaderMap,
     user_id: Uuid,
+    kinds: DeviceKinds,
 ) -> AppResult<i32> {
     let value = headers
-        .get(CHAT_DEVICE_HEADER)
+        .get(DEVICE_HEADER)
         .and_then(|value| value.to_str().ok())
         .ok_or_else(unauthorized)?;
     let (device_id, credential) = parse_device_header(value).map_err(|_| unauthorized())?;
     let device_id = device_id as i32;
     let stored: Option<(Vec<u8>, Vec<u8>)> = sqlx::query_as(
-        "SELECT credential_salt, credential_hash FROM chat_devices
-          WHERE user_id = $1 AND device_id = $2 AND expired_at IS NULL",
+        "SELECT credential_salt, credential_hash FROM devices
+          WHERE user_id = $1 AND device_id = $2 AND expired_at IS NULL
+            AND ($3 OR suite IS NOT NULL)",
     )
     .bind(user_id)
     .bind(device_id)
+    .bind(kinds == DeviceKinds::Any)
     .fetch_optional(executor)
     .await?;
     let Some((salt, hash)) = stored else {
@@ -129,17 +150,17 @@ pub(crate) async fn account_identity(
 
 /// The devices a peer's send must address (`$1` the recipient account): the
 /// live rows whose id, registration id and suite the account's signed manifest
-/// lists. A device registered but not yet listed (a link before its
+/// lists as a Chat device. A device registered but not yet listed (a link before its
 /// manifest) isn't one: peers would refuse it, as they check bundles and
 /// mismatches against the manifest. The account's own syncs use its rows.
 pub(crate) const LISTED_DEVICES: &str = "SELECT d.device_id, d.registration_id
-       FROM chat_devices d
+       FROM devices d
        JOIN chat_device_manifests m ON m.user_id = d.user_id
        JOIN LATERAL jsonb_array_elements(m.manifest -> 'devices') listed ON true
       WHERE d.user_id = $1 AND d.expired_at IS NULL
         AND (listed ->> 'deviceId')::int = d.device_id
-        AND (listed ->> 'registrationId')::bigint = d.registration_id
-        AND (listed ->> 'directChatSuite')::int = d.suite";
+        AND (listed -> 'chat' ->> 'registrationId')::bigint = d.registration_id
+        AND (listed -> 'chat' ->> 'directChatSuite')::int = d.suite";
 
 fn bad_signature(what: &str) -> AppError {
     AppError::bad_request(format!("{what} is not signed by the account identity"))
@@ -197,7 +218,7 @@ pub(crate) fn verify_prekey_signatures(
 /// (this authority, incarnation and account). The authority's signature
 /// alone would let anyone list someone's identity under an authority of
 /// their own.
-pub(crate) fn identity_binding_holds(manifest: &AccountManifestV2) -> bool {
+pub(crate) fn identity_binding_holds(manifest: &AccountManifestV3) -> bool {
     let Ok(bytes) = manifest.identity_binding_bytes() else {
         return false;
     };
@@ -213,7 +234,7 @@ pub(crate) fn identity_binding_holds(manifest: &AccountManifestV2) -> bool {
 
 /// The manifest's own checks, its identity binding and an `issuedAt` not
 /// from the future.
-pub(crate) fn validate_manifest_v2(manifest: &AccountManifestV2) -> AppResult<()> {
+pub(crate) fn validate_manifest(manifest: &AccountManifestV3) -> AppResult<()> {
     if manifest.sequence > i64::MAX as u64 {
         return Err(AppError::bad_request("manifest sequence is too large"));
     }
@@ -266,7 +287,7 @@ pub async fn check_keys(
         sqlx::query_as(
             "SELECT identity_key, signed_pre_key_id, signed_pre_key,
                     last_resort_kyber_pre_key_id, last_resort_kyber_pre_key
-               FROM chat_devices WHERE user_id = $1 AND device_id = $2",
+               FROM devices WHERE user_id = $1 AND device_id = $2",
         )
         .bind(user_id)
         .bind(device_id)
@@ -307,7 +328,7 @@ pub async fn check_keys(
     operation_id = "distributeChatAccountIdentity",
     request_body = AccountIdentityDistributionRequest,
     responses(
-        (status = 200, description = "Distributed", body = AccountManifestPublicationV2),
+        (status = 200, description = "Distributed", body = AccountManifestPublicationV3),
         (status = 400, description = "Malformed, or a key not signed by the identity"),
         (status = 401, description = "Missing or wrong device credential"),
         (status = 409, description = "Devices missing or extra, or a manifest conflict", body = DeviceListMismatch),
@@ -338,7 +359,7 @@ pub async fn distribute_identity(
             return Ok((axum::http::StatusCode::CONFLICT, Json(mismatch)).into_response())
         }
     }
-    validate_manifest_v2(&request.manifest)?;
+    validate_manifest(&request.manifest)?;
     let identity = identity_public_key(&request.identity_key)?;
     for keys in &request.devices {
         verify_prekey_signatures(
@@ -384,14 +405,14 @@ pub async fn distribute_identity(
         )
     {
         tx.rollback().await?;
-        return Ok(Json(AccountManifestPublicationV2 {
+        return Ok(Json(AccountManifestPublicationV3 {
             manifest: request.manifest,
         })
         .into_response());
     }
     let rows: Vec<(i32, i64)> = sqlx::query_as(
-        "SELECT device_id, registration_id FROM chat_devices
-          WHERE user_id = $1 AND expired_at IS NULL",
+        "SELECT device_id, registration_id FROM devices
+          WHERE user_id = $1 AND expired_at IS NULL AND suite IS NOT NULL",
     )
     .bind(user_id)
     .fetch_all(&mut *tx)
@@ -431,7 +452,7 @@ pub async fn distribute_identity(
         return Ok((axum::http::StatusCode::GONE, Json(mismatch)).into_response());
     }
 
-    let stored = crate::handlers::chat::store_manifest_v2(
+    let stored = crate::handlers::chat::store_manifest(
         &mut tx,
         &state,
         user_id,
@@ -445,11 +466,22 @@ pub async fn distribute_identity(
         return Err(AppError::conflict("this manifest is already the account's")
             .with_details(serde_json::json!({ "code": "manifestConflict" })));
     }
+    // Every other listed device is a row of the account, as listed.
+    crate::account_devices::check_listed_rows(
+        &mut tx,
+        user_id,
+        &request.manifest,
+        None,
+        crate::account_devices::ChatKeys::Set,
+        crate::account_devices::Backing::Live,
+    )
+    .await?;
     // The devices left out (a lost or stolen one) go now.
     let kept: Vec<i32> = request
+        .manifest
         .devices
         .iter()
-        .map(|keys| keys.device_id as i32)
+        .map(|device| device.device_id as i32)
         .collect();
     // Link tokens die with the device set they were asked under.
     sqlx::query("DELETE FROM chat_link_tokens WHERE user_id = $1")
@@ -457,7 +489,7 @@ pub async fn distribute_identity(
         .execute(&mut *tx)
         .await?;
     let dropped: Vec<i32> = sqlx::query_scalar(
-        "DELETE FROM chat_devices WHERE user_id = $1 AND NOT (device_id = ANY($2))
+        "DELETE FROM devices WHERE user_id = $1 AND NOT (device_id = ANY($2))
          RETURNING device_id",
     )
     .bind(user_id)
@@ -466,7 +498,7 @@ pub async fn distribute_identity(
     .await?;
     for keys in &request.devices {
         sqlx::query(
-            "UPDATE chat_devices SET identity_key = $3, registration_id = $4,
+            "UPDATE devices SET identity_key = $3, registration_id = $4,
                  signed_pre_key_id = $5, signed_pre_key = $6, signed_pre_key_signature = $7,
                  last_resort_kyber_pre_key_id = $8, last_resort_kyber_pre_key = $9,
                  last_resort_kyber_pre_key_signature = $10
@@ -525,7 +557,7 @@ pub async fn distribute_identity(
         state.chat_hub.close_device(user_id, device_id);
     }
     state.chat_hub.notify_devices_changed(user_id);
-    Ok(Json(AccountManifestPublicationV2 {
+    Ok(Json(AccountManifestPublicationV3 {
         manifest: request.manifest,
     })
     .into_response())

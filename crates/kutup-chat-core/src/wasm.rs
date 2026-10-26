@@ -11,7 +11,7 @@ use async_trait::async_trait;
 use base64::engine::general_purpose::STANDARD;
 use base64::Engine as _;
 use kutup_chat_proto::{
-    AccountManifestHistoryPageV2, AccountManifestPublicationV2, AccountManifestV2,
+    AccountManifestHistoryPageV3, AccountManifestPublicationV3, AccountManifestV3,
     AccountPreKeyBundlesResponse, ChatProfileResponse, DeviceListMismatch, MailboxPage,
     OwnChatProfileResponse, PreKeyCountResponse, PutChatProfileRequest,
     RegisterChatDeviceRequestV2, RegisterChatDeviceResponse, ReplenishKeysRequest,
@@ -33,7 +33,7 @@ use crate::{
 const TRANSPORT_TYPES: &str = r#"
 export interface KutupChatTransport {
   registerDevice(request: unknown): Promise<unknown>;
-  /** This device's id and credential, for the `X-Kutup-Chat-Device` header on every device-bound call from now on. */
+  /** This device's id and credential, for the `X-Kutup-Device` header on every device-bound call from now on. */
   setDeviceAuth(deviceId: number, credential: string): void;
   createLinkToken(): Promise<unknown>;
   /** `false` is the server's 404: the new device's socket is gone. */
@@ -44,6 +44,7 @@ export interface KutupChatTransport {
   >;
   fetchBundles(account: string): Promise<unknown>;
   fetchSyncBundles(account: string, currentDeviceId: number): Promise<unknown>;
+  fetchDeviceSession(): Promise<string>;
   fetchManifest(account: string): Promise<unknown | null>;
   fetchManifestHistory(account: string, fromSequence: string, toSequence: string, pageFromSequence: string): Promise<unknown>;
   fetchSealedSenderPolicy(domain: string): Promise<unknown>;
@@ -189,6 +190,11 @@ extern "C" {
         this: &JsChatTransport,
         account: &str,
         current_device_id: u32,
+    ) -> std::result::Result<JsValue, JsValue>;
+
+    #[wasm_bindgen(method, catch, js_name = fetchDeviceSession)]
+    async fn js_fetch_device_session(
+        this: &JsChatTransport,
     ) -> std::result::Result<JsValue, JsValue>;
 
     #[wasm_bindgen(method, catch, js_name = fetchManifest)]
@@ -664,7 +670,16 @@ impl ChatTransport for BrowserTransport {
         )
     }
 
-    async fn fetch_manifest(&self, account: &str) -> Result<Option<AccountManifestV2>> {
+    async fn fetch_device_session(&self) -> Result<String> {
+        from_transport(
+            self.js
+                .js_fetch_device_session()
+                .await
+                .map_err(transport_error)?,
+        )
+    }
+
+    async fn fetch_manifest(&self, account: &str) -> Result<Option<AccountManifestV3>> {
         from_transport(
             self.js
                 .js_fetch_manifest(account)
@@ -679,7 +694,7 @@ impl ChatTransport for BrowserTransport {
         from_sequence: u64,
         to_sequence: u64,
         page_from_sequence: u64,
-    ) -> Result<AccountManifestHistoryPageV2> {
+    ) -> Result<AccountManifestHistoryPageV3> {
         from_transport(
             self.js
                 .js_fetch_manifest_history(
@@ -732,8 +747,8 @@ impl ChatTransport for BrowserTransport {
 
     async fn publish_manifest(
         &self,
-        manifest: &AccountManifestV2,
-    ) -> Result<AccountManifestPublicationV2> {
+        manifest: &AccountManifestV3,
+    ) -> Result<AccountManifestPublicationV3> {
         from_transport(
             self.js
                 .js_publish_manifest(to_transport(manifest)?)

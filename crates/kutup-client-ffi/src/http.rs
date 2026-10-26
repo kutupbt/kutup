@@ -6,8 +6,8 @@ use kutup_chat_core::{
     SendOutcome,
 };
 use kutup_chat_proto::{
-    AccountIdentityDistributionRequest, AccountManifestHistoryPageV2, AccountManifestPublicationV2,
-    AccountManifestV2, AccountPreKeyBundlesResponse, ChatLinkTokenResponse, DeviceListMismatch,
+    AccountIdentityDistributionRequest, AccountManifestHistoryPageV3, AccountManifestPublicationV3,
+    AccountManifestV3, AccountPreKeyBundlesResponse, ChatLinkTokenResponse, DeviceListMismatch,
     MailboxPage, PreKeyCountResponse, ProvisioningRelayRequest, RegisterChatDeviceRequestV2,
     RegisterChatDeviceResponse, ReplenishKeysRequest, SendMessagesRequest,
 };
@@ -127,7 +127,19 @@ impl ChatTransport for NativeTransport {
         .await
     }
 
-    async fn fetch_manifest(&self, account: &str) -> CoreResult<Option<AccountManifestV2>> {
+    async fn fetch_device_session(&self) -> CoreResult<String> {
+        #[derive(serde::Deserialize)]
+        struct DeviceSession {
+            session: String,
+        }
+        let response = self
+            .request(ChatHttpMethod::Get, "/device-session".into(), None)
+            .await?;
+        ensure_success(&response)?;
+        decode::<DeviceSession>(&response.body_json).map(|body| body.session)
+    }
+
+    async fn fetch_manifest(&self, account: &str) -> CoreResult<Option<AccountManifestV3>> {
         let response = self
             .request(
                 ChatHttpMethod::Get,
@@ -198,8 +210,8 @@ impl ChatTransport for NativeTransport {
 
     async fn publish_manifest(
         &self,
-        manifest: &AccountManifestV2,
-    ) -> CoreResult<AccountManifestPublicationV2> {
+        manifest: &AccountManifestV3,
+    ) -> CoreResult<AccountManifestPublicationV3> {
         self.json(
             ChatHttpMethod::Post,
             "/chat/manifest".into(),
@@ -214,7 +226,7 @@ impl ChatTransport for NativeTransport {
         from_sequence: u64,
         to_sequence: u64,
         page_from_sequence: u64,
-    ) -> CoreResult<AccountManifestHistoryPageV2> {
+    ) -> CoreResult<AccountManifestHistoryPageV3> {
         self.json::<(), _>(
             ChatHttpMethod::Get,
             account_path(account, &format!("/manifest-history?fromSequence={from_sequence}&toSequence={to_sequence}&pageFromSequence={page_from_sequence}"))?,

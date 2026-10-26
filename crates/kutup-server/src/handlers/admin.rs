@@ -2281,7 +2281,7 @@ pub async fn wipe_user(
         .bind(target)
         .execute(&state.pool)
         .await?;
-    sqlx::query("DELETE FROM chat_devices WHERE user_id = $1")
+    sqlx::query("DELETE FROM devices WHERE user_id = $1")
         .bind(target)
         .execute(&state.pool)
         .await?;

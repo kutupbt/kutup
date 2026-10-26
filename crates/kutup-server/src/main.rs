@@ -6,6 +6,7 @@
 //! groups (auth, files, collab, federation, …) are added in `build_router` as each
 //! handler slice lands.
 
+mod account_devices;
 mod account_heads;
 mod account_ids;
 mod account_names;
@@ -1425,6 +1426,10 @@ fn build_router(state: AppState) -> Router {
         .route(
             "/api/chat/backup/media/:mediaId",
             get(handlers::chat_backup::download_media),
+        )
+        .route(
+            "/api/device-session",
+            get(account_devices::get_device_session),
         )
         .route("/api/chat/manifest", post(chat::publish_manifest))
         .route(

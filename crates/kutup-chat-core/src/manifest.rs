@@ -5,9 +5,9 @@
 use base64::engine::general_purpose::STANDARD;
 use base64::Engine as _;
 use kutup_chat_proto::{
-    AccountIdentitySuiteId, AccountManifestDeviceV2, AccountManifestDriveKeysV1,
-    AccountManifestHistoryPageV2, AccountManifestV2, AccountPreKeyBundlesResponse, AccountRef,
-    DevicePreKeyBundle, ACCOUNT_MANIFEST_V2_VERSION,
+    AccountIdentitySuiteId, AccountManifestDeviceV3, AccountManifestDriveKeysV1,
+    AccountManifestHistoryPageV3, AccountManifestV3, AccountPreKeyBundlesResponse, AccountRef,
+    DevicePreKeyBundle, ACCOUNT_MANIFEST_V3_VERSION,
 };
 use serde::Serialize;
 
@@ -266,9 +266,9 @@ impl AccountAuthority {
         sequence: u64,
         previous_hash: Option<String>,
         identity: &libsignal_protocol::IdentityKeyPair,
-        devices: Vec<AccountManifestDeviceV2>,
+        devices: Vec<AccountManifestDeviceV3>,
         issued_at: impl Into<String>,
-    ) -> Result<AccountManifestV2> {
+    ) -> Result<AccountManifestV3> {
         let identity_binding = self.identity_binding(&account, identity)?;
         self.sign_manifest_with_binding(
             account,
@@ -294,65 +294,12 @@ impl AccountAuthority {
         previous_hash: Option<String>,
         identity_key: String,
         identity_binding: String,
-        mut devices: Vec<AccountManifestDeviceV2>,
+        mut devices: Vec<AccountManifestDeviceV3>,
         issued_at: impl Into<String>,
-    ) -> Result<AccountManifestV2> {
-        // Kutup has no MLS groups any more: a manifest signed now carries no
-        // device's MLS keys, so the legacy field fades out with each re-sign.
-        for device in &mut devices {
-            device.mls = None;
-        }
-        self.sign_devices_as_given(
-            account,
-            sequence,
-            previous_hash,
-            identity_key,
-            identity_binding,
-            devices,
-            issued_at,
-        )
-    }
-
-    /// A manifest signed as one from before the MLS removal: its devices'
-    /// legacy MLS keys kept, as an account may still hold it. Only for tests
-    /// of how the next manifest drops them.
-    #[doc(hidden)]
-    #[allow(clippy::too_many_arguments)]
-    pub fn sign_legacy_manifest_for_testing(
-        &self,
-        account: AccountRef,
-        sequence: u64,
-        previous_hash: Option<String>,
-        identity_key: String,
-        identity_binding: String,
-        devices: Vec<AccountManifestDeviceV2>,
-        issued_at: impl Into<String>,
-    ) -> Result<AccountManifestV2> {
-        self.sign_devices_as_given(
-            account,
-            sequence,
-            previous_hash,
-            identity_key,
-            identity_binding,
-            devices,
-            issued_at,
-        )
-    }
-
-    #[allow(clippy::too_many_arguments)]
-    fn sign_devices_as_given(
-        &self,
-        account: AccountRef,
-        sequence: u64,
-        previous_hash: Option<String>,
-        identity_key: String,
-        identity_binding: String,
-        mut devices: Vec<AccountManifestDeviceV2>,
-        issued_at: impl Into<String>,
-    ) -> Result<AccountManifestV2> {
+    ) -> Result<AccountManifestV3> {
         devices.sort_by_key(|device| device.device_id);
-        let mut manifest = AccountManifestV2 {
-            manifest_version: ACCOUNT_MANIFEST_V2_VERSION,
+        let mut manifest = AccountManifestV3 {
+            manifest_version: ACCOUNT_MANIFEST_V3_VERSION,
             account,
             incarnation_id: self.incarnation_id(),
             sequence,
@@ -377,13 +324,13 @@ impl AccountAuthority {
 /// identity key signed this authority, incarnation and account. A server
 /// listing someone's identity under an authority of its own has no such
 /// signature.
-pub fn verify_manifest(manifest: &AccountManifestV2) -> Result<()> {
+pub fn verify_manifest(manifest: &AccountManifestV3) -> Result<()> {
     manifest.verify().map_err(ChatError::Protocol)?;
     verify_identity_binding(manifest).map_err(|error| ChatError::Protocol(error.to_string()))
 }
 
 /// The identity binding alone (libsignal's XEdDSA check), as a trust error.
-pub(crate) fn verify_identity_binding(manifest: &AccountManifestV2) -> Result<()> {
+pub(crate) fn verify_identity_binding(manifest: &AccountManifestV3) -> Result<()> {
     let refused = || ChatError::Trust("the manifest's identity binding is invalid".into());
     let bytes = manifest.identity_binding_bytes().map_err(|_| refused())?;
     let key = STANDARD
@@ -443,7 +390,7 @@ pub(crate) fn verify_bundle_trust(
 /// retrieves and atomically commits every missing complete sequence.
 pub(crate) fn verify_manifest_evidence(
     expected_peer: &str,
-    manifest: &AccountManifestV2,
+    manifest: &AccountManifestV3,
     prior: Option<&ManifestTrust>,
 ) -> Result<ManifestTrust> {
     verify_manifest_trust(expected_peer, manifest, prior)
@@ -451,7 +398,7 @@ pub(crate) fn verify_manifest_evidence(
 
 fn verify_manifest_trust(
     expected_peer: &str,
-    manifest: &AccountManifestV2,
+    manifest: &AccountManifestV3,
     prior: Option<&ManifestTrust>,
 ) -> Result<ManifestTrust> {
     manifest.verify().map_err(ChatError::Trust)?;
@@ -560,9 +507,9 @@ fn verify_manifest_trust(
 /// authority signature and predecessor hash on every entry are authoritative.
 pub(crate) fn verify_manifest_history(
     expected_peer: &str,
-    pages: &[AccountManifestHistoryPageV2],
+    pages: &[AccountManifestHistoryPageV3],
     prior: Option<&ManifestTrust>,
-    pending: &AccountManifestV2,
+    pending: &AccountManifestV3,
 ) -> Result<(ManifestTrust, Vec<AccountManifestHistoryRecord>)> {
     if pages.is_empty() {
         return Err(ChatError::Trust(
@@ -659,12 +606,12 @@ mod legacy_suite1_for_upgrade {
     use base64::engine::general_purpose::STANDARD;
     use base64::Engine as _;
     use kutup_chat_proto::{
-        legacy_suite1_for_upgrade::HPKE_PUBLIC_KEY_LEN, AccountIdentitySuiteId, AccountManifestV2,
+        legacy_suite1_for_upgrade::HPKE_PUBLIC_KEY_LEN, AccountIdentitySuiteId, AccountManifestV3,
     };
 
     /// Whether `next` raises a suite-1 Drive key (`prior_key`, as pinned) to
     /// an X-Wing one. Never the other way.
-    pub(super) fn drive_key_rises(prior_key: &str, next: &AccountManifestV2) -> bool {
+    pub(super) fn drive_key_rises(prior_key: &str, next: &AccountManifestV3) -> bool {
         STANDARD.decode(prior_key).map(|key| key.len()) == Ok(HPKE_PUBLIC_KEY_LEN)
             && next.drive.suite == AccountIdentitySuiteId::XWingEd25519V2
     }
@@ -684,7 +631,7 @@ fn match_expected_account(expected_peer: &str, authenticated_account: &AccountRe
 #[cfg(test)]
 mod tests {
     use super::*;
-    use kutup_chat_proto::{AccountManifestDeviceV2, DirectChatSuiteId};
+    use kutup_chat_proto::{AccountManifestDeviceV3, DirectChatSuiteId};
 
     const ALICE_IDENTITY: &str =
         "0506863bc66d02b40d27b8d49ca7c09e9239236f9d7d25d6fcca5ce13c7064d868";
@@ -717,13 +664,13 @@ mod tests {
         STANDARD.encode(key(label).serialize())
     }
 
-    fn device(device_id: u32, registration_id: u32) -> AccountManifestDeviceV2 {
-        AccountManifestDeviceV2 {
+    fn device(device_id: u32, registration_id: u32) -> AccountManifestDeviceV3 {
+        AccountManifestDeviceV3::chat(
             device_id,
-            direct_chat_suite: DirectChatSuiteId::PqxdhTripleRatchetV1,
+            DirectChatSuiteId::PqxdhTripleRatchetV1,
             registration_id,
-            mls: None,
-        }
+            "51".repeat(32),
+        )
     }
 
     /// libsignal's own fingerprint vector (testVectorsVersion2), through the
@@ -805,32 +752,6 @@ mod tests {
         assert!(verify_manifest_trust(peer, &much_later, Some(&xwing_pin)).is_err());
         // The same key at the next sequence stays fine.
         assert!(verify_manifest_trust(peer, &after, Some(&risen)).is_ok());
-    }
-
-    /// A device entry still carrying the legacy MLS keys loses them when the
-    /// manifest is signed again: nothing writes them any more.
-    #[test]
-    fn a_signed_manifest_carries_no_legacy_mls_keys() {
-        let authority = AccountAuthority::derive(&[5u8; 32]).unwrap();
-        let mut legacy = device(2, 8);
-        legacy.mls = Some(kutup_chat_proto::LegacyMlsDeviceV1 {
-            suite: 0x0003,
-            credential_public_key: STANDARD.encode([1u8; 32]),
-            anonymous_delivery_public_key: STANDARD.encode([2u8; 32]),
-        });
-        let manifest = authority
-            .sign_manifest(
-                BOB.parse().unwrap(),
-                3,
-                Some("22".repeat(32)),
-                &pair(BOB_IDENTITY),
-                vec![device(1, 7), legacy],
-                "2026-10-24T00:00:00Z",
-            )
-            .unwrap();
-        assert_eq!(manifest.devices.len(), 2);
-        assert!(manifest.devices.iter().all(|device| device.mls.is_none()));
-        assert!(verify_manifest_trust(BOB, &manifest, None).is_ok());
     }
 
     /// A peer's pin, as a verified manifest of `account` with `identity`
