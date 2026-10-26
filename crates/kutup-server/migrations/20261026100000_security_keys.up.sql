@@ -44,3 +44,10 @@ ALTER TABLE account_security_events ADD CONSTRAINT account_security_events_kind_
     'twoFactorOn', 'twoFactorOff', 'recoveryCodeUsed', 'recoveryCodesRenewed',
     'securityKeyAdded', 'securityKeyRemoved', 'securityKeyCompromised',
     'authenticatorOn', 'authenticatorOff']));
+-- Each key event names its key.
+ALTER TABLE account_security_events DROP CONSTRAINT account_security_events_names_check;
+ALTER TABLE account_security_events ADD CONSTRAINT account_security_events_names_check CHECK (
+    (kind = ANY (ARRAY['rename', 'nameDropped', 'nameClosed', 'nameFreed', 'domainLost',
+                       'securityKeyAdded', 'securityKeyRemoved', 'securityKeyCompromised']))
+        = (old_name IS NOT NULL)
+    AND (kind = 'rename') = (new_name IS NOT NULL));

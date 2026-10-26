@@ -40,7 +40,8 @@ pub struct SecurityEventView {
     /// recovery or an administrator's).
     client: Option<String>,
     user_agent: Option<String>,
-    /// For a name event: the name it was about (the old one, for a rename).
+    /// For a name event: the name it was about (the old one, for a rename);
+    /// for a security key's event: the key's name.
     #[serde(skip_serializing_if = "Option::is_none")]
     old_name: Option<String>,
     /// For a rename: the new name.

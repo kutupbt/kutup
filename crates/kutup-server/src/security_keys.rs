@@ -233,8 +233,8 @@ pub async fn finish_assertion(
         Ok(state) => state,
         Err(_) => return Ok(Err(Refused::Invalid)),
     };
-    let key: Option<(Uuid, Vec<u8>, Vec<u8>)> = sqlx::query_as(
-        "SELECT id, static_state, dynamic_state FROM user_security_keys
+    let key: Option<(Uuid, String, Vec<u8>, Vec<u8>)> = sqlx::query_as(
+        "SELECT id, name, static_state, dynamic_state FROM user_security_keys
          WHERE user_id = $1 AND credential_id = $2 AND NOT compromised
          FOR UPDATE",
     )
@@ -242,7 +242,7 @@ pub async fn finish_assertion(
     .bind(response.credential_id())
     .fetch_optional(&mut **tx)
     .await?;
-    let Some((key_id, static_state, dynamic_state)) = key else {
+    let Some((key_id, name, static_state, dynamic_state)) = key else {
         return Ok(Err(Refused::Invalid));
     };
     let credential_id = response.credential_id();
@@ -276,11 +276,13 @@ pub async fn finish_assertion(
                 .bind(key_id)
                 .execute(&mut **tx)
                 .await?;
-            crate::security_events::record(
+            crate::security_events::record_names(
                 tx,
                 user_id,
                 crate::security_events::Kind::SecurityKeyCompromised,
                 None,
+                None,
+                &name,
                 None,
             )
             .await?;

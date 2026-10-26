@@ -299,9 +299,9 @@
           "twoFactorOff": "İki adımlı doğrulama kapatıldı",
           "recoveryCodeUsed": "Kurtarma koduyla oturum açıldı",
           "recoveryCodesRenewed": "Yeni kurtarma kodları oluşturuldu",
-          "securityKeyAdded": "Güvenlik anahtarı eklendi",
-          "securityKeyRemoved": "Güvenlik anahtarı kaldırıldı",
-          "securityKeyCompromised": "Güvenlik anahtarı kopyalanmış olabilir (artık kullanılmıyor)",
+          "securityKeyAdded": "“{{oldName}}” güvenlik anahtarı eklendi",
+          "securityKeyRemoved": "“{{oldName}}” güvenlik anahtarı kaldırıldı",
+          "securityKeyCompromised": "“{{oldName}}” güvenlik anahtarı kopyalanmış olabilir (artık kullanılmıyor)",
           "authenticatorOn": "Doğrulama uygulaması açıldı",
           "authenticatorOff": "Doğrulama uygulaması kapatıldı"
         }

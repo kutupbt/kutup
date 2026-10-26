@@ -299,9 +299,9 @@
           "twoFactorOff": "Two-factor authentication turned off",
           "recoveryCodeUsed": "Signed in with a recovery code",
           "recoveryCodesRenewed": "New recovery codes made",
-          "securityKeyAdded": "Security key added",
-          "securityKeyRemoved": "Security key removed",
-          "securityKeyCompromised": "Security key may have been copied (no longer used)",
+          "securityKeyAdded": "Security key “{{oldName}}” added",
+          "securityKeyRemoved": "Security key “{{oldName}}” removed",
+          "securityKeyCompromised": "Security key “{{oldName}}” may have been copied (no longer used)",
           "authenticatorOn": "Authenticator app turned on",
           "authenticatorOff": "Authenticator app turned off"
         }

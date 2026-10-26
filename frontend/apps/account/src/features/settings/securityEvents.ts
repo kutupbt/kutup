@@ -11,14 +11,22 @@ const KNOWN = new Set([
   'twoFactorOff',
   'recoveryCodeUsed',
   'recoveryCodesRenewed',
-  'securityKeyAdded',
-  'securityKeyRemoved',
-  'securityKeyCompromised',
   'authenticatorOn',
   'authenticatorOff',
 ])
-/** Events about a name: their text names it (`oldName`, and `newName` for a rename). */
-const NAMED = new Set(['rename', 'nameDropped', 'nameClosed', 'nameFreed'])
+/**
+ * Events about a name, or a named security key: their text names it
+ * (`oldName`, and `newName` for a rename).
+ */
+const NAMED = new Set([
+  'rename',
+  'nameDropped',
+  'nameClosed',
+  'nameFreed',
+  'securityKeyAdded',
+  'securityKeyRemoved',
+  'securityKeyCompromised',
+])
 
 /**
  * The locale key for what happened, and its values; a kind added later (or

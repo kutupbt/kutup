@@ -307,13 +307,20 @@ fn security_keys_add_sign_in_and_go() {
     );
     assert_eq!(s.keys(&user.token)["keys"], json!([]));
 
-    // Every step is in the security log.
-    let kinds: Vec<String> = security_events(&s.c, &s.base, &user.token, "")["events"]
+    // Every step is in the security log, a key's events by its name.
+    let events = security_events(&s.c, &s.base, &user.token, "")["events"]
         .as_array()
         .unwrap()
+        .clone();
+    let kinds: Vec<String> = events
         .iter()
         .map(|event| event["kind"].as_str().unwrap().to_owned())
         .collect();
+    let compromised = events
+        .iter()
+        .find(|event| event["kind"] == "securityKeyCompromised")
+        .expect("the compromised key's event");
+    assert_eq!(compromised["oldName"], "Desk key");
     for kind in [
         "securityKeyAdded",
         "twoFactorOn",

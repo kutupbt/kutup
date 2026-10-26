@@ -17,9 +17,6 @@ describe('securityEventLabel', () => {
       'accountReset',
       'twoFactorOn',
       'twoFactorOff',
-      'securityKeyAdded',
-      'securityKeyRemoved',
-      'securityKeyCompromised',
       'authenticatorOn',
       'authenticatorOff',
     ]) {
@@ -59,6 +56,15 @@ describe('securityEventLabel for names', () => {
       expect(label).toEqual({ key: `settings.security.events.kind.${kind}`, values: { oldName: 'ada.l' } })
       for (const messages of [en, tr]) expect(lookup(messages, label.key) as string).toContain('{{oldName}}')
     }
+  })
+
+  it("names a security key's event by the key's name", () => {
+    for (const kind of ['securityKeyAdded', 'securityKeyRemoved', 'securityKeyCompromised']) {
+      const label = securityEventLabel({ kind, oldName: 'Desk key' })
+      expect(label).toEqual({ key: `settings.security.events.kind.${kind}`, values: { oldName: 'Desk key' } })
+      for (const messages of [en, tr]) expect(lookup(messages, label.key) as string).toContain('{{oldName}}')
+    }
+    expect(securityEventLabel({ kind: 'securityKeyAdded' })).toEqual({ key: 'settings.security.events.kind.other' })
   })
 
   it('reads a name event without its names generically', () => {
