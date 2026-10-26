@@ -449,7 +449,12 @@ async fn delete_ids(
     .await?;
     let freed = freed.unwrap_or(0);
     if freed > 0 {
-        crate::storage_pool::charge_within_quota(&mut tx, user_id, -freed).await?;
+        crate::storage_pool::charge(
+            &mut *tx,
+            crate::storage_pool::Payer::Account(user_id),
+            -freed,
+        )
+        .await?;
     }
     account_heads::advance(&mut tx, &locked, head.as_ref()).await?;
     tx.commit().await?;

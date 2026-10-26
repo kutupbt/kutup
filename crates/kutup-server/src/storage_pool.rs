@@ -115,21 +115,30 @@ pub async fn charge<'e, E: PgExecutor<'e>>(
     payer: Payer,
     delta: i64,
 ) -> sqlx::Result<()> {
+    // The counter before, so a release past zero (an accounting slip the
+    // reconciler will correct) is seen rather than hidden by the clamp.
     let (sql, id) = match payer {
         Payer::Account(id) => (
-            "UPDATE users SET storage_used_bytes = GREATEST(storage_used_bytes + $2, 0) WHERE id = $1",
+            "WITH before AS (SELECT storage_used_bytes AS used FROM users WHERE id = $1 FOR UPDATE)
+             UPDATE users SET storage_used_bytes = GREATEST(before.used + $2, 0)
+             FROM before WHERE users.id = $1 RETURNING before.used",
             id,
         ),
         Payer::MailGroup(id) => (
-            "UPDATE mail_groups SET storage_used_bytes = GREATEST(storage_used_bytes + $2, 0) WHERE id = $1",
+            "WITH before AS (SELECT storage_used_bytes AS used FROM mail_groups WHERE id = $1 FOR UPDATE)
+             UPDATE mail_groups SET storage_used_bytes = GREATEST(before.used + $2, 0)
+             FROM before WHERE mail_groups.id = $1 RETURNING before.used",
             id,
         ),
     };
-    sqlx::query(sql)
+    let before: Option<i64> = sqlx::query_scalar(sql)
         .bind(id)
         .bind(delta)
-        .execute(executor)
+        .fetch_optional(executor)
         .await?;
+    if let Some(used) = before.filter(|used| used.saturating_add(delta) < 0) {
+        tracing::warn!(?payer, delta, used, "storage charge clamped at zero");
+    }
     Ok(())
 }
 
@@ -184,46 +193,77 @@ pub async fn reserved<'e, E: PgExecutor<'e>>(
 mod tests {
     use super::*;
 
-    /// Every write goes through [`charge`]: no other code changes the
-    /// counters, except the two recounts that set them from what is stored
-    /// (the reconciler in jobs.rs, an administrator's in admin.rs) and test
-    /// fixtures.
+    /// Every write goes through [`charge`]: no other code (nor any
+    /// migration) assigns the counters, except the two recounts that set
+    /// them from what is stored (the reconciler in jobs.rs, an
+    /// administrator's in admin.rs) and two test fixtures. The text is
+    /// lowercased and its whitespace collapsed, so no line break, column
+    /// list or `ON CONFLICT` form slips past.
     #[test]
     fn only_this_module_charges() {
-        let src = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+        let column = ["storage", "used", "bytes"].join("_");
         let mut found = Vec::new();
-        let mut stack = vec![src.clone()];
-        while let Some(dir) = stack.pop() {
-            for entry in std::fs::read_dir(dir).unwrap() {
-                let path = entry.unwrap().path();
-                if path.is_dir() {
-                    stack.push(path);
-                } else if path.extension().is_some_and(|ext| ext == "rs") {
-                    let text = std::fs::read_to_string(&path).unwrap();
-                    let count = text.matches("SET storage_used_bytes").count();
-                    if count > 0 {
-                        let name = path
-                            .strip_prefix(&src)
-                            .unwrap()
-                            .to_string_lossy()
-                            .into_owned();
-                        found.push((name, count));
+        for base in ["src", "migrations"] {
+            let mut stack = vec![root.join(base)];
+            while let Some(dir) = stack.pop() {
+                for entry in std::fs::read_dir(dir).unwrap() {
+                    let path = entry.unwrap().path();
+                    if path.is_dir() {
+                        stack.push(path);
+                        continue;
+                    }
+                    if !path
+                        .extension()
+                        .is_some_and(|ext| ext == "rs" || ext == "sql")
+                    {
+                        continue;
+                    }
+                    let text = std::fs::read_to_string(&path)
+                        .unwrap()
+                        .to_lowercase()
+                        .split_whitespace()
+                        .collect::<Vec<_>>()
+                        .join(" ");
+                    let name = path
+                        .strip_prefix(root.join("src"))
+                        .unwrap_or(&path)
+                        .to_string_lossy()
+                        .into_owned();
+                    for (at, _) in text.match_indices(&column) {
+                        // An assignment: `=` after the column, not `==`.
+                        let rest = text[at + column.len()..].trim_start();
+                        let Some(value) = rest.strip_prefix('=') else {
+                            continue;
+                        };
+                        if value.starts_with('=') {
+                            continue;
+                        }
+                        let value: String = value.trim_start().chars().take(16).collect();
+                        found.push((name.clone(), value));
                     }
                 }
             }
         }
         found.sort();
-        assert_eq!(
-            found,
-            [
-                // A recount from what the account stores.
-                ("handlers/admin.rs".to_owned(), 1),
-                // The reconciler's recount, and two test fixtures.
-                ("jobs.rs".to_owned(), 3),
-                // `charge`, an account's and a mail group's.
-                ("storage_pool.rs".to_owned(), 3),
-            ]
-        );
+        let allowed = [
+            // An administrator's recount from what the account stores.
+            ("handlers/admin.rs", "( select coalesc"),
+            // The reconciler's recount.
+            ("jobs.rs", "$2 where id = $1"),
+            // Two test fixtures.
+            ("jobs.rs", "$1 where id=$2\")"),
+            ("jobs.rs", &format!("{column}+123")[..16]),
+            // `charge`: an account's and a mail group's.
+            ("storage_pool.rs", "greatest(before."),
+            ("storage_pool.rs", "greatest(before."),
+        ];
+        let mut allowed: Vec<(String, String)> = allowed
+            .iter()
+            .map(|(file, value)| ((*file).to_owned(), (*value).to_owned()))
+            .collect();
+        allowed.sort();
+        assert_eq!(found, allowed);
     }
 
     #[test]

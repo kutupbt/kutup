@@ -1011,18 +1011,25 @@ pub async fn purge_file_root(
         return Ok(());
     }
 
-    // Thumbnails, assets and versions are charged to whoever stored them;
-    // release each before the cascade removes their rows.
+    // The file, its thumbnails, assets and versions are charged to whoever
+    // stored each; release them before the cascade removes their rows, one
+    // payer at a time in id order, so purges that share payers lock their
+    // rows in the same order and never deadlock.
     let charged: Vec<(Uuid, i64)> = sqlx::query_as(
         r#"SELECT payer, SUM(size_bytes)::bigint FROM (
                SELECT uploader_user_id AS payer, size_bytes FROM file_assets WHERE file_id = $1
                UNION ALL
                SELECT uploader_user_id, size_bytes FROM file_thumbnails WHERE file_id = $1
                UNION ALL
-               SELECT author_user_id, size_bytes FROM file_versions WHERE file_id = $1) AS charged
-           GROUP BY payer"#,
+               SELECT author_user_id, size_bytes FROM file_versions WHERE file_id = $1
+               UNION ALL
+               SELECT $2::uuid, $3::bigint) AS charged
+           GROUP BY payer
+           ORDER BY payer"#,
     )
     .bind(file_id)
+    .bind(uploader_id)
+    .bind(file_size)
     .fetch_all(&mut *tx)
     .await?;
     for (payer, total) in charged {
@@ -1046,12 +1053,6 @@ pub async fn purge_file_root(
         .bind(file_id)
         .execute(&mut *tx)
         .await?;
-    crate::storage_pool::charge(
-        &mut *tx,
-        crate::storage_pool::Payer::Account(uploader_id),
-        -file_size,
-    )
-    .await?;
     tx.commit().await?;
 
     // Best-effort S3 GC (post-commit): everything the file has lives under

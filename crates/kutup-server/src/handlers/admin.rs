@@ -659,7 +659,7 @@ async fn hand_over_contributions(pool: &PgPool, target: Uuid) -> AppResult<()> {
               JOIN collections c ON c.id = x.collection_id
               WHERE c.owner_user_id <> $1
               GROUP BY c.owner_user_id)
-           SELECT owner, total::bigint FROM moved"#,
+           SELECT owner, total::bigint FROM moved ORDER BY owner"#,
     )
     .bind(target)
     .fetch_all(&mut *tx)

@@ -798,8 +798,12 @@ pub async fn add_draft_attachment(
         .bind(size)
         .execute(&mut *tx)
         .await?;
-        crate::storage_pool::charge(&mut *tx, crate::storage_pool::Payer::Account(user_id), size)
-            .await?;
+        crate::storage_pool::charge(
+            &mut *tx,
+            crate::storage_pool::Payer::Account(user_id),
+            size,
+        )
+        .await?;
         tx.commit().await?;
         Ok(())
     }

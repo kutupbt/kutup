@@ -603,7 +603,8 @@ pub async fn delete(
         .bind(id)
         .execute(&mut *tx)
         .await?;
-    crate::storage_pool::charge_within_quota(&mut tx, owner, -bytes).await?;
+    crate::storage_pool::charge(&mut *tx, crate::storage_pool::Payer::Account(owner), -bytes)
+        .await?;
     account_heads::advance(&mut tx, &locked, head.as_ref()).await?;
     tx.commit().await?;
     Ok(StatusCode::NO_CONTENT)
@@ -1499,7 +1500,12 @@ async fn apply(
                 .bind(id)
                 .execute(&mut *tx)
                 .await?;
-            crate::storage_pool::charge_within_quota(&mut tx, owner, -bytes).await?;
+            crate::storage_pool::charge(
+                &mut *tx,
+                crate::storage_pool::Payer::Account(owner),
+                -bytes,
+            )
+            .await?;
             None
         }
     };
