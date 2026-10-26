@@ -1212,6 +1212,7 @@
                   user: first.user,
                   useridoriginal: first.useridoriginal,
                 }
+                console.log('[kutup-bridge] applying remote cursor sender=' + msg.senderDeviceId + ' user=' + first.user)
                 sendToOO(cursorPayload)
                 if (docType === 'docx') {
                   // word's CDocument.Update_ForeignCursor stores the peer's
