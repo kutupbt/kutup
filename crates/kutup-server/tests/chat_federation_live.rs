@@ -2636,7 +2636,7 @@ fn setup_phase(c: &Client, a: &str, b: &str) {
     );
     assert_eq!(mismatch.status().as_u16(), 409);
     let mismatch: Value = mismatch.json().unwrap();
-    assert_eq!(mismatch["missingDevices"], json!([2]));
+    assert_eq!(mismatch["missingDevices"], json!([bob_2_id]));
 
     let refreshed_content = b"refreshed-device-set";
     json_response(

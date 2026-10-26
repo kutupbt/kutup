@@ -1,5 +1,5 @@
 import { expect, test, type Browser } from '@playwright/test'
-import { appUrl, newAccount, openDrive, registerAccount } from '../fixtures/apps'
+import { appUrl, newAccount, openDrive, registerAccount, signIn } from '../fixtures/apps'
 import { item, openItem } from '../fixtures/drive'
 import {
   appliedCursors,
@@ -174,4 +174,31 @@ test('Document: two accounts see each other\'s caret', async ({ browser }: { bro
   await caretShown(b, a)
   await contextA.close()
   await contextB.close()
+})
+
+// One account on two devices (two browsers, each signed in), the first with
+// two tabs: device ids are per account and the tabs of a browser share its
+// device, so every tab is told apart by its account, device and tab.
+test('Document: two tabs of one device and a second device of the account see each other\'s caret', async ({ browser }: { browser: Browser }) => {
+  test.slow()
+  const account = newAccount('caretdevices', PASSWORD)
+  const first = await browser.newContext()
+  await registerAccount(first, account)
+  const drive = await openDrive(first)
+  const url = await createOffice(drive, 'Document')
+  await drive.close()
+  const second = await browser.newContext()
+  await signIn(second, account)
+
+  const a = await openOffice(first, url)
+  const b = await openOffice(first, url)
+  const c = await openOffice(second, url)
+  await write(a, 'Document', 'hello')
+  await caretShown(a, b)
+  await caretShown(b, a)
+  await caretShown(a, c)
+  await caretShown(c, a)
+  await caretShown(b, c)
+  await first.close()
+  await second.close()
 })
