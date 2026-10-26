@@ -759,7 +759,9 @@
         "rateLimitUpdate": "{{admin}} set {{limit}} to {{value}}",
         "rateLimitReset": "{{admin}} reset {{limit}} to its first value",
         "userRateLimitUpdate": "{{admin}} set {{limit}} to {{value}} for {{target}}",
-        "userRateLimitReset": "{{admin}} gave {{target}} the server's {{limit}} again"
+        "userRateLimitReset": "{{admin}} gave {{target}} the server's {{limit}} again",
+        "userSettingUpdate": "{{admin}} set {{limit}} to {{value}} for {{target}}",
+        "userSettingReset": "{{admin}} gave {{target}} the server's {{limit}} again"
       }
     },
     "settings": {

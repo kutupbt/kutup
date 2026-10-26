@@ -508,7 +508,10 @@ pub async fn check_registration_code(
     tag = "auth",
     responses((status = 200, description = "Public registration settings", body = SettingsResponse))
 )]
-pub async fn get_public_settings(State(state): State<AppState>) -> AppResult<Response> {
+pub async fn get_public_settings(
+    State(state): State<AppState>,
+    user: Option<AuthUser>,
+) -> AppResult<Response> {
     let registration_mode = crate::registration::mode(&state).await?;
     let federation_enabled = match state.federation.as_ref() {
         Some(federation) => {
@@ -561,9 +564,20 @@ pub async fn get_public_settings(State(state): State<AppState>) -> AppResult<Res
             .chat_device_expiry_days
             .try_into()
             .unwrap_or(u32::MAX),
-        maximum_active_devices: crate::site_settings::CHAT_MAX_ACTIVE_DEVICES
-            .load(&state.pool)
-            .await? as u32,
+        // A signed-in caller's own limit (docs/plans/settings-registry.md),
+        // else the site's.
+        maximum_active_devices: match user.as_ref().map(|user| parse_uuid(&user.user_id)) {
+            Some(Ok(account)) => {
+                crate::site_settings::CHAT_MAX_ACTIVE_DEVICES
+                    .load_for(&state.pool, account)
+                    .await?
+            }
+            _ => {
+                crate::site_settings::CHAT_MAX_ACTIVE_DEVICES
+                    .load_site(&state.pool)
+                    .await?
+            }
+        } as u32,
         server_name: Some(state.config.chat_server_name.clone()),
         federation: federation_enabled,
         sealed_sender: sealed_sender_policy.is_some(),
@@ -596,7 +610,7 @@ pub async fn get_public_settings(State(state): State<AppState>) -> AppResult<Res
     };
     let (name_hold_days, old_address_receive_days) =
         crate::site_settings::name_holds(&state.pool, &state.config).await?;
-    Ok(Json(SettingsResponse {
+    let mut response = Json(SettingsResponse {
         registration_mode,
         chat,
         apps: state.config.apps.clone(),
@@ -607,7 +621,19 @@ pub async fn get_public_settings(State(state): State<AppState>) -> AppResult<Res
         old_address_receive_days,
         pass_vault_max_bytes: crate::site_settings::pass_vault_max_bytes(&state.pool).await?,
     })
-    .into_response())
+    .into_response();
+    // A signed-in caller's answer holds its own limits: no shared cache.
+    if user.is_some() {
+        response.headers_mut().insert(
+            axum::http::header::CACHE_CONTROL,
+            axum::http::HeaderValue::from_static("private, no-store"),
+        );
+        response.headers_mut().insert(
+            axum::http::header::VARY,
+            axum::http::HeaderValue::from_static("Authorization"),
+        );
+    }
+    Ok(response)
 }
 
 /// `POST /api/auth/register` — mirrors `Register`.

@@ -258,6 +258,12 @@ pub async fn put_push_subscription(
         .ok_or_else(|| AppError::bad_request("auth is 16 bytes"))?;
     let session = user.session.session_id;
     let mut tx = state.pool.begin().await?;
+    // One subscription change per account at a time: two new browsers at
+    // once can't both take the same longest-held one's place and go over.
+    sqlx::query("SELECT id FROM users WHERE id = $1 FOR UPDATE")
+        .bind(user_id)
+        .execute(&mut *tx)
+        .await?;
     // The browser's subscription is this account's under one session: this
     // one takes it over from an earlier one (signed out, expired or still
     // signed in). Another account in the same browser has its own.

@@ -372,12 +372,25 @@ pub async fn update(
         &admin.user_id,
         action,
         Some(id),
-        json!({
-            "username": username,
-            "key": stored_key,
-            "value": request.value,
-            "previous": previous,
-        }),
+        // Named as the pages name them: a rate limit by its own key (as
+        // `settings.rate_limit` logs it), a setting by its key, field and
+        // section.
+        match &target {
+            Target::Setting(section, setting) => json!({
+                "username": username,
+                "key": setting.key,
+                "field": setting.field,
+                "section": section,
+                "value": request.value,
+                "previous": previous,
+            }),
+            Target::RateLimit(spec) => json!({
+                "username": username,
+                "key": spec.key,
+                "value": request.value,
+                "previous": previous,
+            }),
+        },
     )
     .await;
     Ok(Json(match target {

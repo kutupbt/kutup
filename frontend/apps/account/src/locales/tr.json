@@ -759,7 +759,9 @@
         "rateLimitUpdate": "{{admin}}, {{limit}} sınırını {{value}} yaptı",
         "rateLimitReset": "{{admin}}, {{limit}} sınırını ilk değerine döndürdü",
         "userRateLimitUpdate": "{{admin}}, {{target}} için {{limit}} sınırını {{value}} yaptı",
-        "userRateLimitReset": "{{admin}}, {{target}} için {{limit}} sınırını yeniden sunucunun değerine döndürdü"
+        "userRateLimitReset": "{{admin}}, {{target}} için {{limit}} sınırını yeniden sunucunun değerine döndürdü",
+        "userSettingUpdate": "{{admin}}, {{target}} için {{limit}} ayarını {{value}} yaptı",
+        "userSettingReset": "{{admin}}, {{target}} için {{limit}} ayarını yeniden sunucunun değerine döndürdü"
       }
     },
     "settings": {

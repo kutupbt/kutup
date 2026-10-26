@@ -179,6 +179,39 @@ fn an_accounts_own_upload_limit_holds_it_alone() {
     assert_eq!(reset["value"], site_upload);
     assert_eq!(start_upload(&c, &base, &small), StatusCode::CREATED);
 
+    // The public settings show a signed-in account its own device limit (and
+    // say not to share that answer); anyone else gets the site's.
+    let (status, _) = admin.put(&small_id, "chat_max_active_devices", json!(1));
+    assert_eq!(status, StatusCode::OK);
+    let public = |token: Option<&str>| {
+        let request = c.get(format!("{base}/api/auth/settings"));
+        let r = match token {
+            Some(token) => bearer(request, token),
+            None => request,
+        }
+        .send()
+        .unwrap();
+        let private = r
+            .headers()
+            .get("cache-control")
+            .is_some_and(|value| value.to_str().unwrap_or("").contains("private"));
+        let body: Value = r.json().unwrap();
+        (body["chat"]["maximumActiveDevices"].clone(), private)
+    };
+    let (own, private) = public(Some(&small.token));
+    assert_eq!(own, 1);
+    assert!(private, "a signed-in answer is private");
+    let (anyone, private) = public(None);
+    assert_ne!(anyone, 1);
+    assert!(!private);
+    assert_eq!(public(Some(&other.token)).0, anyone);
+    assert_eq!(
+        admin
+            .put(&small_id, "chat_max_active_devices", Value::Null)
+            .0,
+        StatusCode::OK
+    );
+
     // Audited.
     let activity = admin.get("/api/admin/activity?limit=20");
     assert!(

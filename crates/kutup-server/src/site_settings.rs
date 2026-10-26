@@ -303,9 +303,31 @@ impl NumericSetting {
     }
 
     /// The site's value: the stored one, else the first (on the pool, or in
-    /// a transaction). A setting that limits one account is read with
-    /// [`Self::load_for`] instead, wherever an account is in hand.
+    /// a transaction). Only for a setting that doesn't limit one account: one
+    /// that does is read with [`Self::load_for`], or, where no account is in
+    /// hand, [`Self::load_site`], saying so.
     pub async fn load<'e, E: sqlx::PgExecutor<'e>>(&self, executor: E) -> Result<i64, sqlx::Error> {
+        debug_assert!(
+            !self.per_account,
+            "{} limits one account: load_for, or load_site where no account is in hand",
+            self.field
+        );
+        if self.per_account {
+            tracing::error!(
+                setting = self.field,
+                "a per-account setting read without its account; the site's value applies"
+            );
+        }
+        self.load_site(executor).await
+    }
+
+    /// The site's value of any setting, a per-account one included: for a
+    /// read that has no account (public settings, a peer server's objects,
+    /// the admin pages).
+    pub async fn load_site<'e, E: sqlx::PgExecutor<'e>>(
+        &self,
+        executor: E,
+    ) -> Result<i64, sqlx::Error> {
         Ok(self.resolve(
             None,
             sqlx::query_scalar::<_, String>("SELECT value FROM site_settings WHERE key=$1")
@@ -1087,6 +1109,15 @@ mod tests {
         );
     }
 
+    /// `load` (the site's value) refuses a setting that limits one account,
+    /// before any query: its reads are `load_for` or, saying so, `load_site`.
+    #[tokio::test]
+    #[should_panic(expected = "limits one account")]
+    async fn load_refuses_a_per_account_setting() {
+        let pool = sqlx::PgPool::connect_lazy("postgres://unused@127.0.0.1:1/unused").unwrap();
+        let _ = DRIVE_UPLOAD_MAX_BYTES.load(&pool).await;
+    }
+
     #[test]
     fn the_registry_lists_every_setting_once() {
         let keys: Vec<&str> = numeric_settings().map(|setting| setting.key).collect();
@@ -1101,8 +1132,8 @@ mod tests {
     }
 
     /// A setting that limits one account is read for the account
-    /// (`load_for`) everywhere one is in hand: `.load(` on one is only where
-    /// none is (allowlisted).
+    /// (`load_for`), or with `load_site` where no account is in hand, never
+    /// with `.load(`.
     #[test]
     fn per_account_settings_are_read_for_the_account() {
         let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
@@ -1148,24 +1179,8 @@ mod tests {
             }
         }
         found.sort();
-        assert_eq!(
-            found,
-            [
-                // The public settings: no account.
-                (
-                    "handlers/auth.rs".to_owned(),
-                    "CHAT_MAX_ACTIVE_DEVICES".to_owned()
-                ),
-                // A peer server's objects: this server's own limit.
-                (
-                    "drive_federation.rs".to_owned(),
-                    "DRIVE_UPLOAD_MAX_BYTES".to_owned()
-                ),
-            ]
-            .into_iter()
-            .collect::<std::collections::BTreeSet<_>>()
-            .into_iter()
-            .collect::<Vec<_>>()
-        );
+        // None: a read without an account says so (`load_site`), and `load`
+        // refuses a per-account setting (a debug assertion).
+        assert_eq!(found, Vec::<(String, String)>::new());
     }
 }

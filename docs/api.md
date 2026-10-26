@@ -230,7 +230,8 @@ Returns public server settings: who may register (`registrationMode`:
 capability advertisement, and where each web app lives (`apps`, from
 `KUTUP_BASE_DOMAIN` / `KUTUP_{ACCOUNT,DRIVE,CHAT,OFFICE}_URL`).
 
-**Auth:** None
+**Auth:** None (a bearer token, if sent, makes per-account values the
+caller's own)
 
 **Response:**
 ```jsonc
@@ -271,8 +272,10 @@ a vault's own saves are never refused by it.
 
 The chat block also advertises size/retention limits, the canonical federation
 server name when enabled, and the authenticated sealed-sender service-policy
-history. `maximumActiveDevices` is the site setting `chatMaxActiveDevices`,
-from 1 through the V1 hard cap of 10. A capability is advertised only when its complete local and
+history. `maximumActiveDevices` is the setting `chatMaxActiveDevices`, from 1
+through the V1 hard cap of 10: a signed-in caller's own where administrators
+set one (that answer is `Cache-Control: private, no-store`), else the
+site's. A capability is advertised only when its complete local and
 federated path is enabled.
 
 ---
