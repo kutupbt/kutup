@@ -63,7 +63,9 @@ Specific codes, where an app does something particular (a test in
 | `securityKeyExists` | 409 | That security key is already added |
 | `securityKeyRefused` | 400 | The key's answer was not accepted (another origin or RP, user verification missing when required, a bad attestation) |
 | `securityKeyCeremony` | 400 | The security key prompt expired, or was answered already: start again |
-| `securityKeyCompromised` | 401 | The key's counter did not move on: it may have been copied, and is no longer used |
+| `securityKeyCompromised` | 401 | The key's counter did not move on, with no other use of it in flight: it may have been copied, and is no longer used (remove it; add it again if it is yours) |
+| `securityKeyRetry` | 409 | The key's counter is behind because it was used elsewhere (another tab) since this sign-in started: start again |
+| `secondFactorRequired` | 403 | Adding a factor (a security key, the authenticator app beside keys) or turning "Require PIN" off while two-step sign-in is on: prove a factor the account has (`code`, `recoveryCode` or `securityKey`) |
 | `noSecurityKeys` | 409 | A security key step for an account without a usable key |
 | `accountIdTaken` | 409 | `register`: the account id is some account's, or was a deleted account's (ids are never reused): start again |
 | `keyListInvalid` | 400 | A shared mailbox's next key list the chain refuses: not signed by its signer in force, an old signer after its handover, a gap, or other keys than the group's |
@@ -514,7 +516,10 @@ The second step with a security key (docs/plans/security-keys.md).
   `login/2fa`'s attempt budget (`401 invalidCredentials`, then `429`). A key
   whose counter did not move on may have been cloned: it is marked
   compromised, logged, and refused (`401 securityKeyCompromised`); it is
-  never offered again.
+  never offered again (Proton's flag: remove it, and add it again if it is
+  yours). When the key was used after this sign-in started (another tab),
+  a counter behind is that use, not a clone: refused only (`409
+  securityKeyRetry`), as Signal restarts the ceremony.
 
 **Auth:** None · **Header:** `X-Kutup-Client` (on `finish`)
 
@@ -919,7 +924,10 @@ The secret is stored as *pending* and only becomes active after `POST /api/user/
 ### POST /api/user/2fa/verify
 
 Confirm TOTP setup by providing the first valid code, with the password proved
-again: a `totp` grant from a reauth of this session.
+again: a `totp` grant from a reauth of this session. Beside security keys
+(two-step sign-in already on), a factor the account has is proved too:
+`recoveryCode` or `securityKey` (`403 secondFactorRequired` without), and
+the response's `recoveryCodes` is empty (the account's codes stay).
 
 **Auth:** Bearer JWT
 
@@ -988,21 +996,26 @@ Security keys (WebAuthn: a YubiKey, or a phone's or computer's built-in
 authenticator used as a key) as a second factor beside the authenticator app,
 as Proton has them (docs/plans/security-keys.md): several per account, each
 named; not passkeys (no passwordless sign-in). The relying party is the
-account app's origin and its registrable domain (`KUTUP_WEBAUTHN_RP_ID`
-overrides it); where WebAuthn can't work (plain http off localhost) keys are
+account app's origin and the RP id (`KUTUP_WEBAUTHN_RP_ID`, else
+`KUTUP_BASE_DOMAIN`, else the account app's host); where WebAuthn can't work (plain http off localhost) keys are
 off: `available: false`, and the routes answer `503 securityKeysOff`.
 
 - `GET` → `{ keys: [{ id, name, createdAt, lastUsedAt, compromised }],
   requireUv, limit, available }`.
-- `POST register/start` `{ grant }` (a `totp` grant from a reauth of this
-  session) → `PublicKeyCredentialCreationOptions` (JSON form): attestation
+- `POST register/start` `{ grant, code | securityKey }` (a `totp` grant
+  from a reauth of this session; while two-step sign-in is on, a factor the
+  account has proved again, as `DELETE` takes it, else `403
+  secondFactorRequired`) → `PublicKeyCredentialCreationOptions` (JSON form): attestation
   `none`, not discoverable, the account's keys excluded, user verification
   from "Require PIN". `409 securityKeyLimit` at `securityKeysPerAccount`
   (10).
 - `POST register/finish` `{ name, credential }` (1–128 characters; the
   browser's `toJSON()` from `create()`) → `{ key, recoveryCodes? }`.
   The account's first second factor turns two-step sign-in on, with its
-  recovery codes (shown once). `409 securityKeyExists`, `400
+  recovery codes (shown once). A start that proved no factor can't finish
+  once one is on (`403 secondFactorRequired`). Names refuse control and
+  format characters (bidi overrides). `409 securityKeyExists` (on this or
+  any account: a credential is unique), `400
   securityKeyRefused` (another origin or RP, a wrong answer), `400
   securityKeyCeremony` (expired or answered).
 - `PATCH {id}` `{ name }` renames it (`204`).
@@ -1013,12 +1026,15 @@ off: `available: false`, and the routes answer `503 securityKeysOff`.
 - `POST proof/start` → options for proving the second factor with a key for
   this session: the answer goes in `securityKey` (removing a key or the
   authenticator app, renewing recovery codes).
-- `PUT require-uv` `{ grant, requireUv }`: Proton's "Require PIN", user
-  verification when adding and signing in (`204`).
+- `PUT require-uv` `{ grant, requireUv, code | securityKey }`: Proton's
+  "Require PIN", user verification when adding and signing in (`204`).
+  Turning it off takes the second factor too.
 
 Every change is in the security log (`securityKeyAdded`, `securityKeyRemoved`,
-`securityKeyCompromised`, `authenticatorOn`, `authenticatorOff`, and
-`twoFactorOn`/`twoFactorOff` when two-step sign-in turns on or off).
+`securityKeyCompromised`, each with the key's name in `oldName`;
+`authenticatorOn`, `authenticatorOff`, and `twoFactorOn`/`twoFactorOff`
+when two-step sign-in turns on or off), and the account's other sessions
+see a new session version.
 
 ---
 

@@ -407,7 +407,7 @@ async fn main() -> anyhow::Result<()> {
         None
     };
     // Security keys (docs/plans/security-keys.md): the account app's origin
-    // and its registrable domain. Off, with a warning, where they can't work.
+    // and the configured RP id. Off, with a warning, where they can't work.
     let webauthn = match security_keys::relying_party(&config) {
         Ok(rp) => Some(Arc::new(rp)),
         Err(reason) => {

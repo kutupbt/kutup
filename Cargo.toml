@@ -84,6 +84,8 @@ qrcode = "0.14"
 time = { version = "0.3", features = ["formatting", "serde", "serde-well-known"] }
 notify = "6"
 url = "2"
+# Unicode general categories: names refuse control and format characters.
+unicode-properties = { version = "0.1.4", default-features = false, features = ["general-category"] }
 
 # Server (kutup-server).
 axum = { version = "0.7", features = ["multipart", "ws"] }

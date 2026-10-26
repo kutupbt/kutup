@@ -3707,6 +3707,7 @@ dependencies = [
  "tracing",
  "tracing-opentelemetry",
  "tracing-subscriber",
+ "unicode-properties",
  "url",
  "utoipa",
  "uuid",

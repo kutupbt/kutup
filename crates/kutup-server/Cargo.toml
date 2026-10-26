@@ -47,6 +47,7 @@ sha1 = "0.10"
 bcrypt.workspace = true
 totp-rs.workspace = true
 url.workspace = true
+unicode-properties.workspace = true
 # Custom mail domains: names in their A-label form, and the public suffix list.
 idna = "1"
 psl = "2"

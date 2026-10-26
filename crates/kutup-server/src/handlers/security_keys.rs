@@ -92,36 +92,35 @@ pub async fn list(
 
 /// A reauth's grant for this session (`totp` purpose: changing second
 /// factors).
-// No Debug: it carries a one-time grant.
-#[derive(Default, Deserialize, ToSchema)]
-#[serde(rename_all = "camelCase", default)]
-pub struct GrantRequest {
-    grant: String,
-}
-
 /// `POST /api/auth/security-keys/register/start` — options for adding a key,
 /// with the password proved again (a `totp` grant from a reauth of this
-/// session). `409 securityKeyLimit` at the account's limit.
+/// session) and, while two-step sign-in is on, a factor the account has
+/// (`code` or `securityKey`, as removing one takes; `403
+/// secondFactorRequired` without). `409 securityKeyLimit` at the account's
+/// limit.
 #[utoipa::path(
     post,
     path = "/api/auth/security-keys/register/start",
     tag = "auth",
     security(("BearerAuth" = [])),
-    request_body = GrantRequest,
+    request_body = crate::handlers::auth::CodeRequest,
     responses((status = 200, description = "PublicKeyCredentialCreationOptions (JSON form)"))
 )]
 pub async fn register_start(
     State(state): State<AppState>,
     user: AuthUser,
-    body: Result<Json<GrantRequest>, JsonRejection>,
+    body: Result<Json<super::auth::CodeRequest>, JsonRejection>,
 ) -> AppResult<Response> {
     let Json(req) = body.map_err(|_| AppError::bad_request("invalid request"))?;
     let rp = relying_party(&state)?;
     let user_id = trusted_uuid(&user.user_id)?;
     let seconds = ceremony_seconds(&state).await?;
     let mut tx = state.pool.begin().await?;
-    crate::grants::take_for_session(&mut *tx, &req.grant, crate::grants::Purpose::Totp, &user)
+    crate::grants::take_for_session(&mut *tx, req.grant(), crate::grants::Purpose::Totp, &user)
         .await?;
+    let (mut tx, second_factor_proved) =
+        super::auth::second_factor_if_on(tx, &state, &user, req.code(), req.security_key.as_ref())
+            .await?;
     let (count, name, require_uv): (i64, Option<String>, bool) = sqlx::query_as(
         "SELECT (SELECT count(*) FROM user_security_keys WHERE user_id = u.id),
                 u.username, u.security_keys_require_uv
@@ -153,6 +152,7 @@ pub async fn register_start(
         user_id,
         &keys::binding(&user.session.session_id.to_string()),
         seconds,
+        second_factor_proved,
     )
     .await?;
     tx.commit().await?;
@@ -172,10 +172,24 @@ async fn check_limit(state: &AppState, count: i64) -> AppResult<()> {
     Ok(())
 }
 
+/// A key's name: 1 to 128 characters, none of them control or format
+/// characters (Cc, Cf: bidi overrides, zero-width marks) but the zero-width
+/// joiner emoji sequences use.
 fn key_name(name: &str) -> AppResult<String> {
+    use unicode_properties::{GeneralCategory, UnicodeGeneralCategory};
     let name = name.trim();
     if name.is_empty() || name.chars().count() > 128 {
         return Err(AppError::bad_request("a key's name is 1 to 128 characters"));
+    }
+    if name.chars().any(|c| {
+        matches!(
+            c.general_category(),
+            GeneralCategory::Control | GeneralCategory::Format
+        ) && c != '\u{200d}'
+    }) {
+        return Err(AppError::bad_request(
+            "a key's name may not hold control or format characters",
+        ));
     }
     Ok(name.to_owned())
 }
@@ -229,7 +243,7 @@ pub async fn register_finish(
         kutup_crypto::webauthn::registration_challenge(&response).map_err(|_| refused())?;
     let mut tx = state.pool.begin().await?;
     let factors = crate::two_factor::factors_locked(&mut tx, user_id).await?;
-    let state_bytes = keys::take_ceremony(
+    let ceremony = keys::take_ceremony(
         &mut tx,
         &challenge,
         CeremonyKind::Register,
@@ -237,7 +251,12 @@ pub async fn register_finish(
         &keys::binding(&user.session.session_id.to_string()),
     )
     .await?;
-    let key = kutup_crypto::webauthn::finish_registration(rp, &state_bytes, &response).map_err(
+    // A factor turned on since a start that proved none: start again, with it.
+    if factors.on() && !ceremony.second_factor_proved {
+        return Err(AppError::forbidden("prove your second factor again first")
+            .with_details(serde_json::json!({ "code": "secondFactorRequired" })));
+    }
+    let key = kutup_crypto::webauthn::finish_registration(rp, &ceremony.state, &response).map_err(
         |error| {
             tracing::info!(%error, "security key registration refused");
             refused()
@@ -254,7 +273,7 @@ pub async fn register_finish(
              (user_id, credential_id, transports, static_state, dynamic_state, sign_count,
               aaguid, name)
          VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-         ON CONFLICT (user_id, credential_id) DO NOTHING
+         ON CONFLICT (credential_id) DO NOTHING
          RETURNING id, name, created_at, last_used_at, compromised",
     )
     .bind(user_id)
@@ -437,8 +456,9 @@ pub struct LoginFinishRequest {
 
 /// `POST /api/auth/login/security-key/finish` — checks the key's answer and
 /// signs in, as `login/2fa` does for a code. Failures share the code's
-/// attempt budget. A key whose counter went back is marked compromised and
-/// refused (`securityKeyCompromised`).
+/// attempt budget. A key whose counter went back is refused: marked
+/// compromised (`securityKeyCompromised`), or, when it was used after this
+/// sign-in's start (another tab), only refused (`409 securityKeyRetry`).
 #[utoipa::path(
     post,
     path = "/api/auth/login/security-key/finish",
@@ -499,6 +519,10 @@ pub async fn login_finish(
                     "this security key may have been copied; use another factor",
                 )
                 .with_details(serde_json::json!({ "code": "securityKeyCompromised" })),
+                Refused::Concurrent => {
+                    AppError::conflict("the security key was used meanwhile; sign in again")
+                        .with_details(serde_json::json!({ "code": "securityKeyRetry" }))
+                }
                 Refused::Invalid => AppError::unauthorized("the security key was not accepted")
                     .with_details(serde_json::json!({ "code": "invalidCredentials" })),
             })
@@ -591,16 +615,23 @@ pub async fn remove(
     Ok(Json(RemoveResponse { two_factor_off }).into_response())
 }
 
+// No Debug: it carries a one-time grant.
 #[derive(Default, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase", default)]
 pub struct RequireUvRequest {
     grant: String,
     require_uv: bool,
+    /// Turning it off: the second factor proved again (the authenticator's
+    /// or a recovery code, or `securityKey`).
+    code: String,
+    #[schema(value_type = Option<Object>)]
+    security_key: Option<serde_json::Value>,
 }
 
 /// `PUT /api/auth/security-keys/require-uv` — Proton's "Require PIN": keys
 /// verify their user (a PIN or a fingerprint) when added and at sign-in.
-/// With the password proved again (a `totp` grant).
+/// With the password proved again (a `totp` grant); turning it off takes
+/// the second factor too (`403 secondFactorRequired` without).
 #[utoipa::path(
     put,
     path = "/api/auth/security-keys/require-uv",
@@ -619,6 +650,14 @@ pub async fn set_require_uv(
     let mut tx = state.pool.begin().await?;
     crate::grants::take_for_session(&mut *tx, &req.grant, crate::grants::Purpose::Totp, &user)
         .await?;
+    // Weakening it is a change to the factor: proved as adding one is.
+    let mut tx = if req.require_uv {
+        tx
+    } else {
+        super::auth::second_factor_if_on(tx, &state, &user, &req.code, req.security_key.as_ref())
+            .await?
+            .0
+    };
     sqlx::query("UPDATE users SET security_keys_require_uv = $2 WHERE id = $1")
         .bind(user_id)
         .bind(req.require_uv)

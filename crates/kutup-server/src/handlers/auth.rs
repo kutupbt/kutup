@@ -172,6 +172,11 @@ pub struct CodeRequest {
     #[serde(rename = "securityKey")]
     #[schema(value_type = Option<Object>)]
     pub(crate) security_key: Option<serde_json::Value>,
+    /// Turning the authenticator app on beside security keys, where `code`
+    /// is the app's new code: a recovery code proving the factor the
+    /// account has (or `securityKey`).
+    #[serde(rename = "recoveryCode")]
+    pub(crate) recovery_code: String,
 }
 
 impl CodeRequest {
@@ -1496,11 +1501,17 @@ pub async fn verify_totp(
     crate::grants::take_for_session(&mut *tx, &req.grant, crate::grants::Purpose::Totp, &user)
         .await?;
     let user_id = parse_uuid(&user.user_id)?;
-    // Already on with a security key: the app joins it, and the recovery
-    // codes the account has stay (none are shown).
-    let already_on = crate::two_factor::factors_locked(&mut tx, user_id)
-        .await?
-        .on();
+    // Already on with a security key: the app joins it once a key (or a
+    // recovery code) is proved too, and the recovery codes the account has
+    // stay (none are shown).
+    let (mut tx, already_on) = second_factor_if_on(
+        tx,
+        &state,
+        &user,
+        &req.recovery_code,
+        req.security_key.as_ref(),
+    )
+    .await?;
     let enabled =
         sqlx::query("UPDATE users SET totp_enabled = true WHERE id = $1 AND totp_secret = $2")
             .bind(user_id)
@@ -1682,6 +1693,39 @@ pub(crate) async fn prove_second_factor(
         return Ok(SecondFactor::Wrong);
     }
     Ok(SecondFactor::Proved)
+}
+
+/// Adding or weakening a second factor while two-step sign-in is on (a key,
+/// the authenticator app beside keys, "Require PIN" off): a factor the
+/// account has, proved again as removing one takes (`code`: the
+/// authenticator's or a recovery code; or `security_key`), so a password
+/// and a session alone can't plant a factor that outlives the session
+/// (docs/plans/security-keys.md §4). Whether one was proved (false while
+/// two-step sign-in is off). `403 secondFactorRequired` when it is on and
+/// nothing was given (the transaction, and its grant, rolled back); a wrong
+/// one settles as [`settle_second_factor`] does.
+pub(crate) async fn second_factor_if_on<'c>(
+    mut tx: sqlx::Transaction<'c, sqlx::Postgres>,
+    state: &AppState,
+    user: &AuthUser,
+    code: &str,
+    security_key: Option<&serde_json::Value>,
+) -> AppResult<(sqlx::Transaction<'c, sqlx::Postgres>, bool)> {
+    let user_id = parse_uuid(&user.user_id)?;
+    if !crate::two_factor::factors_locked(&mut tx, user_id)
+        .await?
+        .on()
+    {
+        return Ok((tx, false));
+    }
+    if code.is_empty() && security_key.is_none() {
+        return Err(AppError::forbidden("prove your second factor again first")
+            .with_details(serde_json::json!({ "code": "secondFactorRequired" })));
+    }
+    second_factor_not_blocked(user_id)?;
+    let outcome = prove_second_factor(&mut tx, state, user, code, security_key).await?;
+    let tx = settle_second_factor(tx, user_id, &outcome).await?;
+    Ok((tx, outcome == SecondFactor::Proved))
 }
 
 /// Before a signed-in second-factor check: `429` while the account's checks

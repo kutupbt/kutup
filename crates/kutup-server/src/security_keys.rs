@@ -13,25 +13,14 @@ use crate::config::Config;
 use crate::error::{AppError, AppResult};
 
 /// The relying party: the account app's origin (where keys are added and
-/// used), and its registrable domain as the RP id (`KUTUP_WEBAUTHN_RP_ID`
-/// overrides it), so a key serves every host of the deployment. `None`, with
-/// a warning, where the deployment's origins can't use WebAuthn (plain http
-/// off localhost, as a two-server test stack); production refuses to start
-/// then (`check-config`).
+/// used) and the configured RP id (`Config::webauthn_rp_id`), which must be
+/// that origin's host or a domain it ends in. An error where the
+/// deployment's origins can't use WebAuthn (plain http off localhost, as a
+/// two-server test stack): security keys are off then, and production
+/// refuses to start (`check-config`).
 pub fn relying_party(config: &Config) -> Result<RelyingParty, String> {
-    let origin = config.apps.account.clone();
-    let host = url::Url::parse(&origin)
-        .ok()
-        .and_then(|url| url.host_str().map(str::to_owned))
-        .ok_or_else(|| format!("the account origin {origin} has no host"))?;
-    let rp_id = std::env::var("KUTUP_WEBAUTHN_RP_ID")
-        .ok()
-        .filter(|value| !value.is_empty())
-        .unwrap_or_else(|| match host.split_once('.') {
-            Some((_, parent)) if parent.contains('.') || parent == "localhost" => parent.to_owned(),
-            _ => host.clone(),
-        });
-    RelyingParty::new(&rp_id, vec![origin]).map_err(|error| error.to_string())
+    RelyingParty::new(&config.webauthn_rp_id, vec![config.apps.account.clone()])
+        .map_err(|error| format!("{error} (RP id {:?})", config.webauthn_rp_id))
 }
 
 /// Which ceremony a stored state belongs to.
@@ -67,7 +56,8 @@ pub fn binding(secret: &str) -> Vec<u8> {
 /// Ceremonies one account may have open of one kind: the oldest go first.
 const OPEN_PER_KIND: i64 = 5;
 
-/// Keeps `started`'s state until it is finished or `seconds` pass.
+/// Keeps `started`'s state until it is finished or `seconds` pass;
+/// `second_factor_proved`: adding a key, the start proved a factor.
 pub async fn store_ceremony(
     tx: &mut Transaction<'_, Postgres>,
     started: &Started,
@@ -75,19 +65,22 @@ pub async fn store_ceremony(
     user_id: Uuid,
     bound_to: &[u8],
     seconds: i64,
+    second_factor_proved: bool,
 ) -> AppResult<()> {
     sqlx::query("DELETE FROM webauthn_ceremonies WHERE expires_at < now()")
         .execute(&mut **tx)
         .await?;
     sqlx::query(
-        "INSERT INTO webauthn_ceremonies (challenge, kind, user_id, bound_to, state, expires_at)
-         VALUES ($1, $2, $3, $4, $5, now() + make_interval(secs => $6))",
+        "INSERT INTO webauthn_ceremonies
+             (challenge, kind, user_id, bound_to, state, second_factor_proved, expires_at)
+         VALUES ($1, $2, $3, $4, $5, $6, now() + make_interval(secs => $7))",
     )
     .bind(&started.challenge)
     .bind(kind.as_str())
     .bind(user_id)
     .bind(bound_to)
     .bind(&started.state)
+    .bind(second_factor_proved)
     .bind(seconds as f64)
     .execute(&mut **tx)
     .await?;
@@ -105,20 +98,28 @@ pub async fn store_ceremony(
     Ok(())
 }
 
-/// The state of the ceremony `challenge` names, if it is `user_id`'s, of
-/// `kind`, bound to `bound_to` and not expired; taken (single use).
+/// A ceremony taken to be finished.
+#[derive(Debug, sqlx::FromRow)]
+pub struct Ceremony {
+    pub state: Vec<u8>,
+    pub second_factor_proved: bool,
+    pub created_at: time::OffsetDateTime,
+}
+
+/// The ceremony `challenge` names, if it is `user_id`'s, of `kind`, bound
+/// to `bound_to` and not expired; taken (single use).
 pub async fn take_ceremony(
     tx: &mut Transaction<'_, Postgres>,
     challenge: &[u8],
     kind: CeremonyKind,
     user_id: Uuid,
     bound_to: &[u8],
-) -> AppResult<Vec<u8>> {
-    sqlx::query_scalar(
+) -> AppResult<Ceremony> {
+    sqlx::query_as(
         "DELETE FROM webauthn_ceremonies
          WHERE challenge = $1 AND kind = $2 AND user_id = $3 AND bound_to = $4
            AND expires_at > now()
-         RETURNING state",
+         RETURNING state, second_factor_proved, created_at",
     )
     .bind(challenge)
     .bind(kind.as_str())
@@ -196,7 +197,7 @@ pub async fn start_assertion(
         u32::try_from(seconds * 1000).unwrap_or(u32::MAX),
     )
     .map_err(|error| AppError::internal(format!("WebAuthn options: {error}")))?;
-    store_ceremony(tx, &started, kind, user_id, bound_to, seconds).await?;
+    store_ceremony(tx, &started, kind, user_id, bound_to, seconds, false).await?;
     serde_json::from_str(&started.options_json)
         .map_err(|error| AppError::internal(format!("WebAuthn options: {error}")))
 }
@@ -206,9 +207,13 @@ pub async fn start_assertion(
 pub enum Refused {
     /// The answer doesn't hold: `400` to the client.
     Invalid,
-    /// Its counter went back: the key is now marked compromised (and the
-    /// owner told), within the caller's transaction.
+    /// Its counter went back with no other use of it since the ceremony
+    /// started: the key is now marked compromised (and the owner told),
+    /// within the caller's transaction.
     Compromised,
+    /// Its counter went back, but the key was used after this ceremony
+    /// started (two tabs, a double submit): refused, to be tried again.
+    Concurrent,
 }
 
 /// Checks a key's answer to the `kind` ceremony it names, for `user_id`,
@@ -229,26 +234,27 @@ pub async fn finish_assertion(
     let Ok(challenge) = response.challenge() else {
         return Ok(Err(Refused::Invalid));
     };
-    let state = match take_ceremony(tx, &challenge, kind, user_id, bound_to).await {
-        Ok(state) => state,
+    let ceremony = match take_ceremony(tx, &challenge, kind, user_id, bound_to).await {
+        Ok(ceremony) => ceremony,
         Err(_) => return Ok(Err(Refused::Invalid)),
     };
-    let key: Option<(Uuid, String, Vec<u8>, Vec<u8>)> = sqlx::query_as(
-        "SELECT id, name, static_state, dynamic_state FROM user_security_keys
+    let key: Option<(Uuid, String, Vec<u8>, Vec<u8>, Option<time::OffsetDateTime>)> =
+        sqlx::query_as(
+            "SELECT id, name, static_state, dynamic_state, last_used_at FROM user_security_keys
          WHERE user_id = $1 AND credential_id = $2 AND NOT compromised
          FOR UPDATE",
-    )
-    .bind(user_id)
-    .bind(response.credential_id())
-    .fetch_optional(&mut **tx)
-    .await?;
-    let Some((key_id, name, static_state, dynamic_state)) = key else {
+        )
+        .bind(user_id)
+        .bind(response.credential_id())
+        .fetch_optional(&mut **tx)
+        .await?;
+    let Some((key_id, name, static_state, dynamic_state, last_used_at)) = key else {
         return Ok(Err(Refused::Invalid));
     };
     let credential_id = response.credential_id();
     let checked = webauthn::finish_authentication(
         rp,
-        &state,
+        &ceremony.state,
         &response,
         StoredKey {
             credential_id: &credential_id,
@@ -270,6 +276,11 @@ pub async fn finish_assertion(
             .execute(&mut **tx)
             .await?;
             Ok(Ok(key_id))
+        }
+        Err(AuthenticationRefusal::CounterWentBack)
+            if last_used_at.is_some_and(|used| used >= ceremony.created_at) =>
+        {
+            Ok(Err(Refused::Concurrent))
         }
         Err(AuthenticationRefusal::CounterWentBack) => {
             sqlx::query("UPDATE user_security_keys SET compromised = true WHERE id = $1")

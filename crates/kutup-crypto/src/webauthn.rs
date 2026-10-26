@@ -46,8 +46,8 @@ const USER_LEN: usize = 16;
 /// A stored key's public key and what came with it, decoded.
 type StoredStaticState = StaticState<CompressedPubKey<[u8; 32], [u8; 32], [u8; 48], Vec<u8>>>;
 
-/// Where keys work: the registrable domain (`kutup.dev`, so one key serves
-/// every app's host) and the app origins that may ask.
+/// Where keys work: the RP id (a domain, as `kutup.dev`, so one key serves
+/// every host under it) and the app origins that may ask.
 pub struct RelyingParty {
     rp_id: RpId,
     origins: Vec<String>,
@@ -56,7 +56,7 @@ pub struct RelyingParty {
 impl RelyingParty {
     /// `rp_id` must be a lowercase domain name, and each origin an
     /// `https://` origin on it or a subdomain (WebAuthn's rule), or
-    /// `http://localhost` with a port for a development stack.
+    /// plain `http://` for a development stack under `localhost`.
     pub fn new(rp_id: &str, origins: Vec<String>) -> Result<Self> {
         let label_ok = |label: &str| {
             !label.is_empty()
@@ -83,7 +83,7 @@ impl RelyingParty {
             let host = origin
                 .strip_prefix("https://")
                 .or_else(|| {
-                    (rp_id == "localhost")
+                    (rp_id == "localhost" || rp_id.ends_with(".localhost"))
                         .then(|| origin.strip_prefix("http://"))
                         .flatten()
                 })
@@ -838,5 +838,10 @@ mod tests {
             );
         }
         assert!(RelyingParty::new("localhost", vec!["http://localhost:39643".to_owned()]).is_ok());
+        assert!(RelyingParty::new(
+            "account.localhost",
+            vec!["http://account.localhost:5173".to_owned()]
+        )
+        .is_ok());
     }
 }

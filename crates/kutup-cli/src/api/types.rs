@@ -162,6 +162,9 @@ pub struct UserMe {
     pub is_admin: bool,
     #[serde(default)]
     pub totp_enabled: bool,
+    /// Security keys the account has: two-step sign-in is on with them too.
+    #[serde(default)]
+    pub security_keys: i64,
     #[serde(default)]
     pub storage_quota_bytes: i64,
     #[serde(default)]

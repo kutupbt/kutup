@@ -5,7 +5,9 @@
 CREATE TABLE user_security_keys (
     id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
     user_id uuid NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-    credential_id bytea NOT NULL CHECK (octet_length(credential_id) BETWEEN 16 AND 1023),
+    -- Unique across accounts (WebAuthn L3 §7.1 step 26): a credential
+    -- another account holds is refused.
+    credential_id bytea NOT NULL UNIQUE CHECK (octet_length(credential_id) BETWEEN 16 AND 1023),
     transports bytea NOT NULL CHECK (octet_length(transports) = 1),
     static_state bytea NOT NULL,
     dynamic_state bytea NOT NULL,
@@ -13,12 +15,14 @@ CREATE TABLE user_security_keys (
     -- The authenticator model; shown nowhere, kept to flag a known-bad one.
     aaguid bytea NOT NULL CHECK (octet_length(aaguid) = 16),
     name text NOT NULL CHECK (char_length(name) BETWEEN 1 AND 128),
-    -- Its counter went back: it may have been cloned. Shown, never used.
+    -- Its counter went back with no other use of it in flight: it may have
+    -- been cloned. Shown, never used again (Proton's Compromised flag); its
+    -- owner removes it, and adds it again if it is theirs.
     compromised boolean NOT NULL DEFAULT false,
     created_at timestamptz NOT NULL DEFAULT now(),
-    last_used_at timestamptz,
-    UNIQUE (user_id, credential_id)
+    last_used_at timestamptz
 );
+-- An account's keys (the credential's own index doesn't lead with the account).
 CREATE INDEX user_security_keys_user ON user_security_keys (user_id);
 
 -- Proton's "Require PIN": user verification for adding and signing in.
@@ -33,6 +37,14 @@ CREATE TABLE webauthn_ceremonies (
     user_id uuid NOT NULL REFERENCES users(id) ON DELETE CASCADE,
     bound_to bytea NOT NULL CHECK (octet_length(bound_to) = 32),
     state bytea NOT NULL,
+    -- Adding a key while two-step sign-in is on: whether the start proved a
+    -- factor the account has. The finish refuses one that didn't if a factor
+    -- appeared meanwhile.
+    second_factor_proved boolean NOT NULL DEFAULT false,
+    -- A counter that went back while the key was used after this start is
+    -- the key's own concurrent use (two tabs), not a clone: refused, not
+    -- flagged.
+    created_at timestamptz NOT NULL DEFAULT now(),
     expires_at timestamptz NOT NULL
 );
 CREATE INDEX webauthn_ceremonies_expiry ON webauthn_ceremonies (expires_at);

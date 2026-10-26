@@ -212,6 +212,11 @@ pub struct Config {
     /// Where each web app lives. Published by `/api/auth/settings` and enforced
     /// for session forks (a fork for `web-drive` is only consumable from `drive`).
     pub apps: AppOrigins,
+    /// The relying party id security keys are bound to
+    /// (docs/plans/security-keys.md): `KUTUP_WEBAUTHN_RP_ID`, else
+    /// `KUTUP_BASE_DOMAIN`, else the account app's host. Never guessed from a
+    /// host's shape: changing it makes every added key unusable.
+    pub webauthn_rp_id: String,
 }
 
 /// The origins of the Kutup web apps (scheme://host[:port], no path).
@@ -287,6 +292,26 @@ fn canonical_origin(name: &str, value: &str) -> Result<String, String> {
         return Err(format!("{name} must be a bare origin without a path"));
     }
     Ok(origin.ascii_serialization())
+}
+
+/// The security keys' relying party id: `KUTUP_WEBAUTHN_RP_ID`, else
+/// `KUTUP_BASE_DOMAIN`, else the host of `account_origin`, lowercased. Whether
+/// it suits the account origin is the relying party's check
+/// (`security_keys::relying_party`, run by `check-config` in production).
+pub fn resolve_webauthn_rp_id(
+    env: impl Fn(&str) -> Option<String>,
+    account_origin: &str,
+) -> String {
+    env("KUTUP_WEBAUTHN_RP_ID")
+        .or_else(|| env("KUTUP_BASE_DOMAIN"))
+        .map(|value| value.trim().trim_end_matches('.').to_owned())
+        .or_else(|| {
+            url::Url::parse(account_origin)
+                .ok()
+                .and_then(|url| url.host_str().map(str::to_owned))
+        })
+        .unwrap_or_default()
+        .to_ascii_lowercase()
 }
 
 /// KUTUP_{ACCOUNT,DRIVE,CHAT,OFFICE,EDITOR,MAPS,PHOTOS,CONTACTS,MAIL,PASS}_URL win; otherwise KUTUP_BASE_DOMAIN gives
@@ -451,7 +476,7 @@ impl Config {
             );
         }
         let app_env_for_apps = app_env.clone();
-        let cfg = Config {
+        let mut cfg = Config {
             database_url: must_env("DATABASE_URL"),
             jwt_secret: must_env("JWT_SECRET"),
             opaque_setup_keys: {
@@ -607,7 +632,9 @@ impl Config {
                 env.error(format!("app origins: {error}"));
                 AppOrigins::unset()
             }),
+            webauthn_rp_id: String::new(),
         };
+        cfg.webauthn_rp_id = resolve_webauthn_rp_id(|k| env.set(k), &cfg.apps.account);
         for origin in cfg.allowed_origins.split(',').map(str::trim) {
             if origin == "*" {
                 if cfg.app_env == "production" {
@@ -902,6 +929,34 @@ mod tests {
             .map(|(k, v)| (k.to_string(), v.to_string()))
             .collect();
         move |k| map.get(k).cloned()
+    }
+
+    #[test]
+    fn webauthn_rp_id_is_configured_never_guessed() {
+        let account = "https://account-kutup.example.com";
+        // Explicit wins, then the base domain, then the account host itself.
+        assert_eq!(
+            resolve_webauthn_rp_id(
+                env(&[
+                    ("KUTUP_WEBAUTHN_RP_ID", "Example.COM"),
+                    ("KUTUP_BASE_DOMAIN", "kutup.example.com")
+                ]),
+                account
+            ),
+            "example.com"
+        );
+        assert_eq!(
+            resolve_webauthn_rp_id(env(&[("KUTUP_BASE_DOMAIN", "kutup.example.org")]), account),
+            "kutup.example.org"
+        );
+        assert_eq!(
+            resolve_webauthn_rp_id(env(&[]), account),
+            "account-kutup.example.com"
+        );
+        assert_eq!(
+            resolve_webauthn_rp_id(env(&[]), "http://account.localhost:5173"),
+            "account.localhost"
+        );
     }
 
     #[test]

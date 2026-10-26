@@ -1093,3 +1093,48 @@ pub fn register_device(c: &Client, base: &str, user: &User) -> Device {
         seed,
     }
 }
+
+/// A new password for `user` with `grant` from `token`'s session: its status.
+pub fn set_password(
+    c: &Client,
+    base: &str,
+    user: &User,
+    grant: &str,
+    token: Option<&str>,
+    password: &str,
+) -> StatusCode {
+    let (record, key_id, export_key) =
+        match try_opaque_register(c, base, password, &user.binding, Some(grant), None) {
+            Ok(registered) => registered,
+            Err((status, _)) => return status,
+        };
+    let mut request = c
+        .post(format!("{base}/api/auth/opaque/register/finish"))
+        .json(&json!({
+            "grant": grant, "keyBinding": user.binding,
+            "opaqueRecord": record, "opaqueServerKeyId": key_id,
+            "masterKeyEnvelope": export_key.seal_master_key(&user.master_key, &user.binding).unwrap(),
+        }));
+    if let Some(token) = token {
+        request = request.bearer_auth(token);
+    }
+    request.send().unwrap().status()
+}
+
+/// The authenticator app's code now for `secret` (the setup's base32).
+pub fn totp_now(secret: &str) -> String {
+    totp_rs::TOTP::new(
+        totp_rs::Algorithm::SHA1,
+        6,
+        1,
+        30,
+        totp_rs::Secret::Encoded(secret.to_owned())
+            .to_bytes()
+            .unwrap(),
+        None,
+        String::new(),
+    )
+    .unwrap()
+    .generate_current()
+    .unwrap()
+}
