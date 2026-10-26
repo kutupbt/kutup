@@ -1498,7 +1498,25 @@ fn drive_round_trip(
         .unwrap(),
         &big,
     );
-    json_response(upload(big_upload), "large federated Drive upload");
+    // Past the share's 1 MiB upload quota: the owner stores it on her own
+    // server, in the shared folder.
+    let mut owner_upload = format!(
+        "--{boundary}\r\nContent-Disposition: form-data; name=\"collectionId\"\r\n\r\n{collection_id}\r\n"
+    )
+    .into_bytes();
+    owner_upload.extend_from_slice(&big_upload);
+    json_response(
+        c.post(format!("{a}/api/files/upload"))
+            .bearer_auth(alice_token)
+            .header(
+                "Content-Type",
+                format!("multipart/form-data; boundary={boundary}"),
+            )
+            .body(owner_upload)
+            .send()
+            .unwrap(),
+        "large Drive upload by the owner",
+    );
     let big_total = big.len();
     let first = ranged_of(&big_id, "bytes=0-", None);
     assert_eq!(
