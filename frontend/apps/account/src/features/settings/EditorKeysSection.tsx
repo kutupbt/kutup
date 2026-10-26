@@ -11,22 +11,27 @@ import { Section } from '@kutup/ui/components/page'
 import { EmptyState, LoadingPanel } from '@kutup/ui/components/states'
 import { apiErrorMessage } from '@kutup/ui/lib/apiError'
 import { formatInstant } from '@kutup/ui/lib/format'
-import { MAX_DEVICES_IN_USE, useDevices, useRevokeDevice, type EditorDevice } from './api'
+import { useDevices, useRevokeDevice, type EditorDevice } from './api'
 
 /**
- * Editor devices: the per-browser Ed25519 keys that sign collaborative edits
- * (notes, office documents, whiteboards). Revoking one makes its signatures
- * stop being accepted and closes its live editing connections.
+ * Editing devices and CLIs: each editing app of each browser (Drive,
+ * Office, Maps, Pass, and this page once it has removed a device) and each
+ * CLI is a device of the account, with its own key that signs its
+ * collaborative edits, listed in the account's signed device list
+ * (docs/plans/one-device-list.md). Removing one publishes the list without
+ * it: its edits stop being accepted and its live editing connections close.
  */
 export function EditorKeysSection() {
   const { t, i18n } = useTranslation()
   const devices = useDevices()
   const revoke = useRevokeDevice()
   const [revoking, setRevoking] = useState<EditorDevice | null>(null)
-  // In use first, then retired (signed out, or long unused), then revoked.
-  const rank = (d: EditorDevice) => (d.inUse ? 0 : d.isActive ? 1 : 2)
-  const rows = devices.data ? [...devices.data].sort((a, b) => rank(a) - rank(b)) : []
-  const inUse = rows.filter((d) => d.inUse).length
+  // This sign-in's first, then the rest; newest first within each.
+  const rows = devices.data
+    ? [...devices.data].sort(
+        (a, b) => Number(b.thisSignIn) - Number(a.thisSignIn) || b.createdAt.localeCompare(a.createdAt),
+      )
+    : []
 
   return (
     <Section title={t('settings.devices.title')} description={t('settings.devices.description')}>
@@ -38,23 +43,22 @@ export function EditorKeysSection() {
         <EmptyState title={t('settings.devices.emptyTitle')} description={t('settings.devices.emptyDescription')} />
       ) : null}
       {rows.length > 0 ? (
-        <p className="text-sm text-muted-foreground">
-          {t('settings.devices.inUseCount', { count: inUse, max: MAX_DEVICES_IN_USE })}
-        </p>
-      ) : null}
-      {rows.length > 0 ? (
         <Card className="divide-y divide-border p-0">
           {rows.map((d) => (
-            <div key={d.deviceId} className="flex flex-wrap items-center gap-4 p-4">
+            <div key={d.deviceId} className="flex flex-wrap items-center gap-4 p-4" data-testid="account-editor-device">
               <div className="min-w-0 flex-1 space-y-1">
                 <p className="flex flex-wrap items-center gap-2 font-medium">
-                  {d.label || t('settings.devices.unnamed')}
+                  <span className="min-w-0 break-words">{d.name || t('settings.devices.unnamed')}</span>
                   <Mono className="text-xs text-muted-foreground">#{d.deviceId}</Mono>
-                  {!d.isActive ? (
-                    <Badge variant="neutral">{t('settings.devices.revoked')}</Badge>
-                  ) : d.inUse ? null : (
-                    <Badge variant="neutral">{t('settings.devices.notInUse')}</Badge>
-                  )}
+                  <Badge variant="neutral">
+                    {d.kind === 'cli' ? t('settings.devices.kindCli') : t('settings.devices.kindEditor')}
+                  </Badge>
+                  {d.thisSignIn ? <Badge variant="neutral">{t('settings.devices.thisSignIn')}</Badge> : null}
+                  {d.expired ? (
+                    <Badge variant="neutral">{t('settings.devices.expired')}</Badge>
+                  ) : !d.listed ? (
+                    <Badge variant="neutral">{t('settings.devices.notListed')}</Badge>
+                  ) : null}
                 </p>
                 <p className="text-xs text-muted-foreground">
                   {t('settings.devices.added', { when: formatInstant(d.createdAt, i18n.language) })}
@@ -64,11 +68,9 @@ export function EditorKeysSection() {
                     : t('settings.devices.neverSeen')}
                 </p>
               </div>
-              {d.isActive ? (
-                <Button variant="outline" size="sm" onClick={() => setRevoking(d)}>
-                  {t('settings.devices.revoke')}
-                </Button>
-              ) : null}
+              <Button variant="outline" size="sm" onClick={() => setRevoking(d)}>
+                {t('settings.devices.revoke')}
+              </Button>
             </div>
           ))}
         </Card>
@@ -83,7 +85,7 @@ export function EditorKeysSection() {
         }}
         title={t('settings.devices.revokeTitle')}
         description={t('settings.devices.revokeDescription', {
-          name: revoking?.label || t('settings.devices.unnamed'),
+          name: revoking?.name || t('settings.devices.unnamed'),
         })}
         submit={t('settings.devices.revoke')}
         pending={revoke.isPending}

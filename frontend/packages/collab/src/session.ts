@@ -5,7 +5,7 @@
 //
 // Extracted from the notes editor (docs/plans/maps.md, slice 4a); the steps
 // and their order are unchanged:
-//   1. a device keypair and registered device id,
+//   1. this sign-in's device (listed in the account's manifest),
 //   2. the local Y.Doc and awareness,
 //   3. the snapshot trigger (editors only) and the restore handler,
 //   4. local updates and awareness changes sealed and sent,
@@ -16,9 +16,9 @@ import { Awareness, applyAwarenessUpdate, encodeAwarenessUpdate } from 'y-protoc
 import { decryptFileBlobV1, encryptFileBlobV1 } from '@kutup/crypto/fileBlob'
 import { yjsSeedClientId } from '@kutup/crypto/yjsSeed'
 import api from '@kutup/session/client'
-import { claimSeed, listDevices, listVersions, localBase, newestYjsVersion } from './api'
-import { encryptCollabFrameV1, openCollabFrameAtGenerationV1 } from './cryptoFrame'
-import { currentDevice, deviceRefused, renewRequested } from './currentDevice'
+import { currentDevice, replaceRefusedDevice } from '@kutup/session/currentDevice'
+import { claimSeed, listVersions, localBase, newestYjsVersion } from './api'
+import { encryptCollabFrame, openCollabFrameAtGeneration } from './cryptoFrame'
 import { KIND } from './envelope'
 import { buildAwarenessName, randomSenderSeqPrefix, withAlpha } from './identity'
 import { SnapshotTrigger } from './snapshot'
@@ -117,8 +117,8 @@ export async function openCollabSession(options: CollabSessionOptions): Promise<
   const { fileId, fileKey, keyGeneration, fileKeyAt, readOnly, signal } = options
   const base = options.base ?? localBase(fileId)
 
-  // 1. This sign-in's collaboration device (throws TooManyDevicesError
-  // when the account has 20 in use). Replaced if the server stops taking it.
+  // 1. This sign-in's device (throws TooManyDevicesError at the account's
+  // device limit). Replaced if the account stops listing it.
   let dev = await currentDevice()
   if (signal.aborted) return null
 
@@ -149,8 +149,8 @@ export async function openCollabSession(options: CollabSessionOptions): Promise<
     if (!fileKeyAt) throw new Error('no key for an older generation')
     return fileKeyAt(generation)
   }
-  // Per-tab sender_seq partition: two tabs of one user share a device row,
-  // so a random prefix keeps (file_id, sender_device, sender_seq) unique.
+  // Per-tab sender_seq partition: the tabs of one sign-in share a device,
+  // so a random prefix keeps (file, sender, sender_seq) unique.
   let outboundSeq = randomSenderSeqPrefix()
   let transport: CollabTransport | null = null
 
@@ -193,12 +193,12 @@ export async function openCollabSession(options: CollabSessionOptions): Promise<
     if (origin === 'remote') return
     const sent = (async () => {
       outboundSeq++
-      const frame = await encryptCollabFrameV1(
+      const frame = await encryptCollabFrame(
         update,
         KIND.YJS_UPDATE,
-        { fileId, keyGeneration, docKeyId, deviceId: BigInt(dev.deviceId), sequence: outboundSeq },
+        { fileId, keyGeneration, docKeyId, sequence: outboundSeq },
         fileKey,
-        dev.keypair.privateKey,
+        dev,
       )
       // Loading the file's content into a new document is not an edit.
       transport?.send(frame, { edit: origin !== 'seed' })
@@ -218,12 +218,12 @@ export async function openCollabSession(options: CollabSessionOptions): Promise<
     void (async () => {
       const update = encodeAwarenessUpdate(awareness, changed)
       outboundSeq++
-      const frame = await encryptCollabFrameV1(
+      const frame = await encryptCollabFrame(
         update,
         KIND.YJS_AWARENESS,
-        { fileId, keyGeneration, docKeyId, deviceId: BigInt(dev.deviceId), sequence: outboundSeq },
+        { fileId, keyGeneration, docKeyId, sequence: outboundSeq },
         fileKey,
-        dev.keypair.privateKey,
+        dev,
       )
       transport?.send(frame, { edit: false })
     })()
@@ -311,7 +311,7 @@ export async function openCollabSession(options: CollabSessionOptions): Promise<
 
   // 6. The relay: replays what came after the saved state, then live frames.
   transport = new CollabTransport({
-    url: () => collabSocketUrl(fileId, dev.deviceId, base),
+    url: () => collabSocketUrl(dev, base),
     lastSeenSeq: () => applied,
     onPosition: async (message: PositionMsg) => {
       if (message.type === 'stored') {
@@ -324,18 +324,11 @@ export async function openCollabSession(options: CollabSessionOptions): Promise<
       // Frames arrive, and are applied, before the position that follows them.
       if (message.type === 'replayed') options.onReplayed?.(message.throughSeq)
     },
-    // The server may have stopped taking this device (revoked under
+    // The account may have stopped listing this device (removed under
     // Account → Devices): checked, and replaced if so; frames sealed from
     // then on carry the new one.
     onRefused: async () => {
-      const id = dev.deviceId
-      const trusted = await listDevices()
-        .then((rows) => rows.some((row) => row.deviceId === id && row.trusted))
-        .catch(() => null)
-      if (trusted === false && (await deviceRefused())) dev = await currentDevice()
-    },
-    onRenewDevice: (deviceIds) => {
-      void renewRequested(deviceIds).catch(() => undefined)
+      dev = (await replaceRefusedDevice(dev)) ?? dev
     },
     onHello: (hello: HelloMsg) => {
       docKeyId = hello.currentDocKeyId
@@ -360,7 +353,7 @@ export async function openCollabSession(options: CollabSessionOptions): Promise<
     onFrame: async (bytes) => {
       try {
         // A frame from before a re-key opens with its generation's key.
-        const frame = await openCollabFrameAtGenerationV1(bytes, keyOf, { fileId, keyGeneration })
+        const frame = await openCollabFrameAtGeneration(bytes, keyOf, { fileId, keyGeneration })
         if (frame.kind === KIND.YJS_UPDATE) Y.applyUpdate(doc, frame.plaintext, 'remote')
         else if (frame.kind === KIND.YJS_AWARENESS) applyAwarenessUpdate(awareness, frame.plaintext, 'remote')
       } catch (error) {

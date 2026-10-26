@@ -456,7 +456,9 @@ Administration (default 10, from 1 through 10; no environment variable). A
 lower value is a local resource/product policy. Ten is the V1 protocol hard
 cap and cannot be raised. Every device of an account, of every app (each
 browser app is one: Chat, Office, Drive; and the CLI), counts toward
-`devicesPerAccount` (default 32, from 1 through 127):
+`devicesPerAccount` (default 32, from 1 through 127). A newly registered
+device has `deviceListingGraceSeconds` (default 600) to add itself to its
+account's device list before another device's update drops its row:
 
 ```sh
 CHAT_MEDIA_MAX_PLAINTEXT_BYTES=2147483648

@@ -31,7 +31,7 @@ export interface Session {
   masterKey: Uint8Array
   privateKey: Uint8Array
   currentDeviceId: number | null
-  /** This sign-in's collaboration device on this origin, once registered (persisted with the keys). */
+  /** This sign-in's device on this origin, once registered (persisted with the keys). */
   device: DeviceKeys | null
 }
 
@@ -81,6 +81,7 @@ export function clearSession(): void {
   prev?.masterKey.fill(0)
   prev?.privateKey.fill(0)
   prev?.device?.privateKey.fill(0)
+  prev?.device?.credential.fill(0)
 }
 
 /** The current session, or null when signed out. */

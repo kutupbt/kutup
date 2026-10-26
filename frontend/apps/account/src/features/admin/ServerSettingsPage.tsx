@@ -64,6 +64,7 @@ const CALENDAR_SETTINGS = [
 /** Devices and linking Chat devices (site_settings::DEVICES_PER_ACCOUNT, CHAT_IDENTITY_SETTINGS). */
 const CHAT_LINKING_SETTINGS = [
   { field: 'devicesPerAccount', min: 1, max: 127 },
+  { field: 'deviceListingGraceSeconds', min: 60, max: 86_400 },
   { field: 'chatLinkTokenSeconds', min: 60, max: 3600 },
   { field: 'chatLinkTokensPerAccount', min: 1, max: 20 },
   { field: 'chatProvisionBodyBytes', min: 4096, max: 65_536 },

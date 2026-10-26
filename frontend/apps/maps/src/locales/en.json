@@ -123,7 +123,7 @@
     "placeCount_one": "{{count}} place",
     "placeCount_other": "{{count}} places",
     "rightClickHint": "Or right-click the map where the place is.",
-    "tooManyDevices": "You have 20 devices in use. Remove one under Account → Devices to edit lists here."
+    "tooManyDevices": "Your account has as many devices as it can have. Remove one under Account → Devices to edit lists here."
   },
   "place": {
     "addTitle": "Add a place",

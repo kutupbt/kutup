@@ -3790,7 +3790,10 @@ Remaining one-time pool sizes: `{ "oneTimePreKeys": n, "oneTimeKyberPreKeys": n 
 ### POST /api/chat/manifest
 
 Publish the account's next `AccountManifestV3`, signed by the account
-self-authority (device-authenticated). It follows the head
+self-authority (device-authenticated: any device of the account, of every
+kind; without `X-Kutup-Device`, a sign-in alone may publish one that only
+removes devices, every other entry as the head lists it, which the Account
+app does: `401 deviceCredential` for anything else). It follows the head
 (`verifySuccessor`: head + 1, linked by hash, the same account, incarnation
 and authority), names the account's identity (`409 identityMismatch`: the
 identity changes only by a distribution or a re-registration), carries

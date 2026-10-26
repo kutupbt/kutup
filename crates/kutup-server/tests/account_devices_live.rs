@@ -341,3 +341,61 @@ fn the_device_cap_counts_every_kind() {
     set_cap(None);
     assert_eq!(status, StatusCode::OK, "{answer}");
 }
+
+/// A sign-in with no device of its own (the Account app) removes devices:
+/// a manifest that only drops entries, signed by the authority, publishes
+/// without `X-Kutup-Device`; one that adds or changes an entry doesn't.
+#[test]
+fn a_sign_in_alone_only_removes_devices() {
+    let Some(live) = live() else { return };
+    let mut ada = live.account();
+    let first = ada.reregister(&live.c, &live.base);
+    let (editor, _) = live.editor(&ada, 2);
+    let (cli, _) = live.editor(&ada, 3);
+    let manifest = manifest_with(&ada, &[editor.clone(), cli.clone()]);
+    let (status, answer) = publish(&live, &mut ada, &first.header(), &manifest);
+    assert_eq!(status, StatusCode::OK, "{answer}");
+
+    let without = |ada: &mut ChatAccount, manifest: &AccountManifestV3| {
+        let answer = code(
+            live.c
+                .post(format!("{}/api/chat/manifest", live.base))
+                .bearer_auth(&ada.token)
+                .json(manifest)
+                .send()
+                .unwrap(),
+        );
+        if answer.0 == StatusCode::OK {
+            ada.head = Some(manifest.clone());
+        }
+        answer
+    };
+    // Adding an entry, or listing the same set again: refused.
+    let (fourth, _) = live.editor(&ada, 4);
+    let grown = manifest_with(&ada, &[editor.clone(), cli.clone(), fourth]);
+    let (status, answer) = without(&mut ada, &grown);
+    assert_eq!(status, StatusCode::UNAUTHORIZED, "{answer}");
+    let same = manifest_with(&ada, &[editor.clone(), cli.clone()]);
+    let (status, _) = without(&mut ada, &same);
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+    // Changing an entry while removing another: refused.
+    let mut changed = editor.clone();
+    changed.session = "00".repeat(32);
+    let changed = manifest_with(&ada, &[changed]);
+    let (status, _) = without(&mut ada, &changed);
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+    // Removing one: published, its row gone.
+    let fewer = manifest_with(&ada, std::slice::from_ref(&editor));
+    let (status, answer) = without(&mut ada, &fewer);
+    assert_eq!(status, StatusCode::OK, "{answer}");
+    let user_id = Uuid::parse_str(&ada.account.account_id).unwrap();
+    let rows: i64 = live
+        .runtime
+        .block_on(
+            sqlx::query_scalar("SELECT count(*) FROM devices WHERE user_id = $1 AND device_id = 3")
+                .bind(user_id)
+                .fetch_one(&live.pool),
+        )
+        .unwrap();
+    assert_eq!(rows, 0);
+}

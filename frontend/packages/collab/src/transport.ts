@@ -3,7 +3,11 @@
 
 import { reportCollabSocket, trackCollabTransport } from './connectivity'
 
+/** One device in the room, as the server lists it. */
 export interface PeerInfo {
+  /** Its account (`aci:<uuid>@<server>`): with `deviceId`, the sender its frames name. */
+  account: string
+  /** 1..127 within its account: not unique in a room on its own (see `peerKey`). */
   deviceId: number
   userId: string
   username?: string
@@ -50,13 +54,17 @@ export interface BaseMsg {
 
 export interface CollabTransportOpts {
   /**
-   * The ws URL (with ?token=…&deviceId=…), or a function producing a current
-   * one. Reconnects can come long after a 15-minute access token expired, so
-   * apps pass `collabSocketUrl`, which is asked again on every connect.
+   * The ws URL (with `?ticket=…`), or a function producing a current one. A
+   * device ticket is good once, so apps pass `collabSocketUrl`, which is
+   * asked again on every connect.
    */
   url: string | (() => Promise<string>)
   wsFactory?: (url: string) => WebSocket            // overridable for tests
-  /** May be async (frames are decrypted); a rejection is reported to onError. */
+  /**
+   * A frame as the server delivers it: the sender's account, then the packed
+   * frame (`openCollabFrame` takes it whole). May be async (frames are
+   * decrypted); a rejection is reported to onError.
+   */
   onFrame: (bytes: Uint8Array) => void | Promise<void>
   onHello: (h: HelloMsg) => void
   onError: (e: unknown) => void
@@ -75,13 +83,12 @@ export interface CollabTransportOpts {
    */
   onPosition?: (message: PositionMsg) => void | Promise<void>
   /**
-   * Connections keep closing before they open (twice in a row): the server
-   * may no longer take this device. Resolves when the caller has checked
-   * (and replaced it if need be); the next connect asks `url` again.
+   * Connections keep failing before they open (twice in a row: no ticket,
+   * or a socket closed before it opened): the server may no longer take
+   * this device. Resolves when the caller has checked (and replaced it if
+   * need be); the next connect asks `url` again.
    */
   onRefused?: () => Promise<void>
-  /** A shared file's server asks these devices to renew their statement. */
-  onRenewDevice?: (deviceIds: number[]) => void
 }
 
 export type PositionMsg =
@@ -147,7 +154,7 @@ export class CollabTransport {
       (url) => this.open(url),
       (e: unknown) => {
         this.opts.onError(e)
-        this.scheduleReconnect()
+        this.notOpened()
       },
     )
   }
@@ -192,10 +199,6 @@ export class CollabTransport {
               return // ignore non-JSON text
             }
             if (obj.type === 'hello') this.opts.onHello(obj as HelloMsg)
-            else if (obj.type === 'renewDevice') {
-              const ids = (obj as { deviceIds?: unknown }).deviceIds
-              if (Array.isArray(ids)) this.opts.onRenewDevice?.(ids.filter((id): id is number => typeof id === 'number'))
-            }
             else if (obj.type === 'peers') this.opts.onPeers?.(obj as PeersMsg)
             else if (obj.type === 'base') this.opts.onBase?.(obj as BaseMsg)
             else if (obj.type === 'stored' && typeof obj.seq === 'number') {
@@ -219,18 +222,29 @@ export class CollabTransport {
     })
 
     ws.addEventListener('close', () => {
-      // Closed before it ever opened: the network (or the server) refused it.
-      if (!opened && !this.closed) reportCollabSocket(false)
-      this.refusedInARow = opened ? 0 : this.refusedInARow + 1
-      if (!this.closed && this.refusedInARow >= 2 && this.opts.onRefused) {
+      if (opened) {
         this.refusedInARow = 0
-        // Reconnect once the device is checked, whatever the answer.
-        void this.opts.onRefused().catch((e: unknown) => this.opts.onError(e)).finally(() => this.scheduleReconnect())
+        this.scheduleReconnect()
         return
       }
-      if (!this.closed) this.scheduleReconnect()
+      // Closed before it ever opened: the network (or the server) refused it.
+      if (!this.closed) reportCollabSocket(false)
+      this.notOpened()
     })
     ws.addEventListener('error', (e) => this.opts.onError(e))
+  }
+
+  /** A connect that never opened (no URL, or a socket closed before it opened). */
+  private notOpened(): void {
+    if (this.closed) return
+    this.refusedInARow += 1
+    if (this.refusedInARow >= 2 && this.opts.onRefused) {
+      this.refusedInARow = 0
+      // Reconnect once the device is checked, whatever the answer.
+      void this.opts.onRefused().catch((e: unknown) => this.opts.onError(e)).finally(() => this.scheduleReconnect())
+      return
+    }
+    this.scheduleReconnect()
   }
 
   private scheduleReconnect(): void {

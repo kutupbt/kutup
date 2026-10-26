@@ -870,14 +870,20 @@ pub async fn publish_manifest(
 ) -> AppResult<Response> {
     let user_id = trusted_uuid(&auth.user_id)?;
     use crate::handlers::chat_identity::DeviceKinds;
-    // Any device of the account lists itself (an editor too, slice 2).
-    crate::handlers::chat_identity::authenticated_device_of(
-        &state.pool,
-        &headers,
-        user_id,
-        DeviceKinds::Any,
-    )
-    .await?;
+    // Any device of the account lists itself (an editor too, slice 2). A
+    // sign-in without a device of its own (the Account app) may publish a
+    // manifest that only removes devices: the authority's signature is what
+    // vouches for it, and it adds nothing a device would have to back.
+    let by_device = headers.contains_key(kutup_chat_proto::DEVICE_HEADER);
+    if by_device {
+        crate::handlers::chat_identity::authenticated_device_of(
+            &state.pool,
+            &headers,
+            user_id,
+            DeviceKinds::Any,
+        )
+        .await?;
+    }
     crate::handlers::chat_identity::validate_manifest(&manifest)?;
     let mut tx = state.pool.begin().await?;
     // The account's lock, then the head this publication follows: the devices
@@ -887,23 +893,45 @@ pub async fn publish_manifest(
         .execute(&mut *tx)
         .await?;
     let head_before = stored_manifest(&mut *tx, user_id).await?;
+    if !by_device {
+        let removes_only = head_before.as_ref().is_some_and(|head| {
+            manifest.devices.len() < head.devices.len()
+                && manifest
+                    .devices
+                    .iter()
+                    .all(|entry| head.device(entry.device_id) == Some(entry))
+        });
+        if !removes_only {
+            return Err(AppError::unauthorized(
+                "only a device of the account lists devices; a sign-in alone only removes them",
+            )
+            .with_details(json!({ "code": "deviceCredential" })));
+        }
+    }
     let stored = store_manifest(&mut tx, &state, user_id, &manifest, IdentityChange::Same).await?;
     // The account's lock is held now: the publishing device is still one of
     // its live devices with this credential.
-    crate::handlers::chat_identity::credential_holds_of(
-        &mut *tx,
-        &headers,
-        user_id,
-        DeviceKinds::Any,
-    )
-    .await?;
+    if by_device {
+        crate::handlers::chat_identity::credential_holds_of(
+            &mut *tx,
+            &headers,
+            user_id,
+            DeviceKinds::Any,
+        )
+        .await?;
+    }
+    // A removal keeps the head's other entries as they were, idle ones too.
     crate::account_devices::check_listed_rows(
         &mut tx,
         user_id,
         &manifest,
         None,
         crate::account_devices::ChatKeys::Match,
-        crate::account_devices::Backing::Live,
+        if by_device {
+            crate::account_devices::Backing::Live
+        } else {
+            crate::account_devices::Backing::Present
+        },
     )
     .await?;
     // Registration precedes publication so a device learns its id; rows the

@@ -217,7 +217,7 @@
     },
     "viewOnly": "View only",
     "devices": {
-      "tooMany": "You have 20 devices in use. Remove one under Account → Devices to edit here.",
+      "tooMany": "Your account has as many devices as it can have. Remove one under Account → Devices to edit here.",
       "removed": "This browser's editing device was removed. Reopen the document to keep editing.",
       "manage": "Manage devices"
     }

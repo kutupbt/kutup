@@ -234,6 +234,8 @@ export interface AdminSettings {
   calendarEventsPage: number
   /** Every device of an account, of every app (site_settings::DEVICES_PER_ACCOUNT). */
   devicesPerAccount: number
+  /** How long a new device's row waits to be listed (site_settings::DEVICE_LISTING_GRACE_SECONDS). */
+  deviceListingGraceSeconds: number
   /** Linking Chat devices (site_settings::CHAT_IDENTITY_SETTINGS). */
   chatLinkTokenSeconds: number
   /** How many two-factor recovery codes are made at once. */

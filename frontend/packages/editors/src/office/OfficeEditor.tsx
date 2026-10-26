@@ -27,10 +27,11 @@ import { useSession } from '@kutup/session/store'
 import { CollabTransport, type BaseMsg, type HelloMsg, type PositionMsg } from '@kutup/collab/transport'
 import type { LogPosition } from '../snapshots'
 import { KIND } from '@kutup/collab/envelope'
-import { encryptCollabFrameV1, openCollabFrameV1 } from '@kutup/collab/cryptoFrame'
-import { currentDevice, deviceRefused, renewRequested, TooManyDevicesError } from '@kutup/collab/currentDevice'
+import { encryptCollabFrame, openCollabFrame } from '@kutup/collab/cryptoFrame'
+import { currentDevice, deviceRefused, stillListed, TooManyDevicesError, type CurrentDevice } from '@kutup/session/currentDevice'
 import { randomSenderSeqPrefix } from '@kutup/collab/identity'
-import { listDevices } from '@kutup/collab/api'
+import { localBase } from '@kutup/collab/api'
+import { peerKey } from '@kutup/collab/envelope'
 import { useResolvedTheme } from '../useResolvedTheme'
 import { DeviceLimitNotice } from '../DeviceLimitNotice'
 
@@ -71,7 +72,7 @@ interface Props {
 }
 
 /** Who the editor is when nobody is signed in (`live` false): one viewer. */
-const VIEWER = { deviceId: 1, userId: '00000000-0000-0000-0000-000000000000' }
+const VIEWER = { deviceId: 1, userId: '00000000-0000-0000-0000-000000000000', account: '' }
 
 /** Where an office editing session started (docs/onlyoffice.md). */
 export interface SessionBase {
@@ -121,9 +122,11 @@ type ToBridge =
   | { type: 'save-request'; requestId: number }
   | { type: 'thumbnail-request'; requestId: number }
   | { type: 'oo-remote-op'; payload: string }
-  | { type: 'oo-remote-cursor'; senderDeviceId: number; payload: string }
-  | { type: 'oo-peers'; list: { deviceId: number; userId: string; username?: string; color?: string }[]; ts: number }
-  | { type: 'oo-self'; deviceId: number; userId: string }
+  /** `sender`: the peer's `account#deviceId` (see `peerKey`). */
+  | { type: 'oo-remote-cursor'; sender: string; payload: string }
+  | { type: 'oo-peers'; list: { account: string; deviceId: number; userId: string; username?: string; color?: string }[]; ts: number }
+  /** Device ids are per account: the bridge tells peers apart by account and device. */
+  | { type: 'oo-self'; deviceId: number; userId: string; account: string }
   | { type: 'oo-color-update'; userId: string; color: string | null }
   | { type: 'oo-theme'; theme: 'dark' | 'light' }
 
@@ -191,8 +194,7 @@ function OfficeEditorBase(
   // Collab WS state — held in refs so message handlers (which are stable)
   // see the latest values without re-binding.
   const transportRef = useRef<CollabTransport | null>(null)
-  const deviceIdRef = useRef<number | null>(null)
-  const keypairRef = useRef<{ publicKey: Uint8Array; privateKey: Uint8Array } | null>(null)
+  const deviceRef = useRef<CurrentDevice | null>(null)
   const docKeyIdRef = useRef<number>(1)
   // The collaboration log up to here is in the document (the version it
   // opened from, then every frame applied since, the editor's own included).
@@ -200,16 +202,15 @@ function OfficeEditorBase(
   const baseRef = useRef<SessionBase>(base ?? { versionId: null, seq: 0 })
   const resetBaseRef = useRef(resetBase)
   // Per-tab sender_seq partition — see randomSenderSeqPrefix doc in
-  // @/collab/identity. Two tabs of the same user share a sender_device
-  // row; without a high random tabPrefix in the upper 32 bits, both
-  // tabs would collide on (file_id, sender_device, sender_seq) UNIQUE
-  // and one frame would silently drop, producing one-way sync.
+  // @/collab/identity. The tabs of one sign-in share a device; without a
+  // high random tabPrefix in the upper 32 bits, both tabs would collide
+  // on (file, sender, sender_seq) UNIQUE and one frame would silently
+  // drop, producing one-way sync.
   const outboundSeqRef = useRef<bigint>(randomSenderSeqPrefix())
 
   // Live editing is for the signed-in; without it, nobody needs to be.
   const session = useSession()
   if (live && !session) throw new Error('live editing needs a session')
-  const storedDeviceId = session?.device?.id ?? null
   const username = session?.username ?? null
   const color = session?.color ?? null
   const userId = session?.userId ?? null
@@ -263,26 +264,24 @@ function OfficeEditorBase(
 
     async function sendLocalOp(payload: string) {
       const transport = transportRef.current
-      const did = deviceIdRef.current
-      const kp = keypairRef.current
-      if (!transport || !did || !kp) {
-        console.warn('[office] sendLocalOp dropped — transport/did/kp not ready', { hasTransport: !!transport, hasDid: !!did, hasKp: !!kp, payloadLen: payload.length })
+      const device = deviceRef.current
+      if (!transport || !device) {
+        console.warn('[office] sendLocalOp dropped — transport/device not ready', { hasTransport: !!transport, hasDevice: !!device, payloadLen: payload.length })
         return
       }
       try {
         outboundSeqRef.current = outboundSeqRef.current + 1n
-        const packed = await encryptCollabFrameV1(
+        const packed = await encryptCollabFrame(
           new TextEncoder().encode(payload),
           KIND.OO_OP,
           {
             fileId,
             keyGeneration,
             docKeyId: docKeyIdRef.current,
-            deviceId: BigInt(did),
             sequence: outboundSeqRef.current,
           },
           fileKey,
-          kp.privateKey,
+          device,
         )
         transport.send(packed)
       } catch (e) {
@@ -292,23 +291,21 @@ function OfficeEditorBase(
 
     async function sendLocalCursor(payload: string) {
       const transport = transportRef.current
-      const did = deviceIdRef.current
-      const kp = keypairRef.current
-      if (!transport || !did || !kp) return
+      const device = deviceRef.current
+      if (!transport || !device) return
       try {
         outboundSeqRef.current = outboundSeqRef.current + 1n
-        const packed = await encryptCollabFrameV1(
+        const packed = await encryptCollabFrame(
           new TextEncoder().encode(payload),
           KIND.OO_CURSOR,
           {
             fileId,
             keyGeneration,
             docKeyId: docKeyIdRef.current,
-            deviceId: BigInt(did),
             sequence: outboundSeqRef.current,
           },
           fileKey,
-          kp.privateKey,
+          device,
         )
         transport.send(packed, { edit: false })
       } catch (e) {
@@ -329,17 +326,15 @@ function OfficeEditorBase(
           // Send 'oo-self' before 'init' so the bridge's maybeStart() —
           // which gates on selfDeviceId/selfUserId — has both sides of the
           // identity ready when 'init' lands. The WS effect also posts
-          // 'oo-self', but on refresh storedDeviceId is restored with the
-          // session's keys and the WS effect sends it BEFORE inner.html's
-          // listener is attached (the await in currentDevice that gave it
-          // a head start on first sign-in is skipped). Sending here on
-          // 'ready' guarantees the iframe is listening.
+          // 'oo-self' once the device is known, which may be BEFORE
+          // inner.html's listener is attached; sending here on 'ready'
+          // too guarantees the iframe hears it, whichever comes first.
           if (!live) {
             send({ type: 'oo-self', ...VIEWER })
           } else {
-            const did = deviceIdRef.current ?? storedDeviceId
-            if (did != null && userId) {
-              send({ type: 'oo-self', deviceId: did, userId })
+            const device = deviceRef.current
+            if (device && userId) {
+              send({ type: 'oo-self', deviceId: device.deviceId, userId, account: device.account })
             }
           }
           send({
@@ -447,18 +442,18 @@ function OfficeEditorBase(
         throw error
       }
       if (!alive) return
-      keypairRef.current = current.keypair
-      const did = current.deviceId
-      deviceIdRef.current = did
+      const device = current
+      deviceRef.current = device
+      const did = device.deviceId
 
       // 2. Open the relay WebSocket.
-      const wsUrl = () => collabSocketUrl(fileId, did)
+      const wsUrl = () => collabSocketUrl(device, localBase(fileId))
       // Forward initial peer-list (from hello) + later updates (from
       // server-pushed `peers` messages) to the bridge so it can rebuild
       // OnlyOffice's connectState. Without this OO rejects remote
       // saveChanges from peers it never learned about, producing the
       // "second-direction sync stalls" bug user-reported on 2026-05-07.
-      function forwardPeers(list: { deviceId: number; userId: string; username?: string; color?: string }[], ts: number) {
+      function forwardPeers(list: { account: string; deviceId: number; userId: string; username?: string; color?: string }[], ts: number) {
         const iframe = iframeRef.current
         if (!iframe || !iframe.contentWindow) return
         iframe.contentWindow.postMessage(
@@ -473,7 +468,7 @@ function OfficeEditorBase(
       const iframeForSelf = iframeRef.current
       if (iframeForSelf && iframeForSelf.contentWindow && did && userId) {
         iframeForSelf.contentWindow.postMessage(
-          { type: 'oo-self', deviceId: did, userId } satisfies ToBridge,
+          { type: 'oo-self', deviceId: did, userId, account: device.account } satisfies ToBridge,
           officeOrigin(),
         )
       }
@@ -522,7 +517,7 @@ function OfficeEditorBase(
         },
         onFrame: async (bs: Uint8Array) => {
           try {
-            const f = await openCollabFrameV1(bs, fileKey, {
+            const f = await openCollabFrame(bs, fileKey, {
               fileId,
               keyGeneration,
             })
@@ -545,7 +540,7 @@ function OfficeEditorBase(
                 iframe.contentWindow.postMessage(
                   {
                     type: 'oo-remote-cursor',
-                    senderDeviceId: Number(f.senderDeviceId),
+                    sender: peerKey(f.sender, f.deviceId),
                     payload: new TextDecoder().decode(payload),
                   } satisfies ToBridge,
                   officeOrigin(),
@@ -557,20 +552,14 @@ function OfficeEditorBase(
           }
         },
         onError: (e: unknown) => console.warn('office: ws error', e),
-        // The server stopped taking this device (removed under Account →
+        // The account stopped listing this device (removed under Account →
         // Devices). OnlyOffice knows this tab by its device, so the editor
         // stops here; reopening registers a new one.
         onRefused: async () => {
-          const trusted = await listDevices()
-            .then((rows) => rows.some((row) => row.deviceId === did && row.trusted))
-            .catch(() => null)
-          if (trusted !== false) return
+          if ((await stillListed(device)) !== false) return
           await deviceRefused()
           transportRef.current?.close()
           if (alive) setError(t('editor.devices.removed'))
-        },
-        onRenewDevice: (deviceIds) => {
-          void renewRequested(deviceIds).catch(() => undefined)
         },
       })
       if (!alive) {
@@ -585,11 +574,10 @@ function OfficeEditorBase(
       transportRef.current?.close()
       transportRef.current = null
     }
-    // storedDeviceId is intentionally NOT a dep: the first render reads it
-    // (often null), the registration flow sets it via dispatch, and React's
-    // re-render would otherwise tear down + recreate the WS for no reason.
-    // We hold the registered id in deviceIdRef and don't need it in deps.
-    // The WS URL is built per connect from a fresh token (collabSocketUrl); refreshing the
+    // The device is intentionally NOT a dep: registering one updates the
+    // session, and React's re-render would otherwise tear down + recreate
+    // the WS for no reason. We hold the device in deviceRef.
+    // The WS URL is built per connect from a fresh ticket (collabSocketUrl); refreshing the
     // token mid-session MUST NOT tear down the WS — that would drop the peer
     // roster and silently break sync. The WS stays authenticated for its
     // lifetime; if the relay needs to re-auth, it'll

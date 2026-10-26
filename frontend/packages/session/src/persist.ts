@@ -41,7 +41,7 @@ export async function persistKeys(sessionId: string, keys: SessionKeys): Promise
 }
 
 /**
- * Keep `device` as this sign-in's collaboration device on this origin: in
+ * Keep `device` as this sign-in's device on this origin: in
  * the session now, and sealed with the keys when this origin keeps them
  * (so a reload or another tab reuses it instead of registering another).
  * `null` forgets it.
