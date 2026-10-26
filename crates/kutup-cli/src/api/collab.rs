@@ -1,6 +1,6 @@
-//! Collaboration over HTTP (docs/plans/cli-yjs-sync.md): the CLI's
-//! collaboration device, signed by the account (docs/plans/device-registration.md),
-//! and the log of a file's live edits.
+//! Collaboration over HTTP (docs/plans/cli-yjs-sync.md): the log of a
+//! file's live edits, read and written as the CLI's device of its account
+//! (docs/plans/one-device-list.md).
 
 use anyhow::Result;
 use base64::engine::general_purpose::STANDARD;
@@ -9,20 +9,15 @@ use reqwest::Method;
 use serde::Deserialize;
 
 use super::Client;
-
-/// The account's statement for a device key: a challenge from this server,
-/// when, and the authority's signature.
-pub struct DeviceStatement<'a> {
-    pub challenge: &'a str,
-    pub issued_at_ms: i64,
-    pub signature: &'a str,
-}
+use crate::collab_device::Device;
 
 /// One frame of the log.
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct LoggedFrame {
     pub seq: i64,
+    /// Its sender's account, which its signature covers.
+    pub sender: String,
     /// The sealed frame, base64.
     pub frame: String,
 }
@@ -49,76 +44,27 @@ pub struct FramesPage {
 }
 
 impl Client {
-    /// A one-time challenge (base64) for registering or renewing a device.
-    pub fn device_challenge(&self) -> Result<String> {
-        #[derive(Deserialize)]
-        struct Challenge {
-            challenge: String,
-        }
-        let resp = self.request(Method::POST, "/devices/challenge").send()?;
-        Ok(super::decode_json::<Challenge>(resp)?.challenge)
-    }
-
-    /// Registers `public_signing` (base64) as a collaboration device; its id.
-    pub fn register_device(
-        &self,
-        public_signing: &str,
-        label: &str,
-        statement: &DeviceStatement,
-    ) -> Result<i64> {
-        #[derive(Deserialize)]
-        #[serde(rename_all = "camelCase")]
-        struct Registered {
-            device_id: i64,
-        }
-        let resp = self
-            .request(Method::POST, "/devices")
-            .json(&serde_json::json!({
-                "publicSigning": public_signing,
-                "label": label,
-                "challenge": statement.challenge,
-                "issuedAtMs": statement.issued_at_ms,
-                "signature": statement.signature,
-            }))
-            .send()?;
-        Ok(super::decode_json::<Registered>(resp)?.device_id)
-    }
-
-    /// Renews a device's statement (other servers trust one 30 days).
-    pub fn renew_device(&self, device_id: i64, statement: &DeviceStatement) -> Result<()> {
-        let resp = self
-            .request(Method::POST, &format!("/devices/{device_id}/renew"))
-            .json(&serde_json::json!({
-                "challenge": statement.challenge,
-                "issuedAtMs": statement.issued_at_ms,
-                "signature": statement.signature,
-            }))
-            .send()?;
-        super::check_ok(resp)
-    }
-
     /// The log of `file_id` after `after`, one page.
-    pub fn collab_frames(&self, file_id: &str, device_id: i64, after: i64) -> Result<FramesPage> {
+    pub fn collab_frames(&self, file_id: &str, device: &Device, after: i64) -> Result<FramesPage> {
         let resp = self
             .request(
                 Method::GET,
-                &format!("/files/{file_id}/collab/frames?deviceId={device_id}&after={after}"),
+                &format!("/files/{file_id}/collab/frames?after={after}"),
             )
+            .header(kutup_chat_proto::DEVICE_HEADER, device.header())
             .send()?;
         super::decode_json(resp)
     }
 
     /// Appends one sealed frame to the log; its position.
-    pub fn post_collab_frame(&self, file_id: &str, device_id: i64, frame: Vec<u8>) -> Result<i64> {
+    pub fn post_collab_frame(&self, file_id: &str, device: &Device, frame: Vec<u8>) -> Result<i64> {
         #[derive(Deserialize)]
         struct Kept {
             seq: i64,
         }
         let resp = self
-            .request(
-                Method::POST,
-                &format!("/files/{file_id}/collab/frames?deviceId={device_id}"),
-            )
+            .request(Method::POST, &format!("/files/{file_id}/collab/frames"))
+            .header(kutup_chat_proto::DEVICE_HEADER, device.header())
             .header(reqwest::header::CONTENT_TYPE, "application/octet-stream")
             .body(frame)
             .send()?;

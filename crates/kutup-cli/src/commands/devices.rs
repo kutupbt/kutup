@@ -1,21 +1,23 @@
-//! `kutup devices` — list and revoke account devices. Mirrors `cmd/devices.go`.
+//! `kutup devices` — the account's devices (docs/plans/one-device-list.md):
+//! list them, and remove one. Removing is the account's act: its authority
+//! signs the next manifest without the device, so a session alone cannot.
 
-use anyhow::Result;
-use base64::Engine;
+use anyhow::{anyhow, Result};
 use clap::Subcommand;
-use kutup_crypto::device_registration;
 
+use crate::collab_device::Signer;
 use crate::commands::confirm;
 use crate::context::require_session;
 
 #[derive(Subcommand)]
 pub enum DevicesCmd {
-    /// List devices registered for your account.
+    /// List the account's devices (Chat, editing apps, the CLI).
     List,
-    /// Revoke a device (closes its in-flight WebSocket sessions).
-    Revoke {
-        /// Numeric device id.
-        device_id: i64,
+    /// Remove a device from the account (closes its open sessions).
+    #[command(alias = "revoke")]
+    Remove {
+        /// The device's id in the account's list.
+        device_id: u32,
         /// Skip the confirmation prompt.
         #[arg(long)]
         yes: bool,
@@ -25,27 +27,27 @@ pub enum DevicesCmd {
 pub fn run(profile: &str, json: bool, cmd: &DevicesCmd) -> Result<()> {
     match cmd {
         DevicesCmd::List => list(profile, json),
-        DevicesCmd::Revoke { device_id, yes } => revoke(profile, json, *device_id, *yes),
+        DevicesCmd::Remove { device_id, yes } => remove(profile, json, *device_id, *yes),
     }
 }
 
 fn list(profile: &str, json: bool) -> Result<()> {
     let ctx = require_session(profile)?;
-    let devices = ctx.client.list_user_devices()?;
+    let devices = ctx.client.list_devices()?;
 
     if json {
         crate::output::print_json(&devices)?;
         return Ok(());
     }
     if devices.is_empty() {
-        println!("(no devices registered)");
+        println!("(no devices)");
         return Ok(());
     }
     println!(
         "{}",
         crate::output::header(format!(
-            "{:<12}  {:<30}  {:<16}  {:<16}  STATUS",
-            "ID", "LABEL", "CREATED", "LAST SEEN"
+            "{:<4}  {:<7}  {:<30}  {:<16}  {:<16}  STATUS",
+            "ID", "KIND", "NAME", "CREATED", "LAST SEEN"
         ))
     );
     for d in &devices {
@@ -54,17 +56,20 @@ fn list(profile: &str, json: bool) -> Result<()> {
             .as_deref()
             .map(crate::output::format_time)
             .unwrap_or_else(|| "(never)".to_string());
-        let status = if !d.is_active {
-            "revoked"
-        } else if d.trusted {
-            "active"
+        let status = if d.expired {
+            "expired"
+        } else if !d.listed {
+            "not listed"
+        } else if d.this_sign_in {
+            "active (this sign-in)"
         } else {
-            "untrusted"
+            "active"
         };
         println!(
-            "{:<12}  {:<30}  {:<16}  {:<16}  {}",
+            "{:<4}  {:<7}  {:<30}  {:<16}  {:<16}  {}",
             d.device_id,
-            d.label,
+            d.kind.as_str(),
+            d.name,
             crate::output::format_time(&d.created_at),
             last,
             status
@@ -73,43 +78,37 @@ fn list(profile: &str, json: bool) -> Result<()> {
     Ok(())
 }
 
-fn revoke(profile: &str, json: bool, device_id: i64, yes: bool) -> Result<()> {
+fn remove(profile: &str, json: bool, device_id: u32, yes: bool) -> Result<()> {
     let ctx = require_session(profile)?;
-
+    if !ctx
+        .client
+        .list_devices()?
+        .iter()
+        .any(|d| d.device_id == device_id)
+    {
+        return Err(anyhow!("the account has no device {device_id}"));
+    }
     confirm(
-        &format!("Revoke device {device_id}? This closes its active sessions."),
+        &format!("Remove device {device_id}? This closes its open sessions."),
         yes,
     )?;
-
-    // Revoking is the account's act: its authority signs the revocation, so
-    // a session alone cannot revoke devices (docs/plans/device-registration.md).
-    if ctx.session.master_key.is_empty() {
-        return Err(anyhow::anyhow!(
-            "this session holds no account keys; sign in again to revoke a device"
-        ));
+    // Published as this CLI's own device of the account.
+    let signer = Signer::new(&ctx.client, &ctx.store, &ctx.session)?;
+    let me = signer.device()?;
+    signer.publish(&me.header(), |devices| {
+        devices.retain(|d| d.device_id != device_id);
+        if devices.is_empty() {
+            return Err(anyhow!("the account's last device stays"));
+        }
+        Ok(())
+    })?;
+    if device_id == me.id {
+        ctx.store.put_collab_device(None)?;
     }
-    let device = ctx
-        .client
-        .list_user_devices()?
-        .into_iter()
-        .find(|d| d.device_id == device_id && d.is_active)
-        .ok_or_else(|| anyhow::anyhow!("no active device {device_id}"))?;
-    let key: [u8; 32] = base64::engine::general_purpose::STANDARD
-        .decode(&device.public_signing)
-        .ok()
-        .and_then(|k| k.try_into().ok())
-        .ok_or_else(|| anyhow::anyhow!("the server sent a malformed device key"))?;
-    let me = crate::identity::Me::of(&ctx, profile)?;
-    let server = ctx.client.settings()?.chat.server_name;
-    let revoked_at_ms = (time::OffsetDateTime::now_utc().unix_timestamp_nanos() / 1_000_000) as i64;
-    let signature =
-        device_registration::sign_revocation(&me.identity, &server, &key, revoked_at_ms)?;
-    ctx.client
-        .revoke_user_device(device_id, revoked_at_ms, &signature)?;
     if json {
-        crate::output::print_json(&serde_json::json!({ "deviceId": device_id, "revoked": true }))?;
+        crate::output::print_json(&serde_json::json!({ "deviceId": device_id, "removed": true }))?;
     } else {
-        println!("Revoked device {device_id}");
+        println!("Removed device {device_id}");
     }
     Ok(())
 }

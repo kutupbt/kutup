@@ -237,7 +237,9 @@ impl Store {
             return Ok(None);
         }
         let data = self.decrypt(v.value())?;
-        Ok(Some(serde_json::from_slice(&data)?))
+        // One kept in an earlier form (before devices were manifest entries)
+        // is no device now: a new one registers.
+        Ok(serde_json::from_slice(&data).ok())
     }
 
     /// Keeps the collaboration device (`None`: forgets it).
@@ -499,18 +501,19 @@ pub struct SyncFileState {
     pub synced_at: i64,
 }
 
-/// The CLI's collaboration device (docs/plans/device-registration.md): the
-/// key its frames are signed with, registered for one account on one server.
+/// The CLI's device of its account (docs/plans/one-device-list.md): its id
+/// in the account's manifest, the key its frames are signed with, and its
+/// credential, for one account on one server.
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CollabDevice {
     pub server: String,
     pub user_id: String,
-    pub device_id: i64,
+    pub device_id: u32,
     /// The Ed25519 seed, base64.
     pub seed: String,
-    /// When the account's statement for it was signed (renewed after 15 days).
-    pub issued_at_ms: i64,
+    /// The device credential, base64.
+    pub credential: String,
 }
 
 /// Where a note or place list was last in sync (docs/plans/cli-yjs-sync.md):

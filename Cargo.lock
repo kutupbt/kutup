@@ -3463,6 +3463,7 @@ dependencies = [
  "hex",
  "indicatif",
  "keyring",
+ "kutup-chat-proto",
  "kutup-collab",
  "kutup-crypto",
  "kutup-pass",
