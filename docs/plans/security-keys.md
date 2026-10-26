@@ -1,7 +1,15 @@
 # Security keys as a second factor
 
-Status: **approved** (the user, 2026-10-24; decisions below). Nothing here is
-built yet.
+Status: **approved** (the user, 2026-10-24; decisions below). Step 1 (recovery
+codes, the phrase turning 2FA off) is built (#353). Step 2 (the adapter, the
+data and the server's ceremonies) is built: kutup-crypto's `webauthn`
+module, the `user_security_keys` and `webauthn_ceremonies` tables, the
+routes in docs/api.md ("Security keys"), and a security key at sign-in. Its
+vectors are Chromium's virtual authenticator, recorded by
+`scripts/record-webauthn-vector.mjs`; a real key's recording (a YubiKey)
+drops into `crates/kutup-crypto/tests/vectors/webauthn/` when one is made.
+Step 3 (the settings and sign-in UI) is next. Per-account overrides of the
+key limit come with the settings registry, for every limit at once.
 
 **The request (the user, through the main session):** security keys (WebAuthn:
 a YubiKey, a phone's or laptop's built-in authenticator used as a key) as a
@@ -58,7 +66,7 @@ choice.
 |---|---|
 | `id` | uuid, the settings page's handle |
 | `user_id` | FK, cascade |
-| `credential_id` | bytea, unique per user; at most 1023 bytes (the spec's bound) |
+| `credential_id` | bytea, unique across accounts (WebAuthn L3 §7.1 step 26); at most 1023 bytes (the spec's bound) |
 | `public_key` | the COSE key, as registered |
 | `algorithm` | the COSE algorithm id |
 | `sign_count` | bigint; a counter that goes back marks the key compromised (§5) |
@@ -76,11 +84,11 @@ started it.
 
 ## 4. The ceremonies
 
-The relying party id is the deployment's registrable domain
-(`kutup.dev`, from `SERVER_URL`), so one key works on every app's host. The
-accepted origins are the app origins the server already lists
-(`ALLOWED_ORIGINS`). Both are configuration, read once at start and checked
-by `check-config`.
+The relying party id is configuration, never guessed from a host's shape:
+`KUTUP_WEBAUTHN_RP_ID`, else `KUTUP_BASE_DOMAIN` (`kutup.dev`, so one key
+works on every app's host), else the account app's host. The accepted origin
+is the account app's. Both are read once at start and checked by
+`check-config`; changing the RP id later makes every added key unusable.
 
 **Adding a key** (Account settings → Security → Two-factor authentication):
 1. `POST /api/auth/security-keys/register/start`: bearer, plus a grant from
@@ -131,7 +139,13 @@ becomes a list of the factors the account has:
   Proton's does.
 
 **Reauth** (password change, turning factors on or off, deleting the
-account): the same second step, with either factor.
+account): the same second step, with either factor. While two-step sign-in
+is on, adding a factor (a key, or the authenticator app beside keys) and
+turning "Require PIN" off take a factor the account has proved again, as
+removing one does and as Proton's 2FA-scoped changes do: a password and a
+live session alone can't plant a factor that outlives the session. A key's
+registration remembers whether its start proved one, and its finish refuses
+one that didn't once a factor is on.
 
 ## 5. Policy
 
@@ -141,9 +155,14 @@ account): the same second step, with either factor.
 - **User verification:** `discouraged`, unless the account turned "Require
   PIN" on (then `required`, for adding and for signing in).
 - **Counter:** a key reporting a counter at or below the stored one (both
-  non-zero) is refused for that sign-in and marked `compromised`, shown so
-  in settings as Proton shows its flag. Keys that always report 0 (many
-  platform authenticators) are taken as they are.
+  non-zero) is refused for that sign-in. With no other use of the key since
+  the ceremony started it is marked `compromised`, shown so in settings as
+  Proton shows its flag, and never used again; its owner removes it (and
+  adds it again, a new credential, if it is theirs). When the key was used
+  after the ceremony started (two tabs, a double submit), the lower counter
+  is that use: refused only, to be started again, as Signal does
+  (`409 securityKeyRetry`). Keys that always report 0 (many platform
+  authenticators) are taken as they are.
 - **Discoverable credentials (passkeys):** not asked for, and not offered
   for passwordless sign-in.
 - **Apps that can't do WebAuthn:** the CLI, and native apps until they do.

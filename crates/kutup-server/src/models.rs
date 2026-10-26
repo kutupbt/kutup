@@ -141,7 +141,11 @@ pub struct MeResponse {
     pub envelope_binding: String,
     pub username: String,
     pub public_key: String,
+    /// The authenticator app is on.
     pub totp_enabled: bool,
+    /// Security keys the account has (a compromised one included): two-step
+    /// sign-in is on while this or `totp_enabled` is.
+    pub security_keys: i64,
     pub storage_quota_bytes: i64,
     pub storage_used_bytes: i64,
     pub is_admin: bool,

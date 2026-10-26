@@ -56,6 +56,7 @@ pub mod rate_limits;
 pub mod registration_codes;
 pub mod renames;
 pub mod security_events;
+pub mod security_keys;
 pub mod sessions;
 pub mod shares;
 pub mod storage;

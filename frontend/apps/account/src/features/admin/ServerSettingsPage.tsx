@@ -85,6 +85,8 @@ const DRIVE_SETTINGS = [
 /** Two-factor sign-in (site_settings::TWO_FACTOR_SETTINGS). */
 const TWO_FACTOR_SETTINGS = [
   { field: 'twoFactorRecoveryCodes', min: 4, max: 64 },
+  { field: 'securityKeysPerAccount', min: 1, max: 50 },
+  { field: 'webauthnCeremonySeconds', min: 60, max: 600 },
 ] as const satisfies readonly { field: keyof AdminSettings; min: number; max: number }[]
 /** Every whole-number setting the page edits by field. */
 const NUMERIC_SETTINGS = [...MULTI_SETTINGS, ...CALENDAR_SETTINGS, ...CHAT_LINKING_SETTINGS, ...TWO_FACTOR_SETTINGS, ...DRIVE_SETTINGS]

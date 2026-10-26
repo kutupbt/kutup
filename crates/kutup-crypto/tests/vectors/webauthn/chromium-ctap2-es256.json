@@ -1,0 +1,44 @@
+{
+  "name": "chromium-ctap2-es256",
+  "source": "Chromium virtual authenticator (CTAP2, USB), recorded with Playwright",
+  "rpId": "kutup.test",
+  "origin": "https://account.kutup.test",
+  "account": "bMYn6os0IHkUy83VVXJaIA",
+  "registration": {
+    "challenge": "gKmtZZgHMsV28xnlFxVeBQ",
+    "requireUv": false,
+    "response": {
+      "authenticatorAttachment": "cross-platform",
+      "clientExtensionResults": {},
+      "id": "H7TE_ewSaET9GUIt0FMNr-PmrgmOcURZGjXVEGToupQ",
+      "rawId": "H7TE_ewSaET9GUIt0FMNr-PmrgmOcURZGjXVEGToupQ",
+      "response": {
+        "attestationObject": "o2NmbXRkbm9uZWdhdHRTdG10oGhhdXRoRGF0YViB4i5FF1IbTnoKF7mw_MibXLqT7Kvs7y3NWy59sdAMicNFAAAAAQAAAAAAAAAAAAAAAAAAAAAAIB-0xP3sEmhE_RlCLdBTDa_j5q4JjnFEWRo11RBk6LqUpAEBAycgBiFYIOzg4Qnc31Hwk88EAvAJyE2AJPYTpcpiBM3YwQriNmTP",
+        "authenticatorData": "4i5FF1IbTnoKF7mw_MibXLqT7Kvs7y3NWy59sdAMicNFAAAAAQAAAAAAAAAAAAAAAAAAAAAAIB-0xP3sEmhE_RlCLdBTDa_j5q4JjnFEWRo11RBk6LqUpAEBAycgBiFYIOzg4Qnc31Hwk88EAvAJyE2AJPYTpcpiBM3YwQriNmTP",
+        "clientDataJSON": "eyJ0eXBlIjoid2ViYXV0aG4uY3JlYXRlIiwiY2hhbGxlbmdlIjoiZ0ttdFpaZ0hNc1YyOHhubEZ4VmVCUSIsIm9yaWdpbiI6Imh0dHBzOi8vYWNjb3VudC5rdXR1cC50ZXN0IiwiY3Jvc3NPcmlnaW4iOmZhbHNlfQ",
+        "publicKey": "MCowBQYDK2VwAyEA7ODhCdzfUfCTzwQC8AnITYAk9hOlymIEzdjBCuI2ZM8",
+        "publicKeyAlgorithm": -8,
+        "transports": [
+          "usb"
+        ]
+      },
+      "type": "public-key"
+    }
+  },
+  "authentication": {
+    "challenge": "Yx34e4LxPwUOff0dLVMmGA",
+    "requireUv": false,
+    "response": {
+      "authenticatorAttachment": "cross-platform",
+      "clientExtensionResults": {},
+      "id": "H7TE_ewSaET9GUIt0FMNr-PmrgmOcURZGjXVEGToupQ",
+      "rawId": "H7TE_ewSaET9GUIt0FMNr-PmrgmOcURZGjXVEGToupQ",
+      "response": {
+        "authenticatorData": "4i5FF1IbTnoKF7mw_MibXLqT7Kvs7y3NWy59sdAMicMBAAAAAg",
+        "clientDataJSON": "eyJ0eXBlIjoid2ViYXV0aG4uZ2V0IiwiY2hhbGxlbmdlIjoiWXgzNGU0THhQd1VPZmYwZExWTW1HQSIsIm9yaWdpbiI6Imh0dHBzOi8vYWNjb3VudC5rdXR1cC50ZXN0IiwiY3Jvc3NPcmlnaW4iOmZhbHNlfQ",
+        "signature": "_UevHzg6rOj6VhqVZ0f_rTnS18B5aEBfPxB7OYSHY0LHUwAN3YBQNIlG8tN3n-b2IfRHOr__QH6N36uxBNl2Cg"
+      },
+      "type": "public-key"
+    }
+  }
+}

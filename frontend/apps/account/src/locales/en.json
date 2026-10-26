@@ -298,7 +298,12 @@
           "twoFactorOn": "Two-factor authentication turned on",
           "twoFactorOff": "Two-factor authentication turned off",
           "recoveryCodeUsed": "Signed in with a recovery code",
-          "recoveryCodesRenewed": "New recovery codes made"
+          "recoveryCodesRenewed": "New recovery codes made",
+          "securityKeyAdded": "Security key “{{oldName}}” added",
+          "securityKeyRemoved": "Security key “{{oldName}}” removed",
+          "securityKeyCompromised": "Security key “{{oldName}}” may have been copied (no longer used)",
+          "authenticatorOn": "Authenticator app turned on",
+          "authenticatorOff": "Authenticator app turned off"
         }
       },
       "recovery": "Recovery phrase",
@@ -882,10 +887,14 @@
         "chatDistributionMessageBytesHint": "The largest message a new Chat identity sends each kept device."
       },
       "twoFactor": "Two-factor sign-in",
-      "twoFactorHint": "Recovery codes for accounts with two-factor authentication.",
+      "twoFactorHint": "Recovery codes and security keys for accounts with two-factor authentication.",
       "twoFactorLimits": {
         "twoFactorRecoveryCodes": "Recovery codes per account",
-        "twoFactorRecoveryCodesHint": "How many one-time codes are made when someone turns two-factor authentication on or makes new codes."
+        "twoFactorRecoveryCodesHint": "How many one-time codes are made when someone turns two-factor authentication on or makes new codes.",
+        "securityKeysPerAccount": "Security keys per account",
+        "securityKeysPerAccountHint": "How many security keys one account may add.",
+        "webauthnCeremonySeconds": "Security key prompt (seconds)",
+        "webauthnCeremonySecondsHint": "How long a prompt to touch a security key stays open, when adding one or signing in."
       },
       "drive": "Drive uploads and streaming",
       "driveHint": "How large a file may be, and how videos and audio play while they download.",
