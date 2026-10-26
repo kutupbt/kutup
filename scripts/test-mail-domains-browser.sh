@@ -6,8 +6,9 @@
 # first, as an operator does, so a domain's DKIM can check good.
 #
 # Runs on master and on demand (CI's mail-domains-browser job); run it
-# locally before merging a change to custom domains. One Docker stack at a
-# time: it takes ports 38443 and 39086-39088.
+# locally before merging a change to custom domains. It takes port
+# KUTUP_HTTPS_PORT (38443 unless set, as a test lane sets it) and
+# 39086-39088 (or the KUTUP_MAIL_*_PORT a lane sets).
 set -euo pipefail
 
 root_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -35,10 +36,12 @@ export RATE_LIMITS_RELAXED=true
 export REGISTRATION_MODE=on
 export MAIL_DEFAULT_DELAY_SEND_SECONDS=0
 # One app per hostname; *.localhost resolves to this machine.
-export KUTUP_HTTPS_PORT=38443
+https_port="${KUTUP_HTTPS_PORT:-38443}"
+export KUTUP_HTTPS_PORT="$https_port"
 for app in account drive chat office editor maps photos contacts mail pass calendar; do
-  export "KUTUP_${app^^}_URL=https://$app.localhost:38443"
+  export "KUTUP_${app^^}_URL=https://$app.localhost:$https_port"
 done
+export E2E_APP_ORIGIN="https://{app}.localhost:$https_port"
 
 KUTUP_MAIL_KEYS_DIR="$(mktemp -d)"
 export KUTUP_MAIL_KEYS_DIR
@@ -135,8 +138,8 @@ done
 
 curl --fail --silent --show-error --insecure --retry 60 --retry-delay 1 \
   --retry-connrefused --retry-all-errors \
-  --resolve "account.localhost:38443:127.0.0.1" \
-  https://account.localhost:38443/register >/dev/null
+  --resolve "account.localhost:$https_port:127.0.0.1" \
+  "https://account.localhost:$https_port/register" >/dev/null
 
 E2E_PSQL="docker compose --project-name $project --file $root_dir/docker-compose.yml --file $root_dir/docker-compose.mail.yml --file $root_dir/tests/mail/compose.yml exec -T postgres psql -U $POSTGRES_USER -d $POSTGRES_DB -v ON_ERROR_STOP=1"
 export E2E_PSQL
