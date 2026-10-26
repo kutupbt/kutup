@@ -21,7 +21,10 @@ import { PLAIN_CHUNK } from '@kutup/crypto/streamEncryptor'
 import { EncryptedFileSource, type PlaintextSource } from './encryptedSource'
 
 function plaintext(size: number): PlaintextSource & { reads: number } {
-  const bytes = Uint8Array.from({ length: size }, (_, i) => (i * 7 + 3) & 0xff)
+  // A plain loop: Uint8Array.from over an array-like with a callback takes
+  // seconds for 10 MiB.
+  const bytes = new Uint8Array(size)
+  for (let i = 0; i < size; i++) bytes[i] = (i * 7 + 3) & 0xff
   const source = {
     size,
     reads: 0,

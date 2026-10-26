@@ -29,7 +29,6 @@ const ROUND_TRIP_SIZES = [
   PLAIN_CHUNK + 1,
 ] as const
 
-const LIBSODIUM_TIMEOUT_MS = 60_000
 
 async function genKey(): Promise<Uint8Array> {
   const sodium = await getSodium()
@@ -97,7 +96,7 @@ describe('newStreamDecryptor', () => {
     expect(sawFinal).toBe(true)
     expect(pos).toBe(n)
     expect(recovered).toEqual(plain)
-  }, LIBSODIUM_TIMEOUT_MS)
+  })
 
   it('rejects a wrong-length header', async () => {
     const key = await genKey()
@@ -128,5 +127,5 @@ describe('newStreamDecryptor', () => {
     const dec = await newStreamDecryptor(key, header)
     // Pull the SECOND chunk first — nonce state mismatch → MAC fail.
     expect(() => dec.pull(chunks[1])).toThrow(/Stream decryption failed/)
-  }, LIBSODIUM_TIMEOUT_MS)
+  })
 })
