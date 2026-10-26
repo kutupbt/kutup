@@ -15,7 +15,14 @@ import { OneUseSecret, ReauthLockedError, WrongPasswordError } from '@kutup/sess
 import { PasswordInput } from '@kutup/ui/components/password-input'
 import { apiErrorMessage } from '@kutup/ui/lib/apiError'
 import { DataStateSection } from './DataStateSection'
-import { useDisableTotp, useStartTotp, useVerifyTotp, type TotpEnrolment } from './api'
+import {
+  useDisableTotp,
+  useRecoveryCodesLeft,
+  useRenewRecoveryCodes,
+  useStartTotp,
+  useVerifyTotp,
+  type TotpEnrolment,
+} from './api'
 import { ChangePasswordSection } from './ChangePasswordSection'
 import { SecurityEventsSection } from './SecurityEventsSection'
 
@@ -23,10 +30,13 @@ function CodeField({
   label,
   value,
   onChange,
+  recovery = false,
 }: {
   label: string
   value: string
   onChange: (value: string) => void
+  /** Takes a recovery code as well as an authenticator code. */
+  recovery?: boolean
 }) {
   return (
     <Field label={label} required>
@@ -36,12 +46,121 @@ function CodeField({
           value={value}
           onChange={(e) => onChange(e.target.value)}
           autoComplete="one-time-code"
-          inputMode="numeric"
-          maxLength={6}
-          className="max-w-40 font-mono tracking-widest"
+          inputMode={recovery ? 'text' : 'numeric'}
+          maxLength={recovery ? 13 : 6}
+          spellCheck={false}
+          className="max-w-48 font-mono tracking-widest"
         />
       )}
     </Field>
+  )
+}
+
+/** New recovery codes, shown once: copied, downloaded, then put away. */
+function RecoveryCodesShown({ codes, onDone }: { codes: string[]; onDone: () => void }) {
+  const { t } = useTranslation()
+  const session = useRequiredSession()
+  const text = `${t('settings.security.codesFileHeader', { account: session.username })}\n\n${codes.join('\n')}\n`
+
+  function download() {
+    const url = URL.createObjectURL(new Blob([text], { type: 'text/plain' }))
+    const a = document.createElement('a')
+    a.href = url
+    a.download = 'kutup-recovery-codes.txt'
+    a.click()
+    URL.revokeObjectURL(url)
+  }
+
+  return (
+    <div className="space-y-4">
+      <Alert variant="warn" title={t('settings.security.saveCodesTitle')}>
+        {t('settings.security.saveCodesNote')}
+      </Alert>
+      <ol className="grid grid-cols-2 gap-x-6 gap-y-1.5 rounded-md border border-border bg-muted/40 p-4">
+        {codes.map((code) => (
+          <li key={code} className="font-mono text-sm">
+            {code}
+          </li>
+        ))}
+      </ol>
+      <div className="flex flex-wrap gap-2">
+        <Button
+          type="button"
+          variant="outline"
+          onClick={() => {
+            void navigator.clipboard.writeText(text).then(() => toast.success(t('settings.security.codesCopied')))
+          }}
+        >
+          {t('settings.security.copyCodes')}
+        </Button>
+        <Button type="button" variant="outline" onClick={download}>
+          {t('settings.security.downloadCodes')}
+        </Button>
+        <Button type="button" onClick={onDone}>
+          {t('settings.security.codesSaved')}
+        </Button>
+      </div>
+    </div>
+  )
+}
+
+/** How many recovery codes are left, and new ones in their place. */
+function RecoveryCodes({ onCodes }: { onCodes: (codes: string[]) => void }) {
+  const { t } = useTranslation()
+  const left = useRecoveryCodesLeft(true)
+  const renew = useRenewRecoveryCodes()
+  const [open, setOpen] = useState(false)
+  const [code, setCode] = useState('')
+  const [password, setPassword] = useState('')
+
+  return (
+    <div className="space-y-3">
+      <p className="text-sm">
+        {left.data === undefined
+          ? null
+          : left.data === 0
+            ? t('settings.security.codesNone')
+            : t('settings.security.codesLeft', { count: left.data })}
+      </p>
+      {open ? (
+        <form
+          className="space-y-4"
+          onSubmit={(event) => {
+            event.preventDefault()
+            renew.mutate(
+              { code: code.trim(), password: new OneUseSecret(password) },
+              {
+                onSuccess: (codes) => {
+                  setOpen(false)
+                  setCode('')
+                  onCodes(codes)
+                },
+              },
+            )
+            setPassword('')
+          }}
+        >
+          <Alert variant="warn">{t('settings.security.renewWarning')}</Alert>
+          <CodeField label={t('settings.security.codeOrRecovery')} value={code} onChange={setCode} recovery />
+          <PasswordField value={password} onChange={setPassword} />
+          {renew.isError ? (
+            <Alert variant="error">{totpFailure(renew.error, t, 'settings.security.renewFailed')}</Alert>
+          ) : null}
+          <div className="flex gap-2">
+            <Button type="button" variant="outline" onClick={() => setOpen(false)}>
+              {t('common.cancel')}
+            </Button>
+            <Button type="submit" loading={renew.isPending}>
+              {t('settings.security.renewCodes')}
+            </Button>
+          </div>
+        </form>
+      ) : (
+        <Button variant="outline" onClick={() => setOpen(true)}>
+          {t('settings.security.renewCodes')}
+        </Button>
+      )}
+    </div>
   )
 }
 
@@ -64,7 +183,7 @@ function totpFailure(error: unknown, t: ReturnType<typeof useTranslation>['t'], 
   return apiErrorMessage(error, t(fallbackKey))
 }
 
-function Enrol() {
+function Enrol({ onCodes }: { onCodes: (codes: string[]) => void }) {
   const { t } = useTranslation()
   const start = useStartTotp()
   const verify = useVerifyTotp()
@@ -90,15 +209,16 @@ function Enrol() {
 
   function submit(event: FormEvent) {
     event.preventDefault()
-    verify.mutate(
-      { code: code.trim(), password: new OneUseSecret(password) },
-      {
-        onSuccess: () => {
-          toast.success(t('settings.security.enabled'))
-          setEnrolment(null)
-          setCode('')
-        },
+    // Turning it on updates the session, which swaps this form out of the
+    // page before a per-call onSuccess would run: the codes are handed up
+    // from the promise instead, which settles whether or not this form is
+    // still there. A failure shows through `verify.error`.
+    verify.mutateAsync({ code: code.trim(), password: new OneUseSecret(password) }).then(
+      (codes) => {
+        toast.success(t('settings.security.enabled'))
+        onCodes(codes)
       },
+      () => undefined,
     )
     // Asked again for each try; the grant it buys is made at the last moment.
     setPassword('')
@@ -158,21 +278,17 @@ function Disable() {
       className="space-y-4"
       onSubmit={(event) => {
         event.preventDefault()
-        disable.mutate(
-          { code: code.trim(), password: new OneUseSecret(password) },
-          {
-            onSuccess: () => {
-              toast.success(t('settings.security.disabled'))
-              setOpen(false)
-              setCode('')
-            },
-          },
+        // As turning it on: the session update swaps this form out before a
+        // per-call onSuccess would run, so the toast follows the promise.
+        disable.mutateAsync({ code: code.trim(), password: new OneUseSecret(password) }).then(
+          () => toast.success(t('settings.security.disabled')),
+          () => undefined,
         )
         setPassword('')
       }}
     >
       <Alert variant="warn">{t('settings.security.disableWarning')}</Alert>
-      <CodeField label={t('settings.security.code')} value={code} onChange={setCode} />
+      <CodeField label={t('settings.security.codeOrRecovery')} value={code} onChange={setCode} recovery />
       <PasswordField value={password} onChange={setPassword} />
       {disable.isError ? (
         <Alert variant="error">{totpFailure(disable.error, t, 'settings.security.disableFailed')}</Alert>
@@ -192,6 +308,8 @@ function Disable() {
 export function SecurityPage() {
   const { t } = useTranslation()
   const session = useRequiredSession()
+  // Recovery codes just made, shown until put away.
+  const [shownCodes, setShownCodes] = useState<string[] | null>(null)
 
   return (
     <PageBody width="prose">
@@ -210,10 +328,26 @@ export function SecurityPage() {
       >
         <Card>
           <CardContent className="p-5">
-            {session.totpEnabled ? <Disable /> : <Enrol />}
+            {shownCodes ? (
+              <RecoveryCodesShown codes={shownCodes} onDone={() => setShownCodes(null)} />
+            ) : session.totpEnabled ? (
+              <Disable />
+            ) : (
+              <Enrol onCodes={setShownCodes} />
+            )}
           </CardContent>
         </Card>
       </Section>
+
+      {session.totpEnabled && !shownCodes ? (
+        <Section title={t('settings.security.recoveryCodes')} description={t('settings.security.recoveryCodesDescription')}>
+          <Card>
+            <CardContent className="p-5">
+              <RecoveryCodes onCodes={setShownCodes} />
+            </CardContent>
+          </Card>
+        </Section>
+      ) : null}
 
       <ChangePasswordSection />
 

@@ -633,6 +633,10 @@ export interface CryptoWasmModule {
   photosLibraryDigest(envelopeBase64: string): string
   inspectPhotosLibrary(envelopeBase64: string): { accountIncarnationId: string; revision: number; previousDigest?: string }
   ContentHasher: new () => { update(chunk: Uint8Array): void; finish(): string; free(): void }
+  SuiteHasher: new () => { update(chunk: Uint8Array): void; finish(): Uint8Array; free(): void }
+  signingKeyGenerate(): Uint8Array
+  signingKeySign(privateKey: Uint8Array, message: Uint8Array): Uint8Array
+  signingKeyVerify(publicKey: Uint8Array, message: Uint8Array, signature: Uint8Array): boolean
   liveLocationOpen(keyBase64: string, streamIdHex: string, envelopeBase64: string): LiveLocationUpdate
   sealProfileKeyEnvelope(
     profileKeyBase64: string,

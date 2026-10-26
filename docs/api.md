@@ -469,6 +469,9 @@ silently. Nobody's sign-in ends for that.
 ### POST /api/auth/login/2fa
 
 Complete login when 2FA is enabled. Locked after 5 failed attempts.
+`code` is the authenticator's six digits, or one of the account's recovery
+codes (`POST /api/user/2fa/verify`), which works once: case, spaces and the
+dash are ignored, and I/L read as 1, O as 0.
 
 **Auth:** None (uses `preAuthToken` from the sign-in's answer) · **Header:** `X-Kutup-Client` as for `/api/auth/login/start`
 
@@ -518,6 +521,10 @@ account's key binding), which ends every session of the account. Rate-limited
 bcrypt-compares it to the verifier stored at registration; it never receives
 the recovery entropy used for decryption. An unknown name, an account without
 a verifier and a wrong phrase are the same `401`, checked at full cost.
+Registering the new password with the grant also turns every second factor
+off and drops the recovery codes, as Proton's lost-2FA path does, and records
+`twoFactorOff` in the security log: someone who lost the authenticator signs
+in with the new password alone.
 
 **Response:** `{ "grant": "kg1_…", "expiresAt": "<RFC 3339>" }`.
 
@@ -893,12 +900,41 @@ again: a `totp` grant from a reauth of this session.
 }
 ```
 
+**Response:** `{ "message": "TOTP enabled", "recoveryCodes": ["xxxxx-xxxxx", …] }`:
+the account's recovery codes, shown once (Crockford base32, 10 characters;
+as many as `twoFactorRecoveryCodes`, 16 at first). Each takes the second
+factor's place once. The server keeps only a MAC of each, under a key it
+makes for itself, bound to the account.
+
+---
+
+### GET /api/user/2fa/recovery-codes
+
+`{ "remaining": <n> }`: how many recovery codes are left. **Auth:** Bearer JWT.
+
+### POST /api/user/2fa/recovery-codes
+
+New recovery codes in place of the old ones, which stop working: `{ "code":
+"…", "grant": "kg1_…" }` → `{ "recoveryCodes": [...] }`, shown once. The code
+is the authenticator's or an unused recovery code (then spent), and the grant
+is a `totp` grant from a reauth of this session: as in Proton, a session and
+the password alone cannot mint codes. `400` for a wrong code, `409` while
+two-step sign-in is off.
+**Auth:** Bearer JWT.
+
 ---
 
 ### DELETE /api/user/2fa
 
-Disable TOTP for the current user. Requires a valid TOTP code and a `totp`
-grant from a reauth of this session, so a stolen session cannot remove 2FA.
+Disable TOTP for the current user. Requires a valid TOTP code, or a recovery
+code in its place, and a `totp` grant from a reauth of this session, so a
+stolen session cannot remove 2FA. The recovery codes go with it.
+
+A wrong code here or at `POST /api/user/2fa/recovery-codes` still uses up
+the grant, so each guess takes the password again. Wrong codes count per
+account: the `totp_attempts`-th (5) blocks both routes for
+`totp_block_minutes` (both rate-limit settings), with `429`, the right code
+included.
 
 **Auth:** Bearer JWT
 
@@ -4891,7 +4927,7 @@ Delete a user and all their data.
 
 ### DELETE /api/admin/users/:id/2fa
 
-Force-disable a user's TOTP two-factor authentication — an admin override for users locked out of their authenticator. Clears `totp_secret` and `totp_enabled`; the account becomes password-only until the user re-enables 2FA from their Security page. Allowed on any user, including the break-glass admin.
+Force-disable a user's TOTP two-factor authentication — an admin override for users locked out of their authenticator. Clears `totp_secret` and `totp_enabled` and the recovery codes, and records `twoFactorOff` in the account's security log; the account becomes password-only until the user re-enables 2FA from their Security page. Allowed on any user, including the break-glass admin.
 
 **Auth:** Bearer JWT (admin)
 

@@ -88,7 +88,11 @@
     "totpCode": "Doğrulama kodu",
     "verify": "Doğrula",
     "useAnotherAccount": "Başka bir hesap kullan",
-    "nameHint": "Kullanıcı adınız veya Kutup adresiniz."
+    "nameHint": "Kullanıcı adınız veya Kutup adresiniz.",
+    "recoveryCode": "Kurtarma kodu",
+    "recoveryCodeDescription": "İki adımlı doğrulamayı açarken kaydettiğiniz kurtarma kodlarından birini girin. Her kod bir kez çalışır.",
+    "useRecoveryCode": "Kurtarma kodu kullan",
+    "useAuthenticator": "Doğrulama uygulamanızı kullanın"
   },
   "newKeys": {
     "continue": "Devam",
@@ -290,12 +294,32 @@
           "nameDropped": "{{oldName}} adresine posta alımı durduruldu",
           "nameClosed": "{{oldName}} adresine posta alımı bir yönetici tarafından durduruldu",
           "nameFreed": "{{oldName}} başkalarına açıldı",
-          "other": "Girişinizde bir değişiklik"
+          "other": "Girişinizde bir değişiklik",
+          "twoFactorOn": "İki adımlı doğrulama açıldı",
+          "twoFactorOff": "İki adımlı doğrulama kapatıldı",
+          "recoveryCodeUsed": "Kurtarma koduyla oturum açıldı",
+          "recoveryCodesRenewed": "Yeni kurtarma kodları oluşturuldu"
         }
       },
       "recovery": "Kurtarma ifadesi",
       "recoveryDescription": "Hesabınız oluşturulurken gösterilen 24 sözcük.",
-      "recoveryNote": "Unutulan bir parolayı sıfırlamanın tek yolu kurtarma ifadenizdir. Kutup onu saklamaz ve yeniden gösteremez — kaydettiğiniz kopyayı güvenli ve çevrimdışı bir yerde tutun."
+      "recoveryNote": "Unutulan bir parolayı sıfırlamanın tek yolu kurtarma ifadenizdir. Kutup onu saklamaz ve yeniden gösteremez — kaydettiğiniz kopyayı güvenli ve çevrimdışı bir yerde tutun.",
+      "codeOrRecovery": "Doğrulama kodu veya kurtarma kodu",
+      "recoveryCodes": "Kurtarma kodları",
+      "recoveryCodesDescription": "Doğrulama uygulamanızı kaybederseniz oturum açmanızı sağlayan tek kullanımlık kodlar.",
+      "codesLeft_one": "{{count}} kurtarma kodu kaldı.",
+      "codesLeft_other": "{{count}} kurtarma kodu kaldı.",
+      "codesNone": "Kurtarma kodu kalmadı. Doğrulama uygulamanız olmadan da oturum açabilmek için yenilerini oluşturun.",
+      "renewCodes": "Yeni kodlar oluştur",
+      "renewWarning": "Şu anki kurtarma kodlarınız çalışmaz olur.",
+      "renewFailed": "Yeni kurtarma kodları oluşturulamadı.",
+      "saveCodesTitle": "Kurtarma kodlarınızı kaydedin",
+      "saveCodesNote": "Doğrulama uygulamanızı kaybederseniz her kod onun yerine bir kez oturum açar. Güvenli bir yerde saklayın. Bir daha gösterilmezler.",
+      "copyCodes": "Kopyala",
+      "codesCopied": "Kurtarma kodları kopyalandı",
+      "downloadCodes": "İndir",
+      "codesSaved": "Kaydettim",
+      "codesFileHeader": "{{account}} için Kutup kurtarma kodları. Her kod bir kez çalışır."
     },
     "sessions": {
       "title": "Oturumlar",
@@ -858,6 +882,12 @@
         "chatProvisioningSocketsPerAccountHint": "Bir hesabın aynı anda bağlanmayı bekleyebilecek cihaz sayısı.",
         "chatDistributionMessageBytes": "En büyük kimlik eşitlemesi (bayt)",
         "chatDistributionMessageBytesHint": "Yeni bir Sohbet kimliğinin tutulan her cihaza gönderdiği en büyük ileti."
+      },
+      "twoFactor": "İki adımlı oturum açma",
+      "twoFactorHint": "İki adımlı doğrulaması açık hesaplar için kurtarma kodları.",
+      "twoFactorLimits": {
+        "twoFactorRecoveryCodes": "Hesap başına kurtarma kodu",
+        "twoFactorRecoveryCodesHint": "İki adımlı doğrulama açıldığında veya yeni kodlar istendiğinde kaç tek kullanımlık kod oluşturulduğu."
       }
     },
     "federation": {

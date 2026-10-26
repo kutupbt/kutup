@@ -77,8 +77,20 @@ pub(crate) enum ChatKeys {
     Set,
 }
 
+/// Which rows back a listed entry in [`check_listed_rows`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Backing {
+    /// A live row: what a device publishes.
+    Live,
+    /// Any row, expired ones too: a re-registration carries the head's other
+    /// devices over, and may not know which of them idled out (the next
+    /// manifest drops those).
+    Present,
+}
+
 /// Every entry `manifest` lists, except `except` (a device the caller
-/// inserts after, in the same transaction), is a live row of the account
+/// inserts after, in the same transaction), is a row of the account (live,
+/// or by `backing`)
 /// with the entry's kind, sign-in, frame key, and Chat keys (by `chat`): an
 /// entry the server can't back, or one naming another sign-in than its row's,
 /// is refused (`409`). Run under the account's lock.
@@ -88,14 +100,16 @@ pub(crate) async fn check_listed_rows(
     manifest: &AccountManifestV3,
     except: Option<u32>,
     chat: ChatKeys,
+    backing: Backing,
 ) -> AppResult<()> {
     #[allow(clippy::type_complexity)]
     let rows: Vec<(i32, String, Uuid, Option<Vec<u8>>, Option<i16>, Option<i64>)> = sqlx::query_as(
         "SELECT device_id, kind, session_id, frame_key, suite, registration_id
-               FROM devices WHERE user_id = $1 AND expired_at IS NULL
+               FROM devices WHERE user_id = $1 AND ($2 OR expired_at IS NULL)
               ORDER BY device_id FOR SHARE",
     )
     .bind(user_id)
+    .bind(backing == Backing::Present)
     .fetch_all(&mut *conn)
     .await?;
     for listed in &manifest.devices {
@@ -137,15 +151,22 @@ pub(crate) async fn check_listed_rows(
 }
 
 /// The manifest lists no more devices than the account may have
-/// ([`crate::site_settings::DEVICES_PER_ACCOUNT`]): `409 deviceLimit`.
+/// ([`crate::site_settings::DEVICES_PER_ACCOUNT`]), or no more than `head`
+/// did: a cap lowered below an account's count still lets it publish one
+/// that removes devices. `409 deviceLimit` otherwise.
 pub(crate) async fn check_device_cap<'e>(
     executor: impl PgExecutor<'e>,
     manifest: &AccountManifestV3,
+    head: Option<&AccountManifestV3>,
 ) -> AppResult<()> {
+    let listed = manifest.devices.len();
+    if head.is_some_and(|head| listed <= head.devices.len()) {
+        return Ok(());
+    }
     let most = crate::site_settings::DEVICES_PER_ACCOUNT
         .load(executor)
         .await?;
-    if manifest.devices.len() as i64 > most {
+    if listed as i64 > most {
         return Err(device_limit());
     }
     Ok(())

@@ -70,6 +70,12 @@ KUTUP_LIVE_SERVER="http://127.0.0.1:$port" \
 KUTUP_LIVE_SERVER="http://127.0.0.1:$port" \
   KUTUP_LIVE_DATABASE_URL="postgres://$POSTGRES_USER:$POSTGRES_PASSWORD@127.0.0.1:$db_port/$POSTGRES_DB" \
   cargo test -p kutup-server --test chat_identity_live -- --nocapture
+# One device list per account (docs/plans/one-device-list.md): the manifest's
+# entries of every kind against the account's rows, and the device cap (one
+# thread: it changes a site setting).
+KUTUP_LIVE_SERVER="http://127.0.0.1:$port" \
+  KUTUP_LIVE_DATABASE_URL="postgres://$POSTGRES_USER:$POSTGRES_PASSWORD@127.0.0.1:$db_port/$POSTGRES_DB" \
+  cargo test -p kutup-server --test account_devices_live -- --nocapture --test-threads 1
 # Groups off by default (CHAT_GROUPS unset on this stack): no groups, no
 # group calls (though an SFU is configured), every group and MLS route refused.
 KUTUP_LIVE_SERVER="http://127.0.0.1:$port" \

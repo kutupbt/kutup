@@ -30,6 +30,9 @@ export function LoginPage() {
   const session = useSession()
   const [challenge, setChallenge] = useState<TotpChallenge | null>(null)
   const [code, setCode] = useState('')
+  // A recovery code in place of the authenticator's (Proton's "use a
+  // recovery code"): the server takes either in the same field.
+  const [recovery, setRecovery] = useState(false)
   const [pending, setPending] = useState(false)
   const [error, setError] = useState<string | null>(
     // Sent back from a first sign-in whose setup token ran out.
@@ -106,17 +109,22 @@ export function LoginPage() {
 
   if (challenge) {
     return (
-      <AuthLayout title={t('login.totpTitle')} description={t('login.totpDescription')}>
+      <AuthLayout
+        title={t('login.totpTitle')}
+        description={t(recovery ? 'login.recoveryCodeDescription' : 'login.totpDescription')}
+      >
         <form className="space-y-4" onSubmit={(e) => void onTotp(e)}>
-          <Field label={t('login.totpCode')} required>
+          <Field label={t(recovery ? 'login.recoveryCode' : 'login.totpCode')} required>
             {(field) => (
               <Input
                 {...field}
+                key={recovery ? 'recovery' : 'totp'}
                 value={code}
                 onChange={(e) => setCode(e.target.value)}
-                autoComplete="one-time-code"
-                inputMode="numeric"
-                maxLength={6}
+                autoComplete={recovery ? 'off' : 'one-time-code'}
+                inputMode={recovery ? 'text' : 'numeric'}
+                maxLength={recovery ? 13 : 6}
+                spellCheck={false}
                 className="font-mono tracking-widest"
                 autoFocus
               />
@@ -131,9 +139,22 @@ export function LoginPage() {
             variant="link"
             className="w-full"
             onClick={() => {
+              setRecovery(!recovery)
+              setCode('')
+              setError(null)
+            }}
+          >
+            {t(recovery ? 'login.useAuthenticator' : 'login.useRecoveryCode')}
+          </Button>
+          <Button
+            type="button"
+            variant="link"
+            className="w-full"
+            onClick={() => {
               abandonTotp(challenge)
               setChallenge(null)
               setCode('')
+              setRecovery(false)
               setError(null)
             }}
           >

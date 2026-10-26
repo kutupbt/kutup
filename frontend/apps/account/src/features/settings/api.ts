@@ -66,16 +66,49 @@ export interface TotpChange {
   password: OneUseSecret
 }
 
+/** Turns two-factor sign-in on; its recovery codes, to show once. */
 export function useVerifyTotp() {
   const queryClient = useQueryClient()
   return useMutation({
     mutationFn: async ({ code, password }: TotpChange) => {
       const grant = await accountGrant(password.take(), 'totp')
-      await api.post('/user/2fa/verify', { code, grant })
+      const { data } = await api.post<{ recoveryCodes: string[] }>('/user/2fa/verify', { code, grant })
+      return data.recoveryCodes
     },
     onSuccess: async () => {
       updateSession({ totpEnabled: true })
       await queryClient.invalidateQueries({ queryKey: meKey })
+      await queryClient.invalidateQueries({ queryKey: recoveryCodesKey })
+    },
+  })
+}
+
+export const recoveryCodesKey = ['recoveryCodes'] as const
+
+/** How many recovery codes the account has left. */
+export function useRecoveryCodesLeft(enabled: boolean) {
+  return useQuery({
+    queryKey: recoveryCodesKey,
+    queryFn: async () => (await api.get<{ remaining: number }>('/user/2fa/recovery-codes')).data.remaining,
+    enabled,
+  })
+}
+
+/**
+ * New recovery codes in place of the old ones, with the password (a `totp`
+ * grant) and the second factor (an authenticator code or an unused recovery
+ * code); the codes, to show once.
+ */
+export function useRenewRecoveryCodes() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: async ({ code, password }: TotpChange) => {
+      const grant = await accountGrant(password.take(), 'totp')
+      const { data } = await api.post<{ recoveryCodes: string[] }>('/user/2fa/recovery-codes', { code, grant })
+      return data.recoveryCodes
+    },
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: recoveryCodesKey })
     },
   })
 }
@@ -90,6 +123,7 @@ export function useDisableTotp() {
     onSuccess: async () => {
       updateSession({ totpEnabled: false })
       await queryClient.invalidateQueries({ queryKey: meKey })
+      await queryClient.invalidateQueries({ queryKey: recoveryCodesKey })
     },
   })
 }

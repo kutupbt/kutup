@@ -1,3 +1,4 @@
+import { fillRandom, randomBytes } from '@kutup/crypto/random'
 // Passwords and passphrases from the browser's cryptographic random source,
 // without modulo bias.
 
@@ -34,7 +35,7 @@ export function randomBelow(n: number): number {
   const limit = Math.floor(2 ** 32 / n) * n
   const word = new Uint32Array(1)
   for (;;) {
-    crypto.getRandomValues(word)
+    fillRandom(word)
     if (word[0] < limit) return word[0] % n
   }
 }
@@ -87,7 +88,7 @@ const VAULT_KEY_ALPHABET = '0123456789abcdefghjkmnpqrstvwxyz'
  */
 export function randomVaultKey(): string {
   // 32 divides 256: a byte's low five bits carry no bias.
-  const bytes = crypto.getRandomValues(new Uint8Array(25))
+  const bytes = randomBytes(25)
   const chars = Array.from(bytes, (byte) => VAULT_KEY_ALPHABET[byte & 31])
   return [0, 5, 10, 15, 20].map((at) => chars.slice(at, at + 5).join('')).join('-')
 }

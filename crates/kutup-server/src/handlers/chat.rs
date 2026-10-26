@@ -490,6 +490,7 @@ pub async fn register_device(
                 manifest,
                 Some(new_id),
                 crate::account_devices::ChatKeys::Match,
+                crate::account_devices::Backing::Present,
             )
             .await?;
             let shared: Vec<Uuid> = sqlx::query_scalar(
@@ -545,7 +546,7 @@ pub async fn register_device(
                 AND t.expires_at > now()
                 AND EXISTS (SELECT 1 FROM devices d
                              WHERE d.user_id = t.user_id AND d.device_id = t.issued_by_device
-                               AND d.expired_at IS NULL)
+                               AND d.expired_at IS NULL AND d.suite IS NOT NULL)
               RETURNING 1",
             )
             .bind(hash(Suite::V1, token).to_vec())
@@ -751,22 +752,27 @@ pub(crate) async fn store_manifest(
         }
     }
     if identity == IdentityChange::Reregistration {
-        let others = |manifest: &AccountManifestV3| -> Vec<AccountManifestDeviceV3> {
-            manifest
-                .devices
-                .iter()
-                .filter(|device| device.chat.is_none())
-                .cloned()
-                .collect()
+        // The account's other devices as the head lists them: a
+        // re-registration may leave some out (an idle one the server expired,
+        // say), never change or add one.
+        let kept = |entry: &AccountManifestDeviceV3| {
+            head.as_ref()
+                .and_then(|head| head.device(entry.device_id))
+                .is_some_and(|listed| listed.chat.is_none() && listed == entry)
         };
-        if others(manifest) != head.as_ref().map(others).unwrap_or_default() {
+        if !manifest
+            .devices
+            .iter()
+            .filter(|device| device.chat.is_none())
+            .all(kept)
+        {
             return Err(AppError::conflict(
-                "a re-registration lists the account's other devices unchanged",
+                "a re-registration lists only the account's other devices, unchanged",
             )
             .with_details(json!({ "code": "devicesMismatch" })));
         }
     }
-    crate::account_devices::check_device_cap(&mut **tx, manifest).await?;
+    crate::account_devices::check_device_cap(&mut **tx, manifest, head.as_ref()).await?;
 
     match identity {
         IdentityChange::Same => {
@@ -859,19 +865,34 @@ pub async fn publish_manifest(
     Json(manifest): Json<AccountManifestV3>,
 ) -> AppResult<Response> {
     let user_id = trusted_uuid(&auth.user_id)?;
-    crate::handlers::chat_identity::authenticated_device(&state.pool, &headers, user_id).await?;
+    use crate::handlers::chat_identity::DeviceKinds;
+    // Any device of the account lists itself (an editor too, slice 2).
+    crate::handlers::chat_identity::authenticated_device_of(
+        &state.pool,
+        &headers,
+        user_id,
+        DeviceKinds::Any,
+    )
+    .await?;
     crate::handlers::chat_identity::validate_manifest(&manifest)?;
     let mut tx = state.pool.begin().await?;
     let stored = store_manifest(&mut tx, &state, user_id, &manifest, IdentityChange::Same).await?;
     // The account's lock is held now: the publishing device is still one of
     // its live devices with this credential.
-    crate::handlers::chat_identity::credential_holds(&mut *tx, &headers, user_id).await?;
+    crate::handlers::chat_identity::credential_holds_of(
+        &mut *tx,
+        &headers,
+        user_id,
+        DeviceKinds::Any,
+    )
+    .await?;
     crate::account_devices::check_listed_rows(
         &mut tx,
         user_id,
         &manifest,
         None,
         crate::account_devices::ChatKeys::Match,
+        crate::account_devices::Backing::Live,
     )
     .await?;
     // Registration precedes publication so a device learns its id; rows the

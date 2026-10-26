@@ -179,13 +179,44 @@ uploads, whiteboard assets) are the suite's hash, as on the server; under V1
 it is the same SHA-256 as the served `ContentDigest`, and a suite with
 another hash renames those fields (a format change, not a silent swap).
 
+Step 5 notes: the frontend's one random source, hash and signature live in
+`@kutup/crypto`:
+- `random` (`randomBytes`, `fillRandom`, over `crypto.getRandomValues`);
+- `hash` (`hash` over Web Crypto's SHA-256, and `createHasher`, the suite's
+  streaming hash through kutup-crypto's WASM `SuiteHasher`, for Chat's media
+  and backup streams);
+- `signing` (Ed25519 through the WASM `signingKey*` functions, verified
+  strictly as the server verifies; collaboration device keys keep
+  libsodium's `seed ‖ public key` form, so stored keys still sign).
+
+Nothing outside the package reaches libsodium: `@kutup/crypto/sodium` is
+refused like the libsodium packages. ESLint refuses Web Crypto and libsodium
+everywhere else, tests and the apps' public scripts included, in every
+form: a member by name or computed (`crypto['subtle']`, `crypto[k]`), a
+destructured property (named, quoted or computed), `Reflect` on `crypto`,
+static imports and subpaths, and dynamic imports. A dynamic import of a
+computed name is refused too. The static gate refuses `eslint-disable` or
+inline config for these rules (`check-crypto-exceptions.py`). Named
+exceptions in `eslint.config.js`:
+- the calendar's push worker (`apps/calendar/public/push-sw.js`), which
+  checks a push's account tag with Web Crypto's HMAC, as a service worker
+  can't load the WASM first;
+- the three WASM loaders that import their own glue by URL (Chat's
+  libsignal module, the Pass worker, mail search), for computed dynamic
+  imports only.
+
+`crypto.randomUUID` stays allowed: it makes ids, never keys.
+
 Step 6 notes: kutup-pass draws its randomness from the one source: new key
 files are `primitives::random_key()` (`generate_key_file` can no longer
 fail), and RSA blinding in the SSH agent uses `primitives::Rng` in place of
 its own getrandom wrapper. The crate no longer depends on getrandom or
 rand_core; kutup-pass-wasm keeps getrandom's browser backend features, which
 kutup-crypto's getrandom needs there. KeePass's and SSH's own hashes are
-item-level adapters.
+item-level adapters. The vendored `keepass` crate (crates/kutup-pass/vendor/keepass) still calls
+getrandom directly for its own random values (`dump.rs`, `config.rs`,
+`kdbx4/mod.rs`): a named exception until its patch (KUTUP.md) routes them
+through `primitives::random`.
 
 After that, **block format slices 1-2** build their framing on `Aead::new`
 and `hash`, and the wipe branch sets every header's suite to 1.

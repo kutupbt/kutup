@@ -71,13 +71,21 @@ test('the password is changed, guarded by a second factor, and reset with the re
     await page.getByLabel('6-digit code').fill(totp(secret))
     await page.getByLabel('Your Kutup password').fill('Not*MyPassword12345')
   })
-  await submitThroughRateLimit(page, 'Verify and turn on', page.getByRole('button', { name: 'Turn off two-factor authentication' }), async () => {
+  const saved = page.getByRole('button', { name: 'I have saved them' })
+  await submitThroughRateLimit(page, 'Verify and turn on', saved, async () => {
     await page.getByLabel('6-digit code').fill(totp(secret))
     await page.getByLabel('Your Kutup password').fill(SECOND)
   })
+  // Its recovery codes are shown once, then put away.
+  const codes = await page.getByRole('listitem').filter({ hasText: /^[0-9a-z]{5}-[0-9a-z]{5}$/ }).allInnerTexts()
+  expect(codes).toHaveLength(16)
+  await saved.click()
+  await expect(page.getByRole('button', { name: 'Turn off two-factor authentication' })).toBeVisible()
+  await expect(page.getByText('16 recovery codes left')).toBeVisible()
   await own.close()
 
-  // Elsewhere: the first password is gone; the second asks for the code, then signs in.
+  // Elsewhere: the first password is gone; the second asks for the code, and
+  // the authenticator's or a recovery code signs in.
   const other = await browser.newContext()
   const tab = await other.newPage()
   await signIn(tab, account.username, FIRST, 'failed')
@@ -85,8 +93,17 @@ test('the password is changed, guarded by a second factor, and reset with the re
   await tab.getByLabel('Authentication code').fill(totp(secret))
   await submitThroughRateLimit(tab, 'Verify', tab.getByRole('heading', { name: /^Welcome/ }))
   await other.close()
+  const another = await browser.newContext()
+  const second = await another.newPage()
+  await signIn(second, account.username, SECOND, 'code')
+  await second.getByRole('button', { name: 'Use a recovery code' }).click()
+  await second.getByLabel('Recovery code').fill(codes[0].trim())
+  await submitThroughRateLimit(second, 'Verify', second.getByRole('heading', { name: /^Welcome/ }))
+  await another.close()
 
-  // The recovery phrase sets a third password; the second stops working.
+  // The recovery phrase sets a third password; the second stops working. It
+  // also turns two-factor authentication off, as Proton's lost-2FA path does
+  // (docs/plans/security-keys.md, D2): the third signs in without a code.
   const recovering = await browser.newContext()
   const recover = await recovering.newPage()
   await recover.goto(appUrl('account', '/recover'))
@@ -96,15 +113,16 @@ test('the password is changed, guarded by a second factor, and reset with the re
   await recover.getByLabel('Repeat password', { exact: true }).fill(THIRD)
   await submitThroughRateLimit(recover, 'Set new password', recover.getByRole('heading', { name: 'Password changed' }))
   await signIn(recover, account.username, SECOND, 'failed')
-  await signIn(recover, account.username, THIRD, 'code')
-  await recover.getByLabel('Authentication code').fill(totp(secret))
-  await submitThroughRateLimit(recover, 'Verify', recover.getByRole('heading', { name: /^Welcome/ }))
+  await signIn(recover, account.username, THIRD, 'Welcome')
 
-  // The recovery is listed, made by no session of this account.
+  // The recovery and the second factor it turned off are listed, made by no
+  // session of this account.
   await recover.goto(appUrl('account', '/settings/security'))
   const listed = recover.getByRole('list', { name: 'Security events' })
-  await expect(listed.getByRole('listitem').filter({ hasText: 'Password reset with the recovery phrase' })).toBeVisible()
-  await expect(listed.getByRole('listitem').filter({ hasText: 'Password reset with the recovery phrase' }).getByText('This device')).toHaveCount(0)
+  for (const event of ['Password reset with the recovery phrase', 'Two-factor authentication turned off']) {
+    await expect(listed.getByRole('listitem').filter({ hasText: event })).toBeVisible()
+    await expect(listed.getByRole('listitem').filter({ hasText: event }).getByText('This device')).toHaveCount(0)
+  }
   await recovering.close()
 })
 

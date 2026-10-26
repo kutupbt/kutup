@@ -52,6 +52,7 @@ import VersionHistoryPanel from './versions/VersionHistoryPanel'
 import { chooseViewer } from './viewers/dispatch'
 import { useCursorColor } from './useCursorColor'
 import type { WhiteboardEditorHandle } from './whiteboard/WhiteboardEditor'
+import { hash } from '@kutup/crypto/hash'
 
 /**
  * Decrypted content lives entirely in tab memory, so a 2 GB video would take
@@ -956,7 +957,7 @@ function WholeFileActions({
 }
 
 async function sha256(bytes: Uint8Array): Promise<string> {
-  const digest = new Uint8Array(await crypto.subtle.digest('SHA-256', bytes as BufferSource))
+  const digest = await hash(bytes)
   return Array.from(digest, (b) => b.toString(16).padStart(2, '0')).join('')
 }
 

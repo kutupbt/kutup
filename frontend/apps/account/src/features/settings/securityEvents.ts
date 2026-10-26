@@ -1,7 +1,17 @@
 import type { SecurityEvent } from './api'
 import { describeUserAgent } from './userAgent'
 
-const KNOWN = new Set(['passwordChange', 'recovery', 'rotate', 'adminReset', 'accountReset'])
+const KNOWN = new Set([
+  'passwordChange',
+  'recovery',
+  'rotate',
+  'adminReset',
+  'accountReset',
+  'twoFactorOn',
+  'twoFactorOff',
+  'recoveryCodeUsed',
+  'recoveryCodesRenewed',
+])
 /** Events about a name: their text names it (`oldName`, and `newName` for a rename). */
 const NAMED = new Set(['rename', 'nameDropped', 'nameClosed', 'nameFreed'])
 
