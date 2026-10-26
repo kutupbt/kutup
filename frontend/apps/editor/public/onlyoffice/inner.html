@@ -346,20 +346,21 @@
         // ambiguous concat of two numeric strings — userId is a UUID so the
         // separator is just for readability).
         //   - user.id            = userId       (UUID; same across user's tabs)
-        //   - indexUser          = deviceId     (per-tab; unique)
+        //   - indexUser          = indexOfDevice(deviceId) (past the reserved ones)
         //   - _userId            = userId + String(deviceId)
         //   - participant.id     = peerUserId + "--" + String(peerDeviceId)
         //                                       — wait: must EQUAL _userId
         //                                         on receivers, so use direct
         //                                         concat, not separator.
         //
-        // Final: ooUserIdFor(uid, did) = String(uid) + String(did). matches
-        // _userId because OO does string concat with no separator.
+        // Final: ooUserIdFor(uid, index) = String(uid) + String(index), the
+        // index being indexOfDevice(deviceId). matches _userId because OO
+        // does string concat with no separator.
         // idOriginal = userId so OO's per-USER color cache is keyed per-user.
         var myOOId = null            // = selfUserId (UUID string)
-        var myIndex = null           // = selfDeviceId (number)
+        var myIndex = null           // = indexOfDevice(selfDeviceId)
         var myUniqueOOId = null      // = ooUserIdFor(myOOId, myIndex)
-        function ooUserIdFor(userId, deviceId) { return String(userId) + String(deviceId) }
+        function ooUserIdFor(userId, index) { return String(userId) + String(index) }
         // Self-held cell-edit locks. Cleared on releaseLock or
         // unLockDocument {releaseLocks: true}. See fromOO 'getLock'.
         var selfLocks = Object.create(null)
@@ -404,19 +405,12 @@
         // peerCursorIdentity[peerKey] = { user: '<myUniqueOOId>', useridoriginal: '<myOOId>' }.
         var peerCursorIdentity = Object.create(null)
 
-        // Allocate a per-device indexUser starting from SELF_INDEX_USER+1.
-        // OO requires every peer to have a distinct positive integer index.
-        // We assign on first sight and remember (so the same device keeps
-        // its index across leave/rejoin within the same session).
-        var nextIndex = SELF_INDEX_USER + 1
-        var indexByDevice = Object.create(null)
-        function indexFor(deviceId) {
-          if (deviceId === selfDeviceId) return SELF_INDEX_USER
-          var k = String(deviceId)
-          if (!(k in indexByDevice)) {
-            indexByDevice[k] = nextIndex++
-          }
-          return indexByDevice[k]
+        // A device's OnlyOffice index: its id (1..127, its account's) past
+        // the indexes this bridge reserves (the history keeper's and the
+        // pre-init self placeholder's), the same on every tab, so a sender's
+        // _userId (user.id + index) is what its peers compute for it.
+        function indexOfDevice(deviceId) {
+          return SELF_INDEX_USER + Number(deviceId)
         }
 
         // Tab differentiator suffix — last 4 hex chars of deviceId. Mirrors
@@ -442,10 +436,10 @@
           //                        — keys per-USER color in
           //                        window.APP.getUserColor and OO's color cache.
           return {
-            id: ooUserIdFor(userId, deviceId),
+            id: ooUserIdFor(userId, indexOfDevice(deviceId)),
             idOriginal: String(userId),
             username: withTabSuffix(username, deviceId),
-            indexUser: deviceId,
+            indexUser: indexOfDevice(deviceId),
             connectionId: 'dev-' + String(userId) + '-' + deviceId,
             isCloseCoAuthoring: false,
             view: false,
@@ -866,8 +860,8 @@
           // at construction time.
           if (myOOId == null) {
             myOOId = selfUserId
-            myIndex = selfDeviceId
-            myUniqueOOId = ooUserIdFor(selfUserId, selfDeviceId)
+            myIndex = indexOfDevice(selfDeviceId)
+            myUniqueOOId = ooUserIdFor(selfUserId, myIndex)
             selfUsername = pendingInitPayload.username || null
             if (pendingInitPayload.color) userColors[selfUserId] = pendingInitPayload.color
             selfPlaceholder = buildSelfPlaceholder()
