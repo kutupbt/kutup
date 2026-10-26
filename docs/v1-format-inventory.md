@@ -184,16 +184,19 @@ incarnation IDs and both canonical accounts, but no folder: one key serves
 every share between the pair. Tests in `profile_key_share.rs` (no vector: the
 format has one producer and one consumer, both in this crate and its WASM).
 
-`CollabFrameSuiteId = 1` uses magic `KUTPCF2\0` and a fixed 80-byte
+`CollabFrameSuiteId = 1` uses magic `KUTPCF3\0` and a fixed 88-byte
 big-endian header containing suite, kind, file-key generation, document-key
-generation, file UUID, sender device, sequence, nonce and exact ciphertext
-length. The header is AEAD associated data. HKDF-SHA256 derives from the file
+generation, file UUID, the sender's device id (its entry in its account's
+manifest), the manifest sequence it sealed under, sequence, nonce and exact
+ciphertext length. The header is AEAD associated data. HKDF-SHA256 derives from the file
 key a distinct XChaCha20-Poly1305 key bound to the same suite, kind, key
 generation, document generation and file UUID (the 96-byte `KUTPCF1` layout,
-under the folder key, was replaced before the first tag). Ed25519 signs the
-header and ciphertext; the trailing signature is not self-covered. The server
-accepts only the exact current file/key-generation/document binding and a
-registered sender device.
+under the folder key, was replaced before the first tag). Ed25519 signs a
+domain (`kutup/collab/frame/v3\0`), the sender account, the header and the
+ciphertext; the trailing signature is not self-covered. The account travels
+beside the frame (`envelope::deliver`). The server accepts only the exact
+current file/key-generation/document binding and a sender device that its
+account's manifest lists with the signing key (docs/plans/one-device-list.md).
 
 Whiteboard assets use `DriveEnvelopeV1` purpose 6 under the **file key**. The
 object UUID is the file UUID; the parent binding is a fixed-label

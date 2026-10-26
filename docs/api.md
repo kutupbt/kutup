@@ -4339,9 +4339,8 @@ is then absent) or the device is not the caller's.
 
 `204`: stop waking the device.
 
-### POST /api/chat/ws-ticket?deviceId=N
-
-Mint a random, one-time browser WebSocket ticket bound to the authenticated user and chat device. The ticket expires in 60 seconds and is returned as `{ "ticket", "expiresAt" }`.
+Browsers mint the socket's one-time ticket with `POST /api/device-ticket`
+(Devices, below); the Chat socket takes only a Chat device's.
 
 ### GET /api/chat/ws?ticket=…
 
@@ -4715,29 +4714,19 @@ base64 sealed collab frames.
 - **`POST push`** (home → bridge) `{ subscriptionId, fileId, frames: [{ seq,
   frame }], ephemeral: [frame], throughSeq, floor, close }`: frames in log
   order, never the bridge's own. `404` for an unknown subscription.
-- **`POST devices`** `{ fileId, devices: [{ deviceId, userId,
-  authorityPublicKey, publicSigning, challenge, issuedAtMs, signature }],
-  revocations: [{ seq, authorityPublicKey, publicSigning, revokedAtMs,
-  signature }] }` → `{ accepted: [deviceId], refused: [{ deviceId, code }],
-  revocationsThrough }`. `seq` is the bridge's own order of its revocations
-  (never a clock), and `revocationsThrough` the highest `seq` home has
-  processed for the account: the bridge sends what comes after it. The bridge announces the editing account's
-  collaboration devices (docs/plans/device-registration.md) and forwards its
-  signed revocations, at most 50 entries in all. A device is kept only when
-  its `DeviceRegistrationV1` names the bridge and verifies under the share
-  recipient's authority. Refusal codes are `doesNotVerify`, `notRecipient`,
-  `expired` (older than the 30-day lease, or dated ahead), `revoked`,
-  `keyInUse` and `tooManyDevices` (20 in use per account: not revoked, within
-the lease). Rate limit:
-  `RATE_LIMIT_COLLAB_DEVICE_ANNOUNCES_PER_MIN` per (domain, capability).
-- **`POST frames`** `{ fileId, subscriptionId, frames }` → `{ positions,
-  unknownDevices, expiredDevices }` (positions are null for relayed-only or
-  refused frames). Checked as local frames are, against the file's current
-  keys and the share's edit permission, and also signed by an announced,
-  unrevoked, unexpired device of the share's recipient; the sender is kept
-  as `(domain, device)`. Frames from devices listed in `unknownDevices` or
-  `expiredDevices` are not kept: the bridge announces the unknown ones and
-  sends again, and asks its clients to renew the expired ones.
+- **`POST frames`** `{ fileId, subscriptionId, frames: [{ sender, frame }] }`
+  → `{ positions }` (null for relayed-only or refused frames). Each frame
+  names its sender account, which its signature covers. Checked as local
+  frames are, against the file's current keys and the share's edit
+  permission, and also: the sender is the share's recipient, an account of
+  the calling server, and the frame is signed with a frame key that the
+  recipient's account manifest lists for the frame's device, under the
+  incarnation the share was made to (docs/plans/one-device-list.md §8). The
+  home fetches that manifest through the federated manifest route and keeps
+  it in `remote_account_manifests`. It fetches again when a frame names a
+  newer manifest sequence or a device it doesn't list, at most once a minute
+  per account, and moves only forward along the account's chain. The sender
+  is kept as (domain, account, device).
 - **`POST log`** `{ fileId, since }` → `{ frames, throughSeq, floor }`:
   catching up.
 - **`POST versions/list`** `{ fileId }`; **`GET files/:fileId/versions/:vid`**
@@ -5402,67 +5391,61 @@ is not an automatic fallback for failed rotation.
 
 ## Devices
 
-Collaboration devices: the Ed25519 keys that sign collaborative-edit frames,
-each registered with the account's signed statement
-(docs/plans/device-registration.md). On the web, one device per sign-in per
-app origin, shared by its tabs; the CLI keeps one per profile. A device is
-trusted while it is not revoked, its incarnation is the account's current
-one and the sign-in session that registered (or last renewed) it is live.
-Refusals on the device routes and the collaboration routes answer `403
-deviceNotAuthorized`: the client registers again, it does not sign out.
-
-### POST /api/devices/challenge
-A one-time challenge for registering or renewing a device: 32 random bytes,
-valid five minutes, used up by any answer. At most five stay open per account
-(a sixth evicts the oldest). Rate limit:
-`RATE_LIMIT_DEVICE_CHALLENGES_PER_MIN` (default 20) per account.
-**Auth:** Bearer JWT. **Response:** `{challenge}` (base64).
+One device list per account (docs/plans/one-device-list.md): every app
+installation is a device of the account, an entry of its signed manifest
+(`AccountManifestV3`, Chat above), with a server-issued id (1..127), a
+credential sent as `X-Kutup-Device: <deviceId>.<credential>`, and, for an
+editing app (Drive, Office, Maps, Pass) or the CLI, the Ed25519 frame key
+that signs its collaborative-edit frames. On the web, one device per sign-in
+per app origin, shared by its tabs; the CLI keeps one per profile. A device's
+frames count while its row and sign-in are live and the account's head
+manifest lists it with its frame key; otherwise the collaboration routes
+answer `403 deviceNotAuthorized` (the client registers again, it does not
+sign out). A device is removed by publishing the account's next manifest
+without it: its row and open sockets go. A row not yet listed is dropped
+by a publication after `deviceListingGraceSeconds` (default 600).
 
 ### POST /api/devices
-Register a device key. Required before opening a collaborative-edit socket
-or using the HTTP frame routes.
+Register an editor or CLI device of the caller's account (a Chat device
+registers with `POST /api/chat/device`).
 **Auth:** Bearer JWT.
-**Body:** `{publicSigning, label?, challenge, issuedAtMs, signature}`: the
-account authority's `DeviceRegistrationV1` signature over its incarnation,
-this server, the user id, the key, the purpose, the challenge and
-`issuedAtMs` (within ±24 hours of the server clock). The device is bound to
-the caller's session.
-**Response 201:** `{deviceId, label, createdAt}`. **403**
-`deviceNotAuthorized`: the statement does not verify or the challenge is not
-the caller's to answer. **409**: the key was ever registered (any account,
-revoked or not), or `tooManyDevices`: the account has 20 devices in use
-(trusted, with a statement within 30 days). Devices of ended sign-ins, or
-unused for 30 days, do not count.
-
-### POST /api/devices/:id/renew
-A newer statement for the same key (body `{challenge, issuedAtMs,
-signature}`), which other servers need within 30 days. It also binds the
-device to the caller's session, so a device whose sign-in ended is taken up
-again; it then counts against the cap like a new one.
-**Response:** `204`, or `403 deviceNotAuthorized`, or `409 tooManyDevices`.
+**Body:** `RegisterDeviceRequestV1` `{kind: "editor"|"cli", name?, frameKey,
+credential}`: the frame key (canonical base64 of an Ed25519 public key, not
+a small-order point) and the device's credential (unpadded base64url of 32
+random bytes; the server keeps a salted hash).
+**Response 200:** `{deviceId, session}`: the lowest id no row of the account
+holds, and the `session` hash its manifest entry lists. A retry with the
+same credential answers the row it made. The device then lists itself in the
+account's next manifest (`POST /api/chat/manifest`, with its
+`X-Kutup-Device`); an account with no manifest yet gets its first, with no
+Chat identity. **409 `deviceLimit`**: the account has `devicesPerAccount`
+devices. **429**: `RATE_LIMIT_DEVICE_REGISTRATIONS_PER_MIN` (default 20) per
+account.
 
 ### GET /api/devices
-The account's devices, newest first: `{deviceId, label, publicSigning,
-isActive, trusted, inUse, thisSession, statementIssuedAtMs, createdAt,
-lastSeenAt}`. `isActive`: not revoked. `trusted`: as above. `inUse`: counted
-by the cap. `thisSession`: registered or renewed by the caller's session.
+Every device of the account, of every kind: `{devices: [{deviceId, kind,
+name, session, thisSignIn, listed, expired, createdAt, lastSeenAt}]}`.
+`listed`: the head manifest lists it. `thisSignIn`: of the caller's sign-in.
+`expired`: idle too long, dropped by the next manifest.
 
-### DELETE /api/devices/:id
-Revoke a device for good, with the account authority's `DeviceRevocationV1`
-signature (body `{revokedAtMs, signature}`): a session alone cannot revoke
-the account's devices. Its open sockets close, its key never registers
-again, and other servers are told through the account's announces.
-**Response:** `204`; `403 deviceNotAuthorized` when the revocation does not
-verify; `404` for a device already revoked.
+### GET /api/device-session
+`{session}`: the hash a device of the caller's sign-in lists in its manifest
+entry (Chat, above).
+
+### POST /api/device-ticket
+A single-use WebSocket ticket for the device `X-Kutup-Device` names, of any
+kind, valid 60 seconds: `{ticket, expiresAt}`. Browsers can't set headers on
+a socket, so the Chat socket (`?ticket=`, a Chat device's only) and the
+collaboration sockets (a device with a frame key) take it.
 
 ---
 
 ## Collaborative Editing
 
 ### GET /api/files/:fileId/collab/ws
-WebSocket upgrade. Auth via `Authorization: Bearer ...` header **or** `?token=...&deviceId=N` query (browsers can't set custom headers on the initial WS handshake).
+WebSocket upgrade. Auth via `?ticket=` (a device ticket, `POST /api/device-ticket`: browsers can't set custom headers on the handshake) **or** `Authorization: Bearer …` with `X-Kutup-Device`.
 
-PreUpgrade validates: JWT (rejects setup/pre-auth tokens), file access (owner OR collection-share recipient), device registration (must belong to user, must be active). Failures return HTTP 401/403/404 BEFORE the WS handshake completes.
+PreUpgrade validates: the device (a live row with a frame key, of a live sign-in, listed in the account's head manifest with that key: `403 deviceNotAuthorized` otherwise) and file access (owner OR collection-share recipient). Failures return HTTP 401/403/404 BEFORE the WS handshake completes.
 
 A view-only recipient joins to follow edits: the server relays its presence
 frames (awareness and cursors) and drops everything else it sends. Edits are
@@ -5474,23 +5457,23 @@ sending edits faster than 50 frames/s or 1 MiB/s sustained (bursts of 500
 frames / 16 MiB) is disconnected. Office edit frames stay in the log for a
 day, as a buffer for peers resuming after a dropped connection.
 
-On accept the server sends a JSON `hello` `{type, fileId, currentDocKeyId, headSeq, peers: [{deviceId, userId}]}`. Client replies with JSON `{type: "resume", lastSeenSeq: K}`. Server replays binary `CollabFrame`s from seq `K+1` to head, then sends `{type: "replayed", throughSeq, floor}` (the last position replayed, and how far saved versions have trimmed the log: a client that resumed below `floor` merges the latest saved version), then enters bidirectional binary mode. After storing each document frame it sends `{type: "stored", seq}` to everyone in the file, the sender included, after the frame itself. Messages are handled in order, so a client knows every frame up to a position it has seen is applied; positions only ever go up. A saved version records the highest contiguous position its client had applied; a note's version trims the log up to it, a whole-file (office) version does not. Office editors also send `{type: "base", versionId, seq, reset}` on connect, before `resume`: the version they loaded (null: the original upload) and its position. The first claim in an empty room sets the editing session's base (and trims the log up to it); later claims get `{type: "base", versionId, seq, yours, reset: false}` back, and a tab whose claim is not `yours` reopens from the returned base; `reset: true` (after a restore) replaces the base and the server sends the other tabs `{type: "base", …, reset: true}` so they reopen. A claim must name a `kind = file` version of the file at its recorded position (or null at 0); anything else is ignored. `CollabFrameSuiteId = 1` is the canonical Rust-owned `KUTPCF1\0` format documented in `docs/v1-format-inventory.md`; the server rejects an unknown suite, malformed length, invalid device signature, or any file/collection/epoch/document-generation mismatch. On a file shared from another server, the bridge sends `{type: "renewDevice", deviceIds}` when the file's server reports a device's statement past its 30-day lease; the named devices sign a fresh statement (`POST /api/devices/:id/renew`) and the bridge announces it.
+On accept the server sends a JSON `hello` `{type, fileId, currentDocKeyId, headSeq, peers: [{account, deviceId, userId}]}` (a device id is its account's: a peer is `account` and `deviceId` together). Every binary message the server sends is a delivered frame: the sender account (`AccountRef` bytes) then the packed frame (`envelope::deliver`); a client sends bare frames, and the server names it. Client replies with JSON `{type: "resume", lastSeenSeq: K}`. Server replays binary `CollabFrame`s from seq `K+1` to head, then sends `{type: "replayed", throughSeq, floor}` (the last position replayed, and how far saved versions have trimmed the log: a client that resumed below `floor` merges the latest saved version), then enters bidirectional binary mode. After storing each document frame it sends `{type: "stored", seq}` to everyone in the file, the sender included, after the frame itself. Messages are handled in order, so a client knows every frame up to a position it has seen is applied; positions only ever go up. A saved version records the highest contiguous position its client had applied; a note's version trims the log up to it, a whole-file (office) version does not. Office editors also send `{type: "base", versionId, seq, reset}` on connect, before `resume`: the version they loaded (null: the original upload) and its position. The first claim in an empty room sets the editing session's base (and trims the log up to it); later claims get `{type: "base", versionId, seq, yours, reset: false}` back, and a tab whose claim is not `yours` reopens from the returned base; `reset: true` (after a restore) replaces the base and the server sends the other tabs `{type: "base", …, reset: true}` so they reopen. A claim must name a `kind = file` version of the file at its recorded position (or null at 0); anything else is ignored. `CollabFrameSuiteId = 1` is the canonical Rust-owned `KUTPCF3\0` format (`kutup-crypto::envelope`: the header names the sender's device id and manifest sequence; the signature covers the sender account too); the server rejects an unknown suite, malformed length, a frame of another device or naming a manifest sequence the account doesn't have, an invalid signature under the device's listed frame key, or any file/collection/epoch/document-generation mismatch.
 
 ### GET /api/files/:fileId/collab/frames and POST /api/files/:fileId/collab/frames
 
 The collaboration log over HTTP, for a peer that does not hold a socket open:
 the CLI editing notes, code files and place lists as a Yjs peer
-(docs/plans/cli-yjs-sync.md). **Auth:** as the socket: Bearer JWT and
-`?deviceId=` (the caller's active registered device).
+(docs/plans/cli-yjs-sync.md). **Auth:** Bearer JWT and `X-Kutup-Device` (a
+device whose frames count, as the socket's).
 
-- `GET …?deviceId=&after=K&limit=` (a reader of the file) → `{ frames: [{ seq,
+- `GET …?after=K&limit=` (a reader of the file) → `{ frames: [{ seq, sender,
   frame }], headSeq, floor, currentDocKeyId, mySenderSeqHigh, more }`: the
   sealed frames after position `K`, oldest first, at most 500 (`more` when
   others follow), the log's head, how far saved versions have trimmed it (a
   reader below `floor` starts from the latest saved version), the current
   document key, and this device's highest sender sequence (its next frame goes
   above it).
-- `POST …?deviceId=` (an editor) with one sealed frame as
+- `POST …` (an editor) with one sealed frame as
   `application/octet-stream` → `{ seq }`. It passes the same gate as a socket's
   frame (this device's signature, the exact file, its current key generation
   and document key, write access, a key the folder still holds) and is kept and

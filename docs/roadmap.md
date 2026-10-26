@@ -74,8 +74,9 @@ The release wiped kutup.dev (database and bucket) and shipped:
 - rollback protection ([`plans/rollback-protection.md`](plans/rollback-protection.md));
 - device limits: Chat installations 1–10 per account
   (the site setting `chatMaxActiveDevices`, default 10, the protocol's hard cap; a new
-  installation past it is refused) and at most 20 collaboration devices in
-  use per account, fixed ([`plans/device-registration.md`](plans/device-registration.md));
+  installation past it is refused) and at most `devicesPerAccount` devices
+  of every kind per account (default 32, an admin setting;
+  [`plans/one-device-list.md`](plans/one-device-list.md));
 - username renames: names folded (dots, `_` and `-` ignored), freed after an
   administrator-set hold, the old address receive-only during the hold,
   carried across federation ([`plans/username-renames.md`](plans/username-renames.md));
