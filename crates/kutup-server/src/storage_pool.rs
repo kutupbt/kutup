@@ -9,6 +9,12 @@
 //! overcommitted. What is promised but not stored yet counts too: open tus
 //! uploads (their whole declared length), open Chat-media uploads (what is
 //! still to come) and Chat media another server is handing over.
+//!
+//! [`charge`] is the one place the counters change (an account's, or a mail
+//! group's for its shared mailbox), in the transaction that stores or
+//! deletes the bytes; [`charge_within_quota`] adds the room check for writes
+//! that grow the pool. What fills the pool by app is summed from the tables
+//! themselves (`GET /api/user/storage`).
 
 use sqlx::{PgExecutor, Postgres, Transaction};
 use uuid::Uuid;
@@ -92,6 +98,69 @@ pub async fn lock(
     })
 }
 
+/// Whose pool a charge goes to: an account's, or a mail group's (its shared
+/// mailbox has a pool of its own; docs/plans/mail-groups.md).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Payer {
+    Account(Uuid),
+    MailGroup(Uuid),
+}
+
+/// Charges `delta` bytes to `payer`'s pool (`delta` < 0 frees them), never
+/// below zero: the one place stored bytes are counted. The write that stores
+/// or deletes them calls it in the same transaction; a write that adds bytes
+/// checks the room first (`lock` and `Pool::fits`).
+pub async fn charge<'e, E: PgExecutor<'e>>(
+    executor: E,
+    payer: Payer,
+    delta: i64,
+) -> sqlx::Result<()> {
+    // The counter before, so a release past zero (an accounting slip the
+    // reconciler will correct) is seen rather than hidden by the clamp.
+    let (sql, id) = match payer {
+        Payer::Account(id) => (
+            "WITH before AS (SELECT storage_used_bytes AS used FROM users WHERE id = $1 FOR UPDATE)
+             UPDATE users SET storage_used_bytes = GREATEST(before.used + $2, 0)
+             FROM before WHERE users.id = $1 RETURNING before.used",
+            id,
+        ),
+        Payer::MailGroup(id) => (
+            "WITH before AS (SELECT storage_used_bytes AS used FROM mail_groups WHERE id = $1 FOR UPDATE)
+             UPDATE mail_groups SET storage_used_bytes = GREATEST(before.used + $2, 0)
+             FROM before WHERE mail_groups.id = $1 RETURNING before.used",
+            id,
+        ),
+    };
+    let before: Option<i64> = sqlx::query_scalar(sql)
+        .bind(id)
+        .bind(delta)
+        .fetch_optional(executor)
+        .await?;
+    if let Some(used) = before.filter(|used| used.saturating_add(delta) < 0) {
+        tracing::warn!(?payer, delta, used, "storage charge clamped at zero");
+    }
+    Ok(())
+}
+
+/// [`charge`] for a write that adds bytes within the account's quota:
+/// locks its row, refuses (`413`) when `delta` more bytes don't fit, and
+/// charges them. A negative `delta` always goes through.
+pub async fn charge_within_quota(
+    tx: &mut Transaction<'_, Postgres>,
+    user_id: Uuid,
+    delta: i64,
+) -> crate::error::AppResult<()> {
+    let pool = lock(tx, user_id, Leave::default()).await?;
+    if delta > 0 && !pool.fits(delta, 0) {
+        return Err(crate::error::AppError::new(
+            axum::http::StatusCode::PAYLOAD_TOO_LARGE,
+            "storage quota exceeded",
+        ));
+    }
+    charge(&mut **tx, Payer::Account(user_id), delta).await?;
+    Ok(())
+}
+
 /// Bytes promised to `user_id`'s writes still in flight, less `leave`.
 pub async fn reserved<'e, E: PgExecutor<'e>>(
     executor: E,
@@ -123,6 +192,79 @@ pub async fn reserved<'e, E: PgExecutor<'e>>(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Every write goes through [`charge`]: no other code (nor any
+    /// migration) assigns the counters, except the two recounts that set
+    /// them from what is stored (the reconciler in jobs.rs, an
+    /// administrator's in admin.rs) and two test fixtures. The text is
+    /// lowercased and its whitespace collapsed, so no line break, column
+    /// list or `ON CONFLICT` form slips past.
+    #[test]
+    fn only_this_module_charges() {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+        let column = ["storage", "used", "bytes"].join("_");
+        let mut found = Vec::new();
+        for base in ["src", "migrations"] {
+            let mut stack = vec![root.join(base)];
+            while let Some(dir) = stack.pop() {
+                for entry in std::fs::read_dir(dir).unwrap() {
+                    let path = entry.unwrap().path();
+                    if path.is_dir() {
+                        stack.push(path);
+                        continue;
+                    }
+                    if !path
+                        .extension()
+                        .is_some_and(|ext| ext == "rs" || ext == "sql")
+                    {
+                        continue;
+                    }
+                    let text = std::fs::read_to_string(&path)
+                        .unwrap()
+                        .to_lowercase()
+                        .split_whitespace()
+                        .collect::<Vec<_>>()
+                        .join(" ");
+                    let name = path
+                        .strip_prefix(root.join("src"))
+                        .unwrap_or(&path)
+                        .to_string_lossy()
+                        .into_owned();
+                    for (at, _) in text.match_indices(&column) {
+                        // An assignment: `=` after the column, not `==`.
+                        let rest = text[at + column.len()..].trim_start();
+                        let Some(value) = rest.strip_prefix('=') else {
+                            continue;
+                        };
+                        if value.starts_with('=') {
+                            continue;
+                        }
+                        let value: String = value.trim_start().chars().take(16).collect();
+                        found.push((name.clone(), value));
+                    }
+                }
+            }
+        }
+        found.sort();
+        let allowed = [
+            // An administrator's recount from what the account stores.
+            ("handlers/admin.rs", "( select coalesc"),
+            // The reconciler's recount.
+            ("jobs.rs", "$2 where id = $1"),
+            // Two test fixtures.
+            ("jobs.rs", "$1 where id=$2\")"),
+            ("jobs.rs", &format!("{column}+123")[..16]),
+            // `charge`: an account's and a mail group's.
+            ("storage_pool.rs", "greatest(before."),
+            ("storage_pool.rs", "greatest(before."),
+        ];
+        let mut allowed: Vec<(String, String)> = allowed
+            .iter()
+            .map(|(file, value)| ((*file).to_owned(), (*value).to_owned()))
+            .collect();
+        allowed.sort();
+        assert_eq!(found, allowed);
+    }
 
     #[test]
     fn headroom_and_fits_count_what_is_reserved() {

@@ -1059,11 +1059,12 @@ async fn process_reserved_offer_inner(
             .bind(transaction.offer.ciphertext_bytes as i64)
             .fetch_one(&mut *tx)
             .await?;
-            sqlx::query("UPDATE users SET storage_used_bytes=storage_used_bytes+$1 WHERE id=$2")
-                .bind(transaction.offer.ciphertext_bytes as i64)
-                .bind(recipient_user_id)
-                .execute(&mut *tx)
-                .await?;
+            crate::storage_pool::charge(
+                &mut *tx,
+                crate::storage_pool::Payer::Account(recipient_user_id),
+                transaction.offer.ciphertext_bytes as i64,
+            )
+            .await?;
             (reference_id, ChatMediaDeliveryStatusV1::Stored)
         };
         let response = ChatMediaOfferResponseV1 {

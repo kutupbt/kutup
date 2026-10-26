@@ -285,12 +285,11 @@ pub async fn store_list(
             .await?;
         return Ok(Stored::AlreadyThere);
     }
-    sqlx::query(
-        "UPDATE mail_groups SET storage_used_bytes = storage_used_bytes + $2 WHERE id = $1",
+    crate::storage_pool::charge(
+        &mut **tx,
+        crate::storage_pool::Payer::MailGroup(group.id),
+        total,
     )
-    .bind(group.id)
-    .bind(total)
-    .execute(&mut **tx)
     .await?;
     Ok(Stored::Delivered(delivered))
 }
@@ -530,12 +529,11 @@ pub async fn release_unreferenced(
         *refunds.entry(*group).or_default() += size;
     }
     for (group, size) in refunds {
-        sqlx::query(
-            "UPDATE mail_groups SET storage_used_bytes = GREATEST(storage_used_bytes - $2, 0) WHERE id = $1",
+        crate::storage_pool::charge(
+            &mut *tx,
+            crate::storage_pool::Payer::MailGroup(group),
+            -size,
         )
-        .bind(group)
-        .bind(size)
-        .execute(&mut *tx)
         .await?;
     }
     tx.commit().await?;

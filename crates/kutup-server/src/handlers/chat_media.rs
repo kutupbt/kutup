@@ -599,12 +599,13 @@ pub async fn patch_upload(
         }
     };
     if storage_reference_id.is_none()
-        || sqlx::query("UPDATE users SET storage_used_bytes=storage_used_bytes+$1 WHERE id=$2")
-            .bind(total)
-            .bind(user_id)
-            .execute(&mut *transaction)
-            .await
-            .is_err()
+        || crate::storage_pool::charge(
+            &mut *transaction,
+            crate::storage_pool::Payer::Account(user_id),
+            total,
+        )
+        .await
+        .is_err()
         || sqlx::query("DELETE FROM chat_media_uploads WHERE id=$1")
             .bind(upload_id)
             .execute(&mut *transaction)
@@ -870,11 +871,12 @@ pub async fn deliver_local(
         .bind(stored_bytes)
         .fetch_one(&mut *transaction)
         .await?;
-        sqlx::query("UPDATE users SET storage_used_bytes=storage_used_bytes+$1 WHERE id=$2")
-            .bind(stored_bytes)
-            .bind(recipient_user_id)
-            .execute(&mut *transaction)
-            .await?;
+        crate::storage_pool::charge(
+            &mut *transaction,
+            crate::storage_pool::Payer::Account(recipient_user_id),
+            stored_bytes,
+        )
+        .await?;
         (reference_id, ChatMediaDeliveryStatusV1::Stored)
     };
     sqlx::query(
@@ -1003,12 +1005,11 @@ pub async fn discard_origin_object(
     if removed.rows_affected() != 1 {
         return Err(AppError::conflict("Chat media reference changed"));
     }
-    sqlx::query(
-        "UPDATE users SET storage_used_bytes=GREATEST(storage_used_bytes-$1,0) WHERE id=$2",
+    crate::storage_pool::charge(
+        &mut *tx,
+        crate::storage_pool::Payer::Account(user_id),
+        -bytes,
     )
-    .bind(bytes)
-    .bind(user_id)
-    .execute(&mut *tx)
     .await?;
     sqlx::query("DELETE FROM chat_media_objects WHERE attachment_id=$1")
         .bind(attachment_id)
@@ -1102,12 +1103,11 @@ pub async fn clear_reference(
         .bind(reference_id)
         .execute(&mut *tx)
         .await?;
-    sqlx::query(
-        "UPDATE users SET storage_used_bytes=GREATEST(storage_used_bytes-$1,0) WHERE id=$2",
+    crate::storage_pool::charge(
+        &mut *tx,
+        crate::storage_pool::Payer::Account(user_id),
+        -logical_bytes,
     )
-    .bind(logical_bytes)
-    .bind(user_id)
-    .execute(&mut *tx)
     .await?;
     let remaining: i64 =
         sqlx::query_scalar("SELECT COUNT(*) FROM chat_media_references WHERE attachment_id=$1")

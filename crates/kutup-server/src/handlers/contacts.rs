@@ -188,25 +188,6 @@ async fn write_index(
     Ok(())
 }
 
-/// Charges `add` bytes to the pool (refunds when negative), under the user's row lock.
-async fn charge(tx: &mut Transaction<'_, Postgres>, user_id: Uuid, add: i64) -> AppResult<()> {
-    let pool = crate::storage_pool::lock(tx, user_id, Default::default()).await?;
-    if add > 0 && !pool.fits(add, 0) {
-        return Err(AppError::new(
-            StatusCode::PAYLOAD_TOO_LARGE,
-            "storage quota exceeded",
-        ));
-    }
-    sqlx::query(
-        "UPDATE users SET storage_used_bytes = GREATEST(storage_used_bytes + $2, 0) WHERE id = $1",
-    )
-    .bind(user_id)
-    .bind(add)
-    .execute(&mut **tx)
-    .await?;
-    Ok(())
-}
-
 async fn insert(
     tx: &mut Transaction<'_, Postgres>,
     user_id: Uuid,
@@ -334,7 +315,7 @@ pub async fn create(
     )?;
     let mut tx = state.pool.begin().await?;
     let locked = account_heads::lock(&mut tx, user_id, user.session.session_id).await?;
-    charge(&mut tx, user_id, checked.charge()).await?;
+    crate::storage_pool::charge_within_quota(&mut tx, user_id, checked.charge()).await?;
     room_for(&mut tx, user_id, 1).await?;
     let id = insert(&mut tx, user_id, &checked).await?;
     account_heads::advance(&mut tx, &locked, head.as_ref()).await?;
@@ -426,7 +407,8 @@ pub async fn update(
             revision,
         ));
     }
-    charge(&mut tx, user_id, checked.charge() - old_charge).await?;
+    crate::storage_pool::charge_within_quota(&mut tx, user_id, checked.charge() - old_charge)
+        .await?;
     sqlx::query(
         "UPDATE contacts SET name = $2, summary = $3, signature = $4, card = $5,
                 revision = $6, updated_at = now()
@@ -467,7 +449,12 @@ async fn delete_ids(
     .await?;
     let freed = freed.unwrap_or(0);
     if freed > 0 {
-        charge(&mut tx, user_id, -freed).await?;
+        crate::storage_pool::charge(
+            &mut *tx,
+            crate::storage_pool::Payer::Account(user_id),
+            -freed,
+        )
+        .await?;
     }
     account_heads::advance(&mut tx, &locked, head.as_ref()).await?;
     tx.commit().await?;
@@ -593,7 +580,7 @@ pub async fn import(
     let total: i64 = checked.iter().map(Checked::charge).sum();
     let mut tx = state.pool.begin().await?;
     let locked = account_heads::lock(&mut tx, user_id, user.session.session_id).await?;
-    charge(&mut tx, user_id, total).await?;
+    crate::storage_pool::charge_within_quota(&mut tx, user_id, total).await?;
     room_for(&mut tx, user_id, checked.len()).await?;
     for contact in &checked {
         insert(&mut tx, user_id, contact).await?;

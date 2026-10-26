@@ -285,13 +285,11 @@ pub async fn purge_for_account(state: &AppState, user_id: Uuid) -> AppResult<()>
         .bind(user_id)
         .execute(&mut *transaction)
         .await?;
-    sqlx::query(
-        "UPDATE users SET storage_used_bytes=GREATEST(0,storage_used_bytes-$1)
-         WHERE id=$2",
+    crate::storage_pool::charge(
+        &mut *transaction,
+        crate::storage_pool::Payer::Account(user_id),
+        -released,
     )
-    .bind(released)
-    .bind(user_id)
-    .execute(&mut *transaction)
     .await?;
     transaction.commit().await?;
     let prefix = format!("chat-backup/{user_id}/{backup_id}/");
@@ -604,11 +602,12 @@ pub async fn append_segment(
     .bind(user_id)
     .execute(&mut *transaction)
     .await?;
-    sqlx::query("UPDATE users SET storage_used_bytes=storage_used_bytes+$1 WHERE id=$2")
-        .bind(ciphertext_bytes)
-        .bind(user_id)
-        .execute(&mut *transaction)
-        .await?;
+    crate::storage_pool::charge(
+        &mut *transaction,
+        crate::storage_pool::Payer::Account(user_id),
+        ciphertext_bytes,
+    )
+    .await?;
     transaction.commit().await?;
     crate::telemetry::chat_backup_event("segment", "stored");
     Ok(Json(ChatBackupSegmentReceiptV1 {
@@ -948,11 +947,12 @@ pub async fn stage_base(
         .rows_affected()
             == 1;
         if inserted {
-            sqlx::query("UPDATE users SET storage_used_bytes=storage_used_bytes+$1 WHERE id=$2")
-                .bind(charged)
-                .bind(user_id)
-                .execute(&mut *transaction)
-                .await?;
+            crate::storage_pool::charge(
+                &mut *transaction,
+                crate::storage_pool::Payer::Account(user_id),
+                charged,
+            )
+            .await?;
         } else {
             let existing: Option<(Uuid, i64, i64, String)> = sqlx::query_as(
                 "SELECT object_id,covered_cursor,ciphertext_bytes,ciphertext_sha256
@@ -1178,17 +1178,13 @@ pub async fn commit_manifest(
     .bind(user_id)
     .execute(&mut *transaction)
     .await?;
-    sqlx::query(
-        "UPDATE users SET storage_used_bytes=GREATEST(0,storage_used_bytes-$1)
-         WHERE id=$2",
-    )
-    .bind(
-        released_segments
+    crate::storage_pool::charge(
+        &mut *transaction,
+        crate::storage_pool::Payer::Account(user_id),
+        -released_segments
             .saturating_add(released_bases)
             .saturating_add(released_media),
     )
-    .bind(user_id)
-    .execute(&mut *transaction)
     .await?;
     sqlx::query(
         "DELETE FROM chat_backup_media_reconciliations
@@ -1459,11 +1455,12 @@ pub async fn copy_media(
             .bind(&path)
             .execute(&mut *transaction)
             .await?;
-            sqlx::query("UPDATE users SET storage_used_bytes=storage_used_bytes+$1 WHERE id=$2")
-                .bind(charged)
-                .bind(user_id)
-                .execute(&mut *transaction)
-                .await?;
+            crate::storage_pool::charge(
+                &mut *transaction,
+                crate::storage_pool::Payer::Account(user_id),
+                charged,
+            )
+            .await?;
             true
         };
         if let Some(existing_media_id) = sqlx::query_scalar::<_, Vec<u8>>(
@@ -1749,11 +1746,12 @@ pub async fn upload_media(
             .bind(&path)
             .execute(&mut *transaction)
             .await?;
-            sqlx::query("UPDATE users SET storage_used_bytes=storage_used_bytes+$1 WHERE id=$2")
-                .bind(charged)
-                .bind(user_id)
-                .execute(&mut *transaction)
-                .await?;
+            crate::storage_pool::charge(
+                &mut *transaction,
+                crate::storage_pool::Payer::Account(user_id),
+                charged,
+            )
+            .await?;
             true
         };
         insert_media_reference(&mut transaction, user_id, media_id, reference_id).await?;

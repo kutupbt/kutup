@@ -130,21 +130,22 @@ pub async fn upload(
     crate::drive_writes::check_room(&mut tx, user_id, collection_id, size - own_previous, None)
         .await?
         .into_result()?;
-    sqlx::query("UPDATE users SET storage_used_bytes = GREATEST(0, storage_used_bytes - $1 + $2) WHERE id = $3")
-        .bind(own_previous)
-        .bind(size)
-        .bind(user_id)
-        .execute(&mut *tx)
-        .await?;
+    crate::storage_pool::charge(
+        &mut *tx,
+        crate::storage_pool::Payer::Account(user_id),
+        size - own_previous,
+    )
+    .await?;
     if let Some((bytes, uploader, _)) = previous
         .as_ref()
         .filter(|(_, uploader, _)| *uploader != user_id)
     {
-        sqlx::query("UPDATE users SET storage_used_bytes = GREATEST(0, storage_used_bytes - $1) WHERE id = $2")
-            .bind(bytes)
-            .bind(uploader)
-            .execute(&mut *tx)
-            .await?;
+        crate::storage_pool::charge(
+            &mut *tx,
+            crate::storage_pool::Payer::Account(*uploader),
+            -bytes,
+        )
+        .await?;
     }
 
     // Stored before commit, with the row lock held: a failed PUT rolls the
@@ -315,11 +316,12 @@ pub async fn delete(
     .fetch_all(&mut *tx)
     .await?;
     for (_, bytes, uploader, _) in &removed {
-        sqlx::query("UPDATE users SET storage_used_bytes = GREATEST(0, storage_used_bytes - $1) WHERE id = $2")
-            .bind(bytes)
-            .bind(uploader)
-            .execute(&mut *tx)
-            .await?;
+        crate::storage_pool::charge(
+            &mut *tx,
+            crate::storage_pool::Payer::Account(*uploader),
+            -bytes,
+        )
+        .await?;
     }
     tx.commit().await?;
     for (variant, _, _, version_id) in removed {
