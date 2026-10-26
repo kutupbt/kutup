@@ -41,10 +41,6 @@ const ADMIN_B_EMAIL: &str = "federation-admin-b@example.test";
 const ALICE_REGISTRATION_ID: u32 = 4101;
 const BOB_REGISTRATION_ID_1: u32 = 4201;
 const BOB_REGISTRATION_ID_2: u32 = 4202;
-/// Bob's second Chat device: id 2 is the interrupted registration's, which
-/// stays pending for the listing grace (`deviceListingGraceSeconds`, at
-/// least a minute), so the next link takes the lowest free id after it.
-const BOB_DEVICE_2: u32 = 3;
 const QUEUED_MEDIA_ATTACHMENT_ID: &str = "50000000-0000-4000-8000-000000000003";
 const QUEUED_MEDIA_OPERATION_ID: &str = "50000000-0000-4000-8000-000000000004";
 const QUEUED_MEDIA_PLAINTEXT: &[u8] = b"chat-media-queued-across-origin-restart";
@@ -773,16 +769,27 @@ fn alice_device() -> ChatDevice {
     }
 }
 
-/// Bob's Chat device `id` (1 or `BOB_DEVICE_2`), as the setup phase registered it.
+/// Bob's Chat device `id` (1, or his second device's), as the setup phase
+/// registered it.
 fn bob_device(id: u32) -> ChatDevice {
+    let slot = if id == 1 { 1 } else { 2 };
     ChatDevice {
         id,
-        registration_id: match id {
+        registration_id: match slot {
             1 => BOB_REGISTRATION_ID_1,
             _ => BOB_REGISTRATION_ID_2,
         },
-        credential: test_credential(BOB_EMAIL, id),
+        credential: test_credential(BOB_EMAIL, slot),
     }
+}
+
+/// The id of Bob's second Chat device, as the server gave it when the setup
+/// phase linked it (the lowest id no row holds, which depends on whether an
+/// earlier unlisted row still waits out its listing grace).
+fn bob_second_device() -> u32 {
+    recall("bobSecondDevice")
+        .as_u64()
+        .expect("the setup phase kept Bob's second device") as u32
 }
 
 fn envelope(device_id: u32, registration_id: u32, content: &[u8]) -> Value {
@@ -2394,13 +2401,17 @@ fn setup_phase(c: &Client, a: &str, b: &str) {
         .unwrap();
     assert_eq!(direct["sender"], json!(account_of(c, a, &alice_token)));
 
-    let bob_2 = bob_device(BOB_DEVICE_2);
-    assert_eq!(
-        bob_chat
-            .link_as(c, b, &bob_1, bob_2.registration_id, bob_2.credential)
-            .id,
-        BOB_DEVICE_2
-    );
+    let bob_2_id = bob_chat
+        .link_as(
+            c,
+            b,
+            &bob_1,
+            BOB_REGISTRATION_ID_2,
+            test_credential(BOB_EMAIL, 2),
+        )
+        .id;
+    assert_ne!(bob_2_id, 1);
+    remember("bobSecondDevice", json!(bob_2_id));
     let bob_manifest_v2 = bob_chat.head.clone().unwrap();
     let refreshed_bundles = json_response(
         c.get(format!(
@@ -2487,13 +2498,13 @@ fn setup_phase(c: &Client, a: &str, b: &str) {
             mismatch_id,
             vec![
                 envelope(1, BOB_REGISTRATION_ID_1, refreshed_content),
-                envelope(BOB_DEVICE_2, BOB_REGISTRATION_ID_2, refreshed_content),
+                envelope(bob_2_id, BOB_REGISTRATION_ID_2, refreshed_content),
             ],
         ),
         "retry after remote device mismatch",
     );
     assert_content_once(&mailbox(c, b, &bob_token, 1), refreshed_content);
-    assert_content_once(&mailbox(c, b, &bob_token, BOB_DEVICE_2), refreshed_content);
+    assert_content_once(&mailbox(c, b, &bob_token, bob_2_id), refreshed_content);
 
     // Unknown recipients consume their sequence as a terminal rejection. A
     // later valid send must not be poisoned behind that outbox entry.
@@ -2518,13 +2529,13 @@ fn setup_phase(c: &Client, a: &str, b: &str) {
             "10000000-0000-4000-8000-000000000004",
             vec![
                 envelope(1, BOB_REGISTRATION_ID_1, after_rejection),
-                envelope(BOB_DEVICE_2, BOB_REGISTRATION_ID_2, after_rejection),
+                envelope(bob_2_id, BOB_REGISTRATION_ID_2, after_rejection),
             ],
         ),
         "valid send after terminal rejection",
     );
     assert_content_once(&mailbox(c, b, &bob_token, 1), after_rejection);
-    assert_content_once(&mailbox(c, b, &bob_token, BOB_DEVICE_2), after_rejection);
+    assert_content_once(&mailbox(c, b, &bob_token, bob_2_id), after_rejection);
 
     chat_media_round_trip(c, a, b, &alice_token, &bob_token, &admin_b);
 
@@ -2635,7 +2646,11 @@ fn queue_phase(c: &Client, a: &str) {
         "10000000-0000-4000-8000-000000000005",
         vec![
             envelope(1, BOB_REGISTRATION_ID_1, b"queued-during-outage"),
-            envelope(BOB_DEVICE_2, BOB_REGISTRATION_ID_2, b"queued-during-outage"),
+            envelope(
+                bob_second_device(),
+                BOB_REGISTRATION_ID_2,
+                b"queued-during-outage",
+            ),
         ],
     );
     assert_eq!(response.status().as_u16(), 503);
@@ -2684,7 +2699,7 @@ fn verify_retry_phase(c: &Client, a: &str, b: &str) {
     let deadline = Instant::now() + Duration::from_secs(30);
     loop {
         let first = mailbox(c, b, &bob_token, 1);
-        let second = mailbox(c, b, &bob_token, BOB_DEVICE_2);
+        let second = mailbox(c, b, &bob_token, bob_second_device());
         let encoded = b64(b"queued-during-outage");
         if first.iter().any(|message| message["content"] == encoded)
             && second.iter().any(|message| message["content"] == encoded)
@@ -2736,13 +2751,13 @@ fn verify_retry_phase(c: &Client, a: &str, b: &str) {
             "10000000-0000-4000-8000-000000000006",
             vec![
                 envelope(1, BOB_REGISTRATION_ID_1, follow_up),
-                envelope(BOB_DEVICE_2, BOB_REGISTRATION_ID_2, follow_up),
+                envelope(bob_second_device(), BOB_REGISTRATION_ID_2, follow_up),
             ],
         ),
         "send after durable retry",
     );
     assert_content_once(&mailbox(c, b, &bob_token, 1), follow_up);
-    assert_content_once(&mailbox(c, b, &bob_token, BOB_DEVICE_2), follow_up);
+    assert_content_once(&mailbox(c, b, &bob_token, bob_second_device()), follow_up);
 }
 
 /// Renames across servers (docs/plans/username-renames.md, R2): an account
