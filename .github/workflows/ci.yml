@@ -381,6 +381,8 @@ jobs:
         run: scripts/gate.sh browser calendar
       - name: Run the Account browser specs
         run: scripts/gate.sh browser account
+      - name: Run the Office collaboration browser specs
+        run: scripts/gate.sh browser office
       - name: Collect sanitized diagnostics
         if: failure()
         run: scripts/collect-chat-e2e-diagnostics.sh single

@@ -28,6 +28,27 @@ pub struct CollabQuery {
     pub(crate) token: Option<String>,
     #[serde(rename = "deviceId")]
     pub(crate) device_id: Option<String>,
+    /// The tab's own random id (lowercase hex, at most 8 digits): the tabs
+    /// of one browser share a device, and the room tells them apart by it
+    /// (an office editor keys its participants on it).
+    #[serde(default)]
+    pub(crate) tab: Option<String>,
+}
+
+impl CollabQuery {
+    /// The tab id, if well formed: empty otherwise (an older client).
+    pub(crate) fn tab(&self) -> String {
+        self.tab
+            .as_deref()
+            .filter(|tab| {
+                (1..=8).contains(&tab.len())
+                    && tab
+                        .bytes()
+                        .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+            })
+            .unwrap_or_default()
+            .to_owned()
+    }
 }
 
 /// One participant in the room's peer-list. Keys are emitted in the alphabetical order Go's
@@ -39,6 +60,9 @@ pub(crate) struct PeerSummary {
     color: String,
     #[serde(rename = "deviceId")]
     device_id: i64,
+    /// The tab's id (see `CollabQuery::tab`); omitted for an older client.
+    #[serde(skip_serializing_if = "String::is_empty")]
+    tab: String,
     #[serde(rename = "userId")]
     user_id: String,
     #[serde(skip_serializing_if = "String::is_empty")]
@@ -112,6 +136,7 @@ pub async fn ws(
         session_id,
         device_id,
         pub_key,
+        tab: q.tab(),
     };
     // One frame carries at most one envelope's plaintext.
     let max_frame = envelope::MAX_PLAINTEXT_BYTES + envelope::MIN_PACKED;
@@ -221,6 +246,7 @@ struct Conn {
     session_id: Uuid,
     device_id: i64,
     pub_key: Vec<u8>,
+    tab: String,
 }
 
 /// How often an open connection re-checks its session and file access, so
@@ -333,7 +359,7 @@ async fn handle_connection(state: AppState, socket: WebSocket, conn: Conn, user_
     };
     let hello_json = serde_json::to_string(&hello).unwrap_or_else(|_| "{}".into());
 
-    let (peer, mut rx) = hub::new_peer(&hub, device_id, user_id, username, color);
+    let (peer, mut rx) = hub::new_peer(&hub, device_id, conn.tab.clone(), user_id, username, color);
 
     // Writer task — the Rust analogue of writePump. Drains the outbound channel to the sink.
     let (mut sink, mut stream) = socket.split();
@@ -403,6 +429,7 @@ pub(crate) fn peer_summaries(hub: &Hub, file_id: &str) -> Vec<PeerSummary> {
         .map(|p| PeerSummary {
             color: p.color.clone(),
             device_id: p.device_id,
+            tab: p.tab.clone(),
             user_id: p.user_id.clone(),
             username: p.username.clone(),
         })
@@ -944,6 +971,7 @@ pub async fn get_frames(
         &CollabQuery {
             token: None,
             device_id: q.device_id.clone(),
+            tab: None,
         },
     )
     .await?;
@@ -1043,6 +1071,7 @@ pub async fn post_frame(
         &CollabQuery {
             token: None,
             device_id: q.device_id.clone(),
+            tab: None,
         },
     )
     .await?;
@@ -1076,5 +1105,29 @@ pub async fn post_frame(
             "the frame was not kept: read the log again",
         )
         .with_details(serde_json::json!({ "code": "frameRefused" }))),
+    }
+}
+
+#[cfg(test)]
+mod tab_tests {
+    use super::CollabQuery;
+
+    fn tab(value: Option<&str>) -> String {
+        CollabQuery {
+            token: None,
+            device_id: None,
+            tab: value.map(str::to_owned),
+        }
+        .tab()
+    }
+
+    #[test]
+    fn a_tab_id_is_short_lowercase_hex_or_nothing() {
+        assert_eq!(tab(Some("0a1b2c")), "0a1b2c");
+        assert_eq!(tab(Some("deadbeef")), "deadbeef");
+        for bad in ["", "DEAD", "123456789", "xyz", "<script>"] {
+            assert_eq!(tab(Some(bad)), "", "{bad}");
+        }
+        assert_eq!(tab(None), "");
     }
 }

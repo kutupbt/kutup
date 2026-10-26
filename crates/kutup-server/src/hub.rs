@@ -35,6 +35,8 @@ pub enum WsOut {
 pub struct Peer {
     pub conn_id: u64,
     pub device_id: i64,
+    /// The tab's id: tabs of one browser share a device.
+    pub tab: String,
     pub user_id: String,
     pub username: String,
     pub color: String,
@@ -269,6 +271,7 @@ impl Hub {
 pub fn new_peer(
     hub: &Hub,
     device_id: i64,
+    tab: String,
     user_id: String,
     username: String,
     color: String,
@@ -277,6 +280,7 @@ pub fn new_peer(
     let peer = Arc::new(Peer {
         conn_id: hub.next_conn_id(),
         device_id,
+        tab,
         user_id,
         username,
         color,
@@ -291,7 +295,14 @@ mod tests {
     use super::*;
 
     fn peer(hub: &Hub, device_id: i64) -> (Arc<Peer>, mpsc::Receiver<WsOut>) {
-        new_peer(hub, device_id, String::new(), String::new(), String::new())
+        new_peer(
+            hub,
+            device_id,
+            String::new(),
+            String::new(),
+            String::new(),
+            String::new(),
+        )
     }
 
     #[test]

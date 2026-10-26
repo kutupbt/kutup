@@ -23,11 +23,17 @@ function randomHex(bytes: number): string {
   return Array.from(arr, (b) => b.toString(16).padStart(2, '0')).join('')
 }
 
-/** Stable per-tab identifier. Persisted in sessionStorage, survives reload. */
+/**
+ * Stable per-tab identifier: lowercase hex, persisted in sessionStorage, so
+ * it survives a reload. The tabs of one browser share a device, and a
+ * collaboration room tells them apart by it (the socket names it; an office
+ * editor keys its participants on it). 24 bits: two tabs of one device
+ * drawing the same id is a one-in-sixteen-million chance.
+ */
 export function getOrCreateTabId(): string {
   let v = sessionStorage.getItem(TAB_ID_KEY)
   if (!v) {
-    v = randomHex(2)
+    v = randomHex(3)
     sessionStorage.setItem(TAB_ID_KEY, v)
   }
   return v

@@ -342,24 +342,22 @@
         //   _getUserColorById: if window.parent.APP.getUserColor(id) returns
         //                      {r,g,b,a}, OO uses it; else auto-palette.
         //
-        // Scheme: myUniqueOOId = "<userId>--<deviceId>" (separator avoids
-        // ambiguous concat of two numeric strings — userId is a UUID so the
-        // separator is just for readability).
+        // Scheme: one OnlyOffice participant per TAB. The tabs of one
+        // browser share a device (one per sign-in and app), so the device
+        // can't tell them apart; each tab names its own random id (`tab`,
+        // lowercase hex) on its socket, and the room's peer list carries it.
         //   - user.id            = userId       (UUID; same across user's tabs)
-        //   - indexUser          = deviceId     (per-tab; unique)
-        //   - _userId            = userId + String(deviceId)
-        //   - participant.id     = peerUserId + "--" + String(peerDeviceId)
-        //                                       — wait: must EQUAL _userId
-        //                                         on receivers, so use direct
-        //                                         concat, not separator.
-        //
-        // Final: ooUserIdFor(uid, did) = String(uid) + String(did). matches
-        // _userId because OO does string concat with no separator.
+        //   - indexUser          = indexOfTab(tab)   (per tab; past the
+        //                                             reserved indexes)
+        //   - _userId            = userId + String(indexUser)
+        //   - participant.id     = ooUserIdFor(peerUserId, indexOfTab(peerTab))
+        //                          — must EQUAL the peer's _userId, so a
+        //                            direct concat, no separator.
         // idOriginal = userId so OO's per-USER color cache is keyed per-user.
         var myOOId = null            // = selfUserId (UUID string)
-        var myIndex = null           // = selfDeviceId (number)
+        var myIndex = null           // = indexOfTab(selfTab)
         var myUniqueOOId = null      // = ooUserIdFor(myOOId, myIndex)
-        function ooUserIdFor(userId, deviceId) { return String(userId) + String(deviceId) }
+        function ooUserIdFor(userId, index) { return String(userId) + String(index) }
         // Self-held cell-edit locks. Cleared on releaseLock or
         // unLockDocument {releaseLocks: true}. See fromOO 'getLock'.
         var selfLocks = Object.create(null)
@@ -385,52 +383,49 @@
         var HISTORY_KEEPER_INDEX_USER = 1
         var SELF_INDEX_USER = 2
 
-        // Live peer list. Keyed by deviceId so every wire-format peer
-        // entry maps to a stable {id, indexUser, username, connectionId}
-        // that OnlyOffice expects in its connectState message.
-        // peerByDevice[deviceId] = oo participant entry (see makePeer).
+        // Live peer list. Keyed by device and tab ('<deviceId>:<tab>') so
+        // every wire-format peer entry maps to a stable {id, indexUser,
+        // username, connectionId} that OnlyOffice expects in its
+        // connectState message.
+        // peerByDevice['<deviceId>:<tab>'] = oo participant entry (see makePeer).
         var peerByDevice = Object.create(null)
         var lastConnectStateTs = 0
         var selfDeviceId = null  // set in oo-self handler from msg.deviceId
+        var selfTab      = null  // set in oo-self handler from msg.tab
         var selfUserId   = null  // set in oo-self handler from msg.userId
 
-        // Per-peer cursor identity, keyed by deviceId (string). Captured from
-        // each oo-remote-cursor frame so we can address the right user when
-        // a peer leaves and we need to clear their foreign-selection rect.
-        // peerCursorIdentity[deviceId] = { user: '<myUniqueOOId>', useridoriginal: '<myOOId>' }.
+        // Per-peer cursor identity, keyed by the peer's OnlyOffice user id
+        // (its participant id). Captured from each oo-remote-cursor frame so
+        // we can address the right user when a peer leaves and we need to
+        // clear their foreign-selection rect.
+        // peerCursorIdentity[user] = { user: '<user>', useridoriginal: '<myOOId>' }.
         var peerCursorIdentity = Object.create(null)
 
-        // Allocate a per-device indexUser starting from SELF_INDEX_USER+1.
-        // OO requires every peer to have a distinct positive integer index.
-        // We assign on first sight and remember (so the same device keeps
-        // its index across leave/rejoin within the same session).
-        var nextIndex = SELF_INDEX_USER + 1
-        var indexByDevice = Object.create(null)
-        function indexFor(deviceId) {
-          if (deviceId === selfDeviceId) return SELF_INDEX_USER
-          var k = String(deviceId)
-          if (!(k in indexByDevice)) {
-            indexByDevice[k] = nextIndex++
-          }
-          return indexByDevice[k]
+        // A tab's OnlyOffice index: its id (hex, up to 24 bits) past the
+        // indexes this bridge reserves (the history keeper's and the pre-init
+        // self placeholder's), computed alike on every tab, so a sender's
+        // _userId (user.id + index) is what its peers compute for it.
+        function indexOfTab(tab) {
+          var n = parseInt(String(tab), 16)
+          return SELF_INDEX_USER + 1 + (isFinite(n) && n >= 0 ? n : 0)
         }
 
-        // Tab differentiator suffix — last 4 hex chars of deviceId. Mirrors
-        // notes' "<username> #<tabId>" pattern (TextCollabEditor uses
-        // buildAwarenessName) so two tabs of the same user have visually
+        // Tab differentiator suffix — the last 4 hex digits of the tab id.
+        // Mirrors notes' "<username> #<tabId>" pattern (TextCollabEditor
+        // uses buildAwarenessName) so two tabs of the same user have visually
         // distinct labels in OO's peer chrome — color is intentionally
         // per-user / shared across tabs (like the user's display name).
-        function tabSuffix(deviceId) {
-          return Number(deviceId).toString(16).slice(-4)
+        function tabSuffix(tab) {
+          return String(tab).slice(-4)
         }
-        function withTabSuffix(name, deviceId) {
-          if (!name) return 'user-' + deviceId
-          return name + ' #' + tabSuffix(deviceId)
+        function withTabSuffix(name, tab) {
+          if (!name) return 'user-' + tabSuffix(tab)
+          return name + ' #' + tabSuffix(tab)
         }
 
-        function makePeer(deviceId, userId, username) {
+        function makePeer(deviceId, tab, userId, username) {
           // Identity must satisfy:
-          //   participant.id     = ooUserIdFor(peerUserId, peerDeviceId)
+          //   participant.id     = ooUserIdFor(peerUserId, indexOfTab(peerTab))
           //                        — equals sender's myUniqueOOId so cross-tab
           //                        change.user attribution and lock-grant
           //                        lookups resolve to this entry.
@@ -438,11 +433,11 @@
           //                        — keys per-USER color in
           //                        window.APP.getUserColor and OO's color cache.
           return {
-            id: ooUserIdFor(userId, deviceId),
+            id: ooUserIdFor(userId, indexOfTab(tab)),
             idOriginal: String(userId),
-            username: withTabSuffix(username, deviceId),
-            indexUser: deviceId,
-            connectionId: 'dev-' + deviceId,
+            username: withTabSuffix(username, tab),
+            indexUser: indexOfTab(tab),
+            connectionId: 'dev-' + deviceId + '-' + tab,
             isCloseCoAuthoring: false,
             view: false,
           }
@@ -468,7 +463,7 @@
           return {
             id: myUniqueOOId,
             idOriginal: String(myOOId),
-            username: selfDeviceId != null ? withTabSuffix(raw, selfDeviceId) : raw,
+            username: selfTab != null ? withTabSuffix(raw, selfTab) : raw,
             indexUser: myIndex,
             connectionId: 'self',
             isCloseCoAuthoring: false,
@@ -857,13 +852,13 @@
         var initReceived = false
         var maybeStart = function () {
           if (selfDeviceId == null || selfUserId == null || pendingInitPayload == null) return
-          // Bind OO identity from (selfUserId, selfDeviceId). Must happen
-          // before the editor mounts because user.id is read from the config
-          // at construction time.
+          // Bind OO identity from (selfUserId, selfTab). Must happen before
+          // the editor mounts because user.id is read from the config at
+          // construction time.
           if (myOOId == null) {
             myOOId = selfUserId
-            myIndex = selfDeviceId
-            myUniqueOOId = ooUserIdFor(selfUserId, selfDeviceId)
+            myIndex = indexOfTab(selfTab)
+            myUniqueOOId = ooUserIdFor(selfUserId, myIndex)
             selfUsername = pendingInitPayload.username || null
             if (pendingInitPayload.color) userColors[selfUserId] = pendingInitPayload.color
             selfPlaceholder = buildSelfPlaceholder()
@@ -1004,8 +999,8 @@
                         //   _userId = user.id + getParticipants().index
                         // and checks lock.user === _userId for self-vs-other.
                         id: String(myOOId),
-                        firstname: withTabSuffix(selfUsername || 'You', selfDeviceId),
-                        name: withTabSuffix(selfUsername || 'You', selfDeviceId),
+                        firstname: withTabSuffix(selfUsername || 'You', selfTab),
+                        name: withTabSuffix(selfUsername || 'You', selfTab),
                       },
                       mode: payload.readOnly ? 'view' : 'edit',
                       lang: (navigator.language || 'en').slice(0, 2),
@@ -1179,13 +1174,13 @@
               // in messages[].cursor and the userid in messages[].user.
               try {
                 var cursorPayload = JSON.parse(msg.payload)
-                // Track the senderDeviceId → user identity so we can clear
-                // the rectangle when this peer leaves the room (see
-                // 'oo-peers' below).
-                if (typeof msg.senderDeviceId === 'number'
-                    && cursorPayload && cursorPayload.messages && cursorPayload.messages[0]) {
+                // Track the sender's OnlyOffice user id so we can clear the
+                // rectangle when this peer leaves the room (see 'oo-peers'
+                // below).
+                if (cursorPayload && cursorPayload.messages && cursorPayload.messages[0]
+                    && typeof cursorPayload.messages[0].user === 'string') {
                   var first = cursorPayload.messages[0]
-                  peerCursorIdentity[String(msg.senderDeviceId)] = {
+                  peerCursorIdentity[first.user] = {
                     user: first.user,
                     useridoriginal: first.useridoriginal,
                   }
@@ -1268,6 +1263,8 @@
               if (typeof msg.deviceId === 'number') {
                 selfDeviceId = msg.deviceId
               }
+              // The tab: an older parent sends none, as its sockets do.
+              selfTab = typeof msg.tab === 'string' && msg.tab ? msg.tab : '0'
               if (typeof msg.userId === 'string') {
                 selfUserId = msg.userId
               }
@@ -1288,12 +1285,13 @@
                   var entry = list[i]
                   if (!entry || typeof entry.deviceId === 'undefined') continue
                   var did = entry.deviceId
-                  // Skip self — we render at SELF_INDEX_USER (selfPlaceholder).
-                  // If selfDeviceId hasn't been received yet (parent's
-                  // oo-self message arrives async), include the entry — it
-                  // will be re-emitted on the next oo-peers after oo-self
-                  // arrives.
-                  if (selfDeviceId !== null && did === selfDeviceId) continue
+                  var tab = typeof entry.tab === 'string' && entry.tab ? entry.tab : '0'
+                  // Skip self — this tab of this device (another tab of the
+                  // same device is a peer). If oo-self hasn't been received
+                  // yet (parent's oo-self message arrives async), include the
+                  // entry — it will be re-emitted on the next oo-peers after
+                  // oo-self arrives.
+                  if (selfDeviceId !== null && did === selfDeviceId && tab === selfTab) continue
                   // userId is the per-USER color key. If the backend wire
                   // dropped it (shouldn't — collab.go peerSummaries always
                   // includes it), fall back to a deviceId-derived key so
@@ -1302,7 +1300,7 @@
                   var entryUserId = (typeof entry.userId === 'string' && entry.userId)
                     ? entry.userId
                     : 'dev-' + did
-                  nextById[String(did)] = makePeer(did, entryUserId, entry.username)
+                  nextById[String(did) + ':' + tab] = makePeer(did, tab, entryUserId, entry.username)
                   if (entry.color) userColors[entryUserId] = entry.color
                 }
                 peerByDevice = nextById
@@ -1314,9 +1312,12 @@
                 // sendToOO with the peer's identity tells OO to wipe their
                 // entry from m_aForeignCursorsData and redraw without their
                 // rectangle.
+                var present = Object.create(null)
+                var peerKeys = Object.keys(nextById)
+                for (var pk = 0; pk < peerKeys.length; pk++) present[nextById[peerKeys[pk]].id] = true
                 var idKeys = Object.keys(peerCursorIdentity)
                 for (var pi = 0; pi < idKeys.length; pi++) {
-                  if (nextById[idKeys[pi]]) continue
+                  if (present[idKeys[pi]]) continue
                   var ident = peerCursorIdentity[idKeys[pi]]
                   sendToOO({
                     type: 'cursor',

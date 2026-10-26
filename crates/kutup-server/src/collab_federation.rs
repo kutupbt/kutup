@@ -1838,6 +1838,7 @@ async fn bridge_ws(
 ) -> AppResult<Response> {
     let (user_id, session_id, device_id, pub_key) =
         authenticate_socket(&state, &headers, &q).await?;
+    let tab = q.tab();
     let user_uuid =
         Uuid::parse_str(&user_id).map_err(|_| AppError::unauthorized("invalid token"))?;
     let target = target_for(&state, user_uuid, &route).await?;
@@ -1849,7 +1850,8 @@ async fn bridge_ws(
         .max_frame_size(max_frame)
         .on_upgrade(move |socket| async move {
             bridge_connection(
-                state, socket, bridge, subscribed, route, user_uuid, session_id, device_id, pub_key,
+                state, socket, bridge, subscribed, route, user_uuid, session_id, device_id,
+                pub_key, tab,
             )
             .await;
         }))
@@ -1866,6 +1868,7 @@ async fn bridge_connection(
     session_id: Uuid,
     device_id: i64,
     pub_key: Vec<u8>,
+    tab: String,
 ) {
     let hub = state.hub.clone();
     let key = bridge.key.clone();
@@ -1887,7 +1890,8 @@ async fn bridge_connection(
         kind: "hello",
     };
     let hello_json = serde_json::to_string(&hello).unwrap_or_else(|_| "{}".into());
-    let (peer, mut rx) = hub::new_peer(&hub, device_id, user_uuid.to_string(), username, color);
+    let (peer, mut rx) =
+        hub::new_peer(&hub, device_id, tab, user_uuid.to_string(), username, color);
     let (mut sink, mut stream) = socket.split();
     let writer = tokio::spawn(async move {
         while let Some(msg) = rx.recv().await {
