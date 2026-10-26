@@ -206,9 +206,9 @@ pub async fn create(State(state): State<AppState>, user: AuthUser, headers: Head
     if meta.contains_key("versionOf") {
         return super::tus_versions::create(&state, user_id, total_bytes, format, &meta).await;
     }
-    // The upload limit is a site setting.
+    // The upload limit is a setting, the site's or the account's own.
     match crate::site_settings::DRIVE_UPLOAD_MAX_BYTES
-        .load(&state.pool)
+        .load_for(&state.pool, user_id)
         .await
     {
         Ok(limit) if total_bytes <= limit => {}

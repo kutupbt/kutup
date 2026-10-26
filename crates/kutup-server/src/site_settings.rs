@@ -250,8 +250,31 @@ pub async fn chat_group_avatar_limits(pool: &PgPool) -> Result<AvatarLimits, sql
     Ok(limits.validate().unwrap_or(default))
 }
 
+/// What a [`NumericSetting`]'s value counts, for showing it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, utoipa::ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub enum SettingUnit {
+    Bytes,
+    Count,
+    Seconds,
+    Days,
+}
+
+/// The Server settings page's section a [`NumericSetting`] is shown in.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, utoipa::ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub enum SettingSection {
+    ChatMulti,
+    Calendar,
+    ChatLinking,
+    TwoFactor,
+    Drive,
+}
+
 /// A whole-number setting administrators set: its key, its field in
-/// `/api/admin/settings`, its first value and its range.
+/// `/api/admin/settings`, its first value, its range, what it counts, and
+/// whether one account may have its own value (docs/plans/settings-
+/// registry.md: only a setting that limits one account).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct NumericSetting {
     pub key: &'static str,
@@ -259,7 +282,13 @@ pub struct NumericSetting {
     pub default: i64,
     pub min: i64,
     pub max: i64,
+    pub unit: SettingUnit,
+    pub per_account: bool,
 }
+
+/// The `user_setting_overrides` key prefix of an account's own rate limits
+/// (`rate_limit.<key>`, as `site_settings` names the site's).
+pub const RATE_LIMIT_PREFIX: &str = "rate_limit.";
 
 impl NumericSetting {
     pub fn validate(&self, value: i64) -> Result<i64, String> {
@@ -273,19 +302,68 @@ impl NumericSetting {
         }
     }
 
-    /// The stored value, else the first value (on the pool, or in a
-    /// transaction).
+    /// The site's value: the stored one, else the first (on the pool, or in
+    /// a transaction). A setting that limits one account is read with
+    /// [`Self::load_for`] instead, wherever an account is in hand.
     pub async fn load<'e, E: sqlx::PgExecutor<'e>>(&self, executor: E) -> Result<i64, sqlx::Error> {
-        Ok(
+        Ok(self.resolve(
+            None,
             sqlx::query_scalar::<_, String>("SELECT value FROM site_settings WHERE key=$1")
                 .bind(self.key)
                 .fetch_optional(executor)
-                .await?
-                .and_then(|value| value.parse::<i64>().ok())
-                .and_then(|value| self.validate(value).ok())
-                .unwrap_or(self.default),
-        )
+                .await?,
+        ))
     }
+
+    /// The value for `account`: its own (where the setting takes one), else
+    /// the site's, else the first; each outside the range is passed over.
+    pub async fn load_for<'e, E: sqlx::PgExecutor<'e>>(
+        &self,
+        executor: E,
+        account: uuid::Uuid,
+    ) -> Result<i64, sqlx::Error> {
+        let (own, site): (Option<i64>, Option<String>) = sqlx::query_as(
+            "SELECT (SELECT value FROM user_setting_overrides WHERE user_id = $2 AND key = $1),
+                    (SELECT value FROM site_settings WHERE key = $1)",
+        )
+        .bind(self.key)
+        .bind(account)
+        .fetch_one(executor)
+        .await?;
+        Ok(self.resolve(own.filter(|_| self.per_account), site))
+    }
+
+    /// The value from an account's own and the site's, as stored.
+    pub fn resolve(&self, own: Option<i64>, site: Option<String>) -> i64 {
+        self.source(own, site).0
+    }
+
+    /// The value from an account's own and the site's, as stored, and where
+    /// it came from.
+    pub fn source(&self, own: Option<i64>, site: Option<String>) -> (i64, ValueSource) {
+        if let Some(own) = own.and_then(|value| self.validate(value).ok()) {
+            return (own, ValueSource::Account);
+        }
+        match site
+            .and_then(|value| value.parse::<i64>().ok())
+            .and_then(|value| self.validate(value).ok())
+        {
+            Some(site) => (site, ValueSource::Site),
+            None => (self.default, ValueSource::Default),
+        }
+    }
+}
+
+/// Where a value in effect comes from.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, utoipa::ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub enum ValueSource {
+    /// The account's own value.
+    Account,
+    /// The value administrators set for the site.
+    Site,
+    /// The first value (none set).
+    Default,
 }
 
 /// Multi-recipient sends (docs/plans/pairwise-groups.md, slice 2 §1 and §4),
@@ -298,6 +376,8 @@ pub const CHAT_MULTI_MAX_MESSAGE_BYTES: NumericSetting = NumericSetting {
     default: 96 * 1024,
     min: 4 * 1024,
     max: 1024 * 1024,
+    unit: SettingUnit::Bytes,
+    per_account: false,
 };
 pub const CHAT_MULTI_BASE_BYTES: NumericSetting = NumericSetting {
     key: "chat_multi_base_bytes",
@@ -305,6 +385,8 @@ pub const CHAT_MULTI_BASE_BYTES: NumericSetting = NumericSetting {
     default: 256 * 1024,
     min: 4 * 1024,
     max: 4 * 1024 * 1024,
+    unit: SettingUnit::Bytes,
+    per_account: false,
 };
 pub const CHAT_MULTI_MAX_RECIPIENTS: NumericSetting = NumericSetting {
     key: "chat_multi_max_recipients",
@@ -312,6 +394,8 @@ pub const CHAT_MULTI_MAX_RECIPIENTS: NumericSetting = NumericSetting {
     default: 256,
     min: 1,
     max: kutup_chat_proto::MAX_SEALED_MULTI_RECIPIENTS as i64,
+    unit: SettingUnit::Count,
+    per_account: false,
 };
 pub const CHAT_MULTI_IP_BYTES_PER_MIN: NumericSetting = NumericSetting {
     key: "chat_multi_ip_bytes_per_min",
@@ -319,6 +403,8 @@ pub const CHAT_MULTI_IP_BYTES_PER_MIN: NumericSetting = NumericSetting {
     default: 32 * 1024 * 1024,
     min: 1024 * 1024,
     max: 1024 * 1024 * 1024,
+    unit: SettingUnit::Bytes,
+    per_account: false,
 };
 /// Group send endorsements (docs/plans/group-send-endorsements.md §3.6): the
 /// multi-recipient sends one recipient account takes a minute across every
@@ -330,6 +416,8 @@ pub const CHAT_MULTI_PER_RECIPIENT_PER_MIN: NumericSetting = NumericSetting {
     default: 1_200,
     min: 1,
     max: 1_000_000,
+    unit: SettingUnit::Count,
+    per_account: false,
 };
 pub const CHAT_MULTI_PER_TOKEN_PER_MIN: NumericSetting = NumericSetting {
     key: "chat_multi_per_token_per_min",
@@ -337,6 +425,8 @@ pub const CHAT_MULTI_PER_TOKEN_PER_MIN: NumericSetting = NumericSetting {
     default: 60,
     min: 1,
     max: 100_000,
+    unit: SettingUnit::Count,
+    per_account: false,
 };
 /// Endorsements one account may fetch a day from this server (§3.2; a
 /// client needs one a day).
@@ -346,6 +436,8 @@ pub const CHAT_GROUP_SEND_ENDORSEMENTS_PER_DAY: NumericSetting = NumericSetting 
     default: 48,
     min: 1,
     max: 10_000,
+    unit: SettingUnit::Count,
+    per_account: false,
 };
 /// Blobs one member may upload to one group a day, on the group's home
 /// (§3.3; one a day, with room for retries).
@@ -355,6 +447,8 @@ pub const CHAT_GROUP_ENDORSEMENT_UPLOADS_PER_DAY: NumericSetting = NumericSettin
     default: 8,
     min: 1,
     max: 1_000,
+    unit: SettingUnit::Count,
+    per_account: false,
 };
 /// The most blobs one endorsement read answers (§3.3); a page must fit one
 /// sealed group answer, so at most 200.
@@ -364,6 +458,8 @@ pub const CHAT_GROUP_ENDORSEMENT_PAGE_SIZE: NumericSetting = NumericSetting {
     default: 100,
     min: 1,
     max: kutup_chat_proto::group_send::MAX_ENDORSEMENT_PAGE as i64,
+    unit: SettingUnit::Count,
+    per_account: false,
 };
 /// What one origin server may deliver here in multi-recipient sends a
 /// minute, all its users together: requests and bytes (never counted per
@@ -374,6 +470,8 @@ pub const CHAT_MULTI_ORIGIN_REQUESTS_PER_MIN: NumericSetting = NumericSetting {
     default: 6_000,
     min: 1,
     max: 1_000_000,
+    unit: SettingUnit::Count,
+    per_account: false,
 };
 pub const CHAT_MULTI_ORIGIN_BYTES_PER_MIN: NumericSetting = NumericSetting {
     key: "chat_multi_origin_bytes_per_min",
@@ -381,6 +479,8 @@ pub const CHAT_MULTI_ORIGIN_BYTES_PER_MIN: NumericSetting = NumericSetting {
     default: 512 * 1024 * 1024,
     min: 1024 * 1024,
     max: 16 * 1024 * 1024 * 1024,
+    unit: SettingUnit::Bytes,
+    per_account: false,
 };
 /// Every multi-recipient setting, as `/api/admin/settings` lists them.
 pub const CHAT_MULTI_SETTINGS: [NumericSetting; 11] = [
@@ -406,6 +506,8 @@ pub const CALENDARS_PER_ACCOUNT: NumericSetting = NumericSetting {
     default: 25,
     min: 1,
     max: 1000,
+    unit: SettingUnit::Count,
+    per_account: true,
 };
 pub const CALENDAR_EVENTS_PER_CALENDAR: NumericSetting = NumericSetting {
     key: "calendar_events_per_calendar",
@@ -413,6 +515,8 @@ pub const CALENDAR_EVENTS_PER_CALENDAR: NumericSetting = NumericSetting {
     default: 25_000,
     min: 1,
     max: 1_000_000,
+    unit: SettingUnit::Count,
+    per_account: false,
 };
 pub const CALENDAR_SYNC_BATCH: NumericSetting = NumericSetting {
     key: "calendar_sync_batch",
@@ -420,6 +524,8 @@ pub const CALENDAR_SYNC_BATCH: NumericSetting = NumericSetting {
     default: 10,
     min: 1,
     max: 100,
+    unit: SettingUnit::Count,
+    per_account: false,
 };
 /// The largest COUNT a repeating event takes (Proton's 49; the format's
 /// 499 is for invitations, E4).
@@ -429,6 +535,8 @@ pub const CALENDAR_MAX_COUNT: NumericSetting = NumericSetting {
     default: 49,
     min: 1,
     max: 499,
+    unit: SettingUnit::Count,
+    per_account: false,
 };
 /// Reminders a member's list for one event takes, and for a calendar's
 /// defaults (Proton's 10 and 5).
@@ -438,6 +546,8 @@ pub const CALENDAR_REMINDERS_PER_EVENT: NumericSetting = NumericSetting {
     default: 10,
     min: 1,
     max: 50,
+    unit: SettingUnit::Count,
+    per_account: false,
 };
 pub const CALENDAR_DEFAULT_REMINDERS: NumericSetting = NumericSetting {
     key: "calendar_default_reminders",
@@ -445,6 +555,8 @@ pub const CALENDAR_DEFAULT_REMINDERS: NumericSetting = NumericSetting {
     default: 5,
     min: 1,
     max: 20,
+    unit: SettingUnit::Count,
+    per_account: false,
 };
 /// How late a reminder may still fire, in seconds (Proton's web: a minute);
 /// later ones are skipped.
@@ -454,6 +566,8 @@ pub const CALENDAR_REMINDER_LATENESS_SECONDS: NumericSetting = NumericSetting {
     default: 60,
     min: 10,
     max: 3600,
+    unit: SettingUnit::Seconds,
+    per_account: false,
 };
 /// How often the reminder job looks for due alarms, in seconds.
 pub const CALENDAR_ALARM_TICK_SECONDS: NumericSetting = NumericSetting {
@@ -462,6 +576,8 @@ pub const CALENDAR_ALARM_TICK_SECONDS: NumericSetting = NumericSetting {
     default: 20,
     min: 5,
     max: 300,
+    unit: SettingUnit::Seconds,
+    per_account: false,
 };
 /// Due alarms the job takes at once (it takes batches until none is due).
 pub const CALENDAR_ALARM_BATCH: NumericSetting = NumericSetting {
@@ -470,6 +586,8 @@ pub const CALENDAR_ALARM_BATCH: NumericSetting = NumericSetting {
     default: 200,
     min: 10,
     max: 5000,
+    unit: SettingUnit::Count,
+    per_account: false,
 };
 /// Of one batch, the most one account's alarms take: one account's many
 /// never make everyone else's late.
@@ -479,6 +597,8 @@ pub const CALENDAR_ALARM_BATCH_PER_ACCOUNT: NumericSetting = NumericSetting {
     default: 20,
     min: 1,
     max: 1000,
+    unit: SettingUnit::Count,
+    per_account: false,
 };
 /// Reminder pushes and emails the job sends at the same time.
 pub const CALENDAR_ALARM_SENDS: NumericSetting = NumericSetting {
@@ -487,6 +607,8 @@ pub const CALENDAR_ALARM_SENDS: NumericSetting = NumericSetting {
     default: 16,
     min: 1,
     max: 256,
+    unit: SettingUnit::Count,
+    per_account: false,
 };
 /// The most alarms an account keeps (an event's reminders past it fire
 /// nothing until others are gone).
@@ -496,6 +618,8 @@ pub const CALENDAR_ALARMS_PER_ACCOUNT: NumericSetting = NumericSetting {
     default: 10_000,
     min: 100,
     max: 1_000_000,
+    unit: SettingUnit::Count,
+    per_account: true,
 };
 /// Browsers one account keeps taking reminder pushes (a new one past it
 /// ends the longest-held).
@@ -505,6 +629,8 @@ pub const CALENDAR_PUSH_SUBSCRIPTIONS_PER_ACCOUNT: NumericSetting = NumericSetti
     default: 10,
     min: 1,
     max: 100,
+    unit: SettingUnit::Count,
+    per_account: true,
 };
 /// Events whose alarms the job recomputes at once after a member's
 /// defaults or zone change.
@@ -514,6 +640,8 @@ pub const CALENDAR_RECOMPUTE_BATCH: NumericSetting = NumericSetting {
     default: 500,
     min: 10,
     max: 10_000,
+    unit: SettingUnit::Count,
+    per_account: false,
 };
 /// Alarms one page of `/api/calendar/alarms` answers.
 pub const CALENDAR_ALARMS_PAGE: NumericSetting = NumericSetting {
@@ -522,6 +650,8 @@ pub const CALENDAR_ALARMS_PAGE: NumericSetting = NumericSetting {
     default: 100,
     min: 10,
     max: 1000,
+    unit: SettingUnit::Count,
+    per_account: false,
 };
 /// The widest window one events query asks, in days, and the events one
 /// page answers.
@@ -531,6 +661,8 @@ pub const CALENDAR_WINDOW_DAYS: NumericSetting = NumericSetting {
     default: 400,
     min: 1,
     max: 3660,
+    unit: SettingUnit::Days,
+    per_account: false,
 };
 pub const CALENDAR_EVENTS_PAGE: NumericSetting = NumericSetting {
     key: "calendar_events_page",
@@ -538,6 +670,8 @@ pub const CALENDAR_EVENTS_PAGE: NumericSetting = NumericSetting {
     default: 1000,
     min: 10,
     max: 5000,
+    unit: SettingUnit::Count,
+    per_account: false,
 };
 pub const CALENDAR_SETTINGS: [NumericSetting; 17] = [
     CALENDARS_PER_ACCOUNT,
@@ -567,6 +701,8 @@ pub const CHAT_LINK_TOKEN_SECONDS: NumericSetting = NumericSetting {
     default: 600,
     min: 60,
     max: 3600,
+    unit: SettingUnit::Seconds,
+    per_account: false,
 };
 /// Link tokens one account may hold unused at once.
 pub const CHAT_LINK_TOKENS_PER_ACCOUNT: NumericSetting = NumericSetting {
@@ -575,6 +711,8 @@ pub const CHAT_LINK_TOKENS_PER_ACCOUNT: NumericSetting = NumericSetting {
     default: 3,
     min: 1,
     max: 20,
+    unit: SettingUnit::Count,
+    per_account: true,
 };
 /// The largest provisioning message body relayed, in bytes (at most the
 /// format's own, `MAX_PROVISION_BODY_BYTES`).
@@ -584,6 +722,8 @@ pub const CHAT_PROVISION_BODY_BYTES: NumericSetting = NumericSetting {
     default: kutup_chat_proto::MAX_PROVISION_BODY_BYTES as i64,
     min: 4 * 1024,
     max: kutup_chat_proto::MAX_PROVISION_BODY_BYTES as i64,
+    unit: SettingUnit::Bytes,
+    per_account: false,
 };
 /// Chat installations one account may have (Chat V1's hard cap is 10).
 pub const CHAT_MAX_ACTIVE_DEVICES: NumericSetting = NumericSetting {
@@ -592,6 +732,8 @@ pub const CHAT_MAX_ACTIVE_DEVICES: NumericSetting = NumericSetting {
     default: 10,
     min: 1,
     max: 10,
+    unit: SettingUnit::Count,
+    per_account: true,
 };
 /// How long a provisioning socket's ticket stays usable, in seconds.
 pub const CHAT_PROVISIONING_TICKET_SECONDS: NumericSetting = NumericSetting {
@@ -600,6 +742,8 @@ pub const CHAT_PROVISIONING_TICKET_SECONDS: NumericSetting = NumericSetting {
     default: 60,
     min: 10,
     max: 600,
+    unit: SettingUnit::Seconds,
+    per_account: false,
 };
 /// Provisioning sockets one account may hold open at once.
 pub const CHAT_PROVISIONING_SOCKETS_PER_ACCOUNT: NumericSetting = NumericSetting {
@@ -608,6 +752,8 @@ pub const CHAT_PROVISIONING_SOCKETS_PER_ACCOUNT: NumericSetting = NumericSetting
     default: 3,
     min: 1,
     max: 20,
+    unit: SettingUnit::Count,
+    per_account: true,
 };
 /// The largest sync one identity distribution carries to one device, in
 /// bytes (its ciphertext).
@@ -617,6 +763,8 @@ pub const CHAT_DISTRIBUTION_MESSAGE_BYTES: NumericSetting = NumericSetting {
     default: 64 * 1024,
     min: 1024,
     max: 1024 * 1024,
+    unit: SettingUnit::Bytes,
+    per_account: false,
 };
 pub const CHAT_IDENTITY_SETTINGS: [NumericSetting; 7] = [
     CHAT_LINK_TOKEN_SECONDS,
@@ -636,6 +784,8 @@ pub const TWO_FACTOR_RECOVERY_CODES: NumericSetting = NumericSetting {
     default: 16,
     min: 4,
     max: 64,
+    unit: SettingUnit::Count,
+    per_account: true,
 };
 /// Security keys one account may add (docs/plans/security-keys.md, D3;
 /// Proton allows 4): room for a backup key per device.
@@ -645,6 +795,8 @@ pub const SECURITY_KEYS_PER_ACCOUNT: NumericSetting = NumericSetting {
     default: 10,
     min: 1,
     max: 50,
+    unit: SettingUnit::Count,
+    per_account: true,
 };
 /// How long a security key prompt (adding a key, or signing in with one)
 /// stays open, in seconds.
@@ -654,6 +806,8 @@ pub const WEBAUTHN_CEREMONY_SECONDS: NumericSetting = NumericSetting {
     default: 300,
     min: 60,
     max: 600,
+    unit: SettingUnit::Seconds,
+    per_account: false,
 };
 pub const TWO_FACTOR_SETTINGS: [NumericSetting; 3] = [
     TWO_FACTOR_RECOVERY_CODES,
@@ -675,6 +829,8 @@ pub const DRIVE_UPLOAD_MAX_BYTES: NumericSetting = NumericSetting {
     default: 10 * GIB,
     min: MIB,
     max: 4 * TIB,
+    unit: SettingUnit::Bytes,
+    per_account: true,
 };
 /// The largest saved version (an editor's snapshot or a new upload of a
 /// file), in ciphertext bytes.
@@ -684,6 +840,8 @@ pub const DRIVE_VERSION_MAX_BYTES: NumericSetting = NumericSetting {
     default: 2 * GIB,
     min: MIB,
     max: 4 * TIB,
+    unit: SettingUnit::Bytes,
+    per_account: true,
 };
 /// The largest file a player streams rather than downloads first; 0 never
 /// streams. Above the upload limit it changes nothing.
@@ -693,6 +851,8 @@ pub const DRIVE_STREAM_MAX_BYTES: NumericSetting = NumericSetting {
     default: 10 * GIB,
     min: 0,
     max: 4 * TIB,
+    unit: SettingUnit::Bytes,
+    per_account: true,
 };
 /// Verified blocks one stream keeps (2 on iOS, where the client takes one
 /// fewer).
@@ -702,6 +862,8 @@ pub const DRIVE_STREAM_CACHE_BLOCKS: NumericSetting = NumericSetting {
     default: 3,
     min: 1,
     max: 16,
+    unit: SettingUnit::Count,
+    per_account: true,
 };
 /// Blocks a stream reads ahead of the one playing.
 pub const DRIVE_STREAM_READAHEAD_BLOCKS: NumericSetting = NumericSetting {
@@ -710,6 +872,8 @@ pub const DRIVE_STREAM_READAHEAD_BLOCKS: NumericSetting = NumericSetting {
     default: 1,
     min: 0,
     max: 4,
+    unit: SettingUnit::Count,
+    per_account: true,
 };
 /// Streams one tab plays at once.
 pub const DRIVE_STREAM_MAX_CONCURRENT: NumericSetting = NumericSetting {
@@ -718,6 +882,8 @@ pub const DRIVE_STREAM_MAX_CONCURRENT: NumericSetting = NumericSetting {
     default: 3,
     min: 1,
     max: 8,
+    unit: SettingUnit::Count,
+    per_account: true,
 };
 /// The most bytes one ranged answer carries, and so the federated part
 /// size. At least one sealed block (4 MiB and its 40 bytes), which a reader
@@ -728,6 +894,8 @@ pub const DRIVE_STREAM_RESPONSE_MAX_BYTES: NumericSetting = NumericSetting {
     default: 5 * MIB,
     min: 4 * MIB + 512 * KIB,
     max: 16 * MIB,
+    unit: SettingUnit::Bytes,
+    per_account: false,
 };
 /// Without a service worker, the largest file a player loads whole into
 /// memory instead.
@@ -737,6 +905,8 @@ pub const DRIVE_STREAM_BLOB_FALLBACK_MAX_BYTES: NumericSetting = NumericSetting 
     default: GIB,
     min: 0,
     max: 4 * GIB,
+    unit: SettingUnit::Bytes,
+    per_account: true,
 };
 pub const DRIVE_SETTINGS: [NumericSetting; 8] = [
     DRIVE_UPLOAD_MAX_BYTES,
@@ -751,12 +921,23 @@ pub const DRIVE_SETTINGS: [NumericSetting; 8] = [
 
 /// Every whole-number setting `/api/admin/settings` lists by field.
 pub fn numeric_settings() -> impl Iterator<Item = &'static NumericSetting> {
-    CHAT_MULTI_SETTINGS
-        .iter()
-        .chain(CALENDAR_SETTINGS.iter())
-        .chain(CHAT_IDENTITY_SETTINGS.iter())
-        .chain(TWO_FACTOR_SETTINGS.iter())
-        .chain(DRIVE_SETTINGS.iter())
+    registry().map(|(_, setting)| setting)
+}
+
+/// Every whole-number setting with its Server settings section: the
+/// registry `GET /api/admin/settings/registry` lists.
+pub fn registry() -> impl Iterator<Item = (SettingSection, &'static NumericSetting)> {
+    let section = |section: SettingSection, settings: &'static [NumericSetting]| {
+        settings.iter().map(move |setting| (section, setting))
+    };
+    section(SettingSection::ChatMulti, &CHAT_MULTI_SETTINGS)
+        .chain(section(SettingSection::Calendar, &CALENDAR_SETTINGS))
+        .chain(section(
+            SettingSection::ChatLinking,
+            &CHAT_IDENTITY_SETTINGS,
+        ))
+        .chain(section(SettingSection::TwoFactor, &TWO_FACTOR_SETTINGS))
+        .chain(section(SettingSection::Drive, &DRIVE_SETTINGS))
 }
 
 /// The multi-recipient limits now.
@@ -877,6 +1058,114 @@ mod tests {
         assert!(validate_chat_delivery_retention_days(-1).is_err());
         assert!(
             validate_chat_delivery_retention_days(MAX_CHAT_DELIVERY_RETENTION_DAYS + 1).is_err()
+        );
+    }
+
+    #[test]
+    fn an_accounts_own_value_then_the_sites_then_the_default() {
+        let setting = DRIVE_UPLOAD_MAX_BYTES;
+        assert_eq!(
+            setting.source(Some(5 * MIB), Some((8 * MIB).to_string())),
+            (5 * MIB, ValueSource::Account)
+        );
+        assert_eq!(
+            setting.source(None, Some((8 * MIB).to_string())),
+            (8 * MIB, ValueSource::Site)
+        );
+        assert_eq!(
+            setting.source(None, None),
+            (setting.default, ValueSource::Default)
+        );
+        // Out of range, or not a number, at any step: the next one.
+        assert_eq!(
+            setting.source(Some(1), Some((8 * MIB).to_string())),
+            (8 * MIB, ValueSource::Site)
+        );
+        assert_eq!(
+            setting.source(Some(1), Some("lots".into())),
+            (setting.default, ValueSource::Default)
+        );
+    }
+
+    #[test]
+    fn the_registry_lists_every_setting_once() {
+        let keys: Vec<&str> = numeric_settings().map(|setting| setting.key).collect();
+        let fields: std::collections::HashSet<&str> =
+            numeric_settings().map(|setting| setting.field).collect();
+        let unique: std::collections::HashSet<&str> = keys.iter().copied().collect();
+        assert_eq!(unique.len(), keys.len(), "a key twice");
+        assert_eq!(fields.len(), keys.len(), "a field twice");
+        assert!(numeric_settings().all(|s| (s.min..=s.max).contains(&s.default)));
+        // The range answers' part size is a transport parameter: site-only.
+        const { assert!(!DRIVE_STREAM_RESPONSE_MAX_BYTES.per_account) };
+    }
+
+    /// A setting that limits one account is read for the account
+    /// (`load_for`) everywhere one is in hand: `.load(` on one is only where
+    /// none is (allowlisted).
+    #[test]
+    fn per_account_settings_are_read_for_the_account() {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+        let source = std::fs::read_to_string(root.join("site_settings.rs")).unwrap();
+        let names: Vec<String> = numeric_settings()
+            .filter(|setting| setting.per_account)
+            .map(|setting| setting.key.to_uppercase())
+            .collect();
+        for name in &names {
+            assert!(
+                source.contains(&format!("pub const {name}: NumericSetting")),
+                "{name} is the constant's name"
+            );
+        }
+        let mut found = Vec::new();
+        let mut stack = vec![root.clone()];
+        while let Some(dir) = stack.pop() {
+            for entry in std::fs::read_dir(dir).unwrap() {
+                let path = entry.unwrap().path();
+                if path.is_dir() {
+                    stack.push(path);
+                    continue;
+                }
+                if !path.extension().is_some_and(|ext| ext == "rs")
+                    || path.ends_with("site_settings.rs")
+                {
+                    continue;
+                }
+                let text: String = std::fs::read_to_string(&path)
+                    .unwrap()
+                    .split_whitespace()
+                    .collect();
+                let file = path
+                    .strip_prefix(&root)
+                    .unwrap()
+                    .to_string_lossy()
+                    .into_owned();
+                for name in &names {
+                    if text.contains(&format!("{name}.load(")) {
+                        found.push((file.clone(), name.clone()));
+                    }
+                }
+            }
+        }
+        found.sort();
+        assert_eq!(
+            found,
+            [
+                // The public settings: no account.
+                (
+                    "handlers/auth.rs".to_owned(),
+                    "CHAT_MAX_ACTIVE_DEVICES".to_owned()
+                ),
+                // A peer server's objects: this server's own limit.
+                (
+                    "drive_federation.rs".to_owned(),
+                    "DRIVE_UPLOAD_MAX_BYTES".to_owned()
+                ),
+            ]
+            .into_iter()
+            .collect::<std::collections::BTreeSet<_>>()
+            .into_iter()
+            .collect::<Vec<_>>()
         );
     }
 }

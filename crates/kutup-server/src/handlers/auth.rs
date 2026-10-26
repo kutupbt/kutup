@@ -1528,7 +1528,7 @@ pub async fn verify_totp(
         (Vec::new(), crate::security_events::Kind::AuthenticatorOn)
     } else {
         let count = crate::site_settings::TWO_FACTOR_RECOVERY_CODES
-            .load(&mut *tx)
+            .load_for(&mut *tx, user_id)
             .await?;
         (
             crate::two_factor::replace(&mut tx, &state.pool, user_id, count).await?,
@@ -1618,7 +1618,7 @@ pub async fn renew_recovery_codes(
     }
     let mut tx = settle_second_factor(tx, user_id, &outcome).await?;
     let count = crate::site_settings::TWO_FACTOR_RECOVERY_CODES
-        .load(&mut *tx)
+        .load_for(&mut *tx, user_id)
         .await?;
     let recovery_codes = crate::two_factor::replace(&mut tx, &state.pool, user_id, count).await?;
     crate::security_events::record(

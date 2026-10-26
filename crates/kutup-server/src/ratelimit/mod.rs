@@ -75,13 +75,18 @@ pub(crate) fn apply_overrides(rows: Vec<(String, String, i64)>) {
     *OVERRIDES.write().unwrap() = overrides;
 }
 
-/// Every account's own values, as stored.
+/// Every account's own values, as stored (`user_setting_overrides`, keyed
+/// `rate_limit.<key>`), by limit key.
 pub async fn stored_overrides(
     pool: &sqlx::PgPool,
 ) -> Result<Vec<(String, String, i64)>, sqlx::Error> {
-    sqlx::query_as("SELECT user_id::text, key, value FROM user_rate_limit_overrides")
-        .fetch_all(pool)
-        .await
+    sqlx::query_as(
+        "SELECT user_id::text, substr(key, length($1) + 1), value FROM user_setting_overrides
+         WHERE starts_with(key, $1)",
+    )
+    .bind(SETTING_PREFIX)
+    .fetch_all(pool)
+    .await
 }
 
 /// The values [`registry::ENV_SEEDS`] names, as the environment set them.

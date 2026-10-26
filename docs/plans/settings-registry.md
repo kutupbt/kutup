@@ -1,6 +1,7 @@
 # One settings registry, with per-account values
 
-Status: **proposed** (second session, 2026-10-26). This is a build note for
+Status: **approved** (main session, 2026-10-26, with the additions in §6
+and §7). This is a build note for
 docs/plans/wipe-unification.md, "Not needing the wipe", item 4. It adds the
 per-account values that the #359 review (the 8 Drive settings) and the #361
 review (the security-key limit) asked for. It also follows the standing rule
@@ -52,10 +53,11 @@ for storage.
   `driveStreamReadaheadBlocks`, `driveStreamMaxConcurrent` and
   `driveStreamBlobFallbackMaxBytes` apply to the account reading. They reach
   its client through `/api/drive/limits`.
-- **Range answers.** `driveStreamResponseMaxBytes` applies to the account
-  reading, in this server's own range answers. Federated parts, and links
-  opened without an account, keep the site value: the relay clamps to its
-  own limit before signing (#359).
+- **Range answers.** `driveStreamResponseMaxBytes` stays site-only. It is a
+  transport parameter of the block protocol (one sealed block per answer,
+  which the relay clamps before signing), not a limit on an account's
+  resources. A per-reader value would add a code path and make part sizes
+  vary by viewer, for no gain.
 - **Security keys.** `securityKeysPerAccount` applies to the account.
 - **Also per account, because the mechanism costs nothing more:**
   - `calendarsPerAccount`, `calendarAlarmsPerAccount` and
@@ -81,8 +83,18 @@ for storage.
   breaking change is fine).
 
 **6. The admin UI.** The account's admin page gets one "Limits" section: the
-per-account settings and rate limits together, each with the site's value, a
-field and a reset, in English and Turkish.
+per-account settings and rate limits together, in English and Turkish. Each
+shows:
+- the value in effect, and where it comes from (the account, the site, or
+  the default);
+- a field and a reset.
+
+**7. Values and use.**
+- A per-account value outside the setting's bounds is refused when it is
+  set (`400`), not clamped when it is read.
+- Lowering an account's limit below what it already uses only stops new
+  growth. Nothing is deleted. Each count limit checks "at the limit or
+  over" before adding: security keys, calendars, devices and the rest.
 
 ## Not in this PR (later slices of item 4)
 
@@ -117,6 +129,8 @@ Each later slice moves a group of limits and adds them to the registry.
   - a reset;
   - a value out of bounds, or a key that isn't per account: `400`;
   - each change in the audit log;
+  - an account lowered below its security keys keeps them all, but can't
+    add one;
   - the moved rate-limit overrides still apply.
 - **Browser:** the account's admin page sets and resets a limit (a spec in
   the account suite).

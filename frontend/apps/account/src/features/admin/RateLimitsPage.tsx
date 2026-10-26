@@ -14,18 +14,6 @@ import { formatBytes } from '@kutup/ui/lib/format'
 import { adminKey } from './api'
 import { windowUnit } from './helpers'
 
-export interface AccountRateLimit {
-  key: string
-  section: string
-  unit: RateLimit['unit']
-  windowSeconds: number | null
-  value: number
-  siteValue: number
-  override: boolean
-  min: number
-  max: number
-}
-
 export interface RateLimit {
   key: string
   section: string
@@ -95,7 +83,7 @@ export function RateLimitsPage() {
 type TFunction = ReturnType<typeof useTranslation>['t']
 
 /** What a limit counts, per what and over which window, in words. */
-function countsText(limit: Pick<RateLimit, 'unit' | 'windowSeconds' | 'per'>, t: TFunction): string {
+export function countsText(limit: Pick<RateLimit, 'unit' | 'windowSeconds' | 'per'>, t: TFunction): string {
   const per = t(`admin.rateLimits.per.${limit.per}`)
   if ((limit.unit === 'events' || limit.unit === 'bytes') && limit.windowSeconds) {
     const unit = windowUnit(limit.windowSeconds)
@@ -115,6 +103,8 @@ function SiteRateLimitRow({ limit }: { limit: RateLimit }) {
   return (
     <RateLimitRow
       limitKey={limit.key}
+      label={t(`admin.rateLimits.limit.${limit.key}`)}
+      about={t(`admin.rateLimits.about.${limit.key}`)}
       counts={countsText(limit, t)}
       bytes={limit.unit === 'bytes' || limit.unit === 'bytesAtOnce'}
       note={limit.set ? t('admin.rateLimits.setHere', { first }) : first}
@@ -133,54 +123,11 @@ function SiteRateLimitRow({ limit }: { limit: RateLimit }) {
   )
 }
 
-/**
- * One account's own values of the limits counted per account
- * (docs/plans/admin-rate-limits.md §4), on its page under Administration.
- */
-export function AccountRateLimits({ userId }: { userId: string }) {
-  const { t } = useTranslation()
-  const queryClient = useQueryClient()
-  const key = [...adminKey, 'users', userId, 'rate-limits'] as const
-  const limits = useQuery({
-    queryKey: key,
-    queryFn: async () => (await api.get<{ limits: AccountRateLimit[] }>(`/admin/users/${userId}/rate-limits`)).data.limits,
-  })
-  if (limits.isError) return <Alert variant="error">{apiErrorMessage(limits.error, t('common.tryAgain'))}</Alert>
-  if (limits.isPending) return <LoadingPanel label={t('common.loading')} />
-  return (
-    <Card>
-      <CardContent className="divide-y divide-border p-0">
-        {limits.data.map((limit) => (
-          <RateLimitRow
-            key={limit.key}
-            limitKey={limit.key}
-            counts={countsText({ ...limit, per: 'account' }, t)}
-            bytes={limit.unit === 'bytes' || limit.unit === 'bytesAtOnce'}
-            note={
-              limit.override
-                ? t('admin.rateLimits.accountOwn', { site: limit.siteValue })
-                : t('admin.rateLimits.accountSite')
-            }
-            value={limit.value}
-            min={limit.min}
-            max={limit.max}
-            resettable={limit.override}
-            resetLabel={t('admin.rateLimits.accountResetAction')}
-            save={async (value) =>
-              (await api.put<AccountRateLimit>(`/admin/users/${userId}/rate-limits/${limit.key}`, { value })).data
-            }
-            onSaved={(saved) =>
-              queryClient.setQueryData<AccountRateLimit[]>(key, (all) => all?.map((each) => (each.key === saved.key ? saved : each)))
-            }
-          />
-        ))}
-      </CardContent>
-    </Card>
-  )
-}
-
 interface RowProps<T> {
+  /** Names the row in test ids. */
   limitKey: string
+  label: string
+  about: string
   counts: string
   /** The value is a number of bytes: its size is shown beside it. */
   bytes: boolean
@@ -195,7 +142,7 @@ interface RowProps<T> {
 }
 
 /** One limit: its name, what it counts, its value with save and reset. */
-function RateLimitRow<T>({ limitKey, counts, bytes, note, value, min, max, resettable, resetLabel, save, onSaved }: RowProps<T>) {
+export function RateLimitRow<T>({ limitKey, label, about, counts, bytes, note, value, min, max, resettable, resetLabel, save, onSaved }: RowProps<T>) {
   const { t, i18n } = useTranslation()
   const [draft, setDraft] = useState(String(value))
   useEffect(() => setDraft(String(value)), [value])
@@ -223,8 +170,8 @@ function RateLimitRow<T>({ limitKey, counts, bytes, note, value, min, max, reset
       }}
     >
       <div className="min-w-0 flex-1 basis-56 space-y-1">
-        <label htmlFor={inputId} className="text-sm font-medium">{t(`admin.rateLimits.limit.${limitKey}`)}</label>
-        <p className="text-sm text-muted-foreground">{t(`admin.rateLimits.about.${limitKey}`)}</p>
+        <label htmlFor={inputId} className="text-sm font-medium">{label}</label>
+        <p className="text-sm text-muted-foreground">{about}</p>
         <p className="text-xs text-muted-foreground">
           {counts}
           {bytes && valid ? ` (${t('admin.rateLimits.bytesHint', { size: formatBytes(parsed, i18n.language) })})` : ''}
