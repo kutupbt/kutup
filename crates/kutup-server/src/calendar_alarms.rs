@@ -129,7 +129,6 @@ async fn recompute_for(
             return Ok(());
         }
     };
-    let most = CALENDAR_ALARMS_PER_ACCOUNT.load(&mut *conn).await?;
     type Member = (
         Uuid,
         serde_json::Value,
@@ -160,6 +159,9 @@ async fn recompute_for(
             continue;
         };
         let zone = zone.unwrap_or_else(|| "UTC".into());
+        let most = CALENDAR_ALARMS_PER_ACCOUNT
+            .load_for(&mut *conn, user)
+            .await?;
         let mut held = held;
         for (index, reminder) in reminders.iter().enumerate() {
             if held >= most {

@@ -675,3 +675,50 @@ fn an_expired_ceremony_is_refused() {
     assert_eq!(status, StatusCode::UNAUTHORIZED);
     purge_accounts(&s.c, &s.base, &[&user]);
 }
+
+/// An administrator lowering an account's own key limit below the keys it
+/// has (docs/plans/settings-registry.md): they all stay and still sign in,
+/// and no new one is added. Needs `KUTUP_LIVE_ADMIN` too.
+#[test]
+fn a_lowered_key_limit_keeps_the_keys() {
+    let Ok(admin) = std::env::var("KUTUP_LIVE_ADMIN") else {
+        eprintln!("KUTUP_LIVE_ADMIN not set; skipping");
+        return;
+    };
+    let Some(s) = stack() else { return };
+    let (name, password) = admin.split_once(':').expect("username:password");
+    let admin_token = admin_token(&s.c, &s.base, password, name);
+    let user = register(&s.c, &s.base);
+    let id = me(&s.c, &s.base, &user.token)["id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let mut desk = new_key(1);
+    s.first_key(&user, &desk);
+    let proof = s.proof(&user, &mut desk);
+    let (status, body) = s.add(&user, &new_key(2), "Spare", json!({ "securityKey": proof }));
+    assert_eq!(status, StatusCode::OK, "{body}");
+
+    let r = bearer(
+        s.c.put(format!(
+            "{}/api/admin/users/{id}/limits/security_keys_per_account",
+            s.base
+        )),
+        &admin_token,
+    )
+    .json(&json!({ "value": 1 }))
+    .send()
+    .unwrap();
+    assert_eq!(r.status(), StatusCode::OK);
+    let listed = s.keys(&user.token);
+    assert_eq!(listed["limit"], 1);
+    assert_eq!(listed["keys"].as_array().unwrap().len(), 2);
+    let proof = s.proof(&user, &mut desk);
+    let (status, body) = s.add(&user, &new_key(3), "Third", json!({ "securityKey": proof }));
+    assert_eq!(status, StatusCode::CONFLICT, "{body}");
+    assert_eq!(body["code"], "securityKeyLimit");
+    let (status, _, _, _) = s.sign_in_with(&user, &mut desk, true);
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(s.keys(&user.token)["keys"].as_array().unwrap().len(), 2);
+    purge_accounts(&s.c, &s.base, &[&user]);
+}

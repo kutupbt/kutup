@@ -563,13 +563,13 @@ pub async fn register_device(
             let live = rows.iter().filter(|(.., expired)| !expired);
             let chat = live.clone().filter(|(_, _, _, chat, _)| *chat).count() as i64;
             let most = crate::site_settings::CHAT_MAX_ACTIVE_DEVICES
-                .load(&state.pool)
+                .load_for(&state.pool, user_id)
                 .await?;
             if chat >= most {
                 return Err(AppError::conflict("chat active-device limit reached"));
             }
             let most = crate::site_settings::DEVICES_PER_ACCOUNT
-                .load(&state.pool)
+                .load_for(&state.pool, user_id)
                 .await?;
             if live.count() as i64 >= most {
                 return Err(crate::account_devices::device_limit());
@@ -771,7 +771,7 @@ pub(crate) async fn store_manifest(
             .with_details(json!({ "code": "devicesMismatch" })));
         }
     }
-    crate::account_devices::check_device_cap(&mut **tx, manifest, head.as_ref()).await?;
+    crate::account_devices::check_device_cap(&mut **tx, user_id, manifest, head.as_ref()).await?;
 
     match identity {
         IdentityChange::Same => {

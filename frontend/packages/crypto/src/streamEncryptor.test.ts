@@ -58,7 +58,6 @@ const ROUND_TRIP_SIZES = [
   PLAIN_CHUNK + 1,
 ] as const
 
-const LIBSODIUM_TIMEOUT_MS = 60_000
 
 async function genKey(): Promise<Uint8Array> {
   const sodium = await getSodium()
@@ -113,7 +112,7 @@ describe('cipherSize', () => {
     for (let i = 0; i < n; i++) plain[i] = i & 0xff
     const cipher = await encryptChunked(plain, key)
     expect(cipher.length).toBe(cipherSize(n))
-  }, LIBSODIUM_TIMEOUT_MS)
+  })
 
   it('is monotonically non-decreasing across sizes', () => {
     let prev = -1
@@ -147,7 +146,7 @@ describe('newStreamEncryptor', () => {
     const back = await decryptChunked(cipher, key)
     expect(back.length).toBe(n)
     expect(back).toEqual(plain)
-  }, LIBSODIUM_TIMEOUT_MS)
+  })
 
   it('encrypts deterministically given the same key+state pair', async () => {
     // Two independent encryptors with the same key must NOT produce

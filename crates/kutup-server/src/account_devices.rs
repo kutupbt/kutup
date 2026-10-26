@@ -166,6 +166,7 @@ pub(crate) async fn check_listed_rows(
 /// that removes devices. `409 deviceLimit` otherwise.
 pub(crate) async fn check_device_cap<'e>(
     executor: impl PgExecutor<'e>,
+    user_id: Uuid,
     manifest: &AccountManifestV3,
     head: Option<&AccountManifestV3>,
 ) -> AppResult<()> {
@@ -174,7 +175,7 @@ pub(crate) async fn check_device_cap<'e>(
         return Ok(());
     }
     let most = crate::site_settings::DEVICES_PER_ACCOUNT
-        .load(executor)
+        .load_for(executor, user_id)
         .await?;
     if listed as i64 > most {
         return Err(device_limit());
@@ -261,7 +262,7 @@ pub async fn register_device(
     }
     let live = rows.iter().filter(|(.., expired)| !expired).count() as i64;
     let most = crate::site_settings::DEVICES_PER_ACCOUNT
-        .load(&mut *tx)
+        .load_for(&mut *tx, user_id)
         .await?;
     if live >= most {
         return Err(device_limit());

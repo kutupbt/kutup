@@ -35,7 +35,7 @@ import { OneUseSecret } from '@kutup/session/reauth'
 import { bytesToGib, generateTempPassword, gibToBytes } from './helpers'
 import { MailDomainOverridesCard } from './MailDomainOverrides'
 import { MailSendingCard } from './MailSending'
-import { AccountRateLimits } from './RateLimitsPage'
+import { AccountLimits } from './AccountLimits'
 import { UserStatus } from './UsersPage'
 import { ReauthLockedError, WrongPasswordError } from '@kutup/session/reauth'
 
@@ -334,8 +334,8 @@ export function UserPage() {
         <Card className="p-0"><Quotas user={user} /></Card>
       </Section>
 
-      <Section title={t('admin.rateLimits.accountTitle')} description={t('admin.rateLimits.accountHint')}>
-        <AccountRateLimits userId={user.id} />
+      <Section title={t('admin.limits.title')} description={t('admin.limits.hint')}>
+        <AccountLimits userId={user.id} />
       </Section>
 
       <Section title={t('admin.user.recovery')} description={t('admin.user.recoveryHint')}>

@@ -131,10 +131,10 @@ async fn open(
              metadataRevision, contentHash, basedOn and revisionId",
         ));
     }
-    // The version limit is a site setting.
+    // The version limit is a setting, the site's or the account's own.
     if total_bytes
         > crate::site_settings::DRIVE_VERSION_MAX_BYTES
-            .load(&state.pool)
+            .load_for(&state.pool, user_id)
             .await?
     {
         return Err(AppError::payload_too_large(

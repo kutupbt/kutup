@@ -48,7 +48,7 @@ pub(crate) const MAX_LIST_RESPONSE_BYTES: usize = 16 * 1024 * 1024;
 /// limit (a site setting), the largest file it would store itself.
 pub(crate) async fn max_drive_object_bytes(pool: &sqlx::PgPool) -> AppResult<usize> {
     let limit = crate::site_settings::DRIVE_UPLOAD_MAX_BYTES
-        .load(pool)
+        .load_site(pool)
         .await?;
     Ok(usize::try_from(limit).unwrap_or(usize::MAX))
 }

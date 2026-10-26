@@ -85,7 +85,9 @@ pub async fn list(
     Ok(Json(SecurityKeysResponse {
         keys,
         require_uv: keys::requires_uv(&state.pool, user_id).await?,
-        limit: SECURITY_KEYS_PER_ACCOUNT.load(&state.pool).await?,
+        limit: SECURITY_KEYS_PER_ACCOUNT
+            .load_for(&state.pool, user_id)
+            .await?,
         available: state.webauthn.is_some(),
     }))
 }
@@ -129,7 +131,7 @@ pub async fn register_start(
     .bind(user_id)
     .fetch_one(&mut *tx)
     .await?;
-    check_limit(&state, count).await?;
+    check_limit(&state, user_id, count).await?;
     let existing: Vec<keys::KeyRow> = sqlx::query_as(
         "SELECT credential_id, transports FROM user_security_keys WHERE user_id = $1",
     )
@@ -161,8 +163,12 @@ pub async fn register_start(
     Ok(Json(options).into_response())
 }
 
-async fn check_limit(state: &AppState, count: i64) -> AppResult<()> {
-    let limit = SECURITY_KEYS_PER_ACCOUNT.load(&state.pool).await?;
+/// `409 securityKeyLimit` when the account has its limit of keys or more
+/// (a lowered limit keeps the keys it has, and stops new ones).
+async fn check_limit(state: &AppState, user_id: Uuid, count: i64) -> AppResult<()> {
+    let limit = SECURITY_KEYS_PER_ACCOUNT
+        .load_for(&state.pool, user_id)
+        .await?;
     if count >= limit {
         return Err(
             AppError::conflict("this account has as many security keys as it may")
@@ -267,7 +273,7 @@ pub async fn register_finish(
             .bind(user_id)
             .fetch_one(&mut *tx)
             .await?;
-    check_limit(&state, count).await?;
+    check_limit(&state, user_id, count).await?;
     let inserted: Option<SecurityKeyView> = sqlx::query_as(
         "INSERT INTO user_security_keys
              (user_id, credential_id, transports, static_state, dynamic_state, sign_count,
@@ -306,7 +312,7 @@ pub async fn register_finish(
         None
     } else {
         let count = crate::site_settings::TWO_FACTOR_RECOVERY_CODES
-            .load(&mut *tx)
+            .load_for(&mut *tx, user_id)
             .await?;
         let codes = crate::two_factor::replace(&mut tx, &state.pool, user_id, count).await?;
         crate::security_events::record(

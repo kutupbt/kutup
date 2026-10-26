@@ -108,7 +108,9 @@ pub async fn create_link_token(
         return Err(rate_limited());
     }
     let lifetime = CHAT_LINK_TOKEN_SECONDS.load(&state.pool).await?;
-    let most = CHAT_LINK_TOKENS_PER_ACCOUNT.load(&state.pool).await?;
+    let most = CHAT_LINK_TOKENS_PER_ACCOUNT
+        .load_for(&state.pool, user_id)
+        .await?;
     let mut tx = state.pool.begin().await?;
     sqlx::query("SELECT id FROM users WHERE id = $1 FOR UPDATE")
         .bind(user_id)
@@ -179,7 +181,7 @@ pub async fn create_ticket(State(state): State<AppState>, auth: AuthUser) -> App
     let user_id = trusted_uuid(&auth.user_id)?;
     let lifetime = CHAT_PROVISIONING_TICKET_SECONDS.load(&state.pool).await?;
     let most = CHAT_PROVISIONING_SOCKETS_PER_ACCOUNT
-        .load(&state.pool)
+        .load_for(&state.pool, user_id)
         .await?;
     // Open sockets and tickets not yet used both count: each ticket may
     // become a socket. The upgrade checks again (`socket`).
@@ -248,7 +250,7 @@ pub async fn socket(
     let lifetime = CHAT_LINK_TOKEN_SECONDS.load(&state.pool).await?;
     let lifetime = Duration::from_secs(u64::try_from(lifetime).unwrap_or(600));
     let most = CHAT_PROVISIONING_SOCKETS_PER_ACCOUNT
-        .load(&state.pool)
+        .load_for(&state.pool, user_id)
         .await?;
     // The socket's place, taken under the lock that counts the account's
     // open sockets: concurrent upgrades can't pass the cap together.

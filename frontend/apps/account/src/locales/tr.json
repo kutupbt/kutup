@@ -761,7 +761,9 @@
         "rateLimitUpdate": "{{admin}}, {{limit}} sınırını {{value}} yaptı",
         "rateLimitReset": "{{admin}}, {{limit}} sınırını ilk değerine döndürdü",
         "userRateLimitUpdate": "{{admin}}, {{target}} için {{limit}} sınırını {{value}} yaptı",
-        "userRateLimitReset": "{{admin}}, {{target}} için {{limit}} sınırını yeniden sunucunun değerine döndürdü"
+        "userRateLimitReset": "{{admin}}, {{target}} için {{limit}} sınırını yeniden sunucunun değerine döndürdü",
+        "userSettingUpdate": "{{admin}}, {{target}} için {{limit}} ayarını {{value}} yaptı",
+        "userSettingReset": "{{admin}}, {{target}} için {{limit}} ayarını yeniden sunucunun değerine döndürdü"
       }
     },
     "settings": {
@@ -1409,11 +1411,6 @@
         "forwarding_unverified_pending": "Kod bekleyen yönlendirmeler",
         "forwarding_unverified_minutes": "Doğrulanmamış yönlendirmenin ömrü"
       },
-      "accountTitle": "Hız sınırları",
-      "accountHint": "Hesap başına sayılan sınırlarda bu hesabın kendi değerleri. Kendi değeri yoksa hesap sunucunun değerini alır.",
-      "accountOwn": "Bu hesabın kendi değeri; sunucununki {{site}}",
-      "accountSite": "Sunucunun değeri",
-      "accountResetAction": "Sunucununkini kullan",
       "about": {
         "login": "Oturum açma denemeleri (ve ikinci adımları).",
         "login_lockout_threshold": "Bir hesap için bir istemciden, o ikili kilitlenmeden önceki yanlış parolalar.",
@@ -1507,6 +1504,24 @@
       "countsAtOnce": "Aynı anda, {{per}} başına",
       "countsBytesAtOnce": "Aynı anda bayt, {{per}} başına",
       "bytesHint": "= {{size}}"
+    },
+    "limits": {
+      "title": "Sınırlar",
+      "hint": "Tek bir hesabı sınırlayan ayar ve hız sınırlarında bu hesabın kendi değerleri. Kendi değeri yoksa hesap sunucunun değerini alır. Bir değeri hesabın zaten kullandığının altına indirmek yalnızca yenilerini durdurur; hiçbir şey silinmez.",
+      "settings": "Ayarlar",
+      "rateLimits": "Hız sınırları",
+      "reset": "Sunucununkini kullan",
+      "source": {
+        "account": "Bu hesabın kendi değeri; sunucununki {{site}}",
+        "site": "Sunucunun değeri, yöneticilerin ayarladığı",
+        "default": "Sunucunun varsayılanı"
+      },
+      "unit": {
+        "bytes": "Bayt olarak",
+        "count": "Bir sayı",
+        "seconds": "Saniye olarak",
+        "days": "Gün olarak"
+      }
     },
     "mailDomains": {
       "title": "Posta alan adları",

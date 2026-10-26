@@ -761,7 +761,9 @@
         "rateLimitUpdate": "{{admin}} set {{limit}} to {{value}}",
         "rateLimitReset": "{{admin}} reset {{limit}} to its first value",
         "userRateLimitUpdate": "{{admin}} set {{limit}} to {{value}} for {{target}}",
-        "userRateLimitReset": "{{admin}} gave {{target}} the server's {{limit}} again"
+        "userRateLimitReset": "{{admin}} gave {{target}} the server's {{limit}} again",
+        "userSettingUpdate": "{{admin}} set {{limit}} to {{value}} for {{target}}",
+        "userSettingReset": "{{admin}} gave {{target}} the server's {{limit}} again"
       }
     },
     "settings": {
@@ -1409,11 +1411,6 @@
         "forwarding_unverified_pending": "Forwardings awaiting a code",
         "forwarding_unverified_minutes": "Unverified forwarding lifetime"
       },
-      "accountTitle": "Rate limits",
-      "accountHint": "This account's own values of the limits counted per account. Without one, the account gets the server's value.",
-      "accountOwn": "This account's own; the server's is {{site}}",
-      "accountSite": "The server's",
-      "accountResetAction": "Use the server's",
       "about": {
         "login": "Sign-in attempts (and their second factor).",
         "login_lockout_threshold": "Wrong secrets for one account from one client before that pair is locked out.",
@@ -1507,6 +1504,24 @@
       "countsAtOnce": "At once, per {{per}}",
       "countsBytesAtOnce": "Bytes at once, per {{per}}",
       "bytesHint": "= {{size}}"
+    },
+    "limits": {
+      "title": "Limits",
+      "hint": "This account's own values of the settings and rate limits that limit one account. Without one, the account gets the server's value. Lowering a value below what the account already uses only stops it from adding more; nothing is removed.",
+      "settings": "Settings",
+      "rateLimits": "Rate limits",
+      "reset": "Use the server's",
+      "source": {
+        "account": "This account's own; the server's is {{site}}",
+        "site": "The server's, as administrators set it",
+        "default": "The server's default"
+      },
+      "unit": {
+        "bytes": "In bytes",
+        "count": "A number",
+        "seconds": "In seconds",
+        "days": "In days"
+      }
     },
     "mailDomains": {
       "title": "Mail domains",
