@@ -317,7 +317,92 @@ fn block_blobs_are_checked_keyed_by_revision_and_read_by_range() {
         .unwrap();
     assert_eq!(r.status(), StatusCode::BAD_REQUEST);
 
-    purge_accounts(&c, &base, &[&owner]);
+    // A version upload's id is its revision's, which the client chose and
+    // which becomes a public ETag: still, only its uploader (or the folder's
+    // owner, to cancel) can touch the upload.
+    let file = seal_file(&folder, &uuid(), b"unused");
+    let first = uuid();
+    assert_eq!(
+        form_upload(
+            &c,
+            &base,
+            &owner,
+            &folder,
+            &file,
+            &first,
+            blob(&owner, &file, &first, 1, b"x")
+        )
+        .status(),
+        StatusCode::CREATED
+    );
+    let version = uuid();
+    let next = blob(&owner, &file, &version, 1, &plain);
+    let metadata = kutup_crypto::drive_envelope::seal_b64(
+        br#"{"name":"a.txt","mimeType":"text/plain","size":70000}"#,
+        &file.key,
+        kutup_crypto::drive_envelope::DriveEnvelopeContextV1::file_metadata(&file.id, 1, 2)
+            .unwrap(),
+    )
+    .unwrap();
+    let meta = [
+        ("versionOf", file.id.as_str()),
+        ("metadataEnvelope", metadata.as_str()),
+        ("metadataRevision", "2"),
+        ("revisionId", version.as_str()),
+    ]
+    .iter()
+    .map(|(k, v)| format!("{k} {}", b64(v.as_bytes())))
+    .collect::<Vec<_>>()
+    .join(",");
+    let created = bearer(c.post(format!("{base}/api/uploads")), &owner.token)
+        .header("Tus-Resumable", "1.0.0")
+        .header("Upload-Length", next.len().to_string())
+        .header("Upload-Metadata", meta)
+        .send()
+        .unwrap();
+    assert_eq!(created.status(), StatusCode::CREATED);
+    assert_eq!(
+        header(&created, "location"),
+        format!("/api/uploads/{version}")
+    );
+    let stranger = register(&c, &base);
+    let at = format!("{base}/api/uploads/{version}");
+    let tus = |request: reqwest::blocking::RequestBuilder| {
+        request
+            .header("Tus-Resumable", "1.0.0")
+            .send()
+            .unwrap()
+            .status()
+    };
+    assert_eq!(
+        tus(bearer(c.head(&at), &stranger.token)),
+        StatusCode::NOT_FOUND
+    );
+    assert_eq!(
+        tus(bearer(c.patch(&at), &stranger.token)
+            .header("Upload-Offset", "0")
+            .header("Content-Type", "application/offset+octet-stream")
+            .body(next.clone())),
+        StatusCode::NOT_FOUND
+    );
+    assert_eq!(
+        tus(bearer(c.delete(&at), &stranger.token)),
+        StatusCode::NOT_FOUND
+    );
+    // Its uploader goes on with it.
+    assert_eq!(
+        tus(bearer(c.patch(&at), &owner.token)
+            .header("Upload-Offset", "0")
+            .header("Content-Type", "application/offset+octet-stream")
+            .body(next.clone())),
+        StatusCode::NO_CONTENT
+    );
+    assert_eq!(
+        download(&c, &base, &owner.token, &file.id),
+        (StatusCode::OK, next)
+    );
+
+    purge_accounts(&c, &base, &[&owner, &stranger]);
 }
 
 /// `tus_create` with the block format's `revisionId`.
