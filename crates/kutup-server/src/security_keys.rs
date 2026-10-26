@@ -216,6 +216,16 @@ pub enum Refused {
     Concurrent,
 }
 
+/// The stored key an answer names, as [`finish_assertion`] checks it.
+#[derive(sqlx::FromRow)]
+struct AnsweringKey {
+    id: Uuid,
+    name: String,
+    static_state: Vec<u8>,
+    dynamic_state: Vec<u8>,
+    last_used_at: Option<time::OffsetDateTime>,
+}
+
 /// Checks a key's answer to the `kind` ceremony it names, for `user_id`,
 /// bound to `bound_to`: the ceremony taken, the key one of the account's
 /// usable ones, the answer verified, and the key's new counter stored. The
@@ -238,17 +248,23 @@ pub async fn finish_assertion(
         Ok(ceremony) => ceremony,
         Err(_) => return Ok(Err(Refused::Invalid)),
     };
-    let key: Option<(Uuid, String, Vec<u8>, Vec<u8>, Option<time::OffsetDateTime>)> =
-        sqlx::query_as(
-            "SELECT id, name, static_state, dynamic_state, last_used_at FROM user_security_keys
+    let key: Option<AnsweringKey> = sqlx::query_as(
+        "SELECT id, name, static_state, dynamic_state, last_used_at FROM user_security_keys
          WHERE user_id = $1 AND credential_id = $2 AND NOT compromised
          FOR UPDATE",
-        )
-        .bind(user_id)
-        .bind(response.credential_id())
-        .fetch_optional(&mut **tx)
-        .await?;
-    let Some((key_id, name, static_state, dynamic_state, last_used_at)) = key else {
+    )
+    .bind(user_id)
+    .bind(response.credential_id())
+    .fetch_optional(&mut **tx)
+    .await?;
+    let Some(AnsweringKey {
+        id: key_id,
+        name,
+        static_state,
+        dynamic_state,
+        last_used_at,
+    }) = key
+    else {
         return Ok(Err(Refused::Invalid));
     };
     let credential_id = response.credential_id();
