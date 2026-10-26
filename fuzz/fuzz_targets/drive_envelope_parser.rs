@@ -39,7 +39,10 @@ fuzz_target!(|data: &[u8]| {
         );
     }
     let _ = envelope::Frame::unpack(data);
-    let _ = envelope::verify(data, &[0x41; 32]);
+    let sender = AccountRef::new("a.test", "3f1c9a52-6b7e-4f0e-9d1a-2c3b4d5e6f70")
+        .expect("fixed fuzz account is valid");
+    let _ = envelope::verify(data, &sender, &[0x41; 32]);
+    let _ = envelope::delivered(data);
     let _ = envelope::open(data, &[0x42; 32], "22222222-2222-4222-8222-222222222222", 1);
     let _ = drive_envelope::inspect(data);
     for purpose in [
