@@ -91,6 +91,10 @@ pub struct LoginResponse {
     pub identity_suite: Option<i16>,
     #[serde(default)]
     pub requires_totp: bool,
+    /// The second steps the account has: `securityKey`, `totp`,
+    /// `recoveryCode`.
+    #[serde(default)]
+    pub second_factors: Vec<String>,
     #[serde(default)]
     pub pre_auth_token: String,
     #[serde(default)]

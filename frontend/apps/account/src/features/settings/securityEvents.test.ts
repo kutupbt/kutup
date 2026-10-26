@@ -9,7 +9,20 @@ function lookup(messages: unknown, key: string): unknown {
 
 describe('securityEventLabel', () => {
   it('names each known kind, in both languages', () => {
-    for (const kind of ['passwordChange', 'recovery', 'rotate', 'adminReset', 'accountReset']) {
+    for (const kind of [
+      'passwordChange',
+      'recovery',
+      'rotate',
+      'adminReset',
+      'accountReset',
+      'twoFactorOn',
+      'twoFactorOff',
+      'securityKeyAdded',
+      'securityKeyRemoved',
+      'securityKeyCompromised',
+      'authenticatorOn',
+      'authenticatorOff',
+    ]) {
       const { key } = securityEventLabel({ kind })
       expect(key).toBe(`settings.security.events.kind.${kind}`)
       expect(typeof lookup(en, key)).toBe('string')

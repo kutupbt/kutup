@@ -146,24 +146,102 @@ pub(crate) async fn clear(
     Ok(())
 }
 
-/// Turns every second factor off, in `tx` (the recovery phrase's path, and
-/// an administrator's reset); whether one was on. Security keys join here
-/// when they land (docs/plans/security-keys.md).
+/// Turns every second factor off, in `tx` (the recovery phrase's path, an
+/// administrator's reset, or the last factor removed): the authenticator
+/// app, every security key and the recovery codes. Whether one was on.
 pub(crate) async fn turn_off(
     tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
     user_id: Uuid,
 ) -> AppResult<bool> {
-    let was_on: Option<bool> =
-        sqlx::query_scalar("SELECT totp_enabled FROM users WHERE id = $1 FOR UPDATE")
-            .bind(user_id)
-            .fetch_optional(&mut **tx)
-            .await?;
-    sqlx::query("UPDATE users SET totp_enabled = false, totp_secret = NULL WHERE id = $1")
+    let was_on = factors_locked(tx, user_id).await?.on();
+    sqlx::query(
+        "UPDATE users SET totp_enabled = false, totp_secret = NULL,
+                          security_keys_require_uv = false
+         WHERE id = $1",
+    )
+    .bind(user_id)
+    .execute(&mut **tx)
+    .await?;
+    sqlx::query("DELETE FROM user_security_keys WHERE user_id = $1")
         .bind(user_id)
         .execute(&mut **tx)
         .await?;
     clear(tx, user_id).await?;
-    Ok(was_on.unwrap_or(false))
+    Ok(was_on)
+}
+
+/// The account's second factors.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub(crate) struct Factors {
+    pub totp: bool,
+    /// Security keys, compromised ones included: a key marked compromised
+    /// still keeps two-step sign-in on until it is removed.
+    pub keys: i64,
+    /// Those still usable at sign-in.
+    pub usable_keys: i64,
+    pub recovery_codes: i64,
+}
+
+impl Factors {
+    /// Two-factor sign-in is on while either factor is.
+    pub fn on(self) -> bool {
+        self.totp || self.keys > 0
+    }
+
+    /// The second steps a sign-in may take, in the order to offer them (a
+    /// key first, as Proton's page does).
+    pub fn names(self) -> Vec<&'static str> {
+        let mut names = Vec::new();
+        if self.usable_keys > 0 {
+            names.push("securityKey");
+        }
+        if self.totp {
+            names.push("totp");
+        }
+        if self.recovery_codes > 0 {
+            names.push("recoveryCode");
+        }
+        names
+    }
+}
+
+const FACTORS: &str = "SELECT u.totp_enabled,
+        (SELECT count(*) FROM user_security_keys k WHERE k.user_id = u.id),
+        (SELECT count(*) FROM user_security_keys k WHERE k.user_id = u.id AND NOT k.compromised),
+        (SELECT count(*) FROM two_factor_recovery_codes c WHERE c.user_id = u.id)
+    FROM users u WHERE u.id = $1";
+
+/// The account's factors.
+pub(crate) async fn factors<'e, E: sqlx::PgExecutor<'e>>(
+    executor: E,
+    user_id: Uuid,
+) -> AppResult<Factors> {
+    let row: Option<(bool, i64, i64, i64)> = sqlx::query_as(FACTORS)
+        .bind(user_id)
+        .fetch_optional(executor)
+        .await?;
+    Ok(row.map_or_else(
+        Factors::default,
+        |(totp, keys, usable_keys, recovery_codes)| Factors {
+            totp,
+            keys,
+            usable_keys,
+            recovery_codes,
+        },
+    ))
+}
+
+/// The account's factors with its row locked until `tx` ends: a change of
+/// factors is made against what this read.
+pub(crate) async fn factors_locked(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    user_id: Uuid,
+) -> AppResult<Factors> {
+    sqlx::query("SELECT 1 FROM users WHERE id = $1 FOR UPDATE")
+        .bind(user_id)
+        .execute(&mut **tx)
+        .await?;
+    factors(&mut **tx, user_id).await
 }
 
 #[cfg(test)]

@@ -258,17 +258,6 @@ fn set_password(
     request.send().unwrap().status()
 }
 
-fn security_events(c: &Client, base: &str, token: &str, query: &str) -> Value {
-    let r = bearer(
-        c.get(format!("{base}/api/user/security-events{query}")),
-        token,
-    )
-    .send()
-    .unwrap();
-    assert_eq!(r.status(), StatusCode::OK);
-    r.json().unwrap()
-}
-
 #[test]
 fn a_sign_in_that_straddles_a_new_password_gets_nothing() {
     let Ok(base) = std::env::var("KUTUP_LIVE_SERVER") else {

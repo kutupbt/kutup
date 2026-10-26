@@ -88,7 +88,7 @@ impl RelyingParty {
                         .flatten()
                 })
                 .map(|rest| rest.split(':').next().unwrap_or(rest))
-                .filter(|host| !origin.ends_with('/'));
+                .filter(|_| !origin.ends_with('/'));
             let on_rp = host.is_some_and(|host| {
                 host == rp_id
                     || host

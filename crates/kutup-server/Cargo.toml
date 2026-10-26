@@ -15,7 +15,7 @@ path = "src/main.rs"
 kutup-chat-proto = { path = "../kutup-chat-proto", features = ["openapi"] }
 kutup-group-send = { path = "../kutup-group-send" }
 kutup-federation-proto = { path = "../kutup-federation-proto", features = ["openapi"] }
-kutup-crypto = { path = "../kutup-crypto", features = ["calendar"] }
+kutup-crypto = { path = "../kutup-crypto", features = ["calendar", "webauthn"] }
 # Readable headers of incoming mail (Stalwart's own parser), docs/plans/mail.md.
 mail-parser = { version = "=0.11.9", default-features = false }
 axum.workspace = true
@@ -77,7 +77,7 @@ zeroize.workspace = true
 [dev-dependencies]
 # The calendar packet builders, for live tests of misaddressed events
 # (tests/calendar_live.rs); the server binary itself never has them.
-kutup-crypto = { path = "../kutup-crypto", features = ["calendar", "test-vectors"] }
+kutup-crypto = { path = "../kutup-crypto", features = ["calendar", "test-vectors", "webauthn"] }
 # A local TLS server for the post-quantum handshake test (src/tls.rs).
 tokio-rustls = { version = "0.26", default-features = false }
 # The collaboration socket in live tests (tests/collab_frames_live.rs); the

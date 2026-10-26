@@ -58,6 +58,7 @@ mod revisions;
 mod sealed_sender_provision;
 mod sealed_sender_service;
 mod security_events;
+mod security_keys;
 mod server_keys;
 mod sessions;
 mod site_settings;
@@ -140,6 +141,10 @@ pub struct AppState {
     /// One sealed-federation flush per destination at a time
     /// (docs/chat-protocol.md §7).
     pub(crate) sealed_flush: Arc<chat_federation::SealedFlushLocks>,
+    /// The WebAuthn relying party for security keys
+    /// (docs/plans/security-keys.md); `None` where the account app's origin
+    /// can't use WebAuthn (plain http off localhost), so keys are off.
+    pub(crate) webauthn: Option<Arc<kutup_crypto::webauthn::RelyingParty>>,
 }
 
 const USAGE: &str = "usage: kutup-server [serve]
@@ -180,6 +185,14 @@ async fn main() -> anyhow::Result<()> {
         std::process::exit(2);
     }
     let config = Config::load();
+    // Production must be able to offer security keys: the account app on
+    // https, its domain a valid relying party id.
+    if config.app_env == "production" {
+        if let Err(reason) = security_keys::relying_party(&config) {
+            eprintln!("kutup-server: security keys can't work here: {reason}");
+            std::process::exit(2);
+        }
+    }
     // `check-config`: read and check every setting, touch nothing (no
     // database, no migrations). Exit 0, or 2 with every problem listed (from
     // `Config::load`); deploys run it against the new image first.
@@ -393,9 +406,19 @@ async fn main() -> anyhow::Result<()> {
     } else {
         None
     };
+    // Security keys (docs/plans/security-keys.md): the account app's origin
+    // and its registrable domain. Off, with a warning, where they can't work.
+    let webauthn = match security_keys::relying_party(&config) {
+        Ok(rp) => Some(Arc::new(rp)),
+        Err(reason) => {
+            tracing::warn!(%reason, "security keys are off");
+            None
+        }
+    };
     let state = AppState {
         opaque,
         group_send,
+        webauthn,
         sealed_flush: Arc::new(chat_federation::SealedFlushLocks::new(
             &pool,
             config.sealed_flush_lock_connections,
@@ -720,6 +743,19 @@ fn build_router(state: AppState) -> Router {
         .route(
             "/api/auth/login/2fa",
             post(auth::login_two_fa).route_layer(from_fn(middleware::rate_limit_login)),
+        )
+        // Security keys at sign-in (docs/plans/security-keys.md §4); the
+        // answer is a few KiB of JSON.
+        .route(
+            "/api/auth/login/security-key/start",
+            post(handlers::security_keys::login_start)
+                .route_layer(from_fn(middleware::rate_limit_login)),
+        )
+        .route(
+            "/api/auth/login/security-key/finish",
+            post(handlers::security_keys::login_finish)
+                .route_layer(from_fn(middleware::rate_limit_login))
+                .route_layer(DefaultBodyLimit::max(64 * 1024)),
         )
         .route(
             "/api/auth/recover/preflight",
@@ -1205,6 +1241,31 @@ fn build_router(state: AppState) -> Router {
         .route(
             "/api/user/2fa/recovery-codes",
             get(auth::recovery_codes_left).post(auth::renew_recovery_codes),
+        )
+        .route(
+            "/api/auth/security-keys",
+            get(handlers::security_keys::list),
+        )
+        .route(
+            "/api/auth/security-keys/register/start",
+            post(handlers::security_keys::register_start),
+        )
+        .route(
+            "/api/auth/security-keys/register/finish",
+            post(handlers::security_keys::register_finish)
+                .route_layer(DefaultBodyLimit::max(64 * 1024)),
+        )
+        .route(
+            "/api/auth/security-keys/proof/start",
+            post(handlers::security_keys::proof_start),
+        )
+        .route(
+            "/api/auth/security-keys/require-uv",
+            put(handlers::security_keys::set_require_uv),
+        )
+        .route(
+            "/api/auth/security-keys/:id",
+            patch(handlers::security_keys::rename).delete(handlers::security_keys::remove),
         )
         .route(
             "/api/users/by-address/:address",

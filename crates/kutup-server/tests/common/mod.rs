@@ -280,6 +280,18 @@ pub fn opaque_login(
 
 /// Signs `name` in with `password`: the session's answer (or the setup's,
 /// or the second factor's). Panics on any refusal.
+/// The account's security log (`query`: its `?…`).
+pub fn security_events(c: &Client, base: &str, token: &str, query: &str) -> Value {
+    let r = bearer(
+        c.get(format!("{base}/api/user/security-events{query}")),
+        token,
+    )
+    .send()
+    .unwrap();
+    assert_eq!(r.status(), StatusCode::OK);
+    r.json().unwrap()
+}
+
 pub fn sign_in(c: &Client, base: &str, name: &str, password: &str) -> Value {
     let (status, body, _) = opaque_login(c, base, name, password, "session", None, None);
     assert_eq!(status, StatusCode::OK, "sign-in of {name}: {body}");

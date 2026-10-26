@@ -39,6 +39,19 @@ pub enum Kind {
     RecoveryCodeUsed,
     /// New recovery codes made; the old ones stopped working.
     RecoveryCodesRenewed,
+    /// A security key added (`new_name` is its name).
+    SecurityKeyAdded,
+    /// A security key removed (`old_name` is its name).
+    SecurityKeyRemoved,
+    /// A security key's counter went back: it may have been cloned, and is
+    /// no longer used.
+    SecurityKeyCompromised,
+    /// The authenticator app turned on beside a security key (two-step
+    /// sign-in was on already).
+    AuthenticatorOn,
+    /// The authenticator app turned off; security keys keep two-step
+    /// sign-in on.
+    AuthenticatorOff,
 }
 
 impl Kind {
@@ -58,6 +71,11 @@ impl Kind {
             Kind::TwoFactorOff => "twoFactorOff",
             Kind::RecoveryCodeUsed => "recoveryCodeUsed",
             Kind::RecoveryCodesRenewed => "recoveryCodesRenewed",
+            Kind::SecurityKeyAdded => "securityKeyAdded",
+            Kind::SecurityKeyRemoved => "securityKeyRemoved",
+            Kind::SecurityKeyCompromised => "securityKeyCompromised",
+            Kind::AuthenticatorOn => "authenticatorOn",
+            Kind::AuthenticatorOff => "authenticatorOff",
         }
     }
 }

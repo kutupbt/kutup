@@ -1,7 +1,15 @@
 # Security keys as a second factor
 
-Status: **approved** (the user, 2026-10-24; decisions below). Nothing here is
-built yet.
+Status: **approved** (the user, 2026-10-24; decisions below). Step 1 (recovery
+codes, the phrase turning 2FA off) is built (#353). Step 2 (the adapter, the
+data and the server's ceremonies) is built: kutup-crypto's `webauthn`
+module, the `user_security_keys` and `webauthn_ceremonies` tables, the
+routes in docs/api.md ("Security keys"), and a security key at sign-in. Its
+vectors are Chromium's virtual authenticator, recorded by
+`scripts/record-webauthn-vector.mjs`; a real key's recording (a YubiKey)
+drops into `crates/kutup-crypto/tests/vectors/webauthn/` when one is made.
+Step 3 (the settings and sign-in UI) is next. Per-account overrides of the
+key limit come with the settings registry, for every limit at once.
 
 **The request (the user, through the main session):** security keys (WebAuthn:
 a YubiKey, a phone's or laptop's built-in authenticator used as a key) as a

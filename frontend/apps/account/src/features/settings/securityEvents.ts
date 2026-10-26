@@ -11,6 +11,11 @@ const KNOWN = new Set([
   'twoFactorOff',
   'recoveryCodeUsed',
   'recoveryCodesRenewed',
+  'securityKeyAdded',
+  'securityKeyRemoved',
+  'securityKeyCompromised',
+  'authenticatorOn',
+  'authenticatorOff',
 ])
 /** Events about a name: their text names it (`oldName`, and `newName` for a rename). */
 const NAMED = new Set(['rename', 'nameDropped', 'nameClosed', 'nameFreed'])

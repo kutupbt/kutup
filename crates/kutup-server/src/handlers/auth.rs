@@ -111,8 +111,14 @@ pub struct LoginResponse {
     /// (`POST /api/account/identity-suite`). Absent on the 2FA/setup branches.
     #[serde(skip_serializing_if = "Option::is_none")]
     identity_suite: Option<i16>,
+    /// A second step is needed (named for the authenticator app, which was
+    /// once the only one): `secondFactors` says which the account has.
     #[serde(skip_serializing_if = "is_false")]
     requires_totp: bool,
+    /// The second steps this sign-in may take, a security key first:
+    /// `securityKey`, `totp`, `recoveryCode`.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    second_factors: Vec<&'static str>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pre_auth_token: Option<String>,
     #[serde(skip_serializing_if = "is_false")]
@@ -160,6 +166,22 @@ pub struct CodeRequest {
     /// Turning two-step sign-in on or off: a `totp` grant from a reauth of
     /// this session (the password proved again).
     grant: String,
+    /// Instead of `code`, where the second factor is proved again: a
+    /// security key's answer (`PublicKeyCredential.toJSON()`) to
+    /// `POST /api/auth/security-keys/proof/start`.
+    #[serde(rename = "securityKey")]
+    #[schema(value_type = Option<Object>)]
+    pub(crate) security_key: Option<serde_json::Value>,
+}
+
+impl CodeRequest {
+    pub(crate) fn grant(&self) -> &str {
+        &self.grant
+    }
+
+    pub(crate) fn code(&self) -> &str {
+        &self.code
+    }
 }
 
 /// `?name=` query for the preflight endpoints.
@@ -815,12 +837,22 @@ pub(crate) async fn signed_in_answer(
         .into_response());
     }
 
-    // TOTP enabled — return a pre-auth token instead of a full session.
-    if totp_enabled {
+    // A second factor on (the authenticator app, a security key) — return a
+    // pre-auth token instead of a full session, and the steps it may take.
+    let factors = if totp_enabled {
+        crate::two_factor::Factors {
+            totp: true,
+            ..crate::two_factor::factors(&state.pool, parse_uuid(&user_id)?).await?
+        }
+    } else {
+        crate::two_factor::factors(&state.pool, parse_uuid(&user_id)?).await?
+    };
+    if factors.on() {
         let pre_auth = jwt::generate_pre_auth_token(&user_id, epoch, &state.config.jwt_secret)
             .map_err(|_| AppError::internal("token"))?;
         return Ok(Json(LoginResponse {
             requires_totp: true,
+            second_factors: factors.names(),
             pre_auth_token: Some(pre_auth),
             ..Default::default()
         })
@@ -873,48 +905,18 @@ pub async fn login_two_fa(
         jwt::validate_pre_auth_token(&req.pre_auth_token, &state.config.jwt_secret)
             .map_err(|_| pre_auth_invalid())?;
 
-    type Row = (
-        Option<String>,
-        String,
-        String,
-        String,
-        bool,
-        i64,
-        i64,
-        String,
-        bool,
-        String,
-        String,
-    );
-    let row: Option<Row> = sqlx::query_as(
-        r#"SELECT totp_secret, master_key_envelope,
-                  drive_private_key_envelope, public_key,
-                  is_admin, storage_quota_bytes, storage_used_bytes,
-                  COALESCE(username, ''), is_active, COALESCE(color, ''),
-                  COALESCE(key_binding, '')
-           FROM users WHERE id = $1"#,
+    // The authenticator app's secret, only once it is turned on: a secret
+    // still being set up never signs anyone in.
+    let row: Option<(Option<String>, bool)> = sqlx::query_as(
+        "SELECT CASE WHEN totp_enabled THEN totp_secret END, is_active
+         FROM users WHERE id = $1",
     )
     .bind(Uuid::parse_str(&user_id).map_err(|_| AppError::unauthorized("unauthorized"))?)
     .fetch_optional(&state.pool)
     .await?;
-
-    let Some((
-        totp_secret,
-        master_key_envelope,
-        drive_private_key_envelope,
-        pub_key,
-        is_admin,
-        quota_bytes,
-        used_bytes,
-        username,
-        is_active,
-        color,
-        envelope_binding,
-    )) = row
-    else {
+    let Some((totp_secret, is_active)) = row else {
         return Err(AppError::unauthorized("unauthorized"));
     };
-
     if !is_active {
         return Err(AppError::unauthorized("account disabled"));
     }
@@ -958,12 +960,64 @@ pub async fn login_two_fa(
             .with_details(serde_json::json!({ "code": "invalidCredentials" })));
     }
     ratelimit::record_totp_attempt(&req.pre_auth_token, true);
+    issue_after_second_step(&state, &headers, client, &user_id, &epoch).await
+}
 
+/// A sign-in's second step passed (a code, a recovery code or a security
+/// key): the session, as a sign-in without one gets it.
+pub(crate) async fn issue_after_second_step(
+    state: &AppState,
+    headers: &HeaderMap,
+    client: ClientType,
+    user_id: &str,
+    epoch: &[u8],
+) -> AppResult<Response> {
+    type Row = (
+        String,
+        String,
+        String,
+        bool,
+        i64,
+        i64,
+        String,
+        bool,
+        String,
+        String,
+    );
+    let row: Option<Row> = sqlx::query_as(
+        r#"SELECT master_key_envelope,
+                  drive_private_key_envelope, public_key,
+                  is_admin, storage_quota_bytes, storage_used_bytes,
+                  COALESCE(username, ''), is_active, COALESCE(color, ''),
+                  COALESCE(key_binding, '')
+           FROM users WHERE id = $1"#,
+    )
+    .bind(Uuid::parse_str(user_id).map_err(|_| AppError::unauthorized("unauthorized"))?)
+    .fetch_optional(&state.pool)
+    .await?;
+    let Some((
+        master_key_envelope,
+        drive_private_key_envelope,
+        pub_key,
+        is_admin,
+        quota_bytes,
+        used_bytes,
+        username,
+        is_active,
+        color,
+        envelope_binding,
+    )) = row
+    else {
+        return Err(AppError::unauthorized("unauthorized"));
+    };
+    if !is_active {
+        return Err(AppError::unauthorized("account disabled"));
+    }
     issue_tokens_and_respond(
-        &state,
-        &headers,
+        state,
+        headers,
         client,
-        &user_id,
+        user_id,
         &username,
         &master_key_envelope,
         &drive_private_key_envelope,
@@ -973,7 +1027,7 @@ pub async fn login_two_fa(
         used_bytes,
         &color,
         &envelope_binding,
-        &epoch,
+        epoch,
         pre_auth_invalid,
     )
     .await
@@ -1227,6 +1281,7 @@ pub async fn get_me(State(state): State<AppState>, user: AuthUser) -> AppResult<
         username,
         public_key,
         totp_enabled,
+        security_keys: crate::two_factor::factors(&state.pool, id).await?.keys,
         storage_quota_bytes: quota,
         storage_used_bytes: used,
         is_admin,
@@ -1441,6 +1496,11 @@ pub async fn verify_totp(
     crate::grants::take_for_session(&mut *tx, &req.grant, crate::grants::Purpose::Totp, &user)
         .await?;
     let user_id = parse_uuid(&user.user_id)?;
+    // Already on with a security key: the app joins it, and the recovery
+    // codes the account has stay (none are shown).
+    let already_on = crate::two_factor::factors_locked(&mut tx, user_id)
+        .await?
+        .on();
     let enabled =
         sqlx::query("UPDATE users SET totp_enabled = true WHERE id = $1 AND totp_secret = $2")
             .bind(user_id)
@@ -1451,19 +1511,21 @@ pub async fn verify_totp(
     if enabled.rows_affected() != 1 {
         return Err(AppError::conflict("two-step sign-in changed meanwhile"));
     }
-    // Its recovery codes, made with it (docs/plans/security-keys.md, D2).
-    let count = crate::site_settings::TWO_FACTOR_RECOVERY_CODES
-        .load(&mut *tx)
+    // Turning two-step sign-in on makes its recovery codes
+    // (docs/plans/security-keys.md, D2).
+    let (recovery_codes, kind) = if already_on {
+        (Vec::new(), crate::security_events::Kind::AuthenticatorOn)
+    } else {
+        let count = crate::site_settings::TWO_FACTOR_RECOVERY_CODES
+            .load(&mut *tx)
+            .await?;
+        (
+            crate::two_factor::replace(&mut tx, &state.pool, user_id, count).await?,
+            crate::security_events::Kind::TwoFactorOn,
+        )
+    };
+    crate::security_events::record(&mut tx, user_id, kind, Some(user.session.session_id), None)
         .await?;
-    let recovery_codes = crate::two_factor::replace(&mut tx, &state.pool, user_id, count).await?;
-    crate::security_events::record(
-        &mut tx,
-        user_id,
-        crate::security_events::Kind::TwoFactorOn,
-        Some(user.session.session_id),
-        None,
-    )
-    .await?;
     tx.commit().await?;
 
     Ok(Json(TotpEnabledResponse {
@@ -1538,7 +1600,8 @@ pub async fn renew_recovery_codes(
     let mut tx = state.pool.begin().await?;
     crate::grants::take_for_session(&mut *tx, &req.grant, crate::grants::Purpose::Totp, &user)
         .await?;
-    let outcome = prove_second_factor(&mut tx, &state.pool, user_id, &req.code).await?;
+    let outcome =
+        prove_second_factor(&mut tx, &state, &user, &req.code, req.security_key.as_ref()).await?;
     if outcome == SecondFactor::Off {
         return Err(AppError::conflict("two-step sign-in is off"));
     }
@@ -1559,38 +1622,62 @@ pub async fn renew_recovery_codes(
     Ok(Json(RecoveryCodesResponse { recovery_codes }).into_response())
 }
 
-/// Whether the account's second factor is on, and if so whether `code`
-/// proves it.
+/// Whether the account's second factor is on, and if so whether the proof
+/// given holds.
 #[derive(PartialEq, Eq)]
-enum SecondFactor {
+pub(crate) enum SecondFactor {
     Off,
     Proved,
     Wrong,
 }
 
 /// In `tx`, with the account's row locked: [`SecondFactor::Off`] while
-/// two-step sign-in is off, [`SecondFactor::Proved`] when `code` is the
-/// authenticator's or an unused recovery code (then spent), else
+/// two-step sign-in is off; [`SecondFactor::Proved`] for the authenticator's
+/// code, an unused recovery code (then spent) or a security key's answer to
+/// this session's proof ceremony (`security_key`); else
 /// [`SecondFactor::Wrong`]. Callers take the grant first and settle with
 /// [`settle_second_factor`].
-async fn prove_second_factor(
+pub(crate) async fn prove_second_factor(
     tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
-    pool: &sqlx::PgPool,
-    user_id: Uuid,
+    state: &AppState,
+    user: &AuthUser,
     code: &str,
+    security_key: Option<&serde_json::Value>,
 ) -> AppResult<SecondFactor> {
-    let secret: Option<Option<String>> = sqlx::query_scalar(
-        "SELECT totp_secret FROM users WHERE id = $1 AND totp_enabled = true FOR UPDATE",
+    let user_id = parse_uuid(&user.user_id)?;
+    let factors = crate::two_factor::factors_locked(tx, user_id).await?;
+    if !factors.on() {
+        return Ok(SecondFactor::Off);
+    }
+    if let Some(answer) = security_key {
+        let Some(rp) = state.webauthn.as_deref() else {
+            return Ok(SecondFactor::Wrong);
+        };
+        let answer = serde_json::to_vec(answer).unwrap_or_default();
+        let checked = crate::security_keys::finish_assertion(
+            tx,
+            rp,
+            crate::security_keys::CeremonyKind::Proof,
+            user_id,
+            &crate::security_keys::binding(&user.session.session_id.to_string()),
+            &answer,
+        )
+        .await?;
+        return Ok(if checked.is_ok() {
+            SecondFactor::Proved
+        } else {
+            SecondFactor::Wrong
+        });
+    }
+    let secret: Option<String> = sqlx::query_scalar(
+        "SELECT CASE WHEN totp_enabled THEN totp_secret END FROM users WHERE id = $1",
     )
     .bind(user_id)
-    .fetch_optional(&mut **tx)
+    .fetch_one(&mut **tx)
     .await?;
-    let Some(Some(secret)) = secret else {
-        return Ok(SecondFactor::Off);
-    };
     if code.is_empty()
-        || !(totp::validate_totp(&secret, code)
-            || crate::two_factor::spend(tx, pool, user_id, code).await?)
+        || !(secret.is_some_and(|secret| totp::validate_totp(&secret, code))
+            || crate::two_factor::spend(tx, &state.pool, user_id, code).await?)
     {
         return Ok(SecondFactor::Wrong);
     }
@@ -1599,7 +1686,7 @@ async fn prove_second_factor(
 
 /// Before a signed-in second-factor check: `429` while the account's checks
 /// are blocked.
-fn second_factor_not_blocked(user_id: Uuid) -> AppResult<()> {
+pub(crate) fn second_factor_not_blocked(user_id: Uuid) -> AppResult<()> {
     if ratelimit::is_account_totp_blocked(user_id) {
         return Err(AppError::too_many_requests(
             "too many wrong codes, try again later",
@@ -1613,7 +1700,7 @@ fn second_factor_not_blocked(user_id: Uuid) -> AppResult<()> {
 /// against the account (`totp_attempts` wrong codes block it for
 /// `totp_block_minutes`); `400`, or `429` once blocked. A right one clears
 /// the count. `Off` is the caller's to answer.
-async fn settle_second_factor<'c>(
+pub(crate) async fn settle_second_factor<'c>(
     tx: sqlx::Transaction<'c, sqlx::Postgres>,
     user_id: Uuid,
     outcome: &SecondFactor,
@@ -1651,11 +1738,11 @@ pub async fn disable_totp(
     user: AuthUser,
     body: Result<Json<CodeRequest>, JsonRejection>,
 ) -> AppResult<Response> {
-    let (code, grant) = match body {
-        Ok(Json(b)) => (b.code, b.grant),
-        Err(_) => (String::new(), String::new()),
+    let req = match body {
+        Ok(Json(req)) => req,
+        Err(_) => CodeRequest::default(),
     };
-    if code.is_empty() {
+    if req.code.is_empty() && req.security_key.is_none() {
         return Err(AppError::bad_request("totp code required"));
     }
 
@@ -1665,21 +1752,32 @@ pub async fn disable_totp(
     let user_id = parse_uuid(&user.user_id)?;
     second_factor_not_blocked(user_id)?;
     let mut tx = state.pool.begin().await?;
-    crate::grants::take_for_session(&mut *tx, &grant, crate::grants::Purpose::Totp, &user).await?;
-    let outcome = prove_second_factor(&mut tx, &state.pool, user_id, &code).await?;
+    crate::grants::take_for_session(&mut *tx, &req.grant, crate::grants::Purpose::Totp, &user)
+        .await?;
+    let outcome =
+        prove_second_factor(&mut tx, &state, &user, &req.code, req.security_key.as_ref()).await?;
     if outcome == SecondFactor::Off {
         return Err(AppError::bad_request("TOTP not enabled"));
     }
     let mut tx = settle_second_factor(tx, user_id, &outcome).await?;
-    crate::two_factor::turn_off(&mut tx, user_id).await?;
-    crate::security_events::record(
-        &mut tx,
-        user_id,
-        crate::security_events::Kind::TwoFactorOff,
-        Some(user.session.session_id),
-        None,
-    )
-    .await?;
+    let factors = crate::two_factor::factors_locked(&mut tx, user_id).await?;
+    if !factors.totp {
+        return Err(AppError::bad_request("TOTP not enabled"));
+    }
+    // With security keys left, two-step sign-in stays on (and its recovery
+    // codes): only the authenticator app goes.
+    let kind = if factors.keys > 0 {
+        sqlx::query("UPDATE users SET totp_enabled = false, totp_secret = NULL WHERE id = $1")
+            .bind(user_id)
+            .execute(&mut *tx)
+            .await?;
+        crate::security_events::Kind::AuthenticatorOff
+    } else {
+        crate::two_factor::turn_off(&mut tx, user_id).await?;
+        crate::security_events::Kind::TwoFactorOff
+    };
+    crate::security_events::record(&mut tx, user_id, kind, Some(user.session.session_id), None)
+        .await?;
     tx.commit().await?;
 
     Ok(Json(MessageResponse {
@@ -1863,7 +1961,7 @@ pub async fn complete_setup(
 /// The 2FA step's token is expired, not one, or from a password the account
 /// no longer has: back to the password step (a wrong code is
 /// `invalidCredentials`, and the token still holds).
-fn pre_auth_invalid() -> AppError {
+pub(crate) fn pre_auth_invalid() -> AppError {
     AppError::unauthorized("sign in again")
         .with_details(serde_json::json!({ "code": "preAuthInvalid" }))
 }
