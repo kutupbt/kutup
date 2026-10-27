@@ -52,7 +52,7 @@ export async function listDeviceInManifest(
 }
 
 /**
- * The newest manifest of its own account a client saw (`OwnManifestPinV1`):
+ * The newest manifest of its own account a client saw (`AccountManifestPinV1`):
  * a server can't have it sign an older head, or start a new chain over one.
  */
 export interface OwnManifestPin {

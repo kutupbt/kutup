@@ -413,7 +413,7 @@ What the note leaves open, as built:
     - The old `remote_collab_devices` route, its announce and its rate limit
       go; `device_challenges` becomes `device_registrations` (20 a minute
       per account).
-13. **A client pins its own account's head** (`OwnManifestPinV1` in
+13. **A client pins its own account's head** (`AccountManifestPinV1` in
     `kutup-chat-proto`, the same check in the CLI and in the browser's
     crypto WASM).
     - It keeps the newest manifest of its own account it has seen

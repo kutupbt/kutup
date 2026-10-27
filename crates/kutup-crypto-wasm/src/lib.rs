@@ -1197,7 +1197,7 @@ pub fn list_device_in_manifest(
 /// the master key derives; returns the pin to keep (null while there is
 /// none). Throws on a head that doesn't verify, names another account or
 /// incarnation, or is older than the pin, and on no head once there is a
-/// pin ([`kutup_chat_proto::OwnManifestPinV1::check`]).
+/// pin ([`kutup_chat_proto::AccountManifestPinV1::check`]).
 #[wasm_bindgen(js_name = checkOwnManifestHead)]
 pub fn check_own_manifest_head(
     pin: JsValue,
@@ -1209,7 +1209,7 @@ pub fn check_own_manifest_head(
     let account: kutup_crypto::account_ref::AccountRef = account
         .parse()
         .map_err(|_| js_error("an account reference is malformed"))?;
-    let pin: Option<kutup_chat_proto::OwnManifestPinV1> = if pin.is_null() || pin.is_undefined() {
+    let pin: Option<kutup_chat_proto::AccountManifestPinV1> = if pin.is_null() || pin.is_undefined() {
         None
     } else {
         // A pin this client can't read is no pin it trusts: none.
@@ -1224,7 +1224,7 @@ pub fn check_own_manifest_head(
                 .map_err(|error| js_error(&format!("account manifest: {error}")))?,
         )
     };
-    let next = kutup_chat_proto::OwnManifestPinV1::check(
+    let next = kutup_chat_proto::AccountManifestPinV1::check(
         pin.as_ref(),
         head.as_ref(),
         &account,

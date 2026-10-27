@@ -27,7 +27,7 @@ const SYNC_STATE: TableDefinition<&str, &[u8]> = TableDefinition::new("sync_stat
 /// The CLI's collaboration device (encrypted), key `device`.
 const COLLAB_DEVICE: TableDefinition<&str, &[u8]> = TableDefinition::new("collab_device");
 /// The newest manifest of its own account this profile saw (plain JSON of a
-/// `kutup_chat_proto::OwnManifestPinV1`, key `pin`): not secret, and kept
+/// `kutup_chat_proto::AccountManifestPinV1`, key `pin`): not secret, and kept
 /// across sign-ins, so a server can't roll the account back under it.
 const MANIFEST_PIN: TableDefinition<&str, &[u8]> = TableDefinition::new("manifest_pin");
 /// Interrupted-upload resume records, keyed `"{collection_id}\n{canonical_path}"`.
@@ -267,7 +267,7 @@ impl Store {
     }
 
     /// The pin [`Self::put_manifest_pin`] kept, if any.
-    pub fn manifest_pin(&self) -> Result<Option<kutup_chat_proto::OwnManifestPinV1>> {
+    pub fn manifest_pin(&self) -> Result<Option<kutup_chat_proto::AccountManifestPinV1>> {
         let rtx = self.db.begin_read()?;
         let t = rtx.open_table(MANIFEST_PIN)?;
         let Some(v) = t.get("pin")? else {
@@ -278,7 +278,7 @@ impl Store {
         ))
     }
 
-    pub fn put_manifest_pin(&self, pin: &kutup_chat_proto::OwnManifestPinV1) -> Result<()> {
+    pub fn put_manifest_pin(&self, pin: &kutup_chat_proto::AccountManifestPinV1) -> Result<()> {
         let wtx = self.db.begin_write()?;
         {
             let mut t = wtx.open_table(MANIFEST_PIN)?;

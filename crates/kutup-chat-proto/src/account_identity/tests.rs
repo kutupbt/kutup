@@ -284,14 +284,14 @@ fn the_own_manifest_pin_refuses_rollback_and_a_new_chain() {
         .successor(vec![editor(1), editor(2)], "2026-10-26T00:01:00Z")
         .unwrap();
     second.sign(keys.authority_signing_key()).unwrap();
-    let check = |pin: Option<&OwnManifestPinV1>, head: Option<&AccountManifestV3>| {
-        OwnManifestPinV1::check(pin, head, &account, &incarnation)
+    let check = |pin: Option<&AccountManifestPinV1>, head: Option<&AccountManifestV3>| {
+        AccountManifestPinV1::check(pin, head, &account, &incarnation)
     };
 
     // Nothing seen: no head, or any head, is taken.
     assert_eq!(check(None, None).unwrap(), None);
     let pin = check(None, Some(&first)).unwrap().unwrap();
-    assert_eq!(pin, OwnManifestPinV1::of(&first).unwrap());
+    assert_eq!(pin, AccountManifestPinV1::of(&first).unwrap());
     // The same head again, then a later one, move the pin forward.
     assert_eq!(check(Some(&pin), Some(&first)).unwrap(), Some(pin.clone()));
     let pin = check(Some(&pin), Some(&second)).unwrap().unwrap();
@@ -312,7 +312,7 @@ fn the_own_manifest_pin_refuses_rollback_and_a_new_chain() {
     assert!(check(None, Some(&forged)).is_err());
     // Another account's head is refused.
     let other = AccountRef::new("example.test", "1b6b5e0c-4c1e-4b8e-9c2d-6a1f3e5d7c9b").unwrap();
-    assert!(OwnManifestPinV1::check(None, Some(&second), &other, &incarnation).is_err());
+    assert!(AccountManifestPinV1::check(None, Some(&second), &other, &incarnation).is_err());
     // A reset account's new keys: the old incarnation's pin no longer
     // applies, and its own first manifest is taken.
     let reset = kutup_crypto::identity::AccountIdentityKeysV1::derive(&[6; 32]).unwrap();
@@ -324,12 +324,12 @@ fn the_own_manifest_pin_refuses_rollback_and_a_new_chain() {
     );
     fresh.sign(reset.authority_signing_key()).unwrap();
     let after_reset =
-        OwnManifestPinV1::check(Some(&pin), Some(&fresh), &account, &reset.incarnation_id())
+        AccountManifestPinV1::check(Some(&pin), Some(&fresh), &account, &reset.incarnation_id())
             .unwrap()
             .unwrap();
     assert_eq!(after_reset.sequence, 1);
     assert!(
-        OwnManifestPinV1::check(Some(&pin), None, &account, &reset.incarnation_id())
+        AccountManifestPinV1::check(Some(&pin), None, &account, &reset.incarnation_id())
             .unwrap()
             .is_none()
     );

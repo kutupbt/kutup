@@ -719,16 +719,20 @@ impl AccountManifestV3 {
     }
 }
 
-/// The newest manifest of its own account a client has seen: its rollback
-/// pin (docs/plans/one-device-list.md §8, slice 2). A client keeps one per
-/// account and signs a successor only of a head [`Self::check`] accepted, so
-/// a server can't have it sign a stale head (bringing back a removed device,
-/// or dropping the Chat identity) or start a new chain over an existing one.
+/// The newest manifest of an account a client has seen: its rollback pin
+/// (docs/plans/one-device-list.md §8, slices 2 and 3). A client keeps one per
+/// account it has met, its own included.
+/// - Of its own account it signs a successor only of a head [`Self::check`]
+///   accepted, so a server can't have it sign a stale head (bringing back a
+///   removed device, or dropping the Chat identity) or start a new chain over
+///   an existing one.
+/// - Another account's head only moves forward from it
+///   ([`crate::SenderManifests`]).
 /// The pin names its incarnation: a reset account's new keys start a chain
 /// of their own, and the old pin no longer applies.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct OwnManifestPinV1 {
+pub struct AccountManifestPinV1 {
     pub account: AccountRef,
     pub incarnation_id: String,
     pub sequence: u64,
@@ -736,7 +740,7 @@ pub struct OwnManifestPinV1 {
     pub hash: String,
 }
 
-impl OwnManifestPinV1 {
+impl AccountManifestPinV1 {
     /// The pin `manifest` sets.
     pub fn of(manifest: &AccountManifestV3) -> Result<Self, String> {
         Ok(Self {
