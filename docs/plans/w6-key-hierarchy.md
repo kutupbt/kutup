@@ -26,9 +26,12 @@ Status: **proposed** (second session, 2026-10-27), for docs/plans/wipe-unificati
 
 - **Grammar:** `kutup/<area>/<purpose>/v<N>\0`. Lowercase `a-z 0-9 -` segments, a trailing NUL, and nothing appended to a label without a length prefix or a separator that the label's own format fixes.
 - **Registry:** `kutup-crypto/src/labels.rs` holds every label as a `pub const`, grouped by area, with one line saying what it separates. It is also the reviewer's index. Other crates use it from there: kutup-chat-proto, kutup-chat-core, kutup-group-send, kutup-server and kutup-cli all depend on kutup-crypto.
-- **HKDF:** the salt is always the family label and the info always the purpose label, followed by the context, length-prefixed where it varies. No `None` salts (`store_cipher.rs`, `profile.rs`), no salts that are data (`sealed_sender.rs` salts with the recipient), and no label in both salt and info. One helper does it: `primitives::Kdf::labeled(family, ikm)` then `.expand(purpose, context, out)`.
+- **HKDF:** the salt is always a label from the registry (the family), and the info is the context (the purpose label, the object's own header, or both). There are no `None` or empty salts (`store_cipher.rs`, `profile.rs`, `drive_names.rs`, `opaque_login_state.rs`), and no data as salt (`sealed_sender.rs` salts with the recipient, `drive_names.rs` with the folder id): that data moves into the info, length-prefixed. Constructions a standard fixes keep their own salts, marked as adapters: OHTTP (RFC 9458), Web Push (RFC 8291), and Signal's provisioning cipher.
 - **Hash domains, signature contexts and AAD prefixes** take their labels from the same registry under the same grammar.
-- **The renames change bytes.** They change every derived key and every pinned vector, which the wipe allows. Labels already in the grammar keep their text. Of the 188 label literals, 14 lack the NUL and about 30 mix `area-purpose` into one segment; those move to `area/purpose`.
+- **The renames change bytes.** They change every derived key and every pinned vector, which the wipe allows. Labels already in the grammar keep their text. As built, the registry holds 180 labels:
+  - 164 were `kutup/…` literals. Of those, 14 lacked the NUL. 20 moved into their area: `area-purpose` became `area/purpose` where the area already had labels, and two versions were fixed (`gateway-key/v2-xwing`, `call-link/v1/joined`);
+  - 13 were in the old `kutup-…-vN` style (federation documents, Chat profile keys);
+  - 3 are new family salts: `chat-store`, `chat-profile`, `drive/names`.
 - **Tests:**
   - a unit test lists `labels::ALL` and checks the grammar, uniqueness, and that no label is a prefix of another;
   - a static-gate check (`scripts/check-labels.sh`) refuses a `"kutup/` literal outside `labels.rs` in any crate's `src/`;

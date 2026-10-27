@@ -12,12 +12,12 @@ use zeroize::Zeroizing;
 use crate::error::{CryptoError, Result};
 
 const MAGIC: &[u8; 8] = b"KUTPCB1\0";
-const HKDF_SALT: &[u8] = b"kutup/chat-backup/v1\0";
-const MESSAGE_ARCHIVE_LABEL: &[u8] = b"kutup/chat-backup/message-archive-key/v1\0";
-const EVENT_SEGMENT_LABEL: &[u8] = b"kutup/chat-backup/event-segment-key/v1\0";
-const MEDIA_ID_LABEL: &[u8] = b"kutup/chat-backup/media-id-key/v1\0";
-const MEDIA_ENCRYPTION_LABEL: &[u8] = b"kutup/chat-backup/media-encryption-root/v1\0";
-const MANIFEST_SIGNING_LABEL: &[u8] = b"kutup/chat-backup/manifest-signing-seed/v1\0";
+const HKDF_SALT: &[u8] = crate::labels::CHAT_BACKUP_V1;
+const MESSAGE_ARCHIVE_LABEL: &[u8] = crate::labels::CHAT_BACKUP_MESSAGE_ARCHIVE_KEY_V1;
+const EVENT_SEGMENT_LABEL: &[u8] = crate::labels::CHAT_BACKUP_EVENT_SEGMENT_KEY_V1;
+const MEDIA_ID_LABEL: &[u8] = crate::labels::CHAT_BACKUP_MEDIA_ID_KEY_V1;
+const MEDIA_ENCRYPTION_LABEL: &[u8] = crate::labels::CHAT_BACKUP_MEDIA_ENCRYPTION_ROOT_V1;
+const MANIFEST_SIGNING_LABEL: &[u8] = crate::labels::CHAT_BACKUP_MANIFEST_SIGNING_SEED_V1;
 const NONCE_LEN: usize = 24;
 const TAG_LEN: usize = 16;
 pub const CHAT_BACKUP_OBJECT_HEADER_BYTES: usize =

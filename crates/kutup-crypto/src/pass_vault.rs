@@ -28,7 +28,7 @@ use zeroize::Zeroizing;
 use crate::account_envelope::{self, AccountEnvelopePurpose};
 use crate::error::{CryptoError, Result};
 
-const DOMAIN: &[u8] = b"kutup/pass-vault-secret/v2\0";
+const DOMAIN: &[u8] = crate::labels::PASS_VAULT_SECRET_V2;
 const HAS_PASSWORD_HASH: u8 = 1;
 const HAS_KEY_FILE: u8 = 2;
 const HAS_GENERATED_PASSWORD: u8 = 4;
@@ -481,7 +481,7 @@ mod tests {
         other.push(HAS_PASSWORD_HASH);
         other.extend_from_slice(&[3; 32]);
         assert!(open(&other).is_err());
-        let mut v1 = b"kutup/pass-vault-secret/v1\0".to_vec();
+        let mut v1 = crate::labels::PASS_VAULT_SECRET_V1.to_vec();
         v1.extend_from_slice(&VAULT);
         v1.push(1);
         v1.extend_from_slice(&[0, 1, b'p']);

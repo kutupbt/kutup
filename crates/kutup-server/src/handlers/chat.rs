@@ -2373,7 +2373,7 @@ pub async fn send_sealed_batch(
         crate::middleware::client_key(crate::middleware::client_ip_from_headers(&headers), peer);
     let address_digest: [u8; 32] = hash(
         Suite::V1,
-        [b"kutup/multi-ip-bytes/v1\0".as_slice(), address.as_bytes()].concat(),
+        [kutup_crypto::labels::MULTI_IP_BYTES_V1, address.as_bytes()].concat(),
     )
     .into();
     let bytes: usize = batch
@@ -2642,7 +2642,7 @@ pub(crate) async fn store_sealed_messages(
     let recipient_digest: [u8; 32] = hash(
         Suite::V1,
         [
-            b"kutup/sealed-recipient-rate/v1\0".as_slice(),
+            kutup_crypto::labels::SEALED_RECIPIENT_RATE_V1,
             recipient_id.as_bytes(),
         ]
         .concat(),
@@ -2659,7 +2659,7 @@ pub(crate) async fn store_sealed_messages(
         let origin_digest: [u8; 32] = hash(
             Suite::V1,
             [
-                b"kutup/sealed-origin-rate/v1\0".as_slice(),
+                kutup_crypto::labels::SEALED_ORIGIN_RATE_V1,
                 origin.as_bytes(),
             ]
             .concat(),

@@ -7,18 +7,18 @@ use sha2::{Digest as _, Sha256};
 
 use crate::{AccountRef, DirectChatSuiteId};
 
-pub const DELIVERY_CAPABILITY_CONTEXT: &[u8] = b"kutup/sealed-delivery-capability/v1";
+pub const DELIVERY_CAPABILITY_CONTEXT: &[u8] = kutup_crypto::labels::SEALED_DELIVERY_CAPABILITY_V1;
 
 /// The capability to deliver sealed mail to `recipient`, from their profile
-/// key: salted with their account (server and permanent id), never a name
-/// (docs/plans/account-ids.md).
+/// key, for their account (server and permanent id, in the HKDF info), never
+/// a name (docs/plans/account-ids.md).
 pub fn derive_delivery_capability(
     profile_key: &[u8; 32],
     recipient: &AccountRef,
 ) -> Result<[u8; 16], String> {
-    let hkdf = Hkdf::<Sha256>::new(Some(&recipient.bytes()), profile_key);
+    let hkdf = Hkdf::<Sha256>::new(Some(DELIVERY_CAPABILITY_CONTEXT), profile_key);
     let mut output = [0u8; 16];
-    hkdf.expand(DELIVERY_CAPABILITY_CONTEXT, &mut output)
+    hkdf.expand(&recipient.bytes(), &mut output)
         .map_err(|_| "sealed delivery capability derivation failed".to_string())?;
     Ok(output)
 }
@@ -554,7 +554,7 @@ mod tests {
             .parse()
             .unwrap();
         let first = derive_delivery_capability(&[7; 32], &alice).unwrap();
-        assert_eq!(hex::encode(first), "0017a2dbfb9b23d85fc735e3ea889233");
+        assert_eq!(hex::encode(first), "9f3d6f8cbc54ea934735e039f6b4f37b");
         // Another account on the same server, or the same id on another server.
         let bob: AccountRef = "aci:5b0e7f3a-1d2c-4b8e-9f6a-7c3d2e1f0a9b@example.com"
             .parse()

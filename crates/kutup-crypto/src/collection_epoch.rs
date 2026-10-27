@@ -9,8 +9,8 @@ use crate::error::{CryptoError, Result};
 const MAGIC: &[u8; 8] = b"KUTPCE1\0";
 const SIGNED_LEN: usize = 8 + 2 + 2 + 16 + 16 + 4 + 32 + 32 + 32;
 const WIRE_LEN: usize = SIGNED_LEN + 64;
-const KEY_COMMITMENT_DOMAIN: &[u8] = b"kutup/drive/collection-key-commitment/v1\0";
-const RECORD_HASH_DOMAIN: &[u8] = b"kutup/drive/collection-epoch-record-hash/v1\0";
+const KEY_COMMITMENT_DOMAIN: &[u8] = crate::labels::DRIVE_COLLECTION_KEY_COMMITMENT_V1;
+const RECORD_HASH_DOMAIN: &[u8] = crate::labels::DRIVE_COLLECTION_EPOCH_RECORD_HASH_V1;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[repr(u16)]

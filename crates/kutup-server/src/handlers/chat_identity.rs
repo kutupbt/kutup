@@ -24,7 +24,7 @@ use uuid::Uuid;
 
 use crate::error::{AppError, AppResult};
 
-const CREDENTIAL_DOMAIN: &[u8] = b"kutup/chat-device-credential/v1\0";
+const CREDENTIAL_DOMAIN: &[u8] = kutup_crypto::labels::CHAT_DEVICE_CREDENTIAL_V1;
 
 /// SHA-256 over the domain, the row's salt and the device's credential: a
 /// 32-byte random credential needs no slow hash (Signal's `SaltedTokenHash`).

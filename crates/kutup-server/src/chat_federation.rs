@@ -2899,7 +2899,7 @@ async fn charge_sealed_origin(
     let origin_digest: [u8; 32] = hash(
         Suite::V1,
         [
-            b"kutup/sealed-origin-rate/v1\0".as_slice(),
+            kutup_crypto::labels::SEALED_ORIGIN_RATE_V1,
             origin.as_bytes(),
         ]
         .concat(),

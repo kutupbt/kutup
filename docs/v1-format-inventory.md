@@ -26,7 +26,7 @@ dual-written. This destructive rule expires at the first stable `v*` tag.
 | File key history | — (new) | **Implemented end to end:** `DriveEnvelopeV1` purpose 10 seals generation *g − 1*'s file key under generation *g*'s; `file_keyring::key_at` walks the chain, so a file's history travels with it between folders (docs/plans/drive-move.md) |
 | Folder key history | — (new) | **Implemented end to end:** `DriveEnvelopeV1` purpose 8 seals epoch *e − 1*'s key under epoch *e*'s; `collection_keyring::unlock` verifies the whole owner-signed statement chain and every key commitment (docs/plans/drive-share-revocation.md) |
 | Public-link owner copy | — (new) | **Implemented end to end:** `DriveEnvelopeV1` purpose 9 seals a link's key under the owner's master key (object = link id), so links can be listed, copied and re-wrapped on rotation |
-| Encrypted profile | AES-256-GCM nonce/ciphertext | **Implemented end to end:** `ProfileSuiteId = 1` plus account/revision/device/purpose-bound XChaCha `ProfileEnvelopeV1`; suite code accompanies every E2EE profile-key capability; the owner's own copy of the profile key is wrapped under a key from the master key and the key binding (`kutup-chat-profile-wrap-v2`) |
+| Encrypted profile | AES-256-GCM nonce/ciphertext | **Implemented end to end:** `ProfileSuiteId = 1` plus account/revision/device/purpose-bound XChaCha `ProfileEnvelopeV1`; suite code accompanies every E2EE profile-key capability; the owner's own copy of the profile key is wrapped under a key from the master key and the key binding (`kutup/chat-profile/wrap/v2`) |
 | Identity pins | — (new) | **Implemented end to end:** `KUTIP3` suite 3, the account's synced pin list sealed under a master-key-derived key, bound to the account's key binding and the list's revision; pins are keyed by account (server and account id), with addresses kept only as labels. Earlier suites are not read. Vector: `identity-pins-v3.json` |
 | Contacts | — (new) | **Implemented end to end:** summaries signed by the account authority under `kutup/contact-summary/v2` and cards sealed as `KUTCC2` suite 2, both bound to the account's key binding (cards also to the contact UID). Vector: `contact-card-v2.json` |
 | Mail folder, label and filter names | — (new) | **Implemented end to end:** `KUTMN2` suite 2, sealed under a master-key-derived key, bound to the account's key binding, the kind and the id. Vector: `mail-names-v2.json` |
@@ -78,7 +78,7 @@ old one (the private beta was reset): identity pins `KUTIP1` → `KUTIP2` →
 `KUTIP3` (suite 3, the key binding),
 contact summaries `kutup/contact-summary/v1` → `/v2` and cards `KUTCC1` →
 `KUTCC2`, mail names `KUTMN1` → `KUTMN2`, and Chat's wrapped profile key
-`kutup-chat-profile-wrap-v1` → `-v2`. Each vector file lists the values that
+`kutup/chat-profile/wrap/v1` → `-v2`. Each vector file lists the values that
 must be refused: another key binding, the address in place of the binding, a
 changed header, nonce or ciphertext, and the old address-bound value.
 Statements to other people keep naming the address, because the address is

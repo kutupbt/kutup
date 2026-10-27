@@ -13,9 +13,9 @@
         "publicKey": "Zr5+Myx6RTMyvZ0Kf32wVfXF7xoGraZtmLOftoEMRzo="
       },
       "issuedAt": 1700000000,
-      "currentSignature": "uLmY6SefwJzXJ5jDp0gnux/nXMWSsrw42yWfZLWtg5njW9aCOkG2hqssZWv+o7TgviRmHnmFACGq757hRApVCQ=="
+      "currentSignature": "/YKId3hZ+FVMK4zYDE9i3WcVi8atku0/hmOSCFZpKDsU44JmMY+CZ66MH9hPMGiROs7asTCKO0Ov0s2fVjqtAg=="
     },
-    "genesisDocumentHash": "bd1a7db9e57d7a83d80109c026160defa2fc4ac9cf989bacc2a7860b34a234e2",
+    "genesisDocumentHash": "22e6b81cba6b6d4b6299da340dac7b60607785ea4338a15a7726068d74bc53f6",
     "rotation": {
       "identityVersion": 1,
       "server": "alpha.example",
@@ -25,12 +25,12 @@
         "keyId": "ed23d853125a3acff2782dddf84e018ebc85942ebf328ff1287202a479964207",
         "publicKey": "C1E62bSSQBXKCQLtB5BE06xdvsIwbwaUjBDajrbjny0="
       },
-      "previousDocumentHash": "bd1a7db9e57d7a83d80109c026160defa2fc4ac9cf989bacc2a7860b34a234e2",
+      "previousDocumentHash": "22e6b81cba6b6d4b6299da340dac7b60607785ea4338a15a7726068d74bc53f6",
       "issuedAt": 1700000100,
-      "previousSignature": "kaT0jsidUra6tJvneQWxS6JfEn0mFYbCLaHBviIPgl3mfojY3POQ22N9DxW4kM+3Mi6zXzqVV230y3NqNxmKCA==",
-      "currentSignature": "MEtI8X6YuivBvzTZujsyNqlLoPdRT3WZjyCrF1sGROpZFiL5buVXy+cPH8g/FcULbWjVn3J8v6duxTWYo5L+AQ=="
+      "previousSignature": "/siH3QY187BBO2NU0fG4AFNpn6x/Xp0gLIL5ijNwt0FanUMoYi+3lo6YE62WuUkST6fQnfgKRggToGX35x20Bg==",
+      "currentSignature": "jYdXFM167hB6/O/uLauQD0/pc9YEGY/TdWsu/UOt1BPmvn3LFr00/Q6otXYphkATLW0mArTjcchWoAt13fgVAg=="
     },
-    "rotationDocumentHash": "f2490dda597a09beb4029a4a92ed3d985e917b3a341afb89e3287f04c2bc15fc",
+    "rotationDocumentHash": "073155df957c8f58a577a1363975fab14253494c5e8ea054f3ca3cad9e0e04c4",
     "rotationFingerprint": "ed23d853 125a3acf f2782ddd f84e018e bc85942e bf328ff1 287202a4 79964207"
   },
   "discovery": {
@@ -51,15 +51,15 @@
         "keyId": "ed23d853125a3acff2782dddf84e018ebc85942ebf328ff1287202a479964207",
         "publicKey": "C1E62bSSQBXKCQLtB5BE06xdvsIwbwaUjBDajrbjny0="
       },
-      "previousDocumentHash": "bd1a7db9e57d7a83d80109c026160defa2fc4ac9cf989bacc2a7860b34a234e2",
+      "previousDocumentHash": "22e6b81cba6b6d4b6299da340dac7b60607785ea4338a15a7726068d74bc53f6",
       "issuedAt": 1700000100,
-      "previousSignature": "kaT0jsidUra6tJvneQWxS6JfEn0mFYbCLaHBviIPgl3mfojY3POQ22N9DxW4kM+3Mi6zXzqVV230y3NqNxmKCA==",
-      "currentSignature": "MEtI8X6YuivBvzTZujsyNqlLoPdRT3WZjyCrF1sGROpZFiL5buVXy+cPH8g/FcULbWjVn3J8v6duxTWYo5L+AQ=="
+      "previousSignature": "/siH3QY187BBO2NU0fG4AFNpn6x/Xp0gLIL5ijNwt0FanUMoYi+3lo6YE62WuUkST6fQnfgKRggToGX35x20Bg==",
+      "currentSignature": "jYdXFM167hB6/O/uLauQD0/pc9YEGY/TdWsu/UOt1BPmvn3LFr00/Q6otXYphkATLW0mArTjcchWoAt13fgVAg=="
     },
-    "identityDocumentHash": "f2490dda597a09beb4029a4a92ed3d985e917b3a341afb89e3287f04c2bc15fc",
+    "identityDocumentHash": "073155df957c8f58a577a1363975fab14253494c5e8ea054f3ca3cad9e0e04c4",
     "signedAt": 1700000200,
     "expiresAt": 1700003800,
-    "signature": "m0b3Z0sSgdG2JP2mMrjzphdgRvieLGgxP+u7Cdj7cs60rodbxCPKPG5SzLn+MqbKf1klw4cxvqN311ynINtSBg=="
+    "signature": "fr13j+SvH+1FTzWkNDLWJ3LXNBJS2fJ5U0lKoihOiD4cm/u9fGurOWllPGkK0/tKKI+73w6snQ5FkIxkW/zkCw=="
   },
   "httpSignature": {
     "requestSignerPublicKeyBase64": "C1E62bSSQBXKCQLtB5BE06xdvsIwbwaUjBDajrbjny0=",

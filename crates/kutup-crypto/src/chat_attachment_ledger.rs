@@ -13,9 +13,9 @@ use crate::drive_object::parse_canonical_uuid;
 use crate::error::{CryptoError, Result};
 
 const MAGIC: &[u8; 8] = b"KUTPCL1\0";
-const KEY_DERIVATION_SALT: &[u8] = b"kutup/chat-attachment-ledger/key/v1\0";
-const ACCOUNT_LEDGER_KEY_SALT: &[u8] = b"kutup/account-private-subkey/v1\0";
-const ACCOUNT_LEDGER_KEY_INFO: &[u8] = b"kutup/chat-attachment-ledger/account-key/v1\0";
+const KEY_DERIVATION_SALT: &[u8] = crate::labels::CHAT_ATTACHMENT_LEDGER_KEY_V1;
+const ACCOUNT_LEDGER_KEY_SALT: &[u8] = crate::labels::ACCOUNT_PRIVATE_SUBKEY_V1;
+const ACCOUNT_LEDGER_KEY_INFO: &[u8] = crate::labels::CHAT_ATTACHMENT_LEDGER_ACCOUNT_KEY_V1;
 const KEY_LEN: usize = 32;
 const NONCE_LEN: usize = 24;
 const TAG_LEN: usize = 16;
@@ -393,7 +393,7 @@ mod tests {
     fn deterministic_round_trip_and_header_are_stable() {
         assert_eq!(
             hex::encode(derive_account_ledger_key(&[0x33; 32]).unwrap().as_slice()),
-            "0cc9ac119e8d3527d3ee5d76e26b0e8e863fd147cedac605b4ca90c19de6d925"
+            "61a5642b5a04bbcf6c59cf6276ea07305ba6e705de53d66ffc3ced2989c84a23"
         );
         let envelope = seal_with_nonce(
             b"canonical ledger entry",

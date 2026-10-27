@@ -437,7 +437,7 @@ pub(crate) fn drive_spec(
 
 fn stable_mutation_request_id(operation: &str, scope: &[&[u8]]) -> String {
     let mut digest = Hasher::new(Suite::V1);
-    digest.update(b"kutup-drive-federation-operation-v1\0");
+    digest.update(kutup_crypto::labels::DRIVE_FEDERATION_OPERATION_V1);
     digest.update(operation.as_bytes());
     for value in scope {
         digest.update((value.len() as u64).to_be_bytes());

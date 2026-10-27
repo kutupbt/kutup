@@ -57,8 +57,8 @@ const MAX_PUBLIC_KEY_LEN: usize = 16 * 1024;
 const MAX_SECRET_KEY_LEN: usize = 3 * 1024;
 const MAX_ISSUED_AT_LEN: usize = 64;
 
-const PRIVATE_KEY_DOMAIN: &[u8] = b"kutup/mail-address-key/v1\0";
-const KEY_LIST_DOMAIN: &[u8] = b"kutup/mail-key-list/v1\0";
+const PRIVATE_KEY_DOMAIN: &[u8] = crate::labels::MAIL_ADDRESS_KEY_V1;
+const KEY_LIST_DOMAIN: &[u8] = crate::labels::MAIL_KEY_LIST_V1;
 const KEY_LIST_VERSION: u16 = 1;
 
 /// A canonical address ([`crate::mail_address::canonical`]): what keys and
@@ -363,7 +363,7 @@ pub fn open_address_key(
 /// (docs/plans/pq-shares.md); version 1 (X25519) is refused.
 const GROUP_SHARE_VERSION: u8 = 2;
 /// HPKE info and the start of the AAD of a group key share.
-const GROUP_SHARE_DOMAIN: &[u8] = b"kutup/mail-group-key-share/v2\0";
+const GROUP_SHARE_DOMAIN: &[u8] = crate::labels::MAIL_GROUP_KEY_SHARE_V2;
 /// The version byte, the member's incarnation id, the encapsulated key.
 const GROUP_SHARE_HEADER_LEN: usize = 1 + 32 + crate::hpke_xwing::ENCAPSULATED_KEY_LEN;
 

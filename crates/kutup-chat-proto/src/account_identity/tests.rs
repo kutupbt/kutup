@@ -58,7 +58,7 @@ fn sign(manifest: &mut AccountManifestV3) {
 fn manifest(devices: Vec<AccountManifestDeviceV3>) -> AccountManifestV3 {
     let public = authority().verifying_key().to_bytes();
     let mut incarnation = Sha256::new();
-    incarnation.update(b"kutup/account-incarnation/v1\0");
+    incarnation.update(kutup_crypto::labels::ACCOUNT_INCARNATION_V1);
     incarnation.update(public);
     let drive_signing = ed25519_dalek::SigningKey::from_bytes(&[8; 32]);
     let mut manifest = AccountManifestV3 {
@@ -340,7 +340,7 @@ fn the_device_session_hash_is_pinned() {
     assert_eq!(
         device_session_hash(&[7; 16]),
         hex::encode(Sha256::digest(
-            [b"kutup/account/device-session/v1\0".as_slice(), &[7; 16]].concat()
+            [kutup_crypto::labels::ACCOUNT_DEVICE_SESSION_V1, &[7; 16]].concat()
         ))
     );
 }
@@ -348,7 +348,7 @@ fn the_device_session_hash_is_pinned() {
 #[test]
 fn manifest_v3_domain_differs_from_v2() {
     let bytes = two_devices().signing_bytes().unwrap();
-    assert!(bytes.starts_with(b"kutup/account/manifest/v3\0"));
+    assert!(bytes.starts_with(kutup_crypto::labels::ACCOUNT_MANIFEST_V3));
 }
 
 #[test]
@@ -803,7 +803,7 @@ fn successors_continue_the_chain() {
     let other = ed25519_dalek::SigningKey::from_bytes(&[9; 32]);
     let public = other.verifying_key().to_bytes();
     let mut incarnation = Sha256::new();
-    incarnation.update(b"kutup/account-incarnation/v1\0");
+    incarnation.update(kutup_crypto::labels::ACCOUNT_INCARNATION_V1);
     incarnation.update(public);
     let mut foreign = next.clone();
     foreign.self_authority_key = b64(&public);
@@ -863,8 +863,8 @@ fn manifest_v3_vector_is_pinned() {
 }
 
 const SIGNING_BYTES_SHA256: &str =
-    "4df9d81e6392f894d842fd784e2a93be5ed47ad95e5c56d501100d350682f19f";
-const MANIFEST_HASH: &str = "b7ee11e87ce4e3033173b5f5939feff90474cbcf7b7600d1488f1dff3dba8760";
+    "f1e1a5493e66957ef92247ebac9e4f062c1c2adda2ef7689c10f1937974d1351";
+const MANIFEST_HASH: &str = "da3cdaef03a400a48e089414d9f2f465b67cbc01779931ae4a4d8c25d18fa5cb";
 
 #[test]
 fn account_identity_sync_body() {
@@ -916,7 +916,7 @@ fn keys_check_digest_is_pinned() {
 fn the_identity_binding_is_signed_and_names_authority_incarnation_account_and_identity() {
     let manifest = two_devices();
     let bytes = manifest.identity_binding_bytes().unwrap();
-    assert!(bytes.starts_with(b"kutup/account-identity-binding/v1\0"));
+    assert!(bytes.starts_with(kutup_crypto::labels::ACCOUNT_IDENTITY_BINDING_V1));
     assert_eq!(
         bytes.len(),
         34 + 32 + 32 + manifest.account.bytes().len() + 33

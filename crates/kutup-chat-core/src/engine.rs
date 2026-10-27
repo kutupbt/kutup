@@ -3288,7 +3288,7 @@ fn profile_key_send_id(peer: &str, profile: &LocalProfile) -> Result<String> {
     use sha2::{Digest, Sha256};
     let version = crate::profile::profile_version(&profile.key)?;
     let mut digest = Sha256::new();
-    digest.update(b"kutup-profile-key-update-v1\0");
+    digest.update(kutup_crypto::labels::CHAT_PROFILE_KEY_UPDATE_V1);
     digest.update(peer.as_bytes());
     digest.update(version.as_bytes());
     digest.update(profile.revision.to_be_bytes());

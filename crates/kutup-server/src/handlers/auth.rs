@@ -2215,7 +2215,7 @@ pub(crate) fn is_valid_hex_color(s: &str) -> bool {
 /// server's own key for them (an HMAC under a key derived from it).
 fn deterministic_fake_bytes(secret: &[u8], name: &str, purpose: &str, len: usize) -> String {
     use kutup_crypto::primitives::{mac, subkey, Suite};
-    let key = subkey(Suite::V1, secret, b"kutup/fake-account/v1\0");
+    let key = subkey(Suite::V1, secret, kutup_crypto::labels::FAKE_ACCOUNT_V1);
     let mut out = Vec::with_capacity(len);
     let mut counter = 0u32;
     while out.len() < len {

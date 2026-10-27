@@ -15,7 +15,7 @@ use crate::error::{CryptoError, Result};
 /// The recovery entropy's and the proof's length in bytes.
 pub const KEY_LEN: usize = 32;
 
-const RECOVERY_AUTH_SALT: &[u8] = b"kutup/account-recovery/auth-proof/v1\0";
+const RECOVERY_AUTH_SALT: &[u8] = crate::labels::ACCOUNT_RECOVERY_AUTH_PROOF_V1;
 
 /// Derive the server-visible recovery authorization proof. The 32-byte raw
 /// recovery entropy continues to encrypt the recovery master-key wrap and is

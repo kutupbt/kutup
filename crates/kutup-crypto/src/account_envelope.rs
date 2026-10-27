@@ -31,8 +31,8 @@ const MAX_CONTEXT_LEN: usize = 320;
 /// The longest object id a suite-2 envelope names.
 pub const MAX_OBJECT_LEN: usize = 64;
 const MAX_PLAINTEXT_LEN: usize = 4096;
-const V2_KEY_SALT: &[u8] = b"kutup/account-envelope/v2\0";
-const V2_KEY_INFO: &[u8] = b"kutup/account-envelope-key/v2\0";
+const V2_KEY_SALT: &[u8] = crate::labels::ACCOUNT_ENVELOPE_V2;
+const V2_KEY_INFO: &[u8] = crate::labels::ACCOUNT_ENVELOPE_KEY_V2;
 
 /// Which master key an account secret belongs to: the generation of the MK
 /// a password or recovery wrap holds, or of the MK that sealed any other

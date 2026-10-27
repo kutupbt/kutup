@@ -45,12 +45,12 @@ use crate::error::{CryptoError, Result};
 /// The suite number stored with each account's record.
 pub const SUITE: u16 = 1;
 /// Bound into every sign-in's transcript.
-pub const CONTEXT: &[u8] = b"kutup/opaque/v1";
-const EXPORT_SALT: &[u8] = b"kutup/opaque/export/v1\0";
-const MASTER_KEY_KEK_INFO: &[u8] = b"kutup/opaque/master-key-kek/v1\0";
-const CREDENTIAL_PREFIX: &[u8] = b"kutup/opaque/credential/v1\0";
+pub const CONTEXT: &[u8] = crate::labels::OPAQUE_V1;
+const EXPORT_SALT: &[u8] = crate::labels::OPAQUE_EXPORT_V1;
+const MASTER_KEY_KEK_INFO: &[u8] = crate::labels::OPAQUE_MASTER_KEY_KEK_V1;
+const CREDENTIAL_PREFIX: &[u8] = crate::labels::OPAQUE_CREDENTIAL_V1;
 const UNKNOWN_PREFIX: &[u8] = b"unknown:";
-const SETUP_AAD: &[u8] = b"kutup/opaque-setup/v1\0";
+const SETUP_AAD: &[u8] = crate::labels::OPAQUE_SETUP_V1;
 const SETUP_MAGIC: &[u8; 8] = b"KUTOPS1\0";
 const NONCE_LEN: usize = 24;
 

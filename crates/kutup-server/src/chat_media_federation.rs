@@ -654,7 +654,7 @@ async fn reserve_inbound_offer(
         &hash(
             Suite::V1,
             [
-                b"kutup/chat-media/federation-origin-rate/v1\0".as_slice(),
+                kutup_crypto::labels::CHAT_MEDIA_FEDERATION_ORIGIN_RATE_V1,
                 transaction.origin_domain.as_bytes(),
             ]
             .concat(),

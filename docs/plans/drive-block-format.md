@@ -231,7 +231,7 @@ manifest plaintext:
   u32 block size ‖ u32 n ‖ u64 plaintext size ‖ h_0 … h_{n−1}
   ‖ signer: u8 kind (1 = Drive signing key) ‖ 16-byte account id
   ‖ 64-byte Ed25519 signature
-signed message = "kutup/drive-block-manifest/v1\0" ‖ header ‖ 16-byte account id
+signed message = "kutup/drive/block-manifest/v1\0" ‖ header ‖ 16-byte account id
                  ‖ u32 block size ‖ u32 n ‖ u64 size ‖ h_0 … h_{n−1}
 sealed manifest = nonce(24 random) ‖ XChaCha20-Poly1305(manifest key, nonce,
                   AAD = header ‖ "manifest", plaintext) ‖ tag(16)

@@ -18,7 +18,7 @@ use crate::error::AppResult;
 const ALPHABET: &[u8; 32] = b"0123456789abcdefghjkmnpqrstvwxyz";
 /// The characters in a code, without its dash.
 const CODE_CHARS: usize = 10;
-const MAC_LABEL: &[u8] = b"kutup/2fa-recovery-code/v1\0";
+const MAC_LABEL: &[u8] = kutup_crypto::labels::TWO_FACTOR_RECOVERY_CODE_V1;
 
 static KEY: tokio::sync::OnceCell<[u8; 32]> = tokio::sync::OnceCell::const_new();
 

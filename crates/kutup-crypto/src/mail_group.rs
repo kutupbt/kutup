@@ -25,8 +25,8 @@ use crate::mail_key::{
     open_group_secret, seal_group_secret, GroupShareMember, MailKeyListV1, SignedMailKeyListV1,
 };
 
-const SIGNING_SHARE_DOMAIN: &[u8] = b"kutup/mail-group-signing-share/v2\0";
-const HANDOVER_DOMAIN: &[u8] = b"kutup/mail-group-signer-handover/v1\0";
+const SIGNING_SHARE_DOMAIN: &[u8] = crate::labels::MAIL_GROUP_SIGNING_SHARE_V2;
+const HANDOVER_DOMAIN: &[u8] = crate::labels::MAIL_GROUP_SIGNER_HANDOVER_V1;
 const HANDOVER_VERSION: u16 = 1;
 /// The handover's bytes after its domain: version, group, sequence, the
 /// previous list's hash, the next signer, the signature.
