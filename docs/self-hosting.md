@@ -672,6 +672,19 @@ sealed under it, so a dump alone doesn't hold them. A database restored
 without it keeps every message; its end-to-end forwardings stop (Outdated)
 until their owners re-enable them. Mail keeps arriving either way.
 
+A restored database also holds every account's device list as it was at
+the backup. Clients keep the newest device list they have seen of their own
+account (docs/plans/one-device-list.md §8), and refuse an older one as a
+rollback: a server that serves an outdated list is exactly what they guard
+against. So after a restore, accounts whose devices changed since the backup
+can't add or remove a device until each client trusts the restored list
+again:
+- **CLI:** `kutup devices forget-pin` in each profile.
+- **Web:** clear the app's site data in the browser (each app's address
+  separately), or sign in from a new browser profile.
+- **Chat:** clearing the Chat app's site data removes that browser's Chat
+  device too; link it again from another device, as a new browser is.
+
 `scripts/backup-postgres.sh` dumps the database, encrypts the dump on this
 machine, and stores it in the object store Kutup already uses (`S3_*` in
 `.env`), under `database-backups/`. It works with the bundled SeaweedFS and

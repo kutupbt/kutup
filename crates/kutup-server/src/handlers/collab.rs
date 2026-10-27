@@ -373,13 +373,11 @@ async fn handle_connection(state: AppState, socket: WebSocket, conn: Conn) {
                     break;
                 }
             }
-            msg = stream.next() => match msg {
+            // Shut (the device removed) while a message was on its way:
+            // nothing of it is acted on (a frame, a base claim, a resume),
+            // whatever the select picked.
+            msg = stream.next() => if peer.is_shut() { break } else { match msg {
                 Some(Ok(Message::Binary(b))) => {
-                    // Shut (the device removed) while this frame was on its
-                    // way: never applied, whatever the select picked.
-                    if peer.is_shut() {
-                        break;
-                    }
                     if !handle_frame(&state, &peer, &conn, &mut budget, &b).await {
                         break;
                     }
@@ -389,7 +387,7 @@ async fn handle_connection(state: AppState, socket: WebSocket, conn: Conn) {
                 }
                 Some(Ok(_)) => {} // ping/pong/other
                 Some(Err(_)) | None => break,
-            },
+            } },
         }
     }
 

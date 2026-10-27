@@ -278,6 +278,17 @@ impl Store {
         ))
     }
 
+    /// Forgets the pin (`kutup devices forget-pin`, after a server restore).
+    pub fn forget_manifest_pin(&self) -> Result<()> {
+        let wtx = self.db.begin_write()?;
+        {
+            let mut t = wtx.open_table(MANIFEST_PIN)?;
+            t.remove("pin")?;
+        }
+        wtx.commit()?;
+        Ok(())
+    }
+
     pub fn put_manifest_pin(&self, pin: &kutup_chat_proto::OwnManifestPinV1) -> Result<()> {
         let wtx = self.db.begin_write()?;
         {

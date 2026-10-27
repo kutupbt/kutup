@@ -22,13 +22,55 @@ pub enum DevicesCmd {
         #[arg(long)]
         yes: bool,
     },
+    /// Forget the newest account manifest this profile has seen. Only after
+    /// the server was restored from a backup: its device list is then older
+    /// than the one kept here, which is refused as a rollback until this
+    /// profile trusts the server's list again on first use.
+    ForgetPin {
+        /// Skip the confirmation prompt.
+        #[arg(long)]
+        yes: bool,
+    },
 }
 
 pub fn run(profile: &str, json: bool, cmd: &DevicesCmd) -> Result<()> {
     match cmd {
         DevicesCmd::List => list(profile, json),
         DevicesCmd::Remove { device_id, yes } => remove(profile, json, *device_id, *yes),
+        DevicesCmd::ForgetPin { yes } => forget_pin(profile, json, *yes),
     }
+}
+
+fn forget_pin(profile: &str, json: bool, yes: bool) -> Result<()> {
+    let ctx = require_session(profile)?;
+    let Some(pin) = ctx.store.manifest_pin()? else {
+        if json {
+            crate::output::print_json(&serde_json::json!({ "forgotten": false }))?;
+        } else {
+            println!("This profile keeps no account manifest.");
+        }
+        return Ok(());
+    };
+    confirm(
+        &format!(
+            "Forget the account manifest kept here (sequence {})? Do this only after the server \
+             was restored from a backup: the next one it serves is trusted on first use.",
+            pin.sequence
+        ),
+        yes,
+    )?;
+    ctx.store.forget_manifest_pin()?;
+    if json {
+        crate::output::print_json(
+            &serde_json::json!({ "forgotten": true, "sequence": pin.sequence }),
+        )?;
+    } else {
+        println!(
+            "Forgot the account manifest kept at sequence {}.",
+            pin.sequence
+        );
+    }
+    Ok(())
 }
 
 fn list(profile: &str, json: bool) -> Result<()> {

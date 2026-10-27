@@ -431,6 +431,25 @@ What the note leaves open, as built:
       doesn't cover.
     - The CLI also checks that what it signed follows the head
       (`verify_successor`), as the WASM path does.
+    - Chat holds the same rule. Every path that signs the account's next
+      manifest (its own entry's sync, linking, a removal, an identity reset,
+      a re-registration of an installation that kept its store) checks the
+      head against the newest own manifest the installation accepted (its
+      `ManifestTrust`).
+    - Where there is no pin yet, the first head is trusted on first use:
+      - a fresh browser profile;
+      - each web app's address separately (pins are per origin);
+      - a new CLI profile;
+      - a new Chat installation.
+      There, a `404 noManifest` lets the client make the account's first
+      manifest (sequence 1). The window is bounded: the server takes a first
+      manifest only while it holds none (`verify_successor`), and every
+      client that already pins the account refuses a chain that went back.
+    - After a legitimate database restore, the pins are ahead of the
+      restored head and are refused as a rollback. `kutup devices
+      forget-pin`, or clearing the app's site data in the browser, lets the
+      client trust the restored head on first use again
+      (docs/self-hosting.md, database backups).
 14. **Pending rows don't fill the cap.** A registration first drops the
     account's rows that its head doesn't list and that are older than the
     listing grace. Only listed rows and rows within their grace count

@@ -351,3 +351,82 @@ fn a_removed_devices_busy_socket_is_cut() {
     assert!(sender.join().unwrap(), "the server closed the socket");
     purge_accounts(&c, &base, &[&owner]);
 }
+
+/// A saved version trims the log; a trimmed frame's counter stays a replay
+/// (`file_sender_floors`), and the device's next counter is above it.
+#[test]
+fn a_trimmed_frame_is_still_a_replay() {
+    let Ok(base) = std::env::var("KUTUP_LIVE_SERVER") else {
+        eprintln!("KUTUP_LIVE_SERVER unset; skipping");
+        return;
+    };
+    let c = crate::common::client();
+    let owner = register(&c, &base);
+    let folder = create_folder(&c, &base, &owner);
+    let file = seal_file(&folder, &uuid(), b"# notes\n");
+    assert!(upload(&c, &base, &owner.token, &folder, &file)
+        .status()
+        .is_success());
+    let mine = register_device(&c, &base, &owner);
+    let mut last = 0;
+    for sequence in 1..=3 {
+        let (status, body) = post(
+            &c,
+            &base,
+            &owner,
+            &file.id,
+            &mine.header(),
+            frame(&file, &mine, &mine, sequence, |_| {}),
+        );
+        assert_eq!(status, StatusCode::OK, "{body}");
+        last = body["seq"].as_i64().unwrap();
+    }
+    // A version of the notes through the last frame: the log is trimmed.
+    let blob = kutup_crypto::drive_object::encrypt_file_blob(
+        b"yjs state",
+        &file.key,
+        kutup_crypto::drive_object::DriveFileBlobContextV1::new(&file.id, 1).unwrap(),
+    )
+    .unwrap();
+    let form = reqwest::blocking::multipart::Form::new()
+        .text("kind", "yjs")
+        .text("seqAtSnapshot", last.to_string())
+        .text("docKeyId", "1")
+        .part(
+            "file",
+            reqwest::blocking::multipart::Part::bytes(blob).file_name("version"),
+        );
+    let r = bearer(
+        c.post(format!("{base}/api/files/{}/versions", file.id)),
+        &owner.token,
+    )
+    .multipart(form)
+    .send()
+    .unwrap();
+    assert!(r.status().is_success(), "save a version: {}", r.status());
+    let page = log(&c, &base, &owner, &file.id, &mine);
+    assert_eq!(page["frames"].as_array().unwrap().len(), 0, "{page}");
+    // Its rows are gone, and a trimmed counter is still refused.
+    let (status, body) = post(
+        &c,
+        &base,
+        &owner,
+        &file.id,
+        &mine.header(),
+        frame(&file, &mine, &mine, 2, |_| {}),
+    );
+    assert_eq!(status, StatusCode::CONFLICT, "{body}");
+    assert_eq!(body["code"], "frameRefused");
+    // The device's next counter starts above the trimmed ones.
+    assert_eq!(page["mySenderSeqHigh"], 3);
+    let (status, body) = post(
+        &c,
+        &base,
+        &owner,
+        &file.id,
+        &mine.header(),
+        frame(&file, &mine, &mine, 4, |_| {}),
+    );
+    assert_eq!(status, StatusCode::OK, "{body}");
+    purge_accounts(&c, &base, &[&owner]);
+}
