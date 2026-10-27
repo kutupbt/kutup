@@ -1442,11 +1442,14 @@ pub async fn get_federation_control_plane(
                 verified_at, discovery_expires_at, quarantine_reason,
                 pending_document->'key'->>'keyId' AS pending_fingerprint,
                 last_discovery_error,
-                (SELECT COUNT(*) FROM chat_federation_outbox o
-                 WHERE o.destination = federation_peer_identities.domain AND o.state = 'pending')
+                (SELECT COUNT(*) FROM federation_outbox o
+                 WHERE o.kind IN ('chat', 'sealed')
+                   AND o.destination = federation_peer_identities.domain AND o.state = 'pending')
                     AS chat_pending_transactions,
-                (SELECT COUNT(*) FROM chat_federation_outbox o
-                 WHERE o.destination = federation_peer_identities.domain AND o.state = 'mismatch')
+                (SELECT COUNT(*) FROM federation_outbox o
+                 WHERE o.kind IN ('chat', 'sealed')
+                   AND o.destination = federation_peer_identities.domain
+                   AND o.state = 'rejected' AND o.error_class = 'device_mismatch')
                     AS chat_mismatch_transactions,
                 (SELECT COUNT(*) FROM federated_incoming_shares s
                  WHERE s.remote_domain = federation_peer_identities.domain)
@@ -1500,9 +1503,13 @@ pub async fn get_federation_control_plane(
         active_replay_reservations,
     ): OperationalRow = sqlx::query_as(
         "SELECT
-            (SELECT COUNT(*) FROM chat_federation_outbox WHERE state = 'pending'),
-            (SELECT COUNT(*) FROM chat_federation_outbox WHERE state = 'mismatch'),
-            (SELECT MIN(created_at) FROM chat_federation_outbox WHERE state = 'pending'),
+            (SELECT COUNT(*) FROM federation_outbox
+             WHERE kind IN ('chat', 'sealed') AND state = 'pending'),
+            (SELECT COUNT(*) FROM federation_outbox
+             WHERE kind IN ('chat', 'sealed') AND state = 'rejected'
+               AND error_class = 'device_mismatch'),
+            (SELECT MIN(created_at) FROM federation_outbox
+             WHERE kind IN ('chat', 'sealed') AND state = 'pending'),
             (SELECT COUNT(*) FROM federated_incoming_shares),
             (SELECT COUNT(*) FROM federated_outgoing_shares),
             (SELECT COUNT(*) FROM federation_request_replays WHERE expires_at > now())",
@@ -2011,14 +2018,17 @@ fn canonical_federation_domain(value: &str) -> AppResult<String> {
 
 async fn wake_federation_outbox(pool: &PgPool, domain: Option<&str>) -> AppResult<()> {
     if let Some(domain) = domain {
-        sqlx::query("UPDATE chat_federation_outbox SET next_attempt_at = now() WHERE destination = $1 AND state = 'pending'")
-            .bind(domain).execute(pool).await?;
-    } else {
         sqlx::query(
-            "UPDATE chat_federation_outbox SET next_attempt_at = now() WHERE state = 'pending'",
+            "UPDATE federation_outbox SET next_attempt_at = now()
+             WHERE destination = $1 AND state = 'pending'",
         )
+        .bind(domain)
         .execute(pool)
         .await?;
+    } else {
+        sqlx::query("UPDATE federation_outbox SET next_attempt_at = now() WHERE state = 'pending'")
+            .execute(pool)
+            .await?;
     }
     Ok(())
 }

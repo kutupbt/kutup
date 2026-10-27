@@ -10,6 +10,7 @@ export const SETTING_LABELS: Record<SettingSection, string> = {
   chatLinking: 'admin.settings.chatLinkingLimits',
   twoFactor: 'admin.settings.twoFactorLimits',
   drive: 'admin.settings.driveLimits',
+  federation: 'admin.settings.federationLimits',
 }
 
 type TFunction = ReturnType<typeof useTranslation>['t']

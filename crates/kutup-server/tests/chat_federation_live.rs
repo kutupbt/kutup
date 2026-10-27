@@ -2647,6 +2647,37 @@ fn setup_phase(c: &Client, a: &str, b: &str) {
     let mismatch: Value = mismatch.json().unwrap();
     assert_eq!(mismatch["missingDevices"], json!([2]));
 
+    // The mismatch is final (docs/plans/federation-outbox.md): it used its
+    // sequence up at B, so a later send to B goes at once, before the first
+    // is corrected, and the same stale content again gets the same answer.
+    let behind = b"behind-an-uncorrected-mismatch";
+    json_response(
+        send(
+            c,
+            a,
+            &alice_token,
+            &remote_address,
+            "10000000-0000-4000-8000-000000000012",
+            vec![
+                envelope(1, BOB_REGISTRATION_ID_1, behind),
+                envelope(2, BOB_REGISTRATION_ID_2, behind),
+            ],
+        ),
+        "a send behind an uncorrected mismatch",
+    );
+    assert_content_once(&mailbox(c, b, &bob_token, 1), behind);
+    assert_content_once(&mailbox(c, b, &bob_token, 2), behind);
+    let again = send(
+        c,
+        a,
+        &alice_token,
+        &remote_address,
+        mismatch_id,
+        vec![envelope(1, BOB_REGISTRATION_ID_1, b"stale-device-set")],
+    );
+    assert_eq!(again.status().as_u16(), 409);
+    assert_eq!(again.json::<Value>().unwrap()["missingDevices"], json!([2]));
+
     let refreshed_content = b"refreshed-device-set";
     json_response(
         send(

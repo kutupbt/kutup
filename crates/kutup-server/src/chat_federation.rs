@@ -31,14 +31,18 @@ use uuid::Uuid;
 use crate::chat_hub::ChatWsOut;
 use crate::error::{AppError, AppResult};
 use crate::federation::{AuthenticatedFederationRequest, FederationRequestSpec};
+use crate::federation_outbox;
 use crate::{federation::FederationStack, AppState};
 use kutup_federation_proto::FederationFeature;
 
-const CHAT_FEDERATION_PAYLOAD_VERSION: u16 = 1;
+/// The plain chat federation wire version. 2 (2026-10-27): a device
+/// mismatch is final and uses up its sequence on both sides (the corrected
+/// resend takes a new one), so servers on 1 and 2 must not mix: each refuses
+/// the other's sends (docs/self-hosting.md, Updating).
+const CHAT_FEDERATION_PAYLOAD_VERSION: u16 = 2;
 pub(crate) const JSON_CONTENT_TYPE: &str = "application/json";
 const MAX_DIRECTORY_RESPONSE_BYTES: usize = 2 * 1024 * 1024;
 const MAX_FEDERATION_TRANSACTION_BYTES: usize = 16 * 1024 * 1024;
-const RETRY_INTERVAL: Duration = Duration::from_secs(5);
 
 /// The active user an inbound path's `:accountId` is, on this server.
 async fn inbound_user(state: &AppState, account: &AccountRef) -> AppResult<Option<Uuid>> {
@@ -379,11 +383,6 @@ impl FederatedSealedOutcome {
     }
 }
 
-/// How long a send to a server without `chat.v2` waits before it is tried
-/// again: long enough not to keep asking, short enough that an upgrade is
-/// noticed within the hour. Order per destination is kept meanwhile.
-const PEER_UNSUPPORTED_RETRY_SECONDS: i64 = 3600;
-
 /// The answer to a send whose recipient's server does not speak this Chat
 /// wire: 503 with `code: peerUnsupported`, so apps can say so instead of
 /// showing a send that never ends.
@@ -472,16 +471,13 @@ async fn next_sealed_sequence(
     tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
     destination: &str,
 ) -> AppResult<i64> {
-    Ok(sqlx::query_scalar(
-        "INSERT INTO chat_sealed_federation_sequences (destination, next_sequence)
-         VALUES ($1, 2)
-         ON CONFLICT (destination) DO UPDATE SET
-             next_sequence = chat_sealed_federation_sequences.next_sequence + 1
-         RETURNING next_sequence - 1",
-    )
-    .bind(destination)
-    .fetch_one(&mut **tx)
-    .await?)
+    federation_outbox::next_sequence(tx, federation_outbox::Kind::Sealed, destination).await
+}
+
+/// A sealed send's idempotency key: one per destination, recipient and
+/// sendId.
+fn sealed_key(destination: &str, recipient: Uuid, send_id: Uuid) -> String {
+    format!("{destination}:{recipient}:{send_id}")
 }
 
 /// A sealed transaction as stored, if it fits the destination's single
@@ -540,13 +536,11 @@ async fn enqueue_sealed_row_in(
     let mut tx = pool.begin().await?;
     if let Some((id, state_name, stored_transaction, class, answer)) =
         sqlx::query_as::<_, (Uuid, String, Value, Option<String>, Option<Value>)>(
-            "SELECT id, state, transaction, last_error_class, answer
-             FROM chat_sealed_federation_outbox
-             WHERE destination = $1 AND recipient_account_id = $2 AND send_id = $3 FOR UPDATE",
+            "SELECT id, state, payload->'transaction', error_class, answer
+             FROM federation_outbox
+             WHERE kind = 'sealed' AND idempotency_key = $1 FOR UPDATE",
         )
-        .bind(destination)
-        .bind(recipient_id)
-        .bind(send_id)
+        .bind(sealed_key(destination, recipient_id, send_id))
         .fetch_optional(&mut *tx)
         .await?
     {
@@ -610,15 +604,15 @@ async fn enqueue_sealed_row_in(
     let value = sealed_transaction_value(&transaction)?;
     let id = Uuid::new_v4();
     sqlx::query(
-        "INSERT INTO chat_sealed_federation_outbox
-             (id, destination, sequence, recipient_account_id, send_id, transaction)
-         VALUES ($1,$2,$3,$4,$5,$6)",
+        "INSERT INTO federation_outbox
+             (id, kind, destination, sequence, idempotency_key, recipient_account_id, payload)
+         VALUES ($1, 'sealed', $2, $3, $4, $5, jsonb_build_object('transaction', $6::jsonb))",
     )
     .bind(id)
     .bind(destination)
     .bind(sequence)
+    .bind(sealed_key(destination, recipient_id, send_id))
     .bind(recipient_id)
-    .bind(send_id)
     .bind(value)
     .execute(&mut *tx)
     .await?;
@@ -639,10 +633,10 @@ async fn requeue_sealed(
         .map_err(|_| AppError::internal("sealed federation sequence is invalid"))?;
     transaction.version = kutup_chat_proto::SEALED_FEDERATION_VERSION;
     sqlx::query(
-        "UPDATE chat_sealed_federation_outbox
-         SET sequence = $3, transaction = $2, state = 'pending', attempts = 0,
-             next_attempt_at = now(), last_error_class = NULL, answer = NULL,
-             updated_at = now()
+        "UPDATE federation_outbox
+         SET sequence = $3, payload = jsonb_set(payload, '{transaction}', $2),
+             state = 'pending', attempts = 0, next_attempt_at = now(), error_class = NULL,
+             last_error = NULL, answer = NULL, updated_at = now()
          WHERE id = $1",
     )
     .bind(id)
@@ -881,8 +875,8 @@ impl SealedFlush {
             return outcome;
         }
         let row: Option<(String, Option<String>, Option<Value>)> = sqlx::query_as(
-            "SELECT state, last_error_class, answer FROM chat_sealed_federation_outbox
-             WHERE id = $1",
+            "SELECT state, error_class, answer FROM federation_outbox
+             WHERE id = $1 AND kind = 'sealed'",
         )
         .bind(id)
         .fetch_optional(pool)
@@ -990,10 +984,10 @@ async fn flush_rounds(
     for _ in 0..MAX_SEALED_FLUSH_ROUNDS {
         // Sizes first: only the rows that fit one batch are loaded.
         let queued: Vec<(Uuid, i64, i32, bool, Option<String>)> = sqlx::query_as(
-            "SELECT id, sequence, octet_length(transaction::text),
-                    next_attempt_at <= now(), last_error_class
-             FROM chat_sealed_federation_outbox
-             WHERE destination = $1 AND state = 'pending'
+            "SELECT id, sequence, octet_length((payload->'transaction')::text),
+                    next_attempt_at <= now(), error_class
+             FROM federation_outbox
+             WHERE kind = 'sealed' AND destination = $1 AND state = 'pending'
              ORDER BY sequence LIMIT $2",
         )
         .bind(destination)
@@ -1031,9 +1025,10 @@ async fn flush_rounds(
         }
         let ids: Vec<Uuid> = run.iter().map(|(id, _)| *id).collect();
         let rows: Vec<SealedFederationOutboxRow> = sqlx::query_as(
-            "SELECT id, destination, sequence, recipient_account_id, transaction, attempts
-             FROM chat_sealed_federation_outbox
-             WHERE id = ANY($1) AND state = 'pending'
+            "SELECT id, destination, sequence, recipient_account_id,
+                    payload->'transaction' AS transaction, attempts
+             FROM federation_outbox
+             WHERE id = ANY($1) AND kind = 'sealed' AND state = 'pending'
              ORDER BY sequence",
         )
         .bind(&ids)
@@ -1052,9 +1047,9 @@ async fn flush_rounds(
 /// so the limit holds whatever the try then answers.
 async fn claim_sealed_probe(pool: &sqlx::PgPool, head: Uuid) -> AppResult<bool> {
     Ok(sqlx::query(
-        "UPDATE chat_sealed_federation_outbox SET updated_at = now()
-         WHERE id = $1 AND state = 'pending' AND next_attempt_at > now()
-           AND last_error_class IS DISTINCT FROM 'peer_unsupported'
+        "UPDATE federation_outbox SET updated_at = now()
+         WHERE id = $1 AND kind = 'sealed' AND state = 'pending' AND next_attempt_at > now()
+           AND error_class IS DISTINCT FROM 'peer_unsupported'
            AND updated_at <= now() - ($2 * interval '1 second')",
     )
     .bind(head)
@@ -1259,21 +1254,15 @@ async fn settle_sealed_row(
     answer: &[u8],
 ) -> AppResult<bool> {
     let answer = serde_json::from_slice::<Value>(answer).unwrap_or(Value::Null);
-    Ok(sqlx::query(
-        "UPDATE chat_sealed_federation_outbox
-         SET state = $3, attempts = attempts + 1,
-             last_error_class = $4, answer = $5, updated_at = now()
-         WHERE id = $1 AND state = 'pending' AND sequence = $2",
+    federation_outbox::settle(
+        pool,
+        row.id,
+        Some(row.sequence),
+        state_name == "delivered",
+        class,
+        &answer,
     )
-    .bind(row.id)
-    .bind(row.sequence)
-    .bind(state_name)
-    .bind(class)
-    .bind(answer)
-    .execute(pool)
-    .await?
-    .rows_affected()
-        == 1)
+    .await
 }
 
 /// Records the destination's answer to the outbox row it answers, and says
@@ -1359,19 +1348,13 @@ async fn park_sealed_for_upgrade(
     pool: &sqlx::PgPool,
     row: &SealedFederationOutboxRow,
 ) -> AppResult<()> {
-    sqlx::query(
-        "UPDATE chat_sealed_federation_outbox
-         SET attempts = attempts + 1,
-             next_attempt_at = now() + ($3 * interval '1 second'),
-             last_error_class = 'peer_unsupported', updated_at = now()
-         WHERE id = $1 AND state = 'pending' AND sequence = $2",
+    federation_outbox::park_for_upgrade(
+        pool,
+        row.id,
+        Some(row.sequence),
+        "the destination has no sealed chat route",
     )
-    .bind(row.id)
-    .bind(row.sequence)
-    .bind(PEER_UNSUPPORTED_RETRY_SECONDS)
-    .execute(pool)
-    .await?;
-    Ok(())
+    .await
 }
 
 async fn mark_sealed_retry(
@@ -1379,22 +1362,8 @@ async fn mark_sealed_retry(
     row: &SealedFederationOutboxRow,
     class: &str,
 ) -> AppResult<()> {
-    let attempt = row.attempts.saturating_add(1).clamp(1, 30);
-    let delay = (1_i64 << attempt.min(8)).min(300);
-    sqlx::query(
-        "UPDATE chat_sealed_federation_outbox
-         SET attempts = attempts + 1,
-             next_attempt_at = now() + ($3 * interval '1 second'),
-             last_error_class = $4, updated_at = now()
-         WHERE id = $1 AND state = 'pending' AND sequence = $2",
-    )
-    .bind(row.id)
-    .bind(row.sequence)
-    .bind(delay)
-    .bind(class)
-    .execute(pool)
-    .await?;
-    Ok(())
+    federation_outbox::retry_later(pool, row.id, Some(row.sequence), row.attempts, class, class)
+        .await
 }
 
 #[derive(Debug, sqlx::FromRow)]
@@ -1402,17 +1371,45 @@ struct FederationOutboxRow {
     id: Uuid,
     destination: String,
     sequence: i64,
-    sender_user_id: Uuid,
+    /// The sending account, as the payload names it (it stays when the
+    /// account is deleted: the row still goes).
+    sender: Uuid,
     recipient_account_id: Uuid,
     request: Value,
     state: String,
-    response: Option<Value>,
+    error_class: Option<String>,
+    answer: Option<Value>,
     attempts: i32,
+}
+
+/// The plain chat columns of a `federation_outbox` row.
+const PLAIN_ROW: &str = "id, destination, sequence, (payload->>'sender')::uuid AS sender,
+     recipient_account_id, payload->'request' AS request, state, error_class, answer, attempts";
+
+/// A plain send's idempotency key: one per sender device and sendId.
+fn plain_key(sender_user_id: Uuid, sender_device_id: u32, send_id: &str) -> String {
+    format!("{sender_user_id}:{sender_device_id}:{send_id}")
+}
+
+/// The device mismatch a rejected plain row's answer holds.
+fn stored_mismatch(answer: Option<Value>) -> AppResult<DeviceListMismatch> {
+    answer
+        .and_then(|value| serde_json::from_value::<FederationDeliveryError>(value).ok())
+        .and_then(|error| match error {
+            FederationDeliveryError::DeviceListMismatch { mismatch } => Some(mismatch),
+            FederationDeliveryError::SequenceGap { .. } => None,
+        })
+        .ok_or_else(|| AppError::internal("stored federation mismatch is invalid"))
 }
 
 /// Persist a remote send before attempting network I/O. A transient remote
 /// failure is returned to the client so its own durable outbox remains, but
 /// the server queue can make progress independently in the meantime.
+///
+/// A send the destination answered for good keeps that answer: the same
+/// content again gets it again; a device mismatch corrected by the client
+/// goes again under the destination's next sequence (the mismatch used up
+/// the old one), so a mismatch never holds back the sends behind it.
 pub async fn enqueue_send(
     state: &AppState,
     sender_user_id: Uuid,
@@ -1429,6 +1426,7 @@ pub async fn enqueue_send(
     }
     let request_value = serde_json::to_value(&request)
         .map_err(|error| AppError::internal(format!("serialize chat send: {error}")))?;
+    let key = plain_key(sender_user_id, request.sender_device_id, &request.send_id);
 
     let mut tx = state.pool.begin().await?;
     sqlx::query("SELECT id FROM users WHERE id = $1 FOR SHARE")
@@ -1447,94 +1445,78 @@ pub async fn enqueue_send(
     let recipient_id = Uuid::parse_str(&recipient.account_id)
         .map_err(|_| AppError::internal("a canonical account id is a UUID"))?;
 
-    let existing: Option<(Uuid, String, Value, Option<Value>, String, Uuid)> = sqlx::query_as(
-        "SELECT id, state, request, response, destination, recipient_account_id
-                 FROM chat_federation_outbox
-                 WHERE sender_user_id = $1 AND sender_device_id = $2 AND send_id = $3
-                 FOR UPDATE",
-    )
-    .bind(sender_user_id)
-    .bind(request.sender_device_id as i32)
-    .bind(&request.send_id)
+    let existing: Option<FederationOutboxRow> = sqlx::query_as(&format!(
+        "SELECT {PLAIN_ROW} FROM federation_outbox
+         WHERE kind = 'chat' AND idempotency_key = $1 FOR UPDATE"
+    ))
+    .bind(&key)
     .fetch_optional(&mut *tx)
     .await?;
 
-    let id = if let Some((
-        id,
-        outbox_state,
-        prior_request,
-        response,
-        prior_destination,
-        prior_recipient,
-    )) = existing
-    {
-        if prior_destination != destination || prior_recipient != recipient_id {
+    let id = if let Some(row) = existing {
+        if row.destination != destination || row.recipient_account_id != recipient_id {
             return Err(AppError::conflict(
                 "sendId is already bound to another federated recipient",
             ));
         }
-        match outbox_state.as_str() {
-            "delivered" => {
+        let same = row.request == request_value;
+        match (row.state.as_str(), row.error_class.as_deref()) {
+            ("delivered", _) => {
                 tx.rollback().await?;
-                return delivered_outcome(response, true);
+                return delivered_outcome(row.answer, true);
             }
-            "mismatch" if prior_request == request_value => {
+            ("rejected", Some("device_mismatch")) if same => {
                 tx.rollback().await?;
-                let mismatch = response
-                    .and_then(|value| serde_json::from_value::<FederationDeliveryError>(value).ok())
-                    .and_then(|error| match error {
-                        FederationDeliveryError::DeviceListMismatch { mismatch } => Some(mismatch),
-                        FederationDeliveryError::SequenceGap { .. } => None,
-                    })
-                    .ok_or_else(|| AppError::internal("stored federation mismatch is invalid"))?;
-                return Ok(FederatedSendOutcome::Mismatch(mismatch));
+                return Ok(FederatedSendOutcome::Mismatch(stored_mismatch(row.answer)?));
             }
-            "mismatch" => {
-                sqlx::query(
-                    "UPDATE chat_federation_outbox
-                         SET request = $2, state = 'pending', response = NULL,
-                             attempts = 0, next_attempt_at = now(), last_error = NULL,
-                             updated_at = now()
-                         WHERE id = $1",
+            // Corrected after a mismatch: again, under the next sequence.
+            ("rejected", Some("device_mismatch")) => {
+                let sequence = federation_outbox::next_sequence(
+                    &mut tx,
+                    federation_outbox::Kind::Chat,
+                    destination,
                 )
-                .bind(id)
+                .await?;
+                sqlx::query(
+                    "UPDATE federation_outbox
+                     SET sequence = $2, payload = jsonb_set(payload, '{request}', $3),
+                         state = 'pending', error_class = NULL, last_error = NULL,
+                         answer = NULL, attempts = 0, next_attempt_at = now(),
+                         updated_at = now()
+                     WHERE id = $1",
+                )
+                .bind(row.id)
+                .bind(sequence)
                 .bind(&request_value)
                 .execute(&mut *tx)
                 .await?;
             }
-            "pending" if prior_request != request_value => {
+            ("pending", _) if !same => {
                 return Err(AppError::conflict(
                     "federated send payload changed before a device mismatch",
                 ));
             }
-            "pending" => {}
+            ("pending", _) => {}
             _ => return Err(AppError::internal("invalid federation outbox state")),
         }
-        id
+        row.id
     } else {
-        let sequence: i64 = sqlx::query_scalar(
-            "INSERT INTO chat_federation_sequences (destination, next_sequence)
-                 VALUES ($1, 2)
-                 ON CONFLICT (destination) DO UPDATE SET
-                     next_sequence = chat_federation_sequences.next_sequence + 1
-                 RETURNING next_sequence - 1",
-        )
-        .bind(destination)
-        .fetch_one(&mut *tx)
-        .await?;
+        let sequence =
+            federation_outbox::next_sequence(&mut tx, federation_outbox::Kind::Chat, destination)
+                .await?;
         let id = Uuid::new_v4();
         sqlx::query(
-            "INSERT INTO chat_federation_outbox
-                    (id, destination, sequence, sender_user_id, sender_device_id,
-                     send_id, recipient_account_id, request)
-                 VALUES ($1,$2,$3,$4,$5,$6,$7,$8)",
+            "INSERT INTO federation_outbox
+                 (id, kind, destination, sequence, idempotency_key, sender_user_id,
+                  recipient_account_id, payload)
+             VALUES ($1, 'chat', $2, $3, $4, $5, $6,
+                     jsonb_build_object('request', $7::jsonb, 'sender', $5))",
         )
         .bind(id)
         .bind(destination)
         .bind(sequence)
+        .bind(&key)
         .bind(sender_user_id)
-        .bind(request.sender_device_id as i32)
-        .bind(&request.send_id)
         .bind(recipient_id)
         .bind(&request_value)
         .execute(&mut *tx)
@@ -1550,31 +1532,17 @@ async fn attempt_outbox(state: &AppState, id: Uuid) -> AppResult<FederatedSendOu
     let row = load_outbox(state, id)
         .await?
         .ok_or_else(|| AppError::internal("federation outbox row disappeared"))?;
-    match row.state.as_str() {
-        "delivered" => return delivered_outcome(row.response, true),
-        "mismatch" => {
-            let mismatch = row
-                .response
-                .and_then(|value| serde_json::from_value::<FederationDeliveryError>(value).ok())
-                .and_then(|error| match error {
-                    FederationDeliveryError::DeviceListMismatch { mismatch } => Some(mismatch),
-                    FederationDeliveryError::SequenceGap { .. } => None,
-                })
-                .ok_or_else(|| AppError::internal("stored federation mismatch is invalid"))?;
-            return Ok(FederatedSendOutcome::Mismatch(mismatch));
+    match (row.state.as_str(), row.error_class.as_deref()) {
+        ("delivered", _) => return delivered_outcome(row.answer, true),
+        ("rejected", Some("device_mismatch")) => {
+            return Ok(FederatedSendOutcome::Mismatch(stored_mismatch(row.answer)?));
         }
-        "pending" => {}
+        ("pending", _) => {}
         _ => return Err(AppError::internal("invalid federation outbox state")),
     }
 
-    let head: Option<i64> = sqlx::query_scalar(
-        "SELECT MIN(sequence) FROM chat_federation_outbox
-             WHERE destination = $1 AND state <> 'delivered'",
-    )
-    .bind(&row.destination)
-    .fetch_one(&state.pool)
-    .await?;
-    if head != Some(row.sequence) {
+    // Only the destination's head goes: the sends behind it keep their order.
+    if plain_head(&state.pool, &row.destination).await? != Some(row.sequence) {
         return Ok(FederatedSendOutcome::Pending);
     }
 
@@ -1589,7 +1557,7 @@ async fn attempt_outbox(state: &AppState, id: Uuid) -> AppResult<FederatedSendOu
         origin: federation.server_name().to_owned(),
         destination: row.destination.clone(),
         recipient: crate::account_ids::stored(&row.destination, row.recipient_account_id)?,
-        sender: crate::account_ids::local(federation.server_name(), row.sender_user_id)?,
+        sender: crate::account_ids::local(federation.server_name(), row.sender)?,
         message,
     };
     let body = serde_json::to_vec(&transaction).map_err(|error| {
@@ -1620,11 +1588,17 @@ async fn attempt_outbox(state: &AppState, id: Uuid) -> AppResult<FederatedSendOu
     {
         Ok(response) => response,
         Err(error) if crate::federation::lacks_capability(&error) => {
-            park_for_upgrade(state, &row, &error.to_string()).await?;
+            federation_outbox::park_for_upgrade(
+                &state.pool,
+                row.id,
+                Some(row.sequence),
+                &error.to_string(),
+            )
+            .await?;
             return Ok(FederatedSendOutcome::PeerUnsupported);
         }
         Err(error) => {
-            mark_retry(state, &row, &error.to_string()).await?;
+            retry_plain(state, &row, "transport", &error.to_string()).await?;
             return Ok(FederatedSendOutcome::Pending);
         }
     };
@@ -1640,22 +1614,20 @@ async fn attempt_outbox(state: &AppState, id: Uuid) -> AppResult<FederatedSendOu
                 )
             })?;
         if delivered.accepted_sequence != sequence {
-            mark_retry(state, &row, "remote acknowledged the wrong sequence").await?;
+            retry_plain(
+                state,
+                &row,
+                "remote_error",
+                "remote acknowledged the wrong sequence",
+            )
+            .await?;
             return Ok(FederatedSendOutcome::Pending);
         }
         let value = serde_json::to_value(&delivered).map_err(|error| {
             AppError::internal(format!("serialize federation response: {error}"))
         })?;
-        sqlx::query(
-            "UPDATE chat_federation_outbox
-                 SET state = 'delivered', response = $2, attempts = attempts + 1,
-                     last_error = NULL, updated_at = now()
-                 WHERE id = $1",
-        )
-        .bind(row.id)
-        .bind(value)
-        .execute(&state.pool)
-        .await?;
+        federation_outbox::settle(&state.pool, row.id, Some(row.sequence), true, None, &value)
+            .await?;
         return match delivered.rejection {
             Some(rejection) => Ok(FederatedSendOutcome::Rejected(rejection)),
             None => Ok(FederatedSendOutcome::Delivered {
@@ -1673,19 +1645,20 @@ async fn attempt_outbox(state: &AppState, id: Uuid) -> AppResult<FederatedSendOu
                 )
             })?;
         match conflict {
+            // Final: the destination used the sequence up, and the client
+            // corrects and sends again under a new one.
             FederationDeliveryError::DeviceListMismatch { ref mismatch } => {
                 let value = serde_json::to_value(&conflict).map_err(|error| {
                     AppError::internal(format!("serialize federation mismatch: {error}"))
                 })?;
-                sqlx::query(
-                    "UPDATE chat_federation_outbox
-                         SET state = 'mismatch', response = $2, attempts = attempts + 1,
-                             last_error = NULL, updated_at = now()
-                         WHERE id = $1",
+                federation_outbox::settle(
+                    &state.pool,
+                    row.id,
+                    Some(row.sequence),
+                    false,
+                    Some("device_mismatch"),
+                    &value,
                 )
-                .bind(row.id)
-                .bind(value)
-                .execute(&state.pool)
                 .await?;
                 return Ok(FederatedSendOutcome::Mismatch(mismatch.clone()));
             }
@@ -1694,11 +1667,11 @@ async fn attempt_outbox(state: &AppState, id: Uuid) -> AppResult<FederatedSendOu
                     let expected = i64::try_from(expected_sequence)
                         .map_err(|_| AppError::internal("remote requested an invalid sequence"))?;
                     let restored = sqlx::query(
-                        "UPDATE chat_federation_outbox
+                        "UPDATE federation_outbox
                              SET state = 'pending', next_attempt_at = now(),
                                  last_error = 'remote requested replay after a sequence gap',
                                  updated_at = now()
-                             WHERE destination = $1
+                             WHERE kind = 'chat' AND destination = $1
                                AND sequence >= $2 AND sequence < $3",
                     )
                     .bind(&row.destination)
@@ -1714,9 +1687,10 @@ async fn attempt_outbox(state: &AppState, id: Uuid) -> AppResult<FederatedSendOu
                         );
                     }
                 }
-                mark_retry(
+                retry_plain(
                     state,
                     &row,
+                    "sequence_gap",
                     &format!("remote expects federation sequence {expected_sequence}"),
                 )
                 .await?;
@@ -1725,29 +1699,60 @@ async fn attempt_outbox(state: &AppState, id: Uuid) -> AppResult<FederatedSendOu
         }
     }
 
-    mark_retry(
+    retry_plain(
         state,
         &row,
+        "remote_error",
         &format!("remote federation delivery returned {status}"),
     )
     .await?;
     Ok(FederatedSendOutcome::Pending)
 }
 
+async fn retry_plain(
+    state: &AppState,
+    row: &FederationOutboxRow,
+    class: &str,
+    error: &str,
+) -> AppResult<()> {
+    federation_outbox::retry_later(
+        &state.pool,
+        row.id,
+        Some(row.sequence),
+        row.attempts,
+        class,
+        error,
+    )
+    .await
+}
+
+/// The destination's plain head: its lowest pending sequence. A settled row
+/// (delivered or rejected) never holds the queue, and nothing behind the
+/// head goes before it.
+async fn plain_head(pool: &sqlx::PgPool, destination: &str) -> AppResult<Option<i64>> {
+    Ok(sqlx::query_scalar(
+        "SELECT MIN(sequence) FROM federation_outbox
+         WHERE kind = 'chat' AND destination = $1 AND state = 'pending'",
+    )
+    .bind(destination)
+    .fetch_one(pool)
+    .await?)
+}
+
 fn delivery_request_id(transaction_id: Uuid, body: &[u8]) -> String {
     format!("{transaction_id}.{}", hex::encode(hash(Suite::V1, body)))
 }
 
-async fn flush_due(state: &AppState) -> AppResult<usize> {
+/// The plain sends due now: each due destination's head, tried once.
+pub(crate) async fn flush_due(state: &AppState) -> AppResult<usize> {
     let ids: Vec<Uuid> = sqlx::query_scalar(
         "SELECT id FROM (
-                 SELECT DISTINCT ON (destination)
-                        id, destination, state, next_attempt_at, sequence
-                 FROM chat_federation_outbox
-                 WHERE state <> 'delivered'
+                 SELECT DISTINCT ON (destination) id, destination, next_attempt_at
+                 FROM federation_outbox
+                 WHERE kind = 'chat' AND state = 'pending'
                  ORDER BY destination, sequence
              ) heads
-             WHERE state = 'pending' AND next_attempt_at <= now()
+             WHERE next_attempt_at <= now()
              ORDER BY destination
              LIMIT 100",
     )
@@ -1766,11 +1771,9 @@ async fn flush_due(state: &AppState) -> AppResult<usize> {
 }
 
 async fn load_outbox(state: &AppState, id: Uuid) -> AppResult<Option<FederationOutboxRow>> {
-    Ok(sqlx::query_as(
-        "SELECT id, destination, sequence, sender_user_id, recipient_account_id, request,
-                state, response, attempts
-         FROM chat_federation_outbox WHERE id = $1",
-    )
+    Ok(sqlx::query_as(&format!(
+        "SELECT {PLAIN_ROW} FROM federation_outbox WHERE id = $1 AND kind = 'chat'"
+    ))
     .bind(id)
     .fetch_optional(&state.pool)
     .await?)
@@ -1790,91 +1793,12 @@ fn delivered_outcome(
     }
 }
 
-async fn park_for_upgrade(
-    state: &AppState,
-    row: &FederationOutboxRow,
-    error: &str,
-) -> AppResult<()> {
-    sqlx::query(
-        "UPDATE chat_federation_outbox
-         SET attempts = attempts + 1,
-             next_attempt_at = now() + ($2 * interval '1 second'),
-             last_error = $3, updated_at = now()
-         WHERE id = $1 AND state = 'pending'",
-    )
-    .bind(row.id)
-    .bind(PEER_UNSUPPORTED_RETRY_SECONDS)
-    .bind(error)
-    .execute(&state.pool)
-    .await?;
-    Ok(())
-}
-
-async fn mark_retry(state: &AppState, row: &FederationOutboxRow, error: &str) -> AppResult<()> {
-    let attempt = row.attempts.saturating_add(1).clamp(1, 30);
-    let exponential_seconds = 1_i64 << attempt.min(8);
-    let jitter_ms = kutup_crypto::primitives::random_below(1001) as i64;
-    let delay_ms = exponential_seconds.min(300) * 1000 + jitter_ms;
-    let error: String = error.chars().take(500).collect();
-    sqlx::query(
-        "UPDATE chat_federation_outbox
-         SET attempts = attempts + 1,
-             next_attempt_at = now() + ($2 * interval '1 millisecond'),
-             last_error = $3, updated_at = now()
-         WHERE id = $1 AND state = 'pending'",
-    )
-    .bind(row.id)
-    .bind(delay_ms)
-    .bind(error)
-    .execute(&state.pool)
-    .await?;
-    Ok(())
-}
-
-pub fn spawn_retry_worker(state: AppState) {
-    if state.federation.is_none() {
-        return;
-    }
-    tokio::spawn(async move {
-        let mut tick = tokio::time::interval(RETRY_INTERVAL);
-        loop {
-            tick.tick().await;
-            match flush_due(&state).await {
-                Ok(completed) if completed > 0 => {
-                    tracing::info!(completed, "chat federation retry delivered queued sends");
-                }
-                Ok(_) => {}
-                Err(error) => tracing::warn!(%error, "chat federation retry failed"),
-            }
-            if let Err(error) = flush_due_sealed(&state).await {
-                tracing::warn!(%error, "sealed chat federation retry failed");
-            }
-        }
-    });
-}
-
-/// The sealed sends due now: only each destination's head. Rows behind a
-/// waiting head (parked for an upgrade, or backing off) would only return
-/// early, and a long queue for one server must not fill the page and starve
-/// the others.
-async fn due_sealed_destinations(pool: &sqlx::PgPool) -> AppResult<Vec<String>> {
-    Ok(sqlx::query_scalar(
-        "SELECT destination FROM (
-                 SELECT DISTINCT ON (destination) id, destination, next_attempt_at
-                 FROM chat_sealed_federation_outbox
-                 WHERE state = 'pending'
-                 ORDER BY destination, sequence
-             ) heads
-             WHERE next_attempt_at <= now()
-             ORDER BY destination
-             LIMIT 100",
-    )
-    .fetch_all(pool)
-    .await?)
-}
-
-async fn flush_due_sealed(state: &AppState) -> AppResult<()> {
-    for destination in due_sealed_destinations(&state.pool).await? {
+/// The sealed sends due now: each due destination flushed (its head and
+/// what follows it, batched).
+pub(crate) async fn flush_due_sealed(state: &AppState) -> AppResult<()> {
+    for destination in
+        federation_outbox::due_destinations(&state.pool, federation_outbox::Kind::Sealed).await?
+    {
         match flush_sealed_destination(state, &destination, FlushTrigger::Worker).await {
             Ok(flush) => {
                 for (id, outcome) in flush.outcomes {
@@ -2250,17 +2174,15 @@ async fn record_sealed_answer(
 ) -> AppResult<()> {
     let send_id =
         Uuid::parse_str(send_id).map_err(|_| AppError::bad_request("sealed sendId is invalid"))?;
-    sqlx::query(
-        "INSERT INTO chat_sealed_federation_inbound
-             (origin, sequence, send_id, response_status, response)
-         VALUES ($1,$2,$3,$4,$5)",
+    federation_outbox::record(
+        tx,
+        federation_outbox::Kind::Sealed,
+        origin,
+        sequence,
+        Some(&send_id.to_string()),
+        answer.status.as_u16(),
+        &answer.body,
     )
-    .bind(origin)
-    .bind(sequence)
-    .bind(send_id)
-    .bind(answer.status.as_u16() as i16)
-    .bind(&answer.body)
-    .execute(&mut **tx)
     .await?;
     Ok(())
 }
@@ -2300,37 +2222,22 @@ async fn apply_sealed_one(
         }
     };
     let mut tx = pool.begin().await?;
-    sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1, 771943))")
-        .bind(origin)
-        .execute(&mut *tx)
-        .await?;
-    if let Some((status, response)) = sqlx::query_as::<_, (i16, Value)>(
-        "SELECT response_status, response FROM chat_sealed_federation_inbound
-         WHERE origin = $1 AND sequence = $2",
-    )
-    .bind(origin)
-    .bind(sequence)
-    .fetch_optional(&mut *tx)
-    .await?
+    let last_sequence =
+        federation_outbox::lock_stream(&mut tx, federation_outbox::Kind::Sealed, origin).await?;
+    if let Some(prior) =
+        federation_outbox::prior(&mut tx, federation_outbox::Kind::Sealed, origin, sequence).await?
     {
         tx.rollback().await?;
-        let status = StatusCode::from_u16(status as u16)
+        let status = StatusCode::from_u16(prior.status as u16)
             .map_err(|_| AppError::internal("stored sealed response status is invalid"))?;
         return Ok((
             SealedAnswer {
                 status,
-                body: response,
+                body: prior.answer,
             },
             Vec::new(),
         ));
     }
-    let last_sequence: i64 = sqlx::query_scalar(
-        "SELECT COALESCE(MAX(sequence), 0) FROM chat_sealed_federation_inbound
-         WHERE origin = $1",
-    )
-    .bind(origin)
-    .fetch_one(&mut *tx)
-    .await?;
     if sequence != last_sequence + 1 {
         tx.rollback().await?;
         return Ok((
@@ -2714,42 +2621,36 @@ pub async fn deliver_messages(
     }
 
     let mut tx = state.pool.begin().await?;
-    sqlx::query(
-        "INSERT INTO chat_federation_inbound_state (origin, last_sequence)
-         VALUES ($1, 0) ON CONFLICT DO NOTHING",
-    )
-    .bind(&transaction.origin)
-    .execute(&mut *tx)
-    .await?;
-    let last_sequence: i64 = sqlx::query_scalar(
-        "SELECT last_sequence FROM chat_federation_inbound_state
-         WHERE origin = $1 FOR UPDATE",
-    )
-    .bind(&transaction.origin)
-    .fetch_one(&mut *tx)
-    .await?;
+    let last_sequence =
+        federation_outbox::lock_stream(&mut tx, federation_outbox::Kind::Chat, &transaction.origin)
+            .await?;
     let sequence = i64::try_from(transaction.sequence)
         .map_err(|_| AppError::bad_request("federation sequence is too large"))?;
 
     if sequence <= last_sequence {
-        let prior: Option<(String, Value)> = sqlx::query_as(
-            "SELECT transaction_id, response
-             FROM chat_federation_inbound_transactions
-             WHERE origin = $1 AND sequence = $2",
+        let prior = federation_outbox::prior(
+            &mut tx,
+            federation_outbox::Kind::Chat,
+            &transaction.origin,
+            sequence,
         )
-        .bind(&transaction.origin)
-        .bind(sequence)
-        .fetch_optional(&mut *tx)
         .await?;
         tx.rollback().await?;
-        if let Some((transaction_id, response)) = prior {
-            if transaction_id == transaction.transaction_id {
-                let mut delivered: FederationDeliveryResponse = serde_json::from_value(response)
-                    .map_err(|error| {
-                        AppError::internal(format!("stored federation response: {error}"))
-                    })?;
-                delivered.deduplicated = true;
-                return signed_json(federation, &authenticated, StatusCode::OK, &delivered);
+        if let Some(prior) = prior {
+            if prior.transaction_id.as_deref() == Some(transaction.transaction_id.as_str()) {
+                // Its final answer again: a delivery (marked a repeat), or the
+                // device mismatch that used the sequence up.
+                if prior.status == StatusCode::OK.as_u16() as i16 {
+                    let mut delivered: FederationDeliveryResponse =
+                        serde_json::from_value(prior.answer).map_err(|error| {
+                            AppError::internal(format!("stored federation response: {error}"))
+                        })?;
+                    delivered.deduplicated = true;
+                    return signed_json(federation, &authenticated, StatusCode::OK, &delivered);
+                }
+                let status = StatusCode::from_u16(prior.status as u16)
+                    .map_err(|_| AppError::internal("stored federation status is invalid"))?;
+                return signed_json(federation, &authenticated, status, &prior.answer);
             }
         } else {
             // The replay record may expire before the origin's outbox record.
@@ -2830,13 +2731,24 @@ pub async fn deliver_messages(
         || !mismatch.stale_devices.is_empty()
         || !mismatch.extra_devices.is_empty()
     {
-        tx.rollback().await?;
-        return signed_json(
-            federation,
-            &authenticated,
-            StatusCode::CONFLICT,
-            &FederationDeliveryError::DeviceListMismatch { mismatch },
-        );
+        // A final answer: it uses the sequence up, so the origin's next send
+        // isn't held behind this one, and the corrected resend comes under a
+        // new sequence.
+        let conflict = FederationDeliveryError::DeviceListMismatch { mismatch };
+        let value = serde_json::to_value(&conflict)
+            .map_err(|error| AppError::internal(format!("serialize mismatch: {error}")))?;
+        federation_outbox::record(
+            &mut tx,
+            federation_outbox::Kind::Chat,
+            &transaction.origin,
+            sequence,
+            Some(&transaction.transaction_id),
+            StatusCode::CONFLICT.as_u16(),
+            &value,
+        )
+        .await?;
+        tx.commit().await?;
+        return signed_json(federation, &authenticated, StatusCode::CONFLICT, &conflict);
     }
 
     let sender_account_id = Uuid::parse_str(&transaction.sender.account_id)
@@ -2953,21 +2865,12 @@ async fn refuse_sealed(
     error: String,
     code: Option<&str>,
 ) -> AppResult<SealedAnswer> {
-    sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1, 771943))")
-        .bind(origin)
-        .execute(&mut *tx)
-        .await?;
+    let last_sequence =
+        federation_outbox::lock_stream(&mut tx, federation_outbox::Kind::Sealed, origin).await?;
     if let Err(limited) = charge_sealed_origin(&mut tx, origin).await {
         tx.rollback().await?;
         return Ok(SealedAnswer::from_error(limited));
     }
-    let last_sequence: i64 = sqlx::query_scalar(
-        "SELECT COALESCE(MAX(sequence), 0) FROM chat_sealed_federation_inbound
-         WHERE origin = $1",
-    )
-    .bind(origin)
-    .fetch_one(&mut *tx)
-    .await?;
     // A refusal is final even for a sendId that doesn't parse: it is
     // recorded under the nil id, which no delivery uses.
     let send_id = Uuid::parse_str(&transaction.send_id).unwrap_or(Uuid::nil());
@@ -2977,21 +2880,16 @@ async fn refuse_sealed(
         final_value["code"] = Value::from(code);
     }
     let recorded = sequence == last_sequence + 1
-        && sqlx::query(
-            "INSERT INTO chat_sealed_federation_inbound
-                 (origin, sequence, send_id, response_status, response)
-             VALUES ($1,$2,$3,$4,$5)
-             ON CONFLICT DO NOTHING",
+        && federation_outbox::record(
+            &mut tx,
+            federation_outbox::Kind::Sealed,
+            origin,
+            sequence,
+            Some(&send_id.to_string()),
+            StatusCode::BAD_REQUEST.as_u16(),
+            &final_value,
         )
-        .bind(origin)
-        .bind(sequence)
-        .bind(send_id)
-        .bind(StatusCode::BAD_REQUEST.as_u16() as i16)
-        .bind(&final_value)
-        .execute(&mut *tx)
-        .await?
-        .rows_affected()
-            == 1;
+        .await?;
     tx.commit().await?;
     Ok(SealedAnswer {
         status: StatusCode::BAD_REQUEST,
@@ -3034,24 +2932,15 @@ async fn record_inbound_response(
 ) -> AppResult<()> {
     let response_value = serde_json::to_value(response)
         .map_err(|error| AppError::internal(format!("serialize delivery response: {error}")))?;
-    sqlx::query(
-        "INSERT INTO chat_federation_inbound_transactions
-            (origin, sequence, transaction_id, response)
-         VALUES ($1,$2,$3,$4)",
+    federation_outbox::record(
+        tx,
+        federation_outbox::Kind::Chat,
+        &transaction.origin,
+        sequence,
+        Some(&transaction.transaction_id),
+        StatusCode::OK.as_u16(),
+        &response_value,
     )
-    .bind(&transaction.origin)
-    .bind(sequence)
-    .bind(&transaction.transaction_id)
-    .bind(response_value)
-    .execute(&mut **tx)
-    .await?;
-    sqlx::query(
-        "UPDATE chat_federation_inbound_state
-         SET last_sequence = $2, updated_at = now() WHERE origin = $1",
-    )
-    .bind(&transaction.origin)
-    .bind(sequence)
-    .execute(&mut **tx)
     .await?;
     Ok(())
 }
@@ -3105,6 +2994,61 @@ fn check_accounts(transaction: &FederatedChatTransaction) -> AppResult<()> {
 
 #[cfg(test)]
 mod tests {
+    /// Order per destination: the head is the lowest pending row; a rejected
+    /// row between pending ones neither holds the queue nor lets a later row
+    /// go first. Needs `KUTUP_LIVE_DATABASE_URL`.
+    #[tokio::test]
+    async fn live_a_rejected_row_never_reorders_the_queue() {
+        let Ok(database_url) = std::env::var("KUTUP_LIVE_DATABASE_URL") else {
+            eprintln!("KUTUP_LIVE_DATABASE_URL unset; skipping");
+            return;
+        };
+        let pool = sqlx::PgPool::connect(&database_url).await.unwrap();
+        let destination = format!("order{}.example", &Uuid::new_v4().simple().to_string()[..8]);
+        let mut ids = Vec::new();
+        for (sequence, state) in [(1_i64, "pending"), (2, "rejected"), (3, "pending")] {
+            ids.push(
+                sqlx::query_scalar::<_, Uuid>(
+                    "INSERT INTO federation_outbox
+                         (kind, destination, sequence, idempotency_key, payload, state)
+                     VALUES ('chat', $1, $2, gen_random_uuid()::text,
+                             jsonb_build_object('sender', gen_random_uuid()), $3)
+                     RETURNING id",
+                )
+                .bind(&destination)
+                .bind(sequence)
+                .bind(state)
+                .fetch_one(&pool)
+                .await
+                .unwrap(),
+            );
+        }
+        assert_eq!(
+            super::plain_head(&pool, &destination).await.unwrap(),
+            Some(1)
+        );
+        crate::federation_outbox::settle(
+            &pool,
+            ids[0],
+            Some(1),
+            true,
+            None,
+            &serde_json::json!({}),
+        )
+        .await
+        .unwrap();
+        // The rejected row is passed over, not waited on.
+        assert_eq!(
+            super::plain_head(&pool, &destination).await.unwrap(),
+            Some(3)
+        );
+        sqlx::query("DELETE FROM federation_outbox WHERE destination = $1")
+            .bind(&destination)
+            .execute(&pool)
+            .await
+            .unwrap();
+    }
+
     /// A backlog for one server does not starve another, and a parked head
     /// holds back only its own server. Needs the database:
     /// `KUTUP_LIVE_DATABASE_URL` (the backup gate).
@@ -3124,9 +3068,10 @@ mod tests {
             let pool = pool.clone();
             async move {
                 sqlx::query_scalar::<_, Uuid>(
-                    "INSERT INTO chat_sealed_federation_outbox
-                         (destination, sequence, recipient_account_id, send_id, transaction)
-                     VALUES ($1, $2, gen_random_uuid(), gen_random_uuid(), '{}'::jsonb) RETURNING id",
+                    "INSERT INTO federation_outbox
+                         (kind, destination, sequence, idempotency_key, recipient_account_id, payload)
+                     VALUES ('sealed', $1, $2, gen_random_uuid()::text, gen_random_uuid(),
+                             '{\"transaction\": {}}'::jsonb) RETURNING id",
                 )
                 .bind(destination)
                 .bind(sequence)
@@ -3141,7 +3086,12 @@ mod tests {
         }
         insert(other.clone(), 1).await;
 
-        let due = super::due_sealed_destinations(&pool).await.unwrap();
+        let due = crate::federation_outbox::due_destinations(
+            &pool,
+            crate::federation_outbox::Kind::Sealed,
+        )
+        .await
+        .unwrap();
         let ours = due
             .iter()
             .filter(|destination| **destination == slow || **destination == other)
@@ -3151,23 +3101,30 @@ mod tests {
         // The slow server's head waits an hour for its upgrade: nothing of
         // it is due, and the other server still is.
         sqlx::query(
-            "UPDATE chat_sealed_federation_outbox
-                SET next_attempt_at = now() + interval '1 hour', last_error_class = 'peer_unsupported'
+            "UPDATE federation_outbox
+                SET next_attempt_at = now() + interval '1 hour', error_class = 'peer_unsupported'
               WHERE id = $1",
         )
         .bind(slow_head)
         .execute(&pool)
         .await
         .unwrap();
-        let due = super::due_sealed_destinations(&pool).await.unwrap();
+        let due = crate::federation_outbox::due_destinations(
+            &pool,
+            crate::federation_outbox::Kind::Sealed,
+        )
+        .await
+        .unwrap();
         assert!(due.contains(&other));
         assert!(!due.contains(&slow), "a parked head holds its queue");
 
-        sqlx::query("DELETE FROM chat_sealed_federation_outbox WHERE destination = ANY($1)")
-            .bind(vec![slow, other])
-            .execute(&pool)
-            .await
-            .unwrap();
+        sqlx::query(
+            "DELETE FROM federation_outbox WHERE kind = 'sealed' AND destination = ANY($1)",
+        )
+        .bind(vec![slow, other])
+        .execute(&pool)
+        .await
+        .unwrap();
     }
 
     #[test]
@@ -3408,8 +3365,8 @@ mod sealed_live_tests {
 
     async fn recorded(pool: &sqlx::PgPool, origin: &str) -> Vec<(i64, i16)> {
         sqlx::query_as(
-            "SELECT sequence, response_status FROM chat_sealed_federation_inbound
-             WHERE origin = $1 ORDER BY sequence",
+            "SELECT sequence, status FROM federation_inbound
+             WHERE kind = 'sealed' AND origin = $1 ORDER BY sequence",
         )
         .bind(origin)
         .fetch_all(pool)
@@ -3418,7 +3375,7 @@ mod sealed_live_tests {
     }
 
     async fn clean(pool: &sqlx::PgPool, origin: &str, users: &[Uuid]) {
-        sqlx::query("DELETE FROM chat_sealed_federation_inbound WHERE origin = $1")
+        sqlx::query("DELETE FROM federation_inbound WHERE kind = 'sealed' AND origin = $1")
             .bind(origin)
             .execute(pool)
             .await
@@ -3509,7 +3466,7 @@ mod sealed_live_tests {
 
     async fn outbox_row(pool: &sqlx::PgPool, id: Uuid) -> (String, i64, Option<String>) {
         sqlx::query_as(
-            "SELECT state, sequence, last_error_class FROM chat_sealed_federation_outbox
+            "SELECT state, sequence, error_class FROM federation_outbox
              WHERE id = $1",
         )
         .bind(id)
@@ -3520,8 +3477,9 @@ mod sealed_live_tests {
 
     async fn loaded(pool: &sqlx::PgPool, id: Uuid) -> SealedFederationOutboxRow {
         sqlx::query_as(
-            "SELECT id, destination, sequence, recipient_account_id, transaction, attempts
-             FROM chat_sealed_federation_outbox WHERE id = $1",
+            "SELECT id, destination, sequence, recipient_account_id,
+                    payload->'transaction' AS transaction, attempts
+             FROM federation_outbox WHERE id = $1",
         )
         .bind(id)
         .fetch_one(pool)
@@ -3585,76 +3543,7 @@ mod sealed_live_tests {
             serde_json::from_value(loaded(&pool, id).await.transaction).unwrap();
         assert_eq!(stored.sequence, sequence as u64);
         assert_eq!(stored.envelopes[0].registration_id, 77);
-        sqlx::query("DELETE FROM chat_sealed_federation_outbox WHERE destination = $1")
-            .bind(&destination)
-            .execute(&pool)
-            .await
-            .unwrap();
-    }
-
-    /// The migration's step for sends rejected on a mismatch before this
-    /// version: each goes once more under its old sequence (closing it at
-    /// the destination); meanwhile a corrected resend is told to wait
-    /// (`conflict`), and an identical one stays queued.
-    #[tokio::test]
-    async fn live_the_migration_closes_old_mismatched_sequences() {
-        let Some(pool) = pool().await else {
-            eprintln!("KUTUP_LIVE_DATABASE_URL unset; skipping");
-            return;
-        };
-        let destination = origin();
-        let recipient = AccountRef::new(&destination, &Uuid::new_v4().to_string()).unwrap();
-        let send_id = Uuid::new_v4();
-        let Queued::Row(id) =
-            enqueue_sealed_row_in(&pool, "origin.test", &recipient, submission(send_id, 78))
-                .await
-                .unwrap()
-        else {
-            panic!("queued");
-        };
-        // As the old version left it: rejected, no answer kept.
-        sqlx::query(
-            "UPDATE chat_sealed_federation_outbox
-             SET state = 'rejected', last_error_class = 'device_mismatch' WHERE id = $1",
-        )
-        .bind(id)
-        .execute(&pool)
-        .await
-        .unwrap();
-        let (_, sequence, _) = outbox_row(&pool, id).await;
-        let migration = include_str!("../migrations/20261018120000_sealed_sequences.up.sql");
-        // The closing step: its UPDATE statement, up to its semicolon.
-        let start = migration
-            .find("UPDATE chat_sealed_federation_outbox")
-            .expect("the closing step");
-        let closing = &migration[start..start + migration[start..].find(';').unwrap()];
-        assert!(closing.contains("closing_sequence"));
-        // Run on this test's destination only: unscoped, it would reopen the
-        // rejected rows of tests running beside it.
-        sqlx::query(&format!("{closing} AND destination = $1"))
-            .bind(&destination)
-            .execute(&pool)
-            .await
-            .unwrap();
-        assert_eq!(
-            outbox_row(&pool, id).await,
-            (
-                "pending".to_owned(),
-                sequence,
-                Some("closing_sequence".to_owned())
-            )
-        );
-        let corrected =
-            enqueue_sealed_row_in(&pool, "origin.test", &recipient, submission(send_id, 77)).await;
-        assert_eq!(corrected.err().unwrap().status, StatusCode::CONFLICT);
-        assert!(matches!(
-            enqueue_sealed_row_in(&pool, "origin.test", &recipient, submission(send_id, 78))
-                .await
-                .unwrap(),
-            Queued::Row(same) if same == id
-        ));
-        assert_eq!(outbox_row(&pool, id).await.1, sequence);
-        sqlx::query("DELETE FROM chat_sealed_federation_outbox WHERE destination = $1")
+        sqlx::query("DELETE FROM federation_outbox WHERE kind = 'sealed' AND destination = $1")
             .bind(&destination)
             .execute(&pool)
             .await
@@ -3743,10 +3632,11 @@ mod sealed_live_tests {
         };
         let destination = origin();
         let head: Uuid = sqlx::query_scalar(
-            "INSERT INTO chat_sealed_federation_outbox
-                 (destination, sequence, recipient_account_id, send_id, transaction,
-                  attempts, next_attempt_at, last_error_class, updated_at)
-             VALUES ($1, 1, gen_random_uuid(), gen_random_uuid(), '{}'::jsonb,
+            "INSERT INTO federation_outbox
+                 (kind, destination, sequence, idempotency_key, recipient_account_id, payload,
+                  attempts, next_attempt_at, error_class, updated_at)
+             VALUES ('sealed', $1, 1, gen_random_uuid()::text, gen_random_uuid(),
+                     '{\"transaction\": {}}'::jsonb,
                      3, now() + interval '5 minutes', 'transport', now() - interval '1 minute')
              RETURNING id",
         )
@@ -3788,7 +3678,7 @@ mod sealed_live_tests {
             let pool = pool.clone();
             async move {
                 sqlx::query(&format!(
-                    "UPDATE chat_sealed_federation_outbox
+                    "UPDATE federation_outbox
                         SET updated_at = now() - interval '{interval}' WHERE id = $1"
                 ))
                 .bind(head)
@@ -3803,8 +3693,8 @@ mod sealed_live_tests {
         // Parked for an upgrade: never tried before its hour.
         age("1 minute").await;
         sqlx::query(
-            "UPDATE chat_sealed_federation_outbox
-                SET last_error_class = 'peer_unsupported' WHERE id = $1",
+            "UPDATE federation_outbox
+                SET error_class = 'peer_unsupported' WHERE id = $1",
         )
         .bind(head)
         .execute(&pool)
@@ -3813,8 +3703,8 @@ mod sealed_live_tests {
         assert_eq!(sends(pool.clone()).await, 0, "a parked head");
         // Due: a flush sends it in full, not as a probe.
         sqlx::query(
-            "UPDATE chat_sealed_federation_outbox
-                SET last_error_class = 'transport', next_attempt_at = now() WHERE id = $1",
+            "UPDATE federation_outbox
+                SET error_class = 'transport', next_attempt_at = now() WHERE id = $1",
         )
         .bind(head)
         .execute(&pool)
@@ -3825,81 +3715,7 @@ mod sealed_live_tests {
             "a due head"
         );
 
-        sqlx::query("DELETE FROM chat_sealed_federation_outbox WHERE destination = $1")
-            .bind(&destination)
-            .execute(&pool)
-            .await
-            .unwrap();
-    }
-
-    /// The migration stamps queued, undelivered rows with version 2 (the
-    /// closing step's sends among them); delivered rows keep what they were.
-    #[tokio::test]
-    async fn live_the_migration_stamps_queued_rows_with_version_2() {
-        let Some(pool) = pool().await else {
-            eprintln!("KUTUP_LIVE_DATABASE_URL unset; skipping");
-            return;
-        };
-        let destination = origin();
-        let insert = |sequence: i64, state: &'static str| {
-            let pool = pool.clone();
-            let destination = destination.clone();
-            async move {
-                let mut queued = transaction(
-                    "origin.test",
-                    Uuid::new_v4(),
-                    sequence as u64,
-                    Uuid::new_v4(),
-                    [1; 16],
-                    77,
-                );
-                queued.version = 1;
-                let id = Uuid::new_v4();
-                sqlx::query(
-                    "INSERT INTO chat_sealed_federation_outbox
-                         (id, destination, sequence, recipient_account_id, send_id, transaction, state)
-                     VALUES ($1, $2, $3, $4, $5, $6, $7)",
-                )
-                .bind(id)
-                .bind(&destination)
-                .bind(sequence)
-                .bind(Uuid::new_v4())
-                .bind(Uuid::new_v4())
-                .bind(serde_json::to_value(&queued).unwrap())
-                .bind(state)
-                .execute(&pool)
-                .await
-                .unwrap();
-                id
-            }
-        };
-        let pending = insert(1, "pending").await;
-        let delivered = insert(2, "delivered").await;
-        let migration = include_str!("../migrations/20261018120000_sealed_sequences.up.sql");
-        let start = migration
-            .find("UPDATE chat_sealed_federation_outbox\n   SET transaction = jsonb_set")
-            .expect("the stamping step");
-        let stamp = &migration[start..start + migration[start..].find(';').unwrap()];
-        sqlx::query(&format!("{stamp} AND destination = $1"))
-            .bind(&destination)
-            .execute(&pool)
-            .await
-            .unwrap();
-        let version = |id: Uuid| {
-            let pool = pool.clone();
-            async move {
-                sqlx::query_scalar::<_, String>(
-                    "SELECT transaction->>'version' FROM chat_sealed_federation_outbox WHERE id = $1",
-                )
-                .bind(id)
-                .fetch_one(&pool)
-                .await
-                .unwrap()
-            }
-        };
-        assert_eq!(version(pending).await, "2");
-        assert_eq!(version(delivered).await, "1");
-        sqlx::query("DELETE FROM chat_sealed_federation_outbox WHERE destination = $1")
+        sqlx::query("DELETE FROM federation_outbox WHERE kind = 'sealed' AND destination = $1")
             .bind(&destination)
             .execute(&pool)
             .await
@@ -4082,9 +3898,9 @@ mod sealed_live_tests {
         let recipient = Uuid::new_v4();
         let current = transaction("origin.test", recipient, 5, Uuid::new_v4(), [1; 16], 77);
         sqlx::query(
-            "INSERT INTO chat_sealed_federation_outbox
-                 (id, destination, sequence, recipient_account_id, send_id, transaction)
-             VALUES ($1, $2, 5, $3, $4, $5)",
+            "INSERT INTO federation_outbox
+                 (id, kind, destination, sequence, idempotency_key, recipient_account_id, payload)
+             VALUES ($1, 'sealed', $2, 5, $4::text, $3, jsonb_build_object('transaction', $5::jsonb))",
         )
         .bind(id)
         .bind(&destination)
@@ -4105,7 +3921,7 @@ mod sealed_live_tests {
         let mismatch = br#"{"code":"deviceListMismatch","missingDevices":[],"staleDevices":[1],"extraDevices":[]}"#;
         let state_of = || async {
             sqlx::query_as::<_, (String, i64)>(
-                "SELECT state, sequence FROM chat_sealed_federation_outbox WHERE id = $1",
+                "SELECT state, sequence FROM federation_outbox WHERE id = $1",
             )
             .bind(id)
             .fetch_one(&pool)
@@ -4143,7 +3959,7 @@ mod sealed_live_tests {
             }
             _ => panic!("the stored mismatch is read back"),
         }
-        sqlx::query("DELETE FROM chat_sealed_federation_outbox WHERE id = $1")
+        sqlx::query("DELETE FROM federation_outbox WHERE id = $1")
             .bind(id)
             .execute(&pool)
             .await

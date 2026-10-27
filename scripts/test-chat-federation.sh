@@ -145,6 +145,17 @@ kept_renames="$(compose exec -T postgres-b psql -U kutup -d kutup -Atc \
 # new inheriting nothing.
 run_phase account-ids
 
+# The federation outbox migration with deliveries mid-flight on both sides
+# (docs/plans/federation-outbox.md): run on a database made for it on A's
+# Postgres, from the migration before it, so peers mid-stream see no gap.
+compose exec -T postgres-a psql -U kutup -d kutup -q \
+  -c "DROP DATABASE IF EXISTS outbox_migration" -c "CREATE DATABASE outbox_migration"
+postgres_a="$(docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' \
+  "$(compose ps -q postgres-a)")"
+KUTUP_TEST_DB="postgres://kutup:federation_test_a@$postgres_a:5432/outbox_migration" \
+  cargo test -p kutup-server --test federation_outbox_migration_live -- --nocapture
+compose exec -T postgres-a psql -U kutup -d kutup -q -c "DROP DATABASE outbox_migration"
+
 # Pairwise groups' anonymous route (docs/plans/pairwise-groups.md §3): the
 # home's signed X-Wing key config, sealed requests relayed and answered. A's
 # administrator (set up in the setup phase) sets the link-join budget.
