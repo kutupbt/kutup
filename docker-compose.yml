@@ -88,6 +88,12 @@ services:
       S3_SECRET_KEY: ${S3_SECRET_KEY:-kutup_dev_s3_secret}
       S3_BUCKET: ${S3_BUCKET:-kutup-files}
       S3_REGION: ${S3_REGION:-us-east-1}
+      # The object store's timeouts (.env.example).
+      S3_CONNECT_TIMEOUT_SECONDS: ${S3_CONNECT_TIMEOUT_SECONDS:-}
+      S3_READ_TIMEOUT_SECONDS: ${S3_READ_TIMEOUT_SECONDS:-}
+      S3_STALL_SECONDS: ${S3_STALL_SECONDS:-}
+      S3_REQUEST_TIMEOUT_SECONDS: ${S3_REQUEST_TIMEOUT_SECONDS:-}
+      S3_MAX_ATTEMPTS: ${S3_MAX_ATTEMPTS:-}
       APP_ENV: ${APP_ENV:-production}
       # This server's canonical external address (docs/self-hosting.md). In
       # production it must be HTTPS; it also anchors the server identity that

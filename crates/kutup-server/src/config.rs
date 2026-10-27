@@ -23,6 +23,9 @@ pub struct Config {
     pub s3_secret_key: String,
     pub s3_bucket: String,
     pub s3_region: String,
+    /// How long the object store may take (`S3_*_TIMEOUT_SECONDS`,
+    /// `S3_STALL_SECONDS`, `S3_MAX_ATTEMPTS`).
+    pub s3_timeouts: crate::storage::S3Timeouts,
     pub app_env: String,
     /// The single bootstrap admin account, `username:password` (the password
     /// may hold colons). Created at first boot; this is the
@@ -426,6 +429,30 @@ impl Config {
         if !(1..=256).contains(&chat_group_max_members) {
             env.error("CHAT_GROUP_MAX_MEMBERS must be between 1 and 256");
         }
+        // The object store's limits: a stalled store fails a request instead
+        // of holding it (docs/self-hosting.md, "Object storage").
+        let s3_seconds = |key: &str, fallback: i64, range: std::ops::RangeInclusive<i64>| {
+            let value = get_env_i64(key, fallback);
+            if !range.contains(&value) {
+                env.error(format!(
+                    "{key} must be between {} and {}",
+                    range.start(),
+                    range.end()
+                ));
+            }
+            std::time::Duration::from_secs(value.clamp(*range.start(), *range.end()) as u64)
+        };
+        let s3_max_attempts = get_env_i64("S3_MAX_ATTEMPTS", 3);
+        if !(1..=10).contains(&s3_max_attempts) {
+            env.error("S3_MAX_ATTEMPTS must be between 1 and 10");
+        }
+        let s3_timeouts = crate::storage::S3Timeouts {
+            connect: s3_seconds("S3_CONNECT_TIMEOUT_SECONDS", 10, 1..=120),
+            read: s3_seconds("S3_READ_TIMEOUT_SECONDS", 60, 5..=900),
+            stall: s3_seconds("S3_STALL_SECONDS", 20, 5..=900),
+            request: s3_seconds("S3_REQUEST_TIMEOUT_SECONDS", 30, 5..=900),
+            max_attempts: s3_max_attempts.clamp(1, 10) as u32,
+        };
         let sealed_flush_lock_connections = get_env_i64("SEALED_FLUSH_LOCK_CONNECTIONS", 4);
         if !(1..=64).contains(&sealed_flush_lock_connections) {
             env.error("SEALED_FLUSH_LOCK_CONNECTIONS must be between 1 and 64");
@@ -513,6 +540,7 @@ impl Config {
             s3_secret_key: must_env("S3_SECRET_KEY"),
             s3_bucket: get_env("S3_BUCKET", "kutup-files"),
             s3_region: get_env("S3_REGION", "us-east-1"),
+            s3_timeouts,
             app_env,
             admin_account: get_env("ADMIN_ACCOUNT", ""),
             break_glass_admin_username: break_glass_username(&get_env("ADMIN_ACCOUNT", "")),

@@ -1397,6 +1397,7 @@ mod tests {
             &std::env::var("KUTUP_LIVE_S3_SECRET_KEY").unwrap(),
             &std::env::var("KUTUP_LIVE_S3_BUCKET").unwrap(),
             "us-east-1",
+            crate::storage::S3Timeouts::default(),
         );
         let pool = sqlx::postgres::PgPoolOptions::new()
             .max_connections(2)

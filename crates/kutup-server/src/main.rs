@@ -309,6 +309,7 @@ async fn main() -> anyhow::Result<()> {
         &config.s3_secret_key,
         &config.s3_bucket,
         &config.s3_region,
+        config.s3_timeouts,
     );
 
     // Subcommand dispatch — admin tooling that reuses the DB pool + storage without starting
