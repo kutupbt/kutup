@@ -1215,7 +1215,8 @@ pub fn check_own_manifest_head(
         // A pin this client can't read is no pin it trusts: none.
         serde_wasm_bindgen::from_value(pin).ok()
     };
-    let head: Option<kutup_chat_proto::AccountManifestV3> = if head.is_null() || head.is_undefined() {
+    let head: Option<kutup_chat_proto::AccountManifestV3> = if head.is_null() || head.is_undefined()
+    {
         None
     } else {
         Some(
