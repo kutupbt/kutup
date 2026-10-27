@@ -127,6 +127,18 @@ struct LocalStateVecs {
     session_fork: LocalStateVec,
     #[serde(rename = "webSession")]
     web_session: LocalStateVec,
+    #[serde(rename = "manifestPins")]
+    manifest_pins: ManifestPinsVec,
+}
+
+#[derive(Deserialize)]
+struct ManifestPinsVec {
+    #[serde(rename = "masterKey")]
+    master_key: String,
+    profile: String,
+    nonce: String,
+    plaintext: String,
+    envelope: String,
 }
 
 #[derive(Deserialize)]
@@ -677,6 +689,55 @@ fn local_state_fork_and_web_session_match_canonical_vectors() {
         let opened = local_state::open(&sealed, &key, purpose, &vec.profile).unwrap();
         assert_eq!(opened, b64(&vec.plaintext));
     }
+}
+
+/// A web app's manifest pins, sealed under the key its master key derives:
+/// another account's master key, another profile or purpose opens nothing.
+#[test]
+fn manifest_pins_match_the_canonical_vector() {
+    let v = load_crypto().local_state.manifest_pins;
+    let master: [u8; 32] = b64(&v.master_key).try_into().expect("32-byte master key");
+    let key = local_state::manifest_pins_key(&master).unwrap();
+    let nonce: [u8; 24] = b64(&v.nonce).try_into().expect("24-byte nonce");
+    let sealed = local_state::seal_with_nonce(
+        &b64(&v.plaintext),
+        key.as_slice(),
+        LocalStatePurpose::ManifestPins,
+        &v.profile,
+        &nonce,
+    )
+    .unwrap();
+    assert_eq!(sealed, b64(&v.envelope));
+    let opened = local_state::open(
+        &sealed,
+        key.as_slice(),
+        LocalStatePurpose::ManifestPins,
+        &v.profile,
+    )
+    .unwrap();
+    assert_eq!(opened, b64(&v.plaintext));
+    let other = local_state::manifest_pins_key(&[0x41; 32]).unwrap();
+    assert!(local_state::open(
+        &sealed,
+        other.as_slice(),
+        LocalStatePurpose::ManifestPins,
+        &v.profile
+    )
+    .is_err());
+    assert!(local_state::open(
+        &sealed,
+        key.as_slice(),
+        LocalStatePurpose::ManifestPins,
+        "web-drive:x"
+    )
+    .is_err());
+    assert!(local_state::open(
+        &sealed,
+        key.as_slice(),
+        LocalStatePurpose::WebSession,
+        &v.profile
+    )
+    .is_err());
 }
 
 #[test]

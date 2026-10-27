@@ -16,7 +16,7 @@
 
 import { isAxiosError } from 'axios'
 import { foldAddress, verifyAccountRenameChain, type AccountRenameV1 } from '@kutup/crypto/accountRename'
-import { sameAccount, type AccountRef } from '@kutup/crypto/accountRef'
+import { accountOfKey, sameAccount, type AccountRef } from '@kutup/crypto/accountRef'
 import {
   applyAccountRenameToPins,
   deriveSafetyNumber,
@@ -47,7 +47,8 @@ import {
   type VerifiedIndex,
 } from '@kutup/session/accountHead'
 import api from '@kutup/session/client'
-import type { DriveIdentity } from './identity'
+import { getSession } from '@kutup/session/store'
+import { driveIdentityOf, type DriveIdentity } from './identity'
 
 /**
  * What can be said about a person's keys:
@@ -594,6 +595,36 @@ export async function pinnedVerdict(me: DriveIdentity, account: AccountRef, addr
     case 'new':
       return { kind: 'unknown' }
   }
+}
+
+/**
+ * Whether `authority` speaks for `account` as far as the pin list knows, by
+ * the account alone (an editor's frames name no address):
+ * - `pinned`: the account is pinned to this authority;
+ * - `changed`: pinned to another (a reset, or a server handing out keys of
+ *   its own) the user hasn't accepted;
+ * - `unknown`: an account the list doesn't know (trusted on first use).
+ */
+export async function authorityVerdict(
+  me: DriveIdentity,
+  account: AccountRef,
+  authority: string,
+): Promise<'pinned' | 'changed' | 'unknown'> {
+  const pin = (await pinStore(me)).pins.list.pins.find((known) => sameAccount(known.account, account))
+  if (!pin) return 'unknown'
+  return pin.authorityPublicKey === authority ? 'pinned' : 'changed'
+}
+
+/**
+ * {@link authorityVerdict} for the signed-in account's pins, `account` as
+ * `aci:<uuid>@<server>`: what an editor checks a frame's sender with
+ * (`SenderCheck` in @kutup/collab).
+ */
+export async function accountAuthorityVerdict(account: string, authority: string): Promise<'pinned' | 'changed' | 'unknown'> {
+  const session = getSession()
+  const ref = accountOfKey(account)
+  if (!session || !ref) throw new Error('not signed in, or not an account')
+  return authorityVerdict(await driveIdentityOf(session), ref, authority)
 }
 
 /**

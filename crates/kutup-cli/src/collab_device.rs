@@ -7,7 +7,7 @@ use anyhow::{anyhow, Context, Result};
 use base64::engine::general_purpose::{STANDARD, URL_SAFE_NO_PAD};
 use base64::Engine as _;
 use kutup_chat_proto::{
-    AccountManifestDeviceV3, AccountManifestV3, DeviceKind, OwnManifestPinV1,
+    AccountManifestDeviceV3, AccountManifestPinV1, AccountManifestV3, DeviceKind,
     RegisterDeviceRequestV1,
 };
 use kutup_crypto::account_ref::AccountRef;
@@ -80,17 +80,17 @@ pub struct Signer<'a> {
 
 /// `head`, the account's head as its server gave it, checked against `pin`
 /// for the account `identity` holds the keys of
-/// ([`OwnManifestPinV1::check`]): the pin to keep. A head that doesn't
+/// ([`AccountManifestPinV1::check`]): the pin to keep. A head that doesn't
 /// verify (one the server changed: another Drive key, identity or device),
 /// one under another authority, an older one, or none once one was seen, is
 /// refused, and nothing is listed from it or signed after it.
 fn checked_head(
-    pin: Option<&OwnManifestPinV1>,
+    pin: Option<&AccountManifestPinV1>,
     head: Option<&AccountManifestV3>,
     account: &AccountRef,
     identity: &AccountIdentityKeysV1,
-) -> Result<Option<OwnManifestPinV1>> {
-    OwnManifestPinV1::check(pin, head, account, &identity.incarnation_id())
+) -> Result<Option<AccountManifestPinV1>> {
+    AccountManifestPinV1::check(pin, head, account, &identity.incarnation_id())
         .map_err(|error| anyhow!("the account's manifest can't be trusted: {error}"))
 }
 

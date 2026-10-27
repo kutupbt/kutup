@@ -1,7 +1,8 @@
 import { useQuery } from '@tanstack/react-query'
-import { sameAccount, type AccountRef } from '@kutup/crypto/accountRef'
+import { accountOfKey, sameAccount, type AccountRef } from '@kutup/crypto/accountRef'
 import api from '@kutup/session/client'
-import { useDriveIdentity, type DriveIdentity } from './identity'
+import { getSession } from '@kutup/session/store'
+import { driveIdentityOf, useDriveIdentity, type DriveIdentity } from './identity'
 import { pinnedNameOf } from './identityPins'
 
 // What to call an account that a record names by its permanent id
@@ -45,6 +46,17 @@ export function serverAddressOf(account: AccountRef, fresh = false): Promise<str
 export async function nameOfAccount(me: DriveIdentity, account: AccountRef): Promise<string | null> {
   if (sameAccount(account, me.accountRef)) return me.account
   return (await pinnedNameOf(me, account).catch(() => null)) ?? serverAddressOf(account)
+}
+
+/**
+ * {@link nameOfAccount} for `account` given as `aci:<uuid>@<server>`, as the
+ * signed-in account sees it; null when nobody can say.
+ */
+export async function accountNameOfKey(account: string): Promise<string | null> {
+  const ref = accountOfKey(account)
+  const session = getSession()
+  if (!ref || !session) return null
+  return nameOfAccount(await driveIdentityOf(session), ref).catch(() => null)
 }
 
 /** The address to show for `account` (null while unknown). */

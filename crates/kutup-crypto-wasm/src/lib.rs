@@ -138,7 +138,9 @@ pub(crate) fn chat_backup_context(
 fn web_local_state_purpose(purpose: u8) -> Result<LocalStatePurpose, JsValue> {
     match LocalStatePurpose::try_from(purpose).map_err(|error| js_error(&error.to_string()))? {
         p @ (LocalStatePurpose::SessionFork | LocalStatePurpose::WebSession) => Ok(p),
-        LocalStatePurpose::CliSession => Err(js_error(
+        // Manifest pins are sealed under a key the master key derives:
+        // `sealManifestPins`, never with a caller's key.
+        LocalStatePurpose::CliSession | LocalStatePurpose::ManifestPins => Err(js_error(
             "local-state purpose is not available to web clients",
         )),
     }
@@ -159,6 +161,62 @@ pub fn seal_local_state(
     let envelope = local_state::seal(&plaintext, &key, purpose, profile)
         .map_err(|error| js_error(&error.to_string()))?;
     Ok(STANDARD.encode(envelope))
+}
+
+/// This web app's manifest pins (docs/plans/one-device-list.md §8, slice 3):
+/// `pins`, a list of `AccountManifestPinV1`, sealed under the key the master
+/// key derives, for `profile` (`<client type>:<user id>`).
+#[wasm_bindgen(js_name = sealManifestPins)]
+pub fn seal_manifest_pins(
+    pins: JsValue,
+    master_key_base64: &str,
+    profile: &str,
+) -> Result<String, JsValue> {
+    let pins: Vec<kutup_chat_proto::AccountManifestPinV1> = serde_wasm_bindgen::from_value(pins)
+        .map_err(|error| js_error(&format!("manifest pins: {error}")))?;
+    let plaintext = serde_json::to_vec(&pins)
+        .map_err(|error| js_error(&format!("encode manifest pins: {error}")))?;
+    let key = manifest_pins_key_of(master_key_base64)?;
+    let envelope = local_state::seal(
+        &plaintext,
+        key.as_slice(),
+        LocalStatePurpose::ManifestPins,
+        profile,
+    )
+    .map_err(|error| js_error(&error.to_string()))?;
+    Ok(STANDARD.encode(envelope))
+}
+
+/// The pins `sealManifestPins` sealed; fails closed on another account's
+/// master key, another profile, or a changed envelope.
+#[wasm_bindgen(js_name = openManifestPins)]
+pub fn open_manifest_pins(
+    envelope_base64: &str,
+    master_key_base64: &str,
+    profile: &str,
+) -> Result<JsValue, JsValue> {
+    let envelope = decode_canonical_base64(envelope_base64, "manifest pins")?;
+    let key = manifest_pins_key_of(master_key_base64)?;
+    let plaintext = local_state::open(
+        &envelope,
+        key.as_slice(),
+        LocalStatePurpose::ManifestPins,
+        profile,
+    )
+    .map_err(|error| js_error(&error.to_string()))?;
+    let pins: Vec<kutup_chat_proto::AccountManifestPinV1> = serde_json::from_slice(&plaintext)
+        .map_err(|error| js_error(&format!("manifest pins: {error}")))?;
+    serde_wasm_bindgen::to_value(&pins)
+        .map_err(|error| js_error(&format!("encode manifest pins: {error}")))
+}
+
+fn manifest_pins_key_of(master_key_base64: &str) -> Result<zeroize::Zeroizing<[u8; 32]>, JsValue> {
+    let master_key: zeroize::Zeroizing<[u8; 32]> = zeroize::Zeroizing::new(
+        decode_canonical_base64(master_key_base64, "master key")?
+            .try_into()
+            .map_err(|_| js_error("master key must be 32 bytes"))?,
+    );
+    local_state::manifest_pins_key(&master_key).map_err(|error| js_error(&error.to_string()))
 }
 
 /// Open an envelope sealed by `sealLocalState` (or the Rust equivalent);
@@ -1197,7 +1255,7 @@ pub fn list_device_in_manifest(
 /// the master key derives; returns the pin to keep (null while there is
 /// none). Throws on a head that doesn't verify, names another account or
 /// incarnation, or is older than the pin, and on no head once there is a
-/// pin ([`kutup_chat_proto::OwnManifestPinV1::check`]).
+/// pin ([`kutup_chat_proto::AccountManifestPinV1::check`]).
 #[wasm_bindgen(js_name = checkOwnManifestHead)]
 pub fn check_own_manifest_head(
     pin: JsValue,
@@ -1209,7 +1267,8 @@ pub fn check_own_manifest_head(
     let account: kutup_crypto::account_ref::AccountRef = account
         .parse()
         .map_err(|_| js_error("an account reference is malformed"))?;
-    let pin: Option<kutup_chat_proto::OwnManifestPinV1> = if pin.is_null() || pin.is_undefined() {
+    let pin: Option<kutup_chat_proto::AccountManifestPinV1> = if pin.is_null() || pin.is_undefined()
+    {
         None
     } else {
         // A pin this client can't read is no pin it trusts: none.
@@ -1224,7 +1283,7 @@ pub fn check_own_manifest_head(
                 .map_err(|error| js_error(&format!("account manifest: {error}")))?,
         )
     };
-    let next = kutup_chat_proto::OwnManifestPinV1::check(
+    let next = kutup_chat_proto::AccountManifestPinV1::check(
         pin.as_ref(),
         head.as_ref(),
         &account,
@@ -3843,6 +3902,119 @@ impl RevisionGuardKeys {
         }
         Ok(revision as f64)
     }
+}
+
+// --- Collab senders (docs/plans/one-device-list.md §8, slice 3) --------------
+// What a page knows of one sender account, kept here so a frame's check costs
+// no copy of the account's manifests.
+
+/// One sender account's manifests, as a page knows them
+/// ([`kutup_chat_proto::SenderManifests`]).
+#[wasm_bindgen]
+pub struct CollabSender {
+    inner: kutup_chat_proto::SenderManifests,
+}
+
+#[wasm_bindgen]
+impl CollabSender {
+    /// A record of `account` (`aci:<uuid>@<server>`) from the page's pin of
+    /// it (null: none).
+    #[wasm_bindgen(constructor)]
+    pub fn new(account: &str, pin: JsValue) -> Result<CollabSender, JsValue> {
+        let account: kutup_crypto::account_ref::AccountRef = account
+            .parse()
+            .map_err(|_| js_error("an account reference is malformed"))?;
+        let pin = if pin.is_null() || pin.is_undefined() {
+            None
+        } else {
+            Some(
+                serde_wasm_bindgen::from_value(pin)
+                    .map_err(|error| js_error(&format!("manifest pin: {error}")))?,
+            )
+        };
+        Ok(Self {
+            inner: kutup_chat_proto::SenderManifests::new(account, pin),
+        })
+    }
+
+    /// Takes the account's head with the manifests after the pin up to it
+    /// (`history`); throws on one that doesn't follow the pin. `newIncarnation`:
+    /// the identity pins vouch for the head's authority (an accepted reset).
+    #[wasm_bindgen(js_name = takeHead)]
+    pub fn take_head(
+        &mut self,
+        head: JsValue,
+        history: JsValue,
+        new_incarnation: bool,
+    ) -> Result<(), JsValue> {
+        let head: kutup_chat_proto::AccountManifestV3 = serde_wasm_bindgen::from_value(head)
+            .map_err(|error| js_error(&format!("account manifest: {error}")))?;
+        let history: Vec<kutup_chat_proto::AccountManifestV3> =
+            if history.is_null() || history.is_undefined() {
+                Vec::new()
+            } else {
+                serde_wasm_bindgen::from_value(history)
+                    .map_err(|error| js_error(&format!("manifest history: {error}")))?
+            };
+        self.inner
+            .take_head(head, &history, new_incarnation)
+            .map_err(|error| js_error(&error))
+    }
+
+    /// Takes an earlier manifest of the account, for logged frames.
+    #[wasm_bindgen(js_name = takeEntry)]
+    pub fn take_entry(&mut self, manifest: JsValue) -> Result<(), JsValue> {
+        let manifest: kutup_chat_proto::AccountManifestV3 =
+            serde_wasm_bindgen::from_value(manifest)
+                .map_err(|error| js_error(&format!("account manifest: {error}")))?;
+        self.inner
+            .take_entry(manifest)
+            .map_err(|error| js_error(&error))
+    }
+
+    /// What to do with `delivered` (a frame as the server delivers it: its
+    /// sender, then the packed frame): `{ kind: 'take' }`, `{ kind:
+    /// 'needHead' }`, `{ kind: 'needManifest', sequence }` or `{ kind:
+    /// 'refuse', reason }`. A frame of another sender is refused.
+    pub fn check(&self, delivered: &[u8], live: bool) -> Result<JsValue, JsValue> {
+        let verdict = match envelope::delivered(delivered) {
+            Ok((sender, raw)) if sender == self.inner.account => self.inner.check(raw, live),
+            Ok(_) => kutup_chat_proto::SenderVerdict::Refuse {
+                reason: "the frame is another account's".into(),
+            },
+            Err(_) => kutup_chat_proto::SenderVerdict::Refuse {
+                reason: "the frame is malformed".into(),
+            },
+        };
+        serde_wasm_bindgen::to_value(&verdict)
+            .map_err(|error| js_error(&format!("encode verdict: {error}")))
+    }
+
+    /// The pin to keep for the account (null: none yet).
+    pub fn pin(&self) -> Result<JsValue, JsValue> {
+        match &self.inner.pin {
+            Some(pin) => serde_wasm_bindgen::to_value(pin)
+                .map_err(|error| js_error(&format!("encode manifest pin: {error}"))),
+            None => Ok(JsValue::NULL),
+        }
+    }
+
+    /// The head's authority public key (canonical base64), for the identity
+    /// pins; null before a head.
+    #[wasm_bindgen(js_name = headAuthority)]
+    pub fn head_authority(&self) -> JsValue {
+        self.inner.head.as_ref().map_or(JsValue::NULL, |head| {
+            JsValue::from_str(&head.self_authority_key)
+        })
+    }
+}
+
+/// The sender account (`aci:<uuid>@<server>`) a delivered frame names.
+#[wasm_bindgen(js_name = deliveredFrameSender)]
+pub fn delivered_frame_sender(delivered: &[u8]) -> Result<String, JsValue> {
+    envelope::delivered(delivered)
+        .map(|(sender, _)| sender.to_string())
+        .map_err(|error| js_error(&error.to_string()))
 }
 
 // --- OPAQUE sign-in (docs/plans/opaque.md) -----------------------------------

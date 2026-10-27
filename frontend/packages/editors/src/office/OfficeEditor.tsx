@@ -27,6 +27,10 @@ import { useSession } from '@kutup/session/store'
 import { CollabTransport, type BaseMsg, type HelloMsg, type PositionMsg } from '@kutup/collab/transport'
 import type { LogPosition } from '../snapshots'
 import { KIND } from '@kutup/collab/envelope'
+import { toast } from 'sonner'
+import { SenderCheck } from '@kutup/collab/senders'
+import { accountAuthorityVerdict } from '@kutup/drive-core/identityPins'
+import { accountNameOfKey } from '@kutup/drive-core/accountName'
 import { encryptCollabFrame, openCollabFrame } from '@kutup/collab/cryptoFrame'
 import { currentDevice, deviceRefused, stillListed, TooManyDevicesError, type CurrentDevice } from '@kutup/session/currentDevice'
 import { getOrCreateTabId, randomSenderSeqPrefix } from '@kutup/collab/identity'
@@ -428,6 +432,14 @@ function OfficeEditorBase(
   useEffect(() => {
     if (!docType || !live) return
     let alive = true
+    // Edits apply only when their sender's devices signed them; a sender
+    // whose edits are dropped is named once.
+    const senders = new SenderCheck({
+      authority: accountAuthorityVerdict,
+      name: accountNameOfKey,
+      onRefused: ({ name, reason }) =>
+        toast.error(t(reason === 'reset' ? 'editor.senderReset' : 'editor.senderUnverified', { name })),
+    })
 
     void (async () => {
       // 1. This sign-in's collaboration device.
@@ -515,7 +527,8 @@ function OfficeEditorBase(
         onPeers: (p) => {
           forwardPeers(p.list, p.ts)
         },
-        onFrame: async (bs: Uint8Array) => {
+        onFrame: async (bs: Uint8Array, { live }) => {
+          if (!(await senders.verify(bs, live))) return
           try {
             const f = await openCollabFrame(bs, fileKey, {
               fileId,
@@ -573,6 +586,7 @@ function OfficeEditorBase(
       alive = false
       transportRef.current?.close()
       transportRef.current = null
+      senders.close()
     }
     // The device is intentionally NOT a dep: registering one updates the
     // session, and React's re-render would otherwise tear down + recreate

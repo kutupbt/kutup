@@ -66,9 +66,11 @@ export interface CollabTransportOpts {
   /**
    * A frame as the server delivers it: the sender's account, then the packed
    * frame (`openCollabFrame` takes it whole). May be async (frames are
-   * decrypted); a rejection is reported to onError.
+   * decrypted); a rejection is reported to onError. `live`: it came after
+   * this connection's replay of the log (`replayed`); a frame of the replay
+   * is checked against the manifest it names, a live one against the head.
    */
-  onFrame: (bytes: Uint8Array) => void | Promise<void>
+  onFrame: (bytes: Uint8Array, meta: { live: boolean }) => void | Promise<void>
   onHello: (h: HelloMsg) => void
   onError: (e: unknown) => void
   /** Optional — fires when the server pushes an updated peer-list. */
@@ -176,6 +178,8 @@ export class CollabTransport {
     this.ws = ws
     ws.binaryType = 'arraybuffer'
     let opened = false
+    // Frames before this connection's `replayed` are the log's.
+    let replayed = false
 
     ws.addEventListener('open', () => {
       opened = true
@@ -207,6 +211,7 @@ export class CollabTransport {
             else if (obj.type === 'stored' && typeof obj.seq === 'number') {
               await this.opts.onPosition?.({ type: 'stored', seq: obj.seq })
             } else if (obj.type === 'replayed' && typeof obj.throughSeq === 'number') {
+              replayed = true
               await this.opts.onPosition?.({
                 type: 'replayed',
                 throughSeq: obj.throughSeq,
@@ -218,7 +223,7 @@ export class CollabTransport {
             const arr = ev.data instanceof ArrayBuffer
               ? new Uint8Array(ev.data)
               : new Uint8Array(ev.data as ArrayBufferLike)
-            await this.opts.onFrame(arr)
+            await this.opts.onFrame(arr, { live: replayed })
           }
         })
         .catch((e: unknown) => this.opts.onError(e))

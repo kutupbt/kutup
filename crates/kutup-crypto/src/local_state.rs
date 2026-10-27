@@ -10,6 +10,12 @@
 //!   sealed under a per-session key only the server holds. Profile =
 //!   `<client type>:<session id>`, so a blob cannot be replayed into another
 //!   session even on the same origin.
+//! - `ManifestPins` — the newest manifest a web app has seen of each account
+//!   it met (docs/plans/one-device-list.md §8, slice 3), kept in
+//!   `localStorage` when the app keeps its sign-in. Sealed under a key the
+//!   master key derives ([`manifest_pins_key`]), so the list survives a new
+//!   sign-in on the same browser yet reveals nothing (who one edits with) to
+//!   anyone holding only the disk. Profile = `<client type>:<user id>`.
 //!
 //! This is not a federated protocol format, but it still uses the project-wide
 //! XChaCha20-Poly1305 palette and authenticates its suite, purpose, profile and
@@ -17,7 +23,21 @@
 //! fails closed even when both profiles were configured with the same key.
 
 use crate::error::{CryptoError, Result};
-use crate::primitives::{Aead, Suite};
+use crate::primitives::{Aead, Kdf, Suite};
+use zeroize::Zeroizing;
+
+const MANIFEST_PINS_KEY_SALT: &[u8] = b"kutup/manifest-pins/v1\0";
+const MANIFEST_PINS_KEY_INFO: &[u8] = b"kutup/manifest-pins/key/v1\0";
+
+/// The key `ManifestPins` envelopes are sealed under, derived from the
+/// account's master key.
+pub fn manifest_pins_key(master_key: &[u8; 32]) -> Result<Zeroizing<[u8; 32]>> {
+    let mut key = Zeroizing::new([0u8; 32]);
+    Kdf::new(Suite::V1, MANIFEST_PINS_KEY_SALT, master_key)
+        .expand(MANIFEST_PINS_KEY_INFO, key.as_mut_slice())
+        .map_err(|_| CryptoError::Backend("manifest pins key HKDF expand".into()))?;
+    Ok(key)
+}
 
 const MAGIC: &[u8; 8] = b"KUTPLS1\0";
 const NONCE_LEN: usize = 24;
@@ -57,6 +77,7 @@ pub enum LocalStatePurpose {
     CliSession = 1,
     SessionFork = 2,
     WebSession = 3,
+    ManifestPins = 4,
 }
 
 impl LocalStatePurpose {
@@ -73,6 +94,7 @@ impl TryFrom<u8> for LocalStatePurpose {
             1 => Ok(Self::CliSession),
             2 => Ok(Self::SessionFork),
             3 => Ok(Self::WebSession),
+            4 => Ok(Self::ManifestPins),
             _ => Err(CryptoError::InvalidInput(format!(
                 "unknown local-state purpose {value}"
             ))),

@@ -59,6 +59,37 @@ impl Client {
         Ok(Some(super::decode_json(resp)?))
     }
 
+    /// `account`'s manifests from `from` through `to`, every page
+    /// (`manifest-history`); whoever reads them verifies them.
+    pub fn account_manifest_history(
+        &self,
+        account: &AccountRef,
+        from: u64,
+        to: u64,
+    ) -> Result<Vec<AccountManifestV3>> {
+        let mut out = Vec::new();
+        let mut page_from = Some(from);
+        for _ in 0..16 {
+            let Some(page) = page_from else { break };
+            let resp = self
+                .request(
+                    Method::GET,
+                    &format!("/chat/accounts/{}/manifest-history", account.account_id),
+                )
+                .query(&[
+                    ("server", account.server.clone()),
+                    ("fromSequence", from.to_string()),
+                    ("toSequence", to.to_string()),
+                    ("pageFromSequence", page.to_string()),
+                ])
+                .send()?;
+            let page: kutup_chat_proto::AccountManifestHistoryPageV3 = super::decode_json(resp)?;
+            out.extend(page.manifests);
+            page_from = page.next_sequence;
+        }
+        Ok(out)
+    }
+
     /// Publishes the account's next manifest as the device `by` names
     /// (`X-Kutup-Device`).
     pub fn publish_manifest(&self, manifest: &AccountManifestV3, by: &str) -> Result<()> {

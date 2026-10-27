@@ -5,6 +5,9 @@ import { toast } from 'sonner'
 import type * as Y from 'yjs'
 import { getCursorColor } from '@kutup/collab/identity'
 import { deterministicSeed, openCollabSession, type CollabSession } from '@kutup/collab/session'
+import { SenderCheck } from '@kutup/collab/senders'
+import { accountNameOfKey } from '@kutup/drive-core/accountName'
+import { accountAuthorityVerdict } from '@kutup/drive-core/identityPins'
 import { TooManyDevicesError } from '@kutup/session/currentDevice'
 import { fileKeyAt } from '@kutup/drive-core/keyring'
 import { collabBase, fileLocation, type DriveFile, type Folder } from '@kutup/drive-core/model'
@@ -146,6 +149,13 @@ export function useListSession(file: DriveFile | null, readOnly: boolean, folder
             picture()
           },
           onCollaborators: setCollaborators,
+          // Edits apply only when their sender's devices signed them.
+          senders: new SenderCheck({
+            authority: accountAuthorityVerdict,
+            name: accountNameOfKey,
+            onRefused: ({ name, reason }) =>
+              toast.error(t(reason === 'reset' ? 'list.senderReset' : 'list.senderUnverified', { name })),
+          }),
           signal: controller.signal,
         })
         if (!session) return

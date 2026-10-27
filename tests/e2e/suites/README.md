@@ -14,6 +14,6 @@ right file here, not into `.github/workflows/ci.yml`.
 | `pass.txt` | Mail browser specs: Pass step |
 | `calendar.txt` | Mail browser specs: Calendar step |
 | `account.txt` | Mail browser specs: Account step |
-| `office.txt` | Mail browser specs: Office collaboration step |
+| `office.txt` | Mail browser specs: Office collaboration step (and collab sender verification) |
 | `mail-domains.txt` | Mail custom domains browser specs (`scripts/test-mail-domains-browser.sh`, on the mail gate's stack) |
 | `chat-backup.txt` | Clean-browser Chat backup recovery |

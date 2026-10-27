@@ -6,6 +6,8 @@ import type * as Y from 'yjs'
 import { getCursorColor } from '@kutup/collab/identity'
 import { accountKeyOf } from '@kutup/crypto/accountRef'
 import { deterministicSeed, openCollabSession } from '@kutup/collab/session'
+import { SenderCheck } from '@kutup/collab/senders'
+import { accountAuthorityVerdict } from '@kutup/drive-core/identityPins'
 import { TooManyDevicesError } from '@kutup/session/currentDevice'
 import { filesKey } from '@kutup/drive-core/files'
 import { useDriveIdentity } from '@kutup/drive-core/identity'
@@ -58,6 +60,9 @@ async function editOnce(
       if (status === 'ready') settle?.resolve()
       else if (status === 'error') settle?.reject(new ListBusy())
     },
+    // A change made without the list open: what isn't its sender's is left
+    // out quietly (the list, when opened, names its senders).
+    senders: new SenderCheck({ authority: accountAuthorityVerdict }),
     signal: controller.signal,
   })
   if (!session) {

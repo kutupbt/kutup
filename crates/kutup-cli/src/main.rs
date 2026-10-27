@@ -19,6 +19,7 @@ mod keyring;
 mod mimetype;
 mod names;
 mod output;
+mod senders;
 mod session;
 #[cfg(unix)]
 mod sshagent;
