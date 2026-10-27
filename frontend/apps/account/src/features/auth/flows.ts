@@ -1,11 +1,11 @@
 // The account app's sign-in flows. The crypto steps are the canonical ones
-// from @kutup/crypto (Argon2id in a worker, typed account envelopes); this
+// from @kutup/crypto (OPAQUE in a worker, typed account envelopes); this
 // file sequences them against the API and hands the unlocked keys to the
 // session layer, which activates and persists them for this origin.
 
 import {
   ACCOUNT_ENVELOPE_PURPOSE,
-  decryptPrivateKey,
+  driveKeysOf,
   generateAccountKeySet,
   openAccountEnvelope,
   rebindAccountKeySet,
@@ -35,7 +35,6 @@ interface LoginResponse {
   userId: string
   username: string
   masterKeyEnvelope: string
-  drivePrivateKeyEnvelope: string
   publicKey: string
   /** What the account's keys are bound to (docs/plans/account-identity.md); only with a session. */
   keyBinding?: string
@@ -127,8 +126,14 @@ async function finishSignIn(data: LoginResponse, opened: OpaqueSignIn): Promise<
     // The master envelope opens only under its own binding, so once it has
     // opened the binding is verified.
     const masterKey = await opened.openMasterKey(data.masterKeyEnvelope, binding)
-    const privateKey = await decryptPrivateKey(data.drivePrivateKeyEnvelope, masterKey, binding)
-    await activate(data, { userId: data.userId, masterKey, privateKey, publicKey: data.publicKey, keyBinding: binding })
+    // The Drive keys are derived from the master key, never stored
+    // (docs/plans/w6-key-hierarchy.md §1); the server must publish the same.
+    const { publicKey, privateKey } = await driveKeysOf(masterKey)
+    if (publicKey !== data.publicKey) {
+      privateKey.fill(0)
+      throw new Error("the server publishes another Drive key than this account's")
+    }
+    await activate(data, { userId: data.userId, masterKey, privateKey, publicKey, keyBinding: binding })
     // A new server setup: the password just used (held by the sign-in's
     // worker) is registered again under it, without asking. A failure leaves
     // the old record, and the next sign-in asks again.
@@ -256,7 +261,6 @@ function registrationBody(keys: AccountKeys) {
     opaqueServerKeyId: keys.opaqueServerKeyId,
     masterKeyEnvelope: keys.masterKeyEnvelope,
     recoveryKeyEnvelope: keys.recoveryKeyEnvelope,
-    drivePrivateKeyEnvelope: keys.drivePrivateKeyEnvelope,
     publicKey: keys.publicKey,
     accountAuthorityPublicKey: keys.accountAuthorityPublicKey,
     accountAuthorityKeyId: keys.accountAuthorityKeyId,

@@ -7,7 +7,7 @@ vi.mock('@kutup/session/client', () => ({ default: { post, get: vi.fn() } }))
 vi.mock('@kutup/session/persist', () => ({ persistKeys: vi.fn() }))
 const crypto_ = vi.hoisted(() => ({
   toBase64: () => 'master',
-  decryptPrivateKey: vi.fn(() => Promise.resolve(new Uint8Array(32))),
+  driveKeysOf: vi.fn(() => Promise.resolve({ publicKey: 'p', privateKey: new Uint8Array(32) })),
   generateAccountKeySet: vi.fn((binding: string) => Promise.resolve({ mnemonic: 'words', masterKey: new Uint8Array(32), recoveryProof: `proof-${binding}` })),
   rebindAccountKeySet: vi.fn((keys: { mnemonic: string }, binding: string) =>
     Promise.resolve({ mnemonic: keys.mnemonic, masterKey: new Uint8Array(32), recoveryProof: `proof-${binding}`, recoveryKeyEnvelope: `recovery-${binding}` }),
@@ -71,7 +71,7 @@ function openSignIn() {
   return { request: 'ke1', finish: vi.fn(), openMasterKey: vi.fn(() => Promise.resolve(new Uint8Array(32))), register: vi.fn(), close: vi.fn() }
 }
 
-const session = { accessToken: 'a', sessionId: 's', userId: 'u', username: 'alice', masterKeyEnvelope: 'm', drivePrivateKeyEnvelope: 'd', publicKey: 'p', keyBinding: 'kb' }
+const session = { accessToken: 'a', sessionId: 's', userId: 'u', username: 'alice', masterKeyEnvelope: 'm', publicKey: 'p', keyBinding: 'kb' }
 
 describe('signIn', () => {
   it('registers nothing again unless the server asks, and ends the sign-in', async () => {

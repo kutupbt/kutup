@@ -563,13 +563,6 @@ fn registration_payload(
         &binding,
     )
     .unwrap();
-    let drive_private_key_envelope = account_envelope::seal_b64(
-        identity.drive_hpke_private_key(),
-        &master_key,
-        AccountEnvelopePurpose::DriveHpkePrivateKey,
-        &binding,
-    )
-    .unwrap();
 
     let mut payload = json!({
         "keyBinding": binding,
@@ -578,7 +571,6 @@ fn registration_payload(
         "opaqueServerKeyId": opaque_server_key_id,
         "masterKeyEnvelope": master_key_envelope,
         "recoveryKeyEnvelope": recovery_key_envelope,
-        "drivePrivateKeyEnvelope": drive_private_key_envelope,
         "publicKey": b64(&identity.drive_hpke_public_key()),
         "accountAuthorityPublicKey": b64(&identity.authority_public_key()),
         "accountAuthorityKeyId": identity.authority_key_id(),

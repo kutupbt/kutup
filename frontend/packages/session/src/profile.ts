@@ -1,7 +1,6 @@
 // Turn unlocked keys + a live access token into the app's Session.
 
 import api from './client'
-import { upgradedKeys } from './identitySuite'
 import type { SessionKeys } from './keys'
 import { resetSessionVersion, setSessionVersionHandler } from './sessionVersion'
 import { signOut } from './signOut'
@@ -73,9 +72,6 @@ export async function activateSession(
     keys.privateKey.fill(0)
     throw new KeyBindingMismatchError()
   }
-  // An account from before X-Wing Drive keys moves to them before any app
-  // uses its keys (docs/plans/pq-shares.md).
-  keys = await upgradedKeys(keys, me, accessToken)
   setSession(
     {
       sessionId,

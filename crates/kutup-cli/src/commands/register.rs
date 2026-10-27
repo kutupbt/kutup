@@ -87,13 +87,6 @@ pub fn run(json: bool, server_flag: Option<&str>, username_flag: Option<&str>) -
         &key_binding,
     )
     .context("seal recovery envelope")?;
-    let drive_private_key_envelope = account_envelope::seal_b64(
-        account_identity.drive_hpke_private_key(),
-        &*master_key,
-        AccountEnvelopePurpose::DriveHpkePrivateKey,
-        &key_binding,
-    )
-    .context("seal Drive private-key envelope")?;
     let phrase = mnemonic::encode(&*recovery_entropy).context("encode mnemonic")?;
 
     // The account the server minted for this sign-up (its permanent id),
@@ -120,7 +113,6 @@ pub fn run(json: bool, server_flag: Option<&str>, username_flag: Option<&str>) -
         opaque_server_key_id: started.server_key_id,
         master_key_envelope,
         recovery_key_envelope,
-        drive_private_key_envelope,
         public_key: b64.encode(account_identity.drive_hpke_public_key()),
         account_authority_public_key: b64.encode(account_identity.authority_public_key()),
         account_authority_key_id: account_identity.authority_key_id(),

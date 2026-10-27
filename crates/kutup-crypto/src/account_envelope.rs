@@ -66,7 +66,9 @@ impl TryFrom<u16> for AccountEnvelopeSuiteId {
 pub enum AccountEnvelopePurpose {
     PasswordMasterKey = 1,
     RecoveryMasterKey = 2,
-    DriveHpkePrivateKey = 3,
+    // 3 was the Drive X-Wing private key, which is derived from the master
+    // key and never stored (docs/plans/w6-key-hierarchy.md §1): reserved,
+    // never reused.
     ChatBackupRoot = 4,
     /// A mail address's OpenPGP secret key (`mail_key`).
     MailAddressPrivateKey = 5,
@@ -108,10 +110,7 @@ impl AccountEnvelopePurpose {
             mutable: false,
         };
         match self {
-            Self::PasswordMasterKey
-            | Self::RecoveryMasterKey
-            | Self::DriveHpkePrivateKey
-            | Self::ChatBackupRoot => KEY,
+            Self::PasswordMasterKey | Self::RecoveryMasterKey | Self::ChatBackupRoot => KEY,
             // The address and the key's algorithm decide its length.
             Self::MailAddressPrivateKey => PurposePolicy {
                 object: ObjectPolicy::None,
@@ -130,10 +129,9 @@ impl AccountEnvelopePurpose {
     }
 
     /// Every purpose, for tests and vectors.
-    pub const ALL: [Self; 6] = [
+    pub const ALL: [Self; 5] = [
         Self::PasswordMasterKey,
         Self::RecoveryMasterKey,
-        Self::DriveHpkePrivateKey,
         Self::ChatBackupRoot,
         Self::MailAddressPrivateKey,
         Self::PassVaultSecret,
@@ -147,7 +145,6 @@ impl TryFrom<u8> for AccountEnvelopePurpose {
         match value {
             1 => Ok(Self::PasswordMasterKey),
             2 => Ok(Self::RecoveryMasterKey),
-            3 => Ok(Self::DriveHpkePrivateKey),
             4 => Ok(Self::ChatBackupRoot),
             5 => Ok(Self::MailAddressPrivateKey),
             6 => Ok(Self::PassVaultSecret),

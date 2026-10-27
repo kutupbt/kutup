@@ -265,11 +265,10 @@ pub async fn create_user(
         r#"INSERT INTO users (
                username, key_binding, opaque_record, opaque_suite, opaque_server_key_id,
                master_key_envelope, recovery_key_envelope,
-               drive_private_key_envelope,
                public_key, account_authority_public_key, account_authority_key_id,
                account_incarnation_id, drive_signing_public_key,
                is_admin, is_first_login, storage_quota_bytes
-           ) VALUES ($1,$2,$3,$4,$5,'','','','','','','','',false,true,$6)
+           ) VALUES ($1,$2,$3,$4,$5,'','','','','','','',false,true,$6)
            RETURNING id"#,
     )
     .bind(&req.username)
@@ -2325,7 +2324,6 @@ pub async fn wipe_user(
     sqlx::query(
         r#"UPDATE users SET
                master_key_envelope = '', recovery_key_envelope = '',
-               drive_private_key_envelope = '',
                public_key = '', account_authority_public_key = '',
                account_authority_key_id = '', account_incarnation_id = '',
                drive_signing_public_key = '',
@@ -2730,9 +2728,9 @@ mod tests {
         for user_id in [reset, kept] {
             sqlx::query(
                 "INSERT INTO users (id, username, master_key_envelope, recovery_key_envelope,
-                    drive_private_key_envelope, public_key, account_authority_public_key,
+                    public_key, account_authority_public_key,
                     account_authority_key_id, account_incarnation_id, drive_signing_public_key)
-                 VALUES ($1, $2, '', '', '', '', '', '', '', '')",
+                 VALUES ($1, $2, '', '', '', '', '', '', '')",
             )
             .bind(user_id)
             .bind(format!("reset{}", &user_id.simple().to_string()[..12]))

@@ -151,10 +151,12 @@ sequenceDiagram
    **access token** (short-lived JWT) in the JSON body and sets the **refresh
    token** as an HTTP-only `refresh_token` cookie scoped to
    `/api/auth/refresh`.
-4. The answer carries `masterKeyEnvelope` and `drivePrivateKeyEnvelope`. The
-   client opens them locally with the key-encryption key from the export key,
-   with the expected key binding and purposes. The server never holds anything
-   that opens either. The master key lives only in client memory.
+4. The answer carries `masterKeyEnvelope`. The client opens it locally with
+   the key-encryption key from the export key, with the expected key binding
+   and purpose, and derives the account's keys (the authority and the Drive
+   keys) from the master key: they are never stored
+   (docs/plans/w6-key-hierarchy.md). The server never holds anything that
+   opens the envelope. The master key lives only in client memory.
 5. If 2FA is enabled, the server returns `{requiresTotp: true, preAuthToken: ...}` instead of full tokens. The client completes login at `POST /api/auth/login/2fa` with a TOTP code before receiving the full JWT.
 6. For accounts an administrator created (or `ADMIN_ACCOUNT`) that have not yet generated a recovery phrase, the server returns `{requiresSetup: true, setupToken: ...}`. The client derives a fresh key bundle, registers its own password, and submits both to `POST /api/auth/complete-setup`.
 7. Re-authentication (the Pass PIN, a new password, an admin reset) is the

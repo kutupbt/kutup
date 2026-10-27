@@ -432,9 +432,9 @@ mod tests {
         for (id, name) in [(a, &name_a), (b, &name_b)] {
             sqlx::query(
                 "INSERT INTO users (id, username, master_key_envelope, recovery_key_envelope,
-                    drive_private_key_envelope, public_key, account_authority_public_key,
+                    public_key, account_authority_public_key,
                     account_authority_key_id, account_incarnation_id, drive_signing_public_key)
-                 VALUES ($1, $2, '', '', '', '', '', '', '', '')",
+                 VALUES ($1, $2, '', '', '', '', '', '', '')",
             )
             .bind(id)
             .bind(name)
@@ -508,9 +508,9 @@ mod tests {
         let incarnation = "a".repeat(64);
         sqlx::query(
             "INSERT INTO users (id, username, master_key_envelope, recovery_key_envelope,
-                drive_private_key_envelope, public_key, account_authority_public_key,
+                public_key, account_authority_public_key,
                 account_authority_key_id, account_incarnation_id, drive_signing_public_key)
-             VALUES ($1, $2, '', '', '', '', '', '', $3, '')",
+             VALUES ($1, $2, '', '', '', '', '', $3, '')",
         )
         .bind(user_id)
         .bind(&current)
@@ -595,9 +595,9 @@ mod tests {
         );
         sqlx::query(
             "INSERT INTO users (id, username, master_key_envelope, recovery_key_envelope,
-                drive_private_key_envelope, public_key, account_authority_public_key,
+                public_key, account_authority_public_key,
                 account_authority_key_id, account_incarnation_id, drive_signing_public_key)
-             VALUES ($1, $2, '', '', '', '', '', '', '', '')",
+             VALUES ($1, $2, '', '', '', '', '', '', '')",
         )
         .bind(user_id)
         .bind(&current)

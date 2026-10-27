@@ -4,7 +4,8 @@ import { getCryptoWasm } from './rustWasm'
 export const ACCOUNT_ENVELOPE_PURPOSE = {
   passwordMasterKey: 1,
   recoveryMasterKey: 2,
-  driveHpkePrivateKey: 3,
+  // 3 was the Drive X-Wing private key, now derived from the master key and
+  // never stored (docs/plans/w6-key-hierarchy.md §1): reserved.
   chatBackupRoot: 4,
   /** A mail address's OpenPGP secret key. */
   mailAddressPrivateKey: 5,

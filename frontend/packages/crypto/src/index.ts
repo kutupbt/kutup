@@ -168,7 +168,6 @@ export {
  */
 export interface AccountKeySet {
   recoveryKeyEnvelope: string // canonical base64 AccountEnvelopeV1
-  drivePrivateKeyEnvelope: string // canonical base64 AccountEnvelopeV1
   publicKey: string // base64
   accountAuthorityPublicKey: string
   accountAuthorityKeyId: string
@@ -226,15 +225,8 @@ async function sealAccountKeySet(masterKey: Uint8Array, recoveryKeyEntropy: Uint
     ACCOUNT_ENVELOPE_PURPOSE.recoveryMasterKey,
     binding,
   )
-  const drivePrivateKeyEnvelope = await sealAccountEnvelope(
-    driveHpkePrivateKey,
-    masterKey,
-    ACCOUNT_ENVELOPE_PURPOSE.driveHpkePrivateKey,
-    binding,
-  )
   return {
     recoveryKeyEnvelope,
-    drivePrivateKeyEnvelope,
     publicKey: toBase64(driveHpkePublicKey),
     accountAuthorityPublicKey: accountIdentity.authorityPublicKey,
     accountAuthorityKeyId: accountIdentity.authorityKeyId,
@@ -248,23 +240,14 @@ async function sealAccountKeySet(masterKey: Uint8Array, recoveryKeyEntropy: Uint
 }
 
 /**
- * The account's current Drive keys (X-Wing, docs/plans/pq-shares.md), derived
- * again from its master key, with the private key sealed to `binding`: what
- * an account from before them publishes once (`POST /account/identity-suite`).
+ * The account's Drive keys (X-Wing, docs/plans/pq-shares.md), derived from
+ * its master key: they are never stored (docs/plans/w6-key-hierarchy.md §1).
  */
-export async function currentDriveKeys(
+export async function driveKeysOf(
   masterKey: Uint8Array,
-  binding: string,
-): Promise<{ publicKey: string; privateKey: Uint8Array; drivePrivateKeyEnvelope: string }> {
+): Promise<{ publicKey: string; privateKey: Uint8Array }> {
   const identity = await deriveAccountIdentityKeys(toBase64(masterKey))
-  const privateKey = fromBase64(identity.driveHpkePrivateKey)
-  const drivePrivateKeyEnvelope = await sealAccountEnvelope(
-    privateKey,
-    masterKey,
-    ACCOUNT_ENVELOPE_PURPOSE.driveHpkePrivateKey,
-    binding,
-  )
-  return { publicKey: identity.driveHpkePublicKey, privateKey, drivePrivateKeyEnvelope }
+  return { publicKey: identity.driveHpkePublicKey, privateKey: fromBase64(identity.driveHpkePrivateKey) }
 }
 
 export interface LoginResult {
@@ -272,16 +255,4 @@ export interface LoginResult {
   privateKey: Uint8Array
 }
 
-export async function decryptPrivateKey(
-  drivePrivateKeyEnvelope: string,
-  masterKey: Uint8Array,
-  binding: string,
-): Promise<Uint8Array> {
-  return openAccountEnvelope(
-    drivePrivateKeyEnvelope,
-    masterKey,
-    ACCOUNT_ENVELOPE_PURPOSE.driveHpkePrivateKey,
-    binding,
-  )
-}
 export { yjsSeedClientId } from './yjsSeed'

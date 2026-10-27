@@ -40,7 +40,6 @@ pub struct RegisterRequest {
     pub opaque_server_key_id: u16,
     pub master_key_envelope: String,
     pub recovery_key_envelope: String,
-    pub drive_private_key_envelope: String,
     pub public_key: String,
     pub account_authority_public_key: String,
     pub account_authority_key_id: String,
@@ -73,8 +72,6 @@ pub struct LoginResponse {
     #[serde(default)]
     pub master_key_envelope: String,
     #[serde(default)]
-    pub drive_private_key_envelope: String,
-    #[serde(default)]
     pub public_key: String,
     /// What the account's sealed keys are bound to; only with a session.
     #[serde(default, rename = "keyBinding")]
@@ -85,10 +82,6 @@ pub struct LoginResponse {
     pub rotate: bool,
     #[serde(default)]
     pub grant: Option<String>,
-    /// 1: the account's Drive key is still X25519 and this sign-in upgrades
-    /// it (docs/plans/pq-shares.md).
-    #[serde(default)]
-    pub identity_suite: Option<i16>,
     #[serde(default)]
     pub requires_totp: bool,
     /// The second steps the account has: `securityKey`, `totp`,
