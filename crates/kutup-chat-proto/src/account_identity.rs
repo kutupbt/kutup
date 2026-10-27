@@ -728,6 +728,7 @@ impl AccountManifestV3 {
 ///   an existing one.
 /// - Another account's head only moves forward from it
 ///   ([`crate::SenderManifests`]).
+///
 /// The pin names its incarnation: a reset account's new keys start a chain
 /// of their own, and the old pin no longer applies.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
