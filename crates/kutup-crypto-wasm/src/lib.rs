@@ -165,7 +165,7 @@ pub fn seal_local_state(
 
 /// This web app's manifest pins (docs/plans/one-device-list.md §8, slice 3):
 /// `pins`, a list of `AccountManifestPinV1`, sealed under the key the master
-/// key derives, for `profile` (`<client type>:<account>`).
+/// key derives, for `profile` (`<client type>:<user id>`).
 #[wasm_bindgen(js_name = sealManifestPins)]
 pub fn seal_manifest_pins(
     pins: JsValue,

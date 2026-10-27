@@ -114,7 +114,7 @@ export async function deliveredFrameSender(delivered: Uint8Array): Promise<strin
   return (await getCryptoWasm()).deliveredFrameSender(delivered)
 }
 
-/** `pins` sealed under the key `masterKeyBase64` derives, for `profile` (`<client type>:<account>`). */
+/** `pins` sealed under the key `masterKeyBase64` derives, for `profile` (`<client type>:<user id>`). */
 export async function sealManifestPins(pins: AccountManifestPin[], masterKeyBase64: string, profile: string): Promise<string> {
   return (await getCryptoWasm()).sealManifestPins(pins, masterKeyBase64, profile)
 }

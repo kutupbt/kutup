@@ -15,7 +15,7 @@
 //!   `localStorage` when the app keeps its sign-in. Sealed under a key the
 //!   master key derives ([`manifest_pins_key`]), so the list survives a new
 //!   sign-in on the same browser yet reveals nothing (who one edits with) to
-//!   anyone holding only the disk. Profile = `<client type>:<account>`.
+//!   anyone holding only the disk. Profile = `<client type>:<user id>`.
 //!
 //! This is not a federated protocol format, but it still uses the project-wide
 //! XChaCha20-Poly1305 palette and authenticates its suite, purpose, profile and

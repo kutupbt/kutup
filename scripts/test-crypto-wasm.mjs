@@ -500,6 +500,21 @@ assert.throws(
   () => crypto.sealLocalState(localState.sessionFork.plaintext, localState.key, 1, 'default'),
   /not available to web clients/,
 )
+// Manifest pins (purpose 4): sealed under the key the master key derives,
+// only through sealManifestPins/openManifestPins, never a caller's key.
+{
+  const pins = localState.manifestPins
+  const plain = JSON.parse(Buffer.from(pins.plaintext, 'base64').toString('utf8'))
+  assert.deepEqual(crypto.openManifestPins(pins.envelope, pins.masterKey, pins.profile), plain)
+  const resealed = crypto.sealManifestPins(plain, pins.masterKey, pins.profile)
+  assert.deepEqual(crypto.openManifestPins(resealed, pins.masterKey, pins.profile), plain)
+  assert.throws(() => crypto.openManifestPins(pins.envelope, localState.key, pins.profile))
+  assert.throws(() => crypto.openManifestPins(pins.envelope, pins.masterKey, 'web-drive:x'))
+  assert.throws(
+    () => crypto.sealLocalState(pins.plaintext, localState.key, 4, pins.profile),
+    /not available to web clients/,
+  )
+}
 
 // Thumbnails: the canonical envelope opens to the vector's picture, only as
 // its own variant, file and key generation; a fresh seal round-trips; the
