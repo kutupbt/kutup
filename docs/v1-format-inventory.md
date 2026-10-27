@@ -9,7 +9,7 @@ dual-written. This destructive rule expires at the first stable `v*` tag.
 
 | Purpose | Pre-V1 shape | V1 owner and format |
 |---|---|---|
-| Master-key password wrap | XSalsa20 secretbox plus separate nonce; implicit Argon parameters | **Implemented:** `AccountProtectionSuiteId` plus suite-bearing `AccountEnvelopeV1` (suite 2, bound to the account's key binding), XChaCha and persisted Argon2id parameters |
+| Master-key password wrap | XSalsa20 secretbox plus separate nonce; implicit Argon parameters | **Implemented:** OPAQUE for the password (its Argon2id in the OPAQUE key-stretching function), and the suite-bearing `AccountEnvelopeV1` (suite 2, bound to the account's key binding, XChaCha) for the wrap |
 | Master-key recovery wrap | XSalsa20 secretbox under random recovery entropy | **Implemented:** `AccountEnvelopeV1` (suite 2) with recovery purpose, the account's key binding as context, and XChaCha |
 | Account sharing private key | XSalsa20 secretbox; public X25519 key stored separately | **Implemented:** account-scoped Drive keys in `AccountManifestV1`; private material wrapped by the Drive-private-key purpose of `AccountEnvelopeV1` |
 | Collection name/key | Separate ciphertext/nonce columns with implicit secretbox | **Implemented end to end:** client-generated collection UUID, `DriveEnvelopeV1` owner-key/name records (names padded to 256-byte buckets), immutable `CollectionEpochStatementV1` history and exact revision/epoch binding |

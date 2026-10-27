@@ -20,19 +20,6 @@ const vectors = JSON.parse(
   await readFile(`${root}/crates/kutup-crypto/tests/vectors/crypto.json`, 'utf8'),
 )
 
-const keys = crypto.deriveAccountProtectionKeys(
-  'correct horse battery staple',
-  'MDEyMzQ1Njc4OWFiY2RlZg==',
-  1,
-  65_536,
-  3,
-  1,
-)
-assert.deepEqual(keys, {
-  keyEncryptionKey: 'dgUIbPObROQzY5NoEVSeiNn1cmCX+T5aHgdIUVuNrG0=',
-  loginKey: 'TqqiEotO6otWBWRjUcGqYnDkmonT51Smn/AfBCJLf/4=',
-})
-
 const entropy = Buffer.from(Uint8Array.from({ length: 32 }, (_, index) => index)).toString('base64')
 assert.equal(
   crypto.deriveRecoveryAuthProof(entropy, '0b9f4c0e-6a51-4d2f-9a33-5e1f6c7d8e90'),
@@ -42,10 +29,6 @@ assert.equal(
 for (const binding of ['alice@example.com', '0B9F4C0E-6A51-4D2F-9A33-5E1F6C7D8E90', ' 0b9f4c0e-6a51-4d2f-9a33-5e1f6c7d8e90']) {
   assert.throws(() => crypto.deriveRecoveryAuthProof(entropy, binding), /key binding/)
 }
-assert.throws(
-  () => crypto.deriveAccountProtectionKeys('password', 'MDEyMzQ1Njc4OWFiY2RlZg==', 1, 32_768, 3, 1),
-  /parameters/,
-)
 assert.throws(
   () => crypto.deriveRecoveryAuthProof('AA==', 'alice@example.com'),
   /32 bytes/,

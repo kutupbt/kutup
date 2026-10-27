@@ -24,20 +24,13 @@ use kutup_crypto::chat_media::{self, ChatMediaObjectContextV1};
 use kutup_crypto::drive_envelope::{self, DriveEnvelopeContextV1, DriveEnvelopePurpose};
 use kutup_crypto::drive_object::{self, DriveFileBlobContextV1};
 use kutup_crypto::envelope::{self, CollabFrameContextV3};
-use kutup_crypto::kdf::{self, AccountProtectionParameters, AccountProtectionSuiteId};
+use kutup_crypto::kdf;
 use kutup_crypto::local_state::{self, LocalStatePurpose};
 use kutup_crypto::primitives::{SigningKey, Suite};
 use kutup_crypto::thumbnail::{self, Thumbnail, ThumbnailFormat, ThumbnailVariant};
 use serde::Serialize;
 use uuid::Uuid;
 use wasm_bindgen::prelude::*;
-
-#[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
-struct AccountProtectionKeysView {
-    key_encryption_key: String,
-    login_key: String,
-}
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -516,35 +509,6 @@ pub fn open_chat_backup_media_header(
         padded_plaintext_bytes: parsed.padded_plaintext_bytes,
     })
     .map_err(|error| js_error(&format!("encode opened backup media header: {error}")))
-}
-
-/// Run the one expensive V1 Argon2id derivation and expand its two
-/// purpose-separated account subkeys.
-#[wasm_bindgen(js_name = deriveAccountProtectionKeys)]
-pub fn derive_account_protection_keys(
-    password: &str,
-    salt_base64: &str,
-    suite: u16,
-    memory_kib: u32,
-    iterations: u32,
-    parallelism: u32,
-) -> Result<JsValue, JsValue> {
-    AccountProtectionSuiteId::try_from(suite).map_err(|error| js_error(&error.to_string()))?;
-    let keys = kdf::derive_account_protection_keys_b64(
-        password,
-        salt_base64,
-        AccountProtectionParameters {
-            memory_kib,
-            iterations,
-            parallelism,
-        },
-    )
-    .map_err(|error| js_error(&error.to_string()))?;
-    serde_wasm_bindgen::to_value(&AccountProtectionKeysView {
-        key_encryption_key: STANDARD.encode(keys.key_encryption_key.as_slice()),
-        login_key: STANDARD.encode(keys.login_key.as_slice()),
-    })
-    .map_err(|error| js_error(&format!("encode account keys: {error}")))
 }
 
 /// Derive the recovery authorization proof sent to the server. Raw recovery
