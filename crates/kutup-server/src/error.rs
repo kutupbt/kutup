@@ -74,6 +74,14 @@ impl AppError {
         Self::new(StatusCode::CONFLICT, message)
     }
 
+    pub fn bad_gateway(message: impl Into<String>) -> Self {
+        Self::new(StatusCode::BAD_GATEWAY, message)
+    }
+
+    pub fn payload_too_large(message: impl Into<String>) -> Self {
+        Self::new(StatusCode::PAYLOAD_TOO_LARGE, message)
+    }
+
     pub fn too_many_requests(message: impl Into<String>) -> Self {
         Self::new(StatusCode::TOO_MANY_REQUESTS, message)
     }

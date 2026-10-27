@@ -311,8 +311,6 @@ async fn apply_rows(
           WHERE remote_domain = $1 AND owner_incarnation_id = $2 AND owner_account <> $3",
         "UPDATE federated_incoming_file_shares SET owner_account = $3
           WHERE remote_domain = $1 AND owner_incarnation_id = $2 AND owner_account <> $3",
-        "UPDATE remote_collab_devices SET account = $3
-          WHERE domain = $1 AND incarnation_id = $2 AND account <> $3",
     ] {
         sqlx::query(statement)
             .bind(domain)
@@ -1132,80 +1130,38 @@ mod tests {
         clean(&pool, &[who.incarnation_id()]).await;
     }
 
-    /// Rows move by incarnation alone: a reused name's earlier owner keeps
-    /// its rows, and a chain a peer mints under a fresh authority, claiming
-    /// an existing name, moves nothing that is not its own.
+    /// A chain a peer mints under a fresh authority, claiming an existing
+    /// name, is kept as its own incarnation; the name's owner's own chain
+    /// still advances.
     #[tokio::test]
-    async fn live_rows_move_by_incarnation_only() {
+    async fn live_a_forged_chain_is_its_own_incarnation() {
         let Some(pool) = pool().await else {
             eprintln!("KUTUP_LIVE_DATABASE_URL unset; skipping");
             return;
         };
-        let (alice, earlier, forger) = (identity(21), identity(22), identity(23));
-        let incarnations = [
-            alice.incarnation_id(),
-            earlier.incarnation_id(),
-            forger.incarnation_id(),
-        ];
+        let (alice, forger) = (identity(21), identity(23));
+        let incarnations = [alice.incarnation_id(), forger.incarnation_id()];
         clean(&pool, &incarnations).await;
         let tag = &Uuid::new_v4().simple().to_string()[..10];
         let name = format!("al{tag}");
-        let address = format!("{name}@{PEER}");
-        // Collaboration devices this server keeps for `address`: one of an
-        // earlier holder of the name, one of Alice's.
-        let device_base = i64::from(u32::from_str_radix(&tag[..8], 16).unwrap()) * 4;
-        for (offset, who) in [(0, &alice), (1, &earlier)] {
-            sqlx::query(
-                "INSERT INTO remote_collab_devices
-                     (domain, device_id, incarnation_id, account, user_id, authority_public_key,
-                      public_signing, registration_challenge, registration_issued_at_ms,
-                      registration_signature)
-                 VALUES ($1, $2, $3, $4, 'u', 'a', $5, $6, 1, 's')",
-            )
-            .bind(PEER)
-            .bind(device_base + offset)
-            .bind(who.incarnation_id())
-            .bind(&address)
-            .bind(kutup_crypto::primitives::random_array::<32>().to_vec())
-            .bind(vec![0u8; 32])
-            .execute(&pool)
-            .await
-            .unwrap();
-        }
-        let shown = |offset: i64| {
-            let pool = pool.clone();
-            async move {
-                sqlx::query_scalar::<_, String>(
-                    "SELECT account FROM remote_collab_devices WHERE domain = $1 AND device_id = $2",
-                )
-                .bind(PEER)
-                .bind(device_base + offset)
-                .fetch_one(&pool)
-                .await
-                .unwrap()
-            }
-        };
-        // A forger's chain for the name under a fresh authority: kept as its
-        // own incarnation, moving nothing of Alice's or the earlier holder's.
         let forged = verify(PEER, entry(&forger, &[&name, &format!("mallory{tag}")])).unwrap();
         assert_eq!(store(&pool, PEER, &forged).await.unwrap(), Stored::Advanced);
-        assert_eq!(shown(0).await, address);
-        assert_eq!(shown(1).await, address);
-        // Alice's own chain moves her row only.
-        let alicia = format!("alicia{tag}");
-        let hers = verify(PEER, entry(&alice, &[&name, &alicia])).unwrap();
+        let hers = verify(PEER, entry(&alice, &[&name, &format!("alicia{tag}")])).unwrap();
         assert_eq!(store(&pool, PEER, &hers).await.unwrap(), Stored::Advanced);
-        assert_eq!(shown(0).await, format!("{alicia}@{PEER}"));
-        assert_eq!(shown(1).await, address, "the earlier holder's row stays");
-        sqlx::query(
-            "DELETE FROM remote_collab_devices WHERE domain = $1 AND device_id IN ($2, $3)",
+        let kept_incarnations: Vec<String> = sqlx::query_scalar(
+            "SELECT incarnation_id FROM remote_account_renames
+              WHERE domain = $1 AND incarnation_id = ANY($2) ORDER BY incarnation_id",
         )
         .bind(PEER)
-        .bind(device_base)
-        .bind(device_base + 1)
-        .execute(&pool)
+        .bind(&incarnations[..])
+        .fetch_all(&pool)
         .await
         .unwrap();
+        assert_eq!(
+            kept_incarnations.len(),
+            2,
+            "each chain under its own incarnation"
+        );
         clean(&pool, &incarnations).await;
     }
 }

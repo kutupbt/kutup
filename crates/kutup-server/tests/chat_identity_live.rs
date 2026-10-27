@@ -444,14 +444,16 @@ fn a_manifest_without_its_identitys_binding_is_refused() {
     };
     let mut forged = ada.next_manifest(&[&device]);
     let other = IdentityKeyPair::generate(&mut kutup_crypto::primitives::Rng);
-    forged.identity_binding = STANDARD.encode(
-        other
-            .private_key()
-            .calculate_signature(
-                &forged.identity_binding_bytes().unwrap(),
-                &mut kutup_crypto::primitives::Rng,
-            )
-            .unwrap(),
+    forged.identity_binding = Some(
+        STANDARD.encode(
+            other
+                .private_key()
+                .calculate_signature(
+                    &forged.identity_binding_bytes().unwrap(),
+                    &mut kutup_crypto::primitives::Rng,
+                )
+                .unwrap(),
+        ),
     );
     ada.sign(&mut forged);
     let body = ada.registration(

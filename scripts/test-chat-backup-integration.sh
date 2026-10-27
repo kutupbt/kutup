@@ -21,7 +21,7 @@ export RATE_LIMIT_RECOVERY_PER_HOUR=500
 # The live tests register their own accounts.
 export REGISTRATION_MODE=on
 # The device tests register more than 20 devices on one account in a minute.
-export RATE_LIMIT_DEVICE_CHALLENGES_PER_MIN=1000
+export RATE_LIMIT_DEVICE_REGISTRATIONS_PER_MIN=1000
 # Held names freed within seconds of their date, for the renames test.
 export NAME_SWEEP_SECONDS=2
 export POSTGRES_DB="kutup_backup_test"
@@ -137,6 +137,11 @@ KUTUP_LIVE_SERVER="http://127.0.0.1:$port" \
 KUTUP_LIVE_SERVER="http://127.0.0.1:$port" \
   KUTUP_LIVE_ADMIN="$test_admin_username:$test_admin_password" \
   cargo test -p kutup-server --test rate_limits_live -- --nocapture
+# An account's own limits (docs/plans/settings-registry.md): one account's
+# upload limit holds it alone, ranges, a reset, the registry, the audit.
+KUTUP_LIVE_SERVER="http://127.0.0.1:$port" \
+  KUTUP_LIVE_ADMIN="$test_admin_username:$test_admin_password" \
+  cargo test -p kutup-server --test settings_registry_live -- --nocapture
 
 # Calendars (docs/plans/calendar.md, E1): keys and the sealed passphrase,
 # events checked against their author's keys and read only from the signed
@@ -150,15 +155,6 @@ KUTUP_LIVE_SERVER="http://127.0.0.1:$port" \
 KUTUP_LIVE_SERVER="http://127.0.0.1:$port" \
   KUTUP_LIVE_ADMIN="$test_admin_username:$test_admin_password" \
   cargo test -p kutup-server --test collab_frames_live -- --nocapture
-# Collaboration devices: only the account's own statement registers one.
-KUTUP_LIVE_SERVER="http://127.0.0.1:$port" \
-  KUTUP_LIVE_ADMIN="$test_admin_username:$test_admin_password" \
-  cargo test -p kutup-server --test devices_live -- --nocapture
-
-# Remote collaboration devices: only the share recipient's own announced,
-# fresh, unrevoked devices; revocations page past one announce.
-KUTUP_LIVE_DATABASE_URL="postgres://$POSTGRES_USER:$POSTGRES_PASSWORD@127.0.0.1:$db_port/$POSTGRES_DB" \
-  cargo test -p kutup-server --bin kutup-server remote_devices::tests -- --nocapture
 # OPAQUE sign-in (docs/plans/opaque.md): a login id once, the per-name cap,
 # new passwords and recoveries ending sessions, grants bound to their use.
 KUTUP_LIVE_SERVER="http://127.0.0.1:$port" \
@@ -225,10 +221,10 @@ KUTUP_LIVE_DATABASE_URL="postgres://$POSTGRES_USER:$POSTGRES_PASSWORD@127.0.0.1:
   cargo test -p kutup-server jobs::tests::live_fixed_cutoff_mailbox_retention \
   -- --exact --nocapture
 
-# Sealed federation: a backlog for one server does not starve another.
+# Federation queues (docs/plans/federation-outbox.md): a backlog for one
+# server does not starve another, and a rejected row never reorders one.
 KUTUP_LIVE_DATABASE_URL="postgres://$POSTGRES_USER:$POSTGRES_PASSWORD@127.0.0.1:$db_port/$POSTGRES_DB" \
-  cargo test -p kutup-server chat_federation::tests::live_sealed_backlog_does_not_starve_other_destinations \
-  -- --exact --nocapture
+  cargo test -p kutup-server --bin kutup-server chat_federation::tests::live_ -- --nocapture
 # Sealed federation queues: a destination's batches below the signature
 # check (a mismatch holds nothing behind it, a repeat replays its answers, a
 # malformed batch applies nothing) and stale answers at the origin.

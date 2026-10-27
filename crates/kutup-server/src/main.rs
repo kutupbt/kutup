@@ -24,15 +24,19 @@ mod chat_hub;
 mod chat_media_federation;
 mod collab_federation;
 mod config;
+mod content_range;
 mod db;
+mod drive_blob;
 mod drive_federation;
 mod drive_federation_albums;
 mod drive_federation_files;
+mod drive_federation_ranges;
 mod drive_names;
 mod drive_profile_keys;
 mod drive_writes;
 mod error;
 mod federation;
+mod federation_outbox;
 mod file_content;
 mod grants;
 mod handlers;
@@ -50,12 +54,13 @@ mod photos;
 mod public_fetch;
 mod ratelimit;
 mod registration;
-mod remote_devices;
+mod remote_manifests;
 mod remote_renames;
 mod revisions;
 mod sealed_sender_provision;
 mod sealed_sender_service;
 mod security_events;
+mod security_keys;
 mod server_keys;
 mod sessions;
 mod site_settings;
@@ -101,16 +106,8 @@ const BUILD_VERSION: &str = "dev";
 /// whole body in memory, so the default is small; the upload routes that
 /// need more raise it on their own route (and stream to disk).
 const BODY_LIMIT_BYTES: usize = 4 * 1024 * 1024;
-/// A whole-file multipart upload, streamed to a temp file.
-const DRIVE_UPLOAD_LIMIT_BYTES: usize = 10 * 1024 * 1024 * 1024;
-/// A saved version (streamed to a temp file): an office document or
-/// whiteboard, or a restored copy of one.
-const DRIVE_VERSION_LIMIT_BYTES: usize = 2 * 1024 * 1024 * 1024;
 /// One tus PATCH is one encryption chunk (5 MiB plus overhead); room to spare.
 const TUS_PATCH_LIMIT_BYTES: usize = 64 * 1024 * 1024;
-/// A federated Drive upload (streamed to disk, its signed digest checked
-/// there): one file blob of the same bound as an upload, plus framing.
-const FEDERATED_DRIVE_UPLOAD_LIMIT_BYTES: usize = 10 * 1024 * 1024 * 1024 + 16 * 1024 * 1024;
 const FED_CHAT_BODY_LIMIT_BYTES: usize = 16 * 1024 * 1024;
 
 /// Shared application state.
@@ -146,6 +143,10 @@ pub struct AppState {
     /// One sealed-federation flush per destination at a time
     /// (docs/chat-protocol.md §7).
     pub(crate) sealed_flush: Arc<chat_federation::SealedFlushLocks>,
+    /// The WebAuthn relying party for security keys
+    /// (docs/plans/security-keys.md); `None` where the account app's origin
+    /// can't use WebAuthn (plain http off localhost), so keys are off.
+    pub(crate) webauthn: Option<Arc<kutup_crypto::webauthn::RelyingParty>>,
 }
 
 const USAGE: &str = "usage: kutup-server [serve]
@@ -186,6 +187,14 @@ async fn main() -> anyhow::Result<()> {
         std::process::exit(2);
     }
     let config = Config::load();
+    // Production must be able to offer security keys: the account app on
+    // https, its domain a valid relying party id.
+    if config.app_env == "production" {
+        if let Err(reason) = security_keys::relying_party(&config) {
+            eprintln!("kutup-server: security keys can't work here: {reason}");
+            std::process::exit(2);
+        }
+    }
     // `check-config`: read and check every setting, touch nothing (no
     // database, no migrations). Exit 0, or 2 with every problem listed (from
     // `Config::load`); deploys run it against the new image first.
@@ -302,6 +311,7 @@ async fn main() -> anyhow::Result<()> {
         &config.s3_secret_key,
         &config.s3_bucket,
         &config.s3_region,
+        config.s3_timeouts,
     );
 
     // Subcommand dispatch — admin tooling that reuses the DB pool + storage without starting
@@ -399,9 +409,19 @@ async fn main() -> anyhow::Result<()> {
     } else {
         None
     };
+    // Security keys (docs/plans/security-keys.md): the account app's origin
+    // and the configured RP id. Off, with a warning, where they can't work.
+    let webauthn = match security_keys::relying_party(&config) {
+        Ok(rp) => Some(Arc::new(rp)),
+        Err(reason) => {
+            tracing::warn!(%reason, "security keys are off");
+            None
+        }
+    };
     let state = AppState {
         opaque,
         group_send,
+        webauthn,
         sealed_flush: Arc::new(chat_federation::SealedFlushLocks::new(
             &pool,
             config.sealed_flush_lock_connections,
@@ -428,7 +448,7 @@ async fn main() -> anyhow::Result<()> {
     account_names::spawn_sweep(state.pool.clone(), state.config.name_sweep_seconds);
     // Announces of this server's renames to its peers.
     remote_renames::spawn_announcer(state.clone());
-    chat_federation::spawn_retry_worker(state.clone());
+    federation_outbox::spawn_worker(state.clone());
     chat_media_federation::spawn_retry_worker(state.clone());
     drive_federation::spawn_digest_backfill(state.clone());
     mail::groups::ensure_system_groups(&state.pool, &state.config.chat_server_name).await?;
@@ -648,7 +668,7 @@ fn build_router(state: AppState) -> Router {
     let cors = build_cors(&state.config.allowed_origins);
 
     use handlers::{
-        admin, auth, chat, chat_link_preview, chat_media, collab, collections, devices, drive_move,
+        admin, auth, chat, chat_link_preview, chat_media, collab, collections, drive_move,
         feedback, file_assets, file_shares, file_thumbnails, file_versions, files, folder_access,
         identity, link_reports, sessions as session_routes, shares, trash, tus,
     };
@@ -726,6 +746,19 @@ fn build_router(state: AppState) -> Router {
         .route(
             "/api/auth/login/2fa",
             post(auth::login_two_fa).route_layer(from_fn(middleware::rate_limit_login)),
+        )
+        // Security keys at sign-in (docs/plans/security-keys.md §4); the
+        // answer is a few KiB of JSON.
+        .route(
+            "/api/auth/login/security-key/start",
+            post(handlers::security_keys::login_start)
+                .route_layer(from_fn(middleware::rate_limit_login)),
+        )
+        .route(
+            "/api/auth/login/security-key/finish",
+            post(handlers::security_keys::login_finish)
+                .route_layer(from_fn(middleware::rate_limit_login))
+                .route_layer(DefaultBodyLimit::max(64 * 1024)),
         )
         .route(
             "/api/auth/recover/preflight",
@@ -1213,6 +1246,31 @@ fn build_router(state: AppState) -> Router {
             get(auth::recovery_codes_left).post(auth::renew_recovery_codes),
         )
         .route(
+            "/api/auth/security-keys",
+            get(handlers::security_keys::list),
+        )
+        .route(
+            "/api/auth/security-keys/register/start",
+            post(handlers::security_keys::register_start),
+        )
+        .route(
+            "/api/auth/security-keys/register/finish",
+            post(handlers::security_keys::register_finish)
+                .route_layer(DefaultBodyLimit::max(64 * 1024)),
+        )
+        .route(
+            "/api/auth/security-keys/proof/start",
+            post(handlers::security_keys::proof_start),
+        )
+        .route(
+            "/api/auth/security-keys/require-uv",
+            put(handlers::security_keys::set_require_uv),
+        )
+        .route(
+            "/api/auth/security-keys/:id",
+            patch(handlers::security_keys::rename).delete(handlers::security_keys::remove),
+        )
+        .route(
             "/api/users/by-address/:address",
             get(auth::get_user_by_address).route_layer(from_fn(middleware::rate_limit_user_lookup)),
         )
@@ -1369,10 +1427,14 @@ fn build_router(state: AppState) -> Router {
             post(drive_move::move_collection),
         )
         // --- Devices (authenticated) ---
-        .route("/api/devices", post(devices::register).get(devices::list))
-        .route("/api/devices/challenge", post(devices::challenge))
-        .route("/api/devices/:id/renew", post(devices::renew))
-        .route("/api/devices/:id", delete(devices::revoke))
+        .route(
+            "/api/devices",
+            post(account_devices::register_device).get(account_devices::list_devices),
+        )
+        .route(
+            "/api/device-ticket",
+            post(account_devices::create_device_ticket),
+        )
         // --- Chat (E2EE messaging; authenticated via AuthUser except the WS, which
         // validates its token pre-upgrade like the collab WS) ---
         .route(
@@ -1532,7 +1594,6 @@ fn build_router(state: AppState) -> Router {
         )
         .route("/api/chat/messages", get(chat::drain_mailbox))
         .route("/api/chat/messages/ack", post(chat::ack_messages))
-        .route("/api/chat/ws-ticket", post(chat::create_ws_ticket))
         .route("/api/chat/link-preview", post(chat_link_preview::fetch))
         .route("/api/chat/call-servers", get(calls::call_servers))
         .route(
@@ -1712,8 +1773,11 @@ fn build_router(state: AppState) -> Router {
         // --- Files (authenticated) ---
         .route(
             "/api/files/upload",
-            post(files::upload).route_layer(DefaultBodyLimit::max(DRIVE_UPLOAD_LIMIT_BYTES)),
+            // The upload limit is a site setting the handler counts against
+            // as the body arrives (driveUploadMaxBytes).
+            post(files::upload).route_layer(DefaultBodyLimit::disable()),
         )
+        .route("/api/drive/limits", get(files::limits))
         .route("/api/files/:id/download", get(files::download))
         .route("/api/files/:id/original", get(files::download_original))
         .route(
@@ -1729,7 +1793,8 @@ fn build_router(state: AppState) -> Router {
             "/api/files/:fileId/versions",
             get(file_versions::list)
                 .post(file_versions::create)
-                .route_layer(DefaultBodyLimit::max(DRIVE_VERSION_LIMIT_BYTES)),
+                // Counted by the handler (driveVersionMaxBytes).
+                .route_layer(DefaultBodyLimit::disable()),
         )
         .route(
             "/api/files/:fileId/versions/:vid/download",
@@ -1940,7 +2005,8 @@ fn build_router(state: AppState) -> Router {
             "/api/fed/drive/files",
             get(drive_federation::list_files)
                 .post(drive_federation::upload_file)
-                .route_layer(DefaultBodyLimit::max(FEDERATED_DRIVE_UPLOAD_LIMIT_BYTES))
+                // Spooled against the upload limit, a site setting.
+                .route_layer(DefaultBodyLimit::disable())
                 .route_layer(from_fn(middleware::rate_limit_fed_users)),
         )
         .route(
@@ -1967,12 +2033,6 @@ fn build_router(state: AppState) -> Router {
             "/api/fed/drive/collab/frames",
             post(collab_federation::frames)
                 .route_layer(DefaultBodyLimit::max(8 * 1024 * 1024))
-                .route_layer(from_fn(middleware::rate_limit_fed_users)),
-        )
-        .route(
-            "/api/fed/drive/collab/devices",
-            post(collab_federation::devices)
-                .route_layer(DefaultBodyLimit::max(256 * 1024))
                 .route_layer(from_fn(middleware::rate_limit_fed_users)),
         )
         .route(
@@ -2169,7 +2229,8 @@ fn build_router(state: AppState) -> Router {
             "/api/drive/federation/shares/:shareId/files",
             get(drive_federation::proxy_list_files)
                 .post(drive_federation::proxy_upload)
-                .route_layer(DefaultBodyLimit::max(FEDERATED_DRIVE_UPLOAD_LIMIT_BYTES)),
+                // Spooled against the upload limit, a site setting.
+                .route_layer(DefaultBodyLimit::disable()),
         )
         .route(
             "/api/drive/federation/shares/:shareId/refresh",
@@ -2286,12 +2347,16 @@ fn build_router(state: AppState) -> Router {
                     put(handlers::rate_limits::update),
                 )
                 .route(
-                    "/api/admin/users/:id/rate-limits",
-                    get(handlers::rate_limits::account_list),
+                    "/api/admin/settings/registry",
+                    get(handlers::account_limits::registry),
                 )
                 .route(
-                    "/api/admin/users/:id/rate-limits/:key",
-                    put(handlers::rate_limits::account_update),
+                    "/api/admin/users/:id/limits",
+                    get(handlers::account_limits::list),
+                )
+                .route(
+                    "/api/admin/users/:id/limits/:key",
+                    put(handlers::account_limits::update),
                 )
                 .route(
                     "/api/admin/registration-codes",

@@ -19,7 +19,9 @@ export function setChatDeviceAuth(deviceId: number, credential: string): void {
   if (installed) return
   installed = true
   api.interceptors.request.use((config) => {
-    if (header && isDeviceBoundChatRoute(config.url, config.method)) {
+    // A call that names its device already (an editing device's, on an
+    // origin that also runs Chat) keeps it.
+    if (header && isDeviceBoundChatRoute(config.url, config.method) && !config.headers.has(DEVICE_HEADER)) {
       config.headers.set(DEVICE_HEADER, header)
     }
     return config
@@ -54,9 +56,11 @@ export function clearChatDeviceAuth(): void {
 
 /**
  * Every `/chat/*` call but the registration itself, the provisioning ticket
- * (a device being linked has no credential yet) and the anonymous routes.
+ * (a device being linked has no credential yet) and the anonymous routes;
+ * and the socket ticket (`/device-ticket`, shared with the editing devices).
  */
 export function isDeviceBoundChatRoute(url: string | undefined, method?: string): boolean {
+  if (url?.split('?')[0] === '/device-ticket') return true
   if (!url || !url.startsWith('/chat/')) return false
   const path = url.split('?')[0]
   if (path === '/chat/device' && method?.toLowerCase() === 'post') return false

@@ -1,33 +1,31 @@
+import { removeDevicesFromManifest } from '@kutup/crypto/accountManifest'
 import { toBase64 } from '@kutup/crypto/base64'
-import { signDeviceRevocation } from '@kutup/crypto/deviceRegistration'
 import api from './client'
+import { deviceHeader, ownAccount, publishNextManifest } from './devices'
 import { clearPersisted } from './persistedStore'
 import { broadcastLogout } from './sessionSync'
 import { clearSession, getSession } from './store'
 
-/** How long a sign-out waits for its device's revocation. */
+/** How long a sign-out waits for its device's removal. */
 const REVOKE_WAIT_MS = 2000
 
 /**
- * Revokes this origin's collaboration device for good, signed by the account
- * (docs/plans/device-registration.md). Best effort: ending the sign-in
- * already retires it on the server; this also makes its key unusable
- * anywhere, even if a copy of it survived.
+ * Takes this origin's device out of the account's manifest
+ * (docs/plans/one-device-list.md): the next manifest without it, published
+ * as itself. Best effort: ending the sign-in already marks its devices
+ * expired and the next manifest drops them; this drops it at once, so
+ * peers stop taking its frames. Skipped when it is the account's only
+ * device (a manifest lists at least one).
  */
 async function revokeOwnDevice(): Promise<void> {
   const session = getSession()
   const device = session?.device
-  if (!session || !device) return
-  const at = session.address.lastIndexOf('@')
-  if (at < 0) return
-  const revokedAtMs = Date.now()
-  const signature = await signDeviceRevocation(
-    toBase64(session.masterKey),
-    session.address.slice(at + 1),
-    toBase64(device.publicKey),
-    revokedAtMs,
-  )
-  await api.delete(`/devices/${device.id}`, { data: { revokedAtMs, signature }, timeout: REVOKE_WAIT_MS })
+  if (!session || !device || device.manifestSequence === 0n) return
+  const masterKey = toBase64(session.masterKey)
+  await publishNextManifest(await ownAccount(session), deviceHeader(device), async (head) => {
+    if (!head?.devices.some((d) => d.deviceId === device.id) || head.devices.length < 2) return null
+    return removeDevicesFromManifest(head, [device.id], new Date().toISOString(), masterKey)
+  })
 }
 
 /**

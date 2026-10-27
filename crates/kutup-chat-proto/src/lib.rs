@@ -37,16 +37,18 @@ mod security_policy;
 pub use account_identity::{
     decode_device_credential, decode_frame_key, decode_identity_key, decode_link_token,
     decode_provisioning_address, device_session_hash, format_device_header, identity_binding_bytes,
-    parse_device_header, repeated_use_keys_digest, reregistration_device_id, AccountIdentityBody,
-    AccountIdentityDistributionRequest, AccountManifestDeviceV3, AccountManifestHistoryPageV3,
-    AccountManifestPublicationV3, AccountManifestV3, AccountPreKeyBundlesResponse,
-    ChatDeviceKeysV3, ChatKeysCheckRequest, ChatLinkTokenResponse, ChatProvisionV1, DeviceKind,
-    DevicePreKeyBundleV2, DeviceRegistrationV1, DistributedDeviceKeysV1, DistributionError,
-    ProvisionEnvelopeV1, ProvisioningLinkCodeV1, ProvisioningRelayRequest,
-    ProvisioningSocketMessage, RegisterChatDeviceRequestV2, ACCOUNT_MANIFEST_V3_VERSION,
-    DEVICE_CREDENTIAL_LEN, DEVICE_HEADER, IDENTITY_BINDING_LEN, LINK_TOKEN_LEN, LINK_URI_PREFIX,
-    MAX_ACCOUNT_MANIFEST_DEVICES, MAX_PREKEY_RECORD_BYTES, MAX_PROVISION_BODY_BYTES,
-    PROVISIONING_ADDRESS_LEN, PROVISIONING_VERSION, REREGISTRATION_DEVICE_ID,
+    parse_device_header, repeated_use_keys_digest, reregistration_device_id, AccountDeviceV1,
+    AccountIdentityBody, AccountIdentityDistributionRequest, AccountManifestDeviceV3,
+    AccountManifestHistoryPageV3, AccountManifestPublicationV3, AccountManifestV3,
+    AccountPreKeyBundlesResponse, ChatDeviceKeysV3, ChatKeysCheckRequest, ChatLinkTokenResponse,
+    ChatProvisionV1, DeviceKind, DevicePreKeyBundleV2, DeviceRegistrationV1,
+    DistributedDeviceKeysV1, DistributionError, OwnManifestPinV1, ProvisionEnvelopeV1,
+    ProvisioningLinkCodeV1, ProvisioningRelayRequest, ProvisioningSocketMessage,
+    RegisterChatDeviceRequestV2, RegisterDeviceRequestV1, RegisterDeviceResponseV1,
+    ACCOUNT_MANIFEST_V3_VERSION, DEVICE_CREDENTIAL_LEN, DEVICE_HEADER, IDENTITY_BINDING_LEN,
+    LINK_TOKEN_LEN, LINK_URI_PREFIX, MAX_ACCOUNT_MANIFEST_DEVICES, MAX_DEVICE_NAME_CHARS,
+    MAX_PREKEY_RECORD_BYTES, MAX_PROVISION_BODY_BYTES, PROVISIONING_ADDRESS_LEN,
+    PROVISIONING_VERSION, REREGISTRATION_DEVICE_ID,
 };
 pub use backup::{
     chat_backup_media_reference_set_digest, AppendChatBackupSegmentRequestV1,
@@ -382,11 +384,13 @@ pub struct PreKeyCountResponse {
     pub one_time_kyber_pre_keys: u64,
 }
 
-/// `POST /api/chat/ws-ticket` — a single-use browser WebSocket credential.
+/// `POST /api/device-ticket` — a single-use WebSocket credential for one
+/// device of the account (browsers can't set headers on a socket): the Chat
+/// socket and the collab sockets take it.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[serde(rename_all = "camelCase")]
-pub struct ChatWsTicketResponse {
+pub struct DeviceTicketResponse {
     pub ticket: String,
     pub expires_at: String,
 }

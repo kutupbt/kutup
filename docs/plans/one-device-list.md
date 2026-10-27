@@ -280,3 +280,179 @@ What the note leaves open, as built:
    crypto move, which goes to master and lands before slice 4. Slice 4 is the
    first to need it (the Account app signing removals), so slice 1 leaves it
    in chat-core.
+
+### Slice 2 (collab onto the manifest)
+
+What the note leaves open, as built:
+
+1. **Frame format V3** (`KUTPCF3\0`, in `kutup-crypto::envelope`).
+   - The 80-byte header becomes 88 bytes:
+     - `deviceId` u32 at 36 (1..=127);
+     - 4 reserved zero bytes;
+     - `manifestSequence` u64 at 44: the sender's manifest when it sealed;
+     - then `sequence`, nonce and length, as before.
+   - The signature covers `kutup/collab/frame/v3\0`, the sender's account
+     (`AccountRef::bytes`), the header and the ciphertext.
+   - The account travels beside the frame on every transport (`{ sender,
+     frame }`) rather than in it, so the frame stays fixed-size. A server
+     that lies about the sender breaks the signature.
+   - The signed bytes hold the file id, the key generation and the
+     per-device `sequence` (all in the header). So a valid frame can't be
+     replayed into another file. A replay into the same file is refused,
+     because the log keeps each sender's sequence once. The AEAD binds the
+     file id too, under the file key. But a key holder can re-encrypt, so
+     the binding that counts is the signature's.
+2. **Registering an editor or CLI device.**
+   - `POST /api/devices` with `{ kind, name, frameKey, credential }` gives a
+     row with the lowest free id under the caller's sign-in, within
+     `devicesPerAccount`.
+   - The device then publishes the account's next manifest listing itself
+     (`POST /api/chat/manifest`, device-authenticated as `X-Kutup-Device`).
+   - Signing needs only the authority key, so `AccountManifestV3::sign`
+     moves into `kutup-chat-proto`. The crypto WASM exposes "add this device
+     to this head", which builds and signs it.
+   - The editors never load the Chat runtime. The rest of the chat-core
+     crypto move is unchanged.
+3. **No leases or statements.** A device's frames count while:
+   - its row is live;
+   - its sign-in is live;
+   - the head manifest lists it with that frame key.
+   Publishing prunes an unlisted row only once it is older than
+   `deviceListingGraceSeconds` (a site setting, default 600). The grace is
+   for a device between registering and listing itself. It only delays row
+   pruning: an unlisted device's frames are refused throughout, by the home
+   (here) and by recipients (slice 3).
+4. **Sockets.** A browser can't set headers on a WebSocket, so a device asks
+   for a single-use ticket first: `POST /api/device-ticket`, as Chat's
+   `ws-ticket`.
+   - Chat's `chat_ws_tickets` becomes the one `device_tickets`, used by the
+     Chat and collab sockets.
+   - The HTTP collab routes take `X-Kutup-Device`; `?deviceId=` goes.
+5. **The home checks frames.**
+   - A local sender: its row's frame key.
+   - A remote sender: the account's manifest, cached in
+     `remote_account_manifests` (domain, account id, sequence, manifest).
+     - It is fetched through the federated manifest route the first time,
+       and again when a frame names a newer sequence or an unknown device.
+     - It goes through `verify_successor` over the history, never back to
+       an older head.
+     - It is fetched at most once a minute per account.
+     - A frame on a head older than `remoteManifestMaxAgeSeconds` (a site
+       setting, default 300) waits for a fetch first, so a device removed
+       on its own server stops counting here within that time. When that
+       fetch fails, the cached head still decides until the next try.
+     - A failed first fetch, with nothing cached, is recorded in
+       `remote_manifest_failures`. The frames after it wait out the minute
+       instead of each starting a fetch.
+   - `remote_collab_devices`, the revocation tables, the announce route and
+     its rate limit all go.
+6. **The update log** names a sender as (`sender_domain`, '' for this
+   server; `sender_account` uuid; `sender_device` 1..=127), unique with
+   `sender_seq` per file. The old `sender_device` bigint and
+   `remote_domain`/`remote_device` columns go. The log is cleared by the
+   migration, as the wipe clears every file.
+   - Trimming the log (a saved version, a new session's base, the daily
+     prune of old office frames) would delete the rows that make a counter
+     a replay. So every trim records, in the same statement, each sender's
+     highest trimmed counter per prefix in `file_sender_floors`.
+   - The prefix is the high 32 bits, drawn per editing session. A frame at
+     or below its prefix's floor is refused as a replay, and a new session's
+     prefix starts clean.
+   - A local device's next counter (`mySenderSeqHigh`) is above its floors
+     too.
+7. **Presence** keys a peer by `account#device`. The hub's peers and
+   `close_device` take (account, device).
+8. **Removing a device.**
+   - It is a manifest without the entry; the server prunes the row and
+     closes its sockets.
+   - Closing marks the connection shut for good, and its read loop checks
+     that before each frame. So a frame read after the removal is never
+     applied, even when the loop was busy with another frame at the time.
+     The wakeup is a `notify_one`, whose permit waits for that loop.
+   - Every 15 seconds a collab socket (local or bridged) also checks its
+     device again: listed with the same frame key, its sign-in live. A
+     definite no closes it, which catches a close it missed.
+   - Signing out publishes the account's manifest without its own device
+     (best effort, as the signed revocation was).
+   - Account → Devices lists every editor and CLI device
+     (`GET /api/devices`: kind, name, sign-in, last seen) and removes one the
+     same way. Slice 4 groups that list by sign-in.
+9. **The CLI** registers as a `cli` device, keeps its credential and frame
+   seed, and publishes its own entry.
+10. **Recipients verify every frame** (slice 3, the user's decision). Each
+    client checks each frame's signature against the sender's head manifest:
+    - the frame key is listed;
+    - the device id matches;
+    - the manifest sequence is not older than the one it has seen.
+    A removed device is refused at once, because the head no longer lists
+    it. Slice 3's tests include a home relaying a forged frame that the
+    recipient refuses. Slice 2 builds the frame and the home's checks that
+    this rests on.
+    - Open for slice 3: device ids are reused, and the head decides. So a
+      logged frame from a device since removed, or from an earlier holder
+      of a reused id, needs a rule of its own. One option is to check it
+      against the manifest its `manifestSequence` names, from the account's
+      history, rather than against the head.
+11. **An account without Chat has a manifest too.**
+    - `identityKey` and `identityBinding` are optional and come together.
+      The signed bytes carry a presence flag.
+    - A manifest without them lists only devices that don't take Chat; an
+      editor of an account that never used Chat publishes the account's
+      first one.
+    - The first Chat device sets the identity by re-registration, which
+      continues that chain and keeps the editors' entries.
+    - A publication keeps the identity the account has, or none while it
+      has none; a distribution or a re-registration names one.
+12. **A device's frames go through one gate everywhere.** The server names
+    the sender of every delivered frame (`envelope::deliver`): on its
+    sockets, in the log, and on the federation wire as `{ sender, frame }`.
+    - The home takes a remote frame only from the share's recipient and
+      from that recipient's server.
+    - Signing is by a frame key that the recipient's cached manifest lists,
+      under the incarnation the share was made to.
+    - The old `remote_collab_devices` route, its announce and its rate limit
+      go; `device_challenges` becomes `device_registrations` (20 a minute
+      per account).
+13. **A client pins its own account's head** (`OwnManifestPinV1` in
+    `kutup-chat-proto`, the same check in the CLI and in the browser's
+    crypto WASM).
+    - It keeps the newest manifest of its own account it has seen
+      (account, incarnation, sequence, hash): the CLI in its profile store,
+      a web app per origin in localStorage.
+    - Before listing itself or signing a successor, it checks the head the
+      server gives. The head must verify under the account's own authority
+      and incarnation. It must be no older than the pin, and at the pin's
+      sequence it must be the same manifest. Once a head has been seen,
+      "no manifest" is refused.
+    - So a server can't have a client sign a stale head (bringing a removed
+      device back, or dropping the Chat identity), or start a new chain over
+      the account's.
+    - A reset account's new keys make a new incarnation, which the old pin
+      doesn't cover.
+    - The CLI also checks that what it signed follows the head
+      (`verify_successor`), as the WASM path does.
+    - Chat holds the same rule. Every path that signs the account's next
+      manifest (its own entry's sync, linking, a removal, an identity reset,
+      a re-registration of an installation that kept its store) checks the
+      head against the newest own manifest the installation accepted (its
+      `ManifestTrust`).
+    - Where there is no pin yet, the first head is trusted on first use:
+      - a fresh browser profile;
+      - each web app's address separately (pins are per origin);
+      - a new CLI profile;
+      - a new Chat installation.
+      There, a `404 noManifest` lets the client make the account's first
+      manifest (sequence 1). The window is bounded: the server takes a first
+      manifest only while it holds none (`verify_successor`), and every
+      client that already pins the account refuses a chain that went back.
+    - After a legitimate database restore, the pins are ahead of the
+      restored head and are refused as a rollback. `kutup devices
+      forget-pin`, or clearing the app's site data in the browser, lets the
+      client trust the restored head on first use again
+      (docs/self-hosting.md, database backups).
+14. **Pending rows don't fill the cap.** A registration first drops the
+    account's rows that its head doesn't list and that are older than the
+    listing grace. Only listed rows and rows within their grace count
+    toward `devicesPerAccount` and the Chat cap. So a stolen access token
+    can't fill the account with registrations that never list themselves.
+    `devicesPerAccount` is a per-account setting.

@@ -8,9 +8,11 @@ All authenticated endpoints require `Authorization: Bearer <accessToken>`.
 > **Note:** File content and metadata are end-to-end encrypted by the client. Account secrets use one canonical, suite-bearing envelope per value; the server validates only its public framing and never sees the plaintext or key.
 
 **Request bodies** are capped at 4 MiB unless a route says otherwise; the
-upload routes raise it (whole-file upload 10 GiB, a multipart version 2 GiB
-(a version of any size goes over tus), a tus chunk 64 MiB, a whiteboard asset one envelope, a federated Drive upload
-10 GiB, streamed to disk). A larger body gets `413`.
+upload routes raise it (a whole-file upload up to `driveUploadMaxBytes`, a
+multipart version up to `driveVersionMaxBytes`, both site settings, 10 GiB
+and 2 GiB at first; a tus chunk 64 MiB, a whiteboard asset one envelope, a
+federated Drive upload the upload limit plus 16 MiB, streamed to disk). A
+larger body gets `413`.
 
 ## Errors
 
@@ -57,6 +59,16 @@ Specific codes, where an app does something particular (a test in
 | `wrongPin`, `signedOut`, `noPin` | 403/404 | Kutup Pass's PIN: wrong (with `attemptsLeft`), the last try ended the sign-in, none set |
 | `accountLocked` | 429 | The sign-in lockout or ceiling (a while) |
 | `accountIdInvalid` | 400 | `register`: no account id given back, or one this server did not mint for the sign-up's key binding (start the sign-up again) |
+| `revisionTaken` | 409 | A Drive upload or version naming a `revisionId` the file, another file or an open upload already has (a revision names one content: choose a new one) |
+| `securityKeysOff` | 503 | This server can't offer security keys (its account app isn't on https) |
+| `securityKeyLimit` | 409 | `POST /api/auth/security-keys/register/*`: the account has `limit` keys already |
+| `securityKeyExists` | 409 | That security key is already added |
+| `securityKeyRefused` | 400 | The key's answer was not accepted (another origin or RP, user verification missing when required, a bad attestation) |
+| `securityKeyCeremony` | 400 | The security key prompt expired, or was answered already: start again |
+| `securityKeyCompromised` | 401 | The key's counter did not move on, with no other use of it in flight: it may have been copied, and is no longer used (remove it; add it again if it is yours) |
+| `securityKeyRetry` | 409 | The key's counter is behind because it was used elsewhere (another tab) since this sign-in started: start again |
+| `secondFactorRequired` | 403 | Adding a factor (a security key, the authenticator app beside keys) or turning "Require PIN" off while two-step sign-in is on: prove a factor the account has (`code`, `recoveryCode` or `securityKey`) |
+| `noSecurityKeys` | 409 | A security key step for an account without a usable key |
 | `accountIdTaken` | 409 | `register`: the account id is some account's, or was a deleted account's (ids are never reused): start again |
 | `keyListInvalid` | 400 | A shared mailbox's next key list the chain refuses: not signed by its signer in force, an old signer after its handover, a gap, or other keys than the group's |
 | `handoverNeeded` | 403 | A shared mailbox's new signer without a handover from the one in force: only an administrator starts a group's key lists over |
@@ -220,7 +232,8 @@ Returns public server settings: who may register (`registrationMode`:
 capability advertisement, and where each web app lives (`apps`, from
 `KUTUP_BASE_DOMAIN` / `KUTUP_{ACCOUNT,DRIVE,CHAT,OFFICE}_URL`).
 
-**Auth:** None
+**Auth:** None (a bearer token, if sent, makes per-account values the
+caller's own)
 
 **Response:**
 ```jsonc
@@ -261,8 +274,10 @@ a vault's own saves are never refused by it.
 
 The chat block also advertises size/retention limits, the canonical federation
 server name when enabled, and the authenticated sealed-sender service-policy
-history. `maximumActiveDevices` is the site setting `chatMaxActiveDevices`,
-from 1 through the V1 hard cap of 10. A capability is advertised only when its complete local and
+history. `maximumActiveDevices` is the setting `chatMaxActiveDevices`, from 1
+through the V1 hard cap of 10: a signed-in caller's own where administrators
+set one (that answer is `Cache-Control: private, no-store`), else the
+site's. A capability is advertised only when its complete local and
 federated path is enabled.
 
 ---
@@ -486,6 +501,32 @@ dash are ignored, and I/L read as 1, O as 0.
 **Response:** the same session as `/api/auth/login/finish` answers (with
 `rotate` and `grant` when due). The client keeps the export key across this
 step.
+
+The sign-in's answer asks for this step (`requiresTotp: true`) whenever the
+account has a second factor, and `secondFactors` lists the steps it may
+take, a security key first: `securityKey`, `totp`, `recoveryCode`. Only an
+authenticator app that is turned on counts here; a secret still being set
+up never signs in.
+
+### POST /api/auth/login/security-key/start, …/finish
+
+The second step with a security key (docs/plans/security-keys.md).
+- `start` `{ "preAuthToken" }` answers `PublicKeyCredentialRequestOptions` in
+  its JSON form, naming the account's usable keys (only someone past the
+  password step learns them); `409 noSecurityKeys` without one.
+- `finish` `{ "preAuthToken", "credential" }`, `credential` being the
+  browser's `PublicKeyCredential.toJSON()` from `get()`, answers the same
+  session as `login/2fa`. The ceremony is single use, bound to the
+  pre-auth token, and lasts `webauthnCeremonySeconds`. Failures share
+  `login/2fa`'s attempt budget (`401 invalidCredentials`, then `429`). A key
+  whose counter did not move on may have been cloned: it is marked
+  compromised, logged, and refused (`401 securityKeyCompromised`); it is
+  never offered again (Proton's flag: remove it, and add it again if it is
+  yours). When the key was used after this sign-in started (another tab),
+  a counter behind is that use, not a clone: refused only (`409
+  securityKeyRetry`), as Signal restarts the ceremony.
+
+**Auth:** None · **Header:** `X-Kutup-Client` (on `finish`)
 
 ---
 
@@ -888,7 +929,10 @@ The secret is stored as *pending* and only becomes active after `POST /api/user/
 ### POST /api/user/2fa/verify
 
 Confirm TOTP setup by providing the first valid code, with the password proved
-again: a `totp` grant from a reauth of this session.
+again: a `totp` grant from a reauth of this session. Beside security keys
+(two-step sign-in already on), a factor the account has is proved too:
+`recoveryCode` or `securityKey` (`403 secondFactorRequired` without), and
+the response's `recoveryCodes` is empty (the account's codes stay).
 
 **Auth:** Bearer JWT
 
@@ -926,9 +970,12 @@ two-step sign-in is off.
 
 ### DELETE /api/user/2fa
 
-Disable TOTP for the current user. Requires a valid TOTP code, or a recovery
-code in its place, and a `totp` grant from a reauth of this session, so a
-stolen session cannot remove 2FA. The recovery codes go with it.
+Turn the authenticator app off. Requires a valid TOTP code (or a recovery
+code, or `securityKey`: a key's answer to `POST
+/api/auth/security-keys/proof/start`) and a `totp` grant from a reauth of
+this session, so a stolen session cannot remove 2FA. With security keys left
+two-step sign-in stays on, with its recovery codes; otherwise they go with
+it.
 
 A wrong code here or at `POST /api/user/2fa/recovery-codes` still uses up
 the grant, so each guess takes the password again. Wrong codes count per
@@ -945,6 +992,54 @@ included.
   "grant": "kg1_…"
 }
 ```
+
+---
+
+### Security keys: `/api/auth/security-keys`
+
+Security keys (WebAuthn: a YubiKey, or a phone's or computer's built-in
+authenticator used as a key) as a second factor beside the authenticator app,
+as Proton has them (docs/plans/security-keys.md): several per account, each
+named; not passkeys (no passwordless sign-in). The relying party is the
+account app's origin and the RP id (`KUTUP_WEBAUTHN_RP_ID`, else
+`KUTUP_BASE_DOMAIN`, else the account app's host); where WebAuthn can't work (plain http off localhost) keys are
+off: `available: false`, and the routes answer `503 securityKeysOff`.
+
+- `GET` → `{ keys: [{ id, name, createdAt, lastUsedAt, compromised }],
+  requireUv, limit, available }`.
+- `POST register/start` `{ grant, code | securityKey }` (a `totp` grant
+  from a reauth of this session; while two-step sign-in is on, a factor the
+  account has proved again, as `DELETE` takes it, else `403
+  secondFactorRequired`) → `PublicKeyCredentialCreationOptions` (JSON form): attestation
+  `none`, not discoverable, the account's keys excluded, user verification
+  from "Require PIN". `409 securityKeyLimit` at `securityKeysPerAccount`
+  (10).
+- `POST register/finish` `{ name, credential }` (1–128 characters; the
+  browser's `toJSON()` from `create()`) → `{ key, recoveryCodes? }`.
+  The account's first second factor turns two-step sign-in on, with its
+  recovery codes (shown once). A start that proved no factor can't finish
+  once one is on (`403 secondFactorRequired`). Names refuse control and
+  format characters (bidi overrides). `409 securityKeyExists` (on this or
+  any account: a credential is unique), `400
+  securityKeyRefused` (another origin or RP, a wrong answer), `400
+  securityKeyCeremony` (expired or answered).
+- `PATCH {id}` `{ name }` renames it (`204`).
+- `DELETE {id}` `{ grant, code | securityKey }`: the password and the second
+  factor proved again, as `DELETE /api/user/2fa` takes them → `{
+  twoFactorOff }`. Removing the last factor turns two-step sign-in off and
+  drops the recovery codes.
+- `POST proof/start` → options for proving the second factor with a key for
+  this session: the answer goes in `securityKey` (removing a key or the
+  authenticator app, renewing recovery codes).
+- `PUT require-uv` `{ grant, requireUv, code | securityKey }`: Proton's
+  "Require PIN", user verification when adding and signing in (`204`).
+  Turning it off takes the second factor too.
+
+Every change is in the security log (`securityKeyAdded`, `securityKeyRemoved`,
+`securityKeyCompromised`, each with the key's name in `oldName`;
+`authenticatorOn`, `authenticatorOff`, and `twoFactorOn`/`twoFactorOff`
+when two-step sign-in turns on or off), and the account's other sessions
+see a new session version.
 
 ---
 
@@ -2822,6 +2917,54 @@ them and counts against the share's `uploadQuotaBytes`.
 declared length of the user's open tus uploads (an upload reserves its whole
 length until it is finalised).
 
+**Revisions and the block format** (docs/plans/drive-block-format.md §3).
+Each stored content of a file — its first upload and every version — is a
+revision with its own id, stored at `files/{fileId}/revisions/{revisionId}`.
+An upload in the block format (suite 2) names its revision with
+`revisionId`: the client chooses it before it seals, and the blob's header
+binds it, so the server checks the two agree. It also checks the blob's
+structure from its length and trailer (the manifest length fits the block
+count, and the count the length); it can't check the AEAD. An upload without
+`revisionId` is the streaming format (suite 1) and gets a new revision id. A
+revision id already used is `409 revisionTaken`.
+
+**Ranges.** Every content route (download, original, version, public link,
+Chat media and the federated reads) takes one `Range: bytes=a-b`, `a-` or
+`-k` and answers `206` with `Content-Range`, or `416` with
+`Content-Range: bytes */<length>` for a range past the end. Several ranges, or
+a malformed one, are answered whole (`200`). The ETag is the revision id (an
+attachment id for Chat media) and `If-Range` is honoured: a range of other
+content gets the whole new content. One answer carries at most
+`driveStreamResponseMaxBytes`; a longer range is answered in part, as its
+`Content-Range` says: its first part, or a suffix's last.
+
+**Limits** are settings an administrator changes, for the site or for one
+account (docs/plans/settings-registry.md): the largest upload
+(`driveUploadMaxBytes`, 10 GiB) and version (`driveVersionMaxBytes`, 2 GiB)
+for the uploading account, counted as the body arrives (`413` past them),
+and the streaming settings `GET /api/drive/limits` lists.
+
+### GET /api/drive/limits
+
+The upload and streaming limits a client works with, as they are for this
+account: its own where administrators set them, else the site's.
+`streamResponseMaxBytes` is the site's always (a transport parameter).
+
+**Auth:** Bearer JWT
+
+```json
+{
+  "uploadMaxBytes": 10737418240,
+  "versionMaxBytes": 2147483648,
+  "streamMaxBytes": 10737418240,
+  "streamCacheBlocks": 3,
+  "streamReadaheadBlocks": 1,
+  "streamMaxConcurrent": 3,
+  "streamResponseMaxBytes": 5242880,
+  "streamBlobFallbackMaxBytes": 1073741824
+}
+```
+
 ### POST /api/files/upload
 
 Upload an encrypted file to a collection. Multipart form.
@@ -2838,6 +2981,7 @@ Upload an encrypted file to a collection. Multipart form.
 | `fileKeyEnvelope` | string (canonical base64) | `DriveEnvelopeV1` file-key record under the collection key, bound to file, collection, the collection's current epoch and key generation 1 (the revision slot) |
 | `nameHash` | string | The name's hash in the folder ("Names in a folder"); required, checked before anything is stored |
 | `contentHash` | string (optional) | The content's hash in the folder, when known before the upload |
+| `revisionId` | string (canonical UUID, optional) | The block-format blob's revision (see "Revisions and the block format") |
 | `file` | binary | Complete typed Drive file blob (`application/octet-stream`) |
 
 The server obtains the current collection epoch itself and rejects malformed,
@@ -2947,7 +3091,8 @@ bytes as the file is now: its latest `kind = file` version when it has one
 Public links and federated reads serve the same. The `X-Kutup-Version` header
 names what was served: the version id, or `original` for the upload. A client
 that saves its edit with `basedOn` passes it on (see
-`POST /api/files/:fileId/versions`).
+`POST /api/files/:fileId/versions`). The ETag is the content's revision id,
+and one `Range` is served (see "Ranges").
 
 ---
 
@@ -3022,8 +3167,11 @@ resumable (tus `HEAD`/`PATCH` as for a new file) and of any size. The
 `metadataRevision` (the file's next metadata revision: its new size and
 `sha256`), and optionally `contentHash` (the new content's hash in its
 folder) and `basedOn` (a version id or `original`, as a multipart save). The
-blob is sealed for the file at its current key generation. Answers `201`
-with `{ "fileId", "versionId" }` (the upload's id is the version's).
+blob is sealed for the file at its current key generation. In the block
+format `revisionId` names the blob's revision, which becomes the version's
+id; its structure is checked when the last part lands. Answers `201` with
+`{ "fileId", "versionId" }` (the upload's id is the version's). At most
+`driveVersionMaxBytes` (`413`).
 
 Checked when the upload starts, so a conflict fails before the content is
 sent, and again when its last part lands: the caller may write the file
@@ -3629,7 +3777,7 @@ A retry with the same credential answers the device it made. `200 OK` →
 
 ### GET /api/chat/device
 
-The caller's Chat devices (the account's devices that take Chat): `{ "devices": [{ "deviceId", "suite", "name", "createdAt", "lastSeenAt" }] }`.
+The account's Chat devices: those its manifest lists with Chat keys (a registration not yet listed isn't one): `{ "devices": [{ "deviceId", "suite", "name", "createdAt", "lastSeenAt" }] }`.
 
 ### PATCH /api/chat/device/{deviceId}
 
@@ -3790,7 +3938,10 @@ Remaining one-time pool sizes: `{ "oneTimePreKeys": n, "oneTimeKyberPreKeys": n 
 ### POST /api/chat/manifest
 
 Publish the account's next `AccountManifestV3`, signed by the account
-self-authority (device-authenticated). It follows the head
+self-authority (device-authenticated: any device of the account, of every
+kind; without `X-Kutup-Device`, a sign-in alone may publish one that only
+removes devices, every other entry as the head lists it, which the Account
+app does: `401 deviceCredential` for anything else). It follows the head
 (`verifySuccessor`: head + 1, linked by hash, the same account, incarnation
 and authority), names the account's identity (`409 identityMismatch`: the
 identity changes only by a distribution or a re-registration), carries
@@ -4339,9 +4490,8 @@ is then absent) or the device is not the caller's.
 
 `204`: stop waking the device.
 
-### POST /api/chat/ws-ticket?deviceId=N
-
-Mint a random, one-time browser WebSocket ticket bound to the authenticated user and chat device. The ticket expires in 60 seconds and is returned as `{ "ticket", "expiresAt" }`.
+Browsers mint the socket's one-time ticket with `POST /api/device-ticket`
+(Devices, below); the Chat socket takes only a Chat device's.
 
 ### GET /api/chat/ws?ticket=…
 
@@ -4682,7 +4832,18 @@ A file (or its folder) in the trash answers `404`.
 
 ### GET /api/fed/drive/files/:fileId/content
 
-Stream ciphertext with its precomputed signed content digest and exact length.
+Stream ciphertext with its precomputed signed content digest and exact length;
+the ETag is the content's revision id. A ranged read
+(docs/plans/drive-block-format.md §3) names its one range in the signed
+query, `?range=a-b` (or `a-`, `-k`) and optionally `&ifRange=<etag>`;
+nothing else may be in the query. The answer is `206`, signed over the
+content digest of that part (at most `driveStreamResponseMaxBytes`), with
+`Content-Range`, or `416`. `GET /api/fed/drive/file-content` (a file shared
+by itself) takes the same query. The receiving server forwards its client's
+`Range` (cut to its own part limit first) and `If-Range` this way, and
+releases a part only once it is the one asked: its start, its length (which the signed digest covers) and the part
+limit. `Content-Range`'s total is not signed; the reader's own metadata gives
+the object's length, and its manifest fixes every byte.
 
 ### POST /api/fed/drive/files
 
@@ -4693,7 +4854,9 @@ owner pays: the upload must fit their quota (less their open uploads) and the
 share's `uploadQuotaBytes`, measured from the files the share uploaded. A
 `fileId` already in use is `409`. The request is signed over its content
 digest: the server verifies the signature first, spools and hashes the body,
-and parses nothing until the digest matches. Body cap 10 GiB.
+and parses nothing until the digest matches. Body cap: the upload limit
+(`driveUploadMaxBytes`) plus 16 MiB. A block-format blob names its
+`revisionId`, checked as a local upload's.
 
 ### DELETE /api/fed/drive/files/:fileId
 
@@ -4715,29 +4878,19 @@ base64 sealed collab frames.
 - **`POST push`** (home → bridge) `{ subscriptionId, fileId, frames: [{ seq,
   frame }], ephemeral: [frame], throughSeq, floor, close }`: frames in log
   order, never the bridge's own. `404` for an unknown subscription.
-- **`POST devices`** `{ fileId, devices: [{ deviceId, userId,
-  authorityPublicKey, publicSigning, challenge, issuedAtMs, signature }],
-  revocations: [{ seq, authorityPublicKey, publicSigning, revokedAtMs,
-  signature }] }` → `{ accepted: [deviceId], refused: [{ deviceId, code }],
-  revocationsThrough }`. `seq` is the bridge's own order of its revocations
-  (never a clock), and `revocationsThrough` the highest `seq` home has
-  processed for the account: the bridge sends what comes after it. The bridge announces the editing account's
-  collaboration devices (docs/plans/device-registration.md) and forwards its
-  signed revocations, at most 50 entries in all. A device is kept only when
-  its `DeviceRegistrationV1` names the bridge and verifies under the share
-  recipient's authority. Refusal codes are `doesNotVerify`, `notRecipient`,
-  `expired` (older than the 30-day lease, or dated ahead), `revoked`,
-  `keyInUse` and `tooManyDevices` (20 in use per account: not revoked, within
-the lease). Rate limit:
-  `RATE_LIMIT_COLLAB_DEVICE_ANNOUNCES_PER_MIN` per (domain, capability).
-- **`POST frames`** `{ fileId, subscriptionId, frames }` → `{ positions,
-  unknownDevices, expiredDevices }` (positions are null for relayed-only or
-  refused frames). Checked as local frames are, against the file's current
-  keys and the share's edit permission, and also signed by an announced,
-  unrevoked, unexpired device of the share's recipient; the sender is kept
-  as `(domain, device)`. Frames from devices listed in `unknownDevices` or
-  `expiredDevices` are not kept: the bridge announces the unknown ones and
-  sends again, and asks its clients to renew the expired ones.
+- **`POST frames`** `{ fileId, subscriptionId, frames: [{ sender, frame }] }`
+  → `{ positions }` (null for relayed-only or refused frames). Each frame
+  names its sender account, which its signature covers. Checked as local
+  frames are, against the file's current keys and the share's edit
+  permission, and also: the sender is the share's recipient, an account of
+  the calling server, and the frame is signed with a frame key that the
+  recipient's account manifest lists for the frame's device, under the
+  incarnation the share was made to (docs/plans/one-device-list.md §8). The
+  home fetches that manifest through the federated manifest route and keeps
+  it in `remote_account_manifests`. It fetches again when a frame names a
+  newer manifest sequence or a device it doesn't list, at most once a minute
+  per account, and moves only forward along the account's chain. The sender
+  is kept as (domain, account, device).
 - **`POST log`** `{ fileId, since }` → `{ frames, throughSeq, floor }`:
   catching up.
 - **`POST versions/list`** `{ fileId }`; **`GET files/:fileId/versions/:vid`**
@@ -5102,15 +5255,43 @@ answers the limit as it is now. A value outside `min`–`max` is `400`, an
 unknown key `404`. It applies at once on this backend and within 30 seconds
 on the others; each change writes a `settings.rate_limit` audit entry.
 
-### GET /api/admin/users/{id}/rate-limits · PUT /api/admin/users/{id}/rate-limits/{key}
+### GET /api/admin/users/{id}/limits · PUT /api/admin/users/{id}/limits/{key}
 
 **Auth:** Bearer JWT (admin)
 
-The limits counted per account, as they stand for one account:
-`{ "limits": [{ "key", "section", "unit", "windowSeconds", "value",
-"siteValue", "override", "min", "max" }] }`. `PUT` gives the account its own
-value (`{ "value": 3 }`) or takes it back (`null`); a limit not counted per
-account is `400`. Each change writes a `user.rate_limit` audit entry.
+The settings and rate limits that limit one account, as they stand for this
+one (docs/plans/settings-registry.md):
+
+```json
+{
+  "settings": [{ "key": "drive_upload_max_bytes", "field": "driveUploadMaxBytes",
+    "section": "drive", "unit": "bytes", "value": 1073741824, "source": "account",
+    "siteValue": 10737418240, "min": 1048576, "max": 4398046511104 }],
+  "rateLimits": [{ "key": "rate_limit.feedback", "limit": "feedback",
+    "section": "administration", "unit": "events", "windowSeconds": 3600,
+    "value": 10, "source": "default", "siteValue": 10, "min": 1, "max": 1000 }]
+}
+```
+
+`source` says where `value` comes from: `account`, `site` or `default`.
+`PUT` takes a setting's key or `rate_limit.<key>`, and gives the account its
+own value (`{ "value": 3 }`) or takes it back (`null`); it answers the entry
+as it is now. A value outside the range is `400` (never clamped), and so is a
+setting or rate limit that doesn't limit one account; an unknown key is
+`404`. Lowering a value below what the account already uses only stops new
+growth: nothing is removed. Each change writes a `user.setting` or
+`user.rate_limit` audit entry.
+
+### GET /api/admin/settings/registry
+
+**Auth:** Bearer JWT (admin)
+
+Every whole-number setting, as Server settings builds its fields from it:
+`{ "settings": [{ "key", "field", "section", "unit", "default", "min", "max",
+"perAccount", "value", "set" }] }`. `field` is its name in
+`/api/admin/settings`, `section` one of `chatMulti`, `calendar`,
+`chatLinking`, `twoFactor` and `drive`, and `perAccount` whether one account
+may have its own value.
 
 ---
 
@@ -5140,9 +5321,28 @@ Return current global server settings.
   "calendarEventsPerCalendar": 25000,
   "calendarSyncBatch": 10,
   "calendarWindowDays": 400,
-  "calendarEventsPage": 1000
+  "calendarEventsPage": 1000,
+  "driveUploadMaxBytes": 10737418240,
+  "driveVersionMaxBytes": 2147483648,
+  "driveStreamMaxBytes": 10737418240,
+  "driveStreamCacheBlocks": 3,
+  "driveStreamReadaheadBlocks": 1,
+  "driveStreamMaxConcurrent": 3,
+  "driveStreamResponseMaxBytes": 5242880,
+  "driveStreamBlobFallbackMaxBytes": 1073741824
 }
 ```
+
+The Drive settings (docs/plans/drive-block-format.md §7; clients read them
+from `GET /api/drive/limits`): `driveUploadMaxBytes` and
+`driveVersionMaxBytes` (1 MiB–4 TiB) are the largest upload and saved
+version; `driveStreamMaxBytes` (0–4 TiB, 0 never streams) the largest file a
+player streams rather than downloads first; `driveStreamCacheBlocks` (1–16),
+`driveStreamReadaheadBlocks` (0–4) and `driveStreamMaxConcurrent` (1–8) shape
+a stream; `driveStreamResponseMaxBytes` (4.5 MiB–16 MiB, at least one sealed 4 MiB
+block) is the most one ranged answer carries, across servers too; and
+`driveStreamBlobFallbackMaxBytes` (0–4 GiB) the largest file played from
+memory where no service worker can stream it.
 
 The Calendar settings: `calendarsPerAccount` (1–1000) is how many calendars
 one account may own, `calendarEventsPerCalendar` how many events one
@@ -5278,7 +5478,7 @@ persisted peer trust/discovery state. Rules remain visible while inactive.
       "lastDiscoveryError": null,
       "diagnostics": {
         "chatPendingTransactions": 0,
-        "chatMismatchTransactions": 0,
+        "chatMismatchesLastDay": 0,
         "driveIncomingShares": 1,
         "driveOutgoingShares": 0
       }
@@ -5290,7 +5490,7 @@ persisted peer trust/discovery state. Rules remain visible while inactive.
     "verifiedPeers": 0,
     "quarantinedPeers": 0,
     "chatPendingTransactions": 0,
-    "chatMismatchTransactions": 0,
+    "chatMismatchesLastDay": 0,
     "oldestChatPendingAt": null,
     "driveIncomingShares": 1,
     "driveOutgoingShares": 0,
@@ -5402,67 +5602,64 @@ is not an automatic fallback for failed rotation.
 
 ## Devices
 
-Collaboration devices: the Ed25519 keys that sign collaborative-edit frames,
-each registered with the account's signed statement
-(docs/plans/device-registration.md). On the web, one device per sign-in per
-app origin, shared by its tabs; the CLI keeps one per profile. A device is
-trusted while it is not revoked, its incarnation is the account's current
-one and the sign-in session that registered (or last renewed) it is live.
-Refusals on the device routes and the collaboration routes answer `403
-deviceNotAuthorized`: the client registers again, it does not sign out.
-
-### POST /api/devices/challenge
-A one-time challenge for registering or renewing a device: 32 random bytes,
-valid five minutes, used up by any answer. At most five stay open per account
-(a sixth evicts the oldest). Rate limit:
-`RATE_LIMIT_DEVICE_CHALLENGES_PER_MIN` (default 20) per account.
-**Auth:** Bearer JWT. **Response:** `{challenge}` (base64).
+One device list per account (docs/plans/one-device-list.md): every app
+installation is a device of the account, an entry of its signed manifest
+(`AccountManifestV3`, Chat above), with a server-issued id (1..127), a
+credential sent as `X-Kutup-Device: <deviceId>.<credential>`, and, for an
+editing app (Drive, Office, Maps, Pass) or the CLI, the Ed25519 frame key
+that signs its collaborative-edit frames. On the web, one device per sign-in
+per app origin, shared by its tabs; the CLI keeps one per profile. A device's
+frames count while its row and sign-in are live and the account's head
+manifest lists it with its frame key; otherwise the collaboration routes
+answer `403 deviceNotAuthorized` (the client registers again, it does not
+sign out). A device is removed by publishing the account's next manifest
+without it: its row and open sockets go. A row not yet listed is dropped
+by a publication, or by the account's next device registration, after
+`deviceListingGraceSeconds` (default 600). Until then it holds its id, and
+it counts toward `devicesPerAccount` (a per-account setting) and the Chat
+cap.
 
 ### POST /api/devices
-Register a device key. Required before opening a collaborative-edit socket
-or using the HTTP frame routes.
+Register an editor or CLI device of the caller's account (a Chat device
+registers with `POST /api/chat/device`).
 **Auth:** Bearer JWT.
-**Body:** `{publicSigning, label?, challenge, issuedAtMs, signature}`: the
-account authority's `DeviceRegistrationV1` signature over its incarnation,
-this server, the user id, the key, the purpose, the challenge and
-`issuedAtMs` (within ±24 hours of the server clock). The device is bound to
-the caller's session.
-**Response 201:** `{deviceId, label, createdAt}`. **403**
-`deviceNotAuthorized`: the statement does not verify or the challenge is not
-the caller's to answer. **409**: the key was ever registered (any account,
-revoked or not), or `tooManyDevices`: the account has 20 devices in use
-(trusted, with a statement within 30 days). Devices of ended sign-ins, or
-unused for 30 days, do not count.
-
-### POST /api/devices/:id/renew
-A newer statement for the same key (body `{challenge, issuedAtMs,
-signature}`), which other servers need within 30 days. It also binds the
-device to the caller's session, so a device whose sign-in ended is taken up
-again; it then counts against the cap like a new one.
-**Response:** `204`, or `403 deviceNotAuthorized`, or `409 tooManyDevices`.
+**Body:** `RegisterDeviceRequestV1` `{kind: "editor"|"cli", name?, frameKey,
+credential}`: the frame key (canonical base64 of an Ed25519 public key, not
+a small-order point) and the device's credential (unpadded base64url of 32
+random bytes; the server keeps a salted hash).
+**Response 200:** `{deviceId, session}`: the lowest id no row of the account
+holds, and the `session` hash its manifest entry lists. A retry with the
+same credential answers the row it made. The device then lists itself in the
+account's next manifest (`POST /api/chat/manifest`, with its
+`X-Kutup-Device`); an account with no manifest yet gets its first, with no
+Chat identity. **409 `deviceLimit`**: the account has `devicesPerAccount`
+devices. **429**: `RATE_LIMIT_DEVICE_REGISTRATIONS_PER_MIN` (default 20) per
+account.
 
 ### GET /api/devices
-The account's devices, newest first: `{deviceId, label, publicSigning,
-isActive, trusted, inUse, thisSession, statementIssuedAtMs, createdAt,
-lastSeenAt}`. `isActive`: not revoked. `trusted`: as above. `inUse`: counted
-by the cap. `thisSession`: registered or renewed by the caller's session.
+Every device of the account, of every kind: `{devices: [{deviceId, kind,
+name, session, thisSignIn, listed, expired, createdAt, lastSeenAt}]}`.
+`listed`: the head manifest lists it. `thisSignIn`: of the caller's sign-in.
+`expired`: idle too long, dropped by the next manifest.
 
-### DELETE /api/devices/:id
-Revoke a device for good, with the account authority's `DeviceRevocationV1`
-signature (body `{revokedAtMs, signature}`): a session alone cannot revoke
-the account's devices. Its open sockets close, its key never registers
-again, and other servers are told through the account's announces.
-**Response:** `204`; `403 deviceNotAuthorized` when the revocation does not
-verify; `404` for a device already revoked.
+### GET /api/device-session
+`{session}`: the hash a device of the caller's sign-in lists in its manifest
+entry (Chat, above).
+
+### POST /api/device-ticket
+A single-use WebSocket ticket for the device `X-Kutup-Device` names, of any
+kind, valid 60 seconds: `{ticket, expiresAt}`. Browsers can't set headers on
+a socket, so the Chat socket (`?ticket=`, a Chat device's only) and the
+collaboration sockets (a device with a frame key) take it.
 
 ---
 
 ## Collaborative Editing
 
 ### GET /api/files/:fileId/collab/ws
-WebSocket upgrade. Auth via `Authorization: Bearer ...` header **or** `?token=...&deviceId=N` query (browsers can't set custom headers on the initial WS handshake).
+WebSocket upgrade. Auth via `?ticket=` (a device ticket, `POST /api/device-ticket`: browsers can't set custom headers on the handshake) **or** `Authorization: Bearer …` with `X-Kutup-Device`.
 
-PreUpgrade validates: JWT (rejects setup/pre-auth tokens), file access (owner OR collection-share recipient), device registration (must belong to user, must be active). Failures return HTTP 401/403/404 BEFORE the WS handshake completes.
+PreUpgrade validates: the device (a live row with a frame key, of a live sign-in, listed in the account's head manifest with that key: `403 deviceNotAuthorized` otherwise) and file access (owner OR collection-share recipient). Failures return HTTP 401/403/404 BEFORE the WS handshake completes.
 
 A view-only recipient joins to follow edits: the server relays its presence
 frames (awareness and cursors) and drops everything else it sends. Edits are
@@ -5474,23 +5671,23 @@ sending edits faster than 50 frames/s or 1 MiB/s sustained (bursts of 500
 frames / 16 MiB) is disconnected. Office edit frames stay in the log for a
 day, as a buffer for peers resuming after a dropped connection.
 
-On accept the server sends a JSON `hello` `{type, fileId, currentDocKeyId, headSeq, peers: [{deviceId, userId}]}`. Client replies with JSON `{type: "resume", lastSeenSeq: K}`. Server replays binary `CollabFrame`s from seq `K+1` to head, then sends `{type: "replayed", throughSeq, floor}` (the last position replayed, and how far saved versions have trimmed the log: a client that resumed below `floor` merges the latest saved version), then enters bidirectional binary mode. After storing each document frame it sends `{type: "stored", seq}` to everyone in the file, the sender included, after the frame itself. Messages are handled in order, so a client knows every frame up to a position it has seen is applied; positions only ever go up. A saved version records the highest contiguous position its client had applied; a note's version trims the log up to it, a whole-file (office) version does not. Office editors also send `{type: "base", versionId, seq, reset}` on connect, before `resume`: the version they loaded (null: the original upload) and its position. The first claim in an empty room sets the editing session's base (and trims the log up to it); later claims get `{type: "base", versionId, seq, yours, reset: false}` back, and a tab whose claim is not `yours` reopens from the returned base; `reset: true` (after a restore) replaces the base and the server sends the other tabs `{type: "base", …, reset: true}` so they reopen. A claim must name a `kind = file` version of the file at its recorded position (or null at 0); anything else is ignored. `CollabFrameSuiteId = 1` is the canonical Rust-owned `KUTPCF1\0` format documented in `docs/v1-format-inventory.md`; the server rejects an unknown suite, malformed length, invalid device signature, or any file/collection/epoch/document-generation mismatch. On a file shared from another server, the bridge sends `{type: "renewDevice", deviceIds}` when the file's server reports a device's statement past its 30-day lease; the named devices sign a fresh statement (`POST /api/devices/:id/renew`) and the bridge announces it.
+On accept the server sends a JSON `hello` `{type, fileId, currentDocKeyId, headSeq, peers: [{account, deviceId, userId}]}` (a device id is its account's: a peer is `account` and `deviceId` together). Every binary message the server sends is a delivered frame: the sender account (`AccountRef` bytes) then the packed frame (`envelope::deliver`); a client sends bare frames, and the server names it. Client replies with JSON `{type: "resume", lastSeenSeq: K}`. Server replays binary `CollabFrame`s from seq `K+1` to head, then sends `{type: "replayed", throughSeq, floor}` (the last position replayed, and how far saved versions have trimmed the log: a client that resumed below `floor` merges the latest saved version), then enters bidirectional binary mode. After storing each document frame it sends `{type: "stored", seq}` to everyone in the file, the sender included, after the frame itself. Messages are handled in order, so a client knows every frame up to a position it has seen is applied; positions only ever go up. A saved version records the highest contiguous position its client had applied; a note's version trims the log up to it, a whole-file (office) version does not. Office editors also send `{type: "base", versionId, seq, reset}` on connect, before `resume`: the version they loaded (null: the original upload) and its position. The first claim in an empty room sets the editing session's base (and trims the log up to it); later claims get `{type: "base", versionId, seq, yours, reset: false}` back, and a tab whose claim is not `yours` reopens from the returned base; `reset: true` (after a restore) replaces the base and the server sends the other tabs `{type: "base", …, reset: true}` so they reopen. A claim must name a `kind = file` version of the file at its recorded position (or null at 0); anything else is ignored. `CollabFrameSuiteId = 1` is the canonical Rust-owned `KUTPCF3\0` format (`kutup-crypto::envelope`: the header names the sender's device id and manifest sequence; the signature covers the sender account too); the server rejects an unknown suite, malformed length, a frame of another device or naming a manifest sequence the account doesn't have, an invalid signature under the device's listed frame key, or any file/collection/epoch/document-generation mismatch.
 
 ### GET /api/files/:fileId/collab/frames and POST /api/files/:fileId/collab/frames
 
 The collaboration log over HTTP, for a peer that does not hold a socket open:
 the CLI editing notes, code files and place lists as a Yjs peer
-(docs/plans/cli-yjs-sync.md). **Auth:** as the socket: Bearer JWT and
-`?deviceId=` (the caller's active registered device).
+(docs/plans/cli-yjs-sync.md). **Auth:** Bearer JWT and `X-Kutup-Device` (a
+device whose frames count, as the socket's).
 
-- `GET …?deviceId=&after=K&limit=` (a reader of the file) → `{ frames: [{ seq,
+- `GET …?after=K&limit=` (a reader of the file) → `{ frames: [{ seq, sender,
   frame }], headSeq, floor, currentDocKeyId, mySenderSeqHigh, more }`: the
   sealed frames after position `K`, oldest first, at most 500 (`more` when
   others follow), the log's head, how far saved versions have trimmed it (a
   reader below `floor` starts from the latest saved version), the current
   document key, and this device's highest sender sequence (its next frame goes
   above it).
-- `POST …?deviceId=` (an editor) with one sealed frame as
+- `POST …` (an editor) with one sealed frame as
   `application/octet-stream` → `{ seq }`. It passes the same gate as a socket's
   frame (this device's signature, the exact file, its current key generation
   and document key, write access, a key the folder still holds) and is kept and

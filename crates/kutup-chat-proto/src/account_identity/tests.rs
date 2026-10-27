@@ -67,8 +67,8 @@ fn manifest(devices: Vec<AccountManifestDeviceV3>) -> AccountManifestV3 {
         incarnation_id: hex::encode(incarnation.finalize()),
         sequence: 1,
         previous_hash: None,
-        identity_key: identity(3),
-        identity_binding: b64(&[0x5b; 64]),
+        identity_key: Some(identity(3)),
+        identity_binding: Some(b64(&[0x5b; 64])),
         drive: AccountManifestDriveKeysV1 {
             suite: AccountIdentitySuiteId::XWingEd25519V2,
             hpke_public_key: b64(&[9; 1216]),
@@ -97,7 +97,7 @@ fn manifest_v3_verifies_and_binds_every_field() {
 
     // Every vouched-for field is under the signature.
     let mut other_identity = good.clone();
-    other_identity.identity_key = identity(4);
+    other_identity.identity_key = Some(identity(4));
     assert!(other_identity.verify().is_err());
     let mut other_registration = good.clone();
     other_registration.devices[1]
@@ -142,7 +142,7 @@ fn manifest_v3_refuses_bad_shapes_even_when_signed() {
     }
 
     let mut not_curve = two_devices();
-    not_curve.identity_key = b64(&[3; 33]);
+    not_curve.identity_key = Some(b64(&[3; 33]));
     assert!(not_curve.signing_bytes().is_err());
 
     let mut no_link = two_devices();
@@ -213,6 +213,126 @@ fn each_kind_carries_its_keys() {
         assert_eq!(DeviceKind::parse(kind.as_str()).unwrap(), kind);
     }
     assert!(DeviceKind::parse("mls").is_err());
+}
+
+/// An account that never used Chat has a manifest too: its editing devices
+/// and no identity. A Chat device needs the identity listed.
+#[test]
+fn a_manifest_without_a_chat_identity_lists_no_chat_device() {
+    let without = |devices| {
+        let mut manifest = manifest(devices);
+        manifest.identity_key = None;
+        manifest.identity_binding = None;
+        sign(&mut manifest);
+        manifest
+    };
+    let editors = without(vec![editor(1), editor(2)]);
+    editors.verify().unwrap();
+    assert!(editors.chat_identity_key().is_err());
+    assert!(editors.identity_binding_bytes().is_err());
+    let json = serde_json::to_value(&editors).unwrap();
+    assert!(json.get("identityKey").is_none());
+    assert!(without(vec![editor(1), device(2, 20)]).verify().is_err());
+    // Both or neither.
+    let mut half = manifest(vec![editor(1)]);
+    half.identity_binding = None;
+    assert!(half.signing_bytes().is_err());
+    // The identity is signed in: dropping it breaks the signature.
+    let mut dropped = manifest(vec![editor(1)]);
+    dropped.identity_key = None;
+    dropped.identity_binding = None;
+    assert!(dropped.verify().is_err());
+}
+
+/// An editor's first manifest for an account: its keys, no identity, and a
+/// successor that adds a device.
+#[test]
+fn an_accounts_first_manifest_and_its_successor() {
+    let keys = kutup_crypto::identity::AccountIdentityKeysV1::derive(&[5; 32]).unwrap();
+    let account = AccountRef::new("example.test", "0b6b5e0c-4c1e-4b8e-9c2d-6a1f3e5d7c9b").unwrap();
+    let mut first =
+        AccountManifestV3::first(account, &keys, vec![editor(2)], "2026-10-26T00:00:00Z");
+    first.sign(keys.authority_signing_key()).unwrap();
+    first.verify_successor(None).unwrap();
+    assert_eq!(first.incarnation_id, keys.incarnation_id());
+    let mut next = first
+        .successor(vec![editor(2), editor(1)], "2026-10-26T00:01:00Z")
+        .unwrap();
+    assert_eq!(next.devices[0].device_id, 1, "ordered");
+    next.sign(keys.authority_signing_key()).unwrap();
+    next.verify_successor(Some(&first)).unwrap();
+    // Another account's authority can't sign it.
+    let other = kutup_crypto::identity::AccountIdentityKeysV1::derive(&[6; 32]).unwrap();
+    assert!(next.clone().sign(other.authority_signing_key()).is_err());
+}
+
+/// A client's pin on its own account: a head no older than the newest it
+/// saw, never no head once it saw one, another incarnation's pin ignored.
+#[test]
+fn the_own_manifest_pin_refuses_rollback_and_a_new_chain() {
+    let keys = kutup_crypto::identity::AccountIdentityKeysV1::derive(&[5; 32]).unwrap();
+    let account = AccountRef::new("example.test", "0b6b5e0c-4c1e-4b8e-9c2d-6a1f3e5d7c9b").unwrap();
+    let incarnation = keys.incarnation_id();
+    let mut first = AccountManifestV3::first(
+        account.clone(),
+        &keys,
+        vec![editor(1)],
+        "2026-10-26T00:00:00Z",
+    );
+    first.sign(keys.authority_signing_key()).unwrap();
+    let mut second = first
+        .successor(vec![editor(1), editor(2)], "2026-10-26T00:01:00Z")
+        .unwrap();
+    second.sign(keys.authority_signing_key()).unwrap();
+    let check = |pin: Option<&OwnManifestPinV1>, head: Option<&AccountManifestV3>| {
+        OwnManifestPinV1::check(pin, head, &account, &incarnation)
+    };
+
+    // Nothing seen: no head, or any head, is taken.
+    assert_eq!(check(None, None).unwrap(), None);
+    let pin = check(None, Some(&first)).unwrap().unwrap();
+    assert_eq!(pin, OwnManifestPinV1::of(&first).unwrap());
+    // The same head again, then a later one, move the pin forward.
+    assert_eq!(check(Some(&pin), Some(&first)).unwrap(), Some(pin.clone()));
+    let pin = check(Some(&pin), Some(&second)).unwrap().unwrap();
+    assert_eq!(pin.sequence, 2);
+    // An older head (the removed device back), or none at all (a fresh
+    // first manifest without the Chat identity), is refused.
+    assert!(check(Some(&pin), Some(&first)).is_err());
+    assert!(check(Some(&pin), None).is_err());
+    // Another manifest at the pinned sequence (a fork) is refused.
+    let mut fork = first
+        .successor(vec![editor(1), editor(3)], "2026-10-26T00:02:00Z")
+        .unwrap();
+    fork.sign(keys.authority_signing_key()).unwrap();
+    assert!(check(Some(&pin), Some(&fork)).is_err());
+    // A head that doesn't verify is refused, pin or not.
+    let mut forged = second.clone();
+    forged.devices.push(editor(4));
+    assert!(check(None, Some(&forged)).is_err());
+    // Another account's head is refused.
+    let other = AccountRef::new("example.test", "1b6b5e0c-4c1e-4b8e-9c2d-6a1f3e5d7c9b").unwrap();
+    assert!(OwnManifestPinV1::check(None, Some(&second), &other, &incarnation).is_err());
+    // A reset account's new keys: the old incarnation's pin no longer
+    // applies, and its own first manifest is taken.
+    let reset = kutup_crypto::identity::AccountIdentityKeysV1::derive(&[6; 32]).unwrap();
+    let mut fresh = AccountManifestV3::first(
+        account.clone(),
+        &reset,
+        vec![editor(1)],
+        "2026-10-27T00:00:00Z",
+    );
+    fresh.sign(reset.authority_signing_key()).unwrap();
+    let after_reset =
+        OwnManifestPinV1::check(Some(&pin), Some(&fresh), &account, &reset.incarnation_id())
+            .unwrap()
+            .unwrap();
+    assert_eq!(after_reset.sequence, 1);
+    assert!(
+        OwnManifestPinV1::check(Some(&pin), None, &account, &reset.incarnation_id())
+            .unwrap()
+            .is_none()
+    );
 }
 
 #[test]
@@ -289,7 +409,7 @@ fn bundles_must_agree_with_the_manifest() {
     let manifest = two_devices();
     let good = AccountPreKeyBundlesResponse {
         account: manifest.account.clone(),
-        identity_key: manifest.identity_key.clone(),
+        identity_key: manifest.identity_key.clone().unwrap(),
         devices: vec![bundle(1, 10), bundle(2, 20)],
         manifest,
     };
@@ -479,7 +599,7 @@ fn distribution() -> AccountIdentityDistributionRequest {
     manifest.previous_hash = Some(hex::encode([7; 32]));
     sign(&mut manifest);
     AccountIdentityDistributionRequest {
-        identity_key: manifest.identity_key.clone(),
+        identity_key: manifest.identity_key.clone().unwrap(),
         devices: vec![keys(1, 11), keys(3, 31)],
         // The message carries device 3's current registration id.
         device_messages: vec![sync_envelope(3, 30)],
@@ -743,8 +863,8 @@ fn manifest_v3_vector_is_pinned() {
 }
 
 const SIGNING_BYTES_SHA256: &str =
-    "7e1eeb0f633c38d76e02e931cc30540c01ba6fa92babcd588d2a1cde2f383381";
-const MANIFEST_HASH: &str = "172b87fd0ff206b5ec35703f8310a9ccd21b7238aa0fedfc9052b485578df6eb";
+    "4df9d81e6392f894d842fd784e2a93be5ed47ad95e5c56d501100d350682f19f";
+const MANIFEST_HASH: &str = "b7ee11e87ce4e3033173b5f5939feff90474cbcf7b7600d1488f1dff3dba8760";
 
 #[test]
 fn account_identity_sync_body() {
@@ -807,7 +927,7 @@ fn the_identity_binding_is_signed_and_names_authority_incarnation_account_and_id
             &manifest.authority_key_id,
             &manifest.incarnation_id,
             &manifest.account,
-            &manifest.identity_key
+            manifest.identity_key.as_deref().unwrap()
         )
         .unwrap()
     );
@@ -818,8 +938,8 @@ fn the_identity_binding_is_signed_and_names_authority_incarnation_account_and_id
     // The binding itself is under the authority's signature, and its length
     // is checked.
     let mut other = manifest.clone();
-    other.identity_binding = b64(&[0x5c; 64]);
+    other.identity_binding = Some(b64(&[0x5c; 64]));
     assert!(other.verify().is_err());
-    other.identity_binding = b64(&[0x5c; 63]);
+    other.identity_binding = Some(b64(&[0x5c; 63]));
     assert!(other.signing_bytes().is_err());
 }

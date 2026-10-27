@@ -307,11 +307,13 @@ impl Client {
         decode_json(resp)
     }
 
-    /// `grant`: a `totp` grant from a reauth of this session.
-    pub fn verify_totp(&self, code: &str, grant: &str) -> Result<()> {
+    /// `grant`: a `totp` grant from a reauth of this session;
+    /// `recovery_code`: beside security keys, one of the account's recovery
+    /// codes proving the factor it has (empty otherwise).
+    pub fn verify_totp(&self, code: &str, grant: &str, recovery_code: &str) -> Result<()> {
         let resp = self.post_json(
             "/user/2fa/verify",
-            &serde_json::json!({ "code": code, "grant": grant }),
+            &serde_json::json!({ "code": code, "grant": grant, "recoveryCode": recovery_code }),
         )?;
         check_ok(resp)
     }

@@ -1,14 +1,15 @@
 //! Collaborative-edit WebSocket handler — mirrors `backend/handlers/collab.go`.
 //!
-//! The server is a blind relay: it verifies each frame's Ed25519 signature (never decrypts),
-//! persists the durable kinds to `file_update_log`, and fans frames out to the other peers in
-//! the file's room. Auth (token + file access + device) happens before the upgrade, mirroring
-//! Go's `PreUpgrade`; `handle_connection` is the per-connection coroutine (Go's
-//! `HandleConnection`): hello → join → peer broadcast → read loop → leave.
+//! The server is a blind relay: it verifies each frame's Ed25519 signature (never decrypts)
+//! against the frame key the sender's account manifest lists for its device
+//! (docs/plans/one-device-list.md), persists the durable kinds to `file_update_log`, and fans
+//! frames out to the other peers in the file's room, each named by its sender account
+//! (`envelope::deliver`). Auth (a device ticket or token + device credential, file access)
+//! happens before the upgrade; `handle_connection` is the per-connection coroutine: hello →
+//! join → peer broadcast → read loop → leave.
 
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
 use axum::extract::{Path, Query, State};
-use axum::http::header::AUTHORIZATION;
 use axum::http::HeaderMap;
 use axum::response::{IntoResponse, Response};
 use futures_util::{SinkExt, StreamExt};
@@ -17,17 +18,40 @@ use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;
 use uuid::Uuid;
 
+use crate::account_devices::FrameDevice;
 use crate::error::{AppError, AppResult};
 use crate::hub::{self, Hub, WsOut};
 use crate::AppState;
+use kutup_crypto::account_ref::AccountRef;
 
-/// Query params on the WS URL. Browsers can't set headers on `new WebSocket(url)`, so the
-/// token + deviceId arrive here (token may also come via `Authorization`).
+/// Query params on the WS URL. Browsers can't set headers on `new WebSocket(url)`, so a
+/// device ticket (`POST /api/device-ticket`) arrives here; a native client sends its token
+/// and `X-Kutup-Device` instead.
 #[derive(Debug, Deserialize)]
 pub struct CollabQuery {
-    pub(crate) token: Option<String>,
-    #[serde(rename = "deviceId")]
-    pub(crate) device_id: Option<String>,
+    pub(crate) ticket: Option<String>,
+    /// The tab's own random id (lowercase hex, at most 6 digits): the tabs
+    /// of one browser share a device, and the room tells them apart by it
+    /// (an office editor keys its participants on it).
+    #[serde(default)]
+    pub(crate) tab: Option<String>,
+}
+
+impl CollabQuery {
+    /// The tab id, if well formed (1 to 6 lowercase hex digits, the 24 bits a client
+    /// draws): empty otherwise (an older client).
+    pub(crate) fn tab(&self) -> String {
+        self.tab
+            .as_deref()
+            .filter(|tab| {
+                (1..=6).contains(&tab.len())
+                    && tab
+                        .bytes()
+                        .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+            })
+            .unwrap_or_default()
+            .to_owned()
+    }
 }
 
 /// One participant in the room's peer-list. Keys are emitted in the alphabetical order Go's
@@ -35,10 +59,16 @@ pub struct CollabQuery {
 /// (Go only sets them when non-empty).
 #[derive(Debug, Serialize)]
 pub(crate) struct PeerSummary {
+    /// The peer's account (`aci:<uuid>@<server>`): with `deviceId`, the
+    /// sender its frames name.
+    account: String,
     #[serde(skip_serializing_if = "String::is_empty")]
     color: String,
     #[serde(rename = "deviceId")]
-    device_id: i64,
+    device_id: u32,
+    /// The tab's id (see `CollabQuery::tab`); omitted for an older client.
+    #[serde(skip_serializing_if = "String::is_empty")]
+    tab: String,
     #[serde(rename = "userId")]
     user_id: String,
     #[serde(skip_serializing_if = "String::is_empty")]
@@ -80,8 +110,7 @@ struct PeersMsg {
     security(("BearerAuth" = [])),
     params(
         ("fileId" = String, Path, description = "File id"),
-        ("token" = Option<String>, Query, description = "Access token (browsers cannot set headers on `new WebSocket`)"),
-        ("deviceId" = Option<String>, Query, description = "The caller's registered device id")
+        ("ticket" = Option<String>, Query, description = "A device ticket (browsers cannot set headers on `new WebSocket`)"),
     ),
     responses((status = 101, description = "WebSocket upgrade — Ed25519-signed encrypted collab frames; the server relays without decrypting"))
 )]
@@ -92,13 +121,10 @@ pub async fn ws(
     headers: HeaderMap,
     upgrade: WebSocketUpgrade,
 ) -> AppResult<Response> {
-    let (user_id, session_id, device_id, pub_key) =
-        authenticate_socket(&state, &headers, &q).await?;
+    let device = authenticate_socket(&state, &headers, &q).await?;
     // Anyone who may read the file joins; only editors' edits are kept.
     let file_uuid = Uuid::parse_str(&file_id).map_err(|_| AppError::not_found("file not found"))?;
-    let user_uuid =
-        Uuid::parse_str(&user_id).map_err(|_| AppError::unauthorized("invalid token"))?;
-    let access = file_access(&state.pool, user_uuid, file_uuid)
+    let access = file_access(&state.pool, device.user_id, file_uuid)
         .await?
         .ok_or_else(|| AppError::not_found("file not found"))?;
     if access == Access::None {
@@ -108,10 +134,8 @@ pub async fn ws(
     let conn = Conn {
         file_id,
         file_uuid,
-        user_uuid,
-        session_id,
-        device_id,
-        pub_key,
+        device,
+        tab: q.tab(),
     };
     // One frame carries at most one envelope's plaintext.
     let max_frame = envelope::MAX_PLAINTEXT_BYTES + envelope::MIN_PACKED;
@@ -119,57 +143,26 @@ pub async fn ws(
         .max_message_size(max_frame)
         .max_frame_size(max_frame)
         .on_upgrade(move |socket| async move {
-            handle_connection(state, socket, conn, user_id).await;
+            handle_connection(state, socket, conn).await;
         }))
 }
 
-/// The session and registered device behind a collaboration socket: the
-/// access token (header or `?token=`, as browsers cannot set headers on a
-/// WebSocket) and `?deviceId=`, which must be this user's active device.
+/// The device behind a collaboration socket: a single-use device ticket
+/// (browsers), or the access token and `X-Kutup-Device` (native clients). Its
+/// frames must count now (`account_devices::frame_device`): `403
+/// deviceNotAuthorized` otherwise, and the client registers again.
 pub(crate) async fn authenticate_socket(
     state: &AppState,
     headers: &HeaderMap,
     q: &CollabQuery,
-) -> AppResult<(String, Uuid, i64, Vec<u8>)> {
-    let token = headers
-        .get(AUTHORIZATION)
-        .and_then(|v| v.to_str().ok())
-        .and_then(|s| s.strip_prefix("Bearer "))
-        .map(|s| s.to_string())
-        .or_else(|| q.token.clone());
-    let token = match token {
-        Some(t) if !t.is_empty() => t,
-        _ => return Err(AppError::unauthorized("missing token")),
-    };
-    let auth = crate::middleware::authenticate_access_token(state, &token)
-        .await
-        .map_err(|_| AppError::unauthorized("invalid token"))?;
-    let user_id = auth.user_id;
-    let session_id = auth.session.session_id;
-    let device_id: i64 = match q.device_id.as_deref().and_then(|s| s.trim().parse().ok()) {
-        Some(d) if d != 0 => d,
-        _ => return Err(AppError::unauthorized("missing or invalid deviceId")),
-    };
-    // An active device of this account, registered under its current
-    // incarnation: a device vouched for by an authority the account no
-    // longer has (an account reset) is not trusted.
-    // Its sign-in must be live too: a device of an ended session is retired.
-    let dev: Option<(Vec<u8>, String, bool)> = sqlx::query_as(&format!(
-        "SELECT d.public_signing, d.user_id::text, {}
-         FROM user_devices d JOIN users u ON u.id = d.user_id WHERE d.id = $1",
-        crate::handlers::devices::DEVICE_LIVE
-    ))
-    .bind(device_id)
-    .fetch_optional(&state.pool)
-    .await?;
-    match dev {
-        Some((pk, owner, true)) if owner == user_id => Ok((user_id, session_id, device_id, pk)),
-        // Not the session's fault: the client registers a device again
-        // (docs/plans/device-registration.md), it does not sign out.
-        _ => Err(AppError::forbidden(
-            "device not registered, revoked or from an earlier incarnation",
-        )
-        .with_details(serde_json::json!({ "code": "deviceNotAuthorized" }))),
+) -> AppResult<FrameDevice> {
+    match q.ticket.as_deref() {
+        Some(ticket) => {
+            let (user_id, device_id) =
+                crate::account_devices::consume_ticket(state, ticket).await?;
+            crate::account_devices::frame_device(state, user_id, device_id).await
+        }
+        None => crate::account_devices::frame_device_of_request(state, headers).await,
     }
 }
 
@@ -217,10 +210,8 @@ async fn file_access(
 struct Conn {
     file_id: String,
     file_uuid: Uuid,
-    user_uuid: Uuid,
-    session_id: Uuid,
-    device_id: i64,
-    pub_key: Vec<u8>,
+    device: FrameDevice,
+    tab: String,
 }
 
 /// How often an open connection re-checks its session and file access, so
@@ -273,13 +264,13 @@ impl FrameBudget {
 }
 
 /// Per-connection coroutine — mirrors `HandleConnection`.
-async fn handle_connection(state: AppState, socket: WebSocket, conn: Conn, user_id: String) {
+async fn handle_connection(state: AppState, socket: WebSocket, conn: Conn) {
     let hub = state.hub.clone();
-    let (file_id, file_uuid, device_id) = (conn.file_id.clone(), conn.file_uuid, conn.device_id);
+    let (file_id, file_uuid) = (conn.file_id.clone(), conn.file_uuid);
+    let device = &conn.device;
+    let user_uuid = device.user_id;
 
-    // Username + color for the peer-list (best-effort). `id` is a uuid column, so bind a
-    // Uuid (a text bind would fail the comparison and silently yield empty fields).
-    let user_uuid = Uuid::parse_str(&user_id).unwrap_or_default();
+    // Username + color for the peer-list (best-effort).
     let (username, color): (String, String) = sqlx::query_as(
         "SELECT COALESCE(username, ''), COALESCE(color, '') FROM users WHERE id = $1",
     )
@@ -289,10 +280,13 @@ async fn handle_connection(state: AppState, socket: WebSocket, conn: Conn, user_
     .unwrap_or_default();
 
     // Stamp last_seen_at on every successful upgrade.
-    let _ = sqlx::query("UPDATE user_devices SET last_seen_at = now() WHERE id = $1")
-        .bind(device_id)
-        .execute(&state.pool)
-        .await;
+    let _ = sqlx::query(
+        "UPDATE devices SET last_seen_at = now() WHERE user_id = $1 AND device_id = $2",
+    )
+    .bind(user_uuid)
+    .bind(device.device_id as i32)
+    .execute(&state.pool)
+    .await;
 
     // hello payload fields. These are not best-effort: a client told a
     // wrong head or sender seq could reuse sequence numbers and have its edits
@@ -304,14 +298,7 @@ async fn handle_connection(state: AppState, socket: WebSocket, conn: Conn, user_
                 .fetch_one(&state.pool)
                 .await?;
         let head_seq: i64 = log_head(&state.pool, file_uuid).await?;
-        let my_sender_seq: i64 = sqlx::query_scalar(
-            "SELECT COALESCE(MAX(sender_seq), 0) FROM file_update_log \
-             WHERE file_id = $1 AND sender_device = $2",
-        )
-        .bind(file_uuid)
-        .bind(device_id)
-        .fetch_one(&state.pool)
-        .await?;
+        let my_sender_seq = sender_seq_high(&state.pool, file_uuid, device).await?;
         Ok::<_, sqlx::Error>((doc_key_id, head_seq, my_sender_seq))
     };
     let (doc_key_id, head_seq, my_sender_seq) = match read.await {
@@ -333,7 +320,15 @@ async fn handle_connection(state: AppState, socket: WebSocket, conn: Conn, user_
     };
     let hello_json = serde_json::to_string(&hello).unwrap_or_else(|_| "{}".into());
 
-    let (peer, mut rx) = hub::new_peer(&hub, device_id, user_id, username, color);
+    let (peer, mut rx) = hub::new_peer(
+        &hub,
+        device.device_id,
+        conn.tab.clone(),
+        user_uuid.to_string(),
+        device.account.to_string(),
+        username,
+        color,
+    );
 
     // Writer task — the Rust analogue of writePump. Drains the outbound channel to the sink.
     let (mut sink, mut stream) = socket.split();
@@ -367,15 +362,21 @@ async fn handle_connection(state: AppState, socket: WebSocket, conn: Conn, user_
                 // Closed on a definite "no" (the session ended, the access
                 // gone); a failed check is tried again at the next tick.
                 let session_ended = matches!(
-                    crate::sessions::live(&state.pool, conn.session_id, conn.user_uuid).await,
+                    crate::sessions::live(&state.pool, device.session_id, user_uuid).await,
                     Err(ref error) if error.status == axum::http::StatusCode::UNAUTHORIZED
                 );
-                let access = file_access(&state.pool, conn.user_uuid, file_uuid).await;
-                if session_ended || matches!(access, Ok(None | Some(Access::None))) {
+                let access = file_access(&state.pool, user_uuid, file_uuid).await;
+                if session_ended
+                    || matches!(access, Ok(None | Some(Access::None)))
+                    || crate::account_devices::still_counts(&state, device).await == Some(false)
+                {
                     break;
                 }
             }
-            msg = stream.next() => match msg {
+            // Shut (the device removed) while a message was on its way:
+            // nothing of it is acted on (a frame, a base claim, a resume),
+            // whatever the select picked.
+            msg = stream.next() => if peer.is_shut() { break } else { match msg {
                 Some(Ok(Message::Binary(b))) => {
                     if !handle_frame(&state, &peer, &conn, &mut budget, &b).await {
                         break;
@@ -386,7 +387,7 @@ async fn handle_connection(state: AppState, socket: WebSocket, conn: Conn, user_
                 }
                 Some(Ok(_)) => {} // ping/pong/other
                 Some(Err(_)) | None => break,
-            },
+            } },
         }
     }
 
@@ -401,8 +402,10 @@ pub(crate) fn peer_summaries(hub: &Hub, file_id: &str) -> Vec<PeerSummary> {
     hub.peers(file_id)
         .into_iter()
         .map(|p| PeerSummary {
+            account: p.account.clone(),
             color: p.color.clone(),
             device_id: p.device_id,
+            tab: p.tab.clone(),
             user_id: p.user_id.clone(),
             username: p.username.clone(),
         })
@@ -532,14 +535,51 @@ async fn trim_log(
         .bind(log_lock_key(file_uuid))
         .execute(&mut *tx)
         .await?;
-    sqlx::query(
-        "DELETE FROM file_update_log l USING files f
-         WHERE l.file_id = $1 AND f.id = $1 AND f.current_doc_key_id = $3 AND l.seq <= $2",
+    trim_log_through(&mut tx, file_uuid, seq, doc_key_id).await?;
+    tx.commit().await
+}
+
+/// Deletes the rows of `delete` (a `DELETE FROM file_update_log l ...
+/// RETURNING l.*` statement) and raises each sender's floor
+/// (`file_sender_floors`) to the highest counter it took, in one statement,
+/// so a trimmed frame stays a replay. Every deletion of log rows goes
+/// through here. The number of rows deleted.
+pub(crate) fn trimming(delete: &str) -> String {
+    format!(
+        "WITH gone AS ({delete}),
+              floors AS (
+                INSERT INTO file_sender_floors
+                       (file_id, sender_domain, sender_account, sender_device, seq_prefix, sender_seq)
+                SELECT file_id, sender_domain, sender_account, sender_device, sender_seq >> 32,
+                       MAX(sender_seq)
+                  FROM gone
+                 GROUP BY file_id, sender_domain, sender_account, sender_device, sender_seq >> 32
+                ON CONFLICT (file_id, sender_domain, sender_account, sender_device, seq_prefix)
+                DO UPDATE SET sender_seq =
+                    GREATEST(file_sender_floors.sender_seq, EXCLUDED.sender_seq)
+                RETURNING 1)
+         SELECT COUNT(*) FROM gone"
     )
+}
+
+/// Trims the file's log through `seq` under the document key `doc_key_id`
+/// (the frames a saved version holds), and moves its position floor there.
+/// The caller holds the log's lock.
+pub(crate) async fn trim_log_through(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    file_uuid: Uuid,
+    seq: i64,
+    doc_key_id: i64,
+) -> sqlx::Result<()> {
+    sqlx::query_scalar::<_, i64>(&trimming(
+        "DELETE FROM file_update_log l USING files f
+          WHERE l.file_id = $1 AND f.id = $1 AND f.current_doc_key_id = $3 AND l.seq <= $2
+         RETURNING l.file_id, l.sender_domain, l.sender_account, l.sender_device, l.sender_seq",
+    ))
     .bind(file_uuid)
     .bind(seq)
     .bind(doc_key_id)
-    .execute(&mut *tx)
+    .fetch_one(&mut **tx)
     .await?;
     sqlx::query(
         "UPDATE files SET collab_log_floor = GREATEST(collab_log_floor, $2)
@@ -548,9 +588,9 @@ async fn trim_log(
     .bind(file_uuid)
     .bind(seq)
     .bind(doc_key_id)
-    .execute(&mut *tx)
+    .execute(&mut **tx)
     .await?;
-    tx.commit().await
+    Ok(())
 }
 
 /// Validates + persists a binary collab frame, then broadcasts it — mirrors `handleFrame`.
@@ -564,9 +604,7 @@ async fn handle_frame(
     data: &[u8],
 ) -> bool {
     let sender = FrameSender {
-        user_uuid: conn.user_uuid,
-        device_id: peer.device_id,
-        pub_key: &conn.pub_key,
+        device: &conn.device,
         file_uuid: conn.file_uuid,
         file_id: &conn.file_id,
         conn_id: peer.conn_id,
@@ -577,12 +615,10 @@ async fn handle_frame(
     )
 }
 
-/// Who sends a frame: a socket's connection, or a registered device posting
-/// one over HTTP (`post_frames`, conn id 0: no connection has it).
+/// Who sends a frame: a socket's connection, or a device posting one over
+/// HTTP (`post_frames`, conn id 0: no connection has it).
 pub(crate) struct FrameSender<'a> {
-    pub user_uuid: Uuid,
-    pub device_id: i64,
-    pub pub_key: &'a [u8],
+    pub device: &'a FrameDevice,
     pub file_uuid: Uuid,
     pub file_id: &'a str,
     pub conn_id: u64,
@@ -618,12 +654,26 @@ pub(crate) async fn accept_frame(
     let Ok(f) = Frame::unpack(data) else {
         return FrameOutcome::Dropped;
     };
-    if f.sender_device_id != sender.device_id as u64 || f.sequence > i64::MAX as u64 {
+    let device = sender.device;
+    if f.device_id != device.device_id || f.sequence > i64::MAX as u64 {
         return FrameOutcome::Dropped; // forged sender
     }
-    if envelope::verify(data, sender.pub_key).is_err() {
+    if envelope::verify(data, &device.account, &device.frame_key).is_err() {
         return FrameOutcome::Dropped;
     }
+    // A frame sealed under a later manifest than the one the connection
+    // started with: the device listed itself again since, or the frame lies.
+    if f.manifest_sequence > device.manifest_sequence {
+        let now =
+            crate::account_devices::frame_device(state, device.user_id, device.device_id as i32)
+                .await;
+        if !now.is_ok_and(|now| {
+            now.frame_key == device.frame_key && f.manifest_sequence <= now.manifest_sequence
+        }) {
+            return FrameOutcome::Dropped;
+        }
+    }
+    let delivered = envelope::deliver(&device.account, data);
     let file_uuid = sender.file_uuid;
 
     // The public authenticated header must name this exact file, its current
@@ -639,9 +689,11 @@ pub(crate) async fn accept_frame(
         }
         state
             .hub
-            .broadcast(sender.file_id, sender.conn_id, data)
+            .broadcast(sender.file_id, sender.conn_id, &delivered)
             .await;
-        state.collab_federation.relayed(file_uuid, None, data);
+        state
+            .collab_federation
+            .relayed(file_uuid, None, &device.account, data);
         return FrameOutcome::Relayed;
     }
 
@@ -649,7 +701,7 @@ pub(crate) async fn accept_frame(
     // (a share can be narrowed while the socket is open).
     // A failed check never lets the edit through: it closes the socket, as
     // a definite "no" does (the client reconnects).
-    match file_access(&state.pool, sender.user_uuid, file_uuid).await {
+    match file_access(&state.pool, device.user_id, file_uuid).await {
         Ok(Some(Access::Write)) => {}
         Ok(Some(Access::Read)) => return FrameOutcome::Dropped,
         _ => return FrameOutcome::Close,
@@ -661,7 +713,7 @@ pub(crate) async fn accept_frame(
         return FrameOutcome::Dropped;
     }
     if !budget.take(data.len()) {
-        tracing::warn!(file = %file_uuid, device = sender.device_id, "collab frame budget exceeded");
+        tracing::warn!(file = %file_uuid, device = device.device_id, "collab frame budget exceeded");
         return FrameOutcome::Close;
     }
 
@@ -672,9 +724,11 @@ pub(crate) async fn accept_frame(
         }
         state
             .hub
-            .broadcast(sender.file_id, sender.conn_id, data)
+            .broadcast(sender.file_id, sender.conn_id, &delivered)
             .await;
-        state.collab_federation.relayed(file_uuid, None, data);
+        state
+            .collab_federation
+            .relayed(file_uuid, None, &device.account, data);
         return FrameOutcome::Relayed;
     }
 
@@ -682,13 +736,17 @@ pub(crate) async fn accept_frame(
     // broadcast, then tell everyone in the room (the sender too) the frame's
     // log position. Each connection gets the frame before its position, so a
     // client knows every frame up to a position it has seen is applied.
-    let Ok(seq) = persist_frame(state, file_uuid, Sender::Device(sender.device_id), &f, data).await
-    else {
+    let log_sender = LogSender {
+        domain: None,
+        account: device.user_id,
+        device: device.device_id,
+    };
+    let Ok(seq) = persist_frame(state, file_uuid, log_sender, &f, data).await else {
         return FrameOutcome::Dropped;
     };
     state
         .hub
-        .broadcast(sender.file_id, sender.conn_id, data)
+        .broadcast(sender.file_id, sender.conn_id, &delivered)
         .await;
     state
         .hub
@@ -756,10 +814,53 @@ pub(crate) async fn replace_base(state: &AppState, file_uuid: Uuid, version_id: 
     }
 }
 
-/// Who sent a kept frame: a device here, or one on another server.
-pub(crate) enum Sender<'a> {
-    Device(i64),
-    Remote { domain: &'a str, device: i64 },
+/// Who sent a kept frame: a device of an account here (`domain` none) or
+/// on another server.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct LogSender<'a> {
+    pub domain: Option<&'a str>,
+    pub account: Uuid,
+    pub device: u32,
+}
+
+/// The highest frame counter `device` has kept in the file's log: its next
+/// frame goes above it.
+async fn sender_seq_high(
+    pool: &sqlx::PgPool,
+    file_uuid: Uuid,
+    device: &FrameDevice,
+) -> Result<i64, sqlx::Error> {
+    sqlx::query_scalar(
+        "SELECT GREATEST(
+             COALESCE((SELECT MAX(sender_seq) FROM file_update_log
+                        WHERE file_id = $1 AND sender_domain = '' AND sender_account = $2
+                          AND sender_device = $3), 0),
+             COALESCE((SELECT MAX(sender_seq) FROM file_sender_floors
+                        WHERE file_id = $1 AND sender_domain = '' AND sender_account = $2
+                          AND sender_device = $3), 0))",
+    )
+    .bind(file_uuid)
+    .bind(device.user_id)
+    .bind(device.device_id as i32)
+    .fetch_one(pool)
+    .await
+}
+
+/// A logged frame as delivered: named by its sender's account (this
+/// server's name for its own accounts).
+pub(crate) fn delivered_from_log(
+    state: &AppState,
+    domain: &str,
+    account: Uuid,
+    frame: &[u8],
+) -> Option<Vec<u8>> {
+    let server = if domain.is_empty() {
+        state.config.chat_server_name.as_str()
+    } else {
+        domain
+    };
+    let sender = AccountRef::new(server, &account.to_string()).ok()?;
+    Some(envelope::deliver(&sender, frame))
 }
 
 /// The position of the last frame in a file's log: the newest kept frame, or
@@ -786,19 +887,15 @@ pub(crate) fn log_lock_key(file_uuid: Uuid) -> i64 {
 
 /// Inserts a frame into `file_update_log`, assigning the next per-file seq — mirrors
 /// `persistFrame`. Sequence allocation is serialized per file so simultaneous frames from
-/// different devices cannot both select the same `MAX(seq) + 1`; the
-/// `(file_id, sender_device, sender_seq)` unique index still rejects exact replays.
+/// different devices cannot both select the same `MAX(seq) + 1`; the sender's
+/// `(domain, account, device, sender_seq)` unique index still rejects exact replays.
 pub(crate) async fn persist_frame(
     state: &AppState,
     file_uuid: Uuid,
-    sender: Sender<'_>,
+    sender: LogSender<'_>,
     f: &Frame,
     raw: &[u8],
 ) -> Result<i64, sqlx::Error> {
-    let (device_id, remote_domain, remote_device) = match sender {
-        Sender::Device(id) => (Some(id), None, None),
-        Sender::Remote { domain, device } => (None, Some(domain), Some(device)),
-    };
     let mut tx = state.pool.begin().await?;
 
     // PostgreSQL advisory locks are transaction-scoped and do not require a schema change.
@@ -809,9 +906,30 @@ pub(crate) async fn persist_frame(
         .execute(&mut *tx)
         .await?;
 
+    // A counter a trim took (see `trimming`) is a replay as much as one
+    // still in the log.
+    let trimmed: bool = sqlx::query_scalar(
+        "SELECT EXISTS (SELECT 1 FROM file_sender_floors
+                         WHERE file_id = $1 AND sender_domain = $2 AND sender_account = $3
+                           AND sender_device = $4 AND seq_prefix = $5 >> 32
+                           AND sender_seq >= $5)",
+    )
+    .bind(file_uuid)
+    .bind(sender.domain.unwrap_or(""))
+    .bind(sender.account)
+    .bind(sender.device as i32)
+    .bind(f.sequence as i64)
+    .fetch_one(&mut *tx)
+    .await?;
+    if trimmed {
+        return Err(sqlx::Error::Protocol(
+            "a replayed frame counter (below its sender's trimmed floor)".into(),
+        ));
+    }
+
     let seq = sqlx::query_scalar(
-        r#"INSERT INTO file_update_log (file_id, seq, sender_device, sender_seq, doc_key_id, kind, frame,
-                                       remote_domain, remote_device)
+        r#"INSERT INTO file_update_log (file_id, seq, sender_account, sender_seq, doc_key_id, kind,
+                                       frame, sender_domain, sender_device)
            VALUES (
              $1,
              GREATEST(
@@ -823,13 +941,13 @@ pub(crate) async fn persist_frame(
            RETURNING seq"#,
     )
     .bind(file_uuid)
-    .bind(device_id)
+    .bind(sender.account)
     .bind(f.sequence as i64)
     .bind(f.doc_key_id as i64)
     .bind(f.kind as i16)
     .bind(raw)
-    .bind(remote_domain)
-    .bind(remote_device)
+    .bind(sender.domain.unwrap_or(""))
+    .bind(sender.device as i32)
     .fetch_one(&mut *tx)
     .await?;
 
@@ -839,8 +957,9 @@ pub(crate) async fn persist_frame(
 
 /// Streams every frame with `seq > since_seq` to the joining client — mirrors `replayLog`.
 async fn replay_log(state: &AppState, peer: &hub::Peer, file_uuid: Uuid, since_seq: i64) {
-    let rows: Vec<(i64, Vec<u8>)> = match sqlx::query_as(
-        "SELECT seq, frame FROM file_update_log WHERE file_id = $1 AND seq > $2 ORDER BY seq ASC",
+    let rows: Vec<(i64, Vec<u8>, String, Uuid)> = match sqlx::query_as(
+        "SELECT seq, frame, sender_domain, sender_account FROM file_update_log
+          WHERE file_id = $1 AND seq > $2 ORDER BY seq ASC",
     )
     .bind(file_uuid)
     .bind(since_seq)
@@ -851,8 +970,11 @@ async fn replay_log(state: &AppState, peer: &hub::Peer, file_uuid: Uuid, since_s
         Err(_) => return,
     };
     let mut through = since_seq;
-    for (seq, frame) in rows {
-        if !peer.write(WsOut::Binary(frame)).await {
+    for (seq, frame, domain, account) in rows {
+        let Some(delivered) = delivered_from_log(state, &domain, account, &frame) else {
+            continue;
+        };
+        if !peer.write(WsOut::Binary(delivered)).await {
             return;
         }
         through = seq;
@@ -887,9 +1009,6 @@ const MAX_FRAMES_PER_READ: i64 = 500;
 
 #[derive(Debug, Deserialize, utoipa::IntoParams)]
 pub struct FramesQuery {
-    /// The caller's registered device.
-    #[serde(rename = "deviceId")]
-    pub device_id: Option<String>,
     /// Frames after this log position (0: from the start).
     #[serde(default)]
     pub after: i64,
@@ -901,6 +1020,9 @@ pub struct FramesQuery {
 #[serde(rename_all = "camelCase")]
 pub struct LoggedFrame {
     pub seq: i64,
+    /// Its sender's account (`aci:<uuid>@<server>`), which the frame's
+    /// signature covers.
+    pub sender: String,
     /// The sealed frame, canonical base64.
     pub frame: String,
 }
@@ -938,19 +1060,9 @@ pub async fn get_frames(
     Query(q): Query<FramesQuery>,
     headers: HeaderMap,
 ) -> AppResult<Response> {
-    let (user_id, _, device_id, _) = authenticate_socket(
-        &state,
-        &headers,
-        &CollabQuery {
-            token: None,
-            device_id: q.device_id.clone(),
-        },
-    )
-    .await?;
+    let device = crate::account_devices::frame_device_of_request(&state, &headers).await?;
     let file_uuid = Uuid::parse_str(&file_id).map_err(|_| AppError::not_found("file not found"))?;
-    let user_uuid =
-        Uuid::parse_str(&user_id).map_err(|_| AppError::unauthorized("invalid token"))?;
-    match file_access(&state.pool, user_uuid, file_uuid).await? {
+    match file_access(&state.pool, device.user_id, file_uuid).await? {
         None => return Err(AppError::not_found("file not found")),
         Some(Access::None) => return Err(AppError::forbidden("forbidden")),
         Some(_) => {}
@@ -959,9 +1071,10 @@ pub async fn get_frames(
         .limit
         .unwrap_or(MAX_FRAMES_PER_READ)
         .clamp(1, MAX_FRAMES_PER_READ);
-    let rows: Vec<(i64, Vec<u8>)> = sqlx::query_as(
-        "SELECT seq, frame FROM file_update_log WHERE file_id = $1 AND seq > $2
-         ORDER BY seq ASC LIMIT $3",
+    let rows: Vec<(i64, Vec<u8>, String, Uuid)> = sqlx::query_as(
+        "SELECT seq, frame, sender_domain, sender_account FROM file_update_log
+          WHERE file_id = $1 AND seq > $2
+          ORDER BY seq ASC LIMIT $3",
     )
     .bind(file_uuid)
     .bind(q.after.max(0))
@@ -975,21 +1088,25 @@ pub async fn get_frames(
             .fetch_one(&state.pool)
             .await?;
     let head_seq = log_head(&state.pool, file_uuid).await?;
-    let my_sender_seq_high: i64 = sqlx::query_scalar(
-        "SELECT COALESCE(MAX(sender_seq), 0) FROM file_update_log
-         WHERE file_id = $1 AND sender_device = $2",
-    )
-    .bind(file_uuid)
-    .bind(device_id)
-    .fetch_one(&state.pool)
-    .await?;
+    let my_sender_seq_high = sender_seq_high(&state.pool, file_uuid, &device).await?;
     use base64::Engine as _;
+    let own = state.config.chat_server_name.as_str();
     let frames = rows
         .into_iter()
         .take(limit as usize)
-        .map(|(seq, frame)| LoggedFrame {
-            seq,
-            frame: base64::engine::general_purpose::STANDARD.encode(frame),
+        .filter_map(|(seq, frame, domain, account)| {
+            let server = if domain.is_empty() {
+                own
+            } else {
+                domain.as_str()
+            };
+            Some(LoggedFrame {
+                seq,
+                sender: AccountRef::new(server, &account.to_string())
+                    .ok()?
+                    .to_string(),
+                frame: base64::engine::general_purpose::STANDARD.encode(frame),
+            })
         })
         .collect();
     Ok(axum::Json(FramesPage {
@@ -1020,10 +1137,7 @@ pub struct FrameKept {
     path = "/api/files/{fileId}/collab/frames",
     tag = "collab",
     security(("BearerAuth" = [])),
-    params(
-        ("fileId" = String, Path, description = "File id"),
-        ("deviceId" = String, Query, description = "The caller's registered device id")
-    ),
+    params(("fileId" = String, Path, description = "File id")),
     request_body(content = Vec<u8>, content_type = "application/octet-stream", description = "One sealed collaboration frame"),
     responses(
         (status = 200, description = "Kept", body = FrameKept),
@@ -1033,35 +1147,24 @@ pub struct FrameKept {
 pub async fn post_frame(
     State(state): State<AppState>,
     Path(file_id): Path<String>,
-    Query(q): Query<CollabQuery>,
     headers: HeaderMap,
     body: axum::body::Bytes,
 ) -> AppResult<Response> {
-    let (user_id, _, device_id, pub_key) = authenticate_socket(
-        &state,
-        &headers,
-        &CollabQuery {
-            token: None,
-            device_id: q.device_id.clone(),
-        },
-    )
-    .await?;
-    if !crate::ratelimit::COLLAB_FRAME_POSTS.allow(&device_id.to_string()) {
+    let device = crate::account_devices::frame_device_of_request(&state, &headers).await?;
+    if !crate::ratelimit::COLLAB_FRAME_POSTS
+        .allow(&format!("{}/{}", device.user_id, device.device_id))
+    {
         return Err(AppError::too_many_requests("too many requests")
             .with_details(serde_json::json!({ "code": "rateLimited" })));
     }
     let file_uuid = Uuid::parse_str(&file_id).map_err(|_| AppError::not_found("file not found"))?;
-    let user_uuid =
-        Uuid::parse_str(&user_id).map_err(|_| AppError::unauthorized("invalid token"))?;
-    match file_access(&state.pool, user_uuid, file_uuid).await? {
+    match file_access(&state.pool, device.user_id, file_uuid).await? {
         None => return Err(AppError::not_found("file not found")),
         Some(Access::Write) => {}
         Some(_) => return Err(AppError::forbidden("forbidden")),
     }
     let sender = FrameSender {
-        user_uuid,
-        device_id,
-        pub_key: &pub_key,
+        device: &device,
         file_uuid,
         file_id: &file_id,
         // No connection has id 0: the frame reaches every tab in the room.
@@ -1076,5 +1179,28 @@ pub async fn post_frame(
             "the frame was not kept: read the log again",
         )
         .with_details(serde_json::json!({ "code": "frameRefused" }))),
+    }
+}
+
+#[cfg(test)]
+mod tab_tests {
+    use super::CollabQuery;
+
+    fn tab(value: Option<&str>) -> String {
+        CollabQuery {
+            ticket: None,
+            tab: value.map(str::to_owned),
+        }
+        .tab()
+    }
+
+    #[test]
+    fn a_tab_id_is_short_lowercase_hex_or_nothing() {
+        assert_eq!(tab(Some("0a1b2c")), "0a1b2c");
+        assert_eq!(tab(Some("f")), "f");
+        for bad in ["", "DEAD", "1234567", "deadbeef", "xyz", "<script>"] {
+            assert_eq!(tab(Some(bad)), "", "{bad}");
+        }
+        assert_eq!(tab(None), "");
     }
 }

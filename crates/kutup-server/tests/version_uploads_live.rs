@@ -184,6 +184,8 @@ fn a_version_uploads_resumably_and_lands_with_its_metadata() {
     let at = location(&r);
     let created: Value = r.json().unwrap();
     let version_id = created["versionId"].as_str().unwrap().to_owned();
+    // The upload's id is the version's: clients address it by `versionId`.
+    assert_eq!(at, format!("/api/uploads/{version_id}"));
     // One open version upload per file; the caller is told which is theirs.
     let r = create_version(&c, &base, &owner.token, &file.id, blob.len(), &fields);
     assert_eq!(r.status(), StatusCode::CONFLICT);

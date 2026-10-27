@@ -2,9 +2,10 @@ import { useTranslation } from 'react-i18next'
 import { appUrl } from '@kutup/session/apps'
 
 /**
- * The account has 20 devices in use, so this browser gets none to edit with
- * (docs/plans/device-registration.md): the user removes one themselves under
- * Account → Devices. Nothing is removed for them.
+ * The account has as many devices as the server allows (an admin setting),
+ * so this browser gets none to edit with (docs/plans/one-device-list.md):
+ * the user removes one themselves under Account → Devices. Nothing is
+ * removed for them.
  */
 export function DeviceLimitNotice() {
   const { t } = useTranslation()

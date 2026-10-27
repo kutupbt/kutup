@@ -184,6 +184,64 @@ export interface SignedUpWith {
   usedAt: string
 }
 
+/** A whole-number setting's Server settings section (site_settings::SettingSection). */
+export type SettingSection = 'chatMulti' | 'calendar' | 'chatLinking' | 'twoFactor' | 'drive' | 'federation'
+/** What a whole-number setting counts. */
+export type SettingUnit = 'bytes' | 'count' | 'seconds' | 'days'
+/** Where a value in effect comes from. */
+export type ValueSource = 'account' | 'site' | 'default'
+
+/** One whole-number setting, as `GET /api/admin/settings/registry` lists it. */
+export interface RegistrySetting {
+  key: string
+  /** Its field in `/api/admin/settings`. */
+  field: keyof AdminSettings
+  section: SettingSection
+  unit: SettingUnit
+  default: number
+  min: number
+  max: number
+  /** Whether one account may have its own value. */
+  perAccount: boolean
+  value: number
+  set: boolean
+}
+
+/** A setting that limits one account, as it stands for one account. */
+export interface AccountSettingLimit {
+  key: string
+  field: keyof AdminSettings
+  section: SettingSection
+  unit: SettingUnit
+  value: number
+  source: ValueSource
+  siteValue: number
+  min: number
+  max: number
+}
+
+/** A rate limit counted per account, as it stands for one account. */
+export interface AccountRateLimitLimit {
+  /** `rate_limit.<key>`. */
+  key: string
+  /** The rate limit's own key. */
+  limit: string
+  section: string
+  unit: 'events' | 'attempts' | 'minutes' | 'bytes' | 'atOnce' | 'bytesAtOnce'
+  windowSeconds: number | null
+  value: number
+  source: ValueSource
+  siteValue: number
+  min: number
+  max: number
+}
+
+/** `GET /api/admin/users/{id}/limits`. */
+export interface AccountLimits {
+  settings: AccountSettingLimit[]
+  rateLimits: AccountRateLimitLimit[]
+}
+
 export interface AdminSettings {
   registrationMode: RegistrationMode
   /** The storage quota new accounts get; existing accounts keep theirs. */
@@ -234,16 +292,37 @@ export interface AdminSettings {
   calendarEventsPage: number
   /** Every device of an account, of every app (site_settings::DEVICES_PER_ACCOUNT). */
   devicesPerAccount: number
+  /** How long a new device's row waits to be listed (site_settings::DEVICE_LISTING_GRACE_SECONDS). */
+  deviceListingGraceSeconds: number
+  /** How long a cached manifest of another server's account is trusted (site_settings::REMOTE_MANIFEST_MAX_AGE_SECONDS). */
+  remoteManifestMaxAgeSeconds: number
   /** Linking Chat devices (site_settings::CHAT_IDENTITY_SETTINGS). */
   chatLinkTokenSeconds: number
   /** How many two-factor recovery codes are made at once. */
   twoFactorRecoveryCodes: number
+  securityKeysPerAccount: number
+  webauthnCeremonySeconds: number
   chatLinkTokensPerAccount: number
   chatProvisionBodyBytes: number
   chatMaxActiveDevices: number
   chatProvisioningTicketSeconds: number
   chatProvisioningSocketsPerAccount: number
   chatDistributionMessageBytes: number
+  /** Drive uploads and streaming (site_settings::DRIVE_SETTINGS), sizes in bytes. */
+  driveUploadMaxBytes: number
+  driveVersionMaxBytes: number
+  driveStreamMaxBytes: number
+  driveStreamCacheBlocks: number
+  driveStreamReadaheadBlocks: number
+  driveStreamMaxConcurrent: number
+  driveStreamResponseMaxBytes: number
+  driveStreamBlobFallbackMaxBytes: number
+  /** Federation deliveries' backoff (docs/plans/federation-outbox.md), in seconds. */
+  federationRetryBaseSeconds: number
+  federationRetryMaxSeconds: number
+  federationPeerUpgradeSeconds: number
+  federationWorkerSeconds: number
+  federationHeadsPerTick: number
 }
 
 export type FederationMode = 'disabled' | 'allowlist' | 'blocklist' | 'open'
@@ -284,7 +363,7 @@ export interface FederationPeer {
   lastDiscoveryError: string | null
   diagnostics: {
     chatPendingTransactions: number
-    chatMismatchTransactions: number
+    chatMismatchesLastDay: number
     driveIncomingShares: number
     driveOutgoingShares: number
   }
@@ -336,7 +415,7 @@ export interface AdminFederationPolicy {
     verifiedPeers: number
     quarantinedPeers: number
     chatPendingTransactions: number
-    chatMismatchTransactions: number
+    chatMismatchesLastDay: number
     oldestChatPendingAt: string | null
     driveIncomingShares: number
     driveOutgoingShares: number

@@ -142,7 +142,7 @@ impl LinkingDevice {
             .await?
             .ok_or_else(|| ChatError::Trust("the account has no manifest to link to".into()))?;
         verify_own_manifest(&head, &account, authority)?;
-        if head.identity_key != message.identity_key_public {
+        if head.identity_key.as_deref() != Some(message.identity_key_public.as_str()) {
             return Err(ChatError::Trust(
                 "the account's manifest lists another identity".into(),
             ));
@@ -201,6 +201,39 @@ pub(crate) fn identity_from_parts(public: &str, private: &str) -> Result<Identit
     Ok(IdentityKeyPair::new(public, private))
 }
 
+/// Checks `head`, the account's own head as its server gave it, against
+/// `trust`: the newest own manifest this installation accepted. The head must
+/// be no older, the same manifest at that sequence, and present once one was
+/// accepted ([`kutup_chat_proto::OwnManifestPinV1::check`]), so a server can't
+/// have this device sign onto a stale head (bringing a removed device back)
+/// or start a new chain. `incarnation`: the one this device's authority
+/// derives, when it holds it (a pin of another incarnation doesn't apply);
+/// otherwise the pinned one.
+pub(crate) fn check_own_head(
+    trust: Option<&crate::db::ManifestTrust>,
+    head: Option<&AccountManifestV3>,
+    account: &kutup_crypto::account_ref::AccountRef,
+    incarnation: Option<&str>,
+) -> Result<()> {
+    let Some(trust) = trust else {
+        return Ok(());
+    };
+    let pin = kutup_chat_proto::OwnManifestPinV1 {
+        account: account.clone(),
+        incarnation_id: trust.incarnation_id.clone(),
+        sequence: trust.highest_sequence,
+        hash: trust.manifest_hash.clone(),
+    };
+    kutup_chat_proto::OwnManifestPinV1::check(
+        Some(&pin),
+        head,
+        account,
+        incarnation.unwrap_or(&trust.incarnation_id),
+    )
+    .map(|_| ())
+    .map_err(ChatError::Trust)
+}
+
 /// The account's own manifest, as the server serves it: valid, this
 /// account's, and signed by this account's authority.
 pub(crate) fn verify_own_manifest(
@@ -247,7 +280,12 @@ impl Engine {
             }
             _ => {}
         }
-        let account_has_identity = transport.fetch_manifest(user).await?.is_some();
+        // A manifest of an account that never used Chat lists its editing
+        // devices and no identity: this device re-registers, as the first.
+        let account_has_identity = transport
+            .fetch_manifest(user)
+            .await?
+            .is_some_and(|manifest| manifest.identity_key.is_some());
         Ok(Installation::Unregistered {
             account_has_identity,
         })
@@ -273,6 +311,17 @@ impl Engine {
         crate::timeline::ensure_built(db.as_ref()).await?;
         let account = crate::address::parse_account(&user)?;
         let head = transport.fetch_manifest(&user).await?;
+        // The newest own manifest this installation accepted, if it kept one.
+        let trust = match db.load_manifest_trust(&account.to_string()).await? {
+            Some(trust) => Some(trust),
+            None => db.load_manifest_trust(&user).await?,
+        };
+        check_own_head(
+            trust.as_ref(),
+            head.as_ref(),
+            &account,
+            Some(&authority.incarnation_id()),
+        )?;
         if let Some(head) = &head {
             verify_own_manifest(head, &account, authority)?;
         }
@@ -444,13 +493,13 @@ impl Engine {
         let code = ProvisioningLinkCodeV1::parse(code).map_err(ChatError::Invalid)?;
         let account = self.self_account()?;
         let transport = Rc::clone(&self.transport);
-        let head = transport
-            .fetch_manifest(self.session.user())
+        let head = self
+            .own_head()
             .await?
             .ok_or_else(|| ChatError::Trust("the account has no manifest".into()))?;
         verify_own_manifest(&head, &account, authority)?;
         let identity_key = self.session.account_identity_key();
-        if head.identity_key != identity_key {
+        if head.identity_key.as_deref() != Some(identity_key.as_str()) {
             return Err(ChatError::Trust(
                 "the account's identity is not this device's".into(),
             ));
@@ -522,12 +571,12 @@ impl Engine {
         let account = self.self_account()?;
         let transport = Rc::clone(&self.transport);
         for _ in 0..crate::engine::MAX_SEND_ATTEMPTS {
-            let head = transport
-                .fetch_manifest(&user)
+            let head = self
+                .own_head()
                 .await?
                 .ok_or_else(|| ChatError::Trust("the account has no manifest".into()))?;
             verify_own_manifest(&head, &account, &self.group_keys()?.authority)?;
-            if head.identity_key != self.session.account_identity_key() {
+            if head.identity_key.as_deref() != Some(self.session.account_identity_key().as_str()) {
                 return Err(ChatError::Trust(
                     "the account's identity is not this device's".into(),
                 ));
@@ -694,13 +743,12 @@ impl Engine {
             .map_err(|error| ChatError::Db(format!("kept identity sync: {error}")))?;
         body.validate().map_err(ChatError::Protocol)?;
         let account = self.self_account()?;
-        let user = self.session.user().to_string();
-        let head = Rc::clone(&self.transport)
-            .fetch_manifest(&user)
+        let head = self
+            .own_head()
             .await?
             .ok_or_else(|| ChatError::Trust("the account has no manifest".into()))?;
         verify_own_manifest(&head, &account, &self.group_keys()?.authority)?;
-        let current = head.identity_key == body.identity_key_public
+        let current = head.identity_key.as_deref() == Some(body.identity_key_public.as_str())
             && head
                 .chat_device(self.session.device_id())
                 .is_some_and(|device| device.registration_id == body.registration_id)
@@ -764,16 +812,15 @@ impl Engine {
     /// ([`ChatError::LinkRequired`]).
     pub async fn catch_up_identity<R: Rng + CryptoRng>(&mut self, rng: &mut R) -> Result<()> {
         let account = self.self_account()?;
-        let user = self.session.user().to_string();
         let mut drained_after: Option<String> = None;
         for _ in 0..IDENTITY_CATCH_UP_ROUNDS {
             self.apply_account_identity().await?;
-            let head = Rc::clone(&self.transport)
-                .fetch_manifest(&user)
+            let head = self
+                .own_head()
                 .await?
                 .ok_or_else(|| ChatError::Trust("the account has no manifest".into()))?;
             verify_own_manifest(&head, &account, &self.group_keys()?.authority)?;
-            if head.identity_key == self.session.account_identity_key() {
+            if head.identity_key.as_deref() == Some(self.session.account_identity_key().as_str()) {
                 return Ok(());
             }
             let hash = head.manifest_hash().map_err(ChatError::Trust)?;
@@ -844,6 +891,40 @@ mod tests {
         }
     }
 
+    /// A server serving the account's head from before a device was linked
+    /// (or before one was removed): Chat refuses to sign onto it, in a sync
+    /// of its own entry and in a re-registration of this installation.
+    #[test]
+    fn chat_never_signs_onto_an_older_own_head() {
+        let world = World::new();
+        let mut alice = world.person(1);
+        let _alice2 = world.link_device(&mut alice);
+        let linked = head(&world, &alice.account);
+        // Alice's installation saw the linked head.
+        block_on(
+            alice
+                .engine
+                .sync_own_manifest(&authority(&alice), ISSUED_AT),
+        )
+        .unwrap();
+        let newest = world.roll_back_manifest(&alice.account);
+        assert_eq!(newest, linked);
+        let error = block_on(
+            alice
+                .engine
+                .sync_own_manifest(&authority(&alice), ISSUED_AT),
+        )
+        .expect_err("an older head is refused");
+        assert!(error.to_string().contains("older"), "{error}");
+        // Revoking a device builds on the head too: refused as well.
+        assert!(block_on(
+            alice
+                .engine
+                .revoke_manifest_device(&authority(&alice), 2, ISSUED_AT)
+        )
+        .is_err());
+    }
+
     /// An account's first device re-registers: device 1 alone, the chain's
     /// first manifest; a later re-registration continues the chain and
     /// drops every other device.
@@ -859,7 +940,7 @@ mod tests {
         );
         assert_eq!(
             first.identity_key,
-            alice.engine.session().account_identity_key()
+            Some(alice.engine.session().account_identity_key())
         );
         let _alice2 = world.link_device(&mut alice);
         let linked = head(&world, &alice.account);
@@ -886,7 +967,7 @@ mod tests {
         );
         assert_ne!(reregistered.identity_key, linked.identity_key);
         assert_eq!(
-            fresh.session().account_identity_key(),
+            Some(fresh.session().account_identity_key()),
             reregistered.identity_key
         );
     }
@@ -907,7 +988,7 @@ mod tests {
         assert!(manifest.device(alice2.device()).is_some());
         assert_eq!(
             manifest.identity_key,
-            alice.engine.session().account_identity_key()
+            Some(alice.engine.session().account_identity_key())
         );
         // The new device holds a credential of its own.
         let local = block_on(alice2.engine.session().db().load_local_identity())
@@ -1009,7 +1090,10 @@ mod tests {
         let manifest = head(&world, &alice.account);
         let new_identity = alice.engine.session().account_identity_key();
         assert_ne!(new_identity, old_identity);
-        assert_eq!(manifest.identity_key, new_identity);
+        assert_eq!(
+            manifest.identity_key.as_deref(),
+            Some(new_identity.as_str())
+        );
         let after = block_on(alice.engine.session().db().load_local_identity())
             .unwrap()
             .unwrap();
@@ -1206,6 +1290,88 @@ mod tests {
         assert!(!trust.identity_verified);
     }
 
+    /// One device list per account (docs/plans/one-device-list.md §8, item
+    /// 11): an account that only used editing apps has a manifest with no
+    /// Chat identity. A contact who pinned it, then meets the account's first
+    /// Chat device (a re-registration that keeps the editor listed), sees no
+    /// "safety number changed": a first identity is not a change.
+    #[test]
+    fn a_first_identity_after_editors_alone_is_no_change() {
+        use crate::group_harness_tests::befriend;
+        use kutup_chat_proto::{AccountManifestDeviceV3, DeviceKind};
+        let world = World::new();
+        let mut bob = world.person(2);
+        let carol = format!(
+            "aci:00000000-0000-4000-8000-000000000003@{}",
+            crate::group_harness_tests::SERVER
+        );
+        let authority = AccountAuthority::derive(&[3; 32]).unwrap();
+        let editor = AccountManifestDeviceV3 {
+            device_id: 1,
+            kind: DeviceKind::Editor,
+            chat: None,
+            frame_key: Some(
+                STANDARD.encode(
+                    ed25519_dalek::SigningKey::from_bytes(&[7; 32])
+                        .verifying_key()
+                        .to_bytes(),
+                ),
+            ),
+            session: "52".repeat(32),
+        };
+        let editors_only = authority
+            .sign_manifest_with_binding(
+                carol.parse().unwrap(),
+                1,
+                None,
+                None,
+                None,
+                vec![editor.clone()],
+                ISSUED_AT,
+            )
+            .unwrap();
+        block_on(world.client(&carol).publish_manifest(&editors_only)).unwrap();
+        block_on(
+            bob.engine
+                .accept_current_manifest_evidence(&carol, &editors_only),
+        )
+        .unwrap();
+        let pinned = block_on(bob.engine.session().manifest_trust(&carol))
+            .unwrap()
+            .unwrap();
+        assert!(pinned.identity_key.is_empty());
+
+        // Carol's first Chat device: the editor stays, the device takes id 2.
+        let mut carol_chat = world.person(3);
+        assert_eq!(carol_chat.account, carol);
+        let head = head(&world, &carol);
+        assert_eq!(head.sequence, 2);
+        assert_eq!(head.device(1), Some(&editor));
+        assert_eq!(carol_chat.device(), 2);
+        assert!(head.identity_key.is_some());
+
+        befriend(&mut bob, &mut carol_chat);
+        let changed = bob
+            .engine
+            .take_events()
+            .into_iter()
+            .filter(|event| {
+                matches!(event, crate::ChatEvent::SafetyNumberChanged { peer } if *peer == carol)
+            })
+            .count();
+        assert_eq!(changed, 0);
+        let lines = block_on(bob.engine.session().sent_history())
+            .unwrap()
+            .into_iter()
+            .filter(|message| {
+                message.peer == carol
+                    && serde_json::from_slice::<kutup_chat_proto::ChatContent>(&message.content)
+                        .is_ok_and(|content| content.is_safety_number_changed())
+            })
+            .count();
+        assert_eq!(lines, 0, "a first identity is not a change");
+    }
+
     /// A contact reads a message sent under the account's new identity
     /// (sealed, before they saw the manifest that lists it): they fetch the
     /// account's signed manifest, take the new identity, see one "safety
@@ -1354,7 +1520,7 @@ mod tests {
                 .is_none()
         );
         assert_ne!(
-            alice2.engine.session().account_identity_key(),
+            Some(alice2.engine.session().account_identity_key()),
             head(&world, &alice.account).identity_key
         );
     }

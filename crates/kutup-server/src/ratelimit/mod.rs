@@ -75,13 +75,18 @@ pub(crate) fn apply_overrides(rows: Vec<(String, String, i64)>) {
     *OVERRIDES.write().unwrap() = overrides;
 }
 
-/// Every account's own values, as stored.
+/// Every account's own values, as stored (`user_setting_overrides`, keyed
+/// `rate_limit.<key>`), by limit key.
 pub async fn stored_overrides(
     pool: &sqlx::PgPool,
 ) -> Result<Vec<(String, String, i64)>, sqlx::Error> {
-    sqlx::query_as("SELECT user_id::text, key, value FROM user_rate_limit_overrides")
-        .fetch_all(pool)
-        .await
+    sqlx::query_as(
+        "SELECT user_id::text, substr(key, length($1) + 1), value FROM user_setting_overrides
+         WHERE starts_with(key, $1)",
+    )
+    .bind(SETTING_PREFIX)
+    .fetch_all(pool)
+    .await
 }
 
 /// The values [`registry::ENV_SEEDS`] names, as the environment set them.
@@ -825,10 +830,10 @@ pub static AVAILABLE_HASHES: LazyLock<RateLimiter> =
 pub static COLLAB_FRAME_POSTS: LazyLock<RateLimiter> =
     LazyLock::new(|| RateLimiter::registered(Limit::CollabFramePosts));
 
-/// Device registration challenges: 20 a minute per account (a tab or the
-/// CLI asks for one each time it registers a device).
-pub static DEVICE_CHALLENGES: LazyLock<RateLimiter> =
-    LazyLock::new(|| RateLimiter::registered(Limit::DeviceChallenges));
+/// Device registrations: 20 a minute per account (an editor app or the CLI
+/// registering itself, docs/plans/one-device-list.md).
+pub static DEVICE_REGISTRATIONS: LazyLock<RateLimiter> =
+    LazyLock::new(|| RateLimiter::registered(Limit::DeviceRegistrations));
 
 /// Account head reads (the head, its chain, a scope's index): 300 a minute
 /// per account, far above what a device checking before each listed write
@@ -858,10 +863,6 @@ pub static RENAME_ANNOUNCES: LazyLock<RateLimiter> =
 /// already says whether a name is taken).
 pub static RENAME_CHECKS: LazyLock<RateLimiter> =
     LazyLock::new(|| RateLimiter::registered(Limit::RenameChecks));
-
-/// Device announces from another server: 60 a minute per (server, share).
-pub static COLLAB_DEVICE_ANNOUNCES: LazyLock<RateLimiter> =
-    LazyLock::new(|| RateLimiter::registered(Limit::CollabDeviceAnnounces));
 
 // --- TOTP brute-force tracker (mirrors the `totpTracker` struct) ---
 
@@ -983,8 +984,7 @@ pub fn spawn_cleanup() {
             LOGIN_CEILING.cleanup();
             AVAILABLE_HASHES.cleanup();
             COLLAB_FRAME_POSTS.cleanup();
-            DEVICE_CHALLENGES.cleanup();
-            COLLAB_DEVICE_ANNOUNCES.cleanup();
+            DEVICE_REGISTRATIONS.cleanup();
             CHAT_GROUP_RELAY.cleanup();
             CHAT_GROUP_GATEWAY_RELAY.cleanup();
             CHAT_GROUP_PSEUDONYM.cleanup();

@@ -103,12 +103,13 @@ pub fn spawn_all(
         loop {
             tick.tick().await;
             uploads_sweep_once(&pool, &storage, chat.media_delivery_retention_days).await;
-            // Devices of people no share here names any more (their revoked
-            // keys keep a tombstone).
-            match crate::remote_devices::sweep(&pool).await {
+            // Manifests of other servers' accounts no share here needs.
+            match crate::remote_manifests::sweep(&pool).await {
                 Ok(0) => {}
-                Ok(rows) => tracing::info!(rows, "remote collaboration devices swept"),
-                Err(error) => tracing::warn!("remote device sweep failed: {error}"),
+                Ok(rows) => tracing::info!(rows, "remote account manifests swept"),
+                Err(error) => {
+                    tracing::warn!(error = %error.message, "remote manifest sweep failed")
+                }
             }
             // Used and expired grants, and sign-ins never finished.
             if let Err(error) = crate::grants::sweep(&pool).await {
@@ -148,7 +149,7 @@ pub async fn chat_maintenance_once(
         tracing::warn!(%error, "chat maintenance: retention setting unavailable; mailbox cleanup skipped");
         0
     });
-    match sqlx::query("DELETE FROM chat_ws_tickets WHERE expires_at <= now()")
+    match sqlx::query("DELETE FROM device_tickets WHERE expires_at <= now()")
         .execute(pool)
         .await
     {
@@ -176,8 +177,8 @@ pub async fn chat_maintenance_once(
             Err(error) => tracing::warn!("chat maintenance: send retention failed: {error}"),
         }
         match sqlx::query(
-            "DELETE FROM chat_federation_outbox
-             WHERE state = 'delivered'
+            "DELETE FROM federation_outbox
+             WHERE kind = 'chat' AND state = 'delivered'
                AND updated_at < now() - ($1 * interval '1 day')",
         )
         .bind(policy.send_retention_days)
@@ -190,8 +191,8 @@ pub async fn chat_maintenance_once(
             }
         }
         match sqlx::query(
-            "DELETE FROM chat_federation_inbound_transactions
-             WHERE created_at < now() - ($1 * interval '1 day')",
+            "DELETE FROM federation_inbound
+             WHERE kind = 'chat' AND created_at < now() - ($1 * interval '1 day')",
         )
         .bind(policy.send_retention_days)
         .execute(pool)
@@ -385,17 +386,19 @@ pub async fn version_retention_tick(pool: &PgPool, storage: &StorageService) -> 
     // Office edits in the collaboration log only serve peers resuming after a
     // dropped connection (joiners open the saved file and skip the backlog),
     // and no save truncates them: keep a day's worth.
-    match sqlx::query(
-        "DELETE FROM file_update_log WHERE kind IN ($1, $2, $3) AND created_at < now() - interval '1 day'",
-    )
+    match sqlx::query_scalar::<_, i64>(&crate::handlers::collab::trimming(
+        "DELETE FROM file_update_log l
+          WHERE l.kind IN ($1, $2, $3) AND l.created_at < now() - interval '1 day'
+         RETURNING l.file_id, l.sender_domain, l.sender_account, l.sender_device, l.sender_seq",
+    ))
     .bind(i16::from(kutup_crypto::envelope::kind::OO_OP))
     .bind(i16::from(kutup_crypto::envelope::kind::OO_LOCK))
     .bind(i16::from(kutup_crypto::envelope::kind::OO_CHECKPOINT_META))
-    .execute(pool)
+    .fetch_one(pool)
     .await
     {
-        Ok(done) if done.rows_affected() > 0 => {
-            tracing::info!("collab log: dropped {} old office frames", done.rows_affected());
+        Ok(done) if done > 0 => {
+            tracing::info!("collab log: dropped {done} old office frames");
         }
         Ok(_) => {}
         Err(e) => tracing::warn!("collab log: prune failed: {e}"),
@@ -427,12 +430,11 @@ pub(crate) async fn mark_original_removed(
     .rows_affected()
         == 1;
     if marked {
-        sqlx::query(
-            "UPDATE users SET storage_used_bytes = GREATEST(0, storage_used_bytes - $1) WHERE id = $2",
+        crate::storage_pool::charge(
+            &mut **tx,
+            crate::storage_pool::Payer::Account(uploader),
+            -size,
         )
-        .bind(size)
-        .bind(uploader)
-        .execute(&mut **tx)
         .await?;
     }
     Ok(marked)
@@ -470,13 +472,8 @@ async fn release_version(pool: &PgPool, version_id: Uuid) -> anyhow::Result<bool
     let Some((author, size)) = removed else {
         return Ok(false);
     };
-    sqlx::query(
-        "UPDATE users SET storage_used_bytes = GREATEST(0, storage_used_bytes - $1) WHERE id = $2",
-    )
-    .bind(size)
-    .bind(author)
-    .execute(&mut *tx)
-    .await?;
+    crate::storage_pool::charge(&mut *tx, crate::storage_pool::Payer::Account(author), -size)
+        .await?;
     tx.commit().await?;
     Ok(true)
 }
@@ -740,13 +737,11 @@ async fn sweep_expired_chat_backup_staging(
         .bind(generation)
         .execute(&mut *transaction)
         .await?;
-        sqlx::query(
-            "UPDATE users SET storage_used_bytes=GREATEST(0,storage_used_bytes-$1)
-             WHERE id=$2",
+        crate::storage_pool::charge(
+            &mut *transaction,
+            crate::storage_pool::Payer::Account(*user_id),
+            -bytes,
         )
-        .bind(bytes)
-        .bind(user_id)
-        .execute(&mut *transaction)
         .await?;
     }
     transaction.commit().await?;
@@ -788,14 +783,11 @@ pub async fn sweep_chat_delivery_media_before(
             .bind(reference_id)
             .execute(&mut *transaction)
             .await?;
-        sqlx::query(
-            "UPDATE users
-             SET storage_used_bytes=GREATEST(storage_used_bytes-$1,0)
-             WHERE id=$2",
+        crate::storage_pool::charge(
+            &mut *transaction,
+            crate::storage_pool::Payer::Account(*user_id),
+            -bytes,
         )
-        .bind(bytes)
-        .bind(user_id)
-        .execute(&mut *transaction)
         .await?;
     }
     let attachment_ids: Vec<Uuid> = expired
@@ -1022,31 +1014,31 @@ pub async fn purge_file_root(
         return Ok(());
     }
 
-    // Thumbnails and assets are charged to whoever uploaded them; release
-    // both before the cascade removes their rows.
-    sqlx::query(
-        r#"WITH per_uploader AS (
-              SELECT uploader_user_id, COALESCE(SUM(size_bytes), 0) AS total
-              FROM (SELECT uploader_user_id, size_bytes FROM file_assets WHERE file_id = $1
-                    UNION ALL
-                    SELECT uploader_user_id, size_bytes FROM file_thumbnails WHERE file_id = $1) AS charged
-              GROUP BY uploader_user_id)
-           UPDATE users SET storage_used_bytes = GREATEST(0, storage_used_bytes - per_uploader.total)
-           FROM per_uploader WHERE users.id = per_uploader.uploader_user_id"#,
+    // The file, its thumbnails, assets and versions are charged to whoever
+    // stored each; release them before the cascade removes their rows, one
+    // payer at a time in id order, so purges that share payers lock their
+    // rows in the same order and never deadlock.
+    let charged: Vec<(Uuid, i64)> = sqlx::query_as(
+        r#"SELECT payer, SUM(size_bytes)::bigint FROM (
+               SELECT uploader_user_id AS payer, size_bytes FROM file_assets WHERE file_id = $1
+               UNION ALL
+               SELECT uploader_user_id, size_bytes FROM file_thumbnails WHERE file_id = $1
+               UNION ALL
+               SELECT author_user_id, size_bytes FROM file_versions WHERE file_id = $1
+               UNION ALL
+               SELECT $2::uuid, $3::bigint) AS charged
+           GROUP BY payer
+           ORDER BY payer"#,
     )
     .bind(file_id)
-    .execute(&mut *tx)
+    .bind(uploader_id)
+    .bind(file_size)
+    .fetch_all(&mut *tx)
     .await?;
-    sqlx::query(
-        r#"WITH per_author AS (
-              SELECT author_user_id, COALESCE(SUM(size_bytes), 0) AS total
-              FROM file_versions WHERE file_id = $1 GROUP BY author_user_id)
-           UPDATE users SET storage_used_bytes = GREATEST(0, storage_used_bytes - per_author.total)
-           FROM per_author WHERE users.id = per_author.author_user_id"#,
-    )
-    .bind(file_id)
-    .execute(&mut *tx)
-    .await?;
+    for (payer, total) in charged {
+        crate::storage_pool::charge(&mut *tx, crate::storage_pool::Payer::Account(payer), -total)
+            .await?;
+    }
     // Links to the file itself (no FK ties them down).
     sqlx::query("DELETE FROM public_shares WHERE share_type = 'file' AND target_id = $1")
         .bind(file_id)
@@ -1064,13 +1056,6 @@ pub async fn purge_file_root(
         .bind(file_id)
         .execute(&mut *tx)
         .await?;
-    sqlx::query(
-        "UPDATE users SET storage_used_bytes = GREATEST(0, storage_used_bytes - $1) WHERE id = $2",
-    )
-    .bind(file_size)
-    .bind(uploader_id)
-    .execute(&mut *tx)
-    .await?;
     tx.commit().await?;
 
     // Best-effort S3 GC (post-commit): everything the file has lives under
@@ -1316,6 +1301,10 @@ mod tests {
         let file = Some(uuid::Uuid::parse_str(uuid).unwrap());
         // Everything of a file is under files/{id}/…
         assert_eq!(drive_file_of_key(&format!("files/{uuid}/original")), file);
+        assert_eq!(
+            drive_file_of_key(&format!("files/{uuid}/revisions/{other}")),
+            file
+        );
         assert_eq!(drive_file_of_key(&format!("files/{uuid}/snapshot")), file);
         assert_eq!(drive_file_of_key(&format!("files/{uuid}/assets/x")), file);
         assert_eq!(
@@ -1411,6 +1400,7 @@ mod tests {
             &std::env::var("KUTUP_LIVE_S3_SECRET_KEY").unwrap(),
             &std::env::var("KUTUP_LIVE_S3_BUCKET").unwrap(),
             "us-east-1",
+            crate::storage::S3Timeouts::default(),
         );
         let pool = sqlx::postgres::PgPoolOptions::new()
             .max_connections(2)
@@ -1531,12 +1521,13 @@ mod tests {
         let fixture_bytes =
             i64::try_from(expired_bytes.len() + boundary_bytes.len() + protected_bytes.len())
                 .unwrap();
-        sqlx::query("UPDATE users SET storage_used_bytes=storage_used_bytes+$1 WHERE id=$2")
-            .bind(fixture_bytes)
-            .bind(user_id)
-            .execute(&pool)
-            .await
-            .unwrap();
+        crate::storage_pool::charge(
+            &pool,
+            crate::storage_pool::Payer::Account(user_id),
+            fixture_bytes,
+        )
+        .await
+        .unwrap();
 
         // The boundary is strict: delivery references created exactly at the cutoff survive.
         sweep_chat_delivery_media_before(&pool, &storage, cutoff)

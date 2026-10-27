@@ -34,7 +34,7 @@ The targets are:
   seeds, the small objects of `tests/vectors/blocks-v1.json` (under
   `seeds/block_object_parsers/`), pass the AEAD and reach the parsers behind
   it; it also seals each input as a manifest plaintext, as a key holder
-  could.
+  could, seeded with a valid signed and unsigned one (`manifest-*`).
 
 Install `cargo-fuzz`, then run the targets with a nightly toolchain:
 

@@ -298,7 +298,12 @@
           "twoFactorOn": "İki adımlı doğrulama açıldı",
           "twoFactorOff": "İki adımlı doğrulama kapatıldı",
           "recoveryCodeUsed": "Kurtarma koduyla oturum açıldı",
-          "recoveryCodesRenewed": "Yeni kurtarma kodları oluşturuldu"
+          "recoveryCodesRenewed": "Yeni kurtarma kodları oluşturuldu",
+          "securityKeyAdded": "“{{oldName}}” güvenlik anahtarı eklendi",
+          "securityKeyRemoved": "“{{oldName}}” güvenlik anahtarı kaldırıldı",
+          "securityKeyCompromised": "“{{oldName}}” güvenlik anahtarı kopyalanmış olabilir (artık kullanılmıyor)",
+          "authenticatorOn": "Doğrulama uygulaması açıldı",
+          "authenticatorOff": "Doğrulama uygulaması kapatıldı"
         }
       },
       "recovery": "Kurtarma ifadesi",
@@ -345,22 +350,24 @@
       "emptyDescription": "Açık bir giriş yok."
     },
     "devices": {
-      "title": "Düzenleyici anahtarları",
-      "description": "Başkalarıyla belge düzenleyen her tarayıcı değişikliklerini kendi anahtarıyla imzalar. Artık kullanmadığınız cihazı iptal edin.",
+      "title": "Düzenleme cihazları",
+      "description": "Bir tarayıcıda başkalarıyla belge düzenleyen her uygulama (Drive, Office, Haritalar, Pass) ve her komut satırı istemcisi, düzenlemelerini kendi anahtarıyla imzalayan bir hesap cihazıdır. Artık kullanmadığınız cihazı kaldırın.",
       "unnamed": "Adsız cihaz",
-      "revoked": "İptal edildi",
+      "kindEditor": "Düzenleme uygulaması",
+      "kindCli": "Komut satırı",
+      "thisSignIn": "Bu oturum",
+      "notListed": "Henüz listelenmedi",
+      "expired": "Boşta",
       "added": "{{when}} eklendi",
       "lastSeen": "son görülme {{when}}",
       "neverSeen": "hiç kullanılmadı",
-      "revoke": "İptal et",
-      "revokeTitle": "Bu cihaz iptal edilsin mi?",
-      "revokeDescription": "{{name}} artık düzenlemeleri imzalayamaz ve açık düzenleme oturumları kapanır.",
-      "revokeFailed": "Cihaz iptal edilemedi.",
-      "revokedToast": "Cihaz iptal edildi",
+      "revoke": "Kaldır",
+      "revokeTitle": "Bu cihaz kaldırılsın mı?",
+      "revokeDescription": "{{name}} hesabınızın cihaz listesinden çıkarılır: düzenlemeleri artık kabul edilmez ve açık düzenleme oturumları kapanır.",
+      "revokeFailed": "Cihaz kaldırılamadı.",
+      "revokedToast": "Cihaz kaldırıldı",
       "emptyTitle": "Henüz düzenleme cihazı yok",
-      "emptyDescription": "Bir cihaz ilk kez paylaşılan bir belgeyi açtığında burada görünür.",
-      "inUseCount": "{{max}} cihazdan {{count}} tanesi kullanımda. Oturumu kapanmış ya da 30 gündür kullanılmayan cihazlar sayılmaz.",
-      "notInUse": "Kullanımda değil"
+      "emptyDescription": "Bir uygulama ilk kez düzenlemek için bir belge açtığında cihaz burada görünür."
     },
     "profile": {
       "title": "Profil",
@@ -754,7 +761,9 @@
         "rateLimitUpdate": "{{admin}}, {{limit}} sınırını {{value}} yaptı",
         "rateLimitReset": "{{admin}}, {{limit}} sınırını ilk değerine döndürdü",
         "userRateLimitUpdate": "{{admin}}, {{target}} için {{limit}} sınırını {{value}} yaptı",
-        "userRateLimitReset": "{{admin}}, {{target}} için {{limit}} sınırını yeniden sunucunun değerine döndürdü"
+        "userRateLimitReset": "{{admin}}, {{target}} için {{limit}} sınırını yeniden sunucunun değerine döndürdü",
+        "userSettingUpdate": "{{admin}}, {{target}} için {{limit}} ayarını {{value}} yaptı",
+        "userSettingReset": "{{admin}}, {{target}} için {{limit}} ayarını yeniden sunucunun değerine döndürdü"
       }
     },
     "settings": {
@@ -874,6 +883,10 @@
         "chatProvisionBodyBytesHint": "Bağlanan cihaza iletilen en büyük bağlama iletisi, en çok 64 KiB.",
         "devicesPerAccount": "Hesap başına cihaz",
         "devicesPerAccountHint": "Bir hesabın toplamda sahip olabileceği uygulama kurulumu sayısı (Sohbet, Ofis, Drive, komut satırı), 1 ile 127 arası.",
+        "deviceListingGraceSeconds": "Yeni cihaz listeleme süresi (saniye)",
+        "deviceListingGraceSecondsHint": "Yeni kaydedilen bir cihazın, başka bir cihazın güncellemesi onu düşürmeden önce kendini hesabının cihaz listesine eklemek için ne kadar süresi olduğu.",
+        "remoteManifestMaxAgeSeconds": "Diğer sunucuların cihaz listeleri, saklama süresi (saniye)",
+        "remoteManifestMaxAgeSecondsHint": "Bu sunucunun, başka bir sunucudaki bir düzenleyicinin cihaz listesinin kopyasına yeniden okumadan önce ne kadar güvendiği: orada kaldırılan bir cihazın buradaki dosyalara düzenleme göndermeyi ne kadar sürdürebileceği.",
         "chatMaxActiveDevices": "Hesap başına Sohbet cihazı",
         "chatMaxActiveDevicesHint": "Bir hesabın sahip olabileceği Sohbet kurulumu sayısı, 1 ile 10 arası.",
         "chatProvisioningTicketSeconds": "Bağlama bağlantısı bileti (saniye)",
@@ -884,10 +897,48 @@
         "chatDistributionMessageBytesHint": "Yeni bir Sohbet kimliğinin tutulan her cihaza gönderdiği en büyük ileti."
       },
       "twoFactor": "İki adımlı oturum açma",
-      "twoFactorHint": "İki adımlı doğrulaması açık hesaplar için kurtarma kodları.",
+      "twoFactorHint": "İki adımlı doğrulaması açık hesaplar için kurtarma kodları ve güvenlik anahtarları.",
+      "federation": "Federasyon",
+      "federationHint": "Bir sunucu yanıt vermediğinde diğer Kutup sunucularına teslimatların yeniden nasıl deneneceği.",
       "twoFactorLimits": {
         "twoFactorRecoveryCodes": "Hesap başına kurtarma kodu",
-        "twoFactorRecoveryCodesHint": "İki adımlı doğrulama açıldığında veya yeni kodlar istendiğinde kaç tek kullanımlık kod oluşturulduğu."
+        "twoFactorRecoveryCodesHint": "İki adımlı doğrulama açıldığında veya yeni kodlar istendiğinde kaç tek kullanımlık kod oluşturulduğu.",
+        "securityKeysPerAccount": "Hesap başına güvenlik anahtarı",
+        "securityKeysPerAccountHint": "Bir hesabın ekleyebileceği en fazla güvenlik anahtarı sayısı.",
+        "webauthnCeremonySeconds": "Güvenlik anahtarı istemi (saniye)",
+        "webauthnCeremonySecondsHint": "Anahtar eklerken ya da oturum açarken güvenlik anahtarına dokunma isteminin açık kaldığı süre."
+      },
+      "drive": "Drive yüklemeleri ve akış",
+      "driveHint": "Bir dosyanın en fazla ne kadar büyük olabileceği ve video ile seslerin inerken nasıl oynatıldığı.",
+      "driveLimits": {
+        "driveUploadMaxBytes": "En büyük yükleme (bayt)",
+        "driveUploadMaxBytesHint": "Tek bir yüklemenin şifreli olarak saklayabileceği en büyük dosya.",
+        "driveVersionMaxBytes": "En büyük sürüm (bayt)",
+        "driveVersionMaxBytesHint": "Kaydedilen en büyük sürüm: bir düzenleyicinin kaydı ya da bir dosyanın yeniden yüklenmesi.",
+        "driveStreamMaxBytes": "Akışla oynatılacak en büyük dosya (bayt)",
+        "driveStreamMaxBytesHint": "Daha büyük dosyalar oynatılmadan önce tamamen indirilir. 0 hiç akış yapmaz.",
+        "driveStreamCacheBlocks": "Akış başına tutulan blok",
+        "driveStreamCacheBlocksHint": "Oynatılan bir dosyanın bellekte tuttuğu doğrulanmış 4 MiB'lık bloklar.",
+        "driveStreamReadaheadBlocks": "Önceden okunan blok",
+        "driveStreamReadaheadBlocksHint": "Oynatılan bloğun ilerisinden getirilen bloklar.",
+        "driveStreamMaxConcurrent": "Sekme başına akış",
+        "driveStreamMaxConcurrentHint": "Bir tarayıcı sekmesinin aynı anda oynattığı dosyalar.",
+        "driveStreamResponseMaxBytes": "İstek başına en büyük parça (bayt)",
+        "driveStreamResponseMaxBytesHint": "Aralıklı bir indirme yanıtının taşıdığı en fazla bayt; sunucular arasında da.",
+        "driveStreamBlobFallbackMaxBytes": "Bellekten oynatılan en büyük dosya (bayt)",
+        "driveStreamBlobFallbackMaxBytesHint": "Tarayıcının akış yapamadığı yerde, bu boyuta kadar dosyalar oynatmak için tamamen belleğe yüklenir."
+      },
+      "federationLimits": {
+        "federationRetryBaseSeconds": "İlk bekleme (saniye)",
+        "federationRetryBaseSecondsHint": "Başarısız bir teslimattan sonra; sonraki her bekleme iki katına çıkar.",
+        "federationRetryMaxSeconds": "En uzun bekleme (saniye)",
+        "federationRetryMaxSecondsHint": "Bir teslimatın iki deneme arasında en fazla bekleyeceği süre.",
+        "federationPeerUpgradeSeconds": "Eski bir sunucu için bekleme (saniye)",
+        "federationPeerUpgradeSecondsHint": "Teslimatı henüz alamayan bir sunucu için yeniden denemeden önce beklenecek süre.",
+        "federationWorkerSeconds": "Bekleyen teslimatları kontrol aralığı (saniye)",
+        "federationWorkerSecondsHint": "Diğer sunuculara bekleyen teslimatlara ne sıklıkla bakılacağı.",
+        "federationHeadsPerTick": "Kontrol başına denenen sunucu",
+        "federationHeadsPerTickHint": "Her kontrolde, her birine bir teslimat olmak üzere en fazla kaç hedef sunucunun deneneceği."
       }
     },
     "federation": {
@@ -1257,7 +1308,6 @@
         "pseudonym": "üye",
         "group": "grup",
         "peer": "sunucu",
-        "peerAndShare": "sunucu ve paylaşım",
         "capability": "yetki",
         "recipient": "alıcı",
         "forwarding": "yönlendirme",
@@ -1303,7 +1353,7 @@
         "registration_code_failures": "Geçersiz çıkan davet kodları",
         "recovery": "Hesap kurtarma denemeleri",
         "user_lookup": "Kullanıcı aramaları",
-        "device_challenges": "Cihaz kayıtları",
+        "device_registrations": "Cihaz kayıtları",
         "account_head_reads": "Hesap başı okumaları",
         "rename_checks": "Ad değişikliği öncesi ad denetimleri",
         "rename_lookups": "Diğer sunuculardaki ad değişikliği aramaları",
@@ -1354,7 +1404,6 @@
         "rename_peer_fetches": "Bir sunucudan alınan ad değişiklikleri",
         "account_peer_fetches": "Bir sunucuda hesap aramaları",
         "rename_announces": "Bir sunucudan ad değişikliği duyuruları",
-        "collab_device_announces": "Bir sunucudan cihaz duyuruları",
         "admin": "Yönetim API istekleri",
         "collab_frames_per_second": "Soket başına ortak çalışma çerçeveleri",
         "collab_frame_burst": "Ortak çalışma çerçeve patlaması",
@@ -1378,11 +1427,6 @@
         "forwarding_unverified_pending": "Kod bekleyen yönlendirmeler",
         "forwarding_unverified_minutes": "Doğrulanmamış yönlendirmenin ömrü"
       },
-      "accountTitle": "Hız sınırları",
-      "accountHint": "Hesap başına sayılan sınırlarda bu hesabın kendi değerleri. Kendi değeri yoksa hesap sunucunun değerini alır.",
-      "accountOwn": "Bu hesabın kendi değeri; sunucununki {{site}}",
-      "accountSite": "Sunucunun değeri",
-      "accountResetAction": "Sunucununkini kullan",
       "about": {
         "login": "Oturum açma denemeleri (ve ikinci adımları).",
         "login_lockout_threshold": "Bir hesap için bir istemciden, o ikili kilitlenmeden önceki yanlış parolalar.",
@@ -1398,7 +1442,7 @@
         "registration_code_failures": "Kimseyi kabul etmeyen davet kodları: kod tahmini.",
         "recovery": "Hesap kurtarma denemeleri.",
         "user_lookup": "Paylaşmak için kullanıcı aramak: hesapları sıralamak.",
-        "device_challenges": "Cihaz kaydı sınamaları.",
+        "device_registrations": "Cihaz kayıtları: bir düzenleme uygulamasının ya da komut satırının kendini kaydetmesi.",
         "account_head_reads": "Hesap başının, zincirinin ve bir kapsam dizininin okunması.",
         "rename_checks": "Ad değişikliği öncesi ad denetimleri.",
         "rename_lookups": "Başka bir sunucuya sorulan ad değişiklikleri (bir şey bulmayan aramalar).",
@@ -1463,7 +1507,6 @@
         "rename_peer_fetches": "Bir sunucudan alınan ad değişiklikleri, kim isterse istesin.",
         "account_peer_fetches": "Bir hesabın bir sunucuya kimlikle sorduğu hesaplar.",
         "rename_announces": "Bir sunucudan alınan ad değişikliği duyuruları.",
-        "collab_device_announces": "Başka bir sunucudan bir paylaşım için cihaz duyuruları.",
         "admin": "Yönetim API istekleri: bir betik için duvar.",
         "calendar_writes": "Takvim değişiklikleri: oluşturulan veya değiştirilen takvimler ve etkinlik eşitlemeleri.",
         "forwarding_code_minutes": "Bir yönlendirmenin doğrulama kodunun ne kadar geçerli olduğu.",
@@ -1477,6 +1520,24 @@
       "countsAtOnce": "Aynı anda, {{per}} başına",
       "countsBytesAtOnce": "Aynı anda bayt, {{per}} başına",
       "bytesHint": "= {{size}}"
+    },
+    "limits": {
+      "title": "Sınırlar",
+      "hint": "Tek bir hesabı sınırlayan ayar ve hız sınırlarında bu hesabın kendi değerleri. Kendi değeri yoksa hesap sunucunun değerini alır. Bir değeri hesabın zaten kullandığının altına indirmek yalnızca yenilerini durdurur; hiçbir şey silinmez.",
+      "settings": "Ayarlar",
+      "rateLimits": "Hız sınırları",
+      "reset": "Sunucununkini kullan",
+      "source": {
+        "account": "Bu hesabın kendi değeri; sunucununki {{site}}",
+        "site": "Sunucunun değeri, yöneticilerin ayarladığı",
+        "default": "Sunucunun varsayılanı"
+      },
+      "unit": {
+        "bytes": "Bayt olarak",
+        "count": "Bir sayı",
+        "seconds": "Saniye olarak",
+        "days": "Gün olarak"
+      }
     },
     "mailDomains": {
       "title": "Posta alan adları",

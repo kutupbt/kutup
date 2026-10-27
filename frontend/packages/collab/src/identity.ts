@@ -3,7 +3,7 @@ import { fillRandom } from '@kutup/crypto/random'
 // of the same user appear as distinct peers in awareness) and a cursor color
 // preference (random-from-palette by default, user-customizable).
 //
-// tabId is sessionStorage-scoped (one per tab session, survives reload).
+// tabId is per page load, in memory only (a duplicated tab gets its own).
 // color is localStorage-scoped (a tab opened in a fresh window gets the user's
 // previous color preference back; user can override at any time).
 
@@ -14,7 +14,6 @@ export const CURSOR_COLORS_20 = [
   '#ec4899', '#f43f5e', '#64748b', '#525252', '#0f766e',
 ]
 
-const TAB_ID_KEY = 'kutup_tab_id_v1'
 const COLOR_PREF_KEY = 'kutup_cursor_color_v1'
 
 function randomHex(bytes: number): string {
@@ -23,14 +22,21 @@ function randomHex(bytes: number): string {
   return Array.from(arr, (b) => b.toString(16).padStart(2, '0')).join('')
 }
 
-/** Stable per-tab identifier. Persisted in sessionStorage, survives reload. */
+/** This page's tab id, drawn on first use. */
+let tabId: string | null = null
+
+/**
+ * This page's identifier: lowercase hex, drawn once per page load and kept
+ * in memory only. The tabs of one browser share a device, and a
+ * collaboration room tells them apart by it (the socket names it; an office
+ * editor keys its participants on it). Never in sessionStorage: a duplicated
+ * tab or an opened window copies that and would take this page's id; a
+ * reload opens a new socket and takes a new one. 24 bits: two pages of one
+ * device drawing the same id is a one-in-sixteen-million chance.
+ */
 export function getOrCreateTabId(): string {
-  let v = sessionStorage.getItem(TAB_ID_KEY)
-  if (!v) {
-    v = randomHex(2)
-    sessionStorage.setItem(TAB_ID_KEY, v)
-  }
-  return v
+  tabId ??= randomHex(3)
+  return tabId
 }
 
 /** User's preferred cursor color. Random-from-palette on first call. */

@@ -72,20 +72,6 @@ export interface CryptoWasmModule {
     driveSigningPublicKey: string
   }
   signDriveKeyBinding(masterKeyBase64: string, account: { server: string; accountId: string }, bindingEpoch: number): string
-  signDeviceRegistration(
-    masterKeyBase64: string,
-    server: string,
-    userId: string,
-    devicePublicBase64: string,
-    challengeBase64: string,
-    issuedAtMs: number,
-  ): string
-  signDeviceRevocation(
-    masterKeyBase64: string,
-    server: string,
-    devicePublicBase64: string,
-    revokedAtMs: number,
-  ): string
   deriveSafetyNumber(
     local: { server: string; accountId: string },
     localAuthorityBase64: string,
@@ -492,10 +478,16 @@ export interface CryptoWasmModule {
     keyGeneration: number,
     docKeyId: number,
     fileId: string,
-    senderDeviceId: string,
+    deviceId: number,
+    manifestSequence: string,
     sequence: string,
   ): string
-  collabFrameSigningBytes(frameBase64: string): string
+  /** What the device's frame key signs: the frame under its sender account (`aci:<uuid>@<server>`). */
+  collabFrameSigningBytes(frameBase64: string, senderAccount: string): string
+  /** A frame as a server delivers it (the sender account's bytes, then the packed frame). */
+  deliveredCollabFrame(deliveredBase64: string): { sender: string; frame: string }
+  /** Whether `senderAccount` signed the frame with `frameKeyBase64` (its manifest's key for the frame's device). */
+  verifyCollabFrame(frameBase64: string, senderAccount: string, frameKeyBase64: string): boolean
   attachCollabFrameSignature(frameBase64: string, signatureBase64: string): string
   openCollabFrame(
     frameBase64: string,
@@ -506,10 +498,26 @@ export interface CryptoWasmModule {
     kind: number
     keyGeneration: number
     docKeyId: number
-    senderDeviceId: string
+    deviceId: number
+    manifestSequence: string
     sequence: string
     plaintext: string
   }
+  /**
+   * The account's next manifest with `entry` listed (in place of any entry
+   * of its id), signed with the authority the master key derives; `head`
+   * null starts the account's first manifest, naming `account`.
+   */
+  listDeviceInManifest(
+    head: unknown,
+    entry: unknown,
+    issuedAt: string,
+    masterKeyBase64: string,
+    account: string,
+  ): unknown
+  /** The account's next manifest without `deviceIds`, signed as above; it keeps at least one device. */
+  removeDevicesFromManifest(head: unknown, deviceIds: Uint32Array, issuedAt: string, masterKeyBase64: string): unknown
+  checkOwnManifestHead(pin: unknown, head: unknown, masterKeyBase64: string, account: string): unknown
   collabFrameKeyGeneration(frameBase64: string): number
   sealPreviousFileKey(
     previousKeyBase64: string,

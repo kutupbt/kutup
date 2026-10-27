@@ -8,7 +8,7 @@
 //! revoked device (or a backpressure timeout) can tear the connection down.
 
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::sync::Mutex;
 use std::time::Duration;
@@ -34,16 +34,39 @@ pub enum WsOut {
 /// One live WebSocket connection in a room. Mirrors the fields of `wsConn` the hub needs.
 pub struct Peer {
     pub conn_id: u64,
-    pub device_id: i64,
+    /// The device's id in its account's manifest.
+    pub device_id: u32,
+    /// The tab's id: tabs of one browser share a device.
+    pub tab: String,
     pub user_id: String,
+    /// The account its frames name (`aci:<uuid>@<server>`).
+    pub account: String,
     pub username: String,
     pub color: String,
     tx: mpsc::Sender<WsOut>,
     /// Notified to force the read loop to exit (revocation / forced close).
     pub close: Arc<Notify>,
+    /// Set by [`Self::shut`] and never cleared: the read loop checks it
+    /// before each frame, so a frame read after a removal is never applied,
+    /// whatever the loop was doing when the close was signalled.
+    closed: AtomicBool,
 }
 
 impl Peer {
+    /// Closes the connection for good: no further frame of it is applied,
+    /// the read loop wakes (a `notify_one` permit waits for a loop busy with
+    /// a frame), and the writer sends a Close.
+    pub fn shut(&self) {
+        self.closed.store(true, Ordering::Release);
+        self.close.notify_one();
+        let _ = self.tx.try_send(WsOut::Close);
+    }
+
+    /// Whether [`Self::shut`] was called.
+    pub fn is_shut(&self) -> bool {
+        self.closed.load(Ordering::Acquire)
+    }
+
     /// Enqueues `msg`, waiting up to `BACKPRESSURE_TIMEOUT` for buffer room before giving up
     /// and closing the connection — mirrors `wsConn.WriteFrame`/`WriteText`. Returns `false`
     /// if the peer was closed / timed out.
@@ -54,8 +77,7 @@ impl Peer {
             Ok(Err(_)) => false,
             // Stuck writer: signal a close, like Go's `c.Close()` on timeout.
             Err(_) => {
-                self.close.notify_waiters();
-                let _ = self.tx.try_send(WsOut::Close);
+                self.shut();
                 false
             }
         }
@@ -240,27 +262,25 @@ impl Hub {
                 .unwrap_or_default()
         };
         for v in victims {
-            v.close.notify_waiters();
-            let _ = v.tx.try_send(WsOut::Close);
+            v.shut();
         }
     }
 
-    /// Forces every connection from a device to close, across all rooms — mirrors
-    /// `CloseDevice` (device revocation). The connections' own read loops call `leave` as
-    /// they exit, so this only signals; it doesn't mutate room state.
-    pub fn close_device(&self, device_id: i64) {
+    /// Forces every connection from a device of an account to close, across all rooms (the
+    /// account's manifest dropped it). The connections' own read loops call `leave` as they
+    /// exit, so this only signals; it doesn't mutate room state.
+    pub fn close_device(&self, user_id: &str, device_id: u32) {
         let victims: Vec<Arc<Peer>> = {
             let rooms = self.rooms.lock().unwrap();
             rooms
                 .values()
                 .flat_map(|r| r.peers.values())
-                .filter(|p| p.device_id == device_id)
+                .filter(|p| p.user_id == user_id && p.device_id == device_id)
                 .cloned()
                 .collect()
         };
         for v in victims {
-            v.close.notify_waiters();
-            let _ = v.tx.try_send(WsOut::Close);
+            v.shut();
         }
     }
 }
@@ -268,8 +288,10 @@ impl Hub {
 /// Builds a peer + its outbound channel. The caller spawns a writer task draining `rx`.
 pub fn new_peer(
     hub: &Hub,
-    device_id: i64,
+    device_id: u32,
+    tab: String,
     user_id: String,
+    account: String,
     username: String,
     color: String,
 ) -> (Arc<Peer>, mpsc::Receiver<WsOut>) {
@@ -277,11 +299,14 @@ pub fn new_peer(
     let peer = Arc::new(Peer {
         conn_id: hub.next_conn_id(),
         device_id,
+        tab,
         user_id,
+        account,
         username,
         color,
         tx,
         close: Arc::new(Notify::new()),
+        closed: AtomicBool::new(false),
     });
     (peer, rx)
 }
@@ -290,8 +315,16 @@ pub fn new_peer(
 mod tests {
     use super::*;
 
-    fn peer(hub: &Hub, device_id: i64) -> (Arc<Peer>, mpsc::Receiver<WsOut>) {
-        new_peer(hub, device_id, String::new(), String::new(), String::new())
+    fn peer(hub: &Hub, device_id: u32) -> (Arc<Peer>, mpsc::Receiver<WsOut>) {
+        new_peer(
+            hub,
+            device_id,
+            String::new(),
+            String::new(),
+            String::new(),
+            String::new(),
+            String::new(),
+        )
     }
 
     #[test]
@@ -333,7 +366,7 @@ mod tests {
         h.join("f1", c1);
         h.join("f2", c2);
         h.join("f3", c1b);
-        h.close_device(1);
+        h.close_device("", 1);
         // close_device only signals; the conns' read loops call leave. Smoke check: it
         // doesn't panic or mutate other rooms.
         assert_eq!(h.peers("f2").len(), 1);

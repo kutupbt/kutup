@@ -2239,9 +2239,9 @@ export class ChatService {
     if (this.socket?.readyState === WebSocket.CONNECTING) return
     this.socketDown()
     try {
-      const response = await api.post<{ ticket: string }>('/chat/ws-ticket', null, {
-        params: { deviceId: this.deviceId },
-      })
+      // One ticket endpoint for every device's socket; the device credential
+      // names this device (device-auth's interceptor sends it).
+      const response = await api.post<{ ticket: string }>('/device-ticket')
       if (this.disposed) return
       const base = await resolveApiBase()
       const url = new URL(`${base.replace(/\/$/, '')}/chat/ws`, window.location.href)

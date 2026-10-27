@@ -11,7 +11,21 @@ in slices 3–6. The suite id 2 is a constant of each family for now:
 federation offers) gain it in the slice that switches their protocol, so
 nothing that parses suite 1 accepts suite 2 before the server checks it.
 When they do, the suite-1 parsers must still refuse suite 2 under the old
-magics (`KUTPDB2`, `KUTPCM1`), with a test each. The user's decision: "follow proton drive". Reference:
+magics (`KUTPDB2`, `KUTPCM1`), with a test each.
+
+Slice 2 (the server) is built too:
+- one `Range` on every content route, with the revision id as the ETag
+  (`content_range.rs`, `storage::get_object_range`);
+- revision ids: `files.content_revision_id`, a version's id, and the
+  uploads' `revision_id` and `blob_suite` (migration `20261025110000`), and
+  the one key shape `files/{id}/revisions/{revisionId}`;
+- the header and structure checks on the multipart, version, tus and
+  federated uploads (`drive_blob.rs`), for blobs naming a `revisionId`;
+- the federated range proxy (`drive_federation_ranges.rs`);
+- the §7 settings, with the upload and version limits, in the admin UI and
+  `GET /api/drive/limits`.
+
+Streaming-format uploads still work beside it until slice 7. The user's decision: "follow proton drive". Reference:
 Proton's web client, `kutup-references/WebClients`. Its new
 `@protontech/drive-sdk` is not checked out there, so the in-repo upload and
 download code (`packages/drive-store`,
@@ -424,7 +438,7 @@ until a test shows the Chrome problem (open question 5).
      The worker answers only fetches whose `clientId` is the document that
      registered the stream. It answers them one at a time per stream (as
      Proton does).
-   - It caps each answer at `drive.stream.response_max_bytes` (4 MiB) and
+   - It caps each answer at `drive.stream.response_max_bytes` (5 MiB) and
      drops the stream when the page closes the viewer or goes away.
    - Responses carry `Content-Type`, `Content-Range` and `Accept-Ranges`,
      plus a strict CSP and `nosniff`, as Proton's do.
@@ -472,7 +486,8 @@ worker) and browsers with service workers disabled.
 
 **Safari and iOS.**
 - Safari probes with `bytes=0-1` and then may ask for the whole file. The
-  4 MiB cap handles both.
+  worker's per-answer cap (`drive.stream.response_max_bytes`, 5 MiB, at
+  least one sealed block) handles both.
 - It needs exact `Content-Range` and `Content-Length` on every `206`.
 - iOS gives a tab little memory, so the default cache there is 2 blocks.
 - Lock screen and background playback are best-effort: iOS may suspend the
@@ -600,7 +615,7 @@ rPGP, and it is additive anyway.
 The block size is **not** a setting. It is a fact of suite 2, like the 5 MiB
 chunk of suite 1, and changing it changes the bytes. The limits around it
 are site settings (`site_settings.rs` `NumericSetting`, in the admin UI, per
-the standing rule). The client reads them from the site config.
+the standing rule). The client reads them from `GET /api/drive/limits`.
 
 | Setting | Default | Bounds |
 |---|---|---|
@@ -608,12 +623,13 @@ the standing rule). The client reads them from the site config.
 | `drive.stream.cache_blocks` (verified blocks kept per stream) | 3 (2 on iOS) | 1–16 |
 | `drive.stream.readahead_blocks` | 1 | 0–4 |
 | `drive.stream.max_concurrent` (streams per tab) | 3 | 1–8 |
-| `drive.stream.response_max_bytes` (per answer, also the federation part size) | 4 MiB | 256 KiB–16 MiB |
+| `drive.stream.response_max_bytes` (per answer, also the federation part size) | 5 MiB (one sealed block, 4 MiB and 40 bytes, fits whole) | 4.5 MiB (at least one sealed block)–16 MiB |
 | `drive.stream.blob_fallback_max_bytes` (no service worker) | 1 GiB | 0–4 GiB |
 
-The Drive upload and version limits (`DRIVE_UPLOAD_LIMIT_BYTES`,
-`DRIVE_VERSION_LIMIT_BYTES`) are constants in `main.rs` today. They become
-site settings in slice 2 too, since streaming depends on them.
+The Drive upload and version limits are site settings too
+(`driveUploadMaxBytes`, 10 GiB, and `driveVersionMaxBytes`, 2 GiB, up to
+4 TiB, the most 2^20 blocks hold), counted as a body arrives. In the code
+the keys are `drive_stream_*` (`driveStream*` in the admin API).
 
 ## 8. Security analysis
 
@@ -627,12 +643,13 @@ It learns nothing of the content, the manifest or who signed it (the signer
 is inside the sealed manifest). The signature covers the account id it
 names, so a holder of the file key can't move it onto another name.
 
-**Key commitment.** XChaCha20-Poly1305 is not key-committing: a manifest
-could be crafted to open under two keys. That gains nothing here, because a
-reader first checks the sealed manifest's SHA-256 against the digest its
-metadata or descriptor commits to (opened under the right key), and each
-block's SHA-256 against the manifest before its AEAD. The bytes are fixed by
-hashes before any key is used on them.
+**Key commitment.** XChaCha20-Poly1305 is not key-committing: a ciphertext
+can be crafted to open under two keys. Two things make an object single-key
+here. The committed digest (in the metadata or descriptor) pins the sealed
+manifest's ciphertext. And the manifest's hash list names every block by the
+SHA-256 of its sealed bytes, checked before the block's AEAD: another object
+behind the same manifest under a second key would need blocks with those
+hashes, a SHA-256 preimage.
 
 **Integrity.** Any change to one block's bytes fails its hash and its AEAD.
 A wrong manifest fails its AEAD, its AAD (header and revision) and its

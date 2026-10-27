@@ -31,7 +31,8 @@ pub enum ChatWsOut {
 pub struct ChatConn {
     pub conn_id: u64,
     tx: mpsc::Sender<ChatWsOut>,
-    /// Notified to force the read loop to exit (device revoked / backpressure).
+    /// Notified to force the read loop to exit (device revoked / backpressure):
+    /// `notify_one`, whose permit waits for a loop busy elsewhere.
     pub close: Arc<Notify>,
 }
 
@@ -43,7 +44,7 @@ impl ChatConn {
             Ok(Ok(())) => true,
             Ok(Err(_)) => false,
             Err(_) => {
-                self.close.notify_waiters();
+                self.close.notify_one();
                 let _ = self.tx.try_send(ChatWsOut::Close);
                 false
             }
@@ -138,7 +139,7 @@ impl ChatHub {
             inner.remove(&(user_id, device_id)).unwrap_or_default()
         };
         for conn in conns {
-            conn.close.notify_waiters();
+            conn.close.notify_one();
             let _ = conn.tx.try_send(ChatWsOut::Close);
         }
     }

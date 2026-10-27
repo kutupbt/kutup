@@ -456,7 +456,14 @@ Administration (default 10, from 1 through 10; no environment variable). A
 lower value is a local resource/product policy. Ten is the V1 protocol hard
 cap and cannot be raised. Every device of an account, of every app (each
 browser app is one: Chat, Office, Drive; and the CLI), counts toward
-`devicesPerAccount` (default 32, from 1 through 127):
+`devicesPerAccount` (default 32, from 1 through 127). A newly registered
+device has `deviceListingGraceSeconds` (default 600) to add itself to its
+account's device list before another device's update drops its row. A
+row that never got listed stops counting toward the caps once that time is
+up. A file's home trusts its copy of an editor's device list from another
+server for `remoteManifestMaxAgeSeconds` (default 300) before reading it
+again: that is how long a device removed on its own server can still send
+edits to files here:
 
 ```sh
 CHAT_MEDIA_MAX_PLAINTEXT_BYTES=2147483648
@@ -665,6 +672,19 @@ sealed under it, so a dump alone doesn't hold them. A database restored
 without it keeps every message; its end-to-end forwardings stop (Outdated)
 until their owners re-enable them. Mail keeps arriving either way.
 
+A restored database also holds every account's device list as it was at
+the backup. Clients keep the newest device list they have seen of their own
+account (docs/plans/one-device-list.md §8), and refuse an older one as a
+rollback: a server that serves an outdated list is exactly what they guard
+against. So after a restore, accounts whose devices changed since the backup
+can't add or remove a device until each client trusts the restored list
+again:
+- **CLI:** `kutup devices forget-pin` in each profile.
+- **Web:** clear the app's site data in the browser (each app's address
+  separately), or sign in from a new browser profile.
+- **Chat:** clearing the Chat app's site data removes that browser's Chat
+  device too; link it again from another device, as a new browser is.
+
 `scripts/backup-postgres.sh` dumps the database, encrypts the dump on this
 machine, and stores it in the object store Kutup already uses (`S3_*` in
 `.env`), under `database-backups/`. It works with the bundled SeaweedFS and
@@ -754,6 +774,11 @@ version" when it refuses a version-1 send, and "the recipient's server refused
 a sealed send for good" (with the peer's error) when a version-1 server
 refuses its own; the version-1 server logs only a generic invalid transaction.
 Sealed sends between the two resume once both run the same version.
+Plain (unsealed) Chat federation moved to version 2 on 2026-10-27, for the
+same reason (a device mismatch closes its sequence there too, so it no
+longer holds back the sends behind it): servers on versions 1 and 2 refuse
+each other's plain sends ("unsupported chat federation version"), and those
+sends wait in the origin's queue until both run the same version.
 
 Each backend also holds up to `SEALED_FLUSH_LOCK_CONNECTIONS` (default 4)
 Postgres sessions of its own beside its main pool: one per destination server
@@ -1259,6 +1284,21 @@ Object Storage, MinIO, AWS S3, …):
    ```sh
    docker compose -f docker-compose.yml -f docker-compose.external-s3.yml up -d --build --wait
    ```
+
+**Timeouts.** A store that stalls fails the request with a clear error
+rather than holding it, along with the database transaction it runs in. The
+defaults suit a remote store on a slow link; each is a setting in `.env`:
+
+| Setting | Default | What it limits |
+|---|---|---|
+| `S3_CONNECT_TIMEOUT_SECONDS` | 10 | Opening a connection |
+| `S3_READ_TIMEOUT_SECONDS` | 60 | Waiting for the store's answer once a request is sent |
+| `S3_STALL_SECONDS` | 20 | A transfer, up or down, that moves no bytes |
+| `S3_REQUEST_TIMEOUT_SECONDS` | 30 | One try of a request without a body (heads, deletes, lists, multipart bookkeeping) |
+| `S3_MAX_ATTEMPTS` | 3 | Tries per request, the first included |
+
+A transfer that keeps moving has no total limit, because a whole object can
+be many gigabytes.
 
 The admin page cannot ask such a store for its capacity; set
 `STORAGE_TOTAL_BYTES` if you want a capacity readout. The SeaweedFS backup

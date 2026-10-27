@@ -10,7 +10,6 @@ use axum::extract::{Multipart, Path, State};
 use axum::http::{HeaderName, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::Json;
-use kutup_crypto::drive_object::DriveFileBlobContextV1;
 use serde::{Deserialize, Serialize};
 use std::io::Write;
 use tempfile::NamedTempFile;
@@ -19,8 +18,7 @@ use utoipa::ToSchema;
 use uuid::Uuid;
 
 use crate::error::{AppError, AppResult};
-use crate::handlers::files::validate_file_blob_file;
-use crate::handlers::{can_access_file, octet_stream_response, trusted_uuid};
+use crate::handlers::{can_access_file, trusted_uuid};
 use crate::middleware::AuthUser;
 use crate::AppState;
 
@@ -161,12 +159,17 @@ pub async fn list(
         ("fileId" = String, Path, description = "File id"),
         ("vid" = String, Path, description = "Version id")
     ),
-    responses((status = 200, description = "The encrypted snapshot blob (octet-stream) + x-kutup-doc-key-id / x-kutup-seq headers"))
+    responses(
+        (status = 200, description = "The encrypted snapshot blob (octet-stream) + x-kutup-doc-key-id / x-kutup-seq headers; the ETag is the version id"),
+        (status = 206, description = "The one `Range` asked"),
+        (status = 416, description = "The range starts past the end")
+    )
 )]
 pub async fn download(
     State(state): State<AppState>,
     user: AuthUser,
     Path((file_id, vid)): Path<(String, String)>,
+    headers: axum::http::HeaderMap,
 ) -> AppResult<Response> {
     let (user_id, fid) = ids(&user.user_id, &file_id)?;
     let vid = Uuid::parse_str(&vid).map_err(|_| AppError::not_found("not found"))?;
@@ -174,22 +177,18 @@ pub async fn download(
         return Err(AppError::forbidden("forbidden"));
     }
 
-    let row: Option<(String, i64, i64)> = sqlx::query_as(
-        "SELECT storage_path, doc_key_id, seq_at_snapshot FROM file_versions WHERE id = $1 AND file_id = $2",
+    let row: Option<(String, i64, i64, i64)> = sqlx::query_as(
+        "SELECT storage_path, size_bytes, doc_key_id, seq_at_snapshot
+         FROM file_versions WHERE id = $1 AND file_id = $2",
     )
     .bind(vid)
     .bind(fid)
     .fetch_optional(&state.pool)
     .await?;
-    let Some((path, doc_key_id, seq)) = row else {
+    let Some((path, size, doc_key_id, seq)) = row else {
         return Err(AppError::not_found("not found"));
     };
 
-    let (body, size) = state
-        .storage
-        .get_object(&path)
-        .await
-        .map_err(|_| AppError::internal("storage"))?;
     let extra = vec![
         (
             HeaderName::from_static("x-kutup-doc-key-id"),
@@ -197,7 +196,17 @@ pub async fn download(
         ),
         (HeaderName::from_static("x-kutup-seq"), seq.to_string()),
     ];
-    Ok(octet_stream_response(body, size, &extra))
+    // A version's id is its revision's: its ETag.
+    crate::content_range::serve_revision(
+        &state.pool,
+        &state.storage,
+        &path,
+        size,
+        vid,
+        &headers,
+        &extra,
+    )
+    .await
 }
 
 /// `PATCH /api/files/{fileId}/versions/{vid}` — mirrors `Patch`.
@@ -389,11 +398,6 @@ async fn delete_original(state: &AppState, user_id: Uuid, fid: Uuid) -> AppResul
 /// The longest version name, in characters.
 const MAX_LABEL_CHARS: usize = 200;
 
-/// Where a version's object lives: its own key, never an S3 object version.
-pub(crate) fn version_storage_path(file_id: Uuid, version_id: Uuid) -> String {
-    format!("files/{file_id}/versions/{version_id}")
-}
-
 /// `POST /api/files/{fileId}/versions` — store a version (multipart).
 #[utoipa::path(
     post,
@@ -405,12 +409,12 @@ pub(crate) fn version_storage_path(file_id: Uuid, version_id: Uuid) -> String {
     request_body(
         content = Vec<u8>,
         content_type = "multipart/form-data",
-        description = "`file` (the sealed Drive file blob), `kind` (`file` | `yjs`), `seqAtSnapshot`, `docKeyId`, optional `label`, `keepForever`, and `basedOn` (a whole-file save made from this version id, or `original`: stored only if that is still the current content)"
+        description = "`file` (the sealed Drive file blob), `kind` (`file` | `yjs`), `seqAtSnapshot`, `docKeyId`, optional `label`, `keepForever`, `basedOn` (a whole-file save made from this version id, or `original`: stored only if that is still the current content), and `revisionId` (a block-format blob's revision, which becomes the version's id)"
     ),
     responses(
         (status = 201, description = "The stored version", body = VersionRow),
-        (status = 409, description = "`code: version_conflict`: the current content is no longer `basedOn`; `current` names it"),
-        (status = 413, description = "Storage quota exceeded")
+        (status = 409, description = "`code: version_conflict`: the current content is no longer `basedOn`; `current` names it. `code: revisionTaken`: the revision id is in use"),
+        (status = 413, description = "Storage quota exceeded, or larger than `driveVersionMaxBytes`")
     )
 )]
 pub async fn create(
@@ -424,6 +428,11 @@ pub async fn create(
         return Err(AppError::forbidden("forbidden"));
     }
 
+    let mut budget = crate::drive_blob::BodyBudget::new(
+        crate::site_settings::DRIVE_VERSION_MAX_BYTES
+            .load_for(&state.pool, user_id)
+            .await?,
+    );
     let mut tmp: Option<(NamedTempFile, i64)> = None;
     let mut fields = std::collections::HashMap::<String, String>::new();
     while let Some(mut field) = multipart
@@ -440,6 +449,7 @@ pub async fn create(
                 .await
                 .map_err(|_| AppError::bad_request("invalid form"))?
             {
+                budget.take(chunk.len())?;
                 file.write_all(&chunk)
                     .map_err(|_| AppError::internal("temp write"))?;
                 size += chunk.len() as i64;
@@ -529,12 +539,14 @@ pub(crate) async fn store_version(
     .ok_or_else(|| AppError::not_found("not found"))?;
     let generation =
         u32::try_from(key_generation).map_err(|_| AppError::conflict("invalid key generation"))?;
-    let blob_context = DriveFileBlobContextV1::new(&fid.to_string(), generation)
-        .map_err(|_| AppError::bad_request("invalid Drive file blob"))?;
-    validate_file_blob_file(&tmp_file, blob_context)?;
+    // With `revisionId` a block-format blob bound to that revision, which
+    // becomes the version's id; without, the streaming format.
+    let format =
+        crate::drive_blob::BlobFormat::from_revision(fields.get("revisionId").map(String::as_str))?;
+    format.check_file(&tmp_file, size as u64, fid, generation)?;
 
-    let version_id = Uuid::new_v4();
-    let storage_path = version_storage_path(fid, version_id);
+    let version_id = format.revision_id();
+    let storage_path = crate::file_content::revision_path(fid, version_id);
 
     let mut tx = state.pool.begin().await?;
     // A save that claims a log position takes the relay's per-file lock
@@ -567,6 +579,7 @@ pub(crate) async fn store_version(
     crate::drive_writes::check_room(&mut tx, payer, collection_id, size, None)
         .await?
         .into_result()?;
+    crate::drive_blob::ensure_revision_free(&mut tx, version_id, None).await?;
     // A version claims the collaboration log up to its position; never past
     // the log's head (a made-up position must not trim edits it lacks). Under
     // the relay's per-file lock, so no frame lands in between.
@@ -603,11 +616,7 @@ pub(crate) async fn store_version(
     .bind(remote_author.map(|author| Uuid::parse_str(&author.account_id).expect("canonical")))
     .fetch_one(&mut *tx)
     .await?;
-    sqlx::query("UPDATE users SET storage_used_bytes = storage_used_bytes + $1 WHERE id = $2")
-        .bind(size)
-        .bind(payer)
-        .execute(&mut *tx)
-        .await?;
+    crate::storage_pool::charge(&mut *tx, crate::storage_pool::Payer::Account(payer), size).await?;
     // A new version is an edit: the file (and so its folder) was modified now.
     // New content: the hash it was recognised by no longer holds; the client
     // records the new one (docs/plans/drive-unique-names.md).
@@ -628,24 +637,8 @@ pub(crate) async fn store_version(
     // session started from and replay every edit since. The log is trimmed
     // when a new session starts (`collab::claim_base`).
     if seq_at_snapshot > 0 && kind == "yjs" {
-        sqlx::query(
-            "DELETE FROM file_update_log l USING files f
-             WHERE l.file_id = $1 AND f.id = $1 AND f.current_doc_key_id = $3 AND l.seq <= $2",
-        )
-        .bind(fid)
-        .bind(seq_at_snapshot)
-        .bind(doc_key_id)
-        .execute(&mut *tx)
-        .await?;
-        sqlx::query(
-            "UPDATE files SET collab_log_floor = GREATEST(collab_log_floor, $2)
-             WHERE id = $1 AND current_doc_key_id = $3",
-        )
-        .bind(fid)
-        .bind(seq_at_snapshot)
-        .bind(doc_key_id)
-        .execute(&mut *tx)
-        .await?;
+        crate::handlers::collab::trim_log_through(&mut tx, fid, seq_at_snapshot, doc_key_id)
+            .await?;
     }
 
     // Stored with the transaction open: if the store fails nothing is

@@ -15,7 +15,7 @@ use base64::engine::general_purpose::STANDARD;
 use base64::Engine as _;
 use kutup_collab::{ListDoc, TextDoc};
 use kutup_crypto::drive_object::{decrypt_file_blob, encrypt_file_blob, DriveFileBlobContextV1};
-use kutup_crypto::envelope::{self, kind, CollabFrameContextV1, Frame};
+use kutup_crypto::envelope::{self, kind, CollabFrameContextV3, Frame};
 
 use crate::api::versions::{NewVersion, VersionRow};
 use crate::api::{ApiError, Client, File};
@@ -212,7 +212,7 @@ fn read_remote(
         doc.apply_v2(state)?;
         after = *seq;
     }
-    let mut page = peer.with_device(|d| client.collab_frames(&file.id, d.id, after))?;
+    let mut page = peer.with_device(|d| client.collab_frames(&file.id, d, after))?;
     let mut saved = false;
     // No base, or the log was trimmed past it: start from the newest saved
     // state (merging it in is safe), and read the log after it.
@@ -228,7 +228,7 @@ fn read_remote(
             }
             if version.seq_at_snapshot > after {
                 after = version.seq_at_snapshot;
-                page = peer.with_device(|d| client.collab_frames(&file.id, d.id, after))?;
+                page = peer.with_device(|d| client.collab_frames(&file.id, d, after))?;
             }
         }
     }
@@ -241,7 +241,7 @@ fn read_remote(
         if !page.more {
             break;
         }
-        page = peer.with_device(|d| client.collab_frames(&file.id, d.id, through))?;
+        page = peer.with_device(|d| client.collab_frames(&file.id, d, through))?;
     }
     let never_opened = !saved && page.head_seq == 0 && base.is_none_or(|(_, seq)| *seq == 0);
     let seed = if never_opened {
@@ -336,17 +336,19 @@ fn send(
         remote.sender_next += 1;
         let sequence = remote.sender_next;
         let result = peer.with_device(|device| {
-            let context = CollabFrameContextV1::new(
+            let context = CollabFrameContextV3::new(
                 kind::YJS_UPDATE,
                 file.key_generation,
                 remote.doc_key_id,
                 &file.id,
-                device.id as u64,
+                device.id,
+                device.manifest_sequence,
                 sequence as u64,
             )?;
             let unsigned = envelope::seal_unsigned(update, &keys.current, context)?;
-            let signed = envelope::sign(&Frame::unpack(&unsigned)?, device.seed())?;
-            client.post_collab_frame(&file.id, device.id, signed)
+            let signed =
+                envelope::sign(&Frame::unpack(&unsigned)?, &device.account, device.seed())?;
+            client.post_collab_frame(&file.id, device, signed)
         });
         match result {
             Err(e) if attempt == 0 && refused(&e) => {
@@ -354,7 +356,7 @@ fn send(
                 // Re-read the document key and this device's sequences, and
                 // go on above them under a new prefix.
                 let page =
-                    peer.with_device(|d| client.collab_frames(&file.id, d.id, remote.through))?;
+                    peer.with_device(|d| client.collab_frames(&file.id, d, remote.through))?;
                 remote.sender_next = sender_prefix(page.my_sender_seq_high);
                 remote.doc_key_id =
                     u32::try_from(page.current_doc_key_id).unwrap_or(remote.doc_key_id);

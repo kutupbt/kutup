@@ -26,12 +26,14 @@ use axum::extract::{Path, State};
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
 use base64::Engine;
+use kutup_crypto::blocks::TRAILER_LEN;
 use kutup_crypto::drive_envelope::DriveEnvelopeContextV1;
-use kutup_crypto::drive_object::{DriveFileBlobContextV1, FILE_BLOB_PREFIX_BYTES};
 use uuid::Uuid;
 
+use crate::drive_blob::BlobFormat;
 use crate::drive_writes::Room;
-use crate::handlers::files::{canonical_uuid, validate_envelope, validate_file_blob_prefix};
+use crate::error::{AppError, AppResult};
+use crate::handlers::files::{canonical_uuid, validate_envelope};
 use crate::middleware::AuthUser;
 use crate::storage::{CompletedPart, MultipartUpload};
 use crate::AppState;
@@ -177,13 +179,8 @@ pub async fn create(State(state): State<AppState>, user: AuthUser, headers: Head
         return tus_text(StatusCode::BAD_REQUEST, "Upload-Length header required");
     }
     let total_bytes: i64 = match total_bytes_str.parse() {
-        Ok(n) if n >= (FILE_BLOB_PREFIX_BYTES + kutup_crypto::stream::ABYTES) as i64 => n,
-        _ => {
-            return tus_text(
-                StatusCode::BAD_REQUEST,
-                "Upload-Length is too small for a Drive file blob",
-            )
-        }
+        Ok(n) if n >= 0 => n,
+        _ => return tus_text(StatusCode::BAD_REQUEST, "invalid Upload-Length"),
     };
 
     let meta = match parse_upload_metadata(header_str(&headers, "Upload-Metadata")) {
@@ -192,9 +189,36 @@ pub async fn create(State(state): State<AppState>, user: AuthUser, headers: Head
             return (StatusCode::BAD_REQUEST, [("Tus-Resumable", TUS_VERSION)], e).into_response()
         }
     };
+    // With `revisionId` the blob is in the block format, bound to that
+    // revision (docs/plans/drive-block-format.md §3); without, the
+    // streaming format.
+    let format = match BlobFormat::from_revision(meta.get("revisionId").map(String::as_str)) {
+        Ok(format) => format,
+        Err(error) => return tus_error(error),
+    };
+    if (total_bytes as u64) < format.min_len() {
+        return tus_text(
+            StatusCode::BAD_REQUEST,
+            "Upload-Length is too small for a Drive file blob",
+        );
+    }
     // A new version of a file already here (`tus_versions`).
     if meta.contains_key("versionOf") {
-        return super::tus_versions::create(&state, user_id, total_bytes, &meta).await;
+        return super::tus_versions::create(&state, user_id, total_bytes, format, &meta).await;
+    }
+    // The upload limit is a setting, the site's or the account's own.
+    match crate::site_settings::DRIVE_UPLOAD_MAX_BYTES
+        .load_for(&state.pool, user_id)
+        .await
+    {
+        Ok(limit) if total_bytes <= limit => {}
+        Ok(_) => {
+            return tus_text(
+                StatusCode::PAYLOAD_TOO_LARGE,
+                "larger than this server's upload limit",
+            )
+        }
+        Err(_) => return tus_text(StatusCode::INTERNAL_SERVER_ERROR, "db read"),
     }
     let empty = String::new();
     let file_id_text = meta.get("fileId").unwrap_or(&empty);
@@ -208,7 +232,7 @@ pub async fn create(State(state): State<AppState>, user: AuthUser, headers: Head
             // Its JSON body carries the code (`nameNeeded` when missing).
             Err(error) => return tus_error(error),
         };
-    if meta.len() != 5
+    if meta.len() != 5 + usize::from(meta.contains_key("revisionId"))
         || file_id_text.is_empty()
         || coll_id.is_empty()
         || metadata_envelope.is_empty()
@@ -217,7 +241,8 @@ pub async fn create(State(state): State<AppState>, user: AuthUser, headers: Head
         return tus_text(
             StatusCode::BAD_REQUEST,
             "Upload-Metadata must contain exactly fileId, collectionId, \
-             metadataEnvelope, fileKeyEnvelope",
+             metadataEnvelope, fileKeyEnvelope, nameHash and, for the block \
+             format, revisionId",
         );
     }
     let file_id = match canonical_uuid(file_id_text) {
@@ -310,6 +335,10 @@ pub async fn create(State(state): State<AppState>, user: AuthUser, headers: Head
         Ok(false) => return tus_text(StatusCode::CONFLICT, "file id already in use"),
         Err(_) => return tus_text(StatusCode::INTERNAL_SERVER_ERROR, "db claim file id"),
     }
+    let revision = format.revision_id();
+    if let Err(error) = crate::drive_blob::ensure_revision_free(&mut tx, revision, None).await {
+        return tus_error(error);
+    }
     match crate::drive_writes::check_room(&mut tx, user_id, coll_uuid, total_bytes, None).await {
         Ok(Room::Enough) => {}
         Ok(Room::Quota) => {
@@ -336,10 +365,10 @@ pub async fn create(State(state): State<AppState>, user: AuthUser, headers: Head
 
     // Allocate the upload-session id; the client allocated the file id before
     // constructing its object-bound envelopes. Open the S3 multipart directly at
-    // the canonical files/{fileId}/original key (no temp→final copy — S3 hides
-    // incomplete multiparts from GetObject until Complete runs).
+    // the revision's canonical key (no temp→final copy — S3 hides incomplete
+    // multiparts from GetObject until Complete runs).
     let upload_id = Uuid::new_v4();
-    let storage_path = crate::handlers::files::original_storage_path(file_id);
+    let storage_path = crate::file_content::revision_path(file_id, revision);
     let s3_upload_id = match state.storage.create_multipart(&storage_path).await {
         Ok(id) => id,
         Err(_) => {
@@ -354,8 +383,8 @@ pub async fn create(State(state): State<AppState>, user: AuthUser, headers: Head
         "INSERT INTO uploads \
             (id, user_id, collection_id, file_id, total_bytes, \
              metadata_envelope, file_key_envelope, key_epoch, metadata_revision, \
-             storage_path, s3_upload_id, name_hash) \
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)",
+             storage_path, s3_upload_id, name_hash, revision_id, blob_suite) \
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)",
     )
     .bind(upload_id)
     .bind(user_id)
@@ -369,6 +398,8 @@ pub async fn create(State(state): State<AppState>, user: AuthUser, headers: Head
     .bind(&storage_path)
     .bind(&s3_upload_id)
     .bind(&name_hash)
+    .bind(revision)
+    .bind(format.suite())
     .execute(&mut *tx)
     .await;
     if ins.is_err() {
@@ -559,12 +590,14 @@ pub async fn patch(
         key_generation: Option<i32>,
         content_hash: Option<String>,
         based_on: Option<String>,
+        revision_id: Uuid,
+        blob_suite: i16,
     }
     let row: Option<UploadRow> = match sqlx::query_as(
         "SELECT collection_id, file_id, total_bytes, received_bytes, \
                 metadata_envelope, file_key_envelope, key_epoch, metadata_revision, \
                 storage_path, s3_upload_id, s3_part_etags, pending_bytes, name_hash, \
-                kind, key_generation, content_hash, based_on \
+                kind, key_generation, content_hash, based_on, revision_id, blob_suite \
          FROM uploads WHERE id=$1 AND user_id=$2 FOR UPDATE",
     )
     .bind(upload_id)
@@ -596,9 +629,15 @@ pub async fn patch(
         key_generation: version_key_generation,
         content_hash: version_content_hash,
         based_on,
+        revision_id,
+        blob_suite,
     }) = row
     else {
         return tus_text(StatusCode::NOT_FOUND, "");
+    };
+    let format = match BlobFormat::from_suite(blob_suite, revision_id) {
+        Ok(format) => format,
+        Err(error) => return tus_error(error),
     };
 
     if client_offset != received_bytes {
@@ -638,12 +677,8 @@ pub async fn patch(
     if received_bytes == 0 {
         // A new file's key is generation 1; a version's, the file's key when it started.
         let generation = version_key_generation.map_or(1, |g| g.max(1) as u32);
-        let context = match DriveFileBlobContextV1::new(&file_id.to_string(), generation) {
-            Ok(context) => context,
-            Err(_) => return tus_text(StatusCode::BAD_REQUEST, "invalid Drive file blob"),
-        };
-        if validate_file_blob_prefix(&body, context).is_err() {
-            return tus_text(StatusCode::BAD_REQUEST, "invalid Drive file blob");
+        if let Err(error) = format.check_head(&body, file_id, generation) {
+            return tus_error(error);
         }
     }
 
@@ -740,6 +775,8 @@ pub async fn patch(
                 key_generation,
                 content_hash: version_content_hash,
                 based_on,
+                revision_id,
+                format,
             },
             &parts,
         )
@@ -816,14 +853,20 @@ pub async fn patch(
         )
             .into_response();
     }
+    // The block format's structure, from the stored object's trailer.
+    if let Err(error) = check_stored_tail(&state, &storage_path, total_bytes, format).await {
+        drop(tx);
+        drop_landed(&state, &storage_path, upload_id).await;
+        return tus_error(error);
+    }
 
     if sqlx::query(
         "INSERT INTO files \
             (id, collection_id, uploader_user_id, \
              metadata_envelope, file_key_envelope, key_epoch, key_generation, \
              metadata_revision, storage_path, encrypted_size_bytes, original_key_generation, \
-             name_hash) \
-         VALUES ($1,$2,$3,$4,$5,$6,1,$7,$8,$9,1,$10)",
+             name_hash, content_revision_id) \
+         VALUES ($1,$2,$3,$4,$5,$6,1,$7,$8,$9,1,$10,$11)",
     )
     .bind(file_id)
     .bind(coll_id)
@@ -835,6 +878,7 @@ pub async fn patch(
     .bind(&storage_path)
     .bind(total_bytes)
     .bind(&name_hash)
+    .bind(revision_id)
     .execute(&mut *tx)
     .await
     .is_err()
@@ -843,12 +887,13 @@ pub async fn patch(
         drop_landed(&state, &storage_path, upload_id).await;
         return tus_text(StatusCode::INTERNAL_SERVER_ERROR, "db insert file");
     }
-    if sqlx::query("UPDATE users SET storage_used_bytes = storage_used_bytes + $1 WHERE id=$2")
-        .bind(total_bytes)
-        .bind(user_id)
-        .execute(&mut *tx)
-        .await
-        .is_err()
+    if crate::storage_pool::charge(
+        &mut *tx,
+        crate::storage_pool::Payer::Account(user_id),
+        total_bytes,
+    )
+    .await
+    .is_err()
     {
         drop(tx);
         drop_landed(&state, &storage_path, upload_id).await;
@@ -890,6 +935,31 @@ pub async fn patch(
         ],
     )
         .into_response()
+}
+
+/// Checks a completed object's structure from its trailer, read with one
+/// ranged GET (docs/plans/drive-block-format.md §3): nothing to check for
+/// the streaming format.
+pub(super) async fn check_stored_tail(
+    state: &AppState,
+    path: &str,
+    total: i64,
+    format: BlobFormat,
+) -> AppResult<()> {
+    if format == BlobFormat::Stream {
+        return Ok(());
+    }
+    let total = total as u64;
+    let trailer = state
+        .storage
+        .get_object_range(path, total - TRAILER_LEN as u64, total - 1, total)
+        .await
+        .map_err(|_| AppError::internal("storage read trailer"))?
+        .collect()
+        .await
+        .map_err(|_| AppError::internal("storage read trailer"))?
+        .into_bytes();
+    format.check_tail(total, &trailer)
 }
 
 /// Whether the file row exists after all: a commit can fail in the reporting

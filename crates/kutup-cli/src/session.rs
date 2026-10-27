@@ -26,6 +26,10 @@ const SESSION: TableDefinition<&str, &[u8]> = TableDefinition::new("session");
 const SYNC_STATE: TableDefinition<&str, &[u8]> = TableDefinition::new("sync_state");
 /// The CLI's collaboration device (encrypted), key `device`.
 const COLLAB_DEVICE: TableDefinition<&str, &[u8]> = TableDefinition::new("collab_device");
+/// The newest manifest of its own account this profile saw (plain JSON of a
+/// `kutup_chat_proto::OwnManifestPinV1`, key `pin`): not secret, and kept
+/// across sign-ins, so a server can't roll the account back under it.
+const MANIFEST_PIN: TableDefinition<&str, &[u8]> = TableDefinition::new("manifest_pin");
 /// Interrupted-upload resume records, keyed `"{collection_id}\n{canonical_path}"`.
 const RESUME: TableDefinition<&str, &[u8]> = TableDefinition::new("resume");
 
@@ -110,6 +114,7 @@ impl Store {
             wtx.open_table(SESSION)?;
             wtx.open_table(SYNC_STATE)?;
             wtx.open_table(RESUME)?;
+            wtx.open_table(MANIFEST_PIN)?;
             wtx.commit()?;
         }
         let mut store = Store {
@@ -237,7 +242,9 @@ impl Store {
             return Ok(None);
         }
         let data = self.decrypt(v.value())?;
-        Ok(Some(serde_json::from_slice(&data)?))
+        // One kept in an earlier form (before devices were manifest entries)
+        // is no device now: a new one registers.
+        Ok(serde_json::from_slice(&data).ok())
     }
 
     /// Keeps the collaboration device (`None`: forgets it).
@@ -254,6 +261,39 @@ impl Store {
                     t.remove("device")?;
                 }
             }
+        }
+        wtx.commit()?;
+        Ok(())
+    }
+
+    /// The pin [`Self::put_manifest_pin`] kept, if any.
+    pub fn manifest_pin(&self) -> Result<Option<kutup_chat_proto::OwnManifestPinV1>> {
+        let rtx = self.db.begin_read()?;
+        let t = rtx.open_table(MANIFEST_PIN)?;
+        let Some(v) = t.get("pin")? else {
+            return Ok(None);
+        };
+        Ok(Some(
+            serde_json::from_slice(v.value()).context("the kept manifest pin is malformed")?,
+        ))
+    }
+
+    /// Forgets the pin (`kutup devices forget-pin`, after a server restore).
+    pub fn forget_manifest_pin(&self) -> Result<()> {
+        let wtx = self.db.begin_write()?;
+        {
+            let mut t = wtx.open_table(MANIFEST_PIN)?;
+            t.remove("pin")?;
+        }
+        wtx.commit()?;
+        Ok(())
+    }
+
+    pub fn put_manifest_pin(&self, pin: &kutup_chat_proto::OwnManifestPinV1) -> Result<()> {
+        let wtx = self.db.begin_write()?;
+        {
+            let mut t = wtx.open_table(MANIFEST_PIN)?;
+            t.insert("pin", serde_json::to_vec(pin)?.as_slice())?;
         }
         wtx.commit()?;
         Ok(())
@@ -499,18 +539,19 @@ pub struct SyncFileState {
     pub synced_at: i64,
 }
 
-/// The CLI's collaboration device (docs/plans/device-registration.md): the
-/// key its frames are signed with, registered for one account on one server.
+/// The CLI's device of its account (docs/plans/one-device-list.md): its id
+/// in the account's manifest, the key its frames are signed with, and its
+/// credential, for one account on one server.
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CollabDevice {
     pub server: String,
     pub user_id: String,
-    pub device_id: i64,
+    pub device_id: u32,
     /// The Ed25519 seed, base64.
     pub seed: String,
-    /// When the account's statement for it was signed (renewed after 15 days).
-    pub issued_at_ms: i64,
+    /// The device credential, base64.
+    pub credential: String,
 }
 
 /// Where a note or place list was last in sync (docs/plans/cli-yjs-sync.md):

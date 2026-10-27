@@ -217,7 +217,7 @@
     },
     "viewOnly": "Yalnızca görüntüleme",
     "devices": {
-      "tooMany": "Kullanımda 20 cihazınız var. Burada düzenlemek için Hesap → Cihazlar bölümünden birini kaldırın.",
+      "tooMany": "Hesabınız olabileceği kadar cihaza sahip. Burada düzenlemek için Hesap → Cihazlar bölümünden birini kaldırın.",
       "removed": "Bu tarayıcının düzenleme cihazı kaldırıldı. Düzenlemeye devam etmek için belgeyi yeniden açın.",
       "manage": "Cihazları yönet"
     }

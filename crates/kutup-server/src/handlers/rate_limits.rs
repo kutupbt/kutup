@@ -1,6 +1,7 @@
 //! Administration → Rate limits (docs/plans/admin-rate-limits.md §2, §6):
 //! every limit in the registry with its value, its first value and where
-//! that came from, set or reset one at a time.
+//! that came from, set or reset one at a time. An account's own values are
+//! with its other limits (`handlers::account_limits`).
 
 use std::collections::HashMap;
 
@@ -9,7 +10,6 @@ use axum::Json;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use utoipa::ToSchema;
-use uuid::Uuid;
 
 use crate::error::{AppError, AppResult};
 use crate::middleware::AdminUser;
@@ -67,7 +67,7 @@ pub struct UpdateRateLimitRequest {
     pub value: Option<u64>,
 }
 
-fn entry(spec: &Spec, stored: &HashMap<String, String>) -> RateLimitEntry {
+pub(crate) fn entry(spec: &Spec, stored: &HashMap<String, String>) -> RateLimitEntry {
     let (unit, window_seconds) = match spec.unit {
         Unit::Events(window) => (RateLimitUnit::Events, Some(window.as_secs())),
         Unit::EventsPerLockout => (
@@ -189,163 +189,4 @@ pub async fn update(
     )
     .await;
     Ok(Json(entry(spec, &stored)))
-}
-
-/// One limit counted per account, as it stands for one account.
-#[derive(Debug, Serialize, ToSchema)]
-#[serde(rename_all = "camelCase")]
-pub struct AccountRateLimitEntry {
-    pub key: &'static str,
-    pub section: Section,
-    pub unit: RateLimitUnit,
-    pub window_seconds: Option<u64>,
-    /// What the account gets: its own value, else the site's.
-    pub value: u64,
-    pub site_value: u64,
-    /// Whether administrators gave the account its own value.
-    #[serde(rename = "override")]
-    pub own: bool,
-    pub min: u64,
-    pub max: u64,
-}
-
-#[derive(Debug, Serialize, ToSchema)]
-pub struct AccountRateLimitsResponse {
-    pub limits: Vec<AccountRateLimitEntry>,
-}
-
-fn account_entry(spec: &Spec, account: &str) -> AccountRateLimitEntry {
-    let site = entry(spec, &HashMap::new());
-    let own = ratelimit::account_override(spec.limit, account);
-    AccountRateLimitEntry {
-        key: spec.key,
-        section: spec.section,
-        unit: site.unit,
-        window_seconds: site.window_seconds,
-        value: own.unwrap_or(site.value),
-        site_value: site.value,
-        own: own.is_some(),
-        min: 1,
-        max: ratelimit::ceiling(spec),
-    }
-}
-
-/// The account's username, or 404 when there is no such account.
-async fn account_name(state: &AppState, id: Uuid) -> AppResult<String> {
-    sqlx::query_scalar("SELECT username FROM users WHERE id = $1")
-        .bind(id)
-        .fetch_optional(&state.pool)
-        .await?
-        .ok_or_else(|| AppError::not_found("user not found"))
-}
-
-/// `GET /api/admin/users/{id}/rate-limits` — the limits counted per account,
-/// as they stand for this one.
-#[utoipa::path(
-    get,
-    path = "/api/admin/users/{id}/rate-limits",
-    tag = "admin",
-    security(("BearerAuth" = [])),
-    params(("id" = Uuid, Path, description = "The account")),
-    responses(
-        (status = 200, description = "The account's limits", body = AccountRateLimitsResponse),
-        (status = 404, description = "No such account"),
-    )
-)]
-pub async fn account_list(
-    State(state): State<AppState>,
-    _admin: AdminUser,
-    Path(id): Path<Uuid>,
-) -> AppResult<Json<AccountRateLimitsResponse>> {
-    account_name(&state, id).await?;
-    ratelimit::reload(&state.pool).await?;
-    let account = id.to_string();
-    Ok(Json(AccountRateLimitsResponse {
-        limits: ratelimit::SPECS
-            .iter()
-            .filter(|spec| spec.overridable())
-            .map(|spec| account_entry(spec, &account))
-            .collect(),
-    }))
-}
-
-/// `PUT /api/admin/users/{id}/rate-limits/{key}` — gives the account its own
-/// value of a limit counted per account, or (`null`) takes it back. Audited
-/// as `user.rate_limit`.
-#[utoipa::path(
-    put,
-    path = "/api/admin/users/{id}/rate-limits/{key}",
-    tag = "admin",
-    security(("BearerAuth" = [])),
-    params(
-        ("id" = Uuid, Path, description = "The account"),
-        ("key" = String, Path, description = "The limit's key"),
-    ),
-    request_body = UpdateRateLimitRequest,
-    responses(
-        (status = 200, description = "The limit as it is now for the account", body = AccountRateLimitEntry),
-        (status = 400, description = "Outside the limit's bounds, or not counted per account"),
-        (status = 404, description = "No such account or limit"),
-    )
-)]
-pub async fn account_update(
-    State(state): State<AppState>,
-    admin: AdminUser,
-    Path((id, key)): Path<(Uuid, String)>,
-    Json(request): Json<UpdateRateLimitRequest>,
-) -> AppResult<Json<AccountRateLimitEntry>> {
-    let username = account_name(&state, id).await?;
-    let spec = ratelimit::SPECS
-        .iter()
-        .find(|spec| spec.key == key)
-        .ok_or_else(|| AppError::not_found("no such rate limit"))?;
-    if !spec.overridable() {
-        return Err(AppError::bad_request(format!(
-            "{} is not counted per account",
-            spec.key
-        )));
-    }
-    let previous = ratelimit::account_override(spec.limit, &id.to_string());
-    match request.value {
-        Some(value) => {
-            if !(1..=ratelimit::ceiling(spec)).contains(&value) {
-                return Err(AppError::bad_request(format!(
-                    "{} is between 1 and {}",
-                    spec.key,
-                    ratelimit::ceiling(spec)
-                )));
-            }
-            sqlx::query(
-                "INSERT INTO user_rate_limit_overrides (user_id, key, value) VALUES ($1, $2, $3) \
-                 ON CONFLICT (user_id, key) DO UPDATE SET value = EXCLUDED.value, updated_at = now()",
-            )
-            .bind(id)
-            .bind(spec.key)
-            .bind(value as i64)
-            .execute(&state.pool)
-            .await?;
-        }
-        None => {
-            sqlx::query("DELETE FROM user_rate_limit_overrides WHERE user_id = $1 AND key = $2")
-                .bind(id)
-                .bind(spec.key)
-                .execute(&state.pool)
-                .await?;
-        }
-    }
-    ratelimit::reload(&state.pool).await?;
-    crate::handlers::admin::audit(
-        &state.pool,
-        &admin.user_id,
-        "user.rate_limit",
-        Some(id),
-        json!({
-            "username": username,
-            "key": spec.key,
-            "value": request.value,
-            "previous": previous,
-        }),
-    )
-    .await;
-    Ok(Json(account_entry(spec, &id.to_string())))
 }

@@ -274,15 +274,16 @@ impl AccountAuthority {
             account,
             sequence,
             previous_hash,
-            STANDARD.encode(identity.identity_key().serialize()),
-            identity_binding,
+            Some(STANDARD.encode(identity.identity_key().serialize())),
+            Some(identity_binding),
             devices,
             issued_at,
         )
     }
 
     /// Sign the account's manifest with an identity binding made before (the
-    /// head's, for the same identity: it doesn't depend on the devices).
+    /// head's, for the same identity: it doesn't depend on the devices; none
+    /// while the account has no Chat identity).
     /// Only the authority's signature is checked here: the caller checked the
     /// binding it carries over (`verify_identity_binding`), and every reader
     /// checks it again.
@@ -292,8 +293,8 @@ impl AccountAuthority {
         account: AccountRef,
         sequence: u64,
         previous_hash: Option<String>,
-        identity_key: String,
-        identity_binding: String,
+        identity_key: Option<String>,
+        identity_binding: Option<String>,
         mut devices: Vec<AccountManifestDeviceV3>,
         issued_at: impl Into<String>,
     ) -> Result<AccountManifestV3> {
@@ -330,17 +331,21 @@ pub fn verify_manifest(manifest: &AccountManifestV3) -> Result<()> {
 }
 
 /// The identity binding alone (libsignal's XEdDSA check), as a trust error.
+/// A manifest of an account with no Chat identity has none to check.
 pub(crate) fn verify_identity_binding(manifest: &AccountManifestV3) -> Result<()> {
     let refused = || ChatError::Trust("the manifest's identity binding is invalid".into());
+    let (Some(identity_key), Some(identity_binding)) =
+        (&manifest.identity_key, &manifest.identity_binding)
+    else {
+        return Ok(());
+    };
     let bytes = manifest.identity_binding_bytes().map_err(|_| refused())?;
     let key = STANDARD
-        .decode(&manifest.identity_key)
+        .decode(identity_key)
         .ok()
         .and_then(|bytes| libsignal_protocol::IdentityKey::decode(&bytes).ok())
         .ok_or_else(refused)?;
-    let signature = STANDARD
-        .decode(&manifest.identity_binding)
-        .map_err(|_| refused())?;
+    let signature = STANDARD.decode(identity_binding).map_err(|_| refused())?;
     if key.public_key().verify_signature(&bytes, &signature) {
         Ok(())
     } else {
@@ -487,13 +492,15 @@ fn verify_manifest_trust(
         drive_share_signing_public_key: manifest.drive.share_signing_public_key.clone(),
         highest_sequence: manifest.sequence,
         manifest_hash,
-        identity_key: manifest.identity_key.clone(),
+        // Empty while the account has no Chat identity.
+        identity_key: manifest.identity_key.clone().unwrap_or_default(),
         // Verified stays with the identity it verified: a new one is not.
         identity_verified: prior.is_some_and(|prior| {
-            prior.identity_verified && prior.identity_key == manifest.identity_key
+            prior.identity_verified
+                && manifest.identity_key.as_deref() == Some(prior.identity_key.as_str())
         }),
         identity_verified_at_ms: prior
-            .filter(|prior| prior.identity_key == manifest.identity_key)
+            .filter(|prior| manifest.identity_key.as_deref() == Some(prior.identity_key.as_str()))
             .map_or(0, |prior| prior.identity_verified_at_ms),
         trust,
         continuity_gap,

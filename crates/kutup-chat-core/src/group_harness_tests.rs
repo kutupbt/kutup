@@ -359,6 +359,16 @@ impl World {
     /// one: the new device opens a provisioning socket and shows its code,
     /// `person` sends it the account identity, and it registers with the
     /// link token and publishes the manifest that lists it.
+    /// The server serves `account`'s manifest before its last one (a
+    /// rollback, as a malicious server would), and keeps the last one aside.
+    pub(crate) fn roll_back_manifest(&self, account: &str) -> AccountManifestV3 {
+        self.accounts
+            .borrow_mut()
+            .get_mut(account)
+            .and_then(|hosted| hosted.manifests.pop())
+            .expect("a manifest to roll back")
+    }
+
     pub(crate) fn link_device(self: &Rc<Self>, person: &mut Person) -> Person {
         self.link_device_into(person, Rc::new(SqliteChatDb::open_in_memory().unwrap()))
     }
@@ -631,7 +641,7 @@ impl World {
             .collect();
         Ok(AccountPreKeyBundlesResponse {
             account: account.parse().unwrap(),
-            identity_key: manifest.identity_key.clone(),
+            identity_key: manifest.identity_key.clone().unwrap_or_default(),
             devices,
             manifest,
         })
@@ -1195,21 +1205,31 @@ impl ChatTransport for Client {
         let hosted = accounts.entry(self.account.clone()).or_default();
         let device_id = match &request.registration {
             kutup_chat_proto::DeviceRegistrationV1::Reregistration { manifest } => {
-                // The account authority's next manifest, this device alone:
-                // every other device goes, as Signal's reclaimAccount.
+                // The account authority's next manifest, this device its one
+                // Chat device: every other Chat device goes, as Signal's
+                // reclaimAccount; the account's other devices stay listed.
                 manifest
                     .verify_successor(hosted.manifests.last())
                     .map_err(ChatError::Transport)?;
                 hosted.devices.clear();
                 hosted.manifests.push((**manifest).clone());
-                kutup_chat_proto::REREGISTRATION_DEVICE_ID
+                manifest
+                    .chat_devices()
+                    .map(|(id, _)| id)
+                    .next()
+                    .expect("validated: one Chat device")
             }
             kutup_chat_proto::DeviceRegistrationV1::Link { link_token } => {
                 let owner = self.world.link_tokens.borrow_mut().remove(link_token);
                 if owner.as_deref() != Some(self.account.as_str()) {
                     return Err(ChatError::Transport("no such link token".into()));
                 }
-                if hosted.manifests.last().map(|m| &m.identity_key) != Some(&request.identity_key) {
+                if hosted
+                    .manifests
+                    .last()
+                    .and_then(|m| m.identity_key.as_deref())
+                    != Some(request.identity_key.as_str())
+                {
                     return Err(ChatError::Transport("not the account's identity".into()));
                 }
                 (1..).find(|id| !hosted.devices.contains_key(id)).unwrap()

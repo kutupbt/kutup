@@ -1,51 +1,71 @@
-//! Device management — mirrors `internal/api/devices.go`.
+//! The account's devices (docs/plans/one-device-list.md): registering this
+//! CLI as one, listing them, and the account manifest that lists them.
 
 use anyhow::Result;
+use kutup_chat_proto::{
+    AccountDeviceV1, AccountManifestV3, RegisterDeviceRequestV1, RegisterDeviceResponseV1,
+};
+use kutup_crypto::account_ref::AccountRef;
 use reqwest::Method;
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 
 use super::Client;
 
-/// Mirrors `backend/handlers/devices.go:deviceRow`. Timestamps are kept as the
-/// server's RFC3339 strings (no local-tz reformatting).
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct UserDevice {
-    pub device_id: i64,
-    #[serde(default)]
-    pub label: String,
-    /// The device's Ed25519 public key, base64.
-    #[serde(default)]
-    pub public_signing: String,
-    #[serde(default)]
-    pub is_active: bool,
-    /// Active and registered under the account's current identity.
-    #[serde(default)]
-    pub trusted: bool,
-    #[serde(default)]
-    pub created_at: String,
-    #[serde(default)]
-    pub last_seen_at: Option<String>,
-}
-
 impl Client {
-    /// Lists every device for the authenticated user (server orders newest-first).
-    pub fn list_user_devices(&self) -> Result<Vec<UserDevice>> {
+    /// Every device of the account, of every kind.
+    pub fn list_devices(&self) -> Result<Vec<AccountDeviceV1>> {
+        #[derive(Deserialize)]
+        struct Devices {
+            devices: Vec<AccountDeviceV1>,
+        }
         let resp = self.request(Method::GET, "/devices").send()?;
+        Ok(super::decode_json::<Devices>(resp)?.devices)
+    }
+
+    /// Registers an editor or CLI device of the account: its id, and the
+    /// `session` its manifest entry lists.
+    pub fn register_device(
+        &self,
+        request: &RegisterDeviceRequestV1,
+    ) -> Result<RegisterDeviceResponseV1> {
+        let resp = self
+            .request(Method::POST, "/devices")
+            .json(request)
+            .send()?;
         super::decode_json(resp)
     }
 
-    /// Revokes a device with the account's signed revocation, closing any
-    /// in-flight WebSocket sessions signed by it.
-    pub fn revoke_user_device(
-        &self,
-        device_id: i64,
-        revoked_at_ms: i64,
-        signature: &str,
-    ) -> Result<()> {
+    /// The account's manifest as its server holds it; none while it has none
+    /// (`404 noManifest`).
+    pub fn account_manifest(&self, account: &AccountRef) -> Result<Option<AccountManifestV3>> {
         let resp = self
-            .request(Method::DELETE, &format!("/devices/{device_id}"))
-            .json(&serde_json::json!({ "revokedAtMs": revoked_at_ms, "signature": signature }))
+            .request(
+                Method::GET,
+                &format!("/chat/accounts/{}/manifest", account.account_id),
+            )
+            .query(&[("server", account.server.as_str())])
+            .send()?;
+        if resp.status().as_u16() == 404 {
+            let error = super::api_error(resp);
+            if error
+                .chain()
+                .filter_map(|e| e.downcast_ref::<super::ApiError>())
+                .any(|e| e.code.as_deref() == Some("noManifest"))
+            {
+                return Ok(None);
+            }
+            return Err(error);
+        }
+        Ok(Some(super::decode_json(resp)?))
+    }
+
+    /// Publishes the account's next manifest as the device `by` names
+    /// (`X-Kutup-Device`).
+    pub fn publish_manifest(&self, manifest: &AccountManifestV3, by: &str) -> Result<()> {
+        let resp = self
+            .request(Method::POST, "/chat/manifest")
+            .header(kutup_chat_proto::DEVICE_HEADER, by)
+            .json(manifest)
             .send()?;
         super::check_ok(resp)
     }

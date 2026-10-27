@@ -157,7 +157,6 @@ fn an_editor_credential_opens_no_chat_route() {
     for (method, path) in [
         ("POST", "/api/chat/keys/check"),
         ("POST", "/api/chat/link-tokens"),
-        ("POST", "/api/chat/ws-ticket?deviceId=2"),
         ("GET", "/api/chat/messages?deviceId=2"),
     ] {
         let request = match method {
@@ -340,4 +339,136 @@ fn the_device_cap_counts_every_kind() {
     let (status, answer) = publish(&live, &mut ada, &first.header(), &fewer);
     set_cap(None);
     assert_eq!(status, StatusCode::OK, "{answer}");
+}
+
+/// Registrations that never listed themselves don't fill the cap: past the
+/// listing grace, the next registration drops them; within it, they count.
+#[test]
+fn stale_unlisted_rows_hold_no_place_under_the_cap() {
+    let Some(live) = live() else { return };
+    let mut ada = live.account();
+    let first = ada.reregister(&live.c, &live.base);
+    let user_id = Uuid::parse_str(&ada.account.account_id).unwrap();
+    // Two registrations an hour old that never listed themselves.
+    live.editor(&ada, 2);
+    live.editor(&ada, 3);
+    live.sql(
+        "UPDATE devices SET created_at = now() - interval '1 hour'
+          WHERE user_id = $1 AND device_id IN (2, 3)",
+        user_id,
+    );
+    let set_cap = |value: Option<i64>| {
+        let query = match value {
+            Some(value) => format!(
+                "INSERT INTO site_settings (key, value) VALUES ('devices_per_account', '{value}')
+                 ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value"
+            ),
+            None => "DELETE FROM site_settings WHERE key = 'devices_per_account'".into(),
+        };
+        live.runtime
+            .block_on(sqlx::query(&query).execute(&live.pool))
+            .unwrap();
+    };
+    let register = |byte: u8| {
+        let frame_key = SigningKey::from_seed(Suite::V1, &[byte; 32])
+            .verifying_key()
+            .to_array::<32>();
+        code(
+            live.c
+                .post(format!("{}/api/devices", live.base))
+                .bearer_auth(&ada.token)
+                .json(&json!({
+                    "kind": "editor",
+                    "name": "live-test editor",
+                    "frameKey": STANDARD.encode(frame_key),
+                    "credential": URL_SAFE_NO_PAD.encode([byte; 32]),
+                }))
+                .send()
+                .unwrap(),
+        )
+    };
+    // Three of three by rows, but only the listed Chat device counts: the
+    // stale rows go and the new device takes the lowest free id.
+    set_cap(Some(3));
+    let (status, answer) = register(0x21);
+    assert_eq!(status, StatusCode::OK, "{answer}");
+    assert_eq!(answer["deviceId"], 2);
+    let ids: Vec<i32> = live
+        .runtime
+        .block_on(
+            sqlx::query_scalar("SELECT device_id FROM devices WHERE user_id = $1 ORDER BY 1")
+                .bind(user_id)
+                .fetch_all(&live.pool),
+        )
+        .unwrap();
+    assert_eq!(ids, vec![1, 2], "the stale rows are gone");
+    // Rows within their grace count: two fresh unlisted rows fill it.
+    let (status, answer) = register(0x22);
+    assert_eq!(status, StatusCode::OK, "{answer}");
+    let (status, answer) = register(0x23);
+    set_cap(None);
+    assert_eq!(status, StatusCode::CONFLICT, "{answer}");
+    assert_eq!(answer["code"], "deviceLimit");
+    // The listed device still publishes over the pending rows.
+    let manifest = manifest_with(&ada, &[]);
+    let (status, answer) = publish(&live, &mut ada, &first.header(), &manifest);
+    assert_eq!(status, StatusCode::OK, "{answer}");
+}
+
+/// A sign-in with no device of its own (the Account app) removes devices:
+/// a manifest that only drops entries, signed by the authority, publishes
+/// without `X-Kutup-Device`; one that adds or changes an entry doesn't.
+#[test]
+fn a_sign_in_alone_only_removes_devices() {
+    let Some(live) = live() else { return };
+    let mut ada = live.account();
+    let first = ada.reregister(&live.c, &live.base);
+    let (editor, _) = live.editor(&ada, 2);
+    let (cli, _) = live.editor(&ada, 3);
+    let manifest = manifest_with(&ada, &[editor.clone(), cli.clone()]);
+    let (status, answer) = publish(&live, &mut ada, &first.header(), &manifest);
+    assert_eq!(status, StatusCode::OK, "{answer}");
+
+    let without = |ada: &mut ChatAccount, manifest: &AccountManifestV3| {
+        let answer = code(
+            live.c
+                .post(format!("{}/api/chat/manifest", live.base))
+                .bearer_auth(&ada.token)
+                .json(manifest)
+                .send()
+                .unwrap(),
+        );
+        if answer.0 == StatusCode::OK {
+            ada.head = Some(manifest.clone());
+        }
+        answer
+    };
+    // Adding an entry, or listing the same set again: refused.
+    let (fourth, _) = live.editor(&ada, 4);
+    let grown = manifest_with(&ada, &[editor.clone(), cli.clone(), fourth]);
+    let (status, answer) = without(&mut ada, &grown);
+    assert_eq!(status, StatusCode::UNAUTHORIZED, "{answer}");
+    let same = manifest_with(&ada, &[editor.clone(), cli.clone()]);
+    let (status, _) = without(&mut ada, &same);
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+    // Changing an entry while removing another: refused.
+    let mut changed = editor.clone();
+    changed.session = "00".repeat(32);
+    let changed = manifest_with(&ada, &[changed]);
+    let (status, _) = without(&mut ada, &changed);
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+    // Removing one: published, its row gone.
+    let fewer = manifest_with(&ada, std::slice::from_ref(&editor));
+    let (status, answer) = without(&mut ada, &fewer);
+    assert_eq!(status, StatusCode::OK, "{answer}");
+    let user_id = Uuid::parse_str(&ada.account.account_id).unwrap();
+    let rows: i64 = live
+        .runtime
+        .block_on(
+            sqlx::query_scalar("SELECT count(*) FROM devices WHERE user_id = $1 AND device_id = 3")
+                .bind(user_id)
+                .fetch_one(&live.pool),
+        )
+        .unwrap();
+    assert_eq!(rows, 0);
 }

@@ -39,20 +39,21 @@ use uuid::Uuid;
 
 use crate::drive_federation::{
     capability_hash, configured_stack, drive_spec, ensure_version_digest, gateway_error,
-    signed_app_error, signed_json, validate_capability, JSON_CONTENT_TYPE, MAX_DRIVE_OBJECT_BYTES,
+    signed_app_error, signed_json, validate_capability, JSON_CONTENT_TYPE,
     OCTET_STREAM_CONTENT_TYPE, SHARE_CAPABILITY_HEADER,
 };
 use crate::error::{AppError, AppResult};
 use crate::federation::{AuthenticatedFederationRequest, FederationStack};
 use crate::handlers::collab::{
-    authenticate_socket, broadcast_peers, frame_binding, is_presence, log_head, peer_summaries,
-    persist_frame, CollabQuery, FrameBudget, Hello, Sender, ACCESS_RECHECK,
+    authenticate_socket, broadcast_peers, delivered_from_log, frame_binding, is_presence, log_head,
+    peer_summaries, persist_frame, CollabQuery, FrameBudget, Hello, LogSender, ACCESS_RECHECK,
 };
 use crate::handlers::file_versions::{store_version, to_version_row, VersionTuple, VERSION_SELECT};
 use crate::handlers::trusted_uuid;
 use crate::hub::{self, WsOut};
 use crate::middleware::AuthUser;
 use crate::AppState;
+use kutup_crypto::account_ref::AccountRef;
 
 /// Frames arriving within this window go home (or to a bridge) together.
 const BATCH_WINDOW: Duration = Duration::from_millis(50);
@@ -102,7 +103,8 @@ struct SubscriberState {
     expires: Instant,
     /// The log position delivered so far.
     sent_through: i64,
-    ephemeral: Vec<Vec<u8>>,
+    /// Relayed-only frames waiting, as `{ sender, frame }`.
+    ephemeral: Vec<WireFrame>,
     /// Kept frames this bridge may send, as a connection's budget.
     budget: FrameBudget,
 }
@@ -117,7 +119,7 @@ impl CollabFederation {
 
     /// A relayed-only frame (cursor, stroke) for subscribers other than the
     /// server it came from.
-    pub fn relayed(&self, file_id: Uuid, origin: Option<&str>, frame: &[u8]) {
+    pub fn relayed(&self, file_id: Uuid, origin: Option<&str>, sender: &AccountRef, frame: &[u8]) {
         for sub in self.subscribers(file_id) {
             if Some(sub.domain.as_str()) == origin {
                 continue;
@@ -127,7 +129,7 @@ impl CollabFederation {
                 if inner.ephemeral.len() >= MAX_EPHEMERAL {
                     inner.ephemeral.remove(0);
                 }
-                inner.ephemeral.push(frame.to_vec());
+                inner.ephemeral.push(WireFrame::new(sender, frame));
             }
             sub.wake.notify_one();
         }
@@ -204,11 +206,11 @@ impl CollabFederation {
 /// What a share's capability allows on one file, for the calling server.
 struct RemoteAccess {
     can_write: bool,
-    /// The share's recipient: whose collaboration devices may send frames
-    /// through it (docs/plans/device-registration.md, "Remote devices").
-    recipient_username: String,
-    /// The share's recipient account (on the calling server).
+    /// The share's recipient account (on the calling server): only its
+    /// devices send frames through the share.
     recipient_account_id: Uuid,
+    /// The incarnation the share was made to: the recipient's manifest must
+    /// be under it.
     recipient_incarnation: String,
 }
 
@@ -228,9 +230,9 @@ async fn remote_access(
         .ok_or_else(|| AppError::not_found("Drive share not found"))?;
     validate_capability(capability).map_err(|_| AppError::not_found("Drive share not found"))?;
     let hash = capability_hash(capability);
-    let file: Option<(bool, String, Uuid, String)> = sqlx::query_as(
+    let file: Option<(bool, Uuid, String)> = sqlx::query_as(
         "SELECT s.can_edit AND s.key_generation = f.key_generation AND f.key_epoch = c.key_epoch,
-                s.recipient_username, s.recipient_account_id, s.recipient_incarnation_id
+                s.recipient_account_id, s.recipient_incarnation_id
          FROM federated_outgoing_file_shares s
          JOIN files f ON f.id = s.file_id AND f.deleted_at IS NULL
          JOIN collections c ON c.id = f.collection_id AND c.deleted_at IS NULL
@@ -241,17 +243,16 @@ async fn remote_access(
     .bind(file_id)
     .fetch_optional(&state.pool)
     .await?;
-    if let Some((can_write, recipient_username, recipient_account_id, incarnation)) = file {
+    if let Some((can_write, recipient_account_id, incarnation)) = file {
         return Ok(RemoteAccess {
             can_write,
-            recipient_username,
             recipient_account_id,
             recipient_incarnation: incarnation.trim().to_owned(),
         });
     }
-    let folder: Option<(bool, String, Uuid, String)> = sqlx::query_as(
+    let folder: Option<(bool, Uuid, String)> = sqlx::query_as(
         "SELECT s.can_upload AND f.key_epoch = c.key_epoch,
-                s.recipient_username, s.recipient_account_id, s.recipient_incarnation_id
+                s.recipient_account_id, s.recipient_incarnation_id
          FROM federated_outgoing_shares s
          JOIN collections c ON c.id = s.collection_id AND c.deleted_at IS NULL
          JOIN files f ON f.collection_id = c.id AND f.deleted_at IS NULL
@@ -264,9 +265,8 @@ async fn remote_access(
     .await?;
     folder
         .map(
-            |(can_write, recipient_username, recipient_account_id, incarnation)| RemoteAccess {
+            |(can_write, recipient_account_id, incarnation)| RemoteAccess {
                 can_write,
-                recipient_username,
                 recipient_account_id,
                 recipient_incarnation: incarnation.trim().to_owned(),
             },
@@ -435,12 +435,44 @@ pub async fn unsubscribe(
     answer(federation, &authenticated, result)
 }
 
+/// A frame on the federation wire: its sender account (which its signature
+/// covers) and the packed frame, base64.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub(crate) struct WireFrame {
+    sender: String,
+    frame: String,
+}
+
+impl WireFrame {
+    fn new(sender: &AccountRef, frame: &[u8]) -> Self {
+        WireFrame {
+            sender: sender.to_string(),
+            frame: STANDARD.encode(frame),
+        }
+    }
+
+    /// The sender and the packed frame, if both are well formed.
+    fn open(&self) -> Option<(AccountRef, Vec<u8>, Frame)> {
+        let sender: AccountRef = self.sender.parse().ok()?;
+        let raw = STANDARD.decode(&self.frame).ok()?;
+        let frame = Frame::unpack(&raw).ok()?;
+        Some((sender, raw, frame))
+    }
+
+    /// As a server delivers it to its clients (`envelope::deliver`).
+    fn delivered(&self) -> Option<Vec<u8>> {
+        let (sender, raw, _) = self.open()?;
+        Some(envelope::deliver(&sender, &raw))
+    }
+}
+
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct PushedFrame {
     seq: i64,
-    /// Base64.
-    frame: String,
+    #[serde(flatten)]
+    frame: WireFrame,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -449,8 +481,8 @@ struct PushBody {
     subscription_id: String,
     file_id: Uuid,
     frames: Vec<PushedFrame>,
-    /// Relayed-only frames, base64.
-    ephemeral: Vec<String>,
+    /// Relayed-only frames.
+    ephemeral: Vec<WireFrame>,
     /// Everything up to here is delivered (some positions are the bridge's own).
     through_seq: i64,
     /// A saved version trimmed the log up to here.
@@ -458,6 +490,13 @@ struct PushBody {
     /// The room is closing (the file moved to a new key, or went away).
     #[serde(default)]
     close: bool,
+}
+
+/// A logged frame on the federation wire, named by its sender's account.
+fn wire_from_log(state: &AppState, domain: &str, account: Uuid, frame: &[u8]) -> Option<WireFrame> {
+    let delivered = delivered_from_log(state, domain, account, frame)?;
+    let (sender, raw) = envelope::delivered(&delivered).ok()?;
+    Some(WireFrame::new(&sender, raw))
 }
 
 async fn push(state: &AppState, sub: &Subscriber, body: &PushBody) -> Result<StatusCode, AppError> {
@@ -500,8 +539,8 @@ async fn pusher(state: AppState, sub: Arc<Subscriber>) {
         tokio::time::sleep(BATCH_WINDOW).await;
         loop {
             let sent_through = sub.inner.lock().unwrap().sent_through;
-            let rows: Vec<(i64, Vec<u8>, Option<String>)> = match sqlx::query_as(
-                "SELECT seq, frame, remote_domain FROM file_update_log
+            let rows: Vec<(i64, Vec<u8>, String, Uuid)> = match sqlx::query_as(
+                "SELECT seq, frame, sender_domain, sender_account FROM file_update_log
                  WHERE file_id = $1 AND seq > $2 ORDER BY seq ASC LIMIT $3",
             )
             .bind(sub.file_id)
@@ -529,10 +568,12 @@ async fn pusher(state: AppState, sub: Arc<Subscriber>) {
             let frames: Vec<PushedFrame> = rows
                 .into_iter()
                 // Never echo a bridge its own frames (it has them, with positions).
-                .filter(|(_, _, origin)| origin.as_deref() != Some(sub.domain.as_str()))
-                .map(|(seq, frame, _)| PushedFrame {
-                    seq,
-                    frame: STANDARD.encode(frame),
+                .filter(|(_, _, domain, _)| *domain != sub.domain)
+                .filter_map(|(seq, frame, domain, account)| {
+                    Some(PushedFrame {
+                        seq,
+                        frame: wire_from_log(&state, &domain, account, &frame)?,
+                    })
                 })
                 .collect();
             if frames.is_empty()
@@ -546,7 +587,7 @@ async fn pusher(state: AppState, sub: Arc<Subscriber>) {
                 subscription_id: sub.id.clone(),
                 file_id: sub.file_id,
                 frames,
-                ephemeral: ephemeral.iter().map(|f| STANDARD.encode(f)).collect(),
+                ephemeral,
                 through_seq: through,
                 floor,
                 close: false,
@@ -587,8 +628,8 @@ async fn pusher(state: AppState, sub: Arc<Subscriber>) {
 struct FramesBody {
     file_id: Uuid,
     subscription_id: String,
-    /// Base64 sealed frames, in the order they were made.
-    frames: Vec<String>,
+    /// Sealed frames with their senders, in the order they were made.
+    frames: Vec<WireFrame>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -596,19 +637,14 @@ struct FramesBody {
 struct FramesResponse {
     /// Each frame's log position; null for relayed-only or refused frames.
     positions: Vec<Option<i64>>,
-    /// Devices home has no announce for: announce them, then send again.
-    #[serde(default)]
-    unknown_devices: Vec<i64>,
-    /// Devices whose statement is more than 30 days old: their clients renew
-    /// it (only they can), then the bridge announces the renewal.
-    #[serde(default)]
-    expired_devices: Vec<i64>,
 }
 
 /// `POST /api/fed/drive/collab/frames` — frames from a bridge's editors,
-/// already checked there against their devices. Home checks them against the
-/// file and the share, keeps the durable ones, and sends them to its room and
-/// to other bridges. Signed, capability-authorized.
+/// already checked there against their devices. Home checks each against the
+/// share (its recipient's, from the bridge's server), the sender's account
+/// manifest (its device's frame key, `remote_manifests`) and the file, keeps
+/// the durable ones, and sends them to its room and to other bridges. Signed,
+/// capability-authorized.
 pub async fn frames(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -627,18 +663,16 @@ pub async fn frames(
         let room = request.file_id.to_string();
         let mut positions = Vec::with_capacity(request.frames.len());
         let mut kept_any = false;
-        let mut unknown_devices = std::collections::BTreeSet::new();
-        let mut expired_devices = std::collections::BTreeSet::new();
-        for encoded in &request.frames {
-            let Ok(raw) = STANDARD.decode(encoded) else {
+        for wired in &request.frames {
+            let Some((sender, raw, frame)) = wired.open() else {
                 positions.push(None);
                 continue;
             };
-            let Ok(frame) = Frame::unpack(&raw) else {
-                positions.push(None);
-                continue;
-            };
-            if frame.sequence > i64::MAX as u64 {
+            // The share's recipient, from its own server, only.
+            if sender.server != domain
+                || Uuid::parse_str(&sender.account_id).ok() != Some(access.recipient_account_id)
+                || frame.sequence > i64::MAX as u64
+            {
                 positions.push(None);
                 continue;
             }
@@ -646,38 +680,27 @@ pub async fn frames(
                 positions.push(None);
                 continue;
             };
-            // Only an announced, fresh device of the share's recipient, by
-            // its own signature (docs/plans/device-registration.md).
-            match crate::remote_devices::check_sender(
-                &state.pool,
+            // Signed with a frame key the sender's account lists for the
+            // frame's device, under the incarnation the share was made to.
+            if !crate::remote_manifests::frame_is_senders(
+                &state,
                 &domain,
                 &access.recipient_incarnation,
+                &sender,
                 &frame,
                 &raw,
             )
             .await?
             {
-                crate::remote_devices::RemoteSender::Trusted => {}
-                crate::remote_devices::RemoteSender::Unknown => {
-                    unknown_devices.insert(frame.sender_device_id as i64);
-                    positions.push(None);
-                    continue;
-                }
-                crate::remote_devices::RemoteSender::Expired => {
-                    expired_devices.insert(frame.sender_device_id as i64);
-                    positions.push(None);
-                    continue;
-                }
-                crate::remote_devices::RemoteSender::Refused => {
-                    positions.push(None);
-                    continue;
-                }
+                positions.push(None);
+                continue;
             }
+            let delivered = envelope::deliver(&sender, &raw);
             if is_presence(frame.kind) {
-                state.hub.broadcast(&room, 0, &raw).await;
+                state.hub.broadcast(&room, 0, &delivered).await;
                 state
                     .collab_federation
-                    .relayed(request.file_id, Some(&domain), &raw);
+                    .relayed(request.file_id, Some(&domain), &sender, &raw);
                 positions.push(None);
                 continue;
             }
@@ -689,20 +712,21 @@ pub async fn frames(
                 continue;
             }
             if frame.kind == envelope::kind::EXCALIDRAW_OP {
-                state.hub.broadcast(&room, 0, &raw).await;
+                state.hub.broadcast(&room, 0, &delivered).await;
                 state
                     .collab_federation
-                    .relayed(request.file_id, Some(&domain), &raw);
+                    .relayed(request.file_id, Some(&domain), &sender, &raw);
                 positions.push(None);
                 continue;
             }
-            let sender = Sender::Remote {
-                domain: &domain,
-                device: frame.sender_device_id as i64,
+            let log_sender = LogSender {
+                domain: Some(&domain),
+                account: access.recipient_account_id,
+                device: frame.device_id,
             };
-            match persist_frame(&state, request.file_id, sender, &frame, &raw).await {
+            match persist_frame(&state, request.file_id, log_sender, &frame, &raw).await {
                 Ok(seq) => {
-                    state.hub.broadcast(&room, 0, &raw).await;
+                    state.hub.broadcast(&room, 0, &delivered).await;
                     state
                         .hub
                         .broadcast_text(
@@ -723,65 +747,8 @@ pub async fn frames(
             federation,
             &authenticated,
             StatusCode::OK,
-            &FramesResponse {
-                positions,
-                unknown_devices: unknown_devices.into_iter().collect(),
-                expired_devices: expired_devices.into_iter().collect(),
-            },
+            &FramesResponse { positions },
         )
-    }
-    .await;
-    answer(federation, &authenticated, result)
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-struct DevicesBody {
-    file_id: Uuid,
-    #[serde(default)]
-    devices: Vec<crate::remote_devices::AnnouncedDevice>,
-    #[serde(default)]
-    revocations: Vec<crate::remote_devices::AnnouncedRevocation>,
-}
-
-/// `POST /api/fed/drive/collab/devices` — a bridge announces the share
-/// recipient's collaboration devices (each with the account's signed
-/// statement) and forwards their revocations. Idempotent; signed and
-/// capability-authorized; at most 50 entries; rate limited per bridge and
-/// share (docs/plans/device-registration.md, "Remote devices").
-pub async fn devices(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    body: Bytes,
-) -> AppResult<Response> {
-    let (federation, authenticated, parsed) =
-        inbound::<DevicesBody>(&state, &headers, "/api/fed/drive/collab/devices", &body).await?;
-    let result = async {
-        let request = parsed?;
-        let access = remote_access(&state, &authenticated, &headers, request.file_id).await?;
-        let domain = authenticated.origin().to_owned();
-        let limiter_key = format!(
-            "{domain}|{}",
-            headers
-                .get(SHARE_CAPABILITY_HEADER)
-                .and_then(|value| value.to_str().ok())
-                .map(capability_hash)
-                .unwrap_or_default()
-        );
-        if !crate::ratelimit::COLLAB_DEVICE_ANNOUNCES.allow(&limiter_key) {
-            return Err(AppError::too_many_requests("too many requests")
-                .with_details(serde_json::json!({ "code": "rateLimited" })));
-        }
-        let outcome = crate::remote_devices::take_announce(
-            &state.pool,
-            &domain,
-            &format!("{}@{domain}", access.recipient_username),
-            &access.recipient_incarnation,
-            &request.devices,
-            &request.revocations,
-        )
-        .await?;
-        signed_json(federation, &authenticated, StatusCode::OK, &outcome)
     }
     .await;
     answer(federation, &authenticated, result)
@@ -814,8 +781,9 @@ pub async fn log(
     let result = async {
         let request = parsed?;
         remote_access(&state, &authenticated, &headers, request.file_id).await?;
-        let rows: Vec<(i64, Vec<u8>)> = sqlx::query_as(
-            "SELECT seq, frame FROM file_update_log WHERE file_id = $1 AND seq > $2 ORDER BY seq ASC",
+        let rows: Vec<(i64, Vec<u8>, String, Uuid)> = sqlx::query_as(
+            "SELECT seq, frame, sender_domain, sender_account FROM file_update_log
+              WHERE file_id = $1 AND seq > $2 ORDER BY seq ASC",
         )
         .bind(request.file_id)
         .bind(request.since)
@@ -833,9 +801,11 @@ pub async fn log(
             &LogResponse {
                 frames: rows
                     .into_iter()
-                    .map(|(seq, frame)| PushedFrame {
-                        seq,
-                        frame: STANDARD.encode(frame),
+                    .filter_map(|(seq, frame, domain, account)| {
+                        Some(PushedFrame {
+                            seq,
+                            frame: wire_from_log(&state, &domain, account, &frame)?,
+                        })
                     })
                     .collect(),
                 through_seq: through,
@@ -917,6 +887,7 @@ pub async fn version_content(
             path,
             size,
             version: Some(vid),
+            revision: vid,
         };
         let digest = ensure_version_digest(&state, vid, &content).await?;
         let digest: [u8; 32] = hex::decode(&digest)
@@ -1237,9 +1208,8 @@ struct Bridge {
     can_write: AtomicBool,
     /// The highest position announced to the room.
     announced: Mutex<i64>,
-    /// The account's devices home has accepted from this bridge.
-    announced_devices: Mutex<std::collections::HashSet<i64>>,
-    outbound: mpsc::Sender<Vec<u8>>,
+    /// The room's frames on their way home.
+    outbound: mpsc::Sender<WireFrame>,
     stopped: AtomicBool,
     stop: Notify,
 }
@@ -1360,7 +1330,6 @@ async fn bridge_join(
                     subscription_id: Uuid::new_v4().simple().to_string(),
                     can_write: AtomicBool::new(false),
                     announced: Mutex::new(0),
-                    announced_devices: Mutex::new(Default::default()),
                     outbound: tx,
                     stopped: AtomicBool::new(false),
                     stop: Notify::new(),
@@ -1451,109 +1420,8 @@ async fn announce(state: &AppState, bridge: &Bridge, seq: i64) {
         .await;
 }
 
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct AnnounceAnswer {
-    accepted: Vec<i64>,
-    #[serde(default)]
-    refused: Vec<crate::remote_devices::Refused>,
-    revocations_through: i64,
-}
-
-/// Tells home about the account's devices among `device_ids` not yet
-/// announced from this bridge (all of them with `force`), with its
-/// revocations home has not stored, paging until none are left.
-async fn announce_devices(
-    state: &AppState,
-    bridge: &Bridge,
-    device_ids: &[i64],
-    force: bool,
-) -> AppResult<()> {
-    let wanted: Vec<i64> = {
-        let known = bridge.announced_devices.lock().unwrap();
-        device_ids
-            .iter()
-            .copied()
-            .filter(|id| force || !known.contains(id))
-            .collect()
-    };
-    let mut first = true;
-    let mut last_mark: Option<i64> = None;
-    loop {
-        let announce = crate::remote_devices::announce_for(
-            &state.pool,
-            bridge.target.user_id,
-            &bridge.target.domain,
-            if first { &wanted } else { &[] },
-        )
-        .await?;
-        if announce.devices.is_empty() && announce.revocations.is_empty() {
-            return Ok(());
-        }
-        let answer: AnnounceAnswer = call_home(
-            state,
-            &bridge.target,
-            "/api/fed/drive/collab/devices",
-            &DevicesBody {
-                file_id: bridge.target.file_id,
-                devices: announce.devices,
-                revocations: announce.revocations,
-            },
-            MAX_JSON_RESPONSE,
-        )
-        .await?;
-        bridge
-            .announced_devices
-            .lock()
-            .unwrap()
-            .extend(answer.accepted);
-        // What home would not keep: the person sees their edits refused, so
-        // the reason is logged here (tooManyDevices: they have 20 devices in
-        // use at home; revoked, expired: their client registers or renews).
-        for refused in &answer.refused {
-            tracing::warn!(
-                home = %bridge.target.domain,
-                user_id = %bridge.target.user_id,
-                device_id = refused.device_id,
-                code = %refused.code,
-                "home refused a collaboration device"
-            );
-        }
-        crate::remote_devices::advance_mark(
-            &state.pool,
-            bridge.target.user_id,
-            &bridge.target.domain,
-            answer.revocations_through,
-        )
-        .await?;
-        if !announce.more {
-            return Ok(());
-        }
-        // Each page moves home's mark on; one that does not would be sent
-        // again for ever.
-        if last_mark.is_some_and(|mark| answer.revocations_through <= mark) {
-            tracing::warn!(home = %bridge.target.domain, "home's revocation mark does not advance");
-            return Ok(());
-        }
-        last_mark = Some(answer.revocations_through);
-        first = false;
-    }
-}
-
-/// The devices whose frames are in `batch`.
-fn senders(batch: &[Vec<u8>]) -> Vec<i64> {
-    let mut ids: Vec<i64> = batch
-        .iter()
-        .filter_map(|raw| Frame::unpack(raw).ok())
-        .map(|frame| frame.sender_device_id as i64)
-        .collect();
-    ids.sort_unstable();
-    ids.dedup();
-    ids
-}
-
 /// Sends the room's frames home in batches and announces their positions.
-async fn bridge_sender(state: AppState, bridge: Arc<Bridge>, mut rx: mpsc::Receiver<Vec<u8>>) {
+async fn bridge_sender(state: AppState, bridge: Arc<Bridge>, mut rx: mpsc::Receiver<WireFrame>) {
     loop {
         let first = tokio::select! {
             frame = rx.recv() => frame,
@@ -1571,12 +1439,9 @@ async fn bridge_sender(state: AppState, bridge: Arc<Bridge>, mut rx: mpsc::Recei
         let body = FramesBody {
             file_id: bridge.target.file_id,
             subscription_id: bridge.subscription_id.clone(),
-            frames: batch.iter().map(|f| STANDARD.encode(f)).collect(),
+            frames: batch,
         };
-        // Home keeps frames only from devices it has been told about.
-        let _ = announce_devices(&state, &bridge, &senders(&batch), false).await;
         let mut attempt = 0;
-        let mut announced_again = false;
         loop {
             let sent: AppResult<FramesResponse> = call_home(
                 &state,
@@ -1588,31 +1453,6 @@ async fn bridge_sender(state: AppState, bridge: Arc<Bridge>, mut rx: mpsc::Recei
             .await;
             match sent {
                 Ok(response) => {
-                    if !response.expired_devices.is_empty() {
-                        // Only the device's client can renew its statement
-                        // (it holds the account's keys): it is asked to.
-                        state
-                            .hub
-                            .broadcast_text(
-                                &bridge.key,
-                                &serde_json::json!({
-                                    "type": "renewDevice",
-                                    "deviceIds": response.expired_devices,
-                                })
-                                .to_string(),
-                            )
-                            .await;
-                    }
-                    if !response.unknown_devices.is_empty() && !announced_again {
-                        // Home lost or never had them: tell it, send again once.
-                        announced_again = true;
-                        if announce_devices(&state, &bridge, &response.unknown_devices, true)
-                            .await
-                            .is_ok()
-                        {
-                            continue;
-                        }
-                    }
                     for seq in response.positions.into_iter().flatten() {
                         announce(&state, &bridge, seq).await;
                     }
@@ -1715,13 +1555,13 @@ pub async fn receive_push(
                 .await;
         }
         for pushed in &request.frames {
-            let Ok(raw) = STANDARD.decode(&pushed.frame) else { continue };
-            state.hub.broadcast(&bridge.key, 0, &raw).await;
+            let Some(delivered) = pushed.frame.delivered() else { continue };
+            state.hub.broadcast(&bridge.key, 0, &delivered).await;
             announce(&state, &bridge, pushed.seq).await;
         }
-        for encoded in &request.ephemeral {
-            if let Ok(raw) = STANDARD.decode(encoded) {
-                state.hub.broadcast(&bridge.key, 0, &raw).await;
+        for wired in &request.ephemeral {
+            if let Some(delivered) = wired.delivered() {
+                state.hub.broadcast(&bridge.key, 0, &delivered).await;
             }
         }
         {
@@ -1835,11 +1675,9 @@ async fn bridge_ws(
     headers: HeaderMap,
     upgrade: WebSocketUpgrade,
 ) -> AppResult<Response> {
-    let (user_id, session_id, device_id, pub_key) =
-        authenticate_socket(&state, &headers, &q).await?;
-    let user_uuid =
-        Uuid::parse_str(&user_id).map_err(|_| AppError::unauthorized("invalid token"))?;
-    let target = target_for(&state, user_uuid, &route).await?;
+    let device = authenticate_socket(&state, &headers, &q).await?;
+    let tab = q.tab();
+    let target = target_for(&state, device.user_id, &route).await?;
     // Subscribed before the upgrade: a share gone or not reachable answers here.
     let (bridge, subscribed) = bridge_join(&state, &target).await?;
     let max_frame = envelope::MAX_PLAINTEXT_BYTES + envelope::MIN_PACKED;
@@ -1847,25 +1685,20 @@ async fn bridge_ws(
         .max_message_size(max_frame)
         .max_frame_size(max_frame)
         .on_upgrade(move |socket| async move {
-            bridge_connection(
-                state, socket, bridge, subscribed, route, user_uuid, session_id, device_id, pub_key,
-            )
-            .await;
+            bridge_connection(state, socket, bridge, subscribed, route, device, tab).await;
         }))
 }
 
-#[allow(clippy::too_many_arguments)]
 async fn bridge_connection(
     state: AppState,
     socket: WebSocket,
     bridge: Arc<Bridge>,
     subscribed: SubscribeResponse,
     route: RemoteRoute,
-    user_uuid: Uuid,
-    session_id: Uuid,
-    device_id: i64,
-    pub_key: Vec<u8>,
+    device: crate::account_devices::FrameDevice,
+    tab: String,
 ) {
+    let user_uuid = device.user_id;
     let hub = state.hub.clone();
     let key = bridge.key.clone();
     let (username, color): (String, String) = sqlx::query_as(
@@ -1886,7 +1719,15 @@ async fn bridge_connection(
         kind: "hello",
     };
     let hello_json = serde_json::to_string(&hello).unwrap_or_else(|_| "{}".into());
-    let (peer, mut rx) = hub::new_peer(&hub, device_id, user_uuid.to_string(), username, color);
+    let (peer, mut rx) = hub::new_peer(
+        &hub,
+        device.device_id,
+        tab,
+        user_uuid.to_string(),
+        device.account.to_string(),
+        username,
+        color,
+    );
     let (mut sink, mut stream) = socket.split();
     let writer = tokio::spawn(async move {
         while let Some(msg) = rx.recv().await {
@@ -1915,19 +1756,26 @@ async fn bridge_connection(
                 // The session: closed when it has ended, retried on another
                 // error. The target: any failure closes (fails closed).
                 let session_ended = matches!(
-                    crate::sessions::live(&state.pool, session_id, user_uuid).await,
+                    crate::sessions::live(&state.pool, device.session_id, user_uuid).await,
                     Err(ref error) if error.status == axum::http::StatusCode::UNAUTHORIZED
                 );
-                if session_ended || target_for(&state, user_uuid, &route).await.is_err() {
+                if session_ended
+                    || target_for(&state, user_uuid, &route).await.is_err()
+                    || crate::account_devices::still_counts(&state, &device).await == Some(false)
+                {
                     break;
                 }
             }
-            msg = stream.next() => match msg {
+            // Shut (the device removed) while a message was on its way:
+            // nothing of it is acted on (a frame, a base claim, a resume),
+            // whatever the select picked.
+            msg = stream.next() => if peer.is_shut() { break } else { match msg {
                 Some(Ok(Message::Binary(data))) => {
                     let Ok(f) = Frame::unpack(&data) else { continue };
                     // The relay's own checks: this device, its signature, this file.
-                    if f.sender_device_id != device_id as u64
-                        || envelope::verify(&data, &pub_key).is_err()
+                    if f.device_id != device.device_id
+                        || f.manifest_sequence > device.manifest_sequence
+                        || envelope::verify(&data, &device.account, &device.frame_key).is_err()
                         || f.file_id != *bridge.target.file_id.as_bytes()
                     {
                         continue;
@@ -1937,12 +1785,12 @@ async fn bridge_connection(
                             continue;
                         }
                         if !budget.take(data.len()) {
-                            tracing::warn!(device = device_id, "bridged collab frame budget exceeded");
+                            tracing::warn!(device = device.device_id, "bridged collab frame budget exceeded");
                             break;
                         }
                     }
-                    hub.broadcast(&key, peer.conn_id, &data).await;
-                    if bridge.outbound.send(data.to_vec()).await.is_err() {
+                    hub.broadcast(&key, peer.conn_id, &envelope::deliver(&device.account, &data)).await;
+                    if bridge.outbound.send(WireFrame::new(&device.account, &data)).await.is_err() {
                         break;
                     }
                 }
@@ -1962,7 +1810,7 @@ async fn bridge_connection(
                 }
                 Some(Ok(_)) => {}
                 Some(Err(_)) | None => break,
-            },
+            } },
         }
     }
     hub.leave(&key, peer.conn_id);
@@ -1986,10 +1834,10 @@ async fn bridge_replay(state: &AppState, bridge: &Bridge, peer: &hub::Peer, sinc
     .await;
     let Ok(log) = log else { return false };
     for pushed in log.frames {
-        let Ok(raw) = STANDARD.decode(&pushed.frame) else {
+        let Some(delivered) = pushed.frame.delivered() else {
             continue;
         };
-        if !peer.write(WsOut::Binary(raw)).await {
+        if !peer.write(WsOut::Binary(delivered)).await {
             return false;
         }
     }
@@ -2050,7 +1898,7 @@ async fn relay_version_download(
                 JSON_CONTENT_TYPE.into(),
                 Vec::new(),
                 Some(&target.capability),
-                MAX_DRIVE_OBJECT_BYTES,
+                crate::drive_federation::max_drive_object_bytes(&state.pool).await?,
             )?,
         )
         .await

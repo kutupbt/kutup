@@ -4,7 +4,8 @@ import { accountGrant, type OneUseSecret } from '@kutup/session/reauth'
 import { broadcastColor } from '@kutup/session/sessionSync'
 import { getSession, updateSession } from '@kutup/session/store'
 import { toBase64 } from '@kutup/crypto/base64'
-import { signDeviceRevocation } from '@kutup/crypto/deviceRegistration'
+import { removeDevicesFromManifest } from '@kutup/crypto/accountManifest'
+import { listAccountDevices, ownAccount, publishNextManifest, type AccountDevice } from '@kutup/session/devices'
 
 // --- profile ------------------------------------------------------------
 
@@ -175,59 +176,48 @@ export function useRevokeOtherSessions() {
 
 export const devicesKey = ['devices'] as const
 
-export interface EditorDevice {
-  deviceId: number
-  label: string
-  /** Its Ed25519 public key, base64: what a revocation names. */
-  publicSigning: string
-  /** Not revoked. */
-  isActive: boolean
-  /** Not revoked, and its sign-in is live: edits from it are taken. */
-  trusted: boolean
-  /** Trusted and renewed within 30 days: one of the at most 20 in use. */
-  inUse: boolean
-  createdAt: string
-  lastSeenAt: string | null
-}
+/** An editing app or the CLI, as the account's device list has it. */
+export type EditorDevice = AccountDevice & { kind: 'editor' | 'cli' }
 
-/** The most devices an account has in use (docs/plans/device-registration.md). */
-export const MAX_DEVICES_IN_USE = 20
-
+/**
+ * The account's editing devices and CLIs (docs/plans/one-device-list.md).
+ * Chat devices are listed, and removed, in their own section: removing one
+ * takes it out of every group, which only Chat can do.
+ */
 export function useDevices() {
   return useQuery({
     queryKey: devicesKey,
-    queryFn: async () => (await api.get<EditorDevice[]>('/devices')).data,
+    queryFn: async () =>
+      (await listAccountDevices()).filter((d): d is EditorDevice => d.kind === 'editor' || d.kind === 'cli'),
   })
 }
 
+/**
+ * Removes a device: the account's next manifest without it, signed with the
+ * master key's authority and published by this sign-in alone (the server
+ * takes one that only removes devices without a device of the app's own, so
+ * the Account app registers none). The server then drops the device's row
+ * and closes its connections.
+ */
 export function useRevokeDevice() {
   const queryClient = useQueryClient()
   return useMutation({
-    // Revoking is the account's act: its key signs it, so a session alone
-    // cannot revoke the account's devices.
     mutationFn: async (device: EditorDevice) => {
       const session = getSession()
       if (!session) throw new Error('not signed in')
-      const revokedAtMs = Date.now()
-      const signature = await signDeviceRevocation(
-        toBase64(session.masterKey),
-        serverOfAddress(session.address),
-        device.publicSigning,
-        revokedAtMs,
+      const masterKey = toBase64(session.masterKey)
+      await publishNextManifest(await ownAccount(session), null, async (head) =>
+        // Listed: the next manifest leaves it out. Not listed (yet, or any
+        // more): nothing to sign; the next publication drops its row.
+        head?.devices.some((listed) => listed.deviceId === device.deviceId)
+          ? removeDevicesFromManifest(head, [device.deviceId], new Date().toISOString(), masterKey)
+          : null,
       )
-      await api.delete(`/devices/${device.deviceId}`, { data: { revokedAtMs, signature } })
     },
     onSuccess: async () => {
       await queryClient.invalidateQueries({ queryKey: devicesKey })
     },
   })
-}
-
-/** The server part of a Kutup address (`username@server`): what device revocations name. */
-function serverOfAddress(address: string): string {
-  const at = address.lastIndexOf('@')
-  if (at < 0 || at === address.length - 1) throw new Error('the account address has no server')
-  return address.slice(at + 1)
 }
 
 // --- security events (the account's own sign-in history) ------------------

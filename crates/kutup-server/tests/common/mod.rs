@@ -280,6 +280,18 @@ pub fn opaque_login(
 
 /// Signs `name` in with `password`: the session's answer (or the setup's,
 /// or the second factor's). Panics on any refusal.
+/// The account's security log (`query`: its `?…`).
+pub fn security_events(c: &Client, base: &str, token: &str, query: &str) -> Value {
+    let r = bearer(
+        c.get(format!("{base}/api/user/security-events{query}")),
+        token,
+    )
+    .send()
+    .unwrap();
+    assert_eq!(r.status(), StatusCode::OK);
+    r.json().unwrap()
+}
+
 pub fn sign_in(c: &Client, base: &str, name: &str, password: &str) -> Value {
     let (status, body, _) = opaque_login(c, base, name, password, "session", None, None);
     assert_eq!(status, StatusCode::OK, "sign-in of {name}: {body}");
@@ -984,72 +996,6 @@ pub fn admin_reset_grant(
         .to_owned()
 }
 
-/// A collaboration device: its id and the seed of the key it signs frames with.
-pub struct Device {
-    pub id: i64,
-    pub seed: [u8; 32],
-}
-
-/// A one-time device registration challenge (base64).
-pub fn device_challenge(c: &Client, base: &str, user: &User) -> String {
-    let r: Value = bearer(c.post(format!("{base}/api/devices/challenge")), &user.token)
-        .send()
-        .unwrap()
-        .json()
-        .unwrap();
-    r["challenge"].as_str().unwrap().to_string()
-}
-
-/// The registration body for `device_key`, signed by `signer`'s authority for
-/// `user`'s account over `challenge`, now (docs/plans/device-registration.md).
-pub fn device_registration_body(
-    c: &Client,
-    base: &str,
-    user: &User,
-    signer: &User,
-    device_key: &[u8; 32],
-    challenge: &str,
-) -> Value {
-    let raw: [u8; 32] = STANDARD.decode(challenge).unwrap().try_into().unwrap();
-    let server = server_domain(c, base);
-    let issued_at_ms = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap()
-        .as_millis() as i64;
-    let statement = kutup_crypto::device_registration::DeviceStatement {
-        server: &server,
-        user_id: &user.id,
-        device_public: device_key,
-        purpose: kutup_crypto::device_registration::PURPOSE_COLLAB_FRAMES,
-        challenge: &raw,
-        issued_at_ms,
-    };
-    let signature = kutup_crypto::device_registration::sign(&signer.identity, &statement).unwrap();
-    json!({
-        "publicSigning": STANDARD.encode(device_key),
-        "label": "test device",
-        "challenge": challenge,
-        "issuedAtMs": issued_at_ms,
-        "signature": signature,
-    })
-}
-
-/// The account's signed revocation body for `device_key`.
-pub fn device_revocation_body(c: &Client, base: &str, user: &User, device_key: &[u8; 32]) -> Value {
-    let revoked_at_ms = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap()
-        .as_millis() as i64;
-    let signature = kutup_crypto::device_registration::sign_revocation(
-        &user.identity,
-        &server_domain(c, base),
-        device_key,
-        revoked_at_ms,
-    )
-    .unwrap();
-    json!({ "revokedAtMs": revoked_at_ms, "signature": signature })
-}
-
 /// Signs `user` in again: a new session (token) of the same account.
 pub fn sign_in_again(c: &Client, base: &str, user: &User) -> String {
     sign_in(c, base, &user.username, &user.password)["accessToken"]
@@ -1058,26 +1004,194 @@ pub fn sign_in_again(c: &Client, base: &str, user: &User) -> String {
         .to_string()
 }
 
-/// A device registered the proper way: a fresh challenge, signed by the
-/// account's own authority.
+/// An editing device of an account (docs/plans/one-device-list.md): its id
+/// in the account's manifest, the seed of its frame key, its credential, and
+/// the manifest sequence that lists it.
+pub struct Device {
+    pub id: u32,
+    pub seed: [u8; 32],
+    pub credential: [u8; 32],
+    pub account: AccountRef,
+    pub manifest_sequence: u64,
+}
+
+impl Device {
+    /// The `X-Kutup-Device` value.
+    pub fn header(&self) -> String {
+        format!(
+            "{}.{}",
+            self.id,
+            base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(self.credential)
+        )
+    }
+}
+
+/// `user`'s account manifest as its server holds it, if it has one.
+pub fn account_manifest(
+    c: &Client,
+    base: &str,
+    user: &User,
+) -> Option<kutup_chat_proto::AccountManifestV3> {
+    let r = bearer(
+        c.get(format!(
+            "{base}/api/chat/accounts/{}/manifest",
+            user.person.account_id
+        )),
+        &user.token,
+    )
+    .send()
+    .unwrap();
+    if r.status() == StatusCode::NOT_FOUND {
+        return None;
+    }
+    assert_eq!(r.status(), StatusCode::OK, "account manifest");
+    Some(r.json().unwrap())
+}
+
+/// The account's next manifest listing `devices` in place of the head's
+/// entries of their ids (the first, with no Chat identity, when it has none),
+/// signed by its authority.
+pub fn next_manifest(
+    c: &Client,
+    base: &str,
+    user: &User,
+    change: impl FnOnce(&mut Vec<kutup_chat_proto::AccountManifestDeviceV3>),
+) -> kutup_chat_proto::AccountManifestV3 {
+    let issued_at = time::OffsetDateTime::now_utc()
+        .format(&time::format_description::well_known::Rfc3339)
+        .unwrap();
+    let mut manifest = match account_manifest(c, base, user) {
+        Some(head) => {
+            let mut devices = head.devices.clone();
+            change(&mut devices);
+            head.successor(devices, issued_at).unwrap()
+        }
+        None => {
+            let mut devices = Vec::new();
+            change(&mut devices);
+            kutup_chat_proto::AccountManifestV3::first(
+                user.person.clone(),
+                &user.identity,
+                devices,
+                issued_at,
+            )
+        }
+    };
+    manifest
+        .sign(user.identity.authority_signing_key())
+        .unwrap();
+    manifest
+}
+
+/// Publishes `manifest` as `by` (any device of the account).
+pub fn publish_manifest(
+    c: &Client,
+    base: &str,
+    user: &User,
+    by: &str,
+    manifest: &kutup_chat_proto::AccountManifestV3,
+) -> reqwest::blocking::Response {
+    bearer(c.post(format!("{base}/api/chat/manifest")), &user.token)
+        .header(kutup_chat_proto::DEVICE_HEADER, by)
+        .json(manifest)
+        .send()
+        .unwrap()
+}
+
+/// An editing device of `user`'s, registered and listed in the account's
+/// manifest by itself, as an editor app does.
 pub fn register_device(c: &Client, base: &str, user: &User) -> Device {
     let mut seed = [0u8; 32];
     kutup_crypto::primitives::random(&mut seed);
+    let mut credential = [0u8; 32];
+    kutup_crypto::primitives::random(&mut credential);
     let key =
         kutup_crypto::primitives::SigningKey::from_seed(kutup_crypto::primitives::Suite::V1, &seed)
             .verifying_key()
             .to_array::<32>();
-    let challenge = device_challenge(c, base, user);
     let r = bearer(c.post(format!("{base}/api/devices")), &user.token)
-        .json(&device_registration_body(
-            c, base, user, user, &key, &challenge,
-        ))
+        .json(&json!({
+            "kind": "editor",
+            "name": "live-test editor",
+            "frameKey": STANDARD.encode(key),
+            "credential": base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(credential),
+        }))
         .send()
         .unwrap();
-    assert_eq!(r.status(), StatusCode::CREATED, "register a device");
+    assert_eq!(r.status(), StatusCode::OK, "register a device");
     let body: Value = r.json().unwrap();
-    Device {
-        id: body["deviceId"].as_i64().unwrap(),
+    let id = body["deviceId"].as_u64().unwrap() as u32;
+    let entry = kutup_chat_proto::AccountManifestDeviceV3 {
+        device_id: id,
+        kind: kutup_chat_proto::DeviceKind::Editor,
+        chat: None,
+        frame_key: Some(STANDARD.encode(key)),
+        session: body["session"].as_str().unwrap().to_owned(),
+    };
+    let manifest = next_manifest(c, base, user, |devices| {
+        devices.retain(|device| device.device_id != id);
+        devices.push(entry);
+    });
+    let mut device = Device {
+        id,
         seed,
+        credential,
+        account: user.person.clone(),
+        manifest_sequence: manifest.sequence,
+    };
+    let r = publish_manifest(c, base, user, &device.header(), &manifest);
+    let status = r.status();
+    assert_eq!(
+        status,
+        StatusCode::OK,
+        "list the device: {}",
+        r.text().unwrap()
+    );
+    device.manifest_sequence = manifest.sequence;
+    device
+}
+
+/// A new password for `user` with `grant` from `token`'s session: its status.
+pub fn set_password(
+    c: &Client,
+    base: &str,
+    user: &User,
+    grant: &str,
+    token: Option<&str>,
+    password: &str,
+) -> StatusCode {
+    let (record, key_id, export_key) =
+        match try_opaque_register(c, base, password, &user.binding, Some(grant), None) {
+            Ok(registered) => registered,
+            Err((status, _)) => return status,
+        };
+    let mut request = c
+        .post(format!("{base}/api/auth/opaque/register/finish"))
+        .json(&json!({
+            "grant": grant, "keyBinding": user.binding,
+            "opaqueRecord": record, "opaqueServerKeyId": key_id,
+            "masterKeyEnvelope": export_key.seal_master_key(&user.master_key, &user.binding).unwrap(),
+        }));
+    if let Some(token) = token {
+        request = request.bearer_auth(token);
     }
+    request.send().unwrap().status()
+}
+
+/// The authenticator app's code now for `secret` (the setup's base32).
+pub fn totp_now(secret: &str) -> String {
+    totp_rs::TOTP::new(
+        totp_rs::Algorithm::SHA1,
+        6,
+        1,
+        30,
+        totp_rs::Secret::Encoded(secret.to_owned())
+            .to_bytes()
+            .unwrap(),
+        None,
+        String::new(),
+    )
+    .unwrap()
+    .generate_current()
+    .unwrap()
 }

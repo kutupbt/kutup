@@ -62,7 +62,6 @@ pub mod chat_media_blocks;
 pub mod collection_epoch;
 pub mod collection_keyring;
 pub mod contact_card;
-pub mod device_registration;
 #[cfg(feature = "mail")]
 pub mod dkim_key;
 pub mod drive_blocks;
@@ -118,6 +117,8 @@ pub mod safety_number;
 // (docs/plans/drive-block-format.md).
 pub mod stream;
 pub mod thumbnail;
+#[cfg(feature = "webauthn")]
+pub mod webauthn;
 pub mod yjs_seed;
 
 pub use error::{CryptoError, Result};

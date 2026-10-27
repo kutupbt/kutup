@@ -50,7 +50,8 @@ stays a lock and a vector as today.
 **4. Per-account overrides, only where a limit counts per account.** Feedback,
 chat key fetches per account, the groups relay per account, custom-domain
 checks, account-head reads, device challenges and rename checks. They are
-stored per account (`user_rate_limit_overrides`: user, key, value), read
+stored per account (now `user_setting_overrides`, keyed `rate_limit.<key>`,
+with the settings' own: docs/plans/settings-registry.md), read
 through the same snapshot, and set on the account's admin page. Limits per
 address, pseudonym, group or peer get none: there is no account to hang them
 on. Overrides per peer server (federation budgets) can come later on the

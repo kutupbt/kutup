@@ -9,7 +9,7 @@ describe('isDeviceBoundChatRoute', () => {
       '/chat/link-tokens',
       '/chat/provisioning/abc',
       '/chat/account-identity',
-      '/chat/ws-ticket?deviceId=2',
+      '/device-ticket',
       '/chat/device/2',
     ]) {
       expect(isDeviceBoundChatRoute(url, 'post'), url).toBe(true)
@@ -25,6 +25,7 @@ describe('isDeviceBoundChatRoute', () => {
     expect(isDeviceBoundChatRoute('/chat/anonymous/accounts/x/keys?server=a', 'post')).toBe(false)
     expect(isDeviceBoundChatRoute('/chat/anonymous/messages/multi', 'post')).toBe(false)
     expect(isDeviceBoundChatRoute('/drive/files', 'get')).toBe(false)
+    expect(isDeviceBoundChatRoute('/devices', 'post')).toBe(false)
     expect(isDeviceBoundChatRoute(undefined, 'get')).toBe(false)
   })
 })

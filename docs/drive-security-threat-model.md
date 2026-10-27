@@ -102,17 +102,18 @@ and re-encryption of old content (lazy rotation, as in KBFS).
 
 ## Collaboration devices
 
-A collaboration device is the key a tab or the CLI signs frames with
-(docs/plans/device-registration.md). The account authority signs each
-device's registration and each revocation. A session token alone can neither
-add a device nor revoke one.
+A collaboration device is a device of the account (a tab of an editing app,
+or the CLI) whose entry in the account's signed manifest lists the key it
+signs frames with (docs/plans/one-device-list.md). The account authority
+signs each manifest, and with it each addition and removal. A session token
+alone can neither add a device nor remove one.
 
 | Attacker | Result |
 | --- | --- |
-| A stolen session token, no master key | Cannot register a device (no authority signature) and cannot revoke one. |
-| A hostile bridge server | Cannot announce a device for an account without that account's authority key. Cannot bring back a revoked key: home keeps every revoked key for good. Cannot keep a device past an account reset: only the recipient's current incarnation counts. |
-| A bridge that withholds a revocation | Frames from that device, which it could only produce while holding the device's private key, are still kept at home until the device's 30-day lease ends. Clients renew devices after 15 days, so a device revoked and not renewed drops out within 30 days at most. Re-sharing to a new incarnation or rotating the folder key ends it sooner. |
-| A lost or stolen device | Revoked from any other device of the account, or after recovery (the recovery phrase restores the master key, so the authority too). The revocation reaches other servers with the bridge's next announce. |
+| A stolen session token, no master key | Can register a device row, but can't list it (no authority signature): its frames are refused, and the row is dropped after the listing grace. Cannot remove a device. |
+| A hostile bridge server | Cannot make frames count for an account's device without that account's authority key: home checks each frame against the recipient's manifest, which only moves forward along the authority's chain. Cannot name another account as a frame's sender: the signature covers the sender. Cannot keep a device past an account reset: the manifest must be under the incarnation the share was made to. |
+| A bridge that withholds a newer manifest | Frames from a removed device, which only its holder could make, are kept at home until home reads the newer manifest: at the next frame naming a newer sequence or an unknown device, or its next fetch. Rotating the folder key ends it at once. |
+| A lost or stolen device | Removed from any other device of the account, or after recovery (the recovery phrase restores the master key, so the authority too), by the next manifest. |
 | An attacker holding the authority key | Has the account: it can register devices and sign revocations as the owner. Only an account reset helps (a new authority and incarnation, which ends every device of the old one). |
 
 Content is unaffected throughout: clients check every frame by AEAD under the

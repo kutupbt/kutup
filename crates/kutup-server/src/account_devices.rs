@@ -5,12 +5,22 @@
 //! authority signs; a row is live while it is listed.
 
 use axum::extract::State;
+use axum::http::HeaderMap;
 use axum::Json;
-use kutup_chat_proto::{device_session_hash, AccountManifestV3, DeviceKind};
+use kutup_chat_proto::{
+    device_session_hash, AccountDeviceV1, AccountManifestV3, DeviceKind, DeviceTicketResponse,
+    RegisterDeviceRequestV1, RegisterDeviceResponseV1, MAX_ACCOUNT_MANIFEST_DEVICES,
+};
+use kutup_crypto::account_ref::AccountRef;
+use kutup_crypto::primitives::{hash, Suite};
 use serde::Serialize;
 use sqlx::{PgConnection, PgExecutor};
+use time::format_description::well_known::Rfc3339;
+use time::OffsetDateTime;
 use utoipa::ToSchema;
 use uuid::Uuid;
+
+use crate::handlers::chat_identity::{self, DeviceKinds};
 
 use crate::error::{AppError, AppResult};
 use crate::middleware::AuthUser;
@@ -156,6 +166,7 @@ pub(crate) async fn check_listed_rows(
 /// that removes devices. `409 deviceLimit` otherwise.
 pub(crate) async fn check_device_cap<'e>(
     executor: impl PgExecutor<'e>,
+    user_id: Uuid,
     manifest: &AccountManifestV3,
     head: Option<&AccountManifestV3>,
 ) -> AppResult<()> {
@@ -164,7 +175,7 @@ pub(crate) async fn check_device_cap<'e>(
         return Ok(());
     }
     let most = crate::site_settings::DEVICES_PER_ACCOUNT
-        .load(executor)
+        .load_for(executor, user_id)
         .await?;
     if listed as i64 > most {
         return Err(device_limit());
@@ -181,4 +192,373 @@ pub(crate) fn device_limit() -> AppError {
 fn devices_conflict() -> AppError {
     AppError::conflict("manifest devices do not match the account's registered devices")
         .with_details(serde_json::json!({ "code": "devicesMismatch" }))
+}
+
+// ---------------------------------------------------------------------------
+// Editor and CLI devices (slice 2)
+// ---------------------------------------------------------------------------
+
+/// `POST /api/devices` — an editor or CLI device of the caller's account:
+/// a row under the caller's sign-in with the lowest id no row holds, within
+/// [`crate::site_settings::DEVICES_PER_ACCOUNT`]. The device then lists
+/// itself in the account's manifest (`POST /api/chat/manifest`); until it
+/// does, its frames are refused, and a publication by another device after
+/// `deviceListingGraceSeconds` drops the row. A retry with the same
+/// credential answers the row it made.
+#[utoipa::path(
+    post,
+    path = "/api/devices",
+    tag = "devices",
+    operation_id = "registerDevice",
+    request_body = RegisterDeviceRequestV1,
+    responses(
+        (status = 200, description = "Registered", body = RegisterDeviceResponseV1),
+        (status = 400, description = "Malformed kind, frame key or credential"),
+        (status = 409, description = "deviceLimit: the account has as many devices as it may"),
+    ),
+    security(("bearerAuth" = []))
+)]
+pub async fn register_device(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    Json(request): Json<RegisterDeviceRequestV1>,
+) -> AppResult<Json<RegisterDeviceResponseV1>> {
+    request.validate().map_err(AppError::bad_request)?;
+    let user_id = crate::handlers::trusted_uuid(&auth.user_id)?;
+    if !crate::ratelimit::DEVICE_REGISTRATIONS.allow(&user_id.to_string()) {
+        return Err(AppError::too_many_requests("too many requests")
+            .with_details(serde_json::json!({ "code": "rateLimited" })));
+    }
+    let frame_key =
+        kutup_chat_proto::decode_frame_key(&request.frame_key).map_err(AppError::bad_request)?;
+    let credential = kutup_chat_proto::decode_device_credential(&request.credential)
+        .map_err(AppError::bad_request)?;
+    let mut tx = state.pool.begin().await?;
+    let root = root_session_id(&mut *tx, auth.session.session_id).await?;
+    sqlx::query("SELECT id FROM users WHERE id = $1 FOR UPDATE")
+        .bind(user_id)
+        .execute(&mut *tx)
+        .await?;
+    let stale = prune_stale_unlisted(&mut tx, user_id).await?;
+    let rows: Vec<(i32, Vec<u8>, Vec<u8>, bool)> = sqlx::query_as(
+        "SELECT device_id, credential_salt, credential_hash, expired_at IS NOT NULL
+           FROM devices WHERE user_id = $1 ORDER BY device_id",
+    )
+    .bind(user_id)
+    .fetch_all(&mut *tx)
+    .await?;
+    let answer = |device_id: i32| RegisterDeviceResponseV1 {
+        device_id: device_id as u32,
+        session: session_hash(root),
+    };
+    if let Some((device_id, ..)) = rows.iter().find(|(_, salt, hash, expired)| {
+        !expired
+            && kutup_crypto::primitives::ct_eq(
+                &chat_identity::credential_hash(salt, &credential),
+                hash,
+            )
+    }) {
+        tx.commit().await?;
+        for id in stale {
+            close_device(&state, user_id, id);
+        }
+        return Ok(Json(answer(*device_id)));
+    }
+    let live = rows.iter().filter(|(.., expired)| !expired).count() as i64;
+    let most = crate::site_settings::DEVICES_PER_ACCOUNT
+        .load_for(&mut *tx, user_id)
+        .await?;
+    if live >= most {
+        return Err(device_limit());
+    }
+    let device_id = (1..=MAX_ACCOUNT_MANIFEST_DEVICES as i32)
+        .find(|id| !rows.iter().any(|(taken, ..)| taken == id))
+        .ok_or_else(device_limit)?;
+    let (salt, credential_hash) = chat_identity::new_credential(&credential);
+    sqlx::query(
+        "INSERT INTO devices (user_id, device_id, kind, session_id, frame_key, name,
+             credential_salt, credential_hash)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8)",
+    )
+    .bind(user_id)
+    .bind(device_id)
+    .bind(request.kind.as_str())
+    .bind(root)
+    .bind(&frame_key[..])
+    .bind(&request.name)
+    .bind(&salt[..])
+    .bind(&credential_hash[..])
+    .execute(&mut *tx)
+    .await?;
+    tx.commit().await?;
+    for id in stale {
+        close_device(&state, user_id, id);
+    }
+    Ok(Json(answer(device_id)))
+}
+
+#[derive(Debug, Serialize, ToSchema)]
+pub struct AccountDevicesResponse {
+    pub devices: Vec<AccountDeviceV1>,
+}
+
+/// `GET /api/devices` — every device of the caller's account, of every
+/// kind, with whether the account's manifest lists it and whether it is of
+/// the caller's sign-in.
+#[utoipa::path(
+    get,
+    path = "/api/devices",
+    tag = "devices",
+    operation_id = "listDevices",
+    responses((status = 200, description = "The account's devices", body = AccountDevicesResponse)),
+    security(("bearerAuth" = []))
+)]
+pub async fn list_devices(
+    State(state): State<AppState>,
+    auth: AuthUser,
+) -> AppResult<Json<AccountDevicesResponse>> {
+    let user_id = crate::handlers::trusted_uuid(&auth.user_id)?;
+    let root = root_session_id(&state.pool, auth.session.session_id).await?;
+    #[allow(clippy::type_complexity)]
+    let rows: Vec<(
+        i32,
+        String,
+        String,
+        Uuid,
+        bool,
+        OffsetDateTime,
+        Option<OffsetDateTime>,
+    )> = sqlx::query_as(
+        "SELECT device_id, kind, name, session_id, expired_at IS NOT NULL, created_at,
+                    last_seen_at
+               FROM devices WHERE user_id = $1 ORDER BY device_id",
+    )
+    .bind(user_id)
+    .fetch_all(&state.pool)
+    .await?;
+    let head = crate::handlers::chat::stored_manifest(&state.pool, user_id).await?;
+    let format = |at: OffsetDateTime| at.format(&Rfc3339).unwrap_or_default();
+    let devices = rows
+        .into_iter()
+        .filter_map(
+            |(device_id, kind, name, session_id, expired, created, seen)| {
+                Some(AccountDeviceV1 {
+                    device_id: device_id as u32,
+                    kind: DeviceKind::parse(&kind).ok()?,
+                    name,
+                    session: session_hash(session_id),
+                    this_sign_in: session_id == root,
+                    listed: head
+                        .as_ref()
+                        .is_some_and(|head| head.device(device_id as u32).is_some()),
+                    expired,
+                    created_at: format(created),
+                    last_seen_at: seen.map(format),
+                })
+            },
+        )
+        .collect();
+    Ok(Json(AccountDevicesResponse { devices }))
+}
+
+// ---------------------------------------------------------------------------
+// Socket tickets
+// ---------------------------------------------------------------------------
+
+/// How long a socket ticket stays usable, in seconds.
+const TICKET_TTL_SECONDS: i64 = 60;
+
+fn ticket_hash(ticket: &str) -> String {
+    hex::encode(hash(Suite::V1, ticket.as_bytes()))
+}
+
+/// `POST /api/device-ticket` — a single-use, short-lived WebSocket
+/// credential for the device `X-Kutup-Device` names (browsers can't set
+/// headers on a socket): the Chat socket takes one of a Chat device, the
+/// collab sockets one of a device with a frame key. Only its hash is kept.
+#[utoipa::path(
+    post,
+    path = "/api/device-ticket",
+    tag = "devices",
+    operation_id = "createDeviceTicket",
+    responses(
+        (status = 200, description = "One-time ticket", body = DeviceTicketResponse),
+        (status = 401, description = "deviceCredential"),
+    ),
+    security(("bearerAuth" = []))
+)]
+pub async fn create_device_ticket(
+    State(state): State<AppState>,
+    auth: AuthUser,
+    headers: HeaderMap,
+) -> AppResult<Json<DeviceTicketResponse>> {
+    let user_id = crate::handlers::trusted_uuid(&auth.user_id)?;
+    let device_id =
+        chat_identity::authenticated_device_of(&state.pool, &headers, user_id, DeviceKinds::Any)
+            .await?;
+    let ticket = crate::handlers::random_token(32);
+    let expires_at: OffsetDateTime = sqlx::query_scalar(
+        "INSERT INTO device_tickets (token_hash, user_id, device_id, expires_at)
+         VALUES ($1, $2, $3, now() + ($4 * interval '1 second'))
+         RETURNING expires_at",
+    )
+    .bind(ticket_hash(&ticket))
+    .bind(user_id)
+    .bind(device_id)
+    .bind(TICKET_TTL_SECONDS)
+    .fetch_one(&state.pool)
+    .await?;
+    Ok(Json(DeviceTicketResponse {
+        ticket,
+        expires_at: expires_at.format(&Rfc3339).unwrap_or_default(),
+    }))
+}
+
+/// The account and device a ticket was minted for, consumed.
+pub(crate) async fn consume_ticket(state: &AppState, ticket: &str) -> AppResult<(Uuid, i32)> {
+    if ticket.is_empty() || ticket.len() > 128 {
+        return Err(AppError::unauthorized("invalid WebSocket ticket"));
+    }
+    sqlx::query_as(
+        "DELETE FROM device_tickets
+         WHERE token_hash = $1 AND expires_at > now()
+         RETURNING user_id, device_id",
+    )
+    .bind(ticket_hash(ticket))
+    .fetch_optional(&state.pool)
+    .await?
+    .ok_or_else(|| AppError::unauthorized("invalid or expired WebSocket ticket"))
+}
+
+// ---------------------------------------------------------------------------
+// Devices that sign collab frames
+// ---------------------------------------------------------------------------
+
+/// A device whose collab frames count: a live row with a frame key, of a
+/// live sign-in, that the account's head manifest lists with that key.
+#[derive(Clone, Debug)]
+pub(crate) struct FrameDevice {
+    pub user_id: Uuid,
+    pub device_id: u32,
+    pub account: AccountRef,
+    pub frame_key: [u8; 32],
+    /// The device's root sign-in, rechecked while its sockets are open.
+    pub session_id: Uuid,
+    /// The head manifest's sequence: a frame naming a later one is refused.
+    pub manifest_sequence: u64,
+}
+
+/// `user_id`'s device `device_id`, if its frames count now; `403
+/// deviceNotAuthorized` otherwise (the client registers again).
+pub(crate) async fn frame_device(
+    state: &AppState,
+    user_id: Uuid,
+    device_id: i32,
+) -> AppResult<FrameDevice> {
+    let row: Option<(Vec<u8>, Uuid, i64)> = sqlx::query_as(
+        "SELECT d.frame_key, d.session_id, m.version
+           FROM devices d
+           JOIN chat_device_manifests m ON m.user_id = d.user_id
+           JOIN LATERAL jsonb_array_elements(m.manifest -> 'devices') listed ON true
+          WHERE d.user_id = $1 AND d.device_id = $2 AND d.expired_at IS NULL
+            AND d.frame_key IS NOT NULL
+            AND (listed ->> 'deviceId')::int = d.device_id
+            AND listed ->> 'frameKey' = encode(d.frame_key, 'base64')
+            AND EXISTS (SELECT 1 FROM auth_sessions s
+                         WHERE s.id = d.session_id AND s.revoked_at IS NULL
+                           AND s.expires_at > now())",
+    )
+    .bind(user_id)
+    .bind(device_id)
+    .fetch_optional(&state.pool)
+    .await?;
+    let not_authorized = || {
+        AppError::forbidden("this device is not listed, or its sign-in ended")
+            .with_details(serde_json::json!({ "code": "deviceNotAuthorized" }))
+    };
+    let (frame_key, session_id, sequence) = row.ok_or_else(not_authorized)?;
+    Ok(FrameDevice {
+        user_id,
+        device_id: device_id as u32,
+        account: crate::account_ids::local(&state.config.chat_server_name, user_id)?,
+        frame_key: frame_key.try_into().map_err(|_| not_authorized())?,
+        session_id,
+        manifest_sequence: sequence as u64,
+    })
+}
+
+/// Drops the account's rows its head manifest doesn't list that are older
+/// than the listing grace (`deviceListingGraceSeconds`): registrations that
+/// never listed themselves. A registration runs this first, under the
+/// account's row lock, so such rows hold neither the cap nor an id (a stolen
+/// access token can't fill the account with them); only listed rows and
+/// rows still within their grace count. Their ids, for [`close_device`]
+/// once the transaction commits.
+pub(crate) async fn prune_stale_unlisted(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    user_id: Uuid,
+) -> AppResult<Vec<i32>> {
+    let grace = crate::site_settings::DEVICE_LISTING_GRACE_SECONDS
+        .load(&mut **tx)
+        .await?;
+    Ok(sqlx::query_scalar(
+        "DELETE FROM devices d
+          WHERE d.user_id = $1
+            AND d.created_at < now() - ($2 * interval '1 second')
+            AND NOT EXISTS (
+                SELECT 1 FROM chat_device_manifests m,
+                       jsonb_array_elements(m.manifest -> 'devices') listed
+                 WHERE m.user_id = d.user_id
+                   AND (listed ->> 'deviceId')::int = d.device_id)
+         RETURNING d.device_id",
+    )
+    .bind(user_id)
+    .bind(grace)
+    .fetch_all(&mut **tx)
+    .await?)
+}
+
+/// Whether `device`'s frames still count as they did when its socket
+/// connected, for the socket's periodic recheck: `Some(false)` on a definite
+/// no (its row, its listing or its sign-in gone, or its id now another
+/// key's), `None` when that can't be told now (tried again at the next tick).
+/// A removal also closes the socket at once ([`close_device`]); this catches
+/// a close that socket missed.
+pub(crate) async fn still_counts(state: &AppState, device: &FrameDevice) -> Option<bool> {
+    match frame_device(state, device.user_id, device.device_id as i32).await {
+        Ok(now) => Some(now.frame_key == device.frame_key && now.session_id == device.session_id),
+        Err(error) if error.status == axum::http::StatusCode::FORBIDDEN => Some(false),
+        Err(_) => None,
+    }
+}
+
+/// The frame device `X-Kutup-Device` names, beside the JWT of `headers`
+/// (the collab routes over HTTP).
+pub(crate) async fn frame_device_of_request(
+    state: &AppState,
+    headers: &HeaderMap,
+) -> AppResult<FrameDevice> {
+    let token = headers
+        .get(axum::http::header::AUTHORIZATION)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.strip_prefix("Bearer "))
+        .filter(|token| !token.is_empty())
+        .ok_or_else(|| AppError::unauthorized("missing token"))?;
+    let auth = crate::middleware::authenticate_access_token(state, token)
+        .await
+        .map_err(|_| AppError::unauthorized("invalid token"))?;
+    let user_id = crate::handlers::trusted_uuid(&auth.user_id)?;
+    let device_id =
+        chat_identity::authenticated_device_of(&state.pool, headers, user_id, DeviceKinds::Any)
+            .await?;
+    frame_device(state, user_id, device_id).await
+}
+
+/// Closes every socket of a device the account's manifest dropped: its Chat
+/// socket and its collab rooms.
+pub(crate) fn close_device(state: &AppState, user_id: Uuid, device_id: i32) {
+    state.chat_hub.close_device(user_id, device_id);
+    state
+        .hub
+        .close_device(&user_id.to_string(), device_id as u32);
 }

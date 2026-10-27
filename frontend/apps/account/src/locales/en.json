@@ -298,7 +298,12 @@
           "twoFactorOn": "Two-factor authentication turned on",
           "twoFactorOff": "Two-factor authentication turned off",
           "recoveryCodeUsed": "Signed in with a recovery code",
-          "recoveryCodesRenewed": "New recovery codes made"
+          "recoveryCodesRenewed": "New recovery codes made",
+          "securityKeyAdded": "Security key “{{oldName}}” added",
+          "securityKeyRemoved": "Security key “{{oldName}}” removed",
+          "securityKeyCompromised": "Security key “{{oldName}}” may have been copied (no longer used)",
+          "authenticatorOn": "Authenticator app turned on",
+          "authenticatorOff": "Authenticator app turned off"
         }
       },
       "recovery": "Recovery phrase",
@@ -345,22 +350,24 @@
       "emptyDescription": "No sign-ins are active."
     },
     "devices": {
-      "title": "Editor keys",
-      "description": "Each browser that edits documents with others signs its changes with its own key. Revoke a device you no longer use.",
+      "title": "Editing devices",
+      "description": "Each app that edits documents with others in a browser (Drive, Office, Maps, Pass) and each command-line client is a device of your account, with its own key that signs its edits. Remove one you no longer use.",
       "unnamed": "Unnamed device",
-      "revoked": "Revoked",
+      "kindEditor": "Editing app",
+      "kindCli": "Command line",
+      "thisSignIn": "This sign-in",
+      "notListed": "Not listed yet",
+      "expired": "Idle",
       "added": "Added {{when}}",
       "lastSeen": "last seen {{when}}",
       "neverSeen": "never used",
-      "revoke": "Revoke",
-      "revokeTitle": "Revoke this device?",
-      "revokeDescription": "{{name}} will no longer be able to sign edits, and its open editing sessions close.",
-      "revokeFailed": "The device could not be revoked.",
-      "revokedToast": "Device revoked",
-      "emptyTitle": "No editor devices yet",
-      "emptyDescription": "A device appears here the first time it opens a shared document.",
-      "inUseCount": "{{count}} of {{max}} devices in use. Devices of ended sign-ins, or unused for 30 days, don't count.",
-      "notInUse": "Not in use"
+      "revoke": "Remove",
+      "revokeTitle": "Remove this device?",
+      "revokeDescription": "{{name}} is taken off your account's device list: its edits are no longer accepted, and its open editing sessions close.",
+      "revokeFailed": "The device could not be removed.",
+      "revokedToast": "Device removed",
+      "emptyTitle": "No editing devices yet",
+      "emptyDescription": "A device appears here the first time an app opens a document to edit."
     },
     "profile": {
       "title": "Profile",
@@ -754,7 +761,9 @@
         "rateLimitUpdate": "{{admin}} set {{limit}} to {{value}}",
         "rateLimitReset": "{{admin}} reset {{limit}} to its first value",
         "userRateLimitUpdate": "{{admin}} set {{limit}} to {{value}} for {{target}}",
-        "userRateLimitReset": "{{admin}} gave {{target}} the server's {{limit}} again"
+        "userRateLimitReset": "{{admin}} gave {{target}} the server's {{limit}} again",
+        "userSettingUpdate": "{{admin}} set {{limit}} to {{value}} for {{target}}",
+        "userSettingReset": "{{admin}} gave {{target}} the server's {{limit}} again"
       }
     },
     "settings": {
@@ -874,6 +883,10 @@
         "chatProvisionBodyBytesHint": "The largest provisioning message relayed to a device being linked, up to 64 KiB.",
         "devicesPerAccount": "Devices per account",
         "devicesPerAccountHint": "How many app installations one account may have in all (Chat, Office, Drive, the CLI), 1 to 127.",
+        "deviceListingGraceSeconds": "New device listing window (seconds)",
+        "deviceListingGraceSecondsHint": "How long a newly registered device has to add itself to its account's device list before another device's update drops it.",
+        "remoteManifestMaxAgeSeconds": "Other servers' device lists, kept for (seconds)",
+        "remoteManifestMaxAgeSecondsHint": "How long this server trusts its copy of an editor's device list from another server before reading it again: how long a device removed there can still send edits to files here.",
         "chatMaxActiveDevices": "Chat devices per account",
         "chatMaxActiveDevicesHint": "How many Chat installations one account may have, 1 to 10.",
         "chatProvisioningTicketSeconds": "Linking socket ticket (seconds)",
@@ -884,10 +897,48 @@
         "chatDistributionMessageBytesHint": "The largest message a new Chat identity sends each kept device."
       },
       "twoFactor": "Two-factor sign-in",
-      "twoFactorHint": "Recovery codes for accounts with two-factor authentication.",
+      "twoFactorHint": "Recovery codes and security keys for accounts with two-factor authentication.",
+      "federation": "Federation",
+      "federationHint": "How deliveries to other Kutup servers are tried again when a server doesn't answer.",
       "twoFactorLimits": {
         "twoFactorRecoveryCodes": "Recovery codes per account",
-        "twoFactorRecoveryCodesHint": "How many one-time codes are made when someone turns two-factor authentication on or makes new codes."
+        "twoFactorRecoveryCodesHint": "How many one-time codes are made when someone turns two-factor authentication on or makes new codes.",
+        "securityKeysPerAccount": "Security keys per account",
+        "securityKeysPerAccountHint": "How many security keys one account may add.",
+        "webauthnCeremonySeconds": "Security key prompt (seconds)",
+        "webauthnCeremonySecondsHint": "How long a prompt to touch a security key stays open, when adding one or signing in."
+      },
+      "drive": "Drive uploads and streaming",
+      "driveHint": "How large a file may be, and how videos and audio play while they download.",
+      "driveLimits": {
+        "driveUploadMaxBytes": "Largest upload (bytes)",
+        "driveUploadMaxBytesHint": "The largest file one upload stores, encrypted.",
+        "driveVersionMaxBytes": "Largest version (bytes)",
+        "driveVersionMaxBytesHint": "The largest saved version: an editor's save, or a new upload of a file.",
+        "driveStreamMaxBytes": "Largest file to stream (bytes)",
+        "driveStreamMaxBytesHint": "Larger files download whole before they play. 0 never streams.",
+        "driveStreamCacheBlocks": "Blocks kept per stream",
+        "driveStreamCacheBlocksHint": "Checked 4 MiB blocks a playing file keeps in memory.",
+        "driveStreamReadaheadBlocks": "Blocks read ahead",
+        "driveStreamReadaheadBlocksHint": "Blocks fetched ahead of the one playing.",
+        "driveStreamMaxConcurrent": "Streams per tab",
+        "driveStreamMaxConcurrentHint": "Files one browser tab plays at once.",
+        "driveStreamResponseMaxBytes": "Largest part per request (bytes)",
+        "driveStreamResponseMaxBytesHint": "The most one ranged download answer carries, also across servers.",
+        "driveStreamBlobFallbackMaxBytes": "Largest file played from memory (bytes)",
+        "driveStreamBlobFallbackMaxBytesHint": "Where a browser can't stream, files up to this size load whole into memory to play."
+      },
+      "federationLimits": {
+        "federationRetryBaseSeconds": "First wait (seconds)",
+        "federationRetryBaseSecondsHint": "After a failed delivery; each later wait doubles.",
+        "federationRetryMaxSeconds": "Longest wait (seconds)",
+        "federationRetryMaxSecondsHint": "The most a delivery waits between two tries.",
+        "federationPeerUpgradeSeconds": "Wait for an older server (seconds)",
+        "federationPeerUpgradeSecondsHint": "How long a delivery waits for a server that can't take it yet before trying again.",
+        "federationWorkerSeconds": "Check for due deliveries every (seconds)",
+        "federationWorkerSecondsHint": "How often waiting deliveries to other servers are looked at.",
+        "federationHeadsPerTick": "Servers tried per check",
+        "federationHeadsPerTickHint": "The most destination servers each check tries, one delivery each."
       }
     },
     "federation": {
@@ -1257,7 +1308,6 @@
         "pseudonym": "member",
         "group": "group",
         "peer": "server",
-        "peerAndShare": "server and share",
         "capability": "capability",
         "recipient": "recipient",
         "forwarding": "forwarding",
@@ -1303,7 +1353,7 @@
         "registration_code_failures": "Referral codes that failed",
         "recovery": "Account recovery attempts",
         "user_lookup": "User lookups",
-        "device_challenges": "Device registrations",
+        "device_registrations": "Device registrations",
         "account_head_reads": "Account head reads",
         "rename_checks": "Name checks before a rename",
         "rename_lookups": "Rename lookups on other servers",
@@ -1354,7 +1404,6 @@
         "rename_peer_fetches": "Renames fetched from a server",
         "account_peer_fetches": "Account lookups on a server",
         "rename_announces": "Rename announces from a server",
-        "collab_device_announces": "Device announces from a server",
         "admin": "Admin API requests",
         "collab_frames_per_second": "Collaboration frames per socket",
         "collab_frame_burst": "Collaboration frame burst",
@@ -1378,11 +1427,6 @@
         "forwarding_unverified_pending": "Forwardings awaiting a code",
         "forwarding_unverified_minutes": "Unverified forwarding lifetime"
       },
-      "accountTitle": "Rate limits",
-      "accountHint": "This account's own values of the limits counted per account. Without one, the account gets the server's value.",
-      "accountOwn": "This account's own; the server's is {{site}}",
-      "accountSite": "The server's",
-      "accountResetAction": "Use the server's",
       "about": {
         "login": "Sign-in attempts (and their second factor).",
         "login_lockout_threshold": "Wrong secrets for one account from one client before that pair is locked out.",
@@ -1398,7 +1442,7 @@
         "registration_code_failures": "Referral codes that admitted no one: guessing codes.",
         "recovery": "Account recovery attempts.",
         "user_lookup": "Looking users up to share with: enumerating accounts.",
-        "device_challenges": "Device registration challenges.",
+        "device_registrations": "Device registrations: an editing app or the CLI registering itself.",
         "account_head_reads": "Reads of the account head, its chain and a scope's index.",
         "rename_checks": "Name checks before a rename.",
         "rename_lookups": "Another server's renames asked of it (lookups that found nothing kept).",
@@ -1463,7 +1507,6 @@
         "rename_peer_fetches": "Renames fetched from one peer, whoever asks.",
         "account_peer_fetches": "Accounts one account asks of one peer by id.",
         "rename_announces": "Rename announces taken from one peer.",
-        "collab_device_announces": "Device announces from another server for one share.",
         "admin": "Admin API requests: a wall for a script.",
         "calendar_writes": "Calendar changes: calendars made or changed and event syncs.",
         "forwarding_code_minutes": "How long a forwarding's verification code lasts.",
@@ -1477,6 +1520,24 @@
       "countsAtOnce": "At once, per {{per}}",
       "countsBytesAtOnce": "Bytes at once, per {{per}}",
       "bytesHint": "= {{size}}"
+    },
+    "limits": {
+      "title": "Limits",
+      "hint": "This account's own values of the settings and rate limits that limit one account. Without one, the account gets the server's value. Lowering a value below what the account already uses only stops it from adding more; nothing is removed.",
+      "settings": "Settings",
+      "rateLimits": "Rate limits",
+      "reset": "Use the server's",
+      "source": {
+        "account": "This account's own; the server's is {{site}}",
+        "site": "The server's, as administrators set it",
+        "default": "The server's default"
+      },
+      "unit": {
+        "bytes": "In bytes",
+        "count": "A number",
+        "seconds": "In seconds",
+        "days": "In days"
+      }
     },
     "mailDomains": {
       "title": "Mail domains",

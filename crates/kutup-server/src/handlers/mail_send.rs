@@ -649,7 +649,8 @@ pub async fn update_draft(
         .bind(user_id)
         .fetch_optional(&mut *tx)
         .await?;
-        let (old_key, old_version, old_size) = old.ok_or_else(|| AppError::not_found("not found"))?;
+        let (old_key, old_version, old_size) =
+            old.ok_or_else(|| AppError::not_found("not found"))?;
         if !pool.fits(size - old_size, 0) {
             return Err(quota_exceeded());
         }
@@ -684,12 +685,11 @@ pub async fn update_draft(
         .bind(sqlx::types::Json(&readable.attachments))
         .execute(&mut *tx)
         .await?;
-        sqlx::query(
-            "UPDATE users SET storage_used_bytes = GREATEST(storage_used_bytes + $2, 0) WHERE id = $1",
+        crate::storage_pool::charge(
+            &mut *tx,
+            crate::storage_pool::Payer::Account(user_id),
+            size - old_size,
         )
-        .bind(user_id)
-        .bind(size - old_size)
-        .execute(&mut *tx)
         .await?;
         tx.commit().await?;
         Ok((old_key, old_version))
@@ -798,11 +798,12 @@ pub async fn add_draft_attachment(
         .bind(size)
         .execute(&mut *tx)
         .await?;
-        sqlx::query("UPDATE users SET storage_used_bytes = storage_used_bytes + $2 WHERE id = $1")
-            .bind(user_id)
-            .bind(size)
-            .execute(&mut *tx)
-            .await?;
+        crate::storage_pool::charge(
+            &mut *tx,
+            crate::storage_pool::Payer::Account(user_id),
+            size,
+        )
+        .await?;
         tx.commit().await?;
         Ok(())
     }
@@ -923,12 +924,11 @@ pub async fn delete_draft_attachment(
     .fetch_optional(&mut *tx)
     .await?;
     let (key, size) = removed.ok_or_else(|| AppError::not_found("not found"))?;
-    sqlx::query(
-        "UPDATE users SET storage_used_bytes = GREATEST(storage_used_bytes - $2, 0) WHERE id = $1",
+    crate::storage_pool::charge(
+        &mut *tx,
+        crate::storage_pool::Payer::Account(user_id),
+        -size,
     )
-    .bind(user_id)
-    .bind(size)
-    .execute(&mut *tx)
     .await?;
     tx.commit().await?;
     remove_objects(&state, &[(key, String::new())]).await;

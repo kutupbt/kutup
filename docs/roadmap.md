@@ -74,8 +74,9 @@ The release wiped kutup.dev (database and bucket) and shipped:
 - rollback protection ([`plans/rollback-protection.md`](plans/rollback-protection.md));
 - device limits: Chat installations 1–10 per account
   (the site setting `chatMaxActiveDevices`, default 10, the protocol's hard cap; a new
-  installation past it is refused) and at most 20 collaboration devices in
-  use per account, fixed ([`plans/device-registration.md`](plans/device-registration.md));
+  installation past it is refused) and at most `devicesPerAccount` devices
+  of every kind per account (default 32, an admin setting;
+  [`plans/one-device-list.md`](plans/one-device-list.md));
 - username renames: names folded (dots, `_` and `-` ignored), freed after an
   administrator-set hold, the old address receive-only during the hold,
   carried across federation ([`plans/username-renames.md`](plans/username-renames.md));
@@ -157,8 +158,9 @@ Left before the tag:
   KSF it may be moot.
 - **Block format for large objects, so films and long recordings stream with
   seeking** ([`plans/drive-block-format.md`](plans/drive-block-format.md),
-  approved 2026-10-22; slice 1, the crypto core, built, nothing using it
-  yet). It follows Proton Drive's block format:
+  approved 2026-10-22; slice 1, the crypto core, and slice 2, the server's
+  ranges, revision ids, upload checks and settings, built; clients switch
+  in slices 3–6). It follows Proton Drive's block format:
   - 4 MiB blocks, each AEAD-sealed on its own and bound to its index and
     the file's revision;
   - a sealed manifest of block hashes signed by the uploader;

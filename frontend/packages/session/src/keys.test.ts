@@ -12,7 +12,8 @@ const device = {
   id: 7,
   publicKey: new Uint8Array(32).fill(3),
   privateKey: new Uint8Array(64).fill(4),
-  issuedAtMs: 1_791_000_000_000,
+  credential: new Uint8Array(32).fill(5),
+  manifestSequence: 12n,
 }
 
 describe('session keys', () => {
@@ -36,12 +37,31 @@ describe('session keys', () => {
     expect(decodeKeys(v2).device).toBeUndefined()
   })
 
+  it('read a device of the retired registry (no credential) as none', () => {
+    const encoded = JSON.parse(new TextDecoder().decode(encodeKeys({ ...base, device })))
+    const v3 = new TextEncoder().encode(
+      JSON.stringify({
+        ...encoded,
+        v: 3,
+        device: { id: 7, publicKey: encoded.device.publicKey, privateKey: encoded.device.privateKey, issuedAtMs: 1 },
+      }),
+    )
+    const decoded = decodeKeys(v3)
+    expect(decoded.device).toBeUndefined()
+    expect(decoded.userId).toBe('u1')
+  })
+
   it('refuse a malformed device', () => {
     const encoded = JSON.parse(new TextDecoder().decode(encodeKeys({ ...base, device })))
     for (const bad of [
       { ...encoded.device, id: 0 },
       { ...encoded.device, privateKey: btoa('short') },
-      { ...encoded.device, issuedAtMs: 'soon' },
+      { ...encoded.device, id: 128 },
+      { ...encoded.device, credential: btoa('short') },
+      { ...encoded.device, credential: undefined },
+      { ...encoded.device, manifestSequence: '012' },
+      { ...encoded.device, manifestSequence: 12 },
+      { ...encoded.device, manifestSequence: '18446744073709551616' },
     ]) {
       const bytes = new TextEncoder().encode(JSON.stringify({ ...encoded, device: bad }))
       expect(() => decodeKeys(bytes)).toThrow()

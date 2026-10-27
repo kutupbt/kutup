@@ -769,16 +769,27 @@ fn alice_device() -> ChatDevice {
     }
 }
 
-/// Bob's Chat device `id` (1 or 2), as the setup phase registered it.
+/// Bob's Chat device `id` (1, or his second device's), as the setup phase
+/// registered it.
 fn bob_device(id: u32) -> ChatDevice {
+    let slot = if id == 1 { 1 } else { 2 };
     ChatDevice {
         id,
-        registration_id: match id {
+        registration_id: match slot {
             1 => BOB_REGISTRATION_ID_1,
             _ => BOB_REGISTRATION_ID_2,
         },
-        credential: test_credential(BOB_EMAIL, id),
+        credential: test_credential(BOB_EMAIL, slot),
     }
+}
+
+/// The id of Bob's second Chat device, as the server gave it when the setup
+/// phase linked it (the lowest id no row holds, which depends on whether an
+/// earlier unlisted row still waits out its listing grace).
+fn bob_second_device() -> u32 {
+    recall("bobSecondDevice")
+        .as_u64()
+        .expect("the setup phase kept Bob's second device") as u32
 }
 
 fn envelope(device_id: u32, registration_id: u32, content: &[u8]) -> Value {
@@ -828,6 +839,138 @@ fn account_of(c: &Client, base: &str, token: &str) -> AccountRef {
         me["accountId"].as_str().unwrap(),
     )
     .unwrap()
+}
+
+/// A plain mismatch from before wire version 2, as the outbox migration
+/// leaves it (docs/plans/federation-outbox.md): under v1 B never recorded
+/// the mismatched sequence N (its mark stayed at N-1), and A's row moved to
+/// `closing_sequence` at N with its stale request. Alice's corrected resend
+/// then closes N first (B records its 409 there), goes under N+1 and is
+/// delivered, and so is the send after it: nothing waits on N. Needs both
+/// servers' databases (`KUTUP_FEDERATION_DB_A`, `KUTUP_FEDERATION_DB_B`).
+fn closing_sequence_from_before_v2(c: &Client, a: &str, alice_token: &str, bob: &AccountRef) {
+    let (Ok(db_a), Ok(db_b)) = (
+        std::env::var("KUTUP_FEDERATION_DB_A"),
+        std::env::var("KUTUP_FEDERATION_DB_B"),
+    ) else {
+        eprintln!("KUTUP_FEDERATION_DB_A / _B unset; skipping the closing-sequence case");
+        return;
+    };
+    let runtime = tokio::runtime::Runtime::new().unwrap();
+    let pool_a = runtime.block_on(sqlx::PgPool::connect(&db_a)).unwrap();
+    let pool_b = runtime.block_on(sqlx::PgPool::connect(&db_b)).unwrap();
+    let alice_id = json_response(
+        c.get(format!("{a}/api/user/me"))
+            .bearer_auth(alice_token)
+            .send()
+            .unwrap(),
+        "Alice's account",
+    )["id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    // B's mark for A's plain stream, and A's next sequence to B: in step.
+    let mark: i64 = runtime
+        .block_on(
+            sqlx::query_scalar(
+                "SELECT last_sequence FROM federation_inbound_state
+                 WHERE kind = 'chat' AND origin = 'a.test'",
+            )
+            .fetch_one(&pool_b),
+        )
+        .unwrap();
+    let next: i64 = runtime
+        .block_on(
+            sqlx::query_scalar(
+                "SELECT next_sequence FROM federation_sequences
+                 WHERE kind = 'chat' AND destination = 'b.test'",
+            )
+            .fetch_one(&pool_a),
+        )
+        .unwrap();
+    assert_eq!(next, mark + 1, "A and B agree before the case");
+    // As the migration leaves a v1 mismatch: A's row closing N with its
+    // stale request (one device of Bob's two), B's mark at N-1.
+    let send_id = "10000000-0000-4000-8000-000000000013";
+    let device = alice_device().id;
+    let stale = json!({
+        "senderDeviceId": device,
+        "sendId": send_id,
+        "envelopes": [envelope(1, BOB_REGISTRATION_ID_1, b"stale-from-v1")],
+    });
+    runtime
+        .block_on(async {
+            let mut tx = pool_a.begin().await?;
+            sqlx::query(
+                "INSERT INTO federation_outbox
+                     (kind, destination, sequence, idempotency_key, sender_user_id,
+                      recipient_account_id, payload, state, error_class)
+                 VALUES ('chat', 'b.test', $1, $2, $3::uuid, $4::uuid,
+                         jsonb_build_object('request', $5::jsonb, 'sender', $3::text),
+                         'pending', 'closing_sequence')",
+            )
+            .bind(next)
+            .bind(format!("{alice_id}:{device}:{send_id}"))
+            .bind(&alice_id)
+            .bind(&bob.account_id)
+            .bind(&stale)
+            .execute(&mut *tx)
+            .await?;
+            sqlx::query(
+                "UPDATE federation_sequences SET next_sequence = $1
+                 WHERE kind = 'chat' AND destination = 'b.test'",
+            )
+            .bind(next + 1)
+            .execute(&mut *tx)
+            .await?;
+            tx.commit().await
+        })
+        .unwrap();
+    // The corrected resend: N closed, then delivered under N+1.
+    let corrected = b"corrected-after-v1-mismatch";
+    json_response(
+        send(
+            c,
+            a,
+            alice_token,
+            bob,
+            send_id,
+            vec![
+                envelope(1, BOB_REGISTRATION_ID_1, corrected),
+                envelope(2, BOB_REGISTRATION_ID_2, corrected),
+            ],
+        ),
+        "the corrected resend of a v1 mismatch",
+    );
+    // And the send after it.
+    let after = b"after-a-closed-v1-sequence";
+    json_response(
+        send(
+            c,
+            a,
+            alice_token,
+            bob,
+            "10000000-0000-4000-8000-000000000014",
+            vec![
+                envelope(1, BOB_REGISTRATION_ID_1, after),
+                envelope(2, BOB_REGISTRATION_ID_2, after),
+            ],
+        ),
+        "a send after a closed v1 sequence",
+    );
+    // B recorded its mismatch at N, and took N+1 and N+2.
+    let answered: Vec<(i64, i16)> = runtime
+        .block_on(
+            sqlx::query_as(
+                "SELECT sequence, status FROM federation_inbound
+                 WHERE kind = 'chat' AND origin = 'a.test' AND sequence >= $1
+                 ORDER BY sequence",
+            )
+            .bind(next)
+            .fetch_all(&pool_b),
+        )
+        .unwrap();
+    assert_eq!(answered, [(next, 409), (next + 1, 200), (next + 2, 200)]);
 }
 
 fn send(
@@ -914,7 +1057,14 @@ fn drive_upload_body(
     body
 }
 
-fn drive_round_trip(c: &Client, a: &str, b: &str, alice_token: &str, bob_token: &str) {
+fn drive_round_trip(
+    c: &Client,
+    a: &str,
+    b: &str,
+    alice_token: &str,
+    bob_token: &str,
+    admins: (&str, &str),
+) {
     let alice_master = test_master_key(ALICE_EMAIL);
     let bob_master = test_master_key(BOB_EMAIL);
     let alice_identity = AccountIdentityKeysV1::derive(&alice_master).unwrap();
@@ -1311,18 +1461,32 @@ fn drive_round_trip(c: &Client, a: &str, b: &str, alice_token: &str, bob_token: 
         &file_key_envelope,
         &ciphertext,
     );
-    let upload = |body: Vec<u8>| {
-        c.post(format!(
-            "{b}/api/drive/federation/shares/{incoming_id}/files"
-        ))
-        .bearer_auth(bob_token)
-        .header(
-            reqwest::header::CONTENT_TYPE,
-            format!("multipart/form-data; boundary={boundary}"),
-        )
-        .body(body)
-        .send()
-        .unwrap()
+    // Each call names itself, with how long it took, so a hang says which.
+    let upload = |body: Vec<u8>, what: &str| {
+        let started = std::time::Instant::now();
+        let response = c
+            .post(format!(
+                "{b}/api/drive/federation/shares/{incoming_id}/files"
+            ))
+            .bearer_auth(bob_token)
+            .header(
+                reqwest::header::CONTENT_TYPE,
+                format!("multipart/form-data; boundary={boundary}"),
+            )
+            .body(body)
+            .send()
+            .unwrap_or_else(|error| {
+                panic!(
+                    "federated Drive upload ({what}) after {:?}: {error}",
+                    started.elapsed()
+                )
+            });
+        eprintln!(
+            "federated Drive upload ({what}): {} in {:?}",
+            response.status(),
+            started.elapsed()
+        );
+        response
     };
     let relocated = drive_upload_body(
         boundary,
@@ -1331,7 +1495,10 @@ fn drive_round_trip(c: &Client, a: &str, b: &str, alice_token: &str, bob_token: 
         &file_key_envelope,
         &ciphertext,
     );
-    assert_eq!(upload(relocated).status().as_u16(), 400);
+    assert_eq!(
+        upload(relocated, "relocated file id").status().as_u16(),
+        400
+    );
     let blob_relocation_id = uuid::Uuid::new_v4().to_string();
     let blob_relocation_file_key = drive_envelope::seal_b64(
         &file_key,
@@ -1352,9 +1519,18 @@ fn drive_round_trip(c: &Client, a: &str, b: &str, alice_token: &str, bob_token: 
         &blob_relocation_file_key,
         &ciphertext,
     );
-    assert_eq!(upload(relocated_blob).status().as_u16(), 400);
-    let first_upload = json_response(upload(upload_body.clone()), "federated Drive upload");
-    let retried_upload = json_response(upload(upload_body), "idempotent Drive upload retry");
+    assert_eq!(
+        upload(relocated_blob, "relocated blob").status().as_u16(),
+        400
+    );
+    let first_upload = json_response(
+        upload(upload_body.clone(), "first upload"),
+        "federated Drive upload",
+    );
+    let retried_upload = json_response(
+        upload(upload_body, "idempotent retry"),
+        "idempotent Drive upload retry",
+    );
     assert_eq!(first_upload["id"], retried_upload["id"]);
     let file_id = first_upload["id"].as_str().unwrap();
     assert_eq!(file_id, proposed_file_id);
@@ -1401,7 +1577,150 @@ fn drive_round_trip(c: &Client, a: &str, b: &str, alice_token: &str, bob_token: 
         .send()
         .unwrap();
     assert_eq!(download.status().as_u16(), 200);
+    let etag = download
+        .headers()
+        .get("etag")
+        .and_then(|value| value.to_str().ok())
+        .map(str::to_owned)
+        .expect("the owner's ETag is relayed");
     assert_eq!(download.bytes().unwrap().as_ref(), ciphertext.as_slice());
+
+    // Ranged reads across servers (docs/plans/drive-block-format.md §3): the
+    // range goes in the signed query, the owner signs the part, and the
+    // relay checks it is the one asked.
+    let ranged_of = |file_id: &str, range: &str, if_range: Option<&str>| {
+        let mut request = c
+            .get(format!(
+                "{b}/api/drive/federation/shares/{incoming_id}/files/{file_id}/content"
+            ))
+            .bearer_auth(bob_token)
+            .header("Range", range);
+        if let Some(tag) = if_range {
+            request = request.header("If-Range", tag);
+        }
+        request.send().unwrap()
+    };
+    let ranged = |range: &str, if_range: Option<&str>| ranged_of(file_id, range, if_range);
+    let total = ciphertext.len();
+    let part = ranged("bytes=3-9", None);
+    assert_eq!(part.status().as_u16(), 206);
+    assert_eq!(
+        part.headers()["content-range"].to_str().unwrap(),
+        format!("bytes 3-9/{total}")
+    );
+    assert_eq!(part.bytes().unwrap().as_ref(), &ciphertext[3..10]);
+    let tail = ranged("bytes=-5", Some(&etag));
+    assert_eq!(tail.status().as_u16(), 206);
+    assert_eq!(tail.bytes().unwrap().as_ref(), &ciphertext[total - 5..]);
+    let other = ranged(
+        "bytes=0-1",
+        Some("\"00000000-0000-4000-8000-000000000000\""),
+    );
+    assert_eq!(
+        other.status().as_u16(),
+        200,
+        "a range of other content reads whole"
+    );
+    assert_eq!(other.bytes().unwrap().as_ref(), ciphertext.as_slice());
+    let past = ranged(&format!("bytes={total}-"), None);
+    assert_eq!(past.status().as_u16(), 416);
+
+    // A file larger than one part, read through peers whose part limits
+    // differ: the relay cuts the range to its own limit before it signs it,
+    // takes a suffix's last part, and takes a whole answer back when its
+    // If-Range names other content.
+    let part_limit = |base: &str, admin: &str, bytes: i64| {
+        let r = c
+            .put(format!("{base}/api/admin/settings"))
+            .bearer_auth(admin)
+            .json(&json!({ "driveStreamResponseMaxBytes": bytes }))
+            .send()
+            .unwrap();
+        assert_eq!(r.status().as_u16(), 200, "part limit {bytes} on {base}");
+    };
+    let (admin_a, admin_b) = admins;
+    let relay_part = 4_718_592usize;
+    part_limit(a, admin_a, 16 * 1024 * 1024);
+    part_limit(b, admin_b, relay_part as i64);
+    let big_id = uuid::Uuid::new_v4().to_string();
+    let big_plain: Vec<u8> = (0..10 * 1024 * 1024u32).map(|i| (i % 251) as u8).collect();
+    let big = drive_object::encrypt_file_blob(
+        &big_plain,
+        &file_key,
+        DriveFileBlobContextV1::new(&big_id, 1).unwrap(),
+    )
+    .unwrap();
+    let big_upload = drive_upload_body(
+        boundary,
+        &big_id,
+        &drive_envelope::seal_b64(
+            metadata_plaintext,
+            &file_key,
+            DriveEnvelopeContextV1::file_metadata(&big_id, 1, 1).unwrap(),
+        )
+        .unwrap(),
+        &drive_envelope::seal_b64(
+            &file_key,
+            &collection_key,
+            DriveEnvelopeContextV1::file_key(&big_id, &collection_id, 1, 1).unwrap(),
+        )
+        .unwrap(),
+        &big,
+    );
+    // Past the share's 1 MiB upload quota: the owner stores it on her own
+    // server, in the shared folder.
+    let mut owner_upload = format!(
+        "--{boundary}\r\nContent-Disposition: form-data; name=\"collectionId\"\r\n\r\n{collection_id}\r\n"
+    )
+    .into_bytes();
+    owner_upload.extend_from_slice(&big_upload);
+    json_response(
+        c.post(format!("{a}/api/files/upload"))
+            .bearer_auth(alice_token)
+            .header(
+                "Content-Type",
+                format!("multipart/form-data; boundary={boundary}"),
+            )
+            .body(owner_upload)
+            .send()
+            .unwrap(),
+        "large Drive upload by the owner",
+    );
+    let big_total = big.len();
+    let first = ranged_of(&big_id, "bytes=0-", None);
+    assert_eq!(
+        first.status().as_u16(),
+        206,
+        "an open range through a smaller relay"
+    );
+    assert_eq!(
+        first.headers()["content-range"].to_str().unwrap(),
+        format!("bytes 0-{}/{big_total}", relay_part - 1)
+    );
+    assert_eq!(first.bytes().unwrap().as_ref(), &big[..relay_part]);
+    let end = ranged_of(&big_id, "bytes=-6000000", None);
+    assert_eq!(end.status().as_u16(), 206, "a suffix longer than one part");
+    assert_eq!(
+        end.headers()["content-range"].to_str().unwrap(),
+        format!(
+            "bytes {}-{}/{big_total}",
+            big_total - relay_part,
+            big_total - 1
+        )
+    );
+    assert_eq!(
+        end.bytes().unwrap().as_ref(),
+        &big[big_total - relay_part..]
+    );
+    let stale = ranged_of(
+        &big_id,
+        "bytes=0-1",
+        Some("\"00000000-0000-4000-8000-000000000000\""),
+    );
+    assert_eq!(stale.status().as_u16(), 200, "a stale If-Range reads whole");
+    assert_eq!(stale.bytes().unwrap().len(), big_total);
+    part_limit(a, admin_a, 5 * 1024 * 1024);
+    part_limit(b, admin_b, 5 * 1024 * 1024);
 
     let delete = || {
         c.delete(format!(
@@ -1949,7 +2268,7 @@ fn setup_phase(c: &Client, a: &str, b: &str) {
 
     let (alice_token, _alice_drive_public) = register_account(c, a, ALICE_EMAIL, ALICE_USERNAME);
     let (bob_token, _bob_drive_public) = register_account(c, b, BOB_EMAIL, BOB_USERNAME);
-    drive_round_trip(c, a, b, &alice_token, &bob_token);
+    drive_round_trip(c, a, b, &alice_token, &bob_token, (&admin_a, &admin_b));
     live_location_across_servers(c, a, b, &alice_token, &bob_token);
 
     // Drive is deliberately the first feature to contact B. Capture the one
@@ -1994,7 +2313,9 @@ fn setup_phase(c: &Client, a: &str, b: &str) {
         2,
         "interrupted registration occupies a pending device id"
     );
-    // The next manifest lists device 1 alone: the unlisted row goes.
+    // The next manifest lists device 1 alone. The unlisted row is younger
+    // than the listing grace, so it stays pending (its frames and messages
+    // refused) and off the device list.
     bob_chat.publish(c, b, &bob_1);
     let bob_devices_after_manifest = json_response(
         c.get(format!("{b}/api/chat/device"))
@@ -2388,13 +2709,17 @@ fn setup_phase(c: &Client, a: &str, b: &str) {
         .unwrap();
     assert_eq!(direct["sender"], json!(account_of(c, a, &alice_token)));
 
-    let bob_2 = bob_device(2);
-    assert_eq!(
-        bob_chat
-            .link_as(c, b, &bob_1, bob_2.registration_id, bob_2.credential)
-            .id,
-        2
-    );
+    let bob_2_id = bob_chat
+        .link_as(
+            c,
+            b,
+            &bob_1,
+            BOB_REGISTRATION_ID_2,
+            test_credential(BOB_EMAIL, 2),
+        )
+        .id;
+    assert_ne!(bob_2_id, 1);
+    remember("bobSecondDevice", json!(bob_2_id));
     let bob_manifest_v2 = bob_chat.head.clone().unwrap();
     let refreshed_bundles = json_response(
         c.get(format!(
@@ -2469,7 +2794,40 @@ fn setup_phase(c: &Client, a: &str, b: &str) {
     );
     assert_eq!(mismatch.status().as_u16(), 409);
     let mismatch: Value = mismatch.json().unwrap();
-    assert_eq!(mismatch["missingDevices"], json!([2]));
+    assert_eq!(mismatch["missingDevices"], json!([bob_2_id]));
+
+    // The mismatch is final (docs/plans/federation-outbox.md): it used its
+    // sequence up at B, so a later send to B goes at once, before the first
+    // is corrected, and the same stale content again gets the same answer.
+    let behind = b"behind-an-uncorrected-mismatch";
+    json_response(
+        send(
+            c,
+            a,
+            &alice_token,
+            &remote_address,
+            "10000000-0000-4000-8000-000000000012",
+            vec![
+                envelope(1, BOB_REGISTRATION_ID_1, behind),
+                envelope(2, BOB_REGISTRATION_ID_2, behind),
+            ],
+        ),
+        "a send behind an uncorrected mismatch",
+    );
+    assert_content_once(&mailbox(c, b, &bob_token, 1), behind);
+    assert_content_once(&mailbox(c, b, &bob_token, 2), behind);
+    let again = send(
+        c,
+        a,
+        &alice_token,
+        &remote_address,
+        mismatch_id,
+        vec![envelope(1, BOB_REGISTRATION_ID_1, b"stale-device-set")],
+    );
+    assert_eq!(again.status().as_u16(), 409);
+    assert_eq!(again.json::<Value>().unwrap()["missingDevices"], json!([2]));
+
+    closing_sequence_from_before_v2(c, a, &alice_token, &remote_address);
 
     let refreshed_content = b"refreshed-device-set";
     json_response(
@@ -2481,13 +2839,13 @@ fn setup_phase(c: &Client, a: &str, b: &str) {
             mismatch_id,
             vec![
                 envelope(1, BOB_REGISTRATION_ID_1, refreshed_content),
-                envelope(2, BOB_REGISTRATION_ID_2, refreshed_content),
+                envelope(bob_2_id, BOB_REGISTRATION_ID_2, refreshed_content),
             ],
         ),
         "retry after remote device mismatch",
     );
     assert_content_once(&mailbox(c, b, &bob_token, 1), refreshed_content);
-    assert_content_once(&mailbox(c, b, &bob_token, 2), refreshed_content);
+    assert_content_once(&mailbox(c, b, &bob_token, bob_2_id), refreshed_content);
 
     // Unknown recipients consume their sequence as a terminal rejection. A
     // later valid send must not be poisoned behind that outbox entry.
@@ -2512,15 +2870,16 @@ fn setup_phase(c: &Client, a: &str, b: &str) {
             "10000000-0000-4000-8000-000000000004",
             vec![
                 envelope(1, BOB_REGISTRATION_ID_1, after_rejection),
-                envelope(2, BOB_REGISTRATION_ID_2, after_rejection),
+                envelope(bob_2_id, BOB_REGISTRATION_ID_2, after_rejection),
             ],
         ),
         "valid send after terminal rejection",
     );
     assert_content_once(&mailbox(c, b, &bob_token, 1), after_rejection);
-    assert_content_once(&mailbox(c, b, &bob_token, 2), after_rejection);
+    assert_content_once(&mailbox(c, b, &bob_token, bob_2_id), after_rejection);
 
     chat_media_round_trip(c, a, b, &alice_token, &bob_token, &admin_b);
+    remote_editor_past_max_age(c, a, b, &admin_a);
 
     let unsigned = c
         .get(format!(
@@ -2629,7 +2988,11 @@ fn queue_phase(c: &Client, a: &str) {
         "10000000-0000-4000-8000-000000000005",
         vec![
             envelope(1, BOB_REGISTRATION_ID_1, b"queued-during-outage"),
-            envelope(2, BOB_REGISTRATION_ID_2, b"queued-during-outage"),
+            envelope(
+                bob_second_device(),
+                BOB_REGISTRATION_ID_2,
+                b"queued-during-outage",
+            ),
         ],
     );
     assert_eq!(response.status().as_u16(), 503);
@@ -2678,7 +3041,7 @@ fn verify_retry_phase(c: &Client, a: &str, b: &str) {
     let deadline = Instant::now() + Duration::from_secs(30);
     loop {
         let first = mailbox(c, b, &bob_token, 1);
-        let second = mailbox(c, b, &bob_token, 2);
+        let second = mailbox(c, b, &bob_token, bob_second_device());
         let encoded = b64(b"queued-during-outage");
         if first.iter().any(|message| message["content"] == encoded)
             && second.iter().any(|message| message["content"] == encoded)
@@ -2730,13 +3093,13 @@ fn verify_retry_phase(c: &Client, a: &str, b: &str) {
             "10000000-0000-4000-8000-000000000006",
             vec![
                 envelope(1, BOB_REGISTRATION_ID_1, follow_up),
-                envelope(2, BOB_REGISTRATION_ID_2, follow_up),
+                envelope(bob_second_device(), BOB_REGISTRATION_ID_2, follow_up),
             ],
         ),
         "send after durable retry",
     );
     assert_content_once(&mailbox(c, b, &bob_token, 1), follow_up);
-    assert_content_once(&mailbox(c, b, &bob_token, 2), follow_up);
+    assert_content_once(&mailbox(c, b, &bob_token, bob_second_device()), follow_up);
 }
 
 /// Renames across servers (docs/plans/username-renames.md, R2): an account
@@ -2868,6 +3231,138 @@ fn federated_user(
         .unwrap(),
         account: format!("{username}@{}", me["server"].as_str().unwrap()),
     }
+}
+
+/// An editor on another server keeps editing a file past the home's
+/// `remoteManifestMaxAgeSeconds`: once its cached head of the editor's
+/// account is that old, the home reads the head again before it takes a
+/// frame. The head hasn't changed, so the device still counts and its frames
+/// are kept (a frame on a refreshed, unchanged head is never dropped).
+fn remote_editor_past_max_age(c: &Client, a: &str, b: &str, admin_a: &str) {
+    use futures_util::{SinkExt, StreamExt};
+    use kutup_crypto::envelope::{self, kind, CollabFrameContextV3, Frame};
+    use kutup_crypto::named_share::FileShareEnvelopeV1;
+    let (owner_email, bob_email) = ("age-owner@example.test", "age-bob@example.test");
+    let (owner_token, _) = register_account(c, a, owner_email, "age_owner");
+    let (bob_token, _) = register_account(c, b, bob_email, "age_bob");
+    let owner = federated_user(c, a, owner_email, "age_owner", &owner_token);
+    let bob = federated_user(c, b, bob_email, "age_bob", &bob_token);
+    let folder = common::create_folder(c, a, &owner);
+    let file = common::seal_file(&folder, &Uuid::new_v4().to_string(), b"edited from B");
+    assert!(common::upload(c, a, &owner.token, &folder, &file)
+        .status()
+        .is_success());
+    let envelope = FileShareEnvelopeV1::seal(
+        &file.key,
+        &file.id,
+        1,
+        &owner.person,
+        &owner.identity.incarnation_id(),
+        owner.identity.drive_signing_key(),
+        &bob.person,
+        &bob.identity.incarnation_id(),
+        &bob.identity.drive_hpke_public_key(),
+    )
+    .unwrap()
+    .encode_b64()
+    .unwrap();
+    let invite = json_response(
+        c.post(format!("{a}/api/files/{}/federated-shares", file.id))
+            .bearer_auth(&owner.token)
+            .json(&json!({
+                "recipientServer": bob.person.server,
+                "recipientAccountId": bob.person.account_id,
+                "shareEnvelope": envelope,
+                "canEdit": true,
+            }))
+            .send()
+            .unwrap(),
+        "share the file to edit",
+    );
+    let accepted = json_response(
+        c.post(format!("{b}/api/drive/federation/file-shares"))
+            .bearer_auth(&bob.token)
+            .json(&json!({
+                "server": owner.person.server,
+                "capability": invite_capability(invite["inviteUrl"].as_str().unwrap()),
+            }))
+            .send()
+            .unwrap(),
+        "accept the file to edit",
+    );
+    let incoming = accepted["id"].as_str().unwrap().to_owned();
+    let device = common::register_device(c, b, &bob);
+    let set_max_age = |seconds: Option<i64>| {
+        let r = c
+            .put(format!("{a}/api/admin/settings"))
+            .bearer_auth(admin_a)
+            .json(&json!({ "remoteManifestMaxAgeSeconds": seconds.unwrap_or(300) }))
+            .send()
+            .unwrap();
+        assert_eq!(r.status().as_u16(), 200, "remote manifest max age");
+    };
+    set_max_age(Some(60));
+
+    let frame = |sequence: u64| {
+        let context = CollabFrameContextV3::new(
+            kind::YJS_UPDATE,
+            1,
+            1,
+            &file.id,
+            device.id,
+            device.manifest_sequence,
+            sequence,
+        )
+        .unwrap();
+        let packed = envelope::seal_unsigned(b"an edit from B", &file.key, context).unwrap();
+        envelope::sign(
+            &Frame::unpack(&packed).unwrap(),
+            &device.account,
+            &device.seed,
+        )
+        .unwrap()
+    };
+    // One frame through B's bridge; true once A kept it (`stored`).
+    let kept = |sequence: u64| {
+        let ticket = json_response(
+            c.post(format!("{b}/api/device-ticket"))
+                .bearer_auth(&bob.token)
+                .header(kutup_chat_proto::DEVICE_HEADER, device.header())
+                .send()
+                .unwrap(),
+            "device ticket",
+        );
+        let url = format!(
+            "{}/api/drive/federation/file-shares/{incoming}/collab/ws?ticket={}",
+            b.replacen("http", "ws", 1),
+            ticket["ticket"].as_str().unwrap()
+        );
+        let bytes = frame(sequence);
+        tokio::runtime::Runtime::new()
+            .unwrap()
+            .block_on(async move {
+                use tokio_tungstenite::tungstenite::Message;
+                let (mut socket, _) = tokio_tungstenite::connect_async(url).await.unwrap();
+                socket.send(Message::Binary(bytes)).await.unwrap();
+                let deadline = tokio::time::Instant::now() + Duration::from_secs(20);
+                loop {
+                    match tokio::time::timeout_at(deadline, socket.next()).await {
+                        Ok(Some(Ok(Message::Text(text)))) if text.contains("\"stored\"") => {
+                            return true
+                        }
+                        Ok(Some(Ok(_))) => {}
+                        _ => return false,
+                    }
+                }
+            })
+    };
+    assert!(kept(1), "the first frame from B is kept");
+    // Past the max age: the home reads the unchanged head again, and the
+    // still-listed device's frame is kept.
+    std::thread::sleep(Duration::from_secs(61));
+    let after = kept(2);
+    set_max_age(None);
+    assert!(after, "a listed device's frame is kept past the max age");
 }
 
 /// The capability in an invite link's fragment.

@@ -30,10 +30,10 @@ use tokio::io::AsyncReadExt as _;
 use utoipa::ToSchema;
 use uuid::Uuid;
 
+use super::trusted_uuid;
 use super::tus::{
     header_str, parse_upload_metadata, require_tus_resumable, tus_text, MIN_PART_SIZE, TUS_VERSION,
 };
-use super::{octet_stream_response, trusted_uuid};
 use crate::error::{AppError, AppResult};
 use crate::middleware::AuthUser;
 use crate::storage::{CompletedPart, MultipartUpload};
@@ -599,12 +599,13 @@ pub async fn patch_upload(
         }
     };
     if storage_reference_id.is_none()
-        || sqlx::query("UPDATE users SET storage_used_bytes=storage_used_bytes+$1 WHERE id=$2")
-            .bind(total)
-            .bind(user_id)
-            .execute(&mut *transaction)
-            .await
-            .is_err()
+        || crate::storage_pool::charge(
+            &mut *transaction,
+            crate::storage_pool::Payer::Account(user_id),
+            total,
+        )
+        .await
+        .is_err()
         || sqlx::query("DELETE FROM chat_media_uploads WHERE id=$1")
             .bind(upload_id)
             .execute(&mut *transaction)
@@ -870,11 +871,12 @@ pub async fn deliver_local(
         .bind(stored_bytes)
         .fetch_one(&mut *transaction)
         .await?;
-        sqlx::query("UPDATE users SET storage_used_bytes=storage_used_bytes+$1 WHERE id=$2")
-            .bind(stored_bytes)
-            .bind(recipient_user_id)
-            .execute(&mut *transaction)
-            .await?;
+        crate::storage_pool::charge(
+            &mut *transaction,
+            crate::storage_pool::Payer::Account(recipient_user_id),
+            stored_bytes,
+        )
+        .await?;
         (reference_id, ChatMediaDeliveryStatusV1::Stored)
     };
     sqlx::query(
@@ -915,6 +917,7 @@ pub async fn download_object(
     State(state): State<AppState>,
     user: AuthUser,
     Path(attachment_id): Path<String>,
+    headers: axum::http::HeaderMap,
 ) -> AppResult<Response> {
     let user_id = trusted_uuid(&user.user_id)?;
     let attachment_id = canonical_uuid(&attachment_id)
@@ -931,17 +934,28 @@ pub async fn download_object(
     let Some((path, expected_bytes)) = row else {
         return Err(AppError::not_found("Chat media not found"));
     };
-    let (body, bytes) = state
-        .storage
-        .get_object(&path)
-        .await
-        .map_err(|_| AppError::internal("Chat media storage unavailable"))?;
-    if bytes != expected_bytes {
-        crate::telemetry::chat_media_event("download", "length_mismatch");
-        return Err(AppError::internal("Chat media storage length mismatch"));
-    }
-    crate::telemetry::chat_media_event("download", "streamed");
-    Ok(octet_stream_response(body, bytes, &[]))
+    // An attachment never changes, so its id is the ETag; one range at a
+    // time (docs/plans/drive-block-format.md §3). The stored length must be
+    // the recorded one, whole or in part.
+    let response = crate::content_range::serve_revision(
+        &state.pool,
+        &state.storage,
+        &path,
+        expected_bytes,
+        attachment_id,
+        &headers,
+        &[],
+    )
+    .await;
+    crate::telemetry::chat_media_event(
+        "download",
+        if response.is_ok() {
+            "streamed"
+        } else {
+            "failed"
+        },
+    );
+    response
 }
 
 /// Discard a finalized origin object before it has been offered. This is used
@@ -991,12 +1005,11 @@ pub async fn discard_origin_object(
     if removed.rows_affected() != 1 {
         return Err(AppError::conflict("Chat media reference changed"));
     }
-    sqlx::query(
-        "UPDATE users SET storage_used_bytes=GREATEST(storage_used_bytes-$1,0) WHERE id=$2",
+    crate::storage_pool::charge(
+        &mut *tx,
+        crate::storage_pool::Payer::Account(user_id),
+        -bytes,
     )
-    .bind(bytes)
-    .bind(user_id)
-    .execute(&mut *tx)
     .await?;
     sqlx::query("DELETE FROM chat_media_objects WHERE attachment_id=$1")
         .bind(attachment_id)
@@ -1090,12 +1103,11 @@ pub async fn clear_reference(
         .bind(reference_id)
         .execute(&mut *tx)
         .await?;
-    sqlx::query(
-        "UPDATE users SET storage_used_bytes=GREATEST(storage_used_bytes-$1,0) WHERE id=$2",
+    crate::storage_pool::charge(
+        &mut *tx,
+        crate::storage_pool::Payer::Account(user_id),
+        -logical_bytes,
     )
-    .bind(logical_bytes)
-    .bind(user_id)
-    .execute(&mut *tx)
     .await?;
     let remaining: i64 =
         sqlx::query_scalar("SELECT COUNT(*) FROM chat_media_references WHERE attachment_id=$1")
