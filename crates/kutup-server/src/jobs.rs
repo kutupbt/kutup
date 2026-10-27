@@ -177,8 +177,8 @@ pub async fn chat_maintenance_once(
             Err(error) => tracing::warn!("chat maintenance: send retention failed: {error}"),
         }
         match sqlx::query(
-            "DELETE FROM chat_federation_outbox
-             WHERE state = 'delivered'
+            "DELETE FROM federation_outbox
+             WHERE kind = 'chat' AND state = 'delivered'
                AND updated_at < now() - ($1 * interval '1 day')",
         )
         .bind(policy.send_retention_days)
@@ -191,8 +191,8 @@ pub async fn chat_maintenance_once(
             }
         }
         match sqlx::query(
-            "DELETE FROM chat_federation_inbound_transactions
-             WHERE created_at < now() - ($1 * interval '1 day')",
+            "DELETE FROM federation_inbound
+             WHERE kind = 'chat' AND created_at < now() - ($1 * interval '1 day')",
         )
         .bind(policy.send_retention_days)
         .execute(pool)
@@ -1400,6 +1400,7 @@ mod tests {
             &std::env::var("KUTUP_LIVE_S3_SECRET_KEY").unwrap(),
             &std::env::var("KUTUP_LIVE_S3_BUCKET").unwrap(),
             "us-east-1",
+            crate::storage::S3Timeouts::default(),
         );
         let pool = sqlx::postgres::PgPoolOptions::new()
             .max_connections(2)

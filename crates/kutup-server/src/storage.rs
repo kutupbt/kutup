@@ -76,10 +76,48 @@ pub struct MultipartUpload<'a> {
     pub total_bytes: i64,
 }
 
+/// How long the object store may take (docs/self-hosting.md, "Object
+/// storage"): a stalled store fails a request with a clear error instead of
+/// holding it, and whatever it holds (a database transaction), for good.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct S3Timeouts {
+    /// Opening a connection (`S3_CONNECT_TIMEOUT_SECONDS`).
+    pub connect: std::time::Duration,
+    /// Waiting for the store's answer once a request is sent
+    /// (`S3_READ_TIMEOUT_SECONDS`).
+    pub read: std::time::Duration,
+    /// A transfer, up or down, that moves no bytes this long fails
+    /// (`S3_STALL_SECONDS`): a slow link keeps going, a stuck one doesn't.
+    /// Whole objects can be many gigabytes, so a transfer has no total limit.
+    pub stall: std::time::Duration,
+    /// One try of a request without a body (heads, deletes, lists, the
+    /// multipart bookkeeping) (`S3_REQUEST_TIMEOUT_SECONDS`); all its tries
+    /// together get `max_attempts` times this.
+    pub request: std::time::Duration,
+    /// Tries of a request, the first included (`S3_MAX_ATTEMPTS`).
+    pub max_attempts: u32,
+}
+
+impl Default for S3Timeouts {
+    fn default() -> Self {
+        Self {
+            connect: std::time::Duration::from_secs(10),
+            read: std::time::Duration::from_secs(60),
+            stall: std::time::Duration::from_secs(20),
+            request: std::time::Duration::from_secs(30),
+            max_attempts: 3,
+        }
+    }
+}
+
 /// Wraps the S3 client + target bucket — mirrors `StorageService`.
 #[derive(Clone)]
 pub struct StorageService {
+    /// For requests that carry an object's bytes: connect, read and stall
+    /// limits, no total (an object may be gigabytes).
     client: Client,
+    /// For requests without a body: also a limit per try and in all.
+    quick: Client,
     bucket: String,
     /// Whether the store reads an object by its version id: learned on the
     /// first one it refuses (Cloudflare R2 returns a version id for every
@@ -101,6 +139,7 @@ impl StorageService {
         secret_key: &str,
         bucket: &str,
         region: &str,
+        timeouts: S3Timeouts,
     ) -> Self {
         let creds = Credentials::new(access_key, secret_key, None, None, "kutup-static");
         let conf = aws_sdk_s3::config::Builder::new()
@@ -114,9 +153,38 @@ impl StorageService {
             // S3-compatible stores reject.
             .request_checksum_calculation(RequestChecksumCalculation::WhenRequired)
             .response_checksum_validation(ResponseChecksumValidation::WhenRequired)
+            .timeout_config(
+                aws_sdk_s3::config::timeout::TimeoutConfig::builder()
+                    .connect_timeout(timeouts.connect)
+                    .read_timeout(timeouts.read)
+                    .build(),
+            )
+            .stalled_stream_protection(
+                aws_sdk_s3::config::StalledStreamProtectionConfig::enabled()
+                    .upload_enabled(true)
+                    .download_enabled(true)
+                    .grace_period(timeouts.stall)
+                    .build(),
+            )
+            .retry_config(
+                aws_sdk_s3::config::retry::RetryConfig::standard()
+                    .with_max_attempts(timeouts.max_attempts.max(1)),
+            )
+            .build();
+        let quick = conf
+            .to_builder()
+            .timeout_config(
+                aws_sdk_s3::config::timeout::TimeoutConfig::builder()
+                    .connect_timeout(timeouts.connect)
+                    .read_timeout(timeouts.read)
+                    .operation_attempt_timeout(timeouts.request)
+                    .operation_timeout(timeouts.request * timeouts.max_attempts.max(1))
+                    .build(),
+            )
             .build();
         StorageService {
             client: Client::from_conf(conf),
+            quick: Client::from_conf(quick),
             bucket: bucket.to_string(),
             versioned_reads: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true)),
         }
@@ -203,7 +271,7 @@ impl StorageService {
     /// Deletes a specific (noncurrent) object version — mirrors `DeleteObjectVersion`.
     /// Used by the version-cleanup job.
     pub async fn delete_object_version(&self, key: &str, version_id: &str) -> Result<()> {
-        self.client
+        self.quick
             .delete_object()
             .bucket(&self.bucket)
             .key(key)
@@ -235,7 +303,7 @@ impl StorageService {
         token: Option<String>,
     ) -> Result<(Vec<ObjectInfo>, Option<String>)> {
         let out = self
-            .client
+            .quick
             .list_objects_v2()
             .bucket(&self.bucket)
             .prefix(prefix)
@@ -331,7 +399,7 @@ impl StorageService {
             // A store without version listing: an unversioned bucket, where a
             // plain delete is final.
             Err(_) => {
-                self.client
+                self.quick
                     .delete_object()
                     .bucket(&self.bucket)
                     .key(path)
@@ -350,7 +418,7 @@ impl StorageService {
         let mut version_marker: Option<String> = None;
         loop {
             let page = self
-                .client
+                .quick
                 .list_object_versions()
                 .bucket(&self.bucket)
                 .prefix(prefix)
@@ -390,7 +458,7 @@ impl StorageService {
                 .quiet(true)
                 .build()
                 .context("build delete")?;
-            self.client
+            self.quick
                 .delete_objects()
                 .bucket(&self.bucket)
                 .delete(delete)
@@ -416,7 +484,7 @@ impl StorageService {
             .quiet(true)
             .build()
             .context("build delete")?;
-        self.client
+        self.quick
             .delete_objects()
             .bucket(&self.bucket)
             .delete(delete)
@@ -438,7 +506,7 @@ impl StorageService {
         let mut continuation: Option<String> = None;
         loop {
             let out = self
-                .client
+                .quick
                 .list_objects_v2()
                 .bucket(&self.bucket)
                 .prefix(prefix)
@@ -465,7 +533,7 @@ impl StorageService {
     /// mirrors `CreateMultipart`.
     pub async fn create_multipart(&self, key: &str) -> Result<String> {
         let out = self
-            .client
+            .quick
             .create_multipart_upload()
             .bucket(&self.bucket)
             .key(key)
@@ -565,7 +633,7 @@ impl StorageService {
         let completed = CompletedMultipartUpload::builder()
             .set_parts(Some(sdk_parts))
             .build();
-        self.client
+        self.quick
             .complete_multipart_upload()
             .bucket(&self.bucket)
             .key(key)
@@ -584,7 +652,7 @@ impl StorageService {
     /// left behind can still be cleaned up.
     pub async fn abort_multipart(&self, key: &str, upload_id: &str) -> Result<()> {
         match self
-            .client
+            .quick
             .abort_multipart_upload()
             .bucket(&self.bucket)
             .key(key)

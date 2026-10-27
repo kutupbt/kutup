@@ -36,6 +36,7 @@ mod drive_profile_keys;
 mod drive_writes;
 mod error;
 mod federation;
+mod federation_outbox;
 mod file_content;
 mod grants;
 mod handlers;
@@ -310,6 +311,7 @@ async fn main() -> anyhow::Result<()> {
         &config.s3_secret_key,
         &config.s3_bucket,
         &config.s3_region,
+        config.s3_timeouts,
     );
 
     // Subcommand dispatch — admin tooling that reuses the DB pool + storage without starting
@@ -446,7 +448,7 @@ async fn main() -> anyhow::Result<()> {
     account_names::spawn_sweep(state.pool.clone(), state.config.name_sweep_seconds);
     // Announces of this server's renames to its peers.
     remote_renames::spawn_announcer(state.clone());
-    chat_federation::spawn_retry_worker(state.clone());
+    federation_outbox::spawn_worker(state.clone());
     chat_media_federation::spawn_retry_worker(state.clone());
     drive_federation::spawn_digest_backfill(state.clone());
     mail::groups::ensure_system_groups(&state.pool, &state.config.chat_server_name).await?;
