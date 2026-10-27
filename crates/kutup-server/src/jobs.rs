@@ -476,8 +476,9 @@ async fn release_version(pool: &PgPool, version_id: Uuid) -> anyhow::Result<bool
 }
 
 /// Rewrites the account's one storage counter (crate::storage_pool) from
-/// the rows it stands for — Drive, Chat and Contacts together — for any
-/// drifted user.
+/// the rows it stands for — Drive, Chat, Contacts, Mail and Calendar
+/// together — for any drifted user, then each mail group's. How many it
+/// corrected.
 pub async fn quota_reconcile_tick(pool: &PgPool) -> usize {
     // First find who drifted (a plain read), then correct each one under
     // their row lock with the sums taken afresh: every charge and release
@@ -541,6 +542,75 @@ pub async fn quota_reconcile_tick(pool: &PgPool) -> usize {
     }
     if corrected > 0 {
         tracing::info!("quota reconcile: corrected {corrected} users");
+    }
+    corrected + mail_group_quota_reconcile(pool).await
+}
+
+/// What a mail group (`group`, an SQL expression) is charged for, summed from
+/// the rows (docs/plans/mail-groups.md): its shared mailbox's own messages,
+/// and the objects of its distribution-list deliveries, which the members'
+/// copies (rows with a key packet) share and never count again.
+fn mail_group_sums(group: &str) -> String {
+    format!(
+        r#"SELECT (
+    COALESCE((SELECT SUM(size_bytes) FROM mail_messages
+               WHERE group_id = {group} AND user_id IS NULL AND key_packet IS NULL), 0)
+  + COALESCE((SELECT SUM(size_bytes) FROM mail_group_objects WHERE group_id = {group}), 0)
+)::bigint"#
+    )
+}
+
+/// Rewrites each drifted mail group's storage counter from the rows it
+/// stands for, as [`quota_reconcile_tick`] does for accounts: found with a
+/// plain read, corrected under the group's row lock with the sum taken
+/// afresh. How many it corrected.
+async fn mail_group_quota_reconcile(pool: &PgPool) -> usize {
+    let drifted: Vec<Uuid> = match sqlx::query_scalar(&format!(
+        "SELECT g.id FROM mail_groups g WHERE g.storage_used_bytes <> ({})",
+        mail_group_sums("g.id")
+    ))
+    .fetch_all(pool)
+    .await
+    {
+        Ok(rows) => rows,
+        Err(e) => {
+            tracing::warn!("quota reconcile: mail groups: query failed: {e}");
+            return 0;
+        }
+    };
+    let mut corrected = 0;
+    for group in drifted {
+        let fixed: anyhow::Result<Option<i64>> = async {
+            let mut tx = pool.begin().await?;
+            crate::mail::groups::lock(&mut tx, group).await?;
+            let total: i64 = sqlx::query_scalar(&mail_group_sums("$1"))
+                .bind(group)
+                .fetch_one(&mut *tx)
+                .await?;
+            let row: Option<i64> = sqlx::query_scalar(
+                "UPDATE mail_groups SET storage_used_bytes = $2
+                 WHERE id = $1 AND storage_used_bytes <> $2
+                 RETURNING storage_used_bytes",
+            )
+            .bind(group)
+            .bind(total)
+            .fetch_optional(&mut *tx)
+            .await?;
+            tx.commit().await?;
+            Ok(row)
+        }
+        .await;
+        match fixed {
+            Ok(Some(used)) => {
+                corrected += 1;
+                tracing::info!("quota reconcile: mail group={group} used={used} (drift corrected)");
+            }
+            Ok(None) => {}
+            Err(e) => tracing::warn!("quota reconcile: mail group {group}: {e}"),
+        }
+    }
+    if corrected > 0 {
+        tracing::info!("quota reconcile: corrected {corrected} mail groups");
     }
     corrected
 }
@@ -1327,6 +1397,74 @@ mod tests {
             None
         );
         assert_eq!(drive_file_of_key("files/not-a-uuid/x"), None);
+    }
+
+    #[tokio::test]
+    async fn live_mail_group_quota_reconcile() {
+        let Ok(database_url) = std::env::var("KUTUP_LIVE_DATABASE_URL") else {
+            eprintln!("KUTUP_LIVE_DATABASE_URL unset — skipping live mail group reconcile test");
+            return;
+        };
+        let pool = sqlx::PgPool::connect(&database_url).await.unwrap();
+        let tag = uuid::Uuid::new_v4().simple().to_string();
+        let mut groups = Vec::new();
+        for name in ["drifted", "exact"] {
+            let id: uuid::Uuid = sqlx::query_scalar(
+                "INSERT INTO mail_groups (address, display_name, kind, storage_quota_bytes)
+                 VALUES ($1, $2, 'list', 1000000) RETURNING id",
+            )
+            .bind(format!("{name}-{tag}@reconcile.test"))
+            .bind(name)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+            for (i, size) in [300_i64, 200].into_iter().enumerate() {
+                sqlx::query(
+                    "INSERT INTO mail_group_objects (object_key, group_id, size_bytes)
+                     VALUES ($1, $2, $3)",
+                )
+                .bind(format!("mail/groups/{id}/{i}"))
+                .bind(id)
+                .bind(size)
+                .execute(&pool)
+                .await
+                .unwrap();
+            }
+            groups.push(id);
+        }
+        // One counter drifted, one right.
+        sqlx::query("UPDATE mail_groups SET storage_used_bytes = $2 WHERE id = $1")
+            .bind(groups[0])
+            .bind(9_999_i64)
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query("UPDATE mail_groups SET storage_used_bytes = 500 WHERE id = $1")
+            .bind(groups[1])
+            .execute(&pool)
+            .await
+            .unwrap();
+        assert!(crate::jobs::mail_group_quota_reconcile(&pool).await >= 1);
+        for id in &groups {
+            let used: i64 =
+                sqlx::query_scalar("SELECT storage_used_bytes FROM mail_groups WHERE id = $1")
+                    .bind(id)
+                    .fetch_one(&pool)
+                    .await
+                    .unwrap();
+            assert_eq!(used, 500);
+        }
+        sqlx::query("DELETE FROM mail_group_objects WHERE group_id = ANY($1)")
+            .bind(&groups)
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query("DELETE FROM mail_groups WHERE id = ANY($1)")
+            .bind(&groups)
+            .execute(&pool)
+            .await
+            .unwrap();
+        pool.close().await;
     }
 
     #[tokio::test]
