@@ -619,6 +619,11 @@ pub struct ChatCapabilities {
     /// entire Phase 6 path passes its gates.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub media: Option<ChatMediaCapabilitiesV1>,
+    /// How long a client's attachment send waits for the recipient's server
+    /// to store its copy before it shows as not delivered, in seconds (an
+    /// administrator's setting).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub attachment_send_lifetime_seconds: Option<u32>,
     /// Always-on encrypted display-history backup and dedicated Chat quota.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub backup: Option<ChatBackupCapabilitiesV1>,
@@ -651,6 +656,7 @@ impl Default for ChatCapabilities {
             group_calls: false,
             call_links: false,
             media: None,
+            attachment_send_lifetime_seconds: None,
             backup: None,
             sealed_sender_policy: None,
         }

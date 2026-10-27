@@ -5,7 +5,8 @@
 //! this server gave, per kind and origin.
 //!
 //! The kinds ([`Kind`]) keep their own rules in their modules
-//! (`chat_federation` for plain and sealed chat): what a batch is, the route,
+//! (`chat_federation` for plain and sealed chat, `chat_media_federation`,
+//! `remote_renames`): what a batch is, the route,
 //! and which answers are final; the worker calls each kind's flush. Every
 //! final answer, delivered or refused, uses up its sequence on both sides, so
 //! one refusal never blocks the destination's queue (for plain chat that is
@@ -27,6 +28,11 @@ pub enum Kind {
     Chat,
     /// A sealed-sender chat send.
     Sealed,
+    /// A Chat media offer (the destination then pulls the object).
+    Media,
+    /// An account's rename chain, announced to the servers that know it (no
+    /// transport sequence: applying a chain is idempotent).
+    Rename,
 }
 
 impl Kind {
@@ -34,6 +40,8 @@ impl Kind {
         match self {
             Kind::Chat => "chat",
             Kind::Sealed => "sealed",
+            Kind::Media => "media",
+            Kind::Rename => "rename",
         }
     }
 }
@@ -192,9 +200,18 @@ pub async fn due_destinations(pool: &sqlx::PgPool, kind: Kind) -> AppResult<Vec<
     .await?)
 }
 
-/// The worker: every `federationWorkerSeconds`, each kind's due
-/// destinations, flushed by the kind's own rules. The client's own request
-/// tries its send first; the worker takes what that left.
+/// Wakes the worker before its next tick ([`wake`]).
+static WAKE: tokio::sync::Notify = tokio::sync::Notify::const_new();
+
+/// Asks the worker to look now: something was queued that peers should get
+/// at once (a rename announce), not at the next tick.
+pub fn wake() {
+    WAKE.notify_one();
+}
+
+/// The worker: every `federationWorkerSeconds` (or at once when woken), each
+/// kind's due deliveries, flushed by the kind's own rules. The client's own
+/// request tries its send first; the worker takes what that left.
 pub fn spawn_worker(state: AppState) {
     if state.federation.is_none() {
         return;
@@ -205,7 +222,10 @@ pub fn spawn_worker(state: AppState) {
                 .load(&state.pool)
                 .await
                 .unwrap_or(crate::site_settings::FEDERATION_WORKER_SECONDS.default);
-            tokio::time::sleep(Duration::from_secs(seconds.max(1) as u64)).await;
+            tokio::select! {
+                _ = tokio::time::sleep(Duration::from_secs(seconds.max(1) as u64)) => {}
+                _ = WAKE.notified() => {}
+            }
             match crate::chat_federation::flush_due(&state).await {
                 Ok(completed) if completed > 0 => {
                     tracing::info!(completed, "chat federation delivered queued sends");
@@ -216,8 +236,39 @@ pub fn spawn_worker(state: AppState) {
             if let Err(error) = crate::chat_federation::flush_due_sealed(&state).await {
                 tracing::warn!(%error, "sealed chat federation retry failed");
             }
+            if let Err(error) = crate::chat_media_federation::flush_due(&state).await {
+                tracing::warn!(%error, "Chat media federation retry failed");
+            }
+            if let Err(error) = crate::remote_renames::deliver_due(&state).await {
+                tracing::warn!(error = %error.message, "rename announces failed");
+            }
         }
     });
+}
+
+/// Deletes settled deliveries of every kind, and the answers given to
+/// peers, older than `federationRecordDays`. Each stream's high-water mark
+/// stays, so a replay past it is still known as answered. How many rows went.
+pub async fn prune(pool: &sqlx::PgPool) -> AppResult<u64> {
+    let days = crate::site_settings::FEDERATION_RECORD_DAYS
+        .load(pool)
+        .await?;
+    let outbox = sqlx::query(
+        "DELETE FROM federation_outbox
+         WHERE state <> 'pending' AND updated_at < now() - ($1 * interval '1 day')",
+    )
+    .bind(days as f64)
+    .execute(pool)
+    .await?
+    .rows_affected();
+    let inbound = sqlx::query(
+        "DELETE FROM federation_inbound WHERE created_at < now() - ($1 * interval '1 day')",
+    )
+    .bind(days as f64)
+    .execute(pool)
+    .await?
+    .rows_affected();
+    Ok(outbox + inbound)
 }
 
 /// One origin's stream of `kind`, locked for this transaction: the highest
@@ -249,6 +300,8 @@ pub async fn lock_stream(
 #[derive(Debug, sqlx::FromRow)]
 pub struct InboundRecord {
     pub transaction_id: Option<String>,
+    /// The body's digest, where a replay must be byte-identical (media).
+    pub digest: Option<String>,
     pub status: i16,
     pub answer: Value,
 }
@@ -260,7 +313,7 @@ pub async fn prior(
     sequence: i64,
 ) -> AppResult<Option<InboundRecord>> {
     Ok(sqlx::query_as(
-        "SELECT transaction_id, status, answer FROM federation_inbound
+        "SELECT transaction_id, digest, status, answer FROM federation_inbound
          WHERE kind = $1 AND origin = $2 AND sequence = $3",
     )
     .bind(kind.as_str())
@@ -273,23 +326,27 @@ pub async fn prior(
 /// Records a final answer to (origin, sequence) of `kind` and uses the
 /// sequence up. The caller holds the stream ([`lock_stream`]) and has checked
 /// that `sequence` is the next one. Whether it was recorded (not already).
+#[allow(clippy::too_many_arguments)]
 pub async fn record(
     tx: &mut Transaction<'_, Postgres>,
     kind: Kind,
     origin: &str,
     sequence: i64,
     transaction_id: Option<&str>,
+    digest: Option<&str>,
     status: u16,
     answer: &Value,
 ) -> AppResult<bool> {
     let recorded = sqlx::query(
-        "INSERT INTO federation_inbound (kind, origin, sequence, transaction_id, status, answer)
-         VALUES ($1, $2, $3, $4, $5, $6) ON CONFLICT DO NOTHING",
+        "INSERT INTO federation_inbound
+             (kind, origin, sequence, transaction_id, digest, status, answer)
+         VALUES ($1, $2, $3, $4, $5, $6, $7) ON CONFLICT DO NOTHING",
     )
     .bind(kind.as_str())
     .bind(origin)
     .bind(sequence)
     .bind(transaction_id)
+    .bind(digest)
     .bind(status as i16)
     .bind(answer)
     .execute(&mut **tx)

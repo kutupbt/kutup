@@ -598,6 +598,11 @@ pub async fn get_public_settings(
             )
             .map_err(AppError::internal)?,
         ),
+        attachment_send_lifetime_seconds: Some(
+            crate::site_settings::CHAT_ATTACHMENT_SEND_LIFETIME_SECONDS
+                .load(&state.pool)
+                .await? as u32,
+        ),
         backup: Some(
             kutup_chat_proto::ChatBackupCapabilitiesV1::v1(
                 account_default_quota_bytes,

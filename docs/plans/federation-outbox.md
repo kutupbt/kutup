@@ -14,6 +14,13 @@ two PRs below, with these conditions:
 docs/plans/wipe-unification.md, "Not needing the wipe", item 6. The survey
 behind it reads master at b2b086a3.
 
+Built: PR 1 (#367) the tables, the worker, plain and sealed chat; PR 2 media
+and rename announces on the shared tables, refusals recorded on both sides,
+`federationRecordDays` retention, the admin view per kind, and the client's
+attachment-send wait (`kutup-chat-core` `media_wait.rs`). The client's
+backoff between asks (5 s doubling to 5 min) is the client's own pacing, like
+its other retry timers; the wait's lifetime is the site setting.
+
 ## Today
 
 Four outboxes deliver to peer servers. Each has its own sequences, worker,

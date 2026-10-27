@@ -2244,6 +2244,7 @@ async fn record_sealed_answer(
         origin,
         sequence,
         Some(&send_id.to_string()),
+        None,
         answer.status.as_u16(),
         &answer.body,
     )
@@ -2299,6 +2300,22 @@ async fn apply_sealed_one(
                 status,
                 body: prior.answer,
             },
+            Vec::new(),
+        ));
+    }
+    if sequence <= last_sequence {
+        // Answered, and its record pruned (`federationRecordDays`): the mark
+        // proves the sequence was used up, so it is acknowledged as a repeat
+        // without its old ciphertext being tried, as plain chat does.
+        tx.rollback().await?;
+        return Ok((
+            SealedAnswer::json(
+                StatusCode::OK,
+                &SealedDeliveryResponseV1 {
+                    stored: 0,
+                    deduplicated: true,
+                },
+            )?,
             Vec::new(),
         ));
     }
@@ -2807,6 +2824,7 @@ pub async fn deliver_messages(
             &transaction.origin,
             sequence,
             Some(&transaction.transaction_id),
+            None,
             StatusCode::CONFLICT.as_u16(),
             &value,
         )
@@ -2950,6 +2968,7 @@ async fn refuse_sealed(
             origin,
             sequence,
             Some(&send_id.to_string()),
+            None,
             StatusCode::BAD_REQUEST.as_u16(),
             &final_value,
         )
@@ -3002,6 +3021,7 @@ async fn record_inbound_response(
         &transaction.origin,
         sequence,
         Some(&transaction.transaction_id),
+        None,
         StatusCode::OK.as_u16(),
         &response_value,
     )

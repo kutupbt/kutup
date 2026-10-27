@@ -44,6 +44,18 @@ const BOB_REGISTRATION_ID_2: u32 = 4202;
 const QUEUED_MEDIA_ATTACHMENT_ID: &str = "50000000-0000-4000-8000-000000000003";
 const QUEUED_MEDIA_OPERATION_ID: &str = "50000000-0000-4000-8000-000000000004";
 const QUEUED_MEDIA_PLAINTEXT: &[u8] = b"chat-media-queued-across-origin-restart";
+/// Behind the queued offer while B is down: one that expires before B is
+/// back (refused for good when it arrives), then another valid one.
+const EXPIRING_MEDIA_ATTACHMENT_ID: &str = "50000000-0000-4000-8000-000000000010";
+const EXPIRING_MEDIA_OPERATION_ID: &str = "50000000-0000-4000-8000-000000000011";
+const BEHIND_MEDIA_ATTACHMENT_ID: &str = "50000000-0000-4000-8000-000000000012";
+const BEHIND_MEDIA_OPERATION_ID: &str = "50000000-0000-4000-8000-000000000013";
+const BEHIND_MEDIA_PLAINTEXT: &[u8] = b"chat-media-behind-a-refused-offer";
+
+/// Where the queue phase leaves its offers for the next phase to repeat.
+fn queued_offers_path() -> std::path::PathBuf {
+    std::env::temp_dir().join("kutup-federation-queued-media-offers.json")
+}
 
 fn b64(bytes: &[u8]) -> String {
     STANDARD.encode(bytes)
@@ -2988,23 +3000,39 @@ fn queue_phase(c: &Client, a: &str) {
         &retrieval_token,
         &object,
     );
+    let offer = |attachment_id: &str,
+                 operation_id: &str,
+                 object: &[u8],
+                 digest: &str,
+                 token: &[u8; 32],
+                 expires_in: i64| {
+        json!({
+            "version": 1,
+            "originDomain": "a.test",
+            "destinationDomain": "b.test",
+            "recipient": bob_account(),
+            "operationId": operation_id,
+            "attachmentId": attachment_id,
+            "suite": 1,
+            "ciphertextBytes": object.len(),
+            "ciphertextSha256": digest,
+            "retrievalToken": b64(token),
+            "deliveryCapability": b64(&[0x6a; 16]),
+            "expiresAt": OffsetDateTime::now_utc().unix_timestamp() + expires_in,
+        })
+    };
+    let first = offer(
+        QUEUED_MEDIA_ATTACHMENT_ID,
+        QUEUED_MEDIA_OPERATION_ID,
+        &object,
+        &digest,
+        &retrieval_token,
+        30 * 86_400,
+    );
     let queued = json_response(
         c.post(format!("{a}/api/chat/media/deliveries"))
             .bearer_auth(&alice_token)
-            .json(&json!({
-                "version": 1,
-                "originDomain": "a.test",
-                "destinationDomain": "b.test",
-                "recipient": bob_account(),
-                "operationId": QUEUED_MEDIA_OPERATION_ID,
-                "attachmentId": QUEUED_MEDIA_ATTACHMENT_ID,
-                "suite": 1,
-                "ciphertextBytes": object.len(),
-                "ciphertextSha256": digest,
-                "retrievalToken": b64(&retrieval_token),
-                "deliveryCapability": b64(&[0x6a; 16]),
-                "expiresAt": OffsetDateTime::now_utc().unix_timestamp() + 30 * 86_400,
-            }))
+            .json(&first)
             .send()
             .unwrap(),
         "queue federated Chat-media delivery while destination is offline",
@@ -3012,6 +3040,114 @@ fn queue_phase(c: &Client, a: &str) {
     assert_eq!(queued["operationId"], QUEUED_MEDIA_OPERATION_ID);
     assert_eq!(queued["status"], "queued");
     assert!(queued["storageReferenceId"].is_null());
+
+    // Behind it: an offer that expires while B is down (B refuses it for
+    // good when it arrives), then a valid one, which must not be stuck
+    // behind that refusal (docs/plans/federation-outbox.md).
+    let mut offers = vec![first];
+    for (attachment_id, operation_id, plaintext, expires_in) in [
+        (
+            EXPIRING_MEDIA_ATTACHMENT_ID,
+            EXPIRING_MEDIA_OPERATION_ID,
+            b"chat-media-expiring-in-the-queue".as_slice(),
+            3,
+        ),
+        (
+            BEHIND_MEDIA_ATTACHMENT_ID,
+            BEHIND_MEDIA_OPERATION_ID,
+            BEHIND_MEDIA_PLAINTEXT,
+            30 * 86_400,
+        ),
+    ] {
+        let token = [0x63; 32];
+        let context = ChatMediaObjectContextV1::new(attachment_id).unwrap();
+        let object = chat_media::encrypt_object(plaintext, &[0x61; 32], context).unwrap();
+        let (digest, _) = upload_chat_media(c, a, &alice_token, attachment_id, &token, &object);
+        let body = offer(
+            attachment_id,
+            operation_id,
+            &object,
+            &digest,
+            &token,
+            expires_in,
+        );
+        let answer = json_response(
+            c.post(format!("{a}/api/chat/media/deliveries"))
+                .bearer_auth(&alice_token)
+                .json(&body)
+                .send()
+                .unwrap(),
+            "queue a Chat-media delivery behind another",
+        );
+        assert_eq!(answer["status"], "queued");
+        offers.push(body);
+    }
+    std::fs::write(queued_offers_path(), serde_json::to_vec(&offers).unwrap()).unwrap();
+    // The short offer expires before B can take it.
+    std::thread::sleep(Duration::from_secs(4));
+}
+
+/// The offers queued while B was down, once B is back: the expired one is
+/// refused for good, the one behind it still stored, and each operation
+/// asked again gets its stored answer (a new expiry changes nothing).
+fn verify_queued_media_answers(c: &Client, a: &str, b: &str, alice_token: &str, bob_token: &str) {
+    // Each waits its turn behind the one before, with the outage's backoff.
+    let deadline = Instant::now() + Duration::from_secs(120);
+    loop {
+        let response = c
+            .get(format!(
+                "{b}/api/chat/media/objects/{BEHIND_MEDIA_ATTACHMENT_ID}"
+            ))
+            .bearer_auth(bob_token)
+            .send()
+            .unwrap();
+        if response.status().is_success() {
+            let context = ChatMediaObjectContextV1::new(BEHIND_MEDIA_ATTACHMENT_ID).unwrap();
+            let plaintext =
+                chat_media::decrypt_object(&response.bytes().unwrap(), &[0x61; 32], context)
+                    .unwrap();
+            assert_eq!(plaintext, BEHIND_MEDIA_PLAINTEXT);
+            break;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "a Chat-media offer behind a refused one was never stored"
+        );
+        std::thread::sleep(Duration::from_millis(500));
+    }
+    assert_eq!(
+        c.get(format!(
+            "{b}/api/chat/media/objects/{EXPIRING_MEDIA_ATTACHMENT_ID}"
+        ))
+        .bearer_auth(bob_token)
+        .send()
+        .unwrap()
+        .status()
+        .as_u16(),
+        404
+    );
+    let offers: Vec<Value> =
+        serde_json::from_slice(&std::fs::read(queued_offers_path()).unwrap()).unwrap();
+    for (index, mut offer) in offers.into_iter().enumerate() {
+        offer["expiresAt"] = json!(OffsetDateTime::now_utc().unix_timestamp() + 20 * 86_400);
+        let repeat = c
+            .post(format!("{a}/api/chat/media/deliveries"))
+            .bearer_auth(alice_token)
+            .json(&offer)
+            .send()
+            .unwrap();
+        if index == 1 {
+            // Refused for good: the stored refusal, not `queued`.
+            assert_eq!(repeat.status().as_u16(), 422, "the expired offer's repeat");
+        } else {
+            assert_eq!(repeat.status().as_u16(), 200, "offer {index} repeated");
+            let answer: Value = repeat.json().unwrap();
+            assert_eq!(answer["status"], "stored", "offer {index} repeated");
+            assert!(answer["storageReferenceId"].is_string());
+        }
+    }
+    let _ = std::fs::remove_file(queued_offers_path());
+    println!("QUEUED MEDIA REFUSAL AND REPEATS VERIFIED");
 }
 
 fn verify_retry_phase(c: &Client, a: &str, b: &str) {
@@ -3060,6 +3196,7 @@ fn verify_retry_phase(c: &Client, a: &str, b: &str) {
     }
 
     let alice_token = login(c, a, ALICE_USERNAME);
+    verify_queued_media_answers(c, a, b, &alice_token, &bob_token);
 
     let follow_up = b"after-origin-restart";
     json_response(

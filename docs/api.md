@@ -5460,7 +5460,10 @@ persisted peer trust/discovery state. Rules remain visible while inactive.
         "chatPendingTransactions": 0,
         "chatMismatchesLastDay": 0,
         "driveIncomingShares": 1,
-        "driveOutgoingShares": 0
+        "driveOutgoingShares": 0,
+        "deliveries": [
+          { "kind": "media", "pending": 1, "rejectedLastDay": 0, "oldestPendingAt": "2026-07-20T10:05:00Z" }
+        ]
       }
     }
   ],
@@ -5474,10 +5477,17 @@ persisted peer trust/discovery state. Rules remain visible while inactive.
     "oldestChatPendingAt": null,
     "driveIncomingShares": 1,
     "driveOutgoingShares": 0,
-    "activeReplayReservations": 0
+    "activeReplayReservations": 0,
+    "deliveries": [
+      { "kind": "media", "pending": 1, "rejectedLastDay": 0, "oldestPendingAt": "2026-07-20T10:05:00Z" }
+    ]
   }
 }
 ```
+
+`deliveries` counts the deliveries to peers by kind (`chat`, `sealed`,
+`media`, `rename`): still pending, the oldest pending, and refused for good in
+the last day. A kind with nothing pending or refused is left out.
 
 `configured` reports whether the persistent v2 identity exists. Fingerprints
 are always returned in full; the grouped form is display-only.
