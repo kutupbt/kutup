@@ -484,7 +484,7 @@ apply a frame the sender's devices didn't sign.
      holds it to that chain.
    - Web: in memory per page. When the origin keeps the sign-in, also
      sealed in localStorage (local-state purpose `ManifestPins`, under a key
-     derived from the master key, profile = the client and account), never
+     derived from the master key, profile = the client and the account's id), never
      plain. This replaces slice 2's plain own-account pin.
    - CLI: in its profile store.
 3. **Live frames** (after `replayed`): the head must list the frame's
