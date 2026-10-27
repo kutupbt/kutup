@@ -315,6 +315,8 @@ export interface AdminSettings {
   federationRetryBaseSeconds: number
   federationRetryMaxSeconds: number
   federationPeerUpgradeSeconds: number
+  federationWorkerSeconds: number
+  federationHeadsPerTick: number
 }
 
 export type FederationMode = 'disabled' | 'allowlist' | 'blocklist' | 'open'
@@ -355,7 +357,7 @@ export interface FederationPeer {
   lastDiscoveryError: string | null
   diagnostics: {
     chatPendingTransactions: number
-    chatMismatchTransactions: number
+    chatMismatchesLastDay: number
     driveIncomingShares: number
     driveOutgoingShares: number
   }
@@ -407,7 +409,7 @@ export interface AdminFederationPolicy {
     verifiedPeers: number
     quarantinedPeers: number
     chatPendingTransactions: number
-    chatMismatchTransactions: number
+    chatMismatchesLastDay: number
     oldestChatPendingAt: string | null
     driveIncomingShares: number
     driveOutgoingShares: number

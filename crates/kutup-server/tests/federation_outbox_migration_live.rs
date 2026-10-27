@@ -185,20 +185,18 @@ async fn deliveries_mid_flight_carry_across() {
         shape,
         [
             ("chat", 1, "delivered", None),
-            // A pending mismatch is the final answer it was.
-            ("chat", 2, "rejected", Some("device_mismatch")),
+            // A mismatch from before version 2 closes its sequence: sent
+            // once more under it, so the destination records an answer there.
+            ("chat", 2, "pending", Some("closing_sequence")),
             ("chat", 3, "pending", None),
             ("sealed", 4, "rejected", Some("refused")),
             ("sealed", 5, "pending", Some("transport")),
         ]
     );
-    assert_eq!(
-        rows[1].answer.as_ref().unwrap()["code"],
-        "deviceListMismatch"
-    );
+    assert!(rows[1].answer.is_none());
     assert_eq!(rows[3].answer.as_ref().unwrap()["code"], "refused");
-    // The plain rows keep their sender and request; their key is the old
-    // unique triple.
+    // The plain rows keep their sender and request (the closing one its stale
+    // request, sent again as it was); their key is the old unique triple.
     let (key, payload): (String, Value) = sqlx::query_as(
         "SELECT idempotency_key, payload FROM federation_outbox
          WHERE kind = 'chat' AND sequence = 3",
@@ -209,6 +207,13 @@ async fn deliveries_mid_flight_carry_across() {
     assert_eq!(key, format!("{sender}:1:s3"));
     assert_eq!(payload["sender"], sender.to_string());
     assert_eq!(payload["request"]["sendId"], "s3");
+    let closing: Value = sqlx::query_scalar(
+        "SELECT payload FROM federation_outbox WHERE kind = 'chat' AND sequence = 2",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(closing["request"]["sendId"], "s2");
 
     // The next sequences carry on where they were.
     let next: Vec<(String, i64)> = sqlx::query_as(

@@ -17,7 +17,19 @@ compose() {
 # accounts' ids: docs/plans/account-ids.md).
 state_file="$(mktemp)"
 
+# A server's database, for the phases that set up a case directly
+# (docs/plans/federation-outbox.md): looked up each time, as a restart may
+# move the container.
+fed_db() {
+  local ip
+  ip="$(docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' \
+    "$(compose ps -q "postgres-$1")")"
+  printf 'postgres://kutup:federation_test_%s@%s:5432/kutup' "$1" "$ip"
+}
+
 run_phase() {
+  KUTUP_FEDERATION_DB_A="$(fed_db a)" \
+  KUTUP_FEDERATION_DB_B="$(fed_db b)" \
   KUTUP_FEDERATION_STATE="$state_file" \
   KUTUP_FEDERATION_PHASE="$1" \
   KUTUP_FEDERATION_SERVER_A="http://127.0.0.1:$port_a" \

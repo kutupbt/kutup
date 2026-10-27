@@ -1,13 +1,15 @@
 //! One federation outbox (docs/plans/federation-outbox.md): every kind of
 //! delivery to a peer server in `federation_outbox`, each kind with its own
-//! sequence per destination (what every receiver checks: nothing changes on
-//! the wire), one backoff, one worker, and one record of the answers this
-//! server gave, per kind and origin.
+//! sequence per destination (what every receiver checks, so sequences mean
+//! what they meant), one backoff, one worker, and one record of the answers
+//! this server gave, per kind and origin.
 //!
-//! The kinds' own rules stay with them (`chat_federation` for plain and
-//! sealed chat): what a batch is, the route, and which answers are final.
-//! Every final answer, delivered or refused, uses up its sequence on both
-//! sides, so one refusal never blocks the destination's queue.
+//! The kinds ([`Kind`]) keep their own rules in their modules
+//! (`chat_federation` for plain and sealed chat): what a batch is, the route,
+//! and which answers are final; the worker calls each kind's flush. Every
+//! final answer, delivered or refused, uses up its sequence on both sides, so
+//! one refusal never blocks the destination's queue (for plain chat that is
+//! its wire version 2).
 
 use std::time::Duration;
 
@@ -35,9 +37,6 @@ impl Kind {
         }
     }
 }
-
-/// How often the worker looks for what is due.
-const WORKER_INTERVAL: Duration = Duration::from_secs(5);
 
 /// The destination's next sequence of `kind`, taken for good.
 pub async fn next_sequence(
@@ -167,7 +166,8 @@ pub async fn settle<'e, E: PgExecutor<'e>>(
         == 1)
 }
 
-/// The destinations whose head of `kind` is due now (at most 100): only each
+/// The destinations whose head of `kind` is due now (at most
+/// `federationHeadsPerTick`): only each
 /// destination's head, so a long queue for one server never fills the page
 /// and starves the others, and rows behind a waiting head stay behind it.
 pub async fn due_destinations(pool: &sqlx::PgPool, kind: Kind) -> AppResult<Vec<String>> {
@@ -180,25 +180,32 @@ pub async fn due_destinations(pool: &sqlx::PgPool, kind: Kind) -> AppResult<Vec<
              ) heads
          WHERE next_attempt_at <= now()
          ORDER BY destination
-         LIMIT 100",
+         LIMIT $2",
     )
     .bind(kind.as_str())
+    .bind(
+        crate::site_settings::FEDERATION_HEADS_PER_TICK
+            .load(pool)
+            .await?,
+    )
     .fetch_all(pool)
     .await?)
 }
 
-/// The worker: every few seconds, each kind's due destinations, flushed by
-/// the kind's own rules. The client's own request tries its send first; the
-/// worker takes what that left.
+/// The worker: every `federationWorkerSeconds`, each kind's due
+/// destinations, flushed by the kind's own rules. The client's own request
+/// tries its send first; the worker takes what that left.
 pub fn spawn_worker(state: AppState) {
     if state.federation.is_none() {
         return;
     }
     tokio::spawn(async move {
-        let mut tick = tokio::time::interval(WORKER_INTERVAL);
-        tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
         loop {
-            tick.tick().await;
+            let seconds = crate::site_settings::FEDERATION_WORKER_SECONDS
+                .load(&state.pool)
+                .await
+                .unwrap_or(crate::site_settings::FEDERATION_WORKER_SECONDS.default);
+            tokio::time::sleep(Duration::from_secs(seconds.max(1) as u64)).await;
             match crate::chat_federation::flush_due(&state).await {
                 Ok(completed) if completed > 0 => {
                     tracing::info!(completed, "chat federation delivered queued sends");

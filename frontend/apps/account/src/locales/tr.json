@@ -926,7 +926,11 @@
         "federationRetryMaxSeconds": "En uzun bekleme (saniye)",
         "federationRetryMaxSecondsHint": "Bir teslimatın iki deneme arasında en fazla bekleyeceği süre.",
         "federationPeerUpgradeSeconds": "Eski bir sunucu için bekleme (saniye)",
-        "federationPeerUpgradeSecondsHint": "Teslimatı henüz alamayan bir sunucu için yeniden denemeden önce beklenecek süre."
+        "federationPeerUpgradeSecondsHint": "Teslimatı henüz alamayan bir sunucu için yeniden denemeden önce beklenecek süre.",
+        "federationWorkerSeconds": "Bekleyen teslimatları kontrol aralığı (saniye)",
+        "federationWorkerSecondsHint": "Diğer sunuculara bekleyen teslimatlara ne sıklıkla bakılacağı.",
+        "federationHeadsPerTick": "Kontrol başına denenen sunucu",
+        "federationHeadsPerTickHint": "Her kontrolde, her birine bir teslimat olmak üzere en fazla kaç hedef sunucunun deneneceği."
       }
     },
     "federation": {

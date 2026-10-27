@@ -976,10 +976,33 @@ pub const FEDERATION_PEER_UPGRADE_SECONDS: NumericSetting = NumericSetting {
     unit: SettingUnit::Seconds,
     per_account: false,
 };
-pub const FEDERATION_SETTINGS: [NumericSetting; 3] = [
+/// How often the federation worker looks for deliveries that are due, in
+/// seconds.
+pub const FEDERATION_WORKER_SECONDS: NumericSetting = NumericSetting {
+    key: "federation_worker_seconds",
+    field: "federationWorkerSeconds",
+    default: 5,
+    min: 1,
+    max: 60,
+    unit: SettingUnit::Seconds,
+    per_account: false,
+};
+/// The destinations the worker tries per kind on each look: one head each.
+pub const FEDERATION_HEADS_PER_TICK: NumericSetting = NumericSetting {
+    key: "federation_heads_per_tick",
+    field: "federationHeadsPerTick",
+    default: 100,
+    min: 1,
+    max: 1000,
+    unit: SettingUnit::Count,
+    per_account: false,
+};
+pub const FEDERATION_SETTINGS: [NumericSetting; 5] = [
     FEDERATION_RETRY_BASE_SECONDS,
     FEDERATION_RETRY_MAX_SECONDS,
     FEDERATION_PEER_UPGRADE_SECONDS,
+    FEDERATION_WORKER_SECONDS,
+    FEDERATION_HEADS_PER_TICK,
 ];
 
 pub fn numeric_settings() -> impl Iterator<Item = &'static NumericSetting> {

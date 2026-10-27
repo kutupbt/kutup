@@ -926,7 +926,11 @@
         "federationRetryMaxSeconds": "Longest wait (seconds)",
         "federationRetryMaxSecondsHint": "The most a delivery waits between two tries.",
         "federationPeerUpgradeSeconds": "Wait for an older server (seconds)",
-        "federationPeerUpgradeSecondsHint": "How long a delivery waits for a server that can't take it yet before trying again."
+        "federationPeerUpgradeSecondsHint": "How long a delivery waits for a server that can't take it yet before trying again.",
+        "federationWorkerSeconds": "Check for due deliveries every (seconds)",
+        "federationWorkerSecondsHint": "How often waiting deliveries to other servers are looked at.",
+        "federationHeadsPerTick": "Servers tried per check",
+        "federationHeadsPerTickHint": "The most destination servers each check tries, one delivery each."
       }
     },
     "federation": {

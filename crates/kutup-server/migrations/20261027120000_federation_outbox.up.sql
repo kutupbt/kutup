@@ -76,8 +76,13 @@ CREATE TABLE federation_inbound (
 );
 CREATE INDEX federation_inbound_created ON federation_inbound (created_at);
 
--- Plain chat. A device mismatch was kept pending under its sequence; it is a
--- final, rejected answer now, and the corrected resend takes a new sequence.
+-- Plain chat. Before wire version 2 a device mismatch didn't use up its
+-- sequence: the destination rolled it back (its mark is one below), and the
+-- origin kept the row open under it. Each such row is sent once more under
+-- that sequence (`closing_sequence`), at version 2, so the destination
+-- records its answer there and the origin's queue moves on; the client's
+-- corrected resend then takes a new sequence, as sealed chat's did
+-- (20261018120000).
 INSERT INTO federation_outbox
     (id, kind, destination, sequence, idempotency_key, sender_user_id, recipient_account_id,
      payload, state, error_class, last_error, answer, attempts, next_attempt_at,
@@ -86,9 +91,13 @@ SELECT id, 'chat', destination, sequence,
        sender_user_id::text || ':' || sender_device_id::text || ':' || send_id,
        sender_user_id, recipient_account_id,
        jsonb_build_object('request', request, 'sender', sender_user_id),
-       CASE state WHEN 'mismatch' THEN 'rejected' ELSE state END,
-       CASE state WHEN 'mismatch' THEN 'device_mismatch' END,
-       last_error, response, attempts, next_attempt_at, created_at, updated_at
+       CASE state WHEN 'mismatch' THEN 'pending' ELSE state END,
+       CASE state WHEN 'mismatch' THEN 'closing_sequence' END,
+       last_error,
+       CASE state WHEN 'mismatch' THEN NULL ELSE response END,
+       attempts,
+       CASE state WHEN 'mismatch' THEN now() ELSE next_attempt_at END,
+       created_at, updated_at
 FROM chat_federation_outbox;
 INSERT INTO federation_sequences (kind, destination, next_sequence)
     SELECT 'chat', destination, next_sequence FROM chat_federation_sequences;

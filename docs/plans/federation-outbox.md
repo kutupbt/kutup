@@ -60,22 +60,24 @@ federation_sequences (kind, destination, next_sequence)
 
 - Sequences stay per (kind, destination), as every receiver checks today. A
   counter shared across kinds would leave gaps in each kind's stream and need
-  a protocol version bump, so this design changes **nothing on the wire**.
+  a protocol version bump, so sequences keep their meaning on the wire. (What
+  a plain chat mismatch does does change: §3, plain chat's wire version 2.)
 - Each kind keeps its rules for `request_id` (the replay check needs new
   bytes to get a new id) and for which answers use up a sequence.
 
 **2. One worker, the kinds as data.** One module:
 - per destination, one flush at a time, with the advisory lock that sealed
   chat already uses;
-- the kinds' send functions behind one trait: what a batch is, the endpoint,
-  and how an answer maps to a state;
+- the kinds as a `Kind` enum, each flushed by its own module's function
+  (what a batch is, the endpoint, and how an answer maps to a state), called
+  by the one worker;
 - one backoff (2^n seconds with jitter, a cap per kind) and one "peer can't
   yet" park (1 h).
 
 The client's request still sends at once, and the worker takes what's left.
 Media gets the per-destination flush, rather than one row per tick for the
-whole server. The base, the caps, the park and the batch sizes become
-settings (`NumericSetting`), as every limit is.
+whole server. The base, the cap, the park, the worker's tick and its heads
+per tick are settings (`NumericSetting`), as every limit is.
 
 **3. Every final answer uses up its sequence, and is recorded.** On both
 sides, as sealed chat does already:

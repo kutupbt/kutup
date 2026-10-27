@@ -40,6 +40,10 @@ use kutup_federation_proto::FederationFeature;
 /// resend takes a new one), so servers on 1 and 2 must not mix: each refuses
 /// the other's sends (docs/self-hosting.md, Updating).
 const CHAT_FEDERATION_PAYLOAD_VERSION: u16 = 2;
+
+/// What a server answers a plain send at another wire version (its origin
+/// waits for an upgrade).
+const UNSUPPORTED_VERSION: &str = "unsupported chat federation version";
 pub(crate) const JSON_CONTENT_TYPE: &str = "application/json";
 const MAX_DIRECTORY_RESPONSE_BYTES: usize = 2 * 1024 * 1024;
 const MAX_FEDERATION_TRANSACTION_BYTES: usize = 16 * 1024 * 1024;
@@ -1471,25 +1475,34 @@ pub async fn enqueue_send(
             }
             // Corrected after a mismatch: again, under the next sequence.
             ("rejected", Some("device_mismatch")) => {
-                let sequence = federation_outbox::next_sequence(
-                    &mut tx,
-                    federation_outbox::Kind::Chat,
-                    destination,
-                )
-                .await?;
-                sqlx::query(
-                    "UPDATE federation_outbox
-                     SET sequence = $2, payload = jsonb_set(payload, '{request}', $3),
-                         state = 'pending', error_class = NULL, last_error = NULL,
-                         answer = NULL, attempts = 0, next_attempt_at = now(),
-                         updated_at = now()
-                     WHERE id = $1",
-                )
-                .bind(row.id)
-                .bind(sequence)
-                .bind(&request_value)
-                .execute(&mut *tx)
-                .await?;
+                requeue_plain(&mut tx, row.id, destination, &request_value).await?;
+            }
+            // Corrected while a mismatch from before wire version 2 is still
+            // closing its sequence (its stale content is sent once more under
+            // it, so the destination records an answer there): that goes
+            // first, then the correction under the next sequence.
+            ("pending", Some("closing_sequence")) if !same => {
+                tx.commit().await?;
+                return match attempt_outbox(state, row.id).await? {
+                    FederatedSendOutcome::Mismatch(_) => {
+                        let mut tx = state.pool.begin().await?;
+                        let still: Option<String> = sqlx::query_scalar(
+                            "SELECT error_class FROM federation_outbox
+                             WHERE id = $1 AND state = 'rejected' FOR UPDATE",
+                        )
+                        .bind(row.id)
+                        .fetch_optional(&mut *tx)
+                        .await?
+                        .flatten();
+                        if still.as_deref() != Some("device_mismatch") {
+                            return Ok(FederatedSendOutcome::Pending);
+                        }
+                        requeue_plain(&mut tx, row.id, destination, &request_value).await?;
+                        tx.commit().await?;
+                        attempt_outbox(state, row.id).await
+                    }
+                    other => Ok(other),
+                };
             }
             ("pending", _) if !same => {
                 return Err(AppError::conflict(
@@ -1525,6 +1538,32 @@ pub async fn enqueue_send(
     };
     tx.commit().await?;
     attempt_outbox(state, id).await
+}
+
+/// Puts a plain row answered with a device mismatch back in the queue with
+/// its client's corrected request, under the destination's next sequence
+/// (the mismatch used up the old one).
+async fn requeue_plain(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    id: Uuid,
+    destination: &str,
+    request: &Value,
+) -> AppResult<()> {
+    let sequence =
+        federation_outbox::next_sequence(tx, federation_outbox::Kind::Chat, destination).await?;
+    sqlx::query(
+        "UPDATE federation_outbox
+         SET sequence = $2, payload = jsonb_set(payload, '{request}', $3),
+             state = 'pending', error_class = NULL, last_error = NULL,
+             answer = NULL, attempts = 0, next_attempt_at = now(), updated_at = now()
+         WHERE id = $1",
+    )
+    .bind(id)
+    .bind(sequence)
+    .bind(request)
+    .execute(&mut **tx)
+    .await?;
+    Ok(())
 }
 
 async fn attempt_outbox(state: &AppState, id: Uuid) -> AppResult<FederatedSendOutcome> {
@@ -1634,6 +1673,26 @@ async fn attempt_outbox(state: &AppState, id: Uuid) -> AppResult<FederatedSendOu
                 deduplicated: delivered.deduplicated,
             }),
         };
+    }
+
+    // A server on another plain chat wire version refuses ours (version 2
+    // changed what a device mismatch does): wait for it as for a server
+    // without the feature, and tell the client so.
+    if status == StatusCode::BAD_REQUEST
+        && serde_json::from_slice::<Value>(&response_body)
+            .ok()
+            .and_then(|body| body.get("error").and_then(Value::as_str).map(str::to_owned))
+            .as_deref()
+            == Some(UNSUPPORTED_VERSION)
+    {
+        federation_outbox::park_for_upgrade(
+            &state.pool,
+            row.id,
+            Some(row.sequence),
+            "the destination runs another chat federation version",
+        )
+        .await?;
+        return Ok(FederatedSendOutcome::PeerUnsupported);
     }
 
     if status == StatusCode::CONFLICT {
@@ -1754,7 +1813,12 @@ pub(crate) async fn flush_due(state: &AppState) -> AppResult<usize> {
              ) heads
              WHERE next_attempt_at <= now()
              ORDER BY destination
-             LIMIT 100",
+             LIMIT $1",
+    )
+    .bind(
+        crate::site_settings::FEDERATION_HEADS_PER_TICK
+            .load(&state.pool)
+            .await?,
     )
     .fetch_all(&state.pool)
     .await?;
@@ -2951,7 +3015,7 @@ fn validate_transaction(
     local_server: &str,
 ) -> AppResult<()> {
     if transaction.fed_version != CHAT_FEDERATION_PAYLOAD_VERSION {
-        return Err(AppError::bad_request("unsupported chat federation version"));
+        return Err(AppError::bad_request(UNSUPPORTED_VERSION));
     }
     if transaction.origin != authenticated.origin()
         || transaction.destination != authenticated.destination()

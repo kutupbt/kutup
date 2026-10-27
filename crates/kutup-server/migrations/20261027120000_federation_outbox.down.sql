@@ -70,8 +70,12 @@ CREATE TABLE chat_sealed_federation_inbound (
     PRIMARY KEY (origin, sequence)
 );
 
--- A rejected plain chat row was a pending device mismatch before; one with
--- a later answer than that has no older form and is dropped.
+-- A rejected device-mismatch plain row was a pending `mismatch` before, and a
+-- row still closing its sequence goes back to one too. Caveat: the
+-- receiving side keeps its marks, which version 2 advanced past mismatches
+-- it recorded, so after going back an origin's resend under such a sequence
+-- is answered as already delivered and lost. Going back is for a database
+-- that hasn't federated under version 2.
 INSERT INTO chat_federation_outbox
     (id, destination, sequence, sender_user_id, sender_device_id, send_id, request, state,
      response, attempts, next_attempt_at, last_error, created_at, updated_at,
@@ -80,11 +84,15 @@ SELECT id, destination, sequence, sender_user_id, split_part(idempotency_key, ':
        substr(idempotency_key, length(split_part(idempotency_key, ':', 1))
                                + length(split_part(idempotency_key, ':', 2)) + 3),
        payload->'request',
-       CASE state WHEN 'rejected' THEN 'mismatch' ELSE state END,
+       CASE WHEN state = 'rejected' OR error_class = 'closing_sequence' THEN 'mismatch' ELSE state END,
        answer, attempts, next_attempt_at, last_error, created_at, updated_at, recipient_account_id
 FROM federation_outbox
 WHERE kind = 'chat' AND sender_user_id IS NOT NULL
   AND (state <> 'rejected' OR error_class = 'device_mismatch');
+-- (A row closing its sequence has no answer yet; as a `mismatch` it needs
+-- one, so it keeps an empty mismatch.)
+UPDATE chat_federation_outbox SET response = '{"code": "deviceListMismatch"}'
+ WHERE state = 'mismatch' AND response IS NULL;
 INSERT INTO chat_federation_sequences
     SELECT destination, next_sequence FROM federation_sequences WHERE kind = 'chat';
 INSERT INTO chat_federation_inbound_state (origin, last_sequence, updated_at)
@@ -98,7 +106,7 @@ INSERT INTO chat_sealed_federation_outbox
      attempts, next_attempt_at, last_error_class, created_at, updated_at, recipient_account_id,
      answer)
 SELECT id, destination, sequence, sender_user_id, (payload->>'senderDeviceId')::integer,
-       split_part(idempotency_key, ':', 3)::uuid, payload->'transaction', state, attempts,
+       substring(idempotency_key from '[^:]+$')::uuid, payload->'transaction', state, attempts,
        next_attempt_at, error_class, created_at, updated_at, recipient_account_id, answer
 FROM federation_outbox WHERE kind = 'sealed';
 INSERT INTO chat_sealed_federation_sequences
