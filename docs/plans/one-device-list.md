@@ -438,71 +438,87 @@ What the note leaves open, as built:
     can't fill the account with registrations that never list themselves.
     `devicesPerAccount` is a per-account setting.
 
-### Slice 3 (recipients verify senders): proposed, awaiting approval
+### Slice 3 (recipients verify senders)
+
+Approved by the main session on 2026-10-27, with decisions (a) to (c) below.
 
 Every client that applies a collab frame checks its sender against the
 sender account's manifest: the web editors (notes, maps lists, Office,
-whiteboards) and the CLI's sync. Today they take whatever the home relays.
-The home's checks stay, but a home can no longer have its clients apply a
-frame the sender's devices didn't sign.
+whiteboards) and the CLI's sync. Until now they took whatever the home
+relayed. The home's checks stay, but a home can no longer have its clients
+apply a frame the sender's devices didn't sign.
 
-1. **One check, in Rust.** A `SenderCheck` in `kutup-chat-proto`, shared
-   by the crypto WASM and the CLI. For a frame, a delivered sender account
-   and the manifests the client has of that account, it answers one of:
+1. **One check, in Rust.** `SenderManifests` in `kutup-chat-proto`, shared
+   by the crypto WASM and the CLI. It holds what a client knows of one
+   sender account and, for a frame, answers one of:
    - take it;
-   - fetch the head or a history entry first;
+   - fetch the head, or the manifest at a sequence, first;
    - refuse it.
    The clients only fetch, store and apply.
-2. **What a client keeps per sender account** (other accounts too, not only
-   its own): a pin (account, incarnation, sequence, hash, the
-   `OwnManifestPinV1` shape) and the head manifest.
-   - Heads come from `GET /api/chat/accounts/{id}/manifest?server=`. The
-     client's own server fetches another server's account over federation.
+2. **Rollback pins** (`AccountManifestPinV1`: account, incarnation,
+   sequence, hash). One per account a client has met, its own included,
+   with one rule for all:
    - A newer head is taken only when the history from the pin to it
-     verifies link by link (`manifest-history`, as the home does), never
-     an older one.
-   - Kept in memory per page. When the origin keeps its sign-in, also
-     sealed with the session keys (as `persistDevice` does), never plain
-     localStorage: the pins list who one edits with. The CLI keeps them in
-     its profile store.
+     verifies link by link (`manifest-history`), never an older one.
+   - A fresh browser or profile with no pin trusts the first head that
+     verifies under the account's authority (trust on first use), then
+     holds it to that chain.
+   - Web: in memory per page. When the origin keeps the sign-in, also
+     sealed in localStorage (local-state purpose `ManifestPins`, under a key
+     derived from the master key, profile = the client and account), never
+     plain. This replaces slice 2's plain own-account pin.
+   - CLI: in its profile store.
 3. **Live frames** (after `replayed`): the head must list the frame's
    device with the key that signed it. A frame naming a later sequence than
-   the head makes the client fetch the head and check again. So a removed
-   device's frames stop at the recipients as soon as they hold the head
-   without it.
+   the head makes the client fetch the head and check once more. So a
+   removed device's frames stop at the recipients as soon as they hold the
+   head without it.
 4. **Logged frames** (the replay on join, the CLI's log reads): device ids
    are reused, and a removed device's past edits are part of the document.
    So a logged frame is checked against the manifest its
-   `manifestSequence` names, from `manifest-history`: one fetch per sender
-   and sequence, kept. That manifest must verify, under the pinned account
-   and incarnation, and list the device with the signing key.
-   - Limit: someone holding a removed device's key, with a home that takes
-     it, could add a frame that claims an old sequence. Recipients would
-     take it as history. An honest home refuses it (slice 2).
-   - Closing this fully needs a new document key after a removal, so old
-     keys can't make current frames. I propose that as its own later item
-     (roadmap), not in slice 3.
-5. **An account reset** (a new incarnation of a sender already pinned):
-   Chat quarantines it, and shares are bound to the incarnation they were
-   made to. I propose that editors refuse that sender's frames and show
-   one line in the editor ("Edits from <name> can't be verified: their
-   account was reset"; en and tr). The share has to be made again to the
-   new incarnation.
+   `manifestSequence` names, from `manifest-history`, fetched once per
+   sender and sequence. That manifest must verify, be no later than the
+   pin, name the pinned account and incarnation, and list the device with
+   the signing key.
+5. **A reset account.** The account's identity pin (the synced list Drive
+   and Mail use, docs/plans/drive-identity-pins.md) names another authority
+   than the sender's head: `changed`. Then the sender's frames are refused,
+   and the editor shows "Edits from <name> can't be verified: their
+   account was reset" (en and tr) until the share is made again to the new
+   incarnation. This matches Chat's quarantine and the share's incarnation
+   binding. An account the list doesn't know is trusted on first use, as in
+   item 2.
 6. **Refused frames** are dropped, never applied. The editor shows that
-   once per session and sender (the same line, worded for "couldn't be
-   verified"). The CLI prints a warning and exits non-zero from `sync`.
-7. **Tests.**
-   - Rust: the check's rules: listed or not, key mismatch, a later
-     sequence, a reused id with an earlier holder's history, a reset
-     incarnation.
-   - vitest: the session's `onFrame` with a fake home relaying a frame of a
-     device the head doesn't list, or with another key: dropped, not
-     applied.
-   - Live (two servers): a removed remote device's frames are refused at
-     the recipient even when injected into the log by SQL, standing in for
-     a home that takes them.
-   - Browser: spec 04 and the collab suites stay green.
+   once per session and sender ("Some edits from <name> couldn't be
+   verified"). The CLI prints a warning and `sync` exits non-zero.
 
-Decisions wanted: (a) item 4's limit, with document-key rotation on removal
-as a later item; (b) item 5, refusing a reset sender until re-shared; (c)
-item 2, pins sealed with the session keys.
+**What slice 3 covers and what it doesn't.**
+- Covered: a home (or anyone between) can't have a client apply a frame
+  that the sender account's devices didn't sign. It can't replay a removed
+  device's key into live editing once the recipient holds the head without
+  it, can't roll a sender's manifest back, and can't pass off a reset
+  account as the old one.
+- Not covered: someone who holds a removed device's key, together with a
+  home that takes its frames, can add a frame that claims an earlier
+  `manifestSequence`. Recipients take it as history (item 4). An honest
+  home refuses it (slice 2), so this needs both a stolen key and a
+  dishonest home.
+- Closing that is the roadmap item **"rotate document keys when a device is
+  removed"**, after Signal's practice of new sender keys after a removal.
+  When a device leaves an account that edits a file, the file's next
+  document key excludes it, and frames under an older document key count
+  only up to the rotation's log position.
+  - Every frame already signs its `doc_key_id` and key generation (V3).
+  - The log keeps each frame's document key.
+  - Nothing in slice 3 ties verification to a single key.
+  So the rotation needs no format change and no wipe.
+
+Tests:
+- Rust: the check's rules: listed or not, key mismatch, a later sequence, a
+  reused id with an earlier holder's history, a rolled-back or forked head,
+  a reset incarnation.
+- vitest: the session's `onFrame` with a fake home relaying a frame of a
+  device the head doesn't list, or under another key: dropped, not applied.
+- Live (two servers): a removed remote device's frame injected into the log
+  by SQL, standing in for a home that takes it: refused at the recipient.
+- Browser: spec 04 and the collab suites stay green.

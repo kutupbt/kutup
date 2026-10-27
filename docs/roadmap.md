@@ -241,6 +241,18 @@ log for remote lookups. Needs no format change: it logs the already-signed
 account ids, key bindings and `AccountRenameV1` chains
 (docs/plans/account-ids.md).
 
+### Rotate document keys when a device is removed (after W5)
+
+Signal's practice: new sender keys after a member or device leaves. When a
+device leaves an account that edits a file, the file's next document key
+excludes it, and frames under an older document key count only up to the
+rotation's log position. This closes the one case W5 slice 3 leaves open:
+someone who holds a removed device's key, together with a dishonest home,
+adding frames that claim an earlier manifest sequence
+(docs/plans/one-device-list.md §8, slice 3). It needs no format change:
+every V3 frame already signs its document key id and key generation, and
+the log keeps each frame's document key.
+
 ### Security log: sign-ins and 2FA events (Proton parity)
 
 `account_security_events` (`GET /api/user/security-events`) records what
