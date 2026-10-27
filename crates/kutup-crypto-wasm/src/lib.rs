@@ -1191,6 +1191,52 @@ pub fn list_device_in_manifest(
     signed(next, head.as_ref(), &keys)
 }
 
+/// Checks `head`, the account's head as its server gave it (null: it has
+/// none), against `pin`, the newest manifest of its own account this client
+/// saw (null: none), for the account `account` names and the incarnation
+/// the master key derives; returns the pin to keep (null while there is
+/// none). Throws on a head that doesn't verify, names another account or
+/// incarnation, or is older than the pin, and on no head once there is a
+/// pin ([`kutup_chat_proto::OwnManifestPinV1::check`]).
+#[wasm_bindgen(js_name = checkOwnManifestHead)]
+pub fn check_own_manifest_head(
+    pin: JsValue,
+    head: JsValue,
+    master_key_base64: &str,
+    account: &str,
+) -> Result<JsValue, JsValue> {
+    let keys = account_keys(master_key_base64)?;
+    let account: kutup_crypto::account_ref::AccountRef = account
+        .parse()
+        .map_err(|_| js_error("an account reference is malformed"))?;
+    let pin: Option<kutup_chat_proto::OwnManifestPinV1> = if pin.is_null() || pin.is_undefined() {
+        None
+    } else {
+        // A pin this client can't read is no pin it trusts: none.
+        serde_wasm_bindgen::from_value(pin).ok()
+    };
+    let head: Option<kutup_chat_proto::AccountManifestV3> = if head.is_null() || head.is_undefined() {
+        None
+    } else {
+        Some(
+            serde_wasm_bindgen::from_value(head)
+                .map_err(|error| js_error(&format!("account manifest: {error}")))?,
+        )
+    };
+    let next = kutup_chat_proto::OwnManifestPinV1::check(
+        pin.as_ref(),
+        head.as_ref(),
+        &account,
+        &keys.incarnation_id(),
+    )
+    .map_err(|error| js_error(&error))?;
+    match next {
+        Some(next) => serde_wasm_bindgen::to_value(&next)
+            .map_err(|error| js_error(&format!("encode manifest pin: {error}"))),
+        None => Ok(JsValue::NULL),
+    }
+}
+
 /// The account's next manifest without the devices `device_ids` names (a
 /// removal, or this device signing out), signed as
 /// [`list_device_in_manifest`]. It must keep at least one device.

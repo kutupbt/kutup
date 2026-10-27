@@ -1759,12 +1759,20 @@ async fn bridge_connection(
                     crate::sessions::live(&state.pool, device.session_id, user_uuid).await,
                     Err(ref error) if error.status == axum::http::StatusCode::UNAUTHORIZED
                 );
-                if session_ended || target_for(&state, user_uuid, &route).await.is_err() {
+                if session_ended
+                    || target_for(&state, user_uuid, &route).await.is_err()
+                    || crate::account_devices::still_counts(&state, &device).await == Some(false)
+                {
                     break;
                 }
             }
             msg = stream.next() => match msg {
                 Some(Ok(Message::Binary(data))) => {
+                    // Shut (the device removed) while this frame was on its
+                    // way: never relayed.
+                    if peer.is_shut() {
+                        break;
+                    }
                     let Ok(f) = Frame::unpack(&data) else { continue };
                     // The relay's own checks: this device, its signature, this file.
                     if f.device_id != device.device_id

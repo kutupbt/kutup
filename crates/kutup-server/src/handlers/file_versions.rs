@@ -637,24 +637,8 @@ pub(crate) async fn store_version(
     // session started from and replay every edit since. The log is trimmed
     // when a new session starts (`collab::claim_base`).
     if seq_at_snapshot > 0 && kind == "yjs" {
-        sqlx::query(
-            "DELETE FROM file_update_log l USING files f
-             WHERE l.file_id = $1 AND f.id = $1 AND f.current_doc_key_id = $3 AND l.seq <= $2",
-        )
-        .bind(fid)
-        .bind(seq_at_snapshot)
-        .bind(doc_key_id)
-        .execute(&mut *tx)
-        .await?;
-        sqlx::query(
-            "UPDATE files SET collab_log_floor = GREATEST(collab_log_floor, $2)
-             WHERE id = $1 AND current_doc_key_id = $3",
-        )
-        .bind(fid)
-        .bind(seq_at_snapshot)
-        .bind(doc_key_id)
-        .execute(&mut *tx)
-        .await?;
+        crate::handlers::collab::trim_log_through(&mut tx, fid, seq_at_snapshot, doc_key_id)
+            .await?;
     }
 
     // Stored with the transaction open: if the store fails nothing is

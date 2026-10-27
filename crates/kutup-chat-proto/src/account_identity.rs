@@ -719,6 +719,74 @@ impl AccountManifestV3 {
     }
 }
 
+/// The newest manifest of its own account a client has seen: its rollback
+/// pin (docs/plans/one-device-list.md §8, slice 2). A client keeps one per
+/// account and signs a successor only of a head [`Self::check`] accepted, so
+/// a server can't have it sign a stale head (bringing back a removed device,
+/// or dropping the Chat identity) or start a new chain over an existing one.
+/// The pin names its incarnation: a reset account's new keys start a chain
+/// of their own, and the old pin no longer applies.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct OwnManifestPinV1 {
+    pub account: AccountRef,
+    pub incarnation_id: String,
+    pub sequence: u64,
+    /// The manifest's [`AccountManifestV3::manifest_hash`].
+    pub hash: String,
+}
+
+impl OwnManifestPinV1 {
+    /// The pin `manifest` sets.
+    pub fn of(manifest: &AccountManifestV3) -> Result<Self, String> {
+        Ok(Self {
+            account: manifest.account.clone(),
+            incarnation_id: manifest.incarnation_id.clone(),
+            sequence: manifest.sequence,
+            hash: manifest.manifest_hash()?,
+        })
+    }
+
+    /// Checks `head`, the account's head as its server gave it (`None`: it
+    /// has none), against `pin` for the account and incarnation the client
+    /// holds the keys of, and gives the pin to keep. The head must verify
+    /// and name that account and incarnation, and be no older than the pin:
+    /// the same sequence with the same hash, or a later one (which verifies
+    /// under the account's own authority, so the server can't have made it).
+    /// With a pin, no head at all is refused. A pin of another account or
+    /// incarnation is ignored.
+    pub fn check(
+        pin: Option<&Self>,
+        head: Option<&AccountManifestV3>,
+        account: &AccountRef,
+        incarnation_id: &str,
+    ) -> Result<Option<Self>, String> {
+        let pin = pin.filter(|pin| &pin.account == account && pin.incarnation_id == incarnation_id);
+        let Some(head) = head else {
+            if pin.is_some() {
+                return Err(
+                    "the server has no manifest for an account this client saw one of".into(),
+                );
+            }
+            return Ok(None);
+        };
+        head.verify()?;
+        if &head.account != account || head.incarnation_id != incarnation_id {
+            return Err("the head names another account or incarnation".into());
+        }
+        let seen = Self::of(head)?;
+        if let Some(pin) = pin {
+            if seen.sequence < pin.sequence {
+                return Err("the head is older than one this client saw".into());
+            }
+            if seen.sequence == pin.sequence && seen.hash != pin.hash {
+                return Err("the head differs from the one this client saw at its sequence".into());
+            }
+        }
+        Ok(Some(seen))
+    }
+}
+
 /// Successful publication of one signed V3 manifest.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]

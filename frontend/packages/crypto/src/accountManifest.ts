@@ -51,6 +51,32 @@ export async function listDeviceInManifest(
   return (await getCryptoWasm()).listDeviceInManifest(head, entry, issuedAt, masterKeyBase64, account) as AccountManifest
 }
 
+/**
+ * The newest manifest of its own account a client saw (`OwnManifestPinV1`):
+ * a server can't have it sign an older head, or start a new chain over one.
+ */
+export interface OwnManifestPin {
+  account: string
+  incarnationId: string
+  sequence: number
+  hash: string
+}
+
+/**
+ * Checks `head` as the server gave it (null: none) against `pin` (null:
+ * none seen) for `account` and the incarnation `masterKeyBase64` derives;
+ * the pin to keep. Throws on a head that doesn't verify or is older than the
+ * pin, and on no head once there is a pin.
+ */
+export async function checkOwnManifestHead(
+  pin: OwnManifestPin | null,
+  head: AccountManifest | null,
+  masterKeyBase64: string,
+  account: string,
+): Promise<OwnManifestPin | null> {
+  return (await getCryptoWasm()).checkOwnManifestHead(pin, head, masterKeyBase64, account) as OwnManifestPin | null
+}
+
 /** The next manifest after `head` without `deviceIds`. Throws when it would list no device. */
 export async function removeDevicesFromManifest(
   head: AccountManifest,

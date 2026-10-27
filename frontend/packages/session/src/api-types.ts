@@ -294,6 +294,8 @@ export interface AdminSettings {
   devicesPerAccount: number
   /** How long a new device's row waits to be listed (site_settings::DEVICE_LISTING_GRACE_SECONDS). */
   deviceListingGraceSeconds: number
+  /** How long a cached manifest of another server's account is trusted (site_settings::REMOTE_MANIFEST_MAX_AGE_SECONDS). */
+  remoteManifestMaxAgeSeconds: number
   /** Linking Chat devices (site_settings::CHAT_IDENTITY_SETTINGS). */
   chatLinkTokenSeconds: number
   /** How many two-factor recovery codes are made at once. */

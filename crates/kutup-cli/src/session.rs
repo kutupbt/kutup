@@ -26,6 +26,10 @@ const SESSION: TableDefinition<&str, &[u8]> = TableDefinition::new("session");
 const SYNC_STATE: TableDefinition<&str, &[u8]> = TableDefinition::new("sync_state");
 /// The CLI's collaboration device (encrypted), key `device`.
 const COLLAB_DEVICE: TableDefinition<&str, &[u8]> = TableDefinition::new("collab_device");
+/// The newest manifest of its own account this profile saw (plain JSON of a
+/// `kutup_chat_proto::OwnManifestPinV1`, key `pin`): not secret, and kept
+/// across sign-ins, so a server can't roll the account back under it.
+const MANIFEST_PIN: TableDefinition<&str, &[u8]> = TableDefinition::new("manifest_pin");
 /// Interrupted-upload resume records, keyed `"{collection_id}\n{canonical_path}"`.
 const RESUME: TableDefinition<&str, &[u8]> = TableDefinition::new("resume");
 
@@ -110,6 +114,7 @@ impl Store {
             wtx.open_table(SESSION)?;
             wtx.open_table(SYNC_STATE)?;
             wtx.open_table(RESUME)?;
+            wtx.open_table(MANIFEST_PIN)?;
             wtx.commit()?;
         }
         let mut store = Store {
@@ -256,6 +261,28 @@ impl Store {
                     t.remove("device")?;
                 }
             }
+        }
+        wtx.commit()?;
+        Ok(())
+    }
+
+    /// The pin [`Self::put_manifest_pin`] kept, if any.
+    pub fn manifest_pin(&self) -> Result<Option<kutup_chat_proto::OwnManifestPinV1>> {
+        let rtx = self.db.begin_read()?;
+        let t = rtx.open_table(MANIFEST_PIN)?;
+        let Some(v) = t.get("pin")? else {
+            return Ok(None);
+        };
+        Ok(Some(
+            serde_json::from_slice(v.value()).context("the kept manifest pin is malformed")?,
+        ))
+    }
+
+    pub fn put_manifest_pin(&self, pin: &kutup_chat_proto::OwnManifestPinV1) -> Result<()> {
+        let wtx = self.db.begin_write()?;
+        {
+            let mut t = wtx.open_table(MANIFEST_PIN)?;
+            t.insert("pin", serde_json::to_vec(pin)?.as_slice())?;
         }
         wtx.commit()?;
         Ok(())

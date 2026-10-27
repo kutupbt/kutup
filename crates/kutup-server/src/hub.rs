@@ -8,7 +8,7 @@
 //! revoked device (or a backpressure timeout) can tear the connection down.
 
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::sync::Mutex;
 use std::time::Duration;
@@ -46,9 +46,27 @@ pub struct Peer {
     tx: mpsc::Sender<WsOut>,
     /// Notified to force the read loop to exit (revocation / forced close).
     pub close: Arc<Notify>,
+    /// Set by [`Self::shut`] and never cleared: the read loop checks it
+    /// before each frame, so a frame read after a removal is never applied,
+    /// whatever the loop was doing when the close was signalled.
+    closed: AtomicBool,
 }
 
 impl Peer {
+    /// Closes the connection for good: no further frame of it is applied,
+    /// the read loop wakes (a `notify_one` permit waits for a loop busy with
+    /// a frame), and the writer sends a Close.
+    pub fn shut(&self) {
+        self.closed.store(true, Ordering::Release);
+        self.close.notify_one();
+        let _ = self.tx.try_send(WsOut::Close);
+    }
+
+    /// Whether [`Self::shut`] was called.
+    pub fn is_shut(&self) -> bool {
+        self.closed.load(Ordering::Acquire)
+    }
+
     /// Enqueues `msg`, waiting up to `BACKPRESSURE_TIMEOUT` for buffer room before giving up
     /// and closing the connection — mirrors `wsConn.WriteFrame`/`WriteText`. Returns `false`
     /// if the peer was closed / timed out.
@@ -59,8 +77,7 @@ impl Peer {
             Ok(Err(_)) => false,
             // Stuck writer: signal a close, like Go's `c.Close()` on timeout.
             Err(_) => {
-                self.close.notify_waiters();
-                let _ = self.tx.try_send(WsOut::Close);
+                self.shut();
                 false
             }
         }
@@ -245,8 +262,7 @@ impl Hub {
                 .unwrap_or_default()
         };
         for v in victims {
-            v.close.notify_waiters();
-            let _ = v.tx.try_send(WsOut::Close);
+            v.shut();
         }
     }
 
@@ -264,8 +280,7 @@ impl Hub {
                 .collect()
         };
         for v in victims {
-            v.close.notify_waiters();
-            let _ = v.tx.try_send(WsOut::Close);
+            v.shut();
         }
     }
 }
@@ -291,6 +306,7 @@ pub fn new_peer(
         color,
         tx,
         close: Arc::new(Notify::new()),
+        closed: AtomicBool::new(false),
     });
     (peer, rx)
 }

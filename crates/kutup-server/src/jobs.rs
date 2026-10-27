@@ -386,17 +386,19 @@ pub async fn version_retention_tick(pool: &PgPool, storage: &StorageService) -> 
     // Office edits in the collaboration log only serve peers resuming after a
     // dropped connection (joiners open the saved file and skip the backlog),
     // and no save truncates them: keep a day's worth.
-    match sqlx::query(
-        "DELETE FROM file_update_log WHERE kind IN ($1, $2, $3) AND created_at < now() - interval '1 day'",
-    )
+    match sqlx::query_scalar::<_, i64>(&crate::handlers::collab::trimming(
+        "DELETE FROM file_update_log l
+          WHERE l.kind IN ($1, $2, $3) AND l.created_at < now() - interval '1 day'
+         RETURNING l.file_id, l.sender_domain, l.sender_account, l.sender_device, l.sender_seq",
+    ))
     .bind(i16::from(kutup_crypto::envelope::kind::OO_OP))
     .bind(i16::from(kutup_crypto::envelope::kind::OO_LOCK))
     .bind(i16::from(kutup_crypto::envelope::kind::OO_CHECKPOINT_META))
-    .execute(pool)
+    .fetch_one(pool)
     .await
     {
-        Ok(done) if done.rows_affected() > 0 => {
-            tracing::info!("collab log: dropped {} old office frames", done.rows_affected());
+        Ok(done) if done > 0 => {
+            tracing::info!("collab log: dropped {done} old office frames");
         }
         Ok(_) => {}
         Err(e) => tracing::warn!("collab log: prune failed: {e}"),

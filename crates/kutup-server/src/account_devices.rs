@@ -239,6 +239,7 @@ pub async fn register_device(
         .bind(user_id)
         .execute(&mut *tx)
         .await?;
+    let stale = prune_stale_unlisted(&mut tx, user_id).await?;
     let rows: Vec<(i32, Vec<u8>, Vec<u8>, bool)> = sqlx::query_as(
         "SELECT device_id, credential_salt, credential_hash, expired_at IS NOT NULL
            FROM devices WHERE user_id = $1 ORDER BY device_id",
@@ -258,6 +259,9 @@ pub async fn register_device(
             )
     }) {
         tx.commit().await?;
+        for id in stale {
+            close_device(&state, user_id, id);
+        }
         return Ok(Json(answer(*device_id)));
     }
     let live = rows.iter().filter(|(.., expired)| !expired).count() as i64;
@@ -287,6 +291,9 @@ pub async fn register_device(
     .execute(&mut *tx)
     .await?;
     tx.commit().await?;
+    for id in stale {
+        close_device(&state, user_id, id);
+    }
     Ok(Json(answer(device_id)))
 }
 
@@ -478,6 +485,51 @@ pub(crate) async fn frame_device(
         session_id,
         manifest_sequence: sequence as u64,
     })
+}
+
+/// Drops the account's rows its head manifest doesn't list that are older
+/// than the listing grace (`deviceListingGraceSeconds`): registrations that
+/// never listed themselves. A registration runs this first, under the
+/// account's row lock, so such rows hold neither the cap nor an id (a stolen
+/// access token can't fill the account with them); only listed rows and
+/// rows still within their grace count. Their ids, for [`close_device`]
+/// once the transaction commits.
+pub(crate) async fn prune_stale_unlisted(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    user_id: Uuid,
+) -> AppResult<Vec<i32>> {
+    let grace = crate::site_settings::DEVICE_LISTING_GRACE_SECONDS
+        .load(&mut **tx)
+        .await?;
+    Ok(sqlx::query_scalar(
+        "DELETE FROM devices d
+          WHERE d.user_id = $1
+            AND d.created_at < now() - ($2 * interval '1 second')
+            AND NOT EXISTS (
+                SELECT 1 FROM chat_device_manifests m,
+                       jsonb_array_elements(m.manifest -> 'devices') listed
+                 WHERE m.user_id = d.user_id
+                   AND (listed ->> 'deviceId')::int = d.device_id)
+         RETURNING d.device_id",
+    )
+    .bind(user_id)
+    .bind(grace)
+    .fetch_all(&mut **tx)
+    .await?)
+}
+
+/// Whether `device`'s frames still count as they did when its socket
+/// connected, for the socket's periodic recheck: `Some(false)` on a definite
+/// no (its row, its listing or its sign-in gone, or its id now another
+/// key's), `None` when that can't be told now (tried again at the next tick).
+/// A removal also closes the socket at once ([`close_device`]); this catches
+/// a close that socket missed.
+pub(crate) async fn still_counts(state: &AppState, device: &FrameDevice) -> Option<bool> {
+    match frame_device(state, device.user_id, device.device_id as i32).await {
+        Ok(now) => Some(now.frame_key == device.frame_key && now.session_id == device.session_id),
+        Err(error) if error.status == axum::http::StatusCode::FORBIDDEN => Some(false),
+        Err(_) => None,
+    }
 }
 
 /// The frame device `X-Kutup-Device` names, beside the JWT of `headers`

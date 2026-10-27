@@ -458,7 +458,12 @@ cap and cannot be raised. Every device of an account, of every app (each
 browser app is one: Chat, Office, Drive; and the CLI), counts toward
 `devicesPerAccount` (default 32, from 1 through 127). A newly registered
 device has `deviceListingGraceSeconds` (default 600) to add itself to its
-account's device list before another device's update drops its row:
+account's device list before another device's update drops its row. A
+row that never got listed stops counting toward the caps once that time is
+up. A file's home trusts its copy of an editor's device list from another
+server for `remoteManifestMaxAgeSeconds` (default 300) before reading it
+again: that is how long a device removed on its own server can still send
+edits to files here:
 
 ```sh
 CHAT_MEDIA_MAX_PLAINTEXT_BYTES=2147483648

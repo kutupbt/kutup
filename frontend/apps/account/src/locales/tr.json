@@ -885,6 +885,8 @@
         "devicesPerAccountHint": "Bir hesabın toplamda sahip olabileceği uygulama kurulumu sayısı (Sohbet, Ofis, Drive, komut satırı), 1 ile 127 arası.",
         "deviceListingGraceSeconds": "Yeni cihaz listeleme süresi (saniye)",
         "deviceListingGraceSecondsHint": "Yeni kaydedilen bir cihazın, başka bir cihazın güncellemesi onu düşürmeden önce kendini hesabının cihaz listesine eklemek için ne kadar süresi olduğu.",
+        "remoteManifestMaxAgeSeconds": "Diğer sunucuların cihaz listeleri, saklama süresi (saniye)",
+        "remoteManifestMaxAgeSecondsHint": "Bu sunucunun, başka bir sunucudaki bir düzenleyicinin cihaz listesinin kopyasına yeniden okumadan önce ne kadar güvendiği: orada kaldırılan bir cihazın buradaki dosyalara düzenleme göndermeyi ne kadar sürdürebileceği.",
         "chatMaxActiveDevices": "Hesap başına Sohbet cihazı",
         "chatMaxActiveDevicesHint": "Bir hesabın sahip olabileceği Sohbet kurulumu sayısı, 1 ile 10 arası.",
         "chatProvisioningTicketSeconds": "Bağlama bağlantısı bileti (saniye)",

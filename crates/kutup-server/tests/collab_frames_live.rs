@@ -273,3 +273,81 @@ fn http_and_socket_refuse_the_same_frames() {
     );
     purge_accounts(&c, &base, &[&owner, &viewer]);
 }
+
+/// A device removed while its socket is busy sending frames: the server
+/// cuts the socket, and nothing it sends after the removal is kept.
+#[test]
+fn a_removed_devices_busy_socket_is_cut() {
+    let Ok(base) = std::env::var("KUTUP_LIVE_SERVER") else {
+        eprintln!("KUTUP_LIVE_SERVER unset; skipping");
+        return;
+    };
+    let c = crate::common::client();
+    let owner = register(&c, &base);
+    let folder = create_folder(&c, &base, &owner);
+    let file = seal_file(&folder, &uuid(), b"# notes\n");
+    assert!(upload(&c, &base, &owner.token, &folder, &file)
+        .status()
+        .is_success());
+    let mine = register_device(&c, &base, &owner);
+    let second = register_device(&c, &base, &owner);
+    let ticket: Value = bearer(c.post(format!("{base}/api/device-ticket")), &owner.token)
+        .header(kutup_chat_proto::DEVICE_HEADER, mine.header())
+        .send()
+        .unwrap()
+        .json()
+        .unwrap();
+    let url = format!(
+        "{}/api/files/{}/collab/ws?ticket={}",
+        base.replacen("http", "ws", 1),
+        file.id,
+        ticket["ticket"].as_str().unwrap()
+    );
+    // Frames ten a second until the server closes the socket (or 20 s).
+    let frames: Vec<Vec<u8>> = (1..=200)
+        .map(|sequence| frame(&file, &mine, &mine, sequence, |_| {}))
+        .collect();
+    let sender = std::thread::spawn(move || {
+        tokio::runtime::Runtime::new()
+            .unwrap()
+            .block_on(async move {
+                use tokio_tungstenite::tungstenite::Message;
+                let (mut socket, _) = tokio_tungstenite::connect_async(url).await.unwrap();
+                let mut tick = tokio::time::interval(std::time::Duration::from_millis(100));
+                let mut frames = frames.into_iter();
+                loop {
+                    tokio::select! {
+                        _ = tick.tick() => {
+                            let Some(frame) = frames.next() else { return false };
+                            if socket.send(Message::Binary(frame)).await.is_err() {
+                                return true;
+                            }
+                        }
+                        message = socket.next() => match message {
+                            None | Some(Err(_)) | Some(Ok(Message::Close(_))) => return true,
+                            Some(Ok(_)) => {}
+                        },
+                    }
+                }
+            })
+    });
+    let kept = || {
+        log(&c, &base, &owner, &file.id, &second)["frames"]
+            .as_array()
+            .unwrap()
+            .len()
+    };
+    std::thread::sleep(std::time::Duration::from_millis(1500));
+    assert!(kept() > 0, "frames flow before the removal");
+    let manifest = next_manifest(&c, &base, &owner, |devices| {
+        devices.retain(|device| device.device_id != mine.id)
+    });
+    let r = publish_manifest(&c, &base, &owner, &second.header(), &manifest);
+    assert_eq!(r.status(), StatusCode::OK, "remove the device");
+    std::thread::sleep(std::time::Duration::from_secs(1));
+    let settled = kept();
+    std::thread::sleep(std::time::Duration::from_secs(2));
+    assert_eq!(kept(), settled, "nothing is kept after the removal");
+    assert!(sender.join().unwrap(), "the server closed the socket");
+    purge_accounts(&c, &base, &[&owner]);
+}

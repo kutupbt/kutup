@@ -8,12 +8,12 @@
 
 import axios from 'axios'
 import { accountKeyOf, accountOfKey } from '@kutup/crypto/accountRef'
-import type { AccountManifest, DeviceKind } from '@kutup/crypto/accountManifest'
-import { toBase64Url } from '@kutup/crypto/base64'
+import { checkOwnManifestHead, type AccountManifest, type DeviceKind, type OwnManifestPin } from '@kutup/crypto/accountManifest'
+import { toBase64, toBase64Url } from '@kutup/crypto/base64'
 import { loadServerSettings } from './apps'
 import api from './client'
 import type { DeviceKeys } from './keys'
-import type { Session } from './store'
+import { getSession, type Session } from './store'
 
 /** The device credential beside the sign-in: `<deviceId>.<credential, base64url>`. */
 export const DEVICE_HEADER = 'X-Kutup-Device'
@@ -125,14 +125,60 @@ export async function fetchManifest(account: string): Promise<AccountManifest | 
   }
 }
 
+/** Where this origin keeps its pin on `account`'s manifest. */
+function pinKey(account: string): string {
+  return `kutup_own_manifest_pin_v1:${account}`
+}
+
+/** This origin's pin on `account`'s manifest; none when storage is unavailable. */
+function readPin(account: string): OwnManifestPin | null {
+  try {
+    const raw = localStorage.getItem(pinKey(account))
+    return raw ? (JSON.parse(raw) as OwnManifestPin) : null
+  } catch {
+    return null
+  }
+}
+
+function writePin(account: string, pin: OwnManifestPin): void {
+  try {
+    localStorage.setItem(pinKey(account), JSON.stringify(pin))
+  } catch {
+    // Storage unavailable: the next read starts without a pin.
+  }
+}
+
+/**
+ * Checks `head`, the signed-in account's own head as its server gave it
+ * (null: none), against this origin's pin and keeps the pin it gives: the
+ * head must verify under the account's authority and be no older than the
+ * newest one seen here, and none at all is refused once one was seen. So a
+ * server can't have this origin sign a successor of a stale head (bringing
+ * a removed device back, or dropping the Chat identity), or a new chain.
+ */
+async function keepPin(account: string, head: AccountManifest | null): Promise<void> {
+  const session = getSession()
+  if (!session) throw new Error('not signed in')
+  const pin = await checkOwnManifestHead(readPin(account), head, toBase64(session.masterKey), account)
+  if (pin) writePin(account, pin)
+}
+
+/** The signed-in account's own head, checked against this origin's pin ({@link keepPin}). */
+export async function fetchOwnManifest(account: string): Promise<AccountManifest | null> {
+  const head = await fetchManifest(account)
+  await keepPin(account, head)
+  return head
+}
+
 /**
  * Publishes the account's next manifest, `next(head)` (null: nothing to
  * publish), as the device `header` names; with no header, as the sign-in
  * alone, which the server takes only for a manifest that removes devices
  * and changes nothing else (the Account app). Another device publishing first
  * moves the head (`409`): the head is read again and `next` asked once more.
- * Resolves to the manifest now at the head, or null when nothing was
- * published.
+ * `next` only sees a head this origin's pin accepts ({@link keepPin}), and
+ * the published manifest moves the pin. Resolves to the manifest now at the
+ * head, or null when nothing was published.
  */
 export async function publishNextManifest(
   account: string,
@@ -140,7 +186,7 @@ export async function publishNextManifest(
   next: (head: AccountManifest | null) => Promise<AccountManifest | null>,
 ): Promise<AccountManifest | null> {
   for (let attempt = 0; ; attempt++) {
-    const manifest = await next(await fetchManifest(account))
+    const manifest = await next(await fetchOwnManifest(account))
     if (!manifest) return null
     try {
       const { data } = await api.post<{ manifest?: AccountManifest }>(
@@ -148,7 +194,9 @@ export async function publishNextManifest(
         manifest,
         header === null ? undefined : asDevice(header),
       )
-      return data.manifest ?? manifest
+      const published = data.manifest ?? manifest
+      await keepPin(account, published)
+      return published
     } catch (error) {
       const moved = axios.isAxiosError(error) && error.response?.status === 409 && !isDeviceLimit(error) && !isDevicesMismatch(error)
       if (!moved || attempt > 0) throw error

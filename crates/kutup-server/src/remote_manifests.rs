@@ -6,9 +6,13 @@
 //!
 //! A cached head only moves forward along its chain: a newer head is taken
 //! once the history from the cached one to it verifies, link by link, under
-//! the same authority. It is fetched the first time, and again when a frame
+//! the same authority. It is fetched the first time, again when a frame
 //! names a newer manifest sequence or a device the cached head doesn't list
-//! with that key, at most once a [`REFETCH_AFTER`] per account.
+//! with that key, and again before a frame is taken on a head older than
+//! `remoteManifestMaxAgeSeconds` (so a device removed there stops counting
+//! here within that time), at most once a [`REFETCH_AFTER`] per account. A
+//! failed first read is recorded too (`remote_manifest_failures`), so the
+//! frames that follow wait it out instead of each starting a read.
 
 use kutup_chat_proto::AccountManifestV3;
 use kutup_crypto::account_ref::AccountRef;
@@ -80,6 +84,35 @@ async fn store(pool: &PgPool, manifest: &AccountManifestV3) -> AppResult<()> {
 }
 
 /// Marks the account's head as just looked at (a fetch found nothing newer).
+/// Whether a first read of the account's manifest failed within
+/// [`REFETCH_AFTER`].
+async fn failed_lately(pool: &PgPool, domain: &str, account_id: Uuid) -> AppResult<bool> {
+    let failed_at: Option<OffsetDateTime> = sqlx::query_scalar(
+        "SELECT failed_at FROM remote_manifest_failures WHERE domain = $1 AND account_id = $2",
+    )
+    .bind(domain)
+    .bind(account_id)
+    .fetch_optional(pool)
+    .await?;
+    Ok(failed_at.is_some_and(|at| OffsetDateTime::now_utc() - at < REFETCH_AFTER))
+}
+
+/// Records a failed first read (`failed`), or clears it.
+async fn mark_failed(pool: &PgPool, domain: &str, account_id: Uuid, failed: bool) -> AppResult<()> {
+    let query = if failed {
+        "INSERT INTO remote_manifest_failures (domain, account_id) VALUES ($1, $2)
+         ON CONFLICT (domain, account_id) DO UPDATE SET failed_at = now()"
+    } else {
+        "DELETE FROM remote_manifest_failures WHERE domain = $1 AND account_id = $2"
+    };
+    sqlx::query(query)
+        .bind(domain)
+        .bind(account_id)
+        .execute(pool)
+        .await?;
+    Ok(())
+}
+
 async fn touch(pool: &PgPool, domain: &str, account_id: Uuid) -> AppResult<()> {
     sqlx::query(
         "UPDATE remote_account_manifests SET fetched_at = now()
@@ -181,37 +214,65 @@ pub(crate) async fn frame_is_senders(
                 .and_then(|key| kutup_chat_proto::decode_frame_key(key).ok())
                 .is_some_and(|key| envelope::verify(raw, sender, &key).is_ok())
     };
+    let max_age = time::Duration::seconds(
+        crate::site_settings::REMOTE_MANIFEST_MAX_AGE_SECONDS
+            .load(&state.pool)
+            .await?,
+    );
     if let Some(known) = &known {
-        if holds(&known.manifest) {
+        let age = OffsetDateTime::now_utc() - known.fetched_at;
+        if holds(&known.manifest) && age < max_age {
             return Ok(true);
         }
-        if OffsetDateTime::now_utc() - known.fetched_at < REFETCH_AFTER {
-            return Ok(false);
+        if age < REFETCH_AFTER {
+            return Ok(holds(&known.manifest));
         }
+    } else if failed_lately(&state.pool, domain, account_id).await? {
+        return Ok(false);
     }
     let head = match fetch_following(state, sender, known.as_ref().map(|k| &k.manifest)).await {
         Ok(Some(head)) => {
             store(&state.pool, &head).await?;
+            if known.is_none() {
+                mark_failed(&state.pool, domain, account_id, false).await?;
+            }
             head
         }
         Ok(None) => {
-            touch(&state.pool, domain, account_id).await?;
+            // The server says the account has no manifest: none of its
+            // frames count.
+            match &known {
+                Some(_) => touch(&state.pool, domain, account_id).await?,
+                None => mark_failed(&state.pool, domain, account_id, true).await?,
+            }
             return Ok(false);
         }
         Err(error) => {
             tracing::warn!(error = %error.message, domain, "collab: a sender's manifest could not be read");
-            if known.is_some() {
-                touch(&state.pool, domain, account_id).await?;
-            }
-            return Ok(false);
+            return match &known {
+                // Unreachable for now: the cached head still decides, read
+                // again after the refetch interval.
+                Some(known) => {
+                    touch(&state.pool, domain, account_id).await?;
+                    Ok(holds(&known.manifest))
+                }
+                None => {
+                    mark_failed(&state.pool, domain, account_id, true).await?;
+                    Ok(false)
+                }
+            };
         }
     };
     Ok(holds(&head))
 }
 
 /// Drops the cached manifests no shared file needs any more (no live share
-/// names an account of that server): run with the uploads sweep.
+/// names an account of that server), and recorded failures an hour old
+/// (long past the refetch interval): run with the uploads sweep.
 pub(crate) async fn sweep(pool: &PgPool) -> AppResult<u64> {
+    sqlx::query("DELETE FROM remote_manifest_failures WHERE failed_at < now() - interval '1 hour'")
+        .execute(pool)
+        .await?;
     let gone = sqlx::query(
         "DELETE FROM remote_account_manifests r
           WHERE NOT EXISTS (SELECT 1 FROM federated_outgoing_shares s

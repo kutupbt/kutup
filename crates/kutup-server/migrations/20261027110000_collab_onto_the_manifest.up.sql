@@ -22,6 +22,19 @@ ALTER TABLE file_update_log
 -- Each sender's frame counter once per file: an exact replay is refused.
 CREATE UNIQUE INDEX file_update_log_sender_seq_unique
     ON file_update_log (file_id, sender_domain, sender_account, sender_device, sender_seq);
+-- What a trim of the log took with it: per sender and counter prefix (the
+-- high 32 bits, drawn per editing session), the highest counter trimmed. A
+-- frame at or below it under that prefix is still a replay once its row is
+-- gone.
+CREATE TABLE file_sender_floors (
+    file_id uuid NOT NULL REFERENCES files(id) ON DELETE CASCADE,
+    sender_domain text NOT NULL,
+    sender_account uuid NOT NULL,
+    sender_device integer NOT NULL,
+    seq_prefix bigint NOT NULL,
+    sender_seq bigint NOT NULL,
+    PRIMARY KEY (file_id, sender_domain, sender_account, sender_device, seq_prefix)
+);
 
 DROP TABLE collab_revocation_marks;
 DROP TABLE remote_revocation_marks;
@@ -49,5 +62,14 @@ CREATE TABLE remote_account_manifests (
     manifest_hash text NOT NULL CHECK (manifest_hash ~ '^[0-9a-f]{64}$'),
     manifest jsonb NOT NULL,
     fetched_at timestamptz NOT NULL DEFAULT now(),
+    PRIMARY KEY (domain, account_id)
+);
+
+-- A failed read of such a manifest with none cached: further frames of that
+-- account wait out the refetch interval instead of each starting a read.
+CREATE TABLE remote_manifest_failures (
+    domain text NOT NULL,
+    account_id uuid NOT NULL,
+    failed_at timestamptz NOT NULL DEFAULT now(),
     PRIMARY KEY (domain, account_id)
 );

@@ -814,8 +814,24 @@ pub const DEVICE_LISTING_GRACE_SECONDS: NumericSetting = NumericSetting {
     unit: SettingUnit::Seconds,
     per_account: false,
 };
-pub const DEVICE_SETTINGS: [NumericSetting; 2] =
-    [DEVICES_PER_ACCOUNT, DEVICE_LISTING_GRACE_SECONDS];
+/// How long a file's home trusts its cached manifest of an editor's account
+/// on another server before it reads the account's head again, in seconds:
+/// how long a device removed there may still have its frames taken here
+/// (docs/plans/one-device-list.md §8).
+pub const REMOTE_MANIFEST_MAX_AGE_SECONDS: NumericSetting = NumericSetting {
+    key: "remote_manifest_max_age_seconds",
+    field: "remoteManifestMaxAgeSeconds",
+    default: 300,
+    min: 60,
+    max: 86_400,
+    unit: SettingUnit::Seconds,
+    per_account: false,
+};
+pub const DEVICE_SETTINGS: [NumericSetting; 3] = [
+    DEVICES_PER_ACCOUNT,
+    DEVICE_LISTING_GRACE_SECONDS,
+    REMOTE_MANIFEST_MAX_AGE_SECONDS,
+];
 
 pub const CHAT_IDENTITY_SETTINGS: [NumericSetting; 7] = [
     CHAT_LINK_TOKEN_SECONDS,

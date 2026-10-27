@@ -885,6 +885,8 @@
         "devicesPerAccountHint": "How many app installations one account may have in all (Chat, Office, Drive, the CLI), 1 to 127.",
         "deviceListingGraceSeconds": "New device listing window (seconds)",
         "deviceListingGraceSecondsHint": "How long a newly registered device has to add itself to its account's device list before another device's update drops it.",
+        "remoteManifestMaxAgeSeconds": "Other servers' device lists, kept for (seconds)",
+        "remoteManifestMaxAgeSecondsHint": "How long this server trusts its copy of an editor's device list from another server before reading it again: how long a device removed there can still send edits to files here.",
         "chatMaxActiveDevices": "Chat devices per account",
         "chatMaxActiveDevicesHint": "How many Chat installations one account may have, 1 to 10.",
         "chatProvisioningTicketSeconds": "Linking socket ticket (seconds)",

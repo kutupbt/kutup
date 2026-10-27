@@ -426,6 +426,9 @@ pub async fn register_device(
         .bind(user_id)
         .execute(&mut *tx)
         .await?;
+    // Registrations that never listed themselves hold neither the caps nor
+    // an id.
+    let stale = crate::account_devices::prune_stale_unlisted(&mut tx, user_id).await?;
 
     // A retry after an answer was lost: the credential, drawn once by the
     // device, names the row it made. Every row of the account, of every
@@ -444,6 +447,9 @@ pub async fn register_device(
             && kutup_crypto::primitives::ct_eq(&identity::credential_hash(salt, &credential), hash)
     }) {
         tx.commit().await?;
+        for id in stale {
+            crate::account_devices::close_device(&state, user_id, id);
+        }
         return Ok(Json(RegisterChatDeviceResponse {
             device_id: *device_id as u32,
         })
@@ -612,6 +618,9 @@ pub async fn register_device(
     insert_ec_pool(&mut tx, user_id, device_id, &req.one_time_pre_keys).await?;
     insert_kem_pool(&mut tx, user_id, device_id, &req.one_time_kyber_pre_keys).await?;
     tx.commit().await?;
+    for id in stale {
+        crate::account_devices::close_device(&state, user_id, id);
+    }
 
     if let Some((dropped, shared)) = dropped {
         if let Err(error) =

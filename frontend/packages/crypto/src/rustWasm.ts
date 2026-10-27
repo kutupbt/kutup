@@ -517,6 +517,7 @@ export interface CryptoWasmModule {
   ): unknown
   /** The account's next manifest without `deviceIds`, signed as above; it keeps at least one device. */
   removeDevicesFromManifest(head: unknown, deviceIds: Uint32Array, issuedAt: string, masterKeyBase64: string): unknown
+  checkOwnManifestHead(pin: unknown, head: unknown, masterKeyBase64: string, account: string): unknown
   collabFrameKeyGeneration(frameBase64: string): number
   sealPreviousFileKey(
     previousKeyBase64: string,

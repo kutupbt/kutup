@@ -7,7 +7,8 @@ use anyhow::{anyhow, Context, Result};
 use base64::engine::general_purpose::{STANDARD, URL_SAFE_NO_PAD};
 use base64::Engine as _;
 use kutup_chat_proto::{
-    AccountManifestDeviceV3, AccountManifestV3, DeviceKind, RegisterDeviceRequestV1,
+    AccountManifestDeviceV3, AccountManifestV3, DeviceKind, OwnManifestPinV1,
+    RegisterDeviceRequestV1,
 };
 use kutup_crypto::account_ref::AccountRef;
 use kutup_crypto::identity::AccountIdentityKeysV1;
@@ -77,6 +78,22 @@ pub struct Signer<'a> {
     identity: AccountIdentityKeysV1,
 }
 
+/// `head`, the account's head as its server gave it, checked against `pin`
+/// for the account `identity` holds the keys of
+/// ([`OwnManifestPinV1::check`]): the pin to keep. A head that doesn't
+/// verify (one the server changed: another Drive key, identity or device),
+/// one under another authority, an older one, or none once one was seen, is
+/// refused, and nothing is listed from it or signed after it.
+fn checked_head(
+    pin: Option<&OwnManifestPinV1>,
+    head: Option<&AccountManifestV3>,
+    account: &AccountRef,
+    identity: &AccountIdentityKeysV1,
+) -> Result<Option<OwnManifestPinV1>> {
+    OwnManifestPinV1::check(pin, head, account, &identity.incarnation_id())
+        .map_err(|error| anyhow!("the account's manifest can't be trusted: {error}"))
+}
+
 impl<'a> Signer<'a> {
     pub fn new(client: &'a Client, store: &'a Store, sess: &'a Session) -> Result<Self> {
         if sess.master_key.is_empty() {
@@ -99,6 +116,26 @@ impl<'a> Signer<'a> {
             server,
             identity: AccountIdentityKeysV1::derive(&master_key)?,
         })
+    }
+
+    /// The account's head as its server gives it, checked: it verifies under
+    /// this account's authority and incarnation and is no older than the
+    /// newest one this profile saw (none at all is refused once one was
+    /// seen). Only such a head is listed from or signed a successor of.
+    fn head(&self) -> Result<Option<AccountManifestV3>> {
+        let head = self.client.account_manifest(&self.account)?;
+        self.pin(head.as_ref())?;
+        Ok(head)
+    }
+
+    /// Checks `head` against this profile's pin and keeps the pin it gives.
+    fn pin(&self, head: Option<&AccountManifestV3>) -> Result<()> {
+        let pin = self.store.manifest_pin()?;
+        let next = checked_head(pin.as_ref(), head, &self.account, &self.identity)?;
+        if let Some(next) = next.filter(|next| Some(next) != pin.as_ref()) {
+            self.store.put_manifest_pin(&next)?;
+        }
+        Ok(())
     }
 
     /// This profile's device: the one kept, while the account's manifest
@@ -129,7 +166,7 @@ impl<'a> Signer<'a> {
             .decode(&kept.credential)?
             .try_into()
             .map_err(|_| anyhow!("stored device credential has the wrong length"))?;
-        let Some(head) = self.client.account_manifest(&self.account)? else {
+        let Some(head) = self.head()? else {
             return Ok(None);
         };
         let key = STANDARD.encode(frame_key(&seed));
@@ -204,7 +241,7 @@ impl<'a> Signer<'a> {
     ) -> Result<u64> {
         let mut attempt = 0;
         loop {
-            let head = self.client.account_manifest(&self.account)?;
+            let head = self.head()?;
             let mut next = match &head {
                 Some(head) => {
                     let mut devices = head.devices.clone();
@@ -225,8 +262,13 @@ impl<'a> Signer<'a> {
             };
             next.sign(self.identity.authority_signing_key())
                 .map_err(|error| anyhow!(error))?;
+            next.verify_successor(head.as_ref())
+                .map_err(|error| anyhow!(error))?;
             match self.client.publish_manifest(&next, by) {
-                Ok(()) => return Ok(next.sequence),
+                Ok(()) => {
+                    self.pin(Some(&next))?;
+                    return Ok(next.sequence);
+                }
                 Err(error)
                     if attempt == 0
                         && error
@@ -239,5 +281,74 @@ impl<'a> Signer<'a> {
                 Err(error) => return Err(error),
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn editor(device_id: u32, byte: u8) -> AccountManifestDeviceV3 {
+        AccountManifestDeviceV3 {
+            device_id,
+            kind: DeviceKind::Cli,
+            chat: None,
+            frame_key: Some(STANDARD.encode(frame_key(&[byte; 32]))),
+            session: "ab".repeat(32),
+        }
+    }
+
+    /// The heads a server could serve the CLI to have it sign their
+    /// successor: each is refused before anything is signed.
+    #[test]
+    fn a_forged_or_stale_head_is_refused() {
+        let keys = AccountIdentityKeysV1::derive(&[3; 32]).unwrap();
+        let account =
+            AccountRef::new("example.test", "0b6b5e0c-4c1e-4b8e-9c2d-6a1f3e5d7c9b").unwrap();
+        let mut first = AccountManifestV3::first(
+            account.clone(),
+            &keys,
+            vec![editor(1, 1)],
+            "2026-10-27T00:00:00Z",
+        );
+        first.sign(keys.authority_signing_key()).unwrap();
+        let pin = checked_head(None, Some(&first), &account, &keys)
+            .unwrap()
+            .unwrap();
+        let mut second = first
+            .successor(vec![editor(1, 1), editor(2, 2)], "2026-10-27T00:01:00Z")
+            .unwrap();
+        second.sign(keys.authority_signing_key()).unwrap();
+        let pin = checked_head(Some(&pin), Some(&second), &account, &keys)
+            .unwrap()
+            .unwrap();
+
+        // The server's own Drive key and an extra entry under the account's
+        // authority, which it can't sign: before this check the CLI signed
+        // a successor of it.
+        let mut forged = second.clone();
+        forged.drive.share_signing_public_key = STANDARD.encode(frame_key(&[9; 32]));
+        forged.devices.push(editor(3, 3));
+        assert!(checked_head(Some(&pin), Some(&forged), &account, &keys).is_err());
+        assert!(checked_head(None, Some(&forged), &account, &keys).is_err());
+        // The same, signed under an authority of the server's.
+        let other = AccountIdentityKeysV1::derive(&[4; 32]).unwrap();
+        let mut theirs = AccountManifestV3::first(
+            account.clone(),
+            &other,
+            vec![editor(1, 1), editor(3, 3)],
+            "2026-10-27T00:02:00Z",
+        );
+        theirs.sign(other.authority_signing_key()).unwrap();
+        assert!(checked_head(None, Some(&theirs), &account, &keys).is_err());
+        // The head before the last one seen (device 2 gone again), and no
+        // head at all (a new chain).
+        assert!(checked_head(Some(&pin), Some(&first), &account, &keys).is_err());
+        assert!(checked_head(Some(&pin), None, &account, &keys).is_err());
+        // The current head passes.
+        assert_eq!(
+            checked_head(Some(&pin), Some(&second), &account, &keys).unwrap(),
+            Some(pin)
+        );
     }
 }

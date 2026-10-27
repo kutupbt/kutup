@@ -18,7 +18,7 @@ import { randomBytes } from '@kutup/crypto/random'
 import { generateSigningKey } from '@kutup/crypto/signing'
 import {
   deviceHeader,
-  fetchManifest,
+  fetchOwnManifest,
   isDeviceCredentialRefused,
   isDeviceLimit,
   isDevicesMismatch,
@@ -93,7 +93,7 @@ async function standing(device: DeviceKeys, account: string): Promise<Standing |
   let rows: Awaited<ReturnType<typeof listAccountDevices>>
   let head: AccountManifest | null
   try {
-    ;[rows, head] = await Promise.all([listAccountDevices(), fetchManifest(account)])
+    ;[rows, head] = await Promise.all([listAccountDevices(), fetchOwnManifest(account)])
   } catch {
     return null
   }

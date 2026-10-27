@@ -19,7 +19,7 @@ vi.mock('./devices', async (importOriginal) => {
     ...actual,
     ownAccount: async () => ACCOUNT,
     listAccountDevices: () => listAccountDevices(),
-    fetchManifest: (account: string) => fetchManifest(account),
+    fetchOwnManifest: (account: string) => fetchManifest(account),
     registerDevice: (request: unknown) => registerDevice(request),
     publishNextManifest: async (_account: string, header: string, next: (h: unknown) => Promise<unknown>) => {
       if (publishError) throw publishError

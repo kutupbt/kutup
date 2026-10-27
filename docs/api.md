@@ -5614,7 +5614,10 @@ manifest lists it with its frame key; otherwise the collaboration routes
 answer `403 deviceNotAuthorized` (the client registers again, it does not
 sign out). A device is removed by publishing the account's next manifest
 without it: its row and open sockets go. A row not yet listed is dropped
-by a publication after `deviceListingGraceSeconds` (default 600).
+by a publication, or by the account's next device registration, after
+`deviceListingGraceSeconds` (default 600). Until then it holds its id, and
+it counts toward `devicesPerAccount` (a per-account setting) and the Chat
+cap.
 
 ### POST /api/devices
 Register an editor or CLI device of the caller's account (a Chat device

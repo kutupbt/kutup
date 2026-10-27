@@ -366,12 +366,20 @@ async fn handle_connection(state: AppState, socket: WebSocket, conn: Conn) {
                     Err(ref error) if error.status == axum::http::StatusCode::UNAUTHORIZED
                 );
                 let access = file_access(&state.pool, user_uuid, file_uuid).await;
-                if session_ended || matches!(access, Ok(None | Some(Access::None))) {
+                if session_ended
+                    || matches!(access, Ok(None | Some(Access::None)))
+                    || crate::account_devices::still_counts(&state, device).await == Some(false)
+                {
                     break;
                 }
             }
             msg = stream.next() => match msg {
                 Some(Ok(Message::Binary(b))) => {
+                    // Shut (the device removed) while this frame was on its
+                    // way: never applied, whatever the select picked.
+                    if peer.is_shut() {
+                        break;
+                    }
                     if !handle_frame(&state, &peer, &conn, &mut budget, &b).await {
                         break;
                     }
@@ -529,14 +537,51 @@ async fn trim_log(
         .bind(log_lock_key(file_uuid))
         .execute(&mut *tx)
         .await?;
-    sqlx::query(
-        "DELETE FROM file_update_log l USING files f
-         WHERE l.file_id = $1 AND f.id = $1 AND f.current_doc_key_id = $3 AND l.seq <= $2",
+    trim_log_through(&mut tx, file_uuid, seq, doc_key_id).await?;
+    tx.commit().await
+}
+
+/// Deletes the rows of `delete` (a `DELETE FROM file_update_log l ...
+/// RETURNING l.*` statement) and raises each sender's floor
+/// (`file_sender_floors`) to the highest counter it took, in one statement,
+/// so a trimmed frame stays a replay. Every deletion of log rows goes
+/// through here. The number of rows deleted.
+pub(crate) fn trimming(delete: &str) -> String {
+    format!(
+        "WITH gone AS ({delete}),
+              floors AS (
+                INSERT INTO file_sender_floors
+                       (file_id, sender_domain, sender_account, sender_device, seq_prefix, sender_seq)
+                SELECT file_id, sender_domain, sender_account, sender_device, sender_seq >> 32,
+                       MAX(sender_seq)
+                  FROM gone
+                 GROUP BY file_id, sender_domain, sender_account, sender_device, sender_seq >> 32
+                ON CONFLICT (file_id, sender_domain, sender_account, sender_device, seq_prefix)
+                DO UPDATE SET sender_seq =
+                    GREATEST(file_sender_floors.sender_seq, EXCLUDED.sender_seq)
+                RETURNING 1)
+         SELECT COUNT(*) FROM gone"
     )
+}
+
+/// Trims the file's log through `seq` under the document key `doc_key_id`
+/// (the frames a saved version holds), and moves its position floor there.
+/// The caller holds the log's lock.
+pub(crate) async fn trim_log_through(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    file_uuid: Uuid,
+    seq: i64,
+    doc_key_id: i64,
+) -> sqlx::Result<()> {
+    sqlx::query_scalar::<_, i64>(&trimming(
+        "DELETE FROM file_update_log l USING files f
+          WHERE l.file_id = $1 AND f.id = $1 AND f.current_doc_key_id = $3 AND l.seq <= $2
+         RETURNING l.file_id, l.sender_domain, l.sender_account, l.sender_device, l.sender_seq",
+    ))
     .bind(file_uuid)
     .bind(seq)
     .bind(doc_key_id)
-    .execute(&mut *tx)
+    .fetch_one(&mut **tx)
     .await?;
     sqlx::query(
         "UPDATE files SET collab_log_floor = GREATEST(collab_log_floor, $2)
@@ -545,9 +590,9 @@ async fn trim_log(
     .bind(file_uuid)
     .bind(seq)
     .bind(doc_key_id)
-    .execute(&mut *tx)
+    .execute(&mut **tx)
     .await?;
-    tx.commit().await
+    Ok(())
 }
 
 /// Validates + persists a binary collab frame, then broadcasts it — mirrors `handleFrame`.
@@ -788,9 +833,13 @@ async fn sender_seq_high(
     device: &FrameDevice,
 ) -> Result<i64, sqlx::Error> {
     sqlx::query_scalar(
-        "SELECT COALESCE(MAX(sender_seq), 0) FROM file_update_log
-          WHERE file_id = $1 AND sender_domain = '' AND sender_account = $2
-            AND sender_device = $3",
+        "SELECT GREATEST(
+             COALESCE((SELECT MAX(sender_seq) FROM file_update_log
+                        WHERE file_id = $1 AND sender_domain = '' AND sender_account = $2
+                          AND sender_device = $3), 0),
+             COALESCE((SELECT MAX(sender_seq) FROM file_sender_floors
+                        WHERE file_id = $1 AND sender_domain = '' AND sender_account = $2
+                          AND sender_device = $3), 0))",
     )
     .bind(file_uuid)
     .bind(device.user_id)
@@ -858,6 +907,27 @@ pub(crate) async fn persist_frame(
         .bind(log_lock_key(file_uuid))
         .execute(&mut *tx)
         .await?;
+
+    // A counter a trim took (see `trimming`) is a replay as much as one
+    // still in the log.
+    let trimmed: bool = sqlx::query_scalar(
+        "SELECT EXISTS (SELECT 1 FROM file_sender_floors
+                         WHERE file_id = $1 AND sender_domain = $2 AND sender_account = $3
+                           AND sender_device = $4 AND seq_prefix = $5 >> 32
+                           AND sender_seq >= $5)",
+    )
+    .bind(file_uuid)
+    .bind(sender.domain.unwrap_or(""))
+    .bind(sender.account)
+    .bind(sender.device as i32)
+    .bind(f.sequence as i64)
+    .fetch_one(&mut *tx)
+    .await?;
+    if trimmed {
+        return Err(sqlx::Error::Protocol(
+            "a replayed frame counter (below its sender's trimmed floor)".into(),
+        ));
+    }
 
     let seq = sqlx::query_scalar(
         r#"INSERT INTO file_update_log (file_id, seq, sender_account, sender_seq, doc_key_id, kind,
