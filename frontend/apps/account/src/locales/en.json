@@ -898,6 +898,8 @@
       },
       "twoFactor": "Two-factor sign-in",
       "twoFactorHint": "Recovery codes and security keys for accounts with two-factor authentication.",
+      "federation": "Federation",
+      "federationHint": "How deliveries to other Kutup servers are tried again when a server doesn't answer.",
       "twoFactorLimits": {
         "twoFactorRecoveryCodes": "Recovery codes per account",
         "twoFactorRecoveryCodesHint": "How many one-time codes are made when someone turns two-factor authentication on or makes new codes.",
@@ -925,6 +927,18 @@
         "driveStreamResponseMaxBytesHint": "The most one ranged download answer carries, also across servers.",
         "driveStreamBlobFallbackMaxBytes": "Largest file played from memory (bytes)",
         "driveStreamBlobFallbackMaxBytesHint": "Where a browser can't stream, files up to this size load whole into memory to play."
+      },
+      "federationLimits": {
+        "federationRetryBaseSeconds": "First wait (seconds)",
+        "federationRetryBaseSecondsHint": "After a failed delivery; each later wait doubles.",
+        "federationRetryMaxSeconds": "Longest wait (seconds)",
+        "federationRetryMaxSecondsHint": "The most a delivery waits between two tries.",
+        "federationPeerUpgradeSeconds": "Wait for an older server (seconds)",
+        "federationPeerUpgradeSecondsHint": "How long a delivery waits for a server that can't take it yet before trying again.",
+        "federationWorkerSeconds": "Check for due deliveries every (seconds)",
+        "federationWorkerSecondsHint": "How often waiting deliveries to other servers are looked at.",
+        "federationHeadsPerTick": "Servers tried per check",
+        "federationHeadsPerTickHint": "The most destination servers each check tries, one delivery each."
       }
     },
     "federation": {

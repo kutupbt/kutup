@@ -1002,6 +1002,13 @@ again under a new sequence with the same `sendId`; the recipient's mailbox
 deduplicates deliveries by `sendId`. So a send whose client never corrects it
 can't hold the origin's later sends to that server.
 
+Plain (unsealed) sends, the fallback when a sealed one isn't possible, keep
+the same rule (wire version 2): a device mismatch is the destination's final
+answer for that sequence, and the corrected resend goes under a new one.
+Both kinds share one outbox and one record of answers per origin, each with
+its own sequence per destination
+([`docs/plans/federation-outbox.md`](plans/federation-outbox.md)).
+
 The origin moves an outbox row only on an answer to the sequence the row
 still has, so a late answer to an old sequence changes nothing. A peer that
 answers a single send but not a batch (a server from before batches) gets

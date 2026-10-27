@@ -841,6 +841,138 @@ fn account_of(c: &Client, base: &str, token: &str) -> AccountRef {
     .unwrap()
 }
 
+/// A plain mismatch from before wire version 2, as the outbox migration
+/// leaves it (docs/plans/federation-outbox.md): under v1 B never recorded
+/// the mismatched sequence N (its mark stayed at N-1), and A's row moved to
+/// `closing_sequence` at N with its stale request. Alice's corrected resend
+/// then closes N first (B records its 409 there), goes under N+1 and is
+/// delivered, and so is the send after it: nothing waits on N. Needs both
+/// servers' databases (`KUTUP_FEDERATION_DB_A`, `KUTUP_FEDERATION_DB_B`).
+fn closing_sequence_from_before_v2(c: &Client, a: &str, alice_token: &str, bob: &AccountRef) {
+    let (Ok(db_a), Ok(db_b)) = (
+        std::env::var("KUTUP_FEDERATION_DB_A"),
+        std::env::var("KUTUP_FEDERATION_DB_B"),
+    ) else {
+        eprintln!("KUTUP_FEDERATION_DB_A / _B unset; skipping the closing-sequence case");
+        return;
+    };
+    let runtime = tokio::runtime::Runtime::new().unwrap();
+    let pool_a = runtime.block_on(sqlx::PgPool::connect(&db_a)).unwrap();
+    let pool_b = runtime.block_on(sqlx::PgPool::connect(&db_b)).unwrap();
+    let alice_id = json_response(
+        c.get(format!("{a}/api/user/me"))
+            .bearer_auth(alice_token)
+            .send()
+            .unwrap(),
+        "Alice's account",
+    )["id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    // B's mark for A's plain stream, and A's next sequence to B: in step.
+    let mark: i64 = runtime
+        .block_on(
+            sqlx::query_scalar(
+                "SELECT last_sequence FROM federation_inbound_state
+                 WHERE kind = 'chat' AND origin = 'a.test'",
+            )
+            .fetch_one(&pool_b),
+        )
+        .unwrap();
+    let next: i64 = runtime
+        .block_on(
+            sqlx::query_scalar(
+                "SELECT next_sequence FROM federation_sequences
+                 WHERE kind = 'chat' AND destination = 'b.test'",
+            )
+            .fetch_one(&pool_a),
+        )
+        .unwrap();
+    assert_eq!(next, mark + 1, "A and B agree before the case");
+    // As the migration leaves a v1 mismatch: A's row closing N with its
+    // stale request (one device of Bob's two), B's mark at N-1.
+    let send_id = "10000000-0000-4000-8000-000000000013";
+    let device = alice_device().id;
+    let stale = json!({
+        "senderDeviceId": device,
+        "sendId": send_id,
+        "envelopes": [envelope(1, BOB_REGISTRATION_ID_1, b"stale-from-v1")],
+    });
+    runtime
+        .block_on(async {
+            let mut tx = pool_a.begin().await?;
+            sqlx::query(
+                "INSERT INTO federation_outbox
+                     (kind, destination, sequence, idempotency_key, sender_user_id,
+                      recipient_account_id, payload, state, error_class)
+                 VALUES ('chat', 'b.test', $1, $2, $3::uuid, $4::uuid,
+                         jsonb_build_object('request', $5::jsonb, 'sender', $3::text),
+                         'pending', 'closing_sequence')",
+            )
+            .bind(next)
+            .bind(format!("{alice_id}:{device}:{send_id}"))
+            .bind(&alice_id)
+            .bind(&bob.account_id)
+            .bind(&stale)
+            .execute(&mut *tx)
+            .await?;
+            sqlx::query(
+                "UPDATE federation_sequences SET next_sequence = $1
+                 WHERE kind = 'chat' AND destination = 'b.test'",
+            )
+            .bind(next + 1)
+            .execute(&mut *tx)
+            .await?;
+            tx.commit().await
+        })
+        .unwrap();
+    // The corrected resend: N closed, then delivered under N+1.
+    let corrected = b"corrected-after-v1-mismatch";
+    json_response(
+        send(
+            c,
+            a,
+            alice_token,
+            bob,
+            send_id,
+            vec![
+                envelope(1, BOB_REGISTRATION_ID_1, corrected),
+                envelope(2, BOB_REGISTRATION_ID_2, corrected),
+            ],
+        ),
+        "the corrected resend of a v1 mismatch",
+    );
+    // And the send after it.
+    let after = b"after-a-closed-v1-sequence";
+    json_response(
+        send(
+            c,
+            a,
+            alice_token,
+            bob,
+            "10000000-0000-4000-8000-000000000014",
+            vec![
+                envelope(1, BOB_REGISTRATION_ID_1, after),
+                envelope(2, BOB_REGISTRATION_ID_2, after),
+            ],
+        ),
+        "a send after a closed v1 sequence",
+    );
+    // B recorded its mismatch at N, and took N+1 and N+2.
+    let answered: Vec<(i64, i16)> = runtime
+        .block_on(
+            sqlx::query_as(
+                "SELECT sequence, status FROM federation_inbound
+                 WHERE kind = 'chat' AND origin = 'a.test' AND sequence >= $1
+                 ORDER BY sequence",
+            )
+            .bind(next)
+            .fetch_all(&pool_b),
+        )
+        .unwrap();
+    assert_eq!(answered, [(next, 409), (next + 1, 200), (next + 2, 200)]);
+}
+
 fn send(
     c: &Client,
     base: &str,
@@ -1329,18 +1461,32 @@ fn drive_round_trip(
         &file_key_envelope,
         &ciphertext,
     );
-    let upload = |body: Vec<u8>| {
-        c.post(format!(
-            "{b}/api/drive/federation/shares/{incoming_id}/files"
-        ))
-        .bearer_auth(bob_token)
-        .header(
-            reqwest::header::CONTENT_TYPE,
-            format!("multipart/form-data; boundary={boundary}"),
-        )
-        .body(body)
-        .send()
-        .unwrap()
+    // Each call names itself, with how long it took, so a hang says which.
+    let upload = |body: Vec<u8>, what: &str| {
+        let started = std::time::Instant::now();
+        let response = c
+            .post(format!(
+                "{b}/api/drive/federation/shares/{incoming_id}/files"
+            ))
+            .bearer_auth(bob_token)
+            .header(
+                reqwest::header::CONTENT_TYPE,
+                format!("multipart/form-data; boundary={boundary}"),
+            )
+            .body(body)
+            .send()
+            .unwrap_or_else(|error| {
+                panic!(
+                    "federated Drive upload ({what}) after {:?}: {error}",
+                    started.elapsed()
+                )
+            });
+        eprintln!(
+            "federated Drive upload ({what}): {} in {:?}",
+            response.status(),
+            started.elapsed()
+        );
+        response
     };
     let relocated = drive_upload_body(
         boundary,
@@ -1349,7 +1495,10 @@ fn drive_round_trip(
         &file_key_envelope,
         &ciphertext,
     );
-    assert_eq!(upload(relocated).status().as_u16(), 400);
+    assert_eq!(
+        upload(relocated, "relocated file id").status().as_u16(),
+        400
+    );
     let blob_relocation_id = uuid::Uuid::new_v4().to_string();
     let blob_relocation_file_key = drive_envelope::seal_b64(
         &file_key,
@@ -1370,9 +1519,18 @@ fn drive_round_trip(
         &blob_relocation_file_key,
         &ciphertext,
     );
-    assert_eq!(upload(relocated_blob).status().as_u16(), 400);
-    let first_upload = json_response(upload(upload_body.clone()), "federated Drive upload");
-    let retried_upload = json_response(upload(upload_body), "idempotent Drive upload retry");
+    assert_eq!(
+        upload(relocated_blob, "relocated blob").status().as_u16(),
+        400
+    );
+    let first_upload = json_response(
+        upload(upload_body.clone(), "first upload"),
+        "federated Drive upload",
+    );
+    let retried_upload = json_response(
+        upload(upload_body, "idempotent retry"),
+        "idempotent Drive upload retry",
+    );
     assert_eq!(first_upload["id"], retried_upload["id"]);
     let file_id = first_upload["id"].as_str().unwrap();
     assert_eq!(file_id, proposed_file_id);
@@ -2637,6 +2795,39 @@ fn setup_phase(c: &Client, a: &str, b: &str) {
     assert_eq!(mismatch.status().as_u16(), 409);
     let mismatch: Value = mismatch.json().unwrap();
     assert_eq!(mismatch["missingDevices"], json!([bob_2_id]));
+
+    // The mismatch is final (docs/plans/federation-outbox.md): it used its
+    // sequence up at B, so a later send to B goes at once, before the first
+    // is corrected, and the same stale content again gets the same answer.
+    let behind = b"behind-an-uncorrected-mismatch";
+    json_response(
+        send(
+            c,
+            a,
+            &alice_token,
+            &remote_address,
+            "10000000-0000-4000-8000-000000000012",
+            vec![
+                envelope(1, BOB_REGISTRATION_ID_1, behind),
+                envelope(2, BOB_REGISTRATION_ID_2, behind),
+            ],
+        ),
+        "a send behind an uncorrected mismatch",
+    );
+    assert_content_once(&mailbox(c, b, &bob_token, 1), behind);
+    assert_content_once(&mailbox(c, b, &bob_token, 2), behind);
+    let again = send(
+        c,
+        a,
+        &alice_token,
+        &remote_address,
+        mismatch_id,
+        vec![envelope(1, BOB_REGISTRATION_ID_1, b"stale-device-set")],
+    );
+    assert_eq!(again.status().as_u16(), 409);
+    assert_eq!(again.json::<Value>().unwrap()["missingDevices"], json!([2]));
+
+    closing_sequence_from_before_v2(c, a, &alice_token, &remote_address);
 
     let refreshed_content = b"refreshed-device-set";
     json_response(

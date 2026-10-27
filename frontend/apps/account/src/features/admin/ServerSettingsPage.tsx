@@ -234,6 +234,13 @@ function ServerSettingsForm({ settings, registry }: { settings: AdminSettings; r
             </CardContent>
           </Card>
         </Section>
+        <Section title={t('admin.settings.federation')} description={t('admin.settings.federationHint')}>
+          <Card>
+            <CardContent className="grid gap-4 p-5 sm:grid-cols-2">
+              {numericFields('federation')}
+            </CardContent>
+          </Card>
+        </Section>
         {update.isError ? <Alert variant="error">{apiErrorMessage(update.error, t('admin.settings.saveFailed'))}</Alert> : null}
         <div className="flex justify-end">
           <Button type="submit" loading={update.isPending} disabled={!isDirty}>{t('common.save')}</Button>

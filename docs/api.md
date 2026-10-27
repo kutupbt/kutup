@@ -5478,7 +5478,7 @@ persisted peer trust/discovery state. Rules remain visible while inactive.
       "lastDiscoveryError": null,
       "diagnostics": {
         "chatPendingTransactions": 0,
-        "chatMismatchTransactions": 0,
+        "chatMismatchesLastDay": 0,
         "driveIncomingShares": 1,
         "driveOutgoingShares": 0
       }
@@ -5490,7 +5490,7 @@ persisted peer trust/discovery state. Rules remain visible while inactive.
     "verifiedPeers": 0,
     "quarantinedPeers": 0,
     "chatPendingTransactions": 0,
-    "chatMismatchTransactions": 0,
+    "chatMismatchesLastDay": 0,
     "oldestChatPendingAt": null,
     "driveIncomingShares": 1,
     "driveOutgoingShares": 0,

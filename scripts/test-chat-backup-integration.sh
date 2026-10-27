@@ -221,10 +221,10 @@ KUTUP_LIVE_DATABASE_URL="postgres://$POSTGRES_USER:$POSTGRES_PASSWORD@127.0.0.1:
   cargo test -p kutup-server jobs::tests::live_fixed_cutoff_mailbox_retention \
   -- --exact --nocapture
 
-# Sealed federation: a backlog for one server does not starve another.
+# Federation queues (docs/plans/federation-outbox.md): a backlog for one
+# server does not starve another, and a rejected row never reorders one.
 KUTUP_LIVE_DATABASE_URL="postgres://$POSTGRES_USER:$POSTGRES_PASSWORD@127.0.0.1:$db_port/$POSTGRES_DB" \
-  cargo test -p kutup-server chat_federation::tests::live_sealed_backlog_does_not_starve_other_destinations \
-  -- --exact --nocapture
+  cargo test -p kutup-server --bin kutup-server chat_federation::tests::live_ -- --nocapture
 # Sealed federation queues: a destination's batches below the signature
 # check (a mismatch holds nothing behind it, a repeat replays its answers, a
 # malformed batch applies nothing) and stale answers at the origin.
