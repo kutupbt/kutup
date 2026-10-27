@@ -41,9 +41,10 @@ vi.mock('./client', () => ({
     },
   },
 }))
-vi.mock('./store', () => ({ getSession: () => ({ masterKey: MASTER_KEY }) }))
+vi.mock('./store', () => ({ getSession: () => ({ userId: '0b6b5e0c-4c1e-4b8e-9c2d-6a1f3e5d7c9b', sessionId: 'session-1', masterKey: MASTER_KEY }) }))
 
 import { publishNextManifest } from './devices'
+import { resetManifestPinsForTesting } from './manifestPins'
 
 async function editor(deviceId: number): Promise<ManifestDevice> {
   const { publicKey } = await generateSigningKey()
@@ -69,6 +70,7 @@ describe('publishNextManifest and the own-manifest pin', () => {
   beforeEach(() => {
     served = null
     stored.clear()
+    resetManifestPinsForTesting()
   })
 
   it('refuses a new chain once a head was seen', async () => {

@@ -7,7 +7,7 @@ use anyhow::{anyhow, Context, Result};
 use base64::engine::general_purpose::{STANDARD, URL_SAFE_NO_PAD};
 use base64::Engine as _;
 use kutup_chat_proto::{
-    AccountManifestDeviceV3, AccountManifestV3, DeviceKind, AccountManifestPinV1,
+    AccountManifestDeviceV3, AccountManifestPinV1, AccountManifestV3, DeviceKind,
     RegisterDeviceRequestV1,
 };
 use kutup_crypto::account_ref::AccountRef;

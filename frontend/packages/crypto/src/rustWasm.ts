@@ -140,6 +140,10 @@ export interface CryptoWasmModule {
   openMailName(masterKeyBase64: string, binding: string, kind: string, id: string, sealedBase64: string): { value: string; revision: number }
   inspectAccountEnvelope(envelopeBase64: string): number
   RevisionGuardKeys: new (masterKeyBase64: string) => import('./revisionGuard').GuardKeys & { free(): void }
+  CollabSender: new (account: string, pin: unknown) => import('./accountManifest').CollabSenderHandle
+  deliveredFrameSender(delivered: Uint8Array): string
+  sealManifestPins(pins: unknown, masterKeyBase64: string, profile: string): string
+  openManifestPins(envelopeBase64: string, masterKeyBase64: string, profile: string): unknown
   AccountHeadKeys: new (masterKeyBase64: string, binding: string, incarnationId: string) => AccountHeadKeysHandle
   OpaqueLogin: { start(password: string): OpaqueLoginHandle }
   OpaqueRegistration: { start(password: string): OpaqueRegistrationHandle }

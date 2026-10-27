@@ -278,6 +278,35 @@ impl Store {
         ))
     }
 
+    /// The newest manifest seen of another account (`sender:<account>`):
+    /// the pin its collab frames' manifests follow.
+    pub fn sender_pin(
+        &self,
+        account: &kutup_crypto::account_ref::AccountRef,
+    ) -> Result<Option<kutup_chat_proto::AccountManifestPinV1>> {
+        let rtx = self.db.begin_read()?;
+        let t = rtx.open_table(MANIFEST_PIN)?;
+        let Some(v) = t.get(format!("sender:{account}").as_str())? else {
+            return Ok(None);
+        };
+        Ok(Some(
+            serde_json::from_slice(v.value()).context("a kept manifest pin is malformed")?,
+        ))
+    }
+
+    pub fn put_sender_pin(&self, pin: &kutup_chat_proto::AccountManifestPinV1) -> Result<()> {
+        let wtx = self.db.begin_write()?;
+        {
+            let mut t = wtx.open_table(MANIFEST_PIN)?;
+            t.insert(
+                format!("sender:{}", pin.account).as_str(),
+                serde_json::to_vec(pin)?.as_slice(),
+            )?;
+        }
+        wtx.commit()?;
+        Ok(())
+    }
+
     /// Forgets the pin (`kutup devices forget-pin`, after a server restore).
     pub fn forget_manifest_pin(&self) -> Result<()> {
         let wtx = self.db.begin_write()?;

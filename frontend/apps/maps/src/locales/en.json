@@ -104,6 +104,8 @@
     "tooMany": "This map has as many places as it can hold.",
     "mapLabel": "Map of {{title}}",
     "quota": "Your storage is full, so changes are no longer saved as versions.",
+    "senderReset": "Changes from {{name}} can't be verified: their account was reset",
+    "senderUnverified": "Some changes from {{name}} couldn't be verified and weren't applied",
     "preRestoreLabel": "Before restoring ({{time}})",
     "restoredLabel": "Restored ({{time}})",
     "share": "Share",

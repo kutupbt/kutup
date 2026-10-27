@@ -104,6 +104,8 @@
     "tooMany": "Bu harita alabileceği kadar yer içeriyor.",
     "mapLabel": "{{title}} haritası",
     "quota": "Depolama alanınız dolu, bu yüzden değişiklikler artık sürüm olarak kaydedilmiyor.",
+    "senderReset": "{{name}} tarafından yapılan değişiklikler doğrulanamıyor: hesabı sıfırlandı",
+    "senderUnverified": "{{name}} tarafından yapılan bazı değişiklikler doğrulanamadı ve uygulanmadı",
     "preRestoreLabel": "Geri yüklemeden önce ({{time}})",
     "restoredLabel": "Geri yüklendi ({{time}})",
     "share": "Paylaş",

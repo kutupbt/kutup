@@ -19,6 +19,7 @@ import api from '@kutup/session/client'
 import { currentDevice, replaceRefusedDevice } from '@kutup/session/currentDevice'
 import { claimSeed, listVersions, localBase, newestYjsVersion } from './api'
 import { encryptCollabFrame, openCollabFrameAtGeneration } from './cryptoFrame'
+import type { SenderCheck } from './senders'
 import { KIND } from './envelope'
 import { buildAwarenessName, randomSenderSeqPrefix, withAlpha } from './identity'
 import { SnapshotTrigger } from './snapshot'
@@ -89,6 +90,13 @@ export interface CollabSessionOptions {
   onReplayed?: (throughSeq: number) => void
   /** Other people (tabs) in the document now. */
   onCollaborators?: (count: number) => void
+  /**
+   * Who may edit: a frame is applied only when its sender account's devices
+   * signed it (docs/plans/one-device-list.md §8, slice 3). The caller makes
+   * it (it tells the editor about refused senders); the session closes it
+   * with itself.
+   */
+  senders: SenderCheck
   /** Stop: resolves to null if aborted before the session was up. */
   signal: AbortSignal
 }
@@ -289,6 +297,7 @@ export async function openCollabSession(options: CollabSessionOptions): Promise<
     awareness.off('update', countCollaborators)
     doc.destroy()
     transport?.close()
+    options.senders.close()
   }
   if (signal.aborted) {
     close()
@@ -350,7 +359,9 @@ export async function openCollabSession(options: CollabSessionOptions): Promise<
       }
       options.onStatus('ready')
     },
-    onFrame: async (bytes) => {
+    onFrame: async (bytes, { live }) => {
+      // Never applied unless its sender's devices signed it.
+      if (!(await options.senders.verify(bytes, live))) return
       try {
         // A frame from before a re-key opens with its generation's key.
         const frame = await openCollabFrameAtGeneration(bytes, keyOf, { fileId, keyGeneration })

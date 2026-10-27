@@ -50,6 +50,9 @@ import { toast } from 'sonner'
 import { useTranslation } from 'react-i18next'
 import { useRequiredSession } from '@kutup/session/store'
 import { deterministicSeed, openCollabSession } from '@kutup/collab/session'
+import { SenderCheck } from '@kutup/collab/senders'
+import { accountAuthorityVerdict } from '@kutup/drive-core/identityPins'
+import { accountNameOfKey } from '@kutup/drive-core/accountName'
 import { TooManyDevicesError } from '@kutup/session/currentDevice'
 import { DeviceLimitNotice } from '../DeviceLimitNotice'
 import { buildAwarenessName, withAlpha } from '@kutup/collab/identity'
@@ -375,6 +378,14 @@ export default function TextCollabEditor({
     const controller = new AbortController()
     let view: EditorView | null = null
     let cleanup: (() => void) | null = null
+    // Edits apply only when their sender's devices signed them; a sender
+    // whose edits are dropped is named once.
+    const senders = new SenderCheck({
+      authority: accountAuthorityVerdict,
+      name: accountNameOfKey,
+      onRefused: ({ name, reason }) =>
+        toast.error(t(reason === 'reset' ? 'editor.senderReset' : 'editor.senderUnverified', { name })),
+    })
 
     void (async () => {
       // Only editors save; each saved version also redraws the thumbnail
@@ -425,6 +436,7 @@ export default function TextCollabEditor({
         },
         onStatus: setStatus,
         onCollaborators: setCollaboratorCount,
+        senders,
         signal: controller.signal,
       }).catch((error: unknown) => {
         if (!(error instanceof TooManyDevicesError)) throw error
@@ -682,6 +694,7 @@ export default function TextCollabEditor({
     return () => {
       controller.abort()
       cleanup?.()
+      senders.close()
     }
     // Not every value read here is a dep: re-running would tear down and
     // recreate the socket for no reason, and on a second mount the

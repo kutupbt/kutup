@@ -55,8 +55,9 @@ export async function listDeviceInManifest(
  * The newest manifest of its own account a client saw (`AccountManifestPinV1`):
  * a server can't have it sign an older head, or start a new chain over one.
  */
-export interface OwnManifestPin {
-  account: string
+export interface AccountManifestPin {
+  /** As Rust serializes an `AccountRef`. */
+  account: import('./accountRef').AccountRef
   incarnationId: string
   sequence: number
   hash: string
@@ -69,12 +70,58 @@ export interface OwnManifestPin {
  * pin, and on no head once there is a pin.
  */
 export async function checkOwnManifestHead(
-  pin: OwnManifestPin | null,
+  pin: AccountManifestPin | null,
   head: AccountManifest | null,
   masterKeyBase64: string,
   account: string,
-): Promise<OwnManifestPin | null> {
-  return (await getCryptoWasm()).checkOwnManifestHead(pin, head, masterKeyBase64, account) as OwnManifestPin | null
+): Promise<AccountManifestPin | null> {
+  return (await getCryptoWasm()).checkOwnManifestHead(pin, head, masterKeyBase64, account) as AccountManifestPin | null
+}
+
+/** What a page does with a collab frame (`SenderVerdict`). */
+export type SenderVerdict =
+  | { kind: 'take' }
+  | { kind: 'needHead' }
+  | { kind: 'needManifest'; sequence: number }
+  | { kind: 'refuse'; reason: string }
+
+/**
+ * One sender account's manifests, held in the crypto WASM
+ * (`SenderManifests`, docs/plans/one-device-list.md §8, slice 3): its head,
+ * the earlier manifests logged frames name, and the pin they follow.
+ */
+export interface CollabSenderHandle {
+  /** Takes the head with the manifests after the pin up to it; throws on one that doesn't follow the pin. */
+  takeHead(head: AccountManifest, history: AccountManifest[] | null, newIncarnation: boolean): void
+  /** Takes an earlier manifest of the account, for logged frames. */
+  takeEntry(manifest: AccountManifest): void
+  /** What to do with a frame as the server delivers it (`live`: during editing; otherwise from the log). */
+  check(delivered: Uint8Array, live: boolean): SenderVerdict
+  /** The pin to keep for the account. */
+  pin(): AccountManifestPin | null
+  /** The head's authority public key (canonical base64), for the identity pins; null before a head. */
+  headAuthority(): string | null
+  free(): void
+}
+
+/** A record of `account` in the crypto WASM, from this page's pin of it. */
+export async function collabSender(account: string, pin: AccountManifestPin | null): Promise<CollabSenderHandle> {
+  return new (await getCryptoWasm()).CollabSender(account, pin)
+}
+
+/** The sender account a delivered frame names. */
+export async function deliveredFrameSender(delivered: Uint8Array): Promise<string> {
+  return (await getCryptoWasm()).deliveredFrameSender(delivered)
+}
+
+/** `pins` sealed under the key `masterKeyBase64` derives, for `profile` (`<client type>:<account>`). */
+export async function sealManifestPins(pins: AccountManifestPin[], masterKeyBase64: string, profile: string): Promise<string> {
+  return (await getCryptoWasm()).sealManifestPins(pins, masterKeyBase64, profile)
+}
+
+/** The pins {@link sealManifestPins} sealed; throws on another key, profile, or a changed envelope. */
+export async function openManifestPins(envelope: string, masterKeyBase64: string, profile: string): Promise<AccountManifestPin[]> {
+  return (await getCryptoWasm()).openManifestPins(envelope, masterKeyBase64, profile) as AccountManifestPin[]
 }
 
 /** The next manifest after `head` without `deviceIds`. Throws when it would list no device. */

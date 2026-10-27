@@ -538,6 +538,24 @@ Tests:
   a reset incarnation.
 - vitest: the session's `onFrame` with a fake home relaying a frame of a
   device the head doesn't list, or under another key: dropped, not applied.
-- Live (two servers): a removed remote device's frame injected into the log
-  by SQL, standing in for a home that takes it: refused at the recipient.
+- Browser (spec 171, office suite): every frame relayed to one tab with its
+  signature changed in transit, as a dishonest home would relay it. The tab
+  drops it and names the sender once, while the edit stays in the log from
+  its real sender. A removed device's old frame injected into the log
+  (planned at first) is history by design (item 4), so it proves nothing.
 - Browser: spec 04 and the collab suites stay green.
+
+As built:
+- `kutup-chat-proto::SenderManifests` holds the rules. The crypto WASM's
+  `CollabSender` keeps one per sender account on a page, so a frame's check
+  copies no manifests.
+- `@kutup/collab/senders` (`SenderCheck`) reads heads and history, asks the
+  identity pins through drive-core's `accountAuthorityVerdict`, and keeps the
+  pins in the sealed store (`@kutup/session/manifestPins`).
+- The collab transport tells `onFrame` whether a frame came before this
+  connection's `replayed` (the log) or after (live).
+- Every frame consumer checks before it applies: notes and lists (the
+  session, which closes the check with itself), Office, whiteboards, and
+  Maps' background list writes (quietly).
+- The CLI's `sync` checks every logged frame (`crate::senders`), keeping
+  other accounts' pins in its profile store under `sender:<account>`.

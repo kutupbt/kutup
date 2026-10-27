@@ -29,6 +29,8 @@
     "preRestoreLabel": "Before restore, {{time}}",
     "restoredLabel": "Restored from {{time}}",
     "quotaSave": "Storage quota exceeded — couldn't save",
+    "senderReset": "Edits from {{name}} can't be verified: their account was reset",
+    "senderUnverified": "Some edits from {{name}} couldn't be verified and weren't applied",
     "mode": {
       "label": "View",
       "edit": "Edit",

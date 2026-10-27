@@ -54,6 +54,9 @@ import { useRequiredSession } from '@kutup/session/store'
 import { SaveTracker, hasLocalChanges } from './unsaved'
 import { CollabTransport, type BaseMsg, type HelloMsg, type PeerInfo } from '@kutup/collab/transport'
 import { KIND, peerKey } from '@kutup/collab/envelope'
+import { SenderCheck } from '@kutup/collab/senders'
+import { accountAuthorityVerdict } from '@kutup/drive-core/identityPins'
+import { accountNameOfKey } from '@kutup/drive-core/accountName'
 import { encryptCollabFrame, openCollabFrame } from '@kutup/collab/cryptoFrame'
 import { currentDevice, replaceRefusedDevice, TooManyDevicesError, type CurrentDevice } from '@kutup/session/currentDevice'
 import { randomSenderSeqPrefix, buildAwarenessName } from '@kutup/collab/identity'
@@ -261,6 +264,14 @@ function WhiteboardEditorBase(
   // ---- Collab ----
   useEffect(() => {
     let alive = true
+    // Edits apply only when their sender's devices signed them; a sender
+    // whose edits are dropped is named once.
+    const senders = new SenderCheck({
+      authority: accountAuthorityVerdict,
+      name: accountNameOfKey,
+      onRefused: ({ name, reason }) =>
+        toast.error(t(reason === 'reset' ? 'editor.senderReset' : 'editor.senderUnverified', { name })),
+    })
 
     void (async () => {
       // This sign-in's device; replaced below if the account stops listing
@@ -298,7 +309,8 @@ function WhiteboardEditorBase(
             }
           }
         },
-        onFrame: async (bs: Uint8Array) => {
+        onFrame: async (bs: Uint8Array, { live }) => {
+          if (!(await senders.verify(bs, live))) return
           try {
             const f = await openCollabFrame(bs, fileKey, {
               fileId,
@@ -402,6 +414,7 @@ function WhiteboardEditorBase(
       alive = false
       transportRef.current?.close()
       transportRef.current = null
+      senders.close()
       if (broadcastTimerRef.current) clearTimeout(broadcastTimerRef.current)
       if (presenceTimerRef.current) clearTimeout(presenceTimerRef.current)
     }

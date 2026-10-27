@@ -32,16 +32,24 @@ pub struct Peer<'a> {
     sess: &'a Session,
     signer: Option<Signer<'a>>,
     device: Option<Device>,
+    /// Whether a logged frame is its sender's (one-device-list.md §8, slice 3).
+    pub senders: crate::senders::Senders<'a>,
 }
 
 impl<'a> Peer<'a> {
-    pub fn new(client: &'a Client, store: &'a Store, sess: &'a Session) -> Self {
+    pub fn new(
+        client: &'a Client,
+        store: &'a Store,
+        sess: &'a Session,
+        authority: crate::senders::AuthorityCheck<'a>,
+    ) -> Self {
         Peer {
             client,
             store,
             sess,
             signer: None,
             device: None,
+            senders: crate::senders::Senders::new(client, store, authority),
         }
     }
 
@@ -235,7 +243,11 @@ fn read_remote(
     let mut through = after;
     loop {
         for logged in &page.frames {
-            apply_frame(&doc, keys, &logged.bytes()?)?;
+            let raw = logged.bytes()?;
+            // Only a frame its sender's devices signed (slice 3).
+            if peer.senders.verify(&logged.sender, &raw)? {
+                apply_frame(&doc, keys, &raw)?;
+            }
             through = through.max(logged.seq);
         }
         if !page.more {

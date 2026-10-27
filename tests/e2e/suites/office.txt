@@ -1,3 +1,5 @@
 # Office collaboration: two tabs of one account and two accounts editing one
-# document together, cursors drawn both ways.
+# document together, cursors drawn both ways. Collab senders: a frame its
+# sender didn't sign is not applied.
 specs/04-office-collaboration.spec.ts
+specs/171-collab-forged-frame.spec.ts

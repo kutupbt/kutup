@@ -29,6 +29,8 @@
     "preRestoreLabel": "Geri yüklemeden önce, {{time}}",
     "restoredLabel": "{{time}} sürümünden geri yüklendi",
     "quotaSave": "Depolama kotası aşıldı — kaydedilemedi",
+    "senderReset": "{{name}} tarafından yapılan düzenlemeler doğrulanamıyor: hesabı sıfırlandı",
+    "senderUnverified": "{{name}} tarafından yapılan bazı düzenlemeler doğrulanamadı ve uygulanmadı",
     "mode": {
       "label": "Görünüm",
       "edit": "Düzenle",
