@@ -185,7 +185,7 @@ export interface SignedUpWith {
 }
 
 /** A whole-number setting's Server settings section (site_settings::SettingSection). */
-export type SettingSection = 'chatMulti' | 'calendar' | 'chatLinking' | 'twoFactor' | 'drive'
+export type SettingSection = 'chatMulti' | 'calendar' | 'chatLinking' | 'twoFactor' | 'drive' | 'federation'
 /** What a whole-number setting counts. */
 export type SettingUnit = 'bytes' | 'count' | 'seconds' | 'days'
 /** Where a value in effect comes from. */
@@ -311,6 +311,12 @@ export interface AdminSettings {
   driveStreamMaxConcurrent: number
   driveStreamResponseMaxBytes: number
   driveStreamBlobFallbackMaxBytes: number
+  /** Federation deliveries' backoff (docs/plans/federation-outbox.md), in seconds. */
+  federationRetryBaseSeconds: number
+  federationRetryMaxSeconds: number
+  federationPeerUpgradeSeconds: number
+  federationWorkerSeconds: number
+  federationHeadsPerTick: number
 }
 
 export type FederationMode = 'disabled' | 'allowlist' | 'blocklist' | 'open'
@@ -351,7 +357,7 @@ export interface FederationPeer {
   lastDiscoveryError: string | null
   diagnostics: {
     chatPendingTransactions: number
-    chatMismatchTransactions: number
+    chatMismatchesLastDay: number
     driveIncomingShares: number
     driveOutgoingShares: number
   }
@@ -403,7 +409,7 @@ export interface AdminFederationPolicy {
     verifiedPeers: number
     quarantinedPeers: number
     chatPendingTransactions: number
-    chatMismatchTransactions: number
+    chatMismatchesLastDay: number
     oldestChatPendingAt: string | null
     driveIncomingShares: number
     driveOutgoingShares: number

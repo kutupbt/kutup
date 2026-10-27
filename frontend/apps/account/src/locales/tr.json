@@ -890,6 +890,8 @@
       },
       "twoFactor": "İki adımlı oturum açma",
       "twoFactorHint": "İki adımlı doğrulaması açık hesaplar için kurtarma kodları ve güvenlik anahtarları.",
+      "federation": "Federasyon",
+      "federationHint": "Bir sunucu yanıt vermediğinde diğer Kutup sunucularına teslimatların yeniden nasıl deneneceği.",
       "twoFactorLimits": {
         "twoFactorRecoveryCodes": "Hesap başına kurtarma kodu",
         "twoFactorRecoveryCodesHint": "İki adımlı doğrulama açıldığında veya yeni kodlar istendiğinde kaç tek kullanımlık kod oluşturulduğu.",
@@ -917,6 +919,18 @@
         "driveStreamResponseMaxBytesHint": "Aralıklı bir indirme yanıtının taşıdığı en fazla bayt; sunucular arasında da.",
         "driveStreamBlobFallbackMaxBytes": "Bellekten oynatılan en büyük dosya (bayt)",
         "driveStreamBlobFallbackMaxBytesHint": "Tarayıcının akış yapamadığı yerde, bu boyuta kadar dosyalar oynatmak için tamamen belleğe yüklenir."
+      },
+      "federationLimits": {
+        "federationRetryBaseSeconds": "İlk bekleme (saniye)",
+        "federationRetryBaseSecondsHint": "Başarısız bir teslimattan sonra; sonraki her bekleme iki katına çıkar.",
+        "federationRetryMaxSeconds": "En uzun bekleme (saniye)",
+        "federationRetryMaxSecondsHint": "Bir teslimatın iki deneme arasında en fazla bekleyeceği süre.",
+        "federationPeerUpgradeSeconds": "Eski bir sunucu için bekleme (saniye)",
+        "federationPeerUpgradeSecondsHint": "Teslimatı henüz alamayan bir sunucu için yeniden denemeden önce beklenecek süre.",
+        "federationWorkerSeconds": "Bekleyen teslimatları kontrol aralığı (saniye)",
+        "federationWorkerSecondsHint": "Diğer sunuculara bekleyen teslimatlara ne sıklıkla bakılacağı.",
+        "federationHeadsPerTick": "Kontrol başına denenen sunucu",
+        "federationHeadsPerTickHint": "Her kontrolde, her birine bir teslimat olmak üzere en fazla kaç hedef sunucunun deneneceği."
       }
     },
     "federation": {

@@ -752,6 +752,11 @@ version" when it refuses a version-1 send, and "the recipient's server refused
 a sealed send for good" (with the peer's error) when a version-1 server
 refuses its own; the version-1 server logs only a generic invalid transaction.
 Sealed sends between the two resume once both run the same version.
+Plain (unsealed) Chat federation moved to version 2 on 2026-10-27, for the
+same reason (a device mismatch closes its sequence there too, so it no
+longer holds back the sends behind it): servers on versions 1 and 2 refuse
+each other's plain sends ("unsupported chat federation version"), and those
+sends wait in the origin's queue until both run the same version.
 
 Each backend also holds up to `SEALED_FLUSH_LOCK_CONNECTIONS` (default 4)
 Postgres sessions of its own beside its main pool: one per destination server

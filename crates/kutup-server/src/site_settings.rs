@@ -269,6 +269,7 @@ pub enum SettingSection {
     ChatLinking,
     TwoFactor,
     Drive,
+    Federation,
 }
 
 /// A whole-number setting administrators set: its key, its field in
@@ -942,6 +943,68 @@ pub const DRIVE_SETTINGS: [NumericSetting; 8] = [
 ];
 
 /// Every whole-number setting `/api/admin/settings` lists by field.
+/// The federation outbox's backoff (docs/plans/federation-outbox.md): the
+/// first wait after a failed try, in seconds, doubling each time.
+pub const FEDERATION_RETRY_BASE_SECONDS: NumericSetting = NumericSetting {
+    key: "federation_retry_base_seconds",
+    field: "federationRetryBaseSeconds",
+    default: 2,
+    min: 1,
+    max: 60,
+    unit: SettingUnit::Seconds,
+    per_account: false,
+};
+/// The longest wait between tries of one delivery, in seconds.
+pub const FEDERATION_RETRY_MAX_SECONDS: NumericSetting = NumericSetting {
+    key: "federation_retry_max_seconds",
+    field: "federationRetryMaxSeconds",
+    default: 300,
+    min: 10,
+    max: 21_600,
+    unit: SettingUnit::Seconds,
+    per_account: false,
+};
+/// How long a delivery waits for a peer that can't take it yet (an older
+/// server) before it is tried again, in seconds; order per destination is
+/// kept meanwhile.
+pub const FEDERATION_PEER_UPGRADE_SECONDS: NumericSetting = NumericSetting {
+    key: "federation_peer_upgrade_seconds",
+    field: "federationPeerUpgradeSeconds",
+    default: 3600,
+    min: 60,
+    max: 86_400,
+    unit: SettingUnit::Seconds,
+    per_account: false,
+};
+/// How often the federation worker looks for deliveries that are due, in
+/// seconds.
+pub const FEDERATION_WORKER_SECONDS: NumericSetting = NumericSetting {
+    key: "federation_worker_seconds",
+    field: "federationWorkerSeconds",
+    default: 5,
+    min: 1,
+    max: 60,
+    unit: SettingUnit::Seconds,
+    per_account: false,
+};
+/// The destinations the worker tries per kind on each look: one head each.
+pub const FEDERATION_HEADS_PER_TICK: NumericSetting = NumericSetting {
+    key: "federation_heads_per_tick",
+    field: "federationHeadsPerTick",
+    default: 100,
+    min: 1,
+    max: 1000,
+    unit: SettingUnit::Count,
+    per_account: false,
+};
+pub const FEDERATION_SETTINGS: [NumericSetting; 5] = [
+    FEDERATION_RETRY_BASE_SECONDS,
+    FEDERATION_RETRY_MAX_SECONDS,
+    FEDERATION_PEER_UPGRADE_SECONDS,
+    FEDERATION_WORKER_SECONDS,
+    FEDERATION_HEADS_PER_TICK,
+];
+
 pub fn numeric_settings() -> impl Iterator<Item = &'static NumericSetting> {
     registry().map(|(_, setting)| setting)
 }
@@ -960,6 +1023,7 @@ pub fn registry() -> impl Iterator<Item = (SettingSection, &'static NumericSetti
         ))
         .chain(section(SettingSection::TwoFactor, &TWO_FACTOR_SETTINGS))
         .chain(section(SettingSection::Drive, &DRIVE_SETTINGS))
+        .chain(section(SettingSection::Federation, &FEDERATION_SETTINGS))
 }
 
 /// The multi-recipient limits now.

@@ -17,7 +17,19 @@ compose() {
 # accounts' ids: docs/plans/account-ids.md).
 state_file="$(mktemp)"
 
+# A server's database, for the phases that set up a case directly
+# (docs/plans/federation-outbox.md): looked up each time, as a restart may
+# move the container.
+fed_db() {
+  local ip
+  ip="$(docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' \
+    "$(compose ps -q "postgres-$1")")"
+  printf 'postgres://kutup:federation_test_%s@%s:5432/kutup' "$1" "$ip"
+}
+
 run_phase() {
+  KUTUP_FEDERATION_DB_A="$(fed_db a)" \
+  KUTUP_FEDERATION_DB_B="$(fed_db b)" \
   KUTUP_FEDERATION_STATE="$state_file" \
   KUTUP_FEDERATION_PHASE="$1" \
   KUTUP_FEDERATION_SERVER_A="http://127.0.0.1:$port_a" \
@@ -144,6 +156,17 @@ kept_renames="$(compose exec -T postgres-b psql -U kutup -d kutup -Atc \
 # with a folder and a file shared across, and a freed name taken by someone
 # new inheriting nothing.
 run_phase account-ids
+
+# The federation outbox migration with deliveries mid-flight on both sides
+# (docs/plans/federation-outbox.md): run on a database made for it on A's
+# Postgres, from the migration before it, so peers mid-stream see no gap.
+compose exec -T postgres-a psql -U kutup -d kutup -q \
+  -c "DROP DATABASE IF EXISTS outbox_migration" -c "CREATE DATABASE outbox_migration"
+postgres_a="$(docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' \
+  "$(compose ps -q postgres-a)")"
+KUTUP_TEST_DB="postgres://kutup:federation_test_a@$postgres_a:5432/outbox_migration" \
+  cargo test -p kutup-server --test federation_outbox_migration_live -- --nocapture
+compose exec -T postgres-a psql -U kutup -d kutup -q -c "DROP DATABASE outbox_migration"
 
 # Pairwise groups' anonymous route (docs/plans/pairwise-groups.md §3): the
 # home's signed X-Wing key config, sealed requests relayed and answered. A's
