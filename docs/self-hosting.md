@@ -1258,6 +1258,21 @@ Object Storage, MinIO, AWS S3, …):
    docker compose -f docker-compose.yml -f docker-compose.external-s3.yml up -d --build --wait
    ```
 
+**Timeouts.** A store that stalls fails the request with a clear error
+rather than holding it, along with the database transaction it runs in. The
+defaults suit a remote store on a slow link; each is a setting in `.env`:
+
+| Setting | Default | What it limits |
+|---|---|---|
+| `S3_CONNECT_TIMEOUT_SECONDS` | 10 | Opening a connection |
+| `S3_READ_TIMEOUT_SECONDS` | 60 | Waiting for the store's answer once a request is sent |
+| `S3_STALL_SECONDS` | 20 | A transfer, up or down, that moves no bytes |
+| `S3_REQUEST_TIMEOUT_SECONDS` | 30 | One try of a request without a body (heads, deletes, lists, multipart bookkeeping) |
+| `S3_MAX_ATTEMPTS` | 3 | Tries per request, the first included |
+
+A transfer that keeps moving has no total limit, because a whole object can
+be many gigabytes.
+
 The admin page cannot ask such a store for its capacity; set
 `STORAGE_TOTAL_BYTES` if you want a capacity readout. The SeaweedFS backup
 steps above do not apply: the store's durability is the provider's, and the
