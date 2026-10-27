@@ -48,7 +48,7 @@ assert.deepEqual(
 
 const envelopePlaintext = Buffer.alloc(32, 0x42).toString('base64')
 const envelopeKey = Buffer.alloc(32, 0x24).toString('base64')
-const accountEnvelope = crypto.sealAccountEnvelope(envelopePlaintext, envelopeKey, 1, '0b9f4c0e-6a51-4d2f-9a33-5e1f6c7d8e90')
+const accountEnvelope = crypto.sealAccountEnvelope(envelopePlaintext, envelopeKey, 1, 1, '0b9f4c0e-6a51-4d2f-9a33-5e1f6c7d8e90')
 assert.equal(crypto.openAccountEnvelope(accountEnvelope, envelopeKey, 1, '0b9f4c0e-6a51-4d2f-9a33-5e1f6c7d8e90'), envelopePlaintext)
 assert.throws(
   () => crypto.openAccountEnvelope(accountEnvelope, envelopeKey, 2, '0b9f4c0e-6a51-4d2f-9a33-5e1f6c7d8e90'),
@@ -61,7 +61,7 @@ assert.throws(
 // Exactly a key binding: an address, another case or padding is refused on
 // seal and open.
 for (const binding of ['alice@example.com', '0B9F4C0E-6A51-4D2F-9A33-5E1F6C7D8E90', ' 0b9f4c0e-6a51-4d2f-9a33-5e1f6c7d8e90 ']) {
-  assert.throws(() => crypto.sealAccountEnvelope(envelopePlaintext, envelopeKey, 1, binding), /binding/)
+  assert.throws(() => crypto.sealAccountEnvelope(envelopePlaintext, envelopeKey, 1, 1, binding), /binding/)
   assert.throws(() => crypto.openAccountEnvelope(accountEnvelope, envelopeKey, 1, binding), /binding/)
 }
 
@@ -682,12 +682,12 @@ const resigned = crypto.signMailKeyList(mailVectors.masterKey, {
 assert.equal(resigned.data, firstList.data)
 assert.equal(resigned.signature, firstList.signature)
 // A fresh key: sealed in WASM, never returned in clear.
-const fresh = crypto.generateMailAddressKey(mailVectors.masterKey, mailVectors.binding, 'carol@kutup.dev', 1_790_000_000)
+const fresh = crypto.generateMailAddressKey(mailVectors.masterKey, 1, mailVectors.binding, 'carol@kutup.dev', 1_790_000_000)
 assert.deepEqual(Object.keys(fresh).sort(), ['envelope', 'fingerprint', 'publicKey', 'sha256Fingerprint'])
 assert.equal(crypto.inspectMailAddressPublicKey(fresh.publicKey, 'carol@kutup.dev').fingerprint, fresh.fingerprint)
 // The generic account-envelope path refuses the mail-key purpose.
 assert.throws(() => crypto.openAccountEnvelope(fresh.envelope, mailVectors.masterKey, 5, mailVectors.binding), /typed export/)
-assert.throws(() => crypto.sealAccountEnvelope('AA==', mailVectors.masterKey, 5, mailVectors.binding), /typed export/)
+assert.throws(() => crypto.sealAccountEnvelope('AA==', mailVectors.masterKey, 5, 1, mailVectors.binding), /typed export/)
 
 // Mail between Kutup users (docs/plans/mail.md): a split message opens for
 // each recipient with the shared data packet; fresh ones round-trip.
@@ -728,7 +728,7 @@ assert.equal(reopenedMail.verified, true)
 // client makes the material with its key kept in WASM; the forwardee's
 // accepts only the activation made for this forwarding, signed by the
 // forwarder's key, and gets back a sealed key.
-const forwardee = crypto.generateMailAddressKey(mailVectors.masterKey, mailVectors.binding, 'carol@kutup.dev', 1_790_000_000)
+const forwardee = crypto.generateMailAddressKey(mailVectors.masterKey, 1, mailVectors.binding, 'carol@kutup.dev', 1_790_000_000)
 const forwardingId = '6f1c2a3b-4d5e-4f60-8a71-b2c3d4e5f607'
 const made = crypto.makeMailForwarding(
   mailVectors.masterKey, mailVectors.binding, mailVectors.address, aliceEnvelope, mailVectors.fingerprint,
@@ -738,7 +738,7 @@ assert.deepEqual(Object.keys(made).sort(), ['activation', 'forwardeePublicKey', 
 assert.equal(made.instances.length, 1)
 assert.equal(Buffer.from(made.instances[0].proxyParameter, 'base64').length, 32)
 const acceptAs = (id, forwarderKey, now) => crypto.acceptMailForwarding(
-  mailVectors.masterKey, mailVectors.binding, 'carol@kutup.dev', forwardee.envelope, forwardee.fingerprint,
+  mailVectors.masterKey, 1, mailVectors.binding, 'carol@kutup.dev', forwardee.envelope, forwardee.fingerprint,
   mailVectors.address, forwarderKey, id, now, made.activation,
 )
 const accepted = acceptAs(forwardingId, mailVectors.publicKey, 1_790_000_200)
@@ -771,11 +771,11 @@ assert.throws(() => crypto.exportMailAddressKey(
   mailVectors.masterKey, mailVectors.binding, mailVectors.address, aliceEnvelope, mailVectors.fingerprint, 'short',
 ))
 assert.throws(
-  () => crypto.importMailAddressKey(mailVectors.masterKey, mailVectors.binding, mailVectors.address, new TextEncoder().encode(exportedKey), 'wrong passphrase!'),
+  () => crypto.importMailAddressKey(mailVectors.masterKey, 1, mailVectors.binding, mailVectors.address, new TextEncoder().encode(exportedKey), 'wrong passphrase!'),
   (error) => error === 'wrong passphrase',
 )
 const reimported = crypto.importMailAddressKey(
-  mailVectors.masterKey, mailVectors.binding, mailVectors.address, new TextEncoder().encode(exportedKey), 'export passphrase',
+  mailVectors.masterKey, 1, mailVectors.binding, mailVectors.address, new TextEncoder().encode(exportedKey), 'export passphrase',
 )
 assert.equal(reimported.fingerprint, mailVectors.fingerprint)
 // A shared mailbox's key: Alice gets a share sealed to her account key,
@@ -1081,8 +1081,8 @@ assert.equal(crypto.incarnationIdOfAuthority(iv.authorityPublicKey), crypto.deri
   // A registration made in the browser signs in, and its envelope opens.
   const registration = crypto.OpaqueRegistration.start('browser password')
   const record = crypto.OpaqueServer.record(registration.finish(server.registrationResponse(registration.request, v.keyBinding)))
-  const envelope = registration.sealMasterKey(v.masterKey, v.keyBinding)
-  assert.throws(() => registration.sealMasterKey(v.masterKey, v.keyBinding), /not finished/)
+  const envelope = registration.sealMasterKey(v.masterKey, 1, v.keyBinding)
+  assert.throws(() => registration.sealMasterKey(v.masterKey, 1, v.keyBinding), /not finished/)
   assert.equal(signIn(record, 'browser password').openMasterKey(envelope, v.keyBinding), v.masterKey)
 }
 

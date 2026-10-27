@@ -290,6 +290,7 @@ fn chat_backup_lifecycle(
             &backup_root,
             master_key,
             AccountEnvelopePurpose::ChatBackupRoot,
+            kutup_crypto::account_envelope::MasterKeyGeneration::FIRST,
             binding,
         )
         .unwrap(),
@@ -317,6 +318,7 @@ fn chat_backup_lifecycle(
         &[0x92; 32],
         master_key,
         AccountEnvelopePurpose::ChatBackupRoot,
+        kutup_crypto::account_envelope::MasterKeyGeneration::FIRST,
         binding,
     )
     .unwrap();

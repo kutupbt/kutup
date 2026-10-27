@@ -556,19 +556,35 @@ pub fn derive_account_identity_keys(master_key_base64: &str) -> Result<JsValue, 
     .map_err(|error| js_error(&format!("encode account identity: {error}")))
 }
 
+/// The master key's generation a page passes (never 0;
+/// `MASTER_KEY_GENERATION` in `@kutup/crypto` until rotation exists).
+fn master_key_generation(
+    generation: u32,
+) -> Result<account_envelope::MasterKeyGeneration, JsValue> {
+    account_envelope::MasterKeyGeneration::new(generation)
+        .map_err(|error| js_error(&error.to_string()))
+}
+
 /// Seal one account secret into the canonical, suite-bearing V1 envelope.
 #[wasm_bindgen(js_name = sealAccountEnvelope)]
 pub fn seal_account_envelope(
     plaintext_base64: &str,
     key_base64: &str,
     purpose: u8,
+    generation: u32,
     binding: &str,
 ) -> Result<String, JsValue> {
     let plaintext = decode_canonical_base64(plaintext_base64, "plaintext")?;
     let key = decode_canonical_base64(key_base64, "key")?;
     let purpose = generic_account_purpose(purpose)?;
-    account_envelope::seal_b64(&plaintext, &key, purpose, binding)
-        .map_err(|error| js_error(&error.to_string()))
+    account_envelope::seal_b64(
+        &plaintext,
+        &key,
+        purpose,
+        master_key_generation(generation)?,
+        binding,
+    )
+    .map_err(|error| js_error(&error.to_string()))
 }
 
 /// Open one account secret only when its purpose and login-email binding match.
@@ -2073,6 +2089,7 @@ fn master_key_32(master_key_base64: &str) -> Result<zeroize::Zeroizing<[u8; 32]>
 #[wasm_bindgen(js_name = generateMailAddressKey)]
 pub fn generate_mail_address_key(
     master_key_base64: &str,
+    generation: u32,
     binding: &str,
     address: &str,
     created_at_secs: u32,
@@ -2082,6 +2099,7 @@ pub fn generate_mail_address_key(
         .map_err(|error| js_error(&error.to_string()))?;
     let envelope = kutup_crypto::mail_key::seal_address_key(
         &master_key[..],
+        master_key_generation(generation)?,
         binding,
         address,
         &key.secret_key,
@@ -2125,6 +2143,7 @@ pub fn export_mail_address_key(
 #[wasm_bindgen(js_name = importMailAddressKey)]
 pub fn import_mail_address_key(
     master_key_base64: &str,
+    generation: u32,
     binding: &str,
     address: &str,
     file: &[u8],
@@ -2138,6 +2157,7 @@ pub fn import_mail_address_key(
         })?;
     let envelope = kutup_crypto::mail_key::seal_address_key(
         &master_key[..],
+        master_key_generation(generation)?,
         binding,
         address,
         &key.secret_key,
@@ -3865,6 +3885,7 @@ impl OpaqueRegistration {
     pub fn seal_master_key(
         &mut self,
         master_key_base64: &str,
+        generation: u32,
         key_binding: &str,
     ) -> Result<String, JsValue> {
         // Once: the export key is wiped afterwards, sealed or not.
@@ -3873,7 +3894,11 @@ impl OpaqueRegistration {
             .take()
             .ok_or_else(|| js_error("opaque: the registration is not finished"))?;
         export
-            .seal_master_key(&*master_key_32(master_key_base64)?, key_binding)
+            .seal_master_key(
+                &*master_key_32(master_key_base64)?,
+                master_key_generation(generation)?,
+                key_binding,
+            )
             .map_err(opaque_error)
     }
 
@@ -4681,6 +4706,7 @@ struct AcceptedMailForwardingView {
 #[allow(clippy::too_many_arguments)]
 pub fn accept_mail_forwarding(
     master_key_base64: &str,
+    generation: u32,
     binding: &str,
     forwardee_address: &str,
     envelope_base64: &str,
@@ -4717,9 +4743,14 @@ pub fn accept_mail_forwarding(
     let public_key =
         forwarding::forwarding_public_key(&key).map_err(|error| js_error(&error.to_string()))?;
     let master_key = master_key_32(master_key_base64)?;
-    let envelope =
-        kutup_crypto::mail_key::seal_address_key(&master_key[..], binding, forwardee_address, &key)
-            .map_err(|error| js_error(&error.to_string()))?;
+    let envelope = kutup_crypto::mail_key::seal_address_key(
+        &master_key[..],
+        master_key_generation(generation)?,
+        binding,
+        forwardee_address,
+        &key,
+    )
+    .map_err(|error| js_error(&error.to_string()))?;
     let fingerprint =
         kutup_crypto::mail_key::inspect_forwarding_public_key(&public_key, forwardee_address)
             .map_err(|error| js_error(&error.to_string()))?

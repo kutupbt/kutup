@@ -185,9 +185,11 @@ fn take_value<'a>(rest: &mut &'a [u8]) -> Result<&'a [u8]> {
 }
 
 /// Seals revision `revision` of the secret of vault `file_id` (the Drive
-/// file's UUID bytes) under the master key, for the account's key binding.
+/// file's UUID bytes) under the master key of `generation`, for the
+/// account's key binding.
 pub fn seal_vault_secret(
     master_key: &[u8],
+    generation: account_envelope::MasterKeyGeneration,
     binding: &str,
     file_id: &[u8; 16],
     revision: u64,
@@ -197,6 +199,7 @@ pub fn seal_vault_secret(
         &payload(file_id, secret)?,
         master_key,
         AccountEnvelopePurpose::PassVaultSecret,
+        generation,
         binding,
         file_id,
         revision,
@@ -206,6 +209,7 @@ pub fn seal_vault_secret(
 /// [`seal_vault_secret`] with a fixed nonce, for checked-in vectors only.
 pub fn seal_vault_secret_with_nonce(
     master_key: &[u8],
+    generation: account_envelope::MasterKeyGeneration,
     binding: &str,
     file_id: &[u8; 16],
     revision: u64,
@@ -217,6 +221,7 @@ pub fn seal_vault_secret_with_nonce(
         &payload(file_id, secret)?,
         master_key,
         AccountEnvelopePurpose::PassVaultSecret,
+        generation,
         binding,
         file_id,
         Some(revision),
@@ -317,7 +322,15 @@ mod tests {
             VaultSecret::generated("abcd-efgh-ijkl", None),
             VaultSecret::generated("abcd-efgh-ijkl", Some(b"kf")),
         ] {
-            let sealed = seal_vault_secret(&MASTER, BINDING, &VAULT, 7, &s).unwrap();
+            let sealed = seal_vault_secret(
+                &MASTER,
+                crate::account_envelope::MasterKeyGeneration::FIRST,
+                BINDING,
+                &VAULT,
+                7,
+                &s,
+            )
+            .unwrap();
             assert_eq!(
                 open_vault_secret(&sealed, &MASTER, BINDING, &VAULT).unwrap(),
                 (s, 7)
@@ -330,7 +343,15 @@ mod tests {
     #[allow(clippy::disallowed_types)]
     fn a_chosen_password_is_kept_only_as_keepass_hashes_it() {
         let s = VaultSecret::chosen(Some("parola-çğ"), None);
-        let sealed = seal_vault_secret(&MASTER, BINDING, &VAULT, 7, &s).unwrap();
+        let sealed = seal_vault_secret(
+            &MASTER,
+            crate::account_envelope::MasterKeyGeneration::FIRST,
+            BINDING,
+            &VAULT,
+            7,
+            &s,
+        )
+        .unwrap();
         let (plain, _) = account_envelope::open_revision(
             &sealed,
             &MASTER,
@@ -360,6 +381,7 @@ mod tests {
     fn bound_to_the_vault_the_account_and_the_key() {
         let sealed = seal_vault_secret(
             &MASTER,
+            crate::account_envelope::MasterKeyGeneration::FIRST,
             BINDING,
             &VAULT,
             7,
@@ -384,6 +406,7 @@ mod tests {
             payload,
             &MASTER,
             AccountEnvelopePurpose::PassVaultSecret,
+            crate::account_envelope::MasterKeyGeneration::FIRST,
             BINDING,
             &VAULT,
             7,
@@ -412,9 +435,16 @@ mod tests {
         ]
         .iter()
         .map(|s| {
-            seal_vault_secret(&MASTER, BINDING, &VAULT, 7, s)
-                .unwrap()
-                .len()
+            seal_vault_secret(
+                &MASTER,
+                crate::account_envelope::MasterKeyGeneration::FIRST,
+                BINDING,
+                &VAULT,
+                7,
+                s,
+            )
+            .unwrap()
+            .len()
         })
         .collect();
         assert_eq!(sizes.len(), 1, "{sizes:?}");
@@ -460,7 +490,16 @@ mod tests {
 
     #[test]
     fn refuses_empty_doubled_and_oversized_secrets() {
-        let seal = |s: &VaultSecret| seal_vault_secret(&MASTER, BINDING, &VAULT, 7, s);
+        let seal = |s: &VaultSecret| {
+            seal_vault_secret(
+                &MASTER,
+                crate::account_envelope::MasterKeyGeneration::FIRST,
+                BINDING,
+                &VAULT,
+                7,
+                s,
+            )
+        };
         assert!(seal(&VaultSecret::chosen(None, None)).is_err());
         let mut both = VaultSecret::chosen(Some("a"), None);
         both.generated_password = Some(Zeroizing::new("b".into()));

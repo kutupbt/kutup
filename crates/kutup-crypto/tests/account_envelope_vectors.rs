@@ -11,7 +11,7 @@ use serde::{Deserialize, Serialize};
 
 use kutup_crypto::account_envelope::{
     self, seal_suite, seal_unchecked_for_vectors, AccountEnvelopePurpose, AccountEnvelopeSuiteId,
-    Length, ObjectPolicy,
+    Length, MasterKeyGeneration, ObjectPolicy,
 };
 
 const PATH: &str = concat!(
@@ -80,7 +80,17 @@ fn refused_for(purpose: AccountEnvelopePurpose, envelope: &[u8]) -> Vec<Refused>
     // The revision a well-formed envelope of this purpose carries.
     let rev = purpose.policy().mutable.then_some(1);
     let unchecked = |plain: &[u8], binding: &str, object: &[u8], revision: Option<u64>| {
-        seal_unchecked_for_vectors(plain, &KEY, purpose, binding, object, revision, &NONCE).unwrap()
+        seal_unchecked_for_vectors(
+            plain,
+            &KEY,
+            purpose,
+            MasterKeyGeneration::FIRST,
+            binding,
+            object,
+            revision,
+            &NONCE,
+        )
+        .unwrap()
     };
     let mut refused = Vec::new();
     let mut add = |why: &str, step: &str, envelope: Vec<u8>| {
@@ -96,8 +106,20 @@ fn refused_for(purpose: AccountEnvelopePurpose, envelope: &[u8]) -> Vec<Refused>
     let mut reserved = envelope.to_vec();
     reserved[11] = 1;
     add("reserved byte set", "inspect", reserved);
+    // The master-key generation (bytes 12..16): never 0, and covered by the
+    // AEAD, so a secret can't pass as another master key's.
+    let mut generation_zero = envelope.to_vec();
+    generation_zero[12..16].copy_from_slice(&0u32.to_be_bytes());
+    add("master-key generation 0", "inspect", generation_zero);
+    let mut generation_relabelled = envelope.to_vec();
+    generation_relabelled[12..16].copy_from_slice(&2u32.to_be_bytes());
+    add(
+        "master-key generation relabelled",
+        "open",
+        generation_relabelled,
+    );
     let mut upper = envelope.to_vec();
-    upper[14] = b'B';
+    upper[18] = b'B';
     add("binding not a canonical key binding", "inspect", upper);
     let mut trailing = envelope.to_vec();
     trailing.push(0);
@@ -179,6 +201,7 @@ fn sealed(purpose: AccountEnvelopePurpose) -> Vec<u8> {
         &plaintext_for(purpose),
         &KEY,
         purpose,
+        MasterKeyGeneration::FIRST,
         BINDING,
         &object_for(purpose),
         purpose.policy().mutable.then_some(1),

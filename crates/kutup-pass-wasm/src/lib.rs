@@ -308,6 +308,7 @@ impl Vault {
     pub fn keep_key(
         &self,
         master_key: &[u8],
+        generation: u32,
         binding: &str,
         file_id: &str,
         revision: f64,
@@ -320,6 +321,7 @@ impl Vault {
         }
         let sealed = kutup_pass::kept::seal(
             master_key,
+            master_key_generation(generation)?,
             binding,
             &vault_id(file_id)?,
             revision_arg(revision)?,
@@ -450,6 +452,13 @@ fn revision_arg(revision: f64) -> Result<u64, JsValue> {
         return Err(js_error("revision must be a positive safe integer"));
     }
     Ok(revision as u64)
+}
+
+/// The master key's generation the page passes (never 0).
+fn master_key_generation(
+    generation: u32,
+) -> Result<kutup_pass::kept::MasterKeyGeneration, JsValue> {
+    kutup_pass::kept::MasterKeyGeneration::new(generation).map_err(js_error)
 }
 
 fn vault_id(file_id: &str) -> Result<[u8; 16], JsValue> {

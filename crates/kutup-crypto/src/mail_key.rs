@@ -261,10 +261,12 @@ fn sha256_fingerprint_of(key: &SignedPublicKey) -> Result<[u8; 32]> {
     Ok(imprint.into())
 }
 
-/// Seals an address's secret key under the master key. The payload binds the
+/// Seals an address's secret key under the master key of `generation`. The
+/// payload binds the
 /// address and the key's own fingerprint.
 pub fn seal_address_key(
     master_key: &[u8],
+    generation: account_envelope::MasterKeyGeneration,
     binding: &str,
     address: &str,
     secret_key: &[u8],
@@ -274,6 +276,7 @@ pub fn seal_address_key(
         &payload,
         master_key,
         AccountEnvelopePurpose::MailAddressPrivateKey,
+        generation,
         binding,
     )
 }
@@ -281,6 +284,7 @@ pub fn seal_address_key(
 /// [`seal_address_key`] with a fixed nonce, for checked-in vectors only.
 pub fn seal_address_key_with_nonce(
     master_key: &[u8],
+    generation: account_envelope::MasterKeyGeneration,
     binding: &str,
     address: &str,
     secret_key: &[u8],
@@ -291,6 +295,7 @@ pub fn seal_address_key_with_nonce(
         &payload,
         master_key,
         AccountEnvelopePurpose::MailAddressPrivateKey,
+        generation,
         binding,
         nonce,
     )
@@ -1739,7 +1744,13 @@ pub fn first_address_key(
 ) -> Result<FirstAddressKey> {
     let address = canonical_address(address)?;
     let key = generate_address_key(&address, created_at_secs)?;
-    let private_key_envelope = seal_address_key(master_key, binding, &address, &key.secret_key)?;
+    let private_key_envelope = seal_address_key(
+        master_key,
+        crate::account_envelope::MasterKeyGeneration::FIRST,
+        binding,
+        &address,
+        &key.secret_key,
+    )?;
     let hex32 = |value: String| -> Result<[u8; 32]> {
         hex::decode(value)
             .ok()
@@ -1846,6 +1857,7 @@ mod tests {
         let key = generate_address_key(ADDRESS, 1_790_000_000).unwrap();
         let sealed = seal_address_key(
             &master,
+            crate::account_envelope::MasterKeyGeneration::FIRST,
             "0b9f4c0e-6a51-4d2f-9a33-5e1f6c7d8e90",
             ADDRESS,
             &key.secret_key,

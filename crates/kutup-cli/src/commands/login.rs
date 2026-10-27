@@ -67,7 +67,11 @@ pub(crate) fn set_password(
         .context("the server's registration answer")?;
     let envelope = registered
         .export_key
-        .seal_master_key(master_key, key_binding)
+        .seal_master_key(
+            master_key,
+            kutup_crypto::account_envelope::MasterKeyGeneration::FIRST,
+            key_binding,
+        )
         .context("seal master-key envelope")?;
     client
         .register_finish(

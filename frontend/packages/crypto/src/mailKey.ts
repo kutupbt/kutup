@@ -1,5 +1,6 @@
 import type { AccountRef } from './accountRef'
 import { getCryptoWasm } from './rustWasm'
+import { MASTER_KEY_GENERATION } from './masterKeyGeneration'
 
 // Mail address keys (docs/plans/mail-address-keys.md): OpenPGP keys per
 // address, generated and sealed in Rust (kutup-crypto `mail_key`); the secret
@@ -51,7 +52,7 @@ export async function generateMailAddressKey(
   createdAt: Date = new Date(),
 ): Promise<GeneratedMailAddressKey> {
   const seconds = Math.floor(createdAt.getTime() / 1000)
-  return (await getCryptoWasm()).generateMailAddressKey(masterKeyBase64, binding, address, seconds)
+  return (await getCryptoWasm()).generateMailAddressKey(masterKeyBase64, MASTER_KEY_GENERATION, binding, address, seconds)
 }
 
 /** Shortest passphrase an exported key may be locked with (kutup-crypto `MIN_EXPORT_PASSPHRASE_CHARS`). */
@@ -81,7 +82,7 @@ export async function importMailAddressKey(
   passphrase: string,
 ): Promise<GeneratedMailAddressKey> {
   try {
-    return (await getCryptoWasm()).importMailAddressKey(masterKeyBase64, binding, address, file, passphrase)
+    return (await getCryptoWasm()).importMailAddressKey(masterKeyBase64, MASTER_KEY_GENERATION, binding, address, file, passphrase)
   } catch (error) {
     // WASM throws its messages as strings.
     if (error === 'wrong passphrase' || (error instanceof Error && error.message === 'wrong passphrase')) throw new WrongKeyPassphrase()
@@ -324,6 +325,7 @@ export async function acceptMailForwarding(
 ): Promise<AcceptedMailForwarding> {
   return (await getCryptoWasm()).acceptMailForwarding(
     key.masterKeyBase64,
+    MASTER_KEY_GENERATION,
     key.binding,
     key.address,
     key.envelope,

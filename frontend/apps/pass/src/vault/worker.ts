@@ -9,6 +9,7 @@
 
 import { freshUrl, retryLoad } from '@kutup/crypto/retry'
 import { exactBytes } from '@kutup/crypto/bytes'
+import { MASTER_KEY_GENERATION } from '@kutup/crypto/masterKeyGeneration'
 import type { Request, Response } from './protocol'
 
 declare const __KUTUP_PASS_WASM__: string | undefined
@@ -28,7 +29,7 @@ interface WasmVault {
   keyChangeSaved(): void
   abandonKeyChange(): void
   keyParts(): unknown
-  keepKey(masterKey: Uint8Array, binding: string, fileId: string, revision: number, generated: boolean): string
+  keepKey(masterKey: Uint8Array, generation: number, binding: string, fileId: string, revision: number, generated: boolean): string
   keptKeyIsMine(envelope: string, masterKey: Uint8Array, binding: string, fileId: string): boolean
   free(): void
 }
@@ -116,7 +117,7 @@ async function run(request: Request): Promise<unknown> {
       return null
     }
     case 'keepKey':
-      return vault(request.handle).keepKey(request.masterKey, request.binding, request.fileId, request.revision, request.generated)
+      return vault(request.handle).keepKey(request.masterKey, MASTER_KEY_GENERATION, request.binding, request.fileId, request.revision, request.generated)
     case 'keptKeyIsMine':
       return vault(request.handle).keptKeyIsMine(request.envelope, request.masterKey, request.binding, request.fileId)
     case 'openKept':

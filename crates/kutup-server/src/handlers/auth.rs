@@ -985,17 +985,7 @@ pub(crate) async fn issue_after_second_step(
     user_id: &str,
     epoch: &[u8],
 ) -> AppResult<Response> {
-    type Row = (
-        String,
-        String,
-        bool,
-        i64,
-        i64,
-        String,
-        bool,
-        String,
-        String,
-    );
+    type Row = (String, String, bool, i64, i64, String, bool, String, String);
     let row: Option<Row> = sqlx::query_as(
         r#"SELECT master_key_envelope, public_key,
                   is_admin, storage_quota_bytes, storage_used_bytes,
@@ -2268,6 +2258,7 @@ fn deterministic_fake_account_envelope(secret: &[u8], binding: &str) -> String {
         &[0u8; 32],
         &key,
         kutup_crypto::account_envelope::AccountEnvelopePurpose::RecoveryMasterKey,
+        kutup_crypto::account_envelope::MasterKeyGeneration::FIRST,
         binding,
         &nonce,
     )

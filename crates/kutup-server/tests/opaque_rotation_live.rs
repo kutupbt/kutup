@@ -52,7 +52,7 @@ fn rotate(
         .json(&json!({
             "grant": grant, "keyBinding": user.binding,
             "opaqueRecord": record, "opaqueServerKeyId": key_id,
-            "masterKeyEnvelope": export_key.seal_master_key(&user.master_key, &user.binding).unwrap(),
+            "masterKeyEnvelope": export_key.seal_master_key(&user.master_key, kutup_crypto::account_envelope::MasterKeyGeneration::FIRST, &user.binding).unwrap(),
         }))
         .send()
         .unwrap()

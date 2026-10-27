@@ -354,6 +354,7 @@ fn account_envelope_vector() {
         &b64(&vector.plaintext),
         &b64(&vector.key),
         purpose,
+        kutup_crypto::account_envelope::MasterKeyGeneration::FIRST,
         &vector.binding,
         &object,
         purpose.policy().mutable.then_some(1),

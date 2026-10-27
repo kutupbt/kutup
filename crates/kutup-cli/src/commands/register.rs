@@ -78,12 +78,17 @@ pub fn run(json: bool, server_flag: Option<&str>, username_flag: Option<&str>) -
 
     let master_key_envelope = registered
         .export_key
-        .seal_master_key(&master_key, &key_binding)
+        .seal_master_key(
+            &master_key,
+            kutup_crypto::account_envelope::MasterKeyGeneration::FIRST,
+            &key_binding,
+        )
         .context("seal master-key envelope")?;
     let recovery_key_envelope = account_envelope::seal_b64(
         &*master_key,
         &*recovery_entropy,
         AccountEnvelopePurpose::RecoveryMasterKey,
+        kutup_crypto::account_envelope::MasterKeyGeneration::FIRST,
         &key_binding,
     )
     .context("seal recovery envelope")?;

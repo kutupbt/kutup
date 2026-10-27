@@ -1,5 +1,6 @@
 import { fromBase64, toBase64 } from './base64'
 import { getCryptoWasm } from './rustWasm'
+import { MASTER_KEY_GENERATION } from './masterKeyGeneration'
 
 export const ACCOUNT_ENVELOPE_PURPOSE = {
   passwordMasterKey: 1,
@@ -24,7 +25,7 @@ export async function sealAccountEnvelope(
   binding: string,
 ): Promise<string> {
   const module = await getCryptoWasm()
-  return module.sealAccountEnvelope(toBase64(plaintext), toBase64(key), purpose, binding)
+  return module.sealAccountEnvelope(toBase64(plaintext), toBase64(key), purpose, MASTER_KEY_GENERATION, binding)
 }
 
 export async function openAccountEnvelope(

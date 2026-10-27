@@ -36,9 +36,11 @@ dual-written. This destructive rule expires at the first stable `v*` tag.
 | Chat history backup | Absent; a new browser device starts with an empty local database | **Implemented:** always-on account-local E2EE backup using a master-key-wrapped Chat root, independently derived segment/base/manifest/media keys, signed hash-chained manifests, and server-side base-plus-tail restore; device-to-device transfer is not supported (current contract: [`chat-backup.md`](chat-backup.md)) |
 | Broadcast post and grants | Absent | Typed broadcast policy, epoch, account/device grant, history grant and post structures |
 
-`AccountEnvelopeV1` is encoded as magic `KUTPAE1\0`, big-endian suite ID
-(2; suite 1 is retired and not read), purpose byte, zero reserved byte,
-big-endian context length, the context (the account's key binding, a UUID v4,
+`AccountEnvelopeV1` is encoded as magic `KUTPAE2\0`, big-endian suite ID
+(2; suite 1 is retired and not read), purpose byte, zero reserved byte, the
+big-endian u32 master-key generation (never 0: the generation of the master
+key a password or recovery wrap holds, or of the one that sealed any other
+secret; docs/plans/w6-key-hierarchy.md §2), big-endian context length, the context (the account's key binding, a UUID v4,
 never an email, username or address: docs/plans/account-identity.md), the
 object id's length byte and the object id where the purpose has one secret
 per object, an 8-byte big-endian revision for a mutable purpose, 24-byte
