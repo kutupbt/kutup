@@ -40,6 +40,29 @@ Two defects come from the split:
 - **A plain chat mismatch blocks the destination's queue**, because the
   receiver doesn't use up the sequence. Sealed chat already uses it up.
 
+## Media sends and "not delivered" (decided 2026-10-27, Signal's model)
+
+Today a media offer answered `queued` lets the client send the attachment
+message at once, so an offer refused later leaves the recipient a broken
+attachment and tells the sender nothing; and a repeat of the operation is
+refused (the client's `expiresAt` changes). PR 2 does it as Signal does:
+
+- **Server.** The origin keeps each offer's final answer. A repeat of the
+  same operation compares only what can't change (attachment, recipient,
+  digest, size, suite, token), and gets the stored receipt or refusal once
+  settled, or `queued` while pending (waking that destination's queue). The
+  receiver records refusals too.
+- **Client.** On `queued` the message stays pending (shown as sending) and
+  its attachment-send job is persisted in chat-core's send queue. It asks
+  the same operation again with backoff (a few minutes at most per wait),
+  and is woken when the app comes back online or reopens. Stored or
+  already stored sends the message; storage full or a refusal shows it as
+  not delivered at once. The attachment message is never sent before the
+  destination's copy is durable.
+- **Lifetime.** The job gives up after `chatAttachmentSendLifetimeSeconds`
+  (a site setting, 86400): not delivered, with retry, which asks the same
+  operation again.
+
 ## Proposal
 
 **1. One outgoing table, sequences per kind.**
