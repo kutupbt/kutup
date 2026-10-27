@@ -59,7 +59,7 @@ export async function activateSession(
   setAccessToken(accessToken)
   resetSessionVersion()
   const me = prefetched ?? (await api.get<MeResponse>('/user/me')).data
-  let keys = given
+  const keys = given
   if (me.id !== keys.userId) {
     throw new Error('the session belongs to a different account than its keys')
   }

@@ -2,11 +2,7 @@
 import { getSodium } from './sodium'
 import { deriveRecoveryAuthProof } from './kdf'
 import { fromBase64, toBase64 } from './base64'
-import {
-  ACCOUNT_ENVELOPE_PURPOSE,
-  openAccountEnvelope,
-  sealAccountEnvelope,
-} from './accountEnvelope'
+import { ACCOUNT_ENVELOPE_PURPOSE, sealAccountEnvelope } from './accountEnvelope'
 import { deriveAccountIdentityKeys } from './identity'
 
 export { encryptStream, decryptStream } from './symmetric'
