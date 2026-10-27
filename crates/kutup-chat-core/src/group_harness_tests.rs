@@ -359,6 +359,16 @@ impl World {
     /// one: the new device opens a provisioning socket and shows its code,
     /// `person` sends it the account identity, and it registers with the
     /// link token and publishes the manifest that lists it.
+    /// The server serves `account`'s manifest before its last one (a
+    /// rollback, as a malicious server would), and keeps the last one aside.
+    pub(crate) fn roll_back_manifest(&self, account: &str) -> AccountManifestV3 {
+        self.accounts
+            .borrow_mut()
+            .get_mut(account)
+            .and_then(|hosted| hosted.manifests.pop())
+            .expect("a manifest to roll back")
+    }
+
     pub(crate) fn link_device(self: &Rc<Self>, person: &mut Person) -> Person {
         self.link_device_into(person, Rc::new(SqliteChatDb::open_in_memory().unwrap()))
     }

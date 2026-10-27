@@ -2688,6 +2688,7 @@ fn setup_phase(c: &Client, a: &str, b: &str) {
     assert_content_once(&mailbox(c, b, &bob_token, bob_2_id), after_rejection);
 
     chat_media_round_trip(c, a, b, &alice_token, &bob_token, &admin_b);
+    remote_editor_past_max_age(c, a, b, &admin_a);
 
     let unsigned = c
         .get(format!(
@@ -3039,6 +3040,138 @@ fn federated_user(
         .unwrap(),
         account: format!("{username}@{}", me["server"].as_str().unwrap()),
     }
+}
+
+/// An editor on another server keeps editing a file past the home's
+/// `remoteManifestMaxAgeSeconds`: once its cached head of the editor's
+/// account is that old, the home reads the head again before it takes a
+/// frame. The head hasn't changed, so the device still counts and its frames
+/// are kept (a frame on a refreshed, unchanged head is never dropped).
+fn remote_editor_past_max_age(c: &Client, a: &str, b: &str, admin_a: &str) {
+    use futures_util::{SinkExt, StreamExt};
+    use kutup_crypto::envelope::{self, kind, CollabFrameContextV3, Frame};
+    use kutup_crypto::named_share::FileShareEnvelopeV1;
+    let (owner_email, bob_email) = ("age-owner@example.test", "age-bob@example.test");
+    let (owner_token, _) = register_account(c, a, owner_email, "age_owner");
+    let (bob_token, _) = register_account(c, b, bob_email, "age_bob");
+    let owner = federated_user(c, a, owner_email, "age_owner", &owner_token);
+    let bob = federated_user(c, b, bob_email, "age_bob", &bob_token);
+    let folder = common::create_folder(c, a, &owner);
+    let file = common::seal_file(&folder, &Uuid::new_v4().to_string(), b"edited from B");
+    assert!(common::upload(c, a, &owner.token, &folder, &file)
+        .status()
+        .is_success());
+    let envelope = FileShareEnvelopeV1::seal(
+        &file.key,
+        &file.id,
+        1,
+        &owner.person,
+        &owner.identity.incarnation_id(),
+        owner.identity.drive_signing_key(),
+        &bob.person,
+        &bob.identity.incarnation_id(),
+        &bob.identity.drive_hpke_public_key(),
+    )
+    .unwrap()
+    .encode_b64()
+    .unwrap();
+    let invite = json_response(
+        c.post(format!("{a}/api/files/{}/federated-shares", file.id))
+            .bearer_auth(&owner.token)
+            .json(&json!({
+                "recipientServer": bob.person.server,
+                "recipientAccountId": bob.person.account_id,
+                "shareEnvelope": envelope,
+                "canEdit": true,
+            }))
+            .send()
+            .unwrap(),
+        "share the file to edit",
+    );
+    let accepted = json_response(
+        c.post(format!("{b}/api/drive/federation/file-shares"))
+            .bearer_auth(&bob.token)
+            .json(&json!({
+                "server": owner.person.server,
+                "capability": invite_capability(invite["inviteUrl"].as_str().unwrap()),
+            }))
+            .send()
+            .unwrap(),
+        "accept the file to edit",
+    );
+    let incoming = accepted["id"].as_str().unwrap().to_owned();
+    let device = common::register_device(c, b, &bob);
+    let set_max_age = |seconds: Option<i64>| {
+        let r = c
+            .put(format!("{a}/api/admin/settings"))
+            .bearer_auth(admin_a)
+            .json(&json!({ "remoteManifestMaxAgeSeconds": seconds.unwrap_or(300) }))
+            .send()
+            .unwrap();
+        assert_eq!(r.status().as_u16(), 200, "remote manifest max age");
+    };
+    set_max_age(Some(60));
+
+    let frame = |sequence: u64| {
+        let context = CollabFrameContextV3::new(
+            kind::YJS_UPDATE,
+            1,
+            1,
+            &file.id,
+            device.id,
+            device.manifest_sequence,
+            sequence,
+        )
+        .unwrap();
+        let packed = envelope::seal_unsigned(b"an edit from B", &file.key, context).unwrap();
+        envelope::sign(
+            &Frame::unpack(&packed).unwrap(),
+            &device.account,
+            &device.seed,
+        )
+        .unwrap()
+    };
+    // One frame through B's bridge; true once A kept it (`stored`).
+    let kept = |sequence: u64| {
+        let ticket = json_response(
+            c.post(format!("{b}/api/device-ticket"))
+                .bearer_auth(&bob.token)
+                .header(kutup_chat_proto::DEVICE_HEADER, device.header())
+                .send()
+                .unwrap(),
+            "device ticket",
+        );
+        let url = format!(
+            "{}/api/drive/federation/file-shares/{incoming}/collab/ws?ticket={}",
+            b.replacen("http", "ws", 1),
+            ticket["ticket"].as_str().unwrap()
+        );
+        let bytes = frame(sequence);
+        tokio::runtime::Runtime::new()
+            .unwrap()
+            .block_on(async move {
+                use tokio_tungstenite::tungstenite::Message;
+                let (mut socket, _) = tokio_tungstenite::connect_async(url).await.unwrap();
+                socket.send(Message::Binary(bytes)).await.unwrap();
+                let deadline = tokio::time::Instant::now() + Duration::from_secs(20);
+                loop {
+                    match tokio::time::timeout_at(deadline, socket.next()).await {
+                        Ok(Some(Ok(Message::Text(text)))) if text.contains("\"stored\"") => {
+                            return true
+                        }
+                        Ok(Some(Ok(_))) => {}
+                        _ => return false,
+                    }
+                }
+            })
+    };
+    assert!(kept(1), "the first frame from B is kept");
+    // Past the max age: the home reads the unchanged head again, and the
+    // still-listed device's frame is kept.
+    std::thread::sleep(Duration::from_secs(61));
+    let after = kept(2);
+    set_max_age(None);
+    assert!(after, "a listed device's frame is kept past the max age");
 }
 
 /// The capability in an invite link's fragment.

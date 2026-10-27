@@ -194,9 +194,13 @@ export async function publishNextManifest(
         manifest,
         header === null ? undefined : asDevice(header),
       )
-      const published = data.manifest ?? manifest
-      await keepPin(account, published)
-      return published
+      // The pin moves to what this client signed; an answer naming another
+      // manifest is not the one published.
+      if (data.manifest && data.manifest.signature !== manifest.signature) {
+        throw new Error('the server answered another manifest than the one published')
+      }
+      await keepPin(account, manifest)
+      return manifest
     } catch (error) {
       const moved = axios.isAxiosError(error) && error.response?.status === 409 && !isDeviceLimit(error) && !isDevicesMismatch(error)
       if (!moved || attempt > 0) throw error

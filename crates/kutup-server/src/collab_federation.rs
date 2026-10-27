@@ -1766,13 +1766,11 @@ async fn bridge_connection(
                     break;
                 }
             }
-            msg = stream.next() => match msg {
+            // Shut (the device removed) while a message was on its way:
+            // nothing of it is acted on (a frame, a base claim, a resume),
+            // whatever the select picked.
+            msg = stream.next() => if peer.is_shut() { break } else { match msg {
                 Some(Ok(Message::Binary(data))) => {
-                    // Shut (the device removed) while this frame was on its
-                    // way: never relayed.
-                    if peer.is_shut() {
-                        break;
-                    }
                     let Ok(f) = Frame::unpack(&data) else { continue };
                     // The relay's own checks: this device, its signature, this file.
                     if f.device_id != device.device_id
@@ -1812,7 +1810,7 @@ async fn bridge_connection(
                 }
                 Some(Ok(_)) => {}
                 Some(Err(_)) | None => break,
-            },
+            } },
         }
     }
     hub.leave(&key, peer.conn_id);

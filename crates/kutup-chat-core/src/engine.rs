@@ -595,6 +595,23 @@ impl Engine {
         Ok(self.self_account()?.to_string())
     }
 
+    /// The account's own head as its server gives it, checked against the
+    /// newest own manifest this installation accepted
+    /// ([`crate::account_identity::check_own_head`]). Every path that signs
+    /// the account's next manifest builds on this.
+    pub(crate) async fn own_head(&self) -> Result<Option<AccountManifestV3>> {
+        let account = self.self_account()?;
+        let head = Rc::clone(&self.transport)
+            .fetch_manifest(self.session.user())
+            .await?;
+        let trust = match self.session.manifest_trust(&account.to_string()).await? {
+            Some(trust) => Some(trust),
+            None => self.session.manifest_trust(self.session.user()).await?,
+        };
+        crate::account_identity::check_own_head(trust.as_ref(), head.as_ref(), &account, None)?;
+        Ok(head)
+    }
+
     /// This account, as its manifest names it.
     pub(crate) fn self_account(&self) -> Result<AccountRef> {
         crate::address::parse_account(self.session.user())
@@ -1172,7 +1189,7 @@ impl Engine {
         issued_at: impl Into<String>,
     ) -> Result<AccountManifestV3> {
         let transport = Rc::clone(&self.transport);
-        let current = transport.fetch_manifest(self.session.user()).await?;
+        let current = self.own_head().await?;
         let canonical_self = self.self_account()?;
         let issued_at = issued_at.into();
         let candidate = match current {
@@ -1289,8 +1306,8 @@ impl Engine {
             ));
         }
         let transport = Rc::clone(&self.transport);
-        let current = transport
-            .fetch_manifest(self.session.user())
+        let current = self
+            .own_head()
             .await?
             .ok_or_else(|| ChatError::Trust("account manifest is unavailable".into()))?;
         current.verify().map_err(ChatError::Trust)?;

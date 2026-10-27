@@ -127,7 +127,8 @@ async fn touch(pool: &PgPool, domain: &str, account_id: Uuid) -> AppResult<()> {
 
 /// The account's head from its own server, taken only if it follows `known`
 /// (its chain verified from `known` to it) or, with nothing known, as the
-/// first one seen of the account.
+/// first one seen of the account. `None`: its server holds no newer head
+/// than `known`.
 async fn fetch_following(
     state: &AppState,
     account: &AccountRef,
@@ -238,14 +239,20 @@ pub(crate) async fn frame_is_senders(
             }
             head
         }
+        // No newer head: with one cached, the account's server holds the
+        // same head (or an older one, never taken), so the cached head still
+        // decides, refreshed now.
         Ok(None) => {
-            // The server says the account has no manifest: none of its
-            // frames count.
-            match &known {
-                Some(_) => touch(&state.pool, domain, account_id).await?,
-                None => mark_failed(&state.pool, domain, account_id, true).await?,
-            }
-            return Ok(false);
+            return match &known {
+                Some(known) => {
+                    touch(&state.pool, domain, account_id).await?;
+                    Ok(holds(&known.manifest))
+                }
+                None => {
+                    mark_failed(&state.pool, domain, account_id, true).await?;
+                    Ok(false)
+                }
+            };
         }
         Err(error) => {
             tracing::warn!(error = %error.message, domain, "collab: a sender's manifest could not be read");
