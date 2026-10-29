@@ -5,15 +5,34 @@
 -- reservation, not a queue.
 
 -- Media offers: one sequence per destination, as their receivers check.
+--
+-- A v1 receiver recorded only some of its final answers (stored, storage
+-- full, the uniform 404 of a capability); a refusal it did not record (an
+-- offer invalid or expired on arrival, a routing or identity mismatch) left
+-- its mark below the sequence, so every later offer to it would meet a gap.
+-- So a refused v1 offer is not taken as settled: it goes pending again under
+-- its own sequence ("closing_sequence", as plain chat's v1 mismatches), and
+-- the receiver now replays the answer it recorded or refuses it and records
+-- that, which uses the sequence up. A delivered v1 offer kept no answer: it
+-- gets the one a repeat of it should read (already stored).
 INSERT INTO federation_outbox
     (id, kind, destination, sequence, idempotency_key, sender_user_id, recipient_account_id,
-     payload, state, error_class, attempts, next_attempt_at, created_at, updated_at)
+     payload, state, error_class, answer, attempts, next_attempt_at, created_at, updated_at)
 SELECT id, 'media', destination, sequence,
        origin_user_id::text || ':' || operation_id::text,
        origin_user_id,
        (transaction->'offer'->'recipient'->>'accountId')::uuid,
        jsonb_build_object('transaction', transaction, 'operationId', operation_id),
-       state, last_error_class, attempts, next_attempt_at, created_at, updated_at
+       CASE state WHEN 'rejected' THEN 'pending' ELSE state END,
+       CASE state WHEN 'rejected' THEN 'closing_sequence' ELSE last_error_class END,
+       CASE state WHEN 'delivered' THEN jsonb_build_object(
+           'outcome', 'receipt',
+           'receipt', jsonb_build_object('operationId', operation_id::text,
+                                         'status', 'already_stored'))
+       END,
+       attempts,
+       CASE state WHEN 'rejected' THEN now() ELSE next_attempt_at END,
+       created_at, updated_at
 FROM chat_media_federation_outbox;
 INSERT INTO federation_sequences (kind, destination, next_sequence)
     SELECT 'media', destination, next_sequence FROM chat_media_federation_sequences;

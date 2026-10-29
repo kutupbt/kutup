@@ -51,6 +51,17 @@ CREATE TABLE rename_announce_outbox (
 );
 CREATE INDEX rename_announce_outbox_due ON rename_announce_outbox (next_attempt_at);
 
+-- The old table names every offer's sender; one of a deleted account can't
+-- go back. A settled one is dropped (its sequence is used up at the
+-- destination, so nothing waits on it); a pending one would leave its
+-- destination a gap, so the down migration stops until it has settled.
+DO $$ BEGIN
+  IF EXISTS (SELECT 1 FROM federation_outbox
+              WHERE kind = 'media' AND state = 'pending' AND sender_user_id IS NULL) THEN
+    RAISE EXCEPTION 'pending Chat media offers of deleted accounts: let them settle first';
+  END IF;
+END $$;
+
 INSERT INTO chat_media_federation_outbox
     (id, destination, sequence, origin_user_id, operation_id, transaction, state, attempts,
      next_attempt_at, last_error_class, created_at, updated_at)
@@ -64,13 +75,16 @@ INSERT INTO chat_media_federation_inbound_state (origin, last_sequence, updated_
     SELECT origin, last_sequence, updated_at FROM federation_inbound_state WHERE kind = 'media';
 INSERT INTO chat_media_federation_inbound_transactions
     (origin, sequence, operation_id, transaction_digest, response_status, response, created_at)
-SELECT origin, sequence, transaction_id::uuid, digest, status, answer, created_at
+-- A refusal recorded without its operation (it may be of a reused one) gets
+-- an id of its own: v1 checks a replay by its digest, not its operation.
+SELECT origin, sequence, COALESCE(transaction_id::uuid, gen_random_uuid()), digest, status,
+       answer, created_at
 FROM federation_inbound WHERE kind = 'media';
 INSERT INTO rename_announce_outbox
     (destination, incarnation_id, sequence, attempts, next_attempt_at, created_at, last_error)
 SELECT destination, payload->>'incarnation', (payload->>'chainSequence')::integer, attempts,
        next_attempt_at, created_at, last_error
-FROM federation_outbox WHERE kind = 'rename';
+FROM federation_outbox WHERE kind = 'rename' AND state = 'pending';
 
 DROP INDEX federation_outbox_rename_incarnation;
 DROP INDEX federation_outbox_media_pending;

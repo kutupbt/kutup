@@ -141,7 +141,12 @@ async fn send_offer(
             .ok()
             .and_then(|body| body.get("error").and_then(Value::as_str).map(str::to_owned))
             .unwrap_or_else(|| format!("remote Chat-media offer returned {}", response.status));
-        return Ok(Err(if retryable_status(response.status) {
+        // An authentication or routing refusal is no answer to the offer:
+        // the receiver records none (the sequence stays open there), so it
+        // waits like a failure that may pass, never settles as refused.
+        let unanswered =
+            response.status == StatusCode::UNAUTHORIZED || response.status == StatusCode::FORBIDDEN;
+        return Ok(Err(if unanswered || retryable_status(response.status) {
             OfferFailure::Retry(
                 if response.status == StatusCode::CONFLICT {
                     "sequence_conflict"

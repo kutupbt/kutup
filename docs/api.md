@@ -83,6 +83,7 @@ Specific codes, where an app does something particular (a test in
 | `deviceListMismatch` | 409 | Federation: the recipient's device list changed; the body lists missing, stale and extra devices |
 | `sequenceGap` | 409 | Federation: a transaction arrived out of order; `expectedSequence` names the next one |
 | `sealedVersionUnsupported` | 400 | Federation: a sealed transaction of another wire version, refused for good |
+| `recordGone` | 410 | Federation: a repeat of a plain chat transaction whose record was pruned (past `federationRecordDays`); the origin settles it as not delivered to the recipient, never as delivered |
 | `version_conflict` | 409 | A newer version exists (Drive, collab) |
 | `revision_conflict` | 409 | A newer revision exists |
 | `head_conflict` | 409 | The account head moved (another device wrote first; `sequence` the current one, or a folder delete whose `removes` is not what it removes): read the head and index again, redo the edit |

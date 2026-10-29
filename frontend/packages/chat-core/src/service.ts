@@ -985,7 +985,13 @@ export class ChatService {
         ),
       )
       this.emitUpdate()
-      const released = (await this.driveMediaSends()).get(sendId)
+      // Staged: the message is kept and waits, whatever happens to this
+      // first ask, so a failure here is not the caller's (the next pass
+      // asks again).
+      const released = (await this.driveMediaSends().catch((error: unknown) => {
+        reportBackgroundFailure(error)
+        return new Map<string, SendSummary>()
+      })).get(sendId)
       return released ?? { delivered: false, deduplicated: false, attempts: 0, safetyNumberChanges: [] }
     }
     const summary = await this.withLock(() =>
@@ -1188,7 +1194,13 @@ export class ChatService {
       if (this.disposed) break
       const outcome = await this.askForCopy(due)
       if (outcome === 'stored') {
-        released.set(due.sendId, await this.withLock(() => this.client.releaseMediaSend(due.sendId)))
+        try {
+          released.set(due.sendId, await this.withLock(() => this.client.releaseMediaSend(due.sendId)))
+        } catch (error) {
+          // Another tab released it first, or the send failed and stays
+          // queued in the engine's outbox: either way, nothing to undo here.
+          reportBackgroundFailure(error)
+        }
       } else if (outcome === 'waiting') {
         const at = await this.withLock(() => this.client.deferMediaSend(due.sendId, Date.now()))
         next = next === null ? at : Math.min(next, at)
