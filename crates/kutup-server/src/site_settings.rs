@@ -1032,7 +1032,9 @@ pub const FEDERATION_ANNOUNCE_PEER_DAYS: NumericSetting = NumericSetting {
 };
 /// How long a chat attachment waits for the recipient's server to store its
 /// copy before the client shows it as not delivered, in seconds (the
-/// client's attachment-send job; at most an offer's 30-day expiry).
+/// client's attachment-send job; at most an offer's 30-day expiry). Clients
+/// are given at most `federationRecordDays` of it: a repeat must still find
+/// the origin's record of its operation.
 pub const CHAT_ATTACHMENT_SEND_LIFETIME_SECONDS: NumericSetting = NumericSetting {
     key: "chat_attachment_send_lifetime_seconds",
     field: "chatAttachmentSendLifetimeSeconds",

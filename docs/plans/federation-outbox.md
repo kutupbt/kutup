@@ -131,7 +131,12 @@ servers are ours, so both sides ship together.
 **5. Retention and admin.**
 - Delivered and rejected rows, and inbound records, are pruned after one
   setting (`federationRecordDays`, 30). The state rows keep each high-water
-  mark, so replays past it still answer "already applied".
+  mark, so a replay past it is known as answered, but not how: it is never
+  answered as a success. Plain chat answers 410 (the origin settles the
+  send as not delivered, `record_gone`), sealed chat a final refusal naming
+  the sequence, media 410 (a refusal: the client shows not delivered). The
+  attachment-send lifetime clients are given is at most
+  `federationRecordDays`, so a repeat finds the origin's record.
 - Administration → Federation shows pending, rejected and the oldest pending
   row per peer **and per kind**. "Retry now" wakes every kind.
 
@@ -143,6 +148,17 @@ servers are ours, so both sides ship together.
 
 The queues are small and transient, so this needs no wipe. Sequences carry
 over unchanged, so peers mid-stream don't see a gap.
+
+Chat media (`20261027130000`): a v1 receiver recorded only some of its final
+answers (stored, storage full, the uniform 404 of a capability). So a v1
+offer its origin settled as refused goes pending again under its own
+sequence (`closing_sequence`, as plain chat's v1 mismatches): the receiver
+replays what it recorded, or refuses it and records that, and either uses
+the sequence up. A delivered v1 offer kept no answer; it gets the one a
+repeat should read (`already_stored`). An authentication or routing refusal
+(401, 403) is no answer to an offer, so the origin waits on it as on a
+failure that may pass. The down migration stops while an offer of a deleted
+account is pending (it can't go back to a table that names every sender).
 
 ## Questions
 

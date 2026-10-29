@@ -226,20 +226,28 @@ pub fn spawn_worker(state: AppState) {
                 _ = tokio::time::sleep(Duration::from_secs(seconds.max(1) as u64)) => {}
                 _ = WAKE.notified() => {}
             }
-            match crate::chat_federation::flush_due(&state).await {
+            // Each kind on its own, at once: a destination timing out for
+            // one kind holds up none of the others.
+            let (chat, sealed, media, renames) = tokio::join!(
+                crate::chat_federation::flush_due(&state),
+                crate::chat_federation::flush_due_sealed(&state),
+                crate::chat_media_federation::flush_due(&state),
+                crate::remote_renames::deliver_due(&state),
+            );
+            match chat {
                 Ok(completed) if completed > 0 => {
                     tracing::info!(completed, "chat federation delivered queued sends");
                 }
                 Ok(_) => {}
                 Err(error) => tracing::warn!(%error, "chat federation retry failed"),
             }
-            if let Err(error) = crate::chat_federation::flush_due_sealed(&state).await {
+            if let Err(error) = sealed {
                 tracing::warn!(%error, "sealed chat federation retry failed");
             }
-            if let Err(error) = crate::chat_media_federation::flush_due(&state).await {
+            if let Err(error) = media {
                 tracing::warn!(%error, "Chat media federation retry failed");
             }
-            if let Err(error) = crate::remote_renames::deliver_due(&state).await {
+            if let Err(error) = renames {
                 tracing::warn!(error = %error.message, "rename announces failed");
             }
         }
