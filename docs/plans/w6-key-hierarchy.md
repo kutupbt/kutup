@@ -42,6 +42,21 @@ Status: **proposed** (second session, 2026-10-27), for docs/plans/wipe-unificati
 
 The Argon2id account-protection derivation (`kdf::derive_account_protection_keys`, `AccountProtectionSuiteId`, and the WASM `deriveAccountProtectionKeys`) has no caller since OPAQUE, only its vectors. It goes, with its vectors and its row in docs/crypto-agility.md. The recovery proof (`derive_recovery_auth_proof`) stays.
 
+## Rotation checklist
+
+When master-key rotation is built, every place that writes `MasterKeyGeneration::FIRST` (Rust) or `MASTER_KEY_GENERATION` (TypeScript) outside tests must take the account's current generation instead. Find them with `grep -rn 'MasterKeyGeneration::FIRST\|MASTER_KEY_GENERATION' crates frontend/packages frontend/apps`; as of W6 they are:
+
+- **Master-key wraps (purposes 1 and 2):**
+  - CLI `register.rs` (password and recovery wraps) and `login.rs` (the password wrap resealed at sign-in);
+  - web `opaque.worker.ts` (`sealMasterKey`) and `accountEnvelope.ts` (`sealAccountEnvelope`).
+- **Secrets sealed under the master key:**
+  - mail address keys: `mail_key.rs` (`first_address_key`) and web `mailKey.ts` (generate, import, and `acceptMailForwarding`);
+  - Pass kept keys: CLI `vaultsync.rs` and web `pass/src/vault/worker.ts` (`keepKey`). `kept::reseal` already keeps the generation of the envelope it opens, so a copied vault follows its source.
+- **The server's fake recovery envelope** (`handlers/auth.rs`, `deterministic_fake_account_envelope`): an unknown name gets a stable fake so it looks like a real account. Once accounts can be past generation 1, the fake must carry a generation as plausible as a real one, or the header tells a fake from a real account.
+- **The constant itself:** `@kutup/crypto/masterKeyGeneration` and its doc comment in `kutup-crypto-wasm` (`sealAccountEnvelope`).
+
+The `inspect` that a rotation reads first to pick the master key returns the generation in Rust and in WASM (`inspectAccountEnvelope`).
+
 ## Migration and order
 
 - **Migration `20261027160000`:** drops `users.drive_private_key_envelope` (down: adds it back, nullable).
