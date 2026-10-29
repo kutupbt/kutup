@@ -847,7 +847,13 @@ fn account_of(c: &Client, base: &str, token: &str) -> AccountRef {
 /// then closes N first (B records its 409 there), goes under N+1 and is
 /// delivered, and so is the send after it: nothing waits on N. Needs both
 /// servers' databases (`KUTUP_FEDERATION_DB_A`, `KUTUP_FEDERATION_DB_B`).
-fn closing_sequence_from_before_v2(c: &Client, a: &str, alice_token: &str, bob: &AccountRef) {
+fn closing_sequence_from_before_v2(
+    c: &Client,
+    a: &str,
+    alice_token: &str,
+    bob: &AccountRef,
+    bob_2_id: u32,
+) {
     let (Ok(db_a), Ok(db_b)) = (
         std::env::var("KUTUP_FEDERATION_DB_A"),
         std::env::var("KUTUP_FEDERATION_DB_B"),
@@ -936,7 +942,7 @@ fn closing_sequence_from_before_v2(c: &Client, a: &str, alice_token: &str, bob: 
             send_id,
             vec![
                 envelope(1, BOB_REGISTRATION_ID_1, corrected),
-                envelope(2, BOB_REGISTRATION_ID_2, corrected),
+                envelope(bob_2_id, BOB_REGISTRATION_ID_2, corrected),
             ],
         ),
         "the corrected resend of a v1 mismatch",
@@ -952,7 +958,7 @@ fn closing_sequence_from_before_v2(c: &Client, a: &str, alice_token: &str, bob: 
             "10000000-0000-4000-8000-000000000014",
             vec![
                 envelope(1, BOB_REGISTRATION_ID_1, after),
-                envelope(2, BOB_REGISTRATION_ID_2, after),
+                envelope(bob_2_id, BOB_REGISTRATION_ID_2, after),
             ],
         ),
         "a send after a closed v1 sequence",
@@ -2808,13 +2814,13 @@ fn setup_phase(c: &Client, a: &str, b: &str) {
             "10000000-0000-4000-8000-000000000012",
             vec![
                 envelope(1, BOB_REGISTRATION_ID_1, behind),
-                envelope(2, BOB_REGISTRATION_ID_2, behind),
+                envelope(bob_2_id, BOB_REGISTRATION_ID_2, behind),
             ],
         ),
         "a send behind an uncorrected mismatch",
     );
     assert_content_once(&mailbox(c, b, &bob_token, 1), behind);
-    assert_content_once(&mailbox(c, b, &bob_token, 2), behind);
+    assert_content_once(&mailbox(c, b, &bob_token, bob_2_id), behind);
     let again = send(
         c,
         a,
@@ -2824,9 +2830,12 @@ fn setup_phase(c: &Client, a: &str, b: &str) {
         vec![envelope(1, BOB_REGISTRATION_ID_1, b"stale-device-set")],
     );
     assert_eq!(again.status().as_u16(), 409);
-    assert_eq!(again.json::<Value>().unwrap()["missingDevices"], json!([2]));
+    assert_eq!(
+        again.json::<Value>().unwrap()["missingDevices"],
+        json!([bob_2_id])
+    );
 
-    closing_sequence_from_before_v2(c, a, &alice_token, &remote_address);
+    closing_sequence_from_before_v2(c, a, &alice_token, &remote_address, bob_2_id);
 
     let refreshed_content = b"refreshed-device-set";
     json_response(
