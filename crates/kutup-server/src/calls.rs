@@ -73,7 +73,10 @@ fn turn_credential(secret: &str, user_id: &str, expires_at: i64) -> (String, Str
         &kutup_crypto::primitives::mac(
             Suite::V1,
             secret.as_bytes(),
-            &[kutup_crypto::labels::CALLS_TURN_PSEUDONYM_V1, user_id.as_bytes()],
+            &[
+                kutup_crypto::labels::CALLS_TURN_PSEUDONYM_V1,
+                user_id.as_bytes(),
+            ],
         )
         .as_ref()[..12],
     );
