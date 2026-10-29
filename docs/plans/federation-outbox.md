@@ -14,6 +14,13 @@ two PRs below, with these conditions:
 docs/plans/wipe-unification.md, "Not needing the wipe", item 6. The survey
 behind it reads master at b2b086a3.
 
+Built: PR 1 (#367) the tables, the worker, plain and sealed chat; PR 2 media
+and rename announces on the shared tables, refusals recorded on both sides,
+`federationRecordDays` retention, the admin view per kind, and the client's
+attachment-send wait (`kutup-chat-core` `media_wait.rs`). The client's
+backoff between asks (5 s doubling to 5 min) is the client's own pacing, like
+its other retry timers; the wait's lifetime is the site setting.
+
 ## Today
 
 Four outboxes deliver to peer servers. Each has its own sequences, worker,
@@ -39,6 +46,29 @@ Two defects come from the split:
   gets a 409 gap, which is retried for ever.
 - **A plain chat mismatch blocks the destination's queue**, because the
   receiver doesn't use up the sequence. Sealed chat already uses it up.
+
+## Media sends and "not delivered" (decided 2026-10-27, Signal's model)
+
+Today a media offer answered `queued` lets the client send the attachment
+message at once, so an offer refused later leaves the recipient a broken
+attachment and tells the sender nothing; and a repeat of the operation is
+refused (the client's `expiresAt` changes). PR 2 does it as Signal does:
+
+- **Server.** The origin keeps each offer's final answer. A repeat of the
+  same operation compares only what can't change (attachment, recipient,
+  digest, size, suite, token), and gets the stored receipt or refusal once
+  settled, or `queued` while pending (waking that destination's queue). The
+  receiver records refusals too.
+- **Client.** On `queued` the message stays pending (shown as sending) and
+  its attachment-send job is persisted in chat-core's send queue. It asks
+  the same operation again with backoff (a few minutes at most per wait),
+  and is woken when the app comes back online or reopens. Stored or
+  already stored sends the message; storage full or a refusal shows it as
+  not delivered at once. The attachment message is never sent before the
+  destination's copy is durable.
+- **Lifetime.** The job gives up after `chatAttachmentSendLifetimeSeconds`
+  (a site setting, 86400): not delivered, with retry, which asks the same
+  operation again.
 
 ## Proposal
 
@@ -101,7 +131,18 @@ servers are ours, so both sides ship together.
 **5. Retention and admin.**
 - Delivered and rejected rows, and inbound records, are pruned after one
   setting (`federationRecordDays`, 30). The state rows keep each high-water
-  mark, so replays past it still answer "already applied".
+  mark, so a replay past it is known as answered, but not how: it is never
+  answered as a success. Plain chat answers 410 (the origin settles the
+  send as not delivered, `record_gone`), sealed chat a final refusal naming
+  the sequence, media 410 (a refusal: the client shows not delivered). The
+  attachment-send lifetime clients are given is at most
+  `federationRecordDays`, so a repeat finds the origin's record.
+- Accepted limitation: a replay past the record, of a media offer the
+  recipient's server did store, is still answered 410, so its sender sees
+  "not delivered" for a copy the recipient has. It needs a repeat older
+  than `federationRecordDays`, which the lifetime above rules out for a
+  client acting within its own limit; a retry then sends a second copy
+  rather than losing one.
 - Administration → Federation shows pending, rejected and the oldest pending
   row per peer **and per kind**. "Retry now" wakes every kind.
 
@@ -113,6 +154,17 @@ servers are ours, so both sides ship together.
 
 The queues are small and transient, so this needs no wipe. Sequences carry
 over unchanged, so peers mid-stream don't see a gap.
+
+Chat media (`20261027130000`): a v1 receiver recorded only some of its final
+answers (stored, storage full, the uniform 404 of a capability). So a v1
+offer its origin settled as refused goes pending again under its own
+sequence (`closing_sequence`, as plain chat's v1 mismatches): the receiver
+replays what it recorded, or refuses it and records that, and either uses
+the sequence up. A delivered v1 offer kept no answer; it gets the one a
+repeat should read (`already_stored`). An authentication or routing refusal
+(401, 403) is no answer to an offer, so the origin waits on it as on a
+failure that may pass. The down migration stops while an offer of a deleted
+account is pending (it can't go back to a table that names every sender).
 
 ## Questions
 

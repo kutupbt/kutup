@@ -25,6 +25,7 @@ import type {
   ChatConversationStateV1,
   PeerChatProfile,
   ReceiveReport,
+  MediaSendDue,
   SendSummary,
   ChatCallEvent,
   ChatCallLog,
@@ -68,7 +69,12 @@ import {
   type AccountRef,
 } from './identity'
 import { matchesWords, searchableText, searchWords } from './search'
-import { chatMediaCacheBindingV1, deliverChatMediaV1 } from './media'
+import {
+  chatMediaCacheBindingV1,
+  chatMediaDeliveryOperationId,
+  chatMediaDeliveryRefused,
+  deliverChatMediaV1,
+} from './media'
 import { privateCiphertextCacheForAccountV1 } from '@kutup/files/mediaCache'
 import { ChatAttachmentLedger } from './attachment-ledger'
 import {
@@ -146,6 +152,8 @@ const POLL_AFTER_ATTEMPTS = 2
  */
 const HELD_RETRY_FIRST_MS = 5_000
 const HELD_RETRY_MAX_MS = 15 * 60_000
+/** How long an attachment send waits for the recipient's server, when the server doesn't say (its setting's default). */
+const ATTACHMENT_SEND_LIFETIME_SECONDS = 86_400
 
 /** The protocol's limit on messages per delete-for-me control. */
 const DELETE_FOR_ME_BATCH = 64
@@ -342,6 +350,10 @@ export class ChatService {
   private pollTimer: ReturnType<typeof setTimeout> | null = null
   private heldRetry: ReturnType<typeof setTimeout> | null = null
   private heldRetryDelay = HELD_RETRY_FIRST_MS
+  /** Wakes the next attachment send that waits for its copy. */
+  private mediaSendTimer: ReturnType<typeof setTimeout> | null = null
+  private mediaSendsRun: Promise<Map<string, SendSummary>> | null = null
+  private mediaSendsAgain = false
   /** A polling loop runs (its timer may be between ticks, or a read in flight). */
   private polling = false
   private readonly connectionListeners = new Set<(status: ChatConnectionStatus) => void>()
@@ -953,14 +965,35 @@ export class ChatService {
       ? null
       : await this.withLock(() => this.client.mediaDeliveryCapability(peer))
     if (capability) {
-      const receipt = await deliverChatMediaV1(descriptor, address, capability)
-      if (receipt.status === 'storage_full') {
-        throw new Error('recipient Chat-media storage is full')
-      }
+      // The opaque destination copy must be durable before the descriptor
+      // can enter the recipient's mailbox (Signal's model,
+      // docs/plans/federation-outbox.md): the message is written to history
+      // now and waits, sending, until the recipient's server stores the
+      // copy. A refusal or a full storage shows it as not delivered; it
+      // never becomes a visibly broken attachment message.
+      const operationId = await chatMediaDeliveryOperationId(descriptor.attachmentId, peer)
+      await this.withLock(() =>
+        this.client.stageAttachment(
+          sendId,
+          peer,
+          new Date().toISOString(),
+          descriptor,
+          expiresAfterSeconds,
+          extras ?? null,
+          operationId,
+          this.attachmentSendLifetimeSeconds(),
+        ),
+      )
+      this.emitUpdate()
+      // Staged: the message is kept and waits, whatever happens to this
+      // first ask, so a failure here is not the caller's (the next pass
+      // asks again).
+      const released = (await this.driveMediaSends().catch((error: unknown) => {
+        reportBackgroundFailure(error)
+        return new Map<string, SendSummary>()
+      })).get(sendId)
+      return released ?? { delivered: false, deduplicated: false, attempts: 0, safetyNumberChanges: [] }
     }
-    // The opaque destination copy must be durable before the descriptor can
-    // enter the recipient's mailbox. A failed media receipt therefore never
-    // creates a visibly broken attachment message.
     const summary = await this.withLock(() =>
       this.client.sendAttachment(
         sendId,
@@ -1115,6 +1148,106 @@ export class ChatService {
    */
   async retrySends(): Promise<void> {
     await this.reconcile()
+  }
+
+  /**
+   * The person retries an attachment message that was not delivered: it
+   * waits for the recipient's server again, for the server's lifetime.
+   */
+  async retryAttachmentSend(sendId: string): Promise<void> {
+    await this.withLock(() => this.client.restartMediaSend(sendId, this.attachmentSendLifetimeSeconds()))
+    this.emitUpdate()
+    await this.driveMediaSends()
+  }
+
+  private attachmentSendLifetimeSeconds(): number {
+    return this.capabilities.attachmentSendLifetimeSeconds ?? ATTACHMENT_SEND_LIFETIME_SECONDS
+  }
+
+  /**
+   * Asks for the copy of each attachment send that waits and is due, once
+   * at a time: stored sends the message, storage full or a refusal makes it
+   * not delivered, anything else waits for the engine's next try (woken by
+   * a timer, a reconcile, or the app coming back online). The summaries of
+   * the messages sent.
+   */
+  private driveMediaSends(): Promise<Map<string, SendSummary>> {
+    if (this.mediaSendsRun) {
+      this.mediaSendsAgain = true
+      return this.mediaSendsRun
+    }
+    this.mediaSendsRun = this.runMediaSends().finally(() => {
+      this.mediaSendsRun = null
+      if (this.mediaSendsAgain && !this.disposed) {
+        this.mediaSendsAgain = false
+        void this.driveMediaSends().catch(reportBackgroundFailure)
+      }
+    })
+    return this.mediaSendsRun
+  }
+
+  private async runMediaSends(): Promise<Map<string, SendSummary>> {
+    const released = new Map<string, SendSummary>()
+    const sends = await this.withLock(() => this.client.mediaSends(Date.now()))
+    let next = sends.nextRetryMs ?? null
+    for (const due of sends.due) {
+      if (this.disposed) break
+      const outcome = await this.askForCopy(due)
+      if (outcome === 'stored') {
+        try {
+          released.set(due.sendId, await this.withLock(() => this.client.releaseMediaSend(due.sendId)))
+        } catch (error) {
+          // Another tab released it first, or the send failed and stays
+          // queued in the engine's outbox: either way, nothing to undo here.
+          reportBackgroundFailure(error)
+        }
+      } else if (outcome === 'waiting') {
+        const at = await this.withLock(() => this.client.deferMediaSend(due.sendId, Date.now()))
+        next = next === null ? at : Math.min(next, at)
+      } else {
+        await this.withLock(() => this.client.failMediaSend(due.sendId, outcome))
+      }
+    }
+    if (sends.due.length > 0 || sends.expired.length > 0) {
+      this.notifyPeers()
+      this.emitUpdate()
+    }
+    if (this.mediaSendTimer) clearTimeout(this.mediaSendTimer)
+    this.mediaSendTimer = null
+    if (next !== null && !this.disposed) {
+      this.mediaSendTimer = setTimeout(() => {
+        this.mediaSendTimer = null
+        void this.driveMediaSends().catch(reportBackgroundFailure)
+      }, Math.max(0, next - Date.now()))
+    }
+    return released
+  }
+
+  /** One ask of this account's server for an attachment's copy at the recipient's. */
+  private async askForCopy(due: MediaSendDue): Promise<'stored' | 'waiting' | 'storageFull' | 'refused'> {
+    const recipient = parseAccount(due.peer)
+    if (!recipient) return 'refused'
+    let capability: string
+    try {
+      capability = await this.withLock(() => this.client.mediaDeliveryCapability(due.peer))
+    } catch {
+      // Not an accepted contact with a profile key just now: it waits.
+      return 'waiting'
+    }
+    try {
+      const receipt = await deliverChatMediaV1(due.descriptor, recipient, capability, due.operationId)
+      switch (receipt.status) {
+        case 'stored':
+        case 'already_stored':
+          return 'stored'
+        case 'storage_full':
+          return 'storageFull'
+        default:
+          return 'waiting'
+      }
+    } catch (error) {
+      return chatMediaDeliveryRefused(error) ? 'refused' : 'waiting'
+    }
   }
 
   /** Send one call signal to `peer` (its devices; see docs/chat-calls.md). */
@@ -1428,6 +1561,8 @@ export class ChatService {
     })
       .then(async ({ commits, expiry, report }) => {
         await this.releaseExpiredAttachments(expiry)
+        // Attachment sends waiting for their copy are asked again too.
+        void this.driveMediaSends().catch(reportBackgroundFailure)
         // A queued message the server would not take stays queued, behind
         // nothing but its own conversation; it is tried again on every pass.
         const waiting = new Set<string>()
@@ -1965,6 +2100,7 @@ export class ChatService {
     this.disposed = true
     if (this.socketRetry) clearTimeout(this.socketRetry)
     if (this.heldRetry) clearTimeout(this.heldRetry)
+    if (this.mediaSendTimer) clearTimeout(this.mediaSendTimer)
     this.stopPolling()
     if (this.prekeyTimer) clearInterval(this.prekeyTimer)
     if (this.accountListsTimer) clearTimeout(this.accountListsTimer)

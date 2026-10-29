@@ -233,7 +233,12 @@
       "notDeliveredTo_one": "Not delivered to {{count}} member",
       "notDeliveredTo_other": "Not delivered to {{count}} members",
       "sendingTo_one": "Sending to {{count}} member",
-      "sendingTo_other": "Sending to {{count}} members"
+      "sendingTo_other": "Sending to {{count}} members",
+      "notDelivered": "Not delivered",
+      "sendingAttachment": "Sending — waiting for the recipient's server to store the attachment",
+      "mediaStorageFull": "The recipient's storage is full. Try again later.",
+      "mediaRefused": "The recipient's server refused the attachment. Try again?",
+      "mediaExpired": "The recipient's server didn't take the attachment in time. Try again?"
     },
     "replies": {
       "reply": "Reply to message",

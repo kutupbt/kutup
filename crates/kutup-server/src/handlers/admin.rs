@@ -1245,6 +1245,60 @@ pub struct FederationPeerDiagnosticsResponse {
     chat_mismatches_last_day: i64,
     drive_incoming_shares: i64,
     drive_outgoing_shares: i64,
+    /// Deliveries to the peer by kind (docs/plans/federation-outbox.md).
+    deliveries: Vec<FederationDeliveryCountsResponse>,
+}
+
+/// One kind of delivery to peers: chat, sealed chat, media offers, or
+/// rename announces.
+#[derive(Debug, Clone, Serialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct FederationDeliveryCountsResponse {
+    kind: String,
+    /// Still to go.
+    pending: i64,
+    /// Refused for good in the last day (a device mismatch, storage full,
+    /// a refusal, given up).
+    rejected_last_day: i64,
+    #[serde(with = "time::serde::rfc3339::option")]
+    oldest_pending_at: Option<OffsetDateTime>,
+}
+
+/// The delivery counts of every kind, by destination: what is pending, and
+/// what was refused in the last day.
+async fn federation_delivery_counts(
+    pool: &PgPool,
+) -> AppResult<Vec<(String, FederationDeliveryCountsResponse)>> {
+    type Row = (String, String, i64, i64, Option<OffsetDateTime>);
+    let rows: Vec<Row> = sqlx::query_as(
+        "SELECT destination, kind,
+                COUNT(*) FILTER (WHERE state = 'pending'),
+                COUNT(*) FILTER (WHERE state = 'rejected'),
+                MIN(created_at) FILTER (WHERE state = 'pending')
+         FROM federation_outbox
+         WHERE state = 'pending'
+            OR (state = 'rejected' AND updated_at > now() - interval '1 day')
+         GROUP BY destination, kind
+         ORDER BY destination, kind",
+    )
+    .fetch_all(pool)
+    .await?;
+    Ok(rows
+        .into_iter()
+        .map(
+            |(destination, kind, pending, rejected_last_day, oldest_pending_at)| {
+                (
+                    destination,
+                    FederationDeliveryCountsResponse {
+                        kind,
+                        pending,
+                        rejected_last_day,
+                        oldest_pending_at,
+                    },
+                )
+            },
+        )
+        .collect())
 }
 
 #[derive(Debug, Serialize, ToSchema)]
@@ -1262,6 +1316,8 @@ pub struct FederationOperationalSummaryResponse {
     drive_incoming_shares: i64,
     drive_outgoing_shares: i64,
     active_replay_reservations: i64,
+    /// Deliveries to all peers by kind.
+    deliveries: Vec<FederationDeliveryCountsResponse>,
 }
 
 #[derive(Debug, Serialize, ToSchema)]
@@ -1439,6 +1495,7 @@ pub async fn get_federation_control_plane(
         drive_incoming_shares: i64,
         drive_outgoing_shares: i64,
     }
+    let delivery_counts = federation_delivery_counts(&state.pool).await?;
     let peers = sqlx::query_as::<_, PeerRow>(
         "SELECT domain, trust_state, current_sequence, current_key_id,
                 current_api_base, capabilities, first_seen_at, last_seen_at,
@@ -1467,6 +1524,11 @@ pub async fn get_federation_control_plane(
     .await?
     .into_iter()
     .map(|row| {
+        let deliveries = delivery_counts
+            .iter()
+            .filter(|(destination, _)| *destination == row.domain)
+            .map(|(_, counts)| counts.clone())
+            .collect();
         let capabilities: Vec<kutup_federation_proto::FederationCapabilityId> =
             serde_json::from_value(row.capabilities)
                 .map_err(|_| AppError::internal("invalid stored federation capabilities"))?;
@@ -1492,6 +1554,7 @@ pub async fn get_federation_control_plane(
                 chat_mismatches_last_day: row.chat_mismatches_last_day,
                 drive_incoming_shares: row.drive_incoming_shares,
                 drive_outgoing_shares: row.drive_outgoing_shares,
+                deliveries,
             },
         })
     })
@@ -1534,6 +1597,28 @@ pub async fn get_federation_control_plane(
         drive_incoming_shares,
         drive_outgoing_shares,
         active_replay_reservations,
+        deliveries: {
+            let mut by_kind: std::collections::BTreeMap<String, FederationDeliveryCountsResponse> =
+                std::collections::BTreeMap::new();
+            for (_, counts) in &delivery_counts {
+                let total = by_kind.entry(counts.kind.clone()).or_insert_with(|| {
+                    FederationDeliveryCountsResponse {
+                        kind: counts.kind.clone(),
+                        pending: 0,
+                        rejected_last_day: 0,
+                        oldest_pending_at: None,
+                    }
+                });
+                total.pending += counts.pending;
+                total.rejected_last_day += counts.rejected_last_day;
+                total.oldest_pending_at = match (total.oldest_pending_at, counts.oldest_pending_at)
+                {
+                    (Some(a), Some(b)) => Some(a.min(b)),
+                    (a, b) => a.or(b),
+                };
+            }
+            by_kind.into_values().collect()
+        },
     };
 
     let enabled_capabilities = if global_enabled {

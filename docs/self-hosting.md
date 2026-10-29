@@ -757,6 +757,13 @@ same reason (a device mismatch closes its sequence there too, so it no
 longer holds back the sends behind it): servers on versions 1 and 2 refuse
 each other's plain sends ("unsupported chat federation version"), and those
 sends wait in the origin's queue until both run the same version.
+Chat media offers changed the same way (also 2026-10-27): a destination now
+records its final refusals too, so a refused offer no longer leaves a gap
+before the next. Update federating servers together: an older destination
+answers a sequence gap after an offer it refused, and the offers behind it
+wait until it is updated. Delivered and refused deliveries of every kind,
+and the answers a server gave its peers, are kept for `federationRecordDays`
+(Server settings → Federation, 30 days) and then deleted.
 
 Each backend also holds up to `SEALED_FLUSH_LOCK_CONNECTIONS` (default 4)
 Postgres sessions of its own beside its main pool: one per destination server
