@@ -1,28 +1,54 @@
 #!/usr/bin/env bash
 # Every label Kutup derives keys, hashes, signatures or associated data with
 # lives in crates/kutup-crypto/src/labels.rs (docs/plans/w6-key-hierarchy.md
-# §3). This refuses one written anywhere else in a crate's source: a byte
-# string starting with `kutup/` or `kutup-`, or a versioned `"kutup/…/vN`
-# string outside a comment. Tests may spell labels out (they pin bytes).
+# §3). This refuses any string or byte-string literal starting `kutup/` or
+# `kutup-` (`"…`, `b"…`, `br"…`, `br#"…`) outside a comment in a crate's
+# source, unless scripts/check-labels.allow names that file and literal as
+# a non-label (a header, path, name or test fixture). An allow-list entry
+# that no longer matches anything fails too, so the list stays exact.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-found=0
-while IFS= read -r line; do
-  echo "$line" >&2
-  found=1
-done < <(
+allow=scripts/check-labels.allow
+hits="$(
   git ls-files -- 'crates/*/src/*.rs' 'crates/*/src/**/*.rs' \
     | grep -v '^crates/kutup-crypto/src/labels\.rs$' \
-    | grep -v '/tests\.rs$' \
     | xargs -r awk '
         /^[[:space:]]*\/\// { next }
-        /b"kutup[\/-]/ { print FILENAME ":" FNR ": " $0; next }
-        /"kutup\/[a-z0-9\/-]*v[0-9]/ { print FILENAME ":" FNR ": " $0 }
+        {
+          rest = $0
+          while (match(rest, /(br?#?)?"kutup[\/-][a-z0-9\/:.=_-]*/)) {
+            print FILENAME "\t" substr(rest, RSTART, RLENGTH) "\t" FNR
+            rest = substr(rest, RSTART + RLENGTH)
+          }
+        }
       '
-)
-if [ "$found" -ne 0 ]; then
-  echo "check-labels: put these labels in crates/kutup-crypto/src/labels.rs" >&2
-  exit 1
+)"
+
+failed=0
+# A literal the allow-list doesn't name.
+while IFS=$'\t' read -r path literal line; do
+  [ -n "$path" ] || continue
+  if ! awk -F'\t' -v p="$path" -v l="$literal" \
+      '!/^#/ && $1 == p && $2 == l { found = 1 } END { exit !found }' "$allow"; then
+    echo "$path:$line: $literal" >&2
+    failed=1
+  fi
+done <<<"$hits"
+if [ "$failed" -ne 0 ]; then
+  echo "check-labels: put these labels in crates/kutup-crypto/src/labels.rs" \
+    "(or, if one is not a label, in $allow)" >&2
 fi
+
+# An allow-list entry nothing matches any more.
+while IFS=$'\t' read -r path literal _; do
+  case "$path" in '' | '#'*) continue ;; esac
+  if ! awk -F'\t' -v p="$path" -v l="$literal" \
+      '$1 == p && $2 == l { found = 1 } END { exit !found }' <<<"$hits"; then
+    echo "check-labels: $allow names $path $literal, which is no longer there" >&2
+    failed=1
+  fi
+done <"$allow"
+
+[ "$failed" -eq 0 ] || exit 1
 echo "check-labels: every label is in the registry"

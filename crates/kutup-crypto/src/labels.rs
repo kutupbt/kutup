@@ -4,9 +4,11 @@
 //! family), never none, empty or data; its info is the context (a purpose
 //! label, the object's own header, or both). A unit test checks the grammar
 //! and that no label repeats or is a prefix of another, and
-//! `scripts/check-labels.sh` refuses a `"kutup/` literal anywhere else in
-//! a crate's source. Constructions a standard fixes (OHTTP, Web Push,
-//! Signal's provisioning cipher) keep their own strings.
+//! `scripts/check-labels.sh` refuses a `"kutup/` or `"kutup-` literal
+//! anywhere else in a crate's source unless `scripts/check-labels.allow`
+//! names it as a non-label. Constructions a standard fixes (OHTTP, Web Push,
+//! Signal's provisioning cipher) keep their own strings; wire tags a
+//! standard's syntax carries are listed at the end, outside the grammar.
 
 // --- 2fa-recovery-code -------------------------------------------------------
 
@@ -77,6 +79,13 @@ pub const ACCOUNT_MANIFEST_V3: &[u8] = b"kutup/account/manifest/v3\0";
 pub const ACCOUNT_PRIVATE_SUBKEY_V1: &[u8] = b"kutup/account/private-subkey/v1\0";
 /// `kutup-crypto/src/account_rename.rs` (`DOMAIN`)
 pub const ACCOUNT_RENAME_V1: &[u8] = b"kutup/account/rename/v1\0";
+
+// --- calls -------------------------------------------------------------------
+
+/// `kutup-server/src/calls.rs` (`turn_credential`): keyed by the TURN secret,
+/// the pseudonym a relay credential names instead of the account (was
+/// `kutup-turn:` hashed with the secret)
+pub const CALLS_TURN_PSEUDONYM_V1: &[u8] = b"kutup/calls/turn-pseudonym/v1\0";
 
 // --- chat-attachment-ledger --------------------------------------------------
 
@@ -561,8 +570,18 @@ pub const FEDERATION_IDENTITY_DOCUMENT_V1: &[u8] = b"kutup/federation/identity-d
 pub const FEDERATION_REPLAY_V1: &[u8] = b"kutup/federation/replay/v1\0";
 /// `kutup-federation-proto/src/http_signatures.rs` (was `kutup-federation-request-replay-hash-v1`)
 pub const FEDERATION_REQUEST_REPLAY_HASH_V1: &[u8] = b"kutup/federation/request-replay-hash/v1\0";
+// --- wire tags -----------------------------------------------------------------
+//
+// Not labels in the grammar: a standard's syntax carries them, so they hold
+// no NUL. Listed here so the registry stays the one index.
+
+/// `kutup-federation-proto` (`FEDERATION_SIGNATURE_TAG`): the RFC 9421
+/// `tag` parameter of every federation signature
+pub const FEDERATION_SIGNATURE_TAG: &str = "kutup-federation-v2";
+
 /// Every label, for the registry's own checks.
-pub const ALL: [&[u8]; 180] = [
+pub const ALL: [&[u8]; 181] = [
+    CALLS_TURN_PSEUDONYM_V1,
     TWO_FACTOR_RECOVERY_CODE_V1,
     ACCOUNT_ENVELOPE_KEY_V2,
     ACCOUNT_ENVELOPE_V2,
