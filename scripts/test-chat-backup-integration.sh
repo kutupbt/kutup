@@ -274,4 +274,3 @@ fi
 for check in verify-cli verify-pass-sync verify-pass-ssh; do
   KUTUP_SERVER="http://127.0.0.1:$port" "$root_dir/scripts/$check.sh"
 done
-
