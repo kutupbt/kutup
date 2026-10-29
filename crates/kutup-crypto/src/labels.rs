@@ -9,6 +9,9 @@
 //! names it as a non-label. Constructions a standard fixes (OHTTP, Web Push,
 //! Signal's provisioning cipher) keep their own strings; wire tags a
 //! standard's syntax carries are listed at the end, outside the grammar.
+//! Labels the browser computes in TypeScript (marked so) are registered here
+//! too, and the check refuses a `kutup/` literal in frontend sources that
+//! isn't one of them, so no two languages pick the same label.
 
 // --- 2fa-recovery-code -------------------------------------------------------
 
@@ -94,6 +97,12 @@ pub const CHAT_ATTACHMENT_LEDGER_ACCOUNT_KEY_V1: &[u8] =
     b"kutup/chat-attachment-ledger/account-key/v1\0";
 /// `kutup-crypto/src/chat_attachment_ledger.rs` (`KEY_DERIVATION_SALT`)
 pub const CHAT_ATTACHMENT_LEDGER_KEY_V1: &[u8] = b"kutup/chat-attachment-ledger/key/v1\0";
+/// `frontend/packages/chat-core/src/attachment-ledger.ts` (`LOCAL_PIN_DOMAIN`, TypeScript)
+pub const CHAT_ATTACHMENT_LEDGER_LOCAL_PIN_V1: &[u8] =
+    b"kutup/chat-attachment-ledger/local-pin/v1\0";
+/// `frontend/packages/chat-core/src/attachment-ledger.ts` (operation ids, TypeScript)
+pub const CHAT_ATTACHMENT_LEDGER_OPERATION_V1: &[u8] =
+    b"kutup/chat-attachment-ledger/operation/v1\0";
 
 // --- chat-backup-media -------------------------------------------------------
 
@@ -215,6 +224,8 @@ pub const CHAT_MEDIA_BLOCKS_NONCE_KEY_V1: &[u8] = b"kutup/chat-media/blocks/nonc
 /// `kutup-server/src/handlers/chat_media.rs`
 pub const CHAT_MEDIA_DELIVERY_OFFER_DIGEST_V1: &[u8] =
     b"kutup/chat-media/delivery-offer-digest/v1\0";
+/// `frontend/packages/chat-core/src/media.ts` (delivery operation ids, TypeScript)
+pub const CHAT_MEDIA_DELIVERY_OPERATION_V1: &[u8] = b"kutup/chat-media/delivery-operation/v1\0";
 /// `kutup-server/src/chat_media_federation.rs`
 pub const CHAT_MEDIA_FEDERATION_ORIGIN_RATE_V1: &[u8] =
     b"kutup/chat-media/federation-origin-rate/v1\0";
@@ -483,6 +494,15 @@ pub const PHOTOS_LIBRARY_ACCOUNT_KEY_V1: &[u8] = b"kutup/photos-library/account-
 /// `kutup-crypto/src/photos_library.rs` (`KEY_DERIVATION_SALT`)
 pub const PHOTOS_LIBRARY_KEY_V1: &[u8] = b"kutup/photos-library/key/v1\0";
 
+// --- private-ciphertext-cache ------------------------------------------------
+
+/// `frontend/packages/files/src/mediaCache/types.ts` (account scope, TypeScript)
+pub const PRIVATE_CIPHERTEXT_CACHE_ACCOUNT_V1: &[u8] =
+    b"kutup/private-ciphertext-cache/account/v1\0";
+/// `frontend/packages/files/src/mediaCache/types.ts` (binding key, TypeScript)
+pub const PRIVATE_CIPHERTEXT_CACHE_BINDING_V1: &[u8] =
+    b"kutup/private-ciphertext-cache/binding/v1\0";
+
 // --- profile-envelope --------------------------------------------------------
 
 /// `kutup-chat-core/src/profile.rs` (`ENVELOPE_KEY_SALT`)
@@ -580,8 +600,13 @@ pub const FEDERATION_REQUEST_REPLAY_HASH_V1: &[u8] = b"kutup/federation/request-
 pub const FEDERATION_SIGNATURE_TAG: &str = "kutup-federation-v2";
 
 /// Every label, for the registry's own checks.
-pub const ALL: [&[u8]; 181] = [
+pub const ALL: [&[u8]; 186] = [
     CALLS_TURN_PSEUDONYM_V1,
+    CHAT_ATTACHMENT_LEDGER_LOCAL_PIN_V1,
+    CHAT_ATTACHMENT_LEDGER_OPERATION_V1,
+    CHAT_MEDIA_DELIVERY_OPERATION_V1,
+    PRIVATE_CIPHERTEXT_CACHE_ACCOUNT_V1,
+    PRIVATE_CIPHERTEXT_CACHE_BINDING_V1,
     TWO_FACTOR_RECOVERY_CODE_V1,
     ACCOUNT_ENVELOPE_KEY_V2,
     ACCOUNT_ENVELOPE_V2,

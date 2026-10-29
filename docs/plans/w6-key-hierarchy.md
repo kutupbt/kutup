@@ -34,7 +34,7 @@ Status: **proposed** (second session, 2026-10-27), for docs/plans/wipe-unificati
   - 3 are new family salts: `chat-store`, `chat-profile`, `drive/names`.
 - **Tests:**
   - a unit test lists `labels::ALL` and checks the grammar, uniqueness, and that no label is a prefix of another;
-  - a static-gate check (`scripts/check-labels.sh`) refuses a `"kutup/` or `"kutup-` literal (also `b"`, `br"`) outside `labels.rs` in any crate's `src/`, unless `scripts/check-labels.allow` names that file and literal as a non-label (a header, path, name or test fixture); an entry that no longer matches fails too;
+  - a static-gate check (`scripts/check-labels.sh`) refuses a `"kutup/` or `"kutup-` literal (also `b"`, `br"`) outside `labels.rs` in any crate's `src/`, unless `scripts/check-labels.allow` names that file and literal as a non-label (a header, path, name or test fixture); an entry that no longer matches fails too. Labels the browser computes in TypeScript are registered too (marked so), and a `kutup/` literal in a frontend source must be one of them, NUL included;
   - vectors are regenerated once (`crypto.json`, chat-core and proto vectors), with one commit saying so.
 - **Not renamed:** strings that aren't cryptographic labels, such as the `kutup/<profile>` CLI keychain service name.
 

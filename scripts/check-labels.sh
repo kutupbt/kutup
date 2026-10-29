@@ -50,5 +50,22 @@ while IFS=$'\t' read -r path literal _; do
   fi
 done <"$allow"
 
+# Labels the browser computes in TypeScript: every `kutup/` literal in a
+# frontend source must be a registry label, NUL included.
+registry="$(grep -o 'b"kutup/[^"]*' crates/kutup-crypto/src/labels.rs | sed 's/^b"//')"
+while IFS=: read -r path line literal; do
+  [ -n "$path" ] || continue
+  label="${literal:1}"
+  if ! grep -qxF -- "$label" <<<"$registry"; then
+    echo "$path:$line: $literal (not a registry label, or no \\0)" >&2
+    failed=1
+  fi
+done < <(
+  git ls-files -- 'frontend/packages/*/src/**' 'frontend/apps/*/src/**' \
+    | grep -E '\.(ts|tsx)$' \
+    | grep -vE '\.test\.tsx?$' \
+    | xargs -r grep -noE "['\"\`]kutup/[a-z0-9/-]*(\\\\0)?" || true
+)
+
 [ "$failed" -eq 0 ] || exit 1
 echo "check-labels: every label is in the registry"
