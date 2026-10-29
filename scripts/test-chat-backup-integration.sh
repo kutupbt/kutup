@@ -223,6 +223,11 @@ KUTUP_LIVE_SERVER="http://127.0.0.1:$port" \
 KUTUP_LIVE_DATABASE_URL="postgres://$POSTGRES_USER:$POSTGRES_PASSWORD@127.0.0.1:$db_port/$POSTGRES_DB" \
   cargo test -p kutup-server jobs::tests::live_fixed_cutoff_mailbox_retention \
   -- --exact --nocapture
+# The quota reconciler recounts mail groups' storage too
+# (docs/plans/mail-groups.md): a drifted group is corrected, a right one left.
+KUTUP_LIVE_DATABASE_URL="postgres://$POSTGRES_USER:$POSTGRES_PASSWORD@127.0.0.1:$db_port/$POSTGRES_DB" \
+  cargo test -p kutup-server jobs::tests::live_mail_group_quota_reconcile \
+  -- --exact --nocapture
 
 # Federation queues (docs/plans/federation-outbox.md): a backlog for one
 # server does not starve another, and a rejected row never reorders one.

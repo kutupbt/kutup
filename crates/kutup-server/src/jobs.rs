@@ -476,9 +476,17 @@ async fn release_version(pool: &PgPool, version_id: Uuid) -> anyhow::Result<bool
 }
 
 /// Rewrites the account's one storage counter (crate::storage_pool) from
-/// the rows it stands for — Drive, Chat and Contacts together — for any
-/// drifted user.
+/// the rows it stands for — Drive, Chat, Contacts, Mail and Calendar
+/// together — for any drifted user, then each mail group's. How many it
+/// corrected.
 pub async fn quota_reconcile_tick(pool: &PgPool) -> usize {
+    // Each recount on its own: a failing one never skips the other.
+    account_quota_reconcile(pool).await + mail_group_quota_reconcile(pool).await
+}
+
+/// Rewrites each drifted account's storage counter from its rows. How many it
+/// corrected.
+async fn account_quota_reconcile(pool: &PgPool) -> usize {
     // First find who drifted (a plain read), then correct each one under
     // their row lock with the sums taken afresh: every charge and release
     // updates that row, so none can land between the sum and the write (a
@@ -541,6 +549,82 @@ pub async fn quota_reconcile_tick(pool: &PgPool) -> usize {
     }
     if corrected > 0 {
         tracing::info!("quota reconcile: corrected {corrected} users");
+    }
+    corrected
+}
+
+/// What a mail group (`group`, an SQL expression) is charged for, summed from
+/// the rows (docs/plans/mail-groups.md): its shared mailbox's own messages
+/// (by `owner`, which the mailbox indexes lead with; a group's own rows have
+/// no user, so `owner` is the group),
+/// and the objects of its distribution-list deliveries, which the members'
+/// copies (rows with a key packet) share and never count again.
+fn mail_group_sums(group: &str) -> String {
+    format!(
+        r#"SELECT (
+    COALESCE((SELECT SUM(size_bytes) FROM mail_messages
+               WHERE owner = {group} AND user_id IS NULL AND key_packet IS NULL), 0)
+  + COALESCE((SELECT SUM(size_bytes) FROM mail_group_objects WHERE group_id = {group}), 0)
+)::bigint"#
+    )
+}
+
+/// Rewrites each drifted mail group's storage counter from the rows it
+/// stands for, as [`quota_reconcile_tick`] does for accounts: found with a
+/// plain read, corrected under the group's row lock with the sum taken
+/// afresh. How many it corrected.
+async fn mail_group_quota_reconcile(pool: &PgPool) -> usize {
+    let drifted: Vec<Uuid> = match sqlx::query_scalar(&format!(
+        "SELECT g.id FROM mail_groups g WHERE g.storage_used_bytes <> ({})",
+        mail_group_sums("g.id")
+    ))
+    .fetch_all(pool)
+    .await
+    {
+        Ok(rows) => rows,
+        Err(e) => {
+            tracing::warn!("quota reconcile: mail groups: query failed: {e}");
+            return 0;
+        }
+    };
+    let mut corrected = 0;
+    for group in drifted {
+        let fixed: anyhow::Result<Option<i64>> = async {
+            let mut tx = pool.begin().await?;
+            // Deleted since the scan: nothing to correct.
+            match crate::mail::groups::lock(&mut tx, group).await {
+                Ok(_) => {}
+                Err(sqlx::Error::RowNotFound) => return Ok(None),
+                Err(error) => return Err(error.into()),
+            }
+            let total: i64 = sqlx::query_scalar(&mail_group_sums("$1"))
+                .bind(group)
+                .fetch_one(&mut *tx)
+                .await?;
+            let row: Option<i64> = sqlx::query_scalar(
+                "UPDATE mail_groups SET storage_used_bytes = $2
+                 WHERE id = $1 AND storage_used_bytes <> $2
+                 RETURNING storage_used_bytes",
+            )
+            .bind(group)
+            .bind(total)
+            .fetch_optional(&mut *tx)
+            .await?;
+            tx.commit().await?;
+            Ok(row)
+        }
+        .await;
+        match fixed {
+            Ok(Some(used)) => {
+                corrected += 1;
+                tracing::info!("quota reconcile: mail group={group} used={used} (drift corrected)");
+            }
+            Ok(None) => {}
+            Err(e) => tracing::warn!("quota reconcile: mail group {group}: {e}"),
+        }
+    }
+    if corrected > 0 {
+        tracing::info!("quota reconcile: corrected {corrected} mail groups");
     }
     corrected
 }
@@ -1327,6 +1411,133 @@ mod tests {
             None
         );
         assert_eq!(drive_file_of_key("files/not-a-uuid/x"), None);
+    }
+
+    #[tokio::test]
+    async fn live_mail_group_quota_reconcile() {
+        let Ok(database_url) = std::env::var("KUTUP_LIVE_DATABASE_URL") else {
+            eprintln!("KUTUP_LIVE_DATABASE_URL unset — skipping live mail group reconcile test");
+            return;
+        };
+        let pool = sqlx::PgPool::connect(&database_url).await.unwrap();
+        let tag = uuid::Uuid::new_v4().simple().to_string();
+        let mut groups = Vec::new();
+        for name in ["drifted", "exact"] {
+            let id: uuid::Uuid = sqlx::query_scalar(
+                "INSERT INTO mail_groups (address, display_name, kind, storage_quota_bytes)
+                 VALUES ($1, $2, 'list', 1000000) RETURNING id",
+            )
+            .bind(format!("{name}-{tag}@reconcile.test"))
+            .bind(name)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+            for (i, size) in [300_i64, 200].into_iter().enumerate() {
+                sqlx::query(
+                    "INSERT INTO mail_group_objects (object_key, group_id, size_bytes)
+                     VALUES ($1, $2, $3)",
+                )
+                .bind(format!("mail/groups/{id}/{i}"))
+                .bind(id)
+                .bind(size)
+                .execute(&pool)
+                .await
+                .unwrap();
+            }
+            groups.push(id);
+        }
+        // The drifted group's shared mailbox holds a message of its own
+        // (counted), and a member holds a list copy with a key packet
+        // (counted nowhere: its object is one of the group's above).
+        let member = uuid::Uuid::new_v4();
+        sqlx::query(
+            "INSERT INTO users (id, username, master_key_envelope, recovery_key_envelope,
+                drive_private_key_envelope, public_key, account_authority_public_key,
+                account_authority_key_id, account_incarnation_id, drive_signing_public_key)
+             VALUES ($1, $2, '', '', '', '', '', '', '', '')",
+        )
+        .bind(member)
+        .bind(format!("member{}", &tag[..12]))
+        .execute(&pool)
+        .await
+        .unwrap();
+        let address: uuid::Uuid = sqlx::query_scalar(
+            "INSERT INTO mail_addresses (address, group_id) VALUES ($1, $2) RETURNING id",
+        )
+        .bind(format!("drifted-{tag}@reconcile.test"))
+        .bind(groups[0])
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        for (user, key_packet, size) in [
+            (None, None, 70_i64),
+            (Some(member), Some(vec![1_u8; 16]), 900),
+        ] {
+            sqlx::query(
+                "INSERT INTO mail_messages (address_id, thread_id, direction, folder,
+                    protection, object_key, size_bytes, user_id, group_id, key_packet)
+                 VALUES ($1, $2, 'inbound', 'inbox', 'end_to_end', $3, $4, $5, $6, $7)",
+            )
+            .bind(address)
+            .bind(uuid::Uuid::new_v4())
+            .bind(format!("mail/groups/{}/message-{size}", groups[0]))
+            .bind(size)
+            .bind(user)
+            .bind(groups[0])
+            .bind(key_packet)
+            .execute(&pool)
+            .await
+            .unwrap();
+        }
+        // One counter drifted, one right.
+        sqlx::query("UPDATE mail_groups SET storage_used_bytes = $2 WHERE id = $1")
+            .bind(groups[0])
+            .bind(9_999_i64)
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query("UPDATE mail_groups SET storage_used_bytes = 500 WHERE id = $1")
+            .bind(groups[1])
+            .execute(&pool)
+            .await
+            .unwrap();
+        assert!(crate::jobs::mail_group_quota_reconcile(&pool).await >= 1);
+        // Objects 500, plus the shared mailbox's own 70; the member copy not.
+        for (id, expected) in groups.iter().zip([570_i64, 500]) {
+            let used: i64 =
+                sqlx::query_scalar("SELECT storage_used_bytes FROM mail_groups WHERE id = $1")
+                    .bind(id)
+                    .fetch_one(&pool)
+                    .await
+                    .unwrap();
+            assert_eq!(used, expected);
+        }
+        sqlx::query("DELETE FROM mail_messages WHERE address_id = $1")
+            .bind(address)
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query("DELETE FROM mail_addresses WHERE id = $1")
+            .bind(address)
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query("DELETE FROM users WHERE id = $1")
+            .bind(member)
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query("DELETE FROM mail_group_objects WHERE group_id = ANY($1)")
+            .bind(&groups)
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query("DELETE FROM mail_groups WHERE id = ANY($1)")
+            .bind(&groups)
+            .execute(&pool)
+            .await
+            .unwrap();
+        pool.close().await;
     }
 
     #[tokio::test]
