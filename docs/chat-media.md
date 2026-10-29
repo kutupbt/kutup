@@ -132,9 +132,20 @@ treated as evidence for the full object.
    digest before constructing the E2EE descriptor. A mismatch deletes the
    object and never sends a message. The matching digest, exact length, object
    row, quota, and idempotent upload receipt commit atomically.
-4. The sender submits one logical E2EE message and a separate authenticated
-   media-delivery request. The origin may retain the local sender and recipient
-   internally for retry; they never enter a destination transaction or log.
+4. The sender writes the attachment message to its history and asks its own
+   server for the destination's copy (an authenticated media-delivery
+   request). The message is encrypted and sent only once the answer is
+   `stored` or `already_stored` (Signal's model,
+   docs/plans/federation-outbox.md): on `queued` it waits, showing as
+   sending, in a job the client keeps across restarts, and asks the same
+   operation again with backoff (at most five minutes between asks, and when
+   the app comes back online or reopens) for at most
+   `chatAttachmentSendLifetimeSeconds` (a site setting, one day by default).
+   `storage_full`, a refusal (`404`, `422`) or the end of that lifetime shows
+   the message as not delivered, with a retry; a retry after a refusal asks
+   under a new operation. The origin may retain the local sender and
+   recipient internally for retry; they never enter a destination
+   transaction or log.
 5. A send is complete for one destination only after that homeserver has
    reserved recipient quota, fetched and verified the object, committed its
    durable reference and returned a signed acknowledgement.
@@ -143,9 +154,18 @@ treated as evidence for the full object.
    delivery is represented per destination without rolling back successful
    destinations.
 
-Exact retries use the same UUID and operation ID. A changed digest, length,
-suite, recipient or destination under an existing operation ID is a terminal
-conflict.
+Exact retries use the same UUID and operation ID. The origin keeps each
+operation's final answer: a repeat gets the stored receipt or refusal once it
+is settled, or `queued` (and the destination's queue tried at once) while it
+is pending. A repeat may carry a new expiry; a changed digest, length, suite,
+token, capability, recipient or destination under an existing operation ID is
+a terminal conflict.
+
+Offers to one destination go in order, one sequence each, through the one
+federation outbox (docs/plans/federation-outbox.md). The destination records
+every final answer, a refusal included (an offer invalid or expired by the
+time it arrives, an operation or object identity reused, the origin no longer
+serving the object), so a refused offer never blocks the ones behind it.
 
 ## 6. Federation transfer
 

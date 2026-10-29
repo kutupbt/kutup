@@ -446,10 +446,7 @@ async fn main() -> anyhow::Result<()> {
     }
     // Old addresses past their receiving, names past their hold.
     account_names::spawn_sweep(state.pool.clone(), state.config.name_sweep_seconds);
-    // Announces of this server's renames to its peers.
-    remote_renames::spawn_announcer(state.clone());
     federation_outbox::spawn_worker(state.clone());
-    chat_media_federation::spawn_retry_worker(state.clone());
     drive_federation::spawn_digest_backfill(state.clone());
     mail::groups::ensure_system_groups(&state.pool, &state.config.chat_server_name).await?;
     site_settings::seed_mail_outside_sending(&state.pool, state.config.mail_outside_sending)

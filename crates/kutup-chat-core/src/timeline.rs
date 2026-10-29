@@ -929,6 +929,7 @@ mod tests {
             deduplicated: false,
             failed_recipients: 0,
             waiting_recipients: None,
+            media_wait: None,
         }
     }
 

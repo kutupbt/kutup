@@ -135,15 +135,16 @@ wait_url "http://127.0.0.1:$port_b/api/health"
 run_phase verify-retry
 
 # Renames across servers: B learns of A's rename (announce, or lookup) and
-# relays 409 renamed; A's announce reaches B and leaves A's outbox.
+# relays 409 renamed; A's announce reaches B and is delivered in A's outbox.
 run_phase renames
 deadline=$((SECONDS + 90))
 until [[ "$(compose exec -T postgres-a psql -U kutup -d kutup -Atc \
-  "SELECT COUNT(*) FROM rename_announce_outbox")" == "0" ]]; do
+  "SELECT COUNT(*) FROM federation_outbox WHERE kind = 'rename' AND state <> 'delivered'")" == "0" ]]; do
   if (( SECONDS >= deadline )); then
     echo "A's rename announce was never delivered" >&2
     compose exec -T postgres-a psql -U kutup -d kutup -Atc \
-      "SELECT destination, attempts, last_error FROM rename_announce_outbox" >&2
+      "SELECT destination, state, error_class, attempts, last_error FROM federation_outbox
+       WHERE kind = 'rename' AND state <> 'delivered'" >&2
     exit 1
   fi
   sleep 2

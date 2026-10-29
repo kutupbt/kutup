@@ -65,6 +65,9 @@ pub(crate) struct DirectSend<'a> {
     pub recipient_bundles: &'a [DevicePreKeyBundle],
     pub sync_bundles: &'a [DevicePreKeyBundle],
     pub content: &'a ChatContent,
+    /// When the message was written, if before now (an attachment message
+    /// that waited for the recipient's server): it keeps its place.
+    pub created_at: Option<i64>,
 }
 
 pub(crate) struct SealedDirectSend<'a> {
@@ -75,6 +78,8 @@ pub(crate) struct SealedDirectSend<'a> {
     pub content: &'a ChatContent,
     pub sender_certificate: &'a SenderCertificate,
     pub capability: [u8; 16],
+    /// As [`DirectSend::created_at`].
+    pub created_at: Option<i64>,
 }
 
 /// Authenticated information exposed by libsignal's outer sealed envelope.
@@ -1744,6 +1749,7 @@ impl Session {
                     deduplicated: false,
                     failed_recipients: 0,
                     waiting_recipients: None,
+                    media_wait: None,
                 };
                 self.store.stage_sent_message(message.clone());
                 Some(message)
@@ -2643,6 +2649,7 @@ impl Session {
             deduplicated: false,
             failed_recipients: 0,
             waiting_recipients: None,
+            media_wait: None,
         });
         self.identity_changes.push(peer.to_string());
         Ok(())
@@ -2768,6 +2775,7 @@ impl Session {
                 deduplicated: false,
                 failed_recipients: 0,
                 waiting_recipients: None,
+                media_wait: None,
             });
         }
         if let Err(error) = self.store.commit().await {
@@ -2799,6 +2807,7 @@ impl Session {
                 deduplicated: false,
                 failed_recipients: 0,
                 waiting_recipients: None,
+                media_wait: None,
             });
         }
         if let Err(error) = self.store.commit().await {
@@ -2985,6 +2994,7 @@ impl Session {
             recipient_bundles,
             sync_bundles,
             content,
+            created_at: written_at,
         } = send;
         if content.kind == kutup_chat_proto::content::kind::SENT_TRANSCRIPT {
             return Err(ChatError::Invalid(
@@ -2999,7 +3009,7 @@ impl Session {
             let recipient_envelopes = self
                 .build_send(peer_user, recipient_bundles, &plaintext, summary, rng)
                 .await?;
-            let created_at = now_millis();
+            let created_at = written_at.unwrap_or_else(now_millis);
             let (sync, sync_envelopes) = if ephemeral {
                 (None, Vec::new())
             } else {
@@ -3056,6 +3066,7 @@ impl Session {
                     deduplicated: false,
                     failed_recipients: 0,
                     waiting_recipients: None,
+                    media_wait: None,
                 });
                 self.stage_outgoing_contact(peer_user, created_at).await?;
             }
@@ -3086,6 +3097,7 @@ impl Session {
             content,
             sender_certificate,
             capability,
+            created_at: written_at,
         } = send;
         ensure_room_for_wrappers(send_id, peer_user, content)?;
         let ephemeral = content.is_ephemeral();
@@ -3102,7 +3114,7 @@ impl Session {
                     rng,
                 )
                 .await?;
-            let created_at = now_millis();
+            let created_at = written_at.unwrap_or_else(now_millis);
             let (sync, sync_envelopes) = if ephemeral {
                 (None, Vec::new())
             } else {
@@ -3159,6 +3171,7 @@ impl Session {
                     deduplicated: false,
                     failed_recipients: 0,
                     waiting_recipients: None,
+                    media_wait: None,
                 });
                 self.stage_outgoing_contact(peer_user, created_at).await?;
             }
@@ -3322,6 +3335,7 @@ impl Session {
                     deduplicated: false,
                     failed_recipients: 0,
                     waiting_recipients: None,
+                    media_wait: None,
                 });
                 self.store.commit().await?;
                 Ok(envelopes)
@@ -3418,6 +3432,35 @@ impl Session {
         self.store.db().load_sent_message(send_id).await
     }
 
+    /// The send ids of attachment messages waiting for the recipient's
+    /// server (`crate::db::MediaWait`), oldest first.
+    pub(crate) async fn media_waits(&self) -> Result<Vec<String>> {
+        match self.store.media_waits().await? {
+            Some(state) => serde_json::from_slice(&state).map_err(|e| ChatError::Db(e.to_string())),
+            None => Ok(Vec::new()),
+        }
+    }
+
+    /// Writes attachment messages' waits and the list of those waiting, in
+    /// one commit; `seq` is the content sequence a new one took.
+    pub(crate) async fn save_media_waits(
+        &mut self,
+        messages: Vec<SentMessage>,
+        seq: Option<u64>,
+        waiting: &[String],
+    ) -> Result<()> {
+        for message in messages {
+            self.store.stage_sent_message(message);
+        }
+        if let Some(seq) = seq {
+            self.store.stage_sent_seq(seq);
+        }
+        self.store.stage_media_waits(
+            serde_json::to_vec(waiting).map_err(|e| ChatError::Db(e.to_string()))?,
+        );
+        self.store.commit().await
+    }
+
     /// Every still-pending outbound send (for resend-on-startup).
     pub(crate) async fn pending_outbox(&self) -> Result<Vec<OutboxEntry>> {
         self.store.db().list_outbox().await
@@ -3476,6 +3519,7 @@ impl Session {
                 deduplicated: false,
                 failed_recipients: 0,
                 waiting_recipients: None,
+                media_wait: None,
             });
             self.store.commit().await
         }
@@ -4912,6 +4956,7 @@ mod sealed_tests {
                     deduplicated: false,
                     failed_recipients: 0,
                     waiting_recipients: None,
+                    media_wait: None,
                 },
             )
         };
@@ -5150,6 +5195,7 @@ mod sealed_tests {
                 deduplicated: false,
                 failed_recipients: 0,
                 waiting_recipients: None,
+                media_wait: None,
             },
         );
         for (id, seq, conversation, target) in [
@@ -5181,6 +5227,7 @@ mod sealed_tests {
                     deduplicated: false,
                     failed_recipients: 0,
                     waiting_recipients: None,
+                    media_wait: None,
                 },
             );
         }
@@ -5306,6 +5353,7 @@ mod sealed_tests {
                 content: &wrapped,
                 sender_certificate: &sender_certificate,
                 capability: [7; 16],
+                created_at: None,
             },
             &mut summary,
             &mut rng,
@@ -5378,6 +5426,7 @@ mod sealed_tests {
                 content: &content,
                 sender_certificate: &sender_certificate,
                 capability: [7; 16],
+                created_at: None,
             },
             &mut summary,
             &mut rng,

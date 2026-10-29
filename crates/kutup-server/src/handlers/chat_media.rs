@@ -1085,9 +1085,9 @@ pub async fn clear_reference(
     if origin_user_id == Some(user_id) {
         let pending: bool = sqlx::query_scalar(
             "SELECT EXISTS(
-               SELECT 1 FROM chat_media_federation_outbox
-               WHERE origin_user_id=$1 AND state='pending'
-                 AND transaction->'offer'->>'attachmentId'=$2)",
+               SELECT 1 FROM federation_outbox
+               WHERE kind='media' AND sender_user_id=$1 AND state='pending'
+                 AND payload->'transaction'->'offer'->>'attachmentId'=$2)",
         )
         .bind(user_id)
         .bind(attachment_id.to_string())

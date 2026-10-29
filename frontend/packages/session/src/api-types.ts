@@ -316,12 +316,16 @@ export interface AdminSettings {
   driveStreamMaxConcurrent: number
   driveStreamResponseMaxBytes: number
   driveStreamBlobFallbackMaxBytes: number
-  /** Federation deliveries' backoff (docs/plans/federation-outbox.md), in seconds. */
+  /** Federation deliveries (docs/plans/federation-outbox.md): backoff and worker in seconds, records and announces in days. */
   federationRetryBaseSeconds: number
   federationRetryMaxSeconds: number
   federationPeerUpgradeSeconds: number
   federationWorkerSeconds: number
   federationHeadsPerTick: number
+  federationRecordDays: number
+  federationAnnounceDays: number
+  federationAnnouncePeerDays: number
+  chatAttachmentSendLifetimeSeconds: number
 }
 
 export type FederationMode = 'disabled' | 'allowlist' | 'blocklist' | 'open'
@@ -365,7 +369,17 @@ export interface FederationPeer {
     chatMismatchesLastDay: number
     driveIncomingShares: number
     driveOutgoingShares: number
+    deliveries: FederationDeliveryCounts[]
   }
+}
+
+/** One kind of delivery to other servers (docs/plans/federation-outbox.md). */
+export interface FederationDeliveryCounts {
+  kind: 'chat' | 'sealed' | 'media' | 'rename'
+  pending: number
+  /** Refused for good in the last day. */
+  rejectedLastDay: number
+  oldestPendingAt: string | null
 }
 
 export interface FederationPeerEvidenceDocument {
@@ -419,6 +433,7 @@ export interface AdminFederationPolicy {
     driveIncomingShares: number
     driveOutgoingShares: number
     activeReplayReservations: number
+    deliveries: FederationDeliveryCounts[]
   }
 }
 
