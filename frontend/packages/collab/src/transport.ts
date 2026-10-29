@@ -138,6 +138,16 @@ export class CollabTransport {
     }
   }
 
+  /**
+   * Drops the current socket and connects again, resuming from
+   * `lastSeenSeq`: what came after it is replayed (frames held back as
+   * unverified are checked again).
+   */
+  resync(): void {
+    if (this.closed) return
+    this.ws?.close()
+  }
+
   /** Permanently close the transport. No further connects. */
   close(): void {
     this.closed = true

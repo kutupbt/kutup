@@ -383,8 +383,11 @@ export default function TextCollabEditor({
     const senders = new SenderCheck({
       authority: accountAuthorityVerdict,
       name: accountNameOfKey,
-      onRefused: ({ name, reason }) =>
-        toast.error(t(reason === 'reset' ? 'editor.senderReset' : 'editor.senderUnverified', { name })),
+      onRefused: ({ name, reason, trust }) =>
+        toast.error(t(reason === 'reset' ? 'editor.senderReset' : 'editor.senderUnverified', { name }), {
+          // A reset the identity pins don't know: the person may trust it here.
+          action: trust ? { label: t('editor.senderTrust'), onClick: () => void trust() } : undefined,
+        }),
     })
 
     void (async () => {

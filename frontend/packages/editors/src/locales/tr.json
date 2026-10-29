@@ -31,6 +31,7 @@
     "quotaSave": "Depolama kotası aşıldı — kaydedilemedi",
     "senderReset": "{{name}} tarafından yapılan düzenlemeler doğrulanamıyor: hesabı sıfırlandı",
     "senderUnverified": "{{name}} tarafından yapılan bazı düzenlemeler doğrulanamadı ve uygulanmadı",
+    "senderTrust": "Yeni hesabına güven",
     "mode": {
       "label": "Görünüm",
       "edit": "Düzenle",

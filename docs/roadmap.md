@@ -252,6 +252,10 @@ adding frames that claim an earlier manifest sequence
 (docs/plans/one-device-list.md §8, slice 3). It needs no format change:
 every V3 frame already signs its document key id and key generation, and
 the log keeps each frame's document key.
+Saved versions are not sender-verified (an editor opening a file loads the
+newest version as it is, `catchUp`), so the rotation must cover versions
+too: a version saved under an older document key after the rotation's
+position doesn't count.
 
 ### Security log: sign-ins and 2FA events (Proton parity)
 

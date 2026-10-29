@@ -3961,20 +3961,20 @@ impl CollabSender {
             .map_err(|error| js_error(&error))
     }
 
-    /// Takes an earlier manifest of the account, for logged frames.
-    #[wasm_bindgen(js_name = takeEntry)]
-    pub fn take_entry(&mut self, manifest: JsValue) -> Result<(), JsValue> {
-        let manifest: kutup_chat_proto::AccountManifestV3 =
-            serde_wasm_bindgen::from_value(manifest)
-                .map_err(|error| js_error(&format!("account manifest: {error}")))?;
+    /// Takes earlier manifests of the account, for logged frames: the run a
+    /// `needManifest` asked for, linked by `previous_hash` up to the head.
+    #[wasm_bindgen(js_name = takeHistory)]
+    pub fn take_history(&mut self, run: JsValue) -> Result<(), JsValue> {
+        let run: Vec<kutup_chat_proto::AccountManifestV3> = serde_wasm_bindgen::from_value(run)
+            .map_err(|error| js_error(&format!("manifest history: {error}")))?;
         self.inner
-            .take_entry(manifest)
+            .take_history(&run)
             .map_err(|error| js_error(&error))
     }
 
     /// What to do with `delivered` (a frame as the server delivers it: its
     /// sender, then the packed frame): `{ kind: 'take' }`, `{ kind:
-    /// 'needHead' }`, `{ kind: 'needManifest', sequence }` or `{ kind:
+    /// 'needHead' }`, `{ kind: 'needManifest', sequence, through }` or `{ kind:
     /// 'refuse', reason }`. A frame of another sender is refused.
     pub fn check(&self, delivered: &[u8], live: bool) -> Result<JsValue, JsValue> {
         let verdict = match envelope::delivered(delivered) {

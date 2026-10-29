@@ -17,15 +17,32 @@ vi.mock('@kutup/crypto/rustWasm', async () => {
 
 /** The sender account's chain as its server serves it; the head is the last. */
 let chain: import('@kutup/crypto/accountManifest').AccountManifest[] = []
+/** The server can't be reached. */
+let down = false
+let reads = 0
 vi.mock('@kutup/session/devices', () => ({
-  fetchManifest: async () => chain.at(-1) ?? null,
-  fetchManifestHistory: async (_account: string, from: number, to: number) =>
-    chain.filter((m) => m.sequence >= from && m.sequence <= to),
+  fetchManifest: async () => {
+    reads++
+    if (down) throw new Error('unreachable')
+    return chain.at(-1) ?? null
+  },
+  fetchManifestHistory: async (_account: string, from: number, to: number) => {
+    reads++
+    if (down) throw new Error('unreachable')
+    return chain.filter((m) => m.sequence >= from && m.sequence <= to)
+  },
 }))
 const kept: unknown[] = []
+/** The pin this page keeps, as the sealed store would. */
+let pinned: unknown = null
+const forgotten: string[] = []
 vi.mock('@kutup/session/manifestPins', () => ({
-  manifestPin: async () => null,
+  manifestPin: async () => pinned,
   keepManifestPin: async (pin: unknown) => void kept.push(pin),
+  forgetManifestPin: async (account: string) => {
+    forgotten.push(account)
+    pinned = null
+  },
 }))
 
 import { listDeviceInManifest, removeDevicesFromManifest, type ManifestDevice } from '@kutup/crypto/accountManifest'
@@ -81,6 +98,10 @@ describe('SenderCheck', () => {
   beforeEach(async () => {
     chain = []
     kept.length = 0
+    down = false
+    reads = 0
+    pinned = null
+    forgotten.length = 0
     one = await generateSigningKey()
     two = await generateSigningKey()
     await list(editor(1, one)) // 1: device 1
@@ -98,8 +119,8 @@ describe('SenderCheck', () => {
 
   it('takes a listed device signed with its key, and pins the head', async () => {
     const { senders, refused } = check()
-    expect(await senders.verify(await frame(1, 1, one), true)).toBe(true)
-    expect(await senders.verify(await frame(2, 2, two), true)).toBe(true)
+    expect(await senders.verify(await frame(1, 1, one), true)).toBe('take')
+    expect(await senders.verify(await frame(2, 2, two), true)).toBe('take')
     expect(refused()).toEqual([])
     expect(kept).toHaveLength(1)
     senders.close()
@@ -107,8 +128,8 @@ describe('SenderCheck', () => {
 
   it("drops a frame the head doesn't list, or one under another key", async () => {
     const { senders, refused } = check()
-    expect(await senders.verify(await frame(3, 2, two), true)).toBe(false)
-    expect(await senders.verify(await frame(2, 2, one), true)).toBe(false)
+    expect(await senders.verify(await frame(3, 2, two), true)).toBe('forged')
+    expect(await senders.verify(await frame(2, 2, one), true)).toBe('forged')
     await vi.waitFor(() => expect(refused()).toEqual([{ account: ACCOUNT, name: ACCOUNT, reason: 'unverified' }]))
     senders.close()
   })
@@ -118,16 +139,66 @@ describe('SenderCheck', () => {
     const { senders } = check()
     const old = await frame(2, 2, two)
     // Live: the head (3) no longer lists device 2.
-    expect(await senders.verify(old, true)).toBe(false)
+    expect(await senders.verify(old, true)).toBe('forged')
     // From the log: made under manifest 2, which listed it.
-    expect(await senders.verify(old, false)).toBe(true)
+    expect(await senders.verify(old, false)).toBe('take')
     senders.close()
   })
 
   it("refuses a reset account's frames", async () => {
     const { senders, refused } = check('changed')
-    expect(await senders.verify(await frame(1, 1, one), true)).toBe(false)
+    expect(await senders.verify(await frame(1, 1, one), true)).toBe('unverified')
     await vi.waitFor(() => expect(refused()[0]?.reason).toBe('reset'))
+    // The identity pins hold another authority: not trusted from here.
+    expect(refused()[0]?.trust).toBeUndefined()
+    senders.close()
+  })
+
+  it('holds a frame it cannot check now, and does not read again at once', async () => {
+    const { senders, refused } = check()
+    down = true
+    // Unverified, not forged: the editor keeps its log position before it.
+    expect(await senders.verify(await frame(1, 1, one), true)).toBe('unverified')
+    const after = reads
+    // The failure is kept a while: the next frames read nothing.
+    for (let i = 0; i < 5; i++) expect(await senders.verify(await frame(1, 1, one, BigInt(i + 2)), true)).toBe('unverified')
+    expect(reads).toBe(after)
+    await vi.waitFor(() => expect(refused().map((r) => r.reason)).toEqual(['unverified']))
+    senders.close()
+  })
+
+  it('offers to trust a reset the identity pins do not know, and replays after', async () => {
+    // The page pinned the account's old chain; it was reset since.
+    const { senders: first } = check()
+    expect(await first.verify(await frame(1, 1, one), true)).toBe('take')
+    pinned = kept.at(-1)
+    first.close()
+    chain = []
+    const otherMaster = toBase64(new Uint8Array(32).fill(8))
+    const fresh = await generateSigningKey()
+    chain.push(await listDeviceInManifest(null, editor(1, fresh), '2026-10-29T00:00:00Z', otherMaster, ACCOUNT))
+    const { senders, refused } = check()
+    let trusted = 0
+    senders.whenTrusted(() => void trusted++)
+    expect(await senders.verify(await frame(1, 1, fresh), true)).toBe('unverified')
+    await vi.waitFor(() => expect(refused()[0]?.reason).toBe('reset'))
+    const trust = refused()[0]!.trust!
+    expect(trust).toBeDefined()
+    await trust()
+    expect(forgotten).toEqual([ACCOUNT])
+    expect(trusted).toBe(1)
+    expect(await senders.verify(await frame(1, 1, fresh), true)).toBe('take')
+    senders.close()
+  })
+
+  it('takes history only linked up to the head', async () => {
+    // A logged frame of a device listed only at 2, while the head is 3.
+    chain.push(await removeDevicesFromManifest(chain.at(-1)!, [2], '2026-10-27T00:02:00Z', MASTER_KEY))
+    const { senders } = check()
+    const old = await frame(2, 2, two)
+    expect(await senders.verify(old, false)).toBe('take')
+    // A logged frame of a device no manifest of the chain listed: forged.
+    expect(await senders.verify(await frame(5, 2, two), false)).toBe('forged')
     senders.close()
   })
 })

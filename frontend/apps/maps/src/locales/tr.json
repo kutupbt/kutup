@@ -106,6 +106,7 @@
     "quota": "Depolama alanınız dolu, bu yüzden değişiklikler artık sürüm olarak kaydedilmiyor.",
     "senderReset": "{{name}} tarafından yapılan değişiklikler doğrulanamıyor: hesabı sıfırlandı",
     "senderUnverified": "{{name}} tarafından yapılan bazı değişiklikler doğrulanamadı ve uygulanmadı",
+    "senderTrust": "Yeni hesabına güven",
     "preRestoreLabel": "Geri yüklemeden önce ({{time}})",
     "restoredLabel": "Geri yüklendi ({{time}})",
     "share": "Paylaş",

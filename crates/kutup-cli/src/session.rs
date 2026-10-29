@@ -307,6 +307,22 @@ impl Store {
         Ok(())
     }
 
+    /// Forgets another account's pin (`kutup devices forget-pin --sender`):
+    /// its next head is trusted on first use.
+    pub fn forget_sender_pin(
+        &self,
+        account: &kutup_crypto::account_ref::AccountRef,
+    ) -> Result<bool> {
+        let wtx = self.db.begin_write()?;
+        let removed = {
+            let mut t = wtx.open_table(MANIFEST_PIN)?;
+            let removed = t.remove(format!("sender:{account}").as_str())?.is_some();
+            removed
+        };
+        wtx.commit()?;
+        Ok(removed)
+    }
+
     /// Forgets the pin (`kutup devices forget-pin`, after a server restore).
     pub fn forget_manifest_pin(&self) -> Result<()> {
         let wtx = self.db.begin_write()?;

@@ -106,6 +106,7 @@
     "quota": "Your storage is full, so changes are no longer saved as versions.",
     "senderReset": "Changes from {{name}} can't be verified: their account was reset",
     "senderUnverified": "Some changes from {{name}} couldn't be verified and weren't applied",
+    "senderTrust": "Trust their new account",
     "preRestoreLabel": "Before restoring ({{time}})",
     "restoredLabel": "Restored ({{time}})",
     "share": "Share",

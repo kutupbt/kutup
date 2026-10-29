@@ -27,6 +27,11 @@ pub enum DevicesCmd {
     /// than the one kept here, which is refused as a rollback until this
     /// profile trusts the server's list again on first use.
     ForgetPin {
+        /// Another account's pin instead (`aci:<uuid>@<server>`, as `sync`
+        /// names it): only when you know its account was reset; its next
+        /// device list is then trusted on first use.
+        #[arg(long)]
+        sender: Option<String>,
         /// Skip the confirmation prompt.
         #[arg(long)]
         yes: bool,
@@ -37,8 +42,37 @@ pub fn run(profile: &str, json: bool, cmd: &DevicesCmd) -> Result<()> {
     match cmd {
         DevicesCmd::List => list(profile, json),
         DevicesCmd::Remove { device_id, yes } => remove(profile, json, *device_id, *yes),
-        DevicesCmd::ForgetPin { yes } => forget_pin(profile, json, *yes),
+        DevicesCmd::ForgetPin { sender: None, yes } => forget_pin(profile, json, *yes),
+        DevicesCmd::ForgetPin {
+            sender: Some(sender),
+            yes,
+        } => forget_sender_pin(profile, json, sender, *yes),
     }
+}
+
+fn forget_sender_pin(profile: &str, json: bool, sender: &str, yes: bool) -> Result<()> {
+    let account: kutup_crypto::account_ref::AccountRef = sender
+        .parse()
+        .map_err(|_| anyhow!("{sender} is not an account (aci:<uuid>@<server>)"))?;
+    let ctx = require_session(profile)?;
+    confirm(
+        &format!(
+            "Trust {sender}'s new keys? Do this only if you know its account was reset: \
+             its next device list is trusted on first use."
+        ),
+        yes,
+    )?;
+    let forgotten = ctx.store.forget_sender_pin(&account)?;
+    if json {
+        crate::output::print_json(
+            &serde_json::json!({ "forgotten": forgotten, "sender": sender }),
+        )?;
+    } else if forgotten {
+        println!("Forgot the device list kept for {sender}.");
+    } else {
+        println!("This profile keeps no device list for {sender}.");
+    }
+    Ok(())
 }
 
 fn forget_pin(profile: &str, json: bool, yes: bool) -> Result<()> {
