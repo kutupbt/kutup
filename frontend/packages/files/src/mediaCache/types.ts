@@ -79,7 +79,7 @@ export async function ciphertextCacheBindingKeyV1(
     throw new Error('ciphertext cache account scope is invalid')
   }
   const fields = [
-    'kutup/private-ciphertext-cache/binding/v1',
+    'kutup/private-ciphertext-cache/binding/v1\0',
     accountScope,
     binding.product,
     String(binding.suite),
