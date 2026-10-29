@@ -18,7 +18,7 @@ Status: **proposed** (second session, 2026-10-27), for docs/plans/wipe-unificati
   - for every other purpose, the generation of the MK that sealed it.
 
   The magic becomes `KUTPAE2\0`. An envelope without the field is refused, and none survives the wipe.
-- **Sealing takes the generation explicitly** (`seal`, `seal_object`, `seal_revision`, the base64 and WASM forms). A default would let a future rotation seal under the wrong one unnoticed. `inspect` (the authenticated header) shows it, so a future rotation reads it first to pick the master key that opens the envelope, and can tell old wraps from new. Opening is unchanged.
+- **Sealing takes the generation explicitly** (`seal`, `seal_object`, `seal_revision`, the base64 and WASM forms). A default would let a future rotation seal under the wrong one unnoticed. `inspect` (and the WASM `inspectAccountEnvelope`) reads it from the header without opening the envelope, so a future rotation reads it first to pick the master key to try, and can tell old wraps from new. `inspect` authenticates nothing: the generation is AEAD associated data, so a forged one fails when the envelope opens. Opening is unchanged.
 - **Clients** pass the account's current generation. Until rotation exists, that is one constant per client (`MASTER_KEY_GENERATION` in `@kutup/crypto/masterKeyGeneration`, passed by the TS wrappers that seal; `MasterKeyGeneration::FIRST` in Rust). A kept Pass key resealed for a copied vault keeps the generation of the envelope it came from, named so a search finds every place rotation will touch.
 - **No server column yet.** Rotation, when it is built, adds the account's current generation to the account head (W1).
 

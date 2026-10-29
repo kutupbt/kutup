@@ -602,16 +602,30 @@ pub fn open_account_envelope(
     Ok(STANDARD.encode(plaintext))
 }
 
+/// What `inspectAccountEnvelope` reads from a header.
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct AccountEnvelopeInspection {
+    purpose: u8,
+    /// The master key the envelope belongs to (docs/plans/w6-key-hierarchy.md §2).
+    generation: u32,
+}
+
 /// Checks an account envelope's shape (suite, purpose, object, revision and
 /// padded length) without a key, as the server does before storing one;
-/// throws when it is malformed. Returns the purpose.
+/// throws when it is malformed. Returns its purpose and master-key
+/// generation, as written: nothing is authenticated until it opens.
 #[wasm_bindgen(js_name = inspectAccountEnvelope)]
-pub fn inspect_account_envelope(envelope_base64: &str) -> Result<u8, JsValue> {
+pub fn inspect_account_envelope(envelope_base64: &str) -> Result<JsValue, JsValue> {
     let envelope = account_envelope::decode_canonical_b64(envelope_base64)
         .map_err(|error| js_error(&error.to_string()))?;
-    account_envelope::inspect(&envelope)
-        .map(|header| header.purpose.as_u8())
-        .map_err(|error| js_error(&error.to_string()))
+    let header =
+        account_envelope::inspect(&envelope).map_err(|error| js_error(&error.to_string()))?;
+    serde_wasm_bindgen::to_value(&AccountEnvelopeInspection {
+        purpose: header.purpose.as_u8(),
+        generation: header.generation.get(),
+    })
+    .map_err(|error| js_error(&error.to_string()))
 }
 
 /// Mail address keys have typed exports (`generateMailAddressKey`), so the
