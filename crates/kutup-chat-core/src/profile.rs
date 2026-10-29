@@ -881,6 +881,125 @@ mod tests {
         std::sync::LazyLock::new(|| RECIPIENT_KEY.parse().unwrap());
     const BINDING: &str = "0b6b5e0c-4c1e-4b8e-9c2d-6a1f3e5d7c9b";
 
+    /// The profile formats' canonical vectors
+    /// (`crates/kutup-crypto/tests/vectors/profile-v1.json`), made from this
+    /// code before it moves into kutup-crypto (docs/plans/chat-crypto-move.md):
+    /// derived keys and verifiers, each item sealed under a fixed nonce, and a
+    /// whole upload with what it opens to. `KUTUP_WRITE_PROFILE_VECTORS=1`
+    /// writes the file; otherwise this code must reproduce it byte for byte.
+    #[test]
+    fn profile_formats_match_the_canonical_vectors() {
+        use serde_json::json;
+        let path = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../kutup-crypto/tests/vectors/profile-v1.json"
+        );
+        let master_key = [0x09u8; 32];
+        let profile_key = [0x51u8; 32];
+        let wrapping = derive_wrapping_key(&master_key, BINDING).unwrap();
+        let version = profile_version(&profile_key).unwrap();
+        let access = profile_access_key(&profile_key).unwrap();
+        let delivery = derive_delivery_capability(&profile_key, &RECIPIENT).unwrap();
+        let item = |purpose: ProfileEnvelopePurpose,
+                    root: &[u8; 32],
+                    plaintext: &[u8],
+                    nonce: u8| {
+            let context =
+                ProfileEnvelopeContextV1::new(purpose, &RECIPIENT, &version, 4, 3).unwrap();
+            json!({
+                "purpose": format!("{purpose:?}"),
+                "rootKey": STANDARD.encode(root),
+                "revision": 4,
+                "sourceDeviceId": 3,
+                "nonce": STANDARD.encode([nonce; NONCE_BYTES]),
+                "plaintext": STANDARD.encode(plaintext),
+                "envelope": encrypt_b64_with_nonce(plaintext, root, &context, &[nonce; NONCE_BYTES]).unwrap(),
+            })
+        };
+        let mut name = vec![0u8; NAME_PADDED_LENGTHS[0]];
+        name[..13].copy_from_slice(b"Alice Example");
+        let mut about = vec![0u8; PROFILE_ABOUT_PADDED_LENGTHS[0]];
+        about[..9].copy_from_slice(b"Hello, Kt");
+        let items = vec![
+            item(
+                ProfileEnvelopePurpose::DisplayName,
+                &profile_key,
+                &name,
+                0x61,
+            ),
+            item(
+                ProfileEnvelopePurpose::Avatar,
+                &profile_key,
+                &[1, 0x89, 0x50, 0x4e, 0x47],
+                0x62,
+            ),
+            item(ProfileEnvelopePurpose::About, &profile_key, &about, 0x63),
+            item(
+                ProfileEnvelopePurpose::WrappedProfileKey,
+                &wrapping,
+                &profile_key,
+                0x64,
+            ),
+        ];
+        // A whole upload as today's code makes it (its random parts as they
+        // fell), and what it opens to.
+        let mut rng = StdRng::seed_from_u64(11);
+        let made = create_local_profile(
+            "Alice Example",
+            Some(vec![0x89, 0x50, 0x4e, 0x47]),
+            Some("image/png".into()),
+            3,
+            &wrapping,
+            &RECIPIENT,
+            &mut rng,
+        )
+        .unwrap();
+        let upload = made.pending_upload.clone().unwrap();
+        let opened = open_own_profile(&upload, &wrapping, &RECIPIENT).unwrap();
+        let vectors = json!({
+            "masterKey": STANDARD.encode(master_key),
+            "binding": BINDING,
+            "account": RECIPIENT_KEY,
+            "wrappingKey": STANDARD.encode(wrapping),
+            "profileKey": STANDARD.encode(profile_key),
+            "version": version,
+            "accessKey": STANDARD.encode(access),
+            "accessKeyVerifier": access_key_verifier(&access),
+            "deliveryCapabilityVerifier": hex::encode(capability_hash(&delivery)),
+            "items": items,
+            "upload": {
+                "request": serde_json::to_value(&upload).unwrap(),
+                "profileKey": STANDARD.encode(&opened.key),
+                "displayName": opened.display_name,
+                "avatar": STANDARD.encode(opened.avatar.as_deref().unwrap()),
+                "avatarContentType": opened.avatar_content_type,
+                "revision": opened.revision,
+            },
+        });
+        let text = serde_json::to_string_pretty(&vectors).unwrap() + "\n";
+        if std::env::var_os("KUTUP_WRITE_PROFILE_VECTORS").is_some() {
+            std::fs::write(path, &text).unwrap();
+        }
+        let kept: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
+        let mut kept_without_upload = kept.clone();
+        let mut made_without_upload = vectors.clone();
+        // The upload's random parts are today's draw: what it opens to is
+        // checked, and that the kept one opens the same way.
+        kept_without_upload["upload"].take();
+        made_without_upload["upload"].take();
+        assert_eq!(made_without_upload, kept_without_upload);
+        let kept_upload: PutChatProfileRequest =
+            serde_json::from_value(kept["upload"]["request"].clone()).unwrap();
+        let reopened = open_own_profile(&kept_upload, &wrapping, &RECIPIENT).unwrap();
+        assert_eq!(STANDARD.encode(&reopened.key), kept["upload"]["profileKey"]);
+        assert_eq!(reopened.display_name, kept["upload"]["displayName"]);
+        assert_eq!(
+            STANDARD.encode(reopened.avatar.unwrap()),
+            kept["upload"]["avatar"]
+        );
+    }
+
     #[test]
     fn signal_style_name_padding_and_profile_round_trip() {
         let mut rng = StdRng::seed_from_u64(7);

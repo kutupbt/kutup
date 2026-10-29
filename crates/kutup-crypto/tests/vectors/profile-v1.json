@@ -1,0 +1,71 @@
+{
+  "masterKey": "CQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQk=",
+  "binding": "0b6b5e0c-4c1e-4b8e-9c2d-6a1f3e5d7c9b",
+  "account": "aci:00000000-0000-4000-8000-2bd806c97f0e@example.com",
+  "wrappingKey": "gqOaeFgDY4yYiUXsStO5NTgfDPVgzYGlgxn6FJalXYU=",
+  "profileKey": "UVFRUVFRUVFRUVFRUVFRUVFRUVFRUVFRUVFRUVFRUVE=",
+  "version": "c4013806b81a5560e16a1e1993eee6f3ed314ba34917131b9eb9be0f65378334",
+  "accessKey": "akl3SpzK/dOFQugrVdkwqw==",
+  "accessKeyVerifier": "dc9d1cbcea0e38cef929c0623f934bf43be83284a106733951588e235c5f511d",
+  "deliveryCapabilityVerifier": "14b78400c45231e972f8d9b789363d63b976378c364823306da3a8a054c2b1b7",
+  "items": [
+    {
+      "purpose": "DisplayName",
+      "rootKey": "UVFRUVFRUVFRUVFRUVFRUVFRUVFRUVFRUVFRUVFRUVE=",
+      "revision": 4,
+      "sourceDeviceId": 3,
+      "nonce": "YWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFh",
+      "plaintext": "QWxpY2UgRXhhbXBsZQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
+      "envelope": "S1VUUFBFMQAAAQEAAAAAAAAAAAQAAAADxAE4BrgaVWDhah4Zk+7m8+0xS6NJFxMbnrm+D2U3gzQAHQALZXhhbXBsZS5jb20AAAAAAABAAIAAK9gGyX8OYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhAAAARWxtkMwvjrpZj6XCaFJuxM/H/XlieKdeYTjLKE0/EaqRX32KPK5vGEavRfhUHL/oj3bytF0WBRbol3rbQcqWmzRAWLrpvA=="
+    },
+    {
+      "purpose": "Avatar",
+      "rootKey": "UVFRUVFRUVFRUVFRUVFRUVFRUVFRUVFRUVFRUVFRUVE=",
+      "revision": 4,
+      "sourceDeviceId": 3,
+      "nonce": "YmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJi",
+      "plaintext": "AYlQTkc=",
+      "envelope": "S1VUUFBFMQAAAQIAAAAAAAAAAAQAAAADxAE4BrgaVWDhah4Zk+7m8+0xS6NJFxMbnrm+D2U3gzQAHQALZXhhbXBsZS5jb20AAAAAAABAAIAAK9gGyX8OYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiAAAAFaB+t29VkStEzxHEC9IjSZjkWLlesQ=="
+    },
+    {
+      "purpose": "About",
+      "rootKey": "UVFRUVFRUVFRUVFRUVFRUVFRUVFRUVFRUVFRUVFRUVE=",
+      "revision": 4,
+      "sourceDeviceId": 3,
+      "nonce": "Y2NjY2NjY2NjY2NjY2NjY2NjY2NjY2Nj",
+      "plaintext": "SGVsbG8sIEt0AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
+      "envelope": "S1VUUFBFMQAAAQQAAAAAAAAAAAQAAAADxAE4BrgaVWDhah4Zk+7m8+0xS6NJFxMbnrm+D2U3gzQAHQALZXhhbXBsZS5jb20AAAAAAABAAIAAK9gGyX8OY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjAAAAkC5pv+Y8zpfPRE7S+snwmcZQDbjPy6qaO9660kK5ZBi34wIeAMsHEesBushyGIuXlCSMGFJ3XMe2hB/gpCFsh25pJRz/2zLo3cLvmnMHulxOnFeB/ZYXei5VNNywSiHgEfJlWJTT8pxM7by0etthrfBowUV74VlgRktUK9YBuZYGXvUuljpnkZAHuqAN1B1/9g=="
+    },
+    {
+      "purpose": "WrappedProfileKey",
+      "rootKey": "gqOaeFgDY4yYiUXsStO5NTgfDPVgzYGlgxn6FJalXYU=",
+      "revision": 4,
+      "sourceDeviceId": 3,
+      "nonce": "ZGRkZGRkZGRkZGRkZGRkZGRkZGRkZGRk",
+      "plaintext": "UVFRUVFRUVFRUVFRUVFRUVFRUVFRUVFRUVFRUVFRUVE=",
+      "envelope": "S1VUUFBFMQAAAQMAAAAAAAAAAAQAAAADxAE4BrgaVWDhah4Zk+7m8+0xS6NJFxMbnrm+D2U3gzQAHQALZXhhbXBsZS5jb20AAAAAAABAAIAAK9gGyX8OZGRkZGRkZGRkZGRkZGRkZGRkZGRkZGRkAAAAMGK+39hozDRjKCKW+xBmOI0tk+LL9tdrWiwjrcE0nfeQBYHGzoZqRV8JbNDDXFQ3VA=="
+    }
+  ],
+  "upload": {
+    "request": {
+      "suite": 1,
+      "account": {
+        "server": "example.com",
+        "accountId": "00000000-0000-4000-8000-2bd806c97f0e"
+      },
+      "version": "8eb0f3f54b00c14c613ba233f6097aebcd0b4206abc100739e6787772ebddb6d",
+      "revision": 1,
+      "sourceDeviceId": 3,
+      "name": "S1VUUFBFMQAAAQEAAAAAAAAAAAEAAAADjrDz9UsAwUxhO6Iz9gl6680LQgarwQBznmeHdy69220AHQALZXhhbXBsZS5jb20AAAAAAABAAIAAK9gGyX8OrIFhNNQ772+TSPCW9H1X12vke2PXQhz5AAAARX+6vdfs+YNH8Cdlc9kS915mhFK02KZmF0CIrIfEPbVIpAMXCuBWoxnv86brk5LmNj1UsU6Q9ewqRxb5H+QU7hkSGGj8uA==",
+      "avatar": "S1VUUFBFMQAAAQIAAAAAAAAAAAEAAAADjrDz9UsAwUxhO6Iz9gl6680LQgarwQBznmeHdy69220AHQALZXhhbXBsZS5jb20AAAAAAABAAIAAK9gGyX8OJhAHiGrbW+pOrulc7k7PwakQ0JAtRpvlAAAAFQmLqEpSzh3uuMWTPiotKCduqdPhmA==",
+      "wrappedKey": "S1VUUFBFMQAAAQMAAAAAAAAAAAEAAAADjrDz9UsAwUxhO6Iz9gl6680LQgarwQBznmeHdy69220AHQALZXhhbXBsZS5jb20AAAAAAABAAIAAK9gGyX8OGY4TXqhNwyCFvL/syQWz4sxTH9iEei1kAAAAMAUuAt9WtmrO7ZeCNZgZyBW6I1XDmvIVDkX4ZVZ8teaX4AKGlTMz+LNGs7EX8r4lUQ==",
+      "accessKeyVerifier": "450eb3b067dbda33e056e049519a0f8d85659797becde7706cc0c0eee6c466eb",
+      "deliveryCapabilityVerifier": "537c0e0c21ed6a37480b71512f230ee51d7df9ae6190cfed73d9e988232e8329"
+    },
+    "profileKey": "g1fcOWNcpUYiUBKPrDoEw+uq48lhGv3csHW6o7iT5zA=",
+    "displayName": "Alice Example",
+    "avatar": "iVBORw==",
+    "avatarContentType": "image/png",
+    "revision": 1
+  }
+}
