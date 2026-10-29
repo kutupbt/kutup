@@ -33,7 +33,7 @@ use zeroize::Zeroizing;
 
 use crate::error::{ChatError, Result};
 
-const SALT: &[u8] = b"kutup/chat/call-link/v1";
+const SALT: &[u8] = kutup_crypto::labels::CHAT_CALL_LINK_V1;
 const FRAGMENT_VERSION: u8 = 1;
 pub const CALL_LINK_SECRET_BYTES: usize = 32;
 pub const CALL_LINK_NONCE_BYTES: usize = 16;
@@ -447,7 +447,7 @@ pub fn parse_call_link_fragment(fragment: &str) -> Result<Zeroizing<String>> {
 const JOINED_PADDED_BYTES: usize = 1024;
 /// A sealed joined-meeting record: nonce + padded record + tag.
 pub const JOINED_MEETING_SEALED_BYTES: usize = NONCE_BYTES + JOINED_PADDED_BYTES + TAG_BYTES;
-const JOINED_AAD: &[u8] = b"kutup/chat/call-link/v1/joined";
+const JOINED_AAD: &[u8] = kutup_crypto::labels::CHAT_CALL_LINK_JOINED_V1;
 
 /// One stay in a meeting, as the account that joined keeps it for its own
 /// devices: sealed under a key from the account master key, so the server

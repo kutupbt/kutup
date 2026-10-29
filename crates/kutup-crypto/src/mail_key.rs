@@ -57,8 +57,8 @@ const MAX_PUBLIC_KEY_LEN: usize = 16 * 1024;
 const MAX_SECRET_KEY_LEN: usize = 3 * 1024;
 const MAX_ISSUED_AT_LEN: usize = 64;
 
-const PRIVATE_KEY_DOMAIN: &[u8] = b"kutup/mail-address-key/v1\0";
-const KEY_LIST_DOMAIN: &[u8] = b"kutup/mail-key-list/v1\0";
+const PRIVATE_KEY_DOMAIN: &[u8] = crate::labels::MAIL_ADDRESS_KEY_V1;
+const KEY_LIST_DOMAIN: &[u8] = crate::labels::MAIL_KEY_LIST_V1;
 const KEY_LIST_VERSION: u16 = 1;
 
 /// A canonical address ([`crate::mail_address::canonical`]): what keys and
@@ -261,10 +261,12 @@ fn sha256_fingerprint_of(key: &SignedPublicKey) -> Result<[u8; 32]> {
     Ok(imprint.into())
 }
 
-/// Seals an address's secret key under the master key. The payload binds the
+/// Seals an address's secret key under the master key of `generation`. The
+/// payload binds the
 /// address and the key's own fingerprint.
 pub fn seal_address_key(
     master_key: &[u8],
+    generation: account_envelope::MasterKeyGeneration,
     binding: &str,
     address: &str,
     secret_key: &[u8],
@@ -274,6 +276,7 @@ pub fn seal_address_key(
         &payload,
         master_key,
         AccountEnvelopePurpose::MailAddressPrivateKey,
+        generation,
         binding,
     )
 }
@@ -281,6 +284,7 @@ pub fn seal_address_key(
 /// [`seal_address_key`] with a fixed nonce, for checked-in vectors only.
 pub fn seal_address_key_with_nonce(
     master_key: &[u8],
+    generation: account_envelope::MasterKeyGeneration,
     binding: &str,
     address: &str,
     secret_key: &[u8],
@@ -291,6 +295,7 @@ pub fn seal_address_key_with_nonce(
         &payload,
         master_key,
         AccountEnvelopePurpose::MailAddressPrivateKey,
+        generation,
         binding,
         nonce,
     )
@@ -358,7 +363,7 @@ pub fn open_address_key(
 /// (docs/plans/pq-shares.md); version 1 (X25519) is refused.
 const GROUP_SHARE_VERSION: u8 = 2;
 /// HPKE info and the start of the AAD of a group key share.
-const GROUP_SHARE_DOMAIN: &[u8] = b"kutup/mail-group-key-share/v2\0";
+const GROUP_SHARE_DOMAIN: &[u8] = crate::labels::MAIL_GROUP_KEY_SHARE_V2;
 /// The version byte, the member's incarnation id, the encapsulated key.
 const GROUP_SHARE_HEADER_LEN: usize = 1 + 32 + crate::hpke_xwing::ENCAPSULATED_KEY_LEN;
 
@@ -1739,7 +1744,13 @@ pub fn first_address_key(
 ) -> Result<FirstAddressKey> {
     let address = canonical_address(address)?;
     let key = generate_address_key(&address, created_at_secs)?;
-    let private_key_envelope = seal_address_key(master_key, binding, &address, &key.secret_key)?;
+    let private_key_envelope = seal_address_key(
+        master_key,
+        crate::account_envelope::MasterKeyGeneration::FIRST,
+        binding,
+        &address,
+        &key.secret_key,
+    )?;
     let hex32 = |value: String| -> Result<[u8; 32]> {
         hex::decode(value)
             .ok()
@@ -1846,6 +1857,7 @@ mod tests {
         let key = generate_address_key(ADDRESS, 1_790_000_000).unwrap();
         let sealed = seal_address_key(
             &master,
+            crate::account_envelope::MasterKeyGeneration::FIRST,
             "0b9f4c0e-6a51-4d2f-9a33-5e1f6c7d8e90",
             ADDRESS,
             &key.secret_key,

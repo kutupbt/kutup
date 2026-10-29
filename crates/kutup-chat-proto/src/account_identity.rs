@@ -49,7 +49,7 @@ pub fn identity_binding_bytes(
     identity_key: &str,
 ) -> Result<Vec<u8>, String> {
     let mut out = Vec::with_capacity(160);
-    out.extend_from_slice(b"kutup/account-identity-binding/v1\0");
+    out.extend_from_slice(kutup_crypto::labels::ACCOUNT_IDENTITY_BINDING_V1);
     out.extend_from_slice(&decode_lower_hex_32("authorityKeyId", authority_key_id)?);
     out.extend_from_slice(&decode_lower_hex_32("incarnationId", incarnation_id)?);
     out.extend_from_slice(&account.bytes());
@@ -373,7 +373,7 @@ pub fn decode_frame_key(value: &str) -> Result<[u8; 32], String> {
 pub fn device_session_hash(root_session_id: &[u8; 16]) -> String {
     use sha2::{Digest, Sha256};
     let mut hasher = Sha256::new();
-    hasher.update(b"kutup/account/device-session/v1\0");
+    hasher.update(kutup_crypto::labels::ACCOUNT_DEVICE_SESSION_V1);
     hasher.update(root_session_id);
     hex::encode(hasher.finalize())
 }
@@ -424,7 +424,7 @@ impl AccountManifestV3 {
     /// Deterministic, domain-separated encoding the authority signs. Devices
     /// MUST be strictly ordered by `deviceId`.
     pub fn signing_bytes(&self) -> Result<Vec<u8>, String> {
-        const DOMAIN: &[u8] = b"kutup/account/manifest/v3\0";
+        const DOMAIN: &[u8] = kutup_crypto::labels::ACCOUNT_MANIFEST_V3;
         let mut out = Vec::with_capacity(320 + self.devices.len() * 80);
         out.extend_from_slice(DOMAIN);
         out.extend_from_slice(&self.manifest_version.to_be_bytes());
@@ -659,7 +659,7 @@ impl AccountManifestV3 {
             return Err("authorityKeyId does not match selfAuthorityKey".into());
         }
         let mut incarnation = Sha256::new();
-        incarnation.update(b"kutup/account-incarnation/v1\0");
+        incarnation.update(kutup_crypto::labels::ACCOUNT_INCARNATION_V1);
         incarnation.update(public);
         if self.incarnation_id != hex::encode(incarnation.finalize()) {
             return Err("incarnationId does not match selfAuthorityKey".into());
@@ -1426,7 +1426,7 @@ pub fn repeated_use_keys_digest(
 ) -> [u8; 32] {
     use sha2::{Digest, Sha256};
     let mut hasher = Sha256::new();
-    hasher.update(b"kutup/chat-keys-check/v1\0");
+    hasher.update(kutup_crypto::labels::CHAT_KEYS_CHECK_V1);
     for (id, key) in [
         (None, identity_key),
         (Some(signed_pre_key_id), signed_pre_key),

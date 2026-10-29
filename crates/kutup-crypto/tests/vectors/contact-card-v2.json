@@ -4,7 +4,7 @@
   "contactsKey": "HnhG6nPM2lIwmb3Ap4LHJHXe8s5XFky9SPkxhNIvKJQ=",
   "revision": 1791633600000,
   "summary": "{\"uid\":\"urn:uuid:3f1c9a52-6b7e-4f0e-9d1a-2c3b4d5e6f70\",\"name\":\"Ayşe Yılmaz\",\"emails\":[{\"address\":\"ayse@example.com\",\"label\":\"work\"},{\"address\":\"ayse@kutup.dev\"}],\"groups\":[\"11111111-1111-4111-8111-111111111111\"],\"pinnedKeys\":[{\"address\":\"ayse@example.com\",\"fingerprint\":\"0123456789abcdef0123456789abcdef01234567\",\"encrypt\":true,\"sign\":false}]}",
-  "signature": "pc5WuaOJZ2H1XjmPZdj86PPoYLqonH5rFmOfT4HhQGSGJP3KdtMZkM9tWRjKedsQm7L9ETlMXzSmyf3OCuBhAA==",
+  "signature": "nUrKMy39zOPm8N54gggnuwtISuF3Km6AWUQZ7h6dXNRsAyHPSCQPD9W/5Bj+phy9Oouefm4z3UI/RgSnODy0BQ==",
   "uid": "urn:uuid:3f1c9a52-6b7e-4f0e-9d1a-2c3b4d5e6f70",
   "vcard": "BEGIN:VCARD\r\nVERSION:4.0\r\nUID:urn:uuid:3f1c9a52-6b7e-4f0e-9d1a-2c3b4d5e6f70\r\nFN:Ayşe Yılmaz\r\nEMAIL;TYPE=work:ayse@example.com\r\nTEL;TYPE=cell:+90 555 000 00 00\r\nNOTE:Met at the conference\r\nEND:VCARD\r\n",
   "nonce": "MzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMz",
@@ -13,22 +13,22 @@
     {
       "case": "another account's key binding",
       "binding": "9e8d7c6b-5a49-4382-a716-05f4e3d2c1b0",
-      "signature": "pc5WuaOJZ2H1XjmPZdj86PPoYLqonH5rFmOfT4HhQGSGJP3KdtMZkM9tWRjKedsQm7L9ETlMXzSmyf3OCuBhAA=="
+      "signature": "nUrKMy39zOPm8N54gggnuwtISuF3Km6AWUQZ7h6dXNRsAyHPSCQPD9W/5Bj+phy9Oouefm4z3UI/RgSnODy0BQ=="
     },
     {
       "case": "the account's address instead of its binding",
       "binding": "alice@kutup.dev",
-      "signature": "pc5WuaOJZ2H1XjmPZdj86PPoYLqonH5rFmOfT4HhQGSGJP3KdtMZkM9tWRjKedsQm7L9ETlMXzSmyf3OCuBhAA=="
+      "signature": "nUrKMy39zOPm8N54gggnuwtISuF3Km6AWUQZ7h6dXNRsAyHPSCQPD9W/5Bj+phy9Oouefm4z3UI/RgSnODy0BQ=="
     },
     {
       "case": "signature changed",
       "binding": "3f2a6c1e-8b4d-4e7a-9c5f-1d2e3a4b5c6d",
-      "signature": "pM5WuaOJZ2H1XjmPZdj86PPoYLqonH5rFmOfT4HhQGSGJP3KdtMZkM9tWRjKedsQm7L9ETlMXzSmyf3OCuBhAA=="
+      "signature": "nErKMy39zOPm8N54gggnuwtISuF3Km6AWUQZ7h6dXNRsAyHPSCQPD9W/5Bj+phy9Oouefm4z3UI/RgSnODy0BQ=="
     },
     {
       "case": "signed for another revision",
       "binding": "3f2a6c1e-8b4d-4e7a-9c5f-1d2e3a4b5c6d",
-      "signature": "7Fd2OUDJ5uLCQqf6yLDP+uVqTuqPqBekJ0ZGMDh2Yk98VGNbz93fSaGAmt90xlr/51ac2JK5zUMi+O1L0rHUDw=="
+      "signature": "1aL/Ok8R32jS5/+K0mluWayNCFO1XzO9DOWLs7j3VGS5rtVcZD13P2x9aw48CgoFSP885TOc1vg6rpC2/1/6Cg=="
     },
     {
       "case": "version 1, bound to the address",

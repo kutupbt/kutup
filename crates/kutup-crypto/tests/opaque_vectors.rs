@@ -163,8 +163,20 @@ fn write_vectors() {
         return;
     }
     let (old, new) = export_keys();
-    let envelope = old.seal_master_key(&[0x11; 32], BINDING).unwrap();
-    let new_envelope = new.seal_master_key(&[0x11; 32], BINDING).unwrap();
+    let envelope = old
+        .seal_master_key(
+            &[0x11; 32],
+            kutup_crypto::account_envelope::MasterKeyGeneration::FIRST,
+            BINDING,
+        )
+        .unwrap();
+    let new_envelope = new
+        .seal_master_key(
+            &[0x11; 32],
+            kutup_crypto::account_envelope::MasterKeyGeneration::FIRST,
+            BINDING,
+        )
+        .unwrap();
     let vectors = derive(&envelope, &new_envelope);
     std::fs::write(PATH, serde_json::to_string_pretty(&vectors).unwrap() + "\n").unwrap();
 }

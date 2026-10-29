@@ -69,7 +69,11 @@ async fn proof_key(state: &crate::AppState) -> AppResult<[u8; 32]> {
     static KEY: tokio::sync::OnceCell<[u8; 32]> = tokio::sync::OnceCell::const_new();
     KEY.get_or_try_init(|| async {
         let root = crate::handlers::auth::fake_accounts_key(state).await?;
-        Ok::<_, AppError>(*subkey(Suite::V1, &root, b"kutup/account-id-proof/v1\0"))
+        Ok::<_, AppError>(*subkey(
+            Suite::V1,
+            &root,
+            kutup_crypto::labels::ACCOUNT_ID_PROOF_V1,
+        ))
     })
     .await
     .copied()

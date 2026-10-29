@@ -1,146 +1,21 @@
-//! Purpose-separated V1 account and content key derivation.
+//! The recovery path's derivation: the proof a client sends the server for
+//! an account's recovery, derived from the 32-byte recovery entropy (which
+//! itself only ever opens the recovery wrap of the master key).
 //!
-//! V1 Argon2id parameters are fixed and **must match every client exactly**:
-//! opslimit (time) = 3, memlimit (memory) = 64 MiB (`64 * 1024 * 1024` bytes),
-//! parallelism = 1, output = 32 bytes.
-//!
-//! Note on parallelism: libsodium's `crypto_pwhash` hard-codes 1 lane — the
-//! "4 threads" comment in `kdf.ts` is inaccurate, which is why the Go code
-//! passes `threads = 1`. All three implementations therefore agree.
-//!
-//! One Argon2id invocation produces an account-protection root. HKDF-SHA256
-//! expands independent KEK and login subkeys. The server-visible login key can
-//! therefore never decrypt the account master-key envelope.
+//! The password path is OPAQUE (`opaque`): its Argon2id runs inside the
+//! OPAQUE key-stretching function. The Argon2id account-protection
+//! derivation that came before it has no caller and is gone
+//! (docs/plans/w6-key-hierarchy.md, §4).
 
-use crate::primitives::{pwhash, Kdf, PwhashParams, Suite};
-use base64::Engine;
+use crate::primitives::{Kdf, Suite};
 use zeroize::Zeroizing;
 
 use crate::error::{CryptoError, Result};
 
-/// Argon2id opslimit (iterations). Mirrors `argonTime` / `OPSLIMIT`.
-pub const OPSLIMIT: u64 = 3;
-/// Argon2id memlimit in bytes (64 MiB). Mirrors `argonMemory` (64*1024 KiB) / `MEMLIMIT`.
-pub const MEMLIMIT: usize = 64 * 1024 * 1024;
-/// Derived key length in bytes. Mirrors `argonKeyLen` / `KEYLEN`.
+/// The recovery entropy's and the proof's length in bytes.
 pub const KEY_LEN: usize = 32;
-/// Account-protection salt length required by libsodium/dryoc Argon2id.
-pub const ACCOUNT_PROTECTION_SALT_LEN: usize = 16;
-/// Closed registry for the complete account-protection construction.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-#[repr(u16)]
-pub enum AccountProtectionSuiteId {
-    Argon2idHkdfSha256V1 = 1,
-}
 
-impl AccountProtectionSuiteId {
-    pub const fn as_u16(self) -> u16 {
-        self as u16
-    }
-}
-
-impl TryFrom<u16> for AccountProtectionSuiteId {
-    type Error = CryptoError;
-
-    fn try_from(value: u16) -> Result<Self> {
-        match value {
-            1 => Ok(Self::Argon2idHkdfSha256V1),
-            _ => Err(CryptoError::InvalidInput(format!(
-                "unknown account-protection suite {value}"
-            ))),
-        }
-    }
-}
-
-const ACCOUNT_PROTECTION_HKDF_SALT: &[u8] = b"kutup/account-protection/v1\0";
-const ACCOUNT_KEK_INFO: &[u8] = b"kutup/account-protection/kek/v1\0";
-const ACCOUNT_LOGIN_INFO: &[u8] = b"kutup/account-protection/login/v1\0";
-const RECOVERY_AUTH_SALT: &[u8] = b"kutup/account-recovery/auth-proof/v1\0";
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct AccountProtectionParameters {
-    pub memory_kib: u32,
-    pub iterations: u32,
-    pub parallelism: u32,
-}
-
-impl AccountProtectionParameters {
-    pub const V1: Self = Self {
-        memory_kib: (MEMLIMIT / 1024) as u32,
-        iterations: OPSLIMIT as u32,
-        parallelism: 1,
-    };
-
-    pub fn validate_v1(self) -> Result<()> {
-        if self != Self::V1 {
-            return Err(CryptoError::InvalidInput(
-                "unsupported V1 account-protection parameters".into(),
-            ));
-        }
-        Ok(())
-    }
-}
-
-pub struct AccountProtectionKeys {
-    pub key_encryption_key: Zeroizing<[u8; KEY_LEN]>,
-    pub login_key: Zeroizing<[u8; KEY_LEN]>,
-}
-
-fn argon2id(
-    password: &[u8],
-    salt: &[u8],
-    parameters: AccountProtectionParameters,
-) -> Result<Zeroizing<[u8; KEY_LEN]>> {
-    parameters.validate_v1()?;
-    if salt.len() != ACCOUNT_PROTECTION_SALT_LEN {
-        return Err(CryptoError::InvalidInput(format!(
-            "account-protection salt must be {ACCOUNT_PROTECTION_SALT_LEN} bytes"
-        )));
-    }
-    let salt: &[u8; ACCOUNT_PROTECTION_SALT_LEN] = salt.try_into().expect("checked above");
-    let mut out = Zeroizing::new([0u8; KEY_LEN]);
-    pwhash(
-        &PwhashParams {
-            operations: u64::from(parameters.iterations),
-            memory: parameters.memory_kib as usize * 1024,
-        },
-        password,
-        salt,
-        out.as_mut_slice(),
-    )?;
-    Ok(out)
-}
-
-/// Derive the V1 account KEK and server-facing login key from one expensive
-/// password-hardened root.
-pub fn derive_account_protection_keys(
-    password: &str,
-    salt: &[u8],
-    parameters: AccountProtectionParameters,
-) -> Result<AccountProtectionKeys> {
-    let root = argon2id(password.as_bytes(), salt, parameters)?;
-    let hkdf = Kdf::new(Suite::V1, ACCOUNT_PROTECTION_HKDF_SALT, root.as_slice());
-    let mut key_encryption_key = Zeroizing::new([0u8; KEY_LEN]);
-    let mut login_key = Zeroizing::new([0u8; KEY_LEN]);
-    hkdf.expand(ACCOUNT_KEK_INFO, key_encryption_key.as_mut_slice())
-        .map_err(|_| CryptoError::Backend("account KEK HKDF expand".into()))?;
-    hkdf.expand(ACCOUNT_LOGIN_INFO, login_key.as_mut_slice())
-        .map_err(|_| CryptoError::Backend("account login HKDF expand".into()))?;
-    Ok(AccountProtectionKeys {
-        key_encryption_key,
-        login_key,
-    })
-}
-
-/// Base64-input convenience wrapper for login/CLI clients.
-pub fn derive_account_protection_keys_b64(
-    password: &str,
-    salt_b64: &str,
-    parameters: AccountProtectionParameters,
-) -> Result<AccountProtectionKeys> {
-    let salt = base64::engine::general_purpose::STANDARD.decode(salt_b64)?;
-    derive_account_protection_keys(password, &salt, parameters)
-}
+const RECOVERY_AUTH_SALT: &[u8] = crate::labels::ACCOUNT_RECOVERY_AUTH_PROOF_V1;
 
 /// Derive the server-visible recovery authorization proof. The 32-byte raw
 /// recovery entropy continues to encrypt the recovery master-key wrap and is
@@ -191,22 +66,5 @@ mod tests {
                 "{other}"
             );
         }
-    }
-
-    #[test]
-    fn account_parameters_and_salt_are_closed() {
-        assert!(AccountProtectionParameters::V1.validate_v1().is_ok());
-        assert!(AccountProtectionParameters {
-            parallelism: 2,
-            ..AccountProtectionParameters::V1
-        }
-        .validate_v1()
-        .is_err());
-        assert!(derive_account_protection_keys(
-            "password",
-            &[0u8; 15],
-            AccountProtectionParameters::V1,
-        )
-        .is_err());
     }
 }

@@ -24,10 +24,10 @@ use zeroize::Zeroizing;
 use crate::account_ref::AccountRef;
 use crate::error::{CryptoError, Result};
 
-const SALT: &[u8] = b"kutup/chat-contact-list/v1\0";
-const ID_KEY_INFO: &[u8] = b"kutup/chat-contact-list/id-key/v1\0";
-const SEAL_KEY_INFO: &[u8] = b"kutup/chat-contact-list/seal-key/v1\0";
-const ID_DOMAIN: &[u8] = b"kutup/chat-contact-list/id/v1\0";
+const SALT: &[u8] = crate::labels::CHAT_CONTACT_LIST_V1;
+const ID_KEY_INFO: &[u8] = crate::labels::CHAT_CONTACT_LIST_ID_KEY_V1;
+const SEAL_KEY_INFO: &[u8] = crate::labels::CHAT_CONTACT_LIST_SEAL_KEY_V1;
+const ID_DOMAIN: &[u8] = crate::labels::CHAT_CONTACT_LIST_ID_V1;
 
 const MAGIC: &[u8; 8] = b"KUTPCC1\0";
 /// XChaCha20-Poly1305 under the list's seal key.
@@ -406,10 +406,10 @@ mod tests {
     #[test]
     fn its_labels_are_its_own() {
         const GROUP_LIST: &[&[u8]] = &[
-            b"kutup/chat-group-list/v1\0",
-            b"kutup/chat-group-list/id-key/v1\0",
-            b"kutup/chat-group-list/seal-key/v1\0",
-            b"kutup/chat-group-list/id/v1\0",
+            crate::labels::CHAT_GROUP_LIST_V1,
+            crate::labels::CHAT_GROUP_LIST_ID_KEY_V1,
+            crate::labels::CHAT_GROUP_LIST_SEAL_KEY_V1,
+            crate::labels::CHAT_GROUP_LIST_ID_V1,
             b"KUTPGL1\0",
         ];
         for ours in [SALT, ID_KEY_INFO, SEAL_KEY_INFO, ID_DOMAIN, &MAGIC[..]] {

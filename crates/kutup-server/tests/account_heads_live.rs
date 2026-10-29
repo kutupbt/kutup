@@ -559,6 +559,7 @@ fn every_kind_of_listed_write_takes_the_head() {
         let id = uuid::Uuid::parse_str(&vault.id).unwrap();
         b64(&seal_vault_secret(
             &user.master_key,
+            kutup_crypto::account_envelope::MasterKeyGeneration::FIRST,
             &user.binding,
             id.as_bytes(),
             revision,

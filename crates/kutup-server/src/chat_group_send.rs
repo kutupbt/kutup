@@ -355,7 +355,7 @@ pub(crate) async fn endorsement(
     let digest: [u8; 32] = hash(
         Suite::V1,
         [
-            b"kutup/group-send-issue/v1\0".as_slice(),
+            kutup_crypto::labels::GROUP_SEND_ISSUE_V1,
             account.as_bytes(),
         ]
         .concat(),

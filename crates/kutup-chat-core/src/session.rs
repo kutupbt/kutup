@@ -4196,7 +4196,7 @@ fn contact_sync_send_id(
     source_device_id: u32,
 ) -> String {
     let mut hash = Sha256::new();
-    hash.update(b"kutup/contact-control/v1\0");
+    hash.update(kutup_crypto::labels::CONTACT_CONTROL_V1);
     hash.update(peer.as_bytes());
     hash.update([0]);
     hash.update(match state {

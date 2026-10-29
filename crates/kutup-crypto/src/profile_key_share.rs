@@ -19,7 +19,7 @@ use crate::error::{CryptoError, Result};
 use crate::named_share::{parse_hex_32, read_person, take};
 
 const MAGIC: &[u8; 8] = b"KUTPPK1\0";
-const HPKE_INFO: &[u8] = b"kutup/drive/profile-key-hpke/v1\0";
+const HPKE_INFO: &[u8] = crate::labels::DRIVE_PROFILE_KEY_HPKE_V1;
 /// X-Wing, HKDF-SHA256, ChaCha20-Poly1305, Ed25519 (docs/plans/pq-shares.md);
 /// suite 1 (X25519) is refused.
 const SUITE: u16 = 2;

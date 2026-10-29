@@ -155,8 +155,6 @@ Specific codes, where an app does something particular (a test in
 | `link_removed` | 404/410 | The shared link was removed |
 | `keyChanged` | 409 | A recipient's key changed since it was checked |
 | `keysPendingUpgrade` | 409 | The person's Drive key is still X25519 (identity suite 1): share with them once they have signed in again (docs/plans/pq-shares.md) |
-| `identitySuiteCurrent` | 409 | The account's identity suite is current: nothing to upgrade |
-| `setupPending` | 409 | `POST /api/account/identity-suite` for an account still in its first-login setup, which registers suite-2 keys itself: finish the setup (not a 401, which would end the session) |
 | `peerOutdated` | 502 | The other server runs an older version without post-quantum Drive keys and must upgrade before sharing |
 | `registrationClosed` | 403 | Registration is off: nobody may sign up, with or without a referral code |
 | `registrationCodeRequired` | 403 | Registration needs a referral code and none was given |
@@ -309,7 +307,6 @@ uses admits exactly N accounts however many sign up at once.
   "opaqueServerKeyId": 1,
   "masterKeyEnvelope": "<canonical base64 AccountEnvelopeV1>",
   "recoveryKeyEnvelope": "<canonical base64 AccountEnvelopeV1>",
-  "drivePrivateKeyEnvelope": "<canonical base64 AccountEnvelopeV1>",
   "publicKey": "<base64>",
   "accountAuthorityPublicKey": "<base64 32 bytes>",
   "accountAuthorityKeyId": "<lowercase SHA-256 hex>",
@@ -454,7 +451,6 @@ malformed finalization is a `400`.
   "userId": "<uuid>",
   "username": "alice",
   "masterKeyEnvelope": "<canonical base64 AccountEnvelopeV1>",
-  "drivePrivateKeyEnvelope": "<canonical base64 AccountEnvelopeV1>",
   "publicKey": "<base64>",
   "keyBinding": "<the account's key binding (a UUID v4)>",
   "isAdmin": false,

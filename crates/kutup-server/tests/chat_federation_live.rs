@@ -555,18 +555,18 @@ fn registration_payload(
         kutup_crypto::kdf::derive_recovery_auth_proof(&recovery_entropy, &binding).unwrap();
     let identity = kutup_crypto::identity::AccountIdentityKeysV1::derive(&master_key).unwrap();
     use kutup_crypto::account_envelope::{self, AccountEnvelopePurpose};
-    let master_key_envelope = export_key.seal_master_key(&master_key, &binding).unwrap();
+    let master_key_envelope = export_key
+        .seal_master_key(
+            &master_key,
+            kutup_crypto::account_envelope::MasterKeyGeneration::FIRST,
+            &binding,
+        )
+        .unwrap();
     let recovery_key_envelope = account_envelope::seal_b64(
         &master_key,
         &recovery_entropy,
         AccountEnvelopePurpose::RecoveryMasterKey,
-        &binding,
-    )
-    .unwrap();
-    let drive_private_key_envelope = account_envelope::seal_b64(
-        identity.drive_hpke_private_key(),
-        &master_key,
-        AccountEnvelopePurpose::DriveHpkePrivateKey,
+        kutup_crypto::account_envelope::MasterKeyGeneration::FIRST,
         &binding,
     )
     .unwrap();
@@ -578,7 +578,6 @@ fn registration_payload(
         "opaqueServerKeyId": opaque_server_key_id,
         "masterKeyEnvelope": master_key_envelope,
         "recoveryKeyEnvelope": recovery_key_envelope,
-        "drivePrivateKeyEnvelope": drive_private_key_envelope,
         "publicKey": b64(&identity.drive_hpke_public_key()),
         "accountAuthorityPublicKey": b64(&identity.authority_public_key()),
         "accountAuthorityKeyId": identity.authority_key_id(),

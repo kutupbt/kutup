@@ -82,7 +82,7 @@ padding to a bucket. Yet no two are the same:
 | Revision-guard seen record | none (48 B) | `crypto/revision_guard.rs:77` | **no magic or suite** |
 | Mail search store-key wrap | `KUTMSW1` | `crypto/mail_search.rs:34` | |
 | Joined meetings | none | `crates/kutup-chat-core/src/call_link.rs:444-528` | **constant AAD only**; binds no account or entry |
-| Chat profile key, own copy | `kutup-chat-profile-wrap-v2` | chat-core `profile.rs` | hand-written HKDF and AEAD in chat-core |
+| Chat profile key, own copy | `kutup/chat-profile/wrap/v2` | chat-core `profile.rs` | hand-written HKDF and AEAD in chat-core |
 | Pass vault secret | `AccountEnvelopeV1` purpose 6 | `crypto/account_envelope.rs` | already the generic one |
 
 `AccountEnvelopeV1` (`KUTPAE1`) already is the right design. It has purposes,

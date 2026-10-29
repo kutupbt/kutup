@@ -249,7 +249,11 @@ async fn known_client_key(state: &AppState) -> AppResult<[u8; 32]> {
     KNOWN_CLIENT_KEY
         .get_or_try_init(|| async {
             let root = crate::handlers::auth::fake_accounts_key(state).await?;
-            Ok::<_, AppError>(*subkey(Suite::V1, &root, b"kutup/known-client/v1\0"))
+            Ok::<_, AppError>(*subkey(
+                Suite::V1,
+                &root,
+                kutup_crypto::labels::KNOWN_CLIENT_V1,
+            ))
         })
         .await
         .copied()

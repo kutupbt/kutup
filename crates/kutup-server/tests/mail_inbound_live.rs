@@ -45,9 +45,14 @@ fn set_up_address(c: &Client, base: &str, user: &User) -> Address {
         .unwrap()
         .as_secs() as u32;
     let key = mail_key::generate_address_key(&address, now).unwrap();
-    let envelope =
-        mail_key::seal_address_key(&user.master_key, &user.binding, &address, &key.secret_key)
-            .unwrap();
+    let envelope = mail_key::seal_address_key(
+        &user.master_key,
+        kutup_crypto::account_envelope::MasterKeyGeneration::FIRST,
+        &user.binding,
+        &address,
+        &key.secret_key,
+    )
+    .unwrap();
     let hex32 = |value: String| -> [u8; 32] { hex::decode(value).unwrap().try_into().unwrap() };
     let list = MailKeyListV1 {
         incarnation_id: hex32(user.identity.incarnation_id()),
@@ -1278,6 +1283,7 @@ fn address_keys_rotate_and_change_flags() {
     let new = mail_key::generate_address_key(&first.address, now).unwrap();
     let envelope = mail_key::seal_address_key(
         &user.master_key,
+        kutup_crypto::account_envelope::MasterKeyGeneration::FIRST,
         &user.binding,
         &first.address,
         &new.secret_key,
@@ -5176,6 +5182,7 @@ fn an_old_addresss_keys_stay_its_accounts_to_manage() {
     let new = mail_key::generate_address_key(&old.address, now).unwrap();
     let envelope = mail_key::seal_address_key(
         &alice.master_key,
+        kutup_crypto::account_envelope::MasterKeyGeneration::FIRST,
         &alice.binding,
         &old.address,
         &new.secret_key,
@@ -5793,6 +5800,7 @@ fn accept_forwarding(
     let public_key = mail_forwarding::forwarding_public_key(&key).unwrap();
     let envelope = mail_key::seal_address_key(
         &forwardee.master_key,
+        kutup_crypto::account_envelope::MasterKeyGeneration::FIRST,
         &forwardee.binding,
         &forwardee_address.address,
         &key,
@@ -6251,6 +6259,7 @@ Date: Mon, 19 Oct 2026 10:00:00 +0000\r\nMessage-ID: <blocked-{tag}@sender.test>
     let new = mail_key::generate_address_key(&a.address, now_secs() as u32).unwrap();
     let envelope = mail_key::seal_address_key(
         &alice.master_key,
+        kutup_crypto::account_envelope::MasterKeyGeneration::FIRST,
         &alice.binding,
         &a.address,
         &new.secret_key,
@@ -7123,9 +7132,14 @@ fn add_address_key(c: &Client, base: &str, user: &User, id: &str, address: &str)
         .unwrap()
         .as_secs() as u32;
     let key = mail_key::generate_address_key(address, now).unwrap();
-    let envelope =
-        mail_key::seal_address_key(&user.master_key, &user.binding, address, &key.secret_key)
-            .unwrap();
+    let envelope = mail_key::seal_address_key(
+        &user.master_key,
+        kutup_crypto::account_envelope::MasterKeyGeneration::FIRST,
+        &user.binding,
+        address,
+        &key.secret_key,
+    )
+    .unwrap();
     let hex32 = |value: String| -> [u8; 32] { hex::decode(value).unwrap().try_into().unwrap() };
     // The address's keys already there (an address reopened after an
     // account reset keeps its old, obsolete ones), listed as they are, as a

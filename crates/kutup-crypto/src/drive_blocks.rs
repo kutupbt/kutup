@@ -29,10 +29,10 @@ const KEY_LEN: usize = 32;
 
 /// The Drive family of the block construction.
 pub static DRIVE_BLOCKS: BlockFamily = BlockFamily {
-    block_key_label: b"kutup/drive-object/blocks/block-key/v1\0",
-    nonce_key_label: b"kutup/drive-object/blocks/nonce-key/v1\0",
-    manifest_key_label: b"kutup/drive-object/blocks/manifest-key/v1\0",
-    signature_domain: b"kutup/drive-block-manifest/v1\0",
+    block_key_label: crate::labels::DRIVE_OBJECT_BLOCKS_BLOCK_KEY_V1,
+    nonce_key_label: crate::labels::DRIVE_OBJECT_BLOCKS_NONCE_KEY_V1,
+    manifest_key_label: crate::labels::DRIVE_OBJECT_BLOCKS_MANIFEST_KEY_V1,
+    signature_domain: crate::labels::DRIVE_BLOCK_MANIFEST_V1,
     trailer_magic: b"KUTPDBM\0",
     signed: true,
 };

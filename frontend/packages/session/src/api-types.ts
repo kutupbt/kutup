@@ -95,7 +95,6 @@ export interface LoginResponse {
   userId: string
   username: string
   masterKeyEnvelope: string
-  drivePrivateKeyEnvelope: string
   publicKey: string
   isAdmin: boolean
   storageQuotaBytes: number

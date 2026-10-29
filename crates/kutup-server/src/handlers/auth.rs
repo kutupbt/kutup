@@ -53,7 +53,6 @@ pub struct RegisterRequest {
     record: crate::handlers::opaque::RecordUpload,
     master_key_envelope: String,
     recovery_key_envelope: String,
-    drive_private_key_envelope: String,
     public_key: String,
     account_authority_public_key: String,
     account_authority_key_id: String,
@@ -89,7 +88,6 @@ pub struct LoginResponse {
     user_id: String,
     username: String,
     master_key_envelope: String,
-    drive_private_key_envelope: String,
     public_key: String,
     is_admin: bool,
     storage_quota_bytes: i64,
@@ -106,11 +104,6 @@ pub struct LoginResponse {
     rotate: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     grant: Option<String>,
-    /// The account's identity suite (docs/plans/pq-shares.md): 1 means its
-    /// Drive key is still X25519, and the client upgrades it now
-    /// (`POST /api/account/identity-suite`). Absent on the 2FA/setup branches.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    identity_suite: Option<i16>,
     /// A second step is needed (named for the authenticator app, which was
     /// once the only one): `secondFactors` says which the account has.
     #[serde(skip_serializing_if = "is_false")]
@@ -679,12 +672,6 @@ pub async fn register(
         &req.key_binding,
         "recoveryKeyEnvelope",
     )?;
-    validate_account_envelope(
-        &req.drive_private_key_envelope,
-        AccountEnvelopePurpose::DriveHpkePrivateKey,
-        &req.key_binding,
-        "drivePrivateKeyEnvelope",
-    )?;
     validate_account_identity(&req)?;
 
     // This is an HKDF-derived authorization proof, never the recovery entropy
@@ -720,20 +707,18 @@ pub async fn register(
     let res: Result<Uuid, sqlx::Error> = sqlx::query_scalar(
         r#"INSERT INTO users (
             username, master_key_envelope, recovery_key_envelope,
-            drive_private_key_envelope,
             public_key, account_authority_public_key, account_authority_key_id,
             account_incarnation_id, drive_signing_public_key,
             opaque_record, opaque_suite, opaque_server_key_id,
             recovery_key_verifier, storage_quota_bytes, drive_key_binding,
             key_binding, id, identity_suite, drive_key_binding_epoch
-        ) VALUES ($2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$1,$17,2,1)
+        ) VALUES ($2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$1,$16,2,1)
         RETURNING id"#,
     )
     .bind(&req.key_binding)
     .bind(&req.username)
     .bind(&req.master_key_envelope)
     .bind(&req.recovery_key_envelope)
-    .bind(&req.drive_private_key_envelope)
     .bind(&req.public_key)
     .bind(&req.account_authority_public_key)
     .bind(&req.account_authority_key_id)
@@ -800,7 +785,6 @@ pub(crate) async fn signed_in_answer(
     type Row = (
         String,
         String,
-        String,
         bool,
         bool,
         i64,
@@ -813,7 +797,7 @@ pub(crate) async fn signed_in_answer(
         bool,
     );
     let row: Option<Row> = sqlx::query_as(
-        r#"SELECT master_key_envelope, drive_private_key_envelope, public_key,
+        r#"SELECT master_key_envelope, public_key,
                   totp_enabled, is_admin, storage_quota_bytes, storage_used_bytes, is_active,
                   is_first_login,
                   COALESCE(username, ''), COALESCE(color, ''), COALESCE(key_binding, ''),
@@ -826,7 +810,6 @@ pub(crate) async fn signed_in_answer(
     .await?;
     let Some((
         master_key_envelope,
-        drive_private_key_envelope,
         pub_key,
         totp_enabled,
         is_admin,
@@ -897,7 +880,6 @@ pub(crate) async fn signed_in_answer(
         &user_id,
         &username,
         &master_key_envelope,
-        &drive_private_key_envelope,
         &pub_key,
         is_admin,
         quota_bytes,
@@ -1003,21 +985,9 @@ pub(crate) async fn issue_after_second_step(
     user_id: &str,
     epoch: &[u8],
 ) -> AppResult<Response> {
-    type Row = (
-        String,
-        String,
-        String,
-        bool,
-        i64,
-        i64,
-        String,
-        bool,
-        String,
-        String,
-    );
+    type Row = (String, String, bool, i64, i64, String, bool, String, String);
     let row: Option<Row> = sqlx::query_as(
-        r#"SELECT master_key_envelope,
-                  drive_private_key_envelope, public_key,
+        r#"SELECT master_key_envelope, public_key,
                   is_admin, storage_quota_bytes, storage_used_bytes,
                   COALESCE(username, ''), is_active, COALESCE(color, ''),
                   COALESCE(key_binding, '')
@@ -1028,7 +998,6 @@ pub(crate) async fn issue_after_second_step(
     .await?;
     let Some((
         master_key_envelope,
-        drive_private_key_envelope,
         pub_key,
         is_admin,
         quota_bytes,
@@ -1051,7 +1020,6 @@ pub(crate) async fn issue_after_second_step(
         user_id,
         &username,
         &master_key_envelope,
-        &drive_private_key_envelope,
         &pub_key,
         is_admin,
         quota_bytes,
@@ -1910,12 +1878,6 @@ pub async fn complete_setup(
         &account_binding,
         "recoveryKeyEnvelope",
     )?;
-    validate_account_envelope(
-        &req.drive_private_key_envelope,
-        AccountEnvelopePurpose::DriveHpkePrivateKey,
-        &account_binding,
-        "drivePrivateKeyEnvelope",
-    )?;
     validate_account_identity(&req)?;
     let uid = parse_uuid(&user_id).map_err(|_| AppError::unauthorized("unauthorized"))?;
     // The account has its id already (an administrator made it).
@@ -1933,23 +1895,22 @@ pub async fn complete_setup(
     let mut tx = state.pool.begin().await?;
     let res = sqlx::query(
         r#"UPDATE users SET
-              opaque_record = $1, opaque_suite = $10, opaque_server_key_id = $11,
+              opaque_record = $1, opaque_suite = $9, opaque_server_key_id = $10,
               master_key_envelope = $2, recovery_key_envelope = $3,
-              drive_private_key_envelope = $4, public_key = $5,
-              account_authority_public_key = $6, account_authority_key_id = $7,
-              account_incarnation_id = $8, drive_signing_public_key = $9,
-              recovery_key_verifier = $12,
-              drive_key_binding = $14,
-              key_binding = $15,
+              public_key = $4,
+              account_authority_public_key = $5, account_authority_key_id = $6,
+              account_incarnation_id = $7, drive_signing_public_key = $8,
+              recovery_key_verifier = $11,
+              drive_key_binding = $13,
+              key_binding = $14,
               identity_suite = 2, drive_key_binding_epoch = 1,
               is_first_login = false, updated_at = NOW()
-           WHERE id = $13 AND is_first_login
-             AND substring(sha256(opaque_record) from 1 for 16) = $16"#,
+           WHERE id = $12 AND is_first_login
+             AND substring(sha256(opaque_record) from 1 for 16) = $15"#,
     )
     .bind(&opaque_record)
     .bind(&req.master_key_envelope)
     .bind(&req.recovery_key_envelope)
-    .bind(&req.drive_private_key_envelope)
     .bind(&req.public_key)
     .bind(&req.account_authority_public_key)
     .bind(&req.account_authority_key_id)
@@ -2097,7 +2058,6 @@ async fn issue_tokens_and_respond(
     user_id: &str,
     username: &str,
     master_key_envelope: &str,
-    drive_private_key_envelope: &str,
     pub_key: &str,
     is_admin: bool,
     quota: i64,
@@ -2117,10 +2077,6 @@ async fn issue_tokens_and_respond(
         sessions::revoke_owned(&state.pool, uid, issued.session_id).await?;
         return Err(stale());
     };
-    let identity_suite: i16 = sqlx::query_scalar("SELECT identity_suite FROM users WHERE id = $1")
-        .bind(uid)
-        .fetch_one(&mut *tx)
-        .await?;
     // Registered under a setup that is no longer the current one: moved by
     // the client now, while it holds the password (docs/plans/opaque.md §5).
     let rotate_grant = match record_key {
@@ -2152,7 +2108,6 @@ async fn issue_tokens_and_respond(
         user_id: user_id.to_string(),
         username: username.to_string(),
         master_key_envelope: master_key_envelope.to_string(),
-        drive_private_key_envelope: drive_private_key_envelope.to_string(),
         public_key: pub_key.to_string(),
         is_admin,
         storage_quota_bytes: quota,
@@ -2161,7 +2116,6 @@ async fn issue_tokens_and_respond(
         envelope_binding: envelope_binding.to_string(),
         rotate: rotate_grant.is_some(),
         grant: rotate_grant,
-        identity_suite: Some(identity_suite),
         ..Default::default()
     };
     if client.uses_cookie() {
@@ -2261,7 +2215,7 @@ pub(crate) fn is_valid_hex_color(s: &str) -> bool {
 /// server's own key for them (an HMAC under a key derived from it).
 fn deterministic_fake_bytes(secret: &[u8], name: &str, purpose: &str, len: usize) -> String {
     use kutup_crypto::primitives::{mac, subkey, Suite};
-    let key = subkey(Suite::V1, secret, b"kutup/fake-account/v1\0");
+    let key = subkey(Suite::V1, secret, kutup_crypto::labels::FAKE_ACCOUNT_V1);
     let mut out = Vec::with_capacity(len);
     let mut counter = 0u32;
     while out.len() < len {
@@ -2304,6 +2258,7 @@ fn deterministic_fake_account_envelope(secret: &[u8], binding: &str) -> String {
         &[0u8; 32],
         &key,
         kutup_crypto::account_envelope::AccountEnvelopePurpose::RecoveryMasterKey,
+        kutup_crypto::account_envelope::MasterKeyGeneration::FIRST,
         binding,
         &nonce,
     )

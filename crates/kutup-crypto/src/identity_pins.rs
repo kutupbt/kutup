@@ -35,10 +35,10 @@ use crate::key_binding;
 use crate::named_share::canonical_account;
 use crate::padding::Length;
 
-const PINS_KEY_SALT: &[u8] = b"kutup/identity-pins/v1\0";
-const PINS_KEY_INFO: &[u8] = b"kutup/identity-pins/list-key/v1\0";
+const PINS_KEY_SALT: &[u8] = crate::labels::IDENTITY_PINS_V1;
+const PINS_KEY_INFO: &[u8] = crate::labels::IDENTITY_PINS_LIST_KEY_V1;
 const MAGIC: &[u8; 8] = b"KUTIP3\0\0";
-const AAD_DOMAIN: &[u8] = b"kutup/identity-pins/v3\0";
+const AAD_DOMAIN: &[u8] = crate::labels::IDENTITY_PINS_V3;
 const SUITE: u16 = 3;
 const NONCE_LEN: usize = 24;
 const REVISION_LEN: usize = 8;

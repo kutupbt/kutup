@@ -14,7 +14,7 @@ use zeroize::Zeroizing;
 use crate::error::{CryptoError, Result};
 
 pub const BITS: usize = 2048;
-const SEAL_DOMAIN: &[u8] = b"kutup/dkim-key/v1\0";
+const SEAL_DOMAIN: &[u8] = crate::labels::DKIM_KEY_V1;
 const NONCE_LEN: usize = 24;
 
 /// A fresh key: its PKCS#8 private key and SPKI public key, DER.

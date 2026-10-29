@@ -9,11 +9,11 @@ use crate::drive_object::parse_canonical_uuid;
 use crate::error::{CryptoError, Result};
 
 const MAGIC: &[u8; 8] = b"KUTPNS1\0";
-const HPKE_INFO: &[u8] = b"kutup/drive/named-share-hpke/v1\0";
+const HPKE_INFO: &[u8] = crate::labels::DRIVE_NAMED_SHARE_HPKE_V1;
 /// A single file shared by itself (docs/plans/drive-file-sharing.md): the
 /// file's current key, bound to the file and its key generation.
 const FILE_MAGIC: &[u8; 8] = b"KUTPFS1\0";
-const FILE_HPKE_INFO: &[u8] = b"kutup/drive/file-share-hpke/v1\0";
+const FILE_HPKE_INFO: &[u8] = crate::labels::DRIVE_FILE_SHARE_HPKE_V1;
 /// The AAD before the two people, plus their two server-length prefixes.
 const FIXED_AAD_LEN: usize = 8 + 2 + 2 + 16 + 4 + 32 + 32 + 2 + 2;
 const ENCAPSULATED_KEY_LEN: usize = crate::hpke_xwing::ENCAPSULATED_KEY_LEN;

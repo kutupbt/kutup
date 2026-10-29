@@ -136,7 +136,7 @@ async fn lock_reservation(
     request_id: &str,
 ) -> Result<(), sqlx::Error> {
     let mut digest = Hasher::new(Suite::V1);
-    digest.update(b"kutup-federation-replay-v1\0");
+    digest.update(kutup_crypto::labels::FEDERATION_REPLAY_V1);
     digest.update(origin.as_bytes());
     digest.update([0]);
     digest.update(request_id.as_bytes());

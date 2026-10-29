@@ -640,7 +640,17 @@ mod tests {
 
     fn sealed(binding: &str) -> String {
         let secret = VaultSecret::chosen(Some("kasa"), None);
-        STANDARD.encode(seal_vault_secret(&[7u8; 32], binding, &[1u8; 16], 5, &secret).unwrap())
+        STANDARD.encode(
+            seal_vault_secret(
+                &[7u8; 32],
+                kutup_crypto::account_envelope::MasterKeyGeneration::FIRST,
+                binding,
+                &[1u8; 16],
+                5,
+                &secret,
+            )
+            .unwrap(),
+        )
     }
 
     const VAULT: Uuid = Uuid::from_bytes([1u8; 16]);
@@ -663,6 +673,7 @@ mod tests {
                 &[1u8; 32],
                 &[7u8; 32],
                 AccountEnvelopePurpose::ChatBackupRoot,
+                kutup_crypto::account_envelope::MasterKeyGeneration::FIRST,
                 ID,
             )
             .unwrap(),

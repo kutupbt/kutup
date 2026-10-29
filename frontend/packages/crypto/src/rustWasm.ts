@@ -190,6 +190,7 @@ export interface CryptoWasmModule {
   ): string
   importMailAddressKey(
     masterKeyBase64: string,
+    generation: number,
     binding: string,
     address: string,
     file: Uint8Array,
@@ -197,6 +198,7 @@ export interface CryptoWasmModule {
   ): { publicKey: string; envelope: string; fingerprint: string; sha256Fingerprint: string }
   generateMailAddressKey(
     masterKeyBase64: string,
+    generation: number,
     binding: string,
     address: string,
     createdAtSecs: number,
@@ -246,6 +248,7 @@ export interface CryptoWasmModule {
   ): import('./mailKey').MailForwardingMaterial
   acceptMailForwarding(
     masterKeyBase64: string,
+    generation: number,
     binding: string,
     forwardeeAddress: string,
     envelopeBase64: string,
@@ -301,6 +304,7 @@ export interface CryptoWasmModule {
     plaintextBase64: string,
     keyBase64: string,
     purpose: number,
+    generation: number,
     binding: string,
   ): string
   openAccountEnvelope(
@@ -732,7 +736,7 @@ export interface OpaqueLoginHandle {
 export interface OpaqueRegistrationHandle {
   readonly request: string
   finish(responseBase64: string): string
-  sealMasterKey(masterKeyBase64: string, keyBinding: string): string
+  sealMasterKey(masterKeyBase64: string, generation: number, keyBinding: string): string
   /** Wipes the state and the export key. */
   close(): void
   free(): void

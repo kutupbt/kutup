@@ -72,7 +72,7 @@ pub(crate) fn delivery_offer_digest(offer: &ChatMediaDeliveryOfferV1) -> AppResu
     let encoded = serde_json::to_vec(offer)
         .map_err(|error| AppError::internal(format!("encode Chat-media offer: {error}")))?;
     let mut digest = Hasher::new(Suite::V1);
-    digest.update(b"kutup/chat-media/delivery-offer-digest/v1\0");
+    digest.update(kutup_crypto::labels::CHAT_MEDIA_DELIVERY_OFFER_DIGEST_V1);
     digest.update(encoded);
     Ok(hex::encode(digest.finish()))
 }
@@ -827,7 +827,7 @@ pub async fn deliver_local(
     let recipient_rate_digest: [u8; 32] = hash(
         Suite::V1,
         [
-            b"kutup/chat-media/recipient-rate/v1\0".as_slice(),
+            kutup_crypto::labels::CHAT_MEDIA_RECIPIENT_RATE_V1,
             recipient_user_id.as_bytes(),
         ]
         .concat(),

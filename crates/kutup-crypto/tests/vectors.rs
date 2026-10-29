@@ -27,7 +27,6 @@ fn b64(s: &str) -> Vec<u8> {
 
 #[derive(Deserialize)]
 struct CryptoVectors {
-    kdf: Vec<KdfVec>,
     #[serde(rename = "recoveryAuth")]
     recovery_auth: RecoveryAuthVec,
     #[serde(rename = "accountIdentity")]
@@ -137,17 +136,6 @@ struct LocalStateVec {
     envelope: String,
 }
 
-#[derive(Deserialize)]
-struct KdfVec {
-    password: String,
-    salt: String,
-    #[serde(rename = "expectedRoot")]
-    expected_root: String,
-    #[serde(rename = "expectedKek")]
-    expected_kek: String,
-    #[serde(rename = "expectedLoginKey")]
-    expected_login_key: String,
-}
 #[derive(Deserialize)]
 struct RecoveryAuthVec {
     entropy: String,
@@ -324,34 +312,6 @@ fn load_crypto() -> CryptoVectors {
 }
 
 #[test]
-fn kdf_matches_go() {
-    for v in load_crypto().kdf {
-        let salt = b64(&v.salt);
-        let keys = kdf::derive_account_protection_keys(
-            &v.password,
-            &salt,
-            kdf::AccountProtectionParameters::V1,
-        )
-        .unwrap();
-        assert_eq!(
-            keys.key_encryption_key.as_slice(),
-            &b64(&v.expected_kek),
-            "account KEK mismatch for root {}",
-            v.expected_root
-        );
-        assert_eq!(
-            keys.login_key.as_slice(),
-            &b64(&v.expected_login_key),
-            "account login key mismatch"
-        );
-        assert_ne!(
-            keys.key_encryption_key.as_slice(),
-            keys.login_key.as_slice()
-        );
-    }
-}
-
-#[test]
 fn recovery_auth_proof_vector() {
     let v = load_crypto().recovery_auth;
     let proof = kdf::derive_recovery_auth_proof(&b64(&v.entropy), &v.binding).unwrap();
@@ -394,6 +354,7 @@ fn account_envelope_vector() {
         &b64(&vector.plaintext),
         &b64(&vector.key),
         purpose,
+        kutup_crypto::account_envelope::MasterKeyGeneration::FIRST,
         &vector.binding,
         &object,
         purpose.policy().mutable.then_some(1),

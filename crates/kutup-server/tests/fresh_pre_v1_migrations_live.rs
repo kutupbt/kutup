@@ -26,7 +26,6 @@ async fn all_migrations_build_the_exact_v1_manifest_schema_without_mls() {
     for required in [
         "master_key_envelope",
         "recovery_key_envelope",
-        "drive_private_key_envelope",
         "account_authority_public_key",
         "account_authority_key_id",
         "account_incarnation_id",

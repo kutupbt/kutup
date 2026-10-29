@@ -6,10 +6,7 @@ use base64::Engine;
 use crate::api::{Client, TotpRequest};
 use crate::commands::prompt_line;
 use crate::session::{Session, Store};
-use kutup_crypto::{
-    account_envelope::{self, AccountEnvelopePurpose},
-    opaque,
-};
+use kutup_crypto::opaque;
 
 pub fn run(
     profile: &str,
@@ -70,7 +67,11 @@ pub(crate) fn set_password(
         .context("the server's registration answer")?;
     let envelope = registered
         .export_key
-        .seal_master_key(master_key, key_binding)
+        .seal_master_key(
+            master_key,
+            kutup_crypto::account_envelope::MasterKeyGeneration::FIRST,
+            key_binding,
+        )
         .context("seal master-key envelope")?;
     client
         .register_finish(
@@ -188,13 +189,19 @@ pub(crate) fn login_with_password(
         .export_key
         .open_master_key(&resp.master_key_envelope, &binding)
         .context("decrypt master key")?;
-    let private_key = account_envelope::open_b64(
-        &resp.drive_private_key_envelope,
-        master_key.as_slice(),
-        AccountEnvelopePurpose::DriveHpkePrivateKey,
-        &binding,
-    )
-    .context("decrypt private key")?;
+    // The Drive keys are derived from the master key, never stored
+    // (docs/plans/w6-key-hierarchy.md §1).
+    let master: [u8; 32] = master_key
+        .as_slice()
+        .try_into()
+        .context("the master key is 32 bytes")?;
+    let identity = kutup_crypto::identity::AccountIdentityKeysV1::derive(&master)
+        .context("derive the account's keys")?;
+    let public_key = b64.encode(identity.drive_hpke_public_key());
+    if public_key != resp.public_key {
+        bail!("the server publishes another Drive key than this account's master key derives");
+    }
+    let private_key = identity.drive_hpke_private_key().to_vec();
 
     // Step 4: the server moved to a new setup: the same password registered
     // under it, now, while this side holds it (a failure only waits for the
@@ -217,48 +224,6 @@ pub(crate) fn login_with_password(
         bail!("the server described another account than the one signed in");
     }
 
-    // Step 5b: an account from before X-Wing moves to it now, once: the Drive
-    // key derived again from the master key, bound by the account's own
-    // authority, its seed sealed as before (docs/plans/pq-shares.md).
-    let (mut public_key, mut private_key, mut drive_private_key_envelope) = (
-        resp.public_key,
-        private_key,
-        resp.drive_private_key_envelope,
-    );
-    if resp.identity_suite == Some(1) {
-        let master: [u8; 32] = master_key
-            .as_slice()
-            .try_into()
-            .context("the master key is 32 bytes")?;
-        let identity = kutup_crypto::identity::AccountIdentityKeysV1::derive(&master)
-            .context("derive the account's keys")?;
-        let person =
-            kutup_crypto::account_ref::AccountRef::new(&account.server, &account.account_id)
-                .context("the account's id")?;
-        let binding_signature = kutup_crypto::drive_key_binding::sign(&identity, &person, 1)
-            .context("sign the Drive key binding")?;
-        let envelope = account_envelope::seal_b64(
-            identity.drive_hpke_private_key(),
-            master_key.as_slice(),
-            AccountEnvelopePurpose::DriveHpkePrivateKey,
-            &binding,
-        )
-        .context("seal the Drive private key")?;
-        let new_public = b64.encode(identity.drive_hpke_public_key());
-        Client::new(server, &resp.access_token)
-            .upgrade_identity_suite(&serde_json::json!({
-                "publicKey": new_public,
-                "driveKeyBinding": b64.encode(binding_signature),
-                "driveKeyBindingEpoch": 1,
-                "drivePrivateKeyEnvelope": envelope,
-            }))
-            .context("move the account's Drive key to X-Wing")?;
-        eprintln!("Moved this account's sharing key to post-quantum encryption.");
-        public_key = new_public;
-        private_key = identity.drive_hpke_private_key().to_vec();
-        drive_private_key_envelope = envelope;
-    }
-
     // Step 6: persist the session.
     let mut store = Store::open(profile)?;
     let sess = Session {
@@ -274,7 +239,6 @@ pub(crate) fn login_with_password(
         private_key: b64.encode(&private_key),
         public_key,
         master_key_envelope,
-        drive_private_key_envelope,
         storage_quota_bytes: resp.storage_quota_bytes,
         storage_used_bytes: resp.storage_used_bytes,
     };

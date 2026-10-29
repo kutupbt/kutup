@@ -9,6 +9,9 @@
 //! file is kept as its key element ([`key_file_secret`]). The format itself is
 //! `kutup_crypto::pass_vault`.
 
+use kutup_crypto::account_envelope;
+/// Which master key a kept key is sealed under (`account_envelope`).
+pub use kutup_crypto::account_envelope::MasterKeyGeneration;
 use kutup_crypto::pass_vault::{open_vault_secret, seal_vault_secret, VaultSecret};
 use zeroize::Zeroizing;
 
@@ -48,14 +51,16 @@ pub enum PasswordKind {
     Generated,
 }
 
-/// Seals `key` for the account: under `master_key`, bound to `binding` and
-/// the vault. It does not open the vault: callers pass a key that opened it
+/// Seals `key` for the account: under `master_key` (of `generation`), bound
+/// to `binding` and the vault. It does not open the vault: callers pass a
+/// key that opened it
 /// (the Pass worker keeps the key its vault was opened or made with; the CLI
 /// opens the vault with the key first). A key file is kept as its key element
 /// ([`key_file_secret`]), which opens the vault as the file does.
 /// `kind` says whose password it is (see [`PasswordKind`]).
 pub fn seal(
     master_key: &[u8],
+    generation: MasterKeyGeneration,
     binding: &str,
     file_id: &[u8; 16],
     revision: u64,
@@ -80,7 +85,7 @@ pub fn seal(
         (PasswordKind::Chosen, None, None) => VaultSecret::chosen(None, key_file),
     };
     Ok(seal_vault_secret(
-        master_key, binding, file_id, revision, &secret,
+        master_key, generation, binding, file_id, revision, &secret,
     )?)
 }
 
@@ -119,8 +124,10 @@ pub fn reseal(
     revision: u64,
 ) -> Result<Vec<u8>, KeptError> {
     let (secret, _) = open_vault_secret(envelope, master_key, binding, from)?;
+    // Under the same master key it opened with.
+    let generation = account_envelope::inspect(envelope)?.generation;
     Ok(seal_vault_secret(
-        master_key, binding, to, revision, &secret,
+        master_key, generation, binding, to, revision, &secret,
     )?)
 }
 
@@ -161,7 +168,16 @@ mod tests {
             (VaultKey::new().with_password("k7m2q-9xd4t-4tpav"), true),
         ] {
             let contents = vault_saved_with(&key);
-            let envelope = seal(&MASTER, BINDING, &VAULT, 5, &key, kind(generated)).unwrap();
+            let envelope = seal(
+                &MASTER,
+                MasterKeyGeneration::FIRST,
+                BINDING,
+                &VAULT,
+                5,
+                &key,
+                kind(generated),
+            )
+            .unwrap();
             let kept = open(&envelope, &MASTER, BINDING, &VAULT).unwrap();
             assert_eq!(kept.revision, 5);
             assert!(open_vault(&contents, &kept.key).is_ok());
@@ -187,7 +203,16 @@ mod tests {
             ),
         ] {
             let contents = vault_saved_with(&key);
-            let envelope = seal(&MASTER, BINDING, &VAULT, 5, &key, kind(generated)).unwrap();
+            let envelope = seal(
+                &MASTER,
+                MasterKeyGeneration::FIRST,
+                BINDING,
+                &VAULT,
+                5,
+                &key,
+                kind(generated),
+            )
+            .unwrap();
             let copied = reseal(&envelope, &MASTER, BINDING, &VAULT, &COPY, 1).unwrap();
             let kept = open(&copied, &MASTER, BINDING, &COPY).unwrap();
             assert_eq!(kept.revision, 1);
@@ -202,6 +227,7 @@ mod tests {
         // Only from what is kept for the vault named.
         let envelope = seal(
             &MASTER,
+            MasterKeyGeneration::FIRST,
             BINDING,
             &VAULT,
             5,
@@ -217,9 +243,27 @@ mod tests {
     fn a_chosen_password_known_only_by_its_hash_is_kept_as_that_hash() {
         // A vault opened with its kept key holds its password as the hash.
         let key = VaultKey::new().with_password("parola-çğ");
-        let envelope = seal(&MASTER, BINDING, &VAULT, 5, &key, PasswordKind::Chosen).unwrap();
+        let envelope = seal(
+            &MASTER,
+            MasterKeyGeneration::FIRST,
+            BINDING,
+            &VAULT,
+            5,
+            &key,
+            PasswordKind::Chosen,
+        )
+        .unwrap();
         let kept = open(&envelope, &MASTER, BINDING, &VAULT).unwrap();
-        let again = seal(&MASTER, BINDING, &VAULT, 6, &kept.key, PasswordKind::Chosen).unwrap();
+        let again = seal(
+            &MASTER,
+            MasterKeyGeneration::FIRST,
+            BINDING,
+            &VAULT,
+            6,
+            &kept.key,
+            PasswordKind::Chosen,
+        )
+        .unwrap();
         let (first, _) = open_vault_secret(&envelope, &MASTER, BINDING, &VAULT).unwrap();
         let (second, revision) = open_vault_secret(&again, &MASTER, BINDING, &VAULT).unwrap();
         assert_eq!(revision, 6);
@@ -241,7 +285,15 @@ mod tests {
         // password at all, is refused.
         for key in [kept.key.clone(), VaultKey::new().with_key_file(b"k")] {
             assert!(matches!(
-                seal(&MASTER, BINDING, &VAULT, 7, &key, PasswordKind::Generated),
+                seal(
+                    &MASTER,
+                    MasterKeyGeneration::FIRST,
+                    BINDING,
+                    &VAULT,
+                    7,
+                    &key,
+                    PasswordKind::Generated
+                ),
                 Err(KeptError::NoPassword)
             ));
         }
@@ -253,12 +305,30 @@ mod tests {
         // Kept with its password; opened with the kept key (the hash); its
         // key file changed, keeping the password part; kept again.
         let first = VaultKey::new().with_password("parola");
-        let envelope = seal(&MASTER, BINDING, &VAULT, 5, &first, PasswordKind::Chosen).unwrap();
+        let envelope = seal(
+            &MASTER,
+            MasterKeyGeneration::FIRST,
+            BINDING,
+            &VAULT,
+            5,
+            &first,
+            PasswordKind::Chosen,
+        )
+        .unwrap();
         let opened = open(&envelope, &MASTER, BINDING, &VAULT).unwrap().key;
         let file = crate::kdbx::generate_key_file();
         let changed = opened.with_key_file(&file);
         let contents = vault_saved_with(&changed);
-        let envelope = seal(&MASTER, BINDING, &VAULT, 6, &changed, PasswordKind::Chosen).unwrap();
+        let envelope = seal(
+            &MASTER,
+            MasterKeyGeneration::FIRST,
+            BINDING,
+            &VAULT,
+            6,
+            &changed,
+            PasswordKind::Chosen,
+        )
+        .unwrap();
         let kept = open(&envelope, &MASTER, BINDING, &VAULT).unwrap();
         assert!(
             open_vault(&contents, &kept.key).is_ok(),
@@ -279,6 +349,7 @@ mod tests {
     fn bound_to_the_account_and_the_vault() {
         let envelope = seal(
             &MASTER,
+            MasterKeyGeneration::FIRST,
             BINDING,
             &VAULT,
             5,

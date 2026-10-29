@@ -36,6 +36,7 @@ fn sealed_for(user: &User, file_id: &str, password: &str) -> String {
     let id = uuid::Uuid::parse_str(file_id).unwrap();
     b64(&seal_vault_secret(
         &user.master_key,
+        kutup_crypto::account_envelope::MasterKeyGeneration::FIRST,
         &user.binding,
         id.as_bytes(),
         next_revision(),
@@ -244,6 +245,7 @@ fn vault_secrets() {
     assert_eq!(late["revision"].as_u64(), Some(kept_now));
     let older = b64(&seal_vault_secret(
         &owner.master_key,
+        kutup_crypto::account_envelope::MasterKeyGeneration::FIRST,
         &owner.binding,
         id.as_bytes(),
         kept_now,
@@ -281,6 +283,7 @@ fn vault_secrets() {
         &[1u8; 32],
         &owner.master_key,
         AccountEnvelopePurpose::ChatBackupRoot,
+        kutup_crypto::account_envelope::MasterKeyGeneration::FIRST,
         &owner.binding,
     )
     .unwrap();

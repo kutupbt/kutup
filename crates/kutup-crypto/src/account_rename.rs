@@ -22,7 +22,7 @@ use crate::error::{CryptoError, Result};
 use crate::identity::{incarnation_id_from_authority_public, AccountIdentityKeysV1};
 use crate::named_share::canonical_account;
 
-const DOMAIN: &[u8] = b"kutup/account-rename/v1\0";
+const DOMAIN: &[u8] = crate::labels::ACCOUNT_RENAME_V1;
 /// The most renames one chain holds.
 pub const MAX_CHAIN: usize = 1000;
 /// 2020-01-01T00:00:00Z and 2200-01-01T00:00:00Z, in milliseconds.

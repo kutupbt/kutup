@@ -93,13 +93,6 @@ KUTUP_LIVE_SERVER="http://127.0.0.1:$port" \
   KUTUP_LIVE_ADMIN="$test_admin_username:$test_admin_password" \
   KUTUP_LIVE_DATABASE_URL="postgres://$POSTGRES_USER:$POSTGRES_PASSWORD@127.0.0.1:$db_port/$POSTGRES_DB" \
   cargo test -p kutup-server --test account_identity_live -- --nocapture
-# Post-quantum Drive keys (docs/plans/pq-shares.md): a suite-1 account is
-# refused shares until it upgrades, once, with its own authority's binding;
-# one with suite-1 Chat manifests then raises its key in the next manifest.
-KUTUP_LIVE_SERVER="http://127.0.0.1:$port" \
-  KUTUP_LIVE_ADMIN="$test_admin_username:$test_admin_password" \
-  KUTUP_LIVE_DATABASE_URL="postgres://$POSTGRES_USER:$POSTGRES_PASSWORD@127.0.0.1:$db_port/$POSTGRES_DB" \
-  cargo test -p kutup-server --test identity_suite_live -- --nocapture
 # Permanent account ids (docs/plans/account-ids.md): minted at sign-up,
 # retired on delete, found by id, kept through a rename.
 KUTUP_LIVE_SERVER="http://127.0.0.1:$port" \
@@ -281,49 +274,3 @@ fi
 for check in verify-cli verify-pass-sync verify-pass-ssh; do
   KUTUP_SERVER="http://127.0.0.1:$port" "$root_dir/scripts/$check.sh"
 done
-
-# Post-quantum Drive keys through the CLI (docs/plans/pq-shares.md): an
-# account from before X-Wing (identity suite 1, an X25519 key) is moved to
-# X-Wing by its next `kutup login`, once.
-sql() {
-  compose exec -T postgres psql \
-    --username "${POSTGRES_USER:-kutup}" \
-    --dbname "${POSTGRES_DB:-kutup}" \
-    --tuples-only --no-align \
-    --command "$1"
-}
-cargo build -q -p kutup-cli
-cli="$root_dir/target/debug/kutup"
-upgrade_name="pqup$(date +%s | tail -c 7)$((RANDOM % 100))"
-upgrade_profile="pq-upgrade-$$"
-export KUTUP_PASSWORD="pq-upgrade-pw-$$-123456"
-"$cli" --profile "$upgrade_profile" register \
-  --server "http://127.0.0.1:$port" --username "$upgrade_name" >/dev/null
-# Made a suite-1 account as clients made one: its own X25519 Drive key, v1
-# binding and sealed private key (and suite-1 Chat manifests, had it any).
-KUTUP_SUITE1_SERVER="http://127.0.0.1:$port" \
-  KUTUP_SUITE1_DATABASE_URL="postgres://$POSTGRES_USER:$POSTGRES_PASSWORD@127.0.0.1:$db_port/$POSTGRES_DB" \
-  KUTUP_SUITE1_USERNAME="$upgrade_name" KUTUP_SUITE1_PASSWORD="$KUTUP_PASSWORD" \
-  cargo test -q -p kutup-server --test identity_suite_live make_a_suite_1_account \
-    -- --ignored --exact >/dev/null
-login_log="$("$cli" --profile "$upgrade_profile" login \
-  --server "http://127.0.0.1:$port" --username "$upgrade_name" 2>&1)"
-if ! grep -q "post-quantum" <<<"$login_log"; then
-  echo "kutup login did not upgrade a suite-1 account: $login_log" >&2
-  exit 1
-fi
-upgraded="$(sql "SELECT identity_suite || ':' || length(decode(public_key, 'base64'))
-                   FROM users WHERE username = '$upgrade_name'")"
-if [[ "$upgraded" != "2:1216" ]]; then
-  echo "the upgraded account is $upgraded, not suite 2 with a 1216-byte key" >&2
-  exit 1
-fi
-# A second sign-in has nothing to move.
-if "$cli" --profile "$upgrade_profile" login \
-    --server "http://127.0.0.1:$port" --username "$upgrade_name" 2>&1 | grep -q "post-quantum"; then
-  echo "a suite-2 account was upgraded again" >&2
-  exit 1
-fi
-"$cli" --profile "$upgrade_profile" logout >/dev/null 2>&1 || true
-unset KUTUP_PASSWORD
-echo "CLI IDENTITY SUITE UPGRADE VERIFIED"

@@ -19,9 +19,9 @@ const KEY_LEN: usize = 32;
 
 /// The backup-media family of the block construction.
 pub static CHAT_BACKUP_MEDIA_BLOCKS: BlockFamily = BlockFamily {
-    block_key_label: b"kutup/chat-backup-media/blocks/block-key/v1\0",
-    nonce_key_label: b"kutup/chat-backup-media/blocks/nonce-key/v1\0",
-    manifest_key_label: b"kutup/chat-backup-media/blocks/manifest-key/v1\0",
+    block_key_label: crate::labels::CHAT_BACKUP_MEDIA_BLOCKS_BLOCK_KEY_V1,
+    nonce_key_label: crate::labels::CHAT_BACKUP_MEDIA_BLOCKS_NONCE_KEY_V1,
+    manifest_key_label: crate::labels::CHAT_BACKUP_MEDIA_BLOCKS_MANIFEST_KEY_V1,
     signature_domain: b"",
     trailer_magic: b"KUTPBMM\0",
     signed: false,

@@ -30,8 +30,10 @@ use unicode_normalization::UnicodeNormalization;
 
 use crate::error::{CryptoError, Result};
 
-const HASH_KEY_INFO: &[u8] = b"kutup/drive/folder-hash-key/v1";
-const TOP_LEVEL_INFO: &[u8] = b"kutup/drive/top-level-names/v1";
+/// The family every name hash key comes from (the HKDF salt).
+const NAMES_SALT: &[u8] = crate::labels::DRIVE_NAMES_V1;
+const HASH_KEY_INFO: &[u8] = crate::labels::DRIVE_FOLDER_HASH_KEY_V1;
+const TOP_LEVEL_INFO: &[u8] = crate::labels::DRIVE_TOP_LEVEL_NAMES_V1;
 const NAME_LABEL: &[u8] = b"name\0";
 const CONTENT_LABEL: &[u8] = b"content\0";
 
@@ -45,9 +47,15 @@ pub fn folder_hash_key(first_folder_key: &[u8], collection_id: &str) -> Result<[
     if collection_id.is_empty() {
         return Err(CryptoError::InvalidInput("folder id is empty".into()));
     }
-    let hkdf = Kdf::new(Suite::V1, collection_id.as_bytes(), first_folder_key);
+    let id_len = u16::try_from(collection_id.len())
+        .map_err(|_| CryptoError::InvalidInput("folder id is too long".into()))?;
+    let mut info = Vec::with_capacity(HASH_KEY_INFO.len() + 2 + collection_id.len());
+    info.extend_from_slice(HASH_KEY_INFO);
+    info.extend_from_slice(&id_len.to_be_bytes());
+    info.extend_from_slice(collection_id.as_bytes());
+    let hkdf = Kdf::new(Suite::V1, NAMES_SALT, first_folder_key);
     let mut key = [0u8; 32];
-    hkdf.expand(HASH_KEY_INFO, &mut key)
+    hkdf.expand(&info, &mut key)
         .map_err(|_| CryptoError::InvalidInput("folder hash key derivation failed".into()))?;
     Ok(key)
 }
@@ -60,7 +68,7 @@ pub fn top_level_hash_key(master_key: &[u8]) -> Result<[u8; 32]> {
             "master key must be 32 bytes".into(),
         ));
     }
-    let hkdf = Kdf::new(Suite::V1, &[], master_key);
+    let hkdf = Kdf::new(Suite::V1, NAMES_SALT, master_key);
     let mut key = [0u8; 32];
     hkdf.expand(TOP_LEVEL_INFO, &mut key)
         .map_err(|_| CryptoError::InvalidInput("top-level hash key derivation failed".into()))?;

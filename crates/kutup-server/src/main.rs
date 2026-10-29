@@ -610,11 +610,10 @@ async fn bootstrap_admin(
         r#"INSERT INTO users (
             username, key_binding, opaque_record, opaque_suite, opaque_server_key_id,
             master_key_envelope, recovery_key_envelope,
-            drive_private_key_envelope,
             public_key, account_authority_public_key, account_authority_key_id,
             account_incarnation_id, drive_signing_public_key,
             is_admin, is_first_login, storage_quota_bytes, is_break_glass
-        ) VALUES ($1,$2,$3,$4,$5,'','','','','','','','',true,true,$6,true)
+        ) VALUES ($1,$2,$3,$4,$5,'','','','','','','',true,true,$6,true)
         RETURNING id"#,
     )
     .bind(username)
@@ -868,10 +867,6 @@ fn build_router(state: AppState) -> Router {
                 .route_layer(DefaultBodyLimit::max(
                     handlers::chat_group_list::ENVELOPE_BYTES / 3 * 4 + 64 * 1024,
                 )),
-        )
-        .route(
-            "/api/account/identity-suite",
-            post(identity::upgrade_identity_suite),
         )
         .route(
             "/api/user/identity-pins",

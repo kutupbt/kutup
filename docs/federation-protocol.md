@@ -55,7 +55,7 @@ FederationIdentityDocumentV1 {
 The current signature covers, in order:
 
 ```text
-"kutup-federation-identity-document-v1\0"
+"kutup/federation/identity-document/v1\0"
 identityVersion:u16
 server:length-prefixed
 sequence:u64
@@ -68,7 +68,7 @@ issuedAt:i64
 ```
 
 The document hash is SHA-256 over
-`"kutup-federation-identity-document-hash-v1\0" || signingBytes`. Signatures
+`"kutup/federation/identity-document-hash/v1\0" || signingBytes`. Signatures
 authenticate the canonical payload but are not included in its hash.
 
 Genesis is sequence zero, has neither predecessor field, and is self-signed.
@@ -138,7 +138,7 @@ Refusals are counted in the origin's rate like deliveries.
 The identity's current key signs these deterministic bytes:
 
 ```text
-"kutup-federation-discovery-v2\0"
+"kutup/federation/discovery/v2\0"
 fedVersion:u16
 server:length-prefixed
 apiBase:length-prefixed

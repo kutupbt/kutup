@@ -47,7 +47,7 @@ Devices become links to the account app.
 The server already holds everything:
 - the encrypted name, picture and "about" envelopes;
 - the profile key, wrapped under a key derived from the account master key
-  and the account's key binding (`kutup-chat-profile-wrap-v2`,
+  and the account's key binding (`kutup/chat-profile/wrap/v2`,
   docs/plans/account-identity.md; `PutChatProfileRequest.wrappedKey`). The
   envelopes, which peers read, name the address; the account's own copy of
   the key does not depend on it alone. Vectors with the values that must be

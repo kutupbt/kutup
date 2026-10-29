@@ -20,19 +20,6 @@ const vectors = JSON.parse(
   await readFile(`${root}/crates/kutup-crypto/tests/vectors/crypto.json`, 'utf8'),
 )
 
-const keys = crypto.deriveAccountProtectionKeys(
-  'correct horse battery staple',
-  'MDEyMzQ1Njc4OWFiY2RlZg==',
-  1,
-  65_536,
-  3,
-  1,
-)
-assert.deepEqual(keys, {
-  keyEncryptionKey: 'dgUIbPObROQzY5NoEVSeiNn1cmCX+T5aHgdIUVuNrG0=',
-  loginKey: 'TqqiEotO6otWBWRjUcGqYnDkmonT51Smn/AfBCJLf/4=',
-})
-
 const entropy = Buffer.from(Uint8Array.from({ length: 32 }, (_, index) => index)).toString('base64')
 assert.equal(
   crypto.deriveRecoveryAuthProof(entropy, '0b9f4c0e-6a51-4d2f-9a33-5e1f6c7d8e90'),
@@ -43,10 +30,6 @@ for (const binding of ['alice@example.com', '0B9F4C0E-6A51-4D2F-9A33-5E1F6C7D8E9
   assert.throws(() => crypto.deriveRecoveryAuthProof(entropy, binding), /key binding/)
 }
 assert.throws(
-  () => crypto.deriveAccountProtectionKeys('password', 'MDEyMzQ1Njc4OWFiY2RlZg==', 1, 32_768, 3, 1),
-  /parameters/,
-)
-assert.throws(
   () => crypto.deriveRecoveryAuthProof('AA==', 'alice@example.com'),
   /32 bytes/,
 )
@@ -56,7 +39,7 @@ assert.deepEqual(
   {
     authorityPublicKey: 'eYfen0GgcbJ7PEdEgpsPFRSB9Mi55ZfV+O7e6/P1Kfw=',
     authorityKeyId: '19c53cf8e1cf6790e78bd859ad391db080cc5b3fec885eb345e76b664ce694d3',
-    incarnationId: '3a6ef6bc771054da75a5c5dd018bcfdbc1ed1fcc5126af4248a005b7a95cf895',
+    incarnationId: '52d7989c9e0b29849cda0fad9f8fabcdd48b7512626889c3f2c79943777b6879',
     driveHpkePublicKey: '+cBVrhuiBqGFRLgUvYAa/Lgir2BEK+ER/Cs/FghMcIQ6iwRalwqcQTVPjUW3vwtKTFh9agBnqjaN1ulXo5dITiy4o7PIZQyFJ6VifgiNjQc6Cni0bLPL66UDKpZQG8isTsPDFHdwyMgqOtM6hjZ0PZh0YjyxNMCkJ4EBl9weqFfLABDC25qeQ0ZdRabEtlLO6pWA0MVsDjm8gaWO3xxhjAwOx7K8RvuKm6KjAAvIuKw0SmSO20weDFNzxIyEF7QJKtKCjTwL1DAvu5kSv0l/6kld8Pd0x7xSn5ONg0Jq2JUSVAplohEE7onPSaKs2RIRFACSSCMxjQdMYCM42dk/2ux66bFnZEPKtgiaQyvCjec7wPatF2tFLJqu0JkIhoxFZhYf7ScGz+gmIVdCSKYkKIVVLTdaQ0VFRMVFVARabmu+y+FfjKwD7AyTiYCoh2wlHFwWlSKVUZgHpfBHyhABSKtK1zCfSIJy5PEza0Z3grPMvnVQAIsCsEctmmGuORU9LIB/VVeEIdG6HJhDK+R4ladkc9muK2U9nIACbSCU+pnNh2tVKwCG85Cv/6UdATMWIatk/sR6raJX3OCpQKRIssmK6Qi3NZEZeaUr1hy3tuyTi9BafmJpi9kxuviACQoOJpEUBQsCQgspcCtBCYXJ+0qKdHWmvAVfR6xGghiTBcacwAYDDzievtkc/zyjGUoAuhrMOkVINBWV6IMtPKsWLhhSxMeXFph+aNmzAGO6LUgomTuHYMcp5JxaX0q2DBUoj/lgiNcUR6gpBBB+WIgmiYQ1guVwqqZqd4cCPQMV8dCdqczExGxFIDEL1wAwgtka1DkmgyQm15bAr2WfJYA7+aKxQQUhxXtBxWsXWMobk2Rid+mLNQahfvgDrpA0c6mLTQc9OepiqCYZ4Xp6VOp2L3kFCiEwu/odX2SXzzKc2iohssAcfgBBizt/Z4W1hud0rAJ/QUC4E5htCbE2BQjGcvccf0aS2LDApsQGQWdYfjRyy8y9oZwS7vatZ1SImNur15U8BCS4WhHNw6uitIuvvWDD1CG9ceUOASMmUvzIapIczno6AMp0Zsk28xSXp/CfrGA0ZKs1YGhYq5KjarHBT2Kw5ONfB3bLkll1EAVcDCwm7Lu059utmuDO2CBUGoc3HzixZLhrZmKjwSNDLhO8Q1kqbMQsw/gZzCGoxAoZlOK/EueySvNeGzkbo1QBs5oWSoBfhUFNySmrLiQaDzBDmLIsxRKQibedu1nFXWEV0KlSZKsSZ3hns3okLpsJ+FhcXmBD/5ihInEtJkyHo6d8+Ganw0KkfHQURjxqHqy4Q+MvLyq/z4YdK5fIkoGir9pKp9yJwAgQnSGva5wI/Ei3ZPi+O2BjZgtXN3LFjIVP+5dofrMotdYx3GI8piTINnzLe6aggCgSBnRMp0NMMVmWslJHqRNQNJcdT2RtdFhxJ0qEd1o3vSZp3KYy3gKagpqOP/YdYfFZYhmvAYeABHcrQ5yVRIcSHZVv7+SXbqLLeZCFPYw+8+F+SmlRkjSNGVG8XUCK0v/Cdj4OriQKjLu5oVhE3gchf+XCbYJgXPLv1lJNyYidOLY+8Rlukf/Iw6XqdZwvEYf8y+83c3EFubqhEw==',
     driveHpkePrivateKey: '3AcU81D8HUFAQ1oF/fBU9D0KS9NMVyS92HQhJvaGusg=',
     driveSigningPublicKey: 'q7EjHuex0qgzED93MUSVrAKqBU7mfJY48zjVt8xsp1c=',
@@ -65,7 +48,7 @@ assert.deepEqual(
 
 const envelopePlaintext = Buffer.alloc(32, 0x42).toString('base64')
 const envelopeKey = Buffer.alloc(32, 0x24).toString('base64')
-const accountEnvelope = crypto.sealAccountEnvelope(envelopePlaintext, envelopeKey, 1, '0b9f4c0e-6a51-4d2f-9a33-5e1f6c7d8e90')
+const accountEnvelope = crypto.sealAccountEnvelope(envelopePlaintext, envelopeKey, 1, 1, '0b9f4c0e-6a51-4d2f-9a33-5e1f6c7d8e90')
 assert.equal(crypto.openAccountEnvelope(accountEnvelope, envelopeKey, 1, '0b9f4c0e-6a51-4d2f-9a33-5e1f6c7d8e90'), envelopePlaintext)
 assert.throws(
   () => crypto.openAccountEnvelope(accountEnvelope, envelopeKey, 2, '0b9f4c0e-6a51-4d2f-9a33-5e1f6c7d8e90'),
@@ -78,7 +61,7 @@ assert.throws(
 // Exactly a key binding: an address, another case or padding is refused on
 // seal and open.
 for (const binding of ['alice@example.com', '0B9F4C0E-6A51-4D2F-9A33-5E1F6C7D8E90', ' 0b9f4c0e-6a51-4d2f-9a33-5e1f6c7d8e90 ']) {
-  assert.throws(() => crypto.sealAccountEnvelope(envelopePlaintext, envelopeKey, 1, binding), /binding/)
+  assert.throws(() => crypto.sealAccountEnvelope(envelopePlaintext, envelopeKey, 1, 1, binding), /binding/)
   assert.throws(() => crypto.openAccountEnvelope(accountEnvelope, envelopeKey, 1, binding), /binding/)
 }
 
@@ -326,7 +309,7 @@ assert.throws(
 
 const ledgerMaster = Buffer.alloc(32, 0x33).toString('base64')
 const ledgerKey = crypto.deriveChatAttachmentLedgerKey(ledgerMaster)
-assert.equal(ledgerKey, 'DMmsEZ6NNSfT7l124msOjoY/0UfO2sYFtMqQwZ3m2SU=')
+assert.equal(ledgerKey, 'YaVkK1oEu89sWc9iduoHMFum5wXeU9Zv/DztKYnISiM=')
 const ledgerIncarnation = '11'.repeat(32)
 const ledgerEntity = '22222222-2222-4222-8222-222222222222'
 const ledgerPlaintext = Buffer.from('canonical ledger entry').toString('base64')
@@ -699,12 +682,12 @@ const resigned = crypto.signMailKeyList(mailVectors.masterKey, {
 assert.equal(resigned.data, firstList.data)
 assert.equal(resigned.signature, firstList.signature)
 // A fresh key: sealed in WASM, never returned in clear.
-const fresh = crypto.generateMailAddressKey(mailVectors.masterKey, mailVectors.binding, 'carol@kutup.dev', 1_790_000_000)
+const fresh = crypto.generateMailAddressKey(mailVectors.masterKey, 1, mailVectors.binding, 'carol@kutup.dev', 1_790_000_000)
 assert.deepEqual(Object.keys(fresh).sort(), ['envelope', 'fingerprint', 'publicKey', 'sha256Fingerprint'])
 assert.equal(crypto.inspectMailAddressPublicKey(fresh.publicKey, 'carol@kutup.dev').fingerprint, fresh.fingerprint)
 // The generic account-envelope path refuses the mail-key purpose.
 assert.throws(() => crypto.openAccountEnvelope(fresh.envelope, mailVectors.masterKey, 5, mailVectors.binding), /typed export/)
-assert.throws(() => crypto.sealAccountEnvelope('AA==', mailVectors.masterKey, 5, mailVectors.binding), /typed export/)
+assert.throws(() => crypto.sealAccountEnvelope('AA==', mailVectors.masterKey, 5, 1, mailVectors.binding), /typed export/)
 
 // Mail between Kutup users (docs/plans/mail.md): a split message opens for
 // each recipient with the shared data packet; fresh ones round-trip.
@@ -745,7 +728,7 @@ assert.equal(reopenedMail.verified, true)
 // client makes the material with its key kept in WASM; the forwardee's
 // accepts only the activation made for this forwarding, signed by the
 // forwarder's key, and gets back a sealed key.
-const forwardee = crypto.generateMailAddressKey(mailVectors.masterKey, mailVectors.binding, 'carol@kutup.dev', 1_790_000_000)
+const forwardee = crypto.generateMailAddressKey(mailVectors.masterKey, 1, mailVectors.binding, 'carol@kutup.dev', 1_790_000_000)
 const forwardingId = '6f1c2a3b-4d5e-4f60-8a71-b2c3d4e5f607'
 const made = crypto.makeMailForwarding(
   mailVectors.masterKey, mailVectors.binding, mailVectors.address, aliceEnvelope, mailVectors.fingerprint,
@@ -755,7 +738,7 @@ assert.deepEqual(Object.keys(made).sort(), ['activation', 'forwardeePublicKey', 
 assert.equal(made.instances.length, 1)
 assert.equal(Buffer.from(made.instances[0].proxyParameter, 'base64').length, 32)
 const acceptAs = (id, forwarderKey, now) => crypto.acceptMailForwarding(
-  mailVectors.masterKey, mailVectors.binding, 'carol@kutup.dev', forwardee.envelope, forwardee.fingerprint,
+  mailVectors.masterKey, 1, mailVectors.binding, 'carol@kutup.dev', forwardee.envelope, forwardee.fingerprint,
   mailVectors.address, forwarderKey, id, now, made.activation,
 )
 const accepted = acceptAs(forwardingId, mailVectors.publicKey, 1_790_000_200)
@@ -788,11 +771,11 @@ assert.throws(() => crypto.exportMailAddressKey(
   mailVectors.masterKey, mailVectors.binding, mailVectors.address, aliceEnvelope, mailVectors.fingerprint, 'short',
 ))
 assert.throws(
-  () => crypto.importMailAddressKey(mailVectors.masterKey, mailVectors.binding, mailVectors.address, new TextEncoder().encode(exportedKey), 'wrong passphrase!'),
+  () => crypto.importMailAddressKey(mailVectors.masterKey, 1, mailVectors.binding, mailVectors.address, new TextEncoder().encode(exportedKey), 'wrong passphrase!'),
   (error) => error === 'wrong passphrase',
 )
 const reimported = crypto.importMailAddressKey(
-  mailVectors.masterKey, mailVectors.binding, mailVectors.address, new TextEncoder().encode(exportedKey), 'export passphrase',
+  mailVectors.masterKey, 1, mailVectors.binding, mailVectors.address, new TextEncoder().encode(exportedKey), 'export passphrase',
 )
 assert.equal(reimported.fingerprint, mailVectors.fingerprint)
 // A shared mailbox's key: Alice gets a share sealed to her account key,
@@ -1098,8 +1081,8 @@ assert.equal(crypto.incarnationIdOfAuthority(iv.authorityPublicKey), crypto.deri
   // A registration made in the browser signs in, and its envelope opens.
   const registration = crypto.OpaqueRegistration.start('browser password')
   const record = crypto.OpaqueServer.record(registration.finish(server.registrationResponse(registration.request, v.keyBinding)))
-  const envelope = registration.sealMasterKey(v.masterKey, v.keyBinding)
-  assert.throws(() => registration.sealMasterKey(v.masterKey, v.keyBinding), /not finished/)
+  const envelope = registration.sealMasterKey(v.masterKey, 1, v.keyBinding)
+  assert.throws(() => registration.sealMasterKey(v.masterKey, 1, v.keyBinding), /not finished/)
   assert.equal(signIn(record, 'browser password').openMasterKey(envelope, v.keyBinding), v.masterKey)
 }
 
