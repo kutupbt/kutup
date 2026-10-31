@@ -111,7 +111,8 @@ CREATE TABLE IF NOT EXISTS sent_messages (
     delivered      INTEGER NOT NULL,
     deduplicated   INTEGER NOT NULL,
     failed_recipients INTEGER NOT NULL DEFAULT 0,
-    waiting_recipients INTEGER
+    waiting_recipients INTEGER,
+    media_wait     BLOB
 );
 CREATE INDEX IF NOT EXISTS sent_messages_by_created_at
     ON sent_messages (created_at, send_id);
@@ -426,6 +427,17 @@ impl ChatDb for SqliteChatDb {
             .optional())
     }
 
+    async fn load_media_waits(&self) -> Result<Option<Vec<u8>>> {
+        let conn = self.conn.borrow();
+        db(conn
+            .query_row(
+                "SELECT value FROM meta WHERE key = 'media_waits'",
+                [],
+                |row| row.get(0),
+            )
+            .optional())
+    }
+
     async fn load_group_send_endorsement(&self) -> Result<Option<Vec<u8>>> {
         let conn = self.conn.borrow();
         db(conn
@@ -502,7 +514,7 @@ impl ChatDb for SqliteChatDb {
         db(conn
             .query_row(
                 "SELECT send_id, peer, sender_device_id, content, created_at, delivered_at, delivered, deduplicated, failed_recipients,
-                        waiting_recipients
+                        waiting_recipients, media_wait
                  FROM sent_messages WHERE send_id = ?1",
                 [send_id],
                 sent_message_row,
@@ -514,7 +526,7 @@ impl ChatDb for SqliteChatDb {
         let conn = self.conn.borrow();
         let mut stmt = db(conn.prepare(
             "SELECT send_id, peer, sender_device_id, content, created_at, delivered_at, delivered, deduplicated, failed_recipients,
-                        waiting_recipients
+                        waiting_recipients, media_wait
              FROM sent_messages ORDER BY created_at, send_id",
         ))?;
         let rows = db(stmt.query_map([], sent_message_row))?;
@@ -942,8 +954,8 @@ impl ChatDb for SqliteChatDb {
             db(tx.execute(
                 "INSERT INTO sent_messages
                      (send_id, peer, sender_device_id, content, created_at, delivered_at, delivered, deduplicated,
-                      failed_recipients, waiting_recipients)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)
+                      failed_recipients, waiting_recipients, media_wait)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)
                  ON CONFLICT(send_id) DO UPDATE SET
                      peer = excluded.peer, sender_device_id = excluded.sender_device_id,
                      content = excluded.content,
@@ -951,7 +963,8 @@ impl ChatDb for SqliteChatDb {
                      delivered = excluded.delivered,
                      deduplicated = excluded.deduplicated,
                      failed_recipients = excluded.failed_recipients,
-                     waiting_recipients = excluded.waiting_recipients",
+                     waiting_recipients = excluded.waiting_recipients,
+                     media_wait = excluded.media_wait",
                 rusqlite::params![
                     send_id,
                     message.peer,
@@ -963,6 +976,12 @@ impl ChatDb for SqliteChatDb {
                     i64::from(message.deduplicated),
                     message.failed_recipients,
                     message.waiting_recipients,
+                    message
+                        .media_wait
+                        .as_ref()
+                        .map(serde_json::to_vec)
+                        .transpose()
+                        .map_err(|e| ChatError::Db(e.to_string()))?,
                 ],
             ))?;
         }
@@ -1215,6 +1234,13 @@ impl ChatDb for SqliteChatDb {
                 [state],
             ))?;
         }
+        if let Some(state) = &pending.media_waits {
+            db(tx.execute(
+                "INSERT INTO meta (key, value) VALUES ('media_waits', ?1) \
+                 ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+                [state],
+            ))?;
+        }
         if let Some(state) = &pending.group_send_endorsement {
             db(tx.execute(
                 "INSERT INTO meta (key, value) VALUES ('group_send_endorsement', ?1) \
@@ -1385,6 +1411,17 @@ fn sent_message_row(row: &rusqlite::Row) -> rusqlite::Result<SentMessage> {
         deduplicated: row.get::<_, i64>(7)? != 0,
         failed_recipients: row.get(8)?,
         waiting_recipients: row.get(9)?,
+        media_wait: row
+            .get::<_, Option<Vec<u8>>>(10)?
+            .map(|bytes| serde_json::from_slice(&bytes))
+            .transpose()
+            .map_err(|error| {
+                rusqlite::Error::FromSqlConversionFailure(
+                    10,
+                    rusqlite::types::Type::Blob,
+                    Box::new(error),
+                )
+            })?,
     })
 }
 

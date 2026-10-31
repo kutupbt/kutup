@@ -1,4 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { Copy } from 'lucide-react'
 import { useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
@@ -14,6 +15,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { EmptyState, LoadingPanel } from '@kutup/ui/components/states'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@kutup/ui/components/table'
 import { apiErrorMessage } from '@kutup/ui/lib/apiError'
+import { copyText } from '@kutup/ui/lib/clipboard'
 import { formatInstant } from '@kutup/ui/lib/format'
 import { adminKey } from './api'
 
@@ -148,8 +150,18 @@ export function MailDomainsPage() {
             {[data.spf, ...data.dkimKeys].map((key) => (
               <TableRow key={`${key.host}-${key.selector}`} data-testid="admin-dkim-key">
                 <TableCell className="font-mono text-xs">{key.host}</TableCell>
-                <TableCell className="max-w-96 truncate font-mono text-xs" title={key.txt}>
-                  TXT {key.txt}
+                <TableCell className="max-w-96 font-mono text-xs">
+                  <div className="flex items-start gap-2">
+                    <span className="break-all">TXT {key.txt}</span>
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      aria-label={t('common.copy')}
+                      onClick={() => void copyText(key.txt).then(() => toast.success(t('common.copied')))}
+                    >
+                      <Copy />
+                    </Button>
+                  </div>
                 </TableCell>
                 <TableCell>
                   <Badge variant={key.state === 'active' ? 'ok' : key.state === 'pending' ? 'warn' : 'neutral'}>

@@ -1,7 +1,8 @@
 //! The federation outbox migration (`20261027120000`,
 //! docs/plans/federation-outbox.md) with deliveries mid-flight on both
 //! sides: the database is migrated to the one before, given plain and sealed
-//! chat rows in the old tables (pending, mismatched, delivered and rejected,
+//! chat rows and (for `20261027130000`) Chat media offers in the old tables
+//! (pending, mismatched, delivered and rejected,
 //! their sequences, and an origin's high-water marks and answers), then
 //! migrated on; every row, sequence and mark must carry across, so peers
 //! mid-stream see no gap.
@@ -160,7 +161,84 @@ async fn deliveries_mid_flight_carry_across() {
         .unwrap();
     }
 
+    // Chat media to media.test, as v1 left it (20261027130000 moves it): 1
+    // delivered (no answer kept), 2 a refusal the v1 receiver never recorded
+    // (its mark stayed at 1), 3 storage full, 4 pending behind them.
+    for (sequence, state, class) in [
+        (1_i64, "delivered", None),
+        (2, "rejected", Some("remote_rejection")),
+        (3, "rejected", Some("storage_full")),
+        (4, "pending", Some("sequence_conflict")),
+    ] {
+        sqlx::query(
+            "INSERT INTO chat_media_federation_outbox
+                 (destination, sequence, origin_user_id, operation_id, transaction, state,
+                  last_error_class)
+             VALUES ('media.test', $1, $2, $3, $4, $5, $6)",
+        )
+        .bind(sequence)
+        .bind(sender)
+        .bind(Uuid::from_u128(0x5000 + sequence as u128))
+        .bind(json!({ "originSequence": sequence }))
+        .bind(state)
+        .bind(class)
+        .execute(&pool)
+        .await
+        .unwrap();
+    }
+    sqlx::query(
+        "INSERT INTO chat_media_federation_sequences (destination, next_sequence)
+         VALUES ('media.test', 5)",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+
     all.run(&pool).await.unwrap();
+
+    // The refused media offers go again under their own sequences (the
+    // receiver replays what it recorded, or refuses and records it, using the
+    // sequence up), so none leaves a gap; the delivered one answers a repeat
+    // as already stored.
+    let media: Vec<OutboxRow> = sqlx::query_as(
+        "SELECT kind, sequence, state, error_class, answer FROM federation_outbox
+         WHERE destination = 'media.test' ORDER BY sequence",
+    )
+    .fetch_all(&pool)
+    .await
+    .unwrap();
+    let shape: Vec<(i64, &str, Option<&str>)> = media
+        .iter()
+        .map(|row| (row.sequence, row.state.as_str(), row.error_class.as_deref()))
+        .collect();
+    assert_eq!(
+        shape,
+        [
+            (1, "delivered", None),
+            (2, "pending", Some("closing_sequence")),
+            (3, "pending", Some("closing_sequence")),
+            (4, "pending", Some("sequence_conflict")),
+        ]
+    );
+    assert_eq!(
+        media[0].answer.as_ref().unwrap(),
+        &json!({
+            "outcome": "receipt",
+            "receipt": {
+                "operationId": Uuid::from_u128(0x5001).to_string(),
+                "status": "already_stored",
+            },
+        })
+    );
+    assert!(media[1].answer.is_none() && media[2].answer.is_none());
+    let media_next: i64 = sqlx::query_scalar(
+        "SELECT next_sequence FROM federation_sequences
+         WHERE kind = 'media' AND destination = 'media.test'",
+    )
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(media_next, 5);
 
     // The outgoing rows, each kind with its own sequences.
     let rows: Vec<OutboxRow> = sqlx::query_as(

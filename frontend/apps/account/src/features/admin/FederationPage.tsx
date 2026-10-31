@@ -5,6 +5,7 @@ import { PageBody, PageHeader, Section } from '@kutup/ui/components/page'
 import { LoadingPanel } from '@kutup/ui/components/states'
 import { apiErrorMessage } from '@kutup/ui/lib/apiError'
 import { useFederationPolicy } from './api'
+import { DeliveriesSection } from './federation/DeliveriesSection'
 import { PeersSection } from './federation/PeersSection'
 import { IdentitySection, PolicySection } from './federation/PolicySection'
 import { RulesSection } from './federation/RulesSection'
@@ -40,6 +41,7 @@ export function FederationPage() {
                   <Counter label={t('admin.federation.ops.chatPending')} value={policy.data.operational.chatPendingTransactions} />
                   <Counter label={t('admin.federation.ops.driveShares')} value={policy.data.operational.driveIncomingShares + policy.data.operational.driveOutgoingShares} />
                 </Card>
+                <DeliveriesSection deliveries={policy.data.operational.deliveries} />
               </Section>
               <RulesSection rules={policy.data.rules} />
               <PeersSection peers={policy.data.peers} />

@@ -17,6 +17,7 @@ import { apiErrorMessage } from '@kutup/ui/lib/apiError'
 import { copyText } from '@kutup/ui/lib/clipboard'
 import { formatInstant } from '@kutup/ui/lib/format'
 import { useBulkRetryPeers, usePeerAction, usePeerEvidence } from '../api'
+import { peerDeliveriesLine } from './deliveries'
 
 function TrustBadge({ trust }: { trust: FederationPeer['trust'] }) {
   const { t } = useTranslation()
@@ -221,6 +222,11 @@ export function PeersSection({ peers }: { peers: FederationPeer[] }) {
                   outgoing: peer.diagnostics.driveOutgoingShares,
                 })}
               </p>
+              {peerDeliveriesLine(peer.diagnostics.deliveries, t) ? (
+                <p className="text-xs text-muted-foreground" data-testid="federation-peer-deliveries">
+                  {peerDeliveriesLine(peer.diagnostics.deliveries, t)}
+                </p>
+              ) : null}
               {peer.lastDiscoveryError ? <Alert variant="warn">{peer.lastDiscoveryError}</Alert> : null}
             </li>
           ))}
