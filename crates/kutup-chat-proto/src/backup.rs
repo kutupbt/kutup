@@ -25,8 +25,9 @@ pub const MAX_CHAT_BACKUP_SIGNER_AUTHORIZATION_BYTES: usize = 4096;
 pub const MAX_CHAT_BACKUP_RECORDS_PER_SEGMENT: usize = 1024;
 pub const MAX_CHAT_BACKUP_MEDIA_REFERENCES_PER_PAGE: usize = 1000;
 
-const SIGNER_AUTHORIZATION_DOMAIN: &[u8] = b"kutup/chat-backup/signer-authorization/v1\0";
-const MANIFEST_DOMAIN: &[u8] = b"kutup/chat-backup/manifest/v1\0";
+const SIGNER_AUTHORIZATION_DOMAIN: &[u8] =
+    kutup_crypto::labels::CHAT_BACKUP_SIGNER_AUTHORIZATION_V1;
+const MANIFEST_DOMAIN: &[u8] = kutup_crypto::labels::CHAT_BACKUP_MANIFEST_V1;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
@@ -652,7 +653,7 @@ pub fn chat_backup_media_reference_set_digest(
     let mut sorted = references.to_vec();
     sorted.sort_by(|left, right| left.reference_id.cmp(&right.reference_id));
     let mut digest = Sha256::new();
-    digest.update(b"kutup/chat-backup/media-reference-set/v1\0");
+    digest.update(kutup_crypto::labels::CHAT_BACKUP_MEDIA_REFERENCE_SET_V1);
     digest.update((sorted.len() as u64).to_be_bytes());
     let mut previous: Option<Uuid> = None;
     for reference in sorted {

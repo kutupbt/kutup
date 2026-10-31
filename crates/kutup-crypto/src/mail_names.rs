@@ -27,10 +27,10 @@ use crate::error::{CryptoError, Result};
 use crate::key_binding;
 use crate::padding::Length;
 
-const KEY_SALT: &[u8] = b"kutup/mail-names/v1\0";
-const KEY_INFO: &[u8] = b"kutup/mail-names/name-key/v1\0";
+const KEY_SALT: &[u8] = crate::labels::MAIL_NAMES_V1;
+const KEY_INFO: &[u8] = crate::labels::MAIL_NAMES_NAME_KEY_V1;
 const MAGIC: &[u8; 8] = b"KUTMN2\0\0";
-const AAD_DOMAIN: &[u8] = b"kutup/mail-name/v2\0";
+const AAD_DOMAIN: &[u8] = crate::labels::MAIL_NAME_V2;
 const SUITE: u16 = 2;
 const NONCE_LEN: usize = 24;
 const TAG_LEN: usize = 16;

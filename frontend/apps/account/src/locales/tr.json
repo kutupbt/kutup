@@ -938,7 +938,15 @@
         "federationWorkerSeconds": "Bekleyen teslimatları kontrol aralığı (saniye)",
         "federationWorkerSecondsHint": "Diğer sunuculara bekleyen teslimatlara ne sıklıkla bakılacağı.",
         "federationHeadsPerTick": "Kontrol başına denenen sunucu",
-        "federationHeadsPerTickHint": "Her kontrolde, her birine bir teslimat olmak üzere en fazla kaç hedef sunucunun deneneceği."
+        "federationHeadsPerTickHint": "Her kontrolde, her birine bir teslimat olmak üzere en fazla kaç hedef sunucunun deneneceği.",
+        "federationRecordDays": "Teslimat kayıtlarını sakla (gün)",
+        "federationRecordDaysHint": "Tamamlanan teslimatlar ve diğer sunuculara verilen yanıtlar bu sürenin sonunda silinir.",
+        "federationAnnounceDays": "Ad değişikliği bildirimlerini dene (gün)",
+        "federationAnnounceDaysHint": "Bu süreden sonra, bildirilemeyen sunucu ad değişikliğini bir sonraki sorgusunda öğrenir.",
+        "federationAnnouncePeerDays": "Son kaç günde görülen sunuculara bildir",
+        "federationAnnouncePeerDaysHint": "Ad değişiklikleri, bu sunucunun bu süre içinde iletişim kurduğu sunuculara duyurulur.",
+        "chatAttachmentSendLifetimeSeconds": "Ekin alıcı sunucuyu bekleme süresi (saniye)",
+        "chatAttachmentSendLifetimeSecondsHint": "Bir sohbet ekinin, iletilmedi olarak gösterilmeden önce alıcının sunucusunun onu saklamasını ne kadar bekleyeceği."
       }
     },
     "federation": {
@@ -1042,6 +1050,19 @@
         "accepted": "Kabul edildi",
         "quarantined": "Karantinada",
         "superseded": "Yerine yenisi geçti"
+      },
+      "deliveries": {
+        "kind": "Tür",
+        "pending": "Bekleyen",
+        "oldest": "En eski bekleyen",
+        "rejected": "Reddedilen (son gün)",
+        "kinds": {
+          "chat": "Mesajlar",
+          "sealed": "Mühürlü mesajlar",
+          "media": "Ekler",
+          "rename": "Ad değişikliği bildirimleri"
+        },
+        "peerLine": "{{kind}}: {{pending}} bekleyen, son günde {{rejected}} reddedilen"
       }
     },
     "maps": {

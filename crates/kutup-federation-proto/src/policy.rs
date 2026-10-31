@@ -13,8 +13,8 @@ use crate::{
     FederationIdentityDocumentV1, FederationProtocolError,
 };
 
-const POLICY_SIGNING_DOMAIN: &[u8] = b"kutup-federated-feature-policy-envelope-v1\0";
-const POLICY_HASH_DOMAIN: &[u8] = b"kutup-federated-feature-policy-envelope-hash-v1\0";
+const POLICY_SIGNING_DOMAIN: &[u8] = kutup_crypto::labels::FEDERATION_FEATURE_POLICY_ENVELOPE_V1;
+const POLICY_HASH_DOMAIN: &[u8] = kutup_crypto::labels::FEDERATION_FEATURE_POLICY_ENVELOPE_HASH_V1;
 
 pub const FEDERATED_FEATURE_POLICY_VERSION: u16 = 1;
 pub const MAX_FEDERATED_FEATURE_POLICY_PAYLOAD_BYTES: usize = 256 * 1024;

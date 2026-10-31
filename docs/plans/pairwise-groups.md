@@ -443,7 +443,7 @@ to see members").**
   group's server knows a member only by that public key.
   - It is derived from the account master key (decided 2026-10-19, after
     spec 38 found a lost-list window): its Ed25519 seed is HKDF-SHA256 over
-    the master key, salt `kutup/chat-group-pseudonym/v1\0`, info the group id
+    the master key, salt `kutup/chat-group/pseudonym/v1\0`, info the group id
     then the **join epoch** (u32 big-endian), in `kutup_crypto::chat_group::
     GroupPseudonymKey` with vectors in `chat-group-pseudonym-v1.json`.
   - The join epoch counts the account's joins of the group: 0 at the first,

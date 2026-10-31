@@ -451,6 +451,19 @@ impl ChatStore {
         self.db.load_pins_due().await
     }
 
+    /// Stages the waiting attachment sends' ids (JSON).
+    pub(crate) fn stage_media_waits(&self, state: Vec<u8>) {
+        self.pending.borrow_mut().media_waits = Some(state);
+    }
+
+    /// The waiting attachment sends' ids (overlay before durable).
+    pub(crate) async fn media_waits(&self) -> ChatResult<Option<Vec<u8>>> {
+        if let Some(state) = self.pending.borrow().media_waits.clone() {
+            return Ok(Some(state));
+        }
+        self.db.load_media_waits().await
+    }
+
     /// Marks the account's contact list followed (only ever set).
     pub(crate) fn stage_contact_list_followed(&self) {
         self.pending.borrow_mut().contact_list_followed = true;

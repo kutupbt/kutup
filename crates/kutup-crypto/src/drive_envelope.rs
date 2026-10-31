@@ -26,10 +26,10 @@ pub const MAX_COLLECTION_NAME_BYTES: usize = 1024;
 pub const MAX_FILE_METADATA_BYTES: usize = crate::file_metadata::MAX_METADATA_BYTES;
 /// Names and metadata are padded to a multiple of this many bytes.
 const NAME_BUCKET: usize = 256;
-const KEY_DERIVATION_SALT: &[u8] = b"kutup/drive-envelope/key/v1\0";
-const WHITEBOARD_ASSET_BINDING_LABEL: &[u8] = b"kutup/drive-envelope/whiteboard-asset/v2\0";
-const THUMBNAIL_BINDING_LABEL: &[u8] = b"kutup/drive-envelope/thumbnail/v1\0";
-const THUMBNAIL_REVISION_BINDING_LABEL: &[u8] = b"kutup/drive-envelope/thumbnail/v2\0";
+const KEY_DERIVATION_SALT: &[u8] = crate::labels::DRIVE_ENVELOPE_KEY_V1;
+const WHITEBOARD_ASSET_BINDING_LABEL: &[u8] = crate::labels::DRIVE_ENVELOPE_WHITEBOARD_ASSET_V2;
+const THUMBNAIL_BINDING_LABEL: &[u8] = crate::labels::DRIVE_ENVELOPE_THUMBNAIL_V1;
+const THUMBNAIL_REVISION_BINDING_LABEL: &[u8] = crate::labels::DRIVE_ENVELOPE_THUMBNAIL_V2;
 pub const MAX_WHITEBOARD_ASSET_PLAINTEXT_BYTES: usize = 25 * 1024 * 1024;
 pub const MAX_WHITEBOARD_ASSET_ENVELOPE_BYTES: usize =
     HEADER_LEN + MAX_WHITEBOARD_ASSET_PLAINTEXT_BYTES + TAG_LEN;

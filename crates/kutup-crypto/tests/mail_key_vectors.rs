@@ -102,6 +102,7 @@ fn write_vectors() {
         let mut v: Vectors = serde_json::from_str(&std::fs::read_to_string(PATH).unwrap()).unwrap();
         let sealed = seal_address_key_with_nonce(
             &b64(&v.master_key),
+            kutup_crypto::account_envelope::MasterKeyGeneration::FIRST,
             &v.binding,
             &v.address,
             &b64(&v.secret_key),
@@ -151,6 +152,7 @@ fn write_vectors() {
     let nonce = [0x24u8; 24];
     let envelope = seal_address_key_with_nonce(
         &master,
+        kutup_crypto::account_envelope::MasterKeyGeneration::FIRST,
         "0b9f4c0e-6a51-4d2f-9a33-5e1f6c7d8e90",
         address,
         &key.secret_key,
@@ -215,6 +217,7 @@ fn checked_in_vectors_hold() {
     // and it opens only for its own address, fingerprint and account.
     let sealed = seal_address_key_with_nonce(
         &master,
+        kutup_crypto::account_envelope::MasterKeyGeneration::FIRST,
         &v.binding,
         &v.address,
         &b64(&v.secret_key),

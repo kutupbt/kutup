@@ -17,7 +17,7 @@ use crate::stream::{
 };
 
 const FILE_BLOB_MAGIC: &[u8; 8] = b"KUTPDB2\0";
-const FILE_BLOB_KEY_SALT: &[u8] = b"kutup/drive-object/file-blob-key/v1\0";
+const FILE_BLOB_KEY_SALT: &[u8] = crate::labels::DRIVE_OBJECT_FILE_BLOB_KEY_V1;
 const KEY_LEN: usize = 32;
 
 /// Complete Kutup-owned Drive construction registry. Features retain their

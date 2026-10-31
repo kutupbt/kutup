@@ -32,11 +32,11 @@ use crate::identity::{authority_key_id_from_public, incarnation_id_from_authorit
 use crate::key_binding;
 use crate::padding::Length;
 
-const CONTACTS_KEY_SALT: &[u8] = b"kutup/contacts/v1\0";
-const CONTACTS_KEY_INFO: &[u8] = b"kutup/contacts/card-key/v1\0";
-const SUMMARY_DOMAIN: &[u8] = b"kutup/contact-summary/v2\0";
+const CONTACTS_KEY_SALT: &[u8] = crate::labels::CONTACTS_V1;
+const CONTACTS_KEY_INFO: &[u8] = crate::labels::CONTACTS_CARD_KEY_V1;
+const SUMMARY_DOMAIN: &[u8] = crate::labels::CONTACT_SUMMARY_V2;
 const CARD_MAGIC: &[u8; 8] = b"KUTCC2\0\0";
-const CARD_AAD_DOMAIN: &[u8] = b"kutup/contact-card/v2\0";
+const CARD_AAD_DOMAIN: &[u8] = crate::labels::CONTACT_CARD_V2;
 const SUITE: u16 = 2;
 const NONCE_LEN: usize = 24;
 const REVISION_LEN: usize = 8;

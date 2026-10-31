@@ -987,7 +987,6 @@ pub const DRIVE_SETTINGS: [NumericSetting; 8] = [
     DRIVE_STREAM_BLOB_FALLBACK_MAX_BYTES,
 ];
 
-/// Every whole-number setting `/api/admin/settings` lists by field.
 /// The federation outbox's backoff (docs/plans/federation-outbox.md): the
 /// first wait after a failed try, in seconds, doubling each time.
 pub const FEDERATION_RETRY_BASE_SECONDS: NumericSetting = NumericSetting {
@@ -1042,14 +1041,67 @@ pub const FEDERATION_HEADS_PER_TICK: NumericSetting = NumericSetting {
     unit: SettingUnit::Count,
     per_account: false,
 };
-pub const FEDERATION_SETTINGS: [NumericSetting; 5] = [
+/// How long settled deliveries and the answers given to peers are kept, in
+/// days. Each stream's high-water mark stays, so a replay older than this is
+/// still known as answered.
+pub const FEDERATION_RECORD_DAYS: NumericSetting = NumericSetting {
+    key: "federation_record_days",
+    field: "federationRecordDays",
+    default: 30,
+    min: 1,
+    max: 365,
+    unit: SettingUnit::Days,
+    per_account: false,
+};
+/// How long a rename announce is tried before it is given up, in days (the
+/// peer then learns of the rename at its next lookup).
+pub const FEDERATION_ANNOUNCE_DAYS: NumericSetting = NumericSetting {
+    key: "federation_announce_days",
+    field: "federationAnnounceDays",
+    default: 7,
+    min: 1,
+    max: 90,
+    unit: SettingUnit::Days,
+    per_account: false,
+};
+/// Renames are announced to the peers this server has been in touch with in
+/// this many days.
+pub const FEDERATION_ANNOUNCE_PEER_DAYS: NumericSetting = NumericSetting {
+    key: "federation_announce_peer_days",
+    field: "federationAnnouncePeerDays",
+    default: 90,
+    min: 1,
+    max: 3650,
+    unit: SettingUnit::Days,
+    per_account: false,
+};
+/// How long a chat attachment waits for the recipient's server to store its
+/// copy before the client shows it as not delivered, in seconds (the
+/// client's attachment-send job; at most an offer's 30-day expiry). Clients
+/// are given at most `federationRecordDays` of it: a repeat must still find
+/// the origin's record of its operation.
+pub const CHAT_ATTACHMENT_SEND_LIFETIME_SECONDS: NumericSetting = NumericSetting {
+    key: "chat_attachment_send_lifetime_seconds",
+    field: "chatAttachmentSendLifetimeSeconds",
+    default: 86_400,
+    min: 600,
+    max: 30 * 86_400,
+    unit: SettingUnit::Seconds,
+    per_account: false,
+};
+pub const FEDERATION_SETTINGS: [NumericSetting; 9] = [
     FEDERATION_RETRY_BASE_SECONDS,
     FEDERATION_RETRY_MAX_SECONDS,
     FEDERATION_PEER_UPGRADE_SECONDS,
     FEDERATION_WORKER_SECONDS,
     FEDERATION_HEADS_PER_TICK,
+    FEDERATION_RECORD_DAYS,
+    FEDERATION_ANNOUNCE_DAYS,
+    FEDERATION_ANNOUNCE_PEER_DAYS,
+    CHAT_ATTACHMENT_SEND_LIFETIME_SECONDS,
 ];
 
+/// Every whole-number setting `/api/admin/settings` lists by field.
 pub fn numeric_settings() -> impl Iterator<Item = &'static NumericSetting> {
     registry().map(|(_, setting)| setting)
 }

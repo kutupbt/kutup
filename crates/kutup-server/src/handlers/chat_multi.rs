@@ -285,7 +285,7 @@ pub async fn send_multi(
         crate::middleware::client_key(crate::middleware::client_ip_from_headers(&headers), peer);
     let address_digest: [u8; 32] = hash(
         Suite::V1,
-        [b"kutup/multi-ip-bytes/v1\0".as_slice(), address.as_bytes()].concat(),
+        [kutup_crypto::labels::MULTI_IP_BYTES_V1, address.as_bytes()].concat(),
     )
     .into();
     let bytes = i64::try_from(submission.payload.len()).unwrap_or(i64::MAX);
@@ -340,7 +340,7 @@ async fn deliver(
     let token_digest: [u8; 32] = hash(
         Suite::V1,
         [
-            b"kutup/multi-token/v1\0".as_slice(),
+            kutup_crypto::labels::MULTI_TOKEN_V1,
             submission.group_send_token.as_bytes(),
         ]
         .concat(),
@@ -371,7 +371,7 @@ async fn deliver(
         let digest: [u8; 32] = hash(
             Suite::V1,
             [
-                b"kutup/multi-recipient/v1\0".as_slice(),
+                kutup_crypto::labels::MULTI_RECIPIENT_V1,
                 recipient.user_id.as_bytes(),
             ]
             .concat(),
@@ -622,7 +622,7 @@ pub async fn deliver_federated(
     let origin: [u8; 32] = hash(
         Suite::V1,
         [
-            b"kutup/multi-origin/v1\0".as_slice(),
+            kutup_crypto::labels::MULTI_ORIGIN_V1,
             authenticated.origin().as_bytes(),
         ]
         .concat(),

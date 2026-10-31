@@ -79,7 +79,7 @@ one (a vault file, a mail key, a folder), under the account's own keys.
 | Kutup address | identity pins (`identity_pins.rs` AAD) | `KUTIP2` suite 2, the key binding; vectors `identity-pins-v2.json` |
 | Kutup address | contact cards and their summary signature (`contact_card.rs`) | `KUTCC2` suite 2 and `kutup/contact-summary/v2`, the key binding (the server checks summaries against `users.key_binding`); vectors `contact-card-v2.json` |
 | Kutup address | mail folder, label and filter names (`mail_names.rs` AAD) | `KUTMN2` suite 2, the key binding; vectors `mail-names-v2.json` |
-| Kutup address | Chat's own copy of the account profile key (`kutup-chat-core` `profile.rs`, the wrapped key) | wrapped under `kutup-chat-profile-wrap-v2`, from the master key and the key binding; vectors `crates/kutup-chat-core/tests/vectors/profile-wrap-v2.json`. Its envelope header still names the address, as the whole profile record does for peers and the server's check |
+| Kutup address | Chat's own copy of the account profile key (`kutup-chat-core` `profile.rs`, the wrapped key) | wrapped under `kutup/chat-profile/wrap/v2`, from the master key and the key binding; vectors `crates/kutup-chat-core/tests/vectors/profile-wrap-v2.json`. Its envelope header still names the address, as the whole profile record does for peers and the server's check |
 | Kutup address | a Chat localStorage key (`pendingTimers.ts`, not sealed) | `kutup.chat.pending-default-timers.v2:<user id>` |
 
   Chat no longer takes over anything an older version kept in plaintext:

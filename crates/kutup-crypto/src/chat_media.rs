@@ -17,7 +17,7 @@ use crate::stream::{
 };
 
 const OBJECT_MAGIC: &[u8; 8] = b"KUTPCM1\0";
-const OBJECT_KEY_SALT: &[u8] = b"kutup/chat-media/object-key/v1\0";
+const OBJECT_KEY_SALT: &[u8] = crate::labels::CHAT_MEDIA_OBJECT_KEY_V1;
 const KEY_LEN: usize = 32;
 
 /// One protocol attachment is capped at 2 GiB of plaintext-class content.

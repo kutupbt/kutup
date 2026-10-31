@@ -85,6 +85,7 @@ Specific codes, where an app does something particular (a test in
 | `deviceListMismatch` | 409 | Federation: the recipient's device list changed; the body lists missing, stale and extra devices |
 | `sequenceGap` | 409 | Federation: a transaction arrived out of order; `expectedSequence` names the next one |
 | `sealedVersionUnsupported` | 400 | Federation: a sealed transaction of another wire version, refused for good |
+| `recordGone` | 410 | Federation: a repeat of a plain chat transaction whose record was pruned (past `federationRecordDays`); the origin settles it as not delivered to the recipient, never as delivered |
 | `version_conflict` | 409 | A newer version exists (Drive, collab) |
 | `revision_conflict` | 409 | A newer revision exists |
 | `head_conflict` | 409 | The account head moved (another device wrote first; `sequence` the current one, or a folder delete whose `removes` is not what it removes): read the head and index again, redo the edit |
@@ -155,8 +156,6 @@ Specific codes, where an app does something particular (a test in
 | `link_removed` | 404/410 | The shared link was removed |
 | `keyChanged` | 409 | A recipient's key changed since it was checked |
 | `keysPendingUpgrade` | 409 | The person's Drive key is still X25519 (identity suite 1): share with them once they have signed in again (docs/plans/pq-shares.md) |
-| `identitySuiteCurrent` | 409 | The account's identity suite is current: nothing to upgrade |
-| `setupPending` | 409 | `POST /api/account/identity-suite` for an account still in its first-login setup, which registers suite-2 keys itself: finish the setup (not a 401, which would end the session) |
 | `peerOutdated` | 502 | The other server runs an older version without post-quantum Drive keys and must upgrade before sharing |
 | `registrationClosed` | 403 | Registration is off: nobody may sign up, with or without a referral code |
 | `registrationCodeRequired` | 403 | Registration needs a referral code and none was given |
@@ -309,7 +308,6 @@ uses admits exactly N accounts however many sign up at once.
   "opaqueServerKeyId": 1,
   "masterKeyEnvelope": "<canonical base64 AccountEnvelopeV1>",
   "recoveryKeyEnvelope": "<canonical base64 AccountEnvelopeV1>",
-  "drivePrivateKeyEnvelope": "<canonical base64 AccountEnvelopeV1>",
   "publicKey": "<base64>",
   "accountAuthorityPublicKey": "<base64 32 bytes>",
   "accountAuthorityKeyId": "<lowercase SHA-256 hex>",
@@ -454,7 +452,6 @@ malformed finalization is a `400`.
   "userId": "<uuid>",
   "username": "alice",
   "masterKeyEnvelope": "<canonical base64 AccountEnvelopeV1>",
-  "drivePrivateKeyEnvelope": "<canonical base64 AccountEnvelopeV1>",
   "publicKey": "<base64>",
   "keyBinding": "<the account's key binding (a UUID v4)>",
   "isAdmin": false,
@@ -5480,7 +5477,10 @@ persisted peer trust/discovery state. Rules remain visible while inactive.
         "chatPendingTransactions": 0,
         "chatMismatchesLastDay": 0,
         "driveIncomingShares": 1,
-        "driveOutgoingShares": 0
+        "driveOutgoingShares": 0,
+        "deliveries": [
+          { "kind": "media", "pending": 1, "rejectedLastDay": 0, "oldestPendingAt": "2026-07-20T10:05:00Z" }
+        ]
       }
     }
   ],
@@ -5494,10 +5494,17 @@ persisted peer trust/discovery state. Rules remain visible while inactive.
     "oldestChatPendingAt": null,
     "driveIncomingShares": 1,
     "driveOutgoingShares": 0,
-    "activeReplayReservations": 0
+    "activeReplayReservations": 0,
+    "deliveries": [
+      { "kind": "media", "pending": 1, "rejectedLastDay": 0, "oldestPendingAt": "2026-07-20T10:05:00Z" }
+    ]
   }
 }
 ```
+
+`deliveries` counts the deliveries to peers by kind (`chat`, `sealed`,
+`media`, `rename`): still pending, the oldest pending, and refused for good in
+the last day. A kind with nothing pending or refused is left out.
 
 `configured` reports whether the persistent v2 identity exists. Fingerprints
 are always returned in full; the grouped form is display-only.

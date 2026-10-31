@@ -1,7 +1,10 @@
 # Post-quantum shares: X-Wing instead of X25519
 
 Status: accepted (user, 2026-10-18), with the one-way identity suite upgrade
-below. Next: the build, in the order at the end.
+below. Next: the build, in the order at the end. Later: W6
+([w6-key-hierarchy.md](w6-key-hierarchy.md)) removed the stored copy of the
+X-Wing seed (`drive_private_key_envelope`, account-envelope purpose 3) and the
+suite-1 upgrade, which no account needs after the wipe.
 - Clean-slate rule: no shims and no dual formats.
 - Production has been live since the 2026-10-17 wipe with almost no data. The
   counts in "Existing data" decide what happens to any old envelope.

@@ -79,6 +79,7 @@ pub mod identity;
 pub mod identity_pins;
 pub mod kdf;
 pub mod key_binding;
+pub mod labels;
 pub mod live_location;
 pub mod local_state;
 pub mod mail_address;

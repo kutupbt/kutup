@@ -62,7 +62,6 @@ pub struct Session {
     pub public_key: String,
     /// Server-returned encrypted blobs (kept for possible re-derivation).
     pub master_key_envelope: String,
-    pub drive_private_key_envelope: String,
     pub storage_quota_bytes: i64,
     pub storage_used_bytes: i64,
 }

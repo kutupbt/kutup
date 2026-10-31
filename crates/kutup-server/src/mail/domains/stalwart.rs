@@ -7,7 +7,6 @@
 
 use anyhow::{anyhow, bail, Context, Result};
 use axum::async_trait;
-use kutup_crypto::primitives::{hash, Suite};
 use serde_json::{json, Value};
 
 use super::reconcile::{Stalwart, StalwartDomain, StalwartSignature};
@@ -156,17 +155,7 @@ fn text(value: &Value, field: &str) -> String {
 #[async_trait]
 impl Stalwart for StalwartApi {
     async fn domains(&self) -> Result<Vec<StalwartDomain>> {
-        Ok(self
-            .get("Domain")
-            .await?
-            .iter()
-            .map(|d| StalwartDomain {
-                object_id: text(d, "id"),
-                name: text(d, "name"),
-                description: text(d, "description"),
-                content: digest(d),
-            })
-            .collect())
+        Ok(self.get("Domain").await?.iter().map(domain_of).collect())
     }
 
     async fn signatures(&self) -> Result<Vec<StalwartSignature>> {
@@ -174,12 +163,7 @@ impl Stalwart for StalwartApi {
             .get("DkimSignature")
             .await?
             .iter()
-            .map(|s| StalwartSignature {
-                object_id: text(s, "id"),
-                domain_object_id: text(s, "domainId"),
-                selector: text(s, "selector"),
-                content: digest(s),
-            })
+            .map(signature_of)
             .collect())
     }
 
@@ -226,23 +210,65 @@ impl Stalwart for StalwartApi {
     }
 }
 
-/// A digest of `value` with its keys sorted at every level, whatever order
-/// Stalwart lists them in.
-fn digest(value: &Value) -> String {
-    fn sorted(value: &Value) -> Value {
-        match value {
-            Value::Object(map) => {
-                let mut keys: Vec<&String> = map.keys().collect();
-                keys.sort();
-                Value::Object(
-                    keys.into_iter()
-                        .map(|k| (k.clone(), sorted(&map[k])))
-                        .collect(),
-                )
-            }
-            Value::Array(items) => Value::Array(items.iter().map(sorted).collect()),
-            other => other.clone(),
-        }
+/// A domain as listed: what identifies it, nothing Stalwart changes on its
+/// own between listings (the drift fingerprint reads these).
+fn domain_of(value: &Value) -> StalwartDomain {
+    StalwartDomain {
+        object_id: text(value, "id"),
+        name: text(value, "name"),
+        description: text(value, "description"),
     }
-    hex::encode(hash(Suite::V1, sorted(value).to_string().as_bytes()))
+}
+
+/// A DKIM signature as listed: what identifies it (its algorithm is its
+/// `@type`), nothing Stalwart changes on its own (creation and rotation
+/// times, stage).
+fn signature_of(value: &Value) -> StalwartSignature {
+    StalwartSignature {
+        object_id: text(value, "id"),
+        domain_object_id: text(value, "domainId"),
+        selector: text(value, "selector"),
+        algorithm: text(value, "@type"),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::mail::domains::reconcile::untagged_fingerprint;
+
+    fn fingerprint(domain: &Value, signature: &Value) -> String {
+        untagged_fingerprint(&[domain_of(domain)], &[signature_of(signature)])
+    }
+
+    #[test]
+    fn fingerprint_ignores_what_stalwart_changes_on_its_own() {
+        let domain = json!({"id": "d1", "name": "example.org", "description": "kutup:7",
+            "createdAt": "2026-10-28T10:00:00Z"});
+        let signature = json!({"@type": "Dkim1Ed25519Sha256", "id": "s1", "domainId": "d1",
+            "selector": "k1", "stage": "active", "nextTransitionAt": "2026-11-28T10:00:00Z",
+            "privateKey": "****"});
+        let later_domain = json!({"id": "d1", "name": "example.org", "description": "kutup:7",
+            "createdAt": "2026-10-29T08:00:00Z"});
+        let later_signature = json!({"@type": "Dkim1Ed25519Sha256", "id": "s1", "domainId": "d1",
+            "selector": "k1", "stage": "retiring", "nextTransitionAt": "2026-12-01T00:00:00Z",
+            "privateKey": "****"});
+        assert_eq!(
+            fingerprint(&domain, &signature),
+            fingerprint(&later_domain, &later_signature)
+        );
+
+        let mut reselected = signature.clone();
+        reselected["selector"] = json!("k2");
+        assert_ne!(
+            fingerprint(&domain, &signature),
+            fingerprint(&domain, &reselected)
+        );
+        let mut realgorithm = signature.clone();
+        realgorithm["@type"] = json!("Dkim1RsaSha256");
+        assert_ne!(
+            fingerprint(&domain, &signature),
+            fingerprint(&domain, &realgorithm)
+        );
+    }
 }

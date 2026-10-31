@@ -107,7 +107,7 @@ attack. So:
   `opaque_server_setups (key_id smallint PK, sealed_setup bytea, created_at,
   retired_at)`, sealed with XChaCha20-Poly1305 under a key that is neither in the
   database nor in its backups. The AAD is
-  `"kutup/opaque-setup/v1\0" ‖ key_id`.
+  `"kutup/opaque/setup/v1\0" ‖ key_id`.
 - **The key** is `OPAQUE_SETUP_KEYS`: a comma list of `id:base64(32 bytes)`, in env
   or a secret file, loaded and checked like `JWT_SECRET` (`check-config`: present,
   well formed, at least one key). The highest id is the current one.

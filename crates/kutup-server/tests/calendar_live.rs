@@ -39,9 +39,14 @@ fn owner(c: &Client, base: &str) -> Owner {
         .unwrap()
         .as_secs() as u32;
     let key = mail_key::generate_address_key(&address, now).unwrap();
-    let envelope =
-        mail_key::seal_address_key(&user.master_key, &user.binding, &address, &key.secret_key)
-            .unwrap();
+    let envelope = mail_key::seal_address_key(
+        &user.master_key,
+        kutup_crypto::account_envelope::MasterKeyGeneration::FIRST,
+        &user.binding,
+        &address,
+        &key.secret_key,
+    )
+    .unwrap();
     let hex32 = |value: String| -> [u8; 32] { hex::decode(value).unwrap().try_into().unwrap() };
     let list = MailKeyListV1 {
         incarnation_id: hex32(user.identity.incarnation_id()),

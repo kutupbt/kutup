@@ -136,6 +136,8 @@ export interface KutupChatHistoryEntry {
   failedRecipients?: number;
   /** A pairwise group message sent from here: how many member accounts this account's server hasn't taken it for yet. */
   waitingRecipients?: number;
+  /** An attachment message waiting for the recipient's server to store its copy, or not delivered. */
+  mediaWait?: "waiting" | "storageFull" | "refused" | "expired";
   content: KutupChatContentView;
 }
 
@@ -2399,6 +2401,137 @@ impl WasmChatClient {
         to_output(&SendSummaryView::from(summary))
     }
 
+    /// An attachment message to another account, written to history to wait
+    /// for the recipient's server to store its copy under `operation_id`
+    /// (docs/plans/federation-outbox.md): sent by [`release_media_send`]
+    /// once the copy is stored, for at most `lifetime_seconds`.
+    #[allow(clippy::too_many_arguments)]
+    #[wasm_bindgen(js_name = stageAttachment)]
+    pub async fn stage_attachment(
+        &mut self,
+        send_id: String,
+        peer: String,
+        sent_at: String,
+        descriptor: JsValue,
+        expires_after_seconds: Option<u32>,
+        extras: JsValue,
+        operation_id: String,
+        lifetime_seconds: u32,
+    ) -> std::result::Result<(), JsValue> {
+        let descriptor: ChatAttachmentDescriptorV1 =
+            from_transport(descriptor).map_err(chat_error)?;
+        let extras = parse_extras(extras)?;
+        let seq = self
+            .engine
+            .session()
+            .next_sent_seq()
+            .await
+            .map_err(chat_error)?;
+        let mut content = ChatContent::attachment_with_id(&send_id, sent_at, seq, descriptor)
+            .and_then(|content| content.with_extras(&extras))
+            .map_err(|error| js_error(&error))?;
+        if let Some(seconds) = expires_after_seconds {
+            content = content
+                .with_disappearing_after(seconds)
+                .map_err(|error| js_error(&error))?;
+        }
+        self.engine
+            .stage_media_send(
+                &send_id,
+                &peer,
+                &content,
+                &operation_id,
+                i64::from(lifetime_seconds) * 1000,
+            )
+            .await
+            .map_err(chat_error)
+    }
+
+    /// The waiting attachment sends due at `now_ms` (those past their
+    /// lifetime become not delivered).
+    #[wasm_bindgen(js_name = mediaSends)]
+    pub async fn media_sends(&mut self, now_ms: f64) -> std::result::Result<JsValue, JsValue> {
+        let sends = self
+            .engine
+            .media_sends(now_ms as i64)
+            .await
+            .map_err(chat_error)?;
+        to_output(&MediaSendsView {
+            due: sends
+                .due
+                .into_iter()
+                .map(|due| MediaSendDueView {
+                    send_id: due.send_id,
+                    peer: due.peer,
+                    operation_id: due.operation_id,
+                    descriptor: due.descriptor,
+                })
+                .collect(),
+            next_retry_ms: sends.next_retry_ms,
+            expired: sends.expired,
+        })
+    }
+
+    /// The copy isn't stored yet: asked again later. When (milliseconds).
+    #[wasm_bindgen(js_name = deferMediaSend)]
+    pub async fn defer_media_send(
+        &mut self,
+        send_id: String,
+        now_ms: f64,
+    ) -> std::result::Result<f64, JsValue> {
+        Ok(self
+            .engine
+            .defer_media_send(&send_id, now_ms as i64)
+            .await
+            .map_err(chat_error)? as f64)
+    }
+
+    /// Not delivered: `reason` is `storageFull` or `refused`.
+    #[wasm_bindgen(js_name = failMediaSend)]
+    pub async fn fail_media_send(
+        &mut self,
+        send_id: String,
+        reason: String,
+    ) -> std::result::Result<(), JsValue> {
+        let failure = match reason.as_str() {
+            "storageFull" => crate::db::MediaWaitFailure::StorageFull,
+            "refused" => crate::db::MediaWaitFailure::Refused,
+            _ => return Err(js_error("unknown media send failure")),
+        };
+        self.engine
+            .fail_media_send(&send_id, failure)
+            .await
+            .map_err(chat_error)
+    }
+
+    /// The copy is stored: the attachment message goes now.
+    #[wasm_bindgen(js_name = releaseMediaSend)]
+    pub async fn release_media_send(
+        &mut self,
+        send_id: String,
+    ) -> std::result::Result<JsValue, JsValue> {
+        let mut rng = OsRng.unwrap_err();
+        let summary = self
+            .engine
+            .release_media_send(&send_id, &mut rng)
+            .await
+            .map_err(chat_error)?;
+        to_output(&SendSummaryView::from(summary))
+    }
+
+    /// The person retries an attachment send that was not delivered.
+    #[wasm_bindgen(js_name = restartMediaSend)]
+    pub async fn restart_media_send(
+        &mut self,
+        send_id: String,
+        lifetime_seconds: u32,
+    ) -> std::result::Result<(), JsValue> {
+        self.engine
+            .restart_media_send(&send_id, i64::from(lifetime_seconds) * 1000)
+            .await
+            .map_err(chat_error)
+    }
+
     /// A poll, a vote in one, or its end (`kind` = `poll` | `pollVote` |
     /// `pollTerminate`), in a Direct chat or Note to Self.
     #[wasm_bindgen(js_name = sendPollContent)]
@@ -3785,6 +3918,24 @@ fn parse_receipt_state(
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
+struct MediaSendsView {
+    due: Vec<MediaSendDueView>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    next_retry_ms: Option<i64>,
+    expired: Vec<String>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct MediaSendDueView {
+    send_id: String,
+    peer: String,
+    operation_id: String,
+    descriptor: ChatAttachmentDescriptorV1,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
 struct HistoryEntry {
     id: String,
     conversation: ConversationId,
@@ -3807,6 +3958,11 @@ struct HistoryEntry {
     /// this account's server hasn't taken it for yet (0: sent).
     #[serde(skip_serializing_if = "Option::is_none")]
     waiting_recipients: Option<u32>,
+    /// An attachment message waiting for the recipient's server to store
+    /// its copy (`waiting`), or not delivered (`storageFull`, `refused`,
+    /// `expired`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    media_wait: Option<&'static str>,
     content: ContentView,
 }
 
@@ -3851,6 +4007,7 @@ impl HistoryEntry {
             deduplicated: false,
             failed_recipients: 0,
             waiting_recipients: None,
+            media_wait: None,
             content: content.into(),
         })
     }
@@ -3874,6 +4031,12 @@ impl HistoryEntry {
             deduplicated: message.deduplicated,
             failed_recipients: message.failed_recipients,
             waiting_recipients: message.waiting_recipients,
+            media_wait: message.media_wait.as_ref().map(|wait| match wait.failed {
+                None => "waiting",
+                Some(crate::db::MediaWaitFailure::StorageFull) => "storageFull",
+                Some(crate::db::MediaWaitFailure::Refused) => "refused",
+                Some(crate::db::MediaWaitFailure::Expired) => "expired",
+            }),
             content: content.into(),
         })
     }

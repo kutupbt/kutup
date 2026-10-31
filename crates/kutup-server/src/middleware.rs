@@ -77,7 +77,11 @@ async fn session_version(state: &AppState, digest: &str) -> Result<String, AppEr
     let key: &[u8; 32] = SESSION_VERSION_KEY
         .get_or_try_init(|| async {
             let root = crate::handlers::auth::fake_accounts_key(state).await?;
-            Ok::<_, AppError>(*subkey(Suite::V1, &root, b"kutup/session-version/v1\0"))
+            Ok::<_, AppError>(*subkey(
+                Suite::V1,
+                &root,
+                kutup_crypto::labels::SESSION_VERSION_V1,
+            ))
         })
         .await?;
     let tag = mac(Suite::V1, key, &[digest.as_bytes()]);

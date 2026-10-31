@@ -318,8 +318,8 @@ pub async fn outside_refusal(
     Ok(None)
 }
 
-const RETURN_PATH_DOMAIN: &[u8] = b"kutup/mail-forwarding/return-path/v1\0";
-const MARKER_DOMAIN: &[u8] = b"kutup/mail-forwarding/marker/v1\0";
+const RETURN_PATH_DOMAIN: &[u8] = kutup_crypto::labels::MAIL_FORWARDING_RETURN_PATH_V1;
+const MARKER_DOMAIN: &[u8] = kutup_crypto::labels::MAIL_FORWARDING_MARKER_V1;
 
 /// The loop marker's MAC: its own label, over the forwarding alone.
 fn marker_mac(key: &[u8; 32], forwarding: Uuid) -> String {

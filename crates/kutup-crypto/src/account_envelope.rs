@@ -20,8 +20,9 @@ use zeroize::Zeroizing;
 use crate::error::{CryptoError, Result};
 pub use crate::padding::Length;
 
-const MAGIC: &[u8; 8] = b"KUTPAE1\0";
-const FIXED_PREFIX_LEN: usize = MAGIC.len() + 2 + 1 + 1 + 2;
+const MAGIC: &[u8; 8] = b"KUTPAE2\0";
+const GENERATION_LEN: usize = 4;
+const FIXED_PREFIX_LEN: usize = MAGIC.len() + 2 + 1 + 1 + GENERATION_LEN + 2;
 const NONCE_LEN: usize = 24;
 const LENGTH_LEN: usize = 4;
 const REVISION_LEN: usize = 8;
@@ -30,8 +31,37 @@ const MAX_CONTEXT_LEN: usize = 320;
 /// The longest object id a suite-2 envelope names.
 pub const MAX_OBJECT_LEN: usize = 64;
 const MAX_PLAINTEXT_LEN: usize = 4096;
-const V2_KEY_SALT: &[u8] = b"kutup/account-envelope/v2\0";
-const V2_KEY_INFO: &[u8] = b"kutup/account-envelope-key/v2\0";
+const V2_KEY_SALT: &[u8] = crate::labels::ACCOUNT_ENVELOPE_V2;
+const V2_KEY_INFO: &[u8] = crate::labels::ACCOUNT_ENVELOPE_KEY_V2;
+
+/// Which master key an account secret belongs to: the generation of the MK
+/// a password or recovery wrap holds, or of the MK that sealed any other
+/// secret (docs/plans/w6-key-hierarchy.md §2). Every envelope names it in
+/// its authenticated header, so a future MK rotation can keep the old MK in
+/// a keyring sealed under the new one and re-seal lazily, with no wipe.
+/// Never 0; [`MasterKeyGeneration::FIRST`] is the only one until rotation
+/// is built (docs/plans/account-identity-key.md, "Device removal"). W1's
+/// account records name it with this same type.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct MasterKeyGeneration(u32);
+
+impl MasterKeyGeneration {
+    /// An account's first master key.
+    pub const FIRST: Self = Self(1);
+
+    pub fn new(value: u32) -> Result<Self> {
+        if value == 0 {
+            return Err(CryptoError::InvalidInput(
+                "a master-key generation is never 0".into(),
+            ));
+        }
+        Ok(Self(value))
+    }
+
+    pub const fn get(self) -> u32 {
+        self.0
+    }
+}
 
 /// Closed registry for account-secret envelope encryption (suite 1 retired).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -66,7 +96,9 @@ impl TryFrom<u16> for AccountEnvelopeSuiteId {
 pub enum AccountEnvelopePurpose {
     PasswordMasterKey = 1,
     RecoveryMasterKey = 2,
-    DriveHpkePrivateKey = 3,
+    // 3 was the Drive X-Wing private key, which is derived from the master
+    // key and never stored (docs/plans/w6-key-hierarchy.md §1): reserved,
+    // never reused.
     ChatBackupRoot = 4,
     /// A mail address's OpenPGP secret key (`mail_key`).
     MailAddressPrivateKey = 5,
@@ -108,10 +140,7 @@ impl AccountEnvelopePurpose {
             mutable: false,
         };
         match self {
-            Self::PasswordMasterKey
-            | Self::RecoveryMasterKey
-            | Self::DriveHpkePrivateKey
-            | Self::ChatBackupRoot => KEY,
+            Self::PasswordMasterKey | Self::RecoveryMasterKey | Self::ChatBackupRoot => KEY,
             // The address and the key's algorithm decide its length.
             Self::MailAddressPrivateKey => PurposePolicy {
                 object: ObjectPolicy::None,
@@ -130,10 +159,9 @@ impl AccountEnvelopePurpose {
     }
 
     /// Every purpose, for tests and vectors.
-    pub const ALL: [Self; 6] = [
+    pub const ALL: [Self; 5] = [
         Self::PasswordMasterKey,
         Self::RecoveryMasterKey,
-        Self::DriveHpkePrivateKey,
         Self::ChatBackupRoot,
         Self::MailAddressPrivateKey,
         Self::PassVaultSecret,
@@ -147,7 +175,6 @@ impl TryFrom<u8> for AccountEnvelopePurpose {
         match value {
             1 => Ok(Self::PasswordMasterKey),
             2 => Ok(Self::RecoveryMasterKey),
-            3 => Ok(Self::DriveHpkePrivateKey),
             4 => Ok(Self::ChatBackupRoot),
             5 => Ok(Self::MailAddressPrivateKey),
             6 => Ok(Self::PassVaultSecret),
@@ -162,6 +189,8 @@ impl TryFrom<u8> for AccountEnvelopePurpose {
 pub struct AccountEnvelopeHeader {
     pub suite: AccountEnvelopeSuiteId,
     pub purpose: AccountEnvelopePurpose,
+    /// The master key the secret belongs to.
+    pub generation: MasterKeyGeneration,
     /// What the account is bound by: its key binding, canonical.
     pub canonical_binding: String,
     /// The object the secret belongs to (empty when the purpose has one
@@ -213,9 +242,11 @@ fn check_shape(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn build_header(
     suite: AccountEnvelopeSuiteId,
     purpose: AccountEnvelopePurpose,
+    generation: MasterKeyGeneration,
     binding: &str,
     object_id: &[u8],
     revision: Option<u64>,
@@ -237,6 +268,7 @@ fn build_header(
     header.extend_from_slice(&suite.as_u16().to_be_bytes());
     header.push(purpose.as_u8());
     header.push(0); // reserved; non-zero is rejected to keep the encoding canonical
+    header.extend_from_slice(&generation.get().to_be_bytes());
     header.extend_from_slice(&context_len.to_be_bytes());
     header.extend_from_slice(binding.as_bytes());
     header.push(u8::try_from(object_id.len()).expect("checked object length"));
@@ -318,9 +350,10 @@ pub fn seal(
     plaintext: &[u8],
     key: &[u8],
     purpose: AccountEnvelopePurpose,
+    generation: MasterKeyGeneration,
     binding: &str,
 ) -> Result<Vec<u8>> {
-    seal_object(plaintext, key, purpose, binding, &[])
+    seal_object(plaintext, key, purpose, generation, binding, &[])
 }
 
 /// Seals a secret of `purpose` belonging to `object_id`.
@@ -328,6 +361,7 @@ pub fn seal_object(
     plaintext: &[u8],
     key: &[u8],
     purpose: AccountEnvelopePurpose,
+    generation: MasterKeyGeneration,
     binding: &str,
     object_id: &[u8],
 ) -> Result<Vec<u8>> {
@@ -336,6 +370,7 @@ pub fn seal_object(
         plaintext,
         key,
         purpose,
+        generation,
         binding,
         object_id,
         None,
@@ -349,6 +384,7 @@ pub fn seal_revision(
     plaintext: &[u8],
     key: &[u8],
     purpose: AccountEnvelopePurpose,
+    generation: MasterKeyGeneration,
     binding: &str,
     object_id: &[u8],
     revision: u64,
@@ -358,6 +394,7 @@ pub fn seal_revision(
         plaintext,
         key,
         purpose,
+        generation,
         binding,
         object_id,
         Some(revision),
@@ -370,6 +407,7 @@ pub fn seal_with_nonce(
     plaintext: &[u8],
     key: &[u8],
     purpose: AccountEnvelopePurpose,
+    generation: MasterKeyGeneration,
     binding: &str,
     nonce: &[u8],
 ) -> Result<Vec<u8>> {
@@ -378,6 +416,7 @@ pub fn seal_with_nonce(
         plaintext,
         key,
         purpose,
+        generation,
         binding,
         &[],
         None,
@@ -392,6 +431,7 @@ pub fn seal_suite(
     plaintext: &[u8],
     key: &[u8],
     purpose: AccountEnvelopePurpose,
+    generation: MasterKeyGeneration,
     binding: &str,
     object_id: &[u8],
     revision: Option<u64>,
@@ -415,6 +455,7 @@ pub fn seal_suite(
     let header = build_header(
         suite,
         purpose,
+        generation,
         &binding,
         object_id,
         revision,
@@ -440,6 +481,7 @@ pub fn seal_unchecked_for_vectors(
     plaintext: &[u8],
     key: &[u8],
     purpose: AccountEnvelopePurpose,
+    generation: MasterKeyGeneration,
     binding: &str,
     object_id: &[u8],
     revision: Option<u64>,
@@ -451,6 +493,7 @@ pub fn seal_unchecked_for_vectors(
     let header = build_header(
         suite,
         purpose,
+        generation,
         binding,
         object_id,
         revision,
@@ -485,6 +528,12 @@ fn parse(envelope: &[u8]) -> Result<ParsedEnvelope<'_>> {
         ));
     }
     cursor += 1;
+    let generation = MasterKeyGeneration::new(u32::from_be_bytes(
+        envelope[cursor..cursor + GENERATION_LEN]
+            .try_into()
+            .expect("four-byte slice"),
+    ))?;
+    cursor += GENERATION_LEN;
     let context_len = usize::from(u16::from_be_bytes([envelope[cursor], envelope[cursor + 1]]));
     cursor += 2;
     if context_len == 0 || context_len > MAX_CONTEXT_LEN {
@@ -566,6 +615,7 @@ fn parse(envelope: &[u8]) -> Result<ParsedEnvelope<'_>> {
         header: AccountEnvelopeHeader {
             suite,
             purpose,
+            generation,
             canonical_binding: canonical,
             object_id,
             revision,
@@ -683,9 +733,11 @@ pub fn seal_b64(
     plaintext: &[u8],
     key: &[u8],
     purpose: AccountEnvelopePurpose,
+    generation: MasterKeyGeneration,
     binding: &str,
 ) -> Result<String> {
-    Ok(base64::engine::general_purpose::STANDARD.encode(seal(plaintext, key, purpose, binding)?))
+    Ok(base64::engine::general_purpose::STANDARD
+        .encode(seal(plaintext, key, purpose, generation, binding)?))
 }
 
 pub fn decode_canonical_b64(value: &str) -> Result<Vec<u8>> {
@@ -723,6 +775,7 @@ mod tests {
             &[0x42; 32],
             &[0x24; 32],
             AccountEnvelopePurpose::PasswordMasterKey,
+            MasterKeyGeneration::FIRST,
             BINDING,
             &[0x11; 24],
         )
@@ -767,6 +820,7 @@ mod tests {
                 &[0x42; 32],
                 &[0x24; 32],
                 AccountEnvelopePurpose::PasswordMasterKey,
+                MasterKeyGeneration::FIRST,
                 &other,
                 &[0x11; 24],
             )
@@ -843,6 +897,7 @@ mod tests {
             &[0x42; 32],
             &key,
             AccountEnvelopePurpose::PassVaultSecret,
+            MasterKeyGeneration::FIRST,
             BINDING,
             &[7; 16],
             9,
@@ -873,6 +928,7 @@ mod tests {
             &[1],
             &key,
             AccountEnvelopePurpose::PassVaultSecret,
+            MasterKeyGeneration::FIRST,
             BINDING,
             &[0; 17],
             9
@@ -884,7 +940,16 @@ mod tests {
     fn a_mutable_secret_carries_its_revision_authenticated() {
         let key = [0x24; 32];
         let purpose = AccountEnvelopePurpose::PassVaultSecret;
-        let envelope = seal_revision(&[0x42; 32], &key, purpose, BINDING, &[7; 16], 9).unwrap();
+        let envelope = seal_revision(
+            &[0x42; 32],
+            &key,
+            purpose,
+            MasterKeyGeneration::FIRST,
+            BINDING,
+            &[7; 16],
+            9,
+        )
+        .unwrap();
         assert_eq!(inspect(&envelope).unwrap().revision, Some(9));
         // Padded to the purpose's fixed length.
         let Length::Fixed(fixed) = purpose.policy().length else {
@@ -901,14 +966,32 @@ mod tests {
         assert_eq!(inspect(&relabelled).unwrap().revision, Some(8));
         assert!(open_revision(&relabelled, &key, purpose, BINDING, &[7; 16]).is_err());
         // A mutable secret needs a revision, never 0, and opens only with it.
-        assert!(seal_object(&[1], &key, purpose, BINDING, &[7; 16]).is_err());
-        assert!(seal_revision(&[1], &key, purpose, BINDING, &[7; 16], 0).is_err());
+        assert!(seal_object(
+            &[1],
+            &key,
+            purpose,
+            MasterKeyGeneration::FIRST,
+            BINDING,
+            &[7; 16]
+        )
+        .is_err());
+        assert!(seal_revision(
+            &[1],
+            &key,
+            purpose,
+            MasterKeyGeneration::FIRST,
+            BINDING,
+            &[7; 16],
+            0
+        )
+        .is_err());
         assert!(open_object(&envelope, &key, purpose, BINDING, &[7; 16]).is_err());
         // And a revision on an immutable purpose is refused.
         assert!(seal_revision(
             &[0x42; 32],
             &key,
             AccountEnvelopePurpose::PasswordMasterKey,
+            MasterKeyGeneration::FIRST,
             BINDING,
             &[],
             1
@@ -930,7 +1013,34 @@ mod tests {
         assert!(inspect(&reserved).is_err());
 
         let mut noncanonical = envelope;
-        noncanonical[14] = b'A';
+        noncanonical[18] = b'A';
         assert!(inspect(&noncanonical).is_err());
+    }
+
+    #[test]
+    fn the_master_key_generation_is_named_and_authenticated() {
+        let key = [0x24; 32];
+        let purpose = AccountEnvelopePurpose::ChatBackupRoot;
+        assert!(MasterKeyGeneration::new(0).is_err());
+        let seventh = MasterKeyGeneration::new(7).unwrap();
+        let envelope = seal(&[0x42; 32], &key, purpose, seventh, BINDING).unwrap();
+        assert_eq!(inspect(&envelope).unwrap().generation, seventh);
+        assert_eq!(
+            open(&envelope, &key, purpose, BINDING).unwrap(),
+            vec![0x42; 32]
+        );
+        // Never 0 on the wire either.
+        let mut zero = envelope.clone();
+        zero[12..16].copy_from_slice(&0u32.to_be_bytes());
+        assert!(inspect(&zero).is_err());
+        // Relabelled as another master key's: well formed, but the AEAD
+        // covers it.
+        let mut relabelled = envelope;
+        relabelled[12..16].copy_from_slice(&1u32.to_be_bytes());
+        assert_eq!(
+            inspect(&relabelled).unwrap().generation,
+            MasterKeyGeneration::FIRST
+        );
+        assert!(open(&relabelled, &key, purpose, BINDING).is_err());
     }
 }

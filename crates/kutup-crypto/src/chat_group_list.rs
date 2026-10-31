@@ -21,10 +21,10 @@ use zeroize::Zeroizing;
 use crate::chat_group::GROUP_ID_LEN;
 use crate::error::{CryptoError, Result};
 
-const SALT: &[u8] = b"kutup/chat-group-list/v1\0";
-const ID_KEY_INFO: &[u8] = b"kutup/chat-group-list/id-key/v1\0";
-const SEAL_KEY_INFO: &[u8] = b"kutup/chat-group-list/seal-key/v1\0";
-const ID_DOMAIN: &[u8] = b"kutup/chat-group-list/id/v1\0";
+const SALT: &[u8] = crate::labels::CHAT_GROUP_LIST_V1;
+const ID_KEY_INFO: &[u8] = crate::labels::CHAT_GROUP_LIST_ID_KEY_V1;
+const SEAL_KEY_INFO: &[u8] = crate::labels::CHAT_GROUP_LIST_SEAL_KEY_V1;
+const ID_DOMAIN: &[u8] = crate::labels::CHAT_GROUP_LIST_ID_V1;
 
 const MAGIC: &[u8; 8] = b"KUTPGL1\0";
 /// XChaCha20-Poly1305 under the list's seal key.

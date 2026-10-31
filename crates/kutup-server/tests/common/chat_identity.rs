@@ -184,7 +184,7 @@ impl ChatAccount {
     pub fn next_manifest(&self, devices: &[&ChatDevice]) -> AccountManifestV3 {
         let public = self.authority.verifying_key();
         let mut incarnation = Hasher::new(Suite::V1);
-        incarnation.update(b"kutup/account-incarnation/v1\0");
+        incarnation.update(b"kutup/account/incarnation/v1\0");
         incarnation.update(public.to_bytes());
         let mut listed: Vec<AccountManifestDeviceV3> = devices
             .iter()

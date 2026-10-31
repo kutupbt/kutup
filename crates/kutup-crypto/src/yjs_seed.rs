@@ -12,7 +12,7 @@
 
 use crate::primitives::{hash, Hasher, Suite};
 
-const LABEL: &[u8] = b"kutup/yjs-seed/v1\0";
+const LABEL: &[u8] = crate::labels::YJS_SEED_V1;
 
 /// The seed's client id: the first 53 bits of
 /// SHA-256(label ‖ file id ‖ 0 ‖ SHA-256(content)), a whole number

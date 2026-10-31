@@ -16,11 +16,11 @@ use crate::hpke_xwing;
 
 use crate::error::{CryptoError, Result};
 
-const ACCOUNT_IDENTITY_SALT: &[u8] = b"kutup/account-identity/v1\0";
-const SELF_AUTHORITY_INFO: &[u8] = b"kutup/account-identity/self-authority/v1\0";
-const DRIVE_HPKE_INFO: &[u8] = b"kutup/account-identity/drive-hpke-xwing/v1\0";
-const DRIVE_SIGNING_INFO: &[u8] = b"kutup/account-identity/drive-share-signing-ed25519/v1\0";
-const INCARNATION_DOMAIN: &[u8] = b"kutup/account-incarnation/v1\0";
+const ACCOUNT_IDENTITY_SALT: &[u8] = crate::labels::ACCOUNT_IDENTITY_V1;
+const SELF_AUTHORITY_INFO: &[u8] = crate::labels::ACCOUNT_IDENTITY_SELF_AUTHORITY_V1;
+const DRIVE_HPKE_INFO: &[u8] = crate::labels::ACCOUNT_IDENTITY_DRIVE_HPKE_XWING_V1;
+const DRIVE_SIGNING_INFO: &[u8] = crate::labels::ACCOUNT_IDENTITY_DRIVE_SHARE_SIGNING_ED25519_V1;
+const INCARNATION_DOMAIN: &[u8] = crate::labels::ACCOUNT_INCARNATION_V1;
 
 /// The account identity suite these keys are: 2, an X-Wing Drive key with
 /// Ed25519 signing keys.

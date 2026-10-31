@@ -19,10 +19,10 @@ use zeroize::Zeroizing;
 
 use crate::error::{ChatError, Result};
 
-const WRAP_INFO: &[u8] = b"kutup/chat-store/wrap/v1";
-const VALUE_INFO: &[u8] = b"kutup/chat-store/value/v1";
-const INDEX_INFO: &[u8] = b"kutup/chat-store/index/v1";
-const RECORD_AAD: &[u8] = b"kutup/chat-store/record/v1";
+const WRAP_INFO: &[u8] = kutup_crypto::labels::CHAT_STORE_WRAP_V1;
+const VALUE_INFO: &[u8] = kutup_crypto::labels::CHAT_STORE_VALUE_V1;
+const INDEX_INFO: &[u8] = kutup_crypto::labels::CHAT_STORE_INDEX_V1;
+const RECORD_AAD: &[u8] = kutup_crypto::labels::CHAT_STORE_RECORD_V1;
 const WRAPPED_VERSION: u8 = 1;
 const NONCE_BYTES: usize = 24;
 
@@ -183,7 +183,7 @@ impl StoreCipher {
     }
 }
 
-const LOCAL_INFO: &[u8] = b"kutup/chat-local/v1";
+const LOCAL_INFO: &[u8] = kutup_crypto::labels::CHAT_LOCAL_V1;
 
 /// Seals small browser-side data kept outside the store (drafts, read
 /// positions, the backup mirror's records) under a key derived from the
@@ -283,7 +283,7 @@ fn record_aad(store: &str, hashed_key: &str) -> Vec<u8> {
 
 fn expand(ikm: &[u8; 32], info: &[u8]) -> Result<[u8; 32]> {
     let mut out = [0u8; 32];
-    Hkdf::<Sha256>::new(None, ikm)
+    Hkdf::<Sha256>::new(Some(kutup_crypto::labels::CHAT_STORE_V1), ikm)
         .expand(info, &mut out)
         .map_err(|_| ChatError::Db("chat store key derivation failed".into()))?;
     Ok(out)

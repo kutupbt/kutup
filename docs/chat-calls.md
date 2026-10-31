@@ -226,7 +226,7 @@ account, so it is the same on all of its devices:
   the title, when it was joined and for how long, sealed in the browser:
   `nonce (24) || XChaCha20-Poly1305(length || JSON || zeros)`, padded to
   1024 bytes, under HKDF-SHA256 of the account master key (the meetings'
-  salt, info `joined key`), with the AAD `kutup/chat/call-link/v1/joined`.
+  salt, info `joined key`), with the AAD `kutup/chat/call-link/joined/v1`.
 - The server stores the records (`/api/chat/joined-meetings`, the newest
   100 per account) and hands them back. It cannot open them, so it still
   has no readable record of who joined what; it does learn that the account

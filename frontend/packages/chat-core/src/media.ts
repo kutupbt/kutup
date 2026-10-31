@@ -110,8 +110,9 @@ export async function deliverChatMediaV1(
   descriptor: ChatAttachmentDescriptorV1,
   recipient: AccountRef,
   deliveryCapability: string,
+  operationId?: string,
 ): Promise<ChatMediaDeliveryResponseV1> {
-  const operationId = await chatMediaDeliveryOperationId(
+  operationId ??= await chatMediaDeliveryOperationId(
     descriptor.attachmentId,
     accountKey(recipient),
   )
@@ -712,7 +713,19 @@ function inferMediaClass(mimeType: string): ChatMediaClassV1 {
   return 'file'
 }
 
-async function chatMediaDeliveryOperationId(
+/**
+ * Whether a failed delivery request was refused for good: the recipient's
+ * server refused the attachment (404, 422), or the request can never pass
+ * (400, 409). Anything else (offline, a server error, a limit) may pass
+ * when asked again.
+ */
+export function chatMediaDeliveryRefused(error: unknown): boolean {
+  const status = (error as { response?: { status?: number } } | null)?.response?.status
+  return status === 400 || status === 404 || status === 409 || status === 422
+}
+
+/** The delivery operation an attachment's first send to `recipient` asks under. */
+export async function chatMediaDeliveryOperationId(
   attachmentId: string,
   recipient: string,
 ): Promise<string> {

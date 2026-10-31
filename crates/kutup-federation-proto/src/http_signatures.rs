@@ -13,7 +13,7 @@ use crate::{
 
 const REQUEST_COMPONENTS: &str = "(\"@method\" \"@authority\" \"@path\" \"@query\" \"content-digest\" \"content-type\" \"kutup-federation-version\" \"kutup-federation-feature\" \"kutup-origin\" \"kutup-destination\")";
 const RESPONSE_COMPONENTS: &str = "(\"@status\" \"content-digest\" \"content-type\" \"kutup-federation-version\" \"kutup-federation-feature\" \"kutup-origin\" \"kutup-destination\" \"@method\";req \"@authority\";req \"@path\";req \"@query\";req \"content-digest\";req \"content-type\";req \"kutup-federation-version\";req \"kutup-federation-feature\";req \"kutup-origin\";req \"kutup-destination\";req)";
-const REPLAY_HASH_DOMAIN: &[u8] = b"kutup-federation-request-replay-hash-v1\0";
+const REPLAY_HASH_DOMAIN: &[u8] = kutup_crypto::labels::FEDERATION_REQUEST_REPLAY_HASH_V1;
 
 /// Feature protocol selected independently from federation authentication.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

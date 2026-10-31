@@ -22,9 +22,9 @@ use crate::drive_object::parse_canonical_uuid;
 use crate::error::{CryptoError, Result};
 
 const MAGIC: &[u8; 8] = b"KUTPPL1\0";
-const KEY_DERIVATION_SALT: &[u8] = b"kutup/photos-library/key/v1\0";
-const ACCOUNT_KEY_SALT: &[u8] = b"kutup/account-private-subkey/v1\0";
-const ACCOUNT_KEY_INFO: &[u8] = b"kutup/photos-library/account-key/v1\0";
+const KEY_DERIVATION_SALT: &[u8] = crate::labels::PHOTOS_LIBRARY_KEY_V1;
+const ACCOUNT_KEY_SALT: &[u8] = crate::labels::ACCOUNT_PRIVATE_SUBKEY_V1;
+const ACCOUNT_KEY_INFO: &[u8] = crate::labels::PHOTOS_LIBRARY_ACCOUNT_KEY_V1;
 const SUITE_XCHACHA20POLY1305_V1: u16 = 1;
 const PURPOSE_LIBRARY: u8 = 1;
 const KEY_LEN: usize = 32;

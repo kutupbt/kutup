@@ -17,11 +17,11 @@ use zeroize::Zeroizing;
 
 use crate::error::{CryptoError, Result};
 
-const SALT: &[u8] = b"kutup/revision-guard/v1\0";
-const ENTRY_KEY_INFO: &[u8] = b"kutup/revision-guard/entry-key/v1\0";
-const SEAL_KEY_INFO: &[u8] = b"kutup/revision-guard/seal-key/v1\0";
-const ENTRY_DOMAIN: &[u8] = b"kutup/revision-guard/entry/v1\0";
-const SEAL_DOMAIN: &[u8] = b"kutup/revision-guard/seen/v1\0";
+const SALT: &[u8] = crate::labels::REVISION_GUARD_V1;
+const ENTRY_KEY_INFO: &[u8] = crate::labels::REVISION_GUARD_ENTRY_KEY_V1;
+const SEAL_KEY_INFO: &[u8] = crate::labels::REVISION_GUARD_SEAL_KEY_V1;
+const ENTRY_DOMAIN: &[u8] = crate::labels::REVISION_GUARD_ENTRY_V1;
+const SEAL_DOMAIN: &[u8] = crate::labels::REVISION_GUARD_SEEN_V1;
 const NONCE_LEN: usize = 24;
 const SEALED_LEN: usize = NONCE_LEN + 8 + 16;
 const MAX_PART_LEN: usize = 1024;

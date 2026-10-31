@@ -444,6 +444,7 @@ pub(crate) fn keep_secret(
         let revision = guard.next(GUARD_SCOPE, file_id, base)?;
         let sealed = kutup_pass::kept::seal(
             master_key,
+            kutup_crypto::account_envelope::MasterKeyGeneration::FIRST,
             binding,
             id.as_bytes(),
             revision,

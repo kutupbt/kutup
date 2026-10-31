@@ -146,7 +146,10 @@ pub fn hash(key: &[u8; 32], canonical: &str) -> [u8; 32] {
     kutup_crypto::primitives::mac(
         kutup_crypto::primitives::Suite::V1,
         key,
-        &[b"kutup/registration-code/v1\0", canonical.as_bytes()],
+        &[
+            kutup_crypto::labels::REGISTRATION_CODE_V1,
+            canonical.as_bytes(),
+        ],
     )
     .to_array()
 }

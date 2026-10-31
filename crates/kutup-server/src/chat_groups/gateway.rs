@@ -36,7 +36,7 @@ use crate::AppState;
 /// envelope (base64 grows it by a third).
 const LOG_PAGE_BYTES: usize = 180 * 1024;
 const MAX_LOG_PAGE_CHANGES: i64 = 256;
-const SEEN_PSEUDONYM_DOMAIN: &[u8] = b"kutup/chat-group/seen-pseudonym/v1\0";
+const SEEN_PSEUDONYM_DOMAIN: &[u8] = kutup_crypto::labels::CHAT_GROUP_SEEN_PSEUDONYM_V1;
 /// A change or a read naming an avatar blob the home doesn't hold.
 const AVATAR_MISSING: &str = "avatarMissing";
 
@@ -525,7 +525,7 @@ async fn put_endorsement(
         .load(&mut *tx)
         .await?;
     let digest: [u8; 32] = Hasher::new(Suite::V1)
-        .chain(b"kutup/group-endorsement-upload/v1\0")
+        .chain(kutup_crypto::labels::GROUP_ENDORSEMENT_UPLOAD_V1)
         .chain(group_id)
         .chain(key)
         .finish()

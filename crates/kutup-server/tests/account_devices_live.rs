@@ -70,7 +70,7 @@ impl Live {
         let credential = [device_id as u8; 32];
         let salt = [7u8; 16];
         let mut hasher = Hasher::new(Suite::V1);
-        hasher.update(b"kutup/chat-device-credential/v1\0");
+        hasher.update(b"kutup/chat/device-credential/v1\0");
         hasher.update(salt);
         hasher.update(credential);
         let hash: [u8; 32] = hasher.finish().into();

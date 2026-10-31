@@ -55,6 +55,7 @@ mod group_settings;
 mod keys;
 pub use keys::PublishedKeys;
 mod manifest;
+mod media_wait;
 mod multi_seal;
 mod padding;
 mod prekey_rotation;
@@ -89,7 +90,8 @@ pub use db::sqlite::SqliteChatDb;
 pub use db::{
     AccountManifestHistoryRecord, AuthorityTrust, ChatDb, ContactRecord, InboundEnvelope,
     InboundFailureKind, InboundState, InboxMessage, LocalIdentity, LocalProfile, ManifestTrust,
-    OutboxEntry, OutboxSyncLeg, PeerProfile, Pending, PendingAccountIdentityResetV1, SentMessage,
+    MediaWait, MediaWaitFailure, OutboxEntry, OutboxSyncLeg, PeerProfile, Pending,
+    PendingAccountIdentityResetV1, SentMessage,
 };
 pub use engine::{
     ChatEvent, Engine, EngineState, GroupInviteNotice, InboundFailure, OutboxFailure, OutboxFlush,
@@ -104,6 +106,7 @@ pub use manifest::{
     derive_safety_number, verify_bundle_response, verify_manifest, AccountAuthority,
     ManifestPolicy, SafetyNumberV2, SAFETY_QR_PREFIX,
 };
+pub use media_wait::{MediaSendDue, MediaSends};
 pub use profile::{derive_wrapping_key, MAX_AVATAR_BYTES};
 pub use session::{ReceivedMessage, SendSummary, Session};
 pub use transport::{

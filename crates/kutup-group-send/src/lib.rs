@@ -40,7 +40,7 @@ pub const REFRESH_BEFORE_SECS: u64 = 25 * 60 * 60;
 pub use kutup_chat_proto::group_send::{ENDORSEMENT_BLOB_BYTES, ENDORSEMENT_SEALED_BYTES};
 
 /// The label P0's master key is the hash of (§3.1).
-pub const PARAMS_LABEL: &[u8] = b"kutup/chat-group-send/params/v1";
+pub const PARAMS_LABEL: &[u8] = kutup_crypto::labels::CHAT_GROUP_SEND_PARAMS_V1;
 
 /// The blob format's version byte.
 const BLOB_VERSION: u8 = 1;
@@ -211,7 +211,7 @@ fn aci(account: Uuid) -> libsignal_core::ServiceId {
 }
 
 /// The domain a stored server key is sealed under.
-const SERVER_KEY_SEAL_DOMAIN: &[u8] = b"kutup/chat-group-send/server-key/v1\0";
+const SERVER_KEY_SEAL_DOMAIN: &[u8] = kutup_crypto::labels::CHAT_GROUP_SEND_SERVER_KEY_V1;
 
 fn server_key_aad(sealing_key_id: u16, key_id: u32) -> Vec<u8> {
     [

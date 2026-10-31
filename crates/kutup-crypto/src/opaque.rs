@@ -45,12 +45,12 @@ use crate::error::{CryptoError, Result};
 /// The suite number stored with each account's record.
 pub const SUITE: u16 = 1;
 /// Bound into every sign-in's transcript.
-pub const CONTEXT: &[u8] = b"kutup/opaque/v1";
-const EXPORT_SALT: &[u8] = b"kutup/opaque/export/v1\0";
-const MASTER_KEY_KEK_INFO: &[u8] = b"kutup/opaque/master-key-kek/v1\0";
-const CREDENTIAL_PREFIX: &[u8] = b"kutup/opaque/credential/v1\0";
+pub const CONTEXT: &[u8] = crate::labels::OPAQUE_V1;
+const EXPORT_SALT: &[u8] = crate::labels::OPAQUE_EXPORT_V1;
+const MASTER_KEY_KEK_INFO: &[u8] = crate::labels::OPAQUE_MASTER_KEY_KEK_V1;
+const CREDENTIAL_PREFIX: &[u8] = crate::labels::OPAQUE_CREDENTIAL_V1;
 const UNKNOWN_PREFIX: &[u8] = b"unknown:";
-const SETUP_AAD: &[u8] = b"kutup/opaque-setup/v1\0";
+const SETUP_AAD: &[u8] = crate::labels::OPAQUE_SETUP_V1;
 const SETUP_MAGIC: &[u8; 8] = b"KUTOPS1\0";
 const NONCE_LEN: usize = 24;
 
@@ -157,12 +157,19 @@ impl ExportKey {
         Ok(kek)
     }
 
-    /// Seals `master_key` as the account's password envelope.
-    pub fn seal_master_key(&self, master_key: &[u8; 32], key_binding: &str) -> Result<String> {
+    /// Seals `master_key` (of `generation`) as the account's password
+    /// envelope.
+    pub fn seal_master_key(
+        &self,
+        master_key: &[u8; 32],
+        generation: account_envelope::MasterKeyGeneration,
+        key_binding: &str,
+    ) -> Result<String> {
         account_envelope::seal_b64(
             master_key,
             self.master_key_kek(key_binding)?.as_slice(),
             AccountEnvelopePurpose::PasswordMasterKey,
+            generation,
             key_binding,
         )
     }
@@ -592,7 +599,13 @@ mod tests {
     fn a_password_signs_in_and_opens_the_master_key() {
         let secrets = ServerSecrets::generate();
         let (record, export) = register(&secrets, "correct horse", BINDING);
-        let envelope = export.seal_master_key(&[9u8; 32], BINDING).unwrap();
+        let envelope = export
+            .seal_master_key(
+                &[9u8; 32],
+                crate::account_envelope::MasterKeyGeneration::FIRST,
+                BINDING,
+            )
+            .unwrap();
         let credential = credential_identifier(BINDING).unwrap();
         let again = sign_in(&secrets, Some(&record), &credential, "correct horse").unwrap();
         assert_eq!(
@@ -678,10 +691,22 @@ mod tests {
     fn a_new_password_replaces_the_old_one() {
         let secrets = ServerSecrets::generate();
         let (_, old) = register(&secrets, "old password", BINDING);
-        let old_envelope = old.seal_master_key(&[5u8; 32], BINDING).unwrap();
+        let old_envelope = old
+            .seal_master_key(
+                &[5u8; 32],
+                crate::account_envelope::MasterKeyGeneration::FIRST,
+                BINDING,
+            )
+            .unwrap();
         let master = old.open_master_key(&old_envelope, BINDING).unwrap();
         let (record, new) = register(&secrets, "new password", BINDING);
-        let envelope = new.seal_master_key(&master, BINDING).unwrap();
+        let envelope = new
+            .seal_master_key(
+                &master,
+                crate::account_envelope::MasterKeyGeneration::FIRST,
+                BINDING,
+            )
+            .unwrap();
         let credential = credential_identifier(BINDING).unwrap();
         assert!(sign_in(&secrets, Some(&record), &credential, "old password").is_err());
         let signed = sign_in(&secrets, Some(&record), &credential, "new password").unwrap();

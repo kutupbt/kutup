@@ -30,8 +30,8 @@ use crate::drive_object::parse_canonical_uuid;
 use crate::error::{CryptoError, Result};
 
 const MAGIC: &[u8; 8] = b"KUTPCF3\0";
-const SIGNATURE_DOMAIN: &[u8] = b"kutup/collab/frame/v3\0";
-const KEY_DERIVATION_SALT: &[u8] = b"kutup/collab-frame/key/v1\0";
+const SIGNATURE_DOMAIN: &[u8] = crate::labels::COLLAB_FRAME_V3;
+const KEY_DERIVATION_SALT: &[u8] = crate::labels::COLLAB_FRAME_KEY_V1;
 const KEY_LEN: usize = 32;
 const NONCE_LEN: usize = 24;
 const TAG_LEN: usize = 16;

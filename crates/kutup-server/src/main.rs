@@ -446,10 +446,7 @@ async fn main() -> anyhow::Result<()> {
     }
     // Old addresses past their receiving, names past their hold.
     account_names::spawn_sweep(state.pool.clone(), state.config.name_sweep_seconds);
-    // Announces of this server's renames to its peers.
-    remote_renames::spawn_announcer(state.clone());
     federation_outbox::spawn_worker(state.clone());
-    chat_media_federation::spawn_retry_worker(state.clone());
     drive_federation::spawn_digest_backfill(state.clone());
     mail::groups::ensure_system_groups(&state.pool, &state.config.chat_server_name).await?;
     site_settings::seed_mail_outside_sending(&state.pool, state.config.mail_outside_sending)
@@ -610,11 +607,10 @@ async fn bootstrap_admin(
         r#"INSERT INTO users (
             username, key_binding, opaque_record, opaque_suite, opaque_server_key_id,
             master_key_envelope, recovery_key_envelope,
-            drive_private_key_envelope,
             public_key, account_authority_public_key, account_authority_key_id,
             account_incarnation_id, drive_signing_public_key,
             is_admin, is_first_login, storage_quota_bytes, is_break_glass
-        ) VALUES ($1,$2,$3,$4,$5,'','','','','','','','',true,true,$6,true)
+        ) VALUES ($1,$2,$3,$4,$5,'','','','','','','',true,true,$6,true)
         RETURNING id"#,
     )
     .bind(username)
@@ -868,10 +864,6 @@ fn build_router(state: AppState) -> Router {
                 .route_layer(DefaultBodyLimit::max(
                     handlers::chat_group_list::ENVELOPE_BYTES / 3 * 4 + 64 * 1024,
                 )),
-        )
-        .route(
-            "/api/account/identity-suite",
-            post(identity::upgrade_identity_suite),
         )
         .route(
             "/api/user/identity-pins",

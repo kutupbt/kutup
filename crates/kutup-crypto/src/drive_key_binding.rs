@@ -27,7 +27,7 @@ use crate::error::{CryptoError, Result};
 use crate::identity::{incarnation_id_from_authority_public, AccountIdentityKeysV1};
 use crate::primitives::{Suite, VerifyingKey};
 
-const DOMAIN: &[u8] = b"kutup/drive-key-binding/v2\0";
+const DOMAIN: &[u8] = crate::labels::DRIVE_KEY_BINDING_V2;
 /// The account identity suite of the bound keys (X-Wing + Ed25519).
 pub const SUITE: u16 = crate::identity::IDENTITY_SUITE;
 /// The epoch of an account's first suite-2 binding: at registration and at

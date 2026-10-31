@@ -228,7 +228,7 @@ Trust states are:
 
 The safety number covers identities, not authorities, so the identity has to
 name its authority: every manifest carries `identityBinding`, the account
-identity key's XEdDSA signature over `kutup/account-identity-binding/v1\0`,
+identity key's XEdDSA signature over `kutup/account-identity/binding/v1\0`,
 the authority key id, incarnation id, account (`AccountRef` bytes) and the
 identity key, and the authority signs it with the rest. Clients and servers
 refuse a manifest whose binding the identity didn't sign (`400 badSignature`

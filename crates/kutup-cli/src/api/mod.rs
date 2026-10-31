@@ -318,13 +318,6 @@ impl Client {
         check_ok(resp)
     }
 
-    /// Moves the account's Drive key from identity suite 1 (X25519) to 2
-    /// (X-Wing), once (docs/plans/pq-shares.md).
-    pub fn upgrade_identity_suite(&self, body: &serde_json::Value) -> Result<()> {
-        let resp = self.post_json("/account/identity-suite", body)?;
-        check_ok(resp)
-    }
-
     /// DELETE-with-body: turning 2FA off takes a current code and a `totp`
     /// grant (the password proved again), so a stolen session cannot.
     pub fn disable_totp(&self, code: &str, grant: &str) -> Result<()> {

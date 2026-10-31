@@ -31,26 +31,26 @@ pub const SIGNATURE_LEN: usize = 64;
 pub const SLOT_ID_LEN: usize = 16;
 pub const HASH_LEN: usize = 32;
 
-const KDF_SALT: &[u8] = b"kutup/chat-group/v1";
+const KDF_SALT: &[u8] = crate::labels::CHAT_GROUP_V1;
 /// v2: the id binds the group's home (its server and the federation identity
 /// it was pinned at), so the same master key at another home is another
 /// group.
-const ID_INFO: &[u8] = b"kutup/chat-group/id/v2\0";
-const HOME_DOMAIN: &[u8] = b"kutup/chat-group/home/v1\0";
+const ID_INFO: &[u8] = crate::labels::CHAT_GROUP_ID_V2;
+const HOME_DOMAIN: &[u8] = crate::labels::CHAT_GROUP_HOME_V1;
 /// v2: the group id follows in the info, so a state key is its group's
 /// alone (each sealed field binds the id as well).
-const STATE_KEY_INFO: &[u8] = b"kutup/chat-group/state-key/v2\0";
+const STATE_KEY_INFO: &[u8] = crate::labels::CHAT_GROUP_STATE_KEY_V2;
 
-const SEAL_DOMAIN: &[u8] = b"kutup/chat-group/sealed-field/v1\0";
+const SEAL_DOMAIN: &[u8] = crate::labels::CHAT_GROUP_SEALED_FIELD_V1;
 const SEAL_VERSION: u8 = 1;
 const NONCE_LEN: usize = 24;
 const TAG_LEN: usize = 16;
 
-const CHANGE_SIGNATURE_DOMAIN: &[u8] = b"kutup/chat-group/change/v1\0";
-const CLAIM_DOMAIN: &[u8] = b"kutup/chat-group/claim/v1\0";
-const BINDING_DOMAIN: &[u8] = b"kutup/chat-group/binding/v1\0";
-const CHANGE_HASH_DOMAIN: &[u8] = b"kutup/chat-group/change-hash/v1\0";
-const STATE_HASH_DOMAIN: &[u8] = b"kutup/chat-group/state-hash/v1\0";
+const CHANGE_SIGNATURE_DOMAIN: &[u8] = crate::labels::CHAT_GROUP_CHANGE_V1;
+const CLAIM_DOMAIN: &[u8] = crate::labels::CHAT_GROUP_CLAIM_V1;
+const BINDING_DOMAIN: &[u8] = crate::labels::CHAT_GROUP_BINDING_V1;
+const CHANGE_HASH_DOMAIN: &[u8] = crate::labels::CHAT_GROUP_CHANGE_HASH_V1;
+const STATE_HASH_DOMAIN: &[u8] = crate::labels::CHAT_GROUP_STATE_HASH_V1;
 
 /// A group's home, as its id binds it: the server the group lives on, for
 /// its whole life, and the federation identity document it was pinned at.
@@ -306,12 +306,12 @@ impl GroupKeyPair {
     }
 }
 
-const PSEUDONYM_SALT: &[u8] = b"kutup/chat-group-pseudonym/v1\0";
+const PSEUDONYM_SALT: &[u8] = crate::labels::CHAT_GROUP_PSEUDONYM_V1;
 
 /// Where an account's group pseudonyms come from: its master key, so any
 /// device of the account finds its place in a group again, even one whose
 /// group list entry was lost. A pseudonym's seed is HKDF-SHA256 over the
-/// account master key, salt `kutup/chat-group-pseudonym/v1\0`, info the
+/// account master key, salt `kutup/chat-group/pseudonym/v1\0`, info the
 /// group id then the join epoch (u32 big-endian). The join epoch counts the
 /// account's joins of the group: 0 at the first, one more at each rejoin
 /// after leaving, so a rejoin is a new pseudonym. Without the account key,
@@ -474,7 +474,7 @@ pub fn state_hash(state_bytes: &[u8]) -> [u8; HASH_LEN] {
 /// avatar attribute.
 pub const AVATAR_BUCKETS: [usize; 4] = [8 * 1024, 16 * 1024, 32 * 1024, 40 * 1024];
 const AVATAR_VERSION: u8 = 1;
-const AVATAR_AAD: &[u8] = b"kutup/chat-group/avatar/v1\0";
+const AVATAR_AAD: &[u8] = crate::labels::CHAT_GROUP_AVATAR_V1;
 
 /// The blob length a padded bucket gives.
 pub const fn avatar_blob_len(bucket: usize) -> usize {
@@ -712,17 +712,17 @@ mod tests {
     #[test]
     fn no_other_authority_signature_passes_as_a_binding() {
         const OTHER_DOMAINS: &[&[u8]] = &[
-            b"kutup/device-registration/v1\0",
-            b"kutup/device-revocation/v1\0",
-            b"kutup/drive-key-binding/v2\0",
-            b"kutup/account-rename/v1\0",
-            b"kutup/contact-summary/v2\0",
-            b"kutup/mail-key-list/v1\0",
-            b"kutup/mail-group-key-share/v2\0",
-            b"kutup/drive/collection-key-commitment/v1\0",
-            b"kutup/account-manifest/v1\0",
-            b"kutup/chat-backup/signer-authorization/v1\0",
-            b"kutup/chat-backup/manifest/v1\0",
+            crate::labels::DEVICE_REGISTRATION_V1,
+            crate::labels::DEVICE_REVOCATION_V1,
+            crate::labels::DRIVE_KEY_BINDING_V2,
+            crate::labels::ACCOUNT_RENAME_V1,
+            crate::labels::CONTACT_SUMMARY_V2,
+            crate::labels::MAIL_KEY_LIST_V1,
+            crate::labels::MAIL_GROUP_KEY_SHARE_V2,
+            crate::labels::DRIVE_COLLECTION_KEY_COMMITMENT_V1,
+            crate::labels::ACCOUNT_MANIFEST_V1,
+            crate::labels::CHAT_BACKUP_SIGNER_AUTHORIZATION_V1,
+            crate::labels::CHAT_BACKUP_MANIFEST_V1,
             // A collection epoch statement starts with its magic.
             b"KUTPCE1\0",
         ];

@@ -117,7 +117,7 @@ fn a_new_password_ends_the_other_sign_ins_and_keeps_the_master_key() {
             .json(&json!({
                 "grant": grant, "keyBinding": user.binding,
                 "opaqueRecord": record, "opaqueServerKeyId": key_id,
-                "masterKeyEnvelope": export_key.seal_master_key(&user.master_key, &user.binding).unwrap(),
+                "masterKeyEnvelope": export_key.seal_master_key(&user.master_key, kutup_crypto::account_envelope::MasterKeyGeneration::FIRST, &user.binding).unwrap(),
             }));
         if let Some(token) = token {
             request = request.bearer_auth(token);
@@ -215,7 +215,7 @@ fn a_recovery_sets_a_new_password_and_ends_every_sign_in() {
         .json(&json!({
             "grant": grant, "keyBinding": user.binding,
             "opaqueRecord": record, "opaqueServerKeyId": key_id,
-            "masterKeyEnvelope": export_key.seal_master_key(&user.master_key, &user.binding).unwrap(),
+            "masterKeyEnvelope": export_key.seal_master_key(&user.master_key, kutup_crypto::account_envelope::MasterKeyGeneration::FIRST, &user.binding).unwrap(),
         }))
         .send()
         .unwrap();

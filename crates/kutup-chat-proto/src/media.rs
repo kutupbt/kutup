@@ -234,8 +234,10 @@ impl ChatMediaDeliveryOfferV1 {
 pub enum ChatMediaDeliveryStatusV1 {
     Stored,
     AlreadyStored,
-    /// The origin durably queued a federated transfer. The encrypted message
-    /// may proceed; the origin retry worker keeps the exact offer immutable.
+    /// The origin durably queued a federated transfer, keeping the exact
+    /// offer. The attachment message waits until the same operation, asked
+    /// again, answers stored (Signal's model): never before the
+    /// destination's copy is durable.
     Queued,
     StorageFull,
 }

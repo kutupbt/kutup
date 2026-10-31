@@ -11,7 +11,7 @@ use crate::{
     MAX_DISCOVERY_LIFETIME_SECONDS,
 };
 
-const DISCOVERY_SIGNING_DOMAIN: &[u8] = b"kutup-federation-discovery-v2\0";
+const DISCOVERY_SIGNING_DOMAIN: &[u8] = kutup_crypto::labels::FEDERATION_DISCOVERY_V2;
 
 /// URL policy used while producing or verifying a signed discovery document.
 ///

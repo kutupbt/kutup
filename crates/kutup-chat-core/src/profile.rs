@@ -35,10 +35,10 @@ pub const MAX_AVATAR_BYTES: usize = MAX_PROFILE_AVATAR_BYTES;
 const NONCE_BYTES: usize = 24;
 const TAG_BYTES: usize = 16;
 const NAME_PADDED_LENGTHS: [usize; 2] = PROFILE_NAME_PADDED_LENGTHS;
-const VERSION_INFO: &[u8] = b"kutup-chat-profile-version-v1";
-const ACCESS_INFO: &[u8] = b"kutup-chat-profile-access-v1";
-const WRAP_INFO: &[u8] = b"kutup-chat-profile-wrap-v2";
-const ENVELOPE_KEY_SALT: &[u8] = b"kutup/profile-envelope/key/v1\0";
+const VERSION_INFO: &[u8] = kutup_crypto::labels::CHAT_PROFILE_VERSION_V1;
+const ACCESS_INFO: &[u8] = kutup_crypto::labels::CHAT_PROFILE_ACCESS_V1;
+const WRAP_INFO: &[u8] = kutup_crypto::labels::CHAT_PROFILE_WRAP_V2;
+const ENVELOPE_KEY_SALT: &[u8] = kutup_crypto::labels::PROFILE_ENVELOPE_KEY_V1;
 
 /// The key the account's own copy of its profile key is wrapped under: from
 /// the master key and the account's key binding (`session.envelopeBinding`).
@@ -845,7 +845,7 @@ fn profile_key(key: &[u8]) -> Result<[u8; PROFILE_KEY_BYTES]> {
 }
 
 fn hkdf_expand<const N: usize>(key: &[u8], info: &[u8]) -> Result<[u8; N]> {
-    let hkdf = Hkdf::<Sha256>::new(None, key);
+    let hkdf = Hkdf::<Sha256>::new(Some(kutup_crypto::labels::CHAT_PROFILE_V1), key);
     let mut output = [0u8; N];
     hkdf.expand(info, &mut output)
         .map_err(|_| ChatError::Protocol("profile key derivation failed".into()))?;
@@ -1177,7 +1177,7 @@ mod tests {
         /// The retired `-wrap-v1` key (the master key alone), kept only to
         /// show that what it wrapped no longer opens.
         fn v1_wrapping_key() -> [u8; 32] {
-            hkdf_expand(&MASTER, b"kutup-chat-profile-wrap-v1").unwrap()
+            hkdf_expand(&MASTER, kutup_crypto::labels::CHAT_PROFILE_WRAP_V1).unwrap()
         }
 
         fn refused(wrapped_key: &str) -> Vec<Refused> {

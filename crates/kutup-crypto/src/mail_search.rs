@@ -19,16 +19,16 @@ use zeroize::Zeroizing;
 
 use crate::error::{CryptoError, Result};
 
-const ACCOUNT_SALT: &[u8] = b"kutup/mail-search/wrap/v1\0";
-const WRAP_KEY_INFO: &[u8] = b"kutup/mail-search/wrap-key/v1\0";
-const LOCATOR_KEY_INFO: &[u8] = b"kutup/mail-search/locator-key/v1\0";
-const STORE_SALT: &[u8] = b"kutup/mail-search/v1\0";
-const RECORD_KEY_INFO: &[u8] = b"kutup/mail-search/record-key/v1\0";
-const NAME_KEY_INFO: &[u8] = b"kutup/mail-search/name-key/v1\0";
+const ACCOUNT_SALT: &[u8] = crate::labels::MAIL_SEARCH_WRAP_V1;
+const WRAP_KEY_INFO: &[u8] = crate::labels::MAIL_SEARCH_WRAP_KEY_V1;
+const LOCATOR_KEY_INFO: &[u8] = crate::labels::MAIL_SEARCH_LOCATOR_KEY_V1;
+const STORE_SALT: &[u8] = crate::labels::MAIL_SEARCH_V1;
+const RECORD_KEY_INFO: &[u8] = crate::labels::MAIL_SEARCH_RECORD_KEY_V1;
+const NAME_KEY_INFO: &[u8] = crate::labels::MAIL_SEARCH_NAME_KEY_V1;
 const MAGIC: &[u8; 8] = b"KUTMS1\0\0";
 const WRAP_MAGIC: &[u8; 8] = b"KUTMSW1\0";
-const AAD_DOMAIN: &[u8] = b"kutup/mail-search-record/v1\0";
-const WRAP_AAD_DOMAIN: &[u8] = b"kutup/mail-search-store-key/v1\0";
+const AAD_DOMAIN: &[u8] = crate::labels::MAIL_SEARCH_RECORD_V1;
+const WRAP_AAD_DOMAIN: &[u8] = crate::labels::MAIL_SEARCH_STORE_KEY_V1;
 const SUITE_V1: u16 = 1;
 const NONCE_LEN: usize = 24;
 const TAG_LEN: usize = 16;

@@ -58,6 +58,7 @@ fn fixed() -> Fixed {
 fn seal(f: &Fixed, secret: &VaultSecret) -> Vec<u8> {
     seal_vault_secret_with_nonce(
         &f.master,
+        kutup_crypto::account_envelope::MasterKeyGeneration::FIRST,
         f.binding,
         f.file_id.as_bytes(),
         f.revision,

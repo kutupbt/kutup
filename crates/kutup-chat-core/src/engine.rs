@@ -635,7 +635,6 @@ impl Engine {
         &self.session
     }
 
-    #[cfg(feature = "wasm")]
     pub(crate) fn session_mut(&mut self) -> &mut Session {
         &mut self.session
     }
@@ -1457,6 +1456,20 @@ impl Engine {
         content: &ChatContent,
         rng: &mut R,
     ) -> Result<SendSummary> {
+        self.send_at(send_id, peer_user, content, None, rng).await
+    }
+
+    /// [`send`](Self::send), for a message written at `written_at`: an
+    /// attachment message released from its wait for the recipient's
+    /// server (`media_wait`), which keeps its place.
+    pub(crate) async fn send_at<R: Rng + CryptoRng>(
+        &mut self,
+        send_id: &str,
+        peer_user: &str,
+        content: &ChatContent,
+        written_at: Option<i64>,
+        rng: &mut R,
+    ) -> Result<SendSummary> {
         if content.kind == kutup_chat_proto::content::kind::CALL && content.as_call().is_none() {
             return Err(ChatError::Invalid("invalid call signal".into()));
         }
@@ -1544,9 +1557,21 @@ impl Engine {
                     ..SendSummary::default()
                 });
             }
-            return Err(ChatError::Db(format!(
-                "send {send_id} is pending but has no durable ciphertext"
-            )));
+            let released = written_at.is_some()
+                && sent
+                    .media_wait
+                    .as_ref()
+                    .is_some_and(|wait| wait.failed.is_none());
+            if sent.media_wait.is_some() && !released {
+                return Err(ChatError::Invalid(format!(
+                    "send {send_id} waits for the recipient's server to store its attachment"
+                )));
+            }
+            if !released {
+                return Err(ChatError::Db(format!(
+                    "send {send_id} is pending but has no durable ciphertext"
+                )));
+            }
         }
         let mut content = content.clone();
         if !ephemeral && peer_user != self.session.user() && content.profile_key.is_none() {
@@ -1614,6 +1639,7 @@ impl Engine {
                             content: &content,
                             sender_certificate: &certificate,
                             capability,
+                            created_at: written_at,
                         },
                         &mut summary,
                         rng,
@@ -1635,6 +1661,7 @@ impl Engine {
                             recipient_bundles: &recipient_bundles,
                             sync_bundles: &sync_bundles,
                             content: &content,
+                            created_at: written_at,
                         },
                         &mut summary,
                         rng,
@@ -3288,7 +3315,7 @@ fn profile_key_send_id(peer: &str, profile: &LocalProfile) -> Result<String> {
     use sha2::{Digest, Sha256};
     let version = crate::profile::profile_version(&profile.key)?;
     let mut digest = Sha256::new();
-    digest.update(b"kutup-profile-key-update-v1\0");
+    digest.update(kutup_crypto::labels::CHAT_PROFILE_KEY_UPDATE_V1);
     digest.update(peer.as_bytes());
     digest.update(version.as_bytes());
     digest.update(profile.revision.to_be_bytes());
