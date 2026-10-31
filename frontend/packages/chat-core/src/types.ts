@@ -337,7 +337,31 @@ export interface ChatHistoryEntry {
    * every member's server has it).
    */
   waitingRecipients?: number
+  /**
+   * An attachment message waiting for the recipient's server to store its
+   * copy before it is sent (`waiting`), or not delivered: the recipient's
+   * storage is full, their server refused it, or it didn't store it in time
+   * (docs/plans/federation-outbox.md).
+   */
+  mediaWait?: MediaWaitState
   content: ChatContentView
+}
+
+export type MediaWaitState = 'waiting' | 'storageFull' | 'refused' | 'expired'
+
+/** An attachment send due to ask for its copy now. */
+export interface MediaSendDue {
+  sendId: string
+  peer: string
+  operationId: string
+  descriptor: ChatAttachmentDescriptorV1
+}
+
+/** The waiting attachment sends: those due now, when the next is, and those that just ran out of time. */
+export interface MediaSends {
+  due: MediaSendDue[]
+  nextRetryMs?: number
+  expired: string[]
 }
 
 export interface SendSummary {
@@ -707,6 +731,8 @@ export interface ChatCapabilities {
     suites: number[]
     maximumPlaintextBytes: number
   }
+  /** How long an attachment send waits for the recipient's server to store its copy (seconds). */
+  attachmentSendLifetimeSeconds?: number
   backup?: {
     protocolVersion: number
     suites: number[]
@@ -1051,6 +1077,21 @@ export interface WasmChatClientHandle {
     startedAtMs: string,
   ): Promise<SendSummary>
   mediaDeliveryCapability(peer: string): Promise<string>
+  stageAttachment(
+    sendId: string,
+    peer: string,
+    sentAt: string,
+    descriptor: ChatAttachmentDescriptorV1,
+    expiresAfterSeconds: number | undefined,
+    extras: ChatMessageExtras | null,
+    operationId: string,
+    lifetimeSeconds: number,
+  ): Promise<void>
+  mediaSends(nowMs: number): Promise<MediaSends>
+  deferMediaSend(sendId: string, nowMs: number): Promise<number>
+  failMediaSend(sendId: string, reason: 'storageFull' | 'refused'): Promise<void>
+  releaseMediaSend(sendId: string): Promise<SendSummary>
+  restartMediaSend(sendId: string, lifetimeSeconds: number): Promise<void>
   syncManifest(): Promise<unknown>
   revokeManifestDevice(deviceId: number): Promise<unknown>
   safetyNumber(peer: string): Promise<SafetyNumberV2>

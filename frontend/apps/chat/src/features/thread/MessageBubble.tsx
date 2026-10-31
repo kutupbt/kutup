@@ -270,6 +270,17 @@ export function DeliveryStatus({ view }: { view: MessageView }) {
   // A group message is sent once this account's server has it for every
   // member (Signal's "sent"), even while a member's own server is slow or
   // down; until then it is sending to the rest, never "not sent".
+  // An attachment message waiting for the recipient's server to store its
+  // copy is sending for as long as that takes; it is not "not sent".
+  if (entry.mediaWait === 'waiting') {
+    const label = t('chat.receipts.sendingAttachment')
+    return (
+      <span className="flex items-center opacity-80" title={label} aria-label={label} data-testid="chat-receipt-sending">
+        <Clock className="size-3.5" />
+      </span>
+    )
+  }
+  if (entry.mediaWait) return <MediaNotDelivered sendId={entry.id} reason={entry.mediaWait} />
   if (entry.delivered || entry.waitingRecipients === 0) {
     return (
       <span className="flex items-center opacity-80" title={t('chat.receipts.sent')} aria-label={t('chat.receipts.sent')} data-testid="chat-receipt-sent">
@@ -286,6 +297,47 @@ export function DeliveryStatus({ view }: { view: MessageView }) {
     )
   }
   return <PendingStatus sentAtMs={entry.timestampMs} />
+}
+
+const MEDIA_FAILURE_HINT = {
+  storageFull: 'chat.receipts.mediaStorageFull',
+  refused: 'chat.receipts.mediaRefused',
+  expired: 'chat.receipts.mediaExpired',
+} as const
+
+/** An attachment message the recipient's server didn't store: not delivered, with a retry. */
+function MediaNotDelivered({ sendId, reason }: { sendId: string; reason: keyof typeof MEDIA_FAILURE_HINT }) {
+  const { t } = useTranslation()
+  const { service } = useChat()
+  const [retrying, setRetrying] = useState(false)
+  async function retry() {
+    if (!service || retrying) return
+    setRetrying(true)
+    try {
+      await service.retryAttachmentSend(sendId)
+      await refreshChat()
+    } catch (error) {
+      toast.error(chatErrorMessage(error, t))
+    } finally {
+      setRetrying(false)
+    }
+  }
+  return (
+    <button
+      type="button"
+      onClick={(event) => {
+        event.stopPropagation()
+        void retry()
+      }}
+      className="flex items-center gap-1 rounded-full bg-destructive px-1.5 py-px font-medium text-destructive-foreground hover:bg-destructive/90"
+      title={t(MEDIA_FAILURE_HINT[reason])}
+      data-testid="chat-media-not-delivered"
+      data-reason={reason}
+    >
+      {retrying ? <Loader2 className="size-3.5 animate-spin" /> : <AlertCircle className="size-3.5" />}
+      {t('chat.receipts.notDelivered')}
+    </button>
+  )
 }
 
 /** How long a message may wait to go out before it shows as not sent. */

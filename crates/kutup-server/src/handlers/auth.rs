@@ -591,6 +591,20 @@ pub async fn get_public_settings(
             )
             .map_err(AppError::internal)?,
         ),
+        // Never longer than the origin keeps a settled offer's answer
+        // (`federationRecordDays`): a repeat after that would meet no record
+        // of its operation.
+        attachment_send_lifetime_seconds: Some(
+            crate::site_settings::CHAT_ATTACHMENT_SEND_LIFETIME_SECONDS
+                .load(&state.pool)
+                .await?
+                .min(
+                    crate::site_settings::FEDERATION_RECORD_DAYS
+                        .load(&state.pool)
+                        .await?
+                        .saturating_mul(86_400),
+                ) as u32,
+        ),
         backup: Some(
             kutup_chat_proto::ChatBackupCapabilitiesV1::v1(
                 account_default_quota_bytes,

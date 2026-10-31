@@ -215,6 +215,42 @@ pub struct SentMessage {
     /// as "sending" while above 0, and "sent" at 0.
     #[serde(default)]
     pub waiting_recipients: Option<u32>,
+    /// An attachment message waiting for the recipient's server to store its
+    /// copy (docs/plans/federation-outbox.md, Signal's model): not encrypted
+    /// or sent until then. `None` for every other message, and once sent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub media_wait: Option<MediaWait>,
+}
+
+/// An attachment send's wait for the recipient's server: the operation it
+/// asks for the copy with, how often it asked, and until when.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MediaWait {
+    /// The delivery operation asked again on each try (the origin keeps
+    /// its answer). A new one only when the person retries after a refusal.
+    pub operation_id: String,
+    /// Tries that left it waiting (`queued`, or the server unreachable).
+    pub attempts: u32,
+    /// Not asked again before this moment (milliseconds).
+    pub retry_at_ms: i64,
+    /// Given up after this moment (milliseconds): not delivered.
+    pub deadline_ms: i64,
+    /// Why it was not delivered, once it wasn't; `None` while it waits.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub failed: Option<MediaWaitFailure>,
+}
+
+/// Why an attachment send was not delivered.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum MediaWaitFailure {
+    /// The recipient's storage is full.
+    StorageFull,
+    /// The recipient's server refused the attachment for good.
+    Refused,
+    /// The recipient's server didn't store it within the wait's lifetime.
+    Expired,
 }
 
 /// Durable state of a raw inbound mailbox envelope. Ciphertext is journaled
@@ -625,6 +661,9 @@ pub struct Pending {
     /// First-seen identity pins waiting for their delayed write, as JSON
     /// (peer → due ms), so a reload doesn't lose them.
     pub(crate) pins_due: Option<Vec<u8>>,
+    /// The send ids of attachment messages waiting for the recipient's
+    /// server ([`MediaWait`]), as JSON: replaced whole.
+    pub(crate) media_waits: Option<Vec<u8>>,
     /// The account's own group send endorsement as its server issued it, as
     /// JSON (`group_endorse::OwnEndorsement`): every group gets it from here.
     pub(crate) group_send_endorsement: Option<Vec<u8>>,
@@ -671,6 +710,7 @@ impl Pending {
             && self.last_sent_seq.is_none()
             && !self.contact_list_followed
             && self.pins_due.is_none()
+            && self.media_waits.is_none()
             && self.group_send_endorsement.is_none()
     }
 
@@ -727,6 +767,8 @@ pub trait ChatDb {
     async fn load_contact_list_followed(&self) -> Result<bool>;
     /// The first-seen identity pins waiting for their write (JSON), if any.
     async fn load_pins_due(&self) -> Result<Option<Vec<u8>>>;
+    /// The waiting attachment sends' ids (JSON), if any.
+    async fn load_media_waits(&self) -> Result<Option<Vec<u8>>>;
     /// The account's own group send endorsement (`Pending::group_send_endorsement`).
     async fn load_group_send_endorsement(&self) -> Result<Option<Vec<u8>>>;
     /// Every persisted inbound message (oldest first, by cursor) — the local history.

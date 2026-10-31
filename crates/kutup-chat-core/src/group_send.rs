@@ -648,6 +648,7 @@ impl Engine {
                     deduplicated: false,
                     failed_recipients: 0,
                     waiting_recipients: Some(u32::try_from(legs.len()).unwrap_or(u32::MAX)),
+                    media_wait: None,
                 },
             );
         }

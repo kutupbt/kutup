@@ -1474,6 +1474,14 @@ pub async fn enqueue_send(
                 return Ok(FederatedSendOutcome::Mismatch(stored_mismatch(row.answer)?));
             }
             // Corrected after a mismatch: again, under the next sequence.
+            // Answered long ago, its record gone at the destination: not
+            // known to be delivered.
+            ("rejected", Some("record_gone")) => {
+                tx.rollback().await?;
+                return Ok(FederatedSendOutcome::Rejected(
+                    FederationDeliveryRejection::RecipientUnavailable,
+                ));
+            }
             ("rejected", Some("device_mismatch")) => {
                 requeue_plain(&mut tx, row.id, destination, &request_value).await?;
             }
@@ -1673,6 +1681,24 @@ async fn attempt_outbox(state: &AppState, id: Uuid) -> AppResult<FederatedSendOu
                 deduplicated: delivered.deduplicated,
             }),
         };
+    }
+
+    // The destination answered this sequence long ago and pruned its record
+    // (`federationRecordDays`): final, and not known to be delivered.
+    if status == StatusCode::GONE {
+        let answer = serde_json::from_slice::<Value>(&response_body).unwrap_or(Value::Null);
+        federation_outbox::settle(
+            &state.pool,
+            row.id,
+            Some(row.sequence),
+            false,
+            Some("record_gone"),
+            &answer,
+        )
+        .await?;
+        return Ok(FederatedSendOutcome::Rejected(
+            FederationDeliveryRejection::RecipientUnavailable,
+        ));
     }
 
     // A server on another plain chat wire version refuses ours (version 2
@@ -2244,6 +2270,7 @@ async fn record_sealed_answer(
         origin,
         sequence,
         Some(&send_id.to_string()),
+        None,
         answer.status.as_u16(),
         &answer.body,
     )
@@ -2299,6 +2326,24 @@ async fn apply_sealed_one(
                 status,
                 body: prior.answer,
             },
+            Vec::new(),
+        ));
+    }
+    if sequence <= last_sequence {
+        // Answered, and its record pruned (`federationRecordDays`): the mark
+        // proves the sequence was used up, but not how it was answered. Never
+        // a success for an unknown outcome: a final refusal naming the
+        // sequence, which the origin settles as refused (not delivered).
+        tx.rollback().await?;
+        return Ok((
+            SealedAnswer::json(
+                StatusCode::BAD_REQUEST,
+                &serde_json::json!({
+                    "error": "this send was answered and its record is gone",
+                    "code": "recordGone",
+                    "refused": { "sequence": sequence },
+                }),
+            )?,
             Vec::new(),
         ));
     }
@@ -2717,19 +2762,18 @@ pub async fn deliver_messages(
                 return signed_json(federation, &authenticated, status, &prior.answer);
             }
         } else {
-            // The replay record may expire before the origin's outbox record.
-            // The contiguous high-water mark proves this sequence was already
-            // consumed, so acknowledge it without attempting old ciphertext.
+            // Answered, and its record pruned (`federationRecordDays`): the
+            // mark proves the sequence was used up, but not how it was
+            // answered. Never a success for an unknown outcome: 410, which
+            // the origin settles as not delivered.
             return signed_json(
                 federation,
                 &authenticated,
-                StatusCode::OK,
-                &FederationDeliveryResponse {
-                    stored: 0,
-                    deduplicated: true,
-                    accepted_sequence: transaction.sequence,
-                    rejection: None,
-                },
+                StatusCode::GONE,
+                &serde_json::json!({
+                    "error": "this send was answered and its record is gone",
+                    "code": "recordGone",
+                }),
             );
         }
         return signed_json(
@@ -2807,6 +2851,7 @@ pub async fn deliver_messages(
             &transaction.origin,
             sequence,
             Some(&transaction.transaction_id),
+            None,
             StatusCode::CONFLICT.as_u16(),
             &value,
         )
@@ -2950,6 +2995,7 @@ async fn refuse_sealed(
             origin,
             sequence,
             Some(&send_id.to_string()),
+            None,
             StatusCode::BAD_REQUEST.as_u16(),
             &final_value,
         )
@@ -3002,6 +3048,7 @@ async fn record_inbound_response(
         &transaction.origin,
         sequence,
         Some(&transaction.transaction_id),
+        None,
         StatusCode::OK.as_u16(),
         &response_value,
     )
