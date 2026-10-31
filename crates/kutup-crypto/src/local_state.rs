@@ -26,8 +26,9 @@ use crate::error::{CryptoError, Result};
 use crate::primitives::{Aead, Kdf, Suite};
 use zeroize::Zeroizing;
 
-const MANIFEST_PINS_KEY_SALT: &[u8] = b"kutup/manifest-pins/v1\0";
-const MANIFEST_PINS_KEY_INFO: &[u8] = b"kutup/manifest-pins/key/v1\0";
+use crate::labels::{
+    MANIFEST_PINS_KEY_V1 as MANIFEST_PINS_KEY_INFO, MANIFEST_PINS_V1 as MANIFEST_PINS_KEY_SALT,
+};
 
 /// The key `ManifestPins` envelopes are sealed under, derived from the
 /// account's master key.

@@ -425,6 +425,13 @@ pub const MAIL_SEARCH_WRAP_KEY_V1: &[u8] = b"kutup/mail-search/wrap-key/v1\0";
 /// `kutup-crypto/src/mail_search.rs` (`ACCOUNT_SALT`)
 pub const MAIL_SEARCH_WRAP_V1: &[u8] = b"kutup/mail-search/wrap/v1\0";
 
+// --- manifest-pins -----------------------------------------------------------
+
+/// `kutup-crypto/src/local_state.rs` (`manifest_pins_key`, the HKDF info)
+pub const MANIFEST_PINS_KEY_V1: &[u8] = b"kutup/manifest-pins/key/v1\0";
+/// `kutup-crypto/src/local_state.rs` (`manifest_pins_key`, the HKDF salt)
+pub const MANIFEST_PINS_V1: &[u8] = b"kutup/manifest-pins/v1\0";
+
 // --- multi-ip-bytes ----------------------------------------------------------
 
 /// `kutup-server/src/handlers/chat.rs`
@@ -562,7 +569,9 @@ pub const FEDERATION_REPLAY_V1: &[u8] = b"kutup/federation/replay/v1\0";
 /// `kutup-federation-proto/src/http_signatures.rs` (was `kutup-federation-request-replay-hash-v1`)
 pub const FEDERATION_REQUEST_REPLAY_HASH_V1: &[u8] = b"kutup/federation/request-replay-hash/v1\0";
 /// Every label, for the registry's own checks.
-pub const ALL: [&[u8]; 180] = [
+pub const ALL: [&[u8]; 182] = [
+    MANIFEST_PINS_KEY_V1,
+    MANIFEST_PINS_V1,
     TWO_FACTOR_RECOVERY_CODE_V1,
     ACCOUNT_ENVELOPE_KEY_V2,
     ACCOUNT_ENVELOPE_V2,
