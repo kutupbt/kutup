@@ -47,3 +47,4 @@ crates/kutup-server/src/storage.rs	"kutup-static	S3 credential provider name
 crates/kutup-server/src/telemetry.rs	"kutup-server	OpenTelemetry names
 crates/kutup-server/src/telemetry.rs	"kutup-server.chat-security	OpenTelemetry names
 crates/kutup-server/src/web_push.rs	"kutup-chat	Web Push Topic header
+crates/kutup-crypto/src/provisioning.rs	b"Kutup Provisioning Message v1	Signal provisioning cipher info (an adapter: Signal fixes the construction)

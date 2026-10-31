@@ -21,7 +21,7 @@ use crate::AppState;
 
 /// The label the code key is derived under, apart from every other use of
 /// `MAIL_FORWARDING_KEYS`.
-const CODE_KEY_LABEL: &[u8] = b"kutup mail forwarding code v1";
+const CODE_KEY_LABEL: &[u8] = kutup_crypto::labels::MAIL_FORWARDING_CODE_KEY_V1;
 
 /// Codes a forwarding may send in a minute (`forwarding_code_resends`).
 static RESENDS: std::sync::LazyLock<RateLimiter> =
@@ -68,7 +68,7 @@ pub fn matches(
 }
 
 /// The label an outside forwarding's stop link is derived under.
-const STOP_LABEL: &[u8] = b"kutup mail forwarding stop v1";
+const STOP_LABEL: &[u8] = kutup_crypto::labels::MAIL_FORWARDING_STOP_V1;
 
 /// An outside forwarding's stop link token and the hash it is found by
 /// (`confirmation_hash`): derived from the current forwarding key, so every

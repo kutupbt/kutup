@@ -4,8 +4,10 @@
 # §3). This refuses any string or byte-string literal starting `kutup/` or
 # `kutup-` (`"…`, `b"…`, `br"…`, `br#"…`) outside a comment in a crate's
 # source, unless scripts/check-labels.allow names that file and literal as
-# a non-label (a header, path, name or test fixture). An allow-list entry
-# that no longer matches anything fails too, so the list stays exact.
+# a non-label (a header, path, name or test fixture). Byte strings are
+# checked in every spelling (`b"kutup mail …`, `b"Kutup …`), since a byte
+# string is almost always key material's label. An allow-list entry that no
+# longer matches anything fails too, so the list stays exact.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
@@ -17,7 +19,7 @@ hits="$(
         /^[[:space:]]*\/\// { next }
         {
           rest = $0
-          while (match(rest, /(br?#?)?"kutup[\/-][a-z0-9\/:.=_-]*/)) {
+          while (match(rest, /br?#?"[Kk]utup[ \/._-][A-Za-z0-9 \/:.=_-]*|"kutup[\/-][a-z0-9\/:.=_-]*/)) {
             print FILENAME "\t" substr(rest, RSTART, RLENGTH) "\t" FNR
             rest = substr(rest, RSTART + RLENGTH)
           }

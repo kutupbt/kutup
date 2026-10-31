@@ -389,6 +389,10 @@ pub const MAIL_ADDRESS_KEY_V1: &[u8] = b"kutup/mail-address-key/v1\0";
 
 /// `kutup-server/src/mail/forwarding.rs` (`MARKER_DOMAIN`)
 pub const MAIL_FORWARDING_MARKER_V1: &[u8] = b"kutup/mail-forwarding/marker/v1\0";
+/// `kutup-server/src/mail/forwarding_code.rs` (`code_key`; was `kutup mail forwarding code v1`)
+pub const MAIL_FORWARDING_CODE_KEY_V1: &[u8] = b"kutup/mail-forwarding/code-key/v1\0";
+/// `kutup-server/src/mail/forwarding_code.rs` (`stop_token`; was `kutup mail forwarding stop v1`)
+pub const MAIL_FORWARDING_STOP_V1: &[u8] = b"kutup/mail-forwarding/stop/v1\0";
 /// `kutup-crypto/src/mail_forwarding.rs` (`SEAL_DOMAIN`)
 pub const MAIL_FORWARDING_PROXY_PARAMETER_V1: &[u8] = b"kutup/mail-forwarding/proxy-parameter/v1\0";
 /// `kutup-server/src/mail/forwarding.rs` (`RETURN_PATH_DOMAIN`)
@@ -600,7 +604,9 @@ pub const FEDERATION_REQUEST_REPLAY_HASH_V1: &[u8] = b"kutup/federation/request-
 pub const FEDERATION_SIGNATURE_TAG: &str = "kutup-federation-v2";
 
 /// Every label, for the registry's own checks.
-pub const ALL: [&[u8]; 186] = [
+pub const ALL: [&[u8]; 188] = [
+    MAIL_FORWARDING_CODE_KEY_V1,
+    MAIL_FORWARDING_STOP_V1,
     CALLS_TURN_PSEUDONYM_V1,
     CHAT_ATTACHMENT_LEDGER_LOCAL_PIN_V1,
     CHAT_ATTACHMENT_LEDGER_OPERATION_V1,
