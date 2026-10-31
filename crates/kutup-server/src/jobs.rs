@@ -1435,9 +1435,9 @@ mod tests {
         let member = uuid::Uuid::new_v4();
         sqlx::query(
             "INSERT INTO users (id, username, master_key_envelope, recovery_key_envelope,
-                drive_private_key_envelope, public_key, account_authority_public_key,
+                public_key, account_authority_public_key,
                 account_authority_key_id, account_incarnation_id, drive_signing_public_key)
-             VALUES ($1, $2, '', '', '', '', '', '', '', '')",
+             VALUES ($1, $2, '', '', '', '', '', '', '')",
         )
         .bind(member)
         .bind(format!("member{}", &tag[..12]))
