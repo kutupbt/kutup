@@ -203,6 +203,10 @@ function OfficeEditorBase(
   // The collaboration log up to here is in the document (the version it
   // opened from, then every frame applied since, the editor's own included).
   const lastSeenSeqRef = useRef<number>(base?.seq ?? 0)
+  // A frame held back as unverified: the log position stays put, so no save
+  // records a position past it and the server never trims it. Office applies
+  // operations in order, so it is checked again by reopening, not by replay.
+  const heldRef = useRef(false)
   const baseRef = useRef<SessionBase>(base ?? { versionId: null, seq: 0 })
   const resetBaseRef = useRef(resetBase)
   // Per-tab sender_seq partition — see randomSenderSeqPrefix doc in
@@ -437,9 +441,15 @@ function OfficeEditorBase(
     const senders = new SenderCheck({
       authority: accountAuthorityVerdict,
       name: accountNameOfKey,
-      onRefused: ({ name, reason }) =>
-        toast.error(t(reason === 'reset' ? 'editor.senderReset' : 'editor.senderUnverified', { name })),
+      onRefused: ({ name, reason, trust }) =>
+        toast.error(t(reason === 'reset' ? 'editor.senderReset' : 'editor.senderUnverified', { name }), {
+          // A reset the identity pins don't know: the person may trust it here.
+          action: trust ? { label: t('editor.senderTrust'), onClick: () => void trust() } : undefined,
+        }),
     })
+
+    // A sender trusted again: reopen, so what was held is checked again.
+    senders.whenTrusted(() => onOutdatedRef.current?.())
 
     void (async () => {
       // 1. This sign-in's collaboration device.
@@ -502,6 +512,7 @@ function OfficeEditorBase(
           }
         },
         onPosition: (message: PositionMsg) => {
+          if (heldRef.current) return
           if (message.type === 'stored') {
             lastSeenSeqRef.current = Math.max(lastSeenSeqRef.current, message.seq)
           } else {
@@ -528,7 +539,9 @@ function OfficeEditorBase(
           forwardPeers(p.list, p.ts)
         },
         onFrame: async (bs: Uint8Array, { live }) => {
-          if (!(await senders.verify(bs, live))) return
+          const verdict = await senders.verify(bs, live)
+          if (verdict === 'unverified') heldRef.current = true
+          if (verdict !== 'take') return
           try {
             const f = await openCollabFrame(bs, fileKey, {
               fileId,

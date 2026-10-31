@@ -118,13 +118,23 @@ fn a_logged_frame_counts_under_the_manifest_it_names() {
     );
     let mut sender = SenderManifests::new(account(), None);
     sender.take_head(manifests[3].clone(), &[], false).unwrap();
-    // The removed holder's past edit: fetch manifest 2, then it counts.
+    // A logged frame of a device the head lists with that key: no fetch.
+    assert_eq!(sender.check(&frame(1, 2, 1), false), SenderVerdict::Take);
+    // The removed holder's past edit: fetch 2 through 3 (up to the head),
+    // then it counts.
     let old = frame(2, 2, 2);
     assert_eq!(
         sender.check(&old, false),
-        SenderVerdict::NeedManifest { sequence: 2 }
+        SenderVerdict::NeedManifest {
+            sequence: 2,
+            through: 3
+        }
     );
-    sender.take_entry(manifests[1].clone()).unwrap();
+    // Not linked up to the head: refused.
+    assert!(sender.take_history(&[manifests[1].clone()]).is_err());
+    sender
+        .take_history(&[manifests[2].clone(), manifests[1].clone()])
+        .unwrap();
     assert_eq!(sender.check(&old, false), SenderVerdict::Take);
     // Live, the id is the new holder's: the old key no longer counts.
     assert!(matches!(
@@ -132,14 +142,58 @@ fn a_logged_frame_counts_under_the_manifest_it_names() {
         SenderVerdict::Refuse { .. }
     ));
     assert_eq!(sender.check(&frame(2, 4, 22), true), SenderVerdict::Take);
-    // An entry must be of the pinned chain: not later than the pin, not
-    // another account's authority, not altered.
-    let mut altered = manifests[1].clone();
+    // Held, and not listing it so: refused without a fetch.
+    assert!(matches!(
+        sender.check(&frame(3, 2, 3), false),
+        SenderVerdict::Refuse { .. }
+    ));
+    // History must be the chain's: not altered, not another authority's.
+    let mut fresh = SenderManifests::new(account(), None);
+    fresh.take_head(manifests[3].clone(), &[], false).unwrap();
+    let mut altered = manifests[2].clone();
     altered.devices.push(editor(5, 5));
-    assert!(sender.take_entry(altered).is_err());
+    assert!(fresh.take_history(&[altered]).is_err());
     let other = AccountIdentityKeysV1::derive(&[6; 32]).unwrap();
-    let theirs = chain(&other, &[vec![editor(1, 1)]]);
-    assert!(sender.take_entry(theirs[0].clone()).is_err());
+    let theirs = chain(
+        &other,
+        &[vec![editor(1, 1)], vec![editor(1, 1)], vec![editor(1, 1)]],
+    );
+    assert!(fresh.take_history(&[theirs[2].clone()]).is_err());
+}
+
+/// A manifest the account's authority signed at a sequence but the chain
+/// never held (a concurrent publish the server didn't take) is no history.
+#[test]
+fn a_signed_manifest_off_the_chain_is_no_history() {
+    let keys = keys();
+    let manifests = chain(
+        &keys,
+        &[
+            vec![editor(1, 1)],
+            vec![editor(1, 1), editor(2, 2)],
+            vec![editor(1, 1)],
+        ],
+    );
+    // Signed at 2 too, listing a device the chain never had.
+    let mut fork = manifests[0]
+        .successor(vec![editor(1, 1), editor(7, 7)], "2026-10-27T00:05:00Z")
+        .unwrap();
+    fork.sign(keys.authority_signing_key()).unwrap();
+    let mut sender = SenderManifests::new(account(), None);
+    sender.take_head(manifests[2].clone(), &[], false).unwrap();
+    assert_eq!(
+        sender.check(&frame(7, 2, 7), false),
+        SenderVerdict::NeedManifest {
+            sequence: 2,
+            through: 2
+        }
+    );
+    assert!(sender.take_history(&[fork]).is_err());
+    sender.take_history(&[manifests[1].clone()]).unwrap();
+    assert!(matches!(
+        sender.check(&frame(7, 2, 7), false),
+        SenderVerdict::Refuse { .. }
+    ));
 }
 
 #[test]

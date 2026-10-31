@@ -82,7 +82,7 @@ export async function checkOwnManifestHead(
 export type SenderVerdict =
   | { kind: 'take' }
   | { kind: 'needHead' }
-  | { kind: 'needManifest'; sequence: number }
+  | { kind: 'needManifest'; sequence: number; through: number }
   | { kind: 'refuse'; reason: string }
 
 /**
@@ -93,8 +93,8 @@ export type SenderVerdict =
 export interface CollabSenderHandle {
   /** Takes the head with the manifests after the pin up to it; throws on one that doesn't follow the pin. */
   takeHead(head: AccountManifest, history: AccountManifest[] | null, newIncarnation: boolean): void
-  /** Takes an earlier manifest of the account, for logged frames. */
-  takeEntry(manifest: AccountManifest): void
+  /** Takes earlier manifests, for logged frames: the run a `needManifest` asked for, linked up to the head. */
+  takeHistory(run: AccountManifest[]): void
   /** What to do with a frame as the server delivers it (`live`: during editing; otherwise from the log). */
   check(delivered: Uint8Array, live: boolean): SenderVerdict
   /** The pin to keep for the account. */

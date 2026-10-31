@@ -32,8 +32,9 @@ pub enum SenderVerdict {
     Take,
     /// Read the account's head (and the history up to it), then check again.
     NeedHead,
-    /// Read the account's manifest at `sequence`, then check again.
-    NeedManifest { sequence: u64 },
+    /// Read the account's manifests from `sequence` through `through` (the
+    /// run up to one already linked to the head), then check again.
+    NeedManifest { sequence: u64, through: u64 },
     /// Drop it: its sender didn't sign it with a listed device's key.
     Refuse { reason: String },
 }
@@ -47,7 +48,9 @@ pub struct SenderManifests {
     pub pin: Option<AccountManifestPinV1>,
     /// The head, when read in this session.
     pub head: Option<AccountManifestV3>,
-    /// Earlier manifests, for logged frames, by sequence.
+    /// Earlier manifests, for logged frames, by sequence: each linked by
+    /// `previous_hash` to the one after it, up to the head, so the server
+    /// can't pass off a manifest the account's chain never held.
     #[serde(default)]
     pub entries: Vec<AccountManifestV3>,
 }
@@ -146,23 +149,49 @@ impl SenderManifests {
         Ok(())
     }
 
-    /// Takes `manifest`, an earlier manifest of the account (for logged
-    /// frames): it must verify, name the pinned account and incarnation, and
-    /// be no later than the pin (the pinned one itself at its sequence).
-    pub fn take_entry(&mut self, manifest: AccountManifestV3) -> Result<(), String> {
-        manifest.verify()?;
-        let Some(pin) = &self.pin else {
+    /// The lowest manifest kept (an entry or the head) above `sequence`: the
+    /// one a run fetched for `sequence` must link up to.
+    fn linked_above(&self, sequence: u64) -> Option<&AccountManifestV3> {
+        self.entries
+            .iter()
+            .chain(self.head.iter())
+            .filter(|m| m.sequence > sequence)
+            .min_by_key(|m| m.sequence)
+    }
+
+    /// Takes `run`, earlier manifests of the account (for logged frames), as
+    /// [`SenderVerdict::NeedManifest`] asked for them: a contiguous run (any
+    /// order) whose links verify by `previous_hash`, the last one's up to the
+    /// lowest manifest kept above it. So each is a manifest of the chain that
+    /// reached the head, not one the account signed and the server never
+    /// took.
+    pub fn take_history(&mut self, run: &[AccountManifestV3]) -> Result<(), String> {
+        let mut run: Vec<&AccountManifestV3> = run.iter().collect();
+        run.sort_by_key(|m| m.sequence);
+        run.dedup_by_key(|m| m.sequence);
+        let Some(last) = run.last() else {
+            return Err("no manifests to take".into());
+        };
+        let Some(above) = self.linked_above(last.sequence) else {
             return Err("no head of the account yet".into());
         };
-        if manifest.account != self.account || manifest.incarnation_id != pin.incarnation_id {
-            return Err("the manifest names another account or incarnation".into());
+        let (mut sequence, mut hash) = (above.sequence, above.previous_hash.clone());
+        let incarnation = above.incarnation_id.clone();
+        for manifest in run.iter().rev() {
+            manifest.verify()?;
+            if manifest.account != self.account
+                || manifest.incarnation_id != incarnation
+                || manifest.sequence + 1 != sequence
+                || Some(manifest.manifest_hash()?) != hash
+            {
+                return Err("the manifests don't link to the account's chain".into());
+            }
+            sequence = manifest.sequence;
+            hash = manifest.previous_hash.clone();
         }
-        if manifest.sequence > pin.sequence
-            || (manifest.sequence == pin.sequence && manifest.manifest_hash()? != pin.hash)
-        {
-            return Err("the manifest is not of the pinned chain".into());
+        for manifest in run {
+            self.keep(manifest.clone());
         }
-        self.keep(manifest);
         Ok(())
     }
 
@@ -192,33 +221,44 @@ impl SenderManifests {
         if frame.manifest_sequence == 0 {
             return refuse("the frame names no manifest");
         }
-        let manifest = if live || frame.manifest_sequence == head.sequence {
-            head
-        } else {
-            match self
-                .entries
-                .iter()
-                .find(|m| m.sequence == frame.manifest_sequence)
-            {
-                Some(manifest) => manifest,
-                None => {
-                    return SenderVerdict::NeedManifest {
-                        sequence: frame.manifest_sequence,
-                    }
-                }
-            }
+        let signed_under = |manifest: &AccountManifestV3| {
+            manifest
+                .device(frame.device_id)
+                .and_then(|device| device.frame_key.as_deref())
+                .and_then(|key| crate::decode_frame_key(key).ok())
+                .is_some_and(|key| envelope::verify(raw, &self.account, &key).is_ok())
         };
-        let Some(key) = manifest
-            .device(frame.device_id)
-            .and_then(|device| device.frame_key.as_deref())
-            .and_then(|key| crate::decode_frame_key(key).ok())
-        else {
-            return refuse("the sender's manifest doesn't list the frame's device");
-        };
-        if envelope::verify(raw, &self.account, &key).is_err() {
-            return refuse("the frame isn't signed with the listed device's key");
+        if live {
+            // Live: only the head counts (a removed device stops at once).
+            return if signed_under(head) {
+                SenderVerdict::Take
+            } else {
+                refuse("the sender's head doesn't list the frame's device with its key")
+            };
         }
-        SenderVerdict::Take
+        // From the log: a manifest held that lists the device with the key
+        // that signed the frame says the device held that key (only it signs
+        // with it), so nothing needs fetching.
+        if signed_under(head) || self.entries.iter().any(signed_under) {
+            return SenderVerdict::Take;
+        }
+        // The manifest it names is held, and doesn't list it so.
+        if self
+            .entries
+            .iter()
+            .chain(std::iter::once(head))
+            .any(|m| m.sequence == frame.manifest_sequence)
+        {
+            return refuse("the manifest the frame names doesn't list its device with its key");
+        }
+        let through = self
+            .linked_above(frame.manifest_sequence)
+            .map_or(head.sequence, |m| m.sequence)
+            - 1;
+        SenderVerdict::NeedManifest {
+            sequence: frame.manifest_sequence,
+            through,
+        }
     }
 }
 

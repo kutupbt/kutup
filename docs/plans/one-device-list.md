@@ -498,7 +498,13 @@ apply a frame the sender's devices didn't sign.
    `manifestSequence` names, from `manifest-history`, fetched once per
    sender and sequence. That manifest must verify, be no later than the
    pin, name the pinned account and incarnation, and list the device with
-   the signing key.
+   the signing key. It must also link to the pinned chain: `take_history`
+   walks its `previous_hash` links up to the lowest manifest the client
+   already holds above it (`NeedManifest { sequence, through }` asks for
+   the gap), so a fork that verifies under the authority but isn't the
+   pinned chain is refused as history too. A logged frame is taken at once,
+   with no fetch, when any manifest the client already holds lists its
+   device with its signing key.
 5. **A reset account.** The account's identity pin (the synced list Drive
    and Mail use, docs/plans/drive-identity-pins.md) names another authority
    than the sender's head: `changed`. Then the sender's frames are refused,
@@ -507,9 +513,36 @@ apply a frame the sender's devices didn't sign.
    incarnation. This matches Chat's quarantine and the share's incarnation
    binding. An account the list doesn't know is trusted on first use, as in
    item 2.
-6. **Refused frames** are dropped, never applied. The editor shows that
-   once per session and sender ("Some edits from <name> couldn't be
-   verified"). The CLI prints a warning and `sync` exits non-zero.
+6. **Three answers, not two.** A frame is taken, forged, or unverified:
+   - **forged**: the sender's devices didn't sign it (an unlisted device,
+     another key, a broken signature). Dropped, never applied. The editor
+     shows that once per session and sender ("Some edits from <name>
+     couldn't be verified and weren't applied"). The CLI skips it, counts
+     it, and `sync` exits non-zero.
+   - **unverified**: it can't be checked now (the server can't be read, the
+     read budget is spent, the history isn't there yet). It is never
+     applied and never trimmed: the web session's log position
+     (`LogPosition`) stops at the first unverified frame for the rest of the
+     connection, so no saved version records a position past it and the
+     server keeps it. The session resyncs after a minute, and when the
+     sender is trusted. Office holds its position the same way and reopens
+     when trusted; the whiteboard applies only what is taken. The CLI fails
+     that file's sync (an error, not a skip), so the next run reads it again.
+   - **A read budget** keeps a home from making a client read without end:
+     at most 2 reads per frame and 20 per sender per minute, and a failed
+     read is remembered for a minute. No sleeps: past the budget a frame is
+     unverified.
+7. **Trust after a reset.** When the identity pins don't know the sender's
+   account but the manifest pin names another incarnation, the answer is
+   reset with a way out: the editor's notice has "Trust their new account"
+   (en and tr; the editors and Maps), which forgets the manifest pin and
+   resyncs every session waiting on that sender. The CLI's errors name
+   `kutup devices forget-pin --sender <account>` or `kutup identity trust
+   <their address>`.
+8. **Pins** are forward-only within an incarnation (an entry `supersedes`
+   the one before), merged with the sealed copy on every write (so tabs
+   don't undo each other), parsed one entry at a time, and the plain pins
+   of #365 are deleted only after the sealed ones are written.
 
 **What slice 3 covers and what it doesn't.**
 - Covered: a home (or anyone between) can't have a client apply a frame
@@ -543,6 +576,18 @@ Tests:
   drops it and names the sender once, while the edit stays in the log from
   its real sender. A removed device's old frame injected into the log
   (planned at first) is history by design (item 4), so it proves nothing.
+  Two more cases with a second account: a frame relayed under a device the
+  sender's account doesn't list, and the second account's genuinely signed
+  frame relabelled as the first's. Both are refused and said, and the
+  genuine edits around them still arrive.
+- Two-server (`chat_federation_live`, the remote editor case): a federated
+  editor's frame signed by another key, and one from a device its account
+  doesn't list, are never kept by the home, though the editor's own server
+  relays them.
+- Rust, CLI and vitest: forged (unlisted device, other key), an unreadable
+  server (the CLI fails the file, not the sender), a reset with its way
+  out, the cheap path, linked history (a fork refused), and the session
+  holding its position at an unverified frame.
 - Browser: spec 04 and the collab suites stay green.
 
 As built:
@@ -559,3 +604,7 @@ As built:
   Maps' background list writes (quietly).
 - The CLI's `sync` checks every logged frame (`crate::senders`), keeping
   other accounts' pins in its profile store under `sender:<account>`.
+- After review (#370): the three answers, holding (`LogPosition`, Office's
+  held position), the read budget and failure cache, trust after a reset
+  (`forgetManifestPin`, `kutup devices forget-pin`), linked history
+  (`take_history`), and the pins' merge rules (items 4, 6, 7 and 8).

@@ -3246,7 +3246,9 @@ fn federated_user(
 /// `remoteManifestMaxAgeSeconds`: once its cached head of the editor's
 /// account is that old, the home reads the head again before it takes a
 /// frame. The head hasn't changed, so the device still counts and its frames
-/// are kept (a frame on a refreshed, unchanged head is never dropped).
+/// are kept (a frame on a refreshed, unchanged head is never dropped). A
+/// frame the editor's account didn't sign (another key, or a device it
+/// doesn't list) is never kept, though the editor's own server relays it.
 fn remote_editor_past_max_age(c: &Client, a: &str, b: &str, admin_a: &str) {
     use futures_util::{SinkExt, StreamExt};
     use kutup_crypto::envelope::{self, kind, CollabFrameContextV3, Frame};
@@ -3312,27 +3314,23 @@ fn remote_editor_past_max_age(c: &Client, a: &str, b: &str, admin_a: &str) {
     };
     set_max_age(Some(60));
 
-    let frame = |sequence: u64| {
+    // A frame of Bob's, as `device_id` and signed with `seed`.
+    let frame = |sequence: u64, device_id: u32, seed: &[u8; 32]| {
         let context = CollabFrameContextV3::new(
             kind::YJS_UPDATE,
             1,
             1,
             &file.id,
-            device.id,
+            device_id,
             device.manifest_sequence,
             sequence,
         )
         .unwrap();
         let packed = envelope::seal_unsigned(b"an edit from B", &file.key, context).unwrap();
-        envelope::sign(
-            &Frame::unpack(&packed).unwrap(),
-            &device.account,
-            &device.seed,
-        )
-        .unwrap()
+        envelope::sign(&Frame::unpack(&packed).unwrap(), &device.account, seed).unwrap()
     };
     // One frame through B's bridge; true once A kept it (`stored`).
-    let kept = |sequence: u64| {
+    let kept = |bytes: Vec<u8>| {
         let ticket = json_response(
             c.post(format!("{b}/api/device-ticket"))
                 .bearer_auth(&bob.token)
@@ -3346,7 +3344,6 @@ fn remote_editor_past_max_age(c: &Client, a: &str, b: &str, admin_a: &str) {
             b.replacen("http", "ws", 1),
             ticket["ticket"].as_str().unwrap()
         );
-        let bytes = frame(sequence);
         tokio::runtime::Runtime::new()
             .unwrap()
             .block_on(async move {
@@ -3365,11 +3362,26 @@ fn remote_editor_past_max_age(c: &Client, a: &str, b: &str, admin_a: &str) {
                 }
             })
     };
-    assert!(kept(1), "the first frame from B is kept");
+    assert!(
+        kept(frame(1, device.id, &device.seed)),
+        "the first frame from B is kept"
+    );
+    // Forged: a valid signature by a key Bob's account doesn't list, and a
+    // device it doesn't list. Neither is kept.
+    let other_key = [0x5a; 32];
+    assert!(
+        !kept(frame(2, device.id, &other_key)),
+        "a frame signed by another key is not kept"
+    );
+    assert!(
+        !kept(frame(3, 4242, &device.seed)),
+        "a frame from a device Bob's account doesn't list is not kept"
+    );
+    println!("FEDERATED FORGED FRAMES ARE NOT KEPT");
     // Past the max age: the home reads the unchanged head again, and the
     // still-listed device's frame is kept.
     std::thread::sleep(Duration::from_secs(61));
-    let after = kept(2);
+    let after = kept(frame(4, device.id, &device.seed));
     set_max_age(None);
     assert!(after, "a listed device's frame is kept past the max age");
 }

@@ -1,17 +1,21 @@
 //! Whether a logged collab frame is its sender's (docs/plans/one-device-list.md
 //! §8, slice 3), as the web editors check it: a frame read from the log
-//! counts only when the manifest it names lists the frame's device with the
-//! key that signed it. The rules are `kutup_chat_proto::SenderManifests`;
-//! this reads what they ask for and keeps the pins in the profile store.
+//! counts only when a manifest of its sender's chain lists the frame's device
+//! with the key that signed it. The rules are
+//! `kutup_chat_proto::SenderManifests`; this reads what they ask for and keeps
+//! the pins in the profile store.
 //!
-//! A sender whose account was reset (the identity pins hold another
-//! authority, not accepted) is refused. Refused frames are skipped and
-//! counted; `kutup sync` warns and exits non-zero when any were.
+//! - A frame proven not its sender's (the manifest is held and doesn't list
+//!   the device with that key) is skipped and counted; `kutup sync` warns and
+//!   exits non-zero when any were.
+//! - A frame that can't be checked now (the server unreadable, the account
+//!   reset) fails that file's sync: nothing of it is written or saved, so no
+//!   save trims the frame away, and the next run checks it again.
 
 use std::collections::{BTreeSet, HashMap};
 
-use anyhow::{anyhow, Result};
-use kutup_chat_proto::{SenderManifests, SenderVerdict};
+use anyhow::{anyhow, bail, Result};
+use kutup_chat_proto::{AccountManifestV3, SenderManifests, SenderVerdict};
 use kutup_crypto::account_ref::AccountRef;
 
 use crate::api::Client;
@@ -31,30 +35,67 @@ pub enum AuthorityVerdict {
 /// Asks the identity pins about `account`'s authority (canonical base64).
 pub type AuthorityCheck<'a> = Box<dyn FnMut(&AccountRef, &str) -> Result<AuthorityVerdict> + 'a>;
 
-/// How often one frame's check may read a head or a manifest.
-const MAX_READS: usize = 3;
-
-struct Sender {
-    manifests: SenderManifests,
-    /// Refused for good this run (a reset, a head that doesn't follow).
-    refused: bool,
+/// Where a sender's manifests come from: the account's server, through this
+/// one (`Client`), or a test's.
+pub trait ManifestSource {
+    fn head(&self, account: &AccountRef) -> Result<Option<AccountManifestV3>>;
+    fn history(&self, account: &AccountRef, from: u64, to: u64) -> Result<Vec<AccountManifestV3>>;
 }
 
+impl ManifestSource for Client {
+    fn head(&self, account: &AccountRef) -> Result<Option<AccountManifestV3>> {
+        self.account_manifest(account)
+    }
+
+    fn history(&self, account: &AccountRef, from: u64, to: u64) -> Result<Vec<AccountManifestV3>> {
+        self.account_manifest_history(account, from, to)
+    }
+}
+
+/// Where a sender's pins are kept: the profile store, or a test's.
+pub trait PinStore {
+    fn sender_pin(
+        &self,
+        account: &AccountRef,
+    ) -> Result<Option<kutup_chat_proto::AccountManifestPinV1>>;
+    fn put_sender_pin(&self, pin: &kutup_chat_proto::AccountManifestPinV1) -> Result<()>;
+}
+
+impl PinStore for Store {
+    fn sender_pin(
+        &self,
+        account: &AccountRef,
+    ) -> Result<Option<kutup_chat_proto::AccountManifestPinV1>> {
+        Store::sender_pin(self, account)
+    }
+
+    fn put_sender_pin(&self, pin: &kutup_chat_proto::AccountManifestPinV1) -> Result<()> {
+        Store::put_sender_pin(self, pin)
+    }
+}
+
+/// Reads one frame's check may make.
+const MAX_READS: usize = 2;
+
 pub struct Senders<'a> {
-    client: &'a Client,
-    store: &'a Store,
+    source: &'a dyn ManifestSource,
+    store: &'a dyn PinStore,
     authority: AuthorityCheck<'a>,
-    senders: HashMap<String, Sender>,
-    /// Senders with a frame refused, for the warning.
+    senders: HashMap<String, SenderManifests>,
+    /// Senders with a frame proven not theirs, for the warning.
     pub refused: BTreeSet<String>,
-    /// Frames refused this run.
+    /// Frames proven not their senders', skipped this run.
     pub refused_frames: usize,
 }
 
 impl<'a> Senders<'a> {
-    pub fn new(client: &'a Client, store: &'a Store, authority: AuthorityCheck<'a>) -> Self {
+    pub fn new(
+        source: &'a dyn ManifestSource,
+        store: &'a dyn PinStore,
+        authority: AuthorityCheck<'a>,
+    ) -> Self {
         Senders {
-            client,
+            source,
             store,
             authority,
             senders: HashMap::new(),
@@ -64,8 +105,9 @@ impl<'a> Senders<'a> {
     }
 
     /// Whether `raw`, a packed frame the log names `sender` for, is that
-    /// sender's: true to apply it. A frame that isn't is counted. Errors
-    /// only when the server can't be read.
+    /// sender's: `Ok(true)` to apply it, `Ok(false)` for one proven not
+    /// (counted). An error when it can't be checked now: the file's sync
+    /// stops there.
     pub fn verify(&mut self, sender: &str, raw: &[u8]) -> Result<bool> {
         let account: AccountRef = sender
             .parse()
@@ -74,92 +116,83 @@ impl<'a> Senders<'a> {
             let pin = self.store.sender_pin(&account)?;
             self.senders.insert(
                 sender.to_owned(),
-                Sender {
-                    manifests: SenderManifests::new(account.clone(), pin),
-                    refused: false,
-                },
+                SenderManifests::new(account.clone(), pin),
             );
         }
-        let mut reads = 0;
-        loop {
-            let entry = self.senders.get(sender).expect("added above");
-            let verdict = if entry.refused {
-                SenderVerdict::Refuse {
-                    reason: "refused".into(),
-                }
-            } else {
-                entry.manifests.check(raw, false)
-            };
+        for reads in 0.. {
+            let verdict = self
+                .senders
+                .get(sender)
+                .expect("added above")
+                .check(raw, false);
             match verdict {
                 SenderVerdict::Take => return Ok(true),
-                SenderVerdict::Refuse { .. } => return Ok(self.refuse(sender)),
-                _ if reads >= MAX_READS => return Ok(self.refuse(sender)),
+                SenderVerdict::Refuse { .. } => {
+                    self.refused.insert(sender.to_owned());
+                    self.refused_frames += 1;
+                    return Ok(false);
+                }
+                _ if reads >= MAX_READS => {
+                    bail!("an edit from {sender} names a manifest its server didn't give; try again later")
+                }
                 SenderVerdict::NeedHead => self.read_head(sender, &account)?,
-                SenderVerdict::NeedManifest { sequence } => {
-                    self.read_entry(sender, &account, sequence)?
+                SenderVerdict::NeedManifest { sequence, through } => {
+                    let run = self.source.history(&account, sequence, through)?;
+                    self.senders
+                        .get_mut(sender)
+                        .expect("added")
+                        .take_history(&run)
+                        .map_err(|error| {
+                            anyhow!("the manifests {sender}'s server gave don't link to its chain: {error}")
+                        })?;
                 }
             }
-            reads += 1;
         }
-    }
-
-    fn refuse(&mut self, sender: &str) -> bool {
-        self.refused.insert(sender.to_owned());
-        self.refused_frames += 1;
-        false
+        unreachable!("the loop returns")
     }
 
     fn read_head(&mut self, sender: &str, account: &AccountRef) -> Result<()> {
-        let Some(head) = self.client.account_manifest(account)? else {
-            self.senders.get_mut(sender).expect("added").refused = true;
-            return Ok(());
-        };
+        let head = self
+            .source
+            .head(account)?
+            .ok_or_else(|| anyhow!("{sender}'s server has no device list for it"))?;
         let verdict = (self.authority)(account, &head.self_authority_key)?;
-        let entry = self.senders.get_mut(sender).expect("added");
+        let manifests = self.senders.get_mut(sender).expect("added");
+        let pin = manifests.pin.clone();
+        let other_incarnation = pin
+            .as_ref()
+            .is_some_and(|pin| pin.incarnation_id != head.incarnation_id);
         if verdict == AuthorityVerdict::Changed {
-            entry.refused = true;
-            return Ok(());
+            bail!(
+                "{sender}'s account was reset: its edits can't be verified until you accept \
+                 its new keys (`kutup identity trust <their address>`) or the file is shared again"
+            );
         }
-        let pin = entry.manifests.pin.clone();
+        if verdict == AuthorityVerdict::Unknown && other_incarnation {
+            bail!(
+                "{sender}'s account was reset: if you know it was, trust its new keys with \
+                 `kutup devices forget-pin --sender {sender}`"
+            );
+        }
         // The identity pins hold this authority while the pin is of another
         // incarnation: the user accepted the account's reset.
-        let new_incarnation = verdict == AuthorityVerdict::Pinned
-            && pin
-                .as_ref()
-                .is_some_and(|pin| pin.incarnation_id != head.incarnation_id);
+        let new_incarnation = verdict == AuthorityVerdict::Pinned && other_incarnation;
         let history = match &pin {
             Some(pin) if !new_incarnation && head.sequence > pin.sequence + 1 => self
-                .client
-                .account_manifest_history(account, pin.sequence + 1, head.sequence - 1)?,
+                .source
+                .history(account, pin.sequence + 1, head.sequence - 1)?,
             _ => Vec::new(),
         };
-        let entry = self.senders.get_mut(sender).expect("added");
-        if entry
-            .manifests
+        let manifests = self.senders.get_mut(sender).expect("added");
+        manifests
             .take_head(head, &history, new_incarnation)
-            .is_err()
-        {
-            entry.refused = true;
-            return Ok(());
-        }
-        if let Some(pin) = &entry.manifests.pin {
+            .map_err(|error| anyhow!("{sender}'s device list can't be trusted: {error}"))?;
+        if let Some(pin) = &manifests.pin {
             self.store.put_sender_pin(pin)?;
         }
         Ok(())
     }
-
-    fn read_entry(&mut self, sender: &str, account: &AccountRef, sequence: u64) -> Result<()> {
-        let manifests = self
-            .client
-            .account_manifest_history(account, sequence, sequence)?;
-        let entry = self.senders.get_mut(sender).expect("added");
-        let taken = manifests
-            .into_iter()
-            .find(|m| m.sequence == sequence)
-            .is_some_and(|manifest| entry.manifests.take_entry(manifest).is_ok());
-        if !taken {
-            entry.refused = true;
-        }
-        Ok(())
-    }
 }
+
+#[cfg(test)]
+mod tests;

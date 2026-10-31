@@ -153,8 +153,11 @@ export function useListSession(file: DriveFile | null, readOnly: boolean, folder
           senders: new SenderCheck({
             authority: accountAuthorityVerdict,
             name: accountNameOfKey,
-            onRefused: ({ name, reason }) =>
-              toast.error(t(reason === 'reset' ? 'list.senderReset' : 'list.senderUnverified', { name })),
+            onRefused: ({ name, reason, trust }) =>
+              toast.error(t(reason === 'reset' ? 'list.senderReset' : 'list.senderUnverified', { name }), {
+                // A reset the identity pins don't know: the person may trust it here.
+                action: trust ? { label: t('list.senderTrust'), onClick: () => void trust() } : undefined,
+              }),
           }),
           signal: controller.signal,
         })

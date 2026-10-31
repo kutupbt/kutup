@@ -269,8 +269,11 @@ function WhiteboardEditorBase(
     const senders = new SenderCheck({
       authority: accountAuthorityVerdict,
       name: accountNameOfKey,
-      onRefused: ({ name, reason }) =>
-        toast.error(t(reason === 'reset' ? 'editor.senderReset' : 'editor.senderUnverified', { name })),
+      onRefused: ({ name, reason, trust }) =>
+        toast.error(t(reason === 'reset' ? 'editor.senderReset' : 'editor.senderUnverified', { name }), {
+          // A reset the identity pins don't know: the person may trust it here.
+          action: trust ? { label: t('editor.senderTrust'), onClick: () => void trust() } : undefined,
+        }),
     })
 
     void (async () => {
@@ -310,7 +313,10 @@ function WhiteboardEditorBase(
           }
         },
         onFrame: async (bs: Uint8Array, { live }) => {
-          if (!(await senders.verify(bs, live))) return
+          // A whiteboard op carries whole elements, and the log isn't
+          // trimmed by its saves: a dropped one is overtaken by the sender's
+          // next change of those elements.
+          if ((await senders.verify(bs, live)) !== 'take') return
           try {
             const f = await openCollabFrame(bs, fileKey, {
               fileId,
