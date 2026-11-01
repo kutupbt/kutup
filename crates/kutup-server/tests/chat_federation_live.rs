@@ -3709,7 +3709,8 @@ fn remote_editor_past_max_age(c: &Client, a: &str, b: &str, admin_a: &str) {
         "a frame signed by another key is not kept"
     );
     assert!(
-        !kept(frame(3, 4242, &device.seed)),
+        // A valid device id (1-127) that Bob's account doesn't list.
+        !kept(frame(3, 127, &device.seed)),
         "a frame from a device Bob's account doesn't list is not kept"
     );
     println!("FEDERATED FORGED FRAMES ARE NOT KEPT");

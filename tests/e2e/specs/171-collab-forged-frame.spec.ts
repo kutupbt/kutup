@@ -59,7 +59,8 @@ function frameStart(delivered: Buffer): number {
   return 2 + delivered.readUInt16BE(0) + 16
 }
 
-/** A delivered frame's device id (the packed frame's bytes 36..40). */
+/** A delivered frame's device id (the packed frame's bytes 36..40; valid ids
+ * are 1-127, so an unlisted one must be in range to reach the sender check). */
 const DEVICE_AT = 36
 
 // The other two ways a home can relay a frame its sender didn't sign: under
@@ -130,7 +131,7 @@ test('a frame from an unlisted device, or signed by another account, is refused'
   const unlisted = await relayedBy((delivered, start) => {
     if (!unlist || !alicePrefix || !delivered.subarray(0, start).equals(alicePrefix)) return null
     const forged = Buffer.from(delivered)
-    forged.writeUInt32BE(4242, start + DEVICE_AT)
+    forged.writeUInt32BE(127, start + DEVICE_AT)
     return forged
   })
   // Armed once Bob is in (the notice is a toast: one raised by his joining
@@ -163,10 +164,11 @@ test('a frame from an unlisted device, or signed by another account, is refused'
   await expect(relabelled.getByText(/couldn't be verified and weren't applied/)).toBeVisible({ timeout: 30_000 })
   expect(await noteText(relabelled)).not.toContain(`FROM-B-${tag}`)
 
-  // Alice's own edits, relayed from a device her account doesn't list.
+  // Alice's own edits, relayed from a device her account doesn't list. (The
+  // relabelled tab is left out from here: an edit made after Bob's text
+  // depends on it, so it never applies where his text was refused.)
   await typeAtEnd(a, ` GENUINE-A-${tag}`)
   await expect.poll(() => noteText(unlisted), { timeout: 30_000 }).toContain(`GENUINE-A-${tag}`)
-  await expect.poll(() => noteText(relabelled), { timeout: 30_000 }).toContain(`GENUINE-A-${tag}`)
   unlist = true
   await typeAtEnd(a, ` UNLISTED-A-${tag}`)
   await expect(unlisted.getByText(/couldn't be verified and weren't applied/)).toBeVisible({ timeout: 30_000 })
