@@ -33,6 +33,8 @@ vi.mock('@kutup/session/opaque', () => opaque)
 // What it activated: the keys given (the session layer's upgrade is tested there).
 const activateSession = vi.hoisted(() => vi.fn((keys: unknown) => Promise.resolve(keys)))
 vi.mock('@kutup/session/profile', () => ({ activateSession }))
+const store = vi.hoisted(() => ({ setAccessToken: vi.fn(), clearSession: vi.fn() }))
+vi.mock('@kutup/session/store', () => store)
 
 import { abandonTotp, completeTotp, generateAccountKeys, registerAndSignIn, RegistrationConflictError, signIn } from './flows'
 
@@ -74,6 +76,23 @@ function openSignIn() {
 const session = { accessToken: 'a', sessionId: 's', userId: 'u', username: 'alice', masterKeyEnvelope: 'm', publicKey: 'p', keyBinding: 'kb' }
 
 describe('signIn', () => {
+  it('ends the sign-in and drops the keys when the server publishes another Drive key', async () => {
+    const masterKey = new Uint8Array(32).fill(7)
+    const driveKey = new Uint8Array(32).fill(9)
+    const opened = { ...openSignIn(), openMasterKey: vi.fn(() => Promise.resolve(masterKey)) }
+    opaque.opaqueLogin.mockResolvedValue({ data: { ...session, publicKey: 'other' }, signIn: opened })
+    crypto_.driveKeysOf.mockResolvedValueOnce({ publicKey: 'p', privateKey: driveKey })
+    post.mockResolvedValue({ data: {} })
+    await expect(signIn('alice', 'pw')).rejects.toThrow('another Drive key')
+    expect(store.setAccessToken).toHaveBeenCalledWith('a')
+    expect(post).toHaveBeenCalledWith('/auth/logout')
+    expect(store.clearSession).toHaveBeenCalled()
+    expect(masterKey.every((byte) => byte === 0)).toBe(true)
+    expect(driveKey.every((byte) => byte === 0)).toBe(true)
+    expect(activateSession).not.toHaveBeenCalled()
+    expect(opened.close).toHaveBeenCalled()
+  })
+
   it('registers nothing again unless the server asks, and ends the sign-in', async () => {
     const opened = openSignIn()
     opaque.opaqueLogin.mockResolvedValue({ data: session, signIn: opened })

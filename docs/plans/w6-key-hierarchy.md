@@ -18,7 +18,7 @@ Status: **proposed** (second session, 2026-10-27), for docs/plans/wipe-unificati
   - for every other purpose, the generation of the MK that sealed it.
 
   The magic becomes `KUTPAE2\0`. An envelope without the field is refused, and none survives the wipe.
-- **Sealing takes the generation explicitly** (`seal`, `seal_object`, `seal_revision`, the base64 and WASM forms). A default would let a future rotation seal under the wrong one unnoticed. `inspect` (the authenticated header) shows it, so a future rotation reads it first to pick the master key that opens the envelope, and can tell old wraps from new. Opening is unchanged.
+- **Sealing takes the generation explicitly** (`seal`, `seal_object`, `seal_revision`, the base64 and WASM forms). A default would let a future rotation seal under the wrong one unnoticed. `inspect` (and the WASM `inspectAccountEnvelope`) reads it from the header without opening the envelope, so a future rotation reads it first to pick the master key to try, and can tell old wraps from new. `inspect` authenticates nothing: the generation is AEAD associated data, so a forged one fails when the envelope opens. Opening is unchanged.
 - **Clients** pass the account's current generation. Until rotation exists, that is one constant per client (`MASTER_KEY_GENERATION` in `@kutup/crypto/masterKeyGeneration`, passed by the TS wrappers that seal; `MasterKeyGeneration::FIRST` in Rust). A kept Pass key resealed for a copied vault keeps the generation of the envelope it came from, named so a search finds every place rotation will touch.
 - **No server column yet.** Rotation, when it is built, adds the account's current generation to the account head (W1).
 
@@ -34,13 +34,28 @@ Status: **proposed** (second session, 2026-10-27), for docs/plans/wipe-unificati
   - 3 are new family salts: `chat-store`, `chat-profile`, `drive/names`.
 - **Tests:**
   - a unit test lists `labels::ALL` and checks the grammar, uniqueness, and that no label is a prefix of another;
-  - a static-gate check (`scripts/check-labels.sh`) refuses a `"kutup/` literal outside `labels.rs` in any crate's `src/`;
+  - a static-gate check (`scripts/check-labels.sh`) refuses a `"kutup/` or `"kutup-` literal (also `b"`, `br"`) outside `labels.rs` in any crate's `src/`, unless `scripts/check-labels.allow` names that file and literal as a non-label (a header, path, name or test fixture); an entry that no longer matches fails too. Labels the browser computes in TypeScript are registered too (marked so), and a `kutup/` literal in a frontend source must be one of them, NUL included;
   - vectors are regenerated once (`crypto.json`, chat-core and proto vectors), with one commit saying so.
 - **Not renamed:** strings that aren't cryptographic labels, such as the `kutup/<profile>` CLI keychain service name.
 
 ## 4. The legacy Argon2 derivation
 
 The Argon2id account-protection derivation (`kdf::derive_account_protection_keys`, `AccountProtectionSuiteId`, and the WASM `deriveAccountProtectionKeys`) has no caller since OPAQUE, only its vectors. It goes, with its vectors and its row in docs/crypto-agility.md. The recovery proof (`derive_recovery_auth_proof`) stays.
+
+## Rotation checklist
+
+When master-key rotation is built, every place that writes `MasterKeyGeneration::FIRST` (Rust) or `MASTER_KEY_GENERATION` (TypeScript) outside tests must take the account's current generation instead. Find them with `grep -rn 'MasterKeyGeneration::FIRST\|MASTER_KEY_GENERATION' crates frontend/packages frontend/apps`; as of W6 they are:
+
+- **Master-key wraps (purposes 1 and 2):**
+  - CLI `register.rs` (password and recovery wraps) and `login.rs` (the password wrap resealed at sign-in);
+  - web `opaque.worker.ts` (`sealMasterKey`) and `accountEnvelope.ts` (`sealAccountEnvelope`).
+- **Secrets sealed under the master key:**
+  - mail address keys: `mail_key.rs` (`first_address_key`) and web `mailKey.ts` (generate, import, and `acceptMailForwarding`);
+  - Pass kept keys: CLI `vaultsync.rs` and web `pass/src/vault/worker.ts` (`keepKey`). `kept::reseal` already keeps the generation of the envelope it opens, so a copied vault follows its source.
+- **The server's fake recovery envelope** (`handlers/auth.rs`, `deterministic_fake_account_envelope`): an unknown name gets a stable fake so it looks like a real account. Once accounts can be past generation 1, the fake must carry a generation as plausible as a real one, or the header tells a fake from a real account.
+- **The constant itself:** `@kutup/crypto/masterKeyGeneration` and its doc comment in `kutup-crypto-wasm` (`sealAccountEnvelope`).
+
+The `inspect` that a rotation reads first to pick the master key returns the generation in Rust and in WASM (`inspectAccountEnvelope`).
 
 ## Migration and order
 

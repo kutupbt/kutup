@@ -138,7 +138,7 @@ export interface CryptoWasmModule {
   openContactCard(masterKeyBase64: string, binding: string, uid: string, sealedBase64: string): { value: string; revision: number }
   sealMailName(masterKeyBase64: string, binding: string, kind: string, id: string, revision: number, name: string): string
   openMailName(masterKeyBase64: string, binding: string, kind: string, id: string, sealedBase64: string): { value: string; revision: number }
-  inspectAccountEnvelope(envelopeBase64: string): number
+  inspectAccountEnvelope(envelopeBase64: string): { purpose: number; generation: number }
   RevisionGuardKeys: new (masterKeyBase64: string) => import('./revisionGuard').GuardKeys & { free(): void }
   AccountHeadKeys: new (masterKeyBase64: string, binding: string, incarnationId: string) => AccountHeadKeysHandle
   OpaqueLogin: { start(password: string): OpaqueLoginHandle }

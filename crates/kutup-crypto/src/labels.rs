@@ -4,9 +4,14 @@
 //! family), never none, empty or data; its info is the context (a purpose
 //! label, the object's own header, or both). A unit test checks the grammar
 //! and that no label repeats or is a prefix of another, and
-//! `scripts/check-labels.sh` refuses a `"kutup/` literal anywhere else in
-//! a crate's source. Constructions a standard fixes (OHTTP, Web Push,
-//! Signal's provisioning cipher) keep their own strings.
+//! `scripts/check-labels.sh` refuses a `"kutup/` or `"kutup-` literal
+//! anywhere else in a crate's source unless `scripts/check-labels.allow`
+//! names it as a non-label. Constructions a standard fixes (OHTTP, Web Push,
+//! Signal's provisioning cipher) keep their own strings; wire tags a
+//! standard's syntax carries are listed at the end, outside the grammar.
+//! Labels the browser computes in TypeScript (marked so) are registered here
+//! too, and the check refuses a `kutup/` literal in frontend sources that
+//! isn't one of them, so no two languages pick the same label.
 
 // --- 2fa-recovery-code -------------------------------------------------------
 
@@ -78,6 +83,13 @@ pub const ACCOUNT_PRIVATE_SUBKEY_V1: &[u8] = b"kutup/account/private-subkey/v1\0
 /// `kutup-crypto/src/account_rename.rs` (`DOMAIN`)
 pub const ACCOUNT_RENAME_V1: &[u8] = b"kutup/account/rename/v1\0";
 
+// --- calls -------------------------------------------------------------------
+
+/// `kutup-server/src/calls.rs` (`turn_credential`): keyed by the TURN secret,
+/// the pseudonym a relay credential names instead of the account (was
+/// `kutup-turn:` hashed with the secret)
+pub const CALLS_TURN_PSEUDONYM_V1: &[u8] = b"kutup/calls/turn-pseudonym/v1\0";
+
 // --- chat-attachment-ledger --------------------------------------------------
 
 /// `kutup-crypto/src/chat_attachment_ledger.rs` (`ACCOUNT_LEDGER_KEY_INFO`)
@@ -85,6 +97,12 @@ pub const CHAT_ATTACHMENT_LEDGER_ACCOUNT_KEY_V1: &[u8] =
     b"kutup/chat-attachment-ledger/account-key/v1\0";
 /// `kutup-crypto/src/chat_attachment_ledger.rs` (`KEY_DERIVATION_SALT`)
 pub const CHAT_ATTACHMENT_LEDGER_KEY_V1: &[u8] = b"kutup/chat-attachment-ledger/key/v1\0";
+/// `frontend/packages/chat-core/src/attachment-ledger.ts` (`LOCAL_PIN_DOMAIN`, TypeScript)
+pub const CHAT_ATTACHMENT_LEDGER_LOCAL_PIN_V1: &[u8] =
+    b"kutup/chat-attachment-ledger/local-pin/v1\0";
+/// `frontend/packages/chat-core/src/attachment-ledger.ts` (operation ids, TypeScript)
+pub const CHAT_ATTACHMENT_LEDGER_OPERATION_V1: &[u8] =
+    b"kutup/chat-attachment-ledger/operation/v1\0";
 
 // --- chat-backup-media -------------------------------------------------------
 
@@ -206,6 +224,8 @@ pub const CHAT_MEDIA_BLOCKS_NONCE_KEY_V1: &[u8] = b"kutup/chat-media/blocks/nonc
 /// `kutup-server/src/handlers/chat_media.rs`
 pub const CHAT_MEDIA_DELIVERY_OFFER_DIGEST_V1: &[u8] =
     b"kutup/chat-media/delivery-offer-digest/v1\0";
+/// `frontend/packages/chat-core/src/media.ts` (delivery operation ids, TypeScript)
+pub const CHAT_MEDIA_DELIVERY_OPERATION_V1: &[u8] = b"kutup/chat-media/delivery-operation/v1\0";
 /// `kutup-server/src/chat_media_federation.rs`
 pub const CHAT_MEDIA_FEDERATION_ORIGIN_RATE_V1: &[u8] =
     b"kutup/chat-media/federation-origin-rate/v1\0";
@@ -369,6 +389,10 @@ pub const MAIL_ADDRESS_KEY_V1: &[u8] = b"kutup/mail-address-key/v1\0";
 
 /// `kutup-server/src/mail/forwarding.rs` (`MARKER_DOMAIN`)
 pub const MAIL_FORWARDING_MARKER_V1: &[u8] = b"kutup/mail-forwarding/marker/v1\0";
+/// `kutup-server/src/mail/forwarding_code.rs` (`code_key`; was `kutup mail forwarding code v1`)
+pub const MAIL_FORWARDING_CODE_KEY_V1: &[u8] = b"kutup/mail-forwarding/code-key/v1\0";
+/// `kutup-server/src/mail/forwarding_code.rs` (`stop_token`; was `kutup mail forwarding stop v1`)
+pub const MAIL_FORWARDING_STOP_V1: &[u8] = b"kutup/mail-forwarding/stop/v1\0";
 /// `kutup-crypto/src/mail_forwarding.rs` (`SEAL_DOMAIN`)
 pub const MAIL_FORWARDING_PROXY_PARAMETER_V1: &[u8] = b"kutup/mail-forwarding/proxy-parameter/v1\0";
 /// `kutup-server/src/mail/forwarding.rs` (`RETURN_PATH_DOMAIN`)
@@ -474,6 +498,15 @@ pub const PHOTOS_LIBRARY_ACCOUNT_KEY_V1: &[u8] = b"kutup/photos-library/account-
 /// `kutup-crypto/src/photos_library.rs` (`KEY_DERIVATION_SALT`)
 pub const PHOTOS_LIBRARY_KEY_V1: &[u8] = b"kutup/photos-library/key/v1\0";
 
+// --- private-ciphertext-cache ------------------------------------------------
+
+/// `frontend/packages/files/src/mediaCache/types.ts` (account scope, TypeScript)
+pub const PRIVATE_CIPHERTEXT_CACHE_ACCOUNT_V1: &[u8] =
+    b"kutup/private-ciphertext-cache/account/v1\0";
+/// `frontend/packages/files/src/mediaCache/types.ts` (binding key, TypeScript)
+pub const PRIVATE_CIPHERTEXT_CACHE_BINDING_V1: &[u8] =
+    b"kutup/private-ciphertext-cache/binding/v1\0";
+
 // --- profile-envelope --------------------------------------------------------
 
 /// `kutup-chat-core/src/profile.rs` (`ENVELOPE_KEY_SALT`)
@@ -561,8 +594,25 @@ pub const FEDERATION_IDENTITY_DOCUMENT_V1: &[u8] = b"kutup/federation/identity-d
 pub const FEDERATION_REPLAY_V1: &[u8] = b"kutup/federation/replay/v1\0";
 /// `kutup-federation-proto/src/http_signatures.rs` (was `kutup-federation-request-replay-hash-v1`)
 pub const FEDERATION_REQUEST_REPLAY_HASH_V1: &[u8] = b"kutup/federation/request-replay-hash/v1\0";
+// --- wire tags -----------------------------------------------------------------
+//
+// Not labels in the grammar: a standard's syntax carries them, so they hold
+// no NUL. Listed here so the registry stays the one index.
+
+/// `kutup-federation-proto` (`FEDERATION_SIGNATURE_TAG`): the RFC 9421
+/// `tag` parameter of every federation signature
+pub const FEDERATION_SIGNATURE_TAG: &str = "kutup-federation-v2";
+
 /// Every label, for the registry's own checks.
-pub const ALL: [&[u8]; 180] = [
+pub const ALL: [&[u8]; 188] = [
+    MAIL_FORWARDING_CODE_KEY_V1,
+    MAIL_FORWARDING_STOP_V1,
+    CALLS_TURN_PSEUDONYM_V1,
+    CHAT_ATTACHMENT_LEDGER_LOCAL_PIN_V1,
+    CHAT_ATTACHMENT_LEDGER_OPERATION_V1,
+    CHAT_MEDIA_DELIVERY_OPERATION_V1,
+    PRIVATE_CIPHERTEXT_CACHE_ACCOUNT_V1,
+    PRIVATE_CIPHERTEXT_CACHE_BINDING_V1,
     TWO_FACTOR_RECOVERY_CODE_V1,
     ACCOUNT_ENVELOPE_KEY_V2,
     ACCOUNT_ENVELOPE_V2,
