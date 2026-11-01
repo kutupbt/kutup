@@ -133,8 +133,11 @@ test('a frame from an unlisted device, or signed by another account, is refused'
     forged.writeUInt32BE(4242, start + DEVICE_AT)
     return forged
   })
+  // Armed once Bob is in (the notice is a toast: one raised by his joining
+  // would be gone before the check).
+  let relabel = false
   const relabelled = await relayedBy((delivered, start) => {
-    if (!alicePrefix || delivered.subarray(0, start).equals(alicePrefix)) return null
+    if (!relabel || !alicePrefix || delivered.subarray(0, start).equals(alicePrefix)) return null
     // Bob's frame, as Alice's: his device's valid signature, her name.
     return Buffer.concat([alicePrefix, delivered.subarray(start)])
   })
@@ -154,6 +157,7 @@ test('a frame from an unlisted device, or signed by another account, is refused'
   await openItem(b, note)
   await noteLive(b)
   const a = await openNote(contextA, noteUrl)
+  relabel = true
   await typeAtEnd(b, ` FROM-B-${tag}`)
   await expect.poll(() => noteText(a), { timeout: 30_000 }).toContain(`FROM-B-${tag}`)
   await expect(relabelled.getByText(/couldn't be verified and weren't applied/)).toBeVisible({ timeout: 30_000 })
