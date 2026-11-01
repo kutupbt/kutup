@@ -1,0 +1,50 @@
+# Literals starting "kutup/ or "kutup- in crate sources that are NOT
+# cryptographic labels (names, headers, paths, test fixtures):
+# scripts/check-labels.sh skips exactly these, by file and literal.
+# A label goes in crates/kutup-crypto/src/labels.rs instead.
+# Format: <path> TAB <literal as the check prints it> TAB <what it is>
+
+crates/kutup-chat-core/src/db/indexed_db.rs	"kutup-chat-test-	test database name
+crates/kutup-chat-core/src/db/indexed_db.rs	"kutup-chat-test-unkeyed-	test database name
+crates/kutup-chat-core/src/db/sqlite.rs	"kutup-chat-	test database path
+crates/kutup-chat-core/src/db/sqlite.rs	"kutup-chat-no-sqlcipher-	test database path
+crates/kutup-chat-core/src/db/sqlite.rs	"kutup-chat-sqlcipher-	test database path
+crates/kutup-chat-core/src/db/store_cipher.rs	"kutup-chat-v2:abc	test store id (an input, not a label)
+crates/kutup-chat-core/src/db/store_cipher.rs	"kutup-chat-v2:other	test store id (an input, not a label)
+crates/kutup-client-ffi/src/lib.rs	"kutup-chat-	thread name
+crates/kutup-cli/src/session.rs	"kutup-cli/	keychain service name / test path
+crates/kutup-cli/src/session.rs	"kutup-test-	keychain service name / test path
+crates/kutup-cli/src/sshagent/service.rs	"kutup-ssh-agent.service	systemd unit name
+crates/kutup-federation-proto/src/http_signatures.rs	"kutup-destination	HTTP header names (RFC 9421 covered components) / test of the registry tag
+crates/kutup-federation-proto/src/http_signatures.rs	"kutup-federation-feature	HTTP header names (RFC 9421 covered components) / test of the registry tag
+crates/kutup-federation-proto/src/http_signatures.rs	"kutup-federation-v2	HTTP header names (RFC 9421 covered components) / test of the registry tag
+crates/kutup-federation-proto/src/http_signatures.rs	"kutup-federation-version	HTTP header names (RFC 9421 covered components) / test of the registry tag
+crates/kutup-federation-proto/src/http_signatures.rs	"kutup-origin	HTTP header names (RFC 9421 covered components) / test of the registry tag
+crates/kutup-server/src/auth_check.rs	"kutup-timing-only	bcrypt timing dummy
+crates/kutup-server/src/auth_check.rs	"kutup-timing-only-not	bcrypt timing dummy
+crates/kutup-server/src/config.rs	"kutup-files	log prefix / default bucket / test path
+crates/kutup-server/src/config.rs	"kutup-opaque-	log prefix / default bucket / test path
+crates/kutup-server/src/config.rs	"kutup-server:	log prefix / default bucket / test path
+crates/kutup-server/src/drive_federation.rs	"kutup-drive-test-boundary	HTTP header name / test multipart boundary
+crates/kutup-server/src/drive_federation.rs	"kutup-share-capability	HTTP header name / test multipart boundary
+crates/kutup-server/src/federation/transport.rs	"kutup-destination	HTTP header names
+crates/kutup-server/src/federation/transport.rs	"kutup-federation-feature	HTTP header names
+crates/kutup-server/src/federation/transport.rs	"kutup-federation-version	HTTP header names
+crates/kutup-server/src/federation/transport.rs	"kutup-origin	HTTP header names
+crates/kutup-server/src/handlers/admin.rs	"kutup-admin-audit.csv	download file name
+crates/kutup-server/src/mail/auto_reply.rs	"kutup-	MIME boundary
+crates/kutup-server/src/mail/domains/check.rs	"kutup-verification=abcdefghijklmnopqrstuvwxyz	test DNS TXT value
+crates/kutup-server/src/mail/domains/reconcile.rs	"kutup-custom-domain:	Stalwart description tag
+crates/kutup-server/src/mail/domains/records.rs	"kutup-verification=	DNS TXT verification prefix / tests
+crates/kutup-server/src/mail/domains/records.rs	"kutup-verification=abc	DNS TXT verification prefix / tests
+crates/kutup-server/src/mail/domains/records.rs	"kutup-verification=other	DNS TXT verification prefix / tests
+crates/kutup-server/src/mail/domains/stalwart.rs	"kutup-domains	Stalwart account name
+crates/kutup-server/src/main.rs	"kutup-server:	log prefix
+crates/kutup-server/src/maps.rs	"kutup-maps-cache	cache directory name
+crates/kutup-server/src/remote_renames.rs	"kutup-federation-feature	HTTP header name
+crates/kutup-server/src/storage_check.rs	"kutup-storage-check/	S3 key prefix
+crates/kutup-server/src/storage.rs	"kutup-static	S3 credential provider name
+crates/kutup-server/src/telemetry.rs	"kutup-server	OpenTelemetry names
+crates/kutup-server/src/telemetry.rs	"kutup-server.chat-security	OpenTelemetry names
+crates/kutup-server/src/web_push.rs	"kutup-chat	Web Push Topic header
+crates/kutup-crypto/src/provisioning.rs	b"Kutup Provisioning Message v1	Signal provisioning cipher info (an adapter: Signal fixes the construction)

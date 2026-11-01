@@ -28,6 +28,7 @@ import {
 } from '@kutup/session/opaque'
 import { persistKeys } from '@kutup/session/persist'
 import { activateSession } from '@kutup/session/profile'
+import { clearSession, setAccessToken } from '@kutup/session/store'
 
 interface LoginResponse {
   accessToken: string
@@ -76,8 +77,7 @@ async function activate(
   response: Pick<LoginResponse, 'accessToken' | 'sessionId'>,
   keys: SessionKeys,
 ): Promise<void> {
-  // The session layer also moves an account from before X-Wing Drive keys
-  // to them (docs/plans/pq-shares.md): what it activated is what is kept.
+  // What the session layer activated (after its own checks) is what is kept.
   const activated = await activateSession(keys, response.accessToken, response.sessionId)
   await persistKeys(response.sessionId, activated)
 }
@@ -130,6 +130,12 @@ async function finishSignIn(data: LoginResponse, opened: OpaqueSignIn): Promise<
     // (docs/plans/w6-key-hierarchy.md §1); the server must publish the same.
     const { publicKey, privateKey } = await driveKeysOf(masterKey)
     if (publicKey !== data.publicKey) {
+      // This sign-in is over: ended on the server too (best effort), and the
+      // keys dropped here, as for a key-binding mismatch (profile.ts).
+      setAccessToken(data.accessToken)
+      await api.post('/auth/logout').catch(() => undefined)
+      clearSession()
+      masterKey.fill(0)
       privateKey.fill(0)
       throw new Error("the server publishes another Drive key than this account's")
     }

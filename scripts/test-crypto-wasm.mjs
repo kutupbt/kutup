@@ -78,9 +78,9 @@ assert.notEqual(new crypto.RevisionGuardKeys(Buffer.alloc(32, 0x32).toString('ba
 // every refused one is refused here as in Rust (malformed ones by inspect;
 // the rest, for the purposes the generic API opens, by open).
 const envelopeVectors = JSON.parse(await readFile(`${root}/crates/kutup-crypto/tests/vectors/account-envelope-v2.json`, 'utf8'))
-const genericPurposes = new Set([1, 2, 3, 4])
+const genericPurposes = new Set([1, 2, 4])
 for (const p of envelopeVectors.purposes) {
-  assert.equal(crypto.inspectAccountEnvelope(p.envelope), p.purpose)
+  assert.deepEqual(crypto.inspectAccountEnvelope(p.envelope), { purpose: p.purpose, generation: 1 })
   if (genericPurposes.has(p.purpose)) {
     assert.equal(crypto.openAccountEnvelope(p.envelope, envelopeVectors.key, p.purpose, envelopeVectors.binding), p.plaintext)
   } else {
@@ -91,7 +91,7 @@ for (const p of envelopeVectors.purposes) {
   }
   for (const refused of p.refused) {
     if (refused.step === 'inspect') assert.throws(() => crypto.inspectAccountEnvelope(refused.envelope), refused.why)
-    if (refused.step === 'open') assert.equal(crypto.inspectAccountEnvelope(refused.envelope), p.purpose, refused.why)
+    if (refused.step === 'open') assert.equal(crypto.inspectAccountEnvelope(refused.envelope).purpose, p.purpose, refused.why)
     if (genericPurposes.has(p.purpose)) {
       assert.throws(() => crypto.openAccountEnvelope(refused.envelope, envelopeVectors.key, p.purpose, envelopeVectors.binding), refused.why)
     }

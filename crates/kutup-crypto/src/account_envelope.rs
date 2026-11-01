@@ -1012,6 +1012,12 @@ mod tests {
         reserved[11] = 1;
         assert!(inspect(&reserved).is_err());
 
+        // Purpose 3 (the Drive X-Wing key, now derived only) stays refused.
+        assert!(AccountEnvelopePurpose::try_from(3).is_err());
+        let mut drive_key = envelope.clone();
+        drive_key[10] = 3;
+        assert!(inspect(&drive_key).is_err());
+
         let mut noncanonical = envelope;
         noncanonical[18] = b'A';
         assert!(inspect(&noncanonical).is_err());
