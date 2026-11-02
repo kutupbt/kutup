@@ -10,7 +10,7 @@ import { EmptyState, LoadingPanel } from '@kutup/ui/components/states'
 import { formatRelative } from '@kutup/ui/lib/format'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@kutup/ui/components/select'
 import { useVaultFiles, vaultTitle, type VaultFile } from '../drive/vaults'
-import { AUTO_LOCK_CHOICES, setAutoLockMinutes, setUnlockMode, useAutoLockMinutes, useUnlockMode, type AutoLockMinutes, type UnlockMode } from '../sync/autoLock'
+import { AUTO_LOCK_CHOICES, chosenUnlockMode, setAutoLockMinutes, setUnlockMode, useAutoLockMinutes, useUnlockMode, type AutoLockMinutes, type UnlockMode } from '../sync/autoLock'
 import { useVaultSession } from '../sync/openVaults'
 import { usePinStatus } from '../sync/pin'
 import { SITE_ICON_MODES, useSaveSiteIconsMode, useSiteIconsMode, type SiteIconsMode } from '../sync/siteIcons'
@@ -85,7 +85,7 @@ function AutoLockSetting() {
       </h2>
       <p className="text-xs text-muted-foreground">{t('unlockMode.description')}</p>
       <Select
-        value={mode}
+        value={mode ?? undefined}
         onValueChange={(value) => {
           // The PIN mode needs a PIN: set one first.
           if (value === 'pin' && !pinSet) setPinAction('set')
@@ -116,8 +116,9 @@ function AutoLockSetting() {
         action={pinAction}
         onOpenChange={(open) => !open && setPinAction(null)}
         onDone={(action) => {
+          // No PIN: back to the default (one click), not a password nobody chose.
           if (action === 'remove') {
-            if (mode === 'pin') setUnlockMode('password')
+            if (chosenUnlockMode() === 'pin') setUnlockMode(null)
           } else setUnlockMode('pin')
         }}
       />

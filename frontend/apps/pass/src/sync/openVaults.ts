@@ -1,7 +1,10 @@
 // The vaults open in this tab, by Drive file id. A vault stays open while
-// the person moves around the app, until they lock it or sign out.
+// the person moves around the app, until they lock it or sign out. Locks are
+// the device's (`deviceLock.ts`): one tab's lock closes the vault in all.
 
 import { useSyncExternalStore } from 'react'
+import { getSession } from '@kutup/session/store'
+import { isLocked, markAllLocked, markLocked, markUnlocked } from './deviceLock'
 import type { VaultFile } from '../drive/vaults'
 import type { VaultKeyInput } from '../vault/types'
 import { VaultSession, type SessionState } from './vaultSession'
@@ -56,46 +59,29 @@ export function openVault(
   return beforeShown ? pending.then(async (session) => (await beforeShown(session), session)) : pending
 }
 
-const LOCKED_KEY = 'kutup-pass-locked'
-
-function lockedIds(): Set<string> {
-  try {
-    return new Set(JSON.parse(sessionStorage.getItem(LOCKED_KEY) ?? '[]') as string[])
-  } catch {
-    return new Set()
-  }
-}
-
-function saveLocked(ids: Set<string>) {
-  try {
-    sessionStorage.setItem(LOCKED_KEY, JSON.stringify([...ids]))
-  } catch {
-    // This visit only.
-  }
+/** The signed-in account ('' when signed out: nothing is locked under it). */
+function account(): string {
+  return getSession()?.userId ?? ''
 }
 
 /**
- * Whether the vault was locked in this tab (by hand or after idling): it
- * then waits for a click before its kept key opens it again, also after a
- * reload of the tab.
+ * Whether the vault is locked on this device (by hand or after idling, in any
+ * tab): its kept key then waits for the unlock (`autoLock.ts`'s mode) before
+ * it opens the vault again, in this tab, a new one, or one opened from Drive.
  */
 export function wasLocked(fileId: string): boolean {
-  return lockedIds().has(fileId)
+  return isLocked(account(), fileId)
 }
 
 /** The vault was unlocked on purpose. */
 export function clearLocked(fileId: string): void {
-  const ids = lockedIds()
-  if (ids.delete(fileId)) saveLocked(ids)
+  markUnlocked(account(), fileId)
 }
 
-/** Locks a vault: saves what is waiting (it stays in the outbox if that fails) and forgets it here. */
-export async function lockVault(fileId: string): Promise<void> {
+/** Saves what is waiting (it stays in the outbox if that fails) and forgets the vault here. */
+async function closeHere(fileId: string): Promise<void> {
   const session = sessions.get(fileId)
   if (!session) return
-  const ids = lockedIds()
-  ids.add(fileId)
-  saveLocked(ids)
   try {
     await session.save()
   } catch {
@@ -106,9 +92,27 @@ export async function lockVault(fileId: string): Promise<void> {
   await session.close()
 }
 
+/** Locks a vault, in every tab of this device. */
+export async function lockVault(fileId: string): Promise<void> {
+  markLocked(account(), fileId)
+  await closeHere(fileId)
+}
+
+/** Locks every vault, in every tab of this device. */
 export async function lockAll(): Promise<void> {
+  markAllLocked(account())
+  await closeAllHere()
+}
+
+/** Another tab locked everything: close what this one holds. */
+export async function closeAllHere(): Promise<void> {
   freshKeys.clear()
-  await Promise.all([...sessions.keys()].map(lockVault))
+  await Promise.all([...sessions.keys()].map(closeHere))
+}
+
+/** Another tab locked this vault: close it here. */
+export function closeLockedHere(fileId: string): Promise<void> {
+  return closeHere(fileId)
 }
 
 export function openVaultIds(): string[] {
