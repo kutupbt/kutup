@@ -52,6 +52,11 @@ pub struct SyncResult {
     pub deleted_remote: usize,
     pub skipped_deletions: usize,
     pub errors: Vec<String>,
+    /// Logged collab frames whose senders' devices didn't sign them: skipped
+    /// (docs/plans/one-device-list.md §8, slice 3).
+    pub unverified_frames: usize,
+    /// Their senders' accounts.
+    pub unverified_senders: Vec<String>,
 }
 
 // --- pure planning types (unit-tested without I/O) ---
@@ -290,6 +295,7 @@ struct RemoteEntry {
 }
 
 /// Performs one bidirectional sync pass between `local_dir` and `collection_id`.
+#[allow(clippy::too_many_arguments)]
 pub fn sync(
     client: &Client,
     store: &Store,
@@ -298,10 +304,11 @@ pub fn sync(
     collection_id: &str,
     opts: &SyncOptions,
     vaults: &mut VaultKeys,
+    authority: crate::senders::AuthorityCheck<'_>,
 ) -> Result<SyncResult> {
     let mut result = SyncResult::default();
     let master_key = sess.master_key_bytes().context("master key")?;
-    let mut peer = crate::yjs_sync::Peer::new(client, store, sess);
+    let mut peer = crate::yjs_sync::Peer::new(client, store, sess, authority);
     vaults.refresh(sess)?;
     let root = PathBuf::from(local_dir);
     let canonical_root = std::fs::canonicalize(&root).unwrap_or_else(|_| root.clone());
@@ -647,6 +654,8 @@ pub fn sync(
         }
     }
 
+    result.unverified_frames = peer.senders.refused_frames;
+    result.unverified_senders = peer.senders.refused.iter().cloned().collect();
     Ok(result)
 }
 

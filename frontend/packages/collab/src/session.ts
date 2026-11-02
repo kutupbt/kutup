@@ -19,6 +19,8 @@ import api from '@kutup/session/client'
 import { currentDevice, replaceRefusedDevice } from '@kutup/session/currentDevice'
 import { claimSeed, listVersions, localBase, newestYjsVersion } from './api'
 import { encryptCollabFrame, openCollabFrameAtGeneration } from './cryptoFrame'
+import { LogPosition } from './logPosition'
+import type { SenderCheck } from './senders'
 import { KIND } from './envelope'
 import { buildAwarenessName, randomSenderSeqPrefix, withAlpha } from './identity'
 import { SnapshotTrigger } from './snapshot'
@@ -47,6 +49,9 @@ export async function deterministicSeed(fileId: string, fill: (doc: Y.Doc) => vo
 }
 
 export type RestoreChoice = 'save-and-restore' | 'restore-only'
+
+/** How long frames held back as unverified wait before the socket replays them. */
+const RESYNC_AFTER_MS = 60_000
 
 export interface CollabSessionOptions {
   fileId: string
@@ -89,6 +94,13 @@ export interface CollabSessionOptions {
   onReplayed?: (throughSeq: number) => void
   /** Other people (tabs) in the document now. */
   onCollaborators?: (count: number) => void
+  /**
+   * Who may edit: a frame is applied only when its sender account's devices
+   * signed it (docs/plans/one-device-list.md §8, slice 3). The caller makes
+   * it (it tells the editor about refused senders); the session closes it
+   * with itself.
+   */
+  senders: SenderCheck
   /** Stop: resolves to null if aborted before the session was up. */
   signal: AbortSignal
 }
@@ -130,19 +142,13 @@ export async function openCollabSession(options: CollabSessionOptions): Promise<
     color: options.cursorColor,
     colorLight: withAlpha(options.cursorColor, 0.3),
   })
-  // How far into the relay's log this document is known to be complete:
-  // every kept frame up to `applied` is in it. Saved versions record it (so
-  // trimming the log never removes an edit they lack) and reconnects resume
-  // from it. Positions announced beyond it wait until the gap closes.
-  let applied = 0
-  const announced = new Set<number>()
-  const advance = () => {
-    while (announced.has(applied + 1)) {
-      announced.delete(applied + 1)
-      applied += 1
-    }
-    for (const seq of announced) if (seq <= applied) announced.delete(seq)
-  }
+  // How far into the relay's log this document is known to be complete
+  // (see LogPosition): saved versions record it, reconnects resume from it,
+  // and a frame held back as unverified stops it. A held frame is replayed
+  // by a resync (scheduled; trusting a sender resyncs at once).
+  const position = new LogPosition()
+  let resyncTimer: ReturnType<typeof setTimeout> | null = null
+  let stopTrusted: () => void = () => {}
   let docKeyId = 1
   const keyOf = async (generation: number): Promise<Uint8Array> => {
     if (generation === keyGeneration) return fileKey
@@ -162,7 +168,7 @@ export async function openCollabSession(options: CollabSessionOptions): Promise<
         fileId,
         base,
         ydoc: doc,
-        getSeq: () => applied,
+        getSeq: () => position.applied,
         encryptSnapshot: async (bytes: Uint8Array) => {
           const out = await encryptFileBlobV1(bytes, fileKey, { fileId, generation: keyGeneration })
           return { ciphertext: out, storageHints: { docKeyId, sizeBytes: out.length } }
@@ -258,7 +264,7 @@ export async function openCollabSession(options: CollabSessionOptions): Promise<
           generation: latest.keyGeneration,
         })
         Y.applyUpdateV2(doc, state, 'remote')
-        applied = latest.seqAtSnapshot
+        position.loaded(latest.seqAtSnapshot)
       }
     } else if (options.seed && !readOnly) {
       try {
@@ -288,7 +294,10 @@ export async function openCollabSession(options: CollabSessionOptions): Promise<
     awareness.off('change', onAwarenessChange)
     awareness.off('update', countCollaborators)
     doc.destroy()
+    if (resyncTimer) clearTimeout(resyncTimer)
+    stopTrusted()
     transport?.close()
+    options.senders.close()
   }
   if (signal.aborted) {
     close()
@@ -310,17 +319,18 @@ export async function openCollabSession(options: CollabSessionOptions): Promise<
   }
 
   // 6. The relay: replays what came after the saved state, then live frames.
+  // A sender trusted again: replay what was held.
+  stopTrusted = options.senders.whenTrusted(() => transport?.resync())
   transport = new CollabTransport({
     url: () => collabSocketUrl(dev, base),
-    lastSeenSeq: () => applied,
+    lastSeenSeq: () => position.applied,
     onPosition: async (message: PositionMsg) => {
       if (message.type === 'stored') {
-        if (message.seq > applied) announced.add(message.seq)
+        position.stored(message.seq)
       } else {
         const version = message.floor > message.since ? await catchUp() : 0
-        applied = Math.max(applied, message.throughSeq, version)
+        position.replayed(message.throughSeq, version)
       }
-      advance()
       // Frames arrive, and are applied, before the position that follows them.
       if (message.type === 'replayed') options.onReplayed?.(message.throughSeq)
     },
@@ -331,6 +341,8 @@ export async function openCollabSession(options: CollabSessionOptions): Promise<
       dev = (await replaceRefusedDevice(dev)) ?? dev
     },
     onHello: (hello: HelloMsg) => {
+      // A new connection replays from `applied`: what was held is checked again.
+      position.connected()
       docKeyId = hello.currentDocKeyId
       // Continue after the server's record of this device's sequence.
       if (typeof hello.mySenderSeqHigh === 'number' && hello.mySenderSeqHigh > 0) {
@@ -350,7 +362,19 @@ export async function openCollabSession(options: CollabSessionOptions): Promise<
       }
       options.onStatus('ready')
     },
-    onFrame: async (bytes) => {
+    onFrame: async (bytes, { live }) => {
+      // Never applied unless its sender's devices signed it.
+      const verdict = await options.senders.verify(bytes, live)
+      if (verdict === 'unverified' && !position.held) {
+        position.hold()
+        if (!resyncTimer) {
+          resyncTimer = setTimeout(() => {
+            resyncTimer = null
+            transport?.resync()
+          }, RESYNC_AFTER_MS)
+        }
+      }
+      if (verdict !== 'take') return
       try {
         // A frame from before a re-key opens with its generation's key.
         const frame = await openCollabFrameAtGeneration(bytes, keyOf, { fileId, keyGeneration })

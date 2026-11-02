@@ -109,6 +109,13 @@ upload, which the first editor turns into a deterministic seed
   is, since it holds the document. A local edit is diffed against that state,
   so edits made elsewhere since merge instead of being undone. After an
   upload, the base is the seed of what went up.
+- **Senders.** A frame read from the log is applied only when the manifest
+  it names lists its device with the key that signed it, as in the editors
+  (docs/plans/one-device-list.md §8, slice 3). The pins of other accounts'
+  manifests are kept in the profile store. A sender whose account was reset
+  is refused while the identity pins hold its old authority. Refused frames
+  are skipped, and `sync` then reports them and exits non-zero
+  (`unverifiedFrames` and `unverifiedSenders` with `--json`).
 - **Never synced, and different on both sides.** Drive's copy is kept as a
   conflict copy, and the local file goes up as an edit over it, as for other
   files. A list counts as different only when its places differ, not its

@@ -8,11 +8,12 @@
 
 import axios from 'axios'
 import { accountKeyOf, accountOfKey } from '@kutup/crypto/accountRef'
-import { checkOwnManifestHead, type AccountManifest, type DeviceKind, type OwnManifestPin } from '@kutup/crypto/accountManifest'
+import { checkOwnManifestHead, type AccountManifest, type DeviceKind } from '@kutup/crypto/accountManifest'
 import { toBase64, toBase64Url } from '@kutup/crypto/base64'
 import { loadServerSettings } from './apps'
 import api from './client'
 import type { DeviceKeys } from './keys'
+import { keepManifestPin, manifestPin } from './manifestPins'
 import { getSession, type Session } from './store'
 
 /** The device credential beside the sign-in: `<deviceId>.<credential, base64url>`. */
@@ -125,27 +126,34 @@ export async function fetchManifest(account: string): Promise<AccountManifest | 
   }
 }
 
-/** Where this origin keeps its pin on `account`'s manifest. */
-function pinKey(account: string): string {
-  return `kutup_own_manifest_pin_v1:${account}`
+/** One page of `manifest-history` (`AccountManifestHistoryPageV3`). */
+interface HistoryPage {
+  manifests: AccountManifest[]
+  nextSequence?: number | null
 }
 
-/** This origin's pin on `account`'s manifest; none when storage is unavailable. */
-function readPin(account: string): OwnManifestPin | null {
-  try {
-    const raw = localStorage.getItem(pinKey(account))
-    return raw ? (JSON.parse(raw) as OwnManifestPin) : null
-  } catch {
-    return null
-  }
-}
+/** The most history pages one read takes (each holds up to 64 manifests). */
+const MAX_HISTORY_PAGES = 16
 
-function writePin(account: string, pin: OwnManifestPin): void {
-  try {
-    localStorage.setItem(pinKey(account), JSON.stringify(pin))
-  } catch {
-    // Storage unavailable: the next read starts without a pin.
+/**
+ * `account`'s manifests from sequence `from` through `to`, every page, as its
+ * server (or, for an account on another server, this one on its behalf)
+ * serves them (`manifest-history`). Whoever reads them verifies them.
+ */
+export async function fetchManifestHistory(account: string, from: number, to: number): Promise<AccountManifest[]> {
+  const ref = accountOfKey(account)
+  if (!ref) throw new Error('not an account reference')
+  const out: AccountManifest[] = []
+  let page: number | undefined = from
+  for (let i = 0; i < MAX_HISTORY_PAGES && page !== undefined; i++) {
+    const { data }: { data: HistoryPage } = await api.get<HistoryPage>(
+      `/chat/accounts/${encodeURIComponent(ref.accountId)}/manifest-history`,
+      { params: { server: ref.server, fromSequence: from, toSequence: to, pageFromSequence: page } },
+    )
+    out.push(...data.manifests)
+    page = data.nextSequence ?? undefined
   }
+  return out
 }
 
 /**
@@ -159,8 +167,8 @@ function writePin(account: string, pin: OwnManifestPin): void {
 async function keepPin(account: string, head: AccountManifest | null): Promise<void> {
   const session = getSession()
   if (!session) throw new Error('not signed in')
-  const pin = await checkOwnManifestHead(readPin(account), head, toBase64(session.masterKey), account)
-  if (pin) writePin(account, pin)
+  const pin = await checkOwnManifestHead(await manifestPin(account), head, toBase64(session.masterKey), account)
+  if (pin) await keepManifestPin(pin)
 }
 
 /** The signed-in account's own head, checked against this origin's pin ({@link keepPin}). */

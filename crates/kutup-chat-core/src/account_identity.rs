@@ -204,7 +204,7 @@ pub(crate) fn identity_from_parts(public: &str, private: &str) -> Result<Identit
 /// Checks `head`, the account's own head as its server gave it, against
 /// `trust`: the newest own manifest this installation accepted. The head must
 /// be no older, the same manifest at that sequence, and present once one was
-/// accepted ([`kutup_chat_proto::OwnManifestPinV1::check`]), so a server can't
+/// accepted ([`kutup_chat_proto::AccountManifestPinV1::check`]), so a server can't
 /// have this device sign onto a stale head (bringing a removed device back)
 /// or start a new chain. `incarnation`: the one this device's authority
 /// derives, when it holds it (a pin of another incarnation doesn't apply);
@@ -218,13 +218,13 @@ pub(crate) fn check_own_head(
     let Some(trust) = trust else {
         return Ok(());
     };
-    let pin = kutup_chat_proto::OwnManifestPinV1 {
+    let pin = kutup_chat_proto::AccountManifestPinV1 {
         account: account.clone(),
         incarnation_id: trust.incarnation_id.clone(),
         sequence: trust.highest_sequence,
         hash: trust.manifest_hash.clone(),
     };
-    kutup_chat_proto::OwnManifestPinV1::check(
+    kutup_chat_proto::AccountManifestPinV1::check(
         Some(&pin),
         head,
         account,

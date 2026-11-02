@@ -129,6 +129,25 @@ fn do_sync(
 ) -> Result<()> {
     let ctx = require_session(profile)?;
     vaults.sign_in(&ctx.session, profile)?;
+    // The identity pins' word on a collab sender's authority (a reset this
+    // account hasn't accepted refuses its frames), read once per run.
+    let mut pins: Option<kutup_crypto::identity_pins::IdentityPinsV2> = None;
+    let authority: crate::senders::AuthorityCheck<'_> = Box::new(|account, authority| {
+        if pins.is_none() {
+            let me = crate::identity::Me::of(&ctx, profile)?;
+            pins = Some(crate::identity::load_pins(&ctx, &me)?.1);
+        }
+        let pinned = pins
+            .as_ref()
+            .and_then(|list| list.pins.iter().find(|pin| pin.account == *account));
+        Ok(match pinned {
+            None => crate::senders::AuthorityVerdict::Unknown,
+            Some(pin) if pin.authority_public_key == authority => {
+                crate::senders::AuthorityVerdict::Pinned
+            }
+            Some(_) => crate::senders::AuthorityVerdict::Changed,
+        })
+    });
     let result = syncengine::sync(
         &ctx.client,
         &ctx.store,
@@ -137,6 +156,7 @@ fn do_sync(
         collection_id,
         opts,
         vaults,
+        authority,
     )?;
     if json {
         crate::output::print_json(&serde_json::json!({
@@ -149,6 +169,8 @@ fn do_sync(
             "deletedRemote": result.deleted_remote,
             "skippedDeletions": result.skipped_deletions,
             "errors": result.errors,
+            "unverifiedFrames": result.unverified_frames,
+            "unverifiedSenders": result.unverified_senders,
         }))?;
     } else {
         let prefix = if opts.dry_run {
@@ -182,6 +204,14 @@ fn do_sync(
     }
     if !result.errors.is_empty() {
         anyhow::bail!("sync finished with {} error(s)", result.errors.len());
+    }
+    if result.unverified_frames > 0 {
+        anyhow::bail!(
+            "{} edit(s) from {} couldn't be verified as their sender's and were not applied \
+             (an account reset not accepted, or a device its account doesn't list)",
+            result.unverified_frames,
+            result.unverified_senders.join(", ")
+        );
     }
     Ok(())
 }

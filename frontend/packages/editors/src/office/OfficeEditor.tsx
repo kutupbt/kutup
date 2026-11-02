@@ -27,6 +27,10 @@ import { useSession } from '@kutup/session/store'
 import { CollabTransport, type BaseMsg, type HelloMsg, type PositionMsg } from '@kutup/collab/transport'
 import type { LogPosition } from '../snapshots'
 import { KIND } from '@kutup/collab/envelope'
+import { toast } from 'sonner'
+import { SenderCheck } from '@kutup/collab/senders'
+import { accountAuthorityVerdict } from '@kutup/drive-core/identityPins'
+import { accountNameOfKey } from '@kutup/drive-core/accountName'
 import { encryptCollabFrame, openCollabFrame } from '@kutup/collab/cryptoFrame'
 import { currentDevice, deviceRefused, stillListed, TooManyDevicesError, type CurrentDevice } from '@kutup/session/currentDevice'
 import { getOrCreateTabId, randomSenderSeqPrefix } from '@kutup/collab/identity'
@@ -199,6 +203,10 @@ function OfficeEditorBase(
   // The collaboration log up to here is in the document (the version it
   // opened from, then every frame applied since, the editor's own included).
   const lastSeenSeqRef = useRef<number>(base?.seq ?? 0)
+  // A frame held back as unverified: the log position stays put, so no save
+  // records a position past it and the server never trims it. Office applies
+  // operations in order, so it is checked again by reopening, not by replay.
+  const heldRef = useRef(false)
   const baseRef = useRef<SessionBase>(base ?? { versionId: null, seq: 0 })
   const resetBaseRef = useRef(resetBase)
   // Per-tab sender_seq partition — see randomSenderSeqPrefix doc in
@@ -428,6 +436,20 @@ function OfficeEditorBase(
   useEffect(() => {
     if (!docType || !live) return
     let alive = true
+    // Edits apply only when their sender's devices signed them; a sender
+    // whose edits are dropped is named once.
+    const senders = new SenderCheck({
+      authority: accountAuthorityVerdict,
+      name: accountNameOfKey,
+      onRefused: ({ name, reason, trust }) =>
+        toast.error(t(reason === 'reset' ? 'editor.senderReset' : 'editor.senderUnverified', { name }), {
+          // A reset the identity pins don't know: the person may trust it here.
+          action: trust ? { label: t('editor.senderTrust'), onClick: () => void trust() } : undefined,
+        }),
+    })
+
+    // A sender trusted again: reopen, so what was held is checked again.
+    senders.whenTrusted(() => onOutdatedRef.current?.())
 
     void (async () => {
       // 1. This sign-in's collaboration device.
@@ -490,6 +512,7 @@ function OfficeEditorBase(
           }
         },
         onPosition: (message: PositionMsg) => {
+          if (heldRef.current) return
           if (message.type === 'stored') {
             lastSeenSeqRef.current = Math.max(lastSeenSeqRef.current, message.seq)
           } else {
@@ -515,7 +538,10 @@ function OfficeEditorBase(
         onPeers: (p) => {
           forwardPeers(p.list, p.ts)
         },
-        onFrame: async (bs: Uint8Array) => {
+        onFrame: async (bs: Uint8Array, { live }) => {
+          const verdict = await senders.verify(bs, live)
+          if (verdict === 'unverified') heldRef.current = true
+          if (verdict !== 'take') return
           try {
             const f = await openCollabFrame(bs, fileKey, {
               fileId,
@@ -573,6 +599,7 @@ function OfficeEditorBase(
       alive = false
       transportRef.current?.close()
       transportRef.current = null
+      senders.close()
     }
     // The device is intentionally NOT a dep: registering one updates the
     // session, and React's re-render would otherwise tear down + recreate

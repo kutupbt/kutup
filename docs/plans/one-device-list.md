@@ -413,7 +413,7 @@ What the note leaves open, as built:
     - The old `remote_collab_devices` route, its announce and its rate limit
       go; `device_challenges` becomes `device_registrations` (20 a minute
       per account).
-13. **A client pins its own account's head** (`OwnManifestPinV1` in
+13. **A client pins its own account's head** (`AccountManifestPinV1` in
     `kutup-chat-proto`, the same check in the CLI and in the browser's
     crypto WASM).
     - It keeps the newest manifest of its own account it has seen
@@ -456,3 +456,155 @@ What the note leaves open, as built:
     toward `devicesPerAccount` and the Chat cap. So a stolen access token
     can't fill the account with registrations that never list themselves.
     `devicesPerAccount` is a per-account setting.
+
+### Slice 3 (recipients verify senders)
+
+Approved by the main session on 2026-10-27, with decisions (a) to (c) below.
+
+Every client that applies a collab frame checks its sender against the
+sender account's manifest: the web editors (notes, maps lists, Office,
+whiteboards) and the CLI's sync. Until now they took whatever the home
+relayed. The home's checks stay, but a home can no longer have its clients
+apply a frame the sender's devices didn't sign.
+
+1. **One check, in Rust.** `SenderManifests` in `kutup-chat-proto`, shared
+   by the crypto WASM and the CLI. It holds what a client knows of one
+   sender account and, for a frame, answers one of:
+   - take it;
+   - fetch the head, or the manifest at a sequence, first;
+   - refuse it.
+   The clients only fetch, store and apply.
+2. **Rollback pins** (`AccountManifestPinV1`: account, incarnation,
+   sequence, hash). One per account a client has met, its own included,
+   with one rule for all:
+   - A newer head is taken only when the history from the pin to it
+     verifies link by link (`manifest-history`), never an older one.
+   - A fresh browser or profile with no pin trusts the first head that
+     verifies under the account's authority (trust on first use), then
+     holds it to that chain.
+   - Web: in memory per page. When the origin keeps the sign-in, also
+     sealed in localStorage (local-state purpose `ManifestPins`, under a key
+     derived from the master key, profile = the client and the account's id), never
+     plain. This replaces slice 2's plain own-account pin.
+   - CLI: in its profile store.
+3. **Live frames** (after `replayed`): the head must list the frame's
+   device with the key that signed it. A frame naming a later sequence than
+   the head makes the client fetch the head and check once more. So a
+   removed device's frames stop at the recipients as soon as they hold the
+   head without it.
+4. **Logged frames** (the replay on join, the CLI's log reads): device ids
+   are reused, and a removed device's past edits are part of the document.
+   So a logged frame is checked against the manifest its
+   `manifestSequence` names, from `manifest-history`, fetched once per
+   sender and sequence. That manifest must verify, be no later than the
+   pin, name the pinned account and incarnation, and list the device with
+   the signing key. It must also link to the pinned chain: `take_history`
+   walks its `previous_hash` links up to the lowest manifest the client
+   already holds above it (`NeedManifest { sequence, through }` asks for
+   the gap), so a fork that verifies under the authority but isn't the
+   pinned chain is refused as history too. A logged frame is taken at once,
+   with no fetch, when any manifest the client already holds lists its
+   device with its signing key.
+5. **A reset account.** The account's identity pin (the synced list Drive
+   and Mail use, docs/plans/drive-identity-pins.md) names another authority
+   than the sender's head: `changed`. Then the sender's frames are refused,
+   and the editor shows "Edits from <name> can't be verified: their
+   account was reset" (en and tr) until the share is made again to the new
+   incarnation. This matches Chat's quarantine and the share's incarnation
+   binding. An account the list doesn't know is trusted on first use, as in
+   item 2.
+6. **Three answers, not two.** A frame is taken, forged, or unverified:
+   - **forged**: the sender's devices didn't sign it (an unlisted device,
+     another key, a broken signature). Dropped, never applied. The editor
+     shows that once per session and sender ("Some edits from <name>
+     couldn't be verified and weren't applied"). The CLI skips it, counts
+     it, and `sync` exits non-zero.
+   - **unverified**: it can't be checked now (the server can't be read, the
+     read budget is spent, the history isn't there yet). It is never
+     applied and never trimmed: the web session's log position
+     (`LogPosition`) stops at the first unverified frame for the rest of the
+     connection, so no saved version records a position past it and the
+     server keeps it. The session resyncs after a minute, and when the
+     sender is trusted. Office holds its position the same way and reopens
+     when trusted; the whiteboard applies only what is taken. The CLI fails
+     that file's sync (an error, not a skip), so the next run reads it again.
+   - **A read budget** keeps a home from making a client read without end:
+     at most 2 reads per frame and 20 per sender per minute, and a failed
+     read is remembered for a minute. No sleeps: past the budget a frame is
+     unverified.
+7. **Trust after a reset.** When the identity pins don't know the sender's
+   account but the manifest pin names another incarnation, the answer is
+   reset with a way out: the editor's notice has "Trust their new account"
+   (en and tr; the editors and Maps), which forgets the manifest pin and
+   resyncs every session waiting on that sender. The CLI's errors name
+   `kutup devices forget-pin --sender <account>` or `kutup identity trust
+   <their address>`.
+8. **Pins** are forward-only within an incarnation (an entry `supersedes`
+   the one before), merged with the sealed copy on every write (so tabs
+   don't undo each other), parsed one entry at a time, and the plain pins
+   of #365 are deleted only after the sealed ones are written.
+
+**What slice 3 covers and what it doesn't.**
+- Covered: a home (or anyone between) can't have a client apply a frame
+  that the sender account's devices didn't sign. It can't replay a removed
+  device's key into live editing once the recipient holds the head without
+  it, can't roll a sender's manifest back, and can't pass off a reset
+  account as the old one.
+- Not covered: someone who holds a removed device's key, together with a
+  home that takes its frames, can add a frame that claims an earlier
+  `manifestSequence`. Recipients take it as history (item 4). An honest
+  home refuses it (slice 2), so this needs both a stolen key and a
+  dishonest home.
+- Closing that is the roadmap item **"rotate document keys when a device is
+  removed"**, after Signal's practice of new sender keys after a removal.
+  When a device leaves an account that edits a file, the file's next
+  document key excludes it, and frames under an older document key count
+  only up to the rotation's log position.
+  - Every frame already signs its `doc_key_id` and key generation (V3).
+  - The log keeps each frame's document key.
+  - Nothing in slice 3 ties verification to a single key.
+  So the rotation needs no format change and no wipe.
+
+Tests:
+- Rust: the check's rules: listed or not, key mismatch, a later sequence, a
+  reused id with an earlier holder's history, a rolled-back or forked head,
+  a reset incarnation.
+- vitest: the session's `onFrame` with a fake home relaying a frame of a
+  device the head doesn't list, or under another key: dropped, not applied.
+- Browser (spec 171, office suite): every frame relayed to one tab with its
+  signature changed in transit, as a dishonest home would relay it. The tab
+  drops it and names the sender once, while the edit stays in the log from
+  its real sender. A removed device's old frame injected into the log
+  (planned at first) is history by design (item 4), so it proves nothing.
+  Two more cases with a second account: a frame relayed under a device the
+  sender's account doesn't list, and the second account's genuinely signed
+  frame relabelled as the first's. Both are refused and said, and the
+  genuine edits around them still arrive.
+- Two-server (`chat_federation_live`, the remote editor case): a federated
+  editor's frame signed by another key, and one from a device its account
+  doesn't list, are never kept by the home, though the editor's own server
+  relays them.
+- Rust, CLI and vitest: forged (unlisted device, other key), an unreadable
+  server (the CLI fails the file, not the sender), a reset with its way
+  out, the cheap path, linked history (a fork refused), and the session
+  holding its position at an unverified frame.
+- Browser: spec 04 and the collab suites stay green.
+
+As built:
+- `kutup-chat-proto::SenderManifests` holds the rules. The crypto WASM's
+  `CollabSender` keeps one per sender account on a page, so a frame's check
+  copies no manifests.
+- `@kutup/collab/senders` (`SenderCheck`) reads heads and history, asks the
+  identity pins through drive-core's `accountAuthorityVerdict`, and keeps the
+  pins in the sealed store (`@kutup/session/manifestPins`).
+- The collab transport tells `onFrame` whether a frame came before this
+  connection's `replayed` (the log) or after (live).
+- Every frame consumer checks before it applies: notes and lists (the
+  session, which closes the check with itself), Office, whiteboards, and
+  Maps' background list writes (quietly).
+- The CLI's `sync` checks every logged frame (`crate::senders`), keeping
+  other accounts' pins in its profile store under `sender:<account>`.
+- After review (#370): the three answers, holding (`LogPosition`, Office's
+  held position), the read budget and failure cache, trust after a reset
+  (`forgetManifestPin`, `kutup devices forget-pin`), linked history
+  (`take_history`), and the pins' merge rules (items 4, 6, 7 and 8).
