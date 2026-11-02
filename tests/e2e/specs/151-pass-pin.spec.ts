@@ -63,7 +63,7 @@ test('pass: a PIN set with the account password opens locked vaults; three wrong
   await context.close()
 })
 
-test('pass: the PIN is removed with the account password, and a removed PIN falls back to the password', async ({ browser }) => {
+test('pass: the PIN is removed with the account password, and a removed PIN falls back to one click', async ({ browser }) => {
   test.slow()
   const context = await browser.newContext()
   await registerAccount(context, newAccount('pass151b', PASSWORD))
@@ -97,13 +97,13 @@ test('pass: the PIN is removed with the account password, and a removed PIN fall
   await submitThroughRateLimit(other, 'Remove PIN', other.getByText('PIN removed').first(), () =>
     remove.getByLabel('Your Kutup password').fill(PASSWORD),
   )
-  await expect(other.getByRole('combobox', { name: 'After a lock, open vaults with' })).toHaveText('My Kutup password')
+  // No PIN, nothing else chosen: one click, not a password nobody chose.
+  await expect(other.getByRole('combobox', { name: 'After a lock, open vaults with' })).toHaveText('One click')
   await other.close()
 
   await page.getByLabel('PIN', { exact: true }).fill('135790')
   await expect(page.getByText(/The PIN was removed/)).toBeVisible({ timeout: 30_000 })
-  await submitThroughRateLimit(page, 'Unlock with my password', page.getByRole('heading', { name: 'Kişisel', exact: true, level: 1 }), () =>
-    page.getByLabel('Your Kutup password').fill(PASSWORD),
-  )
+  await page.getByRole('button', { name: 'Unlock with my sign-in' }).click()
+  await expect(page.getByRole('heading', { name: 'Kişisel', exact: true, level: 1 })).toBeVisible({ timeout: 60_000 })
   await context.close()
 })
