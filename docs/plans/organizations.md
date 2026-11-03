@@ -542,9 +542,13 @@ An account the organization creates has no username on the server's domain
 ### 7. Limits: settings, not plans
 
 Each limit is a registry setting ([`settings-registry.md`](settings-registry.md)),
-site-wide with a value per organization: the registry gains an organization
-scope (`organization_setting_overrides`, `load_for_org`), edited on the
-organization's admin page. The per-account `mail_domain_overrides` goes.
+site-wide with a value per organization (`organization_setting_overrides`).
+The per-account `mail_domain_overrides` goes (O1: the domain count and the
+catch-all become the organization's, the address count the account's own).
+The registry's generic organization scope (`per_organization`,
+`load_for_org`) comes with the first slice that reads such a setting (O3),
+each setting with the code that uses it, so no setting shows in the admin
+pages before it does anything.
 
 | Setting | Default |
 | --- | --- |
@@ -632,7 +636,7 @@ by the third session.
 
 | Slice | What | Tests |
 | --- | --- | --- |
-| **O1 server** (before the wipe) | tables; organization of one on the first domain; domains keyed by organization; registry organization scope | live: an account adds a domain and owns its organization of one; limits read from the organization |
+| **O1 server** (before the wipe) | tables; organization of one on the first domain; domains keyed by organization; the domain count and catch-all as the organization's own values (`organization_setting_overrides`) | live: an account adds a domain and owns its organization of one; limits read from the organization |
 | **O2 crypto** (before the wipe) | the five formats, purpose 7, labels, vectors, WASM | unit and vectors: tampered AAD, wrong recipient, an escrow whose master key derives another authority, a share signed by a non-admin |
 | **O3 server** | invitations, roles, private members, admin-made addresses without keys, leaving and removal with addresses freed and reusable, catch-all on any member's address, security events | live (mail gate with CoreDNS): account 1 verifies `mail.t.co`, invites account 2, makes `b@mail.t.co`; account 2's client makes its key; both send and receive with `d=mail.t.co`; account 2 leaves; `b@` is refused, then made again for account 3, whose key list is a new account's |
 | **O4 server + web** | the organization key: setup, certificate, admin shares and activation, access requests and consent, escrow, privatize, rotation on admin removal, lost-key reset | live and browser: consent and decline; an escrow opened by an admin; privatize deletes it and refuses reset; a removed admin's share gone and escrows re-sealed |
