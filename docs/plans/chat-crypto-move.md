@@ -1,7 +1,7 @@
 # Chat's own crypto into kutup-crypto
 
 Status: approved (two PRs, labels unchanged). Slice 1 (profiles) is built;
-slice 2 (links and the store cipher) is next.
+slice 2 (call links and the store cipher) is in progress: its vectors are made.
 
 Code-only items 1 and 2 of [wipe-unification.md](wipe-unification.md): the
 last large body of crypto outside the canonical crate moves into it, and the
@@ -60,8 +60,11 @@ Two PRs into master, each with its own vectors:
 
 1. **Profiles** (items 1 and 2's win): `profile` into kutup-crypto, the five
    WASM calls, the apps switched. Size M.
-2. **Links and the store cipher:** `call_link`, `group_link`/`group_invite`,
-   `store_cipher`. Size M. Only chat-core and the Chat app see it.
+2. **Call links and the store cipher:** `call_link`, `store_cipher` (with
+   its `LocalCipher`). Size M. Only chat-core and the Chat app see it.
+   `group_link`/`group_invite` turned out to need no move: their sealed
+   fields are already `kutup_crypto::chat_group`'s, and they hold no
+   primitives of their own.
 
 ## Tests
 

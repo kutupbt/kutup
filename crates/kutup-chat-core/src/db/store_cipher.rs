@@ -340,6 +340,101 @@ mod tests {
 
     const MASTER: [u8; 32] = [7; 32];
 
+    /// Hands out 0, 1, 2, ... so a sealing is the same every run.
+    struct CountingRng(u8);
+
+    impl RngCore for CountingRng {
+        fn next_u32(&mut self) -> u32 {
+            let mut bytes = [0; 4];
+            self.fill_bytes(&mut bytes);
+            u32::from_le_bytes(bytes)
+        }
+        fn next_u64(&mut self) -> u64 {
+            let mut bytes = [0; 8];
+            self.fill_bytes(&mut bytes);
+            u64::from_le_bytes(bytes)
+        }
+        fn fill_bytes(&mut self, dest: &mut [u8]) {
+            for byte in dest {
+                *byte = self.0;
+                self.0 = self.0.wrapping_add(1);
+            }
+        }
+        fn try_fill_bytes(&mut self, dest: &mut [u8]) -> std::result::Result<(), rand_core::Error> {
+            self.fill_bytes(dest);
+            Ok(())
+        }
+    }
+
+    impl CryptoRng for CountingRng {}
+
+    /// The chat store's formats' canonical vectors
+    /// (`crates/kutup-crypto/tests/vectors/chat-store-v1.json`), made from
+    /// this code before it moves into kutup-crypto
+    /// (docs/plans/chat-crypto-move.md, slice 2): the wrapped store key, a
+    /// record's hashed key and sealed value, and local data, each sealed with
+    /// a counting rng. `KUTUP_WRITE_CHAT_VECTORS=1` writes the file;
+    /// otherwise this code must reproduce it byte for byte.
+    #[test]
+    fn store_formats_match_the_canonical_vectors() {
+        use base64::engine::general_purpose::STANDARD;
+        use base64::Engine as _;
+        use serde_json::json;
+        let path = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../kutup-crypto/tests/vectors/chat-store-v1.json"
+        );
+        let binding = "chat:0b6b5e0c-4c1e-4b8e-9c2d-6a1f3e5d7c9b";
+        let mut rng = CountingRng(0);
+        let (store, wrapped) = StoreCipher::create(&MASTER, binding, &mut rng).unwrap();
+        let record_key = keys::text("aci:0b6b5e0c-4c1e-4b8e-9c2d-6a1f3e5d7c9b@example.test");
+        let hashed = store.hashed_key("contacts", &record_key);
+        let record = store
+            .seal(
+                "contacts",
+                &hashed,
+                &record_key,
+                b"{\"state\":\"accepted\"}",
+                &mut rng,
+            )
+            .unwrap();
+        let local = LocalCipher::new(&MASTER, "account:example")
+            .unwrap()
+            .seal("draft", b"half a message", &mut rng)
+            .unwrap();
+        let made = json!({
+            "masterKey": STANDARD.encode(MASTER),
+            "binding": binding,
+            "rng": "bytes 0, 1, 2, ... in order",
+            "wrappedStoreKey": STANDARD.encode(&wrapped),
+            "record": {
+                "store": "contacts",
+                "key": STANDARD.encode(&record_key),
+                "hashedKey": hashed,
+                "value": STANDARD.encode(b"{\"state\":\"accepted\"}"),
+                "sealed": STANDARD.encode(&record),
+            },
+            "local": {
+                "scope": "account:example",
+                "purpose": "draft",
+                "plaintext": STANDARD.encode(b"half a message"),
+                "sealed": STANDARD.encode(&local),
+            },
+        });
+        if std::env::var_os("KUTUP_WRITE_CHAT_VECTORS").is_some() {
+            std::fs::write(path, serde_json::to_string_pretty(&made).unwrap() + "\n").unwrap();
+        }
+        let v: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
+        assert_eq!(made, v);
+        let reopened = StoreCipher::unwrap(&MASTER, binding, &wrapped).unwrap();
+        let (key, value) = reopened.open("contacts", &hashed, &record).unwrap();
+        assert_eq!(
+            (key, value.to_vec()),
+            (record_key, b"{\"state\":\"accepted\"}".to_vec())
+        );
+    }
+
     #[test]
     fn a_record_opens_where_it_was_sealed_and_nowhere_else() {
         let (cipher, wrapped) =

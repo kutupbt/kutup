@@ -557,6 +557,98 @@ pub fn open_joined_meeting(master_key: &str, sealed: &str) -> Result<JoinedMeeti
 mod tests {
     use super::*;
 
+    /// The call-link formats' canonical vectors
+    /// (`crates/kutup-crypto/tests/vectors/call-link-v1.json`), made from this
+    /// code before it moves into kutup-crypto (docs/plans/chat-crypto-move.md,
+    /// slice 2): the owner's secret and host token, every key a secret gives,
+    /// the fragment, and a sealed name, info, message and joined meeting with
+    /// what each opens to. Their nonces are inside them, so the moved code
+    /// must reseal each byte for byte. `KUTUP_WRITE_CHAT_VECTORS=1` writes the
+    /// file; otherwise this code must open what it holds.
+    #[test]
+    fn call_link_formats_match_the_canonical_vectors() {
+        use serde_json::json;
+        let path = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../kutup-crypto/tests/vectors/call-link-v1.json"
+        );
+        if std::env::var_os("KUTUP_WRITE_CHAT_VECTORS").is_some() {
+            let master = STANDARD.encode([0x21u8; 32]);
+            let nonce = "0123456789abcdef0123456789abcdef";
+            let secret = owner_call_link_secret(&master, nonce).unwrap();
+            let host = owner_call_link_host_token(&master, nonce).unwrap();
+            let keys = CallLinkKeys::derive(&secret).unwrap();
+            let info = CallLinkInfoV1 {
+                title: "Weekly sync".into(),
+                starts_at_ms: Some(1_700_000_000_000),
+                duration_minutes: Some(45),
+            };
+            let message = CallLinkMessageV1 {
+                id: "00112233445566778899aabbccddeeff".into(),
+                text: "Hello\nall".into(),
+                sent_at_ms: 1_700_000_001_000,
+            };
+            let fragment = call_link_fragment(&secret).unwrap();
+            let joined = JoinedMeetingV1 {
+                fragment: fragment.clone(),
+                title: "Weekly sync".into(),
+                joined_at_ms: 1_700_000_002_000,
+                seconds: 754,
+            };
+            let vectors = json!({
+                "masterKey": master,
+                "nonce": nonce,
+                "ownerSecret": secret.as_str(),
+                "hostToken": host.as_str(),
+                "hostTokenHash": call_link_token_hash(&host).unwrap(),
+                "roomId": keys.room_id,
+                "accessToken": keys.access_token,
+                "accessTokenHash": keys.access_token_hash,
+                "frameKey": keys.frame_key.as_str(),
+                "fragment": fragment,
+                "name": { "plaintext": "Ayşe", "sealed": keys.seal_name("Ayşe").unwrap() },
+                "info": { "plaintext": info, "sealed": keys.seal_info(&info).unwrap() },
+                "message": { "plaintext": message, "sealed": keys.seal_message(&message).unwrap() },
+                "joined": { "plaintext": joined, "sealed": seal_joined_meeting(&master, &joined).unwrap() },
+            });
+            std::fs::write(path, serde_json::to_string_pretty(&vectors).unwrap() + "\n").unwrap();
+        }
+        let v: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
+        let text = |key: &str| v[key].as_str().unwrap().to_owned();
+        let secret = owner_call_link_secret(&text("masterKey"), &text("nonce")).unwrap();
+        assert_eq!(secret.as_str(), text("ownerSecret"));
+        let host = owner_call_link_host_token(&text("masterKey"), &text("nonce")).unwrap();
+        assert_eq!(host.as_str(), text("hostToken"));
+        assert_eq!(call_link_token_hash(&host).unwrap(), text("hostTokenHash"));
+        let keys = CallLinkKeys::derive(&secret).unwrap();
+        assert_eq!(keys.room_id, text("roomId"));
+        assert_eq!(keys.access_token, text("accessToken"));
+        assert_eq!(keys.access_token_hash, text("accessTokenHash"));
+        assert_eq!(keys.frame_key.as_str(), text("frameKey"));
+        assert_eq!(call_link_fragment(&secret).unwrap(), text("fragment"));
+        let sealed = |key: &str| v[key]["sealed"].as_str().unwrap().to_owned();
+        assert_eq!(
+            keys.open_name(&sealed("name")).unwrap(),
+            v["name"]["plaintext"]
+        );
+        assert_eq!(
+            serde_json::to_value(keys.open_info(&sealed("info")).unwrap()).unwrap(),
+            v["info"]["plaintext"]
+        );
+        assert_eq!(
+            serde_json::to_value(keys.open_message(&sealed("message")).unwrap()).unwrap(),
+            v["message"]["plaintext"]
+        );
+        assert_eq!(
+            serde_json::to_value(
+                open_joined_meeting(&text("masterKey"), &sealed("joined")).unwrap()
+            )
+            .unwrap(),
+            v["joined"]["plaintext"]
+        );
+    }
+
     #[test]
     fn a_joined_meeting_opens_only_for_the_account_that_sealed_it() {
         let master = STANDARD.encode([0x11u8; 32]);
