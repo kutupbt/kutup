@@ -65,7 +65,11 @@ refused (the client's `expiresAt` changes). PR 2 does it as Signal does:
   and is woken when the app comes back online or reopens. Stored or
   already stored sends the message; storage full or a refusal shows it as
   not delivered at once. The attachment message is never sent before the
-  destination's copy is durable.
+  destination's copy is durable. The copy is asked with the recipient's
+  delivery capability, from their profile key; an accepted contact whose
+  key hasn't come yet (a reply that accepts can travel without it while
+  their profile upload is pending) waits for it the same way, instead of
+  the send being refused.
 - **Lifetime.** The job gives up after `chatAttachmentSendLifetimeSeconds`
   (a site setting, 86400): not delivered, with retry, which asks the same
   operation again.

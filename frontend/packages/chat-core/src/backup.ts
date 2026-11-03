@@ -41,6 +41,12 @@ const SEGMENT_TARGET_BYTES = 64 * 1024
 const COMPACT_EVENT_THRESHOLD = 10_000
 const COMPACT_BYTE_THRESHOLD = 64 * 1024 * 1024
 const COMPACT_DAILY_MS = 24 * 60 * 60 * 1000
+// A cycle that leaves work it can retry (a segment or a media copy a network
+// blip or the server's error stopped) runs again after this, doubling up to
+// the most; a cycle that leaves none starts over. Signal retries its backups
+// the same way, not only on the next change.
+const RETRY_FIRST_MS = 5_000
+const RETRY_MAX_MS = 5 * 60 * 1000
 const BACKUP_MEDIA_HEADER_BYTES = 107
 const encoder = new TextEncoder()
 
@@ -401,6 +407,8 @@ export class ChatBackupCoordinator {
   private readonly media = new Map<string, MediaProtection>()
   private viewValue: ChatBackupView
   private timer: BackupScheduledTask | null = null
+  private retryTask: BackupScheduledTask | null = null
+  private retryDelayMs = RETRY_FIRST_MS
   private running: Promise<void> | null = null
   /** A cycle was asked for while one ran: that one collected before the change, so another follows. */
   private again = false
@@ -673,6 +681,8 @@ export class ChatBackupCoordinator {
     this.disposed = true
     if (this.timer !== null) this.runtime.scheduler.cancel(this.timer)
     this.timer = null
+    if (this.retryTask !== null) this.runtime.scheduler.cancel(this.retryTask)
+    this.retryTask = null
     this.root.fill(0)
     this.listeners.clear()
     this.db.close()
@@ -687,29 +697,65 @@ export class ChatBackupCoordinator {
       return this.running
     }
     this.running = (async () => {
-      do {
-        this.again = false
-        try {
-          await this.collectAndQueue()
-        } catch (error) {
-          // Nothing new was queued: the view says so, instead of staying on
-          // "backing up" for a cycle that ended (the next change, visit or
-          // reconnect tries again).
+      let failed = true
+      try {
+        do {
           this.again = false
-          await this.refreshView('needsAttention')
-          throw error
-        }
-        try {
-          await this.flush()
-        } catch (error) {
-          // `flush` said why in the view; a cycle asked for meanwhile is the
-          // next change's to run.
-          this.again = false
-          throw error
-        }
-      } while (this.again && !this.disposed)
+          try {
+            await this.collectAndQueue()
+          } catch (error) {
+            // Nothing new was queued: the view says so, instead of staying on
+            // "backing up" for a cycle that ended (the retry, the next change,
+            // visit or reconnect tries again).
+            this.again = false
+            await this.refreshView('needsAttention')
+            throw error
+          }
+          try {
+            await this.flush()
+          } catch (error) {
+            // `flush` said why in the view; a cycle asked for meanwhile is the
+            // retry's or the next change's to run.
+            this.again = false
+            throw error
+          }
+        } while (this.again && !this.disposed)
+        failed = false
+      } finally {
+        await this.retryIfLeft(failed)
+      }
     })().finally(() => { this.running = null })
     return this.running
+  }
+
+  /**
+   * After a cycle: when it failed, or left work it can retry, another runs
+   * after the backoff. Offline waits for the reconnect, and a full storage
+   * for space, as before.
+   */
+  private async retryIfLeft(failed: boolean): Promise<void> {
+    if (this.retryTask !== null) this.runtime.scheduler.cancel(this.retryTask)
+    this.retryTask = null
+    if (this.disposed) return
+    const left = failed || await this.workLeft().catch(() => true)
+    if (!left || this.messageStorageFull || !this.runtime.connectivity.isOnline()) {
+      if (!left) this.retryDelayMs = RETRY_FIRST_MS
+      return
+    }
+    const delay = this.retryDelayMs
+    this.retryDelayMs = Math.min(delay * 2, RETRY_MAX_MS)
+    this.retryTask = this.runtime.scheduler.schedule(delay, () => {
+      this.retryTask = null
+      this.runInBackground()
+    })
+  }
+
+  /** Segments not yet taken, or media whose copy failed for a reason other than a full storage. */
+  private async workLeft(): Promise<boolean> {
+    for (const media of this.media.values()) {
+      if (media.needsAttention && !media.storageFull) return true
+    }
+    return (await getAll<OutboxEntry>(this.db, 'outbox')).length > 0
   }
 
   /** Protects the media of `contents` (the backed-up history's); attachment id → backup media id. */
