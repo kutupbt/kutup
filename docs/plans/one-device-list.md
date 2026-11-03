@@ -519,6 +519,9 @@ apply a frame the sender's devices didn't sign.
      shows that once per session and sender ("Some edits from <name>
      couldn't be verified and weren't applied"). The CLI skips it, counts
      it, and `sync` exits non-zero.
+     A relayed frame that isn't a frame at all (it can't name a sender) is
+     dropped the same way and said without a name ("An edit couldn't be
+     verified and wasn't applied"), at most once a minute.
    - **unverified**: it can't be checked now (the server can't be read, the
      read budget is spent, the history isn't there yet). It is never
      applied and never trimmed: the web session's log position

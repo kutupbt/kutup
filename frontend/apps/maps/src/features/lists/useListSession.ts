@@ -151,6 +151,7 @@ export function useListSession(file: DriveFile | null, readOnly: boolean, folder
           onCollaborators: setCollaborators,
           // Edits apply only when their sender's devices signed them.
           senders: new SenderCheck({
+            onMalformed: () => toast.error(t('list.editUnverified')),
             authority: accountAuthorityVerdict,
             name: accountNameOfKey,
             onRefused: ({ name, reason, trust }) =>
