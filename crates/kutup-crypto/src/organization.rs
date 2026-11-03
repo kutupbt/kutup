@@ -4,27 +4,36 @@
 //! - The **organization key** is an X-Wing key pair from a random 32-byte
 //!   seed; its id is a hash of the public key (`kutup/org/key-id/v1`).
 //! - [`KeyCertificateV1`]: the admin who made it vouches for it, signed with
-//!   their account authority (Proton's fingerprint signature).
-//! - [`KeyShareV1`]: the seed sealed to a new admin's Drive X-Wing key, bound
-//!   to the organization, the key, the recipient and the granting admin, and
+//!   their account authority (Proton's fingerprint signature). Verifying
+//!   gives a [`VerifiedKeyCertificate`], the only way to an organization's
+//!   public key that a member's escrow is sealed to.
+//! - [`KeyShareV1`]: the seed sealed to a new admin's Drive X-Wing key, taken
+//!   from their verified, authority-signed Drive key binding
+//!   ([`VerifiedDriveKey`]); bound to the organization, the key, the
+//!   recipient (and a hash of their public key) and the granting admin, and
 //!   signed by the granting admin (Proton's `OrganizationKeyInvitation`).
 //! - [`AccessRequestV1`]: an admin's signed request that a private member
 //!   become managed (Proton's signed `InvitationData`).
 //! - [`EscrowV1`]: a managed member's master key sealed to the organization
-//!   key, bound to the member, their incarnation and the master key's
-//!   generation. Unsigned: whoever opens it derives the authority from the
-//!   master key and checks it is the member's, so a server can't plant one.
+//!   key of a verified certificate, bound to the member, their incarnation
+//!   and the master key's generation. Unsigned: whoever opens it derives the
+//!   authority from the master key and checks it is the member's, so a
+//!   server can't plant one.
 //!
 //! Each format is an 8-byte magic, a suite, then length-prefixed fields; a
 //! signature covers its label then every byte before it. Nothing binds a
-//! username, an address or the organization's name.
+//! username, an address or the organization's name. Whether a signer is an
+//! admin is the server's word, as at Proton: these formats prove who signed,
+//! and the member's client checks the rest at consent (§3).
 
 use zeroize::Zeroizing;
 
 use crate::account_envelope::MasterKeyGeneration;
 use crate::account_ref::AccountRef;
 use crate::error::{CryptoError, Result};
-use crate::identity::{authority_key_id_from_public, AccountIdentityKeysV1};
+use crate::identity::{
+    authority_key_id_from_public, incarnation_id_from_authority_public, AccountIdentityKeysV1,
+};
 use crate::labels;
 use crate::primitives::{
     hash, hpke_open, hpke_public_key, hpke_seal, SigningKey, Suite, VerifyingKey,
@@ -37,6 +46,7 @@ const ESCROW_MAGIC: &[u8; 8] = b"KUTPOE1\0";
 /// X-Wing, HKDF-SHA256, ChaCha20-Poly1305, Ed25519 (docs/plans/pq-shares.md).
 const SUITE: u16 = 1;
 const SIGNATURE_LEN: usize = 64;
+const PUBLIC_KEY_LEN: usize = crate::hpke_xwing::PUBLIC_KEY_LEN;
 const ENCAPSULATED_LEN: usize = crate::hpke_xwing::ENCAPSULATED_KEY_LEN;
 /// A 32-byte secret sealed with ChaCha20-Poly1305.
 const SEALED_SECRET_LEN: usize = 32 + 16;
@@ -81,18 +91,33 @@ impl Party {
         })
     }
 
-    fn put(&self, out: &mut Vec<u8>) {
-        put(out, &self.account.bytes());
+    fn put(&self, out: &mut Vec<u8>) -> Result<()> {
+        put(out, &self.account.bytes())?;
         out.extend_from_slice(&self.incarnation_id);
+        Ok(())
     }
 
     fn take(reader: &mut Reader<'_>) -> Result<Self> {
-        let (account, _) = AccountRef::read(reader.prefixed()?)
+        let bytes = reader.prefixed()?;
+        let (account, used) = AccountRef::read(bytes)
             .map_err(|_| CryptoError::InvalidInput("organization document: account".into()))?;
+        if used != bytes.len() {
+            return Err(CryptoError::InvalidInput(
+                "organization document: account has trailing bytes".into(),
+            ));
+        }
         Ok(Self {
             account,
             incarnation_id: reader.array()?,
         })
+    }
+
+    /// Whether `authority` is this party's: the incarnation it derives.
+    fn is_authority(&self, authority: &[u8; 32]) -> Result<bool> {
+        Ok(hex_32(
+            &incarnation_id_from_authority_public(authority),
+            "incarnation",
+        )? == self.incarnation_id)
     }
 }
 
@@ -108,9 +133,12 @@ fn uuid_bytes(value: &str) -> Result<[u8; 16]> {
     crate::drive_object::parse_canonical_uuid(value, "organization")
 }
 
-fn put(out: &mut Vec<u8>, bytes: &[u8]) {
-    out.extend_from_slice(&(bytes.len() as u16).to_be_bytes());
+fn put(out: &mut Vec<u8>, bytes: &[u8]) -> Result<()> {
+    let len = u16::try_from(bytes.len())
+        .map_err(|_| CryptoError::InvalidInput("organization document field too long".into()))?;
+    out.extend_from_slice(&len.to_be_bytes());
     out.extend_from_slice(bytes);
+    Ok(())
 }
 
 /// Reads a document field by field; every read past the end is refused.
@@ -154,6 +182,11 @@ impl<'a> Reader<'a> {
     fn prefixed(&mut self) -> Result<&'a [u8]> {
         let len = u16::from_be_bytes(self.array()?) as usize;
         self.take(len)
+    }
+
+    fn text(&mut self) -> Result<String> {
+        String::from_utf8(self.prefixed()?.to_vec())
+            .map_err(|_| CryptoError::InvalidInput("organization document: text".into()))
     }
 
     /// The signed part and the signature that ends the document.
@@ -217,6 +250,19 @@ pub struct KeyCertificateV1 {
     pub admin_authority_key_id: String,
 }
 
+/// A certificate whose signature, key id and admin were checked: the only
+/// way to the public key an escrow is sealed to.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct VerifiedKeyCertificate(KeyCertificateV1);
+
+impl std::ops::Deref for VerifiedKeyCertificate {
+    type Target = KeyCertificateV1;
+
+    fn deref(&self) -> &KeyCertificateV1 {
+        &self.0
+    }
+}
+
 impl KeyCertificateV1 {
     /// Signs a certificate of `public_key` for `organization_id` with
     /// `admin`'s authority.
@@ -227,18 +273,23 @@ impl KeyCertificateV1 {
         admin: &Party,
         admin_keys: &AccountIdentityKeysV1,
     ) -> Result<Vec<u8>> {
-        if public_key.len() != crate::hpke_xwing::PUBLIC_KEY_LEN {
+        if public_key.len() != PUBLIC_KEY_LEN {
             return Err(CryptoError::InvalidInput(
                 "organization public key length".into(),
+            ));
+        }
+        if !admin.is_authority(&admin_keys.authority_public_key())? {
+            return Err(CryptoError::InvalidInput(
+                "the admin's incarnation is not their authority's".into(),
             ));
         }
         let mut body = header(CERTIFICATE_MAGIC);
         body.extend_from_slice(&uuid_bytes(organization_id)?);
         body.extend_from_slice(&key_id(public_key));
-        put(&mut body, public_key);
+        put(&mut body, public_key)?;
         body.extend_from_slice(&issued_at.to_be_bytes());
-        admin.put(&mut body);
-        put(&mut body, admin_keys.authority_key_id().as_bytes());
+        admin.put(&mut body)?;
+        put(&mut body, admin_keys.authority_key_id().as_bytes())?;
         Ok(sign(
             labels::ORG_KEY_CERTIFICATE_V1,
             body,
@@ -247,16 +298,18 @@ impl KeyCertificateV1 {
     }
 
     /// The certificate, if `admin_authority` (the admin's published account
-    /// authority) signed it and its key id is its public key's.
-    pub fn verify(bytes: &[u8], admin_authority: &[u8; 32]) -> Result<Self> {
+    /// authority) signed it, its key id is its public key's, and the admin
+    /// it names is that authority's (incarnation and authority key id).
+    /// This proves who signed; whether they are an admin is the server's
+    /// word (§3, what the member's client checks at consent).
+    pub fn verify(bytes: &[u8], admin_authority: &[u8; 32]) -> Result<VerifiedKeyCertificate> {
         let mut reader = Reader::new(bytes, CERTIFICATE_MAGIC)?;
         let organization_id = reader.array()?;
         let key_id_read: KeyId = reader.array()?;
         let public_key = reader.prefixed()?.to_vec();
         let issued_at = u64::from_be_bytes(reader.array()?);
         let admin = Party::take(&mut reader)?;
-        let admin_authority_key_id = String::from_utf8(reader.prefixed()?.to_vec())
-            .map_err(|_| CryptoError::InvalidInput("authority key id".into()))?;
+        let admin_authority_key_id = reader.text()?;
         let (body, signature) = reader.signed()?;
         verify(
             labels::ORG_KEY_CERTIFICATE_V1,
@@ -264,20 +317,63 @@ impl KeyCertificateV1 {
             &signature,
             admin_authority,
         )?;
-        if key_id(&public_key) != key_id_read
+        if public_key.len() != PUBLIC_KEY_LEN
+            || key_id(&public_key) != key_id_read
             || authority_key_id_from_public(admin_authority) != admin_authority_key_id
+            || !admin.is_authority(admin_authority)?
         {
             return Err(CryptoError::AuthFailed);
         }
-        Ok(Self {
+        Ok(VerifiedKeyCertificate(Self {
             organization_id,
             key_id: key_id_read,
             public_key,
             issued_at,
             admin,
             admin_authority_key_id,
+        }))
+    }
+}
+
+/// An account's Drive X-Wing key from its authority-signed Drive key binding
+/// (`drive_key_binding`): the only key an organization key share is sealed
+/// to, so a server can't swap in its own.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct VerifiedDriveKey {
+    account: AccountRef,
+    authority: [u8; 32],
+    hpke_public: [u8; PUBLIC_KEY_LEN],
+}
+
+impl VerifiedDriveKey {
+    /// Checks the binding `signature` by `authority_public` over the
+    /// account's Drive keys at `epoch`.
+    pub fn verify(
+        account: &AccountRef,
+        authority_public: &[u8; 32],
+        epoch: u32,
+        drive_hpke_public: &[u8; PUBLIC_KEY_LEN],
+        drive_signing_public: &[u8; 32],
+        signature: &[u8],
+    ) -> Result<Self> {
+        crate::drive_key_binding::verify(
+            account,
+            authority_public,
+            epoch,
+            drive_hpke_public,
+            drive_signing_public,
+            signature,
+        )?;
+        Ok(Self {
+            account: account.clone(),
+            authority: *authority_public,
+            hpke_public: *drive_hpke_public,
         })
     }
+}
+
+fn public_key_hash(public_key: &[u8]) -> [u8; 32] {
+    hash(Suite::V1, public_key).into()
 }
 
 /// The organization key's seed for one admin.
@@ -288,38 +384,56 @@ impl KeyShareV1 {
         organization_id: &[u8; 16],
         key_id: &KeyId,
         recipient: &Party,
+        recipient_key_hash: &[u8; 32],
         granter: &Party,
-    ) -> Vec<u8> {
+        granter_authority_key_id: &str,
+    ) -> Result<Vec<u8>> {
         let mut out = header(SHARE_MAGIC);
         out.extend_from_slice(organization_id);
         out.extend_from_slice(key_id);
-        recipient.put(&mut out);
-        granter.put(&mut out);
-        out
+        recipient.put(&mut out)?;
+        out.extend_from_slice(recipient_key_hash);
+        granter.put(&mut out)?;
+        put(&mut out, granter_authority_key_id.as_bytes())?;
+        Ok(out)
     }
 
-    /// Seals `seed` (the organization key whose public key is `public_key`)
-    /// to `recipient_hpke_public_key` (their Drive X-Wing key), signed by
+    /// Seals `seed` to `recipient`'s verified Drive X-Wing key, signed by
     /// the granting admin.
     pub fn seal(
         seed: &[u8; 32],
         organization_id: &str,
         recipient: &Party,
-        recipient_hpke_public_key: &[u8],
+        recipient_key: &VerifiedDriveKey,
         granter: &Party,
         granter_keys: &AccountIdentityKeysV1,
     ) -> Result<Vec<u8>> {
+        if recipient_key.account != recipient.account
+            || !recipient.is_authority(&recipient_key.authority)?
+            || !granter.is_authority(&granter_keys.authority_public_key())?
+        {
+            return Err(CryptoError::InvalidInput(
+                "the share's parties are not their keys'".into(),
+            ));
+        }
         let key_id = key_id(&public_key(seed));
-        let mut body = Self::header(&uuid_bytes(organization_id)?, &key_id, recipient, granter);
+        let mut body = Self::header(
+            &uuid_bytes(organization_id)?,
+            &key_id,
+            recipient,
+            &public_key_hash(&recipient_key.hpke_public),
+            granter,
+            &granter_keys.authority_key_id(),
+        )?;
         let sealed = hpke_seal(
             Suite::V1,
-            recipient_hpke_public_key,
+            &recipient_key.hpke_public,
             labels::ORG_KEY_SHARE_V1,
             &body,
             seed,
         )?;
         body.extend_from_slice(&sealed.encapsulated);
-        put(&mut body, &sealed.ciphertext);
+        put(&mut body, &sealed.ciphertext)?;
         Ok(sign(
             labels::ORG_KEY_SHARE_SIGNATURE_V1,
             body,
@@ -328,21 +442,24 @@ impl KeyShareV1 {
     }
 
     /// Opens a share for `recipient` with their Drive X-Wing seed, if
-    /// `granter_authority` signed it for this organization and key: the
-    /// organization key's seed, checked against `key_id`.
+    /// `granter_authority` signed it for this organization and key and the
+    /// granter it names is that authority's: the organization key's seed,
+    /// checked against `key_id`, and the granter.
     pub fn open(
         bytes: &[u8],
         organization_id: &str,
         key_id_expected: &KeyId,
         recipient: &Party,
-        recipient_hpke_seed: &[u8],
+        recipient_hpke_seed: &[u8; 32],
         granter_authority: &[u8; 32],
     ) -> Result<(Zeroizing<[u8; 32]>, Party)> {
         let mut reader = Reader::new(bytes, SHARE_MAGIC)?;
         let organization: [u8; 16] = reader.array()?;
         let key: KeyId = reader.array()?;
         let named_recipient = Party::take(&mut reader)?;
+        let recipient_key_hash: [u8; 32] = reader.array()?;
         let granter = Party::take(&mut reader)?;
+        let granter_authority_key_id = reader.text()?;
         let header_len = reader.at;
         let encapsulated: [u8; ENCAPSULATED_LEN] = reader.array()?;
         let ciphertext = reader.prefixed()?;
@@ -361,6 +478,10 @@ impl KeyShareV1 {
         if organization != uuid_bytes(organization_id)?
             || &key != key_id_expected
             || &named_recipient != recipient
+            || recipient_key_hash
+                != public_key_hash(&hpke_public_key(Suite::V1, recipient_hpke_seed))
+            || authority_key_id_from_public(granter_authority) != granter_authority_key_id
+            || !granter.is_authority(granter_authority)?
         {
             return Err(CryptoError::AuthFailed);
         }
@@ -396,21 +517,29 @@ pub struct AccessRequestV1 {
 }
 
 impl AccessRequestV1 {
-    pub fn sign(&self, admin_keys: &AccountIdentityKeysV1) -> Vec<u8> {
+    pub fn sign(&self, admin_keys: &AccountIdentityKeysV1) -> Result<Vec<u8>> {
+        if !self
+            .admin
+            .is_authority(&admin_keys.authority_public_key())?
+        {
+            return Err(CryptoError::InvalidInput(
+                "the admin's incarnation is not their authority's".into(),
+            ));
+        }
         let mut body = header(REQUEST_MAGIC);
         body.extend_from_slice(&self.organization_id);
         body.extend_from_slice(&self.key_id);
-        self.member.put(&mut body);
-        self.admin.put(&mut body);
+        self.member.put(&mut body)?;
+        self.admin.put(&mut body)?;
         body.extend_from_slice(&self.issued_at.to_be_bytes());
-        sign(
+        Ok(sign(
             labels::ORG_ACCESS_REQUEST_V1,
             body,
             admin_keys.authority_signing_key(),
-        )
+        ))
     }
 
-    /// The request, if `admin_authority` signed it.
+    /// The request, if `admin_authority` signed it and is the admin it names.
     pub fn verify(bytes: &[u8], admin_authority: &[u8; 32]) -> Result<Self> {
         let mut reader = Reader::new(bytes, REQUEST_MAGIC)?;
         let request = Self {
@@ -427,6 +556,9 @@ impl AccessRequestV1 {
             &signature,
             admin_authority,
         )?;
+        if !request.admin.is_authority(admin_authority)? {
+            return Err(CryptoError::AuthFailed);
+        }
         Ok(request)
     }
 }
@@ -446,45 +578,48 @@ impl EscrowV1 {
         key_id: &KeyId,
         member: &Party,
         generation: MasterKeyGeneration,
-    ) -> Vec<u8> {
+    ) -> Result<Vec<u8>> {
         let mut out = header(ESCROW_MAGIC);
         out.extend_from_slice(organization_id);
         out.extend_from_slice(key_id);
-        member.put(&mut out);
+        member.put(&mut out)?;
         out.extend_from_slice(&generation.get().to_be_bytes());
-        out
+        Ok(out)
     }
 
     /// Seals `master_key` (of `generation`, the member's) to the
-    /// organization key `organization_public_key`.
+    /// organization key of `certificate`, verified by the member's client
+    /// (the admin pinned, and the rest of §3's consent checks).
     pub fn seal(
         master_key: &[u8; 32],
         generation: MasterKeyGeneration,
-        organization_id: &str,
-        organization_public_key: &[u8],
+        certificate: &VerifiedKeyCertificate,
         member: &Party,
     ) -> Result<Vec<u8>> {
         let mut out = Self::header(
-            &uuid_bytes(organization_id)?,
-            &key_id(organization_public_key),
+            &certificate.organization_id,
+            &certificate.key_id,
             member,
             generation,
-        );
+        )?;
         let sealed = hpke_seal(
             Suite::V1,
-            organization_public_key,
+            &certificate.public_key,
             labels::ORG_MEMBER_ESCROW_V1,
             &out,
             master_key,
         )?;
         out.extend_from_slice(&sealed.encapsulated);
-        put(&mut out, &sealed.ciphertext);
+        put(&mut out, &sealed.ciphertext)?;
         Ok(out)
     }
 
     /// Opens an escrow of `member` with the organization key's seed: the
     /// master key, if the authority and incarnation it derives are the
     /// member's (`member_authority`, their published account authority).
+    /// The generation only labels which master key it is: a downgrade is
+    /// refused because rotation gives a new authority (W6 rotation
+    /// checklist).
     pub fn open(
         bytes: &[u8],
         organization_id: &str,
@@ -523,7 +658,7 @@ impl EscrowV1 {
         // A server can't plant an escrow: the master key must be the member's.
         let keys = AccountIdentityKeysV1::derive(&master_key)?;
         if &keys.authority_public_key() != member_authority
-            || hex_32(&keys.incarnation_id(), "incarnation")? != member.incarnation_id
+            || !member.is_authority(member_authority)?
         {
             return Err(CryptoError::AuthFailed);
         }

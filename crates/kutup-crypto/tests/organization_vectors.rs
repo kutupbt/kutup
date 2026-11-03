@@ -15,6 +15,7 @@ use kutup_crypto::account_ref::AccountRef;
 use kutup_crypto::identity::AccountIdentityKeysV1;
 use kutup_crypto::organization::{
     key_id, public_key, AccessRequestV1, EscrowV1, KeyCertificateV1, KeyShareV1, Party,
+    VerifiedDriveKey,
 };
 
 const PATH: &str = concat!(
@@ -73,15 +74,18 @@ fn write_vectors() {
     let (_, member) = person(&member_master, MEMBER);
     let issued_at = 1_793_000_000;
     let certificate = KeyCertificateV1::sign(ORG, &public, issued_at, &admin, &admin_keys).unwrap();
-    let share = KeyShareV1::seal(
-        &seed,
-        ORG,
-        &second,
+    let binding = kutup_crypto::drive_key_binding::sign(&second_keys, &second.account, 1).unwrap();
+    let second_drive_key = VerifiedDriveKey::verify(
+        &second.account,
+        &second_keys.authority_public_key(),
+        1,
         &second_keys.drive_hpke_public_key(),
-        &admin,
-        &admin_keys,
+        &second_keys.drive_signing_public_key(),
+        &binding,
     )
     .unwrap();
+    let share =
+        KeyShareV1::seal(&seed, ORG, &second, &second_drive_key, &admin, &admin_keys).unwrap();
     let request = AccessRequestV1 {
         organization_id: *uuid::Uuid::parse_str(ORG).unwrap().as_bytes(),
         key_id: key_id(&public),
@@ -89,15 +93,12 @@ fn write_vectors() {
         admin: admin.clone(),
         issued_at,
     }
-    .sign(&admin_keys);
-    let escrow = EscrowV1::seal(
-        &[0x33; 32],
-        MasterKeyGeneration::FIRST,
-        ORG,
-        &public,
-        &member,
-    )
+    .sign(&admin_keys)
     .unwrap();
+    let verified =
+        KeyCertificateV1::verify(&certificate, &admin_keys.authority_public_key()).unwrap();
+    let escrow =
+        EscrowV1::seal(&[0x33; 32], MasterKeyGeneration::FIRST, &verified, &member).unwrap();
     let vectors = Vectors {
         organization_id: ORG.into(),
         organization_seed: hex::encode(seed),
@@ -134,7 +135,11 @@ fn checked_in_vectors_hold() {
     )
     .unwrap();
     assert_eq!(
-        (certificate.key_id, certificate.issued_at, certificate.admin),
+        (
+            certificate.key_id,
+            certificate.issued_at,
+            certificate.admin.clone()
+        ),
         (id, v.issued_at, admin.clone())
     );
 

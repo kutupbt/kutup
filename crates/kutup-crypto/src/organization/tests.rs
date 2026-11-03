@@ -22,6 +22,25 @@ fn member() -> (AccountIdentityKeysV1, Party) {
     person(0x33, "aci:0f4a6d83-2e5c-4a1b-9d7f-8c3b4a5e6f7d@kutup.dev")
 }
 
+fn drive_key(keys: &AccountIdentityKeysV1, party: &Party) -> VerifiedDriveKey {
+    let signature = crate::drive_key_binding::sign(keys, &party.account, 1).unwrap();
+    VerifiedDriveKey::verify(
+        &party.account,
+        &keys.authority_public_key(),
+        1,
+        &keys.drive_hpke_public_key(),
+        &keys.drive_signing_public_key(),
+        &signature,
+    )
+    .unwrap()
+}
+
+fn certificate(public: &[u8]) -> VerifiedKeyCertificate {
+    let (keys, admin) = admin();
+    let bytes = KeyCertificateV1::sign(ORG, public, 1_700_000_000, &admin, &keys).unwrap();
+    KeyCertificateV1::verify(&bytes, &keys.authority_public_key()).unwrap()
+}
+
 #[test]
 fn a_key_id_is_its_public_keys_hash_under_its_label() {
     let (seed, public, id) = generate();
@@ -38,7 +57,7 @@ fn a_certificate_verifies_only_under_its_admins_authority() {
     let certificate = KeyCertificateV1::sign(ORG, &public, 1_700_000_000, &party, &keys).unwrap();
     let read = KeyCertificateV1::verify(&certificate, &keys.authority_public_key()).unwrap();
     assert_eq!(
-        (read.key_id, read.public_key.as_slice(), read.admin),
+        (read.key_id, read.public_key.as_slice(), read.admin.clone()),
         (id, public.as_slice(), party)
     );
     let (other, _) = second_admin();
@@ -63,7 +82,7 @@ fn a_share_opens_for_its_recipient_only_and_names_its_granter() {
         &seed,
         ORG,
         &recipient,
-        &recipient_keys.drive_hpke_public_key(),
+        &drive_key(&recipient_keys, &recipient),
         &granter,
         &granter_keys,
     )
@@ -110,13 +129,24 @@ fn a_share_opens_for_its_recipient_only_and_names_its_granter() {
     )
     .is_err());
 
-    // Signed by someone who isn't the named granter (a non-admin): refused.
+    // Sealing in the admin's name with someone else's keys is refused, and
+    // a share a non-admin signed as themselves fails under the admin's
+    // authority.
+    assert!(KeyShareV1::seal(
+        &seed,
+        ORG,
+        &recipient,
+        &drive_key(&recipient_keys, &recipient),
+        &granter,
+        &member_keys,
+    )
+    .is_err());
     let forged = KeyShareV1::seal(
         &seed,
         ORG,
         &recipient,
-        &recipient_keys.drive_hpke_public_key(),
-        &granter,
+        &drive_key(&recipient_keys, &recipient),
+        &member,
         &member_keys,
     )
     .unwrap();
@@ -155,7 +185,7 @@ fn a_request_verifies_under_its_admins_authority() {
         admin,
         issued_at: 1_700_000_000,
     };
-    let signed = request.sign(&keys);
+    let signed = request.sign(&keys).unwrap();
     assert_eq!(
         AccessRequestV1::verify(&signed, &keys.authority_public_key()).unwrap(),
         request
@@ -173,7 +203,7 @@ fn an_escrow_opens_only_as_the_members_own_master_key() {
     let (member_keys, member) = member();
     let master = [0x33u8; 32];
     let generation = MasterKeyGeneration::new(2).unwrap();
-    let escrow = EscrowV1::seal(&master, generation, ORG, &public, &member).unwrap();
+    let escrow = EscrowV1::seal(&master, generation, &certificate(&public), &member).unwrap();
     let opened = EscrowV1::open(
         &escrow,
         ORG,
@@ -206,7 +236,7 @@ fn an_escrow_opens_only_as_the_members_own_master_key() {
 
     // Planted: a master key that derives another authority, sealed in the
     // member's name, never passes as theirs.
-    let planted = EscrowV1::seal(&[0x44; 32], generation, ORG, &public, &member).unwrap();
+    let planted = EscrowV1::seal(&[0x44; 32], generation, &certificate(&public), &member).unwrap();
     assert!(EscrowV1::open(
         &planted,
         ORG,
@@ -242,4 +272,84 @@ fn magics_and_truncations_are_refused() {
     }
     // A certificate is no request.
     assert!(AccessRequestV1::verify(&certificate, &keys.authority_public_key()).is_err());
+}
+
+#[test]
+fn an_escrow_names_its_member_and_incarnation() {
+    let (seed, public, _) = generate();
+    let (member_keys, member) = member();
+    let (other_keys, other) = second_admin();
+    let escrow = EscrowV1::seal(
+        &[0x33; 32],
+        MasterKeyGeneration::FIRST,
+        &certificate(&public),
+        &member,
+    )
+    .unwrap();
+    // Opened as another member's: refused, under their party or their authority.
+    assert!(EscrowV1::open(
+        &escrow,
+        ORG,
+        &seed,
+        &other,
+        &other_keys.authority_public_key()
+    )
+    .is_err());
+    assert!(EscrowV1::open(
+        &escrow,
+        ORG,
+        &seed,
+        &member,
+        &other_keys.authority_public_key()
+    )
+    .is_err());
+    // A member's party with another incarnation: refused.
+    let stale = Party {
+        incarnation_id: [0x99; 32],
+        ..member.clone()
+    };
+    assert!(EscrowV1::open(
+        &escrow,
+        ORG,
+        &seed,
+        &stale,
+        &member_keys.authority_public_key()
+    )
+    .is_err());
+}
+
+#[test]
+fn a_document_naming_a_wrong_incarnation_is_refused() {
+    let (keys, admin) = admin();
+    let (_, public, _) = generate();
+    // Signing for a party whose incarnation isn't the signer's is refused.
+    let stale = Party {
+        incarnation_id: [0x99; 32],
+        ..admin.clone()
+    };
+    assert!(KeyCertificateV1::sign(ORG, &public, 1, &stale, &keys).is_err());
+    let (_, someone) = member();
+    let request = AccessRequestV1 {
+        organization_id: uuid_bytes(ORG).unwrap(),
+        key_id: key_id(&public),
+        member: someone,
+        admin: stale,
+        issued_at: 1,
+    };
+    assert!(request.sign(&keys).is_err());
+    // A recipient key bound to another account is refused for the share.
+    let (seed, _, _) = generate();
+    let (other_keys, other) = second_admin();
+    let (_, someone) = member();
+    assert!(KeyShareV1::seal(
+        &seed,
+        ORG,
+        &someone,
+        &drive_key(&other_keys, &other),
+        &admin,
+        &keys
+    )
+    .is_err());
+    // A certificate refuses a short public key.
+    assert!(KeyCertificateV1::sign(ORG, &public[..100], 1, &admin, &keys).is_err());
 }

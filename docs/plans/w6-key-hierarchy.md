@@ -57,7 +57,8 @@ When master-key rotation is built, every place that writes `MasterKeyGeneration:
 - **Organizations** (`organization.rs`, docs/plans/organizations.md §3):
   - a still-managed member's rotation re-seals their `EscrowV1` at the new generation and deletes the old one, or admins lose access silently;
   - an admin's purpose-7 copy of the organization key (`OrganizationPrivateKey`) follows that admin's generation: re-wrapped at their rotation;
-  - a `KeyCertificateV1` names its signing admin's incarnation and authority key id, so when that admin rotates another admin re-signs it, or members' checks fail at consent.
+  - a `KeyCertificateV1` names its signing admin's incarnation and authority key id, so when that admin rotates another admin re-signs it, or members' checks fail at consent;
+  - an escrow's generation only labels which master key it holds: a downgrade (an old escrow offered as current) is refused because rotation makes a new authority, which the opener checks. If rotation ever keeps the authority, the opener must compare an expected generation from the account head.
 
 The `inspect` that a rotation reads first to pick the master key returns the generation in Rust and in WASM (`inspectAccountEnvelope`).
 
