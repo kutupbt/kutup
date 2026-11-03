@@ -1,9 +1,14 @@
 # Organizations, following Proton
 
 Status: **approved** 2026-11-02 (the main session's review, the user's answers
-to the open questions below). O1 (schema, domains keyed by organization,
-the registry's organization scope) is being built on `wipe/o1-organizations`;
-O2 (the formats) follows.
+to the open questions below). O1 (schema, domains keyed by organization) is
+PR #380; O2 (the formats, `kutup-crypto::organization`) is built on
+`wipe/o2-org-formats`: the four formats with magics `KUTPOC1`, `KUTPOS1`,
+`KUTPOR1`, `KUTPOE1`, envelope purpose 7, the `kutup/org/*` labels and
+`tests/vectors/organization-v1.json`. Their WASM exports come with O4, the
+first slice whose browser uses them: typed, so the organization key's seed
+and an opened master key never reach JavaScript (purpose 7 is refused on the
+generic envelope path now).
 
 - **Need (user):** two accounts on one custom mail domain, e.g.
   `a@mail.t.co` for account 1 and `b@mail.t.co` for account 2. Today a
@@ -349,11 +354,29 @@ can't tell a managed account from a private one, as at Proton.
    beyond Proton's text, what admin access means in Kutup: "Administrators
    will be able to reset your password and open everything in your account:
    files, photos, mail, calendars, contacts, passwords and chat backups.
-   They will be able to sign in as you." Accept and Decline.
-3. Before accepting, the client checks: the request is signed by a current
-   admin's authority; the key certificate is signed by an admin; both
-   admins' authorities against its pins, showing the usual shield (a red
-   shield blocks accepting).
+   They will be able to sign in as you and act as you." Accept and Decline.
+   "Act as you" is said because escrowing the master key also gives admins
+   the account authority it derives: they can sign as the member (key
+   lists, device lists). That goes beyond Proton's user-key escrow, though
+   Proton's sign-in-as has the same effect.
+3. **Before accepting, the member's client checks (O4 requirements):**
+   - the request verifies (`AccessRequestV1::verify`) and the certificate
+     verifies (`KeyCertificateV1::verify`), each under its signer's
+     published authority, the signer's incarnation matching it;
+   - both signers are pinned (identity pins: a new one is trusted on first
+     use, a changed one warns with the usual shield, a red shield blocks
+     accepting);
+   - each signer is a current owner or admin **per the server**;
+   - the request's admin is the certificate's admin, and the request's key
+     id is the certificate's;
+   - the escrow is sealed to that verified certificate's public key
+     (`EscrowV1::seal` takes only a `VerifiedKeyCertificate`, never a raw
+     key);
+   - the consent screen names the admin (their pinned name and address).
+
+   **Admin-ness is trusted to the server,** as at Proton: the formats prove
+   who signed, not their role. A server can't make a non-admin's
+   certificate pass the pins, but it decides who counts as an admin.
 4. On accept it seals `OrganizationEscrowV1` and uploads it; the server
    marks the member managed. A security event (`orgAccessGranted`) records it.
 - Declining deletes the request; the admin is told.

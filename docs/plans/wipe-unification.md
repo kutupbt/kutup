@@ -112,7 +112,8 @@ suite        u16 (W2: the one suite table)
 purpose      u16 closed registry: contactCard, mailName, identityPins,
                  chatGroup, chatContact, photosLibrary, attachmentLedger,
                  accountHead, revisionSeen, joinedMeeting, profileKeyWrap,
-                 passVaultSecret, mailSearchKey, masterKeyWrap, ...
+                 passVaultSecret, mailSearchKey, masterKeyWrap,
+                 organizationPrivateKey (purpose 7 until then), ...
 mk_gen       u32 generation of the master key that sealed it (W6)
 binding      16  users.key_binding (the permanent random binding, never a name)
 object       16  the record id (a UUID, or an HMAC of it for lists the server must not see)

@@ -104,6 +104,9 @@ pub enum AccountEnvelopePurpose {
     MailAddressPrivateKey = 5,
     /// A Kutup Pass vault's password and key file (`pass_vault`).
     PassVaultSecret = 6,
+    /// An organization key's seed, an owner's or admin's own copy
+    /// (docs/plans/organizations.md §3); its object is the key's id.
+    OrganizationPrivateKey = 7,
 }
 
 /// Whether a purpose's envelopes name an object.
@@ -155,16 +158,23 @@ impl AccountEnvelopePurpose {
                 length: Length::Fixed(crate::pass_vault::MAX_PAYLOAD_LEN + 1),
                 mutable: true,
             },
+            // One per organization key, named by its id.
+            Self::OrganizationPrivateKey => PurposePolicy {
+                object: ObjectPolicy::Required(32),
+                length: Length::Exact(32),
+                mutable: false,
+            },
         }
     }
 
     /// Every purpose, for tests and vectors.
-    pub const ALL: [Self; 5] = [
+    pub const ALL: [Self; 6] = [
         Self::PasswordMasterKey,
         Self::RecoveryMasterKey,
         Self::ChatBackupRoot,
         Self::MailAddressPrivateKey,
         Self::PassVaultSecret,
+        Self::OrganizationPrivateKey,
     ];
 }
 
@@ -178,6 +188,7 @@ impl TryFrom<u8> for AccountEnvelopePurpose {
             4 => Ok(Self::ChatBackupRoot),
             5 => Ok(Self::MailAddressPrivateKey),
             6 => Ok(Self::PassVaultSecret),
+            7 => Ok(Self::OrganizationPrivateKey),
             _ => Err(CryptoError::InvalidInput(format!(
                 "unknown account-envelope purpose {value}"
             ))),

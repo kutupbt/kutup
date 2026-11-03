@@ -101,6 +101,7 @@ pub mod oblivious;
 // Adapter: OPAQUE (RFC 9807, opaque-ke) and its ciphersuite.
 pub mod opaque;
 pub mod opaque_login_state;
+pub mod organization;
 pub mod padding;
 // Adapter: KeePass KDBX's composite key.
 pub mod pass_vault;

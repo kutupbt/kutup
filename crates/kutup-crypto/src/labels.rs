@@ -491,6 +491,22 @@ pub const OPAQUE_SETUP_V1: &[u8] = b"kutup/opaque/setup/v1\0";
 /// `kutup-crypto/src/opaque.rs` (`CONTEXT`): Bound into every sign-in's transcript.
 pub const OPAQUE_V1: &[u8] = b"kutup/opaque/v1\0";
 
+// --- org -----------------------------------------------------------------------
+
+/// `kutup-crypto/src/organization.rs` (`access_request`, signature context)
+pub const ORG_ACCESS_REQUEST_V1: &[u8] = b"kutup/org/access-request/v1\0";
+/// `kutup-crypto/src/organization.rs` (`KeyCertificateV1`, signature context)
+pub const ORG_KEY_CERTIFICATE_V1: &[u8] = b"kutup/org/key-certificate/v1\0";
+/// `kutup-crypto/src/organization.rs` (`key_id`, hash domain)
+pub const ORG_KEY_ID_V1: &[u8] = b"kutup/org/key-id/v1\0";
+/// `kutup-crypto/src/organization.rs` (`KeyShareV1`, signature context)
+pub const ORG_KEY_SHARE_SIGNATURE_V1: &[u8] = b"kutup/org/key-share-signature/v1\0";
+/// `kutup-crypto/src/organization.rs` (`KeyShareV1`, HPKE info: the seed to
+/// an admin's Drive X-Wing key, apart from Drive's share labels)
+pub const ORG_KEY_SHARE_V1: &[u8] = b"kutup/org/key-share/v1\0";
+/// `kutup-crypto/src/organization.rs` (`EscrowV1`, HPKE info)
+pub const ORG_MEMBER_ESCROW_V1: &[u8] = b"kutup/org/member-escrow/v1\0";
+
 // --- pass-vault-secret -------------------------------------------------------
 
 /// `kutup-crypto/src/pass_vault.rs`
@@ -611,7 +627,13 @@ pub const FEDERATION_REQUEST_REPLAY_HASH_V1: &[u8] = b"kutup/federation/request-
 pub const FEDERATION_SIGNATURE_TAG: &str = "kutup-federation-v2";
 
 /// Every label, for the registry's own checks.
-pub const ALL: [&[u8]; 190] = [
+pub const ALL: [&[u8]; 196] = [
+    ORG_ACCESS_REQUEST_V1,
+    ORG_KEY_CERTIFICATE_V1,
+    ORG_KEY_ID_V1,
+    ORG_KEY_SHARE_SIGNATURE_V1,
+    ORG_KEY_SHARE_V1,
+    ORG_MEMBER_ESCROW_V1,
     MANIFEST_PINS_KEY_V1,
     MANIFEST_PINS_V1,
     MAIL_FORWARDING_CODE_KEY_V1,
