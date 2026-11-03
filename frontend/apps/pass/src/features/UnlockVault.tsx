@@ -15,8 +15,8 @@ import { PasswordInput } from '@kutup/ui/components/password-input'
 import { LoadingPanel } from '@kutup/ui/components/states'
 import { keptKey, useKeepVaultKey, useVaultSecrets } from '../drive/secrets'
 import { vaultTitle, type VaultFile } from '../drive/vaults'
-import { setUnlockMode, unlockMode, type UnlockMode } from '../sync/autoLock'
-import { isPin, PIN_LENGTH, verifyPin } from '../sync/pin'
+import { setUnlockMode, useUnlockMode, type UnlockMode } from '../sync/autoLock'
+import { isPin, PIN_LENGTH, useRefreshPinStatus, verifyPin } from '../sync/pin'
 import { clearLocked, freshKeys, openVault, wasLocked } from '../sync/openVaults'
 import { VaultError } from '../vault/client'
 import type { VaultKeyInput } from '../vault/types'
@@ -117,7 +117,10 @@ export function UnlockVault({ vault }: { vault: VaultFile }) {
   const [error, setError] = useState<string | null>(null)
   const [kept, setKept] = useState<VaultKeyInput | null>(null)
   const [keptSecret, setKeptSecret] = useState('')
-  const [mode, setMode] = useState<UnlockMode>(unlockMode)
+  // The same at every way in (this tab, a new one, Drive); null while the
+  // account's PIN status is read.
+  const mode = useUnlockMode()
+  const refreshPinStatus = useRefreshPinStatus()
   const tried = useRef<string | null>(null)
 
   const fileId = vault.file.id
@@ -173,7 +176,7 @@ export function UnlockVault({ vault }: { vault: VaultFile }) {
     }
   }
 
-  if (attempt === 'trying') return <LoadingPanel label={t('unlock.opening')} />
+  if (attempt === 'trying' || (kept && !mode)) return <LoadingPanel label={t('unlock.opening')} />
   return (
     <div className="mx-auto flex w-full max-w-md flex-col gap-6 px-4 py-10">
       <div className="flex flex-col items-center gap-3 text-center">
@@ -184,7 +187,7 @@ export function UnlockVault({ vault }: { vault: VaultFile }) {
         <p className="text-sm text-muted-foreground">{t('unlock.description')}</p>
       </div>
       {notice ? <Alert variant="warn">{notice}</Alert> : null}
-      {kept ? (
+      {kept && mode ? (
         <KeptUnlock
           mode={mode}
           pending={pending}
@@ -214,9 +217,9 @@ export function UnlockVault({ vault }: { vault: VaultFile }) {
                     return
                   }
                   if (check.result === 'noPin') {
-                    // Removed, perhaps on another device: the password again.
-                    setUnlockMode('password')
-                    setMode('password')
+                    // Removed, perhaps on another device: back to the default.
+                    setUnlockMode(null)
+                    await refreshPinStatus()
                     setError(t('unlock.pinRemoved'))
                     return
                   }

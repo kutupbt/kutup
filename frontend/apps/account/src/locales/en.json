@@ -930,7 +930,15 @@
         "federationWorkerSeconds": "Check for due deliveries every (seconds)",
         "federationWorkerSecondsHint": "How often waiting deliveries to other servers are looked at.",
         "federationHeadsPerTick": "Servers tried per check",
-        "federationHeadsPerTickHint": "The most destination servers each check tries, one delivery each."
+        "federationHeadsPerTickHint": "The most destination servers each check tries, one delivery each.",
+        "federationRecordDays": "Keep delivery records (days)",
+        "federationRecordDaysHint": "Finished deliveries, and the answers given to other servers, are deleted after this long.",
+        "federationAnnounceDays": "Try rename notices for (days)",
+        "federationAnnounceDaysHint": "After this, a server that wasn't told of a rename learns of it at its next lookup.",
+        "federationAnnouncePeerDays": "Tell servers seen in the last (days)",
+        "federationAnnouncePeerDaysHint": "Renames are announced to the servers this one was in touch with this recently.",
+        "chatAttachmentSendLifetimeSeconds": "Attachment wait for the recipient's server (seconds)",
+        "chatAttachmentSendLifetimeSecondsHint": "How long a chat attachment waits for the recipient's server to store it before it shows as not delivered."
       }
     },
     "federation": {
@@ -1034,6 +1042,19 @@
         "accepted": "Accepted",
         "quarantined": "Quarantined",
         "superseded": "Superseded"
+      },
+      "deliveries": {
+        "kind": "Kind",
+        "pending": "Waiting",
+        "oldest": "Oldest waiting",
+        "rejected": "Refused (last day)",
+        "kinds": {
+          "chat": "Messages",
+          "sealed": "Sealed messages",
+          "media": "Attachments",
+          "rename": "Rename notices"
+        },
+        "peerLine": "{{kind}}: {{pending}} waiting, {{rejected}} refused in the last day"
       }
     },
     "maps": {

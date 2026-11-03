@@ -20,7 +20,7 @@ use kutup_chat_proto::{
 };
 use kutup_federation_proto::{content_digest_sha256_from_digest, FederationFeature};
 use reqwest::Method;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use time::OffsetDateTime;
 use tokio_util::io::ReaderStream;
@@ -28,6 +28,7 @@ use uuid::Uuid;
 
 use crate::error::{AppError, AppResult};
 use crate::federation::{AuthenticatedFederationRequest, FederationRequestSpec, FederationStack};
+use crate::federation_outbox;
 use crate::handlers::chat_media;
 use crate::AppState;
 
@@ -56,41 +57,6 @@ fn retryable_status(status: StatusCode) -> bool {
         || status == StatusCode::BAD_GATEWAY
         || status == StatusCode::GATEWAY_TIMEOUT
         || status.is_server_error()
-}
-
-async fn finalize_outbox(
-    state: &AppState,
-    destination: &str,
-    sequence: i64,
-    terminal_state: &'static str,
-    error_class: Option<&'static str>,
-) -> AppResult<()> {
-    debug_assert!(matches!(terminal_state, "delivered" | "rejected"));
-    let mut tx = state.pool.begin().await?;
-    let operation_id: Option<Uuid> = sqlx::query_scalar(
-        "UPDATE chat_media_federation_outbox
-         SET state=$3,attempts=attempts+1,last_error_class=$4,updated_at=now()
-         WHERE destination=$1 AND sequence=$2 AND state='pending'
-         RETURNING operation_id",
-    )
-    .bind(destination)
-    .bind(sequence)
-    .bind(terminal_state)
-    .bind(error_class)
-    .fetch_optional(&mut *tx)
-    .await?;
-    if let Some(operation_id) = operation_id {
-        sqlx::query(
-            "DELETE FROM chat_media_federation_pull_grants
-             WHERE destination=$1 AND operation_id=$2",
-        )
-        .bind(destination)
-        .bind(operation_id)
-        .execute(&mut *tx)
-        .await?;
-    }
-    tx.commit().await?;
-    Ok(())
 }
 
 fn signed_json<T: Serialize>(
@@ -146,54 +112,183 @@ fn offer_spec(transaction: &FederatedChatMediaTransactionV1) -> AppResult<Federa
     })
 }
 
+/// Why an offer didn't get a receipt: the destination can't take media
+/// offers yet, a failure that may pass, or its final refusal.
+enum OfferFailure {
+    Unsupported(String),
+    Retry(&'static str, String),
+    Refused { status: StatusCode, message: String },
+}
+
 async fn send_offer(
     state: &AppState,
     destination: &str,
     transaction: &FederatedChatMediaTransactionV1,
-) -> AppResult<ChatMediaOfferResponseV1> {
-    let response = state
+) -> AppResult<Result<ChatMediaOfferResponseV1, OfferFailure>> {
+    let federation = state
         .federation
         .as_ref()
-        .ok_or_else(|| AppError::not_found("Chat media federation unavailable"))?
-        .send(destination, offer_spec(transaction)?)
-        .await
-        .map_err(|error| AppError::new(StatusCode::BAD_GATEWAY, error.to_string()))?;
+        .ok_or_else(|| AppError::not_found("Chat media federation unavailable"))?;
+    let response = match federation.send(destination, offer_spec(transaction)?).await {
+        Ok(response) => response,
+        Err(error) if crate::federation::lacks_capability(&error) => {
+            return Ok(Err(OfferFailure::Unsupported(error.to_string())));
+        }
+        Err(error) => return Ok(Err(OfferFailure::Retry("transport", error.to_string()))),
+    };
     if response.status != StatusCode::OK {
-        return Err(AppError::new(
-            response.status,
-            format!("remote Chat-media offer returned {}", response.status),
-        ));
-    }
-    let receipt: ChatMediaOfferResponseV1 =
-        serde_json::from_slice(&response.body).map_err(|_| {
-            AppError::new(
-                StatusCode::BAD_GATEWAY,
-                "remote Chat-media receipt is malformed",
+        let message = serde_json::from_slice::<Value>(&response.body)
+            .ok()
+            .and_then(|body| body.get("error").and_then(Value::as_str).map(str::to_owned))
+            .unwrap_or_else(|| format!("remote Chat-media offer returned {}", response.status));
+        // An authentication or routing refusal is no answer to the offer:
+        // the receiver records none (the sequence stays open there), so it
+        // waits like a failure that may pass, never settles as refused.
+        let unanswered =
+            response.status == StatusCode::UNAUTHORIZED || response.status == StatusCode::FORBIDDEN;
+        return Ok(Err(if unanswered || retryable_status(response.status) {
+            OfferFailure::Retry(
+                if response.status == StatusCode::CONFLICT {
+                    "sequence_conflict"
+                } else {
+                    "remote_error"
+                },
+                message,
             )
-        })?;
-    if receipt.operation_id != transaction.offer.operation_id
-        || receipt.status == ChatMediaDeliveryStatusV1::Queued
-        || matches!(
-            receipt.status,
-            ChatMediaDeliveryStatusV1::Stored | ChatMediaDeliveryStatusV1::AlreadyStored
-        ) && receipt
-            .storage_reference_id
-            .as_deref()
-            .and_then(canonical_uuid)
-            .is_none()
-        || receipt.status == ChatMediaDeliveryStatusV1::StorageFull
-            && receipt.storage_reference_id.is_some()
-    {
-        return Err(AppError::new(
-            StatusCode::BAD_GATEWAY,
-            "remote Chat-media receipt does not match the offer",
-        ));
+        } else {
+            OfferFailure::Refused {
+                status: response.status,
+                message,
+            }
+        }));
     }
-    Ok(receipt)
+    let receipt: Option<ChatMediaOfferResponseV1> = serde_json::from_slice(&response.body).ok();
+    let Some(receipt) = receipt.filter(|receipt| {
+        receipt.operation_id == transaction.offer.operation_id
+            && match receipt.status {
+                ChatMediaDeliveryStatusV1::Queued => false,
+                ChatMediaDeliveryStatusV1::Stored | ChatMediaDeliveryStatusV1::AlreadyStored => {
+                    receipt
+                        .storage_reference_id
+                        .as_deref()
+                        .and_then(canonical_uuid)
+                        .is_some()
+                }
+                ChatMediaDeliveryStatusV1::StorageFull => receipt.storage_reference_id.is_none(),
+            }
+    }) else {
+        return Ok(Err(OfferFailure::Retry(
+            "remote_error",
+            "remote Chat-media receipt does not match the offer".into(),
+        )));
+    };
+    Ok(Ok(receipt))
 }
 
-/// Stage an authenticated local sender's remote delivery. Network failure is
-/// represented as `queued`; immutable retry state has already committed.
+/// An offer's final answer at the origin, kept in its outbox row so a repeat
+/// of the operation gets it again (docs/plans/federation-outbox.md).
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(tag = "outcome", rename_all = "camelCase")]
+enum MediaAnswer {
+    /// The destination's receipt: stored, already stored, or storage full.
+    Receipt { receipt: ChatMediaOfferResponseV1 },
+    /// The destination refused the offer for good.
+    Refused { status: u16, message: String },
+}
+
+impl MediaAnswer {
+    /// The answer as the client is given it.
+    fn into_result(self) -> AppResult<ChatMediaOfferResponseV1> {
+        match self {
+            MediaAnswer::Receipt { receipt } => Ok(receipt),
+            MediaAnswer::Refused { status: 404, .. } => Err(chat_media::unavailable()),
+            MediaAnswer::Refused { message, .. } => Err(AppError::new(
+                StatusCode::UNPROCESSABLE_ENTITY,
+                format!("the recipient's server refused the attachment: {message}"),
+            )),
+        }
+    }
+
+    /// Its telemetry outcome, and its row's state and class.
+    fn outcome(&self) -> (&'static str, bool, Option<&'static str>) {
+        match self {
+            MediaAnswer::Receipt { receipt }
+                if receipt.status == ChatMediaDeliveryStatusV1::StorageFull =>
+            {
+                ("storage_full", false, Some("storage_full"))
+            }
+            MediaAnswer::Receipt { .. } => ("delivered", true, None),
+            MediaAnswer::Refused { status: 404, .. } => ("unavailable", false, Some("unavailable")),
+            MediaAnswer::Refused { .. } => ("rejected", false, Some("remote_rejection")),
+        }
+    }
+}
+
+/// Settles a pending media row (still at `sequence`) with its final answer,
+/// and drops its pull grant: the destination has the object, or won't.
+async fn settle_media(
+    state: &AppState,
+    row: &MediaRow,
+    operation_id: Uuid,
+    answer: &MediaAnswer,
+) -> AppResult<()> {
+    let (_, delivered, class) = answer.outcome();
+    let value = serde_json::to_value(answer)
+        .map_err(|_| AppError::internal("serialize Chat-media answer"))?;
+    let mut tx = state.pool.begin().await?;
+    if federation_outbox::settle(
+        &mut *tx,
+        row.id,
+        Some(row.sequence),
+        delivered,
+        class,
+        &value,
+    )
+    .await?
+    {
+        sqlx::query(
+            "DELETE FROM chat_media_federation_pull_grants
+             WHERE destination=$1 AND operation_id=$2",
+        )
+        .bind(&row.destination)
+        .bind(operation_id)
+        .execute(&mut *tx)
+        .await?;
+    }
+    tx.commit().await?;
+    Ok(())
+}
+
+/// An offer without what may change between a client's repeats of it (its
+/// expiry): two offers of one operation must match in everything else.
+fn fixed_part(offer: &ChatMediaDeliveryOfferV1) -> ChatMediaDeliveryOfferV1 {
+    ChatMediaDeliveryOfferV1 {
+        expires_at: 0,
+        ..offer.clone()
+    }
+}
+
+/// One media row as its sender tries it.
+#[derive(sqlx::FromRow)]
+struct MediaRow {
+    id: Uuid,
+    destination: String,
+    sequence: i64,
+    transaction: Value,
+    state: String,
+    answer: Option<Value>,
+    attempts: i32,
+}
+
+const MEDIA_ROW: &str = "id, destination, sequence, payload->'transaction' AS transaction, state,
+     answer, attempts";
+
+/// Stage an authenticated local sender's remote delivery, or answer a repeat
+/// of it (Signal's model: the client sends its attachment message only once
+/// the destination's copy is durable). A settled operation gets its final
+/// answer again; a pending one `queued`, and its destination's queue goes
+/// now. A new one is queued and tried at once if it is its destination's
+/// head. Whatever may still pass is `queued`: the row is durable.
 #[tracing::instrument(name = "chat_media.federation.stage", skip_all)]
 pub(crate) async fn stage_remote_delivery(
     state: &AppState,
@@ -211,32 +306,47 @@ pub(crate) async fn stage_remote_delivery(
         .ok_or_else(|| AppError::bad_request("invalid Chat media delivery"))?;
     let token_hash = decode_token_hash(&offer.retrieval_token)
         .ok_or_else(|| AppError::bad_request("invalid Chat media delivery"))?;
+    let recipient = recipient_account_id(&offer)?;
+    let key = format!("{origin_user_id}:{operation_id}");
     let mut tx = state.pool.begin().await?;
-    let operation_lock = format!("{origin_user_id}:{operation_id}");
     sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1, 1127042))")
-        .bind(operation_lock)
+        .bind(&key)
         .execute(&mut *tx)
         .await?;
-    let existing: Option<(i64, Value)> = sqlx::query_as(
-        "SELECT sequence,transaction FROM chat_media_federation_outbox
-         WHERE origin_user_id=$1 AND operation_id=$2",
-    )
-    .bind(origin_user_id)
-    .bind(operation_id)
+    let existing: Option<MediaRow> = sqlx::query_as(&format!(
+        "SELECT {MEDIA_ROW} FROM federation_outbox
+         WHERE kind = 'media' AND idempotency_key = $1 FOR UPDATE"
+    ))
+    .bind(&key)
     .fetch_optional(&mut *tx)
     .await?;
-    let existing = if let Some((sequence, stored)) = existing {
-        let transaction: FederatedChatMediaTransactionV1 = serde_json::from_value(stored)
-            .map_err(|_| AppError::internal("stored Chat-media transaction is malformed"))?;
-        if transaction.offer != offer || transaction.origin_sequence != sequence as u64 {
+    let id = if let Some(row) = existing {
+        let transaction: FederatedChatMediaTransactionV1 =
+            serde_json::from_value(row.transaction.clone())
+                .map_err(|_| AppError::internal("stored Chat-media transaction is malformed"))?;
+        if fixed_part(&transaction.offer) != fixed_part(&offer)
+            || transaction.origin_sequence != row.sequence as u64
+        {
             return Err(AppError::conflict("Chat media operation replay changed"));
         }
-        Some((sequence, transaction))
-    } else {
-        None
-    };
-    let (sequence, transaction) = if let Some(existing) = existing {
-        existing
+        if row.state != "pending" {
+            tx.rollback().await?;
+            let answer: MediaAnswer = row
+                .answer
+                .and_then(|answer| serde_json::from_value(answer).ok())
+                .ok_or_else(|| AppError::internal("settled Chat-media row has no answer"))?;
+            return answer.into_result();
+        }
+        // Asked again: the destination's queue goes now.
+        sqlx::query(
+            "UPDATE federation_outbox SET next_attempt_at = LEAST(next_attempt_at, now())
+             WHERE kind = 'media' AND destination = $1 AND state = 'pending'",
+        )
+        .bind(&row.destination)
+        .execute(&mut *tx)
+        .await?;
+        tx.commit().await?;
+        row.id
     } else {
         type ObjectRow = (i16, i64, String, Vec<u8>);
         let object: Option<ObjectRow> = sqlx::query_as(
@@ -262,20 +372,9 @@ pub(crate) async fn stage_remote_delivery(
         {
             return Err(chat_media::unavailable());
         }
-        sqlx::query(
-            "INSERT INTO chat_media_federation_sequences(destination,next_sequence)
-             VALUES ($1,1) ON CONFLICT DO NOTHING",
-        )
-        .bind(&destination)
-        .execute(&mut *tx)
-        .await?;
-        let sequence: i64 = sqlx::query_scalar(
-            "SELECT next_sequence FROM chat_media_federation_sequences
-             WHERE destination=$1 FOR UPDATE",
-        )
-        .bind(&destination)
-        .fetch_one(&mut *tx)
-        .await?;
+        let sequence =
+            federation_outbox::next_sequence(&mut tx, federation_outbox::Kind::Media, &destination)
+                .await?;
         let transaction = FederatedChatMediaTransactionV1 {
             version: 1,
             origin_domain: federation.server_name().to_owned(),
@@ -295,71 +394,36 @@ pub(crate) async fn stage_remote_delivery(
         )
         .bind(origin_user_id)
         .bind(&destination)
-        .bind(recipient_account_id(&offer)?)
+        .bind(recipient)
         .bind(operation_id)
         .bind(attachment_id)
         .bind(token_hash.as_slice())
         .bind(offer.expires_at as f64)
         .execute(&mut *tx)
         .await?;
-        sqlx::query(
-            "INSERT INTO chat_media_federation_outbox
-                 (destination,sequence,origin_user_id,operation_id,transaction)
-             VALUES ($1,$2,$3,$4,$5)",
+        let id: Uuid = sqlx::query_scalar(
+            "INSERT INTO federation_outbox
+                 (kind, destination, sequence, idempotency_key, sender_user_id,
+                  recipient_account_id, payload)
+             VALUES ('media', $1, $2, $3, $4, $5,
+                     jsonb_build_object('transaction', $6::jsonb, 'operationId', $7::text))
+             RETURNING id",
         )
         .bind(&destination)
         .bind(sequence)
+        .bind(&key)
         .bind(origin_user_id)
-        .bind(operation_id)
+        .bind(recipient)
         .bind(value)
-        .execute(&mut *tx)
+        .bind(operation_id.to_string())
+        .fetch_one(&mut *tx)
         .await?;
-        sqlx::query(
-            "UPDATE chat_media_federation_sequences SET next_sequence=next_sequence+1
-             WHERE destination=$1",
-        )
-        .bind(&destination)
-        .execute(&mut *tx)
-        .await?;
-        (sequence, transaction)
+        tx.commit().await?;
+        id
     };
-    tx.commit().await?;
-
-    match send_offer(state, &destination, &transaction).await {
-        Ok(receipt) => {
-            let (terminal, error_class) =
-                if receipt.status == ChatMediaDeliveryStatusV1::StorageFull {
-                    ("rejected", Some("storage_full"))
-                } else {
-                    ("delivered", None)
-                };
-            finalize_outbox(state, &destination, sequence, terminal, error_class).await?;
-            crate::telemetry::chat_media_event(
-                "federation_origin",
-                if receipt.status == ChatMediaDeliveryStatusV1::StorageFull {
-                    "storage_full"
-                } else {
-                    "delivered"
-                },
-            );
-            Ok(receipt)
-        }
-        Err(error) if retryable_status(error.status) => {
-            sqlx::query(
-                "UPDATE chat_media_federation_outbox
-                 SET attempts=attempts+1,next_attempt_at=now()+interval '5 seconds',
-                     last_error_class=$3,updated_at=now()
-                 WHERE destination=$1 AND sequence=$2 AND state='pending'",
-            )
-            .bind(&destination)
-            .bind(sequence)
-            .bind(if error.status == StatusCode::CONFLICT {
-                "sequence_conflict"
-            } else {
-                "transport_or_remote"
-            })
-            .execute(&state.pool)
-            .await?;
+    match attempt_media(state, id, "federation_origin").await? {
+        Some(answer) => answer.into_result(),
+        None => {
             crate::telemetry::chat_media_event("federation_origin", "queued");
             Ok(ChatMediaOfferResponseV1 {
                 operation_id: offer.operation_id,
@@ -367,24 +431,97 @@ pub(crate) async fn stage_remote_delivery(
                 storage_reference_id: None,
             })
         }
-        Err(error) => {
-            finalize_outbox(
-                state,
-                &destination,
-                sequence,
-                "rejected",
-                Some("remote_rejection"),
+    }
+}
+
+/// Tries a pending media row if it is its destination's head (offers keep
+/// their order: the receiver takes them in sequence). Its final answer, or
+/// `None` while it waits (not the head, or a try that may pass later).
+async fn attempt_media(
+    state: &AppState,
+    id: Uuid,
+    telemetry: &'static str,
+) -> AppResult<Option<MediaAnswer>> {
+    let Some(row) = sqlx::query_as::<_, MediaRow>(&format!(
+        "SELECT {MEDIA_ROW} FROM federation_outbox WHERE id = $1 AND kind = 'media'"
+    ))
+    .bind(id)
+    .fetch_optional(&state.pool)
+    .await?
+    else {
+        return Err(AppError::internal("Chat-media outbox row disappeared"));
+    };
+    if row.state != "pending" {
+        return Ok(row
+            .answer
+            .and_then(|answer| serde_json::from_value(answer).ok()));
+    }
+    let head: Option<i64> = sqlx::query_scalar(
+        "SELECT MIN(sequence) FROM federation_outbox
+         WHERE kind = 'media' AND destination = $1 AND state = 'pending'",
+    )
+    .bind(&row.destination)
+    .fetch_one(&state.pool)
+    .await?;
+    if head != Some(row.sequence) {
+        return Ok(None);
+    }
+    let transaction: FederatedChatMediaTransactionV1 =
+        serde_json::from_value(row.transaction.clone())
+            .map_err(|_| AppError::internal("stored Chat-media transaction is malformed"))?;
+    let operation_id = canonical_uuid(&transaction.offer.operation_id)
+        .ok_or_else(|| AppError::internal("stored Chat-media operation is malformed"))?;
+    let answer = match send_offer(state, &row.destination, &transaction).await? {
+        Ok(receipt) => MediaAnswer::Receipt { receipt },
+        Err(OfferFailure::Unsupported(error)) => {
+            federation_outbox::park_for_upgrade(&state.pool, row.id, Some(row.sequence), &error)
+                .await?;
+            crate::telemetry::chat_media_event(telemetry, "rescheduled");
+            return Ok(None);
+        }
+        Err(OfferFailure::Retry(class, error)) => {
+            federation_outbox::retry_later(
+                &state.pool,
+                row.id,
+                Some(row.sequence),
+                row.attempts,
+                class,
+                &error,
             )
             .await?;
-            if error.status == StatusCode::NOT_FOUND {
-                crate::telemetry::chat_media_event("federation_origin", "unavailable");
-                Err(chat_media::unavailable())
-            } else {
-                crate::telemetry::chat_media_event("federation_origin", "rejected");
-                Err(error)
+            crate::telemetry::chat_media_event(telemetry, "rescheduled");
+            return Ok(None);
+        }
+        Err(OfferFailure::Refused { status, message }) => MediaAnswer::Refused {
+            status: status.as_u16(),
+            message,
+        },
+    };
+    settle_media(state, &row, operation_id, &answer).await?;
+    crate::telemetry::chat_media_event(telemetry, answer.outcome().0);
+    Ok(Some(answer))
+}
+
+/// The media offers due now: each due destination's head, tried once.
+pub(crate) async fn flush_due(state: &AppState) -> AppResult<()> {
+    for destination in
+        federation_outbox::due_destinations(&state.pool, federation_outbox::Kind::Media).await?
+    {
+        let head: Option<Uuid> = sqlx::query_scalar(
+            "SELECT id FROM federation_outbox
+             WHERE kind = 'media' AND destination = $1 AND state = 'pending'
+             ORDER BY sequence LIMIT 1",
+        )
+        .bind(&destination)
+        .fetch_optional(&state.pool)
+        .await?;
+        if let Some(id) = head {
+            if let Err(error) = attempt_media(state, id, "federation_retry").await {
+                tracing::warn!(%error, %destination, "Chat-media federation retry failed");
             }
         }
     }
+    Ok(())
 }
 
 /// Destination-side signed offer. It verifies the recipient capability before
@@ -430,21 +567,6 @@ async fn receive_offer_inner(
     let federation = state.federation.as_ref().expect("authenticated federation");
     let transaction: FederatedChatMediaTransactionV1 = serde_json::from_slice(body)
         .map_err(|_| AppError::bad_request("invalid federated Chat-media transaction"))?;
-    transaction
-        .validate(
-            federation.server_name(),
-            OffsetDateTime::now_utc().unix_timestamp(),
-        )
-        .map_err(AppError::bad_request)?;
-    let configured_ciphertext_limit = kutup_crypto::chat_media::object_ciphertext_size(
-        state.config.chat_media_max_plaintext_bytes,
-    )
-    .map_err(|_| AppError::internal("invalid Chat-media server limit"))?;
-    if transaction.offer.ciphertext_bytes > configured_ciphertext_limit {
-        return Err(AppError::bad_request(
-            "Chat media exceeds the destination server limit",
-        ));
-    }
     if authenticated.origin() != transaction.origin_domain
         || authenticated.destination() != federation.server_name()
     {
@@ -453,27 +575,14 @@ async fn receive_offer_inner(
         ));
     }
     let sequence = i64::try_from(transaction.origin_sequence)
-        .map_err(|_| AppError::bad_request("Chat-media sequence is too large"))?;
-    let operation_id = canonical_uuid(&transaction.offer.operation_id)
-        .ok_or_else(|| AppError::bad_request("invalid Chat-media operation"))?;
-    let attachment_id = canonical_uuid(&transaction.offer.attachment_id)
-        .ok_or_else(|| AppError::bad_request("invalid Chat-media attachment"))?;
+        .ok()
+        .filter(|sequence| *sequence > 0)
+        .ok_or_else(|| AppError::bad_request("invalid Chat-media sequence"))?;
     let transaction_digest = hex::encode(hash(Suite::V1, body));
-    let recipient =
-        recipient_account_id(&transaction.offer).map_err(|_| chat_media::unavailable())?;
-    let reservation = reserve_inbound_offer(
-        state,
-        &transaction,
-        &transaction_digest,
-        recipient,
-        sequence,
-        operation_id,
-        attachment_id,
-    )
-    .await?;
-    match reservation {
+    match reserve_inbound_offer(state, &transaction, &transaction_digest, sequence).await? {
         InboundReservation::Final(status, response) => Ok((status, response)),
         InboundReservation::Reserved {
+            attachment_id,
             recipient_user_id,
             lease_id,
         } => {
@@ -494,77 +603,101 @@ async fn receive_offer_inner(
 enum InboundReservation {
     Final(StatusCode, Value),
     Reserved {
+        attachment_id: Uuid,
         recipient_user_id: Uuid,
         lease_id: Uuid,
     },
 }
 
-#[allow(clippy::too_many_arguments)]
+/// What a valid offer names, or why it is refused for good.
+fn check_offer(
+    state: &AppState,
+    transaction: &FederatedChatMediaTransactionV1,
+) -> AppResult<(Uuid, Uuid, Uuid)> {
+    let federation = state.federation.as_ref().expect("authenticated federation");
+    transaction
+        .validate(
+            federation.server_name(),
+            OffsetDateTime::now_utc().unix_timestamp(),
+        )
+        .map_err(AppError::bad_request)?;
+    let configured_ciphertext_limit = kutup_crypto::chat_media::object_ciphertext_size(
+        state.config.chat_media_max_plaintext_bytes,
+    )
+    .map_err(|_| AppError::internal("invalid Chat-media server limit"))?;
+    if transaction.offer.ciphertext_bytes > configured_ciphertext_limit {
+        return Err(AppError::bad_request(
+            "Chat media exceeds the destination server limit",
+        ));
+    }
+    let operation_id = canonical_uuid(&transaction.offer.operation_id)
+        .ok_or_else(|| AppError::bad_request("invalid Chat-media operation"))?;
+    let attachment_id = canonical_uuid(&transaction.offer.attachment_id)
+        .ok_or_else(|| AppError::bad_request("invalid Chat-media attachment"))?;
+    let recipient =
+        recipient_account_id(&transaction.offer).map_err(|_| chat_media::unavailable())?;
+    decode_token_hash(&transaction.offer.retrieval_token).ok_or_else(chat_media::unavailable)?;
+    Ok((operation_id, attachment_id, recipient))
+}
+
+/// Records a final refusal of the offer at its sequence (using it up, so the
+/// origin's next offer is not a gap) and commits: the refusal's answer.
+async fn refuse_offer(
+    mut tx: sqlx::Transaction<'_, sqlx::Postgres>,
+    transaction: &FederatedChatMediaTransactionV1,
+    transaction_digest: &str,
+    refusal: AppError,
+) -> AppResult<InboundReservation> {
+    // Only a refusal that may not pass is recorded: what may (a server
+    // error) is the origin's to try again.
+    if refusal.status.is_server_error() {
+        return Err(refusal);
+    }
+    let status = refusal_status(&refusal);
+    let response = serde_json::json!({ "error": refusal.message });
+    // No operation: a refusal may be of an operation already answered.
+    persist_inbound_response(
+        &mut tx,
+        transaction,
+        None,
+        transaction_digest,
+        status,
+        &response,
+    )
+    .await?;
+    tx.commit().await?;
+    Ok(InboundReservation::Final(status, response))
+}
+
 async fn reserve_inbound_offer(
     state: &AppState,
     transaction: &FederatedChatMediaTransactionV1,
     transaction_digest: &str,
-    recipient: Uuid,
     sequence: i64,
-    operation_id: Uuid,
-    attachment_id: Uuid,
 ) -> AppResult<InboundReservation> {
+    let origin = transaction.origin_domain.as_str();
     let mut tx = state.pool.begin().await?;
-    sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1, 1127041))")
-        .bind(&transaction.origin_domain)
-        .execute(&mut *tx)
-        .await?;
-    sqlx::query(
-        "INSERT INTO chat_media_federation_inbound_state(origin,last_sequence)
-         VALUES ($1,0) ON CONFLICT DO NOTHING",
-    )
-    .bind(&transaction.origin_domain)
-    .execute(&mut *tx)
-    .await?;
-    if let Some((status, response, digest)) = sqlx::query_as::<_, (i16, Value, String)>(
-        "SELECT response_status,response,transaction_digest
-         FROM chat_media_federation_inbound_transactions
-         WHERE origin=$1 AND sequence=$2",
-    )
-    .bind(&transaction.origin_domain)
-    .bind(sequence)
-    .fetch_optional(&mut *tx)
-    .await?
+    let last_sequence =
+        federation_outbox::lock_stream(&mut tx, federation_outbox::Kind::Media, origin).await?;
+    if let Some(prior) =
+        federation_outbox::prior(&mut tx, federation_outbox::Kind::Media, origin, sequence).await?
     {
-        if digest != transaction_digest {
+        if prior.digest.as_deref() != Some(transaction_digest) {
             return Err(AppError::conflict("Chat-media sequence replay changed"));
         }
         return Ok(InboundReservation::Final(
-            StatusCode::from_u16(status as u16)
+            StatusCode::from_u16(prior.status as u16)
                 .map_err(|_| AppError::internal("stored Chat-media status is malformed"))?,
-            response,
+            prior.answer,
         ));
     }
-    if sqlx::query_scalar::<_, bool>(
-        "SELECT EXISTS(
-           SELECT 1 FROM chat_media_federation_inbound_transactions
-           WHERE origin=$1 AND operation_id=$2 AND sequence<>$3
-           UNION ALL
-           SELECT 1 FROM chat_media_federation_inbound_pending
-           WHERE origin=$1 AND operation_id=$2 AND sequence<>$3)",
-    )
-    .bind(&transaction.origin_domain)
-    .bind(operation_id)
-    .bind(sequence)
-    .fetch_one(&mut *tx)
-    .await?
-    {
-        return Err(AppError::conflict(
-            "Chat-media operation id was reused at another sequence",
+    if sequence <= last_sequence {
+        // Answered, and its record pruned (`federationRecordDays`).
+        return Err(AppError::new(
+            StatusCode::GONE,
+            "Chat-media offer was answered and its record is gone",
         ));
     }
-    let last_sequence: i64 = sqlx::query_scalar(
-        "SELECT last_sequence FROM chat_media_federation_inbound_state
-         WHERE origin=$1 FOR UPDATE",
-    )
-    .bind(&transaction.origin_domain)
-    .fetch_one(&mut *tx)
-    .await?;
     if sequence != last_sequence + 1 {
         return Err(AppError::conflict(format!(
             "Chat-media sequence gap; expected {}",
@@ -578,14 +711,12 @@ async fn reserve_inbound_offer(
          FROM chat_media_federation_inbound_pending
          WHERE origin=$1 AND sequence=$2",
     )
-    .bind(&transaction.origin_domain)
+    .bind(origin)
     .bind(sequence)
     .fetch_optional(&mut *tx)
     .await?;
-    if let Some((digest, recipient_user_id, stored_attachment, stored_bytes)) = pending {
-        if digest != transaction_digest
-            || stored_attachment != attachment_id
-            || stored_bytes != transaction.offer.ciphertext_bytes as i64
+    if let Some((digest, recipient_user_id, attachment_id, stored_bytes)) = pending {
+        if digest != transaction_digest || stored_bytes != transaction.offer.ciphertext_bytes as i64
         {
             return Err(AppError::conflict("Chat-media pending replay changed"));
         }
@@ -594,7 +725,7 @@ async fn reserve_inbound_offer(
              SET lease_id=$3,lease_until=now()+interval '2 minutes',updated_at=now()
              WHERE origin=$1 AND sequence=$2 AND lease_until<=now()",
         )
-        .bind(&transaction.origin_domain)
+        .bind(origin)
         .bind(sequence)
         .bind(lease_id)
         .execute(&mut *tx)
@@ -606,9 +737,33 @@ async fn reserve_inbound_offer(
         }
         tx.commit().await?;
         return Ok(InboundReservation::Reserved {
+            attachment_id,
             recipient_user_id,
             lease_id,
         });
+    }
+    let (operation_id, attachment_id, recipient) = match check_offer(state, transaction) {
+        Ok(checked) => checked,
+        Err(refusal) => return refuse_offer(tx, transaction, transaction_digest, refusal).await,
+    };
+    if sqlx::query_scalar::<_, bool>(
+        "SELECT EXISTS(
+           SELECT 1 FROM federation_inbound
+           WHERE kind='media' AND origin=$1 AND transaction_id=$2
+           UNION ALL
+           SELECT 1 FROM chat_media_federation_inbound_pending
+           WHERE origin=$1 AND operation_id=$3 AND sequence<>$4)",
+    )
+    .bind(origin)
+    .bind(operation_id.to_string())
+    .bind(operation_id)
+    .bind(sequence)
+    .fetch_one(&mut *tx)
+    .await?
+    {
+        let refusal =
+            AppError::bad_request("Chat-media operation id was reused at another sequence");
+        return refuse_offer(tx, transaction, transaction_digest, refusal).await;
     }
     let capability: Option<[u8; 16]> = STANDARD
         .decode(&transaction.offer.delivery_capability)
@@ -633,6 +788,7 @@ async fn reserve_inbound_offer(
         persist_inbound_response(
             &mut tx,
             transaction,
+            Some(operation_id),
             transaction_digest,
             StatusCode::NOT_FOUND,
             &response,
@@ -655,7 +811,7 @@ async fn reserve_inbound_offer(
             Suite::V1,
             [
                 b"kutup/chat-media/federation-origin-rate/v1\0".as_slice(),
-                transaction.origin_domain.as_bytes(),
+                origin.as_bytes(),
             ]
             .concat(),
         )
@@ -664,32 +820,9 @@ async fn reserve_inbound_offer(
     )
     .await?;
 
-    type ExistingObject = (String, i16, i64, String, Vec<u8>, String);
-    let existing_object: Option<ExistingObject> = sqlx::query_as(
-        "SELECT origin_domain,suite,ciphertext_bytes,ciphertext_sha256,
-                retrieval_token_hash,storage_path
-         FROM chat_media_objects WHERE attachment_id=$1",
-    )
-    .bind(attachment_id)
-    .fetch_optional(&mut *tx)
-    .await?;
-    let token_hash = decode_token_hash(&transaction.offer.retrieval_token)
-        .ok_or_else(chat_media::unavailable)?;
-    if let Some((origin, suite, bytes, digest, token, _)) = &existing_object {
-        let token: [u8; 32] = token
-            .clone()
-            .try_into()
-            .map_err(|_| AppError::internal("stored Chat-media token is malformed"))?;
-        if origin != &transaction.origin_domain
-            || *suite != transaction.offer.suite.as_u16() as i16
-            || *bytes != transaction.offer.ciphertext_bytes as i64
-            || digest != &transaction.offer.ciphertext_sha256
-            || !constant_time_capability_hash_eq(&token, &token_hash)
-        {
-            return Err(AppError::conflict("Chat-media object identity collision"));
-        }
+    if let Err(collision) = check_object_identity(&mut tx, transaction, attachment_id).await {
+        return refuse_offer(tx, transaction, transaction_digest, collision).await;
     }
-
     let existing_reference: Option<Uuid> = sqlx::query_scalar(
         "SELECT id FROM chat_media_references WHERE user_id=$1 AND attachment_id=$2",
     )
@@ -708,6 +841,7 @@ async fn reserve_inbound_offer(
         persist_inbound_response(
             &mut tx,
             transaction,
+            Some(operation_id),
             transaction_digest,
             StatusCode::OK,
             &value,
@@ -729,6 +863,7 @@ async fn reserve_inbound_offer(
         persist_inbound_response(
             &mut tx,
             transaction,
+            Some(operation_id),
             transaction_digest,
             StatusCode::OK,
             &value,
@@ -743,7 +878,7 @@ async fn reserve_inbound_offer(
               attachment_id,ciphertext_bytes,lease_id,lease_until)
          VALUES ($1,$2,$3,$4,$5,$6,$7,$8,now()+interval '2 minutes')",
     )
-    .bind(&transaction.origin_domain)
+    .bind(origin)
     .bind(sequence)
     .bind(operation_id)
     .bind(transaction_digest)
@@ -755,9 +890,47 @@ async fn reserve_inbound_offer(
     .await?;
     tx.commit().await?;
     Ok(InboundReservation::Reserved {
+        attachment_id,
         recipient_user_id,
         lease_id,
     })
+}
+
+/// Whether this server holds the offer's object already (its row locked for
+/// the caller's transaction). An attachment id it holds as another object
+/// is a final refusal: the origin's object can't be stored under that id.
+async fn check_object_identity(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    transaction: &FederatedChatMediaTransactionV1,
+    attachment_id: Uuid,
+) -> AppResult<bool> {
+    type ExistingObject = (String, i16, i64, String, Vec<u8>);
+    let existing: Option<ExistingObject> = sqlx::query_as(
+        "SELECT origin_domain,suite,ciphertext_bytes,ciphertext_sha256,retrieval_token_hash
+         FROM chat_media_objects WHERE attachment_id=$1 FOR UPDATE",
+    )
+    .bind(attachment_id)
+    .fetch_optional(&mut **tx)
+    .await?;
+    let Some((origin, suite, bytes, digest, token)) = existing else {
+        return Ok(false);
+    };
+    let token_hash = decode_token_hash(&transaction.offer.retrieval_token)
+        .ok_or_else(chat_media::unavailable)?;
+    let token: [u8; 32] = token
+        .try_into()
+        .map_err(|_| AppError::internal("stored Chat-media token is malformed"))?;
+    if origin != transaction.origin_domain
+        || suite != transaction.offer.suite.as_u16() as i16
+        || bytes != transaction.offer.ciphertext_bytes as i64
+        || digest != transaction.offer.ciphertext_sha256
+        || !constant_time_capability_hash_eq(&token, &token_hash)
+    {
+        return Err(AppError::bad_request(
+            "Chat-media object identity collision",
+        ));
+    }
+    Ok(true)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -831,32 +1004,18 @@ async fn process_reserved_offer_inner(
     let federation = state.federation.as_ref().expect("authenticated federation");
     let token_hash = decode_token_hash(&transaction.offer.retrieval_token)
         .ok_or_else(chat_media::unavailable)?;
-    type ExistingObject = (String, i16, i64, String, Vec<u8>, String);
-    let existing_object: Option<ExistingObject> = sqlx::query_as(
-        "SELECT origin_domain,suite,ciphertext_bytes,ciphertext_sha256,
-                retrieval_token_hash,storage_path
-         FROM chat_media_objects WHERE attachment_id=$1",
-    )
-    .bind(attachment_id)
-    .fetch_optional(&state.pool)
-    .await?;
-    let object_exists = if let Some((origin, suite, bytes, digest, token, _)) = &existing_object {
-        let token: [u8; 32] = token
-            .clone()
-            .try_into()
-            .map_err(|_| AppError::internal("stored Chat-media token is malformed"))?;
-        if origin != &transaction.origin_domain
-            || *suite != transaction.offer.suite.as_u16() as i16
-            || *bytes != transaction.offer.ciphertext_bytes as i64
-            || digest != &transaction.offer.ciphertext_sha256
-            || !constant_time_capability_hash_eq(&token, &token_hash)
-        {
-            return Err(AppError::conflict("Chat-media object identity collision"));
+    let operation_id = canonical_uuid(&transaction.offer.operation_id)
+        .ok_or_else(|| AppError::internal("reserved Chat-media operation is malformed"))?;
+    let mut check = state.pool.begin().await?;
+    let object_exists = match check_object_identity(&mut check, transaction, attachment_id).await {
+        Ok(exists) => exists,
+        Err(collision) => {
+            drop(check);
+            return refuse_reserved(state, transaction, transaction_digest, lease_id, collision)
+                .await;
         }
-        true
-    } else {
-        false
     };
+    check.rollback().await?;
     let mut uploaded_path = None;
     if !object_exists {
         let pull_body = serde_json::to_vec(transaction)
@@ -879,6 +1038,18 @@ async fn process_reserved_offer_inner(
             )
             .await
             .map_err(|error| AppError::new(StatusCode::BAD_GATEWAY, error.to_string()))?;
+        // The origin's signed "no such object" (its grant gone or revoked)
+        // is final: the offer can't be stored.
+        if streamed.status == StatusCode::NOT_FOUND {
+            return refuse_reserved(
+                state,
+                transaction,
+                transaction_digest,
+                lease_id,
+                chat_media::unavailable(),
+            )
+            .await;
+        }
         if streamed.status != StatusCode::OK
             || streamed.content_type != OCTETS
             || streamed.content_length != transaction.offer.ciphertext_bytes
@@ -910,10 +1081,12 @@ async fn process_reserved_offer_inner(
 
     let result = async {
         let mut tx = state.pool.begin().await?;
-        sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1, 1127041))")
-            .bind(&transaction.origin_domain)
-            .execute(&mut *tx)
-            .await?;
+        let last_sequence = federation_outbox::lock_stream(
+            &mut tx,
+            federation_outbox::Kind::Media,
+            &transaction.origin_domain,
+        )
+        .await?;
         let pending: Option<(Uuid, Uuid, i64)> = sqlx::query_as(
             "SELECT recipient_user_id,attachment_id,ciphertext_bytes
              FROM chat_media_federation_inbound_pending
@@ -933,39 +1106,27 @@ async fn process_reserved_offer_inner(
         {
             return Err(AppError::conflict("Chat-media reservation changed"));
         }
-        let last_sequence: i64 = sqlx::query_scalar(
-            "SELECT last_sequence FROM chat_media_federation_inbound_state
-             WHERE origin=$1 FOR UPDATE",
-        )
-        .bind(&transaction.origin_domain)
-        .fetch_one(&mut *tx)
-        .await?;
         if sequence != last_sequence + 1 {
             return Err(AppError::conflict(
                 "Chat-media reservation sequence changed",
             ));
         }
-        let stored_object: Option<ExistingObject> = sqlx::query_as(
-            "SELECT origin_domain,suite,ciphertext_bytes,ciphertext_sha256,
-                    retrieval_token_hash,storage_path
-             FROM chat_media_objects WHERE attachment_id=$1 FOR UPDATE",
-        )
-        .bind(attachment_id)
-        .fetch_optional(&mut *tx)
-        .await?;
-        if let Some((origin, suite, bytes, digest, token, _)) = stored_object {
-            let token: [u8; 32] = token
-                .try_into()
-                .map_err(|_| AppError::internal("stored Chat-media token is malformed"))?;
-            if origin != transaction.origin_domain
-                || suite != transaction.offer.suite.as_u16() as i16
-                || bytes != transaction.offer.ciphertext_bytes as i64
-                || digest != transaction.offer.ciphertext_sha256
-                || !constant_time_capability_hash_eq(&token, &token_hash)
-            {
-                return Err(AppError::conflict("Chat-media object identity collision"));
+        let stored = match check_object_identity(&mut tx, transaction, attachment_id).await {
+            Ok(stored) => stored,
+            Err(collision) => {
+                let refused = refuse_reserved_in(
+                    &mut tx,
+                    transaction,
+                    transaction_digest,
+                    lease_id,
+                    collision,
+                )
+                .await?;
+                tx.commit().await?;
+                return AppResult::Ok((refused.0, refused.1, false));
             }
-        } else {
+        };
+        if !stored {
             let path = uploaded_path
                 .as_ref()
                 .ok_or_else(|| AppError::internal("Chat-media object disappeared"))?;
@@ -1006,6 +1167,7 @@ async fn process_reserved_offer_inner(
             persist_inbound_response(
                 &mut tx,
                 transaction,
+                Some(operation_id),
                 transaction_digest,
                 StatusCode::OK,
                 &value,
@@ -1038,7 +1200,7 @@ async fn process_reserved_offer_inner(
                 .await?;
             }
             tx.commit().await?;
-            return AppResult::Ok((value, false));
+            return AppResult::Ok((StatusCode::OK, value, false));
         }
         let existing_reference: Option<Uuid> = sqlx::query_scalar(
             "SELECT id FROM chat_media_references WHERE user_id=$1 AND attachment_id=$2",
@@ -1077,6 +1239,7 @@ async fn process_reserved_offer_inner(
         persist_inbound_response(
             &mut tx,
             transaction,
+            Some(operation_id),
             transaction_digest,
             StatusCode::OK,
             &value,
@@ -1092,17 +1255,17 @@ async fn process_reserved_offer_inner(
         .execute(&mut *tx)
         .await?;
         tx.commit().await?;
-        AppResult::Ok((value, true))
+        AppResult::Ok((StatusCode::OK, value, true))
     }
     .await;
     match result {
-        Ok((response, keep_uploaded_object)) => {
+        Ok((status, response, keep_uploaded_object)) => {
             if !keep_uploaded_object {
                 if let Some(path) = uploaded_path {
                     let _ = state.storage.delete(&path).await;
                 }
             }
-            Ok((StatusCode::OK, response))
+            Ok((status, response))
         }
         Err(error) => {
             if let Some(path) = uploaded_path {
@@ -1113,37 +1276,98 @@ async fn process_reserved_offer_inner(
     }
 }
 
+/// Records this server's final answer to the offer at its sequence, using
+/// the sequence up. `operation` is the offer's operation where the answer is
+/// that operation's (not a refusal, which may be of a reused one).
 async fn persist_inbound_response(
     tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
     transaction: &FederatedChatMediaTransactionV1,
+    operation: Option<Uuid>,
     transaction_digest: &str,
     status: StatusCode,
     response: &Value,
 ) -> AppResult<()> {
-    let operation_id = canonical_uuid(&transaction.offer.operation_id)
-        .ok_or_else(|| AppError::internal("Chat-media operation id changed"))?;
-    sqlx::query(
-        "INSERT INTO chat_media_federation_inbound_transactions
-             (origin,sequence,operation_id,transaction_digest,response_status,response)
-         VALUES ($1,$2,$3,$4,$5,$6)",
+    let recorded = federation_outbox::record(
+        tx,
+        federation_outbox::Kind::Media,
+        &transaction.origin_domain,
+        transaction.origin_sequence as i64,
+        operation.map(|operation| operation.to_string()).as_deref(),
+        Some(transaction_digest),
+        status.as_u16(),
+        response,
     )
-    .bind(&transaction.origin_domain)
-    .bind(transaction.origin_sequence as i64)
-    .bind(operation_id)
-    .bind(transaction_digest)
-    .bind(status.as_u16() as i16)
-    .bind(response)
-    .execute(&mut **tx)
     .await?;
-    sqlx::query(
-        "UPDATE chat_media_federation_inbound_state
-         SET last_sequence=$2,updated_at=now() WHERE origin=$1",
-    )
-    .bind(&transaction.origin_domain)
-    .bind(transaction.origin_sequence as i64)
-    .execute(&mut **tx)
-    .await?;
+    if !recorded {
+        return Err(AppError::conflict(
+            "Chat-media offer was answered meanwhile",
+        ));
+    }
     Ok(())
+}
+
+/// [`refuse_reserved_in`] in a transaction of its own.
+async fn refuse_reserved(
+    state: &AppState,
+    transaction: &FederatedChatMediaTransactionV1,
+    transaction_digest: &str,
+    lease_id: Uuid,
+    refusal: AppError,
+) -> AppResult<(StatusCode, Value)> {
+    let mut tx = state.pool.begin().await?;
+    let last_sequence = federation_outbox::lock_stream(
+        &mut tx,
+        federation_outbox::Kind::Media,
+        &transaction.origin_domain,
+    )
+    .await?;
+    if transaction.origin_sequence as i64 != last_sequence + 1 {
+        return Err(AppError::conflict(
+            "Chat-media reservation sequence changed",
+        ));
+    }
+    let refused =
+        refuse_reserved_in(&mut tx, transaction, transaction_digest, lease_id, refusal).await?;
+    tx.commit().await?;
+    Ok(refused)
+}
+
+/// Ends a reserved offer with a final refusal (recorded, using up its
+/// sequence), while this caller still holds its lease. The caller holds the
+/// origin's stream.
+async fn refuse_reserved_in(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    transaction: &FederatedChatMediaTransactionV1,
+    transaction_digest: &str,
+    lease_id: Uuid,
+    refusal: AppError,
+) -> AppResult<(StatusCode, Value)> {
+    let released = sqlx::query(
+        "DELETE FROM chat_media_federation_inbound_pending
+         WHERE origin=$1 AND sequence=$2 AND lease_id=$3",
+    )
+    .bind(&transaction.origin_domain)
+    .bind(transaction.origin_sequence as i64)
+    .bind(lease_id)
+    .execute(&mut **tx)
+    .await?;
+    if released.rows_affected() != 1 {
+        return Err(AppError::conflict("Chat-media reservation changed"));
+    }
+    let status = refusal_status(&refusal);
+    let response = serde_json::json!({ "error": refusal.message });
+    persist_inbound_response(tx, transaction, None, transaction_digest, status, &response).await?;
+    Ok((status, response))
+}
+
+/// The status a final refusal is recorded with: "unavailable" (404) as it
+/// is, every other one a 400, which the origin never tries again.
+fn refusal_status(refusal: &AppError) -> StatusCode {
+    if refusal.status == StatusCode::NOT_FOUND {
+        StatusCode::NOT_FOUND
+    } else {
+        StatusCode::BAD_REQUEST
+    }
 }
 
 /// Origin-side object pull. A valid upload token is insufficient: the signed
@@ -1268,102 +1492,6 @@ async fn serve_object_inner(
         return Err(chat_media::unavailable());
     }
     Ok((path, bytes, digest))
-}
-
-pub(crate) fn spawn_retry_worker(state: AppState) {
-    if state.federation.is_none() {
-        return;
-    }
-    tokio::spawn(async move {
-        let mut interval = tokio::time::interval(Duration::from_secs(5));
-        interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
-        loop {
-            interval.tick().await;
-            if let Err(error) = retry_once(&state).await {
-                tracing::warn!(error = %error, "Chat-media federation retry failed");
-            }
-        }
-    });
-}
-
-#[tracing::instrument(name = "chat_media.federation.retry", skip_all)]
-async fn retry_once(state: &AppState) -> AppResult<()> {
-    let row: Option<(Uuid, String, Value, i32)> = sqlx::query_as(
-        "SELECT o.id,o.destination,o.transaction,o.attempts
-         FROM chat_media_federation_outbox o
-         WHERE o.state='pending' AND o.next_attempt_at<=now()
-           AND NOT EXISTS (
-             SELECT 1 FROM chat_media_federation_outbox prior
-             WHERE prior.destination=o.destination AND prior.state='pending'
-               AND prior.sequence<o.sequence)
-         ORDER BY o.next_attempt_at,o.destination,o.sequence LIMIT 1",
-    )
-    .fetch_optional(&state.pool)
-    .await?;
-    let Some((id, destination, value, attempts)) = row else {
-        return Ok(());
-    };
-    let transaction: FederatedChatMediaTransactionV1 = serde_json::from_value(value)
-        .map_err(|_| AppError::internal("stored Chat-media retry is malformed"))?;
-    let outcome = send_offer(state, &destination, &transaction).await;
-    match outcome {
-        Ok(receipt) => {
-            let (terminal, error_class) =
-                if receipt.status == ChatMediaDeliveryStatusV1::StorageFull {
-                    ("rejected", Some("storage_full"))
-                } else {
-                    ("delivered", None)
-                };
-            finalize_outbox(
-                state,
-                &destination,
-                transaction.origin_sequence as i64,
-                terminal,
-                error_class,
-            )
-            .await?;
-            crate::telemetry::chat_media_event(
-                "federation_retry",
-                if receipt.status == ChatMediaDeliveryStatusV1::StorageFull {
-                    "storage_full"
-                } else {
-                    "delivered"
-                },
-            );
-        }
-        Err(error) if retryable_status(error.status) => {
-            let exponent = u32::try_from(attempts).unwrap_or(u32::MAX).min(8);
-            let delay = 5_i64.saturating_mul(1_i64 << exponent).min(900);
-            sqlx::query(
-                "UPDATE chat_media_federation_outbox
-                 SET attempts=attempts+1,next_attempt_at=now()+make_interval(secs=>$2),
-                     last_error_class=$3,updated_at=now()
-                 WHERE id=$1 AND state='pending'",
-            )
-            .bind(id)
-            .bind(delay as f64)
-            .bind(if error.status == StatusCode::CONFLICT {
-                "sequence_conflict"
-            } else {
-                "transport_or_remote"
-            })
-            .execute(&state.pool)
-            .await?;
-            crate::telemetry::chat_media_event("federation_retry", "rescheduled");
-        }
-        Err(_) => {
-            finalize_outbox(
-                state,
-                &destination,
-                transaction.origin_sequence as i64,
-                "rejected",
-                Some("remote_rejection"),
-            )
-            .await?;
-            crate::telemetry::chat_media_event("federation_retry", "rejected");
-        }
-    }
-    Ok(())
 }
 
 /// The recipient's account id in an offer (canonical: checked as it parsed).

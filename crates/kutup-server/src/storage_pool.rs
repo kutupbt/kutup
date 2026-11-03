@@ -249,11 +249,15 @@ mod tests {
         let allowed = [
             // An administrator's recount from what the account stores.
             ("handlers/admin.rs", "( select coalesc"),
-            // The reconciler's recount.
+            // The reconciler's recounts: an account's and a mail group's.
             ("jobs.rs", "$2 where id = $1"),
-            // Two test fixtures.
+            ("jobs.rs", "$2 where id = $1"),
+            // Test fixtures: a drifted and a right counter, one each for an
+            // account and for mail groups.
             ("jobs.rs", "$1 where id=$2\")"),
             ("jobs.rs", &format!("{column}+123")[..16]),
+            ("jobs.rs", "$2 where id = $1"),
+            ("jobs.rs", "500 where id = $"),
             // `charge`: an account's and a mail group's.
             ("storage_pool.rs", "greatest(before."),
             ("storage_pool.rs", "greatest(before."),

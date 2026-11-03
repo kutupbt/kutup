@@ -4,6 +4,7 @@ specs/78-pass-offline.spec.ts
 specs/79-pass-unlock.spec.ts
 specs/150-pass-import.spec.ts
 specs/151-pass-pin.spec.ts
+specs/158-pass-device-lock.spec.ts
 specs/152-pass-site-icons.spec.ts
 specs/153-pass-custom-icons.spec.ts
 specs/154-pass-vault-keys.spec.ts

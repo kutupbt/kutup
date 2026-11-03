@@ -75,11 +75,10 @@ test('pass: a vault is renamed while locked, downloaded, duplicated, moved, dele
   await expect(vaultRow(page, 'Yeni ad (2)')).toHaveCount(0, { timeout: 30_000 })
 
   // A vault in the trash with a kept key leaves the others opening with the
-  // sign-in: the original, locked in this tab, asks only for the Kutup
-  // password (its kept key was read), never the vault's own.
+  // sign-in: the original, locked, asks only for the account's unlock (one
+  // click, with no PIN: its kept key was read), never the vault's own key.
   await vaultRow(page, 'Yeni ad').getByText('Yeni ad', { exact: true }).click()
-  await page.getByLabel('Your Kutup password').fill(PASSWORD)
-  await page.getByRole('button', { name: 'Unlock with my password' }).click()
+  await page.getByRole('button', { name: 'Unlock with my sign-in' }).click({ timeout: 60_000 })
   await expect(page.getByRole('list', { name: 'Entries' }).getByRole('button', { name: 'Banka' })).toBeVisible({ timeout: 60_000 })
   await openPass(page)
 

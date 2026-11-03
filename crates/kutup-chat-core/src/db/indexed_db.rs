@@ -84,6 +84,7 @@ const SINGLETON: &str = "value";
 const LAST_CURSOR: &str = "last_cursor";
 const CONTACT_LIST_FOLLOWED: &str = "contact_list_followed";
 const PINS_DUE: &str = "pins_due";
+const MEDIA_WAITS: &str = "media_waits";
 const GROUP_SEND_ENDORSEMENT: &str = "group_send_endorsement";
 const LAST_SENT_SEQ: &str = "last_sent_seq";
 const PENDING_PREKEY_UPLOAD: &str = "pending_prekey_upload";
@@ -491,6 +492,10 @@ impl ChatDb for IndexedDbChatDb {
 
     async fn load_pins_due(&self) -> Result<Option<Vec<u8>>> {
         self.get::<Vec<u8>>(META, string_key(PINS_DUE)).await
+    }
+
+    async fn load_media_waits(&self) -> Result<Option<Vec<u8>>> {
+        self.get::<Vec<u8>>(META, string_key(MEDIA_WAITS)).await
     }
 
     async fn load_group_send_endorsement(&self) -> Result<Option<Vec<u8>>> {
@@ -911,6 +916,9 @@ impl ChatDb for IndexedDbChatDb {
         if let Some(state) = writes.pins_due {
             operations.push(self.put(&meta, string_key(PINS_DUE), &state)?);
         }
+        if let Some(state) = writes.media_waits {
+            operations.push(self.put(&meta, string_key(MEDIA_WAITS), &state)?);
+        }
         if let Some(state) = writes.group_send_endorsement {
             operations.push(self.put(&meta, string_key(GROUP_SEND_ENDORSEMENT), &state)?);
         }
@@ -1046,6 +1054,7 @@ struct PreparedWrites {
     last_sent_seq: Option<Vec<u8>>,
     contact_list_followed: Option<Vec<u8>>,
     pins_due: Option<Vec<u8>>,
+    media_waits: Option<Vec<u8>>,
     group_send_endorsement: Option<Vec<u8>>,
 }
 
@@ -1111,6 +1120,7 @@ impl PreparedWrites {
                 .then(|| encode(&true))
                 .transpose()?,
             pins_due: pending.pins_due.as_ref().map(encode).transpose()?,
+            media_waits: pending.media_waits.as_ref().map(encode).transpose()?,
             group_send_endorsement: pending
                 .group_send_endorsement
                 .as_ref()

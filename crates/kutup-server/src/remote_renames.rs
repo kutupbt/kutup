@@ -49,15 +49,8 @@ const RESPONSE_LIMIT: usize = 2 * 1024 * 1024;
 const FRESH_SECONDS: f64 = 24.0 * 3600.0;
 /// Lookups of one address within this share one fetch.
 const COALESCE_SECONDS: f64 = 60.0;
-/// An announce not delivered in this long is dropped (peers learn on their
-/// next lookup instead, from `409 renamed`).
-const GIVE_UP_DAYS: i64 = 7;
-const ANNOUNCES_PER_PASS: i64 = 50;
 /// Announces sent at once: a dead peer does not hold up live ones.
 const ANNOUNCES_AT_ONCE: usize = 8;
-/// Peers announced to: those this server has been in touch with this
-/// recently (others learn at their next lookup).
-const PEER_RECENT_DAYS: i64 = 90;
 const FEATURE_HEADER: &str = "kutup-federation-feature";
 
 /// The endpoint namespace a feature's requests live under (the transport
@@ -728,16 +721,23 @@ pub async fn announce(
 
 /// Queues the announce of `incarnation`'s rename `sequence` to every peer
 /// this server has pinned, not quarantined, and been in touch with in the
-/// last 90 days, in the rename's transaction.
+/// last `federationAnnouncePeerDays`, in the rename's transaction: rows of
+/// the one federation outbox (docs/plans/federation-outbox.md), without a
+/// transport sequence (applying a chain is idempotent).
 pub async fn enqueue(
     conn: &mut sqlx::PgConnection,
     server_name: &str,
     incarnation: &str,
     sequence: u64,
 ) -> AppResult<()> {
+    let peer_days = crate::site_settings::FEDERATION_ANNOUNCE_PEER_DAYS
+        .load(&mut *conn)
+        .await?;
     sqlx::query(
-        "INSERT INTO rename_announce_outbox (destination, incarnation_id, sequence)
-         SELECT domain, $1, $2 FROM federation_peer_identities
+        "INSERT INTO federation_outbox (kind, destination, idempotency_key, payload)
+         SELECT $5, domain, domain || ':' || $1 || ':' || $2::text,
+                jsonb_build_object('incarnation', $1::text, 'chainSequence', $2)
+           FROM federation_peer_identities
           WHERE trust_state <> 'quarantined' AND domain <> $3
             AND last_seen_at > now() - make_interval(days => $4)
          ON CONFLICT DO NOTHING",
@@ -745,7 +745,8 @@ pub async fn enqueue(
     .bind(incarnation)
     .bind(sequence as i32)
     .bind(server_name)
-    .bind(PEER_RECENT_DAYS as i32)
+    .bind(peer_days as i32)
+    .bind(crate::federation_outbox::Kind::Rename.as_str())
     .execute(&mut *conn)
     .await?;
     Ok(())
@@ -763,17 +764,24 @@ pub async fn deliver_due(state: &AppState) -> AppResult<usize> {
     let Some(federation) = state.federation.as_deref() else {
         return Ok(0);
     };
+    let give_up_days = crate::site_settings::FEDERATION_ANNOUNCE_DAYS
+        .load(&state.pool)
+        .await?;
+    let per_pass = crate::site_settings::FEDERATION_HEADS_PER_TICK
+        .load(&state.pool)
+        .await?;
     let due: Vec<Due> = sqlx::query_as(
-        "SELECT destination, incarnation_id, max(sequence), max(attempts),
+        "SELECT destination, payload->>'incarnation',
+                max((payload->>'chainSequence')::integer), max(attempts),
                 min(created_at) < now() - make_interval(days => $1)
-           FROM rename_announce_outbox
-          WHERE next_attempt_at <= now()
-          GROUP BY destination, incarnation_id
+           FROM federation_outbox
+          WHERE kind = 'rename' AND state = 'pending' AND next_attempt_at <= now()
+          GROUP BY destination, payload->>'incarnation'
           ORDER BY min(next_attempt_at)
           LIMIT $2",
     )
-    .bind(GIVE_UP_DAYS as i32)
-    .bind(ANNOUNCES_PER_PASS)
+    .bind(give_up_days as i32)
+    .bind(per_pass)
     .fetch_all(&state.pool)
     .await?;
     let count = due.len();
@@ -796,18 +804,30 @@ async fn deliver_one(
     federation: &FederationStack,
     (destination, incarnation, through, attempts, expired): Due,
 ) -> AppResult<()> {
-    let done = || async {
-        sqlx::query(
-            "DELETE FROM rename_announce_outbox
-              WHERE destination = $1 AND incarnation_id = $2 AND sequence <= $3",
-        )
-        .bind(&destination)
-        .bind(&incarnation)
-        .bind(through)
-        .execute(&state.pool)
-        .await
-        .map(|_| ())
-        .map_err(AppError::from)
+    // Settles every row of the account's announce to this peer up to the
+    // chain sequence sent: delivered, or given up with why.
+    let settle = |delivered: bool, class: Option<&'static str>, answer: Value| {
+        let (destination, incarnation) = (&destination, &incarnation);
+        async move {
+            sqlx::query(
+                "UPDATE federation_outbox
+                    SET state = $4, error_class = $5, answer = $6, last_error = NULL,
+                        attempts = attempts + 1, updated_at = now()
+                  WHERE kind = 'rename' AND state = 'pending' AND destination = $1
+                    AND payload->>'incarnation' = $2
+                    AND (payload->>'chainSequence')::integer <= $3",
+            )
+            .bind(destination)
+            .bind(incarnation)
+            .bind(through)
+            .bind(if delivered { "delivered" } else { "rejected" })
+            .bind(class)
+            .bind(answer)
+            .execute(&state.pool)
+            .await
+            .map(|_| ())
+            .map_err(AppError::from)
+        }
     };
     let rows: Vec<(Value, String, String)> = sqlx::query_as(
         "SELECT statement, authority_public_key, current FROM account_renames
@@ -817,7 +837,7 @@ async fn deliver_one(
     .fetch_all(&state.pool)
     .await?;
     let Some((_, authority, current)) = rows.last().cloned() else {
-        return done().await;
+        return settle(false, Some("no_chain"), json!({})).await;
     };
     let chain: Vec<AccountRenameV1> = rows
         .into_iter()
@@ -842,68 +862,63 @@ async fn deliver_one(
     .await;
     let failure = match sent {
         Err(_) => "timed out".to_owned(),
-        // Kept, or the peer holds as much or refuses it for good.
+        // Kept, or the peer holds as much.
         Ok(Ok(response))
-            if response.status.is_success()
-                || response.status == StatusCode::CONFLICT
-                || response.status == StatusCode::BAD_REQUEST =>
+            if response.status.is_success() || response.status == StatusCode::CONFLICT =>
         {
-            if response.status == StatusCode::BAD_REQUEST {
-                tracing::warn!(%destination, %incarnation, "a peer refused a rename announce");
-            }
-            return done().await;
+            return settle(true, None, json!({ "status": response.status.as_u16() })).await;
+        }
+        // Refused for good.
+        Ok(Ok(response)) if response.status == StatusCode::BAD_REQUEST => {
+            tracing::warn!(%destination, %incarnation, "a peer refused a rename announce");
+            return settle(
+                false,
+                Some("remote_rejection"),
+                json!({ "status": response.status.as_u16() }),
+            )
+            .await;
         }
         Ok(Ok(response)) => format!("answered {}", response.status),
         // A peer without Chat and Drive federation, or one this server may
         // not send to: it learns on its next lookup.
-        Ok(Err(error)) if refused_feature(&error) => return done().await,
+        Ok(Err(error)) if refused_feature(&error) => {
+            return settle(false, Some("peer_unsupported"), json!({})).await;
+        }
         Ok(Err(error)) => format!("{error:#}"),
     };
     if expired {
         tracing::warn!(%destination, %incarnation, error = %failure,
-            "a rename announce was never delivered; dropped");
-        return done().await;
+            "a rename announce was never delivered; given up");
+        return settle(false, Some("expired"), json!({ "error": failure })).await;
     }
-    let wait = (30_i64 << attempts.clamp(0, 10)).min(6 * 3600);
+    let base = crate::site_settings::FEDERATION_RETRY_BASE_SECONDS
+        .load(&state.pool)
+        .await?;
+    let cap = crate::site_settings::FEDERATION_RETRY_MAX_SECONDS
+        .load(&state.pool)
+        .await?;
+    let wait = crate::federation_outbox::retry_delay(attempts, base, cap);
     sqlx::query(
-        "UPDATE rename_announce_outbox
-            SET attempts = attempts + 1, last_error = left($3, 500),
-                next_attempt_at = now() + make_interval(secs => $4)
-          WHERE destination = $1 AND incarnation_id = $2",
+        "UPDATE federation_outbox
+            SET attempts = attempts + 1, error_class = 'transport', last_error = left($3, 500),
+                next_attempt_at = now() + ($4 * interval '1 millisecond'), updated_at = now()
+          WHERE kind = 'rename' AND state = 'pending' AND destination = $1
+            AND payload->>'incarnation' = $2",
     )
     .bind(&destination)
     .bind(&incarnation)
     .bind(&failure)
-    .bind(wait as f64)
+    .bind(wait.as_millis() as i64)
     .execute(&state.pool)
     .await?;
     Ok(())
 }
 
-/// Wakes the announcer at once (`announce_soon`).
-static ANNOUNCE_NOW: tokio::sync::Notify = tokio::sync::Notify::const_new();
-
-/// Asks the announcer to send what is queued now: a rename just committed,
-/// and peers should show the new name at once, not within the half minute.
+/// Asks the federation worker to send what is queued now: a rename just
+/// committed, and peers should show the new name at once, not at the next
+/// look.
 pub fn announce_soon() {
-    ANNOUNCE_NOW.notify_one();
-}
-
-/// Sends announces every half minute, and at once when a rename asks
-/// (`announce_soon`), for as long as the server runs.
-pub fn spawn_announcer(state: AppState) {
-    tokio::spawn(async move {
-        let mut tick = tokio::time::interval(Duration::from_secs(30));
-        loop {
-            tokio::select! {
-                _ = tick.tick() => {}
-                _ = ANNOUNCE_NOW.notified() => {}
-            }
-            if let Err(error) = deliver_due(&state).await {
-                tracing::warn!(error = %error.message, "rename announces failed");
-            }
-        }
-    });
+    crate::federation_outbox::wake();
 }
 
 #[cfg(test)]
