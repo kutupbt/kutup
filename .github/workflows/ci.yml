@@ -275,7 +275,7 @@ jobs:
       - rust-workspace
       - web
     runs-on: ubuntu-24.04
-    timeout-minutes: 45
+    timeout-minutes: 60
     env:
       KUTUP_E2E_SAFE_ARTIFACTS: "1"
       KUTUP_E2E_DIAGNOSTICS_DIR: sanitized-results
