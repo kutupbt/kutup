@@ -961,16 +961,15 @@ export class ChatService {
     const address = conversation.account
     const peer = accountKey(address)
     const self = this.selfKey()
-    const capability = peer === self
-      ? null
-      : await this.withLock(() => this.client.mediaDeliveryCapability(peer))
-    if (capability) {
+    if (peer !== self) {
       // The opaque destination copy must be durable before the descriptor
       // can enter the recipient's mailbox (Signal's model,
       // docs/plans/federation-outbox.md): the message is written to history
       // now and waits, sending, until the recipient's server stores the
       // copy. A refusal or a full storage shows it as not delivered; it
-      // never becomes a visibly broken attachment message.
+      // never becomes a visibly broken attachment message. An accepted
+      // contact whose profile key is still on its way waits too (staging
+      // refuses anyone else).
       const operationId = await chatMediaDeliveryOperationId(descriptor.attachmentId, peer)
       await this.withLock(() =>
         this.client.stageAttachment(

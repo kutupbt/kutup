@@ -194,6 +194,8 @@ pub(crate) struct World {
     /// The home answers the next change "not found" (a link reset between
     /// the join info and the join).
     pub(crate) refuse_next_change: Cell<bool>,
+    /// The server takes no profile uploads (one still in flight).
+    pub(crate) refuse_profile_uploads: Cell<bool>,
     /// How many claims the home refused as a used pseudonym.
     pub(crate) pseudonyms_used: Cell<usize>,
     /// How many times a group list was read.
@@ -311,6 +313,7 @@ impl World {
             every_pseudonym_used: Cell::new(false),
             next_pseudonyms_used: Cell::new(0),
             refuse_next_change: Cell::new(false),
+            refuse_profile_uploads: Cell::new(false),
             pseudonyms_used: Cell::new(0),
             list_reads: Cell::new(0),
             batch_answers: RefCell::new(Vec::new()),
@@ -1435,6 +1438,9 @@ impl ChatTransport for Client {
         &self,
         profile: &PutChatProfileRequest,
     ) -> Result<OwnChatProfileResponse> {
+        if self.world.refuse_profile_uploads.get() {
+            return Err(ChatError::Transport("profile upload not taken".into()));
+        }
         let mut accounts = self.world.accounts.borrow_mut();
         let hosted = accounts.entry(self.account.clone()).or_default();
         if hosted.profile.as_ref().is_some_and(|current| {

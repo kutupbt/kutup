@@ -58,6 +58,7 @@ vi.mock('@kutup/crypto/rustWasm', () => ({
 
 import {
   ChatBackupCoordinator,
+  type BackupMediaSource,
   type BackupStatusResponse,
   type ChatBackupRuntime,
   type ChatBackupTransport,
@@ -99,6 +100,8 @@ class ScriptedTransport implements ChatBackupTransport {
   readonly reconciliationRequests: Parameters<ChatBackupTransport['reconcileMedia']>[0][] = []
   readonly segments: SegmentPage['segments'] = []
   ambiguousOnce = false
+  /** The next appends fail as a network blip does (no response). */
+  blips = 0
   statusOverride?: BackupStatusResponse
   manifest?: NonNullable<BackupStatusResponse['manifest']>
   stagedBase?: Uint8Array
@@ -137,6 +140,10 @@ class ScriptedTransport implements ChatBackupTransport {
 
   async appendSegment(request: Parameters<ChatBackupTransport['appendSegment']>[0]) {
     this.appendRequests.push(structuredClone(request))
+    if (this.blips > 0) {
+      this.blips -= 1
+      throw new Error('network error')
+    }
     // The test runtime hands every coordinator the same ids, so an operation
     // is the same one only when it is also the same device and sequence.
     const existing = this.segments.find(segment =>
@@ -184,7 +191,16 @@ class ScriptedTransport implements ChatBackupTransport {
     if (!this.stagedBase) throw new Error('no base')
     return this.stagedBase.slice()
   }
-  async copyMedia(): Promise<void> {}
+  /** The next media copies fail with the server's error. */
+  copyFailures = 0
+  readonly copyRequests: Parameters<ChatBackupTransport['copyMedia']>[0][] = []
+  async copyMedia(request: Parameters<ChatBackupTransport['copyMedia']>[0]): Promise<void> {
+    this.copyRequests.push(structuredClone(request))
+    if (this.copyFailures > 0) {
+      this.copyFailures -= 1
+      throw Object.assign(new Error('server error'), { response: { status: 500 } })
+    }
+  }
   async uploadMedia(): Promise<void> {}
   async downloadMedia(): Promise<never> { throw new Error('no media') }
   async reconcileMedia(
@@ -285,6 +301,42 @@ async function open(
   }, runtime(transport, checkpoint))
   openCoordinators.push(coordinator)
   return coordinator
+}
+
+/** A coordinator whose scheduled tasks wait for the test to run them. */
+async function openWithRetries(
+  transport: ScriptedTransport,
+  databaseName: string,
+  history: () => Promise<ChatHistoryEntry[]>,
+  mediaSources: () => BackupMediaSource[] = () => [],
+) {
+  const tasks: { delay: number; callback: () => void }[] = []
+  const coordinator = await ChatBackupCoordinator.open({
+    databaseName,
+    envelopeBinding: 'aci:00000000-0000-4000-8000-04f8996da763@kutup.dev',
+    masterKey: new Uint8Array(32).fill(3),
+    deviceId: 9,
+    history,
+    manifestSequence: async () => 1,
+    mediaSources,
+    localMediaCiphertext: async function* () {},
+    sealer: testSealer,
+  }, {
+    ...runtime(transport),
+    scheduler: {
+      schedule: (delay, callback) => {
+        const task = { delay, callback }
+        tasks.push(task)
+        return task
+      },
+      cancel: task => {
+        const at = tasks.indexOf(task as (typeof tasks)[number])
+        if (at >= 0) tasks.splice(at, 1)
+      },
+    },
+  })
+  openCoordinators.push(coordinator)
+  return { coordinator, tasks }
 }
 
 afterEach(async () => {
@@ -768,6 +820,59 @@ describe('ChatBackupCoordinator durable retry', () => {
     entries.push({ ...historyEntry(), id: '55555555-5555-4555-8555-555555555555', timestampMs: 1_700_000_002_000 })
     await coordinator.flushNow()
     expect(coordinator.view().state).toBe('protected')
+  })
+
+  it('retries what a network blip stopped, backing off, without waiting for the next change', async () => {
+    const transport = new ScriptedTransport()
+    transport.blips = 2
+    const databaseName = `backup-coordinator:${crypto.randomUUID()}`
+    databaseNames.push(databaseName)
+    const { coordinator, tasks: retries } = await openWithRetries(transport, databaseName, async () => [historyEntry()])
+    await coordinator.settled()
+    // The blip leaves the segment queued, and a retry after the first wait.
+    expect(transport.segments).toHaveLength(0)
+    expect(coordinator.view().state).toBe('offline')
+    expect(retries.map(task => task.delay)).toEqual([5_000])
+
+    // Another blip: the wait doubles.
+    retries.shift()!.callback()
+    await vi.waitFor(() => expect(retries.map(task => task.delay)).toEqual([10_000]))
+    expect(transport.segments).toHaveLength(0)
+
+    // It goes; nothing is left, so no retry, and the next blip waits the first wait again.
+    retries.shift()!.callback()
+    await vi.waitFor(() => expect(coordinator.view().state).toBe('protected'))
+    await coordinator.settled()
+    expect(transport.segments).toHaveLength(1)
+    expect(retries).toEqual([])
+  })
+
+  it('retries a media copy the server failed, though no change follows', async () => {
+    const transport = new ScriptedTransport()
+    // The server fails every copy of this cycle.
+    transport.copyFailures = Number.POSITIVE_INFINITY
+    const databaseName = `backup-coordinator:${crypto.randomUUID()}`
+    databaseNames.push(databaseName)
+    const entry = mediaHistoryEntry()
+    const attachment = entry.content.attachment!
+    const { coordinator, tasks } = await openWithRetries(transport, databaseName, async () => [entry], () => [{
+      attachmentId: attachment.attachmentId,
+      referenceId: '66666666-6666-4666-8666-666666666666',
+      ciphertextBytes: attachment.ciphertextBytes,
+    }])
+    await coordinator.settled()
+    const failed = transport.copyRequests.length
+    expect(failed).toBeGreaterThan(0)
+    expect(coordinator.view().state).toBe('needsAttention')
+    expect(tasks.map(task => task.delay)).toEqual([5_000])
+
+    // The server is back; the retry copies it.
+    transport.copyFailures = 0
+    tasks.shift()!.callback()
+    await vi.waitFor(() => expect(transport.copyRequests.length).toBeGreaterThan(failed))
+    await coordinator.settled()
+    expect(coordinator.view().state).toBe('protected')
+    expect(tasks).toEqual([])
   })
 
   it('runs again for a change that arrives while a cycle runs', async () => {
