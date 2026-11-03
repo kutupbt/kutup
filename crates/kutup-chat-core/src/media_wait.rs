@@ -87,7 +87,12 @@ impl Engine {
                 "sendId {send_id} is already used"
             )));
         }
-        if self.media_delivery_capability(peer_user).await?.is_none() {
+        // The copy is asked for with the recipient's delivery capability, from
+        // their profile key. An accepted contact's key can still be on its
+        // way (their reply accepts the request, and the key comes in a
+        // message of its own that can land after it): the send waits for it
+        // as for the copy, and is asked again until its lifetime ends.
+        if !self.media_copy_reachable(peer_user).await? {
             return Err(ChatError::Invalid(
                 "the recipient's server takes attachments only from an accepted contact".into(),
             ));
@@ -279,7 +284,7 @@ mod tests {
     use kutup_crypto::chat_media::{object_ciphertext_size, ChatMediaSuiteId};
 
     use super::*;
-    use crate::group_harness_tests::{befriend, rng, World};
+    use crate::group_harness_tests::{befriend, rng, Person, World};
 
     const OPERATION: &str = "66666666-6666-4666-8666-666666666666";
 
@@ -386,6 +391,95 @@ mod tests {
             .due
             .is_empty());
         assert_eq!(received_ids(&bob.receive()), vec![send_id]);
+    }
+
+    /// Bob's profile upload is still in flight when he accepts and replies:
+    /// his reply carries no profile key (a key goes out only once its
+    /// profile is published), yet it accepts the request on Alice's side.
+    /// Her attachment to him waits for the key as for the copy, instead of
+    /// being refused; the key comes once his upload goes. A stranger is
+    /// refused.
+    #[test]
+    fn an_accepted_contact_without_a_profile_key_yet_waits() {
+        let world = World::new();
+        let (mut alice, mut bob, carol) = (world.person(1), world.person(2), world.person(3));
+        let mut rng = rng();
+        let text = |person: &Person, body: &str| {
+            let send_id = uuid::Uuid::new_v4().to_string();
+            let seq = block_on(person.engine.session().next_sent_seq()).unwrap();
+            let content = ChatContent::text_with_id(&send_id, "2026-10-27T10:00:00Z", seq, body);
+            (send_id, content)
+        };
+        let (id, content) = text(&alice, "hello");
+        block_on(alice.engine.send(&id, &bob.account, &content, &mut rng)).unwrap();
+        bob.receive();
+        world.refuse_profile_uploads.set(true);
+        let wrapping_key = bob.wrapping_key;
+        let _ = block_on(bob.engine.update_profile(
+            "Bob",
+            None,
+            None,
+            None,
+            &wrapping_key,
+            "2026-10-27T10:00:01Z",
+            &mut rng,
+        ));
+        block_on(
+            bob.engine
+                .accept_contact(&alice.account, "2026-10-27T10:00:01Z", &mut rng),
+        )
+        .unwrap();
+        let (id, content) = text(&bob, "hi");
+        block_on(bob.engine.send(&id, &alice.account, &content, &mut rng)).unwrap();
+        alice.receive();
+        let contact = block_on(alice.engine.session().contact(&bob.account))
+            .unwrap()
+            .unwrap();
+        assert_eq!(contact.state, crate::ContactState::Accepted);
+        assert!(
+            block_on(alice.engine.media_delivery_capability(&bob.account))
+                .unwrap()
+                .is_none()
+        );
+
+        let send_id = uuid::Uuid::new_v4().to_string();
+        let seq = block_on(alice.engine.session().next_sent_seq()).unwrap();
+        block_on(alice.engine.stage_media_send(
+            &send_id,
+            &bob.account,
+            &attachment(&send_id, seq),
+            OPERATION,
+            60_000,
+        ))
+        .unwrap();
+        let sends = block_on(alice.engine.media_sends(unix_millis())).unwrap();
+        assert_eq!(sends.due.len(), 1);
+        assert_eq!(sends.due[0].peer, bob.account);
+
+        // His upload goes; his key follows, and the copy can be asked for.
+        world.refuse_profile_uploads.set(false);
+        block_on(
+            bob.engine
+                .flush_profile(&wrapping_key, "2026-10-27T10:00:02Z", &mut rng),
+        )
+        .unwrap();
+        alice.receive();
+        assert!(
+            block_on(alice.engine.media_delivery_capability(&bob.account))
+                .unwrap()
+                .is_some()
+        );
+
+        let stranger = uuid::Uuid::new_v4().to_string();
+        let seq = block_on(alice.engine.session().next_sent_seq()).unwrap();
+        assert!(block_on(alice.engine.stage_media_send(
+            &stranger,
+            &carol.account,
+            &attachment(&stranger, seq),
+            "77777777-7777-4777-8777-777777777777",
+            60_000,
+        ))
+        .is_err());
     }
 
     #[test]

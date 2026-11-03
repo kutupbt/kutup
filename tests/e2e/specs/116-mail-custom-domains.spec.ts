@@ -148,9 +148,11 @@ test('custom domains: the wizard, addresses on the domain, catch-all, deleting i
     // DMARC checks "relaxed" (Proton's RELAXED: DKIM aligned relaxed), which
     // Proton's badge shows neutral, never as a fault.
     await expect(await badge(mail, 'DMARC')).not.toHaveAttribute('data-tone', 'danger', { timeout: 5_000 })
+    // Read in the same pass: a refresh re-renders the whole row, so a badge
+    // found before it can be the one replaced.
+    await expect(await badge(mail, '0 addresses')).toHaveAttribute('data-tone', 'danger', { timeout: 5_000 })
+    await expect(mail.getByTestId('domains-used')).toContainText('1 /', { timeout: 5_000 })
   }).toPass({ timeout: 120_000 })
-  await expect(await badge(mail, '0 addresses')).toHaveAttribute('data-tone', 'danger')
-  await expect(mail.getByTestId('domains-used')).toContainText('1 /')
 
   // Addresses on it, in Identity and addresses.
   await mail.goto(appUrl('mail', '/settings/identity'))
