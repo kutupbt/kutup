@@ -320,11 +320,13 @@ test('custom domains: the administrators’ page', async ({ browser }) => {
     await expect(admin.getByText('Domain approved').first()).toBeVisible({ timeout: 30_000 })
     await expect(row.getByText('Awaiting approval')).toHaveCount(0)
 
-    // Bob's own limit: three domains, shown on his page.
+    // Bob's organization's limit: three domains, shown on his page. His
+    // first domain made him the owner of an organization of one.
     await admin.goto(appUrl('account', '/admin/users'))
     await admin.getByRole('link', { name: new RegExp(bob.username) }).first().click()
     const limits = admin.getByTestId('mail-domain-overrides')
     await expect(limits.getByText('From 0 to 100.')).toBeVisible({ timeout: 60_000 })
+    await expect(limits.getByTestId('mail-domain-organization')).toHaveText(`Organization: ${bob.username} (owner)`)
     await limits.getByRole('spinbutton', { name: 'Domains' }).fill('3')
     await limits.getByRole('button', { name: 'Save' }).click()
     await expect(admin.getByText('Limits saved').first()).toBeVisible({ timeout: 30_000 })

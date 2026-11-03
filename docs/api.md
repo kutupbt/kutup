@@ -125,6 +125,7 @@ Specific codes, where an app does something particular (a test in
 | `forwardingExists` | 409 | The address already forwards there |
 | `forwardingLimit` | 409 | 10 forwardings per address or 25 per account |
 | `customDomainsOff` | 403 | Custom mail domains are off here (`POST /api/mail/domains`) |
+| `orgRoleRequired` | 403 | `/api/mail/domains`: the account is in an organization whose domains it doesn't manage (a member, invited or disabled, or the organization disabled); only owners and admins add, check, remove or set a catch-all |
 | `addressDisabled` | 403/404/422 | The address is disabled: a send from it (403), a key lookup for it (404), a send to it (422); clients never send to it another way |
 | `addressEnabled` | 409 | `PUT /api/mail/addresses/{id}/delete` or `/enable`: the address isn't disabled |
 | `addressSetChanged` | 409 | `PUT /api/mail/addresses/order`: the ids aren't exactly the account's current addresses |
@@ -2013,8 +2014,11 @@ its end-to-end forwardings `outdated` and deletes their k.
 
 ## Custom mail domains
 
-An account's own domains, as Proton's
-([`plans/mail-custom-domains.md`](plans/mail-custom-domains.md)): added,
+An organization's domains, as Proton's
+([`plans/mail-custom-domains.md`](plans/mail-custom-domains.md),
+[`plans/organizations.md`](plans/organizations.md)): managed by its owners and
+admins (others get `403 orgRoleRequired`); an account's first domain makes it
+the owner of an organization of one. Added,
 proved with a TXT record before any mail flows, checked as Proton checks them,
 and given addresses. `404` unless the server has Mail; adds answer `403
 customDomainsOff` unless an administrator allows them and the server has
@@ -2033,18 +2037,22 @@ Proton's `Domain.ts`). `records` lists what to publish, each `{ "type", "host",
 A held domain whose TXT goes missing keeps working in `warn` for 14 days
 (admin-settable) while its MX is still this server; with its MX gone too,
 sending and delivery stop at once (`stopped`) and it ends within 72 hours.
-Then its addresses are freed and its owner sees a `domainLost` security
-event, as when another account proves the domain (two checks an hour apart
-that find that account's code and not the holder's).
+Then its addresses are freed and the organization's owners see a
+`domainLost` security event, as when another organization proves the domain
+(two checks an hour apart that find its code and not the holder's).
 
 ### GET /api/mail/domains
 
-`{ "domains": [...], "used", "max", "mode": "everyone"|"approve"|"off" }`.
+`{ "domains": [...], "used", "max", "mode": "everyone"|"approve"|"off" }`: the
+domains of the organization the account manages (none yet: an empty list
+under the site's limit). `max` is the organization's domain limit.
 
 ### POST /api/mail/domains
 
-`{ "name" }` → `201` with the domain (or the one the account removed before,
-with its code). The name is lowercased and put in its IDNA form. `400`
+`{ "name" }` → `201` with the domain (or the one the organization removed
+before, with its code); the account's first domain makes its organization of
+one. `403 orgRoleRequired` for an account whose organization's domains it
+doesn't manage. The name is lowercased and put in its IDNA form. `400`
 `invalidDomain`, `domainIsAddress`, `serverDomain` (this server's or a name
 under it) or `publicSuffix`; `409` `domainLimit`, `domainDailyLimit`,
 `serverDomainLimit` or `domainBlocked`.
@@ -2128,9 +2136,14 @@ lifts one by its name (`204`; `404` for a name not blocked), audited
 
 Administrators only. One account's limits over the site's: `{ "maxDomains":
 0–100 | null, "maxAddresses": 1–1000 | null, "catchAll": bool | null }`, `null`
-keeping the site's; `GET` adds `maxDomainsRange` and `maxAddressesRange`
-(`{ min, max }`, the ranges of the site settings they override), which the
-`PUT` checks against.
+keeping the site's. `maxDomains` and `catchAll` are the account's
+organization's (`organization_setting_overrides`), `maxAddresses` its own
+(`user_setting_overrides`); setting an organization's limit for an account
+without one makes its organization of one, so a limit (0 blocks custom
+domains) can be set before the first domain. `GET` adds `maxDomainsRange` and
+`maxAddressesRange` (`{ min, max }`, the ranges of the site settings they
+override), which the `PUT` checks against, and `organization` (`{ id, name,
+role }` or `null`).
 
 ## Mail
 

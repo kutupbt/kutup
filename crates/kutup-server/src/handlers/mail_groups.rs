@@ -1610,9 +1610,10 @@ pub async fn resolve_account(
         username,
         address,
     };
-    // As RCPT and key lookups: a custom domain's address only while usable.
+    // As RCPT and key lookups: a custom domain's address only while usable
+    // for its account.
     if let Some(domain_id) = domain_id {
-        if !crate::mail::domains::usable_domain(&state, domain_id).await? {
+        if !crate::mail::domains::usable_for(&state, user_id, domain_id).await? {
             return Err(AppError::not_found("not found"));
         }
     }

@@ -22,6 +22,8 @@ interface Overrides {
 interface OverridesView extends Overrides {
   maxDomainsRange: { min: number; max: number }
   maxAddressesRange: { min: number; max: number }
+  /** The organization the domain limits belong to; none until the account holds a domain. */
+  organization: { id: string; name: string; role: 'owner' | 'admin' | 'member' } | null
 }
 
 /** A number field's value, `null` when left empty (the site's). */
@@ -31,8 +33,9 @@ function parsed(value: string): number | null {
 
 /**
  * One account's custom-domain limits over the site's
- * (docs/plans/mail-custom-domains.md §7): domains, addresses, catch-all;
- * each left empty keeps the site's value.
+ * (docs/plans/mail-custom-domains.md §7): domains and the catch-all are its
+ * organization's (docs/plans/organizations.md §7), addresses its own; each
+ * left empty keeps the site's value.
  */
 export function MailDomainOverridesCard({ userId }: { userId: string }) {
   const { t } = useTranslation()
@@ -67,13 +70,29 @@ export function MailDomainOverridesCard({ userId }: { userId: string }) {
   const { maxDomainsRange: dr, maxAddressesRange: ar } = current.data
   const within = (value: number | null, range: { min: number; max: number }) =>
     value === null || (Number.isInteger(value) && value >= range.min && value <= range.max)
+  const organization = current.data.organization
   const valid = within(maxDomains, dr) && within(maxAddresses, ar)
   return (
     <Card className="space-y-3 p-4" data-testid="mail-domain-overrides">
       <p className="text-sm text-muted-foreground">{t('admin.mailDomains.overrides.description')}</p>
+      <p className="text-sm" data-testid="mail-domain-organization">
+        {organization
+          ? t('admin.mailDomains.overrides.organization', { name: organization.name, role: t(`admin.mailDomains.overrides.roles.${organization.role}`) })
+          : t('admin.mailDomains.overrides.noOrganization')}
+      </p>
       <div className="grid gap-3 sm:grid-cols-3">
         <Field label={t('admin.mailDomains.overrides.maxDomains')} description={t('admin.mailDomains.range', { min: dr.min, max: dr.max })}>
-          {(props) => <Input {...props} type="number" min={dr.min} max={dr.max} placeholder={t('admin.mailDomains.overrides.site')} value={domains} onChange={(e) => setDomains(e.target.value)} />}
+          {(props) => (
+            <Input
+              {...props}
+              type="number"
+              min={dr.min}
+              max={dr.max}
+              placeholder={t('admin.mailDomains.overrides.site')}
+              value={domains}
+              onChange={(e) => setDomains(e.target.value)}
+            />
+          )}
         </Field>
         <Field label={t('admin.mailDomains.overrides.maxAddresses')} description={t('admin.mailDomains.range', { min: ar.min, max: ar.max })}>
           {(props) => (

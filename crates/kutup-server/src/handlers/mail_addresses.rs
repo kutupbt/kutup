@@ -64,7 +64,7 @@ async fn default_address_in(
         match domain_id {
             None => return Ok(Some((id, address))),
             Some(domain_id) => {
-                if crate::mail::domains::usable_domain(state, domain_id).await? {
+                if crate::mail::domains::usable_for(state, user_id, domain_id).await? {
                     return Ok(Some((id, address)));
                 }
             }

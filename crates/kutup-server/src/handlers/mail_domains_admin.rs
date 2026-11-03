@@ -131,7 +131,7 @@ fn effective(settings: &Settings) -> BTreeMap<String, String> {
     let mut out = BTreeMap::new();
     out.insert(MODE_KEY.to_owned(), settings.mode.as_str().to_owned());
     let values = [
-        settings.domains_per_account,
+        settings.domains_per_organization,
         settings.addresses_per_account,
         settings.domains_on_server,
         settings.adds_per_day,
@@ -175,13 +175,13 @@ pub async fn list(
         })
         .collect();
     let rows: Vec<AdminDomainRow> = sqlx::query_as(
-        "SELECT d.id, d.name, COALESCE(u.username, u.id::text) AS owner, d.state, d.verify_state,
+        "SELECT d.id, d.name, o.name AS owner, d.state, d.verify_state,
                 d.mx_state, d.spf_state, d.dkim_state, d.dmarc_state,
                 d.approved_at IS NOT NULL AS approved, d.stopped_at IS NOT NULL AS stopped,
                 EXISTS (SELECT 1 FROM mail_domain_blocks b
                          WHERE b.name = d.name OR d.name LIKE '%.' || b.name) AS blocked,
                 d.created_at
-           FROM mail_domains d JOIN users u ON u.id = d.user_id
+           FROM mail_domains d JOIN organizations o ON o.id = d.organization_id
           WHERE d.removed_at IS NULL
           ORDER BY d.name",
     )
@@ -327,10 +327,10 @@ pub async fn deactivate(
     let id = Uuid::parse_str(&id).map_err(|_| AppError::not_found("no such domain"))?;
     let admin_id =
         Uuid::parse_str(&admin.user_id).map_err(|_| AppError::unauthorized("bad session"))?;
-    let (owner, name) = store::deactivate(&state.pool, id, admin_id).await?;
-    crate::mail::notice::domain_lost(
+    let (organization, name) = store::deactivate(&state.pool, id, admin_id).await?;
+    crate::mail::notice::domain_lost_to_owners(
         &state,
-        owner,
+        organization,
         &name,
         crate::mail::notice::DomainLost::Deactivated,
     )
@@ -411,7 +411,9 @@ pub async fn unblock(
     Ok(StatusCode::NO_CONTENT)
 }
 
-/// One account's limits over the site's; `null` keeps the site's.
+/// One account's custom-domain limits over the site's; `null` keeps the
+/// site's. The domain count and the catch-all are its organization's
+/// (docs/plans/organizations.md §7), the address count its own.
 #[derive(Debug, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct DomainOverrides {
@@ -420,8 +422,19 @@ pub struct DomainOverrides {
     pub catch_all: Option<bool>,
 }
 
-/// An account's overrides as the page shows them, with each one's range
-/// (the site settings they override).
+/// The organization an account's domain limits belong to.
+#[derive(Debug, Serialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct OrganizationRef {
+    pub id: String,
+    pub name: String,
+    /// The account's role in it.
+    pub role: String,
+}
+
+/// An account's limits as the page shows them, with each one's range (the
+/// site settings they override) and the organization the domain ones
+/// belong to (none until the account holds a domain or joins one).
 #[derive(Debug, Serialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct DomainOverridesView {
@@ -429,6 +442,26 @@ pub struct DomainOverridesView {
     pub overrides: DomainOverrides,
     pub max_domains_range: SettingRange,
     pub max_addresses_range: SettingRange,
+    pub organization: Option<OrganizationRef>,
+}
+
+const DOMAINS_KEY: &str = "mail_domains.per_organization";
+const CATCH_ALL_KEY: &str = "mail_domains.catch_all";
+const ADDRESSES_KEY: &str = "mail_domains.addresses_per_account";
+
+/// The account's organization (enabled or invited member) with its role.
+async fn organization_of(
+    pool: &sqlx::PgPool,
+    account: Uuid,
+) -> AppResult<Option<(Uuid, String, String)>> {
+    Ok(sqlx::query_as(
+        "SELECT o.id, o.name, m.role FROM organization_members m
+           JOIN organizations o ON o.id = m.organization_id
+          WHERE m.account_id = $1 AND m.state IN (1, 2)",
+    )
+    .bind(account)
+    .fetch_optional(pool)
+    .await?)
 }
 
 /// `GET /api/admin/users/{id}/mail-domains`
@@ -446,25 +479,52 @@ pub async fn overrides(
     Path(id): Path<String>,
 ) -> AppResult<Json<DomainOverridesView>> {
     let id = Uuid::parse_str(&id).map_err(|_| AppError::not_found("no such user"))?;
-    let row: Option<(Option<i32>, Option<i32>, Option<bool>)> = sqlx::query_as(
-        "SELECT max_domains, max_addresses, catch_all FROM mail_domain_overrides WHERE user_id = $1",
+    let organization = organization_of(&state.pool, id).await?;
+    let max_addresses: Option<i64> = sqlx::query_scalar(
+        "SELECT value FROM user_setting_overrides WHERE user_id = $1 AND key = $2",
     )
     .bind(id)
+    .bind(ADDRESSES_KEY)
     .fetch_optional(&state.pool)
     .await?;
-    let (max_domains, max_addresses, catch_all) = row.unwrap_or_default();
+    let (mut max_domains, mut catch_all) = (None, None);
+    if let Some((organization, _, _)) = &organization {
+        let rows: Vec<(String, i64)> = sqlx::query_as(
+            "SELECT key, value FROM organization_setting_overrides
+              WHERE organization_id = $1 AND key = ANY($2)",
+        )
+        .bind(organization)
+        .bind(&[DOMAINS_KEY, CATCH_ALL_KEY][..])
+        .fetch_all(&state.pool)
+        .await?;
+        for (key, value) in rows {
+            if key == DOMAINS_KEY {
+                max_domains = i32::try_from(value).ok();
+            } else {
+                catch_all = Some(value == 1);
+            }
+        }
+    }
     Ok(Json(DomainOverridesView {
         overrides: DomainOverrides {
             max_domains,
-            max_addresses,
+            max_addresses: max_addresses.and_then(|v| i32::try_from(v).ok()),
             catch_all,
         },
-        max_domains_range: range_of("mail_domains.per_account"),
-        max_addresses_range: range_of("mail_domains.addresses_per_account"),
+        max_domains_range: range_of(DOMAINS_KEY),
+        max_addresses_range: range_of(ADDRESSES_KEY),
+        organization: organization.map(|(id, name, role)| OrganizationRef {
+            id: id.to_string(),
+            name,
+            role,
+        }),
     }))
 }
 
-/// `PUT /api/admin/users/{id}/mail-domains`
+/// `PUT /api/admin/users/{id}/mail-domains`: the address count on the
+/// account, the domain count and the catch-all on its organization; an
+/// account with none yet gets its organization of one, so an administrator
+/// can limit (or block, with 0) custom domains before the first one.
 #[utoipa::path(
     put,
     path = "/api/admin/users/{id}/mail-domains",
@@ -481,10 +541,7 @@ pub async fn set_overrides(
     Json(input): Json<DomainOverrides>,
 ) -> AppResult<Json<DomainOverrides>> {
     let id = Uuid::parse_str(&id).map_err(|_| AppError::not_found("no such user"))?;
-    let (domains, addresses) = (
-        range_of("mail_domains.per_account"),
-        range_of("mail_domains.addresses_per_account"),
-    );
+    let (domains, addresses) = (range_of(DOMAINS_KEY), range_of(ADDRESSES_KEY));
     let outside = |value: Option<i32>, range: SettingRange| {
         value.is_some_and(|n| !(range.min..=range.max).contains(&i64::from(n)))
     };
@@ -494,32 +551,93 @@ pub async fn set_overrides(
             domains.min, domains.max, addresses.min, addresses.max
         )));
     }
-    let exists: bool = sqlx::query_scalar("SELECT EXISTS (SELECT 1 FROM users WHERE id = $1)")
+    let mut tx = state.pool.begin().await?;
+    let exists: Option<i32> = sqlx::query_scalar("SELECT 1 FROM users WHERE id = $1 FOR UPDATE")
         .bind(id)
-        .fetch_one(&state.pool)
+        .fetch_optional(&mut *tx)
         .await?;
-    if !exists {
+    if exists.is_none() {
         return Err(AppError::not_found("no such user"));
     }
-    sqlx::query(
-        "INSERT INTO mail_domain_overrides (user_id, max_domains, max_addresses, catch_all)
-         VALUES ($1, $2, $3, $4)
-         ON CONFLICT (user_id) DO UPDATE SET max_domains = EXCLUDED.max_domains,
-             max_addresses = EXCLUDED.max_addresses, catch_all = EXCLUDED.catch_all",
+    // An organization-wide limit needs the organization: one of one if the
+    // account has none yet.
+    let organization = if input.max_domains.is_some() || input.catch_all.is_some() {
+        Some(crate::organizations::of_account(&mut tx, id).await?)
+    } else {
+        organization_of(&state.pool, id).await?.map(|(id, _, _)| id)
+    };
+    set_or_clear(
+        &mut tx,
+        "user_setting_overrides",
+        "user_id",
+        id,
+        ADDRESSES_KEY,
+        input.max_addresses.map(i64::from),
     )
-    .bind(id)
-    .bind(input.max_domains)
-    .bind(input.max_addresses)
-    .bind(input.catch_all)
-    .execute(&state.pool)
     .await?;
+    if let Some(organization) = organization {
+        set_or_clear(
+            &mut tx,
+            "organization_setting_overrides",
+            "organization_id",
+            organization,
+            DOMAINS_KEY,
+            input.max_domains.map(i64::from),
+        )
+        .await?;
+        set_or_clear(
+            &mut tx,
+            "organization_setting_overrides",
+            "organization_id",
+            organization,
+            CATCH_ALL_KEY,
+            input.catch_all.map(i64::from),
+        )
+        .await?;
+    }
+    tx.commit().await?;
     audit(
         &state.pool,
         &admin.user_id,
         "mail.domains.overrides",
         Some(id),
-        json!(input),
+        json!({ "limits": input, "organization": organization.map(|o| o.to_string()) }),
     )
     .await;
     Ok(Json(input))
+}
+
+/// Sets `key` to `value` in `table` for `owner`, or removes it (`None`: the
+/// site's again). `table` and `column` are this module's constants.
+async fn set_or_clear(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    table: &'static str,
+    column: &'static str,
+    owner: Uuid,
+    key: &str,
+    value: Option<i64>,
+) -> AppResult<()> {
+    match value {
+        Some(value) => {
+            sqlx::query(&format!(
+                "INSERT INTO {table} ({column}, key, value) VALUES ($1, $2, $3)
+                 ON CONFLICT ({column}, key) DO UPDATE SET value = EXCLUDED.value, updated_at = now()"
+            ))
+            .bind(owner)
+            .bind(key)
+            .bind(value)
+            .execute(&mut **tx)
+            .await?;
+        }
+        None => {
+            sqlx::query(&format!(
+                "DELETE FROM {table} WHERE {column} = $1 AND key = $2"
+            ))
+            .bind(owner)
+            .bind(key)
+            .execute(&mut **tx)
+            .await?;
+        }
+    }
+    Ok(())
 }

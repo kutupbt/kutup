@@ -464,6 +464,7 @@
   "apiErrors": {
     "keysPendingUpgrade": "Bu kişiyle paylaşabilmeniz için Kutup'a bir kez daha giriş yapması gerekiyor: hesabı daha güçlü şifreleme anahtarlarına geçiyor.",
     "checkTimedOut": "DNS denetimi çok uzun sürdü. Bir dakika sonra yeniden deneyin.",
+    "orgRoleRequired": "Kuruluşunuzun alan adlarını yalnızca sahipleri ve yöneticileri yönetir.",
     "peerOutdated": "Bu kişinin sunucusu Kutup'un eski bir sürümünü çalıştırıyor. Sunucu güncellendiğinde onunla paylaşabilirsiniz."
   },
   "pendingUpgrade": {
