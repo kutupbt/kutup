@@ -54,6 +54,10 @@ When master-key rotation is built, every place that writes `MasterKeyGeneration:
   - Pass kept keys: CLI `vaultsync.rs` and web `pass/src/vault/worker.ts` (`keepKey`). `kept::reseal` already keeps the generation of the envelope it opens, so a copied vault follows its source.
 - **The server's fake recovery envelope** (`handlers/auth.rs`, `deterministic_fake_account_envelope`): an unknown name gets a stable fake so it looks like a real account. Once accounts can be past generation 1, the fake must carry a generation as plausible as a real one, or the header tells a fake from a real account.
 - **The constant itself:** `@kutup/crypto/masterKeyGeneration` and its doc comment in `kutup-crypto-wasm` (`sealAccountEnvelope`).
+- **Organizations** (`organization.rs`, docs/plans/organizations.md §3):
+  - a still-managed member's rotation re-seals their `EscrowV1` at the new generation and deletes the old one, or admins lose access silently;
+  - an admin's purpose-7 copy of the organization key (`OrganizationPrivateKey`) follows that admin's generation: re-wrapped at their rotation;
+  - a `KeyCertificateV1` names its signing admin's incarnation and authority key id, so when that admin rotates another admin re-signs it, or members' checks fail at consent.
 
 The `inspect` that a rotation reads first to pick the master key returns the generation in Rust and in WASM (`inspectAccountEnvelope`).
 

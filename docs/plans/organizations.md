@@ -1,9 +1,14 @@
 # Organizations, following Proton
 
 Status: **approved** 2026-11-02 (the main session's review, the user's answers
-to the open questions below). O1 (schema, domains keyed by organization,
-the registry's organization scope) is being built on `wipe/o1-organizations`;
-O2 (the formats) follows.
+to the open questions below). O1 (schema, domains keyed by organization) is
+PR #380; O2 (the formats, `kutup-crypto::organization`) is built on
+`wipe/o2-org-formats`: the four formats with magics `KUTPOC1`, `KUTPOS1`,
+`KUTPOR1`, `KUTPOE1`, envelope purpose 7, the `kutup/org/*` labels and
+`tests/vectors/organization-v1.json`. Their WASM exports come with O4, the
+first slice whose browser uses them: typed, so the organization key's seed
+and an opened master key never reach JavaScript (purpose 7 is refused on the
+generic envelope path now).
 
 - **Need (user):** two accounts on one custom mail domain, e.g.
   `a@mail.t.co` for account 1 and `b@mail.t.co` for account 2. Today a

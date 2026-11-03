@@ -690,7 +690,9 @@ pub fn inspect_account_envelope(envelope_base64: &str) -> Result<JsValue, JsValu
 /// generic account-envelope path cannot hand their secret key to JavaScript.
 fn generic_account_purpose(value: u8) -> Result<AccountEnvelopePurpose, JsValue> {
     match AccountEnvelopePurpose::try_from(value).map_err(|error| js_error(&error.to_string()))? {
-        AccountEnvelopePurpose::MailAddressPrivateKey | AccountEnvelopePurpose::PassVaultSecret => {
+        AccountEnvelopePurpose::MailAddressPrivateKey
+        | AccountEnvelopePurpose::PassVaultSecret
+        | AccountEnvelopePurpose::OrganizationPrivateKey => {
             Err(js_error(
                 "this account envelope purpose has its own typed export",
             ))
