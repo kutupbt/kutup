@@ -522,8 +522,9 @@ pub async fn overrides(
 }
 
 /// `PUT /api/admin/users/{id}/mail-domains`: the address count on the
-/// account, the domain count and the catch-all on its organization (refused,
-/// `noOrganization`, for an account that has none yet).
+/// account, the domain count and the catch-all on its organization; an
+/// account with none yet gets its organization of one, so an administrator
+/// can limit (or block, with 0) custom domains before the first one.
 #[utoipa::path(
     put,
     path = "/api/admin/users/{id}/mail-domains",
@@ -531,12 +532,7 @@ pub async fn overrides(
     security(("BearerAuth" = [])),
     params(("id" = String, Path)),
     request_body = DomainOverrides,
-    responses(
-        (status = 200, body = DomainOverrides),
-        (status = 400),
-        (status = 404),
-        (status = 409, description = "noOrganization")
-    )
+    responses((status = 200, body = DomainOverrides), (status = 400), (status = 404))
 )]
 pub async fn set_overrides(
     State(state): State<AppState>,
@@ -555,21 +551,21 @@ pub async fn set_overrides(
             domains.min, domains.max, addresses.min, addresses.max
         )));
     }
-    let exists: bool = sqlx::query_scalar("SELECT EXISTS (SELECT 1 FROM users WHERE id = $1)")
+    let mut tx = state.pool.begin().await?;
+    let exists: Option<i32> = sqlx::query_scalar("SELECT 1 FROM users WHERE id = $1 FOR UPDATE")
         .bind(id)
-        .fetch_one(&state.pool)
+        .fetch_optional(&mut *tx)
         .await?;
-    if !exists {
+    if exists.is_none() {
         return Err(AppError::not_found("no such user"));
     }
-    let organization = organization_of(&state.pool, id).await?.map(|(id, _, _)| id);
-    if organization.is_none() && (input.max_domains.is_some() || input.catch_all.is_some()) {
-        return Err(AppError::conflict(
-            "the account has no organization yet: its domain limits apply once it holds a domain",
-        )
-        .with_details(json!({ "code": "noOrganization" })));
-    }
-    let mut tx = state.pool.begin().await?;
+    // An organization-wide limit needs the organization: one of one if the
+    // account has none yet.
+    let organization = if input.max_domains.is_some() || input.catch_all.is_some() {
+        Some(crate::organizations::of_account(&mut tx, id).await?)
+    } else {
+        organization_of(&state.pool, id).await?.map(|(id, _, _)| id)
+    };
     set_or_clear(
         &mut tx,
         "user_setting_overrides",

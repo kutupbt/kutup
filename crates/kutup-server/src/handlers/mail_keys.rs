@@ -159,9 +159,12 @@ async fn own_address(
     let usable = address_state == "active"
         && !disabled
         && keys.iter().any(|key| key.5)
-        && match domain_id {
-            None => true,
-            Some(domain_id) => crate::mail::domains::usable_domain(state, domain_id).await?,
+        && match (domain_id, user_id) {
+            (None, _) => true,
+            (Some(domain_id), Some(owner)) => {
+                crate::mail::domains::usable_for(state, owner, domain_id).await?
+            }
+            (Some(_), None) => false,
         };
     let is_default = match user_id {
         Some(user_id) if usable => {
@@ -769,8 +772,8 @@ async fn public_keys(
 ) -> AppResult<Option<(Uuid, String, Vec<PublicMailKey>)>> {
     // The address as stored (the spelling its key lists and keys name),
     // whatever spelling was asked.
-    let row: Option<(Uuid, String, Option<Uuid>)> = sqlx::query_as(
-        "SELECT a.id, a.address, a.domain_id FROM mail_addresses a JOIN users u ON u.id = a.user_id
+    let row: Option<(Uuid, String, Option<Uuid>, Uuid)> = sqlx::query_as(
+        "SELECT a.id, a.address, a.domain_id, a.user_id FROM mail_addresses a JOIN users u ON u.id = a.user_id
           WHERE a.folded = kutup_address_folded($1)
             AND a.disabled_at IS NULL
             AND (a.state = 'active'
@@ -780,14 +783,14 @@ async fn public_keys(
     .bind(address)
     .fetch_optional(&state.pool)
     .await?;
-    let Some((address_id, stored, domain_id)) = row else {
+    let Some((address_id, stored, domain_id, owner)) = row else {
         return Ok(None);
     };
     // An address on a custom domain has keys only while its domain is
-    // usable, as RCPT takes its mail: a lapsed or moved domain's former
-    // holder isn't offered to senders.
+    // usable for its account, as RCPT takes its mail: a lapsed or moved
+    // domain's former holder, or a disabled member, isn't offered to senders.
     if let Some(domain_id) = domain_id {
-        if !crate::mail::domains::usable_domain(state, domain_id).await? {
+        if !crate::mail::domains::usable_for(state, owner, domain_id).await? {
             return Ok(None);
         }
     }

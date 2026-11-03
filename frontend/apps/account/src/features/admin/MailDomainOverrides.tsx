@@ -88,7 +88,6 @@ export function MailDomainOverridesCard({ userId }: { userId: string }) {
               type="number"
               min={dr.min}
               max={dr.max}
-              disabled={!organization}
               placeholder={t('admin.mailDomains.overrides.site')}
               value={domains}
               onChange={(e) => setDomains(e.target.value)}
@@ -102,7 +101,7 @@ export function MailDomainOverridesCard({ userId }: { userId: string }) {
         </Field>
         <Field label={t('admin.mailDomains.overrides.catchAll')}>
           {(props) => (
-            <Select value={catchAll} disabled={!organization} onValueChange={(value) => setCatchAll(value as typeof catchAll)}>
+            <Select value={catchAll} onValueChange={(value) => setCatchAll(value as typeof catchAll)}>
               <SelectTrigger {...props}>
                 <SelectValue />
               </SelectTrigger>

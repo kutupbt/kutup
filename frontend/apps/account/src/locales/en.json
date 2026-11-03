@@ -1632,7 +1632,7 @@
         "title": "Mail domains",
         "description": "This account's limits over the site's; empty keeps the site's. Domains and the catch-all are its organization's, addresses its own.",
         "organization": "Organization: {{name}} ({{role}})",
-        "noOrganization": "No organization yet: the domain limits apply once this account holds a domain.",
+        "noOrganization": "No organization yet: setting the domains or the catch-all here gives this account its organization of one.",
         "roles": { "owner": "owner", "admin": "admin", "member": "member" },
         "maxDomains": "Domains",
         "maxAddresses": "Addresses",

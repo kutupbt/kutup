@@ -286,7 +286,7 @@ async fn sender_for(state: &AppState, user_id: Uuid, from: Option<&str>) -> AppR
             );
         }
         // Only an enabled member of the domain's organization sends from it.
-        if !crate::mail::domains::member_of_holder(state, user_id, domain_id).await? {
+        if !crate::mail::domains::usable_for(state, user_id, domain_id).await? {
             return Err(
                 AppError::forbidden("this address's organization doesn't let you send")
                     .with_details(json!({ "code": "addressDisabled" })),

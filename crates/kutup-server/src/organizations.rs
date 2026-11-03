@@ -51,8 +51,9 @@ impl Membership {
     }
 }
 
-/// The account's membership: enabled or invited (one at most, the partial
-/// unique index), or none.
+/// The account's membership, whatever its state (one at most, the unique
+/// index): a disabled member is still the organization's, refused
+/// [`role_required`], never free to make an organization of its own.
 pub async fn membership<'e, E: sqlx::PgExecutor<'e>>(
     executor: E,
     account: Uuid,
@@ -60,7 +61,7 @@ pub async fn membership<'e, E: sqlx::PgExecutor<'e>>(
     let row: Option<(Uuid, String, i16, i16)> = sqlx::query_as(
         "SELECT m.organization_id, m.role, m.state, o.state
            FROM organization_members m JOIN organizations o ON o.id = m.organization_id
-          WHERE m.account_id = $1 AND m.state IN (1, 2)",
+          WHERE m.account_id = $1",
     )
     .bind(account)
     .fetch_optional(executor)
@@ -117,6 +118,21 @@ pub async fn for_new_domain(tx: &mut Transaction<'_, Postgres>, account: Uuid) -
         Some(_) => return Err(role_required()),
         None => {}
     }
+    of_one(tx, account).await
+}
+
+/// The account's organization (any membership), or a new organization of
+/// one with it as owner: where an administrator's domain limits for an
+/// account go before it holds a domain. The account's row must be locked by
+/// the caller.
+pub async fn of_account(tx: &mut Transaction<'_, Postgres>, account: Uuid) -> AppResult<Uuid> {
+    match membership(&mut **tx, account).await? {
+        Some(m) => Ok(m.organization_id),
+        None => of_one(tx, account).await,
+    }
+}
+
+async fn of_one(tx: &mut Transaction<'_, Postgres>, account: Uuid) -> AppResult<Uuid> {
     let organization: Uuid = sqlx::query_scalar(
         "INSERT INTO organizations (name)
          SELECT coalesce(nullif(username, ''), 'organization') FROM users WHERE id = $1
@@ -266,5 +282,75 @@ mod tests {
             .execute(&pool)
             .await
             .unwrap();
+
+        // A disabled member is still the organization's: refused, and no
+        // organization of one of its own.
+        sqlx::query(
+            "UPDATE organization_members SET role = 'member', state = 0 WHERE account_id = $1",
+        )
+        .bind(bob)
+        .execute(&pool)
+        .await
+        .unwrap();
+        let refused = store::add(&pool, bob, &format!("bob2-{tag}.test"), &site)
+            .await
+            .unwrap_err();
+        assert_eq!(refused.status, axum::http::StatusCode::FORBIDDEN);
+        assert_eq!(
+            super::membership(&pool, bob)
+                .await
+                .unwrap()
+                .map(|m| m.organization_id),
+            Some(organization)
+        );
+
+        // An administrator's limit for an account with no domain: its
+        // organization of one.
+        let carol = account(&pool, &tag, "orgcarol").await;
+        let mut tx = pool.begin().await.unwrap();
+        let carols = super::of_account(&mut tx, carol).await.unwrap();
+        tx.commit().await.unwrap();
+        assert_ne!(carols, organization);
+        assert_eq!(super::owners(&pool, carols).await.unwrap(), [carol]);
+
+        // Its last owner's account deleted, an organization of one goes with
+        // its domains, so the name is free again.
+        let dave = account(&pool, &tag, "orgdave").await;
+        let daves = store::add(&pool, dave, &format!("dave-{tag}.test"), &site)
+            .await
+            .unwrap()
+            .unwrap();
+        sqlx::query("DELETE FROM users WHERE id = $1")
+            .bind(dave)
+            .execute(&pool)
+            .await
+            .unwrap();
+        let left: i64 = sqlx::query_scalar("SELECT count(*) FROM organizations WHERE id = $1")
+            .bind(daves.organization_id)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(left, 0, "an organization nobody is left in goes");
+        let domains: i64 = sqlx::query_scalar("SELECT count(*) FROM mail_domains WHERE id = $1")
+            .bind(daves.id)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(domains, 0);
+
+        // With people left in it, it passes to its longest-standing admin.
+        sqlx::query(
+            "UPDATE organization_members SET state = 1, role = 'admin' WHERE account_id = $1",
+        )
+        .bind(bob)
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query("DELETE FROM users WHERE id = $1")
+            .bind(alice)
+            .execute(&pool)
+            .await
+            .unwrap();
+        assert_eq!(super::owners(&pool, organization).await.unwrap(), [bob]);
     }
 }

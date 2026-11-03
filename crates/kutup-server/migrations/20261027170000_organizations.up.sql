@@ -34,9 +34,10 @@ CREATE TABLE organization_members (
     CHECK ((state = 2) = (invited_at IS NOT NULL AND joined_at IS NULL))
 );
 -- One organization per account (Proton's screens enforce it), counting a
--- pending invitation's.
+-- pending invitation's and a disabled membership: a disabled member is still
+-- the organization's (refused orgRoleRequired), never free to make another.
 CREATE UNIQUE INDEX organization_members_one_per_account
-    ON organization_members (account_id) WHERE state IN (1, 2);
+    ON organization_members (account_id);
 
 -- The organization key: an X-Wing public key, its id a hash of it
 -- (kutup/org/key-id/v1), certified by the admin who made it.
@@ -50,30 +51,43 @@ CREATE TABLE organization_keys (
 );
 CREATE UNIQUE INDEX organization_keys_one_active
     ON organization_keys (organization_id) WHERE state = 'active';
+-- What shares and escrows reference, so neither can cite another
+-- organization's key.
+ALTER TABLE organization_keys ADD CONSTRAINT organization_keys_of_organization
+    UNIQUE (id, organization_id);
 
 -- An admin's hold on a key: sealed to them while pending, then their own
--- account envelope once they activated it.
+-- account envelope once they activated it. Gone with their membership.
 CREATE TABLE organization_key_shares (
-    key_id bytea NOT NULL REFERENCES organization_keys(id) ON DELETE CASCADE,
-    account_id uuid NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    organization_id uuid NOT NULL,
+    key_id bytea NOT NULL,
+    account_id uuid NOT NULL,
     sealed_share bytea,
     envelope bytea,
     granted_by uuid REFERENCES users(id) ON DELETE SET NULL,
     created_at timestamptz NOT NULL DEFAULT now(),
     PRIMARY KEY (key_id, account_id),
+    FOREIGN KEY (key_id, organization_id)
+        REFERENCES organization_keys (id, organization_id) ON DELETE CASCADE,
+    FOREIGN KEY (organization_id, account_id)
+        REFERENCES organization_members (organization_id, account_id) ON DELETE CASCADE,
     CHECK ((sealed_share IS NULL) <> (envelope IS NULL))
 );
 
 -- A managed member's master key, sealed to the organization key, under the
--- master-key generation it belongs to.
+-- master-key generation it belongs to. One per key: while the organization
+-- key rotates, the escrow under the old key stays until the new one is
+-- sealed, then goes with the old key (docs/plans/organizations.md §3).
 CREATE TABLE organization_member_escrows (
     organization_id uuid NOT NULL,
     account_id uuid NOT NULL,
-    key_id bytea NOT NULL REFERENCES organization_keys(id) ON DELETE CASCADE,
+    key_id bytea NOT NULL,
     mk_generation integer NOT NULL CHECK (mk_generation > 0),
     sealed bytea NOT NULL,
     created_at timestamptz NOT NULL DEFAULT now(),
-    PRIMARY KEY (organization_id, account_id),
+    PRIMARY KEY (organization_id, account_id, key_id),
+    FOREIGN KEY (key_id, organization_id)
+        REFERENCES organization_keys (id, organization_id) ON DELETE CASCADE,
     FOREIGN KEY (organization_id, account_id)
         REFERENCES organization_members (organization_id, account_id) ON DELETE CASCADE
 );
@@ -100,6 +114,49 @@ CREATE TABLE organization_setting_overrides (
     PRIMARY KEY (organization_id, key)
 );
 
+-- An organization with no owner left (its last owner's account deleted)
+-- either goes, its domains with it, when nobody is left in it, or passes to
+-- its longest-standing enabled admin, else member, so the people left keep
+-- their addresses (docs/plans/organizations.md §5). Before organizations a
+-- domain went with its account (user_id ON DELETE CASCADE); this keeps that.
+CREATE FUNCTION organization_after_member_gone() RETURNS trigger AS $$
+DECLARE
+    heir uuid;
+BEGIN
+    IF OLD.role <> 'owner' OR EXISTS (
+        SELECT 1 FROM organization_members
+         WHERE organization_id = OLD.organization_id AND role = 'owner'
+    ) THEN
+        RETURN NULL;
+    END IF;
+    SELECT account_id INTO heir FROM organization_members
+     WHERE organization_id = OLD.organization_id AND state = 1
+     ORDER BY role = 'admin' DESC, joined_at NULLS LAST, account_id
+     LIMIT 1;
+    IF heir IS NOT NULL THEN
+        UPDATE organization_members SET role = 'owner'
+         WHERE organization_id = OLD.organization_id AND account_id = heir;
+    ELSIF NOT EXISTS (SELECT 1 FROM organization_members
+                       WHERE organization_id = OLD.organization_id) THEN
+        DELETE FROM organizations WHERE id = OLD.organization_id;
+    END IF;
+    RETURN NULL;
+END $$ LANGUAGE plpgsql;
+CREATE TRIGGER organization_after_member_gone
+    AFTER DELETE ON organization_members
+    FOR EACH ROW EXECUTE FUNCTION organization_after_member_gone();
+
+-- An administrator's limit for an account that holds no domain has no
+-- organization to go to: refuse rather than drop it silently.
+DO $$
+BEGIN
+    IF EXISTS (SELECT 1 FROM mail_domain_overrides o
+                WHERE (o.max_domains IS NOT NULL OR o.catch_all IS NOT NULL)
+                  AND NOT EXISTS (SELECT 1 FROM mail_domains d WHERE d.user_id = o.user_id)) THEN
+        RAISE EXCEPTION 'a domain or catch-all limit exists for an account with no domain: clear it, or give the account its organization first';
+    END IF;
+END $$;
+
 -- Every account that holds domains today becomes the owner of an
 -- organization of one, named after its username.
 CREATE TEMPORARY TABLE organization_of_holder ON COMMIT DROP AS
@@ -111,8 +168,7 @@ CREATE TEMPORARY TABLE organization_of_holder ON COMMIT DROP AS
 DO $$
 BEGIN
     IF EXISTS (SELECT 1 FROM organization_of_holder h
-                 JOIN organization_members m ON m.account_id = h.account_id
-                WHERE m.state IN (1, 2)) THEN
+                 JOIN organization_members m ON m.account_id = h.account_id) THEN
         RAISE EXCEPTION 'a domain holder is already in an organization: move its domains by hand';
     END IF;
 END $$;

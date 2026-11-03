@@ -57,8 +57,8 @@ pub async fn usable_domain(state: &crate::AppState, id: uuid::Uuid) -> Result<bo
 }
 
 /// Whether `account` is an enabled member of the organization holding the
-/// domain `id`: only then do its addresses there send.
-pub async fn member_of_holder(
+/// domain `id`.
+async fn member_of_holder(
     state: &crate::AppState,
     account: uuid::Uuid,
     id: uuid::Uuid,
@@ -74,6 +74,18 @@ pub async fn member_of_holder(
     .await
 }
 
+/// Whether `account`'s address on the domain `id` works now: the domain
+/// usable (its organization active) and the account an enabled member of
+/// that organization (docs/plans/organizations.md §2). What sending, the
+/// default address, key lookups and the directory all ask, as RCPT does.
+pub async fn usable_for(
+    state: &crate::AppState,
+    account: uuid::Uuid,
+    id: uuid::Uuid,
+) -> Result<bool, sqlx::Error> {
+    Ok(usable_domain(state, id).await? && member_of_holder(state, account, id).await?)
+}
+
 /// Whether `domain` is a custom domain held here that takes mail now.
 pub async fn held_here(state: &crate::AppState, domain: &str) -> Result<bool, sqlx::Error> {
     if !sweep::configured(state) {
@@ -81,7 +93,8 @@ pub async fn held_here(state: &crate::AppState, domain: &str) -> Result<bool, sq
     }
     let settings = settings::Settings::load(&state.pool).await?;
     let row: Option<store::Row> = sqlx::query_as(&format!(
-        "SELECT {} FROM mail_domains WHERE name = $1 AND state IN (1, 2) AND removed_at IS NULL",
+        "SELECT {} FROM mail_domains WHERE name = $1 AND state IN (1, 2) AND removed_at IS NULL
+            AND organization_id IN (SELECT id FROM organizations WHERE state = 1)",
         store::COLUMNS
     ))
     .bind(domain.to_ascii_lowercase())

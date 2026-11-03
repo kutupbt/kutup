@@ -221,6 +221,8 @@ organization_keys (id, organization_id, public_key, certificate, state, created_
 organization_key_shares (key_id, account_id, sealed_share NULL, envelope NULL, granted_by)
                                                  -- pending: sealed_share; active: envelope
 organization_member_escrows (organization_id, account_id, key_id, mk_generation, sealed)
+                                                 -- one per member and key: old and new coexist
+                                                 -- while the organization key rotates
 organization_access_requests (organization_id, account_id, request, created_at)
 
 mail_domains.organization_id uuid                -- replaces mail_domains.user_id
@@ -494,7 +496,15 @@ can't tell a managed account from a private one, as at Proton.
 - **Disabling** a member: their organization addresses refuse mail at RCPT
   and can't send; nothing is freed.
 - **The last owner** can't leave; they delete the organization or make
-  another owner. Deleting the organization needs no other members (Kutup's
+  another owner. If the last owner's account is deleted (by them, an
+  administrator or a job), the organization passes to its longest-standing
+  enabled admin, else member; with nobody left in it, it goes with its
+  domains, as a domain went with its account before organizations (a
+  database trigger, so every way an account is deleted does it).
+- **A disabled member stays the organization's:** it can't make an
+  organization of its own (the one-per-account index counts every state)
+  and is refused `orgRoleRequired`; its addresses neither send, nor get
+  mail, nor are offered in key lookups or the directory. Deleting the organization needs no other members (Kutup's
   rule); its domains are removed as custom domains §8 says, and its keys,
   shares and escrows are deleted.
 - Each of these is a security event for the member (`orgJoined`, `orgLeft`,

@@ -62,6 +62,8 @@ UPDATE site_settings SET key = 'mail_domains.per_account' WHERE key = 'mail_doma
 
 ALTER TABLE mail_domains DROP COLUMN organization_id;
 
+DROP TRIGGER organization_after_member_gone ON organization_members;
+DROP FUNCTION organization_after_member_gone();
 DROP TABLE organization_setting_overrides;
 DROP TABLE organization_access_requests;
 DROP TABLE organization_member_escrows;

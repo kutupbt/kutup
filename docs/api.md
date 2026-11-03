@@ -126,7 +126,6 @@ Specific codes, where an app does something particular (a test in
 | `forwardingLimit` | 409 | 10 forwardings per address or 25 per account |
 | `customDomainsOff` | 403 | Custom mail domains are off here (`POST /api/mail/domains`) |
 | `orgRoleRequired` | 403 | `/api/mail/domains`: the account is in an organization whose domains it doesn't manage (a member, invited or disabled, or the organization disabled); only owners and admins add, check, remove or set a catch-all |
-| `noOrganization` | 409 | `PUT /api/admin/users/{id}/mail-domains`: a domain or catch-all limit for an account that has no organization yet (it gets one with its first domain) |
 | `addressDisabled` | 403/404/422 | The address is disabled: a send from it (403), a key lookup for it (404), a send to it (422); clients never send to it another way |
 | `addressEnabled` | 409 | `PUT /api/mail/addresses/{id}/delete` or `/enable`: the address isn't disabled |
 | `addressSetChanged` | 409 | `PUT /api/mail/addresses/order`: the ids aren't exactly the account's current addresses |
@@ -2140,7 +2139,8 @@ Administrators only. One account's limits over the site's: `{ "maxDomains":
 keeping the site's. `maxDomains` and `catchAll` are the account's
 organization's (`organization_setting_overrides`), `maxAddresses` its own
 (`user_setting_overrides`); setting an organization's limit for an account
-without one answers `409 noOrganization`. `GET` adds `maxDomainsRange` and
+without one makes its organization of one, so a limit (0 blocks custom
+domains) can be set before the first domain. `GET` adds `maxDomainsRange` and
 `maxAddressesRange` (`{ min, max }`, the ranges of the site settings they
 override), which the `PUT` checks against, and `organization` (`{ id, name,
 role }` or `null`).
