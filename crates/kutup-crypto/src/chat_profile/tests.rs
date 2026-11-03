@@ -115,3 +115,35 @@ fn contents_are_validated_before_sealing() {
     assert!(validate_avatar(Some(&[]), Some("image/png")).is_err());
     assert!(validate_avatar(None, None).is_ok());
 }
+
+#[test]
+fn profile_envelope_parser_rejects_unknown_suite_and_trailing_data() {
+    let alice: AccountRef = "aci:0b6b5e0c-4c1e-4b8e-9c2d-6a1f3e5d7c9b@example.test".parse().unwrap();
+    let context = ProfileEnvelopeContextV1::new(
+        ProfileEnvelopePurpose::WrappedProfileKey,
+        &alice,
+        &"01".repeat(32),
+        1,
+        1,
+    )
+    .unwrap();
+    let header = encode_profile_envelope_header(&context, &[3; 24], 48).unwrap();
+    let mut encoded = header;
+    encoded.extend_from_slice(&[4; 48]);
+    let valid = STANDARD.encode(&encoded);
+    assert_eq!(decode_profile_envelope(&valid).unwrap().context, context);
+
+    encoded[8] = 0x7f;
+    assert!(decode_profile_envelope(&STANDARD.encode(&encoded)).is_err());
+    encoded[8] = 0;
+    encoded.push(0);
+    assert!(decode_profile_envelope(&STANDARD.encode(&encoded)).is_err());
+    encoded.pop();
+
+    // The account slot holds exactly one account's bytes: one more byte in
+    // its length (taken from the nonce) is refused.
+    let length_at = FIXED_PREFIX_BYTES - 2;
+    let length = u16::from_be_bytes([encoded[length_at], encoded[length_at + 1]]);
+    encoded[length_at..length_at + 2].copy_from_slice(&(length + 1).to_be_bytes());
+    assert!(decode_profile_envelope(&STANDARD.encode(&encoded)).is_err());
+}
