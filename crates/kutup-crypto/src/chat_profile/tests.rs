@@ -31,7 +31,10 @@ fn the_moved_code_reproduces_the_vectors() {
     assert_eq!(STANDARD.encode(access), v["accessKey"]);
     assert_eq!(access_key_verifier(&access), v["accessKeyVerifier"]);
     let delivery = derive_delivery_capability(&key, &account).unwrap();
-    assert_eq!(hex::encode(capability_hash(&delivery)), v["deliveryCapabilityVerifier"]);
+    assert_eq!(
+        hex::encode(capability_hash(&delivery)),
+        v["deliveryCapabilityVerifier"]
+    );
 
     for item in v["items"].as_array().unwrap() {
         let purpose = match item["purpose"].as_str().unwrap() {
@@ -63,13 +66,25 @@ fn the_moved_code_reproduces_the_vectors() {
 
     let upload: SealedProfile = serde_json::from_value(v["upload"]["request"].clone()).unwrap();
     let opened = open_own_profile(&upload, &wrapping, &account).unwrap();
-    assert_eq!(STANDARD.encode(opened.key.as_slice()), v["upload"]["profileKey"]);
+    assert_eq!(
+        STANDARD.encode(opened.key.as_slice()),
+        v["upload"]["profileKey"]
+    );
     assert_eq!(opened.contents.display_name, v["upload"]["displayName"]);
-    assert_eq!(STANDARD.encode(opened.contents.avatar.unwrap()), v["upload"]["avatar"]);
-    assert_eq!(opened.contents.avatar_content_type.as_deref(), v["upload"]["avatarContentType"].as_str());
+    assert_eq!(
+        STANDARD.encode(opened.contents.avatar.unwrap()),
+        v["upload"]["avatar"]
+    );
+    assert_eq!(
+        opened.contents.avatar_content_type.as_deref(),
+        v["upload"]["avatarContentType"].as_str()
+    );
     assert_eq!(opened.revision, v["upload"]["revision"].as_u64().unwrap());
     // The wire shape round-trips.
-    assert_eq!(serde_json::to_value(&upload).unwrap(), v["upload"]["request"]);
+    assert_eq!(
+        serde_json::to_value(&upload).unwrap(),
+        v["upload"]["request"]
+    );
 }
 
 #[test]
@@ -85,20 +100,28 @@ fn a_sealed_profile_opens_for_its_owner_and_with_its_key() {
         about: Some("Merhaba".into()),
     };
     let first = seal_account_profile(&master, None, &contents, &account, binding).unwrap();
-    assert_eq!((first.revision, first.source_device_id), (1, ACCOUNT_PROFILE_SOURCE));
+    assert_eq!(
+        (first.revision, first.source_device_id),
+        (1, ACCOUNT_PROFILE_SOURCE)
+    );
     let opened = open_account_profile(&master, &first, &account, binding).unwrap();
     assert_eq!(opened.contents.display_name, "Ayşe");
     assert_eq!(opened.contents.about.as_deref(), Some("Merhaba"));
 
     // The next revision keeps the key.
     let next = seal_account_profile(&master, Some(&first), &contents, &account, binding).unwrap();
-    assert_eq!((next.revision, next.version.as_str()), (2, first.version.as_str()));
+    assert_eq!(
+        (next.revision, next.version.as_str()),
+        (2, first.version.as_str())
+    );
 
     // Someone given the key opens it; another account's name, another key or
     // another master key don't.
     let peer = open_peer_profile(&first, &account, opened.key.as_slice()).unwrap();
     assert_eq!(peer.contents, opened.contents);
-    let other: AccountRef = "aci:00000000-0000-4000-8000-000000000001@example.com".parse().unwrap();
+    let other: AccountRef = "aci:00000000-0000-4000-8000-000000000001@example.com"
+        .parse()
+        .unwrap();
     assert!(open_peer_profile(&first, &other, opened.key.as_slice()).is_err());
     assert!(open_peer_profile(&first, &account, &[7; 32]).is_err());
     assert!(open_account_profile(&[8; 32], &first, &account, binding).is_err());
@@ -118,7 +141,9 @@ fn contents_are_validated_before_sealing() {
 
 #[test]
 fn profile_envelope_parser_rejects_unknown_suite_and_trailing_data() {
-    let alice: AccountRef = "aci:0b6b5e0c-4c1e-4b8e-9c2d-6a1f3e5d7c9b@example.test".parse().unwrap();
+    let alice: AccountRef = "aci:0b6b5e0c-4c1e-4b8e-9c2d-6a1f3e5d7c9b@example.test"
+        .parse()
+        .unwrap();
     let context = ProfileEnvelopeContextV1::new(
         ProfileEnvelopePurpose::WrappedProfileKey,
         &alice,

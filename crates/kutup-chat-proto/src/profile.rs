@@ -165,7 +165,10 @@ mod tests {
         assert!(value.get("accessKeyVerifier").is_none());
         // The wire shape is kutup-crypto's sealed profile's.
         let sealed = SealedProfile::from(owner.clone());
-        assert_eq!(serde_json::to_value(&sealed).unwrap(), serde_json::to_value(&owner).unwrap());
+        assert_eq!(
+            serde_json::to_value(&sealed).unwrap(),
+            serde_json::to_value(&owner).unwrap()
+        );
         assert_eq!(PutChatProfileRequest::from(sealed), owner);
     }
 }

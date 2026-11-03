@@ -22,13 +22,12 @@ use rand::{CryptoRng, Rng};
 
 use crate::db::{LocalProfile, PeerProfile};
 use crate::error::{ChatError, Result};
-use kutup_chat_proto::{AccountRef, ChatProfileResponse, PutChatProfileRequest};
 #[cfg(test)]
 use kutup_chat_proto::{
-    capability_hash, decode_profile_envelope, derive_delivery_capability,
-    ProfileEnvelopeContextV1, ProfileEnvelopePurpose, PROFILE_ABOUT_PADDED_LENGTHS,
-    PROFILE_NAME_PADDED_LENGTHS,
+    capability_hash, decode_profile_envelope, derive_delivery_capability, ProfileEnvelopeContextV1,
+    ProfileEnvelopePurpose, PROFILE_ABOUT_PADDED_LENGTHS, PROFILE_NAME_PADDED_LENGTHS,
 };
+use kutup_chat_proto::{AccountRef, ChatProfileResponse, PutChatProfileRequest};
 
 pub const PROFILE_KEY_BYTES: usize = crypto::PROFILE_KEY_BYTES;
 pub const PROFILE_ACCESS_KEY_BYTES: usize = crypto::PROFILE_ACCESS_KEY_BYTES;
@@ -62,10 +61,6 @@ pub fn profile_version(key: &[u8]) -> Result<String> {
 
 pub fn profile_access_key(key: &[u8]) -> Result<[u8; PROFILE_ACCESS_KEY_BYTES]> {
     crypto::profile_access_key(key).map_err(invalid)
-}
-
-pub fn access_key_verifier(access_key: &[u8]) -> String {
-    crypto::access_key_verifier(access_key)
 }
 
 pub fn validate_display_name(value: &str) -> Result<String> {
@@ -246,9 +241,15 @@ pub fn seal_account_profile<R: Rng + CryptoRng>(
         avatar_content_type: update.avatar_content_type,
         about: update.about,
     };
-    crypto::seal_account_profile(master_key, current.as_ref(), &contents, canonical_account, binding)
-        .map(PutChatProfileRequest::from)
-        .map_err(invalid)
+    crypto::seal_account_profile(
+        master_key,
+        current.as_ref(),
+        &contents,
+        canonical_account,
+        binding,
+    )
+    .map(PutChatProfileRequest::from)
+    .map_err(invalid)
 }
 
 /// The account's own profile as the account app shows it.
@@ -343,7 +344,10 @@ fn prepare_local_profile(
 ) -> Result<LocalProfile> {
     let key = crypto::profile_key(&draft.key).map_err(invalid)?;
     let display_name = validate_display_name(draft.display_name)?;
-    validate_avatar(draft.avatar.as_deref(), draft.avatar_content_type.as_deref())?;
+    validate_avatar(
+        draft.avatar.as_deref(),
+        draft.avatar_content_type.as_deref(),
+    )?;
     let about = validate_about(draft.about.as_deref())?;
     let contents = ProfileContents {
         display_name: display_name.clone(),
@@ -499,7 +503,7 @@ mod tests {
             "profileKey": STANDARD.encode(profile_key),
             "version": version,
             "accessKey": STANDARD.encode(access),
-            "accessKeyVerifier": access_key_verifier(&access),
+            "accessKeyVerifier": crypto::access_key_verifier(&access),
             "deliveryCapabilityVerifier": hex::encode(capability_hash(&delivery)),
             "items": items,
             "upload": {

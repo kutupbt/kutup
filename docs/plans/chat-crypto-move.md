@@ -1,4 +1,7 @@
-# Chat's own crypto into kutup-crypto (proposed)
+# Chat's own crypto into kutup-crypto
+
+Status: approved (two PRs, labels unchanged). Slice 1 (profiles) is built;
+slice 2 (links and the store cipher) is next.
 
 Code-only items 1 and 2 of [wipe-unification.md](wipe-unification.md): the
 last large body of crypto outside the canonical crate moves into it, and the
@@ -69,7 +72,25 @@ Two PRs into master, each with its own vectors:
   specs, which still use the moved code through chat-core) in the browser.
 - Bundle check: the non-Chat apps' builds hold no Chat WASM.
 
-## Decisions wanted
+## Slice 1 as built
+
+- `kutup_crypto::chat_profile` holds the profile keys, the `KUTPPE1`
+  envelope (encoder and parser together), validation, the delivery
+  capability, and the sealed profile (`SealedProfile`, the same JSON as the
+  upload) for the account and for peers. `tests/vectors/profile-v1.json` was
+  made by chat-core's code before the move; the moved code reproduces it byte
+  for byte (Rust in `chat_profile/tests.rs`, WASM in `test-crypto-wasm.mjs`).
+- chat-proto re-exports the envelope types and converts its wire structs to
+  and from `SealedProfile`; chat-core's `profile.rs` keeps its public API and
+  calls kutup-crypto.
+- kutup-crypto-wasm exports `accountProfileOpen`, `accountProfileKey`,
+  `profileLookup`, `profileOpenPeer` and `accountProfileSeal`, wrapped by
+  `@kutup/crypto/profile`; drive-core's `people.ts` and the Account app's
+  profile settings use them.
+- `scripts/check-app-bundles.mjs` (web gate, after the build) fails when any
+  app but Chat carries the Chat runtime.
+
+## Decisions (taken)
 
 (a) Two PRs as above, profiles first, so the 11 MB win lands early.
 (b) Labels move unchanged now; renaming any of them to W6.3's grammar is

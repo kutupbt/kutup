@@ -1124,30 +1124,9 @@ export interface SafetyNumberV2 {
 }
 
 /** The account's profile as the account app edits it (docs/plans/unified-profile.md). */
-export interface AccountProfileView {
-  displayName: string
-  about?: string
-  /** Standard base64. */
-  avatar?: string
-  avatarContentType?: string
-  revision: string
-}
-
-export interface AccountProfileInput {
-  displayName: string
-  about?: string
-  avatar?: string
-  avatarContentType?: string
-}
-
-/** Where someone's profile is, from their profile key. */
-export interface ProfileLookup {
-  /** Standard base64 of the 32-byte profile key. */
-  key: string
-  version: string
-  /** Standard base64; the `x-kutup-profile-access-key` header. */
-  accessKey: string
-}
+// The profile shapes are the crypto WASM's (docs/plans/chat-crypto-move.md).
+export type { AccountProfileInput, AccountProfileView, ProfileLookup } from '@kutup/crypto/profile'
+import type { AccountProfileInput, AccountProfileView, ProfileLookup } from '@kutup/crypto/profile'
 
 export interface ChatWasmModule extends CallLinkCrypto {
   /**

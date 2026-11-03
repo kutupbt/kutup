@@ -333,7 +333,10 @@ pub fn access_key_verifier(access_key: &[u8]) -> String {
     hex::encode(hash(Suite::V1, access_key))
 }
 
-fn envelope_key(root_key: &[u8; 32], context: &ProfileEnvelopeContextV1) -> CryptoResult<Zeroizing<[u8; 32]>> {
+fn envelope_key(
+    root_key: &[u8; 32],
+    context: &ProfileEnvelopeContextV1,
+) -> CryptoResult<Zeroizing<[u8; 32]>> {
     let mut out = Zeroizing::new([0u8; 32]);
     Kdf::new(Suite::V1, ENVELOPE_KEY_SALT, root_key)
         .expand(&context.key_derivation_info(), out.as_mut_slice())?;
@@ -343,7 +346,11 @@ fn envelope_key(root_key: &[u8; 32], context: &ProfileEnvelopeContextV1) -> Cryp
 /// `plaintext` sealed in a `KUTPPE1` envelope for `context` under a key
 /// `root_key` derives (the profile key, or the wrapping key for the wrapped
 /// profile key), as standard base64.
-pub fn seal_item(plaintext: &[u8], root_key: &[u8; 32], context: &ProfileEnvelopeContextV1) -> CryptoResult<String> {
+pub fn seal_item(
+    plaintext: &[u8],
+    root_key: &[u8; 32],
+    context: &ProfileEnvelopeContextV1,
+) -> CryptoResult<String> {
     let mut nonce = [0u8; NONCE_BYTES];
     crate::primitives::random(&mut nonce);
     seal_item_with_nonce(plaintext, root_key, context, &nonce)
@@ -361,7 +368,8 @@ pub fn seal_item_with_nonce(
     let header = encode_profile_envelope_header(context, nonce, ciphertext_len)
         .map_err(|error| invalid(&error))?;
     let key = envelope_key(root_key, context)?;
-    let ciphertext = Aead::new(Suite::V1, key.as_slice())?.seal_with_nonce(nonce, &header, plaintext)?;
+    let ciphertext =
+        Aead::new(Suite::V1, key.as_slice())?.seal_with_nonce(nonce, &header, plaintext)?;
     let mut encoded = header;
     encoded.extend_from_slice(&ciphertext);
     Ok(STANDARD.encode(encoded))
@@ -379,7 +387,11 @@ pub fn open_item(
         return Err(invalid("encrypted profile envelope context does not match"));
     }
     let key = envelope_key(root_key, expected)?;
-    Aead::new(Suite::V1, key.as_slice())?.open_with_nonce(&parsed.nonce, &parsed.aad, &parsed.ciphertext)
+    Aead::new(Suite::V1, key.as_slice())?.open_with_nonce(
+        &parsed.nonce,
+        &parsed.aad,
+        &parsed.ciphertext,
+    )
 }
 
 /// `text` zero-padded to the smallest of `buckets` that fits (so the length
@@ -410,9 +422,14 @@ pub fn open_padded_text(
 ) -> CryptoResult<String> {
     let padded = open_item(encoded, root_key, context)?;
     if !buckets.contains(&padded.len()) {
-        return Err(invalid("encrypted profile text has an invalid padded length"));
+        return Err(invalid(
+            "encrypted profile text has an invalid padded length",
+        ));
     }
-    let end = padded.iter().position(|byte| *byte == 0).unwrap_or(padded.len());
+    let end = padded
+        .iter()
+        .position(|byte| *byte == 0)
+        .unwrap_or(padded.len());
     if padded[end..].iter().any(|byte| *byte != 0) {
         return Err(invalid("profile text padding is invalid"));
     }
@@ -429,7 +446,8 @@ pub fn derive_delivery_capability(
     recipient: &AccountRef,
 ) -> CryptoResult<[u8; 16]> {
     let mut out = [0u8; 16];
-    Kdf::new(Suite::V1, &recipient.bytes(), profile_key).expand(DELIVERY_CAPABILITY_CONTEXT, &mut out)?;
+    Kdf::new(Suite::V1, &recipient.bytes(), profile_key)
+        .expand(DELIVERY_CAPABILITY_CONTEXT, &mut out)?;
     Ok(out)
 }
 
@@ -579,14 +597,23 @@ pub fn seal_profile(
     account: &AccountRef,
 ) -> CryptoResult<SealedProfile> {
     let display_name = validate_display_name(&contents.display_name)?;
-    validate_avatar(contents.avatar.as_deref(), contents.avatar_content_type.as_deref())?;
+    validate_avatar(
+        contents.avatar.as_deref(),
+        contents.avatar_content_type.as_deref(),
+    )?;
     let about = validate_about(contents.about.as_deref())?;
     let version = profile_version(key)?;
     let name = seal_padded_text(
         &display_name,
         &PROFILE_NAME_PADDED_LENGTHS,
         key,
-        &context(ProfileEnvelopePurpose::DisplayName, account, &version, revision, source_device_id)?,
+        &context(
+            ProfileEnvelopePurpose::DisplayName,
+            account,
+            &version,
+            revision,
+            source_device_id,
+        )?,
     )?;
     let avatar = match (&contents.avatar, &contents.avatar_content_type) {
         (Some(bytes), Some(kind)) => {
@@ -596,7 +623,13 @@ pub fn seal_profile(
             Some(seal_item(
                 &plaintext,
                 key,
-                &context(ProfileEnvelopePurpose::Avatar, account, &version, revision, source_device_id)?,
+                &context(
+                    ProfileEnvelopePurpose::Avatar,
+                    account,
+                    &version,
+                    revision,
+                    source_device_id,
+                )?,
             )?)
         }
         _ => None,
@@ -608,14 +641,26 @@ pub fn seal_profile(
                 about,
                 &PROFILE_ABOUT_PADDED_LENGTHS,
                 key,
-                &context(ProfileEnvelopePurpose::About, account, &version, revision, source_device_id)?,
+                &context(
+                    ProfileEnvelopePurpose::About,
+                    account,
+                    &version,
+                    revision,
+                    source_device_id,
+                )?,
             )
         })
         .transpose()?;
     let wrapped_key = seal_item(
         key,
         wrapping_key,
-        &context(ProfileEnvelopePurpose::WrappedProfileKey, account, &version, revision, source_device_id)?,
+        &context(
+            ProfileEnvelopePurpose::WrappedProfileKey,
+            account,
+            &version,
+            revision,
+            source_device_id,
+        )?,
     )?;
     let delivery = derive_delivery_capability(key, account)?;
     Ok(SealedProfile {
@@ -656,10 +701,14 @@ pub fn open_own_profile(
     )?;
     let key = Zeroizing::new(profile_key(&wrapped)?);
     if profile_version(key.as_slice())? != sealed.version {
-        return Err(invalid("wrapped profile key does not match profile version"));
+        return Err(invalid(
+            "wrapped profile key does not match profile version",
+        ));
     }
     if access_key_verifier(&profile_access_key(key.as_slice())?) != sealed.access_key_verifier {
-        return Err(invalid("wrapped profile key does not match access verifier"));
+        return Err(invalid(
+            "wrapped profile key does not match access verifier",
+        ));
     }
     let delivery = derive_delivery_capability(&key, account)?;
     if hex::encode(capability_hash(&delivery)) != sealed.delivery_capability_verifier {
@@ -701,13 +750,23 @@ pub fn open_peer_profile(
 }
 
 fn open_items(sealed: &SealedProfile, key: &[u8; 32]) -> CryptoResult<ProfileContents> {
-    let (account, version, revision, source) =
-        (&sealed.account, &sealed.version, sealed.revision, sealed.source_device_id);
+    let (account, version, revision, source) = (
+        &sealed.account,
+        &sealed.version,
+        sealed.revision,
+        sealed.source_device_id,
+    );
     let display_name = open_padded_text(
         &sealed.name,
         &PROFILE_NAME_PADDED_LENGTHS,
         key,
-        &context(ProfileEnvelopePurpose::DisplayName, account, version, revision, source)?,
+        &context(
+            ProfileEnvelopePurpose::DisplayName,
+            account,
+            version,
+            revision,
+            source,
+        )?,
     )
     .map_err(|_| invalid("encrypted profile name is invalid"))?;
     let display_name = validate_display_name(&display_name)?;
@@ -717,7 +776,13 @@ fn open_items(sealed: &SealedProfile, key: &[u8; 32]) -> CryptoResult<ProfileCon
             let plaintext = open_item(
                 value,
                 key,
-                &context(ProfileEnvelopePurpose::Avatar, account, version, revision, source)?,
+                &context(
+                    ProfileEnvelopePurpose::Avatar,
+                    account,
+                    version,
+                    revision,
+                    source,
+                )?,
             )?;
             let (&kind, bytes) = plaintext
                 .split_first()
@@ -725,7 +790,8 @@ fn open_items(sealed: &SealedProfile, key: &[u8; 32]) -> CryptoResult<ProfileCon
             if bytes.is_empty() || bytes.len() > MAX_PROFILE_AVATAR_BYTES {
                 return Err(invalid("encrypted profile avatar has an invalid size"));
             }
-            let kind = avatar_type_name(kind).ok_or_else(|| invalid("profile avatar type is invalid"))?;
+            let kind =
+                avatar_type_name(kind).ok_or_else(|| invalid("profile avatar type is invalid"))?;
             (Some(bytes.to_vec()), Some(kind.to_string()))
         }
     };
@@ -736,9 +802,16 @@ fn open_items(sealed: &SealedProfile, key: &[u8; 32]) -> CryptoResult<ProfileCon
                 value,
                 &PROFILE_ABOUT_PADDED_LENGTHS,
                 key,
-                &context(ProfileEnvelopePurpose::About, account, version, revision, source)?,
+                &context(
+                    ProfileEnvelopePurpose::About,
+                    account,
+                    version,
+                    revision,
+                    source,
+                )?,
             )?;
-            validate_about(Some(&text)).map_err(|_| invalid("encrypted profile about is invalid"))?
+            validate_about(Some(&text))
+                .map_err(|_| invalid("encrypted profile about is invalid"))?
         }
     };
     Ok(ProfileContents {
@@ -771,7 +844,14 @@ pub fn seal_account_profile(
         }
         None => (Zeroizing::new(crate::primitives::random_array::<32>()), 1),
     };
-    seal_profile(&key, contents, revision, ACCOUNT_PROFILE_SOURCE, &wrapping_key, account)
+    seal_profile(
+        &key,
+        contents,
+        revision,
+        ACCOUNT_PROFILE_SOURCE,
+        &wrapping_key,
+        account,
+    )
 }
 
 /// The account's own profile, opened from the master key.

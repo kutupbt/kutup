@@ -3,8 +3,7 @@ import { useEffect, useState } from 'react'
 import axios from 'axios'
 import { fromBase64, openProfileKeyEnvelope, sealProfileKeyEnvelope, toBase64 } from '@kutup/crypto'
 import { accountRoute } from '@kutup/chat-core/transport'
-import { loadChatWasm } from '@kutup/chat-core/wasm'
-import type { ProfileLookup } from '@kutup/chat-core/types'
+import { accountProfileKey, profileLookup, profileOpenPeer, type ProfileLookup } from '@kutup/crypto/profile'
 import { accountKeyOf, type AccountRef } from '@kutup/crypto/accountRef'
 import api from '@kutup/session/client'
 import { useDriveIdentity, type DriveIdentity } from './identity'
@@ -127,9 +126,8 @@ async function ownLookup(me: DriveIdentity): Promise<ProfileLookup | null> {
     if (axios.isAxiosError(error) && error.response?.status === 404) return null
     throw error
   }
-  const wasm = await loadChatWasm()
   // Sealed for the account, never its address.
-  return wasm.accountProfileKey(me.masterKey, sealed, accountKeyOf(me.accountRef), me.binding)
+  return accountProfileKey(me.masterKey, sealed, accountKeyOf(me.accountRef), me.binding)
 }
 
 /** Give someone your current profile key, if they do not have it yet. */
@@ -163,8 +161,7 @@ async function read(person: DrivePerson, keys: Keys, me: DriveIdentity): Promise
     recipient: me.accountRef,
     recipientIncarnationId: me.incarnationId,
   })
-  const wasm = await loadChatWasm()
-  const lookup = wasm.profileLookup(toBase64(key))
+  const lookup = await profileLookup(toBase64(key))
   // The profile is the account's, sealed for it: fetched and opened by its key.
   const account = accountKeyOf(refOf(person))
   const { path, server } = accountRoute(account, `/profile/${encodeURIComponent(lookup.version)}`)
@@ -172,7 +169,7 @@ async function read(person: DrivePerson, keys: Keys, me: DriveIdentity): Promise
     params: { server },
     headers: { 'x-kutup-profile-access-key': lookup.accessKey },
   })
-  const view = wasm.profileOpenPeer(account, data, lookup.key)
+  const view = await profileOpenPeer(account, data, lookup.key)
   if (!view.displayName && !view.avatar) return null
   return {
     displayName: view.displayName,
