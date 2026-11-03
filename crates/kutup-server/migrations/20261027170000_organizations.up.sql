@@ -105,6 +105,17 @@ CREATE TABLE organization_setting_overrides (
 CREATE TEMPORARY TABLE organization_of_holder ON COMMIT DROP AS
     SELECT h.account_id, gen_random_uuid() AS organization_id
       FROM (SELECT DISTINCT user_id AS account_id FROM mail_domains) h;
+-- A holder already in an organization would need its domains moved, not a
+-- second organization: that can't happen before this migration (the table
+-- is new), so it fails loudly rather than merging silently.
+DO $$
+BEGIN
+    IF EXISTS (SELECT 1 FROM organization_of_holder h
+                 JOIN organization_members m ON m.account_id = h.account_id
+                WHERE m.state IN (1, 2)) THEN
+        RAISE EXCEPTION 'a domain holder is already in an organization: move its domains by hand';
+    END IF;
+END $$;
 INSERT INTO organizations (id, name)
     SELECT h.organization_id, coalesce(nullif(u.username, ''), 'organization')
       FROM organization_of_holder h JOIN users u ON u.id = h.account_id;
