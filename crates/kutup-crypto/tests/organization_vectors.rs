@@ -17,7 +17,10 @@ use kutup_crypto::organization::{
     key_id, public_key, AccessRequestV1, EscrowV1, KeyCertificateV1, KeyShareV1, Party,
 };
 
-const PATH: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/vectors/organization-v1.json");
+const PATH: &str = concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/tests/vectors/organization-v1.json"
+);
 
 const ORG: &str = "5b0e7f3a-1d2c-4b8e-9f6a-7c3d2e1f0a9b";
 const ADMIN: &str = "aci:8d2e4b61-0c3a-4e9f-b7d5-6a1f2e3c4d5b@kutup.dev";
@@ -45,8 +48,8 @@ struct Vectors {
 }
 
 fn person(master: &str, account: &str) -> (AccountIdentityKeysV1, Party) {
-    let keys =
-        AccountIdentityKeysV1::derive(&STANDARD.decode(master).unwrap().try_into().unwrap()).unwrap();
+    let keys = AccountIdentityKeysV1::derive(&STANDARD.decode(master).unwrap().try_into().unwrap())
+        .unwrap();
     let account: AccountRef = account.parse().unwrap();
     let party = Party::new(&account, &keys.incarnation_id()).unwrap();
     (keys, party)
@@ -70,7 +73,15 @@ fn write_vectors() {
     let (_, member) = person(&member_master, MEMBER);
     let issued_at = 1_793_000_000;
     let certificate = KeyCertificateV1::sign(ORG, &public, issued_at, &admin, &admin_keys).unwrap();
-    let share = KeyShareV1::seal(&seed, ORG, &second, &second_keys.drive_hpke_public_key(), &admin, &admin_keys).unwrap();
+    let share = KeyShareV1::seal(
+        &seed,
+        ORG,
+        &second,
+        &second_keys.drive_hpke_public_key(),
+        &admin,
+        &admin_keys,
+    )
+    .unwrap();
     let request = AccessRequestV1 {
         organization_id: *uuid::Uuid::parse_str(ORG).unwrap().as_bytes(),
         key_id: key_id(&public),
@@ -107,7 +118,10 @@ fn write_vectors() {
 #[test]
 fn checked_in_vectors_hold() {
     let v: Vectors = serde_json::from_str(&std::fs::read_to_string(PATH).unwrap()).unwrap();
-    let seed: [u8; 32] = hex::decode(&v.organization_seed).unwrap().try_into().unwrap();
+    let seed: [u8; 32] = hex::decode(&v.organization_seed)
+        .unwrap()
+        .try_into()
+        .unwrap();
     let id: [u8; 32] = hex::decode(&v.key_id).unwrap().try_into().unwrap();
     assert_eq!(key_id(&public_key(&seed)), id);
     let (admin_keys, admin) = person(&v.admin_master_key, ADMIN);
@@ -119,7 +133,10 @@ fn checked_in_vectors_hold() {
         &admin_keys.authority_public_key(),
     )
     .unwrap();
-    assert_eq!((certificate.key_id, certificate.issued_at, certificate.admin), (id, v.issued_at, admin.clone()));
+    assert_eq!(
+        (certificate.key_id, certificate.issued_at, certificate.admin),
+        (id, v.issued_at, admin.clone())
+    );
 
     let (opened, granter) = KeyShareV1::open(
         &STANDARD.decode(&v.share).unwrap(),
@@ -137,7 +154,10 @@ fn checked_in_vectors_hold() {
         &admin_keys.authority_public_key(),
     )
     .unwrap();
-    assert_eq!((request.member, request.admin, request.key_id), (member.clone(), admin, id));
+    assert_eq!(
+        (request.member, request.admin, request.key_id),
+        (member.clone(), admin, id)
+    );
 
     let escrowed = EscrowV1::open(
         &STANDARD.decode(&v.escrow).unwrap(),
@@ -149,6 +169,9 @@ fn checked_in_vectors_hold() {
     .unwrap();
     assert_eq!(
         (escrowed.master_key.as_slice(), escrowed.generation.get()),
-        (STANDARD.decode(&v.member_master_key).unwrap().as_slice(), v.member_generation)
+        (
+            STANDARD.decode(&v.member_master_key).unwrap().as_slice(),
+            v.member_generation
+        )
     );
 }

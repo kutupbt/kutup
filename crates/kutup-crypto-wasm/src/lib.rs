@@ -692,11 +692,9 @@ fn generic_account_purpose(value: u8) -> Result<AccountEnvelopePurpose, JsValue>
     match AccountEnvelopePurpose::try_from(value).map_err(|error| js_error(&error.to_string()))? {
         AccountEnvelopePurpose::MailAddressPrivateKey
         | AccountEnvelopePurpose::PassVaultSecret
-        | AccountEnvelopePurpose::OrganizationPrivateKey => {
-            Err(js_error(
-                "this account envelope purpose has its own typed export",
-            ))
-        }
+        | AccountEnvelopePurpose::OrganizationPrivateKey => Err(js_error(
+            "this account envelope purpose has its own typed export",
+        )),
         purpose => Ok(purpose),
     }
 }

@@ -37,14 +37,20 @@ fn a_certificate_verifies_only_under_its_admins_authority() {
     let (_, public, id) = generate();
     let certificate = KeyCertificateV1::sign(ORG, &public, 1_700_000_000, &party, &keys).unwrap();
     let read = KeyCertificateV1::verify(&certificate, &keys.authority_public_key()).unwrap();
-    assert_eq!((read.key_id, read.public_key.as_slice(), read.admin), (id, public.as_slice(), party));
+    assert_eq!(
+        (read.key_id, read.public_key.as_slice(), read.admin),
+        (id, public.as_slice(), party)
+    );
     let (other, _) = second_admin();
     assert!(KeyCertificateV1::verify(&certificate, &other.authority_public_key()).is_err());
     // Any changed byte, the public key's among them, fails.
     for at in [10, 60, certificate.len() / 2, certificate.len() - 1] {
         let mut tampered = certificate.clone();
         tampered[at] ^= 1;
-        assert!(KeyCertificateV1::verify(&tampered, &keys.authority_public_key()).is_err(), "byte {at}");
+        assert!(
+            KeyCertificateV1::verify(&tampered, &keys.authority_public_key()).is_err(),
+            "byte {at}"
+        );
     }
 }
 
@@ -76,18 +82,66 @@ fn a_share_opens_for_its_recipient_only_and_names_its_granter() {
 
     // Another recipient's keys, another organization, another key: refused.
     let (member_keys, member) = member();
-    assert!(KeyShareV1::open(&share, ORG, &id, &member, member_keys.drive_hpke_private_key(), &granter_keys.authority_public_key()).is_err());
-    assert!(KeyShareV1::open(&share, OTHER_ORG, &id, &recipient, recipient_keys.drive_hpke_private_key(), &granter_keys.authority_public_key()).is_err());
-    assert!(KeyShareV1::open(&share, ORG, &[9; 32], &recipient, recipient_keys.drive_hpke_private_key(), &granter_keys.authority_public_key()).is_err());
+    assert!(KeyShareV1::open(
+        &share,
+        ORG,
+        &id,
+        &member,
+        member_keys.drive_hpke_private_key(),
+        &granter_keys.authority_public_key()
+    )
+    .is_err());
+    assert!(KeyShareV1::open(
+        &share,
+        OTHER_ORG,
+        &id,
+        &recipient,
+        recipient_keys.drive_hpke_private_key(),
+        &granter_keys.authority_public_key()
+    )
+    .is_err());
+    assert!(KeyShareV1::open(
+        &share,
+        ORG,
+        &[9; 32],
+        &recipient,
+        recipient_keys.drive_hpke_private_key(),
+        &granter_keys.authority_public_key()
+    )
+    .is_err());
 
     // Signed by someone who isn't the named granter (a non-admin): refused.
-    let forged = KeyShareV1::seal(&seed, ORG, &recipient, &recipient_keys.drive_hpke_public_key(), &granter, &member_keys).unwrap();
-    assert!(KeyShareV1::open(&forged, ORG, &id, &recipient, recipient_keys.drive_hpke_private_key(), &granter_keys.authority_public_key()).is_err());
+    let forged = KeyShareV1::seal(
+        &seed,
+        ORG,
+        &recipient,
+        &recipient_keys.drive_hpke_public_key(),
+        &granter,
+        &member_keys,
+    )
+    .unwrap();
+    assert!(KeyShareV1::open(
+        &forged,
+        ORG,
+        &id,
+        &recipient,
+        recipient_keys.drive_hpke_private_key(),
+        &granter_keys.authority_public_key()
+    )
+    .is_err());
 
     // A changed header byte (the AAD) fails, whatever re-signs it.
     let mut tampered = share.clone();
     tampered[30] ^= 1;
-    assert!(KeyShareV1::open(&tampered, ORG, &id, &recipient, recipient_keys.drive_hpke_private_key(), &granter_keys.authority_public_key()).is_err());
+    assert!(KeyShareV1::open(
+        &tampered,
+        ORG,
+        &id,
+        &recipient,
+        recipient_keys.drive_hpke_private_key(),
+        &granter_keys.authority_public_key()
+    )
+    .is_err());
 }
 
 #[test]
@@ -102,7 +156,10 @@ fn a_request_verifies_under_its_admins_authority() {
         issued_at: 1_700_000_000,
     };
     let signed = request.sign(&keys);
-    assert_eq!(AccessRequestV1::verify(&signed, &keys.authority_public_key()).unwrap(), request);
+    assert_eq!(
+        AccessRequestV1::verify(&signed, &keys.authority_public_key()).unwrap(),
+        request
+    );
     let (other, _) = second_admin();
     assert!(AccessRequestV1::verify(&signed, &other.authority_public_key()).is_err());
     let mut tampered = signed.clone();
@@ -117,25 +174,60 @@ fn an_escrow_opens_only_as_the_members_own_master_key() {
     let master = [0x33u8; 32];
     let generation = MasterKeyGeneration::new(2).unwrap();
     let escrow = EscrowV1::seal(&master, generation, ORG, &public, &member).unwrap();
-    let opened = EscrowV1::open(&escrow, ORG, &seed, &member, &member_keys.authority_public_key()).unwrap();
+    let opened = EscrowV1::open(
+        &escrow,
+        ORG,
+        &seed,
+        &member,
+        &member_keys.authority_public_key(),
+    )
+    .unwrap();
     assert_eq!(*opened.master_key, master);
     assert_eq!(opened.generation, generation);
 
     // Another key's seed, another organization: refused.
     let (other_seed, _, _) = generate();
-    assert!(EscrowV1::open(&escrow, ORG, &other_seed, &member, &member_keys.authority_public_key()).is_err());
-    assert!(EscrowV1::open(&escrow, OTHER_ORG, &seed, &member, &member_keys.authority_public_key()).is_err());
+    assert!(EscrowV1::open(
+        &escrow,
+        ORG,
+        &other_seed,
+        &member,
+        &member_keys.authority_public_key()
+    )
+    .is_err());
+    assert!(EscrowV1::open(
+        &escrow,
+        OTHER_ORG,
+        &seed,
+        &member,
+        &member_keys.authority_public_key()
+    )
+    .is_err());
 
     // Planted: a master key that derives another authority, sealed in the
     // member's name, never passes as theirs.
     let planted = EscrowV1::seal(&[0x44; 32], generation, ORG, &public, &member).unwrap();
-    assert!(EscrowV1::open(&planted, ORG, &seed, &member, &member_keys.authority_public_key()).is_err());
+    assert!(EscrowV1::open(
+        &planted,
+        ORG,
+        &seed,
+        &member,
+        &member_keys.authority_public_key()
+    )
+    .is_err());
 
     // The generation is bound: changed in the header, the escrow fails.
     let mut tampered = escrow.clone();
     let generation_at = escrow.len() - ENCAPSULATED_LEN - 2 - SEALED_SECRET_LEN - 4;
     tampered[generation_at + 3] ^= 1;
-    assert!(EscrowV1::open(&tampered, ORG, &seed, &member, &member_keys.authority_public_key()).is_err());
+    assert!(EscrowV1::open(
+        &tampered,
+        ORG,
+        &seed,
+        &member,
+        &member_keys.authority_public_key()
+    )
+    .is_err());
 }
 
 #[test]
@@ -144,7 +236,9 @@ fn magics_and_truncations_are_refused() {
     let (_, public, _) = generate();
     let certificate = KeyCertificateV1::sign(ORG, &public, 1, &party, &keys).unwrap();
     for len in [0, 7, 9, 40, certificate.len() - 1] {
-        assert!(KeyCertificateV1::verify(&certificate[..len], &keys.authority_public_key()).is_err());
+        assert!(
+            KeyCertificateV1::verify(&certificate[..len], &keys.authority_public_key()).is_err()
+        );
     }
     // A certificate is no request.
     assert!(AccessRequestV1::verify(&certificate, &keys.authority_public_key()).is_err());

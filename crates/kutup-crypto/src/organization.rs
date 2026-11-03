@@ -26,7 +26,9 @@ use crate::account_ref::AccountRef;
 use crate::error::{CryptoError, Result};
 use crate::identity::{authority_key_id_from_public, AccountIdentityKeysV1};
 use crate::labels;
-use crate::primitives::{hash, hpke_open, hpke_public_key, hpke_seal, SigningKey, Suite, VerifyingKey};
+use crate::primitives::{
+    hash, hpke_open, hpke_public_key, hpke_seal, SigningKey, Suite, VerifyingKey,
+};
 
 const CERTIFICATE_MAGIC: &[u8; 8] = b"KUTPOC1\0";
 const SHARE_MAGIC: &[u8; 8] = b"KUTPOS1\0";
@@ -95,7 +97,8 @@ impl Party {
 }
 
 fn hex_32(value: &str, what: &str) -> Result<[u8; 32]> {
-    let bytes = hex::decode(value).map_err(|_| CryptoError::InvalidInput(format!("{what}: hex")))?;
+    let bytes =
+        hex::decode(value).map_err(|_| CryptoError::InvalidInput(format!("{what}: hex")))?;
     bytes
         .try_into()
         .map_err(|_| CryptoError::InvalidInput(format!("{what}: 32 bytes")))
@@ -119,18 +122,26 @@ struct Reader<'a> {
 impl<'a> Reader<'a> {
     fn new(bytes: &'a [u8], magic: &[u8; 8]) -> Result<Self> {
         if bytes.get(..8) != Some(magic.as_slice()) {
-            return Err(CryptoError::InvalidInput("not this organization document".into()));
+            return Err(CryptoError::InvalidInput(
+                "not this organization document".into(),
+            ));
         }
         let mut reader = Self { bytes, at: 8 };
         if u16::from_be_bytes(reader.array()?) != SUITE {
-            return Err(CryptoError::InvalidInput("unknown organization suite".into()));
+            return Err(CryptoError::InvalidInput(
+                "unknown organization suite".into(),
+            ));
         }
         Ok(reader)
     }
 
     fn take(&mut self, len: usize) -> Result<&'a [u8]> {
-        let end = self.at.checked_add(len).filter(|end| *end <= self.bytes.len());
-        let end = end.ok_or_else(|| CryptoError::InvalidInput("organization document too short".into()))?;
+        let end = self
+            .at
+            .checked_add(len)
+            .filter(|end| *end <= self.bytes.len());
+        let end =
+            end.ok_or_else(|| CryptoError::InvalidInput("organization document too short".into()))?;
         let slice = &self.bytes[self.at..end];
         self.at = end;
         Ok(slice)
@@ -148,14 +159,21 @@ impl<'a> Reader<'a> {
     /// The signed part and the signature that ends the document.
     fn signed(self) -> Result<(&'a [u8], [u8; SIGNATURE_LEN])> {
         if self.bytes.len() != self.at + SIGNATURE_LEN {
-            return Err(CryptoError::InvalidInput("organization document length".into()));
+            return Err(CryptoError::InvalidInput(
+                "organization document length".into(),
+            ));
         }
-        Ok((&self.bytes[..self.at], self.bytes[self.at..].try_into().expect("64 bytes")))
+        Ok((
+            &self.bytes[..self.at],
+            self.bytes[self.at..].try_into().expect("64 bytes"),
+        ))
     }
 
     fn end(self) -> Result<()> {
         if self.at != self.bytes.len() {
-            return Err(CryptoError::InvalidInput("organization document length".into()));
+            return Err(CryptoError::InvalidInput(
+                "organization document length".into(),
+            ));
         }
         Ok(())
     }
@@ -210,7 +228,9 @@ impl KeyCertificateV1 {
         admin_keys: &AccountIdentityKeysV1,
     ) -> Result<Vec<u8>> {
         if public_key.len() != crate::hpke_xwing::PUBLIC_KEY_LEN {
-            return Err(CryptoError::InvalidInput("organization public key length".into()));
+            return Err(CryptoError::InvalidInput(
+                "organization public key length".into(),
+            ));
         }
         let mut body = header(CERTIFICATE_MAGIC);
         body.extend_from_slice(&uuid_bytes(organization_id)?);
@@ -219,7 +239,11 @@ impl KeyCertificateV1 {
         body.extend_from_slice(&issued_at.to_be_bytes());
         admin.put(&mut body);
         put(&mut body, admin_keys.authority_key_id().as_bytes());
-        Ok(sign(labels::ORG_KEY_CERTIFICATE_V1, body, admin_keys.authority_signing_key()))
+        Ok(sign(
+            labels::ORG_KEY_CERTIFICATE_V1,
+            body,
+            admin_keys.authority_signing_key(),
+        ))
     }
 
     /// The certificate, if `admin_authority` (the admin's published account
@@ -234,7 +258,12 @@ impl KeyCertificateV1 {
         let admin_authority_key_id = String::from_utf8(reader.prefixed()?.to_vec())
             .map_err(|_| CryptoError::InvalidInput("authority key id".into()))?;
         let (body, signature) = reader.signed()?;
-        verify(labels::ORG_KEY_CERTIFICATE_V1, body, &signature, admin_authority)?;
+        verify(
+            labels::ORG_KEY_CERTIFICATE_V1,
+            body,
+            &signature,
+            admin_authority,
+        )?;
         if key_id(&public_key) != key_id_read
             || authority_key_id_from_public(admin_authority) != admin_authority_key_id
         {
@@ -255,7 +284,12 @@ impl KeyCertificateV1 {
 pub struct KeyShareV1;
 
 impl KeyShareV1 {
-    fn header(organization_id: &[u8; 16], key_id: &KeyId, recipient: &Party, granter: &Party) -> Vec<u8> {
+    fn header(
+        organization_id: &[u8; 16],
+        key_id: &KeyId,
+        recipient: &Party,
+        granter: &Party,
+    ) -> Vec<u8> {
         let mut out = header(SHARE_MAGIC);
         out.extend_from_slice(organization_id);
         out.extend_from_slice(key_id);
@@ -277,10 +311,20 @@ impl KeyShareV1 {
     ) -> Result<Vec<u8>> {
         let key_id = key_id(&public_key(seed));
         let mut body = Self::header(&uuid_bytes(organization_id)?, &key_id, recipient, granter);
-        let sealed = hpke_seal(Suite::V1, recipient_hpke_public_key, labels::ORG_KEY_SHARE_V1, &body, seed)?;
+        let sealed = hpke_seal(
+            Suite::V1,
+            recipient_hpke_public_key,
+            labels::ORG_KEY_SHARE_V1,
+            &body,
+            seed,
+        )?;
         body.extend_from_slice(&sealed.encapsulated);
         put(&mut body, &sealed.ciphertext);
-        Ok(sign(labels::ORG_KEY_SHARE_SIGNATURE_V1, body, granter_keys.authority_signing_key()))
+        Ok(sign(
+            labels::ORG_KEY_SHARE_SIGNATURE_V1,
+            body,
+            granter_keys.authority_signing_key(),
+        ))
     }
 
     /// Opens a share for `recipient` with their Drive X-Wing seed, if
@@ -303,11 +347,21 @@ impl KeyShareV1 {
         let encapsulated: [u8; ENCAPSULATED_LEN] = reader.array()?;
         let ciphertext = reader.prefixed()?;
         if ciphertext.len() != SEALED_SECRET_LEN {
-            return Err(CryptoError::InvalidInput("organization key share length".into()));
+            return Err(CryptoError::InvalidInput(
+                "organization key share length".into(),
+            ));
         }
         let (body, signature) = reader.signed()?;
-        verify(labels::ORG_KEY_SHARE_SIGNATURE_V1, body, &signature, granter_authority)?;
-        if organization != uuid_bytes(organization_id)? || &key != key_id_expected || &named_recipient != recipient {
+        verify(
+            labels::ORG_KEY_SHARE_SIGNATURE_V1,
+            body,
+            &signature,
+            granter_authority,
+        )?;
+        if organization != uuid_bytes(organization_id)?
+            || &key != key_id_expected
+            || &named_recipient != recipient
+        {
             return Err(CryptoError::AuthFailed);
         }
         let seed = hpke_open(
@@ -318,7 +372,10 @@ impl KeyShareV1 {
             &bytes[..header_len],
             ciphertext,
         )?;
-        let seed: [u8; 32] = seed.as_slice().try_into().map_err(|_| CryptoError::AuthFailed)?;
+        let seed: [u8; 32] = seed
+            .as_slice()
+            .try_into()
+            .map_err(|_| CryptoError::AuthFailed)?;
         let seed = Zeroizing::new(seed);
         if key_id(&public_key(&seed)) != key {
             return Err(CryptoError::AuthFailed);
@@ -346,7 +403,11 @@ impl AccessRequestV1 {
         self.member.put(&mut body);
         self.admin.put(&mut body);
         body.extend_from_slice(&self.issued_at.to_be_bytes());
-        sign(labels::ORG_ACCESS_REQUEST_V1, body, admin_keys.authority_signing_key())
+        sign(
+            labels::ORG_ACCESS_REQUEST_V1,
+            body,
+            admin_keys.authority_signing_key(),
+        )
     }
 
     /// The request, if `admin_authority` signed it.
@@ -360,7 +421,12 @@ impl AccessRequestV1 {
             issued_at: u64::from_be_bytes(reader.array()?),
         };
         let (body, signature) = reader.signed()?;
-        verify(labels::ORG_ACCESS_REQUEST_V1, body, &signature, admin_authority)?;
+        verify(
+            labels::ORG_ACCESS_REQUEST_V1,
+            body,
+            &signature,
+            admin_authority,
+        )?;
         Ok(request)
     }
 }
@@ -375,7 +441,12 @@ pub struct Escrowed {
 }
 
 impl EscrowV1 {
-    fn header(organization_id: &[u8; 16], key_id: &KeyId, member: &Party, generation: MasterKeyGeneration) -> Vec<u8> {
+    fn header(
+        organization_id: &[u8; 16],
+        key_id: &KeyId,
+        member: &Party,
+        generation: MasterKeyGeneration,
+    ) -> Vec<u8> {
         let mut out = header(ESCROW_MAGIC);
         out.extend_from_slice(organization_id);
         out.extend_from_slice(key_id);
@@ -444,7 +515,10 @@ impl EscrowV1 {
             &bytes[..header_len],
             ciphertext,
         )?;
-        let master_key: [u8; 32] = opened.as_slice().try_into().map_err(|_| CryptoError::AuthFailed)?;
+        let master_key: [u8; 32] = opened
+            .as_slice()
+            .try_into()
+            .map_err(|_| CryptoError::AuthFailed)?;
         let master_key = Zeroizing::new(master_key);
         // A server can't plant an escrow: the master key must be the member's.
         let keys = AccountIdentityKeysV1::derive(&master_key)?;
@@ -453,7 +527,10 @@ impl EscrowV1 {
         {
             return Err(CryptoError::AuthFailed);
         }
-        Ok(Escrowed { master_key, generation })
+        Ok(Escrowed {
+            master_key,
+            generation,
+        })
     }
 }
 
