@@ -134,6 +134,24 @@ describe('SenderCheck', () => {
     senders.close()
   })
 
+  it('drops what is not a frame, and says so without a name, once a minute', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] })
+    try {
+      let told = 0
+      const senders = new SenderCheck({ authority: async () => 'unknown', onMalformed: () => told++ })
+      const junk = new Uint8Array([0, 3, 1, 2])
+      expect(await senders.verify(junk, true)).toBe('forged')
+      expect(await senders.verify(junk, true)).toBe('forged')
+      expect(told).toBe(1)
+      vi.setSystemTime(Date.now() + 61_000)
+      expect(await senders.verify(junk, true)).toBe('forged')
+      expect(told).toBe(2)
+      senders.close()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
   it("drops a removed device's live frames and keeps its logged ones", async () => {
     chain.push(await removeDevicesFromManifest(chain.at(-1)!, [2], '2026-10-27T00:02:00Z', MASTER_KEY))
     const { senders } = check()

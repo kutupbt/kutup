@@ -54,7 +54,15 @@ export interface SenderCheckOptions {
   name?: (account: string) => Promise<string | null>
   /** Told once per sender and reason. */
   onRefused?: (refusal: SenderRefusal) => void
+  /**
+   * A frame the server relayed that isn't a frame at all (it names no sender
+   * that could be trusted): dropped, and told at most once a minute.
+   */
+  onMalformed?: () => void
 }
+
+/** How often a malformed frame is told about. */
+const MALFORMED_NOTICE_MS = 60_000
 
 /** Reads one frame's check may make before it is held. */
 const MAX_READS_PER_FRAME = 2
@@ -85,6 +93,7 @@ class ResetAccount extends Error {
 export class SenderCheck {
   private readonly senders = new Map<string, Promise<Sender>>()
   private readonly trusted = new Set<() => void>()
+  private malformedToldAt = -Infinity
 
   constructor(private readonly options: SenderCheckOptions) {}
 
@@ -97,6 +106,12 @@ export class SenderCheck {
     try {
       account = await deliveredFrameSender(delivered)
     } catch {
+      // Not even a frame: dropped as forged, and said without a name.
+      const now = Date.now()
+      if (now - this.malformedToldAt >= MALFORMED_NOTICE_MS) {
+        this.malformedToldAt = now
+        this.options.onMalformed?.()
+      }
       return 'forged'
     }
     const sender = await this.sender(account)

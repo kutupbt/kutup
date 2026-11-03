@@ -381,6 +381,7 @@ export default function TextCollabEditor({
     // Edits apply only when their sender's devices signed them; a sender
     // whose edits are dropped is named once.
     const senders = new SenderCheck({
+      onMalformed: () => toast.error(t('editor.editUnverified')),
       authority: accountAuthorityVerdict,
       name: accountNameOfKey,
       onRefused: ({ name, reason, trust }) =>
