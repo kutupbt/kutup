@@ -421,5 +421,368 @@ pub fn open_padded_text(
         .map_err(|_| invalid("profile text is not UTF-8"))
 }
 
+/// The sealed-delivery capability for `recipient` from their profile key:
+/// salted with their account (server and permanent id), never a name
+/// (docs/plans/account-ids.md).
+pub fn derive_delivery_capability(
+    profile_key: &[u8; 32],
+    recipient: &AccountRef,
+) -> CryptoResult<[u8; 16]> {
+    let mut out = [0u8; 16];
+    Kdf::new(Suite::V1, &recipient.bytes(), profile_key).expand(DELIVERY_CAPABILITY_CONTEXT, &mut out)?;
+    Ok(out)
+}
+
+/// Its info label.
+pub const DELIVERY_CAPABILITY_CONTEXT: &[u8] = b"kutup/sealed-delivery-capability/v1";
+
+/// What the server keeps to check a delivery capability: its SHA-256.
+pub fn capability_hash(capability: &[u8; 16]) -> [u8; 32] {
+    hash(Suite::V1, capability).into()
+}
+
+/// A display name: trimmed, 1 to 80 non-control characters.
+pub fn validate_display_name(value: &str) -> CryptoResult<String> {
+    let value = value.trim();
+    if value.is_empty() {
+        return Err(invalid("profile display name is required"));
+    }
+    if value.chars().count() > 80
+        || value.len() > PROFILE_NAME_PADDED_LENGTHS[1]
+        || value.chars().any(char::is_control)
+    {
+        return Err(invalid(
+            "profile display name must be at most 80 non-control characters",
+        ));
+    }
+    Ok(value.to_string())
+}
+
+/// The "about" line: trimmed, at most 140 characters (Signal's limit), one
+/// line; empty means none.
+pub fn validate_about(value: Option<&str>) -> CryptoResult<Option<String>> {
+    let Some(value) = value.map(str::trim).filter(|value| !value.is_empty()) else {
+        return Ok(None);
+    };
+    if value.chars().count() > MAX_PROFILE_ABOUT_CHARS
+        || value.len() > PROFILE_ABOUT_PADDED_LENGTHS[PROFILE_ABOUT_PADDED_LENGTHS.len() - 1]
+        || value.chars().any(char::is_control)
+    {
+        return Err(invalid(
+            "profile about must be one line of at most 140 characters",
+        ));
+    }
+    Ok(Some(value.to_string()))
+}
+
+/// An avatar: a non-empty PNG, JPEG or WebP under 512 KiB, its bytes and
+/// type given together.
+pub fn validate_avatar(avatar: Option<&[u8]>, content_type: Option<&str>) -> CryptoResult<()> {
+    match (avatar, content_type) {
+        (None, None) => Ok(()),
+        (Some(bytes), Some(kind))
+            if !bytes.is_empty()
+                && bytes.len() <= MAX_PROFILE_AVATAR_BYTES
+                && avatar_type_code(kind).is_some() =>
+        {
+            Ok(())
+        }
+        (Some(_), Some(_)) => Err(invalid(
+            "profile avatar must be a non-empty PNG, JPEG, or WebP under 512 KiB",
+        )),
+        _ => Err(invalid(
+            "profile avatar bytes and content type must be provided together",
+        )),
+    }
+}
+
+fn avatar_type_code(value: &str) -> Option<u8> {
+    match value {
+        "image/png" => Some(1),
+        "image/jpeg" => Some(2),
+        "image/webp" => Some(3),
+        _ => None,
+    }
+}
+
+fn avatar_type_name(value: u8) -> Option<&'static str> {
+    match value {
+        1 => Some("image/png"),
+        2 => Some("image/jpeg"),
+        3 => Some("image/webp"),
+        _ => None,
+    }
+}
+
+/// A sealed profile as it travels: chat-proto's `PutChatProfileRequest`
+/// (and, without the owner's fields, `ChatProfileResponse`) field for field.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SealedProfile {
+    pub suite: ProfileSuiteId,
+    pub account: AccountRef,
+    pub version: String,
+    pub revision: u64,
+    pub source_device_id: u32,
+    pub name: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub avatar: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub about: Option<String>,
+    /// The owner's fields: empty in a profile someone else fetched.
+    #[serde(default)]
+    pub wrapped_key: String,
+    #[serde(default)]
+    pub access_key_verifier: String,
+    #[serde(default)]
+    pub delivery_capability_verifier: String,
+}
+
+/// A profile's contents, to seal or as opened.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProfileContents {
+    pub display_name: String,
+    pub avatar: Option<Vec<u8>>,
+    pub avatar_content_type: Option<String>,
+    pub about: Option<String>,
+}
+
+/// An opened profile: its key, contents, revision and source.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OpenedProfile {
+    pub key: Zeroizing<[u8; PROFILE_KEY_BYTES]>,
+    pub contents: ProfileContents,
+    pub revision: u64,
+    pub source_device_id: u32,
+}
+
+fn context(
+    purpose: ProfileEnvelopePurpose,
+    account: &AccountRef,
+    version: &str,
+    revision: u64,
+    source_device_id: u32,
+) -> CryptoResult<ProfileEnvelopeContextV1> {
+    ProfileEnvelopeContextV1::new(purpose, account, version, revision, source_device_id)
+        .map_err(|error| invalid(&error))
+}
+
+/// Seals `contents` under `key` (revision `revision`, from
+/// `source_device_id`) for `account`, with the owner's copy of the key
+/// wrapped under `wrapping_key`. Validates the contents first.
+pub fn seal_profile(
+    key: &[u8; PROFILE_KEY_BYTES],
+    contents: &ProfileContents,
+    revision: u64,
+    source_device_id: u32,
+    wrapping_key: &[u8; 32],
+    account: &AccountRef,
+) -> CryptoResult<SealedProfile> {
+    let display_name = validate_display_name(&contents.display_name)?;
+    validate_avatar(contents.avatar.as_deref(), contents.avatar_content_type.as_deref())?;
+    let about = validate_about(contents.about.as_deref())?;
+    let version = profile_version(key)?;
+    let name = seal_padded_text(
+        &display_name,
+        &PROFILE_NAME_PADDED_LENGTHS,
+        key,
+        &context(ProfileEnvelopePurpose::DisplayName, account, &version, revision, source_device_id)?,
+    )?;
+    let avatar = match (&contents.avatar, &contents.avatar_content_type) {
+        (Some(bytes), Some(kind)) => {
+            let mut plaintext = Zeroizing::new(Vec::with_capacity(bytes.len() + 1));
+            plaintext.push(avatar_type_code(kind).expect("validated avatar type"));
+            plaintext.extend_from_slice(bytes);
+            Some(seal_item(
+                &plaintext,
+                key,
+                &context(ProfileEnvelopePurpose::Avatar, account, &version, revision, source_device_id)?,
+            )?)
+        }
+        _ => None,
+    };
+    let about = about
+        .as_deref()
+        .map(|about| {
+            seal_padded_text(
+                about,
+                &PROFILE_ABOUT_PADDED_LENGTHS,
+                key,
+                &context(ProfileEnvelopePurpose::About, account, &version, revision, source_device_id)?,
+            )
+        })
+        .transpose()?;
+    let wrapped_key = seal_item(
+        key,
+        wrapping_key,
+        &context(ProfileEnvelopePurpose::WrappedProfileKey, account, &version, revision, source_device_id)?,
+    )?;
+    let delivery = derive_delivery_capability(key, account)?;
+    Ok(SealedProfile {
+        suite: ProfileSuiteId::XChaCha20Poly1305V1,
+        account: account.clone(),
+        version,
+        revision,
+        source_device_id,
+        name,
+        avatar,
+        about,
+        wrapped_key,
+        access_key_verifier: access_key_verifier(&profile_access_key(key)?),
+        delivery_capability_verifier: hex::encode(capability_hash(&delivery)),
+    })
+}
+
+/// The owner opens their own sealed profile: the key from its wrapped copy,
+/// checked against the version and both verifiers, then the items.
+pub fn open_own_profile(
+    sealed: &SealedProfile,
+    wrapping_key: &[u8; 32],
+    account: &AccountRef,
+) -> CryptoResult<OpenedProfile> {
+    if sealed.suite != ProfileSuiteId::XChaCha20Poly1305V1 || sealed.account != *account {
+        return Err(invalid("encrypted profile suite or account does not match"));
+    }
+    let wrapped = open_item(
+        &sealed.wrapped_key,
+        wrapping_key,
+        &context(
+            ProfileEnvelopePurpose::WrappedProfileKey,
+            &sealed.account,
+            &sealed.version,
+            sealed.revision,
+            sealed.source_device_id,
+        )?,
+    )?;
+    let key = Zeroizing::new(profile_key(&wrapped)?);
+    if profile_version(key.as_slice())? != sealed.version {
+        return Err(invalid("wrapped profile key does not match profile version"));
+    }
+    if access_key_verifier(&profile_access_key(key.as_slice())?) != sealed.access_key_verifier {
+        return Err(invalid("wrapped profile key does not match access verifier"));
+    }
+    let delivery = derive_delivery_capability(&key, account)?;
+    if hex::encode(capability_hash(&delivery)) != sealed.delivery_capability_verifier {
+        return Err(invalid(
+            "wrapped profile key does not match delivery capability verifier",
+        ));
+    }
+    let contents = open_items(sealed, &key)?;
+    Ok(OpenedProfile {
+        key,
+        contents,
+        revision: sealed.revision,
+        source_device_id: sealed.source_device_id,
+    })
+}
+
+/// Someone else's fetched profile, opened with the key they gave.
+pub fn open_peer_profile(
+    sealed: &SealedProfile,
+    account: &AccountRef,
+    key: &[u8],
+) -> CryptoResult<OpenedProfile> {
+    if sealed.suite != ProfileSuiteId::XChaCha20Poly1305V1 || sealed.account != *account {
+        return Err(invalid(
+            "encrypted peer profile context does not match the requested account",
+        ));
+    }
+    let key = Zeroizing::new(profile_key(key)?);
+    if profile_version(key.as_slice())? != sealed.version {
+        return Err(invalid("peer profile key does not match profile version"));
+    }
+    let contents = open_items(sealed, &key)?;
+    Ok(OpenedProfile {
+        key,
+        contents,
+        revision: sealed.revision,
+        source_device_id: sealed.source_device_id,
+    })
+}
+
+fn open_items(sealed: &SealedProfile, key: &[u8; 32]) -> CryptoResult<ProfileContents> {
+    let (account, version, revision, source) =
+        (&sealed.account, &sealed.version, sealed.revision, sealed.source_device_id);
+    let display_name = open_padded_text(
+        &sealed.name,
+        &PROFILE_NAME_PADDED_LENGTHS,
+        key,
+        &context(ProfileEnvelopePurpose::DisplayName, account, version, revision, source)?,
+    )
+    .map_err(|_| invalid("encrypted profile name is invalid"))?;
+    let display_name = validate_display_name(&display_name)?;
+    let (avatar, avatar_content_type) = match &sealed.avatar {
+        None => (None, None),
+        Some(value) => {
+            let plaintext = open_item(
+                value,
+                key,
+                &context(ProfileEnvelopePurpose::Avatar, account, version, revision, source)?,
+            )?;
+            let (&kind, bytes) = plaintext
+                .split_first()
+                .ok_or_else(|| invalid("encrypted profile avatar is empty"))?;
+            if bytes.is_empty() || bytes.len() > MAX_PROFILE_AVATAR_BYTES {
+                return Err(invalid("encrypted profile avatar has an invalid size"));
+            }
+            let kind = avatar_type_name(kind).ok_or_else(|| invalid("profile avatar type is invalid"))?;
+            (Some(bytes.to_vec()), Some(kind.to_string()))
+        }
+    };
+    let about = match &sealed.about {
+        None => None,
+        Some(value) => {
+            let text = open_padded_text(
+                value,
+                &PROFILE_ABOUT_PADDED_LENGTHS,
+                key,
+                &context(ProfileEnvelopePurpose::About, account, version, revision, source)?,
+            )?;
+            validate_about(Some(&text)).map_err(|_| invalid("encrypted profile about is invalid"))?
+        }
+    };
+    Ok(ProfileContents {
+        display_name,
+        avatar,
+        avatar_content_type,
+        about,
+    })
+}
+
+/// The account app's next profile revision: over `current` (the same key,
+/// one revision later) or the first, under a fresh key. Only the master key
+/// and the key binding take part; the source is [`ACCOUNT_PROFILE_SOURCE`].
+pub fn seal_account_profile(
+    master_key: &[u8; 32],
+    current: Option<&SealedProfile>,
+    contents: &ProfileContents,
+    account: &AccountRef,
+    binding: &str,
+) -> CryptoResult<SealedProfile> {
+    let wrapping_key = derive_wrapping_key(master_key, binding)?;
+    let (key, revision) = match current {
+        Some(current) => {
+            let opened = open_own_profile(current, &wrapping_key, account)?;
+            let revision = opened
+                .revision
+                .checked_add(1)
+                .ok_or_else(|| invalid("profile revision is exhausted"))?;
+            (opened.key, revision)
+        }
+        None => (Zeroizing::new(crate::primitives::random_array::<32>()), 1),
+    };
+    seal_profile(&key, contents, revision, ACCOUNT_PROFILE_SOURCE, &wrapping_key, account)
+}
+
+/// The account's own profile, opened from the master key.
+pub fn open_account_profile(
+    master_key: &[u8; 32],
+    current: &SealedProfile,
+    account: &AccountRef,
+    binding: &str,
+) -> CryptoResult<OpenedProfile> {
+    open_own_profile(current, &derive_wrapping_key(master_key, binding)?, account)
+}
+
 #[cfg(test)]
 mod tests;
