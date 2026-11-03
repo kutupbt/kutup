@@ -61,14 +61,11 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 base64 = "0.22"
 thiserror = "2"
-hkdf = "0.12"
-hmac = "0.12"
 # The browser store seals CBOR-encoded records (db/store_cipher.rs).
 ciborium = "0.2"
 # Search folding (src/search.rs): canonical decomposition to drop accents.
 kutup-search = { path = "../kutup-search" }
 sha2 = "0.10"
-chacha20poly1305 = "0.10"
 ed25519-dalek = "2"
 hex = "0.4"
 zeroize = "1"
