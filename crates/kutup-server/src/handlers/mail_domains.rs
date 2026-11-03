@@ -216,18 +216,24 @@ async fn view(state: &AppState, row: &Row, settings: &Settings) -> AppResult<Mai
 pub async fn list(State(state): State<AppState>, user: AuthUser) -> AppResult<Json<MailDomains>> {
     enabled(&state)?;
     let user_id = trusted_uuid(&user.user_id)?;
-    let settings = Settings::load(&state.pool)
-        .await?
-        .for_user(&state.pool, user_id)
-        .await?;
-    let rows = store::list(&state.pool, user_id).await?;
+    // The domains of the organization the account manages; none yet (or
+    // not its to manage): an empty list under the site's limit.
+    let site = Settings::load(&state.pool).await?;
+    let organization = crate::organizations::managed_domains(&state.pool, user_id).await?;
+    let (settings, rows) = match organization {
+        Some(organization) => (
+            site.for_org(&state.pool, organization).await?,
+            store::list(&state.pool, organization).await?,
+        ),
+        None => (site, Vec::new()),
+    };
     let mut domains = Vec::with_capacity(rows.len());
     for row in &rows {
         domains.push(view(&state, row, &settings).await?);
     }
     Ok(Json(MailDomains {
         used: rows.len() as i64,
-        max: settings.domains_per_account,
+        max: settings.domains_per_organization,
         mode: settings.mode.as_str(),
         domains,
     }))
@@ -257,15 +263,12 @@ pub async fn add(
     let user_id = trusted_uuid(&user.user_id)?;
     let name = name::normalize(&input.name, &state.config.chat_server_name)
         .map_err(|refusal| coded(AppError::bad_request("not a domain to add"), refusal.code()))?;
-    let mut settings = Settings::load(&state.pool)
-        .await?
-        .for_user(&state.pool, user_id)
-        .await?;
+    let mut site = Settings::load(&state.pool).await?;
     // Without Stalwart's management key, a domain could never take mail.
     if !crate::mail::domains::sweep::configured(&state) {
-        settings.mode = Mode::Off;
+        site.mode = Mode::Off;
     }
-    let row = match store::add(&state.pool, user_id, &name, &settings).await? {
+    let row = match store::add(&state.pool, user_id, &name, &site).await? {
         Ok(row) => row,
         Err(refusal @ store::AddRefusal::Off) => {
             return Err(coded(
@@ -280,6 +283,7 @@ pub async fn add(
             ))
         }
     };
+    let settings = site.for_org(&state.pool, row.organization_id).await?;
     Ok((
         StatusCode::CREATED,
         Json(view(&state, &row, &settings).await?),
@@ -329,11 +333,12 @@ pub async fn get(
     enabled(&state)?;
     let user_id = trusted_uuid(&user.user_id)?;
     let id = Uuid::parse_str(&id).map_err(|_| AppError::not_found("no such domain"))?;
+    let organization = crate::organizations::require_managed_domains(&state.pool, user_id).await?;
     let settings = Settings::load(&state.pool)
         .await?
-        .for_user(&state.pool, user_id)
+        .for_org(&state.pool, organization)
         .await?;
-    let mut row = store::get(&state.pool, user_id, id).await?;
+    let mut row = store::get(&state.pool, organization, id).await?;
     if query.refresh == Some(1) {
         if !MAIL_DOMAIN_CHECKS.allow(&user_id.to_string()) {
             return Err(AppError::too_many_requests(
@@ -382,7 +387,8 @@ pub async fn delete(
     enabled(&state)?;
     let user_id = trusted_uuid(&user.user_id)?;
     let id = Uuid::parse_str(&id).map_err(|_| AppError::not_found("no such domain"))?;
-    store::remove(&state.pool, user_id, id).await?;
+    let organization = crate::organizations::require_managed_domains(&state.pool, user_id).await?;
+    store::remove(&state.pool, organization, id).await?;
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -412,11 +418,12 @@ pub async fn catch_all(
         .map(Uuid::parse_str)
         .transpose()
         .map_err(|_| AppError::bad_request("addressId"))?;
+    let organization = crate::organizations::require_managed_domains(&state.pool, user_id).await?;
     let settings = Settings::load(&state.pool)
         .await?
-        .for_user(&state.pool, user_id)
+        .for_org(&state.pool, organization)
         .await?;
-    store::set_catch_all(&state.pool, user_id, id, address, &settings).await?;
+    store::set_catch_all(&state.pool, organization, id, address, &settings).await?;
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -471,9 +478,14 @@ pub async fn create_address(
     let local = input.local.trim().to_lowercase();
     kutup_crypto::mail_address::check_local(&local)
         .map_err(|_| coded(AppError::bad_request("not an address"), "invalidAddress"))?;
+    // A domain of the organization the account manages (O1: its own
+    // addresses; admins making members' addresses come with O3).
+    let organization = crate::organizations::require_managed_domains(&state.pool, user_id).await?;
     let settings = Settings::load(&state.pool)
         .await?
-        .for_user(&state.pool, user_id)
+        .for_org(&state.pool, organization)
+        .await?
+        .for_account(&state.pool, user_id)
         .await?;
     let mut tx = state.pool.begin().await?;
     sqlx::query("SELECT 1 FROM users WHERE id = $1 FOR UPDATE")
@@ -481,11 +493,11 @@ pub async fn create_address(
         .execute(&mut *tx)
         .await?;
     let domain: Option<Row> = sqlx::query_as(&format!(
-        "SELECT {} FROM mail_domains WHERE id = $1 AND user_id = $2 AND removed_at IS NULL FOR SHARE",
+        "SELECT {} FROM mail_domains WHERE id = $1 AND organization_id = $2 AND removed_at IS NULL FOR SHARE",
         store::COLUMNS
     ))
     .bind(domain_id)
-    .bind(user_id)
+    .bind(organization)
     .fetch_optional(&mut *tx)
     .await?;
     let domain = domain.ok_or_else(|| AppError::not_found("no such domain"))?;

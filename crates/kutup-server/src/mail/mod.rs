@@ -238,9 +238,11 @@ async fn custom_domain_row(state: &AppState, recipient: &str) -> Result<CustomDo
     if !domains::sweep::configured(state) {
         return Ok(CustomDomain::Address(None));
     }
+    // Held by an active organization (docs/plans/organizations.md §2).
     let held: Option<domains::store::Row> = sqlx::query_as(&format!(
         "SELECT {} FROM mail_domains
-          WHERE name = $1 AND state IN (1, 2) AND stopped_at IS NULL AND removed_at IS NULL",
+          WHERE name = $1 AND state IN (1, 2) AND stopped_at IS NULL AND removed_at IS NULL
+            AND organization_id IN (SELECT id FROM organizations WHERE state = 1)",
         domains::store::COLUMNS
     ))
     .bind(&domain)
@@ -249,20 +251,23 @@ async fn custom_domain_row(state: &AppState, recipient: &str) -> Result<CustomDo
     let Some(held) = held else {
         return Ok(CustomDomain::Address(None));
     };
-    // The owner's settings: the site's, with an administrator's overrides
-    // for this account (the catch-all among them).
+    // The organization's settings: the site's, with an administrator's
+    // values for this organization (the catch-all among them).
     let settings = domains::settings::Settings::load(&state.pool)
         .await?
-        .for_user(&state.pool, held.user_id)
+        .for_org(&state.pool, held.organization_id)
         .await?;
     if !held.usable(&settings) {
         return Ok(CustomDomain::Address(None));
     }
     let (domain_id, catch_all) = (held.id, held.catch_all_address_id);
+    // An address of an enabled member of the domain's organization.
     const SELECT: &str =
         "SELECT a.id, a.user_id, k.public_key, u.storage_quota_bytes, u.storage_used_bytes
            FROM mail_addresses a
            JOIN users u ON u.id = a.user_id AND u.is_active
+           JOIN organization_members m ON m.account_id = a.user_id AND m.organization_id = $3
+                                      AND m.state = 1
            LEFT JOIN mail_address_keys k ON k.address_id = a.id AND k.is_primary";
     let row: Option<RecipientRow> = sqlx::query_as(&format!(
         "{SELECT} WHERE a.folded = $1 AND a.domain_id = $2 AND a.state = 'active'
@@ -270,6 +275,7 @@ async fn custom_domain_row(state: &AppState, recipient: &str) -> Result<CustomDo
     ))
     .bind(format!("{local}@{domain}"))
     .bind(domain_id)
+    .bind(held.organization_id)
     .fetch_optional(&state.pool)
     .await?;
     if row.is_some() {
@@ -301,6 +307,7 @@ async fn custom_domain_row(state: &AppState, recipient: &str) -> Result<CustomDo
     ))
     .bind(catch_all)
     .bind(domain_id)
+    .bind(held.organization_id)
     .fetch_optional(&state.pool)
     .await?;
     Ok(CustomDomain::Caught(

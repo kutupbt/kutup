@@ -58,6 +58,7 @@ INSERT INTO mail_domain_overrides (user_id, max_domains, max_addresses, catch_al
 DELETE FROM mail_domain_overrides
  WHERE max_domains IS NULL AND max_addresses IS NULL AND catch_all IS NULL;
 DELETE FROM user_setting_overrides WHERE key = 'mail_domains.addresses_per_account';
+UPDATE site_settings SET key = 'mail_domains.per_account' WHERE key = 'mail_domains.per_organization';
 
 ALTER TABLE mail_domains DROP COLUMN organization_id;
 

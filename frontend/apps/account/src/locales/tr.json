@@ -1630,7 +1630,10 @@
       },
       "overrides": {
         "title": "Posta alan adları",
-        "description": "Bu hesabın sınırları sitenin sınırlarının yerine geçer; boş bırakılan sitenin değerini korur.",
+        "description": "Bu hesabın sınırları sitenin sınırlarının yerine geçer; boş bırakılan sitenin değerini korur. Alan adları ve tümünü yakala hesabın kuruluşuna, adresler hesabın kendisine aittir.",
+        "organization": "Kuruluş: {{name}} ({{role}})",
+        "noOrganization": "Henüz kuruluş yok: alan adı sınırları bu hesap bir alan adı edindiğinde geçerli olur.",
+        "roles": { "owner": "sahip", "admin": "yönetici", "member": "üye" },
         "maxDomains": "Alan adı",
         "maxAddresses": "Adres",
         "catchAll": "Tümünü yakala",

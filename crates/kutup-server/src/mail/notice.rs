@@ -22,8 +22,9 @@ pub enum DomainLost {
 pub async fn domain_lost(state: &AppState, user: Uuid, name: &str, why: DomainLost) {
     let reason = match why {
         DomainLost::Transferred => format!(
-            "Another account proved that it controls {name}: its DNS now carries that \
-             account's verification record and no longer yours. The domain moved to it."
+            "Another organization proved that it controls {name}: its DNS now carries \
+             that organization's verification record and no longer yours. The domain \
+             moved to it."
         ),
         DomainLost::Lapsed => format!(
             "{name}'s DNS records stopped pointing to this server for longer than the \
@@ -40,6 +41,23 @@ pub async fn domain_lost(state: &AppState, user: Uuid, name: &str, why: DomainLo
     );
     if let Err(error) = deliver(state, user, &format!("You no longer hold {name}"), &body).await {
         tracing::warn!(error = %error, "mail: the domain-lost notice was not delivered");
+    }
+}
+
+/// The domain-lost notice to each of an organization's owners.
+pub async fn domain_lost_to_owners(
+    state: &AppState,
+    organization: Uuid,
+    name: &str,
+    why: DomainLost,
+) {
+    match crate::organizations::owners(&state.pool, organization).await {
+        Ok(owners) => {
+            for owner in owners {
+                domain_lost(state, owner, name, why).await;
+            }
+        }
+        Err(error) => tracing::warn!(error = %error, "mail: the domain's owners were not read"),
     }
 }
 

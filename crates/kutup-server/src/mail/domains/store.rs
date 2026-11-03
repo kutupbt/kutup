@@ -1,7 +1,8 @@
 //! Custom domains in the database (docs/plans/mail-custom-domains.md §1–2,
 //! 8): adding within the limits, saving a check (with the rule for a name
-//! another account holds), removing, and what happens to a domain's
-//! addresses when it goes.
+//! another organization holds), removing, and what happens to a domain's
+//! addresses when it goes. A domain belongs to an organization
+//! (docs/plans/organizations.md §1), managed by its owners and admins.
 
 use sqlx::{FromRow, PgPool, Postgres, Transaction};
 use time::OffsetDateTime;
@@ -24,7 +25,7 @@ pub const TRANSFER_CONFIRM_WINDOW_SECS: i64 = 48 * 3600;
 #[derive(Debug, Clone, FromRow)]
 pub struct Row {
     pub id: Uuid,
-    pub user_id: Uuid,
+    pub organization_id: Uuid,
     pub name: String,
     pub verify_code: String,
     pub state: i16,
@@ -50,7 +51,7 @@ pub struct Row {
 }
 
 pub const COLUMNS: &str =
-    "id, user_id, name, verify_code, state, verify_state, mx_state, spf_state,
+    "id, organization_id, name, verify_code, state, verify_state, mx_state, spf_state,
     dkim_state, dmarc_state, dkim_good_once, dkim_warning_since, approved_at, removed_at,
     catch_all_address_id, created_at, checked_at, verified_at, failing_since, warned_at,
     stopped_at, transfer_seen_at, stalwart_signature_id, stalwart_signature_key";
@@ -119,47 +120,59 @@ impl AddRefusal {
     }
 }
 
-pub async fn list(pool: &PgPool, user: Uuid) -> AppResult<Vec<Row>> {
+pub async fn list(pool: &PgPool, organization: Uuid) -> AppResult<Vec<Row>> {
     Ok(sqlx::query_as(&format!(
-        "SELECT {COLUMNS} FROM mail_domains WHERE user_id = $1 AND removed_at IS NULL ORDER BY name"
+        "SELECT {COLUMNS} FROM mail_domains WHERE organization_id = $1 AND removed_at IS NULL ORDER BY name"
     ))
-    .bind(user)
+    .bind(organization)
     .fetch_all(pool)
     .await?)
 }
 
-pub async fn get(pool: &PgPool, user: Uuid, id: Uuid) -> AppResult<Row> {
+pub async fn get(pool: &PgPool, organization: Uuid, id: Uuid) -> AppResult<Row> {
     sqlx::query_as(&format!(
-        "SELECT {COLUMNS} FROM mail_domains WHERE id = $1 AND user_id = $2 AND removed_at IS NULL"
+        "SELECT {COLUMNS} FROM mail_domains WHERE id = $1 AND organization_id = $2 AND removed_at IS NULL"
     ))
     .bind(id)
-    .bind(user)
+    .bind(organization)
     .fetch_optional(pool)
     .await?
     .ok_or_else(|| AppError::not_found("no such domain"))
 }
 
-/// Adds `name` (normalized) for `user`, or gives back the row it removed
-/// before, with its code.
+/// Adds `name` (normalized) for the organization `account` manages (a new
+/// organization of one when it has none), or gives back the row that
+/// organization removed before, with its code. `site` is the site's
+/// settings: the organization's own limits are read here, once it is known.
 pub async fn add(
     pool: &PgPool,
-    user: Uuid,
+    account: Uuid,
     name: &str,
-    settings: &Settings,
+    site: &Settings,
 ) -> AppResult<Result<Row, AddRefusal>> {
-    if settings.mode == Mode::Off || settings.domains_per_account == 0 {
+    if site.mode == Mode::Off {
         return Ok(Err(AddRefusal::Off));
     }
     let mut tx = pool.begin().await?;
-    // One add at a time per account, so the counts hold.
+    // One add at a time per account, so a first domain makes one
+    // organization; then one at a time per organization, so its counts hold.
     sqlx::query("SELECT 1 FROM users WHERE id = $1 FOR UPDATE")
-        .bind(user)
+        .bind(account)
         .execute(&mut *tx)
         .await?;
+    let organization = crate::organizations::for_new_domain(&mut tx, account).await?;
+    sqlx::query("SELECT 1 FROM organizations WHERE id = $1 FOR UPDATE")
+        .bind(organization)
+        .execute(&mut *tx)
+        .await?;
+    let settings = site.for_org(&mut *tx, organization).await?;
+    if settings.domains_per_organization == 0 {
+        return Ok(Err(AddRefusal::Off));
+    }
     let existing: Option<Row> = sqlx::query_as(&format!(
-        "SELECT {COLUMNS} FROM mail_domains WHERE user_id = $1 AND name = $2"
+        "SELECT {COLUMNS} FROM mail_domains WHERE organization_id = $1 AND name = $2"
     ))
-    .bind(user)
+    .bind(organization)
     .bind(name)
     .fetch_optional(&mut *tx)
     .await?;
@@ -174,12 +187,12 @@ pub async fn add(
     let (kept, today): (i64, i64) = sqlx::query_as(
         "SELECT count(*) FILTER (WHERE removed_at IS NULL),
                 count(*) FILTER (WHERE created_at > now() - interval '1 day')
-           FROM mail_domains WHERE user_id = $1",
+           FROM mail_domains WHERE organization_id = $1",
     )
-    .bind(user)
+    .bind(organization)
     .fetch_one(&mut *tx)
     .await?;
-    if kept >= settings.domains_per_account {
+    if kept >= settings.domains_per_organization {
         return Ok(Err(AddRefusal::AccountLimit));
     }
     if today >= settings.adds_per_day {
@@ -210,10 +223,10 @@ pub async fn add(
         }
         None => {
             sqlx::query_as(&format!(
-                "INSERT INTO mail_domains (user_id, name, verify_code) VALUES ($1, $2, $3)
+                "INSERT INTO mail_domains (organization_id, name, verify_code) VALUES ($1, $2, $3)
              RETURNING {COLUMNS}"
             ))
-            .bind(user)
+            .bind(organization)
             .bind(name)
             .bind(records::new_verify_code())
             .fetch_one(&mut *tx)
@@ -246,15 +259,15 @@ pub fn blocked_names(name: &str) -> Vec<String> {
     names
 }
 
-/// Who holds `name` now, other than `id`: the holder's row id, account and
-/// code.
+/// Who holds `name` now, other than `id`: the holder's row id, organization
+/// and code.
 async fn holder(
     tx: &mut Transaction<'_, Postgres>,
     name: &str,
     id: Uuid,
 ) -> AppResult<Option<(Uuid, Uuid, String)>> {
     Ok(sqlx::query_as(
-        "SELECT id, user_id, verify_code FROM mail_domains
+        "SELECT id, organization_id, verify_code FROM mail_domains
           WHERE name = $1 AND id <> $2 AND state IN (1, 2) FOR UPDATE",
     )
     .bind(name)
@@ -319,7 +332,7 @@ pub async fn check_and_save(
         tx.commit().await?;
         return Ok((current, Change::None, None));
     }
-    // The account that lost the domain to this one, to be told.
+    // The organization that lost the domain to this one, its owners to be told.
     let mut lost_holder = None;
     // The transfer's first sighting holds only while every check finds this
     // account's code.
@@ -336,7 +349,7 @@ pub async fn check_and_save(
         change = Change::None;
         transfer_seen = None;
     } else if becomes_held {
-        if let Some((holder_id, holder_user, holder_code)) =
+        if let Some((holder_id, holder_org, holder_code)) =
             holder(&mut tx, &row.name, row.id).await?
         {
             let holder_gone = name_txt
@@ -352,8 +365,8 @@ pub async fn check_and_save(
                     now - seen.unix_timestamp() >= super::scaled(TRANSFER_CONFIRM_SECS)
                 });
             if confirmed {
-                lose(&mut tx, holder_id, holder_user, &row.name).await?;
-                lost_holder = Some(holder_user);
+                lose(&mut tx, holder_id, holder_org, &row.name).await?;
+                lost_holder = Some(holder_org);
                 transfer_seen = None;
             } else {
                 // Not yet (or not at all): pending, the holder untouched.
@@ -369,16 +382,7 @@ pub async fn check_and_save(
     }
     if change == Change::Inactive {
         free_addresses(&mut tx, row.id).await?;
-        security_events::record_names(
-            &mut tx,
-            row.user_id,
-            Kind::DomainLost,
-            None,
-            None,
-            &row.name,
-            None,
-        )
-        .await?;
+        tell_owners(&mut tx, row.organization_id, &row.name).await?;
     }
     let saved: Row = sqlx::query_as(&format!(
         "UPDATE mail_domains SET state = $2, verify_state = $3, mx_state = $4, spf_state = $5,
@@ -407,12 +411,12 @@ pub async fn check_and_save(
     Ok((saved, change, lost_holder))
 }
 
-/// The holder loses a domain another account proved: inactive, its
-/// addresses freed, and told.
+/// The holder loses a domain another organization proved: inactive, its
+/// addresses freed, and its owners told.
 async fn lose(
     tx: &mut Transaction<'_, Postgres>,
     id: Uuid,
-    user: Uuid,
+    organization: Uuid,
     name: &str,
 ) -> AppResult<()> {
     sqlx::query(
@@ -424,7 +428,19 @@ async fn lose(
     .execute(&mut **tx)
     .await?;
     free_addresses(tx, id).await?;
-    security_events::record_names(tx, user, Kind::DomainLost, None, None, name, None).await?;
+    tell_owners(tx, organization, name).await?;
+    Ok(())
+}
+
+/// A security event for each of the organization's owners: it lost `name`.
+async fn tell_owners(
+    tx: &mut Transaction<'_, Postgres>,
+    organization: Uuid,
+    name: &str,
+) -> AppResult<()> {
+    for owner in crate::organizations::owners(&mut **tx, organization).await? {
+        security_events::record_names(tx, owner, Kind::DomainLost, None, None, name, None).await?;
+    }
     Ok(())
 }
 
@@ -453,18 +469,18 @@ pub async fn free_addresses(tx: &mut Transaction<'_, Postgres>, domain: Uuid) ->
     Ok(())
 }
 
-/// The owner removes a domain: its addresses are freed (Proton: "all the
-/// addresses associated with it will be disabled"), the row stays removed
-/// for its code.
-pub async fn remove(pool: &PgPool, user: Uuid, id: Uuid) -> AppResult<()> {
+/// The organization removes a domain: its addresses are freed (Proton: "all
+/// the addresses associated with it will be disabled"), the row stays
+/// removed for its code.
+pub async fn remove(pool: &PgPool, organization: Uuid, id: Uuid) -> AppResult<()> {
     let mut tx = pool.begin().await?;
     let removed = sqlx::query(
         "UPDATE mail_domains SET removed_at = now(), state = 0, approved_at = NULL,
                 failing_since = NULL, warned_at = NULL, stopped_at = NULL, transfer_seen_at = NULL
-          WHERE id = $1 AND user_id = $2 AND removed_at IS NULL",
+          WHERE id = $1 AND organization_id = $2 AND removed_at IS NULL",
     )
     .bind(id)
-    .bind(user)
+    .bind(organization)
     .execute(&mut *tx)
     .await?;
     if removed.rows_affected() == 0 {
@@ -475,10 +491,11 @@ pub async fn remove(pool: &PgPool, user: Uuid, id: Uuid) -> AppResult<()> {
     Ok(())
 }
 
-/// The domain's catch-all: one of its own addresses that receives, or none.
+/// The domain's catch-all: one of its own addresses that receives (any
+/// member's, organizations §2), or none.
 pub async fn set_catch_all(
     pool: &PgPool,
-    user: Uuid,
+    organization: Uuid,
     id: Uuid,
     address: Option<Uuid>,
     settings: &Settings,
@@ -488,10 +505,10 @@ pub async fn set_catch_all(
     }
     let mut tx = pool.begin().await?;
     let row: Option<Row> = sqlx::query_as(&format!(
-        "SELECT {COLUMNS} FROM mail_domains WHERE id = $1 AND user_id = $2 AND removed_at IS NULL FOR UPDATE"
+        "SELECT {COLUMNS} FROM mail_domains WHERE id = $1 AND organization_id = $2 AND removed_at IS NULL FOR UPDATE"
     ))
     .bind(id)
-    .bind(user)
+    .bind(organization)
     .fetch_optional(&mut *tx)
     .await?;
     let row = row.ok_or_else(|| AppError::not_found("no such domain"))?;
@@ -502,12 +519,11 @@ pub async fn set_catch_all(
         }
         let fits: bool = sqlx::query_scalar(
             "SELECT EXISTS (SELECT 1 FROM mail_addresses
-                             WHERE id = $1 AND domain_id = $2 AND user_id = $3 AND state = 'active'
+                             WHERE id = $1 AND domain_id = $2 AND state = 'active'
                                AND disabled_at IS NULL)",
         )
         .bind(address)
         .bind(id)
-        .bind(user)
         .fetch_one(&mut *tx)
         .await?;
         if !fits {
@@ -525,23 +541,21 @@ pub async fn set_catch_all(
     Ok(())
 }
 
-/// An administrator ends a domain: inactive at once, its addresses freed,
-/// its owner told. The name of the domain it was.
 /// An administrator deactivates a domain (abuse): inactive at once, its
-/// addresses freed, its owner told, and its name blocked until an
-/// administrator lifts it ([`unblock`]), so no refresh brings it back.
-/// The owner and the name.
+/// addresses freed, its organization's owners told, and its name blocked
+/// until an administrator lifts it ([`unblock`]), so no refresh brings it
+/// back. The organization and the name.
 pub async fn deactivate(pool: &PgPool, id: Uuid, admin: Uuid) -> AppResult<(Uuid, String)> {
     let mut tx = pool.begin().await?;
     let row: Option<(Uuid, String)> = sqlx::query_as(
         "UPDATE mail_domains SET state = 0, failing_since = NULL, warned_at = NULL,
                 stopped_at = NULL, transfer_seen_at = NULL, approved_at = NULL
-          WHERE id = $1 AND removed_at IS NULL RETURNING user_id, name",
+          WHERE id = $1 AND removed_at IS NULL RETURNING organization_id, name",
     )
     .bind(id)
     .fetch_optional(&mut *tx)
     .await?;
-    let (user, name) = row.ok_or_else(|| AppError::not_found("no such domain"))?;
+    let (organization, name) = row.ok_or_else(|| AppError::not_found("no such domain"))?;
     sqlx::query(
         "INSERT INTO mail_domain_blocks (name, blocked_by) VALUES ($1, $2)
          ON CONFLICT (name) DO NOTHING",
@@ -551,9 +565,9 @@ pub async fn deactivate(pool: &PgPool, id: Uuid, admin: Uuid) -> AppResult<(Uuid
     .execute(&mut *tx)
     .await?;
     free_addresses(&mut tx, id).await?;
-    security_events::record_names(&mut tx, user, Kind::DomainLost, None, None, &name, None).await?;
+    tell_owners(&mut tx, organization, &name).await?;
     tx.commit().await?;
-    Ok((user, name))
+    Ok((organization, name))
 }
 
 /// An administrator lifts the block on `name` (as listed): it, and the

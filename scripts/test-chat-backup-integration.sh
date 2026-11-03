@@ -218,6 +218,15 @@ KUTUP_LIVE_DATABASE_URL="postgres://$POSTGRES_USER:$POSTGRES_PASSWORD@127.0.0.1:
 KUTUP_LIVE_DATABASE_URL="postgres://$POSTGRES_USER:$POSTGRES_PASSWORD@127.0.0.1:$db_port/$POSTGRES_DB" \
   cargo test -p kutup-server jobs::tests::live_mail_group_quota_reconcile \
   -- --exact --nocapture
+# Custom domains belong to organizations (docs/plans/organizations.md, O1):
+# an organization of one on the first domain, its limit, a member refused,
+# every owner told of a loss.
+KUTUP_LIVE_DATABASE_URL="postgres://$POSTGRES_USER:$POSTGRES_PASSWORD@127.0.0.1:$db_port/$POSTGRES_DB" \
+  cargo test -p kutup-server --bin kutup-server organizations::tests::live_ -- --nocapture
+# The organizations migration on a database with domains and limits (it
+# makes and drops a database of its own on this server).
+KUTUP_TEST_DB="postgres://$POSTGRES_USER:$POSTGRES_PASSWORD@127.0.0.1:$db_port/$POSTGRES_DB" \
+  cargo test -p kutup-server --test organizations_migration_live -- --nocapture
 
 # Federation queues (docs/plans/federation-outbox.md): a backlog for one
 # server does not starve another, and a rejected row never reorders one.

@@ -129,12 +129,11 @@ async fn check_due(state: &AppState, settings: &Settings) -> AppResult<()> {
             // A small random wait, so a tick's checks don't all start at once.
             let wait = kutup_crypto::primitives::random_below(2000);
             tokio::time::sleep(Duration::from_millis(wait)).await;
-            let user_settings = match settings.for_user(&state.pool, row.user_id).await {
+            let org_settings = match settings.for_org(&state.pool, row.organization_id).await {
                 Ok(settings) => settings,
                 Err(_) => settings,
             };
-            match store::check_and_save(&state.pool, resolver, &server, &user_settings, &row).await
-            {
+            match store::check_and_save(&state.pool, resolver, &server, &org_settings, &row).await {
                 Ok((checked, change, lost_holder)) => {
                     tell_losses(&state, &checked, change, lost_holder).await;
                 }
@@ -149,21 +148,27 @@ async fn check_due(state: &AppState, settings: &Settings) -> AppResult<()> {
     Ok(())
 }
 
-/// Tells the accounts a check took a domain from, in their inboxes: the
-/// owner whose domain lapsed, and a holder another account's proof moved it
-/// from.
+/// Tells the organizations a check took a domain from, in their owners'
+/// inboxes: the one whose domain lapsed, and a holder another
+/// organization's proof moved it from.
 pub async fn tell_losses(
     state: &AppState,
     checked: &Row,
     change: Change,
     lost_holder: Option<Uuid>,
 ) {
-    use crate::mail::notice::{domain_lost, DomainLost};
+    use crate::mail::notice::{domain_lost_to_owners, DomainLost};
     if change == Change::Inactive {
-        domain_lost(state, checked.user_id, &checked.name, DomainLost::Lapsed).await;
+        domain_lost_to_owners(
+            state,
+            checked.organization_id,
+            &checked.name,
+            DomainLost::Lapsed,
+        )
+        .await;
     }
     if let Some(holder) = lost_holder {
-        domain_lost(state, holder, &checked.name, DomainLost::Transferred).await;
+        domain_lost_to_owners(state, holder, &checked.name, DomainLost::Transferred).await;
     }
 }
 

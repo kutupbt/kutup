@@ -50,6 +50,7 @@ mod middleware;
 mod models;
 mod opaque_setup;
 mod openapi;
+mod organizations;
 mod photos;
 mod public_fetch;
 mod ratelimit;

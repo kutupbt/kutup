@@ -143,6 +143,8 @@ INSERT INTO user_setting_overrides (user_id, key, value)
       FROM mail_domain_overrides o WHERE o.max_addresses IS NOT NULL
     ON CONFLICT (user_id, key) DO NOTHING;
 DROP TABLE mail_domain_overrides;
+-- The site's domain limit now counts an organization's domains.
+UPDATE site_settings SET key = 'mail_domains.per_organization' WHERE key = 'mail_domains.per_account';
 
 ALTER TABLE mail_domains DROP CONSTRAINT mail_domains_user_id_name_key;
 ALTER TABLE mail_domains DROP COLUMN user_id;

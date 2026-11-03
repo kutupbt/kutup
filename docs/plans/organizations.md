@@ -502,6 +502,28 @@ can't tell a managed account from a private one, as at Proton.
   `orgSignIn`); the CHECK list on `account_security_events.kind` grows in
   the same migration.
 
+### 5b. Chat by custom-domain address (the user, 2026-11-03; builds with O5)
+
+An account the organization creates has no username on the server's domain
+(§4), so Chat must find it by its organization address (`b@mail.t.co`):
+
+- **Chat addresses are lookup handles,** never stored (chat-core
+  `identity.ts`, `username@server`): a handle on a custom domain resolves
+  to the account that holds that address. The home server resolves its own
+  verified domains locally.
+- **Across servers, discovery uses DNS on the custom domain:** a TXT record
+  `_kutup.<domain>` naming the home server. It joins the domain wizard's
+  record list and the domain checks (as Proton lists its records). The
+  asking server then asks that home, which confirms it holds the domain,
+  verified, and returns the account.
+- **Identity stays the permanent account id and its signed binding:** DNS
+  is only discovery, so a forged record can't impersonate anyone; the usual
+  pins apply.
+- **The same lookup serves a single user on their own domain,** and
+  sign-in takes the organization address (O5).
+- **Not wipe-sensitive** (no stored format). The federation lookup change
+  ships when both servers update, after the wipe, with O5.
+
 ### 6. The other apps and federation
 
 - **Federation:** an organization is local to one server. Addresses on its

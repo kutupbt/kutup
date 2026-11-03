@@ -44,14 +44,34 @@ pub async fn usable_domain(state: &crate::AppState, id: uuid::Uuid) -> Result<bo
         return Ok(false);
     }
     let settings = settings::Settings::load(&state.pool).await?;
+    // Held by an active organization (docs/plans/organizations.md §2).
     let row: Option<store::Row> = sqlx::query_as(&format!(
-        "SELECT {} FROM mail_domains WHERE id = $1",
+        "SELECT {} FROM mail_domains
+          WHERE id = $1 AND organization_id IN (SELECT id FROM organizations WHERE state = 1)",
         store::COLUMNS
     ))
     .bind(id)
     .fetch_optional(&state.pool)
     .await?;
     Ok(row.is_some_and(|row| row.usable(&settings)))
+}
+
+/// Whether `account` is an enabled member of the organization holding the
+/// domain `id`: only then do its addresses there send.
+pub async fn member_of_holder(
+    state: &crate::AppState,
+    account: uuid::Uuid,
+    id: uuid::Uuid,
+) -> Result<bool, sqlx::Error> {
+    sqlx::query_scalar(
+        "SELECT EXISTS (SELECT 1 FROM mail_domains d
+                          JOIN organization_members m ON m.organization_id = d.organization_id
+                         WHERE d.id = $1 AND m.account_id = $2 AND m.state = 1)",
+    )
+    .bind(id)
+    .bind(account)
+    .fetch_one(&state.pool)
+    .await
 }
 
 /// Whether `domain` is a custom domain held here that takes mail now.
