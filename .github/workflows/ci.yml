@@ -211,6 +211,13 @@ jobs:
             -out nginx/certs/fullchain.pem \
             -subj /CN=localhost \
             -addext subjectAltName=DNS:localhost,DNS:account.localhost,DNS:drive.localhost,DNS:chat.localhost,DNS:office.localhost,DNS:editor.localhost,DNS:maps.localhost,DNS:photos.localhost,DNS:contacts.localhost,DNS:mail.localhost,DNS:pass.localhost,DNS:calendar.localhost,IP:127.0.0.1
+      # GitHub's runner image ships ~25 GB of toolchains these jobs never use
+      # (.NET, Android, GHC, CodeQL); the stack images and their build cache
+      # now outgrow the space left, so drop those first.
+      - name: Free runner disk
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
+          df -h /
       # The image builds keep Cargo's registry and target directories in
       # BuildKit cache mounts, which a fresh runner starts without. Carry
       # them between runs so only changed crates compile. Never fatal: a
@@ -333,6 +340,13 @@ jobs:
             -out nginx/certs/fullchain.pem \
             -subj /CN=localhost \
             -addext subjectAltName=DNS:localhost,DNS:account.localhost,DNS:drive.localhost,DNS:chat.localhost,DNS:office.localhost,DNS:editor.localhost,DNS:maps.localhost,DNS:photos.localhost,DNS:contacts.localhost,DNS:mail.localhost,DNS:pass.localhost,DNS:calendar.localhost,IP:127.0.0.1
+      # GitHub's runner image ships ~25 GB of toolchains these jobs never use
+      # (.NET, Android, GHC, CodeQL); the stack images and their build cache
+      # now outgrow the space left, so drop those first.
+      - name: Free runner disk
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
+          df -h /
       # The image builds keep Cargo's registry and target directories in
       # BuildKit cache mounts, which a fresh runner starts without. Carry
       # them between runs so only changed crates compile. Never fatal: a
@@ -426,6 +440,13 @@ jobs:
             -addext subjectAltName=DNS:mail.kutup.test,DNS:localhost,IP:127.0.0.1
       # The backend image's Cargo caches, carried between runs as the
       # browser gates do. Never fatal.
+      # GitHub's runner image ships ~25 GB of toolchains these jobs never use
+      # (.NET, Android, GHC, CodeQL); the stack images and their build cache
+      # now outgrow the space left, so drop those first.
+      - name: Free runner disk
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
+          df -h /
       - name: Restore image build caches
         id: image-build-cache
         continue-on-error: true
@@ -474,6 +495,13 @@ jobs:
         run: npm ci --prefix tests/e2e
       - name: Install Chromium
         run: npx --prefix tests/e2e playwright install --with-deps chromium
+      # GitHub's runner image ships ~25 GB of toolchains these jobs never use
+      # (.NET, Android, GHC, CodeQL); the stack images and their build cache
+      # now outgrow the space left, so drop those first.
+      - name: Free runner disk
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
+          df -h /
       - name: Restore image build caches
         id: image-build-cache
         continue-on-error: true
@@ -546,6 +574,13 @@ jobs:
         run: npx --prefix tests/e2e playwright install --with-deps chromium
       - name: Verify Docker Compose
         run: docker compose version
+      # GitHub's runner image ships ~25 GB of toolchains these jobs never use
+      # (.NET, Android, GHC, CodeQL); the stack images and their build cache
+      # now outgrow the space left, so drop those first.
+      - name: Free runner disk
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
+          df -h /
       # The image builds keep Cargo's registry and target directories in
       # BuildKit cache mounts, which a fresh runner starts without. Carry
       # them between runs so only changed crates compile. Never fatal: a
