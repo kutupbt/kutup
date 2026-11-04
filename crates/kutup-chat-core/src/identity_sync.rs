@@ -233,8 +233,14 @@ impl IdentityPinsSync {
                 .max(self.highest_seen + 1);
             // Rotation (docs/plans/w6-key-hierarchy.md) seals at the
             // account's current generation; until it exists, the first.
-            let sealed = identity_pins::seal(&self.key, kutup_crypto::account_record::MasterKeyGeneration::FIRST, &self.binding, next, &list)
-                .map_err(crypto)?;
+            let sealed = identity_pins::seal(
+                &self.key,
+                kutup_crypto::account_record::MasterKeyGeneration::FIRST,
+                &self.binding,
+                next,
+                &list,
+            )
+            .map_err(crypto)?;
             let write = IdentityPinsWrite {
                 base_revision: revision,
                 envelope: STANDARD.encode(sealed),
@@ -593,8 +599,16 @@ mod tests {
         let key = Zeroizing::new(MASTER);
         *server.stored.borrow_mut() = Some(IdentityPinsRecord {
             revision: 2_000_000_000_000,
-            envelope: STANDARD
-                .encode(identity_pins::seal(&key, kutup_crypto::account_record::MasterKeyGeneration::FIRST, OWNER, 2_000_000_000_000, &list).unwrap()),
+            envelope: STANDARD.encode(
+                identity_pins::seal(
+                    &key,
+                    kutup_crypto::account_record::MasterKeyGeneration::FIRST,
+                    OWNER,
+                    2_000_000_000_000,
+                    &list,
+                )
+                .unwrap(),
+            ),
         });
         // Chat still holds the old one: not verified from the list, quarantined.
         assert_eq!(

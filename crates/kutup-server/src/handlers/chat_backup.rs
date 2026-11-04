@@ -125,7 +125,7 @@ pub async fn provision(
         &request.root_envelope,
         account_record::AccountRecordPurpose::ChatBackupRoot,
     )
-        .map_err(|_| AppError::bad_request("invalid Chat backup root envelope"))?;
+    .map_err(|_| AppError::bad_request("invalid Chat backup root envelope"))?;
     account_record::inspect(&envelope)
         .map_err(|_| AppError::bad_request("invalid Chat backup root envelope"))?;
     let digest = request_digest(&request)?;

@@ -3849,7 +3849,7 @@ pub fn open_contact_card(
     let sealed = decode_canonical_base64(sealed_base64, "card")?;
     let (vcard, revision) =
         kutup_crypto::contact_card::open_card(&master_key, binding, uid, &sealed)
-        .map_err(|error| js_error(&error.to_string()))?;
+            .map_err(|error| js_error(&error.to_string()))?;
     let text =
         String::from_utf8(vcard.to_vec()).map_err(|_| js_error("contact card is not UTF-8"))?;
     revisioned(text, revision)

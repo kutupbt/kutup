@@ -4,10 +4,10 @@
 //! (kutup-crypto `mail_names`), bound to the account and the id the browser
 //! chose, so the server keeps ids, colours, order and the tree, never names.
 
-use kutup_crypto::mail_names::MailNameKind;
 use axum::extract::{Path, State};
 use axum::http::StatusCode;
 use axum::Json;
+use kutup_crypto::mail_names::MailNameKind;
 use serde::{Deserialize, Serialize};
 use sqlx::{Postgres, Transaction};
 use utoipa::ToSchema;

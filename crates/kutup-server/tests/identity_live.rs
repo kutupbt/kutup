@@ -152,7 +152,14 @@ fn identity_pins_sync_by_revision() {
     };
     assert_eq!(get().status(), StatusCode::NOT_FOUND);
     let seal = |revision: u64| {
-        b64(&identity_pins::seal(&key, kutup_crypto::account_record::MasterKeyGeneration::FIRST, &binding, revision, &list).unwrap())
+        b64(&identity_pins::seal(
+            &key,
+            kutup_crypto::account_record::MasterKeyGeneration::FIRST,
+            &binding,
+            revision,
+            &list,
+        )
+        .unwrap())
     };
 
     // A list is stored on top of the revision it started from (0: none yet),
