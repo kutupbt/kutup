@@ -67,6 +67,13 @@ site setting) and whether it carries a revision:
 | ContactCard | SHA-256 of the contact's UID (32 bytes) | padded to a multiple of 256 bytes, at most 512 KiB | yes |
 | MailName | the kind byte and the 16-byte id | padded to a multiple of 256 bytes, at most 400 bytes | yes |
 | IdentityPins | none (one list per account) | padded to a multiple of 256 bytes, at most 4 MiB | yes |
+| ChatGroupListEntry | `hashed_object` of the group id (32 bytes) | one length, at most 3972 bytes of plaintext | yes |
+| ChatContactListEntry | `hashed_object` of the contact's account (32 bytes) | one length, at most 1988 bytes of plaintext | yes |
+
+A hashed object is `HMAC(K_id, purpose ‖ id)` with `K_id` from the master key
+(`kutup/account-record/object-id/v1`), so the server stores an entry under an
+id it can't link to a group or a person. Vectors: `chat-group-list-v2.json`,
+`chat-contact-list-v2.json`.
 
 Every server write path checks a record with
 `account_record::validate_for(purpose, binding, object)` before storing it,
