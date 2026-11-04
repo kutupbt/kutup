@@ -120,11 +120,16 @@ fn check(input: &ContactInput, binding: &str, authority: &[u8; 32]) -> AppResult
     let signature = STANDARD
         .decode(&input.signature)
         .map_err(|_| AppError::bad_request("signature must be base64"))?;
-    let card = STANDARD
-        .decode(&input.card)
-        .map_err(|_| AppError::bad_request("card must be base64"))?;
-    let revision = contact_card::inspect_card(&card)
-        .map_err(|error| AppError::bad_request(error.to_string()))?;
+    use kutup_crypto::account_record::{self, AccountRecordPurpose};
+    let card = account_record::decode_record_b64(&input.card, AccountRecordPurpose::ContactCard)
+        .map_err(|_| AppError::bad_request("card is not a sealed contact card"))?;
+    // The card's revision first (its header's): the summary's signature binds
+    // it. Then the card is checked whole against the summary's contact.
+    let revision = account_record::inspect(&card)
+        .ok()
+        .filter(|header| header.purpose == AccountRecordPurpose::ContactCard)
+        .and_then(|header| header.revision)
+        .ok_or_else(|| AppError::bad_request("card is not a sealed contact card"))?;
     let summary = contact_card::verify_summary(
         input.summary.as_bytes(),
         &signature,
@@ -133,6 +138,8 @@ fn check(input: &ContactInput, binding: &str, authority: &[u8; 32]) -> AppResult
         authority,
     )
     .map_err(|error| AppError::bad_request(format!("summary: {error}")))?;
+    contact_card::validate_card(&card, binding, &summary.uid)
+        .map_err(|_| AppError::bad_request("card is not this contact's"))?;
     Ok(Checked {
         summary,
         summary_text: input.summary.clone(),

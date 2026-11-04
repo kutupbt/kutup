@@ -33,7 +33,8 @@ const NONCE_LEN: usize = 24;
 const LENGTH_LEN: usize = 4;
 const REVISION_LEN: usize = 8;
 const TAG_LEN: usize = 16;
-const MAX_CONTEXT_LEN: usize = 320;
+/// A key binding: a canonical UUID's 36 characters.
+const MAX_CONTEXT_LEN: usize = 36;
 /// The longest object id a record names.
 pub const MAX_OBJECT_LEN: usize = 64;
 const KEY_SALT: &[u8] = crate::labels::ACCOUNT_RECORD_V1;
@@ -97,6 +98,37 @@ impl TryFrom<u16> for AccountRecordSuiteId {
             ))),
         }
     }
+}
+
+/// The longest record of `purpose`, its largest header included.
+pub const fn max_record_len(purpose: AccountRecordPurpose) -> usize {
+    FIXED_PREFIX_LEN
+        + MAX_CONTEXT_LEN
+        + 1
+        + MAX_OBJECT_LEN
+        + REVISION_LEN
+        + COMMITMENT_LEN
+        + NONCE_LEN
+        + LENGTH_LEN
+        + purpose.policy().max_len
+        + TAG_LEN
+}
+
+/// The longest canonical base64 of a record of `purpose`: a server refuses a
+/// longer value before decoding it.
+pub const fn max_record_b64_len(purpose: AccountRecordPurpose) -> usize {
+    max_record_len(purpose).div_ceil(3) * 4
+}
+
+/// [`decode_canonical_b64`] for a record of `purpose`, refusing a value too
+/// long to be one before decoding it.
+pub fn decode_record_b64(value: &str, purpose: AccountRecordPurpose) -> Result<Vec<u8>> {
+    if value.len() > max_record_b64_len(purpose) {
+        return Err(CryptoError::InvalidInput(
+            "account-record is longer than its purpose allows".into(),
+        ));
+    }
+    decode_canonical_b64(value)
 }
 
 /// What a record is, in its authenticated header: a closed registry, one

@@ -1578,7 +1578,11 @@ pub async fn accept(
 ) -> AppResult<Json<MailForwarding>> {
     let user_id = trusted_uuid(&user.user_id)?;
     let public_key = base64(&req.public_key, "publicKey")?;
-    let envelope = base64(&req.private_key_envelope, "privateKeyEnvelope")?;
+    let envelope = account_record::decode_record_b64(
+        &req.private_key_envelope,
+        account_record::AccountRecordPurpose::MailAddressPrivateKey,
+    )
+    .map_err(|_| AppError::bad_request("privateKeyEnvelope is not an account envelope"))?;
     let mut tx = state.pool.begin().await?;
     let (id, side, current, forwardee_address_id) = lock(&mut tx, user_id, &id).await?;
     let forwardee_address_id = forwardee_address_id.filter(|_| side == Side::Forwardee);
