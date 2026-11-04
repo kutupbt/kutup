@@ -15,7 +15,7 @@ use axum::response::{IntoResponse, Response};
 use axum::Json;
 use base64::engine::general_purpose::STANDARD;
 use base64::Engine as _;
-use kutup_crypto::account_envelope::{self, AccountEnvelopePurpose};
+use kutup_crypto::account_record::{self, AccountRecordPurpose};
 use kutup_crypto::mail_key::{self, MailKeyEntryV1, SignedMailKeyListV1, FLAG_NOT_OBSOLETE};
 use serde::{Deserialize, Serialize};
 use sha1::{Digest as _, Sha1};
@@ -526,7 +526,7 @@ pub async fn add_key(
     let user_id = trusted_uuid(&user.user_id)?;
     let public_key = decode(&req.public_key, "publicKey")?;
     let envelope = decode(&req.private_key_envelope, "privateKeyEnvelope")?;
-    account_envelope::inspect(&envelope)
+    account_record::inspect(&envelope)
         .map_err(|_| AppError::bad_request("privateKeyEnvelope is not an account envelope"))?;
 
     // The address is the caller's row's (current, or an old one still
@@ -540,9 +540,9 @@ pub async fn add_key(
             .bind(user_id)
             .fetch_one(&mut *change.tx)
             .await?;
-    if account_envelope::validate_for(
+    if account_record::validate_for(
         &envelope,
-        AccountEnvelopePurpose::MailAddressPrivateKey,
+        AccountRecordPurpose::MailAddressPrivateKey,
         &binding,
         &[],
     )
@@ -608,9 +608,9 @@ pub(crate) async fn first_key(
     .bind(user_id)
     .fetch_one(&mut *conn)
     .await?;
-    if account_envelope::validate_for(
+    if account_record::validate_for(
         &envelope,
-        AccountEnvelopePurpose::MailAddressPrivateKey,
+        AccountRecordPurpose::MailAddressPrivateKey,
         &binding,
         &[],
     )

@@ -307,8 +307,8 @@ uses admits exactly N accounts however many sign up at once.
   "keyBinding": "<lowercase UUID v4 drawn by the client>",
   "opaqueRecord": "<base64 OPAQUE RegistrationUpload>",
   "opaqueServerKeyId": 1,
-  "masterKeyEnvelope": "<canonical base64 AccountEnvelopeV1>",
-  "recoveryKeyEnvelope": "<canonical base64 AccountEnvelopeV1>",
+  "masterKeyEnvelope": "<canonical base64 AccountRecordV1>",
+  "recoveryKeyEnvelope": "<canonical base64 AccountRecordV1>",
   "publicKey": "<base64>",
   "accountAuthorityPublicKey": "<base64 32 bytes>",
   "accountAuthorityKeyId": "<lowercase SHA-256 hex>",
@@ -452,7 +452,7 @@ malformed finalization is a `400`.
   "sessionId": "<uuid>",
   "userId": "<uuid>",
   "username": "alice",
-  "masterKeyEnvelope": "<canonical base64 AccountEnvelopeV1>",
+  "masterKeyEnvelope": "<canonical base64 AccountRecordV1>",
   "publicKey": "<base64>",
   "keyBinding": "<the account's key binding (a UUID v4)>",
   "isAdmin": false,
@@ -538,7 +538,7 @@ Fetch the encrypted recovery key bundle so the client can decrypt the master key
 **Response:**
 ```json
 {
-  "recoveryKeyEnvelope": "<canonical base64 AccountEnvelopeV1>",
+  "recoveryKeyEnvelope": "<canonical base64 AccountRecordV1>",
   "envelopeBinding": "<the account's key binding>"
 }
 ```
@@ -621,7 +621,7 @@ second one is refused (`403`), so it never serves as a password change.
   "keyBinding": "<the account's>",
   "opaqueRecord": "<base64>",
   "opaqueServerKeyId": 1,
-  "masterKeyEnvelope": "<canonical base64 AccountEnvelopeV1>"
+  "masterKeyEnvelope": "<canonical base64 AccountRecordV1>"
 }
 ```
 
@@ -1672,7 +1672,7 @@ no share between you; `400` for an envelope that does not match.
 Each account's email address is `username@<server name>`, with OpenPGP keys
 as Proton keeps address keys (`docs/plans/mail-address-keys.md`). The server
 never holds a private key: it stores the public key, the secret key sealed in
-an `AccountEnvelopeV1` under the master key (purpose `MailAddressPrivateKey`,
+an `AccountRecordV1` under the master key (purpose `MailAddressPrivateKey`,
 binding the address and fingerprint), and each address's signed key list
 (`MailKeyListV1`, signed by the account authority and hash-chained). Key flags
 use Proton's bits: `1` may verify, `2` may encrypt to, `4` mail not end-to-end
@@ -1703,7 +1703,7 @@ opening its mail). An account without a username has none.
   "keys": [{
     "id": "uuid", "fingerprint": "40 hex", "sha256Fingerprint": "64 hex",
     "publicKey": "base64 binary OpenPGP certificate",
-    "privateKeyEnvelope": "base64 AccountEnvelopeV1",
+    "privateKeyEnvelope": "base64 AccountRecordV1",
     "primary": true, "flags": 3, "createdAt": "RFC 3339", "forwarding": false
   }],
   "keyList": { "data": "base64 canonical MailKeyListV1", "signature": "base64 Ed25519" }
@@ -2709,7 +2709,7 @@ grant for that action.
 
 Vault secrets (docs/plans/pass.md, "Vault secrets"). A vault is a KeePass
 file in Drive with its own key; each person may keep, per vault they can
-open, that key sealed under their master key: an `AccountEnvelopeV1` with
+open, that key sealed under their master key: an `AccountRecordV1` with
 purpose `PassVaultSecret` (6) whose payload binds the vault's file id
 (`kutup_crypto::pass_vault`, vectors in
 `crates/kutup-crypto/tests/vectors/pass-vault-secret-v1.json`). Kutup Pass and

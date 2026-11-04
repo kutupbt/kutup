@@ -14,7 +14,7 @@ use base64::Engine;
 use crate::api::Client;
 use crate::commands::prompt_line;
 use kutup_crypto::{
-    account_envelope::{self, AccountEnvelopePurpose},
+    account_record::{self, AccountRecordPurpose},
     kdf, mnemonic,
 };
 
@@ -74,10 +74,10 @@ pub fn run(
 
     // A wrong phrase — or an unknown name, which the server answers with
     // deterministic fake data — fails to unwrap here, before anything changes.
-    let master_key = account_envelope::open_b64(
+    let master_key = account_record::open_b64(
         &pre.recovery_key_envelope,
         &entropy,
-        AccountEnvelopePurpose::RecoveryMasterKey,
+        AccountRecordPurpose::RecoveryMasterKey,
         &binding,
     )
     .map_err(|_| {

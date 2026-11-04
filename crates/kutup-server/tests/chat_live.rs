@@ -235,7 +235,7 @@ fn chat_backup_lifecycle(
     // The owner's current manifest sequence, which every segment names.
     manifest_sequence: u64,
 ) {
-    use kutup_crypto::account_envelope::{self, AccountEnvelopePurpose};
+    use kutup_crypto::account_record::{self, AccountRecordPurpose};
     use kutup_crypto::chat_backup::{
         self, ChatBackupContextV1, ChatBackupObjectContextV1, ChatBackupObjectPurposeV1,
         ChatBackupProtectionDomainV1, ChatBackupSuiteId,
@@ -286,11 +286,11 @@ fn chat_backup_lifecycle(
     let operation_id = Uuid::new_v4();
     let provision = ProvisionChatBackupRequestV1 {
         operation_id: operation_id.to_string(),
-        root_envelope: account_envelope::seal_b64(
+        root_envelope: account_record::seal_b64(
             &backup_root,
             master_key,
-            AccountEnvelopePurpose::ChatBackupRoot,
-            kutup_crypto::account_envelope::MasterKeyGeneration::FIRST,
+            AccountRecordPurpose::ChatBackupRoot,
+            kutup_crypto::account_record::MasterKeyGeneration::FIRST,
             binding,
         )
         .unwrap(),
@@ -314,11 +314,11 @@ fn chat_backup_lifecycle(
         .unwrap();
     assert_eq!(exact_retry.status(), StatusCode::OK);
     let mut changed_provision = provision.clone();
-    changed_provision.root_envelope = account_envelope::seal_b64(
+    changed_provision.root_envelope = account_record::seal_b64(
         &[0x92; 32],
         master_key,
-        AccountEnvelopePurpose::ChatBackupRoot,
-        kutup_crypto::account_envelope::MasterKeyGeneration::FIRST,
+        AccountRecordPurpose::ChatBackupRoot,
+        kutup_crypto::account_record::MasterKeyGeneration::FIRST,
         binding,
     )
     .unwrap();

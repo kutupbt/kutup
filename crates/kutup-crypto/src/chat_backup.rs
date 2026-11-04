@@ -1,7 +1,7 @@
 //! Canonical cryptographic framing for continuous E2EE Chat history.
 //!
 //! Backup keys are rooted in a random account secret wrapped with
-//! [`AccountEnvelopePurpose::ChatBackupRoot`](crate::account_envelope::AccountEnvelopePurpose::ChatBackupRoot).
+//! [`AccountRecordPurpose::ChatBackupRoot`](crate::account_record::AccountRecordPurpose::ChatBackupRoot).
 //! This module never accepts Direct, MLS, Drive, Chat-media, attachment-ledger,
 //! or device-transfer keys as substitutes.
 

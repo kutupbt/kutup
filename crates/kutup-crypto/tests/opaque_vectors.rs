@@ -166,14 +166,14 @@ fn write_vectors() {
     let envelope = old
         .seal_master_key(
             &[0x11; 32],
-            kutup_crypto::account_envelope::MasterKeyGeneration::FIRST,
+            kutup_crypto::account_record::MasterKeyGeneration::FIRST,
             BINDING,
         )
         .unwrap();
     let new_envelope = new
         .seal_master_key(
             &[0x11; 32],
-            kutup_crypto::account_envelope::MasterKeyGeneration::FIRST,
+            kutup_crypto::account_record::MasterKeyGeneration::FIRST,
             BINDING,
         )
         .unwrap();

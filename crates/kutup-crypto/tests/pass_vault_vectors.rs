@@ -58,7 +58,7 @@ fn fixed() -> Fixed {
 fn seal(f: &Fixed, secret: &VaultSecret) -> Vec<u8> {
     seal_vault_secret_with_nonce(
         &f.master,
-        kutup_crypto::account_envelope::MasterKeyGeneration::FIRST,
+        kutup_crypto::account_record::MasterKeyGeneration::FIRST,
         f.binding,
         f.file_id.as_bytes(),
         f.revision,
@@ -134,7 +134,7 @@ fn checked_in_vectors_hold() {
         // Another vault's id does not open it.
         assert!(open_vault_secret(&resealed, &f.master, f.binding, &[0; 16]).is_err());
         assert_eq!(
-            kutup_crypto::account_envelope::inspect(&resealed)
+            kutup_crypto::account_record::inspect(&resealed)
                 .unwrap()
                 .object_id,
             f.file_id.as_bytes()

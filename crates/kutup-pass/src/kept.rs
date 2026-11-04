@@ -9,9 +9,9 @@
 //! file is kept as its key element ([`key_file_secret`]). The format itself is
 //! `kutup_crypto::pass_vault`.
 
-use kutup_crypto::account_envelope;
-/// Which master key a kept key is sealed under (`account_envelope`).
-pub use kutup_crypto::account_envelope::MasterKeyGeneration;
+use kutup_crypto::account_record;
+/// Which master key a kept key is sealed under (`account_record`).
+pub use kutup_crypto::account_record::MasterKeyGeneration;
 use kutup_crypto::pass_vault::{open_vault_secret, seal_vault_secret, VaultSecret};
 use zeroize::Zeroizing;
 
@@ -125,7 +125,7 @@ pub fn reseal(
 ) -> Result<Vec<u8>, KeptError> {
     let (secret, _) = open_vault_secret(envelope, master_key, binding, from)?;
     // Under the same master key it opened with.
-    let generation = account_envelope::inspect(envelope)?.generation;
+    let generation = account_record::inspect(envelope)?.generation;
     Ok(seal_vault_secret(
         master_key, generation, binding, to, revision, &secret,
     )?)

@@ -12,7 +12,7 @@
 //!   KUTUP_LIVE_SERVER=http://localhost:3000 \
 //!     cargo test -p kutup-server --test pass_live -- --nocapture
 
-use kutup_crypto::account_envelope::{self, AccountEnvelopePurpose};
+use kutup_crypto::account_record::{self, AccountRecordPurpose};
 use kutup_crypto::pass_vault::{open_vault_secret, password_hash, seal_vault_secret, VaultSecret};
 use reqwest::blocking::Client;
 use reqwest::StatusCode;
@@ -36,7 +36,7 @@ fn sealed_for(user: &User, file_id: &str, password: &str) -> String {
     let id = uuid::Uuid::parse_str(file_id).unwrap();
     b64(&seal_vault_secret(
         &user.master_key,
-        kutup_crypto::account_envelope::MasterKeyGeneration::FIRST,
+        kutup_crypto::account_record::MasterKeyGeneration::FIRST,
         &user.binding,
         id.as_bytes(),
         next_revision(),
@@ -52,8 +52,8 @@ fn current_revision(c: &Client, base: &str, user: &User, file_id: &str) -> u64 {
         .find(|row| row["fileId"] == file_id)
         .map(|row| {
             let envelope =
-                account_envelope::decode_canonical_b64(row["envelope"].as_str().unwrap()).unwrap();
-            account_envelope::inspect(&envelope)
+                account_record::decode_canonical_b64(row["envelope"].as_str().unwrap()).unwrap();
+            account_record::inspect(&envelope)
                 .unwrap()
                 .revision
                 .unwrap()
@@ -163,7 +163,7 @@ fn vault_secrets() {
     assert_eq!(mine.len(), 1);
     assert_eq!(mine[0]["fileId"], vault.id.as_str());
     let envelope =
-        account_envelope::decode_canonical_b64(mine[0]["envelope"].as_str().unwrap()).unwrap();
+        account_record::decode_canonical_b64(mine[0]["envelope"].as_str().unwrap()).unwrap();
     let id = uuid::Uuid::parse_str(&vault.id).unwrap();
     let (opened, _) =
         open_vault_secret(&envelope, &owner.master_key, &owner.binding, id.as_bytes()).unwrap();
@@ -245,7 +245,7 @@ fn vault_secrets() {
     assert_eq!(late["revision"].as_u64(), Some(kept_now));
     let older = b64(&seal_vault_secret(
         &owner.master_key,
-        kutup_crypto::account_envelope::MasterKeyGeneration::FIRST,
+        kutup_crypto::account_record::MasterKeyGeneration::FIRST,
         &owner.binding,
         id.as_bytes(),
         kept_now,
@@ -279,11 +279,11 @@ fn vault_secrets() {
         ),
         StatusCode::BAD_REQUEST
     );
-    let other_purpose = account_envelope::seal_b64(
+    let other_purpose = account_record::seal_b64(
         &[1u8; 32],
         &owner.master_key,
-        AccountEnvelopePurpose::ChatBackupRoot,
-        kutup_crypto::account_envelope::MasterKeyGeneration::FIRST,
+        AccountRecordPurpose::ChatBackupRoot,
+        kutup_crypto::account_record::MasterKeyGeneration::FIRST,
         &owner.binding,
     )
     .unwrap();

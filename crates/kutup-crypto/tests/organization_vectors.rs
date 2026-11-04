@@ -10,7 +10,7 @@ use base64::engine::general_purpose::STANDARD;
 use base64::Engine as _;
 use serde::{Deserialize, Serialize};
 
-use kutup_crypto::account_envelope::MasterKeyGeneration;
+use kutup_crypto::account_record::MasterKeyGeneration;
 use kutup_crypto::account_ref::AccountRef;
 use kutup_crypto::identity::AccountIdentityKeysV1;
 use kutup_crypto::organization::{

@@ -2,10 +2,10 @@
 import 'fake-indexeddb/auto'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
-vi.mock('@kutup/crypto/accountEnvelope', () => ({
-  ACCOUNT_ENVELOPE_PURPOSE: { chatBackupRoot: 4 },
-  openAccountEnvelope: vi.fn(async () => new Uint8Array(32).fill(7)),
-  sealAccountEnvelope: vi.fn(async () => 'sealed-root'),
+vi.mock('@kutup/crypto/accountRecord', () => ({
+  ACCOUNT_RECORD_PURPOSE: { chatBackupRoot: 4 },
+  openAccountRecord: vi.fn(async () => new Uint8Array(32).fill(7)),
+  sealAccountRecord: vi.fn(async () => 'sealed-root'),
 }))
 
 vi.mock('@kutup/crypto/identity', () => ({

@@ -1,5 +1,5 @@
 import api from '@kutup/session/client'
-import { ACCOUNT_ENVELOPE_PURPOSE, openAccountEnvelope, sealAccountEnvelope } from '@kutup/crypto/accountEnvelope'
+import { ACCOUNT_RECORD_PURPOSE, openAccountRecord, sealAccountRecord } from '@kutup/crypto/accountRecord'
 import { fromBase64, toBase64 } from '@kutup/crypto/base64'
 import { exactBytes } from '@kutup/crypto/bytes'
 import { deriveAccountIdentityKeys } from '@kutup/crypto/identity'
@@ -454,10 +454,10 @@ export class ChatBackupCoordinator {
       if (!status.rootEnvelope || !status.signerAuthorization) {
         throw new Error('Chat backup status is incomplete')
       }
-      root = await openAccountEnvelope(
+      root = await openAccountRecord(
         status.rootEnvelope,
         options.masterKey,
-        ACCOUNT_ENVELOPE_PURPOSE.chatBackupRoot,
+        ACCOUNT_RECORD_PURPOSE.chatBackupRoot,
         options.envelopeBinding,
       )
       backupIncarnationId = status.signerAuthorization.backupIncarnationId
@@ -470,10 +470,10 @@ export class ChatBackupCoordinator {
         backupIncarnationId,
         BigInt(Math.floor(runtime.clock.now() / 1000)),
       ) as BackupAuthorization
-      const rootEnvelope = await sealAccountEnvelope(
+      const rootEnvelope = await sealAccountRecord(
         root,
         options.masterKey,
-        ACCOUNT_ENVELOPE_PURPOSE.chatBackupRoot,
+        ACCOUNT_RECORD_PURPOSE.chatBackupRoot,
         options.envelopeBinding,
       )
       status = await runtime.transport.provision({

@@ -3,7 +3,7 @@
 //! A vault is a KeePass file in Drive with its own composite key (a password,
 //! a key file, or both), so KeePass apps keep opening it. Kutup Pass and
 //! `kutup sync` unlock it with the Kutup sign-in, as Proton Pass does: the
-//! vault's key is kept in an [`account_envelope`] under the master key
+//! vault's key is kept in an [`account_record`] under the master key
 //! (purpose `PassVaultSecret`, the vault's file id as the header's object),
 //! one per person and vault, stored by the server and unreadable to it.
 //!
@@ -25,7 +25,7 @@
 use sha2::{Digest, Sha256};
 use zeroize::Zeroizing;
 
-use crate::account_envelope::{self, AccountEnvelopePurpose};
+use crate::account_record::{self, AccountRecordPurpose};
 use crate::error::{CryptoError, Result};
 
 const DOMAIN: &[u8] = crate::labels::PASS_VAULT_SECRET_V2;
@@ -189,16 +189,16 @@ fn take_value<'a>(rest: &mut &'a [u8]) -> Result<&'a [u8]> {
 /// account's key binding.
 pub fn seal_vault_secret(
     master_key: &[u8],
-    generation: account_envelope::MasterKeyGeneration,
+    generation: account_record::MasterKeyGeneration,
     binding: &str,
     file_id: &[u8; 16],
     revision: u64,
     secret: &VaultSecret,
 ) -> Result<Vec<u8>> {
-    account_envelope::seal_revision(
+    account_record::seal_revision(
         &payload(file_id, secret)?,
         master_key,
-        AccountEnvelopePurpose::PassVaultSecret,
+        AccountRecordPurpose::PassVaultSecret,
         generation,
         binding,
         file_id,
@@ -209,18 +209,18 @@ pub fn seal_vault_secret(
 /// [`seal_vault_secret`] with a fixed nonce, for checked-in vectors only.
 pub fn seal_vault_secret_with_nonce(
     master_key: &[u8],
-    generation: account_envelope::MasterKeyGeneration,
+    generation: account_record::MasterKeyGeneration,
     binding: &str,
     file_id: &[u8; 16],
     revision: u64,
     secret: &VaultSecret,
     nonce: &[u8],
 ) -> Result<Vec<u8>> {
-    account_envelope::seal_suite(
-        account_envelope::AccountEnvelopeSuiteId::XChaCha20Poly1305HkdfV2,
+    account_record::seal_suite(
+        account_record::AccountRecordSuiteId::V1,
         &payload(file_id, secret)?,
         master_key,
-        AccountEnvelopePurpose::PassVaultSecret,
+        AccountRecordPurpose::PassVaultSecret,
         generation,
         binding,
         file_id,
@@ -237,10 +237,10 @@ pub fn open_vault_secret(
     binding: &str,
     file_id: &[u8; 16],
 ) -> Result<(VaultSecret, u64)> {
-    let (plain, revision) = account_envelope::open_revision(
+    let (plain, revision) = account_record::open_revision(
         envelope,
         master_key,
-        AccountEnvelopePurpose::PassVaultSecret,
+        AccountRecordPurpose::PassVaultSecret,
         binding,
         file_id,
     )?;
@@ -324,7 +324,7 @@ mod tests {
         ] {
             let sealed = seal_vault_secret(
                 &MASTER,
-                crate::account_envelope::MasterKeyGeneration::FIRST,
+                crate::account_record::MasterKeyGeneration::FIRST,
                 BINDING,
                 &VAULT,
                 7,
@@ -345,17 +345,17 @@ mod tests {
         let s = VaultSecret::chosen(Some("parola-çğ"), None);
         let sealed = seal_vault_secret(
             &MASTER,
-            crate::account_envelope::MasterKeyGeneration::FIRST,
+            crate::account_record::MasterKeyGeneration::FIRST,
             BINDING,
             &VAULT,
             7,
             &s,
         )
         .unwrap();
-        let (plain, _) = account_envelope::open_revision(
+        let (plain, _) = account_record::open_revision(
             &sealed,
             &MASTER,
-            AccountEnvelopePurpose::PassVaultSecret,
+            AccountRecordPurpose::PassVaultSecret,
             BINDING,
             &VAULT,
         )
@@ -381,7 +381,7 @@ mod tests {
     fn bound_to_the_vault_the_account_and_the_key() {
         let sealed = seal_vault_secret(
             &MASTER,
-            crate::account_envelope::MasterKeyGeneration::FIRST,
+            crate::account_record::MasterKeyGeneration::FIRST,
             BINDING,
             &VAULT,
             7,
@@ -402,11 +402,11 @@ mod tests {
     /// Seals `payload` as a vault secret's envelope as is, to hand the
     /// parser what sealing never makes.
     fn sealed_raw(payload: &[u8]) -> Vec<u8> {
-        account_envelope::seal_revision(
+        account_record::seal_revision(
             payload,
             &MASTER,
-            AccountEnvelopePurpose::PassVaultSecret,
-            crate::account_envelope::MasterKeyGeneration::FIRST,
+            AccountRecordPurpose::PassVaultSecret,
+            crate::account_record::MasterKeyGeneration::FIRST,
             BINDING,
             &VAULT,
             7,
@@ -437,7 +437,7 @@ mod tests {
         .map(|s| {
             seal_vault_secret(
                 &MASTER,
-                crate::account_envelope::MasterKeyGeneration::FIRST,
+                crate::account_record::MasterKeyGeneration::FIRST,
                 BINDING,
                 &VAULT,
                 7,
@@ -493,7 +493,7 @@ mod tests {
         let seal = |s: &VaultSecret| {
             seal_vault_secret(
                 &MASTER,
-                crate::account_envelope::MasterKeyGeneration::FIRST,
+                crate::account_record::MasterKeyGeneration::FIRST,
                 BINDING,
                 &VAULT,
                 7,

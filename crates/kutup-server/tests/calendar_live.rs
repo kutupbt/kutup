@@ -41,7 +41,7 @@ fn owner(c: &Client, base: &str) -> Owner {
     let key = mail_key::generate_address_key(&address, now).unwrap();
     let envelope = mail_key::seal_address_key(
         &user.master_key,
-        kutup_crypto::account_envelope::MasterKeyGeneration::FIRST,
+        kutup_crypto::account_record::MasterKeyGeneration::FIRST,
         &user.binding,
         &address,
         &key.secret_key,

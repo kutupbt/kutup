@@ -22,7 +22,7 @@ use kutup_chat_proto::{
     UploadChatBackupMediaRequestV1, MAX_CHAT_BACKUP_BASE_CIPHERTEXT_BYTES,
     MAX_CHAT_BACKUP_PAGE_SEGMENTS,
 };
-use kutup_crypto::account_envelope::{self, AccountEnvelopePurpose};
+use kutup_crypto::account_record::{self, AccountRecordPurpose};
 use kutup_crypto::chat_backup::{
     self, ChatBackupObjectPurposeV1, ChatBackupProtectionDomainV1, ChatBackupSuiteId,
 };
@@ -121,9 +121,9 @@ pub async fn provision(
         "backup incarnation id",
         &request.signer_authorization.backup_incarnation_id,
     )?;
-    let envelope = account_envelope::decode_canonical_b64(&request.root_envelope)
+    let envelope = account_record::decode_canonical_b64(&request.root_envelope)
         .map_err(|_| AppError::bad_request("invalid Chat backup root envelope"))?;
-    account_envelope::inspect(&envelope)
+    account_record::inspect(&envelope)
         .map_err(|_| AppError::bad_request("invalid Chat backup root envelope"))?;
     let digest = request_digest(&request)?;
     let authorization_digest = request
@@ -142,9 +142,9 @@ pub async fn provision(
     let (binding, account_incarnation_id, authority_public_key, authority_key_id) = user_row;
     // The one check every stored account envelope passes: its purpose, this
     // account's key binding, no object.
-    if account_envelope::validate_for(
+    if account_record::validate_for(
         &envelope,
-        AccountEnvelopePurpose::ChatBackupRoot,
+        AccountRecordPurpose::ChatBackupRoot,
         &binding,
         &[],
     )

@@ -8,7 +8,7 @@ toolchain or libFuzzer dependency.
 
 The targets are:
 
-- `account_envelope_parser`: strict suite/purpose/context/length parsing plus
+- `account_record_parser`: strict suite/purpose/context/length parsing plus
   authenticated open attempts for every V1 account-envelope purpose;
 - `drive_envelope_parser`: strict suite/purpose/UUID/epoch/revision/length
   parsing and authenticated open attempts for every V1 Drive-envelope purpose,
@@ -41,7 +41,7 @@ Install `cargo-fuzz`, then run the targets with a nightly toolchain:
 ```sh
 cargo install cargo-fuzz
 cd fuzz
-cargo +nightly fuzz run account_envelope_parser -- -max_len=8192
+cargo +nightly fuzz run account_record_parser -- -max_len=8192
 cargo +nightly fuzz run drive_envelope_parser -- -max_len=131072
 cargo +nightly fuzz run profile_envelope_parser -- -max_len=1048576
 cargo +nightly fuzz run account_policy_parsers -- -max_len=2097152

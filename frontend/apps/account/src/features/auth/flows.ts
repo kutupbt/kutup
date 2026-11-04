@@ -4,10 +4,10 @@
 // session layer, which activates and persists them for this origin.
 
 import {
-  ACCOUNT_ENVELOPE_PURPOSE,
+  ACCOUNT_RECORD_PURPOSE,
   driveKeysOf,
   generateAccountKeySet,
-  openAccountEnvelope,
+  openAccountRecord,
   rebindAccountKeySet,
   toBase64,
   deriveRecoveryAuthProof,
@@ -365,10 +365,10 @@ export async function recoverAccount(name: string, mnemonic: string, newPassword
   const binding = data.envelopeBinding
   const { decodeMnemonic } = await import('@kutup/crypto/mnemonic')
   const recoveryKey = decodeMnemonic(normalizeMnemonic(mnemonic))
-  const masterKey = await openAccountEnvelope(
+  const masterKey = await openAccountRecord(
     data.recoveryKeyEnvelope,
     recoveryKey,
-    ACCOUNT_ENVELOPE_PURPOSE.recoveryMasterKey,
+    ACCOUNT_RECORD_PURPOSE.recoveryMasterKey,
     binding,
   )
   try {

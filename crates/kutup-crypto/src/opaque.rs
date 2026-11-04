@@ -39,7 +39,7 @@ use opaque_ke::{
 use sha2::Sha512;
 use zeroize::{Zeroize, Zeroizing};
 
-use crate::account_envelope::{self, AccountEnvelopePurpose};
+use crate::account_record::{self, AccountRecordPurpose};
 use crate::error::{CryptoError, Result};
 
 /// The suite number stored with each account's record.
@@ -162,13 +162,13 @@ impl ExportKey {
     pub fn seal_master_key(
         &self,
         master_key: &[u8; 32],
-        generation: account_envelope::MasterKeyGeneration,
+        generation: account_record::MasterKeyGeneration,
         key_binding: &str,
     ) -> Result<String> {
-        account_envelope::seal_b64(
+        account_record::seal_b64(
             master_key,
             self.master_key_kek(key_binding)?.as_slice(),
-            AccountEnvelopePurpose::PasswordMasterKey,
+            AccountRecordPurpose::PasswordMasterKey,
             generation,
             key_binding,
         )
@@ -180,10 +180,10 @@ impl ExportKey {
         envelope: &str,
         key_binding: &str,
     ) -> Result<Zeroizing<[u8; 32]>> {
-        let opened = Zeroizing::new(account_envelope::open_b64(
+        let opened = Zeroizing::new(account_record::open_b64(
             envelope,
             self.master_key_kek(key_binding)?.as_slice(),
-            AccountEnvelopePurpose::PasswordMasterKey,
+            AccountRecordPurpose::PasswordMasterKey,
             key_binding,
         )?);
         let key: [u8; 32] =
@@ -602,7 +602,7 @@ mod tests {
         let envelope = export
             .seal_master_key(
                 &[9u8; 32],
-                crate::account_envelope::MasterKeyGeneration::FIRST,
+                crate::account_record::MasterKeyGeneration::FIRST,
                 BINDING,
             )
             .unwrap();
@@ -694,7 +694,7 @@ mod tests {
         let old_envelope = old
             .seal_master_key(
                 &[5u8; 32],
-                crate::account_envelope::MasterKeyGeneration::FIRST,
+                crate::account_record::MasterKeyGeneration::FIRST,
                 BINDING,
             )
             .unwrap();
@@ -703,7 +703,7 @@ mod tests {
         let envelope = new
             .seal_master_key(
                 &master,
-                crate::account_envelope::MasterKeyGeneration::FIRST,
+                crate::account_record::MasterKeyGeneration::FIRST,
                 BINDING,
             )
             .unwrap();

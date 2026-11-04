@@ -183,7 +183,7 @@ fn forget(profile: &str, json: bool, file_id: &str, force: bool) -> Result<()> {
             .into_iter()
             .find(|row| row.file_id == file_id)
         {
-            let generated = kutup_crypto::account_envelope::decode_canonical_b64(&row.envelope)
+            let generated = kutup_crypto::account_record::decode_canonical_b64(&row.envelope)
                 .ok()
                 .zip(uuid::Uuid::parse_str(file_id).ok())
                 .and_then(|(envelope, id)| {
@@ -228,7 +228,7 @@ fn show_key(profile: &str, json: bool, file_id: &str) -> Result<()> {
         .into_iter()
         .find(|row| row.file_id == file_id)
         .ok_or_else(|| anyhow::anyhow!("your account keeps no key for vault {file_id}"))?;
-    let envelope = kutup_crypto::account_envelope::decode_canonical_b64(&row.envelope)?;
+    let envelope = kutup_crypto::account_record::decode_canonical_b64(&row.envelope)?;
     let id = uuid::Uuid::parse_str(file_id).context("a vault's file id is a UUID")?;
     let kept = kutup_pass::kept::open(
         &envelope,

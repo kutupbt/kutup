@@ -17,7 +17,7 @@ use axum::response::{IntoResponse, Response};
 use axum::Json;
 use base64::engine::general_purpose::STANDARD;
 use base64::Engine as _;
-use kutup_crypto::account_envelope::{self, AccountEnvelopePurpose};
+use kutup_crypto::account_record::{self, AccountRecordPurpose};
 use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;
 use utoipa::ToSchema;
@@ -124,7 +124,7 @@ pub async fn list_vault_secrets(
         } else {
             VaultSecretState::Open
         };
-        let revision = account_envelope::inspect(&envelope)
+        let revision = account_record::inspect(&envelope)
             .ok()
             .and_then(|header| header.revision)
             .map(revisions::stored)
@@ -251,7 +251,7 @@ pub async fn put_vault_secret(
 /// The revision of a stored vault secret (0 for one without, which a stored
 /// one never is).
 pub(crate) fn revision_of(envelope: &[u8]) -> AppResult<i64> {
-    account_envelope::inspect(envelope)
+    account_record::inspect(envelope)
         .ok()
         .and_then(|header| header.revision)
         .map(revisions::stored)
@@ -271,13 +271,13 @@ fn checked_envelope(b64: &str, binding: &str, file_id: Uuid) -> AppResult<(Vec<u
     if envelope.len() > MAX_ENVELOPE_BYTES {
         return Err(AppError::bad_request("envelope is too large"));
     }
-    account_envelope::inspect(&envelope)
+    account_record::inspect(&envelope)
         .map_err(|_| AppError::bad_request("envelope is not an account envelope"))?;
     // The one check every stored account envelope passes: its purpose, this
     // account's key binding, this vault.
-    let header = account_envelope::validate_for(
+    let header = account_record::validate_for(
         &envelope,
-        AccountEnvelopePurpose::PassVaultSecret,
+        AccountRecordPurpose::PassVaultSecret,
         binding,
         file_id.as_bytes(),
     )
@@ -643,7 +643,7 @@ mod tests {
         STANDARD.encode(
             seal_vault_secret(
                 &[7u8; 32],
-                kutup_crypto::account_envelope::MasterKeyGeneration::FIRST,
+                kutup_crypto::account_record::MasterKeyGeneration::FIRST,
                 binding,
                 &[1u8; 16],
                 5,
@@ -669,11 +669,11 @@ mod tests {
         // Sealed for another vault.
         assert!(checked_envelope(&sealed(ID), ID, Uuid::from_bytes([2u8; 16])).is_err());
         let other_purpose = STANDARD.encode(
-            account_envelope::seal(
+            account_record::seal(
                 &[1u8; 32],
                 &[7u8; 32],
-                AccountEnvelopePurpose::ChatBackupRoot,
-                kutup_crypto::account_envelope::MasterKeyGeneration::FIRST,
+                AccountRecordPurpose::ChatBackupRoot,
+                kutup_crypto::account_record::MasterKeyGeneration::FIRST,
                 ID,
             )
             .unwrap(),

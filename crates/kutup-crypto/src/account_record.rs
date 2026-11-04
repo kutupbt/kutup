@@ -1,17 +1,23 @@
-//! Typed, context-bound envelopes for persistent account secrets.
+//! The one envelope for every account-private sealed value
+//! (`AccountRecordV1`, docs/plans/w1-account-record.md).
 //!
 //! The complete wire value is stored as one canonical base64 string. The
 //! header is authenticated as AEAD associated data, so a server-controlled
-//! database cannot relocate a wrap between accounts, purposes or objects.
+//! database cannot relocate a record between accounts, purposes or objects,
+//! or pass an older revision as newer:
 //!
-//! Suite 2 (docs/plans/account-identity.md, review H2) derives a separate
-//! AEAD key per envelope from the wrapping key (a password's key-encryption
-//! key, the recovery entropy, the master key) with HKDF-SHA256 over the
-//! purpose, the binding and the object, so no long-lived key is ever used
-//! raw, and binds the account's key binding and, where one secret of a
-//! purpose exists per object, that object's id. Suite 1 (the wrapping key as
-//! the AEAD key, bound to the sign-in email) is no longer read or written:
-//! no account from before carries over (the private beta was reset).
+//! ```text
+//! magic "KUTPAR1\0" ‖ suite u16 ‖ purpose u16 ‖ master-key generation u32 ‖
+//! u16 len ‖ key binding ‖ u8 len ‖ object ‖ [revision u64] ‖
+//! nonce 24 ‖ ciphertext length u32 ‖ ciphertext
+//! ```
+//!
+//! Each record has its own AEAD key, derived from the wrapping key (a
+//! password's key-encryption key, the recovery entropy, the master key) with
+//! the suite's KDF over the header before the nonce, so no long-lived key is
+//! ever used raw. A purpose's policy fixes its object, revision, padding and
+//! maximum length: these define the format, the same on every server and in
+//! every client, and are never site settings.
 
 use crate::primitives::{Aead, Kdf, Suite};
 use base64::Engine as _;
@@ -20,19 +26,18 @@ use zeroize::Zeroizing;
 use crate::error::{CryptoError, Result};
 pub use crate::padding::Length;
 
-const MAGIC: &[u8; 8] = b"KUTPAE2\0";
+const MAGIC: &[u8; 8] = b"KUTPAR1\0";
 const GENERATION_LEN: usize = 4;
-const FIXED_PREFIX_LEN: usize = MAGIC.len() + 2 + 1 + 1 + GENERATION_LEN + 2;
+const FIXED_PREFIX_LEN: usize = MAGIC.len() + 2 + 2 + GENERATION_LEN + 2;
 const NONCE_LEN: usize = 24;
 const LENGTH_LEN: usize = 4;
 const REVISION_LEN: usize = 8;
 const TAG_LEN: usize = 16;
 const MAX_CONTEXT_LEN: usize = 320;
-/// The longest object id a suite-2 envelope names.
+/// The longest object id a record names.
 pub const MAX_OBJECT_LEN: usize = 64;
-const MAX_PLAINTEXT_LEN: usize = 4096;
-const V2_KEY_SALT: &[u8] = crate::labels::ACCOUNT_ENVELOPE_V2;
-const V2_KEY_INFO: &[u8] = crate::labels::ACCOUNT_ENVELOPE_KEY_V2;
+const KEY_SALT: &[u8] = crate::labels::ACCOUNT_RECORD_V1;
+const KEY_INFO: &[u8] = crate::labels::ACCOUNT_RECORD_KEY_V1;
 
 /// Which master key an account secret belongs to: the generation of the MK
 /// a password or recovery wrap holds, or of the MK that sealed any other
@@ -63,37 +68,39 @@ impl MasterKeyGeneration {
     }
 }
 
-/// Closed registry for account-secret envelope encryption (suite 1 retired).
+/// Closed registry of account-record suites.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[repr(u16)]
-pub enum AccountEnvelopeSuiteId {
-    /// A per-envelope AEAD key (HKDF-SHA256) and an object id.
-    XChaCha20Poly1305HkdfV2 = 2,
+pub enum AccountRecordSuiteId {
+    /// The primitives' suite V1: a per-record key from HKDF-SHA256 over the
+    /// header, XChaCha20-Poly1305.
+    V1 = 1,
 }
 
-impl AccountEnvelopeSuiteId {
+impl AccountRecordSuiteId {
     pub const fn as_u16(self) -> u16 {
         self as u16
     }
 }
 
-impl TryFrom<u16> for AccountEnvelopeSuiteId {
+impl TryFrom<u16> for AccountRecordSuiteId {
     type Error = CryptoError;
 
     fn try_from(value: u16) -> Result<Self> {
         match value {
-            2 => Ok(Self::XChaCha20Poly1305HkdfV2),
+            1 => Ok(Self::V1),
             _ => Err(CryptoError::InvalidInput(format!(
-                "unknown account-envelope suite {value}"
+                "unknown account-record suite {value}"
             ))),
         }
     }
 }
 
-/// The secret's purpose is part of the authenticated header.
+/// What a record is, in its authenticated header: a closed registry, one
+/// line per kind of account-private value.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-#[repr(u8)]
-pub enum AccountEnvelopePurpose {
+#[repr(u16)]
+pub enum AccountRecordPurpose {
     PasswordMasterKey = 1,
     RecoveryMasterKey = 2,
     // 3 was the Drive X-Wing private key, which is derived from the master
@@ -129,11 +136,14 @@ pub struct PurposePolicy {
     /// A secret that is replaced over time: its envelopes carry a revision
     /// in the authenticated header, so an older one cannot pass as newer.
     pub mutable: bool,
+    /// The longest padded plaintext a record of the purpose holds. A format
+    /// limit, not a setting (see the module doc).
+    pub max_len: usize,
 }
 
-impl AccountEnvelopePurpose {
-    pub const fn as_u8(self) -> u8 {
-        self as u8
+impl AccountRecordPurpose {
+    pub const fn as_u16(self) -> u16 {
+        self as u16
     }
 
     pub const fn policy(self) -> PurposePolicy {
@@ -141,6 +151,7 @@ impl AccountEnvelopePurpose {
             object: ObjectPolicy::None,
             length: Length::Exact(32),
             mutable: false,
+            max_len: 32,
         };
         match self {
             Self::PasswordMasterKey | Self::RecoveryMasterKey | Self::ChatBackupRoot => KEY,
@@ -149,6 +160,7 @@ impl AccountEnvelopePurpose {
                 object: ObjectPolicy::None,
                 length: Length::Bucket(256),
                 mutable: false,
+                max_len: 4096,
             },
             // One per vault (its Drive file id), replaced when the vault's
             // key changes; every one the same length, so the size does not
@@ -157,12 +169,14 @@ impl AccountEnvelopePurpose {
                 object: ObjectPolicy::Required(16),
                 length: Length::Fixed(crate::pass_vault::MAX_PAYLOAD_LEN + 1),
                 mutable: true,
+                max_len: crate::pass_vault::MAX_PAYLOAD_LEN + 1,
             },
             // One per organization key, named by its id.
             Self::OrganizationPrivateKey => PurposePolicy {
                 object: ObjectPolicy::Required(32),
                 length: Length::Exact(32),
                 mutable: false,
+                max_len: 32,
             },
         }
     }
@@ -178,10 +192,10 @@ impl AccountEnvelopePurpose {
     ];
 }
 
-impl TryFrom<u8> for AccountEnvelopePurpose {
+impl TryFrom<u16> for AccountRecordPurpose {
     type Error = CryptoError;
 
-    fn try_from(value: u8) -> Result<Self> {
+    fn try_from(value: u16) -> Result<Self> {
         match value {
             1 => Ok(Self::PasswordMasterKey),
             2 => Ok(Self::RecoveryMasterKey),
@@ -190,16 +204,16 @@ impl TryFrom<u8> for AccountEnvelopePurpose {
             6 => Ok(Self::PassVaultSecret),
             7 => Ok(Self::OrganizationPrivateKey),
             _ => Err(CryptoError::InvalidInput(format!(
-                "unknown account-envelope purpose {value}"
+                "unknown account-record purpose {value}"
             ))),
         }
     }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct AccountEnvelopeHeader {
-    pub suite: AccountEnvelopeSuiteId,
-    pub purpose: AccountEnvelopePurpose,
+pub struct AccountRecordHeader {
+    pub suite: AccountRecordSuiteId,
+    pub purpose: AccountRecordPurpose,
     /// The master key the secret belongs to.
     pub generation: MasterKeyGeneration,
     /// What the account is bound by: its key binding, canonical.
@@ -213,7 +227,7 @@ pub struct AccountEnvelopeHeader {
 }
 
 struct ParsedEnvelope<'a> {
-    header: AccountEnvelopeHeader,
+    header: AccountRecordHeader,
     aad: &'a [u8],
     nonce: &'a [u8],
     ciphertext: &'a [u8],
@@ -225,12 +239,12 @@ pub fn canonical_binding(value: &str) -> Result<String> {
     // a name, an address or any other string is refused on seal and open.
     crate::key_binding::check(value)
         .map(str::to_owned)
-        .map_err(|_| CryptoError::InvalidInput("account-envelope binding is invalid".into()))
+        .map_err(|_| CryptoError::InvalidInput("account-record binding is invalid".into()))
 }
 
 /// Refuses an object id or revision the purpose does not take.
 fn check_shape(
-    purpose: AccountEnvelopePurpose,
+    purpose: AccountRecordPurpose,
     object_id: &[u8],
     revision: Option<u64>,
 ) -> Result<()> {
@@ -241,22 +255,22 @@ fn check_shape(
     };
     if !object_ok || object_id.len() > MAX_OBJECT_LEN {
         return Err(CryptoError::InvalidInput(
-            "account-envelope object id does not fit its purpose".into(),
+            "account-record object id does not fit its purpose".into(),
         ));
     }
     match (policy.mutable, revision) {
         (true, Some(revision)) if revision > 0 => Ok(()),
         (false, None) => Ok(()),
         _ => Err(CryptoError::InvalidInput(
-            "account-envelope revision does not fit its purpose".into(),
+            "account-record revision does not fit its purpose".into(),
         )),
     }
 }
 
 #[allow(clippy::too_many_arguments)]
 fn build_header(
-    suite: AccountEnvelopeSuiteId,
-    purpose: AccountEnvelopePurpose,
+    suite: AccountRecordSuiteId,
+    purpose: AccountRecordPurpose,
     generation: MasterKeyGeneration,
     binding: &str,
     object_id: &[u8],
@@ -265,7 +279,7 @@ fn build_header(
     ciphertext_len: u32,
 ) -> Result<Vec<u8>> {
     let context_len = u16::try_from(binding.len())
-        .map_err(|_| CryptoError::InvalidInput("account-envelope context is too long".into()))?;
+        .map_err(|_| CryptoError::InvalidInput("account-record context is too long".into()))?;
     let mut header = Vec::with_capacity(
         FIXED_PREFIX_LEN
             + binding.len()
@@ -277,8 +291,7 @@ fn build_header(
     );
     header.extend_from_slice(MAGIC);
     header.extend_from_slice(&suite.as_u16().to_be_bytes());
-    header.push(purpose.as_u8());
-    header.push(0); // reserved; non-zero is rejected to keep the encoding canonical
+    header.extend_from_slice(&purpose.as_u16().to_be_bytes());
     header.extend_from_slice(&generation.get().to_be_bytes());
     header.extend_from_slice(&context_len.to_be_bytes());
     header.extend_from_slice(binding.as_bytes());
@@ -292,51 +305,31 @@ fn build_header(
     Ok(header)
 }
 
-/// The AEAD key of an envelope: derived from the wrapping key for this
-/// purpose, binding and object alone.
-fn aead_key(
-    suite: AccountEnvelopeSuiteId,
-    key: &[u8],
-    purpose: AccountEnvelopePurpose,
-    binding: &str,
-    object_id: &[u8],
-) -> Result<Zeroizing<[u8; 32]>> {
+/// A record's AEAD key: derived from the wrapping key over the header up to
+/// the nonce (`keyed`), so every record of another purpose, account, object,
+/// generation or revision has a key of its own.
+fn aead_key(key: &[u8], keyed: &[u8]) -> Result<Zeroizing<[u8; 32]>> {
     let mut out = Zeroizing::new([0u8; 32]);
-    match suite {
-        AccountEnvelopeSuiteId::XChaCha20Poly1305HkdfV2 => {
-            let mut info =
-                Vec::with_capacity(V2_KEY_INFO.len() + 4 + binding.len() + object_id.len());
-            info.extend_from_slice(V2_KEY_INFO);
-            info.push(purpose.as_u8());
-            info.extend_from_slice(&(binding.len() as u16).to_be_bytes());
-            info.extend_from_slice(binding.as_bytes());
-            info.push(object_id.len() as u8);
-            info.extend_from_slice(object_id);
-            Kdf::new(Suite::V1, V2_KEY_SALT, key)
-                .expand(&info, out.as_mut_slice())
-                .map_err(|_| CryptoError::Backend("account-envelope key".into()))?;
-        }
-    }
+    let mut info = Vec::with_capacity(KEY_INFO.len() + keyed.len());
+    info.extend_from_slice(KEY_INFO);
+    info.extend_from_slice(keyed);
+    Kdf::new(Suite::V1, KEY_SALT, key)
+        .expand(&info, out.as_mut_slice())
+        .map_err(|_| CryptoError::Backend("account-record key".into()))?;
     Ok(out)
 }
 
-/// A suite-2 envelope's AEAD key, as derived for it: for checked-in vectors
-/// only (they pin this intermediate step).
-pub fn v2_aead_key_for_vectors(
-    key: &[u8],
-    purpose: AccountEnvelopePurpose,
-    binding: &str,
-    object_id: &[u8],
-) -> Result<[u8; 32]> {
+/// The header up to the nonce: what a record's key is derived over.
+fn keyed_part(header: &[u8]) -> &[u8] {
+    &header[..header.len() - NONCE_LEN - LENGTH_LEN]
+}
+
+/// A record's AEAD key, as derived for it: for checked-in vectors only
+/// (they pin this intermediate step).
+pub fn aead_key_for_vectors(key: &[u8], record: &[u8]) -> Result<[u8; 32]> {
     check_key(key)?;
-    let binding = canonical_binding(binding)?;
-    Ok(*aead_key(
-        AccountEnvelopeSuiteId::XChaCha20Poly1305HkdfV2,
-        key,
-        purpose,
-        &binding,
-        object_id,
-    )?)
+    let parsed = parse(record)?;
+    Ok(*aead_key(key, keyed_part(parsed.aad))?)
 }
 
 fn check_key(key: &[u8]) -> Result<()> {
@@ -360,7 +353,7 @@ fn random_nonce() -> [u8; NONCE_LEN] {
 pub fn seal(
     plaintext: &[u8],
     key: &[u8],
-    purpose: AccountEnvelopePurpose,
+    purpose: AccountRecordPurpose,
     generation: MasterKeyGeneration,
     binding: &str,
 ) -> Result<Vec<u8>> {
@@ -371,13 +364,13 @@ pub fn seal(
 pub fn seal_object(
     plaintext: &[u8],
     key: &[u8],
-    purpose: AccountEnvelopePurpose,
+    purpose: AccountRecordPurpose,
     generation: MasterKeyGeneration,
     binding: &str,
     object_id: &[u8],
 ) -> Result<Vec<u8>> {
     seal_suite(
-        AccountEnvelopeSuiteId::XChaCha20Poly1305HkdfV2,
+        AccountRecordSuiteId::V1,
         plaintext,
         key,
         purpose,
@@ -394,14 +387,14 @@ pub fn seal_object(
 pub fn seal_revision(
     plaintext: &[u8],
     key: &[u8],
-    purpose: AccountEnvelopePurpose,
+    purpose: AccountRecordPurpose,
     generation: MasterKeyGeneration,
     binding: &str,
     object_id: &[u8],
     revision: u64,
 ) -> Result<Vec<u8>> {
     seal_suite(
-        AccountEnvelopeSuiteId::XChaCha20Poly1305HkdfV2,
+        AccountRecordSuiteId::V1,
         plaintext,
         key,
         purpose,
@@ -417,13 +410,13 @@ pub fn seal_revision(
 pub fn seal_with_nonce(
     plaintext: &[u8],
     key: &[u8],
-    purpose: AccountEnvelopePurpose,
+    purpose: AccountRecordPurpose,
     generation: MasterKeyGeneration,
     binding: &str,
     nonce: &[u8],
 ) -> Result<Vec<u8>> {
     seal_suite(
-        AccountEnvelopeSuiteId::XChaCha20Poly1305HkdfV2,
+        AccountRecordSuiteId::V1,
         plaintext,
         key,
         purpose,
@@ -438,10 +431,10 @@ pub fn seal_with_nonce(
 /// Any suite, object, revision and nonce: for checked-in vectors only.
 #[allow(clippy::too_many_arguments)]
 pub fn seal_suite(
-    suite: AccountEnvelopeSuiteId,
+    suite: AccountRecordSuiteId,
     plaintext: &[u8],
     key: &[u8],
-    purpose: AccountEnvelopePurpose,
+    purpose: AccountRecordPurpose,
     generation: MasterKeyGeneration,
     binding: &str,
     object_id: &[u8],
@@ -451,9 +444,9 @@ pub fn seal_suite(
     check_key(key)?;
     check_shape(purpose, object_id, revision)?;
     let padded = Zeroizing::new(purpose.policy().length.pad(plaintext)?);
-    if padded.is_empty() || padded.len() > MAX_PLAINTEXT_LEN {
+    if padded.is_empty() || padded.len() > purpose.policy().max_len {
         return Err(CryptoError::InvalidInput(
-            "account-envelope plaintext length is invalid".into(),
+            "account-record plaintext length is invalid".into(),
         ));
     }
     let nonce: [u8; NONCE_LEN] = nonce.try_into().map_err(|_| CryptoError::InvalidLength {
@@ -462,7 +455,7 @@ pub fn seal_suite(
     })?;
     let binding = canonical_binding(binding)?;
     let ciphertext_len = u32::try_from(padded.len() + TAG_LEN)
-        .map_err(|_| CryptoError::InvalidInput("account-envelope plaintext is too long".into()))?;
+        .map_err(|_| CryptoError::InvalidInput("account-record plaintext is too long".into()))?;
     let header = build_header(
         suite,
         purpose,
@@ -473,10 +466,10 @@ pub fn seal_suite(
         &nonce,
         ciphertext_len,
     )?;
-    let aead = aead_key(suite, key, purpose, &binding, object_id)?;
+    let aead = aead_key(key, keyed_part(&header))?;
     let ciphertext = Aead::new(Suite::V1, aead.as_ref())?
         .seal_with_nonce(&nonce, &header, &padded)
-        .map_err(|_| CryptoError::Backend("account-envelope seal".into()))?;
+        .map_err(|_| CryptoError::Backend("account-record seal".into()))?;
     debug_assert_eq!(ciphertext.len(), ciphertext_len as usize);
     let mut envelope = header;
     envelope.extend_from_slice(&ciphertext);
@@ -491,14 +484,14 @@ pub fn seal_suite(
 pub fn seal_unchecked_for_vectors(
     plaintext: &[u8],
     key: &[u8],
-    purpose: AccountEnvelopePurpose,
+    purpose: AccountRecordPurpose,
     generation: MasterKeyGeneration,
     binding: &str,
     object_id: &[u8],
     revision: Option<u64>,
     nonce: &[u8; NONCE_LEN],
 ) -> Result<Vec<u8>> {
-    let suite = AccountEnvelopeSuiteId::XChaCha20Poly1305HkdfV2;
+    let suite = AccountRecordSuiteId::V1;
     let ciphertext_len = u32::try_from(plaintext.len() + TAG_LEN)
         .map_err(|_| CryptoError::InvalidInput("too long".into()))?;
     let header = build_header(
@@ -511,10 +504,10 @@ pub fn seal_unchecked_for_vectors(
         nonce,
         ciphertext_len,
     )?;
-    let aead = aead_key(suite, key, purpose, binding, object_id)?;
+    let aead = aead_key(key, keyed_part(&header))?;
     let ciphertext = Aead::new(Suite::V1, aead.as_ref())?
         .seal_with_nonce(nonce, &header, plaintext)
-        .map_err(|_| CryptoError::Backend("account-envelope seal".into()))?;
+        .map_err(|_| CryptoError::Backend("account-record seal".into()))?;
     let mut envelope = header;
     envelope.extend_from_slice(&ciphertext);
     Ok(envelope)
@@ -526,19 +519,16 @@ fn parse(envelope: &[u8]) -> Result<ParsedEnvelope<'_>> {
         return Err(CryptoError::TooShort);
     }
     let mut cursor = MAGIC.len();
-    let suite = AccountEnvelopeSuiteId::try_from(u16::from_be_bytes([
+    let suite = AccountRecordSuiteId::try_from(u16::from_be_bytes([
         envelope[cursor],
         envelope[cursor + 1],
     ]))?;
     cursor += 2;
-    let purpose = AccountEnvelopePurpose::try_from(envelope[cursor])?;
-    cursor += 1;
-    if envelope[cursor] != 0 {
-        return Err(CryptoError::InvalidInput(
-            "account-envelope reserved byte is non-zero".into(),
-        ));
-    }
-    cursor += 1;
+    let purpose = AccountRecordPurpose::try_from(u16::from_be_bytes([
+        envelope[cursor],
+        envelope[cursor + 1],
+    ]))?;
+    cursor += 2;
     let generation = MasterKeyGeneration::new(u32::from_be_bytes(
         envelope[cursor..cursor + GENERATION_LEN]
             .try_into()
@@ -549,7 +539,7 @@ fn parse(envelope: &[u8]) -> Result<ParsedEnvelope<'_>> {
     cursor += 2;
     if context_len == 0 || context_len > MAX_CONTEXT_LEN {
         return Err(CryptoError::InvalidInput(
-            "account-envelope context length is invalid".into(),
+            "account-record context length is invalid".into(),
         ));
     }
     let after_context = cursor
@@ -559,17 +549,17 @@ fn parse(envelope: &[u8]) -> Result<ParsedEnvelope<'_>> {
         return Err(CryptoError::TooShort);
     }
     let context = std::str::from_utf8(&envelope[cursor..after_context])
-        .map_err(|_| CryptoError::InvalidInput("account-envelope context is not UTF-8".into()))?;
+        .map_err(|_| CryptoError::InvalidInput("account-record context is not UTF-8".into()))?;
     let canonical = canonical_binding(context)?;
     if canonical != context {
         return Err(CryptoError::InvalidInput(
-            "account-envelope context is not canonical".into(),
+            "account-record context is not canonical".into(),
         ));
     }
     let object_len = usize::from(envelope[after_context]);
     if object_len > MAX_OBJECT_LEN {
         return Err(CryptoError::InvalidInput(
-            "account-envelope object id is too long".into(),
+            "account-record object id is too long".into(),
         ));
     }
     let after_object = (after_context + 1)
@@ -610,8 +600,8 @@ fn parse(envelope: &[u8]) -> Result<ParsedEnvelope<'_>> {
             .expect("four-byte slice"),
     );
     let ciphertext_len_usize = usize::try_from(ciphertext_len)
-        .map_err(|_| CryptoError::InvalidInput("account-envelope ciphertext is too long".into()))?;
-    if !(TAG_LEN + 1..=MAX_PLAINTEXT_LEN + TAG_LEN).contains(&ciphertext_len_usize)
+        .map_err(|_| CryptoError::InvalidInput("account-record ciphertext is too long".into()))?;
+    if !(TAG_LEN + 1..=purpose.policy().max_len + TAG_LEN).contains(&ciphertext_len_usize)
         || !purpose
             .policy()
             .length
@@ -619,11 +609,11 @@ fn parse(envelope: &[u8]) -> Result<ParsedEnvelope<'_>> {
         || after_length.checked_add(ciphertext_len_usize) != Some(envelope.len())
     {
         return Err(CryptoError::InvalidInput(
-            "account-envelope ciphertext length is invalid".into(),
+            "account-record ciphertext length is invalid".into(),
         ));
     }
     Ok(ParsedEnvelope {
-        header: AccountEnvelopeHeader {
+        header: AccountRecordHeader {
             suite,
             purpose,
             generation,
@@ -640,7 +630,7 @@ fn parse(envelope: &[u8]) -> Result<ParsedEnvelope<'_>> {
 
 /// The header of a well-formed envelope (its purpose's object, revision and
 /// length rules hold), without opening it.
-pub fn inspect(envelope: &[u8]) -> Result<AccountEnvelopeHeader> {
+pub fn inspect(envelope: &[u8]) -> Result<AccountRecordHeader> {
     Ok(parse(envelope)?.header)
 }
 
@@ -651,17 +641,17 @@ pub fn inspect(envelope: &[u8]) -> Result<AccountEnvelopeHeader> {
 /// mutable purpose).
 pub fn validate_for(
     envelope: &[u8],
-    expected_purpose: AccountEnvelopePurpose,
+    expected_purpose: AccountRecordPurpose,
     expected_binding: &str,
     expected_object: &[u8],
-) -> Result<AccountEnvelopeHeader> {
+) -> Result<AccountRecordHeader> {
     let header = parse(envelope)?.header;
     if header.purpose != expected_purpose
         || header.canonical_binding != canonical_binding(expected_binding)?
         || header.object_id != expected_object
     {
         return Err(CryptoError::InvalidInput(
-            "account-envelope binding does not match".into(),
+            "account-record binding does not match".into(),
         ));
     }
     Ok(header)
@@ -671,7 +661,7 @@ pub fn validate_for(
 pub fn open(
     envelope: &[u8],
     key: &[u8],
-    expected_purpose: AccountEnvelopePurpose,
+    expected_purpose: AccountRecordPurpose,
     expected_binding: &str,
 ) -> Result<Vec<u8>> {
     open_object(envelope, key, expected_purpose, expected_binding, &[])
@@ -681,7 +671,7 @@ pub fn open(
 pub fn open_object(
     envelope: &[u8],
     key: &[u8],
-    expected_purpose: AccountEnvelopePurpose,
+    expected_purpose: AccountRecordPurpose,
     expected_binding: &str,
     object_id: &[u8],
 ) -> Result<Vec<u8>> {
@@ -698,7 +688,7 @@ pub fn open_object(
 pub fn open_revision(
     envelope: &[u8],
     key: &[u8],
-    expected_purpose: AccountEnvelopePurpose,
+    expected_purpose: AccountRecordPurpose,
     expected_binding: &str,
     object_id: &[u8],
 ) -> Result<(Vec<u8>, u64)> {
@@ -712,26 +702,19 @@ pub fn open_revision(
 fn open_any(
     envelope: &[u8],
     key: &[u8],
-    expected_purpose: AccountEnvelopePurpose,
+    expected_purpose: AccountRecordPurpose,
     expected_binding: &str,
     object_id: &[u8],
 ) -> Result<(Vec<u8>, Option<u64>)> {
     check_key(key)?;
     let parsed = parse(envelope)?;
-    let suite = parsed.header.suite;
     if parsed.header.purpose != expected_purpose
         || parsed.header.canonical_binding != canonical_binding(expected_binding)?
         || parsed.header.object_id != object_id
     {
         return Err(CryptoError::AuthFailed);
     }
-    let aead = aead_key(
-        suite,
-        key,
-        expected_purpose,
-        &parsed.header.canonical_binding,
-        &parsed.header.object_id,
-    )?;
+    let aead = aead_key(key, keyed_part(parsed.aad))?;
     let padded = Aead::new(Suite::V1, aead.as_ref())?
         .open_with_nonce(parsed.nonce, parsed.aad, parsed.ciphertext)
         .map_err(|_| CryptoError::AuthFailed)
@@ -743,7 +726,7 @@ fn open_any(
 pub fn seal_b64(
     plaintext: &[u8],
     key: &[u8],
-    purpose: AccountEnvelopePurpose,
+    purpose: AccountRecordPurpose,
     generation: MasterKeyGeneration,
     binding: &str,
 ) -> Result<String> {
@@ -764,7 +747,7 @@ pub fn decode_canonical_b64(value: &str) -> Result<Vec<u8>> {
 pub fn open_b64(
     envelope_b64: &str,
     key: &[u8],
-    expected_purpose: AccountEnvelopePurpose,
+    expected_purpose: AccountRecordPurpose,
     expected_binding: &str,
 ) -> Result<Vec<u8>> {
     open(
@@ -785,7 +768,7 @@ mod tests {
         seal_with_nonce(
             &[0x42; 32],
             &[0x24; 32],
-            AccountEnvelopePurpose::PasswordMasterKey,
+            AccountRecordPurpose::PasswordMasterKey,
             MasterKeyGeneration::FIRST,
             BINDING,
             &[0x11; 24],
@@ -797,16 +780,13 @@ mod tests {
     fn round_trip_is_canonical_and_context_bound() {
         let envelope = fixture();
         let header = inspect(&envelope).unwrap();
-        assert_eq!(
-            header.suite,
-            AccountEnvelopeSuiteId::XChaCha20Poly1305HkdfV2
-        );
+        assert_eq!(header.suite, AccountRecordSuiteId::V1);
         assert_eq!(header.canonical_binding, BINDING);
         assert!(header.object_id.is_empty());
         assert_eq!(header.ciphertext_len, 48);
         validate_for(
             &envelope,
-            AccountEnvelopePurpose::PasswordMasterKey,
+            AccountRecordPurpose::PasswordMasterKey,
             BINDING,
             &[],
         )
@@ -820,7 +800,7 @@ mod tests {
             assert!(
                 validate_for(
                     &envelope,
-                    AccountEnvelopePurpose::PasswordMasterKey,
+                    AccountRecordPurpose::PasswordMasterKey,
                     &other,
                     &[]
                 )
@@ -830,7 +810,7 @@ mod tests {
             assert!(seal_with_nonce(
                 &[0x42; 32],
                 &[0x24; 32],
-                AccountEnvelopePurpose::PasswordMasterKey,
+                AccountRecordPurpose::PasswordMasterKey,
                 MasterKeyGeneration::FIRST,
                 &other,
                 &[0x11; 24],
@@ -841,7 +821,7 @@ mod tests {
             open(
                 &envelope,
                 &[0x24; 32],
-                AccountEnvelopePurpose::PasswordMasterKey,
+                AccountRecordPurpose::PasswordMasterKey,
                 BINDING
             )
             .unwrap(),
@@ -866,32 +846,36 @@ mod tests {
         assert!(open(
             &envelope,
             &key,
-            AccountEnvelopePurpose::PasswordMasterKey,
+            AccountRecordPurpose::PasswordMasterKey,
             "1b6b5e0c-4c1e-4b8e-9c2d-6a1f3e5d7c9b"
         )
         .is_err());
         assert!(open(
             &envelope,
             &key,
-            AccountEnvelopePurpose::RecoveryMasterKey,
+            AccountRecordPurpose::RecoveryMasterKey,
             BINDING
         )
         .is_err());
         assert!(open_object(
             &envelope,
             &key,
-            AccountEnvelopePurpose::PasswordMasterKey,
+            AccountRecordPurpose::PasswordMasterKey,
             BINDING,
             &[1]
         )
         .is_err());
 
         let mut tampered = envelope.clone();
-        tampered[10] = AccountEnvelopePurpose::RecoveryMasterKey.as_u8();
+        tampered[10..12].copy_from_slice(
+            &AccountRecordPurpose::RecoveryMasterKey
+                .as_u16()
+                .to_be_bytes(),
+        );
         assert!(open(
             &tampered,
             &key,
-            AccountEnvelopePurpose::RecoveryMasterKey,
+            AccountRecordPurpose::RecoveryMasterKey,
             BINDING
         )
         .is_err());
@@ -907,7 +891,7 @@ mod tests {
         let envelope = seal_revision(
             &[0x42; 32],
             &key,
-            AccountEnvelopePurpose::PassVaultSecret,
+            AccountRecordPurpose::PassVaultSecret,
             MasterKeyGeneration::FIRST,
             BINDING,
             &[7; 16],
@@ -919,7 +903,7 @@ mod tests {
             open_revision(
                 &envelope,
                 &key,
-                AccountEnvelopePurpose::PassVaultSecret,
+                AccountRecordPurpose::PassVaultSecret,
                 BINDING,
                 &[7; 16]
             )
@@ -929,7 +913,7 @@ mod tests {
         assert!(open_revision(
             &envelope,
             &key,
-            AccountEnvelopePurpose::PassVaultSecret,
+            AccountRecordPurpose::PassVaultSecret,
             BINDING,
             &[8; 16]
         )
@@ -938,7 +922,7 @@ mod tests {
         assert!(seal_revision(
             &[1],
             &key,
-            AccountEnvelopePurpose::PassVaultSecret,
+            AccountRecordPurpose::PassVaultSecret,
             MasterKeyGeneration::FIRST,
             BINDING,
             &[0; 17],
@@ -950,7 +934,7 @@ mod tests {
     #[test]
     fn a_mutable_secret_carries_its_revision_authenticated() {
         let key = [0x24; 32];
-        let purpose = AccountEnvelopePurpose::PassVaultSecret;
+        let purpose = AccountRecordPurpose::PassVaultSecret;
         let envelope = seal_revision(
             &[0x42; 32],
             &key,
@@ -1001,7 +985,7 @@ mod tests {
         assert!(seal_revision(
             &[0x42; 32],
             &key,
-            AccountEnvelopePurpose::PasswordMasterKey,
+            AccountRecordPurpose::PasswordMasterKey,
             MasterKeyGeneration::FIRST,
             BINDING,
             &[],
@@ -1011,23 +995,22 @@ mod tests {
     }
 
     #[test]
-    fn retired_or_unknown_suites_reserved_byte_and_noncanonical_context_are_rejected() {
+    fn unknown_suites_purposes_and_noncanonical_context_are_rejected() {
         let envelope = fixture();
-        for suite in [0u8, 1, 3] {
+        for suite in [0u8, 2, 3] {
             let mut other = envelope.clone();
             other[9] = suite;
             assert!(inspect(&other).is_err(), "suite {suite}");
         }
 
-        let mut reserved = envelope.clone();
-        reserved[11] = 1;
-        assert!(inspect(&reserved).is_err());
-
-        // Purpose 3 (the Drive X-Wing key, now derived only) stays refused.
-        assert!(AccountEnvelopePurpose::try_from(3).is_err());
-        let mut drive_key = envelope.clone();
-        drive_key[10] = 3;
-        assert!(inspect(&drive_key).is_err());
+        // Purpose 3 (the Drive X-Wing key, now derived only) stays refused,
+        // and so does a purpose with a high byte.
+        assert!(AccountRecordPurpose::try_from(3).is_err());
+        for purpose in [3u16, 0x0101] {
+            let mut other = envelope.clone();
+            other[10..12].copy_from_slice(&purpose.to_be_bytes());
+            assert!(inspect(&other).is_err(), "purpose {purpose}");
+        }
 
         let mut noncanonical = envelope;
         noncanonical[18] = b'A';
@@ -1037,7 +1020,7 @@ mod tests {
     #[test]
     fn the_master_key_generation_is_named_and_authenticated() {
         let key = [0x24; 32];
-        let purpose = AccountEnvelopePurpose::ChatBackupRoot;
+        let purpose = AccountRecordPurpose::ChatBackupRoot;
         assert!(MasterKeyGeneration::new(0).is_err());
         let seventh = MasterKeyGeneration::new(7).unwrap();
         let envelope = seal(&[0x42; 32], &key, purpose, seventh, BINDING).unwrap();

@@ -61,13 +61,13 @@ flowchart TD
 ```
 
 Mail address keys are random OpenPGP keys (rPGP), one or more per email
-address, each sealed in an `AccountEnvelopeV1` under the master key. Each
+address, each sealed in an `AccountRecordV1` under the master key. Each
 address publishes a signed key list (`MailKeyListV1`) signed by the account
 authority, so the pin a contact holds for the account covers its mail keys
 ([`plans/mail-address-keys.md`](plans/mail-address-keys.md)).
 
 Kutup Pass vaults are KeePass files in Drive with their own keys. A person may
-keep a vault's key in an `AccountEnvelopeV1` under the master key (purpose
+keep a vault's key in an `AccountRecordV1` under the master key (purpose
 `PassVaultSecret`, its payload bound to the vault's file id), so the website
 and `kutup sync` open the vault with the Kutup sign-in
 ([`plans/pass.md`](plans/pass.md)).
@@ -100,7 +100,7 @@ remains a ciphertext relay.
    exact bytes as a 24-word BIP39 mnemonic. BIP39 is an encoding here; the
    recovery path does not run Argon2id.
 5. The canonical Rust implementation creates three XChaCha20-Poly1305
-   `AccountEnvelopeV1` values:
+   `AccountRecordV1` values:
    - `masterKey` under the key-encryption key with purpose `PasswordMasterKey`;
    - `masterKey` under the recovery entropy with purpose `RecoveryMasterKey`;
    - the Drive private key under the master key with purpose
