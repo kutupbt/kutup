@@ -320,4 +320,23 @@ mod tests {
         )
         .is_err());
     }
+
+    /// The tables' size bounds are the records' longest lengths.
+    #[test]
+    fn the_columns_bound_the_entries_by_their_longest_record() {
+        let up = include_str!("../../migrations/20261027180000_chat_list_records.up.sql");
+        for (table, max) in [
+            (
+                "chat_group_list",
+                kutup_crypto::chat_group_list::MAX_SEALED_LEN,
+            ),
+            (
+                "chat_contact_list",
+                kutup_crypto::chat_contact_list::MAX_SEALED_LEN,
+            ),
+        ] {
+            let bound = format!("ALTER TABLE {table}\n    ADD CONSTRAINT {table}_envelope_check CHECK (octet_length(envelope) <= {max});");
+            assert!(up.contains(&bound), "{table}: {bound}");
+        }
+    }
 }
