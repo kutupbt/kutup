@@ -17,7 +17,8 @@ import {
 } from '@kutup/ui/components/dropdown-menu'
 import { Input } from '@kutup/ui/components/input'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@kutup/ui/components/select'
-import { EmptyState, LoadingPanel } from '@kutup/ui/components/states'
+import { EmptyState } from '@kutup/ui/components/states'
+import { ListSkeleton } from '@kutup/ui/components/skeleton'
 import { cn } from '@kutup/ui/lib/cn'
 import { asNameTaken } from '@kutup/drive-core/names'
 import { useRequiredSession } from '@kutup/session/store'
@@ -55,7 +56,7 @@ export function VaultPage() {
   const session = useVaultSession(fileId)
   const vault = vaults.find((v) => v.file.id === fileId)
   if (session) return <OpenVault session={session} vault={vault} />
-  if (loading) return <LoadingPanel label={t('vaults.loading')} />
+  if (loading) return <ListSkeleton label={t('vaults.loading')} />
   if (!vault) return <EmptyState title={t('vaults.notFoundTitle')} description={t('vaults.notFoundDescription')} />
   return <UnlockVault key={vault.file.id} vault={vault} />
 }

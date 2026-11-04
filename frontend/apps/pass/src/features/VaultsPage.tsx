@@ -6,7 +6,8 @@ import { Link, useNavigate, useSearchParams } from 'react-router-dom'
 import { Alert } from '@kutup/ui/components/alert'
 import { Button } from '@kutup/ui/components/button'
 import { PageBody, PageHeader } from '@kutup/ui/components/page'
-import { EmptyState, LoadingPanel } from '@kutup/ui/components/states'
+import { EmptyState } from '@kutup/ui/components/states'
+import { ListSkeleton } from '@kutup/ui/components/skeleton'
 import { formatRelative } from '@kutup/ui/lib/format'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@kutup/ui/components/select'
 import { useVaultFiles, vaultTitle, type VaultFile } from '../drive/vaults'
@@ -167,7 +168,7 @@ export function VaultsPage({ creating: startCreating = false }: { creating?: boo
   const [creating, setCreating] = useState(startCreating)
   const [uploading, setUploading] = useState(false)
   const folderId = startCreating ? params.get('folder') : null
-  if (loading) return <LoadingPanel label={t('vaults.loading')} />
+  if (loading) return <ListSkeleton label={t('vaults.loading')} rows={4} />
   return (
     <PageBody className="px-4 py-6 md:px-8 md:py-8">
       <PageHeader
