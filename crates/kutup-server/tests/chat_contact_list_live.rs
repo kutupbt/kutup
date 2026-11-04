@@ -102,7 +102,10 @@ fn a_contact_list_keeps_sealed_entries_by_revision() {
         c: &c,
         base: &base,
         user: &user,
-        key: ContactListKey::derive(&user.master_key),
+        key: ContactListKey::new(
+            &user.master_key,
+            kutup_crypto::account_record::MasterKeyGeneration::FIRST,
+        ),
     };
     let (one, one_at_1) = list.entry(1, 1);
     let (_, one_at_2) = list.entry(1, 2);
@@ -163,7 +166,10 @@ fn a_contact_list_keeps_sealed_entries_by_revision() {
     let (three, _) = list.entry(3, 1);
     let short = STANDARD.encode(vec![0u8; 2047]);
     // A group list entry is no contact entry, whatever id it goes under.
-    let groups = kutup_crypto::chat_group_list::GroupListKey::derive(&user.master_key);
+    let groups = kutup_crypto::chat_group_list::GroupListKey::new(
+        &user.master_key,
+        kutup_crypto::account_record::MasterKeyGeneration::FIRST,
+    );
     let group_entry = groups
         .seal(&user.binding, &groups.entry_id(&[3u8; 32]), 1, b"{}")
         .unwrap();
@@ -218,7 +224,10 @@ fn the_account_head_covers_the_contact_list() {
         c: &c,
         base: &base,
         user: &user,
-        key: ContactListKey::derive(&user.master_key),
+        key: ContactListKey::new(
+            &user.master_key,
+            kutup_crypto::account_record::MasterKeyGeneration::FIRST,
+        ),
     };
     let (one, one_at_1) = list.entry(1, 1);
     let (_, one_at_2) = list.entry(1, 2);
@@ -271,7 +280,10 @@ fn a_contact_list_keeps_at_most_10000_entries() {
         c: &c,
         base: &base,
         user: &user,
-        key: ContactListKey::derive(&user.master_key),
+        key: ContactListKey::new(
+            &user.master_key,
+            kutup_crypto::account_record::MasterKeyGeneration::FIRST,
+        ),
     };
     for n in 0..10_000 {
         let (id, sealed) = list.entry(n, 1);

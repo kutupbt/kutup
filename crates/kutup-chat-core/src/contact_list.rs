@@ -253,7 +253,12 @@ impl Engine {
         kutup_crypto::key_binding::check(binding)
             .map_err(|_| ChatError::Invalid("the account's key binding is invalid".into()))?;
         self.contact_list = Some(ContactListSync {
-            key: ContactListKey::derive(master_key),
+            // Rotation (docs/plans/w6-key-hierarchy.md) seals at the
+            // account's current generation; until it exists, the first.
+            key: ContactListKey::new(
+                master_key,
+                kutup_crypto::account_record::MasterKeyGeneration::FIRST,
+            ),
             binding: binding.to_string(),
             timing,
             listed: BTreeMap::new(),

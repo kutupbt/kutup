@@ -31,7 +31,7 @@ use crate::{revisions, AppState};
 /// before it reaches it (the oldest rejections first, never a block).
 pub const MAX_ENTRIES: i64 = 10_000;
 /// Every sealed entry's size (`kutup_crypto::chat_contact_list`).
-pub const ENVELOPE_BYTES: usize = kutup_crypto::chat_contact_list::SEALED_LEN;
+pub const ENVELOPE_BYTES: usize = kutup_crypto::chat_contact_list::MAX_SEALED_LEN;
 
 /// One sealed entry.
 #[derive(Debug, Serialize, ToSchema)]
@@ -84,14 +84,17 @@ fn entry_id(id: &str) -> AppResult<String> {
 
 /// A sealed entry and the revision its authenticated header carries; the
 /// server reads nothing else of it.
-fn envelope(value: &str) -> AppResult<(Vec<u8>, u64)> {
-    let bytes = STANDARD
-        .decode(value)
-        .ok()
-        .filter(|bytes| STANDARD.encode(bytes) == value)
-        .ok_or_else(|| AppError::bad_request("envelope is not canonical base64"))?;
-    let revision = kutup_crypto::chat_contact_list::inspect(&bytes)
-        .map_err(|_| AppError::bad_request("not a sealed contact list entry"))?;
+fn envelope(value: &str, binding: &str, id: &str) -> AppResult<(Vec<u8>, u64)> {
+    use kutup_crypto::account_record::{self, AccountRecordPurpose};
+    let bytes =
+        account_record::decode_record_b64(value, AccountRecordPurpose::ChatContactListEntry)
+            .map_err(|_| AppError::bad_request("envelope is not a sealed contact list entry"))?;
+    let entry = kutup_crypto::chat_contact_list::decode_entry_id(id)
+        .map_err(|_| AppError::not_found("not found"))?;
+    // This account's entry, filed under this id: another account's, or one
+    // moved from another id, is refused.
+    let revision = kutup_crypto::chat_contact_list::validate(&bytes, binding, &entry)
+        .map_err(|_| AppError::bad_request("not this account's sealed contact list entry"))?;
     Ok((bytes, revision))
 }
 
@@ -157,7 +160,8 @@ pub async fn put(
 ) -> AppResult<Json<ContactListEntry>> {
     let user_id = trusted_uuid(&user.user_id)?;
     let id = entry_id(&id)?;
-    let (sealed, revision) = envelope(&input.envelope)?;
+    let binding = revisions::key_binding(&state.pool, user_id).await?;
+    let (sealed, revision) = envelope(&input.envelope, &binding, &id)?;
     let revision = revisions::check_follows(revision, input.base_revision)?;
     let head = NextHead::parse(input.head.as_deref())?;
     let mut tx = state.pool.begin().await?;
@@ -280,25 +284,38 @@ mod tests {
     }
 
     #[test]
-    fn an_envelope_is_a_sealed_entry_and_its_revision_comes_from_its_header() {
-        let key = ContactListKey::derive(&[3u8; 32]);
+    fn an_envelope_is_this_accounts_entry_and_its_revision_comes_from_its_header() {
+        let first = kutup_crypto::account_record::MasterKeyGeneration::FIRST;
+        let key = ContactListKey::new(&[3u8; 32], first);
         let id = key
             .entry_id(&AccountRef::new("b.test", "00000000-0000-4000-8000-0000000000b2").unwrap());
+        let text_id = encode_entry_id(&id);
         let binding = "00000000-0000-4000-8000-000000000001";
         let sealed = key.seal(binding, &id, 7, b"{}").unwrap();
-        assert_eq!(sealed.len(), ENVELOPE_BYTES);
-        let (bytes, revision) = envelope(&STANDARD.encode(&sealed)).unwrap();
+        assert!(sealed.len() <= ENVELOPE_BYTES);
+        let (bytes, revision) = envelope(&STANDARD.encode(&sealed), binding, &text_id).unwrap();
         assert_eq!((bytes, revision), (sealed.clone(), 7));
-        // Any other size, or not one at all, is refused.
-        assert!(envelope(&STANDARD.encode(&sealed[..sealed.len() - 1])).is_err());
-        assert!(envelope(&STANDARD.encode([1u8; 10])).is_err());
-        assert!(envelope("").is_err());
-        assert!(envelope("AQ").is_err());
+        // Cut, not one at all, under another id or another account: refused.
+        let check = |value: &str| envelope(value, binding, &text_id).is_err();
+        assert!(check(&STANDARD.encode(&sealed[..sealed.len() - 1])));
+        assert!(check(&STANDARD.encode([1u8; 10])));
+        assert!(check(""));
+        assert!(check("AQ"));
+        assert!(envelope(
+            &STANDARD.encode(&sealed),
+            binding,
+            &encode_entry_id(&[9u8; 32])
+        )
+        .is_err());
+        assert!(envelope(
+            &STANDARD.encode(&sealed),
+            "00000000-0000-4000-8000-000000000002",
+            &text_id
+        )
+        .is_err());
         // A group list entry isn't one.
-        let groups = kutup_crypto::chat_group_list::GroupListKey::derive(&[3u8; 32]);
-        let group_entry = groups
-            .seal(binding, &groups.entry_id(&[5u8; 32]), 7, b"{}")
-            .unwrap();
-        assert!(envelope(&STANDARD.encode(group_entry)).is_err());
+        let groups = kutup_crypto::chat_group_list::GroupListKey::new(&[3u8; 32], first);
+        let group_entry = groups.seal(binding, &id, 7, b"{}").unwrap();
+        assert!(check(&STANDARD.encode(group_entry)));
     }
 }

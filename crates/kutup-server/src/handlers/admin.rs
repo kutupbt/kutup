@@ -2827,7 +2827,7 @@ mod tests {
             )
             .bind(user_id)
             .bind("A".repeat(43))
-            .bind(vec![0u8; kutup_crypto::chat_group_list::SEALED_LEN])
+            .bind(vec![0u8; kutup_crypto::chat_group_list::MAX_SEALED_LEN])
             .execute(&pool)
             .await
             .unwrap();
@@ -2836,7 +2836,7 @@ mod tests {
             )
             .bind(user_id)
             .bind("A".repeat(43))
-            .bind(vec![0u8; kutup_crypto::chat_contact_list::SEALED_LEN])
+            .bind(vec![0u8; kutup_crypto::chat_contact_list::MAX_SEALED_LEN])
             .execute(&pool)
             .await
             .unwrap();
