@@ -126,6 +126,7 @@ web() {
   pnpm -C frontend run test:mail-search-wasm
   step "Production build"
   pnpm -C frontend run build
+  node scripts/check-app-bundles.mjs
 }
 
 # The specs of one or more suites. Each list lives in

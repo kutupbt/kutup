@@ -223,13 +223,23 @@ one database, plus a report of what happened.
   (15 minutes unless changed on the vault list; "only when I sign out" is a
   choice), when the account's session ends (signed out in Pass or another
   Pass tab, or refused by the server because it was revoked elsewhere, which
-  the minute's refresh notices), and by hand. A vault locked in a tab waits
-  for a click before its kept key opens it again, also after a reload of the
-  tab. **What opens it again** is a setting on the device, as Proton Pass's
-  lock modes: the account password (the default; checked by the server as
-  at sign-in, a reauth (an OPAQUE sign-in exchange for a `pass` grant, docs/plans/opaque.md), under the sign-in
-  lockout, so a stolen access token gives no way to guess the password
-  offline), the account's PIN, or one click. A vault without a
+  the minute's refresh notices), and by hand. **The lock is the device's,
+  not a tab's** (`sync/deviceLock.ts`, as Proton Pass locks the whole app):
+  kept in localStorage per account (forgotten on sign-out, so a new sign-in
+  starts unlocked; a session that only expired and is renewed stays locked),
+  told to open tabs at once (BroadcastChannel), and idling is counted across
+  tabs, so a tab opened after the device idled past the delay starts locked.
+  A locked vault waits for the unlock before its kept key opens it again, the
+  same in its tab, a new tab, a reload, or opened from Drive. **What opens it
+  again** is a setting on the device, as Proton Pass's lock modes: the
+  account password (checked by the server as at sign-in, a reauth (an OPAQUE
+  sign-in exchange for a `pass` grant, docs/plans/opaque.md), under the
+  sign-in lockout, so a stolen access token gives no way to guess the
+  password offline), the account's PIN, or one click. Unless one is chosen,
+  it is the PIN when the account has one, else one click: a vault kept for
+  quick opening never asks for a password nobody chose (and when whether
+  there is a PIN can't be read, the password, so a blocked request never
+  skips a PIN). Removing the PIN goes back to that default. A vault without a
   kept key always asks for its own key. Signing out also deletes the vaults
   this device kept for offline use; a refused session keeps them, unsaved
   edits included, for the next sign-in.

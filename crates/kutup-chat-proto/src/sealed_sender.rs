@@ -1,30 +1,20 @@
 //! Contacts-only sealed delivery wire structures and capability derivation.
 
 use base64::Engine as _;
-use hkdf::Hkdf;
 use serde::{Deserialize, Serialize};
-use sha2::{Digest as _, Sha256};
 
 use crate::{AccountRef, DirectChatSuiteId};
 
-pub const DELIVERY_CAPABILITY_CONTEXT: &[u8] = kutup_crypto::labels::SEALED_DELIVERY_CAPABILITY_V1;
+pub use kutup_crypto::chat_profile::{capability_hash, DELIVERY_CAPABILITY_CONTEXT};
 
 /// The capability to deliver sealed mail to `recipient`, from their profile
-/// key, for their account (server and permanent id, in the HKDF info), never
-/// a name (docs/plans/account-ids.md).
+/// key (`kutup_crypto::chat_profile::derive_delivery_capability`).
 pub fn derive_delivery_capability(
     profile_key: &[u8; 32],
     recipient: &AccountRef,
 ) -> Result<[u8; 16], String> {
-    let hkdf = Hkdf::<Sha256>::new(Some(DELIVERY_CAPABILITY_CONTEXT), profile_key);
-    let mut output = [0u8; 16];
-    hkdf.expand(&recipient.bytes(), &mut output)
-        .map_err(|_| "sealed delivery capability derivation failed".to_string())?;
-    Ok(output)
-}
-
-pub fn capability_hash(capability: &[u8; 16]) -> [u8; 32] {
-    Sha256::digest(capability).into()
+    kutup_crypto::chat_profile::derive_delivery_capability(profile_key, recipient)
+        .map_err(|_| "sealed delivery capability derivation failed".to_string())
 }
 
 pub fn constant_time_capability_hash_eq(left: &[u8; 32], right: &[u8; 32]) -> bool {

@@ -199,6 +199,12 @@ function OfficeEditorBase(
   // see the latest values without re-binding.
   const transportRef = useRef<CollabTransport | null>(null)
   const deviceRef = useRef<CurrentDevice | null>(null)
+  // The relay's last peer roster: posted again when the bridge says it is
+  // ready, as a roster that arrived first (the socket can open before the
+  // editor frame listens) is lost, and no other comes until someone joins or
+  // leaves. Without it the bridge drops every peer's cursor and edits as
+  // from no participant.
+  const peersRef = useRef<Extract<ToBridge, { type: 'oo-peers' }> | null>(null)
   const docKeyIdRef = useRef<number>(1)
   // The collaboration log up to here is in the document (the version it
   // opened from, then every frame applied since, the editor's own included).
@@ -358,6 +364,9 @@ function OfficeEditorBase(
               theme: themeRef.current,
             },
           })
+          // The roster the relay sent before this frame listened (after
+          // oo-self, so the bridge leaves its own tab out).
+          if (live && peersRef.current) send(peersRef.current)
           return
         case 'init-ack':
           return
@@ -469,7 +478,9 @@ function OfficeEditorBase(
       deviceRef.current = device
       const did = device.deviceId
 
-      // 2. Open the relay WebSocket.
+      // 2. Open the relay WebSocket. A roster from before (another file or
+      // device) is never replayed to this one.
+      peersRef.current = null
       const wsUrl = () => collabSocketUrl(device, localBase(fileId))
       // Forward initial peer-list (from hello) + later updates (from
       // server-pushed `peers` messages) to the bridge so it can rebuild
@@ -477,12 +488,11 @@ function OfficeEditorBase(
       // saveChanges from peers it never learned about, producing the
       // "second-direction sync stalls" bug user-reported on 2026-05-07.
       function forwardPeers(list: { account: string; deviceId: number; tab?: string; userId: string; username?: string; color?: string }[], ts: number) {
+        const message = { type: 'oo-peers', list, ts } satisfies ToBridge
+        peersRef.current = message
         const iframe = iframeRef.current
         if (!iframe || !iframe.contentWindow) return
-        iframe.contentWindow.postMessage(
-          { type: 'oo-peers', list, ts } satisfies ToBridge,
-          officeOrigin(),
-        )
+        iframe.contentWindow.postMessage(message, officeOrigin())
       }
 
       // Tell the bridge which deviceId is "self" so it can filter that

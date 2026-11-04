@@ -1,4 +1,4 @@
 import { defineConfig } from 'vite'
 import { kutupApp } from '@kutup/config/vite'
 
-export default defineConfig(kutupApp({ app: 'photos', wasm: ['crypto', 'chat'] }))
+export default defineConfig(kutupApp({ app: 'photos', wasm: ['crypto'] }))

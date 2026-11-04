@@ -1,0 +1,19 @@
+{
+  "masterKey": "BwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwc=",
+  "binding": "chat:0b6b5e0c-4c1e-4b8e-9c2d-6a1f3e5d7c9b",
+  "rng": "bytes 0, 1, 2, ... in order",
+  "wrappedStoreKey": "ASAhIiMkJSYnKCkqKywtLi8wMTIzNDU2N6gZgjls1UV0UtEhayqbS9jD5V8MEC3J2Cew87WAs/8XTBfZpq+EsyfZEDpbm2qHww==",
+  "record": {
+    "store": "contacts",
+    "key": "c2FjaTowYjZiNWUwYy00YzFlLTRiOGUtOWMyZC02YTFmM2U1ZDdjOWJAZXhhbXBsZS50ZXN0",
+    "hashedKey": "7d07939799d099f51644cf31036489153979e1f7b6c60f75541bf3279aeb9c28",
+    "value": "eyJzdGF0ZSI6ImFjY2VwdGVkIn0=",
+    "sealed": "ODk6Ozw9Pj9AQUJDREVGR0hJSktMTU5PDRBzXZWnaKwE+ivNpquC+zGWx5wUWvN2Z/lrufab0kcRa0+q9hLxmvuyRAwEfBWWYf75kb6FPFylpxlZnOARGvbXf0stw/y3IP6P7G9Z9Mf0tH3sHtY3Z70r4E71Iw=="
+  },
+  "local": {
+    "scope": "account:example",
+    "purpose": "draft",
+    "plaintext": "aGFsZiBhIG1lc3NhZ2U=",
+    "sealed": "AVBRUlNUVVZXWFlaW1xdXl9gYWJjZGVmZyqfE4LMjLdhPICdIi7SLOgiNMhnC2x1mGEVz7TNMg=="
+  }
+}
