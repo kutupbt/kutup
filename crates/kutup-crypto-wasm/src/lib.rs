@@ -616,9 +616,7 @@ pub fn derive_account_identity_keys(master_key_base64: &str) -> Result<JsValue, 
 
 /// The master key's generation a page passes (never 0;
 /// `MASTER_KEY_GENERATION` in `@kutup/crypto` until rotation exists).
-fn master_key_generation(
-    generation: u32,
-) -> Result<account_record::MasterKeyGeneration, JsValue> {
+fn master_key_generation(generation: u32) -> Result<account_record::MasterKeyGeneration, JsValue> {
     account_record::MasterKeyGeneration::new(generation)
         .map_err(|error| js_error(&error.to_string()))
 }

@@ -4,7 +4,7 @@ Status: approved 2026-11-04 (decisions (a)-(e) below, all as recommended).
 Slice 1 (the envelope) is in this PR.
 
 Builds [wipe-unification.md](wipe-unification.md) W1 on what W6 already
-shipped: `KUTPAE2` ([account_envelope.rs](../../crates/kutup-crypto/src/account_envelope.rs))
+shipped: `KUTPAE2` (now [account_record.rs](../../crates/kutup-crypto/src/account_record.rs))
 has a purpose registry with a policy each (object, padding, revision), the
 master-key generation, the key binding, a per-envelope HKDF key and the
 server check `validate_for`. W1 makes it the one envelope for every
@@ -154,11 +154,16 @@ neither under the old key. The checklist lists this.
 ## Slices (each into `wipe-2`, each with its vectors)
 
 1. **The envelope.** `account_record.rs` replaces `account_envelope.rs`
-   (`KUTPAR1`, the policy fields above, every purpose registered, labels in
-   `labels.rs`), the existing six purposes moved, the server's two callers
-   switched, `account-record-v1.json` with a refusal set per purpose
-   (another purpose, binding, object, generation, revision, previous; a
-   cut, padded or swapped envelope). Size M.
+   (`KUTPAR1`: a `u16` purpose, no reserved byte, the record's key derived
+   over the header before the nonce, a maximum length per purpose), the six
+   existing purposes moved, the server's callers and the WASM and TS API
+   renamed (`sealAccountRecord`, `@kutup/crypto/accountRecord`), and
+   `account-record-v1.json` with a refusal set per purpose (another suite,
+   purpose, binding, object, generation or revision; a length its policy or
+   maximum never gives; a cut, padded or swapped record). Each later slice
+   adds the policy its purposes need, with its vectors: hashed objects
+   (slice 2, contact cards; slice 3, the Chat lists), the chain (slice 4).
+   Size M.
 2. **Contacts, mail names, identity pins.** Their modules keep their
    plaintext codecs and lose their envelope code; the server's three
    revision checks call `validate_for`. Size M.
