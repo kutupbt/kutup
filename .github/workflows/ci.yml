@@ -35,6 +35,12 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     steps:
+      # The runner image ships ~25 GB of toolchains no job here uses; a full
+      # build of the workspace and its images now needs that space.
+      - name: Free runner disk
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
+          df -h /
       - uses: actions/checkout@v7
         with:
           # The migrations check compares with the base branch (or, on master,
@@ -66,6 +72,12 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     steps:
+      # The runner image ships ~25 GB of toolchains no job here uses; a full
+      # build of the workspace and its images now needs that space.
+      - name: Free runner disk
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
+          df -h /
       - uses: actions/checkout@v7
       - name: Install protobuf compiler
         run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
@@ -82,6 +94,12 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     steps:
+      # The runner image ships ~25 GB of toolchains no job here uses; a full
+      # build of the workspace and its images now needs that space.
+      - name: Free runner disk
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
+          df -h /
       - uses: actions/checkout@v7
       - name: Install protobuf compiler
         run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
@@ -102,6 +120,12 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     steps:
+      # The runner image ships ~25 GB of toolchains no job here uses; a full
+      # build of the workspace and its images now needs that space.
+      - name: Free runner disk
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
+          df -h /
       - uses: actions/checkout@v7
       - name: Install protobuf compiler
         run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
@@ -139,6 +163,12 @@ jobs:
     # (scripts/verify-cli.sh and the Kutup Pass ones), which build the CLI.
     timeout-minutes: 45
     steps:
+      # The runner image ships ~25 GB of toolchains no job here uses; a full
+      # build of the workspace and its images now needs that space.
+      - name: Free runner disk
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
+          df -h /
       - uses: actions/checkout@v7
       - name: Install protobuf compiler
         run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
