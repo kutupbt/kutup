@@ -6,7 +6,8 @@ import { FileShareDialog } from '@kutup/drive-ui/FileShareDialog'
 import type { Folder } from '@kutup/drive-core/model'
 import { useSharedByMe, type SharedByMeItem } from '@kutup/drive-core/sharedByMe'
 import { Alert } from '@kutup/ui/components/alert'
-import { EmptyState, LoadingPanel } from '@kutup/ui/components/states'
+import { EmptyState } from '@kutup/ui/components/states'
+import { ListSkeleton } from '@kutup/ui/components/skeleton'
 import { apiErrorMessage } from '@kutup/ui/lib/apiError'
 import { ShareDialog } from '../dialogs/ShareDialog'
 import { LinkDialog } from '../dialogs/LinkDialog'
@@ -75,7 +76,7 @@ export function SharedByMePage() {
     return item?.file ? { folder: item.folder, file: item.file, role: 'owner' as const } : null
   })()
 
-  if (shared.loading && shared.items.length === 0) return <LoadingPanel label={t('common.loading')} />
+  if (shared.loading && shared.items.length === 0) return <ListSkeleton label={t('common.loading')} />
 
   return (
     <div className="flex min-h-[calc(100svh-3.5rem)] flex-col">

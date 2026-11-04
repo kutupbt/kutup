@@ -8,7 +8,8 @@ import { useRequiredSession } from '@kutup/session/store'
 import { Alert } from '@kutup/ui/components/alert'
 import { Breadcrumb, type Crumb } from '@kutup/ui/components/breadcrumb'
 import { Button } from '@kutup/ui/components/button'
-import { EmptyState, LoadingPanel } from '@kutup/ui/components/states'
+import { EmptyState } from '@kutup/ui/components/states'
+import { ListSkeleton } from '@kutup/ui/components/skeleton'
 import { apiErrorMessage } from '@kutup/ui/lib/apiError'
 import { cn } from '@kutup/ui/lib/cn'
 import { useCreateActions } from '../create/useCreateActions'
@@ -416,7 +417,7 @@ export function FolderPage() {
     }
   }
 
-  if (folders.isPending || (folder?.key && files.isPending)) return <LoadingPanel label={t('common.loading')} />
+  if (folders.isPending || (folder?.key && files.isPending)) return <ListSkeleton label={t('common.loading')} />
   if (folders.isError) {
     return (
       <div className="p-6">
