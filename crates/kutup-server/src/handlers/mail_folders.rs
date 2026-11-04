@@ -7,6 +7,7 @@
 use axum::extract::{Path, State};
 use axum::http::StatusCode;
 use axum::Json;
+use kutup_crypto::mail_names::MailNameKind;
 use serde::{Deserialize, Serialize};
 use sqlx::{Postgres, Transaction};
 use utoipa::ToSchema;
@@ -53,8 +54,17 @@ pub struct MailPlaces {
     pub labels: Vec<MailLabel>,
 }
 
-fn check_sealed(name: &str) -> AppResult<()> {
-    crate::revisions::mail_name(name).map(drop)
+/// A new sealed name for the folder or label `id` of the account: its
+/// revision, or a refusal.
+async fn check_sealed(
+    state: &AppState,
+    user_id: Uuid,
+    kind: MailNameKind,
+    id: &Uuid,
+    name: &str,
+) -> AppResult<u64> {
+    let binding = crate::revisions::key_binding(&state.pool, user_id).await?;
+    crate::revisions::new_mail_name(name, &binding, kind, id)
 }
 
 fn check_color(color: &str) -> AppResult<()> {
@@ -218,7 +228,7 @@ pub async fn create_folder(
     let user_id = trusted_uuid(&user.user_id)?;
     let id = parse_id(&request.id)?;
     let parent = request.parent_id.as_deref().map(parse_id).transpose()?;
-    check_sealed(&request.name)?;
+    check_sealed(&state, user_id, MailNameKind::Folder, &id, &request.name).await?;
     check_color(&request.color)?;
     let head = NextHead::parse(request.head.as_deref())?;
     let mut tx = state.pool.begin().await?;
@@ -327,6 +337,7 @@ pub async fn update_folder(
     let locked = account_heads::lock(&mut tx, user_id, user.session.session_id).await?;
     let (_, below) = depth_of(&mut tx, user_id, id).await?;
     if let Some(name) = &request.name {
+        let new = check_sealed(&state, user_id, MailNameKind::Folder, &id, name).await?;
         let stored: Option<String> = sqlx::query_scalar(
             "SELECT name_sealed FROM mail_folders WHERE user_id = $1 AND id = $2",
         )
@@ -336,7 +347,7 @@ pub async fn update_folder(
         .await?;
         match stored {
             Some(stored) => {
-                crate::revisions::check_rename(&stored, name, request.base_name_revision)?
+                crate::revisions::check_rename(&stored, new, request.base_name_revision)?
             }
             // A folder that needs a name (kept through an account reset):
             // named from revision 0.
@@ -344,7 +355,7 @@ pub async fn update_folder(
                 if request.base_name_revision != Some(0) {
                     return Err(crate::revisions::conflict("this folder has no name yet", 0));
                 }
-                crate::revisions::check_follows(crate::revisions::mail_name(name)?, 0)?;
+                crate::revisions::check_follows(new, 0)?;
             }
         }
     }
@@ -548,7 +559,7 @@ pub async fn create_label(
 ) -> AppResult<StatusCode> {
     let user_id = trusted_uuid(&user.user_id)?;
     let id = parse_id(&request.id)?;
-    check_sealed(&request.name)?;
+    check_sealed(&state, user_id, MailNameKind::Label, &id, &request.name).await?;
     check_color(&request.color)?;
     let head = NextHead::parse(request.head.as_deref())?;
     let mut tx = state.pool.begin().await?;
@@ -626,7 +637,8 @@ pub async fn update_label(
             .await?;
     let stored = stored.ok_or_else(|| AppError::not_found("no such label"))?;
     if let Some(name) = &request.name {
-        crate::revisions::check_rename(&stored, name, request.base_name_revision)?;
+        let new = check_sealed(&state, user_id, MailNameKind::Label, &id, name).await?;
+        crate::revisions::check_rename(&stored, new, request.base_name_revision)?;
     }
     // Written only over the name the rename started from.
     let updated = sqlx::query(
@@ -726,18 +738,34 @@ mod tests {
         for bad in ["#1A2B3C", "1a2b3c", "#12345", "#zzzzzz", "#1a2b3c0"] {
             assert!(check_color(bad).is_err(), "{bad}");
         }
-        assert!(check_sealed("not base64!").is_err());
-        assert!(check_sealed(&STANDARD.encode(b"KUTMN2\0\0short")).is_err());
-        let key = kutup_crypto::mail_names::derive_names_key(&[1; 32]).unwrap();
-        let sealed = kutup_crypto::mail_names::seal_name(
-            &key,
-            "0b6b5e0c-4c1e-4b8e-9c2d-6a1f3e5d7c9b",
-            kutup_crypto::mail_names::MailNameKind::Folder,
-            &[2; 16],
-            1,
-            "Faturalar",
+        // The server's name checks, without the database.
+        let binding = "0b6b5e0c-4c1e-4b8e-9c2d-6a1f3e5d7c9b";
+        let id = Uuid::from_bytes([2; 16]);
+        let check = |name: &str, kind| crate::revisions::new_mail_name(name, binding, kind, &id);
+        assert!(check("not base64!", MailNameKind::Folder).is_err());
+        assert!(check(&STANDARD.encode(b"KUTPAR1\0short"), MailNameKind::Folder).is_err());
+        let sealed = STANDARD.encode(
+            kutup_crypto::mail_names::seal_name(
+                &[1; 32],
+                kutup_crypto::account_record::MasterKeyGeneration::FIRST,
+                binding,
+                MailNameKind::Folder,
+                &[2; 16],
+                1,
+                "Faturalar",
+            )
+            .unwrap(),
+        );
+        assert_eq!(check(&sealed, MailNameKind::Folder).unwrap(), 1);
+        // Another kind's or id's name: refused.
+        assert!(check(&sealed, MailNameKind::Label).is_err());
+        assert!(crate::revisions::new_mail_name(
+            &sealed,
+            binding,
+            MailNameKind::Folder,
+            &Uuid::from_bytes([3; 16])
         )
-        .unwrap();
-        assert!(check_sealed(&STANDARD.encode(sealed)).is_ok());
+        .is_err());
+        assert_eq!(crate::revisions::mail_name(&sealed).unwrap(), 1);
     }
 }

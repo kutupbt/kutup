@@ -1397,12 +1397,17 @@ fn sealed_name_at(
     revision: u64,
     name: &str,
 ) -> String {
-    let key = kutup_crypto::mail_names::derive_names_key(&user.master_key).unwrap();
     let id = *uuid::Uuid::parse_str(id).unwrap().as_bytes();
-    b64(
-        &kutup_crypto::mail_names::seal_name(&key, &user.binding, kind, &id, revision, name)
-            .unwrap(),
+    b64(&kutup_crypto::mail_names::seal_name(
+        &user.master_key,
+        kutup_crypto::account_record::MasterKeyGeneration::FIRST,
+        &user.binding,
+        kind,
+        &id,
+        revision,
+        name,
     )
+    .unwrap())
 }
 
 /// Renames `kind`/`id` (a folder, label or filter) to `name` sealed at
@@ -1573,7 +1578,7 @@ fn folders_and_labels() {
     assert_eq!(find(&clients)["color"], "#cc3366");
     assert_eq!(find(&acme)["parentId"], clients.as_str());
     // The name comes back sealed, and opens only as this folder's.
-    let key = kutup_crypto::mail_names::derive_names_key(&user.master_key).unwrap();
+    let key = user.master_key;
     let sealed = base64::Engine::decode(
         &base64::engine::general_purpose::STANDARD,
         find(&acme)["name"].as_str().unwrap(),

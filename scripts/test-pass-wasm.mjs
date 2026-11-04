@@ -143,8 +143,8 @@ for (const bad of [0, -1, 1.5]) {
 // and the same envelope with the revision changed in its header does not.
 const chosenEnvelope = Buffer.from(vectors.sealedChosen, 'base64')
 assert.equal(pass.openKept(vectors.sealedChosen, masterKey, vectors.binding, vectors.fileId).revision, vectors.revision)
-// Header: ... revision (8 bytes) | nonce (24) | ciphertext length (4) | ciphertext (3121 + 16).
-const lastRevisionByte = chosenEnvelope.length - (3121 + 16) - 4 - 24 - 1
+// Header: ... revision (8 bytes) | key commitment (32) | nonce (24) | ciphertext length (4) | ciphertext (3121 + 16).
+const lastRevisionByte = chosenEnvelope.length - (3121 + 16) - 4 - 24 - 32 - 1
 assert.equal(chosenEnvelope.readBigUInt64BE(lastRevisionByte - 7), BigInt(vectors.revision))
 const relabelled = Buffer.from(chosenEnvelope)
 relabelled[lastRevisionByte] ^= 2

@@ -3553,9 +3553,9 @@ fn synced_pins(
     pins: Vec<kutup_crypto::identity_pins::IdentityPinV2>,
 ) -> kutup_chat_core::IdentityPinsRecord {
     use base64::Engine as _;
-    let key = kutup_crypto::identity_pins::derive_key(owner_master).unwrap();
     let sealed = kutup_crypto::identity_pins::seal(
-        &key,
+        owner_master,
+        kutup_crypto::account_record::MasterKeyGeneration::FIRST,
         ALICE_BINDING,
         1,
         &kutup_crypto::identity_pins::IdentityPinsV2 {

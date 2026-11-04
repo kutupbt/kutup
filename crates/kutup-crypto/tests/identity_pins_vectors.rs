@@ -11,6 +11,7 @@ use base64::engine::general_purpose::STANDARD;
 use base64::Engine as _;
 use serde::{Deserialize, Serialize};
 
+use kutup_crypto::account_record::MasterKeyGeneration;
 use kutup_crypto::account_ref::AccountRef;
 use kutup_crypto::account_rename::{self, AccountRenameV1};
 use kutup_crypto::drive_key_binding;
@@ -21,7 +22,7 @@ use kutup_crypto::identity_pins::{
 
 const PATH: &str = concat!(
     env!("CARGO_MANIFEST_DIR"),
-    "/tests/vectors/identity-pins-v3.json"
+    "/tests/vectors/identity-pins-v4.json"
 );
 
 #[derive(Serialize, Deserialize)]
@@ -35,7 +36,6 @@ struct Vectors {
     drive_hpke_public_key: String,
     drive_signing_public_key: String,
     drive_key_binding: String,
-    pins_key: String,
     revision: u64,
     pins: String,
     nonce: String,
@@ -146,14 +146,13 @@ fn refused(sealed: &[u8]) -> Vec<Refused> {
         revision,
         sealed: STANDARD.encode(sealed),
     };
-    let mut magic = sealed.to_vec();
-    magic[5] = b'2';
-    let mut suite = sealed.to_vec();
-    suite[9] = 2;
+    // The record's header ends with revision ‖ nonce ‖ length.
+    let header = kutup_crypto::account_record::inspect(sealed).unwrap();
+    let length_at = sealed.len() - header.ciphertext_len as usize - 4;
     let mut relabelled = sealed.to_vec();
-    relabelled[17] = 8;
+    relabelled[length_at - 24 - 32 - 1] = 8;
     let mut nonce = sealed.to_vec();
-    nonce[18] ^= 1;
+    nonce[length_at - 1] ^= 1;
     let mut tag = sealed.to_vec();
     *tag.last_mut().unwrap() ^= 1;
     vec![
@@ -165,8 +164,6 @@ fn refused(sealed: &[u8]) -> Vec<Refused> {
             sealed,
         ),
         case("relabelled as another revision", BINDING, 8, &relabelled),
-        case("magic of suite 2", BINDING, 7, &magic),
-        case("suite 2", BINDING, 7, &suite),
         case("nonce changed", BINDING, 7, &nonce),
         case("ciphertext changed", BINDING, 7, &tag),
     ]
@@ -772,9 +769,17 @@ fn write_vectors() {
     let account = "aci:00000000-0000-4000-8000-0000000000a1@kutup.dev";
     let identity = AccountIdentityKeysV1::derive(&master).unwrap();
     let binding = drive_key_binding::sign(&identity, &account.parse().unwrap(), 1).unwrap();
-    let key = identity_pins::derive_key(&master).unwrap();
+    let key = master;
     let nonce = [0x44u8; 24];
-    let sealed = identity_pins::seal_with_nonce(&key, BINDING, 7, &pins(), &nonce).unwrap();
+    let sealed = identity_pins::seal_with_nonce(
+        &key,
+        MasterKeyGeneration::FIRST,
+        BINDING,
+        7,
+        &pins(),
+        &nonce,
+    )
+    .unwrap();
     let vectors = Vectors {
         master_key: STANDARD.encode(master),
         account: account.into(),
@@ -783,7 +788,6 @@ fn write_vectors() {
         drive_hpke_public_key: STANDARD.encode(identity.drive_hpke_public_key()),
         drive_signing_public_key: STANDARD.encode(identity.drive_signing_public_key()),
         drive_key_binding: STANDARD.encode(binding),
-        pins_key: STANDARD.encode(*key),
         revision: 7,
         pins: json(&pins()),
         nonce: STANDARD.encode(nonce),
@@ -834,14 +838,24 @@ fn checked_in_vectors_hold() {
     )
     .unwrap();
 
-    let key = identity_pins::derive_key(&master).unwrap();
-    assert_eq!(STANDARD.encode(*key), v.pins_key);
+    let key = master;
     assert_eq!(json(&pins()), v.pins);
     let nonce: [u8; 24] = STANDARD.decode(&v.nonce).unwrap().try_into().unwrap();
-    let sealed =
-        identity_pins::seal_with_nonce(&key, &v.binding, v.revision, &pins(), &nonce).unwrap();
+    let sealed = identity_pins::seal_with_nonce(
+        &key,
+        MasterKeyGeneration::FIRST,
+        &v.binding,
+        v.revision,
+        &pins(),
+        &nonce,
+    )
+    .unwrap();
     assert_eq!(STANDARD.encode(&sealed), v.sealed);
     assert_eq!(identity_pins::inspect(&sealed).unwrap(), v.revision);
+    assert_eq!(
+        identity_pins::validate(&sealed, &v.binding).unwrap(),
+        v.revision
+    );
     assert_eq!(
         identity_pins::open(&key, &v.binding, &sealed).unwrap(),
         (pins(), v.revision)
@@ -861,7 +875,15 @@ fn checked_in_vectors_hold() {
         );
     }
     // The address is not a key binding, so nothing seals to it either.
-    assert!(identity_pins::seal_with_nonce(&key, &v.account, v.revision, &pins(), &nonce).is_err());
+    assert!(identity_pins::seal_with_nonce(
+        &key,
+        MasterKeyGeneration::FIRST,
+        &v.account,
+        v.revision,
+        &pins(),
+        &nonce
+    )
+    .is_err());
     check_rules(&v.rules);
 }
 

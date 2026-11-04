@@ -52,6 +52,7 @@ When master-key rotation is built, every place that writes `MasterKeyGeneration:
 - **Secrets sealed under the master key:**
   - mail address keys: `mail_key.rs` (`first_address_key`) and web `mailKey.ts` (generate, import, and `acceptMailForwarding`);
   - Pass kept keys: CLI `vaultsync.rs` and web `pass/src/vault/worker.ts` (`keepKey`). `kept::reseal` already keeps the generation of the envelope it opens, so a copied vault follows its source.
+- **Account records sealed by Rust callers** (W1 slice 2): identity pins from the CLI (`identity.rs`, `pin`) and from chat-core (`identity_sync.rs`). The web passes `MASTER_KEY_GENERATION` to `sealContactCard`, `sealMailName` and `sealIdentityPins`.
 - **The server's fake recovery envelope** (`handlers/auth.rs`, `deterministic_fake_account_envelope`): an unknown name gets a stable fake so it looks like a real account. Once accounts can be past generation 1, the fake must carry a generation as plausible as a real one, or the header tells a fake from a real account.
 - **The constant itself:** `@kutup/crypto/masterKeyGeneration` and its doc comment in `kutup-crypto-wasm` (`sealAccountRecord`).
 - **Organizations** (`organization.rs`, docs/plans/organizations.md §3):

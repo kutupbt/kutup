@@ -92,13 +92,14 @@ pub async fn put_identity_pins(
     Json(req): Json<IdentityPinsWrite>,
 ) -> AppResult<Response> {
     let id = trusted_uuid(&user.user_id)?;
-    let envelope = STANDARD
-        .decode(&req.envelope)
-        .ok()
-        .filter(|bytes| STANDARD.encode(bytes) == req.envelope)
-        .ok_or_else(|| AppError::bad_request("envelope is not canonical base64"))?;
-    let revision = kutup_crypto::identity_pins::inspect(&envelope)
-        .map_err(|_| AppError::bad_request("not an identity pin list"))?;
+    use kutup_crypto::account_record::{self, AccountRecordPurpose};
+    let envelope =
+        account_record::decode_record_b64(&req.envelope, AccountRecordPurpose::IdentityPins)
+            .map_err(|_| AppError::bad_request("envelope is not an identity pin list"))?;
+    let binding = revisions::key_binding(&state.pool, id).await?;
+    // The account's own list, well formed: another account's is refused.
+    let revision = kutup_crypto::identity_pins::validate(&envelope, &binding)
+        .map_err(|_| AppError::bad_request("not this account's identity pin list"))?;
     let revision = revisions::check_follows(revision, req.base_revision)?;
     let head = crate::account_heads::NextHead::parse(req.head.as_deref())?;
     let mut tx = state.pool.begin().await?;
