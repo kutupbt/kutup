@@ -399,13 +399,18 @@ fn decrypt_b64(
         .map_err(content)
 }
 
-/// HKDF-SHA256 with no salt: the retired `-wrap-v1` key, in the tests only.
+/// HKDF-SHA256 salted with the profile family's label: the retired `-wrap-v1`
+/// key, in the tests only.
 #[cfg(test)]
 fn hkdf_expand<const N: usize>(key: &[u8], info: &[u8]) -> Result<[u8; N]> {
     let mut output = [0u8; N];
-    kutup_crypto::primitives::Kdf::new(kutup_crypto::primitives::Suite::V1, &[], key)
-        .expand(info, &mut output)
-        .map_err(invalid)?;
+    kutup_crypto::primitives::Kdf::new(
+        kutup_crypto::primitives::Suite::V1,
+        kutup_crypto::labels::CHAT_PROFILE_V1,
+        key,
+    )
+    .expand(info, &mut output)
+    .map_err(invalid)?;
     Ok(output)
 }
 
