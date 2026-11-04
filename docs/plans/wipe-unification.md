@@ -646,6 +646,7 @@ because their tables only hold transient data.
    `KUTPPE1` encoder sits in chat-core while the parser is in chat-proto) and
    the direct HPKE. It is the last large body of crypto outside the canonical
    crate, in a separate Cargo root whose versions drift. Pairs with W2. Size M.
+   Build note: [chat-crypto-move.md](chat-crypto-move.md).
 2. **Drop the Chat WASM from Drive, Account, Maps, Photos and Office.** They
    load the 11 MB (3.35 MB gzip) Chat runtime only for profile-key operations
    (`fe/drive-core/src/people.ts:6,130,166`,

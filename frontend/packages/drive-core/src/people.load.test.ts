@@ -12,7 +12,7 @@ const wasm = {
   profileLookup: vi.fn(() => ({ version: 'v/1', key: 'cGVlcg==', accessKey: 'peer-access' })),
   profileOpenPeer: vi.fn(() => ({ displayName: 'Ada Lovelace' })),
 }
-vi.mock('@kutup/chat-core/wasm', () => ({ loadChatWasm: () => Promise.resolve(wasm) }))
+vi.mock('@kutup/crypto/profile', () => wasm)
 vi.mock('@kutup/crypto', () => ({
   fromBase64: (value: string) => new TextEncoder().encode(value),
   toBase64: () => 'a2V5',

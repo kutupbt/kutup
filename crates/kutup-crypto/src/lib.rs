@@ -59,6 +59,7 @@ pub mod chat_group;
 pub mod chat_group_list;
 pub mod chat_media;
 pub mod chat_media_blocks;
+pub mod chat_profile;
 pub mod collection_epoch;
 pub mod collection_keyring;
 pub mod contact_card;
