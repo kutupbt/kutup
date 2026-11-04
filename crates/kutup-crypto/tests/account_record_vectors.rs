@@ -186,15 +186,15 @@ fn refused_for(purpose: AccountRecordPurpose, envelope: &[u8]) -> Vec<Refused> {
         unchecked(&padded(purpose), OTHER_BINDING, &object, rev),
     );
     if let Length::Bucket(bucket) = purpose.policy().length {
-        // Padded right, but past the purpose's maximum.
-        let over = (purpose.policy().max_len / bucket + 1) * bucket;
-        let mut big = vec![0u8; over];
-        big[0] = 0x80;
-        add(
-            "longer than the purpose's maximum",
-            "inspect",
-            unchecked(&big, BINDING, &object, rev),
-        );
+        // The header's ciphertext length past the purpose's maximum (a whole
+        // bucket over, so only the maximum refuses it): refused before any
+        // ciphertext is read, so the vector stays small.
+        let header = account_record::inspect(envelope).unwrap();
+        let length_at = envelope.len() - header.ciphertext_len as usize - 4;
+        let over = u32::try_from(purpose.policy().max_len + bucket + 16).unwrap();
+        let mut long = envelope.to_vec();
+        long[length_at..length_at + 4].copy_from_slice(&over.to_be_bytes());
+        add("longer than the purpose's maximum", "inspect", long);
     }
     let mut swapped = envelope.to_vec();
     let other = if purpose == AccountRecordPurpose::PasswordMasterKey {

@@ -690,7 +690,10 @@ fn generic_account_purpose(value: u16) -> Result<AccountRecordPurpose, JsValue> 
     match AccountRecordPurpose::try_from(value).map_err(|error| js_error(&error.to_string()))? {
         AccountRecordPurpose::MailAddressPrivateKey
         | AccountRecordPurpose::PassVaultSecret
-        | AccountRecordPurpose::OrganizationPrivateKey => Err(js_error(
+        | AccountRecordPurpose::OrganizationPrivateKey
+        | AccountRecordPurpose::ContactCard
+        | AccountRecordPurpose::MailName
+        | AccountRecordPurpose::IdentityPins => Err(js_error(
             "this account envelope purpose has its own typed export",
         )),
         purpose => Ok(purpose),

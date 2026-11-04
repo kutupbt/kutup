@@ -13,15 +13,13 @@
 //! warned about until they accept it: Signal's "safety number changed".
 //!
 //! One list serves every app of the account and survives a new browser: it is
-//! sealed with XChaCha20-Poly1305 under a key derived from the master key and
-//! stored by the server, which can neither read nor rewrite it. The revision
-//! (a time in unix milliseconds, above every revision seen) is in the header
-//! and authenticated, so the server cannot relabel an old list as a new one;
-//! clients also remember the highest revision they have seen. Suite 3
-//! (`KUTIP3`) binds the owner's key binding. Earlier suites are not read:
-//! nothing from before carries over.
+//! an account record (`account_record`, purpose `IdentityPins`) under the
+//! master key, stored by the server, which can neither read nor rewrite it.
+//! The revision (a time in unix milliseconds, above every revision seen) is
+//! in the record's header and authenticated, so the server cannot relabel an
+//! old list as a new one; clients also remember the highest revision they
+//! have seen. The record binds the owner's key binding.
 
-use crate::primitives::{Aead, Kdf, Suite};
 use base64::engine::general_purpose::STANDARD;
 use base64::Engine as _;
 use serde::{Deserialize, Serialize};
@@ -33,20 +31,10 @@ use crate::error::{CryptoError, Result};
 use crate::identity::incarnation_id_from_authority_public;
 use crate::key_binding;
 use crate::named_share::canonical_account;
-use crate::padding::Length;
+use crate::account_record::{self, AccountRecordPurpose, MasterKeyGeneration};
 
-const PINS_KEY_SALT: &[u8] = crate::labels::IDENTITY_PINS_V1;
-const PINS_KEY_INFO: &[u8] = crate::labels::IDENTITY_PINS_LIST_KEY_V1;
-const MAGIC: &[u8; 8] = b"KUTIP3\0\0";
-const AAD_DOMAIN: &[u8] = crate::labels::IDENTITY_PINS_V3;
-const SUITE: u16 = 3;
 const NONCE_LEN: usize = 24;
-const REVISION_LEN: usize = 8;
-const HEADER_LEN: usize = 8 + 2 + REVISION_LEN + NONCE_LEN;
 const TAG_LEN: usize = 16;
-/// How a list is padded before it is sealed: its length then tells only
-/// roughly how many accounts it pins.
-const PADDING: Length = Length::Bucket(256);
 
 /// The most accounts one list keeps.
 pub const MAX_PINS: usize = 10_000;
@@ -990,38 +978,26 @@ pub fn decode(bytes: &[u8]) -> Result<IdentityPinsV2> {
     Ok(list)
 }
 
-/// The account's pins key, derived from the master key.
-pub fn derive_key(master_key: &[u8; 32]) -> Result<Zeroizing<[u8; 32]>> {
-    let mut key = Zeroizing::new([0u8; 32]);
-    Kdf::new(Suite::V1, PINS_KEY_SALT, master_key)
-        .expand(PINS_KEY_INFO, key.as_mut_slice())
-        .map_err(|_| CryptoError::Backend("identity pins key HKDF expand".into()))?;
-    Ok(key)
-}
-
-fn aad(binding: &str, revision: u64) -> Result<Vec<u8>> {
-    let binding = key_binding::check(binding).map_err(|_| invalid("owner binding is invalid"))?;
-    let mut aad = Vec::with_capacity(MAGIC.len() + 2 + AAD_DOMAIN.len() + 2 + binding.len() + 8);
-    aad.extend_from_slice(MAGIC);
-    aad.extend_from_slice(&SUITE.to_be_bytes());
-    aad.extend_from_slice(AAD_DOMAIN);
-    aad.extend_from_slice(&(binding.len() as u16).to_be_bytes());
-    aad.extend_from_slice(binding.as_bytes());
-    aad.extend_from_slice(&revision.to_be_bytes());
-    Ok(aad)
-}
-
 /// Seals the list of the account whose key binding is `owner` at
-/// `revision`: `magic ‖ suite ‖ revision ‖ nonce ‖ ciphertext`.
-pub fn seal(key: &[u8; 32], owner: &str, revision: u64, list: &IdentityPinsV2) -> Result<Vec<u8>> {
+/// `revision`, under the master key: an account record (purpose
+/// `IdentityPins`, one per account), padded to 256-byte buckets so its length
+/// tells only roughly how many accounts it pins.
+pub fn seal(
+    master_key: &[u8; 32],
+    generation: MasterKeyGeneration,
+    owner: &str,
+    revision: u64,
+    list: &IdentityPinsV2,
+) -> Result<Vec<u8>> {
     let mut nonce = [0u8; NONCE_LEN];
     crate::primitives::random(&mut nonce);
-    seal_with_nonce(key, owner, revision, list, &nonce)
+    seal_with_nonce(master_key, generation, owner, revision, list, &nonce)
 }
 
 /// [`seal`] with a fixed nonce, for checked-in vectors only.
 pub fn seal_with_nonce(
-    key: &[u8; 32],
+    master_key: &[u8; 32],
+    generation: MasterKeyGeneration,
     owner: &str,
     revision: u64,
     list: &IdentityPinsV2,
@@ -1030,56 +1006,55 @@ pub fn seal_with_nonce(
     if revision == 0 {
         return Err(invalid("revisions start at 1"));
     }
-    let plain = Zeroizing::new(PADDING.pad(&encode(list)?)?);
-    let ciphertext = Aead::new(Suite::V1, key.as_ref())?
-        .seal_with_nonce(nonce, &aad(owner, revision)?, &plain)
-        .map_err(|_| CryptoError::Backend("identity pins seal".into()))?;
-    let mut out = Vec::with_capacity(HEADER_LEN + ciphertext.len());
-    out.extend_from_slice(MAGIC);
-    out.extend_from_slice(&SUITE.to_be_bytes());
-    out.extend_from_slice(&revision.to_be_bytes());
-    out.extend_from_slice(nonce);
-    out.extend_from_slice(&ciphertext);
-    Ok(out)
+    key_binding::check(owner).map_err(|_| invalid("owner binding is invalid"))?;
+    let plain = Zeroizing::new(encode(list)?);
+    account_record::seal_suite(
+        account_record::AccountRecordSuiteId::V1,
+        &plain,
+        master_key,
+        AccountRecordPurpose::IdentityPins,
+        generation,
+        owner,
+        &[],
+        Some(revision),
+        nonce,
+    )
 }
 
 /// Opens the list of the account whose key binding is `owner`: the list and
 /// the revision it was sealed at (refuse one older than seen).
-pub fn open(key: &[u8; 32], owner: &str, sealed: &[u8]) -> Result<(IdentityPinsV2, u64)> {
-    let revision = inspect(sealed)?;
-    let plain = Aead::new(Suite::V1, key.as_ref())?
-        .open_with_nonce(
-            &sealed[10 + REVISION_LEN..HEADER_LEN],
-            &aad(owner, revision)?,
-            &sealed[HEADER_LEN..],
-        )
-        .map(Zeroizing::new)
-        .map_err(|_| CryptoError::AuthFailed)?;
-    let plain = Zeroizing::new(PADDING.unpad(plain.to_vec())?);
+pub fn open(master_key: &[u8; 32], owner: &str, sealed: &[u8]) -> Result<(IdentityPinsV2, u64)> {
+    let (plain, revision) = account_record::open_revision(
+        sealed,
+        master_key,
+        AccountRecordPurpose::IdentityPins,
+        owner,
+        &[],
+    )?;
+    let plain = Zeroizing::new(plain);
     Ok((decode(&plain)?, revision))
 }
 
-/// Checks a sealed list's framing, size and revision without opening it (the
-/// server's view), and returns the revision.
+/// The revision of a well-formed list, without opening it.
 pub fn inspect(sealed: &[u8]) -> Result<u64> {
-    if sealed.len() <= HEADER_LEN + TAG_LEN
-        || sealed.len() > MAX_SEALED_BYTES
-        || !PADDING.allows_padded_len(sealed.len() - HEADER_LEN - TAG_LEN)
-    {
-        return Err(invalid("size is invalid"));
-    }
-    if &sealed[..MAGIC.len()] != MAGIC || sealed[8..10] != SUITE.to_be_bytes() {
+    let header = account_record::inspect(sealed)?;
+    if header.purpose != AccountRecordPurpose::IdentityPins {
         return Err(invalid("not an identity pin list"));
     }
-    let revision = u64::from_be_bytes(sealed[10..10 + REVISION_LEN].try_into().expect("8"));
-    if revision == 0 {
-        return Err(invalid("revisions start at 1"));
-    }
-    Ok(revision)
+    header.revision.ok_or_else(|| invalid("a list has a revision"))
 }
 
-/// The largest sealed list.
-pub const MAX_SEALED_BYTES: usize = HEADER_LEN + MAX_LIST_BYTES + 256 + TAG_LEN;
+/// What the server checks before storing a list: a well-formed pin list of
+/// the account bound by `owner`; returns its revision.
+pub fn validate(sealed: &[u8], owner: &str) -> Result<u64> {
+    let header =
+        account_record::validate_for(sealed, AccountRecordPurpose::IdentityPins, owner, &[])?;
+    header.revision.ok_or_else(|| invalid("a list has a revision"))
+}
+
+/// The largest sealed list: the record's header (at most 128 bytes for a
+/// key binding and no object), the list padded to its bucket, and the tag.
+pub const MAX_SEALED_BYTES: usize = 128 + (MAX_LIST_BYTES / 256 + 1) * 256 + TAG_LEN;
 
 #[cfg(test)]
 mod tests {

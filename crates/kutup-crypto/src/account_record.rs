@@ -114,6 +114,21 @@ pub enum AccountRecordPurpose {
     /// An organization key's seed, an owner's or admin's own copy
     /// (docs/plans/organizations.md §3); its object is the key's id.
     OrganizationPrivateKey = 7,
+    /// A contact's vCard (`contact_card`); its object is the SHA-256 of the
+    /// contact's UID, which the server reads from the card's signed summary
+    /// (Proton's model), so it checks the card is that contact's.
+    ContactCard = 8,
+    /// A mail folder's, label's or filter's name (`mail_names`); its object
+    /// is the kind byte and the 16-byte id.
+    MailName = 9,
+    /// The account's one identity-pin list (`identity_pins`).
+    IdentityPins = 10,
+}
+
+/// The longest padded length of `max` bytes in 256-byte buckets (`0x80`
+/// marker, then zeros).
+const fn bucketed(max: usize) -> usize {
+    (max / 256 + 1) * 256
 }
 
 /// Whether a purpose's envelopes name an object.
@@ -178,17 +193,38 @@ impl AccountRecordPurpose {
                 mutable: false,
                 max_len: 32,
             },
+            Self::ContactCard => PurposePolicy {
+                object: ObjectPolicy::Required(32),
+                length: Length::Bucket(256),
+                mutable: true,
+                max_len: bucketed(crate::contact_card::MAX_CARD_BYTES),
+            },
+            Self::MailName => PurposePolicy {
+                object: ObjectPolicy::Required(17),
+                length: Length::Bucket(256),
+                mutable: true,
+                max_len: bucketed(crate::mail_names::MAX_NAME_BYTES),
+            },
+            Self::IdentityPins => PurposePolicy {
+                object: ObjectPolicy::None,
+                length: Length::Bucket(256),
+                mutable: true,
+                max_len: bucketed(crate::identity_pins::MAX_LIST_BYTES),
+            },
         }
     }
 
     /// Every purpose, for tests and vectors.
-    pub const ALL: [Self; 6] = [
+    pub const ALL: [Self; 9] = [
         Self::PasswordMasterKey,
         Self::RecoveryMasterKey,
         Self::ChatBackupRoot,
         Self::MailAddressPrivateKey,
         Self::PassVaultSecret,
         Self::OrganizationPrivateKey,
+        Self::ContactCard,
+        Self::MailName,
+        Self::IdentityPins,
     ];
 }
 
@@ -203,6 +239,9 @@ impl TryFrom<u16> for AccountRecordPurpose {
             5 => Ok(Self::MailAddressPrivateKey),
             6 => Ok(Self::PassVaultSecret),
             7 => Ok(Self::OrganizationPrivateKey),
+            8 => Ok(Self::ContactCard),
+            9 => Ok(Self::MailName),
+            10 => Ok(Self::IdentityPins),
             _ => Err(CryptoError::InvalidInput(format!(
                 "unknown account-record purpose {value}"
             ))),

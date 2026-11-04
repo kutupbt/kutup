@@ -267,11 +267,6 @@ pub const COLLAB_FRAME_KEY_V1: &[u8] = b"kutup/collab/frame-key/v1\0";
 /// `kutup-crypto/src/envelope.rs` (`SIGNATURE_DOMAIN`)
 pub const COLLAB_FRAME_V3: &[u8] = b"kutup/collab/frame/v3\0";
 
-// --- contact-card ------------------------------------------------------------
-
-/// `kutup-crypto/src/contact_card.rs` (`CARD_AAD_DOMAIN`)
-pub const CONTACT_CARD_V2: &[u8] = b"kutup/contact-card/v2\0";
-
 // --- contact-control ---------------------------------------------------------
 
 /// `kutup-chat-core/src/session.rs`
@@ -281,13 +276,6 @@ pub const CONTACT_CONTROL_V1: &[u8] = b"kutup/contact-control/v1\0";
 
 /// `kutup-crypto/src/chat_group.rs`
 pub const CONTACT_SUMMARY_V2: &[u8] = b"kutup/contact-summary/v2\0";
-
-// --- contacts ----------------------------------------------------------------
-
-/// `kutup-crypto/src/contact_card.rs` (`CONTACTS_KEY_INFO`)
-pub const CONTACTS_CARD_KEY_V1: &[u8] = b"kutup/contacts/card-key/v1\0";
-/// `kutup-crypto/src/contact_card.rs` (`CONTACTS_KEY_SALT`)
-pub const CONTACTS_V1: &[u8] = b"kutup/contacts/v1\0";
 
 // --- device-registration -----------------------------------------------------
 
@@ -366,15 +354,6 @@ pub const GROUP_ENDORSEMENT_UPLOAD_V1: &[u8] = b"kutup/group-endorsement-upload/
 /// `kutup-server/src/chat_group_send.rs`
 pub const GROUP_SEND_ISSUE_V1: &[u8] = b"kutup/group-send-issue/v1\0";
 
-// --- identity-pins -----------------------------------------------------------
-
-/// `kutup-crypto/src/identity_pins.rs` (`PINS_KEY_INFO`)
-pub const IDENTITY_PINS_LIST_KEY_V1: &[u8] = b"kutup/identity-pins/list-key/v1\0";
-/// `kutup-crypto/src/identity_pins.rs` (`PINS_KEY_SALT`)
-pub const IDENTITY_PINS_V1: &[u8] = b"kutup/identity-pins/v1\0";
-/// `kutup-crypto/src/identity_pins.rs` (`AAD_DOMAIN`)
-pub const IDENTITY_PINS_V3: &[u8] = b"kutup/identity-pins/v3\0";
-
 // --- known-client ------------------------------------------------------------
 
 /// `kutup-server/src/auth_check.rs`
@@ -417,18 +396,6 @@ pub const MAIL_GROUP_SIGNING_SHARE_V2: &[u8] = b"kutup/mail-group-signing-share/
 
 /// `kutup-crypto/src/chat_group.rs`
 pub const MAIL_KEY_LIST_V1: &[u8] = b"kutup/mail-key-list/v1\0";
-
-// --- mail-name ---------------------------------------------------------------
-
-/// `kutup-crypto/src/mail_names.rs` (`AAD_DOMAIN`)
-pub const MAIL_NAME_V2: &[u8] = b"kutup/mail-name/v2\0";
-
-// --- mail-names --------------------------------------------------------------
-
-/// `kutup-crypto/src/mail_names.rs` (`KEY_INFO`)
-pub const MAIL_NAMES_NAME_KEY_V1: &[u8] = b"kutup/mail-names/name-key/v1\0";
-/// `kutup-crypto/src/mail_names.rs` (`KEY_SALT`)
-pub const MAIL_NAMES_V1: &[u8] = b"kutup/mail-names/v1\0";
 
 // --- mail-search -------------------------------------------------------------
 
@@ -627,7 +594,7 @@ pub const FEDERATION_REQUEST_REPLAY_HASH_V1: &[u8] = b"kutup/federation/request-
 pub const FEDERATION_SIGNATURE_TAG: &str = "kutup-federation-v2";
 
 /// Every label, for the registry's own checks.
-pub const ALL: [&[u8]; 196] = [
+pub const ALL: [&[u8]; 187] = [
     ORG_ACCESS_REQUEST_V1,
     ORG_KEY_CERTIFICATE_V1,
     ORG_KEY_ID_V1,
@@ -731,11 +698,8 @@ pub const ALL: [&[u8]; 196] = [
     CHAT_LOCAL_V1,
     COLLAB_FRAME_KEY_V1,
     COLLAB_FRAME_V3,
-    CONTACT_CARD_V2,
     CONTACT_CONTROL_V1,
     CONTACT_SUMMARY_V2,
-    CONTACTS_CARD_KEY_V1,
-    CONTACTS_V1,
     DEVICE_REGISTRATION_V1,
     DEVICE_REVOCATION_V1,
     DKIM_KEY_V1,
@@ -759,9 +723,6 @@ pub const ALL: [&[u8]; 196] = [
     FAKE_ACCOUNT_V1,
     GROUP_ENDORSEMENT_UPLOAD_V1,
     GROUP_SEND_ISSUE_V1,
-    IDENTITY_PINS_LIST_KEY_V1,
-    IDENTITY_PINS_V1,
-    IDENTITY_PINS_V3,
     KNOWN_CLIENT_V1,
     MAIL_ADDRESS_KEY_V1,
     MAIL_FORWARDING_MARKER_V1,
@@ -771,9 +732,6 @@ pub const ALL: [&[u8]; 196] = [
     MAIL_GROUP_SIGNER_HANDOVER_V1,
     MAIL_GROUP_SIGNING_SHARE_V2,
     MAIL_KEY_LIST_V1,
-    MAIL_NAME_V2,
-    MAIL_NAMES_NAME_KEY_V1,
-    MAIL_NAMES_V1,
     MAIL_SEARCH_LOCATOR_KEY_V1,
     MAIL_SEARCH_NAME_KEY_V1,
     MAIL_SEARCH_RECORD_KEY_V1,
