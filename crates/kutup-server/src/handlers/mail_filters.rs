@@ -37,8 +37,16 @@ pub struct MailFilter {
     pub source: String,
 }
 
-fn check_sealed(name: &str) -> AppResult<()> {
-    crate::revisions::mail_name(name).map(drop)
+/// A new sealed name for the filter `id` of the account: its revision, or a
+/// refusal.
+async fn check_sealed(state: &AppState, user_id: Uuid, id: &Uuid, name: &str) -> AppResult<u64> {
+    let binding = crate::revisions::key_binding(&state.pool, user_id).await?;
+    crate::revisions::new_mail_name(
+        name,
+        &binding,
+        kutup_crypto::mail_names::MailNameKind::Filter,
+        id,
+    )
 }
 
 /// The folder and labels a filter names are the account's own.
@@ -191,7 +199,7 @@ pub async fn create(
 ) -> AppResult<StatusCode> {
     let user_id = trusted_uuid(&user.user_id)?;
     let id = Uuid::parse_str(&request.id).map_err(|_| AppError::bad_request("not an id"))?;
-    check_sealed(&request.name)?;
+    check_sealed(&state, user_id, &id, &request.name).await?;
     filters::check(&request.conditions, &request.actions).map_err(AppError::bad_request)?;
     check_places(&state, user_id, &request.actions).await?;
     let source = request.source.as_deref().unwrap_or("manual");
@@ -280,7 +288,8 @@ pub async fn update(
     let (conditions, actions, stored_name) =
         current.ok_or_else(|| AppError::not_found("no such filter"))?;
     if let Some(name) = &request.name {
-        crate::revisions::check_rename(&stored_name, name, request.base_name_revision)?;
+        let new = check_sealed(&state, user_id, &id, name).await?;
+        crate::revisions::check_rename(&stored_name, new, request.base_name_revision)?;
     }
     let conditions: Vec<Condition> = match request.conditions {
         Some(conditions) => conditions,

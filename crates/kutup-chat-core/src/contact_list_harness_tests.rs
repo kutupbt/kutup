@@ -369,7 +369,7 @@ fn contacts_a_first_meeting_reaches_the_pin_list_later_and_together() {
         .unwrap()
         .is_none());
     let envelope = world.identity_pins.borrow()[&alice.account].1.clone();
-    let key = kutup_crypto::identity_pins::derive_key(&[seed; 32]).unwrap();
+    let key = [seed; 32];
     let (list, _) = kutup_crypto::identity_pins::open(
         &key,
         &binding,

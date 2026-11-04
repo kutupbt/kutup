@@ -27,9 +27,9 @@ dual-written. This destructive rule expires at the first stable `v*` tag.
 | Folder key history | — (new) | **Implemented end to end:** `DriveEnvelopeV1` purpose 8 seals epoch *e − 1*'s key under epoch *e*'s; `collection_keyring::unlock` verifies the whole owner-signed statement chain and every key commitment (docs/plans/drive-share-revocation.md) |
 | Public-link owner copy | — (new) | **Implemented end to end:** `DriveEnvelopeV1` purpose 9 seals a link's key under the owner's master key (object = link id), so links can be listed, copied and re-wrapped on rotation |
 | Encrypted profile | AES-256-GCM nonce/ciphertext | **Implemented end to end:** `ProfileSuiteId = 1` plus account/revision/device/purpose-bound XChaCha `ProfileEnvelopeV1`; suite code accompanies every E2EE profile-key capability; the owner's own copy of the profile key is wrapped under a key from the master key and the key binding (`kutup/chat-profile/wrap/v2`) |
-| Identity pins | — (new) | **Implemented end to end:** `KUTIP3` suite 3, the account's synced pin list sealed under a master-key-derived key, bound to the account's key binding and the list's revision; pins are keyed by account (server and account id), with addresses kept only as labels. Earlier suites are not read. Vector: `identity-pins-v3.json` |
-| Contacts | — (new) | **Implemented end to end:** summaries signed by the account authority under `kutup/contact-summary/v2` and cards sealed as `KUTCC2` suite 2, both bound to the account's key binding (cards also to the contact UID). Vector: `contact-card-v2.json` |
-| Mail folder, label and filter names | — (new) | **Implemented end to end:** `KUTMN2` suite 2, sealed under a master-key-derived key, bound to the account's key binding, the kind and the id. Vector: `mail-names-v2.json` |
+| Identity pins | — (new) | **Implemented end to end:** the account's synced pin list, an `AccountRecordV1` (purpose `IdentityPins`, one per account) under the master key, bound to the account's key binding and the list's revision; pins are keyed by account (server and account id), with addresses kept only as labels. Vector: `identity-pins-v4.json` |
+| Contacts | — (new) | **Implemented end to end:** summaries signed by the account authority under `kutup/contact-summary/v2`, and cards as `AccountRecordV1` (purpose `ContactCard`, object the SHA-256 of the UID, which the server checks against the summary), both bound to the account's key binding. Vector: `contact-card-v3.json` |
+| Mail folder, label and filter names | — (new) | **Implemented end to end:** `AccountRecordV1` (purpose `MailName`, object the kind and the id) under the master key, bound to the account's key binding. Vector: `mail-names-v3.json` |
 | Direct Chat | `DirectChatSuiteId = 1`, libsignal bytes | Unchanged pinned libsignal suite |
 | MLS group | MLS `0x0002`, P-256 control and delivery keys | MLS `0x0003`, X25519/ChaCha/Ed25519 throughout Kutup-owned bindings |
 | Account device directory | Chat-only `DeviceManifest` plus global transparency proofs | One account-signed `AccountManifestV1` with complete device set, previous hash, history and durable peer pin |
@@ -44,11 +44,14 @@ docs/plans/w6-key-hierarchy.md §2), big-endian context length, the context
 (the account's key binding, a UUID v4, never an email, username or address:
 docs/plans/account-identity.md), the object id's length byte and the object
 id where the purpose has one record per object, an 8-byte big-endian revision
-for a mutable purpose, 24-byte nonce, big-endian ciphertext length, and
-XChaCha20-Poly1305 ciphertext/tag. The bytes preceding the ciphertext are the
-complete AAD, and the AEAD key is derived per record with HKDF-SHA256
-(salt `kutup/account-record/v1`) over the header before the nonce. Each
-purpose has one policy (`AccountRecordPurpose::policy`),
+for a mutable purpose, the 32-byte key commitment, 24-byte nonce, big-endian
+ciphertext length, and XChaCha20-Poly1305 ciphertext/tag. The bytes preceding
+the ciphertext are the complete AAD. The AEAD key and the key commitment are
+two HKDF-SHA256 outputs (salt `kutup/account-record/v1`, infos
+`…/key/v1` and `…/commit/v1`) over the header before the commitment; a reader
+compares the commitment in constant time before the AEAD, so no record opens
+under more than one key (XChaCha20-Poly1305 alone does not commit to its
+key). Each purpose has one policy (`AccountRecordPurpose::policy`),
 checked on seal, open and by the server: whether it names an object (and its
 length), how its plaintext's length shows (`Exact` for keys; `Fixed` or
 `Bucket` padding, `0x80` then zeros, applied once by the envelope and checked
@@ -61,6 +64,9 @@ site setting) and whether it carries a revision:
 | MailAddressPrivateKey | none | padded to a multiple of 256 bytes, at most 4096 | no |
 | PassVaultSecret | the vault's file id (16 bytes) | padded to one length (`pass_vault::MAX_PAYLOAD_LEN` + 1 = 3121 bytes) | yes |
 | OrganizationPrivateKey | the key's id (32 bytes) | exactly 32 bytes | no |
+| ContactCard | SHA-256 of the contact's UID (32 bytes) | padded to a multiple of 256 bytes, at most 512 KiB | yes |
+| MailName | the kind byte and the 16-byte id | padded to a multiple of 256 bytes, at most 400 bytes | yes |
+| IdentityPins | none (one list per account) | padded to a multiple of 256 bytes, at most 4 MiB | yes |
 
 Every server write path checks a record with
 `account_record::validate_for(purpose, binding, object)` before storing it,
@@ -70,17 +76,16 @@ extra object or revision, a length its policy never gives, and trailing data.
 `account-record-v1.json` holds one envelope per purpose and, for each, the
 envelopes that must be refused, read by the Rust and the WASM tests.
 
-Contact cards (`KUTCC2`), mail names (`KUTMN2`) and identity pin lists
-(`KUTIP3`) carry their revision in clear after the suite, covered by the AAD
-(docs/plans/sealed-revisions.md); cards and names are padded to a multiple of
+Contact cards, mail names and identity pin lists are mutable purposes: their
+revision is in the record's header, covered by the AAD
+(docs/plans/sealed-revisions.md), and all three are padded to a multiple of
 256 bytes.
 
 The account's own at-rest formats bind the key binding, never a name, and a
 format that bound a name was replaced by a new version with no reader for the
-old one (the private beta was reset): identity pins `KUTIP1` → `KUTIP2` →
-`KUTIP3` (suite 3, the key binding),
-contact summaries `kutup/contact-summary/v1` → `/v2` and cards `KUTCC1` →
-`KUTCC2`, mail names `KUTMN1` → `KUTMN2`, and Chat's wrapped profile key
+old one (the private beta was reset): identity pins, contact cards and mail
+names (now account records), contact summaries `kutup/contact-summary/v1` →
+`/v2`, and Chat's wrapped profile key
 `kutup/chat-profile/wrap/v1` → `-v2`. Each vector file lists the values that
 must be refused: another key binding, the address in place of the binding, a
 changed header, nonce or ciphertext, and the old address-bound value.

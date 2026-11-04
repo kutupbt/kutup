@@ -244,7 +244,7 @@ fn read_pins(
     me: &Me,
     index: &crate::account_head::Index,
 ) -> Result<(u64, IdentityPinsV2)> {
-    let key = identity_pins::derive_key(&me.master_key)?;
+    let key = &me.master_key;
     let guard = me.guard()?;
     let (revision, list) = match ctx.client.get_identity_pins()? {
         None => {
@@ -258,7 +258,7 @@ fn read_pins(
             let sealed = STANDARD
                 .decode(&record.envelope)
                 .context("identity pins are not base64")?;
-            let (list, revision) = identity_pins::open(&key, &me.binding, &sealed)?;
+            let (list, revision) = identity_pins::open(key, &me.binding, &sealed)?;
             index.expect(HEAD_ID, revision)?;
             (revision, list)
         }
@@ -313,7 +313,7 @@ fn now_seconds() -> u64 {
 /// `identity_pins::record`) with the next account head; merges with whatever
 /// another app stored meanwhile.
 fn pin(ctx: &Ctx, me: &Me, person: &Published, update: PinUpdate) -> Result<Recorded> {
-    let key = identity_pins::derive_key(&me.master_key)?;
+    let key = &me.master_key;
     let guard = me.guard()?;
     let guard = &guard;
     let mut head = me.head(ctx)?;
@@ -338,7 +338,15 @@ fn pin(ctx: &Ctx, me: &Me, person: &Published, update: PinUpdate) -> Result<Reco
         let next = guard
             .next(PINS_GUARD_SCOPE, PINS_GUARD_ID, revision)?
             .max(now_millis());
-        let sealed = identity_pins::seal(&key, &me.binding, next, &list)?;
+        // Rotation (docs/plans/w6-key-hierarchy.md) seals at the account's
+        // current generation; until it exists there is only the first.
+        let sealed = identity_pins::seal(
+            key,
+            kutup_crypto::account_record::MasterKeyGeneration::FIRST,
+            &me.binding,
+            next,
+            &list,
+        )?;
         let envelope = STANDARD.encode(sealed);
         Ok(Some(crate::account_head::Edit {
             changes: vec![(HEAD_ID.to_owned(), Some(next))],

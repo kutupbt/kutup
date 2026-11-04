@@ -1,7 +1,8 @@
 # W1: one account-record envelope (build note)
 
 Status: approved 2026-11-04 (decisions (a)-(e) below, all as recommended).
-Slice 1 (the envelope) is in this PR.
+Slice 1 (the envelope) is merged; slice 2 (contact cards, mail names, identity
+pins, and the key commitment) is in its PR.
 
 Builds [wipe-unification.md](wipe-unification.md) W1 on what W6 already
 shipped: `KUTPAE2` (now [account_record.rs](../../crates/kutup-crypto/src/account_record.rs))
@@ -117,6 +118,40 @@ binding, object)` and reads the revision and `previous` from the header for
 its compare-and-swap. It never parses a second field: the ledger's entity
 check becomes "the URL's entity hashes to the header's object", and the
 profile's "matches the request" becomes the object and revision.
+
+## Key commitment (added with slice 2, from the crypto review)
+
+XChaCha20-Poly1305 does not commit to its key: a party that can name several
+candidate keys (a server holding the OPRF key and the OPAQUE envelope can
+derive candidate password KEKs) could craft one record that opens under many
+of them, a partitioning oracle. `KUTPAR1` is frozen at the wipe, so the
+commitment goes in now rather than as a later suite: the record's HKDF gives
+a second output, `info kutup/account-record/commit/v1 ‖ header before the
+commitment`, a 32-byte key commitment kept in the header after the revision
+(so inside the AAD). A reader derives it and compares it in constant time
+before the AEAD; a record whose commitment does not match its key is refused
+there.
+
+## Slice 2 as built
+
+- `ContactCard` (8): the object is the SHA-256 of the contact's UID, not an
+  HMAC. Contacts follow Proton's model, where the server reads the UID from
+  the signed summary, so a keyed hash would hide nothing, while a plain hash
+  lets the server check the card is the summary's contact (`validate_card`).
+- `MailName` (9): the object is the kind byte and the 16-byte id; the ids are
+  chosen by the client, so the server checks a new name against the place it
+  names (`new_mail_name`).
+- `IdentityPins` (10): no object. The list is one per account (its table's
+  key is the user), so the account binding pins it; the "missing list id"
+  above was not a gap.
+- The cards', names' and pins' own keys (`derive_contacts_key`,
+  `derive_names_key`, `identity_pins::derive_key`) and their magics and labels
+  are gone: each seals under the master key, with the generation from the
+  caller (`MASTER_KEY_GENERATION` on the web).
+- Servers refuse a record's base64 longer than its purpose allows
+  (`decode_record_b64`) before decoding it.
+- Slice 2 needs no keyed-hash object policy; it comes with the Chat lists
+  (slice 3), whose group ids and accounts the server must not see.
 
 ## Decisions (approved 2026-11-04)
 

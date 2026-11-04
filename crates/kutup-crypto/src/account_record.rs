@@ -33,11 +33,15 @@ const NONCE_LEN: usize = 24;
 const LENGTH_LEN: usize = 4;
 const REVISION_LEN: usize = 8;
 const TAG_LEN: usize = 16;
-const MAX_CONTEXT_LEN: usize = 320;
+/// A key binding: a canonical UUID's 36 characters.
+const MAX_CONTEXT_LEN: usize = 36;
 /// The longest object id a record names.
 pub const MAX_OBJECT_LEN: usize = 64;
 const KEY_SALT: &[u8] = crate::labels::ACCOUNT_RECORD_V1;
 const KEY_INFO: &[u8] = crate::labels::ACCOUNT_RECORD_KEY_V1;
+const COMMIT_INFO: &[u8] = crate::labels::ACCOUNT_RECORD_COMMIT_V1;
+/// The key commitment's length (see [`record_keys`]).
+const COMMITMENT_LEN: usize = 32;
 
 /// Which master key an account secret belongs to: the generation of the MK
 /// a password or recovery wrap holds, or of the MK that sealed any other
@@ -96,6 +100,37 @@ impl TryFrom<u16> for AccountRecordSuiteId {
     }
 }
 
+/// The longest record of `purpose`, its largest header included.
+pub const fn max_record_len(purpose: AccountRecordPurpose) -> usize {
+    FIXED_PREFIX_LEN
+        + MAX_CONTEXT_LEN
+        + 1
+        + MAX_OBJECT_LEN
+        + REVISION_LEN
+        + COMMITMENT_LEN
+        + NONCE_LEN
+        + LENGTH_LEN
+        + purpose.policy().max_len
+        + TAG_LEN
+}
+
+/// The longest canonical base64 of a record of `purpose`: a server refuses a
+/// longer value before decoding it.
+pub const fn max_record_b64_len(purpose: AccountRecordPurpose) -> usize {
+    max_record_len(purpose).div_ceil(3) * 4
+}
+
+/// [`decode_canonical_b64`] for a record of `purpose`, refusing a value too
+/// long to be one before decoding it.
+pub fn decode_record_b64(value: &str, purpose: AccountRecordPurpose) -> Result<Vec<u8>> {
+    if value.len() > max_record_b64_len(purpose) {
+        return Err(CryptoError::InvalidInput(
+            "account-record is longer than its purpose allows".into(),
+        ));
+    }
+    decode_canonical_b64(value)
+}
+
 /// What a record is, in its authenticated header: a closed registry, one
 /// line per kind of account-private value.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -114,6 +149,21 @@ pub enum AccountRecordPurpose {
     /// An organization key's seed, an owner's or admin's own copy
     /// (docs/plans/organizations.md §3); its object is the key's id.
     OrganizationPrivateKey = 7,
+    /// A contact's vCard (`contact_card`); its object is the SHA-256 of the
+    /// contact's UID, which the server reads from the card's signed summary
+    /// (Proton's model), so it checks the card is that contact's.
+    ContactCard = 8,
+    /// A mail folder's, label's or filter's name (`mail_names`); its object
+    /// is the kind byte and the 16-byte id.
+    MailName = 9,
+    /// The account's one identity-pin list (`identity_pins`).
+    IdentityPins = 10,
+}
+
+/// The longest padded length of `max` bytes in 256-byte buckets (`0x80`
+/// marker, then zeros).
+const fn bucketed(max: usize) -> usize {
+    (max / 256 + 1) * 256
 }
 
 /// Whether a purpose's envelopes name an object.
@@ -178,17 +228,38 @@ impl AccountRecordPurpose {
                 mutable: false,
                 max_len: 32,
             },
+            Self::ContactCard => PurposePolicy {
+                object: ObjectPolicy::Required(32),
+                length: Length::Bucket(256),
+                mutable: true,
+                max_len: bucketed(crate::contact_card::MAX_CARD_BYTES),
+            },
+            Self::MailName => PurposePolicy {
+                object: ObjectPolicy::Required(17),
+                length: Length::Bucket(256),
+                mutable: true,
+                max_len: bucketed(crate::mail_names::MAX_NAME_BYTES),
+            },
+            Self::IdentityPins => PurposePolicy {
+                object: ObjectPolicy::None,
+                length: Length::Bucket(256),
+                mutable: true,
+                max_len: bucketed(crate::identity_pins::MAX_LIST_BYTES),
+            },
         }
     }
 
     /// Every purpose, for tests and vectors.
-    pub const ALL: [Self; 6] = [
+    pub const ALL: [Self; 9] = [
         Self::PasswordMasterKey,
         Self::RecoveryMasterKey,
         Self::ChatBackupRoot,
         Self::MailAddressPrivateKey,
         Self::PassVaultSecret,
         Self::OrganizationPrivateKey,
+        Self::ContactCard,
+        Self::MailName,
+        Self::IdentityPins,
     ];
 }
 
@@ -203,6 +274,9 @@ impl TryFrom<u16> for AccountRecordPurpose {
             5 => Ok(Self::MailAddressPrivateKey),
             6 => Ok(Self::PassVaultSecret),
             7 => Ok(Self::OrganizationPrivateKey),
+            8 => Ok(Self::ContactCard),
+            9 => Ok(Self::MailName),
+            10 => Ok(Self::IdentityPins),
             _ => Err(CryptoError::InvalidInput(format!(
                 "unknown account-record purpose {value}"
             ))),
@@ -275,8 +349,6 @@ fn build_header(
     binding: &str,
     object_id: &[u8],
     revision: Option<u64>,
-    nonce: &[u8; NONCE_LEN],
-    ciphertext_len: u32,
 ) -> Result<Vec<u8>> {
     let context_len = u16::try_from(binding.len())
         .map_err(|_| CryptoError::InvalidInput("account-record context is too long".into()))?;
@@ -286,6 +358,7 @@ fn build_header(
             + 1
             + object_id.len()
             + REVISION_LEN
+            + COMMITMENT_LEN
             + NONCE_LEN
             + LENGTH_LEN,
     );
@@ -300,28 +373,58 @@ fn build_header(
     if let Some(revision) = revision {
         header.extend_from_slice(&revision.to_be_bytes());
     }
-    header.extend_from_slice(nonce);
-    header.extend_from_slice(&ciphertext_len.to_be_bytes());
     Ok(header)
 }
 
-/// A record's AEAD key: derived from the wrapping key over the header up to
-/// the nonce (`keyed`), so every record of another purpose, account, object,
-/// generation or revision has a key of its own.
-fn aead_key(key: &[u8], keyed: &[u8]) -> Result<Zeroizing<[u8; 32]>> {
-    let mut out = Zeroizing::new([0u8; 32]);
-    let mut info = Vec::with_capacity(KEY_INFO.len() + keyed.len());
-    info.extend_from_slice(KEY_INFO);
-    info.extend_from_slice(keyed);
-    Kdf::new(Suite::V1, KEY_SALT, key)
-        .expand(&info, out.as_mut_slice())
-        .map_err(|_| CryptoError::Backend("account-record key".into()))?;
-    Ok(out)
+/// The keyed part followed by the key commitment, the nonce and the
+/// ciphertext length: the whole header, and the record's AEAD key.
+fn finish_header(
+    key: &[u8],
+    keyed: Vec<u8>,
+    nonce: &[u8; NONCE_LEN],
+    ciphertext_len: u32,
+) -> Result<(Vec<u8>, Zeroizing<[u8; 32]>)> {
+    let (aead, commitment) = record_keys(key, &keyed)?;
+    let mut header = keyed;
+    header.extend_from_slice(&commitment);
+    header.extend_from_slice(nonce);
+    header.extend_from_slice(&ciphertext_len.to_be_bytes());
+    Ok((header, aead))
 }
 
-/// The header up to the nonce: what a record's key is derived over.
+/// A record's AEAD key and its key commitment, both derived from the
+/// wrapping key over the header before the commitment (`keyed`), so every
+/// record of another purpose, account, object, generation or revision has a
+/// key of its own. XChaCha20-Poly1305 does not commit to its key: a record
+/// could be crafted to open under several candidate keys (a partitioning
+/// oracle on password-derived keys). The commitment, a second output of the
+/// same derivation kept in the header, closes that: a record opens only
+/// under the key that derives its commitment, checked before the AEAD.
+fn record_keys(key: &[u8], keyed: &[u8]) -> Result<(Zeroizing<[u8; 32]>, [u8; COMMITMENT_LEN])> {
+    let kdf = Kdf::new(Suite::V1, KEY_SALT, key);
+    let expand = |label: &[u8], out: &mut [u8]| {
+        let mut info = Vec::with_capacity(label.len() + keyed.len());
+        info.extend_from_slice(label);
+        info.extend_from_slice(keyed);
+        kdf.expand(&info, out)
+            .map_err(|_| CryptoError::Backend("account-record key".into()))
+    };
+    let mut aead = Zeroizing::new([0u8; 32]);
+    expand(KEY_INFO, aead.as_mut_slice())?;
+    let mut commitment = [0u8; COMMITMENT_LEN];
+    expand(COMMIT_INFO, &mut commitment)?;
+    Ok((aead, commitment))
+}
+
+/// The header before the commitment: what a record's keys are derived over.
 fn keyed_part(header: &[u8]) -> &[u8] {
-    &header[..header.len() - NONCE_LEN - LENGTH_LEN]
+    &header[..header.len() - COMMITMENT_LEN - NONCE_LEN - LENGTH_LEN]
+}
+
+/// The key commitment a header carries.
+fn commitment_of(header: &[u8]) -> &[u8] {
+    let end = header.len() - NONCE_LEN - LENGTH_LEN;
+    &header[end - COMMITMENT_LEN..end]
 }
 
 /// A record's AEAD key, as derived for it: for checked-in vectors only
@@ -329,7 +432,7 @@ fn keyed_part(header: &[u8]) -> &[u8] {
 pub fn aead_key_for_vectors(key: &[u8], record: &[u8]) -> Result<[u8; 32]> {
     check_key(key)?;
     let parsed = parse(record)?;
-    Ok(*aead_key(key, keyed_part(parsed.aad))?)
+    Ok(*record_keys(key, keyed_part(parsed.aad))?.0)
 }
 
 fn check_key(key: &[u8]) -> Result<()> {
@@ -456,17 +559,8 @@ pub fn seal_suite(
     let binding = canonical_binding(binding)?;
     let ciphertext_len = u32::try_from(padded.len() + TAG_LEN)
         .map_err(|_| CryptoError::InvalidInput("account-record plaintext is too long".into()))?;
-    let header = build_header(
-        suite,
-        purpose,
-        generation,
-        &binding,
-        object_id,
-        revision,
-        &nonce,
-        ciphertext_len,
-    )?;
-    let aead = aead_key(key, keyed_part(&header))?;
+    let keyed = build_header(suite, purpose, generation, &binding, object_id, revision)?;
+    let (header, aead) = finish_header(key, keyed, &nonce, ciphertext_len)?;
     let ciphertext = Aead::new(Suite::V1, aead.as_ref())?
         .seal_with_nonce(&nonce, &header, &padded)
         .map_err(|_| CryptoError::Backend("account-record seal".into()))?;
@@ -494,17 +588,8 @@ pub fn seal_unchecked_for_vectors(
     let suite = AccountRecordSuiteId::V1;
     let ciphertext_len = u32::try_from(plaintext.len() + TAG_LEN)
         .map_err(|_| CryptoError::InvalidInput("too long".into()))?;
-    let header = build_header(
-        suite,
-        purpose,
-        generation,
-        binding,
-        object_id,
-        revision,
-        nonce,
-        ciphertext_len,
-    )?;
-    let aead = aead_key(key, keyed_part(&header))?;
+    let keyed = build_header(suite, purpose, generation, binding, object_id, revision)?;
+    let (header, aead) = finish_header(key, keyed, nonce, ciphertext_len)?;
     let ciphertext = Aead::new(Suite::V1, aead.as_ref())?
         .seal_with_nonce(nonce, &header, plaintext)
         .map_err(|_| CryptoError::Backend("account-record seal".into()))?;
@@ -514,7 +599,7 @@ pub fn seal_unchecked_for_vectors(
 }
 
 fn parse(envelope: &[u8]) -> Result<ParsedEnvelope<'_>> {
-    let minimum = FIXED_PREFIX_LEN + 1 + NONCE_LEN + LENGTH_LEN + TAG_LEN;
+    let minimum = FIXED_PREFIX_LEN + 1 + COMMITMENT_LEN + NONCE_LEN + LENGTH_LEN + TAG_LEN;
     if envelope.len() < minimum || envelope.get(..MAGIC.len()) != Some(MAGIC) {
         return Err(CryptoError::TooShort);
     }
@@ -585,7 +670,10 @@ fn parse(envelope: &[u8]) -> Result<ParsedEnvelope<'_>> {
         )
     });
     check_shape(purpose, &object_id, revision)?;
-    let after_nonce = after_revision
+    let after_commitment = after_revision
+        .checked_add(COMMITMENT_LEN)
+        .ok_or(CryptoError::TooShort)?;
+    let after_nonce = after_commitment
         .checked_add(NONCE_LEN)
         .ok_or(CryptoError::TooShort)?;
     let after_length = after_nonce
@@ -623,7 +711,7 @@ fn parse(envelope: &[u8]) -> Result<ParsedEnvelope<'_>> {
             ciphertext_len,
         },
         aad: &envelope[..after_length],
-        nonce: &envelope[after_revision..after_nonce],
+        nonce: &envelope[after_commitment..after_nonce],
         ciphertext: &envelope[after_length..],
     })
 }
@@ -714,7 +802,12 @@ fn open_any(
     {
         return Err(CryptoError::AuthFailed);
     }
-    let aead = aead_key(key, keyed_part(parsed.aad))?;
+    let (aead, commitment) = record_keys(key, keyed_part(parsed.aad))?;
+    // The key commitment first, in constant time: a record crafted to open
+    // under several keys stops here.
+    if !crate::primitives::ct_eq(&commitment, commitment_of(parsed.aad)) {
+        return Err(CryptoError::AuthFailed);
+    }
     let padded = Aead::new(Suite::V1, aead.as_ref())?
         .open_with_nonce(parsed.nonce, parsed.aad, parsed.ciphertext)
         .map_err(|_| CryptoError::AuthFailed)
@@ -955,7 +1048,12 @@ mod tests {
             fixed + TAG_LEN
         );
         // Relabelled as another revision: refused.
-        let at = envelope.len() - (fixed + TAG_LEN) - LENGTH_LEN - NONCE_LEN - REVISION_LEN;
+        let at = envelope.len()
+            - (fixed + TAG_LEN)
+            - LENGTH_LEN
+            - NONCE_LEN
+            - COMMITMENT_LEN
+            - REVISION_LEN;
         let mut relabelled = envelope.clone();
         relabelled[at + REVISION_LEN - 1] ^= 1;
         assert_eq!(inspect(&relabelled).unwrap().revision, Some(8));

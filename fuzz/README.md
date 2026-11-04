@@ -1,6 +1,6 @@
 # Chat security parser fuzzing
 
-This standalone `cargo-fuzz` package drives the untrusted account-envelope,
+This standalone `cargo-fuzz` package drives the untrusted account-record,
 Drive/collaboration/profile-envelope, account-manifest,
 authenticated service-policy, sealed-sender, Chat media, calendar and block-format parsers. It is
 excluded from the normal workspace so release builds do not acquire a nightly
@@ -9,7 +9,7 @@ toolchain or libFuzzer dependency.
 The targets are:
 
 - `account_record_parser`: strict suite/purpose/context/length parsing plus
-  authenticated open attempts for every V1 account-envelope purpose;
+  authenticated open attempts for every account-record purpose;
 - `drive_envelope_parser`: strict suite/purpose/UUID/epoch/revision/length
   parsing and authenticated open attempts for every V1 Drive-envelope purpose,
   signed collection-epoch statements, authenticated named-share envelopes and

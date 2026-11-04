@@ -121,8 +121,11 @@ pub async fn provision(
         "backup incarnation id",
         &request.signer_authorization.backup_incarnation_id,
     )?;
-    let envelope = account_record::decode_canonical_b64(&request.root_envelope)
-        .map_err(|_| AppError::bad_request("invalid Chat backup root envelope"))?;
+    let envelope = account_record::decode_record_b64(
+        &request.root_envelope,
+        account_record::AccountRecordPurpose::ChatBackupRoot,
+    )
+    .map_err(|_| AppError::bad_request("invalid Chat backup root envelope"))?;
     account_record::inspect(&envelope)
         .map_err(|_| AppError::bad_request("invalid Chat backup root envelope"))?;
     let digest = request_digest(&request)?;

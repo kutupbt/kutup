@@ -7,8 +7,10 @@
 //! - [`ContactSummaryV1`]: what the server may read and index (UID, name,
 //!   emails, groups, pinned PGP keys), canonical JSON signed by the account
 //!   authority, so a server cannot rewrite who a contact is.
-//! - The contact card: the full vCard 4.0 text, sealed with XChaCha20-Poly1305
-//!   under the account's contacts key and bound to the account and UID.
+//! - The contact card: the full vCard 4.0 text, an account record
+//!   (`account_record`, purpose `ContactCard`) under the master key, whose
+//!   object is the SHA-256 of the contact's UID: bound to the account and
+//!   UID, and the server checks it is the card of the summary's contact.
 //!
 //! A contact is replaced over time, so both carry its revision (a time in
 //! unix milliseconds, above every revision seen: `RevisionGuard` on the web):
@@ -19,31 +21,18 @@
 //!
 //! Both bind the account by its key binding (docs/plans/account-identity.md),
 //! never by its address, which may change: summary signatures under the
-//! `kutup/contact-summary/v2` domain and cards of suite 2 (`KUTCC2`). The
-//! address-bound version 1 of both is not read: nothing from before carries
-//! over.
+//! `kutup/contact-summary/v2` domain, and cards in their account record.
 
-use crate::primitives::{Aead, Kdf, SigningKey, Suite, VerifyingKey};
+use crate::account_record::{self, AccountRecordPurpose, MasterKeyGeneration};
+use crate::primitives::{hash, SigningKey, Suite, VerifyingKey};
 use serde::{Deserialize, Serialize};
 use zeroize::Zeroizing;
 
 use crate::error::{CryptoError, Result};
 use crate::identity::{authority_key_id_from_public, incarnation_id_from_authority_public};
 use crate::key_binding;
-use crate::padding::Length;
 
-const CONTACTS_KEY_SALT: &[u8] = crate::labels::CONTACTS_V1;
-const CONTACTS_KEY_INFO: &[u8] = crate::labels::CONTACTS_CARD_KEY_V1;
 const SUMMARY_DOMAIN: &[u8] = crate::labels::CONTACT_SUMMARY_V2;
-const CARD_MAGIC: &[u8; 8] = b"KUTCC2\0\0";
-const CARD_AAD_DOMAIN: &[u8] = crate::labels::CONTACT_CARD_V2;
-const SUITE: u16 = 2;
-const NONCE_LEN: usize = 24;
-const REVISION_LEN: usize = 8;
-const CARD_HEADER_LEN: usize = 8 + 2 + REVISION_LEN + NONCE_LEN;
-const TAG_LEN: usize = 16;
-/// How a vCard is padded before it is sealed.
-const CARD_PADDING: Length = Length::Bucket(256);
 
 /// The largest summary accepted, encoded.
 pub const MAX_SUMMARY_BYTES: usize = 32 * 1024;
@@ -292,116 +281,98 @@ pub fn verify_summary(
     Ok(parsed)
 }
 
-/// The account's contacts key, derived from the master key.
-pub fn derive_contacts_key(master_key: &[u8; 32]) -> Result<Zeroizing<[u8; 32]>> {
-    let mut key = Zeroizing::new([0u8; 32]);
-    Kdf::new(Suite::V1, CONTACTS_KEY_SALT, master_key)
-        .expand(CONTACTS_KEY_INFO, key.as_mut_slice())
-        .map_err(|_| CryptoError::Backend("contacts key HKDF expand".into()))?;
-    Ok(key)
-}
-
-fn card_aad(binding: &str, uid: &str, revision: u64) -> Result<Vec<u8>> {
-    let binding = key_binding::check(binding).map_err(|_| invalid("key binding is invalid"))?;
+/// A card's object in its account record: the SHA-256 of the contact's UID
+/// (which the server reads from the summary, so it can check the card is
+/// that contact's).
+pub fn card_object(uid: &str) -> Result<[u8; 32]> {
     if !plain_text(uid, MAX_UID_CHARS) {
         return Err(invalid("uid is invalid"));
     }
-    check_revision(revision)?;
-    let mut aad = Vec::with_capacity(
-        CARD_MAGIC.len() + 2 + CARD_AAD_DOMAIN.len() + binding.len() + uid.len() + 12,
-    );
-    aad.extend_from_slice(CARD_MAGIC);
-    aad.extend_from_slice(&SUITE.to_be_bytes());
-    aad.extend_from_slice(CARD_AAD_DOMAIN);
-    aad.extend_from_slice(&(binding.len() as u16).to_be_bytes());
-    aad.extend_from_slice(binding.as_bytes());
-    aad.extend_from_slice(&(uid.len() as u16).to_be_bytes());
-    aad.extend_from_slice(uid.as_bytes());
-    aad.extend_from_slice(&revision.to_be_bytes());
-    Ok(aad)
+    Ok(hash(Suite::V1, uid.as_bytes()).to_array())
 }
 
-/// Seals revision `revision` of a contact's vCard text:
-/// `magic ‖ suite ‖ revision ‖ nonce ‖ ciphertext`, bound to the account's
-/// key binding, the contact's UID and the revision.
+/// Seals revision `revision` of a contact's vCard text under the master key:
+/// an account record bound to the account's key binding, the contact's UID
+/// and the revision.
 pub fn seal_card(
-    contacts_key: &[u8; 32],
+    master_key: &[u8; 32],
+    generation: MasterKeyGeneration,
     binding: &str,
     uid: &str,
     revision: u64,
     vcard: &[u8],
 ) -> Result<Vec<u8>> {
-    let mut nonce = [0u8; NONCE_LEN];
+    let mut nonce = [0u8; 24];
     crate::primitives::random(&mut nonce);
-    seal_card_with_nonce(contacts_key, binding, uid, revision, vcard, &nonce)
+    seal_card_with_nonce(
+        master_key, generation, binding, uid, revision, vcard, &nonce,
+    )
 }
 
 /// [`seal_card`] with a fixed nonce, for checked-in vectors only.
 pub fn seal_card_with_nonce(
-    contacts_key: &[u8; 32],
+    master_key: &[u8; 32],
+    generation: MasterKeyGeneration,
     binding: &str,
     uid: &str,
     revision: u64,
     vcard: &[u8],
-    nonce: &[u8; NONCE_LEN],
+    nonce: &[u8; 24],
 ) -> Result<Vec<u8>> {
     if vcard.is_empty() || vcard.len() > MAX_CARD_BYTES {
         return Err(invalid("card size is invalid"));
     }
-    let aad = card_aad(binding, uid, revision)?;
-    let padded = Zeroizing::new(CARD_PADDING.pad(vcard)?);
-    let ciphertext = Aead::new(Suite::V1, contacts_key.as_ref())?
-        .seal_with_nonce(nonce, &aad, &padded)
-        .map_err(|_| CryptoError::Backend("contact card seal".into()))?;
-    let mut out = Vec::with_capacity(CARD_HEADER_LEN + ciphertext.len());
-    out.extend_from_slice(CARD_MAGIC);
-    out.extend_from_slice(&SUITE.to_be_bytes());
-    out.extend_from_slice(&revision.to_be_bytes());
-    out.extend_from_slice(nonce);
-    out.extend_from_slice(&ciphertext);
-    Ok(out)
+    check_revision(revision)?;
+    account_record::seal_suite(
+        account_record::AccountRecordSuiteId::V1,
+        vcard,
+        master_key,
+        AccountRecordPurpose::ContactCard,
+        generation,
+        binding,
+        &card_object(uid)?,
+        Some(revision),
+        nonce,
+    )
 }
 
 /// Opens a sealed card of the account whose key binding is `binding`, for
 /// `uid`: the vCard and the revision it was sealed at (refuse one older than
 /// seen).
 pub fn open_card(
-    contacts_key: &[u8; 32],
+    master_key: &[u8; 32],
     binding: &str,
     uid: &str,
     sealed: &[u8],
 ) -> Result<(Zeroizing<Vec<u8>>, u64)> {
-    let revision = inspect_card(sealed)?;
-    let aad = card_aad(binding, uid, revision)?;
-    let nonce = &sealed[10 + REVISION_LEN..CARD_HEADER_LEN];
-    let padded = Aead::new(Suite::V1, contacts_key.as_ref())?
-        .open_with_nonce(nonce, &aad, &sealed[CARD_HEADER_LEN..])
-        .map_err(|_| CryptoError::AuthFailed)
-        .map(crate::primitives::into_vec)?;
-    let vcard = Zeroizing::new(CARD_PADDING.unpad(padded)?);
+    let (vcard, revision) = account_record::open_revision(
+        sealed,
+        master_key,
+        AccountRecordPurpose::ContactCard,
+        binding,
+        &card_object(uid)?,
+    )?;
+    let vcard = Zeroizing::new(vcard);
     if vcard.is_empty() || vcard.len() > MAX_CARD_BYTES {
         return Err(invalid("card size is invalid"));
     }
+    check_revision(revision)?;
     Ok((vcard, revision))
 }
 
-/// Checks a sealed card's framing, padded size and revision without opening
-/// it (the server's view), and returns the revision.
-pub fn inspect_card(sealed: &[u8]) -> Result<u64> {
-    let max = CARD_PADDING
-        .padded_len(MAX_CARD_BYTES)
-        .expect("fits")
-        .saturating_add(CARD_HEADER_LEN + TAG_LEN);
-    if sealed.len() <= CARD_HEADER_LEN + TAG_LEN
-        || sealed.len() > max
-        || !CARD_PADDING.allows_padded_len(sealed.len() - CARD_HEADER_LEN - TAG_LEN)
-    {
-        return Err(invalid("card size is invalid"));
-    }
-    if &sealed[..CARD_MAGIC.len()] != CARD_MAGIC || sealed[8..10] != SUITE.to_be_bytes() {
-        return Err(invalid("not a contact card"));
-    }
-    let revision = u64::from_be_bytes(sealed[10..10 + REVISION_LEN].try_into().expect("8"));
+/// What the server checks before storing a card: a well-formed card record
+/// of the account bound by `binding`, for the contact `uid` (the summary's),
+/// at a valid revision, which it returns.
+pub fn validate_card(sealed: &[u8], binding: &str, uid: &str) -> Result<u64> {
+    let header = account_record::validate_for(
+        sealed,
+        AccountRecordPurpose::ContactCard,
+        binding,
+        &card_object(uid)?,
+    )?;
+    let revision = header
+        .revision
+        .ok_or_else(|| invalid("a card has a revision"))?;
     check_revision(revision)?;
     Ok(revision)
 }
@@ -497,33 +468,32 @@ mod tests {
 
     #[test]
     fn cards_seal_and_open_only_for_their_contact() {
-        let key = derive_contacts_key(&[5u8; 32]).unwrap();
+        let master = [5u8; 32];
+        let first = MasterKeyGeneration::FIRST;
         let vcard = b"BEGIN:VCARD\r\nVERSION:4.0\r\nFN:Ay\xc5\x9fe\r\nTEL:+90 555 000 00 00\r\nEND:VCARD\r\n";
-        let sealed = seal_card(&key, ACCOUNT, "uid-1", 42, vcard).unwrap();
-        assert_eq!(inspect_card(&sealed).unwrap(), 42);
+        let sealed = seal_card(&master, first, ACCOUNT, "uid-1", 42, vcard).unwrap();
+        // The server's check: this account, this contact, revision 42.
+        assert_eq!(validate_card(&sealed, ACCOUNT, "uid-1").unwrap(), 42);
+        assert!(validate_card(&sealed, ACCOUNT, "uid-2").is_err());
+        assert!(validate_card(&sealed, OTHER, "uid-1").is_err());
         // Padded to a multiple of 256 bytes.
-        assert_eq!(sealed.len(), CARD_HEADER_LEN + 256 + TAG_LEN);
-        let (opened, revision) = open_card(&key, ACCOUNT, "uid-1", &sealed).unwrap();
+        let header = account_record::inspect(&sealed).unwrap();
+        assert_eq!(header.ciphertext_len as usize, 256 + 16);
+        let (opened, revision) = open_card(&master, ACCOUNT, "uid-1", &sealed).unwrap();
         assert_eq!((&opened[..], revision), (&vcard[..], 42));
         // The revision is authenticated: relabelled newer, it does not open.
+        let revision_at = sealed.len() - header.ciphertext_len as usize - 4 - 24 - 32 - 8;
         let mut relabelled = sealed.clone();
-        relabelled[10..18].copy_from_slice(&43u64.to_be_bytes());
-        assert!(open_card(&key, ACCOUNT, "uid-1", &relabelled).is_err());
-        let mut zero = sealed.clone();
-        zero[10..18].copy_from_slice(&0u64.to_be_bytes());
-        assert!(inspect_card(&zero).is_err());
-        assert!(seal_card(&key, ACCOUNT, "uid-1", 0, vcard).is_err());
+        relabelled[revision_at..revision_at + 8].copy_from_slice(&43u64.to_be_bytes());
+        assert!(open_card(&master, ACCOUNT, "uid-1", &relabelled).is_err());
+        assert!(seal_card(&master, first, ACCOUNT, "uid-1", 0, vcard).is_err());
         let mut short = sealed.clone();
         short.pop();
-        assert!(inspect_card(&short).is_err());
-        assert!(open_card(&key, ACCOUNT, "uid-2", &sealed).is_err());
-        assert!(open_card(&key, OTHER, "uid-1", &sealed).is_err());
-        assert!(open_card(&key, "alice@kutup.dev", "uid-1", &sealed).is_err());
-        let mut old = sealed.clone();
-        old[..8].copy_from_slice(b"KUTCC1\0\0");
-        old[8..10].copy_from_slice(&1u16.to_be_bytes());
-        assert!(inspect_card(&old).is_err());
-        let other = derive_contacts_key(&[6u8; 32]).unwrap();
-        assert!(open_card(&other, ACCOUNT, "uid-1", &sealed).is_err());
+        assert!(validate_card(&short, ACCOUNT, "uid-1").is_err());
+        assert!(open_card(&master, ACCOUNT, "uid-2", &sealed).is_err());
+        assert!(open_card(&master, OTHER, "uid-1", &sealed).is_err());
+        assert!(open_card(&master, "alice@kutup.dev", "uid-1", &sealed).is_err());
+        assert!(open_card(&[6u8; 32], ACCOUNT, "uid-1", &sealed).is_err());
+        assert!(card_object(&"u".repeat(MAX_UID_CHARS + 1)).is_err());
     }
 }

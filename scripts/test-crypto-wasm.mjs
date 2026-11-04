@@ -84,14 +84,23 @@ for (const p of envelopeVectors.purposes) {
   if (genericPurposes.has(p.purpose)) {
     assert.equal(crypto.openAccountRecord(p.envelope, envelopeVectors.key, p.purpose, envelopeVectors.binding), p.plaintext)
   } else {
-    // Mail keys and Pass vault secrets open only through their typed APIs
-    // (which the Rust vector test and test-pass-wasm.mjs open): the generic
-    // path refuses even a well-formed one.
+    // Mail keys, Pass vault secrets, organization keys, contact cards, mail
+    // names and identity pins open only through their typed APIs (the Rust
+    // vector test opens every purpose's; test-pass-wasm.mjs and the typed
+    // tests below open theirs): the generic path refuses even a well-formed
+    // one, so it never hands such a secret to JavaScript.
     assert.throws(() => crypto.openAccountRecord(p.envelope, envelopeVectors.key, p.purpose, envelopeVectors.binding))
   }
   for (const refused of p.refused) {
     if (refused.step === 'inspect') assert.throws(() => crypto.inspectAccountRecord(refused.envelope), refused.why)
     if (refused.step === 'open') assert.equal(crypto.inspectAccountRecord(refused.envelope).purpose, p.purpose, refused.why)
+    // Either refused well formed (another purpose's record) or malformed:
+    // never this purpose's record.
+    if (refused.step === 'inspect-or-open') {
+      let inspected = null
+      try { inspected = crypto.inspectAccountRecord(refused.envelope) } catch { /* malformed */ }
+      if (inspected) assert.notEqual(inspected.purpose, p.purpose, refused.why)
+    }
     if (genericPurposes.has(p.purpose)) {
       assert.throws(() => crypto.openAccountRecord(refused.envelope, envelopeVectors.key, p.purpose, envelopeVectors.binding), refused.why)
     }
@@ -880,7 +889,7 @@ assert.equal(crypto.verifyMailCleartext(cleartext.replace('metin', 'yazı'), mai
 
 // Contacts (docs/plans/contacts.md): bound to the account's key binding.
 const contactVectors = JSON.parse(
-  await readFile(`${root}/crates/kutup-crypto/tests/vectors/contact-card-v2.json`, 'utf8'),
+  await readFile(`${root}/crates/kutup-crypto/tests/vectors/contact-card-v3.json`, 'utf8'),
 )
 const contactIdentity = crypto.deriveAccountIdentityKeys(contactVectors.masterKey)
 // Signing a reordered summary gives the canonical bytes and the vector signature.
@@ -905,29 +914,29 @@ assert.deepEqual(
 for (const refused of contactVectors.refusedCards) {
   assert.throws(() => crypto.openContactCard(contactVectors.masterKey, refused.binding, refused.uid, refused.sealed), undefined, refused.case)
 }
-const resealedCard = crypto.sealContactCard(contactVectors.masterKey, contactVectors.binding, contactVectors.uid, contactVectors.revision + 1, contactVectors.vcard)
+const resealedCard = crypto.sealContactCard(contactVectors.masterKey, 1, contactVectors.binding, contactVectors.uid, contactVectors.revision + 1, contactVectors.vcard)
 assert.deepEqual(crypto.openContactCard(contactVectors.masterKey, contactVectors.binding, contactVectors.uid, resealedCard), { value: contactVectors.vcard, revision: contactVectors.revision + 1 })
-assert.throws(() => crypto.sealContactCard(contactVectors.masterKey, contactVectors.binding, contactVectors.uid, 0, contactVectors.vcard))
+assert.throws(() => crypto.sealContactCard(contactVectors.masterKey, 1, contactVectors.binding, contactVectors.uid, 0, contactVectors.vcard))
 assert.throws(() => crypto.openContactCard(contactVectors.masterKey, contactVectors.binding, 'another-uid', resealedCard))
-assert.throws(() => crypto.sealContactCard(contactVectors.masterKey, 'alice@kutup.dev', contactVectors.uid, 1, contactVectors.vcard))
+assert.throws(() => crypto.sealContactCard(contactVectors.masterKey, 1, 'alice@kutup.dev', contactVectors.uid, 1, contactVectors.vcard))
 
 // Sealed mail names (docs/plans/mail-filters.md): bound to the key binding.
-const nameVectors = JSON.parse(await readFile(`${root}/crates/kutup-crypto/tests/vectors/mail-names-v2.json`, 'utf8'))
+const nameVectors = JSON.parse(await readFile(`${root}/crates/kutup-crypto/tests/vectors/mail-names-v3.json`, 'utf8'))
 assert.deepEqual(crypto.openMailName(nameVectors.masterKey, nameVectors.binding, nameVectors.kind, nameVectors.id, nameVectors.sealed), { value: nameVectors.name, revision: nameVectors.revision })
 for (const refused of nameVectors.refused) {
   assert.throws(() => crypto.openMailName(nameVectors.masterKey, refused.binding, refused.kind, refused.id, refused.sealed), undefined, refused.case)
 }
-const resealedName = crypto.sealMailName(nameVectors.masterKey, nameVectors.binding, 'label', nameVectors.id, 5, nameVectors.name)
+const resealedName = crypto.sealMailName(nameVectors.masterKey, 1, nameVectors.binding, 'label', nameVectors.id, 5, nameVectors.name)
 assert.deepEqual(crypto.openMailName(nameVectors.masterKey, nameVectors.binding, 'label', nameVectors.id, resealedName), { value: nameVectors.name, revision: 5 })
 assert.throws(() => crypto.openMailName(nameVectors.masterKey, nameVectors.binding, 'folder', nameVectors.id, resealedName))
 assert.throws(() => crypto.openMailName(nameVectors.masterKey, nameVectors.binding, 'label', '00000000-0000-4000-8000-000000000000', resealedName))
-assert.throws(() => crypto.sealMailName(nameVectors.masterKey, 'alice@kutup.dev', 'label', nameVectors.id, 5, nameVectors.name))
+assert.throws(() => crypto.sealMailName(nameVectors.masterKey, 1, 'alice@kutup.dev', 'label', nameVectors.id, 5, nameVectors.name))
 
 // Drive identity (docs/plans/drive-identity-pins.md): the Drive key binding
 // names the account, its server and id (a statement to others); the pin
 // list, keyed by account id, binds the key binding.
 const identityVectors = JSON.parse(
-  await readFile(`${root}/crates/kutup-crypto/tests/vectors/identity-pins-v3.json`, 'utf8'),
+  await readFile(`${root}/crates/kutup-crypto/tests/vectors/identity-pins-v4.json`, 'utf8'),
 )
 const iv = identityVectors
 const ivAccount = crypto.parseAccountRef(iv.account)
@@ -947,10 +956,10 @@ assert.deepEqual(crypto.openIdentityPins(iv.masterKey, iv.binding, iv.sealed), {
 for (const refused of iv.refused) {
   assert.throws(() => crypto.openIdentityPins(iv.masterKey, refused.binding, refused.sealed), undefined, refused.case)
 }
-const resealedPins = crypto.sealIdentityPins(iv.masterKey, iv.binding, 8, iv.pins)
+const resealedPins = crypto.sealIdentityPins(iv.masterKey, 1, iv.binding, 8, iv.pins)
 assert.deepEqual(crypto.openIdentityPins(iv.masterKey, iv.binding, resealedPins), { value: iv.pins, revision: 8 })
-assert.throws(() => crypto.sealIdentityPins(iv.masterKey, iv.binding, 0, iv.pins))
-assert.throws(() => crypto.sealIdentityPins(iv.masterKey, iv.account, 8, iv.pins))
+assert.throws(() => crypto.sealIdentityPins(iv.masterKey, 1, iv.binding, 0, iv.pins))
+assert.throws(() => crypto.sealIdentityPins(iv.masterKey, 1, iv.account, 8, iv.pins))
 assert.equal(crypto.incarnationIdOfAuthority(iv.authorityPublicKey), crypto.deriveAccountIdentityKeys(iv.masterKey).incarnationId)
 
 // What every app does with the list: the same rules as Rust (record, lookup,
@@ -991,7 +1000,7 @@ assert.equal(crypto.incarnationIdOfAuthority(iv.authorityPublicKey), crypto.deri
   assert.equal(keptList.pins[0].addresses[0].via, 'chain')
   assert.deepEqual(keptList.laterList, { a: [1, 2] })
   for (const refused of r.refusedLists) {
-    assert.throws(() => crypto.sealIdentityPins(iv.masterKey, iv.binding, 9, refused.pins), undefined, refused.case)
+    assert.throws(() => crypto.sealIdentityPins(iv.masterKey, 1, iv.binding, 9, refused.pins), undefined, refused.case)
     assert.throws(() => crypto.recordIdentityPin(refused.pins, r.dave, undefined, iv.authorityPublicKey, 'firstSeen', since), undefined, refused.case)
   }
   // Shared mailboxes: the same rules as Rust (lookup_group, record_group).

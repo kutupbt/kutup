@@ -315,7 +315,7 @@ pub(crate) fn validate_account_record(
     binding: &str,
     field: &str,
 ) -> AppResult<()> {
-    let envelope = kutup_crypto::account_record::decode_canonical_b64(value)
+    let envelope = kutup_crypto::account_record::decode_record_b64(value, purpose)
         .map_err(|_| AppError::bad_request(format!("invalid {field} encoding")))?;
     kutup_crypto::account_record::validate_for(&envelope, purpose, binding, &[])
         .map(drop)

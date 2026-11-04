@@ -10,7 +10,7 @@ does not duplicate headers, parsers, KDF labels or AEAD constructions.
 | Module | Construction | Backing crate | Used for |
 |---|---|---|---|
 | `kdf` | Argon2id + HKDF-SHA256 | `dryoc`, `hkdf`/`sha2` | account protection and purpose subkeys |
-| `account_envelope` | suite-bearing XChaCha20-Poly1305 | `chacha20poly1305` | password/recovery/private account wraps |
+| `account_record` | `KUTPAR1`: per-record HKDF key and key commitment, XChaCha20-Poly1305 | primitives (`Kdf`, `Aead`) | every account-private record: password/recovery wraps, secrets under the master key, contact cards, mail names, identity pins |
 | `identity` / `collection_epoch` | deterministic account keys and signed epoch chains | `ed25519-dalek`, `hkdf`/`sha2` | account authority and collection continuity |
 | `drive_envelope` / `asset` | purpose-bound XChaCha20-Poly1305 | `chacha20poly1305` | Drive records, public links and whiteboard assets |
 | `drive_object` / `stream` | context-bound XChaCha20 secretstream, 5 MiB frames | `dryoc` | originals and version snapshots |

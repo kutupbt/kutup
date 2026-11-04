@@ -4,6 +4,7 @@
 // (kutup-crypto drive_key_binding, identity_pins).
 
 import type { AccountRef } from './accountRef'
+import { MASTER_KEY_GENERATION } from './masterKeyGeneration'
 import type { AccountRenameV1 } from './accountRename'
 import { getCryptoWasm } from './rustWasm'
 
@@ -126,7 +127,7 @@ export const EMPTY_PINS: PinsText = pinsText('{"pins":[]}')
  * (`session.envelopeBinding`), never its address.
  */
 export async function sealIdentityPins(masterKeyBase64: string, binding: string, revision: number, pins: PinsText): Promise<string> {
-  return (await getCryptoWasm()).sealIdentityPins(masterKeyBase64, binding, revision, pins.text)
+  return (await getCryptoWasm()).sealIdentityPins(masterKeyBase64, MASTER_KEY_GENERATION, binding, revision, pins.text)
 }
 
 /** Opens the pin list of the account whose key binding is `binding`, and the revision it was sealed at. */

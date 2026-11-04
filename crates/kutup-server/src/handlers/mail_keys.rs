@@ -525,7 +525,11 @@ pub async fn add_key(
 ) -> AppResult<Json<OwnMailAddress>> {
     let user_id = trusted_uuid(&user.user_id)?;
     let public_key = decode(&req.public_key, "publicKey")?;
-    let envelope = decode(&req.private_key_envelope, "privateKeyEnvelope")?;
+    let envelope = account_record::decode_record_b64(
+        &req.private_key_envelope,
+        account_record::AccountRecordPurpose::MailAddressPrivateKey,
+    )
+    .map_err(|_| AppError::bad_request("privateKeyEnvelope is not an account envelope"))?;
     account_record::inspect(&envelope)
         .map_err(|_| AppError::bad_request("privateKeyEnvelope is not an account envelope"))?;
 
@@ -599,7 +603,11 @@ pub(crate) async fn first_key(
     let address = mail_key::canonical_address(account)
         .map_err(|_| AppError::bad_request("the username is not a valid mail address"))?;
     let public_key = decode(&req.public_key, "publicKey")?;
-    let envelope = decode(&req.private_key_envelope, "privateKeyEnvelope")?;
+    let envelope = account_record::decode_record_b64(
+        &req.private_key_envelope,
+        account_record::AccountRecordPurpose::MailAddressPrivateKey,
+    )
+    .map_err(|_| AppError::bad_request("privateKeyEnvelope is not an account envelope"))?;
     let info = mail_key::inspect_address_public_key(&public_key, &address)
         .map_err(|error| AppError::bad_request(error.to_string()))?;
     let (authority, binding): (String, String) = sqlx::query_as(

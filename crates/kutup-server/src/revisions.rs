@@ -44,29 +44,66 @@ pub fn conflict(message: &'static str, current: i64) -> AppError {
         .with_details(json!({ "code": "revision_conflict", "revision": current }))
 }
 
-/// The revision of a sealed mail folder, label or filter name (base64), as
-/// its header carries it; refuses anything else.
+/// The revision of a stored sealed mail folder, label or filter name
+/// (base64), as its header carries it; refuses anything else. A new name is
+/// checked whole by [`new_mail_name`] before it is stored.
 pub fn mail_name(sealed_b64: &str) -> AppResult<u64> {
-    let bytes = base64::Engine::decode(&base64::engine::general_purpose::STANDARD, sealed_b64)
-        .map_err(|_| AppError::bad_request("name is not base64"))?;
-    let revision = kutup_crypto::mail_names::inspect_name(&bytes)
+    use kutup_crypto::account_record::{self, AccountRecordPurpose};
+    let bytes = account_record::decode_record_b64(sealed_b64, AccountRecordPurpose::MailName)
         .map_err(|_| AppError::bad_request("name is not a sealed mail name"))?;
+    let header = account_record::inspect(&bytes)
+        .ok()
+        .filter(|header| header.purpose == AccountRecordPurpose::MailName)
+        .ok_or_else(|| AppError::bad_request("name is not a sealed mail name"))?;
+    let revision = header
+        .revision
+        .ok_or_else(|| AppError::bad_request("name is not a sealed mail name"))?;
     stored(revision)?;
     Ok(revision)
+}
+
+/// A new sealed name (base64) for the `kind` with `id` of the account bound
+/// by `binding`: its revision, or a refusal (another account's, kind's or
+/// id's name, or not a name).
+pub fn new_mail_name(
+    sealed_b64: &str,
+    binding: &str,
+    kind: kutup_crypto::mail_names::MailNameKind,
+    id: &uuid::Uuid,
+) -> AppResult<u64> {
+    use kutup_crypto::account_record::{self, AccountRecordPurpose};
+    let bytes = account_record::decode_record_b64(sealed_b64, AccountRecordPurpose::MailName)
+        .map_err(|_| AppError::bad_request("name is not a sealed mail name"))?;
+    let revision = kutup_crypto::mail_names::validate_name(&bytes, binding, kind, id.as_bytes())
+        .map_err(|_| AppError::bad_request("name is not this place's sealed name"))?;
+    stored(revision)?;
+    Ok(revision)
+}
+
+/// The account's key binding, which its records bind.
+pub async fn key_binding<'e, E>(executor: E, user_id: uuid::Uuid) -> AppResult<String>
+where
+    E: sqlx::PgExecutor<'e>,
+{
+    let binding: Option<String> = sqlx::query_scalar("SELECT key_binding FROM users WHERE id = $1")
+        .bind(user_id)
+        .fetch_one(executor)
+        .await?;
+    binding.ok_or_else(|| AppError::bad_request("the account has no key binding"))
 }
 
 /// A rename of a mail folder, label or filter: `new` must follow `base` (the
 /// revision of the name the rename started from), which must be the stored
 /// name's. The caller then writes only where the stored name is still
 /// `stored` (a compare-and-swap) and answers [`conflict`] if it is not.
-pub fn check_rename(stored: &str, new: &str, base: Option<i64>) -> AppResult<()> {
+pub fn check_rename(stored: &str, new: u64, base: Option<i64>) -> AppResult<()> {
     let base =
         base.ok_or_else(|| AppError::bad_request("a rename names the revision it started from"))?;
     let current = stored_or_conflict(mail_name(stored)?)?;
     if current != base {
         return Err(conflict("this name was changed elsewhere", current));
     }
-    check_follows(mail_name(new)?, base).map(drop)
+    check_follows(new, base).map(drop)
 }
 
 /// What to answer when a guarded rename wrote nothing: the row's name now

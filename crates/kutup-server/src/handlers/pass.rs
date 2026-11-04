@@ -263,11 +263,8 @@ pub(crate) fn revision_of(envelope: &[u8]) -> AppResult<i64> {
 /// most [`MAX_ENVELOPE_BYTES`], a Pass vault secret, bound to `binding` and
 /// sealed for vault `file_id`.
 fn checked_envelope(b64: &str, binding: &str, file_id: Uuid) -> AppResult<(Vec<u8>, u64)> {
-    let envelope = STANDARD
-        .decode(b64)
-        .ok()
-        .filter(|bytes| STANDARD.encode(bytes) == b64)
-        .ok_or_else(|| AppError::bad_request("envelope is not canonical base64"))?;
+    let envelope = account_record::decode_record_b64(b64, AccountRecordPurpose::PassVaultSecret)
+        .map_err(|_| AppError::bad_request("envelope is not canonical base64"))?;
     if envelope.len() > MAX_ENVELOPE_BYTES {
         return Err(AppError::bad_request("envelope is too large"));
     }
