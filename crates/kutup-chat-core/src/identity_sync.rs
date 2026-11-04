@@ -63,7 +63,7 @@ impl IdentityPinsSync {
             binding: kutup_crypto::key_binding::check(binding)
                 .map_err(crypto)?
                 .to_string(),
-            key: identity_pins::derive_key(master_key).map_err(crypto)?,
+            key: Zeroizing::new(*master_key),
             cache: None,
             highest_seen: 0,
         })
@@ -231,8 +231,10 @@ impl IdentityPinsSync {
                 .saturating_mul(1000)
                 .max(revision + 1)
                 .max(self.highest_seen + 1);
-            let sealed =
-                identity_pins::seal(&self.key, &self.binding, next, &list).map_err(crypto)?;
+            // Rotation (docs/plans/w6-key-hierarchy.md) seals at the
+            // account's current generation; until it exists, the first.
+            let sealed = identity_pins::seal(&self.key, kutup_crypto::account_record::MasterKeyGeneration::FIRST, &self.binding, next, &list)
+                .map_err(crypto)?;
             let write = IdentityPinsWrite {
                 base_revision: revision,
                 envelope: STANDARD.encode(sealed),
@@ -345,7 +347,7 @@ mod tests {
 
     fn pins(server: &Server) -> Vec<IdentityPinV2> {
         let record = server.stored.borrow().clone().unwrap();
-        let key = identity_pins::derive_key(&MASTER).unwrap();
+        let key = Zeroizing::new(MASTER);
         identity_pins::open(&key, OWNER, &STANDARD.decode(record.envelope).unwrap())
             .unwrap()
             .0
@@ -571,7 +573,7 @@ mod tests {
         let server = Server::default();
         block_on(sync().record(&server, &trust(BOB, 2, AuthorityTrust::Verified), 0)).unwrap();
         let mut list = identity_pins::open(
-            &identity_pins::derive_key(&MASTER).unwrap(),
+            &Zeroizing::new(MASTER),
             OWNER,
             &STANDARD
                 .decode(server.stored.borrow().clone().unwrap().envelope)
@@ -588,11 +590,11 @@ mod tests {
             "2026-10-11T12:00:00Z",
         )
         .unwrap();
-        let key = identity_pins::derive_key(&MASTER).unwrap();
+        let key = Zeroizing::new(MASTER);
         *server.stored.borrow_mut() = Some(IdentityPinsRecord {
             revision: 2_000_000_000_000,
             envelope: STANDARD
-                .encode(identity_pins::seal(&key, OWNER, 2_000_000_000_000, &list).unwrap()),
+                .encode(identity_pins::seal(&key, kutup_crypto::account_record::MasterKeyGeneration::FIRST, OWNER, 2_000_000_000_000, &list).unwrap()),
         });
         // Chat still holds the old one: not verified from the list, quarantined.
         assert_eq!(

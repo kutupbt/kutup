@@ -1,7 +1,8 @@
 import { getCryptoWasm } from './rustWasm'
+import { MASTER_KEY_GENERATION } from './masterKeyGeneration'
 
 // Contacts (docs/plans/contacts.md): the readable summary signed by the
-// account authority, and the vCard sealed under the contacts key, both bound
+// account authority, and the vCard sealed as an account record under the master key, both bound
 // to the account's key binding (`session.envelopeBinding`), never to its
 // address, both in Rust (kutup-crypto `contact_card`). Both carry the
 // contact's revision (a time in unix milliseconds; `RevisionGuard`): the
@@ -44,7 +45,7 @@ export async function verifyContactSummary(
 }
 
 export async function sealContactCard(masterKeyBase64: string, binding: string, uid: string, revision: number, vcard: string): Promise<string> {
-  return (await getCryptoWasm()).sealContactCard(masterKeyBase64, binding, uid, revision, vcard)
+  return (await getCryptoWasm()).sealContactCard(masterKeyBase64, MASTER_KEY_GENERATION, binding, uid, revision, vcard)
 }
 
 /** The vCard text and the revision the card was sealed at. */
@@ -64,7 +65,7 @@ export async function sealMailName(
   revision: number,
   name: string,
 ): Promise<string> {
-  return (await getCryptoWasm()).sealMailName(masterKeyBase64, binding, kind, id, revision, name)
+  return (await getCryptoWasm()).sealMailName(masterKeyBase64, MASTER_KEY_GENERATION, binding, kind, id, revision, name)
 }
 
 /** The name and the revision it was sealed at. */

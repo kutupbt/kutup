@@ -124,7 +124,7 @@ export interface CryptoWasmModule {
     bindingEpoch: number,
   ): boolean
   incarnationIdOfAuthority(authorityPublicKeyBase64: string): string
-  sealIdentityPins(masterKeyBase64: string, binding: string, revision: number, pinsJson: string): string
+  sealIdentityPins(masterKeyBase64: string, generation: number, binding: string, revision: number, pinsJson: string): string
   openIdentityPins(masterKeyBase64: string, binding: string, sealedBase64: string): { value: string; revision: number }
   signContactSummary(masterKeyBase64: string, binding: string, revision: number, summaryJson: string): { summary: string; signature: string }
   verifyContactSummary(
@@ -134,9 +134,9 @@ export interface CryptoWasmModule {
     revision: number,
     authorityPublicKeyBase64: string,
   ): import('./contactCard').ContactSummary
-  sealContactCard(masterKeyBase64: string, binding: string, uid: string, revision: number, vcard: string): string
+  sealContactCard(masterKeyBase64: string, generation: number, binding: string, uid: string, revision: number, vcard: string): string
   openContactCard(masterKeyBase64: string, binding: string, uid: string, sealedBase64: string): { value: string; revision: number }
-  sealMailName(masterKeyBase64: string, binding: string, kind: string, id: string, revision: number, name: string): string
+  sealMailName(masterKeyBase64: string, generation: number, binding: string, kind: string, id: string, revision: number, name: string): string
   openMailName(masterKeyBase64: string, binding: string, kind: string, id: string, sealedBase64: string): { value: string; revision: number }
   inspectAccountRecord(envelopeBase64: string): { purpose: number; generation: number }
   RevisionGuardKeys: new (masterKeyBase64: string) => import('./revisionGuard').GuardKeys & { free(): void }

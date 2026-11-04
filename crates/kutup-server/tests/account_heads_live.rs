@@ -75,9 +75,17 @@ fn code(r: reqwest::blocking::Response) -> (StatusCode, Value) {
 }
 
 fn sealed_name(binding: &str, kind: MailNameKind, id: &str, revision: u64) -> String {
-    let key = mail_names::derive_names_key(&[0x43; 32]).unwrap();
     let id = uuid::Uuid::parse_str(id).unwrap();
-    b64(&mail_names::seal_name(&key, binding, kind, id.as_bytes(), revision, "n").unwrap())
+    b64(&mail_names::seal_name(
+        &[0x43; 32],
+        kutup_crypto::account_record::MasterKeyGeneration::FIRST,
+        binding,
+        kind,
+        id.as_bytes(),
+        revision,
+        "n",
+    )
+    .unwrap())
 }
 
 fn get(c: &Client, base: &str, user: &User, path: &str) -> Value {
@@ -117,10 +125,10 @@ fn the_chain_starts_on_its_basis_and_every_write_follows_it() {
     };
     let c = client();
     let user = register(&c, &base);
-    let pins_key = kutup_crypto::identity_pins::derive_key(&[0x44; 32]).unwrap();
     let pins = |revision: u64| {
         b64(&kutup_crypto::identity_pins::seal(
-            &pins_key,
+            &[0x44; 32],
+            kutup_crypto::account_record::MasterKeyGeneration::FIRST,
             &user.binding,
             revision,
             &kutup_crypto::identity_pins::IdentityPinsV2::default(),
@@ -327,10 +335,16 @@ fn contact(user: &User, uid: &str, revision: u64) -> Value {
         user.identity.authority_signing_key(),
     )
     .unwrap();
-    let key = contact_card::derive_contacts_key(&user.master_key).unwrap();
     let vcard = format!("BEGIN:VCARD\r\nVERSION:4.0\r\nUID:{uid}\r\nFN:Ayşe\r\nEND:VCARD\r\n");
-    let card =
-        contact_card::seal_card(&key, &user.binding, uid, revision, vcard.as_bytes()).unwrap();
+    let card = contact_card::seal_card(
+        &user.master_key,
+        kutup_crypto::account_record::MasterKeyGeneration::FIRST,
+        &user.binding,
+        uid,
+        revision,
+        vcard.as_bytes(),
+    )
+    .unwrap();
     json!({
         "summary": String::from_utf8(bytes).unwrap(),
         "signature": b64(&signature),

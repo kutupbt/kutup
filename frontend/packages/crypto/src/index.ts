@@ -163,7 +163,7 @@ export {
  * comes from OPAQUE (`@kutup/crypto/opaqueWorker`), sealed under its export key.
  */
 export interface AccountKeySet {
-  recoveryKeyEnvelope: string // canonical base64 AccountEnvelopeV1
+  recoveryKeyEnvelope: string // canonical base64 AccountRecordV1
   publicKey: string // base64
   accountAuthorityPublicKey: string
   accountAuthorityKeyId: string

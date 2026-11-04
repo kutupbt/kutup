@@ -667,7 +667,7 @@ struct AccountRecordInspection {
     generation: u32,
 }
 
-/// Checks an account envelope's shape (suite, purpose, object, revision and
+/// Checks an account record's shape (suite, purpose, object, revision and
 /// padded length) without a key, as the server does before storing one;
 /// throws when it is malformed. Returns its purpose and master-key
 /// generation, as written: nothing is authenticated until it opens.
@@ -684,8 +684,9 @@ pub fn inspect_account_record(envelope_base64: &str) -> Result<JsValue, JsValue>
     .map_err(|error| js_error(&error.to_string()))
 }
 
-/// Mail address keys have typed exports (`generateMailAddressKey`), so the
-/// generic account-envelope path cannot hand their secret key to JavaScript.
+/// Purposes with typed exports (mail address keys, Pass vault secrets,
+/// organization keys, contact cards, mail names, identity pins): the generic
+/// account-record path never hands their secrets to JavaScript.
 fn generic_account_purpose(value: u16) -> Result<AccountRecordPurpose, JsValue> {
     match AccountRecordPurpose::try_from(value).map_err(|error| js_error(&error.to_string()))? {
         AccountRecordPurpose::MailAddressPrivateKey
@@ -694,7 +695,7 @@ fn generic_account_purpose(value: u16) -> Result<AccountRecordPurpose, JsValue> 
         | AccountRecordPurpose::ContactCard
         | AccountRecordPurpose::MailName
         | AccountRecordPurpose::IdentityPins => Err(js_error(
-            "this account envelope purpose has its own typed export",
+            "this account-record purpose has its own typed export",
         )),
         purpose => Ok(purpose),
     }
@@ -3412,6 +3413,7 @@ fn revision_arg(revision: f64) -> Result<u64, JsValue> {
 #[wasm_bindgen(js_name = sealIdentityPins)]
 pub fn seal_identity_pins(
     master_key_base64: &str,
+    generation: u32,
     binding: &str,
     revision: f64,
     pins_json: &str,
@@ -3419,10 +3421,14 @@ pub fn seal_identity_pins(
     let master_key = master_key_32(master_key_base64)?;
     let list: kutup_crypto::identity_pins::IdentityPinsV2 = serde_json::from_str(pins_json)
         .map_err(|error| js_error(&format!("identity pins: {error}")))?;
-    let key = kutup_crypto::identity_pins::derive_key(&master_key)
-        .map_err(|error| js_error(&error.to_string()))?;
-    let sealed = kutup_crypto::identity_pins::seal(&key, binding, revision_arg(revision)?, &list)
-        .map_err(|error| js_error(&error.to_string()))?;
+    let sealed = kutup_crypto::identity_pins::seal(
+        &master_key,
+        master_key_generation(generation)?,
+        binding,
+        revision_arg(revision)?,
+        &list,
+    )
+    .map_err(|error| js_error(&error.to_string()))?;
     Ok(STANDARD.encode(sealed))
 }
 
@@ -3455,10 +3461,8 @@ pub fn open_identity_pins(
     sealed_base64: &str,
 ) -> Result<JsValue, JsValue> {
     let master_key = master_key_32(master_key_base64)?;
-    let key = kutup_crypto::identity_pins::derive_key(&master_key)
-        .map_err(|error| js_error(&error.to_string()))?;
     let sealed = decode_canonical_base64(sealed_base64, "identity pins")?;
-    let (list, revision) = kutup_crypto::identity_pins::open(&key, binding, &sealed)
+    let (list, revision) = kutup_crypto::identity_pins::open(&master_key, binding, &sealed)
         .map_err(|error| js_error(&error.to_string()))?;
     let json = String::from_utf8(
         kutup_crypto::identity_pins::encode(&list).map_err(|error| js_error(&error.to_string()))?,
@@ -3752,16 +3756,16 @@ pub fn verify_contact_summary(
 #[wasm_bindgen(js_name = sealContactCard)]
 pub fn seal_contact_card(
     master_key_base64: &str,
+    generation: u32,
     binding: &str,
     uid: &str,
     revision: f64,
     vcard: &str,
 ) -> Result<String, JsValue> {
     let master_key = master_key_32(master_key_base64)?;
-    let key = kutup_crypto::contact_card::derive_contacts_key(&master_key)
-        .map_err(|error| js_error(&error.to_string()))?;
     let sealed = kutup_crypto::contact_card::seal_card(
-        &key,
+        &master_key,
+        master_key_generation(generation)?,
         binding,
         uid,
         revision_arg(revision)?,
@@ -3782,9 +3786,7 @@ fn mail_name_parts(
     kind: &str,
     id: &str,
 ) -> Result<MailNameParts, JsValue> {
-    let master_key = master_key_32(master_key_base64)?;
-    let key = kutup_crypto::mail_names::derive_names_key(&master_key)
-        .map_err(|error| js_error(&error.to_string()))?;
+    let key = master_key_32(master_key_base64)?;
     let kind = kutup_crypto::mail_names::MailNameKind::parse(kind)
         .map_err(|error| js_error(&error.to_string()))?;
     let id = Uuid::parse_str(id).map_err(|_| js_error("mail name id is not a UUID"))?;
@@ -3797,6 +3799,7 @@ fn mail_name_parts(
 #[wasm_bindgen(js_name = sealMailName)]
 pub fn seal_mail_name(
     master_key_base64: &str,
+    generation: u32,
     binding: &str,
     kind: &str,
     id: &str,
@@ -3806,6 +3809,7 @@ pub fn seal_mail_name(
     let (key, kind, id) = mail_name_parts(master_key_base64, kind, id)?;
     let sealed = kutup_crypto::mail_names::seal_name(
         &key,
+        master_key_generation(generation)?,
         binding,
         kind,
         &id,
@@ -3842,10 +3846,9 @@ pub fn open_contact_card(
     sealed_base64: &str,
 ) -> Result<JsValue, JsValue> {
     let master_key = master_key_32(master_key_base64)?;
-    let key = kutup_crypto::contact_card::derive_contacts_key(&master_key)
-        .map_err(|error| js_error(&error.to_string()))?;
     let sealed = decode_canonical_base64(sealed_base64, "card")?;
-    let (vcard, revision) = kutup_crypto::contact_card::open_card(&key, binding, uid, &sealed)
+    let (vcard, revision) =
+        kutup_crypto::contact_card::open_card(&master_key, binding, uid, &sealed)
         .map_err(|error| js_error(&error.to_string()))?;
     let text =
         String::from_utf8(vcard.to_vec()).map_err(|_| js_error("contact card is not UTF-8"))?;

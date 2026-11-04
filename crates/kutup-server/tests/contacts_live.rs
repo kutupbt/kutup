@@ -35,13 +35,13 @@ fn body(user: &User, name: &str, card_revision: u64, signed_revision: u64) -> Va
         user.identity.authority_signing_key(),
     )
     .unwrap();
-    let key = contact_card::derive_contacts_key(&user.master_key).unwrap();
     let vcard = format!(
         "BEGIN:VCARD\r\nVERSION:4.0\r\nUID:{}\r\nFN:{name}\r\nEND:VCARD\r\n",
         summary.uid
     );
     let card = contact_card::seal_card(
-        &key,
+        &user.master_key,
+        kutup_crypto::account_record::MasterKeyGeneration::FIRST,
         &user.binding,
         &summary.uid,
         card_revision,
@@ -116,9 +116,8 @@ fn contact_revisions() {
         .unwrap();
     let row = &page["contacts"][0];
     assert_eq!(row["revision"], T + 6);
-    let key = contact_card::derive_contacts_key(&user.master_key).unwrap();
     let (_, revision) = contact_card::open_card(
-        &key,
+        &user.master_key,
         &user.binding,
         &summary("x").uid,
         &b64_decode(row["card"].as_str().unwrap()),

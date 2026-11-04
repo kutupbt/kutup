@@ -113,7 +113,7 @@ fn identity_pins_sync_by_revision() {
     let c = crate::common::client();
     let owner = register(&c, &base);
     let binding = owner.binding.clone();
-    let key = identity_pins::derive_key(&owner.master_key).unwrap();
+    let key = owner.master_key;
     let friend = AccountIdentityKeysV1::derive(&[3u8; 32]).unwrap();
     let list = IdentityPinsV2 {
         pins: vec![IdentityPinV2 {
@@ -151,7 +151,9 @@ fn identity_pins_sync_by_revision() {
         .unwrap()
     };
     assert_eq!(get().status(), StatusCode::NOT_FOUND);
-    let seal = |revision: u64| b64(&identity_pins::seal(&key, &binding, revision, &list).unwrap());
+    let seal = |revision: u64| {
+        b64(&identity_pins::seal(&key, kutup_crypto::account_record::MasterKeyGeneration::FIRST, &binding, revision, &list).unwrap())
+    };
 
     // A list is stored on top of the revision it started from (0: none yet),
     // with a newer one in its header; a write that started from another is
