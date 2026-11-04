@@ -717,16 +717,9 @@ fn a_wipe_starts_the_chain_again_with_nothing_old_in_it() {
     .unwrap();
     assert!(r.status().is_success(), "wipe: {}", r.status());
     let first_login = sign_in(&c, &base, &user.username, "Temporary*Password123");
-    let (token, identity) = complete_setup(
-        &c,
-        &base,
-        &first_login,
-        &user.username,
-        "Another*Password456",
-    );
-    user.token = token;
-    user.identity = identity;
-    user.password = "Another*Password456".into();
+    // The account as it is now: new keys and a new key binding, which every
+    // record it seals from here on binds.
+    user = set_up_again(&c, &base, &first_login, &user, "Another*Password456");
 
     // No head; the label is gone; the folder kept its place, not its name,
     // and is left out of the index until named.
