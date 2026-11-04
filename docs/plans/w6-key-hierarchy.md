@@ -60,6 +60,8 @@ When master-key rotation is built, every place that writes `MasterKeyGeneration:
   - a `KeyCertificateV1` names its signing admin's incarnation and authority key id, so when that admin rotates another admin re-signs it, or members' checks fail at consent;
   - an escrow's generation only labels which master key it holds: a downgrade (an old escrow offered as current) is refused because rotation makes a new authority, which the opener checks. If rotation ever keeps the authority, the opener must compare an expected generation from the account head.
 
+- **Account records with a hashed object** (W1, [w1-account-record.md](w1-account-record.md), "Hashed object ids"): the object is an HMAC under a key from the master key, so a rotation gives every such record a new id. Contact cards, chat group and contact list entries, attachment-ledger entries and revision-guard records are re-sealed at the new generation and moved to their new id, the old row deleted, or the server keeps both and clients find neither.
+
 The `inspect` that a rotation reads first to pick the master key returns the generation in Rust and in WASM (`inspectAccountEnvelope`).
 
 ## Migration and order

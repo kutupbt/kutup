@@ -1,4 +1,7 @@
-# W1: one account-record envelope (build note, proposed)
+# W1: one account-record envelope (build note)
+
+Status: approved 2026-11-04 (decisions (a)-(e) below, all as recommended).
+Slice 1 (the envelope) is in this PR.
 
 Builds [wipe-unification.md](wipe-unification.md) W1 on what W6 already
 shipped: `KUTPAE2` ([account_envelope.rs](../../crates/kutup-crypto/src/account_envelope.rs))
@@ -76,7 +79,15 @@ Changes from `KUTPAE2`, each needed by a row above:
    The binding, which they lacked, is now bound like everywhere else.
 
 Padding stays per purpose (`Exact`, `Fixed(n)`, `Bucket(256)`), applied once
-by the envelope. The lists' "u16 length then zeros to a fixed total" becomes
+by the envelope.
+
+**The per-purpose limits are the format's, not settings.** A purpose's
+maximum length, padding and object size define what a valid record is, the
+same on every server and in every client, so they are constants in the
+registry and in the vectors. They are not site settings and must not become
+one: a server with another limit would refuse records another client made.
+What an account may store (its quota, how many contacts or pins) stays a
+site setting, enforced where it is stored. The lists' "u16 length then zeros to a fixed total" becomes
 `Fixed(n)`.
 
 ## Purposes
@@ -107,7 +118,7 @@ its compare-and-swap. It never parses a second field: the ledger's entity
 check becomes "the URL's entity hashes to the header's object", and the
 profile's "matches the request" becomes the object and revision.
 
-## Decisions wanted
+## Decisions (approved 2026-11-04)
 
 (a) **The account head's chain moves into the header** (the server then
     refuses a head whose `previous` isn't the stored digest, as for Photos).
@@ -124,6 +135,21 @@ profile's "matches the request" becomes the object and revision.
     entry can't be swapped for another. Recommended: yes.
 (e) **The contact card's signed summary stays** as it is (it is the server's
     own check, outside the envelope).
+
+## Hashed object ids and master-key rotation
+
+A hashed object is `HMAC(K_id, purpose ‖ id)`, where `K_id = KDF(MK, salt
+kutup/account-record/v1, info kutup/account-record/object-id/v1)` (both
+labels in `labels.rs`). The id is stable for as long as the master key is,
+which is what the server's lookups need: a contact's card, a group's list
+entry and a guard's record keep one row each.
+
+A master-key rotation (not built; [w6-key-hierarchy.md](w6-key-hierarchy.md),
+"Rotation checklist") changes `K_id`, so every hashed id changes with it. A
+rotation must therefore re-seal each hashed-object record under the new
+generation **and** move it to its new id (delete the old row), purpose by
+purpose, or the server keeps two rows for one record and the client finds
+neither under the old key. The checklist lists this.
 
 ## Slices (each into `wipe-2`, each with its vectors)
 
