@@ -15,7 +15,7 @@ use base64::Engine;
 use crate::api::{Client, RegisterRequest};
 use crate::commands::prompt_line;
 use kutup_crypto::{
-    account_envelope::{self, AccountEnvelopePurpose},
+    account_record::{self, AccountRecordPurpose},
     identity::AccountIdentityKeysV1,
     kdf, mnemonic,
 };
@@ -80,15 +80,15 @@ pub fn run(json: bool, server_flag: Option<&str>, username_flag: Option<&str>) -
         .export_key
         .seal_master_key(
             &master_key,
-            kutup_crypto::account_envelope::MasterKeyGeneration::FIRST,
+            kutup_crypto::account_record::MasterKeyGeneration::FIRST,
             &key_binding,
         )
         .context("seal master-key envelope")?;
-    let recovery_key_envelope = account_envelope::seal_b64(
+    let recovery_key_envelope = account_record::seal_b64(
         &*master_key,
         &*recovery_entropy,
-        AccountEnvelopePurpose::RecoveryMasterKey,
-        kutup_crypto::account_envelope::MasterKeyGeneration::FIRST,
+        AccountRecordPurpose::RecoveryMasterKey,
+        kutup_crypto::account_record::MasterKeyGeneration::FIRST,
         &key_binding,
     )
     .context("seal recovery envelope")?;

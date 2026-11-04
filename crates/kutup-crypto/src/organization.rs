@@ -28,7 +28,7 @@
 
 use zeroize::Zeroizing;
 
-use crate::account_envelope::MasterKeyGeneration;
+use crate::account_record::MasterKeyGeneration;
 use crate::account_ref::AccountRef;
 use crate::error::{CryptoError, Result};
 use crate::identity::{

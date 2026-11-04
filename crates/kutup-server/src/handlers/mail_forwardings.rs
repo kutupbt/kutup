@@ -12,7 +12,7 @@ use axum::http::StatusCode;
 use axum::Json;
 use base64::engine::general_purpose::STANDARD;
 use base64::Engine as _;
-use kutup_crypto::account_envelope::{self, AccountEnvelopePurpose};
+use kutup_crypto::account_record::{self, AccountRecordPurpose};
 use kutup_crypto::mail_forwarding::{self as crypto, ProxyInstance};
 use kutup_crypto::mail_key;
 use kutup_crypto::primitives::{hash, Suite};
@@ -1628,9 +1628,9 @@ pub async fn accept(
             .bind(user_id)
             .fetch_one(&mut *tx)
             .await?;
-    if account_envelope::validate_for(
+    if account_record::validate_for(
         &envelope,
-        AccountEnvelopePurpose::MailAddressPrivateKey,
+        AccountRecordPurpose::MailAddressPrivateKey,
         &binding,
         &[],
     )

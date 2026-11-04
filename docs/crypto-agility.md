@@ -63,7 +63,7 @@ select its suite.
 
 | Registry | Protected purpose and lock unit | Authoritative owner |
 |---|---|---|
-| `AccountEnvelopeSuiteId` | Wrapping of account secrets (the password and recovery wraps of the master key, and the secrets sealed under it); one envelope. The password itself is OPAQUE's (its own suite in `opaque`) | `kutup-crypto` `account_envelope` module and Auth wire contract |
+| `AccountRecordSuiteId` | Every account-private record (the password and recovery wraps of the master key, and the records sealed under it); one envelope. The password itself is OPAQUE's (its own suite in `opaque`) | `kutup-crypto` `account_record` module and Auth wire contract |
 | `AccountIdentitySuiteId` | Account root authority, feature-key authorization, and authenticated identity rotation; one identity epoch | `kutup-crypto` account-identity module and the shared account-manifest wire contract |
 | `DriveObjectSuiteId` | The complete Drive E2EE object family: collection/file metadata, key envelopes, content streams, assets, and share key wrapping; one independently decryptable object | canonical `kutup-crypto` Rust module consumed through WASM, native Rust and UniFFI |
 | `CollabFrameSuiteId` | Collaborative frame KDF, AEAD, signature, framing, and validation; one document-key epoch | canonical `kutup-crypto` Rust module consumed through WASM, native Rust and UniFFI |

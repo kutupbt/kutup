@@ -2,7 +2,7 @@
 import { getSodium } from './sodium'
 import { deriveRecoveryAuthProof } from './kdf'
 import { fromBase64, toBase64 } from './base64'
-import { ACCOUNT_ENVELOPE_PURPOSE, sealAccountEnvelope } from './accountEnvelope'
+import { ACCOUNT_RECORD_PURPOSE, sealAccountRecord } from './accountRecord'
 import { deriveAccountIdentityKeys } from './identity'
 
 export { encryptStream, decryptStream } from './symmetric'
@@ -152,10 +152,10 @@ export type {
   FileWireV1,
 } from './fileRecord'
 export {
-  ACCOUNT_ENVELOPE_PURPOSE,
-  openAccountEnvelope,
-  sealAccountEnvelope,
-} from './accountEnvelope'
+  ACCOUNT_RECORD_PURPOSE,
+  openAccountRecord,
+  sealAccountRecord,
+} from './accountRecord'
 
 /**
  * A new account's keys, before any password: the master key, the recovery
@@ -215,10 +215,10 @@ async function sealAccountKeySet(masterKey: Uint8Array, recoveryKeyEntropy: Uint
   const accountIdentity = await deriveAccountIdentityKeys(toBase64(masterKey))
   const driveHpkePublicKey = fromBase64(accountIdentity.driveHpkePublicKey)
   const driveHpkePrivateKey = fromBase64(accountIdentity.driveHpkePrivateKey)
-  const recoveryKeyEnvelope = await sealAccountEnvelope(
+  const recoveryKeyEnvelope = await sealAccountRecord(
     masterKey,
     recoveryKeyEntropy,
-    ACCOUNT_ENVELOPE_PURPOSE.recoveryMasterKey,
+    ACCOUNT_RECORD_PURPOSE.recoveryMasterKey,
     binding,
   )
   return {

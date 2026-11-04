@@ -450,13 +450,13 @@ fn sign_up_sent(
     let recovery_proof =
         kutup_crypto::kdf::derive_recovery_auth_proof(&recovery_entropy, &key_binding).unwrap();
     let identity = AccountIdentityKeysV1::derive(&master_key).unwrap();
-    use kutup_crypto::account_envelope::{self, AccountEnvelopePurpose};
+    use kutup_crypto::account_record::{self, AccountRecordPurpose};
     let seal = |plain: &[u8], key: &[u8], purpose| {
-        account_envelope::seal_b64(
+        account_record::seal_b64(
             plain,
             key,
             purpose,
-            kutup_crypto::account_envelope::MasterKeyGeneration::FIRST,
+            kutup_crypto::account_record::MasterKeyGeneration::FIRST,
             &key_binding,
         )
         .unwrap()
@@ -465,8 +465,8 @@ fn sign_up_sent(
             "keyBinding": key_binding, "username": username,
             "accountId": account_id, "accountIdProof": started["accountIdProof"],
             "opaqueRecord": opaque_record, "opaqueServerKeyId": server_key_id,
-            "masterKeyEnvelope": export_key.seal_master_key(&master_key, kutup_crypto::account_envelope::MasterKeyGeneration::FIRST, &key_binding).unwrap(),
-            "recoveryKeyEnvelope": seal(&master_key, &recovery_entropy, AccountEnvelopePurpose::RecoveryMasterKey),
+            "masterKeyEnvelope": export_key.seal_master_key(&master_key, kutup_crypto::account_record::MasterKeyGeneration::FIRST, &key_binding).unwrap(),
+            "recoveryKeyEnvelope": seal(&master_key, &recovery_entropy, AccountRecordPurpose::RecoveryMasterKey),
             "publicKey": b64(&identity.drive_hpke_public_key()),
             "accountAuthorityPublicKey": b64(&identity.authority_public_key()),
             "accountAuthorityKeyId": identity.authority_key_id(),
@@ -888,13 +888,13 @@ fn setup_keys(
     let recovery_proof =
         kutup_crypto::kdf::derive_recovery_auth_proof(&recovery_entropy, &binding).unwrap();
     let identity = AccountIdentityKeysV1::derive(&master_key).unwrap();
-    use kutup_crypto::account_envelope::{self, AccountEnvelopePurpose};
+    use kutup_crypto::account_record::{self, AccountRecordPurpose};
     let seal = |plain: &[u8], key: &[u8], purpose| {
-        account_envelope::seal_b64(
+        account_record::seal_b64(
             plain,
             key,
             purpose,
-            kutup_crypto::account_envelope::MasterKeyGeneration::FIRST,
+            kutup_crypto::account_record::MasterKeyGeneration::FIRST,
             &binding,
         )
         .unwrap()
@@ -906,8 +906,8 @@ fn setup_keys(
         .json(&json!({
             "keyBinding": binding, "username": username,
             "opaqueRecord": opaque_record, "opaqueServerKeyId": server_key_id,
-            "masterKeyEnvelope": export_key.seal_master_key(&master_key, kutup_crypto::account_envelope::MasterKeyGeneration::FIRST, &binding).unwrap(),
-            "recoveryKeyEnvelope": seal(&master_key, &recovery_entropy, AccountEnvelopePurpose::RecoveryMasterKey),
+            "masterKeyEnvelope": export_key.seal_master_key(&master_key, kutup_crypto::account_record::MasterKeyGeneration::FIRST, &binding).unwrap(),
+            "recoveryKeyEnvelope": seal(&master_key, &recovery_entropy, AccountRecordPurpose::RecoveryMasterKey),
             "publicKey": b64(&identity.drive_hpke_public_key()),
             "accountAuthorityPublicKey": b64(&identity.authority_public_key()),
             "accountAuthorityKeyId": identity.authority_key_id(),
@@ -1182,7 +1182,7 @@ pub fn set_password(
         .json(&json!({
             "grant": grant, "keyBinding": user.binding,
             "opaqueRecord": record, "opaqueServerKeyId": key_id,
-            "masterKeyEnvelope": export_key.seal_master_key(&user.master_key, kutup_crypto::account_envelope::MasterKeyGeneration::FIRST, &user.binding).unwrap(),
+            "masterKeyEnvelope": export_key.seal_master_key(&user.master_key, kutup_crypto::account_record::MasterKeyGeneration::FIRST, &user.binding).unwrap(),
         }));
     if let Some(token) = token {
         request = request.bearer_auth(token);

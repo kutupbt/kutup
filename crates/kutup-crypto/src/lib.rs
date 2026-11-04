@@ -15,7 +15,7 @@
 //! ## Modules
 //! - [`kdf`] — one-root Argon2id account protection and recovery proof.
 //! - [`mnemonic`] — BIP39 recovery-phrase encode/decode (registration).
-//! - [`account_envelope`] — suite-bearing, purpose- and account-bound XChaCha account wraps.
+//! - [`account_record`] — suite-bearing, purpose- and account-bound XChaCha account wraps.
 //! - [`key_binding`] — the account's permanent random key binding, which its own seals bind.
 //! - [`chat_attachment_ledger`] — account-private attachment-index envelopes.
 //! - [`chat_media`] — immutable typed Chat-media secretstream objects.
@@ -38,8 +38,8 @@
 //! - [`calendar_recurrence`] — Proton's RRULE subset and the expansion of a series.
 //! - [`pass_vault`] — Kutup Pass vault secrets sealed under the master key.
 
-pub mod account_envelope;
 pub mod account_head;
+pub mod account_record;
 pub mod account_ref;
 pub mod account_rename;
 pub mod asset;

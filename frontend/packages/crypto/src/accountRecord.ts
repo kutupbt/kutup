@@ -2,7 +2,7 @@ import { fromBase64, toBase64 } from './base64'
 import { getCryptoWasm } from './rustWasm'
 import { MASTER_KEY_GENERATION } from './masterKeyGeneration'
 
-export const ACCOUNT_ENVELOPE_PURPOSE = {
+export const ACCOUNT_RECORD_PURPOSE = {
   passwordMasterKey: 1,
   recoveryMasterKey: 2,
   // 3 was the Drive X-Wing private key, now derived from the master key and
@@ -14,26 +14,26 @@ export const ACCOUNT_ENVELOPE_PURPOSE = {
   passVaultSecret: 6,
 } as const
 
-export type AccountEnvelopePurpose =
-  (typeof ACCOUNT_ENVELOPE_PURPOSE)[keyof typeof ACCOUNT_ENVELOPE_PURPOSE]
+export type AccountRecordPurpose =
+  (typeof ACCOUNT_RECORD_PURPOSE)[keyof typeof ACCOUNT_RECORD_PURPOSE]
 
-export async function sealAccountEnvelope(
+export async function sealAccountRecord(
   plaintext: Uint8Array,
   key: Uint8Array,
-  purpose: AccountEnvelopePurpose,
+  purpose: AccountRecordPurpose,
   /** What the account's keys are bound to (`session.envelopeBinding`), never a name. */
   binding: string,
 ): Promise<string> {
   const module = await getCryptoWasm()
-  return module.sealAccountEnvelope(toBase64(plaintext), toBase64(key), purpose, MASTER_KEY_GENERATION, binding)
+  return module.sealAccountRecord(toBase64(plaintext), toBase64(key), purpose, MASTER_KEY_GENERATION, binding)
 }
 
-export async function openAccountEnvelope(
+export async function openAccountRecord(
   envelopeBase64: string,
   key: Uint8Array,
-  purpose: AccountEnvelopePurpose,
+  purpose: AccountRecordPurpose,
   binding: string,
 ): Promise<Uint8Array> {
   const module = await getCryptoWasm()
-  return fromBase64(module.openAccountEnvelope(envelopeBase64, toBase64(key), purpose, binding))
+  return fromBase64(module.openAccountRecord(envelopeBase64, toBase64(key), purpose, binding))
 }

@@ -138,7 +138,7 @@ export interface CryptoWasmModule {
   openContactCard(masterKeyBase64: string, binding: string, uid: string, sealedBase64: string): { value: string; revision: number }
   sealMailName(masterKeyBase64: string, binding: string, kind: string, id: string, revision: number, name: string): string
   openMailName(masterKeyBase64: string, binding: string, kind: string, id: string, sealedBase64: string): { value: string; revision: number }
-  inspectAccountEnvelope(envelopeBase64: string): { purpose: number; generation: number }
+  inspectAccountRecord(envelopeBase64: string): { purpose: number; generation: number }
   RevisionGuardKeys: new (masterKeyBase64: string) => import('./revisionGuard').GuardKeys & { free(): void }
   CollabSender: new (account: string, pin: unknown) => import('./accountManifest').CollabSenderHandle
   deliveredFrameSender(delivered: Uint8Array): string
@@ -304,14 +304,14 @@ export interface CryptoWasmModule {
   ): string
   verifyMailDetachedSignature(signature: Uint8Array, content: Uint8Array, signerPublicKeyBase64: string): boolean
   verifyMailCleartext(message: string, signerPublicKeyBase64?: string): { text: string; verified: boolean }
-  sealAccountEnvelope(
+  sealAccountRecord(
     plaintextBase64: string,
     keyBase64: string,
     purpose: number,
     generation: number,
     binding: string,
   ): string
-  openAccountEnvelope(
+  openAccountRecord(
     envelopeBase64: string,
     keyBase64: string,
     expectedPurpose: number,

@@ -327,7 +327,7 @@ kutup/
 │   ├── kutup-cli/           # The `kutup` CLI (clap)
 │   │   └── src/{commands,api,session,syncengine,transfer}/  # commands, HTTP client, session store, sync
 │   ├── kutup-crypto/        # Canonical Kutup-owned E2EE formats
-│   │   ├── src/{kdf,account_envelope,drive_envelope,drive_object,named_share,stream,envelope}.rs
+│   │   ├── src/{kdf,account_record,drive_envelope,drive_object,named_share,stream,envelope}.rs
 │   │   └── tests/vectors/   # Checked-in byte-parity vectors
 │   ├── kutup-crypto-wasm/   # Browser bindings for canonical crypto (built twice: crypto, and crypto-calendar with calendars)
 │   ├── kutup-chat-proto/    # Typed Chat wire DTOs and validation

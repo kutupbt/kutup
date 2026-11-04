@@ -18,7 +18,7 @@ Status: **proposed** (second session, 2026-10-27), for docs/plans/wipe-unificati
   - for every other purpose, the generation of the MK that sealed it.
 
   The magic becomes `KUTPAE2\0`. An envelope without the field is refused, and none survives the wipe.
-- **Sealing takes the generation explicitly** (`seal`, `seal_object`, `seal_revision`, the base64 and WASM forms). A default would let a future rotation seal under the wrong one unnoticed. `inspect` (and the WASM `inspectAccountEnvelope`) reads it from the header without opening the envelope, so a future rotation reads it first to pick the master key to try, and can tell old wraps from new. `inspect` authenticates nothing: the generation is AEAD associated data, so a forged one fails when the envelope opens. Opening is unchanged.
+- **Sealing takes the generation explicitly** (`seal`, `seal_object`, `seal_revision`, the base64 and WASM forms). A default would let a future rotation seal under the wrong one unnoticed. `inspect` (and the WASM `inspectAccountRecord`) reads it from the header without opening the envelope, so a future rotation reads it first to pick the master key to try, and can tell old wraps from new. `inspect` authenticates nothing: the generation is AEAD associated data, so a forged one fails when the envelope opens. Opening is unchanged.
 - **Clients** pass the account's current generation. Until rotation exists, that is one constant per client (`MASTER_KEY_GENERATION` in `@kutup/crypto/masterKeyGeneration`, passed by the TS wrappers that seal; `MasterKeyGeneration::FIRST` in Rust). A kept Pass key resealed for a copied vault keeps the generation of the envelope it came from, named so a search finds every place rotation will touch.
 - **No server column yet.** Rotation, when it is built, adds the account's current generation to the account head (W1).
 
@@ -48,12 +48,12 @@ When master-key rotation is built, every place that writes `MasterKeyGeneration:
 
 - **Master-key wraps (purposes 1 and 2):**
   - CLI `register.rs` (password and recovery wraps) and `login.rs` (the password wrap resealed at sign-in);
-  - web `opaque.worker.ts` (`sealMasterKey`) and `accountEnvelope.ts` (`sealAccountEnvelope`).
+  - web `opaque.worker.ts` (`sealMasterKey`) and `accountRecord.ts` (`sealAccountRecord`).
 - **Secrets sealed under the master key:**
   - mail address keys: `mail_key.rs` (`first_address_key`) and web `mailKey.ts` (generate, import, and `acceptMailForwarding`);
   - Pass kept keys: CLI `vaultsync.rs` and web `pass/src/vault/worker.ts` (`keepKey`). `kept::reseal` already keeps the generation of the envelope it opens, so a copied vault follows its source.
 - **The server's fake recovery envelope** (`handlers/auth.rs`, `deterministic_fake_account_envelope`): an unknown name gets a stable fake so it looks like a real account. Once accounts can be past generation 1, the fake must carry a generation as plausible as a real one, or the header tells a fake from a real account.
-- **The constant itself:** `@kutup/crypto/masterKeyGeneration` and its doc comment in `kutup-crypto-wasm` (`sealAccountEnvelope`).
+- **The constant itself:** `@kutup/crypto/masterKeyGeneration` and its doc comment in `kutup-crypto-wasm` (`sealAccountRecord`).
 - **Organizations** (`organization.rs`, docs/plans/organizations.md §3):
   - a still-managed member's rotation re-seals their `EscrowV1` at the new generation and deletes the old one, or admins lose access silently;
   - an admin's purpose-7 copy of the organization key (`OrganizationPrivateKey`) follows that admin's generation: re-wrapped at their rotation;
@@ -62,7 +62,7 @@ When master-key rotation is built, every place that writes `MasterKeyGeneration:
 
 - **Account records with a hashed object** (W1, [w1-account-record.md](w1-account-record.md), "Hashed object ids"): the object is an HMAC under a key from the master key, so a rotation gives every such record a new id. Contact cards, chat group and contact list entries, attachment-ledger entries and revision-guard records are re-sealed at the new generation and moved to their new id, the old row deleted, or the server keeps both and clients find neither.
 
-The `inspect` that a rotation reads first to pick the master key returns the generation in Rust and in WASM (`inspectAccountEnvelope`).
+The `inspect` that a rotation reads first to pick the master key returns the generation in Rust and in WASM (`inspectAccountRecord`).
 
 ## Migration and order
 

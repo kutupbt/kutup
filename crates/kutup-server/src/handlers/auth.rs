@@ -309,15 +309,15 @@ pub(crate) fn is_key_binding(value: &str) -> bool {
         .is_ok_and(|id| id.get_version_num() == 4 && id.hyphenated().to_string() == value)
 }
 
-pub(crate) fn validate_account_envelope(
+pub(crate) fn validate_account_record(
     value: &str,
-    purpose: kutup_crypto::account_envelope::AccountEnvelopePurpose,
+    purpose: kutup_crypto::account_record::AccountRecordPurpose,
     binding: &str,
     field: &str,
 ) -> AppResult<()> {
-    let envelope = kutup_crypto::account_envelope::decode_canonical_b64(value)
+    let envelope = kutup_crypto::account_record::decode_canonical_b64(value)
         .map_err(|_| AppError::bad_request(format!("invalid {field} encoding")))?;
-    kutup_crypto::account_envelope::validate_for(&envelope, purpose, binding, &[])
+    kutup_crypto::account_record::validate_for(&envelope, purpose, binding, &[])
         .map(drop)
         .map_err(|_| AppError::bad_request(format!("invalid {field} binding")))
 }
@@ -673,16 +673,16 @@ pub async fn register(
         ));
     }
     let (opaque_record, opaque_server_key_id) = req.record.checked(&state)?;
-    use kutup_crypto::account_envelope::AccountEnvelopePurpose;
-    validate_account_envelope(
+    use kutup_crypto::account_record::AccountRecordPurpose;
+    validate_account_record(
         &req.master_key_envelope,
-        AccountEnvelopePurpose::PasswordMasterKey,
+        AccountRecordPurpose::PasswordMasterKey,
         &req.key_binding,
         "masterKeyEnvelope",
     )?;
-    validate_account_envelope(
+    validate_account_record(
         &req.recovery_key_envelope,
-        AccountEnvelopePurpose::RecoveryMasterKey,
+        AccountRecordPurpose::RecoveryMasterKey,
         &req.key_binding,
         "recoveryKeyEnvelope",
     )?;
@@ -1081,7 +1081,7 @@ pub async fn get_recovery_preflight(
             let secret = fake_accounts_key(&state).await?;
             let binding = fake_binding(&secret, &canonical_name(&state, &name));
             PreflightRecoverResponse {
-                recovery_key_envelope: deterministic_fake_account_envelope(&secret, &binding),
+                recovery_key_envelope: deterministic_fake_account_record(&secret, &binding),
                 envelope_binding: binding,
             }
         }
@@ -1879,16 +1879,16 @@ pub async fn complete_setup(
     // The new password's record, under the key binding drawn now (the
     // temporary password's record goes with this).
     let (opaque_record, opaque_server_key_id) = req.record.checked(&state)?;
-    use kutup_crypto::account_envelope::AccountEnvelopePurpose;
-    validate_account_envelope(
+    use kutup_crypto::account_record::AccountRecordPurpose;
+    validate_account_record(
         &req.master_key_envelope,
-        AccountEnvelopePurpose::PasswordMasterKey,
+        AccountRecordPurpose::PasswordMasterKey,
         &account_binding,
         "masterKeyEnvelope",
     )?;
-    validate_account_envelope(
+    validate_account_record(
         &req.recovery_key_envelope,
-        AccountEnvelopePurpose::RecoveryMasterKey,
+        AccountRecordPurpose::RecoveryMasterKey,
         &account_binding,
         "recoveryKeyEnvelope",
     )?;
@@ -2251,7 +2251,7 @@ fn deterministic_fake_bytes(secret: &[u8], name: &str, purpose: &str, len: usize
     STANDARD.encode(out)
 }
 
-fn deterministic_fake_account_envelope(secret: &[u8], binding: &str) -> String {
+fn deterministic_fake_account_record(secret: &[u8], binding: &str) -> String {
     let key = STANDARD
         .decode(deterministic_fake_bytes(
             secret,
@@ -2268,11 +2268,11 @@ fn deterministic_fake_account_envelope(secret: &[u8], binding: &str) -> String {
             24,
         ))
         .expect("deterministic fake nonce is base64");
-    let envelope = kutup_crypto::account_envelope::seal_with_nonce(
+    let envelope = kutup_crypto::account_record::seal_with_nonce(
         &[0u8; 32],
         &key,
-        kutup_crypto::account_envelope::AccountEnvelopePurpose::RecoveryMasterKey,
-        kutup_crypto::account_envelope::MasterKeyGeneration::FIRST,
+        kutup_crypto::account_record::AccountRecordPurpose::RecoveryMasterKey,
+        kutup_crypto::account_record::MasterKeyGeneration::FIRST,
         binding,
         &nonce,
     )
@@ -2368,13 +2368,13 @@ mod tests {
     fn fake_recovery_envelope_is_stable_and_structurally_valid() {
         // Faked under the name's fake binding, as preflight answers it.
         let binding = fake_binding(&[7u8; 32], "user");
-        let first = deterministic_fake_account_envelope(&[7u8; 32], &binding);
-        let second = deterministic_fake_account_envelope(&[7u8; 32], &binding);
+        let first = deterministic_fake_account_record(&[7u8; 32], &binding);
+        let second = deterministic_fake_account_record(&[7u8; 32], &binding);
         assert_eq!(first, second);
-        let decoded = kutup_crypto::account_envelope::decode_canonical_b64(&first).unwrap();
-        kutup_crypto::account_envelope::validate_for(
+        let decoded = kutup_crypto::account_record::decode_canonical_b64(&first).unwrap();
+        kutup_crypto::account_record::validate_for(
             &decoded,
-            kutup_crypto::account_envelope::AccountEnvelopePurpose::RecoveryMasterKey,
+            kutup_crypto::account_record::AccountRecordPurpose::RecoveryMasterKey,
             &binding,
             &[],
         )

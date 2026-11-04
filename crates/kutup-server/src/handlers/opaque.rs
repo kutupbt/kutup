@@ -689,9 +689,9 @@ pub async fn register_finish(
 ) -> AppResult<Response> {
     let Json(req) = body.map_err(|_| AppError::bad_request("invalid request"))?;
     let (record, server_key_id) = req.record.checked(&state)?;
-    crate::handlers::auth::validate_account_envelope(
+    crate::handlers::auth::validate_account_record(
         &req.master_key_envelope,
-        kutup_crypto::account_envelope::AccountEnvelopePurpose::PasswordMasterKey,
+        kutup_crypto::account_record::AccountRecordPurpose::PasswordMasterKey,
         &req.key_binding,
         "masterKeyEnvelope",
     )?;

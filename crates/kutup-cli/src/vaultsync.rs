@@ -13,7 +13,7 @@ use std::io::IsTerminal;
 
 use anyhow::{anyhow, Context, Result};
 use base64::Engine as _;
-use kutup_crypto::account_envelope;
+use kutup_crypto::account_record;
 use kutup_crypto::drive_object::{self, DriveFileBlobContextV1};
 use kutup_pass::keepass::Database;
 use kutup_pass::{MergeReport, VaultKey};
@@ -255,7 +255,7 @@ impl VaultKeys {
             );
         }
         let stored = self.stored.as_ref()?;
-        let envelope = account_envelope::decode_canonical_b64(stored.get(file_id)?).ok()?;
+        let envelope = account_record::decode_canonical_b64(stored.get(file_id)?).ok()?;
         let id = Uuid::parse_str(file_id).ok()?;
         kutup_pass::kept::open(
             &envelope,
@@ -335,7 +335,7 @@ fn envelope_revision(envelope_b64: &str) -> u64 {
     base64::engine::general_purpose::STANDARD
         .decode(envelope_b64)
         .ok()
-        .and_then(|envelope| kutup_crypto::account_envelope::inspect(&envelope).ok())
+        .and_then(|envelope| kutup_crypto::account_record::inspect(&envelope).ok())
         .and_then(|header| header.revision)
         .unwrap_or(0)
 }
@@ -430,7 +430,7 @@ pub(crate) fn keep_secret(
         // This same key kept already (by another device, or by an earlier try
         // whose answer was lost): nothing to send.
         if let Some(row) = &now {
-            let envelope = account_envelope::decode_canonical_b64(&row.envelope)?;
+            let envelope = account_record::decode_canonical_b64(&row.envelope)?;
             if kutup_pass::kept::open(&envelope, master_key, binding, id.as_bytes())
                 .is_ok_and(|kept| kept.key.same_as(&key))
             {
@@ -444,7 +444,7 @@ pub(crate) fn keep_secret(
         let revision = guard.next(GUARD_SCOPE, file_id, base)?;
         let sealed = kutup_pass::kept::seal(
             master_key,
-            kutup_crypto::account_envelope::MasterKeyGeneration::FIRST,
+            kutup_crypto::account_record::MasterKeyGeneration::FIRST,
             binding,
             id.as_bytes(),
             revision,

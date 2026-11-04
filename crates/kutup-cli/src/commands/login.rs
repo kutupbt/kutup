@@ -69,7 +69,7 @@ pub(crate) fn set_password(
         .export_key
         .seal_master_key(
             master_key,
-            kutup_crypto::account_envelope::MasterKeyGeneration::FIRST,
+            kutup_crypto::account_record::MasterKeyGeneration::FIRST,
             key_binding,
         )
         .context("seal master-key envelope")?;

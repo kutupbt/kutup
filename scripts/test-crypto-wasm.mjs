@@ -48,21 +48,21 @@ assert.deepEqual(
 
 const envelopePlaintext = Buffer.alloc(32, 0x42).toString('base64')
 const envelopeKey = Buffer.alloc(32, 0x24).toString('base64')
-const accountEnvelope = crypto.sealAccountEnvelope(envelopePlaintext, envelopeKey, 1, 1, '0b9f4c0e-6a51-4d2f-9a33-5e1f6c7d8e90')
-assert.equal(crypto.openAccountEnvelope(accountEnvelope, envelopeKey, 1, '0b9f4c0e-6a51-4d2f-9a33-5e1f6c7d8e90'), envelopePlaintext)
+const accountEnvelope = crypto.sealAccountRecord(envelopePlaintext, envelopeKey, 1, 1, '0b9f4c0e-6a51-4d2f-9a33-5e1f6c7d8e90')
+assert.equal(crypto.openAccountRecord(accountEnvelope, envelopeKey, 1, '0b9f4c0e-6a51-4d2f-9a33-5e1f6c7d8e90'), envelopePlaintext)
 assert.throws(
-  () => crypto.openAccountEnvelope(accountEnvelope, envelopeKey, 2, '0b9f4c0e-6a51-4d2f-9a33-5e1f6c7d8e90'),
+  () => crypto.openAccountRecord(accountEnvelope, envelopeKey, 2, '0b9f4c0e-6a51-4d2f-9a33-5e1f6c7d8e90'),
   /authentication failed/,
 )
 assert.throws(
-  () => crypto.openAccountEnvelope(accountEnvelope, envelopeKey, 1, '1c9f4c0e-6a51-4d2f-9a33-5e1f6c7d8e91'),
+  () => crypto.openAccountRecord(accountEnvelope, envelopeKey, 1, '1c9f4c0e-6a51-4d2f-9a33-5e1f6c7d8e91'),
   /authentication failed/,
 )
 // Exactly a key binding: an address, another case or padding is refused on
 // seal and open.
 for (const binding of ['alice@example.com', '0B9F4C0E-6A51-4D2F-9A33-5E1F6C7D8E90', ' 0b9f4c0e-6a51-4d2f-9a33-5e1f6c7d8e90 ']) {
-  assert.throws(() => crypto.sealAccountEnvelope(envelopePlaintext, envelopeKey, 1, 1, binding), /binding/)
-  assert.throws(() => crypto.openAccountEnvelope(accountEnvelope, envelopeKey, 1, binding), /binding/)
+  assert.throws(() => crypto.sealAccountRecord(envelopePlaintext, envelopeKey, 1, 1, binding), /binding/)
+  assert.throws(() => crypto.openAccountRecord(accountEnvelope, envelopeKey, 1, binding), /binding/)
 }
 
 // The revision guard's store (Rust revision_guard): entries named by an HMAC,
@@ -77,23 +77,23 @@ assert.notEqual(new crypto.RevisionGuardKeys(Buffer.alloc(32, 0x32).toString('ba
 // The shared envelope vectors: every purpose's envelope is well formed, and
 // every refused one is refused here as in Rust (malformed ones by inspect;
 // the rest, for the purposes the generic API opens, by open).
-const envelopeVectors = JSON.parse(await readFile(`${root}/crates/kutup-crypto/tests/vectors/account-envelope-v2.json`, 'utf8'))
+const envelopeVectors = JSON.parse(await readFile(`${root}/crates/kutup-crypto/tests/vectors/account-record-v1.json`, 'utf8'))
 const genericPurposes = new Set([1, 2, 4])
 for (const p of envelopeVectors.purposes) {
-  assert.deepEqual(crypto.inspectAccountEnvelope(p.envelope), { purpose: p.purpose, generation: 1 })
+  assert.deepEqual(crypto.inspectAccountRecord(p.envelope), { purpose: p.purpose, generation: 1 })
   if (genericPurposes.has(p.purpose)) {
-    assert.equal(crypto.openAccountEnvelope(p.envelope, envelopeVectors.key, p.purpose, envelopeVectors.binding), p.plaintext)
+    assert.equal(crypto.openAccountRecord(p.envelope, envelopeVectors.key, p.purpose, envelopeVectors.binding), p.plaintext)
   } else {
     // Mail keys and Pass vault secrets open only through their typed APIs
     // (which the Rust vector test and test-pass-wasm.mjs open): the generic
     // path refuses even a well-formed one.
-    assert.throws(() => crypto.openAccountEnvelope(p.envelope, envelopeVectors.key, p.purpose, envelopeVectors.binding))
+    assert.throws(() => crypto.openAccountRecord(p.envelope, envelopeVectors.key, p.purpose, envelopeVectors.binding))
   }
   for (const refused of p.refused) {
-    if (refused.step === 'inspect') assert.throws(() => crypto.inspectAccountEnvelope(refused.envelope), refused.why)
-    if (refused.step === 'open') assert.equal(crypto.inspectAccountEnvelope(refused.envelope).purpose, p.purpose, refused.why)
+    if (refused.step === 'inspect') assert.throws(() => crypto.inspectAccountRecord(refused.envelope), refused.why)
+    if (refused.step === 'open') assert.equal(crypto.inspectAccountRecord(refused.envelope).purpose, p.purpose, refused.why)
     if (genericPurposes.has(p.purpose)) {
-      assert.throws(() => crypto.openAccountEnvelope(refused.envelope, envelopeVectors.key, p.purpose, envelopeVectors.binding), refused.why)
+      assert.throws(() => crypto.openAccountRecord(refused.envelope, envelopeVectors.key, p.purpose, envelopeVectors.binding), refused.why)
     }
   }
 }
@@ -701,8 +701,8 @@ const fresh = crypto.generateMailAddressKey(mailVectors.masterKey, 1, mailVector
 assert.deepEqual(Object.keys(fresh).sort(), ['envelope', 'fingerprint', 'publicKey', 'sha256Fingerprint'])
 assert.equal(crypto.inspectMailAddressPublicKey(fresh.publicKey, 'carol@kutup.dev').fingerprint, fresh.fingerprint)
 // The generic account-envelope path refuses the mail-key purpose.
-assert.throws(() => crypto.openAccountEnvelope(fresh.envelope, mailVectors.masterKey, 5, mailVectors.binding), /typed export/)
-assert.throws(() => crypto.sealAccountEnvelope('AA==', mailVectors.masterKey, 5, 1, mailVectors.binding), /typed export/)
+assert.throws(() => crypto.openAccountRecord(fresh.envelope, mailVectors.masterKey, 5, mailVectors.binding), /typed export/)
+assert.throws(() => crypto.sealAccountRecord('AA==', mailVectors.masterKey, 5, 1, mailVectors.binding), /typed export/)
 
 // Mail between Kutup users (docs/plans/mail.md): a split message opens for
 // each recipient with the shared data packet; fresh ones round-trip.

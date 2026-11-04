@@ -5,7 +5,7 @@
 //! certifies and signs, a Curve25519 encryption subkey) so every OpenPGP
 //! client reads them, generated and used through rPGP.
 //!
-//! - The private key is kept in an [`account_envelope`] under the master key
+//! - The private key is kept in an [`account_record`] under the master key
 //!   (purpose `MailAddressPrivateKey`). Its payload binds the address and the
 //!   fingerprint, so a server cannot swap one address's key for another's.
 //! - Each address publishes a [`MailKeyListV1`], Proton's signed key list:
@@ -31,7 +31,7 @@ use pgp::{
 use sha2::Sha256;
 use zeroize::Zeroizing;
 
-use crate::account_envelope::{self, AccountEnvelopePurpose};
+use crate::account_record::{self, AccountRecordPurpose};
 use crate::account_ref::AccountRef;
 use crate::error::{CryptoError, Result};
 use crate::identity::{authority_key_id_from_public, incarnation_id_from_authority_public};
@@ -266,16 +266,16 @@ fn sha256_fingerprint_of(key: &SignedPublicKey) -> Result<[u8; 32]> {
 /// address and the key's own fingerprint.
 pub fn seal_address_key(
     master_key: &[u8],
-    generation: account_envelope::MasterKeyGeneration,
+    generation: account_record::MasterKeyGeneration,
     binding: &str,
     address: &str,
     secret_key: &[u8],
 ) -> Result<Vec<u8>> {
     let payload = private_key_payload(address, secret_key)?;
-    account_envelope::seal(
+    account_record::seal(
         &payload,
         master_key,
-        AccountEnvelopePurpose::MailAddressPrivateKey,
+        AccountRecordPurpose::MailAddressPrivateKey,
         generation,
         binding,
     )
@@ -284,17 +284,17 @@ pub fn seal_address_key(
 /// [`seal_address_key`] with a fixed nonce, for checked-in vectors only.
 pub fn seal_address_key_with_nonce(
     master_key: &[u8],
-    generation: account_envelope::MasterKeyGeneration,
+    generation: account_record::MasterKeyGeneration,
     binding: &str,
     address: &str,
     secret_key: &[u8],
     nonce: &[u8],
 ) -> Result<Vec<u8>> {
     let payload = private_key_payload(address, secret_key)?;
-    account_envelope::seal_with_nonce(
+    account_record::seal_with_nonce(
         &payload,
         master_key,
-        AccountEnvelopePurpose::MailAddressPrivateKey,
+        AccountRecordPurpose::MailAddressPrivateKey,
         generation,
         binding,
         nonce,
@@ -336,10 +336,10 @@ pub fn open_address_key(
     fingerprint: &[u8; FINGERPRINT_LEN],
 ) -> Result<Zeroizing<Vec<u8>>> {
     let address = canonical_address(address)?;
-    let payload = Zeroizing::new(account_envelope::open(
+    let payload = Zeroizing::new(account_record::open(
         envelope,
         master_key,
-        AccountEnvelopePurpose::MailAddressPrivateKey,
+        AccountRecordPurpose::MailAddressPrivateKey,
         binding,
     )?);
     let mut rest = payload
@@ -1746,7 +1746,7 @@ pub fn first_address_key(
     let key = generate_address_key(&address, created_at_secs)?;
     let private_key_envelope = seal_address_key(
         master_key,
-        crate::account_envelope::MasterKeyGeneration::FIRST,
+        crate::account_record::MasterKeyGeneration::FIRST,
         binding,
         &address,
         &key.secret_key,
@@ -1857,7 +1857,7 @@ mod tests {
         let key = generate_address_key(ADDRESS, 1_790_000_000).unwrap();
         let sealed = seal_address_key(
             &master,
-            crate::account_envelope::MasterKeyGeneration::FIRST,
+            crate::account_record::MasterKeyGeneration::FIRST,
             "0b9f4c0e-6a51-4d2f-9a33-5e1f6c7d8e90",
             ADDRESS,
             &key.secret_key,

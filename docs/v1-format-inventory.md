@@ -9,9 +9,9 @@ dual-written. This destructive rule expires at the first stable `v*` tag.
 
 | Purpose | Pre-V1 shape | V1 owner and format |
 |---|---|---|
-| Master-key password wrap | XSalsa20 secretbox plus separate nonce; implicit Argon parameters | **Implemented:** OPAQUE for the password (its Argon2id in the OPAQUE key-stretching function), and the suite-bearing `AccountEnvelopeV1` (suite 2, bound to the account's key binding, XChaCha) for the wrap |
-| Master-key recovery wrap | XSalsa20 secretbox under random recovery entropy | **Implemented:** `AccountEnvelopeV1` (suite 2) with recovery purpose, the account's key binding as context, and XChaCha |
-| Account sharing private key | XSalsa20 secretbox; public X25519 key stored separately | **Implemented:** account-scoped Drive keys in `AccountManifestV1`; private material wrapped by the Drive-private-key purpose of `AccountEnvelopeV1` |
+| Master-key password wrap | XSalsa20 secretbox plus separate nonce; implicit Argon parameters | **Implemented:** OPAQUE for the password (its Argon2id in the OPAQUE key-stretching function), and the suite-bearing `AccountRecordV1` (suite 2, bound to the account's key binding, XChaCha) for the wrap |
+| Master-key recovery wrap | XSalsa20 secretbox under random recovery entropy | **Implemented:** `AccountRecordV1` (suite 2) with recovery purpose, the account's key binding as context, and XChaCha |
+| Account sharing private key | XSalsa20 secretbox; public X25519 key stored separately | **Implemented:** account-scoped Drive keys in `AccountManifestV1`; private material wrapped by the Drive-private-key purpose of `AccountRecordV1` |
 | Collection name/key | Separate ciphertext/nonce columns with implicit secretbox | **Implemented end to end:** client-generated collection UUID, `DriveEnvelopeV1` owner-key/name records (names padded to 256-byte buckets), immutable `CollectionEpochStatementV1` history and exact revision/epoch binding |
 | File metadata/key | Separate ciphertext/nonce columns with implicit secretbox | **Implemented end to end:** client-generated file UUID; the file key's wrap is bound to file, folder, the folder epoch it is sealed at and the key's generation, and the metadata (padded to 256-byte buckets, with the content SHA-256) to the file alone (generation and revision), across multipart, tus, trash, public-link and signed-federation paths (docs/plans/drive-move.md) |
 | File blob and version snapshot | Raw secretstream header/chunks, or nonce-prefixed snapshot AEAD | **Implemented end to end:** one `DriveObjectSuiteId` file-blob format for originals and text/office/whiteboard snapshots, with 5 MiB secretstream framing bound to the file and its key generation, never the folder |
@@ -36,35 +36,38 @@ dual-written. This destructive rule expires at the first stable `v*` tag.
 | Chat history backup | Absent; a new browser device starts with an empty local database | **Implemented:** always-on account-local E2EE backup using a master-key-wrapped Chat root, independently derived segment/base/manifest/media keys, signed hash-chained manifests, and server-side base-plus-tail restore; device-to-device transfer is not supported (current contract: [`chat-backup.md`](chat-backup.md)) |
 | Broadcast post and grants | Absent | Typed broadcast policy, epoch, account/device grant, history grant and post structures |
 
-`AccountEnvelopeV1` is encoded as magic `KUTPAE2\0`, big-endian suite ID
-(2; suite 1 is retired and not read), purpose byte, zero reserved byte, the
-big-endian u32 master-key generation (never 0: the generation of the master
-key a password or recovery wrap holds, or of the one that sealed any other
-secret; docs/plans/w6-key-hierarchy.md §2), big-endian context length, the context (the account's key binding, a UUID v4,
-never an email, username or address: docs/plans/account-identity.md), the
-object id's length byte and the object id where the purpose has one secret
-per object, an 8-byte big-endian revision for a mutable purpose, 24-byte
-nonce, big-endian ciphertext length, and XChaCha20-Poly1305 ciphertext/tag.
-The bytes preceding the ciphertext are the complete AAD, and the AEAD key is
-derived per envelope with HKDF-SHA256 over the purpose, the binding and the
-object. Each purpose has one policy (`AccountEnvelopePurpose::policy`),
+`AccountRecordV1` (docs/plans/w1-account-record.md) is encoded as magic
+`KUTPAR1\0`, big-endian suite ID (1), big-endian u16 purpose, the big-endian
+u32 master-key generation (never 0: the generation of the master key a
+password or recovery wrap holds, or of the one that sealed any other record;
+docs/plans/w6-key-hierarchy.md §2), big-endian context length, the context
+(the account's key binding, a UUID v4, never an email, username or address:
+docs/plans/account-identity.md), the object id's length byte and the object
+id where the purpose has one record per object, an 8-byte big-endian revision
+for a mutable purpose, 24-byte nonce, big-endian ciphertext length, and
+XChaCha20-Poly1305 ciphertext/tag. The bytes preceding the ciphertext are the
+complete AAD, and the AEAD key is derived per record with HKDF-SHA256
+(salt `kutup/account-record/v1`) over the header before the nonce. Each
+purpose has one policy (`AccountRecordPurpose::policy`),
 checked on seal, open and by the server: whether it names an object (and its
 length), how its plaintext's length shows (`Exact` for keys; `Fixed` or
 `Bucket` padding, `0x80` then zeros, applied once by the envelope and checked
-canonically on open) and whether it carries a revision:
+canonically on open), its longest padded plaintext (a format limit, never a
+site setting) and whether it carries a revision:
 
 | Purpose | Object | Length | Revision |
 |---|---|---|---|
-| PasswordMasterKey, RecoveryMasterKey, DriveHpkePrivateKey, ChatBackupRoot | none | exactly 32 bytes | no |
-| MailAddressPrivateKey | none | padded to a multiple of 256 bytes | no |
+| PasswordMasterKey, RecoveryMasterKey, ChatBackupRoot | none | exactly 32 bytes | no |
+| MailAddressPrivateKey | none | padded to a multiple of 256 bytes, at most 4096 | no |
 | PassVaultSecret | the vault's file id (16 bytes) | padded to one length (`pass_vault::MAX_PAYLOAD_LEN` + 1 = 3121 bytes) | yes |
+| OrganizationPrivateKey | the key's id (32 bytes) | exactly 32 bytes | no |
 
-Every server write path checks an envelope with
-`account_envelope::validate_for(purpose, binding, object)` before storing it,
+Every server write path checks a record with
+`account_record::validate_for(purpose, binding, object)` before storing it,
 and so rejects noncanonical base64, unknown or retired suites and purposes,
 noncanonical context, the wrong purpose, binding or object, a missing or
 extra object or revision, a length its policy never gives, and trailing data.
-`account-envelope-v2.json` holds one envelope per purpose and, for each, the
+`account-record-v1.json` holds one envelope per purpose and, for each, the
 envelopes that must be refused, read by the Rust and the WASM tests.
 
 Contact cards (`KUTCC2`), mail names (`KUTMN2`) and identity pin lists
@@ -231,7 +234,7 @@ the profile key inside encrypted Direct Chat content, and unknown codes do not
 authorize a profile fetch.
 
 Chat backup uses `ChatBackupRootV1`, wrapped with the Chat-backup purpose of
-`AccountEnvelopeV1`. Fixed HKDF-SHA256 labels derive independent message,
+`AccountRecordV1`. Fixed HKDF-SHA256 labels derive independent message,
 media-ID, media-encryption, manifest-signing and segment keys. Typed headers
 bind every XChaCha20-Poly1305/secretstream object to its suite, account,
 incarnation, protection domain, generation and object purpose. Signed,

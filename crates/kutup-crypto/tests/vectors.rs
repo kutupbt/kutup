@@ -8,7 +8,7 @@ use base64::Engine;
 use serde::Deserialize;
 
 use kutup_crypto::{
-    account_envelope::{self, AccountEnvelopePurpose},
+    account_record::{self, AccountRecordPurpose},
     asset,
     drive_envelope::{self, DriveEnvelopeContextV1, DriveEnvelopePurpose},
     drive_object::{self, DriveFileBlobContextV1},
@@ -31,8 +31,8 @@ struct CryptoVectors {
     recovery_auth: RecoveryAuthVec,
     #[serde(rename = "accountIdentity")]
     account_identity: AccountIdentityVec,
-    #[serde(rename = "accountEnvelope")]
-    account_envelope: AccountEnvelopeVec,
+    #[serde(rename = "accountRecord")]
+    account_record: AccountRecordVec,
     #[serde(rename = "driveEnvelope")]
     drive_envelope: DriveEnvelopeVec,
     #[serde(rename = "driveFileBlob")]
@@ -172,10 +172,10 @@ struct AccountIdentityVec {
     drive_signing_public_key: String,
 }
 #[derive(Deserialize)]
-struct AccountEnvelopeVec {
+struct AccountRecordVec {
     plaintext: String,
     key: String,
-    purpose: u8,
+    purpose: u16,
     binding: String,
     #[serde(rename = "objectId", default)]
     object_id: String,
@@ -356,17 +356,17 @@ fn account_identity_vector() {
 }
 
 #[test]
-fn account_envelope_vector() {
-    let vector = load_crypto().account_envelope;
-    let purpose = AccountEnvelopePurpose::try_from(vector.purpose).unwrap();
+fn account_record_vector() {
+    let vector = load_crypto().account_record;
+    let purpose = AccountRecordPurpose::try_from(vector.purpose).unwrap();
     // A key binding, an object, a key derived for them.
     let object = b64(&vector.object_id);
-    let envelope = account_envelope::seal_suite(
-        account_envelope::AccountEnvelopeSuiteId::XChaCha20Poly1305HkdfV2,
+    let envelope = account_record::seal_suite(
+        account_record::AccountRecordSuiteId::V1,
         &b64(&vector.plaintext),
         &b64(&vector.key),
         purpose,
-        kutup_crypto::account_envelope::MasterKeyGeneration::FIRST,
+        kutup_crypto::account_record::MasterKeyGeneration::FIRST,
         &vector.binding,
         &object,
         purpose.policy().mutable.then_some(1),
@@ -378,7 +378,7 @@ fn account_envelope_vector() {
         vector.envelope
     );
     assert_eq!(
-        account_envelope::open_revision(
+        account_record::open_revision(
             &envelope,
             &b64(&vector.key),
             purpose,
@@ -390,22 +390,15 @@ fn account_envelope_vector() {
     );
     // The per-envelope key, pinned.
     assert_eq!(
-        base64::engine::general_purpose::STANDARD.encode(
-            account_envelope::v2_aead_key_for_vectors(
-                &b64(&vector.key),
-                purpose,
-                &vector.binding,
-                &object
-            )
-            .unwrap()
-        ),
+        base64::engine::general_purpose::STANDARD
+            .encode(account_record::aead_key_for_vectors(&b64(&vector.key), &envelope).unwrap()),
         vector.aead_key
     );
-    // Refused: another object, binding or purpose; the suite byte turned to
-    // the retired 1; the object id in the header changed.
+    // Refused: another object, binding or purpose; an unknown suite; the
+    // object id in the header changed.
     let key = b64(&vector.key);
     let refused = |envelope: &[u8], purpose, binding: &str, object: &[u8]| {
-        account_envelope::open_revision(envelope, &key, purpose, binding, object).is_err()
+        account_record::open_revision(envelope, &key, purpose, binding, object).is_err()
     };
     assert!(refused(&envelope, purpose, &vector.binding, &[0; 16]));
     assert!(refused(
@@ -416,15 +409,15 @@ fn account_envelope_vector() {
     ));
     assert!(refused(
         &envelope,
-        AccountEnvelopePurpose::PasswordMasterKey,
+        AccountRecordPurpose::PasswordMasterKey,
         &vector.binding,
         &object
     ));
     let mut downgraded = envelope.clone();
-    downgraded[9] = 1;
+    downgraded[9] = 2;
     assert!(refused(&downgraded, purpose, &vector.binding, &object));
     assert!(refused(&downgraded, purpose, &vector.binding, &[]));
-    let object_at = 14 + vector.binding.len() + 1;
+    let object_at = 18 + vector.binding.len() + 1;
     let mut moved = envelope.clone();
     moved[object_at] ^= 0x01;
     let mut moved_object = object.clone();

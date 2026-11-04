@@ -18,12 +18,12 @@
 /// `kutup-server/src/two_factor.rs` (`MAC_LABEL`)
 pub const TWO_FACTOR_RECOVERY_CODE_V1: &[u8] = b"kutup/2fa-recovery-code/v1\0";
 
-// --- account-envelope --------------------------------------------------------
+// --- account-record ----------------------------------------------------------
 
-/// `kutup-crypto/src/account_envelope.rs` (`V2_KEY_INFO`)
-pub const ACCOUNT_ENVELOPE_KEY_V2: &[u8] = b"kutup/account-envelope/key/v2\0";
-/// `kutup-crypto/src/account_envelope.rs` (`V2_KEY_SALT`)
-pub const ACCOUNT_ENVELOPE_V2: &[u8] = b"kutup/account-envelope/v2\0";
+/// `kutup-crypto/src/account_record.rs` (`KEY_INFO`)
+pub const ACCOUNT_RECORD_KEY_V1: &[u8] = b"kutup/account-record/key/v1\0";
+/// `kutup-crypto/src/account_record.rs` (`KEY_SALT`)
+pub const ACCOUNT_RECORD_V1: &[u8] = b"kutup/account-record/v1\0";
 
 // --- account-head ------------------------------------------------------------
 
@@ -645,8 +645,8 @@ pub const ALL: [&[u8]; 196] = [
     PRIVATE_CIPHERTEXT_CACHE_ACCOUNT_V1,
     PRIVATE_CIPHERTEXT_CACHE_BINDING_V1,
     TWO_FACTOR_RECOVERY_CODE_V1,
-    ACCOUNT_ENVELOPE_KEY_V2,
-    ACCOUNT_ENVELOPE_V2,
+    ACCOUNT_RECORD_KEY_V1,
+    ACCOUNT_RECORD_V1,
     ACCOUNT_HEAD_ID_KEY_V1,
     ACCOUNT_HEAD_LOCAL_NAME_V1,
     ACCOUNT_HEAD_LOCAL_V1,

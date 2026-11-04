@@ -13,7 +13,7 @@ use kutup_chat_proto::{
     ChatAttachmentLedgerEntryV1, ChatBackupBasePlaintextV1, ChatBackupManifestV1,
     ChatBackupSegmentPlaintextV1, ChatBackupSignerAuthorizationV1,
 };
-use kutup_crypto::account_envelope::{self, AccountEnvelopePurpose};
+use kutup_crypto::account_record::{self, AccountRecordPurpose};
 use kutup_crypto::account_ref::AccountRef;
 use kutup_crypto::chat_attachment_ledger::{self, ChatAttachmentLedgerContextV1};
 use kutup_crypto::chat_backup::{
@@ -618,24 +618,24 @@ pub fn derive_account_identity_keys(master_key_base64: &str) -> Result<JsValue, 
 /// `MASTER_KEY_GENERATION` in `@kutup/crypto` until rotation exists).
 fn master_key_generation(
     generation: u32,
-) -> Result<account_envelope::MasterKeyGeneration, JsValue> {
-    account_envelope::MasterKeyGeneration::new(generation)
+) -> Result<account_record::MasterKeyGeneration, JsValue> {
+    account_record::MasterKeyGeneration::new(generation)
         .map_err(|error| js_error(&error.to_string()))
 }
 
-/// Seal one account secret into the canonical, suite-bearing V1 envelope.
-#[wasm_bindgen(js_name = sealAccountEnvelope)]
-pub fn seal_account_envelope(
+/// Seal one account secret into a canonical account record (`KUTPAR1`).
+#[wasm_bindgen(js_name = sealAccountRecord)]
+pub fn seal_account_record(
     plaintext_base64: &str,
     key_base64: &str,
-    purpose: u8,
+    purpose: u16,
     generation: u32,
     binding: &str,
 ) -> Result<String, JsValue> {
     let plaintext = decode_canonical_base64(plaintext_base64, "plaintext")?;
     let key = decode_canonical_base64(key_base64, "key")?;
     let purpose = generic_account_purpose(purpose)?;
-    account_envelope::seal_b64(
+    account_record::seal_b64(
         &plaintext,
         &key,
         purpose,
@@ -645,26 +645,26 @@ pub fn seal_account_envelope(
     .map_err(|error| js_error(&error.to_string()))
 }
 
-/// Open one account secret only when its purpose and login-email binding match.
-#[wasm_bindgen(js_name = openAccountEnvelope)]
-pub fn open_account_envelope(
+/// Open one account record only when its purpose and key binding match.
+#[wasm_bindgen(js_name = openAccountRecord)]
+pub fn open_account_record(
     envelope_base64: &str,
     key_base64: &str,
-    expected_purpose: u8,
+    expected_purpose: u16,
     binding: &str,
 ) -> Result<String, JsValue> {
     let key = decode_canonical_base64(key_base64, "key")?;
     let purpose = generic_account_purpose(expected_purpose)?;
-    let plaintext = account_envelope::open_b64(envelope_base64, &key, purpose, binding)
+    let plaintext = account_record::open_b64(envelope_base64, &key, purpose, binding)
         .map_err(|error| js_error(&error.to_string()))?;
     Ok(STANDARD.encode(plaintext))
 }
 
-/// What `inspectAccountEnvelope` reads from a header.
+/// What `inspectAccountRecord` reads from a header.
 #[derive(serde::Serialize)]
 #[serde(rename_all = "camelCase")]
-struct AccountEnvelopeInspection {
-    purpose: u8,
+struct AccountRecordInspection {
+    purpose: u16,
     /// The master key the envelope belongs to (docs/plans/w6-key-hierarchy.md §2).
     generation: u32,
 }
@@ -673,14 +673,14 @@ struct AccountEnvelopeInspection {
 /// padded length) without a key, as the server does before storing one;
 /// throws when it is malformed. Returns its purpose and master-key
 /// generation, as written: nothing is authenticated until it opens.
-#[wasm_bindgen(js_name = inspectAccountEnvelope)]
-pub fn inspect_account_envelope(envelope_base64: &str) -> Result<JsValue, JsValue> {
-    let envelope = account_envelope::decode_canonical_b64(envelope_base64)
+#[wasm_bindgen(js_name = inspectAccountRecord)]
+pub fn inspect_account_record(envelope_base64: &str) -> Result<JsValue, JsValue> {
+    let envelope = account_record::decode_canonical_b64(envelope_base64)
         .map_err(|error| js_error(&error.to_string()))?;
     let header =
-        account_envelope::inspect(&envelope).map_err(|error| js_error(&error.to_string()))?;
-    serde_wasm_bindgen::to_value(&AccountEnvelopeInspection {
-        purpose: header.purpose.as_u8(),
+        account_record::inspect(&envelope).map_err(|error| js_error(&error.to_string()))?;
+    serde_wasm_bindgen::to_value(&AccountRecordInspection {
+        purpose: header.purpose.as_u16(),
         generation: header.generation.get(),
     })
     .map_err(|error| js_error(&error.to_string()))
@@ -688,11 +688,11 @@ pub fn inspect_account_envelope(envelope_base64: &str) -> Result<JsValue, JsValu
 
 /// Mail address keys have typed exports (`generateMailAddressKey`), so the
 /// generic account-envelope path cannot hand their secret key to JavaScript.
-fn generic_account_purpose(value: u8) -> Result<AccountEnvelopePurpose, JsValue> {
-    match AccountEnvelopePurpose::try_from(value).map_err(|error| js_error(&error.to_string()))? {
-        AccountEnvelopePurpose::MailAddressPrivateKey
-        | AccountEnvelopePurpose::PassVaultSecret
-        | AccountEnvelopePurpose::OrganizationPrivateKey => Err(js_error(
+fn generic_account_purpose(value: u16) -> Result<AccountRecordPurpose, JsValue> {
+    match AccountRecordPurpose::try_from(value).map_err(|error| js_error(&error.to_string()))? {
+        AccountRecordPurpose::MailAddressPrivateKey
+        | AccountRecordPurpose::PassVaultSecret
+        | AccountRecordPurpose::OrganizationPrivateKey => Err(js_error(
             "this account envelope purpose has its own typed export",
         )),
         purpose => Ok(purpose),

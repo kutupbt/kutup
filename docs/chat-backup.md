@@ -70,7 +70,7 @@ backup to the peer server.
 ## Keys and formats
 
 The client generates a random 32-byte `ChatBackupRootV1` and wraps it in
-`AccountEnvelopeV1` with the dedicated Chat-backup-root purpose. Independent
+`AccountRecordV1` with the dedicated Chat-backup-root purpose. Independent
 HKDF-SHA256 subkeys cover:
 
 - encrypted event segments;

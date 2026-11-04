@@ -73,7 +73,7 @@ record binds), never the username.
 never reaches the server.
 - `kek = HKDF-SHA256(salt = "kutup/opaque/export/v1\0", ikm = export_key,
   info = "kutup/opaque/master-key-kek/v1\0" ‖ key_binding)`, 32 bytes.
-- The master key envelope stays `AccountEnvelopePurpose::PasswordMasterKey`, sealed
+- The master key envelope stays `AccountRecordPurpose::PasswordMasterKey`, sealed
   under `kek` and bound to `key_binding`, as today. Only where `kek` comes from
   changes.
 - Any later use of the export key gets its own HKDF info.
