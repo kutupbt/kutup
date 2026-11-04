@@ -15,7 +15,7 @@ use sha2::{Digest, Sha256};
 
 use kutup_crypto::account_record::{self, MasterKeyGeneration};
 use kutup_crypto::chat_group::{GroupHome, GroupMasterKey};
-use kutup_crypto::chat_group_list::{self, GroupListKey, MAX_SEALED_LEN};
+use kutup_crypto::chat_group_list::{self, GroupListKey, SEALED_LEN};
 
 /// The vectors' group home (the id binds it).
 const HOME: GroupHome<'static> = GroupHome {
@@ -89,7 +89,7 @@ fn the_group_list_entry_matches_its_vector() {
     let stored: Vectors = serde_json::from_str(&std::fs::read_to_string(PATH).unwrap()).unwrap();
     assert_eq!(computed(), stored);
     let sealed = sealed();
-    assert!(sealed.len() <= MAX_SEALED_LEN);
+    assert_eq!(sealed.len(), SEALED_LEN);
     assert_eq!(chat_group_list::inspect(&sealed).unwrap(), stored.revision);
     // It opens, only as itself.
     let key = GroupListKey::new(&[0x11u8; 32], MasterKeyGeneration::FIRST);

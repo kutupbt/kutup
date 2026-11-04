@@ -162,7 +162,11 @@ there.
   32-byte object like any other (`ObjectPolicy::Required(32)`): only the
   client knows how it is made, so no separate policy was needed.
 - The plaintext is padded to one length per purpose (`Fixed`), with the
-  limits the lists had (3972 and 1988 bytes). `KUTPGL1`, `KUTPCC1`, their id
+  limits the lists had (3972 and 1988 bytes). With a canonical binding, a
+  32-byte object and a revision, every entry is exactly one length
+  (`account_record::exact_record_len`: 4144 and 2160 bytes), and the tables
+  keep requiring it (migration `20261027180000`), so the server can't tell
+  entries apart by their length. `KUTPGL1`, `KUTPCC1`, their id
   and seal keys and their eight labels are gone.
 - The server validates each write whole: this account's entry, filed under
   the URL's entry id (`validate`), where before it read only the revision.

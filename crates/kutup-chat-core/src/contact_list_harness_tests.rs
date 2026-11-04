@@ -446,7 +446,7 @@ fn contacts_a_listed_entry_that_does_not_open_fails_the_read() {
         .unwrap()
         .get_mut(&id)
         .unwrap()
-        .1 = STANDARD.encode([0u8; chat_contact_list::MAX_SEALED_LEN]);
+        .1 = STANDARD.encode([0u8; chat_contact_list::SEALED_LEN]);
     let mut alice2 = world.link_device(&mut alice);
     assert!(block_on(alice2.engine.sync_contact_list()).is_err());
 }

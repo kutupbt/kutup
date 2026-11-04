@@ -16,7 +16,7 @@ use sha2::{Digest, Sha256};
 
 use kutup_crypto::account_record::{self, MasterKeyGeneration};
 use kutup_crypto::account_ref::AccountRef;
-use kutup_crypto::chat_contact_list::{self, ContactListKey, MAX_SEALED_LEN};
+use kutup_crypto::chat_contact_list::{self, ContactListKey, SEALED_LEN};
 
 const PATH: &str = concat!(
     env!("CARGO_MANIFEST_DIR"),
@@ -84,7 +84,7 @@ fn the_contact_list_entry_matches_its_vector() {
     let stored: Vectors = serde_json::from_str(&std::fs::read_to_string(PATH).unwrap()).unwrap();
     assert_eq!(computed(), stored);
     let sealed = sealed();
-    assert!(sealed.len() <= MAX_SEALED_LEN);
+    assert_eq!(sealed.len(), SEALED_LEN);
     assert_eq!(
         chat_contact_list::inspect(&sealed).unwrap(),
         stored.revision

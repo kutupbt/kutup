@@ -29,7 +29,7 @@ use crate::{revisions, AppState};
 /// The most entries one account keeps.
 pub const MAX_ENTRIES: i64 = 1024;
 /// Every sealed entry's size (`kutup_crypto::chat_group_list`).
-pub const ENVELOPE_BYTES: usize = kutup_crypto::chat_group_list::MAX_SEALED_LEN;
+pub const ENVELOPE_BYTES: usize = kutup_crypto::chat_group_list::SEALED_LEN;
 
 /// One sealed entry.
 #[derive(Debug, Serialize, ToSchema)]
@@ -298,7 +298,7 @@ mod tests {
         let text_id = encode_entry_id(&id);
         let binding = "00000000-0000-4000-8000-000000000001";
         let sealed = key.seal(binding, &id, 7, b"{}").unwrap();
-        assert!(sealed.len() <= ENVELOPE_BYTES);
+        assert_eq!(sealed.len(), ENVELOPE_BYTES);
         let (bytes, revision) = envelope(&STANDARD.encode(&sealed), binding, &text_id).unwrap();
         assert_eq!((bytes, revision), (sealed.clone(), 7));
         // Cut, not one at all, under another id or another account: refused.
@@ -321,21 +321,18 @@ mod tests {
         .is_err());
     }
 
-    /// The tables' size bounds are the records' longest lengths.
+    /// The tables require each entry's one length, the code's.
     #[test]
     fn the_columns_bound_the_entries_by_their_longest_record() {
         let up = include_str!("../../migrations/20261027180000_chat_list_records.up.sql");
         for (table, max) in [
-            (
-                "chat_group_list",
-                kutup_crypto::chat_group_list::MAX_SEALED_LEN,
-            ),
+            ("chat_group_list", kutup_crypto::chat_group_list::SEALED_LEN),
             (
                 "chat_contact_list",
-                kutup_crypto::chat_contact_list::MAX_SEALED_LEN,
+                kutup_crypto::chat_contact_list::SEALED_LEN,
             ),
         ] {
-            let bound = format!("ALTER TABLE {table}\n    ADD CONSTRAINT {table}_envelope_check CHECK (octet_length(envelope) <= {max});");
+            let bound = format!("ALTER TABLE {table}\n    ADD CONSTRAINT {table}_envelope_check CHECK (octet_length(envelope) = {max});");
             assert!(up.contains(&bound), "{table}: {bound}");
         }
     }

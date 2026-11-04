@@ -31,7 +31,7 @@ use crate::{revisions, AppState};
 /// before it reaches it (the oldest rejections first, never a block).
 pub const MAX_ENTRIES: i64 = 10_000;
 /// Every sealed entry's size (`kutup_crypto::chat_contact_list`).
-pub const ENVELOPE_BYTES: usize = kutup_crypto::chat_contact_list::MAX_SEALED_LEN;
+pub const ENVELOPE_BYTES: usize = kutup_crypto::chat_contact_list::SEALED_LEN;
 
 /// One sealed entry.
 #[derive(Debug, Serialize, ToSchema)]
@@ -292,7 +292,7 @@ mod tests {
         let text_id = encode_entry_id(&id);
         let binding = "00000000-0000-4000-8000-000000000001";
         let sealed = key.seal(binding, &id, 7, b"{}").unwrap();
-        assert!(sealed.len() <= ENVELOPE_BYTES);
+        assert_eq!(sealed.len(), ENVELOPE_BYTES);
         let (bytes, revision) = envelope(&STANDARD.encode(&sealed), binding, &text_id).unwrap();
         assert_eq!((bytes, revision), (sealed.clone(), 7));
         // Cut, not one at all, under another id or another account: refused.

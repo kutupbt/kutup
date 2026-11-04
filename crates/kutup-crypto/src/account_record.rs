@@ -115,6 +115,35 @@ pub const fn max_record_len(purpose: AccountRecordPurpose) -> usize {
         + TAG_LEN
 }
 
+/// The one length of every record of `purpose`, when its padding, object and
+/// revision are all fixed (the key binding is always a canonical UUID's 36
+/// characters): what a server can require exactly, so records of the purpose
+/// can't be told apart by their length. None when the length varies.
+pub const fn exact_record_len(purpose: AccountRecordPurpose) -> Option<usize> {
+    let policy = purpose.policy();
+    let padded = match policy.length {
+        Length::Exact(n) | Length::Fixed(n) => n,
+        Length::Bucket(_) => return None,
+    };
+    let object = match policy.object {
+        ObjectPolicy::None => 0,
+        ObjectPolicy::Required(n) => n,
+    };
+    let revision = if policy.mutable { REVISION_LEN } else { 0 };
+    Some(
+        FIXED_PREFIX_LEN
+            + MAX_CONTEXT_LEN
+            + 1
+            + object
+            + revision
+            + COMMITMENT_LEN
+            + NONCE_LEN
+            + LENGTH_LEN
+            + padded
+            + TAG_LEN,
+    )
+}
+
 /// The longest canonical base64 of a record of `purpose`: a server refuses a
 /// longer value before decoding it.
 pub const fn max_record_b64_len(purpose: AccountRecordPurpose) -> usize {

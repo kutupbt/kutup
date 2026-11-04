@@ -28,8 +28,12 @@ pub const ENTRY_ID_LEN: usize = 32;
 const NONCE_LEN: usize = 24;
 /// The longest entry plaintext.
 pub const MAX_PLAIN_LEN: usize = 1988;
-/// The longest sealed entry (every entry of one account is one length).
-pub const MAX_SEALED_LEN: usize = account_record::max_record_len(PURPOSE);
+/// Every sealed entry's length: the plaintext is padded to one size, so the
+/// server can't tell entries apart by their length.
+pub const SEALED_LEN: usize = match account_record::exact_record_len(PURPOSE) {
+    Some(len) => len,
+    None => panic!("list entries have one length"),
+};
 
 /// An account's contact list: its master key and the generation it seals at.
 pub struct ContactListKey {
@@ -186,7 +190,7 @@ mod tests {
         );
 
         let sealed = key.seal(BINDING, &id, 3, b"entry").unwrap();
-        assert!(sealed.len() <= MAX_SEALED_LEN);
+        assert_eq!(sealed.len(), SEALED_LEN);
         assert_eq!(inspect(&sealed).unwrap(), 3);
         assert_eq!(validate(&sealed, BINDING, &id).unwrap(), 3);
         let opened = key.open(BINDING, &id, &sealed).unwrap();
@@ -217,6 +221,7 @@ mod tests {
         for len in [0, 1, 400, MAX_PLAIN_LEN] {
             let plain = vec![b'x'; len];
             let sealed = key.seal(BINDING, &id, 1, &plain).unwrap();
+            assert_eq!(sealed.len(), SEALED_LEN);
             sizes.insert(sealed.len());
             assert_eq!(
                 &key.open(BINDING, &id, &sealed).unwrap().plain[..],

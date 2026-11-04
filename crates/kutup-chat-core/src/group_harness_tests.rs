@@ -5436,16 +5436,15 @@ fn group_list_entries_are_per_account_and_sealed() {
     // The same group under unrelated ids, and no group id in the clear.
     assert_ne!(ids(&alice.account), ids(&bob.account));
     for entries in lists.values() {
-        // One size for every entry of an account.
-        let mut sizes = std::collections::BTreeSet::new();
         for (id, (_, envelope)) in entries {
             assert_ne!(*id, group_id);
             assert!(!envelope.contains(&group_id));
-            let len = STANDARD.decode(envelope).unwrap().len();
-            assert!(len <= kutup_crypto::chat_group_list::MAX_SEALED_LEN);
-            sizes.insert(len);
+            // One size for every entry.
+            assert_eq!(
+                STANDARD.decode(envelope).unwrap().len(),
+                kutup_crypto::chat_group_list::SEALED_LEN
+            );
         }
-        assert!(sizes.len() <= 1);
     }
 }
 
