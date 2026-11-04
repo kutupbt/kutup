@@ -1,7 +1,6 @@
 # Chat's own crypto into kutup-crypto
 
-Status: approved (two PRs, labels unchanged). Slice 1 (profiles) is built;
-slice 2 (links and the store cipher) is next.
+Status: approved (two PRs, labels unchanged). Both slices are built.
 
 Code-only items 1 and 2 of [wipe-unification.md](wipe-unification.md): the
 last large body of crypto outside the canonical crate moves into it, and the
@@ -60,8 +59,11 @@ Two PRs into master, each with its own vectors:
 
 1. **Profiles** (items 1 and 2's win): `profile` into kutup-crypto, the five
    WASM calls, the apps switched. Size M.
-2. **Links and the store cipher:** `call_link`, `group_link`/`group_invite`,
-   `store_cipher`. Size M. Only chat-core and the Chat app see it.
+2. **Call links and the store cipher:** `call_link`, `store_cipher` (with
+   its `LocalCipher`). Size M. Only chat-core and the Chat app see it.
+   `group_link`/`group_invite` turned out to need no move: their sealed
+   fields are already `kutup_crypto::chat_group`'s, and they hold no
+   primitives of their own.
 
 ## Tests
 
@@ -89,6 +91,23 @@ Two PRs into master, each with its own vectors:
   profile settings use them.
 - `scripts/check-app-bundles.mjs` (web gate, after the build) fails when any
   app but Chat carries the Chat runtime.
+
+## Slice 2 as built
+
+- `kutup_crypto::chat_call_link` holds the call-link formats: the owner's
+  secret and host token from the master key and the link's nonce, every key
+  a link's secret gives, the fragment, and the sealed name, info, message and
+  joined meeting. `kutup_crypto::chat_store` holds the store cipher (wrapped
+  store key, hashed record keys, sealed records) and the local cipher. Both
+  are on the primitives, with labels unchanged.
+- `tests/vectors/call-link-v1.json` and `chat-store-v1.json` were made by
+  chat-core's code before the move. The moved code reproduces them byte for
+  byte: the call-link values resealed under the nonces they carry, the store
+  formats with the same counting rng.
+- chat-core's `call_link.rs` and `db/store_cipher.rs` keep Chat's API and
+  error kinds (bad input is `Invalid`, what doesn't open is `Content`, the
+  store's are `Db`) and call kutup-crypto. Their tests pass unchanged.
+  chat-core no longer depends on `chacha20poly1305`, `hkdf` or `hmac`.
 
 ## Decisions (taken)
 
