@@ -94,7 +94,9 @@ pub fn seal_name(
 ) -> Result<Vec<u8>> {
     let mut nonce = [0u8; 24];
     crate::primitives::random(&mut nonce);
-    seal_name_with_nonce(master_key, generation, binding, kind, id, revision, name, &nonce)
+    seal_name_with_nonce(
+        master_key, generation, binding, kind, id, revision, name, &nonce,
+    )
 }
 
 /// [`seal_name`] with a fixed nonce, for checked-in vectors only.
@@ -175,12 +177,14 @@ mod tests {
 
     const ACCOUNT: &str = "0b6b5e0c-4c1e-4b8e-9c2d-6a1f3e5d7c9b";
     const ID: [u8; 16] = [7; 16];
+    const FIRST: MasterKeyGeneration = MasterKeyGeneration::FIRST;
 
     #[test]
     fn a_name_opens_only_where_it_was_sealed() {
-        let key = derive_names_key(&[0x5a; 32]).unwrap();
+        let key = [0x5a; 32];
         let sealed = seal_name(
             &key,
+            FIRST,
             ACCOUNT,
             MailNameKind::Folder,
             &ID,
@@ -188,15 +192,21 @@ mod tests {
             "  İş başvuruları ",
         )
         .unwrap();
-        assert_eq!(inspect_name(&sealed).unwrap(), 9);
-        assert_eq!(sealed.len(), HEADER_LEN + 256 + TAG_LEN);
+        assert_eq!(
+            validate_name(&sealed, ACCOUNT, MailNameKind::Folder, &ID).unwrap(),
+            9
+        );
+        assert!(validate_name(&sealed, ACCOUNT, MailNameKind::Label, &ID).is_err());
+        let header = account_record::inspect(&sealed).unwrap();
+        assert_eq!(header.ciphertext_len as usize, 256 + TAG);
         assert_eq!(
             open_name(&key, ACCOUNT, MailNameKind::Folder, &ID, &sealed).unwrap(),
             ("İş başvuruları".to_owned(), 9)
         );
         // An older name relabelled as newer does not open.
+        let revision_at = sealed.len() - header.ciphertext_len as usize - 4 - 24 - 32 - 8;
         let mut relabelled = sealed.clone();
-        relabelled[10..18].copy_from_slice(&10u64.to_be_bytes());
+        relabelled[revision_at..revision_at + 8].copy_from_slice(&10u64.to_be_bytes());
         assert!(open_name(&key, ACCOUNT, MailNameKind::Folder, &ID, &relabelled).is_err());
         // Another id, kind, key binding or key, or the address: refused.
         assert!(open_name(&key, ACCOUNT, MailNameKind::Folder, &[8; 16], &sealed).is_err());
@@ -210,30 +220,36 @@ mod tests {
         )
         .is_err());
         assert!(open_name(&key, "alice@kutup.dev", MailNameKind::Folder, &ID, &sealed).is_err());
-        let other = derive_names_key(&[0x5b; 32]).unwrap();
-        assert!(open_name(&other, ACCOUNT, MailNameKind::Folder, &ID, &sealed).is_err());
+        assert!(open_name(&[0x5b; 32], ACCOUNT, MailNameKind::Folder, &ID, &sealed).is_err());
         // Tampering is caught.
         let mut flipped = sealed.clone();
         *flipped.last_mut().unwrap() ^= 1;
         assert!(open_name(&key, ACCOUNT, MailNameKind::Folder, &ID, &flipped).is_err());
     }
 
+    const TAG: usize = 16;
+
     #[test]
     fn names_are_checked() {
-        let key = derive_names_key(&[1; 32]).unwrap();
+        let key = [1; 32];
         for bad in ["", "   ", "a\nb", &"x".repeat(101)] {
             assert!(
-                seal_name(&key, ACCOUNT, MailNameKind::Label, &ID, 1, bad).is_err(),
+                seal_name(&key, FIRST, ACCOUNT, MailNameKind::Label, &ID, 1, bad).is_err(),
                 "{bad:?}"
             );
         }
-        assert!(seal_name(&key, ACCOUNT, MailNameKind::Label, &ID, 1, &"ş".repeat(100)).is_ok());
-        assert!(seal_name(&key, ACCOUNT, MailNameKind::Label, &ID, 0, "x").is_err());
-        assert!(inspect_name(b"KUTMN2\0\0").is_err());
-        let mut old = seal_name(&key, ACCOUNT, MailNameKind::Label, &ID, 1, "x").unwrap();
-        old[..8].copy_from_slice(b"KUTMN1\0\0");
-        old[8..10].copy_from_slice(&1u16.to_be_bytes());
-        assert!(inspect_name(&old).is_err());
+        assert!(seal_name(
+            &key,
+            FIRST,
+            ACCOUNT,
+            MailNameKind::Label,
+            &ID,
+            1,
+            &"ş".repeat(100)
+        )
+        .is_ok());
+        assert!(seal_name(&key, FIRST, ACCOUNT, MailNameKind::Label, &ID, 0, "x").is_err());
+        assert!(validate_name(b"KUTPAR1\0", ACCOUNT, MailNameKind::Label, &ID).is_err());
         assert!(MailNameKind::parse("folder").is_ok() && MailNameKind::parse("box").is_err());
     }
 }

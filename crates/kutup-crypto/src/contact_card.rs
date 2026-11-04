@@ -304,7 +304,9 @@ pub fn seal_card(
 ) -> Result<Vec<u8>> {
     let mut nonce = [0u8; 24];
     crate::primitives::random(&mut nonce);
-    seal_card_with_nonce(master_key, generation, binding, uid, revision, vcard, &nonce)
+    seal_card_with_nonce(
+        master_key, generation, binding, uid, revision, vcard, &nonce,
+    )
 }
 
 /// [`seal_card`] with a fixed nonce, for checked-in vectors only.
@@ -466,33 +468,32 @@ mod tests {
 
     #[test]
     fn cards_seal_and_open_only_for_their_contact() {
-        let key = derive_contacts_key(&[5u8; 32]).unwrap();
+        let master = [5u8; 32];
+        let first = MasterKeyGeneration::FIRST;
         let vcard = b"BEGIN:VCARD\r\nVERSION:4.0\r\nFN:Ay\xc5\x9fe\r\nTEL:+90 555 000 00 00\r\nEND:VCARD\r\n";
-        let sealed = seal_card(&key, ACCOUNT, "uid-1", 42, vcard).unwrap();
-        assert_eq!(inspect_card(&sealed).unwrap(), 42);
+        let sealed = seal_card(&master, first, ACCOUNT, "uid-1", 42, vcard).unwrap();
+        // The server's check: this account, this contact, revision 42.
+        assert_eq!(validate_card(&sealed, ACCOUNT, "uid-1").unwrap(), 42);
+        assert!(validate_card(&sealed, ACCOUNT, "uid-2").is_err());
+        assert!(validate_card(&sealed, OTHER, "uid-1").is_err());
         // Padded to a multiple of 256 bytes.
-        assert_eq!(sealed.len(), CARD_HEADER_LEN + 256 + TAG_LEN);
-        let (opened, revision) = open_card(&key, ACCOUNT, "uid-1", &sealed).unwrap();
+        let header = account_record::inspect(&sealed).unwrap();
+        assert_eq!(header.ciphertext_len as usize, 256 + 16);
+        let (opened, revision) = open_card(&master, ACCOUNT, "uid-1", &sealed).unwrap();
         assert_eq!((&opened[..], revision), (&vcard[..], 42));
         // The revision is authenticated: relabelled newer, it does not open.
+        let revision_at = sealed.len() - header.ciphertext_len as usize - 4 - 24 - 32 - 8;
         let mut relabelled = sealed.clone();
-        relabelled[10..18].copy_from_slice(&43u64.to_be_bytes());
-        assert!(open_card(&key, ACCOUNT, "uid-1", &relabelled).is_err());
-        let mut zero = sealed.clone();
-        zero[10..18].copy_from_slice(&0u64.to_be_bytes());
-        assert!(inspect_card(&zero).is_err());
-        assert!(seal_card(&key, ACCOUNT, "uid-1", 0, vcard).is_err());
+        relabelled[revision_at..revision_at + 8].copy_from_slice(&43u64.to_be_bytes());
+        assert!(open_card(&master, ACCOUNT, "uid-1", &relabelled).is_err());
+        assert!(seal_card(&master, first, ACCOUNT, "uid-1", 0, vcard).is_err());
         let mut short = sealed.clone();
         short.pop();
-        assert!(inspect_card(&short).is_err());
-        assert!(open_card(&key, ACCOUNT, "uid-2", &sealed).is_err());
-        assert!(open_card(&key, OTHER, "uid-1", &sealed).is_err());
-        assert!(open_card(&key, "alice@kutup.dev", "uid-1", &sealed).is_err());
-        let mut old = sealed.clone();
-        old[..8].copy_from_slice(b"KUTCC1\0\0");
-        old[8..10].copy_from_slice(&1u16.to_be_bytes());
-        assert!(inspect_card(&old).is_err());
-        let other = derive_contacts_key(&[6u8; 32]).unwrap();
-        assert!(open_card(&other, ACCOUNT, "uid-1", &sealed).is_err());
+        assert!(validate_card(&short, ACCOUNT, "uid-1").is_err());
+        assert!(open_card(&master, ACCOUNT, "uid-2", &sealed).is_err());
+        assert!(open_card(&master, OTHER, "uid-1", &sealed).is_err());
+        assert!(open_card(&master, "alice@kutup.dev", "uid-1", &sealed).is_err());
+        assert!(open_card(&[6u8; 32], ACCOUNT, "uid-1", &sealed).is_err());
+        assert!(card_object(&"u".repeat(MAX_UID_CHARS + 1)).is_err());
     }
 }

@@ -25,13 +25,13 @@ use base64::Engine as _;
 use serde::{Deserialize, Serialize};
 use zeroize::Zeroizing;
 
+use crate::account_record::{self, AccountRecordPurpose, MasterKeyGeneration};
 use crate::account_ref::AccountRef;
 use crate::account_rename::{self, AccountRenameV1};
 use crate::error::{CryptoError, Result};
 use crate::identity::incarnation_id_from_authority_public;
 use crate::key_binding;
 use crate::named_share::canonical_account;
-use crate::account_record::{self, AccountRecordPurpose, MasterKeyGeneration};
 
 const NONCE_LEN: usize = 24;
 const TAG_LEN: usize = 16;
@@ -1041,7 +1041,9 @@ pub fn inspect(sealed: &[u8]) -> Result<u64> {
     if header.purpose != AccountRecordPurpose::IdentityPins {
         return Err(invalid("not an identity pin list"));
     }
-    header.revision.ok_or_else(|| invalid("a list has a revision"))
+    header
+        .revision
+        .ok_or_else(|| invalid("a list has a revision"))
 }
 
 /// What the server checks before storing a list: a well-formed pin list of
@@ -1049,7 +1051,9 @@ pub fn inspect(sealed: &[u8]) -> Result<u64> {
 pub fn validate(sealed: &[u8], owner: &str) -> Result<u64> {
     let header =
         account_record::validate_for(sealed, AccountRecordPurpose::IdentityPins, owner, &[])?;
-    header.revision.ok_or_else(|| invalid("a list has a revision"))
+    header
+        .revision
+        .ok_or_else(|| invalid("a list has a revision"))
 }
 
 /// The largest sealed list: the record's header (at most 128 bytes for a
@@ -1127,13 +1131,18 @@ mod tests {
 
     #[test]
     fn a_list_round_trips_under_its_owner_and_revision() {
-        let key = derive_key(&[7u8; 32]).unwrap();
-        let sealed = seal(&key, OWNER, 3, &list()).unwrap();
+        let key = [7u8; 32];
+        let first = MasterKeyGeneration::FIRST;
+        let sealed = seal(&key, first, OWNER, 3, &list()).unwrap();
         assert_eq!(open(&key, OWNER, &sealed).unwrap(), (list(), 3));
         assert_eq!(inspect(&sealed).unwrap(), 3);
+        assert_eq!(validate(&sealed, OWNER).unwrap(), 3);
+        assert!(validate(&sealed, OTHER).is_err());
         // Relabelled as another revision, or another account's: refused.
+        let header = account_record::inspect(&sealed).unwrap();
+        let revision_at = sealed.len() - header.ciphertext_len as usize - 4 - 24 - 32 - 8;
         let mut relabelled = sealed.clone();
-        relabelled[10..18].copy_from_slice(&4u64.to_be_bytes());
+        relabelled[revision_at..revision_at + 8].copy_from_slice(&4u64.to_be_bytes());
         assert!(matches!(
             open(&key, OWNER, &relabelled),
             Err(CryptoError::AuthFailed)
@@ -1144,22 +1153,15 @@ mod tests {
         ));
         // A name is not a key binding: refused before anything is opened.
         assert!(open(&key, "owner@kutup.dev", &sealed).is_err());
-        assert!(seal(&key, "owner@kutup.dev", 3, &list()).is_err());
-        // Earlier suites are not read.
-        for (magic, suite) in [(b"KUTIP1\0\0", 1u16), (b"KUTIP2\0\0", 2)] {
-            let mut old = sealed.clone();
-            old[..8].copy_from_slice(magic);
-            old[8..10].copy_from_slice(&suite.to_be_bytes());
-            assert!(inspect(&old).is_err());
-        }
-        assert!(open(&derive_key(&[8u8; 32]).unwrap(), OWNER, &sealed).is_err());
+        assert!(seal(&key, first, "owner@kutup.dev", 3, &list()).is_err());
+        assert!(open(&[8u8; 32], OWNER, &sealed).is_err());
         let mut tampered = sealed.clone();
         *tampered.last_mut().unwrap() ^= 1;
         assert!(open(&key, OWNER, &tampered).is_err());
         let mut zero = sealed.clone();
-        zero[10..18].copy_from_slice(&0u64.to_be_bytes());
+        zero[revision_at..revision_at + 8].copy_from_slice(&0u64.to_be_bytes());
         assert!(inspect(&zero).is_err());
-        assert!(seal(&key, OWNER, 0, &list()).is_err());
+        assert!(seal(&key, first, OWNER, 0, &list()).is_err());
     }
 
     #[test]

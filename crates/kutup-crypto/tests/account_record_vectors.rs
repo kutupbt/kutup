@@ -124,6 +124,13 @@ fn refused_for(purpose: AccountRecordPurpose, envelope: &[u8]) -> Vec<Refused> {
     let mut trailing = envelope.to_vec();
     trailing.push(0);
     add("trailing byte", "inspect", trailing);
+    // The key commitment (the 32 bytes before the nonce): well formed, but
+    // it no longer matches the key, so the record is refused before the AEAD.
+    let header = account_record::inspect(envelope).unwrap();
+    let commitment_at = envelope.len() - header.ciphertext_len as usize - 4 - 24 - 32;
+    let mut committed = envelope.to_vec();
+    committed[commitment_at] ^= 1;
+    add("key commitment changed", "open", committed);
     match purpose.policy().object {
         ObjectPolicy::None => add(
             "an object id where the purpose has none",
@@ -152,7 +159,7 @@ fn refused_for(purpose: AccountRecordPurpose, envelope: &[u8]) -> Vec<Refused> {
         // The revision changed in the header: well formed, but the AEAD
         // covers it, so an older secret cannot pass as newer.
         let header = account_record::inspect(envelope).unwrap();
-        let last_revision_byte = envelope.len() - header.ciphertext_len as usize - 4 - 24 - 1;
+        let last_revision_byte = envelope.len() - header.ciphertext_len as usize - 4 - 24 - 32 - 1;
         let mut relabelled = envelope.to_vec();
         relabelled[last_revision_byte] ^= 2;
         add("revision relabelled", "open", relabelled);
@@ -272,6 +279,16 @@ fn checked_in_vectors_hold() {
         assert!(open_for(purpose, &envelope, &object), "{purpose:?} opens");
         assert!(account_record::validate_for(&envelope, purpose, OTHER_BINDING, &object).is_err());
         assert!(!p.refused.is_empty());
+        // The checked-in refusals are the ones this code makes: no drift.
+        let made = refused_for(purpose, &envelope);
+        assert_eq!(p.refused.len(), made.len(), "{purpose:?}");
+        for (checked_in, made) in p.refused.iter().zip(&made) {
+            assert_eq!(
+                (&checked_in.why, &checked_in.step, &checked_in.envelope),
+                (&made.why, &made.step, &made.envelope),
+                "{purpose:?}"
+            );
+        }
         for refused in &p.refused {
             let bad = STANDARD.decode(&refused.envelope).unwrap();
             let inspected = account_record::inspect(&bad);
