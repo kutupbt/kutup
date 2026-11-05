@@ -110,7 +110,12 @@ impl Engine {
             .map_err(|_| ChatError::Invalid("the account's key binding is invalid".into()))?;
         self.group_keys = Some(crate::group::GroupAccountKeys::derive(master_key)?);
         self.group_list = Some(GroupListSync {
-            key: GroupListKey::derive(master_key),
+            // Rotation (docs/plans/w6-key-hierarchy.md) seals at the
+            // account's current generation; until it exists, the first.
+            key: GroupListKey::new(
+                master_key,
+                kutup_crypto::account_record::MasterKeyGeneration::FIRST,
+            ),
             binding: binding.to_string(),
             listed: BTreeMap::new(),
             read_at_ms: 0,

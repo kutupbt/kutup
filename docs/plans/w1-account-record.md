@@ -153,6 +153,27 @@ there.
 - Slice 2 needs no keyed-hash object policy; it comes with the Chat lists
   (slice 3), whose group ids and accounts the server must not see.
 
+## Slice 3a as built
+
+- `ChatGroupListEntry` (11) and `ChatContactListEntry` (12): the object is
+  `account_record::hashed_object(master key, purpose, id)` (the group id; the
+  contact's account ref), `HMAC(K_id, purpose ‖ id)` with `K_id` from the
+  master key under `kutup/account-record/object-id/v1`. On the wire it is a
+  32-byte object like any other (`ObjectPolicy::Required(32)`): only the
+  client knows how it is made, so no separate policy was needed.
+- The plaintext is padded to one length per purpose (`Fixed`), with the
+  limits the lists had (3972 and 1988 bytes). With a canonical binding, a
+  32-byte object and a revision, every entry is exactly one length
+  (`account_record::exact_record_len`: 4144 and 2160 bytes), and the tables
+  keep requiring it (migration `20261027180000`), so the server can't tell
+  entries apart by their length. `KUTPGL1`, `KUTPCC1`, their id
+  and seal keys and their eight labels are gone.
+- The server validates each write whole: this account's entry, filed under
+  the URL's entry id (`validate`), where before it read only the revision.
+- Joined meetings and the profile key wrap (slice 3b) wait for the master to
+  wipe-2 sync that brings #385 and #386, which moved those formats into
+  kutup-crypto.
+
 ## Decisions (approved 2026-11-04)
 
 (a) **The account head's chain moves into the header** (the server then

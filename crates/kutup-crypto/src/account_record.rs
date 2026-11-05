@@ -40,6 +40,7 @@ pub const MAX_OBJECT_LEN: usize = 64;
 const KEY_SALT: &[u8] = crate::labels::ACCOUNT_RECORD_V1;
 const KEY_INFO: &[u8] = crate::labels::ACCOUNT_RECORD_KEY_V1;
 const COMMIT_INFO: &[u8] = crate::labels::ACCOUNT_RECORD_COMMIT_V1;
+const OBJECT_ID_INFO: &[u8] = crate::labels::ACCOUNT_RECORD_OBJECT_ID_V1;
 /// The key commitment's length (see [`record_keys`]).
 const COMMITMENT_LEN: usize = 32;
 
@@ -114,6 +115,35 @@ pub const fn max_record_len(purpose: AccountRecordPurpose) -> usize {
         + TAG_LEN
 }
 
+/// The one length of every record of `purpose`, when its padding, object and
+/// revision are all fixed (the key binding is always a canonical UUID's 36
+/// characters): what a server can require exactly, so records of the purpose
+/// can't be told apart by their length. None when the length varies.
+pub const fn exact_record_len(purpose: AccountRecordPurpose) -> Option<usize> {
+    let policy = purpose.policy();
+    let padded = match policy.length {
+        Length::Exact(n) | Length::Fixed(n) => n,
+        Length::Bucket(_) => return None,
+    };
+    let object = match policy.object {
+        ObjectPolicy::None => 0,
+        ObjectPolicy::Required(n) => n,
+    };
+    let revision = if policy.mutable { REVISION_LEN } else { 0 };
+    Some(
+        FIXED_PREFIX_LEN
+            + MAX_CONTEXT_LEN
+            + 1
+            + object
+            + revision
+            + COMMITMENT_LEN
+            + NONCE_LEN
+            + LENGTH_LEN
+            + padded
+            + TAG_LEN,
+    )
+}
+
 /// The longest canonical base64 of a record of `purpose`: a server refuses a
 /// longer value before decoding it.
 pub const fn max_record_b64_len(purpose: AccountRecordPurpose) -> usize {
@@ -158,6 +188,34 @@ pub enum AccountRecordPurpose {
     MailName = 9,
     /// The account's one identity-pin list (`identity_pins`).
     IdentityPins = 10,
+    /// One entry of the account's Chat group list (`chat_group_list`); its
+    /// object is [`hashed_object`] of the group id, so the server never sees
+    /// a group id.
+    ChatGroupListEntry = 11,
+    /// One entry of the account's Chat contact list (`chat_contact_list`); its
+    /// object is [`hashed_object`] of the contact's account, so the server
+    /// never sees whom an entry is about.
+    ChatContactListEntry = 12,
+}
+
+/// The object of a record whose id the server must not see (a group id, the
+/// account a contact entry is about): `HMAC(K_id, purpose ‖ id)`, where
+/// `K_id = KDF(master key, salt kutup/account-record/v1, info
+/// kutup/account-record/object-id/v1)`. Stable while the master key is, so
+/// the server keeps one row per record; a master-key rotation moves every
+/// such record to its new id (docs/plans/w6-key-hierarchy.md, "Rotation
+/// checklist").
+pub fn hashed_object(master_key: &[u8; 32], purpose: AccountRecordPurpose, id: &[u8]) -> [u8; 32] {
+    let mut id_key = Zeroizing::new([0u8; 32]);
+    Kdf::new(Suite::V1, KEY_SALT, master_key)
+        .expand(OBJECT_ID_INFO, id_key.as_mut_slice())
+        .expect("a 32-byte HKDF output is valid");
+    crate::primitives::mac(
+        Suite::V1,
+        id_key.as_ref(),
+        &[&purpose.as_u16().to_be_bytes(), id],
+    )
+    .to_array()
 }
 
 /// The longest padded length of `max` bytes in 256-byte buckets (`0x80`
@@ -246,11 +304,24 @@ impl AccountRecordPurpose {
                 mutable: true,
                 max_len: bucketed(crate::identity_pins::MAX_LIST_BYTES),
             },
+            // One size each, so an entry's length says nothing.
+            Self::ChatGroupListEntry => PurposePolicy {
+                object: ObjectPolicy::Required(32),
+                length: Length::Fixed(crate::chat_group_list::MAX_PLAIN_LEN + 1),
+                mutable: true,
+                max_len: crate::chat_group_list::MAX_PLAIN_LEN + 1,
+            },
+            Self::ChatContactListEntry => PurposePolicy {
+                object: ObjectPolicy::Required(32),
+                length: Length::Fixed(crate::chat_contact_list::MAX_PLAIN_LEN + 1),
+                mutable: true,
+                max_len: crate::chat_contact_list::MAX_PLAIN_LEN + 1,
+            },
         }
     }
 
     /// Every purpose, for tests and vectors.
-    pub const ALL: [Self; 9] = [
+    pub const ALL: [Self; 11] = [
         Self::PasswordMasterKey,
         Self::RecoveryMasterKey,
         Self::ChatBackupRoot,
@@ -260,6 +331,8 @@ impl AccountRecordPurpose {
         Self::ContactCard,
         Self::MailName,
         Self::IdentityPins,
+        Self::ChatGroupListEntry,
+        Self::ChatContactListEntry,
     ];
 }
 
@@ -277,6 +350,8 @@ impl TryFrom<u16> for AccountRecordPurpose {
             8 => Ok(Self::ContactCard),
             9 => Ok(Self::MailName),
             10 => Ok(Self::IdentityPins),
+            11 => Ok(Self::ChatGroupListEntry),
+            12 => Ok(Self::ChatContactListEntry),
             _ => Err(CryptoError::InvalidInput(format!(
                 "unknown account-record purpose {value}"
             ))),

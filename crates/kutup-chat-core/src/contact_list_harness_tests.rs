@@ -44,7 +44,10 @@ fn block(person: &mut Person, peer: &Person) {
 fn list_key(person: &Person) -> (ContactListKey, String) {
     let seed = person.authority_seed;
     (
-        ContactListKey::derive(&[seed; 32]),
+        ContactListKey::new(
+            &[seed; 32],
+            kutup_crypto::account_record::MasterKeyGeneration::FIRST,
+        ),
         format!("{seed:08x}-0000-4000-8000-{seed:012x}"),
     )
 }

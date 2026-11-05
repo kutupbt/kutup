@@ -22,6 +22,8 @@ pub const TWO_FACTOR_RECOVERY_CODE_V1: &[u8] = b"kutup/2fa-recovery-code/v1\0";
 
 /// `kutup-crypto/src/account_record.rs` (`COMMIT_INFO`): the key commitment
 pub const ACCOUNT_RECORD_COMMIT_V1: &[u8] = b"kutup/account-record/commit/v1\0";
+/// `kutup-crypto/src/account_record.rs` (`OBJECT_ID_INFO`): the key of hashed objects
+pub const ACCOUNT_RECORD_OBJECT_ID_V1: &[u8] = b"kutup/account-record/object-id/v1\0";
 /// `kutup-crypto/src/account_record.rs` (`KEY_INFO`)
 pub const ACCOUNT_RECORD_KEY_V1: &[u8] = b"kutup/account-record/key/v1\0";
 /// `kutup-crypto/src/account_record.rs` (`KEY_SALT`)
@@ -141,28 +143,6 @@ pub const CHAT_BACKUP_SIGNER_AUTHORIZATION_V1: &[u8] =
     b"kutup/chat-backup/signer-authorization/v1\0";
 /// `kutup-crypto/src/chat_backup.rs` (`HKDF_SALT`)
 pub const CHAT_BACKUP_V1: &[u8] = b"kutup/chat-backup/v1\0";
-
-// --- chat-contact-list -------------------------------------------------------
-
-/// `kutup-crypto/src/chat_contact_list.rs` (`ID_KEY_INFO`)
-pub const CHAT_CONTACT_LIST_ID_KEY_V1: &[u8] = b"kutup/chat-contact-list/id-key/v1\0";
-/// `kutup-crypto/src/chat_contact_list.rs` (`ID_DOMAIN`)
-pub const CHAT_CONTACT_LIST_ID_V1: &[u8] = b"kutup/chat-contact-list/id/v1\0";
-/// `kutup-crypto/src/chat_contact_list.rs` (`SEAL_KEY_INFO`)
-pub const CHAT_CONTACT_LIST_SEAL_KEY_V1: &[u8] = b"kutup/chat-contact-list/seal-key/v1\0";
-/// `kutup-crypto/src/chat_contact_list.rs` (`SALT`)
-pub const CHAT_CONTACT_LIST_V1: &[u8] = b"kutup/chat-contact-list/v1\0";
-
-// --- chat-group-list ---------------------------------------------------------
-
-/// `kutup-crypto/src/chat_contact_list.rs`
-pub const CHAT_GROUP_LIST_ID_KEY_V1: &[u8] = b"kutup/chat-group-list/id-key/v1\0";
-/// `kutup-crypto/src/chat_contact_list.rs`
-pub const CHAT_GROUP_LIST_ID_V1: &[u8] = b"kutup/chat-group-list/id/v1\0";
-/// `kutup-crypto/src/chat_contact_list.rs`
-pub const CHAT_GROUP_LIST_SEAL_KEY_V1: &[u8] = b"kutup/chat-group-list/seal-key/v1\0";
-/// `kutup-crypto/src/chat_contact_list.rs`
-pub const CHAT_GROUP_LIST_V1: &[u8] = b"kutup/chat-group-list/v1\0";
 
 // --- chat-group-send ---------------------------------------------------------
 
@@ -596,7 +576,7 @@ pub const FEDERATION_REQUEST_REPLAY_HASH_V1: &[u8] = b"kutup/federation/request-
 pub const FEDERATION_SIGNATURE_TAG: &str = "kutup-federation-v2";
 
 /// Every label, for the registry's own checks.
-pub const ALL: [&[u8]; 188] = [
+pub const ALL: [&[u8]; 181] = [
     ORG_ACCESS_REQUEST_V1,
     ORG_KEY_CERTIFICATE_V1,
     ORG_KEY_ID_V1,
@@ -616,6 +596,7 @@ pub const ALL: [&[u8]; 188] = [
     TWO_FACTOR_RECOVERY_CODE_V1,
     ACCOUNT_RECORD_COMMIT_V1,
     ACCOUNT_RECORD_KEY_V1,
+    ACCOUNT_RECORD_OBJECT_ID_V1,
     ACCOUNT_RECORD_V1,
     ACCOUNT_HEAD_ID_KEY_V1,
     ACCOUNT_HEAD_LOCAL_NAME_V1,
@@ -653,14 +634,6 @@ pub const ALL: [&[u8]; 188] = [
     CHAT_BACKUP_MESSAGE_ARCHIVE_KEY_V1,
     CHAT_BACKUP_SIGNER_AUTHORIZATION_V1,
     CHAT_BACKUP_V1,
-    CHAT_CONTACT_LIST_ID_KEY_V1,
-    CHAT_CONTACT_LIST_ID_V1,
-    CHAT_CONTACT_LIST_SEAL_KEY_V1,
-    CHAT_CONTACT_LIST_V1,
-    CHAT_GROUP_LIST_ID_KEY_V1,
-    CHAT_GROUP_LIST_ID_V1,
-    CHAT_GROUP_LIST_SEAL_KEY_V1,
-    CHAT_GROUP_LIST_V1,
     CHAT_GROUP_SEND_PARAMS_V1,
     CHAT_GROUP_SEND_SERVER_KEY_V1,
     CHAT_GROUP_AVATAR_V1,

@@ -92,14 +92,16 @@ fn entry_id(id: &str) -> AppResult<String> {
 
 /// A sealed entry and the revision its authenticated header carries; the
 /// server reads nothing else of it.
-fn envelope(value: &str) -> AppResult<(Vec<u8>, u64)> {
-    let bytes = STANDARD
-        .decode(value)
-        .ok()
-        .filter(|bytes| STANDARD.encode(bytes) == value)
-        .ok_or_else(|| AppError::bad_request("envelope is not canonical base64"))?;
-    let revision = kutup_crypto::chat_group_list::inspect(&bytes)
-        .map_err(|_| AppError::bad_request("not a sealed group list entry"))?;
+fn envelope(value: &str, binding: &str, id: &str) -> AppResult<(Vec<u8>, u64)> {
+    use kutup_crypto::account_record::{self, AccountRecordPurpose};
+    let bytes = account_record::decode_record_b64(value, AccountRecordPurpose::ChatGroupListEntry)
+        .map_err(|_| AppError::bad_request("envelope is not a sealed group list entry"))?;
+    let entry = kutup_crypto::chat_group_list::decode_entry_id(id)
+        .map_err(|_| AppError::not_found("not found"))?;
+    // This account's entry, filed under this id: another account's, or one
+    // moved from another id, is refused.
+    let revision = kutup_crypto::chat_group_list::validate(&bytes, binding, &entry)
+        .map_err(|_| AppError::bad_request("not this account's sealed group list entry"))?;
     Ok((bytes, revision))
 }
 
@@ -167,7 +169,8 @@ pub async fn put(
     enabled(&state)?;
     let user_id = trusted_uuid(&user.user_id)?;
     let id = entry_id(&id)?;
-    let (sealed, revision) = envelope(&input.envelope)?;
+    let binding = revisions::key_binding(&state.pool, user_id).await?;
+    let (sealed, revision) = envelope(&input.envelope, &binding, &id)?;
     let revision = revisions::check_follows(revision, input.base_revision)?;
     let head = NextHead::parse(input.head.as_deref())?;
     let mut tx = state.pool.begin().await?;
@@ -286,18 +289,51 @@ mod tests {
     }
 
     #[test]
-    fn an_envelope_is_a_sealed_entry_and_its_revision_comes_from_its_header() {
-        let key = GroupListKey::derive(&[3u8; 32]);
+    fn an_envelope_is_this_accounts_entry_and_its_revision_comes_from_its_header() {
+        let key = GroupListKey::new(
+            &[3u8; 32],
+            kutup_crypto::account_record::MasterKeyGeneration::FIRST,
+        );
         let id = key.entry_id(&[5u8; 32]);
+        let text_id = encode_entry_id(&id);
         let binding = "00000000-0000-4000-8000-000000000001";
         let sealed = key.seal(binding, &id, 7, b"{}").unwrap();
         assert_eq!(sealed.len(), ENVELOPE_BYTES);
-        let (bytes, revision) = envelope(&STANDARD.encode(&sealed)).unwrap();
+        let (bytes, revision) = envelope(&STANDARD.encode(&sealed), binding, &text_id).unwrap();
         assert_eq!((bytes, revision), (sealed.clone(), 7));
-        // Any other size, or not one at all, is refused.
-        assert!(envelope(&STANDARD.encode(&sealed[..sealed.len() - 1])).is_err());
-        assert!(envelope(&STANDARD.encode([1u8; 10])).is_err());
-        assert!(envelope("").is_err());
-        assert!(envelope("AQ").is_err());
+        // Cut, not one at all, under another id or another account: refused.
+        let check = |value: &str| envelope(value, binding, &text_id).is_err();
+        assert!(check(&STANDARD.encode(&sealed[..sealed.len() - 1])));
+        assert!(check(&STANDARD.encode([1u8; 10])));
+        assert!(check(""));
+        assert!(check("AQ"));
+        assert!(envelope(
+            &STANDARD.encode(&sealed),
+            binding,
+            &encode_entry_id(&[9u8; 32])
+        )
+        .is_err());
+        assert!(envelope(
+            &STANDARD.encode(&sealed),
+            "00000000-0000-4000-8000-000000000002",
+            &text_id
+        )
+        .is_err());
+    }
+
+    /// The tables require each entry's one length, the code's.
+    #[test]
+    fn the_columns_bound_the_entries_by_their_longest_record() {
+        let up = include_str!("../../migrations/20261027180000_chat_list_records.up.sql");
+        for (table, max) in [
+            ("chat_group_list", kutup_crypto::chat_group_list::SEALED_LEN),
+            (
+                "chat_contact_list",
+                kutup_crypto::chat_contact_list::SEALED_LEN,
+            ),
+        ] {
+            let bound = format!("ALTER TABLE {table}\n    ADD CONSTRAINT {table}_envelope_check CHECK (octet_length(envelope) = {max});");
+            assert!(up.contains(&bound), "{table}: {bound}");
+        }
     }
 }

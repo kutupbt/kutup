@@ -102,7 +102,10 @@ fn a_group_list_keeps_sealed_entries_by_revision() {
         c: &c,
         base: &base,
         user: &user,
-        key: GroupListKey::derive(&user.master_key),
+        key: GroupListKey::new(
+            &user.master_key,
+            kutup_crypto::account_record::MasterKeyGeneration::FIRST,
+        ),
     };
     let (one, one_at_1) = list.entry(1, 1);
     let (_, one_at_2) = list.entry(1, 2);
@@ -205,7 +208,10 @@ fn the_account_head_covers_the_group_list() {
         c: &c,
         base: &base,
         user: &user,
-        key: GroupListKey::derive(&user.master_key),
+        key: GroupListKey::new(
+            &user.master_key,
+            kutup_crypto::account_record::MasterKeyGeneration::FIRST,
+        ),
     };
     let (one, one_at_1) = list.entry(1, 1);
     let (_, one_at_2) = list.entry(1, 2);
@@ -258,7 +264,10 @@ fn a_group_list_keeps_at_most_1024_entries() {
         c: &c,
         base: &base,
         user: &user,
-        key: GroupListKey::derive(&user.master_key),
+        key: GroupListKey::new(
+            &user.master_key,
+            kutup_crypto::account_record::MasterKeyGeneration::FIRST,
+        ),
     };
     for n in 0..1024 {
         let (id, sealed) = list.entry(n, 1);

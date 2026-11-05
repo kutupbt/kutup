@@ -695,7 +695,9 @@ fn generic_account_purpose(value: u16) -> Result<AccountRecordPurpose, JsValue> 
         | AccountRecordPurpose::OrganizationPrivateKey
         | AccountRecordPurpose::ContactCard
         | AccountRecordPurpose::MailName
-        | AccountRecordPurpose::IdentityPins => Err(js_error(
+        | AccountRecordPurpose::IdentityPins
+        | AccountRecordPurpose::ChatGroupListEntry
+        | AccountRecordPurpose::ChatContactListEntry => Err(js_error(
             "this account-record purpose has its own typed export",
         )),
         purpose => Ok(purpose),
