@@ -6,8 +6,10 @@
 //! - A profile key (32 random bytes) gives the profile's version (its
 //!   public name), its access key (what a fetch shows) and the key each
 //!   item's envelope is sealed under, per purpose and context.
-//! - The owner's own copy of the profile key is wrapped under a key the
-//!   master key and the key binding derive.
+//! - The owner's own copy of the profile key is an account record (purpose
+//!   `ChatProfileKeyWrap`, docs/plans/w1-account-record.md) under the master
+//!   key, bound to the account's key binding, the profile version and the
+//!   revision.
 //! - Every envelope binds its suite, purpose, account, version, revision and
 //!   source device in its AAD and in its key.
 
@@ -16,6 +18,7 @@ use base64::Engine as _;
 use serde::{Deserialize, Serialize};
 use zeroize::Zeroizing;
 
+use crate::account_record::{self, AccountRecordPurpose, MasterKeyGeneration};
 use crate::account_ref::AccountRef;
 use crate::error::{CryptoError, Result as CryptoResult};
 use crate::primitives::{hash, Aead, Kdf, Suite};
@@ -69,7 +72,8 @@ impl TryFrom<u16> for ProfileSuiteId {
 pub enum ProfileEnvelopePurpose {
     DisplayName = 1,
     Avatar = 2,
-    WrappedProfileKey = 3,
+    // 3 was the owner's wrapped profile key, now an account record
+    // (`ChatProfileKeyWrap`): never reused.
     About = 4,
 }
 
@@ -86,7 +90,6 @@ impl ProfileEnvelopePurpose {
             Self::Avatar => {
                 (2 + TAG_BYTES..=MAX_PROFILE_AVATAR_BYTES + 1 + TAG_BYTES).contains(&len)
             }
-            Self::WrappedProfileKey => len == 32 + TAG_BYTES,
             Self::About => PROFILE_ABOUT_PADDED_LENGTHS
                 .iter()
                 .any(|plain| len == plain + TAG_BYTES),
@@ -109,7 +112,6 @@ impl TryFrom<u8> for ProfileEnvelopePurpose {
         match value {
             1 => Ok(Self::DisplayName),
             2 => Ok(Self::Avatar),
-            3 => Ok(Self::WrappedProfileKey),
             4 => Ok(Self::About),
             _ => Err(format!("unknown encrypted profile purpose {value}")),
         }
@@ -286,7 +288,6 @@ pub const PROFILE_ACCESS_KEY_BYTES: usize = 16;
 const KEY_SALT: &[u8] = crate::labels::CHAT_PROFILE_V1;
 const VERSION_INFO: &[u8] = crate::labels::CHAT_PROFILE_VERSION_V1;
 const ACCESS_INFO: &[u8] = crate::labels::CHAT_PROFILE_ACCESS_V1;
-const WRAP_INFO: &[u8] = crate::labels::CHAT_PROFILE_WRAP_V2;
 const ENVELOPE_KEY_SALT: &[u8] = crate::labels::PROFILE_ENVELOPE_KEY_V1;
 
 fn invalid(message: &str) -> CryptoError {
@@ -300,16 +301,122 @@ fn expand<const N: usize>(ikm: &[u8], info: &[u8]) -> CryptoResult<[u8; N]> {
     Ok(out)
 }
 
-/// The key the account's own copy of its profile key is wrapped under: from
-/// the master key and the account's key binding.
-pub fn derive_wrapping_key(master_key: &[u8; 32], binding: &str) -> CryptoResult<[u8; 32]> {
-    let binding = crate::key_binding::check(binding)
-        .map_err(|_| invalid("profile wrapping needs the account's key binding"))?;
-    let mut info = Vec::with_capacity(WRAP_INFO.len() + 2 + binding.len());
-    info.extend_from_slice(WRAP_INFO);
-    info.extend_from_slice(&(binding.len() as u16).to_be_bytes());
-    info.extend_from_slice(binding.as_bytes());
-    expand(master_key, &info)
+/// What the account's own copy of its profile key is sealed under: the
+/// master key, its generation and the account's key binding.
+#[derive(Clone)]
+pub struct ProfileOwnerKey {
+    master_key: Zeroizing<[u8; 32]>,
+    generation: MasterKeyGeneration,
+    binding: String,
+}
+
+impl ProfileOwnerKey {
+    pub fn new(
+        master_key: &[u8; 32],
+        generation: MasterKeyGeneration,
+        binding: &str,
+    ) -> CryptoResult<Self> {
+        let binding = account_record::canonical_binding(binding)
+            .map_err(|_| invalid("the profile key's copy needs the account's key binding"))?;
+        Ok(Self {
+            master_key: Zeroizing::new(*master_key),
+            generation,
+            binding,
+        })
+    }
+
+    pub fn binding(&self) -> &str {
+        &self.binding
+    }
+}
+
+impl std::fmt::Debug for ProfileOwnerKey {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ProfileOwnerKey")
+            .field("generation", &self.generation)
+            .field("binding", &self.binding)
+            .finish_non_exhaustive()
+    }
+}
+
+const WRAP_PURPOSE: AccountRecordPurpose = AccountRecordPurpose::ChatProfileKeyWrap;
+
+/// A profile version (lowercase hex) as a record's object: its 32 bytes.
+fn version_object(version: &str) -> CryptoResult<[u8; 32]> {
+    let bytes = hex::decode(version)
+        .map_err(|_| invalid("profile version must be lowercase SHA-256 hex"))?;
+    if hex::encode(&bytes) != version {
+        return Err(invalid("profile version must be lowercase SHA-256 hex"));
+    }
+    bytes
+        .try_into()
+        .map_err(|_| invalid("profile version must be lowercase SHA-256 hex"))
+}
+
+/// The owner's copy of `key` at `revision` (standard base64): an account
+/// record for the profile version the key derives.
+pub fn wrap_profile_key(
+    key: &[u8; PROFILE_KEY_BYTES],
+    owner: &ProfileOwnerKey,
+    revision: u64,
+) -> CryptoResult<String> {
+    let version = version_object(&profile_version(key)?)?;
+    let sealed = account_record::seal_revision(
+        key,
+        owner.master_key.as_slice(),
+        WRAP_PURPOSE,
+        owner.generation,
+        &owner.binding,
+        &version,
+        revision,
+    )?;
+    Ok(STANDARD.encode(sealed))
+}
+
+/// The profile key from the owner's copy: sealed for this account, this
+/// profile version and this revision, and deriving that version.
+pub fn unwrap_profile_key(
+    wrapped: &str,
+    owner: &ProfileOwnerKey,
+    version: &str,
+    revision: u64,
+) -> CryptoResult<Zeroizing<[u8; PROFILE_KEY_BYTES]>> {
+    let bytes = account_record::decode_record_b64(wrapped, WRAP_PURPOSE)?;
+    let (plain, sealed_at) = account_record::open_revision(
+        &bytes,
+        owner.master_key.as_slice(),
+        WRAP_PURPOSE,
+        &owner.binding,
+        &version_object(version)?,
+    )?;
+    let plain = Zeroizing::new(plain);
+    if sealed_at != revision {
+        return Err(invalid("wrapped profile key is for another revision"));
+    }
+    let key = Zeroizing::new(profile_key(&plain)?);
+    if profile_version(key.as_slice())? != version {
+        return Err(invalid(
+            "wrapped profile key does not match profile version",
+        ));
+    }
+    Ok(key)
+}
+
+/// What a server checks of the owner's copy before it stores a profile: an
+/// account record of this account, for this version and this revision.
+pub fn validate_wrapped_profile_key(
+    wrapped: &str,
+    binding: &str,
+    version: &str,
+    revision: u64,
+) -> CryptoResult<()> {
+    let bytes = account_record::decode_record_b64(wrapped, WRAP_PURPOSE)?;
+    let header =
+        account_record::validate_for(&bytes, WRAP_PURPOSE, binding, &version_object(version)?)?;
+    if header.revision != Some(revision) {
+        return Err(invalid("wrapped profile key is for another revision"));
+    }
+    Ok(())
 }
 
 /// A profile key, checked: exactly 32 bytes.
@@ -589,13 +696,13 @@ fn context(
 
 /// Seals `contents` under `key` (revision `revision`, from
 /// `source_device_id`) for `account`, with the owner's copy of the key
-/// wrapped under `wrapping_key`. Validates the contents first.
+/// sealed for `owner`. Validates the contents first.
 pub fn seal_profile(
     key: &[u8; PROFILE_KEY_BYTES],
     contents: &ProfileContents,
     revision: u64,
     source_device_id: u32,
-    wrapping_key: &[u8; 32],
+    owner: &ProfileOwnerKey,
     account: &AccountRef,
 ) -> CryptoResult<SealedProfile> {
     let display_name = validate_display_name(&contents.display_name)?;
@@ -653,17 +760,7 @@ pub fn seal_profile(
             )
         })
         .transpose()?;
-    let wrapped_key = seal_item(
-        key,
-        wrapping_key,
-        &context(
-            ProfileEnvelopePurpose::WrappedProfileKey,
-            account,
-            &version,
-            revision,
-            source_device_id,
-        )?,
-    )?;
+    let wrapped_key = wrap_profile_key(key, owner, revision)?;
     let delivery = derive_delivery_capability(key, account)?;
     Ok(SealedProfile {
         suite: ProfileSuiteId::XChaCha20Poly1305V1,
@@ -684,29 +781,13 @@ pub fn seal_profile(
 /// checked against the version and both verifiers, then the items.
 pub fn open_own_profile(
     sealed: &SealedProfile,
-    wrapping_key: &[u8; 32],
+    owner: &ProfileOwnerKey,
     account: &AccountRef,
 ) -> CryptoResult<OpenedProfile> {
     if sealed.suite != ProfileSuiteId::XChaCha20Poly1305V1 || sealed.account != *account {
         return Err(invalid("encrypted profile suite or account does not match"));
     }
-    let wrapped = open_item(
-        &sealed.wrapped_key,
-        wrapping_key,
-        &context(
-            ProfileEnvelopePurpose::WrappedProfileKey,
-            &sealed.account,
-            &sealed.version,
-            sealed.revision,
-            sealed.source_device_id,
-        )?,
-    )?;
-    let key = Zeroizing::new(profile_key(&wrapped)?);
-    if profile_version(key.as_slice())? != sealed.version {
-        return Err(invalid(
-            "wrapped profile key does not match profile version",
-        ));
-    }
+    let key = unwrap_profile_key(&sealed.wrapped_key, owner, &sealed.version, sealed.revision)?;
     if access_key_verifier(&profile_access_key(key.as_slice())?) != sealed.access_key_verifier {
         return Err(invalid(
             "wrapped profile key does not match access verifier",
@@ -825,19 +906,17 @@ fn open_items(sealed: &SealedProfile, key: &[u8; 32]) -> CryptoResult<ProfileCon
 }
 
 /// The account app's next profile revision: over `current` (the same key,
-/// one revision later) or the first, under a fresh key. Only the master key
-/// and the key binding take part; the source is [`ACCOUNT_PROFILE_SOURCE`].
+/// one revision later) or the first, under a fresh key. Only the owner's
+/// key takes part; the source is [`ACCOUNT_PROFILE_SOURCE`].
 pub fn seal_account_profile(
-    master_key: &[u8; 32],
+    owner: &ProfileOwnerKey,
     current: Option<&SealedProfile>,
     contents: &ProfileContents,
     account: &AccountRef,
-    binding: &str,
 ) -> CryptoResult<SealedProfile> {
-    let wrapping_key = derive_wrapping_key(master_key, binding)?;
     let (key, revision) = match current {
         Some(current) => {
-            let opened = open_own_profile(current, &wrapping_key, account)?;
+            let opened = open_own_profile(current, owner, account)?;
             let revision = opened
                 .revision
                 .checked_add(1)
@@ -851,19 +930,9 @@ pub fn seal_account_profile(
         contents,
         revision,
         ACCOUNT_PROFILE_SOURCE,
-        &wrapping_key,
+        owner,
         account,
     )
-}
-
-/// The account's own profile, opened from the master key.
-pub fn open_account_profile(
-    master_key: &[u8; 32],
-    current: &SealedProfile,
-    account: &AccountRef,
-    binding: &str,
-) -> CryptoResult<OpenedProfile> {
-    open_own_profile(current, &derive_wrapping_key(master_key, binding)?, account)
 }
 
 #[cfg(test)]

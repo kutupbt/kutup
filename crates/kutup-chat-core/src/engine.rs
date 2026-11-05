@@ -805,7 +805,7 @@ impl Engine {
     /// survive transport failures in the local profile record.
     pub async fn initialize_profile<R: Rng + CryptoRng>(
         &mut self,
-        wrapping_key: &[u8; 32],
+        owner: &crate::profile::ProfileOwnerKey,
         default_display_name: &str,
         rng: &mut R,
     ) -> Result<LocalProfile> {
@@ -818,7 +818,7 @@ impl Engine {
                     > (local.revision, local.source_device_id) =>
             {
                 let mut adopted =
-                    crate::profile::open_own_profile(&remote, wrapping_key, &canonical_self)?;
+                    crate::profile::open_own_profile(&remote, owner, &canonical_self)?;
                 // The account app changed the profile: it cannot tell
                 // contacts, so this device fans the key out and they refetch.
                 if remote.source_device_id == kutup_chat_proto::ACCOUNT_PROFILE_SOURCE
@@ -832,20 +832,20 @@ impl Engine {
             }
             (Some(local), _) => local,
             (None, Some(remote)) => {
-                crate::profile::open_own_profile(&remote, wrapping_key, &canonical_self)?
+                crate::profile::open_own_profile(&remote, owner, &canonical_self)?
             }
             (None, None) => crate::profile::create_local_profile(
                 default_display_name,
                 None,
                 None,
                 self.session.device_id(),
-                wrapping_key,
+                owner,
                 &canonical_self,
                 rng,
             )?,
         };
         self.session.save_local_profile(selected).await?;
-        self.flush_profile(wrapping_key, "1970-01-01T00:00:00Z", rng)
+        self.flush_profile(owner, "1970-01-01T00:00:00Z", rng)
             .await?;
         self.session
             .local_profile()
@@ -860,7 +860,7 @@ impl Engine {
         avatar: Option<Vec<u8>>,
         avatar_content_type: Option<String>,
         about: Option<String>,
-        wrapping_key: &[u8; 32],
+        owner: &crate::profile::ProfileOwnerKey,
         sent_at: &str,
         rng: &mut R,
     ) -> Result<LocalProfile> {
@@ -878,13 +878,13 @@ impl Engine {
                 avatar_content_type,
                 about,
                 source_device_id: self.session.device_id(),
-                wrapping_key,
+                owner,
                 canonical_recipient: &canonical_self,
             },
             rng,
         )?;
         self.session.save_local_profile(updated).await?;
-        self.flush_profile(wrapping_key, sent_at, rng).await?;
+        self.flush_profile(owner, sent_at, rng).await?;
         self.session
             .local_profile()
             .await?
@@ -895,7 +895,7 @@ impl Engine {
     /// version, then redistribute only to still-authorized conversations.
     pub async fn rotate_profile_key<R: Rng + CryptoRng>(
         &mut self,
-        wrapping_key: &[u8; 32],
+        owner: &crate::profile::ProfileOwnerKey,
         sent_at: &str,
         rng: &mut R,
     ) -> Result<LocalProfile> {
@@ -908,12 +908,12 @@ impl Engine {
         let rotated = crate::profile::rotate_local_profile(
             &current,
             self.session.device_id(),
-            wrapping_key,
+            owner,
             &canonical_self,
             rng,
         )?;
         self.session.save_local_profile(rotated).await?;
-        self.flush_profile(wrapping_key, sent_at, rng).await?;
+        self.flush_profile(owner, sent_at, rng).await?;
         // The groups' members deliver with the profile key in this account's
         // entry: each group gets the new one (best effort; each group's next
         // opening tries again).
@@ -931,7 +931,7 @@ impl Engine {
     /// Publish a crash-surviving encrypted profile and fan out its current key.
     pub async fn flush_profile<R: Rng + CryptoRng>(
         &mut self,
-        wrapping_key: &[u8; 32],
+        owner: &crate::profile::ProfileOwnerKey,
         sent_at: &str,
         rng: &mut R,
     ) -> Result<()> {
@@ -976,13 +976,12 @@ impl Engine {
                     {
                         return Err(publish_error);
                     }
-                    let remote =
-                        crate::profile::open_own_profile(&remote, wrapping_key, &canonical_self)?;
+                    let remote = crate::profile::open_own_profile(&remote, owner, &canonical_self)?;
                     let rebased = crate::profile::rebase_local_profile(
                         &profile,
                         &remote,
                         self.session.device_id(),
-                        wrapping_key,
+                        owner,
                         &canonical_self,
                         rng,
                     )?;
@@ -1081,7 +1080,7 @@ impl Engine {
     pub async fn block_contact<R: Rng + CryptoRng>(
         &mut self,
         peer: &str,
-        wrapping_key: &[u8; 32],
+        owner: &crate::profile::ProfileOwnerKey,
         sent_at: &str,
         rng: &mut R,
     ) -> Result<ContactRecord> {
@@ -1094,7 +1093,7 @@ impl Engine {
         // contacts. A publication failure is surfaced and its exact encrypted
         // upload remains durable for reconciliation.
         if self.session.local_profile().await?.is_some() {
-            self.rotate_profile_key(wrapping_key, sent_at, rng).await?;
+            self.rotate_profile_key(owner, sent_at, rng).await?;
         }
         let _ = self.flush_contact_syncs(sent_at, rng).await;
         Ok(self.session.contact(peer).await?.unwrap_or(record))

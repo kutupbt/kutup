@@ -49,12 +49,13 @@ export interface GroupKeyMember {
 }
 
 export interface CryptoWasmModule {
-  accountProfileKey(masterKey: Uint8Array, current: unknown, account: string, binding: string): import('./profile').ProfileLookup
+  accountProfileKey(masterKey: Uint8Array, generation: number, current: unknown, account: string, binding: string): import('./profile').ProfileLookup
   profileLookup(key: string): import('./profile').ProfileLookup
   profileOpenPeer(peer: string, encrypted: unknown, key: string): import('./profile').AccountProfileView
-  accountProfileOpen(masterKey: Uint8Array, current: unknown, account: string, binding: string): import('./profile').AccountProfileView
+  accountProfileOpen(masterKey: Uint8Array, generation: number, current: unknown, account: string, binding: string): import('./profile').AccountProfileView
   accountProfileSeal(
     masterKey: Uint8Array,
+    generation: number,
     current: unknown | null,
     update: import('./profile').AccountProfileInput,
     account: string,

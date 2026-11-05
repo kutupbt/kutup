@@ -6,7 +6,8 @@ import { useRequiredSession } from '@kutup/session/store'
 import { Alert } from '@kutup/ui/components/alert'
 import { Button } from '@kutup/ui/components/button'
 import { ConfirmDestructive } from '@kutup/ui/components/confirm-destructive'
-import { LoadingPanel, Spinner } from '@kutup/ui/components/states'
+import { ListSkeleton } from '@kutup/ui/components/skeleton'
+import { Spinner } from '@kutup/ui/components/states'
 import { openChat, reopenChat, useChat } from './chatStore'
 import { LinkThisDevice } from './LinkThisDevice'
 
@@ -27,7 +28,16 @@ export function ChatGate({ children }: { children: ReactNode }) {
   }, [session])
 
   if (chat.status === 'ready' && chat.loaded) return <>{children}</>
-  if (chat.status !== 'failed') return <LoadingPanel label={t('chat.preparing')} />
+  // The conversation list's shape while the chat opens; the pane beside it
+  // stays empty, as it does until a conversation is chosen.
+  if (chat.status !== 'failed') {
+    return (
+      <div className="flex min-h-svh">
+        <ListSkeleton label={t('chat.preparing')} avatar="round" rows={10} className="w-full border-r md:w-80" />
+        <div className="hidden flex-1 md:block" />
+      </div>
+    )
+  }
 
   const failure = chat.failure ?? 'unavailable'
   // Another device of the account holds its Chat identity: link this one.

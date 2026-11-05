@@ -683,12 +683,13 @@ fn a_renamed_account_keeps_its_chat_profile() {
     let chat_device = ChatAccount::of(&user, &user.token).reregister(&c, &base);
     let device = chat_device.id;
     let access = [5u8; 16];
+    let (master_key, binding) = (user.master_key, user.binding.clone());
     let profile = |account: &kutup_chat_proto::AccountRef, version: &str, revision: u64| {
         json!({
             "suite": 1, "account": account, "version": version, "revision": revision,
             "sourceDeviceId": device,
             "name": profile_envelope(account, version, revision, device, Purpose::DisplayName, 53 + 16),
-            "wrappedKey": profile_envelope(account, version, revision, device, Purpose::WrappedProfileKey, 32 + 16),
+            "wrappedKey": common::wrapped_profile_key(&master_key, &binding, version, revision),
             "accessKeyVerifier": hex::encode(hash(Suite::V1, access)),
             "deliveryCapabilityVerifier": hex::encode(hash(Suite::V1, [6u8; 16])),
         })

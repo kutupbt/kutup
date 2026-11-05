@@ -4009,7 +4009,8 @@ random profile key wrapped under the account master key for linked-device
 recovery. Returns `404` until a profile has been published.
 The response carries `suite: 1`, canonical `account`, version, revision,
 source device, and canonical `ProfileEnvelopeV1` fields. The owner-only
-response includes the wrapped profile-key envelope; peer responses omit it.
+response includes `wrappedKey`, the account's own copy of the profile key;
+peer responses omit it.
 
 ### PUT /api/chat/profile
 
@@ -4020,6 +4021,10 @@ only ciphertext, a profile-key-derived version, an access-key verifier, a
 master-key-wrapped profile key, revision, and source device. Revision plus
 source-device ordering resolves concurrent linked-device writes; exact replay
 is idempotent and a stale/conflicting revision returns `409`.
+`wrappedKey` is an account record (`KUTPAR1`, purpose `ChatProfileKeyWrap`,
+[`plans/w1-account-record.md`](plans/w1-account-record.md)) whose header
+names the account's key binding, the profile version and the revision: one
+of another account, version or revision is refused (`400`).
 Every encrypted field binds the exact profile suite, the authenticated
 account (server and account id, so a rename leaves it valid), version,
 revision, source device and purpose. Unknown suites,
@@ -4470,14 +4475,15 @@ when the SFU's API cannot be reached.
 → `{ "entries": [{ "id", "entry" }] }`: the meetings this account joined,
 most recently recorded first, at most 100
 ([`chat-calls.md`](chat-calls.md) "History"). Each `entry` is a stay sealed
-in the browser under a key from the account master key (base64, 1064
-bytes); the server cannot open it.
+in the browser as an account record (`KUTPAR1`, purpose `JoinedMeeting`,
+base64, 1171 bytes); the server cannot open it.
 
 ### POST /api/chat/joined-meetings
 
 `{ "id", "entry" }` → `204`: record a stay. `id` is 32 lowercase hex
-characters chosen by the browser; recording the same id again changes
-nothing. Beyond 100 the oldest are dropped.
+characters chosen by the browser, and the record names it: a record of
+another account, or one sealed for another id, is refused (`400`).
+Recording the same id again changes nothing. Beyond 100 the oldest are dropped.
 
 ### DELETE /api/chat/joined-meetings/:id
 

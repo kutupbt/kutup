@@ -1057,12 +1057,15 @@ fn requests_reject_cleanly_and_blocks_advance_the_ratchet_without_plaintext() {
         ContactState::PendingIncoming
     );
 
-    let blocked = block_on(bob.block_contact(
-        "aci:00000000-0000-4000-8000-2bd806c97f0e@example.test",
-        &[0; 32],
-        "2026-07-16T12:02:00Z",
-        &mut rng,
-    ))
+    let blocked = block_on(
+        bob.block_contact(
+            "aci:00000000-0000-4000-8000-2bd806c97f0e@example.test",
+            &kutup_chat_core::profile_owner_key(&[0; 32], "0b6b5e0c-4c1e-4b8e-9c2d-6a1f3e5d7c9b")
+                .unwrap(),
+            "2026-07-16T12:02:00Z",
+            &mut rng,
+        ),
+    )
     .unwrap();
     assert_eq!(blocked.state, ContactState::Blocked);
     assert_eq!(blocked.previous_state, Some(ContactState::PendingIncoming));

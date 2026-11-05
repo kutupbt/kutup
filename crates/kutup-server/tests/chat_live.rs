@@ -1188,7 +1188,7 @@ fn chat_v1_contract() {
         "revision": 1,
         "sourceDeviceId": dev_a.id,
         "name": opaque_profile_envelope(&account_a, &profile_v1_version, 1, dev_a.id, ProfileEnvelopePurpose::DisplayName, 53 + 16, 31),
-        "wrappedKey": opaque_profile_envelope(&account_a, &profile_v1_version, 1, dev_a.id, ProfileEnvelopePurpose::WrappedProfileKey, 32 + 16, 41),
+        "wrappedKey": common::wrapped_profile_key(&user_a.master_key, &user_a.binding, &profile_v1_version, 1),
         "accessKeyVerifier": hex::encode(hash(Suite::V1, access_v1)),
         "deliveryCapabilityVerifier": hex::encode(hash(Suite::V1, delivery_v1)),
     });
@@ -1240,7 +1240,7 @@ fn chat_v1_contract() {
         "revision": 2,
         "sourceDeviceId": dev_a.id,
         "name": opaque_profile_envelope(&account_a, &profile_v2_version, 2, dev_a.id, ProfileEnvelopePurpose::DisplayName, 53 + 16, 32),
-        "wrappedKey": opaque_profile_envelope(&account_a, &profile_v2_version, 2, dev_a.id, ProfileEnvelopePurpose::WrappedProfileKey, 32 + 16, 42),
+        "wrappedKey": common::wrapped_profile_key(&user_a.master_key, &user_a.binding, &profile_v2_version, 2),
         "accessKeyVerifier": hex::encode(hash(Suite::V1, access_v2)),
         "deliveryCapabilityVerifier": hex::encode(hash(Suite::V1, delivery_v2)),
     });

@@ -231,8 +231,6 @@ pub const CHAT_STORE_WRAP_V1: &[u8] = b"kutup/chat-store/wrap/v1\0";
 
 // --- chat --------------------------------------------------------------------
 
-/// `kutup-crypto/src/chat_call_link.rs` (`JOINED_AAD`)
-pub const CHAT_CALL_LINK_JOINED_V1: &[u8] = b"kutup/chat/call-link/joined/v1\0";
 /// `kutup-crypto/src/chat_call_link.rs` (`SALT`)
 pub const CHAT_CALL_LINK_V1: &[u8] = b"kutup/chat/call-link/v1\0";
 /// `kutup-server/src/handlers/chat_identity.rs` (`CREDENTIAL_DOMAIN`)
@@ -537,10 +535,6 @@ pub const CHAT_PROFILE_ACCESS_V1: &[u8] = b"kutup/chat-profile/access/v1\0";
 pub const CHAT_PROFILE_KEY_UPDATE_V1: &[u8] = b"kutup/chat-profile/key-update/v1\0";
 /// `kutup-crypto/src/chat_profile.rs` (was `kutup-chat-profile-version-v1`)
 pub const CHAT_PROFILE_VERSION_V1: &[u8] = b"kutup/chat-profile/version/v1\0";
-/// `kutup-crypto/src/chat_profile.rs` (was `kutup-chat-profile-wrap-v1`)
-pub const CHAT_PROFILE_WRAP_V1: &[u8] = b"kutup/chat-profile/wrap/v1\0";
-/// `kutup-crypto/src/chat_profile.rs` (was `kutup-chat-profile-wrap-v2`)
-pub const CHAT_PROFILE_WRAP_V2: &[u8] = b"kutup/chat-profile/wrap/v2\0";
 
 // --- drive-federation --------------------------------------------------------
 
@@ -576,7 +570,7 @@ pub const FEDERATION_REQUEST_REPLAY_HASH_V1: &[u8] = b"kutup/federation/request-
 pub const FEDERATION_SIGNATURE_TAG: &str = "kutup-federation-v2";
 
 /// Every label, for the registry's own checks.
-pub const ALL: [&[u8]; 181] = [
+pub const ALL: [&[u8]; 178] = [
     ORG_ACCESS_REQUEST_V1,
     ORG_KEY_CERTIFICATE_V1,
     ORG_KEY_ID_V1,
@@ -667,7 +661,6 @@ pub const ALL: [&[u8]; 181] = [
     CHAT_STORE_RECORD_V1,
     CHAT_STORE_VALUE_V1,
     CHAT_STORE_WRAP_V1,
-    CHAT_CALL_LINK_JOINED_V1,
     CHAT_CALL_LINK_V1,
     CHAT_DEVICE_CREDENTIAL_V1,
     CHAT_KEYS_CHECK_V1,
@@ -744,8 +737,6 @@ pub const ALL: [&[u8]; 181] = [
     YJS_SEED_V1,
     CHAT_PROFILE_ACCESS_V1,
     CHAT_PROFILE_VERSION_V1,
-    CHAT_PROFILE_WRAP_V1,
-    CHAT_PROFILE_WRAP_V2,
     CHAT_PROFILE_KEY_UPDATE_V1,
     DRIVE_FEDERATION_OPERATION_V1,
     FEDERATION_FEATURE_POLICY_ENVELOPE_HASH_V1,

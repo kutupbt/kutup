@@ -686,7 +686,8 @@ pub fn inspect_account_record(envelope_base64: &str) -> Result<JsValue, JsValue>
 }
 
 /// Purposes with typed exports (mail address keys, Pass vault secrets,
-/// organization keys, contact cards, mail names, identity pins): the generic
+/// organization keys, contact cards, mail names, identity pins, Chat list
+/// entries, joined meetings, the profile key's own copy): the generic
 /// account-record path never hands their secrets to JavaScript.
 fn generic_account_purpose(value: u16) -> Result<AccountRecordPurpose, JsValue> {
     match AccountRecordPurpose::try_from(value).map_err(|error| js_error(&error.to_string()))? {
@@ -697,7 +698,9 @@ fn generic_account_purpose(value: u16) -> Result<AccountRecordPurpose, JsValue> 
         | AccountRecordPurpose::MailName
         | AccountRecordPurpose::IdentityPins
         | AccountRecordPurpose::ChatGroupListEntry
-        | AccountRecordPurpose::ChatContactListEntry => Err(js_error(
+        | AccountRecordPurpose::ChatContactListEntry
+        | AccountRecordPurpose::JoinedMeeting
+        | AccountRecordPurpose::ChatProfileKeyWrap => Err(js_error(
             "this account-record purpose has its own typed export",
         )),
         purpose => Ok(purpose),
@@ -5043,10 +5046,20 @@ struct ProfileLookup {
     access_key: String,
 }
 
-fn profile_master_key(master_key: Vec<u8>) -> Result<[u8; 32], JsValue> {
-    master_key
-        .try_into()
-        .map_err(|_| js_error("the account master key is 32 bytes"))
+/// What the account's own copy of its profile key is sealed for: the master
+/// key at `generation`, and the key binding.
+fn profile_owner(
+    master_key: Vec<u8>,
+    generation: u32,
+    binding: &str,
+) -> Result<chat_profile::ProfileOwnerKey, JsValue> {
+    let master_key: zeroize::Zeroizing<[u8; 32]> = zeroize::Zeroizing::new(
+        master_key
+            .try_into()
+            .map_err(|_| js_error("the account master key is 32 bytes"))?,
+    );
+    chat_profile::ProfileOwnerKey::new(&master_key, master_key_generation(generation)?, binding)
+        .map_err(|error| js_error(&error.to_string()))
 }
 
 fn profile_account(account: &str) -> Result<kutup_crypto::account_ref::AccountRef, JsValue> {
@@ -5077,15 +5090,15 @@ fn profile_lookup_of(key: &[u8]) -> Result<ProfileLookup, JsValue> {
 #[wasm_bindgen(js_name = accountProfileOpen)]
 pub fn account_profile_open(
     master_key: Vec<u8>,
+    generation: u32,
     current: JsValue,
     account: String,
     binding: String,
 ) -> Result<JsValue, JsValue> {
-    let opened = chat_profile::open_account_profile(
-        &profile_master_key(master_key)?,
+    let opened = chat_profile::open_own_profile(
         &sealed_profile(current)?,
+        &profile_owner(master_key, generation, &binding)?,
         &profile_account(&account)?,
-        &binding,
     )
     .map_err(|error| js_error(&error.to_string()))?;
     profile_output(&AccountProfileView::from(opened))
@@ -5096,15 +5109,15 @@ pub fn account_profile_open(
 #[wasm_bindgen(js_name = accountProfileKey)]
 pub fn account_profile_key(
     master_key: Vec<u8>,
+    generation: u32,
     current: JsValue,
     account: String,
     binding: String,
 ) -> Result<JsValue, JsValue> {
-    let opened = chat_profile::open_account_profile(
-        &profile_master_key(master_key)?,
+    let opened = chat_profile::open_own_profile(
         &sealed_profile(current)?,
+        &profile_owner(master_key, generation, &binding)?,
         &profile_account(&account)?,
-        &binding,
     )
     .map_err(|error| js_error(&error.to_string()))?;
     profile_output(&profile_lookup_of(opened.key.as_slice())?)
@@ -5143,6 +5156,7 @@ pub fn profile_open_peer(
 #[wasm_bindgen(js_name = accountProfileSeal)]
 pub fn account_profile_seal(
     master_key: Vec<u8>,
+    generation: u32,
     current: JsValue,
     update: JsValue,
     account: String,
@@ -5161,7 +5175,7 @@ pub fn account_profile_seal(
         .transpose()
         .map_err(|_| js_error("the avatar is standard base64"))?;
     let upload = chat_profile::seal_account_profile(
-        &profile_master_key(master_key)?,
+        &profile_owner(master_key, generation, &binding)?,
         current.as_ref(),
         &chat_profile::ProfileContents {
             display_name: update.display_name,
@@ -5170,7 +5184,6 @@ pub fn account_profile_seal(
             about: update.about,
         },
         &profile_account(&account)?,
-        &binding,
     )
     .map_err(|error| js_error(&error.to_string()))?;
     profile_output(&upload)

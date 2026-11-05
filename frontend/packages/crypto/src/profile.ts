@@ -3,6 +3,7 @@
 // people's profiles, without loading the Chat runtime
 // (docs/plans/chat-crypto-move.md). Same calls as the Chat WASM's.
 
+import { MASTER_KEY_GENERATION } from './masterKeyGeneration'
 import { getCryptoWasm } from './rustWasm'
 
 export interface AccountProfileView {
@@ -32,7 +33,7 @@ export interface ProfileLookup {
 
 /** The account's own profile key (to give the people it shares with), from its sealed profile. */
 export async function accountProfileKey(masterKey: Uint8Array, current: unknown, account: string, binding: string): Promise<ProfileLookup> {
-  return (await getCryptoWasm()).accountProfileKey(masterKey, current, account, binding)
+  return (await getCryptoWasm()).accountProfileKey(masterKey, MASTER_KEY_GENERATION, current, account, binding)
 }
 
 /** Where to fetch someone's profile, from their profile key (standard base64). */
@@ -47,7 +48,7 @@ export async function profileOpenPeer(peer: string, encrypted: unknown, key: str
 
 /** The account's own profile, opened from the master key. */
 export async function accountProfileOpen(masterKey: Uint8Array, current: unknown, account: string, binding: string): Promise<AccountProfileView> {
-  return (await getCryptoWasm()).accountProfileOpen(masterKey, current, account, binding)
+  return (await getCryptoWasm()).accountProfileOpen(masterKey, MASTER_KEY_GENERATION, current, account, binding)
 }
 
 /** The account's next profile revision, sealed from the master key: the exact upload. */
@@ -58,5 +59,5 @@ export async function accountProfileSeal(
   account: string,
   binding: string,
 ): Promise<unknown> {
-  return (await getCryptoWasm()).accountProfileSeal(masterKey, current, update, account, binding)
+  return (await getCryptoWasm()).accountProfileSeal(masterKey, MASTER_KEY_GENERATION, current, update, account, binding)
 }

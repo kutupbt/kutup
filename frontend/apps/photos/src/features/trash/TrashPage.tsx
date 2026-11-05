@@ -10,7 +10,8 @@ import { Alert } from '@kutup/ui/components/alert'
 import { Button } from '@kutup/ui/components/button'
 import { ConfirmDestructive } from '@kutup/ui/components/confirm-destructive'
 import { PageBody, PageHeader } from '@kutup/ui/components/page'
-import { EmptyState, LoadingPanel } from '@kutup/ui/components/states'
+import { EmptyState } from '@kutup/ui/components/states'
+import { GridSkeleton } from '@kutup/ui/components/skeleton'
 import { cn } from '@kutup/ui/lib/cn'
 import { formatInstant } from '@kutup/ui/lib/format'
 import { useThumbnail } from '../timeline/useThumbnail'
@@ -81,7 +82,7 @@ export function TrashPage() {
     else if (chosen.length > left) toast.success(t(done, { count: chosen.length - left }))
   }
 
-  if (trash.isPending) return <LoadingPanel label={t('trash.loading')} />
+  if (trash.isPending) return <GridSkeleton label={t('trash.loading')} />
   return (
     <PageBody className="px-4 py-6 md:px-8 md:py-8">
       {restoreName.dialog}

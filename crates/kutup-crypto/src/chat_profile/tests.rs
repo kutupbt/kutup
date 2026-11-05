@@ -23,8 +23,12 @@ fn the_moved_code_reproduces_the_vectors() {
     let account: AccountRef = v["account"].as_str().unwrap().parse().unwrap();
     let master = array(&v["masterKey"]);
     let key = array(&v["profileKey"]);
-    let wrapping = derive_wrapping_key(&master, v["binding"].as_str().unwrap()).unwrap();
-    assert_eq!(STANDARD.encode(wrapping), v["wrappingKey"]);
+    let owner = ProfileOwnerKey::new(
+        &master,
+        MasterKeyGeneration::FIRST,
+        v["binding"].as_str().unwrap(),
+    )
+    .unwrap();
     let version = profile_version(&key).unwrap();
     assert_eq!(version, v["version"]);
     let access = profile_access_key(&key).unwrap();
@@ -41,7 +45,6 @@ fn the_moved_code_reproduces_the_vectors() {
             "DisplayName" => ProfileEnvelopePurpose::DisplayName,
             "Avatar" => ProfileEnvelopePurpose::Avatar,
             "About" => ProfileEnvelopePurpose::About,
-            "WrappedProfileKey" => ProfileEnvelopePurpose::WrappedProfileKey,
             other => panic!("purpose {other}"),
         };
         let context = ProfileEnvelopeContextV1::new(
@@ -65,7 +68,7 @@ fn the_moved_code_reproduces_the_vectors() {
     }
 
     let upload: SealedProfile = serde_json::from_value(v["upload"]["request"].clone()).unwrap();
-    let opened = open_own_profile(&upload, &wrapping, &account).unwrap();
+    let opened = open_own_profile(&upload, &owner, &account).unwrap();
     assert_eq!(
         STANDARD.encode(opened.key.as_slice()),
         v["upload"]["profileKey"]
@@ -93,23 +96,24 @@ fn a_sealed_profile_opens_for_its_owner_and_with_its_key() {
     let account: AccountRef = v["account"].as_str().unwrap().parse().unwrap();
     let master = array(&v["masterKey"]);
     let binding = v["binding"].as_str().unwrap();
+    let owner = ProfileOwnerKey::new(&master, MasterKeyGeneration::FIRST, binding).unwrap();
     let contents = ProfileContents {
         display_name: "  Ayşe  ".into(),
         avatar: Some(vec![0x89, 0x50, 0x4e, 0x47]),
         avatar_content_type: Some("image/png".into()),
         about: Some("Merhaba".into()),
     };
-    let first = seal_account_profile(&master, None, &contents, &account, binding).unwrap();
+    let first = seal_account_profile(&owner, None, &contents, &account).unwrap();
     assert_eq!(
         (first.revision, first.source_device_id),
         (1, ACCOUNT_PROFILE_SOURCE)
     );
-    let opened = open_account_profile(&master, &first, &account, binding).unwrap();
+    let opened = open_own_profile(&first, &owner, &account).unwrap();
     assert_eq!(opened.contents.display_name, "Ayşe");
     assert_eq!(opened.contents.about.as_deref(), Some("Merhaba"));
 
     // The next revision keeps the key.
-    let next = seal_account_profile(&master, Some(&first), &contents, &account, binding).unwrap();
+    let next = seal_account_profile(&owner, Some(&first), &contents, &account).unwrap();
     assert_eq!(
         (next.revision, next.version.as_str()),
         (2, first.version.as_str())
@@ -124,7 +128,51 @@ fn a_sealed_profile_opens_for_its_owner_and_with_its_key() {
         .unwrap();
     assert!(open_peer_profile(&first, &other, opened.key.as_slice()).is_err());
     assert!(open_peer_profile(&first, &account, &[7; 32]).is_err());
-    assert!(open_account_profile(&[8; 32], &first, &account, binding).is_err());
+    let other_master = ProfileOwnerKey::new(&[8; 32], MasterKeyGeneration::FIRST, binding).unwrap();
+    assert!(open_own_profile(&first, &other_master, &account).is_err());
+}
+
+/// The owner's copy of the profile key is an account record for this
+/// account, this profile version and this revision: the server checks all
+/// three, and the owner opens it only with all three.
+#[test]
+fn the_owners_copy_is_bound_to_the_account_version_and_revision() {
+    let binding = "0b6b5e0c-4c1e-4b8e-9c2d-6a1f3e5d7c9b";
+    let other_binding = "7d3f1a2b-9c4e-4f6a-8b1d-2e5c7a9f0b3d";
+    let owner = ProfileOwnerKey::new(&[9; 32], MasterKeyGeneration::FIRST, binding).unwrap();
+    let key = [0x51u8; 32];
+    let version = profile_version(&key).unwrap();
+    let other_version = profile_version(&[0x52u8; 32]).unwrap();
+    let wrapped = wrap_profile_key(&key, &owner, 4).unwrap();
+    assert_eq!(
+        STANDARD.decode(&wrapped).unwrap().len(),
+        account_record::exact_record_len(AccountRecordPurpose::ChatProfileKeyWrap).unwrap()
+    );
+    assert_eq!(
+        *unwrap_profile_key(&wrapped, &owner, &version, 4).unwrap(),
+        key
+    );
+    validate_wrapped_profile_key(&wrapped, binding, &version, 4).unwrap();
+
+    assert!(validate_wrapped_profile_key(&wrapped, other_binding, &version, 4).is_err());
+    assert!(validate_wrapped_profile_key(&wrapped, binding, &other_version, 4).is_err());
+    assert!(validate_wrapped_profile_key(&wrapped, binding, &version, 5).is_err());
+    assert!(validate_wrapped_profile_key(&wrapped, binding, &version.to_uppercase(), 4).is_err());
+    assert!(unwrap_profile_key(&wrapped, &owner, &other_version, 4).is_err());
+    assert!(unwrap_profile_key(&wrapped, &owner, &version, 3).is_err());
+    let elsewhere =
+        ProfileOwnerKey::new(&[9; 32], MasterKeyGeneration::FIRST, other_binding).unwrap();
+    assert!(unwrap_profile_key(&wrapped, &elsewhere, &version, 4).is_err());
+    let other_master = ProfileOwnerKey::new(&[8; 32], MasterKeyGeneration::FIRST, binding).unwrap();
+    assert!(unwrap_profile_key(&wrapped, &other_master, &version, 4).is_err());
+    // An address is not a key binding.
+    assert!(
+        ProfileOwnerKey::new(&[9; 32], MasterKeyGeneration::FIRST, "aci:x@example.com").is_err()
+    );
+    // Another purpose's record of the same length is refused.
+    let mut bytes = STANDARD.decode(&wrapped).unwrap();
+    bytes[11] = 7;
+    assert!(validate_wrapped_profile_key(&STANDARD.encode(&bytes), binding, &version, 4).is_err());
 }
 
 #[test]
@@ -145,16 +193,17 @@ fn profile_envelope_parser_rejects_unknown_suite_and_trailing_data() {
         .parse()
         .unwrap();
     let context = ProfileEnvelopeContextV1::new(
-        ProfileEnvelopePurpose::WrappedProfileKey,
+        ProfileEnvelopePurpose::DisplayName,
         &alice,
         &"01".repeat(32),
         1,
         1,
     )
     .unwrap();
-    let header = encode_profile_envelope_header(&context, &[3; 24], 48).unwrap();
+    let header =
+        encode_profile_envelope_header(&context, &[3; 24], (53 + TAG_BYTES) as u32).unwrap();
     let mut encoded = header;
-    encoded.extend_from_slice(&[4; 48]);
+    encoded.extend_from_slice(&[4; 53 + TAG_BYTES]);
     let valid = STANDARD.encode(&encoded);
     assert_eq!(decode_profile_envelope(&valid).unwrap().context, context);
 

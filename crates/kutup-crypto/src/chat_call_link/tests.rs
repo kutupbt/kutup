@@ -16,6 +16,14 @@ fn nonce_of(sealed: &str) -> [u8; NONCE_BYTES] {
         .unwrap()
 }
 
+/// The nonce of a joined-meeting record: it ends where the ciphertext length
+/// and the fixed-size ciphertext begin.
+fn joined_nonce_of(sealed: &str) -> [u8; NONCE_BYTES] {
+    let bytes = STANDARD.decode(sealed).unwrap();
+    let end = bytes.len() - (JOINED_PADDED_BYTES + TAG_BYTES) - 4;
+    bytes[end - NONCE_BYTES..end].try_into().unwrap()
+}
+
 /// The vectors chat-core's code made before the move
 /// (docs/plans/chat-crypto-move.md): this code derives every key alike, opens
 /// every sealed value, and reseals each byte for byte under its nonce.
@@ -71,14 +79,23 @@ fn the_moved_code_reproduces_the_vectors() {
         sealed("message")
     );
 
-    let joined = open_joined_meeting(&text("masterKey"), &sealed("joined")).unwrap();
+    let binding = v["joined"]["binding"].as_str().unwrap();
+    let id = v["joined"]["id"].as_str().unwrap();
+    let joined = open_joined_meeting(&text("masterKey"), binding, id, &sealed("joined")).unwrap();
     assert_eq!(
         serde_json::to_value(&joined).unwrap(),
         v["joined"]["plaintext"]
     );
     assert_eq!(
-        seal_joined_meeting_with_nonce(&text("masterKey"), &joined, &nonce_of(&sealed("joined")))
-            .unwrap(),
+        seal_joined_meeting_with_nonce(
+            &text("masterKey"),
+            crate::account_record::MasterKeyGeneration::FIRST,
+            binding,
+            id,
+            &joined,
+            &joined_nonce_of(&sealed("joined"))
+        )
+        .unwrap(),
         sealed("joined")
     );
 }
@@ -101,7 +118,13 @@ fn a_value_opens_only_for_its_purpose_link_and_account() {
         .is_err());
 
     let joined = v["joined"]["sealed"].as_str().unwrap();
-    assert!(open_joined_meeting(&STANDARD.encode([0x22u8; 32]), joined).is_err());
+    let binding = v["joined"]["binding"].as_str().unwrap();
+    let id = v["joined"]["id"].as_str().unwrap();
+    assert!(open_joined_meeting(&STANDARD.encode([0x22u8; 32]), binding, id, joined).is_err());
+    let raw = STANDARD.decode(joined).unwrap();
+    validate_joined_meeting(&raw, binding, id).unwrap();
+    assert!(validate_joined_meeting(&raw, binding, &"ab".repeat(16)).is_err());
+    assert!(validate_joined_meeting(&raw[1..], binding, id).is_err());
     assert!(owner_call_link_secret(&text("masterKey"), "0123").is_err());
     assert!(owner_call_link_secret(&text("masterKey"), &text("nonce").to_uppercase()).is_err());
     assert!(parse_call_link_fragment("AA").is_err());

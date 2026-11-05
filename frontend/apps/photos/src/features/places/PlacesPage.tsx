@@ -8,7 +8,8 @@ import { useMapConfig } from '@kutup/map/config'
 import { maplibregl, useKutupMap } from '@kutup/map/useKutupMap'
 import { appUrl } from '@kutup/session/apps'
 import { Button } from '@kutup/ui/components/button'
-import { EmptyState, LoadingPanel } from '@kutup/ui/components/states'
+import { EmptyState } from '@kutup/ui/components/states'
+import { GridSkeleton } from '@kutup/ui/components/skeleton'
 import { formatDay } from '../library/format'
 import type { Photo } from '../library/library'
 import { useLibraryContext } from '../library/libraryContext'
@@ -181,7 +182,7 @@ export function PlacesPage() {
   const viewerList = inView.some((p) => p.id === openId) ? inView : located
   const viewerIndex = openId ? viewerList.findIndex((p) => p.id === openId) : -1
 
-  if ((loading && photos.length === 0) || mapConfig.isPending) return <LoadingPanel label={t('timeline.loading')} />
+  if ((loading && photos.length === 0) || mapConfig.isPending) return <GridSkeleton label={t('timeline.loading')} />
   if (!effective) {
     return (
       <div className="px-4 py-6 md:px-8">

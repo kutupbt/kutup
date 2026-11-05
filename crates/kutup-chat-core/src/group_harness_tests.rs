@@ -340,7 +340,6 @@ impl World {
     /// published, sealed sender on. `n` makes its id.
     pub(crate) fn person(self: &Rc<Self>, n: u8) -> Person {
         let account = format!("aci:00000000-0000-4000-8000-0000000000{n:02x}@{SERVER}");
-        let wrapping_key = [n.wrapping_add(100); 32];
         let mut rng = rng();
         let client = self.client(&account);
         let db = Rc::new(SqliteChatDb::open_in_memory().unwrap());
@@ -355,7 +354,7 @@ impl World {
             &mut rng,
         ))
         .unwrap();
-        self.set_up(engine, client, &account, wrapping_key)
+        self.set_up(engine, client, &account)
     }
 
     /// Another device of `person`'s account, linked from it as Signal links
@@ -403,7 +402,7 @@ impl World {
             &mut rng(),
         ))
         .unwrap();
-        self.set_up(engine, client, &account, person.wrapping_key)
+        self.set_up(engine, client, &account)
     }
 
     /// The new device's side of linking up to the envelope: its socket and
@@ -439,13 +438,7 @@ impl World {
 
     /// What the app does once a device is registered: its manifest entry,
     /// its profile, its lists.
-    fn set_up(
-        self: &Rc<Self>,
-        mut engine: Engine,
-        client: Rc<Client>,
-        account: &str,
-        wrapping_key: [u8; 32],
-    ) -> Person {
+    fn set_up(self: &Rc<Self>, mut engine: Engine, client: Rc<Client>, account: &str) -> Person {
         let mut rng = rng();
         let authority_seed = account
             .strip_suffix(&format!("@{SERVER}"))
@@ -455,10 +448,12 @@ impl World {
         client.device.set(engine.session().device_id());
         engine.set_sealed_sender_enabled(true);
         block_on(engine.sync_own_manifest(&authority, ISSUED_AT)).unwrap();
-        block_on(engine.initialize_profile(&wrapping_key, "Someone", &mut rng)).unwrap();
         // The account's master key (its authority's, as above) and key
         // binding, as the app hands them over.
         let binding = format!("{authority_seed:08x}-0000-4000-8000-{authority_seed:012x}");
+        let profile_owner =
+            crate::profile::profile_owner_key(&[authority_seed; 32], &binding).unwrap();
+        block_on(engine.initialize_profile(&profile_owner, "Someone", &mut rng)).unwrap();
         engine
             .enable_group_list(&[authority_seed; 32], &binding)
             .unwrap();
@@ -477,7 +472,7 @@ impl World {
             client,
             account: account.to_string(),
             authority_seed,
-            wrapping_key,
+            profile_owner,
         }
     }
 
@@ -2071,7 +2066,7 @@ pub(crate) struct Person {
     #[allow(dead_code)] // what linking another device needs
     pub(crate) authority_seed: u8,
     #[allow(dead_code)]
-    pub(crate) wrapping_key: [u8; 32],
+    pub(crate) profile_owner: crate::profile::ProfileOwnerKey,
 }
 
 impl Person {
@@ -5506,7 +5501,7 @@ fn group_list_a_rotated_profile_key_reaches_the_group() {
     deliver_all(&mut [&mut alice, &mut bob]);
     // Bob's profile key changes (as blocking someone rotates it): his entry
     // in the group gets the new one, so the group still reaches him.
-    let wrapping_key = bob.wrapping_key;
+    let wrapping_key = bob.profile_owner.clone();
     block_on(
         bob.engine
             .rotate_profile_key(&wrapping_key, ISSUED_AT, &mut rng()),

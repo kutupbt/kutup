@@ -31,7 +31,7 @@ fn state_of(person: &Person, peer: &Person) -> Option<ContactState> {
 }
 
 fn block(person: &mut Person, peer: &Person) {
-    let key = person.wrapping_key;
+    let key = person.profile_owner.clone();
     block_on(
         person
             .engine

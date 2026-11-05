@@ -141,15 +141,26 @@ pub fn parse_call_link_fragment(fragment: &str) -> Result<Zeroizing<String>> {
     crypto::parse_call_link_fragment(fragment).map_err(invalid)
 }
 
-/// Seal one stay for the account's own list.
-pub fn seal_joined_meeting(master_key: &str, entry: &JoinedMeetingV1) -> Result<String> {
-    crypto::seal_joined_meeting(master_key, entry).map_err(invalid)
+/// Seal one stay for the account's own list, as the row `id`.
+pub fn seal_joined_meeting(
+    master_key: &str,
+    generation: kutup_crypto::account_record::MasterKeyGeneration,
+    binding: &str,
+    id: &str,
+    entry: &JoinedMeetingV1,
+) -> Result<String> {
+    crypto::seal_joined_meeting(master_key, generation, binding, id, entry).map_err(invalid)
 }
 
-/// A record that does not open was not sealed by this account. An unusable
-/// master key is the caller's.
-pub fn open_joined_meeting(master_key: &str, sealed: &str) -> Result<JoinedMeetingV1> {
-    crypto::open_joined_meeting(master_key, sealed).map_err(|error| match error {
+/// A record that does not open was not sealed by this account for row `id`.
+/// An unusable master key is the caller's.
+pub fn open_joined_meeting(
+    master_key: &str,
+    binding: &str,
+    id: &str,
+    sealed: &str,
+) -> Result<JoinedMeetingV1> {
+    crypto::open_joined_meeting(master_key, binding, id, sealed).map_err(|error| match error {
         CryptoError::InvalidInput(message) if message.starts_with("account master key") => {
             ChatError::Invalid(message)
         }
@@ -164,6 +175,11 @@ mod tests {
     use sha2::{Digest as _, Sha256};
 
     use super::*;
+
+    const BINDING: &str = "0b6b5e0c-4c1e-4b8e-9c2d-6a1f3e5d7c9b";
+    const JOINED_ID: &str = "00112233445566778899aabbccddeeff";
+    const FIRST: kutup_crypto::account_record::MasterKeyGeneration =
+        kutup_crypto::account_record::MasterKeyGeneration::FIRST;
 
     /// The call-link formats' canonical vectors
     /// (`crates/kutup-crypto/tests/vectors/call-link-v1.json`), made from this
@@ -217,7 +233,12 @@ mod tests {
                 "name": { "plaintext": "Ayşe", "sealed": keys.seal_name("Ayşe").unwrap() },
                 "info": { "plaintext": info, "sealed": keys.seal_info(&info).unwrap() },
                 "message": { "plaintext": message, "sealed": keys.seal_message(&message).unwrap() },
-                "joined": { "plaintext": joined, "sealed": seal_joined_meeting(&master, &joined).unwrap() },
+                "joined": {
+                    "binding": BINDING,
+                    "id": JOINED_ID,
+                    "plaintext": joined,
+                    "sealed": seal_joined_meeting(&master, FIRST, BINDING, JOINED_ID, &joined).unwrap(),
+                },
             });
             std::fs::write(path, serde_json::to_string_pretty(&vectors).unwrap() + "\n").unwrap();
         }
@@ -250,7 +271,8 @@ mod tests {
         );
         assert_eq!(
             serde_json::to_value(
-                open_joined_meeting(&text("masterKey"), &sealed("joined")).unwrap()
+                open_joined_meeting(&text("masterKey"), BINDING, JOINED_ID, &sealed("joined"))
+                    .unwrap()
             )
             .unwrap(),
             v["joined"]["plaintext"]
@@ -267,23 +289,41 @@ mod tests {
             joined_at_ms: 1_700_000_000_000,
             seconds: 754,
         };
-        let sealed = seal_joined_meeting(&master, &entry).unwrap();
+        let sealed = seal_joined_meeting(&master, FIRST, BINDING, JOINED_ID, &entry).unwrap();
         assert_eq!(
             STANDARD.decode(&sealed).unwrap().len(),
             JOINED_MEETING_SEALED_BYTES
         );
-        assert_ne!(sealed, seal_joined_meeting(&master, &entry).unwrap());
-        assert_eq!(open_joined_meeting(&master, &sealed).unwrap(), entry);
-        assert!(open_joined_meeting(&STANDARD.encode([0x12u8; 32]), &sealed).is_err());
+        assert_ne!(
+            sealed,
+            seal_joined_meeting(&master, FIRST, BINDING, JOINED_ID, &entry).unwrap()
+        );
+        assert_eq!(
+            open_joined_meeting(&master, BINDING, JOINED_ID, &sealed).unwrap(),
+            entry
+        );
+        assert!(
+            open_joined_meeting(&STANDARD.encode([0x12u8; 32]), BINDING, JOINED_ID, &sealed)
+                .is_err()
+        );
+        // Another row's id, or another account: refused.
+        assert!(open_joined_meeting(&master, BINDING, &"ab".repeat(16), &sealed).is_err());
+        assert!(open_joined_meeting(
+            &master,
+            "7d3f1a2b-9c4e-4f6a-8b1d-2e5c7a9f0b3d",
+            JOINED_ID,
+            &sealed
+        )
+        .is_err());
         let mut bytes = STANDARD.decode(&sealed).unwrap();
         *bytes.last_mut().unwrap() ^= 1;
-        assert!(open_joined_meeting(&master, &STANDARD.encode(bytes)).is_err());
+        assert!(open_joined_meeting(&master, BINDING, JOINED_ID, &STANDARD.encode(bytes)).is_err());
 
         let without_link = JoinedMeetingV1 {
             fragment: "nope".into(),
             ..entry.clone()
         };
-        assert!(seal_joined_meeting(&master, &without_link).is_err());
+        assert!(seal_joined_meeting(&master, FIRST, BINDING, JOINED_ID, &without_link).is_err());
         // Not a value the link's own keys open: a different key and purpose.
         let keys = CallLinkKeys::derive(&STANDARD.encode([0x42u8; 32])).unwrap();
         assert!(keys.open_info(&sealed).is_err());

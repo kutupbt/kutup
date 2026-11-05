@@ -107,7 +107,7 @@ pub use manifest::{
     ManifestPolicy, SafetyNumberV2, SAFETY_QR_PREFIX,
 };
 pub use media_wait::{MediaSendDue, MediaSends};
-pub use profile::{derive_wrapping_key, MAX_AVATAR_BYTES};
+pub use profile::{profile_owner_key, ProfileOwnerKey, MAX_AVATAR_BYTES};
 pub use session::{ReceivedMessage, SendSummary, Session};
 pub use transport::{
     ChatTransport, DistributionOutcome, GroupListItem, IdentityPinsRecord, IdentityPinsWrite,

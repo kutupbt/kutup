@@ -7,15 +7,16 @@
 //! docs/plans/chat-crypto-move.md); this module keeps the local and peer
 //! profiles the Chat store holds, and their flows.
 //!
-//! The profile is a statement to peers about an address, so its envelopes
-//! name the address. The account's own copy of the profile key (the wrapped
-//! key) is sealed under a wrapping key derived from the master key and the
-//! account's key binding (docs/plans/account-identity.md, `-wrap-v2`), so it
-//! never depends on a name alone; the `-wrap-v1` key (the master key only) is
-//! no longer derived, and what it wrapped does not open.
+//! The profile is a statement to peers about an account, so its envelopes
+//! name the account. The account's own copy of the profile key (the wrapped
+//! key) is an account record (purpose `ChatProfileKeyWrap`,
+//! docs/plans/w1-account-record.md) under the master key, bound to the
+//! account's key binding, the profile version and the revision.
 
 use base64::engine::general_purpose::STANDARD;
 use base64::Engine as _;
+use kutup_crypto::account_record::MasterKeyGeneration;
+pub use kutup_crypto::chat_profile::ProfileOwnerKey;
 use kutup_crypto::chat_profile::{self as crypto, ProfileContents, SealedProfile};
 use kutup_crypto::error::CryptoError;
 use rand::{CryptoRng, Rng};
@@ -49,10 +50,20 @@ fn content(error: CryptoError) -> ChatError {
     ChatError::Content(error.to_string())
 }
 
-/// The key the account's own copy of its profile key is wrapped under: from
-/// the master key and the account's key binding (`session.envelopeBinding`).
-pub fn derive_wrapping_key(master_key: &[u8; 32], binding: &str) -> Result<[u8; 32]> {
-    crypto::derive_wrapping_key(master_key, binding).map_err(invalid)
+/// What the account's own copy of its profile key is sealed for: the master
+/// key and the account's key binding (`session.envelopeBinding`).
+/// Chat's devices seal with the first generation until master-key rotation
+/// exists, as its lists do.
+pub fn profile_owner_key(master_key: &[u8; 32], binding: &str) -> Result<ProfileOwnerKey> {
+    owner_at(master_key, MasterKeyGeneration::FIRST, binding)
+}
+
+fn owner_at(
+    master_key: &[u8; 32],
+    generation: MasterKeyGeneration,
+    binding: &str,
+) -> Result<ProfileOwnerKey> {
+    ProfileOwnerKey::new(master_key, generation, binding).map_err(invalid)
 }
 
 pub fn profile_version(key: &[u8]) -> Result<String> {
@@ -88,7 +99,7 @@ pub fn create_local_profile<R: Rng + CryptoRng>(
     avatar: Option<Vec<u8>>,
     avatar_content_type: Option<String>,
     source_device_id: u32,
-    wrapping_key: &[u8; 32],
+    owner: &ProfileOwnerKey,
     canonical_recipient: &AccountRef,
     rng: &mut R,
 ) -> Result<LocalProfile> {
@@ -102,7 +113,7 @@ pub fn create_local_profile<R: Rng + CryptoRng>(
             revision: 1,
             source_device_id,
         },
-        wrapping_key,
+        owner,
         canonical_recipient,
     )
 }
@@ -113,7 +124,7 @@ pub(crate) struct LocalProfileUpdate<'a> {
     pub avatar_content_type: Option<String>,
     pub about: Option<String>,
     pub source_device_id: u32,
-    pub wrapping_key: &'a [u8; 32],
+    pub owner: &'a ProfileOwnerKey,
     pub canonical_recipient: &'a AccountRef,
 }
 
@@ -128,7 +139,7 @@ pub(crate) fn update_local_profile<R: Rng + CryptoRng>(
         avatar_content_type,
         about,
         source_device_id,
-        wrapping_key,
+        owner,
         canonical_recipient,
     } = update;
     let revision = current
@@ -145,7 +156,7 @@ pub(crate) fn update_local_profile<R: Rng + CryptoRng>(
             revision,
             source_device_id,
         },
-        wrapping_key,
+        owner,
         canonical_recipient,
     )
 }
@@ -153,7 +164,7 @@ pub(crate) fn update_local_profile<R: Rng + CryptoRng>(
 pub fn rotate_local_profile<R: Rng + CryptoRng>(
     current: &LocalProfile,
     source_device_id: u32,
-    wrapping_key: &[u8; 32],
+    owner: &ProfileOwnerKey,
     canonical_recipient: &AccountRef,
     rng: &mut R,
 ) -> Result<LocalProfile> {
@@ -171,7 +182,7 @@ pub fn rotate_local_profile<R: Rng + CryptoRng>(
             revision,
             source_device_id,
         },
-        wrapping_key,
+        owner,
         canonical_recipient,
     )
 }
@@ -183,7 +194,7 @@ pub(crate) fn rebase_local_profile<R: Rng + CryptoRng>(
     desired: &LocalProfile,
     remote: &LocalProfile,
     source_device_id: u32,
-    wrapping_key: &[u8; 32],
+    owner: &ProfileOwnerKey,
     canonical_recipient: &AccountRef,
     rng: &mut R,
 ) -> Result<LocalProfile> {
@@ -195,7 +206,7 @@ pub(crate) fn rebase_local_profile<R: Rng + CryptoRng>(
             avatar_content_type: desired.avatar_content_type.clone(),
             about: desired.about.clone(),
             source_device_id,
-            wrapping_key,
+            owner,
             canonical_recipient,
         },
         rng,
@@ -203,13 +214,7 @@ pub(crate) fn rebase_local_profile<R: Rng + CryptoRng>(
     if desired.key == remote.key {
         Ok(rebased)
     } else {
-        rotate_local_profile(
-            &rebased,
-            source_device_id,
-            wrapping_key,
-            canonical_recipient,
-            rng,
-        )
+        rotate_local_profile(&rebased, source_device_id, owner, canonical_recipient, rng)
     }
 }
 
@@ -228,6 +233,7 @@ pub struct AccountProfileUpdate {
 #[cfg(any(test, all(feature = "wasm", target_arch = "wasm32")))]
 pub fn seal_account_profile<R: Rng + CryptoRng>(
     master_key: &[u8; 32],
+    generation: MasterKeyGeneration,
     current: Option<&PutChatProfileRequest>,
     update: AccountProfileUpdate,
     canonical_account: &AccountRef,
@@ -242,11 +248,10 @@ pub fn seal_account_profile<R: Rng + CryptoRng>(
         about: update.about,
     };
     crypto::seal_account_profile(
-        master_key,
+        &owner_at(master_key, generation, binding)?,
         current.as_ref(),
         &contents,
         canonical_account,
-        binding,
     )
     .map(PutChatProfileRequest::from)
     .map_err(invalid)
@@ -256,25 +261,26 @@ pub fn seal_account_profile<R: Rng + CryptoRng>(
 #[cfg(any(test, all(feature = "wasm", target_arch = "wasm32")))]
 pub fn open_account_profile(
     master_key: &[u8; 32],
+    generation: MasterKeyGeneration,
     current: &PutChatProfileRequest,
     canonical_account: &AccountRef,
     binding: &str,
 ) -> Result<LocalProfile> {
     open_own_profile(
         current,
-        &derive_wrapping_key(master_key, binding)?,
+        &owner_at(master_key, generation, binding)?,
         canonical_account,
     )
 }
 
 pub fn open_own_profile(
     encrypted: &PutChatProfileRequest,
-    wrapping_key: &[u8; 32],
+    owner: &ProfileOwnerKey,
     canonical_recipient: &AccountRef,
 ) -> Result<LocalProfile> {
     let opened = crypto::open_own_profile(
         &SealedProfile::from(encrypted.clone()),
-        wrapping_key,
+        owner,
         canonical_recipient,
     )
     .map_err(content)?;
@@ -339,7 +345,7 @@ struct LocalProfileDraft<'a> {
 /// its contents) and keeps it as the local profile, its upload pending.
 fn prepare_local_profile(
     draft: LocalProfileDraft<'_>,
-    wrapping_key: &[u8; 32],
+    owner: &ProfileOwnerKey,
     canonical_recipient: &AccountRef,
 ) -> Result<LocalProfile> {
     let key = crypto::profile_key(&draft.key).map_err(invalid)?;
@@ -360,7 +366,7 @@ fn prepare_local_profile(
         &contents,
         draft.revision,
         draft.source_device_id,
-        wrapping_key,
+        owner,
         canonical_recipient,
     )
     .map_err(invalid)?;
@@ -389,32 +395,6 @@ fn encrypt_b64_with_nonce(
 }
 
 #[cfg(test)]
-fn decrypt_b64(
-    encoded: &str,
-    root_key: &[u8; 32],
-    expected: &ProfileEnvelopeContextV1,
-) -> Result<Vec<u8>> {
-    crypto::open_item(encoded, root_key, expected)
-        .map(|plaintext| plaintext.to_vec())
-        .map_err(content)
-}
-
-/// HKDF-SHA256 salted with the profile family's label: the retired `-wrap-v1`
-/// key, in the tests only.
-#[cfg(test)]
-fn hkdf_expand<const N: usize>(key: &[u8], info: &[u8]) -> Result<[u8; N]> {
-    let mut output = [0u8; N];
-    kutup_crypto::primitives::Kdf::new(
-        kutup_crypto::primitives::Suite::V1,
-        kutup_crypto::labels::CHAT_PROFILE_V1,
-        key,
-    )
-    .expand(info, &mut output)
-    .map_err(invalid)?;
-    Ok(output)
-}
-
-#[cfg(test)]
 mod tests {
     use super::*;
     use rand::rngs::StdRng;
@@ -440,7 +420,7 @@ mod tests {
         );
         let master_key = [0x09u8; 32];
         let profile_key = [0x51u8; 32];
-        let wrapping = derive_wrapping_key(&master_key, BINDING).unwrap();
+        let wrapping = profile_owner_key(&master_key, BINDING).unwrap();
         let version = profile_version(&profile_key).unwrap();
         let access = profile_access_key(&profile_key).unwrap();
         let delivery = derive_delivery_capability(&profile_key, &RECIPIENT).unwrap();
@@ -478,12 +458,6 @@ mod tests {
                 0x62,
             ),
             item(ProfileEnvelopePurpose::About, &profile_key, &about, 0x63),
-            item(
-                ProfileEnvelopePurpose::WrappedProfileKey,
-                &wrapping,
-                &profile_key,
-                0x64,
-            ),
         ];
         // A whole upload as today's code makes it (its random parts as they
         // fell), and what it opens to.
@@ -504,7 +478,6 @@ mod tests {
             "masterKey": STANDARD.encode(master_key),
             "binding": BINDING,
             "account": RECIPIENT_KEY,
-            "wrappingKey": STANDARD.encode(wrapping),
             "profileKey": STANDARD.encode(profile_key),
             "version": version,
             "accessKey": STANDARD.encode(access),
@@ -547,7 +520,7 @@ mod tests {
     #[test]
     fn signal_style_name_padding_and_profile_round_trip() {
         let mut rng = StdRng::seed_from_u64(7);
-        let wrapping = derive_wrapping_key(&[9; 32], BINDING).unwrap();
+        let wrapping = profile_owner_key(&[9; 32], BINDING).unwrap();
         let profile = create_local_profile(
             "Alice Example",
             Some(vec![1, 2, 3, 4]),
@@ -576,7 +549,7 @@ mod tests {
     #[test]
     fn rotation_revokes_the_old_version_and_access_capability() {
         let mut rng = StdRng::seed_from_u64(8);
-        let wrapping = derive_wrapping_key(&[4; 32], BINDING).unwrap();
+        let wrapping = profile_owner_key(&[4; 32], BINDING).unwrap();
         let before =
             create_local_profile("Alice", None, None, 1, &wrapping, &RECIPIENT, &mut rng).unwrap();
         let after = rotate_local_profile(&before, 1, &wrapping, &RECIPIENT, &mut rng).unwrap();
@@ -594,7 +567,7 @@ mod tests {
     #[test]
     fn decryption_rejects_the_wrong_profile_key() {
         let mut rng = StdRng::seed_from_u64(9);
-        let wrapping = derive_wrapping_key(&[5; 32], BINDING).unwrap();
+        let wrapping = profile_owner_key(&[5; 32], BINDING).unwrap();
         let profile =
             create_local_profile("Alice", None, None, 1, &wrapping, &RECIPIENT, &mut rng).unwrap();
         let response = ChatProfileResponse::from(profile.pending_upload.as_ref().unwrap());
@@ -622,7 +595,7 @@ mod tests {
     #[test]
     fn stale_linked_device_rebase_preserves_edit_without_undoing_rotation() {
         let mut rng = StdRng::seed_from_u64(10);
-        let wrapping = derive_wrapping_key(&[6; 32], BINDING).unwrap();
+        let wrapping = profile_owner_key(&[6; 32], BINDING).unwrap();
         let original =
             create_local_profile("Alice", None, None, 1, &wrapping, &RECIPIENT, &mut rng).unwrap();
         let desired = update_local_profile(
@@ -633,7 +606,7 @@ mod tests {
                 avatar_content_type: None,
                 about: Some("Out hiking".into()),
                 source_device_id: 1,
-                wrapping_key: &wrapping,
+                owner: &wrapping,
                 canonical_recipient: &RECIPIENT,
             },
             &mut rng,
@@ -653,7 +626,7 @@ mod tests {
     #[test]
     fn about_is_padded_encrypted_and_opened_by_owner_and_peer() {
         let mut rng = StdRng::seed_from_u64(11);
-        let wrapping = derive_wrapping_key(&[7; 32], BINDING).unwrap();
+        let wrapping = profile_owner_key(&[7; 32], BINDING).unwrap();
         let original =
             create_local_profile("Alice", None, None, 1, &wrapping, &RECIPIENT, &mut rng).unwrap();
         let about = "Out hiking 🥾 until Monday";
@@ -665,7 +638,7 @@ mod tests {
                 avatar_content_type: None,
                 about: Some(format!("  {about}  ")),
                 source_device_id: 1,
-                wrapping_key: &wrapping,
+                owner: &wrapping,
                 canonical_recipient: &RECIPIENT,
             },
             &mut rng,
@@ -698,6 +671,7 @@ mod tests {
         let master = [7u8; 32];
         let first = seal_account_profile(
             &master,
+            MasterKeyGeneration::FIRST,
             None,
             AccountProfileUpdate {
                 display_name: "Ada".into(),
@@ -714,12 +688,20 @@ mod tests {
             (first.revision, first.source_device_id),
             (1, kutup_chat_proto::ACCOUNT_PROFILE_SOURCE)
         );
-        let opened = open_account_profile(&master, &first, &RECIPIENT, BINDING).unwrap();
+        let opened = open_account_profile(
+            &master,
+            MasterKeyGeneration::FIRST,
+            &first,
+            &RECIPIENT,
+            BINDING,
+        )
+        .unwrap();
         assert_eq!(opened.display_name, "Ada");
         assert_eq!(opened.about.as_deref(), Some("Counting things"));
 
         let next = seal_account_profile(
             &master,
+            MasterKeyGeneration::FIRST,
             Some(&first),
             AccountProfileUpdate {
                 display_name: "Ada L.".into(),
@@ -740,59 +722,74 @@ mod tests {
         // A chat device opens it with the same master-derived wrapping key.
         let device_view = open_own_profile(
             &next,
-            &derive_wrapping_key(&master, BINDING).unwrap(),
+            &profile_owner_key(&master, BINDING).unwrap(),
             &RECIPIENT,
         )
         .unwrap();
         assert_eq!(device_view.display_name, "Ada L.");
         assert_eq!(device_view.about, None);
         // Another master key, or another key binding, opens nothing.
-        assert!(open_account_profile(&[8u8; 32], &next, &RECIPIENT, BINDING).is_err());
+        assert!(open_account_profile(
+            &[8u8; 32],
+            MasterKeyGeneration::FIRST,
+            &next,
+            &RECIPIENT,
+            BINDING
+        )
+        .is_err());
         assert!(open_account_profile(
             &master,
+            MasterKeyGeneration::FIRST,
             &next,
             &RECIPIENT,
             "7d3f1a2b-9c4e-4f6a-8b1d-2e5c7a9f0b3d"
         )
         .is_err());
         // The address is not a key binding.
-        assert!(open_account_profile(&master, &next, &RECIPIENT, RECIPIENT_KEY).is_err());
+        assert!(open_account_profile(
+            &master,
+            MasterKeyGeneration::FIRST,
+            &next,
+            &RECIPIENT,
+            RECIPIENT_KEY
+        )
+        .is_err());
     }
 
     /// Checked-in vectors for the account's own copy of its profile key
-    /// (`tests/vectors/profile-wrap-v2.json`): the wrapping key from the
-    /// master key and the key binding, the wrapped key, and the values that
-    /// must not open. Regenerate only for a deliberate format change:
+    /// (`tests/vectors/profile-key-wrap-v1.json`): an account record
+    /// (`ChatProfileKeyWrap`) under the master key, for the key binding, the
+    /// profile version and the revision, and the values that must not open.
+    /// Regenerate only for a deliberate format change:
     /// `KUTUP_WRITE_PROFILE_VECTORS=1 cargo test --locked --lib profile_wrap_vectors_write -- --ignored`.
     mod wrap_vectors {
         use super::*;
+        use kutup_crypto::account_record::{
+            self, AccountRecordPurpose, AccountRecordSuiteId, MasterKeyGeneration,
+        };
         use serde::{Deserialize, Serialize};
 
         const PATH: &str = concat!(
             env!("CARGO_MANIFEST_DIR"),
-            "/tests/vectors/profile-wrap-v2.json"
+            "/tests/vectors/profile-key-wrap-v1.json"
         );
         const MASTER: [u8; 32] = [0x5a; 32];
+        const OTHER_MASTER: [u8; 32] = [0x5b; 32];
         const BINDING: &str = "3f2a6c1e-8b4d-4e7a-9c5f-1d2e3a4b5c6d";
         const OTHER_BINDING: &str = "9e8d7c6b-5a49-4382-a716-05f4e3d2c1b0";
-        const ACCOUNT: &str = "aci:00000000-0000-4000-8000-2bd806c97f0e@kutup.dev";
         const PROFILE_KEY: [u8; 32] = [0x21; 32];
         const NONCE: [u8; 24] = [0x44; 24];
         const REVISION: u64 = 3;
-        const SOURCE: u32 = 2;
 
         #[derive(Serialize, Deserialize)]
         #[serde(rename_all = "camelCase")]
         struct Vectors {
             master_key: String,
             binding: String,
-            account: String,
             profile_key: String,
             profile_version: String,
             revision: u64,
-            source_device_id: u32,
             nonce: String,
-            wrapping_key: String,
             wrapped_key: String,
             refused: Vec<Refused>,
         }
@@ -801,46 +798,40 @@ mod tests {
         #[serde(rename_all = "camelCase")]
         struct Refused {
             case: String,
-            /// The binding the wrapping key is derived with.
+            /// The binding the opener holds.
             binding: String,
-            /// The account the opener expects in the header.
-            account: String,
+            /// The profile version and revision the opener expects.
+            profile_version: String,
+            revision: u64,
             wrapped_key: String,
         }
 
-        fn context(account: &AccountRef) -> ProfileEnvelopeContextV1 {
-            ProfileEnvelopeContextV1::new(
-                ProfileEnvelopePurpose::WrappedProfileKey,
-                account,
-                &profile_version(&PROFILE_KEY).unwrap(),
-                REVISION,
-                SOURCE,
-            )
-            .unwrap()
+        fn version() -> String {
+            profile_version(&PROFILE_KEY).unwrap()
         }
 
-        fn wrapped(wrapping_key: &[u8; 32]) -> String {
-            encrypt_b64_with_nonce(
-                &PROFILE_KEY,
-                wrapping_key,
-                &context(&ACCOUNT.parse().unwrap()),
-                &NONCE,
-            )
-            .unwrap()
-        }
-
-        fn open(binding: &str, account: &str, wrapped: &str) -> Result<Vec<u8>> {
-            decrypt_b64(
-                wrapped,
-                &derive_wrapping_key(&MASTER, binding)?,
-                &context(&crate::address::parse_account(account)?),
+        fn wrapped(master: &[u8; 32], purpose: AccountRecordPurpose) -> String {
+            STANDARD.encode(
+                account_record::seal_suite(
+                    AccountRecordSuiteId::V1,
+                    &PROFILE_KEY,
+                    master,
+                    purpose,
+                    MasterKeyGeneration::FIRST,
+                    BINDING,
+                    &hex::decode(version()).unwrap(),
+                    Some(REVISION),
+                    &NONCE,
+                )
+                .unwrap(),
             )
         }
 
-        /// The retired `-wrap-v1` key (the master key alone), kept only to
-        /// show that what it wrapped no longer opens.
-        fn v1_wrapping_key() -> [u8; 32] {
-            hkdf_expand(&MASTER, kutup_crypto::labels::CHAT_PROFILE_WRAP_V1).unwrap()
+        fn open(binding: &str, version: &str, revision: u64, wrapped: &str) -> Result<Vec<u8>> {
+            let owner = profile_owner_key(&MASTER, binding)?;
+            crypto::unwrap_profile_key(wrapped, &owner, version, revision)
+                .map(|key| key.to_vec())
+                .map_err(content)
         }
 
         fn refused(wrapped_key: &str) -> Vec<Refused> {
@@ -851,61 +842,79 @@ mod tests {
                 STANDARD.encode(changed)
             };
             let last = bytes.len() - 1;
-            let case = |case: &str, binding: &str, account: &str, wrapped_key: String| Refused {
-                case: case.into(),
-                binding: binding.into(),
-                account: account.into(),
-                wrapped_key,
-            };
+            let other_version = profile_version(&[0x22; 32]).unwrap();
+            let case =
+                |case: &str, binding: &str, version: &str, revision: u64, wrapped_key: String| {
+                    Refused {
+                        case: case.into(),
+                        binding: binding.into(),
+                        profile_version: version.into(),
+                        revision,
+                        wrapped_key,
+                    }
+                };
             vec![
                 case(
                     "another account's key binding",
                     OTHER_BINDING,
-                    ACCOUNT,
+                    &version(),
+                    REVISION,
                     wrapped_key.into(),
                 ),
                 case(
-                    "the address instead of the key binding",
-                    ACCOUNT,
-                    ACCOUNT,
+                    "an address instead of the key binding",
+                    "aci:00000000-0000-4000-8000-2bd806c97f0e@kutup.dev",
+                    &version(),
+                    REVISION,
                     wrapped_key.into(),
                 ),
                 case(
-                    "another account in the header",
+                    "another profile version",
                     BINDING,
-                    "aci:00000000-0000-4000-8000-81b637d8fcd2@kutup.dev",
+                    &other_version,
+                    REVISION,
                     wrapped_key.into(),
                 ),
-                case("magic changed", BINDING, ACCOUNT, edit(6, b'2')),
-                case("purpose changed", BINDING, ACCOUNT, edit(10, 1)),
+                case(
+                    "another revision",
+                    BINDING,
+                    &version(),
+                    REVISION + 1,
+                    wrapped_key.into(),
+                ),
+                case(
+                    "magic changed",
+                    BINDING,
+                    &version(),
+                    REVISION,
+                    edit(6, b'2'),
+                ),
                 case(
                     "ciphertext changed",
                     BINDING,
-                    ACCOUNT,
+                    &version(),
+                    REVISION,
                     edit(last, bytes[last] ^ 1),
                 ),
                 case(
-                    "wrapped under the v1 key (master key only)",
+                    "sealed under another master key",
                     BINDING,
-                    ACCOUNT,
-                    wrapped(&v1_wrapping_key()),
+                    &version(),
+                    REVISION,
+                    wrapped(&OTHER_MASTER, AccountRecordPurpose::ChatProfileKeyWrap),
                 ),
             ]
         }
 
         fn expected() -> Vectors {
-            let wrapping_key = derive_wrapping_key(&MASTER, BINDING).unwrap();
-            let wrapped_key = wrapped(&wrapping_key);
+            let wrapped_key = wrapped(&MASTER, AccountRecordPurpose::ChatProfileKeyWrap);
             Vectors {
                 master_key: STANDARD.encode(MASTER),
                 binding: BINDING.into(),
-                account: ACCOUNT.into(),
                 profile_key: STANDARD.encode(PROFILE_KEY),
-                profile_version: profile_version(&PROFILE_KEY).unwrap(),
+                profile_version: version(),
                 revision: REVISION,
-                source_device_id: SOURCE,
                 nonce: STANDARD.encode(NONCE),
-                wrapping_key: STANDARD.encode(wrapping_key),
                 refused: refused(&wrapped_key),
                 wrapped_key,
             }
@@ -933,12 +942,18 @@ mod tests {
             );
             let v: Vectors = serde_json::from_str(&checked_in).unwrap();
             assert_eq!(
-                open(&v.binding, &v.account, &v.wrapped_key).unwrap(),
+                open(&v.binding, &v.profile_version, v.revision, &v.wrapped_key).unwrap(),
                 STANDARD.decode(&v.profile_key).unwrap()
             );
             for case in &v.refused {
                 assert!(
-                    open(&case.binding, &case.account, &case.wrapped_key).is_err(),
+                    open(
+                        &case.binding,
+                        &case.profile_version,
+                        case.revision,
+                        &case.wrapped_key
+                    )
+                    .is_err(),
                     "{} opened",
                     case.case
                 );
