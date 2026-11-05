@@ -196,6 +196,12 @@ pub enum AccountRecordPurpose {
     /// object is [`hashed_object`] of the contact's account, so the server
     /// never sees whom an entry is about.
     ChatContactListEntry = 12,
+    // 13 and 14: the Photos library and the Chat attachment ledger (W1
+    // slice 4).
+    /// One meeting the account joined (`chat_call_link`); its object is the
+    /// row id the client chose (16 bytes), so a record can't be swapped for
+    /// another's.
+    JoinedMeeting = 15,
 }
 
 /// The object of a record whose id the server must not see (a group id, the
@@ -317,11 +323,18 @@ impl AccountRecordPurpose {
                 mutable: true,
                 max_len: crate::chat_contact_list::MAX_PLAIN_LEN + 1,
             },
+            // One size, so a stay's length says nothing of its meeting.
+            Self::JoinedMeeting => PurposePolicy {
+                object: ObjectPolicy::Required(16),
+                length: Length::Fixed(crate::chat_call_link::JOINED_PADDED_BYTES),
+                mutable: false,
+                max_len: crate::chat_call_link::JOINED_PADDED_BYTES,
+            },
         }
     }
 
     /// Every purpose, for tests and vectors.
-    pub const ALL: [Self; 11] = [
+    pub const ALL: [Self; 12] = [
         Self::PasswordMasterKey,
         Self::RecoveryMasterKey,
         Self::ChatBackupRoot,
@@ -333,6 +346,7 @@ impl AccountRecordPurpose {
         Self::IdentityPins,
         Self::ChatGroupListEntry,
         Self::ChatContactListEntry,
+        Self::JoinedMeeting,
     ];
 }
 
@@ -352,6 +366,7 @@ impl TryFrom<u16> for AccountRecordPurpose {
             10 => Ok(Self::IdentityPins),
             11 => Ok(Self::ChatGroupListEntry),
             12 => Ok(Self::ChatContactListEntry),
+            15 => Ok(Self::JoinedMeeting),
             _ => Err(CryptoError::InvalidInput(format!(
                 "unknown account-record purpose {value}"
             ))),

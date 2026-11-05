@@ -4195,24 +4195,34 @@ pub fn call_link_host_token(
     })
 }
 
-/// Seal one stay in a meeting for the account's own list of joined meetings.
+/// Seal one stay in a meeting for the account's own list of joined meetings,
+/// as the row `id` (32 lowercase hex) of the account bound by `binding`.
 #[wasm_bindgen(js_name = callLinkSealJoined)]
 pub fn call_link_seal_joined(
     master_key: String,
+    generation: u32,
+    binding: String,
+    id: String,
     entry: JsValue,
 ) -> std::result::Result<String, JsValue> {
     let master_key = zeroize::Zeroizing::new(master_key);
+    let generation = kutup_crypto::account_record::MasterKeyGeneration::new(generation)
+        .map_err(|error| chat_error(crate::ChatError::Invalid(error.to_string())))?;
     let entry: crate::call_link::JoinedMeetingV1 = from_transport(entry).map_err(chat_error)?;
-    crate::call_link::seal_joined_meeting(&master_key, &entry).map_err(chat_error)
+    crate::call_link::seal_joined_meeting(&master_key, generation, &binding, &id, &entry)
+        .map_err(chat_error)
 }
 
 #[wasm_bindgen(js_name = callLinkOpenJoined)]
 pub fn call_link_open_joined(
     master_key: String,
+    binding: String,
+    id: String,
     sealed: String,
 ) -> std::result::Result<JsValue, JsValue> {
     let master_key = zeroize::Zeroizing::new(master_key);
-    let entry = crate::call_link::open_joined_meeting(&master_key, &sealed).map_err(chat_error)?;
+    let entry = crate::call_link::open_joined_meeting(&master_key, &binding, &id, &sealed)
+        .map_err(chat_error)?;
     to_output(&entry)
 }
 

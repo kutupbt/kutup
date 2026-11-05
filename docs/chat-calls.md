@@ -223,10 +223,13 @@ joined, with when and for how long. That second list belongs to the
 account, so it is the same on all of its devices:
 
 - Each stay is a record of the link's fragment (so it can be joined again),
-  the title, when it was joined and for how long, sealed in the browser:
-  `nonce (24) || XChaCha20-Poly1305(length || JSON || zeros)`, padded to
-  1024 bytes, under HKDF-SHA256 of the account master key (the meetings'
-  salt, info `joined key`), with the AAD `kutup/chat/call-link/joined/v1`.
+  the title, when it was joined and for how long, sealed in the browser as
+  an account record (`KUTPAR1`, purpose `JoinedMeeting`,
+  [`plans/w1-account-record.md`](plans/w1-account-record.md)): `length ||
+  JSON || zeros`, padded to 1024 bytes, under the account master key, its
+  header naming the account's key binding and the row's 16-byte id. The
+  server checks that header, so a record can't be moved to another row or
+  another account.
 - The server stores the records (`/api/chat/joined-meetings`, the newest
   100 per account) and hands them back. It cannot open them, so it still
   has no readable record of who joined what; it does learn that the account

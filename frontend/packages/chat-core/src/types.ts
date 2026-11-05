@@ -803,11 +803,13 @@ export interface CallLinkCrypto {
   callLinkOpenMessage(secret: string, sealed: string): CallLinkMessage
   /**
    * Seal one stay in a meeting for the account's own list of joined
-   * meetings, under a key from the account master key (base64).
+   * meetings: an account record (purpose JoinedMeeting) under the master key
+   * (base64) of the account bound by `binding`, for the row `id` (32
+   * lowercase hex).
    */
-  callLinkSealJoined(masterKey: string, entry: JoinedMeetingRecord): string
-  /** Throws when the record was not sealed by this account. */
-  callLinkOpenJoined(masterKey: string, sealed: string): JoinedMeetingRecord
+  callLinkSealJoined(masterKey: string, generation: number, binding: string, id: string, entry: JoinedMeetingRecord): string
+  /** Throws when the record was not sealed by this account for row `id`. */
+  callLinkOpenJoined(masterKey: string, binding: string, id: string, sealed: string): JoinedMeetingRecord
 }
 
 /** One stay in a meeting, as the account that joined keeps it. */

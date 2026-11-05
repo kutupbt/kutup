@@ -4470,14 +4470,15 @@ when the SFU's API cannot be reached.
 → `{ "entries": [{ "id", "entry" }] }`: the meetings this account joined,
 most recently recorded first, at most 100
 ([`chat-calls.md`](chat-calls.md) "History"). Each `entry` is a stay sealed
-in the browser under a key from the account master key (base64, 1064
-bytes); the server cannot open it.
+in the browser as an account record (`KUTPAR1`, purpose `JoinedMeeting`,
+base64, 1171 bytes); the server cannot open it.
 
 ### POST /api/chat/joined-meetings
 
 `{ "id", "entry" }` → `204`: record a stay. `id` is 32 lowercase hex
-characters chosen by the browser; recording the same id again changes
-nothing. Beyond 100 the oldest are dropped.
+characters chosen by the browser, and the record names it: a record of
+another account, or one sealed for another id, is refused (`400`).
+Recording the same id again changes nothing. Beyond 100 the oldest are dropped.
 
 ### DELETE /api/chat/joined-meetings/:id
 

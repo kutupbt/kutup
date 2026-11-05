@@ -432,11 +432,17 @@ pub fn parse_call_link_fragment(fragment: &str) -> Result<Zeroizing<String>> {
 
 // --- An account's joined meetings -------------------------------------------
 
-/// A sealed joined-meeting record is padded to this.
-const JOINED_PADDED_BYTES: usize = 1024;
-/// A sealed joined-meeting record: nonce + padded record + tag.
-pub const JOINED_MEETING_SEALED_BYTES: usize = NONCE_BYTES + JOINED_PADDED_BYTES + TAG_BYTES;
-const JOINED_AAD: &[u8] = crate::labels::CHAT_CALL_LINK_JOINED_V1;
+/// A joined-meeting record's plaintext is padded to this.
+pub const JOINED_PADDED_BYTES: usize = 1024;
+/// Every sealed joined-meeting record's length (an account record, purpose
+/// `JoinedMeeting`, one size).
+pub const JOINED_MEETING_SEALED_BYTES: usize =
+    match crate::account_record::exact_record_len(JOINED_PURPOSE) {
+        Some(len) => len,
+        None => panic!("joined meetings have one length"),
+    };
+const JOINED_PURPOSE: crate::account_record::AccountRecordPurpose =
+    crate::account_record::AccountRecordPurpose::JoinedMeeting;
 
 /// One stay in a meeting, as the account that joined keeps it for its own
 /// devices: sealed under a key from the account master key, so the server
@@ -470,29 +476,44 @@ impl JoinedMeetingV1 {
     }
 }
 
-fn joined_cipher(master_key: &str) -> Result<Aead> {
+fn joined_master_key(master_key: &str) -> Result<Zeroizing<[u8; 32]>> {
     let invalid_key =
         || CryptoError::InvalidInput("account master key is not 32 bytes of base64".into());
     let master = Zeroizing::new(STANDARD.decode(master_key).map_err(|_| invalid_key())?);
-    if master.len() != 32 {
-        return Err(invalid_key());
-    }
-    let hkdf = Kdf::new(Suite::V1, SALT, master.as_slice());
-    let mut key = Zeroizing::new([0u8; 32]);
-    expand(&hkdf, b"joined key", key.as_mut_slice())?;
-    Aead::new(Suite::V1, key.as_slice())
+    let master: [u8; 32] = master.as_slice().try_into().map_err(|_| invalid_key())?;
+    Ok(Zeroizing::new(master))
 }
 
-/// Seal one stay for the account's own list:
-/// `nonce (24) || XChaCha20-Poly1305(length (u32 BE) || JSON || zeros)`.
-pub fn seal_joined_meeting(master_key: &str, entry: &JoinedMeetingV1) -> Result<String> {
+/// A joined meeting's row id (32 lowercase hex characters, chosen by the
+/// browser that recorded it): the record's object.
+fn joined_id(id: &str) -> Result<[u8; 16]> {
+    let invalid = || CryptoError::InvalidInput("a joined meeting id is 32 lowercase hex".into());
+    let bytes = hex::decode(id).map_err(|_| invalid())?;
+    if bytes.len() != 16 || hex::encode(&bytes) != id {
+        return Err(invalid());
+    }
+    bytes.try_into().map_err(|_| invalid())
+}
+
+/// Seal one stay for the account's own list, as the row `id`: an account
+/// record under the master key, bound to the account and the row.
+pub fn seal_joined_meeting(
+    master_key: &str,
+    generation: crate::account_record::MasterKeyGeneration,
+    binding: &str,
+    id: &str,
+    entry: &JoinedMeetingV1,
+) -> Result<String> {
     let mut nonce = [0u8; NONCE_BYTES];
     random(&mut nonce);
-    seal_joined_meeting_with_nonce(master_key, entry, &nonce)
+    seal_joined_meeting_with_nonce(master_key, generation, binding, id, entry, &nonce)
 }
 
 fn seal_joined_meeting_with_nonce(
     master_key: &str,
+    generation: crate::account_record::MasterKeyGeneration,
+    binding: &str,
+    id: &str,
     entry: &JoinedMeetingV1,
     nonce: &[u8; NONCE_BYTES],
 ) -> Result<String> {
@@ -500,35 +521,51 @@ fn seal_joined_meeting_with_nonce(
     let json = Zeroizing::new(
         serde_json::to_vec(entry).map_err(|error| CryptoError::InvalidInput(error.to_string()))?,
     );
-    if 4 + json.len() > JOINED_PADDED_BYTES {
+    if json.len() >= JOINED_PADDED_BYTES {
         return Err(CryptoError::InvalidInput(
             "joined meeting is too large".into(),
         ));
     }
-    let padded = pad(&json, JOINED_PADDED_BYTES);
-    let ciphertext = joined_cipher(master_key)?
-        .seal_with_nonce(nonce, JOINED_AAD, &padded)
-        .map_err(|_| CryptoError::InvalidInput("joined meeting sealing failed".into()))?;
-    let mut sealed = nonce.to_vec();
-    sealed.extend_from_slice(&ciphertext);
+    let sealed = crate::account_record::seal_suite(
+        crate::account_record::AccountRecordSuiteId::V1,
+        &json,
+        joined_master_key(master_key)?.as_slice(),
+        JOINED_PURPOSE,
+        generation,
+        binding,
+        &joined_id(id)?,
+        None,
+        nonce,
+    )?;
     Ok(STANDARD.encode(sealed))
 }
 
-/// A record that does not open was not sealed by this account.
-pub fn open_joined_meeting(master_key: &str, sealed: &str) -> Result<JoinedMeetingV1> {
+/// A record that does not open was not sealed by this account for row `id`.
+pub fn open_joined_meeting(
+    master_key: &str,
+    binding: &str,
+    id: &str,
+    sealed: &str,
+) -> Result<JoinedMeetingV1> {
     let malformed = || CryptoError::InvalidInput("sealed joined meeting is malformed".into());
     let sealed = STANDARD.decode(sealed).map_err(|_| malformed())?;
-    if sealed.len() != JOINED_MEETING_SEALED_BYTES {
-        return Err(malformed());
-    }
-    let (nonce, ciphertext) = sealed.split_at(NONCE_BYTES);
-    let padded = joined_cipher(master_key)?
-        .open_with_nonce(nonce, JOINED_AAD, ciphertext)
-        .map_err(|_| CryptoError::InvalidInput("sealed joined meeting does not open".into()))?;
-    let body = unpad(&padded).ok_or_else(malformed)?;
-    let entry: JoinedMeetingV1 = serde_json::from_slice(&body).map_err(|_| malformed())?;
+    let json = crate::account_record::open_object(
+        &sealed,
+        joined_master_key(master_key)?.as_slice(),
+        JOINED_PURPOSE,
+        binding,
+        &joined_id(id)?,
+    )
+    .map_err(|_| CryptoError::InvalidInput("sealed joined meeting does not open".into()))?;
+    let entry: JoinedMeetingV1 = serde_json::from_slice(&json).map_err(|_| malformed())?;
     entry.validate().map_err(CryptoError::InvalidInput)?;
     Ok(entry)
+}
+
+/// What the server checks before storing a stay: a well-formed record of the
+/// account bound by `binding`, for row `id`.
+pub fn validate_joined_meeting(sealed: &[u8], binding: &str, id: &str) -> Result<()> {
+    crate::account_record::validate_for(sealed, JOINED_PURPOSE, binding, &joined_id(id)?).map(drop)
 }
 
 /// `length (u32 BE) || body || zeros`, `padded_length` bytes in all.
