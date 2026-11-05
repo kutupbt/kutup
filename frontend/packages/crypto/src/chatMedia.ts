@@ -3,6 +3,7 @@
 // only incremental I/O; it does not select suites or construct persistent AAD.
 
 import { fromBase64, toBase64 } from './base64'
+import { MASTER_KEY_GENERATION } from './masterKeyGeneration'
 import { getCryptoWasm } from './rustWasm'
 import {
   ABYTES,
@@ -142,8 +143,14 @@ export async function decryptChatMediaV1(
   return output
 }
 
-export async function deriveChatAttachmentLedgerKey(masterKey: Uint8Array): Promise<Uint8Array> {
-  return fromBase64((await getCryptoWasm()).deriveChatAttachmentLedgerKey(toBase64(masterKey)))
+/**
+ * Whose ledger: the account's master key and its key binding
+ * (`session.envelopeBinding`); each record is an account record of that
+ * account (docs/chat-media.md).
+ */
+export interface ChatAttachmentLedgerOwner {
+  masterKey: Uint8Array
+  binding: string
 }
 
 export interface ChatAttachmentLedgerContextV1 {
@@ -155,12 +162,14 @@ export interface ChatAttachmentLedgerContextV1 {
 
 export async function sealChatAttachmentLedger(
   plaintext: Uint8Array,
-  ledgerKey: Uint8Array,
+  owner: ChatAttachmentLedgerOwner,
   context: ChatAttachmentLedgerContextV1,
 ): Promise<string> {
   return (await getCryptoWasm()).sealChatAttachmentLedger(
     toBase64(plaintext),
-    toBase64(ledgerKey),
+    toBase64(owner.masterKey),
+    MASTER_KEY_GENERATION,
+    owner.binding,
     context.accountIncarnationId,
     context.entityId,
     context.revision,
@@ -170,12 +179,13 @@ export async function sealChatAttachmentLedger(
 
 export async function openChatAttachmentLedger(
   envelope: string,
-  ledgerKey: Uint8Array,
+  owner: ChatAttachmentLedgerOwner,
   expected: ChatAttachmentLedgerContextV1,
 ): Promise<Uint8Array> {
   return fromBase64((await getCryptoWasm()).openChatAttachmentLedger(
     envelope,
-    toBase64(ledgerKey),
+    toBase64(owner.masterKey),
+    owner.binding,
     expected.accountIncarnationId,
     expected.entityId,
     expected.revision,
@@ -188,7 +198,6 @@ export async function chatAttachmentLedgerEnvelopeDigest(envelope: string): Prom
 }
 
 export interface ChatAttachmentLedgerHeaderV1 {
-  suite: number
   accountIncarnationId: string
   entityId: string
   revision: string

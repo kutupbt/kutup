@@ -43,6 +43,8 @@ const COMMIT_INFO: &[u8] = crate::labels::ACCOUNT_RECORD_COMMIT_V1;
 const OBJECT_ID_INFO: &[u8] = crate::labels::ACCOUNT_RECORD_OBJECT_ID_V1;
 /// The key commitment's length (see [`record_keys`]).
 const COMMITMENT_LEN: usize = 32;
+/// The previous record's digest in a chained purpose's header.
+const PREVIOUS_LEN: usize = 32;
 
 /// Which master key an account secret belongs to: the generation of the MK
 /// a password or recovery wrap holds, or of the MK that sealed any other
@@ -108,6 +110,7 @@ pub const fn max_record_len(purpose: AccountRecordPurpose) -> usize {
         + 1
         + MAX_OBJECT_LEN
         + REVISION_LEN
+        + PREVIOUS_LEN
         + COMMITMENT_LEN
         + NONCE_LEN
         + LENGTH_LEN
@@ -130,12 +133,14 @@ pub const fn exact_record_len(purpose: AccountRecordPurpose) -> Option<usize> {
         ObjectPolicy::Required(n) => n,
     };
     let revision = if policy.mutable { REVISION_LEN } else { 0 };
+    let previous = if policy.chained { PREVIOUS_LEN } else { 0 };
     Some(
         FIXED_PREFIX_LEN
             + MAX_CONTEXT_LEN
             + 1
             + object
             + revision
+            + previous
             + COMMITMENT_LEN
             + NONCE_LEN
             + LENGTH_LEN
@@ -196,8 +201,13 @@ pub enum AccountRecordPurpose {
     /// object is [`hashed_object`] of the contact's account, so the server
     /// never sees whom an entry is about.
     ChatContactListEntry = 12,
-    // 13 and 14: the Photos library and the Chat attachment ledger (W1
-    // slice 4).
+    /// The account's Photos library (`photos_library`); its object is the
+    /// account incarnation, and its records form a chain.
+    PhotosLibrary = 13,
+    /// One entry of the account's Chat attachment ledger
+    /// (`chat_attachment_ledger`); its object is the account incarnation and
+    /// the entry's id (48 bytes), and its records form a chain.
+    ChatAttachmentLedger = 14,
     /// One meeting the account joined (`chat_call_link`); its object is the
     /// row id the client chose (16 bytes), so a record can't be swapped for
     /// another's.
@@ -257,6 +267,12 @@ pub struct PurposePolicy {
     /// The longest padded plaintext a record of the purpose holds. A format
     /// limit, not a setting (see the module doc).
     pub max_len: usize,
+    /// A chain: each record names the SHA-256 of the one before it
+    /// ([`record_digest`]) in its header, after the revision (zeros at
+    /// revision 1), so a server can require each write to follow the one it
+    /// holds, and a reader can check the history it is shown. Only for
+    /// mutable purposes.
+    pub chained: bool,
 }
 
 impl AccountRecordPurpose {
@@ -270,6 +286,7 @@ impl AccountRecordPurpose {
             length: Length::Exact(32),
             mutable: false,
             max_len: 32,
+            chained: false,
         };
         match self {
             Self::PasswordMasterKey | Self::RecoveryMasterKey | Self::ChatBackupRoot => KEY,
@@ -279,6 +296,7 @@ impl AccountRecordPurpose {
                 length: Length::Bucket(256),
                 mutable: false,
                 max_len: 4096,
+                chained: false,
             },
             // One per vault (its Drive file id), replaced when the vault's
             // key changes; every one the same length, so the size does not
@@ -288,6 +306,7 @@ impl AccountRecordPurpose {
                 length: Length::Fixed(crate::pass_vault::MAX_PAYLOAD_LEN + 1),
                 mutable: true,
                 max_len: crate::pass_vault::MAX_PAYLOAD_LEN + 1,
+                chained: false,
             },
             // One per organization key, named by its id.
             Self::OrganizationPrivateKey => PurposePolicy {
@@ -295,24 +314,28 @@ impl AccountRecordPurpose {
                 length: Length::Exact(32),
                 mutable: false,
                 max_len: 32,
+                chained: false,
             },
             Self::ContactCard => PurposePolicy {
                 object: ObjectPolicy::Required(32),
                 length: Length::Bucket(256),
                 mutable: true,
                 max_len: bucketed(crate::contact_card::MAX_CARD_BYTES),
+                chained: false,
             },
             Self::MailName => PurposePolicy {
                 object: ObjectPolicy::Required(17),
                 length: Length::Bucket(256),
                 mutable: true,
                 max_len: bucketed(crate::mail_names::MAX_NAME_BYTES),
+                chained: false,
             },
             Self::IdentityPins => PurposePolicy {
                 object: ObjectPolicy::None,
                 length: Length::Bucket(256),
                 mutable: true,
                 max_len: bucketed(crate::identity_pins::MAX_LIST_BYTES),
+                chained: false,
             },
             // One size each, so an entry's length says nothing.
             Self::ChatGroupListEntry => PurposePolicy {
@@ -320,12 +343,30 @@ impl AccountRecordPurpose {
                 length: Length::Fixed(crate::chat_group_list::MAX_PLAIN_LEN + 1),
                 mutable: true,
                 max_len: crate::chat_group_list::MAX_PLAIN_LEN + 1,
+                chained: false,
             },
             Self::ChatContactListEntry => PurposePolicy {
                 object: ObjectPolicy::Required(32),
                 length: Length::Fixed(crate::chat_contact_list::MAX_PLAIN_LEN + 1),
                 mutable: true,
                 max_len: crate::chat_contact_list::MAX_PLAIN_LEN + 1,
+                chained: false,
+            },
+            Self::PhotosLibrary => PurposePolicy {
+                object: ObjectPolicy::Required(32),
+                length: Length::Bucket(256),
+                mutable: true,
+                max_len: bucketed(crate::photos_library::MAX_PHOTOS_LIBRARY_PLAINTEXT_BYTES),
+                chained: true,
+            },
+            Self::ChatAttachmentLedger => PurposePolicy {
+                object: ObjectPolicy::Required(48),
+                length: Length::Bucket(256),
+                mutable: true,
+                max_len: bucketed(
+                    crate::chat_attachment_ledger::MAX_CHAT_ATTACHMENT_LEDGER_PLAINTEXT_BYTES,
+                ),
+                chained: true,
             },
             // One size, so a stay's length says nothing of its meeting.
             Self::JoinedMeeting => PurposePolicy {
@@ -333,18 +374,20 @@ impl AccountRecordPurpose {
                 length: Length::Fixed(crate::chat_call_link::JOINED_PADDED_BYTES),
                 mutable: false,
                 max_len: crate::chat_call_link::JOINED_PADDED_BYTES,
+                chained: false,
             },
             Self::ChatProfileKeyWrap => PurposePolicy {
                 object: ObjectPolicy::Required(32),
                 length: Length::Exact(32),
                 mutable: true,
                 max_len: 32,
+                chained: false,
             },
         }
     }
 
     /// Every purpose, for tests and vectors.
-    pub const ALL: [Self; 13] = [
+    pub const ALL: [Self; 15] = [
         Self::PasswordMasterKey,
         Self::RecoveryMasterKey,
         Self::ChatBackupRoot,
@@ -356,6 +399,8 @@ impl AccountRecordPurpose {
         Self::IdentityPins,
         Self::ChatGroupListEntry,
         Self::ChatContactListEntry,
+        Self::PhotosLibrary,
+        Self::ChatAttachmentLedger,
         Self::JoinedMeeting,
         Self::ChatProfileKeyWrap,
     ];
@@ -377,6 +422,8 @@ impl TryFrom<u16> for AccountRecordPurpose {
             10 => Ok(Self::IdentityPins),
             11 => Ok(Self::ChatGroupListEntry),
             12 => Ok(Self::ChatContactListEntry),
+            13 => Ok(Self::PhotosLibrary),
+            14 => Ok(Self::ChatAttachmentLedger),
             15 => Ok(Self::JoinedMeeting),
             16 => Ok(Self::ChatProfileKeyWrap),
             _ => Err(CryptoError::InvalidInput(format!(
@@ -399,6 +446,9 @@ pub struct AccountRecordHeader {
     pub object_id: Vec<u8>,
     /// The secret's revision, for a mutable purpose (never 0).
     pub revision: Option<u64>,
+    /// The previous record's digest, for a chained purpose (zeros at
+    /// revision 1).
+    pub previous: Option<[u8; PREVIOUS_LEN]>,
     pub ciphertext_len: u32,
 }
 
@@ -423,6 +473,7 @@ fn check_shape(
     purpose: AccountRecordPurpose,
     object_id: &[u8],
     revision: Option<u64>,
+    previous: Option<&[u8; PREVIOUS_LEN]>,
 ) -> Result<()> {
     let policy = purpose.policy();
     let object_ok = match policy.object {
@@ -435,10 +486,25 @@ fn check_shape(
         ));
     }
     match (policy.mutable, revision) {
-        (true, Some(revision)) if revision > 0 => Ok(()),
-        (false, None) => Ok(()),
+        (true, Some(revision)) if revision > 0 => {}
+        (false, None) => {}
+        _ => {
+            return Err(CryptoError::InvalidInput(
+                "account-record revision does not fit its purpose".into(),
+            ))
+        }
+    }
+    // A chain starts at revision 1 with no predecessor (zeros) and names one
+    // at every later revision.
+    match (policy.chained, previous, revision) {
+        (false, None, _) => Ok(()),
+        (true, Some(previous), Some(revision))
+            if (revision == 1) == (previous == &[0u8; PREVIOUS_LEN]) =>
+        {
+            Ok(())
+        }
         _ => Err(CryptoError::InvalidInput(
-            "account-record revision does not fit its purpose".into(),
+            "account-record chain does not fit its purpose".into(),
         )),
     }
 }
@@ -451,6 +517,7 @@ fn build_header(
     binding: &str,
     object_id: &[u8],
     revision: Option<u64>,
+    previous: Option<&[u8; PREVIOUS_LEN]>,
 ) -> Result<Vec<u8>> {
     let context_len = u16::try_from(binding.len())
         .map_err(|_| CryptoError::InvalidInput("account-record context is too long".into()))?;
@@ -460,6 +527,7 @@ fn build_header(
             + 1
             + object_id.len()
             + REVISION_LEN
+            + PREVIOUS_LEN
             + COMMITMENT_LEN
             + NONCE_LEN
             + LENGTH_LEN,
@@ -474,6 +542,9 @@ fn build_header(
     header.extend_from_slice(object_id);
     if let Some(revision) = revision {
         header.extend_from_slice(&revision.to_be_bytes());
+    }
+    if let Some(previous) = previous {
+        header.extend_from_slice(previous);
     }
     Ok(header)
 }
@@ -646,8 +717,61 @@ pub fn seal_suite(
     revision: Option<u64>,
     nonce: &[u8],
 ) -> Result<Vec<u8>> {
+    seal_record(
+        suite, plaintext, key, purpose, generation, binding, object_id, revision, None, nonce,
+    )
+}
+
+/// Seals revision `revision` of a chained purpose's record, after the record
+/// whose digest is `previous` (zeros at revision 1).
+#[allow(clippy::too_many_arguments)]
+pub fn seal_chained(
+    plaintext: &[u8],
+    key: &[u8],
+    purpose: AccountRecordPurpose,
+    generation: MasterKeyGeneration,
+    binding: &str,
+    object_id: &[u8],
+    revision: u64,
+    previous: &[u8; PREVIOUS_LEN],
+    nonce: Option<&[u8; NONCE_LEN]>,
+) -> Result<Vec<u8>> {
+    let nonce = nonce.copied().unwrap_or_else(random_nonce);
+    seal_record(
+        AccountRecordSuiteId::V1,
+        plaintext,
+        key,
+        purpose,
+        generation,
+        binding,
+        object_id,
+        Some(revision),
+        Some(previous),
+        &nonce,
+    )
+}
+
+/// The digest a chained record's successor names as its `previous`: the
+/// SHA-256 of the whole record.
+pub fn record_digest(record: &[u8]) -> [u8; PREVIOUS_LEN] {
+    crate::primitives::hash(Suite::V1, record).to_array()
+}
+
+#[allow(clippy::too_many_arguments)]
+fn seal_record(
+    suite: AccountRecordSuiteId,
+    plaintext: &[u8],
+    key: &[u8],
+    purpose: AccountRecordPurpose,
+    generation: MasterKeyGeneration,
+    binding: &str,
+    object_id: &[u8],
+    revision: Option<u64>,
+    previous: Option<&[u8; PREVIOUS_LEN]>,
+    nonce: &[u8],
+) -> Result<Vec<u8>> {
     check_key(key)?;
-    check_shape(purpose, object_id, revision)?;
+    check_shape(purpose, object_id, revision, previous)?;
     let padded = Zeroizing::new(purpose.policy().length.pad(plaintext)?);
     if padded.is_empty() || padded.len() > purpose.policy().max_len {
         return Err(CryptoError::InvalidInput(
@@ -661,7 +785,9 @@ pub fn seal_suite(
     let binding = canonical_binding(binding)?;
     let ciphertext_len = u32::try_from(padded.len() + TAG_LEN)
         .map_err(|_| CryptoError::InvalidInput("account-record plaintext is too long".into()))?;
-    let keyed = build_header(suite, purpose, generation, &binding, object_id, revision)?;
+    let keyed = build_header(
+        suite, purpose, generation, &binding, object_id, revision, previous,
+    )?;
     let (header, aead) = finish_header(key, keyed, &nonce, ciphertext_len)?;
     let ciphertext = Aead::new(Suite::V1, aead.as_ref())?
         .seal_with_nonce(&nonce, &header, &padded)
@@ -685,12 +811,15 @@ pub fn seal_unchecked_for_vectors(
     binding: &str,
     object_id: &[u8],
     revision: Option<u64>,
+    previous: Option<&[u8; PREVIOUS_LEN]>,
     nonce: &[u8; NONCE_LEN],
 ) -> Result<Vec<u8>> {
     let suite = AccountRecordSuiteId::V1;
     let ciphertext_len = u32::try_from(plaintext.len() + TAG_LEN)
         .map_err(|_| CryptoError::InvalidInput("too long".into()))?;
-    let keyed = build_header(suite, purpose, generation, binding, object_id, revision)?;
+    let keyed = build_header(
+        suite, purpose, generation, binding, object_id, revision, previous,
+    )?;
     let (header, aead) = finish_header(key, keyed, nonce, ciphertext_len)?;
     let ciphertext = Aead::new(Suite::V1, aead.as_ref())?
         .seal_with_nonce(nonce, &header, plaintext)
@@ -757,10 +886,18 @@ fn parse(envelope: &[u8]) -> Result<ParsedEnvelope<'_>> {
     } else {
         0
     };
+    let previous_len = if purpose.policy().chained {
+        PREVIOUS_LEN
+    } else {
+        0
+    };
     let after_revision = after_object
         .checked_add(revision_len)
         .ok_or(CryptoError::TooShort)?;
-    if after_revision > envelope.len() {
+    let after_previous = after_revision
+        .checked_add(previous_len)
+        .ok_or(CryptoError::TooShort)?;
+    if after_previous > envelope.len() {
         return Err(CryptoError::TooShort);
     }
     let object_id = envelope[after_context + 1..after_object].to_vec();
@@ -771,8 +908,13 @@ fn parse(envelope: &[u8]) -> Result<ParsedEnvelope<'_>> {
                 .expect("eight-byte slice"),
         )
     });
-    check_shape(purpose, &object_id, revision)?;
-    let after_commitment = after_revision
+    let previous: Option<[u8; PREVIOUS_LEN]> = (previous_len > 0).then(|| {
+        envelope[after_revision..after_previous]
+            .try_into()
+            .expect("32-byte slice")
+    });
+    check_shape(purpose, &object_id, revision, previous.as_ref())?;
+    let after_commitment = after_previous
         .checked_add(COMMITMENT_LEN)
         .ok_or(CryptoError::TooShort)?;
     let after_nonce = after_commitment
@@ -810,6 +952,7 @@ fn parse(envelope: &[u8]) -> Result<ParsedEnvelope<'_>> {
             canonical_binding: canonical,
             object_id,
             revision,
+            previous,
             ciphertext_len,
         },
         aad: &envelope[..after_length],
@@ -882,11 +1025,34 @@ pub fn open_revision(
     expected_binding: &str,
     object_id: &[u8],
 ) -> Result<(Vec<u8>, u64)> {
-    let (plain, revision) = open_any(envelope, key, expected_purpose, expected_binding, object_id)?;
-    let revision = revision.ok_or_else(|| {
+    let (plain, header) = open_any(envelope, key, expected_purpose, expected_binding, object_id)?;
+    let revision = header.revision.ok_or_else(|| {
         CryptoError::InvalidInput("this purpose's secrets have no revision".into())
     })?;
     Ok((plain, revision))
+}
+
+/// Opens a chained record: its plaintext, its revision and the digest of
+/// the record it follows (zeros at revision 1). The caller checks the chain
+/// (each record's `previous` is the [`record_digest`] of the one before).
+pub fn open_chained(
+    envelope: &[u8],
+    key: &[u8],
+    expected_purpose: AccountRecordPurpose,
+    expected_binding: &str,
+    object_id: &[u8],
+) -> Result<(Vec<u8>, u64, [u8; PREVIOUS_LEN])> {
+    if !expected_purpose.policy().chained {
+        return Err(CryptoError::InvalidInput(
+            "this purpose's records are not chained".into(),
+        ));
+    }
+    let (plain, header) = open_any(envelope, key, expected_purpose, expected_binding, object_id)?;
+    let revision = header.revision.expect("a chained purpose is mutable");
+    let previous = header
+        .previous
+        .expect("a chained record names its predecessor");
+    Ok((plain, revision, previous))
 }
 
 fn open_any(
@@ -895,7 +1061,7 @@ fn open_any(
     expected_purpose: AccountRecordPurpose,
     expected_binding: &str,
     object_id: &[u8],
-) -> Result<(Vec<u8>, Option<u64>)> {
+) -> Result<(Vec<u8>, AccountRecordHeader)> {
     check_key(key)?;
     let parsed = parse(envelope)?;
     if parsed.header.purpose != expected_purpose
@@ -915,7 +1081,7 @@ fn open_any(
         .map_err(|_| CryptoError::AuthFailed)
         .map(crate::primitives::into_vec)?;
     let plain = expected_purpose.policy().length.unpad(padded)?;
-    Ok((plain, parsed.header.revision))
+    Ok((plain, parsed.header))
 }
 
 pub fn seal_b64(

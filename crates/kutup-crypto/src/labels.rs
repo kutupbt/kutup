@@ -82,8 +82,6 @@ pub const ACCOUNT_INCARNATION_V1: &[u8] = b"kutup/account/incarnation/v1\0";
 pub const ACCOUNT_MANIFEST_V1: &[u8] = b"kutup/account/manifest/v1\0";
 /// `kutup-chat-proto/src/account_identity.rs` (`DOMAIN`)
 pub const ACCOUNT_MANIFEST_V3: &[u8] = b"kutup/account/manifest/v3\0";
-/// `kutup-crypto/src/chat_attachment_ledger.rs` (`ACCOUNT_LEDGER_KEY_SALT`)
-pub const ACCOUNT_PRIVATE_SUBKEY_V1: &[u8] = b"kutup/account/private-subkey/v1\0";
 /// `kutup-crypto/src/account_rename.rs` (`DOMAIN`)
 pub const ACCOUNT_RENAME_V1: &[u8] = b"kutup/account/rename/v1\0";
 
@@ -96,11 +94,6 @@ pub const CALLS_TURN_PSEUDONYM_V1: &[u8] = b"kutup/calls/turn-pseudonym/v1\0";
 
 // --- chat-attachment-ledger --------------------------------------------------
 
-/// `kutup-crypto/src/chat_attachment_ledger.rs` (`ACCOUNT_LEDGER_KEY_INFO`)
-pub const CHAT_ATTACHMENT_LEDGER_ACCOUNT_KEY_V1: &[u8] =
-    b"kutup/chat-attachment-ledger/account-key/v1\0";
-/// `kutup-crypto/src/chat_attachment_ledger.rs` (`KEY_DERIVATION_SALT`)
-pub const CHAT_ATTACHMENT_LEDGER_KEY_V1: &[u8] = b"kutup/chat-attachment-ledger/key/v1\0";
 /// `frontend/packages/chat-core/src/attachment-ledger.ts` (`LOCAL_PIN_DOMAIN`, TypeScript)
 pub const CHAT_ATTACHMENT_LEDGER_LOCAL_PIN_V1: &[u8] =
     b"kutup/chat-attachment-ledger/local-pin/v1\0";
@@ -463,11 +456,6 @@ pub const PASS_VAULT_SECRET_V2: &[u8] = b"kutup/pass-vault-secret/v2\0";
 
 // --- photos-library ----------------------------------------------------------
 
-/// `kutup-crypto/src/photos_library.rs` (`ACCOUNT_KEY_INFO`)
-pub const PHOTOS_LIBRARY_ACCOUNT_KEY_V1: &[u8] = b"kutup/photos-library/account-key/v1\0";
-/// `kutup-crypto/src/photos_library.rs` (`KEY_DERIVATION_SALT`)
-pub const PHOTOS_LIBRARY_KEY_V1: &[u8] = b"kutup/photos-library/key/v1\0";
-
 // --- private-ciphertext-cache ------------------------------------------------
 
 /// `frontend/packages/files/src/mediaCache/types.ts` (account scope, TypeScript)
@@ -570,7 +558,7 @@ pub const FEDERATION_REQUEST_REPLAY_HASH_V1: &[u8] = b"kutup/federation/request-
 pub const FEDERATION_SIGNATURE_TAG: &str = "kutup-federation-v2";
 
 /// Every label, for the registry's own checks.
-pub const ALL: [&[u8]; 178] = [
+pub const ALL: [&[u8]; 173] = [
     ORG_ACCESS_REQUEST_V1,
     ORG_KEY_CERTIFICATE_V1,
     ORG_KEY_ID_V1,
@@ -612,10 +600,7 @@ pub const ALL: [&[u8]; 178] = [
     ACCOUNT_INCARNATION_V1,
     ACCOUNT_MANIFEST_V1,
     ACCOUNT_MANIFEST_V3,
-    ACCOUNT_PRIVATE_SUBKEY_V1,
     ACCOUNT_RENAME_V1,
-    CHAT_ATTACHMENT_LEDGER_ACCOUNT_KEY_V1,
-    CHAT_ATTACHMENT_LEDGER_KEY_V1,
     CHAT_BACKUP_MEDIA_BLOCKS_BLOCK_KEY_V1,
     CHAT_BACKUP_MEDIA_BLOCKS_MANIFEST_KEY_V1,
     CHAT_BACKUP_MEDIA_BLOCKS_NONCE_KEY_V1,
@@ -721,8 +706,6 @@ pub const ALL: [&[u8]; 178] = [
     OPAQUE_V1,
     PASS_VAULT_SECRET_V1,
     PASS_VAULT_SECRET_V2,
-    PHOTOS_LIBRARY_ACCOUNT_KEY_V1,
-    PHOTOS_LIBRARY_KEY_V1,
     PROFILE_ENVELOPE_KEY_V1,
     REGISTRATION_CODE_V1,
     REVISION_GUARD_ENTRY_KEY_V1,

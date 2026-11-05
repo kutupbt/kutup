@@ -140,11 +140,11 @@ envelope purpose 12 (`AlbumFileKey`): object = file, parent = album, epoch =
 the album's key epoch, revision = the file key's generation.
 
 The Photos library record (`kutup-crypto` `photos_library`, vector
-`photosLibrary`) is one account-private XChaCha20-Poly1305 envelope under an
-HKDF subkey of the master key (as the Chat attachment ledger's). A 112-byte
-header (magic `KUTPPL1`, suite, purpose, account incarnation, revision, the
-previous envelope's SHA-256, nonce, length) is the AAD and the per-envelope
-key's input; the server checks it for compare-and-swap. The plaintext is
+`photosLibrary`) is one chained account record (`KUTPAR1`, purpose
+`PhotosLibrary`) under the master key, bound to the account's key binding;
+its object is the account incarnation, and its header names the revision and
+the previous record's SHA-256, which the server checks for compare-and-swap.
+The plaintext is padded to 256-byte buckets. The plaintext is
 canonical JSON `{ favourites, archived, hidden }`, each a sorted set of file
 UUIDs, at most 100,000 in all.
 

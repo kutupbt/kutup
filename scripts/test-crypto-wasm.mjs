@@ -316,43 +316,36 @@ assert.throws(
   /context does not match/,
 )
 
+// The Chat attachment ledger: one chained account record per entity.
 const ledgerMaster = Buffer.alloc(32, 0x33).toString('base64')
-const ledgerKey = crypto.deriveChatAttachmentLedgerKey(ledgerMaster)
-assert.equal(ledgerKey, 'YaVkK1oEu89sWc9iduoHMFum5wXeU9Zv/DztKYnISiM=')
+const ledgerBinding = '0b6b5e0c-4c1e-4b8e-9c2d-6a1f3e5d7c9b'
 const ledgerIncarnation = '11'.repeat(32)
 const ledgerEntity = '22222222-2222-4222-8222-222222222222'
 const ledgerPlaintext = Buffer.from('canonical ledger entry').toString('base64')
 const ledgerEnvelope = crypto.sealChatAttachmentLedger(
   ledgerPlaintext,
-  ledgerKey,
+  ledgerMaster,
+  1,
+  ledgerBinding,
   ledgerIncarnation,
   ledgerEntity,
   1n,
   '',
 )
 assert.equal(
-  crypto.openChatAttachmentLedger(
-    ledgerEnvelope,
-    ledgerKey,
-    ledgerIncarnation,
-    ledgerEntity,
-    1n,
-    '',
-  ),
+  crypto.openChatAttachmentLedger(ledgerEnvelope, ledgerMaster, ledgerBinding, ledgerIncarnation, ledgerEntity, 1n, ''),
   ledgerPlaintext,
 )
 assert.match(crypto.chatAttachmentLedgerEnvelopeDigest(ledgerEnvelope), /^[0-9a-f]{64}$/)
 assert.throws(
-  () => crypto.openChatAttachmentLedger(
-    ledgerEnvelope,
-    ledgerKey,
-    ledgerIncarnation,
-    '33333333-3333-4333-8333-333333333333',
-    1n,
-    '',
-  ),
+  () => crypto.openChatAttachmentLedger(ledgerEnvelope, ledgerMaster, ledgerBinding, ledgerIncarnation, '33333333-3333-4333-8333-333333333333', 1n, ''),
   /authentication failed/,
 )
+assert.throws(() => crypto.openChatAttachmentLedger(
+  ledgerEnvelope, ledgerMaster, '7d3f1a2b-9c4e-4f6a-8b1d-2e5c7a9f0b3d', ledgerIncarnation, ledgerEntity, 1n, '',
+))
+// The generic account-record path refuses the purpose.
+assert.throws(() => crypto.openAccountRecord(ledgerEnvelope, ledgerMaster, 14, ledgerBinding))
 
 const backupRoot = Buffer.alloc(32, 0x55).toString('base64')
 const backupId = '44444444-4444-4444-8444-444444444444'
@@ -653,22 +646,26 @@ assert.equal(contentHasher.finish(), metadataVector.contentHash.hash)
 assert.throws(() => contentHasher.finish())
 
 const libraryVector = vectors.photosLibrary
-assert.equal(crypto.photosLibraryKey(libraryVector.masterKey), libraryVector.libraryKey)
-const firstLibrary = crypto.openPhotosLibrary(libraryVector.first.envelope, libraryVector.libraryKey, libraryVector.accountIncarnationId, 1, undefined)
+const libraryOwner = [libraryVector.masterKey, libraryVector.binding]
+const firstLibrary = crypto.openPhotosLibrary(libraryVector.first.envelope, ...libraryOwner, libraryVector.accountIncarnationId, 1, undefined)
 assert.equal(firstLibrary, libraryVector.first.plaintext)
 assert.equal(crypto.photosLibraryDigest(libraryVector.first.envelope), libraryVector.first.digest)
 assert.equal(
-  crypto.openPhotosLibrary(libraryVector.second.envelope, libraryVector.libraryKey, libraryVector.accountIncarnationId, 2, libraryVector.first.digest),
+  crypto.openPhotosLibrary(libraryVector.second.envelope, ...libraryOwner, libraryVector.accountIncarnationId, 2, libraryVector.first.digest),
   libraryVector.second.plaintext,
 )
-assert.throws(() => crypto.openPhotosLibrary(libraryVector.second.envelope, libraryVector.libraryKey, libraryVector.accountIncarnationId, 1, undefined))
+assert.throws(() => crypto.openPhotosLibrary(libraryVector.second.envelope, ...libraryOwner, libraryVector.accountIncarnationId, 1, undefined))
+// Another account's key binding opens nothing.
+assert.throws(() => crypto.openPhotosLibrary(libraryVector.first.envelope, libraryVector.masterKey, '7d3f1a2b-9c4e-4f6a-8b1d-2e5c7a9f0b3d', libraryVector.accountIncarnationId, 1, undefined))
+// The generic account-record path refuses the purpose.
+assert.throws(() => crypto.openAccountRecord(libraryVector.first.envelope, libraryVector.masterKey, 13, libraryVector.binding))
 const resealed = crypto.sealPhotosLibrary(
   JSON.stringify({ favourites: ['33333333-3333-4333-8333-333333333333', '22222222-2222-4222-8222-222222222222'], archived: [], hidden: [] }),
-  libraryVector.libraryKey, libraryVector.accountIncarnationId, 3, crypto.photosLibraryDigest(libraryVector.second.envelope),
+  libraryVector.masterKey, 1, libraryVector.binding, libraryVector.accountIncarnationId, 3, crypto.photosLibraryDigest(libraryVector.second.envelope),
 )
 assert.equal(crypto.photosLibraryDigest(resealed.envelope), resealed.digest)
 assert.equal(
-  crypto.openPhotosLibrary(resealed.envelope, libraryVector.libraryKey, libraryVector.accountIncarnationId, 3, crypto.photosLibraryDigest(libraryVector.second.envelope)),
+  crypto.openPhotosLibrary(resealed.envelope, ...libraryOwner, libraryVector.accountIncarnationId, 3, crypto.photosLibraryDigest(libraryVector.second.envelope)),
   '{"favourites":["22222222-2222-4222-8222-222222222222","33333333-3333-4333-8333-333333333333"],"archived":[],"hidden":[]}',
 )
 

@@ -227,21 +227,21 @@
   "photosLibrary": {
     "description": "The Photos library record (kutup-crypto/src/photos_library.rs): account-private subkey of the master key; a hash-chained revision.",
     "masterKey": "QkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkI=",
-    "libraryKey": "CYLWY6474pxlvd+zHiLK9HA760Lcn2wW5LHH4G9BYXQ=",
+    "binding": "0b6b5e0c-4c1e-4b8e-9c2d-6a1f3e5d7c9b",
     "accountIncarnationId": "a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1",
     "first": {
       "revision": 1,
       "plaintext": "{\"favourites\":[\"22222222-2222-4222-8222-222222222222\"],\"archived\":[],\"hidden\":[\"33333333-3333-4333-8333-333333333333\"]}",
       "nonce": "BwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcH",
-      "envelope": "S1VUUFBMMQAAAQEAoaGhoaGhoaGhoaGhoaGhoaGhoaGhoaGhoaGhoaGhoaEAAAAAAAAAAQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAABwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHAAAAhyi6hm+KgSs5fTsJppayovsj1e9HQS28hL/OjfIjxw0Ahpo1i4DiHwJKu58GQ0RihwRXonDHFPxa/cS/gINF0OhiGfyiyFLDF/kKNBC2ax6AjpZdCGvSKy7FMScahMU38N+84AmSDm5KtLW0DJN5Q5iEBmYOGobXe6jPCbcG35OXc9R0Cw0l7g==",
-      "digest": "fa98b7a6f30e871d2818060e4e7d1f0e663a13fe4d6f444333f56f0f84bf804e"
+      "envelope": "S1VUUEFSMQAAAQANAAAAAQAkMGI2YjVlMGMtNGMxZS00YjhlLTljMmQtNmExZjNlNWQ3YzliIKGhoaGhoaGhoaGhoaGhoaGhoaGhoaGhoaGhoaGhoaGhAAAAAAAAAAEAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAABzhCdu4+78eJTo+FG+h4NCIGESJO8T6ac4U7uzCzMvBBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHAAABEEgiWc0cXSkNAv0XLop55p9L5+zNKCUf2U2rCMXz/sCKV0cSHv+ZMIr9As7QdUBtu0hJp6fBPadOCmlPYV5v4jnm/LnaZh27Wt9EgD7sHLANisW4oNGPzyfjP79lU5aU6AWnnlE9V3MRs/GnIroF9b5qW8s1IEHdthXVSFd+yOCRRcztSWxqHfdVB/Y2VAsP9tRj3X0b/1KV7o7XoSYafuWHKuU0gPDXpjQj/BVo6gVVua+azlcojcYkCtpfur47be3VlibVdMDbRbxsdrosN9v697LtAVzEMsXWW5bmz81w5/M1FyNA2HyPjp5q80dCW9dZhabjlvQDSJU4NvKPjBtYk1T60K9Y+40WuKnq/hbk",
+      "digest": "f6efd0cd0c53eb8f01b2de53e8cdfdb69820a68618ccdee32eee42aa5e825689"
     },
     "second": {
       "revision": 2,
-      "previousDigest": "fa98b7a6f30e871d2818060e4e7d1f0e663a13fe4d6f444333f56f0f84bf804e",
+      "previousDigest": "f6efd0cd0c53eb8f01b2de53e8cdfdb69820a68618ccdee32eee42aa5e825689",
       "plaintext": "{\"favourites\":[],\"archived\":[],\"hidden\":[]}",
       "nonce": "CAgICAgICAgICAgICAgICAgICAgICAgI",
-      "envelope": "S1VUUFBMMQAAAQEAoaGhoaGhoaGhoaGhoaGhoaGhoaGhoaGhoaGhoaGhoaEAAAAAAAAAAvqYt6bzDocdKBgGDk59Hw5mOhP+TW9EQzP1bw+Ev4BOCAgICAgICAgICAgICAgICAgICAgICAgIAAAAO3MiXWgqJ0jqfS1kWttKdVwU0XmV1cIxg4pTtOtuGS+rDnmq6MDOW5Y5cr7QarTuWsapaLga1lWifAls"
+      "envelope": "S1VUUEFSMQAAAQANAAAAAQAkMGI2YjVlMGMtNGMxZS00YjhlLTljMmQtNmExZjNlNWQ3YzliIKGhoaGhoaGhoaGhoaGhoaGhoaGhoaGhoaGhoaGhoaGhAAAAAAAAAAL279DNDFPrjwGy3lPozf22mCCmhhjM3uMu7kKqXoJWiXUpYuG6oBhH/MoY0+Clt2XruZAkH4lGJlCrOk2tuDV7CAgICAgICAgICAgICAgICAgICAgICAgIAAABEEzb79UkSgBXe7wQnJBGOpMIpguWBe/PuuLt3p1R3pJd+PZtvjfz+Fy5nxZoq0ph9CzlQyF2Ej7eV0jOKNtNG6wPgi1yZ/YJAMuB9OVdB4IKegNYhsIbqx+/pwjQ7f9BxlmIH9k+4TqsPPFngU2eNuH36sbY43UT96X29gX7ps0NcLv5jz/n6VzvBSdjwjZhPtMzqFk8e0nwdW7SNwavRZBcnYNxlBOqV1LPli7UyZWAX1YHNCtjKOpj3DQ7jBgU0bdjPJ6m+wkMig7QdRSAT4ozqe8QLJrqF/lLI3oCagvFupEoGeAZClfjeElZ+/u1rrMgqcHHwQ++/mmiyyCZkdeW8uor5K2yLAFD3dPVt/oL"
     }
   },
   "driveNames": {

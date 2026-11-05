@@ -1191,10 +1191,6 @@ pub async fn put_ledger_entity(
     if Uuid::from_bytes(header.context.entity_id) != entity_id {
         return Err(AppError::bad_request("ledger entity binding mismatch"));
     }
-    let revision = i64::try_from(header.context.revision)
-        .map_err(|_| AppError::bad_request("ledger revision is too large"))?;
-    let digest = chat_attachment_ledger::envelope_digest(&envelope)
-        .map_err(|_| AppError::bad_request("invalid attachment ledger envelope"))?;
     let account_incarnation: String =
         sqlx::query_scalar("SELECT account_incarnation_id FROM users WHERE id=$1")
             .bind(user_id)
@@ -1203,6 +1199,19 @@ pub async fn put_ledger_entity(
     if hex::encode(header.context.account_incarnation_id) != account_incarnation {
         return Err(AppError::conflict("ledger account incarnation mismatch"));
     }
+    // This account's record (its key binding), filed under this entity.
+    let binding = crate::revisions::key_binding(&state.pool, user_id).await?;
+    chat_attachment_ledger::validate(
+        &envelope,
+        &binding,
+        &header.context.account_incarnation_id,
+        entity_id.as_bytes(),
+    )
+    .map_err(|_| AppError::bad_request("not this account's attachment ledger record"))?;
+    let revision = i64::try_from(header.context.revision)
+        .map_err(|_| AppError::bad_request("ledger revision is too large"))?;
+    let digest = chat_attachment_ledger::envelope_digest(&envelope)
+        .map_err(|_| AppError::bad_request("invalid attachment ledger envelope"))?;
 
     let mut transaction = state.pool.begin().await?;
     type Receipt = (Uuid, i64, String, i64);

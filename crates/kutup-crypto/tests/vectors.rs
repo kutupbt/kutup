@@ -68,7 +68,7 @@ struct FileMetadataVec {
 #[serde(rename_all = "camelCase")]
 struct PhotosLibraryVec {
     master_key: String,
-    library_key: String,
+    binding: String,
     account_incarnation_id: String,
     first: PhotosLibraryRecordVec,
     second: PhotosLibraryRecordVec,
@@ -966,8 +966,8 @@ fn file_metadata_matches_canonical_vector() {
 fn photos_library_matches_canonical_vector() {
     use kutup_crypto::photos_library::{self, PhotosLibraryContextV1};
     let v = load_crypto().photos_library;
-    let key = photos_library::derive_photos_library_key(&b64(&v.master_key)).unwrap();
-    assert_eq!(key.to_vec(), b64(&v.library_key));
+    let key: [u8; 32] = b64(&v.master_key).try_into().unwrap();
+    let first = kutup_crypto::account_record::MasterKeyGeneration::FIRST;
     for record in [&v.first, &v.second] {
         let context = PhotosLibraryContextV1::new(
             &v.account_incarnation_id,
@@ -977,14 +977,16 @@ fn photos_library_matches_canonical_vector() {
         .unwrap();
         let sealed = photos_library::seal_with_nonce(
             record.plaintext.as_bytes(),
-            key.as_slice(),
+            &key,
+            first,
+            &v.binding,
             context,
-            &b64(&record.nonce),
+            &b64(&record.nonce).try_into().unwrap(),
         )
         .unwrap();
         assert_eq!(sealed, b64(&record.envelope));
         assert_eq!(photos_library::inspect(&sealed).unwrap(), context);
-        let opened = photos_library::open(&sealed, key.as_slice(), context).unwrap();
+        let opened = photos_library::open(&sealed, &key, &v.binding, context).unwrap();
         assert_eq!(opened, record.plaintext.as_bytes());
         photos_library::decode_library(&opened).unwrap();
     }

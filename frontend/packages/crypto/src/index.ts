@@ -22,7 +22,6 @@ export {
   chatAttachmentLedgerEnvelopeDigest,
   chatMediaCipherSize,
   decryptChatMediaV1,
-  deriveChatAttachmentLedgerKey,
   encryptChatMediaV1,
   newChatMediaStreamEncryptorV1,
   openChatAttachmentLedger,
@@ -31,6 +30,7 @@ export {
 } from './chatMedia'
 export type {
   ChatAttachmentLedgerContextV1,
+  ChatAttachmentLedgerOwner,
   ChatMediaStreamEncryptorV1,
 } from './chatMedia'
 // The recovery phrase (bip39 and its wordlists) is @kutup/crypto/mnemonic,

@@ -857,6 +857,8 @@ mod tests {
         let envelope = chat_attachment_ledger::seal_with_nonce(
             &ledger_entry().canonical_bytes().unwrap(),
             &[8; 32],
+            kutup_crypto::account_record::MasterKeyGeneration::FIRST,
+            "0b6b5e0c-4c1e-4b8e-9c2d-6a1f3e5d7c9b",
             context,
             &[9; 24],
         )

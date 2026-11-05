@@ -53,12 +53,10 @@ For each attachment the sender generates a fresh random 32-byte
 zeroized after use and appears only inside the encrypted logical message and
 the sender's encrypted linked-device transcript.
 
-`ChatAttachmentLedgerSuiteId` is independent even though its V1 construction
-also uses HKDF-SHA256 and XChaCha20-Poly1305. The client derives a stable
-32-byte account ledger key from the recoverable master key under the locked
-label `kutup/chat-attachment-ledger/account-key/v1`; it never stores that key
-remotely. A Drive root, profile key, Signal session key or group sender key is never
-accepted as a ledger key.
+The attachment ledger's records are account records (`KUTPAR1`, purpose
+`ChatAttachmentLedger`, [`plans/w1-account-record.md`](plans/w1-account-record.md))
+under the recoverable master key, bound to the account's key binding. A Drive
+root, profile key, Signal session key or group sender key never seals one.
 
 ## 3. `ChatMediaObjectV1`
 
@@ -238,23 +236,23 @@ The homeserver's quota rows know only recipient, opaque object/reference IDs,
 namespace, byte counts and lifecycle state. Named per-conversation totals are a
 client projection over `ChatAttachmentLedgerV1` encrypted entities.
 
-Each ledger entity is a `ChatAttachmentLedgerEnvelopeV1`:
+Each revision of a ledger entity is one chained account record
+(`kutup_crypto::chat_attachment_ledger`):
 
 ```text
-magic                    8 bytes  "KUTPCL1\0"
-suite                    u16      ChatAttachmentLedgerSuiteId
-purpose                  u8       1 = attachment entry
-reserved                 u8       must be zero
-account_incarnation_id   32 bytes SHA-256 incarnation identifier
-entity_id                16 bytes random UUID
-revision                 u64      non-zero, big-endian
-previous_envelope_digest 32 bytes SHA-256, all-zero only at revision 1
-nonce                    24 bytes XChaCha nonce
-ciphertext_length        u32      big-endian
-ciphertext               variable AEAD bytes including tag
+header (KUTPAR1)  suite 1, purpose ChatAttachmentLedger (14), master-key
+                  generation, the account's key binding,
+                  object = account_incarnation_id (32) || entity_id (16),
+                  revision (non-zero),
+                  previous = SHA-256 of the entity's previous record
+                  (all-zero only at revision 1),
+                  key commitment, nonce, ciphertext length
+ciphertext        the entry, padded to a 256-byte bucket, plus the tag
 ```
 
-The complete 128-byte fixed header is AEAD associated data and HKDF context.
+The whole header is the AEAD's associated data and the record key's input;
+the server checks it (this account's binding, the URL's entity, the account's
+current incarnation, the revision and predecessor) without opening anything.
 An envelope plaintext is capped at 16 KiB and uses the project canonical
 big-endian length-prefixed encoding, not signed JSON. It binds version,
 conversation kind/reference, logical message UUID, attachment UUID, opaque

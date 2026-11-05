@@ -88,6 +88,8 @@ fn refused_for(purpose: AccountRecordPurpose, envelope: &[u8]) -> Vec<Refused> {
             binding,
             object,
             revision,
+            // A chained purpose's revision-1 record names no predecessor.
+            purpose.policy().chained.then_some(&[0u8; 32]),
             &NONCE,
         )
         .unwrap()
@@ -159,15 +161,51 @@ fn refused_for(purpose: AccountRecordPurpose, envelope: &[u8]) -> Vec<Refused> {
         // The revision changed in the header: well formed, but the AEAD
         // covers it, so an older secret cannot pass as newer.
         let header = account_record::inspect(envelope).unwrap();
-        let last_revision_byte = envelope.len() - header.ciphertext_len as usize - 4 - 24 - 32 - 1;
+        // A chained header carries the previous digest between the revision
+        // and the commitment.
+        let previous = if purpose.policy().chained { 32 } else { 0 };
+        let last_revision_byte =
+            envelope.len() - header.ciphertext_len as usize - 4 - 24 - 32 - previous - 1;
         let mut relabelled = envelope.to_vec();
         relabelled[last_revision_byte] ^= 2;
-        add("revision relabelled", "open", relabelled);
+        // In a chain, revision 1 names no predecessor and every later one
+        // does, so a relabelled first record no longer parses.
+        let step = if purpose.policy().chained {
+            "inspect-or-open"
+        } else {
+            "open"
+        };
+        add("revision relabelled", step, relabelled);
     } else {
         add(
             "a revision where the purpose has none",
             "inspect",
             unchecked(&padded(purpose), BINDING, &object, Some(1)),
+        );
+    }
+    if purpose.policy().chained {
+        // The previous digest changed in the header: the AEAD covers it, so
+        // a record can't be moved to another place in the chain.
+        let header = account_record::inspect(envelope).unwrap();
+        let previous_at = envelope.len() - header.ciphertext_len as usize - 4 - 24 - 32 - 32;
+        let mut moved = envelope.to_vec();
+        moved[previous_at] ^= 1;
+        add("previous digest changed", "inspect-or-open", moved);
+        add(
+            "revision 1 naming a predecessor",
+            "inspect",
+            account_record::seal_unchecked_for_vectors(
+                &padded(purpose),
+                &KEY,
+                purpose,
+                MasterKeyGeneration::FIRST,
+                BINDING,
+                &object,
+                Some(1),
+                Some(&[9u8; 32]),
+                &NONCE,
+            )
+            .unwrap(),
         );
     }
     let mut long = padded(purpose);
@@ -215,6 +253,21 @@ fn refused_for(purpose: AccountRecordPurpose, envelope: &[u8]) -> Vec<Refused> {
 }
 
 fn sealed(purpose: AccountRecordPurpose) -> Vec<u8> {
+    if purpose.policy().chained {
+        // Revision 1 of a chain: it names no predecessor.
+        return account_record::seal_chained(
+            &plaintext_for(purpose),
+            &KEY,
+            purpose,
+            MasterKeyGeneration::FIRST,
+            BINDING,
+            &object_for(purpose),
+            1,
+            &[0u8; 32],
+            Some(&NONCE),
+        )
+        .unwrap();
+    }
     seal_suite(
         AccountRecordSuiteId::V1,
         &plaintext_for(purpose),

@@ -3,7 +3,6 @@ import { isAxiosError } from 'axios'
 import { useCallback, useMemo } from 'react'
 import {
   openPhotosLibrary,
-  photosLibraryKey,
   sealPhotosLibrary,
   type PhotosLibraryMarks,
 } from '@kutup/crypto/photosLibrary'
@@ -33,16 +32,15 @@ interface MarksState {
 const EMPTY: PhotosLibraryMarks = { favourites: [], archived: [], hidden: [] }
 export const marksKey = ['photos-marks'] as const
 
-async function openRecord(record: StoredRecord, key: string, me: DriveIdentity): Promise<MarksState> {
-  const { marks } = await openPhotosLibrary(record.envelope, key, me.incarnationId)
+async function openRecord(record: StoredRecord, me: DriveIdentity): Promise<MarksState> {
+  const { marks } = await openPhotosLibrary(record.envelope, me, me.incarnationId)
   return { revision: record.revision, digest: record.envelopeDigest, marks }
 }
 
 async function loadMarks(me: DriveIdentity): Promise<MarksState> {
-  const key = await photosLibraryKey(me.masterKey)
   try {
     const { data } = await api.get<StoredRecord>('/photos/library')
-    return await openRecord(data, key, me)
+    return await openRecord(data, me)
   } catch (error) {
     if (isAxiosError(error) && error.response?.status === 404) return { revision: 0, digest: undefined, marks: EMPTY }
     throw error
@@ -57,12 +55,11 @@ async function write(
   me: DriveIdentity,
   change: (marks: PhotosLibraryMarks) => PhotosLibraryMarks,
 ): Promise<void> {
-  const key = await photosLibraryKey(me.masterKey)
   const cacheKey = [...marksKey, me.userId]
   let state = queryClient.getQueryData<MarksState>(cacheKey) ?? (await loadMarks(me))
   for (let attempt = 0; attempt < 5; attempt++) {
     const next = change(state.marks)
-    const sealed = await sealPhotosLibrary(next, key, me.incarnationId, state.revision + 1, state.digest)
+    const sealed = await sealPhotosLibrary(next, me, me.incarnationId, state.revision + 1, state.digest)
     try {
       await api.put('/photos/library', { envelope: sealed.envelope })
       // The record's canonical order comes back when it is next read; the sets are what matter.
@@ -72,7 +69,7 @@ async function write(
       if (!(isAxiosError(error) && error.response?.status === 409)) throw error
       const newer = error.response.data as Partial<StoredRecord> | undefined
       state = newer?.envelope && newer.revision && newer.envelopeDigest
-        ? await openRecord(newer as StoredRecord, key, me)
+        ? await openRecord(newer as StoredRecord, me)
         : await loadMarks(me)
       queryClient.setQueryData<MarksState>(cacheKey, state)
     }

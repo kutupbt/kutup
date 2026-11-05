@@ -241,22 +241,24 @@ pub async fn put_library(
     let user_id = trusted_uuid(&user.user_id)?;
     let envelope = photos_library::decode_canonical_b64(&request.envelope)
         .map_err(|_| AppError::bad_request("envelope must be canonical base64"))?;
-    let header = photos_library::inspect(&envelope)
-        .map_err(|_| AppError::bad_request("not a Photos library envelope"))?;
-    let digest = photos_library::envelope_digest(&envelope)
-        .map_err(|_| AppError::bad_request("not a Photos library envelope"))?;
-    let revision = i64::try_from(header.revision)
-        .map_err(|_| AppError::bad_request("library revision is too large"))?;
     let incarnation: String =
         sqlx::query_scalar("SELECT account_incarnation_id FROM users WHERE id = $1")
             .bind(user_id)
             .fetch_one(&state.pool)
             .await?;
-    if hex::encode(header.account_incarnation_id) != incarnation {
-        return Err(AppError::bad_request(
-            "library of another account incarnation",
-        ));
-    }
+    let incarnation_id: [u8; 32] = hex::decode(&incarnation)
+        .ok()
+        .and_then(|bytes| bytes.try_into().ok())
+        .ok_or_else(|| AppError::internal("account incarnation id is not 32 bytes of hex"))?;
+    let binding = crate::revisions::key_binding(&state.pool, user_id).await?;
+    // This account's record (its key binding), for its current incarnation:
+    // another account's, or one from before a reset, is refused.
+    let header = photos_library::validate(&envelope, &binding, &incarnation_id)
+        .map_err(|_| AppError::bad_request("not this account's Photos library record"))?;
+    let digest = photos_library::envelope_digest(&envelope)
+        .map_err(|_| AppError::bad_request("not a Photos library envelope"))?;
+    let revision = i64::try_from(header.revision)
+        .map_err(|_| AppError::bad_request("library revision is too large"))?;
 
     let mut tx = state.pool.begin().await?;
     let current: Option<(i64, String, Vec<u8>)> = sqlx::query_as(

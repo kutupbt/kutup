@@ -464,10 +464,11 @@ export interface CryptoWasmModule {
     attachmentKeyBase64: string,
     expectedAttachmentId: string,
   ): string
-  deriveChatAttachmentLedgerKey(masterKeyBase64: string): string
   sealChatAttachmentLedger(
     plaintextBase64: string,
-    ledgerKeyBase64: string,
+    masterKeyBase64: string,
+    generation: number,
+    binding: string,
     accountIncarnationId: string,
     entityId: string,
     revision: bigint,
@@ -475,7 +476,8 @@ export interface CryptoWasmModule {
   ): string
   openChatAttachmentLedger(
     envelopeBase64: string,
-    ledgerKeyBase64: string,
+    masterKeyBase64: string,
+    binding: string,
     expectedAccountIncarnationId: string,
     expectedEntityId: string,
     expectedRevision: bigint,
@@ -483,7 +485,6 @@ export interface CryptoWasmModule {
   ): string
   chatAttachmentLedgerEnvelopeDigest(envelopeBase64: string): string
   inspectChatAttachmentLedgerEnvelope(envelopeBase64: string): {
-    suite: number
     accountIncarnationId: string
     entityId: string
     revision: string
@@ -643,17 +644,19 @@ export interface CryptoWasmModule {
   driveContentHash(hashKeyBase64: string, contentSha256Base64: string): string
   driveCanonicalName(name: string): string
   yjsSeedClientId(fileId: string, content: Uint8Array): number
-  photosLibraryKey(masterKeyBase64: string): string
   sealPhotosLibrary(
     libraryJson: string,
-    keyBase64: string,
+    masterKeyBase64: string,
+    generation: number,
+    binding: string,
     accountIncarnationId: string,
     revision: number,
     previousDigest: string | undefined,
   ): { envelope: string; digest: string }
   openPhotosLibrary(
     envelopeBase64: string,
-    keyBase64: string,
+    masterKeyBase64: string,
+    binding: string,
     accountIncarnationId: string,
     revision: number,
     previousDigest: string | undefined,
