@@ -4,7 +4,8 @@ import { useTranslation } from 'react-i18next'
 import { Link } from 'react-router-dom'
 import { Button } from '@kutup/ui/components/button'
 import { PageBody, PageHeader } from '@kutup/ui/components/page'
-import { EmptyState, LoadingPanel } from '@kutup/ui/components/states'
+import { EmptyState } from '@kutup/ui/components/states'
+import { GridSkeleton } from '@kutup/ui/components/skeleton'
 import { useLibraryContext } from '../library/libraryContext'
 import { useThumbnail } from '../timeline/useThumbnail'
 import type { Photo } from '../library/library'
@@ -47,7 +48,7 @@ export function AlbumsPage() {
   const create = useCreateAlbum()
   const [naming, setNaming] = useState(false)
   const [inviting, setInviting] = useState(false)
-  if (albums.isPending) return <LoadingPanel label={t('albums.loading')} />
+  if (albums.isPending) return <GridSkeleton label={t('albums.loading')} count={8} className="grid-cols-2 gap-3 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-4" />
   return (
     <PageBody className="px-4 py-6 md:px-8 md:py-8">
       <PageHeader
