@@ -3283,12 +3283,15 @@ fn explicit_contact_state_converges_over_authenticated_linked_device_sync() {
     server.set_sync_active(vec![(1, reg_id(&alice1)), (2, reg_id(&alice2))]);
 
     let mut first = Engine::new_for_development(alice1, server.clone());
-    let local = block_on(first.block_contact(
-        "aci:00000000-0000-4000-8000-81b637d8fcd2@example.test",
-        &[0; 32],
-        "2026-07-16T10:05:00Z",
-        &mut rng,
-    ))
+    let local = block_on(
+        first.block_contact(
+            "aci:00000000-0000-4000-8000-81b637d8fcd2@example.test",
+            &kutup_chat_core::profile_owner_key(&[0; 32], "0b6b5e0c-4c1e-4b8e-9c2d-6a1f3e5d7c9b")
+                .unwrap(),
+            "2026-07-16T10:05:00Z",
+            &mut rng,
+        ),
+    )
     .unwrap();
     assert_eq!(local.state, ContactState::Blocked);
     assert!(!local.sync_pending);
@@ -3334,7 +3337,7 @@ fn pending_profile_key_is_withheld_until_its_ciphertext_is_published() {
         ),
         server.clone(),
     );
-    let wrapping = kutup_chat_core::derive_wrapping_key(&[42; 32], ALICE_BINDING).unwrap();
+    let wrapping = kutup_chat_core::profile_owner_key(&[42; 32], ALICE_BINDING).unwrap();
     assert!(block_on(alice.initialize_profile(&wrapping, "Alice", &mut rng)).is_err());
 
     let first = ChatContent::text_with_id(

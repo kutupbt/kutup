@@ -46,12 +46,13 @@ Devices become links to the account app.
 
 The server already holds everything:
 - the encrypted name, picture and "about" envelopes;
-- the profile key, wrapped under a key derived from the account master key
-  and the account's key binding (`kutup/chat-profile/wrap/v2`,
-  docs/plans/account-identity.md; `PutChatProfileRequest.wrappedKey`). The
-  envelopes, which peers read, name the address; the account's own copy of
-  the key does not depend on it alone. Vectors with the values that must be
-  refused: `crates/kutup-chat-core/tests/vectors/profile-wrap-v2.json`.
+- the profile key's own copy, an account record (purpose
+  `ChatProfileKeyWrap`, docs/plans/w1-account-record.md;
+  `PutChatProfileRequest.wrappedKey`) under the master key, bound to the
+  account's key binding, the profile version and the revision. The
+  envelopes, which peers read, name the account; the account's own copy of
+  the key does not depend on it. Vectors with the values that must be
+  refused: `crates/kutup-chat-core/tests/vectors/profile-key-wrap-v1.json`.
 
 Any signed-in client with the master key can open and re-seal the profile.
 The account app has it. What changes:

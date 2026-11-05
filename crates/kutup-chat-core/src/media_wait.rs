@@ -414,7 +414,7 @@ mod tests {
         block_on(alice.engine.send(&id, &bob.account, &content, &mut rng)).unwrap();
         bob.receive();
         world.refuse_profile_uploads.set(true);
-        let wrapping_key = bob.wrapping_key;
+        let wrapping_key = bob.profile_owner.clone();
         let _ = block_on(bob.engine.update_profile(
             "Bob",
             None,

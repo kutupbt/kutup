@@ -1132,21 +1132,22 @@ import type { AccountProfileInput, AccountProfileView, ProfileLookup } from '@ku
 
 export interface ChatWasmModule extends CallLinkCrypto {
   /**
-   * The account's own profile key, from the master key and the key binding
-   * (`session.envelopeBinding`) its own copy is wrapped to.
+   * The account's own profile key, from the master key (at `generation`)
+   * and the key binding (`session.envelopeBinding`) its own copy is sealed for.
    */
-  accountProfileKey(masterKey: Uint8Array, current: unknown, account: string, binding: string): ProfileLookup
+  accountProfileKey(masterKey: Uint8Array, generation: number, current: unknown, account: string, binding: string): ProfileLookup
   /** Where to fetch a profile, from its key (standard base64). */
   profileLookup(key: string): ProfileLookup
   /** Open someone's fetched profile with their key (standard base64). */
   profileOpenPeer(peer: string, encrypted: unknown, key: string): AccountProfileView
   /** Open the account's profile from the master key and key binding (no chat device). */
-  accountProfileOpen(masterKey: Uint8Array, current: unknown, account: string, binding: string): AccountProfileView
+  accountProfileOpen(masterKey: Uint8Array, generation: number, current: unknown, account: string, binding: string): AccountProfileView
   /**
    * Seal the next profile revision (or the first) as the account app: the
-   * profile names `account`; its own copy of the key binds `binding`.
+   * profile names `account`; its own copy of the key is an account record
+   * for `binding`, under the master key at `generation`.
    */
-  accountProfileSeal(masterKey: Uint8Array, current: unknown | null, update: AccountProfileInput, account: string, binding: string): unknown
+  accountProfileSeal(masterKey: Uint8Array, generation: number, current: unknown | null, update: AccountProfileInput, account: string, binding: string): unknown
   /** Seal small browser-side values for an account scope, one purpose each. */
   sealLocalData(masterKey: Uint8Array, scope: string, purposes: string[], plaintexts: Uint8Array[]): Uint8Array[]
   /** Open what `sealLocalData` sealed; a value that does not open is `null`. */

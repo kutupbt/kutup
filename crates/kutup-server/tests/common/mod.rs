@@ -95,6 +95,29 @@ pub struct User {
     pub account: String,
 }
 
+/// The account's own copy of a profile key for `version` at `revision`, as
+/// its apps seal it: an account record (`ChatProfileKeyWrap`) for its key
+/// binding, which the server checks before it stores the profile.
+#[allow(dead_code)]
+pub fn wrapped_profile_key(
+    master_key: &[u8; 32],
+    binding: &str,
+    version: &str,
+    revision: u64,
+) -> String {
+    use kutup_crypto::account_record::{self, AccountRecordPurpose, MasterKeyGeneration};
+    b64(&account_record::seal_revision(
+        &[0x42; 32],
+        master_key,
+        AccountRecordPurpose::ChatProfileKeyWrap,
+        MasterKeyGeneration::FIRST,
+        binding,
+        &hex::decode(version).unwrap(),
+        revision,
+    )
+    .unwrap())
+}
+
 pub fn register(c: &Client, base: &str) -> User {
     register_with(c, base, true).unwrap_or_else(|status| panic!("register: {status}"))
 }

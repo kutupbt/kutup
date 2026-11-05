@@ -22,7 +22,6 @@ use rand::TryRngCore as _;
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use wasm_bindgen::prelude::*;
-use zeroize::Zeroize as _;
 
 use crate::{
     AccountAuthority, ChatAttachmentDescriptorV1, ChatContent, ChatError, ChatTransport,
@@ -971,15 +970,10 @@ impl ChatTransport for BrowserTransport {
 pub struct WasmChatClient {
     engine: Engine,
     authority: AccountAuthority,
-    profile_wrapping_key: [u8; 32],
+    /// What the account's own copy of its profile key is sealed for.
+    profile_owner: crate::profile::ProfileOwnerKey,
     /// Decoded search shards between queries (`search.rs`).
     search_cache: std::cell::RefCell<crate::search::ShardCache>,
-}
-
-impl Drop for WasmChatClient {
-    fn drop(&mut self) {
-        self.profile_wrapping_key.zeroize();
-    }
 }
 
 impl WasmChatClient {
@@ -1651,8 +1645,8 @@ impl WasmChatClient {
         sealed_sender_enabled: bool,
     ) -> std::result::Result<WasmChatClient, JsValue> {
         let authority = AccountAuthority::derive(master_key).map_err(chat_error)?;
-        let profile_wrapping_key =
-            crate::profile::derive_wrapping_key(master_key, binding).map_err(chat_error)?;
+        let profile_owner =
+            crate::profile::profile_owner_key(master_key, binding).map_err(chat_error)?;
         let mut rng = OsRng.unwrap_err();
         // One identity for every app of the account (docs/plans/drive-identity-pins.md).
         engine
@@ -1684,13 +1678,13 @@ impl WasmChatClient {
             .await
             .map_err(chat_error)?;
         engine
-            .initialize_profile(&profile_wrapping_key, display_name, &mut rng)
+            .initialize_profile(&profile_owner, display_name, &mut rng)
             .await
             .map_err(chat_error)?;
         Ok(Self {
             engine,
             authority,
-            profile_wrapping_key,
+            profile_owner,
             search_cache: Default::default(),
         })
     }
@@ -2964,7 +2958,7 @@ impl WasmChatClient {
             .await;
         let _ = self
             .engine
-            .flush_profile(&self.profile_wrapping_key, &now_rfc3339(), &mut rng)
+            .flush_profile(&self.profile_owner, &now_rfc3339(), &mut rng)
             .await;
         // Group messages still on their way: best effort, retried each pass.
         if let Ok(summaries) = self.engine.flush_group_outbox(&mut rng).await {
@@ -3362,7 +3356,7 @@ impl WasmChatClient {
         let mut rng = OsRng.unwrap_err();
         let user = self.engine.session().user().to_string();
         self.engine
-            .initialize_profile(&self.profile_wrapping_key, &user, &mut rng)
+            .initialize_profile(&self.profile_owner, &user, &mut rng)
             .await
             .map_err(chat_error)?;
         Ok(())
@@ -3388,7 +3382,7 @@ impl WasmChatClient {
                 avatar,
                 avatar_content_type,
                 about,
-                &self.profile_wrapping_key,
+                &self.profile_owner,
                 &now_rfc3339(),
                 &mut rng,
             )
@@ -3424,7 +3418,7 @@ impl WasmChatClient {
         let mut rng = OsRng.unwrap_err();
         let contact = self
             .engine
-            .block_contact(&peer, &self.profile_wrapping_key, &now_rfc3339(), &mut rng)
+            .block_contact(&peer, &self.profile_owner, &now_rfc3339(), &mut rng)
             .await
             .map_err(chat_error)?;
         to_output(&ContactRecordView::from(contact))
@@ -4206,8 +4200,7 @@ pub fn call_link_seal_joined(
     entry: JsValue,
 ) -> std::result::Result<String, JsValue> {
     let master_key = zeroize::Zeroizing::new(master_key);
-    let generation = kutup_crypto::account_record::MasterKeyGeneration::new(generation)
-        .map_err(|error| chat_error(crate::ChatError::Invalid(error.to_string())))?;
+    let generation = master_key_generation(generation)?;
     let entry: crate::call_link::JoinedMeetingV1 = from_transport(entry).map_err(chat_error)?;
     crate::call_link::seal_joined_meeting(&master_key, generation, &binding, &id, &entry)
         .map_err(chat_error)
@@ -4347,9 +4340,19 @@ fn master_key_input(master_key: Vec<u8>) -> std::result::Result<[u8; 32], JsValu
         .map_err(|_| js_error("the account master key is 32 bytes"))
 }
 
+/// The master key's generation a page passes (never 0; `MASTER_KEY_GENERATION`
+/// in `@kutup/crypto` until rotation exists).
+fn master_key_generation(
+    generation: u32,
+) -> std::result::Result<kutup_crypto::account_record::MasterKeyGeneration, JsValue> {
+    kutup_crypto::account_record::MasterKeyGeneration::new(generation)
+        .map_err(|error| chat_error(ChatError::Invalid(error.to_string())))
+}
+
 #[wasm_bindgen(js_name = accountProfileOpen)]
 pub fn account_profile_open(
     master_key: Vec<u8>,
+    generation: u32,
     current: JsValue,
     account: String,
     binding: String,
@@ -4359,6 +4362,7 @@ pub fn account_profile_open(
         from_transport(current).map_err(chat_error)?;
     let profile = crate::profile::open_account_profile(
         &master_key,
+        master_key_generation(generation)?,
         &current,
         &crate::address::parse_account(&account).map_err(chat_error)?,
         &binding,
@@ -4396,6 +4400,7 @@ fn profile_lookup_of(key: &[u8]) -> std::result::Result<ProfileLookup, JsValue> 
 #[wasm_bindgen(js_name = accountProfileKey)]
 pub fn account_profile_key(
     master_key: Vec<u8>,
+    generation: u32,
     current: JsValue,
     account: String,
     binding: String,
@@ -4405,6 +4410,7 @@ pub fn account_profile_key(
         from_transport(current).map_err(chat_error)?;
     let profile = crate::profile::open_account_profile(
         &master_key,
+        master_key_generation(generation)?,
         &current,
         &crate::address::parse_account(&account).map_err(chat_error)?,
         &binding,
@@ -4447,6 +4453,7 @@ pub fn profile_open_peer(
 #[wasm_bindgen(js_name = accountProfileSeal)]
 pub fn account_profile_seal(
     master_key: Vec<u8>,
+    generation: u32,
     current: JsValue,
     update: JsValue,
     account: String,
@@ -4468,6 +4475,7 @@ pub fn account_profile_seal(
     let mut rng = OsRng.unwrap_err();
     let upload = crate::profile::seal_account_profile(
         &master_key,
+        master_key_generation(generation)?,
         current.as_ref(),
         crate::profile::AccountProfileUpdate {
             display_name: update.display_name,

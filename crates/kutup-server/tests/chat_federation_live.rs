@@ -99,6 +99,7 @@ fn publish_direct_delivery_capability(
     token: &str,
     device: &ChatDevice,
     account: &AccountRef,
+    (master_key, binding): (&[u8; 32], &str),
     capability: &[u8; 16],
 ) {
     let version = "71".repeat(32);
@@ -116,12 +117,7 @@ fn publish_direct_delivery_capability(
         ),
         avatar: None,
         about: None,
-        wrapped_key: opaque_profile_envelope(
-            account,
-            &version,
-            ProfileEnvelopePurpose::WrappedProfileKey,
-            48,
-        ),
+        wrapped_key: common::wrapped_profile_key(master_key, binding, &version, 1),
         access_key_verifier: "72".repeat(32),
         delivery_capability_verifier: hex::encode(hash(Suite::V1, capability)),
     };
@@ -151,6 +147,12 @@ fn chat_media_round_trip(
         bob_token,
         &bob_device(1),
         &account_of(c, b, bob_token),
+        (
+            &test_master_key(BOB_EMAIL),
+            common::sign_in(c, b, BOB_USERNAME, PASSWORD)["keyBinding"]
+                .as_str()
+                .expect("a session names its key binding"),
+        ),
         &capability,
     );
     let attachment_id = "50000000-0000-4000-8000-000000000001";

@@ -202,6 +202,10 @@ pub enum AccountRecordPurpose {
     /// row id the client chose (16 bytes), so a record can't be swapped for
     /// another's.
     JoinedMeeting = 15,
+    /// The account's own copy of its Chat profile key: the object is the
+    /// profile version the key derives (32 bytes), the revision the
+    /// profile's, so a copy can't be moved to another profile or revision.
+    ChatProfileKeyWrap = 16,
 }
 
 /// The object of a record whose id the server must not see (a group id, the
@@ -330,11 +334,17 @@ impl AccountRecordPurpose {
                 mutable: false,
                 max_len: crate::chat_call_link::JOINED_PADDED_BYTES,
             },
+            Self::ChatProfileKeyWrap => PurposePolicy {
+                object: ObjectPolicy::Required(32),
+                length: Length::Exact(32),
+                mutable: true,
+                max_len: 32,
+            },
         }
     }
 
     /// Every purpose, for tests and vectors.
-    pub const ALL: [Self; 12] = [
+    pub const ALL: [Self; 13] = [
         Self::PasswordMasterKey,
         Self::RecoveryMasterKey,
         Self::ChatBackupRoot,
@@ -347,6 +357,7 @@ impl AccountRecordPurpose {
         Self::ChatGroupListEntry,
         Self::ChatContactListEntry,
         Self::JoinedMeeting,
+        Self::ChatProfileKeyWrap,
     ];
 }
 
@@ -367,6 +378,7 @@ impl TryFrom<u16> for AccountRecordPurpose {
             11 => Ok(Self::ChatGroupListEntry),
             12 => Ok(Self::ChatContactListEntry),
             15 => Ok(Self::JoinedMeeting),
+            16 => Ok(Self::ChatProfileKeyWrap),
             _ => Err(CryptoError::InvalidInput(format!(
                 "unknown account-record purpose {value}"
             ))),

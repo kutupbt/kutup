@@ -234,6 +234,7 @@ fn envelope_type_from_code(code: i16) -> EnvelopeType {
 fn validate_profile(
     profile: &PutChatProfileRequest,
     expected_account: &AccountRef,
+    binding: &str,
 ) -> AppResult<(Vec<u8>, Vec<u8>)> {
     if profile.suite != ProfileSuiteId::XChaCha20Poly1305V1 || profile.account != *expected_account
     {
@@ -264,11 +265,7 @@ fn validate_profile(
     if let Some(about) = profile.about.as_deref() {
         validate_profile_envelope(about, ProfileEnvelopePurpose::About, profile)?;
     }
-    validate_profile_envelope(
-        &profile.wrapped_key,
-        ProfileEnvelopePurpose::WrappedProfileKey,
-        profile,
-    )?;
+    validate_wrapped_key(profile, binding)?;
     let verifier = hex::decode(&profile.access_key_verifier)
         .map_err(|_| AppError::bad_request("profile access verifier must be SHA-256 hex"))?;
     if verifier.len() != 32 || hex::encode(&verifier) != profile.access_key_verifier {
@@ -286,6 +283,20 @@ fn validate_profile(
         ));
     }
     Ok((verifier, delivery_verifier))
+}
+
+/// The owner's copy of the profile key: an account record of this account,
+/// for this profile version and revision (docs/plans/w1-account-record.md).
+fn validate_wrapped_key(profile: &PutChatProfileRequest, binding: &str) -> AppResult<()> {
+    kutup_crypto::chat_profile::validate_wrapped_profile_key(
+        &profile.wrapped_key,
+        binding,
+        &profile.version,
+        profile.revision,
+    )
+    .map_err(|_| {
+        AppError::bad_request("profile wrappedKey is not this account's copy of this profile key")
+    })
 }
 
 fn validate_profile_envelope(
@@ -1194,7 +1205,8 @@ pub async fn put_profile(
         .execute(&mut *tx)
         .await?;
     let account = crate::account_ids::local(&state.config.chat_server_name, user_id)?;
-    let (verifier, delivery_verifier) = validate_profile(&profile, &account)?;
+    let binding = crate::revisions::key_binding(&mut *tx, user_id).await?;
+    let (verifier, delivery_verifier) = validate_profile(&profile, &account, &binding)?;
     // The account app edits the profile too, without being a chat device
     // (docs/plans/unified-profile.md); any other source must be one.
     let device_exists: Option<i32> =
@@ -1454,6 +1466,10 @@ async fn load_own_profile_in(
         .bind(user_id)
         .fetch_optional(&mut **tx)
         .await?;
+    let binding = match row {
+        Some(_) => crate::revisions::key_binding(&mut **tx, user_id).await?,
+        None => String::new(),
+    };
     row.map(
         |(
             suite,
@@ -1491,11 +1507,7 @@ async fn load_own_profile_in(
             if let Some(about) = profile.about.as_deref() {
                 validate_profile_envelope(about, ProfileEnvelopePurpose::About, &profile)?;
             }
-            validate_profile_envelope(
-                &profile.wrapped_key,
-                ProfileEnvelopePurpose::WrappedProfileKey,
-                &profile,
-            )?;
+            validate_wrapped_key(&profile, &binding)?;
             Ok(profile)
         },
     )
@@ -3523,6 +3535,26 @@ mod tests {
         STANDARD.encode(envelope)
     }
 
+    const PROFILE_TEST_BINDING: &str = "00000000-0000-4000-8000-000000000001";
+
+    /// An owner's copy of a profile key for version `01…01` at `revision`,
+    /// as an account bound by `binding` seals it.
+    fn wrapped_key(binding: &str, revision: u64) -> String {
+        use kutup_crypto::account_record::{self, AccountRecordPurpose, MasterKeyGeneration};
+        STANDARD.encode(
+            account_record::seal_revision(
+                &[7u8; 32],
+                &[5u8; 32],
+                AccountRecordPurpose::ChatProfileKeyWrap,
+                MasterKeyGeneration::FIRST,
+                binding,
+                &[1u8; 32],
+                revision,
+            )
+            .unwrap(),
+        )
+    }
+
     fn valid_profile() -> PutChatProfileRequest {
         PutChatProfileRequest {
             suite: ProfileSuiteId::XChaCha20Poly1305V1,
@@ -3536,10 +3568,7 @@ mod tests {
             ),
             avatar: None,
             about: None,
-            wrapped_key: opaque_profile_envelope(
-                ProfileEnvelopePurpose::WrappedProfileKey,
-                32 + 16,
-            ),
+            wrapped_key: wrapped_key(PROFILE_TEST_BINDING, 1),
             access_key_verifier: "02".repeat(32),
             delivery_capability_verifier: "03".repeat(32),
         }
@@ -3635,7 +3664,7 @@ mod tests {
     fn encrypted_profile_validation_accepts_only_bounded_opaque_fields() {
         let profile = valid_profile();
         assert_eq!(
-            validate_profile(&profile, &profile_test_account()).unwrap(),
+            validate_profile(&profile, &profile_test_account(), PROFILE_TEST_BINDING).unwrap(),
             (vec![2u8; 32], vec![3u8; 32])
         );
 
@@ -3648,18 +3677,47 @@ mod tests {
         decoded_avatar.push(0);
         oversized_avatar.avatar = Some(STANDARD.encode(decoded_avatar));
         assert_eq!(
-            validate_profile(&oversized_avatar, &profile_test_account())
-                .unwrap_err()
-                .status,
+            validate_profile(
+                &oversized_avatar,
+                &profile_test_account(),
+                PROFILE_TEST_BINDING
+            )
+            .unwrap_err()
+            .status,
             StatusCode::BAD_REQUEST
         );
+
+        // The owner's copy: another account's, another revision's, or the
+        // old KUTPPE1 wrap is refused (a
+        // name envelope stands in for it: purpose 3 no longer parses).
+        for wrapped in [
+            wrapped_key("00000000-0000-4000-8000-000000000002", 1),
+            wrapped_key(PROFILE_TEST_BINDING, 2),
+            opaque_profile_envelope(
+                ProfileEnvelopePurpose::DisplayName,
+                kutup_chat_proto::PROFILE_NAME_PADDED_LENGTHS[0] + 16,
+            ),
+        ] {
+            let mut other = profile.clone();
+            other.wrapped_key = wrapped;
+            assert_eq!(
+                validate_profile(&other, &profile_test_account(), PROFILE_TEST_BINDING)
+                    .unwrap_err()
+                    .status,
+                StatusCode::BAD_REQUEST
+            );
+        }
 
         let mut noncanonical_version = profile;
         noncanonical_version.version = "AA".repeat(32);
         assert_eq!(
-            validate_profile(&noncanonical_version, &profile_test_account())
-                .unwrap_err()
-                .status,
+            validate_profile(
+                &noncanonical_version,
+                &profile_test_account(),
+                PROFILE_TEST_BINDING
+            )
+            .unwrap_err()
+            .status,
             StatusCode::BAD_REQUEST
         );
     }

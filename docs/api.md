@@ -4009,7 +4009,8 @@ random profile key wrapped under the account master key for linked-device
 recovery. Returns `404` until a profile has been published.
 The response carries `suite: 1`, canonical `account`, version, revision,
 source device, and canonical `ProfileEnvelopeV1` fields. The owner-only
-response includes the wrapped profile-key envelope; peer responses omit it.
+response includes `wrappedKey`, the account's own copy of the profile key;
+peer responses omit it.
 
 ### PUT /api/chat/profile
 
@@ -4020,6 +4021,10 @@ only ciphertext, a profile-key-derived version, an access-key verifier, a
 master-key-wrapped profile key, revision, and source device. Revision plus
 source-device ordering resolves concurrent linked-device writes; exact replay
 is idempotent and a stale/conflicting revision returns `409`.
+`wrappedKey` is an account record (`KUTPAR1`, purpose `ChatProfileKeyWrap`,
+[`plans/w1-account-record.md`](plans/w1-account-record.md)) whose header
+names the account's key binding, the profile version and the revision: one
+of another account, version or revision is refused (`400`).
 Every encrypted field binds the exact profile suite, the authenticated
 account (server and account id, so a rename leaves it valid), version,
 revision, source device and purpose. Unknown suites,

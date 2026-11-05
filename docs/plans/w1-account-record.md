@@ -174,6 +174,34 @@ there.
   wipe-2 sync that brings #385 and #386, which moved those formats into
   kutup-crypto.
 
+## Slice 3b as built
+
+- `JoinedMeeting` (15): the object is the row's id (16 bytes, the random id
+  the browser sends with the row), the stay is padded to 1024 bytes
+  (`Fixed`), no revision. Every record is 1171 bytes
+  (`kutup_crypto::chat_call_link::JOINED_MEETING_SEALED_BYTES`), and the
+  table requires it (migration `20261027190000`). The server checks each
+  record's header against the account's key binding and the row's id before
+  storing it, so a record can't be moved to another row or another account.
+  The joined-meeting key, its constant AAD and the
+  `kutup/chat/call-link/joined/v1` label are gone.
+- `ChatProfileKeyWrap` (16): the object is the profile version (32 bytes),
+  the revision the profile's, the plaintext the 32-byte key (`Exact(32)`).
+  `kutup_crypto::chat_profile::ProfileOwnerKey` (master key, generation, key
+  binding) replaces the derived wrapping key in chat-core, its engine, both
+  WASM builds and the account app. `KUTPPE1` purpose 3 is retired and never
+  reused; `KUTPPE1` keeps the peer-visible name, avatar and about. The server
+  checks `wrappedKey` (this account, this version, this revision) on every
+  write and again when it loads the stored profile. The `-wrap-v1` and
+  `-wrap-v2` labels are gone; the vectors are
+  `crates/kutup-chat-core/tests/vectors/profile-key-wrap-v1.json`.
+- Chat's devices seal both with `MasterKeyGeneration::FIRST`, as its lists
+  do; pages pass `MASTER_KEY_GENERATION` (joined meetings, and the account
+  profile calls of both WASM builds).
+- The generic WASM account-record path refuses `JoinedMeeting`, as it does
+  every purpose with its own export. `ChatProfileKeyWrap` is refused there
+  too.
+
 ## Decisions (approved 2026-11-04)
 
 (a) **The account head's chain moves into the header** (the server then

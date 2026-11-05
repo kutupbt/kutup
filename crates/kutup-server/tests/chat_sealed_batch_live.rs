@@ -65,12 +65,7 @@ fn recipient(c: &Client, base: &str, seed: u8) -> Recipient {
         ),
         avatar: None,
         about: None,
-        wrapped_key: opaque_profile_envelope(
-            &user.person,
-            &version,
-            ProfileEnvelopePurpose::WrappedProfileKey,
-            48,
-        ),
+        wrapped_key: common::wrapped_profile_key(&user.master_key, &user.binding, &version, 1),
         access_key_verifier: "72".repeat(32),
         delivery_capability_verifier: hex::encode(hash(Suite::V1, capability)),
     };
