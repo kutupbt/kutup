@@ -107,6 +107,9 @@ KUTUP_LIVE_SERVER="http://127.0.0.1:$port" \
 # The Photos library record (docs/plans/photos.md): this account's chain only.
 KUTUP_LIVE_SERVER="http://127.0.0.1:$port" \
   cargo test -p kutup-server --test photos_library_live -- --nocapture
+# The Chat attachment ledger: this account's records, per entity, chained.
+KUTUP_LIVE_SERVER="http://127.0.0.1:$port" \
+  cargo test -p kutup-server --test chat_attachment_ledger_live -- --nocapture
 
 # Drive: names unique in a folder, as Proton Drive's hashes (required on
 # every write, restore under a new name, which names are free), moves, and

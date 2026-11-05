@@ -1258,7 +1258,9 @@ pub async fn put_ledger_entity(
         .fetch_one(&mut *transaction)
         .await?;
     if current.is_none() {
-        sqlx::query(
+        // With no row there was nothing to lock: two first revisions of one
+        // entity both get here, and the second meets the first's key.
+        let inserted = sqlx::query(
             "INSERT INTO chat_attachment_ledger_entities
              (user_id,entity_id,revision,envelope_digest,cursor)
              VALUES ($1,$2,$3,$4,$5)",
@@ -1269,7 +1271,16 @@ pub async fn put_ledger_entity(
         .bind(&digest)
         .bind(cursor)
         .execute(&mut *transaction)
-        .await?;
+        .await;
+        match inserted {
+            Ok(_) => {}
+            Err(sqlx::Error::Database(error)) if error.code().as_deref() == Some("23505") => {
+                return Err(AppError::conflict(
+                    "ledger revision or predecessor mismatch",
+                ));
+            }
+            Err(error) => return Err(error.into()),
+        }
     } else {
         sqlx::query(
             "UPDATE chat_attachment_ledger_entities
@@ -1297,7 +1308,9 @@ pub async fn put_ledger_entity(
     .bind(cursor)
     .execute(&mut *transaction)
     .await?;
-    sqlx::query(
+    // The same operation sent twice at once: the second meets the first's
+    // key (a later retry finds its receipt above).
+    let recorded = sqlx::query(
         "INSERT INTO chat_attachment_ledger_operations
          (user_id,operation_id,entity_id,revision,envelope_digest,cursor)
          VALUES ($1,$2,$3,$4,$5,$6)",
@@ -1309,7 +1322,14 @@ pub async fn put_ledger_entity(
     .bind(&digest)
     .bind(cursor)
     .execute(&mut *transaction)
-    .await?;
+    .await;
+    match recorded {
+        Ok(_) => {}
+        Err(sqlx::Error::Database(error)) if error.code().as_deref() == Some("23505") => {
+            return Err(AppError::conflict("ledger operation replay changed"));
+        }
+        Err(error) => return Err(error.into()),
+    }
     transaction.commit().await?;
     Ok(Json(ChatAttachmentLedgerPutReceiptV1 {
         entity_id: entity_id.to_string(),

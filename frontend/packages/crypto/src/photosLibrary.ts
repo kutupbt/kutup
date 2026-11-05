@@ -48,6 +48,11 @@ export async function sealPhotosLibrary(
   )
 }
 
+/** A record's digest (lowercase hex SHA-256): what its successor names. */
+export async function photosLibraryDigest(envelope: string): Promise<string> {
+  return (await getCryptoWasm()).photosLibraryDigest(envelope)
+}
+
 export async function inspectPhotosLibrary(envelope: string): Promise<PhotosLibraryHeader> {
   return (await getCryptoWasm()).inspectPhotosLibrary(envelope)
 }
