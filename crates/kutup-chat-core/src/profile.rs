@@ -1,8 +1,11 @@
-//! Signal-style encrypted profile primitives.
+//! Signal-style encrypted profiles: chat-core's side.
 //!
 //! Kutup keeps Signal's random 32-byte profile key and fixed display-name
 //! padding buckets, while its purpose-specific suite uses XChaCha20-Poly1305,
-//! canonical account/revision binding and HKDF-separated field keys.
+//! canonical account/revision binding and HKDF-separated field keys. The
+//! format and its crypto are kutup-crypto's (`kutup_crypto::chat_profile`,
+//! docs/plans/chat-crypto-move.md); this module keeps the local and peer
+//! profiles the Chat store holds, and their flows.
 //!
 //! The profile is a statement to peers about an address, so its envelopes
 //! name the address. The account's own copy of the profile key (the wrapped
@@ -13,112 +16,71 @@
 
 use base64::engine::general_purpose::STANDARD;
 use base64::Engine as _;
-use chacha20poly1305::aead::{Aead, KeyInit, Payload};
-use chacha20poly1305::{XChaCha20Poly1305, XNonce};
-use hkdf::Hkdf;
+use kutup_crypto::chat_profile::{self as crypto, ProfileContents, SealedProfile};
+use kutup_crypto::error::CryptoError;
 use rand::{CryptoRng, Rng};
-use sha2::{Digest, Sha256};
-use zeroize::Zeroizing;
 
 use crate::db::{LocalProfile, PeerProfile};
 use crate::error::{ChatError, Result};
+#[cfg(test)]
 use kutup_chat_proto::{
-    capability_hash, decode_profile_envelope, derive_delivery_capability,
-    encode_profile_envelope_header, AccountRef, ChatProfileResponse, ProfileEnvelopeContextV1,
-    ProfileEnvelopePurpose, ProfileSuiteId, PutChatProfileRequest, MAX_PROFILE_ABOUT_CHARS,
-    MAX_PROFILE_AVATAR_BYTES, PROFILE_ABOUT_PADDED_LENGTHS, PROFILE_NAME_PADDED_LENGTHS,
+    capability_hash, decode_profile_envelope, derive_delivery_capability, ProfileEnvelopeContextV1,
+    ProfileEnvelopePurpose, PROFILE_ABOUT_PADDED_LENGTHS, PROFILE_NAME_PADDED_LENGTHS,
 };
+use kutup_chat_proto::{AccountRef, ChatProfileResponse, PutChatProfileRequest};
 
-pub const PROFILE_KEY_BYTES: usize = 32;
-pub const PROFILE_ACCESS_KEY_BYTES: usize = 16;
-pub const MAX_AVATAR_BYTES: usize = MAX_PROFILE_AVATAR_BYTES;
+pub const PROFILE_KEY_BYTES: usize = crypto::PROFILE_KEY_BYTES;
+pub const PROFILE_ACCESS_KEY_BYTES: usize = crypto::PROFILE_ACCESS_KEY_BYTES;
+pub const MAX_AVATAR_BYTES: usize = crypto::MAX_PROFILE_AVATAR_BYTES;
+#[cfg(test)]
 const NONCE_BYTES: usize = 24;
+#[cfg(test)]
 const TAG_BYTES: usize = 16;
+#[cfg(test)]
 const NAME_PADDED_LENGTHS: [usize; 2] = PROFILE_NAME_PADDED_LENGTHS;
-const VERSION_INFO: &[u8] = kutup_crypto::labels::CHAT_PROFILE_VERSION_V1;
-const ACCESS_INFO: &[u8] = kutup_crypto::labels::CHAT_PROFILE_ACCESS_V1;
-const WRAP_INFO: &[u8] = kutup_crypto::labels::CHAT_PROFILE_WRAP_V2;
-const ENVELOPE_KEY_SALT: &[u8] = kutup_crypto::labels::PROFILE_ENVELOPE_KEY_V1;
+
+/// A refusal of what was asked to be sealed.
+fn invalid(error: CryptoError) -> ChatError {
+    ChatError::Invalid(error.to_string())
+}
+
+/// A sealed profile that doesn't open or check out.
+fn content(error: CryptoError) -> ChatError {
+    ChatError::Content(error.to_string())
+}
 
 /// The key the account's own copy of its profile key is wrapped under: from
 /// the master key and the account's key binding (`session.envelopeBinding`).
 pub fn derive_wrapping_key(master_key: &[u8; 32], binding: &str) -> Result<[u8; 32]> {
-    let binding = kutup_crypto::key_binding::check(binding).map_err(|_| {
-        ChatError::Invalid("profile wrapping needs the account's key binding".into())
-    })?;
-    let mut info = Vec::with_capacity(WRAP_INFO.len() + 2 + binding.len());
-    info.extend_from_slice(WRAP_INFO);
-    info.extend_from_slice(&(binding.len() as u16).to_be_bytes());
-    info.extend_from_slice(binding.as_bytes());
-    hkdf_expand(master_key, &info)
+    crypto::derive_wrapping_key(master_key, binding).map_err(invalid)
 }
 
 pub fn profile_version(key: &[u8]) -> Result<String> {
-    let key = profile_key(key)?;
-    Ok(hex::encode(hkdf_expand::<32>(&key, VERSION_INFO)?))
+    crypto::profile_version(key).map_err(invalid)
 }
 
 pub fn profile_access_key(key: &[u8]) -> Result<[u8; PROFILE_ACCESS_KEY_BYTES]> {
-    let key = profile_key(key)?;
-    hkdf_expand(&key, ACCESS_INFO)
-}
-
-pub fn access_key_verifier(access_key: &[u8]) -> String {
-    hex::encode(Sha256::digest(access_key))
+    crypto::profile_access_key(key).map_err(invalid)
 }
 
 pub fn validate_display_name(value: &str) -> Result<String> {
-    let value = value.trim();
-    if value.is_empty() {
-        return Err(ChatError::Invalid(
-            "profile display name is required".into(),
-        ));
-    }
-    if value.chars().count() > 80
-        || value.len() > NAME_PADDED_LENGTHS[1]
-        || value.chars().any(char::is_control)
-    {
-        return Err(ChatError::Invalid(
-            "profile display name must be at most 80 non-control characters".into(),
-        ));
-    }
-    Ok(value.to_string())
+    crypto::validate_display_name(value).map_err(invalid)
 }
 
 /// The "about" line: trimmed, at most 140 characters (Signal's limit), one
 /// line; empty means none.
 pub fn validate_about(value: Option<&str>) -> Result<Option<String>> {
-    let Some(value) = value.map(str::trim).filter(|value| !value.is_empty()) else {
-        return Ok(None);
-    };
-    if value.chars().count() > MAX_PROFILE_ABOUT_CHARS
-        || value.len() > PROFILE_ABOUT_PADDED_LENGTHS[PROFILE_ABOUT_PADDED_LENGTHS.len() - 1]
-        || value.chars().any(char::is_control)
-    {
-        return Err(ChatError::Invalid(
-            "profile about must be one line of at most 140 characters".into(),
-        ));
-    }
-    Ok(Some(value.to_string()))
+    crypto::validate_about(value).map_err(invalid)
 }
 
 pub fn validate_avatar(avatar: Option<&[u8]>, content_type: Option<&str>) -> Result<()> {
-    match (avatar, content_type) {
-        (None, None) => Ok(()),
-        (Some(bytes), Some(kind))
-            if !bytes.is_empty()
-                && bytes.len() <= MAX_AVATAR_BYTES
-                && avatar_type_code(kind).is_some() =>
-        {
-            Ok(())
-        }
-        (Some(_), Some(_)) => Err(ChatError::Invalid(
-            "profile avatar must be a non-empty PNG, JPEG, or WebP under 512 KiB".into(),
-        )),
-        _ => Err(ChatError::Invalid(
-            "profile avatar bytes and content type must be provided together".into(),
-        )),
-    }
+    crypto::validate_avatar(avatar, content_type).map_err(invalid)
+}
+
+fn fresh_key<R: Rng + CryptoRng>(rng: &mut R) -> Vec<u8> {
+    let mut key = vec![0u8; PROFILE_KEY_BYTES];
+    rng.fill(key.as_mut_slice());
+    key
 }
 
 pub fn create_local_profile<R: Rng + CryptoRng>(
@@ -130,11 +92,9 @@ pub fn create_local_profile<R: Rng + CryptoRng>(
     canonical_recipient: &AccountRef,
     rng: &mut R,
 ) -> Result<LocalProfile> {
-    let mut key = vec![0u8; PROFILE_KEY_BYTES];
-    rng.fill(key.as_mut_slice());
     prepare_local_profile(
         LocalProfileDraft {
-            key,
+            key: fresh_key(rng),
             display_name,
             avatar,
             avatar_content_type,
@@ -144,7 +104,6 @@ pub fn create_local_profile<R: Rng + CryptoRng>(
         },
         wrapping_key,
         canonical_recipient,
-        rng,
     )
 }
 
@@ -161,7 +120,7 @@ pub(crate) struct LocalProfileUpdate<'a> {
 pub(crate) fn update_local_profile<R: Rng + CryptoRng>(
     current: &LocalProfile,
     update: LocalProfileUpdate<'_>,
-    rng: &mut R,
+    _rng: &mut R,
 ) -> Result<LocalProfile> {
     let LocalProfileUpdate {
         display_name,
@@ -188,7 +147,6 @@ pub(crate) fn update_local_profile<R: Rng + CryptoRng>(
         },
         wrapping_key,
         canonical_recipient,
-        rng,
     )
 }
 
@@ -199,15 +157,13 @@ pub fn rotate_local_profile<R: Rng + CryptoRng>(
     canonical_recipient: &AccountRef,
     rng: &mut R,
 ) -> Result<LocalProfile> {
-    let mut key = vec![0u8; PROFILE_KEY_BYTES];
-    rng.fill(key.as_mut_slice());
     let revision = current
         .revision
         .checked_add(1)
         .ok_or_else(|| ChatError::Invalid("profile revision is exhausted".into()))?;
     prepare_local_profile(
         LocalProfileDraft {
-            key,
+            key: fresh_key(rng),
             display_name: &current.display_name,
             avatar: current.avatar.clone(),
             avatar_content_type: current.avatar_content_type.clone(),
@@ -217,7 +173,6 @@ pub fn rotate_local_profile<R: Rng + CryptoRng>(
         },
         wrapping_key,
         canonical_recipient,
-        rng,
     )
 }
 
@@ -267,10 +222,9 @@ pub struct AccountProfileUpdate {
     pub about: Option<String>,
 }
 
-/// Seal the account's next profile revision from the account app: over the
-/// current one (same key, one revision later), or the first one with a fresh
-/// key. Only the master key and the key binding are needed; no chat device
-/// takes part. Returns the exact upload.
+/// Seal the account's next profile revision from the account app
+/// (`kutup_crypto::chat_profile::seal_account_profile`). Returns the exact
+/// upload.
 #[cfg(any(test, all(feature = "wasm", target_arch = "wasm32")))]
 pub fn seal_account_profile<R: Rng + CryptoRng>(
     master_key: &[u8; 32],
@@ -278,42 +232,24 @@ pub fn seal_account_profile<R: Rng + CryptoRng>(
     update: AccountProfileUpdate,
     canonical_account: &AccountRef,
     binding: &str,
-    rng: &mut R,
+    _rng: &mut R,
 ) -> Result<PutChatProfileRequest> {
-    let wrapping_key = derive_wrapping_key(master_key, binding)?;
-    let about = validate_about(update.about.as_deref())?;
-    let (key, revision) = match current {
-        Some(current) => {
-            let profile = open_own_profile(current, &wrapping_key, canonical_account)?;
-            let revision = profile
-                .revision
-                .checked_add(1)
-                .ok_or_else(|| ChatError::Invalid("profile revision is exhausted".into()))?;
-            (profile.key, revision)
-        }
-        None => {
-            let mut key = vec![0u8; PROFILE_KEY_BYTES];
-            rng.fill(key.as_mut_slice());
-            (key, 1)
-        }
+    let current = current.cloned().map(SealedProfile::from);
+    let contents = ProfileContents {
+        display_name: update.display_name,
+        avatar: update.avatar,
+        avatar_content_type: update.avatar_content_type,
+        about: update.about,
     };
-    let profile = prepare_local_profile(
-        LocalProfileDraft {
-            key,
-            display_name: &update.display_name,
-            avatar: update.avatar,
-            avatar_content_type: update.avatar_content_type,
-            about,
-            revision,
-            source_device_id: kutup_chat_proto::ACCOUNT_PROFILE_SOURCE,
-        },
-        &wrapping_key,
+    crypto::seal_account_profile(
+        master_key,
+        current.as_ref(),
+        &contents,
         canonical_account,
-        rng,
-    )?;
-    profile
-        .pending_upload
-        .ok_or_else(|| ChatError::Db("sealed profile has no upload".into()))
+        binding,
+    )
+    .map(PutChatProfileRequest::from)
+    .map_err(invalid)
 }
 
 /// The account's own profile as the account app shows it.
@@ -336,51 +272,20 @@ pub fn open_own_profile(
     wrapping_key: &[u8; 32],
     canonical_recipient: &AccountRef,
 ) -> Result<LocalProfile> {
-    validate_profile_request_context(encrypted, canonical_recipient)?;
-    let wrapped_context = profile_context(ProfileEnvelopePurpose::WrappedProfileKey, encrypted)?;
-    let key = decrypt_b64(&encrypted.wrapped_key, wrapping_key, &wrapped_context)?;
-    profile_key(&key)?;
-    if profile_version(&key)? != encrypted.version {
-        return Err(ChatError::Content(
-            "wrapped profile key does not match profile version".into(),
-        ));
-    }
-    let access = profile_access_key(&key)?;
-    if access_key_verifier(&access) != encrypted.access_key_verifier {
-        return Err(ChatError::Content(
-            "wrapped profile key does not match access verifier".into(),
-        ));
-    }
-    let delivery = derive_delivery_capability(
-        key.as_slice()
-            .try_into()
-            .map_err(|_| ChatError::Content("wrapped profile key has an invalid length".into()))?,
+    let opened = crypto::open_own_profile(
+        &SealedProfile::from(encrypted.clone()),
+        wrapping_key,
         canonical_recipient,
     )
-    .map_err(ChatError::Content)?;
-    if hex::encode(capability_hash(&delivery)) != encrypted.delivery_capability_verifier {
-        return Err(ChatError::Content(
-            "wrapped profile key does not match delivery capability verifier".into(),
-        ));
-    }
-    let (display_name, avatar, avatar_content_type, about) = decrypt_profile_items(
-        &encrypted.name,
-        encrypted.avatar.as_deref(),
-        encrypted.about.as_deref(),
-        &key,
-        &encrypted.account,
-        &encrypted.version,
-        encrypted.revision,
-        encrypted.source_device_id,
-    )?;
+    .map_err(content)?;
     Ok(LocalProfile {
-        key,
-        display_name,
-        avatar,
-        avatar_content_type,
-        about,
-        revision: encrypted.revision,
-        source_device_id: encrypted.source_device_id,
+        key: opened.key.to_vec(),
+        display_name: opened.contents.display_name,
+        avatar: opened.contents.avatar,
+        avatar_content_type: opened.contents.avatar_content_type,
+        about: opened.contents.about,
+        revision: opened.revision,
+        source_device_id: opened.source_device_id,
         pending_upload: None,
         broadcast_pending: false,
     })
@@ -392,42 +297,23 @@ pub fn open_peer_profile(
     key: &[u8],
 ) -> Result<PeerProfile> {
     let peer = peer.into();
-    if encrypted.suite != ProfileSuiteId::XChaCha20Poly1305V1
-        || encrypted.account != crate::address::parse_account(&peer)?
-    {
-        return Err(ChatError::Content(
-            "encrypted peer profile context does not match the requested account".into(),
-        ));
-    }
-    if profile_version(key)? != encrypted.version {
-        return Err(ChatError::Content(
-            "peer profile key does not match profile version".into(),
-        ));
-    }
-    let (display_name, avatar, avatar_content_type, about) = decrypt_profile_items(
-        &encrypted.name,
-        encrypted.avatar.as_deref(),
-        encrypted.about.as_deref(),
-        key,
-        &encrypted.account,
-        &encrypted.version,
-        encrypted.revision,
-        encrypted.source_device_id,
-    )?;
+    let account = crate::address::parse_account(&peer)?;
+    let opened = crypto::open_peer_profile(&SealedProfile::from(encrypted.clone()), &account, key)
+        .map_err(content)?;
     Ok(PeerProfile {
         peer,
         key: key.to_vec(),
-        display_name: Some(display_name),
-        avatar,
-        avatar_content_type,
-        about,
-        revision: encrypted.revision,
-        source_device_id: encrypted.source_device_id,
+        display_name: Some(opened.contents.display_name),
+        avatar: opened.contents.avatar,
+        avatar_content_type: opened.contents.avatar_content_type,
+        about: opened.contents.about,
+        revision: opened.revision,
+        source_device_id: opened.source_device_id,
     })
 }
 
 pub fn profile_key_base64(profile: &LocalProfile) -> Result<String> {
-    profile_key(&profile.key)?;
+    crypto::profile_key(&profile.key).map_err(invalid)?;
     Ok(STANDARD.encode(&profile.key))
 }
 
@@ -435,7 +321,7 @@ pub fn decode_shared_profile_key(encoded: &str) -> Result<Vec<u8>> {
     let key = STANDARD
         .decode(encoded)
         .map_err(|_| ChatError::Content("profileKey must be standard base64".into()))?;
-    profile_key(&key)?;
+    crypto::profile_key(&key).map_err(content)?;
     Ok(key)
 }
 
@@ -449,425 +335,83 @@ struct LocalProfileDraft<'a> {
     source_device_id: u32,
 }
 
-fn prepare_local_profile<R: Rng + CryptoRng>(
+/// Seals a draft (`kutup_crypto::chat_profile::seal_profile`, which checks
+/// its contents) and keeps it as the local profile, its upload pending.
+fn prepare_local_profile(
     draft: LocalProfileDraft<'_>,
     wrapping_key: &[u8; 32],
     canonical_recipient: &AccountRef,
-    rng: &mut R,
 ) -> Result<LocalProfile> {
-    let LocalProfileDraft {
-        key,
-        display_name,
-        avatar,
-        avatar_content_type,
-        about,
-        revision,
-        source_device_id,
-    } = draft;
-    profile_key(&key)?;
-    let display_name = validate_display_name(display_name)?;
-    validate_avatar(avatar.as_deref(), avatar_content_type.as_deref())?;
-    let about = validate_about(about.as_deref())?;
-    let version = profile_version(&key)?;
-    let name = encrypt_name(
-        &display_name,
-        &key,
-        canonical_recipient,
-        &version,
-        revision,
-        source_device_id,
-        rng,
+    let key = crypto::profile_key(&draft.key).map_err(invalid)?;
+    let display_name = validate_display_name(draft.display_name)?;
+    validate_avatar(
+        draft.avatar.as_deref(),
+        draft.avatar_content_type.as_deref(),
     )?;
-    let avatar_ciphertext = encrypt_avatar(
-        avatar.as_deref(),
-        avatar_content_type.as_deref(),
-        &key,
-        canonical_recipient,
-        &version,
-        revision,
-        source_device_id,
-        rng,
-    )?;
-    let about_ciphertext = about
-        .as_deref()
-        .map(|about| {
-            encrypt_padded(
-                about,
-                &PROFILE_ABOUT_PADDED_LENGTHS,
-                ProfileEnvelopePurpose::About,
-                &key,
-                canonical_recipient,
-                &version,
-                revision,
-                source_device_id,
-                rng,
-            )
-        })
-        .transpose()?;
-    let wrapped_context = ProfileEnvelopeContextV1::new(
-        ProfileEnvelopePurpose::WrappedProfileKey,
-        canonical_recipient,
-        &version,
-        revision,
-        source_device_id,
-    )
-    .map_err(ChatError::Invalid)?;
-    let wrapped_key = encrypt_b64(&key, wrapping_key, &wrapped_context, rng)?;
-    let access_key = profile_access_key(&key)?;
-    let delivery_capability = derive_delivery_capability(
-        key.as_slice()
-            .try_into()
-            .map_err(|_| ChatError::Invalid("profile key has an invalid length".into()))?,
-        canonical_recipient,
-    )
-    .map_err(ChatError::Invalid)?;
-    let pending_upload = PutChatProfileRequest {
-        suite: ProfileSuiteId::XChaCha20Poly1305V1,
-        account: canonical_recipient.clone(),
-        version,
-        revision,
-        source_device_id,
-        name,
-        avatar: avatar_ciphertext,
-        about: about_ciphertext,
-        wrapped_key,
-        access_key_verifier: access_key_verifier(&access_key),
-        delivery_capability_verifier: hex::encode(capability_hash(&delivery_capability)),
+    let about = validate_about(draft.about.as_deref())?;
+    let contents = ProfileContents {
+        display_name: display_name.clone(),
+        avatar: draft.avatar.clone(),
+        avatar_content_type: draft.avatar_content_type.clone(),
+        about: about.clone(),
     };
+    let sealed = crypto::seal_profile(
+        &key,
+        &contents,
+        draft.revision,
+        draft.source_device_id,
+        wrapping_key,
+        canonical_recipient,
+    )
+    .map_err(invalid)?;
     Ok(LocalProfile {
-        key,
+        key: draft.key,
         display_name,
-        avatar,
-        avatar_content_type,
+        avatar: draft.avatar,
+        avatar_content_type: draft.avatar_content_type,
         about,
-        revision,
-        source_device_id,
-        pending_upload: Some(pending_upload),
+        revision: draft.revision,
+        source_device_id: draft.source_device_id,
+        pending_upload: Some(PutChatProfileRequest::from(sealed)),
         broadcast_pending: true,
     })
 }
 
-#[allow(clippy::too_many_arguments)]
-fn encrypt_name<R: Rng + CryptoRng>(
-    value: &str,
-    key: &[u8],
-    account: &AccountRef,
-    version: &str,
-    revision: u64,
-    source_device_id: u32,
-    rng: &mut R,
-) -> Result<String> {
-    encrypt_padded(
-        value,
-        &NAME_PADDED_LENGTHS,
-        ProfileEnvelopePurpose::DisplayName,
-        key,
-        account,
-        version,
-        revision,
-        source_device_id,
-        rng,
-    )
-}
-
-/// Text zero-padded to the smallest bucket that fits, so the ciphertext
-/// length tells the server only the bucket.
-#[allow(clippy::too_many_arguments)]
-fn encrypt_padded<R: Rng + CryptoRng>(
-    value: &str,
-    buckets: &[usize],
-    purpose: ProfileEnvelopePurpose,
-    key: &[u8],
-    account: &AccountRef,
-    version: &str,
-    revision: u64,
-    source_device_id: u32,
-    rng: &mut R,
-) -> Result<String> {
-    let bytes = value.as_bytes();
-    let padded_len = buckets
-        .iter()
-        .copied()
-        .find(|length| bytes.len() <= *length)
-        .ok_or_else(|| ChatError::Invalid("profile text is too large".into()))?;
-    let mut padded = vec![0u8; padded_len];
-    padded[..bytes.len()].copy_from_slice(bytes);
-    let context =
-        ProfileEnvelopeContextV1::new(purpose, account, version, revision, source_device_id)
-            .map_err(ChatError::Invalid)?;
-    encrypt_b64(&padded, &profile_key(key)?, &context, rng)
-}
-
-/// The text of a padded envelope (see [`encrypt_padded`]).
-fn decrypt_padded(
-    encrypted: &str,
-    buckets: &[usize],
-    key: &[u8; 32],
-    context: &ProfileEnvelopeContextV1,
-) -> Result<String> {
-    let padded = decrypt_b64(encrypted, key, context)?;
-    if !buckets.contains(&padded.len()) {
-        return Err(ChatError::Content(
-            "encrypted profile text has an invalid padded length".into(),
-        ));
-    }
-    let end = padded
-        .iter()
-        .position(|byte| *byte == 0)
-        .unwrap_or(padded.len());
-    if padded[end..].iter().any(|byte| *byte != 0) {
-        return Err(ChatError::Content("profile text padding is invalid".into()));
-    }
-    std::str::from_utf8(&padded[..end])
-        .map(str::to_owned)
-        .map_err(|_| ChatError::Content("profile text is not UTF-8".into()))
-}
-
-#[allow(clippy::too_many_arguments)]
-fn encrypt_avatar<R: Rng + CryptoRng>(
-    avatar: Option<&[u8]>,
-    content_type: Option<&str>,
-    key: &[u8],
-    account: &AccountRef,
-    version: &str,
-    revision: u64,
-    source_device_id: u32,
-    rng: &mut R,
-) -> Result<Option<String>> {
-    let (Some(avatar), Some(content_type)) = (avatar, content_type) else {
-        return Ok(None);
-    };
-    validate_avatar(Some(avatar), Some(content_type))?;
-    let mut plaintext = Vec::with_capacity(avatar.len() + 1);
-    plaintext.push(avatar_type_code(content_type).expect("validated avatar type"));
-    plaintext.extend_from_slice(avatar);
-    let context = ProfileEnvelopeContextV1::new(
-        ProfileEnvelopePurpose::Avatar,
-        account,
-        version,
-        revision,
-        source_device_id,
-    )
-    .map_err(ChatError::Invalid)?;
-    encrypt_b64(&plaintext, &profile_key(key)?, &context, rng).map(Some)
-}
-
-/// A profile's opened items: display name, avatar, avatar content type and
-/// about text.
-type ProfileItems = (String, Option<Vec<u8>>, Option<String>, Option<String>);
-
-#[allow(clippy::too_many_arguments)]
-fn decrypt_profile_items(
-    encrypted_name: &str,
-    encrypted_avatar: Option<&str>,
-    encrypted_about: Option<&str>,
-    key: &[u8],
-    account: &AccountRef,
-    version: &str,
-    revision: u64,
-    source_device_id: u32,
-) -> Result<ProfileItems> {
-    let key = profile_key(key)?;
-    let name_context = ProfileEnvelopeContextV1::new(
-        ProfileEnvelopePurpose::DisplayName,
-        account,
-        version,
-        revision,
-        source_device_id,
-    )
-    .map_err(ChatError::Content)?;
-    let padded = decrypt_b64(encrypted_name, &key, &name_context)?;
-    if !NAME_PADDED_LENGTHS.contains(&padded.len()) {
-        return Err(ChatError::Content(
-            "encrypted profile name has an invalid padded length".into(),
-        ));
-    }
-    let end = padded
-        .iter()
-        .position(|byte| *byte == 0)
-        .unwrap_or(padded.len());
-    if padded[end..].iter().any(|byte| *byte != 0) {
-        return Err(ChatError::Content("profile name padding is invalid".into()));
-    }
-    let display_name = std::str::from_utf8(&padded[..end])
-        .map_err(|_| ChatError::Content("profile display name is not UTF-8".into()))?;
-    let display_name = validate_display_name(display_name)?;
-
-    let (avatar, avatar_content_type) = match encrypted_avatar {
-        None => (None, None),
-        Some(value) => {
-            let avatar_context = ProfileEnvelopeContextV1::new(
-                ProfileEnvelopePurpose::Avatar,
-                account,
-                version,
-                revision,
-                source_device_id,
-            )
-            .map_err(ChatError::Content)?;
-            let plaintext = decrypt_b64(value, &key, &avatar_context)?;
-            let (&kind, bytes) = plaintext
-                .split_first()
-                .ok_or_else(|| ChatError::Content("encrypted profile avatar is empty".into()))?;
-            if bytes.is_empty() || bytes.len() > MAX_AVATAR_BYTES {
-                return Err(ChatError::Content(
-                    "encrypted profile avatar has an invalid size".into(),
-                ));
-            }
-            let content_type = avatar_type_name(kind)
-                .ok_or_else(|| ChatError::Content("profile avatar type is invalid".into()))?;
-            (Some(bytes.to_vec()), Some(content_type.to_string()))
-        }
-    };
-    let about = match encrypted_about {
-        None => None,
-        Some(value) => {
-            let context = ProfileEnvelopeContextV1::new(
-                ProfileEnvelopePurpose::About,
-                account,
-                version,
-                revision,
-                source_device_id,
-            )
-            .map_err(ChatError::Content)?;
-            let text = decrypt_padded(value, &PROFILE_ABOUT_PADDED_LENGTHS, &key, &context)?;
-            validate_about(Some(&text))
-                .map_err(|_| ChatError::Content("encrypted profile about is invalid".into()))?
-        }
-    };
-    Ok((display_name, avatar, avatar_content_type, about))
-}
-
-fn encrypt_b64<R: Rng + CryptoRng>(
-    plaintext: &[u8],
-    root_key: &[u8; 32],
-    context: &ProfileEnvelopeContextV1,
-    rng: &mut R,
-) -> Result<String> {
-    let mut nonce = [0u8; NONCE_BYTES];
-    rng.fill(&mut nonce);
-    encrypt_b64_with_nonce(plaintext, root_key, context, &nonce)
-}
-
+/// An item sealed under a given nonce (the tests' vectors).
+#[cfg(test)]
 fn encrypt_b64_with_nonce(
     plaintext: &[u8],
     root_key: &[u8; 32],
     context: &ProfileEnvelopeContextV1,
     nonce: &[u8; NONCE_BYTES],
 ) -> Result<String> {
-    let ciphertext_len = u32::try_from(plaintext.len() + TAG_BYTES)
-        .map_err(|_| ChatError::Invalid("encrypted profile item is too large".into()))?;
-    let header = encode_profile_envelope_header(context, nonce, ciphertext_len)
-        .map_err(ChatError::Invalid)?;
-    let key = profile_envelope_key(root_key, context)?;
-    let cipher = XChaCha20Poly1305::new_from_slice(key.as_slice())
-        .map_err(|_| ChatError::Protocol("invalid profile envelope key".into()))?;
-    let ciphertext = cipher
-        .encrypt(
-            XNonce::from_slice(nonce),
-            Payload {
-                msg: plaintext,
-                aad: &header,
-            },
-        )
-        .map_err(|_| ChatError::Protocol("profile encryption failed".into()))?;
-    let mut encoded = header;
-    encoded.extend_from_slice(&ciphertext);
-    Ok(STANDARD.encode(encoded))
+    crypto::seal_item_with_nonce(plaintext, root_key, context, nonce).map_err(invalid)
 }
 
+#[cfg(test)]
 fn decrypt_b64(
     encoded: &str,
     root_key: &[u8; 32],
     expected: &ProfileEnvelopeContextV1,
 ) -> Result<Vec<u8>> {
-    let parsed = decode_profile_envelope(encoded).map_err(ChatError::Content)?;
-    if parsed.context != *expected {
-        return Err(ChatError::Content(
-            "encrypted profile envelope context does not match".into(),
-        ));
-    }
-    let key = profile_envelope_key(root_key, expected)?;
-    let cipher = XChaCha20Poly1305::new_from_slice(key.as_slice())
-        .map_err(|_| ChatError::Protocol("invalid profile envelope key".into()))?;
-    cipher
-        .decrypt(
-            XNonce::from_slice(&parsed.nonce),
-            Payload {
-                msg: &parsed.ciphertext,
-                aad: &parsed.aad,
-            },
-        )
-        .map_err(|_| ChatError::Protocol("profile decryption failed".into()))
+    crypto::open_item(encoded, root_key, expected)
+        .map(|plaintext| plaintext.to_vec())
+        .map_err(content)
 }
 
-fn profile_envelope_key(
-    root_key: &[u8; 32],
-    context: &ProfileEnvelopeContextV1,
-) -> Result<Zeroizing<[u8; 32]>> {
-    let hkdf = Hkdf::<Sha256>::new(Some(ENVELOPE_KEY_SALT), root_key);
-    let mut output = Zeroizing::new([0u8; 32]);
-    hkdf.expand(&context.key_derivation_info(), output.as_mut_slice())
-        .map_err(|_| ChatError::Protocol("profile envelope key derivation failed".into()))?;
-    Ok(output)
-}
-
-fn profile_context(
-    purpose: ProfileEnvelopePurpose,
-    profile: &PutChatProfileRequest,
-) -> Result<ProfileEnvelopeContextV1> {
-    ProfileEnvelopeContextV1::new(
-        purpose,
-        &profile.account,
-        &profile.version,
-        profile.revision,
-        profile.source_device_id,
-    )
-    .map_err(ChatError::Content)
-}
-
-fn validate_profile_request_context(
-    profile: &PutChatProfileRequest,
-    canonical_recipient: &AccountRef,
-) -> Result<()> {
-    if profile.suite != ProfileSuiteId::XChaCha20Poly1305V1
-        || profile.account != *canonical_recipient
-    {
-        return Err(ChatError::Content(
-            "encrypted profile suite or account does not match".into(),
-        ));
-    }
-    Ok(())
-}
-
-fn profile_key(key: &[u8]) -> Result<[u8; PROFILE_KEY_BYTES]> {
-    key.try_into()
-        .map_err(|_| ChatError::Invalid("profile key must be exactly 32 bytes".into()))
-}
-
+/// HKDF-SHA256 salted with the profile family's label: the retired `-wrap-v1`
+/// key, in the tests only.
+#[cfg(test)]
 fn hkdf_expand<const N: usize>(key: &[u8], info: &[u8]) -> Result<[u8; N]> {
-    let hkdf = Hkdf::<Sha256>::new(Some(kutup_crypto::labels::CHAT_PROFILE_V1), key);
     let mut output = [0u8; N];
-    hkdf.expand(info, &mut output)
-        .map_err(|_| ChatError::Protocol("profile key derivation failed".into()))?;
+    kutup_crypto::primitives::Kdf::new(
+        kutup_crypto::primitives::Suite::V1,
+        kutup_crypto::labels::CHAT_PROFILE_V1,
+        key,
+    )
+    .expand(info, &mut output)
+    .map_err(invalid)?;
     Ok(output)
-}
-
-fn avatar_type_code(value: &str) -> Option<u8> {
-    match value {
-        "image/png" => Some(1),
-        "image/jpeg" => Some(2),
-        "image/webp" => Some(3),
-        _ => None,
-    }
-}
-
-fn avatar_type_name(value: u8) -> Option<&'static str> {
-    match value {
-        1 => Some("image/png"),
-        2 => Some("image/jpeg"),
-        3 => Some("image/webp"),
-        _ => None,
-    }
 }
 
 #[cfg(test)]
@@ -880,6 +424,125 @@ mod tests {
     static RECIPIENT: std::sync::LazyLock<AccountRef> =
         std::sync::LazyLock::new(|| RECIPIENT_KEY.parse().unwrap());
     const BINDING: &str = "0b6b5e0c-4c1e-4b8e-9c2d-6a1f3e5d7c9b";
+
+    /// The profile formats' canonical vectors
+    /// (`crates/kutup-crypto/tests/vectors/profile-v1.json`), made from this
+    /// code before it moves into kutup-crypto (docs/plans/chat-crypto-move.md):
+    /// derived keys and verifiers, each item sealed under a fixed nonce, and a
+    /// whole upload with what it opens to. `KUTUP_WRITE_PROFILE_VECTORS=1`
+    /// writes the file; otherwise this code must reproduce it byte for byte.
+    #[test]
+    fn profile_formats_match_the_canonical_vectors() {
+        use serde_json::json;
+        let path = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../kutup-crypto/tests/vectors/profile-v1.json"
+        );
+        let master_key = [0x09u8; 32];
+        let profile_key = [0x51u8; 32];
+        let wrapping = derive_wrapping_key(&master_key, BINDING).unwrap();
+        let version = profile_version(&profile_key).unwrap();
+        let access = profile_access_key(&profile_key).unwrap();
+        let delivery = derive_delivery_capability(&profile_key, &RECIPIENT).unwrap();
+        let item = |purpose: ProfileEnvelopePurpose,
+                    root: &[u8; 32],
+                    plaintext: &[u8],
+                    nonce: u8| {
+            let context =
+                ProfileEnvelopeContextV1::new(purpose, &RECIPIENT, &version, 4, 3).unwrap();
+            json!({
+                "purpose": format!("{purpose:?}"),
+                "rootKey": STANDARD.encode(root),
+                "revision": 4,
+                "sourceDeviceId": 3,
+                "nonce": STANDARD.encode([nonce; NONCE_BYTES]),
+                "plaintext": STANDARD.encode(plaintext),
+                "envelope": encrypt_b64_with_nonce(plaintext, root, &context, &[nonce; NONCE_BYTES]).unwrap(),
+            })
+        };
+        let mut name = vec![0u8; NAME_PADDED_LENGTHS[0]];
+        name[..13].copy_from_slice(b"Alice Example");
+        let mut about = vec![0u8; PROFILE_ABOUT_PADDED_LENGTHS[0]];
+        about[..9].copy_from_slice(b"Hello, Kt");
+        let items = vec![
+            item(
+                ProfileEnvelopePurpose::DisplayName,
+                &profile_key,
+                &name,
+                0x61,
+            ),
+            item(
+                ProfileEnvelopePurpose::Avatar,
+                &profile_key,
+                &[1, 0x89, 0x50, 0x4e, 0x47],
+                0x62,
+            ),
+            item(ProfileEnvelopePurpose::About, &profile_key, &about, 0x63),
+            item(
+                ProfileEnvelopePurpose::WrappedProfileKey,
+                &wrapping,
+                &profile_key,
+                0x64,
+            ),
+        ];
+        // A whole upload as today's code makes it (its random parts as they
+        // fell), and what it opens to.
+        let mut rng = StdRng::seed_from_u64(11);
+        let made = create_local_profile(
+            "Alice Example",
+            Some(vec![0x89, 0x50, 0x4e, 0x47]),
+            Some("image/png".into()),
+            3,
+            &wrapping,
+            &RECIPIENT,
+            &mut rng,
+        )
+        .unwrap();
+        let upload = made.pending_upload.clone().unwrap();
+        let opened = open_own_profile(&upload, &wrapping, &RECIPIENT).unwrap();
+        let vectors = json!({
+            "masterKey": STANDARD.encode(master_key),
+            "binding": BINDING,
+            "account": RECIPIENT_KEY,
+            "wrappingKey": STANDARD.encode(wrapping),
+            "profileKey": STANDARD.encode(profile_key),
+            "version": version,
+            "accessKey": STANDARD.encode(access),
+            "accessKeyVerifier": crypto::access_key_verifier(&access),
+            "deliveryCapabilityVerifier": hex::encode(capability_hash(&delivery)),
+            "items": items,
+            "upload": {
+                "request": serde_json::to_value(&upload).unwrap(),
+                "profileKey": STANDARD.encode(&opened.key),
+                "displayName": opened.display_name,
+                "avatar": STANDARD.encode(opened.avatar.as_deref().unwrap()),
+                "avatarContentType": opened.avatar_content_type,
+                "revision": opened.revision,
+            },
+        });
+        let text = serde_json::to_string_pretty(&vectors).unwrap() + "\n";
+        if std::env::var_os("KUTUP_WRITE_PROFILE_VECTORS").is_some() {
+            std::fs::write(path, &text).unwrap();
+        }
+        let kept: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
+        let mut kept_without_upload = kept.clone();
+        let mut made_without_upload = vectors.clone();
+        // The upload's random parts are today's draw: what it opens to is
+        // checked, and that the kept one opens the same way.
+        kept_without_upload["upload"].take();
+        made_without_upload["upload"].take();
+        assert_eq!(made_without_upload, kept_without_upload);
+        let kept_upload: PutChatProfileRequest =
+            serde_json::from_value(kept["upload"]["request"].clone()).unwrap();
+        let reopened = open_own_profile(&kept_upload, &wrapping, &RECIPIENT).unwrap();
+        assert_eq!(STANDARD.encode(&reopened.key), kept["upload"]["profileKey"]);
+        assert_eq!(reopened.display_name, kept["upload"]["displayName"]);
+        assert_eq!(
+            STANDARD.encode(reopened.avatar.unwrap()),
+            kept["upload"]["avatar"]
+        );
+    }
 
     #[test]
     fn signal_style_name_padding_and_profile_round_trip() {

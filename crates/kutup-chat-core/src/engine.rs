@@ -2945,14 +2945,20 @@ impl Engine {
     /// Derive the contacts-only delivery capability used by sealed messages
     /// and immutable Chat media. It is unavailable until the contact is
     /// accepted and the authenticated profile key is present.
-    pub async fn media_delivery_capability(&self, peer: &str) -> Result<Option<[u8; 16]>> {
-        if !self.sealed_sender_enabled
-            || !self
+    /// Whether an attachment copy at `peer`'s server can be asked for, now or
+    /// once their profile key arrives: sealed sender on, and an accepted
+    /// contact.
+    pub(crate) async fn media_copy_reachable(&self, peer: &str) -> Result<bool> {
+        Ok(self.sealed_sender_enabled
+            && self
                 .session
                 .contact(peer)
                 .await?
-                .is_some_and(|contact| contact.state == ContactState::Accepted)
-        {
+                .is_some_and(|contact| contact.state == ContactState::Accepted))
+    }
+
+    pub async fn media_delivery_capability(&self, peer: &str) -> Result<Option<[u8; 16]>> {
+        if !self.media_copy_reachable(peer).await? {
             return Ok(None);
         }
         let Some(profile) = self.session.peer_profile(peer).await? else {

@@ -21,6 +21,7 @@ use kutup_crypto::chat_backup::{
     ChatBackupProtectionDomainV1, ChatBackupSuiteId,
 };
 use kutup_crypto::chat_media::{self, ChatMediaObjectContextV1};
+use kutup_crypto::chat_profile;
 use kutup_crypto::drive_envelope::{self, DriveEnvelopeContextV1, DriveEnvelopePurpose};
 use kutup_crypto::drive_object::{self, DriveFileBlobContextV1};
 use kutup_crypto::envelope::{self, CollabFrameContextV3};
@@ -4986,4 +4987,189 @@ pub fn open_forwarded_mail_message(
         signed: opened.signed,
         verified: opened.verified,
     })
+}
+
+// --- profiles (docs/plans/unified-profile.md, docs/plans/chat-crypto-move.md)
+
+/// A profile as the apps show it (the same as the Chat WASM's).
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct AccountProfileView {
+    display_name: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    about: Option<String>,
+    /// Standard base64.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    avatar: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    avatar_content_type: Option<String>,
+    revision: String,
+}
+
+impl From<chat_profile::OpenedProfile> for AccountProfileView {
+    fn from(opened: chat_profile::OpenedProfile) -> Self {
+        Self {
+            display_name: opened.contents.display_name,
+            about: opened.contents.about,
+            avatar: opened.contents.avatar.map(|bytes| STANDARD.encode(bytes)),
+            avatar_content_type: opened.contents.avatar_content_type,
+            revision: opened.revision.to_string(),
+        }
+    }
+}
+
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct AccountProfileInput {
+    display_name: String,
+    #[serde(default)]
+    about: Option<String>,
+    /// Standard base64.
+    #[serde(default)]
+    avatar: Option<String>,
+    #[serde(default)]
+    avatar_content_type: Option<String>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ProfileLookup {
+    /// Standard base64 of the 32-byte profile key.
+    key: String,
+    version: String,
+    /// Standard base64; sent as the access header when fetching.
+    access_key: String,
+}
+
+fn profile_master_key(master_key: Vec<u8>) -> Result<[u8; 32], JsValue> {
+    master_key
+        .try_into()
+        .map_err(|_| js_error("the account master key is 32 bytes"))
+}
+
+fn profile_account(account: &str) -> Result<kutup_crypto::account_ref::AccountRef, JsValue> {
+    account
+        .parse()
+        .map_err(|error| js_error(&format!("not an account: {error}")))
+}
+
+fn sealed_profile(value: JsValue) -> Result<chat_profile::SealedProfile, JsValue> {
+    serde_wasm_bindgen::from_value(value)
+        .map_err(|error| js_error(&format!("not a sealed profile: {error}")))
+}
+
+fn profile_output<T: Serialize>(value: &T) -> Result<JsValue, JsValue> {
+    serde_wasm_bindgen::to_value(value).map_err(|error| js_error(&error.to_string()))
+}
+
+fn profile_lookup_of(key: &[u8]) -> Result<ProfileLookup, JsValue> {
+    Ok(ProfileLookup {
+        key: STANDARD.encode(key),
+        version: chat_profile::profile_version(key).map_err(|e| js_error(&e.to_string()))?,
+        access_key: STANDARD
+            .encode(chat_profile::profile_access_key(key).map_err(|e| js_error(&e.to_string()))?),
+    })
+}
+
+/// The account's own profile, opened from the master key.
+#[wasm_bindgen(js_name = accountProfileOpen)]
+pub fn account_profile_open(
+    master_key: Vec<u8>,
+    current: JsValue,
+    account: String,
+    binding: String,
+) -> Result<JsValue, JsValue> {
+    let opened = chat_profile::open_account_profile(
+        &profile_master_key(master_key)?,
+        &sealed_profile(current)?,
+        &profile_account(&account)?,
+        &binding,
+    )
+    .map_err(|error| js_error(&error.to_string()))?;
+    profile_output(&AccountProfileView::from(opened))
+}
+
+/// The account's own profile key (to give to the people it shares files
+/// with), opened from the master key.
+#[wasm_bindgen(js_name = accountProfileKey)]
+pub fn account_profile_key(
+    master_key: Vec<u8>,
+    current: JsValue,
+    account: String,
+    binding: String,
+) -> Result<JsValue, JsValue> {
+    let opened = chat_profile::open_account_profile(
+        &profile_master_key(master_key)?,
+        &sealed_profile(current)?,
+        &profile_account(&account)?,
+        &binding,
+    )
+    .map_err(|error| js_error(&error.to_string()))?;
+    profile_output(&profile_lookup_of(opened.key.as_slice())?)
+}
+
+/// Where to fetch someone's profile, from their profile key.
+#[wasm_bindgen(js_name = profileLookup)]
+pub fn profile_lookup(key: String) -> Result<JsValue, JsValue> {
+    let key = STANDARD
+        .decode(key)
+        .map_err(|_| js_error("a profile key is standard base64"))?;
+    profile_output(&profile_lookup_of(&key)?)
+}
+
+/// Open someone's fetched profile with their profile key.
+#[wasm_bindgen(js_name = profileOpenPeer)]
+pub fn profile_open_peer(
+    peer: String,
+    encrypted: JsValue,
+    key: String,
+) -> Result<JsValue, JsValue> {
+    let key = STANDARD
+        .decode(key)
+        .map_err(|_| js_error("a profile key is standard base64"))?;
+    let opened = chat_profile::open_peer_profile(
+        &sealed_profile(encrypted)?,
+        &profile_account(&peer)?,
+        &key,
+    )
+    .map_err(|error| js_error(&error.to_string()))?;
+    profile_output(&AccountProfileView::from(opened))
+}
+
+/// The account's next profile revision, sealed from the master key: the
+/// exact upload.
+#[wasm_bindgen(js_name = accountProfileSeal)]
+pub fn account_profile_seal(
+    master_key: Vec<u8>,
+    current: JsValue,
+    update: JsValue,
+    account: String,
+    binding: String,
+) -> Result<JsValue, JsValue> {
+    let current = if current.is_null() || current.is_undefined() {
+        None
+    } else {
+        Some(sealed_profile(current)?)
+    };
+    let update: AccountProfileInput = serde_wasm_bindgen::from_value(update)
+        .map_err(|error| js_error(&format!("not a profile update: {error}")))?;
+    let avatar = update
+        .avatar
+        .map(|value| STANDARD.decode(value))
+        .transpose()
+        .map_err(|_| js_error("the avatar is standard base64"))?;
+    let upload = chat_profile::seal_account_profile(
+        &profile_master_key(master_key)?,
+        current.as_ref(),
+        &chat_profile::ProfileContents {
+            display_name: update.display_name,
+            avatar,
+            avatar_content_type: update.avatar_content_type,
+            about: update.about,
+        },
+        &profile_account(&account)?,
+        &binding,
+    )
+    .map_err(|error| js_error(&error.to_string()))?;
+    profile_output(&upload)
 }

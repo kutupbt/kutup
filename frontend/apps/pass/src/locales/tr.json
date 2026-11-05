@@ -100,7 +100,7 @@
     "wrongPin_one": "Yanlış PIN. {{count}} deneme hakkı kaldı, sonra oturumunuz kapanır.",
     "wrongPin_other": "Yanlış PIN. {{count}} deneme hakkı kaldı, sonra oturumunuz kapanır.",
     "pinSignedOut": "Çok fazla yanlış PIN: oturumunuz kapatıldı. Parolanızla yeniden giriş yapın.",
-    "pinRemoved": "PIN kaldırılmış, belki başka bir cihazda. Hesap parolanızı kullanın; ayarlardan yeniden PIN belirleyebilirsiniz."
+    "pinRemoved": "PIN kaldırılmış, belki başka bir cihazda; bu kasa artık tek tıklamayla açılır. Ayarlardan yeniden PIN belirleyebilirsiniz."
   },
   "sync": {
     "saved": "Kaydedildi",
@@ -293,7 +293,7 @@
   },
   "unlockMode": {
     "label": "Kilitten sonra kasaları şununla aç",
-    "description": "Bu cihazda kilitlenen (elle ya da boşta kalınca) bir kasa bununla yeniden açılır. Anahtarı tutulmayan kasalar her zaman kendi anahtarını sorar.",
+    "description": "Bu cihazda kilitlenen (elle ya da boşta kalınca) bir kasa her sekmede ve Drive'dan açıldığında da bununla yeniden açılır. PIN yoksa, parolanızı seçmediğiniz sürece tek tıklama yeter. Anahtarı tutulmayan kasalar her zaman kendi anahtarını sorar.",
     "password": "Kutup parolam",
     "click": "Tek tıklama",
     "pin": "PIN'im"

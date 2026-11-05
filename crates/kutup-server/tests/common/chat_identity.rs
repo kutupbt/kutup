@@ -126,7 +126,7 @@ fn new_device_secrets() -> (u32, [u8; 32]) {
     let mut credential = [0u8; 32];
     kutup_crypto::primitives::random(&mut credential);
     (
-        (kutup_crypto::primitives::random_below(16383) as u32) + 1,
+        (kutup_crypto::primitives::random_below(16380) as u32) + 1,
         credential,
     )
 }

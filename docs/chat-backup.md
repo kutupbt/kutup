@@ -123,7 +123,12 @@ final tags, and noncanonical record sequences fail closed.
 Offline startup, reconnection, page hiding, the 64 KiB accumulation threshold,
 and the normal debounce can all request a flush, but they share the same
 serialized drain. A failed local acknowledgement leaves the exact operation
-durably resumable after reload.
+durably resumable after reload. A cycle that fails, or leaves segments the
+server didn't take or media copies it failed (a network blip or a server
+error while the browser is online), runs again after 5 seconds, doubling up to
+5 minutes, without waiting for the next change; a cycle that leaves nothing
+starts over at 5 seconds. A full storage waits for space and offline waits for
+the reconnect, as before.
 
 ## Compaction and atomic restore points
 

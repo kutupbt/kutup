@@ -238,28 +238,28 @@ pub const CHAT_MEDIA_RECIPIENT_RATE_V1: &[u8] = b"kutup/chat-media/recipient-rat
 
 // --- chat-store --------------------------------------------------------------
 
-/// `kutup-chat-core/src/db/store_cipher.rs`: the family (HKDF salt) of the local store's keys
+/// `kutup-crypto/src/chat_store.rs`: the family (HKDF salt) of the local store's keys
 pub const CHAT_STORE_V1: &[u8] = b"kutup/chat-store/v1\0";
-/// `kutup-chat-core/src/db/store_cipher.rs` (`INDEX_INFO`)
+/// `kutup-crypto/src/chat_store.rs` (`INDEX_INFO`)
 pub const CHAT_STORE_INDEX_V1: &[u8] = b"kutup/chat-store/index/v1\0";
-/// `kutup-chat-core/src/db/store_cipher.rs` (`RECORD_AAD`)
+/// `kutup-crypto/src/chat_store.rs` (`RECORD_AAD`)
 pub const CHAT_STORE_RECORD_V1: &[u8] = b"kutup/chat-store/record/v1\0";
-/// `kutup-chat-core/src/db/store_cipher.rs` (`VALUE_INFO`)
+/// `kutup-crypto/src/chat_store.rs` (`VALUE_INFO`)
 pub const CHAT_STORE_VALUE_V1: &[u8] = b"kutup/chat-store/value/v1\0";
-/// `kutup-chat-core/src/db/store_cipher.rs` (`WRAP_INFO`)
+/// `kutup-crypto/src/chat_store.rs` (`WRAP_INFO`)
 pub const CHAT_STORE_WRAP_V1: &[u8] = b"kutup/chat-store/wrap/v1\0";
 
 // --- chat --------------------------------------------------------------------
 
-/// `kutup-chat-core/src/call_link.rs` (`JOINED_AAD`)
+/// `kutup-crypto/src/chat_call_link.rs` (`JOINED_AAD`)
 pub const CHAT_CALL_LINK_JOINED_V1: &[u8] = b"kutup/chat/call-link/joined/v1\0";
-/// `kutup-chat-core/src/call_link.rs` (`SALT`)
+/// `kutup-crypto/src/chat_call_link.rs` (`SALT`)
 pub const CHAT_CALL_LINK_V1: &[u8] = b"kutup/chat/call-link/v1\0";
 /// `kutup-server/src/handlers/chat_identity.rs` (`CREDENTIAL_DOMAIN`)
 pub const CHAT_DEVICE_CREDENTIAL_V1: &[u8] = b"kutup/chat/device-credential/v1\0";
 /// `kutup-chat-proto/src/account_identity.rs`
 pub const CHAT_KEYS_CHECK_V1: &[u8] = b"kutup/chat/keys-check/v1\0";
-/// `kutup-chat-core/src/db/store_cipher.rs` (`LOCAL_INFO`)
+/// `kutup-crypto/src/chat_store.rs` (`LOCAL_INFO`)
 pub const CHAT_LOCAL_V1: &[u8] = b"kutup/chat/local/v1\0";
 
 // --- collab ------------------------------------------------------------------
@@ -501,7 +501,7 @@ pub const PRIVATE_CIPHERTEXT_CACHE_BINDING_V1: &[u8] =
 
 // --- profile-envelope --------------------------------------------------------
 
-/// `kutup-chat-core/src/profile.rs` (`ENVELOPE_KEY_SALT`)
+/// `kutup-crypto/src/chat_profile.rs` (`ENVELOPE_KEY_SALT`)
 pub const PROFILE_ENVELOPE_KEY_V1: &[u8] = b"kutup/profile-envelope/key/v1\0";
 
 // --- registration-code -------------------------------------------------------
@@ -524,7 +524,7 @@ pub const REVISION_GUARD_V1: &[u8] = b"kutup/revision-guard/v1\0";
 
 // --- sealed-delivery-capability ----------------------------------------------
 
-/// `kutup-chat-proto/src/sealed_sender.rs` (`DELIVERY_CAPABILITY_CONTEXT`)
+/// `kutup-crypto/src/chat_profile.rs` (`DELIVERY_CAPABILITY_CONTEXT`)
 pub const SEALED_DELIVERY_CAPABILITY_V1: &[u8] = b"kutup/sealed-delivery-capability/v1\0";
 
 // --- sealed-origin-rate ------------------------------------------------------
@@ -549,17 +549,17 @@ pub const YJS_SEED_V1: &[u8] = b"kutup/yjs-seed/v1\0";
 
 // --- chat-profile ------------------------------------------------------------
 
-/// `kutup-chat-core/src/profile.rs`: the family (HKDF salt) of the profile keys
+/// `kutup-crypto/src/chat_profile.rs`: the family (HKDF salt) of the profile keys
 pub const CHAT_PROFILE_V1: &[u8] = b"kutup/chat-profile/v1\0";
-/// `kutup-chat-core/src/profile.rs` (was `kutup-chat-profile-access-v1`)
+/// `kutup-crypto/src/chat_profile.rs` (was `kutup-chat-profile-access-v1`)
 pub const CHAT_PROFILE_ACCESS_V1: &[u8] = b"kutup/chat-profile/access/v1\0";
 /// `kutup-chat-core/src/engine.rs` (was `kutup-profile-key-update-v1`)
 pub const CHAT_PROFILE_KEY_UPDATE_V1: &[u8] = b"kutup/chat-profile/key-update/v1\0";
-/// `kutup-chat-core/src/profile.rs` (was `kutup-chat-profile-version-v1`)
+/// `kutup-crypto/src/chat_profile.rs` (was `kutup-chat-profile-version-v1`)
 pub const CHAT_PROFILE_VERSION_V1: &[u8] = b"kutup/chat-profile/version/v1\0";
-/// `kutup-chat-core/src/profile.rs` (was `kutup-chat-profile-wrap-v1`)
+/// `kutup-crypto/src/chat_profile.rs` (was `kutup-chat-profile-wrap-v1`)
 pub const CHAT_PROFILE_WRAP_V1: &[u8] = b"kutup/chat-profile/wrap/v1\0";
-/// `kutup-chat-core/src/profile.rs` (was `kutup-chat-profile-wrap-v2`)
+/// `kutup-crypto/src/chat_profile.rs` (was `kutup-chat-profile-wrap-v2`)
 pub const CHAT_PROFILE_WRAP_V2: &[u8] = b"kutup/chat-profile/wrap/v2\0";
 
 // --- drive-federation --------------------------------------------------------

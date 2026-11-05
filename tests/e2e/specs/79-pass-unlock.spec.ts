@@ -59,7 +59,8 @@ test('pass: a vault not kept with the sign-in asks for its key, refuses a wrong 
   await page.reload()
   await expect(page.getByRole('heading', { name: 'Gizli', exact: true, level: 1 })).toBeVisible({ timeout: 60_000 })
 
-  // Locked by hand: it waits for a click, also after a reload.
+  // Locked by hand: it waits for an unlock, also after a reload. With no PIN
+  // and nothing chosen, that is one click: no password nobody chose.
   await page.getByRole('button', { name: 'Vault actions' }).click()
   await page.getByRole('menuitem', { name: 'Lock vault' }).click()
   await expect(page.getByRole('heading', { name: 'Vaults', exact: true })).toBeVisible()
@@ -67,7 +68,15 @@ test('pass: a vault not kept with the sign-in asks for its key, refuses a wrong 
   await expect(unlock).toBeVisible({ timeout: 60_000 })
   await page.reload()
   await expect(unlock).toBeVisible({ timeout: 60_000 })
-  // By default the account password opens it again, checked by Kutup.
+  await expect(page.getByRole('button', { name: 'Unlock with my sign-in' })).toBeVisible()
+  await expect(page.getByLabel('Your Kutup password')).toBeHidden()
+
+  // Chosen: the account password, checked by Kutup.
+  await page.goto(appUrl('pass'))
+  await page.getByRole('combobox', { name: 'After a lock, open vaults with' }).click()
+  await page.getByRole('option', { name: 'My Kutup password' }).click()
+  await page.goto(vaultUrl)
+  await expect(unlock).toBeVisible({ timeout: 60_000 })
   await page.getByLabel('Your Kutup password').fill('not-my-password')
   await page.getByRole('button', { name: 'Unlock with my password' }).click()
   await expect(page.getByText('That is not your Kutup password.')).toBeVisible({ timeout: 30_000 })
