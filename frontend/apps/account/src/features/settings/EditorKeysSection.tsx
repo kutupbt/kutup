@@ -8,7 +8,8 @@ import { Card } from '@kutup/ui/components/card'
 import { ConfirmDestructive } from '@kutup/ui/components/confirm-destructive'
 import { Mono } from '@kutup/ui/components/mono'
 import { Section } from '@kutup/ui/components/page'
-import { EmptyState, LoadingPanel } from '@kutup/ui/components/states'
+import { ListSkeleton } from '@kutup/ui/components/skeleton'
+import { EmptyState } from '@kutup/ui/components/states'
 import { apiErrorMessage } from '@kutup/ui/lib/apiError'
 import { formatInstant } from '@kutup/ui/lib/format'
 import { MAX_DEVICES_IN_USE, useDevices, useRevokeDevice, type EditorDevice } from './api'
@@ -33,7 +34,7 @@ export function EditorKeysSection() {
       {devices.isError ? (
         <Alert variant="error">{apiErrorMessage(devices.error, t('common.tryAgain'))}</Alert>
       ) : null}
-      {devices.isPending ? <LoadingPanel label={t('common.loading')} /> : null}
+      {devices.isPending ? <ListSkeleton label={t('common.loading')} rows={3} /> : null}
       {devices.data && rows.length === 0 ? (
         <EmptyState title={t('settings.devices.emptyTitle')} description={t('settings.devices.emptyDescription')} />
       ) : null}

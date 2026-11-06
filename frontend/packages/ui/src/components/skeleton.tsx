@@ -64,3 +64,48 @@ export function GridSkeleton({ label, count = 24, className }: { label: string; 
     </div>
   )
 }
+
+/**
+ * A loading settings page or form: a heading, then label-and-field rows, as
+ * Proton's settings sections load. Announced once by `label`.
+ */
+export function FormSkeleton({ label, rows = 4, className }: { label: string; rows?: number; className?: string }) {
+  return (
+    <div role="status" aria-busy="true" className={cn('max-w-2xl space-y-6 p-3', className)}>
+      <span className="sr-only">{label}</span>
+      <Skeleton aria-hidden="true" className="h-5 w-1/3" />
+      {Array.from({ length: rows }, (_, i) => (
+        <div key={i} aria-hidden="true" className="space-y-2">
+          <Skeleton className={cn('h-3.5', ['w-1/4', 'w-1/3', 'w-1/5', 'w-2/5'][i % 4])} />
+          <Skeleton className="h-9 w-full" />
+        </div>
+      ))}
+    </div>
+  )
+}
+
+/**
+ * A loading month: a row of weekday names over six weeks of day cells, as a
+ * calendar opens. Announced once by `label`.
+ */
+export function CalendarSkeleton({ label, className }: { label: string; className?: string }) {
+  return (
+    <div role="status" aria-busy="true" className={cn('flex h-full min-h-0 flex-col gap-2 p-4', className)}>
+      <span className="sr-only">{label}</span>
+      <div aria-hidden="true" className="flex items-center gap-2">
+        <Skeleton className="h-8 w-16" />
+        <Skeleton className="h-8 w-8" />
+        <Skeleton className="h-8 w-8" />
+        <Skeleton className="h-6 w-40" />
+      </div>
+      <div aria-hidden="true" className="grid flex-1 grid-cols-7 grid-rows-[auto_repeat(6,minmax(0,1fr))] gap-1">
+        {Array.from({ length: 7 }, (_, i) => (
+          <Skeleton key={`d${i}`} className="mx-auto h-3 w-8" />
+        ))}
+        {Array.from({ length: 42 }, (_, i) => (
+          <Skeleton key={i} className="min-h-16 w-full rounded-sm opacity-60" />
+        ))}
+      </div>
+    </div>
+  )
+}

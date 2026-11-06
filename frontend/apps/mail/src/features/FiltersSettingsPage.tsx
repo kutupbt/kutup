@@ -10,7 +10,8 @@ import { Checkbox } from '@kutup/ui/components/checkbox'
 import { ConfirmDestructive } from '@kutup/ui/components/confirm-destructive'
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@kutup/ui/components/dialog'
 import { PageBody, PageHeader } from '@kutup/ui/components/page'
-import { EmptyState, LoadingPanel } from '@kutup/ui/components/states'
+import { ListSkeleton } from '@kutup/ui/components/skeleton'
+import { EmptyState } from '@kutup/ui/components/states'
 import { Tooltip } from '@kutup/ui/components/tooltip'
 import { apiErrorMessage } from '@kutup/ui/lib/apiError'
 import { cn } from '@kutup/ui/lib/cn'
@@ -38,7 +39,7 @@ export function FiltersSettingsPage() {
   const [dragging, setDragging] = useState<string | null>(null)
   const [over, setOver] = useState<{ id: string; after: boolean } | null>(null)
 
-  if (filters.isPending) return <LoadingPanel label={t('common.loading')} />
+  if (filters.isPending) return <ListSkeleton label={t('common.loading')} rows={4} />
   if (filters.isError) return <Alert variant="error">{apiErrorMessage(filters.error, t('common.tryAgain'))}</Alert>
   const list = filters.data
 

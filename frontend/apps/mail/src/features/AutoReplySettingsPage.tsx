@@ -10,7 +10,7 @@ import { Input } from '@kutup/ui/components/input'
 import { Label } from '@kutup/ui/components/label'
 import { PageBody, PageHeader } from '@kutup/ui/components/page'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@kutup/ui/components/select'
-import { LoadingPanel } from '@kutup/ui/components/states'
+import { FormSkeleton } from '@kutup/ui/components/skeleton'
 import { apiErrorMessage } from '@kutup/ui/lib/apiError'
 import { SimpleEditor } from './SimpleEditor'
 
@@ -127,7 +127,7 @@ function Choice({ id, label, value, options, onChange }: { id: string; label: st
 export function AutoReplySettingsPage() {
   const { t } = useTranslation()
   const autoReply = useAutoReply()
-  if (autoReply.isPending) return <LoadingPanel label={t('common.loading')} />
+  if (autoReply.isPending) return <FormSkeleton label={t('common.loading')} />
   if (autoReply.isError) return <Alert variant="error">{apiErrorMessage(autoReply.error, t('common.tryAgain'))}</Alert>
   return <AutoReplyEditor data={autoReply.data} />
 }

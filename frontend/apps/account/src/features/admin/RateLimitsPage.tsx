@@ -8,7 +8,7 @@ import { Button } from '@kutup/ui/components/button'
 import { Card, CardContent } from '@kutup/ui/components/card'
 import { Input } from '@kutup/ui/components/input'
 import { PageBody, PageHeader, Section } from '@kutup/ui/components/page'
-import { LoadingPanel } from '@kutup/ui/components/states'
+import { FormSkeleton } from '@kutup/ui/components/skeleton'
 import { apiErrorMessage } from '@kutup/ui/lib/apiError'
 import { formatBytes } from '@kutup/ui/lib/format'
 import { adminKey } from './api'
@@ -54,7 +54,7 @@ export function RateLimitsPage() {
       </PageBody>
     )
   }
-  if (limits.isPending) return <LoadingPanel label={t('common.loading')} />
+  if (limits.isPending) return <FormSkeleton label={t('common.loading')} rows={6} />
 
   return (
     <PageBody width="prose">

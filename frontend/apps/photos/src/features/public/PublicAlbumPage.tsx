@@ -9,7 +9,8 @@ import { isRawName } from '@kutup/files/media/raw'
 import { Alert } from '@kutup/ui/components/alert'
 import { KutupLogo } from '@kutup/ui/components/brand'
 import { Button } from '@kutup/ui/components/button'
-import { LoadingPanel, Spinner } from '@kutup/ui/components/states'
+import { GridSkeleton } from '@kutup/ui/components/skeleton'
+import { Spinner } from '@kutup/ui/components/states'
 import { ThemeToggle } from '@kutup/ui/components/theme-toggle'
 import { PublicNotice } from '@kutup/drive-ui/PublicNotice'
 import { formatDuration, formatTaken } from '../library/format'
@@ -196,7 +197,7 @@ export function PublicAlbumPage() {
       </header>
       {album.data ? <PublicNotice owner={album.data.owner} token={token} /> : null}
       <main className="mx-auto max-w-6xl px-2 py-6 md:px-8">
-        {album.isPending ? <LoadingPanel label={t('public.loading')} /> : null}
+        {album.isPending ? <GridSkeleton label={t('public.loading')} /> : null}
         {failure ? (
           <div className="px-2">
             <Alert variant="error" title={t('public.failedTitle')}>

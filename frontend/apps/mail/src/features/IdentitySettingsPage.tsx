@@ -10,7 +10,7 @@ import { Field } from '@kutup/ui/components/field'
 import { Input } from '@kutup/ui/components/input'
 import { PageBody, PageHeader } from '@kutup/ui/components/page'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@kutup/ui/components/select'
-import { LoadingPanel } from '@kutup/ui/components/states'
+import { FormSkeleton } from '@kutup/ui/components/skeleton'
 import { apiErrorMessage } from '@kutup/ui/lib/apiError'
 import { AddressesSection } from './AddressesSection'
 import { SimpleEditor } from './SimpleEditor'
@@ -72,7 +72,7 @@ function IdentityForm({ addressId }: { addressId: string | undefined }) {
     }
   }, [loaded])
 
-  if (identity.isPending) return <LoadingPanel label={t('common.loading')} />
+  if (identity.isPending) return <FormSkeleton label={t('common.loading')} />
   if (identity.isError) return <Alert variant="error">{apiErrorMessage(identity.error, t('common.tryAgain'))}</Alert>
 
   function save() {

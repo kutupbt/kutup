@@ -4,7 +4,8 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, typ
 import { useTranslation } from 'react-i18next'
 import { useSearchParams } from 'react-router-dom'
 import { useRequiredSession } from '@kutup/session/store'
-import { EmptyState, LoadingPanel } from '@kutup/ui/components/states'
+import { GridSkeleton } from '@kutup/ui/components/skeleton'
+import { EmptyState } from '@kutup/ui/components/states'
 import { Alert } from '@kutup/ui/components/alert'
 import { cn } from '@kutup/ui/lib/cn'
 import { formatDay, formatMonth } from '../library/format'
@@ -215,7 +216,7 @@ export function PhotoGrid({ photos, title, empty: emptyState, dropToUpload = tru
       </div>
     )
   }
-  if (loading && photos.length === 0) return <LoadingPanel label={t('timeline.loading')} />
+  if (loading && photos.length === 0) return <GridSkeleton label={t('timeline.loading')} />
 
   const selection = photos.filter((p) => selected.has(p.id))
   const viewerIndex = openId ? photos.findIndex((p) => p.id === openId) : -1

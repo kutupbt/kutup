@@ -18,7 +18,8 @@ import { Alert } from '@kutup/ui/components/alert'
 import { Button } from '@kutup/ui/components/button'
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@kutup/ui/components/dialog'
 import { PageBody, PageHeader } from '@kutup/ui/components/page'
-import { EmptyState, LoadingPanel } from '@kutup/ui/components/states'
+import { ListSkeleton } from '@kutup/ui/components/skeleton'
+import { EmptyState } from '@kutup/ui/components/states'
 import { Tooltip } from '@kutup/ui/components/tooltip'
 import { apiErrorMessage } from '@kutup/ui/lib/apiError'
 import { cn } from '@kutup/ui/lib/cn'
@@ -60,7 +61,7 @@ export function PlacesSettingsPage() {
   const [sorting, setSorting] = useState<'folders' | 'labels' | null>(null)
   const [busy, setBusy] = useState(false)
 
-  if (places.isPending) return <LoadingPanel label={t('common.loading')} />
+  if (places.isPending) return <ListSkeleton label={t('common.loading')} rows={6} />
   if (places.isError || !places.data) {
     return (
       <div className="p-6">

@@ -14,7 +14,8 @@ import { Alert } from '@kutup/ui/components/alert'
 import { Button } from '@kutup/ui/components/button'
 import { Input } from '@kutup/ui/components/input'
 import { PageBody } from '@kutup/ui/components/page'
-import { EmptyState, LoadingPanel, Spinner } from '@kutup/ui/components/states'
+import { ListSkeleton } from '@kutup/ui/components/skeleton'
+import { EmptyState, Spinner } from '@kutup/ui/components/states'
 import { useShownRange } from '@kutup/ui/lib/shownRange'
 import { filterDocuments, sortDocuments, useCreateDocument, useDocuments, type DocumentEntry, type DocumentOrder } from './documents'
 
@@ -236,7 +237,7 @@ export function HomePage({ kind = null }: { kind?: DocumentKind | null }) {
             {t('home.loadFailed')}
           </Alert>
         ) : loading && documents.length === 0 ? (
-          <LoadingPanel label={t('home.loading')} />
+          <ListSkeleton label={t('home.loading')} />
         ) : shown.length === 0 ? (
           <EmptyState
             title={query.trim() ? t('home.noMatchTitle') : t('home.emptyTitle')}

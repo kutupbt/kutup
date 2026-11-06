@@ -13,7 +13,7 @@ import { useSession } from '@kutup/session/store'
 import { Alert } from '@kutup/ui/components/alert'
 import { Field } from '@kutup/ui/components/field'
 import { Input } from '@kutup/ui/components/input'
-import { LoadingPanel } from '@kutup/ui/components/states'
+import { FormSkeleton } from '@kutup/ui/components/skeleton'
 import { AuthLayout } from './AuthLayout'
 import { registerAndSignIn } from './flows'
 import { NewKeysWizard } from './NewKeysWizard'
@@ -81,7 +81,7 @@ export function RegisterPage() {
   })
 
   if (session) return <Navigate to={next} replace />
-  if (settings.isPending) return <LoadingPanel label={t('common.loading')} />
+  if (settings.isPending) return <FormSkeleton label={t('common.loading')} />
   // Checks the code before the keys are derived (it uses nothing up).
   const checkCode = async (): Promise<boolean> => {
     const value = code.trim()

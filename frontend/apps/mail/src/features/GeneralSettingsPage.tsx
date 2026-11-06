@@ -7,7 +7,7 @@ import { Button } from '@kutup/ui/components/button'
 import { Checkbox } from '@kutup/ui/components/checkbox'
 import { PageBody, PageHeader } from '@kutup/ui/components/page'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@kutup/ui/components/select'
-import { LoadingPanel } from '@kutup/ui/components/states'
+import { FormSkeleton } from '@kutup/ui/components/skeleton'
 import { apiErrorMessage } from '@kutup/ui/lib/apiError'
 import { useContentSearch, useContentSearchState } from '@kutup/mail-core/contentSearch'
 import { notificationStatus, requestNotifications, showNotification, type NotificationStatus } from '@kutup/ui/lib/desktopNotifications'
@@ -82,7 +82,7 @@ export function GeneralSettingsPage() {
   const update = useUpdateMailSettings()
   const imageSenders = useImageSenders()
   const removeImageSender = useRemoveImageSender()
-  if (settings.isPending) return <LoadingPanel label={t('common.loading')} />
+  if (settings.isPending) return <FormSkeleton label={t('common.loading')} />
   if (settings.isError) return <Alert variant="error">{apiErrorMessage(settings.error, t('common.tryAgain'))}</Alert>
   const save = (change: Partial<MailSettings>) =>
     update.mutate(change, {

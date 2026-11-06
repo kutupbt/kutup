@@ -19,7 +19,8 @@ import { Field } from '@kutup/ui/components/field'
 import { Input } from '@kutup/ui/components/input'
 import { PageBody, PageHeader } from '@kutup/ui/components/page'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@kutup/ui/components/select'
-import { EmptyState, LoadingPanel } from '@kutup/ui/components/states'
+import { ListSkeleton } from '@kutup/ui/components/skeleton'
+import { EmptyState } from '@kutup/ui/components/states'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@kutup/ui/components/table'
 import { apiErrorMessage } from '@kutup/ui/lib/apiError'
 import { formatBytes } from '@kutup/ui/lib/format'
@@ -71,7 +72,7 @@ export function MailGroupsPage() {
         }
       />
       {groups.isPending ? (
-        <LoadingPanel label={t('common.loading')} />
+        <ListSkeleton label={t('common.loading')} />
       ) : groups.isError ? (
         <Alert variant="error">{apiErrorMessage(groups.error, t('common.tryAgain'))}</Alert>
       ) : groups.data.length === 0 ? (

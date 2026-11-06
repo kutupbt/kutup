@@ -8,7 +8,8 @@ import { Button } from '@kutup/ui/components/button'
 import { Card } from '@kutup/ui/components/card'
 import { ConfirmDestructive } from '@kutup/ui/components/confirm-destructive'
 import { Section } from '@kutup/ui/components/page'
-import { EmptyState, LoadingPanel } from '@kutup/ui/components/states'
+import { ListSkeleton } from '@kutup/ui/components/skeleton'
+import { EmptyState } from '@kutup/ui/components/states'
 import { Tooltip } from '@kutup/ui/components/tooltip'
 import { apiErrorMessage } from '@kutup/ui/lib/apiError'
 import { formatInstant, formatRelative } from '@kutup/ui/lib/format'
@@ -80,7 +81,7 @@ export function SessionsSection() {
       {sessions.isError ? (
         <Alert variant="error">{apiErrorMessage(sessions.error, t('common.tryAgain'))}</Alert>
       ) : null}
-      {sessions.isPending ? <LoadingPanel label={t('common.loading')} /> : null}
+      {sessions.isPending ? <ListSkeleton label={t('common.loading')} rows={3} /> : null}
       {sessions.data && groups.length === 0 ? (
         <EmptyState title={t('settings.sessions.emptyTitle')} description={t('settings.sessions.emptyDescription')} />
       ) : null}

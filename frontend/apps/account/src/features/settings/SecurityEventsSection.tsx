@@ -6,7 +6,7 @@ import { Badge } from '@kutup/ui/components/badge'
 import { Button } from '@kutup/ui/components/button'
 import { Card, CardContent } from '@kutup/ui/components/card'
 import { Section } from '@kutup/ui/components/page'
-import { LoadingPanel } from '@kutup/ui/components/states'
+import { ListSkeleton } from '@kutup/ui/components/skeleton'
 import { formatInstant } from '@kutup/ui/lib/format'
 import { useSecurityEvents } from './api'
 import { securityEventDevice, securityEventLabel } from './securityEvents'
@@ -43,7 +43,7 @@ export function SecurityEventsSection() {
       <Card>
         <CardContent className="p-5">
           {events.isPending ? (
-            <LoadingPanel label={t('common.loading')} />
+            <ListSkeleton label={t('common.loading')} rows={4} />
           ) : events.isError && !staleCursor ? (
             <Alert variant="error">{t('settings.security.events.failed')}</Alert>
           ) : list.length === 0 ? (
