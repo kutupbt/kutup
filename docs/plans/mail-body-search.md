@@ -75,8 +75,9 @@ Research 16's design (`kutup_crypto::mail_search`, vectors in
   `kutup-mail-search:<HMAC(locator key, "database")>`, the locator key from
   the master key (HKDF-SHA256, salt `kutup/mail-search/wrap/v1`): it names
   no one and is found before anything is read.
-- **Store key:** random, kept in the database wrapped under a second
-  master-derived key (XChaCha20-Poly1305, `KUTMSW1`). Deleting the database
+- **Store key:** random, kept in the database as an account record
+  (`KUTPAR1`, purpose `MailSearchStoreKey`, docs/plans/w1-account-record.md)
+  under the master key, bound to the account's key binding. Deleting the database
   destroys it, so copies left behind (disk remnants, a profile backup) stay
   unreadable even to someone who later has the master key.
 - **Records:** stored under `HMAC(name key, name)`, values

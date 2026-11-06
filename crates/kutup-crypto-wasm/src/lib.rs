@@ -686,8 +686,9 @@ pub fn inspect_account_record(envelope_base64: &str) -> Result<JsValue, JsValue>
 
 /// Purposes with typed exports (mail address keys, Pass vault secrets,
 /// organization keys, contact cards, mail names, identity pins, Chat list
-/// entries, joined meetings, the profile key's own copy, the account head and
-/// a device's head state): the generic
+/// entries, joined meetings, the profile key's own copy, the account head, a
+/// device's head state, its revisions seen and its mail-search store key): the
+/// generic
 /// account-record path never hands their secrets to JavaScript.
 fn generic_account_purpose(value: u16) -> Result<AccountRecordPurpose, JsValue> {
     match AccountRecordPurpose::try_from(value).map_err(|error| js_error(&error.to_string()))? {
@@ -704,7 +705,9 @@ fn generic_account_purpose(value: u16) -> Result<AccountRecordPurpose, JsValue> 
         | AccountRecordPurpose::JoinedMeeting
         | AccountRecordPurpose::ChatProfileKeyWrap
         | AccountRecordPurpose::AccountHead
-        | AccountRecordPurpose::AccountLocalAnchor => Err(js_error(
+        | AccountRecordPurpose::AccountLocalAnchor
+        | AccountRecordPurpose::RevisionSeen
+        | AccountRecordPurpose::MailSearchStoreKey => Err(js_error(
             "this account-record purpose has its own typed export",
         )),
         purpose => Ok(purpose),
@@ -3891,11 +3894,12 @@ pub struct RevisionGuardKeys {
 
 #[wasm_bindgen]
 impl RevisionGuardKeys {
+    /// The keys of the account bound by `binding` (`session.envelopeBinding`).
     #[wasm_bindgen(constructor)]
-    pub fn new(master_key_base64: &str) -> Result<RevisionGuardKeys, JsValue> {
+    pub fn new(master_key_base64: &str, binding: &str) -> Result<RevisionGuardKeys, JsValue> {
         let master_key = master_key_32(master_key_base64)?;
         Ok(Self {
-            keys: kutup_crypto::revision_guard::GuardKeys::derive(&master_key)
+            keys: kutup_crypto::revision_guard::GuardKeys::derive(&master_key, binding)
                 .map_err(|error| js_error(&error.to_string()))?,
         })
     }

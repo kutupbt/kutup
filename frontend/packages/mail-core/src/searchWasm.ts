@@ -64,7 +64,7 @@ export interface MailSearchIndex {
 interface MailSearchModule {
   default(input?: unknown): Promise<unknown>
   MailSearch: {
-    new (masterKey: Uint8Array, wrappedStoreKey: Uint8Array | undefined): MailSearchIndex
+    new (masterKey: Uint8Array, binding: string, wrappedStoreKey: Uint8Array | undefined): MailSearchIndex
     storeName(masterKey: Uint8Array): string
     matches(query: string, text: string): boolean
   }
@@ -101,10 +101,11 @@ export async function mailSearchStoreName(masterKey: Uint8Array): Promise<string
 
 /**
  * An account's index under the store key the database keeps (`wrapped`), or
- * under a new one when there is none (then kept from `wrappedStoreKey()`).
- * Throws when `wrapped` does not open under this master key.
+ * under a new one when there is none (then kept from `wrappedStoreKey()`),
+ * for the account bound by `binding` (`session.envelopeBinding`). Throws when
+ * `wrapped` does not open for this master key and binding.
  */
-export async function createMailSearch(masterKey: Uint8Array, wrapped: Uint8Array | undefined): Promise<MailSearchIndex> {
+export async function createMailSearch(masterKey: Uint8Array, binding: string, wrapped: Uint8Array | undefined): Promise<MailSearchIndex> {
   const module = await getModule()
-  return new module.MailSearch(masterKey, wrapped)
+  return new module.MailSearch(masterKey, binding, wrapped)
 }

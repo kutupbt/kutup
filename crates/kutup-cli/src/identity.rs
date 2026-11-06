@@ -149,7 +149,11 @@ impl Me {
 
     /// This profile's sealed revision guard.
     pub fn guard(&self) -> Result<crate::account_head::Guard> {
-        crate::account_head::CliHead::guard(&config::data_dir(&self.profile)?, &self.master_key)
+        crate::account_head::CliHead::guard(
+            &config::data_dir(&self.profile)?,
+            &self.master_key,
+            &self.binding,
+        )
     }
 }
 

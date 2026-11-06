@@ -45,7 +45,7 @@ const listOf = (keys: (typeof a)[], data = 'data'): SignedMailKeyList => ({
   hash: 'current',
 })
 const list = listOf([a, b])
-const session = { masterKey: new Uint8Array(32), userId: 'me' }
+const session = { masterKey: new Uint8Array(32), userId: 'me', envelopeBinding: '0b6b5e0c-4c1e-4b8e-9c2d-6a1f3e5d7c9b' }
 const row = (key: typeof a & { forwarding?: boolean }) => ({ ...key, id: key.fingerprint, publicKey: '', privateKeyEnvelope: '', createdAt: '' })
 
 beforeEach(() => {

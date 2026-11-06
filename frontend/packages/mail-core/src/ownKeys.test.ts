@@ -48,7 +48,7 @@ beforeEach(() => resetRevisionGuardsForTesting())
 
 describe('the account’s own addresses, checked against its own authority', () => {
   const masterKey = randomBytes(32)
-  const session = { masterKey, userId: 'me' }
+  const session = { masterKey, userId: 'me', envelopeBinding: BINDING }
 
   it('names a key the account only when its public key has the signed fingerprints', async () => {
     const { row } = await ownRow(masterKey, 'ada@kutup.test')
@@ -87,7 +87,7 @@ describe('the account’s own addresses, checked against its own authority', () 
     // first list at sequence 1 is no rollback of the old one's 5.
     const reset = randomBytes(32)
     const { row: fresh } = await ownRow(reset, 'max@kutup.test', 1)
-    const [checked] = await checkedAddresses({ masterKey: reset, userId: 'me' }, [fresh], { strict: true })
+    const [checked] = await checkedAddresses({ masterKey: reset, userId: 'me', envelopeBinding: BINDING }, [fresh], { strict: true })
     expect(checked.verifiedList?.sequence).toBe(1)
     // The old authority's count still stands.
     const { row: older } = await ownRow(masterKey, 'max@kutup.test', 4)

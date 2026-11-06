@@ -224,6 +224,14 @@ pub enum AccountRecordPurpose {
     /// server: its object is the account incarnation, so it opens for no
     /// other account or incarnation.
     AccountLocalAnchor = 18,
+    /// The highest revision a device has seen of one value
+    /// (`revision_guard`), never sent to a server: its object is
+    /// [`hashed_object`] of the value's scope and id, which is also the name
+    /// the device stores it under.
+    RevisionSeen = 19,
+    /// A device's mail-search store key (`mail_search`), never sent to a
+    /// server: one per account.
+    MailSearchStoreKey = 20,
 }
 
 /// The object of a record whose id the server must not see (a group id, the
@@ -406,11 +414,25 @@ impl AccountRecordPurpose {
                 max_len: crate::account_head::MAX_PADDED_BYTES,
                 chained: false,
             },
+            Self::RevisionSeen => PurposePolicy {
+                object: ObjectPolicy::Required(32),
+                length: Length::Exact(8),
+                mutable: false,
+                max_len: 8,
+                chained: false,
+            },
+            Self::MailSearchStoreKey => PurposePolicy {
+                object: ObjectPolicy::None,
+                length: Length::Exact(32),
+                mutable: false,
+                max_len: 32,
+                chained: false,
+            },
         }
     }
 
     /// Every purpose, for tests and vectors.
-    pub const ALL: [Self; 17] = [
+    pub const ALL: [Self; 19] = [
         Self::PasswordMasterKey,
         Self::RecoveryMasterKey,
         Self::ChatBackupRoot,
@@ -428,6 +450,8 @@ impl AccountRecordPurpose {
         Self::ChatProfileKeyWrap,
         Self::AccountHead,
         Self::AccountLocalAnchor,
+        Self::RevisionSeen,
+        Self::MailSearchStoreKey,
     ];
 }
 
@@ -453,6 +477,8 @@ impl TryFrom<u16> for AccountRecordPurpose {
             16 => Ok(Self::ChatProfileKeyWrap),
             17 => Ok(Self::AccountHead),
             18 => Ok(Self::AccountLocalAnchor),
+            19 => Ok(Self::RevisionSeen),
+            20 => Ok(Self::MailSearchStoreKey),
             _ => Err(CryptoError::InvalidInput(format!(
                 "unknown account-record purpose {value}"
             ))),

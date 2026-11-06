@@ -92,8 +92,8 @@ The account's own at-rest formats bind the key binding, never a name, and a
 format that bound a name was replaced by a new version with no reader for the
 old one (the private beta was reset): identity pins, contact cards and mail
 names (now account records), contact summaries `kutup/contact-summary/v1` →
-`/v2`, and Chat's wrapped profile key
-`kutup/chat-profile/wrap/v1` → `-v2`. Each vector file lists the values that
+`/v2`, and Chat's wrapped profile key (`kutup/chat-profile/wrap/v1` → `-v2`, now an
+account record, `ChatProfileKeyWrap`). Each vector file lists the values that
 must be refused: another key binding, the address in place of the binding, a
 changed header, nonce or ciphertext, and the old address-bound value.
 Statements to other people keep naming the address, because the address is

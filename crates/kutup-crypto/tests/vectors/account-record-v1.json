@@ -1409,6 +1409,149 @@
           "envelope": "S1VUUEFSMQAAAQABAAAAAQAkMGI2YjVlMGMtNGMxZS00YjhlLTljMmQtNmExZjNlNWQ3YzliID8+PTw7Ojk4NzY1NDMyMTAvLi0sKyopKCcmJSQjIiEg7p5NC4Ih+jBLicxvYHmsdQiHCehZKRr63EGSE9Jax6IREREREREREREREREREREREREREREREREAAAEQW/OF/4ffy4IgHh7rYC/u5vIGPEUWucJBe5phOuJnHaeMqFoKa2N5RrmSBxxV9Cx/DQsxq7H4nA0pVRqleZf9wKj0jTFSF77A0S8x8qSk7QYfUC1U6FCv3F3FqjByYBHUU76yFUnmQZX5/evYLGW7NWLDYqA+oSXK3dDfB/RbiljRsT2ggAeh9XAA/WL+7MfSw022IQQq/3tSCimo9emLuLrqMklLAy10nN7VResMWPttkqPF2QafCgbxmIFKpkiuAGbU8hFIJdMMAV6A94QfdQZStR6JKuUNT7vEK2BAMOgHjXWr3NUH9Cq52fStdB4YjoMtpR+NYF8Aw07oPEnhgBGtaQDsJ7fXqkBe5u3A7UU="
         }
       ]
+    },
+    {
+      "purpose": 19,
+      "objectId": "Pz49PDs6OTg3NjU0MzIxMC8uLSwrKikoJyYlJCMiISA=",
+      "plaintext": "QkJCQkJCQkI=",
+      "nonce": "ERERERERERERERERERERERERERERERER",
+      "envelope": "S1VUUEFSMQAAAQATAAAAAQAkMGI2YjVlMGMtNGMxZS00YjhlLTljMmQtNmExZjNlNWQ3YzliID8+PTw7Ojk4NzY1NDMyMTAvLi0sKyopKCcmJSQjIiEgIpdEmzFN3bPyCM4XBYKaROgrkAf4yz7b1vQNmE6K8m4REREREREREREREREREREREREREREREREAAAAYkeKIOoO7gZCkbiaaX7ckjs+rGazJNFsH",
+      "refused": [
+        {
+          "why": "an unknown suite",
+          "step": "inspect",
+          "envelope": "S1VUUEFSMQAAAgATAAAAAQAkMGI2YjVlMGMtNGMxZS00YjhlLTljMmQtNmExZjNlNWQ3YzliID8+PTw7Ojk4NzY1NDMyMTAvLi0sKyopKCcmJSQjIiEgIpdEmzFN3bPyCM4XBYKaROgrkAf4yz7b1vQNmE6K8m4REREREREREREREREREREREREREREREREAAAAYkeKIOoO7gZCkbiaaX7ckjs+rGazJNFsH"
+        },
+        {
+          "why": "an unknown purpose",
+          "step": "inspect",
+          "envelope": "S1VUUEFSMQAAAf//AAAAAQAkMGI2YjVlMGMtNGMxZS00YjhlLTljMmQtNmExZjNlNWQ3YzliID8+PTw7Ojk4NzY1NDMyMTAvLi0sKyopKCcmJSQjIiEgIpdEmzFN3bPyCM4XBYKaROgrkAf4yz7b1vQNmE6K8m4REREREREREREREREREREREREREREREREAAAAYkeKIOoO7gZCkbiaaX7ckjs+rGazJNFsH"
+        },
+        {
+          "why": "master-key generation 0",
+          "step": "inspect",
+          "envelope": "S1VUUEFSMQAAAQATAAAAAAAkMGI2YjVlMGMtNGMxZS00YjhlLTljMmQtNmExZjNlNWQ3YzliID8+PTw7Ojk4NzY1NDMyMTAvLi0sKyopKCcmJSQjIiEgIpdEmzFN3bPyCM4XBYKaROgrkAf4yz7b1vQNmE6K8m4REREREREREREREREREREREREREREREREAAAAYkeKIOoO7gZCkbiaaX7ckjs+rGazJNFsH"
+        },
+        {
+          "why": "master-key generation relabelled",
+          "step": "open",
+          "envelope": "S1VUUEFSMQAAAQATAAAAAgAkMGI2YjVlMGMtNGMxZS00YjhlLTljMmQtNmExZjNlNWQ3YzliID8+PTw7Ojk4NzY1NDMyMTAvLi0sKyopKCcmJSQjIiEgIpdEmzFN3bPyCM4XBYKaROgrkAf4yz7b1vQNmE6K8m4REREREREREREREREREREREREREREREREAAAAYkeKIOoO7gZCkbiaaX7ckjs+rGazJNFsH"
+        },
+        {
+          "why": "binding not a canonical key binding",
+          "step": "inspect",
+          "envelope": "S1VUUEFSMQAAAQATAAAAAQAkQmI2YjVlMGMtNGMxZS00YjhlLTljMmQtNmExZjNlNWQ3YzliID8+PTw7Ojk4NzY1NDMyMTAvLi0sKyopKCcmJSQjIiEgIpdEmzFN3bPyCM4XBYKaROgrkAf4yz7b1vQNmE6K8m4REREREREREREREREREREREREREREREREAAAAYkeKIOoO7gZCkbiaaX7ckjs+rGazJNFsH"
+        },
+        {
+          "why": "trailing byte",
+          "step": "inspect",
+          "envelope": "S1VUUEFSMQAAAQATAAAAAQAkMGI2YjVlMGMtNGMxZS00YjhlLTljMmQtNmExZjNlNWQ3YzliID8+PTw7Ojk4NzY1NDMyMTAvLi0sKyopKCcmJSQjIiEgIpdEmzFN3bPyCM4XBYKaROgrkAf4yz7b1vQNmE6K8m4REREREREREREREREREREREREREREREREAAAAYkeKIOoO7gZCkbiaaX7ckjs+rGazJNFsHAA=="
+        },
+        {
+          "why": "key commitment changed",
+          "step": "open",
+          "envelope": "S1VUUEFSMQAAAQATAAAAAQAkMGI2YjVlMGMtNGMxZS00YjhlLTljMmQtNmExZjNlNWQ3YzliID8+PTw7Ojk4NzY1NDMyMTAvLi0sKyopKCcmJSQjIiEgI5dEmzFN3bPyCM4XBYKaROgrkAf4yz7b1vQNmE6K8m4REREREREREREREREREREREREREREREREAAAAYkeKIOoO7gZCkbiaaX7ckjs+rGazJNFsH"
+        },
+        {
+          "why": "no object id",
+          "step": "inspect",
+          "envelope": "S1VUUEFSMQAAAQATAAAAAQAkMGI2YjVlMGMtNGMxZS00YjhlLTljMmQtNmExZjNlNWQ3YzliAPRh+REw/2pARDn0Q3bZ52vZKSBlkWwMvKdxPfDNGaC7ERERERERERERERERERERERERERERERERAAAAGPJrKGgowL5E9+FFtc6+mAX2kb4OXfL5ZQ=="
+        },
+        {
+          "why": "an object id of the wrong length",
+          "step": "inspect",
+          "envelope": "S1VUUEFSMQAAAQATAAAAAQAkMGI2YjVlMGMtNGMxZS00YjhlLTljMmQtNmExZjNlNWQ3YzliIQcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBzvsh0YLCZ8OgGdIImF3W6kF7x7Jspop3/7ZBa9K3v7WERERERERERERERERERERERERERERERERAAAAGJxcoqsMHtrFS2Jvi2x/5tdlb8LS/KmMxw=="
+        },
+        {
+          "why": "a revision where the purpose has none",
+          "step": "inspect",
+          "envelope": "S1VUUEFSMQAAAQATAAAAAQAkMGI2YjVlMGMtNGMxZS00YjhlLTljMmQtNmExZjNlNWQ3YzliID8+PTw7Ojk4NzY1NDMyMTAvLi0sKyopKCcmJSQjIiEgAAAAAAAAAAHZHGbAA0QPrY9IpxP/k0bQ+xM4t550qKdcW2W8llhcOhEREREREREREREREREREREREREREREREQAAABiRvmwnMguQRp39wlMqm8GkvZmOneQcVyM="
+        },
+        {
+          "why": "a length its padding policy never gives",
+          "step": "inspect",
+          "envelope": "S1VUUEFSMQAAAQATAAAAAQAkMGI2YjVlMGMtNGMxZS00YjhlLTljMmQtNmExZjNlNWQ3YzliID8+PTw7Ojk4NzY1NDMyMTAvLi0sKyopKCcmJSQjIiEgIpdEmzFN3bPyCM4XBYKaROgrkAf4yz7b1vQNmE6K8m4REREREREREREREREREREREREREREREREAAAAZkeKIOoO7gZBFB+ZH4M5Fv8SsrqwYiN6dHg=="
+        },
+        {
+          "why": "sealed for another account",
+          "step": "open",
+          "envelope": "S1VUUEFSMQAAAQATAAAAAQAkMWI2YjVlMGMtNGMxZS00YjhlLTljMmQtNmExZjNlNWQ3YzliID8+PTw7Ojk4NzY1NDMyMTAvLi0sKyopKCcmJSQjIiEgNLlHqS6zkP3AwI+Qgo5qzlwidcxEyeTdaAVq1JwJgrIREREREREREREREREREREREREREREREREAAAAYo0/oLBvZfBnWE4yn89lJUFl9mXBE1OxO"
+        },
+        {
+          "why": "purpose changed",
+          "step": "inspect-or-open",
+          "envelope": "S1VUUEFSMQAAAQABAAAAAQAkMGI2YjVlMGMtNGMxZS00YjhlLTljMmQtNmExZjNlNWQ3YzliID8+PTw7Ojk4NzY1NDMyMTAvLi0sKyopKCcmJSQjIiEgIpdEmzFN3bPyCM4XBYKaROgrkAf4yz7b1vQNmE6K8m4REREREREREREREREREREREREREREREREAAAAYkeKIOoO7gZCkbiaaX7ckjs+rGazJNFsH"
+        }
+      ]
+    },
+    {
+      "purpose": 20,
+      "objectId": "",
+      "plaintext": "QkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkI=",
+      "nonce": "ERERERERERERERERERERERERERERERER",
+      "envelope": "S1VUUEFSMQAAAQAUAAAAAQAkMGI2YjVlMGMtNGMxZS00YjhlLTljMmQtNmExZjNlNWQ3YzliAEA9uQpDpVcAbgYDuryLqPL8YCLdJ0TBHgAdOQ0iccYdERERERERERERERERERERERERERERERERAAAAMNyhIgGYOZGKC41o4eyYFjFKGpvYvWWRwb+LxW1Ej/O3SJIUgDnvCjPoDF8/z/xsbA==",
+      "refused": [
+        {
+          "why": "an unknown suite",
+          "step": "inspect",
+          "envelope": "S1VUUEFSMQAAAgAUAAAAAQAkMGI2YjVlMGMtNGMxZS00YjhlLTljMmQtNmExZjNlNWQ3YzliAEA9uQpDpVcAbgYDuryLqPL8YCLdJ0TBHgAdOQ0iccYdERERERERERERERERERERERERERERERERAAAAMNyhIgGYOZGKC41o4eyYFjFKGpvYvWWRwb+LxW1Ej/O3SJIUgDnvCjPoDF8/z/xsbA=="
+        },
+        {
+          "why": "an unknown purpose",
+          "step": "inspect",
+          "envelope": "S1VUUEFSMQAAAf//AAAAAQAkMGI2YjVlMGMtNGMxZS00YjhlLTljMmQtNmExZjNlNWQ3YzliAEA9uQpDpVcAbgYDuryLqPL8YCLdJ0TBHgAdOQ0iccYdERERERERERERERERERERERERERERERERAAAAMNyhIgGYOZGKC41o4eyYFjFKGpvYvWWRwb+LxW1Ej/O3SJIUgDnvCjPoDF8/z/xsbA=="
+        },
+        {
+          "why": "master-key generation 0",
+          "step": "inspect",
+          "envelope": "S1VUUEFSMQAAAQAUAAAAAAAkMGI2YjVlMGMtNGMxZS00YjhlLTljMmQtNmExZjNlNWQ3YzliAEA9uQpDpVcAbgYDuryLqPL8YCLdJ0TBHgAdOQ0iccYdERERERERERERERERERERERERERERERERAAAAMNyhIgGYOZGKC41o4eyYFjFKGpvYvWWRwb+LxW1Ej/O3SJIUgDnvCjPoDF8/z/xsbA=="
+        },
+        {
+          "why": "master-key generation relabelled",
+          "step": "open",
+          "envelope": "S1VUUEFSMQAAAQAUAAAAAgAkMGI2YjVlMGMtNGMxZS00YjhlLTljMmQtNmExZjNlNWQ3YzliAEA9uQpDpVcAbgYDuryLqPL8YCLdJ0TBHgAdOQ0iccYdERERERERERERERERERERERERERERERERAAAAMNyhIgGYOZGKC41o4eyYFjFKGpvYvWWRwb+LxW1Ej/O3SJIUgDnvCjPoDF8/z/xsbA=="
+        },
+        {
+          "why": "binding not a canonical key binding",
+          "step": "inspect",
+          "envelope": "S1VUUEFSMQAAAQAUAAAAAQAkQmI2YjVlMGMtNGMxZS00YjhlLTljMmQtNmExZjNlNWQ3YzliAEA9uQpDpVcAbgYDuryLqPL8YCLdJ0TBHgAdOQ0iccYdERERERERERERERERERERERERERERERERAAAAMNyhIgGYOZGKC41o4eyYFjFKGpvYvWWRwb+LxW1Ej/O3SJIUgDnvCjPoDF8/z/xsbA=="
+        },
+        {
+          "why": "trailing byte",
+          "step": "inspect",
+          "envelope": "S1VUUEFSMQAAAQAUAAAAAQAkMGI2YjVlMGMtNGMxZS00YjhlLTljMmQtNmExZjNlNWQ3YzliAEA9uQpDpVcAbgYDuryLqPL8YCLdJ0TBHgAdOQ0iccYdERERERERERERERERERERERERERERERERAAAAMNyhIgGYOZGKC41o4eyYFjFKGpvYvWWRwb+LxW1Ej/O3SJIUgDnvCjPoDF8/z/xsbAA="
+        },
+        {
+          "why": "key commitment changed",
+          "step": "open",
+          "envelope": "S1VUUEFSMQAAAQAUAAAAAQAkMGI2YjVlMGMtNGMxZS00YjhlLTljMmQtNmExZjNlNWQ3YzliAEE9uQpDpVcAbgYDuryLqPL8YCLdJ0TBHgAdOQ0iccYdERERERERERERERERERERERERERERERERAAAAMNyhIgGYOZGKC41o4eyYFjFKGpvYvWWRwb+LxW1Ej/O3SJIUgDnvCjPoDF8/z/xsbA=="
+        },
+        {
+          "why": "an object id where the purpose has none",
+          "step": "inspect",
+          "envelope": "S1VUUEFSMQAAAQAUAAAAAQAkMGI2YjVlMGMtNGMxZS00YjhlLTljMmQtNmExZjNlNWQ3YzliEAcHBwcHBwcHBwcHBwcHBwfxDyyBjlF2ERoqxsk1vxKqanFXC/kekbG8d9GLiz6IFhEREREREREREREREREREREREREREREREQAAADBeIfhLDjVNNiOTLQ6KQNKFqzHLOw34OB/SdtnKeVCtRPz1In1ZEwnqppeS8y7rf3k="
+        },
+        {
+          "why": "a revision where the purpose has none",
+          "step": "inspect",
+          "envelope": "S1VUUEFSMQAAAQAUAAAAAQAkMGI2YjVlMGMtNGMxZS00YjhlLTljMmQtNmExZjNlNWQ3YzliAAAAAAAAAAABwUEgflpppwRv47DlD53Wvotx/3Uxkxmki9LP2VqQ0XwREREREREREREREREREREREREREREREREAAAAwsAVVDmP5sMqL8OTJfNr5WgAtUpzb0znbAUaa0uyY8FeINpSPgBkMK5n5a1P28iDT"
+        },
+        {
+          "why": "a length its padding policy never gives",
+          "step": "inspect",
+          "envelope": "S1VUUEFSMQAAAQAUAAAAAQAkMGI2YjVlMGMtNGMxZS00YjhlLTljMmQtNmExZjNlNWQ3YzliAEA9uQpDpVcAbgYDuryLqPL8YCLdJ0TBHgAdOQ0iccYdERERERERERERERERERERERERERERERERAAAAMdyhIgGYOZGKC41o4eyYFjFKGpvYvWWRwb+LxW1Ej/O3/pQkUlc96gYXI46lmMkF69g="
+        },
+        {
+          "why": "sealed for another account",
+          "step": "open",
+          "envelope": "S1VUUEFSMQAAAQAUAAAAAQAkMWI2YjVlMGMtNGMxZS00YjhlLTljMmQtNmExZjNlNWQ3YzliAEz/V734N3cNMIWqi/bCkeW4eAHhRnkol3OAuWN7mtnRERERERERERERERERERERERERERERERERAAAAMI1BFXSS2tOG84YAkzNZ9w2TubA5HgWSSZwlh1FmTz1uv5j5JqlhzO6hvlx7yT9gvQ=="
+        },
+        {
+          "why": "purpose changed",
+          "step": "inspect-or-open",
+          "envelope": "S1VUUEFSMQAAAQABAAAAAQAkMGI2YjVlMGMtNGMxZS00YjhlLTljMmQtNmExZjNlNWQ3YzliAEA9uQpDpVcAbgYDuryLqPL8YCLdJ0TBHgAdOQ0iccYdERERERERERERERERERERERERERERERERAAAAMNyhIgGYOZGKC41o4eyYFjFKGpvYvWWRwb+LxW1Ej/O3SJIUgDnvCjPoDF8/z/xsbA=="
+        }
+      ]
     }
   ]
 }

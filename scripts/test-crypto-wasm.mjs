@@ -65,14 +65,21 @@ for (const binding of ['alice@example.com', '0B9F4C0E-6A51-4D2F-9A33-5E1F6C7D8E9
   assert.throws(() => crypto.openAccountRecord(accountEnvelope, envelopeKey, 1, binding), /binding/)
 }
 
-// The revision guard's store (Rust revision_guard): entries named by an HMAC,
-// revisions sealed to their entry, both under the account's keys.
-const guardKeys = new crypto.RevisionGuardKeys(Buffer.alloc(32, 0x31).toString('base64'))
+// The revision guard's store (Rust revision_guard): entries named by a keyed
+// hash, revisions account records bound to their entry and the account's key
+// binding.
+const guardBinding = '0b6b5e0c-4c1e-4b8e-9c2d-6a1f3e5d7c9b'
+const guardKeys = new crypto.RevisionGuardKeys(Buffer.alloc(32, 0x31).toString('base64'), guardBinding)
 const guardEntry = guardKeys.entryId('contact', 'ayse@example.com')
 assert.match(guardEntry, /^[0-9a-f]{64}$/)
-assert.equal(guardKeys.openSeen(guardEntry, guardKeys.sealSeen(guardEntry, 1791633600000)), 1791633600000)
+const guardSealed = guardKeys.sealSeen(guardEntry, 1791633600000)
+assert.equal(guardKeys.openSeen(guardEntry, guardSealed), 1791633600000)
 assert.throws(() => guardKeys.openSeen(guardKeys.entryId('contact', 'bob@example.com'), guardKeys.sealSeen(guardEntry, 5)))
-assert.notEqual(new crypto.RevisionGuardKeys(Buffer.alloc(32, 0x32).toString('base64')).entryId('contact', 'ayse@example.com'), guardEntry)
+assert.notEqual(new crypto.RevisionGuardKeys(Buffer.alloc(32, 0x32).toString('base64'), guardBinding).entryId('contact', 'ayse@example.com'), guardEntry)
+// Another account's key binding under the same master key opens nothing.
+const reboundGuard = new crypto.RevisionGuardKeys(Buffer.alloc(32, 0x31).toString('base64'), '7d3f1a2b-9c4e-4f6a-8b1d-2e5c7a9f0b3d')
+assert.throws(() => reboundGuard.openSeen(guardEntry, guardSealed))
+assert.throws(() => new crypto.RevisionGuardKeys(Buffer.alloc(32, 0x31).toString('base64'), 'aci:x@example.com'))
 
 // The shared envelope vectors: every purpose's envelope is well formed, and
 // every refused one is refused here as in Rust (malformed ones by inspect;

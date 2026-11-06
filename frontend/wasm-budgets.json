@@ -1,10 +1,10 @@
 {
-  "comment": "Gzipped (level 9) size budget per WASM runtime, in bytes, checked by scripts/check-wasm-size.mjs in the web gate. About 5% above each runtime's size when set (2026-10-21); raise one only with a reason in the commit. crypto-calendar is crypto plus calendars and the time zone database (docs/plans/calendar.md), loaded instead of crypto by the apps with calendars. Both raised by 20000 when the Chat profile code moved into the crypto runtime (2026-11-03, docs/plans/chat-crypto-move.md: +18259 and +19024 bytes gzipped), so the apps that aren't Chat drop the Chat runtime.",
+  "comment": "Gzipped (level 9) size budget per WASM runtime, in bytes, checked by scripts/check-wasm-size.mjs in the web gate. About 5% above each runtime's size when set (2026-10-21); raise one only with a reason in the commit. crypto-calendar is crypto plus calendars and the time zone database (docs/plans/calendar.md), loaded instead of crypto by the apps with calendars. Both raised by 20000 when the Chat profile code moved into the crypto runtime (2026-11-03, docs/plans/chat-crypto-move.md: +18259 and +19024 bytes gzipped), so the apps that aren't Chat drop the Chat runtime. mail-search raised to 210000 when its store key became an account record (2026-11-06, W1 slice 5, docs/plans/w1-account-record.md: 200213 bytes gzipped, the account-record code it now links).",
   "budgets": {
     "crypto": 1800000,
     "crypto-calendar": 2145000,
     "chat": 3350000,
     "pass": 670000,
-    "mail-search": 200000
+    "mail-search": 210000
   }
 }

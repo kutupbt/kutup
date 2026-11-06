@@ -1,9 +1,10 @@
 {
   "masterKey": "WlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlo=",
+  "binding": "0b6b5e0c-4c1e-4b8e-9c2d-6a1f3e5d7c9b",
   "storeName": "e93068a1a0ee71e59e1881d19e7a2299",
   "storeKey": "MzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzMzM=",
   "wrapNonce": "IiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIi",
-  "wrappedStoreKey": "S1VUTVNXMQAAASIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIheHdOVFOCntzxQZ71BQZp8VBXYPkEGskGTgd49JhLHD7BTytq+i4xvoNy8At3cAdA==",
+  "wrappedStoreKey": "S1VUUEFSMQAAAQAUAAAAAQAkMGI2YjVlMGMtNGMxZS00YjhlLTljMmQtNmExZjNlNWQ3YzliAJIa/0Ol1LwwVeRUaEZj2JzmTImOzUeKpcLcQoy84nbLIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiAAAAMLe+zLiQEZurV3QoEKcHAEpIwaQtkcJwIzVII8Q65MxyjYeNo1lPP1itZvK4DOQVkA==",
   "name": "shard/680/fat",
   "recordId": "91c3fa1579a1c4a7c85d8bde62b330ef0ba4f50ddf18e59b36e12d29872ab12d",
   "value": "ZmF0dXJhIOKGkiDEsMWf",
@@ -15,6 +16,7 @@
       "kind": "record",
       "name": "shard/680/fau",
       "masterKey": null,
+      "binding": null,
       "bytes": "S1VUTVMxAAAAAUREREREREREREREREREREREREREREREREftSh8Jh+hmHcto/KPK7mIv28nxx9Kl+f9kUajLP7s="
     },
     {
@@ -22,6 +24,7 @@
       "kind": "record",
       "name": "shard/680/fat",
       "masterKey": null,
+      "binding": null,
       "bytes": "SlVUTVMxAAAAAUREREREREREREREREREREREREREREREREftSh8Jh+hmHcto/KPK7mIv28nxx9Kl+f9kUajLP7s="
     },
     {
@@ -29,6 +32,7 @@
       "kind": "record",
       "name": "shard/680/fat",
       "masterKey": null,
+      "binding": null,
       "bytes": "S1VUTVMxAAAAAEREREREREREREREREREREREREREREREREftSh8Jh+hmHcto/KPK7mIv28nxx9Kl+f9kUajLP7s="
     },
     {
@@ -36,6 +40,7 @@
       "kind": "record",
       "name": "shard/680/fat",
       "masterKey": null,
+      "binding": null,
       "bytes": "S1VUTVMxAAAAAURERUREREREREREREREREREREREREREREftSh8Jh+hmHcto/KPK7mIv28nxx9Kl+f9kUajLP7s="
     },
     {
@@ -43,6 +48,7 @@
       "kind": "record",
       "name": "shard/680/fat",
       "masterKey": null,
+      "binding": null,
       "bytes": "S1VUTVMxAAAAAUREREREREREREREREREREREREREREREREftSh8Jh+hmHcto/KPK7mIv28nxx9Kl+f9kUajLP7o="
     },
     {
@@ -50,6 +56,7 @@
       "kind": "record",
       "name": "shard/680/fat",
       "masterKey": null,
+      "binding": null,
       "bytes": "S1VUTVMxAAAAAUREREREREREREQ="
     },
     {
@@ -57,6 +64,7 @@
       "kind": "record",
       "name": "shard/680/fat",
       "masterKey": null,
+      "binding": null,
       "bytes": "S1VUTVMxAAAAAURERERERERERERERERERERERERERERERCXYDtkPBnTzCOx6S7Ju3VleFn1ZZjIl9TjO87ngoHc="
     },
     {
@@ -64,21 +72,40 @@
       "kind": "storeKey",
       "name": null,
       "masterKey": "W1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1tbW1s=",
-      "bytes": "S1VUTVNXMQAAASIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIheHdOVFOCntzxQZ71BQZp8VBXYPkEGskGTgd49JhLHD7BTytq+i4xvoNy8At3cAdA=="
+      "binding": null,
+      "bytes": "S1VUUEFSMQAAAQAUAAAAAQAkMGI2YjVlMGMtNGMxZS00YjhlLTljMmQtNmExZjNlNWQ3YzliAJIa/0Ol1LwwVeRUaEZj2JzmTImOzUeKpcLcQoy84nbLIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiAAAAMLe+zLiQEZurV3QoEKcHAEpIwaQtkcJwIzVII8Q65MxyjYeNo1lPP1itZvK4DOQVkA=="
+    },
+    {
+      "why": "another account's key binding",
+      "kind": "storeKey",
+      "name": null,
+      "masterKey": "WlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlo=",
+      "binding": "7d3f1a2b-9c4e-4f6a-8b1d-2e5c7a9f0b3d",
+      "bytes": "S1VUUEFSMQAAAQAUAAAAAQAkMGI2YjVlMGMtNGMxZS00YjhlLTljMmQtNmExZjNlNWQ3YzliAJIa/0Ol1LwwVeRUaEZj2JzmTImOzUeKpcLcQoy84nbLIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiAAAAMLe+zLiQEZurV3QoEKcHAEpIwaQtkcJwIzVII8Q65MxyjYeNo1lPP1itZvK4DOQVkA=="
     },
     {
       "why": "a flipped wrapped byte",
       "kind": "storeKey",
       "name": null,
       "masterKey": "WlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlo=",
-      "bytes": "S1VUTVNXMQAAASIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIheHdOVFOCntzxQZ71BQZp8VBXYPkEGskGTgd49JhLHD7BTytq+i4xvoNy8At3cAdQ=="
+      "binding": null,
+      "bytes": "S1VUUEFSMQAAAQAUAAAAAQAkMGI2YjVlMGMtNGMxZS00YjhlLTljMmQtNmExZjNlNWQ3YzliAJIa/0Ol1LwwVeRUaEZj2JzmTImOzUeKpcLcQoy84nbLIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiAAAAMLe+zLiQEZurV3QoEKcHAEpIwaQtkcJwIzVII8Q65MxyjYeNo1lPP1itZvK4DOQVkQ=="
     },
     {
       "why": "a flipped suite byte",
       "kind": "storeKey",
       "name": null,
       "masterKey": "WlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlo=",
-      "bytes": "S1VUTVNXMQAAACIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIheHdOVFOCntzxQZ71BQZp8VBXYPkEGskGTgd49JhLHD7BTytq+i4xvoNy8At3cAdA=="
+      "binding": null,
+      "bytes": "S1VUUEFSMQAAAAAUAAAAAQAkMGI2YjVlMGMtNGMxZS00YjhlLTljMmQtNmExZjNlNWQ3YzliAJIa/0Ol1LwwVeRUaEZj2JzmTImOzUeKpcLcQoy84nbLIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiAAAAMLe+zLiQEZurV3QoEKcHAEpIwaQtkcJwIzVII8Q65MxyjYeNo1lPP1itZvK4DOQVkA=="
+    },
+    {
+      "why": "a flipped purpose byte",
+      "kind": "storeKey",
+      "name": null,
+      "masterKey": "WlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlo=",
+      "binding": null,
+      "bytes": "S1VUUEFSMQAAAQAVAAAAAQAkMGI2YjVlMGMtNGMxZS00YjhlLTljMmQtNmExZjNlNWQ3YzliAJIa/0Ol1LwwVeRUaEZj2JzmTImOzUeKpcLcQoy84nbLIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiAAAAMLe+zLiQEZurV3QoEKcHAEpIwaQtkcJwIzVII8Q65MxyjYeNo1lPP1itZvK4DOQVkA=="
     }
   ]
 }

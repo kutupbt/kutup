@@ -252,6 +252,23 @@ there.
   `account_heads_live`.
 - The generic WASM account-record path refuses both purposes.
 
+## Slice 5 as built
+
+- `RevisionSeen` (19): the object is `hashed_object(master key, purpose,
+  scope ‖ id)` (each length-prefixed), which is also the name the device
+  stores the entry under; the plaintext is the revision (`Exact(8)`). The
+  guard's entry key, seal key and five labels are gone. `GuardKeys::derive`
+  takes the key binding; the web guard (`revisionGuard`) takes the session's
+  `envelopeBinding`, the CLI its profile's binding.
+- `MailSearchStoreKey` (20): no object, `Exact(32)`; a wrapped store key is
+  163 bytes. `KUTMSW1`, its wrap key and two labels are gone; the records in
+  the index (`KUTMS1`, under the store key) are unchanged. `MailSearchKeys`
+  and the WASM `MailSearch` take the key binding.
+- Both are device-only (decision (b) for 9 and 10). Entries and indexes kept
+  by a browser before this don't open: a guard entry then reads as never
+  seen, and the index is built again (browser data goes at the wipe anyway).
+- The generic WASM account-record path refuses both.
+
 ## Decisions (approved 2026-11-04)
 
 (a) **The account head's chain moves into the header** (the server then

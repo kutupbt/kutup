@@ -190,23 +190,27 @@ function serialized<T>(entry: string, task: () => Promise<T>): Promise<T> {
 
 let shared: RevisionStore | null = null
 /** By account: the guard, for the master key it was made with. */
-const guards = new Map<string, { masterKey: string; guard: RevisionGuard }>()
+const guards = new Map<string, { masterKey: string; binding: string; guard: RevisionGuard }>()
 /** Set by tests: keys that need no WASM. */
 let testKeys: ((userId: string) => GuardKeys) | null = null
 
-/** The account's guard over the browser's store. */
-export function revisionGuard(session: { userId: string; masterKey: Uint8Array }): RevisionGuard {
+/**
+ * The account's guard over the browser's store: its entries are sealed for
+ * the account's master key and key binding (`envelopeBinding`).
+ */
+export function revisionGuard(session: { userId: string; masterKey: Uint8Array; envelopeBinding: string }): RevisionGuard {
   const masterKey = toBase64(session.masterKey)
+  const binding = session.envelopeBinding
   const known = guards.get(session.userId)
-  // Made again when the master key is another (the keys derive from it).
-  if (known?.masterKey === masterKey) return known.guard
+  // Made again when the master key or the binding is another (the keys are both).
+  if (known?.masterKey === masterKey && known.binding === binding) return known.guard
   shared ??= indexedDbRevisionStore()
   let keys: Promise<GuardKeys> | null = null
   const forTests = testKeys
   const load = (): Promise<GuardKeys> => {
     if (forTests) return Promise.resolve(forTests(session.userId))
     keys ??= getCryptoWasm()
-      .then((wasm): GuardKeys => new wasm.RevisionGuardKeys(masterKey))
+      .then((wasm): GuardKeys => new wasm.RevisionGuardKeys(masterKey, binding))
       .catch((error: unknown) => {
         // Not kept: the next call loads again.
         keys = null
@@ -215,7 +219,7 @@ export function revisionGuard(session: { userId: string; masterKey: Uint8Array }
     return keys
   }
   const guard = new RevisionGuard(shared, load)
-  guards.set(session.userId, { masterKey, guard })
+  guards.set(session.userId, { masterKey, binding, guard })
   return guard
 }
 
