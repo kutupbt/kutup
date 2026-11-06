@@ -2,7 +2,7 @@ import { ChevronDown, ChevronRight, Folder, FolderPlus, MoreHorizontal, Pencil, 
 import { useState, type DragEvent, type ReactNode } from 'react'
 import { useTranslation } from 'react-i18next'
 import { Link, NavLink, useParams } from 'react-router-dom'
-import { useRefreshMail, type FolderCount } from '@kutup/mail-core/api'
+import { useRefetchOpenMail, type FolderCount } from '@kutup/mail-core/api'
 import { MAX_FOLDER_DEPTH, usePlaces, useUpdateFolder, type MailFolder, type MailLabel } from '@kutup/mail-core/places'
 import { SidebarRefreshButton } from '@kutup/ui/components/app-shell'
 import { useSidebarRefresh } from '@kutup/ui/lib/sidebarRefresh'
@@ -43,7 +43,7 @@ function PlaceRow({
 }) {
   const { t } = useTranslation()
   const [over, setOver] = useState(false)
-  const run = useRefreshMail()
+  const run = useRefetchOpenMail()
   const refresh = { label: t('folders.refresh', { name: label }), run }
   const refreshing = useSidebarRefresh(to, refresh)
   const drop = {

@@ -5,7 +5,7 @@ import { lazy, Suspense, useEffect, useState, type ReactNode } from 'react'
 import { useTranslation } from 'react-i18next'
 import { Link, Outlet, useLocation, useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import { StorageMeter } from '@kutup/drive-ui/StorageMeter'
-import { useCounts, useMailSettings, useRefreshMail, type FolderId } from '@kutup/mail-core/api'
+import { useCounts, useMailSettings, useRefetchOpenMail, type FolderId } from '@kutup/mail-core/api'
 import { useContentSearch } from '@kutup/mail-core/contentSearch'
 import { useMyGroups, type MailGroup } from '@kutup/mail-core/groups'
 import { appUrl } from '@kutup/session/apps'
@@ -71,7 +71,7 @@ const SHARED_NAV: { id: FolderId; icon: ReactNode }[] = [
 function SharedMailbox({ group, open }: { group: MailGroup; open: boolean }) {
   const { t } = useTranslation()
   const counts = useCounts(group.id)
-  const refresh = useRefreshMail()
+  const refresh = useRefetchOpenMail()
   const unread = (folder: FolderId) => counts.data?.find((c) => c.folder === folder)?.unread ?? 0
   return (
     <>
@@ -153,7 +153,7 @@ export function MailShell() {
   const accountHeadState = useAccountHeadState()
   useAccountUiPreferences()
   const counts = useCounts()
-  const refresh = useRefreshMail()
+  const refresh = useRefetchOpenMail()
   useNewMailNotifications()
   // An outside forwarding that ended elsewhere: encryption back on (once a session).
   useSettleOwedKeyLists()

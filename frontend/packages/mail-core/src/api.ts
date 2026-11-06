@@ -279,7 +279,7 @@ export const POLL_MS = 30_000
  * The open list and the counts, fetched again now: the sidebar's refresh
  * (Proton's `call()` on the event loop). Resolves when both are in.
  */
-export function useRefreshMail() {
+export function useRefetchOpenMail() {
   const queryClient = useQueryClient()
   return () =>
     Promise.all([
