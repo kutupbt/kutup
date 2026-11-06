@@ -217,6 +217,30 @@ pub async fn get_library(
     Ok(Json(record_of(stored)?))
 }
 
+/// `409` for a write that does not follow the stored record: with that
+/// record (which the client opens and merges into) when it is this
+/// incarnation's, else without one.
+async fn library_conflict(
+    state: &AppState,
+    user_id: Uuid,
+    incarnation: &str,
+) -> AppResult<axum::response::Response> {
+    use axum::response::IntoResponse;
+    use kutup_crypto::photos_library;
+    let stored = stored_library(state, user_id)
+        .await?
+        .filter(|(_, _, envelope)| {
+            photos_library::inspect(envelope)
+                .is_ok_and(|header| hex::encode(header.account_incarnation_id) == incarnation)
+        });
+    Ok(match stored {
+        Some(stored) => {
+            (axum::http::StatusCode::CONFLICT, Json(record_of(stored)?)).into_response()
+        }
+        None => AppError::conflict("library revision does not follow").into_response(),
+    })
+}
+
 /// `PUT /api/photos/library` — the next revision of your marks. Accepted only
 /// as the successor of what is stored (its revision plus one, naming its
 /// digest), else `409` with the current record, which the client merges into.
@@ -241,22 +265,24 @@ pub async fn put_library(
     let user_id = trusted_uuid(&user.user_id)?;
     let envelope = photos_library::decode_canonical_b64(&request.envelope)
         .map_err(|_| AppError::bad_request("envelope must be canonical base64"))?;
-    let header = photos_library::inspect(&envelope)
-        .map_err(|_| AppError::bad_request("not a Photos library envelope"))?;
-    let digest = photos_library::envelope_digest(&envelope)
-        .map_err(|_| AppError::bad_request("not a Photos library envelope"))?;
-    let revision = i64::try_from(header.revision)
-        .map_err(|_| AppError::bad_request("library revision is too large"))?;
     let incarnation: String =
         sqlx::query_scalar("SELECT account_incarnation_id FROM users WHERE id = $1")
             .bind(user_id)
             .fetch_one(&state.pool)
             .await?;
-    if hex::encode(header.account_incarnation_id) != incarnation {
-        return Err(AppError::bad_request(
-            "library of another account incarnation",
-        ));
-    }
+    let incarnation_id: [u8; 32] = hex::decode(&incarnation)
+        .ok()
+        .and_then(|bytes| bytes.try_into().ok())
+        .ok_or_else(|| AppError::internal("account incarnation id is not 32 bytes of hex"))?;
+    let binding = crate::revisions::key_binding(&state.pool, user_id).await?;
+    // This account's record (its key binding), for its current incarnation:
+    // another account's, or one from before a reset, is refused.
+    let header = photos_library::validate(&envelope, &binding, &incarnation_id)
+        .map_err(|_| AppError::bad_request("not this account's Photos library record"))?;
+    let digest = photos_library::envelope_digest(&envelope)
+        .map_err(|_| AppError::bad_request("not a Photos library envelope"))?;
+    let revision = i64::try_from(header.revision)
+        .map_err(|_| AppError::bad_request("library revision is too large"))?;
 
     let mut tx = state.pool.begin().await?;
     let current: Option<(i64, String, Vec<u8>)> = sqlx::query_as(
@@ -272,6 +298,19 @@ pub async fn put_library(
             .map(|h| hex::encode(h.account_incarnation_id) != incarnation)
             .unwrap_or(true)
     });
+    // The record already stored, sent again (a retry after a lost answer):
+    // nothing changes, and it is answered as stored.
+    if let Some((stored_revision, stored_digest, _)) = &current {
+        if !stale_incarnation && *stored_revision == revision && *stored_digest == digest {
+            drop(tx);
+            return Ok(Json(PhotosLibraryRecord {
+                envelope: request.envelope,
+                revision: header.revision,
+                envelope_digest: digest,
+            })
+            .into_response());
+        }
+    }
     let successor = match &current {
         None => revision == 1,
         Some(_) if stale_incarnation => revision == 1,
@@ -282,25 +321,46 @@ pub async fn put_library(
     };
     if !successor {
         drop(tx);
-        return Ok(match current {
-            Some(stored) if !stale_incarnation => {
-                (axum::http::StatusCode::CONFLICT, Json(record_of(stored)?)).into_response()
-            }
-            _ => AppError::conflict("library revision does not follow").into_response(),
-        });
+        return library_conflict(&state, user_id, &incarnation).await;
     }
-    sqlx::query(
-        "INSERT INTO photos_library (user_id, revision, envelope_digest, envelope) VALUES ($1, $2, $3, $4)
-         ON CONFLICT (user_id) DO UPDATE SET
-             revision = EXCLUDED.revision, envelope_digest = EXCLUDED.envelope_digest,
-             envelope = EXCLUDED.envelope, updated_at = now()",
-    )
-    .bind(user_id)
-    .bind(revision)
-    .bind(&digest)
-    .bind(&envelope)
-    .execute(&mut *tx)
-    .await?;
+    // A compare-and-swap in the statement itself: with no row there is nothing
+    // to lock, so two first writes both get here, and only one inserts; an
+    // update (a successor, or a new chain over a reset's record) matches the
+    // row it was checked against. A write that changes no row lost a race.
+    let written = match &current {
+        None => {
+            sqlx::query(
+                "INSERT INTO photos_library (user_id, revision, envelope_digest, envelope)
+                 VALUES ($1, $2, $3, $4) ON CONFLICT (user_id) DO NOTHING",
+            )
+            .bind(user_id)
+            .bind(revision)
+            .bind(&digest)
+            .bind(&envelope)
+            .execute(&mut *tx)
+            .await?
+        }
+        Some((stored_revision, stored_digest, _)) => {
+            sqlx::query(
+                "UPDATE photos_library
+                    SET revision = $2, envelope_digest = $3, envelope = $4, updated_at = now()
+                  WHERE user_id = $1 AND revision = $5 AND envelope_digest = $6",
+            )
+            .bind(user_id)
+            .bind(revision)
+            .bind(&digest)
+            .bind(&envelope)
+            .bind(stored_revision)
+            .bind(stored_digest)
+            .execute(&mut *tx)
+            .await?
+        }
+    }
+    .rows_affected();
+    if written != 1 {
+        drop(tx);
+        return library_conflict(&state, user_id, &incarnation).await;
+    }
     tx.commit().await?;
     Ok(Json(PhotosLibraryRecord {
         envelope: request.envelope,

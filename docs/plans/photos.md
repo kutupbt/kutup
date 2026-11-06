@@ -164,10 +164,11 @@ Until then, a photo sorts by when it was uploaded.
 These are yours, not the photo's: a favourite from a shared folder is
 private to you. They are kept in one encrypted **library record** per
 account:
-- **Key:** a random library key, sealed with the account key (new account
-  envelope purpose).
-- **Record:** file id sets for favourites, archived and hidden, sealed under
-  that key (new Drive envelope purpose), with a revision.
+- **Record:** file id sets for favourites, archived and hidden, as one
+  chained account record (purpose `PhotosLibrary`,
+  docs/plans/w1-account-record.md) under the master key, bound to the
+  account's key binding and incarnation, with a revision and its
+  predecessor's digest.
 - **Two devices changing it at once:** the second write is refused, and that
   device merges and writes again.
 - **What the server learns:** only that a record exists and its size. Ente's

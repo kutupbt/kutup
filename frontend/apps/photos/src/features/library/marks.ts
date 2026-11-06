@@ -3,7 +3,7 @@ import { isAxiosError } from 'axios'
 import { useCallback, useMemo } from 'react'
 import {
   openPhotosLibrary,
-  photosLibraryKey,
+  photosLibraryDigest,
   sealPhotosLibrary,
   type PhotosLibraryMarks,
 } from '@kutup/crypto/photosLibrary'
@@ -14,6 +14,9 @@ import api from '@kutup/session/client'
 // hidden, in one account-private record. The server keeps the latest and
 // accepts only its successor; a change another device made first comes back
 // as 409 with the newer record, and the change is applied again on top of it.
+// This browser keeps the newest record it has seen (its revision and digest)
+// and refuses an older one, or another at the same revision: a server can't
+// bring back marks that were taken off (a photo hidden again shown).
 
 export type MarkKind = keyof PhotosLibraryMarks
 
@@ -33,18 +36,73 @@ interface MarksState {
 const EMPTY: PhotosLibraryMarks = { favourites: [], archived: [], hidden: [] }
 export const marksKey = ['photos-marks'] as const
 
-async function openRecord(record: StoredRecord, key: string, me: DriveIdentity): Promise<MarksState> {
-  const { marks } = await openPhotosLibrary(record.envelope, key, me.incarnationId)
-  return { revision: record.revision, digest: record.envelopeDigest, marks }
+interface LibraryPinV1 {
+  version: 1
+  revision: number
+  digest: string
 }
 
-async function loadMarks(me: DriveIdentity): Promise<MarksState> {
-  const key = await photosLibraryKey(me.masterKey)
+const PIN_PREFIX = 'kutup.photos.library.pin.v1.'
+
+function loadPin(incarnationId: string): LibraryPinV1 | null {
+  let text: string | null = null
+  try {
+    text = globalThis.localStorage?.getItem(PIN_PREFIX + incarnationId) ?? null
+  } catch {
+    return null
+  }
+  if (text === null) return null
+  const pin = JSON.parse(text) as Partial<LibraryPinV1>
+  if (pin.version !== 1 || !Number.isSafeInteger(pin.revision) || (pin.revision ?? 0) < 1 ||
+      typeof pin.digest !== 'string' || !/^[0-9a-f]{64}$/.test(pin.digest)) {
+    throw new Error('the local Photos library pin is malformed')
+  }
+  return pin as LibraryPinV1
+}
+
+/** Remember `revision` as the newest record seen, never moving back. */
+function storePin(incarnationId: string, revision: number, digest: string): void {
+  const known = loadPin(incarnationId)
+  if (known && known.revision >= revision) return
+  try {
+    globalThis.localStorage?.setItem(PIN_PREFIX + incarnationId, JSON.stringify({ version: 1, revision, digest }))
+  } catch {
+    // Storage may be off: the chain is still checked, only not across restarts.
+  }
+}
+
+/** A record the server shows, against the newest this browser has seen. */
+function checkPin(incarnationId: string, revision: number, digest: string): void {
+  const pin = loadPin(incarnationId)
+  if (!pin) return
+  if (revision < pin.revision || (revision === pin.revision && digest !== pin.digest)) {
+    throw new Error('the server showed an older Photos library than this browser has seen')
+  }
+}
+
+async function openRecord(record: StoredRecord, me: DriveIdentity): Promise<MarksState> {
+  const { marks, header } = await openPhotosLibrary(record.envelope, me, me.incarnationId)
+  // What the server says of the record must be what the record says.
+  const digest = await photosLibraryDigest(record.envelope)
+  if (header.revision !== record.revision || digest !== record.envelopeDigest) {
+    throw new Error('the Photos library record differs from what the server says of it')
+  }
+  checkPin(me.incarnationId, header.revision, digest)
+  storePin(me.incarnationId, header.revision, digest)
+  return { revision: header.revision, digest, marks }
+}
+
+/** The account's marks as the server keeps them, checked against this browser's pin. */
+export async function loadMarks(me: DriveIdentity): Promise<MarksState> {
   try {
     const { data } = await api.get<StoredRecord>('/photos/library')
-    return await openRecord(data, key, me)
+    return await openRecord(data, me)
   } catch (error) {
-    if (isAxiosError(error) && error.response?.status === 404) return { revision: 0, digest: undefined, marks: EMPTY }
+    if (isAxiosError(error) && error.response?.status === 404) {
+      // No record, though this browser saw one: dropped by the server.
+      if (loadPin(me.incarnationId)) throw new Error('the server no longer shows the Photos library this browser has seen')
+      return { revision: 0, digest: undefined, marks: EMPTY }
+    }
     throw error
   }
 }
@@ -57,14 +115,14 @@ async function write(
   me: DriveIdentity,
   change: (marks: PhotosLibraryMarks) => PhotosLibraryMarks,
 ): Promise<void> {
-  const key = await photosLibraryKey(me.masterKey)
   const cacheKey = [...marksKey, me.userId]
   let state = queryClient.getQueryData<MarksState>(cacheKey) ?? (await loadMarks(me))
   for (let attempt = 0; attempt < 5; attempt++) {
     const next = change(state.marks)
-    const sealed = await sealPhotosLibrary(next, key, me.incarnationId, state.revision + 1, state.digest)
+    const sealed = await sealPhotosLibrary(next, me, me.incarnationId, state.revision + 1, state.digest)
     try {
       await api.put('/photos/library', { envelope: sealed.envelope })
+      storePin(me.incarnationId, state.revision + 1, sealed.digest)
       // The record's canonical order comes back when it is next read; the sets are what matter.
       queryClient.setQueryData<MarksState>(cacheKey, { revision: state.revision + 1, digest: sealed.digest, marks: next })
       return
@@ -72,7 +130,7 @@ async function write(
       if (!(isAxiosError(error) && error.response?.status === 409)) throw error
       const newer = error.response.data as Partial<StoredRecord> | undefined
       state = newer?.envelope && newer.revision && newer.envelopeDigest
-        ? await openRecord(newer as StoredRecord, key, me)
+        ? await openRecord(newer as StoredRecord, me)
         : await loadMarks(me)
       queryClient.setQueryData<MarksState>(cacheKey, state)
     }

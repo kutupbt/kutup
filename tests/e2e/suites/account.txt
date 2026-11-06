@@ -1,7 +1,8 @@
-# Account: registration, administration and the profile.
+# Account: registration, administration, the profile and account-owned records.
 specs/155-registration-codes.spec.ts
 specs/156-account-password.spec.ts
 specs/157-account-head.spec.ts
 specs/160-username-rename.spec.ts
 specs/119-account-limits.spec.ts
 specs/172-profile-from-crypto-runtime.spec.ts
+specs/121-photos-marks.spec.ts

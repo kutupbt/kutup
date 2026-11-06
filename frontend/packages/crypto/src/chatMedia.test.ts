@@ -20,7 +20,6 @@ import {
   chatMediaCipherSize,
   decryptChatMediaV1,
   decodeChatAttachmentLedgerEntry,
-  deriveChatAttachmentLedgerKey,
   encodeChatAttachmentLedgerEntry,
   encryptChatMediaV1,
   inspectChatAttachmentLedgerEnvelope,
@@ -67,11 +66,8 @@ describe('Chat-media Rust/WASM framing', () => {
 })
 
 describe('Chat attachment ledger Rust/WASM envelope', () => {
-  it('derives a stable purpose key and enforces account/entity/revision context', async () => {
-    const key = await deriveChatAttachmentLedgerKey(new Uint8Array(32).fill(0x33))
-    expect(Array.from(key)).toEqual(Array.from(await deriveChatAttachmentLedgerKey(
-      new Uint8Array(32).fill(0x33),
-    )))
+  it('is an account record of its account, entity and place in the chain', async () => {
+    const key = { masterKey: new Uint8Array(32).fill(0x33), binding: '0b6b5e0c-4c1e-4b8e-9c2d-6a1f3e5d7c9b' }
     const plaintext = new TextEncoder().encode('canonical entry')
     const context = {
       accountIncarnationId: incarnationId,
@@ -80,7 +76,6 @@ describe('Chat attachment ledger Rust/WASM envelope', () => {
     }
     const envelope = await sealChatAttachmentLedger(plaintext, key, context)
     expect(await inspectChatAttachmentLedgerEnvelope(envelope)).toEqual({
-      suite: 1,
       accountIncarnationId: incarnationId,
       entityId,
       revision: '1',
@@ -97,6 +92,9 @@ describe('Chat attachment ledger Rust/WASM envelope', () => {
       revision: 2n,
       previousEnvelopeDigest: '22'.repeat(32),
     })).rejects.toThrow()
+    // Another account's key binding, or another master key: refused.
+    await expect(openChatAttachmentLedger(envelope, { ...key, binding: '7d3f1a2b-9c4e-4f6a-8b1d-2e5c7a9f0b3d' }, context)).rejects.toThrow()
+    await expect(openChatAttachmentLedger(envelope, { ...key, masterKey: new Uint8Array(32).fill(0x34) }, context)).rejects.toThrow()
   })
 
   it('uses the strict Rust canonical codec for private accounting entries', async () => {

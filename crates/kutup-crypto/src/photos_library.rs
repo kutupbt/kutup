@@ -1,37 +1,24 @@
 //! The Photos library record (docs/plans/photos.md): an account's own marks
-//! on photos — favourites, archived, hidden — as one account-private envelope.
+//! on photos — favourites, archived, hidden — as one account record
+//! (`account_record`, purpose `PhotosLibrary`) under the master key.
 //!
-//! The key is a typed subkey of the recoverable master key (as the Chat
-//! attachment ledger's), so nothing else is stored to recover it. The fixed
-//! header carries the account incarnation, a revision and the previous
-//! envelope's SHA-256, which the server checks for compare-and-swap without
-//! reading anything: it learns that a record exists, its size and how often
-//! it changes, never which photos are marked.
-//!
-//! Envelope: `magic(8) suite(2) purpose(1) reserved(1) incarnation(32)
-//! revision(8) previous_digest(32) nonce(24) ciphertext_len(4)`, then the
-//! XChaCha20-Poly1305 ciphertext; the header is the AAD and the input of the
-//! per-envelope key.
+//! Its object is the account incarnation, so a record restarts at revision 1
+//! after an account reset; it is chained: each record names the digest of the
+//! one before it, which the server checks for compare-and-swap without
+//! reading anything. The server learns that a record exists, roughly its
+//! size (it is padded to 256-byte buckets) and how often it changes, never
+//! which photos are marked.
 
-use crate::primitives::{hash, Aead, Kdf, Suite};
 use base64::Engine as _;
 use serde::{Deserialize, Serialize};
-use zeroize::Zeroizing;
 
+use crate::account_record::{self, AccountRecordPurpose, MasterKeyGeneration};
 use crate::drive_object::parse_canonical_uuid;
 use crate::error::{CryptoError, Result};
 
-const MAGIC: &[u8; 8] = b"KUTPPL1\0";
-const KEY_DERIVATION_SALT: &[u8] = crate::labels::PHOTOS_LIBRARY_KEY_V1;
-const ACCOUNT_KEY_SALT: &[u8] = crate::labels::ACCOUNT_PRIVATE_SUBKEY_V1;
-const ACCOUNT_KEY_INFO: &[u8] = crate::labels::PHOTOS_LIBRARY_ACCOUNT_KEY_V1;
-const SUITE_XCHACHA20POLY1305_V1: u16 = 1;
-const PURPOSE_LIBRARY: u8 = 1;
-const KEY_LEN: usize = 32;
+const PURPOSE: AccountRecordPurpose = AccountRecordPurpose::PhotosLibrary;
 const NONCE_LEN: usize = 24;
-const TAG_LEN: usize = 16;
 const DIGEST_LEN: usize = 32;
-pub const PHOTOS_LIBRARY_HEADER_BYTES: usize = 112;
 /// Enough for 100,000 marked photos.
 pub const MAX_PHOTOS_LIBRARY_PLAINTEXT_BYTES: usize = 4 * 1024 * 1024;
 pub const MAX_MARKED_PHOTOS: usize = 100_000;
@@ -54,7 +41,7 @@ fn parse_lower_hex_32(value: &str, field: &str) -> Result<[u8; 32]> {
     }
     decoded
         .try_into()
-        .map_err(|_| CryptoError::InvalidInput(format!("{field} length is invalid")))
+        .map_err(|_| CryptoError::InvalidInput(format!("{field} must be 32 bytes")))
 }
 
 impl PhotosLibraryContextV1 {
@@ -92,168 +79,113 @@ impl PhotosLibraryContextV1 {
     }
 }
 
-/// The account-private key of the record, from the master key.
-pub fn derive_photos_library_key(master_key: &[u8]) -> Result<Zeroizing<[u8; KEY_LEN]>> {
-    if master_key.len() != KEY_LEN {
-        return Err(CryptoError::InvalidLength {
-            expected: KEY_LEN,
-            got: master_key.len(),
-        });
-    }
-    let hkdf = Kdf::new(Suite::V1, ACCOUNT_KEY_SALT, master_key);
-    let mut key = Zeroizing::new([0_u8; KEY_LEN]);
-    hkdf.expand(ACCOUNT_KEY_INFO, key.as_mut_slice())
-        .map_err(|_| CryptoError::Backend("Photos library account HKDF expand".into()))?;
-    Ok(key)
-}
-
-fn build_header(
-    context: PhotosLibraryContextV1,
-    nonce: &[u8; NONCE_LEN],
-    ciphertext_len: u32,
-) -> [u8; PHOTOS_LIBRARY_HEADER_BYTES] {
-    let mut header = [0u8; PHOTOS_LIBRARY_HEADER_BYTES];
-    header[..8].copy_from_slice(MAGIC);
-    header[8..10].copy_from_slice(&SUITE_XCHACHA20POLY1305_V1.to_be_bytes());
-    header[10] = PURPOSE_LIBRARY;
-    header[12..44].copy_from_slice(&context.account_incarnation_id);
-    header[44..52].copy_from_slice(&context.revision.to_be_bytes());
-    header[52..84].copy_from_slice(&context.previous_envelope_digest);
-    header[84..108].copy_from_slice(nonce);
-    header[108..112].copy_from_slice(&ciphertext_len.to_be_bytes());
-    header
-}
-
-fn derive_key(
-    library_key: &[u8],
-    header: &[u8; PHOTOS_LIBRARY_HEADER_BYTES],
-) -> Result<Zeroizing<[u8; KEY_LEN]>> {
-    if library_key.len() != KEY_LEN {
-        return Err(CryptoError::InvalidLength {
-            expected: KEY_LEN,
-            got: library_key.len(),
-        });
-    }
-    let hkdf = Kdf::new(Suite::V1, KEY_DERIVATION_SALT, library_key);
-    let mut key = Zeroizing::new([0u8; KEY_LEN]);
-    hkdf.expand(header, key.as_mut_slice())
-        .map_err(|_| CryptoError::Backend("Photos library HKDF expand".into()))?;
-    Ok(key)
-}
-
 pub fn seal(
     plaintext: &[u8],
-    library_key: &[u8],
+    master_key: &[u8; 32],
+    generation: MasterKeyGeneration,
+    binding: &str,
     context: PhotosLibraryContextV1,
 ) -> Result<Vec<u8>> {
     let mut nonce = [0u8; NONCE_LEN];
     crate::primitives::random(&mut nonce);
-    seal_with_nonce(plaintext, library_key, context, &nonce)
+    seal_with_nonce(plaintext, master_key, generation, binding, context, &nonce)
 }
 
 /// Deterministic-nonce entry point for canonical vectors only.
 pub fn seal_with_nonce(
     plaintext: &[u8],
-    library_key: &[u8],
+    master_key: &[u8; 32],
+    generation: MasterKeyGeneration,
+    binding: &str,
     context: PhotosLibraryContextV1,
-    nonce: &[u8],
+    nonce: &[u8; NONCE_LEN],
 ) -> Result<Vec<u8>> {
     if plaintext.is_empty() || plaintext.len() > MAX_PHOTOS_LIBRARY_PLAINTEXT_BYTES {
         return Err(CryptoError::InvalidInput(
             "Photos library plaintext length is invalid".into(),
         ));
     }
-    let nonce: [u8; NONCE_LEN] = nonce.try_into().map_err(|_| CryptoError::InvalidLength {
-        expected: NONCE_LEN,
-        got: nonce.len(),
-    })?;
-    let ciphertext_len = u32::try_from(plaintext.len() + TAG_LEN)
-        .map_err(|_| CryptoError::InvalidInput("Photos library plaintext is too long".into()))?;
-    let header = build_header(context, &nonce, ciphertext_len);
-    let key = derive_key(library_key, &header)?;
-    let cipher = Aead::new(Suite::V1, key.as_slice())
-        .map_err(|_| CryptoError::Backend("Photos library AEAD init".into()))?;
-    let ciphertext = cipher
-        .seal_with_nonce(&nonce, &header, plaintext)
-        .map_err(|_| CryptoError::Backend("Photos library seal".into()))?;
-    let mut envelope = header.to_vec();
-    envelope.extend_from_slice(&ciphertext);
-    Ok(envelope)
+    account_record::seal_chained(
+        plaintext,
+        master_key,
+        PURPOSE,
+        generation,
+        binding,
+        &context.account_incarnation_id,
+        context.revision,
+        &context.previous_envelope_digest,
+        Some(nonce),
+    )
 }
 
-/// The public header: what the server checks.
-pub fn inspect(envelope: &[u8]) -> Result<PhotosLibraryContextV1> {
-    if envelope.len() < PHOTOS_LIBRARY_HEADER_BYTES + TAG_LEN + 1
-        || envelope.get(..8) != Some(MAGIC)
-    {
-        return Err(CryptoError::TooShort);
-    }
-    if u16::from_be_bytes([envelope[8], envelope[9]]) != SUITE_XCHACHA20POLY1305_V1
-        || envelope[10] != PURPOSE_LIBRARY
-        || envelope[11] != 0
-    {
-        return Err(CryptoError::InvalidInput(
-            "unknown Photos library suite or purpose".into(),
-        ));
-    }
-    let revision = u64::from_be_bytes(envelope[44..52].try_into().expect("eight bytes"));
-    let previous_envelope_digest: [u8; DIGEST_LEN] =
-        envelope[52..84].try_into().expect("digest slice");
-    if revision == 0
-        || (revision == 1 && previous_envelope_digest != [0u8; DIGEST_LEN])
-        || (revision > 1 && previous_envelope_digest == [0u8; DIGEST_LEN])
-    {
-        return Err(CryptoError::InvalidInput(
-            "Photos library revision and predecessor do not match".into(),
-        ));
-    }
-    let ciphertext_len =
-        u32::from_be_bytes(envelope[108..112].try_into().expect("four bytes")) as usize;
-    if !(TAG_LEN + 1..=MAX_PHOTOS_LIBRARY_PLAINTEXT_BYTES + TAG_LEN).contains(&ciphertext_len)
-        || PHOTOS_LIBRARY_HEADER_BYTES.checked_add(ciphertext_len) != Some(envelope.len())
-    {
-        return Err(CryptoError::InvalidInput(
-            "Photos library ciphertext length is invalid".into(),
-        ));
+fn context_of(header: &account_record::AccountRecordHeader) -> Result<PhotosLibraryContextV1> {
+    let invalid = || CryptoError::InvalidInput("not a Photos library record".into());
+    if header.purpose != PURPOSE {
+        return Err(invalid());
     }
     Ok(PhotosLibraryContextV1 {
-        account_incarnation_id: envelope[12..44].try_into().expect("incarnation slice"),
-        revision,
-        previous_envelope_digest,
+        account_incarnation_id: header
+            .object_id
+            .as_slice()
+            .try_into()
+            .map_err(|_| invalid())?,
+        revision: header.revision.ok_or_else(invalid)?,
+        previous_envelope_digest: header.previous.ok_or_else(invalid)?,
     })
 }
 
-/// SHA-256 of a well-formed envelope, lowercase hex: the next one's predecessor.
-pub fn envelope_digest(envelope: &[u8]) -> Result<String> {
-    inspect(envelope)?;
-    Ok(hex::encode(hash(Suite::V1, envelope)))
+/// The public header: which incarnation, revision and predecessor.
+pub fn inspect(envelope: &[u8]) -> Result<PhotosLibraryContextV1> {
+    context_of(&account_record::inspect(envelope)?)
 }
 
+/// What the server checks before storing a record: a well-formed library
+/// record of the account bound by `binding`, for its current incarnation.
+pub fn validate(
+    envelope: &[u8],
+    binding: &str,
+    account_incarnation_id: &[u8; 32],
+) -> Result<PhotosLibraryContextV1> {
+    context_of(&account_record::validate_for(
+        envelope,
+        PURPOSE,
+        binding,
+        account_incarnation_id,
+    )?)
+}
+
+/// SHA-256 of a well-formed record, lowercase hex: the next one's predecessor.
+pub fn envelope_digest(envelope: &[u8]) -> Result<String> {
+    inspect(envelope)?;
+    Ok(hex::encode(account_record::record_digest(envelope)))
+}
+
+/// Opens a record as exactly the revision and predecessor `expected` names.
 pub fn open(
     envelope: &[u8],
-    library_key: &[u8],
+    master_key: &[u8; 32],
+    binding: &str,
     expected: PhotosLibraryContextV1,
 ) -> Result<Vec<u8>> {
-    if inspect(envelope)? != expected {
+    let (plain, revision, previous) = account_record::open_chained(
+        envelope,
+        master_key,
+        PURPOSE,
+        binding,
+        &expected.account_incarnation_id,
+    )?;
+    if revision != expected.revision || previous != expected.previous_envelope_digest {
         return Err(CryptoError::AuthFailed);
     }
-    let header: &[u8; PHOTOS_LIBRARY_HEADER_BYTES] = envelope[..PHOTOS_LIBRARY_HEADER_BYTES]
-        .try_into()
-        .expect("fixed header");
-    let key = derive_key(library_key, header)?;
-    let cipher = Aead::new(Suite::V1, key.as_slice())
-        .map_err(|_| CryptoError::Backend("Photos library AEAD init".into()))?;
-    cipher
-        .open_with_nonce(
-            &envelope[84..108],
-            header,
-            &envelope[PHOTOS_LIBRARY_HEADER_BYTES..],
-        )
-        .map_err(|_| CryptoError::AuthFailed)
-        .map(crate::primitives::into_vec)
+    Ok(plain)
 }
 
 pub fn decode_canonical_b64(value: &str) -> Result<Vec<u8>> {
+    if value.len() > account_record::max_record_b64_len(PURPOSE) {
+        return Err(CryptoError::InvalidInput(
+            "Photos library envelope is too long".into(),
+        ));
+    }
     let decoded = base64::engine::general_purpose::STANDARD.decode(value)?;
     if base64::engine::general_purpose::STANDARD.encode(&decoded) != value {
         return Err(CryptoError::InvalidInput(
@@ -334,25 +266,39 @@ mod tests {
         .unwrap()
     }
 
+    const BINDING: &str = "0b6b5e0c-4c1e-4b8e-9c2d-6a1f3e5d7c9b";
+    const FIRST: MasterKeyGeneration = MasterKeyGeneration::FIRST;
+
     #[test]
     fn seals_and_opens_a_chain_of_revisions() {
-        let key = derive_photos_library_key(&[9u8; 32]).unwrap();
+        let key = [9u8; 32];
         let first_context = PhotosLibraryContextV1::new(INCARNATION, 1, None).unwrap();
         let first = seal(
             &encode_library(&library()).unwrap(),
-            key.as_slice(),
+            &key,
+            FIRST,
+            BINDING,
             first_context,
         )
         .unwrap();
         assert_eq!(inspect(&first).unwrap(), first_context);
-        let opened = open(&first, key.as_slice(), first_context).unwrap();
+        let incarnation = first_context.account_incarnation_id;
+        assert_eq!(
+            validate(&first, BINDING, &incarnation).unwrap(),
+            first_context
+        );
+        assert!(validate(&first, "7d3f1a2b-9c4e-4f6a-8b1d-2e5c7a9f0b3d", &incarnation).is_err());
+        assert!(validate(&first, BINDING, &[2u8; 32]).is_err());
+        let opened = open(&first, &key, BINDING, first_context).unwrap();
         assert_eq!(decode_library(&opened).unwrap(), library());
 
         let digest = envelope_digest(&first).unwrap();
         let second_context = PhotosLibraryContextV1::new(INCARNATION, 2, Some(&digest)).unwrap();
         let second = seal(
             b"{\"favourites\":[],\"archived\":[],\"hidden\":[]}",
-            key.as_slice(),
+            &key,
+            FIRST,
+            BINDING,
             second_context,
         )
         .unwrap();
@@ -360,14 +306,20 @@ mod tests {
             inspect(&second).unwrap().previous_envelope_digest.to_vec(),
             hex::decode(&digest).unwrap()
         );
-        // Opened only as what it claims to be.
-        assert!(open(&second, key.as_slice(), first_context).is_err());
-        let other = derive_photos_library_key(&[8u8; 32]).unwrap();
-        assert!(open(&first, other.as_slice(), first_context).is_err());
+        // Opened only as what it claims to be, by its account.
+        assert!(open(&second, &key, BINDING, first_context).is_err());
+        assert!(open(&first, &[8u8; 32], BINDING, first_context).is_err());
+        assert!(open(
+            &first,
+            &key,
+            "7d3f1a2b-9c4e-4f6a-8b1d-2e5c7a9f0b3d",
+            first_context
+        )
+        .is_err());
         let mut tampered = first.clone();
         let last = tampered.len() - 1;
         tampered[last] ^= 1;
-        assert!(open(&tampered, key.as_slice(), first_context).is_err());
+        assert!(open(&tampered, &key, BINDING, first_context).is_err());
     }
 
     #[test]

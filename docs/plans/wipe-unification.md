@@ -664,6 +664,14 @@ because their tables only hold transient data.
      docs/research/16 (Proton's model).
    - Seal the plaintext metadata that pending uploads and the media cache
      leave visible.
+   - Move the rollback pins that are still plain `localStorage` under the
+     sealed local-state store (a local-state purpose, as `ManifestPins`; in
+     memory when the origin doesn't keep the sign-in): the Photos library
+     pin (`apps/photos/src/features/library/marks.ts`,
+     `kutup.photos.library.pin.v1.*`) and the Chat attachment ledger's pin
+     chain (`fe/chat-core/src/attachment-ledger.ts`,
+     `kutup.chat.attachment-ledger.pin.v1.*`). Pins are sealed, never plain
+     (the Proton browser-storage model).
 
    Browser data is discarded at the wipe anyway, so format changes here are
    free whenever they land. Size M.

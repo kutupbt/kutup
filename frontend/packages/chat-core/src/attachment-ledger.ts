@@ -8,11 +8,11 @@ import { deriveAccountIdentityKeys } from '@kutup/crypto/identity'
 import {
   chatAttachmentLedgerEnvelopeDigest,
   decodeChatAttachmentLedgerEntry,
-  deriveChatAttachmentLedgerKey,
   encodeChatAttachmentLedgerEntry,
   inspectChatAttachmentLedgerEnvelope,
   openChatAttachmentLedger,
   sealChatAttachmentLedger,
+  type ChatAttachmentLedgerOwner,
 } from '@kutup/crypto/chatMedia'
 import type { ChatAttachmentLedgerEntryV1 } from './types'
 import { hash as suiteHash } from '@kutup/crypto/hash'
@@ -65,20 +65,18 @@ export class ChatAttachmentLedger {
   private pinVerified: boolean
 
   private constructor(
-    private readonly ledgerKey: Uint8Array,
+    /** The account's master key (a copy, wiped on dispose) and key binding. */
+    private readonly owner: ChatAttachmentLedgerOwner,
     private readonly accountIncarnationId: string,
     private readonly localPin: LedgerLocalPinV1 | null,
   ) {
     this.pinVerified = localPin === null || localPin.cursor === '0'
   }
 
-  static async open(masterKey: Uint8Array): Promise<ChatAttachmentLedger> {
-    const [ledgerKey, identity] = await Promise.all([
-      deriveChatAttachmentLedgerKey(masterKey),
-      deriveAccountIdentityKeys(toBase64(masterKey)),
-    ])
+  static async open(masterKey: Uint8Array, binding: string): Promise<ChatAttachmentLedger> {
+    const identity = await deriveAccountIdentityKeys(toBase64(masterKey))
     const ledger = new ChatAttachmentLedger(
-      ledgerKey,
+      { masterKey: masterKey.slice(), binding },
       identity.incarnationId,
       loadLocalPin(identity.incarnationId),
     )
@@ -100,7 +98,7 @@ export class ChatAttachmentLedger {
         if (cursor <= pageCursor) throw new Error('Chat attachment ledger cursor regressed')
         const header = await inspectChatAttachmentLedgerEnvelope(wire.envelope)
         const digest = await chatAttachmentLedgerEnvelopeDigest(wire.envelope)
-        if (header.suite !== 1 || header.accountIncarnationId !== this.accountIncarnationId ||
+        if (header.accountIncarnationId !== this.accountIncarnationId ||
             header.entityId !== wire.entityId ||
             parseCanonicalU64(header.revision, 'envelope ledger revision') !== revision ||
             digest !== wire.envelopeDigest) {
@@ -117,7 +115,7 @@ export class ChatAttachmentLedger {
         }
         const plaintext = await openChatAttachmentLedger(
           wire.envelope,
-          this.ledgerKey,
+          this.owner,
           {
             accountIncarnationId: this.accountIncarnationId,
             entityId: wire.entityId,
@@ -239,7 +237,7 @@ export class ChatAttachmentLedger {
   }
 
   dispose(): void {
-    this.ledgerKey.fill(0)
+    this.owner.masterKey.fill(0)
     this.chainDigest.fill(0)
     this.current.clear()
     this.cursor = 0n
@@ -249,7 +247,7 @@ export class ChatAttachmentLedger {
     const previous = this.current.get(entityId)
     const revision = (previous?.revision ?? 0n) + 1n
     const plaintext = await encodeChatAttachmentLedgerEntry(entry)
-    const envelope = await sealChatAttachmentLedger(plaintext, this.ledgerKey, {
+    const envelope = await sealChatAttachmentLedger(plaintext, this.owner, {
       accountIncarnationId: this.accountIncarnationId,
       entityId,
       revision,

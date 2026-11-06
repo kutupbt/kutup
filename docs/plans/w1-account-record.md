@@ -202,6 +202,36 @@ there.
   every purpose with its own export. `ChatProfileKeyWrap` is refused there
   too.
 
+## Slice 4a as built
+
+- Chained purposes: a policy says `chained`, and its header carries the
+  previous record's digest (`previous`, 32 bytes) after the revision. It is
+  all zeros exactly at revision 1 and never after, which `inspect` checks.
+  `record_digest` is the SHA-256 of a whole record; `seal_chained` and
+  `open_chained` take and return it. The header is the AEAD's associated
+  data, so a record can't be moved to another place in its chain.
+- `PhotosLibrary` (13): object the account incarnation (32 bytes), 256-byte
+  buckets, at most 4 MiB. The server checks the account's binding and current
+  incarnation (`photos_library::validate`), then the revision and
+  predecessor for its compare-and-swap. `photosLibraryKey` is gone; the
+  WASM seal and open take the master key, generation and binding.
+- `ChatAttachmentLedger` (14): object the account incarnation and the entity
+  id (48 bytes), 256-byte buckets, at most 16 KiB. The table above said
+  `Hashed(incarnation ‖ entity)`, but the server already sees the entity id
+  in the URL, and a keyed hash would keep it from checking the URL against
+  the header (only the client has the master key), so the object is the two
+  ids as they are. `deriveChatAttachmentLedgerKey` is gone; the ledger client
+  holds a copy of the master key and the binding, wiped on dispose.
+- `KUTPPL1`, `KUTPCL1` and five labels are gone (the two account subkey
+  infos, the two per-record key salts, `kutup/account/private-subkey/v1`).
+  Neither table had a length check, so no migration.
+- The generic WASM account-record path refuses both purposes.
+  `account-record-v1.json` covers them at revision 1, with "previous digest
+  changed" and "revision 1 naming a predecessor" among the refusals.
+- A live test (`photos_library_live`, in the backup gate) covers the chain,
+  a lost race (409 with the stored record), and records of another account
+  or incarnation (400).
+
 ## Decisions (approved 2026-11-04)
 
 (a) **The account head's chain moves into the header** (the server then

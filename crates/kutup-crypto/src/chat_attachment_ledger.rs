@@ -1,84 +1,24 @@
-//! Typed account-private envelopes for the Chat attachment reference ledger.
+//! The Chat attachment reference ledger (docs/chat-media.md): one account
+//! record (`account_record`, purpose `ChatAttachmentLedger`) per entity,
+//! under the master key, bound to the account's key binding.
 //!
-//! The server uses the public header only for bounded compare-and-swap
-//! persistence. Conversation, message, media class and display metadata remain
-//! inside the XChaCha20-Poly1305 ciphertext and are projected locally.
+//! Its object is the account incarnation and the entity id (48 bytes), both
+//! of which the server already knows (the entity id is in the URL), so it
+//! checks them exactly. Each entity's records form a chain: each names the
+//! digest of the one before, which the server checks for compare-and-swap
+//! without reading anything. Conversation, message, media class and display
+//! metadata stay inside the ciphertext, padded to 256-byte buckets.
 
-use crate::primitives::{hash, Aead, Kdf, Suite};
 use base64::Engine as _;
-use serde::{Deserialize, Serialize};
-use zeroize::Zeroizing;
 
+use crate::account_record::{self, AccountRecordPurpose, MasterKeyGeneration};
 use crate::drive_object::parse_canonical_uuid;
 use crate::error::{CryptoError, Result};
 
-const MAGIC: &[u8; 8] = b"KUTPCL1\0";
-const KEY_DERIVATION_SALT: &[u8] = crate::labels::CHAT_ATTACHMENT_LEDGER_KEY_V1;
-const ACCOUNT_LEDGER_KEY_SALT: &[u8] = crate::labels::ACCOUNT_PRIVATE_SUBKEY_V1;
-const ACCOUNT_LEDGER_KEY_INFO: &[u8] = crate::labels::CHAT_ATTACHMENT_LEDGER_ACCOUNT_KEY_V1;
-const KEY_LEN: usize = 32;
+const PURPOSE: AccountRecordPurpose = AccountRecordPurpose::ChatAttachmentLedger;
 const NONCE_LEN: usize = 24;
-const TAG_LEN: usize = 16;
 const DIGEST_LEN: usize = 32;
-pub const CHAT_ATTACHMENT_LEDGER_HEADER_BYTES: usize = 128;
 pub const MAX_CHAT_ATTACHMENT_LEDGER_PLAINTEXT_BYTES: usize = 16 * 1024;
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(into = "u16", try_from = "u16")]
-#[repr(u16)]
-pub enum ChatAttachmentLedgerSuiteId {
-    XChaCha20Poly1305V1 = 1,
-}
-
-impl ChatAttachmentLedgerSuiteId {
-    pub const fn as_u16(self) -> u16 {
-        self as u16
-    }
-}
-
-impl From<ChatAttachmentLedgerSuiteId> for u16 {
-    fn from(value: ChatAttachmentLedgerSuiteId) -> Self {
-        value.as_u16()
-    }
-}
-
-impl TryFrom<u16> for ChatAttachmentLedgerSuiteId {
-    type Error = CryptoError;
-
-    fn try_from(value: u16) -> Result<Self> {
-        match value {
-            1 => Ok(Self::XChaCha20Poly1305V1),
-            _ => Err(CryptoError::InvalidInput(format!(
-                "unknown Chat attachment-ledger suite {value}"
-            ))),
-        }
-    }
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-#[repr(u8)]
-pub enum ChatAttachmentLedgerPurpose {
-    AttachmentEntry = 1,
-}
-
-impl ChatAttachmentLedgerPurpose {
-    pub const fn as_u8(self) -> u8 {
-        self as u8
-    }
-}
-
-impl TryFrom<u8> for ChatAttachmentLedgerPurpose {
-    type Error = CryptoError;
-
-    fn try_from(value: u8) -> Result<Self> {
-        match value {
-            1 => Ok(Self::AttachmentEntry),
-            _ => Err(CryptoError::InvalidInput(format!(
-                "unknown Chat attachment-ledger purpose {value}"
-            ))),
-        }
-    }
-}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ChatAttachmentLedgerContextV1 {
@@ -139,36 +79,19 @@ fn parse_lower_hex_32(value: &str, field: &str) -> Result<[u8; 32]> {
         .map_err(|_| CryptoError::InvalidInput(format!("{field} length is invalid")))
 }
 
-/// Derive the account-private ledger root from the recoverable master key.
-/// This is a typed subkey, never a Drive, profile, Signal, MLS, or attachment
-/// object key, and requires no second remote account-secret envelope.
-pub fn derive_account_ledger_key(master_key: &[u8]) -> Result<Zeroizing<[u8; KEY_LEN]>> {
-    if master_key.len() != KEY_LEN {
-        return Err(CryptoError::InvalidLength {
-            expected: KEY_LEN,
-            got: master_key.len(),
-        });
-    }
-    let hkdf = Kdf::new(Suite::V1, ACCOUNT_LEDGER_KEY_SALT, master_key);
-    let mut key = Zeroizing::new([0_u8; KEY_LEN]);
-    hkdf.expand(ACCOUNT_LEDGER_KEY_INFO, key.as_mut_slice())
-        .map_err(|_| CryptoError::Backend("Chat attachment-ledger account HKDF expand".into()))?;
-    Ok(key)
+/// A record's object: the account incarnation, then the entity id.
+fn object_of(context: &ChatAttachmentLedgerContextV1) -> [u8; 48] {
+    let mut object = [0u8; 48];
+    object[..32].copy_from_slice(&context.account_incarnation_id);
+    object[32..].copy_from_slice(&context.entity_id);
+    object
 }
 
+/// What a record's header says: whose entity, which revision, after which.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ChatAttachmentLedgerHeaderV1 {
-    pub suite: ChatAttachmentLedgerSuiteId,
-    pub purpose: ChatAttachmentLedgerPurpose,
     pub context: ChatAttachmentLedgerContextV1,
     pub ciphertext_len: u32,
-}
-
-struct ParsedEnvelope<'a> {
-    header: ChatAttachmentLedgerHeaderV1,
-    aad: &'a [u8],
-    nonce: &'a [u8],
-    ciphertext: &'a [u8],
 }
 
 fn parse_digest(value: &str) -> Result<[u8; DIGEST_LEN]> {
@@ -184,188 +107,127 @@ fn parse_digest(value: &str) -> Result<[u8; DIGEST_LEN]> {
         .map_err(|_| CryptoError::InvalidInput("ledger digest length is invalid".into()))
 }
 
-fn build_header(
-    context: ChatAttachmentLedgerContextV1,
-    nonce: &[u8; NONCE_LEN],
-    ciphertext_len: u32,
-) -> [u8; CHAT_ATTACHMENT_LEDGER_HEADER_BYTES] {
-    let mut header = [0u8; CHAT_ATTACHMENT_LEDGER_HEADER_BYTES];
-    header[..8].copy_from_slice(MAGIC);
-    header[8..10].copy_from_slice(
-        &ChatAttachmentLedgerSuiteId::XChaCha20Poly1305V1
-            .as_u16()
-            .to_be_bytes(),
-    );
-    header[10] = ChatAttachmentLedgerPurpose::AttachmentEntry.as_u8();
-    header[12..44].copy_from_slice(&context.account_incarnation_id);
-    header[44..60].copy_from_slice(&context.entity_id);
-    header[60..68].copy_from_slice(&context.revision.to_be_bytes());
-    header[68..100].copy_from_slice(&context.previous_envelope_digest);
-    header[100..124].copy_from_slice(nonce);
-    header[124..128].copy_from_slice(&ciphertext_len.to_be_bytes());
-    header
-}
-
-fn derive_key(
-    ledger_key: &[u8],
-    header: &[u8; CHAT_ATTACHMENT_LEDGER_HEADER_BYTES],
-) -> Result<Zeroizing<[u8; KEY_LEN]>> {
-    if ledger_key.len() != KEY_LEN {
-        return Err(CryptoError::InvalidLength {
-            expected: KEY_LEN,
-            got: ledger_key.len(),
-        });
-    }
-    let hkdf = Kdf::new(Suite::V1, KEY_DERIVATION_SALT, ledger_key);
-    let mut key = Zeroizing::new([0u8; KEY_LEN]);
-    hkdf.expand(header, key.as_mut_slice())
-        .map_err(|_| CryptoError::Backend("Chat attachment-ledger HKDF expand".into()))?;
-    Ok(key)
-}
-
 pub fn seal(
     plaintext: &[u8],
-    ledger_key: &[u8],
+    master_key: &[u8; 32],
+    generation: MasterKeyGeneration,
+    binding: &str,
     context: ChatAttachmentLedgerContextV1,
 ) -> Result<Vec<u8>> {
     let mut nonce = [0u8; NONCE_LEN];
     crate::primitives::random(&mut nonce);
-    seal_with_nonce(plaintext, ledger_key, context, &nonce)
+    seal_with_nonce(plaintext, master_key, generation, binding, context, &nonce)
 }
 
 /// Deterministic-nonce entry point for canonical vectors only.
 pub fn seal_with_nonce(
     plaintext: &[u8],
-    ledger_key: &[u8],
+    master_key: &[u8; 32],
+    generation: MasterKeyGeneration,
+    binding: &str,
     context: ChatAttachmentLedgerContextV1,
-    nonce: &[u8],
+    nonce: &[u8; NONCE_LEN],
 ) -> Result<Vec<u8>> {
     if plaintext.is_empty() || plaintext.len() > MAX_CHAT_ATTACHMENT_LEDGER_PLAINTEXT_BYTES {
         return Err(CryptoError::InvalidInput(
             "Chat attachment-ledger plaintext length is invalid".into(),
         ));
     }
-    let nonce: [u8; NONCE_LEN] = nonce.try_into().map_err(|_| CryptoError::InvalidLength {
-        expected: NONCE_LEN,
-        got: nonce.len(),
-    })?;
-    let ciphertext_len = u32::try_from(plaintext.len() + TAG_LEN)
-        .map_err(|_| CryptoError::InvalidInput("ledger plaintext is too long".into()))?;
-    let header = build_header(context, &nonce, ciphertext_len);
-    let key = derive_key(ledger_key, &header)?;
-    let cipher = Aead::new(Suite::V1, key.as_slice())
-        .map_err(|_| CryptoError::Backend("Chat attachment-ledger AEAD init".into()))?;
-    let ciphertext = cipher
-        .seal_with_nonce(&nonce, &header, plaintext)
-        .map_err(|_| CryptoError::Backend("Chat attachment-ledger seal".into()))?;
-    let mut envelope = header.to_vec();
-    envelope.extend_from_slice(&ciphertext);
-    Ok(envelope)
+    account_record::seal_chained(
+        plaintext,
+        master_key,
+        PURPOSE,
+        generation,
+        binding,
+        &object_of(&context),
+        context.revision,
+        &context.previous_envelope_digest,
+        Some(nonce),
+    )
 }
 
-fn parse(envelope: &[u8]) -> Result<ParsedEnvelope<'_>> {
-    if envelope.len() < CHAT_ATTACHMENT_LEDGER_HEADER_BYTES + TAG_LEN + 1
-        || envelope.get(..8) != Some(MAGIC)
-    {
-        return Err(CryptoError::TooShort);
+fn header_of(header: &account_record::AccountRecordHeader) -> Result<ChatAttachmentLedgerHeaderV1> {
+    let invalid = || CryptoError::InvalidInput("not a Chat attachment-ledger record".into());
+    if header.purpose != PURPOSE || header.object_id.len() != 48 {
+        return Err(invalid());
     }
-    let suite =
-        ChatAttachmentLedgerSuiteId::try_from(u16::from_be_bytes([envelope[8], envelope[9]]))?;
-    let purpose = ChatAttachmentLedgerPurpose::try_from(envelope[10])?;
-    if envelope[11] != 0 {
-        return Err(CryptoError::InvalidInput(
-            "Chat attachment-ledger reserved byte is non-zero".into(),
-        ));
-    }
-    let revision = u64::from_be_bytes(envelope[60..68].try_into().expect("eight-byte slice"));
-    let previous_envelope_digest: [u8; DIGEST_LEN] =
-        envelope[68..100].try_into().expect("digest slice");
-    if revision == 0
-        || (revision == 1 && previous_envelope_digest != [0u8; DIGEST_LEN])
-        || (revision > 1 && previous_envelope_digest == [0u8; DIGEST_LEN])
-    {
-        return Err(CryptoError::InvalidInput(
-            "Chat attachment-ledger revision/predecessor is invalid".into(),
-        ));
-    }
-    let ciphertext_len = u32::from_be_bytes(
-        envelope[124..128]
-            .try_into()
-            .expect("four-byte length slice"),
-    );
-    let ciphertext_len_usize = ciphertext_len as usize;
-    if !(TAG_LEN + 1..=MAX_CHAT_ATTACHMENT_LEDGER_PLAINTEXT_BYTES + TAG_LEN)
-        .contains(&ciphertext_len_usize)
-        || CHAT_ATTACHMENT_LEDGER_HEADER_BYTES.checked_add(ciphertext_len_usize)
-            != Some(envelope.len())
-    {
-        return Err(CryptoError::InvalidInput(
-            "Chat attachment-ledger ciphertext length is invalid".into(),
-        ));
-    }
-    Ok(ParsedEnvelope {
-        header: ChatAttachmentLedgerHeaderV1 {
-            suite,
-            purpose,
-            context: ChatAttachmentLedgerContextV1 {
-                account_incarnation_id: envelope[12..44]
-                    .try_into()
-                    .expect("account incarnation slice"),
-                entity_id: envelope[44..60].try_into().expect("entity id slice"),
-                revision,
-                previous_envelope_digest,
-            },
-            ciphertext_len,
+    Ok(ChatAttachmentLedgerHeaderV1 {
+        context: ChatAttachmentLedgerContextV1 {
+            account_incarnation_id: header.object_id[..32].try_into().map_err(|_| invalid())?,
+            entity_id: header.object_id[32..].try_into().map_err(|_| invalid())?,
+            revision: header.revision.ok_or_else(invalid)?,
+            previous_envelope_digest: header.previous.ok_or_else(invalid)?,
         },
-        aad: &envelope[..CHAT_ATTACHMENT_LEDGER_HEADER_BYTES],
-        nonce: &envelope[100..124],
-        ciphertext: &envelope[CHAT_ATTACHMENT_LEDGER_HEADER_BYTES..],
+        ciphertext_len: header.ciphertext_len,
     })
 }
 
+/// The public header of a well-formed ledger record.
 pub fn inspect(envelope: &[u8]) -> Result<ChatAttachmentLedgerHeaderV1> {
-    Ok(parse(envelope)?.header)
+    header_of(&account_record::inspect(envelope)?)
 }
 
+/// What the server checks before storing a record: a well-formed ledger
+/// record of the account bound by `binding`, for its current incarnation and
+/// the entity it is filed under.
+pub fn validate(
+    envelope: &[u8],
+    binding: &str,
+    account_incarnation_id: &[u8; 32],
+    entity_id: &[u8; 16],
+) -> Result<ChatAttachmentLedgerHeaderV1> {
+    let mut object = [0u8; 48];
+    object[..32].copy_from_slice(account_incarnation_id);
+    object[32..].copy_from_slice(entity_id);
+    header_of(&account_record::validate_for(
+        envelope, PURPOSE, binding, &object,
+    )?)
+}
+
+/// SHA-256 of a well-formed record, lowercase hex: the next one's predecessor.
 pub fn envelope_digest(envelope: &[u8]) -> Result<String> {
-    parse(envelope)?;
-    Ok(hex::encode(hash(Suite::V1, envelope)))
+    inspect(envelope)?;
+    Ok(hex::encode(account_record::record_digest(envelope)))
 }
 
+/// Opens a record as exactly the entity, revision and predecessor `expected`
+/// names, for the account bound by `binding`.
 pub fn open(
     envelope: &[u8],
-    ledger_key: &[u8],
+    master_key: &[u8; 32],
+    binding: &str,
     expected: ChatAttachmentLedgerContextV1,
 ) -> Result<Vec<u8>> {
-    let parsed = parse(envelope)?;
-    if parsed.header.suite != ChatAttachmentLedgerSuiteId::XChaCha20Poly1305V1
-        || parsed.header.purpose != ChatAttachmentLedgerPurpose::AttachmentEntry
-        || parsed.header.context != expected
-    {
+    let (plain, revision, previous) = account_record::open_chained(
+        envelope,
+        master_key,
+        PURPOSE,
+        binding,
+        &object_of(&expected),
+    )?;
+    if revision != expected.revision || previous != expected.previous_envelope_digest {
         return Err(CryptoError::AuthFailed);
     }
-    let header: &[u8; CHAT_ATTACHMENT_LEDGER_HEADER_BYTES] = parsed
-        .aad
-        .try_into()
-        .expect("parser returns the fixed ledger header");
-    let key = derive_key(ledger_key, header)?;
-    let cipher = Aead::new(Suite::V1, key.as_slice())
-        .map_err(|_| CryptoError::Backend("Chat attachment-ledger AEAD init".into()))?;
-    cipher
-        .open_with_nonce(parsed.nonce, parsed.aad, parsed.ciphertext)
-        .map_err(|_| CryptoError::AuthFailed)
-        .map(crate::primitives::into_vec)
+    Ok(plain)
 }
 
 pub fn seal_b64(
     plaintext: &[u8],
-    ledger_key: &[u8],
+    master_key: &[u8; 32],
+    generation: MasterKeyGeneration,
+    binding: &str,
     context: ChatAttachmentLedgerContextV1,
 ) -> Result<String> {
-    Ok(base64::engine::general_purpose::STANDARD.encode(seal(plaintext, ledger_key, context)?))
+    Ok(base64::engine::general_purpose::STANDARD
+        .encode(seal(plaintext, master_key, generation, binding, context)?))
 }
 
 pub fn decode_canonical_b64(value: &str) -> Result<Vec<u8>> {
+    if value.len() > account_record::max_record_b64_len(PURPOSE) {
+        return Err(CryptoError::InvalidInput(
+            "Chat attachment-ledger envelope is too long".into(),
+        ));
+    }
     let decoded = base64::engine::general_purpose::STANDARD.decode(value)?;
     if base64::engine::general_purpose::STANDARD.encode(&decoded) != value {
         return Err(CryptoError::InvalidInput(
@@ -379,6 +241,9 @@ pub fn decode_canonical_b64(value: &str) -> Result<Vec<u8>> {
 mod tests {
     use super::*;
 
+    const BINDING: &str = "0b6b5e0c-4c1e-4b8e-9c2d-6a1f3e5d7c9b";
+    const MASTER: [u8; 32] = [0x42; 32];
+
     fn first_context() -> ChatAttachmentLedgerContextV1 {
         ChatAttachmentLedgerContextV1::new(
             &"11".repeat(32),
@@ -389,34 +254,36 @@ mod tests {
         .unwrap()
     }
 
-    #[test]
-    fn deterministic_round_trip_and_header_are_stable() {
-        assert_eq!(
-            hex::encode(derive_account_ledger_key(&[0x33; 32]).unwrap().as_slice()),
-            "61a5642b5a04bbcf6c59cf6276ea07305ba6e705de53d66ffc3ced2989c84a23"
-        );
-        let envelope = seal_with_nonce(
-            b"canonical ledger entry",
-            &[0x42; 32],
-            first_context(),
+    fn sealed(context: ChatAttachmentLedgerContextV1, plaintext: &[u8]) -> Vec<u8> {
+        seal_with_nonce(
+            plaintext,
+            &MASTER,
+            MasterKeyGeneration::FIRST,
+            BINDING,
+            context,
             &[0x11; 24],
         )
-        .unwrap();
-        assert_eq!(&envelope[..8], MAGIC);
-        assert_eq!(&envelope[100..124], &[0x11; 24]);
-        assert_eq!(
-            open(&envelope, &[0x42; 32], first_context()).unwrap(),
-            b"canonical ledger entry"
-        );
-        let header = inspect(&envelope).unwrap();
-        assert_eq!(header.context.revision, 1);
-        assert_eq!(header.ciphertext_len, 38);
-        assert_eq!(envelope_digest(&envelope).unwrap().len(), 64);
+        .unwrap()
     }
 
     #[test]
-    fn context_tamper_relocation_and_trailing_bytes_fail_closed() {
-        let envelope = seal_with_nonce(b"entry", &[7; 32], first_context(), &[9; 24]).unwrap();
+    fn a_record_round_trips_and_its_header_is_public() {
+        let envelope = sealed(first_context(), b"canonical ledger entry");
+        assert_eq!(
+            open(&envelope, &MASTER, BINDING, first_context()).unwrap(),
+            b"canonical ledger entry"
+        );
+        let header = inspect(&envelope).unwrap();
+        assert_eq!(header.context, first_context());
+        // Padded to a 256-byte bucket, plus the tag.
+        assert_eq!(header.ciphertext_len, 256 + 16);
+        assert_eq!(envelope_digest(&envelope).unwrap().len(), 64);
+        validate(&envelope, BINDING, &[0x11; 32], &first_context().entity_id).unwrap();
+    }
+
+    #[test]
+    fn another_entity_account_incarnation_or_chain_place_is_refused() {
+        let envelope = sealed(first_context(), b"entry");
         let other = ChatAttachmentLedgerContextV1::new(
             &"11".repeat(32),
             "33333333-3333-4333-8333-333333333333",
@@ -424,11 +291,36 @@ mod tests {
             None,
         )
         .unwrap();
-        assert!(open(&envelope, &[7; 32], other).is_err());
-        let mut reserved = envelope.clone();
-        reserved[11] = 1;
-        assert!(inspect(&reserved).is_err());
-        let mut trailing = envelope;
+        assert!(open(&envelope, &MASTER, BINDING, other).is_err());
+        assert!(validate(&envelope, BINDING, &[0x11; 32], &other.entity_id).is_err());
+        assert!(validate(&envelope, BINDING, &[0x12; 32], &first_context().entity_id).is_err());
+        let elsewhere = "7d3f1a2b-9c4e-4f6a-8b1d-2e5c7a9f0b3d";
+        assert!(validate(
+            &envelope,
+            elsewhere,
+            &[0x11; 32],
+            &first_context().entity_id
+        )
+        .is_err());
+        assert!(open(&envelope, &MASTER, elsewhere, first_context()).is_err());
+        assert!(open(&envelope, &[0x43; 32], BINDING, first_context()).is_err());
+
+        // The second record names the first; opened as another place in the
+        // chain, it is refused.
+        let digest = envelope_digest(&envelope).unwrap();
+        let second_context = ChatAttachmentLedgerContextV1::new(
+            &"11".repeat(32),
+            "22222222-2222-4222-8222-222222222222",
+            2,
+            Some(&digest),
+        )
+        .unwrap();
+        let second = sealed(second_context, b"entry, later");
+        assert_eq!(inspect(&second).unwrap().context, second_context);
+        let mut wrong_previous = second_context;
+        wrong_previous.previous_envelope_digest[0] ^= 1;
+        assert!(open(&second, &MASTER, BINDING, wrong_previous).is_err());
+        let mut trailing = second;
         trailing.push(0);
         assert!(inspect(&trailing).is_err());
     }

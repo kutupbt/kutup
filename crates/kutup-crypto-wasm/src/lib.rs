@@ -85,7 +85,6 @@ struct VerifiedChatBackupMetadataView {
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 struct ChatAttachmentLedgerHeaderView {
-    suite: u16,
     account_incarnation_id: String,
     entity_id: String,
     revision: String,
@@ -699,6 +698,8 @@ fn generic_account_purpose(value: u16) -> Result<AccountRecordPurpose, JsValue> 
         | AccountRecordPurpose::IdentityPins
         | AccountRecordPurpose::ChatGroupListEntry
         | AccountRecordPurpose::ChatContactListEntry
+        | AccountRecordPurpose::PhotosLibrary
+        | AccountRecordPurpose::ChatAttachmentLedger
         | AccountRecordPurpose::JoinedMeeting
         | AccountRecordPurpose::ChatProfileKeyWrap => Err(js_error(
             "this account-record purpose has its own typed export",
@@ -956,18 +957,22 @@ pub fn open_chat_media_object_header(
     Ok(STANDARD.encode(stream_key.as_slice()))
 }
 
+/// Seal one ledger entity's record as an account record of the account bound
+/// by `binding`, under its master key at `generation` (docs/chat-media.md).
 #[wasm_bindgen(js_name = sealChatAttachmentLedger)]
 #[allow(clippy::too_many_arguments)]
 pub fn seal_chat_attachment_ledger(
     plaintext_base64: &str,
-    ledger_key_base64: &str,
+    master_key_base64: &str,
+    generation: u32,
+    binding: &str,
     account_incarnation_id: &str,
     entity_id: &str,
     revision: u64,
     previous_envelope_digest: &str,
 ) -> Result<String, JsValue> {
     let plaintext = decode_canonical_base64(plaintext_base64, "ledger plaintext")?;
-    let ledger_key = decode_canonical_base64(ledger_key_base64, "ledger key")?;
+    let master = account_master_key(master_key_base64)?;
     let context = ChatAttachmentLedgerContextV1::new(
         account_incarnation_id,
         entity_id,
@@ -975,23 +980,24 @@ pub fn seal_chat_attachment_ledger(
         (!previous_envelope_digest.is_empty()).then_some(previous_envelope_digest),
     )
     .map_err(|error| js_error(&error.to_string()))?;
-    chat_attachment_ledger::seal_b64(&plaintext, &ledger_key, context)
-        .map_err(|error| js_error(&error.to_string()))
+    chat_attachment_ledger::seal_b64(
+        &plaintext,
+        &master,
+        master_key_generation(generation)?,
+        binding,
+        context,
+    )
+    .map_err(|error| js_error(&error.to_string()))
 }
 
-#[wasm_bindgen(js_name = deriveChatAttachmentLedgerKey)]
-pub fn derive_chat_attachment_ledger_key(master_key_base64: &str) -> Result<String, JsValue> {
-    let master_key = decode_canonical_base64(master_key_base64, "master key")?;
-    let key = chat_attachment_ledger::derive_account_ledger_key(&master_key)
-        .map_err(|error| js_error(&error.to_string()))?;
-    Ok(STANDARD.encode(key.as_slice()))
-}
-
+/// Open one ledger entity's record of the account bound by `binding` as
+/// exactly the revision and predecessor expected.
 #[wasm_bindgen(js_name = openChatAttachmentLedger)]
 #[allow(clippy::too_many_arguments)]
 pub fn open_chat_attachment_ledger(
     envelope_base64: &str,
-    ledger_key_base64: &str,
+    master_key_base64: &str,
+    binding: &str,
     expected_account_incarnation_id: &str,
     expected_entity_id: &str,
     expected_revision: u64,
@@ -999,7 +1005,7 @@ pub fn open_chat_attachment_ledger(
 ) -> Result<String, JsValue> {
     let envelope = chat_attachment_ledger::decode_canonical_b64(envelope_base64)
         .map_err(|error| js_error(&error.to_string()))?;
-    let ledger_key = decode_canonical_base64(ledger_key_base64, "ledger key")?;
+    let master = account_master_key(master_key_base64)?;
     let expected = ChatAttachmentLedgerContextV1::new(
         expected_account_incarnation_id,
         expected_entity_id,
@@ -1008,7 +1014,7 @@ pub fn open_chat_attachment_ledger(
             .then_some(expected_previous_envelope_digest),
     )
     .map_err(|error| js_error(&error.to_string()))?;
-    let plaintext = chat_attachment_ledger::open(&envelope, &ledger_key, expected)
+    let plaintext = chat_attachment_ledger::open(&envelope, &master, binding, expected)
         .map_err(|error| js_error(&error.to_string()))?;
     Ok(STANDARD.encode(plaintext))
 }
@@ -1027,7 +1033,6 @@ pub fn inspect_chat_attachment_ledger_envelope(envelope_base64: &str) -> Result<
     let header =
         chat_attachment_ledger::inspect(&envelope).map_err(|error| js_error(&error.to_string()))?;
     let view = ChatAttachmentLedgerHeaderView {
-        suite: header.suite.as_u16(),
         account_incarnation_id: hex::encode(header.context.account_incarnation_id),
         entity_id: uuid::Uuid::from_bytes(header.context.entity_id)
             .hyphenated()
@@ -2024,13 +2029,15 @@ pub fn drive_canonical_name(name: &str) -> String {
     kutup_crypto::drive_names::canonical_name(name)
 }
 
-/// The Photos library record's key (docs/plans/photos.md), from the master key.
-#[wasm_bindgen(js_name = photosLibraryKey)]
-pub fn photos_library_key(master_key_base64: &str) -> Result<String, JsValue> {
-    let master = decode_canonical_base64(master_key_base64, "master key")?;
-    kutup_crypto::photos_library::derive_photos_library_key(&master)
-        .map(|key| STANDARD.encode(key.as_slice()))
-        .map_err(|error| js_error(&error.to_string()))
+/// The account master key (standard base64) that the Photos library and the
+/// Chat attachment ledger records are sealed under.
+fn account_master_key(master_key_base64: &str) -> Result<zeroize::Zeroizing<[u8; 32]>, JsValue> {
+    let master = zeroize::Zeroizing::new(decode_canonical_base64(master_key_base64, "master key")?);
+    let key: [u8; 32] = master
+        .as_slice()
+        .try_into()
+        .map_err(|_| js_error("the account master key is 32 bytes"))?;
+    Ok(zeroize::Zeroizing::new(key))
 }
 
 fn photos_library_context(
@@ -2053,12 +2060,15 @@ struct SealedPhotosLibrary {
 }
 
 /// Seal the library (JSON `{favourites, archived, hidden}`, put in canonical
-/// order here) as `revision`, after the record whose digest is given (none
-/// for revision 1). Returns `{ envelope, digest }`.
+/// order here) as an account record of the account bound by `binding`, under
+/// its master key at `generation`, as `revision`, after the record whose
+/// digest is given (none for revision 1). Returns `{ envelope, digest }`.
 #[wasm_bindgen(js_name = sealPhotosLibrary)]
 pub fn seal_photos_library(
     library_json: &str,
-    key_base64: &str,
+    master_key_base64: &str,
+    generation: u32,
+    binding: &str,
     account_incarnation_id: &str,
     revision: f64,
     previous_digest: Option<String>,
@@ -2071,10 +2081,16 @@ pub fn seal_photos_library(
         .map_err(|error| js_error(&error.to_string()))?;
     let plaintext =
         photos_library::encode_library(&library).map_err(|error| js_error(&error.to_string()))?;
-    let key = decode_canonical_base64(key_base64, "Photos library key")?;
+    let master = account_master_key(master_key_base64)?;
     let context = photos_library_context(account_incarnation_id, revision, previous_digest)?;
-    let envelope = photos_library::seal(&plaintext, &key, context)
-        .map_err(|error| js_error(&error.to_string()))?;
+    let envelope = photos_library::seal(
+        &plaintext,
+        &master,
+        master_key_generation(generation)?,
+        binding,
+        context,
+    )
+    .map_err(|error| js_error(&error.to_string()))?;
     let digest =
         photos_library::envelope_digest(&envelope).map_err(|error| js_error(&error.to_string()))?;
     serde_wasm_bindgen::to_value(&SealedPhotosLibrary {
@@ -2084,11 +2100,13 @@ pub fn seal_photos_library(
     .map_err(|_| js_error("encode sealed library"))
 }
 
-/// Open a library record as exactly the revision expected; its JSON text.
+/// Open a library record of the account bound by `binding` as exactly the
+/// revision expected; its JSON text.
 #[wasm_bindgen(js_name = openPhotosLibrary)]
 pub fn open_photos_library(
     envelope_base64: &str,
-    key_base64: &str,
+    master_key_base64: &str,
+    binding: &str,
     account_incarnation_id: &str,
     revision: f64,
     previous_digest: Option<String>,
@@ -2096,9 +2114,9 @@ pub fn open_photos_library(
     use kutup_crypto::photos_library;
     let envelope = photos_library::decode_canonical_b64(envelope_base64)
         .map_err(|error| js_error(&error.to_string()))?;
-    let key = decode_canonical_base64(key_base64, "Photos library key")?;
+    let master = account_master_key(master_key_base64)?;
     let context = photos_library_context(account_incarnation_id, revision, previous_digest)?;
-    let plaintext = photos_library::open(&envelope, &key, context)
+    let plaintext = photos_library::open(&envelope, &master, binding, context)
         .map_err(|error| js_error(&error.to_string()))?;
     let library =
         photos_library::decode_library(&plaintext).map_err(|error| js_error(&error.to_string()))?;
