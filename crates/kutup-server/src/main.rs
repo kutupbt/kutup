@@ -24,6 +24,7 @@ mod chat_group_send;
 mod chat_groups;
 mod chat_hub;
 mod chat_media_federation;
+mod client_family;
 mod collab_federation;
 mod config;
 mod content_range;
@@ -373,6 +374,7 @@ async fn main() -> anyhow::Result<()> {
     // Every server key list entry still wrapping an account data key must be
     // there (docs/plans/server-personal-data.md, A2); keys under an older
     // entry move to the current one in batches.
+    account_data::install(&config.opaque_setup_keys);
     account_data::check_entries(&pool, &config.opaque_setup_keys)
         .await
         .map_err(anyhow::Error::msg)?;
@@ -2651,8 +2653,8 @@ const SINGLE_ROLE_WARNING: &str = "DATABASE_OWNER_URL is not set: the server run
     database's owner, so the security and admin logs are NOT append-only (it could change \
     or delete them). Set up the two roles (docs/self-hosting.md, \"Database roles\").";
 
-/// Deletes the security events and admin-log rows past their Privacy and
-/// retention settings.
+/// Deletes the security events, admin-log rows and ended sessions past their
+/// Privacy and retention settings.
 async fn prune_logs(pool: &sqlx::PgPool) -> error::AppResult<()> {
     let days = site_settings::SECURITY_EVENT_RETENTION_DAYS
         .load(pool)
@@ -2660,11 +2662,14 @@ async fn prune_logs(pool: &sqlx::PgPool) -> error::AppResult<()> {
     let events = security_events::prune(pool, days).await?;
     let days = site_settings::ADMIN_AUDIT_RETENTION_DAYS.load(pool).await?;
     let audit = audit_log::prune(pool, days).await?;
-    if events + audit > 0 {
+    let days = site_settings::SESSION_RECORD_GRACE_DAYS.load(pool).await?;
+    let sessions = sessions::prune_ended(pool, days).await?;
+    if events + audit + sessions > 0 {
         tracing::info!(
             events,
             audit,
-            "log retention: rows past their period deleted"
+            sessions,
+            "retention: rows past their period deleted"
         );
     }
     Ok(())

@@ -1,5 +1,4 @@
 import type { SecurityEvent } from './api'
-import { describeUserAgent } from './userAgent'
 
 const KNOWN = new Set([
   'passwordChange',
@@ -57,12 +56,25 @@ export function securityEventLabel(event: Pick<SecurityEvent, 'kind' | 'oldName'
  * its values, or null when no session did it (a recovery, an administrator).
  */
 export function securityEventDevice(
-  event: Pick<SecurityEvent, 'client' | 'userAgent'>,
+  event: Pick<SecurityEvent, 'client' | 'browser' | 'browserMajor' | 'os'>,
 ): { key: string; values?: Record<string, string> } | null {
   if (!event.client) return null
   if (event.client === 'cli') return { key: 'settings.sessions.cli' }
-  const { browser, os } = describeUserAgent(event.userAgent)
+  const { browser, os } = clientName(event)
   if (browser && os) return { key: 'settings.sessions.browserOn', values: { browser, os } }
   const one = browser ?? os
   return one ? { key: 'settings.security.events.device', values: { device: one } } : { key: 'settings.sessions.unknownBrowser' }
+}
+
+/** A session's browser as it is named: "Firefox 128" and "Linux", or null for each part unknown. */
+export function clientName(client: { browser?: string; browserMajor?: number; os?: string }): {
+  browser: string | null
+  os: string | null
+} {
+  const browser = client.browser
+    ? client.browserMajor !== undefined && client.browser !== 'Kutup CLI'
+      ? `${client.browser} ${client.browserMajor}`
+      : client.browser
+    : null
+  return { browser, os: client.os ?? null }
 }

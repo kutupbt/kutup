@@ -913,10 +913,22 @@ pub const ADMIN_AUDIT_RETENTION_DAYS: NumericSetting = NumericSetting {
     unit: SettingUnit::Days,
     per_account: false,
 };
-pub const PRIVACY_SETTINGS: [NumericSetting; 3] = [
+/// How long a session that ended (signed out, ended elsewhere, or expired)
+/// is kept, with its sealed browser, in days (A10).
+pub const SESSION_RECORD_GRACE_DAYS: NumericSetting = NumericSetting {
+    key: "session_record_grace_days",
+    field: "sessionRecordGraceDays",
+    default: 30,
+    min: 1,
+    max: 365,
+    unit: SettingUnit::Days,
+    per_account: false,
+};
+pub const PRIVACY_SETTINGS: [NumericSetting; 4] = [
     KEY_BACKUP_KEEP_DAYS,
     SECURITY_EVENT_RETENTION_DAYS,
     ADMIN_AUDIT_RETENTION_DAYS,
+    SESSION_RECORD_GRACE_DAYS,
 ];
 
 pub const TWO_FACTOR_SETTINGS: [NumericSetting; 3] = [

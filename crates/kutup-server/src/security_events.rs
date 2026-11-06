@@ -146,18 +146,47 @@ async fn insert(
     old_name: Option<&str>,
     new_name: Option<&str>,
 ) -> AppResult<()> {
+    let id = Uuid::new_v4();
+    // What made it: the session's client, and its browser re-sealed for this
+    // row (a session's own goes when the session does; the event stays).
+    let acting: Option<(String, Option<Vec<u8>>)> = match session {
+        Some(session) => {
+            sqlx::query_as("SELECT client_type, client_sealed FROM auth_sessions WHERE id = $1")
+                .bind(session)
+                .fetch_optional(&mut **tx)
+                .await?
+        }
+        None => None,
+    };
+    let (acting_client, client_sealed) = match (acting, session) {
+        (Some((client, sealed)), Some(session)) => {
+            let family = crate::client_family::open_in(
+                tx,
+                user_id,
+                "auth_sessions",
+                session,
+                sealed.as_deref(),
+            )
+            .await?;
+            let sealed =
+                crate::client_family::seal_in(tx, user_id, "account_security_events", id, &family)
+                    .await?;
+            (Some(client), sealed)
+        }
+        _ => (None, None),
+    };
     sqlx::query(
         "INSERT INTO account_security_events
-             (id, user_id, kind, acting_session_id, acting_client, acting_user_agent, admin_user_id,
+             (id, user_id, kind, acting_session_id, acting_client, client_sealed, admin_user_id,
               old_name, new_name)
-         SELECT $1, $2, $3, $4, s.client_type, s.user_agent, $5, $6, $7
-         FROM (SELECT 1) one
-         LEFT JOIN auth_sessions s ON s.id = $4",
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)",
     )
-    .bind(Uuid::new_v4())
+    .bind(id)
     .bind(user_id)
     .bind(kind.as_str())
     .bind(session)
+    .bind(acting_client)
+    .bind(client_sealed)
     .bind(admin)
     .bind(old_name)
     .bind(new_name)
@@ -217,7 +246,10 @@ pub struct Event {
     pub at: time::OffsetDateTime,
     pub acting_session_id: Option<Uuid>,
     pub acting_client: Option<String>,
-    pub acting_user_agent: Option<String>,
+    /// Its browser, opened.
+    #[sqlx(skip)]
+    pub client: crate::client_family::ClientFamily,
+    pub client_sealed: Option<Vec<u8>>,
     pub by_admin: bool,
     pub old_name: Option<String>,
     pub new_name: Option<String>,
@@ -233,8 +265,9 @@ pub async fn list(
     cursor: Option<Uuid>,
     limit: i64,
 ) -> AppResult<Vec<Event>> {
-    Ok(sqlx::query_as(
-        "SELECT e.id, e.kind, e.at, e.acting_session_id, e.acting_client, e.acting_user_agent,
+    let mut conn = pool.acquire().await?;
+    let mut events: Vec<Event> = sqlx::query_as(
+        "SELECT e.id, e.kind, e.at, e.acting_session_id, e.acting_client, e.client_sealed,
                 e.kind IN ('adminReset', 'accountReset', 'nameClosed', 'nameFreed') AS by_admin,
                 e.old_name, e.new_name, e.count
          FROM account_security_events e
@@ -248,6 +281,17 @@ pub async fn list(
     .bind(user_id)
     .bind(cursor)
     .bind(limit)
-    .fetch_all(pool)
-    .await?)
+    .fetch_all(&mut *conn)
+    .await?;
+    for event in &mut events {
+        event.client = crate::client_family::open_in(
+            &mut conn,
+            user_id,
+            "account_security_events",
+            event.id,
+            event.client_sealed.as_deref(),
+        )
+        .await?;
+    }
+    Ok(events)
 }

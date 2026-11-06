@@ -131,8 +131,16 @@ fn well_formed(secret: &str) -> bool {
             .unwrap_or(false)
 }
 
-fn truncate_user_agent(user_agent: Option<&str>) -> Option<String> {
-    user_agent.map(|ua| ua.chars().take(512).collect())
+/// What a session keeps of its `User-Agent`: the parsed family only, sealed
+/// for its row (docs/plans/server-personal-data.md, A10).
+async fn sealed_client(
+    conn: &mut sqlx::PgConnection,
+    user_id: Uuid,
+    session_id: Uuid,
+    user_agent: Option<&str>,
+) -> AppResult<Option<Vec<u8>>> {
+    let family = crate::client_family::parse(user_agent.unwrap_or_default());
+    crate::client_family::seal_in(conn, user_id, "auth_sessions", session_id, &family).await
 }
 
 pub struct IssuedSession {
@@ -149,9 +157,11 @@ pub async fn create(
 ) -> AppResult<IssuedSession> {
     let session_id = Uuid::new_v4();
     let refresh_token = new_secret();
+    let mut conn = pool.acquire().await?;
+    let client_sealed = sealed_client(&mut conn, user_id, session_id, user_agent).await?;
     sqlx::query(
         "INSERT INTO auth_sessions
-             (id, user_id, client_type, parent_session_id, refresh_token_hash, user_agent, expires_at)
+             (id, user_id, client_type, parent_session_id, refresh_token_hash, client_sealed, expires_at)
          VALUES ($1, $2, $3, $4, $5, $6, $7)",
     )
     .bind(session_id)
@@ -159,9 +169,9 @@ pub async fn create(
     .bind(client.as_str())
     .bind(parent)
     .bind(hash_secret(&refresh_token))
-    .bind(truncate_user_agent(user_agent))
+    .bind(client_sealed)
     .bind(OffsetDateTime::now_utc() + SESSION_TTL)
-    .execute(pool)
+    .execute(&mut *conn)
     .await?;
     Ok(IssuedSession {
         session_id,
@@ -471,21 +481,69 @@ pub struct SessionRow {
     pub id: Uuid,
     pub client_type: String,
     pub parent_session_id: Option<Uuid>,
-    pub user_agent: Option<String>,
+    /// Its browser, opened.
+    pub client: crate::client_family::ClientFamily,
     pub created_at: OffsetDateTime,
     pub last_used_at: OffsetDateTime,
 }
 
 pub async fn list(pool: &PgPool, user_id: Uuid) -> AppResult<Vec<SessionRow>> {
-    Ok(sqlx::query_as(
-        "SELECT id, client_type, parent_session_id, user_agent, created_at, last_used_at
+    type Row = (
+        Uuid,
+        String,
+        Option<Uuid>,
+        Option<Vec<u8>>,
+        OffsetDateTime,
+        OffsetDateTime,
+    );
+    let mut conn = pool.acquire().await?;
+    let rows: Vec<Row> = sqlx::query_as(
+        "SELECT id, client_type, parent_session_id, client_sealed, created_at, last_used_at
          FROM auth_sessions
          WHERE user_id = $1 AND revoked_at IS NULL AND expires_at > now()
          ORDER BY last_used_at DESC",
     )
     .bind(user_id)
-    .fetch_all(pool)
-    .await?)
+    .fetch_all(&mut *conn)
+    .await?;
+    let mut sessions = Vec::with_capacity(rows.len());
+    for (id, client_type, parent_session_id, sealed, created_at, last_used_at) in rows {
+        let client = crate::client_family::open_in(
+            &mut conn,
+            user_id,
+            "auth_sessions",
+            id,
+            sealed.as_deref(),
+        )
+        .await?;
+        sessions.push(SessionRow {
+            id,
+            client_type,
+            parent_session_id,
+            client,
+            created_at,
+            last_used_at,
+        });
+    }
+    Ok(sessions)
+}
+
+/// The retention job's part (A10): sessions that ended more than `days` ago
+/// go, with their sealed browser, unless a session forked from one still
+/// lives (deleting a parent ends its children). Returns how many.
+pub async fn prune_ended(pool: &PgPool, days: i64) -> AppResult<u64> {
+    Ok(sqlx::query(
+        "DELETE FROM auth_sessions s
+          WHERE LEAST(COALESCE(s.revoked_at, s.expires_at), s.expires_at)
+                < now() - make_interval(days => $1::int)
+            AND NOT EXISTS (SELECT 1 FROM auth_sessions c
+                             WHERE c.parent_session_id = s.id
+                               AND c.revoked_at IS NULL AND c.expires_at > now())",
+    )
+    .bind(days)
+    .execute(pool)
+    .await?
+    .rows_affected())
 }
 
 /// Store a fork hand-off for `child`, returning the one-time selector.
@@ -573,9 +631,10 @@ pub async fn consume_fork(
     };
     let session_id = Uuid::new_v4();
     let refresh_token = new_secret();
+    let client_sealed = sealed_client(&mut tx, user_id, session_id, user_agent).await?;
     sqlx::query(
         "INSERT INTO auth_sessions
-             (id, user_id, client_type, parent_session_id, refresh_token_hash, user_agent, expires_at)
+             (id, user_id, client_type, parent_session_id, refresh_token_hash, client_sealed, expires_at)
          VALUES ($1, $2, $3, $4, $5, $6, $7)",
     )
     .bind(session_id)
@@ -583,7 +642,7 @@ pub async fn consume_fork(
     .bind(child.as_str())
     .bind(parent_id)
     .bind(hash_secret(&refresh_token))
-    .bind(truncate_user_agent(user_agent))
+    .bind(client_sealed)
     .bind(OffsetDateTime::now_utc() + SESSION_TTL)
     .execute(&mut *tx)
     .await?;
@@ -661,12 +720,5 @@ mod tests {
         assert!(ClientType::WebChat.is_fork_child());
         assert!(!ClientType::WebAccount.is_fork_child());
         assert!(!ClientType::Cli.uses_cookie());
-    }
-
-    #[test]
-    fn user_agents_are_bounded() {
-        let long = "x".repeat(2000);
-        assert_eq!(truncate_user_agent(Some(&long)).unwrap().len(), 512);
-        assert_eq!(truncate_user_agent(None), None);
     }
 }

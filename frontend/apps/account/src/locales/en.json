@@ -951,7 +951,9 @@
         "securityEventRetentionDays": "Keep security events (days)",
         "securityEventRetentionDaysHint": "Each account's sign-ins and security changes, the newest 500 at most. Its owner sees this period.",
         "adminAuditRetentionDays": "Keep the admin log (days)",
-        "adminAuditRetentionDaysHint": "What administrators did, including opening an account's data."
+        "adminAuditRetentionDaysHint": "What administrators did, including opening an account's data.",
+        "sessionRecordGraceDays": "Keep ended sessions (days)",
+        "sessionRecordGraceDaysHint": "Sessions that were signed out, ended elsewhere or expired, with the browser they used."
       },
       "federationLimits": {
         "federationRetryBaseSeconds": "First wait (seconds)",
