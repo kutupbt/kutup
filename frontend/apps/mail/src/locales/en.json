@@ -1389,5 +1389,15 @@
       "unknownPlace": "No folder or label with this name (make it first, then import again):",
       "noAction": "This filter does nothing Kutup can do:"
     }
+  },
+  "export": {
+    "title": "Export mail",
+    "hint": "Download a folder or label, or all your mail, as .eml files in a zip. The messages are opened in this browser; the file holds them readable, so keep it safe.",
+    "place": "What to export",
+    "start": "Export",
+    "stop": "Stop",
+    "progress": "{{done}} of {{total}} messages",
+    "done": "Your mail is downloaded.",
+    "failed": "The export stopped. Try again."
   }
 }

@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
+import { ExportMailSection } from './ExportMailSection'
 import { toast } from 'sonner'
 import { PAGE_SIZES, useImageSenders, useMailSettings, useRemoveImageSender, useUpdateMailSettings, type MailSettings } from '@kutup/mail-core/api'
 import { Alert } from '@kutup/ui/components/alert'
@@ -199,6 +200,7 @@ export function GeneralSettingsPage() {
       </div>
       <NotificationSettings />
       <ContentSearchSettings />
+      <ExportMailSection />
       <section className="mt-8 space-y-3" aria-labelledby="images-heading">
         <h2 id="images-heading" className="text-sm font-medium">
           {t('remoteImages.settingsTitle')}

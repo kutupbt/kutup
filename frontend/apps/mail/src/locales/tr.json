@@ -1389,5 +1389,15 @@
       "unknownPlace": "Bu adla bir klasör ya da etiket yok (önce oluşturun, sonra yeniden içe aktarın):",
       "noAction": "Bu filtre Kutup’un yapabileceği hiçbir şey yapmıyor:"
     }
+  },
+  "export": {
+    "title": "Postaları dışa aktar",
+    "hint": "Bir klasörü ya da etiketi veya tüm postalarınızı zip içinde .eml dosyaları olarak indirin. İletiler bu tarayıcıda açılır; dosya onları okunur halde tutar, güvenli saklayın.",
+    "place": "Dışa aktarılacak yer",
+    "start": "Dışa aktar",
+    "stop": "Durdur",
+    "progress": "{{total}} iletiden {{done}}",
+    "done": "Postalarınız indirildi.",
+    "failed": "Dışa aktarma durdu. Yeniden deneyin."
   }
 }

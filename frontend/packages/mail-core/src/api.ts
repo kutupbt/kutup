@@ -737,6 +737,22 @@ async function offeredKey(raw: Uint8Array, parsed: ParsedMessage, from: string, 
  * as for reading (OpenPGP from outside decrypted too), signatures not checked,
  * which search does not need.
  */
+/**
+ * A message as it was received or sent: its MIME, opened from the stored
+ * encryption, for export (an outside sender's own OpenPGP layer stays, as
+ * Proton's export keeps it). Your own mailbox only.
+ */
+export async function storedMessage(account: MailAccount, message: MailMessage): Promise<Uint8Array> {
+  const response = await api.get<ArrayBuffer>(`/mail/messages/${message.id}/content`, { responseType: 'arraybuffer' })
+  return (await openWithKeys(account, new Uint8Array(response.data), undefined, !!message.forwardedFrom)).data
+}
+
+/** One numbered page of a place's messages (one row per message), with how many it holds. */
+export async function placePage(place: PlaceKey, page: number, limit: number): Promise<{ messages: MailMessage[]; total: number }> {
+  const { data } = await api.get<Page>('/mail/messages', { params: { folder: place, page, limit } })
+  return { messages: data.messages, total: data.total ?? data.messages.length }
+}
+
 export async function openMessageText(account: MailAccount, message: MailMessage): Promise<string> {
   const response = await api.get<ArrayBuffer>(`/mail/messages/${message.id}/content`, { responseType: 'arraybuffer' })
   const opened = await openWithKeys(account, new Uint8Array(response.data), undefined, !!message.forwardedFrom)
