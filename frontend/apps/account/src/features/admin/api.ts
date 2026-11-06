@@ -179,6 +179,22 @@ export function useAdminActivity(filter: ActivityFilter) {
   })
 }
 
+/** The admin log's integrity: its hash chain, and whether the server can change it at all. */
+export interface ActivityIntegrity {
+  checked: number
+  /** The first row whose hash or link is wrong; null when the chain holds. */
+  brokenAt: number | null
+  /** False while the server runs as the database's owner (no DATABASE_OWNER_URL). */
+  appendOnly: boolean
+}
+
+export function useActivityIntegrity() {
+  return useQuery({
+    queryKey: [...adminKey, 'activity', 'integrity'],
+    queryFn: async () => (await api.get<ActivityIntegrity>('/admin/activity/verify')).data,
+  })
+}
+
 /** CSV of the (federation) audit trail, as the server renders it. */
 export async function exportActivityCsv(filter: ActivityFilter): Promise<Blob> {
   const response = await api.get<Blob>('/admin/activity/export', {

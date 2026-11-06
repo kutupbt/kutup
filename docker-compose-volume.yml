@@ -72,7 +72,12 @@ services:
       dockerfile: Dockerfile.server
     restart: unless-stopped
     environment:
-      DATABASE_URL: postgres://${POSTGRES_USER:-kutup}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-kutup}?sslmode=disable
+      # With POSTGRES_APP_USER set, the server runs as that role and the
+      # owner (POSTGRES_USER) only migrates, grants and deletes expired log
+      # rows: the security and admin logs are then append-only for the server
+      # (docs/self-hosting.md, "Database roles").
+      DATABASE_URL: postgres://${POSTGRES_APP_USER:-${POSTGRES_USER:-kutup}}:${POSTGRES_APP_PASSWORD:-${POSTGRES_PASSWORD}}@postgres:5432/${POSTGRES_DB:-kutup}?sslmode=disable
+      DATABASE_OWNER_URL: ${DATABASE_OWNER_URL:-${POSTGRES_APP_USER:+postgres://${POSTGRES_USER:-kutup}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-kutup}?sslmode=disable}}
       JWT_SECRET: ${JWT_SECRET}
       OPAQUE_SETUP_KEYS: ${OPAQUE_SETUP_KEYS:?set OPAQUE_SETUP_KEYS (docs/self-hosting.md)}
       S3_ENDPOINT: http://seaweedfs-s3:8333

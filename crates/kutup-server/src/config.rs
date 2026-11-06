@@ -4,6 +4,12 @@
 #[derive(Debug, Clone)]
 pub struct Config {
     pub database_url: String,
+    /// The owner role's connection (`DATABASE_OWNER_URL`), when the server
+    /// runs as a separate app role (docs/plans/server-personal-data.md, A8):
+    /// migrations, the app role's grants and the retention job use it, and the
+    /// security and admin logs are append-only for the server. `None`: one
+    /// role does everything, and those logs are not append-only.
+    pub database_owner_url: Option<String>,
     pub jwt_secret: String,
     /// The keys the OPAQUE server setups are sealed under
     /// (`OPAQUE_SETUP_KEYS`, docs/plans/opaque.md §5). Never logged.
@@ -505,6 +511,7 @@ impl Config {
         let app_env_for_apps = app_env.clone();
         let mut cfg = Config {
             database_url: must_env("DATABASE_URL"),
+            database_owner_url: env.set("DATABASE_OWNER_URL").filter(|url| !url.is_empty()),
             jwt_secret: must_env("JWT_SECRET"),
             opaque_setup_keys: {
                 let value = env.opaque_setup_keys();
@@ -1320,6 +1327,8 @@ mod env_example {
         ("POSTGRES_PASSWORD", "docker-compose.yml"),
         ("POSTGRES_DB", "docker-compose.yml"),
         ("POSTGRES_USER", "docker-compose.yml"),
+        ("POSTGRES_APP_USER", "docker-compose.yml"),
+        ("POSTGRES_APP_PASSWORD", "docker-compose.yml"),
         ("KUTUP_HTTP_PORT", "docker-compose.yml"),
         ("KUTUP_HTTPS_PORT", "docker-compose.yml"),
         ("CHAT_TURN_REALM", "docker-compose.yml"),

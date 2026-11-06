@@ -891,7 +891,33 @@ pub const KEY_BACKUP_KEEP_DAYS: NumericSetting = NumericSetting {
     unit: SettingUnit::Days,
     per_account: false,
 };
-pub const PRIVACY_SETTINGS: [NumericSetting; 1] = [KEY_BACKUP_KEEP_DAYS];
+/// How long an account's security events are kept, in days (its newest 500
+/// at most; docs/plans/server-personal-data.md, A8). The account's security
+/// page says it.
+pub const SECURITY_EVENT_RETENTION_DAYS: NumericSetting = NumericSetting {
+    key: "security_event_retention_days",
+    field: "securityEventRetentionDays",
+    default: 365,
+    min: 30,
+    max: 3650,
+    unit: SettingUnit::Days,
+    per_account: false,
+};
+/// How long the admin log is kept, in days.
+pub const ADMIN_AUDIT_RETENTION_DAYS: NumericSetting = NumericSetting {
+    key: "admin_audit_retention_days",
+    field: "adminAuditRetentionDays",
+    default: 730,
+    min: 90,
+    max: 3650,
+    unit: SettingUnit::Days,
+    per_account: false,
+};
+pub const PRIVACY_SETTINGS: [NumericSetting; 3] = [
+    KEY_BACKUP_KEEP_DAYS,
+    SECURITY_EVENT_RETENTION_DAYS,
+    ADMIN_AUDIT_RETENTION_DAYS,
+];
 
 pub const TWO_FACTOR_SETTINGS: [NumericSetting; 3] = [
     TWO_FACTOR_RECOVERY_CODES,

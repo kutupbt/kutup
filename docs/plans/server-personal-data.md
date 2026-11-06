@@ -207,6 +207,21 @@ keeps them; reports on them are operator tooling.
   events and folding and drops its `advanced` mode and `ip` column (no table
   stores IPs).
 
+**As built (L2):**
+- The owner role is `DATABASE_OWNER_URL`; with the bundled compose,
+  `POSTGRES_APP_USER` and `POSTGRES_APP_PASSWORD` make the server's role.
+- At each start the owner grants that role every table, then takes back UPDATE,
+  DELETE and TRUNCATE on the two logs and gives `UPDATE (count)` on the security
+  events, the one updatable column, so failures fold.
+- Foreign-key cascades still delete an account's events: Postgres runs them as
+  the table's owner.
+- The retention job runs hourly on the owner's connection.
+- `GET /api/admin/activity/verify` walks the chain and says whether the logs
+  are append-only.
+- Admin access means opening one account's limits, mail-domain overrides or
+  mail-sending state: account content is end-to-end encrypted, so these are
+  what an admin sees of an account.
+
 ## A10. User agents: a parsed family, sealed, with retention
 
 - **Parsing:** the server parses the `User-Agent` header once, at sign-in, into

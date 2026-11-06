@@ -15,6 +15,7 @@ const ACTION_KEYS: Record<string, string> = {
   'user.2fa_disable': 'user2faDisable',
   'user.rotate_temp_password': 'userRotateTempPassword',
   'user.wipe': 'userWipe',
+  'admin.view': 'adminView',
   'report.dismiss': 'reportDismiss',
   'share.remove': 'shareRemove',
   'settings.update': 'settingsUpdate',

@@ -412,8 +412,19 @@ pub async fn login_finish(
         Err(kutup_crypto::error::CryptoError::InvalidInput(_)) => {
             return Err(AppError::bad_request("invalid credentialFinalization"))
         }
-        // A wrong password, or a name that is no account.
-        Err(_) => return Err(AppError::invalid_credentials()),
+        // A wrong password, or a name that is no account. A sign-in that
+        // named a real account goes into its security log (repeats folded).
+        Err(_) => {
+            if let (Some(user_id), "session") = (user_id, purpose.as_str()) {
+                crate::security_events::record_folded(
+                    &state.pool,
+                    user_id,
+                    crate::security_events::Kind::SignInFailedPassword,
+                )
+                .await?;
+            }
+            return Err(AppError::invalid_credentials());
+        }
     }
     // A fake answer cannot be finished; this is a guard, not a path.
     let (Some(user_id), Some(epoch)) = (user_id, epoch) else {

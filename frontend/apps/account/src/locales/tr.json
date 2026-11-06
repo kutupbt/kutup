@@ -284,6 +284,9 @@
         "byAdmin": "Bir yönetici tarafından",
         "thisDevice": "Bu cihaz",
         "device": "{{device}}",
+        "times_one": "bir kez",
+        "times_other": "{{count}} kez",
+        "kept": "{{count}} gün saklanır, en fazla son 500.",
         "kind": {
           "passwordChange": "Parola değiştirildi",
           "recovery": "Parola kurtarma ifadesiyle sıfırlandı",
@@ -303,7 +306,14 @@
           "securityKeyRemoved": "“{{oldName}}” güvenlik anahtarı kaldırıldı",
           "securityKeyCompromised": "“{{oldName}}” güvenlik anahtarı kopyalanmış olabilir (artık kullanılmıyor)",
           "authenticatorOn": "Doğrulama uygulaması açıldı",
-          "authenticatorOff": "Doğrulama uygulaması kapatıldı"
+          "authenticatorOff": "Doğrulama uygulaması kapatıldı",
+          "signIn": "Giriş yapıldı",
+          "signInFailedPassword": "Girişte yanlış parola",
+          "signInFailed2fa": "Girişte yanlış ikinci adım",
+          "signOut": "Çıkış yapıldı",
+          "sessionRevoked": "Bir oturum sonlandırıldı",
+          "allSessionsRevoked": "Diğer tüm oturumlar sonlandırıldı",
+          "adminAccess": "Bir yönetici hesabınızın ayrıntılarını açtı"
         }
       },
       "recovery": "Kurtarma ifadesi",
@@ -723,6 +733,10 @@
       "description": "Yöneticilerin yaptığı değişiklikler, en yenisi önce.",
       "export": "CSV olarak dışa aktar",
       "exportFailed": "Dışa aktarma başarısız oldu.",
+      "notAppendOnly": "Sunucu veritabanının sahibi olarak çalışıyor (DATABASE_OWNER_URL ayarlı değil), bu yüzden bu kayıt ve hesapların güvenlik kayıtları yalnızca eklemeli değil: sunucu bunları değiştirebilir ya da silebilir. İki veritabanı rolünü kurun (kendi sunucunu barındırma kılavuzu, \"Veritabanı rolleri\").",
+      "chainHolds_one": "Kaydın özet zinciri sağlam ({{count}} giriş denetlendi).",
+      "chainHolds_other": "Kaydın özet zinciri sağlam ({{count}} giriş denetlendi).",
+      "chainBroken": "Kaydın özet zinciri {{id}} numaralı girişte kopuyor: orada bir giriş değiştirilmiş ya da silinmiş.",
       "federationOnly": "Yalnızca federasyon",
       "domain": "Sunucuya göre filtrele",
       "older": "Daha eskileri yükle",
@@ -737,6 +751,7 @@
         "user2faDisable": "{{admin}}, {{target}} için 2FA'yı kapattı",
         "userRotateTempPassword": "{{admin}}, {{target}} için geçici parolayı değiştirdi",
         "userWipe": "{{admin}}, {{target}} hesabını sıfırladı",
+        "adminView": "{{admin}}, {{target}} hesabının ayrıntılarını açtı",
         "settingsUpdate": "{{admin}} sunucu ayarlarını değiştirdi",
         "mapsSettingsUpdate": "{{admin}} harita ayarlarını değiştirdi",
         "federationPolicyUpdate": "{{admin}}, {{feature}} federasyonunu {{mode}} olarak ayarladı",
@@ -932,7 +947,11 @@
       },
       "privacyLimits": {
         "keyBackupKeepDays": "Hesap anahtarı yedeklerini sakla (gün)",
-        "keyBackupKeepDaysHint": "Her hesabın sunucudaki verisini mühürleyen anahtarların yedeği. Bu sürenin sonunda silinmiş bir hesabın verisi hiçbir yedekten okunamaz."
+        "keyBackupKeepDaysHint": "Her hesabın sunucudaki verisini mühürleyen anahtarların yedeği. Bu sürenin sonunda silinmiş bir hesabın verisi hiçbir yedekten okunamaz.",
+        "securityEventRetentionDays": "Güvenlik olaylarını sakla (gün)",
+        "securityEventRetentionDaysHint": "Her hesabın girişleri ve güvenlik değişiklikleri, en fazla son 500. Hesap sahibi bu süreyi görür.",
+        "adminAuditRetentionDays": "Yönetici kaydını sakla (gün)",
+        "adminAuditRetentionDaysHint": "Yöneticilerin yaptıkları, bir hesabın verisini açmak dahil."
       },
       "federationLimits": {
         "federationRetryBaseSeconds": "İlk bekleme (saniye)",

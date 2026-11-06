@@ -25,9 +25,9 @@ use crate::jobs;
 use crate::middleware::AdminUser;
 use crate::AppState;
 
-/// Best-effort audit-log write. The payload snapshots human-readable identities
-/// (usernames) at action time so the trail stays meaningful after the
-/// referenced users are deleted.
+/// Best-effort audit-log write, chained (`crate::audit_log`). The payload
+/// snapshots human-readable identities (usernames) at action time so the trail
+/// stays meaningful after the referenced users are deleted.
 pub(crate) async fn audit(
     pool: &PgPool,
     admin_user_id: &str,
@@ -38,19 +38,43 @@ pub(crate) async fn audit(
     let Ok(admin_uuid) = Uuid::parse_str(admin_user_id) else {
         return;
     };
-    if let Err(e) = sqlx::query(
-        "INSERT INTO admin_audit_log (admin_user_id, action, target_user_id, payload) \
-         VALUES ($1, $2, $3, $4)",
-    )
-    .bind(admin_uuid)
-    .bind(action)
-    .bind(target_user_id)
-    .bind(payload)
-    .execute(pool)
-    .await
+    if let Err(e) =
+        crate::audit_log::append(pool, admin_uuid, action, target_user_id, &payload).await
     {
-        tracing::warn!("audit log write failed ({action}): {e}");
+        tracing::warn!("audit log write failed ({action}): {}", e.message);
     }
+}
+
+/// An administrator opened one account's details (`view`): an `admin.view`
+/// row in the admin log, and `adminAccess` in the account's own security log
+/// (repeats within minutes folded; docs/plans/server-personal-data.md, A8).
+pub(crate) async fn viewed(
+    state: &AppState,
+    admin: &AdminUser,
+    target: Uuid,
+    view: &str,
+) -> AppResult<()> {
+    let exists: bool = sqlx::query_scalar("SELECT EXISTS (SELECT 1 FROM users WHERE id = $1)")
+        .bind(target)
+        .fetch_one(&state.pool)
+        .await?;
+    if !exists {
+        return Err(AppError::not_found("no such user"));
+    }
+    audit(
+        &state.pool,
+        &admin.user_id,
+        "admin.view",
+        Some(target),
+        serde_json::json!({ "view": view }),
+    )
+    .await;
+    crate::security_events::record_folded(
+        &state.pool,
+        target,
+        crate::security_events::Kind::AdminAccess,
+    )
+    .await
 }
 
 /// `^[a-z0-9_-]{3,32}$` — mirrors `adminUsernameRegexp`.
@@ -2507,6 +2531,36 @@ struct ActivityResponse {
     entries: Vec<ActivityEntry>,
     /// Pass as `?before=` to fetch the next (older) page; `null` = no more pages.
     next_before: Option<i64>,
+}
+
+/// The admin log's integrity: its hash chain checked, and whether the server
+/// can change it at all (docs/plans/server-personal-data.md, A8).
+#[derive(Debug, Serialize, utoipa::ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct ActivityIntegrity {
+    #[serde(flatten)]
+    pub chain: crate::audit_log::Verification,
+    /// False while the server runs as the database's owner
+    /// (`DATABASE_OWNER_URL` unset): it could change or delete log rows.
+    pub append_only: bool,
+}
+
+/// `GET /api/admin/activity/verify` — walks the admin log's hash chain.
+#[utoipa::path(
+    get,
+    path = "/api/admin/activity/verify",
+    tag = "admin",
+    security(("BearerAuth" = [])),
+    responses((status = 200, description = "The chain checked, and whether the logs are append-only", body = ActivityIntegrity))
+)]
+pub async fn activity_verify(
+    State(state): State<AppState>,
+    _admin: AdminUser,
+) -> AppResult<Json<ActivityIntegrity>> {
+    Ok(Json(ActivityIntegrity {
+        chain: crate::audit_log::verify(&state.pool).await?,
+        append_only: state.config.database_owner_url.is_some(),
+    }))
 }
 
 /// `GET /api/admin/activity?limit=50&before=<id>` — the filterable audit-log feed.
