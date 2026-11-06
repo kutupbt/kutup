@@ -1,6 +1,7 @@
 # Server-side personal data: shredding, retention, audit, consent (before the wipe)
 
-Status: **note for review** (2026-11-06). No code before it is accepted.
+Status: **accepted** (2026-11-06; decisions below, by the main session within
+what the user approved). Build in slices L1–L7, in order.
 
 The server stores a little personal data in the clear: who signed in from what
 browser, what the admin did, mail headers, and later a recovery email. These
@@ -67,6 +68,9 @@ each copy.
      serves anything, it destroys the keys of every account the log
      recorded as destroyed after the dump was taken. The log is append-only
      and kept for years, so it outlives every dump.
+
+  Both, so restoring any older backup can never bring back a deleted
+  account's key (decision 2).
 - **What is sealed:**
   - the parsed user-agent family in sessions and security events (A10);
   - the TOTP secret (today plaintext);
@@ -100,11 +104,11 @@ each copy.
   admin, and is waiting out a grace period: a site setting
   `account_closing_days`, default 14. In that time the account can't sign in
   except to cancel. Then a background job deletes it.
-- **"Deleted" is not a row.** A deleted account's row goes: the purge that runs
-  today, then the account data key is destroyed, then a destruction event is
-  recorded (A7). The record of the deletion is that event, which holds no
-  personal data. *Alternative for review: keep a tombstone row
-  (`state = deleted`).*
+- **"Deleted" is not a row** (decision 1). A deleted account's row goes: the
+  purge that runs today, then the account data key is destroyed, then a
+  destruction event is recorded (A7). The record of the deletion is that
+  event, which holds no personal data. Username holds keep their own
+  mechanism and table (`account_names`), unaffected.
 - **`purpose_ended_at`** (timestamptz): set when the account is closed. It is
   the start of every retention clock that runs on after an account ends, in
   the logs and the destruction log.
@@ -152,8 +156,10 @@ keeps them; reports on them are operator tooling.
   - The owner role, which runs migrations, also runs a retention job: a
     separate connection (`DATABASE_OWNER_URL`) that deletes only rows past
     their retention.
-  - Single-role self-hosting keeps working: if no owner URL is set, the
-    server warns at start and runs the job on its own connection.
+  - Single-role self-hosting keeps working (decision 3): if no owner URL is
+    set, the server runs the job on its own connection and says the
+    append-only guarantee is off, loudly at start, in `check-config`, and as
+    a standing warning in the admin console. kutup.dev runs two roles.
   - docs/self-hosting.md says how to create the two roles.
   - **The insert-time pruning goes** (`security_events.rs:138`); the retention
     job does it.
@@ -263,14 +269,11 @@ keeps them; reports on them are operator tooling.
   - **Purposes from day one:** `federation_abroad` and `marketing`. There is
     no purpose for storing the account abroad: that rests on the operator's
     contracts with its providers, not on the user.
-  - **Open:** federation is site-level today, so there is no per-account
-    opt-in to ask `federation_abroad` at.
-    - (a) Add a per-account "talk to other servers" switch (default per a
-      site setting) that asks for the consent when a document for the
-      purpose is published.
-    - (b) Keep the purpose and API only, and leave the opt-in to whoever
-      needs it. Recommended: (a), since a per-account switch is useful on its
-      own.
+  - **A per-account federation switch** (decision 4): federation is
+    site-level today, so the account gets a "talk to other servers" switch
+    (its default a site setting). Turning it on asks for the
+    `federation_abroad` consent when a document for the purpose is published;
+    withdrawing the consent turns it off. Built in L6.
   - `marketing` is recorded only: there are no marketing messages.
 
 ## Slices (after review, in this order)
@@ -282,25 +285,26 @@ keeps them; reports on them are operator tooling.
 | L3 | A10: UA family parser, sealed client columns, API and Account app, feedback, session retention | S–M |
 | L4 | A5 and A7: states, closing job, legal hold, self-service deletion, destruction events, restore replay | M |
 | L5 | A11: operator block, per-account and site-wide switches, share dialogs, public pages | S–M |
-| L6 | A3 and A4: documents, acknowledgements at signup and update, consents API and Settings, (a) if chosen | M |
-| L7 | A2 for mail metadata: sealed headers, keyed-hash threading, search check | M |
+| L6 | A3 and A4: documents, acknowledgements at signup and update, consents API and Settings, the per-account federation switch | M |
+| L7 | A2 for mail metadata: sealed headers, keyed-hash threading, search check; before the wipe, as it is a format (decision 5) | M |
 
 Each slice adds en and tr strings, site settings in the registry (with the admin
 UI), docs (`api.md`, `self-hosting.md`, the Account app's help), and live tests;
 L2 and L4 also a backup-restore test of the replay.
 
-## Decisions for review
+## Decisions (2026-11-06)
 
-1. Deleted accounts leave no row (the destruction event is the record), or a
-   tombstone row.
-2. The key schema and its own short-retention dump, with replay on restore
-   (both), or only one of them.
-3. Two database roles with a single-role fallback that warns, or two roles
-   required.
-4. `federation_abroad`: (a) a per-account federation switch, or (b) ledger
-   only.
-5. Mail metadata sealed before the wipe (L7), or after it with a re-seal
-   migration.
-6. Defaults: closing 14 days, key-dump retention 7 days, ended sessions
+1. A deleted account leaves no row; its destruction event is the record.
+   Username holds are unaffected.
+2. Both the key schema with its own short-retention dump and the replay of
+   the destruction log on restore.
+3. Two database roles, with a single-role fallback that warns at start, in
+   `check-config` and in the admin console. kutup.dev runs two roles.
+4. A per-account federation switch, where `federation_abroad` is asked.
+5. Mail metadata is sealed before the wipe (L7).
+6. Defaults, all site settings (per account where a setting limits one
+   account): closing 14 days, key-dump retention 7 days, ended sessions
    30 days, security events 365 days, admin audit 730 days, destruction
    events 3 years.
+7. TOTP secrets are sealed under the account data key (L1), so they are
+   shredded with the account.
