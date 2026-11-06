@@ -50,7 +50,7 @@ Items below are organized by **whether they block v1** vs. whether they can ship
 4. System emails through Kutup's Stalwart (reset, welcome, share notices).
 5. Account-level device linking (QR).
 6. Key transparency.
-7. Native apps.
+7. Native apps: mobile first, then desktop.
 8. Signed builds.
 9. The admin app at `admin.<domain>`.
 10. A strict Content-Security-Policy for every app. Today's policy (set by
@@ -337,6 +337,25 @@ client:
 - the verified index checked on reads;
 - the chain started on the index basis;
 - a blocked state shown in the app.
+
+### Native desktop apps
+
+Not started, and planned after the native mobile apps (decided 2026-11-06).
+Follow Discord, which announced in November 2026 that it is rebuilding its
+client in Rust with [GPUI](https://www.gpui.rs/) on the desktop instead of
+Electron (early builds use about 290 MB of RAM against up to 4 GB), while
+embedded content such as video and Activities stays web:
+- Chat first, as a native GPUI app on the shared Rust core
+  (`kutup-chat-core`, `kutup-client-ffi`, `kutup-crypto`), where native
+  speed and memory matter most.
+- The other apps start inside an embedded web view and get native screens
+  one app at a time, where that pays off.
+- Office (OnlyOffice) and the whiteboards stay web, since they only run in a
+  browser engine.
+- Re-check GPUI's maturity and Discord's published approach (a UI layer that
+  renders to HTML or GPUI) when this work starts; Iced is the fallback.
+- Desktop builds need macOS notarization and Windows Authenticode (see
+  [Signed builds](#signed-builds)).
 
 ### Responsive web · mobile selection mode
 
