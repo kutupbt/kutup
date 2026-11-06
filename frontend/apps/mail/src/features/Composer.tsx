@@ -39,6 +39,7 @@ import { groupKeys, heldKeys, useMyGroups, type MailGroup } from '@kutup/mail-co
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@kutup/ui/components/select'
 import api from '@kutup/session/client'
 import { Button } from '@kutup/ui/components/button'
+import { Checkbox } from '@kutup/ui/components/checkbox'
 import { DropdownMenu, DropdownMenuCheckboxItem, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@kutup/ui/components/dropdown-menu'
 import { Input } from '@kutup/ui/components/input'
 import { Tooltip } from '@kutup/ui/components/tooltip'
@@ -54,6 +55,16 @@ import { InlineImage, newContentId, withContentIds, withoutMetadata } from './in
 import { fontFamily, plainToHtml, wrapHtml, type ComposerLook } from './composerLook'
 import { ScheduleSend } from './ScheduleSend'
 import { isAddress } from './recipients'
+import { isNoReplyAddress, mentionedAttachment, ownWords } from './sendChecks'
+import {
+  AlertDialog,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from '@kutup/ui/components/alert-dialog'
 
 /** Proton's limit for one message, attachments included. */
 const MAX_ATTACHMENTS_BYTES = 25 * 1024 * 1024
@@ -317,6 +328,26 @@ export function Composer() {
   return <ComposerPanel key={generation} base={startingSender(account.data, target)} target={target} />
 }
 
+/** Proton's questions before a send (`sendChecks.ts`). */
+type SendCheck = 'noReply' | 'noSubject' | 'noAttachment'
+
+/** Proton keeps "Don't show again" for no-reply addresses in the browser (`NO_REPLY_EMAIL_DONT_SHOW_AGAIN_KEY`). */
+const NO_REPLY_QUIET_KEY = 'kutup.mail.noReplyDontShowAgain'
+function noReplyQuietSaved(): boolean {
+  try {
+    return localStorage.getItem(NO_REPLY_QUIET_KEY) === 'true'
+  } catch {
+    return false
+  }
+}
+function saveNoReplyQuiet() {
+  try {
+    localStorage.setItem(NO_REPLY_QUIET_KEY, 'true')
+  } catch {
+    // Without storage it asks again next time.
+  }
+}
+
 function ComposerPanel({ base, target }: { base: MailAccount; target: ComposerTarget }) {
   const { t, i18n } = useTranslation()
   // The address writing (Proton's From): one of the account's that can send.
@@ -379,7 +410,10 @@ function ComposerPanel({ base, target }: { base: MailAccount; target: ComposerTa
   const [sending, setSending] = useState(false)
   // Send pressed while files or inline images still upload: it goes once they
   // are up (the button says Sending at once), or stops if one failed.
-  const [queued, setQueued] = useState<{ scheduleAt?: Date } | null>(null)
+  const [queued, setQueued] = useState<{ scheduleAt?: Date; confirmed: SendCheck[] } | null>(null)
+  // Proton's questions before a send: asked one at a time, each answered once.
+  const [asking, setAsking] = useState<{ check: SendCheck; detail?: string; scheduleAt?: Date; confirmed: SendCheck[] } | null>(null)
+  const [noReplyQuiet, setNoReplyQuiet] = useState(false)
   // Encrypt and Sign for this message (docs/plans/mail-encrypt-sign.md).
   const [encrypt, setEncrypt] = useState(true)
   // Proton's "Request read receipt".
@@ -647,8 +681,23 @@ function ComposerPanel({ base, target }: { base: MailAccount; target: ComposerTa
     closeComposer(mine)
   }
 
-  /** Sends now (held for undo send), or at `scheduleAt` (scheduled send). */
-  async function send(scheduleAt?: Date) {
+  /** The first of Proton's questions this message raises, past those already answered. */
+  function firstCheck(everyone: { address: string }[], confirmed: SendCheck[]): { check: SendCheck; detail?: string } | null {
+    if (!confirmed.includes('noReply') && !noReplyQuietSaved()) {
+      const noReply = everyone.find((m) => isNoReplyAddress(m.address))
+      if (noReply) return { check: 'noReply', detail: noReply.address }
+    }
+    if (!confirmed.includes('noSubject') && !subject.trim()) return { check: 'noSubject' }
+    if (!confirmed.includes('noAttachment') && !attachments.some((a) => !a.publicKey)) {
+      const words = ownWords(plain ? { plain: plainText } : { html: editor?.getHTML() ?? '' }, account.signature ?? undefined)
+      const keyword = mentionedAttachment(`${subject} ${words}`)
+      if (keyword) return { check: 'noAttachment', detail: keyword }
+    }
+    return null
+  }
+
+  /** Sends now (held for undo send), or at `scheduleAt` (scheduled send); `confirmed`: the questions already answered "Send anyway". */
+  async function send(scheduleAt?: Date, confirmed: SendCheck[] = []) {
     // Every way to send (the button, Ctrl/Cmd+Enter, a send queued behind uploads) waits.
     if (lookingUp) return
     const everyone = [...to, ...cc, ...bcc]
@@ -669,9 +718,14 @@ function ComposerPanel({ base, target }: { base: MailAccount; target: ComposerTa
       toast.error(t('compose.attachmentsPending'))
       return
     }
+    const check = firstCheck(everyone, confirmed)
+    if (check) {
+      setAsking({ ...check, scheduleAt, confirmed })
+      return
+    }
     if (attachments.some((a) => a.status === 'uploading')) {
       setSending(true)
-      setQueued({ scheduleAt })
+      setQueued({ scheduleAt, confirmed })
       return
     }
     setSending(true)
@@ -776,13 +830,51 @@ function ComposerPanel({ base, target }: { base: MailAccount; target: ComposerTa
       toast.error(t('compose.attachmentsPending'))
       return
     }
-    void send(queued.scheduleAt)
+    void send(queued.scheduleAt, queued.confirmed)
     // eslint-disable-next-line react-hooks/exhaustive-deps -- send reads this render's state
   }, [queued, attachments, lookingUp])
 
   const title = subject.trim() || t('compose.newMessage')
   return (
     <>
+      <AlertDialog
+        open={asking !== null}
+        onOpenChange={(open) => {
+          if (!open) {
+            setAsking(null)
+            setNoReplyQuiet(false)
+          }
+        }}
+      >
+        <AlertDialogContent data-testid="compose-send-check">
+          <AlertDialogHeader>
+            <AlertDialogTitle>{asking ? t(`sendCheck.${asking.check}.title`) : null}</AlertDialogTitle>
+            <AlertDialogDescription>{asking ? t(`sendCheck.${asking.check}.body`, { detail: asking.detail }) : null}</AlertDialogDescription>
+          </AlertDialogHeader>
+          {asking?.check === 'noReply' ? (
+            <div className="flex items-center gap-2 text-sm">
+              <Checkbox id="compose-no-reply-quiet" checked={noReplyQuiet} onCheckedChange={(on) => setNoReplyQuiet(on === true)} />
+              <label htmlFor="compose-no-reply-quiet">{t('sendCheck.dontShowAgain')}</label>
+            </div>
+          ) : null}
+          <AlertDialogFooter>
+            <AlertDialogCancel>{t('common.cancel')}</AlertDialogCancel>
+            <Button
+              data-testid="compose-send-anyway"
+              onClick={() => {
+                if (!asking) return
+                if (asking.check === 'noReply' && noReplyQuiet) saveNoReplyQuiet()
+                const { scheduleAt, confirmed, check } = asking
+                setAsking(null)
+                setNoReplyQuiet(false)
+                void send(scheduleAt, [...confirmed, check])
+              }}
+            >
+              {t('sendCheck.sendAnyway')}
+            </Button>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     {maximised && !minimised ? (
       // Maximised, the composer is the thing to look at (Gmail's full-screen
       // compose): the app behind it dims, and a click there docks it again.

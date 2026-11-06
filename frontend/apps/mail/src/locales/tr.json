@@ -1343,5 +1343,21 @@
       "enabled": "Etkin",
       "updated": "Tümünü yakala adresi güncellendi"
     }
+  },
+  "sendCheck": {
+    "sendAnyway": "Yine de gönder",
+    "dontShowAgain": "Bir daha gösterme",
+    "noReply": {
+      "title": "Yanıt kabul etmeyen adres",
+      "body": "{{detail}} adresi yanıt kabul etmiyor gibi görünüyor. İletinizi göndermek istediğinize emin misiniz?"
+    },
+    "noSubject": {
+      "title": "Konu yok",
+      "body": "İletinize bir konu yazmadınız. Yine de göndermek istiyor musunuz?"
+    },
+    "noAttachment": {
+      "title": "Ek bulunamadı",
+      "body": "“{{detail}}” yazdınız, ancak hiç ek eklenmedi. İletinizi yine de göndermek istiyor musunuz?"
+    }
   }
 }

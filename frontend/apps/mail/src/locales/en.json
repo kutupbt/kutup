@@ -1343,5 +1343,21 @@
       "enabled": "Enabled",
       "updated": "Catch-all address updated"
     }
+  },
+  "sendCheck": {
+    "sendAnyway": "Send anyway",
+    "dontShowAgain": "Don't show again",
+    "noReply": {
+      "title": "No-reply address detected",
+      "body": "The address {{detail}} does not seem to accept replies. Are you sure you want to send your message?"
+    },
+    "noSubject": {
+      "title": "Subject missing",
+      "body": "You have not given your email any subject. Do you want to send the message anyway?"
+    },
+    "noAttachment": {
+      "title": "No attachment found",
+      "body": "You wrote “{{detail}}”, but no attachment has been added. Do you want to send your message anyway?"
+    }
   }
 }

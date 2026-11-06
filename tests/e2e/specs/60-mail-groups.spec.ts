@@ -94,13 +94,13 @@ test('a shared mailbox and a distribution list, made by an administrator and use
 
   // Bob writes to the shared mailbox; both members see it there.
   const subject = `Başvuru ${tag}`
-  await write(bobMail, `${hr}@${domain}`, subject, 'Özgeçmişim ekte.')
+  await write(bobMail, `${hr}@${domain}`, subject, 'Özgeçmişim hazır.')
   await aliceMail.goto(appUrl('mail', '/inbox'))
   await aliceMail.getByRole('link', { name: new RegExp(hr) }).first().click()
   const row = aliceMail.getByRole('link', { name: new RegExp(subject) })
   await expect(row).toBeVisible({ timeout: 60_000 })
   await row.click()
-  await expect(aliceMail.frameLocator('iframe[title="Message"]').getByText('Özgeçmişim ekte.')).toBeVisible({ timeout: 60_000 })
+  await expect(aliceMail.frameLocator('iframe[title="Message"]').getByText('Özgeçmişim hazır.')).toBeVisible({ timeout: 60_000 })
 
   // Read for one, read for all.
   await bobMail.reload()
