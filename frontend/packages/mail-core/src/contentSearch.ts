@@ -232,6 +232,7 @@ export class ContentSearch {
 
   private constructor(
     private readonly masterKey: Uint8Array,
+    private readonly binding: string,
     private account: MailAccount,
     private readonly dbName: string,
     private readonly matches: (query: string, text: string) => boolean,
@@ -249,9 +250,9 @@ export class ContentSearch {
   }
 
   /** Named by an HMAC under a key from the master key: bound to no name. */
-  static async open(masterKey: Uint8Array, account: MailAccount): Promise<ContentSearch> {
+  static async open(masterKey: Uint8Array, binding: string, account: MailAccount): Promise<ContentSearch> {
     const dbName = `kutup-mail-search:${await mailSearchStoreName(masterKey)}`
-    const search = new ContentSearch(masterKey, account, dbName, await mailSearchMatcher())
+    const search = new ContentSearch(masterKey, binding, account, dbName, await mailSearchMatcher())
     await search.exclusive(() => Promise.resolve())
     return search
   }
@@ -326,7 +327,7 @@ export class ContentSearch {
     const wrapped = (await store.get([KEY_ID])).get(KEY_ID)
     let index: MailSearchIndex
     try {
-      index = await createMailSearch(this.masterKey, wrapped)
+      index = await createMailSearch(this.masterKey, this.binding, wrapped)
     } catch (error) {
       store.close()
       if (!wrapped) throw error
@@ -839,7 +840,7 @@ export function useContentSearch(): ContentSearch | null {
     const data = account.data
     let promise = opened.get(session.userId)
     if (!promise) {
-      promise = ContentSearch.open(session.masterKey, data)
+      promise = ContentSearch.open(session.masterKey, session.envelopeBinding, data)
       opened.set(session.userId, promise)
       promise.catch(() => opened.delete(session.userId))
     }
@@ -852,7 +853,7 @@ export function useContentSearch(): ContentSearch | null {
     return () => {
       live = false
     }
-  }, [account.data, session.userId, session.masterKey])
+  }, [account.data, session.userId, session.masterKey, session.envelopeBinding])
   return search
 }
 

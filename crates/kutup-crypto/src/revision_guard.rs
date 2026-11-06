@@ -4,46 +4,44 @@
 //! from the server is refused.
 //!
 //! The browser keeps these in IndexedDB, which anyone with the disk can read
-//! and write. So the entry's name is an HMAC of what it is about (a contact's
-//! UID can be an email address; folder ids and edit times say what the
-//! account does), and the revision is sealed with XChaCha20-Poly1305 bound to
-//! that name, both under keys derived from the master key. A disk attacker
-//! can still delete entries, which only makes the device a fresh one again
-//! (the first revision read is trusted), or put back an older copy of one; it
-//! can no longer read them or set one to a revision it chooses.
+//! and write. So the entry's name is a keyed hash of what it is about (a
+//! contact's UID can be an email address; folder ids and edit times say what
+//! the account does), and the revision is an account record (purpose
+//! `RevisionSeen`, docs/plans/w1-account-record.md) under the master key,
+//! bound to the account's key binding and to that name. A disk attacker can
+//! still delete entries, which only makes the device a fresh one again (the
+//! first revision read is trusted), or put back an older copy of one; it can
+//! no longer read them or set one to a revision it chooses.
 
-use crate::primitives::{Aead, Kdf, Mac, Suite};
 use zeroize::Zeroizing;
 
+use crate::account_record::{self, AccountRecordPurpose, MasterKeyGeneration};
 use crate::error::{CryptoError, Result};
 
-const SALT: &[u8] = crate::labels::REVISION_GUARD_V1;
-const ENTRY_KEY_INFO: &[u8] = crate::labels::REVISION_GUARD_ENTRY_KEY_V1;
-const SEAL_KEY_INFO: &[u8] = crate::labels::REVISION_GUARD_SEAL_KEY_V1;
-const ENTRY_DOMAIN: &[u8] = crate::labels::REVISION_GUARD_ENTRY_V1;
-const SEAL_DOMAIN: &[u8] = crate::labels::REVISION_GUARD_SEEN_V1;
-const NONCE_LEN: usize = 24;
-const SEALED_LEN: usize = NONCE_LEN + 8 + 16;
+const PURPOSE: AccountRecordPurpose = AccountRecordPurpose::RevisionSeen;
 const MAX_PART_LEN: usize = 1024;
 
-/// The account's keys for its revision store, derived from the master key.
+/// The account's keys for its revision store: its master key and key binding.
 pub struct GuardKeys {
-    entry: Zeroizing<[u8; 32]>,
-    seal: Zeroizing<[u8; 32]>,
+    master: Zeroizing<[u8; 32]>,
+    generation: MasterKeyGeneration,
+    binding: String,
 }
 
 impl GuardKeys {
-    pub fn derive(master_key: &[u8; 32]) -> Result<Self> {
-        let hkdf = Kdf::new(Suite::V1, SALT, master_key);
-        let mut entry = Zeroizing::new([0u8; 32]);
-        let mut seal = Zeroizing::new([0u8; 32]);
-        hkdf.expand(ENTRY_KEY_INFO, entry.as_mut_slice())
-            .and_then(|_| hkdf.expand(SEAL_KEY_INFO, seal.as_mut_slice()))
-            .map_err(|_| CryptoError::Backend("revision guard key".into()))?;
-        Ok(Self { entry, seal })
+    /// The keys of the account bound by `binding`, under its master key's
+    /// first generation (every account's, until master-key rotation exists).
+    pub fn derive(master_key: &[u8; 32], binding: &str) -> Result<Self> {
+        Ok(Self {
+            master: Zeroizing::new(*master_key),
+            generation: MasterKeyGeneration::FIRST,
+            binding: account_record::canonical_binding(binding)?,
+        })
     }
 
-    /// The store's name for `scope`/`id` (hex), revealing neither.
+    /// The store's name for `scope`/`id` (hex), revealing neither: the
+    /// record's object, [`account_record::hashed_object`] of the two,
+    /// length-prefixed.
     pub fn entry_id(&self, scope: &str, id: &str) -> Result<String> {
         if scope.is_empty()
             || scope.len() > MAX_PART_LEN
@@ -54,43 +52,48 @@ impl GuardKeys {
                 "revision guard: scope or id is invalid".into(),
             ));
         }
-        let mut mac = Mac::new(Suite::V1, self.entry.as_slice());
-        mac.update(ENTRY_DOMAIN);
-        mac.update((scope.len() as u16).to_be_bytes());
-        mac.update(scope.as_bytes());
-        mac.update((id.len() as u16).to_be_bytes());
-        mac.update(id.as_bytes());
-        Ok(hex::encode(mac.finish()))
+        let mut named = Vec::with_capacity(4 + scope.len() + id.len());
+        named.extend_from_slice(&(scope.len() as u16).to_be_bytes());
+        named.extend_from_slice(scope.as_bytes());
+        named.extend_from_slice(&(id.len() as u16).to_be_bytes());
+        named.extend_from_slice(id.as_bytes());
+        Ok(hex::encode(account_record::hashed_object(
+            &self.master,
+            PURPOSE,
+            &named,
+        )))
     }
 
-    fn aad(entry_id: &str) -> Vec<u8> {
-        [SEAL_DOMAIN, entry_id.as_bytes()].concat()
+    fn object(entry_id: &str) -> Result<[u8; 32]> {
+        hex::decode(entry_id)
+            .ok()
+            .and_then(|bytes| bytes.try_into().ok())
+            .ok_or_else(|| CryptoError::InvalidInput("revision guard: entry id is invalid".into()))
     }
 
-    /// `revision`, sealed for entry `entry_id`: `nonce ‖ ciphertext`.
+    /// `revision`, sealed for entry `entry_id`.
     pub fn seal_seen(&self, entry_id: &str, revision: u64) -> Result<Vec<u8>> {
-        let mut nonce = [0u8; NONCE_LEN];
-        crate::primitives::random(&mut nonce);
-        let ciphertext = Aead::new(Suite::V1, self.seal.as_ref())?
-            .seal_with_nonce(&nonce, &Self::aad(entry_id), &revision.to_be_bytes())
-            .map_err(|_| CryptoError::Backend("revision guard seal".into()))?;
-        Ok([nonce.as_slice(), &ciphertext].concat())
+        account_record::seal_object(
+            &revision.to_be_bytes(),
+            self.master.as_slice(),
+            PURPOSE,
+            self.generation,
+            &self.binding,
+            &Self::object(entry_id)?,
+        )
     }
 
     /// The revision sealed for entry `entry_id`; fails for one sealed for
     /// another entry or account, or altered.
     pub fn open_seen(&self, entry_id: &str, sealed: &[u8]) -> Result<u64> {
-        if sealed.len() != SEALED_LEN {
-            return Err(CryptoError::AuthFailed);
-        }
-        let plain = Aead::new(Suite::V1, self.seal.as_ref())?
-            .open_with_nonce(
-                &sealed[..NONCE_LEN],
-                &Self::aad(entry_id),
-                &sealed[NONCE_LEN..],
-            )
-            .map_err(|_| CryptoError::AuthFailed)
-            .map(crate::primitives::into_vec)?;
+        let plain = account_record::open_object(
+            sealed,
+            self.master.as_slice(),
+            PURPOSE,
+            &self.binding,
+            &Self::object(entry_id).map_err(|_| CryptoError::AuthFailed)?,
+        )
+        .map_err(|_| CryptoError::AuthFailed)?;
         Ok(u64::from_be_bytes(
             plain.try_into().map_err(|_| CryptoError::AuthFailed)?,
         ))
@@ -101,15 +104,17 @@ impl GuardKeys {
 mod tests {
     use super::*;
 
+    const BINDING: &str = "0b6b5e0c-4c1e-4b8e-9c2d-6a1f3e5d7c9b";
+
     #[test]
     fn entries_hide_what_they_are_about_and_open_only_where_sealed() {
-        let keys = GuardKeys::derive(&[1; 32]).unwrap();
+        let keys = GuardKeys::derive(&[1; 32], BINDING).unwrap();
         let entry = keys.entry_id("contact", "ayse@example.com").unwrap();
         assert_eq!(entry.len(), 64);
         assert!(!entry.contains("ayse"));
         // Stable for the account; another account's differs.
         assert_eq!(entry, keys.entry_id("contact", "ayse@example.com").unwrap());
-        let other = GuardKeys::derive(&[2; 32]).unwrap();
+        let other = GuardKeys::derive(&[2; 32], BINDING).unwrap();
         assert_ne!(
             entry,
             other.entry_id("contact", "ayse@example.com").unwrap()
@@ -122,13 +127,17 @@ mod tests {
 
         let sealed = keys.seal_seen(&entry, 1_791_633_600_000).unwrap();
         assert_eq!(keys.open_seen(&entry, &sealed).unwrap(), 1_791_633_600_000);
-        // Moved to another entry, opened by another account, or altered: refused.
+        // Moved to another entry, opened by another account (another master
+        // key or key binding), or altered: refused.
         let elsewhere = keys.entry_id("contact", "bob@example.com").unwrap();
         assert!(keys.open_seen(&elsewhere, &sealed).is_err());
         assert!(other.open_seen(&entry, &sealed).is_err());
+        let rebound = GuardKeys::derive(&[1; 32], "7d3f1a2b-9c4e-4f6a-8b1d-2e5c7a9f0b3d").unwrap();
+        assert!(rebound.open_seen(&entry, &sealed).is_err());
         let mut altered = sealed.clone();
-        altered[NONCE_LEN] ^= 1;
+        *altered.last_mut().unwrap() ^= 1;
         assert!(keys.open_seen(&entry, &altered).is_err());
         assert!(keys.entry_id("", "x").is_err());
+        assert!(GuardKeys::derive(&[1; 32], "aci:x@example.com").is_err());
     }
 }

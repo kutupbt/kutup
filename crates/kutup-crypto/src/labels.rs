@@ -374,12 +374,8 @@ pub const MAIL_SEARCH_NAME_KEY_V1: &[u8] = b"kutup/mail-search/name-key/v1\0";
 pub const MAIL_SEARCH_RECORD_KEY_V1: &[u8] = b"kutup/mail-search/record-key/v1\0";
 /// `kutup-crypto/src/mail_search.rs` (`AAD_DOMAIN`)
 pub const MAIL_SEARCH_RECORD_V1: &[u8] = b"kutup/mail-search/record/v1\0";
-/// `kutup-crypto/src/mail_search.rs` (`WRAP_AAD_DOMAIN`)
-pub const MAIL_SEARCH_STORE_KEY_V1: &[u8] = b"kutup/mail-search/store-key/v1\0";
 /// `kutup-crypto/src/mail_search.rs` (`STORE_SALT`)
 pub const MAIL_SEARCH_V1: &[u8] = b"kutup/mail-search/v1\0";
-/// `kutup-crypto/src/mail_search.rs` (`WRAP_KEY_INFO`)
-pub const MAIL_SEARCH_WRAP_KEY_V1: &[u8] = b"kutup/mail-search/wrap-key/v1\0";
 /// `kutup-crypto/src/mail_search.rs` (`ACCOUNT_SALT`)
 pub const MAIL_SEARCH_WRAP_V1: &[u8] = b"kutup/mail-search/wrap/v1\0";
 
@@ -469,19 +465,6 @@ pub const PROFILE_ENVELOPE_KEY_V1: &[u8] = b"kutup/profile-envelope/key/v1\0";
 /// `kutup-server/src/registration.rs`
 pub const REGISTRATION_CODE_V1: &[u8] = b"kutup/registration-code/v1\0";
 
-// --- revision-guard ----------------------------------------------------------
-
-/// `kutup-crypto/src/revision_guard.rs` (`ENTRY_KEY_INFO`)
-pub const REVISION_GUARD_ENTRY_KEY_V1: &[u8] = b"kutup/revision-guard/entry-key/v1\0";
-/// `kutup-crypto/src/revision_guard.rs` (`ENTRY_DOMAIN`)
-pub const REVISION_GUARD_ENTRY_V1: &[u8] = b"kutup/revision-guard/entry/v1\0";
-/// `kutup-crypto/src/revision_guard.rs` (`SEAL_KEY_INFO`)
-pub const REVISION_GUARD_SEAL_KEY_V1: &[u8] = b"kutup/revision-guard/seal-key/v1\0";
-/// `kutup-crypto/src/revision_guard.rs` (`SEAL_DOMAIN`)
-pub const REVISION_GUARD_SEEN_V1: &[u8] = b"kutup/revision-guard/seen/v1\0";
-/// `kutup-crypto/src/revision_guard.rs` (`SALT`)
-pub const REVISION_GUARD_V1: &[u8] = b"kutup/revision-guard/v1\0";
-
 // --- sealed-delivery-capability ----------------------------------------------
 
 /// `kutup-crypto/src/chat_profile.rs` (`DELIVERY_CAPABILITY_CONTEXT`)
@@ -552,7 +535,7 @@ pub const FEDERATION_REQUEST_REPLAY_HASH_V1: &[u8] = b"kutup/federation/request-
 pub const FEDERATION_SIGNATURE_TAG: &str = "kutup-federation-v2";
 
 /// Every label, for the registry's own checks.
-pub const ALL: [&[u8]; 170] = [
+pub const ALL: [&[u8]; 163] = [
     ORG_ACCESS_REQUEST_V1,
     ORG_KEY_CERTIFICATE_V1,
     ORG_KEY_ID_V1,
@@ -681,9 +664,7 @@ pub const ALL: [&[u8]; 170] = [
     MAIL_SEARCH_NAME_KEY_V1,
     MAIL_SEARCH_RECORD_KEY_V1,
     MAIL_SEARCH_RECORD_V1,
-    MAIL_SEARCH_STORE_KEY_V1,
     MAIL_SEARCH_V1,
-    MAIL_SEARCH_WRAP_KEY_V1,
     MAIL_SEARCH_WRAP_V1,
     MULTI_IP_BYTES_V1,
     MULTI_ORIGIN_V1,
@@ -699,11 +680,6 @@ pub const ALL: [&[u8]; 170] = [
     PASS_VAULT_SECRET_V2,
     PROFILE_ENVELOPE_KEY_V1,
     REGISTRATION_CODE_V1,
-    REVISION_GUARD_ENTRY_KEY_V1,
-    REVISION_GUARD_ENTRY_V1,
-    REVISION_GUARD_SEAL_KEY_V1,
-    REVISION_GUARD_SEEN_V1,
-    REVISION_GUARD_V1,
     SEALED_DELIVERY_CAPABILITY_V1,
     SEALED_ORIGIN_RATE_V1,
     SEALED_RECIPIENT_RATE_V1,

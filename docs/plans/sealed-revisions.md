@@ -58,10 +58,12 @@ a server that drops the pin list cannot have it rewritten from nothing.
 
 - On the web, `RevisionGuard` in `@kutup/crypto` keeps them in IndexedDB.
   Anyone with the disk could read and write that store, so it is protected
-  with keys derived from the master key (Rust `revision_guard`):
-  - each entry is named by an HMAC of what it is about (a contact's UID can
-    be an email address);
-  - its revision is sealed with XChaCha20-Poly1305 to that name.
+  under the master key (Rust `revision_guard`):
+  - each entry is named by a keyed hash of what it is about (a contact's UID
+    can be an email address), `account_record::hashed_object`;
+  - its revision is an account record (purpose `RevisionSeen`,
+    docs/plans/w1-account-record.md) whose object is that name, bound to the
+    account's key binding.
 
   A disk attacker can delete an entry, which makes the device a fresh one for
   that value, or put back an older copy of one. It can neither read the

@@ -130,17 +130,22 @@ impl MailSearch {
 
     /// The account's index, empty until [`MailSearch::open_directory`]: under
     /// the store key `wrapped` (as the database keeps it), or under a new one
-    /// when there is none. A wrapped key that does not open is an error; the
-    /// page then deletes the database and starts again.
+    /// when there is none, for the account bound by `binding`
+    /// (`session.envelopeBinding`). A wrapped key that does not open is an
+    /// error; the page then deletes the database and starts again.
     #[wasm_bindgen(constructor)]
-    pub fn new(master_key: &[u8], wrapped: Option<Vec<u8>>) -> Result<MailSearch, JsValue> {
+    pub fn new(
+        master_key: &[u8],
+        binding: &str,
+        wrapped: Option<Vec<u8>>,
+    ) -> Result<MailSearch, JsValue> {
         let master = master(master_key)?;
         let (keys, wrapped) = match wrapped {
             Some(wrapped) => (
-                MailSearchKeys::open(&master, &wrapped).map_err(js_error)?,
+                MailSearchKeys::open(&master, binding, &wrapped).map_err(js_error)?,
                 wrapped,
             ),
-            None => MailSearchKeys::create(&master).map_err(js_error)?,
+            None => MailSearchKeys::create(&master, binding).map_err(js_error)?,
         };
         Ok(MailSearch {
             keys,

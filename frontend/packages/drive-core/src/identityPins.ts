@@ -287,7 +287,7 @@ async function openPins(
   data: { revision: number; envelope: string } | null,
   index: VerifiedIndex | null,
 ): Promise<PinStore> {
-  const guard = revisionGuard(me)
+  const guard = revisionGuard({ ...me, envelopeBinding: me.binding })
   if (!data) {
     // None stored, though this browser has seen one, or the head lists one:
     // held back by the server.
@@ -333,7 +333,7 @@ function updatePins(me: DriveIdentity, change: (pins: PinsText) => Promise<PinsT
       const current = await pinStore(me)
       const list = await change(current.pins)
       if (!list) return null
-      const guard = revisionGuard(me)
+      const guard = revisionGuard({ ...me, envelopeBinding: me.binding })
       const revision = await guard.next(PINS_SCOPE, PINS_ID, current.revision)
       const envelope = await sealIdentityPins(toBase64(me.masterKey), me.binding, revision, list)
       return {

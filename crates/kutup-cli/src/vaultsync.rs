@@ -356,6 +356,7 @@ pub(crate) fn verified_secrets(
         master_key
             .try_into()
             .context("master key must be 32 bytes")?,
+        binding,
     )?;
     let mut last = None;
     for _ in 0..2 {
@@ -418,6 +419,7 @@ pub(crate) fn keep_secret(
         master_key
             .try_into()
             .context("master key must be 32 bytes")?,
+        binding,
     )?;
     let guard = &guard;
     let mut head = secrets_head(client, master_key, binding, dir)?;
