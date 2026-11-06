@@ -76,7 +76,7 @@ reference only where Proton has nothing.
 | Inbox, Drafts, Sent, Starred, Archive, Spam, Trash, All mail | `MailSidebarSystemFolders.tsx` | ✅ |
 | Delete for good, empty a folder | `MessagePermanentDeleteModal.tsx` | ✅ delete chosen, "Delete all" in Trash and Spam |
 | Spam and Trash emptied after 30 days | `AutoDeleteSetting.tsx` | ✅ "Auto-delete unwanted messages" (off by default, as Proton), banner with Enable |
-| Almost all mail, keep moved messages in Sent | `AlmostAllMailToggle.tsx` | ✅ All mail in the sidebar, "Exclude Spam/Trash from All mail"; ❌ keep moved messages in Sent |
+| Almost all mail, keep moved messages in Sent | `AlmostAllMailToggle.tsx` | ✅ All mail in the sidebar, "Exclude Spam/Trash from All mail"; "Keep messages in Sent" in General (Proton's `ShowMoved`, off by default): sent mail moved elsewhere, short of Spam and Trash, still shows in Sent (Proton's `ALL_SENT`); drafts are never moved in Kutup |
 | Custom folders (nested), labels | `FoldersSection.tsx` | ✅ F1, names sealed ([`mail-filters.md`](mail-filters.md)) |
 | Filters, "Always move sender's emails", apply to existing | `FiltersSection.tsx` | ✅ F2 |
 | Block, spam, allow lists | `SpamFiltersSection.tsx` | ✅ F3 (allow needs DMARC) |
@@ -94,13 +94,13 @@ reference only where Proton has nothing.
 | Address keys: rotate, import, export, retire | `AddressKeysSection.tsx` | ✅ C3 |
 | PGP settings: sign outside mail, attach key, PGP/MIME or inline | `ExternalPGPSettingsSection.tsx` | ✅ Settings → General: Sign outside mail, Attach public key, Default PGP scheme; Inline sends plain text with each file encrypted (`.pgp`) or signed (`.sig`); the reader opens and checks Inline with files; scheme per contact in Contacts → Email settings |
 | Key transparency, address verification | `KTToggle.tsx` | ❌ |
-| Post-quantum keys | `PostQuantumKeysOptInSection.tsx` | ❌ |
+| Post-quantum keys | `PostQuantumKeysOptInSection.tsx` | ❌ waiting on rPGP ([`mail-pq-openpgp.md`](mail-pq-openpgp.md)) |
 | Distribution lists, shared mailboxes | (business: groups) | ✅ |
 | Aliases (hide-my-email) | Pass aliases | 🔶 aliases plan (`feat/mail-aliases`) |
 | Dots, dashes, capitals and `+tags` ignored | `CANONICALIZE_SCHEME.PROTON` | 🔶 aliases A0 |
-| Several addresses per account, default address | `AddressesSection.tsx` | ❌ |
-| Custom domains (MX, SPF, DKIM, DMARC checks), catch-all | `DomainModal.tsx`, `CatchAllSection.tsx` | ❌ (moved up 2026-10-20; plan `mail-custom-domains.md`) |
-| Forwarding (with conditions, end to end to Kutup users) | `ForwardSection.tsx` | ❌ (with filters' actions) |
+| Several addresses per account, default address | `AddressesSection.tsx` | ✅ Mail → Settings → Identity and addresses: the addresses in order, the first enabled one with a key the default ([`mail-address-keys.md`](mail-address-keys.md)) |
+| Custom domains (MX, SPF, DKIM, DMARC checks), catch-all | `DomainModal.tsx`, `CatchAllSection.tsx` | ✅ Mail → Settings → Domains with MX, SPF, DKIM and DMARC checks, catch-all ([`mail-custom-domains.md`](mail-custom-domains.md)); one domain shared by several accounts comes with organizations |
+| Forwarding (with conditions, end to end to Kutup users) | `ForwardSection.tsx` | ✅ Mail → Settings → Forwarding ([`mail-forwarding.md`](mail-forwarding.md)) |
 | Auto-reply (vacation responder, schedules) | `AutoReplySection.tsx` | ✅ fixed, daily, weekly, monthly, permanent in a time zone; once per sender every 7 days; never to lists or automatic mail; kept in Sent; Proton's banner on received auto-replies |
 | Save contacts automatically | `AutomaticallySaveContacts.tsx` | ➖ Kutup asks first (contacts plan) |
 
@@ -108,7 +108,7 @@ reference only where Proton has nothing.
 
 | Feature | Proton | Kutup |
 |---|---|---|
-| Unread count in the title | `useMailboxFavicon.ts` | ✅ (favicon count missing) |
+| Unread count in the title | `useMailboxFavicon.ts` | ✅ the Inbox's count in the title; "Show unread count in the tab icon" in General (Proton's `UnreadFavicon`, off by default): the open place's count on the icon, 99+ above 99 |
 | Desktop notifications for new mail | `useNewEmailNotification.ts` | ✅ while Mail is open: "New email received", "From: sender - subject" for each new unread message in the Inbox, Starred or a folder with notifications on (snoozed mail coming back too), one "N new messages" past three (Proton groups on Windows only); a click opens it; Settings → General shows the browser's permission, Enable and Send test notification; a banner asks once (`GET /api/mail/notifications`, `notify_at`; spec 112). Your own mailbox only, as Proton |
 | Web push | | ❌ deferred (2026-10-12): Proton's web app has none (its notifications come while a tab is open, as Kutup's desktop notifications do). Chat's web push could carry it later |
 | Daily email summary | `DailyEmailNotificationToggle` | ❌ |

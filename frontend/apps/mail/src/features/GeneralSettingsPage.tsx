@@ -184,6 +184,18 @@ export function GeneralSettingsPage() {
           checked={settings.data.almostAllMail}
           onChange={(on) => save({ almostAllMail: on })}
         />
+        <Setting
+          label={t('general.keepMovedSent')}
+          hint={t('general.keepMovedSentHint')}
+          checked={settings.data.keepMovedSent}
+          onChange={(on) => save({ keepMovedSent: on })}
+        />
+        <Setting
+          label={t('general.unreadFavicon')}
+          hint={t('general.unreadFaviconHint')}
+          checked={settings.data.unreadFavicon}
+          onChange={(on) => save({ unreadFavicon: on })}
+        />
       </div>
       <NotificationSettings />
       <ContentSearchSettings />

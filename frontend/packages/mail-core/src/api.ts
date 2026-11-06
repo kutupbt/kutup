@@ -1146,6 +1146,10 @@ export interface MailSettings {
   attachPublicKey: boolean
   /** How mail to outside OpenPGP users is encrypted or signed (Proton's PGPScheme); Inline is plain text. */
   pgpScheme: 'pgp_mime' | 'inline'
+  /** The tab icon shows the open place's unread count (Proton's UnreadFavicon). */
+  unreadFavicon: boolean
+  /** Sent mail moved elsewhere still shows in Sent (Proton's ShowMoved). */
+  keepMovedSent: boolean
 }
 
 export const mailSettingsKey = ['mail', 'settings'] as const

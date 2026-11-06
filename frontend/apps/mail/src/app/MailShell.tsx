@@ -3,9 +3,9 @@ import { feedbackServices } from '@kutup/session/feedback'
 import { AlarmClock, Archive, BookUser, CalendarDays, Clock, FilePen, FileType, HardDrive, Images, Inbox, KeyRound, Mail as MailIcon, Mails, Map as MapIcon, MessagesSquare, OctagonAlert, PenSquare, Search, Send, Settings, SlidersHorizontal, Star, Trash2, UserRound, Users } from 'lucide-react'
 import { lazy, Suspense, useEffect, useState, type ReactNode } from 'react'
 import { useTranslation } from 'react-i18next'
-import { Link, Outlet, useNavigate, useParams, useSearchParams } from 'react-router-dom'
+import { Link, Outlet, useLocation, useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import { StorageMeter } from '@kutup/drive-ui/StorageMeter'
-import { useCounts, useRefreshMail, type FolderId } from '@kutup/mail-core/api'
+import { useCounts, useMailSettings, useRefreshMail, type FolderId } from '@kutup/mail-core/api'
 import { useContentSearch } from '@kutup/mail-core/contentSearch'
 import { useMyGroups, type MailGroup } from '@kutup/mail-core/groups'
 import { appUrl } from '@kutup/session/apps'
@@ -22,6 +22,7 @@ import { UserMenu } from '@kutup/ui/components/user-menu'
 import { AdvancedSearch } from '../features/AdvancedSearch'
 import { NotificationBanner } from '../features/NotificationBanner'
 import { useNewMailNotifications } from '../features/useNewMailNotifications'
+import { useUnreadFavicon } from '../features/useUnreadFavicon'
 import { useSettleOwedKeyLists } from '@kutup/mail-core/forwardings'
 import { openComposer, useComposer } from '../features/composerState'
 import { MAILTO_HASH, parseMailto } from '../features/mailto'
@@ -199,6 +200,20 @@ export function MailShell() {
       { replace: true },
     )
   }, [composeTo, setParams])
+
+  // Proton's unread favicon: the open place's count, your own mailbox's
+  // (a custom folder or label too); elsewhere the Inbox's.
+  const settings = useMailSettings()
+  const { pathname } = useLocation()
+  const { placeId } = useParams()
+  const faviconPlace = groupId
+    ? 'inbox'
+    : pathname.startsWith('/f/') && placeId
+      ? `folder:${placeId}`
+      : pathname.startsWith('/l/') && placeId
+        ? `label:${placeId}`
+        : (openFolder ?? 'inbox')
+  useUnreadFavicon(counts.data?.find((c) => c.folder === faviconPlace)?.unread ?? 0, settings.data?.unreadFavicon ?? false)
 
   useEffect(() => {
     const inbox = unread('inbox')

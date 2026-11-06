@@ -708,11 +708,11 @@ async fn list_page(
     let criteria = Criteria::parse(&query)?;
     // All mail leaves out Spam and Trash only when the account asks
     // (Proton's "Exclude Spam/Trash from All mail"); a search always does.
+    let settings = crate::handlers::mail_settings::settings_of(state, user_id).await?;
     let almost_all = query.q.as_deref().is_some_and(|q| !q.trim().is_empty())
         || criteria.any()
-        || crate::handlers::mail_settings::settings_of(state, user_id)
-            .await?
-            .almost_all_mail;
+        || settings.almost_all_mail;
+    let place = sent_place(place, settings.keep_moved_sent);
     let limit = query.limit.unwrap_or(DEFAULT_PAGE).clamp(1, MAX_PAGE);
     let sort = Sort::parse(query.sort.as_deref())?;
     let before = query
@@ -898,6 +898,17 @@ pub async fn search_addresses(
 /// Pages past this are refused (`page × limit` stays small for `OFFSET`).
 const MAX_PAGE_NUMBER: i64 = 10_000;
 
+/// Sent, or with "Keep messages in Sent" (Proton's `ShowMoved`) every sent
+/// message wherever it was moved, short of Spam and Trash: Proton's
+/// `ALL_SENT` in place of `SENT`.
+fn sent_place(place: &str, keep_moved_sent: bool) -> &str {
+    if place == "sent" && keep_moved_sent {
+        "all_sent"
+    } else {
+        place
+    }
+}
+
 /// What a listing asks for, beyond its page.
 struct Listing<'a> {
     owner: Uuid,
@@ -970,6 +981,8 @@ async fn message_rows(
 const PLACE_WHERE: &str = "owner = $1
         AND CASE $2
               WHEN 'starred' THEN starred AND folder NOT IN ('spam', 'trash')
+              WHEN 'all_sent' THEN direction = 'outbound'
+                                   AND folder NOT IN ('drafts', 'scheduled', 'spam', 'trash')
               WHEN 'all' THEN (NOT $8 OR folder NOT IN ('spam', 'trash'))
               WHEN 'folder' THEN custom_folder = $7
               WHEN 'label' THEN folder NOT IN ('spam', 'trash') AND EXISTS (
@@ -1635,6 +1648,13 @@ pub async fn batch_messages(
         }
         _ => return Err(AppError::bad_request("unknown place")),
     };
+    // Select all in Sent takes what Sent shows.
+    let place = sent_place(
+        place,
+        crate::handlers::mail_settings::settings_of(&state, user_id)
+            .await?
+            .keep_moved_sent,
+    );
     // $6 search, $7 place id, $8 almost all, renumbered for this query.
     let place_filter = PLACE_WHERE
         .replace("$6", "$3")
