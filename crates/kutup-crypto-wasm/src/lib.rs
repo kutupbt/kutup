@@ -686,7 +686,8 @@ pub fn inspect_account_record(envelope_base64: &str) -> Result<JsValue, JsValue>
 
 /// Purposes with typed exports (mail address keys, Pass vault secrets,
 /// organization keys, contact cards, mail names, identity pins, Chat list
-/// entries, joined meetings, the profile key's own copy): the generic
+/// entries, joined meetings, the profile key's own copy, the account head and
+/// a device's head state): the generic
 /// account-record path never hands their secrets to JavaScript.
 fn generic_account_purpose(value: u16) -> Result<AccountRecordPurpose, JsValue> {
     match AccountRecordPurpose::try_from(value).map_err(|error| js_error(&error.to_string()))? {
@@ -701,7 +702,9 @@ fn generic_account_purpose(value: u16) -> Result<AccountRecordPurpose, JsValue> 
         | AccountRecordPurpose::PhotosLibrary
         | AccountRecordPurpose::ChatAttachmentLedger
         | AccountRecordPurpose::JoinedMeeting
-        | AccountRecordPurpose::ChatProfileKeyWrap => Err(js_error(
+        | AccountRecordPurpose::ChatProfileKeyWrap
+        | AccountRecordPurpose::AccountHead
+        | AccountRecordPurpose::AccountLocalAnchor => Err(js_error(
             "this account-record purpose has its own typed export",
         )),
         purpose => Ok(purpose),

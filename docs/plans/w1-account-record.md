@@ -232,6 +232,26 @@ there.
   a lost race (409 with the stored record), and records of another account
   or incarnation (400).
 
+## Slice 4b as built
+
+- `AccountHead` (17): no object, the revision is the head's sequence, chained
+  (decision (a)), 256-byte buckets with at most 16,128 padded bytes, so a
+  sealed head stays within the server's 16 KiB. The plaintext keeps its
+  `sequence` and `previous`, and `open` checks them against the header.
+- `AccountLocalAnchor` (18): object the incarnation, never sent to a server
+  (decision (b) for 8b).
+- `HeadKeys` keeps the master key (and its generation; `derive` is the first,
+  `derive_at` any) and the HMAC key for value ids, writers and local names;
+  the seal key, `KUTAH1`, `KUTAL1` and three labels are gone. The API
+  (`seal`, `open`, `inspect`, the local state) is unchanged for its callers;
+  `inspect_header` and `validate` are new.
+- The server: `lock` reads the key binding with the incarnation, under the
+  account row's lock; `advance` and `start` refuse another account's head
+  (`400`), and `advance` refuses a head whose predecessor is not the newest
+  head kept (`409 head_conflict`), as it did a wrong sequence. Live cases in
+  `account_heads_live`.
+- The generic WASM account-record path refuses both purposes.
+
 ## Decisions (approved 2026-11-04)
 
 (a) **The account head's chain moves into the header** (the server then

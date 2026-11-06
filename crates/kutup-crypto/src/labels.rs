@@ -35,14 +35,8 @@ pub const ACCOUNT_RECORD_V1: &[u8] = b"kutup/account-record/v1\0";
 pub const ACCOUNT_HEAD_ID_KEY_V1: &[u8] = b"kutup/account-head/id-key/v1\0";
 /// `kutup-crypto/src/account_head.rs` (`LOCAL_NAME_DOMAIN`)
 pub const ACCOUNT_HEAD_LOCAL_NAME_V1: &[u8] = b"kutup/account-head/local-name/v1\0";
-/// `kutup-crypto/src/account_head.rs` (`LOCAL_AAD_DOMAIN`)
-pub const ACCOUNT_HEAD_LOCAL_V1: &[u8] = b"kutup/account-head/local/v1\0";
 /// `kutup-crypto/src/account_head.rs` (`SCOPE_DOMAIN`)
 pub const ACCOUNT_HEAD_SCOPE_V1: &[u8] = b"kutup/account-head/scope/v1\0";
-/// `kutup-crypto/src/account_head.rs` (`SEAL_KEY_INFO`)
-pub const ACCOUNT_HEAD_SEAL_KEY_V1: &[u8] = b"kutup/account-head/seal-key/v1\0";
-/// `kutup-crypto/src/account_head.rs` (`AAD_DOMAIN`)
-pub const ACCOUNT_HEAD_SEALED_V1: &[u8] = b"kutup/account-head/sealed/v1\0";
 /// `kutup-crypto/src/account_head.rs` (`SALT`)
 pub const ACCOUNT_HEAD_V1: &[u8] = b"kutup/account-head/v1\0";
 /// `kutup-crypto/src/account_head.rs` (`VALUE_ID_DOMAIN`)
@@ -558,7 +552,7 @@ pub const FEDERATION_REQUEST_REPLAY_HASH_V1: &[u8] = b"kutup/federation/request-
 pub const FEDERATION_SIGNATURE_TAG: &str = "kutup-federation-v2";
 
 /// Every label, for the registry's own checks.
-pub const ALL: [&[u8]; 173] = [
+pub const ALL: [&[u8]; 170] = [
     ORG_ACCESS_REQUEST_V1,
     ORG_KEY_CERTIFICATE_V1,
     ORG_KEY_ID_V1,
@@ -582,10 +576,7 @@ pub const ALL: [&[u8]; 173] = [
     ACCOUNT_RECORD_V1,
     ACCOUNT_HEAD_ID_KEY_V1,
     ACCOUNT_HEAD_LOCAL_NAME_V1,
-    ACCOUNT_HEAD_LOCAL_V1,
     ACCOUNT_HEAD_SCOPE_V1,
-    ACCOUNT_HEAD_SEAL_KEY_V1,
-    ACCOUNT_HEAD_SEALED_V1,
     ACCOUNT_HEAD_V1,
     ACCOUNT_HEAD_VALUE_V1,
     ACCOUNT_HEAD_WRITER_V1,

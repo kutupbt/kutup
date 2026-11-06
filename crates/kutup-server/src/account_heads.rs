@@ -5,7 +5,9 @@
 //! next head, in its transaction: the head's sequence must be the current
 //! one plus one (`409 head_conflict`), and once the account has a head, a
 //! listed write without one is refused (`409 head_required`). The server
-//! never opens a head; it reads its sequence in clear and keeps the newest
+//! never opens a head: each is an account record of the account (its key
+//! binding), whose header says its sequence and the digest of the head before
+//! it, which must be the newest head kept (`409 head_conflict`). It keeps the newest
 //! [`RETENTION`] + 1 (so a device anchored [`RETENTION`] heads back still gets
 //! its whole segment, anchor included).
 //!
@@ -37,6 +39,8 @@ pub const PAGE: i64 = 200;
 pub struct Locked {
     user_id: Uuid,
     incarnation_id: String,
+    /// The account's key binding, which every head it keeps names.
+    binding: String,
 }
 
 /// Takes the account row for update and checks, under it, that `session` is
@@ -47,13 +51,14 @@ pub async fn lock(
     user_id: Uuid,
     session: Uuid,
 ) -> AppResult<Locked> {
-    let incarnation_id: Option<String> = sqlx::query_scalar(
-        "SELECT account_incarnation_id FROM users WHERE id = $1 AND is_active FOR UPDATE",
+    let account: Option<(String, Option<String>)> = sqlx::query_as(
+        "SELECT account_incarnation_id, key_binding FROM users
+          WHERE id = $1 AND is_active FOR UPDATE",
     )
     .bind(user_id)
     .fetch_optional(&mut **tx)
     .await?;
-    let Some(incarnation_id) = incarnation_id else {
+    let Some((incarnation_id, binding)) = account else {
         return Err(AppError::unauthorized("unauthorized"));
     };
     let live: bool = sqlx::query_scalar(
@@ -70,21 +75,25 @@ pub async fn lock(
     if !live {
         return Err(AppError::unauthorized("unauthorized"));
     }
-    if incarnation_id.is_empty() {
-        return Err(AppError::conflict("the account has no keys yet")
-            .with_details(json!({ "code": "setupRequired" })));
-    }
+    let binding = binding
+        .filter(|_| !incarnation_id.is_empty())
+        .ok_or_else(|| {
+            AppError::conflict("the account has no keys yet")
+                .with_details(json!({ "code": "setupRequired" }))
+        })?;
     Ok(Locked {
         user_id,
         incarnation_id,
+        binding,
     })
 }
 
-/// A next head as a write carries it: its sealed bytes and the sequence they
-/// say.
+/// A next head as a write carries it: its sealed bytes, and the sequence and
+/// predecessor its header says.
 pub struct NextHead {
     sealed: Vec<u8>,
     sequence: i64,
+    previous: [u8; 32],
 }
 
 impl NextHead {
@@ -100,13 +109,24 @@ impl NextHead {
             .ok()
             .filter(|bytes| STANDARD.encode(bytes) == value)
             .ok_or_else(|| AppError::bad_request("head is not canonical base64"))?;
-        let sequence = kutup_crypto::account_head::inspect(&sealed)
+        let header = kutup_crypto::account_head::inspect_header(&sealed)
             .map_err(|_| AppError::bad_request("head is not a sealed account head"))?;
-        let sequence = i64::try_from(sequence)
+        let sequence = i64::try_from(header.sequence)
             .ok()
             .filter(|s| *s >= 1)
             .ok_or_else(|| AppError::bad_request("head sequence is out of range"))?;
-        Ok(Some(Self { sealed, sequence }))
+        Ok(Some(Self {
+            sealed,
+            sequence,
+            previous: header.previous,
+        }))
+    }
+
+    /// This account's head (its key binding): another account's is refused.
+    fn check(&self, locked: &Locked) -> AppResult<()> {
+        kutup_crypto::account_head::validate(&self.sealed, &locked.binding)
+            .map(|_| ())
+            .map_err(|_| AppError::bad_request("head is not this account's"))
     }
 
     /// [`NextHead::parse`] for a write that may or may not change a listed
@@ -148,8 +168,8 @@ pub async fn advance(
     let user_id = locked.user_id;
     // The newest head (the account row, locked by `lock`, already orders the
     // account's listed writes; the primary key below is the second guard).
-    let current: Option<i64> = sqlx::query_scalar(
-        "SELECT sequence FROM account_heads WHERE user_id = $1
+    let current: Option<(i64, Vec<u8>)> = sqlx::query_as(
+        "SELECT sequence, sealed FROM account_heads WHERE user_id = $1
          ORDER BY sequence DESC LIMIT 1 FOR UPDATE",
     )
     .bind(user_id)
@@ -161,11 +181,16 @@ pub async fn advance(
             None => Ok(()),
         };
     };
+    next.check(locked)?;
     // A chain starts only with `start`, on the basis it was made on.
-    let Some(current) = current else {
+    let Some((current, current_sealed)) = current else {
         return Err(head_conflict(None));
     };
-    if next.sequence != current + 1 {
+    // The next head, and the one it names is the newest kept: a head made on
+    // an older or another one is refused, as a Photos record is.
+    if next.sequence != current + 1
+        || next.previous != kutup_crypto::account_head::digest(&current_sealed)
+    {
         return Err(head_conflict(Some(current)));
     }
     insert(tx, locked, next, Some(current)).await
@@ -432,6 +457,7 @@ pub async fn start(
     if next.sequence != 1 {
         return Err(AppError::bad_request("a chain starts at sequence 1"));
     }
+    next.check(locked)?;
     if latest(&mut **tx, locked.user_id).await?.is_some() {
         return Err(head_conflict(None));
     }
@@ -504,6 +530,7 @@ mod tests {
         let locked = Locked {
             user_id,
             incarnation_id: incarnation.clone(),
+            binding: BINDING.into(),
         };
         let keys = HeadKeys::derive(&[9; 32]).unwrap();
         let writer = keys.writer("window").unwrap();

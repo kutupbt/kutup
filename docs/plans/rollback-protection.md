@@ -37,9 +37,13 @@ visible as soon as the devices' histories meet.
 
 ### 1. The account head (`AccountHeadV1`, Rust-owned, with vectors)
 
-One small value per account, sealed and authenticated by a key derived from
-the master key (`HKDF(master key, "kutup/account-head/v1")`), so only the
-account's own clients can make one:
+One small value per account, an account record (`KUTPAR1`, purpose
+`AccountHead`, [`w1-account-record.md`](w1-account-record.md)) under the
+master key and bound to the account's key binding, so only the account's own
+clients can make one. The record's revision is the head's sequence and its
+header names the previous head's digest (zeros at 1), so the server checks
+the chain without opening anything; value ids and writers are HMAC'd with a
+key from `HKDF(master key, "kutup/account-head/v1")` (the head key):
 
 ```
 AccountHeadV1 {
@@ -183,7 +187,10 @@ Every write of a listed value also writes the next head, in the same request:
 
 - **The chain:** `account_heads (user_id, sequence, sealed, incarnation_id,
   written_at)`, primary key `(user_id, sequence)`, sealed heads up to 16 KiB
-  (`MAX_SEALED_BYTES`); the newest `RETENTION` + 1 (1,001) kept, so a device
+  (their padded plaintext at most `account_head::MAX_PADDED_BYTES`). A head
+  must be this account's (its key binding) and name the newest head kept as
+  its predecessor (`account_head::validate`, then the digest compare), else
+  `400` or `409 head_conflict` (W1 slice 4b); the newest `RETENTION` + 1 (1,001) kept, so a device
   anchored exactly `RETENTION` back still gets its whole segment, anchor
   included; pruned in the write. `crates/kutup-server/src/account_heads.rs`.
 - **Every listed write first locks the account row** and checks, under the
@@ -254,8 +261,9 @@ format for every client:
   anchor last moved;
 - a log of the last 20 events: started fresh, re-anchored, forgotten.
 
-It is sealed under the head key, bound to the key binding and the
-incarnation, and stored under an HMAC name of the incarnation. Two accounts in
+It is an account record too (purpose `AccountLocalAnchor`, its object the
+incarnation) under the master key, bound to the key binding, and stored under
+an HMAC name of the incarnation. Two accounts in
 one store, or one account before and after a reset, never share or compare
 anchors. A record that does not open means the device starts fresh, which is
 logged. The anchor moves only forward from a verified head. Another tab's
