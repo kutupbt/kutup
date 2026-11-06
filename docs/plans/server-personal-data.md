@@ -52,12 +52,23 @@ each copy.
 - **Format.** A sealed field is `suite (u16) ‖ key generation (u32) ‖ nonce
   (24) ‖ XChaCha20-Poly1305(value)`. The AAD binds the table, the column, the
   row's id and the account id, so a value can't be moved to another row or
-  account. This is Rust in `kutup-crypto` (`server_field`, with vectors), used
+  account. This is Rust in `kutup-crypto` (`server_data`, with vectors), used
   only by the server.
-- **Where the key lives.** `account_data_keys(user_id, generation, wrapped,
-  created_at)`. Each key is wrapped under a server key-encryption key from an
-  env key list, `SERVER_DATA_KEYS` (versioned like `OPAQUE_SETUP_KEYS`, so it
-  can rotate). A database dump without that env value opens nothing.
+- **Where the key lives.** `account_keys.account_data_keys(user_id,
+  sealing_key_id, generation, wrapped, created_at)`. Each key is wrapped under
+  a key-encryption key derived (HKDF, its own label) from an entry of the
+  server key list, `OPAQUE_SETUP_KEYS`. The list already seals the OPAQUE
+  setups and the group send keys, is kept out of the dumps and is backed up
+  apart, so a second list would add nothing (decided in L1, 2026-11-06). A
+  database dump without the list opens nothing.
+  - Each row names the entry that wraps it (`sealing_key_id`). After an entry
+    is added, keys move to it when next used and in batches of 500 a minute;
+    never all at start.
+  - The server refuses to start without an entry that still wraps keys,
+    naming the entry and the count; self-hosting.md says how to check before
+    removing one.
+  - A key is made when the account first has something to seal, and goes with
+    the account (the foreign key cascades) and at an account reset.
 - **Backups.** Deleting the key row is not enough while 30 days of dumps still
   hold it. Two measures together:
   1. `account_data_keys` lives in its own schema, which the database dump
@@ -280,7 +291,7 @@ keeps them; reports on them are operator tooling.
 
 | Slice | Contents | Size |
 |---|---|---|
-| L1 | A2: `server_field` format and vectors, `account_data_keys`, `SERVER_DATA_KEYS`, key schema and its own dump, restore replay hook; TOTP secret sealed | M |
+| L1 | A2: `server_data` format and vectors, `account_data_keys` under the server key list, key schema and its own dump; TOTP secret sealed (the restore replay comes with A7, L4) | M |
 | L2 | A8: two roles, retention job, append-only grants, hash chain on the admin log, sign-in events, admin-access events, retention settings | M |
 | L3 | A10: UA family parser, sealed client columns, API and Account app, feedback, session retention | S–M |
 | L4 | A5 and A7: states, closing job, legal hold, self-service deletion, destruction events, restore replay | M |

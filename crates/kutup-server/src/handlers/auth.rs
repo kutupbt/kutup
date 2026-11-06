@@ -934,8 +934,8 @@ pub async fn login_two_fa(
 
     // The authenticator app's secret, only once it is turned on: a secret
     // still being set up never signs anyone in.
-    let row: Option<(Option<String>, bool)> = sqlx::query_as(
-        "SELECT CASE WHEN totp_enabled THEN totp_secret END, is_active
+    let row: Option<(Option<Vec<u8>>, bool)> = sqlx::query_as(
+        "SELECT CASE WHEN totp_enabled THEN totp_secret_sealed END, is_active
          FROM users WHERE id = $1",
     )
     .bind(Uuid::parse_str(&user_id).map_err(|_| AppError::unauthorized("unauthorized"))?)
@@ -949,6 +949,10 @@ pub async fn login_two_fa(
     }
 
     let account = Uuid::parse_str(&user_id).map_err(|_| AppError::unauthorized("unauthorized"))?;
+    let totp_secret = match totp_secret {
+        Some(sealed) => Some(open_totp_secret(&state, account, &sealed).await?),
+        None => None,
+    };
     let valid = totp_secret
         .as_deref()
         .map(|s| totp::validate_totp(s, &req.code))
@@ -1463,11 +1467,14 @@ pub async fn setup_totp(State(state): State<AppState>, user: AuthUser) -> AppRes
 
     // Never while it is on: the secret in use is replaced only by turning it
     // off (with the password) and on again.
-    let set = sqlx::query("UPDATE users SET totp_secret = $1 WHERE id = $2 AND NOT totp_enabled")
-        .bind(&secret)
-        .bind(parse_uuid(&user.user_id)?)
-        .execute(&state.pool)
-        .await?;
+    let user_id = parse_uuid(&user.user_id)?;
+    let sealed = seal_totp_secret(&state, user_id, &secret).await?;
+    let set =
+        sqlx::query("UPDATE users SET totp_secret_sealed = $1 WHERE id = $2 AND NOT totp_enabled")
+            .bind(&sealed)
+            .bind(user_id)
+            .execute(&state.pool)
+            .await?;
     if set.rows_affected() != 1 {
         return Err(AppError::conflict("two-step sign-in is already on"));
     }
@@ -1491,14 +1498,16 @@ pub async fn verify_totp(
 ) -> AppResult<Response> {
     let Json(req) = body.map_err(|_| AppError::bad_request("invalid request"))?;
 
-    let secret: Option<String> = sqlx::query_scalar("SELECT totp_secret FROM users WHERE id = $1")
-        .bind(parse_uuid(&user.user_id)?)
-        .fetch_optional(&state.pool)
-        .await?
-        .flatten();
-    let Some(secret) = secret else {
+    let sealed: Option<Vec<u8>> =
+        sqlx::query_scalar("SELECT totp_secret_sealed FROM users WHERE id = $1")
+            .bind(parse_uuid(&user.user_id)?)
+            .fetch_optional(&state.pool)
+            .await?
+            .flatten();
+    let Some(sealed) = sealed else {
         return Err(AppError::bad_request("TOTP not set up"));
     };
+    let secret = open_totp_secret(&state, parse_uuid(&user.user_id)?, &sealed).await?;
 
     if !totp::validate_totp(&secret, &req.code) {
         return Err(AppError::bad_request("invalid code"));
@@ -1520,12 +1529,13 @@ pub async fn verify_totp(
         req.security_key.as_ref(),
     )
     .await?;
-    let enabled =
-        sqlx::query("UPDATE users SET totp_enabled = true WHERE id = $1 AND totp_secret = $2")
-            .bind(user_id)
-            .bind(&secret)
-            .execute(&mut *tx)
-            .await?;
+    let enabled = sqlx::query(
+        "UPDATE users SET totp_enabled = true WHERE id = $1 AND totp_secret_sealed = $2",
+    )
+    .bind(user_id)
+    .bind(&sealed)
+    .execute(&mut *tx)
+    .await?;
     // A new setup or a turn-off landed since the secret was read.
     if enabled.rows_affected() != 1 {
         return Err(AppError::conflict("two-step sign-in changed meanwhile"));
@@ -1688,12 +1698,16 @@ pub(crate) async fn prove_second_factor(
             SecondFactor::Wrong
         });
     }
-    let secret: Option<String> = sqlx::query_scalar(
-        "SELECT CASE WHEN totp_enabled THEN totp_secret END FROM users WHERE id = $1",
+    let sealed: Option<Vec<u8>> = sqlx::query_scalar(
+        "SELECT CASE WHEN totp_enabled THEN totp_secret_sealed END FROM users WHERE id = $1",
     )
     .bind(user_id)
     .fetch_one(&mut **tx)
     .await?;
+    let secret = match sealed {
+        Some(sealed) => Some(open_totp_secret(state, user_id, &sealed).await?),
+        None => None,
+    };
     if code.is_empty()
         || !(secret.is_some_and(|secret| totp::validate_totp(&secret, code))
             || crate::two_factor::spend(tx, &state.pool, user_id, code).await?)
@@ -1819,10 +1833,12 @@ pub async fn disable_totp(
     // With security keys left, two-step sign-in stays on (and its recovery
     // codes): only the authenticator app goes.
     let kind = if factors.keys > 0 {
-        sqlx::query("UPDATE users SET totp_enabled = false, totp_secret = NULL WHERE id = $1")
-            .bind(user_id)
-            .execute(&mut *tx)
-            .await?;
+        sqlx::query(
+            "UPDATE users SET totp_enabled = false, totp_secret_sealed = NULL WHERE id = $1",
+        )
+        .bind(user_id)
+        .execute(&mut *tx)
+        .await?;
         crate::security_events::Kind::AuthenticatorOff
     } else {
         crate::two_factor::turn_off(&mut tx, user_id).await?;
@@ -2278,6 +2294,39 @@ fn deterministic_fake_account_record(secret: &[u8], binding: &str) -> String {
     )
     .expect("fake recovery envelope inputs are valid");
     STANDARD.encode(envelope)
+}
+
+/// Where the authenticator app's secret is sealed: the account's own row.
+fn totp_field(user_id: &str) -> (&'static str, &'static str, &str) {
+    ("users", "totp_secret", user_id)
+}
+
+/// The authenticator app's secret, sealed under the account's data key
+/// (docs/plans/server-personal-data.md, A2): it goes with the account.
+async fn seal_totp_secret(state: &AppState, user_id: Uuid, secret: &str) -> AppResult<Vec<u8>> {
+    let row = user_id.to_string();
+    crate::account_data::seal(
+        &state.pool,
+        &state.config.opaque_setup_keys,
+        user_id,
+        totp_field(&row),
+        secret.as_bytes(),
+    )
+    .await
+}
+
+async fn open_totp_secret(state: &AppState, user_id: Uuid, sealed: &[u8]) -> AppResult<String> {
+    let row = user_id.to_string();
+    let plain = crate::account_data::open(
+        &state.pool,
+        &state.config.opaque_setup_keys,
+        user_id,
+        totp_field(&row),
+        sealed,
+    )
+    .await?;
+    String::from_utf8(plain.to_vec())
+        .map_err(|_| AppError::internal("the sealed authenticator secret is not text"))
 }
 
 #[cfg(test)]

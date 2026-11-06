@@ -47,7 +47,7 @@ and its [environment reference](https://ente.com/help/self-hosting/installation/
    | `CHAT_SERVER_NAME` | The name after the `@` in every address; set once | — |
    | `POSTGRES_PASSWORD` | The database password | `openssl rand -hex 32` |
    | `JWT_SECRET` | Signs sessions | `openssl rand -hex 64` |
-   | `OPAQUE_SETUP_KEYS` | The keys sign-in is sealed under; back it up apart from the database | `echo "1:$(openssl rand -base64 32)"` |
+   | `OPAQUE_SETUP_KEYS` | The server key list: sign-in, group send keys and every account's data key are sealed under it; back it up apart from the database | `echo "1:$(openssl rand -base64 32)"` |
    | `S3_SECRET_KEY` | The bundled object store's secret | `openssl rand -hex 32` |
    | `MAIL_FORWARDING_KEYS` | Mail forwarding's keys; forwarding stays off until it's set; back it up apart from the database | `echo "1:$(openssl rand -base64 32)"` |
    | `ADMIN_ACCOUNT` | The break-glass administrator, `username:password` | — |
@@ -662,9 +662,19 @@ durable operator backups.
 
 ## Database backups
 
-The database backups below do not hold `OPAQUE_SETUP_KEYS` (it is in `.env`),
-and must not: back that key up on its own, somewhere else. A database restored
-without it signs no one in (see the security notes).
+The database backups below do not hold `OPAQUE_SETUP_KEYS`, the server key
+list (it is in `.env`), and must not: back it up on its own, somewhere else. A
+database restored without it signs no one in, and the server-side personal
+fields sealed under the account data keys (the authenticator secret, and more
+to come, docs/plans/server-personal-data.md) can't be read (see the security
+notes).
+
+Each account's data key lives in the schema `account_keys`, which the database
+dump leaves out. `scripts/backup-postgres.sh` dumps it apart, under
+`database-backups-keys/`, and keeps those dumps only for **Keep account key
+backups** (Server settings → Privacy and retention, default 7 days). An
+account deleted, or reset, more than that long ago has its key in no backup,
+so what the server sealed for it can't be read from any copy.
 
 The same goes for `MAIL_FORWARDING_KEYS`, when Mail's end-to-end forwarding
 is on (docs/plans/mail-forwarding.md): the proxy factors in the database are
@@ -745,8 +755,14 @@ To restore onto a fresh server: set up `.env` with the same store, the same
 
 ```sh
 docker compose up -d --wait postgres
+scripts/backup-postgres.sh --list                  # database dumps, then "keys: …"
 scripts/backup-postgres.sh --fetch <name> kutup.dump
 docker compose exec -T postgres pg_restore -U kutup -d kutup --clean --if-exists --no-owner < kutup.dump
+# The account data keys: always the NEWEST key dump, whichever database dump
+# you restored. Keys of accounts deleted since are in it no more, so their
+# sealed fields stay unreadable.
+scripts/backup-postgres.sh --fetch keys:<newest key dump> keys.dump
+docker compose exec -T postgres pg_restore -U kutup -d kutup --clean --if-exists --no-owner < keys.dump
 docker compose up -d --wait
 ```
 
@@ -1145,8 +1161,9 @@ if any.
 - **Change all defaults** in `.env` before first start. The defaults are intentionally weak placeholders.
 - **Firewall:** Only expose ports 80 and 443 (TCP), and UDP 443 for HTTP/3. All other services (PostgreSQL, SeaweedFS) must not be reachable from the internet. Without UDP 443 browsers stay on HTTP/2 over TCP; nothing breaks, it is only slower on lossy mobile links.
 - **JWT_SECRET:** Use `openssl rand -hex 64`. A weak secret allows forging authentication tokens.
-- **OPAQUE_SETUP_KEYS:** the keys sign-in's OPAQUE setups are sealed under
-  (docs/plans/opaque.md). The server keeps each account's OPAQUE record, which
+- **OPAQUE_SETUP_KEYS, the server key list:** the keys sign-in's OPAQUE
+  setups are sealed under (docs/plans/opaque.md), and, below, the group send
+  keys and every account's data key. The server keeps each account's OPAQUE record, which
   is useless for guessing passwords offline as long as the setup's secrets are
   out of reach; they are stored sealed under this key, so a database dump or
   backup alone gives nothing to attack.
@@ -1172,6 +1189,20 @@ if any.
     under the current key, so after adding a key, start the server once
     before you remove the old id; a key whose id is gone stops the server at
     start.
+  - **Every account's data key is wrapped under it too**
+    (docs/plans/server-personal-data.md, A2): the key the server seals that
+    account's server-side personal fields under. Each wrapped key names the
+    entry it is wrapped under. After you add an entry, keys move to it when
+    they are next used and in batches of 500 a minute; an entry can be
+    removed once no key uses it:
+
+    ```sh
+    docker compose exec -T postgres psql -U kutup -d kutup -c \
+      "SELECT sealing_key_id, count(*) FROM account_keys.account_data_keys GROUP BY 1"
+    ```
+
+    The server refuses to start without an entry that still wraps keys,
+    naming each such entry and how many keys it wraps.
 - **Group send endorsement keys:** made on first start when `CHAT_GROUPS`
   and federation are on, stored sealed (above). `kutup-server chat-zk-keys
   rotate` makes a new key that issues from then on; the old one keeps

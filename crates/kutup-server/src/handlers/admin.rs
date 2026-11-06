@@ -2415,7 +2415,7 @@ pub async fn wipe_user(
                recovery_key_verifier = '', drive_key_binding = NULL,
                key_binding = $1, opaque_record = $3, opaque_suite = $4,
                opaque_server_key_id = $5,
-               totp_secret = NULL, totp_enabled = false,
+               totp_secret_sealed = NULL, totp_enabled = false,
                is_first_login = true, updated_at = NOW()
            WHERE id = $2"#,
     )
@@ -2427,6 +2427,13 @@ pub async fn wipe_user(
     .execute(&mut *tx)
     .await
     .map_err(map_insert_conflict)?;
+    // The account's data key goes too: whatever the old incarnation sealed
+    // under it is unreadable everywhere, backups included
+    // (docs/plans/server-personal-data.md, A2); the next seal makes a new one.
+    sqlx::query("DELETE FROM account_keys.account_data_keys WHERE user_id = $1")
+        .bind(target)
+        .execute(&mut *tx)
+        .await?;
     crate::grants::end_all(&mut tx, target).await?;
     crate::sessions::revoke_all_for_user_in(&mut tx, target, None).await?;
     crate::security_events::record(

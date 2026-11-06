@@ -270,6 +270,7 @@ pub enum SettingSection {
     TwoFactor,
     Drive,
     Federation,
+    Privacy,
 }
 
 /// A whole-number setting administrators set: its key, its field in
@@ -877,6 +878,21 @@ pub const WEBAUTHN_CEREMONY_SECONDS: NumericSetting = NumericSetting {
     unit: SettingUnit::Seconds,
     per_account: false,
 };
+/// How long the separate dump of the account data keys is kept, in days
+/// (docs/plans/server-personal-data.md, A2): a deleted account's key is in no
+/// copy after this long, so its sealed fields are unreadable in every backup.
+/// `scripts/backup-postgres.sh` reads it.
+pub const KEY_BACKUP_KEEP_DAYS: NumericSetting = NumericSetting {
+    key: "key_backup_keep_days",
+    field: "keyBackupKeepDays",
+    default: 7,
+    min: 1,
+    max: 90,
+    unit: SettingUnit::Days,
+    per_account: false,
+};
+pub const PRIVACY_SETTINGS: [NumericSetting; 1] = [KEY_BACKUP_KEEP_DAYS];
+
 pub const TWO_FACTOR_SETTINGS: [NumericSetting; 3] = [
     TWO_FACTOR_RECOVERY_CODES,
     SECURITY_KEYS_PER_ACCOUNT,
@@ -1122,6 +1138,7 @@ pub fn registry() -> impl Iterator<Item = (SettingSection, &'static NumericSetti
         .chain(section(SettingSection::TwoFactor, &TWO_FACTOR_SETTINGS))
         .chain(section(SettingSection::Drive, &DRIVE_SETTINGS))
         .chain(section(SettingSection::Federation, &FEDERATION_SETTINGS))
+        .chain(section(SettingSection::Privacy, &PRIVACY_SETTINGS))
 }
 
 /// The multi-recipient limits now.
