@@ -900,6 +900,8 @@
       "twoFactorHint": "Recovery codes and security keys for accounts with two-factor authentication.",
       "federation": "Federation",
       "federationHint": "How deliveries to other Kutup servers are tried again when a server doesn't answer.",
+      "privacy": "Privacy and retention",
+      "privacyHint": "How long personal data the server keeps for itself stays, backups included.",
       "twoFactorLimits": {
         "twoFactorRecoveryCodes": "Recovery codes per account",
         "twoFactorRecoveryCodesHint": "How many one-time codes are made when someone turns two-factor authentication on or makes new codes.",
@@ -927,6 +929,10 @@
         "driveStreamResponseMaxBytesHint": "The most one ranged download answer carries, also across servers.",
         "driveStreamBlobFallbackMaxBytes": "Largest file played from memory (bytes)",
         "driveStreamBlobFallbackMaxBytesHint": "Where a browser can't stream, files up to this size load whole into memory to play."
+      },
+      "privacyLimits": {
+        "keyBackupKeepDays": "Keep account key backups (days)",
+        "keyBackupKeepDaysHint": "The backup of the keys that seal each account's server-side data. A deleted account's data can no longer be read from any backup after this long."
       },
       "federationLimits": {
         "federationRetryBaseSeconds": "First wait (seconds)",

@@ -118,6 +118,9 @@ pub mod provisioning;
 pub mod revision_guard;
 // Adapter: Signal's safety number (iterated SHA-512).
 pub mod safety_number;
+// Server-held: account data keys and the personal fields they seal
+// (docs/plans/server-personal-data.md, A2).
+pub mod server_data;
 // Legacy: libsodium's secretstream, until the block format replaces it
 // (docs/plans/drive-block-format.md).
 pub mod stream;
