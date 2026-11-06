@@ -35,6 +35,8 @@ fn user_uuid(user: &AuthUser) -> AppResult<Uuid> {
     responses((status = 200, description = "Signed out", body = OkResponse))
 )]
 pub async fn logout(State(state): State<AppState>, user: AuthUser) -> AppResult<Response> {
+    // Recorded first: the session's client and browser are copied from it.
+    log(&state, &user, crate::security_events::Kind::SignOut).await?;
     sessions::sign_out(&state.pool, user.session.session_id).await?;
     let body = Json(OkResponse { ok: true });
     if user.session.client.uses_cookie() {
@@ -126,6 +128,7 @@ pub async fn revoke_session(
     if !sessions::revoke_owned(&state.pool, user_uuid(&user)?, id).await? {
         return Err(AppError::not_found("session not found"));
     }
+    log(&state, &user, crate::security_events::Kind::SessionRevoked).await?;
     Ok(Json(OkResponse { ok: true }).into_response())
 }
 
@@ -148,7 +151,33 @@ pub async fn revoke_other_sessions(
         Some(user.session.session_id),
     )
     .await?;
+    log(
+        &state,
+        &user,
+        crate::security_events::Kind::AllSessionsRevoked,
+    )
+    .await?;
     Ok(Json(OkResponse { ok: true }).into_response())
+}
+
+/// `kind` in the account's security log, made by the calling session
+/// (docs/plans/server-personal-data.md, A8).
+async fn log(
+    state: &AppState,
+    user: &AuthUser,
+    kind: crate::security_events::Kind,
+) -> AppResult<()> {
+    let mut tx = state.pool.begin().await?;
+    crate::security_events::record(
+        &mut tx,
+        user_uuid(user)?,
+        kind,
+        Some(user.session.session_id),
+        None,
+    )
+    .await?;
+    tx.commit().await?;
+    Ok(())
 }
 
 #[derive(Debug, Default, Deserialize, ToSchema)]

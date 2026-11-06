@@ -12,11 +12,12 @@ import { PageBody, PageHeader } from '@kutup/ui/components/page'
 import { EmptyState, LoadingPanel } from '@kutup/ui/components/states'
 import { apiErrorMessage } from '@kutup/ui/lib/apiError'
 import { formatInstant } from '@kutup/ui/lib/format'
-import { exportActivityCsv, useAdminActivity, type ActivityFilter } from './api'
+import { exportActivityCsv, useActivityIntegrity, useAdminActivity, type ActivityFilter } from './api'
 import { activitySentence } from './activityText'
 
 export function ActivityPage() {
   const { t, i18n } = useTranslation()
+  const integrity = useActivityIntegrity()
   const [filter, setFilter] = useState<ActivityFilter>({ federationOnly: false, domain: '' })
   const [domainDraft, setDomainDraft] = useState('')
   const [exporting, setExporting] = useState(false)
@@ -57,6 +58,14 @@ export function ActivityPage() {
         }
       />
       {exportError ? <Alert variant="error">{apiErrorMessage(exportError, t('admin.activity.exportFailed'))}</Alert> : null}
+      {integrity.data && !integrity.data.appendOnly ? (
+        <Alert variant="warn">{t('admin.activity.notAppendOnly')}</Alert>
+      ) : null}
+      {integrity.data && integrity.data.brokenAt !== null ? (
+        <Alert variant="error">{t('admin.activity.chainBroken', { id: integrity.data.brokenAt })}</Alert>
+      ) : integrity.data ? (
+        <p className="text-sm text-muted-foreground">{t('admin.activity.chainHolds', { count: integrity.data.checked })}</p>
+      ) : null}
       <Card className="p-0">
         <form
           className="flex flex-wrap items-center gap-4 border-b border-border p-3"

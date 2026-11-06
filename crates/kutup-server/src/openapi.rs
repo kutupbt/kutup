@@ -403,6 +403,7 @@ All file content and metadata are encrypted client-side; the server stores only 
         crate::handlers::admin::get_stats,
         crate::handlers::admin::activity,
         crate::handlers::admin::activity_export,
+        crate::handlers::admin::activity_verify,
         crate::handlers::admin::get_settings,
         crate::handlers::admin::update_settings,
         crate::handlers::registration_codes::create,

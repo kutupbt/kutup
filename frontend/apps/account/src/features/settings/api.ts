@@ -252,12 +252,16 @@ export interface SecurityEvent {
   oldName?: string
   /** For a rename: the new name. */
   newName?: string
+  /** How many times it happened: repeats within ten minutes (a failed sign-in, an administrator's view) are one event. */
+  count: number
 }
 
 interface SecurityEventsPage {
   events: SecurityEvent[]
   /** Older events; null when there are none. */
   next: string | null
+  /** How many days events are kept (the newest 500 at most). */
+  retentionDays: number
 }
 
 export const securityEventsKey = ['security-events'] as const

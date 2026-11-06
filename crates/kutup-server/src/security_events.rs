@@ -1,16 +1,23 @@
 //! What changed an account's sign-in, kept for its owner to see
 //! (`GET /api/user/security-events`, docs/api.md): a new password, a
 //! recovery, a move to the server's current OPAQUE setup, an administrator's
-//! reset. Each is written in the transaction of the change it records. No IP
-//! addresses; a year, or the newest 500 per account.
+//! reset, a sign-in or a failed one. Each is written in the transaction of the
+//! change it records. No IP addresses.
+//!
+//! The table is append-only for the server (docs/plans/server-personal-data.md,
+//! A8): it may insert, and raise a failure's `count`, but not change or delete
+//! a row. Old events go by the retention job ([`prune`]): the newest
+//! [`KEEP`] per account, for the days the Privacy and retention setting says.
 
 use uuid::Uuid;
 
 use crate::error::AppResult;
 
-/// The most events kept per account, and for how long.
-const KEEP: i64 = 500;
-const KEEP_DAYS: i32 = 365;
+/// The most events kept per account.
+pub const KEEP: i64 = 500;
+/// A failed sign-in within this many minutes of the same kind's last one is
+/// counted into it instead of a row of its own.
+const FOLD_MINUTES: i32 = 10;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Kind {
@@ -54,6 +61,21 @@ pub enum Kind {
     /// The authenticator app turned off; security keys keep two-step
     /// sign-in on.
     AuthenticatorOff,
+    /// A sign-in completed (a session made).
+    SignIn,
+    /// A wrong password for this account (only when the sign-in named it);
+    /// repeats fold into one row with a count.
+    SignInFailedPassword,
+    /// A wrong second step (code, security key or recovery code); repeats fold.
+    SignInFailed2fa,
+    /// A session signed out by its own device.
+    SignOut,
+    /// One session ended from another (Settings → Sessions).
+    SessionRevoked,
+    /// Every other session ended at once.
+    AllSessionsRevoked,
+    /// An administrator opened this account's data in the admin console.
+    AdminAccess,
 }
 
 impl Kind {
@@ -78,13 +100,19 @@ impl Kind {
             Kind::SecurityKeyCompromised => "securityKeyCompromised",
             Kind::AuthenticatorOn => "authenticatorOn",
             Kind::AuthenticatorOff => "authenticatorOff",
+            Kind::SignIn => "signIn",
+            Kind::SignInFailedPassword => "signInFailedPassword",
+            Kind::SignInFailed2fa => "signInFailed2fa",
+            Kind::SignOut => "signOut",
+            Kind::SessionRevoked => "sessionRevoked",
+            Kind::AllSessionsRevoked => "allSessionsRevoked",
+            Kind::AdminAccess => "adminAccess",
         }
     }
 }
 
 /// Records `kind` for `user_id` inside `tx`, made from `session` (copied:
-/// its client and user agent) or by `admin`; the account's oldest events
-/// past the limits go.
+/// its client and user agent) or by `admin`.
 pub async fn record(
     tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
     user_id: Uuid,
@@ -135,19 +163,50 @@ async fn insert(
     .bind(new_name)
     .execute(&mut **tx)
     .await?;
-    sqlx::query(
-        "DELETE FROM account_security_events
-         WHERE user_id = $1
-           AND (at < now() - make_interval(days => $2)
-                OR id IN (SELECT id FROM account_security_events WHERE user_id = $1
-                          ORDER BY at DESC, id DESC OFFSET $3))",
+    Ok(())
+}
+
+/// A repeatable event for `user_id` (a failed sign-in, an admin view):
+/// counted into the same kind's last event
+/// when that is under [`FOLD_MINUTES`] old, else recorded as a new one.
+pub async fn record_folded(pool: &sqlx::PgPool, user_id: Uuid, kind: Kind) -> AppResult<()> {
+    let mut tx = pool.begin().await?;
+    let folded = sqlx::query(
+        "UPDATE account_security_events SET count = count + 1
+          WHERE id = (SELECT id FROM account_security_events
+                       WHERE user_id = $1 AND kind = $2
+                         AND at > now() - make_interval(mins => $3)
+                       ORDER BY at DESC, id DESC LIMIT 1)",
     )
     .bind(user_id)
-    .bind(KEEP_DAYS)
-    .bind(KEEP)
-    .execute(&mut **tx)
+    .bind(kind.as_str())
+    .bind(FOLD_MINUTES)
+    .execute(&mut *tx)
     .await?;
+    if folded.rows_affected() == 0 {
+        insert(&mut tx, user_id, kind, None, None, None, None).await?;
+    }
+    tx.commit().await?;
     Ok(())
+}
+
+/// The retention job's part: events older than `days`, and past the newest
+/// [`KEEP`] of each account, go. Returns how many. Runs on the owner's
+/// connection when the server has one (the server itself may not delete).
+pub async fn prune(pool: &sqlx::PgPool, days: i64) -> AppResult<u64> {
+    let gone = sqlx::query(
+        "DELETE FROM account_security_events e
+          WHERE e.at < now() - make_interval(days => $1::int)
+             OR e.id IN (SELECT id FROM (
+                    SELECT id, row_number() OVER (PARTITION BY user_id ORDER BY at DESC, id DESC) AS n
+                      FROM account_security_events) ranked
+                  WHERE ranked.n > $2)",
+    )
+    .bind(days)
+    .bind(KEEP)
+    .execute(pool)
+    .await?;
+    Ok(gone.rows_affected())
 }
 
 /// One event as its owner reads it.
@@ -162,6 +221,8 @@ pub struct Event {
     pub by_admin: bool,
     pub old_name: Option<String>,
     pub new_name: Option<String>,
+    /// How many times it happened (a failed sign-in's repeats folded).
+    pub count: i32,
 }
 
 /// The account's events, newest first: after the event `cursor` (the last
@@ -175,7 +236,7 @@ pub async fn list(
     Ok(sqlx::query_as(
         "SELECT e.id, e.kind, e.at, e.acting_session_id, e.acting_client, e.acting_user_agent,
                 e.kind IN ('adminReset', 'accountReset', 'nameClosed', 'nameFreed') AS by_admin,
-                e.old_name, e.new_name
+                e.old_name, e.new_name, e.count
          FROM account_security_events e
          WHERE e.user_id = $1
            AND ($2::uuid IS NULL OR (e.at, e.id) < (

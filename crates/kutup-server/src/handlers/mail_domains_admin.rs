@@ -475,11 +475,12 @@ async fn organization_of(
 )]
 pub async fn overrides(
     State(state): State<AppState>,
-    _admin: AdminUser,
+    admin: AdminUser,
     Path(id): Path<String>,
 ) -> AppResult<Json<DomainOverridesView>> {
     let id = Uuid::parse_str(&id).map_err(|_| AppError::not_found("no such user"))?;
     let organization = organization_of(&state.pool, id).await?;
+    crate::handlers::admin::viewed(&state, &admin, id, "mailDomains").await?;
     let max_addresses: Option<i64> = sqlx::query_scalar(
         "SELECT value FROM user_setting_overrides WHERE user_id = $1 AND key = $2",
     )

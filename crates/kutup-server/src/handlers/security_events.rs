@@ -49,6 +49,9 @@ pub struct SecurityEventView {
     new_name: Option<String>,
     /// An administrator's reset of this account.
     by_admin: bool,
+    /// How many times it happened: a failed sign-in's repeats within ten
+    /// minutes are one event.
+    count: i32,
 }
 
 #[derive(Debug, Serialize, ToSchema)]
@@ -57,6 +60,9 @@ pub struct SecurityEventsPage {
     events: Vec<SecurityEventView>,
     /// The cursor for older events; none when there are no more.
     next: Option<Uuid>,
+    /// How many days events are kept (the newest 500 at most): the server's
+    /// Privacy and retention setting.
+    retention_days: i64,
 }
 
 /// `GET /api/user/security-events` — the caller's account security events,
@@ -122,7 +128,16 @@ pub async fn list(
             by_admin: e.by_admin,
             old_name: e.old_name,
             new_name: e.new_name,
+            count: e.count,
         })
         .collect();
-    Ok(Json(SecurityEventsPage { events, next }).into_response())
+    let retention_days = crate::site_settings::SECURITY_EVENT_RETENTION_DAYS
+        .load(&state.pool)
+        .await?;
+    Ok(Json(SecurityEventsPage {
+        events,
+        next,
+        retention_days,
+    })
+    .into_response())
 }
