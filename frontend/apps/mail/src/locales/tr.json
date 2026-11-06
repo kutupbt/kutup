@@ -1362,5 +1362,32 @@
       "title": "Ek bulunamadı",
       "body": "“{{detail}}” yazdınız, ancak hiç ek eklenmedi. İletinizi yine de göndermek istiyor musunuz?"
     }
+  },
+  "sieve": {
+    "import": "Sieve içe aktar",
+    "export": "Sieve olarak dışa aktar",
+    "importTitle": "Filtreleri Sieve’den içe aktar",
+    "importDescription": "Proton, Fastmail ya da bir Sieve sunucusundan bir Sieve betiği yapıştırın veya dosya seçin. Kutup, kendi filtrelerinin tutabildiği filtreleri okur: gönderen, alıcı, konu ve ekler; taşıma, etiketler, okundu ve yıldızlı. Filtreler sizinkilerin ardına eklenir.",
+    "script": "Sieve betiği",
+    "chooseFile": "Bir Sieve dosyası seçin",
+    "tooLarge": "Bu dosya bir Sieve betiği için fazla büyük.",
+    "read": "Oku",
+    "back": "Geri",
+    "toAdd_one": "Eklenecek {{count}} filtre",
+    "toAdd_other": "Eklenecek {{count}} filtre",
+    "nothing": "Bu betikte Kutup’un tutabileceği bir filtre yok.",
+    "skipped_one": "{{count}} bölüm içe aktarılmadı",
+    "skipped_other": "{{count}} bölüm içe aktarılmadı",
+    "add_one": "{{count}} filtre ekle",
+    "add_other": "{{count}} filtre ekle",
+    "added_one": "{{count}} filtre eklendi",
+    "added_other": "{{count}} filtre eklendi",
+    "addFailed": "{{count}} eklendi, ardından: {{error}}",
+    "problem": {
+      "syntax": "Betik okunamadı:",
+      "unsupported": "Kutup filtreleri bunu yapamaz:",
+      "unknownPlace": "Bu adla bir klasör ya da etiket yok (önce oluşturun, sonra yeniden içe aktarın):",
+      "noAction": "Bu filtre Kutup’un yapabileceği hiçbir şey yapmıyor:"
+    }
   }
 }

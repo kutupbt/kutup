@@ -253,7 +253,7 @@ labels (F1), 113 filters and their runs (F2), 114 the sender lists (F3).
    DMARC for allow; "Block messages from this sender" on the person card and
    the list's right click; Settings → Block and allow. Built on
    `feat/mail-filters-f3`, stacked on F2.
-4. **F4 Sieve** import and export of the subset; folders, labels and
+4. **F4 Sieve** import and export of the subset (built: `mail-core/src/sieve.ts`, spec 174); folders, labels and
    filters for shared mailboxes.
 
 ## Tests

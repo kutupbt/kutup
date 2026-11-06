@@ -1362,5 +1362,32 @@
       "title": "No attachment found",
       "body": "You wrote “{{detail}}”, but no attachment has been added. Do you want to send your message anyway?"
     }
+  },
+  "sieve": {
+    "import": "Import Sieve",
+    "export": "Export as Sieve",
+    "importTitle": "Import filters from Sieve",
+    "importDescription": "Paste a Sieve script or choose a file, from Proton, Fastmail or a Sieve server. Kutup reads the filters its own can hold: sender, recipient, subject and attachments; moving, labels, read and starred. The filters go after yours.",
+    "script": "Sieve script",
+    "chooseFile": "Choose a Sieve file",
+    "tooLarge": "That file is too large for a Sieve script.",
+    "read": "Read",
+    "back": "Back",
+    "toAdd_one": "{{count}} filter to add",
+    "toAdd_other": "{{count}} filters to add",
+    "nothing": "Nothing in this script is a filter Kutup can hold.",
+    "skipped_one": "{{count}} part not imported",
+    "skipped_other": "{{count}} parts not imported",
+    "add_one": "Add {{count}} filter",
+    "add_other": "Add {{count}} filters",
+    "added_one": "{{count}} filter added",
+    "added_other": "{{count}} filters added",
+    "addFailed": "Added {{count}}, then: {{error}}",
+    "problem": {
+      "syntax": "The script could not be read:",
+      "unsupported": "Kutup's filters can't do this:",
+      "unknownPlace": "No folder or label with this name (make it first, then import again):",
+      "noAction": "This filter does nothing Kutup can do:"
+    }
   }
 }

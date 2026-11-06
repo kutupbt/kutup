@@ -1,4 +1,4 @@
-import { Filter, GripVertical, ListChecks, Pencil, Plus, Trash2 } from 'lucide-react'
+import { Download, Filter, GripVertical, ListChecks, Pencil, Plus, Trash2, Upload } from 'lucide-react'
 import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
@@ -17,6 +17,8 @@ import { apiErrorMessage } from '@kutup/ui/lib/apiError'
 import { cn } from '@kutup/ui/lib/cn'
 import { FilterDialog } from './FilterDialog'
 import { describeFilter } from './filterText'
+import { SieveImportDialog } from './SieveDialog'
+import { exportSieve } from './sieveFiles'
 
 /**
  * Settings → Filters (Proton's `FiltersSection`): the filters in the order
@@ -32,6 +34,7 @@ export function FiltersSettingsPage() {
   const order = useOrderFilters()
   const apply = useApplyFilters()
   const [editing, setEditing] = useState<MailFilter | 'new' | null>(null)
+  const [importing, setImporting] = useState(false)
   const [deleting, setDeleting] = useState<MailFilter | null>(null)
   const [applying, setApplying] = useState<MailFilter | null>(null)
   const [runId, setRunId] = useState<string | null>(null)
@@ -56,10 +59,20 @@ export function FiltersSettingsPage() {
         title={t('filters.title')}
         description={t('filters.description')}
         actions={
-          <Button onClick={() => setEditing('new')}>
-            <Plus />
-            {t('filters.add')}
-          </Button>
+          <div className="flex flex-wrap gap-2">
+            <Button variant="outline" onClick={() => setImporting(true)}>
+              <Upload />
+              {t('sieve.import')}
+            </Button>
+            <Button variant="outline" disabled={list.length === 0} onClick={() => exportSieve(list, places.data)}>
+              <Download />
+              {t('sieve.export')}
+            </Button>
+            <Button onClick={() => setEditing('new')}>
+              <Plus />
+              {t('filters.add')}
+            </Button>
+          </div>
         }
       />
       {run.data && !run.data.finished ? (
@@ -144,6 +157,7 @@ export function FiltersSettingsPage() {
           </ul>
         </>
       )}
+      {importing ? <SieveImportDialog places={places.data} onClose={() => setImporting(false)} /> : null}
       {editing ? <FilterDialog filter={editing === 'new' ? undefined : editing} onClose={() => setEditing(null)} /> : null}
       <Dialog open={applying !== null} onOpenChange={(open) => !open && setApplying(null)}>
         <DialogContent className="sm:max-w-md">
