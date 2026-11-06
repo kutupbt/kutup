@@ -43,7 +43,8 @@
     "trash": "Çöp",
     "all": "Tüm postalar",
     "scheduled": "Planlanan",
-    "snoozed": "Ertelenen"
+    "snoozed": "Ertelenen",
+    "refresh": "Yenile: {{name}}"
   },
   "empty": {
     "inbox": "Gelen kutunuz boş",

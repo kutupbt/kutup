@@ -43,7 +43,8 @@
     "trash": "Trash",
     "all": "All mail",
     "scheduled": "Scheduled",
-    "snoozed": "Snoozed"
+    "snoozed": "Snoozed",
+    "refresh": "Refresh {{name}}"
   },
   "empty": {
     "inbox": "Your inbox is empty",

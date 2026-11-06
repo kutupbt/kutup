@@ -275,6 +275,19 @@ const scoped = (group?: string) => (group ? { group } : {})
 /** Fetched again this often while the app is open (web push comes later). */
 export const POLL_MS = 30_000
 
+/**
+ * The open list and the counts, fetched again now: the sidebar's refresh
+ * (Proton's `call()` on the event loop). Resolves when both are in.
+ */
+export function useRefreshMail() {
+  const queryClient = useQueryClient()
+  return () =>
+    Promise.all([
+      queryClient.refetchQueries({ queryKey: ['mail', 'folder'], type: 'active' }),
+      queryClient.refetchQueries({ queryKey: ['mail', 'counts'], type: 'active' }),
+    ])
+}
+
 /** No address key yet: the Account app makes it at sign-in. */
 export class NoAddressKey extends Error {
   constructor() {
@@ -615,6 +628,8 @@ export function useFolder(folder: PlaceKey, view: ListView = {}, enabled = true)
       ).data,
     getNextPageParam: () => null,
     refetchInterval: POLL_MS,
+    // Back on the tab: at once if a poll fell due meanwhile (Proton's event loop).
+    refetchOnWindowFocus: true,
   })
 }
 
@@ -648,6 +663,8 @@ export function useCounts(group?: string) {
     enabled: !settings.isPending,
     queryFn: async () => (await api.get<FolderCount[]>('/mail/counts', { params: { ...scoped(group), ...(conversations ? { conversations: true } : {}) } })).data,
     refetchInterval: POLL_MS,
+    // Back on the tab: at once if a poll fell due meanwhile (Proton's event loop).
+    refetchOnWindowFocus: true,
   })
 }
 

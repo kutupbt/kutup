@@ -5,7 +5,7 @@ import { lazy, Suspense, useEffect, useState, type ReactNode } from 'react'
 import { useTranslation } from 'react-i18next'
 import { Link, Outlet, useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import { StorageMeter } from '@kutup/drive-ui/StorageMeter'
-import { useCounts, type FolderId } from '@kutup/mail-core/api'
+import { useCounts, useRefreshMail, type FolderId } from '@kutup/mail-core/api'
 import { useContentSearch } from '@kutup/mail-core/contentSearch'
 import { useMyGroups, type MailGroup } from '@kutup/mail-core/groups'
 import { appUrl } from '@kutup/session/apps'
@@ -70,6 +70,7 @@ const SHARED_NAV: { id: FolderId; icon: ReactNode }[] = [
 function SharedMailbox({ group, open }: { group: MailGroup; open: boolean }) {
   const { t } = useTranslation()
   const counts = useCounts(group.id)
+  const refresh = useRefreshMail()
   const unread = (folder: FolderId) => counts.data?.find((c) => c.folder === folder)?.unread ?? 0
   return (
     <>
@@ -77,6 +78,7 @@ function SharedMailbox({ group, open }: { group: MailGroup; open: boolean }) {
         to={`/g/${group.id}/inbox`}
         icon={<Users />}
         label={group.displayName || group.address}
+        refresh={{ label: t('folders.refresh', { name: group.displayName || group.address }), run: refresh }}
         trailing={unread('inbox') > 0 ? <Count value={unread('inbox')} /> : undefined}
       />
       {open ? (
@@ -88,6 +90,7 @@ function SharedMailbox({ group, open }: { group: MailGroup; open: boolean }) {
                 to={`/g/${group.id}/${id}`}
                 icon={icon}
                 label={t(`folders.${id}`)}
+                refresh={{ label: t('folders.refresh', { name: t(`folders.${id}`) }), run: refresh }}
                 trailing={id === 'spam' && unread(id) > 0 ? <Count value={unread(id)} /> : undefined}
               />
             ))}
@@ -149,6 +152,7 @@ export function MailShell() {
   const accountHeadState = useAccountHeadState()
   useAccountUiPreferences()
   const counts = useCounts()
+  const refresh = useRefreshMail()
   useNewMailNotifications()
   // An outside forwarding that ended elsewhere: encryption back on (once a session).
   useSettleOwedKeyLists()
@@ -235,6 +239,7 @@ export function MailShell() {
           to={`/${id}`}
           icon={icon}
           label={t(`folders.${id}`)}
+          refresh={{ label: t('folders.refresh', { name: t(`folders.${id}`) }), run: refresh }}
           drop={
             DROPS.has(id)
               ? {

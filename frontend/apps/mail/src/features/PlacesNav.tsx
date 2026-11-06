@@ -2,8 +2,10 @@ import { ChevronDown, ChevronRight, Folder, FolderPlus, MoreHorizontal, Pencil, 
 import { useState, type DragEvent, type ReactNode } from 'react'
 import { useTranslation } from 'react-i18next'
 import { Link, NavLink, useParams } from 'react-router-dom'
-import type { FolderCount } from '@kutup/mail-core/api'
+import { useRefreshMail, type FolderCount } from '@kutup/mail-core/api'
 import { MAX_FOLDER_DEPTH, usePlaces, useUpdateFolder, type MailFolder, type MailLabel } from '@kutup/mail-core/places'
+import { SidebarRefreshButton } from '@kutup/ui/components/app-shell'
+import { useSidebarRefresh } from '@kutup/ui/lib/sidebarRefresh'
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@kutup/ui/components/dropdown-menu'
 import { Spine } from '@kutup/ui/components/spine'
 import { Tooltip } from '@kutup/ui/components/tooltip'
@@ -39,7 +41,11 @@ function PlaceRow({
   menu: ReactNode
   onDrop: (rows: Movable[]) => void
 }) {
+  const { t } = useTranslation()
   const [over, setOver] = useState(false)
+  const run = useRefreshMail()
+  const refresh = { label: t('folders.refresh', { name: label }), run }
+  const refreshing = useSidebarRefresh(to, refresh)
   const drop = {
     onDragOver: (e: DragEvent<HTMLLIElement>) => {
       if (!e.dataTransfer.types.includes(MAIL_DRAG_TYPE)) return
@@ -60,9 +66,11 @@ function PlaceRow({
     <li {...drop} className="group/place relative">
       <NavLink
         to={to}
+        onClick={refreshing.onClick}
         className={({ isActive }) =>
           cn(
             'relative flex h-9 items-center gap-2 rounded-md pr-8 text-sm transition-colors',
+            isActive && 'pr-14',
             'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-chrome-active',
             '[&_svg]:size-4 [&_svg]:shrink-0',
             over && 'ring-2 ring-chrome-active',
@@ -81,6 +89,7 @@ function PlaceRow({
           </>
         )}
       </NavLink>
+      <SidebarRefreshButton to={to} refresh={refresh} state={refreshing} className="right-8" />
       <span className="absolute right-1 top-1/2 -translate-y-1/2 opacity-0 focus-within:opacity-100 group-hover/place:opacity-100">{menu}</span>
     </li>
   )
