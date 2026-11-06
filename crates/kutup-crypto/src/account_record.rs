@@ -216,6 +216,14 @@ pub enum AccountRecordPurpose {
     /// profile version the key derives (32 bytes), the revision the
     /// profile's, so a copy can't be moved to another profile or revision.
     ChatProfileKeyWrap = 16,
+    /// The account head (`account_head`): no object, its revision the head's
+    /// sequence, chained, so the server checks a head's predecessor from the
+    /// header alone.
+    AccountHead = 17,
+    /// A device's own account-head state (`account_head`), never sent to a
+    /// server: its object is the account incarnation, so it opens for no
+    /// other account or incarnation.
+    AccountLocalAnchor = 18,
 }
 
 /// The object of a record whose id the server must not see (a group id, the
@@ -383,11 +391,26 @@ impl AccountRecordPurpose {
                 max_len: 32,
                 chained: false,
             },
+            // A whole sealed head stays within the server's 16 KiB.
+            Self::AccountHead => PurposePolicy {
+                object: ObjectPolicy::None,
+                length: Length::Bucket(256),
+                mutable: true,
+                max_len: crate::account_head::MAX_PADDED_BYTES,
+                chained: true,
+            },
+            Self::AccountLocalAnchor => PurposePolicy {
+                object: ObjectPolicy::Required(32),
+                length: Length::Bucket(256),
+                mutable: false,
+                max_len: crate::account_head::MAX_PADDED_BYTES,
+                chained: false,
+            },
         }
     }
 
     /// Every purpose, for tests and vectors.
-    pub const ALL: [Self; 15] = [
+    pub const ALL: [Self; 17] = [
         Self::PasswordMasterKey,
         Self::RecoveryMasterKey,
         Self::ChatBackupRoot,
@@ -403,6 +426,8 @@ impl AccountRecordPurpose {
         Self::ChatAttachmentLedger,
         Self::JoinedMeeting,
         Self::ChatProfileKeyWrap,
+        Self::AccountHead,
+        Self::AccountLocalAnchor,
     ];
 }
 
@@ -426,6 +451,8 @@ impl TryFrom<u16> for AccountRecordPurpose {
             14 => Ok(Self::ChatAttachmentLedger),
             15 => Ok(Self::JoinedMeeting),
             16 => Ok(Self::ChatProfileKeyWrap),
+            17 => Ok(Self::AccountHead),
+            18 => Ok(Self::AccountLocalAnchor),
             _ => Err(CryptoError::InvalidInput(format!(
                 "unknown account-record purpose {value}"
             ))),

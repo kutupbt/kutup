@@ -14,37 +14,35 @@
 //! A device with no history trusts the first head it reads: nothing can do
 //! better for a device whose only link to the account is the server.
 //!
-//! The head is sealed (XChaCha20-Poly1305) under a key derived from the master
-//! key, bound to the account's key binding and its sequence; value ids and the
-//! writing device are HMAC'd, so the head tells the server nothing it does not
-//! already know.
+//! The head is an account record (`account_record`, purpose `AccountHead`,
+//! docs/plans/w1-account-record.md) under the master key, bound to the
+//! account's key binding; its revision is the head's sequence and its header
+//! names the previous head's digest, so the server checks the chain from the
+//! header alone. Value ids and the writing device are HMAC'd, so the head
+//! tells the server nothing it does not already know. A device's own state
+//! is a record too (`AccountLocalAnchor`), for its account and incarnation.
 
-use crate::primitives::{hash, Aead, Hasher, Kdf, Mac, Suite};
+use crate::primitives::{Hasher, Kdf, Mac, Suite};
 use serde::{Deserialize, Serialize};
 use zeroize::Zeroizing;
 
+use crate::account_record::{self, AccountRecordPurpose, MasterKeyGeneration};
 use crate::error::{CryptoError, Result};
-use crate::key_binding;
 
 const SALT: &[u8] = crate::labels::ACCOUNT_HEAD_V1;
-const SEAL_KEY_INFO: &[u8] = crate::labels::ACCOUNT_HEAD_SEAL_KEY_V1;
 const ID_KEY_INFO: &[u8] = crate::labels::ACCOUNT_HEAD_ID_KEY_V1;
 const VALUE_ID_DOMAIN: &[u8] = crate::labels::ACCOUNT_HEAD_VALUE_V1;
 const WRITER_DOMAIN: &[u8] = crate::labels::ACCOUNT_HEAD_WRITER_V1;
 const SCOPE_DOMAIN: &[u8] = crate::labels::ACCOUNT_HEAD_SCOPE_V1;
-const AAD_DOMAIN: &[u8] = crate::labels::ACCOUNT_HEAD_SEALED_V1;
 const LOCAL_NAME_DOMAIN: &[u8] = crate::labels::ACCOUNT_HEAD_LOCAL_NAME_V1;
-const LOCAL_AAD_DOMAIN: &[u8] = crate::labels::ACCOUNT_HEAD_LOCAL_V1;
-const MAGIC: &[u8; 8] = b"KUTAH1\0\0";
-const LOCAL_MAGIC: &[u8; 8] = b"KUTAL1\0\0";
-const SUITE: u16 = 1;
+const HEAD_PURPOSE: AccountRecordPurpose = AccountRecordPurpose::AccountHead;
+const LOCAL_PURPOSE: AccountRecordPurpose = AccountRecordPurpose::AccountLocalAnchor;
 const NONCE_LEN: usize = 24;
-const TAG_LEN: usize = 16;
-const HEADER_LEN: usize = 8 + 2 + 8 + NONCE_LEN;
+/// The longest padded plaintext of a head or a local state: a whole sealed
+/// head stays within the 16 KiB the server keeps (63 buckets of 256 bytes).
+pub const MAX_PADDED_BYTES: usize = 16 * 1024 - 256;
 /// The most scopes a head lists.
 pub const MAX_SCOPES: usize = 64;
-/// The largest sealed head.
-pub const MAX_SEALED_BYTES: usize = 16 * 1024;
 /// The most values one scope may hold (an index larger than this is refused).
 pub const MAX_SCOPE_VALUES: usize = 1_000_000;
 
@@ -59,21 +57,33 @@ fn is_lower_hex_32(value: &str) -> bool {
             .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
 }
 
-/// The account's head keys, derived from the master key.
+/// The account's head keys: the master key, which heads and local states are
+/// sealed under (as account records), and the key value ids, writers and
+/// local names are HMAC'd with, derived from it.
 pub struct HeadKeys {
-    seal: Zeroizing<[u8; 32]>,
+    master: Zeroizing<[u8; 32]>,
+    generation: MasterKeyGeneration,
     id: Zeroizing<[u8; 32]>,
 }
 
 impl HeadKeys {
+    /// The keys of the master key's first generation (every account's, until
+    /// master-key rotation exists).
     pub fn derive(master_key: &[u8; 32]) -> Result<Self> {
+        Self::derive_at(master_key, MasterKeyGeneration::FIRST)
+    }
+
+    /// The keys of `master_key`, which is the account's at `generation`.
+    pub fn derive_at(master_key: &[u8; 32], generation: MasterKeyGeneration) -> Result<Self> {
         let hkdf = Kdf::new(Suite::V1, SALT, master_key);
-        let mut seal = Zeroizing::new([0u8; 32]);
         let mut id = Zeroizing::new([0u8; 32]);
-        hkdf.expand(SEAL_KEY_INFO, seal.as_mut_slice())
-            .and_then(|_| hkdf.expand(ID_KEY_INFO, id.as_mut_slice()))
+        hkdf.expand(ID_KEY_INFO, id.as_mut_slice())
             .map_err(|_| CryptoError::Backend("account head key".into()))?;
-        Ok(Self { seal, id })
+        Ok(Self {
+            master: Zeroizing::new(*master_key),
+            generation,
+            id,
+        })
     }
 
     fn mac(&self, domain: &[u8], parts: &[&[u8]]) -> [u8; 32] {
@@ -259,27 +269,25 @@ impl AccountHeadV1 {
     }
 }
 
-/// What a head is known by: the SHA-256 of its sealed bytes.
+/// What a head is known by: the SHA-256 of its sealed bytes (the next head's
+/// `previous`, in its plaintext and its record header alike).
 pub fn digest(sealed: &[u8]) -> [u8; 32] {
-    hash(Suite::V1, sealed).to_array()
+    account_record::record_digest(sealed)
 }
 
-fn aad(binding: &str, sequence: u64) -> Result<Vec<u8>> {
-    let binding = key_binding::check(binding).map_err(|_| invalid("key binding is invalid"))?;
-    Ok([
-        MAGIC.as_slice(),
-        &SUITE.to_be_bytes(),
-        AAD_DOMAIN,
-        &(binding.len() as u16).to_be_bytes(),
-        binding.as_bytes(),
-        &sequence.to_be_bytes(),
-    ]
-    .concat())
+fn previous_bytes(head: &AccountHeadV1) -> Result<[u8; 32]> {
+    match &head.previous {
+        None => Ok([0u8; 32]),
+        Some(previous) => hex::decode(previous)
+            .ok()
+            .and_then(|bytes| bytes.try_into().ok())
+            .ok_or_else(|| invalid("previous is invalid")),
+    }
 }
 
-/// Seals `head` for the account whose key binding is `binding`:
-/// `magic ‖ suite ‖ sequence ‖ nonce ‖ ciphertext`. The sequence is in clear
-/// (the server's compare-and-swap reads it) and authenticated.
+/// Seals `head` for the account whose key binding is `binding`: an account
+/// record whose revision is the head's sequence and whose header names the
+/// previous head's digest (zeros at 1).
 pub fn seal(keys: &HeadKeys, binding: &str, head: &AccountHeadV1) -> Result<Vec<u8>> {
     let mut nonce = [0u8; NONCE_LEN];
     crate::primitives::random(&mut nonce);
@@ -305,51 +313,67 @@ fn seal_with_nonce(
 ) -> Result<Vec<u8>> {
     head.validate()?;
     let plain = serde_json::to_vec(head).map_err(|_| invalid("encode"))?;
-    let ciphertext = Aead::new(Suite::V1, keys.seal.as_ref())?
-        .seal_with_nonce(nonce, &aad(binding, head.sequence)?, &plain)
-        .map_err(|_| CryptoError::Backend("account head seal".into()))?;
-    let sealed = [
-        MAGIC.as_slice(),
-        &SUITE.to_be_bytes(),
-        &head.sequence.to_be_bytes(),
-        nonce,
-        &ciphertext,
-    ]
-    .concat();
-    if sealed.len() > MAX_SEALED_BYTES {
+    if plain.len() >= MAX_PADDED_BYTES {
         return Err(invalid("the head is too large"));
     }
-    Ok(sealed)
+    account_record::seal_chained(
+        &plain,
+        keys.master.as_slice(),
+        HEAD_PURPOSE,
+        keys.generation,
+        binding,
+        &[],
+        head.sequence,
+        &previous_bytes(head)?,
+        Some(nonce),
+    )
 }
 
-/// The sequence a sealed head carries, without opening it (the server's view).
+/// What a sealed head's header says, without opening it (the server's view):
+/// its sequence and the digest of the head before it (zeros at 1).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct HeadHeader {
+    pub sequence: u64,
+    pub previous: [u8; 32],
+}
+
+fn header_of(header: account_record::AccountRecordHeader) -> Result<HeadHeader> {
+    match (header.purpose, header.revision, header.previous) {
+        (HEAD_PURPOSE, Some(sequence), Some(previous)) => Ok(HeadHeader { sequence, previous }),
+        _ => Err(invalid("not an account head")),
+    }
+}
+
+/// The sequence a sealed head carries, without opening it.
 pub fn inspect(sealed: &[u8]) -> Result<u64> {
-    if sealed.len() <= HEADER_LEN + TAG_LEN || sealed.len() > MAX_SEALED_BYTES {
-        return Err(invalid("size is invalid"));
-    }
-    if &sealed[..8] != MAGIC || sealed[8..10] != SUITE.to_be_bytes() {
-        return Err(invalid("not an account head"));
-    }
-    let sequence = u64::from_be_bytes(sealed[10..18].try_into().expect("8 bytes"));
-    if sequence == 0 {
-        return Err(invalid("sequence is invalid"));
-    }
-    Ok(sequence)
+    Ok(inspect_header(sealed)?.sequence)
+}
+
+/// A sealed head's sequence and predecessor, without opening it.
+pub fn inspect_header(sealed: &[u8]) -> Result<HeadHeader> {
+    header_of(account_record::inspect(sealed).map_err(|_| invalid("not an account head"))?)
+}
+
+/// What a server checks before it stores a head: a well-formed head of the
+/// account bound by `binding`. Returns its sequence and predecessor, which the
+/// server's compare-and-swap checks against the head it keeps.
+pub fn validate(sealed: &[u8], binding: &str) -> Result<HeadHeader> {
+    header_of(
+        account_record::validate_for(sealed, HEAD_PURPOSE, binding, &[])
+            .map_err(|_| invalid("not this account's head"))?,
+    )
 }
 
 /// Opens a sealed head of the account whose key binding is `binding`.
 pub fn open(keys: &HeadKeys, binding: &str, sealed: &[u8]) -> Result<AccountHeadV1> {
-    let sequence = inspect(sealed)?;
-    let plain = Aead::new(Suite::V1, keys.seal.as_ref())?
-        .open_with_nonce(
-            &sealed[18..HEADER_LEN],
-            &aad(binding, sequence)?,
-            &sealed[HEADER_LEN..],
-        )
-        .map_err(|_| CryptoError::AuthFailed)?;
+    let (plain, sequence, previous) =
+        account_record::open_chained(sealed, keys.master.as_slice(), HEAD_PURPOSE, binding, &[])?;
     let head: AccountHeadV1 = serde_json::from_slice(&plain).map_err(|_| invalid("decode"))?;
     head.validate()?;
-    if head.sequence != sequence || serde_json::to_vec(&head).ok().as_deref() != Some(&plain[..]) {
+    if head.sequence != sequence
+        || previous_bytes(&head)? != previous
+        || serde_json::to_vec(&head).ok().as_deref() != Some(&plain[..])
+    {
         return Err(invalid("the head is not canonical"));
     }
     Ok(head)
@@ -672,8 +696,6 @@ pub fn first(
 
 /// The most entries a device's local log keeps (the newest).
 pub const LOCAL_LOG_LEN: usize = 20;
-/// The largest sealed local state.
-pub const MAX_LOCAL_SEALED_BYTES: usize = 16 * 1024;
 
 /// Something a device notes about its anchor, newest last, so that trusting
 /// a head on first use, or moving to another history, is never silent.
@@ -822,22 +844,19 @@ impl LocalHeadStateV1 {
     }
 }
 
-fn local_aad(binding: &str, incarnation_id: &str) -> Result<Vec<u8>> {
-    let binding = key_binding::check(binding).map_err(|_| invalid("key binding is invalid"))?;
-    Ok([
-        LOCAL_MAGIC.as_slice(),
-        &SUITE.to_be_bytes(),
-        LOCAL_AAD_DOMAIN,
-        &(binding.len() as u16).to_be_bytes(),
-        binding.as_bytes(),
-        incarnation_id.as_bytes(),
-    ]
-    .concat())
+fn incarnation_object(incarnation_id: &str) -> Result<[u8; 32]> {
+    if !is_lower_hex_32(incarnation_id) {
+        return Err(invalid("incarnation id is invalid"));
+    }
+    hex::decode(incarnation_id)
+        .ok()
+        .and_then(|bytes| bytes.try_into().ok())
+        .ok_or_else(|| invalid("incarnation id is invalid"))
 }
 
-/// Seals a device's state for the account bound to `binding`:
-/// `magic ‖ suite ‖ nonce ‖ ciphertext`, bound to the binding and the
-/// incarnation, so it opens for no other account or incarnation.
+/// Seals a device's state for the account bound to `binding`: an account
+/// record whose object is the incarnation, so it opens for no other account
+/// or incarnation.
 pub fn seal_local_state(
     keys: &HeadKeys,
     binding: &str,
@@ -867,20 +886,20 @@ fn seal_local_with_nonce(
 ) -> Result<Vec<u8>> {
     state.validate()?;
     let plain = Zeroizing::new(serde_json::to_vec(state).map_err(|_| invalid("encode"))?);
-    let ciphertext = Aead::new(Suite::V1, keys.seal.as_ref())?
-        .seal_with_nonce(nonce, &local_aad(binding, &state.incarnation_id)?, &plain)
-        .map_err(|_| CryptoError::Backend("account head local seal".into()))?;
-    let sealed = [
-        LOCAL_MAGIC.as_slice(),
-        &SUITE.to_be_bytes(),
-        nonce,
-        &ciphertext,
-    ]
-    .concat();
-    if sealed.len() > MAX_LOCAL_SEALED_BYTES {
+    if plain.len() >= MAX_PADDED_BYTES {
         return Err(invalid("the local state is too large"));
     }
-    Ok(sealed)
+    account_record::seal_suite(
+        account_record::AccountRecordSuiteId::V1,
+        &plain,
+        keys.master.as_slice(),
+        LOCAL_PURPOSE,
+        keys.generation,
+        binding,
+        &incarnation_object(&state.incarnation_id)?,
+        None,
+        nonce,
+    )
 }
 
 /// Opens a device's state for the account bound to `binding`, incarnation
@@ -893,22 +912,13 @@ pub fn open_local_state(
     incarnation_id: &str,
     sealed: &[u8],
 ) -> Result<LocalHeadStateV1> {
-    let header = 8 + 2 + NONCE_LEN;
-    if sealed.len() <= header + TAG_LEN || sealed.len() > MAX_LOCAL_SEALED_BYTES {
-        return Err(invalid("size is invalid"));
-    }
-    if &sealed[..8] != LOCAL_MAGIC || sealed[8..10] != SUITE.to_be_bytes() {
-        return Err(invalid("not a local head state"));
-    }
-    let plain = Zeroizing::new(
-        Aead::new(Suite::V1, keys.seal.as_ref())?
-            .open_with_nonce(
-                &sealed[10..header],
-                &local_aad(binding, incarnation_id)?,
-                &sealed[header..],
-            )
-            .map_err(|_| CryptoError::AuthFailed)?,
-    );
+    let plain = Zeroizing::new(account_record::open_object(
+        sealed,
+        keys.master.as_slice(),
+        LOCAL_PURPOSE,
+        binding,
+        &incarnation_object(incarnation_id)?,
+    )?);
     let state: LocalHeadStateV1 = serde_json::from_slice(&plain).map_err(|_| invalid("decode"))?;
     state.validate()?;
     if state.incarnation_id != incarnation_id {

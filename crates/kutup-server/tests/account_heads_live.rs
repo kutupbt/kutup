@@ -200,6 +200,28 @@ fn the_chain_starts_on_its_basis_and_every_write_follows_it() {
     let r = put_pins(2, 3, Some(&skipped));
     assert_eq!(r.status(), StatusCode::CONFLICT);
     assert_eq!(r.json::<Value>().unwrap()["sequence"], 1);
+    // The next sequence, naming a predecessor that isn't the newest head kept
+    // (a head made on another history): refused from its header alone.
+    let detached = {
+        let mut head = second.0.clone();
+        head.previous = Some("55".repeat(32));
+        b64(&account_head::seal(&chain.keys, &chain.binding, &head).unwrap())
+    };
+    assert_eq!(
+        code(put_pins(2, 3, Some(&detached))),
+        (StatusCode::CONFLICT, json!("head_conflict"))
+    );
+    // Another account's head (its key binding): refused.
+    let foreign = b64(&account_head::seal(
+        &chain.keys,
+        "7d3f1a2b-9c4e-4f6a-8b1d-2e5c7a9f0b3d",
+        &second.0,
+    )
+    .unwrap());
+    assert_eq!(
+        put_pins(2, 3, Some(&foreign)).status(),
+        StatusCode::BAD_REQUEST
+    );
     let second = chain.keep(second);
     assert_eq!(
         put_pins(2, 3, Some(&second)).status(),
@@ -764,4 +786,63 @@ fn a_wipe_starts_the_chain_again_with_nothing_old_in_it() {
         json!({ "head": second, "values": [[folder_id, 1]], "basis": null })
     );
     purge_accounts(&c, &base, &[&user]);
+}
+
+#[test]
+fn two_heads_made_on_one_predecessor_at_once_one_wins() {
+    let Ok(base) = std::env::var("KUTUP_LIVE_SERVER") else {
+        eprintln!("KUTUP_LIVE_SERVER not set; skipping");
+        return;
+    };
+    let c = client();
+    for round in 0..5 {
+        let user = register(&c, &base);
+        let mut chain = Chain::new(&user.binding);
+        let first = chain.keep(chain.make("contacts", &[]));
+        let on = basis(&c, &base, &user);
+        assert_eq!(
+            start(&c, &base, &user, &first, &on).status(),
+            StatusCode::CREATED
+        );
+        // Two devices each add a contact, with the next head made on the
+        // same first head.
+        let writes: Vec<(String, Value)> = (0..2u8)
+            .map(|n| {
+                let uid = format!("urn:uuid:7c1d0e2f-3a4b-4c5d-8e6f-{round:02x}{n:02x}00000000");
+                let mut body = contact(&user, &uid, 1);
+                let (_, sealed) = chain.make("contacts", &[(&uid, 1)]);
+                body["head"] = json!(b64(&sealed));
+                (uid, body)
+            })
+            .collect();
+        let barrier = std::sync::Barrier::new(2);
+        let statuses: Vec<(StatusCode, Value)> = std::thread::scope(|scope| {
+            let runs: Vec<_> = writes
+                .iter()
+                .map(|(_, body)| {
+                    let (c, base, user, barrier) = (&c, &base, &user, &barrier);
+                    scope.spawn(move || {
+                        barrier.wait();
+                        code(
+                            bearer(c.post(format!("{base}/api/contacts")), &user.token)
+                                .json(body)
+                                .send()
+                                .unwrap(),
+                        )
+                    })
+                })
+                .collect();
+            runs.into_iter().map(|run| run.join().unwrap()).collect()
+        });
+        let won = statuses.iter().filter(|(s, _)| s.is_success()).count();
+        let lost = statuses
+            .iter()
+            .filter(|(s, c)| *s == StatusCode::CONFLICT && c == "head_conflict")
+            .count();
+        assert_eq!((won, lost), (1, 1), "round {round}: {statuses:?}");
+        // The chain has exactly the winner's head after the first.
+        let heads = get(&c, &base, &user, "/api/account/heads?from=1");
+        assert_eq!(heads["heads"].as_array().unwrap().len(), 2);
+        purge_accounts(&c, &base, &[&user]);
+    }
 }
