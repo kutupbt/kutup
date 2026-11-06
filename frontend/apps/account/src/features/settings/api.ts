@@ -137,7 +137,10 @@ export interface SessionView {
   id: string
   clientType: string
   parentId: string | null
-  userAgent: string | null
+  /** The browser, parsed at sign-in: family, major version, system. */
+  browser?: string
+  browserMajor?: number
+  os?: string
   createdAt: string
   lastUsedAt: string
   current: boolean
@@ -244,8 +247,10 @@ export interface SecurityEvent {
   thisSession: boolean
   /** The kind of session that made it (`web-account`, `cli`, …), as the session list has it; null for a recovery or an administrator's reset. */
   client: string | null
-  /** That session's User-Agent; null as `client` is. */
-  userAgent: string | null
+  /** That session's browser: family, major version, system; absent as `client` is, or when unknown. */
+  browser?: string
+  browserMajor?: number
+  os?: string
   /** Done by an administrator. */
   byAdmin: boolean
   /** For a name event: the name it was about (the old one, for a rename). */

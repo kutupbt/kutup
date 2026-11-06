@@ -30,16 +30,40 @@ fn current(keys: &OpaqueSetupKeys) -> AppResult<(u16, &[u8; 32])> {
         .ok_or_else(|| AppError::internal("the server key list (OPAQUE_SETUP_KEYS) is empty"))
 }
 
+/// The server key list, set once at start ([`install`]), for code that runs
+/// inside a transaction and has no state to hand (the security log).
+static KEYS: std::sync::OnceLock<OpaqueSetupKeys> = std::sync::OnceLock::new();
+
+/// Keeps the server key list for [`installed`]. At start, once.
+pub fn install(keys: &OpaqueSetupKeys) {
+    let _ = KEYS.set(keys.clone());
+}
+
+/// The key list [`install`] kept; none before the server started (unit tests).
+pub fn installed() -> Option<&'static OpaqueSetupKeys> {
+    KEYS.get()
+}
+
 /// The account's data key, made (wrapped under the current entry) when it has
 /// none yet, and wrapped again under the current entry when an older one
 /// wraps it.
 pub async fn key(pool: &PgPool, keys: &OpaqueSetupKeys, user_id: Uuid) -> AppResult<DataKey> {
+    let mut conn = pool.acquire().await?;
+    key_in(&mut conn, keys, user_id).await
+}
+
+/// [`key`] on a connection, so it runs in the caller's transaction.
+pub async fn key_in(
+    conn: &mut sqlx::PgConnection,
+    keys: &OpaqueSetupKeys,
+    user_id: Uuid,
+) -> AppResult<DataKey> {
     let account = *user_id.as_bytes();
     let (current_id, current_entry) = current(keys)?;
     let stored: Option<Vec<u8>> =
         sqlx::query_scalar("SELECT wrapped FROM account_keys.account_data_keys WHERE user_id = $1")
             .bind(user_id)
-            .fetch_optional(pool)
+            .fetch_optional(&mut *conn)
             .await?;
     let wrapped = match stored {
         Some(wrapped) => wrapped,
@@ -58,13 +82,13 @@ pub async fn key(pool: &PgPool, keys: &OpaqueSetupKeys, user_id: Uuid) -> AppRes
             .bind(current_id as i16)
             .bind(GENERATION as i32)
             .bind(&wrapped)
-            .execute(pool)
+            .execute(&mut *conn)
             .await?;
             sqlx::query_scalar(
                 "SELECT wrapped FROM account_keys.account_data_keys WHERE user_id = $1",
             )
             .bind(user_id)
-            .fetch_one(pool)
+            .fetch_one(&mut *conn)
             .await?
         }
     };
@@ -75,7 +99,15 @@ pub async fn key(pool: &PgPool, keys: &OpaqueSetupKeys, user_id: Uuid) -> AppRes
         ))
     })?;
     if entry_id != current_id {
-        rewrap(pool, user_id, &key, &wrapped, current_id, current_entry).await?;
+        rewrap(
+            &mut *conn,
+            user_id,
+            &key,
+            &wrapped,
+            current_id,
+            current_entry,
+        )
+        .await?;
     }
     Ok(key)
 }
@@ -83,7 +115,7 @@ pub async fn key(pool: &PgPool, keys: &OpaqueSetupKeys, user_id: Uuid) -> AppRes
 /// Wraps `key` again under the current entry, only if the row still holds
 /// `old` (another instance may have done it already).
 async fn rewrap(
-    pool: &PgPool,
+    conn: &mut sqlx::PgConnection,
     user_id: Uuid,
     key: &DataKey,
     old: &[u8],
@@ -101,7 +133,7 @@ async fn rewrap(
     .bind(current_id as i16)
     .bind(&wrapped)
     .bind(old)
-    .execute(pool)
+    .execute(&mut *conn)
     .await?;
     Ok(())
 }
@@ -126,7 +158,16 @@ pub async fn rewrap_some(pool: &PgPool, keys: &OpaqueSetupKeys) -> AppResult<u64
             // this runs, so this is a key changed meanwhile; left as it is.
             continue;
         };
-        rewrap(pool, user_id, &key, &wrapped, current_id, current_entry).await?;
+        let mut conn = pool.acquire().await?;
+        rewrap(
+            &mut conn,
+            user_id,
+            &key,
+            &wrapped,
+            current_id,
+            current_entry,
+        )
+        .await?;
         moved += 1;
     }
     Ok(moved)

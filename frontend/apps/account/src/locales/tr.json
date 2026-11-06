@@ -951,7 +951,9 @@
         "securityEventRetentionDays": "Güvenlik olaylarını sakla (gün)",
         "securityEventRetentionDaysHint": "Her hesabın girişleri ve güvenlik değişiklikleri, en fazla son 500. Hesap sahibi bu süreyi görür.",
         "adminAuditRetentionDays": "Yönetici kaydını sakla (gün)",
-        "adminAuditRetentionDaysHint": "Yöneticilerin yaptıkları, bir hesabın verisini açmak dahil."
+        "adminAuditRetentionDaysHint": "Yöneticilerin yaptıkları, bir hesabın verisini açmak dahil.",
+        "sessionRecordGraceDays": "Biten oturumları sakla (gün)",
+        "sessionRecordGraceDaysHint": "Çıkış yapılmış, başka yerden sonlandırılmış ya da süresi dolmuş oturumlar, kullandıkları tarayıcıyla birlikte."
       },
       "federationLimits": {
         "federationRetryBaseSeconds": "İlk bekleme (saniye)",
