@@ -7,7 +7,7 @@ use base64::engine::general_purpose::STANDARD;
 use base64::Engine as _;
 use serde::{Deserialize, Serialize};
 
-use kutup_crypto::server_data::{inspect_wrapped, DataKey, Field};
+use kutup_crypto::server_data::{destruction_subject, inspect_wrapped, DataKey, Field};
 
 const PATH: &str = concat!(
     env!("CARGO_MANIFEST_DIR"),
@@ -31,6 +31,8 @@ struct Vectors {
     row: String,
     value: String,
     sealed: String,
+    /// The account as the destruction log names it under `entry`.
+    destruction_subject: String,
     /// Each must be refused.
     refused: Vec<Refused>,
 }
@@ -100,6 +102,7 @@ fn write_vectors() {
         row: ROW.into(),
         value: STANDARD.encode(value),
         sealed: STANDARD.encode(&sealed),
+        destruction_subject: STANDARD.encode(destruction_subject(&ENTRY, &ACCOUNT).unwrap()),
         refused: vec![
             refused("a flipped magic byte", "wrap", flipped(&wrapped, 0)),
             refused("another entry id named", "wrap", flipped(&wrapped, 9)),
@@ -145,6 +148,10 @@ fn checked_in_vectors_hold() {
     assert_eq!(
         &*key.open(&field(&v.row, &ACCOUNT), &sealed).unwrap(),
         &value[..]
+    );
+    assert_eq!(
+        STANDARD.encode(destruction_subject(&ENTRY, &ACCOUNT).unwrap()),
+        v.destruction_subject
     );
     // Another account can't unwrap it, nor open the field.
     assert!(DataKey::unwrap(&wrapped, &[0x42; 16], |_| Some(&ENTRY)).is_err());

@@ -18,7 +18,10 @@
 //! - sealed field: `suite (u16) ‖ generation (u32) ‖ nonce (24) ‖
 //!   XChaCha20-Poly1305(value)`, under a subkey of the data key, the AAD the
 //!   header and the field's table, column, row and account, so a value can't
-//!   move to another row or account.
+//!   move to another row or account;
+//! - destruction subject: 32 bytes, HKDF of the entry expanded with the label
+//!   and the account id, so the destruction log names an account only to
+//!   whoever holds the entry.
 
 use zeroize::Zeroizing;
 
@@ -30,6 +33,7 @@ const KEK_INFO: &[u8] = crate::labels::SERVER_DATA_KEK_V1;
 const WRAP_AAD: &[u8] = crate::labels::SERVER_DATA_KEY_WRAP_V1;
 const FIELD_KEY_INFO: &[u8] = crate::labels::SERVER_DATA_FIELD_KEY_V1;
 const FIELD_AAD: &[u8] = crate::labels::SERVER_DATA_FIELD_V1;
+const SUBJECT_INFO: &[u8] = crate::labels::SERVER_DESTRUCTION_SUBJECT_V1;
 const WRAP_MAGIC: &[u8; 8] = b"KUTSDK1\0";
 const FIELD_SUITE: u16 = 1;
 const NONCE_LEN: usize = 24;
@@ -203,6 +207,14 @@ pub fn inspect_wrapped(wrapped: &[u8]) -> Result<(u16, u32)> {
     Ok((entry_id, generation))
 }
 
+/// The account as the destruction log names it under one entry of the server
+/// key list (docs/plans/server-personal-data.md, A7): a keyed hash of its id,
+/// which a restore computes again for the accounts it holds.
+pub fn destruction_subject(entry: &[u8; 32], account_id: &[u8; 16]) -> Result<[u8; 32]> {
+    let info = [SUBJECT_INFO, account_id.as_slice()].concat();
+    Ok(*expand(entry, &info)?)
+}
+
 /// Where a sealed value lives: its table, column and row, and the account it
 /// belongs to.
 pub struct Field<'a> {
@@ -244,6 +256,14 @@ mod tests {
             row,
             account_id: &ACCOUNT,
         }
+    }
+
+    #[test]
+    fn a_destruction_subject_is_the_accounts_under_its_entry() {
+        let subject = destruction_subject(&ENTRY, &ACCOUNT).unwrap();
+        assert_eq!(destruction_subject(&ENTRY, &ACCOUNT).unwrap(), subject);
+        assert_ne!(destruction_subject(&ENTRY, &[0x12; 16]).unwrap(), subject);
+        assert_ne!(destruction_subject(&[0x23; 32], &ACCOUNT).unwrap(), subject);
     }
 
     #[test]

@@ -538,7 +538,11 @@ pub async fn prune_ended(pool: &PgPool, days: i64) -> AppResult<u64> {
                 < now() - make_interval(days => $1::int)
             AND NOT EXISTS (SELECT 1 FROM auth_sessions c
                              WHERE c.parent_session_id = s.id
-                               AND c.revoked_at IS NULL AND c.expires_at > now())",
+                               AND c.revoked_at IS NULL AND c.expires_at > now())
+            -- A legal hold keeps everything of its account
+            -- (docs/plans/server-personal-data.md, A5).
+            AND NOT EXISTS (SELECT 1 FROM users u
+                             WHERE u.id = s.user_id AND u.legal_hold_reference IS NOT NULL)",
     )
     .bind(days)
     .execute(pool)

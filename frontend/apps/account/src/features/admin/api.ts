@@ -17,6 +17,7 @@ import type {
   RegistrationCode,
   RegistrationCodeUse,
   SignedUpWith,
+  SuspendedReason,
   UserRow,
 } from '@kutup/session/api-types'
 
@@ -105,7 +106,9 @@ export function useCreateUser() {
 }
 
 export type UserPatch = Partial<{
+  /** False suspends (with `suspendedReason`); true makes a suspended or closing account active. */
   isActive: boolean
+  suspendedReason: SuspendedReason
   isAdmin: boolean
   storageQuotaBytes: number
 }>
@@ -143,6 +146,22 @@ export function useWipeUser() {
   return useAdminMutation(async ({ id, tempPassword, adminPassword }: ResetInput) => {
     const grant = await resetGrant(id, adminPassword.take())
     await api.post(`/admin/users/${encodeURIComponent(id)}/wipe`, { grant, ...(await temporaryPassword(tempPassword, { grant })) })
+  })
+}
+
+/** Closes the account: deleted after the waiting period unless kept. */
+export function useCloseUser() {
+  return useAdminMutation(async (id: string) => {
+    await api.post(`/admin/users/${encodeURIComponent(id)}/close`)
+  })
+}
+
+/** Sets (or, with `reference` null, clears) a legal hold. */
+export function useLegalHold() {
+  return useAdminMutation(async ({ id, reference }: { id: string; reference: string | null }) => {
+    const path = `/admin/users/${encodeURIComponent(id)}/legal-hold`
+    if (reference === null) await api.delete(path)
+    else await api.put(path, { reference })
   })
 }
 

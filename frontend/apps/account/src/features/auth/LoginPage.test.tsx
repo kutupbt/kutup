@@ -7,6 +7,8 @@ const flows = vi.hoisted(() => ({
   signIn: vi.fn(),
   completeTotp: vi.fn(),
   abandonTotp: vi.fn(),
+  keepAccount: vi.fn(),
+  abandonClosing: vi.fn(),
 }))
 vi.mock('./flows', () => flows)
 vi.mock('@kutup/session/store', () => ({ useSession: () => null }))
@@ -75,5 +77,45 @@ describe('the code step', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Verify' }))
     await screen.findByLabelText('Username', { exact: true })
     expect(flows.abandonTotp).toHaveBeenCalledWith(challenge)
+  })
+})
+
+describe('a closing account', () => {
+  const offer = { closesAt: '2026-11-20T10:00:00Z', grant: 'kg1_x', signIn: {} }
+
+  async function reachOffer() {
+    flows.signIn.mockResolvedValue({ kind: 'closing', offer })
+    const view = render(
+      <MemoryRouter>
+        <LoginPage />
+      </MemoryRouter>,
+    )
+    fireEvent.change(screen.getByLabelText('Username', { exact: true }), { target: { value: 'alice' } })
+    fireEvent.change(screen.getByLabelText('Password', { exact: true }), { target: { value: 'pw' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Sign in' }))
+    await screen.findByText('This account is closing')
+    return view
+  }
+
+  it('is offered to keep it, and keeping it signs in', async () => {
+    await reachOffer()
+    flows.keepAccount.mockResolvedValue({ kind: 'signedIn' })
+    fireEvent.click(screen.getByRole('button', { name: 'Keep my account' }))
+    await waitFor(() => expect(flows.keepAccount).toHaveBeenCalledWith(offer))
+  })
+
+  it('going back ends the waiting sign-in', async () => {
+    await reachOffer()
+    fireEvent.click(screen.getByRole('button', { name: 'Use a different account' }))
+    await screen.findByLabelText('Username', { exact: true })
+    expect(flows.abandonClosing).toHaveBeenCalledWith(offer)
+  })
+
+  it('an offer that ran out starts over', async () => {
+    await reachOffer()
+    flows.keepAccount.mockRejectedValue(Object.assign(new Error('403'), { code: 'grantInvalid' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Keep my account' }))
+    await screen.findByLabelText('Username', { exact: true })
+    expect(screen.getByText('The sign-in ended before it finished. Sign in again.')).toBeTruthy()
   })
 })

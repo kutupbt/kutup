@@ -1,0 +1,28 @@
+DROP TABLE account_keys.destruction_events;
+DELETE FROM auth_grants WHERE purpose IN ('close', 'keep');
+ALTER TABLE auth_grants DROP CONSTRAINT auth_grants_check1;
+ALTER TABLE auth_grants ADD CONSTRAINT auth_grants_check1
+    CHECK ((purpose = 'recovery') = (session_id IS NULL));
+ALTER TABLE auth_grants DROP CONSTRAINT auth_grants_purpose_check;
+ALTER TABLE auth_grants ADD CONSTRAINT auth_grants_purpose_check CHECK (purpose = ANY (ARRAY[
+    'pass', 'passwordChange', 'totp', 'adminReset', 'recovery', 'rotate', 'rename']));
+DELETE FROM account_security_events WHERE kind IN ('accountClosing', 'accountKept');
+ALTER TABLE account_security_events DROP CONSTRAINT account_security_events_kind_check;
+ALTER TABLE account_security_events ADD CONSTRAINT account_security_events_kind_check CHECK (kind = ANY (ARRAY[
+    'passwordChange', 'recovery', 'rotate', 'adminReset', 'accountReset', 'rename',
+    'nameDropped', 'nameClosed', 'nameFreed', 'domainLost',
+    'twoFactorOn', 'twoFactorOff', 'recoveryCodeUsed', 'recoveryCodesRenewed',
+    'securityKeyAdded', 'securityKeyRemoved', 'securityKeyCompromised',
+    'authenticatorOn', 'authenticatorOff',
+    'orgJoined', 'orgLeft', 'orgRemoved', 'orgAccessGranted', 'orgAccessRevoked',
+    'orgReset', 'orgSignIn',
+    'signIn', 'signInFailedPassword', 'signInFailed2fa', 'signOut',
+    'sessionRevoked', 'allSessionsRevoked', 'adminAccess']));
+DROP INDEX users_closing_due;
+ALTER TABLE users DROP COLUMN is_active;
+ALTER TABLE users ADD COLUMN is_active boolean NOT NULL DEFAULT true;
+UPDATE users SET is_active = (state = 'active');
+ALTER TABLE users
+    DROP COLUMN state, DROP COLUMN suspended_reason, DROP COLUMN state_changed_at,
+    DROP COLUMN closing_by, DROP COLUMN closes_at, DROP COLUMN purpose_ended_at,
+    DROP COLUMN legal_hold_reference, DROP COLUMN legal_hold_at, DROP COLUMN legal_hold_by;

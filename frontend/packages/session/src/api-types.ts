@@ -68,13 +68,25 @@ export interface FileRow {
   contentHash?: string
 }
 
+export type SuspendedReason = 'admin' | 'operator_order' | 'security'
+
 export interface UserRow {
   id: string
   username: string
   storageQuotaBytes: number
   storageUsedBytes: number
   isAdmin: boolean
+  /** The state is `active`. */
   isActive: boolean
+  /** `active`, `suspended` or `closing` (docs/plans/server-personal-data.md, A5). */
+  state: 'active' | 'suspended' | 'closing'
+  /** Why a suspended account is. */
+  suspendedReason?: SuspendedReason
+  /** When a closing account is deleted. */
+  closesAt?: string
+  /** A legal hold's reference: while set, nothing deletes the account. */
+  legalHoldReference?: string
+  legalHoldAt?: string
   totpEnabled: boolean
   /**
    * Still on the admin-issued temp password — no key material yet. Gates the

@@ -13,8 +13,11 @@
 # account_keys, docs/plans/server-personal-data.md, A2) are dumped apart, under
 # "<prefix>-keys", and kept only `key_backup_keep_days` (a site setting,
 # default 7): a deleted account's key is then in no copy, so what was sealed
-# under it can't be read from any backup. A restore takes the keys from the
-# newest key dump, whichever database dump it restores (docs/self-hosting.md). A dump is encrypted before it leaves
+# under it can't be read from any backup. The schema also holds the
+# destruction log (A7). A restore takes the keys and the log from the newest
+# key dump, whichever database dump it restores, and the server, at start,
+# deletes again the accounts the log says were deleted since
+# (docs/self-hosting.md). A dump is encrypted before it leaves
 # this machine with KUTUP_BACKUP_PASSPHRASE from .env. Keep a copy of that
 # passphrase somewhere else: without it the backups cannot be read, and it
 # is lost with this machine otherwise.
@@ -112,7 +115,8 @@ chmod a+rX "$work_dir" "$work_dir/$name"
 s3 s3 cp --only-show-errors "/work/$name" "s3://$bucket/$prefix/$name"
 echo "backup: stored $prefix/$name ($size bytes)"
 
-# The account data keys, apart (an empty schema still dumps).
+# The account data keys and the destruction log, apart (an empty schema
+# still dumps).
 key_name="kutup-keys-$(date -u +%Y%m%dT%H%M%SZ).dump.enc"
 docker compose exec -T postgres pg_dump -U "${database_user:-kutup}" -d "${database:-kutup}" -Fc \
   --schema=account_keys > "$work_dir/keys.dump"

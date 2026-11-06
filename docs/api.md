@@ -76,6 +76,10 @@ Specific codes, where an app does something particular (a test in
 | `idTaken` | 409 | Creating a group: the id the browser drew is some group's: draw another |
 | `noAccountKey` | 400 | A shared mailbox's key share for an account not set up yet (no account keys to seal it to) |
 | `grantInvalid` | 403 | A one-time grant that does not fit: unknown, used, expired, for another purpose, account or session (one answer for all): prove the password again |
+| `lastAdmin` | 403 | The last usable administrator can't close their own account: make someone else an administrator first |
+| `accountClosing` | 409 | The account is closing (docs/plans/server-personal-data.md, A5): keep it before suspending it, or it is closing already |
+| `accountDeleting` | 409 | A closing account past its date is being deleted and can't be kept |
+| `legalHold` | 409 | The account is under a legal hold: nothing of it is deleted until the hold is lifted |
 | `opaqueKeyStale` | 409 | An OPAQUE record made against a setup that is no longer the server's current one: register again |
 | `opaqueKeyMissing` | 500 | The account's record names an OPAQUE setup whose key is not in `OPAQUE_SETUP_KEYS`: the operator restores the key (the account can recover with its phrase meanwhile) |
 | `keyBindingTaken` | 409 | The key binding drawn for a new record is another account's: draw another |
@@ -1115,6 +1119,34 @@ receiving nothing.
   `POST /api/admin/names/:name/free` (free now) → `204`; recorded on the
   account as `nameClosed` / `nameFreed`.
 
+### POST /api/user/close
+
+Ask for this account to be deleted (docs/plans/server-personal-data.md, A5).
+It is `closing` for `account_closing_days` (default 14), then deleted with
+everything in it; every sign-in, this one included, ends now. A sign-in before
+then is offered to keep it (`POST /api/auth/keep`). Recorded as
+`accountClosing`.
+
+**Auth:** Bearer JWT
+
+**Request body:** `{"grant": "kg1_…"}`: a reauth grant for `close`.
+
+**Response:** `200 OK` `{"closesAt": "2026-11-20T10:00:00Z"}`. `403
+grantInvalid`; `403` for the break-glass admin; `403 lastAdmin` for the last
+usable admin.
+
+### POST /api/auth/keep
+
+A sign-in of a closing account that passed every step answers, instead of a
+session, `{"userId", "username", "closing": {"closesAt", "grant"}}`: the grant
+(purpose `keep`, minutes, once) keeps the account here. The account is active
+again (`accountKept`), and the answer is the sign-in's, with the session.
+
+**Request body:** `{"grant": "kg1_…"}`, with `X-Kutup-Client`.
+
+**Response:** `200 OK`, as a sign-in; `403 grantInvalid`, also once the
+account's date has passed (it is being deleted).
+
 ### GET /api/user/security-events
 
 What changed the caller's sign-in, newest first: a new password, a recovery, a
@@ -1156,7 +1188,9 @@ one that is not one of the caller's events is `400`: start from the first page)
   `accountReset`, the name and two-step kinds, and `signIn`,
   `signInFailedPassword` (only when the sign-in named this account),
   `signInFailed2fa`, `signOut`, `sessionRevoked`, `allSessionsRevoked`,
-  `adminAccess`. More kinds will come; show an unknown one generally.
+  `adminAccess`, `accountClosing` (the owner asked for the account to be
+  deleted), `accountKept`. More kinds will come; show an unknown one
+  generally.
 - `count`: how many times it happened. A wrong password, a wrong second step
   and an administrator's view within ten minutes of the same kind's last one
   are counted into it.
@@ -5046,12 +5080,22 @@ List all registered users.
     "storageUsedBytes": 524288000,
     "isAdmin": false,
     "isActive": true,
+    "state": "closing",
+    "closesAt": "2026-11-20T10:00:00Z",
+    "legalHoldReference": "case 2026/17",
+    "legalHoldAt": "2026-11-06T09:00:00Z",
     "totpEnabled": false,
     "createdAt": "2026-03-14T12:00:00Z",
     "isProtected": false
   }
 ]
 ```
+
+`state` is `active`, `suspended` (with `suspendedReason`: `admin`,
+`operator_order` or `security`) or `closing` (with `closesAt`, when it is
+deleted); `isActive` is `state == "active"` (docs/plans/server-personal-data.md,
+A5). `legalHoldReference` and `legalHoldAt` are present while a legal hold is
+set.
 
 `isProtected` is `true` for the break-glass admin (the account from the `ADMIN_ACCOUNT` env var, known by its username). Protected users cannot be demoted, disabled, or deleted — the relevant mutations below return `403`.
 
@@ -5095,12 +5139,17 @@ Update a user. All fields are optional; only the ones present in the request are
 ```json
 {
   "storageQuotaBytes": 21474836480,
-  "isActive": true,
+  "isActive": false,
+  "suspendedReason": "operator_order",
   "isAdmin": false
 }
 ```
 
-`isAdmin` promotes/demotes the user. The change is reflected in JWT claims on the user's next token refresh.
+`isActive: false` suspends the account (`suspendedReason`, default `admin`);
+its sign-ins end. A closing account is `409 accountClosing`: keep it first.
+`isActive: true` makes a suspended account active again, and keeps a closing
+one until its date (`409 accountDeleting` after: the closing job may be
+deleting it; a held account can still be kept). `isAdmin` promotes/demotes the user. The change is reflected in JWT claims on the user's next token refresh.
 
 **Response:** `200 OK` `{"message": "updated"}`. `403` if the request would demote or disable the break-glass admin; `400` if it would leave zero usable admins.
 
@@ -5108,11 +5157,46 @@ Update a user. All fields are optional; only the ones present in the request are
 
 ### DELETE /api/admin/users/:id
 
-Delete a user and all their data.
+Delete a user and all their data, now: everything it holds, bytes included,
+then its row, with its account data key. A destruction event names it only by
+keyed hashes (docs/plans/server-personal-data.md, A7).
 
 **Auth:** Bearer JWT (admin)
 
-**Response:** `204 No Content`. `403` if the target is the break-glass admin.
+**Response:** `204 No Content`. `403` if the target is the break-glass admin;
+`409 legalHold` while the account is under a legal hold.
+
+---
+
+### POST /api/admin/users/:id/close
+
+Close the account: every sign-in ends, and it is deleted after
+`account_closing_days` (a Privacy and retention setting, default 14) unless it
+is kept, by its owner at sign-in or here (`PUT` with `isActive: true`).
+Recorded as `user.close`.
+
+**Auth:** Bearer JWT (admin)
+
+**Response:** `200 OK` `{"closesAt": "2026-11-20T10:00:00Z"}`. `403` for the
+break-glass admin; `400` for the last usable admin; `409 accountClosing` if it
+is closing already.
+
+---
+
+### PUT /api/admin/users/:id/legal-hold · DELETE /api/admin/users/:id/legal-hold
+
+Set (or change) and lift a legal hold. While it is set nothing deletes the
+account or anything of it: the closing job waits, an admin delete or reset is
+`409 legalHold`, and the retention jobs pass its sessions, security events and
+admin-log rows by. Recorded as `user.legalHold.set` / `user.legalHold.clear`,
+with the reference.
+
+**Auth:** Bearer JWT (admin)
+
+**Request body (PUT):** `{"reference": "case 2026/17"}` (1–200 characters).
+
+**Response:** `204 No Content`; `400` for an empty or long reference; `404`
+for an unknown account.
 
 ---
 

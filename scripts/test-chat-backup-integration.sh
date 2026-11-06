@@ -118,6 +118,14 @@ KUTUP_LIVE_SERVER="http://127.0.0.1:$port" \
   KUTUP_LIVE_ADMIN="$test_admin_username:$test_admin_password" \
   KUTUP_LIVE_DATABASE_URL="postgres://$POSTGRES_USER:$POSTGRES_PASSWORD@127.0.0.1:$db_port/$POSTGRES_DB" \
   cargo test -p kutup-server --test account_data_live -- --nocapture
+# An account's end (docs/plans/server-personal-data.md, A5 and A7): closing,
+# keeping, the legal hold, the destruction log; and a restore replaying it.
+KUTUP_LIVE_SERVER="http://127.0.0.1:$port" \
+  KUTUP_LIVE_ADMIN="$test_admin_username:$test_admin_password" \
+  KUTUP_LIVE_DATABASE_URL="postgres://$POSTGRES_USER:$POSTGRES_PASSWORD@127.0.0.1:$db_port/$POSTGRES_DB" \
+  cargo test -p kutup-server --test account_closing_live -- --nocapture
+KUTUP_LIVE_DATABASE_URL="postgres://$POSTGRES_USER:$POSTGRES_PASSWORD@127.0.0.1:$db_port/$POSTGRES_DB" \
+  cargo test -p kutup-server --bin kutup-server destruction_events::tests::live_ -- --nocapture
 # The Photos library record (docs/plans/photos.md): this account's chain only.
 KUTUP_LIVE_SERVER="http://127.0.0.1:$port" \
   cargo test -p kutup-server --test photos_library_live -- --nocapture

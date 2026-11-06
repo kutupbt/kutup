@@ -201,7 +201,13 @@ fn check(
 /// so the chain stays whole). Returns how many.
 pub async fn prune(pool: &PgPool, days: i64) -> AppResult<u64> {
     Ok(sqlx::query(
-        "DELETE FROM admin_audit_log WHERE occurred_at < now() - make_interval(days => $1::int)",
+        "DELETE FROM admin_audit_log
+          WHERE occurred_at < now() - make_interval(days => $1::int)
+            -- A legal hold keeps its account's rows (A5), and the chain
+            -- stays whole: nothing from the oldest held row on goes.
+            AND id < COALESCE((SELECT min(a.id) FROM admin_audit_log a
+                                 JOIN users u ON u.id = a.target_user_id
+                                WHERE u.legal_hold_reference IS NOT NULL), 9223372036854775807)",
     )
     .bind(days)
     .execute(pool)

@@ -76,6 +76,10 @@ pub enum Kind {
     AllSessionsRevoked,
     /// An administrator opened this account's data in the admin console.
     AdminAccess,
+    /// The owner asked for the account to be deleted; it is closing.
+    AccountClosing,
+    /// A closing account was kept.
+    AccountKept,
 }
 
 impl Kind {
@@ -107,6 +111,8 @@ impl Kind {
             Kind::SessionRevoked => "sessionRevoked",
             Kind::AllSessionsRevoked => "allSessionsRevoked",
             Kind::AdminAccess => "adminAccess",
+            Kind::AccountClosing => "accountClosing",
+            Kind::AccountKept => "accountKept",
         }
     }
 }
@@ -225,11 +231,14 @@ pub async fn record_folded(pool: &sqlx::PgPool, user_id: Uuid, kind: Kind) -> Ap
 pub async fn prune(pool: &sqlx::PgPool, days: i64) -> AppResult<u64> {
     let gone = sqlx::query(
         "DELETE FROM account_security_events e
-          WHERE e.at < now() - make_interval(days => $1::int)
-             OR e.id IN (SELECT id FROM (
-                    SELECT id, row_number() OVER (PARTITION BY user_id ORDER BY at DESC, id DESC) AS n
-                      FROM account_security_events) ranked
-                  WHERE ranked.n > $2)",
+          WHERE (e.at < now() - make_interval(days => $1::int)
+                 OR e.id IN (SELECT id FROM (
+                        SELECT id, row_number() OVER (PARTITION BY user_id ORDER BY at DESC, id DESC) AS n
+                          FROM account_security_events) ranked
+                      WHERE ranked.n > $2))
+            -- A legal hold keeps everything of its account (A5).
+            AND NOT EXISTS (SELECT 1 FROM users u
+                             WHERE u.id = e.user_id AND u.legal_hold_reference IS NOT NULL)",
     )
     .bind(days)
     .bind(KEEP)
