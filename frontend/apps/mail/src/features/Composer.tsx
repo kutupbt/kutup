@@ -56,6 +56,7 @@ import { fontFamily, plainToHtml, wrapHtml, type ComposerLook } from './composer
 import { ScheduleSend } from './ScheduleSend'
 import { isAddress } from './recipients'
 import { isNoReplyAddress, mentionedAttachment, ownWords } from './sendChecks'
+import { sanitizeSignature } from '@kutup/mail-core/sanitize'
 import {
   AlertDialog,
   AlertDialogCancel,
@@ -367,7 +368,12 @@ function ComposerPanel({ base, target }: { base: MailAccount; target: ComposerTa
   const sendAsChoices = (groups.data ?? []).filter((group) => group.kind === 'shared' && group.myCanSendAs)
   const [fromGroup, setFromGroup] = useState<string | undefined>(target.fromGroup)
   const from = sendAsChoices.find((group) => group.id === fromGroup)
-  const start = useMemo(() => initial(base, target, t, i18n.language), [base, target, t, i18n.language])
+  // Opened as a shared mailbox: its signature, not the person's.
+  const start = useMemo(() => {
+    const group = target.fromGroup ? sendAsChoices.find((g) => g.id === target.fromGroup) : undefined
+    return initial(group ? { ...base, signature: sanitizeSignature(group.signature) } : base, target, t, i18n.language)
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- the mailboxes as the composer opened
+  }, [base, target, t, i18n.language])
   const [to, setTo] = useState(start.draft.to)
   const [cc, setCc] = useState(start.draft.cc)
   const [bcc, setBcc] = useState(start.draft.bcc)
@@ -469,18 +475,26 @@ function ComposerPanel({ base, target }: { base: MailAccount; target: ComposerTa
   /** Proton's From: an address of the account's, or a shared mailbox. */
   const chooseFrom = (value: string) => {
     const [kind, id] = [value.slice(0, value.indexOf(':')), value.slice(value.indexOf(':') + 1)]
+    // The new From's signature, while nothing is written yet.
+    const restart = (signed: MailAccount) => {
+      if (editor && !plain && pristine.current !== null && editor.getHTML() === pristine.current) {
+        editor.commands.setContent(initial(signed, target, t, i18n.language).html)
+        pristine.current = editor.getHTML()
+      }
+    }
     if (kind === 'group') {
+      const group = sendAsChoices.find((g) => g.id === id)
+      if (!group || id === fromGroup) return
       setFromGroup(id)
+      restart({ ...account, signature: sanitizeSignature(group.signature) })
       return
     }
+    const wasGroup = fromGroup !== undefined
     setFromGroup(undefined)
     const sender = base.senders.find((s) => s.addressId === id)
-    if (!sender || id === senderId) return
+    if (!sender || (id === senderId && !wasGroup)) return
     setSenderId(id)
-    if (editor && !plain && pristine.current !== null && editor.getHTML() === pristine.current) {
-      editor.commands.setContent(initial(asSender(base, sender), target, t, i18n.language).html)
-      pristine.current = editor.getHTML()
-    }
+    restart(asSender(base, sender))
   }
 
   // The editor for effects that run once (a saved draft's images).
@@ -689,7 +703,7 @@ function ComposerPanel({ base, target }: { base: MailAccount; target: ComposerTa
     }
     if (!confirmed.includes('noSubject') && !subject.trim()) return { check: 'noSubject' }
     if (!confirmed.includes('noAttachment') && !attachments.some((a) => !a.publicKey)) {
-      const words = ownWords(plain ? { plain: plainText } : { html: editor?.getHTML() ?? '' }, account.signature ?? undefined)
+      const words = ownWords(plain ? { plain: plainText } : { html: editor?.getHTML() ?? '' }, (from ? sanitizeSignature(from.signature) : account.signature) || undefined)
       const keyword = mentionedAttachment(`${subject} ${words}`)
       if (keyword) return { check: 'noAttachment', detail: keyword }
     }

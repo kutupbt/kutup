@@ -54,6 +54,9 @@ pub struct MailGroup {
     /// with a new signer (a manager hands over, or an administrator starts a
     /// new chain).
     pub needs_new_signer: bool,
+    /// A shared mailbox's signature (rich text, as an address's own), which
+    /// the composer starts with when someone writes as it; empty for none.
+    pub signature: String,
 }
 
 #[derive(Debug, Serialize, ToSchema, sqlx::FromRow)]
@@ -92,7 +95,7 @@ const GROUP_COLUMNS: &str = "g.id, g.address, g.display_name, g.description, g.k
     (SELECT role FROM mail_group_members r WHERE r.group_id = g.id AND r.user_id = $1) AS my_role,
     COALESCE((SELECT r.can_send_as OR r.role IN ('owner', 'manager') FROM mail_group_members r
                WHERE r.group_id = g.id AND r.user_id = $1), false) AS my_can_send_as,
-    g.needs_new_signer";
+    g.needs_new_signer, g.signature";
 
 async fn group_row(state: &AppState, caller: Uuid, id: Uuid) -> AppResult<MailGroup> {
     sqlx::query_as(&format!(
@@ -319,6 +322,8 @@ pub struct UpdateMailGroup {
     pub display_name: Option<String>,
     pub description: Option<String>,
     pub post_policy: Option<String>,
+    /// A shared mailbox's signature; 10 KB at most, empty to remove it.
+    pub signature: Option<String>,
 }
 
 fn check_text(value: &Option<String>, max: usize, field: &str) -> AppResult<()> {
@@ -337,6 +342,16 @@ async fn apply_update(
 ) -> AppResult<()> {
     check_text(&change.display_name, 200, "displayName")?;
     check_text(&change.description, 1000, "description")?;
+    if let Some(signature) = &change.signature {
+        if group.kind != "shared" && !signature.is_empty() {
+            return Err(AppError::bad_request(
+                "only a shared mailbox is written as, so only it has a signature",
+            ));
+        }
+        if signature.len() > crate::handlers::mail_identity::MAX_SIGNATURE_BYTES {
+            return Err(AppError::bad_request("a signature is 10 KB at most"));
+        }
+    }
     if let Some(policy) = &change.post_policy {
         if !POST_POLICIES.contains(&policy.as_str()) {
             return Err(AppError::bad_request(
@@ -351,13 +366,15 @@ async fn apply_update(
     }
     sqlx::query(
         "UPDATE mail_groups SET display_name = COALESCE($2, display_name),
-                description = COALESCE($3, description), post_policy = COALESCE($4, post_policy)
+                description = COALESCE($3, description), post_policy = COALESCE($4, post_policy),
+                signature = COALESCE($5, signature)
           WHERE id = $1",
     )
     .bind(group.id)
     .bind(change.display_name.as_deref().map(str::trim))
     .bind(change.description.as_deref().map(str::trim))
     .bind(&change.post_policy)
+    .bind(change.signature.as_deref())
     .execute(&state.pool)
     .await?;
     Ok(())
@@ -398,6 +415,7 @@ pub async fn update_group(
     apply_update(&state, &group, &change).await?;
     audit(&state.pool, &user.user_id, "mail_group.update", None, json!({ "groupId": group.id, "address": group.address, "change": {
         "displayName": change.display_name, "description": change.description, "postPolicy": change.post_policy,
+        "signature": change.signature.is_some(),
     } })).await;
     Ok(Json(detail(&state, user_id, id).await?))
 }
@@ -1242,6 +1260,8 @@ pub async fn admin_update(
             display_name: change.display_name.clone(),
             description: change.description.clone(),
             post_policy: change.post_policy.clone(),
+            // Set in Mail by the mailbox's owners and managers.
+            signature: None,
         },
     )
     .await?;

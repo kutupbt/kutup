@@ -14,7 +14,7 @@ use crate::middleware::AuthUser;
 use crate::AppState;
 
 const MAX_NAME_CHARS: usize = 100;
-const MAX_SIGNATURE_BYTES: usize = 10_000;
+pub(crate) const MAX_SIGNATURE_BYTES: usize = 10_000;
 
 #[derive(Debug, Serialize, ToSchema)]
 #[serde(rename_all = "camelCase")]

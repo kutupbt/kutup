@@ -650,7 +650,10 @@
     "signatureTooLong": "The signature is too long (10 KB at most).",
     "addLink": "Add link",
     "nameAndSignature": "Display name and signature",
-    "address": "Address"
+    "address": "Address",
+    "sharedSignatures": "Shared mailboxes",
+    "sharedSignaturesHint": "The signature a message starts with when someone writes as the mailbox. Owners and managers set it.",
+    "sharedSignatureOf": "Signature of {{name}}"
   },
   "autoReply": {
     "title": "Auto-reply",

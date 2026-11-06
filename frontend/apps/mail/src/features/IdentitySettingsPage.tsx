@@ -1,8 +1,10 @@
+import { useQueryClient } from '@tanstack/react-query'
 import { useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 import { defaultAddressId, useOwnAddresses } from '@kutup/mail-core/addresses'
 import { useMailIdentity, useUpdateMailIdentity } from '@kutup/mail-core/api'
+import { groupsKey, updateGroup, useMyGroups, type MailGroup } from '@kutup/mail-core/groups'
 import { sanitizeSignature } from '@kutup/mail-core/sanitize'
 import { Alert } from '@kutup/ui/components/alert'
 import { Button } from '@kutup/ui/components/button'
@@ -51,6 +53,7 @@ export function IdentitySettingsPage() {
           ) : null}
           {addresses.isPending ? null : <IdentityForm key={addressId ?? 'default'} addressId={addressId} />}
         </section>
+        <SharedSignatures />
       </div>
     </PageBody>
   )
@@ -125,5 +128,75 @@ function IdentityForm({ addressId }: { addressId: string | undefined }) {
           {t('common.save')}
         </Button>
       </form>
+  )
+}
+
+/**
+ * The signatures of the shared mailboxes this account owns or manages
+ * (Kutup's own: Proton has no shared mailboxes); whoever writes as one
+ * starts with it.
+ */
+function SharedSignatures() {
+  const { t } = useTranslation()
+  const groups = useMyGroups()
+  const mine = (groups.data ?? []).filter((g) => g.kind === 'shared' && (g.myRole === 'owner' || g.myRole === 'manager'))
+  if (mine.length === 0) return null
+  return (
+    <section className="max-w-2xl space-y-5" aria-labelledby="shared-signatures-heading">
+      <div>
+        <h2 id="shared-signatures-heading" className="text-base font-semibold">
+          {t('identity.sharedSignatures')}
+        </h2>
+        <p className="text-sm text-muted-foreground">{t('identity.sharedSignaturesHint')}</p>
+      </div>
+      {mine.map((group) => (
+        <SharedSignature key={group.id} group={group} />
+      ))}
+    </section>
+  )
+}
+
+function SharedSignature({ group }: { group: MailGroup }) {
+  const { t } = useTranslation()
+  const queryClient = useQueryClient()
+  const [signature, setSignature] = useState(group.signature)
+  const [saving, setSaving] = useState(false)
+  const name = group.displayName || group.address
+
+  async function save() {
+    const clean = sanitizeSignature(signature)
+    if (new TextEncoder().encode(clean).length > 10_000) {
+      toast.error(t('identity.signatureTooLong'))
+      return
+    }
+    setSaving(true)
+    try {
+      await updateGroup(group.id, { signature: clean })
+      await queryClient.invalidateQueries({ queryKey: groupsKey })
+      toast.success(t('general.saved'))
+    } catch (e) {
+      toast.error(apiErrorMessage(e, t('common.tryAgain')))
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  return (
+    <form
+      className="space-y-2"
+      aria-label={t('identity.sharedSignatureOf', { name })}
+      onSubmit={(e) => {
+        e.preventDefault()
+        void save()
+      }}
+    >
+      <p className="text-sm font-medium">
+        {name} <span className="font-normal text-muted-foreground">{group.address}</span>
+      </p>
+      <SimpleEditor value={group.signature} label={t('identity.sharedSignatureOf', { name })} onChange={(html) => setSignature(html)} />
+      <Button type="submit" variant="outline" disabled={saving}>
+        {t('common.save')}
+      </Button>
+    </form>
   )
 }

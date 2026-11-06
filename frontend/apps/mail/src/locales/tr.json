@@ -650,7 +650,10 @@
     "signatureTooLong": "İmza çok uzun (en fazla 10 KB).",
     "addLink": "Bağlantı ekle",
     "nameAndSignature": "Görünen ad ve imza",
-    "address": "Adres"
+    "address": "Adres",
+    "sharedSignatures": "Ortak posta kutuları",
+    "sharedSignaturesHint": "Biri posta kutusu adına yazdığında iletinin başladığı imza. Sahipler ve yöneticiler belirler.",
+    "sharedSignatureOf": "{{name}} imzası"
   },
   "autoReply": {
     "title": "Otomatik yanıt",
