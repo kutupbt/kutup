@@ -1230,3 +1230,39 @@ pub fn totp_now(secret: &str) -> String {
     .generate_current()
     .unwrap()
 }
+
+/// Metadata sealed for `file` at revision `revision` (key generation 1); the
+/// server checks only the envelope's binding, never its plaintext.
+pub fn metadata_at(file: &Sealed, revision: u64) -> String {
+    drive_envelope::seal_b64(
+        br#"{"name":"a.txt","mimeType":"text/plain","size":1}"#,
+        &file.key,
+        DriveEnvelopeContextV1::file_metadata(&file.id, 1, revision).unwrap(),
+    )
+    .unwrap()
+}
+
+/// `POST /api/files/{id}/revisions/{revisionId}/commit`
+/// (docs/plans/drive-block-format.md §10 slice 3).
+pub fn commit(
+    c: &Client,
+    base: &str,
+    token: &str,
+    file_id: &str,
+    revision_id: &str,
+    metadata_envelope: &str,
+    metadata_revision: i64,
+) -> Response {
+    bearer(
+        c.post(format!(
+            "{base}/api/files/{file_id}/revisions/{revision_id}/commit"
+        )),
+        token,
+    )
+    .json(&json!({
+        "metadataEnvelope": metadata_envelope,
+        "metadataRevision": metadata_revision,
+    }))
+    .send()
+    .unwrap()
+}

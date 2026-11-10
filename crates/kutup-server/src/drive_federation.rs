@@ -2142,6 +2142,7 @@ where
     let mut file_key_envelope = None;
     let mut name_hash = None;
     let mut revision_id = None;
+    let mut metadata_revision = None;
     let mut uploaded_file = None;
     while let Some(mut field) = multipart
         .next_field()
@@ -2179,6 +2180,12 @@ where
                 }
                 revision_id = Some(limited_field_text(field).await?);
             }
+            Some("metadataRevision") => {
+                if metadata_revision.is_some() {
+                    return Err(AppError::bad_request("duplicate metadataRevision"));
+                }
+                metadata_revision = Some(limited_field_text(field).await?);
+            }
             Some("file") => {
                 if uploaded_file.is_some() {
                     return Err(AppError::bad_request("only one file may be uploaded"));
@@ -2213,12 +2220,15 @@ where
             .ok_or_else(|| AppError::bad_request(format!("{name} required")))
     };
     let file_id = required(file_id, "fileId")?;
+    let format = crate::drive_blob::BlobFormat::from_revision(revision_id.as_deref())?;
+    // The block format commits inline: its metadata names revision 1.
+    crate::drive_blob::check_first_metadata_revision(format, metadata_revision.as_deref())?;
     Ok(ParsedUpload {
         file_id: canonical_uuid(&file_id)?,
         metadata_envelope: required(metadata_envelope, "metadataEnvelope")?,
         file_key_envelope: required(file_key_envelope, "fileKeyEnvelope")?,
         name_hash: crate::drive_names::require_name_hash(name_hash.as_deref())?,
-        format: crate::drive_blob::BlobFormat::from_revision(revision_id.as_deref())?,
+        format,
         file,
         size,
         digest,

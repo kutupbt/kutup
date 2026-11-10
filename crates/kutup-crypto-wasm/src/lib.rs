@@ -830,7 +830,8 @@ fn thumbnail_variant(value: &str) -> Result<ThumbnailVariant, JsValue> {
 }
 
 /// Frame, pad and seal a thumbnail under the file key
-/// (docs/plans/drive-thumbnails.md). `format`: 1 JPEG, 2 WebP, 3 PNG.
+/// (docs/plans/drive-thumbnails.md), bound to the content revision it shows
+/// (docs/plans/drive-block-format.md §2). `format`: 1 JPEG, 2 WebP, 3 PNG.
 #[wasm_bindgen(js_name = sealThumbnail)]
 #[allow(clippy::too_many_arguments)]
 pub fn seal_thumbnail(
@@ -841,6 +842,7 @@ pub fn seal_thumbnail(
     variant: &str,
     file_key_base64: &str,
     file_id: &str,
+    revision_id: &str,
     generation: u32,
 ) -> Result<String, JsValue> {
     let thumbnail = Thumbnail {
@@ -850,33 +852,37 @@ pub fn seal_thumbnail(
         image: decode_canonical_base64(image_base64, "thumbnail image")?,
     };
     let file_key = decode_canonical_base64(file_key_base64, "file key")?;
-    let envelope = thumbnail::seal(
+    let envelope = thumbnail::seal_v2(
         &thumbnail,
         thumbnail_variant(variant)?,
         &file_key,
         file_id,
+        revision_id,
         generation,
     )
     .map_err(|error| js_error(&error.to_string()))?;
     Ok(STANDARD.encode(envelope))
 }
 
-/// Open a thumbnail of exactly this file, variant and key generation.
+/// Open a thumbnail of exactly this file, content revision, variant and key
+/// generation: one drawn from older content fails, and is drawn again.
 #[wasm_bindgen(js_name = openThumbnail)]
 pub fn open_thumbnail(
     envelope_base64: &str,
     variant: &str,
     file_key_base64: &str,
     expected_file_id: &str,
+    expected_revision_id: &str,
     expected_generation: u32,
 ) -> Result<JsValue, JsValue> {
     let envelope = decode_canonical_base64(envelope_base64, "thumbnail envelope")?;
     let file_key = decode_canonical_base64(file_key_base64, "file key")?;
-    let opened = thumbnail::open(
+    let opened = thumbnail::open_v2(
         &envelope,
         thumbnail_variant(variant)?,
         &file_key,
         expected_file_id,
+        expected_revision_id,
         expected_generation,
     )
     .map_err(|error| js_error(&error.to_string()))?;
@@ -1862,15 +1868,16 @@ pub(crate) fn js_error(message: &str) -> JsValue {
     JsValue::from_str(message)
 }
 
-/// A Drive file's metadata (name, type, size, photo details), checked and
-/// written canonically (docs/plans/photos.md): JSON text in, the exact JSON
-/// text to seal out. Opening metadata runs it through here too, so every
-/// client refuses the same things.
+/// A Drive file's metadata (name, type, size, photo details, and the content
+/// revision it commits to), checked and written canonically
+/// (docs/plans/photos.md, docs/plans/drive-block-format.md §2): JSON text
+/// in, the exact JSON text to seal out. Opening metadata runs it through here
+/// too, so every client refuses the same things.
 #[wasm_bindgen(js_name = canonicalFileMetadata)]
 pub fn canonical_file_metadata(json: &str) -> Result<String, JsValue> {
-    let metadata = kutup_crypto::file_metadata::decode(json.as_bytes())
+    let metadata = kutup_crypto::file_metadata::decode_v2(json.as_bytes())
         .map_err(|error| js_error(&error.to_string()))?;
-    let bytes = kutup_crypto::file_metadata::encode(&metadata)
+    let bytes = kutup_crypto::file_metadata::encode_v2(&metadata)
         .map_err(|error| js_error(&error.to_string()))?;
     String::from_utf8(bytes).map_err(|_| js_error("file metadata is not UTF-8"))
 }

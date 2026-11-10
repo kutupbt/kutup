@@ -645,14 +645,17 @@ type Reconciled = (i64, i64, i64, i64, i64, i64);
 
 /// Reaps abandoned tus uploads (rows whose `updated_at` is older than 24 h): aborts the S3
 /// multipart, then drops the row (freeing soft-reserved quota) — mirrors
-/// `UploadsSweeper.once`. Returns the number reaped.
+/// `UploadsSweeper.once`. An uploaded revision never committed
+/// (docs/plans/drive-block-format.md §10 slice 3) goes the same way, a day
+/// after its last part: its object is deleted, and with its row the
+/// reservation and a new file's id. Returns the number reaped.
 pub async fn uploads_sweep_once(
     pool: &PgPool,
     storage: &StorageService,
     media_delivery_retention_days: i64,
 ) -> usize {
-    let stale: Vec<(Uuid, String, String)> = match sqlx::query_as(
-        "SELECT id, storage_path, s3_upload_id FROM uploads \
+    let stale: Vec<(Uuid, String, String, bool)> = match sqlx::query_as(
+        "SELECT id, storage_path, s3_upload_id, uploaded_at IS NOT NULL FROM uploads \
          WHERE updated_at < NOW() - $1 * interval '1 second'",
     )
     .bind(UPLOADS_STALE_AFTER_SECS)
@@ -666,9 +669,11 @@ pub async fn uploads_sweep_once(
         }
     };
     let mut reaped = 0;
-    for (id, path, s3_upload_id) in &stale {
-        // Abort first; a failure leaves the row for the next sweep.
-        if let Err(e) = storage.abort_multipart(path, s3_upload_id).await {
+    for (id, path, s3_upload_id, uploaded) in &stale {
+        // Abort (or delete) first; a failure leaves the row for the next sweep.
+        if let Err(e) =
+            crate::drive_blob::drop_upload_bytes(storage, path, s3_upload_id, *uploaded).await
+        {
             tracing::warn!("uploads-sweeper: abort {id}: {e}");
             continue;
         }
@@ -1040,8 +1045,8 @@ pub async fn purge_file_root(
     // An open upload of a new version is locked before the file, the order
     // its last part takes them in (`tus::patch`: the upload row, then the
     // file), so the two never deadlock.
-    let open_versions: Vec<(Uuid, String, String)> = sqlx::query_as(
-        "SELECT id, storage_path, s3_upload_id FROM uploads
+    let open_versions: Vec<(Uuid, String, String, bool)> = sqlx::query_as(
+        "SELECT id, storage_path, s3_upload_id, uploaded_at IS NOT NULL FROM uploads
          WHERE file_id = $1 AND kind = 'version' FOR UPDATE",
     )
     .bind(file_id)
@@ -1110,7 +1115,7 @@ pub async fn purge_file_root(
         .await?;
     // The open upload of a new version goes with it (its reservation and
     // the file's one upload slot); its parts are aborted after commit.
-    for (upload_id, _, _) in &open_versions {
+    for (upload_id, _, _, _) in &open_versions {
         sqlx::query("DELETE FROM uploads WHERE id = $1")
             .bind(upload_id)
             .execute(&mut *tx)
@@ -1124,8 +1129,8 @@ pub async fn purge_file_root(
 
     // Best-effort S3 GC (post-commit): everything the file has lives under
     // files/{id}/ — the original, versions, assets and thumbnails.
-    for (_, path, upload) in &open_versions {
-        let _ = storage.abort_multipart(path, upload).await;
+    for (_, path, upload, uploaded) in &open_versions {
+        let _ = crate::drive_blob::drop_upload_bytes(storage, path, upload, *uploaded).await;
     }
     let _ = storage.delete_prefix(&format!("files/{file_id}/")).await;
     Ok(())

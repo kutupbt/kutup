@@ -17,7 +17,7 @@ use uuid::Uuid;
 use super::file_versions::{check_based_on, current_whole_version, parse_based_on};
 use super::files::{canonical_uuid, validate_envelope};
 use super::tus::{tus_error, TUS_VERSION};
-use crate::drive_blob::BlobFormat;
+use crate::drive_blob::{revision_conflict, BlobFormat};
 use crate::error::{AppError, AppResult};
 use crate::storage::CompletedPart;
 use crate::AppState;
@@ -48,15 +48,11 @@ async fn lock_file(
     .ok_or_else(|| AppError::not_found("not found"))
 }
 
-fn revision_conflict() -> AppError {
-    AppError::conflict("metadata revision must advance exactly once")
-        .with_details(serde_json::json!({ "code": "revision_conflict" }))
-}
-
-/// What a version upload must hold both when it starts and when it lands:
-/// the caller may write the file, the file holds what the upload was based
-/// on, its key has not changed, the metadata is its next revision, and the
-/// upload fits. Takes the file's row lock. Returns its collection.
+/// What a version upload must hold when it starts, when it lands and (in the
+/// block format) when it is committed: the caller may write the file, the
+/// file holds what the upload was based on, its key has not changed, the
+/// metadata (when there is one yet) is its next revision, and the upload
+/// fits. Takes the file's row lock. Returns its collection.
 #[allow(clippy::too_many_arguments)]
 async fn check(
     state: &AppState,
@@ -64,8 +60,7 @@ async fn check(
     user_id: Uuid,
     file_id: Uuid,
     key_generation: Option<i32>,
-    metadata_envelope: &str,
-    metadata_revision: i64,
+    metadata: Option<(&str, i64)>,
     based_on: Option<&str>,
     total_bytes: i64,
     except_upload: Option<Uuid>,
@@ -80,19 +75,22 @@ async fn check(
     )?;
     // Sealed under the key it started with: a re-key since refuses it.
     crate::drive_writes::lock_file_key(tx, file_id, key_generation.unwrap_or(generation)).await?;
-    if revision.checked_add(1) != Some(metadata_revision) {
-        return Err(revision_conflict());
+    if let Some((metadata_envelope, metadata_revision)) = metadata {
+        if revision.checked_add(1) != Some(metadata_revision) {
+            return Err(revision_conflict());
+        }
+        validate_envelope(
+            metadata_envelope,
+            DriveEnvelopeContextV1::file_metadata(
+                &file_id.to_string(),
+                u32::try_from(generation)
+                    .map_err(|_| AppError::conflict("invalid key generation"))?,
+                u64::try_from(metadata_revision)
+                    .map_err(|_| AppError::bad_request("invalid metadata revision"))?,
+            )
+            .map_err(|_| AppError::bad_request("invalid Drive envelope"))?,
+        )?;
     }
-    validate_envelope(
-        metadata_envelope,
-        DriveEnvelopeContextV1::file_metadata(
-            &file_id.to_string(),
-            u32::try_from(generation).map_err(|_| AppError::conflict("invalid key generation"))?,
-            u64::try_from(metadata_revision)
-                .map_err(|_| AppError::bad_request("invalid metadata revision"))?,
-        )
-        .map_err(|_| AppError::bad_request("invalid Drive envelope"))?,
-    )?;
     crate::drive_writes::check_room(tx, user_id, collection_id, total_bytes, except_upload)
         .await?
         .into_result()?;
@@ -145,15 +143,28 @@ async fn open(
         .get("versionOf")
         .and_then(|id| canonical_uuid(id).ok())
         .ok_or_else(|| AppError::bad_request("invalid versionOf"))?;
-    let metadata_envelope = meta
-        .get("metadataEnvelope")
-        .filter(|value| !value.is_empty())
-        .ok_or_else(|| AppError::bad_request("metadataEnvelope is required"))?;
-    let metadata_revision: i64 = meta
-        .get("metadataRevision")
-        .and_then(|value| value.parse().ok())
-        .filter(|revision| *revision > 1)
-        .ok_or_else(|| AppError::bad_request("metadataRevision must be greater than 1"))?;
+    // The streaming format's next metadata comes now; the block format's
+    // with the commit, once the manifest's digest is known
+    // (docs/plans/drive-block-format.md §10 slice 3).
+    let metadata = if format == BlobFormat::Stream {
+        let metadata_envelope = meta
+            .get("metadataEnvelope")
+            .filter(|value| !value.is_empty())
+            .ok_or_else(|| AppError::bad_request("metadataEnvelope is required"))?;
+        let metadata_revision: i64 = meta
+            .get("metadataRevision")
+            .and_then(|value| value.parse().ok())
+            .filter(|revision| *revision > 1)
+            .ok_or_else(|| AppError::bad_request("metadataRevision must be greater than 1"))?;
+        Some((metadata_envelope.as_str(), metadata_revision))
+    } else {
+        if meta.contains_key("metadataEnvelope") || meta.contains_key("metadataRevision") {
+            return Err(AppError::bad_request(
+                "the block format's metadata comes with the commit",
+            ));
+        }
+        None
+    };
     let content_hash = meta.get("contentHash");
     if content_hash.is_some_and(|hash| !crate::drive_names::is_hash(hash)) {
         return Err(AppError::bad_request("invalid content hash"));
@@ -167,15 +178,15 @@ async fn open(
         user_id,
         file_id,
         None,
-        metadata_envelope,
-        metadata_revision,
+        metadata,
         based_on,
         total_bytes,
         None,
     )
     .await?;
-    let open: Option<(Uuid, Uuid, i64)> = sqlx::query_as(
-        "SELECT id, user_id, EXTRACT(EPOCH FROM NOW() - updated_at)::bigint
+    let open: Option<(Uuid, Uuid, i64, bool)> = sqlx::query_as(
+        "SELECT id, user_id, EXTRACT(EPOCH FROM NOW() - updated_at)::bigint,
+                uploaded_at IS NOT NULL
          FROM uploads WHERE file_id = $1",
     )
     .bind(file_id)
@@ -187,11 +198,15 @@ async fn open(
             .bind(user_id)
             .fetch_one(&mut *tx)
             .await?;
-    if let Some((upload_id, uploader, idle_seconds)) = open {
+    if let Some((upload_id, uploader, idle_seconds, uploaded)) = open {
         // How long since its last part tells a crashed upload (cancel it)
-        // from one still running on another device (wait for it).
-        let mut details =
-            serde_json::json!({ "code": "versionUploading", "idleSeconds": idle_seconds.max(0) });
+        // from one still running on another device (wait for it); an
+        // uploaded revision waits only for its commit.
+        let mut details = serde_json::json!({
+            "code": "versionUploading",
+            "idleSeconds": idle_seconds.max(0),
+            "uploaded": uploaded,
+        });
         // Its uploader may go on with it or cancel it; the folder's owner may
         // cancel it (tus DELETE), so nobody can hold their file's slot.
         if uploader == user_id || owns_folder {
@@ -232,9 +247,9 @@ async fn open(
     .bind(collection_id)
     .bind(file_id)
     .bind(total_bytes)
-    .bind(metadata_envelope)
+    .bind(metadata.map(|(envelope, _)| envelope))
     .bind(key_epoch)
-    .bind(metadata_revision)
+    .bind(metadata.map(|(_, revision)| revision))
     .bind(&storage_path)
     .bind(&s3_upload_id)
     .bind(key_generation)
@@ -277,8 +292,9 @@ pub(super) struct Landing {
     /// is keyed for that folder).
     pub collection_id: Uuid,
     pub total_bytes: i64,
-    pub metadata_envelope: String,
-    pub metadata_revision: i64,
+    /// The next metadata and its revision; `None` in the block format until
+    /// the commit brings them.
+    pub metadata: Option<(String, i64)>,
     pub storage_path: String,
     pub s3_upload_id: String,
     pub key_generation: i32,
@@ -314,8 +330,10 @@ pub(super) async fn finish(
         landing.user_id,
         landing.file_id,
         Some(landing.key_generation),
-        &landing.metadata_envelope,
-        landing.metadata_revision,
+        landing
+            .metadata
+            .as_ref()
+            .map(|(envelope, revision)| (envelope.as_str(), *revision)),
         landing.based_on.as_deref(),
         landing.total_bytes,
         Some(landing.upload_id),
@@ -362,6 +380,19 @@ pub(super) async fn finish(
             .await;
         return tus_error(error);
     }
+    // The block format lands as an uploaded revision; its commit stores it.
+    if landing.metadata.is_none() {
+        return super::tus::mark_uploaded(
+            state,
+            tx,
+            landing.upload_id,
+            landing.file_id,
+            Some(landing.revision_id),
+            &landing.storage_path,
+            landing.total_bytes,
+        )
+        .await;
+    }
     // Moved meanwhile: the content hash was keyed for the folder it left.
     let content_hash = landing
         .content_hash
@@ -388,16 +419,7 @@ pub(super) async fn finish(
     };
     match stored {
         Ok(seq) => {
-            // Editors on other servers hold the old base: they reconnect.
-            state.collab_federation.close_file(state, landing.file_id);
-            // Tabs editing the file here reopen from the new content.
-            super::collab::replace_base(
-                state,
-                landing.file_id,
-                &landing.revision_id.to_string(),
-                seq,
-            )
-            .await;
+            announce(state, landing.file_id, landing.revision_id, seq).await;
             (
                 StatusCode::NO_CONTENT,
                 [
@@ -420,6 +442,52 @@ pub(super) async fn finish(
             tus_error(AppError::internal("db store version"))
         }
     }
+}
+
+/// A new version became the file's content: editors reopen from it.
+pub(super) async fn announce(state: &AppState, file_id: Uuid, version_id: Uuid, seq: i64) {
+    // Editors on other servers hold the old base: they reconnect.
+    state.collab_federation.close_file(state, file_id);
+    // Tabs editing the file here reopen from the new content.
+    super::collab::replace_base(state, file_id, &version_id.to_string(), seq).await;
+}
+
+/// Commits an uploaded block-format version
+/// (`revision_commit::commit`, docs/plans/drive-block-format.md §10 slice
+/// 3): what it had to hold when it landed holds still, its metadata is the
+/// file's next revision, and it becomes the file's content, the content it
+/// replaces kept in the history as its parent. In the caller's transaction,
+/// which locked the upload row; returns the version's log position.
+pub(super) async fn commit(
+    state: &AppState,
+    tx: &mut Transaction<'_, Postgres>,
+    landing: &Landing,
+) -> AppResult<i64> {
+    // The lock order of `finish`: the upload row, the file's log, its row.
+    sqlx::query("SELECT pg_advisory_xact_lock($1)")
+        .bind(super::collab::log_lock_key(landing.file_id))
+        .execute(&mut **tx)
+        .await?;
+    let (collection_now, _) = check(
+        state,
+        tx,
+        landing.user_id,
+        landing.file_id,
+        Some(landing.key_generation),
+        landing
+            .metadata
+            .as_ref()
+            .map(|(envelope, revision)| (envelope.as_str(), *revision)),
+        landing.based_on.as_deref(),
+        landing.total_bytes,
+        Some(landing.upload_id),
+    )
+    .await?;
+    let content_hash = landing
+        .content_hash
+        .clone()
+        .filter(|_| collection_now == landing.collection_id);
+    record(tx, landing, content_hash.as_deref()).await
 }
 
 /// The version's recorded log position, if it was stored after all.
@@ -461,6 +529,10 @@ async fn record(
     landing: &Landing,
     content_hash: Option<&str>,
 ) -> AppResult<i64> {
+    let (metadata_envelope, metadata_revision) = landing
+        .metadata
+        .as_ref()
+        .ok_or_else(|| AppError::internal("a version without its metadata"))?;
     let parent = current_whole_version(tx, landing.file_id).await?;
     // The new content replaces everything edited so far: it stands at the
     // log's head, so whoever opens it next replays nothing older (as a
@@ -501,8 +573,8 @@ async fn record(
          WHERE id = $1",
     )
     .bind(landing.file_id)
-    .bind(&landing.metadata_envelope)
-    .bind(landing.metadata_revision)
+    .bind(metadata_envelope)
+    .bind(metadata_revision)
     .bind(content_hash)
     .execute(&mut **tx)
     .await?;

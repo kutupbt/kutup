@@ -173,6 +173,56 @@ pub async fn ensure_revision_free(
     Ok(())
 }
 
+/// `409 revision_conflict`: the metadata is not the file's next revision
+/// (exactly the current one + 1, or 1 for a new file).
+pub fn revision_conflict() -> AppError {
+    AppError::conflict("metadata revision must advance exactly once")
+        .with_details(serde_json::json!({ "code": "revision_conflict" }))
+}
+
+/// A whole-buffer upload of a new file (multipart, federated) commits inline
+/// (docs/plans/drive-block-format.md §10 slice 3): in the block format it
+/// names its metadata's revision, which must be 1 (`409` otherwise); the
+/// streaming format's metadata is revision 1 without naming it.
+pub fn check_first_metadata_revision(format: BlobFormat, revision: Option<&str>) -> AppResult<()> {
+    match (format, revision) {
+        (BlobFormat::Stream, None) => Ok(()),
+        (BlobFormat::Stream, Some(_)) => Err(AppError::bad_request(
+            "metadataRevision goes with the block format",
+        )),
+        (BlobFormat::Blocks { .. }, None) => {
+            Err(AppError::bad_request("metadataRevision is required"))
+        }
+        (BlobFormat::Blocks { .. }, Some(text)) => match parse_metadata_revision(text)? {
+            1 => Ok(()),
+            _ => Err(revision_conflict()),
+        },
+    }
+}
+
+/// A `metadataRevision` field: a positive integer.
+pub fn parse_metadata_revision(text: &str) -> AppResult<i64> {
+    text.parse::<i64>()
+        .ok()
+        .filter(|revision| *revision > 0)
+        .ok_or_else(|| AppError::bad_request("invalid metadataRevision"))
+}
+
+/// Frees what an upload row holds in storage: an uploaded revision's whole
+/// object (its multipart completed), else its multipart's parts.
+pub async fn drop_upload_bytes(
+    storage: &crate::storage::StorageService,
+    path: &str,
+    s3_upload_id: &str,
+    uploaded: bool,
+) -> anyhow::Result<()> {
+    if uploaded {
+        storage.delete(path).await
+    } else {
+        storage.abort_multipart(path, s3_upload_id).await
+    }
+}
+
 /// Counts a streamed body against a byte limit (a site setting), so a body
 /// past it is refused as it arrives, before it is all stored.
 pub struct BodyBudget {
@@ -254,6 +304,35 @@ mod tests {
             "",
         ] {
             assert!(BlobFormat::from_revision(Some(bad)).is_err(), "{bad}");
+        }
+    }
+
+    #[test]
+    fn a_new_files_inline_commit_names_revision_one() {
+        let stream = BlobFormat::Stream;
+        check_first_metadata_revision(stream, None).unwrap();
+        assert!(check_first_metadata_revision(stream, Some("1")).is_err());
+        check_first_metadata_revision(blocks(), Some("1")).unwrap();
+        assert_eq!(
+            check_first_metadata_revision(blocks(), None)
+                .unwrap_err()
+                .status,
+            axum::http::StatusCode::BAD_REQUEST
+        );
+        assert_eq!(
+            check_first_metadata_revision(blocks(), Some("2"))
+                .unwrap_err()
+                .status,
+            axum::http::StatusCode::CONFLICT
+        );
+        for bad in ["0", "-1", "x", ""] {
+            assert_eq!(
+                check_first_metadata_revision(blocks(), Some(bad))
+                    .unwrap_err()
+                    .status,
+                axum::http::StatusCode::BAD_REQUEST,
+                "{bad}"
+            );
         }
     }
 

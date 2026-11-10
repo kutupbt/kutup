@@ -569,3 +569,79 @@ pub fn chat_backup_media_block_reader(
         ),
     })
 }
+
+/// A whole Drive revision sealed at once (`drive_blocks::seal_file`): editor
+/// snapshots, versions saved from a buffer, vault and list saves. Signed with
+/// the uploader's Drive signing key, naming their account.
+#[wasm_bindgen(getter_with_clone, js_name = SealedDriveFile)]
+pub struct SealedDriveFileJs {
+    pub bytes: Vec<u8>,
+    /// The sealed manifest's SHA-256 (canonical base64), for the metadata's
+    /// content commitment.
+    #[wasm_bindgen(js_name = manifestSha256)]
+    pub manifest_sha256: String,
+}
+
+#[allow(clippy::too_many_arguments)]
+#[wasm_bindgen(js_name = driveSealFile)]
+pub fn drive_seal_file(
+    plaintext: &[u8],
+    file_key_base64: &str,
+    file_id: &str,
+    revision_id: &str,
+    generation: u32,
+    master_key_base64: &str,
+    uploader_account_id: &str,
+) -> Result<SealedDriveFileJs, JsValue> {
+    let file_key = decode_canonical_base64(file_key_base64, "file key")?;
+    let context =
+        DriveBlobContextV2::new(file_id, revision_id, generation).map_err(crypto_error)?;
+    let master_key: [u8; 32] = decode_canonical_base64(master_key_base64, "master key")?
+        .try_into()
+        .map_err(|_| js_error("master key must be 32 bytes"))?;
+    let identity = AccountIdentityKeysV1::derive(&master_key).map_err(crypto_error)?;
+    let sealed = drive_blocks::seal_file(
+        plaintext,
+        &file_key,
+        context,
+        identity.drive_signing_key(),
+        account_id(uploader_account_id)?,
+    )
+    .map_err(crypto_error)?;
+    Ok(SealedDriveFileJs {
+        manifest_sha256: STANDARD.encode(sealed.manifest_sha256),
+        bytes: sealed.bytes,
+    })
+}
+
+/// Opens a whole Drive revision against what its metadata commits to
+/// (`content.revisionId`, `content.manifestSha256`, `size`); the header must
+/// name that file, generation and revision.
+#[wasm_bindgen(js_name = driveOpenFile)]
+pub fn drive_open_file(
+    object: &[u8],
+    file_key_base64: &str,
+    expected_file_id: &str,
+    expected_generation: u32,
+    content_revision_id: &str,
+    content_manifest_sha256: &str,
+    size: f64,
+) -> Result<Vec<u8>, JsValue> {
+    let file_key = decode_canonical_base64(file_key_base64, "file key")?;
+    let expected =
+        DriveBlobContextV2::new(expected_file_id, content_revision_id, expected_generation)
+            .map_err(crypto_error)?;
+    let content = ContentCommitmentV1::new(
+        expected.revision_id,
+        manifest_sha256(content_manifest_sha256)?,
+    );
+    let (plaintext, _manifest) = drive_blocks::open_file(
+        object,
+        &file_key,
+        expected,
+        &content,
+        byte_count(size, "file size")?,
+    )
+    .map_err(crypto_error)?;
+    Ok(plaintext.to_vec())
+}

@@ -667,7 +667,7 @@ fn build_router(state: AppState) -> Router {
     use handlers::{
         admin, auth, chat, chat_link_preview, chat_media, collab, collections, drive_move,
         feedback, file_assets, file_shares, file_thumbnails, file_versions, files, folder_access,
-        identity, link_reports, sessions as session_routes, shares, trash, tus,
+        identity, link_reports, revision_commit, sessions as session_routes, shares, trash, tus,
     };
 
     Router::new()
@@ -1778,6 +1778,10 @@ fn build_router(state: AppState) -> Router {
             put(files::update_metadata).delete(files::delete),
         )
         .route("/api/files/:fileId/claim-seed", post(files::claim_seed))
+        .route(
+            "/api/files/:id/revisions/:revisionId/commit",
+            post(revision_commit::commit),
+        )
         // --- Trash (authenticated; owner-scoped soft-delete + 30-day retention) ---
         .route("/api/trash", get(trash::list).delete(trash::empty))
         .route("/api/trash/:id", delete(trash::destroy))

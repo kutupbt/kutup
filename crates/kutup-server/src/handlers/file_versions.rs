@@ -409,11 +409,11 @@ const MAX_LABEL_CHARS: usize = 200;
     request_body(
         content = Vec<u8>,
         content_type = "multipart/form-data",
-        description = "`file` (the sealed Drive file blob), `kind` (`file` | `yjs`), `seqAtSnapshot`, `docKeyId`, optional `label`, `keepForever`, `basedOn` (a whole-file save made from this version id, or `original`: stored only if that is still the current content), and `revisionId` (a block-format blob's revision, which becomes the version's id)"
+        description = "`file` (the sealed Drive file blob), `kind` (`file` | `yjs`), `seqAtSnapshot`, `docKeyId`, optional `label`, `keepForever`, `basedOn` (a whole-file save made from this version id, or `original`: stored only if that is still the current content), and `revisionId` (a block-format blob's revision, which becomes the version's id). A block-format `kind: file` save commits inline: `metadataEnvelope` and `metadataRevision` (the file's current + 1), the file's next metadata committing to this revision"
     ),
     responses(
         (status = 201, description = "The stored version", body = VersionRow),
-        (status = 409, description = "`code: version_conflict`: the current content is no longer `basedOn`; `current` names it. `code: revisionTaken`: the revision id is in use"),
+        (status = 409, description = "`code: version_conflict`: the current content is no longer `basedOn`; `current` names it. `code: revisionTaken`: the revision id is in use. `code: revision_conflict`: `metadataRevision` is not the file's current + 1"),
         (status = 413, description = "Storage quota exceeded, or larger than `driveVersionMaxBytes`")
     )
 )]
@@ -463,7 +463,13 @@ pub async fn create(
                 .await
                 .map_err(|_| AppError::bad_request("invalid form"))?
             {
-                if value.len() + chunk.len() > 4096 || fields.len() >= 8 {
+                // The sealed metadata of a block-format save is larger.
+                let limit = if name == "metadataEnvelope" {
+                    crate::handlers::files::MAX_TEXT_FIELD_BYTES
+                } else {
+                    4096
+                };
+                if value.len() + chunk.len() > limit || fields.len() >= 10 {
                     return Err(AppError::bad_request("form field too large"));
                 }
                 value.extend_from_slice(&chunk);
@@ -544,6 +550,28 @@ pub(crate) async fn store_version(
     let format =
         crate::drive_blob::BlobFormat::from_revision(fields.get("revisionId").map(String::as_str))?;
     format.check_file(&tmp_file, size as u64, fid, generation)?;
+    // A block-format whole-file save commits inline
+    // (docs/plans/drive-block-format.md §10 slice 3): it becomes the file's
+    // content, so the file's next metadata, committing to it, comes along.
+    let metadata = if kind == "file" && format != crate::drive_blob::BlobFormat::Stream {
+        let envelope = fields
+            .get("metadataEnvelope")
+            .filter(|value| !value.is_empty())
+            .ok_or_else(|| AppError::bad_request("metadataEnvelope is required"))?;
+        let revision = crate::drive_blob::parse_metadata_revision(
+            fields
+                .get("metadataRevision")
+                .ok_or_else(|| AppError::bad_request("metadataRevision is required"))?,
+        )?;
+        Some((envelope.as_str(), revision))
+    } else {
+        if fields.contains_key("metadataEnvelope") || fields.contains_key("metadataRevision") {
+            return Err(AppError::bad_request(
+                "metadata goes with a block-format whole-file version",
+            ));
+        }
+        None
+    };
 
     let version_id = format.revision_id();
     let storage_path = crate::file_content::revision_path(fid, version_id);
@@ -575,6 +603,26 @@ pub(crate) async fn store_version(
     // Sealed under the file key read above; a re-key since would put new
     // content under a key the folder has left.
     crate::drive_writes::lock_file_key(&mut tx, fid, key_generation).await?;
+    // Its metadata is the file's next revision (the row is locked above).
+    if let Some((envelope, revision)) = metadata {
+        let current: i64 = sqlx::query_scalar("SELECT metadata_revision FROM files WHERE id = $1")
+            .bind(fid)
+            .fetch_one(&mut *tx)
+            .await?;
+        if current.checked_add(1) != Some(revision) {
+            return Err(crate::drive_blob::revision_conflict());
+        }
+        crate::handlers::files::validate_envelope(
+            envelope,
+            kutup_crypto::drive_envelope::DriveEnvelopeContextV1::file_metadata(
+                &fid.to_string(),
+                generation,
+                u64::try_from(revision)
+                    .map_err(|_| AppError::bad_request("invalid metadata revision"))?,
+            )
+            .map_err(|_| AppError::bad_request("invalid Drive envelope"))?,
+        )?;
+    }
     // The measured size, never a client's claim.
     crate::drive_writes::check_room(&mut tx, payer, collection_id, size, None)
         .await?
@@ -620,10 +668,17 @@ pub(crate) async fn store_version(
     // A new version is an edit: the file (and so its folder) was modified now.
     // New content: the hash it was recognised by no longer holds; the client
     // records the new one (docs/plans/drive-unique-names.md).
-    sqlx::query("UPDATE files SET updated_at = NOW(), content_hash = NULL WHERE id = $1")
-        .bind(fid)
-        .execute(&mut *tx)
-        .await?;
+    sqlx::query(
+        "UPDATE files SET updated_at = NOW(), content_hash = NULL,
+                          metadata_envelope = COALESCE($2, metadata_envelope),
+                          metadata_revision = COALESCE($3, metadata_revision)
+         WHERE id = $1",
+    )
+    .bind(fid)
+    .bind(metadata.map(|(envelope, _)| envelope))
+    .bind(metadata.map(|(_, revision)| revision))
+    .execute(&mut *tx)
+    .await?;
     // Everything up to this point of the collaboration log is in the version.
     // Under the relay's own per-file lock, so no frame lands in between; never
     // past the log's head, and only for the document key the log is under (a

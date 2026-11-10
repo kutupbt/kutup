@@ -773,6 +773,33 @@ Each slice is a PR.
    - Thumbnails are drawn bound to the new revision.
    - `RevisionGuard` for Drive file metadata.
    - The CLI upload.
+
+   **The commit, as Proton's** (decided in slice 3, 2026-11-09). The manifest
+   digest is known only after the last block, so content and metadata can't
+   go up together at the start. Proton uploads the blocks, then commits the
+   revision with its manifest signature and sealed XAttr. Kutup does the same:
+   - Every suite-2 upload (tus file and version, multipart file and version,
+     federated) lands as an *uploaded revision*: stored, checked (header,
+     trailer, structure), counted in quota, but not current.
+   - `POST /api/files/{id}/revisions/{revisionId}/commit` with
+     `{ metadataEnvelope, metadataRevision }`: the `FileMetadataV2` sealed
+     with `content = { revisionId, manifestSha256 }`. In one transaction the
+     server checks the revision is uploaded and belongs to the file, takes
+     the metadata as the next revision (1 for a new file), and makes the
+     revision current (a new file appears in its folder; a version becomes
+     the content, the old one listed in its history).
+   - A new file is created at upload start with its key envelope and name
+     hash but no metadata. It is listed nowhere until its first commit, as
+     Proton's draft revisions. An upload that is never committed is swept with
+     the abandoned tus uploads, its object deleted and the quota released.
+   - The server can't read the commitment (the metadata is sealed). Readers
+     check it: a metadata/content mismatch fails to open.
+   - Multipart small-file and version uploads take the commit's fields in
+     the same request, since the client seals the whole buffer first.
+   - Server side: an uploaded revision is its upload row kept after the last
+     part (`uploads.uploaded_at`, migration 20261109130000), so a new file
+     has no `files` row and no listing needs a filter; the commit inserts the
+     row or stores the version as a tus version lands (docs/api.md).
 4. **Download and streaming.**
    - The block reader Worker and `fetchDecrypt` on blocks.
    - The CLI download.

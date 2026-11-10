@@ -289,6 +289,7 @@ All file content and metadata are encrypted client-side; the server stores only 
         crate::handlers::files::update_metadata,
         crate::handlers::files::delete,
         crate::handlers::files::claim_seed,
+        crate::handlers::revision_commit::commit,
         // --- trash ---
         crate::handlers::trash::list,
         crate::handlers::trash::empty,

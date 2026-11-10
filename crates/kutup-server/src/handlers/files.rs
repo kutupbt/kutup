@@ -154,7 +154,7 @@ pub async fn list_all_files(State(state): State<AppState>, user: AuthUser) -> Ap
     request_body(
         content = Vec<u8>,
         content_type = "multipart/form-data",
-        description = "Fields: fileId, collectionId, metadataEnvelope, fileKeyEnvelope + the encrypted `file` part"
+        description = "Fields: fileId, collectionId, metadataEnvelope, fileKeyEnvelope, nameHash, optional contentHash + the encrypted `file` part. The block format adds revisionId and metadataRevision (1): the upload commits inline"
     ),
     responses((status = 201, description = "File stored", body = UploadResult))
 )]
@@ -205,7 +205,7 @@ pub async fn upload(
                 .await
                 .map_err(|_| AppError::bad_request("invalid multipart form"))?
             {
-                if val.len() + chunk.len() > MAX_TEXT_FIELD_BYTES || fields.len() >= 8 {
+                if val.len() + chunk.len() > MAX_TEXT_FIELD_BYTES || fields.len() >= 9 {
                     return Err(AppError::bad_request("form field too large"));
                 }
                 val.extend_from_slice(&chunk);
@@ -278,6 +278,13 @@ pub async fn upload(
     // block format, bound to that revision; without, the streaming format.
     let format =
         crate::drive_blob::BlobFormat::from_revision(fields.get("revisionId").map(String::as_str))?;
+    // The block format commits inline (docs/plans/drive-block-format.md §10
+    // slice 3): the client sealed the whole buffer, so its metadata, naming
+    // revision 1, comes with the content.
+    crate::drive_blob::check_first_metadata_revision(
+        format,
+        fields.get("metadataRevision").map(String::as_str),
+    )?;
     format.check_file(&tmp_file, file_size as u64, file_id, 1)?;
     let revision = format.revision_id();
     let storage_path = crate::file_content::revision_path(file_id, revision);
