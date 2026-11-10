@@ -924,9 +924,34 @@ pub const SESSION_RECORD_GRACE_DAYS: NumericSetting = NumericSetting {
     unit: SettingUnit::Days,
     per_account: false,
 };
-pub const PRIVACY_SETTINGS: [NumericSetting; 4] = [
+/// The most security-log events kept per account of each kind (A8): a kind
+/// that repeats (a wrong password) can't push out the rare ones (a password
+/// change, a recovery).
+pub const SECURITY_EVENTS_KEPT_PER_KIND: NumericSetting = NumericSetting {
+    key: "security_events_kept_per_kind",
+    field: "securityEventsKeptPerKind",
+    default: 100,
+    min: 10,
+    max: 1000,
+    unit: SettingUnit::Count,
+    per_account: false,
+};
+/// A failed sign-in (or an admin's view) within this many seconds of the same
+/// kind's last one is counted into it instead of a row of its own (A8).
+pub const SECURITY_EVENT_FOLD_SECONDS: NumericSetting = NumericSetting {
+    key: "security_event_fold_seconds",
+    field: "securityEventFoldSeconds",
+    default: 600,
+    min: 60,
+    max: 86400,
+    unit: SettingUnit::Seconds,
+    per_account: false,
+};
+pub const PRIVACY_SETTINGS: [NumericSetting; 6] = [
     KEY_BACKUP_KEEP_DAYS,
     SECURITY_EVENT_RETENTION_DAYS,
+    SECURITY_EVENTS_KEPT_PER_KIND,
+    SECURITY_EVENT_FOLD_SECONDS,
     ADMIN_AUDIT_RETENTION_DAYS,
     SESSION_RECORD_GRACE_DAYS,
 ];

@@ -413,15 +413,23 @@ pub async fn login_finish(
             return Err(AppError::bad_request("invalid credentialFinalization"))
         }
         // A wrong password, or a name that is no account. A sign-in that
-        // named a real account goes into its security log (repeats folded).
+        // named a real account goes into its security log (repeats folded),
+        // off the answer's path: a real account must not answer later than a
+        // name that is none (OPAQUE's fake answers hide which is which).
         Err(_) => {
             if let (Some(user_id), "session") = (user_id, purpose.as_str()) {
-                crate::security_events::record_folded(
-                    &state.pool,
-                    user_id,
-                    crate::security_events::Kind::SignInFailedPassword,
-                )
-                .await?;
+                let pool = state.pool.clone();
+                tokio::spawn(async move {
+                    if let Err(error) = crate::security_events::record_folded(
+                        &pool,
+                        user_id,
+                        crate::security_events::Kind::SignInFailedPassword,
+                    )
+                    .await
+                    {
+                        tracing::warn!(%user_id, "record a failed sign-in: {}", error.message);
+                    }
+                });
             }
             return Err(AppError::invalid_credentials());
         }

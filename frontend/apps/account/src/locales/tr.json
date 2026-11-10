@@ -52,6 +52,7 @@
       "usernameRequired": "Kullanıcı adınızı girin."
     },
     "errors": {
+      "authenticatorLost": "Bu hesap için kimlik doğrulama uygulaması artık denetlenemiyor. Bir kurtarma kodu kullanın ya da bir yöneticiden iki adımlı oturum açmayı kapatmasını isteyin.",
       "locked": "Çok fazla deneme. Birkaç dakika bekleyip yeniden deneyin.",
       "network": "Sunucuya ulaşılamadı. Bağlantınızı kontrol edip yeniden deneyin.",
       "signInFailed": "Giriş yapılamadı. Kullanıcı adınızı ve parolanızı kontrol edin.",
@@ -949,7 +950,11 @@
         "keyBackupKeepDays": "Hesap anahtarı yedeklerini sakla (gün)",
         "keyBackupKeepDaysHint": "Her hesabın sunucudaki verisini mühürleyen anahtarların yedeği. Bu sürenin sonunda silinmiş bir hesabın verisi hiçbir yedekten okunamaz.",
         "securityEventRetentionDays": "Güvenlik olaylarını sakla (gün)",
-        "securityEventRetentionDaysHint": "Her hesabın girişleri ve güvenlik değişiklikleri, en fazla son 500. Hesap sahibi bu süreyi görür.",
+        "securityEventRetentionDaysHint": "Her hesabın girişleri ve güvenlik değişiklikleri. Hesap sahibi bu süreyi görür.",
+        "securityEventsKeptPerKind": "Türüne göre saklanan güvenlik olayları",
+        "securityEventsKeptPerKindHint": "Her hesap için her türün en yenileri; böylece tekrarlanan başarısız girişler bir parola değişikliğini silemez.",
+        "securityEventFoldSeconds": "Tekrarları birlikte say (saniye)",
+        "securityEventFoldSecondsHint": "Aynı türden son olaydan bu kadar kısa süre sonra gelen başarısız giriş ya da yönetici görüntülemesi yeni bir olay yerine sayıya eklenir.",
         "adminAuditRetentionDays": "Yönetici kaydını sakla (gün)",
         "adminAuditRetentionDaysHint": "Yöneticilerin yaptıkları, bir hesabın verisini açmak dahil.",
         "sessionRecordGraceDays": "Biten oturumları sakla (gün)",
