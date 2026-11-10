@@ -209,6 +209,11 @@ Also from that review: the crypto WASM module carries `OpaqueServer` (the
 server half of OPAQUE) for the vector tests. A second build with a test
 feature would keep it out of the production bundle.
 
+Before the native apps ship: `kutup-chat-core`'s SQLite store (rusqlite with
+the bundled SQLCipher) must move to a release bundling SQLite 3.54 or newer
+(RUSTSEC-2026-0459, ignored in `deny.toml` until then), and libsignal to one
+pinning `libcrux-secrets` 0.0.6 or newer (RUSTSEC-2026-0212).
+
 ---
 
 ### Account-level device linking (QR)
