@@ -798,16 +798,19 @@ With one role, everything works, but those logs are not append-only: the
 server says so at start, in `kutup-server check-config`, and on the admin
 Activity page.
 
-With the bundled compose, create the role once and name it in `.env`:
+With the bundled compose, name the role in `.env`:
+
+```
+POSTGRES_APP_USER=kutup_app
+POSTGRES_APP_PASSWORD=<openssl rand -hex 32>
+```
+
+A new database gets the role when it is created (`postgres/initdb`). For a
+database that already exists, create it once by hand:
 
 ```sh
 docker compose exec -T postgres psql -U kutup -d kutup \
   -c "CREATE ROLE kutup_app LOGIN PASSWORD '<openssl rand -hex 32>'"
-```
-
-```
-POSTGRES_APP_USER=kutup_app
-POSTGRES_APP_PASSWORD=<the same password>
 ```
 
 Then `docker compose up -d --wait`: the server connects as `kutup_app`, and

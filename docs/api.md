@@ -1115,8 +1115,9 @@ What changed the caller's sign-in, newest first: a new password, a recovery, a
 move to the server's current sign-in setup, an administrator's reset, a
 sign-in, a wrong password or second step, a sign-out, a session ended, an
 administrator opening the account's details. Kept `retentionDays` (a site
-setting, default 365), the newest 500 at most. No IP addresses. An account
-reset keeps the earlier events. The log is append-only for the server when it
+setting, default 365), and of each kind at most the newest a second setting
+says (default 100), so repeated failures can't push out a password change. No
+IP addresses. An account reset keeps the earlier events. The log is append-only for the server when it
 runs as its own database role (docs/plans/server-personal-data.md, A8).
 
 **Auth:** Bearer JWT
@@ -5234,7 +5235,10 @@ time and payload. This walks the chain from the oldest row kept.
 **Auth:** Bearer JWT (admin)
 
 **Response:** `{ "checked": 120, "brokenAt": null, "appendOnly": true }`:
-`brokenAt` is the first row whose hash or link is wrong; `appendOnly` is false
+`brokenAt` is the first row whose hash or link is wrong, or that has none. The
+walk starts where the retention job last cut the chain (the last row it
+deleted and its hash, which only the database owner writes), so deleting more
+of the oldest rows breaks it too; `appendOnly` is false
 while the server runs as the database's owner (`DATABASE_OWNER_URL` unset).
 
 Opening one account's limits, mail-domain overrides or mail-sending state

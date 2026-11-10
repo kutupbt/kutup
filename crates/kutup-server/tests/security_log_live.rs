@@ -52,7 +52,18 @@ fn sign_ins_and_wrong_passwords_are_in_the_accounts_log() {
     // A sign-in, then its sign-out.
     let session = sign_in(&c, &base, &user.username, &user.password);
     let token = session["accessToken"].as_str().unwrap().to_owned();
-    let page = events(&c, &base, &token);
+    // Failed sign-ins are recorded off the answer's path: a moment later.
+    let mut page = events(&c, &base, &token);
+    for _ in 0..50 {
+        if of_kind(&page, "signInFailedPassword")
+            .first()
+            .is_some_and(|event| event["count"] == 2)
+        {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(100));
+        page = events(&c, &base, &token);
+    }
     let failed = of_kind(&page, "signInFailedPassword");
     assert_eq!(failed.len(), 1, "{page}");
     assert_eq!(failed[0]["count"], 2);

@@ -950,7 +950,11 @@
         "keyBackupKeepDays": "Keep account key backups (days)",
         "keyBackupKeepDaysHint": "The backup of the keys that seal each account's server-side data. A deleted account's data can no longer be read from any backup after this long.",
         "securityEventRetentionDays": "Keep security events (days)",
-        "securityEventRetentionDaysHint": "Each account's sign-ins and security changes, the newest 500 at most. Its owner sees this period.",
+        "securityEventRetentionDaysHint": "Each account's sign-ins and security changes. Its owner sees this period.",
+        "securityEventsKeptPerKind": "Security events kept per kind",
+        "securityEventsKeptPerKindHint": "The newest of each kind per account, so repeated failed sign-ins can't push out a password change.",
+        "securityEventFoldSeconds": "Count repeats together within (seconds)",
+        "securityEventFoldSecondsHint": "A failed sign-in, or an administrator's view, this soon after the last one of its kind adds to its count instead of a new event.",
         "adminAuditRetentionDays": "Keep the admin log (days)",
         "adminAuditRetentionDaysHint": "What administrators did, including opening an account's data."
       },

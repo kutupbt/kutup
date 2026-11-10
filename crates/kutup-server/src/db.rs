@@ -74,6 +74,25 @@ async fn grant_role(owner: &PgPool, app: &str) -> Result<()> {
     statements.push(format!(
         "GRANT UPDATE (count) ON account_security_events TO {role}"
     ));
+    // The admin log's ids are the chain's order: the server takes them from
+    // the sequence, never names one, and never moves the sequence back.
+    statements.push(format!("REVOKE INSERT ON admin_audit_log FROM {role}"));
+    statements.push(format!(
+        "GRANT INSERT (admin_user_id, action, target_user_id, payload, occurred_at, \
+         previous_hash, row_hash) ON admin_audit_log TO {role}"
+    ));
+    let sequence: Option<String> =
+        sqlx::query_scalar("SELECT pg_get_serial_sequence('admin_audit_log', 'id')")
+            .fetch_one(owner)
+            .await
+            .context("the admin log's sequence")?;
+    if let Some(sequence) = sequence {
+        statements.push(format!("REVOKE UPDATE ON SEQUENCE {sequence} FROM {role}"));
+    }
+    // Where retention cut the chain: the owner's alone.
+    statements.push(format!(
+        "REVOKE INSERT, UPDATE, DELETE, TRUNCATE ON admin_audit_anchor FROM {role}"
+    ));
     let mut tx = owner.begin().await?;
     for statement in statements {
         sqlx::query(&statement)
@@ -125,6 +144,11 @@ mod tests {
             "DELETE FROM admin_audit_log",
             "UPDATE admin_audit_log SET action = 'x'",
             "TRUNCATE admin_audit_log",
+            "INSERT INTO admin_audit_log (id, admin_user_id, action, payload) \
+             VALUES (9223372036854775000, gen_random_uuid(), 'x', '{}')",
+            "SELECT setval(pg_get_serial_sequence('admin_audit_log', 'id'), 1)",
+            "INSERT INTO admin_audit_anchor (through_id, through_hash) VALUES (1, sha256('x'))",
+            "UPDATE admin_audit_anchor SET through_id = 1",
         ] {
             sqlx::query("SAVEPOINT attempt")
                 .execute(&mut *tx)

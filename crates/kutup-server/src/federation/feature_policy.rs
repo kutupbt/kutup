@@ -222,7 +222,6 @@ impl FeaturePolicyStore {
                 "policyHash": envelope.policy_hash()?,
                 "identityGeneration": envelope.federation_identity_generation,
             }),
-            now,
         )
         .await?;
         tx.commit().await?;

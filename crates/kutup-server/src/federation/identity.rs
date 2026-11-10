@@ -43,7 +43,6 @@ impl LocalFederationIdentity {
                     "sequence": genesis.sequence,
                     "fingerprint": genesis.key.key_id,
                 }),
-                now,
             )
             .await?;
             genesis
@@ -165,7 +164,6 @@ pub(crate) async fn rotate_local_identity(
             "newFingerprint": rotated.key.key_id,
             "newFingerprintDisplay": grouped_fingerprint(&rotated.key.key_id)?,
         }),
-        now,
     )
     .await?;
     transaction.commit().await?;
@@ -175,24 +173,13 @@ pub(crate) async fn rotate_local_identity(
     })
 }
 
+/// Into the admin log's chain, in this transaction (docs/plans/server-personal-data.md, A8).
 pub(crate) async fn insert_system_audit(
     transaction: &mut Transaction<'_, Postgres>,
     action: &str,
     payload: serde_json::Value,
-    occurred_at: OffsetDateTime,
 ) -> Result<(), sqlx::Error> {
-    sqlx::query(
-        "INSERT INTO admin_audit_log
-         (admin_user_id, action, target_user_id, payload, occurred_at)
-         VALUES ($1, $2, NULL, $3, $4)",
-    )
-    .bind(Uuid::nil())
-    .bind(action)
-    .bind(payload)
-    .bind(occurred_at)
-    .execute(&mut **transaction)
-    .await?;
-    Ok(())
+    crate::audit_log::append_in(transaction, Uuid::nil(), action, None, &payload).await
 }
 
 async fn lock_local_identity(

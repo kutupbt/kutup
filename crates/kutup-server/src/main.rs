@@ -2660,7 +2660,10 @@ async fn prune_logs(pool: &sqlx::PgPool) -> error::AppResult<()> {
     let days = site_settings::SECURITY_EVENT_RETENTION_DAYS
         .load(pool)
         .await?;
-    let events = security_events::prune(pool, days).await?;
+    let kept_per_kind = site_settings::SECURITY_EVENTS_KEPT_PER_KIND
+        .load(pool)
+        .await?;
+    let events = security_events::prune(pool, days, kept_per_kind).await?;
     let days = site_settings::ADMIN_AUDIT_RETENTION_DAYS.load(pool).await?;
     let audit = audit_log::prune(pool, days).await?;
     if events + audit > 0 {
