@@ -30,46 +30,25 @@ fn current(keys: &OpaqueSetupKeys) -> AppResult<(u16, &[u8; 32])> {
         .ok_or_else(|| AppError::internal("the server key list (OPAQUE_SETUP_KEYS) is empty"))
 }
 
-/// The account's data key, made (wrapped under the current entry) when it has
-/// none yet, and wrapped again under the current entry when an older one
-/// wraps it.
-pub async fn key(pool: &PgPool, keys: &OpaqueSetupKeys, user_id: Uuid) -> AppResult<DataKey> {
-    let account = *user_id.as_bytes();
+/// The account's data key, when it has one, wrapped again under the current
+/// entry when an older one wraps it. Never makes a key: what was sealed under
+/// a key that is gone stays unreadable ([`open`] says so).
+pub async fn load(
+    pool: &PgPool,
+    keys: &OpaqueSetupKeys,
+    user_id: Uuid,
+) -> AppResult<Option<DataKey>> {
     let (current_id, current_entry) = current(keys)?;
     let stored: Option<Vec<u8>> =
         sqlx::query_scalar("SELECT wrapped FROM account_keys.account_data_keys WHERE user_id = $1")
             .bind(user_id)
             .fetch_optional(pool)
             .await?;
-    let wrapped = match stored {
-        Some(wrapped) => wrapped,
-        None => {
-            let key = DataKey::generate(GENERATION).map_err(internal)?;
-            let wrapped = key
-                .wrap(current_entry, current_id, &account)
-                .map_err(internal)?;
-            // Another request may make it first: then that one is the key.
-            sqlx::query(
-                "INSERT INTO account_keys.account_data_keys
-                     (user_id, sealing_key_id, generation, wrapped)
-                 VALUES ($1, $2, $3, $4) ON CONFLICT (user_id) DO NOTHING",
-            )
-            .bind(user_id)
-            .bind(current_id as i16)
-            .bind(GENERATION as i32)
-            .bind(&wrapped)
-            .execute(pool)
-            .await?;
-            sqlx::query_scalar(
-                "SELECT wrapped FROM account_keys.account_data_keys WHERE user_id = $1",
-            )
-            .bind(user_id)
-            .fetch_one(pool)
-            .await?
-        }
+    let Some(wrapped) = stored else {
+        return Ok(None);
     };
     let (entry_id, _) = kutup_crypto::server_data::inspect_wrapped(&wrapped).map_err(internal)?;
-    let key = DataKey::unwrap(&wrapped, &account, |id| keys.get(id)).map_err(|_| {
+    let key = DataKey::unwrap(&wrapped, user_id.as_bytes(), |id| keys.get(id)).map_err(|_| {
         AppError::internal(format!(
             "an account data key does not open under server key list entry {entry_id}"
         ))
@@ -77,7 +56,40 @@ pub async fn key(pool: &PgPool, keys: &OpaqueSetupKeys, user_id: Uuid) -> AppRes
     if entry_id != current_id {
         rewrap(pool, user_id, &key, &wrapped, current_id, current_entry).await?;
     }
-    Ok(key)
+    Ok(Some(key))
+}
+
+/// The account's data key for sealing: [`load`]ed, or made (wrapped under the
+/// current entry) when it has none yet. Only sealing makes one, outside any
+/// transaction that holds the account's row.
+pub async fn key(pool: &PgPool, keys: &OpaqueSetupKeys, user_id: Uuid) -> AppResult<DataKey> {
+    if let Some(key) = load(pool, keys, user_id).await? {
+        return Ok(key);
+    }
+    let (current_id, current_entry) = current(keys)?;
+    let key = DataKey::generate(GENERATION).map_err(internal)?;
+    let wrapped = key
+        .wrap(current_entry, current_id, user_id.as_bytes())
+        .map_err(internal)?;
+    // Another request may make it first: then that one is the key.
+    let made = sqlx::query(
+        "INSERT INTO account_keys.account_data_keys
+             (user_id, sealing_key_id, generation, wrapped)
+         VALUES ($1, $2, $3, $4) ON CONFLICT (user_id) DO NOTHING",
+    )
+    .bind(user_id)
+    .bind(current_id as i16)
+    .bind(GENERATION as i32)
+    .bind(&wrapped)
+    .execute(pool)
+    .await?
+    .rows_affected();
+    if made == 1 {
+        return Ok(key);
+    }
+    load(pool, keys, user_id)
+        .await?
+        .ok_or_else(|| AppError::internal("an account data key went while it was made"))
 }
 
 /// Wraps `key` again under the current entry, only if the row still holds
@@ -107,18 +119,29 @@ async fn rewrap(
 }
 
 /// Moves up to [`REWRAP_BATCH`] keys still wrapped under an older entry to the
-/// current one. Returns how many it moved; the job runs again while any are
-/// left.
-pub async fn rewrap_some(pool: &PgPool, keys: &OpaqueSetupKeys) -> AppResult<u64> {
+/// current one, in account order from after `after`. Returns how many it
+/// moved and where to go on from: none once it reached the end, so the next
+/// run starts over (a key that does not open is passed, never retried at
+/// once ahead of the rest).
+pub async fn rewrap_some(
+    pool: &PgPool,
+    keys: &OpaqueSetupKeys,
+    after: Uuid,
+) -> AppResult<(u64, Option<Uuid>)> {
     let (current_id, current_entry) = current(keys)?;
     let rows: Vec<(Uuid, Vec<u8>)> = sqlx::query_as(
         "SELECT user_id, wrapped FROM account_keys.account_data_keys
-          WHERE sealing_key_id <> $1 LIMIT $2",
+          WHERE sealing_key_id <> $1 AND user_id > $3
+          ORDER BY user_id LIMIT $2",
     )
     .bind(current_id as i16)
     .bind(REWRAP_BATCH)
+    .bind(after)
     .fetch_all(pool)
     .await?;
+    let next = (rows.len() as i64 == REWRAP_BATCH)
+        .then(|| rows.last().map(|(user_id, _)| *user_id))
+        .flatten();
     let mut moved = 0;
     for (user_id, wrapped) in rows {
         let Ok(key) = DataKey::unwrap(&wrapped, user_id.as_bytes(), |id| keys.get(id)) else {
@@ -129,7 +152,31 @@ pub async fn rewrap_some(pool: &PgPool, keys: &OpaqueSetupKeys) -> AppResult<u64
         rewrap(pool, user_id, &key, &wrapped, current_id, current_entry).await?;
         moved += 1;
     }
-    Ok(moved)
+    Ok((moved, next))
+}
+
+/// At start: the keys' foreign key to the accounts is there. A restore that
+/// adds it back over keys of accounts it doesn't hold fails to, and leaves the
+/// keys without their cascade: deleting an account would then keep its key.
+pub async fn check_cascade(pool: &PgPool) -> Result<(), String> {
+    let present: bool = sqlx::query_scalar(
+        "SELECT EXISTS (SELECT 1 FROM pg_constraint
+                         WHERE conrelid = 'account_keys.account_data_keys'::regclass
+                           AND contype = 'f' AND confdeltype = 'c')",
+    )
+    .fetch_one(pool)
+    .await
+    .map_err(|e| format!("read the account data keys' constraints: {e}"))?;
+    if present {
+        Ok(())
+    } else {
+        Err(
+            "the account data keys have no foreign key to the accounts (a restore \
+             skipped a step): delete the keys of accounts that are not there and add it \
+             back (docs/self-hosting.md, \"Database backups\")"
+                .into(),
+        )
+    }
 }
 
 /// At start: every entry that still wraps a key must be in the list, else
@@ -186,25 +233,35 @@ pub async fn seal(
     .map_err(internal)
 }
 
-/// Opens the account's sealed `field`.
+/// Opens the account's sealed `field`; None when it is destroyed: the
+/// account's key is gone (deleted, or a restore brought back a field without
+/// its key) or is not the one it was sealed under. Never makes a key.
 pub async fn open(
     pool: &PgPool,
     keys: &OpaqueSetupKeys,
     user_id: Uuid,
     (table, column, row): (&str, &str, &str),
     sealed: &[u8],
-) -> AppResult<Zeroizing<Vec<u8>>> {
-    let key = key(pool, keys, user_id).await?;
-    key.open(
-        &Field {
-            table,
-            column,
-            row,
-            account_id: user_id.as_bytes(),
-        },
-        sealed,
-    )
-    .map_err(|_| AppError::internal("a sealed account field does not open"))
+) -> AppResult<Option<Zeroizing<Vec<u8>>>> {
+    let Some(key) = load(pool, keys, user_id).await? else {
+        tracing::warn!(%user_id, table, column, "a sealed field has no account data key");
+        return Ok(None);
+    };
+    let opened = key
+        .open(
+            &Field {
+                table,
+                column,
+                row,
+                account_id: user_id.as_bytes(),
+            },
+            sealed,
+        )
+        .ok();
+    if opened.is_none() {
+        tracing::warn!(%user_id, table, column, "a sealed field does not open under the account's key");
+    }
+    Ok(opened)
 }
 
 fn internal(error: kutup_crypto::error::CryptoError) -> AppError {
