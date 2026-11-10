@@ -155,14 +155,14 @@ async fn insert(
     };
     let (acting_client, client_sealed) = match (acting, session) {
         (Some((client, sealed)), Some(session)) => {
-            let family = crate::client_family::open_in(
-                tx,
+            let key = crate::client_family::account_key(tx, user_id).await?;
+            let family = crate::client_family::open_with(
+                key.as_ref(),
                 user_id,
                 "auth_sessions",
                 session,
                 sealed.as_deref(),
-            )
-            .await?;
+            );
             let sealed =
                 crate::client_family::seal_in(tx, user_id, "account_security_events", id, &family)
                     .await?;
@@ -290,15 +290,15 @@ pub async fn list(
     .bind(limit)
     .fetch_all(&mut *conn)
     .await?;
+    let key = crate::client_family::account_key(&mut conn, user_id).await?;
     for event in &mut events {
-        event.client = crate::client_family::open_in(
-            &mut conn,
+        event.client = crate::client_family::open_with(
+            key.as_ref(),
             user_id,
             "account_security_events",
             event.id,
             event.client_sealed.as_deref(),
-        )
-        .await?;
+        );
     }
     Ok(events)
 }

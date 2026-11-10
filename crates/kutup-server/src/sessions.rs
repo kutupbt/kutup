@@ -506,16 +506,16 @@ pub async fn list(pool: &PgPool, user_id: Uuid) -> AppResult<Vec<SessionRow>> {
     .bind(user_id)
     .fetch_all(&mut *conn)
     .await?;
+    let key = crate::client_family::account_key(&mut conn, user_id).await?;
     let mut sessions = Vec::with_capacity(rows.len());
     for (id, client_type, parent_session_id, sealed, created_at, last_used_at) in rows {
-        let client = crate::client_family::open_in(
-            &mut conn,
+        let client = crate::client_family::open_with(
+            key.as_ref(),
             user_id,
             "auth_sessions",
             id,
             sealed.as_deref(),
-        )
-        .await?;
+        );
         sessions.push(SessionRow {
             id,
             client_type,
