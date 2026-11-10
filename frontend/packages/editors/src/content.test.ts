@@ -7,9 +7,15 @@ vi.mock('@kutup/collab/api', async (importOriginal) => ({
   listVersions: mocks.listVersions,
 }))
 vi.mock('@kutup/session/client', () => ({ default: { get: mocks.get }, freshAccessToken: () => Promise.resolve('t') }))
-vi.mock('@kutup/drive-core/keyring', () => ({ sealedAt: () => Promise.resolve({ fileKey: new Uint8Array(32), context: {} }) }))
+vi.mock('@kutup/drive-core/keyring', () => ({
+  versionContentOf: () => Promise.resolve({ fileKey: new Uint8Array(32), expected: {} }),
+  currentContentOf: () => Promise.resolve({ fileKey: new Uint8Array(32), expected: {} }),
+}))
 // The "sealed" blob is the plaintext itself here.
-vi.mock('@kutup/crypto/fileBlob', () => ({ decryptFileBlobV1: (bytes: Uint8Array) => Promise.resolve(bytes) }))
+vi.mock('@kutup/crypto', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@kutup/crypto')>()),
+  openDriveObject: (bytes: Uint8Array) => Promise.resolve(bytes),
+}))
 
 import type { DriveFile, Folder } from '@kutup/drive-core/model'
 import { currentContent } from './content'

@@ -2,10 +2,11 @@
 // chunk-by-chunk so we can feed a ReadableStream of encrypted bytes to
 // tus-js-client without buffering the whole file.
 //
-// This module is the primitive-only browser adapter used by fileBlob.ts.
-// It emits a 24-byte secretstream header followed by 5 MB plaintext chunks,
-// each producing 5 MB + 17 B ciphertext. fileBlob.ts owns the persistent
-// Drive header, purpose key, AAD, context validation and mandatory final frame.
+// This module is the primitive-only browser adapter used by Chat media and
+// Chat backup (suite 1) until slice 6 of docs/plans/drive-block-format.md;
+// Drive seals in the block format (driveBlocks.ts). It emits a 24-byte
+// secretstream header followed by 5 MB plaintext chunks, each producing
+// 5 MB + 17 B ciphertext.
 // crypto_secretstream_xchacha20poly1305 with TAG_FINAL on the last
 // chunk.
 //

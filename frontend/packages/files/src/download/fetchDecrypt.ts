@@ -1,41 +1,35 @@
-// fetchDecryptedChunks — the streaming "fetch an encrypted blob and yield
-// decrypted plaintext chunks" core, shared by single-file downloads
-// (streamDownload.ts) and folder-as-ZIP downloads (lib/zipDownload.ts).
+// fetchDecryptedChunks — fetch a Drive object and yield its plaintext,
+// shared by single-file downloads (streamDownload.ts), folder-as-ZIP
+// downloads (../zipDownload.ts) and every reader of a whole file.
 //
-// Persistent wire format (matches fileBlob.ts / the CLI / the backend):
-//   [ 32-byte typed Drive header ][ 24-byte secretstream header ][ frames ]
-// where every frame except the last is exactly CIPHER_CHUNK (5 MiB + 17 B)
-// and the last frame carries TAG_FINAL. The last frame may be shorter.
+// The object is in the block format (docs/plans/drive-block-format.md §2):
+// a header bound to the file, its key generation and the revision, 4 MiB
+// blocks, and a signed manifest of the blocks' hashes. It is read whole and
+// opened in Rust against what the caller expects (`DriveObjectExpected`):
+// the current content against the revision and manifest digest its metadata
+// commits to, a history version against its own revision id. Reading by
+// block with Range requests, in a Worker, is slice 4 (§10).
 //
-// Memory: only the not-yet-framed tail of the response body plus one
-// decrypted chunk are held at a time — peak RAM ≈ a few MB regardless of
-// file size. The caller decides what to do with each plaintext chunk
-// (write to a save sink, push into a ZIP entry, …).
-//
-// Throws on: HTTP error, missing body, the stream ending before the typed
-// prefix / before the FINAL tag, context relocation, and MAC failure (wrong
-// key / tampered ciphertext / reordered chunks).
+// Throws on: HTTP error, a header for another file, generation or revision,
+// a manifest other than the committed one, a wrong size, and any block that
+// fails its hash or its AEAD (wrong key, tampered, reordered or cut).
 
-import {
-  DRIVE_FILE_BLOB_CIPHER_CHUNK,
-  DRIVE_FILE_BLOB_PREFIX_BYTES,
-  openFileBlobStreamV1,
-  type FileBlobContextV1,
-} from '@kutup/crypto/fileBlob'
+import { openDriveObject, type DriveObjectExpected } from '@kutup/crypto'
 
 export interface DecryptedChunk {
   plain: Uint8Array
-  /** TAG_FINAL was set on this chunk — no more chunks follow. */
+  /** No more chunks follow. */
   isFinal: boolean
 }
 
-export async function* fetchDecryptedChunks(
+/** The whole object at `url`, opened against `expected`. */
+export async function fetchDriveObject(
   url: string,
   fileKey: Uint8Array,
-  context: FileBlobContextV1,
+  expected: DriveObjectExpected,
   accessToken: string,
   signal?: AbortSignal,
-): AsyncGenerator<DecryptedChunk, void, void> {
+): Promise<Uint8Array> {
   const resp = await fetch(url, {
     // Public-link downloads are anonymous: no token, no header.
     headers: accessToken ? { Authorization: `Bearer ${accessToken}` } : {},
@@ -46,68 +40,18 @@ export async function* fetchDecryptedChunks(
       `download HTTP ${resp.status}: ${await resp.text().catch(() => '')}`,
     )
   }
-  if (!resp.body) {
-    throw new Error('download response has no body')
-  }
+  const object = new Uint8Array(await resp.arrayBuffer())
+  return openDriveObject(object, fileKey, expected)
+}
 
-  const reader = resp.body.getReader()
-  // `Uint8Array<ArrayBufferLike>` — holds both ArrayBuffer-backed slices
-  // from libsodium and whatever the reader yields (possibly
-  // SharedArrayBuffer-backed under TS strict types).
-  let buf: Uint8Array<ArrayBufferLike> = new Uint8Array(0)
-  let decryptor: Awaited<ReturnType<typeof openFileBlobStreamV1>> | null = null
-  let sawFinal = false
-
-  for (;;) {
-    const { value, done } = await reader.read()
-    if (sawFinal && value && value.length > 0) {
-      throw new Error('Drive file blob has bytes after FINAL')
-    }
-    if (value) buf = appendBytes(buf, value)
-
-    // Drain full frames while more bytes might still arrive. The header
-    // comes first; then each `CIPHER_CHUNK`-sized frame. The last frame
-    // (which can be shorter) is pulled out-of-loop once `done`.
-    while (true) {
-      if (!decryptor) {
-        if (buf.length < DRIVE_FILE_BLOB_PREFIX_BYTES) break
-        decryptor = await openFileBlobStreamV1(
-          buf.subarray(0, DRIVE_FILE_BLOB_PREFIX_BYTES),
-          fileKey,
-          context,
-        )
-        buf = buf.subarray(DRIVE_FILE_BLOB_PREFIX_BYTES)
-      }
-      if (buf.length < DRIVE_FILE_BLOB_CIPHER_CHUNK) break
-      const { plain, isFinal } = decryptor.pull(buf.subarray(0, DRIVE_FILE_BLOB_CIPHER_CHUNK))
-      buf = buf.subarray(DRIVE_FILE_BLOB_CIPHER_CHUNK)
-      yield { plain, isFinal }
-      if (isFinal) {
-        sawFinal = true
-        if (buf.length > 0) throw new Error('Drive file blob has bytes after FINAL')
-        break
-      }
-    }
-    if (sawFinal && done) return
-
-    if (done) {
-      if (!decryptor) {
-        throw new Error('download ended before Drive file-blob prefix was received')
-      }
-      if (buf.length > 0) {
-        // The final (possibly short) frame.
-        const { plain, isFinal } = decryptor.pull(buf)
-        buf = new Uint8Array(0)
-        yield { plain, isFinal }
-        if (!isFinal) {
-          throw new Error('download ended before secretstream FINAL tag')
-        }
-        sawFinal = true
-      }
-      if (!sawFinal) throw new Error('download ended before secretstream FINAL tag')
-      return
-    }
-  }
+export async function* fetchDecryptedChunks(
+  url: string,
+  fileKey: Uint8Array,
+  expected: DriveObjectExpected,
+  accessToken: string,
+  signal?: AbortSignal,
+): AsyncGenerator<DecryptedChunk, void, void> {
+  yield { plain: await fetchDriveObject(url, fileKey, expected, accessToken, signal), isFinal: true }
 }
 
 export function appendBytes(

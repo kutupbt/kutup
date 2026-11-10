@@ -1,5 +1,6 @@
 import { Zip, ZipPassThrough } from 'fflate'
 import { fetchDecryptedChunks } from './download/fetchDecrypt'
+import type { DriveObjectExpected } from '@kutup/crypto'
 import { resolveApiBase } from '@kutup/session/apiBase'
 
 // 2 GB — ZIP32 max; Windows Explorer and most real-world readers cap here.
@@ -16,8 +17,8 @@ export class FsaRequiredError extends Error {
 
 export interface ZipFile {
   id: string
-  /** The generation of the file key its content is sealed under. */
-  keyGeneration: number
+  /** What the object must be: the current content its metadata commits to, or a version by its id (and the key generation it is sealed under). */
+  expected: DriveObjectExpected
   name: string
   size: number
   fileKey: Uint8Array
@@ -82,7 +83,7 @@ async function pumpFileIntoZip(
   for await (const { plain, isFinal } of fetchDecryptedChunks(
     url,
     f.fileKey,
-    { fileId: f.id, generation: f.keyGeneration },
+    f.expected,
     accessToken,
     signal,
   )) {

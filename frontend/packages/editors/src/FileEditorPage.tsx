@@ -5,7 +5,6 @@ import { useTranslation } from 'react-i18next'
 import { Link, useParams, useSearchParams } from 'react-router-dom'
 import { toast } from 'sonner'
 import { lostUnsentEdits } from './replacedNotice'
-import { decryptFileBlobV1 } from '@kutup/crypto/fileBlob'
 import { fileKind } from '@kutup/drive-core/kinds'
 import { kindTileSvg } from '@kutup/drive-ui/kindTile'
 import { appUrl } from '@kutup/session/apps'
@@ -21,7 +20,7 @@ import { formatBytes } from '@kutup/ui/lib/format'
 import { NameDialog } from '@kutup/drive-ui/NameDialog'
 import { downloadFile, FsaRequiredError } from './files/downloads'
 import { filesKey, useFolderFiles } from '@kutup/drive-core/files'
-import { fileKeyAt, sealedAt } from '@kutup/drive-core/keyring'
+import { currentContentOf, fileKeyAt, versionContentOf } from '@kutup/drive-core/keyring'
 import { rekeyFile } from '@kutup/drive-core/rekey'
 import { shareRole, useSharedFiles, type ShareRole } from '@kutup/drive-core/fileShares'
 import { useFolders } from '@kutup/drive-core/folders'
@@ -30,7 +29,7 @@ import { personOf, usePeople } from '@kutup/drive-core/people'
 import type { ClaimedKeys } from '@kutup/drive-core/identityPins'
 import { folderOwnerClaim } from '@kutup/drive-core/identityStatus'
 import { IdentityBanner, VerifyPersonButton } from '@kutup/drive-ui/IdentityWarning'
-import { collabBase, contentPath, fileLocation, type DriveFile, type FileLocation, type Folder } from '@kutup/drive-core/model'
+import { collabBase, contentPath, fileLocation, fileMetadataOf, type DriveFile, type FileLocation, type Folder } from '@kutup/drive-core/model'
 import { appFor, currentApp, filePath, folderPath, mapsListUrl, openedFrom, passVaultUrl } from './paths'
 import { contentAt, currentContent } from './content'
 import CursorColorPicker from './CursorColorPicker'
@@ -197,6 +196,8 @@ function OpenFile({ cid, fid }: { cid: string | null; fid: string }) {
     const target: SnapshotTarget = {
       fileKey: f.fileKey,
       context: { fileId: f.id, generation: f.keyGeneration },
+      // Each whole-file save commits the file's next metadata on top of this.
+      file: { collectionId: f.collectionId, metadataRevision: f.metadataRevision, metadata: f.content ? fileMetadataOf(f) : null },
     }
     const keyOf = (generation: number) => fileKeyAt(f, generation)
 
@@ -246,12 +247,12 @@ function OpenFile({ cid, fid }: { cid: string | null; fid: string }) {
           if (content.kind === 'version') base = { versionId: content.versionId, seq: content.seqAtSnapshot }
           bytes =
             content.kind === 'version'
-              ? await loadVersionBytes(await sealedAt(f, content.keyGeneration), content.path)
-              : await loadOriginal(location, f, await sealedAt(f, f.contentKeyGeneration))
+              ? await loadVersionBytes(await versionContentOf(f, { id: content.versionId, keyGeneration: content.keyGeneration }), content.path)
+              : await loadOriginal(location, f)
         } else {
           // Notes pick their latest version up themselves; the upload only
           // seeds a note that has never been edited.
-          bytes = await loadOriginal(location, f, await sealedAt(f, f.contentKeyGeneration))
+          bytes = await loadOriginal(location, f)
         }
         if (cancelled) return
         setKeys({ target, fileKeyAt: keyOf })
@@ -408,9 +409,9 @@ function officeWarmType(file: DriveFile | undefined, folder: Folder | undefined)
   return ext === 'docx' || ext === 'xlsx' || ext === 'pptx' ? ext : null
 }
 
-async function loadOriginal(location: FileLocation, file: DriveFile, target: SnapshotTarget): Promise<Uint8Array> {
-  const { data } = await api.get<ArrayBuffer>(contentPath(location, file.id), { responseType: 'arraybuffer' })
-  return decryptFileBlobV1(new Uint8Array(data), target.fileKey, target.context)
+/** The file's current content, opened against what its metadata commits to. */
+async function loadOriginal(location: FileLocation, file: DriveFile): Promise<Uint8Array> {
+  return loadVersionBytes(await currentContentOf(file), contentPath(location, file.id))
 }
 
 function useDownload(folder: Folder | undefined, file: DriveFile | undefined) {
@@ -562,6 +563,7 @@ function Workspace({
           <TextCollabEditor
             {...common}
             initialContent={opened.initialText}
+            contentRevisionId={file.content?.revisionId ?? null}
             readOnly={readOnly}
             base={location.kind === 'local' ? undefined : collabBase(location, file.id)}
           />
@@ -641,7 +643,7 @@ function Workspace({
                 const version = (await listVersions(file.id)).find((v) => v.id === versionId)
                 if (!version) throw new Error('version not found')
                 return loadVersionBytes(
-                  await sealedAt(file, version.keyGeneration),
+                  await versionContentOf(file, { id: version.id, keyGeneration: version.keyGeneration }),
                   `/files/${file.id}/versions/${versionId}/download`,
                 )
               }}
@@ -787,6 +789,7 @@ function WholeFileActions({
   onRestored: (bytes: Uint8Array, base: SessionBase) => void
 }) {
   const { t } = useTranslation()
+  const queryClient = useQueryClient()
   const [saving, setSaving] = useState(false)
   const [justSaved, setJustSaved] = useState(false)
   const [naming, setNaming] = useState(false)
@@ -829,6 +832,8 @@ function WholeFileActions({
         }
         const { id: versionId } = await saveSnapshot(keys.target, bytes, { ...opts, position })
         settle?.(true)
+        // The file's metadata moved on (its size and content): listings read it again.
+        void queryClient.invalidateQueries({ queryKey: filesKey(keys.target.file.collectionId) })
         lastSaved.current = { digest, versionId }
         if (kind === 'whiteboard') redrawWhiteboard(keys.target, versionId, bytes)
         if (kind === 'office' && officePdf) redrawOffice(keys.target, versionId, officePdf, isSpreadsheet)
@@ -846,7 +851,7 @@ function WholeFileActions({
         setSaving(false)
       }
     },
-    [getBytes, keys.target, kind, officePdf, isSpreadsheet, logPosition, t],
+    [getBytes, keys.target, kind, officePdf, isSpreadsheet, logPosition, queryClient, t],
   )
 
   // Ctrl/Cmd+S anywhere on the page. OnlyOffice runs in a frame and forwards
@@ -882,6 +887,7 @@ function WholeFileActions({
       // the log so far (edits to what it replaces) is behind it.
       const position = logPosition?.() ?? null
       const restored = await saveSnapshot(keys.target, old, { label: t('editor.restoredLabel', { time }), position })
+      void queryClient.invalidateQueries({ queryKey: filesKey(keys.target.file.collectionId) })
       toast.success(t('editor.restored'), { id })
       onRestored(old, { versionId: restored.id, seq: restored.seqAtSnapshot })
     } catch (error) {
@@ -968,7 +974,8 @@ function redrawWhiteboard(target: SnapshotTarget, versionId: string, bytes: Uint
     const png = await exportScene(json)
     if (!png) return false
     return storeThumbnails(
-      { fileId: target.context.fileId, fileKey: target.fileKey, keyGeneration: target.context.generation },
+      // Drawn from the version just saved, now the file's content.
+      { fileId: target.context.fileId, fileKey: target.fileKey, keyGeneration: target.context.generation, revisionId: versionId },
       await thumbnailsOfDrawing(png),
       versionId,
     )
@@ -986,7 +993,7 @@ function redrawOffice(target: SnapshotTarget, versionId: string, pdf: () => Prom
     const png = await renderPdfFirstPageV1(bytes.slice().buffer, THUMBNAIL_MAX_SIDE.lg, undefined, trim ? { trim: 'corner' } : {})
     if (!png) return false
     return storeThumbnails(
-      { fileId: target.context.fileId, fileKey: target.fileKey, keyGeneration: target.context.generation },
+      { fileId: target.context.fileId, fileKey: target.fileKey, keyGeneration: target.context.generation, revisionId: versionId },
       await thumbnailsOfPicture(png, true),
       versionId,
     )

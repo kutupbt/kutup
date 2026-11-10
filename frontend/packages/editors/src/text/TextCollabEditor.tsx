@@ -95,6 +95,11 @@ interface Props {
   fileKeyAt?: (generation: number) => Promise<Uint8Array>
   /** A file on another server: its calls go through this server (see `localBase`). */
   base?: string
+  /**
+   * The file's current content revision (its metadata's `content`): thumbnails
+   * are sealed bound to it (docs/plans/drive-block-format.md §2). Null: none drawn.
+   */
+  contentRevisionId?: string | null
 }
 
 /** The first content of a note no one has edited yet (see deterministicSeed). */
@@ -152,6 +157,7 @@ export default function TextCollabEditor({
   readOnly = false,
   fileKeyAt,
   base,
+  contentRevisionId = null,
 }: Props) {
   const { t, i18n } = useTranslation()
   const ref = useRef<HTMLDivElement>(null)
@@ -396,7 +402,10 @@ export default function TextCollabEditor({
       // (throttled; see noteThumbnailScheduler).
       // Thumbnails are stored with the file's own server: not from here for a
       // file on another one.
-      const thumbnails = readOnly || base ? null : noteThumbnailScheduler({ fileId, fileKey, keyGeneration }, filename)
+      const thumbnails =
+        readOnly || base || !contentRevisionId
+          ? null
+          : noteThumbnailScheduler({ fileId, fileKey, keyGeneration, revisionId: contentRevisionId }, filename)
       let ytext: Y.Text | null = null
       // The file's language (its own chunk) loads while the session opens.
       const ext = filename.split('.').pop()?.toLowerCase() ?? ''

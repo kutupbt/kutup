@@ -1,8 +1,16 @@
-import { createFileRecordV1, type FileMetadataV1, type MediaMetadataV1 } from '@kutup/crypto'
+import {
+  createFileRecordV1,
+  newDriveBlockEncryptor,
+  newRevisionId,
+  renameFileRecordV1,
+  type ContentCommitment,
+  type DriveRevisionContext,
+  type FileMetadataV2,
+  type MediaMetadataV1,
+} from '@kutup/crypto'
 import { hashBlob } from '@kutup/crypto/contentHash'
 import { readMedia } from '@kutup/files/media'
-import { newFileBlobStreamEncryptorV1, type FileBlobContextV1 } from '@kutup/crypto/fileBlob'
-import { PLAIN_CHUNK } from '@kutup/crypto/streamEncryptor'
+import { manifestSigner } from '@kutup/files/upload/commit'
 import { streamUpload, type UploadedFile } from '@kutup/files/upload/streamUpload'
 import api, { freshAccessToken } from '@kutup/session/client'
 import { getSession } from '@kutup/session/store'
@@ -27,9 +35,11 @@ import type { CreatedFile } from '@kutup/editors/files/embedded'
 
 /**
  * A file into a federated folder: the other server takes one multipart body,
- * which our server spools to disk and streams on. It is encrypted a chunk at
- * a time into a Blob (which the browser may keep on disk), never whole in
- * memory.
+ * which our server spools to disk and streams on. It is sealed a block at a
+ * time into a Blob (which the browser may keep on disk), never whole in
+ * memory, and commits inline: its first metadata, committing to the
+ * revision and its manifest (docs/plans/drive-block-format.md §10 slice 3),
+ * goes in the same request.
  */
 async function uploadRemote(
   folder: Folder,
@@ -42,21 +52,27 @@ async function uploadRemote(
   sha256?: string,
 ): Promise<CreatedFile> {
   if (!folder.key) throw new Error('folder is not open')
-  const metadata: FileMetadataV1 = {
+  const contentSha256 = sha256 ?? (await hashBlob(file, signal))
+  const record = await createFileRecordV1(folder.id, folder.keyEpoch, folder.key)
+  const revisionId = newRevisionId()
+  const sealed = await sealToBlob(file, { fileId: record.fileId, revisionId, generation: record.keyGeneration }, record.fileKey, signal)
+  const metadata: FileMetadataV2 = {
     name: file.name,
     mimeType: file.type || 'application/octet-stream',
     size: file.size,
-    sha256: sha256 ?? (await hashBlob(file, signal)),
+    content: sealed.content,
+    sha256: contentSha256,
   }
   if (media) metadata.media = media
-  const record = await createFileRecordV1(folder.id, folder.keyEpoch, folder.key, metadata)
-  const sealed = await sealToBlob(file, { fileId: record.fileId, generation: record.keyGeneration }, record.fileKey, signal)
+  const first = await renameFileRecordV1({ id: record.fileId, keyGeneration: record.keyGeneration, metadataRevision: 0 }, record.fileKey, metadata)
   const form = new FormData()
   form.append('fileId', record.fileId)
-  form.append('metadataEnvelope', record.metadataEnvelope)
+  form.append('revisionId', revisionId)
+  form.append('metadataEnvelope', first.metadataEnvelope)
+  form.append('metadataRevision', String(first.metadataRevision))
   form.append('fileKeyEnvelope', record.fileKeyEnvelope)
   form.append('nameHash', nameHash)
-  form.append('file', sealed, 'encrypted')
+  form.append('file', sealed.blob, 'encrypted')
   await api.post(`/drive/federation/shares/${shareId}/files`, form, {
     signal,
     onUploadProgress: (e) => progress(Math.round((e.progress ?? 0) * file.size), file.size),
@@ -65,21 +81,34 @@ async function uploadRemote(
 }
 
 /**
- * `file` sealed as Drive stores a file's content, a chunk at a time into a
- * Blob (which the browser may keep on disk), never whole in memory.
+ * `file` sealed as Drive stores a revision, a block at a time into a Blob
+ * (which the browser may keep on disk), never whole in memory, with what its
+ * metadata commits to.
  */
-async function sealToBlob(file: File, context: FileBlobContextV1, fileKey: Uint8Array, signal?: AbortSignal): Promise<Blob> {
-  const enc = await newFileBlobStreamEncryptorV1(fileKey, context)
-  const parts: BlobPart[] = [enc.prefix as BlobPart]
-  if (file.size === 0) parts.push(enc.push(new Uint8Array(0), true) as BlobPart)
-  for (let pos = 0; pos < file.size; ) {
-    if (signal?.aborted) throw new DOMException('Upload cancelled', 'AbortError')
-    const end = Math.min(pos + PLAIN_CHUNK, file.size)
-    const plain = new Uint8Array(await file.slice(pos, end).arrayBuffer())
-    parts.push(enc.push(plain, end === file.size) as BlobPart)
-    pos = end
+async function sealToBlob(
+  file: File,
+  context: DriveRevisionContext,
+  fileKey: Uint8Array,
+  signal?: AbortSignal,
+): Promise<{ blob: Blob; content: ContentCommitment }> {
+  const encryptor = await newDriveBlockEncryptor(fileKey, context, file.size)
+  try {
+    const parts: BlobPart[] = [encryptor.header as BlobPart]
+    let pos = 0
+    for (let index = 0; index < encryptor.blockCount; index++) {
+      if (signal?.aborted) throw new DOMException('Upload cancelled', 'AbortError')
+      const end = pos + encryptor.plainLength(index)
+      const plain = new Uint8Array(await file.slice(pos, end).arrayBuffer())
+      if (plain.length !== end - pos) throw new Error('the file changed while it was being read')
+      parts.push(encryptor.sealNext(plain) as BlobPart)
+      pos = end
+    }
+    const { tail, content } = encryptor.finish(manifestSigner())
+    parts.push(tail as BlobPart)
+    return { blob: new Blob(parts, { type: 'application/octet-stream' }), content }
+  } finally {
+    encryptor.free()
   }
-  return new Blob(parts, { type: 'application/octet-stream' })
 }
 
 /**

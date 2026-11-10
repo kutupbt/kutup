@@ -3,9 +3,17 @@
 // from the link's fragment; the server only ever serves ciphertext. Drive
 // lists a folder's link, Office shows a document reached by one.
 
-import { fromBase64, openFileMetadataV1, openFileRecordV1, openPublicLinkCollectionKeyV1, openPublicLinkFileKeyV1 } from '@kutup/crypto'
+import {
+  fromBase64,
+  openDriveObject,
+  openFileMetadataV1,
+  openFileRecordV1,
+  openPublicLinkCollectionKeyV1,
+  openPublicLinkFileKeyV1,
+  type ContentCommitment,
+  type DriveObjectExpected,
+} from '@kutup/crypto'
 import { unlockCollectionKeyring, type EpochLinkV1 } from '@kutup/crypto/collectionKeyring'
-import { decryptFileBlobV1 } from '@kutup/crypto/fileBlob'
 import { fileKeyAtV1 } from '@kutup/crypto/fileKeyring'
 import { editorKindFor } from '@kutup/drive-core/editorKind'
 import { fetchDecryptedChunks } from '@kutup/files/download/fetchDecrypt'
@@ -55,6 +63,8 @@ export interface PublicFile {
   name: string | null
   mimeType: string
   size: number
+  /** The current content its metadata commits to (docs/plans/drive-block-format.md §2); null when it did not open. */
+  content: ContentCommitment | null
 }
 
 export interface PublicShare {
@@ -163,6 +173,7 @@ async function loadFolder(token: string, share: ShareInfo, key: Uint8Array): Pro
         name: opened?.metadata.name ?? null,
         mimeType: opened?.metadata.mimeType ?? 'application/octet-stream',
         size: opened?.metadata.size ?? 0,
+        content: opened?.metadata.content ?? null,
       }
     }),
   )
@@ -193,7 +204,14 @@ async function loadFile(share: ShareInfo, key: Uint8Array): Promise<PublicFile> 
     name: metadata?.name ?? null,
     mimeType: metadata?.mimeType ?? 'application/octet-stream',
     size: metadata?.size ?? 0,
+    content: metadata?.content ?? null,
   }
+}
+
+/** What the file's current content must be: the revision and digest its metadata commits to, and its size. */
+function currentExpected(file: PublicFile): DriveObjectExpected {
+  if (!file.content) throw new Error('file is not open')
+  return { fileId: file.row.id, generation: file.row.contentKeyGeneration, content: file.content, size: file.size }
 }
 
 /** The file key of `generation`, through the file's own key chain. */
@@ -225,7 +243,8 @@ export async function editedContent(token: string, file: PublicFile): Promise<Ui
   }
   const generation = Number(response.headers['x-kutup-key-generation'])
   const key = await publicFileKeyAt(file, generation)
-  const state = await decryptFileBlobV1(new Uint8Array(response.data), key, { fileId: file.row.id, generation })
+  // A note's saved state (a snapshot the relay does not name): its header names its revision.
+  const state = await openDriveObject(new Uint8Array(response.data), key, { fileId: file.row.id, generation, revisionId: null })
   if (list) return stateToListJson(state)
   const Y = await import('yjs')
   const doc = new Y.Doc()
@@ -245,7 +264,7 @@ export async function readPublicFile(token: string, file: PublicFile, signal?: A
   const url = `${await resolveApiBase()}${shareBase(token)}/download/${file.row.id}`
   const parts: Uint8Array[] = []
   let length = 0
-  for await (const { plain } of fetchDecryptedChunks(url, file.fileKey, { fileId: file.row.id, generation: file.row.contentKeyGeneration }, '', signal)) {
+  for await (const { plain } of fetchDecryptedChunks(url, file.fileKey, currentExpected(file), '', signal)) {
     parts.push(plain)
     length += plain.length
   }
@@ -270,7 +289,7 @@ export async function downloadPublicFile(token: string, file: PublicFile): Promi
   await streamDownload({
     url: `${await resolveApiBase()}${shareBase(token)}/download/${file.row.id}`,
     fileKey: file.fileKey,
-    context: { fileId: file.row.id, generation: file.row.contentKeyGeneration },
+    context: currentExpected(file),
     filename: file.name,
     mimeType: file.mimeType,
     expectedPlainSize: file.size,

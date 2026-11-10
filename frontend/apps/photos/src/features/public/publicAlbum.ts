@@ -2,7 +2,8 @@ import { fromBase64, openFileMetadataV1, openPublicLinkCollectionKeyV1 } from '@
 import { openAlbumFileKeyV1 } from '@kutup/crypto/album'
 import { DRIVE_ENVELOPE_PURPOSE, openDriveEnvelope } from '@kutup/crypto/driveEnvelope'
 import { toDriveFile } from '@kutup/drive-core/files'
-import { fileKeyAt } from '@kutup/drive-core/keyring'
+import { currentContentOf } from '@kutup/drive-core/keyring'
+import { acceptFileMetadata } from '@kutup/drive-core/metadataGuard'
 import type { DriveFile } from '@kutup/drive-core/model'
 import { thumbnailUrl } from '@kutup/drive-core/thumbnails'
 import { fetchDecryptedChunks } from '@kutup/files/download/fetchDecrypt'
@@ -117,6 +118,8 @@ export async function loadPublicAlbum(token: string): Promise<PublicAlbum> {
           generation: item.keyGeneration,
         })
         const metadata = await openFileMetadataV1(item.file, fileKey)
+        // Older metadata than this device has seen of the file does not open.
+        await acceptFileMetadata(item.file.id, item.file.metadataRevision)
         const kind = mediaKindOf(metadata.name, metadata.mimeType)
         if (!kind) return null
         const file = toDriveFile({ ...item.file, thumbnails: item.thumbnails }, { fileKey, metadata })
@@ -154,10 +157,10 @@ export function publicThumbnail(token: string, photo: PublicPhoto, variant: 'sm'
 /** A photo's content through the link, decrypted as it streams. */
 export async function readPublicOriginal(token: string, photo: PublicPhoto, signal?: AbortSignal): Promise<Blob> {
   const file = photo.file
-  const key = await fileKeyAt(file, file.contentKeyGeneration)
+  const current = await currentContentOf(file)
   const url = `${await resolveApiBase()}${base(token)}/download/${file.id}`
   const parts: BlobPart[] = []
-  for await (const { plain } of fetchDecryptedChunks(url, key, { fileId: file.id, generation: file.contentKeyGeneration }, '', signal)) {
+  for await (const { plain } of fetchDecryptedChunks(url, current.fileKey, current.expected, '', signal)) {
     parts.push(new Blob([plain as BlobPart]))
   }
   return new Blob(parts, { type: file.mimeType })

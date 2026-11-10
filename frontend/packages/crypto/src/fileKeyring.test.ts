@@ -13,7 +13,7 @@ vi.mock('./rustWasm', async () => {
 import vectors from '../../../../crates/kutup-crypto/tests/vectors/crypto.json'
 import { fromBase64 } from './base64'
 import { fileKeyAtV1, sealPreviousFileKeyV1 } from './fileKeyring'
-import { createFileRecordV1, openFileRecordV1, rekeyFileRecordV1, wrapFileKeyForV1 } from './fileRecord'
+import { createFileRecordV1, openFileRecordV1, rekeyFileRecordV1, renameFileRecordV1, wrapFileKeyForV1 } from './fileRecord'
 
 describe('file key chain', () => {
   const ring = vectors.fileKeyring
@@ -39,7 +39,12 @@ describe('file key chain', () => {
 })
 
 describe('file records across a re-key and a move', () => {
-  const metadata = { name: 'notes.md', mimeType: 'text/markdown', size: 5 }
+  const metadata = {
+    name: 'notes.md',
+    mimeType: 'text/markdown',
+    size: 5,
+    content: { revisionId: '55555555-5555-4555-8555-555555555555', manifestSha256: 'BwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwc=' },
+  }
   const folderA = '22222222-2222-4222-8222-222222222222'
   const folderB = '44444444-4444-4444-8444-444444444444'
 
@@ -47,11 +52,13 @@ describe('file records across a re-key and a move', () => {
     const keyA = new Uint8Array(32).fill(0x0a)
     const keyA2 = new Uint8Array(32).fill(0x0b)
     const keyB = new Uint8Array(32).fill(0x0c)
-    const created = await createFileRecordV1(folderA, 1, keyA, metadata)
+    const created = await createFileRecordV1(folderA, 1, keyA)
+    const first = await renameFileRecordV1({ id: created.fileId, keyGeneration: 1, metadataRevision: 0 }, created.fileKey, metadata)
+    expect(first.metadataRevision).toBe(1)
     const row = {
       id: created.fileId,
       collectionId: folderA,
-      metadataEnvelope: created.metadataEnvelope,
+      metadataEnvelope: first.metadataEnvelope,
       fileKeyEnvelope: created.fileKeyEnvelope,
       keyEpoch: 1,
       keyGeneration: 1,

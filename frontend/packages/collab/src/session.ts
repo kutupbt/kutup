@@ -13,7 +13,8 @@
 //   6. the relay transport, which replays everything after that state.
 import * as Y from 'yjs'
 import { Awareness, applyAwarenessUpdate, encodeAwarenessUpdate } from 'y-protocols/awareness'
-import { decryptFileBlobV1, encryptFileBlobV1 } from '@kutup/crypto/fileBlob'
+import { newRevisionId, openDriveObject, sealDriveFile } from '@kutup/crypto/driveBlocks'
+import { getSession } from '@kutup/session/store'
 import { yjsSeedClientId } from '@kutup/crypto/yjsSeed'
 import api from '@kutup/session/client'
 import { currentDevice, replaceRefusedDevice } from '@kutup/session/currentDevice'
@@ -170,8 +171,16 @@ export async function openCollabSession(options: CollabSessionOptions): Promise<
         ydoc: doc,
         getSeq: () => position.applied,
         encryptSnapshot: async (bytes: Uint8Array) => {
-          const out = await encryptFileBlobV1(bytes, fileKey, { fileId, generation: keyGeneration })
-          return { ciphertext: out, storageHints: { docKeyId, sizeBytes: out.length } }
+          // A note's state is a revision of its own, signed by this account;
+          // its id becomes the version's (docs/plans/drive-block-format.md §2).
+          const session = getSession()
+          if (!session) throw new Error('not signed in')
+          const revisionId = newRevisionId()
+          const out = await sealDriveFile(bytes, fileKey, { fileId, revisionId, generation: keyGeneration }, {
+            masterKey: session.masterKey,
+            accountId: session.userId,
+          })
+          return { ciphertext: out.bytes, revisionId, storageHints: { docKeyId, sizeBytes: out.bytes.length } }
         },
         onError: (error) => options.onSaveError?.(error),
       })
@@ -182,7 +191,8 @@ export async function openCollabSession(options: CollabSessionOptions): Promise<
       const r = await api.get(`${base}/versions/${versionId}/download`, { responseType: 'arraybuffer' })
       const blob = new Uint8Array(r.data as ArrayBuffer)
       const generation = (await listVersions(fileId, base)).find((v) => v.id === versionId)?.keyGeneration ?? keyGeneration
-      const state = await decryptFileBlobV1(blob, await keyOf(generation), { fileId, generation })
+      // A version opens by its own revision: the header must name it.
+      const state = await openDriveObject(blob, await keyOf(generation), { fileId, generation, revisionId: versionId })
       const old = new Y.Doc()
       Y.applyUpdateV2(old, state)
       if (choice === 'save-and-restore') await trigger.forceSave(options.labels.preRestore())
@@ -259,9 +269,10 @@ export async function openCollabSession(options: CollabSessionOptions): Promise<
       const r = await api.get(`${base}/versions/${latest.id}/download`, { responseType: 'arraybuffer' })
       const blob = new Uint8Array(r.data as ArrayBuffer)
       if (blob.length > 0) {
-        const state = await decryptFileBlobV1(blob, await keyOf(latest.keyGeneration), {
+        const state = await openDriveObject(blob, await keyOf(latest.keyGeneration), {
           fileId,
           generation: latest.keyGeneration,
+          revisionId: latest.id,
         })
         Y.applyUpdateV2(doc, state, 'remote')
         position.loaded(latest.seqAtSnapshot)
@@ -312,7 +323,11 @@ export async function openCollabSession(options: CollabSessionOptions): Promise<
     const r = await api.get(`${base}/versions/${latest.id}/download`, { responseType: 'arraybuffer' })
     const blob = new Uint8Array(r.data as ArrayBuffer)
     if (blob.length > 0) {
-      const state = await decryptFileBlobV1(blob, await keyOf(latest.keyGeneration), { fileId, generation: latest.keyGeneration })
+      const state = await openDriveObject(blob, await keyOf(latest.keyGeneration), {
+        fileId,
+        generation: latest.keyGeneration,
+        revisionId: latest.id,
+      })
       Y.applyUpdateV2(doc, state, 'remote')
     }
     return latest.seqAtSnapshot

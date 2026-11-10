@@ -1,11 +1,10 @@
 import { listVersions, newestYjsVersion } from '@kutup/collab/api'
-import { decryptFileBlobV1 } from '@kutup/crypto/fileBlob'
 import { fetchDecryptedChunks } from '@kutup/files/download/fetchDecrypt'
 import { resolveApiBase } from '@kutup/session/apiBase'
 import api, { freshAccessToken } from '@kutup/session/client'
-import { sealedAt } from '@kutup/drive-core/keyring'
+import { currentContentOf, versionContentOf } from '@kutup/drive-core/keyring'
 import { contentPath, fileLocation, remoteStatePath, type DriveFile, type FileLocation, type Folder } from '@kutup/drive-core/model'
-import { fromBase64 } from '@kutup/crypto'
+import { fromBase64, openDriveObject } from '@kutup/crypto'
 import { isListName, stateToListJson } from '@kutup/map/list'
 import { editorKindFor, extensionOf } from '@kutup/drive-core/editorKind'
 
@@ -55,8 +54,8 @@ export async function currentContent(folder: Folder, file: DriveFile): Promise<F
   if (kind !== 'text') return { kind: 'version', path, versionId: latest.id, keyGeneration: latest.keyGeneration, seqAtSnapshot: latest.seqAtSnapshot }
 
   const { data } = await api.get<ArrayBuffer>(path, { responseType: 'arraybuffer' })
-  const sealed = await sealedAt(file, latest.keyGeneration)
-  const state = await decryptFileBlobV1(new Uint8Array(data), sealed.fileKey, sealed.context)
+  const opened = await versionContentOf(file, { id: latest.id, keyGeneration: latest.keyGeneration })
+  const state = await openDriveObject(new Uint8Array(data), opened.fileKey, opened.expected)
   const Y = await import('yjs')
   const doc = new Y.Doc()
   try {
@@ -73,8 +72,8 @@ async function listContent(file: DriveFile): Promise<FileContent> {
   const latest = newestYjsVersion(await listVersions(file.id))
   if (!latest || latest.sizeBytes === 0) return { kind: 'original' }
   const { data } = await api.get<ArrayBuffer>(`/files/${file.id}/versions/${latest.id}/download`, { responseType: 'arraybuffer' })
-  const sealed = await sealedAt(file, latest.keyGeneration)
-  const state = await decryptFileBlobV1(new Uint8Array(data), sealed.fileKey, sealed.context)
+  const opened = await versionContentOf(file, { id: latest.id, keyGeneration: latest.keyGeneration })
+  const state = await openDriveObject(new Uint8Array(data), opened.fileKey, opened.expected)
   return { kind: 'plain', bytes: stateToListJson(state), versionId: latest.id }
 }
 
@@ -93,8 +92,10 @@ async function remoteContent(location: FileLocation, file: DriveFile): Promise<F
     if ((error as { response?: { status?: number } }).response?.status === 404) return { kind: 'original' }
     throw error
   }
-  const sealed = await sealedAt(file, saved.keyGeneration)
-  const state = await decryptFileBlobV1(fromBase64(saved.state), sealed.fileKey, sealed.context)
+  // A saved state relayed from the other server: a note's snapshot, which the
+  // relay does not name; its header names its revision.
+  const opened = await versionContentOf(file, { id: null, keyGeneration: saved.keyGeneration })
+  const state = await openDriveObject(fromBase64(saved.state), opened.fileKey, opened.expected)
   if (list) return { kind: 'plain', bytes: stateToListJson(state), versionId: 'remote' }
   const Y = await import('yjs')
   const doc = new Y.Doc()
@@ -114,8 +115,11 @@ export async function readFile(folder: Folder, file: DriveFile, signal?: AbortSi
   const base = await resolveApiBase()
   const url = content.kind === 'version' ? `${base}${content.path}` : `${base}${contentPath(fileLocation(folder), file.id)}`
   const parts: BlobPart[] = []
-  const sealed = await sealedAt(file, content.kind === 'version' ? content.keyGeneration : file.contentKeyGeneration)
-  for await (const { plain } of fetchDecryptedChunks(url, sealed.fileKey, sealed.context, await freshAccessToken(), signal)) {
+  const opened =
+    content.kind === 'version'
+      ? await versionContentOf(file, { id: content.versionId, keyGeneration: content.keyGeneration })
+      : await currentContentOf(file)
+  for await (const { plain } of fetchDecryptedChunks(url, opened.fileKey, opened.expected, await freshAccessToken(), signal)) {
     // Blobs, not one growing buffer: the browser may keep large ones on disk.
     parts.push(new Blob([plain as BlobPart]))
   }

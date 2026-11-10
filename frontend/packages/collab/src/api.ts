@@ -94,6 +94,17 @@ export interface NewVersion {
    * {@link VersionConflictError}.
    */
   basedOn?: string
+  /**
+   * The revision the sealed blob is bound to (its header names it): the
+   * version's id once stored (docs/plans/drive-block-format.md §2).
+   */
+  revisionId: string
+  /**
+   * A whole-file save becomes the file's current content: the file's next
+   * metadata, committing to this revision (the file's current revision + 1).
+   * A note's state (`yjs`) carries none.
+   */
+  metadata?: { metadataEnvelope: string; metadataRevision: number }
 }
 
 /** A conditional save lost: the file holds `current` now (a version id, or `original`). */
@@ -124,6 +135,11 @@ export async function createVersion(
   form.append('keepForever', String(Boolean(version.keepForever)))
   if (version.label) form.append('label', version.label)
   if (version.basedOn) form.append('basedOn', version.basedOn)
+  form.append('revisionId', version.revisionId)
+  if (version.metadata) {
+    form.append('metadataEnvelope', version.metadata.metadataEnvelope)
+    form.append('metadataRevision', String(version.metadata.metadataRevision))
+  }
   form.append('file', new Blob([sealed as BlobPart], { type: 'application/octet-stream' }), 'version')
   try {
     const r = await api.post<VersionRow>(`${base}/versions`, form)

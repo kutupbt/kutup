@@ -26,7 +26,7 @@ function thumbnailsAfterUpload(uploaded: UploadedFile, file: File) {
   enqueueThumbnail(uploaded.fileId, async () => {
     const made = mediaKindOf(file.name, file.type) === 'video' ? await thumbnailsOfVideo(file) : await thumbnailsOfImage(file)
     return storeThumbnails(
-      { fileId: uploaded.fileId, fileKey: uploaded.fileKey, keyGeneration: uploaded.keyGeneration },
+      { fileId: uploaded.fileId, fileKey: uploaded.fileKey, keyGeneration: uploaded.keyGeneration, revisionId: uploaded.revisionId },
       made,
       'original',
     )

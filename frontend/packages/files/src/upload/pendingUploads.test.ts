@@ -6,7 +6,7 @@ import { PENDING_UPLOAD_LIFETIME_MS, pendingUploads, type PendingUpload } from '
 function upload(fileId: string, owner: string, startedAt: number, updatedAt = startedAt): PendingUpload {
   return {
     fileId, owner, uploadUrl: `https://drive.test/api/uploads/${fileId}`, size: 10, lastModified: 1,
-    collectionId: 'c', keyEpoch: 1, fileKeyEnvelope: 'k', metadataEnvelope: 'm', prefix: 'p', startedAt, updatedAt,
+    collectionId: 'c', keyEpoch: 1, fileKeyEnvelope: 'k', revisionId: 'r', draftEnvelope: 'd', startedAt, updatedAt,
   }
 }
 
@@ -17,6 +17,8 @@ describe('pendingUploads', () => {
     await pendingUploads.put(upload('b', 'alice', now - 1000))
     await pendingUploads.put(upload('c', 'bob', now - 2000))
     await pendingUploads.put(upload('old', 'alice', now - 2 * PENDING_UPLOAD_LIFETIME_MS, now - PENDING_UPLOAD_LIFETIME_MS))
+    // One from before the block format (a prefix, no revision) cannot go on.
+    await pendingUploads.put({ ...upload('suite1', 'alice', now - 500), revisionId: undefined } as unknown as PendingUpload)
     expect((await pendingUploads.list('alice', now)).map((u) => u.fileId)).toEqual(['b', 'a'])
     expect((await pendingUploads.list('bob', now)).map((u) => u.fileId)).toEqual(['c'])
 

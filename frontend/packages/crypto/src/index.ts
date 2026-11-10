@@ -5,15 +5,8 @@ import { fromBase64, toBase64 } from './base64'
 import { ACCOUNT_RECORD_PURPOSE, sealAccountRecord } from './accountRecord'
 import { deriveAccountIdentityKeys } from './identity'
 
-export { encryptStream, decryptStream } from './symmetric'
-export {
-  decryptFileBlobV1,
-  encryptFileBlobV1,
-  fileBlobCipherSize,
-  newFileBlobStreamEncryptorV1,
-  openFileBlobStreamV1,
-} from './fileBlob'
-export type { FileBlobContextV1 } from './fileBlob'
+export { DRIVE_BLOCK_SIZE, newDriveBlockEncryptor, newRevisionId, openDriveFile, openDriveObject, sealDriveFile } from './driveBlocks'
+export type { ContentCommitment, DriveBlockEncryptor, DriveObjectExpected, DriveRevisionContext, ManifestSigner } from './driveBlocks'
 export {
   CHAT_MEDIA_OBJECT_HEADER_BYTES,
   CHAT_MEDIA_OBJECT_PREFIX_BYTES,
@@ -136,8 +129,11 @@ export {
 export type { CreateOwnedCollectionV1, OwnedCollectionWireV1 } from './ownedCollection'
 export {
   createFileRecordV1,
+  openFileKeyV1,
+  openFileMetadataDraftV1,
   openFileMetadataV1,
   openFileRecordV1,
+  sealFileMetadataDraftV1,
   rekeyFileRecordV1,
   renameFileRecordV1,
   wrapFileKeyForV1,
@@ -146,7 +142,8 @@ export { fileKeyAtV1, sealPreviousFileKeyV1 } from './fileKeyring'
 export type { FileKeyLinkV1 } from './fileKeyring'
 export type {
   CreatedFileRecordV1,
-  FileMetadataV1,
+  FileMetadataDraftV1,
+  FileMetadataV2,
   MediaMetadataV1,
   TakenFromV1,
   FileWireV1,

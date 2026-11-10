@@ -1,5 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { createOwnedCollectionV1, openFileMetadataV1, renameOwnedCollectionV1 } from '@kutup/crypto'
+import { acceptFileMetadata } from '@kutup/drive-core/metadataGuard'
 import { openAlbumFileKeyV1, sealAlbumFileKeyV1 } from '@kutup/crypto/album'
 import { rotateFolder, type FolderAccess, type Removal } from '@kutup/drive-core/access'
 import type { PendingUpgradeRemoval } from '@kutup/drive-core/identityPins'
@@ -171,6 +172,8 @@ export function useAlbumItems(album: Album | undefined, index: FolderIndex | und
               generation: item.keyGeneration,
             })
             const metadata = await openFileMetadataV1(item.file, fileKey)
+            // Older metadata than this device has seen of the file does not open.
+            await acceptFileMetadata(item.file.id, item.file.metadataRevision)
             const photo = toPhoto(folderFor(index, item.file, a), toDriveFile(item.file, { fileKey, metadata }))
             return photo ? { ...photo, addedBy: item.addedBy } : null
           } catch {
@@ -218,6 +221,7 @@ async function remoteAlbumItems(album: Album, reloadAlbums: () => Promise<void>)
         })
         const row: FileRow = { ...item.file, thumbnails: item.thumbnails }
         const metadata = await openFileMetadataV1(row, fileKey)
+        await acceptFileMetadata(row.id, row.metadataRevision)
         return toPhoto(folderFor(undefined, row, album), toDriveFile(row, { fileKey, metadata }))
       } catch {
         return null

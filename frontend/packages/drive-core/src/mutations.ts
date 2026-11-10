@@ -17,6 +17,7 @@ import { cachedFolderIndex, foldersKey } from './folders'
 import { trashKey } from './trash'
 import { useDriveIdentity, type DriveIdentity } from './identity'
 import { fileMetadataOf, folderLocation, type DriveFile, type Folder } from './model'
+import { acceptFileMetadata } from './metadataGuard'
 import { atTopLevel, inFolder, nameHashIn, randomNameHash, type NamePlace } from './names'
 import { rekeyFile } from './rekey'
 import { confirmRecipient, lookupAddress } from './identityPins'
@@ -98,6 +99,8 @@ export function useRenameFile() {
       ...next,
       nameHash: folder.key ? await nameHashIn(inFolder(folder), name.trim()) : randomNameHash(),
     })
+    // This device's own write: the file's newest metadata.
+    await acceptFileMetadata(file.id, next.metadataRevision).catch(() => undefined)
   })
 }
 

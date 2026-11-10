@@ -48,6 +48,22 @@ export interface GroupKeyMember {
   hpkePublicKey: string
 }
 
+/** `kutup-crypto-wasm`'s `BlockEncryptor` (blocks.rs). */
+export interface WasmBlockEncryptor {
+  header(): Uint8Array
+  readonly size: number
+  readonly blockCount: number
+  readonly nextIndex: number
+  blockLength(index: number): number
+  blockOffset(index: number): number
+  readonly objectLength: number
+  /** Set once finished: the sealed manifest's SHA-256, canonical base64. */
+  readonly manifestSha256: string | undefined
+  sealNext(plaintext: Uint8Array): Uint8Array
+  finishSigned(masterKeyBase64: string, uploaderAccountId: string): Uint8Array
+  free(): void
+}
+
 export interface CryptoWasmModule {
   accountProfileKey(masterKey: Uint8Array, generation: number, current: unknown, account: string, binding: string): import('./profile').ProfileLookup
   profileLookup(key: string): import('./profile').ProfileLookup
@@ -435,6 +451,7 @@ export interface CryptoWasmModule {
     variant: string,
     fileKeyBase64: string,
     fileId: string,
+    revisionId: string,
     generation: number,
   ): string
   openThumbnail(
@@ -442,19 +459,35 @@ export interface CryptoWasmModule {
     variant: string,
     fileKeyBase64: string,
     expectedFileId: string,
+    expectedRevisionId: string,
     expectedGeneration: number,
   ): { format: number; width: number; height: number; image: string }
-  prepareDriveFileBlob(
+  /** Where everything sits in an object of a block family (`drive`, `chatMedia`, `chatBackupMedia`). */
+  blockLayout(family: string): { headerBytes: number; blockSize: number; blockOverhead: number; trailerBytes: number }
+  /** The sealed manifest's length a trailer (the object's last bytes) names. */
+  blockTrailerManifestLength(family: string, trailer: Uint8Array): number
+  /** A Drive revision's block encryptor (docs/plans/drive-block-format.md §2). */
+  driveBlockEncryptor(fileKeyBase64: string, fileId: string, revisionId: string, generation: number, size: number): WasmBlockEncryptor
+  /** A whole Drive revision sealed at once, signed by the uploader. */
+  driveSealFile(
+    plaintext: Uint8Array,
     fileKeyBase64: string,
     fileId: string,
+    revisionId: string,
     generation: number,
-  ): { objectHeader: string; streamKey: string }
-  openDriveFileBlobHeader(
-    objectHeaderBase64: string,
+    masterKeyBase64: string,
+    uploaderAccountId: string,
+  ): { bytes: Uint8Array; manifestSha256: string; free(): void }
+  /** A whole Drive revision opened against its metadata's content commitment. */
+  driveOpenFile(
+    object: Uint8Array,
     fileKeyBase64: string,
     expectedFileId: string,
     expectedGeneration: number,
-  ): string
+    contentRevisionId: string,
+    contentManifestSha256: string,
+    size: number,
+  ): Uint8Array
   prepareChatMediaObject(
     attachmentKeyBase64: string,
     attachmentId: string,

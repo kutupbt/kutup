@@ -800,6 +800,31 @@ Each slice is a PR.
      part (`uploads.uploaded_at`, migration 20261109130000), so a new file
      has no `files` row and no listing needs a filter; the commit inserts the
      row or stores the version as a tus version lands (docs/api.md).
+   - Web side: the client picks the revision id, sends it in the tus
+     `Upload-Metadata`, and commits after the last PATCH (`commit.ts`). A
+     `409 revision_conflict` re-reads the file from its folder's listing and
+     seals the metadata again on top of it, once (a version keeps a name
+     changed meanwhile); `alreadyCommitted` is success. A refusal at the
+     commit (name taken, file changed) cancels the upload (tus DELETE).
+   - Resume after a reload: the browser's record keeps the revision id and
+     a *draft* of the metadata (sealed under the file key in a context with
+     the revision id as parent, so it never opens as the file's metadata),
+     not a prefix. The server's offset may fall anywhere; the source seals
+     again from the block it falls in (synthetic nonces give the same bytes)
+     and sends from that exact byte. The manifest's nonce is random, so the
+     tail is made once and stored in the record before any of it is sent; an
+     upload resumed inside or after the tail sends the kept one. A record
+     whose bytes all arrived but whose commit did not is committed when the
+     upload is resumed. A PATCH carries two sealed blocks (above S3's 5 MiB
+     minimum part).
+   - History versions and note snapshots: the metadata commits to the
+     current content only, so a version opens by its own revision id (the
+     header must name it) with the manifest digest and size taken from the
+     object itself (`openDriveObject`); its blocks are still checked against
+     its signed manifest. The original upload, which the listing does not
+     name, opens by the revision its header names. Committing each version's
+     digest (a sealed per-version record) would close this; it is not part
+     of this slice.
 4. **Download and streaming.**
    - The block reader Worker and `fetchDecrypt` on blocks.
    - The CLI download.

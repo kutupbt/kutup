@@ -1,6 +1,7 @@
 import { useEffect } from 'react'
 import { renameFileRecordV1, type MediaMetadataV1 } from '@kutup/crypto'
 import { fileMetadataOf, type DriveFile, type Folder } from '@kutup/drive-core/model'
+import { acceptFileMetadata } from '@kutup/drive-core/metadataGuard'
 import { readOriginal } from '@kutup/drive-core/original'
 import { enqueueThumbnail, thumbnailInHand, thumbnailWaiting } from '@kutup/drive-core/thumbnailQueue'
 import { storeThumbnails } from '@kutup/drive-core/thumbnails'
@@ -45,6 +46,8 @@ export async function writeMedia(file: DriveFile, media: MediaMetadataV1 | null,
     fileMetadataOf(file, { media: media ?? undefined, ...(sha256 && !file.sha256 ? { sha256 } : {}) }),
   )
   await api.put(`/files/${file.id}`, next)
+  // This device's own write: the file's newest metadata.
+  await acceptFileMetadata(file.id, next.metadataRevision).catch(() => undefined)
 }
 
 function saveData(): boolean {
@@ -94,10 +97,11 @@ export function catchUp(photo: Photo, userId: string, first = false): void {
           }
         }
       }
-      if (want.thumbnail && file.fileKey) {
+      if (want.thumbnail && file.fileKey && file.content) {
         const made = photo.kind === 'image' ? await thumbnailsOfImage(plain) : await thumbnailsOfVideo(plain)
         const drawn = await storeThumbnails(
-          { fileId: file.id, fileKey: file.fileKey, keyGeneration: file.keyGeneration },
+          // Drawn from the current content (readOriginal opens the committed revision).
+          { fileId: file.id, fileKey: file.fileKey, keyGeneration: file.keyGeneration, revisionId: file.content.revisionId },
           made,
           'original',
         )

@@ -1,6 +1,6 @@
 import { unlockCollectionKeyring, type EpochLinkV1 } from '@kutup/crypto/collectionKeyring'
 import { fileKeyAtV1 } from '@kutup/crypto/fileKeyring'
-import type { FileBlobContextV1 } from '@kutup/crypto/fileBlob'
+import type { DriveObjectExpected } from '@kutup/crypto'
 import api from '@kutup/session/client'
 import { folderLocation, type DriveFile, type Folder } from './model'
 
@@ -86,13 +86,47 @@ export async function fileKeyAt(file: DriveFile, generation: number): Promise<Ui
   return pending
 }
 
-/** A key and the binding context for a blob of `file` sealed under `generation`. */
+/** What a Drive object of a file is sealed for: the file and its key generation. */
+export interface DriveFileBinding {
+  fileId: string
+  generation: number
+}
+
+/** A key and the binding of an object of `file` sealed under `generation`. */
 export async function sealedAt(
   file: DriveFile,
   generation: number,
-): Promise<{ fileKey: Uint8Array; context: FileBlobContextV1 }> {
+): Promise<{ fileKey: Uint8Array; context: DriveFileBinding }> {
   return {
     fileKey: await fileKeyAt(file, generation),
     context: { fileId: file.id, generation },
+  }
+}
+
+/**
+ * The file's current content: the key of the generation it was sealed under
+ * and what it must be, the revision and manifest digest its metadata commits
+ * to and the metadata's size (docs/plans/drive-block-format.md §2).
+ */
+export async function currentContentOf(file: DriveFile): Promise<{ fileKey: Uint8Array; expected: DriveObjectExpected }> {
+  if (!file.content) throw new Error('file is not open')
+  const generation = file.contentKeyGeneration
+  return {
+    fileKey: await fileKeyAt(file, generation),
+    expected: { fileId: file.id, generation, content: file.content, size: file.size },
+  }
+}
+
+/**
+ * A version from the file's history, by its id (its revision): the header
+ * must name it. `null` for the original upload, which the listing does not name.
+ */
+export async function versionContentOf(
+  file: DriveFile,
+  version: { id: string | null; keyGeneration: number },
+): Promise<{ fileKey: Uint8Array; expected: DriveObjectExpected }> {
+  return {
+    fileKey: await fileKeyAt(file, version.keyGeneration),
+    expected: { fileId: file.id, generation: version.keyGeneration, revisionId: version.id },
   }
 }

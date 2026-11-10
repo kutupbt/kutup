@@ -1,7 +1,7 @@
 import { hashBlob } from '@kutup/crypto/contentHash'
 import { editorKindFor } from '@kutup/drive-core/editorKind'
 import { isListName } from '@kutup/map/list'
-import { fileMetadataOf, folderLocation, type DriveFile, type Folder } from '@kutup/drive-core/model'
+import { folderLocation, type DriveFile, type Folder } from '@kutup/drive-core/model'
 import { contentHashIn } from '@kutup/drive-core/names'
 import { rekeyFile } from '@kutup/drive-core/rekey'
 import type { ReplaceProblem } from '@kutup/drive-ui/nameConflicts'
@@ -99,7 +99,14 @@ export async function replaceContent(folder: Folder, listed: DriveFile, file: Fi
         keyGeneration: holder.keyGeneration,
         metadataRevision: holder.metadataRevision,
       },
-      metadata: fileMetadataOf(holder, { size: file.size, mimeType: file.type || holder.mimeType, sha256, media }),
+      // Everything but the content, which the commit adds once the manifest is sealed.
+      metadata: {
+        name: holder.name,
+        mimeType: file.type || holder.mimeType,
+        size: file.size,
+        sha256,
+        ...(media ? { media } : {}),
+      },
       contentHash: await contentHashIn(folder, sha256),
       accessToken: freshAccessToken,
       onProgress: opts.progress,

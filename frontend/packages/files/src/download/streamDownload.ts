@@ -1,17 +1,15 @@
-// streamDownload — chunked decrypt-and-save for non-federated downloads.
+// streamDownload — decrypt-and-save for downloads.
 //
-// Streaming path (RAM stays bounded ~constant regardless of file size on
-// the FSA sink; the Blob fallback still buffers one full plaintext):
-//
-//   fetchDecryptedChunks(url) → { plain, isFinal } per 5 MB chunk
+//   fetchDecryptedChunks(url) → the plaintext (fetchDecrypt.ts, shared with
+//   the folder-as-ZIP path, ../zipDownload.ts)
 //     → showSaveFilePicker WritableStream (Chrome / Edge / Brave)
 //     OR Blob accumulator + <a download> (Firefox / Safari)
 //
-// The fetch + re-framing + secretstream decryption all live in
-// fetchDecrypt.ts, shared with the folder-as-ZIP path (../zipDownload.ts).
+// The object is read whole for now; reading it block by block, through the
+// service worker, comes with slice 4 (docs/plans/drive-block-format.md §10).
 
+import type { DriveObjectExpected } from '@kutup/crypto'
 import { fetchDecryptedChunks } from './fetchDecrypt'
-import type { FileBlobContextV1 } from '@kutup/crypto/fileBlob'
 
 export interface StreamDownloadOptions {
   /** Full URL — either a local file download or a verified federated
@@ -20,8 +18,8 @@ export interface StreamDownloadOptions {
   /** Per-file content key (unwrapped from the collection key by the
    *  caller — same flow as the existing handleDownload). */
   fileKey: Uint8Array
-  /** Exact authenticated Drive object binding expected in the blob header. */
-  context: FileBlobContextV1
+  /** What the object must be: the committed current content, or a version by its id. */
+  context: DriveObjectExpected
   /** Display name + MIME shown in the save picker / `<a download>`. */
   filename: string
   mimeType?: string

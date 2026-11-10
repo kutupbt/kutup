@@ -67,8 +67,11 @@ export function useListSession(file: DriveFile | null, readOnly: boolean, folder
     // Pictures are drawn by editors of lists on this server, sealed under
     // the folder's current key only (as Drive's are).
     const location = folder ? fileLocation(folder) : ({ kind: 'local' } as const)
-    const pictureTarget = { fileId: file.id, fileKey, keyGeneration: file.keyGeneration }
-    const pictures = !readOnly && location.kind === 'local' && (!folder || file.keyEpoch === folder.keyEpoch)
+    // Bound to the list's current content revision (its metadata's): saved
+    // states do not change it (docs/plans/drive-block-format.md §2).
+    const revisionId = file.content?.revisionId ?? ''
+    const pictureTarget = { fileId: file.id, fileKey, keyGeneration: file.keyGeneration, revisionId }
+    const pictures = !readOnly && Boolean(revisionId) && location.kind === 'local' && (!folder || file.keyEpoch === folder.keyEpoch)
     // An outdated picture is redrawn once the list is up, by someone who
     // may manage it (readers of a shared folder do not spend its owner's
     // quota), as Drive's backfill does.

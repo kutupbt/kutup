@@ -15,6 +15,7 @@ import { useDriveIdentity, type DriveIdentity } from './identity'
 import { fileKind, type ItemKind } from './kinds'
 import { folderKeyAt, type KeyringFolder } from './keyring'
 import { fileMetadataOf, type DriveFile } from './model'
+import { acceptFileMetadata } from './metadataGuard'
 import { asNameTaken, atTopLevel, availableHashes, findAvailableName, inFolder, nameHashIn, type NamePlace } from './names'
 
 interface TrashFolderRow {
@@ -143,6 +144,11 @@ export function useTrash() {
                   )
             })
             .then((key) => openFileRecordV1(row, key))
+            // Older metadata than this device has seen of the file does not open.
+            .then(async (result) => {
+              await acceptFileMetadata(row.id, row.metadataRevision)
+              return result
+            })
             .catch(() => null)
           const metadata = opened?.metadata ?? null
           return {
@@ -278,6 +284,10 @@ export async function restoreEntry(
   for (let attempt = 0; ; attempt++) {
     try {
       await api.post(`/trash/${entry.id}/restore`, body)
+      // A rename it came back with is the file's newest metadata.
+      if (entry.type === 'file' && typeof body?.metadataRevision === 'number') {
+        await acceptFileMetadata(entry.id, body.metadataRevision).catch(() => undefined)
+      }
       return
     } catch (error) {
       const refused = refusedName(error)

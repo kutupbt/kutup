@@ -4,11 +4,9 @@
 // plaintext to a write sink (showSaveFilePicker WritableStream or a
 // growing Blob — see upload/streamDownload.ts).
 //
-// Primitive-only counterpart to streamEncryptor.ts. fileBlob.ts supplies the
-// derived purpose key, typed Drive-header AAD and exact context validation.
-//
-// Symmetric to streamEncryptor.ts. The one-shot typed Drive helper delegates
-// to this same bounded primitive adapter.
+// Primitive-only counterpart to streamEncryptor.ts, used by Chat media and
+// Chat backup (suite 1) until they move to the block format (slice 6 of
+// docs/plans/drive-block-format.md); Drive no longer uses it.
 
 import { getSodium } from './sodium'
 import { CIPHER_CHUNK, HEADER_BYTES } from './streamEncryptor'
