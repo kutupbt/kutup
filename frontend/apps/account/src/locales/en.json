@@ -52,6 +52,7 @@
       "usernameRequired": "Enter your username."
     },
     "errors": {
+      "authenticatorLost": "The authenticator app can no longer be checked for this account. Use a recovery code, or ask an administrator to turn two-step sign-in off.",
       "locked": "Too many attempts. Wait a few minutes, then try again.",
       "network": "The server could not be reached. Check your connection and try again.",
       "signInFailed": "Sign-in failed. Check your username and password.",

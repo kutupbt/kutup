@@ -760,11 +760,22 @@ scripts/backup-postgres.sh --fetch <name> kutup.dump
 docker compose exec -T postgres pg_restore -U kutup -d kutup --clean --if-exists --no-owner < kutup.dump
 # The account data keys: always the NEWEST key dump, whichever database dump
 # you restored. Keys of accounts deleted since are in it no more, so their
-# sealed fields stay unreadable.
+# sealed fields stay unreadable. It may hold keys of accounts made after the
+# database dump: those go before the foreign key is added back, which would
+# fail on them (and leave the keys without their cascade).
 scripts/backup-postgres.sh --fetch keys:<newest key dump> keys.dump
-docker compose exec -T postgres pg_restore -U kutup -d kutup --clean --if-exists --no-owner < keys.dump
+docker compose exec -T postgres pg_restore -U kutup -d kutup --clean --if-exists --no-owner \
+  --section=pre-data --section=data < keys.dump
+docker compose exec -T postgres psql -U kutup -d kutup -v ON_ERROR_STOP=1 -c \
+  "DELETE FROM account_keys.account_data_keys k WHERE NOT EXISTS (SELECT 1 FROM users u WHERE u.id = k.user_id)"
+docker compose exec -T postgres pg_restore -U kutup -d kutup --no-owner --exit-on-error \
+  --section=post-data < keys.dump
 docker compose up -d --wait
 ```
+
+The server refuses to start while the account data keys have lost their
+foreign key to the accounts (a restore that skipped the step above): without
+it, deleting an account would no longer destroy its key.
 
 The dump holds accounts, key envelopes and object references; the files'
 ciphertext stays in the object store. A restore therefore returns to the

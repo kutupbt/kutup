@@ -52,6 +52,7 @@
       "usernameRequired": "Kullanıcı adınızı girin."
     },
     "errors": {
+      "authenticatorLost": "Bu hesap için kimlik doğrulama uygulaması artık denetlenemiyor. Bir kurtarma kodu kullanın ya da bir yöneticiden iki adımlı oturum açmayı kapatmasını isteyin.",
       "locked": "Çok fazla deneme. Birkaç dakika bekleyip yeniden deneyin.",
       "network": "Sunucuya ulaşılamadı. Bağlantınızı kontrol edip yeniden deneyin.",
       "signInFailed": "Giriş yapılamadı. Kullanıcı adınızı ve parolanızı kontrol edin.",
