@@ -6,6 +6,7 @@ import tailwindcss from '@tailwindcss/vite'
 import react from '@vitejs/plugin-react'
 import type { Plugin, UserConfig } from 'vite'
 import { reloadGuardScript } from './src/reloadGuard.ts'
+import { THEME_SCRIPT } from './src/theme.ts'
 
 /** frontend/ — the workspace root. */
 const FRONTEND = path.resolve(import.meta.dirname, '../..')
@@ -30,25 +31,87 @@ export function wasmHash(module: WasmModule): string {
   return hash.digest('hex').slice(0, 16)
 }
 
-/** Where the reload guard is served from when a page allows no inline script. */
+/** Where the reload guard and the theme script are served from. */
 const RELOAD_GUARD_FILE = 'kutup-reload-guard.js'
+const THEME_FILE = 'theme.js'
 
 /**
- * The reload guard ([`reloadGuard`]) in each app page, ahead of the bundle it
- * watches: inline, or with `strictCsp` (a page whose policy allows no inline
- * script, such as Pass) as a classic script file loaded the same way.
+ * The two classic scripts each app page runs ahead of its bundle, as files
+ * on the page's own origin: the apps' policy allows no inline script
+ * (frontend/docker/40-kutup-hosts.sh, docs/content-security-policy.md). The
+ * reload guard ([`reloadGuard`]) comes first, in builds only (it watches the
+ * built bundle); the no-flash theme ([`THEME_SCRIPT`]) after it, in dev too.
  */
-function reloadOnceOnLoadFailure(strictCsp: boolean): Plugin {
+function pageScripts(): Plugin {
   const build = Date.now().toString(36)
+  let serving = false
   return {
-    name: 'kutup-reload-once',
-    apply: 'build',
-    transformIndexHtml: () =>
-      strictCsp
-        ? [{ tag: 'script', attrs: { src: `/${RELOAD_GUARD_FILE}` }, injectTo: 'head-prepend' }]
-        : [{ tag: 'script', children: reloadGuardScript(build), injectTo: 'head-prepend' }],
+    name: 'kutup-page-scripts',
+    configResolved(config) {
+      serving = config.command === 'serve'
+    },
+    configureServer(server) {
+      server.middlewares.use((req, res, next) => {
+        if ((req.url ?? '').split('?')[0] !== `/${THEME_FILE}`) return next()
+        res.setHeader('Content-Type', 'text/javascript; charset=utf-8')
+        res.setHeader('Cache-Control', 'no-cache')
+        res.end(THEME_SCRIPT)
+      })
+    },
+    transformIndexHtml: () => [
+      ...(serving ? [] : [{ tag: 'script', attrs: { src: `/${RELOAD_GUARD_FILE}` }, injectTo: 'head-prepend' as const }]),
+      { tag: 'script', attrs: { src: `/${THEME_FILE}` }, injectTo: 'head-prepend' as const },
+    ],
     generateBundle() {
-      if (strictCsp) this.emitFile({ type: 'asset', fileName: RELOAD_GUARD_FILE, source: reloadGuardScript(build) })
+      this.emitFile({ type: 'asset', fileName: RELOAD_GUARD_FILE, source: reloadGuardScript(build) })
+      this.emitFile({ type: 'asset', fileName: THEME_FILE, source: THEME_SCRIPT })
+    },
+  }
+}
+
+/** Where an app serves Excalidraw's fonts (`/<this>/fonts/...`). */
+const EXCALIDRAW_ASSETS = 'excalidraw-assets'
+
+/**
+ * Excalidraw (whiteboards) loads its hand-drawn fonts from
+ * `window.EXCALIDRAW_ASSET_PATH`, else from esm.sh, which the apps' policy
+ * does not allow. An app whose bundle holds Excalidraw gets the fonts in its
+ * own `excalidraw-assets/fonts/`, and @kutup/editors points Excalidraw there
+ * before it loads (packages/editors/src/whiteboard/assets.ts).
+ */
+function excalidrawFonts(): Plugin {
+  const fonts = () => {
+    const index = createRequire(path.join(FRONTEND, 'packages/editors/package.json')).resolve('@excalidraw/excalidraw')
+    return path.resolve(path.dirname(index), '..', 'prod', 'fonts')
+  }
+  const prefix = `/${EXCALIDRAW_ASSETS}/fonts/`
+  let outDir = 'dist'
+  let used = false
+  return {
+    name: 'kutup-excalidraw-fonts',
+    configResolved(config) {
+      outDir = path.resolve(config.root, config.build.outDir)
+    },
+    configureServer(server) {
+      server.middlewares.use((req, res, next) => {
+        const url = decodeURIComponent((req.url ?? '').split('?')[0])
+        if (!url.startsWith(prefix)) return next()
+        const root = fonts()
+        const file = path.resolve(root, url.slice(prefix.length))
+        if (!file.startsWith(root + path.sep) || !existsSync(file) || !statSync(file).isFile()) return next()
+        res.setHeader('Content-Type', 'font/woff2')
+        createReadStream(file).pipe(res)
+      })
+    },
+    generateBundle() {
+      used = [...this.getModuleIds()].some((id) => id.includes('/@excalidraw/excalidraw/'))
+    },
+    closeBundle() {
+      // Vitest runs this hook too, with a placeholder outDir: only builds copy.
+      if (process.env.VITEST || !used) return
+      const source = fonts()
+      if (!existsSync(source)) throw new Error(`Excalidraw's fonts are missing at ${source}`)
+      cpSync(source, path.join(outDir, EXCALIDRAW_ASSETS, 'fonts'), { recursive: true })
     },
   }
 }
@@ -130,8 +193,6 @@ export const DEV_PORTS: Record<KutupApp | 'editor', number> = { account: 5173, d
 export function kutupApp(opts: {
   app: KutupApp
   wasm: WasmModule[]
-  /** The page allows no inline script (its CSP; frontend/docker/40-kutup-hosts.sh). */
-  strictCsp?: boolean
 }): UserConfig {
   const requireFromCrypto = createRequire(path.join(FRONTEND, 'packages/crypto/package.json'))
   const apiTarget = process.env.KUTUP_API_TARGET ?? 'http://localhost:3000'
@@ -140,7 +201,7 @@ export function kutupApp(opts: {
   const domain = process.env.KUTUP_DEV_DOMAIN || 'localhost'
   const port = DEV_PORTS[opts.app] + Number(process.env.KUTUP_DEV_PORT_OFFSET || 0)
   return {
-    plugins: [tailwindcss(), react(), kutupWasm(opts.wasm), reloadOnceOnLoadFailure(Boolean(opts.strictCsp))],
+    plugins: [tailwindcss(), react(), kutupWasm(opts.wasm), pageScripts(), excalidrawFonts()],
     worker: { format: 'es' },
     resolve: {
       alias: {
@@ -192,6 +253,9 @@ export function editorSandboxCsp(officeOrigin: string): string {
     `frame-ancestors 'self' ${officeOrigin}`,
     "base-uri 'none'",
     "form-action 'none'",
+    // The strict policy's one addition (report-only in production until
+    // KUTUP_CSP_ENFORCE=1; docs/content-security-policy.md).
+    "object-src 'none'",
   ].join('; ')
 }
 

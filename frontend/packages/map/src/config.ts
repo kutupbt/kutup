@@ -17,6 +17,12 @@ export interface MapProvider {
   url: string
   /** The same through the relay, a path on this origin; absent when the relay is off. */
   proxyUrl: string | null
+  /**
+   * Whether browsers may load it from the provider itself: its origin is in
+   * the server's KUTUP_MAP_DIRECT_ORIGINS, which the apps' Content-Security-
+   * Policy allows (docs/content-security-policy.md). Otherwise only the relay.
+   */
+  direct: boolean
   attribution: string
 }
 
@@ -43,13 +49,35 @@ export interface CustomProvider {
   attribution: string
 }
 
-/** The administrator's settings (`/api/admin/maps`). */
+/** The administrator's settings (`PUT /api/admin/maps`). */
 export interface MapSettings {
   enabled: boolean
   providers: ProviderId[]
   custom: CustomProvider | null
   proxy: ProxyMode
   cacheMegabytes: number
+}
+
+/** The settings as `GET /api/admin/maps` answers: with what the server was started with. */
+export interface AdminMapSettings extends MapSettings {
+  /** KUTUP_MAP_DIRECT_ORIGINS: the providers' origins browsers may load from directly. */
+  directOrigins: string[]
+}
+
+/** The built-in providers' origins (the server's `maps::Upstream`). */
+export const BUILT_IN_ORIGINS: Record<Exclude<ProviderId, 'custom'>, string> = {
+  openfreemap: 'https://tiles.openfreemap.org',
+  openstreetmap: 'https://tile.openstreetmap.org',
+}
+
+/** A provider's origin under `settings`, or null when it has none yet (a custom one without a valid address). */
+export function providerOrigin(id: ProviderId, custom: CustomProvider | null): string | null {
+  if (id !== 'custom') return BUILT_IN_ORIGINS[id]
+  try {
+    return custom ? new URL(custom.url).origin : null
+  } catch {
+    return null
+  }
 }
 
 /** What a map on this device should load, or null when maps are off. */
@@ -79,9 +107,13 @@ export function useSaveMapPreferences() {
   })
 }
 
-/** Whether tiles go through the relay, given the administrator's mode and the person's choice. */
-export function usesRelay(proxy: ProxyMode, viaProxy: boolean): boolean {
-  return proxy === 'enforced' || (proxy === 'available' && viaProxy)
+/**
+ * Whether tiles go through the relay: always for a provider browsers may not
+ * load directly; otherwise by the administrator's mode and the person's choice.
+ */
+export function usesRelay(proxy: ProxyMode, viaProxy: boolean, provider: Pick<MapProvider, 'direct' | 'proxyUrl'>): boolean {
+  if (provider.proxyUrl === null) return false
+  return !provider.direct || proxy === 'enforced' || (proxy === 'available' && viaProxy)
 }
 
 /**
@@ -93,7 +125,7 @@ export function effectiveMap(config: MapConfig | undefined, origin = window.loca
   if (!config?.enabled || !config.preferences.enabled || config.providers.length === 0) return null
   const provider =
     config.providers.find((p) => p.id === config.preferences.provider) ?? config.providers[0]
-  const viaProxy = usesRelay(config.proxy, config.preferences.viaProxy) && provider.proxyUrl !== null
+  const viaProxy = usesRelay(config.proxy, config.preferences.viaProxy, provider)
   const url = viaProxy ? origin + provider.proxyUrl : provider.url
   return { provider, viaProxy, url }
 }

@@ -947,7 +947,7 @@
     "removed": "Images from {{address}} will be asked for again.",
     "bodyProxy": "They load through the Kutup server, so the sender does not see your IP address or browser, but can still tell that and when the message was opened.",
     "proxyTitle": "Protect against email tracking",
-    "proxyHint": "Remote images come through Kutup instead of your browser, so senders do not see your IP address or browser; they can still tell that and when a message was opened. Known tracking pixels never load, and tracking parameters are taken out of links.",
+    "proxyHint": "Known tracking pixels are never asked for, and tracking parameters are taken out of links. Remote images always come through Kutup instead of your browser, so senders never see your IP address or browser; they can still tell that and when a message was opened.",
     "embeddedTitle": "Auto show embedded images",
     "embeddedHint": "Images sent inside a message show at once. Turned off, they wait until you load them.",
     "metadataTitle": "Remove image metadata",
@@ -964,9 +964,7 @@
     "linksList": "Cleaned links",
     "unknownProvider": "Tracker",
     "removed": "Removed: {{names}}",
-    "proxyFailed": "Tracker protection prevented some images from loading. Load them if you trust the sender.",
-    "loadDirect": "Load",
-    "loadDirectHint": "Images will be loaded without the Kutup server"
+    "proxyFailed": "Some images could not be loaded through Kutup, so they are not shown."
   },
   "schedule": {
     "menu": "Schedule send",

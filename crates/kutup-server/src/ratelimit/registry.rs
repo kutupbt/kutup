@@ -250,6 +250,7 @@ pub enum Limit {
     RenameAnnounces,
     CollabDeviceAnnounces,
     // Administration.
+    CspReports,
     Admin,
 }
 
@@ -1148,6 +1149,16 @@ pub static SPECS: &[Spec] = &[
         PeerAndShare,
         Federation,
         "Device announces from another server for one share."
+    ),
+    spec!(
+        CspReports,
+        "csp_reports",
+        Some("RATE_LIMIT_CSP_REPORTS_PER_MIN"),
+        60,
+        Events(MINUTE),
+        Address,
+        Administration,
+        "Content-Security-Policy violation reports, which need no account."
     ),
     spec!(
         Admin,

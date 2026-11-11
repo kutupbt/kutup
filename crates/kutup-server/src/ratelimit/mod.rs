@@ -522,6 +522,12 @@ pub static REPORT: LazyLock<RateLimiter> =
 /// sends a few; more is someone filling the administrators' inbox.
 pub static FEEDBACK: LazyLock<RateLimiter> =
     LazyLock::new(|| RateLimiter::registered(Limit::Feedback));
+/// Content-Security-Policy violation reports (`POST /api/csp-report`): 60 /
+/// minute / IP (`RATE_LIMIT_CSP_REPORTS_PER_MIN`). A browser sends one per
+/// violation, unauthenticated; a page that breaks the policy everywhere sends
+/// a burst, and the rest are dropped.
+pub static CSP_REPORTS: LazyLock<RateLimiter> =
+    LazyLock::new(|| RateLimiter::registered(Limit::CspReports));
 /// Admin API: 120 / minute / IP (`RATE_LIMIT_ADMIN_PER_MIN`). The dashboard fires a
 /// handful of requests per view; 120/min is generous for a human and a wall for a script.
 pub static ADMIN: LazyLock<RateLimiter> = LazyLock::new(|| RateLimiter::registered(Limit::Admin));

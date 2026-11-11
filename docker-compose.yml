@@ -133,6 +133,8 @@ services:
       MAIL_BACKUP_MX: ${MAIL_BACKUP_MX:-}
       MAIL_BATCH_CHUNK: ${MAIL_BATCH_CHUNK:-}
       MAIL_DEFAULT_DELAY_SEND_SECONDS: ${MAIL_DEFAULT_DELAY_SEND_SECONDS:-}
+      # Map providers browsers may load directly (blank: all through the relay).
+      KUTUP_MAP_DIRECT_ORIGINS: ${KUTUP_MAP_DIRECT_ORIGINS:-}
       # The map relay's shared tile cache; its size is set on the admin Maps page.
       MAPS_CACHE_DIR: /var/cache/kutup-maps
       # Single break-glass admin (username:password) — created on first boot; it can
@@ -192,6 +194,7 @@ services:
       RATE_LIMIT_FED_MULTI_FAILURES_PER_MIN: ${RATE_LIMIT_FED_MULTI_FAILURES_PER_MIN:-}
       RATE_LIMIT_USER_LOOKUP_PER_MIN: ${RATE_LIMIT_USER_LOOKUP_PER_MIN:-}
       RATE_LIMIT_ADMIN_PER_MIN: ${RATE_LIMIT_ADMIN_PER_MIN:-}
+      RATE_LIMIT_CSP_REPORTS_PER_MIN: ${RATE_LIMIT_CSP_REPORTS_PER_MIN:-}
       RATE_LIMIT_REGISTRATION_CODE_CHECK_PER_HOUR: ${RATE_LIMIT_REGISTRATION_CODE_CHECK_PER_HOUR:-}
       RATE_LIMIT_REGISTRATION_CODE_FAILURES_PER_HOUR: ${RATE_LIMIT_REGISTRATION_CODE_FAILURES_PER_HOUR:-}
       RATE_LIMIT_AVAILABLE_HASHES_PER_MIN: ${RATE_LIMIT_AVAILABLE_HASHES_PER_MIN:-}
@@ -266,6 +269,11 @@ services:
       KUTUP_MAIL_URL: ${KUTUP_MAIL_URL:-}
       KUTUP_PASS_URL: ${KUTUP_PASS_URL:-}
       KUTUP_CALENDAR_URL: ${KUTUP_CALENDAR_URL:-}
+      # The apps' Content-Security-Policy (40-kutup-hosts.sh): Chat's group
+      # call SFU, map providers loaded directly, and the strict policy enforced.
+      CHAT_SFU_URL: ${CHAT_SFU_URL:-}
+      KUTUP_MAP_DIRECT_ORIGINS: ${KUTUP_MAP_DIRECT_ORIGINS:-}
+      KUTUP_CSP_ENFORCE: ${KUTUP_CSP_ENFORCE:-}
 
   nginx:
     image: nginx:alpine

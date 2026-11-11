@@ -3,6 +3,7 @@
 // the file show at once; any it lists without carrying them are fetched
 // through the link, as the editor fetches them from Drive.
 
+import '../whiteboard/assets'
 import { Suspense, lazy, useMemo, useRef } from 'react'
 import { useTranslation } from 'react-i18next'
 import type { BinaryFileData, DataURL, ExcalidrawImperativeAPI, ExcalidrawInitialDataState } from '@excalidraw/excalidraw/types'

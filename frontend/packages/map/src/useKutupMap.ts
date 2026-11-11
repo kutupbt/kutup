@@ -1,9 +1,9 @@
-import * as maplibregl from 'maplibre-gl'
 import type { StyleSpecification } from 'maplibre-gl'
 import 'maplibre-gl/dist/maplibre-gl.css'
 import { useEffect, useRef, useState } from 'react'
 import { freshAccessToken } from '@kutup/session/client'
 import { useEffectiveMap, type EffectiveMap } from './config'
+import { maplibregl } from './maplibre'
 import { absoluteStyle, relayRequest } from './relay'
 
 export { maplibregl }

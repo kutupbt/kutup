@@ -2,6 +2,9 @@
 // every other app's build holds no Chat WASM, and none of its glue, so an
 // import of @kutup/chat-core/wasm creeping back into Drive, Account, Mail or
 // any other app fails the web gate instead of shipping 3 MB more to it.
+// Every app's page also loads its scripts as files, never inline: the apps'
+// Content-Security-Policy allows no inline script
+// (docs/content-security-policy.md).
 // Run after `pnpm -C frontend build`.
 import { readdirSync, readFileSync, statSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
@@ -19,9 +22,28 @@ function files(dir) {
 
 let found = false
 let checked = 0
+let pages = 0
 for (const app of readdirSync(apps)) {
-  if (app === 'chat') continue
   const dist = `${apps}${app}/dist`
+  let page
+  try {
+    page = readFileSync(`${dist}/index.html`, 'utf8')
+  } catch {
+    throw new Error(`${dist}/index.html is missing: build the apps first`)
+  }
+  pages++
+  // A <script> without src, or an inline event handler attribute.
+  for (const tag of page.match(/<script\b[^>]*>/gi) ?? []) {
+    if (!/\ssrc\s*=/i.test(tag)) {
+      console.error(`${app}: dist/index.html has an inline script: ${tag}`)
+      found = true
+    }
+  }
+  if (/<[^>]+\son[a-z]+\s*=/i.test(page)) {
+    console.error(`${app}: dist/index.html has an inline event handler`)
+    found = true
+  }
+  if (app === 'chat') continue
   try {
     statSync(dist)
   } catch {
@@ -38,4 +60,4 @@ for (const app of readdirSync(apps)) {
   }
 }
 if (found) process.exit(1)
-console.log(`no Chat runtime in the ${checked} apps that aren't Chat`)
+console.log(`no Chat runtime in the ${checked} apps that aren't Chat; no inline script in the ${pages} app pages`)

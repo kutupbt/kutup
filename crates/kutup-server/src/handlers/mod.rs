@@ -19,6 +19,7 @@ pub mod chat_provisioning;
 pub mod collab;
 pub mod collections;
 pub mod contacts;
+pub mod csp_reports;
 pub mod devices;
 pub mod drive_move;
 pub mod feedback;

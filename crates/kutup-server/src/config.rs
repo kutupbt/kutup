@@ -188,6 +188,12 @@ pub struct Config {
     /// Where the map relay keeps its tile cache (`MAPS_CACHE_DIR`;
     /// docs/plans/maps.md). Its size is an administrator setting.
     pub maps_cache_dir: String,
+    /// Map providers' origins browsers may load from directly
+    /// (`KUTUP_MAP_DIRECT_ORIGINS`, comma or space list; the frontend
+    /// container adds the same list to the apps' Content-Security-Policy).
+    /// A provider elsewhere is offered through the relay only; empty (the
+    /// default) relays every provider (docs/content-security-policy.md).
+    pub map_direct_origins: Vec<String>,
     /// STUN servers for Chat calls (`CHAT_STUN_URLS`, comma list).
     pub chat_stun_urls: String,
     /// TURN relays for Chat calls (`CHAT_TURN_URLS`, comma list of
@@ -295,6 +301,22 @@ fn canonical_origin(name: &str, value: &str) -> Result<String, String> {
         return Err(format!("{name} must be a bare origin without a path"));
     }
     Ok(origin.ascii_serialization())
+}
+
+/// `KUTUP_MAP_DIRECT_ORIGINS`: bare http(s) origins, comma or space
+/// separated, as canonical origins.
+fn map_direct_origins(value: &str) -> Result<Vec<String>, String> {
+    let mut origins = Vec::new();
+    for item in value
+        .split(|c: char| c == ',' || c.is_whitespace())
+        .filter(|item| !item.is_empty())
+    {
+        let origin = canonical_origin("KUTUP_MAP_DIRECT_ORIGINS", item)?;
+        if !origins.contains(&origin) {
+            origins.push(origin);
+        }
+    }
+    Ok(origins)
 }
 
 /// The security keys' relying party id: `KUTUP_WEBAUTHN_RP_ID`, else
@@ -644,6 +666,13 @@ impl Config {
             ),
             chat_web_push_subject: get_env("CHAT_WEB_PUSH_SUBJECT", ""),
             maps_cache_dir: get_env("MAPS_CACHE_DIR", ""),
+            map_direct_origins: match map_direct_origins(&get_env("KUTUP_MAP_DIRECT_ORIGINS", "")) {
+                Ok(origins) => origins,
+                Err(error) => {
+                    env.error(error);
+                    Vec::new()
+                }
+            },
             chat_stun_urls: get_env("CHAT_STUN_URLS", ""),
             chat_turn_urls: get_env("CHAT_TURN_URLS", ""),
             chat_turn_secret: get_env("CHAT_TURN_SECRET", ""),
@@ -929,6 +958,22 @@ impl Env {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn map_direct_origins_are_bare_origins() {
+        assert_eq!(map_direct_origins(""), Ok(Vec::new()));
+        assert_eq!(
+            map_direct_origins(
+                "https://tile.openstreetmap.org, https://TILES.openfreemap.org/ https://tile.openstreetmap.org"
+            ),
+            Ok(vec![
+                "https://tile.openstreetmap.org".to_owned(),
+                "https://tiles.openfreemap.org".to_owned()
+            ])
+        );
+        assert!(map_direct_origins("https://tiles.example.org/styles").is_err());
+        assert!(map_direct_origins("tiles.example.org").is_err());
+    }
 
     #[test]
     fn admin_account_is_read_as_its_owner_meant() {
@@ -1320,6 +1365,7 @@ mod env_example {
         ("POSTGRES_PASSWORD", "docker-compose.yml"),
         ("POSTGRES_DB", "docker-compose.yml"),
         ("POSTGRES_USER", "docker-compose.yml"),
+        ("KUTUP_CSP_ENFORCE", "docker-compose.yml"),
         ("KUTUP_HTTP_PORT", "docker-compose.yml"),
         ("KUTUP_HTTPS_PORT", "docker-compose.yml"),
         ("CHAT_TURN_REALM", "docker-compose.yml"),

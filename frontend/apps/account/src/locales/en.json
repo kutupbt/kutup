@@ -419,7 +419,8 @@
       "preview": "Preview",
       "offForYou": "Maps are off for you.",
       "saved": "Map settings saved",
-      "saveFailed": "The map settings could not be saved."
+      "saveFailed": "The map settings could not be saved.",
+      "relayOnly": "Maps from this provider load through this server only: browsers here may not load them straight from it."
     },
     "storage": {
       "title": "Storage",
@@ -1103,7 +1104,10 @@
       "noCacheWarning": "Without a cache the relay fetches the same tiles again and again, which breaks OpenStreetMap's tile usage policy at any real volume.",
       "osmPolicy": "Tile usage policy",
       "saved": "Map settings saved",
-      "saveFailed": "The map settings could not be saved."
+      "saveFailed": "The map settings could not be saved.",
+      "directAllowed": "Browsers may load it directly (its address is in KUTUP_MAP_DIRECT_ORIGINS).",
+      "relayOnly": "Through this server only: its address is not in KUTUP_MAP_DIRECT_ORIGINS, so the apps' security policy does not let browsers load it directly.",
+      "offNeedsDirect": "Off needs every offered provider's address in KUTUP_MAP_DIRECT_ORIGINS (set when the server and the web apps start): browsers may load maps only from those addresses."
     },
     "mailSending": {
       "title": "Mail sending",
@@ -1419,6 +1423,7 @@
         "account_peer_fetches": "Account lookups on a server",
         "rename_announces": "Rename announces from a server",
         "collab_device_announces": "Device announces from a server",
+        "csp_reports": "Security policy reports",
         "admin": "Admin API requests",
         "collab_frames_per_second": "Collaboration frames per socket",
         "collab_frame_burst": "Collaboration frame burst",
@@ -1523,6 +1528,7 @@
         "account_peer_fetches": "Accounts one account asks of one peer by id.",
         "rename_announces": "Rename announces taken from one peer.",
         "collab_device_announces": "Device announces from another server for one share.",
+        "csp_reports": "Reports of the web apps breaking their Content-Security-Policy, which browsers send without an account.",
         "admin": "Admin API requests: a wall for a script.",
         "calendar_writes": "Calendar changes: calendars made or changed and event syncs.",
         "forwarding_code_minutes": "How long a forwarding's verification code lasts.",

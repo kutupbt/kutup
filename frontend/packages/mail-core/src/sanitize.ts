@@ -5,7 +5,9 @@ import { cleanTrackingLink, type CleanedLink } from './trackingLinks'
 // Proton's `packages/sanitize`: no scripts, forms, frames, embeds or style
 // sheets; remote images, backgrounds and CSS urls blocked until the reader
 // allows them for that message (a remote load tells the sender the mail was
-// read, and from where); `cid:` images shown from the message's own parts;
+// read, and from where), and then shown only as the Kutup image proxy fetched
+// them, never loaded by the browser from the sender's servers; `cid:` images
+// shown from the message's own parts;
 // links open in a new tab without a referrer. The result is shown in a
 // sandboxed iframe with its own CSP, which blocks anything this misses.
 
@@ -27,10 +29,12 @@ export interface SanitizeOptions {
   /** Load remote images and CSS backgrounds. */
   allowRemote: boolean
   /**
-   * With `allowRemote`, through the image proxy: what each remote address
-   * becomes (a `blob:` URL of the proxied image, or the address itself to
-   * load it directly); null leaves it out (a tracker, or not loaded yet).
-   * Without it, remote addresses load directly.
+   * With `allowRemote`, what each remote address becomes: the `blob:` URL of
+   * the image the Kutup image proxy fetched; null leaves it out (a tracker,
+   * one the proxy could not get, or not loaded yet). Nothing else is
+   * accepted: the browser never loads a remote address itself, which the
+   * Mail app's Content-Security-Policy (no remote `img-src`) also enforces.
+   * Without it, nothing remote loads.
    */
   resolveRemote?: (url: string) => string | null
   /** Take tracking parameters out of links (Proton's tracker protection). */
@@ -80,7 +84,6 @@ function rewriteStyle(style: string, options: SanitizeOptions, remote: (url: str
     if (target.toLowerCase().startsWith('data:image/')) return whole
     if (REMOTE.test(target)) {
       const loaded = remote(target)
-      if (loaded === target) return whole
       return loaded ? `url('${loaded.replace(/['"\\]/g, '')}')` : 'none'
     }
     return 'none'
@@ -101,7 +104,6 @@ export function sanitizeMailHtml(html: string, options: SanitizeOptions): Saniti
     }
     return blob ?? null
   }
-  let direct = false
   const remoteUrls = new Set<string>()
   const cleanedLinks: CleanedLink[] = []
   // What a remote address becomes in the frame; null leaves it out.
@@ -112,9 +114,9 @@ export function sanitizeMailHtml(html: string, options: SanitizeOptions): Saniti
       remoteBlocked = true
       return null
     }
-    const loaded = options.resolveRemote ? options.resolveRemote(url) : url
-    if (loaded && REMOTE.test(loaded)) direct = true
-    return loaded
+    const loaded = options.resolveRemote?.(url) ?? null
+    // Only what the proxy fetched: a local blob: URL.
+    return loaded && loaded.trim().toLowerCase().startsWith('blob:') ? loaded : null
   }
   purify.addHook('uponSanitizeAttribute', (node, data) => {
     const name = data.attrName.toLowerCase()
@@ -138,9 +140,8 @@ export function sanitizeMailHtml(html: string, options: SanitizeOptions): Saniti
     if (REMOTE.test(value)) {
       const loaded = remote(value)
       if (loaded) {
-        // A blob: URL passes the URI check; a direct address is kept as it is.
+        // A blob: URL passes the URI check.
         data.attrValue = loaded
-        if (loaded === value) data.forceKeepAttr = true
         return
       }
     }
@@ -175,7 +176,7 @@ export function sanitizeMailHtml(html: string, options: SanitizeOptions): Saniti
     WHOLE_DOCUMENT: false,
   })
   purify.removeAllHooks()
-  const images = direct ? 'data: blob: https: http:' : 'data: blob:'
+  const images = 'data: blob:'
   const adapts = !!options.look && paintsNothing(body)
   return {
     document: frame(foldQuote(body, options.look?.quoteLabel), images, adapts ? options.look : undefined),

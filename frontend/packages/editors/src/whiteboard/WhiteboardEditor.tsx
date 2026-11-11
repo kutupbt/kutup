@@ -22,6 +22,8 @@
 // appState.collaborators map so peers see each other's cursor + the
 // translucent rectangles around peer-selected elements.
 
+// First: where Excalidraw finds its fonts, before Excalidraw loads.
+import './assets'
 import {
   forwardRef,
   Suspense,

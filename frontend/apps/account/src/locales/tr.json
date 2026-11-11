@@ -419,7 +419,8 @@
       "preview": "Önizleme",
       "offForYou": "Haritalar sizin için kapalı.",
       "saved": "Harita ayarları kaydedildi",
-      "saveFailed": "Harita ayarları kaydedilemedi."
+      "saveFailed": "Harita ayarları kaydedilemedi.",
+      "relayOnly": "Bu sağlayıcının haritaları yalnızca bu sunucu üzerinden yüklenir: buradaki tarayıcılar onları doğrudan sağlayıcıdan yükleyemez."
     },
     "storage": {
       "title": "Depolama alanı",
@@ -1103,7 +1104,10 @@
       "noCacheWarning": "Önbellek olmadan aktarıcı aynı karoları tekrar tekrar indirir; bu da gerçek kullanımda OpenStreetMap'in karo kullanım politikasını çiğner.",
       "osmPolicy": "Karo kullanım politikası",
       "saved": "Harita ayarları kaydedildi",
-      "saveFailed": "Harita ayarları kaydedilemedi."
+      "saveFailed": "Harita ayarları kaydedilemedi.",
+      "directAllowed": "Tarayıcılar doğrudan yükleyebilir (adresi KUTUP_MAP_DIRECT_ORIGINS içinde).",
+      "relayOnly": "Yalnızca bu sunucu üzerinden: adresi KUTUP_MAP_DIRECT_ORIGINS içinde değil, bu yüzden uygulamaların güvenlik politikası tarayıcıların onu doğrudan yüklemesine izin vermez.",
+      "offNeedsDirect": "Kapalı seçeneği, sunulan her sağlayıcının adresinin KUTUP_MAP_DIRECT_ORIGINS içinde olmasını gerektirir (sunucu ve web uygulamaları başlarken ayarlanır): tarayıcılar haritaları yalnızca bu adreslerden yükleyebilir."
     },
     "mailSending": {
       "title": "Posta gönderimi",
@@ -1419,6 +1423,7 @@
         "account_peer_fetches": "Bir sunucuda hesap aramaları",
         "rename_announces": "Bir sunucudan ad değişikliği duyuruları",
         "collab_device_announces": "Bir sunucudan cihaz duyuruları",
+        "csp_reports": "Güvenlik politikası raporları",
         "admin": "Yönetim API istekleri",
         "collab_frames_per_second": "Soket başına ortak çalışma çerçeveleri",
         "collab_frame_burst": "Ortak çalışma çerçeve patlaması",
@@ -1523,6 +1528,7 @@
         "account_peer_fetches": "Bir hesabın bir sunucuya kimlikle sorduğu hesaplar.",
         "rename_announces": "Bir sunucudan alınan ad değişikliği duyuruları.",
         "collab_device_announces": "Başka bir sunucudan bir paylaşım için cihaz duyuruları.",
+        "csp_reports": "Web uygulamalarının İçerik Güvenliği Politikası ihlallerine dair, tarayıcıların hesap olmadan gönderdiği raporlar.",
         "admin": "Yönetim API istekleri: bir betik için duvar.",
         "calendar_writes": "Takvim değişiklikleri: oluşturulan veya değiştirilen takvimler ve etkinlik eşitlemeleri.",
         "forwarding_code_minutes": "Bir yönlendirmenin doğrulama kodunun ne kadar geçerli olduğu.",

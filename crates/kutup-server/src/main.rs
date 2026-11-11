@@ -396,8 +396,15 @@ async fn main() -> anyhow::Result<()> {
     };
     live_locations::spawn_sweeper(pool.clone());
     chat_calls::call_link_waiting::spawn_sweeper(pool.clone());
-    let maps =
-        Arc::new(maps::MapService::start(&pool, &config.maps_cache_dir, &config.server_url).await?);
+    let maps = Arc::new(
+        maps::MapService::start(
+            &pool,
+            &config.maps_cache_dir,
+            &config.server_url,
+            config.map_direct_origins.clone(),
+        )
+        .await?,
+    );
     // Group send endorsement keys: made on first start, and every stored one
     // opened now, so a wrong OPAQUE_SETUP_KEYS stops here.
     let group_send = if config.chat_groups && federation.is_some() {
@@ -1846,6 +1853,14 @@ fn build_router(state: AppState) -> Router {
             "/api/share/:token/state/:fileId",
             get(shares::public_share_state),
         )
+        // Content-Security-Policy violation reports from the web apps: anyone,
+        // a small body, a per-address limit (docs/content-security-policy.md).
+        .route(
+            "/api/csp-report",
+            post(handlers::csp_reports::csp_report)
+                .route_layer(DefaultBodyLimit::max(handlers::csp_reports::BODY_LIMIT))
+                .route_layer(from_fn(middleware::rate_limit_csp_reports)),
+        )
         .route(
             "/api/share/:token/report",
             post(link_reports::report_public_link)
@@ -2411,6 +2426,12 @@ fn build_router(state: AppState) -> Router {
         // `Router::layer` runs only for matched paths, so it can't rescue `/collections/`).
         .layer(from_fn(middleware::session_version_header))
         .layer(CatchPanicLayer::new())
+        // Outside the handlers and panic recovery, inside CORS: every /api/
+        // answer, errors included, carries the API policy.
+        .layer(axum::middleware::from_fn_with_state(
+            state.clone(),
+            middleware::api_response_policy,
+        ))
         .layer(TraceLayer::new_for_http())
         .layer(cors)
         .layer(DefaultBodyLimit::max(BODY_LIMIT_BYTES))

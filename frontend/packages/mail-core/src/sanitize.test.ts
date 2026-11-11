@@ -32,14 +32,19 @@ describe('sanitizeMailHtml', () => {
     expect(result.document).toContain("img-src data: blob:;")
   })
 
-  it('loads remote images when the reader allows them', () => {
-    const result = sanitizeMailHtml(hostile, { allowRemote: true, inlineImages: images })
+  it('never loads a remote address itself, even when the reader allows remote images', () => {
+    const result = sanitizeMailHtml(hostile, {
+      allowRemote: true,
+      inlineImages: images,
+      // A resolver handing back the address itself is not obeyed.
+      resolveRemote: (url) => url,
+    })
     const html = body(result.document)
     expect(result.remoteBlocked).toBe(false)
-    expect(html).toContain('src="https://t.example/pixel.gif"')
-    expect(html).toContain("url('https://t.example/b.png')")
+    expect(html).not.toContain('t.example')
     expect(html).not.toMatch(/<script|onerror|javascript:/i)
-    expect(result.document).toContain('img-src data: blob: https: http:')
+    expect(result.document).toContain("img-src data: blob:;")
+    expect(sanitizeMailHtml(hostile, { allowRemote: true }).document).not.toContain('t.example')
   })
 
   it('swaps remote addresses for proxied images, and lists every one', () => {
