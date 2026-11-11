@@ -22,7 +22,15 @@ CREATE TABLE account_keys.account_data_keys (
 
 CREATE INDEX account_data_keys_sealing_key_id ON account_keys.account_data_keys (sealing_key_id);
 
--- The authenticator app's secret, sealed under the account's data key.
+-- The authenticator app's secret, sealed under the account's data key. The
+-- plain secrets go: two-step sign-in by the app is off until it is set up
+-- again (this lands with a database reset, the wipe, so none is lost there).
+UPDATE users SET totp_enabled = false WHERE totp_enabled;
 ALTER TABLE users DROP COLUMN totp_secret;
 ALTER TABLE users ADD COLUMN totp_secret_sealed bytea
     CHECK (totp_secret_sealed IS NULL OR octet_length(totp_secret_sealed) BETWEEN 47 AND 200);
+
+-- When an account's data key was found not to open (restored from another
+-- deployment, or a key-list entry's bytes changed under its id): what was
+-- sealed under it is lost; the admin console says so.
+ALTER TABLE users ADD COLUMN data_key_lost_at timestamptz;
