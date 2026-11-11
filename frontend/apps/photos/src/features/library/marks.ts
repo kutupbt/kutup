@@ -7,6 +7,7 @@ import {
   sealPhotosLibrary,
   type PhotosLibraryMarks,
 } from '@kutup/crypto/photosLibrary'
+import { localChainPins } from '@kutup/crypto/localChainPins'
 import { useDriveIdentity, type DriveIdentity } from '@kutup/drive-core/identity'
 import api from '@kutup/session/client'
 
@@ -14,9 +15,10 @@ import api from '@kutup/session/client'
 // hidden, in one account-private record. The server keeps the latest and
 // accepts only its successor; a change another device made first comes back
 // as 409 with the newer record, and the change is applied again on top of it.
-// This browser keeps the newest record it has seen (its revision and digest)
-// and refuses an older one, or another at the same revision: a server can't
-// bring back marks that were taken off (a photo hidden again shown).
+// This browser keeps the newest record it has seen (its revision and digest,
+// a local chain pin) and refuses an older one, or another at the same
+// revision: a server can't bring back marks that were taken off (a photo
+// hidden again shown).
 
 export type MarkKind = keyof PhotosLibraryMarks
 
@@ -36,44 +38,57 @@ interface MarksState {
 const EMPTY: PhotosLibraryMarks = { favourites: [], archived: [], hidden: [] }
 export const marksKey = ['photos-marks'] as const
 
-interface LibraryPinV1 {
-  version: 1
-  revision: number
-  digest: string
+// The pin is a sealed, account-bound record in this browser's IndexedDB
+// (`@kutup/crypto/localChainPins`, purpose `LocalChainPin`), named by a keyed
+// hash of the incarnation; a missing pin, or one that does not open, is
+// unseen (the record read is trusted and pinned, as on a new browser).
+const PIN_SCOPE = 'photos-library'
+/** Where pins were kept before they were sealed: removed on the first pin stored. */
+const OLD_PIN_PREFIX = 'kutup.photos.library.pin.v1.'
+
+function pinsOf(me: DriveIdentity) {
+  return localChainPins({ masterKey: me.masterKey, envelopeBinding: me.binding })
 }
 
-const PIN_PREFIX = 'kutup.photos.library.pin.v1.'
-
-function loadPin(incarnationId: string): LibraryPinV1 | null {
-  let text: string | null = null
-  try {
-    text = globalThis.localStorage?.getItem(PIN_PREFIX + incarnationId) ?? null
-  } catch {
-    return null
-  }
-  if (text === null) return null
-  const pin = JSON.parse(text) as Partial<LibraryPinV1>
-  if (pin.version !== 1 || !Number.isSafeInteger(pin.revision) || (pin.revision ?? 0) < 1 ||
-      typeof pin.digest !== 'string' || !/^[0-9a-f]{64}$/.test(pin.digest)) {
-    throw new Error('the local Photos library pin is malformed')
-  }
-  return pin as LibraryPinV1
+async function loadPin(me: DriveIdentity): Promise<{ revision: number; digest: string } | null> {
+  const pin = await pinsOf(me).loadPin(PIN_SCOPE, me.incarnationId)
+  return pin && { revision: Number(pin.revision), digest: pin.digest }
 }
+
+let oldPinsRemoved = false
 
 /** Remember `revision` as the newest record seen, never moving back. */
-function storePin(incarnationId: string, revision: number, digest: string): void {
-  const known = loadPin(incarnationId)
-  if (known && known.revision >= revision) return
+async function storePin(me: DriveIdentity, revision: number, digest: string): Promise<void> {
   try {
-    globalThis.localStorage?.setItem(PIN_PREFIX + incarnationId, JSON.stringify({ version: 1, revision, digest }))
+    await pinsOf(me).storePin(PIN_SCOPE, me.incarnationId, revision, digest)
   } catch {
     // Storage may be off: the chain is still checked, only not across restarts.
+    return
+  }
+  if (!oldPinsRemoved) {
+    oldPinsRemoved = true
+    removeOldPins()
+  }
+}
+
+function removeOldPins(): void {
+  try {
+    const storage = globalThis.localStorage
+    if (!storage) return
+    const old: string[] = []
+    for (let i = 0; i < storage.length; i++) {
+      const key = storage.key(i)
+      if (key?.startsWith(OLD_PIN_PREFIX)) old.push(key)
+    }
+    for (const key of old) storage.removeItem(key)
+  } catch {
+    // Storage may be off: nothing to remove then.
   }
 }
 
 /** A record the server shows, against the newest this browser has seen. */
-function checkPin(incarnationId: string, revision: number, digest: string): void {
-  const pin = loadPin(incarnationId)
+async function checkPin(me: DriveIdentity, revision: number, digest: string): Promise<void> {
+  const pin = await loadPin(me)
   if (!pin) return
   if (revision < pin.revision || (revision === pin.revision && digest !== pin.digest)) {
     throw new Error('the server showed an older Photos library than this browser has seen')
@@ -87,8 +102,8 @@ async function openRecord(record: StoredRecord, me: DriveIdentity): Promise<Mark
   if (header.revision !== record.revision || digest !== record.envelopeDigest) {
     throw new Error('the Photos library record differs from what the server says of it')
   }
-  checkPin(me.incarnationId, header.revision, digest)
-  storePin(me.incarnationId, header.revision, digest)
+  await checkPin(me, header.revision, digest)
+  await storePin(me, header.revision, digest)
   return { revision: header.revision, digest, marks }
 }
 
@@ -100,7 +115,7 @@ export async function loadMarks(me: DriveIdentity): Promise<MarksState> {
   } catch (error) {
     if (isAxiosError(error) && error.response?.status === 404) {
       // No record, though this browser saw one: dropped by the server.
-      if (loadPin(me.incarnationId)) throw new Error('the server no longer shows the Photos library this browser has seen')
+      if (await loadPin(me)) throw new Error('the server no longer shows the Photos library this browser has seen')
       return { revision: 0, digest: undefined, marks: EMPTY }
     }
     throw error
@@ -122,7 +137,7 @@ async function write(
     const sealed = await sealPhotosLibrary(next, me, me.incarnationId, state.revision + 1, state.digest)
     try {
       await api.put('/photos/library', { envelope: sealed.envelope })
-      storePin(me.incarnationId, state.revision + 1, sealed.digest)
+      await storePin(me, state.revision + 1, sealed.digest)
       // The record's canonical order comes back when it is next read; the sets are what matter.
       queryClient.setQueryData<MarksState>(cacheKey, { revision: state.revision + 1, digest: sealed.digest, marks: next })
       return

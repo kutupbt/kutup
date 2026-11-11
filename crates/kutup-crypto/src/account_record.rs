@@ -232,6 +232,12 @@ pub enum AccountRecordPurpose {
     /// A device's mail-search store key (`mail_search`), never sent to a
     /// server: one per account.
     MailSearchStoreKey = 20,
+    /// The newest state of an account-private chain this device has seen (a
+    /// revision or cursor and the chain's digest, `local_chain_pin`), never
+    /// sent to a server, like [`Self::RevisionSeen`]: its object is
+    /// [`hashed_object`] of the chain's scope and id, which is also the name
+    /// the device stores it under.
+    LocalChainPin = 21,
 }
 
 /// The object of a record whose id the server must not see (a group id, the
@@ -428,11 +434,19 @@ impl AccountRecordPurpose {
                 max_len: 32,
                 chained: false,
             },
+            // The revision (u64, big-endian) and the chain's 32-byte digest.
+            Self::LocalChainPin => PurposePolicy {
+                object: ObjectPolicy::Required(32),
+                length: Length::Exact(40),
+                mutable: false,
+                max_len: 40,
+                chained: false,
+            },
         }
     }
 
     /// Every purpose, for tests and vectors.
-    pub const ALL: [Self; 19] = [
+    pub const ALL: [Self; 20] = [
         Self::PasswordMasterKey,
         Self::RecoveryMasterKey,
         Self::ChatBackupRoot,
@@ -452,6 +466,7 @@ impl AccountRecordPurpose {
         Self::AccountLocalAnchor,
         Self::RevisionSeen,
         Self::MailSearchStoreKey,
+        Self::LocalChainPin,
     ];
 }
 
@@ -479,6 +494,7 @@ impl TryFrom<u16> for AccountRecordPurpose {
             18 => Ok(Self::AccountLocalAnchor),
             19 => Ok(Self::RevisionSeen),
             20 => Ok(Self::MailSearchStoreKey),
+            21 => Ok(Self::LocalChainPin),
             _ => Err(CryptoError::InvalidInput(format!(
                 "unknown account-record purpose {value}"
             ))),

@@ -29,6 +29,7 @@
 //! - [`asset`] — whiteboard asset envelopes under the file key.
 //! - [`envelope`] — collab-edit frame wire format + Ed25519 sign/verify.
 //! - [`local_state`] — typed XChaCha client-local state such as CLI sessions.
+//! - [`local_chain_pin`] — a device's newest seen state of an account-private chain.
 //! - [`contact_card`] — signed contact summaries and sealed contact cards.
 //! - [`mail_names`] — sealed names of mail folders, labels and filters.
 //! - [`mail_search`] — the browser's Mail search index at rest.
@@ -84,6 +85,7 @@ pub mod kdf;
 pub mod key_binding;
 pub mod labels;
 pub mod live_location;
+pub mod local_chain_pin;
 pub mod local_state;
 pub mod mail_address;
 #[cfg(feature = "mail")]

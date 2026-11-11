@@ -5,6 +5,7 @@
 import api from '@kutup/session/client'
 import { toBase64 } from '@kutup/crypto/base64'
 import { deriveAccountIdentityKeys } from '@kutup/crypto/identity'
+import { localChainPins, type ChainPin, type LocalChainPins } from '@kutup/crypto/localChainPins'
 import {
   chatAttachmentLedgerEnvelopeDigest,
   decodeChatAttachmentLedgerEntry,
@@ -39,12 +40,6 @@ interface LedgerPutResponse {
   idempotent: boolean
 }
 
-interface LedgerLocalPinV1 {
-  version: 1
-  cursor: string
-  chainDigest: string
-}
-
 export interface CurrentLedgerEntity {
   entityId: string
   revision: bigint
@@ -55,7 +50,14 @@ export interface CurrentLedgerEntity {
 
 const ZERO_DIGEST = '0'.repeat(64)
 const MAX_LEDGER_PAGES = 4096
-const LOCAL_PIN_PREFIX = 'kutup.chat.attachment-ledger.pin.v1.'
+// This device's rollback pin: the newest cursor it has replayed and the local
+// chain digest there, a sealed, account-bound record in IndexedDB
+// (`@kutup/crypto/localChainPins`, purpose `LocalChainPin`) named by a keyed
+// hash of the incarnation. A missing pin, or one that does not open, is
+// unseen: the ledger is replayed as on a new device and pinned again.
+const PIN_SCOPE = 'chat-attachment-ledger'
+/** Where pins were kept before they were sealed: removed on the first pin stored. */
+const OLD_PIN_PREFIX = 'kutup.chat.attachment-ledger.pin.v1.'
 const LOCAL_PIN_DOMAIN = new TextEncoder().encode('kutup/chat-attachment-ledger/local-pin/v1\0')
 
 export class ChatAttachmentLedger {
@@ -68,17 +70,21 @@ export class ChatAttachmentLedger {
     /** The account's master key (a copy, wiped on dispose) and key binding. */
     private readonly owner: ChatAttachmentLedgerOwner,
     private readonly accountIncarnationId: string,
-    private readonly localPin: LedgerLocalPinV1 | null,
+    private readonly pins: LocalChainPins,
+    /** `revision` is the cursor, `digest` the local chain digest there. */
+    private readonly localPin: ChainPin | null,
   ) {
-    this.pinVerified = localPin === null || localPin.cursor === '0'
+    this.pinVerified = localPin === null || localPin.revision === 0n
   }
 
   static async open(masterKey: Uint8Array, binding: string): Promise<ChatAttachmentLedger> {
     const identity = await deriveAccountIdentityKeys(toBase64(masterKey))
+    const pins = localChainPins({ masterKey, envelopeBinding: binding })
     const ledger = new ChatAttachmentLedger(
       { masterKey: masterKey.slice(), binding },
       identity.incarnationId,
-      loadLocalPin(identity.incarnationId),
+      pins,
+      await pins.loadPin(PIN_SCOPE, identity.incarnationId),
     )
     await ledger.sync()
     return ledger
@@ -142,12 +148,12 @@ export class ChatAttachmentLedger {
           entry,
         })
         if (!this.pinVerified && this.localPin) {
-          const pinnedCursor = parseCanonicalU64(this.localPin.cursor, 'local ledger pin cursor')
+          const pinnedCursor = this.localPin.revision
           if (cursor > pinnedCursor) {
             throw new Error('Chat attachment ledger omitted the locally pinned cursor')
           }
           if (cursor === pinnedCursor) {
-            if (bytesToHex(this.chainDigest) !== this.localPin.chainDigest) {
+            if (bytesToHex(this.chainDigest) !== this.localPin.digest) {
               throw new Error('Chat attachment ledger conflicts with the local rollback pin')
             }
             this.pinVerified = true
@@ -164,7 +170,7 @@ export class ChatAttachmentLedger {
         if (!this.pinVerified) {
           throw new Error('Chat attachment ledger stopped before the local rollback pin')
         }
-        storeLocalPin(this.accountIncarnationId, this.cursor, this.chainDigest)
+        await this.storeLocalPin()
         return
       }
       if (page.entities.length !== 256) {
@@ -243,6 +249,21 @@ export class ChatAttachmentLedger {
     this.cursor = 0n
   }
 
+  /** Pins the cursor replayed to and its chain digest, never moving back. */
+  private async storeLocalPin(): Promise<void> {
+    try {
+      await this.pins.storePin(PIN_SCOPE, this.accountIncarnationId, this.cursor, bytesToHex(this.chainDigest))
+    } catch {
+      // Browsers may disable persistent storage. The authenticated remote chain
+      // still verifies; only cross-restart rollback pinning is unavailable.
+      return
+    }
+    if (!oldPinsRemoved) {
+      oldPinsRemoved = true
+      removeOldPins()
+    }
+  }
+
   private async put(entityId: string, entry: ChatAttachmentLedgerEntryV1): Promise<void> {
     const previous = this.current.get(entityId)
     const revision = (previous?.revision ?? 0n) + 1n
@@ -278,51 +299,21 @@ export class ChatAttachmentLedger {
   }
 }
 
-function localPinKey(accountIncarnationId: string): string {
-  return `${LOCAL_PIN_PREFIX}${accountIncarnationId}`
-}
+let oldPinsRemoved = false
 
-function loadLocalPin(accountIncarnationId: string): LedgerLocalPinV1 | null {
-  let encoded: string | null
+/** The plain pins kept before they were sealed: removed, never read (unseen is safe). */
+function removeOldPins(): void {
   try {
-    encoded = globalThis.localStorage?.getItem(localPinKey(accountIncarnationId)) ?? null
+    const storage = globalThis.localStorage
+    if (!storage) return
+    const old: string[] = []
+    for (let i = 0; i < storage.length; i++) {
+      const key = storage.key(i)
+      if (key?.startsWith(OLD_PIN_PREFIX)) old.push(key)
+    }
+    for (const key of old) storage.removeItem(key)
   } catch {
-    return null
-  }
-  if (encoded === null) return null
-  let value: unknown
-  try {
-    value = JSON.parse(encoded)
-  } catch {
-    throw new Error('local Chat attachment ledger pin is malformed')
-  }
-  if (typeof value !== 'object' || value === null) {
-    throw new Error('local Chat attachment ledger pin is malformed')
-  }
-  const pin = value as Partial<LedgerLocalPinV1>
-  if (pin.version !== 1 || typeof pin.cursor !== 'string' ||
-      typeof pin.chainDigest !== 'string' || !/^[0-9a-f]{64}$/.test(pin.chainDigest)) {
-    throw new Error('local Chat attachment ledger pin is malformed')
-  }
-  parseCanonicalU64(pin.cursor, 'local ledger pin cursor')
-  return pin as LedgerLocalPinV1
-}
-
-function storeLocalPin(
-  accountIncarnationId: string,
-  cursor: bigint,
-  chainDigest: Uint8Array,
-): void {
-  const pin: LedgerLocalPinV1 = {
-    version: 1,
-    cursor: cursor.toString(),
-    chainDigest: bytesToHex(chainDigest),
-  }
-  try {
-    globalThis.localStorage?.setItem(localPinKey(accountIncarnationId), JSON.stringify(pin))
-  } catch {
-    // Browsers may disable persistent storage. The authenticated remote chain
-    // still verifies; only cross-restart rollback pinning is unavailable.
+    // Storage may be off: nothing to remove then.
   }
 }
 
