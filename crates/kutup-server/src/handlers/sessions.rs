@@ -36,7 +36,8 @@ fn user_uuid(user: &AuthUser) -> AppResult<Uuid> {
 )]
 pub async fn logout(State(state): State<AppState>, user: AuthUser) -> AppResult<Response> {
     // Recorded first: the session's client and browser are copied from it.
-    log(&state, &user, crate::security_events::Kind::SignOut).await?;
+    // Best effort: a log that can't be written never keeps anyone signed in.
+    log(&state, &user, crate::security_events::Kind::SignOut).await;
     sessions::sign_out(&state.pool, user.session.session_id).await?;
     let body = Json(OkResponse { ok: true });
     if user.session.client.uses_cookie() {
@@ -128,7 +129,7 @@ pub async fn revoke_session(
     if !sessions::revoke_owned(&state.pool, user_uuid(&user)?, id).await? {
         return Err(AppError::not_found("session not found"));
     }
-    log(&state, &user, crate::security_events::Kind::SessionRevoked).await?;
+    log(&state, &user, crate::security_events::Kind::SessionRevoked).await;
     Ok(Json(OkResponse { ok: true }).into_response())
 }
 
@@ -156,28 +157,31 @@ pub async fn revoke_other_sessions(
         &user,
         crate::security_events::Kind::AllSessionsRevoked,
     )
-    .await?;
+    .await;
     Ok(Json(OkResponse { ok: true }).into_response())
 }
 
 /// `kind` in the account's security log, made by the calling session
-/// (docs/plans/server-personal-data.md, A8).
-async fn log(
-    state: &AppState,
-    user: &AuthUser,
-    kind: crate::security_events::Kind,
-) -> AppResult<()> {
-    let mut tx = state.pool.begin().await?;
-    crate::security_events::record(
-        &mut tx,
-        user_uuid(user)?,
-        kind,
-        Some(user.session.session_id),
-        None,
-    )
-    .await?;
-    tx.commit().await?;
-    Ok(())
+/// (docs/plans/server-personal-data.md, A8). Best effort: what it records
+/// goes on whether or not the log could be written (a failure is logged).
+async fn log(state: &AppState, user: &AuthUser, kind: crate::security_events::Kind) {
+    let written: AppResult<()> = async {
+        let mut tx = state.pool.begin().await?;
+        crate::security_events::record(
+            &mut tx,
+            user_uuid(user)?,
+            kind,
+            Some(user.session.session_id),
+            None,
+        )
+        .await?;
+        tx.commit().await?;
+        Ok(())
+    }
+    .await;
+    if let Err(error) = written {
+        tracing::warn!("security log: {}", error.message);
+    }
 }
 
 #[derive(Debug, Default, Deserialize, ToSchema)]
