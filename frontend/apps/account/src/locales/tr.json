@@ -713,6 +713,8 @@
       "closeHint": "Hesabı bekleme süresinden sonra siler; o zamana kadar sahibi oturum açıp hesabı tutabilir.",
       "closeTitle": "Bu hesap kapatılsın mı?",
       "closeDescription": "{{name}} hesabının tüm oturumları şimdi kapanır. Tutulmazsa hesap ve sahip olduğu her şey bekleme süresinden sonra silinir.",
+      "deletionFailing_one": "Bu hesabın silinmesi bir kez başarısız oldu; sunucu daha sonra yeniden dener. Nedeni sunucu günlüğündedir.",
+      "deletionFailing_other": "Bu hesabın silinmesi {{count}} kez başarısız oldu; sunucu giderek seyrekleşen aralıklarla denemeyi sürdürür. Nedeni sunucu günlüğündedir.",
       "closesAt": "Silinme tarihi",
       "keep": "Hesabı tut",
       "keepHint": "Hesap kapanıyor. Tutulursa yeniden etkin olur.",

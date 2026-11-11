@@ -22,7 +22,17 @@ ALTER TABLE users
     ADD COLUMN legal_hold_reference text
         CHECK (char_length(legal_hold_reference) BETWEEN 1 AND 200),
     ADD COLUMN legal_hold_at timestamptz,
-    ADD COLUMN legal_hold_by uuid REFERENCES users(id) ON DELETE SET NULL;
+    ADD COLUMN legal_hold_by uuid REFERENCES users(id) ON DELETE SET NULL,
+    -- A suspended account that was closed keeps its suspension: kept again,
+    -- it is suspended again, and it can't sign in to keep itself.
+    ADD COLUMN suspended_before_close text
+        CHECK (suspended_before_close IN ('admin', 'operator_order', 'security')),
+    -- The deletion under way: set before the purges start, so a hold or a
+    -- keep can't come between them and the row's deletion, and so two
+    -- servers don't both purge. A deletion that failed tries again later.
+    ADD COLUMN deleting_at timestamptz,
+    ADD COLUMN deletion_attempts integer NOT NULL DEFAULT 0 CHECK (deletion_attempts >= 0),
+    ADD COLUMN deletion_next_try_at timestamptz;
 UPDATE users SET state = 'suspended', suspended_reason = 'admin' WHERE NOT is_active;
 ALTER TABLE users DROP COLUMN is_active;
 ALTER TABLE users
@@ -32,10 +42,20 @@ ALTER TABLE users
     ADD CONSTRAINT users_closing
         CHECK ((state = 'closing') = (closing_by IS NOT NULL)
            AND (state = 'closing') = (closes_at IS NOT NULL)),
+    ADD CONSTRAINT users_suspended_before_close
+        CHECK (suspended_before_close IS NULL OR state = 'closing'),
     ADD CONSTRAINT users_legal_hold
         CHECK ((legal_hold_reference IS NULL) = (legal_hold_at IS NULL)
            AND (legal_hold_reference IS NOT NULL OR legal_hold_by IS NULL));
 CREATE INDEX users_closing_due ON users (closes_at) WHERE state = 'closing';
+
+-- Whether an account is under a legal hold: every job that deletes an
+-- account's data asks this first (the closing job, retention, trash, mail
+-- expiry, Chat sweeps; crate::account_closing names them).
+CREATE FUNCTION kutup_account_held(account uuid) RETURNS boolean
+LANGUAGE sql STABLE AS $$
+    SELECT EXISTS (SELECT 1 FROM users WHERE id = account AND legal_hold_reference IS NOT NULL)
+$$;
 
 -- Closing and keeping an account are the owner's events; keeping it needs a
 -- one-time grant (the sign-in that found it closing), and closing a reauth.

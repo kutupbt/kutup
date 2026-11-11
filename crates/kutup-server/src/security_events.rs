@@ -244,8 +244,7 @@ pub async fn prune(pool: &sqlx::PgPool, days: i64, kept_per_kind: i64) -> AppRes
                           FROM account_security_events) ranked
                       WHERE ranked.n > $2))
             -- A legal hold keeps everything of its account (A5).
-            AND NOT EXISTS (SELECT 1 FROM users u
-                             WHERE u.id = e.user_id AND u.legal_hold_reference IS NOT NULL)",
+            AND NOT kutup_account_held(e.user_id)",
     )
     .bind(days)
     .bind(kept_per_kind)

@@ -87,6 +87,8 @@ export interface UserRow {
   /** A legal hold's reference: while set, nothing deletes the account. */
   legalHoldReference?: string
   legalHoldAt?: string
+  /** Failed tries at deleting this closing account past its date; 0 when none. */
+  deletionAttempts: number
   totpEnabled: boolean
   /**
    * Still on the admin-issued temp password — no key material yet. Gates the

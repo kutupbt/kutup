@@ -386,6 +386,9 @@ async fn main() -> anyhow::Result<()> {
     // A restore: the accounts the destruction log destroyed after the dump
     // lose their data keys before anything is served, and close at once
     // (A2, A7).
+    destruction_events::check_entries(&pool, &config.opaque_setup_keys)
+        .await
+        .map_err(anyhow::Error::msg)?;
     let replayed = destruction_events::replay(&pool, &config.opaque_setup_keys)
         .await
         .map_err(|error| anyhow::anyhow!("replay the destruction log: {}", error.message))?;

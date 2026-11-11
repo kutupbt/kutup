@@ -130,6 +130,32 @@ pub async fn record_bulk<'e, E: sqlx::PgExecutor<'e>>(
     Ok(())
 }
 
+/// At start: every kept destruction event names its account under at least
+/// one entry of the server key list, else a restore could no longer match it
+/// and bring a deleted account back. An entry stays in the list while
+/// events made under it are kept, unless they were made under a newer
+/// entry too.
+pub async fn check_entries(pool: &PgPool, keys: &OpaqueSetupKeys) -> Result<(), String> {
+    let ids: Vec<i32> = keys.ids().map(i32::from).collect();
+    let orphaned: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM account_keys.destruction_events
+          WHERE subject_key_ids IS NOT NULL AND NOT (subject_key_ids && $1::integer[])",
+    )
+    .bind(&ids)
+    .fetch_one(pool)
+    .await
+    .map_err(|e| format!("read the destruction log: {e}"))?;
+    if orphaned == 0 {
+        Ok(())
+    } else {
+        Err(format!(
+            "the server key list (OPAQUE_SETUP_KEYS) lacks every entry {orphaned} kept \
+             destruction events were made under: a restore could not match those deleted \
+             accounts. Put the entries back (docs/self-hosting.md, \"OPAQUE_SETUP_KEYS, the server key list\")"
+        ))
+    }
+}
+
 /// Accounts read per page by [`replay`].
 const REPLAY_PAGE: i64 = 5000;
 
@@ -173,6 +199,14 @@ pub async fn replay(pool: &PgPool, keys: &OpaqueSetupKeys) -> AppResult<u64> {
             .execute(&mut *tx)
             .await?;
         crate::account_closing::close(&mut tx, *account, ClosingBy::Restore, 0).await?;
+        // One closing already deletes now too, whoever asked.
+        sqlx::query(
+            "UPDATE users SET closes_at = LEAST(closes_at, now()), closing_by = 'restore'
+              WHERE id = $1 AND state = 'closing'",
+        )
+        .bind(account)
+        .execute(&mut *tx)
+        .await?;
         tx.commit().await?;
     }
     Ok(found.len() as u64)

@@ -297,7 +297,7 @@ pub async fn check_entries(pool: &PgPool, keys: &OpaqueSetupKeys) -> Result<(), 
         Err(format!(
             "the server key list (OPAQUE_SETUP_KEYS) lacks entries still in use: {}. \
              Put them back; an entry can be removed only once no key uses it \
-             (docs/self-hosting.md, \"Rotating the server key list\")",
+             (docs/self-hosting.md, \"OPAQUE_SETUP_KEYS, the server key list\")",
             missing.join(", ")
         ))
     }

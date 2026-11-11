@@ -130,6 +130,9 @@ struct UserRow {
     )]
     #[schema(value_type = Option<String>)]
     legal_hold_at: Option<OffsetDateTime>,
+    /// Failed tries at deleting a closing account past its date (the job
+    /// keeps trying, further apart); 0 when none.
+    deletion_attempts: i32,
     #[serde(rename = "totpEnabled")]
     totp_enabled: bool,
     /// Still on the admin-issued temp password (no key material yet). Gates the
@@ -154,7 +157,7 @@ pub async fn list_users(State(state): State<AppState>, _admin: AdminUser) -> App
     let users: Vec<UserRow> = sqlx::query_as(
         r#"SELECT id, COALESCE(username, '') AS username, storage_quota_bytes, storage_used_bytes,
                   is_admin, is_active, state, suspended_reason, closes_at,
-                  legal_hold_reference, legal_hold_at,
+                  legal_hold_reference, legal_hold_at, deletion_attempts,
                   totp_enabled, is_first_login, created_at, is_break_glass AS is_protected
            FROM users ORDER BY created_at DESC"#,
     )
@@ -413,9 +416,19 @@ pub async fn update_user(
                     .bind(target)
                     .fetch_one(&mut *tx)
                     .await?;
-            if suspension == 0 && closing && !crate::account_closing::keep(&mut tx, target).await? {
-                return Err(AppError::conflict("the account is being deleted")
-                    .with_details(json!({ "code": "accountDeleting" })));
+            if suspension == 0 && closing {
+                // Kept as it was before it closed (a suspension stays).
+                if !crate::account_closing::keep(&mut tx, target).await? {
+                    return Err(crate::account_closing::deleting());
+                }
+                crate::security_events::record(
+                    &mut tx,
+                    target,
+                    crate::security_events::Kind::AccountKept,
+                    None,
+                    Some(crate::handlers::trusted_uuid(&admin.user_id)?),
+                )
+                .await?;
             }
         } else {
             // The shared mailboxes it signs for need a new signer: it may
@@ -521,6 +534,7 @@ pub async fn delete_user(
         target,
         crate::destruction_events::Actor::Admin,
         "user.delete",
+        false,
     )
     .await?;
     audit(
@@ -578,9 +592,6 @@ pub async fn close_user(
         .load(&state.pool)
         .await?;
     let mut tx = state.pool.begin().await?;
-    // The shared mailboxes it signs for need a new signer, as for a
-    // suspension (docs/plans/mail-groups.md).
-    crate::mail::group_keys::signer_leaving(&mut tx, target).await?;
     let closes_at = crate::account_closing::close(
         &mut tx,
         target,
@@ -640,7 +651,7 @@ pub async fn set_legal_hold(
     let admin_id = crate::handlers::trusted_uuid(&admin.user_id)?;
     let set = sqlx::query(
         "UPDATE users SET legal_hold_reference = $2, legal_hold_at = now(), legal_hold_by = $3
-          WHERE id = $1",
+          WHERE id = $1 AND deleting_at IS NULL",
     )
     .bind(target)
     .bind(reference)
@@ -649,7 +660,16 @@ pub async fn set_legal_hold(
     .await?
     .rows_affected();
     if set == 0 {
-        return Err(AppError::not_found("not found"));
+        // A deletion under way can't be held any more: its purges have begun.
+        let deleting: Option<bool> =
+            sqlx::query_scalar("SELECT deleting_at IS NOT NULL FROM users WHERE id = $1")
+                .bind(target)
+                .fetch_optional(&state.pool)
+                .await?;
+        return Err(match deleting {
+            Some(true) => crate::account_closing::deleting(),
+            _ => AppError::not_found("not found"),
+        });
     }
     audit(
         &state.pool,

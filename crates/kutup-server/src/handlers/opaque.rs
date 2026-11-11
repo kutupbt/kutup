@@ -739,7 +739,8 @@ pub async fn register_finish(
     let updated = sqlx::query(
         "UPDATE users SET opaque_record = $3, opaque_suite = $4, opaque_server_key_id = $5,
                           master_key_envelope = $6
-         WHERE id = $1 AND key_binding = $2 AND is_active
+         WHERE id = $1 AND key_binding = $2
+           AND (state = 'active' OR (state = 'closing' AND suspended_before_close IS NULL))
            AND (NOT $7 OR opaque_server_key_id IS DISTINCT FROM $5)",
     )
     .bind(grant.user_id)

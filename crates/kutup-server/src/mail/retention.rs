@@ -36,6 +36,7 @@ pub async fn once(state: &AppState) -> anyhow::Result<u64> {
     let accounts: Vec<(Uuid, i32)> = sqlx::query_as(
         "SELECT s.user_id, s.auto_delete_days FROM mail_settings s
           WHERE s.auto_delete_days > 0
+            AND NOT kutup_account_held(s.user_id)
             AND EXISTS (SELECT 1 FROM mail_messages m
                          WHERE m.owner = s.user_id AND m.folder IN ('trash', 'spam')
                            AND m.folder_changed_at < now() - make_interval(days => s.auto_delete_days))",

@@ -536,8 +536,7 @@ pub async fn prune_ended(pool: &PgPool, days: i64) -> AppResult<u64> {
                                AND c.revoked_at IS NULL AND c.expires_at > now())
             -- A legal hold keeps everything of its account
             -- (docs/plans/server-personal-data.md, A5).
-            AND NOT EXISTS (SELECT 1 FROM users u
-                             WHERE u.id = s.user_id AND u.legal_hold_reference IS NOT NULL)",
+            AND NOT kutup_account_held(s.user_id)",
     )
     .bind(days)
     .execute(pool)

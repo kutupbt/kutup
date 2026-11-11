@@ -378,6 +378,9 @@ export function UserPage() {
       </Card>
 
       {locked ? <Alert>{t('admin.user.protectedNote')}</Alert> : null}
+      {user.state === 'closing' && user.deletionAttempts > 0 ? (
+        <Alert variant="error">{t('admin.user.deletionFailing', { count: user.deletionAttempts })}</Alert>
+      ) : null}
 
       <Section title={t('admin.user.access')}>
         <Card className="divide-y divide-border p-0">

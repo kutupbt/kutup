@@ -1279,6 +1279,12 @@ if any.
 
     The server refuses to start without an entry that still wraps keys,
     naming each such entry and how many keys it wraps.
+  - **The destruction log names deleted accounts under it** (A7): each event
+    holds a keyed hash of the account under every entry in the list at the
+    time, so a restore can find accounts deleted since its dump. Keep an
+    entry while events made only under it (or older entries) are kept
+    (Keep the destruction log, default 1095 days): the server refuses to
+    start while a kept event names no entry of the list.
 - **Group send endorsement keys:** made on first start when `CHAT_GROUPS`
   and federation are on, stored sealed (above). `kutup-server chat-zk-keys
   rotate` makes a new key that issues from then on; the old one keeps

@@ -1138,8 +1138,9 @@ usable admin.
 
 ### POST /api/auth/keep
 
-A sign-in of a closing account that passed every step answers, instead of a
-session, `{"userId", "username", "closing": {"closesAt", "grant"}}`: the grant
+A sign-in of a closing account that passed every step answers (`409
+accountDeleting` once its date has passed; a closing account that was
+suspended doesn't sign in at all), instead of a session, `{"userId", "username", "closing": {"closesAt", "grant"}}`: the grant
 (purpose `keep`, minutes, once) keeps the account here. The account is active
 again (`accountKept`), and the answer is the sign-in's, with the session.
 
@@ -5150,7 +5151,8 @@ Update a user. All fields are optional; only the ones present in the request are
 `isActive: false` suspends the account (`suspendedReason`, default `admin`);
 its sign-ins end. A closing account is `409 accountClosing`: keep it first.
 `isActive: true` makes a suspended account active again, and keeps a closing
-one until its date (`409 accountDeleting` after: the closing job may be
+one (as it was before it closed: a suspended account is suspended again, with
+its reason, and records `accountKept`) until its date (`409 accountDeleting` after: the closing job may be
 deleting it; a held account can still be kept). `isAdmin` promotes/demotes the user. The change is reflected in JWT claims on the user's next token refresh.
 
 **Response:** `200 OK` `{"message": "updated"}`. `403` if the request would demote or disable the break-glass admin; `400` if it would leave zero usable admins.
@@ -5198,7 +5200,7 @@ with the reference.
 **Request body (PUT):** `{"reference": "case 2026/17"}` (1–200 characters).
 
 **Response:** `204 No Content`; `400` for an empty or long reference; `404`
-for an unknown account.
+for an unknown account; `409 accountDeleting` once its deletion has begun.
 
 ---
 

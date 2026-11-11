@@ -18,6 +18,7 @@ ALTER TABLE account_security_events ADD CONSTRAINT account_security_events_kind_
     'orgReset', 'orgSignIn',
     'signIn', 'signInFailedPassword', 'signInFailed2fa', 'signOut',
     'sessionRevoked', 'allSessionsRevoked', 'adminAccess']));
+DROP FUNCTION kutup_account_held(uuid);
 DROP INDEX users_closing_due;
 ALTER TABLE users DROP COLUMN is_active;
 ALTER TABLE users ADD COLUMN is_active boolean NOT NULL DEFAULT true;
@@ -25,4 +26,6 @@ UPDATE users SET is_active = (state = 'active');
 ALTER TABLE users
     DROP COLUMN state, DROP COLUMN suspended_reason, DROP COLUMN state_changed_at,
     DROP COLUMN closing_by, DROP COLUMN closes_at, DROP COLUMN purpose_ended_at,
-    DROP COLUMN legal_hold_reference, DROP COLUMN legal_hold_at, DROP COLUMN legal_hold_by;
+    DROP COLUMN legal_hold_reference, DROP COLUMN legal_hold_at, DROP COLUMN legal_hold_by,
+    DROP COLUMN suspended_before_close, DROP COLUMN deleting_at, DROP COLUMN deletion_attempts,
+    DROP COLUMN deletion_next_try_at;
