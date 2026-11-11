@@ -157,7 +157,7 @@ async fn insert(
         (Some((client, sealed)), Some(session)) => {
             let key = crate::client_family::account_key(tx, user_id).await?;
             let family = crate::client_family::open_with(
-                key.as_ref(),
+                &key,
                 user_id,
                 "auth_sessions",
                 session,
@@ -293,7 +293,7 @@ pub async fn list(
     let key = crate::client_family::account_key(&mut conn, user_id).await?;
     for event in &mut events {
         event.client = crate::client_family::open_with(
-            key.as_ref(),
+            &key,
             user_id,
             "account_security_events",
             event.id,

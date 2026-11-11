@@ -6,14 +6,18 @@
 CREATE SCHEMA account_keys;
 
 CREATE TABLE account_keys.account_data_keys (
-    user_id uuid PRIMARY KEY REFERENCES public.users(id) ON DELETE CASCADE,
+    user_id uuid NOT NULL REFERENCES public.users(id) ON DELETE CASCADE,
     -- The server key list entry the key is wrapped under (its id): an entry
     -- can be retired only once no key uses it.
     sealing_key_id smallint NOT NULL CHECK (sealing_key_id >= 1),
     generation integer NOT NULL CHECK (generation >= 1),
     -- kutup_crypto::server_data::WRAPPED_KEY_LEN.
     wrapped bytea NOT NULL CHECK (octet_length(wrapped) = 86),
-    created_at timestamptz NOT NULL DEFAULT now()
+    created_at timestamptz NOT NULL DEFAULT now(),
+    -- An account may hold two generations while its fields are re-sealed
+    -- from one to the next; the newest seals, a field names the one it was
+    -- sealed under.
+    PRIMARY KEY (user_id, generation)
 );
 
 CREATE INDEX account_data_keys_sealing_key_id ON account_keys.account_data_keys (sealing_key_id);

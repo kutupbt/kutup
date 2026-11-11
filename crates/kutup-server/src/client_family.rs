@@ -159,16 +159,16 @@ fn keys() -> Option<&'static crate::opaque_setup::OpaqueSetupKeys> {
     keys
 }
 
-/// The account's data key, to open its families with ([`open_with`]); none
-/// when it has none (nothing of it opens) or the key list is not installed.
-/// Never makes a key.
+/// The account's data keys (every generation), to open its families with
+/// ([`open_with`]); none when it has none (nothing of it opens) or the key
+/// list is not installed. Never makes a key.
 pub async fn account_key(
     conn: &mut sqlx::PgConnection,
     user_id: uuid::Uuid,
-) -> crate::error::AppResult<Option<kutup_crypto::server_data::DataKey>> {
+) -> crate::error::AppResult<Vec<kutup_crypto::server_data::DataKey>> {
     match keys() {
-        Some(keys) => crate::account_data::load_in(conn, keys, user_id).await,
-        None => Ok(None),
+        Some(keys) => crate::account_data::load_all_in(conn, keys, user_id).await,
+        None => Ok(Vec::new()),
     }
 }
 
@@ -204,17 +204,22 @@ pub async fn seal_in(
     .map_err(|_| crate::error::AppError::internal("seal a client family"))
 }
 
-/// Opens a family [`seal_in`] sealed, under the account's `key` (one load for
-/// a whole list). One that does not open (its account's key gone, or
-/// altered) reads as unknown.
+/// Opens a family [`seal_in`] sealed, under the account's key of the
+/// generation it names (`keys`: [`account_key`], one load for a whole list).
+/// One that does not open (its account's key gone, or altered) reads as
+/// unknown.
 pub fn open_with(
-    key: Option<&kutup_crypto::server_data::DataKey>,
+    keys: &[kutup_crypto::server_data::DataKey],
     user_id: uuid::Uuid,
     table: &str,
     row: uuid::Uuid,
     sealed: Option<&[u8]>,
 ) -> ClientFamily {
-    let (Some(key), Some(sealed)) = (key, sealed) else {
+    let Some(sealed) = sealed else {
+        return ClientFamily::default();
+    };
+    let generation = kutup_crypto::server_data::sealed_generation(sealed).ok();
+    let Some(key) = keys.iter().find(|key| Some(key.generation()) == generation) else {
         return ClientFamily::default();
     };
     let row = row.to_string();
