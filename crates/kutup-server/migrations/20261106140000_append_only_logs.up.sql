@@ -37,7 +37,11 @@ CREATE TRIGGER account_security_events_count_step
 -- A hash chain over the admin log: each row names the previous row's hash.
 -- This lands with a database reset (the wipe), so every row is chained: one
 -- without hashes reads as broken.
+-- `chain_version` names how a row is hashed (1: SHA-256 under the
+-- admin-audit-chain/v1 label over the fields below), so a later version can
+-- join the chain without a reset.
 ALTER TABLE admin_audit_log
+    ADD COLUMN chain_version smallint NOT NULL DEFAULT 1 CHECK (chain_version >= 1),
     ADD COLUMN previous_hash bytea CHECK (previous_hash IS NULL OR octet_length(previous_hash) = 32),
     ADD COLUMN row_hash bytea CHECK (row_hash IS NULL OR octet_length(row_hash) = 32);
 

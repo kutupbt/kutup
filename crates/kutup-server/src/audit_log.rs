@@ -21,6 +21,9 @@ use uuid::Uuid;
 use crate::error::AppResult;
 
 const CHAIN_DOMAIN: &[u8] = kutup_crypto::labels::SERVER_ADMIN_AUDIT_CHAIN_V1;
+/// The version [`row_hash`] is (`admin_audit_log.chain_version`): a row of
+/// another version is one this server can't check, and reads as broken.
+const CHAIN_VERSION: i16 = 1;
 /// The advisory lock that orders the chain's inserts.
 const CHAIN_LOCK: i64 = 0x6b75_7475_7061_7564; // "kutupaud"
 /// Rows read per page when verifying.
@@ -137,8 +140,9 @@ pub async fn append_in(
     let hash = row_hash(&previous, admin, action, target, micros(at), payload);
     sqlx::query(
         "INSERT INTO admin_audit_log
-             (admin_user_id, action, target_user_id, payload, occurred_at, previous_hash, row_hash)
-         VALUES ($1, $2, $3, $4, $5, $6, $7)",
+             (admin_user_id, action, target_user_id, payload, occurred_at, previous_hash, row_hash,
+              chain_version)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8)",
     )
     .bind(admin)
     .bind(action)
@@ -147,6 +151,7 @@ pub async fn append_in(
     .bind(at)
     .bind((!previous.is_empty()).then_some(&previous))
     .bind(hash.as_slice())
+    .bind(CHAIN_VERSION)
     .execute(&mut *conn)
     .await?;
     Ok(())
@@ -171,6 +176,7 @@ type ChainRow = (
     OffsetDateTime,
     Option<Vec<u8>>,
     Option<Vec<u8>>,
+    i16,
 );
 
 /// Walks the chain from where the retention job last cut it (its anchor), or
@@ -186,7 +192,7 @@ pub async fn verify(pool: &PgPool) -> AppResult<Verification> {
     loop {
         let rows: Vec<ChainRow> = sqlx::query_as(
             "SELECT id, admin_user_id, action, target_user_id, payload, occurred_at,
-                    previous_hash, row_hash
+                    previous_hash, row_hash, chain_version
                FROM admin_audit_log
               WHERE id > $1
               ORDER BY id LIMIT $2",
@@ -215,9 +221,9 @@ pub async fn verify(pool: &PgPool) -> AppResult<Verification> {
 /// the hash the next row must name, empty before the first row): the first
 /// row whose link, or own hash, is wrong, or that has none.
 fn check(rows: Vec<ChainRow>, expected_previous: &mut Vec<u8>, checked: &mut u64) -> Option<i64> {
-    for (id, admin, action, target, payload, at, previous, stored) in rows {
+    for (id, admin, action, target, payload, at, previous, stored, version) in rows {
         let previous = previous.unwrap_or_default();
-        let Some(stored) = stored else {
+        let (Some(stored), CHAIN_VERSION) = (stored, version) else {
             return Some(id);
         };
         let hash = row_hash(&previous, admin, &action, target, micros(at), &payload);
@@ -286,6 +292,7 @@ mod tests {
                     at,
                     (!previous.is_empty()).then(|| previous.clone()),
                     Some(hash.to_vec()),
+                    CHAIN_VERSION,
                 );
                 previous = hash.to_vec();
                 row
@@ -319,6 +326,10 @@ mod tests {
         let mut unhashed = chain();
         unhashed[2].7 = None;
         assert_eq!(check(unhashed, &mut Vec::new(), &mut 0), Some(3));
+        // A row of a version this server can't check.
+        let mut unknown = chain();
+        unknown[1].8 = 2;
+        assert_eq!(check(unknown, &mut Vec::new(), &mut 0), Some(2));
     }
 
     #[test]

@@ -79,7 +79,7 @@ async fn grant_role(owner: &PgPool, app: &str) -> Result<()> {
     statements.push(format!("REVOKE INSERT ON admin_audit_log FROM {role}"));
     statements.push(format!(
         "GRANT INSERT (admin_user_id, action, target_user_id, payload, occurred_at, \
-         previous_hash, row_hash) ON admin_audit_log TO {role}"
+         previous_hash, row_hash, chain_version) ON admin_audit_log TO {role}"
     ));
     let sequence: Option<String> =
         sqlx::query_scalar("SELECT pg_get_serial_sequence('admin_audit_log', 'id')")
