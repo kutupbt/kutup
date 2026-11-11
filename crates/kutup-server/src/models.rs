@@ -84,6 +84,8 @@ pub struct AdminSettingsResponse {
     /// Who may open public links: `on`, `off` or `signed_in`
     /// (docs/plans/server-personal-data.md, A11).
     pub public_sharing: crate::public_sharing::PublicSharing,
+    /// Whether a new account talks to other servers.
+    pub federation_default: bool,
     /// The storage quota new accounts get. Existing accounts keep theirs.
     pub default_storage_quota_bytes: i64,
     /// Retention for unread Chat mailbox ciphertext. Zero disables expiry.
@@ -163,6 +165,8 @@ pub struct MeResponse {
     /// Whether this account may share by public link (`on`, `off`), as an
     /// administrator set it; the site's switch is in the public settings.
     pub public_sharing: String,
+    /// Whether it talks to other servers (`on`, `off`; Settings → Privacy).
+    pub federation: String,
     pub renames: RenameAnchor,
 }
 
@@ -499,6 +503,8 @@ pub struct UpdateAdminUserRequest {
     pub suspended_reason: Option<String>,
     /// Whether it may share by public link: `on` or `off`.
     pub public_sharing: Option<String>,
+    /// Whether it talks to other servers: `on` or `off`.
+    pub federation: Option<String>,
     pub is_admin: Option<bool>,
 }
 
@@ -509,6 +515,8 @@ pub struct UpdateAdminSettingsRequest {
     pub registration_mode: Option<crate::registration::RegistrationMode>,
     /// Who may open public links: `on`, `off` or `signed_in`.
     pub public_sharing: Option<crate::public_sharing::PublicSharing>,
+    /// Whether a new account talks to other servers.
+    pub federation_default: Option<bool>,
     pub default_storage_quota_bytes: Option<i64>,
     pub chat_mailbox_retention_days: Option<i64>,
     pub chat_media_delivery_retention_days: Option<i64>,

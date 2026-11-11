@@ -42,6 +42,7 @@ pub async fn chains(
     pool: &sqlx::PgPool,
     address: &str,
     incarnation: Option<&str>,
+    for_peer: bool,
 ) -> AppResult<Value> {
     let (local, server) = address.rsplit_once('@').unwrap_or((address, ""));
     type Row = (String, String, i32, String, String, Value, Option<String>);
@@ -60,12 +61,18 @@ pub async fn chains(
                   WHERE n.folded = kutup_fold(split_part(r.current, '@', 1))
                     AND n.incarnation_id = r.incarnation_id)
            FROM account_renames r JOIN named USING (incarnation_id)
-          WHERE $3::text IS NULL OR r.incarnation_id = $3
+          WHERE ($3::text IS NULL OR r.incarnation_id = $3)
+            -- To another server, an account that doesn't talk to other
+            -- servers has no names (crate::federation_switch).
+            AND (NOT $4 OR NOT EXISTS (SELECT 1 FROM users u
+                                        WHERE u.account_incarnation_id = r.incarnation_id
+                                          AND NOT kutup_account_federates(u.id)))
           ORDER BY latest DESC, r.incarnation_id, r.sequence",
     )
     .bind(local)
     .bind(server)
     .bind(incarnation)
+    .bind(for_peer)
     .fetch_all(pool)
     .await?;
     let mut chains: Vec<Value> = Vec::new();
@@ -110,7 +117,7 @@ pub async fn renamed(
         return Ok(None);
     }
     let address = format!("{name}@{server_name}");
-    let found = chains(pool, &address, None).await?;
+    let found = chains(pool, &address, None, false).await?;
     if found["chains"].as_array().is_none_or(|c| c.is_empty()) {
         return Ok(None);
     }

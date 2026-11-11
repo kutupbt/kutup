@@ -52,6 +52,27 @@ pub async fn local_user<'e, E: sqlx::PgExecutor<'e>>(
     )
 }
 
+/// [`local_user`] for another server's request: an account that doesn't talk
+/// to other servers (`crate::federation_switch`) is, to it, no account, found
+/// the same way an unknown one is not.
+pub async fn local_user_for_peer<'e, E: sqlx::PgExecutor<'e>>(
+    executor: E,
+    local_server: &str,
+    account: &AccountRef,
+) -> AppResult<Option<Uuid>> {
+    if account.server != local_server {
+        return Ok(None);
+    }
+    let id = Uuid::parse_str(&account.account_id)
+        .map_err(|_| AppError::internal("a canonical account id is a UUID"))?;
+    Ok(sqlx::query_scalar(
+        "SELECT id FROM users WHERE id = $1 AND is_active AND kutup_account_federates(id)",
+    )
+    .bind(id)
+    .fetch_optional(executor)
+    .await?)
+}
+
 /// A peer's answer naming an account: a bad gateway when it is not canonical.
 pub fn from_peer(server: &str, account_id: &str) -> AppResult<AccountRef> {
     AccountRef::new(server, account_id).map_err(|_| {

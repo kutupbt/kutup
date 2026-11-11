@@ -402,6 +402,7 @@ All file content and metadata are encrypted client-side; the server stores only 
         crate::legal::put_consent,
         crate::legal::admin_documents,
         crate::legal::publish,
+        crate::federation_switch::put_federation,
         crate::handlers::closing::keep,
         crate::handlers::admin::list_users,
         crate::handlers::admin::create_user,

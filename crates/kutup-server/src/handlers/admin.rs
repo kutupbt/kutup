@@ -135,6 +135,8 @@ struct UserRow {
     deletion_attempts: i32,
     /// Whether it may share by public link: `on` or `off`.
     public_sharing: String,
+    /// Whether it talks to other servers: `on` or `off`.
+    federation: String,
     #[serde(rename = "totpEnabled")]
     totp_enabled: bool,
     /// Still on the admin-issued temp password (no key material yet). Gates the
@@ -159,7 +161,7 @@ pub async fn list_users(State(state): State<AppState>, _admin: AdminUser) -> App
     let users: Vec<UserRow> = sqlx::query_as(
         r#"SELECT id, COALESCE(username, '') AS username, storage_quota_bytes, storage_used_bytes,
                   is_admin, is_active, state, suspended_reason, closes_at,
-                  legal_hold_reference, legal_hold_at, deletion_attempts, public_sharing,
+                  legal_hold_reference, legal_hold_at, deletion_attempts, public_sharing, federation,
                   totp_enabled, is_first_login, created_at, is_break_glass AS is_protected
            FROM users ORDER BY created_at DESC"#,
     )
@@ -258,6 +260,7 @@ pub async fn create_user(
         return Err(AppError::bad_request("storage quota must be positive"));
     }
 
+    let federation_default = crate::federation_switch::site_default(&state.pool).await?;
     let mut tx = state.pool.begin().await?;
     // One account per folded name (docs/plans/username-renames.md). The
     // break-glass account itself is made by `bootstrap_admin`, not here.
@@ -295,6 +298,8 @@ pub async fn create_user(
         Err(e) => return Err(map_insert_conflict(e)),
     };
     crate::account_names::claim(&mut tx, &req.username, new_id, None).await?;
+    // Whether it talks to other servers starts as the site says.
+    crate::federation_switch::start_account(&mut tx, new_id, federation_default).await?;
     if !crate::handlers::mail_keys::create_own_address(
         &mut tx,
         &state.config.chat_server_name,
@@ -331,6 +336,7 @@ pub struct UpdateUserRequest {
     is_active: Option<bool>,
     suspended_reason: Option<String>,
     public_sharing: Option<String>,
+    federation: Option<String>,
     is_admin: Option<bool>,
 }
 
@@ -469,6 +475,18 @@ pub async fn update_user(
             }
         }
     }
+    if let Some(federation) = req.federation.as_deref() {
+        // An administrator's switch: the consent the user's own asks for is
+        // theirs to give, so turning it on here records none.
+        if !["on", "off"].contains(&federation) {
+            return Err(AppError::bad_request("federation must be on or off"));
+        }
+        sqlx::query("UPDATE users SET federation = $1 WHERE id = $2")
+            .bind(federation)
+            .bind(target)
+            .execute(&state.pool)
+            .await?;
+    }
     if let Some(sharing) = req.public_sharing.as_deref() {
         if !["on", "off"].contains(&sharing) {
             return Err(AppError::bad_request("publicSharing must be on or off"));
@@ -504,6 +522,9 @@ pub async fn update_user(
     }
     if let Some(sharing) = &req.public_sharing {
         changes.insert("publicSharing".into(), json!(sharing));
+    }
+    if let Some(federation) = &req.federation {
+        changes.insert("federation".into(), json!(federation));
     }
     audit(
         &state.pool,
@@ -1030,6 +1051,7 @@ pub async fn get_stats(State(state): State<AppState>, _admin: AdminUser) -> AppR
 pub async fn get_settings(State(state): State<AppState>, _admin: AdminUser) -> AppResult<Response> {
     let registration_mode = crate::registration::mode(&state).await?;
     let public_sharing = crate::public_sharing::site(&state.pool).await?;
+    let federation_default = crate::federation_switch::site_default(&state.pool).await?;
     let chat_mailbox_retention_days = crate::site_settings::chat_delivery_retention_days(
         &state.pool,
         crate::site_settings::CHAT_MAILBOX_RETENTION_DAYS,
@@ -1058,6 +1080,7 @@ pub async fn get_settings(State(state): State<AppState>, _admin: AdminUser) -> A
     let mut settings = json!({
         "registrationMode": registration_mode,
         "publicSharing": public_sharing,
+        "federationDefault": federation_default,
         "defaultStorageQuotaBytes": default_storage_quota_bytes,
         "chatMailboxRetentionDays": chat_mailbox_retention_days,
         "chatMediaDeliveryRetentionDays": chat_media_delivery_retention_days,
@@ -1081,6 +1104,7 @@ pub async fn get_settings(State(state): State<AppState>, _admin: AdminUser) -> A
 pub struct UpdateSettingsRequest {
     registration_mode: Option<crate::registration::RegistrationMode>,
     public_sharing: Option<crate::public_sharing::PublicSharing>,
+    federation_default: Option<bool>,
     default_storage_quota_bytes: Option<i64>,
     chat_mailbox_retention_days: Option<i64>,
     chat_media_delivery_retention_days: Option<i64>,
@@ -1128,6 +1152,7 @@ pub async fn update_settings(
 ) -> AppResult<Response> {
     if req.registration_mode.is_none()
         && req.public_sharing.is_none()
+        && req.federation_default.is_none()
         && req.default_storage_quota_bytes.is_none()
         && req.chat_mailbox_retention_days.is_none()
         && req.chat_media_delivery_retention_days.is_none()
@@ -1247,6 +1272,9 @@ pub async fn update_settings(
     if let Some(sharing) = req.public_sharing {
         crate::public_sharing::set_site(&mut transaction, sharing).await?;
     }
+    if let Some(on) = req.federation_default {
+        crate::federation_switch::set_site_default(&mut transaction, on).await?;
+    }
     for (key, value) in [
         (
             crate::storage_pool::DEFAULT_QUOTA_SETTING,
@@ -1335,6 +1363,7 @@ pub async fn update_settings(
         json!({
             "registrationMode": req.registration_mode,
             "publicSharing": req.public_sharing,
+            "federationDefault": req.federation_default,
             "defaultStorageQuotaBytes": req.default_storage_quota_bytes,
             "chatMailboxRetentionDays": req.chat_mailbox_retention_days,
             "chatMediaDeliveryRetentionDays": req.chat_media_delivery_retention_days,

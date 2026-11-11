@@ -42,6 +42,7 @@ mod drive_writes;
 mod error;
 mod federation;
 mod federation_outbox;
+mod federation_switch;
 mod file_content;
 mod grants;
 mod handlers;
@@ -903,6 +904,10 @@ fn build_router(state: AppState) -> Router {
         .route(
             "/api/user/consents",
             get(legal::get_consents).put(legal::put_consent),
+        )
+        .route(
+            "/api/user/federation",
+            put(federation_switch::put_federation),
         )
         .route("/api/user/names", get(handlers::renames::names))
         .route(

@@ -46,3 +46,20 @@ CREATE TABLE consents (
     channel text NOT NULL CHECK (channel IN ('settings', 'signup', 'admin'))
 );
 CREATE INDEX consents_latest ON consents (user_id, purpose, seq DESC);
+
+-- Whether the account talks to other servers (Chat and Drive federation;
+-- mail is email, not federation, and isn't covered). A new account takes the
+-- site setting `federation_default`. While `off`, the account reaches no
+-- other server and, to them, is no account at all; its groups and shares
+-- stay, quiet. Turning it on asks the `federation_abroad` consent when a
+-- document for it is published; withdrawing that consent turns it off.
+ALTER TABLE users
+    ADD COLUMN federation text NOT NULL DEFAULT 'on' CHECK (federation IN ('on', 'off'));
+
+-- Whether a local account takes part in federation: what every query that
+-- answers another server about one of ours asks, so an account that doesn't
+-- is answered as one that isn't there.
+CREATE FUNCTION kutup_account_federates(account uuid) RETURNS boolean
+LANGUAGE sql STABLE AS $$
+    SELECT EXISTS (SELECT 1 FROM users WHERE id = account AND federation = 'on')
+$$;
