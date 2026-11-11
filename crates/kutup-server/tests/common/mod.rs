@@ -1242,8 +1242,35 @@ pub fn metadata_at(file: &Sealed, revision: u64) -> String {
     .unwrap()
 }
 
+/// What `revision` of `file` is (`RevisionContent`), sealed under its key
+/// of `generation` (docs/plans/drive-block-format.md §2).
+pub fn revision_content_of(
+    file: &Sealed,
+    revision: &str,
+    manifest: [u8; 32],
+    size: u64,
+    generation: u32,
+) -> String {
+    let content = kutup_crypto::revision_content::RevisionContentV1::new(
+        *uuid::Uuid::parse_str(revision).unwrap().as_bytes(),
+        manifest,
+        size,
+    );
+    b64(&kutup_crypto::revision_content::seal_revision_content(
+        &content, &file.key, &file.id, generation,
+    )
+    .unwrap())
+}
+
+/// A record for `revision` of `file` at key generation 1: the server checks
+/// only its binding, never what it commits to.
+pub fn revision_content_at(file: &Sealed, revision: &str) -> String {
+    revision_content_of(file, revision, [0; 32], 0, 1)
+}
+
 /// `POST /api/files/{id}/revisions/{revisionId}/commit`
 /// (docs/plans/drive-block-format.md §10 slice 3).
+#[allow(clippy::too_many_arguments)]
 pub fn commit(
     c: &Client,
     base: &str,
@@ -1252,6 +1279,7 @@ pub fn commit(
     revision_id: &str,
     metadata_envelope: &str,
     metadata_revision: i64,
+    revision_content_envelope: &str,
 ) -> Response {
     bearer(
         c.post(format!(
@@ -1262,6 +1290,7 @@ pub fn commit(
     .json(&json!({
         "metadataEnvelope": metadata_envelope,
         "metadataRevision": metadata_revision,
+        "revisionContentEnvelope": revision_content_envelope,
     }))
     .send()
     .unwrap()

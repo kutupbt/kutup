@@ -34,6 +34,7 @@ import {
   openFileMetadataV1,
   renameFileRecordV1,
   sealFileMetadataDraftV1,
+  sealRevisionContent,
   type ContentCommitment,
   type FileMetadataDraftV1,
   type MediaMetadataV1,
@@ -41,8 +42,10 @@ import {
 import { hashBlob } from '@kutup/crypto/contentHash'
 import { resolveApiBase } from '@kutup/session/apiBase'
 import { DRIVE_BLOCK_SIZE } from '@kutup/crypto/driveBlocks'
-import { commitRevision, manifestSigner } from './commit'
-import { EncryptedFileSource, fileSource, loadTail, storeTail, type PlaintextSource, type SealedTail } from './encryptedSource'
+import { commitRevision, conflictCode, manifestSigner } from './commit'
+import { EncryptedFileSource, fileSource, loadTail, NotTheSameFile, storeTail, type PlaintextSource, type SealedBlockLog, type SealedTail } from './encryptedSource'
+
+export { NotTheSameFile }
 import { holdUpload, pendingUploads, type PendingUpload } from './pendingUploads'
 
 export interface StreamUploadOptions {
@@ -72,7 +75,17 @@ export interface StreamUploadOptions {
    * into the metadata.
    */
   sha256?: string
+  /** What to do when the name is taken by the time the upload commits. */
+  freeName?: FreeName
 }
+
+/**
+ * The name to commit a new file under when its own was taken while it
+ * uploaded (`409 name_taken` at the commit): the next free one in its
+ * folder and its hash, as a "Keep both" picks it. The bytes stay as they
+ * are; only the metadata and the name hash change.
+ */
+export type FreeName = (taken: string) => Promise<{ name: string; nameHash: string }>
 
 /** What an upload made: enough to seal things beside it (a thumbnail). */
 export interface UploadedFile {
@@ -126,13 +139,6 @@ export class VersionUploading extends Error {
     readonly yours = false,
   ) {
     super('a new version of this file is being uploaded')
-  }
-}
-
-/** The file chosen to resume an upload is not the one it started with. */
-export class NotTheSameFile extends Error {
-  constructor() {
-    super('this is not the file the upload started with')
   }
 }
 
@@ -197,6 +203,7 @@ export async function streamUpload(opts: StreamUploadOptions): Promise<UploadedF
     fileKey: record.fileKey,
     revisionId,
     generation: record.keyGeneration,
+    sha256,
     create: {
       metadata: {
         fileId: record.fileId,
@@ -220,6 +227,7 @@ export async function streamUpload(opts: StreamUploadOptions): Promise<UploadedF
     uploadUrl: sent.uploadUrl,
     accessToken: opts.accessToken,
     pending,
+    freeName: opts.freeName,
   })
   return {
     fileId: record.fileId,
@@ -305,6 +313,7 @@ export async function streamVersionUpload(opts: StreamVersionOptions): Promise<U
     fileKey: target.fileKey,
     revisionId,
     generation: target.keyGeneration,
+    sha256: opts.metadata.sha256,
     create: { metadata: versionUploadMetadata(target, revisionId, opts), pending },
     pending,
   })
@@ -344,24 +353,65 @@ interface CommitUploadOptions {
   uploadUrl: string
   accessToken: string | (() => Promise<string>)
   pending: Pick<PendingUpload, 'fileId'> | null
+  /** A new file whose name was taken meanwhile commits under the one this gives. */
+  freeName?: FreeName
 }
+
+/** How many other names a new file's commit tries when its name keeps being taken. */
+const MAX_COMMIT_RENAMES = 3
 
 /**
  * Commits an uploaded revision with the file's next metadata. A version
- * whose file was renamed meanwhile keeps the new name. A refusal (the name
- * was taken, the file changed) cancels the upload, freeing its quota; a
- * failure to reach the server keeps the browser's record, so `resumeUpload`
- * commits it later.
+ * whose file was renamed meanwhile keeps the new name. A new file whose
+ * name was taken while it uploaded commits under the next free name
+ * (`freeName`), without sending anything again. A refusal (the name was
+ * taken and no other is given, the file changed) cancels the upload,
+ * freeing its quota; a failure to reach the server keeps the browser's
+ * record, so `resumeUpload` commits it later.
  */
 async function commitUpload(opts: CommitUploadOptions): Promise<void> {
+  let draft = opts.draft
+  let nameHash: string | undefined
+  for (let renames = 0; ; renames++) {
+    try {
+      await commitOnce(opts, draft, nameHash)
+      return
+    } catch (error) {
+      const taken = error instanceof UploadNameTaken
+      if (!taken || opts.base || !opts.freeName || renames >= MAX_COMMIT_RENAMES) {
+        await settleCommitError(opts, error)
+        throw error
+      }
+      const free = await opts.freeName(draft.name).catch(async (failed: unknown) => {
+        await settleCommitError(opts, error)
+        throw failed
+      })
+      draft = { ...draft, name: free.name }
+      nameHash = free.nameHash
+    }
+  }
+}
+
+/** One commit of the revision with `draft` (and a new name's hash). */
+async function commitOnce(opts: CommitUploadOptions, baseDraft: FileMetadataDraftV1, nameHash: string | undefined): Promise<void> {
+  // What the revision is, sealed with it: its content record goes up with
+  // the commit, so it opens against a committed digest once in the history.
+  const revisionContentEnvelope = await sealRevisionContent(
+    opts.fileKey,
+    { fileId: opts.fileId, revisionId: opts.revisionId, generation: opts.keyGeneration },
+    opts.content,
+    opts.draft.size,
+  )
   try {
     await commitRevision({
       fileId: opts.fileId,
       revisionId: opts.revisionId,
+      revisionContentEnvelope,
+      nameHash,
       metadataRevision: opts.base?.metadataRevision ?? 0,
       collectionId: opts.base?.collectionId ?? null,
       seal: async ({ metadataRevision, row }) => {
-        let draft = opts.draft
+        let draft = baseDraft
         if (row) {
           // Someone wrote the file meanwhile: on top of what it is now.
           if (row.keyGeneration !== opts.keyGeneration) throw new VersionConflict('key')
@@ -376,16 +426,27 @@ async function commitUpload(opts: CommitUploadOptions): Promise<void> {
       },
     })
   } catch (error) {
+    if (error instanceof VersionConflict) throw error
     const status = (error as { response?: { status?: number } }).response?.status ?? 0
-    const refused = error instanceof VersionConflict ? error : refusalFromBody(status, (error as { response?: { data?: unknown } }).response?.data)
-    if (refused || isFinal(status)) {
-      await terminate(opts.uploadUrl, opts.accessToken)
-      if (opts.pending) await pendingUploads.remove(opts.pending.fileId).catch(() => undefined)
-      throw refused ?? error
-    }
-    throw error
+    throw refusalFromBody(status, (error as { response?: { data?: unknown } }).response?.data) ?? error
   }
   if (opts.pending) await pendingUploads.remove(opts.pending.fileId).catch(() => undefined)
+}
+
+/**
+ * After a commit failed for good: a refusal (the name was taken, the file
+ * changed) or a final status cancels the upload, freeing its quota, and
+ * forgets the browser's record; anything else keeps both, to commit later.
+ */
+async function settleCommitError(opts: CommitUploadOptions, error: unknown): Promise<void> {
+  const status = (error as { response?: { status?: number } }).response?.status ?? 0
+  const refused = error instanceof UploadNameTaken || error instanceof VersionConflict || error instanceof VersionUploading
+  // The object is gone from storage: the upload can never be committed.
+  const lost = conflictCode(error) === 'objectMissing'
+  if (refused || lost || isFinal(status)) {
+    await terminate(opts.uploadUrl, opts.accessToken)
+    if (opts.pending) await pendingUploads.remove(opts.pending.fileId).catch(() => undefined)
+  }
 }
 
 /** Cancels an upload on the server (tus DELETE): an uploaded revision that will not be committed, and its quota. */
@@ -408,6 +469,8 @@ export interface ResumeUploadOptions {
   onProgress?: (plainSent: number, plainTotal: number) => void
   onWaiting?: (waiting: boolean) => void
   signal?: AbortSignal
+  /** A new file whose name was taken meanwhile commits under the one this gives. */
+  freeName?: FreeName
 }
 
 /** What an interrupted upload's metadata will say (its name), read with its folder's key. */
@@ -460,6 +523,10 @@ export async function resumeUpload(opts: ResumeUploadOptions): Promise<UploadedF
       fileKey,
       revisionId: upload.revisionId,
       generation: keyGeneration,
+      // The file chosen again is checked by its content, not only its name,
+      // size and date: its SHA-256 as it is sealed again, or (a draft
+      // without one) its blocks against the ones sealed before.
+      sha256: draft.sha256,
       tail: kept,
       uploadUrl: upload.uploadUrl,
       pending: upload,
@@ -482,6 +549,7 @@ export async function resumeUpload(opts: ResumeUploadOptions): Promise<UploadedF
     uploadUrl: upload.uploadUrl,
     accessToken: opts.accessToken,
     pending: upload,
+    freeName: opts.freeName,
   }).catch((error: unknown) => {
     // Nothing to commit any more: the upload is gone.
     if ((error as { response?: { status?: number } }).response?.status === 404) throw new UploadNoLongerOnServer()
@@ -620,6 +688,13 @@ interface SendOptions {
   generation: number
   /** The tail made before (a resumed upload's, kept by the browser). */
   tail?: SealedTail
+  /**
+   * The plaintext's SHA-256 the metadata will carry, when it carries one:
+   * the content is hashed again as it is sealed and must be the same, or
+   * the upload is discarded (`NotTheSameFile`). Without one, the sealed
+   * blocks are kept in the browser's record and compared when sealed again.
+   */
+  sha256?: string
   accessToken: string | (() => Promise<string>)
   onProgress?: (plainSent: number, plainTotal: number) => void
   onWaiting?: (waiting: boolean) => void
@@ -646,7 +721,7 @@ const PATCH_BLOCKS = 2
  * kept: the commit forgets it.
  */
 async function send(opts: SendOptions): Promise<{ uploadUrl: string; content: ContentCommitment }> {
-  const signer = manifestSigner()
+  const signer = await manifestSigner()
   const open = () => newDriveBlockEncryptor(opts.fileKey, { fileId: opts.fileId, revisionId: opts.revisionId, generation: opts.generation }, opts.plaintext.size)
   const first = await open()
   const header = first.header.length
@@ -669,9 +744,26 @@ async function send(opts: SendOptions): Promise<{ uploadUrl: string; content: Co
     void keep({ ...remembered, updatedAt: Date.now() })
   }
 
+  // No SHA-256 to check the content by: the blocks sealed so far, kept in
+  // the record before each goes out.
+  const known = [...(remembered?.sealedBlocks ?? [])]
+  const blocks: SealedBlockLog | undefined =
+    opts.sha256 || !opts.pending
+      ? undefined
+      : {
+          known,
+          record: async (index, hash) => {
+            known[index] = hash
+            await remembering
+            if (remembered) await pendingUploads.put((remembered = { ...remembered, sealedBlocks: known.slice(), updatedAt: Date.now() }))
+          },
+        }
+
   const source = new EncryptedFileSource(opts.plaintext, first, {
     open,
     signer,
+    sha256: opts.sha256,
+    blocks,
     tail: opts.tail,
     onTail: async (made) => {
       // The record must hold the tail before any of it is sent.
@@ -738,6 +830,7 @@ async function send(opts: SendOptions): Promise<{ uploadUrl: string; content: Co
       // An expired token is recoverable: the next attempt's onBeforeRequest
       // fetches a fresh one. Other client errors are not retried here.
       onShouldRetry(err, _attempt, options) {
+        if (source.wrongFile) return false
         const status = statusOf(err)
         if (status === 401) return true
         if (isFinal(status) || refusalOf(err)) return false
@@ -777,6 +870,18 @@ async function send(opts: SendOptions): Promise<{ uploadUrl: string; content: Co
       },
       onError(err) {
         if (finished || opts.signal?.aborted) return
+        if (source.wrongFile) {
+          // Not the file the upload started with. Caught before any of it
+          // went out, the upload stays as it was, to go on with the right
+          // file; otherwise blocks of the other file may be on the server,
+          // and the upload is discarded with its record.
+          if (source.wrongFile === 'sent') {
+            void upload.abort(true).catch(() => {})
+            void forget()
+          }
+          finish(new NotTheSameFile())
+          return
+        }
         const settled = settleUploadError(statusOf(err), refusalOf(err), Boolean(opts.uploadUrl))
         if (settled.kind !== 'wait') {
           if (settled.forget) void forget()

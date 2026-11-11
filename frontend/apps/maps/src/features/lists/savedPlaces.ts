@@ -1,6 +1,6 @@
 import { useQueries } from '@tanstack/react-query'
 import { listVersions } from '@kutup/collab/api'
-import { currentContentOf, versionContentOf } from '@kutup/drive-core/keyring'
+import { currentContentOf, relayedVersion, versionContentOf, type RelayedState } from '@kutup/drive-core/keyring'
 import { contentPath, fileLocation, remoteStatePath, type DriveFile, type Folder } from '@kutup/drive-core/model'
 import { fromBase64, openDriveObject } from '@kutup/crypto'
 import { parseListJson, stateToListJson, uploadPlaceId, type Place } from '@kutup/map/list'
@@ -29,21 +29,21 @@ export async function savedPlaces(file: DriveFile, folder?: Pick<Folder, 'source
   // On another server: its saved state relayed through this one.
   const remote = folder ? remoteStatePath(fileLocation(folder), file.id) : null
   if (remote) {
-    let saved: { keyGeneration: number; state: string }
+    let saved: RelayedState
     try {
-      saved = (await api.get<{ keyGeneration: number; state: string }>(remote)).data
+      saved = (await api.get<RelayedState>(remote)).data
     } catch (error) {
       if ((error as { response?: { status?: number } }).response?.status === 404) return uploadedPlaces(file, folder)
       throw error
     }
-    // A saved state the relay does not name: its header names its revision.
-    const opened = await versionContentOf(file, { id: null, keyGeneration: saved.keyGeneration })
+    // A saved state relayed with its sealed content record.
+    const opened = await versionContentOf(file, relayedVersion(saved))
     return parseListJson(stateToListJson(await openDriveObject(fromBase64(saved.state), opened.fileKey, opened.expected)))
   }
   const latest = (await listVersions(file.id))[0]
   if (!latest || latest.sizeBytes === 0) return uploadedPlaces(file)
   const { data } = await api.get<ArrayBuffer>(`/files/${file.id}/versions/${latest.id}/download`, { responseType: 'arraybuffer' })
-  const opened = await versionContentOf(file, { id: latest.id, keyGeneration: latest.keyGeneration })
+  const opened = await versionContentOf(file, latest)
   const state = await openDriveObject(new Uint8Array(data), opened.fileKey, opened.expected)
   return parseListJson(stateToListJson(state))
 }

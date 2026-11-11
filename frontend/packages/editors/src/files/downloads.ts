@@ -3,10 +3,10 @@ import { openDownloadSink } from '@kutup/files/download/streamDownload'
 import { downloadAsZip, FsaRequiredError, type ZipFile } from '@kutup/files/zipDownload'
 import { resolveApiBase } from '@kutup/session/apiBase'
 import { freshAccessToken } from '@kutup/session/client'
-import { currentContent, readFile } from '../content'
+import { currentContent, readFile, versionToOpen } from '../content'
 import { embeddingKind, exportEmbedded, type ExportedFile } from './embedded'
 import { loadFolderFiles } from '@kutup/drive-core/files'
-import { currentContentOf, versionContentOf } from '@kutup/drive-core/keyring'
+import { currentContentOf } from '@kutup/drive-core/keyring'
 import type { FileContent } from '../content'
 import { contentPath, fileLocation, folderLocation, type DriveFile, type Folder } from '@kutup/drive-core/model'
 
@@ -54,13 +54,11 @@ export { FsaRequiredError }
 
 /** A ZIP entry already decrypted here: nothing is fetched or opened for it. */
 function plainEntry(id: string, name: string, bytes: Uint8Array): ZipFile {
-  return { id, name, size: bytes.length, fileKey: new Uint8Array(32), plain: bytes, expected: { fileId: id, generation: 1, revisionId: null } }
+  return { id, name, size: bytes.length, fileKey: new Uint8Array(32), plain: bytes, expected: { fileId: id, generation: 1, served: true } }
 }
 
 function openedContent(file: DriveFile, content: FileContent) {
-  return content.kind === 'version'
-    ? versionContentOf(file, { id: content.versionId, keyGeneration: content.keyGeneration })
-    : currentContentOf(file)
+  return content.kind === 'version' ? versionToOpen(file, content) : currentContentOf(file)
 }
 
 /**

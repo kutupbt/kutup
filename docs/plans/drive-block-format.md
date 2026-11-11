@@ -229,10 +229,10 @@ block  = nonce(24) ‖ XChaCha20-Poly1305(block key, nonce, AAD, plaintext) ‖ 
 ```text
 manifest plaintext:
   u32 block size ‖ u32 n ‖ u64 plaintext size ‖ h_0 … h_{n−1}
-  ‖ signer: u8 kind (1 = Drive signing key) ‖ 16-byte account id
-  ‖ 64-byte Ed25519 signature
+  ‖ signer: u8 kind (2 = Drive signing key) ‖ 16-byte account id
+  ‖ 32-byte incarnation id ‖ 64-byte Ed25519 signature
 signed message = "kutup/drive/block-manifest/v1\0" ‖ header ‖ 16-byte account id
-                 ‖ u32 block size ‖ u32 n ‖ u64 size ‖ h_0 … h_{n−1}
+                 ‖ 32-byte incarnation id ‖ u32 block size ‖ u32 n ‖ u64 size ‖ h_0 … h_{n−1}
 sealed manifest = nonce(24 random) ‖ XChaCha20-Poly1305(manifest key, nonce,
                   AAD = header ‖ "manifest", plaintext) ‖ tag(16)
 trailer         = u32 sealed-manifest length ‖ "KUTPDBM\0"
@@ -249,6 +249,13 @@ trailer         = u32 sealed-manifest length ‖ "KUTPDBM\0"
   It proves who wrote the content: someone else who holds the file key, such
   as a co-editor, can seal blocks but cannot sign as you. It is checked
   against pins and warns, never blocks, as Drive's other signatures do.
+- **The signer** is named by the account id and the account's incarnation
+  id (the hash of its authority key, as named shares and the account
+  manifest carry it). An account that was reset keeps its id but has new
+  keys: the incarnation tells a reader which of them signed, so an old
+  revision is checked against the key that was pinned then, not the one the
+  account has now. Kind 1 (the account id alone) was never shipped and is
+  not read.
 - **Where the signature lives.** It sits inside the sealed manifest, so the
   server never sees which key signed. Proton's is in clear, but Kutup's
   server already knows the uploader.
@@ -333,8 +340,10 @@ Two more bindings close that:
   alone. Its revision slot then means something. A thumbnail of older
   content fails to open and is drawn again from the current content.
 
-Versions in the history list open by their own revision id: the header must
-name the version the listing asked for. The server can still mislabel an old
+Versions in the history list open by their own revision id and their own
+sealed commitment (`RevisionContent`, §10 slice 3): the header must name the
+version the listing asked for, and its manifest must be the one the
+version's uploader committed to. The server can still mislabel an old
 version's date in the list. It cannot change what opens.
 
 ## 3. Server and storage
@@ -640,8 +649,9 @@ the keys are `drive_stream_*` (`driveStream*` in the admin API).
   where it was played and seeked to. Proton's server learns the same.
 
 It learns nothing of the content, the manifest or who signed it (the signer
-is inside the sealed manifest). The signature covers the account id it
-names, so a holder of the file key can't move it onto another name.
+is inside the sealed manifest). The signature covers the account id and
+the incarnation id it names, so a holder of the file key can't move it onto
+another name or another incarnation.
 
 **Key commitment.** XChaCha20-Poly1305 is not key-committing: a ciphertext
 can be crafted to open under two keys. Two things make an object single-key
@@ -817,14 +827,49 @@ Each slice is a PR.
      whose bytes all arrived but whose commit did not is committed when the
      upload is resumed. A PATCH carries two sealed blocks (above S3's 5 MiB
      minimum part).
-   - History versions and note snapshots: the metadata commits to the
-     current content only, so a version opens by its own revision id (the
-     header must name it) with the manifest digest and size taken from the
-     object itself (`openDriveObject`); its blocks are still checked against
-     its signed manifest. The original upload, which the listing does not
-     name, opens by the revision its header names. Committing each version's
-     digest (a sealed per-version record) would close this; it is not part
-     of this slice.
+   - History versions, note snapshots, the original upload and relayed
+     states: the metadata commits to the current content only, so each
+     block-format revision carries its own commitment, a `RevisionContent`
+     envelope (Drive envelope purpose 13, `kutup-crypto`
+     `revision_content.rs`): `{revisionId, manifestSha256, size}` under the
+     file key, object = file, parent = the revision id, epoch = the key
+     generation that sealed the object, revision 1, padded to one length.
+     The uploader seals it once the manifest's digest is known and sends it
+     with the commit (the commit body, the multipart upload and version
+     forms incl. note snapshots, the federated upload and version saves);
+     the server checks its header and length and stores it with the row the
+     revision becomes (`files` for the first upload, `file_versions` for
+     each version; both now record `blob_suite`, and a suite-2 row without
+     its envelope is refused by a CHECK; migration 20261109140000). Readers
+     get it from the version list, the federated saved state, or the
+     content response (`x-kutup-revision`, `x-kutup-revision-content`, the
+     way the original upload, which no listing names, is read), open it for
+     the expected file, revision and generation, then open the object
+     against that digest and size. `openDriveObject` takes no digest from
+     the object any more: a reader without a committed digest opens
+     nothing, so a co-editor can't pass off an object of their own under a
+     known revision id. A record served with the current content must agree
+     with the metadata's `content`, or the read is refused.
+   - The commit's checks (review, 2026-11-11): a storage `HEAD` finds the
+     object, whole, before a row names it (`409 objectMissing`); a cancel
+     and the sweep of abandoned uploads remove the upload row first (the
+     sweep `FOR UPDATE SKIP LOCKED`, staleness checked again under the lock)
+     and the bytes only after, so they never race a commit; a revision id
+     is unique across `files`, `file_versions` and `uploads` together (each
+     claim takes the id's advisory lock; `uploads.revision_id` is unique
+     too). A new file's commit may carry `nameHash`: a name taken while the
+     bytes went up is committed under the next free one, nothing sent again.
+   - Resume checks the content, not only the name, size and date: the
+     plaintext's SHA-256 is worked out again as the blocks are sealed and
+     the last block is not sent unless it matches the draft's
+     (`NotTheSameFile`, the upload discarded); a draft without one keeps the
+     sealed blocks' hashes in the browser's record and compares them as it
+     seals again, before anything of another file goes out.
+   - Every open checks the manifest's signer against the identity pins
+     (drive-core `manifestSigners.ts`): the account and incarnation it names
+     must have signed with the key their pinned authority vouches for. A
+     signature that doesn't hold, or one under an incarnation the user never
+     accepted, warns (drive-ui `ManifestSignerWarnings`); it never blocks.
 4. **Download and streaming.**
    - The block reader Worker and `fetchDecrypt` on blocks.
    - The CLI download.

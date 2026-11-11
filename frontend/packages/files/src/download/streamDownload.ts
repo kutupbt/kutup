@@ -8,7 +8,7 @@
 // The object is read whole for now; reading it block by block, through the
 // service worker, comes with slice 4 (docs/plans/drive-block-format.md §10).
 
-import type { DriveObjectExpected } from '@kutup/crypto'
+import type { DriveObjectToOpen } from '@kutup/crypto'
 import { fetchDecryptedChunks } from './fetchDecrypt'
 
 export interface StreamDownloadOptions {
@@ -19,7 +19,7 @@ export interface StreamDownloadOptions {
    *  caller — same flow as the existing handleDownload). */
   fileKey: Uint8Array
   /** What the object must be: the committed current content, or a version by its id. */
-  context: DriveObjectExpected
+  context: DriveObjectToOpen
   /** Display name + MIME shown in the save picker / `<a download>`. */
   filename: string
   mimeType?: string

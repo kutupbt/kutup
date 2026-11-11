@@ -11,9 +11,10 @@ vi.mock('@kutup/crypto/rustWasm', async () => {
 })
 
 import { DRIVE_BLOCK_SIZE, generateKey, newDriveBlockEncryptor, newRevisionId, openDriveFile } from '@kutup/crypto'
-import { EncryptedFileSource, type PlaintextSource, type SealedTail } from './encryptedSource'
+import { hashBlob } from '@kutup/crypto/contentHash'
+import { EncryptedFileSource, NotTheSameFile, type PlaintextSource, type SealedBlockLog, type SealedTail } from './encryptedSource'
 
-const signer = { masterKey: new Uint8Array(32).fill(5), accountId: '22222222-2222-4222-8222-222222222222' }
+const signer = { masterKey: new Uint8Array(32).fill(5), accountId: '22222222-2222-4222-8222-222222222222', incarnationId: '05'.repeat(32) }
 
 function plaintext(size: number): PlaintextSource & { reads: number } {
   // A plain loop: Uint8Array.from over an array-like with a callback takes
@@ -36,9 +37,21 @@ async function setup(size: number) {
   const fileKey = await generateKey()
   const context = { fileId: crypto.randomUUID(), revisionId: newRevisionId(), generation: 1 }
   const open = () => newDriveBlockEncryptor(fileKey, context, size)
-  const source = async (options: { input?: ReturnType<typeof plaintext>; tail?: SealedTail; onTail?: (tail: SealedTail) => Promise<void> } = {}) => {
+  const source = async (
+    options: { input?: ReturnType<typeof plaintext>; tail?: SealedTail; onTail?: (tail: SealedTail) => Promise<void>; sha256?: string; blocks?: SealedBlockLog } = {},
+  ) => {
     const input = options.input ?? plaintext(size)
-    return { input, source: new EncryptedFileSource(input, await open(), { open, signer, tail: options.tail, onTail: options.onTail }) }
+    return {
+      input,
+      source: new EncryptedFileSource(input, await open(), {
+        open,
+        signer,
+        tail: options.tail,
+        onTail: options.onTail,
+        sha256: options.sha256,
+        blocks: options.blocks,
+      }),
+    }
   }
   const opens = (object: Uint8Array, content: SealedTail['content']) =>
     openDriveFile(object, fileKey, { fileId: context.fileId, generation: 1 }, content, size)
@@ -151,5 +164,46 @@ describe('EncryptedFileSource', () => {
     const shrunk = { ...plaintext(DRIVE_BLOCK_SIZE + 10), read: async () => new Uint8Array(3) }
     const { source: s } = await source({ input: shrunk as unknown as ReturnType<typeof plaintext> })
     await expect(s.bytes(0, PATCH)).rejects.toThrow(/changed/)
+  })
+
+  it("hashes the content as it seals it again, and never hands out the last block of another file", async () => {
+    const size = DRIVE_BLOCK_SIZE + 10
+    const { source } = await setup(size)
+    const original = plaintext(size)
+    const sha256 = await hashBlob(new Blob([(await original.read(0, size)) as BlobPart]))
+    // The same file, resumed inside its first block: the whole is hashed again.
+    const { source: same } = await source({ sha256 })
+    const whole = await readFrom(same, 100, PATCH)
+    expect(whole.length).toBe(same.size - 100)
+    expect(same.wrongFile).toBeNull()
+
+    // Another file of the same size: refused at its last block.
+    const other = plaintext(size)
+    const changed = { ...other, read: async (start: number, end: number) => (await other.read(start, end)).map((byte) => byte ^ 1) }
+    const { source: wrong } = await source({ input: changed as ReturnType<typeof plaintext>, sha256 })
+    await expect(readFrom(wrong, 0, PATCH)).rejects.toBeInstanceOf(NotTheSameFile)
+    expect(wrong.wrongFile).toBe('sent')
+    await expect(wrong.bytes(0, 10)).rejects.toBeInstanceOf(NotTheSameFile)
+  })
+
+  it('without a hash, compares the blocks it seals again with those it sealed before', async () => {
+    const size = 2 * DRIVE_BLOCK_SIZE + 10
+    const { source } = await setup(size)
+    const known: string[] = []
+    const log: SealedBlockLog = { known, record: async (index, hash) => void (known[index] = hash) }
+    const { source: first } = await source({ blocks: log })
+    await first.bytes(0, first.size)
+    expect(known).toHaveLength(3)
+
+    // The same file again: the blocks match.
+    const { source: same } = await source({ blocks: { known: [...known], record: async () => {} } })
+    await expect(same.bytes(0, same.size)).resolves.toBeTruthy()
+
+    // Another file: its first block is refused before it is handed out.
+    const other = plaintext(size)
+    const changed = { ...other, read: async (start: number, end: number) => (await other.read(start, end)).map((byte) => byte ^ 1) }
+    const { source: wrong } = await source({ input: changed as ReturnType<typeof plaintext>, blocks: { known: [...known], record: async () => {} } })
+    await expect(wrong.bytes(0, 100)).rejects.toBeInstanceOf(NotTheSameFile)
+    expect(wrong.wrongFile).toBe('caught')
   })
 })

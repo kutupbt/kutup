@@ -31,7 +31,7 @@ import { folderOwnerClaim } from '@kutup/drive-core/identityStatus'
 import { IdentityBanner, VerifyPersonButton } from '@kutup/drive-ui/IdentityWarning'
 import { collabBase, contentPath, fileLocation, fileMetadataOf, type DriveFile, type FileLocation, type Folder } from '@kutup/drive-core/model'
 import { appFor, currentApp, filePath, folderPath, mapsListUrl, openedFrom, passVaultUrl } from './paths'
-import { contentAt, currentContent } from './content'
+import { contentAt, currentContent, versionToOpen } from './content'
 import CursorColorPicker from './CursorColorPicker'
 import { OfficeEditor, TextCollabEditor, WhiteboardEditor } from './dispatch'
 import { editorKindFor, extensionOf, type EditorKind } from '@kutup/drive-core/editorKind'
@@ -247,7 +247,7 @@ function OpenFile({ cid, fid }: { cid: string | null; fid: string }) {
           if (content.kind === 'version') base = { versionId: content.versionId, seq: content.seqAtSnapshot }
           bytes =
             content.kind === 'version'
-              ? await loadVersionBytes(await versionContentOf(f, { id: content.versionId, keyGeneration: content.keyGeneration }), content.path)
+              ? await loadVersionBytes(await versionToOpen(f, content), content.path)
               : await loadOriginal(location, f)
         } else {
           // Notes pick their latest version up themselves; the upload only
@@ -642,10 +642,7 @@ function Workspace({
                 // A version opens with the key generation it was saved under.
                 const version = (await listVersions(file.id)).find((v) => v.id === versionId)
                 if (!version) throw new Error('version not found')
-                return loadVersionBytes(
-                  await versionContentOf(file, { id: version.id, keyGeneration: version.keyGeneration }),
-                  `/files/${file.id}/versions/${versionId}/download`,
-                )
+                return loadVersionBytes(await versionContentOf(file, version), `/files/${file.id}/versions/${versionId}/download`)
               }}
               kind={wholeFile}
               keys={keys}

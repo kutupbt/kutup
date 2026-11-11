@@ -11,7 +11,7 @@ import { isVaultName } from '@kutup/drive-core/editorKind'
 import { useSharedFiles } from '@kutup/drive-core/fileShares'
 import { foldersKey, useFolders } from '@kutup/drive-core/folders'
 import { useDriveIdentity } from '@kutup/drive-core/identity'
-import { currentContentOf, versionContentOf } from '@kutup/drive-core/keyring'
+import { currentContentOf, originalContentOf, versionContentOf } from '@kutup/drive-core/keyring'
 import { fileMetadataOf, type DriveFile, type Folder } from '@kutup/drive-core/model'
 import { uploadUnderFreeName } from '@kutup/drive-core/names'
 import { rekeyFile } from '@kutup/drive-core/rekey'
@@ -87,11 +87,9 @@ export function useVaultFiles() {
 /** One version's contents (KDBX bytes): a version id, or {@link ORIGINAL}. */
 export async function readVaultVersion(file: DriveFile, version: string): Promise<Uint8Array> {
   if (version === ORIGINAL) {
-    // The upload, which the version list does not name: its header names its revision.
-    return loadVersionBytes(
-      await versionContentOf(file, { id: null, keyGeneration: file.originalKeyGeneration }),
-      `/files/${file.id}/original`,
-    )
+    // The upload, which the version list does not name: it opens against
+    // the revision and sealed record served with it.
+    return loadVersionBytes(await originalContentOf(file), `/files/${file.id}/original`)
   }
   const row = (await listVersions(file.id)).find((v) => v.id === version)
   if (!row) throw new Error(`version ${version} is gone`)

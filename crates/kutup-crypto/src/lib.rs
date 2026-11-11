@@ -115,6 +115,7 @@ pub mod primitives;
 pub mod profile_key_share;
 // Adapter: Signal's ProvisioningCipher (AES-256-CBC + HMAC-SHA256).
 pub mod provisioning;
+pub mod revision_content;
 pub mod revision_guard;
 // Adapter: Signal's safety number (iterated SHA-512).
 pub mod safety_number;

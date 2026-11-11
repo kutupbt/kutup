@@ -5,6 +5,7 @@
 // typed wrappers.
 
 import { toBase64 } from './base64'
+import { deriveAccountIdentityKeys } from './identity'
 import { getCryptoWasm, type WasmBlockEncryptor } from './rustWasm'
 
 /** The plaintext size of a block (Proton's 4 MiB). */
@@ -25,10 +26,23 @@ export interface ContentCommitment {
   manifestSha256: string
 }
 
-/** Who signs a manifest: the uploader's account master key and account id. */
+/**
+ * Who signs a manifest: the uploader's account master key (its Drive
+ * signing key), account id and incarnation id. The manifest names both
+ * ids, so a reader can tell which of the account's keys signed after a
+ * reset.
+ */
 export interface ManifestSigner {
   masterKey: Uint8Array
   accountId: string
+  /** The account's incarnation: the hash of its authority key (lowercase hex). */
+  incarnationId: string
+}
+
+/** The signer an account is, from its master key: the incarnation is the one its authority key gives. */
+export async function manifestSignerOf(masterKey: Uint8Array, accountId: string): Promise<ManifestSigner> {
+  const { incarnationId } = await deriveAccountIdentityKeys(toBase64(masterKey))
+  return { masterKey, accountId, incarnationId }
 }
 
 /**
@@ -67,7 +81,7 @@ export async function newDriveBlockEncryptor(fileKey: Uint8Array, context: Drive
     plainLength: (index) => inner.blockLength(index),
     sealNext: (plaintext) => inner.sealNext(plaintext),
     finish: (signer) => {
-      const tail = inner.finishSigned(toBase64(signer.masterKey), signer.accountId)
+      const tail = inner.finishSigned(toBase64(signer.masterKey), signer.accountId, signer.incarnationId)
       const manifestSha256 = inner.manifestSha256
       if (!manifestSha256) throw new Error('the block encryptor gave no manifest digest')
       return { tail, content: { revisionId: context.revisionId, manifestSha256 } }
@@ -77,22 +91,56 @@ export async function newDriveBlockEncryptor(fileKey: Uint8Array, context: Drive
 }
 
 /**
+ * What one revision is, sealed under the file key of the generation that
+ * seals its object (docs/plans/drive-block-format.md §2): its id, its sealed
+ * manifest's digest and its plaintext size. Every upload and save sends it
+ * with the revision (the commit, a multipart upload or save); readers of
+ * any revision but the current content open it before the object.
+ */
+export async function sealRevisionContent(
+  fileKey: Uint8Array,
+  context: DriveRevisionContext,
+  content: ContentCommitment,
+  size: number,
+): Promise<string> {
+  if (content.revisionId !== context.revisionId) throw new Error('the content is another revision')
+  const module = await getCryptoWasm()
+  return module.sealRevisionContent(toBase64(fileKey), context.fileId, context.revisionId, content.manifestSha256, size, context.generation)
+}
+
+/** Opens a revision's sealed content record for exactly this file, revision and key generation. */
+export async function openRevisionContent(
+  envelope: string,
+  fileKey: Uint8Array,
+  expected: DriveRevisionContext,
+): Promise<{ content: ContentCommitment; size: number }> {
+  const module = await getCryptoWasm()
+  const opened = module.openRevisionContent(envelope, toBase64(fileKey), expected.fileId, expected.revisionId, expected.generation)
+  return { content: { revisionId: opened.revisionId, manifestSha256: opened.manifestSha256 }, size: opened.size }
+}
+
+/**
  * A whole revision sealed at once: editor snapshots, versions saved from a
- * buffer, vault and list saves. The same format as a streamed upload.
+ * buffer, vault and list saves. The same format as a streamed upload, with
+ * its sealed content record (`revisionContentEnvelope`) to send along.
  */
 export async function sealDriveFile(
   plaintext: Uint8Array,
   fileKey: Uint8Array,
   context: DriveRevisionContext,
   signer: ManifestSigner,
-): Promise<{ bytes: Uint8Array; content: ContentCommitment }> {
+): Promise<{ bytes: Uint8Array; content: ContentCommitment; revisionContentEnvelope: string }> {
   const module = await getCryptoWasm()
-  const sealed = module.driveSealFile(plaintext, toBase64(fileKey), context.fileId, context.revisionId, context.generation, toBase64(signer.masterKey), signer.accountId)
+  const sealed = module.driveSealFile(plaintext, toBase64(fileKey), context.fileId, context.revisionId, context.generation, toBase64(signer.masterKey), signer.accountId, signer.incarnationId)
+  let bytes: Uint8Array
+  let content: ContentCommitment
   try {
-    return { bytes: sealed.bytes, content: { revisionId: context.revisionId, manifestSha256: sealed.manifestSha256 } }
+    bytes = sealed.bytes
+    content = { revisionId: context.revisionId, manifestSha256: sealed.manifestSha256 }
   } finally {
     sealed.free()
   }
+  return { bytes, content, revisionContentEnvelope: await sealRevisionContent(fileKey, context, content, plaintext.length) }
 }
 
 /**
@@ -108,7 +156,59 @@ export async function openDriveFile(
   size: number,
 ): Promise<Uint8Array> {
   const module = await getCryptoWasm()
-  return module.driveOpenFile(object, toBase64(fileKey), expected.fileId, expected.generation, content.revisionId, content.manifestSha256, size)
+  const opened = module.driveOpenFile(object, toBase64(fileKey), expected.fileId, expected.generation, content.revisionId, content.manifestSha256, size)
+  let bytes: Uint8Array
+  try {
+    bytes = opened.takeBytes()
+  } catch (error) {
+    opened.free()
+    throw error
+  }
+  const { signerAccountId: accountId, signerIncarnationId: incarnationId } = opened
+  const check = signerCheck
+  if (!check || !accountId || !incarnationId) {
+    opened.free()
+    return bytes
+  }
+  // Who signed is checked beside the open, never in its way: a signature
+  // that doesn't hold warns (as Drive's other signatures), it doesn't block.
+  void Promise.resolve()
+    .then(() =>
+      check({
+        fileId: expected.fileId,
+        revisionId: content.revisionId,
+        accountId,
+        incarnationId,
+        signedBy: (driveSigningPublicKey) => opened.signedBy(driveSigningPublicKey),
+      }),
+    )
+    .catch(() => {})
+    .finally(() => opened.free())
+  return bytes
+}
+
+/**
+ * An opened revision's manifest signature: the account and incarnation it
+ * names as its uploader, and whether a Drive signing public key (base64)
+ * made it. Good only while the check it is handed to runs.
+ */
+export interface ManifestSignature {
+  fileId: string
+  revisionId: string
+  accountId: string
+  /** Lowercase hex: which of the account's keys signed (the hash of its authority key). */
+  incarnationId: string
+  signedBy(driveSigningPublicKey: string): boolean
+}
+
+/** What every open hands its manifest's signature to (drive-core checks it against the identity pins). */
+export type ManifestSignerCheck = (signature: ManifestSignature) => void | Promise<void>
+
+let signerCheck: ManifestSignerCheck | null = null
+
+/** Sets (or, with null, removes) the check every opened revision's signature goes to. */
+export function setManifestSignerCheck(check: ManifestSignerCheck | null): void {
+  signerCheck = check
 }
 
 /** A new revision's id: a random UUID, chosen by the client before it seals (lowercase, as the header and the server name it). */
@@ -116,63 +216,105 @@ export function newRevisionId(): string {
   return crypto.randomUUID().toLowerCase()
 }
 
-/** The Drive object family's layout, from Rust. */
-async function driveLayout() {
-  const module = await getCryptoWasm()
-  return { module, layout: module.blockLayout('drive') }
-}
-
 /**
- * What a Drive object must be to open:
+ * What a Drive object must be to open. Every reader takes a committed
+ * digest (docs/plans/drive-block-format.md §2); none takes it from the
+ * object:
  * - the file's current content: the revision and manifest digest its sealed
  *   metadata commits to, and the metadata's size;
- * - a version from the file's history (a saved version or a note's
- *   snapshot): its header must name the revision the listing asked for
- *   (`revisionId`, the version's id; null for the original upload, which the
- *   listing does not name). The metadata commits to the current content
- *   only, so a version's manifest digest and size are its own (§2, "Versions
- *   in the history list open by their own revision id"): its blocks are
- *   still checked against its manifest, and the manifest against its header.
+ * - any other revision (a history version, a note's snapshot, the original
+ *   upload): its id and its sealed content record
+ *   (`revisionContentEnvelope`, from the version list or the response that
+ *   served it), opened first for exactly this file, revision and key
+ *   generation. A revision without one (the streaming format) can't open.
  */
 export type DriveObjectExpected =
   | { fileId: string; generation: number; content: ContentCommitment; size: number }
-  | { fileId: string; generation: number; revisionId: string | null }
+  | { fileId: string; generation: number; revisionId: string; revisionContentEnvelope: string | null }
 
-/** The revision id a Drive object's header names (bytes 32..48: after magic, suite, purpose, reserved, generation and file id). */
-function headerRevisionId(object: Uint8Array, headerBytes: number): string {
-  if (object.length < headerBytes) throw new Error('Drive object is shorter than its header')
-  const hex = Array.from(object.subarray(32, 48), (byte) => byte.toString(16).padStart(2, '0')).join('')
-  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`
+/** The digest and size `expected` commits the object to: the metadata's, or the revision's sealed record, opened. */
+export async function committedContent(fileKey: Uint8Array, expected: DriveObjectExpected): Promise<{ content: ContentCommitment; size: number }> {
+  if ('content' in expected) return { content: expected.content, size: expected.size }
+  if (!expected.revisionContentEnvelope) throw new Error('this revision has no committed content')
+  const opened = await openRevisionContent(expected.revisionContentEnvelope, fileKey, {
+    fileId: expected.fileId,
+    revisionId: expected.revisionId,
+    generation: expected.generation,
+  })
+  if (opened.content.revisionId !== expected.revisionId) throw new Error('the record is for another revision')
+  return opened
+}
+
+/** Opens a whole Drive object, the current content or another revision (`DriveObjectExpected`), against its committed digest. */
+export async function openDriveObject(object: Uint8Array, fileKey: Uint8Array, expected: DriveObjectExpected): Promise<Uint8Array> {
+  const committed = await committedContent(fileKey, expected)
+  return openDriveFile(object, fileKey, { fileId: expected.fileId, generation: expected.generation }, committed.content, committed.size)
 }
 
 /**
- * A history version's own commitment, from the object: its sealed manifest's
- * SHA-256 and the plaintext size its length gives. Rust then checks both
- * against the manifest itself, the manifest against the header, and every
- * block against the manifest.
+ * The current content's served record (`x-kutup-revision-content`), when the
+ * server sent one, must say what the metadata commits to: the file's row and
+ * its metadata never disagree about what is current.
  */
-async function ownCommitment(object: Uint8Array, revisionId: string | null): Promise<{ content: ContentCommitment; size: number }> {
-  const { module, layout } = await driveLayout()
-  const { headerBytes, blockSize, blockOverhead, trailerBytes } = layout
-  if (object.length < headerBytes + trailerBytes) throw new Error('Drive object is too short')
-  const manifestLength = module.blockTrailerManifestLength('drive', object.subarray(object.length - trailerBytes))
-  const manifestEnd = object.length - trailerBytes
-  const manifestStart = manifestEnd - manifestLength
-  const blocksLength = manifestStart - headerBytes
-  if (manifestStart < headerBytes || blocksLength < blockOverhead) throw new Error('Drive object is malformed')
-  const count = Math.ceil(blocksLength / (blockSize + blockOverhead))
-  const size = blocksLength - count * blockOverhead
-  const digest = new Uint8Array(await crypto.subtle.digest('SHA-256', object.slice(manifestStart, manifestEnd)))
-  return {
-    content: { revisionId: revisionId ?? headerRevisionId(object, headerBytes), manifestSha256: toBase64(digest) },
-    size,
+export async function checkServedRecord(
+  fileKey: Uint8Array,
+  expected: { fileId: string; generation: number; content: ContentCommitment; size: number },
+  servedRevisionId: string | null,
+  servedEnvelope: string | null,
+): Promise<void> {
+  if (!servedEnvelope) return
+  if (servedRevisionId !== null && servedRevisionId !== expected.content.revisionId) {
+    throw new Error('the server served another revision than the metadata commits to')
+  }
+  const opened = await openRevisionContent(servedEnvelope, fileKey, {
+    fileId: expected.fileId,
+    revisionId: expected.content.revisionId,
+    generation: expected.generation,
+  })
+  if (opened.content.manifestSha256 !== expected.content.manifestSha256 || opened.size !== expected.size) {
+    throw new Error("the revision's record disagrees with the file's metadata")
   }
 }
 
-/** Opens a whole Drive object, the current content or a history version (`DriveObjectExpected`). */
-export async function openDriveObject(object: Uint8Array, fileKey: Uint8Array, expected: DriveObjectExpected): Promise<Uint8Array> {
-  const binding = { fileId: expected.fileId, generation: expected.generation }
-  if ('content' in expected) return openDriveFile(object, fileKey, binding, expected.content, expected.size)
-  const own = await ownCommitment(object, expected.revisionId)
-  return openDriveFile(object, fileKey, binding, own.content, own.size)
+/**
+ * A revision the response names rather than the caller: the original upload
+ * (`/files/{id}/original`), which no listing names. Its id and sealed
+ * record come with it (`x-kutup-revision`, `x-kutup-revision-content`), and
+ * it opens against that record like any other revision.
+ */
+export interface ServedRevision {
+  fileId: string
+  generation: number
+  served: true
+}
+
+/** What a reader asks to open: a committed revision, or the one the response names. */
+export type DriveObjectToOpen = DriveObjectExpected | ServedRevision
+
+/** The response headers naming the revision served and carrying its sealed record. */
+export const REVISION_HEADER = 'x-kutup-revision'
+export const REVISION_CONTENT_HEADER = 'x-kutup-revision-content'
+
+/**
+ * What the object must be, given what its response says it is: a served
+ * revision takes the id and record the response names (the record binds
+ * them, so a wrong one fails); the current content checks the record served
+ * with it, when there is one, against its metadata.
+ */
+export async function resolveServed(
+  fileKey: Uint8Array,
+  expected: DriveObjectToOpen,
+  served: { revisionId: string | null; revisionContentEnvelope: string | null },
+): Promise<DriveObjectExpected> {
+  if ('served' in expected) {
+    if (!served.revisionId) throw new Error('the response does not name its revision')
+    return {
+      fileId: expected.fileId,
+      generation: expected.generation,
+      revisionId: served.revisionId,
+      revisionContentEnvelope: served.revisionContentEnvelope,
+    }
+  }
+  if ('content' in expected) await checkServedRecord(fileKey, expected, served.revisionId, served.revisionContentEnvelope)
+  return expected
 }

@@ -10,6 +10,9 @@
 
 use std::io::{Read, Seek, SeekFrom};
 
+use base64::engine::general_purpose::STANDARD;
+use base64::Engine as _;
+
 use kutup_crypto::blocks::TRAILER_LEN;
 use kutup_crypto::drive_blocks::{
     self, DriveBlobContextV2, DRIVE_BLOCKS, DRIVE_BLOCKS_HEADER_BYTES,
@@ -148,14 +151,23 @@ impl BlobFormat {
     }
 }
 
-/// Refuses (`409`) a revision id the file or an open upload already has: a
-/// revision names one content, and its id is that content's ETag. The unique
-/// keys (`files.content_revision_id`, `file_versions.id`) back this up.
+/// Refuses (`409`) a revision id any file, version or open upload already
+/// has: a revision names one content, and its id is that content's ETag, so
+/// it is unique across `files.content_revision_id`, `file_versions.id` and
+/// `uploads.revision_id` together. Each table has its unique key; across the
+/// three, every claim of an id takes that id's advisory lock first (held to
+/// the end of the transaction that stores it), so two claims of one id can't
+/// both find it free.
 pub async fn ensure_revision_free(
     tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
     revision: Uuid,
     leave_upload: Option<Uuid>,
 ) -> AppResult<()> {
+    sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1, $2))")
+        .bind(revision.to_string())
+        .bind(REVISION_ID_LOCK_SEED)
+        .execute(&mut **tx)
+        .await?;
     let taken: bool = sqlx::query_scalar(
         "SELECT EXISTS (SELECT 1 FROM files WHERE content_revision_id = $1)
              OR EXISTS (SELECT 1 FROM file_versions WHERE id = $1)
@@ -171,6 +183,45 @@ pub async fn ensure_revision_free(
             .with_details(serde_json::json!({ "code": "revisionTaken" })));
     }
     Ok(())
+}
+
+/// The advisory-lock seed of revision-id claims (`ensure_revision_free`),
+/// apart from the name locks' (`drive_names::lock_place`, seed 0).
+const REVISION_ID_LOCK_SEED: i64 = 0x6b72_6576; // "krev"
+
+/// `409 objectMissing`: an uploaded revision's object is not in storage (or
+/// not whole), so it can't become a file's content. The upload is lost;
+/// the client sends the file again.
+pub fn object_missing() -> AppError {
+    AppError::conflict("the uploaded revision's object is not in storage")
+        .with_details(serde_json::json!({ "code": "objectMissing" }))
+}
+
+/// Checks, with a storage HEAD, that an uploaded revision's object is there
+/// and as long as its upload said, before a commit makes it current
+/// (`409 objectMissing` otherwise): a row must never name content the store
+/// does not hold.
+pub async fn ensure_object_stored(
+    storage: &crate::storage::StorageService,
+    path: &str,
+    total_bytes: i64,
+) -> AppResult<()> {
+    match storage.object_len(path).await {
+        Ok(Some(len)) if len == total_bytes => Ok(()),
+        Ok(found) => {
+            tracing::error!(
+                path,
+                ?found,
+                total_bytes,
+                "commit: the uploaded object is missing or short"
+            );
+            Err(object_missing())
+        }
+        Err(error) => {
+            tracing::error!(%error, path, "commit: storage HEAD failed");
+            Err(AppError::internal("storage unavailable"))
+        }
+    }
 }
 
 /// `409 revision_conflict`: the metadata is not the file's next revision
@@ -206,6 +257,55 @@ pub fn parse_metadata_revision(text: &str) -> AppResult<i64> {
         .ok()
         .filter(|revision| *revision > 0)
         .ok_or_else(|| AppError::bad_request("invalid metadataRevision"))
+}
+
+/// The form field, `Upload-Metadata` key and JSON field naming a
+/// block-format revision's sealed content record.
+pub const REVISION_CONTENT_FIELD: &str = "revisionContentEnvelope";
+
+/// A block-format revision's sealed `RevisionContent` record
+/// (docs/plans/drive-block-format.md §2, §10 slice 3 "History versions"):
+/// required with every block-format revision the server stores and refused
+/// with a streaming one. Only its public header is checked, against the
+/// file, the revision and the key generation that sealed the object, and its
+/// one length; the server can't read what it commits to. Returns what to
+/// store (`None` for the streaming format).
+pub fn revision_content_envelope(
+    format: BlobFormat,
+    value: Option<&str>,
+    file_id: Uuid,
+    generation: u32,
+) -> AppResult<Option<String>> {
+    let invalid = || AppError::bad_request("invalid revisionContentEnvelope");
+    match (format, value) {
+        (BlobFormat::Stream, None) => Ok(None),
+        (BlobFormat::Stream, Some(_)) => Err(AppError::bad_request(
+            "revisionContentEnvelope goes with the block format",
+        )),
+        (BlobFormat::Blocks { .. }, None) => {
+            Err(AppError::bad_request("revisionContentEnvelope is required"))
+        }
+        (BlobFormat::Blocks { revision_id }, Some(text)) => {
+            // Bounded before decoding: the envelope has one length.
+            if text.len()
+                != kutup_crypto::drive_envelope::REVISION_CONTENT_ENVELOPE_BYTES.div_ceil(3) * 4
+            {
+                return Err(invalid());
+            }
+            let bytes = STANDARD.decode(text).map_err(|_| invalid())?;
+            if STANDARD.encode(&bytes) != text {
+                return Err(invalid());
+            }
+            kutup_crypto::revision_content::validate(
+                &bytes,
+                &file_id.hyphenated().to_string(),
+                &revision_id.hyphenated().to_string(),
+                generation,
+            )
+            .map_err(|_| invalid())?;
+            Ok(Some(text.to_owned()))
+        }
+    }
 }
 
 /// Frees what an upload row holds in storage: an uploaded revision's whole
@@ -261,6 +361,39 @@ mod tests {
     const FILE: &str = "11111111-1111-4111-8111-111111111111";
     const REVISION: &str = "22222222-2222-4222-8222-222222222222";
 
+    #[test]
+    fn a_block_revision_needs_its_own_content_record() {
+        use kutup_crypto::revision_content::{seal_revision_content, RevisionContentV1};
+        let key = [7u8; 32];
+        let file = Uuid::parse_str(FILE).unwrap();
+        let revision = Uuid::parse_str(REVISION).unwrap();
+        let other = Uuid::new_v4();
+        let seal = |revision: Uuid| {
+            let content = RevisionContentV1::new(*revision.as_bytes(), [1; 32], 10);
+            STANDARD.encode(seal_revision_content(&content, &key, FILE, 2).unwrap())
+        };
+        let blocks = BlobFormat::Blocks {
+            revision_id: revision,
+        };
+        let good = seal(revision);
+        assert_eq!(
+            revision_content_envelope(blocks, Some(&good), file, 2).unwrap(),
+            Some(good.clone())
+        );
+        // Missing; another revision, generation or file; not base64.
+        assert!(revision_content_envelope(blocks, None, file, 2).is_err());
+        assert!(revision_content_envelope(blocks, Some(&seal(other)), file, 2).is_err());
+        assert!(revision_content_envelope(blocks, Some(&good), file, 1).is_err());
+        assert!(revision_content_envelope(blocks, Some(&good), other, 2).is_err());
+        assert!(revision_content_envelope(blocks, Some(&good[1..]), file, 2).is_err());
+        // The streaming format has none.
+        assert_eq!(
+            revision_content_envelope(BlobFormat::Stream, None, file, 2).unwrap(),
+            None
+        );
+        assert!(revision_content_envelope(BlobFormat::Stream, Some(&good), file, 2).is_err());
+    }
+
     fn blob(size: usize) -> Vec<u8> {
         let context = DriveBlobContextV2::new(FILE, REVISION, 3).unwrap();
         drive_blocks::seal_file(
@@ -268,7 +401,10 @@ mod tests {
             &[1; 32],
             context,
             &SigningKey::from_seed(Suite::V1, &[2; 32]),
-            [3; 16],
+            kutup_crypto::blocks::SignerIdentity {
+                account_id: [3; 16],
+                incarnation_id: [4; 32],
+            },
         )
         .unwrap()
         .bytes

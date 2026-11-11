@@ -508,28 +508,38 @@ assert.throws(
   )
 }
 
-// Thumbnails: the canonical envelope opens to the vector's picture, only as
-// its own variant, file and key generation; a fresh seal round-trips; the
+// Thumbnails: the browser seals and opens only thumbnails bound to the
+// content revision they show (docs/plans/drive-block-format.md §2; the
+// canonical vector is the revision-less form, which only Rust reads). One
+// opens only as its own variant, file, revision and key generation; the
 // generic envelope export refuses the purposes that have typed exports.
 const thumb = vectors.thumbnail
+const thumbRevision = '22222222-2222-4222-8222-222222222222'
+const sealedThumb = crypto.sealThumbnail(
+  thumb.image, 1, thumb.width, thumb.height, thumb.variant, thumb.fileKey, thumb.fileId, thumbRevision, thumb.generation,
+)
 assert.deepEqual(
-  crypto.openThumbnail(thumb.envelope, thumb.variant, thumb.fileKey, thumb.fileId, thumb.generation),
+  crypto.openThumbnail(sealedThumb, thumb.variant, thumb.fileKey, thumb.fileId, thumbRevision, thumb.generation),
   { format: 1, width: thumb.width, height: thumb.height, image: thumb.image },
 )
-assert.throws(() => crypto.openThumbnail(thumb.envelope, 'lg', thumb.fileKey, thumb.fileId, thumb.generation))
+assert.notEqual(
+  crypto.sealThumbnail(thumb.image, 1, thumb.width, thumb.height, thumb.variant, thumb.fileKey, thumb.fileId, thumbRevision, thumb.generation),
+  sealedThumb,
+  'nonce must be random',
+)
+assert.throws(() => crypto.openThumbnail(sealedThumb, 'lg', thumb.fileKey, thumb.fileId, thumbRevision, thumb.generation))
 assert.throws(() =>
-  crypto.openThumbnail(thumb.envelope, thumb.variant, thumb.fileKey, '33333333-3333-4333-8333-333333333333', thumb.generation),
+  crypto.openThumbnail(sealedThumb, thumb.variant, thumb.fileKey, '33333333-3333-4333-8333-333333333333', thumbRevision, thumb.generation),
 )
-const resealedThumb = crypto.sealThumbnail(
-  thumb.image, 1, thumb.width, thumb.height, thumb.variant, thumb.fileKey, thumb.fileId, thumb.generation,
+// Drawn from older content: refused under the revision the metadata names now.
+assert.throws(() =>
+  crypto.openThumbnail(sealedThumb, thumb.variant, thumb.fileKey, thumb.fileId, '44444444-4444-4444-8444-444444444444', thumb.generation),
 )
-assert.notEqual(resealedThumb, thumb.envelope, 'nonce must be random')
-assert.equal(
-  crypto.openThumbnail(resealedThumb, thumb.variant, thumb.fileKey, thumb.fileId, thumb.generation).image,
-  thumb.image,
-)
+assert.throws(() => crypto.openThumbnail(sealedThumb, thumb.variant, thumb.fileKey, thumb.fileId, thumbRevision, thumb.generation + 1))
+// The revision-less canonical vector does not open as a revision's.
+assert.throws(() => crypto.openThumbnail(thumb.envelope, thumb.variant, thumb.fileKey, thumb.fileId, thumbRevision, thumb.generation))
 assert.throws(
-  () => crypto.sealThumbnail(Buffer.from('<svg/>').toString('base64'), 3, 10, 10, 'sm', thumb.fileKey, thumb.fileId, 1),
+  () => crypto.sealThumbnail(Buffer.from('<svg/>').toString('base64'), 3, 10, 10, 'sm', thumb.fileKey, thumb.fileId, thumbRevision, 1),
   /format/,
 )
 for (const purpose of [6, 7, 8, 10]) {
@@ -639,13 +649,25 @@ assert.throws(() =>
   crypto.openCollabFrame(frameVector.frame, frameVector.fileKey, frameVector.fileId, frameVector.keyGeneration + 1),
 )
 
+// The browser's file metadata is FileMetadataV2: the canonical vectors'
+// fields (FileMetadataV1's, which only Rust reads) plus the content
+// commitment, which goes right after `size`.
 const metadataVector = vectors.fileMetadata
+const metadataContent = {
+  revisionId: '22222222-2222-4222-8222-222222222222',
+  manifestSha256: Buffer.alloc(32, 7).toString('base64'),
+}
+const withContent = (json) => JSON.stringify({ ...JSON.parse(json), content: metadataContent })
 for (const { input, output } of metadataVector.canonical) {
-  assert.equal(crypto.canonicalFileMetadata(input), output)
-  assert.equal(crypto.canonicalFileMetadata(output), output)
+  const expected = output.replace(/^(\{"name":.*?"size":\d+)/, `$1,"content":${JSON.stringify(metadataContent)}`)
+  assert.notEqual(expected, output)
+  assert.equal(crypto.canonicalFileMetadata(withContent(input)), expected)
+  assert.equal(crypto.canonicalFileMetadata(expected), expected)
+  // No content commitment: not a file's metadata any more.
+  assert.throws(() => crypto.canonicalFileMetadata(output))
 }
 for (const bad of metadataVector.invalid) {
-  assert.throws(() => crypto.canonicalFileMetadata(bad))
+  assert.throws(() => crypto.canonicalFileMetadata(withContent(bad)))
 }
 const contentHasher = new crypto.ContentHasher()
 for (const chunk of metadataVector.contentHash.chunks) contentHasher.update(Buffer.from(chunk, 'base64'))
@@ -675,6 +697,29 @@ assert.equal(
   crypto.openPhotosLibrary(resealed.envelope, ...libraryOwner, libraryVector.accountIncarnationId, 3, crypto.photosLibraryDigest(libraryVector.second.envelope)),
   '{"favourites":["22222222-2222-4222-8222-222222222222","33333333-3333-4333-8333-333333333333"],"archived":[],"hidden":[]}',
 )
+
+// What one Drive revision is (docs/plans/drive-block-format.md §2): the
+// canonical record opens for exactly its file, revision and generation; a
+// fresh seal round-trips; every negative is refused.
+{
+  const rc = JSON.parse(await readFile(`${root}/crates/kutup-crypto/tests/vectors/revision-content-v1.json`, 'utf8'))
+  const open = (envelope, fileId = rc.fileId, revisionId = rc.revisionId, generation = rc.generation) =>
+    crypto.openRevisionContent(envelope, rc.fileKey, fileId, revisionId, generation)
+  assert.deepEqual({ ...open(rc.envelope) }, rc.content)
+  assert.throws(() => open(rc.envelope, '33333333-3333-4333-8333-333333333333'))
+  assert.throws(() => open(rc.envelope, rc.fileId, '44444444-4444-4444-8444-444444444444'))
+  assert.throws(() => open(rc.envelope, rc.fileId, rc.revisionId, rc.generation + 1))
+  for (const negative of rc.negatives) {
+    assert.throws(
+      () => open(negative.envelope, negative.fileId ?? rc.fileId, negative.revisionId ?? rc.revisionId, negative.generation ?? rc.generation),
+      negative.name,
+    )
+  }
+  const fresh = crypto.sealRevisionContent(rc.fileKey, rc.fileId, rc.revisionId, rc.content.manifestSha256, rc.content.size, rc.generation)
+  assert.notEqual(fresh, rc.envelope, 'nonce must be random')
+  assert.equal(fresh.length, rc.envelope.length, 'one length for every record')
+  assert.deepEqual({ ...open(fresh) }, rc.content)
+}
 
 // Mail address keys (docs/plans/mail-address-keys.md).
 const mailVectors = JSON.parse(
@@ -1310,7 +1355,7 @@ const c0Digest = (digest) => {
     }
     if (c.lastBlock) assert.equal(b64(sealed.at(-1)), c.lastBlock, c.name)
     assert.equal(encryptor.manifestSha256, undefined)
-    const tail = isDrive ? encryptor.finishSigned(identityMaster, '0b9f4c0e-6a51-4d2f-9a33-5e1f6c7d8e90') : encryptor.finish()
+    const tail = isDrive ? encryptor.finishSigned(identityMaster, '0b9f4c0e-6a51-4d2f-9a33-5e1f6c7d8e90', crypto.deriveAccountIdentityKeys(identityMaster).incarnationId) : encryptor.finish()
     const wasmDigest = encryptor.manifestSha256
     assert.throws(() => encryptor.sealNext(new Uint8Array(0)), /already finished/)
     encryptor.free()
@@ -1342,13 +1387,16 @@ const c0Digest = (digest) => {
       assert.throws(() => reader.openBlock(0, flipped))
       if (isDrive && manifestTail === vectorTail) {
         assert.equal(reader.signerAccountId, uuid(bytes(v.accountId)))
+        assert.equal(reader.signerIncarnationId, v.incarnationId)
         reader.verifySigner(v.signerPublicKey)
         assert.throws(() => reader.verifySigner(crypto.deriveAccountIdentityKeys(identityMaster).driveSigningPublicKey))
       } else if (isDrive) {
         assert.equal(reader.signerAccountId, '0b9f4c0e-6a51-4d2f-9a33-5e1f6c7d8e90')
+        assert.equal(reader.signerIncarnationId, crypto.deriveAccountIdentityKeys(identityMaster).incarnationId)
         reader.verifySigner(crypto.deriveAccountIdentityKeys(identityMaster).driveSigningPublicKey)
       } else {
         assert.equal(reader.signerAccountId, undefined)
+        assert.equal(reader.signerIncarnationId, undefined)
       }
       reader.free()
     }

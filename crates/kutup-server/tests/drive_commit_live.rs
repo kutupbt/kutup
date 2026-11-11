@@ -9,6 +9,9 @@
 //!   KUTUP_LIVE_SERVER=http://localhost:3000 \
 //!     cargo test -p kutup-server --test drive_commit_live -- --nocapture
 
+use base64::engine::general_purpose::STANDARD;
+use base64::Engine as _;
+use kutup_crypto::blocks::SignerIdentity;
 use kutup_crypto::drive_blocks::{self, DriveBlobContextV2};
 use kutup_crypto::drive_envelope::{self, DriveEnvelopeContextV1};
 use kutup_crypto::file_metadata::{encode_v2, ContentCommitmentV1, FileMetadataV2};
@@ -22,13 +25,19 @@ use common::*;
 /// A block-format object of `plain` for `revision` of `file` (generation 1),
 /// and its manifest's digest.
 fn sealed(user: &User, file: &Sealed, revision: &str, plain: &[u8]) -> (Vec<u8>, [u8; 32]) {
-    let account = *uuid::Uuid::parse_str(&user.id).unwrap().as_bytes();
+    let identity = SignerIdentity {
+        account_id: *uuid::Uuid::parse_str(&user.id).unwrap().as_bytes(),
+        incarnation_id: hex::decode(user.identity.incarnation_id())
+            .unwrap()
+            .try_into()
+            .unwrap(),
+    };
     let object = drive_blocks::seal_file(
         plain,
         &file.key,
         DriveBlobContextV2::new(&file.id, revision, 1).unwrap(),
         user.identity.drive_signing_key(),
-        account,
+        identity,
     )
     .unwrap();
     (object.bytes, object.manifest_sha256)
@@ -191,14 +200,24 @@ fn an_uploaded_file_appears_only_once_committed() {
             &file.id,
             &revision,
             &wrong,
-            2
+            2,
+            &revision_content_at(&file, &revision)
         )),
         (StatusCode::CONFLICT, Value::from("revision_conflict"))
     );
     assert!(!listed(&c, &base, &owner.token, &folder, &file.id));
 
     let metadata = metadata_v2(&file, &revision, manifest, plain.len() as u64, 1);
-    let r = commit(&c, &base, &owner.token, &file.id, &revision, &metadata, 1);
+    let r = commit(
+        &c,
+        &base,
+        &owner.token,
+        &file.id,
+        &revision,
+        &metadata,
+        1,
+        &revision_content_at(&file, &revision),
+    );
     assert_eq!(r.status(), StatusCode::OK);
     let body: Value = r.json().unwrap();
     assert_eq!(body["kind"], "file");
@@ -219,7 +238,8 @@ fn an_uploaded_file_appears_only_once_committed() {
             &file.id,
             &revision,
             &metadata,
-            1
+            1,
+            &revision_content_at(&file, &revision)
         )),
         (StatusCode::CONFLICT, Value::from("alreadyCommitted"))
     );
@@ -268,7 +288,17 @@ fn a_commit_takes_only_its_own_files_revision() {
         (&first.id, &uuid()),
     ] {
         assert_eq!(
-            commit(&c, &base, &owner.token, file_id, revision, &metadata, 1).status(),
+            commit(
+                &c,
+                &base,
+                &owner.token,
+                file_id,
+                revision,
+                &metadata,
+                1,
+                &revision_content_at(&first, revision)
+            )
+            .status(),
             StatusCode::NOT_FOUND
         );
     }
@@ -281,7 +311,8 @@ fn a_commit_takes_only_its_own_files_revision() {
             &first.id,
             &first_revision,
             &metadata,
-            1
+            1,
+            &revision_content_at(&first, &first_revision)
         )
         .status(),
         StatusCode::NOT_FOUND
@@ -296,7 +327,8 @@ fn a_commit_takes_only_its_own_files_revision() {
             &first.id,
             &first_revision,
             &other,
-            1
+            1,
+            &revision_content_at(&first, &first_revision)
         )
         .status(),
         StatusCode::BAD_REQUEST
@@ -310,7 +342,8 @@ fn a_commit_takes_only_its_own_files_revision() {
             &first.id,
             &first_revision,
             &metadata,
-            1
+            1,
+            &revision_content_at(&first, &first_revision)
         )
         .status(),
         StatusCode::OK
@@ -332,7 +365,8 @@ fn a_commit_takes_only_its_own_files_revision() {
             &second.id,
             &second_revision,
             &metadata,
-            1
+            1,
+            &revision_content_at(&second, &second_revision)
         )
         .status(),
         StatusCode::NOT_FOUND
@@ -363,7 +397,11 @@ fn a_version_commit_keeps_the_old_content_in_history() {
                 metadata_v2(&file, &original, original_manifest, 5, 1),
             )
             .text("nameHash", test_name_hash(&file.id))
-            .text("revisionId", original.clone());
+            .text("revisionId", original.clone())
+            .text(
+                "revisionContentEnvelope",
+                revision_content_of(&file, &original, original_manifest, 5, 1),
+            );
         if let Some(revision) = revision {
             form = form.text("metadataRevision", revision.to_owned());
         }
@@ -410,13 +448,51 @@ fn a_version_commit_keeps_the_old_content_in_history() {
                 &file.id,
                 &version,
                 &metadata,
-                stale as i64
+                stale as i64,
+                &revision_content_at(&file, &version)
             )),
             (StatusCode::CONFLICT, Value::from("revision_conflict"))
         );
     }
     let metadata = metadata_v2(&file, &version, next_manifest, 14, 2);
-    let r = commit(&c, &base, &owner.token, &file.id, &version, &metadata, 2);
+    // What the version is, sealed for it: one sealed for another revision,
+    // or none, is refused.
+    let content = revision_content_of(&file, &version, next_manifest, 14, 1);
+    assert_eq!(
+        commit(
+            &c,
+            &base,
+            &owner.token,
+            &file.id,
+            &version,
+            &metadata,
+            2,
+            &revision_content_of(&file, &original, next_manifest, 14, 1)
+        )
+        .status(),
+        StatusCode::BAD_REQUEST
+    );
+    let without = bearer(
+        c.post(format!(
+            "{base}/api/files/{}/revisions/{version}/commit",
+            file.id
+        )),
+        &owner.token,
+    )
+    .json(&serde_json::json!({ "metadataEnvelope": metadata, "metadataRevision": 2 }))
+    .send()
+    .unwrap();
+    assert!(without.status().is_client_error());
+    let r = commit(
+        &c,
+        &base,
+        &owner.token,
+        &file.id,
+        &version,
+        &metadata,
+        2,
+        &content,
+    );
     assert_eq!(r.status(), StatusCode::OK);
     assert_eq!(r.json::<Value>().unwrap()["kind"], "version");
     assert_eq!(
@@ -437,6 +513,26 @@ fn a_version_commit_keeps_the_old_content_in_history() {
     assert_eq!(rows.len(), 1, "{versions}");
     assert_eq!(rows[0]["id"], version.as_str());
     assert!(rows[0]["parentVersionId"].is_null());
+    // Each revision carries what it is, and it opens to its digest and size.
+    assert_eq!(rows[0]["revisionContentEnvelope"], content.as_str());
+    let opened = kutup_crypto::revision_content::open_revision_content(
+        &STANDARD.decode(&content).unwrap(),
+        &file.key,
+        &file.id,
+        &version,
+        1,
+    )
+    .unwrap();
+    assert_eq!(
+        (opened.size, opened.commitment()),
+        (
+            14,
+            ContentCommitmentV1::new(
+                *uuid::Uuid::parse_str(&version).unwrap().as_bytes(),
+                next_manifest
+            )
+        )
+    );
     let original_now = bearer(
         c.get(format!("{base}/api/files/{}/original", file.id)),
         &owner.token,
@@ -444,6 +540,26 @@ fn a_version_commit_keeps_the_old_content_in_history() {
     .send()
     .unwrap();
     assert_eq!(original_now.status(), StatusCode::OK);
+    assert_eq!(
+        original_now.headers()["x-kutup-revision"].to_str().unwrap(),
+        original
+    );
+    let original_content = original_now.headers()["x-kutup-revision-content"]
+        .to_str()
+        .unwrap()
+        .to_owned();
+    let opened = kutup_crypto::revision_content::open_revision_content(
+        &STANDARD.decode(&original_content).unwrap(),
+        &file.key,
+        &file.id,
+        &original,
+        1,
+    )
+    .unwrap();
+    assert_eq!(
+        (opened.revision_id.as_str(), opened.size),
+        (original.as_str(), 5)
+    );
     assert_eq!(original_now.bytes().unwrap().to_vec(), original_bytes);
 
     // Committed once only.
@@ -455,7 +571,8 @@ fn a_version_commit_keeps_the_old_content_in_history() {
             &file.id,
             &version,
             &metadata,
-            2
+            2,
+            &revision_content_at(&file, &version)
         )),
         (StatusCode::CONFLICT, Value::from("alreadyCommitted"))
     );

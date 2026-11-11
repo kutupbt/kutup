@@ -3,6 +3,7 @@ import {
   newDriveBlockEncryptor,
   newRevisionId,
   renameFileRecordV1,
+  sealRevisionContent,
   type ContentCommitment,
   type DriveRevisionContext,
   type FileMetadataV2,
@@ -19,6 +20,7 @@ import { folderLocation, type DriveFile, type Folder } from '@kutup/drive-core/m
 import {
   asNameTaken,
   findAvailableName,
+  freeNameIn,
   freeName,
   inFolder,
   nameHashIn,
@@ -70,6 +72,10 @@ async function uploadRemote(
   form.append('revisionId', revisionId)
   form.append('metadataEnvelope', first.metadataEnvelope)
   form.append('metadataRevision', String(first.metadataRevision))
+  form.append(
+    'revisionContentEnvelope',
+    await sealRevisionContent(record.fileKey, { fileId: record.fileId, revisionId, generation: record.keyGeneration }, sealed.content, file.size),
+  )
   form.append('fileKeyEnvelope', record.fileKeyEnvelope)
   form.append('nameHash', nameHash)
   form.append('file', sealed.blob, 'encrypted')
@@ -103,7 +109,7 @@ async function sealToBlob(
       parts.push(encryptor.sealNext(plain) as BlobPart)
       pos = end
     }
-    const { tail, content } = encryptor.finish(manifestSigner())
+    const { tail, content } = encryptor.finish(await manifestSigner())
     parts.push(tail as BlobPart)
     return { blob: new Blob(parts, { type: 'application/octet-stream' }), content }
   } finally {
@@ -164,6 +170,7 @@ export async function uploadOne(
     resumable: owner ? { owner } : undefined,
     nameHash,
     sha256: known.sha256,
+    freeName: freeNameIn(folder),
   })
   await recordContentHash(folder, uploaded.fileId, uploaded.contentSha256)
   thumbnailAfterUpload(uploaded, file)

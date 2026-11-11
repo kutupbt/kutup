@@ -303,6 +303,9 @@ pub(super) struct Landing {
     /// The version's id.
     pub revision_id: Uuid,
     pub format: BlobFormat,
+    /// The block format's sealed content record, checked; it comes with
+    /// the commit (`None` until then, and for the streaming format).
+    pub revision_content_envelope: Option<String>,
 }
 
 /// Stores the version, its metadata and content hash, in the transaction
@@ -547,8 +550,10 @@ async fn record(
     sqlx::query(
         r#"INSERT INTO file_versions (id, file_id, storage_path, seq_at_snapshot, doc_key_id,
                                       author_user_id, size_bytes, keep_forever, kind,
-                                      key_generation, parent_version_id, created_at)
-           VALUES ($1, $2, $3, $8, $9, $4, $5, false, 'file', $6, $7, clock_timestamp())"#,
+                                      key_generation, parent_version_id, created_at,
+                                      blob_suite, revision_content_envelope)
+           VALUES ($1, $2, $3, $8, $9, $4, $5, false, 'file', $6, $7, clock_timestamp(),
+                   $10, $11)"#,
     )
     .bind(landing.revision_id)
     .bind(landing.file_id)
@@ -559,6 +564,8 @@ async fn record(
     .bind(parent)
     .bind(seq)
     .bind(doc_key_id)
+    .bind(landing.format.suite())
+    .bind(&landing.revision_content_envelope)
     .execute(&mut **tx)
     .await?;
     crate::storage_pool::charge(

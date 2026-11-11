@@ -27,6 +27,8 @@ export interface SnapshotEncryptResult {
   ciphertext: Uint8Array
   /** The revision it is sealed for: the version's id once stored. */
   revisionId: string
+  /** What the revision is, sealed (`sealDriveFile`'s): stored with the version. */
+  revisionContentEnvelope: string
   /** Carried into the version-record API call. */
   storageHints: { docKeyId: number; sizeBytes: number }
 }
@@ -106,7 +108,7 @@ export class SnapshotTrigger {
         }
       }
       const stateUpdate = Y.encodeStateAsUpdateV2(this.opts.ydoc)
-      const { ciphertext, revisionId, storageHints } = await this.opts.encryptSnapshot(stateUpdate)
+      const { ciphertext, revisionId, revisionContentEnvelope, storageHints } = await this.opts.encryptSnapshot(stateUpdate)
 
       // One request: the server stores it, charges its measured size,
       // records the row and truncates the update log. createVersion turns a
@@ -118,6 +120,7 @@ export class SnapshotTrigger {
         label: label ?? null,
         keepForever,
         revisionId,
+        revisionContentEnvelope,
       }, this.opts.base)
       this.latestVersionId = recorded.id
 

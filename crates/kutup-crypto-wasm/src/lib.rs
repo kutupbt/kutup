@@ -723,7 +723,8 @@ fn generic_drive_purpose(value: u8) -> Result<DriveEnvelopePurpose, JsValue> {
         DriveEnvelopePurpose::WhiteboardAsset
         | DriveEnvelopePurpose::Thumbnail
         | DriveEnvelopePurpose::PreviousCollectionKey
-        | DriveEnvelopePurpose::PreviousFileKey => Err(js_error(
+        | DriveEnvelopePurpose::PreviousFileKey
+        | DriveEnvelopePurpose::RevisionContent => Err(js_error(
             "this Drive envelope purpose has its own typed export",
         )),
         purpose => Ok(purpose),
@@ -891,6 +892,71 @@ pub fn open_thumbnail(
         width: opened.width,
         height: opened.height,
         image: STANDARD.encode(opened.image),
+    })
+    .map_err(|error| js_error(&error.to_string()))
+}
+
+/// A revision's content as JavaScript sees it.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct RevisionContentView {
+    revision_id: String,
+    manifest_sha256: String,
+    size: f64,
+}
+
+/// Seal what one content revision is (its id, its sealed manifest's SHA-256
+/// and its size) under the file key of `generation`, the generation that
+/// sealed its object (docs/plans/drive-block-format.md §2): every upload and
+/// save sends it with the revision, and readers of a non-current revision
+/// open it before the object.
+#[wasm_bindgen(js_name = sealRevisionContent)]
+pub fn seal_revision_content(
+    file_key_base64: &str,
+    file_id: &str,
+    revision_id: &str,
+    manifest_sha256: &str,
+    size: f64,
+    generation: u32,
+) -> Result<String, JsValue> {
+    if size.fract() != 0.0 || !(0.0..=9_007_199_254_740_991.0).contains(&size) {
+        return Err(js_error("revision size must be a whole number"));
+    }
+    let file_key = decode_canonical_base64(file_key_base64, "file key")?;
+    let content = kutup_crypto::revision_content::RevisionContentV1 {
+        revision_id: revision_id.to_owned(),
+        manifest_sha256: manifest_sha256.to_owned(),
+        size: size as u64,
+    };
+    kutup_crypto::revision_content::seal_revision_content(&content, &file_key, file_id, generation)
+        .map(|envelope| STANDARD.encode(envelope))
+        .map_err(|error| js_error(&error.to_string()))
+}
+
+/// Open the record of exactly this file, revision and key generation:
+/// `{revisionId, manifestSha256, size}`, what the revision's object must be.
+#[wasm_bindgen(js_name = openRevisionContent)]
+pub fn open_revision_content(
+    envelope_base64: &str,
+    file_key_base64: &str,
+    expected_file_id: &str,
+    expected_revision_id: &str,
+    expected_generation: u32,
+) -> Result<JsValue, JsValue> {
+    let envelope = decode_canonical_base64(envelope_base64, "revision content envelope")?;
+    let file_key = decode_canonical_base64(file_key_base64, "file key")?;
+    let content = kutup_crypto::revision_content::open_revision_content(
+        &envelope,
+        &file_key,
+        expected_file_id,
+        expected_revision_id,
+        expected_generation,
+    )
+    .map_err(|error| js_error(&error.to_string()))?;
+    serde_wasm_bindgen::to_value(&RevisionContentView {
+        revision_id: content.revision_id,
+        manifest_sha256: content.manifest_sha256,
+        size: content.size as f64,
     })
     .map_err(|error| js_error(&error.to_string()))
 }

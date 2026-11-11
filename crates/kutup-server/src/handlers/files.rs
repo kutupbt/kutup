@@ -154,7 +154,7 @@ pub async fn list_all_files(State(state): State<AppState>, user: AuthUser) -> Ap
     request_body(
         content = Vec<u8>,
         content_type = "multipart/form-data",
-        description = "Fields: fileId, collectionId, metadataEnvelope, fileKeyEnvelope, nameHash, optional contentHash + the encrypted `file` part. The block format adds revisionId and metadataRevision (1): the upload commits inline"
+        description = "Fields: fileId, collectionId, metadataEnvelope, fileKeyEnvelope, nameHash, optional contentHash + the encrypted `file` part. The block format adds revisionId, metadataRevision (1) and revisionContentEnvelope (the revision's sealed content record): the upload commits inline"
     ),
     responses((status = 201, description = "File stored", body = UploadResult))
 )]
@@ -205,7 +205,7 @@ pub async fn upload(
                 .await
                 .map_err(|_| AppError::bad_request("invalid multipart form"))?
             {
-                if val.len() + chunk.len() > MAX_TEXT_FIELD_BYTES || fields.len() >= 9 {
+                if val.len() + chunk.len() > MAX_TEXT_FIELD_BYTES || fields.len() >= 10 {
                     return Err(AppError::bad_request("form field too large"));
                 }
                 val.extend_from_slice(&chunk);
@@ -286,6 +286,15 @@ pub async fn upload(
         fields.get("metadataRevision").map(String::as_str),
     )?;
     format.check_file(&tmp_file, file_size as u64, file_id, 1)?;
+    // What the revision is, sealed under the key of generation 1.
+    let revision_content = crate::drive_blob::revision_content_envelope(
+        format,
+        fields
+            .get(crate::drive_blob::REVISION_CONTENT_FIELD)
+            .map(String::as_str),
+        file_id,
+        1,
+    )?;
     let revision = format.revision_id();
     let storage_path = crate::file_content::revision_path(file_id, revision);
 
@@ -333,8 +342,9 @@ pub async fn upload(
                               metadata_envelope, file_key_envelope,
                               key_epoch, key_generation, metadata_revision,
                               storage_path, encrypted_size_bytes, original_key_generation,
-                              name_hash, content_hash, content_revision_id)
-           VALUES ($1,$2,$3,$4,$5,$6,1,1,$7,$8,1,$9,$10,$11)"#,
+                              name_hash, content_hash, content_revision_id,
+                              blob_suite, revision_content_envelope)
+           VALUES ($1,$2,$3,$4,$5,$6,1,1,$7,$8,1,$9,$10,$11,$12,$13)"#,
     )
     .bind(file_id)
     .bind(coll_id)
@@ -347,6 +357,8 @@ pub async fn upload(
     .bind(&name_hash)
     .bind(&content_hash)
     .bind(revision)
+    .bind(format.suite())
+    .bind(&revision_content)
     .execute(&mut *tx)
     .await;
     if let Err(error) = insert {

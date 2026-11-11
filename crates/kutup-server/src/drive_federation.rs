@@ -232,6 +232,9 @@ struct ParsedUpload {
     name_hash: String,
     /// The block format's revision, when the blob is in it.
     format: crate::drive_blob::BlobFormat,
+    /// The block format's sealed content record, as sent (checked once the
+    /// file id is known to be the one it names).
+    revision_content_envelope: Option<String>,
     file: NamedTempFile,
     size: i64,
     digest: String,
@@ -1831,6 +1834,12 @@ pub async fn upload_file(
         parsed
             .format
             .check_file(&parsed.file, parsed.size as u64, parsed.file_id, 1)?;
+        let revision_content = crate::drive_blob::revision_content_envelope(
+            parsed.format,
+            parsed.revision_content_envelope.as_deref(),
+            parsed.file_id,
+            1,
+        )?;
         let metadata = authenticated.replay_metadata()?;
         let operation = "upload";
         let mut tx = state.pool.begin().await?;
@@ -1933,8 +1942,9 @@ pub async fn upload_file(
                 (id, collection_id, uploader_user_id, metadata_envelope,
                  file_key_envelope, key_epoch, key_generation, metadata_revision,
                  storage_path, encrypted_size_bytes, ciphertext_sha256, fed_share_id,
-                 original_key_generation, name_hash, content_revision_id)
-             VALUES ($1,$2,$3,$4,$5,$6,1,$7,$8,$9,$10,$11,1,$12,$13)",
+                 original_key_generation, name_hash, content_revision_id,
+                 blob_suite, revision_content_envelope)
+             VALUES ($1,$2,$3,$4,$5,$6,1,$7,$8,$9,$10,$11,1,$12,$13,$14,$15)",
             )
             .bind(file_id)
             .bind(share.collection_id)
@@ -1949,6 +1959,8 @@ pub async fn upload_file(
             .bind(share.id)
             .bind(&parsed.name_hash)
             .bind(revision)
+            .bind(parsed.format.suite())
+            .bind(&revision_content)
             .execute(&mut *tx)
             .await
             .map_err(crate::drive_names::map_unique_violation)?;
@@ -2143,6 +2155,7 @@ where
     let mut name_hash = None;
     let mut revision_id = None;
     let mut metadata_revision = None;
+    let mut revision_content_envelope = None;
     let mut uploaded_file = None;
     while let Some(mut field) = multipart
         .next_field()
@@ -2185,6 +2198,12 @@ where
                     return Err(AppError::bad_request("duplicate metadataRevision"));
                 }
                 metadata_revision = Some(limited_field_text(field).await?);
+            }
+            Some(crate::drive_blob::REVISION_CONTENT_FIELD) => {
+                if revision_content_envelope.is_some() {
+                    return Err(AppError::bad_request("duplicate revisionContentEnvelope"));
+                }
+                revision_content_envelope = Some(limited_field_text(field).await?);
             }
             Some("file") => {
                 if uploaded_file.is_some() {
@@ -2229,6 +2248,7 @@ where
         file_key_envelope: required(file_key_envelope, "fileKeyEnvelope")?,
         name_hash: crate::drive_names::require_name_hash(name_hash.as_deref())?,
         format,
+        revision_content_envelope,
         file,
         size,
         digest,

@@ -545,7 +545,9 @@ async fn link_reaches(state: &AppState, token: &str, file_id: &str) -> AppResult
 
 /// `GET /api/share/{token}/state/{fileId}` — a note's or place list's latest
 /// saved state (a Yjs version, sealed under the file key of the generation in
-/// `X-Kutup-Key-Generation`), for the page to turn back into the file: their
+/// `X-Kutup-Key-Generation`; `X-Kutup-Revision` names the version and
+/// `X-Kutup-Revision-Content` carries its sealed content record, which the
+/// page opens first), for the page to turn back into the file: their
 /// edits are not whole-file versions, so the download alone would be the
 /// upload. `404` when it has none. Anonymous.
 #[utoipa::path(
@@ -563,15 +565,15 @@ pub async fn public_share_state(
     Path((token, file_id)): Path<(String, String)>,
 ) -> AppResult<Response> {
     let fid = link_reaches(&state, &token, &file_id).await?;
-    let latest: Option<(String, i32)> = sqlx::query_as(
-        "SELECT storage_path, key_generation FROM file_versions
+    let latest: Option<(Uuid, String, i32, Option<String>)> = sqlx::query_as(
+        "SELECT id, storage_path, key_generation, revision_content_envelope FROM file_versions
          WHERE file_id = $1 AND kind = 'yjs' AND size_bytes > 0
          ORDER BY created_at DESC LIMIT 1",
     )
     .bind(fid)
     .fetch_optional(&state.pool)
     .await?;
-    let Some((path, key_generation)) = latest else {
+    let Some((version_id, path, key_generation, revision_content)) = latest else {
         return Err(AppError::not_found("no saved state"));
     };
     let (body, size) = state
@@ -579,14 +581,13 @@ pub async fn public_share_state(
         .get_object(&path)
         .await
         .map_err(|_| AppError::internal("storage"))?;
-    Ok(octet_stream_response(
-        body,
-        size,
-        &[(
-            axum::http::HeaderName::from_static("x-kutup-key-generation"),
-            key_generation.to_string(),
-        )],
-    ))
+    let mut headers =
+        crate::file_content::revision_headers(version_id, revision_content.as_deref());
+    headers.push((
+        axum::http::HeaderName::from_static("x-kutup-key-generation"),
+        key_generation.to_string(),
+    ));
+    Ok(octet_stream_response(body, size, &headers))
 }
 
 /// `GET /api/share/{token}/files/{fileId}/assets/{assetId}` — a picture in a

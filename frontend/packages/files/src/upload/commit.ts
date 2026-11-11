@@ -4,16 +4,16 @@
 // and its manifest's digest (known only after the last block), makes it
 // current: `POST /api/files/{id}/revisions/{revisionId}/commit`.
 
-import type { ManifestSigner } from '@kutup/crypto'
+import { manifestSignerOf, type ManifestSigner } from '@kutup/crypto'
 import api from '@kutup/session/client'
 import type { FileRow } from '@kutup/session/api-types'
 import { getSession } from '@kutup/session/store'
 
-/** Who signs a revision's manifest: the signed-in account (its Drive signing key, from the master key). */
-export function manifestSigner(): ManifestSigner {
+/** Who signs a revision's manifest: the signed-in account (its Drive signing key and incarnation, from the master key). */
+export async function manifestSigner(): Promise<ManifestSigner> {
   const session = getSession()
   if (!session) throw new Error('not signed in')
-  return { masterKey: session.masterKey, accountId: session.userId }
+  return manifestSignerOf(session.masterKey, session.userId)
 }
 
 /** The file's next metadata, sealed at `metadataRevision`. */
@@ -47,6 +47,14 @@ export interface CommitOptions {
   metadataRevision: number
   /** Where to read the file's row again when someone committed meanwhile; null for a new file. */
   collectionId: string | null
+  /**
+   * What the revision is (`sealRevisionContent`: its id, manifest digest and
+   * size under the file key it was sealed with), kept with it so it opens
+   * against a committed digest once it is in the history.
+   */
+  revisionContentEnvelope: string
+  /** A new file's name hash, when it commits under another name than its upload started with. */
+  nameHash?: string
 }
 
 /**
@@ -57,7 +65,11 @@ export interface CommitOptions {
  */
 export async function commitRevision(opts: CommitOptions): Promise<void> {
   const post = (sealed: SealedMetadata) =>
-    api.post(`/files/${opts.fileId}/revisions/${opts.revisionId}/commit`, sealed)
+    api.post(`/files/${opts.fileId}/revisions/${opts.revisionId}/commit`, {
+      ...sealed,
+      revisionContentEnvelope: opts.revisionContentEnvelope,
+      ...(opts.nameHash ? { nameHash: opts.nameHash } : {}),
+    })
   try {
     await post(await opts.seal({ metadataRevision: opts.metadataRevision, row: null }))
     return

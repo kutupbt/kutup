@@ -24,6 +24,11 @@ const KEY_LEN: usize = 32;
 pub const MAX_COLLECTION_NAME_BYTES: usize = 1024;
 /// A file's metadata, in bytes: the metadata format's own cap.
 pub const MAX_FILE_METADATA_BYTES: usize = crate::file_metadata::MAX_METADATA_BYTES;
+/// A revision's content commitment, in bytes (`crate::revision_content`).
+pub const MAX_REVISION_CONTENT_BYTES: usize = crate::revision_content::MAX_ENCODED_BYTES;
+/// A sealed revision commitment's exact length: the purpose pads to one size.
+pub const REVISION_CONTENT_ENVELOPE_BYTES: usize =
+    HEADER_LEN + MAX_REVISION_CONTENT_BYTES + 1 + TAG_LEN;
 /// Names and metadata are padded to a multiple of this many bytes.
 const NAME_BUCKET: usize = 256;
 const KEY_DERIVATION_SALT: &[u8] = crate::labels::DRIVE_ENVELOPE_KEY_V1;
@@ -74,6 +79,13 @@ pub enum DriveEnvelopePurpose {
     /// object = file, parent = album, epoch = the album's key epoch, revision
     /// = the file key's generation. An album holds references, not files.
     AlbumFileKey = 12,
+    /// What one content revision of a file is (`crate::revision_content`):
+    /// its revision id, its sealed manifest's SHA-256 and its size, under the
+    /// file key. object = file, parent = the revision id, epoch = the
+    /// generation of the file key that seals the revision's object, revision
+    /// = 1. History versions, note snapshots and the original upload open
+    /// against it (docs/plans/drive-block-format.md §2).
+    RevisionContent = 13,
 }
 
 impl DriveEnvelopePurpose {
@@ -97,6 +109,7 @@ impl DriveEnvelopePurpose {
             Self::WhiteboardAsset => 1..=MAX_WHITEBOARD_ASSET_PLAINTEXT_BYTES,
             // The per-variant cap is the container's to enforce; this is the largest.
             Self::Thumbnail => 1..=MAX_THUMBNAIL_PLAINTEXT_BYTES,
+            Self::RevisionContent => 1..=MAX_REVISION_CONTENT_BYTES,
         }
     }
 
@@ -107,6 +120,8 @@ impl DriveEnvelopePurpose {
     pub const fn padding(self) -> Option<Length> {
         match self {
             Self::CollectionName | Self::FileMetadata => Some(Length::Bucket(NAME_BUCKET)),
+            // Always one length: the size's digits never show.
+            Self::RevisionContent => Some(Length::Fixed(MAX_REVISION_CONTENT_BYTES + 1)),
             Self::WhiteboardAsset | Self::Thumbnail => None,
             _ => Some(Length::Exact(KEY_LEN)),
         }
@@ -117,7 +132,7 @@ impl DriveEnvelopePurpose {
     fn validate_sealed_len(self, len: usize) -> Result<()> {
         let range = self.plaintext_range();
         let valid = match self.padding() {
-            Some(policy @ Length::Bucket(_)) => {
+            Some(policy @ (Length::Bucket(_) | Length::Fixed(_))) => {
                 policy.allows_padded_len(len)
                     && policy
                         .padded_len(*range.end())
@@ -163,6 +178,7 @@ impl TryFrom<u8> for DriveEnvelopePurpose {
             10 => Ok(Self::PreviousFileKey),
             11 => Ok(Self::PublicLinkFileKey),
             12 => Ok(Self::AlbumFileKey),
+            13 => Ok(Self::RevisionContent),
             _ => Err(CryptoError::InvalidInput(format!(
                 "unknown Drive envelope purpose {value}"
             ))),
@@ -244,6 +260,19 @@ impl DriveEnvelopeContextV1 {
             1,
             file_id,
             file_id,
+        )
+    }
+
+    /// One content revision's commitment (`crate::revision_content`), under
+    /// the file key of `generation`, the generation that seals the
+    /// revision's object: bound to the file and the revision.
+    pub fn revision_content(file_id: &str, revision_id: &str, generation: u32) -> Result<Self> {
+        Self::new(
+            DriveEnvelopePurpose::RevisionContent,
+            generation,
+            1,
+            file_id,
+            revision_id,
         )
     }
 

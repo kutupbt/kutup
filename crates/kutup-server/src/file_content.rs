@@ -32,23 +32,53 @@ pub struct CurrentContent {
     /// Its revision id: the version's id, or the original's
     /// `content_revision_id`. Its bytes never change, so it is the ETag.
     pub revision: Uuid,
+    /// A block-format revision's sealed content record
+    /// (docs/plans/drive-block-format.md §2): served with it, so a reader
+    /// that is not reading the current content (the original upload, a
+    /// version) opens it against a committed digest.
+    pub revision_content_envelope: Option<String>,
+}
+
+/// The response header naming the revision served.
+pub const REVISION_HEADER: &str = "x-kutup-revision";
+/// The response header carrying the revision's sealed content record.
+pub const REVISION_CONTENT_HEADER: &str = "x-kutup-revision-content";
+
+/// The headers naming a revision and, in the block format, its sealed
+/// content record.
+pub fn revision_headers(
+    revision: Uuid,
+    revision_content_envelope: Option<&str>,
+) -> Vec<(HeaderName, String)> {
+    let mut headers = vec![(
+        HeaderName::from_static(REVISION_HEADER),
+        revision.to_string(),
+    )];
+    if let Some(envelope) = revision_content_envelope {
+        headers.push((
+            HeaderName::from_static(REVISION_CONTENT_HEADER),
+            envelope.to_owned(),
+        ));
+    }
+    headers
 }
 
 pub async fn current_content(pool: &PgPool, file_id: Uuid) -> sqlx::Result<Option<CurrentContent>> {
-    let version: Option<(Uuid, String, i64)> = sqlx::query_as(
-        "SELECT id, storage_path, size_bytes FROM file_versions
+    let version: Option<(Uuid, String, i64, Option<String>)> = sqlx::query_as(
+        "SELECT id, storage_path, size_bytes, revision_content_envelope FROM file_versions
          WHERE file_id = $1 AND kind = 'file'
          ORDER BY created_at DESC LIMIT 1",
     )
     .bind(file_id)
     .fetch_optional(pool)
     .await?;
-    if let Some((id, path, size)) = version {
+    if let Some((id, path, size, revision_content_envelope)) = version {
         return Ok(Some(CurrentContent {
             path,
             size,
             version: Some(id),
             revision: id,
+            revision_content_envelope,
         }));
     }
     original_content(pool, file_id).await
@@ -61,19 +91,23 @@ pub async fn original_content(
     pool: &PgPool,
     file_id: Uuid,
 ) -> sqlx::Result<Option<CurrentContent>> {
-    let original: Option<(String, i64, Uuid)> = sqlx::query_as(
-        "SELECT storage_path, encrypted_size_bytes, content_revision_id FROM files
+    let original: Option<(String, i64, Uuid, Option<String>)> = sqlx::query_as(
+        "SELECT storage_path, encrypted_size_bytes, content_revision_id, revision_content_envelope
+         FROM files
          WHERE id = $1 AND deleted_at IS NULL AND NOT original_pruned",
     )
     .bind(file_id)
     .fetch_optional(pool)
     .await?;
-    Ok(original.map(|(path, size, revision)| CurrentContent {
-        path,
-        size,
-        version: None,
-        revision,
-    }))
+    Ok(original.map(
+        |(path, size, revision, revision_content_envelope)| CurrentContent {
+            path,
+            size,
+            version: None,
+            revision,
+            revision_content_envelope,
+        },
+    ))
 }
 
 impl CurrentContent {
@@ -82,7 +116,8 @@ impl CurrentContent {
     }
 
     /// Serves it whole, or the one range `headers` ask for (its ETag the
-    /// revision id).
+    /// revision id), naming the revision and carrying its sealed content
+    /// record.
     pub async fn serve(
         &self,
         pool: &PgPool,
@@ -90,6 +125,8 @@ impl CurrentContent {
         headers: &HeaderMap,
         extra: &[(HeaderName, String)],
     ) -> AppResult<Response> {
+        let mut named = revision_headers(self.revision, self.revision_content_envelope.as_deref());
+        named.extend_from_slice(extra);
         content_range::serve_revision(
             pool,
             storage,
@@ -97,7 +134,7 @@ impl CurrentContent {
             self.size,
             self.revision,
             headers,
-            extra,
+            &named,
         )
         .await
     }

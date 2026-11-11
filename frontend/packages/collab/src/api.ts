@@ -20,6 +20,13 @@ export interface VersionRow {
   remoteAuthor?: string
   /** A whole-file version: the version it replaced (`null`: the original upload, or not recorded). */
   parentVersionId?: string | null
+  /**
+   * What the version is, sealed by whoever saved it
+   * (docs/plans/drive-block-format.md §2): readers open it first, then the
+   * version against the digest and size it commits to. `null`: a
+   * streaming-format version, which no longer opens.
+   */
+  revisionContentEnvelope: string | null
 }
 
 /**
@@ -100,6 +107,11 @@ export interface NewVersion {
    */
   revisionId: string
   /**
+   * What the revision is (`sealRevisionContent`, as `sealDriveFile` gives
+   * it): kept with the version, so it opens against a committed digest.
+   */
+  revisionContentEnvelope: string
+  /**
    * A whole-file save becomes the file's current content: the file's next
    * metadata, committing to this revision (the file's current revision + 1).
    * A note's state (`yjs`) carries none.
@@ -136,6 +148,7 @@ export async function createVersion(
   if (version.label) form.append('label', version.label)
   if (version.basedOn) form.append('basedOn', version.basedOn)
   form.append('revisionId', version.revisionId)
+  form.append('revisionContentEnvelope', version.revisionContentEnvelope)
   if (version.metadata) {
     form.append('metadataEnvelope', version.metadata.metadataEnvelope)
     form.append('metadataRevision', String(version.metadata.metadataRevision))

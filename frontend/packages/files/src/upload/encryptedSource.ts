@@ -21,6 +21,32 @@
 
 import { DRIVE_BLOCK_SIZE, type ContentCommitment, type DriveBlockEncryptor, type ManifestSigner } from '@kutup/crypto'
 import { fromBase64, toBase64 } from '@kutup/crypto/base64'
+import { newContentHasher, type ContentHasher } from '@kutup/crypto/contentHash'
+import { hash } from '@kutup/crypto/hash'
+
+/** The file chosen to resume an upload is not the one it started with. */
+export class NotTheSameFile extends Error {
+  constructor() {
+    super('this is not the file the upload started with')
+  }
+}
+
+/**
+ * The sealed blocks an upload has made so far, by index: what a resumed
+ * upload compares the blocks it seals again with. A block's nonce is
+ * synthetic, so the same plaintext seals to the same bytes; each entry is
+ * the first 16 bytes of the sealed block's SHA-256 (base64).
+ */
+export interface SealedBlockLog {
+  /** The blocks sealed before (a resumed upload's, from its record). */
+  known: string[]
+  /** Keeps a block's entry, before the block is handed out. */
+  record: (index: number, hash: string) => Promise<void>
+}
+
+async function sealedBlockHash(sealed: Uint8Array): Promise<string> {
+  return toBase64((await hash(sealed)).subarray(0, 16))
+}
 
 /** The plaintext, read in pieces (a `File` from disk). */
 export interface PlaintextSource {
@@ -75,6 +101,22 @@ export interface EncryptedSourceOptions {
   tail?: SealedTail
   /** Called once the tail is made, before any of it is handed out: keep it. */
   onTail?: (tail: SealedTail) => Promise<void>
+  /**
+   * The plaintext's SHA-256 (base64) the file's metadata will carry. It is
+   * worked out again as the blocks are sealed, and the last block is not
+   * handed out (so the upload never completes or commits) unless it is the
+   * same: a file that changed, or another file chosen to resume with, is
+   * refused (`NotTheSameFile`, and `wrongFile` is `sent`: blocks of it may
+   * have gone out already).
+   */
+  sha256?: string
+  /**
+   * For an upload whose metadata carries no SHA-256: the blocks sealed so
+   * far. A block sealed again must be the one sealed before, or it is not
+   * handed out (`NotTheSameFile`, `wrongFile` is `caught`: nothing of the
+   * other file was sent).
+   */
+  blocks?: SealedBlockLog
 }
 
 /** How many sealed blocks stay at hand for ranges asked again (a PATCH spans up to three). */
@@ -92,6 +134,9 @@ export class EncryptedFileSource implements TusFileSource {
   private next = 0
   private readonly kept = new Map<number, Uint8Array>()
   private tail: SealedTail | null
+  /** The plaintext's hash so far, when it is checked (`options.sha256`). */
+  private hasher: ContentHasher | null = null
+  private wrong: 'caught' | 'sent' | null = null
 
   constructor(
     private readonly plaintext: PlaintextSource,
@@ -111,6 +156,15 @@ export class EncryptedFileSource implements TusFileSource {
     if (this.tail && this.tail.tail.length !== this.size - this.tailStart) throw new Error('the kept tail is for another object')
   }
 
+  /**
+   * Set once the plaintext is found not to be the file the upload started
+   * with: `caught` before any of it was handed out, `sent` when blocks of
+   * it may have been. Nothing more is handed out after.
+   */
+  get wrongFile(): 'caught' | 'sent' | null {
+    return this.wrong
+  }
+
   /** What the metadata commits to, once the tail is made. */
   get content(): ContentCommitment | null {
     return this.tail?.content ?? null
@@ -123,6 +177,7 @@ export class EncryptedFileSource implements TusFileSource {
 
   /** The object at [start, end), as bytes. */
   async bytes(start: number, end: number): Promise<{ bytes: Uint8Array; done: boolean }> {
+    if (this.wrong) throw new NotTheSameFile()
     const stop = Math.min(end, this.size)
     if (start >= stop) return { bytes: new Uint8Array(0), done: true }
     const out = new Uint8Array(stop - start)
@@ -154,6 +209,13 @@ export class EncryptedFileSource implements TusFileSource {
     this.kept.clear()
     this.encryptor?.free()
     this.encryptor = null
+    this.dropHasher()
+  }
+
+  private dropHasher(): void {
+    // Finishing frees it.
+    this.hasher?.finish()
+    this.hasher = null
   }
 
   private async block(index: number): Promise<Uint8Array> {
@@ -167,6 +229,11 @@ export class EncryptedFileSource implements TusFileSource {
       this.encryptor = await this.options.open()
       this.next = 0
     }
+    if (this.next === 0 && this.options.sha256) {
+      // From the start: the plaintext is hashed again as it is sealed.
+      this.dropHasher()
+      this.hasher = await newContentHasher()
+    }
     const encryptor = this.encryptor
     let sealed: Uint8Array = new Uint8Array(0)
     while (this.next <= index) {
@@ -175,7 +242,27 @@ export class EncryptedFileSource implements TusFileSource {
       const from = at * DRIVE_BLOCK_SIZE
       const plain = length > 0 ? await this.plaintext.read(from, from + length) : new Uint8Array(0)
       if (plain.length !== length) throw new Error('the file changed while it was being read')
+      this.hasher?.update(plain)
       sealed = encryptor.sealNext(plain)
+      const log = this.options.blocks
+      if (log) {
+        const hash = await sealedBlockHash(sealed)
+        const known = log.known[at]
+        if (known === undefined) await log.record(at, hash)
+        else if (known !== hash) {
+          this.wrong = 'caught'
+          throw new NotTheSameFile()
+        }
+      }
+      if (at === this.blockCount - 1 && this.hasher) {
+        // Every byte was read: it must be the content the metadata names.
+        const digest = this.hasher.finish()
+        this.hasher = null
+        if (digest !== this.options.sha256) {
+          this.wrong = 'sent'
+          throw new NotTheSameFile()
+        }
+      }
       this.kept.set(at, sealed)
       this.kept.delete(at - KEEP_BLOCKS)
       this.next = at + 1

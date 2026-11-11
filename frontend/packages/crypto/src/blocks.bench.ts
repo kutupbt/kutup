@@ -28,6 +28,7 @@ const block = encryptor.sealNext(plaintext)
 const tail = encryptor.finishSigned(
   Buffer.alloc(32, 7).toString('base64'),
   '0b9f4c0e-6a51-4d2f-9a33-5e1f6c7d8e90',
+  '05'.repeat(32),
 )
 const manifestSha256 = encryptor.manifestSha256
 encryptor.free()

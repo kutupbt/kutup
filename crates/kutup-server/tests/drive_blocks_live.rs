@@ -10,6 +10,7 @@
 //!   KUTUP_LIVE_SERVER=http://localhost:3000 \
 //!     cargo test -p kutup-server --test drive_blocks_live -- --nocapture
 
+use kutup_crypto::blocks::SignerIdentity;
 use kutup_crypto::blocks::TRAILER_LEN;
 use kutup_crypto::drive_blocks::{self, DriveBlobContextV2, DRIVE_BLOCKS_HEADER_BYTES};
 use reqwest::blocking::{multipart, Client, Response};
@@ -22,13 +23,19 @@ use common::*;
 /// `plain` sealed in the block format for revision `revision` of `file`
 /// (generation `generation`), signed by `user`.
 fn blob(user: &User, file: &Sealed, revision: &str, generation: u32, plain: &[u8]) -> Vec<u8> {
-    let account = *uuid::Uuid::parse_str(&user.id).unwrap().as_bytes();
+    let identity = SignerIdentity {
+        account_id: *uuid::Uuid::parse_str(&user.id).unwrap().as_bytes(),
+        incarnation_id: hex::decode(user.identity.incarnation_id())
+            .unwrap()
+            .try_into()
+            .unwrap(),
+    };
     drive_blocks::seal_file(
         plain,
         &file.key,
         DriveBlobContextV2::new(&file.id, revision, generation).unwrap(),
         user.identity.drive_signing_key(),
-        account,
+        identity,
     )
     .unwrap()
     .bytes
@@ -51,6 +58,10 @@ fn form_upload(
         .text("nameHash", test_name_hash(&file.id))
         .text("revisionId", revision.to_owned())
         .text("metadataRevision", "1")
+        .text(
+            "revisionContentEnvelope",
+            revision_content_at(file, revision),
+        )
         .part("file", multipart::Part::bytes(bytes).file_name("encrypted"));
     bearer(c.post(format!("{base}/api/files/upload")), &user.token)
         .multipart(form)
@@ -224,6 +235,10 @@ fn block_blobs_are_checked_keyed_by_revision_and_read_by_range() {
         .text("revisionId", version.clone())
         .text("metadataEnvelope", metadata_at(&file, 2))
         .text("metadataRevision", "2")
+        .text(
+            "revisionContentEnvelope",
+            revision_content_at(&file, &version),
+        )
         .part(
             "file",
             multipart::Part::bytes(saved.clone()).file_name("version"),
@@ -302,6 +317,7 @@ fn block_blobs_are_checked_keyed_by_revision_and_read_by_range() {
                 &revision,
                 &metadata_at(&file, 1),
                 1,
+                &revision_content_at(&file, &revision),
             );
             assert_eq!(r.status(), StatusCode::OK);
         }
@@ -419,7 +435,8 @@ fn block_blobs_are_checked_keyed_by_revision_and_read_by_range() {
             &file.id,
             &version,
             &metadata_at(&file, 2),
-            2
+            2,
+            &revision_content_at(&file, &version)
         )
         .status(),
         StatusCode::NOT_FOUND
@@ -432,7 +449,8 @@ fn block_blobs_are_checked_keyed_by_revision_and_read_by_range() {
             &file.id,
             &version,
             &metadata_at(&file, 2),
-            2
+            2,
+            &revision_content_at(&file, &version)
         )
         .status(),
         StatusCode::OK

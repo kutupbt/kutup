@@ -60,6 +60,7 @@ Specific codes, where an app does something particular (a test in
 | `accountLocked` | 429 | The sign-in lockout or ceiling (a while) |
 | `accountIdInvalid` | 400 | `register`: no account id given back, or one this server did not mint for the sign-up's key binding (start the sign-up again) |
 | `revisionTaken` | 409 | A Drive upload or version naming a `revisionId` the file, another file or an open upload already has (a revision names one content: choose a new one) |
+| `objectMissing` | 409 | A Drive revision commit whose uploaded object is not in storage (or not whole): the upload is lost; upload again |
 | `revision_conflict` | 409 | Drive metadata whose `metadataRevision` is not exactly the file's current + 1 (1 for a new file): read the file again |
 | `alreadyCommitted` | 409 | `POST /api/files/:id/revisions/:revisionId/commit`: the revision is already the file's (current or in its history); nothing changed |
 | `notUploaded` | 409 | The same commit while the revision's upload is still in progress: send its remaining parts first |
@@ -2939,7 +2940,9 @@ binds it, so the server checks the two agree. It also checks the blob's
 structure from its length and trailer (the manifest length fits the block
 count, and the count the length); it can't check the AEAD. An upload without
 `revisionId` is the streaming format (suite 1) and gets a new revision id. A
-revision id already used is `409 revisionTaken`.
+revision id already used is `409 revisionTaken`: one id names one content
+across files, versions and open uploads together (each claim takes the
+id's lock, and each table has its unique key).
 
 **Uploaded revisions and the commit** (docs/plans/drive-block-format.md §10
 slice 3, as Proton's draft revisions). The block format's metadata
@@ -2956,6 +2959,27 @@ multipart uploads (`POST /api/files/upload`, `POST /api/files/:id/versions`
 with `kind: file`, and the federated upload) seal the whole buffer first, so
 they carry the metadata and `metadataRevision` in the same request and commit
 inline.
+
+**What each revision is** (docs/plans/drive-block-format.md §2). The file's
+metadata commits to the current content only. Every block-format revision
+therefore also carries its `revisionContentEnvelope`: a `DriveEnvelopeV1` of
+purpose 13 (`RevisionContent`) under the file key, bound to the file (object),
+the revision id (parent) and the key generation that sealed the object
+(epoch), revision slot 1, sealing `{revisionId, manifestSha256, size}`, padded
+to one length (356 bytes, 476 in base64). It comes with the revision's commit
+(the commit body, the multipart upload and version forms, the federated
+upload and version saves) and is stored with the row the revision becomes
+(`files` for the first upload, `file_versions` for every version); the server
+checks only its header and length (`400` otherwise) and requires it for every
+block-format revision, refusing it for a streaming one. Readers of any
+revision other than the current content (a history version, a note's
+snapshot, the original upload, a relayed state) open it first and then the
+object against the digest and size it commits to; it is in the version list
+(`revisionContentEnvelope`, `null` for a streaming version), in the federated
+saved state, and on every content response as `x-kutup-revision-content`,
+beside `x-kutup-revision` (the revision served). A reader of the current
+content checks a served record against the metadata's `content` and refuses
+a disagreement.
 
 **Ranges.** Every content route (download, original, version, public link,
 Chat media and the federated reads) takes one `Range: bytes=a-b`, `a-` or
@@ -3012,6 +3036,7 @@ Upload an encrypted file to a collection. Multipart form.
 | `contentHash` | string (optional) | The content's hash in the folder, when known before the upload |
 | `revisionId` | string (canonical UUID, optional) | The block-format blob's revision (see "Revisions and the block format") |
 | `metadataRevision` | string (`1`) | With `revisionId` only, and then required: the metadata's revision, which must be `1` (`409 revision_conflict` otherwise). The upload commits inline |
+| `revisionContentEnvelope` | string (canonical base64) | With `revisionId` only, and then required: the revision's sealed content record at key generation 1 (see "What each revision is") |
 | `file` | binary | Complete typed Drive file blob (`application/octet-stream`) |
 
 The server obtains the current collection epoch itself and rejects malformed,
@@ -3135,8 +3160,11 @@ sessions").
 
 **Auth:** Bearer JWT (the same access as download)
 
-**Response:** Raw binary (`application/octet-stream`); `404` for no such
-file or a pruned original.
+**Response:** Raw binary (`application/octet-stream`), with
+`x-kutup-revision` (the original's revision id) and, in the block format,
+`x-kutup-revision-content` (its sealed content record, which the reader opens
+first: no listing names the original); `404` for no such file or a pruned
+original.
 
 ---
 
@@ -3237,8 +3265,22 @@ write: into the folder for a new file, to the file for a version (the rules
 of the upload itself).
 
 ```json
-{ "metadataEnvelope": "<DriveEnvelopeV1 base64>", "metadataRevision": 2 }
+{ "metadataEnvelope": "<DriveEnvelopeV1 base64>", "metadataRevision": 2,
+  "revisionContentEnvelope": "<DriveEnvelopeV1 base64>",
+  "nameHash": "<64 hex, optional>" }
 ```
+
+`nameHash` (a new file only; `400` with a version): the name to commit
+under when it is not the one the upload started with. The upload's own name
+hash was only checked when it started; a name taken while the bytes went up
+is answered `409 name_taken` here, and the client commits again under
+another name (its next free one, as "Keep both" picks it) without sending
+the bytes again.
+
+`revisionContentEnvelope` is what the revision is ("What each revision is"),
+sealed for the file, this revision and the key generation that sealed the
+object (1 for a new file); it is stored with the revision. Missing, or sealed
+for another file, revision or generation: `400`.
 
 `metadataEnvelope` is the file's next metadata (`FileMetadataV2`, its
 `content` naming this revision and its manifest's SHA-256), sealed for the
@@ -3257,8 +3299,15 @@ revision_conflict`). The server can't read the commitment; readers check it.
   content it replaces is its `parentVersionId`, kept in the history), the
   metadata, the content hash, the charge; editors reopen on the new content.
 
+Before any row names it, the server checks with a storage `HEAD` that the
+revision's object is there and as long as the upload was: otherwise `409
+objectMissing` (the upload is lost; upload again).
+
 A refused commit leaves the uploaded revision as it was: commit again with
-the right metadata, or cancel the upload (tus `DELETE`).
+the right metadata, or cancel the upload (tus `DELETE`). A cancel, like the
+sweep of abandoned uploads, removes the upload row first and only then its
+bytes, so a revision is never made current without its object, and a commit
+after a cancel finds nothing (`404`).
 
 **Response 200:**
 ```json
@@ -3442,8 +3491,9 @@ owner's.
     re-wraps links left behind, and `pending` lists files whose links wait.
 - **`GET /api/share/:token/state/:fileId`** (anonymous, folder or file
   links): the latest saved Yjs state of a note or place list, sealed under
-  the file key of the generation in `X-Kutup-Key-Generation` (`404` when it
-  has none). Their edits are not whole-file versions, so a link's page turns
+  the file key of the generation in `X-Kutup-Key-Generation`, with
+  `X-Kutup-Revision` (the version it is) and `X-Kutup-Revision-Content` (its
+  sealed content record, opened first) (`404` when it has none). Their edits are not whole-file versions, so a link's page turns
   the state back into the file.
 - **`GET /api/shared-by-me`**: `[{ collectionId, fileId?, people,
   otherServers, links }]`. These are your folders shared with people or by
@@ -4768,8 +4818,10 @@ refreshed share.
 ### GET /api/drive/federation/shares/:shareId/files/:fileId/state
 
 A note's or place list's latest saved Yjs state in the remote folder, relayed:
-`{ keyGeneration, state }` (state base64, sealed under the file key of that
-generation), `404` when it has none. Their edits are not whole-file versions,
+`{ keyGeneration, state, versionId, revisionContentEnvelope }` (state base64,
+sealed under the file key of that generation; the version it is and its
+sealed content record, which the browser opens first), `404` when it has
+none. Their edits are not whole-file versions,
 so the browser turns the state back into the file.
 
 ### GET /api/drive/federation/shares/:shareId/album
@@ -4939,8 +4991,11 @@ share's `uploadQuotaBytes`, measured from the files the share uploaded. A
 digest: the server verifies the signature first, spools and hashes the body,
 and parses nothing until the digest matches. Body cap: the upload limit
 (`driveUploadMaxBytes`) plus 16 MiB. A block-format blob names its
-`revisionId` and `metadataRevision` (`1`), checked as a local upload's: it
-commits inline.
+`revisionId`, `metadataRevision` (`1`) and `revisionContentEnvelope`,
+checked as a local upload's: it commits inline. A version saved by a
+recipient on another server (`POST /api/fed/drive/collab/versions/create`)
+carries `revisionId`, `revisionContentEnvelope` and, for a whole-file save,
+`metadataEnvelope` and `metadataRevision`, checked as a local save's.
 
 ### DELETE /api/fed/drive/files/:fileId
 
@@ -5841,7 +5896,10 @@ Remove both variants and release their bytes to whoever was charged.
 
 ### GET /api/files/:fileId/versions
 List all versions newest-first.
-**Response:** array of `{id, storagePath, seqAtSnapshot, docKeyId, authorUserId, sizeBytes, label, keepForever, createdAt, kind, keyGeneration, remoteAuthor?, parentVersionId}`.
+**Response:** array of `{id, storagePath, seqAtSnapshot, docKeyId, authorUserId, sizeBytes, label, keepForever, createdAt, kind, keyGeneration, remoteAuthor?, parentVersionId, revisionContentEnvelope}`.
+`revisionContentEnvelope` is the version's sealed content record ("What each
+revision is"); readers open it before the version (`null`: a streaming-format
+version).
 `parentVersionId` is, for a whole-file version, the version it replaced (the
 file's current content when it was stored); `null` for the original upload,
 for notes' states and for versions stored before it was recorded. Whole-file
@@ -5851,7 +5909,8 @@ with conditional saves (`basedOn`, below) no edit is overwritten unseen
 
 ### GET /api/files/:fileId/versions/:vid/download
 Get the encrypted snapshot bytes for a specific version. Returns
-`application/octet-stream`. Headers: `X-Kutup-Doc-Key-Id`, `X-Kutup-Seq`. The snapshot uses the same typed,
+`application/octet-stream`. Headers: `X-Kutup-Doc-Key-Id`, `X-Kutup-Seq`,
+`X-Kutup-Revision` and, in the block format, `X-Kutup-Revision-Content`. The snapshot uses the same typed,
 file/collection/epoch-bound Drive file-blob format as an original file. There
 is no snapshot-specific legacy decoder.
 
@@ -5884,8 +5943,9 @@ Store a version in one request (docs/plans/drive-versions-v2.md). Multipart:
 collection and current epoch; `kind` — `file` (the whole file: office
 documents, whiteboards, restored copies) or `yjs` (a note's collaboration
 state); `seqAtSnapshot`, `docKeyId`; optional `label`, `keepForever`, and
-`basedOn` (below); in the block format, `revisionId` (the version's id) and,
-for `kind: file`, `metadataEnvelope` and `metadataRevision`: the file's next
+`basedOn` (below); in the block format, `revisionId` (the version's id),
+`revisionContentEnvelope` (its sealed content record at the file's current
+key generation, every kind) and, for `kind: file`, `metadataEnvelope` and `metadataRevision`: the file's next
 metadata, committing to this revision, stored in the same transaction (the
 save commits inline; `409 revision_conflict` unless it is the file's current
 revision + 1). A `yjs` state is not the file's content and carries none.

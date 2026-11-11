@@ -8,7 +8,7 @@
 use base64::{engine::general_purpose::STANDARD, Engine as _};
 use kutup_crypto::blocks::{
     block_count, block_offset, block_plaintext_len, BlockFamily, BlockReader, BlockSealer,
-    SealedTail, BLOCK_OVERHEAD, BLOCK_SIZE, TRAILER_LEN,
+    SealedTail, SignerIdentity, BLOCK_OVERHEAD, BLOCK_SIZE, TRAILER_LEN,
 };
 use kutup_crypto::chat_backup::{self, ChatBackupContextV1};
 use kutup_crypto::chat_backup_media::ChatBackupMediaContextV1;
@@ -61,6 +61,21 @@ fn account_id(value: &str) -> Result<[u8; 16], JsValue> {
         .filter(|id| !id.is_nil() && id.hyphenated().to_string() == value)
         .map(|id| *id.as_bytes())
         .ok_or_else(|| js_error("account id must be a canonical non-nil UUID"))
+}
+
+/// Who signs a Drive manifest: the uploader's account id and its
+/// incarnation id (lowercase hex of 32 bytes, as `deriveAccountIdentityKeys`
+/// gives it).
+fn signer_identity(account: &str, incarnation: &str) -> Result<SignerIdentity, JsValue> {
+    let incarnation_id: [u8; 32] = hex::decode(incarnation)
+        .ok()
+        .filter(|bytes| hex::encode(bytes) == incarnation)
+        .and_then(|bytes| bytes.try_into().ok())
+        .ok_or_else(|| js_error("incarnation id must be lowercase 32-byte hex"))?;
+    Ok(SignerIdentity {
+        account_id: account_id(account)?,
+        incarnation_id,
+    })
 }
 
 fn media_id(value: &str) -> Result<[u8; 32], JsValue> {
@@ -259,24 +274,25 @@ impl BlockEncryptorJs {
 
     /// A Drive object's sealed manifest and trailer, signed with the
     /// uploader's Drive signing key (from the account master key) and naming
-    /// the uploader's account id.
+    /// the uploader's account id and incarnation id.
     #[wasm_bindgen(js_name = finishSigned)]
     pub fn finish_signed(
         &mut self,
         master_key_base64: &str,
         uploader_account_id: &str,
+        uploader_incarnation_id: &str,
     ) -> Result<Vec<u8>, JsValue> {
         let master_key: [u8; 32] = decode_canonical_base64(master_key_base64, "master key")?
             .try_into()
             .map_err(|_| js_error("master key must be 32 bytes"))?;
-        let account = account_id(uploader_account_id)?;
+        let signer = signer_identity(uploader_account_id, uploader_incarnation_id)?;
         let identity = AccountIdentityKeysV1::derive(&master_key).map_err(crypto_error)?;
         let sealer = self
             .sealer
             .take()
             .ok_or_else(|| js_error("block encryptor already finished"))?;
         let tail = sealer
-            .finish(Some((identity.drive_signing_key(), account)))
+            .finish(Some((identity.drive_signing_key(), signer)))
             .map_err(crypto_error)?;
         Ok(self.finished(tail))
     }
@@ -443,6 +459,17 @@ impl BlockReaderJs {
             .map(|signer| Uuid::from_bytes(signer.account_id).hyphenated().to_string())
     }
 
+    /// The incarnation (lowercase hex) of that account a Drive manifest
+    /// names: which of the account's keys signed, after a reset.
+    #[wasm_bindgen(getter, js_name = signerIncarnationId)]
+    pub fn signer_incarnation_id(&self) -> Option<String> {
+        self.blocks()
+            .manifest()
+            .signer
+            .as_ref()
+            .map(|signer| hex::encode(signer.incarnation_id))
+    }
+
     /// Checks a Drive manifest's signature against the uploader's pinned
     /// Drive signing public key (base64).
     #[wasm_bindgen(js_name = verifySigner)]
@@ -592,6 +619,7 @@ pub fn drive_seal_file(
     generation: u32,
     master_key_base64: &str,
     uploader_account_id: &str,
+    uploader_incarnation_id: &str,
 ) -> Result<SealedDriveFileJs, JsValue> {
     let file_key = decode_canonical_base64(file_key_base64, "file key")?;
     let context =
@@ -605,7 +633,7 @@ pub fn drive_seal_file(
         &file_key,
         context,
         identity.drive_signing_key(),
-        account_id(uploader_account_id)?,
+        signer_identity(uploader_account_id, uploader_incarnation_id)?,
     )
     .map_err(crypto_error)?;
     Ok(SealedDriveFileJs {
@@ -614,9 +642,55 @@ pub fn drive_seal_file(
     })
 }
 
+/// A whole Drive revision opened (`drive_blocks::open_file`): its plaintext,
+/// and who its manifest says signed it, to check against the reader's pins.
+#[wasm_bindgen(js_name = OpenedDriveFile)]
+pub struct OpenedDriveFileJs {
+    plaintext: Vec<u8>,
+    manifest: kutup_crypto::blocks::Manifest,
+}
+
+#[wasm_bindgen(js_class = OpenedDriveFile)]
+impl OpenedDriveFileJs {
+    /// The plaintext, handed over once (it is not kept).
+    #[wasm_bindgen(js_name = takeBytes)]
+    pub fn take_bytes(&mut self) -> Vec<u8> {
+        std::mem::take(&mut self.plaintext)
+    }
+
+    /// The account id the manifest names as its uploader.
+    #[wasm_bindgen(getter, js_name = signerAccountId)]
+    pub fn signer_account_id(&self) -> Option<String> {
+        self.manifest
+            .signer
+            .as_ref()
+            .map(|signer| Uuid::from_bytes(signer.account_id).hyphenated().to_string())
+    }
+
+    /// The incarnation (lowercase hex) of that account the manifest names.
+    #[wasm_bindgen(getter, js_name = signerIncarnationId)]
+    pub fn signer_incarnation_id(&self) -> Option<String> {
+        self.manifest
+            .signer
+            .as_ref()
+            .map(|signer| hex::encode(signer.incarnation_id))
+    }
+
+    /// Whether the manifest's signature is by this Drive signing public key
+    /// (base64): the key the reader's pins hold for the signer it names.
+    #[wasm_bindgen(js_name = signedBy)]
+    pub fn signed_by(&self, drive_signing_public_key_base64: &str) -> Result<bool, JsValue> {
+        let public_key =
+            decode_canonical_base64(drive_signing_public_key_base64, "Drive signing public key")?;
+        let key = VerifyingKey::from_bytes(Suite::V1, &public_key).map_err(crypto_error)?;
+        Ok(self.manifest.verify_signer(&key).is_ok())
+    }
+}
+
 /// Opens a whole Drive revision against what its metadata commits to
 /// (`content.revisionId`, `content.manifestSha256`, `size`); the header must
-/// name that file, generation and revision.
+/// name that file, generation and revision. The signature is not checked
+/// here: the caller checks it against its pins (`OpenedDriveFile.signedBy`).
 #[wasm_bindgen(js_name = driveOpenFile)]
 pub fn drive_open_file(
     object: &[u8],
@@ -626,7 +700,7 @@ pub fn drive_open_file(
     content_revision_id: &str,
     content_manifest_sha256: &str,
     size: f64,
-) -> Result<Vec<u8>, JsValue> {
+) -> Result<OpenedDriveFileJs, JsValue> {
     let file_key = decode_canonical_base64(file_key_base64, "file key")?;
     let expected =
         DriveBlobContextV2::new(expected_file_id, content_revision_id, expected_generation)
@@ -635,7 +709,7 @@ pub fn drive_open_file(
         expected.revision_id,
         manifest_sha256(content_manifest_sha256)?,
     );
-    let (plaintext, _manifest) = drive_blocks::open_file(
+    let (plaintext, manifest) = drive_blocks::open_file(
         object,
         &file_key,
         expected,
@@ -643,5 +717,8 @@ pub fn drive_open_file(
         byte_count(size, "file size")?,
     )
     .map_err(crypto_error)?;
-    Ok(plaintext.to_vec())
+    Ok(OpenedDriveFileJs {
+        plaintext: plaintext.to_vec(),
+        manifest,
+    })
 }

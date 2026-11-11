@@ -5,7 +5,10 @@ import {
   openFileMetadataV1,
   renameFileRecordV1,
   sealDriveFile,
-  type DriveObjectExpected,
+  resolveServed,
+  REVISION_CONTENT_HEADER,
+  REVISION_HEADER,
+  type DriveObjectToOpen,
   type FileMetadataV2,
 } from '@kutup/crypto'
 import type { DriveFileBinding } from '@kutup/drive-core/keyring'
@@ -62,7 +65,7 @@ export async function saveFileVersion(target: SnapshotTarget, bytes: Uint8Array,
   const base = target.file.metadata
   if (!base) throw new Error('file is not open')
   const revisionId = newRevisionId()
-  const sealed = await sealDriveFile(bytes, target.fileKey, { fileId, revisionId, generation }, manifestSigner())
+  const sealed = await sealDriveFile(bytes, target.fileKey, { fileId, revisionId, generation }, await manifestSigner())
   const next = (metadata: FileMetadataV2): FileMetadataV2 => {
     // New content: its size and commitment; the old content's hash no longer holds.
     const { sha256: _sha256, ...kept } = metadata
@@ -83,6 +86,7 @@ export async function saveFileVersion(target: SnapshotTarget, bytes: Uint8Array,
       keepForever: Boolean(opts.keepForever),
       basedOn: opts.basedOn,
       revisionId,
+      revisionContentEnvelope: sealed.revisionContentEnvelope,
       metadata: commit,
     })
     target.file = { ...target.file, metadataRevision: commit.metadataRevision, metadata: next(metadata) }
@@ -111,11 +115,23 @@ export async function saveSnapshot(
   return { id: version.id, seqAtSnapshot: version.seqAtSnapshot }
 }
 
-/** A stored object's plaintext, opened against what it must be (a version by its id, or the current content). */
+/**
+ * A stored object's plaintext, opened against what it must be: the current
+ * content, a version by its id and sealed record, or the original upload by
+ * the revision and record served with it.
+ */
 export async function loadVersionBytes(
-  opened: { fileKey: Uint8Array; expected: DriveObjectExpected },
+  opened: { fileKey: Uint8Array; expected: DriveObjectToOpen },
   path: string,
 ): Promise<Uint8Array> {
-  const { data } = await api.get<ArrayBuffer>(path, { responseType: 'arraybuffer' })
-  return openDriveObject(new Uint8Array(data), opened.fileKey, opened.expected)
+  const response = await api.get<ArrayBuffer>(path, { responseType: 'arraybuffer' })
+  const header = (name: string) => {
+    const value: unknown = response.headers?.[name]
+    return typeof value === 'string' && value ? value : null
+  }
+  const expected = await resolveServed(opened.fileKey, opened.expected, {
+    revisionId: header(REVISION_HEADER),
+    revisionContentEnvelope: header(REVISION_CONTENT_HEADER),
+  })
+  return openDriveObject(new Uint8Array(response.data), opened.fileKey, expected)
 }

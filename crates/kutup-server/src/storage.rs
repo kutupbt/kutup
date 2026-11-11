@@ -225,6 +225,30 @@ impl StorageService {
         Ok(out.version_id().unwrap_or("").to_string())
     }
 
+    /// An object's length as the store holds it now, or `None` when there is
+    /// no such object (a HEAD): what a commit asks before it makes an
+    /// uploaded revision a file's content.
+    pub async fn object_len(&self, path: &str) -> Result<Option<i64>> {
+        match self
+            .client
+            .head_object()
+            .bucket(&self.bucket)
+            .key(path)
+            .send()
+            .await
+        {
+            Ok(out) => Ok(Some(out.content_length().unwrap_or(0))),
+            Err(error)
+                if error
+                    .as_service_error()
+                    .is_some_and(|service| service.is_not_found()) =>
+            {
+                Ok(None)
+            }
+            Err(error) => Err(error).context("s3 head"),
+        }
+    }
+
     /// Fetches an object — mirrors `GetObject`. Returns the body stream + content length.
     pub async fn get_object(&self, path: &str) -> Result<(ByteStream, i64)> {
         let out = self

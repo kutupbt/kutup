@@ -5,8 +5,34 @@ import { fromBase64, toBase64 } from './base64'
 import { ACCOUNT_RECORD_PURPOSE, sealAccountRecord } from './accountRecord'
 import { deriveAccountIdentityKeys } from './identity'
 
-export { DRIVE_BLOCK_SIZE, newDriveBlockEncryptor, newRevisionId, openDriveFile, openDriveObject, sealDriveFile } from './driveBlocks'
-export type { ContentCommitment, DriveBlockEncryptor, DriveObjectExpected, DriveRevisionContext, ManifestSigner } from './driveBlocks'
+export {
+  checkServedRecord,
+  committedContent,
+  DRIVE_BLOCK_SIZE,
+  manifestSignerOf,
+  newDriveBlockEncryptor,
+  newRevisionId,
+  openDriveFile,
+  openDriveObject,
+  openRevisionContent,
+  resolveServed,
+  setManifestSignerCheck,
+  REVISION_CONTENT_HEADER,
+  REVISION_HEADER,
+  sealDriveFile,
+  sealRevisionContent,
+} from './driveBlocks'
+export type {
+  ContentCommitment,
+  DriveBlockEncryptor,
+  DriveObjectExpected,
+  DriveObjectToOpen,
+  DriveRevisionContext,
+  ManifestSignature,
+  ManifestSigner,
+  ManifestSignerCheck,
+  ServedRevision,
+} from './driveBlocks'
 export {
   CHAT_MEDIA_OBJECT_HEADER_BYTES,
   CHAT_MEDIA_OBJECT_PREFIX_BYTES,

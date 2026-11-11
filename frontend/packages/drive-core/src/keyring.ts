@@ -1,6 +1,6 @@
 import { unlockCollectionKeyring, type EpochLinkV1 } from '@kutup/crypto/collectionKeyring'
 import { fileKeyAtV1 } from '@kutup/crypto/fileKeyring'
-import type { DriveObjectExpected } from '@kutup/crypto'
+import type { DriveObjectExpected, DriveObjectToOpen } from '@kutup/crypto'
 import api from '@kutup/session/client'
 import { folderLocation, type DriveFile, type Folder } from './model'
 
@@ -118,15 +118,48 @@ export async function currentContentOf(file: DriveFile): Promise<{ fileKey: Uint
 }
 
 /**
- * A version from the file's history, by its id (its revision): the header
- * must name it. `null` for the original upload, which the listing does not name.
+ * A version from the file's history (or a note's snapshot), by its id (its
+ * revision) and its sealed content record from the listing: it opens
+ * against the digest and size the record commits to
+ * (docs/plans/drive-block-format.md §2).
  */
 export async function versionContentOf(
   file: DriveFile,
-  version: { id: string | null; keyGeneration: number },
+  version: { id: string; keyGeneration: number; revisionContentEnvelope: string | null },
 ): Promise<{ fileKey: Uint8Array; expected: DriveObjectExpected }> {
   return {
     fileKey: await fileKeyAt(file, version.keyGeneration),
-    expected: { fileId: file.id, generation: version.keyGeneration, revisionId: version.id },
+    expected: {
+      fileId: file.id,
+      generation: version.keyGeneration,
+      revisionId: version.id,
+      revisionContentEnvelope: version.revisionContentEnvelope,
+    },
+  }
+}
+
+/** A note's or place list's saved state, relayed from the server the file is on. */
+export interface RelayedState {
+  keyGeneration: number
+  /** Base64. */
+  state: string
+  /** The version the state is, and its sealed content record. */
+  versionId: string
+  revisionContentEnvelope: string | null
+}
+
+/** A relayed state as the version it is. */
+export function relayedVersion(saved: RelayedState): { id: string; keyGeneration: number; revisionContentEnvelope: string | null } {
+  return { id: saved.versionId, keyGeneration: saved.keyGeneration, revisionContentEnvelope: saved.revisionContentEnvelope }
+}
+
+/**
+ * The file's original upload (`/files/{id}/original`), which no listing
+ * names: it opens against the revision and sealed record served with it.
+ */
+export async function originalContentOf(file: DriveFile): Promise<{ fileKey: Uint8Array; expected: DriveObjectToOpen }> {
+  return {
+    fileKey: await fileKeyAt(file, file.originalKeyGeneration),
+    expected: { fileId: file.id, generation: file.originalKeyGeneration, served: true },
   }
 }

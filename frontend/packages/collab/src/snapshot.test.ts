@@ -129,14 +129,14 @@ describe('SnapshotTrigger', () => {
 
   it('stores each version with its kind and sequence in one request', async () => {
     const ydoc = new Y.Doc()
-    const encrypt = vi.fn().mockResolvedValue({ ciphertext: new Uint8Array([9]), revisionId: 'r9', storageHints: { docKeyId: 4, sizeBytes: 1 } })
+    const encrypt = vi.fn().mockResolvedValue({ ciphertext: new Uint8Array([9]), revisionId: 'r9', revisionContentEnvelope: 'rc9', storageHints: { docKeyId: 4, sizeBytes: 1 } })
     recordSnapshotMock.mockReset()
     recordSnapshotMock.mockResolvedValue({ id: 'v9' })
     const t = new SnapshotTrigger({ fileId: 'f1', ydoc, encryptSnapshot: encrypt, getSeq: () => 12 })
     ydoc.getText('content').insert(0, 'hello')
     await t.forceSave()
     expect(recordSnapshotMock).toHaveBeenCalledWith('f1', new Uint8Array([9]), {
-      kind: 'yjs', seqAtSnapshot: 12, docKeyId: 4, label: null, keepForever: false, revisionId: 'r9',
+      kind: 'yjs', seqAtSnapshot: 12, docKeyId: 4, label: null, keepForever: false, revisionId: 'r9', revisionContentEnvelope: 'rc9',
     }, undefined)
     t.destroy()
   })

@@ -883,11 +883,13 @@ pub async fn version_content(
         .fetch_optional(&state.pool)
         .await?;
         let (path, size) = row.ok_or_else(|| AppError::not_found("not found"))?;
+        // Its sealed content record comes with the version list.
         let content = crate::file_content::CurrentContent {
             path,
             size,
             version: Some(vid),
             revision: vid,
+            revision_content_envelope: None,
         };
         let digest = ensure_version_digest(&state, vid, &content).await?;
         let digest: [u8; 32] = hex::decode(&digest)
@@ -926,6 +928,18 @@ struct CreateVersionBody {
     /// set, so servers without it still accept every other save.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     based_on: Option<String>,
+    /// A block-format blob's revision (the version's id) and its sealed
+    /// content record (docs/plans/drive-block-format.md §2); a block-format
+    /// whole-file save also brings the file's next metadata, committing to
+    /// it. Sent only when set, as `basedOn`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    revision_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    revision_content_envelope: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    metadata_envelope: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    metadata_revision: Option<String>,
     /// The sealed blob, base64.
     blob: String,
 }
@@ -984,6 +998,19 @@ pub async fn versions_create(
         fields.insert("keepForever".to_owned(), request.keep_forever.to_string());
         if let Some(based_on) = request.based_on {
             fields.insert("basedOn".to_owned(), based_on);
+        }
+        for (name, value) in [
+            ("revisionId", request.revision_id),
+            (
+                crate::drive_blob::REVISION_CONTENT_FIELD,
+                request.revision_content_envelope,
+            ),
+            ("metadataEnvelope", request.metadata_envelope),
+            ("metadataRevision", request.metadata_revision),
+        ] {
+            if let Some(value) = value {
+                fields.insert(name.to_owned(), value);
+            }
         }
         let created = store_version(
             &state,
@@ -1932,10 +1959,11 @@ async fn relay_version_create(
             .await
             .map_err(|_| AppError::bad_request("invalid form"))?
         {
-            let limit = if name == "file" {
-                MAX_VERSION_BLOB
-            } else {
-                4096
+            // The sealed metadata of a block-format save is larger.
+            let limit = match name.as_str() {
+                "file" => MAX_VERSION_BLOB,
+                "metadataEnvelope" => crate::handlers::files::MAX_TEXT_FIELD_BYTES,
+                _ => 4096,
             };
             if value.len() + chunk.len() > limit {
                 return Err(AppError::new(
@@ -1947,7 +1975,7 @@ async fn relay_version_create(
         }
         if name == "file" {
             blob = Some(value);
-        } else if !name.is_empty() && fields.len() < 8 {
+        } else if !name.is_empty() && fields.len() < 12 {
             fields.insert(
                 name,
                 String::from_utf8(value).map_err(|_| AppError::bad_request("invalid form"))?,
@@ -1974,6 +2002,12 @@ async fn relay_version_create(
             label: fields.get("label").cloned(),
             keep_forever: fields.get("keepForever").is_some_and(|v| v == "true"),
             based_on: fields.get("basedOn").cloned(),
+            revision_id: fields.get("revisionId").cloned(),
+            revision_content_envelope: fields
+                .get(crate::drive_blob::REVISION_CONTENT_FIELD)
+                .cloned(),
+            metadata_envelope: fields.get("metadataEnvelope").cloned(),
+            metadata_revision: fields.get("metadataRevision").cloned(),
             blob: STANDARD.encode(blob),
         },
         MAX_JSON_RESPONSE,

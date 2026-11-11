@@ -10,6 +10,9 @@ import {
   openFileRecordV1,
   openPublicLinkCollectionKeyV1,
   openPublicLinkFileKeyV1,
+  resolveServed,
+  REVISION_CONTENT_HEADER,
+  REVISION_HEADER,
   type ContentCommitment,
   type DriveObjectExpected,
 } from '@kutup/crypto'
@@ -243,8 +246,14 @@ export async function editedContent(token: string, file: PublicFile): Promise<Ui
   }
   const generation = Number(response.headers['x-kutup-key-generation'])
   const key = await publicFileKeyAt(file, generation)
-  // A note's saved state (a snapshot the relay does not name): its header names its revision.
-  const state = await openDriveObject(new Uint8Array(response.data), key, { fileId: file.row.id, generation, revisionId: null })
+  // A note's saved state: the snapshot the response names, opened against
+  // the sealed record served with it.
+  const expected = await resolveServed(key, { fileId: file.row.id, generation, served: true }, {
+    revisionId: typeof response.headers[REVISION_HEADER] === 'string' ? response.headers[REVISION_HEADER] : null,
+    revisionContentEnvelope:
+      typeof response.headers[REVISION_CONTENT_HEADER] === 'string' ? response.headers[REVISION_CONTENT_HEADER] : null,
+  })
+  const state = await openDriveObject(new Uint8Array(response.data), key, expected)
   if (list) return stateToListJson(state)
   const Y = await import('yjs')
   const doc = new Y.Doc()

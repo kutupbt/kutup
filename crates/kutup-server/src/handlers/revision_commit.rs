@@ -37,6 +37,17 @@ pub struct CommitRevisionRequest {
     metadata_envelope: String,
     /// Exactly the file's current metadata revision + 1; 1 for a new file.
     metadata_revision: i64,
+    /// What this revision is (`RevisionContent`: its id, its manifest's
+    /// digest and its size), sealed under the file key of the generation
+    /// that sealed the object: kept with the revision, so it opens against
+    /// a committed digest once it is in the history.
+    revision_content_envelope: String,
+    /// A new file's name hash, when it commits under another name than its
+    /// upload started with (the first was taken meanwhile): the name is
+    /// checked and stored at the commit, so nothing is uploaded again.
+    /// Omitted, the upload's own stands. Not for a version.
+    #[serde(default)]
+    name_hash: Option<String>,
 }
 
 #[derive(Debug, Serialize, ToSchema)]
@@ -83,10 +94,10 @@ struct Uploaded {
     request_body = CommitRevisionRequest,
     responses(
         (status = 200, description = "The revision is the file's current content", body = CommitRevisionResponse),
-        (status = 400, description = "An envelope not sealed for this file, key generation and metadata revision"),
+        (status = 400, description = "An envelope not sealed for this file, key generation and metadata revision, a `revisionContentEnvelope` not sealed for this file, revision and key generation, an invalid `nameHash`, or a `nameHash` with a version"),
         (status = 403, description = "The caller may no longer write the file or into its folder"),
         (status = 404, description = "No uploaded revision of this file by the caller"),
-        (status = 409, description = "`code: revision_conflict`: `metadataRevision` is not the current + 1 (1 for a new file). `code: alreadyCommitted`: the revision is already current or in the history. `code: notUploaded`: the upload is still in progress. `code: version_conflict`: the file no longer holds the version the upload was based on. `code: name_taken`, a key change or a folder gone: the commit cannot apply (cancel the upload)"),
+        (status = 409, description = "`code: revision_conflict`: `metadataRevision` is not the current + 1 (1 for a new file). `code: alreadyCommitted`: the revision is already current or in the history. `code: notUploaded`: the upload is still in progress. `code: version_conflict`: the file no longer holds the version the upload was based on. `code: name_taken`: the name was taken meanwhile (commit again with another name and its `nameHash`). `code: objectMissing`: the revision's object is not in storage (upload again). A key change or a folder gone: the commit cannot apply (cancel the upload)"),
         (status = 413, description = "The quota was lowered below what the revision needs")
     )
 )]
@@ -119,7 +130,7 @@ pub async fn commit(
     .fetch_optional(&mut *tx)
     .await?;
     // Only its uploader commits it.
-    let Some(row) = row.filter(|row| row.user_id == user_id) else {
+    let Some(mut row) = row.filter(|row| row.user_id == user_id) else {
         drop(tx);
         return Err(already_committed(&state, user_id, file_id, revision_id).await?);
     };
@@ -129,8 +140,51 @@ pub async fn commit(
     }
     let metadata = (request.metadata_envelope, request.metadata_revision);
     let kind = row.kind.clone();
+    // The name a new file commits under: the commit's, else the one its
+    // upload started with (checked then only).
+    match (&request.name_hash, kind.as_str()) {
+        (None, _) => {}
+        (Some(hash), "file") => {
+            row.name_hash = Some(crate::drive_names::require_name_hash(Some(hash))?)
+        }
+        (Some(_), _) => {
+            return Err(AppError::bad_request(
+                "nameHash goes with a new file's commit",
+            ))
+        }
+    }
+    // The object is there, whole, before any row names it. The upload row is
+    // locked, and a cancel or the sweep removes that row before the bytes,
+    // so what this finds stays until the commit ends.
+    crate::drive_blob::ensure_object_stored(&state.storage, &row.storage_path, row.total_bytes)
+        .await?;
+    // A new file's key is generation 1; a version's, the one it was sealed at.
+    let generation = match kind.as_str() {
+        "file" => Some(1),
+        _ => row.key_generation,
+    }
+    .and_then(|generation| u32::try_from(generation).ok())
+    .ok_or_else(|| AppError::internal("corrupt upload"))?;
+    let format = BlobFormat::Blocks { revision_id };
+    let revision_content = crate::drive_blob::revision_content_envelope(
+        format,
+        Some(&request.revision_content_envelope),
+        file_id,
+        generation,
+    )?;
     match kind.as_str() {
-        "file" => commit_file(&mut tx, user_id, file_id, revision_id, row, &metadata).await?,
+        "file" => {
+            commit_file(
+                &mut tx,
+                user_id,
+                file_id,
+                revision_id,
+                row,
+                &metadata,
+                revision_content.as_deref(),
+            )
+            .await?
+        }
         "version" => {
             let landing = Landing {
                 user_id,
@@ -147,7 +201,8 @@ pub async fn commit(
                 content_hash: row.content_hash,
                 based_on: row.based_on,
                 revision_id,
-                format: BlobFormat::Blocks { revision_id },
+                format,
+                revision_content_envelope: revision_content,
             };
             let seq = super::tus_versions::commit(&state, &mut tx, &landing).await?;
             tx.commit().await?;
@@ -194,8 +249,10 @@ async fn already_committed(
 }
 
 /// A new file's first commit: what its upload had to hold when it landed
-/// holds still, its name is still free, and its metadata is revision 1. The
-/// file row goes in, its bytes are charged and the upload row goes.
+/// holds still, its name (the commit's `nameHash`, else the one the upload
+/// started with, which was only that moment's check) is free, and its
+/// metadata is revision 1. The file row goes in, its bytes are charged and
+/// the upload row goes.
 async fn commit_file(
     tx: &mut Transaction<'_, Postgres>,
     user_id: Uuid,
@@ -203,6 +260,7 @@ async fn commit_file(
     revision_id: Uuid,
     row: Uploaded,
     (metadata_envelope, metadata_revision): &(String, i64),
+    revision_content_envelope: Option<&str>,
 ) -> AppResult<()> {
     let (Some(file_key_envelope), Some(name_hash)) = (&row.file_key_envelope, &row.name_hash)
     else {
@@ -245,6 +303,7 @@ async fn commit_file(
             name_hash: Some(name_hash),
             content_hash: None,
             revision_id,
+            revision_content_envelope,
         },
     )
     .await

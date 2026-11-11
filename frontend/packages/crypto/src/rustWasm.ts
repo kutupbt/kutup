@@ -60,7 +60,7 @@ export interface WasmBlockEncryptor {
   /** Set once finished: the sealed manifest's SHA-256, canonical base64. */
   readonly manifestSha256: string | undefined
   sealNext(plaintext: Uint8Array): Uint8Array
-  finishSigned(masterKeyBase64: string, uploaderAccountId: string): Uint8Array
+  finishSigned(masterKeyBase64: string, uploaderAccountId: string, uploaderIncarnationId: string): Uint8Array
   free(): void
 }
 
@@ -477,7 +477,25 @@ export interface CryptoWasmModule {
     generation: number,
     masterKeyBase64: string,
     uploaderAccountId: string,
+    uploaderIncarnationId: string,
   ): { bytes: Uint8Array; manifestSha256: string; free(): void }
+  /** One revision's content record (id, manifest digest, size), sealed under the file key of `generation`. */
+  sealRevisionContent(
+    fileKeyBase64: string,
+    fileId: string,
+    revisionId: string,
+    manifestSha256: string,
+    size: number,
+    generation: number,
+  ): string
+  /** Opens a revision's content record for exactly this file, revision and key generation. */
+  openRevisionContent(
+    envelopeBase64: string,
+    fileKeyBase64: string,
+    expectedFileId: string,
+    expectedRevisionId: string,
+    expectedGeneration: number,
+  ): { revisionId: string; manifestSha256: string; size: number }
   /** A whole Drive revision opened against its metadata's content commitment. */
   driveOpenFile(
     object: Uint8Array,
@@ -487,7 +505,15 @@ export interface CryptoWasmModule {
     contentRevisionId: string,
     contentManifestSha256: string,
     size: number,
-  ): Uint8Array
+  ): {
+    /** The plaintext, handed over once. */
+    takeBytes(): Uint8Array
+    readonly signerAccountId: string | undefined
+    readonly signerIncarnationId: string | undefined
+    /** Whether the manifest's signature is by this Drive signing public key (base64). */
+    signedBy(driveSigningPublicKeyBase64: string): boolean
+    free(): void
+  }
   prepareChatMediaObject(
     attachmentKeyBase64: string,
     attachmentId: string,

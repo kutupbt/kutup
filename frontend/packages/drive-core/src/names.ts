@@ -6,7 +6,7 @@ import {
   nameHash as nameHashOf,
   topLevelHashKey,
 } from '@kutup/crypto/driveNames'
-import { UploadNameTaken } from '@kutup/files/upload/streamUpload'
+import { UploadNameTaken, type FreeName } from '@kutup/files/upload/streamUpload'
 import api from '@kutup/session/client'
 import { folderKeyAt, type KeyringFolder } from './keyring'
 import { folderLocation, type DriveFile, type Folder } from './model'
@@ -177,6 +177,18 @@ export async function findAvailableName(
     if (at >= 0) return { name: names[at], hash: hashes[at] }
   }
   throw new Error('no free name found')
+}
+
+/**
+ * A new file whose name was taken while it uploaded commits under the next
+ * free one in `folder`, as "Keep both" names it (`streamUpload`'s and
+ * `resumeUpload`'s `freeName`): nothing is sent again.
+ */
+export function freeNameIn(folder: KeyringFolder): FreeName {
+  return async (taken) => {
+    const free = await findAvailableName(inFolder(folder), taken, { skipName: true })
+    return { name: free.name, nameHash: free.hash }
+  }
 }
 
 /** `name` without the ` (n)` `freeName` adds before its extension. */

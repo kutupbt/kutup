@@ -639,24 +639,58 @@ fn reconcile_sums(user: &str) -> String {
     )
 }
 
+/// Removes one abandoned upload's row, if it is still stale and nothing holds
+/// it, and gives what it held in storage (path, multipart id, whether the
+/// object is complete) to free after the transaction commits.
+async fn take_stale_upload(
+    pool: &PgPool,
+    id: Uuid,
+) -> Result<Option<(String, String, bool)>, sqlx::Error> {
+    let mut tx = pool.begin().await?;
+    let row: Option<(String, String, bool)> = sqlx::query_as(
+        "SELECT storage_path, s3_upload_id, uploaded_at IS NOT NULL FROM uploads \
+         WHERE id = $1 AND updated_at < NOW() - $2 * interval '1 second' \
+         FOR UPDATE SKIP LOCKED",
+    )
+    .bind(id)
+    .bind(UPLOADS_STALE_AFTER_SECS)
+    .fetch_optional(&mut *tx)
+    .await?;
+    let Some(row) = row else {
+        return Ok(None);
+    };
+    sqlx::query("DELETE FROM uploads WHERE id = $1")
+        .bind(id)
+        .execute(&mut *tx)
+        .await?;
+    tx.commit().await?;
+    Ok(Some(row))
+}
+
 /// A corrected account: its new counter, then the Drive, Chat, Contacts,
 /// Mail and Calendar bytes it adds up from.
 type Reconciled = (i64, i64, i64, i64, i64, i64);
 
-/// Reaps abandoned tus uploads (rows whose `updated_at` is older than 24 h): aborts the S3
-/// multipart, then drops the row (freeing soft-reserved quota) — mirrors
-/// `UploadsSweeper.once`. An uploaded revision never committed
-/// (docs/plans/drive-block-format.md §10 slice 3) goes the same way, a day
-/// after its last part: its object is deleted, and with its row the
-/// reservation and a new file's id. Returns the number reaped.
+/// Reaps abandoned tus uploads (rows whose `updated_at` is older than 24 h):
+/// drops the row (freeing soft-reserved quota), then aborts the S3 multipart.
+/// An uploaded revision never committed (docs/plans/drive-block-format.md §10
+/// slice 3) goes the same way, a day after its last part: with its row go the
+/// reservation and a new file's id, then its object is deleted.
+///
+/// The row goes first, in its own transaction, and only if nothing holds it
+/// (`FOR UPDATE SKIP LOCKED`, the staleness test repeated under the lock): a
+/// commit or a last part holds the row, so the sweep can never delete the
+/// object of a revision that is being made current, and a commit that comes
+/// later finds no row. Bytes whose removal then fails are left without a row
+/// (logged; an object is found by the orphan sweep). Returns the number
+/// reaped.
 pub async fn uploads_sweep_once(
     pool: &PgPool,
     storage: &StorageService,
     media_delivery_retention_days: i64,
 ) -> usize {
-    let stale: Vec<(Uuid, String, String, bool)> = match sqlx::query_as(
-        "SELECT id, storage_path, s3_upload_id, uploaded_at IS NOT NULL FROM uploads \
-         WHERE updated_at < NOW() - $1 * interval '1 second'",
+    let stale: Vec<Uuid> = match sqlx::query_scalar(
+        "SELECT id FROM uploads WHERE updated_at < NOW() - $1 * interval '1 second'",
     )
     .bind(UPLOADS_STALE_AFTER_SECS)
     .fetch_all(pool)
@@ -669,21 +703,21 @@ pub async fn uploads_sweep_once(
         }
     };
     let mut reaped = 0;
-    for (id, path, s3_upload_id, uploaded) in &stale {
-        // Abort (or delete) first; a failure leaves the row for the next sweep.
+    for id in &stale {
+        let (path, s3_upload_id, uploaded) = match take_stale_upload(pool, *id).await {
+            Ok(Some(row)) => row,
+            // Held by a commit or a part, or no longer stale: not abandoned.
+            Ok(None) => continue,
+            Err(e) => {
+                tracing::warn!("uploads-sweeper: take {id}: {e}");
+                continue;
+            }
+        };
+        // The row is gone for good: nothing can commit these bytes any more.
         if let Err(e) =
-            crate::drive_blob::drop_upload_bytes(storage, path, s3_upload_id, *uploaded).await
+            crate::drive_blob::drop_upload_bytes(storage, &path, &s3_upload_id, uploaded).await
         {
-            tracing::warn!("uploads-sweeper: abort {id}: {e}");
-            continue;
-        }
-        if sqlx::query("DELETE FROM uploads WHERE id = $1")
-            .bind(id)
-            .execute(pool)
-            .await
-            .is_err()
-        {
-            continue;
+            tracing::warn!("uploads-sweeper: bytes of upload={id} path={path} left behind: {e}");
         }
         tracing::info!("uploads-sweeper: reaped upload={id} path={path}");
         reaped += 1;

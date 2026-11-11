@@ -30,6 +30,13 @@ export interface PendingUpload {
   revisionId: string
   /** What the metadata will say (`FileMetadataDraftV1`), sealed under the file key for this revision. */
   draftEnvelope: string
+  /**
+   * For an upload whose metadata carries no SHA-256: the blocks sealed so
+   * far, by index (`SealedBlockLog` in encryptedSource.ts). A resumed
+   * upload seals them again and they must come out the same, so another
+   * file chosen to resume with is refused before any of it is sent.
+   */
+  sealedBlocks?: string[]
   /** Once made: the sealed manifest and trailer (base64), and what the metadata commits to. */
   tail?: { tail: string; content: ContentCommitment }
   /**

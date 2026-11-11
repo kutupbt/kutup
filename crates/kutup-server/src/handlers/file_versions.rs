@@ -48,6 +48,11 @@ pub struct VersionRow {
     /// A whole-file version: the version it replaced (`null`: the original
     /// upload, or not recorded).
     parent_version_id: Option<String>,
+    /// A block-format version's sealed content record (`RevisionContent`,
+    /// bound to the file, this version's id and `keyGeneration`): readers
+    /// open it first, then the version's object against the digest and size
+    /// it commits to. `null` for a streaming-format version.
+    revision_content_envelope: Option<String>,
 }
 
 pub(crate) type VersionTuple = (
@@ -65,6 +70,7 @@ pub(crate) type VersionTuple = (
     Option<String>,
     Option<Uuid>,
     Option<Uuid>,
+    Option<String>,
 );
 
 pub(crate) fn to_version_row(t: VersionTuple) -> VersionRow {
@@ -83,6 +89,7 @@ pub(crate) fn to_version_row(t: VersionTuple) -> VersionRow {
         remote_author_server,
         remote_author_account_id,
         parent_version_id,
+        revision_content_envelope,
     ) = t;
     let remote_author = match (remote_author_server, remote_author_account_id) {
         (Some(server), Some(id)) => {
@@ -104,12 +111,14 @@ pub(crate) fn to_version_row(t: VersionTuple) -> VersionRow {
         key_generation,
         remote_author,
         parent_version_id: parent_version_id.map(|id| id.to_string()),
+        revision_content_envelope,
     }
 }
 
 pub(crate) const VERSION_SELECT: &str = r#"SELECT id, storage_path, seq_at_snapshot,
        doc_key_id, author_user_id, size_bytes, label, keep_forever, created_at, kind, key_generation,
-       remote_author_server, remote_author_account_id, parent_version_id
+       remote_author_server, remote_author_account_id, parent_version_id,
+       revision_content_envelope
 FROM file_versions"#;
 
 #[derive(Debug, Default, Deserialize, ToSchema)]
@@ -160,7 +169,7 @@ pub async fn list(
         ("vid" = String, Path, description = "Version id")
     ),
     responses(
-        (status = 200, description = "The encrypted snapshot blob (octet-stream) + x-kutup-doc-key-id / x-kutup-seq headers; the ETag is the version id"),
+        (status = 200, description = "The encrypted snapshot blob (octet-stream) + x-kutup-doc-key-id / x-kutup-seq headers, `x-kutup-revision` (the version id, also the ETag) and, in the block format, `x-kutup-revision-content` (its sealed content record)"),
         (status = 206, description = "The one `Range` asked"),
         (status = 416, description = "The range starts past the end")
     )
@@ -177,25 +186,26 @@ pub async fn download(
         return Err(AppError::forbidden("forbidden"));
     }
 
-    let row: Option<(String, i64, i64, i64)> = sqlx::query_as(
-        "SELECT storage_path, size_bytes, doc_key_id, seq_at_snapshot
+    let row: Option<(String, i64, i64, i64, Option<String>)> = sqlx::query_as(
+        "SELECT storage_path, size_bytes, doc_key_id, seq_at_snapshot, revision_content_envelope
          FROM file_versions WHERE id = $1 AND file_id = $2",
     )
     .bind(vid)
     .bind(fid)
     .fetch_optional(&state.pool)
     .await?;
-    let Some((path, size, doc_key_id, seq)) = row else {
+    let Some((path, size, doc_key_id, seq, revision_content)) = row else {
         return Err(AppError::not_found("not found"));
     };
 
-    let extra = vec![
+    let mut extra = crate::file_content::revision_headers(vid, revision_content.as_deref());
+    extra.extend([
         (
             HeaderName::from_static("x-kutup-doc-key-id"),
             doc_key_id.to_string(),
         ),
         (HeaderName::from_static("x-kutup-seq"), seq.to_string()),
-    ];
+    ]);
     // A version's id is its revision's: its ETag.
     crate::content_range::serve_revision(
         &state.pool,
@@ -409,7 +419,7 @@ const MAX_LABEL_CHARS: usize = 200;
     request_body(
         content = Vec<u8>,
         content_type = "multipart/form-data",
-        description = "`file` (the sealed Drive file blob), `kind` (`file` | `yjs`), `seqAtSnapshot`, `docKeyId`, optional `label`, `keepForever`, `basedOn` (a whole-file save made from this version id, or `original`: stored only if that is still the current content), and `revisionId` (a block-format blob's revision, which becomes the version's id). A block-format `kind: file` save commits inline: `metadataEnvelope` and `metadataRevision` (the file's current + 1), the file's next metadata committing to this revision"
+        description = "`file` (the sealed Drive file blob), `kind` (`file` | `yjs`), `seqAtSnapshot`, `docKeyId`, optional `label`, `keepForever`, `basedOn` (a whole-file save made from this version id, or `original`: stored only if that is still the current content), `revisionId` (a block-format blob's revision, which becomes the version's id) and, with it, `revisionContentEnvelope` (the revision's sealed content record, for every kind). A block-format `kind: file` save commits inline: `metadataEnvelope` and `metadataRevision` (the file's current + 1), the file's next metadata committing to this revision"
     ),
     responses(
         (status = 201, description = "The stored version", body = VersionRow),
@@ -469,7 +479,7 @@ pub async fn create(
                 } else {
                     4096
                 };
-                if value.len() + chunk.len() > limit || fields.len() >= 10 {
+                if value.len() + chunk.len() > limit || fields.len() >= 12 {
                     return Err(AppError::bad_request("form field too large"));
                 }
                 value.extend_from_slice(&chunk);
@@ -550,6 +560,16 @@ pub(crate) async fn store_version(
     let format =
         crate::drive_blob::BlobFormat::from_revision(fields.get("revisionId").map(String::as_str))?;
     format.check_file(&tmp_file, size as u64, fid, generation)?;
+    // What the version is, sealed under the key it was sealed at: every
+    // block-format version (a whole file or a note's state) carries it.
+    let revision_content = crate::drive_blob::revision_content_envelope(
+        format,
+        fields
+            .get(crate::drive_blob::REVISION_CONTENT_FIELD)
+            .map(String::as_str),
+        fid,
+        generation,
+    )?;
     // A block-format whole-file save commits inline
     // (docs/plans/drive-block-format.md §10 slice 3): it becomes the file's
     // content, so the file's next metadata, committing to it, comes along.
@@ -642,11 +662,14 @@ pub(crate) async fn store_version(
         r#"INSERT INTO file_versions (id, file_id, storage_path, seq_at_snapshot,
                                       doc_key_id, author_user_id, size_bytes, label, keep_forever, kind,
                                       key_generation, remote_author_server,
-                                      remote_author_account_id, parent_version_id, created_at)
-           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $14, $13, clock_timestamp())
+                                      remote_author_account_id, parent_version_id, created_at,
+                                      blob_suite, revision_content_envelope)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $14, $13, clock_timestamp(),
+                   $15, $16)
            RETURNING id, storage_path, seq_at_snapshot, doc_key_id,
                      author_user_id, size_bytes, label, keep_forever, created_at, kind, key_generation,
-                     remote_author_server, remote_author_account_id, parent_version_id"#,
+                     remote_author_server, remote_author_account_id, parent_version_id,
+                     revision_content_envelope"#,
     )
     .bind(version_id)
     .bind(fid)
@@ -662,6 +685,8 @@ pub(crate) async fn store_version(
     .bind(remote_author.map(|author| author.server.clone()))
     .bind(parent)
     .bind(remote_author.map(|author| Uuid::parse_str(&author.account_id).expect("canonical")))
+    .bind(format.suite())
+    .bind(&revision_content)
     .fetch_one(&mut *tx)
     .await?;
     crate::storage_pool::charge(&mut *tx, crate::storage_pool::Payer::Account(payer), size).await?;

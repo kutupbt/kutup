@@ -808,6 +808,8 @@ pub async fn patch(
                 based_on,
                 revision_id,
                 format,
+                // The block format's comes with its commit.
+                revision_content_envelope: None,
             },
             &parts,
         )
@@ -927,6 +929,7 @@ pub async fn patch(
             name_hash: name_hash.as_deref(),
             content_hash: None,
             revision_id,
+            revision_content_envelope: None,
         },
     )
     .await
@@ -1110,6 +1113,9 @@ pub(super) struct NewFile<'a> {
     pub name_hash: Option<&'a str>,
     pub content_hash: Option<&'a str>,
     pub revision_id: Uuid,
+    /// The block format's sealed content record (it commits with the
+    /// revision); `None`: the streaming format.
+    pub revision_content_envelope: Option<&'a str>,
 }
 
 /// Inserts a landed new file (its key at generation 1).
@@ -1122,8 +1128,9 @@ pub(super) async fn insert_file(
             (id, collection_id, uploader_user_id, \
              metadata_envelope, file_key_envelope, key_epoch, key_generation, \
              metadata_revision, storage_path, encrypted_size_bytes, original_key_generation, \
-             name_hash, content_hash, content_revision_id) \
-         VALUES ($1,$2,$3,$4,$5,$6,1,$7,$8,$9,1,$10,$11,$12)",
+             name_hash, content_hash, content_revision_id, \
+             blob_suite, revision_content_envelope) \
+         VALUES ($1,$2,$3,$4,$5,$6,1,$7,$8,$9,1,$10,$11,$12,$13,$14)",
     )
     .bind(file.file_id)
     .bind(file.collection_id)
@@ -1137,6 +1144,12 @@ pub(super) async fn insert_file(
     .bind(file.name_hash)
     .bind(file.content_hash)
     .bind(file.revision_id)
+    .bind(if file.revision_content_envelope.is_some() {
+        2_i16
+    } else {
+        1_i16
+    })
+    .bind(file.revision_content_envelope)
     .execute(&mut **tx)
     .await
     .map(|_| ())
@@ -1214,10 +1227,13 @@ pub(super) async fn mark_uploaded(
 // DELETE /api/uploads/{id} — cancel
 // ---------------------------------------------------------------------------
 
-/// Cancels an in-flight upload — mirrors `Delete`. Aborts the S3 multipart (freeing
-/// SeaweedFS staging), or deletes the object of an uploaded revision not yet
-/// committed, then removes the DB row (freeing reserved quota). Abort-before-row
-/// ordering keeps a failed abort recoverable from the row. 404 if not owned by the caller.
+/// Cancels an in-flight upload — mirrors `Delete`. Removes the DB row (freeing
+/// reserved quota) and, once that is committed, aborts the S3 multipart (freeing
+/// SeaweedFS staging) or deletes the object of an uploaded revision not yet
+/// committed. Row-before-bytes: a commit takes the same row, so it either made
+/// the revision current first (and this answers 404) or finds no row; the
+/// object of a revision that can still be committed is never deleted. 404 if
+/// not owned by the caller.
 #[utoipa::path(
     delete,
     path = "/api/uploads/{id}",
@@ -1279,24 +1295,22 @@ pub async fn delete(
         return tus_text(StatusCode::NOT_FOUND, "");
     };
 
-    // An uploaded revision not committed yet: its whole object goes.
-    if let Err(e) =
-        crate::drive_blob::drop_upload_bytes(&state.storage, &storage_path, &s3_upload_id, uploaded)
-            .await
-    {
-        return (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            [("Tus-Resumable", TUS_VERSION)],
-            format!("storage abort: {e}"),
-        )
-            .into_response();
-    }
     let deleted = sqlx::query("DELETE FROM uploads WHERE id=$1")
         .bind(upload_id)
         .execute(&mut *tx)
         .await;
     if deleted.is_err() || tx.commit().await.is_err() {
         return tus_text(StatusCode::INTERNAL_SERVER_ERROR, "db delete");
+    }
+    // The row is gone: nothing can commit these bytes. An uploaded revision
+    // not committed yet loses its whole object, an open upload its parts. The
+    // upload is cancelled either way; bytes that could not be removed are
+    // logged (an object is found by the orphan sweep).
+    if let Err(error) =
+        crate::drive_blob::drop_upload_bytes(&state.storage, &storage_path, &s3_upload_id, uploaded)
+            .await
+    {
+        tracing::warn!(%error, upload = %upload_id, path = %storage_path, "upload cancel: bytes left behind");
     }
 
     tus_text(StatusCode::NO_CONTENT, "")

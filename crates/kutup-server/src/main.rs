@@ -2592,6 +2592,8 @@ fn build_cors(allowed_origins: &str) -> CorsLayer {
             HeaderName::from_static("upload-length"),
             HeaderName::from_static("x-kutup-key-generation"),
             HeaderName::from_static("x-kutup-version"),
+            HeaderName::from_static(file_content::REVISION_HEADER),
+            HeaderName::from_static(file_content::REVISION_CONTENT_HEADER),
             HeaderName::from_static(middleware::SESSION_VERSION_HEADER),
             axum::http::header::LOCATION,
         ])
