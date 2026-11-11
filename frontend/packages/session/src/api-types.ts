@@ -89,6 +89,8 @@ export interface UserRow {
   legalHoldAt?: string
   /** Failed tries at deleting this closing account past its date; 0 when none. */
   deletionAttempts: number
+  /** When its data key was found not to open: what was sealed under it is lost. */
+  dataKeyLostAt?: string
   totpEnabled: boolean
   /**
    * Still on the admin-issued temp password — no key material yet. Gates the

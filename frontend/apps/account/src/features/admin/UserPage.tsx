@@ -378,6 +378,9 @@ export function UserPage() {
       </Card>
 
       {locked ? <Alert>{t('admin.user.protectedNote')}</Alert> : null}
+      {user.dataKeyLostAt ? (
+        <Alert variant="error">{t('admin.user.dataKeyLost', { date: formatInstant(user.dataKeyLostAt, lang) ?? '' })}</Alert>
+      ) : null}
       {user.state === 'closing' && user.deletionAttempts > 0 ? (
         <Alert variant="error">{t('admin.user.deletionFailing', { count: user.deletionAttempts })}</Alert>
       ) : null}

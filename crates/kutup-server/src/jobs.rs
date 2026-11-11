@@ -166,7 +166,8 @@ pub async fn chat_maintenance_once(
     if policy.send_retention_days > 0 {
         match sqlx::query(
             "DELETE FROM chat_sends
-             WHERE created_at < now() - ($1 * interval '1 day')",
+             WHERE created_at < now() - ($1 * interval '1 day')
+               AND NOT kutup_account_held(sender_user_id)",
         )
         .bind(policy.send_retention_days)
         .execute(pool)
@@ -375,6 +376,9 @@ pub async fn version_retention_tick(pool: &PgPool, storage: &StorageService) -> 
     match sqlx::query_scalar::<_, i64>(&crate::handlers::collab::trimming(
         "DELETE FROM file_update_log l
           WHERE l.kind IN ($1, $2, $3) AND l.created_at < now() - interval '1 day'
+            AND NOT kutup_account_held((SELECT c.owner_user_id FROM files f
+                                          JOIN collections c ON c.id = f.collection_id
+                                         WHERE f.id = l.file_id))
          RETURNING l.file_id, l.sender_domain, l.sender_account, l.sender_device, l.sender_seq",
     ))
     .bind(i16::from(kutup_crypto::envelope::kind::OO_OP))

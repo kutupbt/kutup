@@ -133,6 +133,14 @@ struct UserRow {
     /// Failed tries at deleting a closing account past its date (the job
     /// keeps trying, further apart); 0 when none.
     deletion_attempts: i32,
+    /// When its data key was found not to open: what was sealed under it is
+    /// lost (docs/plans/server-personal-data.md, A2).
+    #[serde(
+        with = "time::serde::rfc3339::option",
+        skip_serializing_if = "Option::is_none"
+    )]
+    #[schema(value_type = Option<String>)]
+    data_key_lost_at: Option<OffsetDateTime>,
     #[serde(rename = "totpEnabled")]
     totp_enabled: bool,
     /// Still on the admin-issued temp password (no key material yet). Gates the
@@ -157,7 +165,7 @@ pub async fn list_users(State(state): State<AppState>, _admin: AdminUser) -> App
     let users: Vec<UserRow> = sqlx::query_as(
         r#"SELECT id, COALESCE(username, '') AS username, storage_quota_bytes, storage_used_bytes,
                   is_admin, is_active, state, suspended_reason, closes_at,
-                  legal_hold_reference, legal_hold_at, deletion_attempts,
+                  legal_hold_reference, legal_hold_at, deletion_attempts, data_key_lost_at,
                   totp_enabled, is_first_login, created_at, is_break_glass AS is_protected
            FROM users ORDER BY created_at DESC"#,
     )
@@ -2535,8 +2543,10 @@ pub async fn wipe_user(
     if is_break_glass(&state, target).await? {
         return Err(AppError::forbidden("break-glass admin is protected"));
     }
-    // A reset destroys what the account holds: not under a legal hold.
-    crate::account_closing::check_no_hold(&state.pool, target).await?;
+    // A reset destroys what the account holds: not under a legal hold, and
+    // the account claimed while it runs, so a hold set meanwhile is refused
+    // rather than overrun (let go when this ends).
+    let _claim = crate::account_closing::ResetClaim::take(&state, target).await?;
 
     // 0. Nobody signed in to it watches the purges below, nor acts on a grant
     //    meanwhile: its sign-ins and grants end first (and again, with the

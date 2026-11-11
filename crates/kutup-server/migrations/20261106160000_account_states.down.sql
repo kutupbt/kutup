@@ -27,5 +27,5 @@ ALTER TABLE users
     DROP COLUMN state, DROP COLUMN suspended_reason, DROP COLUMN state_changed_at,
     DROP COLUMN closing_by, DROP COLUMN closes_at, DROP COLUMN purpose_ended_at,
     DROP COLUMN legal_hold_reference, DROP COLUMN legal_hold_at, DROP COLUMN legal_hold_by,
-    DROP COLUMN suspended_before_close, DROP COLUMN deleting_at, DROP COLUMN deletion_attempts,
+    DROP COLUMN suspended_before_close, DROP COLUMN deleting_at, DROP COLUMN deleting_for, DROP COLUMN deletion_attempts,
     DROP COLUMN deletion_next_try_at;
