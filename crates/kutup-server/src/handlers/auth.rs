@@ -70,6 +70,11 @@ pub struct RegisterRequest {
     account_id: Option<String>,
     #[serde(default)]
     account_id_proof: Option<String>,
+    /// The documents shown and confirmed at sign-up (`GET /api/legal/documents`,
+    /// those `requiredAtSignup`): the current version of each required kind
+    /// (docs/plans/server-personal-data.md, A3).
+    #[serde(default)]
+    acknowledgements: Vec<Uuid>,
 }
 
 /// Mirrors `auth.LoginResponse`. Non-omitempty fields are always present (empty/zero on
@@ -785,6 +790,9 @@ pub async fn register(
             .ok_or_else(crate::registration::invalid)?;
         crate::registration::record_use(&mut tx, code_id, user_id).await?;
     }
+    // The notices it was shown, recorded with the account: no account lacks
+    // the record of what it confirmed.
+    crate::legal::acknowledge(&mut tx, user_id, &req.acknowledgements, "signup").await?;
     // The account's mail address comes with it (a GET never makes one).
     if !crate::handlers::mail_keys::create_own_address(
         &mut tx,

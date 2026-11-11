@@ -11,6 +11,8 @@
     "failedDescription": "Sunucu yanıt vermedi. Bağlantınızı kontrol edip yeniden deneyin. Oturumunuz açık kalır."
   },
   "nav": {
+    "legal": "Yasal belgeler",
+    "privacy": "Gizlilik",
     "apps": "Uygulamalar",
     "settings": "Ayarlar",
     "account": "Hesap",
@@ -74,6 +76,22 @@
       "fair": "orta",
       "strong": "güçlü",
       "veryStrong": "çok güçlü"
+    }
+  },
+  "legal": {
+    "confirm": "{{name}} metnini okudum (sürüm {{version}}).",
+    "read": "Oku",
+    "readNamed": "{{name}} metnini oku (sürüm {{version}})",
+    "confirmAll": "Devam etmek için her belgeyi onaylayın.",
+    "confirmFailed": "Onayınız kaydedilemedi. Yeniden deneyin.",
+    "updatedTitle": "Güncellenen belgeler",
+    "updatedDescription": "Kabul ettiğiniz bir belgenin yeni sürümü var. Devam etmek için okuyup onaylayın.",
+    "continue": "Devam et",
+    "kinds": {
+      "terms": "Hizmet Koşulları",
+      "privacy_notice": "Aydınlatma Metni",
+      "federation_abroad": "diğer sunucularla iletişim rıza metni",
+      "marketing": "haber ve teklif rıza metni"
     }
   },
   "login": {
@@ -180,6 +198,26 @@
     "calendar": "Etkinlikleriniz ve takvimleriniz, şifreli; sunucunuz yalnızca hatırlatmak için gereken saatleri bilir."
   },
   "settings": {
+    "privacy": {
+      "title": "Gizlilik",
+      "description": "Rızalarınız: her biri ayrı ayrı, istediğiniz zaman verilir ya da geri alınır.",
+      "consents": "Rızalar",
+      "give": "Ver",
+      "withdraw": "Geri al",
+      "givenAt": "{{date}} tarihinde verildi",
+      "withdrawnAt": "{{date}} tarihinde geri alındı",
+      "failed": "Seçiminiz kaydedilemedi. Yeniden deneyin.",
+      "purposes": {
+        "federation_abroad": {
+          "title": "Diğer sunucularla iletişim",
+          "description": "Sohbet ve Drive'ınızın, başka ülkelerde olabilecek diğer Kutup sunucularındaki kişilere ulaşmasına izin verin. Geri alırsanız bu durur."
+        },
+        "marketing": {
+          "title": "Haberler ve teklifler",
+          "description": "Bu sunucunun size haber ve teklif gönderip gönderemeyeceği. Yalnızca seçiminiz kaydedilir."
+        }
+      }
+    },
     "account": {
       "title": "Hesap",
       "description": "Bu sunucuda kim olduğunuz ve ne kadar alan kullandığınız.",
@@ -604,6 +642,29 @@
     }
   },
   "admin": {
+    "legal": {
+      "title": "Yasal belgeler",
+      "description": "Koşullarınız, aydınlatma metniniz ve rıza metinleriniz, sürüm sürüm. Metin kendi adresinde durur; sunucu gösterilen metnin parmak izini saklar.",
+      "publishTitle": "Sürüm yayımla",
+      "publishHint": "Yayımlanan bir sürüm hiç değiştirilmez: yenisini yayımlayın. Zorunlu yeni bir sürüm herkese bir sonraki oturum açışında gösterilir.",
+      "kind": "Tür",
+      "kindHint": "terms, privacy_notice, bir rıza amacı (federation_abroad, marketing) ya da kendi türünüz.",
+      "version": "Sürüm",
+      "language": "Dil",
+      "languageHint": "en, tr ya da pt-BR gibi bir kod.",
+      "url": "Metnin adresi",
+      "sha256": "Metnin SHA-256 değeri",
+      "sha256Hint": "Adresteki metnin tam hâlinin 64 onaltılık karakteri (örneğin: sha256sum terms.html).",
+      "required": "Kayıtta zorunlu (yeni sürüm yayımlandığında yeniden onaylanır)",
+      "publish": "Yayımla",
+      "published": "Yayımlandı",
+      "failed": "Belge yayımlanamadı.",
+      "incomplete": "Her alanı doldurun; SHA-256 64 onaltılık karakterdir.",
+      "versions": "Sürümler",
+      "requiredBadge": "Zorunlu",
+      "noneTitle": "Yayımlanmış belge yok",
+      "noneDescription": "Zorunlu bir belge yayımlayana kadar kayıt hiçbir belge sormaz."
+    },
     "forbiddenTitle": "Yalnızca yöneticiler",
     "forbidden": "Hesabınız yönetim sayfalarını açamaz.",
     "overview": {
@@ -849,6 +910,7 @@
         "unknown": "{{admin}}: {{action}}",
         "mailSendingUpdate": "{{admin}}, {{target}} hesabının posta gönderimini değiştirdi",
         "reportDismiss": "{{admin}}, {{target}} kullanıcısının bir bağlantısıyla ilgili bildirimi kapattı",
+        "legalPublish": "{{admin}}, {{kind}} belgesinin {{version}} sürümünü yayımladı",
         "shareBlock": "{{admin}}, {{target}} kullanıcısının paylaştığı bir bağlantıyı engelledi",
         "shareUnblock": "{{admin}}, {{target}} kullanıcısının paylaştığı bir bağlantının engelini kaldırdı",
         "shareRemove": "{{admin}}, {{target}} kullanıcısının herkese açık bir bağlantısını kaldırdı",

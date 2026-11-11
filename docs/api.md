@@ -162,6 +162,9 @@ Specific codes, where an app does something particular (a test in
 | `link_removed` | 404/410 | The shared link was removed |
 | `link_blocked` | 451/410 | An operator blocked the public link: `451` for a legal order, `410` otherwise; `reason` is `legal_order`, `abuse` or `other` |
 | `sharing_off` | 403/410 | Public links are off, for the whole server or the link owner's account (`scope`: `site` or `account`): `403` when making one, `410` when opening one |
+| `acknowledgementsRequired` | 400 | Sign-up without confirming the current version of every required document (`kinds` names those missing); see `GET /api/legal/documents` |
+| `documentNotCurrent` | 400 | A document named that is not the current version (an acknowledgement, or the text a consent is given under) |
+| `documentExists` | 409 | Publishing a document version (kind, version, language) already published: a version is never edited |
 | `sign_in_required` | 403 | Public links on this server open only for someone signed in to it |
 | `keyChanged` | 409 | A recipient's key changed since it was checked |
 | `keysPendingUpgrade` | 409 | The person's Drive key is still X25519 (identity suite 1): share with them once they have signed in again (docs/plans/pq-shares.md) |
@@ -1151,6 +1154,33 @@ again (`accountKept`), and the answer is the sign-in's, with the session.
 
 **Response:** `200 OK`, as a sign-in; `403 grantInvalid`, also once the
 account's date has passed (it is being deleted).
+
+### Legal documents, acknowledgements and consents
+
+docs/plans/server-personal-data.md, A3 and A4. The operator publishes its
+documents (the text lives at their `url`; the server keeps the SHA-256 of the
+exact text shown). Nothing published means nothing is asked.
+
+- `GET /api/legal/documents` (anyone): the current version of each kind, in
+  every language it was published in: `[{ id, kind, version, language, url,
+  sha256, requiredAtSignup, publishedAt }]`.
+- Sign-up (`POST /api/auth/register`) takes `acknowledgements: [<document
+  id>]`: the current version of each `requiredAtSignup` kind (any language),
+  recorded with the account; `400 acknowledgementsRequired` otherwise.
+- `GET /api/user/legal/pending`: the required documents whose current version
+  the caller hasn't confirmed (shown at the next sign-in);
+  `POST /api/user/legal/acknowledge` `{ documentIds }` confirms them (`204`;
+  `400 documentNotCurrent`).
+- `GET /api/user/consents`: `{ consents: [{ purpose, given, documentId, at }],
+  documents }`, each purpose's latest state and its current text.
+  `PUT /api/user/consents` `{ purpose, given, documentId? }` (`purpose`:
+  `federation_abroad` or `marketing`): giving one names the current document of
+  the purpose's kind when one is published (`400 documentNotCurrent`). Each
+  change is a new row; the records are append-only for the server.
+- Admin: `GET /api/admin/legal/documents` (every version);
+  `POST /api/admin/legal/documents` `{ kind, version, language, url, sha256,
+  requiredAtSignup }` publishes one (`201`; `400` for a malformed field;
+  `409 documentExists`), logged as `legal.publish`. A version is never edited.
 
 ### GET /api/user/security-events
 

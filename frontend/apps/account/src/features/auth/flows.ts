@@ -329,7 +329,12 @@ const registered = new WeakMap<AccountKeys, { data: LoginResponse; keys: Account
  * registered with the keys, so no second sign-in). Safe to call again with
  * the same keys when activating failed: the account is created once.
  */
-export async function registerAndSignIn(username: string, keys: AccountKeys, registrationCode?: string): Promise<void> {
+export async function registerAndSignIn(
+  username: string,
+  keys: AccountKeys,
+  registrationCode?: string,
+  acknowledgements: string[] = [],
+): Promise<void> {
   let done = registered.get(keys)
   if (!done) {
     done = await sendKeys(keys, async (sent) => {
@@ -341,6 +346,8 @@ export async function registerAndSignIn(username: string, keys: AccountKeys, reg
         await api.post<LoginResponse>('/auth/register', {
           username,
           ...(registrationCode ? { registrationCode } : {}),
+          // The operator's documents shown and confirmed (docs/plans/server-personal-data.md, A3).
+          acknowledgements,
           ...registrationBody(sent),
           accountId,
           accountIdProof,

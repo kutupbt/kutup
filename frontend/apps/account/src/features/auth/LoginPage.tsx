@@ -25,6 +25,8 @@ import {
   type SignInResult,
   type TotpChallenge,
 } from './flows'
+import { documentsToConfirm, type LegalDocument } from './legal'
+import { LegalUpdates } from './LegalUpdates'
 import { setPendingSetup } from './pendingSetup'
 
 /**
@@ -41,6 +43,8 @@ export function LoginPage() {
   const [challenge, setChallenge] = useState<TotpChallenge | null>(null)
   // A closing account's offer to keep it (after every step; docs/plans/server-personal-data.md, A5).
   const [closing, setClosing] = useState<ClosingOffer | null>(null)
+  // A required document with a new version, shown once after the sign-in.
+  const [updates, setUpdates] = useState<LegalDocument[] | null>(null)
   const [code, setCode] = useState('')
   // A recovery code in place of the authenticator's (Proton's "use a
   // recovery code"): the server takes either in the same field.
@@ -73,10 +77,13 @@ export function LoginPage() {
     defaultValues: { name: '', password: '' },
   })
 
+  if (updates) return <LegalUpdates documents={updates} onDone={() => void navigate(next, { replace: true })} />
   if (session && !pending) return <Navigate to={next} replace />
 
-  const signedIn = () => {
-    void navigate(next, { replace: true })
+  const signedIn = async () => {
+    const documents = await documentsToConfirm()
+    if (documents.length > 0) setUpdates(documents)
+    else void navigate(next, { replace: true })
   }
 
   const onCredentials = handleSubmit(async ({ name, password }) => {
@@ -92,7 +99,7 @@ export function LoginPage() {
       } else if (result.kind === 'closing') {
         setClosing(result.offer)
       } else {
-        signedIn()
+        await signedIn()
       }
     } catch (err) {
       setError(authErrorMessage(err, t, 'auth.errors.signInFailed'))
@@ -110,7 +117,7 @@ export function LoginPage() {
       const result: SignInResult = await completeTotp(challenge, code.trim())
       // The challenge stays until the offer is answered: they share the open sign-in.
       if (result.kind === 'closing') setClosing(result.offer)
-      else if (result.kind === 'signedIn') signedIn()
+      else if (result.kind === 'signedIn') await signedIn()
     } catch (err) {
       if (err instanceof OpaqueWorkerClosed || bodyCode(err) === 'preAuthInvalid') {
         // The sign-in itself ended (it failed after the code, its first step
@@ -142,7 +149,7 @@ export function LoginPage() {
     setPending(true)
     try {
       const result = await keepAccount(closing)
-      if (result.kind === 'signedIn') signedIn()
+      if (result.kind === 'signedIn') await signedIn()
     } catch (err) {
       // The offer ran out (it lasts minutes), or was used: sign in again.
       if (err instanceof OpaqueWorkerClosed || bodyCode(err) === 'grantInvalid') startOver(t('auth.errors.signInAgain'))

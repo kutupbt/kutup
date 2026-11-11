@@ -395,6 +395,13 @@ All file content and metadata are encrypted client-side; the server stores only 
         crate::drive_federation::proxy_delete,
         // --- admin ---
         crate::handlers::closing::close,
+        crate::legal::get_documents,
+        crate::legal::get_pending,
+        crate::legal::post_acknowledge,
+        crate::legal::get_consents,
+        crate::legal::put_consent,
+        crate::legal::admin_documents,
+        crate::legal::publish,
         crate::handlers::closing::keep,
         crate::handlers::admin::list_users,
         crate::handlers::admin::create_user,
