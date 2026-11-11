@@ -110,6 +110,7 @@ site setting, enforced where it is stored. The lists' "u16 length then zeros to 
 | accountLocalAnchor | Raw(32) incarnation | – | – | none | 16 KiB |
 | revisionSeen | Hashed(scope ‖ id) | – | – | Exact(8) | 8 |
 | mailSearchStoreKey | none | – | – | Exact(32) | 32 |
+| localChainPin | Hashed(scope ‖ id) | – | – | Exact(40) | 40 |
 | joinedMeeting | Raw(16) the row's id | – | – | Fixed(1024) | 1 KiB |
 | chatProfileKeyWrap | Raw(32) profile version | yes | – | Exact(32) | 32 |
 
@@ -268,6 +269,24 @@ there.
   by a browser before this don't open: a guard entry then reads as never
   seen, and the index is built again (browser data goes at the wipe anyway).
 - The generic WASM account-record path refuses both.
+
+## Local chain pins (after slice 5)
+
+- `LocalChainPin` (21): the newest state of an account-private chain a
+  device has seen, its revision or cursor (`u64`, big-endian) and the
+  chain's 32-byte digest (`Exact(40)`). Device-only like `RevisionSeen`, never
+  sent to a server; the object is `hashed_object(master key, purpose, scope ‖
+  id)` (each length-prefixed), also the entry's name. Rust
+  `local_chain_pin::PinKeys`, WASM `LocalChainPins`, and the web store
+  `@kutup/crypto/localChainPins`, which keeps them in the revision guard's
+  IndexedDB store. A pin that is missing or does not open is unseen; a pin
+  never moves back.
+- Users: the Photos library (scope `photos-library`, id the incarnation) and
+  the Chat attachment ledger (scope `chat-attachment-ledger`, id the
+  incarnation, revision the cursor). Their plain `localStorage` pins
+  (`kutup.photos.library.pin.v1.*`, `kutup.chat.attachment-ledger.pin.v1.*`)
+  are removed on the first pin stored, not migrated.
+- The generic WASM account-record path refuses it.
 
 ## Decisions (approved 2026-11-04)
 

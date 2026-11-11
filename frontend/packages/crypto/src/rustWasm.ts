@@ -152,6 +152,7 @@ export interface CryptoWasmModule {
   openMailName(masterKeyBase64: string, binding: string, kind: string, id: string, sealedBase64: string): { value: string; revision: number }
   inspectAccountRecord(envelopeBase64: string): { purpose: number; generation: number }
   RevisionGuardKeys: new (masterKeyBase64: string, binding: string) => import('./revisionGuard').GuardKeys & { free(): void }
+  LocalChainPins: new (masterKeyBase64: string, binding: string) => import('./localChainPins').ChainPinKeys & { free(): void }
   CollabSender: new (account: string, pin: unknown) => import('./accountManifest').CollabSenderHandle
   deliveredFrameSender(delivered: Uint8Array): string
   sealManifestPins(pins: unknown, masterKeyBase64: string, profile: string): string

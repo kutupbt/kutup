@@ -17,6 +17,7 @@ vi.mock('@kutup/crypto/photosLibrary', () => crypto)
 vi.mock('@kutup/drive-core/identity', () => ({ useDriveIdentity: vi.fn() }))
 
 const { loadMarks } = await import('./marks')
+const { resetLocalChainPinsForTesting } = await import('@kutup/crypto/localChainPins')
 
 const me = { userId: 'u', binding: 'b', incarnationId: 'aa'.repeat(32), masterKey: new Uint8Array(32) } as never
 const stored = (revision: number, envelopeDigest = '22'.repeat(32)) => ({ data: { envelope: 'ZW52', revision, envelopeDigest } })
@@ -25,8 +26,23 @@ const notFound = () => Object.assign(new Error('404'), { isAxiosError: true, res
 describe('the Photos library record, as read', () => {
   beforeEach(() => {
     localStorage.clear()
+    resetLocalChainPinsForTesting()
     header.revision = 2
     crypto.photosLibraryDigest.mockResolvedValue('22'.repeat(32))
+  })
+
+  // First: the old pins go once per page, on the first pin stored.
+  it('keeps its pin sealed, not in localStorage, and drops the old plain pins', async () => {
+    localStorage.setItem('kutup.photos.library.pin.v1.' + 'aa'.repeat(32), '{"version":1,"revision":9,"digest":"x"}')
+    localStorage.setItem('kutup.other', 'kept')
+    get.mockResolvedValueOnce(stored(2))
+    await loadMarks(me)
+    expect(localStorage.getItem('kutup.photos.library.pin.v1.' + 'aa'.repeat(32))).toBeNull()
+    expect(localStorage.getItem('kutup.other')).toBe('kept')
+    // The pin held: an older record is refused.
+    header.revision = 1
+    get.mockResolvedValueOnce(stored(1))
+    await expect(loadMarks(me)).rejects.toThrow(/older/)
   })
 
   it('opens a record whose header and digest are what the server says', async () => {

@@ -687,8 +687,8 @@ pub fn inspect_account_record(envelope_base64: &str) -> Result<JsValue, JsValue>
 /// Purposes with typed exports (mail address keys, Pass vault secrets,
 /// organization keys, contact cards, mail names, identity pins, Chat list
 /// entries, joined meetings, the profile key's own copy, the account head, a
-/// device's head state, its revisions seen and its mail-search store key): the
-/// generic
+/// device's head state, its revisions seen, its mail-search store key and its
+/// chain pins): the generic
 /// account-record path never hands their secrets to JavaScript.
 fn generic_account_purpose(value: u16) -> Result<AccountRecordPurpose, JsValue> {
     match AccountRecordPurpose::try_from(value).map_err(|error| js_error(&error.to_string()))? {
@@ -707,7 +707,8 @@ fn generic_account_purpose(value: u16) -> Result<AccountRecordPurpose, JsValue> 
         | AccountRecordPurpose::AccountHead
         | AccountRecordPurpose::AccountLocalAnchor
         | AccountRecordPurpose::RevisionSeen
-        | AccountRecordPurpose::MailSearchStoreKey => Err(js_error(
+        | AccountRecordPurpose::MailSearchStoreKey
+        | AccountRecordPurpose::LocalChainPin => Err(js_error(
             "this account-record purpose has its own typed export",
         )),
         purpose => Ok(purpose),
@@ -3935,6 +3936,98 @@ impl RevisionGuardKeys {
         }
         Ok(revision as f64)
     }
+}
+
+/// The account's keys for its local chain pins (Rust `local_chain_pin`): the
+/// newest state of each account-private chain this device has seen, under
+/// names that do not reveal the chain, sealed to their name.
+#[wasm_bindgen]
+pub struct LocalChainPins {
+    keys: kutup_crypto::local_chain_pin::PinKeys,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct OpenedChainPin {
+    /// Decimal: a u64, which a JavaScript number can't always hold.
+    revision: String,
+    digest_hex: String,
+}
+
+#[wasm_bindgen]
+impl LocalChainPins {
+    /// The keys of the account bound by `binding` (`session.envelopeBinding`).
+    #[wasm_bindgen(constructor)]
+    pub fn new(master_key_base64: &str, binding: &str) -> Result<LocalChainPins, JsValue> {
+        let master_key = master_key_32(master_key_base64)?;
+        Ok(Self {
+            keys: kutup_crypto::local_chain_pin::PinKeys::derive(&master_key, binding)
+                .map_err(|error| js_error(&error.to_string()))?,
+        })
+    }
+
+    /// The device's name for the pin of chain `scope`/`id`.
+    #[wasm_bindgen(js_name = entryId)]
+    pub fn entry_id(&self, scope: &str, id: &str) -> Result<String, JsValue> {
+        self.keys
+            .entry_id(scope, id)
+            .map_err(|error| js_error(&error.to_string()))
+    }
+
+    /// The pin `revision` (decimal u64) and `digest_hex` (32 bytes, lowercase
+    /// hex), sealed for `entry` (base64).
+    #[wasm_bindgen(js_name = sealPin)]
+    pub fn seal_pin(
+        &self,
+        entry: &str,
+        revision: &str,
+        digest_hex: &str,
+    ) -> Result<String, JsValue> {
+        let revision = canonical_u64(revision)
+            .ok_or_else(|| js_error("chain pin: revision is not a canonical u64"))?;
+        let digest = canonical_hex_32(digest_hex)
+            .ok_or_else(|| js_error("chain pin: digest is not 32 bytes of lowercase hex"))?;
+        let sealed = self
+            .keys
+            .seal_pin(
+                entry,
+                &kutup_crypto::local_chain_pin::ChainPin { revision, digest },
+            )
+            .map_err(|error| js_error(&error.to_string()))?;
+        Ok(STANDARD.encode(sealed))
+    }
+
+    /// `{ revision, digestHex }` sealed for `entry`; throws when it was moved,
+    /// sealed for another account, or altered (the caller's "unseen").
+    #[wasm_bindgen(js_name = openPin)]
+    pub fn open_pin(&self, entry: &str, sealed_base64: &str) -> Result<JsValue, JsValue> {
+        let sealed = decode_canonical_base64(sealed_base64, "chain pin")?;
+        let pin = self
+            .keys
+            .open_pin(entry, &sealed)
+            .map_err(|error| js_error(&error.to_string()))?;
+        serde_wasm_bindgen::to_value(&OpenedChainPin {
+            revision: pin.revision.to_string(),
+            digest_hex: hex::encode(pin.digest),
+        })
+        .map_err(|error| js_error(&format!("encode: {error}")))
+    }
+}
+
+/// `value` as a u64 written canonically in decimal (no sign, no leading zero).
+fn canonical_u64(value: &str) -> Option<u64> {
+    let canonical = !value.is_empty()
+        && value.bytes().all(|byte| byte.is_ascii_digit())
+        && (value == "0" || !value.starts_with('0'));
+    canonical.then(|| value.parse().ok()).flatten()
+}
+
+/// `value` as 32 bytes written in lowercase hex.
+fn canonical_hex_32(value: &str) -> Option<[u8; 32]> {
+    if value.len() != 64 || value.bytes().any(|byte| byte.is_ascii_uppercase()) {
+        return None;
+    }
+    hex::decode(value).ok()?.try_into().ok()
 }
 
 // --- Collab senders (docs/plans/one-device-list.md §8, slice 3) --------------

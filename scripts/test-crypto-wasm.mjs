@@ -81,6 +81,20 @@ const reboundGuard = new crypto.RevisionGuardKeys(Buffer.alloc(32, 0x31).toStrin
 assert.throws(() => reboundGuard.openSeen(guardEntry, guardSealed))
 assert.throws(() => new crypto.RevisionGuardKeys(Buffer.alloc(32, 0x31).toString('base64'), 'aci:x@example.com'))
 
+// A device's local chain pins (Rust local_chain_pin): named by a keyed hash,
+// each an account record bound to its entry and the account's key binding.
+const chainPins = new crypto.LocalChainPins(Buffer.alloc(32, 0x31).toString('base64'), guardBinding)
+const pinEntry = chainPins.entryId('photos-library', 'aa'.repeat(32))
+assert.match(pinEntry, /^[0-9a-f]{64}$/)
+assert.notEqual(pinEntry, guardKeys.entryId('photos-library', 'aa'.repeat(32)))
+const pinSealed = chainPins.sealPin(pinEntry, '18446744073709551615', 'ab'.repeat(32))
+assert.deepEqual({ ...chainPins.openPin(pinEntry, pinSealed) }, { revision: '18446744073709551615', digestHex: 'ab'.repeat(32) })
+assert.throws(() => chainPins.openPin(chainPins.entryId('photos-library', 'bb'.repeat(32)), pinSealed))
+assert.throws(() => new crypto.LocalChainPins(Buffer.alloc(32, 0x31).toString('base64'), '7d3f1a2b-9c4e-4f6a-8b1d-2e5c7a9f0b3d').openPin(pinEntry, pinSealed))
+assert.throws(() => guardKeys.openSeen(pinEntry, pinSealed))
+assert.throws(() => chainPins.sealPin(pinEntry, '01', 'ab'.repeat(32)))
+assert.throws(() => chainPins.sealPin(pinEntry, '1', 'AB'.repeat(32)))
+
 // The shared envelope vectors: every purpose's envelope is well formed, and
 // every refused one is refused here as in Rust (malformed ones by inspect;
 // the rest, for the purposes the generic API opens, by open).

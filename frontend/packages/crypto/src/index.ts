@@ -99,6 +99,7 @@ export type {
 export { openContactCard, openMailName, sealContactCard, sealMailName, signContactSummary, verifyContactSummary } from './contactCard'
 export type { ContactSummary, MailNameKind, Revisioned } from './contactCard'
 export { OlderThanSeenError, RevisionGuard, revisionGuard, memoryRevisionStore, type RevisionStore } from './revisionGuard'
+export { LocalChainPins, localChainPins, type ChainPin } from './localChainPins'
 export type { AccountIdentityKeysV1 } from './identity'
 export {
   DRIVE_ENVELOPE_PURPOSE,
