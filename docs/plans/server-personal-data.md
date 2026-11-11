@@ -332,6 +332,23 @@ keeps them; reports on them are operator tooling.
 - **Meeting call links:** a way into a call, not a publication. They aren't
   covered.
 
+**As built (L5):**
+- `crate::public_sharing` holds the three controls and the one check every
+  public route makes first (`ensure_link_up`): `451`/`410 link_blocked`,
+  `410 link_removed`, `410 sharing_off` (with `scope`: `site` or
+  `account`), `403 sign_in_required`. Making a link answers `403
+  sharing_off` while either switch is off; `signed_in` still makes links.
+- The site switch is the site setting `public_sharing` (default `on`), set in
+  Server settings → Accounts and shown in the public settings. The account
+  switch is `users.public_sharing`, on the admin's user page and in
+  `/user/me`.
+- Blocks: `POST`/`DELETE /api/admin/shares/:id/block` (reason `legal_order`,
+  `abuse`, `other`; an admin-only reference), from the Reports page; open
+  reports close as `blocked`. Audited as `share.block`/`share.unblock`.
+- The public pages (Drive folder, Office file, Photos album) say why a link
+  doesn't open, and send the viewer's sign-in when they have one, downloads
+  included; the share dialogs say why links are off instead of offering one.
+
 ## A3 and A4. Notice acknowledgements and consents (separate records)
 
 - **Documents:** `legal_documents(id, kind, version, language, url, sha256,

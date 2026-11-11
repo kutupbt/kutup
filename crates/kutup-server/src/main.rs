@@ -58,6 +58,7 @@ mod openapi;
 mod organizations;
 mod photos;
 mod public_fetch;
+mod public_sharing;
 mod ratelimit;
 mod registration;
 mod remote_manifests;
@@ -2354,6 +2355,10 @@ fn build_router(state: AppState) -> Router {
                 .route(
                     "/api/admin/reports/:id/remove-link",
                     post(link_reports::remove_reported_link),
+                )
+                .route(
+                    "/api/admin/shares/:id/block",
+                    post(link_reports::block_link).delete(link_reports::unblock_link),
                 )
                 .route("/api/admin/feedback", get(feedback::list_feedback))
                 .route(

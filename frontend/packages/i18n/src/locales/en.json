@@ -46,6 +46,12 @@
     "light": "Light theme",
     "system": "Match system theme"
   },
+  "publicSharing": {
+    "off": {
+      "site": "Public links are turned off on this server.",
+      "account": "An administrator turned public links off for your account."
+    }
+  },
   "fileShare": {
     "title": "Share “{{name}}”",
     "description": "They get this file's own key, never its folder's. They see only this file.",

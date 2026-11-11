@@ -407,6 +407,21 @@ export function UserPage() {
             />
           )}
           <ActionRow
+            title={t(user.publicSharing === 'off' ? 'admin.user.publicLinksOff' : 'admin.user.publicLinksOn')}
+            description={t('admin.user.publicLinksHint')}
+            action={
+              <Button variant="outline" size="sm" disabled={update.isPending}
+                onClick={() =>
+                  update.mutate(
+                    { id: user.id, patch: { publicSharing: user.publicSharing === 'off' ? 'on' : 'off' } },
+                    { onError: (error) => toast.error(apiErrorMessage(error, t('admin.user.saveFailed'))) },
+                  )
+                }>
+                {t(user.publicSharing === 'off' ? 'admin.user.publicLinksAllow' : 'admin.user.publicLinksStop')}
+              </Button>
+            }
+          />
+          <ActionRow
             title={user.isAdmin ? t('admin.user.demote') : t('admin.user.promote')}
             description={user.isAdmin ? t('admin.user.demoteHint') : t('admin.user.promoteHint')}
             action={

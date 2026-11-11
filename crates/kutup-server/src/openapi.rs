@@ -364,6 +364,8 @@ All file content and metadata are encrypted client-side; the server stores only 
         crate::handlers::link_reports::list_reports,
         crate::handlers::link_reports::dismiss_report,
         crate::handlers::link_reports::remove_reported_link,
+        crate::handlers::link_reports::block_link,
+        crate::handlers::link_reports::unblock_link,
         // --- Drive federation (shared signed stack + per-share capability) ---
         crate::drive_federation::get_user,
         crate::handlers::accounts::by_id,

@@ -46,6 +46,12 @@
     "light": "Açık tema",
     "system": "Sistem temasını kullan"
   },
+  "publicSharing": {
+    "off": {
+      "site": "Herkese açık bağlantılar bu sunucuda kapalı.",
+      "account": "Bir yönetici hesabınız için herkese açık bağlantıları kapattı."
+    }
+  },
   "fileShare": {
     "title": "“{{name}}” paylaş",
     "description": "Bu dosyanın kendi anahtarını alırlar, klasörünkini asla. Yalnızca bu dosyayı görürler.",

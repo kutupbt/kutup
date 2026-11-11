@@ -643,6 +643,7 @@ pub async fn get_public_settings(
         name_hold_days,
         old_address_receive_days,
         pass_vault_max_bytes: crate::site_settings::pass_vault_max_bytes(&state.pool).await?,
+        public_sharing: crate::public_sharing::site(&state.pool).await?,
     })
     .into_response();
     // A signed-in caller's answer holds its own limits: no shared cache.
@@ -1285,11 +1286,12 @@ pub async fn get_me(State(state): State<AppState>, user: AuthUser) -> AppResult<
         bool,
         String,
         i32,
+        String,
     );
     let row: Option<Row> = sqlx::query_as(
         r#"SELECT id, COALESCE(key_binding, ''), COALESCE(username, ''), public_key, totp_enabled,
                   storage_quota_bytes, storage_used_bytes,
-                  is_admin, COALESCE(color, ''), version_retention_days
+                  is_admin, COALESCE(color, ''), version_retention_days, public_sharing
            FROM users WHERE id = $1"#,
     )
     .bind(parse_uuid(&user.user_id)?)
@@ -1307,6 +1309,7 @@ pub async fn get_me(State(state): State<AppState>, user: AuthUser) -> AppResult<
         is_admin,
         color,
         version_retention_days,
+        public_sharing,
     )) = row
     else {
         return Err(AppError::not_found("user not found"));
@@ -1340,6 +1343,7 @@ pub async fn get_me(State(state): State<AppState>, user: AuthUser) -> AppResult<
         is_admin,
         color,
         version_retention_days,
+        public_sharing,
         renames: crate::models::RenameAnchor {
             sequence: anchor.as_ref().map_or(0, |a| a.0),
             digest: anchor.map(|a| a.1),

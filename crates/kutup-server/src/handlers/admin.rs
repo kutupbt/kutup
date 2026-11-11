@@ -133,6 +133,8 @@ struct UserRow {
     /// Failed tries at deleting a closing account past its date (the job
     /// keeps trying, further apart); 0 when none.
     deletion_attempts: i32,
+    /// Whether it may share by public link: `on` or `off`.
+    public_sharing: String,
     #[serde(rename = "totpEnabled")]
     totp_enabled: bool,
     /// Still on the admin-issued temp password (no key material yet). Gates the
@@ -157,7 +159,7 @@ pub async fn list_users(State(state): State<AppState>, _admin: AdminUser) -> App
     let users: Vec<UserRow> = sqlx::query_as(
         r#"SELECT id, COALESCE(username, '') AS username, storage_quota_bytes, storage_used_bytes,
                   is_admin, is_active, state, suspended_reason, closes_at,
-                  legal_hold_reference, legal_hold_at, deletion_attempts,
+                  legal_hold_reference, legal_hold_at, deletion_attempts, public_sharing,
                   totp_enabled, is_first_login, created_at, is_break_glass AS is_protected
            FROM users ORDER BY created_at DESC"#,
     )
@@ -328,6 +330,7 @@ pub struct UpdateUserRequest {
     storage_quota_bytes: Option<i64>,
     is_active: Option<bool>,
     suspended_reason: Option<String>,
+    public_sharing: Option<String>,
     is_admin: Option<bool>,
 }
 
@@ -466,6 +469,16 @@ pub async fn update_user(
             }
         }
     }
+    if let Some(sharing) = req.public_sharing.as_deref() {
+        if !["on", "off"].contains(&sharing) {
+            return Err(AppError::bad_request("publicSharing must be on or off"));
+        }
+        sqlx::query("UPDATE users SET public_sharing = $1 WHERE id = $2")
+            .bind(sharing)
+            .bind(target)
+            .execute(&state.pool)
+            .await?;
+    }
     if let Some(a) = req.is_admin {
         sqlx::query("UPDATE users SET is_admin = $1 WHERE id = $2")
             .bind(a)
@@ -488,6 +501,9 @@ pub async fn update_user(
     }
     if let Some(a) = req.is_admin {
         changes.insert("isAdmin".into(), json!(a));
+    }
+    if let Some(sharing) = &req.public_sharing {
+        changes.insert("publicSharing".into(), json!(sharing));
     }
     audit(
         &state.pool,
@@ -1013,6 +1029,7 @@ pub async fn get_stats(State(state): State<AppState>, _admin: AdminUser) -> AppR
 )]
 pub async fn get_settings(State(state): State<AppState>, _admin: AdminUser) -> AppResult<Response> {
     let registration_mode = crate::registration::mode(&state).await?;
+    let public_sharing = crate::public_sharing::site(&state.pool).await?;
     let chat_mailbox_retention_days = crate::site_settings::chat_delivery_retention_days(
         &state.pool,
         crate::site_settings::CHAT_MAILBOX_RETENTION_DAYS,
@@ -1040,6 +1057,7 @@ pub async fn get_settings(State(state): State<AppState>, _admin: AdminUser) -> A
     }
     let mut settings = json!({
         "registrationMode": registration_mode,
+        "publicSharing": public_sharing,
         "defaultStorageQuotaBytes": default_storage_quota_bytes,
         "chatMailboxRetentionDays": chat_mailbox_retention_days,
         "chatMediaDeliveryRetentionDays": chat_media_delivery_retention_days,
@@ -1062,6 +1080,7 @@ pub async fn get_settings(State(state): State<AppState>, _admin: AdminUser) -> A
 #[serde(rename_all = "camelCase", default)]
 pub struct UpdateSettingsRequest {
     registration_mode: Option<crate::registration::RegistrationMode>,
+    public_sharing: Option<crate::public_sharing::PublicSharing>,
     default_storage_quota_bytes: Option<i64>,
     chat_mailbox_retention_days: Option<i64>,
     chat_media_delivery_retention_days: Option<i64>,
@@ -1108,6 +1127,7 @@ pub async fn update_settings(
     Json(req): Json<UpdateSettingsRequest>,
 ) -> AppResult<Response> {
     if req.registration_mode.is_none()
+        && req.public_sharing.is_none()
         && req.default_storage_quota_bytes.is_none()
         && req.chat_mailbox_retention_days.is_none()
         && req.chat_media_delivery_retention_days.is_none()
@@ -1224,6 +1244,9 @@ pub async fn update_settings(
     if let Some(mode) = req.registration_mode {
         crate::registration::set_mode(&mut transaction, mode).await?;
     }
+    if let Some(sharing) = req.public_sharing {
+        crate::public_sharing::set_site(&mut transaction, sharing).await?;
+    }
     for (key, value) in [
         (
             crate::storage_pool::DEFAULT_QUOTA_SETTING,
@@ -1311,6 +1334,7 @@ pub async fn update_settings(
         None,
         json!({
             "registrationMode": req.registration_mode,
+            "publicSharing": req.public_sharing,
             "defaultStorageQuotaBytes": req.default_storage_quota_bytes,
             "chatMailboxRetentionDays": req.chat_mailbox_retention_days,
             "chatMediaDeliveryRetentionDays": req.chat_media_delivery_retention_days,

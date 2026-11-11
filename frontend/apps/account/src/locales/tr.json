@@ -708,6 +708,11 @@
       "newTempPassword": "Yeni geçici parola",
       "delete": "Hesabı sil",
       "deleteHint": "Hesabı ve sahip olduğu her şeyi kaldırır.",
+      "publicLinksOn": "Herkese açık bağlantılar: izinli",
+      "publicLinksOff": "Herkese açık bağlantılar: kapalı",
+      "publicLinksHint": "Kapalıyken bu hesap herkese açık bağlantı oluşturamaz ve oluşturdukları açılmaz.",
+      "publicLinksAllow": "İzin ver",
+      "publicLinksStop": "Kapat",
       "deleteHeldHint": "Hesap yasal saklama altındayken silinemez.",
       "close": "Hesabı kapat",
       "closeHint": "Hesabı bekleme süresinden sonra siler; o zamana kadar sahibi oturum açıp hesabı tutabilir.",
@@ -747,6 +752,25 @@
       "noReferralCode": "Davet kodu yok"
     },
     "reports": {
+      "block": "Bağlantıyı engelle",
+      "blockTitle": "Bu bağlantı engellensin mi?",
+      "blockDescription": "{{name}} kullanıcısının paylaştığı bağlantı artık açılmaz. Yasal karar seçilirse “hukuki nedenlerle kullanılamıyor”, başka bir neden seçilirse “engellendi” yanıtını verir. Açık şikâyetleri kapatılır. Engeli daha sonra kaldırabilirsiniz.",
+      "blockReason": "Neden",
+      "blockReasons": {
+        "legal_order": "Yasal karar",
+        "abuse": "Kötüye kullanım",
+        "other": "Başka bir neden"
+      },
+      "blockReference": "Referans (isteğe bağlı)",
+      "blockReferenceHint": "Bir kararın numarası ya da not; yalnızca yöneticiler görür.",
+      "blocked": "Bağlantı engellendi",
+      "unblock": "Engeli kaldır",
+      "unblocked": "Engel kaldırıldı",
+      "blockedAs": {
+        "legal_order": "yasal karar üzerine engellendi",
+        "abuse": "kötüye kullanım nedeniyle engellendi",
+        "other": "engellendi"
+      },
       "title": "Bildirimler",
       "description": "İnsanların bildirdiği herkese açık bağlantılar. Sunucu bir bağlantının gösterdiğini göremez: bildiren eklediyse bağlantıyı açın, ardından bildirimi kapatın, bağlantıyı kaldırın ya da onu oluşturan hesabı devre dışı bırakın (bu, hesabın tüm bağlantılarını kaldırır).",
       "open": "Açık",
@@ -775,6 +799,7 @@
       "disabled": "Hesap devre dışı bırakıldı",
       "actionFailed": "Bu işe yaramadı. Yeniden deneyin.",
       "resolution": {
+        "blocked": "Bağlantı engellendi",
         "dismissed": "Kapatıldı",
         "removed": "Bağlantı kaldırıldı",
         "disabled": "Hesap devre dışı"
@@ -824,6 +849,8 @@
         "unknown": "{{admin}}: {{action}}",
         "mailSendingUpdate": "{{admin}}, {{target}} hesabının posta gönderimini değiştirdi",
         "reportDismiss": "{{admin}}, {{target}} kullanıcısının bir bağlantısıyla ilgili bildirimi kapattı",
+        "shareBlock": "{{admin}}, {{target}} kullanıcısının paylaştığı bir bağlantıyı engelledi",
+        "shareUnblock": "{{admin}}, {{target}} kullanıcısının paylaştığı bir bağlantının engelini kaldırdı",
         "shareRemove": "{{admin}}, {{target}} kullanıcısının herkese açık bir bağlantısını kaldırdı",
         "mailOutsideSendingUpdate": "{{admin}}, dış adreslere kimin gönderebileceğini {{from}} yerine {{to}} yaptı",
         "registrationCodeCreated": "{{admin}} bir davet kodu oluşturdu (…{{hint}})",
@@ -894,6 +921,13 @@
       "saveFailed": "Ayarlar kaydedilemedi.",
       "defaultQuota": "Varsayılan depolama kotası (GiB)",
       "defaultQuotaHint": "Yeni hesapların aldığı alan. Mevcut hesaplar kendi kotalarını korur; birini kullanıcı sayfasından değiştirin.",
+      "publicSharing": "Herkese açık bağlantılar",
+      "publicSharingHint": "“Bağlantıya sahip herkes” ile paylaşılan bağlantıları kimlerin açabileceği. Yalnızca oturum açanlar seçeneği bir deneme sunucusunun bağlantılarını kendi hesaplarıyla sınırlar.",
+      "publicSharingMode": {
+        "on": "Bağlantıya sahip herkes",
+        "signed_in": "Yalnızca burada oturum açanlar",
+        "off": "Kapalı: herkese açık bağlantı yok"
+      },
       "registrationMode": {
         "on": "Herkese açık",
         "code": "Davet koduyla",

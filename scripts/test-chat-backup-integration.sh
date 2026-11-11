@@ -126,6 +126,11 @@ KUTUP_LIVE_SERVER="http://127.0.0.1:$port" \
   cargo test -p kutup-server --test account_closing_live -- --nocapture
 KUTUP_LIVE_DATABASE_URL="postgres://$POSTGRES_USER:$POSTGRES_PASSWORD@127.0.0.1:$db_port/$POSTGRES_DB" \
   cargo test -p kutup-server --bin kutup-server destruction_events::tests::live_ -- --nocapture
+# Share-link controls (docs/plans/server-personal-data.md, A11): an operator's
+# block, the per-account and site-wide switches.
+KUTUP_LIVE_SERVER="http://127.0.0.1:$port" \
+  KUTUP_LIVE_ADMIN="$test_admin_username:$test_admin_password" \
+  cargo test -p kutup-server --test share_controls_live -- --nocapture --test-threads 1
 # The Photos library record (docs/plans/photos.md): this account's chain only.
 KUTUP_LIVE_SERVER="http://127.0.0.1:$port" \
   cargo test -p kutup-server --test photos_library_live -- --nocapture

@@ -708,6 +708,11 @@
       "newTempPassword": "New temporary password",
       "delete": "Delete account",
       "deleteHint": "Removes the account and everything it owns.",
+      "publicLinksOn": "Public links: allowed",
+      "publicLinksOff": "Public links: turned off",
+      "publicLinksHint": "While off, this account makes no public links and the ones it made don't open.",
+      "publicLinksAllow": "Allow",
+      "publicLinksStop": "Turn off",
       "deleteHeldHint": "Not while the account is under a legal hold.",
       "close": "Close account",
       "closeHint": "Deletes the account after the waiting period; until then its owner can sign in and keep it.",
@@ -747,6 +752,25 @@
       "noReferralCode": "No referral code"
     },
     "reports": {
+      "block": "Block link",
+      "blockTitle": "Block this link?",
+      "blockDescription": "The link {{name}} shared stops opening. A legal order makes it answer “unavailable for legal reasons”; any other reason, “blocked”. Its open reports are closed. You can lift the block later.",
+      "blockReason": "Why",
+      "blockReasons": {
+        "legal_order": "A legal order",
+        "abuse": "Abuse",
+        "other": "Another reason"
+      },
+      "blockReference": "Reference (optional)",
+      "blockReferenceHint": "An order's number or a note, seen only by administrators.",
+      "blocked": "Link blocked",
+      "unblock": "Lift the block",
+      "unblocked": "Block lifted",
+      "blockedAs": {
+        "legal_order": "blocked under a legal order",
+        "abuse": "blocked for abuse",
+        "other": "blocked"
+      },
       "title": "Reports",
       "description": "Public links people reported. The server can't see what a link shows: open it when the reporter included it, then dismiss the report, take the link down, or disable the account that made it (which takes all of its links down).",
       "open": "Open",
@@ -775,6 +799,7 @@
       "disabled": "Account disabled",
       "actionFailed": "That did not work. Try again.",
       "resolution": {
+        "blocked": "Link blocked",
         "dismissed": "Dismissed",
         "removed": "Link taken down",
         "disabled": "Account disabled"
@@ -824,6 +849,8 @@
         "unknown": "{{admin}}: {{action}}",
         "mailSendingUpdate": "{{admin}} changed how {{target}} may send mail",
         "reportDismiss": "{{admin}} dismissed a report on a link of {{target}}",
+        "shareBlock": "{{admin}} blocked a link {{target}} shared",
+        "shareUnblock": "{{admin}} lifted the block on a link {{target}} shared",
         "shareRemove": "{{admin}} took down a public link of {{target}}",
         "mailOutsideSendingUpdate": "{{admin}} changed who may send to outside addresses from {{from}} to {{to}}",
         "registrationCodeCreated": "{{admin}} made a referral code (…{{hint}})",
@@ -894,6 +921,13 @@
       "saveFailed": "The settings could not be saved.",
       "defaultQuota": "Default storage quota (GiB)",
       "defaultQuotaHint": "What new accounts get. Existing accounts keep theirs; change one on its user page.",
+      "publicSharing": "Public links",
+      "publicSharingHint": "Who may open links shared with “anyone with the link”. Signed-in only keeps a test server's links among its own accounts.",
+      "publicSharingMode": {
+        "on": "Anyone with the link",
+        "signed_in": "Only people signed in here",
+        "off": "Off: no public links"
+      },
       "registrationMode": {
         "on": "Open to anyone",
         "code": "With a referral code",

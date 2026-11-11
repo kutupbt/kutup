@@ -21,6 +21,8 @@ const ACTION_KEYS: Record<string, string> = {
   'admin.view': 'adminView',
   'report.dismiss': 'reportDismiss',
   'share.remove': 'shareRemove',
+  'share.block': 'shareBlock',
+  'share.unblock': 'shareUnblock',
   'settings.update': 'settingsUpdate',
   'settings.rate_limit': 'rateLimitUpdate',
   'user.rate_limit': 'userRateLimitUpdate',

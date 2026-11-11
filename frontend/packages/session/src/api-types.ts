@@ -88,6 +88,8 @@ export interface UserRow {
   legalHoldReference?: string
   legalHoldAt?: string
   /** Failed tries at deleting this closing account past its date; 0 when none. */
+  /** Whether it may share by public link, as an administrator set it. */
+  publicSharing: 'on' | 'off'
   deletionAttempts: number
   totpEnabled: boolean
   /**
@@ -255,8 +257,12 @@ export interface AccountLimits {
   rateLimits: AccountRateLimitLimit[]
 }
 
+/** Who may open public links (docs/plans/server-personal-data.md, A11). */
+export type PublicSharing = 'on' | 'off' | 'signed_in'
+
 export interface AdminSettings {
   registrationMode: RegistrationMode
+  publicSharing: PublicSharing
   /** The storage quota new accounts get; existing accounts keep theirs. */
   defaultStorageQuotaBytes: number
   chatMailboxRetentionDays: number

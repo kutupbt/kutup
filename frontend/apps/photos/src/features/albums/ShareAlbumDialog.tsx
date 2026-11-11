@@ -6,6 +6,7 @@ import { toast } from 'sonner'
 import { openLinkKey, useFolderAccess, type AccessLink, type Removal } from '@kutup/drive-core/access'
 import { useDriveIdentity } from '@kutup/drive-core/identity'
 import { publicLinkUrl, RecipientNotFound, useCreatePublicLink, useShareFolder } from '@kutup/drive-core/mutations'
+import { sharingOffScope, usePublicSharing } from '@kutup/drive-core/publicSharing'
 import { Button } from '@kutup/ui/components/button'
 import { Checkbox } from '@kutup/ui/components/checkbox'
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@kutup/ui/components/dialog'
@@ -58,6 +59,7 @@ export function ShareAlbumDialog({ album, open, onClose }: { album: Album; open:
   const [email, setEmail] = useState('')
   const [canAdd, setCanAdd] = useState(false)
   const createLink = useCreatePublicLink('photos')
+  const sharingOff = usePublicSharing().data ?? null
   const [created, setCreated] = useState<string | null>(null)
   useEffect(() => {
     if (open) {
@@ -236,7 +238,7 @@ export function ShareAlbumDialog({ album, open, onClose }: { album: Album; open:
             <Button
               variant="outline"
               size="sm"
-              disabled={createLink.isPending}
+              disabled={createLink.isPending || sharingOff !== null}
               onClick={() =>
                 createLink.mutate(album.folder, {
                   onSuccess: (url) => {
@@ -244,7 +246,10 @@ export function ShareAlbumDialog({ album, open, onClose }: { album: Album; open:
                     void queryClient.invalidateQueries({ queryKey: ['folder-access', album.id] })
                     void copy(url)
                   },
-                  onError: () => toast.error(t('share.failed')),
+                  onError: (error) => {
+                    const off = sharingOffScope(error)
+                    toast.error(off ? t(`publicSharing.off.${off}`) : t('share.failed'))
+                  },
                 })
               }
             >
@@ -252,7 +257,9 @@ export function ShareAlbumDialog({ album, open, onClose }: { album: Album; open:
               {t('share.createLink')}
             </Button>
           </div>
-          <p className="text-xs text-muted-foreground">{t('share.linksHint')}</p>
+          <p className="text-xs text-muted-foreground">
+            {sharingOff ? t(`publicSharing.off.${sharingOff}`) : t('share.linksHint')}
+          </p>
           {created ? (
             <Field label={t('share.newLink')}>
               {(field) => <Input {...field} readOnly value={created} onFocus={(e) => e.currentTarget.select()} />}
