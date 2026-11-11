@@ -524,16 +524,20 @@ pub async fn list(pool: &PgPool, user_id: Uuid) -> AppResult<Vec<SessionRow>> {
 }
 
 /// The retention job's part (A10): sessions that ended more than `days` ago
-/// go, with their sealed browser, unless a session forked from one still
-/// lives (deleting a parent ends its children). Returns how many.
+/// go, with their sealed browser, unless a session forked from one ended
+/// later than that, or still lives (deleting a parent takes its children).
+/// Returns how many.
 pub async fn prune_ended(pool: &PgPool, days: i64) -> AppResult<u64> {
     Ok(sqlx::query(
         "DELETE FROM auth_sessions s
           WHERE LEAST(COALESCE(s.revoked_at, s.expires_at), s.expires_at)
                 < now() - make_interval(days => $1::int)
+            -- Nor while a session forked from it is live, or ended within
+            -- the grace period: deleting it would take that one with it.
             AND NOT EXISTS (SELECT 1 FROM auth_sessions c
                              WHERE c.parent_session_id = s.id
-                               AND c.revoked_at IS NULL AND c.expires_at > now())",
+                               AND LEAST(COALESCE(c.revoked_at, c.expires_at), c.expires_at)
+                                   >= now() - make_interval(days => $1::int))",
     )
     .bind(days)
     .execute(pool)
