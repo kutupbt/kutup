@@ -19,7 +19,8 @@ use zeroize::Zeroizing;
 use crate::error::{AppError, AppResult};
 use crate::opaque_setup::OpaqueSetupKeys;
 
-/// The generation every key has until keys are rotated per account.
+/// An account's first key's generation; a key that is lost is followed by
+/// the next one.
 const GENERATION: u32 = 1;
 
 /// How many keys one run of the batched rewrap moves to the current entry.
@@ -31,8 +32,10 @@ fn current(keys: &OpaqueSetupKeys) -> AppResult<(u16, &[u8; 32])> {
 }
 
 /// The account's data key of `generation` (the newest when None), when it
-/// has one, wrapped again under the current entry when an older one wraps
-/// it. Never makes a key: what was sealed under a key that is gone stays
+/// has one that opens. Never makes a key, and never writes: a key under an
+/// older entry moves to the current one by the batched job
+/// ([`rewrap_some`]), so a read takes no lock in its caller's transaction.
+/// What was sealed under a key that is gone, or doesn't open, stays
 /// unreadable ([`open`] says so).
 pub async fn load(
     pool: &PgPool,
@@ -40,7 +43,6 @@ pub async fn load(
     user_id: Uuid,
     generation: Option<u32>,
 ) -> AppResult<Option<DataKey>> {
-    let (current_id, current_entry) = current(keys)?;
     let stored: Option<Vec<u8>> = sqlx::query_scalar(
         "SELECT wrapped FROM account_keys.account_data_keys
           WHERE user_id = $1 AND ($2::integer IS NULL OR generation = $2)
@@ -53,27 +55,57 @@ pub async fn load(
     let Some(wrapped) = stored else {
         return Ok(None);
     };
-    let (entry_id, _) = kutup_crypto::server_data::inspect_wrapped(&wrapped).map_err(internal)?;
-    let key = DataKey::unwrap(&wrapped, user_id.as_bytes(), |id| keys.get(id)).map_err(|_| {
-        AppError::internal(format!(
-            "an account data key does not open under server key list entry {entry_id}"
-        ))
-    })?;
-    if entry_id != current_id {
-        rewrap(pool, user_id, &key, &wrapped, current_id, current_entry).await?;
+    match DataKey::unwrap(&wrapped, user_id.as_bytes(), |id| keys.get(id)) {
+        Ok(key) => Ok(Some(key)),
+        Err(_) => {
+            // There, but it doesn't open: restored from another deployment,
+            // or an entry's bytes changed under its id. Its fields are lost
+            // as if it were gone; the operator is told loudly.
+            lost(pool, user_id, &wrapped);
+            Ok(None)
+        }
     }
-    Ok(Some(key))
+}
+
+/// A key that doesn't open: an error in the log, and the account flagged for
+/// the admin console. Off the caller's connection, so a read never waits.
+fn lost(pool: &PgPool, user_id: Uuid, wrapped: &[u8]) {
+    let entry = kutup_crypto::server_data::inspect_wrapped(wrapped)
+        .map(|(entry, _)| entry.to_string())
+        .unwrap_or_else(|_| "?".into());
+    tracing::error!(
+        %user_id,
+        entry,
+        "an account data key does not open under the server key list: its sealed fields are lost"
+    );
+    let pool = pool.clone();
+    tokio::spawn(async move {
+        let _ = sqlx::query(
+            "UPDATE users SET data_key_lost_at = now() WHERE id = $1 AND data_key_lost_at IS NULL",
+        )
+        .bind(user_id)
+        .execute(&pool)
+        .await;
+    });
 }
 
 /// The account's data key for sealing: its newest generation [`load`]ed, or
-/// made (wrapped under the current entry) when it has none yet. Only sealing
-/// makes one, outside any transaction that holds the account's row.
+/// made (wrapped under the current entry) when it has none that opens: a
+/// lost one is followed by a new generation, so new fields seal again. Only
+/// sealing makes one, outside any transaction that holds the account's row.
 pub async fn key(pool: &PgPool, keys: &OpaqueSetupKeys, user_id: Uuid) -> AppResult<DataKey> {
     if let Some(key) = load(pool, keys, user_id, None).await? {
         return Ok(key);
     }
     let (current_id, current_entry) = current(keys)?;
-    let key = DataKey::generate(GENERATION).map_err(internal)?;
+    let newest: Option<i32> = sqlx::query_scalar(
+        "SELECT max(generation) FROM account_keys.account_data_keys WHERE user_id = $1",
+    )
+    .bind(user_id)
+    .fetch_one(pool)
+    .await?;
+    let generation = newest.map_or(GENERATION, |g| g as u32 + 1);
+    let key = DataKey::generate(generation).map_err(internal)?;
     let wrapped = key
         .wrap(current_entry, current_id, user_id.as_bytes())
         .map_err(internal)?;
@@ -85,7 +117,7 @@ pub async fn key(pool: &PgPool, keys: &OpaqueSetupKeys, user_id: Uuid) -> AppRes
     )
     .bind(user_id)
     .bind(current_id as i16)
-    .bind(GENERATION as i32)
+    .bind(generation as i32)
     .bind(&wrapped)
     .execute(pool)
     .await?
