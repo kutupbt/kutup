@@ -965,10 +965,14 @@ pub async fn login_two_fa(
     }
 
     let account = Uuid::parse_str(&user_id).map_err(|_| AppError::unauthorized("unauthorized"))?;
+    let had_secret = totp_secret.is_some();
     let totp_secret = match totp_secret {
-        Some(sealed) => Some(open_totp_secret(&state, account, &sealed).await?),
+        Some(sealed) => open_totp_secret(&state, account, &sealed).await?,
         None => None,
     };
+    // A secret the account has but nobody can read: only a recovery code (or
+    // a security key) signs in.
+    let lost = had_secret && totp_secret.is_none();
     let valid = totp_secret
         .as_deref()
         .map(|s| totp::validate_totp(s, &req.code))
@@ -1007,6 +1011,11 @@ pub async fn login_two_fa(
             return Err(AppError::too_many_requests(
                 "too many failed attempts, please log in again",
             ));
+        }
+        // The app's secret is gone: say so, so the person uses a recovery
+        // code (the token still holds).
+        if lost {
+            return Err(authenticator_lost());
         }
         // A wrong code: try the code again (the token still holds).
         return Err(AppError::unauthorized("invalid TOTP code")
@@ -1529,7 +1538,11 @@ pub async fn verify_totp(
     let Some(sealed) = sealed else {
         return Err(AppError::bad_request("TOTP not set up"));
     };
-    let secret = open_totp_secret(&state, parse_uuid(&user.user_id)?, &sealed).await?;
+    // A secret being set up whose key is gone: set it up again.
+    let Some(secret) = open_totp_secret(&state, parse_uuid(&user.user_id)?, &sealed).await? else {
+        return Err(AppError::conflict("set the authenticator app up again")
+            .with_details(serde_json::json!({ "code": "authenticatorLost" })));
+    };
 
     if !totp::validate_totp(&secret, &req.code) {
         return Err(AppError::bad_request("invalid code"));
@@ -1726,8 +1739,9 @@ pub(crate) async fn prove_second_factor(
     .bind(user_id)
     .fetch_one(&mut **tx)
     .await?;
+    // A destroyed secret checks no code; a recovery code still does.
     let secret = match sealed {
-        Some(sealed) => Some(open_totp_secret(state, user_id, &sealed).await?),
+        Some(sealed) => open_totp_secret(state, user_id, &sealed).await?,
         None => None,
     };
     if code.is_empty()
@@ -2381,18 +2395,37 @@ async fn seal_totp_secret(state: &AppState, user_id: Uuid, secret: &str) -> AppR
     .await
 }
 
-async fn open_totp_secret(state: &AppState, user_id: Uuid, sealed: &[u8]) -> AppResult<String> {
+/// The authenticator app's secret; None when it is destroyed (its account
+/// data key is gone: a restore brought the sealed secret back without it).
+/// Then no code of the app can be checked: the account signs in with a
+/// recovery code or a security key, or an administrator turns two-step
+/// sign-in off ([`authenticator_lost`]).
+async fn open_totp_secret(
+    state: &AppState,
+    user_id: Uuid,
+    sealed: &[u8],
+) -> AppResult<Option<String>> {
     let row = user_id.to_string();
-    let plain = crate::account_data::open(
+    let Some(plain) = crate::account_data::open(
         &state.pool,
         &state.config.opaque_setup_keys,
         user_id,
         totp_field(&row),
         sealed,
     )
-    .await?;
+    .await?
+    else {
+        return Ok(None);
+    };
     String::from_utf8(plain.to_vec())
+        .map(Some)
         .map_err(|_| AppError::internal("the sealed authenticator secret is not text"))
+}
+
+/// The authenticator app's secret is destroyed: its codes can't be checked.
+fn authenticator_lost() -> AppError {
+    AppError::unauthorized("the authenticator app's secret can't be read")
+        .with_details(serde_json::json!({ "code": "authenticatorLost" }))
 }
 
 #[cfg(test)]

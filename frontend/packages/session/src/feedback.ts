@@ -1,5 +1,5 @@
 import api from './client'
-import { describeUserAgent } from './userAgent'
+import { describeClientFamily, parseUserAgent } from './userAgent'
 import { loadServerSettings } from './apps'
 
 // Feedback from the sidebar of every app (docs/api.md, "Feedback"): sent to
@@ -48,8 +48,8 @@ export function collectFeedbackDetails(): FeedbackDetails {
   if (script) details.version = script.replace(/\.js$/, '')
   // The family only ("Firefox on Linux"), never the whole User-Agent
   // (docs/plans/server-personal-data.md, A10).
-  const { browser, os } = describeUserAgent(navigator.userAgent)
-  details.browser = [browser, os].filter(Boolean).join(' on ') || undefined
+  // Only the parsed family ("Firefox 128 on Linux"), never the raw string.
+  details.browser = describeClientFamily(parseUserAgent(navigator.userAgent)) ?? undefined
   details.language = navigator.language
   details.screen = `${window.innerWidth}×${window.innerHeight}`
   return details

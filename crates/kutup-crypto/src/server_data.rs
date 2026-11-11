@@ -193,6 +193,19 @@ fn wrap_aad(header: &[u8], account_id: &[u8; 16]) -> Vec<u8> {
     [WRAP_AAD, header, account_id.as_slice()].concat()
 }
 
+/// The generation of the key a field was sealed under, without opening it:
+/// which of an account's keys opens it.
+pub fn sealed_generation(sealed: &[u8]) -> Result<u32> {
+    if sealed.len() < FIELD_HEADER_LEN + TAG_LEN || sealed[..2] != FIELD_SUITE.to_be_bytes() {
+        return Err(invalid("not a sealed field"));
+    }
+    let generation = u32::from_be_bytes(sealed[2..6].try_into().expect("4 bytes"));
+    if generation == 0 {
+        return Err(invalid("generations start at 1"));
+    }
+    Ok(generation)
+}
+
 /// A wrapped key's entry id and generation, without opening it (what the
 /// server counts when it checks an entry can be retired).
 pub fn inspect_wrapped(wrapped: &[u8]) -> Result<(u16, u32)> {
@@ -264,6 +277,14 @@ mod tests {
         assert_eq!(destruction_subject(&ENTRY, &ACCOUNT).unwrap(), subject);
         assert_ne!(destruction_subject(&ENTRY, &[0x12; 16]).unwrap(), subject);
         assert_ne!(destruction_subject(&[0x23; 32], &ACCOUNT).unwrap(), subject);
+    }
+
+    #[test]
+    fn a_sealed_field_names_its_keys_generation() {
+        let key = DataKey::generate(3).unwrap();
+        let sealed = key.seal(&field("r"), b"x").unwrap();
+        assert_eq!(sealed_generation(&sealed).unwrap(), 3);
+        assert!(sealed_generation(&sealed[..10]).is_err());
     }
 
     #[test]

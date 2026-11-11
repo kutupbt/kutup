@@ -259,6 +259,21 @@ keeps them; reports on them are operator tooling.
 - Admin access means opening one account's limits, mail-domain overrides or
   mail-sending state: account content is end-to-end encrypted, so these are
   what an admin sees of an account.
+- After review: every admin-log row, the federation ones included, goes
+  through `audit_log::append_in` (in the transaction of what it records). A
+  row is timed after the chain's lock, so id order is time order; one without
+  hashes reads as broken. The retention job deletes by id from the oldest end
+  and records the last row it deleted, with its hash, in `admin_audit_anchor`
+  (the app role may only read it); verification starts there. The app role
+  can't name an admin-log id or move its sequence, a security event's count
+  only grows by one (a trigger), and payloads hold integers only.
+- The security log keeps, per account, the newest of each kind
+  (`security_events_kept_per_kind`, default 100), so repeated failures can't
+  push out a password change; the fold window is `security_event_fold_seconds`
+  (600). A wrong password is recorded off the answer's path, so a real account
+  doesn't answer later than a name that is none.
+- The test stacks (live backup gate, isolated e2e) run as the app role; the
+  bundled compose makes it with a new database (`postgres/initdb`).
 
 ## A10. User agents: a parsed family, sealed, with retention
 

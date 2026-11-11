@@ -377,6 +377,9 @@ async fn main() -> anyhow::Result<()> {
     // there (docs/plans/server-personal-data.md, A2); keys under an older
     // entry move to the current one in batches.
     account_data::install(&config.opaque_setup_keys);
+    account_data::check_cascade(&pool)
+        .await
+        .map_err(anyhow::Error::msg)?;
     account_data::check_entries(&pool, &config.opaque_setup_keys)
         .await
         .map_err(anyhow::Error::msg)?;
@@ -397,13 +400,13 @@ async fn main() -> anyhow::Result<()> {
         let (pool, keys) = (pool.clone(), config.opaque_setup_keys.clone());
         tokio::spawn(async move {
             let mut tick = tokio::time::interval(std::time::Duration::from_secs(60));
+            // One batch a minute, in account order, starting over at the end.
+            let mut after = (uuid::Uuid::nil(), 0);
             loop {
                 tick.tick().await;
-                // A full batch: more may wait, so go on at once.
-                while let Ok(moved) = account_data::rewrap_some(&pool, &keys).await {
-                    if moved < account_data::REWRAP_BATCH as u64 {
-                        break;
-                    }
+                match account_data::rewrap_some(&pool, &keys, after).await {
+                    Ok((_, next)) => after = next.unwrap_or((uuid::Uuid::nil(), 0)),
+                    Err(error) => tracing::warn!("account data key rewrap: {}", error.message),
                 }
             }
         });
@@ -2687,7 +2690,10 @@ async fn prune_logs(pool: &sqlx::PgPool) -> error::AppResult<()> {
     let days = site_settings::SECURITY_EVENT_RETENTION_DAYS
         .load(pool)
         .await?;
-    let events = security_events::prune(pool, days).await?;
+    let kept_per_kind = site_settings::SECURITY_EVENTS_KEPT_PER_KIND
+        .load(pool)
+        .await?;
+    let events = security_events::prune(pool, days, kept_per_kind).await?;
     record_bulk(pool, Category::SecurityEvents, events, "retention").await?;
     let days = site_settings::ADMIN_AUDIT_RETENTION_DAYS.load(pool).await?;
     let audit = audit_log::prune(pool, days).await?;

@@ -165,7 +165,6 @@ impl FederationTrustStore {
                         "sequence": candidate.sequence,
                         "fingerprint": candidate.key.key_id,
                     }),
-                    now,
                 )
                 .await?;
                 FederationPeerObservation::FirstPinned {
@@ -297,7 +296,6 @@ impl FederationTrustStore {
                 "fingerprint": peer.current_key_id,
                 "fingerprintDisplay": grouped_fingerprint(expected_fingerprint)?,
             }),
-            now,
         )
         .await?;
         transaction.commit().await?;
@@ -390,7 +388,6 @@ impl FederationTrustStore {
                 "newFingerprintDisplay": grouped_fingerprint(expected_new_fingerprint)?,
                 "newSequence": candidate.sequence,
             }),
-            now,
         )
         .await?;
         transaction.commit().await?;
@@ -499,7 +496,6 @@ async fn observe_existing(
             "fingerprint": candidate.key.key_id,
             "trust": existing.trust.as_str(),
         }),
-        now,
     )
     .await?;
     Ok(FederationPeerObservation::Advanced {
@@ -549,7 +545,6 @@ async fn quarantine_peer(
             "candidateSequence": candidate.sequence,
             "candidateFingerprint": candidate.key.key_id,
         }),
-        now,
     )
     .await?;
     Ok(())
@@ -709,25 +704,21 @@ async fn lock_domain(
     Ok(())
 }
 
+/// Into the admin log's chain, in this transaction (docs/plans/server-personal-data.md, A8).
 async fn insert_audit(
     transaction: &mut Transaction<'_, Postgres>,
     admin_user_id: Option<Uuid>,
     action: &str,
     payload: serde_json::Value,
-    occurred_at: OffsetDateTime,
 ) -> Result<(), sqlx::Error> {
-    sqlx::query(
-        "INSERT INTO admin_audit_log
-         (admin_user_id, action, target_user_id, payload, occurred_at)
-         VALUES ($1, $2, NULL, $3, $4)",
+    crate::audit_log::append_in(
+        transaction,
+        admin_user_id.unwrap_or_else(Uuid::nil),
+        action,
+        None,
+        &payload,
     )
-    .bind(admin_user_id.unwrap_or_else(Uuid::nil))
-    .bind(action)
-    .bind(payload)
-    .bind(occurred_at)
-    .execute(&mut **transaction)
-    .await?;
-    Ok(())
+    .await
 }
 
 fn validate_exact_fingerprint(value: &str) -> anyhow::Result<()> {

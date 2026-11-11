@@ -6,18 +6,13 @@
 //!
 //! The table is append-only for the server (docs/plans/server-personal-data.md,
 //! A8): it may insert, and raise a failure's `count`, but not change or delete
-//! a row. Old events go by the retention job ([`prune`]): the newest
-//! [`KEEP`] per account, for the days the Privacy and retention setting says.
+//! a row. Old events go by the retention job ([`prune`]), for the days the
+//! Privacy and retention settings say, and past the newest of each kind they
+//! keep per account.
 
 use uuid::Uuid;
 
 use crate::error::AppResult;
-
-/// The most events kept per account.
-pub const KEEP: i64 = 500;
-/// A failed sign-in within this many minutes of the same kind's last one is
-/// counted into it instead of a row of its own.
-const FOLD_MINUTES: i32 = 10;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Kind {
@@ -166,14 +161,14 @@ async fn insert(
     };
     let (acting_client, client_sealed) = match (acting, session) {
         (Some((client, sealed)), Some(session)) => {
-            let family = crate::client_family::open_in(
-                tx,
+            let key = crate::client_family::account_key(tx, user_id).await?;
+            let family = crate::client_family::open_with(
+                &key,
                 user_id,
                 "auth_sessions",
                 session,
                 sealed.as_deref(),
-            )
-            .await?;
+            );
             let sealed =
                 crate::client_family::seal_in(tx, user_id, "account_security_events", id, &family)
                     .await?;
@@ -202,20 +197,30 @@ async fn insert(
 }
 
 /// A repeatable event for `user_id` (a failed sign-in, an admin view):
-/// counted into the same kind's last event
-/// when that is under [`FOLD_MINUTES`] old, else recorded as a new one.
+/// counted into the same kind's last event when that is younger than the fold
+/// window (`security_event_fold_seconds`), else recorded as a new one.
 pub async fn record_folded(pool: &sqlx::PgPool, user_id: Uuid, kind: Kind) -> AppResult<()> {
+    let fold_seconds = crate::site_settings::SECURITY_EVENT_FOLD_SECONDS
+        .load(pool)
+        .await?;
     let mut tx = pool.begin().await?;
+    // One at a time per account and kind: two at once would each find
+    // nothing to fold into and both insert.
+    sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1::text || '/' || $2, 0))")
+        .bind(user_id)
+        .bind(kind.as_str())
+        .execute(&mut *tx)
+        .await?;
     let folded = sqlx::query(
         "UPDATE account_security_events SET count = count + 1
           WHERE id = (SELECT id FROM account_security_events
                        WHERE user_id = $1 AND kind = $2
-                         AND at > now() - make_interval(mins => $3)
+                         AND at > now() - make_interval(secs => $3)
                        ORDER BY at DESC, id DESC LIMIT 1)",
     )
     .bind(user_id)
     .bind(kind.as_str())
-    .bind(FOLD_MINUTES)
+    .bind(fold_seconds as f64)
     .execute(&mut *tx)
     .await?;
     if folded.rows_affected() == 0 {
@@ -226,14 +231,16 @@ pub async fn record_folded(pool: &sqlx::PgPool, user_id: Uuid, kind: Kind) -> Ap
 }
 
 /// The retention job's part: events older than `days`, and past the newest
-/// [`KEEP`] of each account, go. Returns how many. Runs on the owner's
-/// connection when the server has one (the server itself may not delete).
-pub async fn prune(pool: &sqlx::PgPool, days: i64) -> AppResult<u64> {
+/// `kept_per_kind` of their kind for their account, go. Returns how many.
+/// Runs on the owner's connection when the server has one (the server
+/// itself may not delete).
+pub async fn prune(pool: &sqlx::PgPool, days: i64, kept_per_kind: i64) -> AppResult<u64> {
     let gone = sqlx::query(
         "DELETE FROM account_security_events e
           WHERE (e.at < now() - make_interval(days => $1::int)
                  OR e.id IN (SELECT id FROM (
-                        SELECT id, row_number() OVER (PARTITION BY user_id ORDER BY at DESC, id DESC) AS n
+                        SELECT id, row_number() OVER (PARTITION BY user_id, kind
+                                                      ORDER BY at DESC, id DESC) AS n
                           FROM account_security_events) ranked
                       WHERE ranked.n > $2))
             -- A legal hold keeps everything of its account (A5).
@@ -241,7 +248,7 @@ pub async fn prune(pool: &sqlx::PgPool, days: i64) -> AppResult<u64> {
                              WHERE u.id = e.user_id AND u.legal_hold_reference IS NOT NULL)",
     )
     .bind(days)
-    .bind(KEEP)
+    .bind(kept_per_kind)
     .execute(pool)
     .await?;
     Ok(gone.rows_affected())
@@ -292,15 +299,15 @@ pub async fn list(
     .bind(limit)
     .fetch_all(&mut *conn)
     .await?;
+    let key = crate::client_family::account_key(&mut conn, user_id).await?;
     for event in &mut events {
-        event.client = crate::client_family::open_in(
-            &mut conn,
+        event.client = crate::client_family::open_with(
+            &key,
             user_id,
             "account_security_events",
             event.id,
             event.client_sealed.as_deref(),
-        )
-        .await?;
+        );
     }
     Ok(events)
 }

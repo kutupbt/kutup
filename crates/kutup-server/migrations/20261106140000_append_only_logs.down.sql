@@ -1,4 +1,7 @@
-ALTER TABLE admin_audit_log DROP COLUMN row_hash, DROP COLUMN previous_hash;
+DROP TABLE admin_audit_anchor;
+DROP TRIGGER account_security_events_count_step ON account_security_events;
+DROP FUNCTION account_security_events_count_step();
+ALTER TABLE admin_audit_log DROP COLUMN row_hash, DROP COLUMN previous_hash, DROP COLUMN chain_version;
 ALTER TABLE account_security_events DROP COLUMN count;
 ALTER TABLE account_security_events DROP CONSTRAINT account_security_events_kind_check;
 ALTER TABLE account_security_events ADD CONSTRAINT account_security_events_kind_check CHECK (kind = ANY (ARRAY[
