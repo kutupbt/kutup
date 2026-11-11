@@ -1,4 +1,4 @@
-import { expect, test, type Page } from '@playwright/test'
+import { expect, test, type Page } from '../fixtures/test'
 import { appOrigin, appUrl, newAccount, openDrive, registerAccount, signInAsAdmin } from '../fixtures/apps'
 import { createFolder, createNote, item, itemAction, noteLive, openItem, typeAtEnd } from '../fixtures/drive'
 import { createOffice, editorCanvases, openOffice } from '../fixtures/office'

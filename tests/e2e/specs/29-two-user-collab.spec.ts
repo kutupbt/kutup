@@ -1,4 +1,4 @@
-import { expect, test } from '@playwright/test'
+import { expect, test } from '../fixtures/test'
 import { apiUrl, appUrl, newAccount, openDrive, registerAccount } from '../fixtures/apps'
 import { createOffice, officeReady } from '../fixtures/office'
 import { backFromEditor, createFolder, createNote, item, itemAction, noteLive, noteText, openItem, typeAtEnd } from '../fixtures/drive'

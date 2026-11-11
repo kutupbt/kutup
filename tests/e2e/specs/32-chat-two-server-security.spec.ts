@@ -1,4 +1,4 @@
-import { expect, test, type Page, type Request, type Response } from '@playwright/test'
+import { expect, test, type Page, type Request, type Response } from '../fixtures/test'
 import { appUrl, hasSecondaryServer, newAccount, registerAccount, serverDomain, signIn } from '../fixtures/apps'
 import {
   acceptRequest,

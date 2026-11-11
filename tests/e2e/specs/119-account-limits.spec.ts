@@ -1,4 +1,4 @@
-import { expect, test } from '@playwright/test'
+import { expect, test } from '../fixtures/test'
 import { appUrl, newAccount, signInAsAdmin } from '../fixtures/apps'
 
 // An account's own limits (docs/plans/settings-registry.md): on the account's

@@ -1,4 +1,4 @@
-import { expect, test } from '@playwright/test'
+import { expect, test } from '../fixtures/test'
 import { newAccount, openDrive, registerAccount } from '../fixtures/apps'
 import { addRectangle, createWhiteboard, elementCount, historyPanel, saveState, whiteboardReady } from '../fixtures/whiteboard'
 

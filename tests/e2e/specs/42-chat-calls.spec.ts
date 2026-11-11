@@ -3,7 +3,7 @@
 // conversation's chat beside the video, and screen sharing. Group calls come
 // to pairwise groups in slice 4 (docs/plans/pairwise-groups.md).
 
-import { expect, test, type Page } from '@playwright/test'
+import { expect, test, type Page } from '../fixtures/test'
 import { apiUrl, newAccount, registerAccount } from '../fixtures/apps'
 import {
   acceptRequest,

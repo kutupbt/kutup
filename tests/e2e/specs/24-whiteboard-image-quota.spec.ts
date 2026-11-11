@@ -1,4 +1,4 @@
-import { expect, test, type BrowserContext } from '@playwright/test'
+import { expect, test, type BrowserContext } from '../fixtures/test'
 import { appUrl, newAccount, openDrive, registerAccount } from '../fixtures/apps'
 import { item, itemAction, openSection } from '../fixtures/drive'
 import { addImage, createWhiteboard, ONE_PX_PNG } from '../fixtures/whiteboard'

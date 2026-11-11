@@ -1,4 +1,4 @@
-import { expect, test, type Page } from '@playwright/test'
+import { expect, test, type Page } from '../fixtures/test'
 import { appUrl, newAccount, registerAccount, signInAsAdmin } from '../fixtures/apps'
 
 // Outside sending off, set by an administrator under Administration → Mail

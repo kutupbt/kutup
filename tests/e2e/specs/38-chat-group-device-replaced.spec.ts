@@ -1,4 +1,4 @@
-import { expect, test } from '@playwright/test'
+import { expect, test } from '../fixtures/test'
 import { newAccount, registerAccount, signIn } from '../fixtures/apps'
 import { acceptGroup, befriend, composer, createGroup, message, openChat, openChats, openGroup, openSettings, send, startOver } from '../fixtures/chat'
 

@@ -10,7 +10,7 @@
 import { mkdirSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { expect, test, type Page } from '@playwright/test'
+import { expect, test, type Page } from '../fixtures/test'
 import { appUrl, newAccount, openDrive, registerAccount } from '../fixtures/apps'
 import { backFromEditor, createFolder, createNote, noteLive, renameItem } from '../fixtures/drive'
 import { createOffice, officeReady, write } from '../fixtures/office'

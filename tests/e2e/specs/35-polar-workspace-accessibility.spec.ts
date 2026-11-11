@@ -1,5 +1,5 @@
 import AxeBuilder from '@axe-core/playwright'
-import { expect, test, type Page } from '@playwright/test'
+import { expect, test, type Page } from '../fixtures/test'
 import { appUrl, newAccount, registerAccount, type App } from '../fixtures/apps'
 
 type ThemePreference = 'light' | 'dark' | 'system'

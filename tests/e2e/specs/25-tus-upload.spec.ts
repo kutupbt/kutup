@@ -11,7 +11,7 @@
 //   3. The bounded-memory multipart fallback (/api/files/upload) is not
 //      used for an ordinary upload.
 
-import { expect, test } from '@playwright/test'
+import { expect, test } from '../fixtures/test'
 import { newAccount, openDrive, registerAccount } from '../fixtures/apps'
 
 const PASSWORD = 'Deneme123*TusUploadPassword'

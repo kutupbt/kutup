@@ -1,4 +1,4 @@
-import { expect, test, type BrowserContext } from '@playwright/test'
+import { expect, test, type BrowserContext } from '../fixtures/test'
 import { appUrl, newAccount, registerAccount, signIn } from '../fixtures/apps'
 
 const PASSWORD = 'Deneme123*CalendarPassword'

@@ -1,7 +1,7 @@
 import { execFileSync } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
 import { dirname, resolve } from 'node:path'
-import { expect, test, type BrowserContext, type Page } from '@playwright/test'
+import { expect, test, type BrowserContext, type Page } from '../fixtures/test'
 import { apiUrl, hasSecondaryServer, newAccount, registerAccount, serverDomain, signIn, type Server } from '../fixtures/apps'
 import {
   acceptGroup,

@@ -10,7 +10,7 @@
 import { createHash } from 'node:crypto'
 import { createReadStream, createWriteStream } from 'node:fs'
 import { mkdir, readFile, stat } from 'node:fs/promises'
-import { expect, test, type BrowserContext, type Page } from '@playwright/test'
+import { expect, test, type BrowserContext, type Page } from '../fixtures/test'
 import { appUrl, newAccount, openDrive, registerAccount } from '../fixtures/apps'
 import { createFolder, item, itemAction, openItem } from '../fixtures/drive'
 

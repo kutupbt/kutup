@@ -1,4 +1,4 @@
-import { expect, test } from '@playwright/test'
+import { expect, test } from '../fixtures/test'
 import { editorCanvases, freshOfficeFile, officeReady, openOffice, write } from '../fixtures/office'
 
 const PASSWORD = 'Deneme123*OfficeHistoryPassword'

@@ -1,7 +1,7 @@
 // A server with CHAT_GROUPS=false offers direct chats only. Skips on a stack
 // that offers groups.
 
-import { expect, test } from '@playwright/test'
+import { expect, test } from '../fixtures/test'
 import { apiUrl, newAccount, registerAccount } from '../fixtures/apps'
 import { acceptRequest, message, openChat, openConversationWith, openDirectChat, send } from '../fixtures/chat'
 

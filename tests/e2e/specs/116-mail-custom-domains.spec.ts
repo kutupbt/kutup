@@ -1,6 +1,6 @@
 import { writeFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { expect, test, type Locator, type Page } from '@playwright/test'
+import { expect, test, type Locator, type Page } from '../fixtures/test'
 import { appUrl, newAccount, registerAccount, signInAsAdmin } from '../fixtures/apps'
 
 // Custom domains (docs/plans/mail-custom-domains.md §11), Proton's settings

@@ -1,6 +1,6 @@
 import { execSync } from 'node:child_process'
 import { createHmac } from 'node:crypto'
-import { expect, test, type Page } from '@playwright/test'
+import { expect, test, type Page } from '../fixtures/test'
 import { appUrl, newAccount, registerAccount, submitThroughRateLimit } from '../fixtures/apps'
 
 // The password through OPAQUE (docs/plans/opaque.md): changing it in Account

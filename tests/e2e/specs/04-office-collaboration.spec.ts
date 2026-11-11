@@ -1,4 +1,4 @@
-import { expect, test, type Browser } from '@playwright/test'
+import { expect, test, type Browser } from '../fixtures/test'
 import { appUrl, newAccount, openDrive, registerAccount } from '../fixtures/apps'
 import { item, openItem } from '../fixtures/drive'
 import {

@@ -1,4 +1,4 @@
-import { expect, test, type Page, type Request } from '@playwright/test'
+import { expect, test, type Page, type Request } from '../fixtures/test'
 import { newAccount, registerAccount, signIn } from '../fixtures/apps'
 import { backupCursor, bubble, openChat, openChats, openNoteToSelf, send, waitForProtection } from '../fixtures/chat'
 import { recordSafeCheckpoint } from '../safe-diagnostics'

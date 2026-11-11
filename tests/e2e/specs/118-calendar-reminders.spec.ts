@@ -1,4 +1,4 @@
-import { expect, test, type BrowserContext, type Page } from '@playwright/test'
+import { expect, test, type BrowserContext, type Page } from '../fixtures/test'
 import { appUrl, newAccount, registerAccount } from '../fixtures/apps'
 
 // Reminders in the app (docs/plans/calendar.md, E2b-3), as Proton's: an

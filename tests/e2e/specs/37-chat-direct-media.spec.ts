@@ -5,7 +5,7 @@
 // federation decides only whether other servers can be reached; it must not
 // switch sealed delivery off on the server itself.
 
-import { expect, test, type Browser, type Page } from '@playwright/test'
+import { expect, test, type Browser, type Page } from '../fixtures/test'
 import { apiUrl, appUrl, newAccount, registerAccount, signInAsAdmin } from '../fixtures/apps'
 import { acceptRequest, message, openChat, openConversationWith, openDirectChat, send, sendAttachment } from '../fixtures/chat'
 

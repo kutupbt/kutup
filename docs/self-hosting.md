@@ -105,6 +105,16 @@ name) stops it with exit code 2 and the full list of problems, never a silent
 default. `kutup-server check-config` runs that check alone (no database, no
 migrations); run it against a new image and your `.env` before switching over.
 
+**Content-Security-Policy.** The web apps' strict policy
+([`content-security-policy.md`](content-security-policy.md)) is sent
+report-only beside the older, looser one, and browsers report what it would
+block to the server's log (warn level, `content security policy
+violation`). Three settings reach the frontend container: `CHAT_SFU_URL`
+(Chat may connect to the group-call SFU), `KUTUP_MAP_DIRECT_ORIGINS` (also
+read by the server; see Maps) and `KUTUP_CSP_ENFORCE=1`, which enforces the
+strict policy and drops the old one. A deployment that runs the frontend
+image without the compose file must pass them itself.
+
 **Rate limits** are administrators' settings: Administration → Rate limits
 lists every limit the server keeps (sign-in, Drive, Chat, groups, Mail, calls
 and maps, Pass, federation, the admin API), what it counts and per what, its
@@ -863,6 +873,15 @@ offered: its [tile usage policy](https://operations.osmfoundation.org/policies/t
 does not allow fetching the same tiles repeatedly. If your own tile server
 is only reachable from the Kutup server (e.g. on the Docker network), set
 map traffic to **always**.
+
+Browsers may load maps straight from a provider only if its origin is in
+`KUTUP_MAP_DIRECT_ORIGINS` (comma-separated, e.g.
+`https://tile.openstreetmap.org,https://tiles.openfreemap.org`), which both
+the backend and the frontend container read: the apps' Content-Security-Policy
+allows those origins and no others. Blank (the default), every map comes
+through the relay whatever the Maps page says; the page marks providers that
+are relay-only, and **off** is accepted only when every offered provider is
+listed.
 
 The Maps app (`KUTUP_MAPS_URL`, e.g. `maps.example.org`, served by the same
 frontend image) keeps people's place lists. Each list is an encrypted Drive
