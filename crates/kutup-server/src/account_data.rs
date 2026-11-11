@@ -30,20 +30,26 @@ fn current(keys: &OpaqueSetupKeys) -> AppResult<(u16, &[u8; 32])> {
         .ok_or_else(|| AppError::internal("the server key list (OPAQUE_SETUP_KEYS) is empty"))
 }
 
-/// The account's data key, when it has one, wrapped again under the current
-/// entry when an older one wraps it. Never makes a key: what was sealed under
-/// a key that is gone stays unreadable ([`open`] says so).
+/// The account's data key of `generation` (the newest when None), when it
+/// has one, wrapped again under the current entry when an older one wraps
+/// it. Never makes a key: what was sealed under a key that is gone stays
+/// unreadable ([`open`] says so).
 pub async fn load(
     pool: &PgPool,
     keys: &OpaqueSetupKeys,
     user_id: Uuid,
+    generation: Option<u32>,
 ) -> AppResult<Option<DataKey>> {
     let (current_id, current_entry) = current(keys)?;
-    let stored: Option<Vec<u8>> =
-        sqlx::query_scalar("SELECT wrapped FROM account_keys.account_data_keys WHERE user_id = $1")
-            .bind(user_id)
-            .fetch_optional(pool)
-            .await?;
+    let stored: Option<Vec<u8>> = sqlx::query_scalar(
+        "SELECT wrapped FROM account_keys.account_data_keys
+          WHERE user_id = $1 AND ($2::integer IS NULL OR generation = $2)
+          ORDER BY generation DESC LIMIT 1",
+    )
+    .bind(user_id)
+    .bind(generation.map(|g| g as i32))
+    .fetch_optional(pool)
+    .await?;
     let Some(wrapped) = stored else {
         return Ok(None);
     };
@@ -59,11 +65,11 @@ pub async fn load(
     Ok(Some(key))
 }
 
-/// The account's data key for sealing: [`load`]ed, or made (wrapped under the
-/// current entry) when it has none yet. Only sealing makes one, outside any
-/// transaction that holds the account's row.
+/// The account's data key for sealing: its newest generation [`load`]ed, or
+/// made (wrapped under the current entry) when it has none yet. Only sealing
+/// makes one, outside any transaction that holds the account's row.
 pub async fn key(pool: &PgPool, keys: &OpaqueSetupKeys, user_id: Uuid) -> AppResult<DataKey> {
-    if let Some(key) = load(pool, keys, user_id).await? {
+    if let Some(key) = load(pool, keys, user_id, None).await? {
         return Ok(key);
     }
     let (current_id, current_entry) = current(keys)?;
@@ -75,7 +81,7 @@ pub async fn key(pool: &PgPool, keys: &OpaqueSetupKeys, user_id: Uuid) -> AppRes
     let made = sqlx::query(
         "INSERT INTO account_keys.account_data_keys
              (user_id, sealing_key_id, generation, wrapped)
-         VALUES ($1, $2, $3, $4) ON CONFLICT (user_id) DO NOTHING",
+         VALUES ($1, $2, $3, $4) ON CONFLICT (user_id, generation) DO NOTHING",
     )
     .bind(user_id)
     .bind(current_id as i16)
@@ -87,7 +93,7 @@ pub async fn key(pool: &PgPool, keys: &OpaqueSetupKeys, user_id: Uuid) -> AppRes
     if made == 1 {
         return Ok(key);
     }
-    load(pool, keys, user_id)
+    load(pool, keys, user_id, None)
         .await?
         .ok_or_else(|| AppError::internal("an account data key went while it was made"))
 }
@@ -107,16 +113,21 @@ async fn rewrap(
         .map_err(internal)?;
     sqlx::query(
         "UPDATE account_keys.account_data_keys SET sealing_key_id = $2, wrapped = $3
-          WHERE user_id = $1 AND wrapped = $4",
+          WHERE user_id = $1 AND generation = $5 AND wrapped = $4",
     )
     .bind(user_id)
     .bind(current_id as i16)
     .bind(&wrapped)
     .bind(old)
+    .bind(key.generation() as i32)
     .execute(pool)
     .await?;
     Ok(())
 }
+
+/// Where the batched rewrap goes on from: the last account and generation it
+/// read (the nil account and 0 to start).
+pub type RewrapCursor = (Uuid, i32);
 
 /// Moves up to [`REWRAP_BATCH`] keys still wrapped under an older entry to the
 /// current one, in account order from after `after`. Returns how many it
@@ -126,24 +137,28 @@ async fn rewrap(
 pub async fn rewrap_some(
     pool: &PgPool,
     keys: &OpaqueSetupKeys,
-    after: Uuid,
-) -> AppResult<(u64, Option<Uuid>)> {
+    after: RewrapCursor,
+) -> AppResult<(u64, Option<RewrapCursor>)> {
     let (current_id, current_entry) = current(keys)?;
-    let rows: Vec<(Uuid, Vec<u8>)> = sqlx::query_as(
-        "SELECT user_id, wrapped FROM account_keys.account_data_keys
-          WHERE sealing_key_id <> $1 AND user_id > $3
-          ORDER BY user_id LIMIT $2",
+    let rows: Vec<(Uuid, i32, Vec<u8>)> = sqlx::query_as(
+        "SELECT user_id, generation, wrapped FROM account_keys.account_data_keys
+          WHERE sealing_key_id <> $1 AND (user_id, generation) > ($3, $4)
+          ORDER BY user_id, generation LIMIT $2",
     )
     .bind(current_id as i16)
     .bind(REWRAP_BATCH)
-    .bind(after)
+    .bind(after.0)
+    .bind(after.1)
     .fetch_all(pool)
     .await?;
     let next = (rows.len() as i64 == REWRAP_BATCH)
-        .then(|| rows.last().map(|(user_id, _)| *user_id))
+        .then(|| {
+            rows.last()
+                .map(|(user_id, generation, _)| (*user_id, *generation))
+        })
         .flatten();
     let mut moved = 0;
-    for (user_id, wrapped) in rows {
+    for (user_id, _, wrapped) in rows {
         let Ok(key) = DataKey::unwrap(&wrapped, user_id.as_bytes(), |id| keys.get(id)) else {
             // Its entry is missing: `check_entries` stops the server before
             // this runs, so this is a key changed meanwhile; left as it is.
@@ -243,7 +258,8 @@ pub async fn open(
     (table, column, row): (&str, &str, &str),
     sealed: &[u8],
 ) -> AppResult<Option<Zeroizing<Vec<u8>>>> {
-    let Some(key) = load(pool, keys, user_id).await? else {
+    let generation = kutup_crypto::server_data::sealed_generation(sealed).map_err(internal)?;
+    let Some(key) = load(pool, keys, user_id, Some(generation)).await? else {
         tracing::warn!(%user_id, table, column, "a sealed field has no account data key");
         return Ok(None);
     };
