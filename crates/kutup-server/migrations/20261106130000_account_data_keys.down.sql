@@ -1,3 +1,4 @@
+ALTER TABLE users DROP COLUMN data_key_lost_at;
 -- The secrets are gone with their sealed column: two-step sign-in by the
 -- authenticator app is off for every account.
 UPDATE users SET totp_enabled = false WHERE totp_enabled;
