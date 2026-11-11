@@ -384,11 +384,11 @@ async fn main() -> anyhow::Result<()> {
         tokio::spawn(async move {
             let mut tick = tokio::time::interval(std::time::Duration::from_secs(60));
             // One batch a minute, in account order, starting over at the end.
-            let mut after = uuid::Uuid::nil();
+            let mut after = (uuid::Uuid::nil(), 0);
             loop {
                 tick.tick().await;
                 match account_data::rewrap_some(&pool, &keys, after).await {
-                    Ok((_, next)) => after = next.unwrap_or(uuid::Uuid::nil()),
+                    Ok((_, next)) => after = next.unwrap_or((uuid::Uuid::nil(), 0)),
                     Err(error) => tracing::warn!("account data key rewrap: {}", error.message),
                 }
             }
