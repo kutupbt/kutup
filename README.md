@@ -299,7 +299,7 @@ kutup --help
 kutup version
 ```
 
-Large files go either way: the browser encrypts 5 MB at a time as each part is sent (memory stays at about two parts, and an upload goes on after a lost connection or a reload), and the CLI streams `crypto_secretstream` (XChaCha20-Poly1305, 5 MB chunks) over a Rust reader at constant ~5 MB memory, which suits scripts, servers and very large datasets.
+Large files go either way: the browser encrypts 5 MB at a time as each part is sent (memory stays at about two parts, and an upload goes on after a lost connection or a reload), and the CLI seals the same 4 MiB blocks (XChaCha20-Poly1305, a signed manifest of block hashes) over a Rust reader with a few blocks in memory, resumes an interrupted upload from wherever the server stopped, and reads files back block by block with ranged requests, which suits scripts, servers and very large datasets.
 
 ---
 

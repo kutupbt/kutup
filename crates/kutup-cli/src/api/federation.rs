@@ -95,31 +95,6 @@ impl Client {
         super::decode_json(resp)
     }
 
-    /// Streams the encrypted bytes of a file in a federated share (no total
-    /// timeout), for the bounded-memory download path.
-    pub fn proxy_download_stream(
-        &self,
-        share_id: &str,
-        file_id: &str,
-    ) -> Result<reqwest::blocking::Response> {
-        let resp = self
-            .upload_request(
-                Method::GET,
-                &format!("/drive/federation/shares/{share_id}/files/{file_id}/content"),
-            )
-            .send()?;
-        if resp.status().as_u16() >= 400 {
-            return Err(super::api_error(resp));
-        }
-        Ok(resp)
-    }
-
-    /// Downloads encrypted bytes of a file in a federated share. Mirrors `ProxyDownload`.
-    pub fn proxy_download(&self, share_id: &str, file_id: &str) -> Result<Vec<u8>> {
-        let resp = self.proxy_download_stream(share_id, file_id)?;
-        Ok(resp.bytes()?.to_vec())
-    }
-
     /// Uploads an encrypted file through the signed Drive adapter.
     pub fn proxy_upload_file(
         &self,
@@ -128,9 +103,9 @@ impl Client {
         metadata_envelope: &str,
         file_key_envelope: &str,
         name_hash: &str,
-        encrypted_content: Vec<u8>,
+        revision: &crate::transfer::SealedRevision,
     ) -> Result<ProxyUploadResponse> {
-        let part = Part::bytes(encrypted_content)
+        let part = Part::bytes(revision.bytes.clone())
             .file_name("blob")
             .mime_str("application/octet-stream")?;
         let form = Form::new()
@@ -138,6 +113,14 @@ impl Client {
             .text("metadataEnvelope", metadata_envelope.to_string())
             .text("fileKeyEnvelope", file_key_envelope.to_string())
             .text("nameHash", name_hash.to_string())
+            // The block format: the revision, its record, and the first
+            // metadata revision; the upload commits inline.
+            .text("revisionId", revision.content.revision_id.clone())
+            .text("metadataRevision", "1")
+            .text(
+                "revisionContentEnvelope",
+                revision.revision_content_envelope.clone(),
+            )
             .part("file", part);
         let resp = self
             .request(

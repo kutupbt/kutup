@@ -159,10 +159,15 @@ impl Me {
 
 /// Looks `account` up, here or through its server: one lookup, one answer.
 pub fn published(ctx: &Ctx, account: &str) -> Result<Published> {
+    published_with(&ctx.client, account)
+}
+
+/// [`published`], with a client alone.
+pub fn published_with(client: &crate::api::Client, account: &str) -> Result<Published> {
     let (_, server) = account
         .split_once('@')
         .ok_or_else(|| anyhow!("{account} is not an account address (user@server)"))?;
-    let user = ctx.client.get_user_by_address(account)?;
+    let user = client.get_user_by_address(account)?;
     if user.server != server {
         bail!(
             "the lookup for {account} answered for an account on {}",
@@ -207,7 +212,7 @@ fn hpke_key(value: &str) -> Option<[u8; kutup_crypto::hpke_xwing::PUBLIC_KEY_LEN
 
 /// The person's binding holds for their X-Wing Drive key (identity suite 2);
 /// a suite-1 account isn't bound until it upgrades.
-fn bound(person: &Published) -> bool {
+pub(crate) fn bound(person: &Published) -> bool {
     if person.identity_suite < 2 || person.binding_epoch == 0 {
         return false;
     }

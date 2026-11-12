@@ -3,15 +3,15 @@
 
 use anyhow::{Context, Result};
 use reqwest::blocking::multipart::{Form, Part};
-use reqwest::blocking::Response;
 use reqwest::Method;
 use serde::{Deserialize, Serialize};
 
 use super::Client;
+use crate::transfer::{ByteRange, Ranged};
 
 /// A version to store with `POST /files/:id/versions` (multipart, one request:
 /// the server measures and charges the body; docs/plans/drive-versions-v2.md).
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone)]
 pub struct NewVersion {
     /// `file` (the whole file) or `yjs` (a note's collaboration state).
     pub kind: String,
@@ -23,6 +23,13 @@ pub struct NewVersion {
     /// (an id, or [`ORIGINAL`]); otherwise `409` with
     /// `ApiError::version_conflict`.
     pub based_on: Option<String>,
+    /// The block-format revision it is (`revisionId`), its sealed content
+    /// record, and the file's next metadata committing to it (a whole file)
+    /// or naming it as the saved state (`yjs`): the save commits inline.
+    pub revision_id: String,
+    pub revision_content_envelope: String,
+    pub metadata_envelope: String,
+    pub metadata_revision: u64,
 }
 
 /// Names the original upload where a version id is expected.
@@ -68,84 +75,100 @@ pub struct VersionRow {
     /// upload, or not recorded).
     #[serde(default)]
     pub parent_version_id: Option<String>,
+    /// A block-format version's sealed content record (`RevisionContent`):
+    /// opened first, then the version's object against it.
+    #[serde(default)]
+    pub revision_content_envelope: Option<String>,
 }
 
-fn ok_stream(resp: Response, what: &'static str) -> Result<Response> {
-    if resp.status().as_u16() >= 400 {
-        return Err(super::api_error(resp)).context(what);
+/// Where a revision of a file is read from.
+#[derive(Clone, Debug)]
+pub enum ContentRoute<'a> {
+    /// `/files/{id}/download`: the current content.
+    Current(&'a str),
+    /// `/files/{id}/versions/{vid}/download`.
+    Version(&'a str, &'a str),
+    /// `/files/{id}/original`: the original upload.
+    Original(&'a str),
+    /// A file in a folder shared from another server.
+    Federated { share_id: &'a str, file_id: &'a str },
+    /// A file behind a public link (anonymous: the token is the capability).
+    Public { token: &'a str, file_id: &'a str },
+}
+
+impl ContentRoute<'_> {
+    fn path(&self) -> String {
+        match self {
+            ContentRoute::Current(id) => format!("/files/{id}/download"),
+            ContentRoute::Version(id, vid) => format!("/files/{id}/versions/{vid}/download"),
+            ContentRoute::Original(id) => format!("/files/{id}/original"),
+            ContentRoute::Federated { share_id, file_id } => {
+                format!("/drive/federation/shares/{share_id}/files/{file_id}/content")
+            }
+            ContentRoute::Public { token, file_id } => format!("/share/{token}/download/{file_id}"),
+        }
     }
-    Ok(resp)
+}
+
+/// `bytes a-b/total` → total.
+fn content_range_total(value: &str) -> Option<u64> {
+    value
+        .strip_prefix("bytes ")?
+        .rsplit_once('/')?
+        .1
+        .parse()
+        .ok()
 }
 
 impl Client {
+    /// One ranged read of a revision's object (docs/api.md, "Ranges"): a
+    /// `206` with its part and the whole length, or a `200` with the whole
+    /// object, cut to the range here.
+    pub fn get_range(&self, route: &ContentRoute<'_>, range: ByteRange) -> Result<Ranged> {
+        let ByteRange::Span(a, b) = range;
+        let value = format!("bytes={a}-{b}");
+        let resp = self
+            .upload_request(Method::GET, &route.path())
+            .header(reqwest::header::RANGE, value)
+            .send()?;
+        let status = resp.status().as_u16();
+        if status >= 400 {
+            return Err(super::api_error(resp)).context("download");
+        }
+        let header = |name: &str| {
+            resp.headers()
+                .get(name)
+                .and_then(|v| v.to_str().ok())
+                .map(str::to_owned)
+        };
+        let revision = header("x-kutup-revision");
+        let revision_content = header("x-kutup-revision-content");
+        let version = header("x-kutup-version");
+        let total = header("content-range")
+            .as_deref()
+            .and_then(content_range_total);
+        let bytes = resp.bytes().context("download")?.to_vec();
+        let mut ranged = if status == 206 {
+            Ranged {
+                bytes,
+                total: total.ok_or_else(|| anyhow::anyhow!("a 206 without Content-Range"))?,
+                ..Default::default()
+            }
+        } else {
+            crate::transfer::slice_whole(&bytes, range)
+        };
+        ranged.revision = revision;
+        ranged.revision_content = revision_content;
+        ranged.version = version;
+        Ok(ranged)
+    }
+
     /// Lists a file's snapshot versions, newest-first. Mirrors `ListVersions`.
     pub fn list_versions(&self, file_id: &str) -> Result<Vec<VersionRow>> {
         let resp = self
             .request(Method::GET, &format!("/files/{file_id}/versions"))
             .send()?;
         super::decode_json(resp)
-    }
-
-    /// Streams the main `/files/:id/download` blob (no total timeout).
-    /// Mirrors `DownloadFileStream`.
-    pub fn download_file_stream(&self, file_id: &str) -> Result<Response> {
-        let resp = self
-            .upload_request(Method::GET, &format!("/files/{file_id}/download"))
-            .send()?;
-        ok_stream(resp, "download")
-    }
-
-    /// Streams the file's current content with the version it is: an id, or
-    /// [`ORIGINAL`] (`None` from a server that does not say).
-    pub fn download_current_stream(&self, file_id: &str) -> Result<(Response, Option<String>)> {
-        let resp = self.download_file_stream(file_id)?;
-        let version = resp
-            .headers()
-            .get("x-kutup-version")
-            .and_then(|v| v.to_str().ok())
-            .map(str::to_owned);
-        Ok((resp, version))
-    }
-
-    /// The original upload's encrypted bytes, while the server keeps it.
-    pub fn download_original(&self, file_id: &str) -> Result<Vec<u8>> {
-        let resp = self
-            .upload_request(Method::GET, &format!("/files/{file_id}/original"))
-            .send()?;
-        Ok(ok_stream(resp, "download original")?.bytes()?.to_vec())
-    }
-
-    /// Streams a specific version's blob. Mirrors `DownloadVersionStream`.
-    pub fn download_version_stream(&self, file_id: &str, version_id: &str) -> Result<Response> {
-        let resp = self
-            .upload_request(
-                Method::GET,
-                &format!("/files/{file_id}/versions/{version_id}/download"),
-            )
-            .send()?;
-        ok_stream(resp, "download version")
-    }
-
-    /// Returns a readable stream of the latest encrypted content, preferring the
-    /// newest version snapshot and falling back to the main blob. The bool is
-    /// true iff a snapshot won. Mirrors `LatestEncryptedStream`.
-    pub fn latest_encrypted_stream(&self, file_id: &str) -> Result<(Response, bool)> {
-        if let Ok(versions) = self.list_versions(file_id) {
-            if let Some(newest) = versions.first() {
-                if let Ok(rc) = self.download_version_stream(file_id, &newest.id) {
-                    return Ok((rc, true));
-                }
-            }
-        }
-        let rc = self.download_file_stream(file_id)?;
-        Ok((rc, false))
-    }
-
-    /// Downloads a specific version's encrypted bytes into memory (snapshots are
-    /// small). Mirrors `DownloadVersion`.
-    pub fn download_version(&self, file_id: &str, version_id: &str) -> Result<Vec<u8>> {
-        let resp = self.download_version_stream(file_id, version_id)?;
-        Ok(resp.bytes()?.to_vec())
     }
 
     /// Stores a sealed version in one request; returns its row.
@@ -169,6 +192,14 @@ impl Client {
         if let Some(based_on) = &version.based_on {
             form = form.text("basedOn", based_on.clone());
         }
+        form = form
+            .text("revisionId", version.revision_id.clone())
+            .text(
+                "revisionContentEnvelope",
+                version.revision_content_envelope.clone(),
+            )
+            .text("metadataEnvelope", version.metadata_envelope.clone())
+            .text("metadataRevision", version.metadata_revision.to_string());
         let resp = self
             .request(Method::POST, &format!("/files/{file_id}/versions"))
             .multipart(form.part("file", part))

@@ -524,8 +524,7 @@ impl Store {
 /// State needed to resume an interrupted tus upload. Values in the sync/resume
 /// tables are plaintext JSON, so the file key is stored only in its
 /// collection-key wrap (`file_key_envelope` — the exact blob the server already
-/// holds), never raw; the 24-byte header is public (it's the first bytes of
-/// ciphertext the server already received).
+/// holds), never raw. The kept tail is ciphertext the server receives anyway.
 #[derive(Debug, Default, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ResumeState {
@@ -535,8 +534,20 @@ pub struct ResumeState {
     /// Typed envelope wrapped with the collection key.
     pub file_key_envelope: String,
     pub key_epoch: u32,
-    /// base64 24-byte secretstream header.
-    pub header: String,
+    /// The revision the object is sealed as (block format): the commit
+    /// names it.
+    #[serde(default)]
+    pub revision_id: String,
+    /// The plaintext's SHA-256 (base64), as the metadata will carry it: a
+    /// resumed upload seals the file again and refuses another content.
+    #[serde(default)]
+    pub sha256: String,
+    /// The sealed manifest and trailer (base64) and its digest, once made:
+    /// kept before any of it is sent (its nonce is random).
+    #[serde(default)]
+    pub tail: String,
+    #[serde(default)]
+    pub tail_manifest_sha256: String,
     pub plain_size: i64,
     pub cipher_total: i64,
     pub mtime_secs: i64,

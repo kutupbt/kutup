@@ -14,7 +14,6 @@ use std::io::IsTerminal;
 use anyhow::{anyhow, Context, Result};
 use base64::Engine as _;
 use kutup_crypto::account_record;
-use kutup_crypto::drive_object::{self, DriveFileBlobContextV1};
 use kutup_pass::keepass::Database;
 use kutup_pass::{MergeReport, VaultKey};
 use uuid::Uuid;
@@ -583,6 +582,7 @@ fn save_once(
     // Over tus, conditional on what it was made from; the vault's size,
     // SHA-256 and content hash land with it.
     let hash_key = crate::names::folder_hash_key(vault.keys, vault.collection_id).ok();
+    let identity = crate::drive_signer::identity(client)?;
     crate::version_upload::upload_version(
         client,
         &crate::version_upload::NoRecords,
@@ -595,6 +595,7 @@ fn save_once(
             based_on: Some(based_on(based_on_version)),
             progress: crate::uploader::Progress::Quiet,
             crashed_after_secs: crate::version_upload::VAULT_CRASHED_AFTER_SECS,
+            signer: identity.signer(),
         },
     )
     .context("save vault version")
@@ -738,9 +739,10 @@ fn current_file(client: &Client, vault: &VaultFile) -> Result<(File, [u8; 32])> 
 
 /// What the file holds now, with the version it is (as the server names it).
 pub(crate) fn fetch_current(client: &Client, vault: &VaultFile) -> Result<(Vec<u8>, String)> {
-    let (response, version) = client.download_current_stream(vault.file_id)?;
-    let sealed = response.bytes().context("download vault")?.to_vec();
-    let version = match version {
+    let (file, file_key) = current_file(client, vault)?;
+    let (plain, opened) =
+        crate::revisions::read_current(client, &file, &file_key).context("download vault")?;
+    let version = match opened.version {
         Some(version) => version,
         // A server without the header: its newest whole-file version.
         None => client
@@ -749,47 +751,23 @@ pub(crate) fn fetch_current(client: &Client, vault: &VaultFile) -> Result<(Vec<u
             .find(|v| v.kind == "file")
             .map_or_else(|| ORIGINAL.to_owned(), |v| v.id),
     };
-    Ok((open_sealed(client, vault, &sealed, &version)?, version))
+    Ok((plain, version))
 }
 
-/// A recorded version's contents (`""`: the original upload).
+/// A recorded version's contents (`""`: the original upload), opened
+/// against its sealed record at the key generation it was saved with.
 fn fetch_version(client: &Client, vault: &VaultFile, version: &str) -> Result<Vec<u8>> {
     let version = based_on(version);
-    let sealed = if version == ORIGINAL {
-        client.download_original(vault.file_id)?
-    } else {
-        client.download_version(vault.file_id, &version)?
-    };
-    open_sealed(client, vault, &sealed, &version)
-}
-
-/// Opens a sealed blob of the file: version `version`, at the key generation
-/// it was saved with.
-fn open_sealed(
-    client: &Client,
-    vault: &VaultFile,
-    sealed: &[u8],
-    version: &str,
-) -> Result<Vec<u8>> {
     let (file, file_key) = current_file(client, vault)?;
-    let generation = if version == ORIGINAL {
-        file.original_key_generation
-    } else {
-        client
-            .list_versions(&file.id)?
-            .into_iter()
-            .find(|v| v.id == version)
-            .map(|v| v.key_generation)
-            .ok_or_else(|| anyhow!("version {version} is gone"))?
-    };
-    let key = crate::file_crypto::key_at(&file, &file_key, generation)?;
-    let plain = drive_object::decrypt_file_blob(
-        sealed,
-        &key,
-        DriveFileBlobContextV1::new(&file.id, generation)?,
-    )
-    .context("decrypt vault")?;
-    Ok(plain.to_vec())
+    if version == ORIGINAL {
+        return crate::revisions::read_original(client, &file, &file_key).context("decrypt vault");
+    }
+    let row = client
+        .list_versions(&file.id)?
+        .into_iter()
+        .find(|v| v.id == version)
+        .ok_or_else(|| anyhow!("version {version} is gone"))?;
+    crate::revisions::read_version(client, &file, &file_key, &row).context("decrypt vault")
 }
 
 #[cfg(test)]

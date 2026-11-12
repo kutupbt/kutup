@@ -28,6 +28,7 @@ pub mod types;
 pub mod versions;
 
 use std::cell::RefCell;
+use std::rc::Rc;
 use std::time::Duration;
 
 use anyhow::Result;
@@ -159,6 +160,12 @@ pub struct Client {
     token: RefCell<String>,
     http: HttpClient,
     upload: HttpClient,
+    /// The signed-in account as a Drive revision's uploader and reader
+    /// (`drive_signer`); none for an anonymous client.
+    drive: RefCell<Option<Rc<crate::drive_signer::DriveIdentity>>>,
+    /// The account's identity pins, once read: what opened revisions'
+    /// signers are checked against.
+    pins: RefCell<Option<Rc<kutup_crypto::identity_pins::IdentityPinsV2>>>,
 }
 
 impl Client {
@@ -193,7 +200,26 @@ impl Client {
             token: RefCell::new(token.to_string()),
             http,
             upload,
+            drive: RefCell::new(None),
+            pins: RefCell::new(None),
         }
+    }
+
+    /// Sets the signed-in account's Drive identity (`context::require_session`).
+    pub fn set_drive_identity(&self, identity: crate::drive_signer::DriveIdentity) {
+        *self.drive.borrow_mut() = Some(Rc::new(identity));
+    }
+
+    pub fn drive_identity(&self) -> Option<Rc<crate::drive_signer::DriveIdentity>> {
+        self.drive.borrow().clone()
+    }
+
+    pub fn set_identity_pins(&self, pins: kutup_crypto::identity_pins::IdentityPinsV2) {
+        *self.pins.borrow_mut() = Some(Rc::new(pins));
+    }
+
+    pub fn identity_pins(&self) -> Option<Rc<kutup_crypto::identity_pins::IdentityPinsV2>> {
+        self.pins.borrow().clone()
     }
 
     pub fn set_token(&self, token: &str) {

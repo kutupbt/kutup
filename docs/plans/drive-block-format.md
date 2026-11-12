@@ -536,12 +536,41 @@ question 7).
 
 ## 5. Other clients
 
-- **CLI.** It switches with the web; it is the same Rust code.
-  - Upload: tus with `revisionId`; resume re-encrypts from the offset.
-  - Download: the manifest first (one ranged read), then blocks in order. It
-    can also fetch blocks in parallel, and resume after an interruption at a
-    block.
-  - `versions`, `sync`, `share` and `vaultsync` use the same functions.
+- **CLI.** It switches with the web; it is the same Rust code. Built
+  (2026-11-12, `crates/kutup-cli`: `transfer.rs`, `revisions.rs`,
+  `uploader.rs`, `version_upload.rs`, `drive_signer.rs`):
+  - [x] Upload: tus with `revisionId` (exactly the suite-2 `Upload-Metadata`),
+    `Upload-Length` the object's length, sealed block by block, two blocks a
+    PATCH, then the commit with `FileMetadataV2` (`originalRevisionId` on a
+    new file's first) and the `RevisionContent` envelope. `409
+    revision_conflict` reads the file again and seals on top once;
+    `alreadyCommitted` is success; a new file's taken name moves to the next
+    free one (up to 3); `objectMissing` and other refusals cancel the
+    upload; `notUploaded` and lost connections keep the record.
+  - [x] Resume: the record keeps the revision id, the content's SHA-256 and,
+    before any of it is sent, the sealed tail. A later run goes on from any
+    server offset, sealing again from block 0; the last block goes only if
+    the content hashes to the recorded SHA-256 (`NotTheSameFile`: the upload
+    is discarded); another content under the same path starts over; an
+    upload whose bytes all arrived is committed.
+  - [x] Download: the header, trailer and manifest by ranged reads, opened
+    against the metadata's `content` (current) or the revision's
+    `RevisionContent` (versions from the listing, the original and served
+    states from the response, which must name the revision asked for), then
+    blocks in order, each checked. Blocks are fetched one after another;
+    parallel fetches and resuming a download are not built (the CLI never
+    resumed downloads).
+  - [x] `versions` (download, restore), `sync`, `share` (federated download
+    and upload), `pubshare`, the note sync (Yjs states commit metadata naming
+    `stateRevisionId`), whiteboard re-snapshots and `vaultsync` use the same
+    functions.
+  - [x] Every manifest is signed with the account's Drive signing key (signer
+    kind 2: account id and incarnation from the session's master key). Every
+    open checks the signer against this account's own key and, where the
+    command read them (`download`, `versions`, `share download`, `sync`), the
+    identity pins, as `manifestSigners.ts` does: forged or changed signers
+    warn on stderr, never block. The CLI shows no author, so there is no
+    `authorMismatch`.
 - **Native apps, later.** `kutup-client-ffi` exposes the block reader (open
   header, open manifest, open block *i*). An app plugs it into
   AVAssetResourceLoader or an ExoPlayer `DataSource`, the native equivalents
@@ -834,7 +863,7 @@ Each slice is a PR.
      as the content.
    - Thumbnails are drawn bound to the new revision.
    - `RevisionGuard` for Drive file metadata.
-   - The CLI upload.
+   - The CLI upload (built, §5).
 
    **The commit, as Proton's** (decided in slice 3, 2026-11-09). The manifest
    digest is known only after the last block, so content and metadata can't
@@ -941,7 +970,7 @@ Each slice is a PR.
      docs/self-hosting.md has the matching bucket rule).
 4. **Download and streaming.**
    - The block reader Worker and `fetchDecrypt` on blocks.
-   - The CLI download.
+   - The CLI download (built with slice 3, §5).
    - `kutup-sw.js` (merged with Chat's push worker) and the stream registry.
 5. **Players.** Photos' viewer and Drive's preview stream video and audio.
    `MAX_VIDEO_BYTES` gives way to `drive.stream.max_bytes`. The e2e spec.
