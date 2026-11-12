@@ -54,6 +54,7 @@ Specific codes, where an app does something particular (a test in
 | `devicesMismatch` | 409 | A manifest whose entries the server can't back: a listed device that isn't a live row of the account with the entry's kind, sign-in (`session`), frame key and Chat keys; or a re-registration that changes the account's non-Chat entries |
 | `identityMismatch` | 409 | A Chat registration or manifest naming another identity than the account's (it changes only by a distribution or a re-registration) |
 | `invalidCredentials` | 401 | A sign-in that does not finish: a wrong password, a name that is no account, a used or expired login id, a password changed since the sign-in started (not an expired session). At `login/2fa`: a wrong code, the token still good |
+| `authenticatorLost` | 401 / 409 | The authenticator app's secret can't be read any more (its account data key is gone, as after a restore without it): at `login/2fa`, sign in with a recovery code or a security key; at `2fa/verify`, set the app up again. An administrator can turn two-step sign-in off |
 | `preAuthInvalid` | 401 | `login/2fa`: the second step's token is expired, not one, or from a password the account no longer has: back to the password step |
 | `setupTokenInvalid` | 401 | `complete-setup` (and `register/start` under it): the setup token is expired, not one, already used, or from a temporary password since replaced: sign in again |
 | `wrongPin`, `signedOut`, `noPin` | 403/404 | Kutup Pass's PIN: wrong (with `attemptsLeft`), the last try ended the sign-in, none set |
@@ -5096,7 +5097,7 @@ Delete a user and all their data.
 
 ### DELETE /api/admin/users/:id/2fa
 
-Force-disable a user's TOTP two-factor authentication — an admin override for users locked out of their authenticator. Clears `totp_secret` and `totp_enabled` and the recovery codes, and records `twoFactorOff` in the account's security log; the account becomes password-only until the user re-enables 2FA from their Security page. Allowed on any user, including the break-glass admin.
+Force-disable a user's TOTP two-factor authentication — an admin override for users locked out of their authenticator. Clears the sealed authenticator secret, `totp_enabled` and the recovery codes, and records `twoFactorOff` in the account's security log; the account becomes password-only until the user re-enables 2FA from their Security page. Allowed on any user, including the break-glass admin.
 
 **Auth:** Bearer JWT (admin)
 

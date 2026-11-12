@@ -1,0 +1,58 @@
+{
+  "entry": "MTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTE=",
+  "entryId": 2,
+  "accountId": "QUFBQUFBQUFBQUFBQUFBQQ==",
+  "wrappedKey": "S1VUU0RLMQAAAgAAAAFRUVFRUVFRUVFRUVFRUVFRUVFRUVFRUVHfGPEjpQL1pa03BoBy2/7dFr1uKFJLKq/GLLh9BLe2/7aZOnTf1zREDd7h9k6UPmY=",
+  "table": "users",
+  "column": "totp_secret",
+  "row": "41414141-4141-4141-4141-414141414141",
+  "value": "SkJTV1kzRFBFSFBLM1BYUA==",
+  "sealed": "AAEAAAABYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhjoixK2Ytncpvl9DoyY1TgiKx69wGOcq8mARO8HoETv0=",
+  "refused": [
+    {
+      "why": "a flipped magic byte",
+      "kind": "wrap",
+      "bytes": "SlVUU0RLMQAAAgAAAAFRUVFRUVFRUVFRUVFRUVFRUVFRUVFRUVHfGPEjpQL1pa03BoBy2/7dFr1uKFJLKq/GLLh9BLe2/7aZOnTf1zREDd7h9k6UPmY="
+    },
+    {
+      "why": "another entry id named",
+      "kind": "wrap",
+      "bytes": "S1VUU0RLMQAAAwAAAAFRUVFRUVFRUVFRUVFRUVFRUVFRUVFRUVHfGPEjpQL1pa03BoBy2/7dFr1uKFJLKq/GLLh9BLe2/7aZOnTf1zREDd7h9k6UPmY="
+    },
+    {
+      "why": "a flipped generation byte",
+      "kind": "wrap",
+      "bytes": "S1VUU0RLMQAAAgAAAABRUVFRUVFRUVFRUVFRUVFRUVFRUVFRUVHfGPEjpQL1pa03BoBy2/7dFr1uKFJLKq/GLLh9BLe2/7aZOnTf1zREDd7h9k6UPmY="
+    },
+    {
+      "why": "a flipped tag byte",
+      "kind": "wrap",
+      "bytes": "S1VUU0RLMQAAAgAAAAFRUVFRUVFRUVFRUVFRUVFRUVFRUVFRUVHfGPEjpQL1pa03BoBy2/7dFr1uKFJLKq/GLLh9BLe2/7aZOnTf1zREDd7h9k6UPmc="
+    },
+    {
+      "why": "cut short",
+      "kind": "wrap",
+      "bytes": "S1VUU0RLMQAAAgAAAAFRUVFRUVFRUVFRUVFRUVFRUVFRUVFRUVHfGPEjpQL1pa03BoBy2/7dFr1uKFJLKq/GLLh9BLe2/7aZOnTf1zREDd7h9k6UPg=="
+    },
+    {
+      "why": "an unknown field suite",
+      "kind": "field",
+      "bytes": "AAAAAAABYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhjoixK2Ytncpvl9DoyY1TgiKx69wGOcq8mARO8HoETv0="
+    },
+    {
+      "why": "another generation named",
+      "kind": "field",
+      "bytes": "AAEAAAAAYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhjoixK2Ytncpvl9DoyY1TgiKx69wGOcq8mARO8HoETv0="
+    },
+    {
+      "why": "a flipped tag byte",
+      "kind": "field",
+      "bytes": "AAEAAAABYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhjoixK2Ytncpvl9DoyY1TgiKx69wGOcq8mARO8HoETvw="
+    },
+    {
+      "why": "sealed for another row",
+      "kind": "field",
+      "bytes": "AAEAAAABYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhjoixK2Ytncpvl9DoyY1TgixwPHBfuGUB6be4QMHDVjY="
+    }
+  ]
+}

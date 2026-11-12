@@ -6,6 +6,7 @@
 //! groups (auth, files, collab, federation, …) are added in `build_router` as each
 //! handler slice lands.
 
+mod account_data;
 mod account_devices;
 mod account_heads;
 mod account_ids;
@@ -340,6 +341,30 @@ async fn main() -> anyhow::Result<()> {
             .await
             .map_err(anyhow::Error::msg)?,
     );
+    // Every server key list entry still wrapping an account data key must be
+    // there (docs/plans/server-personal-data.md, A2); keys under an older
+    // entry move to the current one in batches.
+    account_data::check_cascade(&pool)
+        .await
+        .map_err(anyhow::Error::msg)?;
+    account_data::check_entries(&pool, &config.opaque_setup_keys)
+        .await
+        .map_err(anyhow::Error::msg)?;
+    {
+        let (pool, keys) = (pool.clone(), config.opaque_setup_keys.clone());
+        tokio::spawn(async move {
+            let mut tick = tokio::time::interval(std::time::Duration::from_secs(60));
+            // One batch a minute, in account order, starting over at the end.
+            let mut after = (uuid::Uuid::nil(), 0);
+            loop {
+                tick.tick().await;
+                match account_data::rewrap_some(&pool, &keys, after).await {
+                    Ok((_, next)) => after = next.unwrap_or((uuid::Uuid::nil(), 0)),
+                    Err(error) => tracing::warn!("account data key rewrap: {}", error.message),
+                }
+            }
+        });
+    }
     bootstrap_admin(
         &pool,
         &opaque,

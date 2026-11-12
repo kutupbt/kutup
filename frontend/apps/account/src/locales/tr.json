@@ -52,6 +52,7 @@
       "usernameRequired": "Kullanıcı adınızı girin."
     },
     "errors": {
+      "authenticatorLost": "Bu hesap için kimlik doğrulama uygulaması artık denetlenemiyor. Bir kurtarma kodu kullanın ya da bir yöneticiden iki adımlı oturum açmayı kapatmasını isteyin.",
       "locked": "Çok fazla deneme. Birkaç dakika bekleyip yeniden deneyin.",
       "network": "Sunucuya ulaşılamadı. Bağlantınızı kontrol edip yeniden deneyin.",
       "signInFailed": "Giriş yapılamadı. Kullanıcı adınızı ve parolanızı kontrol edin.",
@@ -900,6 +901,8 @@
       "twoFactorHint": "İki adımlı doğrulaması açık hesaplar için kurtarma kodları ve güvenlik anahtarları.",
       "federation": "Federasyon",
       "federationHint": "Bir sunucu yanıt vermediğinde diğer Kutup sunucularına teslimatların yeniden nasıl deneneceği.",
+      "privacy": "Gizlilik ve saklama",
+      "privacyHint": "Sunucunun kendisi için tuttuğu kişisel verilerin, yedekler dahil, ne kadar saklandığı.",
       "twoFactorLimits": {
         "twoFactorRecoveryCodes": "Hesap başına kurtarma kodu",
         "twoFactorRecoveryCodesHint": "İki adımlı doğrulama açıldığında veya yeni kodlar istendiğinde kaç tek kullanımlık kod oluşturulduğu.",
@@ -927,6 +930,10 @@
         "driveStreamResponseMaxBytesHint": "Aralıklı bir indirme yanıtının taşıdığı en fazla bayt; sunucular arasında da.",
         "driveStreamBlobFallbackMaxBytes": "Bellekten oynatılan en büyük dosya (bayt)",
         "driveStreamBlobFallbackMaxBytesHint": "Tarayıcının akış yapamadığı yerde, bu boyuta kadar dosyalar oynatmak için tamamen belleğe yüklenir."
+      },
+      "privacyLimits": {
+        "keyBackupKeepDays": "Hesap anahtarı yedeklerini sakla (gün)",
+        "keyBackupKeepDaysHint": "Her hesabın sunucudaki verisini mühürleyen anahtarların yedeği. Bu sürenin sonunda silinmiş bir hesabın verisi hiçbir yedekten okunamaz."
       },
       "federationLimits": {
         "federationRetryBaseSeconds": "İlk bekleme (saniye)",
