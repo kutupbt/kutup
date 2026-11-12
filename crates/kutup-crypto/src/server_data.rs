@@ -19,6 +19,10 @@
 //!   XChaCha20-Poly1305(value)`, under a subkey of the data key, the AAD the
 //!   header and the field's table, column, row and account, so a value can't
 //!   move to another row or account;
+//! - lookup hash: 32 bytes, HMAC-SHA256 under a subkey of the data key for
+//!   one purpose ([`Lookup`]), so the server can find equal values (a mail
+//!   thread's Message-IDs, a search word) without keeping them in the clear;
+//!   destroying the key destroys them too;
 //! - destruction subject: 32 bytes, HKDF of the entry expanded with the label
 //!   and the account id, so the destruction log names an account only to
 //!   whoever holds the entry.
@@ -43,7 +47,7 @@ const FIELD_HEADER_LEN: usize = 2 + 4 + NONCE_LEN;
 /// A wrapped data key's length.
 pub const WRAPPED_KEY_LEN: usize = WRAP_HEADER_LEN + 32 + TAG_LEN;
 /// The longest value a field may seal.
-pub const MAX_FIELD_LEN: usize = 64 * 1024;
+pub const MAX_FIELD_LEN: usize = 1024 * 1024;
 
 fn invalid(what: &str) -> CryptoError {
     CryptoError::InvalidInput(format!("server data: {what}"))
@@ -169,6 +173,13 @@ impl DataKey {
         Ok(header)
     }
 
+    /// The keyed hash of `value` for `purpose`: equal values hash alike under
+    /// one generation of one account's key, and nothing else does.
+    pub fn lookup_hash(&self, purpose: Lookup, value: &[u8]) -> Result<[u8; LOOKUP_HASH_LEN]> {
+        let key = expand(self.key.as_slice(), purpose.label())?;
+        Ok(crate::primitives::mac(Suite::V1, key.as_slice(), &[value]).to_array())
+    }
+
     /// Opens a value sealed for `field` under this generation of the key.
     pub fn open(&self, field: &Field<'_>, sealed: &[u8]) -> Result<Zeroizing<Vec<u8>>> {
         if sealed.len() < FIELD_HEADER_LEN + TAG_LEN || sealed[..2] != FIELD_SUITE.to_be_bytes() {
@@ -226,6 +237,28 @@ pub fn inspect_wrapped(wrapped: &[u8]) -> Result<(u16, u32)> {
 pub fn destruction_subject(entry: &[u8; 32], account_id: &[u8; 16]) -> Result<[u8; 32]> {
     let info = [SUBJECT_INFO, account_id.as_slice()].concat();
     Ok(*expand(entry, &info)?)
+}
+
+/// A lookup hash's length.
+pub const LOOKUP_HASH_LEN: usize = 32;
+
+/// What a [`DataKey::lookup_hash`] is for; each has its own subkey.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Lookup {
+    /// A mail Message-ID (its own, In-Reply-To, References): threading,
+    /// duplicates, bounces.
+    MailThread,
+    /// A folded word of a mail header, tagged with its field: search.
+    MailSearchToken,
+}
+
+impl Lookup {
+    fn label(self) -> &'static [u8] {
+        match self {
+            Lookup::MailThread => crate::labels::SERVER_DATA_MAIL_THREAD_V1,
+            Lookup::MailSearchToken => crate::labels::SERVER_DATA_MAIL_SEARCH_TOKEN_V1,
+        }
+    }
 }
 
 /// Where a sealed value lives: its table, column and row, and the account it

@@ -603,13 +603,13 @@ async fn forward_copy(state: &AppState, arrived: Arrived) -> anyhow::Result<()> 
         return Ok(());
     }
     // Spam isn't forwarded, nor what itself came by forwarding.
-    let copy: Option<(String, Option<String>)> =
-        sqlx::query_as("SELECT folder, forwarded_from FROM mail_messages WHERE id = $1")
+    let copy: Option<(String, bool)> =
+        sqlx::query_as("SELECT folder, forwarded FROM mail_messages WHERE id = $1")
             .bind(arrived.message_id)
             .fetch_optional(&state.pool)
             .await?;
     match copy {
-        Some((folder, None)) if folder != "spam" => {}
+        Some((folder, false)) if folder != "spam" => {}
         _ => return Ok(()),
     }
     let readable = &arrived.readable;

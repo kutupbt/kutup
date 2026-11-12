@@ -402,6 +402,38 @@ keeps them; reports on them are operator tooling.
   the apps refuse them (chat-core's transport asks `/user/me`). Groups and
   shares stay, quiet. Mail isn't covered.
 
+**As built (L7):**
+- A message's headers (subject, From, To, Cc, Reply-To, Bcc, Message-ID,
+  In-Reply-To, References, attached files' names, types and sizes) are one
+  JSON value (`"v": 1`) sealed under its mailbox's data key
+  (`mail_messages.headers`, `kutup-server/src/mail/sealed.rs`). A shared
+  mailbox has its own key, `account_keys.mail_group_data_keys`, going with
+  its group; `account_data::KeyOwner` names whose key, and the rewrap job,
+  the entry check and the cascade check cover both tables. Rows from before
+  the slice keep no headers (it lands with the wipe).
+- Lookups are keyed hashes (`server_data::Lookup`, HMAC under a subkey of the
+  data key, vectors in `server-data-lookup-v1.json`): `message_id_hash`,
+  `in_reply_to_hash`, `references_hashes` for threading, duplicate delivery
+  (`(address_id, message_id_hash)` unique) and the bounce check;
+  `search_tokens` (GIN) for search. Each lookup hashes under every
+  generation of the mailbox's key.
+- Search stays on the server, as Proton's header search: subject, sender's
+  name and address, and To/Cc/Bcc names and addresses are folded words
+  (kutup-search's folding; an address also whole, as local part and as
+  domain), each hashed with its field's tag. A query matches every word,
+  whole; `q` searches subject, sender and To/Cc, `from` the sender, `to`
+  To/Cc/Bcc. Substring search is gone (docs/api.md). Conversation rows'
+  senders and files are put together after opening.
+- Filters, auto-reply, forwarding and the sender lists run at delivery on the
+  plaintext before it is sealed; re-running filters on old mail opens them.
+  An address's signature (`mail_identities.signature_sealed`) is sealed
+  under the account's key, the account as its row, so it moves with a
+  rename.
+- The address mail was forwarded from is in the headers too (`forwarded`
+  stays in clear: such mail is never forwarded again). Not sealed: the
+  mail groups' own signature (it lands with the main session's batch; it
+  seals the same way, under the group's key).
+
 ## Slices (after review, in this order)
 
 | Slice | Contents | Size |

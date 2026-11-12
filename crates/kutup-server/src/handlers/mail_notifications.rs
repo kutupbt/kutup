@@ -13,6 +13,7 @@ use serde::{Deserialize, Serialize};
 use time::format_description::well_known::Rfc3339;
 use time::OffsetDateTime;
 use utoipa::{IntoParams, ToSchema};
+use uuid::Uuid;
 
 use crate::error::{AppError, AppResult};
 use crate::handlers::trusted_uuid;
@@ -28,7 +29,7 @@ pub struct NotificationsQuery {
     pub after: Option<String>,
 }
 
-#[derive(Debug, Serialize, ToSchema, sqlx::FromRow)]
+#[derive(Debug, Serialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct NewMail {
     pub id: String,
@@ -89,9 +90,8 @@ pub async fn new_mail(
     };
     let after = OffsetDateTime::parse(after, &Rfc3339)
         .map_err(|_| AppError::bad_request("after is an RFC 3339 time"))?;
-    let mut messages: Vec<NewMail> = sqlx::query_as(
-        "SELECT m.id::text, m.thread_id::text, m.folder, m.custom_folder::text, m.subject,
-                m.from_address, m.from_name
+    let rows: Vec<(Uuid, Uuid, String, Option<Uuid>, Option<Vec<u8>>)> = sqlx::query_as(
+        "SELECT m.id, m.thread_id, m.folder, m.custom_folder, m.headers
            FROM mail_messages m
           WHERE m.owner = $1 AND m.user_id = $1
             AND m.notify_at > $2 - interval '1 minute' AND m.notify_at <= $3
@@ -110,6 +110,28 @@ pub async fn new_mail(
     .bind(MAX_NEW + 1)
     .fetch_all(&state.pool)
     .await?;
+    let opener = crate::handlers::mail::Mailbox::Own(user_id)
+        .opener(&state)
+        .await?;
+    let mut messages: Vec<NewMail> = rows
+        .into_iter()
+        .map(|(id, thread_id, folder, custom_folder, sealed)| {
+            let headers = opener.open(id, sealed.as_deref());
+            let (from_address, from_name) = headers
+                .from
+                .map(|m| (m.address, m.name))
+                .unwrap_or_default();
+            NewMail {
+                id: id.to_string(),
+                thread_id: thread_id.to_string(),
+                folder,
+                custom_folder: custom_folder.map(|id| id.to_string()),
+                subject: headers.subject,
+                from_address,
+                from_name,
+            }
+        })
+        .collect();
     let more = messages.len() as i64 > MAX_NEW;
     messages.truncate(MAX_NEW as usize);
     Ok(Json(NewMailPage {
