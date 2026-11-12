@@ -91,6 +91,8 @@ export interface UserRow {
   /** Whether it may share by public link, as an administrator set it. */
   publicSharing: 'on' | 'off'
   deletionAttempts: number
+  /** When its data key was found not to open: what was sealed under it is lost. */
+  dataKeyLostAt?: string
   totpEnabled: boolean
   /**
    * Still on the admin-issued temp password — no key material yet. Gates the

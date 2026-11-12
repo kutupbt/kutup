@@ -6,7 +6,7 @@ import { toast } from 'sonner'
 import { openLinkKey, useFolderAccess, type AccessLink, type Removal } from '@kutup/drive-core/access'
 import { useDriveIdentity } from '@kutup/drive-core/identity'
 import { publicLinkUrl, RecipientNotFound, useCreatePublicLink, useShareFolder } from '@kutup/drive-core/mutations'
-import { sharingOffScope, usePublicSharing } from '@kutup/drive-core/publicSharing'
+import { isTargetBlocked, sharingOffScope, usePublicSharing } from '@kutup/drive-core/publicSharing'
 import { Button } from '@kutup/ui/components/button'
 import { Checkbox } from '@kutup/ui/components/checkbox'
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@kutup/ui/components/dialog'
@@ -248,7 +248,9 @@ export function ShareAlbumDialog({ album, open, onClose }: { album: Album; open:
                   },
                   onError: (error) => {
                     const off = sharingOffScope(error)
-                    toast.error(off ? t(`publicSharing.off.${off}`) : t('share.failed'))
+                    toast.error(
+                      off ? t(`publicSharing.off.${off}`) : isTargetBlocked(error) ? t('publicSharing.targetBlocked') : t('share.failed'),
+                    )
                   },
                 })
               }
@@ -269,7 +271,10 @@ export function ShareAlbumDialog({ album, open, onClose }: { album: Album; open:
           <ul className="divide-y divide-border rounded-lg border border-border empty:hidden">
             {links.map((link) => (
               <li key={link.id} className="flex items-center gap-2 px-3 py-2">
-                <p className="min-w-0 flex-1 truncate text-sm">{t('share.linkMade', { date: new Date(link.createdAt).toLocaleDateString(i18n.language, { dateStyle: 'medium' }) })}</p>
+                <p className="min-w-0 flex-1 truncate text-sm">
+                  {t('share.linkMade', { date: new Date(link.createdAt).toLocaleDateString(i18n.language, { dateStyle: 'medium' }) })}
+                  {link.blockedReason ? ` · ${t(`publicSharing.blocked.${link.blockedReason}`)}` : ''}
+                </p>
                 <Button variant="ghost" size="icon" aria-label={t('share.copyLink')} onClick={() => void copyLink(link)}>
                   <Copy />
                 </Button>

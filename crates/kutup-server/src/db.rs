@@ -60,6 +60,32 @@ pub async fn grant_app_role(owner: &PgPool, app_url: &str) -> Result<()> {
         "DATABASE_OWNER_URL names the same role as DATABASE_URL ({app}): the server's own \
          role must be another one (docs/self-hosting.md, \"Database roles\")"
     );
+    // A role that is a superuser, a member of the owner, or owns tables would
+    // get around the grants: the logs would not be append-only for it.
+    let (superuser, member, owns): (bool, bool, i64) = sqlx::query_as(
+        "SELECT r.rolsuper,
+                pg_has_role(r.rolname, current_user, 'MEMBER'),
+                (SELECT count(*) FROM pg_tables
+                  WHERE tableowner = r.rolname AND schemaname IN ('public', 'account_keys'))
+           FROM pg_roles r WHERE r.rolname = $1",
+    )
+    .bind(&app)
+    .fetch_optional(owner)
+    .await
+    .context("the server's role")?
+    .with_context(|| format!("the database has no role {app} (DATABASE_URL)"))?;
+    anyhow::ensure!(
+        !superuser && !member && owns == 0,
+        "the server's role {app} (DATABASE_URL) {}: the logs would not be append-only for it \
+         (docs/self-hosting.md, \"Database roles\")",
+        if superuser {
+            "is a superuser"
+        } else if member {
+            "is a member of the owner role"
+        } else {
+            "owns tables"
+        }
+    );
     grant_role(owner, &app).await
 }
 

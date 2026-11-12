@@ -31,6 +31,10 @@ ALTER TABLE users
     -- keep can't come between them and the row's deletion, and so two
     -- servers don't both purge. A deletion that failed tries again later.
     ADD COLUMN deleting_at timestamptz,
+    -- What the claim is for: the account's deletion, or an admin's reset
+    -- (which purges but keeps the account). A stale claim is resumed only
+    -- as what it was.
+    ADD COLUMN deleting_for text CHECK (deleting_for IN ('delete', 'reset')),
     ADD COLUMN deletion_attempts integer NOT NULL DEFAULT 0 CHECK (deletion_attempts >= 0),
     ADD COLUMN deletion_next_try_at timestamptz;
 UPDATE users SET state = 'suspended', suspended_reason = 'admin' WHERE NOT is_active;

@@ -131,12 +131,19 @@ pub async fn append_in(
     let at: OffsetDateTime = sqlx::query_scalar("SELECT clock_timestamp()")
         .fetch_one(&mut *conn)
         .await?;
-    let previous: Vec<u8> =
-        sqlx::query_scalar("SELECT row_hash FROM admin_audit_log ORDER BY id DESC LIMIT 1")
-            .fetch_optional(&mut *conn)
-            .await?
-            .flatten()
-            .unwrap_or_default();
+    // The newest row's hash; when retention emptied the table, the anchor's
+    // (the last row it deleted), which verification starts from; else none.
+    let previous: Vec<u8> = sqlx::query_scalar(
+        "SELECT h FROM (
+             (SELECT row_hash AS h, 1 AS o FROM admin_audit_log ORDER BY id DESC LIMIT 1)
+             UNION ALL
+             (SELECT through_hash, 2 FROM admin_audit_anchor)
+         ) chain ORDER BY o LIMIT 1",
+    )
+    .fetch_optional(&mut *conn)
+    .await?
+    .flatten()
+    .unwrap_or_default();
     let hash = row_hash(&previous, admin, action, target, micros(at), payload);
     sqlx::query(
         "INSERT INTO admin_audit_log
@@ -241,6 +248,11 @@ fn check(rows: Vec<ChainRow>, expected_previous: &mut Vec<u8>, checked: &mut u64
 /// Returns how many. As the owner (only it writes the anchor).
 pub async fn prune(pool: &PgPool, days: i64) -> AppResult<u64> {
     let mut tx = pool.begin().await?;
+    // In the chain's order: no row is added while the anchor moves.
+    sqlx::query("SELECT pg_advisory_xact_lock($1)")
+        .bind(CHAIN_LOCK)
+        .execute(&mut *tx)
+        .await?;
     let through: Option<(i64, Option<Vec<u8>>)> = sqlx::query_as(
         "SELECT id, row_hash FROM admin_audit_log
           WHERE id = (SELECT max(id) FROM admin_audit_log
@@ -336,6 +348,39 @@ mod tests {
         let mut unknown = chain();
         unknown[1].8 = 2;
         assert_eq!(check(unknown, &mut Vec::new(), &mut 0), Some(2));
+    }
+
+    /// Retention empties the log (a quiet spell longer than it keeps rows):
+    /// the next action chains from the anchor, and the chain still holds.
+    #[tokio::test]
+    async fn live_an_emptied_log_chains_on_from_its_anchor() {
+        let Ok(url) = std::env::var("KUTUP_LIVE_DATABASE_URL") else {
+            eprintln!("KUTUP_LIVE_DATABASE_URL unset; skipping");
+            return;
+        };
+        let pool = sqlx::postgres::PgPoolOptions::new()
+            .max_connections(2)
+            .connect(&url)
+            .await
+            .unwrap();
+        let admin = Uuid::nil();
+        append(&pool, admin, "test.before", None, &json!({ "n": 1 }))
+            .await
+            .unwrap();
+        // Everything older than now goes: the table is empty, the anchor set.
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        prune(&pool, 0).await.unwrap();
+        let left: i64 = sqlx::query_scalar("SELECT count(*) FROM admin_audit_log")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(left, 0);
+        append(&pool, admin, "test.after", None, &json!({ "n": 2 }))
+            .await
+            .unwrap();
+        let verified = verify(&pool).await.unwrap();
+        assert_eq!(verified.broken_at, None);
+        assert_eq!(verified.checked, 1);
     }
 
     #[test]

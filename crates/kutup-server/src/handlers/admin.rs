@@ -133,6 +133,14 @@ struct UserRow {
     /// Failed tries at deleting a closing account past its date (the job
     /// keeps trying, further apart); 0 when none.
     deletion_attempts: i32,
+    /// When its data key was found not to open: what was sealed under it is
+    /// lost (docs/plans/server-personal-data.md, A2).
+    #[serde(
+        with = "time::serde::rfc3339::option",
+        skip_serializing_if = "Option::is_none"
+    )]
+    #[schema(value_type = Option<String>)]
+    data_key_lost_at: Option<OffsetDateTime>,
     /// Whether it may share by public link: `on` or `off`.
     public_sharing: String,
     /// Whether it talks to other servers: `on` or `off`.
@@ -161,7 +169,8 @@ pub async fn list_users(State(state): State<AppState>, _admin: AdminUser) -> App
     let users: Vec<UserRow> = sqlx::query_as(
         r#"SELECT id, COALESCE(username, '') AS username, storage_quota_bytes, storage_used_bytes,
                   is_admin, is_active, state, suspended_reason, closes_at,
-                  legal_hold_reference, legal_hold_at, deletion_attempts, public_sharing, federation,
+                  legal_hold_reference, legal_hold_at, deletion_attempts, data_key_lost_at,
+                  public_sharing, federation,
                   totp_enabled, is_first_login, created_at, is_break_glass AS is_protected
            FROM users ORDER BY created_at DESC"#,
     )
@@ -491,11 +500,23 @@ pub async fn update_user(
         if !["on", "off"].contains(&sharing) {
             return Err(AppError::bad_request("publicSharing must be on or off"));
         }
+        // With its own record, in one transaction: a switch that turns an
+        // account's links off is evidence of who did it.
+        let mut tx = state.pool.begin().await?;
         sqlx::query("UPDATE users SET public_sharing = $1 WHERE id = $2")
             .bind(sharing)
             .bind(target)
-            .execute(&state.pool)
+            .execute(&mut *tx)
             .await?;
+        crate::audit_log::append_in(
+            &mut tx,
+            crate::handlers::trusted_uuid(&admin.user_id)?,
+            "user.publicSharing",
+            Some(target),
+            &json!({ "username": target_username, "publicSharing": sharing }),
+        )
+        .await?;
+        tx.commit().await?;
     }
     if let Some(a) = req.is_admin {
         sqlx::query("UPDATE users SET is_admin = $1 WHERE id = $2")
@@ -2588,8 +2609,10 @@ pub async fn wipe_user(
     if is_break_glass(&state, target).await? {
         return Err(AppError::forbidden("break-glass admin is protected"));
     }
-    // A reset destroys what the account holds: not under a legal hold.
-    crate::account_closing::check_no_hold(&state.pool, target).await?;
+    // A reset destroys what the account holds: not under a legal hold, and
+    // the account claimed while it runs, so a hold set meanwhile is refused
+    // rather than overrun (let go when this ends).
+    let _claim = crate::account_closing::ResetClaim::take(&state, target).await?;
 
     // 0. Nobody signed in to it watches the purges below, nor acts on a grant
     //    meanwhile: its sign-ins and grants end first (and again, with the

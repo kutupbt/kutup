@@ -22,7 +22,7 @@ use uuid::Uuid;
 
 use crate::error::{AppError, AppResult};
 use crate::handlers::admin::audit;
-use crate::middleware::{AdminUser, AuthUser};
+use crate::middleware::AdminUser;
 use crate::AppState;
 
 /// Why someone reports a link.
@@ -112,7 +112,7 @@ fn is_link_to(state: &AppState, link: &str, token: &str) -> bool {
 )]
 pub async fn report_public_link(
     State(state): State<AppState>,
-    viewer: Option<AuthUser>,
+    viewer: crate::middleware::Viewer,
     Path(token): Path<String>,
     Json(req): Json<ReportLinkRequest>,
 ) -> AppResult<Response> {
@@ -131,7 +131,7 @@ pub async fn report_public_link(
         }
         other => other,
     };
-    ensure_link_up(&state.pool, &token, viewer.is_some()).await?;
+    ensure_link_up(&state.pool, &token, viewer.signed_in).await?;
     let share: Option<Uuid> = sqlx::query_scalar("SELECT id FROM public_shares WHERE token = $1")
         .bind(&token)
         .fetch_optional(&state.pool)
@@ -464,28 +464,30 @@ pub async fn block_link(
         return Err(AppError::not_found("not found"));
     };
     sqlx::query(
+        // The reporter's link stays: under a legal order it may be evidence.
         "UPDATE public_link_reports
-            SET resolved_at = NOW(), resolved_by = $2, resolution = 'blocked', link = NULL
+            SET resolved_at = NOW(), resolved_by = $2, resolution = 'blocked'
           WHERE share_id = $1 AND resolved_at IS NULL",
     )
     .bind(share)
     .bind(admin_uuid)
     .execute(&mut *tx)
     .await?;
-    tx.commit().await?;
-    audit(
-        &state.pool,
-        &admin.user_id,
+    // In the block's own transaction: the record of who blocked what, why.
+    crate::audit_log::append_in(
+        &mut tx,
+        admin_uuid,
         "share.block",
         Some(owner),
-        json!({
+        &json!({
             "username": username.unwrap_or_default(),
             "shareId": share,
             "reason": req.reason,
             "reference": reference,
         }),
     )
-    .await;
+    .await?;
+    tx.commit().await?;
     Ok(StatusCode::NO_CONTENT.into_response())
 }
 
@@ -504,29 +506,48 @@ pub async fn unblock_link(
     Path(id): Path<String>,
 ) -> AppResult<Response> {
     let share = Uuid::parse_str(&id).map_err(|_| AppError::not_found("not found"))?;
-    let lifted: Option<(Uuid, Option<String>, Option<String>)> = sqlx::query_as(
-        "UPDATE public_shares p
-            SET blocked_at = NULL, blocked_reason = NULL, blocked_reference = NULL, blocked_by = NULL
-           FROM public_shares old, users u
-          WHERE p.id = $1 AND old.id = p.id AND u.id = p.owner_user_id
-          RETURNING p.owner_user_id, u.username, old.blocked_reason",
+    let admin_uuid = admin_id(&admin)?;
+    let mut tx = state.pool.begin().await?;
+    let row: Option<(Uuid, Option<String>, Option<String>, bool)> = sqlx::query_as(
+        "SELECT p.owner_user_id, u.username, p.blocked_reason, p.owner_removed_at IS NOT NULL
+           FROM public_shares p JOIN users u ON u.id = p.owner_user_id
+          WHERE p.id = $1 FOR UPDATE OF p",
     )
     .bind(share)
-    .fetch_optional(&state.pool)
+    .fetch_optional(&mut *tx)
     .await?;
-    let Some((owner, username, was)) = lifted else {
+    let Some((owner, username, was, owner_removed)) = row else {
         return Err(AppError::not_found("not found"));
     };
-    if let Some(reason) = was {
-        audit(
-            &state.pool,
-            &admin.user_id,
-            "share.unblock",
-            Some(owner),
-            json!({ "username": username.unwrap_or_default(), "shareId": share, "reason": reason }),
+    let Some(reason) = was else {
+        return Ok(StatusCode::NO_CONTENT.into_response());
+    };
+    if owner_removed {
+        // Its owner removed it while it was blocked: kept only for the block.
+        sqlx::query("DELETE FROM public_shares WHERE id = $1")
+            .bind(share)
+            .execute(&mut *tx)
+            .await?;
+    } else {
+        sqlx::query(
+            "UPDATE public_shares
+                SET blocked_at = NULL, blocked_reason = NULL, blocked_reference = NULL,
+                    blocked_by = NULL
+              WHERE id = $1",
         )
-        .await;
+        .bind(share)
+        .execute(&mut *tx)
+        .await?;
     }
+    crate::audit_log::append_in(
+        &mut tx,
+        admin_uuid,
+        "share.unblock",
+        Some(owner),
+        &json!({ "username": username.unwrap_or_default(), "shareId": share, "reason": reason }),
+    )
+    .await?;
+    tx.commit().await?;
     Ok(StatusCode::NO_CONTENT.into_response())
 }
 

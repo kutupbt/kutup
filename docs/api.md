@@ -161,7 +161,8 @@ Specific codes, where an app does something particular (a test in
 | `tooManyDevices` | 409 | The account has 20 collaboration devices in use (trusted, renewed within 30 days): the user removes one under Account → Devices; nothing is removed for them |
 | `link_removed` | 404/410 | The shared link was removed |
 | `link_blocked` | 451/410 | An operator blocked the public link: `451` for a legal order, `410` otherwise; `reason` is `legal_order`, `abuse` or `other` |
-| `sharing_off` | 403/410 | Public links are off, for the whole server or the link owner's account (`scope`: `site` or `account`): `403` when making one, `410` when opening one |
+| `sharing_off` | 403/410 | Public links are off, for the whole server or the link owner's account: `403` when making one (with `scope`: `site` or `account`), `410` when opening one (no scope: a link's holder isn't told whose switch it was) |
+| `targetBlocked` | 409 | Making a public link to what an operator blocked links to (`reason`) |
 | `acknowledgementsRequired` | 400 | Sign-up without confirming the current version of every required document (`kinds` names those missing); see `GET /api/legal/documents` |
 | `documentNotCurrent` | 400 | A document named that is not the current version (an acknowledgement, or the text a consent is given under) |
 | `documentExists` | 409 | Publishing a document version (kind, version, language) already published: a version is never edited |
@@ -3648,11 +3649,19 @@ token.
 account (docs/plans/server-personal-data.md, A11).
 
 **Every public route** (`/api/share/:token…`) answers, before anything else:
-`451`/`410 link_blocked` for a link an operator blocked; `410 link_removed`
-for one taken down, or whose owner's account isn't active; `410 sharing_off`
-while public links are off for the server or the owner's account; and, while
-the server's public sharing is `signed_in`, `403 sign_in_required` without a
-signed-in caller (the web pages send their sign-in when they have one).
+while the server's public sharing is `signed_in`, `403 sign_in_required`
+without a signed-in caller (`401` when a sign-in is sent but no longer holds,
+so the page refreshes it; the web pages send their sign-in when they have
+one); `451`/`410 link_blocked` when an operator blocked what the link
+reaches (any link to the same target, or for a file, to its folder);
+`410 link_removed` for one taken down, or whose owner's account isn't
+active; `410 sharing_off` while public links are off for the server or the
+owner's account. Its answers are never cached (`Cache-Control: no-store`).
+
+A block belongs to what a link reaches: no new link to it is made
+(`409 targetBlocked`), and an owner who removes a blocked link (in a folder's
+or file's access change) only hides it from themselves; the block stays
+until an operator lifts it. Owners' link lists carry `blockedReason`.
 
 ---
 
@@ -5095,7 +5104,9 @@ An operator's block on one public link (by its id, `shareId` in a report):
 `{ "reason": "legal_order" | "abuse" | "other", "reference"?: "…" }`
 (the reference, at most 200 characters, is for the administrators). The link
 answers `451 link_blocked` for a legal order and `410 link_blocked` otherwise,
-and its open reports close as `blocked`. `DELETE` lifts the block. `204`;
+as does every other link to what it reaches, and its open reports close as
+`blocked` (keeping the reported link, which may be evidence). The block and
+its record are one transaction. `DELETE` lifts the block. `204`;
 `400` for another reason; `404` for no such link. Logged as `share.block` and
 `share.unblock`. Reports carry the link's `shareBlockedReason`.
 

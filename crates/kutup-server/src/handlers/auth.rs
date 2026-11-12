@@ -1013,13 +1013,18 @@ pub async fn login_two_fa(
         spent
     };
     if !valid {
-        crate::security_events::record_folded(
+        // Counted first: a log that can't be written never spares an attempt.
+        let counted = ratelimit::record_totp_attempt(&req.pre_auth_token, false);
+        if let Err(error) = crate::security_events::record_folded(
             &state.pool,
             account,
             crate::security_events::Kind::SignInFailed2fa,
         )
-        .await?;
-        if !ratelimit::record_totp_attempt(&req.pre_auth_token, false) {
+        .await
+        {
+            tracing::warn!("security log: {}", error.message);
+        }
+        if !counted {
             return Err(AppError::too_many_requests(
                 "too many failed attempts, please log in again",
             ));

@@ -86,12 +86,6 @@ pub async fn set_site(
     Ok(())
 }
 
-/// Why links are off (`scope`: `site` or `account`): `410` for a link,
-/// `403` for making one.
-pub fn sharing_off(scope: &str) -> AppError {
-    sharing_off_as(StatusCode::GONE, scope)
-}
-
 fn sharing_off_as(status: StatusCode, scope: &str) -> AppError {
     AppError::new(status, "public sharing is off")
         .with_details(json!({ "code": "sharing_off", "scope": scope }))
@@ -112,6 +106,25 @@ pub fn link_blocked(reason: &str) -> AppError {
 pub fn sign_in_required() -> AppError {
     AppError::new(StatusCode::FORBIDDEN, "sign in to open this link")
         .with_details(json!({ "code": "sign_in_required" }))
+}
+
+/// Refuses a new link to what an operator blocked (any link of the target,
+/// or of a file's folder): `409 targetBlocked` with the reason.
+pub async fn ensure_target_open(
+    pool: &PgPool,
+    share_type: &str,
+    target: uuid::Uuid,
+) -> AppResult<()> {
+    let blocked: Option<String> = sqlx::query_scalar("SELECT kutup_target_blocked($1, $2)")
+        .bind(share_type)
+        .bind(target)
+        .fetch_one(pool)
+        .await?;
+    match blocked {
+        Some(reason) => Err(AppError::conflict("an operator blocked links to this")
+            .with_details(json!({ "code": "targetBlocked", "reason": reason }))),
+        None => Ok(()),
+    }
 }
 
 /// Whether `owner` may make a public link now: `403 sharing_off` while
@@ -137,7 +150,9 @@ pub async fn ensure_may_share(pool: &PgPool, owner: uuid::Uuid) -> AppResult<()>
 /// viewer is signed in to this server.
 pub async fn ensure_link_up(pool: &PgPool, token: &str, signed_in: bool) -> AppResult<()> {
     let row: Option<(bool, Option<String>, String)> = sqlx::query_as(
-        "SELECT p.removed_at IS NOT NULL OR NOT u.is_active, p.blocked_reason, u.public_sharing
+        "SELECT p.removed_at IS NOT NULL OR NOT u.is_active,
+                COALESCE(p.blocked_reason, kutup_target_blocked(p.share_type, p.target_id)),
+                u.public_sharing
            FROM public_shares p JOIN users u ON u.id = p.owner_user_id
           WHERE p.token = $1",
     )
@@ -147,19 +162,22 @@ pub async fn ensure_link_up(pool: &PgPool, token: &str, signed_in: bool) -> AppR
     let Some((removed, blocked, account_sharing)) = row else {
         return Ok(());
     };
+    // Signed-in only: nothing of the link shows before the sign-in.
+    let site = site(pool).await?;
+    if site == PublicSharing::SignedIn && !signed_in {
+        return Err(sign_in_required());
+    }
     if let Some(reason) = blocked {
         return Err(link_blocked(&reason));
     }
     if removed {
         return Err(crate::handlers::link_reports::link_removed());
     }
-    match site(pool).await? {
-        PublicSharing::Off => return Err(sharing_off("site")),
-        PublicSharing::SignedIn if !signed_in => return Err(sign_in_required()),
-        _ => {}
-    }
-    if account_sharing == "off" {
-        return Err(sharing_off("account"));
+    // One answer whether the site's switch or the owner's is off: a link's
+    // holder doesn't learn which (the owner's own calls say).
+    if site == PublicSharing::Off || account_sharing == "off" {
+        return Err(AppError::new(StatusCode::GONE, "public sharing is off")
+            .with_details(json!({ "code": "sharing_off" })));
     }
     Ok(())
 }

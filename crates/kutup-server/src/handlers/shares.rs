@@ -56,6 +56,8 @@ pub async fn create_public_share(
         Uuid::parse_str(&user.user_id).map_err(|_| AppError::internal("invalid user id"))?;
     // Public links off, for the site or this account: none is made.
     crate::public_sharing::ensure_may_share(&state.pool, user_id).await?;
+    let target = canonical_uuid(&req.target_id)?;
+    crate::public_sharing::ensure_target_open(&state.pool, &req.share_type, target).await?;
 
     let target_uuid = canonical_uuid(&req.target_id)?;
     // The key version the wrap is bound to: the folder's epoch, or the file
@@ -242,11 +244,11 @@ struct PublicShareResponse {
 )]
 pub async fn get_public_share(
     State(state): State<AppState>,
-    viewer: Option<AuthUser>,
+    viewer: crate::middleware::Viewer,
     Path(token): Path<String>,
 ) -> AppResult<Response> {
     // Taken down, or its owner's account disabled: the link is gone.
-    crate::handlers::link_reports::ensure_link_up(&state.pool, &token, viewer.is_some()).await?;
+    crate::handlers::link_reports::ensure_link_up(&state.pool, &token, viewer.signed_in).await?;
     type ShareRow = (
         Uuid,
         String,
@@ -339,11 +341,11 @@ pub async fn get_public_share(
 )]
 pub async fn public_share_epochs(
     State(state): State<AppState>,
-    viewer: Option<AuthUser>,
+    viewer: crate::middleware::Viewer,
     Path(token): Path<String>,
 ) -> AppResult<Response> {
     // Taken down, or its owner's account disabled: the link is gone.
-    crate::handlers::link_reports::ensure_link_up(&state.pool, &token, viewer.is_some()).await?;
+    crate::handlers::link_reports::ensure_link_up(&state.pool, &token, viewer.signed_in).await?;
     let meta: Option<(Uuid, Option<OffsetDateTime>)> = sqlx::query_as(
         "SELECT target_id, expires_at FROM public_shares WHERE token = $1 AND share_type = 'collection'",
     )
@@ -396,11 +398,11 @@ struct PublicFileRow {
 )]
 pub async fn list_public_share_files(
     State(state): State<AppState>,
-    viewer: Option<AuthUser>,
+    viewer: crate::middleware::Viewer,
     Path(token): Path<String>,
 ) -> AppResult<Response> {
     // Taken down, or its owner's account disabled: the link is gone.
-    crate::handlers::link_reports::ensure_link_up(&state.pool, &token, viewer.is_some()).await?;
+    crate::handlers::link_reports::ensure_link_up(&state.pool, &token, viewer.signed_in).await?;
     let meta: Option<(Uuid, String, Option<OffsetDateTime>)> = sqlx::query_as(
         "SELECT target_id, share_type, expires_at FROM public_shares WHERE token = $1",
     )
@@ -570,10 +572,10 @@ async fn link_reaches(
 )]
 pub async fn public_share_state(
     State(state): State<AppState>,
-    viewer: Option<AuthUser>,
+    viewer: crate::middleware::Viewer,
     Path((token, file_id)): Path<(String, String)>,
 ) -> AppResult<Response> {
-    let fid = link_reaches(&state, &token, &file_id, viewer.is_some()).await?;
+    let fid = link_reaches(&state, &token, &file_id, viewer.signed_in).await?;
     let latest: Option<(String, i32)> = sqlx::query_as(
         "SELECT storage_path, key_generation FROM file_versions
          WHERE file_id = $1 AND kind = 'yjs' AND size_bytes > 0
@@ -617,10 +619,10 @@ pub async fn public_share_state(
 )]
 pub async fn public_share_asset(
     State(state): State<AppState>,
-    viewer: Option<AuthUser>,
+    viewer: crate::middleware::Viewer,
     Path((token, file_id, asset_id)): Path<(String, String, String)>,
 ) -> AppResult<Response> {
-    let fid = link_reaches(&state, &token, &file_id, viewer.is_some()).await?;
+    let fid = link_reaches(&state, &token, &file_id, viewer.signed_in).await?;
     crate::handlers::file_assets::asset_response(&state, fid, &asset_id).await
 }
 
@@ -648,11 +650,11 @@ pub async fn public_share_asset(
 )]
 pub async fn download_public_share_file(
     State(state): State<AppState>,
-    viewer: Option<AuthUser>,
+    viewer: crate::middleware::Viewer,
     Path((token, file_id)): Path<(String, String)>,
     headers: axum::http::HeaderMap,
 ) -> AppResult<Response> {
-    let fid = link_reaches(&state, &token, &file_id, viewer.is_some()).await?;
+    let fid = link_reaches(&state, &token, &file_id, viewer.signed_in).await?;
     // A public link shows the file as it is now, edits included.
     let content = crate::file_content::current_content(&state.pool, fid)
         .await?
@@ -685,11 +687,11 @@ pub struct PublicAlbumItem {
 )]
 pub async fn public_album_items(
     State(state): State<AppState>,
-    viewer: Option<AuthUser>,
+    viewer: crate::middleware::Viewer,
     Path(token): Path<String>,
 ) -> AppResult<Response> {
     // Taken down, or its owner's account disabled: the link is gone.
-    crate::handlers::link_reports::ensure_link_up(&state.pool, &token, viewer.is_some()).await?;
+    crate::handlers::link_reports::ensure_link_up(&state.pool, &token, viewer.signed_in).await?;
     let meta: Option<(Uuid, String, Option<OffsetDateTime>)> = sqlx::query_as(
         "SELECT target_id, share_type, expires_at FROM public_shares WHERE token = $1",
     )
@@ -778,11 +780,11 @@ pub async fn public_album_items(
 )]
 pub async fn public_thumbnail(
     State(state): State<AppState>,
-    viewer: Option<AuthUser>,
+    viewer: crate::middleware::Viewer,
     Path((token, file_id, variant)): Path<(String, String, String)>,
 ) -> AppResult<Response> {
     // Taken down, or its owner's account disabled: the link is gone.
-    crate::handlers::link_reports::ensure_link_up(&state.pool, &token, viewer.is_some()).await?;
-    let fid = link_reaches(&state, &token, &file_id, viewer.is_some()).await?;
+    crate::handlers::link_reports::ensure_link_up(&state.pool, &token, viewer.signed_in).await?;
+    let fid = link_reaches(&state, &token, &file_id, viewer.signed_in).await?;
     crate::handlers::file_thumbnails::serve_thumbnail(&state, fid, &variant).await
 }
