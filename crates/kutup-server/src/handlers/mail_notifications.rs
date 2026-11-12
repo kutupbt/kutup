@@ -29,6 +29,9 @@ pub struct NotificationsQuery {
     pub after: Option<String>,
 }
 
+/// Id, thread, folder, custom folder, sealed headers.
+type NewMailRow = (Uuid, Uuid, String, Option<Uuid>, Option<Vec<u8>>);
+
 #[derive(Debug, Serialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct NewMail {
@@ -90,7 +93,7 @@ pub async fn new_mail(
     };
     let after = OffsetDateTime::parse(after, &Rfc3339)
         .map_err(|_| AppError::bad_request("after is an RFC 3339 time"))?;
-    let rows: Vec<(Uuid, Uuid, String, Option<Uuid>, Option<Vec<u8>>)> = sqlx::query_as(
+    let rows: Vec<NewMailRow> = sqlx::query_as(
         "SELECT m.id, m.thread_id, m.folder, m.custom_folder, m.headers
            FROM mail_messages m
           WHERE m.owner = $1 AND m.user_id = $1

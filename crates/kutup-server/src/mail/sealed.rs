@@ -337,7 +337,9 @@ pub fn search(keys: &[DataKey], query: Option<&str>, parts: &[Part]) -> AppResul
 
 /// A row matches the search in `$tokens` with `$per_word` tokens a word:
 /// one of each word's tokens is among its own. The first word's run uses the
-/// GIN index. `{tokens}` and `{per_word}` are the parameters.
+/// GIN index. `{tokens}` and `{per_word}` are the parameters. The listings
+/// spell it out in their constant clauses; a test holds them to this.
+#[cfg(test)]
 pub fn search_where(tokens: &str, per_word: &str) -> String {
     format!(
         "({tokens}::bytea[] IS NULL OR (
