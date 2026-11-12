@@ -11,10 +11,11 @@ import { editorKindFor, extensionOf } from '@kutup/drive-core/editorKind'
 import { chooseViewer } from '@kutup/editors/viewers/dispatch'
 import { KindIcon } from '@kutup/drive-ui/KindIcon'
 import { thumbnailUrl } from '@kutup/drive-core/thumbnails'
+import { openPlayback } from '@kutup/drive-core/playback'
 
 const MarkdownPreview = lazy(() => import('@kutup/editors/text/markdown/MarkdownPreview'))
 
-/** Quick Look decrypts in memory; beyond this, open or download instead. */
+/** Quick Look decrypts pictures, PDFs and text in memory; beyond this, open or download instead. Video and audio stream. */
 const MAX_PREVIEW_BYTES = 100 * 1024 * 1024
 /** Text beyond this is cut: a preview, not the editor. */
 const MAX_TEXT_BYTES = 512 * 1024
@@ -29,7 +30,7 @@ type Loaded =
   | { kind: 'text'; text: string; markdown: boolean; cut: boolean }
   /** The file's large thumbnail, where there is no viewer or the file is too big. */
   | { kind: 'picture'; url: string; reason: 'type' | 'size' }
-  | { kind: 'none'; reason: 'type' | 'size' | 'failed' }
+  | { kind: 'none'; reason: 'type' | 'size' | 'failed' | 'busy' }
 
 /**
  * A look at a file without leaving the folder (Space, as in Finder and
@@ -75,6 +76,31 @@ export function QuickLook({
       fallback('type')
       return () => {
         cancelled = true
+      }
+    }
+    // Video and audio play as they stream (docs/plans/drive-block-format.md §4).
+    if (viewer && (viewer.kind === 'video' || viewer.kind === 'audio')) {
+      const controller = new AbortController()
+      let close: (() => void) | null = null
+      openPlayback(folder, f, controller.signal)
+        .then((playback) => {
+          if (playback.kind === 'ready') {
+            if (cancelled) {
+              playback.close()
+              return
+            }
+            close = playback.close
+            setLoaded({ kind: 'viewer', url: playback.src, mimeType: viewer.mimeType })
+          } else if (playback.kind === 'tooLarge') fallback('size')
+          else if (!cancelled) setLoaded({ kind: 'none', reason: 'busy' })
+        })
+        .catch(() => {
+          if (!cancelled) setLoaded({ kind: 'none', reason: 'failed' })
+        })
+      return () => {
+        cancelled = true
+        controller.abort()
+        close?.()
       }
     }
     if (f.size > MAX_PREVIEW_BYTES) {

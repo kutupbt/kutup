@@ -6,3 +6,6 @@ specs/160-username-rename.spec.ts
 specs/119-account-limits.spec.ts
 specs/172-profile-from-crypto-runtime.spec.ts
 specs/121-photos-marks.spec.ts
+# Drive and Photos media streamed through the service worker (docs/plans/drive-block-format.md §4).
+specs/190-stream-worker-stopped.spec.ts
+specs/191-stream-worker-swapped.spec.ts

@@ -82,7 +82,7 @@ async function signerOf(me: DriveIdentity, signature: ManifestSignature): Promis
     // went with a reset this device didn't make, or the name is passed off.
     if (signature.incarnationId !== me.incarnationId) return { kind: 'changed', name: me.account }
     const own = await deriveAccountIdentityKeys(toBase64(me.masterKey))
-    return signature.signedBy(own.driveSigningPublicKey)
+    return (await signature.signedBy(own.driveSigningPublicKey))
       ? { signer: { accountId: me.userId, address: me.account } }
       : { kind: 'forged', name: me.account }
   }
@@ -98,7 +98,7 @@ async function signerOf(me: DriveIdentity, signature: ManifestSignature): Promis
     if (incarnation !== signature.incarnationId) continue
     const key = await boundSigningKeyOf(me, pin)
     if (!key) return { kind: 'unknown' }
-    return signature.signedBy(key)
+    return (await signature.signedBy(key))
       ? { signer: { accountId: pin.account.accountId, address: pinAddress(pin) ?? null } }
       : { kind: 'forged', name: pinAddress(pin) ?? null }
   }

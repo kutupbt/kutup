@@ -91,6 +91,7 @@
     "loading": "Açılıyor…",
     "loadingVideo": "Video indiriliyor…",
     "videoTooLarge": "Bu video burada oynatmak için fazla büyük. İzlemek için indirin.",
+    "tooManyStreams": "Bu sekmede çok fazla video oynuyor. Bunu oynatmak için birini kapatın.",
     "failed": "Bu açılamadı. Yeniden deneyin ya da indirin.",
     "cannotDraw": "Bu tarayıcı bu biçimi gösteremiyor. Önizlemesi gösteriliyor.",
     "showingPreview": "Önizleme gösteriliyor: özgün dosya burada açmak için fazla büyük.",

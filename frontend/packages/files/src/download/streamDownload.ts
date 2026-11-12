@@ -5,8 +5,10 @@
 //     → showSaveFilePicker WritableStream (Chrome / Edge / Brave)
 //     OR Blob accumulator + <a download> (Firefox / Safari)
 //
-// The object is read whole for now; reading it block by block, through the
-// service worker, comes with slice 4 (docs/plans/drive-block-format.md §10).
+// The object is read block by block (docs/plans/drive-block-format.md §4):
+// the save picker's file gets each 4 MiB block as it is verified. Without
+// the picker the Blob holds the whole file, so it is refused above
+// `drive.stream.blob_fallback_max_bytes` (`BlobDownloadTooLarge`).
 
 import type { DriveObjectToOpen } from '@kutup/crypto'
 import { fetchDecryptedChunks } from './fetchDecrypt'
@@ -28,6 +30,8 @@ export interface StreamDownloadOptions {
   expectedPlainSize?: number
   /** Bearer token. Same JWT the rest of the app sends. */
   accessToken: string
+  /** Without the save picker, the largest file assembled in memory (`drive.stream.blob_fallback_max_bytes`). */
+  blobFallbackMaxBytes?: number | (() => Promise<number>)
   /** Plaintext bytes written + plaintext total (best-effort estimate). */
   onProgress?: (plainWritten: number, plainTotal: number) => void
   signal?: AbortSignal
@@ -85,6 +89,17 @@ export async function streamDownload(opts: StreamDownloadOptions): Promise<void>
 // Sink abstraction — FSA WritableStream OR growing Blob fallback.
 // ---------------------------------------------------------------------------
 
+/** A download the browser can only assemble in memory, larger than the site allows for that. */
+export class BlobDownloadTooLarge extends Error {
+  constructor(
+    readonly size: number,
+    readonly maxBytes: number,
+  ) {
+    super(`a ${size}-byte download is larger than the ${maxBytes} bytes this browser may hold in memory`)
+    this.name = 'BlobDownloadTooLarge'
+  }
+}
+
 export interface DownloadSink {
   write(plain: Uint8Array): Promise<void>
   finalize(): Promise<void>
@@ -92,7 +107,7 @@ export interface DownloadSink {
 }
 
 export async function openDownloadSink(
-  opts: Pick<StreamDownloadOptions, 'filename' | 'mimeType'>,
+  opts: Pick<StreamDownloadOptions, 'filename' | 'mimeType' | 'expectedPlainSize' | 'blobFallbackMaxBytes'>,
 ): Promise<DownloadSink> {
   if (canUseFSA()) {
     try {
@@ -109,6 +124,11 @@ export async function openDownloadSink(
       console.warn('FSA sink failed, falling back to Blob:', err)
     }
   }
+  // Read only here: the save picker above must not wait for it (it needs the click's activation).
+  const size = opts.expectedPlainSize
+  const limit = opts.blobFallbackMaxBytes
+  const max = typeof limit === 'function' ? await limit() : limit
+  if (size !== undefined && max !== undefined && size > max) throw new BlobDownloadTooLarge(size, max)
   return openBlobSink(opts)
 }
 

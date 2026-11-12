@@ -91,6 +91,7 @@
     "loading": "Opening…",
     "loadingVideo": "Downloading the video…",
     "videoTooLarge": "This video is too large to play here. Download it to watch it.",
+    "tooManyStreams": "Too many videos are playing in this tab. Close one to play this.",
     "failed": "This could not be opened. Try again, or download it.",
     "cannotDraw": "This browser cannot show this format. Showing its preview; download the original.",
     "showingPreview": "Showing a preview: the original is too large to open here.",

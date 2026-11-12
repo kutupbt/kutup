@@ -1,4 +1,5 @@
 import { currentContentOf } from '@kutup/drive-core/keyring'
+import { driveStreamLimits } from '@kutup/files/stream/limits'
 import { contentPath, fileLocation, folderLocation } from '@kutup/drive-core/model'
 import { fetchDecryptedChunks } from '@kutup/files/download/fetchDecrypt'
 import { openDownloadSink } from '@kutup/files/download/streamDownload'
@@ -18,7 +19,12 @@ export async function downloadPhoto(photo: Photo): Promise<void> {
   const { folder, file } = photo
   if (!file.fileKey || !file.name) throw new Error('file is not open')
   // The save picker needs the click's user activation: ask for it first.
-  const sink = await openDownloadSink({ filename: file.name, mimeType: file.mimeType })
+  const sink = await openDownloadSink({
+    filename: file.name,
+    mimeType: file.mimeType,
+    expectedPlainSize: file.size,
+    blobFallbackMaxBytes: async () => (await driveStreamLimits()).blobFallbackMaxBytes,
+  })
   try {
     const url = `${await resolveApiBase()}${contentPath(fileLocation(folder), file.id)}`
     const current = await currentContentOf(file)

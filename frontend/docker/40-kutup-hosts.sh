@@ -110,6 +110,26 @@ server {
         add_header X-Frame-Options $frame_options always;
     }
 
+    # The service worker (Drive, Photos, Chat, Calendar; the others have no
+    # such file and answer 404): always revalidated, so a new one is found
+    # at the next check (docs/plans/drive-block-format.md §4).
+    location = /kutup-sw.js {
+        try_files \$uri =404;
+        add_header Cache-Control "no-cache" always;
+        add_header X-Content-Type-Options nosniff always;
+        add_header Content-Security-Policy "$app_csp" always;
+        add_header X-Frame-Options $frame_options always;
+    }
+
+    # Streams live only in the service worker: a request it doesn't take
+    # (no worker, or a Shift-reload) must not fall through to the app.
+    location ^~ /sw/ {
+        add_header Cache-Control "no-store" always;
+        add_header X-Content-Type-Options nosniff always;
+        add_header Content-Security-Policy "default-src 'none'; sandbox" always;
+        return 404;
+    }
+
     location / {
         try_files \$uri \$uri/ /index.html;
         add_header Cache-Control "no-cache" always;

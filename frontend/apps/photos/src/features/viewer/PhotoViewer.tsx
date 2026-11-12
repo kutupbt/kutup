@@ -4,6 +4,7 @@ import { useTranslation } from 'react-i18next'
 import { toast } from 'sonner'
 import { useTrashFile } from '@kutup/drive-core/mutations'
 import { readOriginal } from '@kutup/drive-core/original'
+import { usePlayback } from '@kutup/drive-core/playback'
 import { isRawName } from '@kutup/files/media/raw'
 import { displayableImage } from '@kutup/files/thumbnails'
 import { useRequiredSession } from '@kutup/session/store'
@@ -31,8 +32,6 @@ import { InfoPanel } from './InfoPanel'
 
 /** Originals up to this size open in the viewer; larger ones show their large thumbnail. */
 const MAX_IMAGE_BYTES = 50 * 1024 * 1024
-/** Videos play once downloaded (Drive's format cannot seek while streaming). */
-const MAX_VIDEO_BYTES = 1024 * 1024 * 1024
 /** Kinds every browser draws; others (HEIC, RAW, TIFF) are tried and may fall back. */
 const INFO_KEY = 'kutup-photos-info'
 
@@ -110,9 +109,9 @@ function readStoredInfo(): boolean {
 
 type Original = { state: 'loading'; read: number } | { state: 'ready'; url: string } | { state: 'unavailable' } | { state: 'failed' }
 
-/** Open the photo's original (or not, when it is too large or cannot be drawn). */
+/** Open a picture's original (or not, when it is too large or cannot be drawn). Videos stream instead (`usePlayback`). */
 function useOriginal(photo: Photo): Original {
-  const tooLarge = photo.file.size > (photo.kind === 'video' ? MAX_VIDEO_BYTES : MAX_IMAGE_BYTES)
+  const tooLarge = photo.kind === 'video' || photo.file.size > MAX_IMAGE_BYTES
   const [original, setOriginal] = useState<Original>(tooLarge ? { state: 'unavailable' } : { state: 'loading', read: 0 })
   useEffect(() => {
     if (tooLarge) {
@@ -190,6 +189,8 @@ function Picture({ photo }: { photo: Photo }) {
   const small = useThumbnail(photo.file, 'sm', photo.folder)
   const large = useThumbnail(photo.file, 'lg', photo.folder)
   const original = useOriginal(photo)
+  // Videos stream (docs/plans/drive-block-format.md §4): a seek fetches one block.
+  const playback = usePlayback(photo.folder, photo.file, photo.kind === 'video')
   const raw = isRawName(photo.file.name ?? '')
   // RAW never draws; HEIC draws in Safari only. Either is converted here.
   const [undrawable, setUndrawable] = useState(raw)
@@ -221,11 +222,11 @@ function Picture({ photo }: { photo: Photo }) {
   const preview = large ?? small
 
   if (photo.kind === 'video') {
-    if (original.state === 'ready' && !unplayable) {
+    if (playback.kind === 'ready' && !unplayable) {
       return (
         <video
           key={photo.id}
-          src={original.url}
+          src={playback.src}
           controls
           autoPlay
           playsInline
@@ -239,13 +240,15 @@ function Picture({ photo }: { photo: Photo }) {
       <div className="relative flex max-h-full max-w-full items-center justify-center">
         {preview ? <img src={preview} alt="" className="max-h-[85svh] max-w-full object-contain opacity-60" /> : null}
         <div className="absolute flex flex-col items-center gap-2 rounded-lg bg-black/60 px-4 py-3 text-sm">
-          {original.state === 'loading' ? (
+          {playback.kind === 'loading' ? (
             <>
               <Spinner label={t('viewer.loadingVideo')} className="text-white" />
-              <span className="tabular-nums">{Math.round((original.read / Math.max(1, photo.file.size)) * 100)}%</span>
+              {playback.read > 0 ? <span className="tabular-nums">{Math.round((playback.read / Math.max(1, photo.file.size)) * 100)}%</span> : null}
             </>
-          ) : original.state === 'unavailable' ? (
+          ) : playback.kind === 'tooLarge' ? (
             <span>{t('viewer.videoTooLarge')}</span>
+          ) : playback.kind === 'busy' ? (
+            <span>{t('viewer.tooManyStreams')}</span>
           ) : unplayable ? (
             <span>{t('viewer.cannotPlay')}</span>
           ) : (

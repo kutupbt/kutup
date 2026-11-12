@@ -198,7 +198,7 @@ static imports and subpaths, and dynamic imports. A dynamic import of a
 computed name is refused too. The static gate refuses `eslint-disable` or
 inline config for these rules (`check-crypto-exceptions.py`). Named
 exceptions in `eslint.config.js`:
-- the calendar's push worker (`apps/calendar/public/push-sw.js`), which
+- the service worker's Calendar push (`packages/config/src/sw/kutup-sw.js`), which
   checks a push's account tag with Web Crypto's HMAC, as a service worker
   can't load the WASM first;
 - the three WASM loaders that import their own glue by URL (Chat's

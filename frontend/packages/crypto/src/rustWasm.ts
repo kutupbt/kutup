@@ -64,6 +64,22 @@ export interface WasmBlockEncryptor {
   free(): void
 }
 
+/** `kutup-crypto-wasm`'s `BlockReader` (blocks.rs): one object, read by block in any order. */
+export interface WasmBlockReader {
+  readonly size: number
+  readonly blockCount: number
+  readonly objectLength: number
+  readonly signerAccountId: string | undefined
+  readonly signerIncarnationId: string | undefined
+  blockOffset(index: number): number
+  sealedBlockLength(index: number): number
+  /** Block `index`'s plaintext; throws unless the sealed bytes hash to the manifest's entry and open at that index. */
+  openBlock(index: number, block: Uint8Array): Uint8Array
+  /** Throws unless this Drive signing public key (base64) made the manifest's signature. */
+  verifySigner(driveSigningPublicKeyBase64: string): void
+  free(): void
+}
+
 export interface CryptoWasmModule {
   accountProfileKey(masterKey: Uint8Array, generation: number, current: unknown, account: string, binding: string): import('./profile').ProfileLookup
   profileLookup(key: string): import('./profile').ProfileLookup
@@ -466,6 +482,21 @@ export interface CryptoWasmModule {
   blockLayout(family: string): { headerBytes: number; blockSize: number; blockOverhead: number; trailerBytes: number }
   /** The sealed manifest's length a trailer (the object's last bytes) names. */
   blockTrailerManifestLength(family: string, trailer: Uint8Array): number
+  /**
+   * A reader of the Drive revision its metadata commits to: the header must
+   * name that revision, the sealed manifest must have that digest and size.
+   * Blocks open by index, each checked against the manifest's hash first.
+   */
+  driveBlockReader(
+    fileKeyBase64: string,
+    expectedFileId: string,
+    expectedGeneration: number,
+    contentRevisionId: string,
+    contentManifestSha256: string,
+    size: number,
+    header: Uint8Array,
+    sealedManifest: Uint8Array,
+  ): WasmBlockReader
   /** A Drive revision's block encryptor (docs/plans/drive-block-format.md §2). */
   driveBlockEncryptor(fileKeyBase64: string, fileId: string, revisionId: string, generation: number, size: number): WasmBlockEncryptor
   /** A whole Drive revision sealed at once, signed by the uploader. */

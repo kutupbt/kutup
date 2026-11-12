@@ -198,7 +198,8 @@ export interface ManifestSignature {
   accountId: string
   /** Lowercase hex: which of the account's keys signed (the hash of its authority key). */
   incarnationId: string
-  signedBy(driveSigningPublicKey: string): boolean
+  /** A block reader in a Worker answers asynchronously. */
+  signedBy(driveSigningPublicKey: string): boolean | Promise<boolean>
 }
 
 /** What every open hands its manifest's signature to (drive-core checks it against the identity pins). */
@@ -209,6 +210,11 @@ let signerCheck: ManifestSignerCheck | null = null
 /** Sets (or, with null, removes) the check every opened revision's signature goes to. */
 export function setManifestSignerCheck(check: ManifestSignerCheck | null): void {
   signerCheck = check
+}
+
+/** The check set with `setManifestSignerCheck`, for readers that open a revision by block (`@kutup/files` blockReader). */
+export function manifestSignerCheck(): ManifestSignerCheck | null {
+  return signerCheck
 }
 
 /** A new revision's id: a random UUID, chosen by the client before it seals (lowercase, as the header and the server name it). */

@@ -650,7 +650,8 @@ language; its tag is `kutup-calendar:<eventId>:<occurrenceStart>`. A click
 focuses the tab and opens the event.
 
 **2. Firing with the app closed (Kutup's push).** The calendar app's own
-service worker (`apps/calendar/public/push-sw.js`, Chat's shape) takes the
+service worker (`/kutup-sw.js?push=calendar&…`, the one worker Kutup's apps
+share, `frontend/packages/config/src/sw/kutup-sw.js`) takes the
 reminder push. It holds no keys: the payload (`{ eventId, startUtc, fireAt,
 allDay, account }`) gives only when, so it shows "Event at 09:30" (or "Event
 today", "Event on Friday, 30 October" for all-day), formatted with the zone

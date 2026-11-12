@@ -36,7 +36,8 @@ The chat app decides from the decrypted history, as Signal Desktop does.
 
 Messages are end-to-end encrypted and usually sealed-sender, so the server
 cannot say who wrote or what. A push is therefore **empty**. It wakes the
-browser's service worker (`/push-sw.js`), which shows one generic
+browser's service worker (`/kutup-sw.js?push=chat&…`, Kutup's one worker,
+`frontend/packages/config/src/sw/kutup-sw.js`), which shows one generic
 notification ("You may have new messages."). Clicking it opens Chat, which
 then shows what arrived.
 

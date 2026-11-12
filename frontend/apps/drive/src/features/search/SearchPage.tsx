@@ -1,4 +1,5 @@
 import { Download, ExternalLink, FolderOpen } from 'lucide-react'
+import { BlobDownloadTooLarge } from '@kutup/files/download/streamDownload'
 import { useMemo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useNavigate, useSearchParams } from 'react-router-dom'
@@ -106,7 +107,13 @@ export function SearchPage() {
       else if ((await downloadFolderZip(hit.folder, () => {})) === 'empty') toast.info(t('drive.zipEmpty'))
     } catch (error) {
       if (error instanceof DOMException && error.name === 'AbortError') return
-      toast.error(error instanceof FsaRequiredError ? t('drive.zipTooLarge') : t('drive.downloadFailed'))
+      toast.error(
+          error instanceof FsaRequiredError
+            ? t('drive.zipTooLarge')
+            : error instanceof BlobDownloadTooLarge
+              ? t('drive.fileTooLargeForBrowser')
+              : t('drive.downloadFailed'),
+        )
     }
   }
 

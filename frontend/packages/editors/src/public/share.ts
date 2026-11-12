@@ -21,6 +21,7 @@ import { fileKeyAtV1 } from '@kutup/crypto/fileKeyring'
 import { editorKindFor } from '@kutup/drive-core/editorKind'
 import { fetchDecryptedChunks } from '@kutup/files/download/fetchDecrypt'
 import { streamDownload } from '@kutup/files/download/streamDownload'
+import { driveStreamLimits } from '@kutup/files/stream/limits'
 import { isListName, stateToListJson } from '@kutup/map/list'
 import { resolveApiBase } from '@kutup/session/apiBase'
 import type { FileKeyHistoryEntry } from '@kutup/session/api-types'
@@ -312,6 +313,7 @@ export async function downloadPublicFile(token: string, file: PublicFile): Promi
     filename: file.name,
     mimeType: file.mimeType,
     expectedPlainSize: file.size,
+    blobFallbackMaxBytes: async () => (await driveStreamLimits({ anonymous: true })).blobFallbackMaxBytes,
     accessToken: '',
   })
 }

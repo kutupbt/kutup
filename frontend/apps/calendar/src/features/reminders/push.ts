@@ -6,7 +6,9 @@ import { loadServerSettings } from '@kutup/session/apps'
 // server encrypts each reminder to (RFC 8291). The worker's words, zone and
 // language travel in its registration URL; it holds no keys.
 
-const WORKER = '/push-sw.js'
+// Kutup's one service worker (`@kutup/config` src/sw/kutup-sw.js), with
+// Calendar's push turned on by `push=calendar`.
+const WORKER = '/kutup-sw.js'
 const PREF = 'kutup-calendar-push'
 
 export function pushSupported(): boolean {
@@ -98,8 +100,8 @@ export interface WorkerWords {
  */
 export async function enablePush(publicKey: string, words: WorkerWords): Promise<void> {
   const { hour12, ...rest } = words
-  const query = new URLSearchParams({ ...rest, ...(hour12 === null ? {} : { hour12: String(hour12) }) }).toString()
-  const registration = await navigator.serviceWorker.register(`${WORKER}?${query}`, { scope: '/' })
+  const query = new URLSearchParams({ push: 'calendar', ...rest, ...(hour12 === null ? {} : { hour12: String(hour12) }) }).toString()
+  const registration = await navigator.serviceWorker.register(`${WORKER}?${query}`, { scope: '/', updateViaCache: 'none' })
   await navigator.serviceWorker.ready
   const key = keyBytes(publicKey)
   let subscription = await registration.pushManager.getSubscription()

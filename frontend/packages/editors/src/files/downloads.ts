@@ -1,4 +1,5 @@
 import { fetchDecryptedChunks } from '@kutup/files/download/fetchDecrypt'
+import { driveStreamLimits } from '@kutup/files/stream/limits'
 import { openDownloadSink } from '@kutup/files/download/streamDownload'
 import { downloadAsZip, FsaRequiredError, type ZipFile } from '@kutup/files/zipDownload'
 import { resolveApiBase } from '@kutup/session/apiBase'
@@ -26,7 +27,12 @@ export async function downloadFile(folder: Folder, file: DriveFile): Promise<voi
     if (exported) return saveExported(file, exported)
   }
   // The save picker needs the click's user activation: ask for it first.
-  const sink = await openDownloadSink({ filename: file.name, mimeType: file.mimeType })
+  const sink = await openDownloadSink({
+    filename: file.name,
+    mimeType: file.mimeType,
+    expectedPlainSize: file.size,
+    blobFallbackMaxBytes: async () => (await driveStreamLimits()).blobFallbackMaxBytes,
+  })
   try {
     const base = await resolveApiBase()
     const content = await currentContent(folder, file)

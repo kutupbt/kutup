@@ -117,6 +117,44 @@ function kutupWasm(modules: WasmModule[]): Plugin {
   }
 }
 
+/** The one service worker's source (src/sw/kutup-sw.js): a plain script, served as it is. */
+const SERVICE_WORKER_SOURCE = path.join(import.meta.dirname, 'src/sw/kutup-sw.js')
+const SERVICE_WORKER_FILE = 'kutup-sw.js'
+
+/**
+ * Kutup's service worker (src/sw/kutup-sw.js: media streams and Web Push)
+ * at `/kutup-sw.js` in the apps that register it: copied into the build as
+ * it is, and served from source in dev. Streams live only in the worker, so
+ * the dev server answers `/sw/*` with 404 as the frontend container does
+ * (frontend/docker/40-kutup-hosts.sh), never with the app.
+ */
+function kutupServiceWorker(): Plugin {
+  return {
+    name: 'kutup-service-worker',
+    configureServer(server) {
+      server.middlewares.use((req, res, next) => {
+        const url = (req.url ?? '').split('?')[0]
+        if (url === `/${SERVICE_WORKER_FILE}`) {
+          res.setHeader('Content-Type', 'text/javascript; charset=utf-8')
+          res.setHeader('Cache-Control', 'no-cache')
+          res.end(readFileSync(SERVICE_WORKER_SOURCE))
+          return
+        }
+        if (url.startsWith('/sw/')) {
+          res.statusCode = 404
+          res.setHeader('Cache-Control', 'no-store')
+          res.end()
+          return
+        }
+        next()
+      })
+    },
+    generateBundle() {
+      this.emitFile({ type: 'asset', fileName: SERVICE_WORKER_FILE, source: readFileSync(SERVICE_WORKER_SOURCE, 'utf8') })
+    },
+  }
+}
+
 /** Dev ports; each app also has its own hostname so cookies stay per app. */
 export const DEV_PORTS: Record<KutupApp | 'editor', number> = { account: 5173, drive: 5174, chat: 5175, editor: 5176, maps: 5177, photos: 5178, office: 5179, contacts: 5180, mail: 5181, pass: 5182, calendar: 5183 }
 
@@ -132,6 +170,8 @@ export function kutupApp(opts: {
   wasm: WasmModule[]
   /** The page allows no inline script (its CSP; frontend/docker/40-kutup-hosts.sh). */
   strictCsp?: boolean
+  /** The app registers Kutup's service worker (streams, Web Push): `/kutup-sw.js` is built in. */
+  serviceWorker?: boolean
 }): UserConfig {
   const requireFromCrypto = createRequire(path.join(FRONTEND, 'packages/crypto/package.json'))
   const apiTarget = process.env.KUTUP_API_TARGET ?? 'http://localhost:3000'
@@ -140,7 +180,13 @@ export function kutupApp(opts: {
   const domain = process.env.KUTUP_DEV_DOMAIN || 'localhost'
   const port = DEV_PORTS[opts.app] + Number(process.env.KUTUP_DEV_PORT_OFFSET || 0)
   return {
-    plugins: [tailwindcss(), react(), kutupWasm(opts.wasm), reloadOnceOnLoadFailure(Boolean(opts.strictCsp))],
+    plugins: [
+      tailwindcss(),
+      react(),
+      kutupWasm(opts.wasm),
+      reloadOnceOnLoadFailure(Boolean(opts.strictCsp)),
+      ...(opts.serviceWorker ? [kutupServiceWorker()] : []),
+    ],
     worker: { format: 'es' },
     resolve: {
       alias: {

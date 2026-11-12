@@ -3,7 +3,9 @@ import type { ChatService } from '@kutup/chat-core/service'
 // Web Push for this browser: a service worker that shows a notification
 // when the server wakes this chat device while Chat is closed.
 
-const WORKER = '/push-sw.js'
+// Kutup's one service worker (`@kutup/config` src/sw/kutup-sw.js), with
+// Chat's push turned on by `push=chat`; it also serves media streams.
+const WORKER = '/kutup-sw.js'
 
 export function webPushSupported(): boolean {
   return 'serviceWorker' in navigator && 'PushManager' in window && typeof Notification !== 'undefined'
@@ -32,8 +34,8 @@ export async function enableWebPush(
   publicKey: string,
   words: { title: string; body: string },
 ): Promise<void> {
-  const query = new URLSearchParams(words).toString()
-  const registration = await navigator.serviceWorker.register(`${WORKER}?${query}`, { scope: '/' })
+  const query = new URLSearchParams({ push: 'chat', ...words }).toString()
+  const registration = await navigator.serviceWorker.register(`${WORKER}?${query}`, { scope: '/', updateViaCache: 'none' })
   await navigator.serviceWorker.ready
   const key = keyBytes(publicKey)
   let subscription = await registration.pushManager.getSubscription()

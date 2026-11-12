@@ -438,78 +438,149 @@ same from block fetches. This is listed in §8.
 **Method: a service worker answering Range requests, as Proton does.**
 
 Proton's current preview (`modals/preview/streaming.ts`, `downloadSW.ts`
-route `/sw/stream/{id}`) works like this:
+route `/sw/stream/{id}`, its second, stateless range handler) works like
+this:
 - The video's `src` is a virtual same-origin URL.
-- The service worker parses `Range` and caps the answer at 4 MiB. Safari asks
-  for the whole file in one range, and a shorter `206` is valid HTTP.
-- It asks the page for those bytes over a MessageChannel.
-- It answers `206` with `Content-Range`.
+- For each request the service worker parses `Range`, finds the page that
+  asked (`clients.get(event.clientId)`), posts it `get_stream_chunk` with a
+  fresh `MessageChannel` port and answers `206` with what comes back,
+  capped at 4 MiB. Safari asks for the whole file in one range, and a
+  shorter `206` is valid HTTP.
+- The worker keeps no stream state: a worker the browser stops or replaces
+  between two requests loses nothing.
 
 The service worker holds no keys; the page decrypts. Proton also has an MSE
 path, but only for fragmented MP4, to avoid Chrome scanning fMP4 through the
 worker (`mseStreaming.ts`), and a full download as the last resort. Kutup
 builds the service worker path, which plays every container the browser
-supports (MP4, WebM, MOV/H.264, MP3, M4A, Opus, FLAC). MSE for fMP4 waits
-until a test shows the Chrome problem (open question 5).
+supports (MP4, WebM, MOV/H.264, MP3, M4A, Opus, FLAC, WAV). MSE for fMP4
+waits until a test shows the Chrome problem (open question 5). Proton's
+older stateful route (a stream registered in the worker, `/sw/video`) is not
+copied.
 
-**Pieces:**
-1. **Block reader, in a dedicated Worker** that the page starts
-   (`@kutup/files` `blockReader`).
-   - The page gives it the file key, the file id, the generation and the
-     revision id. Those are the same keys the page holds today.
-   - It runs the WASM block reader: header, then manifest, then blocks, as in
-     §2.
-   - It fetches with `fetch(url, { headers: { Range } })`, which `connect-src
-     'self'` already allows.
-   - It keeps a small LRU of verified plaintext blocks (default 3, about
-     12 MiB, Proton's `MAXIMUM_BLOCKS_CACHE`) and reads ahead one block.
-2. **Service worker** `kutup-sw.js` at scope `/` on each app host that plays
-   media: `drive.`, `photos.`, `chat.`.
-   - Chat already has `push-sw.js` at `/`. One origin can have only one
-     worker per scope, so push and streaming become one script there.
-   - Route `/sw/stream/{streamId}`. The `streamId` is 128 random bits.
-   - The page registers a stream with `{streamId, size, mimeType, port}`.
-     The worker answers only fetches whose `clientId` is the document that
-     registered the stream. It answers them one at a time per stream (as
-     Proton does).
-   - It caps each answer at `drive.stream.response_max_bytes` (5 MiB) and
-     drops the stream when the page closes the viewer or goes away.
-   - Responses carry `Content-Type`, `Content-Range` and `Accept-Ranges`,
-     plus a strict CSP and `nosniff`, as Proton's do.
-3. **Page glue.** On a request, the page asks the block reader for
-   `[a, b]` and posts the plaintext to the worker over the port as a
-   transferred `ArrayBuffer`.
+**Built (slice 4, 2026-11-12).** The pieces:
+1. **Block reader, in a dedicated Worker** (`@kutup/files`
+   `blockReader/`: `core.ts`, `blockReader.worker.ts`, `client.ts`), one
+   per revision read.
+   - The page gives it the file key, the file id, the generation and what
+     the object must be: the metadata's `content` and size, or a revision
+     and its `RevisionContent` record (from the listing, or served with the
+     response, §2). Those are the keys the page holds today.
+   - It fetches the header, then the trailer, then the sealed manifest with
+     `fetch(url, { headers: { Range } })` (`connect-src 'self'` allows it),
+     and opens them with the WASM `driveBlockReader`: the header must name
+     the file, generation and revision, the manifest must have the
+     committed digest and size, and the server's object length must be the
+     manifest's. Nothing is fetched by block before this succeeds.
+   - The page then runs the manifest's signer through the identity-pin
+     check (`setManifestSignerCheck`, warn-not-block) before it releases a
+     byte; the check may hold the first byte back for at most 10 s.
+   - Any byte range is served from blocks fetched by their own Range, each
+     hashed against the manifest's entry and opened at its index before a
+     byte leaves the Worker. It keeps an LRU of verified plaintext blocks
+     (`drive.stream.cache_blocks`, default 3, about 12 MiB, Proton's
+     `MAXIMUM_BLOCKS_CACHE`; one fewer on iOS) and reads ahead
+     `drive.stream.readahead_blocks` (default 1). A long range the server
+     answers in parts (`drive.stream.response_max_bytes`) is read in parts.
+   - Closing aborts its fetches (`AbortController`), drops the cache and
+     frees the Rust reader. Where there are no Workers (unit tests) the same
+     reader runs in the page.
+2. **Whole downloads** (`download/fetchDecrypt.ts` `fetchDecryptedChunks`)
+   use the same reader: blocks in order, one fetched ahead, each handed to
+   the save picker's file (File System Access) as it is verified. Without
+   the picker the Blob holds the whole file, refused above
+   `drive.stream.blob_fallback_max_bytes` (`BlobDownloadTooLarge`). ZIPs,
+   editors, Photos' downloads and public links read this way too.
+3. **Service worker** `kutup-sw.js` at scope `/`, one script for every app
+   that streams or takes Web Push: `drive.`, `photos.`, `chat.` and
+   `calendar.`. One origin has only one worker per scope, so Chat's and
+   Calendar's `push-sw.js` are merged into it. Its single source is
+   `frontend/packages/config/src/sw/kutup-sw.js`, a plain script with no
+   imports; the shared Vite plugin copies it into those apps' builds
+   (`kutupApp({ serviceWorker: true })`) and serves it in dev. An app opts
+   into push by its registration URL (`?push=chat&…`, `?push=calendar&…`,
+   the words in the page's language); a page that only streams keeps the
+   registration it finds.
+   - Route `GET /sw/stream/{streamId}`; the `streamId` is 128 random bits,
+     base64url, known only to the page. Every other path outside `/sw/` goes
+     to the network untouched (no `respondWith`); other `/sw/*` paths are
+     404.
+   - Per request, statelessly: a destination other than `video` or `audio`
+     is refused (403); no `Range` is a 400; a `Range` that isn't one
+     `a-b`, `a-` or `-k` is a 416; no client (a navigation, a closed page)
+     is a 404. Otherwise it posts `{type: 'get_stream_chunk', v, accepts,
+     streamId, range}` to that client with a fresh port and waits up to
+     190 s (then 504).
+   - It answers `206` with the bytes, checked against what it asked (the
+     same start, no byte past the asked end or the total, at most 16 MiB,
+     the largest `drive.stream.response_max_bytes`). The reader caps each
+     answer at the end of the block its first byte is in and at
+     `drive.stream.response_max_bytes`, so an answer is one verified block
+     at most. No bytes: `416` with `Content-Range: bytes */total`.
+   - Every response, errors included, carries `Content-Security-Policy:
+     default-src 'none'; sandbox`, `X-Content-Type-Options: nosniff`,
+     `Cross-Origin-Resource-Policy: same-origin`, `Cache-Control: no-store`,
+     `Accept-Ranges: bytes`, an exact `Content-Length`, and a
+     `Content-Type` from an audio/video allowlist, else
+     `application/octet-stream`; a `206` carries `Content-Range`.
+   - `skipWaiting()` on install, `clients.claim()` on activate; it is
+     registered with `updateViaCache: 'none'`.
+   - The message protocol is versioned. `accepts` lists the versions a
+     worker serves (its own, and the one before for a release after a
+     change). A page that speaks none of them answers `{kind: 'version'}`;
+     the worker answers `503`, and the page asks for a worker update and
+     shows the reload guard's prompt ("Kutup was updated", `@kutup/config`
+     `reloadGuard.ts`, event `kutup:reload-needed`).
+4. **Page glue** (`@kutup/files` `stream/page.ts`, `stream/limits.ts`;
+   drive-core `playback.ts`). The window registers nothing in the worker. It
+   listens on `navigator.serviceWorker` for `get_stream_chunk` naming one of
+   its own stream ids and transfers the port to that stream's reader
+   Worker, which answers on it directly with a transferred buffer.
+   `drive.stream.max_concurrent` (default 3) is enforced in the page. No
+   controller: the page waits for one up to 15 s (registration, activation
+   and claim), then falls back to a whole download into a Blob, up to
+   `drive.stream.blob_fallback_max_bytes`.
+5. **Players.** Photos' viewer and Drive's Quick Look play video and audio
+   from `/sw/stream/{id}`, for files up to `drive.stream.max_bytes`
+   (Photos' `MAX_VIDEO_BYTES` is gone). The limits come from
+   `GET /api/drive/limits`; a public link's page uses the defaults.
 
 **Seeking.** When the element seeks, it opens a new range request. The
-reader computes ⌊a/B⌋ and fetches only that block (and the next one, if the
-range crosses into it). A 2-hour film at 4 Mbit/s is about 3.6 GB; a seek
-costs one 4 MiB fetch. For an MP4 whose `moov` box is at the end, the browser
-first asks for the tail, which is one more block.
+reader computes ⌊a/B⌋ and fetches only that block (and reads the next one
+ahead). A 2-hour film at 4 Mbit/s is about 3.6 GB; a seek costs one 4 MiB
+fetch. For an MP4 whose `moov` box is at the end, the browser first asks for
+the tail (`bytes=-k` or `a-`), which is one more block. Repeated ranges are
+normal and come from the block cache.
 
 **Memory.** Bounded by the cache (blocks × 4 MiB), the readahead and one
-capped response in flight per stream, and at most
-`drive.stream.max_concurrent` streams per tab (default 3). Nothing grows with
-the file's size.
+capped answer in flight per request, and at most
+`drive.stream.max_concurrent` streams per tab. Nothing grows with the file's
+size.
 
-**Cancelling.** When the viewer closes, the page aborts the reader's
-fetches with an `AbortController`, clears the cache and unregisters the
-stream. If the browser cancels a request, the worker tells the page, and the
-page drops the pending read.
+**Cancelling.** When the viewer closes, the page closes the stream: the
+reader's fetches are aborted, its cache dropped and its id forgotten. A
+request for an id the page no longer has gets an error at once, so the
+worker never waits for it.
 
 **The keys stay in the page.** The file key and the plaintext blocks live in
 the page and its dedicated Worker, as they do today. The service worker sees
-only the plaintext ranges of a stream the page registered. It is
-same-origin, so it has the same trust, but it is longer-lived and shared by
-every tab of the origin. That is why it never gets keys. Keys there would
-outlive the viewer and be reachable from other tabs.
+only the plaintext of one answer at a time, for a request from the page
+that holds the stream. It is same-origin, so it has the same trust, but it
+is longer-lived and shared by every tab of the origin. That is why it never
+gets keys or state: keys there would outlive the viewer and be reachable
+from other tabs.
 
 **CSP and scope.**
-- The existing policy already allows a same-origin worker
-  (`worker-src 'self' blob:`) and same-origin media (`media-src 'self'`), so
-  nothing is loosened.
-- The script is served at `/kutup-sw.js` with `Cache-Control: no-cache`.
-- nginx answers `/sw/*` with 404, so a request that no worker controls never
-  falls through to the app.
+- The apps' policy (`frontend/docker/40-kutup-hosts.sh`) has `worker-src
+  'self' blob:` and `media-src 'self' blob:`: the worker script and the
+  stream URLs are same-origin, so `worker-src 'self'` and `media-src 'self'`
+  are all this design needs; `blob:` stays for the fallback (and the other
+  viewers). Nothing is loosened. The strict CSP branch, when it lands,
+  needs the same two.
+- The frontend container serves `/kutup-sw.js` with `Cache-Control:
+  no-cache` and answers `/sw/*` with 404 (strict CSP, `no-store`), so a
+  request that no worker controls never falls through to the app; the dev
+  server does the same.
 - The worker calls `clients.claim()`, so the first visit is controlled
   without a reload.
 
@@ -520,19 +591,30 @@ worker) and browsers with service workers disabled.
 
 **Safari and iOS.**
 - Safari probes with `bytes=0-1` and then may ask for the whole file. The
-  worker's per-answer cap (`drive.stream.response_max_bytes`, 5 MiB, at
-  least one sealed block) handles both.
+  per-answer cap (one block, at most `drive.stream.response_max_bytes`)
+  handles both.
 - It needs exact `Content-Range` and `Content-Length` on every `206`.
-- iOS gives a tab little memory, so the default cache there is 2 blocks.
+- iOS gives a tab little memory, so the cache there is one block fewer (2 by
+  default).
 - Lock screen and background playback are best-effort: iOS may suspend the
   page that supplies the bytes.
-- The e2e suite runs on WebKit to cover this.
+- The e2e suite runs on WebKit to cover this (slice 5).
+
+**Tests.** Unit tests: range parsing, the response headers, the type
+allowlist, the answer checks and the 503 on a version mismatch
+(`kutup-sw.test.ts`); the reader's order (the manifest before any block, a
+corrupted block refused, a short last block, the answer spans; `core.test.ts`,
+`plan.test.ts`); the page's version handling (`page.test.ts`). Browser
+regressions, in the account suite: `190-stream-worker-stopped` (the worker
+stopped through CDP between two range requests; playback goes on) and
+`191-stream-worker-swapped` (a new worker script takes over mid-playback).
 
 **Downloads to disk** keep File System Access, with a Blob fallback. Proton
 also streams downloads through its worker (`/sw/{id}` with
-`Content-Disposition`). That would lift the 1 GiB Blob limit on Firefox and
-Safari. It is a follow-up on the same worker, not part of this plan (open
-question 7).
+`Content-Disposition`, `download.ts`). That route is stateful (a
+`ReadableStream` handed to the worker) and needs a keep-alive ping; it would
+lift the Blob limit on Firefox and Safari. It is a follow-up on the same
+worker (open question 7).
 
 ## 5. Other clients
 
@@ -968,12 +1050,18 @@ Each slice is a PR.
      the upload sweep aborts those no row names once older than
      `storage_incomplete_multipart_max_age_seconds` (a day by default;
      docs/self-hosting.md has the matching bucket rule).
-4. **Download and streaming.**
+4. **Download and streaming.** Built (2026-11-12, §4).
    - The block reader Worker and `fetchDecrypt` on blocks.
    - The CLI download (built with slice 3, §5).
-   - `kutup-sw.js` (merged with Chat's push worker) and the stream registry.
-5. **Players.** Photos' viewer and Drive's preview stream video and audio.
-   `MAX_VIDEO_BYTES` gives way to `drive.stream.max_bytes`. The e2e spec.
+   - `kutup-sw.js` (merged with Chat's and Calendar's push workers), its
+     stateless stream route and the page glue.
+   - Browser regressions 190 and 191 (written, not yet run).
+5. **Players.** Photos' viewer and Drive's Quick Look stream video and audio,
+   and `MAX_VIDEO_BYTES` gave way to `drive.stream.max_bytes` (built with
+   slice 4). Left: the e2e spec of §9 (a long video, seeking, the network
+   log, WebKit, the no-worker fallback), Drive's file page (`FileEditorPage`)
+   and public links' players, which still read the whole file, and
+   downloads through the worker (`/sw/{id}`, open question 7).
 6. **Chat.** Attachments and backup media on suite 2; Chat's viewer streams.
 7. **Removal.**
    - `stream.rs`, suite 1, `KUTPDB2`/`KUTPCM1`/`KUTPBM1`, the JS
