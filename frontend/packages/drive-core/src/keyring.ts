@@ -3,6 +3,7 @@ import { fileKeyAtV1 } from '@kutup/crypto/fileKeyring'
 import type { DriveObjectExpected, DriveObjectToOpen } from '@kutup/crypto'
 import api from '@kutup/session/client'
 import { folderLocation, type DriveFile, type Folder } from './model'
+import { claimRevisionAuthor, versionAuthor } from './revisionAuthors'
 
 /**
  * Keys across a folder's epochs (docs/plans/drive-share-revocation.md). A
@@ -111,6 +112,10 @@ export async function sealedAt(
 export async function currentContentOf(file: DriveFile): Promise<{ fileKey: Uint8Array; expected: DriveObjectExpected }> {
   if (!file.content) throw new Error('file is not open')
   const generation = file.contentKeyGeneration
+  // Still the original upload: its uploader wrote it.
+  if (file.content.revisionId === file.originalRevisionId && file.uploaderUserId) {
+    claimRevisionAuthor(file.id, file.content.revisionId, { accountId: file.uploaderUserId })
+  }
   return {
     fileKey: await fileKeyAt(file, generation),
     expected: { fileId: file.id, generation, content: file.content, size: file.size },
@@ -125,8 +130,16 @@ export async function currentContentOf(file: DriveFile): Promise<{ fileKey: Uint
  */
 export async function versionContentOf(
   file: DriveFile,
-  version: { id: string; keyGeneration: number; revisionContentEnvelope: string | null },
+  version: {
+    id: string
+    keyGeneration: number
+    revisionContentEnvelope: string | null
+    /** Who the history says saved it: its signer must be the same account (`manifestSigners`). */
+    authorUserId?: string | null
+    remoteAuthor?: string | null
+  },
 ): Promise<{ fileKey: Uint8Array; expected: DriveObjectExpected }> {
+  claimRevisionAuthor(file.id, version.id, versionAuthor(version))
   return {
     fileKey: await fileKeyAt(file, version.keyGeneration),
     expected: {
@@ -155,11 +168,15 @@ export function relayedVersion(saved: RelayedState): { id: string; keyGeneration
 
 /**
  * The file's original upload (`/files/{id}/original`), which no listing
- * names: it opens against the revision and sealed record served with it.
+ * names: the revision its sealed metadata names (`originalRevisionId`), and
+ * nothing else the server might serve, opened against the sealed record
+ * served with it.
  */
 export async function originalContentOf(file: DriveFile): Promise<{ fileKey: Uint8Array; expected: DriveObjectToOpen }> {
+  if (!file.originalRevisionId) throw new Error("the file's metadata names no original upload")
+  claimRevisionAuthor(file.id, file.originalRevisionId, file.uploaderUserId ? { accountId: file.uploaderUserId } : null)
   return {
     fileKey: await fileKeyAt(file, file.originalKeyGeneration),
-    expected: { fileId: file.id, generation: file.originalKeyGeneration, served: true },
+    expected: { fileId: file.id, generation: file.originalKeyGeneration, revisionId: file.originalRevisionId, served: true },
   }
 }

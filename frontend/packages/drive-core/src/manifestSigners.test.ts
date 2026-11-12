@@ -52,8 +52,32 @@ describe('who signed a revision', () => {
   it("takes this account's own signature, and warns of one under its name it did not make", async () => {
     expect(await manifestSignerVerdict(me, signature('me', 'inc-ME', 'key-me'))).toEqual({ kind: 'verified' })
     expect(await manifestSignerVerdict(me, signature('me', 'inc-ME', 'key-other'))).toEqual({ kind: 'forged', name: 'me@kutup.dev' })
-    // What this account signed before it was reset: that key is gone.
-    expect(await manifestSignerVerdict(me, signature('me', 'inc-OLD', 'key-old'))).toEqual({ kind: 'unknown' })
+    // This account under another incarnation than its own now: a reset
+    // this device didn't make, or its name passed off.
+    expect(await manifestSignerVerdict(me, signature('me', 'inc-OLD', 'key-old'))).toEqual({ kind: 'changed', name: 'me@kutup.dev' })
+  })
+
+  it('warns when a good signature is not by the author the history shows', async () => {
+    // The version row says bob saved it; bob signed it.
+    expect(await manifestSignerVerdict(me, signature('bob', 'inc-B', 'key-bob'), { accountId: 'bob' })).toEqual({ kind: 'verified' })
+    expect(await manifestSignerVerdict(me, signature('me', 'inc-ME', 'key-me'), { accountId: 'me' })).toEqual({ kind: 'verified' })
+    // The history says me; bob signed it.
+    expect(await manifestSignerVerdict(me, signature('bob', 'inc-B', 'key-bob'), { accountId: 'me' })).toEqual({
+      kind: 'authorMismatch',
+      name: 'bob@kutup.dev',
+      claimed: null,
+    })
+    // Someone on another server, by address (case aside).
+    expect(await manifestSignerVerdict(me, signature('bob', 'inc-B', 'key-bob'), { address: 'Bob@Kutup.dev' })).toEqual({ kind: 'verified' })
+    expect(await manifestSignerVerdict(me, signature('me', 'inc-ME', 'key-me'), { address: 'bob@kutup.dev' })).toEqual({
+      kind: 'authorMismatch',
+      name: 'me@kutup.dev',
+      claimed: 'bob@kutup.dev',
+    })
+    // A forged or changed signature says so, whatever the history claims.
+    expect(await manifestSignerVerdict(me, signature('bob', 'inc-B', 'key-mallory'), { accountId: 'me' })).toEqual({ kind: 'forged', name: 'bob@kutup.dev' })
+    // An account never met stays silent, whoever the history names.
+    expect(await manifestSignerVerdict(me, signature('carol', 'inc-C', 'key-carol'), { accountId: 'bob' })).toEqual({ kind: 'unknown' })
   })
 
   it("checks a pinned account's signature with the key its pinned authority vouches for", async () => {

@@ -63,6 +63,8 @@ async function uploadRemote(
     mimeType: file.type || 'application/octet-stream',
     size: file.size,
     content: sealed.content,
+    // The first commit names the original upload; every later one carries it.
+    originalRevisionId: revisionId,
     sha256: contentSha256,
   }
   if (media) metadata.media = media

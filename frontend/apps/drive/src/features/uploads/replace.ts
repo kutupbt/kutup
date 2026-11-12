@@ -106,6 +106,9 @@ export async function replaceContent(folder: Folder, listed: DriveFile, file: Fi
         size: file.size,
         sha256,
         ...(media ? { media } : {}),
+        // Carried unchanged (docs/plans/drive-block-format.md §2).
+        ...(holder.originalRevisionId ? { originalRevisionId: holder.originalRevisionId } : {}),
+        ...(holder.stateRevisionId ? { stateRevisionId: holder.stateRevisionId } : {}),
       },
       contentHash: await contentHashIn(folder, sha256),
       accessToken: freshAccessToken,

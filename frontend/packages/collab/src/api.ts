@@ -1,6 +1,6 @@
 import axios from 'axios'
 import api from '@kutup/session/client'
-import { QuotaExceededError } from '@kutup/session/errors'
+import { MetadataConflictError, QuotaExceededError, type CurrentMetadata } from '@kutup/session/errors'
 
 export interface VersionRow {
   id: string
@@ -112,11 +112,21 @@ export interface NewVersion {
    */
   revisionContentEnvelope: string
   /**
-   * A whole-file save becomes the file's current content: the file's next
-   * metadata, committing to this revision (the file's current revision + 1).
-   * A note's state (`yjs`) carries none.
+   * The file's next metadata (the file's current revision + 1): a whole-file
+   * save becomes the file's current content and the metadata commits to it;
+   * a note's state (`yjs`) is named by it as the saved state
+   * (`stateRevisionId`, docs/plans/drive-block-format.md §2).
    */
   metadata?: { metadataEnvelope: string; metadataRevision: number }
+}
+
+/** The current metadata a `409 revision_conflict` carries (null when it carries none). */
+function currentMetadataOf(body: { metadataRevision?: unknown; metadataEnvelope?: unknown } | undefined): CurrentMetadata | null {
+  if (!body) return null
+  const { metadataRevision, metadataEnvelope } = body
+  if (typeof metadataRevision !== 'number' || !Number.isSafeInteger(metadataRevision) || metadataRevision < 1) return null
+  if (typeof metadataEnvelope !== 'string' || !metadataEnvelope) return null
+  return { metadataRevision, metadataEnvelope }
 }
 
 /** A conditional save lost: the file holds `current` now (a version id, or `original`). */
@@ -161,9 +171,14 @@ export async function createVersion(
     if (axios.isAxiosError(err) && err.response?.status === 413) {
       throw new QuotaExceededError()
     }
-    const body = axios.isAxiosError(err) ? (err.response?.data as { code?: string; current?: string } | undefined) : undefined
+    const body = axios.isAxiosError(err)
+      ? (err.response?.data as { code?: string; current?: string; metadataRevision?: unknown; metadataEnvelope?: unknown } | undefined)
+      : undefined
     if (axios.isAxiosError(err) && err.response?.status === 409 && body?.code === 'version_conflict' && body.current) {
       throw new VersionConflictError(body.current)
+    }
+    if (axios.isAxiosError(err) && err.response?.status === 409 && body?.code === 'revision_conflict') {
+      throw new MetadataConflictError(currentMetadataOf(body))
     }
     throw err
   }

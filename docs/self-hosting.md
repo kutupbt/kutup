@@ -1307,6 +1307,18 @@ defaults suit a remote store on a slow link; each is a setting in `.env`:
 A transfer that keeps moving has no total limit, because a whole object can
 be many gigabytes.
 
+**Unfinished multipart uploads.** Resumable uploads are S3 multipart
+uploads. A cancelled or abandoned one is aborted when its upload is removed;
+if that abort fails (the store was unreachable), its parts stay in the
+bucket, unlisted and still taking space. The server's upload sweep lists the
+store's multipart uploads and aborts any that no upload names once they are
+older than the **Abort leftover upload parts after** server setting (a day
+by default). A store that supports it can do the same on its own side: a
+bucket lifecycle rule that aborts incomplete multipart uploads after a day
+(S3's `AbortIncompleteMultipartUpload` with `DaysAfterInitiation: 1`; R2 and
+B2 have the same rule in their bucket settings). Keep the rule's age at
+least as long as the setting, so an upload still running is never cut off.
+
 The admin page cannot ask such a store for its capacity; set
 `STORAGE_TOTAL_BYTES` if you want a capacity readout. The SeaweedFS backup
 steps above do not apply: the store's durability is the provider's, and the

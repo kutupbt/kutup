@@ -59,6 +59,8 @@ fn metadata_v2(
             *uuid::Uuid::parse_str(revision).unwrap().as_bytes(),
             manifest,
         ),
+        original_revision_id: None,
+        state_revision_id: None,
         sha256: None,
         media: None,
     })

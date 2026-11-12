@@ -37,6 +37,7 @@ import {
   sealRevisionContent,
   type ContentCommitment,
   type FileMetadataDraftV1,
+  type FileMetadataV2,
   type MediaMetadataV1,
 } from '@kutup/crypto'
 import { hashBlob } from '@kutup/crypto/contentHash'
@@ -392,6 +393,18 @@ async function commitUpload(opts: CommitUploadOptions): Promise<void> {
   }
 }
 
+/** `draft` naming the original upload and the saved state `current` names (and nothing `current` doesn't). */
+function withRevisionsOf(draft: FileMetadataDraftV1, current: FileMetadataV2): FileMetadataDraftV1 {
+  const { originalRevisionId: _original, stateRevisionId: _state, ...rest } = draft
+  void _original
+  void _state
+  return {
+    ...rest,
+    ...(current.originalRevisionId ? { originalRevisionId: current.originalRevisionId } : {}),
+    ...(current.stateRevisionId ? { stateRevisionId: current.stateRevisionId } : {}),
+  }
+}
+
 /** One commit of the revision with `draft` (and a new name's hash). */
 async function commitOnce(opts: CommitUploadOptions, baseDraft: FileMetadataDraftV1, nameHash: string | undefined): Promise<void> {
   // What the revision is, sealed with it: its content record goes up with
@@ -416,12 +429,15 @@ async function commitOnce(opts: CommitUploadOptions, baseDraft: FileMetadataDraf
           // Someone wrote the file meanwhile: on top of what it is now.
           if (row.keyGeneration !== opts.keyGeneration) throw new VersionConflict('key')
           const current = await openFileMetadataV1(row, opts.fileKey)
-          draft = { ...draft, name: current.name }
+          draft = withRevisionsOf({ ...draft, name: current.name }, current)
         }
+        // A new file's first commit names its original upload; a version
+        // carries the one the file has (docs/plans/drive-block-format.md §2).
+        const named = opts.base ? draft : { ...draft, originalRevisionId: opts.revisionId }
         return renameFileRecordV1(
           { id: opts.fileId, keyGeneration: opts.keyGeneration, metadataRevision },
           opts.fileKey,
-          { ...draft, content: opts.content },
+          { ...named, content: opts.content },
         )
       },
     })

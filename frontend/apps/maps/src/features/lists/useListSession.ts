@@ -5,6 +5,7 @@ import { toast } from 'sonner'
 import type * as Y from 'yjs'
 import { getCursorColor } from '@kutup/collab/identity'
 import { deterministicSeed, openCollabSession, type CollabSession } from '@kutup/collab/session'
+import { stateCommitterOf } from '@kutup/drive-core/metadataCommit'
 import { SenderCheck } from '@kutup/collab/senders'
 import { accountNameOfKey } from '@kutup/drive-core/accountName'
 import { accountAuthorityVerdict } from '@kutup/drive-core/identityPins'
@@ -127,6 +128,8 @@ export function useListSession(file: DriveFile | null, readOnly: boolean, folder
           keyGeneration: file.keyGeneration,
           fileKeyAt: (generation) => fileKeyAt(file, generation),
           readOnly,
+          // Each saved state commits with the list's next metadata naming it.
+          commitState: stateCommitterOf(file),
           username: identity.current.username,
           cursorColor: identity.current.color,
           seed: {

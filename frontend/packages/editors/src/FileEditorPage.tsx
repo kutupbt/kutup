@@ -564,6 +564,7 @@ function Workspace({
             {...common}
             initialContent={opened.initialText}
             contentRevisionId={file.content?.revisionId ?? null}
+            metadataTarget={keys.target}
             readOnly={readOnly}
             base={location.kind === 'local' ? undefined : collabBase(location, file.id)}
           />

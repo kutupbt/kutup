@@ -277,14 +277,19 @@ export async function checkServedRecord(
 }
 
 /**
- * A revision the response names rather than the caller: the original upload
- * (`/files/{id}/original`), which no listing names. Its id and sealed
- * record come with it (`x-kutup-revision`, `x-kutup-revision-content`), and
- * it opens against that record like any other revision.
+ * A revision whose sealed record comes with the response rather than from a
+ * listing: the original upload (`/files/{id}/original`) and a public link's
+ * saved state (`/share/{token}/state/{id}`). The caller names the revision
+ * from what the file's sealed metadata commits to (`originalRevisionId`,
+ * `stateRevisionId`), so the server can't pick another genuine revision:
+ * the response must name this one, and its record (`x-kutup-revision`,
+ * `x-kutup-revision-content`) is opened for it.
  */
 export interface ServedRevision {
   fileId: string
   generation: number
+  /** The revision the file's metadata names. */
+  revisionId: string
   served: true
 }
 
@@ -297,9 +302,10 @@ export const REVISION_CONTENT_HEADER = 'x-kutup-revision-content'
 
 /**
  * What the object must be, given what its response says it is: a served
- * revision takes the id and record the response names (the record binds
- * them, so a wrong one fails); the current content checks the record served
- * with it, when there is one, against its metadata.
+ * revision must be the one the caller named from the metadata, and opens
+ * against the record served with it (the record binds the id, so a record
+ * of another revision fails too); the current content checks the record
+ * served with it, when there is one, against its metadata.
  */
 export async function resolveServed(
   fileKey: Uint8Array,
@@ -307,11 +313,13 @@ export async function resolveServed(
   served: { revisionId: string | null; revisionContentEnvelope: string | null },
 ): Promise<DriveObjectExpected> {
   if ('served' in expected) {
-    if (!served.revisionId) throw new Error('the response does not name its revision')
+    if (served.revisionId !== expected.revisionId) {
+      throw new Error("the server served another revision than the file's metadata names")
+    }
     return {
       fileId: expected.fileId,
       generation: expected.generation,
-      revisionId: served.revisionId,
+      revisionId: expected.revisionId,
       revisionContentEnvelope: served.revisionContentEnvelope,
     }
   }

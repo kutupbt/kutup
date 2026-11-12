@@ -61,6 +61,8 @@ export function toDriveFile(
     sha256: result?.metadata.sha256 ?? null,
     media: result?.metadata.media ?? null,
     content: result?.metadata.content ?? null,
+    originalRevisionId: result?.metadata.originalRevisionId ?? null,
+    stateRevisionId: result?.metadata.stateRevisionId ?? null,
     fileKey: result?.fileKey ?? null,
     fileKeyEnvelope: row.fileKeyEnvelope,
     originalKeyGeneration: row.originalKeyGeneration,

@@ -316,6 +316,8 @@ export interface AdminSettings {
   driveStreamMaxConcurrent: number
   driveStreamResponseMaxBytes: number
   driveStreamBlobFallbackMaxBytes: number
+  /** How old an incomplete multipart upload no upload names gets before it is aborted, in seconds. */
+  storageIncompleteMultipartMaxAgeSeconds: number
   /** Federation deliveries (docs/plans/federation-outbox.md): backoff and worker in seconds, records and announces in days. */
   federationRetryBaseSeconds: number
   federationRetryMaxSeconds: number

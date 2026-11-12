@@ -926,7 +926,9 @@
         "driveStreamResponseMaxBytes": "Largest part per request (bytes)",
         "driveStreamResponseMaxBytesHint": "The most one ranged download answer carries, also across servers.",
         "driveStreamBlobFallbackMaxBytes": "Largest file played from memory (bytes)",
-        "driveStreamBlobFallbackMaxBytesHint": "Where a browser can't stream, files up to this size load whole into memory to play."
+        "driveStreamBlobFallbackMaxBytesHint": "Where a browser can't stream, files up to this size load whole into memory to play.",
+        "storageIncompleteMultipartMaxAgeSeconds": "Abort leftover upload parts after (seconds)",
+        "storageIncompleteMultipartMaxAgeSecondsHint": "Unfinished multipart uploads that no upload names any more are aborted once this old, freeing their parts."
       },
       "federationLimits": {
         "federationRetryBaseSeconds": "First wait (seconds)",

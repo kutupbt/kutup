@@ -52,9 +52,9 @@ export async function downloadFile(folder: Folder, file: DriveFile): Promise<voi
 
 export { FsaRequiredError }
 
-/** A ZIP entry already decrypted here: nothing is fetched or opened for it. */
+/** A ZIP entry already decrypted here: nothing is fetched or opened for it, so it names no key or revision. */
 function plainEntry(id: string, name: string, bytes: Uint8Array): ZipFile {
-  return { id, name, size: bytes.length, fileKey: new Uint8Array(32), plain: bytes, expected: { fileId: id, generation: 1, served: true } }
+  return { id, name, size: bytes.length, plain: bytes }
 }
 
 function openedContent(file: DriveFile, content: FileContent) {

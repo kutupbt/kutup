@@ -61,6 +61,8 @@ struct CryptoVectors {
 struct FileMetadataVec {
     canonical: Vec<FileMetadataCase>,
     invalid: Vec<String>,
+    v2_canonical: Vec<FileMetadataCase>,
+    v2_invalid: Vec<String>,
     content_hash: ContentHashVec,
 }
 
@@ -954,6 +956,20 @@ fn file_metadata_matches_canonical_vector() {
     }
     for bad in &v.invalid {
         assert!(file_metadata::decode(bad.as_bytes()).is_err(), "{bad}");
+    }
+    for case in &v.v2_canonical {
+        let parsed = file_metadata::decode_v2(case.input.as_bytes()).unwrap();
+        assert_eq!(
+            std::str::from_utf8(&file_metadata::encode_v2(&parsed).unwrap()).unwrap(),
+            case.output
+        );
+        assert_eq!(
+            file_metadata::decode_v2(case.output.as_bytes()).unwrap(),
+            parsed
+        );
+    }
+    for bad in &v.v2_invalid {
+        assert!(file_metadata::decode_v2(bad.as_bytes()).is_err(), "{bad}");
     }
     let mut hasher = ContentHasher::new();
     for chunk in &v.content_hash.chunks {

@@ -976,7 +976,19 @@ pub const DRIVE_STREAM_BLOB_FALLBACK_MAX_BYTES: NumericSetting = NumericSetting 
     unit: SettingUnit::Bytes,
     per_account: true,
 };
-pub const DRIVE_SETTINGS: [NumericSetting; 8] = [
+/// How old an incomplete multipart upload no upload row names gets before
+/// the sweep aborts it, freeing its parts (an abort that failed after its
+/// row was removed leaves one behind).
+pub const STORAGE_INCOMPLETE_MULTIPART_MAX_AGE_SECONDS: NumericSetting = NumericSetting {
+    key: "storage_incomplete_multipart_max_age_seconds",
+    field: "storageIncompleteMultipartMaxAgeSeconds",
+    default: 24 * 3600,
+    min: 3600,
+    max: 30 * 24 * 3600,
+    unit: SettingUnit::Seconds,
+    per_account: false,
+};
+pub const DRIVE_SETTINGS: [NumericSetting; 9] = [
     DRIVE_UPLOAD_MAX_BYTES,
     DRIVE_VERSION_MAX_BYTES,
     DRIVE_STREAM_MAX_BYTES,
@@ -985,6 +997,7 @@ pub const DRIVE_SETTINGS: [NumericSetting; 8] = [
     DRIVE_STREAM_MAX_CONCURRENT,
     DRIVE_STREAM_RESPONSE_MAX_BYTES,
     DRIVE_STREAM_BLOB_FALLBACK_MAX_BYTES,
+    STORAGE_INCOMPLETE_MULTIPART_MAX_AGE_SECONDS,
 ];
 
 /// The federation outbox's backoff (docs/plans/federation-outbox.md): the

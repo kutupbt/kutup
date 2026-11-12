@@ -16,6 +16,11 @@
 -- block-format (suite 2) row without its envelope is refused; a
 -- streaming-format (suite 1) row has none. The envelope's length is fixed
 -- (the purpose pads to one size): 356 bytes, 476 in base64.
+--
+-- Requires a fresh database (the clean-slate wipe that ships the block
+-- format, docs/plans/drive-block-format.md §6): `blob_suite` defaults to 1
+-- and nothing is backfilled, so a block-format row stored before this
+-- migration would be marked as the streaming format and lack its record.
 ALTER TABLE files
     ADD COLUMN blob_suite smallint NOT NULL DEFAULT 1,
     ADD COLUMN revision_content_envelope text,

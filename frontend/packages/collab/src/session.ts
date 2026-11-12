@@ -24,7 +24,7 @@ import { LogPosition } from './logPosition'
 import type { SenderCheck } from './senders'
 import { KIND } from './envelope'
 import { buildAwarenessName, randomSenderSeqPrefix, withAlpha } from './identity'
-import { SnapshotTrigger } from './snapshot'
+import { SnapshotTrigger, type StateCommit } from './snapshot'
 import { collabSocketUrl } from './socketUrl'
 import { CollabTransport, type HelloMsg, type PositionMsg } from './transport'
 
@@ -69,6 +69,11 @@ export interface CollabSessionOptions {
   fileKeyAt?: (generation: number) => Promise<Uint8Array>
   /** Follow edits live, change nothing (no saving, no restoring). */
   readOnly: boolean
+  /**
+   * How a saved state commits with the file's next metadata naming it
+   * (drive-core `stateCommitter`); editors only.
+   */
+  commitState?: StateCommit
   /** The signed-in user, for the cursor label. */
   username: string | null
   cursorColor: string
@@ -170,6 +175,7 @@ export async function openCollabSession(options: CollabSessionOptions): Promise<
         base,
         ydoc: doc,
         getSeq: () => position.applied,
+        commitState: options.commitState,
         encryptSnapshot: async (bytes: Uint8Array) => {
           // A note's state is a revision of its own, signed by this account;
           // its id becomes the version's (docs/plans/drive-block-format.md §2).

@@ -5,7 +5,7 @@
 //! wrapped with that link key, so the stored ciphertext is useless without the fragment.
 //! Read endpoints are anonymous — the token is the capability.
 
-use axum::extract::{Path, State};
+use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use axum::Json;
@@ -543,34 +543,51 @@ async fn link_reaches(state: &AppState, token: &str, file_id: &str) -> AppResult
     Ok(fid)
 }
 
-/// `GET /api/share/{token}/state/{fileId}` — a note's or place list's latest
-/// saved state (a Yjs version, sealed under the file key of the generation in
+/// Which saved state a public link reads: `revision`, the one the file's
+/// sealed metadata names (`stateRevisionId`).
+#[derive(Debug, Deserialize)]
+pub struct StateQuery {
+    revision: Option<String>,
+}
+
+/// `GET /api/share/{token}/state/{fileId}` — a note's or place list's saved
+/// state (a Yjs version, sealed under the file key of the generation in
 /// `X-Kutup-Key-Generation`; `X-Kutup-Revision` names the version and
 /// `X-Kutup-Revision-Content` carries its sealed content record, which the
 /// page opens first), for the page to turn back into the file: their
 /// edits are not whole-file versions, so the download alone would be the
-/// upload. `404` when it has none. Anonymous.
+/// upload. `?revision=` asks for the state the file's sealed metadata names
+/// (the page refuses any other, docs/plans/drive-block-format.md §2);
+/// without it, the latest. `404` when there is no such state. Anonymous.
 #[utoipa::path(
     get,
     path = "/api/share/{token}/state/{fileId}",
     tag = "shares",
     params(
         ("token" = String, Path, description = "Share token (the capability)"),
-        ("fileId" = String, Path, description = "File id")
+        ("fileId" = String, Path, description = "File id"),
+        ("revision" = Option<String>, Query, description = "The state's revision (version) id, as the file's metadata names it")
     ),
     responses((status = 200, description = "The sealed state (application/octet-stream)"), (status = 404, description = "No saved state"))
 )]
 pub async fn public_share_state(
     State(state): State<AppState>,
     Path((token, file_id)): Path<(String, String)>,
+    Query(query): Query<StateQuery>,
 ) -> AppResult<Response> {
     let fid = link_reaches(&state, &token, &file_id).await?;
+    let revision = query
+        .revision
+        .as_deref()
+        .map(|value| Uuid::parse_str(value).map_err(|_| AppError::bad_request("invalid revision")))
+        .transpose()?;
     let latest: Option<(Uuid, String, i32, Option<String>)> = sqlx::query_as(
         "SELECT id, storage_path, key_generation, revision_content_envelope FROM file_versions
-         WHERE file_id = $1 AND kind = 'yjs' AND size_bytes > 0
+         WHERE file_id = $1 AND kind = 'yjs' AND size_bytes > 0 AND ($2::uuid IS NULL OR id = $2)
          ORDER BY created_at DESC LIMIT 1",
     )
     .bind(fid)
+    .bind(revision)
     .fetch_optional(&state.pool)
     .await?;
     let Some((version_id, path, key_generation, revision_content)) = latest else {

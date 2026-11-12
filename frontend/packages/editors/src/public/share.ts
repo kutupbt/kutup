@@ -68,6 +68,8 @@ export interface PublicFile {
   size: number
   /** The current content its metadata commits to (docs/plans/drive-block-format.md §2); null when it did not open. */
   content: ContentCommitment | null
+  /** A note's or place list's latest saved state, as its metadata names it; null when none (or it did not open). */
+  stateRevisionId: string | null
 }
 
 export interface PublicShare {
@@ -177,6 +179,7 @@ async function loadFolder(token: string, share: ShareInfo, key: Uint8Array): Pro
         mimeType: opened?.metadata.mimeType ?? 'application/octet-stream',
         size: opened?.metadata.size ?? 0,
         content: opened?.metadata.content ?? null,
+        stateRevisionId: opened?.metadata.stateRevisionId ?? null,
       }
     }),
   )
@@ -208,6 +211,7 @@ async function loadFile(share: ShareInfo, key: Uint8Array): Promise<PublicFile> 
     mimeType: metadata?.mimeType ?? 'application/octet-stream',
     size: metadata?.size ?? 0,
     content: metadata?.content ?? null,
+    stateRevisionId: metadata?.stateRevisionId ?? null,
   }
 }
 
@@ -232,23 +236,29 @@ export function publicFileBase(token: string, fileId: string): string {
  * A note's text or a place list's places as last saved. Their edits are Yjs
  * state, not whole-file versions, so the download alone is the upload. Null
  * for other files, or when nothing was saved since the upload.
+ *
+ * The state read is the one the file's sealed metadata names
+ * (`stateRevisionId`, committed with each saved state): the page asks for
+ * it by id and refuses any other the server serves, so it can't be handed
+ * an older genuine state under the current metadata
+ * (docs/plans/drive-block-format.md §8).
  */
 export async function editedContent(token: string, file: PublicFile): Promise<Uint8Array | null> {
   const name = file.name ?? ''
   const list = isListName(name)
   if (!file.currentKey || (!list && editorKindFor(name) !== 'text')) return null
-  let response
-  try {
-    response = await api.get<ArrayBuffer>(`${shareBase(token)}/state/${file.row.id}`, { responseType: 'arraybuffer' })
-  } catch (error) {
-    if ((error as { response?: { status?: number } }).response?.status === 404) return null
-    throw error
-  }
+  // Nothing saved since the upload, as the metadata says: the upload is it.
+  const stateRevisionId = file.stateRevisionId
+  if (!stateRevisionId) return null
+  // A state the metadata names but the server doesn't serve is refused (a 404 too).
+  const response = await api.get<ArrayBuffer>(`${shareBase(token)}/state/${file.row.id}`, {
+    params: { revision: stateRevisionId },
+    responseType: 'arraybuffer',
+  })
   const generation = Number(response.headers['x-kutup-key-generation'])
   const key = await publicFileKeyAt(file, generation)
-  // A note's saved state: the snapshot the response names, opened against
-  // the sealed record served with it.
-  const expected = await resolveServed(key, { fileId: file.row.id, generation, served: true }, {
+  // That state, opened against the sealed record served with it.
+  const expected = await resolveServed(key, { fileId: file.row.id, generation, revisionId: stateRevisionId, served: true }, {
     revisionId: typeof response.headers[REVISION_HEADER] === 'string' ? response.headers[REVISION_HEADER] : null,
     revisionContentEnvelope:
       typeof response.headers[REVISION_CONTENT_HEADER] === 'string' ? response.headers[REVISION_CONTENT_HEADER] : null,

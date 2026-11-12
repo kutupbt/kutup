@@ -265,7 +265,17 @@ pub async fn sweep_chat_mailboxes_before(
 /// objects for good and releases their bytes. Returns what was removed.
 pub async fn version_retention_tick(pool: &PgPool, storage: &StorageService) -> usize {
     let now = OffsetDateTime::now_utc();
-    type Row = (Uuid, Uuid, OffsetDateTime, bool, String, Uuid, i64, i32);
+    type Row = (
+        Uuid,
+        Uuid,
+        OffsetDateTime,
+        bool,
+        String,
+        Uuid,
+        i64,
+        i32,
+        String,
+    );
     let mut removed = 0;
     // Every file with thinnable versions, a page at a time (keyed on the
     // file id, so a file whose versions all stay never hides the rest).
@@ -273,7 +283,7 @@ pub async fn version_retention_tick(pool: &PgPool, storage: &StorageService) -> 
     loop {
         let rows: Vec<Row> = match sqlx::query_as(
             r#"SELECT v.id, v.file_id, v.created_at, v.keep_forever, v.storage_path,
-                  v.author_user_id, v.size_bytes, u.version_retention_days
+                  v.author_user_id, v.size_bytes, u.version_retention_days, v.kind
            FROM file_versions v
            JOIN files f ON f.id = v.file_id
            JOIN collections c ON c.id = f.collection_id
@@ -283,7 +293,7 @@ pub async fn version_retention_tick(pool: &PgPool, storage: &StorageService) -> 
              WHERE NOT keep_forever AND created_at < now() - interval '1 day' AND file_id > $1
              ORDER BY file_id
              LIMIT 500)
-           ORDER BY v.file_id, v.created_at DESC"#,
+           ORDER BY v.file_id, v.kind, v.created_at DESC"#,
         )
         .bind(after)
         .fetch_all(pool)
@@ -299,7 +309,9 @@ pub async fn version_retention_tick(pool: &PgPool, storage: &StorageService) -> 
             break;
         };
         after = last.1;
-        for file in rows.chunk_by(|a, b| a.1 == b.1) {
+        // Each kind on its own: a note's newest state stays, whatever
+        // whole-file version came after it (its metadata names that state).
+        for file in rows.chunk_by(|a, b| a.1 == b.1 && a.8 == b.8) {
             let retention = i64::from(file[0].7);
             let candidates: Vec<crate::version_retention::Candidate> = file
                 .iter()
@@ -311,7 +323,7 @@ pub async fn version_retention_tick(pool: &PgPool, storage: &StorageService) -> 
                 .collect();
             let doomed = crate::version_retention::doomed(&candidates, now, retention);
             for row in file.iter().filter(|r| doomed.contains(&r.0)) {
-                let (id, _, _, _, path, _, _, _) = row;
+                let (id, _, _, _, path, _, _, _, _) = row;
                 // Row and charge go together, and only if this pass removed the
                 // row (a purge of the file may have raced it). The object goes
                 // after: a failed delete leaves an orphan for the sweep, never a
@@ -667,6 +679,49 @@ async fn take_stale_upload(
     Ok(Some(row))
 }
 
+/// Most incomplete multipart uploads one sweep looks at.
+const INCOMPLETE_MULTIPART_PER_SWEEP: usize = 1000;
+
+/// Aborts the store's multipart uploads that were started longer ago than
+/// `storage_incomplete_multipart_max_age_seconds` (a day by default) and that
+/// no upload row (`uploads`, `chat_media_uploads`) names: the parts an abort
+/// left behind when it failed after its row was removed (a cancel, the
+/// stale-upload sweep above). A bucket lifecycle rule for incomplete
+/// multipart uploads does the same on the store's side
+/// (docs/self-hosting.md). Returns how many it aborted.
+pub(crate) async fn sweep_incomplete_multipart(
+    pool: &PgPool,
+    storage: &StorageService,
+) -> anyhow::Result<usize> {
+    let max_age = crate::site_settings::STORAGE_INCOMPLETE_MULTIPART_MAX_AGE_SECONDS
+        .load(pool)
+        .await?;
+    let before = OffsetDateTime::now_utc().unix_timestamp() - max_age;
+    let uploads = storage
+        .list_multipart_uploads_before(before, INCOMPLETE_MULTIPART_PER_SWEEP)
+        .await?;
+    let mut aborted = 0;
+    for (key, upload_id) in uploads {
+        // An upload a row still names goes on (a long one), or goes with
+        // its row when that is swept.
+        let named: bool = sqlx::query_scalar(
+            "SELECT EXISTS (SELECT 1 FROM uploads WHERE s3_upload_id = $1)
+                 OR EXISTS (SELECT 1 FROM chat_media_uploads WHERE s3_upload_id = $1)",
+        )
+        .bind(&upload_id)
+        .fetch_one(pool)
+        .await?;
+        if named {
+            continue;
+        }
+        match storage.abort_multipart(&key, &upload_id).await {
+            Ok(()) => aborted += 1,
+            Err(error) => tracing::warn!(%error, "incomplete multipart abort failed"),
+        }
+    }
+    Ok(aborted)
+}
+
 /// A corrected account: its new counter, then the Drive, Chat, Contacts,
 /// Mail and Calendar bytes it adds up from.
 type Reconciled = (i64, i64, i64, i64, i64, i64);
@@ -772,6 +827,17 @@ pub async fn uploads_sweep_once(
         }
         Ok(_) => {}
         Err(error) => tracing::warn!(error = %error, "Chat-media hand-over sweep failed"),
+    }
+    match sweep_incomplete_multipart(pool, storage).await {
+        Ok(0) => {}
+        Ok(aborted) => {
+            tracing::info!(
+                aborted,
+                "aborted incomplete multipart uploads no upload names"
+            );
+            reaped += aborted;
+        }
+        Err(error) => tracing::warn!(error = %error, "incomplete multipart sweep failed"),
     }
     if let Err(error) = sweep_chat_media_orphans(pool, storage).await {
         tracing::warn!(error = %error, "Chat-media orphan sweep failed");

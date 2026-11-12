@@ -6,6 +6,7 @@ import type * as Y from 'yjs'
 import { getCursorColor } from '@kutup/collab/identity'
 import { accountKeyOf } from '@kutup/crypto/accountRef'
 import { deterministicSeed, openCollabSession } from '@kutup/collab/session'
+import { stateCommitterOf } from '@kutup/drive-core/metadataCommit'
 import { SenderCheck } from '@kutup/collab/senders'
 import { accountAuthorityVerdict } from '@kutup/drive-core/identityPins'
 import { TooManyDevicesError } from '@kutup/session/currentDevice'
@@ -48,6 +49,8 @@ async function editOnce(
     keyGeneration: file.keyGeneration,
     fileKeyAt: (generation) => fileKeyAt(file, generation),
     readOnly: false,
+    // Each saved state commits with the list's next metadata naming it.
+    commitState: stateCommitterOf(file),
     username: identity.username,
     cursorColor: identity.color,
     seed: {

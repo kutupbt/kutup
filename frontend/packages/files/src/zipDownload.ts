@@ -17,11 +17,16 @@ export class FsaRequiredError extends Error {
 
 export interface ZipFile {
   id: string
-  /** What the object must be: the current content its metadata commits to, or a version by its id (and the key generation it is sealed under). */
-  expected: DriveObjectToOpen
+  /**
+   * What the object must be: the current content its metadata commits to, or
+   * a version by its id (and the key generation it is sealed under). Absent
+   * only for `plain` content, which is never fetched or opened.
+   */
+  expected?: DriveObjectToOpen
   name: string
   size: number
-  fileKey: Uint8Array
+  /** The key `expected` opens under; absent only for `plain` content. */
+  fileKey?: Uint8Array
   isRemote?: boolean
   remoteShareId?: string
   /** Where the encrypted blob is, under the API base, when it is not the
@@ -74,6 +79,9 @@ async function pumpFileIntoZip(
     await flush()
     return
   }
+  // Fetched content opens only against what it must be: never without it.
+  if (!f.expected || !f.fileKey) throw new Error('a fetched ZIP entry needs its committed content')
+  const { expected, fileKey } = f
   const url = f.contentPath
     ? `${base}${f.contentPath}`
     : f.isRemote
@@ -82,8 +90,8 @@ async function pumpFileIntoZip(
   let pushed = false
   for await (const { plain, isFinal } of fetchDecryptedChunks(
     url,
-    f.fileKey,
-    f.expected,
+    fileKey,
+    expected,
     accessToken,
     signal,
   )) {

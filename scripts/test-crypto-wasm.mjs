@@ -669,6 +669,14 @@ for (const { input, output } of metadataVector.canonical) {
 for (const bad of metadataVector.invalid) {
   assert.throws(() => crypto.canonicalFileMetadata(withContent(bad)))
 }
+// The revisions a reader asks for by name: the original upload and the latest saved state.
+for (const { input, output } of metadataVector.v2Canonical) {
+  assert.equal(crypto.canonicalFileMetadata(input), output)
+  assert.equal(crypto.canonicalFileMetadata(output), output)
+}
+for (const bad of metadataVector.v2Invalid) {
+  assert.throws(() => crypto.canonicalFileMetadata(bad))
+}
 const contentHasher = new crypto.ContentHasher()
 for (const chunk of metadataVector.contentHash.chunks) contentHasher.update(Buffer.from(chunk, 'base64'))
 assert.equal(contentHasher.finish(), metadataVector.contentHash.hash)

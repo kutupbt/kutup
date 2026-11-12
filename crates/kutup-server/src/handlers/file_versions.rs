@@ -284,10 +284,11 @@ pub async fn patch(
     Ok(Json(to_version_row(t)).into_response())
 }
 
-/// A file's newest version, which stays: for documents and notes it is the
-/// file's current content (version_retention keeps it for the same reason).
+/// A file's newest version of its kind, which stays: for documents it is the
+/// file's current content, for notes the saved state their metadata names
+/// (version_retention keeps it for the same reason).
 pub(crate) const NEWEST_VERSION: &str =
-    "SELECT n.id FROM file_versions n WHERE n.file_id = v.file_id ORDER BY n.created_at DESC, n.id DESC LIMIT 1";
+    "SELECT n.id FROM file_versions n WHERE n.file_id = v.file_id AND n.kind = v.kind ORDER BY n.created_at DESC, n.id DESC LIMIT 1";
 
 /// `DELETE /api/files/{fileId}/versions/{vid}` — deletes one earlier version
 /// for good and frees its storage. The file's owner or the version's author
@@ -419,11 +420,11 @@ const MAX_LABEL_CHARS: usize = 200;
     request_body(
         content = Vec<u8>,
         content_type = "multipart/form-data",
-        description = "`file` (the sealed Drive file blob), `kind` (`file` | `yjs`), `seqAtSnapshot`, `docKeyId`, optional `label`, `keepForever`, `basedOn` (a whole-file save made from this version id, or `original`: stored only if that is still the current content), `revisionId` (a block-format blob's revision, which becomes the version's id) and, with it, `revisionContentEnvelope` (the revision's sealed content record, for every kind). A block-format `kind: file` save commits inline: `metadataEnvelope` and `metadataRevision` (the file's current + 1), the file's next metadata committing to this revision"
+        description = "`file` (the sealed Drive file blob), `kind` (`file` | `yjs`), `seqAtSnapshot`, `docKeyId`, optional `label`, `keepForever`, `basedOn` (a whole-file save made from this version id, or `original`: stored only if that is still the current content), `revisionId` (a block-format blob's revision, which becomes the version's id) and, with it, `revisionContentEnvelope` (the revision's sealed content record, for every kind). Every block-format save commits inline: `metadataEnvelope` and `metadataRevision` (the file's current + 1), the file's next metadata, committing to this revision (`kind: file`) or naming it as the saved state (`kind: yjs`)"
     ),
     responses(
         (status = 201, description = "The stored version", body = VersionRow),
-        (status = 409, description = "`code: version_conflict`: the current content is no longer `basedOn`; `current` names it. `code: revisionTaken`: the revision id is in use. `code: revision_conflict`: `metadataRevision` is not the file's current + 1"),
+        (status = 409, description = "`code: version_conflict`: the current content is no longer `basedOn`; `current` names it. `code: revisionTaken`: the revision id is in use. `code: revision_conflict`: `metadataRevision` is not the file's current + 1 (`metadataRevision` and `metadataEnvelope` give the current one)"),
         (status = 413, description = "Storage quota exceeded, or larger than `driveVersionMaxBytes`")
     )
 )]
@@ -570,10 +571,12 @@ pub(crate) async fn store_version(
         fid,
         generation,
     )?;
-    // A block-format whole-file save commits inline
-    // (docs/plans/drive-block-format.md §10 slice 3): it becomes the file's
-    // content, so the file's next metadata, committing to it, comes along.
-    let metadata = if kind == "file" && format != crate::drive_blob::BlobFormat::Stream {
+    // A block-format save commits inline (docs/plans/drive-block-format.md
+    // §10 slice 3): a whole file becomes the file's content, so the file's
+    // next metadata, committing to it, comes along; a note's state (`yjs`)
+    // comes with the next metadata naming it as the saved state, so a
+    // reader that asks for the state the metadata names gets no other.
+    let metadata = if format != crate::drive_blob::BlobFormat::Stream {
         let envelope = fields
             .get("metadataEnvelope")
             .filter(|value| !value.is_empty())
@@ -587,7 +590,7 @@ pub(crate) async fn store_version(
     } else {
         if fields.contains_key("metadataEnvelope") || fields.contains_key("metadataRevision") {
             return Err(AppError::bad_request(
-                "metadata goes with a block-format whole-file version",
+                "metadata goes with a block-format version",
             ));
         }
         None
@@ -609,11 +612,15 @@ pub(crate) async fn store_version(
     // One whole-file save at a time per file, so the content it replaces is
     // the content current when it lands. Taken before the key check's shared
     // lock: upgrading a shared lock would deadlock two saves.
-    let parent = if kind == "file" {
+    // A save that commits metadata locks the row too: its revision is
+    // checked and advanced below.
+    if kind == "file" || metadata.is_some() {
         sqlx::query("SELECT 1 FROM files WHERE id = $1 FOR UPDATE")
             .bind(fid)
             .execute(&mut *tx)
             .await?;
+    }
+    let parent = if kind == "file" {
         let current = current_whole_version(&mut tx, fid).await?;
         check_based_on(based_on, current)?;
         current
@@ -625,12 +632,19 @@ pub(crate) async fn store_version(
     crate::drive_writes::lock_file_key(&mut tx, fid, key_generation).await?;
     // Its metadata is the file's next revision (the row is locked above).
     if let Some((envelope, revision)) = metadata {
-        let current: i64 = sqlx::query_scalar("SELECT metadata_revision FROM files WHERE id = $1")
-            .bind(fid)
-            .fetch_one(&mut *tx)
-            .await?;
+        let (current, current_envelope): (i64, Option<String>) =
+            sqlx::query_as("SELECT metadata_revision, metadata_envelope FROM files WHERE id = $1")
+                .bind(fid)
+                .fetch_one(&mut *tx)
+                .await?;
         if current.checked_add(1) != Some(revision) {
-            return Err(crate::drive_blob::revision_conflict());
+            // The metadata as it is now comes back, so the saver seals on
+            // top of it without reading the file's folder again (an editor
+            // on another server has none to read).
+            return Err(crate::drive_blob::revision_conflict_at(
+                current,
+                current_envelope.as_deref(),
+            ));
         }
         crate::handlers::files::validate_envelope(
             envelope,

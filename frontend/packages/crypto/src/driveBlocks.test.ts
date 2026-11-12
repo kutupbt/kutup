@@ -21,6 +21,7 @@ import {
   openDriveFile,
   openDriveObject,
   openRevisionContent,
+  resolveServed,
   sealDriveFile,
   sealRevisionContent,
 } from './driveBlocks'
@@ -88,6 +89,23 @@ describe('Drive block objects', () => {
     await checkServedRecord(fileKey, current, null, null)
     await expect(checkServedRecord(fileKey, { ...current, size: 8 }, revisionId, sealed.revisionContentEnvelope)).rejects.toThrow()
     await expect(checkServedRecord(fileKey, current, newRevisionId(), sealed.revisionContentEnvelope)).rejects.toThrow()
+  })
+
+  it('opens a served revision only when it is the one the metadata names', async () => {
+    // Two genuine revisions of the file: the server may serve either.
+    const named = newRevisionId()
+    const other = newRevisionId()
+    const first = await sealDriveFile(bytes(9), fileKey, { fileId, revisionId: named, generation: 1 }, signer)
+    const second = await sealDriveFile(bytes(9, 3), fileKey, { fileId, revisionId: other, generation: 1 }, signer)
+    const asked = { fileId, generation: 1, revisionId: named, served: true as const }
+    const expected = await resolveServed(fileKey, asked, { revisionId: named, revisionContentEnvelope: first.revisionContentEnvelope })
+    expect(await openDriveObject(first.bytes, fileKey, expected)).toEqual(bytes(9))
+    // Another genuine revision, named as itself: refused before anything opens.
+    await expect(resolveServed(fileKey, asked, { revisionId: other, revisionContentEnvelope: second.revisionContentEnvelope })).rejects.toThrow()
+    await expect(resolveServed(fileKey, asked, { revisionId: null, revisionContentEnvelope: first.revisionContentEnvelope })).rejects.toThrow()
+    // Named as the asked one, but its record and bytes are the other's.
+    const lying = await resolveServed(fileKey, asked, { revisionId: named, revisionContentEnvelope: second.revisionContentEnvelope })
+    await expect(openDriveObject(second.bytes, fileKey, lying)).rejects.toThrow()
   })
 
   it('matches the Rust revision content vectors', async () => {

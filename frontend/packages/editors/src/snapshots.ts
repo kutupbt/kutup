@@ -2,8 +2,6 @@ import { createVersion, type VersionRow } from '@kutup/collab/api'
 import {
   newRevisionId,
   openDriveObject,
-  openFileMetadataV1,
-  renameFileRecordV1,
   sealDriveFile,
   resolveServed,
   REVISION_CONTENT_HEADER,
@@ -11,9 +9,8 @@ import {
   type DriveObjectToOpen,
   type FileMetadataV2,
 } from '@kutup/crypto'
-import type { DriveFileBinding } from '@kutup/drive-core/keyring'
-import { acceptFileMetadata } from '@kutup/drive-core/metadataGuard'
-import { conflictCode, currentFileRow, manifestSigner } from '@kutup/files/upload/commit'
+import { commitNextMetadata, type MetadataTarget } from '@kutup/drive-core/metadataCommit'
+import { currentFileRow, manifestSigner } from '@kutup/files/upload/commit'
 import api from '@kutup/session/client'
 
 /**
@@ -26,16 +23,7 @@ import api from '@kutup/session/client'
  * becomes the version's id. It becomes the file's current content: the
  * file's next metadata, committing to it, goes in the same request.
  */
-export interface SnapshotTarget {
-  /** The file's current key, and the file and generation it seals for. */
-  fileKey: Uint8Array
-  context: DriveFileBinding
-  /**
-   * The file as last known: its folder (to read it again), its metadata
-   * revision and metadata (null when it did not open). Each save moves it on.
-   */
-  file: { collectionId: string; metadataRevision: number; metadata: FileMetadataV2 | null }
-}
+export type SnapshotTarget = MetadataTarget
 
 /**
  * Where a live editor is in the collaboration log: every edit up to `seq`
@@ -57,13 +45,13 @@ export interface FileVersionOptions {
 /**
  * Seals `bytes` as a new revision and stores it as the file's content, with
  * the file's next metadata. When someone else's change to the metadata
- * landed meanwhile (`409 revision_conflict`), the file is read again and the
- * metadata sealed on top of it, once; anything else is thrown as it came.
+ * landed meanwhile (`409 revision_conflict`), the metadata is sealed again
+ * on top of theirs (as the conflict gives it, or read again from the
+ * file's folder), once; anything else is thrown as it came.
  */
 export async function saveFileVersion(target: SnapshotTarget, bytes: Uint8Array, opts: FileVersionOptions = {}): Promise<VersionRow> {
   const { fileId, generation } = target.context
-  const base = target.file.metadata
-  if (!base) throw new Error('file is not open')
+  if (!target.file.metadata) throw new Error('file is not open')
   const revisionId = newRevisionId()
   const sealed = await sealDriveFile(bytes, target.fileKey, { fileId, revisionId, generation }, await manifestSigner())
   const next = (metadata: FileMetadataV2): FileMetadataV2 => {
@@ -72,9 +60,11 @@ export async function saveFileVersion(target: SnapshotTarget, bytes: Uint8Array,
     void _sha256
     return { ...kept, size: bytes.length, content: sealed.content }
   }
-  const store = async (metadataRevision: number, metadata: FileMetadataV2) => {
-    const commit = await renameFileRecordV1({ id: fileId, keyGeneration: generation, metadataRevision }, target.fileKey, next(metadata))
-    const version = await createVersion(fileId, sealed.bytes, {
+  // Read again from the file's folder when a conflict doesn't carry the metadata.
+  const committing: SnapshotTarget = { ...target, reread: target.reread ?? (() => currentFileRow(target.file.collectionId, fileId)) }
+  try {
+    return await commitNextMetadata(committing, next, (metadata) =>
+    createVersion(fileId, sealed.bytes, {
       kind: 'file',
       // The office editor's edits up to here are in these bytes: the server
       // trims its log to this point, and whoever opens this version resumes
@@ -87,22 +77,13 @@ export async function saveFileVersion(target: SnapshotTarget, bytes: Uint8Array,
       basedOn: opts.basedOn,
       revisionId,
       revisionContentEnvelope: sealed.revisionContentEnvelope,
-      metadata: commit,
-    })
-    target.file = { ...target.file, metadataRevision: commit.metadataRevision, metadata: next(metadata) }
-    await acceptFileMetadata(fileId, commit.metadataRevision).catch(() => undefined)
-    return version
+      metadata,
+    }),
+    )
+  } finally {
+    // Each commit moves the file on: the caller's copy too.
+    target.file = committing.file
   }
-  try {
-    return await store(target.file.metadataRevision, base)
-  } catch (error) {
-    if (conflictCode(error) !== 'revision_conflict') throw error
-  }
-  // Renamed (or otherwise changed) meanwhile: keep what it says now.
-  const row = await currentFileRow(target.file.collectionId, fileId)
-  if (row.keyGeneration !== generation) throw new Error('the file key changed since')
-  const current = await openFileMetadataV1(row, target.fileKey)
-  return store(row.metadataRevision, current)
 }
 
 export async function saveSnapshot(

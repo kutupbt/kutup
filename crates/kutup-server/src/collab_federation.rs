@@ -1325,6 +1325,22 @@ async fn call_home<T: Serialize, R: DeserializeOwned>(
 /// passed on with the version it names (checked: a version id or `original`).
 fn version_conflict(body: &[u8]) -> Option<AppError> {
     let answer: serde_json::Value = serde_json::from_slice(body).ok()?;
+    // Someone else's metadata landed first: the file's metadata as it is now
+    // goes back to the editor, which seals on top of it.
+    if answer.get("code")?.as_str()? == "revision_conflict" {
+        let revision = answer.get("metadataRevision")?.as_i64()?;
+        let envelope = match answer.get("metadataEnvelope") {
+            None => None,
+            Some(value) => {
+                let text = value.as_str()?;
+                if text.len() > crate::handlers::files::MAX_TEXT_FIELD_BYTES {
+                    return None;
+                }
+                Some(text)
+            }
+        };
+        return Some(crate::drive_blob::revision_conflict_at(revision, envelope));
+    }
     if answer.get("code")?.as_str()? != "version_conflict" {
         return None;
     }

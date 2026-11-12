@@ -54,6 +54,18 @@ export interface FileMetadataV2 {
   size: number
   /** The current revision and its sealed manifest's digest: a reader refuses any other object. */
   content: ContentCommitment
+  /**
+   * The original upload's revision: set by the first commit (the first
+   * `content.revisionId`) and carried unchanged by every later revision, so
+   * a read of `/original` refuses any other revision the server serves.
+   */
+  originalRevisionId?: string
+  /**
+   * A note's or place list's latest saved Yjs state: each state commits
+   * with the metadata revision that names it, so a reader asks for exactly
+   * this state and refuses any other.
+   */
+  stateRevisionId?: string
   /** SHA-256 of the plaintext, canonical base64: Photos' duplicate check only. */
   sha256?: string
   media?: MediaMetadataV1
@@ -94,6 +106,8 @@ function validateRevision(value: number): void {
 async function encodeMetadata(metadata: FileMetadataV2): Promise<Uint8Array> {
   const module = await getCryptoWasm()
   const plain: FileMetadataV2 = { name: metadata.name, mimeType: metadata.mimeType, size: metadata.size, content: { revisionId: metadata.content.revisionId, manifestSha256: metadata.content.manifestSha256 } }
+  if (metadata.originalRevisionId) plain.originalRevisionId = metadata.originalRevisionId
+  if (metadata.stateRevisionId) plain.stateRevisionId = metadata.stateRevisionId
   if (metadata.sha256) plain.sha256 = metadata.sha256
   if (metadata.media) plain.media = metadata.media
   return new TextEncoder().encode(module.canonicalFileMetadata(JSON.stringify(plain)))

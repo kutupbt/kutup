@@ -231,6 +231,19 @@ pub fn revision_conflict() -> AppError {
         .with_details(serde_json::json!({ "code": "revision_conflict" }))
 }
 
+/// [`revision_conflict`] with the file's metadata as it is now, for a saver
+/// that seals on top of it (a version save; docs/api.md).
+pub fn revision_conflict_at(metadata_revision: i64, metadata_envelope: Option<&str>) -> AppError {
+    let mut details = serde_json::json!({
+        "code": "revision_conflict",
+        "metadataRevision": metadata_revision,
+    });
+    if let Some(envelope) = metadata_envelope {
+        details["metadataEnvelope"] = serde_json::Value::String(envelope.to_owned());
+    }
+    AppError::conflict("metadata revision must advance exactly once").with_details(details)
+}
+
 /// A whole-buffer upload of a new file (multipart, federated) commits inline
 /// (docs/plans/drive-block-format.md §10 slice 3): in the block format it
 /// names its metadata's revision, which must be 1 (`409` otherwise); the

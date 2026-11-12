@@ -285,7 +285,15 @@ impl ContentCommitmentV1 {
 }
 
 /// A Drive file's metadata in the block format: V1's fields and the content
-/// it commits to, which is required.
+/// it commits to, which is required, and the other revisions a reader asks
+/// for by what the response names (docs/plans/drive-block-format.md §2):
+/// - `originalRevisionId`: the original upload's revision, set by the first
+///   commit (equal to `content.revisionId` then) and carried unchanged by
+///   every later metadata revision, so `/original` is refused when the
+///   server serves another revision;
+/// - `stateRevisionId`: a note's or place list's latest saved Yjs state,
+///   named by the metadata revision each state commits with, so a reader
+///   asks for that state and refuses any other.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct FileMetadataV2 {
@@ -293,6 +301,12 @@ pub struct FileMetadataV2 {
     pub mime_type: String,
     pub size: u64,
     pub content: ContentCommitmentV1,
+    /// A canonical lowercase UUID.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub original_revision_id: Option<String>,
+    /// A canonical lowercase UUID.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub state_revision_id: Option<String>,
     /// SHA-256 of the plaintext content, canonical base64; kept only for
     /// Photos' duplicate check.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -310,7 +324,16 @@ impl FileMetadataV2 {
             self.sha256.as_deref(),
             self.media.as_ref(),
         )?;
-        self.content.validate()
+        self.content.validate()?;
+        if let Some(original) = &self.original_revision_id {
+            crate::drive_object::parse_canonical_uuid(original, "original revision")
+                .map_err(|_| invalid("originalRevisionId"))?;
+        }
+        if let Some(state) = &self.state_revision_id {
+            crate::drive_object::parse_canonical_uuid(state, "state revision")
+                .map_err(|_| invalid("stateRevisionId"))?;
+        }
+        Ok(())
     }
 }
 
@@ -439,6 +462,8 @@ mod tests {
             mime_type: v1.mime_type,
             size: v1.size,
             content: ContentCommitmentV1::new(REVISION, [9; 32]),
+            original_revision_id: None,
+            state_revision_id: None,
             sha256: v1.sha256,
             media: v1.media,
         }
@@ -480,6 +505,36 @@ mod tests {
             assert!(decode_v2(bad.as_bytes()).is_err(), "{bad}");
         }
         assert!(decode_v2(br#"{"name":"a","mimeType":"","size":1}"#).is_err());
+    }
+
+    #[test]
+    fn v2_names_the_original_and_the_state() {
+        let mut metadata = photo_v2();
+        metadata.original_revision_id = Some("33333333-3333-4333-8333-333333333333".into());
+        metadata.state_revision_id = Some("44444444-4444-4444-8444-444444444444".into());
+        let bytes = encode_v2(&metadata).unwrap();
+        let text = std::str::from_utf8(&bytes).unwrap();
+        // After the content commitment, before the hash.
+        assert!(text.contains(
+            r#"="},"originalRevisionId":"33333333-3333-4333-8333-333333333333","stateRevisionId":"44444444-4444-4444-8444-444444444444","sha256":"#
+        ));
+        assert_eq!(decode_v2(&bytes).unwrap(), metadata);
+        let digest = STANDARD.encode([9u8; 32]);
+        let content = format!(
+            r#""content":{{"revisionId":"22222222-2222-2222-2222-222222222222","manifestSha256":"{digest}"}}"#
+        );
+        for field in ["originalRevisionId", "stateRevisionId"] {
+            for value in [
+                r#""not-a-uuid""#,
+                r#""33333333-3333-4333-8333-33333333333A""#,
+                r#""""#,
+                "1",
+            ] {
+                let bad =
+                    format!(r#"{{"name":"a","mimeType":"","size":1,{content},"{field}":{value}}}"#);
+                assert!(decode_v2(bad.as_bytes()).is_err(), "{bad}");
+            }
+        }
     }
 
     #[test]

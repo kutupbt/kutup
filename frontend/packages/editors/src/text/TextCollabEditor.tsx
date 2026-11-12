@@ -50,6 +50,7 @@ import { toast } from 'sonner'
 import { useTranslation } from 'react-i18next'
 import { useRequiredSession } from '@kutup/session/store'
 import { deterministicSeed, openCollabSession } from '@kutup/collab/session'
+import { stateCommitter, type MetadataTarget } from '@kutup/drive-core/metadataCommit'
 import { SenderCheck } from '@kutup/collab/senders'
 import { accountAuthorityVerdict } from '@kutup/drive-core/identityPins'
 import { accountNameOfKey } from '@kutup/drive-core/accountName'
@@ -100,6 +101,12 @@ interface Props {
    * are sealed bound to it (docs/plans/drive-block-format.md §2). Null: none drawn.
    */
   contentRevisionId?: string | null
+  /**
+   * The file as each saved state commits its next metadata on top of it,
+   * naming the state (drive-core `stateCommitter`). Needed to save; MUST be
+   * referentially stable, like `fileKey`.
+   */
+  metadataTarget?: MetadataTarget
 }
 
 /** The first content of a note no one has edited yet (see deterministicSeed). */
@@ -158,6 +165,7 @@ export default function TextCollabEditor({
   fileKeyAt,
   base,
   contentRevisionId = null,
+  metadataTarget,
 }: Props) {
   const { t, i18n } = useTranslation()
   const ref = useRef<HTMLDivElement>(null)
@@ -418,6 +426,8 @@ export default function TextCollabEditor({
         keyGeneration,
         fileKeyAt,
         readOnly,
+        // Each saved state commits with the file's next metadata naming it.
+        commitState: metadataTarget ? stateCommitter(metadataTarget) : undefined,
         username,
         cursorColor,
         seed: initialContent

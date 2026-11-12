@@ -346,6 +346,31 @@ version the listing asked for, and its manifest must be the one the
 version's uploader committed to. The server can still mislabel an old
 version's date in the list. It cannot change what opens.
 
+**Revisions read by what the response names.** Two reads take their sealed
+record from the response, not from a listing: the original upload
+(`/files/{id}/original`) and a public link's saved note or place list
+(`/share/{token}/state/{id}`). The record proves the bytes are a genuine
+revision of the file, not *which* one. So the metadata names both, and the
+reader requires the served revision to be the named one:
+- `FileMetadataV2.originalRevisionId`: set by the first commit (the first
+  `content.revisionId`) and carried unchanged by every later metadata
+  revision (a rename, a version's commit, a re-key, a saved state).
+- `FileMetadataV2.stateRevisionId`: a note's or place list's latest saved
+  Yjs state. Yjs states are versions beside the content, not the content,
+  so the smallest binding is the metadata itself: every block-format state
+  is stored with the file's next metadata naming it (the version request
+  carries `metadataEnvelope` and `metadataRevision`, as a whole-file save
+  does; a `409 revision_conflict` returns the current metadata, and the
+  saver seals on top of it once). The public page asks for that state by id
+  (`?revision=`) and refuses any other. Signed-in readers and the live
+  session still take the newest state the version list shows (the live
+  session replays the log after it): the server can hold newer states back
+  from them, as it can hold back any listing.
+
+Both are optional in the format; a reader of `/original` without
+`originalRevisionId`, or a public page whose metadata names no state,
+reads nothing (the page shows the upload).
+
 ## 3. Server and storage
 
 **One object per revision, read with HTTP Range.** Proton stores each block
@@ -687,6 +712,33 @@ the metadata's content commitment. Old metadata with old content is refused
 by any device that has seen a newer metadata revision (`RevisionGuard`, the
 account head). A stale thumbnail fails its revision binding.
 
+**What the `RevisionContent` record defends against.** It is sealed under
+the file key, so it defends against the server alone: the server can't
+make one, so it can't pass off bytes of its own, or a revision's bytes
+under another revision's record. It does not defend against a holder of
+the file key (a co-editor, a link holder) colluding with the server: they
+can seal a record for an object of their own under any revision id the
+file doesn't use yet, and the server can store it as a version. The
+manifest signature is what names the writer then, and it warns.
+
+**Served revisions.** Where the response names the revision (the original
+upload, a public link's saved state), the reader requires it to be the
+revision the file's metadata names (`originalRevisionId`,
+`stateRevisionId`): the server can no longer pick another genuine
+revision of the file. This is as fresh as the metadata the reader holds:
+on a device that saw the file, `RevisionGuard` refuses older metadata; a
+public link's page has no history, so the server can still roll the whole
+file back (old metadata with the state it named), never mix new metadata
+with an older state.
+
+**Signer checks warn after the bytes are handed over.** The manifest's
+signature is checked against the identity pins once the object is open and
+its bytes have gone to the reader (an editor, a download, a vault). A
+forged or changed signer, or one who is not the author the history shows
+(`authorMismatch`), warns; nothing is held back. This is Drive's
+warn-not-block rule (docs/plans/drive-identity-pins.md): the bytes
+themselves are already bound to the file's key and committed digest.
+
 **Not covered:**
 - A device with no history of a file trusts the first metadata revision it
   reads. These are the limits of sealed revisions.
@@ -869,7 +921,24 @@ Each slice is a PR.
      (drive-core `manifestSigners.ts`): the account and incarnation it names
      must have signed with the key their pinned authority vouches for. A
      signature that doesn't hold, or one under an incarnation the user never
-     accepted, warns (drive-ui `ManifestSignerWarnings`); it never blocks.
+     accepted (this account's own included, under an incarnation that isn't
+     its current one), warns (drive-ui `ManifestSignerWarnings`); it never
+     blocks. The author the UI shows for the revision (a version row's
+     `authorUserId` or `remoteAuthor`, the original's uploader; recorded by
+     the keyring before the open) must be the verified signer, or it warns
+     (`authorMismatch`). Accounts never met stay silent. The check runs
+     after the bytes are handed over (§8). Every app that opens Drive
+     objects mounts the warnings (a unit test finds them by their imports).
+   - Served revisions (review 2, 2026-11-12): `/original` and a public
+     link's saved state are read by the revision the metadata names
+     (`originalRevisionId`, `stateRevisionId`, §2), and a note's or place
+     list's state commits with the metadata naming it. The ZIP's entries
+     made in the browser (a note with its pictures) name no revision: they
+     are never fetched or opened.
+   - Incomplete multipart uploads whose abort failed after their row went:
+     the upload sweep aborts those no row names once older than
+     `storage_incomplete_multipart_max_age_seconds` (a day by default;
+     docs/self-hosting.md has the matching bucket rule).
 4. **Download and streaming.**
    - The block reader Worker and `fetchDecrypt` on blocks.
    - The CLI download.

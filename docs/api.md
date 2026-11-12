@@ -3163,8 +3163,9 @@ sessions").
 **Response:** Raw binary (`application/octet-stream`), with
 `x-kutup-revision` (the original's revision id) and, in the block format,
 `x-kutup-revision-content` (its sealed content record, which the reader opens
-first: no listing names the original); `404` for no such file or a pruned
-original.
+first: no listing names the original). The reader requires the revision to be
+the one the file's metadata names (`originalRevisionId`); `404` for no such
+file or a pruned original.
 
 ---
 
@@ -3490,10 +3491,12 @@ owner's.
     removed links must be exactly the current ones. `PUT /api/files/:id/shares`
     re-wraps links left behind, and `pending` lists files whose links wait.
 - **`GET /api/share/:token/state/:fileId`** (anonymous, folder or file
-  links): the latest saved Yjs state of a note or place list, sealed under
+  links): a saved Yjs state of a note or place list, sealed under
   the file key of the generation in `X-Kutup-Key-Generation`, with
   `X-Kutup-Revision` (the version it is) and `X-Kutup-Revision-Content` (its
-  sealed content record, opened first) (`404` when it has none). Their edits are not whole-file versions, so a link's page turns
+  sealed content record, opened first). `?revision=` asks for the state the
+  file's metadata names (`stateRevisionId`; the page refuses any other);
+  without it, the latest (`404` when there is no such state). Their edits are not whole-file versions, so a link's page turns
   the state back into the file.
 - **`GET /api/shared-by-me`**: `[{ collectionId, fileId?, people,
   otherServers, links }]`. These are your folders shared with people or by
@@ -5945,10 +5948,14 @@ documents, whiteboards, restored copies) or `yjs` (a note's collaboration
 state); `seqAtSnapshot`, `docKeyId`; optional `label`, `keepForever`, and
 `basedOn` (below); in the block format, `revisionId` (the version's id),
 `revisionContentEnvelope` (its sealed content record at the file's current
-key generation, every kind) and, for `kind: file`, `metadataEnvelope` and `metadataRevision`: the file's next
-metadata, committing to this revision, stored in the same transaction (the
-save commits inline; `409 revision_conflict` unless it is the file's current
-revision + 1). A `yjs` state is not the file's content and carries none.
+key generation, every kind) and `metadataEnvelope` and `metadataRevision`: the file's next
+metadata, stored in the same transaction (the save commits inline; `409
+revision_conflict` unless it is the file's current revision + 1, with
+`metadataRevision` and `metadataEnvelope` giving the current metadata to
+seal on top of). For `kind: file` it commits to this revision as the
+content; a `yjs` state is not the file's content, and the metadata names it
+as the saved state (`stateRevisionId`, docs/plans/drive-block-format.md §2),
+so a reader asks for that state and refuses another.
 
 The server measures the body and charges **that** size to the author's
 quota (a client's size claim is not read), stores it as an object of its own
@@ -5976,6 +5983,6 @@ KeePass vaults this way.
 
 Versions are kept by the file owner's `versionRetentionDays` (see
 `PATCH /api/user/me`): the last day whole, the last week one per hour, then
-one per day; the newest version and `keepForever` ones always. Earlier
+one per day; the newest version of each kind (the content, a note's saved state) and `keepForever` ones always. Earlier
 versions can also be deleted by hand (`DELETE` above) or in bulk by age
 (`POST /api/user/storage/versions/prune`).

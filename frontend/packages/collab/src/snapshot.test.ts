@@ -141,6 +141,29 @@ describe('SnapshotTrigger', () => {
     t.destroy()
   })
 
+  it("commits each state with the file's next metadata naming it", async () => {
+    const ydoc = new Y.Doc()
+    const encrypt = vi.fn().mockResolvedValue({ ciphertext: new Uint8Array([5]), revisionId: 'r5', revisionContentEnvelope: 'rc5', storageHints: { docKeyId: 1, sizeBytes: 1 } })
+    recordSnapshotMock.mockReset()
+    recordSnapshotMock.mockResolvedValue({ id: 'r5' })
+    const named: string[] = []
+    const commitState = <T,>(revisionId: string, store: (m: { metadataEnvelope: string; metadataRevision: number }) => Promise<T>): Promise<T> => {
+      named.push(revisionId)
+      return store({ metadataEnvelope: 'meta', metadataRevision: 8 })
+    }
+    const t = new SnapshotTrigger({ fileId: 'f1', ydoc, encryptSnapshot: encrypt, getSeq: () => 2, commitState })
+    ydoc.getText('content').insert(0, 'x')
+    await t.forceSave()
+    expect(named).toEqual(['r5'])
+    expect(recordSnapshotMock).toHaveBeenCalledWith(
+      'f1',
+      new Uint8Array([5]),
+      expect.objectContaining({ kind: 'yjs', revisionId: 'r5', metadata: { metadataEnvelope: 'meta', metadataRevision: 8 } }),
+      undefined,
+    )
+    t.destroy()
+  })
+
   it('saves a file on another server through its route here', async () => {
     const ydoc = new Y.Doc()
     const encrypt = vi.fn().mockResolvedValue({ ciphertext: new Uint8Array([7]), storageHints: { docKeyId: 1, sizeBytes: 1 } })
