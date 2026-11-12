@@ -194,6 +194,22 @@ pub async fn replay(pool: &PgPool, keys: &OpaqueSetupKeys) -> AppResult<u64> {
     }
     for account in &found {
         let mut tx = pool.begin().await?;
+        // A legal hold in the restored database wins: nothing of that account
+        // is destroyed. The operator decides, told loudly.
+        let held: bool = sqlx::query_scalar(
+            "SELECT legal_hold_reference IS NOT NULL FROM users WHERE id = $1 FOR UPDATE",
+        )
+        .bind(account)
+        .fetch_one(&mut *tx)
+        .await?;
+        if held {
+            tracing::error!(
+                %account,
+                "a restored account the destruction log destroyed is under a legal hold: kept, \
+                 for the operator to decide"
+            );
+            continue;
+        }
         sqlx::query("DELETE FROM account_keys.account_data_keys WHERE user_id = $1")
             .bind(account)
             .execute(&mut *tx)

@@ -718,6 +718,7 @@
       "closeHint": "Deletes the account after the waiting period; until then its owner can sign in and keep it.",
       "closeTitle": "Close this account?",
       "closeDescription": "Every sign-in of {{name}} ends now. The account and everything it owns are deleted after the waiting period, unless it is kept.",
+      "dataKeyLost": "Since {{date}}, this account's server-side data key doesn't open under the server key list: its two-step sign-in by app and other sealed details are lost. Check that the server key list (OPAQUE_SETUP_KEYS) is this server's; the account works on, and seals anew.",
       "deletionFailing_one": "Deleting this account failed once; the server tries again later. The server log says why.",
       "deletionFailing_other": "Deleting this account failed {{count}} times; the server keeps trying, further apart. The server log says why.",
       "closesAt": "Deleted on",

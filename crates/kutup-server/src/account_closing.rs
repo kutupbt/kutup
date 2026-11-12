@@ -52,22 +52,6 @@ pub fn on_hold() -> AppError {
         .with_details(serde_json::json!({ "code": "legalHold" }))
 }
 
-/// Refuses with [`on_hold`] while the account is under a legal hold.
-pub async fn check_no_hold<'e, E: sqlx::PgExecutor<'e>>(
-    executor: E,
-    user_id: Uuid,
-) -> AppResult<()> {
-    let held: Option<bool> =
-        sqlx::query_scalar("SELECT legal_hold_reference IS NOT NULL FROM users WHERE id = $1")
-            .bind(user_id)
-            .fetch_optional(executor)
-            .await?;
-    if held == Some(true) {
-        return Err(on_hold());
-    }
-    Ok(())
-}
-
 /// The accounts that may sign in, as SQL over `users`: active ones, and
 /// closing ones (to keep them) unless they were suspended when they closed.
 pub const SIGNS_IN: &str =
@@ -147,16 +131,25 @@ const DELETION_CLAIM_MINUTES: i32 = 60;
 /// its purges and its row's deletion: a hold or a keep is refused meanwhile,
 /// and another server doesn't purge it too. `due_only`: only a closing
 /// account past its date (the closing job).
-async fn claim(state: &AppState, target: Uuid, due_only: bool) -> AppResult<()> {
+pub(crate) async fn claim(
+    state: &AppState,
+    target: Uuid,
+    due_only: bool,
+    reset: bool,
+) -> AppResult<()> {
+    // The hold is tested on the row itself, so the test re-checked after a
+    // row-lock wait sees a hold set meanwhile.
     let claimed = sqlx::query(
-        "UPDATE users SET deleting_at = now()
-          WHERE id = $1 AND NOT kutup_account_held(id)
+        "UPDATE users SET deleting_at = now(),
+                deleting_for = CASE WHEN $4 THEN 'reset' ELSE 'delete' END
+          WHERE id = $1 AND legal_hold_reference IS NULL
             AND (deleting_at IS NULL OR deleting_at < now() - make_interval(mins => $3))
             AND (NOT $2 OR (state = 'closing' AND closes_at <= now()))",
     )
     .bind(target)
     .bind(due_only)
     .bind(DELETION_CLAIM_MINUTES)
+    .bind(reset)
     .execute(&state.pool)
     .await?
     .rows_affected();
@@ -164,7 +157,7 @@ async fn claim(state: &AppState, target: Uuid, due_only: bool) -> AppResult<()> 
         return Ok(());
     }
     let row: Option<(bool, bool)> = sqlx::query_as(
-        "SELECT kutup_account_held(id), deleting_at IS NOT NULL FROM users WHERE id = $1",
+        "SELECT legal_hold_reference IS NOT NULL, deleting_at IS NOT NULL FROM users WHERE id = $1",
     )
     .bind(target)
     .fetch_optional(&state.pool)
@@ -188,11 +181,11 @@ pub async fn destroy(
     reference: &str,
     due_only: bool,
 ) -> AppResult<()> {
-    claim(state, target, due_only).await?;
+    claim(state, target, due_only, false).await?;
     let purged = purge(state, target).await;
     if let Err(error) = purged {
         // Taken up again later: the purges are each safe to run again.
-        sqlx::query("UPDATE users SET deleting_at = NULL WHERE id = $1")
+        sqlx::query("UPDATE users SET deleting_at = NULL, deleting_for = NULL WHERE id = $1")
             .bind(target)
             .execute(&state.pool)
             .await?;
@@ -206,15 +199,18 @@ pub async fn destroy(
     let mut tx = state.pool.begin().await?;
     // Still claimed (a hold can't be set meanwhile; a lapsed claim taken by
     // another server is that server's to finish).
-    let claimed: Option<bool> =
-        sqlx::query_scalar("SELECT deleting_at IS NOT NULL FROM users WHERE id = $1 FOR UPDATE")
-            .bind(target)
-            .fetch_optional(&mut *tx)
-            .await?;
+    let claimed: Option<(bool, bool)> = sqlx::query_as(
+        "SELECT deleting_at IS NOT NULL, legal_hold_reference IS NOT NULL
+           FROM users WHERE id = $1 FOR UPDATE",
+    )
+    .bind(target)
+    .fetch_optional(&mut *tx)
+    .await?;
     match claimed {
         None => return Err(AppError::not_found("not found")),
-        Some(false) => return Err(deleting()),
-        Some(true) => {}
+        Some((false, _)) => return Err(deleting()),
+        Some((_, true)) => return Err(on_hold()),
+        Some((true, false)) => {}
     }
     sqlx::query(
         "UPDATE account_names SET state = 'held', receive_until = now(),
@@ -251,10 +247,64 @@ pub async fn destroy(
 /// while what it added to other people's folders stays theirs.
 async fn purge(state: &AppState, target: Uuid) -> AppResult<()> {
     crate::handlers::chat_backup::purge_for_account(state, target).await?;
+    renew_claim(state, target).await?;
     crate::handlers::admin::purge_chat_media(state, target).await?;
+    renew_claim(state, target).await?;
     crate::handlers::admin::purge_owned_drive(state, target).await?;
+    renew_claim(state, target).await?;
     crate::handlers::admin::purge_mail(state, target).await?;
+    renew_claim(state, target).await?;
     crate::handlers::admin::hand_over_contributions(&state.pool, target).await
+}
+
+/// Keeps a deletion's claim fresh between its steps, so a long purge isn't
+/// taken for a crashed one and claimed again.
+pub(crate) async fn renew_claim(state: &AppState, target: Uuid) -> AppResult<()> {
+    sqlx::query("UPDATE users SET deleting_at = now() WHERE id = $1 AND deleting_at IS NOT NULL")
+        .bind(target)
+        .execute(&state.pool)
+        .await?;
+    Ok(())
+}
+
+/// An admin's reset holding the account's claim: a hold or a deletion can't
+/// come between its purges and the reset; let go when it ends, however it
+/// ends.
+pub(crate) struct ResetClaim {
+    state: AppState,
+    target: Uuid,
+}
+
+impl ResetClaim {
+    /// Claims `target` for a reset: refused under a legal hold
+    /// (`409 legalHold`) or while a deletion of it is under way.
+    pub(crate) async fn take(state: &AppState, target: Uuid) -> AppResult<Self> {
+        claim(state, target, false, true).await?;
+        Ok(ResetClaim {
+            state: state.clone(),
+            target,
+        })
+    }
+}
+
+impl Drop for ResetClaim {
+    fn drop(&mut self) {
+        let (state, target) = (self.state.clone(), self.target);
+        tokio::spawn(async move {
+            if let Err(error) = release_claim(&state, target).await {
+                tracing::warn!(%target, "letting go of a reset's claim: {}", error.message);
+            }
+        });
+    }
+}
+
+/// Lets go of a claim (a reset done, or a deletion that failed).
+pub(crate) async fn release_claim(state: &AppState, target: Uuid) -> AppResult<()> {
+    sqlx::query("UPDATE users SET deleting_at = NULL, deleting_for = NULL WHERE id = $1")
+        .bind(target)
+        .execute(&state.pool)
+        .await?;
+    Ok(())
 }
 
 /// Accounts the closing job deletes per run.
@@ -313,7 +363,37 @@ pub async fn run_due(state: &AppState) -> AppResult<u64> {
             }
         }
     }
+    resume_stale(state).await?;
     Ok(deleted)
+}
+
+/// Claims a crash left behind (older than [`DELETION_CLAIM_MINUTES`], their
+/// purges not renewed): an admin's deletion of an account that wasn't
+/// closing is finished; an admin's reset is let go (the admin runs it again;
+/// its purges are safe to repeat). A closing account's is [`run_due`]'s.
+async fn resume_stale(state: &AppState) -> AppResult<()> {
+    let stale: Vec<(Uuid, String)> = sqlx::query_as(
+        "SELECT id, deleting_for FROM users
+          WHERE deleting_at < now() - make_interval(mins => $1) AND state <> 'closing'
+            AND legal_hold_reference IS NULL
+          LIMIT $2",
+    )
+    .bind(DELETION_CLAIM_MINUTES)
+    .bind(DUE_BATCH)
+    .fetch_all(&state.pool)
+    .await?;
+    for (account, kind) in stale {
+        if kind == "reset" {
+            tracing::warn!(%account, "an admin's reset stopped part way: let go, to run again");
+            release_claim(state, account).await?;
+            continue;
+        }
+        tracing::warn!(%account, "an admin's deletion stopped part way: finishing it");
+        if let Err(error) = destroy(state, account, Actor::Admin, "user.delete", false).await {
+            tracing::error!(%account, "finishing an admin's deletion: {}", error.message);
+        }
+    }
+    Ok(())
 }
 
 /// How often the closing job looks for accounts due.
@@ -366,6 +446,13 @@ const DELETION_JOBS: &[(&str, &str, &str)] = &[
         "fn sweep_chat_delivery_media_before",
     ),
     ("jobs.rs", include_str!("jobs.rs"), "fn trash_sweep_once"),
+    // Chat send records' retention (the Office log trim is in
+    // version_retention_tick, above).
+    (
+        "jobs.rs",
+        include_str!("jobs.rs"),
+        "fn chat_maintenance_once",
+    ),
     (
         "mail/retention.rs",
         include_str!("mail/retention.rs"),

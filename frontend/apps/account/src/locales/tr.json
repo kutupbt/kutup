@@ -718,6 +718,7 @@
       "closeHint": "Hesabı bekleme süresinden sonra siler; o zamana kadar sahibi oturum açıp hesabı tutabilir.",
       "closeTitle": "Bu hesap kapatılsın mı?",
       "closeDescription": "{{name}} hesabının tüm oturumları şimdi kapanır. Tutulmazsa hesap ve sahip olduğu her şey bekleme süresinden sonra silinir.",
+      "dataKeyLost": "{{date}} tarihinden beri bu hesabın sunucu tarafı veri anahtarı sunucu anahtar listesiyle açılamıyor: uygulamayla iki adımlı oturum açması ve diğer mühürlü ayrıntıları kayboldu. Sunucu anahtar listesinin (OPAQUE_SETUP_KEYS) bu sunucuya ait olduğunu denetleyin; hesap çalışmaya devam eder ve yeniden mühürler.",
       "deletionFailing_one": "Bu hesabın silinmesi bir kez başarısız oldu; sunucu daha sonra yeniden dener. Nedeni sunucu günlüğündedir.",
       "deletionFailing_other": "Bu hesabın silinmesi {{count}} kez başarısız oldu; sunucu giderek seyrekleşen aralıklarla denemeyi sürdürür. Nedeni sunucu günlüğündedir.",
       "closesAt": "Silinme tarihi",

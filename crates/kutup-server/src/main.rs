@@ -377,7 +377,7 @@ async fn main() -> anyhow::Result<()> {
     // Every server key list entry still wrapping an account data key must be
     // there (docs/plans/server-personal-data.md, A2); keys under an older
     // entry move to the current one in batches.
-    account_data::install(&config.opaque_setup_keys);
+    account_data::install(&config.opaque_setup_keys, &pool);
     account_data::check_cascade(&pool)
         .await
         .map_err(anyhow::Error::msg)?;
