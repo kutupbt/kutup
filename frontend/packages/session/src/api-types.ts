@@ -90,6 +90,8 @@ export interface UserRow {
   /** Failed tries at deleting this closing account past its date; 0 when none. */
   /** Whether it may share by public link, as an administrator set it. */
   publicSharing: 'on' | 'off'
+  /** Whether its Chat and Drive talk to other servers. */
+  federation: 'on' | 'off'
   deletionAttempts: number
   /** When its data key was found not to open: what was sealed under it is lost. */
   dataKeyLostAt?: string
@@ -265,6 +267,8 @@ export type PublicSharing = 'on' | 'off' | 'signed_in'
 export interface AdminSettings {
   registrationMode: RegistrationMode
   publicSharing: PublicSharing
+  /** Whether a new account talks to other servers. */
+  federationDefault: boolean
   /** The storage quota new accounts get; existing accounts keep theirs. */
   defaultStorageQuotaBytes: number
   chatMailboxRetentionDays: number

@@ -163,6 +163,8 @@ Specific codes, where an app does something particular (a test in
 | `link_blocked` | 451/410 | An operator blocked the public link: `451` for a legal order, `410` otherwise; `reason` is `legal_order`, `abuse` or `other` |
 | `sharing_off` | 403/410 | Public links are off, for the whole server or the link owner's account: `403` when making one (with `scope`: `site` or `account`), `410` when opening one (no scope: a link's holder isn't told whose switch it was) |
 | `targetBlocked` | 409 | Making a public link to what an operator blocked links to (`reason`) |
+| `federationOff` | 403 | This account doesn't talk to other servers (Settings → Privacy): a request that would reach one is refused |
+| `consentRequired` | 409 | Turning on talking to other servers needs the `federation_abroad` consent: a text for it is published (`purpose` names it) |
 | `acknowledgementsRequired` | 400 | Sign-up without confirming the current version of every required document (`kinds` names those missing); see `GET /api/legal/documents` |
 | `documentNotCurrent` | 400 | A document named that is not the current version (an acknowledgement, or the text a consent is given under) |
 | `documentExists` | 409 | Publishing a document version (kind, version, language) already published: a version is never edited |
@@ -1178,6 +1180,20 @@ exact text shown). Nothing published means nothing is asked.
   `federation_abroad` or `marketing`): giving one names the current document of
   the purpose's kind when one is published (`400 documentNotCurrent`). Each
   change is a new row; the records are append-only for the server.
+- `PUT /api/user/federation` `{ on, documentId? }`: whether this account's
+  Chat and Drive talk to other Kutup servers (`federation` in `/user/me`).
+  Turning it on, when a `federation_abroad` text is published, gives that
+  consent under `documentId` (or needs it given before: `409
+  consentRequired`); withdrawing the consent turns it off. While off, the
+  account's requests that would reach another server are `403
+  federationOff`, and to other servers it is no account (each of their
+  lookups, deliveries and share reads answers as for an unknown one); its
+  groups and shares stay, quiet. The apps refuse anonymous sealed sends to
+  other servers themselves (the server can't tell whose they are). Mail is
+  email, not federation, and isn't covered. A new account starts from the
+  site setting `federationDefault` (`GET`/`PUT /api/admin/settings`); an
+  administrator sets one account's with `federation` in
+  `PUT /api/admin/users/:id`.
 - Admin: `GET /api/admin/legal/documents` (every version);
   `POST /api/admin/legal/documents` `{ kind, version, language, url, sha256,
   requiredAtSignup }` publishes one (`201`; `400` for a malformed field;

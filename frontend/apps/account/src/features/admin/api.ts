@@ -112,6 +112,8 @@ export type UserPatch = Partial<{
   suspendedReason: SuspendedReason
   /** Whether it may share by public link. */
   publicSharing: 'on' | 'off'
+  /** Whether it talks to other servers. */
+  federation: 'on' | 'off'
   isAdmin: boolean
   storageQuotaBytes: number
 }>

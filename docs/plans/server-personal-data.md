@@ -384,6 +384,24 @@ keeps them; reports on them are operator tooling.
     withdrawing the consent turns it off. Built in L6.
   - `marketing` is recorded only: there are no marketing messages.
 
+**As built (L6):**
+- `legal_documents` (never edited; the current version of a kind is its
+  latest), `document_acknowledgements` (sign-up in the creating transaction,
+  `update` after a sign-in that found a new required version; first logins
+  too) and `consents` (a row per change, ordered by a sequence) are
+  append-only for the app role. A purpose's text is the current document of
+  the purpose's kind.
+- The federation switch (`users.federation`, default from the site setting
+  `federation_default`): off, the account is no account to other servers by
+  the same code path an unknown one takes (`kutup_account_federates` in each
+  peer-facing query: Chat lookups, deliveries, the sealed store, multi-sends,
+  media offers; Drive account lookups, rename chains, profile keys, and
+  every share a peer reads by capability, by its owner), and its own
+  signed-in requests to other servers are `403 federationOff`. Anonymous
+  sealed sends and bundle fetches can't name their sender to this server:
+  the apps refuse them (chat-core's transport asks `/user/me`). Groups and
+  shares stay, quiet. Mail isn't covered.
+
 ## Slices (after review, in this order)
 
 | Slice | Contents | Size |

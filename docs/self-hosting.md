@@ -697,6 +697,22 @@ Reports page: under a legal order it answers `451 Unavailable For Legal
 Reasons`, otherwise `410`; the reference you give (an order's number) is
 seen only by administrators, and the block can be lifted.
 
+## Notices, consents and other servers
+
+Publish your terms, privacy notice and consent texts in **Administration →
+Legal documents** (docs/plans/server-personal-data.md, A3 and A4): the text
+stays at its address; the server keeps a fingerprint of the exact text. A
+document required at sign-up is confirmed there, and a new version of it at
+each account's next sign-in. Nothing published, nothing asked. People give
+and withdraw consents in Settings → Privacy.
+
+Whether an account's Chat and Drive talk to other Kutup servers is its own
+switch (Settings → Privacy); new accounts start as **Server settings →
+Accounts → New accounts talk to other servers** says, and an administrator
+can set one account's. When you publish a `federation_abroad` text, turning
+it on asks for that consent, and withdrawing the consent turns it off. Mail
+is email, not federation: it isn't covered.
+
 ## Closing and deleting accounts
 
 An account's owner deletes it in Settings → Account → Delete account (after

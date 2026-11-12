@@ -410,6 +410,21 @@ export function UserPage() {
             />
           )}
           <ActionRow
+            title={t(user.federation === 'off' ? 'admin.user.federationOff' : 'admin.user.federationOn')}
+            description={t('admin.user.federationHint')}
+            action={
+              <Button variant="outline" size="sm" disabled={update.isPending}
+                onClick={() =>
+                  update.mutate(
+                    { id: user.id, patch: { federation: user.federation === 'off' ? 'on' : 'off' } },
+                    { onError: (error) => toast.error(apiErrorMessage(error, t('admin.user.saveFailed'))) },
+                  )
+                }>
+                {t(user.federation === 'off' ? 'admin.user.publicLinksAllow' : 'admin.user.publicLinksStop')}
+              </Button>
+            }
+          />
+          <ActionRow
             title={t(user.publicSharing === 'off' ? 'admin.user.publicLinksOff' : 'admin.user.publicLinksOn')}
             description={t('admin.user.publicLinksHint')}
             action={

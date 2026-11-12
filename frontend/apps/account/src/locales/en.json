@@ -199,6 +199,17 @@
   },
   "settings": {
     "privacy": {
+      "federation": {
+        "title": "Other servers",
+        "description": "Kutup servers talk to each other, so you can chat and share with people whose accounts are elsewhere. Your mail isn't affected: it always reaches any address.",
+        "on": "Talking to other servers: on",
+        "off": "Talking to other servers: off",
+        "hint": "While off, nobody on another server can reach you, and you can't reach them. Your conversations and shares with them stay, quietly.",
+        "turnOn": "Turn on",
+        "turnOff": "Turn off",
+        "consentTitle": "Talk to other servers?",
+        "agree": "I agree that my Chat and Drive may reach people on other Kutup servers."
+      },
       "title": "Privacy",
       "description": "Your consents, each given or withdrawn separately, at any time.",
       "consents": "Consents",
@@ -769,6 +780,9 @@
       "newTempPassword": "New temporary password",
       "delete": "Delete account",
       "deleteHint": "Removes the account and everything it owns.",
+      "federationOn": "Talking to other servers: on",
+      "federationOff": "Talking to other servers: off",
+      "federationHint": "While off, its Chat and Drive reach no other server, and other servers see no such account. Its own choice, normally (Settings → Privacy).",
       "publicLinksOn": "Public links: allowed",
       "publicLinksOff": "Public links: turned off",
       "publicLinksHint": "While off, this account makes no public links and the ones it made don't open.",
@@ -986,6 +1000,12 @@
       "defaultQuota": "Default storage quota (GiB)",
       "defaultQuotaHint": "What new accounts get. Existing accounts keep theirs; change one on its user page.",
       "publicSharing": "Public links",
+      "federationDefault": "New accounts talk to other servers",
+      "federationDefaultHint": "Where a new account starts; each person can change it in Settings → Privacy, and you on their page.",
+      "federationDefaultMode": {
+        "on": "Yes",
+        "off": "No"
+      },
       "publicSharingHint": "Who may open links shared with “anyone with the link”. Signed-in only keeps a test server's links among its own accounts.",
       "publicSharingMode": {
         "on": "Anyone with the link",

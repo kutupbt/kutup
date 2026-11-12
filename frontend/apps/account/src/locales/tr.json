@@ -199,6 +199,17 @@
   },
   "settings": {
     "privacy": {
+      "federation": {
+        "title": "Diğer sunucular",
+        "description": "Kutup sunucuları birbiriyle konuşur; böylece hesabı başka bir sunucuda olan kişilerle sohbet edip paylaşım yapabilirsiniz. E-postanız etkilenmez: her adrese her zaman ulaşır.",
+        "on": "Diğer sunucularla iletişim: açık",
+        "off": "Diğer sunucularla iletişim: kapalı",
+        "hint": "Kapalıyken başka bir sunucudaki hiç kimse size ulaşamaz, siz de onlara ulaşamazsınız. Onlarla sohbetleriniz ve paylaşımlarınız sessizce kalır.",
+        "turnOn": "Aç",
+        "turnOff": "Kapat",
+        "consentTitle": "Diğer sunucularla iletişim kurulsun mu?",
+        "agree": "Sohbet ve Drive'ımın diğer Kutup sunucularındaki kişilere ulaşmasını kabul ediyorum."
+      },
       "title": "Gizlilik",
       "description": "Rızalarınız: her biri ayrı ayrı, istediğiniz zaman verilir ya da geri alınır.",
       "consents": "Rızalar",
@@ -769,6 +780,9 @@
       "newTempPassword": "Yeni geçici parola",
       "delete": "Hesabı sil",
       "deleteHint": "Hesabı ve sahip olduğu her şeyi kaldırır.",
+      "federationOn": "Diğer sunucularla iletişim: açık",
+      "federationOff": "Diğer sunucularla iletişim: kapalı",
+      "federationHint": "Kapalıyken Sohbet ve Drive'ı hiçbir sunucuya ulaşmaz, diğer sunucular da böyle bir hesap görmez. Normalde kişinin kendi seçimidir (Ayarlar → Gizlilik).",
       "publicLinksOn": "Herkese açık bağlantılar: izinli",
       "publicLinksOff": "Herkese açık bağlantılar: kapalı",
       "publicLinksHint": "Kapalıyken bu hesap herkese açık bağlantı oluşturamaz ve oluşturdukları açılmaz.",
@@ -986,6 +1000,12 @@
       "defaultQuota": "Varsayılan depolama kotası (GiB)",
       "defaultQuotaHint": "Yeni hesapların aldığı alan. Mevcut hesaplar kendi kotalarını korur; birini kullanıcı sayfasından değiştirin.",
       "publicSharing": "Herkese açık bağlantılar",
+      "federationDefault": "Yeni hesaplar diğer sunucularla iletişim kurar",
+      "federationDefaultHint": "Yeni bir hesabın başlangıç ayarı; herkes Ayarlar → Gizlilik'ten, siz de kişinin sayfasından değiştirebilirsiniz.",
+      "federationDefaultMode": {
+        "on": "Evet",
+        "off": "Hayır"
+      },
       "publicSharingHint": "“Bağlantıya sahip herkes” ile paylaşılan bağlantıları kimlerin açabileceği. Yalnızca oturum açanlar seçeneği bir deneme sunucusunun bağlantılarını kendi hesaplarıyla sınırlar.",
       "publicSharingMode": {
         "on": "Bağlantıya sahip herkes",

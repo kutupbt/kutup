@@ -30,6 +30,47 @@ function signedIn() {
   return session
 }
 
+/**
+ * This account doesn't talk to other servers (Settings → Privacy;
+ * docs/plans/server-personal-data.md, A4): a send or a fetch that would reach
+ * one is refused here. The server refuses the signed-in ones itself; the
+ * sealed ones are anonymous to it, so this is where they stop.
+ */
+export class FederationOffError extends Error {
+  constructor() {
+    super('this account does not talk to other servers')
+    this.name = 'FederationOffError'
+  }
+}
+
+const FEDERATION_CHECK_MS = 60_000
+let federationCache: { userId: string; on: boolean; at: number } | null = null
+
+/** Forgets what {@link federationOn} learnt: the next check asks again. */
+export function forgetFederationState(): void {
+  federationCache = null
+}
+
+/** Whether the signed-in account talks to other servers, asked at most once a minute. */
+async function federationOn(): Promise<boolean> {
+  const session = signedIn()
+  const now = Date.now()
+  if (federationCache && federationCache.userId === session.userId && now - federationCache.at < FEDERATION_CHECK_MS) {
+    return federationCache.on
+  }
+  const { data } = await api.get<{ federation?: 'on' | 'off' }>('/user/me')
+  const on = data.federation !== 'off'
+  federationCache = { userId: session.userId, on, at: now }
+  return on
+}
+
+/** Refuses with {@link FederationOffError} a request to another server while this account's federation is off. */
+async function ensureMayReach(server: string): Promise<void> {
+  const own = signedIn().address.split('@')[1]?.toLowerCase()
+  if (server.toLowerCase() === own) return
+  if (!(await federationOn())) throw new FederationOffError()
+}
+
 /** Authenticated REST adapter consumed by the Rust engine. */
 export class ApiChatTransport implements ChatTransportPort {
   async listDevices(): Promise<ChatDevice[]> {
@@ -165,6 +206,7 @@ export class ApiChatTransport implements ChatTransportPort {
     capability: string,
   ): Promise<unknown> {
     const { path, server } = accountRoute(account, '/keys', '/chat/anonymous')
+    await ensureMayReach(server)
     return axios
       .post(
         `${apiBase()}${path}`,
@@ -449,6 +491,7 @@ export class ApiChatTransport implements ChatTransportPort {
     | { kind: 'refused' }
   > {
     const { path, server } = accountRoute(account, '/messages', '/chat/anonymous')
+    await ensureMayReach(server)
     try {
       const response = await axios.post(
         `${apiBase()}${path}`,
@@ -479,6 +522,7 @@ export class ApiChatTransport implements ChatTransportPort {
    * (`SealedBatchSubmissionV1`): one result per recipient, in order.
    */
   async sendSealedBatch(server: string, request: unknown): Promise<unknown> {
+    await ensureMayReach(server)
     try {
       const response = await axios.post(
         `${apiBase()}/chat/anonymous/messages/batch`,
@@ -511,6 +555,7 @@ export class ApiChatTransport implements ChatTransportPort {
     | { kind: 'rateLimited' }
     | { kind: 'tokenInvalid' }
   > {
+    await ensureMayReach(server)
     try {
       const response = await axios.post(`${apiBase()}/chat/anonymous/messages/multi`, request, {
         params: { server },

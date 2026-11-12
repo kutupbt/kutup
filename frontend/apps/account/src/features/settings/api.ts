@@ -21,6 +21,8 @@ export interface Me {
   color: string
   /** How long file versions are kept, in days (docs/plans/drive-versions-v2.md). */
   versionRetentionDays: number
+  /** Whether Chat and Drive talk to other servers (docs/plans/server-personal-data.md, A4). */
+  federation: 'on' | 'off'
 }
 
 

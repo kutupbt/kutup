@@ -21,6 +21,7 @@ import { bytesToGib, gibToBytes } from './helpers'
 
 const MODES: readonly RegistrationMode[] = ['on', 'code', 'off']
 const SHARING: readonly PublicSharing[] = ['on', 'signed_in', 'off']
+const ON_OFF: readonly ('on' | 'off')[] = ['on', 'off']
 
 /** The server's bounds (site_settings::validate_chat_delivery_retention_days). */
 const MAX_RETENTION_DAYS = 3650
@@ -64,6 +65,7 @@ function ServerSettingsForm({ settings, registry }: { settings: AdminSettings; r
   const schema = z.object({
     registrationMode: z.enum(['on', 'code', 'off']),
     publicSharing: z.enum(['on', 'signed_in', 'off']),
+    federationDefault: z.enum(['on', 'off']),
     quotaGib: z.coerce.number<number>().positive(t('admin.quota.positive')),
     mailboxDays: days,
     mediaDays: days,
@@ -89,6 +91,7 @@ function ServerSettingsForm({ settings, registry }: { settings: AdminSettings; r
     reset({
       registrationMode: settings.registrationMode,
       publicSharing: settings.publicSharing,
+      federationDefault: settings.federationDefault ? 'on' : 'off',
       quotaGib: bytesToGib(settings.defaultStorageQuotaBytes),
       mailboxDays: settings.chatMailboxRetentionDays,
       mediaDays: settings.chatMediaDeliveryRetentionDays,
@@ -107,6 +110,7 @@ function ServerSettingsForm({ settings, registry }: { settings: AdminSettings; r
       {
         registrationMode: v.registrationMode,
         publicSharing: v.publicSharing,
+        federationDefault: v.federationDefault === 'on',
         defaultStorageQuotaBytes: gibToBytes(v.quotaGib),
         chatMailboxRetentionDays: v.mailboxDays,
         chatMediaDeliveryRetentionDays: v.mediaDays,
@@ -158,6 +162,19 @@ function ServerSettingsForm({ settings, registry }: { settings: AdminSettings; r
                       name="publicSharing"
                       render={({ field }) => (
                         <Choice value={field.value} options={SHARING} labelPrefix="admin.settings.publicSharingMode" onChange={field.onChange} ariaLabel={t('admin.settings.publicSharing')} />
+                      )}
+                    />
+                  )}
+                </Field>
+              </div>
+              <div className="mt-5 max-w-sm">
+                <Field label={t('admin.settings.federationDefault')} description={t('admin.settings.federationDefaultHint')}>
+                  {() => (
+                    <Controller
+                      control={control}
+                      name="federationDefault"
+                      render={({ field }) => (
+                        <Choice value={field.value} options={ON_OFF} labelPrefix="admin.settings.federationDefaultMode" onChange={field.onChange} ariaLabel={t('admin.settings.federationDefault')} />
                       )}
                     />
                   )}
