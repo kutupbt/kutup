@@ -482,11 +482,23 @@ pub async fn update_user(
         if !["on", "off"].contains(&sharing) {
             return Err(AppError::bad_request("publicSharing must be on or off"));
         }
+        // With its own record, in one transaction: a switch that turns an
+        // account's links off is evidence of who did it.
+        let mut tx = state.pool.begin().await?;
         sqlx::query("UPDATE users SET public_sharing = $1 WHERE id = $2")
             .bind(sharing)
             .bind(target)
-            .execute(&state.pool)
+            .execute(&mut *tx)
             .await?;
+        crate::audit_log::append_in(
+            &mut tx,
+            crate::handlers::trusted_uuid(&admin.user_id)?,
+            "user.publicSharing",
+            Some(target),
+            &json!({ "username": target_username, "publicSharing": sharing }),
+        )
+        .await?;
+        tx.commit().await?;
     }
     if let Some(a) = req.is_admin {
         sqlx::query("UPDATE users SET is_admin = $1 WHERE id = $2")

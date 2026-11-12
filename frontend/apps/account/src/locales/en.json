@@ -850,6 +850,7 @@
         "unknown": "{{admin}}: {{action}}",
         "mailSendingUpdate": "{{admin}} changed how {{target}} may send mail",
         "reportDismiss": "{{admin}} dismissed a report on a link of {{target}}",
+        "userPublicSharing": "{{admin}} turned public links {{state}} for {{target}}",
         "shareBlock": "{{admin}} blocked a link {{target}} shared",
         "shareUnblock": "{{admin}} lifted the block on a link {{target}} shared",
         "shareRemove": "{{admin}} took down a public link of {{target}}",

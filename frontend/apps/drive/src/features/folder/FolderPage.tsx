@@ -30,7 +30,7 @@ import { canonicalName } from '@kutup/drive-core/names'
 import { useFolders, type FolderIndex } from '@kutup/drive-core/folders'
 import type { DriveFile, Folder } from '@kutup/drive-core/model'
 import { useCreatePublicLink, useRenameFile, useRenameFolder, useTrashFile, useTrashFolder } from '@kutup/drive-core/mutations'
-import { sharingOffScope } from '@kutup/drive-core/publicSharing'
+import { isTargetBlocked, sharingOffScope } from '@kutup/drive-core/publicSharing'
 import { folderPath, openFile } from '@kutup/editors/paths'
 import { isListName } from '@kutup/map/list'
 import { moveRefusal, type MoveRefusal } from '../drive/move'
@@ -331,7 +331,13 @@ export function FolderPage() {
                 onSuccess: (url) => setDialog({ kind: 'link', url }),
                 onError: (error) => {
                   const off = sharingOffScope(error)
-                  toast.error(off ? t(`publicSharing.off.${off}`) : apiErrorMessage(error, t('drive.linkFailed')))
+                  toast.error(
+                    off
+                      ? t(`publicSharing.off.${off}`)
+                      : isTargetBlocked(error)
+                        ? t('publicSharing.targetBlocked')
+                        : apiErrorMessage(error, t('drive.linkFailed')),
+                  )
                 },
               }),
           },

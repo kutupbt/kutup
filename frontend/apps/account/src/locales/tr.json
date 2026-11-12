@@ -850,6 +850,7 @@
         "unknown": "{{admin}}: {{action}}",
         "mailSendingUpdate": "{{admin}}, {{target}} hesabının posta gönderimini değiştirdi",
         "reportDismiss": "{{admin}}, {{target}} kullanıcısının bir bağlantısıyla ilgili bildirimi kapattı",
+        "userPublicSharing": "{{admin}}, {{target}} için herkese açık bağlantıları {{state}} yaptı",
         "shareBlock": "{{admin}}, {{target}} kullanıcısının paylaştığı bir bağlantıyı engelledi",
         "shareUnblock": "{{admin}}, {{target}} kullanıcısının paylaştığı bir bağlantının engelini kaldırdı",
         "shareRemove": "{{admin}}, {{target}} kullanıcısının herkese açık bir bağlantısını kaldırdı",

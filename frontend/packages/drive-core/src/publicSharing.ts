@@ -25,6 +25,11 @@ export function usePublicSharing() {
   })
 }
 
+/** A new link refused because the server's operators blocked links to its target. */
+export function isTargetBlocked(error: unknown): boolean {
+  return isAxiosError(error) && (error.response?.data as { code?: string } | undefined)?.code === 'targetBlocked'
+}
+
 /** The scope of a `403 sharing_off` refusal; null for any other error. */
 export function sharingOffScope(error: unknown): SharingOff | null {
   if (!isAxiosError(error)) return null

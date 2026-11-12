@@ -23,6 +23,7 @@ const ACTION_KEYS: Record<string, string> = {
   'share.remove': 'shareRemove',
   'share.block': 'shareBlock',
   'share.unblock': 'shareUnblock',
+  'user.publicSharing': 'userPublicSharing',
   'settings.update': 'settingsUpdate',
   'settings.rate_limit': 'rateLimitUpdate',
   'user.rate_limit': 'userRateLimitUpdate',
@@ -89,6 +90,8 @@ export function activitySentence(e: AdminActivityEntry, t: TFunction): string {
     value: text(e.payload.value),
     // A legal hold's reference.
     reference: text(e.payload.reference),
+    // An account's public links: `on` or `off`.
+    state: text(e.payload.publicSharing),
   }
   if (key === 'rateLimitUpdate' && values.value === '') return t('admin.activity.actions.rateLimitReset', values)
   if (key === 'userRateLimitUpdate' && values.value === '') return t('admin.activity.actions.userRateLimitReset', values)
