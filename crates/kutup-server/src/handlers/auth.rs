@@ -70,6 +70,11 @@ pub struct RegisterRequest {
     account_id: Option<String>,
     #[serde(default)]
     account_id_proof: Option<String>,
+    /// The documents shown and confirmed at sign-up (`GET /api/legal/documents`,
+    /// those `requiredAtSignup`): the current version of each required kind
+    /// (docs/plans/server-personal-data.md, A3).
+    #[serde(default)]
+    acknowledgements: Vec<Uuid>,
 }
 
 /// Mirrors `auth.LoginResponse`. Non-omitempty fields are always present (empty/zero on
@@ -709,6 +714,7 @@ pub async fn register(
     // that opens recoveryKeyEnvelope.
     let recovery_verifier = hash_recovery_proof(&req.recovery_proof)?;
     let storage_quota_bytes = crate::storage_pool::default_quota(&state.pool).await?;
+    let federation_default = crate::federation_switch::site_default(&state.pool).await?;
     let mut tx = state.pool.begin().await?;
     // The account id this server minted for the sign-up (register/start),
     // never one in use or ever used.
@@ -785,6 +791,11 @@ pub async fn register(
             .ok_or_else(crate::registration::invalid)?;
         crate::registration::record_use(&mut tx, code_id, user_id).await?;
     }
+    // The notices it was shown, recorded with the account: no account lacks
+    // the record of what it confirmed.
+    crate::legal::acknowledge(&mut tx, user_id, &req.acknowledgements, "signup").await?;
+    // Whether it talks to other servers starts as the site says.
+    crate::federation_switch::start_account(&mut tx, user_id, federation_default).await?;
     // The account's mail address comes with it (a GET never makes one).
     if !crate::handlers::mail_keys::create_own_address(
         &mut tx,
@@ -1292,11 +1303,13 @@ pub async fn get_me(State(state): State<AppState>, user: AuthUser) -> AppResult<
         String,
         i32,
         String,
+        String,
     );
     let row: Option<Row> = sqlx::query_as(
         r#"SELECT id, COALESCE(key_binding, ''), COALESCE(username, ''), public_key, totp_enabled,
                   storage_quota_bytes, storage_used_bytes,
-                  is_admin, COALESCE(color, ''), version_retention_days, public_sharing
+                  is_admin, COALESCE(color, ''), version_retention_days, public_sharing,
+                  federation
            FROM users WHERE id = $1"#,
     )
     .bind(parse_uuid(&user.user_id)?)
@@ -1315,6 +1328,7 @@ pub async fn get_me(State(state): State<AppState>, user: AuthUser) -> AppResult<
         color,
         version_retention_days,
         public_sharing,
+        federation,
     )) = row
     else {
         return Err(AppError::not_found("user not found"));
@@ -1349,6 +1363,7 @@ pub async fn get_me(State(state): State<AppState>, user: AuthUser) -> AppResult<
         color,
         version_retention_days,
         public_sharing,
+        federation,
         renames: crate::models::RenameAnchor {
             sequence: anchor.as_ref().map_or(0, |a| a.0),
             digest: anchor.map(|a| a.1),
@@ -1443,6 +1458,13 @@ pub async fn get_user_by_address(
 ) -> AppResult<Response> {
     if let Some((name, server)) = address.trim().rsplit_once('@') {
         if !server.eq_ignore_ascii_case(&state.config.chat_server_name) {
+            // Another server: only for an account that talks to them
+            // (crate::federation_switch).
+            crate::federation_switch::ensure_federates(
+                &state.pool,
+                crate::handlers::trusted_uuid(&user.user_id)?,
+            )
+            .await?;
             let remote = crate::drive_federation::remote_user_by_name(
                 &state,
                 &user.user_id,
@@ -1466,7 +1488,7 @@ pub async fn get_user_by_address(
         None => None,
     };
     let found = match id {
-        Some(id) => crate::handlers::accounts::local_identity(&state, id).await?,
+        Some(id) => crate::handlers::accounts::local_identity(&state, id, false).await?,
         None => None,
     };
     match (found, local) {

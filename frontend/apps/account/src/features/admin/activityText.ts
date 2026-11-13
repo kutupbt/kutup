@@ -23,6 +23,7 @@ const ACTION_KEYS: Record<string, string> = {
   'share.remove': 'shareRemove',
   'share.block': 'shareBlock',
   'share.unblock': 'shareUnblock',
+  'legal.publish': 'legalPublish',
   'user.publicSharing': 'userPublicSharing',
   'settings.update': 'settingsUpdate',
   'settings.rate_limit': 'rateLimitUpdate',
@@ -90,6 +91,9 @@ export function activitySentence(e: AdminActivityEntry, t: TFunction): string {
     value: text(e.payload.value),
     // A legal hold's reference.
     reference: text(e.payload.reference),
+    // A published document's kind and version.
+    kind: text(e.payload.kind),
+    version: text(e.payload.version),
     // An account's public links: `on` or `off`.
     state: text(e.payload.publicSharing),
   }

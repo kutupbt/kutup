@@ -1,7 +1,10 @@
 import { useTranslation } from 'react-i18next'
+import { useState } from 'react'
 import { Navigate, useNavigate, useSearchParams } from 'react-router-dom'
 import { sanitizeNext } from '@kutup/session/sessionSync'
 import { completeSetup } from './flows'
+import { documentsToConfirm, type LegalDocument } from './legal'
+import { LegalUpdates } from './LegalUpdates'
 import { NewKeysWizard } from './NewKeysWizard'
 import { getPendingSetup, setPendingSetup } from './pendingSetup'
 
@@ -16,6 +19,10 @@ export function FirstLoginPage() {
   const [params] = useSearchParams()
   const next = sanitizeNext(params.get('next')) ?? '/'
   const setup = getPendingSetup()
+  // The operator's required documents, confirmed before the account goes on
+  // (it was made by an administrator, so none were at sign-up).
+  const [updates, setUpdates] = useState<LegalDocument[] | null>(null)
+  if (updates) return <LegalUpdates documents={updates} onDone={() => void navigate(next, { replace: true })} />
   if (!setup) return <Navigate to="/login" replace />
 
   return (
@@ -31,7 +38,9 @@ export function FirstLoginPage() {
       onKeysConfirmed={async (keys) => {
         await completeSetup(setup, keys)
         setPendingSetup(null)
-        void navigate(next, { replace: true })
+        const documents = await documentsToConfirm()
+        if (documents.length > 0) setUpdates(documents)
+        else void navigate(next, { replace: true })
       }}
     />
   )

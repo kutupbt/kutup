@@ -299,7 +299,7 @@ pub async fn send_multi(
     let server = query.server.as_deref().unwrap_or(local);
     let (status, answer) = if server == local {
         check_token(&state, &submission, &parsed).await?;
-        deliver(&state, &submission, parsed, &limits).await?
+        deliver(&state, &submission, parsed, &limits, false).await?
     } else {
         match forward(&state, server, &submission).await? {
             Some(answered) => answered,
@@ -333,6 +333,7 @@ async fn deliver(
     submission: &SealedMultiSubmissionV1,
     parsed: Parsed,
     limits: &MultiLimits,
+    federated: bool,
 ) -> AppResult<(StatusCode, SealedMultiResponseV1)> {
     // 1. The token's budget (§3.6): weak, as anyone holding endorsements can
     // combine other subsets, but it caps replays of one send. Charged on its
@@ -356,12 +357,18 @@ async fn deliver(
     let mut answer = SealedMultiResponseV1::default();
     let mut passing = Vec::new();
     for recipient in parsed.recipients {
-        // 2. An account that isn't an active one here is refused.
-        let active: Option<Uuid> =
-            sqlx::query_scalar("SELECT id FROM users WHERE id = $1 AND is_active FOR SHARE")
-                .bind(recipient.user_id)
-                .fetch_optional(&mut *tx)
-                .await?;
+        // 2. An account that isn't an active one here is refused; from another
+        // server, so is one that doesn't talk to other servers, the same way
+        // (crate::federation_switch).
+        let active: Option<Uuid> = sqlx::query_scalar(
+            "SELECT id FROM users
+              WHERE id = $1 AND is_active AND (NOT $2 OR kutup_account_federates(id))
+              FOR SHARE",
+        )
+        .bind(recipient.user_id)
+        .bind(federated)
+        .fetch_optional(&mut *tx)
+        .await?;
         if active.is_none() {
             answer.refused.push(recipient.account_id);
             continue;
@@ -655,7 +662,7 @@ pub async fn deliver_federated(
     if let Err(error) = check_token(&state, &submission, &parsed).await {
         return signed_error(error);
     }
-    match deliver(&state, &submission, parsed, &limits).await {
+    match deliver(&state, &submission, parsed, &limits, true).await {
         Ok((status, answer)) => {
             crate::chat_federation::signed_json(federation, &authenticated, status, &answer)
         }

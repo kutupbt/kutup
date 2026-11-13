@@ -11,6 +11,8 @@
     "failedDescription": "The server did not answer. Check your connection, then try again. You are still signed in."
   },
   "nav": {
+    "legal": "Legal documents",
+    "privacy": "Privacy",
     "apps": "Apps",
     "settings": "Settings",
     "account": "Account",
@@ -74,6 +76,22 @@
       "fair": "fair",
       "strong": "strong",
       "veryStrong": "very strong"
+    }
+  },
+  "legal": {
+    "confirm": "I have read the {{name}} (version {{version}}).",
+    "read": "Read",
+    "readNamed": "Read the {{name}} (version {{version}})",
+    "confirmAll": "Confirm each document to go on.",
+    "confirmFailed": "Your confirmation could not be saved. Try again.",
+    "updatedTitle": "Updated documents",
+    "updatedDescription": "A document you agreed to has a new version. Read it and confirm to go on.",
+    "continue": "Continue",
+    "kinds": {
+      "terms": "Terms of Service",
+      "privacy_notice": "Privacy Notice",
+      "federation_abroad": "consent text for talking to other servers",
+      "marketing": "consent text for news and offers"
     }
   },
   "login": {
@@ -180,6 +198,37 @@
     "calendar": "Your events and calendars, encrypted, with times only your server needs to remind you."
   },
   "settings": {
+    "privacy": {
+      "federation": {
+        "title": "Other servers",
+        "description": "Kutup servers talk to each other, so you can chat and share with people whose accounts are elsewhere. Your mail isn't affected: it always reaches any address.",
+        "on": "Talking to other servers: on",
+        "off": "Talking to other servers: off",
+        "hint": "While off, nobody on another server can reach you, and you can't reach them. Your conversations and shares with them stay, quietly.",
+        "turnOn": "Turn on",
+        "turnOff": "Turn off",
+        "consentTitle": "Talk to other servers?",
+        "agree": "I agree that my Chat and Drive may reach people on other Kutup servers."
+      },
+      "title": "Privacy",
+      "description": "Your consents, each given or withdrawn separately, at any time.",
+      "consents": "Consents",
+      "give": "Give",
+      "withdraw": "Withdraw",
+      "givenAt": "Given on {{date}}",
+      "withdrawnAt": "Withdrawn on {{date}}",
+      "failed": "Your choice could not be saved. Try again.",
+      "purposes": {
+        "federation_abroad": {
+          "title": "Talking to other servers",
+          "description": "Let your Chat and Drive reach people on other Kutup servers, which may be in other countries. Withdrawing it stops that."
+        },
+        "marketing": {
+          "title": "News and offers",
+          "description": "Whether this server may send you news and offers. Only your choice is recorded."
+        }
+      }
+    },
     "account": {
       "title": "Account",
       "description": "Who you are on this server, and how much space you use.",
@@ -604,6 +653,29 @@
     }
   },
   "admin": {
+    "legal": {
+      "title": "Legal documents",
+      "description": "Your terms, privacy notice and consent texts, by version. The text lives at its address; the server keeps a fingerprint of the exact text shown.",
+      "publishTitle": "Publish a version",
+      "publishHint": "A published version is never changed: publish a new one. A new required version is shown to everyone at their next sign-in.",
+      "kind": "Kind",
+      "kindHint": "terms, privacy_notice, a consent purpose (federation_abroad, marketing), or your own.",
+      "version": "Version",
+      "language": "Language",
+      "languageHint": "A code such as en, tr or pt-BR.",
+      "url": "Address of the text",
+      "sha256": "SHA-256 of the text",
+      "sha256Hint": "64 hex characters, of the exact text at the address (for example: sha256sum terms.html).",
+      "required": "Required at sign-up (and confirmed again when a new version is published)",
+      "publish": "Publish",
+      "published": "Published",
+      "failed": "The document could not be published.",
+      "incomplete": "Fill in every field; the SHA-256 is 64 hex characters.",
+      "versions": "Versions",
+      "requiredBadge": "Required",
+      "noneTitle": "Nothing published",
+      "noneDescription": "Sign-up asks for no documents until you publish a required one."
+    },
     "forbiddenTitle": "Administrators only",
     "forbidden": "Your account cannot open administration pages.",
     "overview": {
@@ -708,6 +780,9 @@
       "newTempPassword": "New temporary password",
       "delete": "Delete account",
       "deleteHint": "Removes the account and everything it owns.",
+      "federationOn": "Talking to other servers: on",
+      "federationOff": "Talking to other servers: off",
+      "federationHint": "While off, its Chat and Drive reach no other server, and other servers see no such account. Its own choice, normally (Settings → Privacy).",
       "publicLinksOn": "Public links: allowed",
       "publicLinksOff": "Public links: turned off",
       "publicLinksHint": "While off, this account makes no public links and the ones it made don't open.",
@@ -850,6 +925,7 @@
         "unknown": "{{admin}}: {{action}}",
         "mailSendingUpdate": "{{admin}} changed how {{target}} may send mail",
         "reportDismiss": "{{admin}} dismissed a report on a link of {{target}}",
+        "legalPublish": "{{admin}} published {{kind}} version {{version}}",
         "userPublicSharing": "{{admin}} turned public links {{state}} for {{target}}",
         "shareBlock": "{{admin}} blocked a link {{target}} shared",
         "shareUnblock": "{{admin}} lifted the block on a link {{target}} shared",
@@ -924,6 +1000,12 @@
       "defaultQuota": "Default storage quota (GiB)",
       "defaultQuotaHint": "What new accounts get. Existing accounts keep theirs; change one on its user page.",
       "publicSharing": "Public links",
+      "federationDefault": "New accounts talk to other servers",
+      "federationDefaultHint": "Where a new account starts; each person can change it in Settings → Privacy, and you on their page.",
+      "federationDefaultMode": {
+        "on": "Yes",
+        "off": "No"
+      },
       "publicSharingHint": "Who may open links shared with “anyone with the link”. Signed-in only keeps a test server's links among its own accounts.",
       "publicSharingMode": {
         "on": "Anyone with the link",

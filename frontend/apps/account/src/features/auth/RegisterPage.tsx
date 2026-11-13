@@ -15,7 +15,9 @@ import { Field } from '@kutup/ui/components/field'
 import { Input } from '@kutup/ui/components/input'
 import { LoadingPanel } from '@kutup/ui/components/states'
 import { AuthLayout } from './AuthLayout'
+import { DocumentChecks } from './DocumentChecks'
 import { registerAndSignIn } from './flows'
+import { oneEach, useCurrentDocuments } from './legal'
 import { NewKeysWizard } from './NewKeysWizard'
 
 /** Mirrors the server's username rule (3–32 of a–z, 0–9, _ and -). */
@@ -34,7 +36,7 @@ function codeProblem(error: unknown): string | null {
 }
 
 export function RegisterPage() {
-  const { t } = useTranslation()
+  const { t, i18n } = useTranslation()
   const navigate = useNavigate()
   const [params] = useSearchParams()
   const next = sanitizeNext(params.get('next')) ?? '/'
@@ -49,6 +51,11 @@ export function RegisterPage() {
   // In `on` mode the code field stays folded until asked for (or a link brought one).
   const [codeOpen, setCodeOpen] = useState(linked !== '')
   const [codeError, setCodeError] = useState<string | null>(null)
+  // The operator's required documents, one per kind in the person's language.
+  const documents = useCurrentDocuments()
+  const required = oneEach((documents.data ?? []).filter((d) => d.requiredAtSignup), i18n.language)
+  const [confirmed, setConfirmed] = useState<string[]>([])
+  const [documentsError, setDocumentsError] = useState<string | null>(null)
   // The server's answer for the code last checked, so leaving the field and
   // pressing Continue do not each spend a check (they are rate-limited).
   // The pending check counts too, so both at once still make one request.
@@ -81,7 +88,7 @@ export function RegisterPage() {
   })
 
   if (session) return <Navigate to={next} replace />
-  if (settings.isPending) return <LoadingPanel label={t('common.loading')} />
+  if (settings.isPending || documents.isPending) return <LoadingPanel label={t('common.loading')} />
   // Checks the code before the keys are derived (it uses nothing up).
   const checkCode = async (): Promise<boolean> => {
     const value = code.trim()
@@ -129,7 +136,11 @@ export function RegisterPage() {
       title={t('register.title')}
       description={t('register.description')}
       account={() => getValues('username').trim()}
-      validateLeading={async () => (await trigger()) && (await checkCode())}
+      validateLeading={async () => {
+        const allConfirmed = required.every((d) => confirmed.includes(d.id))
+        setDocumentsError(allConfirmed ? null : t('legal.confirmAll'))
+        return (await trigger()) && (await checkCode()) && allConfirmed
+      }}
       leadingFields={
         <>
           <Field
@@ -165,12 +176,18 @@ export function RegisterPage() {
               {t('register.haveCode')}
             </button>
           )}
-          {settings.isError ? <Alert variant="warn">{t('register.settingsUnavailable')}</Alert> : null}
+          <DocumentChecks documents={required} checked={confirmed} onChange={setConfirmed} error={documentsError} />
+          {settings.isError || documents.isError ? <Alert variant="warn">{t('register.settingsUnavailable')}</Alert> : null}
         </>
       }
       onKeysConfirmed={async (keys) => {
         try {
-          await registerAndSignIn(getValues('username').trim(), keys, code.trim() || undefined)
+          await registerAndSignIn(
+            getValues('username').trim(),
+            keys,
+            code.trim() || undefined,
+            required.map((d) => d.id),
+          )
         } catch (error) {
           // The code was taken or revoked meanwhile: say so on its field.
           const problem = codeProblem(error)

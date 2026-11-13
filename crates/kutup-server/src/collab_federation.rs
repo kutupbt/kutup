@@ -236,7 +236,10 @@ async fn remote_access(
          FROM federated_outgoing_file_shares s
          JOIN files f ON f.id = s.file_id AND f.deleted_at IS NULL
          JOIN collections c ON c.id = f.collection_id AND c.deleted_at IS NULL
-         WHERE s.capability_hash = $1 AND s.recipient_domain = $2 AND s.file_id = $3",
+         WHERE s.capability_hash = $1 AND s.recipient_domain = $2 AND s.file_id = $3
+           -- An owner that doesn't talk to other servers has, to them, no
+           -- shares (crate::federation_switch).
+           AND kutup_account_federates(c.owner_user_id)",
     )
     .bind(&hash)
     .bind(authenticated.origin())
@@ -256,7 +259,10 @@ async fn remote_access(
          FROM federated_outgoing_shares s
          JOIN collections c ON c.id = s.collection_id AND c.deleted_at IS NULL
          JOIN files f ON f.collection_id = c.id AND f.deleted_at IS NULL
-         WHERE s.capability_hash = $1 AND s.recipient_domain = $2 AND f.id = $3",
+         WHERE s.capability_hash = $1 AND s.recipient_domain = $2 AND f.id = $3
+           -- An owner that doesn't talk to other servers has, to them, no
+           -- shares (crate::federation_switch).
+           AND kutup_account_federates(c.owner_user_id)",
     )
     .bind(&hash)
     .bind(authenticated.origin())

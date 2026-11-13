@@ -111,12 +111,16 @@ fn decode_envelope(envelope: &str) -> AppResult<ProfileKeyEnvelopeV1> {
         .map_err(|_| AppError::bad_request("invalid profile key envelope"))
 }
 
-async fn local_user(pool: &PgPool, id: Uuid) -> AppResult<Option<LocalUser>> {
+async fn local_user(pool: &PgPool, id: Uuid, for_peer: bool) -> AppResult<Option<LocalUser>> {
     let row: Option<(Uuid, String, Option<String>)> = sqlx::query_as(
         "SELECT id, account_incarnation_id, drive_signing_public_key
-         FROM users WHERE id = $1 AND is_active = true",
+         FROM users WHERE id = $1 AND is_active = true
+          -- To another server, an account that doesn't talk to other servers
+          -- is no account (crate::federation_switch).
+          AND (NOT $2 OR kutup_account_federates(id))",
     )
     .bind(id)
+    .bind(for_peer)
     .fetch_optional(pool)
     .await?;
     Ok(row.and_then(|(id, incarnation, signing)| {
@@ -340,7 +344,7 @@ pub async fn put_profile_key(
     if !canonical_profile_version(&request.profile_version) {
         return Err(AppError::bad_request("invalid profile version"));
     }
-    let me = local_user(&state.pool, trusted_uuid(&user.user_id)?)
+    let me = local_user(&state.pool, trusted_uuid(&user.user_id)?, false)
         .await?
         .ok_or_else(|| AppError::conflict("account identity is unavailable"))?;
     let local_domain = state.config.chat_server_name.as_str();
@@ -370,7 +374,7 @@ pub async fn put_profile_key(
         .map_err(|_| AppError::bad_request("profile key envelope does not match"))?;
 
     if recipient.server == local_domain {
-        let other = local_user(&state.pool, account_uuid(&recipient))
+        let other = local_user(&state.pool, account_uuid(&recipient), false)
             .await?
             .filter(|other| other.incarnation == recipient_incarnation)
             .ok_or_else(|| AppError::not_found("no share with that person"))?;
@@ -496,7 +500,7 @@ pub async fn receive_profile_key(
             return Err(AppError::forbidden("profile key is for another server"));
         }
         let not_shared = || AppError::not_found("no share between them");
-        let recipient = local_user(&state.pool, account_uuid(&delivery.recipient))
+        let recipient = local_user(&state.pool, account_uuid(&delivery.recipient), true)
             .await?
             .ok_or_else(not_shared)?;
         let envelope = decode_envelope(&delivery.envelope)?;

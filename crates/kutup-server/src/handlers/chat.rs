@@ -1026,6 +1026,12 @@ pub async fn get_user_manifest(
 ) -> AppResult<Response> {
     match named_account(&state, &account_id, query.server.as_deref()).await? {
         NamedAccount::Remote(account) => {
+            // Another server: only for an account that talks to them (crate::federation_switch).
+            crate::federation_switch::ensure_federates(
+                &state.pool,
+                crate::handlers::trusted_uuid(&_auth.user_id)?,
+            )
+            .await?;
             let manifest = crate::chat_federation::fetch_remote_manifest(&state, &account).await?;
             Ok(Json(manifest).into_response())
         }
@@ -1102,6 +1108,12 @@ pub async fn get_manifest_history(
     }
     let target_id = match named_account(&state, &account_id, query.server.as_deref()).await? {
         NamedAccount::Remote(account) => {
+            // Another server: only for an account that talks to them (crate::federation_switch).
+            crate::federation_switch::ensure_federates(
+                &state.pool,
+                crate::handlers::trusted_uuid(&_auth.user_id)?,
+            )
+            .await?;
             let page =
                 crate::chat_federation::fetch_remote_manifest_history(&state, &account, &query)
                     .await?;
@@ -1361,6 +1373,12 @@ pub async fn get_user_profile(
     let access_key = profile_access_key_from_headers(&headers)?;
     match named_account(&state, &account_id, query.server.as_deref()).await? {
         NamedAccount::Remote(account) => {
+            // Another server: only for an account that talks to them (crate::federation_switch).
+            crate::federation_switch::ensure_federates(
+                &state.pool,
+                crate::handlers::trusted_uuid(&_auth.user_id)?,
+            )
+            .await?;
             let profile = crate::chat_federation::fetch_remote_profile(
                 &state,
                 &account,
@@ -1927,6 +1945,12 @@ pub async fn get_user_bundles(
                     "linked-device key fetch is limited to the local account",
                 ));
             }
+            // Another server: only for an account that talks to them (crate::federation_switch).
+            crate::federation_switch::ensure_federates(
+                &state.pool,
+                crate::handlers::trusted_uuid(&auth.user_id)?,
+            )
+            .await?;
             let bundles = crate::chat_federation::fetch_remote_bundles(&state, &account).await?;
             return Ok(Json(bundles).into_response());
         }
@@ -2255,6 +2279,12 @@ pub async fn send_messages(
     let recipient_id = match named_account(&state, &account_id, query.server.as_deref()).await? {
         NamedAccount::Local(user_id) => user_id,
         NamedAccount::Remote(account) => {
+            // Another server: only for an account that talks to them (crate::federation_switch).
+            crate::federation_switch::ensure_federates(
+                &state.pool,
+                crate::handlers::trusted_uuid(&auth.user_id)?,
+            )
+            .await?;
             let envelope_count = req.envelopes.len();
             return match crate::chat_federation::enqueue_send(&state, sender_id, &account, req)
                 .await?
@@ -2610,9 +2640,13 @@ pub(crate) async fn store_sealed_messages(
          FROM users u
          JOIN chat_delivery_capabilities c ON c.user_id = u.id
          WHERE u.id = $1 AND u.is_active = true
+           -- From another server, an account that doesn't talk to other
+           -- servers is not found, as an unknown one (crate::federation_switch).
+           AND ($2::text IS NULL OR kutup_account_federates(u.id))
          FOR SHARE OF u, c",
     )
     .bind(recipient)
+    .bind(federation_origin)
     .fetch_optional(&mut **tx)
     .await?;
     let Some((recipient_id, stored_hash)) = target else {

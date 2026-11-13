@@ -770,11 +770,14 @@ async fn reserve_inbound_offer(
         .ok()
         .and_then(|bytes| bytes.try_into().ok());
     let capability_digest = capability.as_ref().map(capability_hash).unwrap_or([0; 32]);
-    let recipient_user_id: Option<Uuid> =
-        sqlx::query_scalar("SELECT id FROM users WHERE id = $1 AND is_active=true")
-            .bind(recipient)
-            .fetch_optional(&mut *tx)
-            .await?;
+    let recipient_user_id: Option<Uuid> = sqlx::query_scalar(
+        // An account that doesn't talk to other servers is, to them, no
+        // account (crate::federation_switch).
+        "SELECT id FROM users WHERE id = $1 AND is_active AND kutup_account_federates(id)",
+    )
+    .bind(recipient)
+    .fetch_optional(&mut *tx)
+    .await?;
     let capability_matches = if let Some(recipient_user_id) = recipient_user_id {
         capability.is_some()
             && chat_media::match_delivery_capability(&mut tx, recipient_user_id, &capability_digest)

@@ -815,7 +815,12 @@ pub async fn chains(
         }
         return Ok(Json(found).into_response());
     }
-    let found =
-        account_names::chains(&state.pool, &address, query.incarnation_id.as_deref()).await?;
+    let found = account_names::chains(
+        &state.pool,
+        &address,
+        query.incarnation_id.as_deref(),
+        false,
+    )
+    .await?;
     Ok(Json(found).into_response())
 }

@@ -2,6 +2,7 @@ import { keepPreviousData, useInfiniteQuery, useMutation, useQuery, useQueryClie
 import { conflictCode, opaqueRegister } from '@kutup/session/opaque'
 import { accountGrant, type OneUseSecret } from '@kutup/session/reauth'
 import api from '@kutup/session/client'
+import type { LegalDocument } from '../auth/legal'
 import type {
   AdminActivityResponse,
   AdminFederationPolicy,
@@ -111,6 +112,8 @@ export type UserPatch = Partial<{
   suspendedReason: SuspendedReason
   /** Whether it may share by public link. */
   publicSharing: 'on' | 'off'
+  /** Whether it talks to other servers. */
+  federation: 'on' | 'off'
   isAdmin: boolean
   storageQuotaBytes: number
 }>
@@ -456,5 +459,33 @@ export function useUnblockLink() {
 export function useRemoveReportedLink() {
   return useAdminMutation(async (id: string) => {
     await api.post(`/admin/reports/${encodeURIComponent(id)}/remove-link`)
+  })
+}
+
+// --- legal documents ----------------------------------------------------
+
+const legalKey = [...adminKey, 'legal'] as const
+
+/** Every published version (docs/plans/server-personal-data.md, A3). */
+export function useLegalDocuments() {
+  return useQuery({
+    queryKey: legalKey,
+    queryFn: async () => (await api.get<LegalDocument[]>('/admin/legal/documents')).data,
+  })
+}
+
+export interface PublishDocumentInput {
+  kind: string
+  version: string
+  language: string
+  url: string
+  sha256: string
+  requiredAtSignup: boolean
+}
+
+/** Publishes a version; never edited after. */
+export function usePublishDocument() {
+  return useAdminMutation(async (input: PublishDocumentInput) => {
+    await api.post('/admin/legal/documents', input)
   })
 }

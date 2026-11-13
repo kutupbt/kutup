@@ -48,9 +48,11 @@ pub(crate) const JSON_CONTENT_TYPE: &str = "application/json";
 const MAX_DIRECTORY_RESPONSE_BYTES: usize = 2 * 1024 * 1024;
 const MAX_FEDERATION_TRANSACTION_BYTES: usize = 16 * 1024 * 1024;
 
-/// The active user an inbound path's `:accountId` is, on this server.
+/// The active user an inbound path's `:accountId` is, on this server: none
+/// for one that doesn't talk to other servers (crate::federation_switch).
 async fn inbound_user(state: &AppState, account: &AccountRef) -> AppResult<Option<Uuid>> {
-    crate::account_ids::local_user(&state.pool, &state.config.chat_server_name, account).await
+    crate::account_ids::local_user_for_peer(&state.pool, &state.config.chat_server_name, account)
+        .await
 }
 
 fn configured_stack(state: &AppState) -> AppResult<&FederationStack> {
@@ -2797,15 +2799,17 @@ pub async fn deliver_messages(
         );
     }
 
-    let recipient_id: Option<Uuid> = match Uuid::parse_str(&transaction.recipient.account_id) {
-        Ok(id) => {
-            sqlx::query_scalar("SELECT id FROM users WHERE id = $1 AND is_active = true FOR SHARE")
-                .bind(id)
-                .fetch_optional(&mut *tx)
-                .await?
-        }
-        Err(_) => None,
-    };
+    let recipient_id: Option<Uuid> =
+        match Uuid::parse_str(&transaction.recipient.account_id) {
+            Ok(id) => sqlx::query_scalar(
+                "SELECT id FROM users WHERE id = $1 AND is_active AND kutup_account_federates(id)
+                  FOR SHARE",
+            )
+            .bind(id)
+            .fetch_optional(&mut *tx)
+            .await?,
+            Err(_) => None,
+        };
     let Some(recipient_id) = recipient_id else {
         let response = FederationDeliveryResponse {
             stored: 0,

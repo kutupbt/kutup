@@ -42,12 +42,14 @@ mod drive_writes;
 mod error;
 mod federation;
 mod federation_outbox;
+mod federation_switch;
 mod file_content;
 mod grants;
 mod handlers;
 mod hub;
 mod jobs;
 mod jwt;
+mod legal;
 mod live_locations;
 mod mail;
 mod maps;
@@ -796,6 +798,7 @@ fn build_router(state: AppState) -> Router {
         )
         // --- Auth routes (anonymous; rate-limited per the Go middleware chain) ---
         .route("/api/auth/settings", get(auth::get_public_settings))
+        .route("/api/legal/documents", get(legal::get_documents))
         .route(
             "/api/auth/register",
             post(auth::register).route_layer(from_fn(middleware::rate_limit_register)),
@@ -900,6 +903,16 @@ fn build_router(state: AppState) -> Router {
         .route("/api/user/rename/check", get(handlers::renames::check))
         .route("/api/user/rename", post(handlers::renames::rename))
         .route("/api/user/close", post(handlers::closing::close))
+        .route("/api/user/legal/pending", get(legal::get_pending))
+        .route("/api/user/legal/acknowledge", post(legal::post_acknowledge))
+        .route(
+            "/api/user/consents",
+            get(legal::get_consents).put(legal::put_consent),
+        )
+        .route(
+            "/api/user/federation",
+            put(federation_switch::put_federation),
+        )
         .route("/api/user/names", get(handlers::renames::names))
         .route(
             "/api/user/names/:name",
@@ -2368,6 +2381,10 @@ fn build_router(state: AppState) -> Router {
                 .route(
                     "/api/admin/reports/:id/remove-link",
                     post(link_reports::remove_reported_link),
+                )
+                .route(
+                    "/api/admin/legal/documents",
+                    get(legal::admin_documents).post(legal::publish),
                 )
                 .route(
                     "/api/admin/shares/:id/block",

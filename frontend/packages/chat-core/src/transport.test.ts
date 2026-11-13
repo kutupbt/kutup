@@ -1,8 +1,22 @@
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import axios from 'axios'
 import api from '@kutup/session/client'
 import { resolveApiBase } from '@kutup/session/apiBase'
-import { ApiChatTransport } from './transport'
+import { ApiChatTransport, FederationOffError, forgetFederationState } from './transport'
+
+vi.mock('@kutup/session/store', () => ({ getSession: () => ({ userId: 'u1', address: 'me@home.test' }) }))
+
+/** This account's switch, as `/user/me` says it. */
+let federation: 'on' | 'off' = 'on'
+const realGet = api.get.bind(api)
+beforeEach(() => {
+  federation = 'on'
+  forgetFederationState()
+  vi.spyOn(api, 'get').mockImplementation(((url: string, ...rest: unknown[]) =>
+    url === '/user/me'
+      ? Promise.resolve({ data: { federation } })
+      : (realGet as (u: string, ...r: unknown[]) => Promise<unknown>)(url, ...rest)) as typeof api.get)
+})
 
 afterEach(() => vi.restoreAllMocks())
 
@@ -360,5 +374,17 @@ describe('ApiChatTransport', () => {
     const other = new axios.AxiosError('boom', '500', undefined, undefined, { status: 500 } as never)
     vi.spyOn(api, 'post').mockRejectedValueOnce(other)
     await expect(transport.relayGroupRequest('home.example', new Uint8Array([1]))).rejects.toBe(other)
+  })
+
+  it('reaches no other server while this account talks to none', async () => {
+    federation = 'off'
+    const post = vi.spyOn(axios, 'post').mockResolvedValue({ data: { results: [] } } as never)
+    const transport = new ApiChatTransport()
+    await expect(transport.fetchSealedBundles(ALICE, 'cap')).rejects.toBeInstanceOf(FederationOffError)
+    await expect(transport.sendSealedBatch('remote.example', { messages: [] })).rejects.toBeInstanceOf(FederationOffError)
+    expect(post).not.toHaveBeenCalled()
+    // This server's own accounts are still reached.
+    await transport.sendSealedBatch('home.test', { messages: [] }).catch(() => undefined)
+    expect(post).toHaveBeenCalled()
   })
 })

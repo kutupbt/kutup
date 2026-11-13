@@ -632,6 +632,7 @@ pub async fn publish(
             &state.pool,
             &format!("{username}@{}", federation.server_name()),
             incarnation.as_deref(),
+            true,
         )
         .await
     }
