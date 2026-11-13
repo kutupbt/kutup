@@ -664,7 +664,7 @@ worker (open question 7).
   header, open manifest, open block *i*). An app plugs it into
   AVAssetResourceLoader or an ExoPlayer `DataSource`, the native equivalents
   of the service worker.
-- **Chat attachments switch too.** Long videos and voice notes in Chat then
+- **Chat attachments switch too** (built, slice 6). Long videos in Chat
   stream the same way.
   - New `ChatMediaSuiteId` 2 with the same block construction. The header
     is `KUTPCM2\0` with the attachment id; there is no revision, since
@@ -673,7 +673,7 @@ worker (open question 7).
     The message is already authenticated by the Signal session, so the
     manifest needs no signature (`signer kind` 0).
   - Server admission and federation still bind the whole-object SHA-256.
-- **Chat backup media switches as well** (`KUTPBM2\0`, same construction).
+- **Chat backup media switches as well** (built, slice 6; `KUTPBM2\0`, same construction).
   It is only read for restore and does not need seeking. Switching it lets
   secretstream and the browser's libsodium stream code leave the codebase.
   That also closes part of the roadmap's "remaining libsodium primitives"
@@ -1075,7 +1075,24 @@ Each slice is a PR.
      a WebKit project waits for a host that runs it (the dev VM lacks its
      libraries).
    - Left: downloads through the worker (`/sw/{id}`, open question 7).
-6. **Chat.** Attachments and backup media on suite 2; Chat's viewer streams.
+6. **Chat.** Built (2026-11-13).
+   - Attachments: `ChatMediaSuiteId` 2 is the only suite the descriptor,
+     the delivery offer, federation and the tus upload accept. The
+     descriptor carries `manifestSha256` (base64) beside the whole-object
+     SHA-256, which admission and federation still bind. Uploads seal with
+     `chatMediaBlockEncryptor`; reads open with `chatMediaBlockReader`
+     against the descriptor's digest, by Range (`@kutup/chat-core`
+     `media.ts`), and a download into the private cache is authenticated
+     without decrypting. The server checks the `KUTPCM2` header at the first
+     part and the trailer's structure at finalization (docs/chat-media.md §3).
+   - Chat's viewer streams video and audio through `/sw/stream/{id}`: the
+     block reader is generic over family (`BlockReaderTarget`, `drive` or
+     `chatMedia`). Voice notes still play from the cache.
+   - Backup media: suite 2 (`KUTPBM2`), sealed by the server's copy or the
+     client's upload; the display record commits to the manifest's digest
+     (`backupMediaManifestSha256`); restore reads by Range
+     (docs/chat-backup.md "Protected media").
+   - Each suite's parser refuses the other's header (Rust tests).
 7. **Removal.**
    - `stream.rs`, suite 1, `KUTPDB2`/`KUTPCM1`/`KUTPBM1`, the JS
      `streamEncryptor`/`streamDecryptor` and the libsodium stream path all

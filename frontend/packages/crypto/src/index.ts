@@ -34,23 +34,20 @@ export type {
   ServedRevision,
 } from './driveBlocks'
 export {
-  CHAT_MEDIA_OBJECT_HEADER_BYTES,
-  CHAT_MEDIA_OBJECT_PREFIX_BYTES,
-  CHAT_MEDIA_SUITE_V1,
+  CHAT_MEDIA_SUITE,
   MAX_CHAT_MEDIA_PLAINTEXT_BYTES,
   chatAttachmentLedgerEnvelopeDigest,
-  chatMediaCipherSize,
-  decryptChatMediaV1,
-  encryptChatMediaV1,
-  newChatMediaStreamEncryptorV1,
+  chatMediaObjectLength,
+  newChatMediaBlockEncryptor,
   openChatAttachmentLedger,
-  openChatMediaStreamV1,
+  openChatMedia,
+  openChatMediaReader,
   sealChatAttachmentLedger,
+  sealChatMedia,
 } from './chatMedia'
 export type {
   ChatAttachmentLedgerContextV1,
   ChatAttachmentLedgerOwner,
-  ChatMediaStreamEncryptorV1,
 } from './chatMedia'
 // The recovery phrase (bip39 and its wordlists) is @kutup/crypto/mnemonic,
 // kept out of this barrel so only the pages that use it load it.

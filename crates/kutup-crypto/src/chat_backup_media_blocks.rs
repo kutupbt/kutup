@@ -1,8 +1,9 @@
 //! Chat backup media in the block format (docs/plans/drive-block-format.md
 //! §2, Q6): the already-E2EE Chat-media ciphertext, padded to its bucket as
-//! today, wrapped in blocks under the backup's outer key. The header is
+//! today, wrapped in blocks under the backup's outer key: backup media suite
+//! 2, the suite every backup media object is written in. The header is
 //! suite 1's with its own magic and suite; the manifest is unsigned, as the
-//! backup's sealed index commits to the media object.
+//! backup's sealed index commits to its digest.
 
 use zeroize::Zeroizing;
 
@@ -172,6 +173,18 @@ impl MediaReader {
     }
 }
 
+/// What a server can check of a whole stored object without the key: the
+/// trailer's manifest length fits the block count, and the count the
+/// length. The block count, if it holds.
+pub fn check_structure(total_len: u64, trailer: &[u8]) -> Result<u64> {
+    let manifest = CHAT_BACKUP_MEDIA_BLOCKS.parse_trailer(trailer)?;
+    CHAT_BACKUP_MEDIA_BLOCKS.check_structure(
+        CHAT_BACKUP_MEDIA_BLOCKS_HEADER_BYTES,
+        total_len,
+        manifest,
+    )
+}
+
 /// The whole object's length for `source_ciphertext_bytes` before padding.
 pub fn object_len(source_ciphertext_bytes: u64) -> Result<u64> {
     CHAT_BACKUP_MEDIA_BLOCKS.object_len(
@@ -295,6 +308,33 @@ mod tests {
         other.media_id = [5; 32];
         assert!(MediaReader::open(&[4; 32], other, header, manifest, digest).is_err());
         assert!(MediaReader::open(&[4; 32], context(), header, manifest, &[0; 32]).is_err());
+    }
+
+    #[test]
+    fn the_suites_refuse_each_others_headers() {
+        let block = header(context(), 1_000).unwrap();
+        assert!(inspect_header(&block).is_ok());
+        // Suite 1 under the block magic.
+        let mut suite_one = block;
+        suite_one[8..10].copy_from_slice(&1u16.to_be_bytes());
+        assert!(inspect_header(&suite_one).is_err());
+        // A secretstream (KUTPBM1) header, as it is.
+        let old = crate::chat_backup_media::build_media_header(context(), 1_000).unwrap();
+        assert!(inspect_header(&old).is_err());
+        // The block suite under the secretstream magic.
+        let mut old_magic = block;
+        old_magic[..8].copy_from_slice(b"KUTPBM1\0");
+        assert!(crate::chat_backup_media::inspect_media_header(&old_magic).is_err());
+        assert!(inspect_header(&old_magic).is_err());
+    }
+
+    #[test]
+    fn the_server_checks_the_structure() {
+        let sealed = seal_media(&[1u8; 600], &[4; 32], context()).unwrap();
+        let object = &sealed.bytes;
+        let trailer = &object[object.len() - blocks::TRAILER_LEN..];
+        assert_eq!(check_structure(object.len() as u64, trailer).unwrap(), 1);
+        assert!(check_structure(object.len() as u64 + blocks::BLOCK_SIZE as u64, trailer).is_err());
     }
 
     #[test]

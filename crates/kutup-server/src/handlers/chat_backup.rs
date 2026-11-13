@@ -23,14 +23,13 @@ use kutup_chat_proto::{
     MAX_CHAT_BACKUP_PAGE_SEGMENTS,
 };
 use kutup_crypto::account_record::{self, AccountRecordPurpose};
+use kutup_crypto::blocks::{self, BLOCK_SIZE, TRAILER_LEN};
 use kutup_crypto::chat_backup::{
     self, ChatBackupObjectPurposeV1, ChatBackupProtectionDomainV1, ChatBackupSuiteId,
 };
-use kutup_crypto::chat_backup_media::{
-    self, ChatBackupMediaContextV1, CHAT_BACKUP_MEDIA_HEADER_BYTES,
-};
+use kutup_crypto::chat_backup_media::{padded_media_plaintext_bytes, ChatBackupMediaContextV1};
+use kutup_crypto::chat_backup_media_blocks::{self, CHAT_BACKUP_MEDIA_BLOCKS_HEADER_BYTES};
 use kutup_crypto::primitives::{hash, Hasher, Suite};
-use kutup_crypto::stream::{StreamEncryptor, CHUNK_SIZE, TAG_FINAL, TAG_MESSAGE};
 use serde::Deserialize;
 use std::io::{Read, Seek, SeekFrom, Write};
 use tempfile::NamedTempFile;
@@ -1272,17 +1271,19 @@ pub async fn copy_media(
     let media_id = canonical_hex_32("backup media id", &request.media_id)?;
     let request_hash = request_digest(&request)?;
 
-    if let Some((stored_hash, bytes, ciphertext_hash)) = sqlx::query_as::<_, (String, i64, String)>(
-        "SELECT operation.request_digest,object.ciphertext_bytes,object.ciphertext_sha256
+    if let Some((stored_hash, bytes, ciphertext_hash, stored_path)) =
+        sqlx::query_as::<_, (String, i64, String, String)>(
+            "SELECT operation.request_digest,object.ciphertext_bytes,object.ciphertext_sha256,
+                object.storage_path
              FROM chat_backup_media_operations operation
              JOIN chat_backup_media_objects object
                ON object.user_id=operation.user_id AND object.media_id=operation.media_id
              WHERE operation.user_id=$1 AND operation.operation_id=$2",
-    )
-    .bind(user_id)
-    .bind(operation_id)
-    .fetch_optional(&state.pool)
-    .await?
+        )
+        .bind(user_id)
+        .bind(operation_id)
+        .fetch_optional(&state.pool)
+        .await?
     {
         if stored_hash != request_hash {
             return Err(AppError::conflict(
@@ -1293,6 +1294,7 @@ pub async fn copy_media(
             media_id: request.media_id,
             ciphertext_bytes: u64::try_from(bytes).unwrap_or_default(),
             ciphertext_sha256: ciphertext_hash,
+            manifest_sha256: stored_manifest_sha256(&state, &stored_path, bytes).await?,
             already_stored: true,
         }));
     }
@@ -1324,25 +1326,28 @@ pub async fn copy_media(
         protection_domain: ChatBackupProtectionDomainV1::StandardChat,
         media_id,
     };
-    let typed_header = chat_backup_media::build_media_header(
-        media_context,
-        u64::try_from(source_bytes).map_err(|_| AppError::internal("stored media length"))?,
-    )
-    .map_err(|_| AppError::bad_request("backup media length is invalid"))?;
-    debug_assert_eq!(typed_header.len(), CHAT_BACKUP_MEDIA_HEADER_BYTES);
-    let parsed_header = chat_backup_media::inspect_media_header(&typed_header)
-        .map_err(|_| AppError::internal("generated backup media header"))?;
-    let expected_outer_bytes =
-        chat_backup_media::media_object_ciphertext_bytes(parsed_header.padded_plaintext_bytes)
-            .map_err(|_| AppError::bad_request("backup media is too large"))?;
+    let source_bytes =
+        u64::try_from(source_bytes).map_err(|_| AppError::internal("stored media length"))?;
+    let typed_header = chat_backup_media_blocks::header(media_context, source_bytes)
+        .map_err(|_| AppError::bad_request("backup media length is invalid"))?;
+    let padded_bytes = padded_media_plaintext_bytes(source_bytes)
+        .map_err(|_| AppError::bad_request("backup media length is invalid"))?;
+    let expected_outer_bytes = chat_backup_media_blocks::object_len(source_bytes)
+        .map_err(|_| AppError::bad_request("backup media is too large"))?;
     let (source_body, measured_source_bytes) =
         state.storage.get_object(&source_path).await.map_err(|_| {
             AppError::not_found("Chat media is no longer available for server copy")
         })?;
-    if measured_source_bytes != source_bytes {
+    if u64::try_from(measured_source_bytes).ok() != Some(source_bytes) {
         return Err(AppError::internal("stored Chat media length mismatch"));
     }
 
+    // The block format (KUTPBM2, docs/plans/drive-block-format.md §5): the
+    // Chat-media ciphertext padded to its bucket, sealed block by block
+    // under the outer key, then the sealed manifest the backup's index
+    // commits to. The key lives only for this request.
+    let mut sealer = chat_backup_media_blocks::sealer(&outer_key, media_context, source_bytes)
+        .map_err(|_| AppError::internal("initialize backup media encryption"))?;
     let mut output =
         NamedTempFile::new().map_err(|_| AppError::internal("create backup media temp file"))?;
     let mut output_digest = Hasher::new(Suite::V1);
@@ -1350,42 +1355,37 @@ pub async fn copy_media(
         .write_all(&typed_header)
         .map_err(|_| AppError::internal("write backup media temp file"))?;
     output_digest.update(typed_header);
-    let (mut encryptor, stream_header) =
-        StreamEncryptor::new_with_aad(&outer_key, &typed_header)
-            .map_err(|_| AppError::internal("initialize backup media encryption"))?;
-    output
-        .write_all(&stream_header)
-        .map_err(|_| AppError::internal("write backup media temp file"))?;
-    output_digest.update(stream_header);
     let mut source_reader = source_body.into_async_read();
-    let source_bytes = u64::try_from(source_bytes).unwrap_or_default();
     let mut offset = 0u64;
-    while offset < parsed_header.padded_plaintext_bytes {
-        let chunk_len =
-            usize::try_from((parsed_header.padded_plaintext_bytes - offset).min(CHUNK_SIZE as u64))
-                .map_err(|_| AppError::internal("backup media chunk length"))?;
-        let mut plaintext = vec![0u8; chunk_len];
+    while offset < padded_bytes {
+        let block_len = usize::try_from((padded_bytes - offset).min(BLOCK_SIZE as u64))
+            .map_err(|_| AppError::internal("backup media block length"))?;
+        let mut plaintext = zeroize::Zeroizing::new(vec![0u8; block_len]);
         if offset < source_bytes {
-            let source_in_chunk = usize::try_from((source_bytes - offset).min(chunk_len as u64))
-                .map_err(|_| AppError::internal("backup media source chunk length"))?;
+            let source_in_block = usize::try_from((source_bytes - offset).min(block_len as u64))
+                .map_err(|_| AppError::internal("backup media source block length"))?;
             source_reader
-                .read_exact(&mut plaintext[..source_in_chunk])
+                .read_exact(&mut plaintext[..source_in_block])
                 .await
                 .map_err(|_| AppError::internal("read Chat media for backup"))?;
         }
-        let final_chunk = offset + chunk_len as u64 == parsed_header.padded_plaintext_bytes;
-        let encrypted = encryptor
-            .push(
-                &plaintext,
-                if final_chunk { TAG_FINAL } else { TAG_MESSAGE },
-            )
+        let sealed = sealer
+            .seal_next(&plaintext)
             .map_err(|_| AppError::internal("encrypt backup media"))?;
         output
-            .write_all(&encrypted)
+            .write_all(&sealed)
             .map_err(|_| AppError::internal("write backup media temp file"))?;
-        output_digest.update(&encrypted);
-        offset += chunk_len as u64;
+        output_digest.update(&sealed);
+        offset += block_len as u64;
     }
+    let tail = sealer
+        .finish(None)
+        .map_err(|_| AppError::internal("seal backup media manifest"))?;
+    output
+        .write_all(&tail.bytes)
+        .map_err(|_| AppError::internal("write backup media temp file"))?;
+    output_digest.update(&tail.bytes);
+    let manifest_sha256 = STANDARD.encode(tail.manifest_sha256);
     let outer_digest = hex::encode(output_digest.finish());
     let measured_outer_bytes = output
         .as_file()
@@ -1432,8 +1432,9 @@ pub async fn copy_media(
         .fetch_optional(&mut *transaction)
         .await?;
         let inserted = if existing.is_some() {
-            // Secretstream uses a fresh header, so concurrent valid copies of
-            // the same deterministic media ID need not have equal ciphertext.
+            // The manifest's nonce is random, so concurrent valid copies of
+            // the same deterministic media ID need not have equal ciphertext:
+            // the stored one stands, with its own manifest digest.
             false
         } else {
             // The account's one storage pool, shared with Drive (crate::storage_pool).
@@ -1519,8 +1520,8 @@ pub async fn copy_media(
         if let Err(error) = state.storage.delete(&path).await {
             tracing::warn!("failed to remove duplicate backup media copy: {error:#}");
         }
-        let (bytes, stored_digest): (i64, String) = sqlx::query_as(
-            "SELECT ciphertext_bytes,ciphertext_sha256 FROM chat_backup_media_objects
+        let (bytes, stored_digest, stored_path): (i64, String, String) = sqlx::query_as(
+            "SELECT ciphertext_bytes,ciphertext_sha256,storage_path FROM chat_backup_media_objects
              WHERE user_id=$1 AND media_id=$2",
         )
         .bind(user_id)
@@ -1531,6 +1532,7 @@ pub async fn copy_media(
             media_id: request.media_id,
             ciphertext_bytes: u64::try_from(bytes).unwrap_or_default(),
             ciphertext_sha256: stored_digest,
+            manifest_sha256: stored_manifest_sha256(&state, &stored_path, bytes).await?,
             already_stored: true,
         }));
     }
@@ -1539,6 +1541,7 @@ pub async fn copy_media(
         media_id: request.media_id,
         ciphertext_bytes: measured_outer_bytes,
         ciphertext_sha256: outer_digest,
+        manifest_sha256,
         already_stored: false,
     }))
 }
@@ -1608,7 +1611,7 @@ pub async fn upload_media(
     }
     let metadata =
         metadata.ok_or_else(|| AppError::bad_request("missing backup media metadata"))?;
-    metadata
+    let claimed_manifest = metadata
         .validate()
         .map_err(|error| AppError::bad_request(format!("invalid backup media: {error}")))?;
     let (mut file, measured_bytes, measured_digest) =
@@ -1623,25 +1626,30 @@ pub async fn upload_media(
     let backup_id = canonical_uuid("backup incarnation id", &metadata.backup_incarnation_id)?;
     let reference_id = canonical_uuid("backup media reference id", &metadata.reference_id)?;
     let media_id = canonical_hex_32("backup media id", &metadata.media_id)?;
-    let mut public_header = vec![0u8; CHAT_BACKUP_MEDIA_HEADER_BYTES];
+    let mut public_header = vec![0u8; CHAT_BACKUP_MEDIA_BLOCKS_HEADER_BYTES];
     file.as_file_mut()
         .seek(SeekFrom::Start(0))
         .and_then(|_| file.as_file_mut().read_exact(&mut public_header))
         .map_err(|_| AppError::bad_request("backup media header is truncated"))?;
-    let parsed = chat_backup_media::inspect_media_header(&public_header)
+    let parsed = chat_backup_media_blocks::inspect_header(&public_header)
         .map_err(|_| AppError::bad_request("invalid backup media header"))?;
-    let expected_bytes =
-        chat_backup_media::media_object_ciphertext_bytes(parsed.padded_plaintext_bytes)
-            .map_err(|_| AppError::bad_request("backup media length is invalid"))?;
+    let expected_bytes = chat_backup_media_blocks::object_len(parsed.source_ciphertext_bytes)
+        .map_err(|_| AppError::bad_request("backup media length is invalid"))?;
     if expected_bytes != measured_bytes
         || parsed.source_ciphertext_bytes != metadata.source_ciphertext_bytes
         || parsed.context.backup_incarnation_id != *backup_id.as_bytes()
         || parsed.context.media_id != media_id
         || parsed.context.protection_domain != ChatBackupProtectionDomainV1::StandardChat
-        || parsed.suite != ChatBackupSuiteId::HkdfSha256XChaCha20Poly1305V1
     {
         return Err(AppError::bad_request(
             "backup media public binding mismatch",
+        ));
+    }
+    // The block structure, and the manifest the client's backup index will
+    // commit to: the one in these bytes.
+    if sealed_manifest_sha256_of_file(file.as_file_mut(), measured_bytes)? != claimed_manifest {
+        return Err(AppError::bad_request(
+            "backup media manifest binding mismatch",
         ));
     }
     let account: Option<(Uuid, String)> = sqlx::query_as(
@@ -1681,10 +1689,12 @@ pub async fn upload_media(
             ));
         }
         ensure_media_reference(&state, user_id, media_id, reference_id).await?;
+        // The same whole object, so the same manifest.
         return Ok(Json(kutup_chat_proto::ChatBackupMediaReceiptV1 {
             media_id: metadata.media_id,
             ciphertext_bytes: measured_bytes,
             ciphertext_sha256: digest,
+            manifest_sha256: metadata.manifest_sha256,
             already_stored: true,
         }));
     }
@@ -1786,8 +1796,68 @@ pub async fn upload_media(
         media_id: metadata.media_id,
         ciphertext_bytes: u64::try_from(stored_bytes).unwrap_or_default(),
         ciphertext_sha256: stored_digest,
+        // Stored only as these bytes (the whole digest is checked above).
+        manifest_sha256: metadata.manifest_sha256,
         already_stored: !inserted,
     }))
+}
+
+/// The sealed manifest's SHA-256 of a whole backup media
+/// object of `total` bytes held in `file`, its block structure checked.
+fn sealed_manifest_sha256_of_file(file: &mut std::fs::File, total: u64) -> AppResult<[u8; 32]> {
+    let invalid = || AppError::bad_request("invalid backup media structure");
+    let trailer_len = TRAILER_LEN as u64;
+    let mut trailer = [0u8; TRAILER_LEN];
+    file.seek(SeekFrom::Start(
+        total.checked_sub(trailer_len).ok_or_else(invalid)?,
+    ))
+    .and_then(|_| file.read_exact(&mut trailer))
+    .map_err(|_| invalid())?;
+    chat_backup_media_blocks::check_structure(total, &trailer).map_err(|_| invalid())?;
+    let manifest_len = chat_backup_media_blocks::CHAT_BACKUP_MEDIA_BLOCKS
+        .parse_trailer(&trailer)
+        .map_err(|_| invalid())?;
+    let mut manifest = vec![0u8; manifest_len];
+    file.seek(SeekFrom::Start(total - trailer_len - manifest_len as u64))
+        .and_then(|_| file.read_exact(&mut manifest))
+        .map_err(|_| invalid())?;
+    Ok(blocks::manifest_digest(&manifest))
+}
+
+/// The sealed manifest's SHA-256 (canonical base64) of the stored backup
+/// media object at `path`, read by range: its trailer, then its manifest.
+async fn stored_manifest_sha256(state: &AppState, path: &str, total: i64) -> AppResult<String> {
+    let broken = || AppError::internal("stored backup media is malformed");
+    let total = u64::try_from(total).map_err(|_| broken())?;
+    let trailer_len = TRAILER_LEN as u64;
+    let read = |start: u64, end: u64| async move {
+        let body = state
+            .storage
+            .get_object_range(path, start, end, total)
+            .await
+            .map_err(|_| AppError::internal("backup media storage error"))?;
+        let mut bytes = Vec::with_capacity((end - start + 1) as usize);
+        body.into_async_read()
+            .read_to_end(&mut bytes)
+            .await
+            .map_err(|_| AppError::internal("backup media storage error"))?;
+        if bytes.len() as u64 != end - start + 1 {
+            return Err(broken());
+        }
+        Ok::<_, AppError>(bytes)
+    };
+    let trailer = read(
+        total.checked_sub(trailer_len).ok_or_else(broken)?,
+        total - 1,
+    )
+    .await?;
+    chat_backup_media_blocks::check_structure(total, &trailer).map_err(|_| broken())?;
+    let manifest_len = chat_backup_media_blocks::CHAT_BACKUP_MEDIA_BLOCKS
+        .parse_trailer(&trailer)
+        .map_err(|_| broken())? as u64;
+    let manifest_end = total - trailer_len - 1;
+    let manifest = read(manifest_end + 1 - manifest_len, manifest_end).await?;
+    Ok(STANDARD.encode(blocks::manifest_digest(&manifest)))
 }
 
 async fn insert_media_reference(
@@ -1838,11 +1908,15 @@ async fn ensure_media_reference(
 
 #[utoipa::path(get, path = "/api/chat/backup/media/{mediaId}", tag = "chat-backup",
     security(("BearerAuth" = [])), params(("mediaId" = String, Path)),
-    responses((status = 200, description = "Outer-encrypted backup media", content_type = "application/octet-stream")))]
+    responses(
+        (status = 200, description = "Outer-encrypted backup media", content_type = "application/octet-stream"),
+        (status = 206, description = "One range of it (`Range: bytes=…`)", content_type = "application/octet-stream"),
+        (status = 416, description = "A range past its end")))]
 pub async fn download_media(
     State(state): State<AppState>,
     user: AuthUser,
     Path(media_id): Path<String>,
+    headers: axum::http::HeaderMap,
 ) -> AppResult<Response> {
     let user_id = trusted_uuid(&user.user_id)?;
     let media_id_bytes = canonical_hex_32("backup media id", &media_id)?;
@@ -1857,19 +1931,27 @@ pub async fn download_media(
     let Some((path, expected_bytes, digest)) = row else {
         return Err(AppError::not_found("backup media not found"));
     };
-    let (body, stored_bytes) = state
-        .storage
-        .get_object(&path)
-        .await
-        .map_err(|_| AppError::internal("backup media storage error"))?;
-    if stored_bytes != expected_bytes {
-        return Err(AppError::internal("stored backup media length mismatch"));
-    }
-    Ok(super::octet_stream_response(
-        body,
-        stored_bytes,
+    // A restore reads the header, the trailer and the manifest, then the
+    // blocks, by range (docs/plans/drive-block-format.md §5). The object
+    // never changes under its digest, which is its ETag.
+    let total = u64::try_from(expected_bytes)
+        .map_err(|_| AppError::internal("stored backup media length"))?;
+    let etag = format!("\"{digest}\"");
+    let asked = crate::content_range::requested(
+        &headers,
+        total,
+        &etag,
+        crate::content_range::max_part_bytes(&state.pool).await?,
+    );
+    crate::content_range::serve(
+        &state.storage,
+        &path,
+        total,
+        &etag,
+        asked,
         &[("x-kutup-ciphertext-sha256".parse().expect("header"), digest)],
-    ))
+    )
+    .await
 }
 
 #[utoipa::path(post, path = "/api/chat/backup/media/reconciliation", tag = "chat-backup",

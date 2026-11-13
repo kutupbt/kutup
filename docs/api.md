@@ -3973,19 +3973,28 @@ reconciled media set, then releases superseded message/media quota.
 ### POST /api/chat/backup/media/copy
 
 Copy an account-owned ordinary Chat-media ciphertext into a padded,
-backup-specific outer encryption. The client supplies only the derived outer
-key; the original attachment plaintext/key never reaches the server.
+backup-specific outer encryption in the block format (`KUTPBM2`, backup media
+suite 2). The client supplies only the derived outer key; the original
+attachment plaintext/key never reaches the server. The receipt
+(`ChatBackupMediaReceiptV1`) names the sealed manifest's SHA-256
+(`manifestSha256`, base64), which the backup's records commit to; a retry
+gets the same one.
 
 ### POST /api/chat/backup/media
 
 Multipart direct-upload fallback for a verified outer-encrypted media object
-retained locally after its ordinary delivery object has expired.
+retained locally after its ordinary delivery object has expired. The metadata
+names the object's `manifestSha256`; the server checks the header, length and
+block structure and that the uploaded manifest hashes to it.
 
 ### GET /api/chat/backup/media/{mediaId}
 
-Lazily stream one opaque history-media object. Clients validate its typed
-header, digest, secretstream final tag, source length and zero padding before
-placing the inner Chat-media ciphertext in the private cache.
+Lazily read one opaque history-media object, whole or by one `Range`
+(`206`, at most `drive.stream.response_max_bytes`; the ETag is the object's
+SHA-256). Clients read the header and the sealed manifest first, open it
+against the digest their record commits to, then each block (its hash, AEAD
+and zero padding) before placing the inner Chat-media ciphertext in the
+private cache.
 
 ### POST /api/chat/backup/media/reconciliation
 

@@ -60,6 +60,10 @@ export interface WasmBlockEncryptor {
   /** Set once finished: the sealed manifest's SHA-256, canonical base64. */
   readonly manifestSha256: string | undefined
   sealNext(plaintext: Uint8Array): Uint8Array
+  /** The sealed manifest and trailer of an unsigned family (Chat media, backup media). */
+  finish(): Uint8Array
+  /** For backup media: the media id the backup root derived for the source. */
+  readonly mediaId: string | undefined
   finishSigned(masterKeyBase64: string, uploaderAccountId: string, uploaderIncarnationId: string): Uint8Array
   free(): void
 }
@@ -71,6 +75,8 @@ export interface WasmBlockReader {
   readonly objectLength: number
   readonly signerAccountId: string | undefined
   readonly signerIncarnationId: string | undefined
+  /** For backup media: the source's length without its padding. */
+  readonly sourceBytes: number | undefined
   blockOffset(index: number): number
   sealedBlockLength(index: number): number
   /** Block `index`'s plaintext; throws unless the sealed bytes hash to the manifest's entry and open at that index. */
@@ -494,6 +500,38 @@ export interface CryptoWasmModule {
     contentRevisionId: string,
     contentManifestSha256: string,
     size: number,
+    header: Uint8Array,
+    sealedManifest: Uint8Array,
+  ): WasmBlockReader
+  /** A Chat attachment's block encryptor (`KUTPCM2`, unsigned: the descriptor commits to its manifest). */
+  chatMediaBlockEncryptor(attachmentKeyBase64: string, attachmentId: string, size: number): WasmBlockEncryptor
+  /** A reader of a Chat attachment whose sealed manifest has the descriptor's digest. */
+  chatMediaBlockReader(
+    attachmentKeyBase64: string,
+    expectedAttachmentId: string,
+    expectedManifestSha256: string,
+    header: Uint8Array,
+    sealedManifest: Uint8Array,
+  ): WasmBlockReader
+  /**
+   * The backup copy of a Chat attachment's ciphertext (`KUTPBM2`): its media
+   * id and key derived from the backup root and the source's binding. Fed
+   * the source, then zeros up to `size` (the padded length).
+   */
+  chatBackupMediaBlockEncryptor(
+    backupRootBase64: string,
+    accountIncarnationId: string,
+    backupIncarnationId: string,
+    stableSourceBinding: string,
+    sourceBytes: number,
+  ): WasmBlockEncryptor
+  /** A reader of a backup media copy whose sealed manifest is the one the backup's index names. */
+  chatBackupMediaBlockReader(
+    backupRootBase64: string,
+    expectedAccountIncarnationId: string,
+    expectedBackupIncarnationId: string,
+    expectedMediaId: string,
+    expectedManifestSha256: string,
     header: Uint8Array,
     sealedManifest: Uint8Array,
   ): WasmBlockReader

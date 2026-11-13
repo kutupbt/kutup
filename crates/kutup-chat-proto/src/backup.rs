@@ -570,18 +570,23 @@ pub struct UploadChatBackupMediaRequestV1 {
     pub source_ciphertext_bytes: u64,
     pub ciphertext_bytes: u64,
     pub ciphertext_sha256: String,
+    /// Canonical base64 SHA-256 of the object's sealed manifest
+    /// (`KUTPBM2`): what the backup's sealed index commits to.
+    pub manifest_sha256: String,
 }
 
 impl UploadChatBackupMediaRequestV1 {
-    pub fn validate(&self) -> Result<(), String> {
+    /// The checked request, with the manifest digest it names.
+    pub fn validate(&self) -> Result<[u8; 32], String> {
         require_uuid("backupIncarnationId", &self.backup_incarnation_id)?;
         require_uuid("referenceId", &self.reference_id)?;
         require_hash("mediaId", &self.media_id)?;
         require_hash("ciphertextSha256", &self.ciphertext_sha256)?;
+        let manifest = decode_base64_exact::<32>("manifestSha256", &self.manifest_sha256)?;
         if self.source_ciphertext_bytes == 0 || self.ciphertext_bytes == 0 {
             return Err("backup media lengths must be positive".into());
         }
-        Ok(())
+        Ok(manifest)
     }
 }
 
@@ -592,6 +597,9 @@ pub struct ChatBackupMediaReceiptV1 {
     pub media_id: String,
     pub ciphertext_bytes: u64,
     pub ciphertext_sha256: String,
+    /// Canonical base64 SHA-256 of the stored object's sealed manifest
+    /// (`KUTPBM2`), for the backup's sealed index to commit to.
+    pub manifest_sha256: String,
     pub already_stored: bool,
 }
 

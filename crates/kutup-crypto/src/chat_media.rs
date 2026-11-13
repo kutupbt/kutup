@@ -30,7 +30,11 @@ pub const CHAT_MEDIA_OBJECT_PREFIX_BYTES: usize =
 #[serde(into = "u16", try_from = "u16")]
 #[repr(u16)]
 pub enum ChatMediaSuiteId {
+    /// `KUTPCM1`: secretstream; no longer written or accepted on the wire
+    /// (removed in slice 7 of docs/plans/drive-block-format.md).
     XChaCha20Poly1305SecretStreamV1 = 1,
+    /// `KUTPCM2`: the block format (`chat_media_blocks`), the wire suite.
+    KutupChatMediaBlocksV1 = 2,
 }
 
 impl ChatMediaSuiteId {
@@ -51,6 +55,7 @@ impl TryFrom<u16> for ChatMediaSuiteId {
     fn try_from(value: u16) -> Result<Self> {
         match value {
             1 => Ok(Self::XChaCha20Poly1305SecretStreamV1),
+            2 => Ok(Self::KutupChatMediaBlocksV1),
             _ => Err(CryptoError::InvalidInput(format!(
                 "unknown Chat-media suite {value}"
             ))),
@@ -327,9 +332,24 @@ mod tests {
         let mut trailing = object.clone();
         trailing.push(0);
         assert!(decrypt_object(&trailing, &key, context()).is_err());
-        let mut unknown_suite = object;
-        unknown_suite[9] = 2;
+        let mut unknown_suite = object.clone();
+        unknown_suite[9] = 3;
         assert!(inspect_object_header(&unknown_suite[..CHAT_MEDIA_OBJECT_HEADER_BYTES]).is_err());
+        // The block suite under the secretstream magic is not a suite-1 object.
+        let mut block_suite = object;
+        block_suite[9] = 2;
+        assert!(
+            validate_object_header(&block_suite[..CHAT_MEDIA_OBJECT_HEADER_BYTES], context())
+                .is_err()
+        );
+        assert!(decrypt_object(&block_suite, &key, context()).is_err());
+    }
+
+    #[test]
+    fn a_block_header_is_not_a_secretstream_header() {
+        let header = crate::chat_media_blocks::header(context());
+        assert!(validate_object_header(&header, context()).is_err());
+        assert!(inspect_object_header(&header).is_err());
     }
 
     #[test]

@@ -160,6 +160,7 @@ describe('ChatBackupStore durable transactions', () => {
       referenceId: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',
       mediaId: 'c'.repeat(64),
       ciphertextBytes: 4096,
+      manifestSha256: 'C'.repeat(43) + '=',
       protected: true,
       needsAttention: false,
       storageFull: false,

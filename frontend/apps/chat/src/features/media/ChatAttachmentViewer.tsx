@@ -10,7 +10,41 @@ import {
 } from '@kutup/ui/components/dialog'
 import type { PrivateCiphertextCacheV1 } from '@kutup/files/mediaCache'
 import type { ChatAttachmentDescriptorV1 } from '@kutup/chat-core/types'
-import { openCachedChatMediaV1, type OpenedChatMediaV1 } from '@kutup/chat-core/media'
+import {
+  chatMediaViewerKindV1,
+  openCachedChatMediaV1,
+  openChatMediaPlaybackV1,
+  type ChatMediaViewerKindV1,
+} from '@kutup/chat-core/media'
+
+/** What the viewer shows: a verified Blob's URL, or a stream's (`close` ends it). */
+interface Shown {
+  kind: ChatMediaViewerKindV1
+  url: string
+  close: () => void
+}
+
+/**
+ * Video and audio stream (docs/plans/drive-block-format.md §4): from the
+ * account's own server through the service worker, each block checked
+ * against the manifest the descriptor commits to before it plays. Pictures
+ * and PDFs open from the private cache, their bytes sniffed first.
+ */
+async function openShown(
+  cache: PrivateCiphertextCacheV1,
+  attachment: ChatAttachmentDescriptorV1,
+  signal: AbortSignal,
+): Promise<Shown | 'busy' | 'tooLarge'> {
+  const hinted = chatMediaViewerKindV1(attachment)
+  if (hinted === 'video' || hinted === 'audio') {
+    const playback = await openChatMediaPlaybackV1(attachment, cache, signal)
+    if (playback.kind !== 'ready') return playback.kind
+    return { kind: hinted, url: playback.src, close: playback.close }
+  }
+  const result = await openCachedChatMediaV1(cache, attachment, signal)
+  const url = URL.createObjectURL(result.blob)
+  return { kind: result.kind, url, close: () => URL.revokeObjectURL(url) }
+}
 
 export function ChatAttachmentViewer({
   open,
@@ -24,8 +58,8 @@ export function ChatAttachmentViewer({
   attachment: ChatAttachmentDescriptorV1
 }) {
   const { t } = useTranslation()
-  const [opened, setOpened] = useState<(OpenedChatMediaV1 & { url: string }) | null>(null)
-  const [failed, setFailed] = useState(false)
+  const [opened, setOpened] = useState<Shown | null>(null)
+  const [failed, setFailed] = useState<false | 'failed' | 'busy' | 'tooLarge'>(false)
 
   useEffect(() => {
     if (!open) {
@@ -33,24 +67,31 @@ export function ChatAttachmentViewer({
       return
     }
     const controller = new AbortController()
-    let url: string | null = null
+    let shown: Shown | null = null
     setOpened(null)
     setFailed(false)
-    void openCachedChatMediaV1(cache, attachment, controller.signal)
+    void openShown(cache, attachment, controller.signal)
       .then((result) => {
-        if (controller.signal.aborted) return
-        url = URL.createObjectURL(result.blob)
-        setOpened({ ...result, url })
+        if (typeof result === 'string') {
+          if (!controller.signal.aborted) setFailed(result)
+          return
+        }
+        if (controller.signal.aborted) {
+          result.close()
+          return
+        }
+        shown = result
+        setOpened(result)
       })
       .catch((cause: unknown) => {
         if (controller.signal.aborted) return
         // The protocol's reason is diagnostic, not user copy.
         console.warn('chat: attachment could not be opened', cause)
-        setFailed(true)
+        setFailed('failed')
       })
     return () => {
       controller.abort()
-      if (url) URL.revokeObjectURL(url)
+      shown?.close()
     }
   }, [attachment, cache, open])
 
@@ -72,7 +113,11 @@ export function ChatAttachmentViewer({
         )}
         {failed && (
           <p className="rounded-lg border border-destructive/30 bg-destructive/5 p-4 text-sm text-destructive">
-            {t('chat.attachments.viewer.openFailed')}
+            {failed === 'busy'
+              ? t('chat.attachments.viewer.tooManyStreams')
+              : failed === 'tooLarge'
+                ? t('chat.attachments.viewer.tooLargeToPlay')
+                : t('chat.attachments.viewer.openFailed')}
           </p>
         )}
         {opened?.kind === 'image' && (

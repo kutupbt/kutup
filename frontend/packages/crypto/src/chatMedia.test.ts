@@ -15,53 +15,48 @@ vi.mock('./rustWasm', async () => {
 })
 
 import {
-  CHAT_MEDIA_OBJECT_PREFIX_BYTES,
   chatAttachmentLedgerEnvelopeDigest,
-  chatMediaCipherSize,
-  decryptChatMediaV1,
+  chatMediaObjectLength,
   decodeChatAttachmentLedgerEntry,
   encodeChatAttachmentLedgerEntry,
-  encryptChatMediaV1,
   inspectChatAttachmentLedgerEnvelope,
   openChatAttachmentLedger,
+  openChatMedia,
   sealChatAttachmentLedger,
+  sealChatMedia,
 } from './chatMedia'
 
 const attachmentId = '11111111-1111-4111-8111-111111111111'
 const entityId = '22222222-2222-4222-8222-222222222222'
 const incarnationId = '11'.repeat(32)
 
-describe('Chat-media Rust/WASM framing', () => {
-  it('round-trips empty and ordinary objects with mandatory FINAL framing', async () => {
+describe('Chat-media block format (suite 2) through Rust/WASM', () => {
+  it('round-trips empty, ordinary and multi-block attachments', async () => {
     const key = new Uint8Array(32).fill(0x42)
-    for (const plaintext of [new Uint8Array(), new TextEncoder().encode('photo bytes')]) {
-      const object = await encryptChatMediaV1(plaintext, key, attachmentId)
-      expect(object.length).toBe(chatMediaCipherSize(plaintext.length))
-      expect(object.length).toBeGreaterThan(CHAT_MEDIA_OBJECT_PREFIX_BYTES)
-      expect(await decryptChatMediaV1(object, key, attachmentId)).toEqual(plaintext)
+    for (const plaintext of [new Uint8Array(), new TextEncoder().encode('photo bytes'), new Uint8Array(4 * 1024 * 1024 + 5).fill(7)]) {
+      const sealed = await sealChatMedia(plaintext, key, attachmentId)
+      expect(sealed.bytes.length).toBe(await chatMediaObjectLength(plaintext.length))
+      expect(new TextDecoder().decode(sealed.bytes.subarray(0, 8))).toBe('KUTPCM2\0')
+      expect(sealed.manifestSha256).toMatch(/^[A-Za-z0-9+/]{43}=$/)
+      expect(await openChatMedia(sealed.bytes, key, attachmentId, sealed.manifestSha256)).toEqual(plaintext)
     }
   })
 
-  it('rejects key, attachment, tamper, truncation, and trailing data changes', async () => {
+  it('refuses another key, attachment, manifest digest, a tampered block, truncation and trailing data', async () => {
     const key = new Uint8Array(32).fill(0x42)
-    const object = await encryptChatMediaV1(new TextEncoder().encode('opaque'), key, attachmentId)
-    await expect(decryptChatMediaV1(
-      object,
-      new Uint8Array(32).fill(0x43),
-      attachmentId,
-    )).rejects.toThrow()
-    await expect(decryptChatMediaV1(
-      object,
-      key,
-      '33333333-3333-4333-8333-333333333333',
-    )).rejects.toThrow()
-    const tampered = object.slice()
-    tampered[tampered.length - 1] ^= 1
-    await expect(decryptChatMediaV1(tampered, key, attachmentId)).rejects.toThrow()
-    await expect(decryptChatMediaV1(object.subarray(0, -1), key, attachmentId)).rejects.toThrow()
-    const trailing = new Uint8Array(object.length + 1)
-    trailing.set(object)
-    await expect(decryptChatMediaV1(trailing, key, attachmentId)).rejects.toThrow()
+    const { bytes, manifestSha256 } = await sealChatMedia(new TextEncoder().encode('opaque'), key, attachmentId)
+    await expect(openChatMedia(bytes, new Uint8Array(32).fill(0x43), attachmentId, manifestSha256)).rejects.toThrow()
+    await expect(openChatMedia(bytes, key, '33333333-3333-4333-8333-333333333333', manifestSha256)).rejects.toThrow()
+    // Another attachment sealed under the same id and key: not the one the descriptor names.
+    const other = await sealChatMedia(new TextEncoder().encode('other'), key, attachmentId)
+    await expect(openChatMedia(other.bytes, key, attachmentId, manifestSha256)).rejects.toThrow()
+    const tampered = bytes.slice()
+    tampered[40] ^= 1
+    await expect(openChatMedia(tampered, key, attachmentId, manifestSha256)).rejects.toThrow()
+    await expect(openChatMedia(bytes.subarray(0, -1), key, attachmentId, manifestSha256)).rejects.toThrow()
+    const trailing = new Uint8Array(bytes.length + 1)
+    trailing.set(bytes)
+    await expect(openChatMedia(trailing, key, attachmentId, manifestSha256)).rejects.toThrow()
   })
 })
 

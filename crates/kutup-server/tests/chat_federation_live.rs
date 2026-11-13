@@ -17,7 +17,8 @@ use kutup_chat_proto::{
     ProfileEnvelopePurpose, ProfileSuiteId, PutChatProfileRequest,
 };
 use kutup_crypto::account_ref::AccountRef;
-use kutup_crypto::chat_media::{self, ChatMediaObjectContextV1};
+use kutup_crypto::chat_media::ChatMediaObjectContextV1;
+use kutup_crypto::chat_media_blocks;
 use kutup_crypto::collection_epoch::CollectionEpochStatementV1;
 use kutup_crypto::drive_envelope::{self, DriveEnvelopeContextV1, DriveEnvelopePurpose};
 use kutup_crypto::drive_object::{self, DriveFileBlobContextV1};
@@ -160,10 +161,10 @@ fn chat_media_round_trip(
     let retrieval_token = [0x52; 32];
     let plaintext = b"sender-free-federated-chat-media";
     let context = ChatMediaObjectContextV1::new(attachment_id).unwrap();
-    let object = chat_media::encrypt_object(plaintext, &attachment_key, context).unwrap();
+    let object = seal_media(plaintext, &attachment_key, context).unwrap();
     let (digest, _origin_reference) =
         upload_chat_media(c, a, alice_token, attachment_id, &retrieval_token, &object);
-    assert_eq!(digest, chat_media::object_sha256(&object));
+    assert_eq!(digest, hex::encode(hash(Suite::V1, &object)));
     let operation_id = "50000000-0000-4000-8000-000000000002";
     let offer = json!({
         "version": 1,
@@ -172,7 +173,7 @@ fn chat_media_round_trip(
         "recipient": account_of(c, b, bob_token),
         "operationId": operation_id,
         "attachmentId": attachment_id,
-        "suite": 1,
+        "suite": 2,
         "ciphertextBytes": object.len(),
         "ciphertextSha256": digest,
         "retrievalToken": b64(&retrieval_token),
@@ -297,7 +298,7 @@ fn chat_media_capability_and_quota_recovery(
     let retrieval_token = [0x72; 32];
     let plaintext = b"chat-media-quota-recovery";
     let context = ChatMediaObjectContextV1::new(attachment_id).unwrap();
-    let object = chat_media::encrypt_object(plaintext, &attachment_key, context).unwrap();
+    let object = seal_media(plaintext, &attachment_key, context).unwrap();
     let (digest, _) =
         upload_chat_media(c, a, alice_token, attachment_id, &retrieval_token, &object);
     let bob = account_of(c, b, bob_token);
@@ -311,7 +312,7 @@ fn chat_media_capability_and_quota_recovery(
             "recipient": recipient,
             "operationId": operation_id,
             "attachmentId": attachment_id,
-            "suite": 1,
+            "suite": 2,
             "ciphertextBytes": object.len(),
             "ciphertextSha256": digest,
             "retrievalToken": b64(&retrieval_token),
@@ -532,7 +533,7 @@ fn media_closing_sequence_from_v1(
     let attachment_id = "50000000-0000-4000-8000-000000000016";
     let retrieval_token = [0x75; 32];
     let context = ChatMediaObjectContextV1::new(attachment_id).unwrap();
-    let object = chat_media::encrypt_object(b"behind-a-v1-refusal", &[0x76; 32], context).unwrap();
+    let object = seal_media(b"behind-a-v1-refusal", &[0x76; 32], context).unwrap();
     let (digest, _) =
         upload_chat_media(c, a, alice_token, attachment_id, &retrieval_token, &object);
     let offer = json!({
@@ -542,7 +543,7 @@ fn media_closing_sequence_from_v1(
         "recipient": bob,
         "operationId": "50000000-0000-4000-8000-000000000017",
         "attachmentId": attachment_id,
-        "suite": 1,
+        "suite": 2,
         "ciphertextBytes": object.len(),
         "ciphertextSha256": digest,
         "retrievalToken": b64(&retrieval_token),
@@ -618,6 +619,30 @@ fn media_closing_sequence_from_v1(
     println!("MEDIA V1 REFUSAL CLOSES ITS SEQUENCE");
 }
 
+/// A Chat attachment in the block format (KUTPCM2), as a client seals it.
+fn seal_media(
+    plaintext: &[u8],
+    key: &[u8; 32],
+    context: ChatMediaObjectContextV1,
+) -> Result<Vec<u8>, kutup_crypto::error::CryptoError> {
+    chat_media_blocks::seal_attachment(plaintext, key, context).map(|sealed| sealed.bytes)
+}
+
+/// Opens an attachment against its own manifest's digest: a client takes
+/// the digest from the descriptor; this test has the bytes it sealed.
+fn open_media(
+    object: &[u8],
+    key: &[u8; 32],
+    context: ChatMediaObjectContextV1,
+) -> Result<Vec<u8>, kutup_crypto::error::CryptoError> {
+    let trailer_at = object.len() - kutup_crypto::blocks::TRAILER_LEN;
+    let manifest_len = chat_media_blocks::CHAT_MEDIA_BLOCKS.parse_trailer(&object[trailer_at..])?;
+    let digest =
+        kutup_crypto::blocks::manifest_digest(&object[trailer_at - manifest_len..trailer_at]);
+    chat_media_blocks::open_attachment(object, key, context, &digest)
+        .map(|(plaintext, _)| plaintext.to_vec())
+}
+
 fn upload_chat_media(
     c: &Client,
     base: &str,
@@ -630,7 +655,7 @@ fn upload_chat_media(
     let metadata = format!(
         "attachmentId {},suite {},retrievalToken {}",
         metadata_value(attachment_id),
-        metadata_value("1"),
+        metadata_value("2"),
         metadata_value(&encoded_token),
     );
     let create = c
@@ -3221,8 +3246,7 @@ fn queue_phase(c: &Client, a: &str) {
     let attachment_key = [0x61; 32];
     let retrieval_token = [0x62; 32];
     let context = ChatMediaObjectContextV1::new(QUEUED_MEDIA_ATTACHMENT_ID).unwrap();
-    let object =
-        chat_media::encrypt_object(QUEUED_MEDIA_PLAINTEXT, &attachment_key, context).unwrap();
+    let object = seal_media(QUEUED_MEDIA_PLAINTEXT, &attachment_key, context).unwrap();
     let (digest, _) = upload_chat_media(
         c,
         a,
@@ -3244,7 +3268,7 @@ fn queue_phase(c: &Client, a: &str) {
             "recipient": bob_account(),
             "operationId": operation_id,
             "attachmentId": attachment_id,
-            "suite": 1,
+            "suite": 2,
             "ciphertextBytes": object.len(),
             "ciphertextSha256": digest,
             "retrievalToken": b64(token),
@@ -3292,7 +3316,7 @@ fn queue_phase(c: &Client, a: &str) {
     ] {
         let token = [0x63; 32];
         let context = ChatMediaObjectContextV1::new(attachment_id).unwrap();
-        let object = chat_media::encrypt_object(plaintext, &[0x61; 32], context).unwrap();
+        let object = seal_media(plaintext, &[0x61; 32], context).unwrap();
         let (digest, _) = upload_chat_media(c, a, &alice_token, attachment_id, &token, &object);
         let body = offer(
             attachment_id,
@@ -3334,9 +3358,7 @@ fn verify_queued_media_answers(c: &Client, a: &str, b: &str, alice_token: &str, 
             .unwrap();
         if response.status().is_success() {
             let context = ChatMediaObjectContextV1::new(BEHIND_MEDIA_ATTACHMENT_ID).unwrap();
-            let plaintext =
-                chat_media::decrypt_object(&response.bytes().unwrap(), &[0x61; 32], context)
-                    .unwrap();
+            let plaintext = open_media(&response.bytes().unwrap(), &[0x61; 32], context).unwrap();
             assert_eq!(plaintext, BEHIND_MEDIA_PLAINTEXT);
             break;
         }
@@ -3414,7 +3436,7 @@ fn verify_retry_phase(c: &Client, a: &str, b: &str) {
         if response.status().is_success() {
             let ciphertext = response.bytes().unwrap();
             let context = ChatMediaObjectContextV1::new(QUEUED_MEDIA_ATTACHMENT_ID).unwrap();
-            let plaintext = chat_media::decrypt_object(&ciphertext, &[0x61; 32], context).unwrap();
+            let plaintext = open_media(&ciphertext, &[0x61; 32], context).unwrap();
             assert_eq!(plaintext, QUEUED_MEDIA_PLAINTEXT);
             break;
         }

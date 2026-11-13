@@ -1,15 +1,17 @@
-// A Drive revision read by block with HTTP Range
-// (docs/plans/drive-block-format.md §2 "Reading", §4). The same code runs in
+// An object of the block format read by block with HTTP Range
+// (docs/plans/drive-block-format.md §2 "Reading", §4): a Drive revision or
+// a Chat attachment (`BlockReaderTarget.family`). The same code runs in
 // the dedicated reader Worker (blockReader.worker.ts) and, where there are
 // no Workers (tests), in the page.
 //
 // The order is what makes it safe:
 // 1. the header (its first bytes), with the response's revision headers;
-// 2. what the object must be: the metadata's commitment, or the revision's
-//    sealed record (`resolveServed`, `committedContent`);
+// 2. what the object must be: for Drive the metadata's commitment, or the
+//    revision's sealed record (`resolveServed`, `committedContent`); for a
+//    Chat attachment its E2EE descriptor's manifest digest and lengths;
 // 3. the trailer, then the sealed manifest, opened in Rust against that
 //    digest and size (the header must name the file, generation and
-//    revision). Nothing is fetched by block before this succeeds;
+//    revision, or the attachment). Nothing is fetched by block before this succeeds;
 // 4. each block by its own Range, its sealed bytes hashed against the
 //    manifest's entry and then opened at its index (`openBlock`).
 // The manifest's signer is checked by the page before it releases a byte
@@ -105,42 +107,57 @@ export class BlockObjectReader {
     let wasmReader: WasmBlockReader | null = null
     try {
       const module = await getCryptoWasm()
-      const layout = module.blockLayout('drive')
+      const layout = module.blockLayout(target.family)
       // 1. The header, and what the response says it serves.
       const header = await range(0, layout.headerBytes - 1)
       // Set by the first answer (the closure's writes aren't tracked).
       const objectLength = total as number | null
       const headers = served as Headers | null
       if (objectLength === null || !headers) throw new RangeFetchError('no length for the object')
-      // 2. What it must be.
-      const expected = await resolveServed(target.fileKey, target.expected, {
-        revisionId: headers.get(REVISION_HEADER),
-        revisionContentEnvelope: headers.get(REVISION_CONTENT_HEADER),
-      })
-      const committed = await committedContent(target.fileKey, expected)
+      // 2. What it must be: a Drive revision's commitment (from its
+      // metadata, or its own sealed record), or a Chat attachment's
+      // descriptor, which the page holds already.
+      let expected: { id: string; revisionId: string; manifestSha256: string; size: number }
+      let generation = 0
+      if (target.family === 'drive') {
+        const resolved = await resolveServed(target.fileKey, target.expected, {
+          revisionId: headers.get(REVISION_HEADER),
+          revisionContentEnvelope: headers.get(REVISION_CONTENT_HEADER),
+        })
+        const committed = await committedContent(target.fileKey, resolved)
+        expected = { id: resolved.fileId, revisionId: committed.content.revisionId, manifestSha256: committed.content.manifestSha256, size: committed.size }
+        generation = resolved.generation
+      } else {
+        if (objectLength !== target.objectLength) throw new RangeFetchError("the object's length is not the descriptor's")
+        expected = { id: target.attachmentId, revisionId: target.attachmentId, manifestSha256: target.manifestSha256, size: target.size }
+      }
       // 3. The trailer, then the sealed manifest, opened against that digest and size.
       if (objectLength < layout.headerBytes + layout.trailerBytes) throw new RangeFetchError('the object is too short')
       const trailer = await range(objectLength - layout.trailerBytes, objectLength - 1)
-      const manifestLength = module.blockTrailerManifestLength('drive', trailer)
+      const manifestLength = module.blockTrailerManifestLength(target.family, trailer)
       const manifestStart = objectLength - layout.trailerBytes - manifestLength
       if (manifestStart < layout.headerBytes) throw new RangeFetchError('the manifest does not fit the object')
       const manifest = await range(manifestStart, objectLength - layout.trailerBytes - 1)
-      wasmReader = module.driveBlockReader(
-        toBase64(target.fileKey),
-        expected.fileId,
-        expected.generation,
-        committed.content.revisionId,
-        committed.content.manifestSha256,
-        committed.size,
-        header,
-        manifest,
-      )
+      wasmReader =
+        target.family === 'drive'
+          ? module.driveBlockReader(
+              toBase64(target.fileKey),
+              expected.id,
+              generation,
+              expected.revisionId,
+              expected.manifestSha256,
+              expected.size,
+              header,
+              manifest,
+            )
+          : module.chatMediaBlockReader(toBase64(target.attachmentKey), expected.id, expected.manifestSha256, header, manifest)
+      if (wasmReader.size !== expected.size) throw new RangeFetchError("the object's size is not the one expected")
       if (wasmReader.objectLength !== objectLength) throw new RangeFetchError("the object's length is not the manifest's")
       const accountId = wasmReader.signerAccountId
       const incarnationId = wasmReader.signerIncarnationId
       const opened: OpenedObject = {
-        fileId: expected.fileId,
-        revisionId: committed.content.revisionId,
+        fileId: expected.id,
+        revisionId: expected.revisionId,
         size: wasmReader.size,
         blockCount: wasmReader.blockCount,
         blockSize: layout.blockSize,

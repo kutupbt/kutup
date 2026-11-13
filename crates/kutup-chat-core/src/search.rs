@@ -1606,15 +1606,17 @@ mod tests {
 
     fn attachment(id: &str, filename: &str, caption: &str) -> Vec<u8> {
         use base64::Engine as _;
-        use kutup_crypto::chat_media::{object_ciphertext_size, ChatMediaSuiteId};
+        use kutup_crypto::chat_media::ChatMediaSuiteId;
+        use kutup_crypto::chat_media_blocks::object_len;
         let descriptor = kutup_chat_proto::ChatAttachmentDescriptorV1 {
             version: 1,
-            suite: ChatMediaSuiteId::XChaCha20Poly1305SecretStreamV1,
+            suite: ChatMediaSuiteId::KutupChatMediaBlocksV1,
             attachment_id: "55555555-5555-4555-8555-555555555555".into(),
             origin_domain: "a.test".into(),
             retrieval_token: base64::engine::general_purpose::STANDARD.encode([1; 32]),
-            ciphertext_bytes: object_ciphertext_size(7).unwrap(),
+            ciphertext_bytes: object_len(7).unwrap(),
             ciphertext_sha256: "22".repeat(32),
+            manifest_sha256: base64::engine::general_purpose::STANDARD.encode([4; 32]),
             attachment_key: base64::engine::general_purpose::STANDARD.encode([3; 32]),
             plaintext_bytes: 7,
             filename: filename.into(),
@@ -1626,6 +1628,7 @@ mod tests {
             duration_ms: None,
             preview: None,
             backup_media_id: None,
+            backup_media_manifest_sha256: None,
         };
         serde_json::to_vec(
             &ChatContent::attachment_with_id(id, "2026-10-08T10:00:00Z", 1, descriptor).unwrap(),

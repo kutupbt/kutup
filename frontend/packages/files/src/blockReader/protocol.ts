@@ -74,8 +74,22 @@ export interface DriveBlockSource {
   expected: DriveObjectToOpen
 }
 
+/** A Chat attachment (docs/chat-media.md): opened against its E2EE descriptor. */
+export interface ChatMediaBlockSource {
+  family: 'chatMedia'
+  /** `/api/chat/media/objects/{attachmentId}` on the account's own server, answered with Range. */
+  url: string
+  attachmentKey: Uint8Array
+  attachmentId: string
+  /** The sealed manifest's SHA-256 the descriptor carries (canonical base64). */
+  manifestSha256: string
+  /** The descriptor's plaintext and ciphertext lengths: the manifest's must be these. */
+  size: number
+  objectLength: number
+}
+
 /** What a reader opens: one object of a block family, and what it must be. */
-export type BlockReaderTarget = DriveBlockSource
+export type BlockReaderTarget = DriveBlockSource | ChatMediaBlockSource
 
 /** Who signed an opened revision's manifest. */
 export interface OpenedSigner {

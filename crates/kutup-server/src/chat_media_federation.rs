@@ -621,10 +621,9 @@ fn check_offer(
             OffsetDateTime::now_utc().unix_timestamp(),
         )
         .map_err(AppError::bad_request)?;
-    let configured_ciphertext_limit = kutup_crypto::chat_media::object_ciphertext_size(
+    let configured_ciphertext_limit = kutup_crypto::chat_media_blocks::max_object_len(
         state.config.chat_media_max_plaintext_bytes,
-    )
-    .map_err(|_| AppError::internal("invalid Chat-media server limit"))?;
+    );
     if transaction.offer.ciphertext_bytes > configured_ciphertext_limit {
         return Err(AppError::bad_request(
             "Chat media exceeds the destination server limit",
