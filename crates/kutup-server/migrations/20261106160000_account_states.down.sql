@@ -7,6 +7,15 @@ ALTER TABLE auth_grants DROP CONSTRAINT auth_grants_purpose_check;
 ALTER TABLE auth_grants ADD CONSTRAINT auth_grants_purpose_check CHECK (purpose = ANY (ARRAY[
     'pass', 'passwordChange', 'totp', 'adminReset', 'recovery', 'rotate', 'rename']));
 DELETE FROM account_security_events WHERE kind IN ('accountClosing', 'accountKept');
+ALTER TABLE account_security_events DROP CONSTRAINT account_security_events_check;
+ALTER TABLE account_security_events ADD CONSTRAINT account_security_events_check CHECK (
+    kind = ANY (ARRAY['adminReset', 'accountReset', 'nameClosed', 'nameFreed', 'twoFactorOff'])
+    OR admin_user_id IS NULL);
+DELETE FROM opaque_login_states WHERE grant_for = 'close';
+ALTER TABLE opaque_login_states DROP CONSTRAINT opaque_login_states_grant_for_check;
+ALTER TABLE opaque_login_states ADD CONSTRAINT opaque_login_states_grant_for_check
+    CHECK (grant_for = ANY (ARRAY['pass', 'passwordChange', 'totp', 'adminReset', 'verify',
+        'rename']));
 ALTER TABLE account_security_events DROP CONSTRAINT account_security_events_kind_check;
 ALTER TABLE account_security_events ADD CONSTRAINT account_security_events_kind_check CHECK (kind = ANY (ARRAY[
     'passwordChange', 'recovery', 'rotate', 'adminReset', 'accountReset', 'rename',
