@@ -606,5 +606,12 @@ mod tests {
             .execute(&pool)
             .await
             .unwrap();
+        // Its documents go too: a required one left published would make
+        // every later sign-up on this database need it.
+        sqlx::query("DELETE FROM legal_documents WHERE kind = $1")
+            .bind(&kind)
+            .execute(&pool)
+            .await
+            .unwrap();
     }
 }
