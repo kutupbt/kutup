@@ -283,7 +283,8 @@ pub async fn list(
     let mut conn = pool.acquire().await?;
     let mut events: Vec<Event> = sqlx::query_as(
         "SELECT e.id, e.kind, e.at, e.acting_session_id, e.acting_client, e.client_sealed,
-                e.kind IN ('adminReset', 'accountReset', 'nameClosed', 'nameFreed') AS by_admin,
+                (e.kind IN ('adminReset', 'accountReset', 'nameClosed', 'nameFreed')
+                 OR (e.kind = 'accountKept' AND e.admin_user_id IS NOT NULL)) AS by_admin,
                 e.old_name, e.new_name, e.count
          FROM account_security_events e
          WHERE e.user_id = $1

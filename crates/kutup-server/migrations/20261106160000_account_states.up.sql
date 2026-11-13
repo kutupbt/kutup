@@ -82,6 +82,17 @@ ALTER TABLE auth_grants ADD CONSTRAINT auth_grants_purpose_check CHECK (purpose 
 ALTER TABLE auth_grants DROP CONSTRAINT auth_grants_check1;
 ALTER TABLE auth_grants ADD CONSTRAINT auth_grants_check1
     CHECK ((purpose IN ('recovery', 'keep')) = (session_id IS NULL));
+-- Closing is asked for with a reauth: its sign-in state names it.
+ALTER TABLE opaque_login_states DROP CONSTRAINT opaque_login_states_grant_for_check;
+ALTER TABLE opaque_login_states ADD CONSTRAINT opaque_login_states_grant_for_check
+    CHECK (grant_for = ANY (ARRAY['pass', 'passwordChange', 'totp', 'adminReset', 'verify',
+        'rename', 'close']));
+-- An administrator may keep a closing account: that event names them.
+ALTER TABLE account_security_events DROP CONSTRAINT account_security_events_check;
+ALTER TABLE account_security_events ADD CONSTRAINT account_security_events_check CHECK (
+    kind = ANY (ARRAY['adminReset', 'accountReset', 'nameClosed', 'nameFreed', 'twoFactorOff',
+        'accountKept'])
+    OR admin_user_id IS NULL);
 
 -- What was destroyed, when, how and by whom, naming nobody: an account is its
 -- subject as a keyed hash of its id, one under each entry of the server key
