@@ -214,14 +214,21 @@ fn a_rotation_moves_the_record_once_and_shows() {
     .unwrap()
     .json()
     .unwrap();
-    let kinds: Vec<&str> = events["events"]
+    // Besides the sign-ins (and the sessions the rotation ended): one rotate.
+    let changes: Vec<&Value> = events["events"]
         .as_array()
         .unwrap()
         .iter()
-        .map(|e| e["kind"].as_str().unwrap())
+        .filter(|e| {
+            !matches!(
+                e["kind"].as_str().unwrap(),
+                "signIn" | "signOut" | "sessionRevoked" | "allSessionsRevoked"
+            )
+        })
         .collect();
-    assert_eq!(kinds, ["rotate"], "{events}");
-    assert_eq!(events["events"][0]["thisSession"], true);
+    assert_eq!(changes.len(), 1, "{events}");
+    assert_eq!(changes[0]["kind"], "rotate");
+    assert_eq!(changes[0]["thisSession"], true);
     user.token = session["accessToken"].as_str().unwrap().to_owned();
     purge_accounts(&c, &base, &[&user]);
 }
