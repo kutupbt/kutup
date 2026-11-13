@@ -222,7 +222,9 @@ keeps them; reports on them are operator tooling.
   by count.
 - **What is logged, added to today's kinds:**
   - **Sign-ins:** `signIn`, `signInFailedPassword` (only when the pending
-    OPAQUE login names a real account), `signInFailed2fa`, `signOut`,
+    OPAQUE login names a real account; OPAQUE finds a wrong password on the
+    client, so a session sign-in that never finishes counts: the client's
+    `login/abort`, or the sign-in dropped by expiry or by newer ones), `signInFailed2fa`, `signOut`,
     `sessionRevoked`, `allSessionsRevoked`. These are the kinds from
     `security-log.md`, with repeated failures folded into one row with a
     `count`.

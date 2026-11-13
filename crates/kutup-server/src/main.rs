@@ -817,6 +817,10 @@ fn build_router(state: AppState) -> Router {
             post(handlers::opaque::login_finish).route_layer(DefaultBodyLimit::max(4 * 1024)),
         )
         .route(
+            "/api/auth/login/abort",
+            post(handlers::opaque::login_abort).route_layer(DefaultBodyLimit::max(1024)),
+        )
+        .route(
             "/api/auth/login/2fa",
             post(auth::login_two_fa).route_layer(from_fn(middleware::rate_limit_login)),
         )
