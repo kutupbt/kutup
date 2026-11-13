@@ -12,6 +12,7 @@ mod account_heads;
 mod account_ids;
 mod account_names;
 mod albums;
+mod audit_log;
 mod auth_check;
 mod calendar_alarms;
 mod calendar_reminders;
@@ -201,12 +202,40 @@ async fn main() -> anyhow::Result<()> {
     // database, no migrations). Exit 0, or 2 with every problem listed (from
     // `Config::load`); deploys run it against the new image first.
     if args.get(1..).is_some_and(|rest| rest == ["check-config"]) {
+        if config.database_owner_url.is_none() {
+            eprintln!("kutup-server: warning: {SINGLE_ROLE_WARNING}");
+        }
         println!("kutup-server: the configuration is valid");
         return Ok(());
     }
     let pool = db::connect(&config.database_url).await?;
-    db::migrate(&pool).await?;
+    // With an owner role, migrations and the app role's grants run as it, and
+    // the security and admin logs are append-only for the server
+    // (docs/plans/server-personal-data.md, A8).
+    let owner_pool = match &config.database_owner_url {
+        Some(url) => Some(db::connect(url).await?),
+        None => None,
+    };
+    db::migrate(owner_pool.as_ref().unwrap_or(&pool)).await?;
     tracing::info!("migrations applied");
+    match &owner_pool {
+        Some(owner) => db::grant_app_role(owner, &config.database_url).await?,
+        None => tracing::warn!("{SINGLE_ROLE_WARNING}"),
+    }
+    // The retention job: the only deletions the logs see, as the owner when
+    // there is one (A8).
+    {
+        let pool = owner_pool.clone().unwrap_or_else(|| pool.clone());
+        tokio::spawn(async move {
+            let mut tick = tokio::time::interval(std::time::Duration::from_secs(60 * 60));
+            loop {
+                tick.tick().await;
+                if let Err(error) = prune_logs(&pool).await {
+                    tracing::warn!("log retention: {}", error.message);
+                }
+            }
+        });
+    }
     if args
         .get(1)
         .is_some_and(|value| value == "federation-identity")
@@ -764,6 +793,10 @@ fn build_router(state: AppState) -> Router {
         .route(
             "/api/auth/login/finish",
             post(handlers::opaque::login_finish).route_layer(DefaultBodyLimit::max(4 * 1024)),
+        )
+        .route(
+            "/api/auth/login/abort",
+            post(handlers::opaque::login_abort).route_layer(DefaultBodyLimit::max(1024)),
         )
         .route(
             "/api/auth/login/2fa",
@@ -2355,6 +2388,7 @@ fn build_router(state: AppState) -> Router {
                 )
                 .route("/api/admin/activity", get(admin::activity))
                 .route("/api/admin/activity/export", get(admin::activity_export))
+                .route("/api/admin/activity/verify", get(admin::activity_verify))
                 .route(
                     "/api/admin/settings",
                     get(admin::get_settings).put(admin::update_settings),
@@ -2616,6 +2650,34 @@ fn build_cors(allowed_origins: &str) -> CorsLayer {
             HeaderName::from_static(middleware::SESSION_VERSION_HEADER),
             axum::http::header::LOCATION,
         ])
+}
+
+/// What the server, `check-config` and the admin console say while one role
+/// does everything.
+const SINGLE_ROLE_WARNING: &str = "DATABASE_OWNER_URL is not set: the server runs as the \
+    database's owner, so the security and admin logs are NOT append-only (it could change \
+    or delete them). Set up the two roles (docs/self-hosting.md, \"Database roles\").";
+
+/// Deletes the security events and admin-log rows past their Privacy and
+/// retention settings.
+async fn prune_logs(pool: &sqlx::PgPool) -> error::AppResult<()> {
+    let days = site_settings::SECURITY_EVENT_RETENTION_DAYS
+        .load(pool)
+        .await?;
+    let kept_per_kind = site_settings::SECURITY_EVENTS_KEPT_PER_KIND
+        .load(pool)
+        .await?;
+    let events = security_events::prune(pool, days, kept_per_kind).await?;
+    let days = site_settings::ADMIN_AUDIT_RETENTION_DAYS.load(pool).await?;
+    let audit = audit_log::prune(pool, days).await?;
+    if events + audit > 0 {
+        tracing::info!(
+            events,
+            audit,
+            "log retention: rows past their period deleted"
+        );
+    }
+    Ok(())
 }
 
 #[cfg(test)]

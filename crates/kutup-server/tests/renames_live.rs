@@ -166,9 +166,16 @@ fn a_rename_keeps_the_account_and_holds_the_old_name() {
     let events: Value = get(&c, &base, &user.token, "/api/user/security-events")
         .json()
         .unwrap();
-    assert_eq!(events["events"][0]["kind"], "rename");
-    assert_eq!(events["events"][0]["oldName"], json!(old));
-    assert_eq!(events["events"][0]["newName"], json!(new));
+    // Among the sign-ins the log also holds: one rename, naming both.
+    let renamed: Vec<&Value> = events["events"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|event| event["kind"] == "rename")
+        .collect();
+    assert_eq!(renamed.len(), 1, "{events}");
+    assert_eq!(renamed[0]["oldName"], json!(old));
+    assert_eq!(renamed[0]["newName"], json!(new));
 
     // One rename a month; the free undo back, once, restarts the clock.
     let (status, body) = rename(&c, &base, &user, &name("again_"));

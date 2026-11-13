@@ -51,12 +51,14 @@ describe('opaqueLogin', () => {
     expect(opened.close).not.toHaveBeenCalled()
   })
 
-  it('closes the sign-in when anything fails, and sends no finish for a wrong password', async () => {
+  it('closes the sign-in when anything fails; a wrong password sends no finish but ends the sign-in', async () => {
     post.mockResolvedValueOnce({ data: { loginId: 'L', credentialResponse: 'ke2', suite: 1 } })
+    post.mockRejectedValueOnce(new Error('offline'))
     signIn.finish.mockRejectedValueOnce(new Error('the password is not right'))
     await expect(opaqueLogin('wrong', { purpose: 'session', name: 'alice' })).rejects.toThrow('not right')
-    expect(post).toHaveBeenCalledTimes(1)
+    expect(post).toHaveBeenCalledTimes(2)
     expect(post.mock.calls[0]?.[1]).toMatchObject({ purpose: 'session', name: 'alice' })
+    expect(post.mock.calls[1]).toEqual(['/auth/login/abort', { loginId: 'L' }])
     expect(signIn.close).toHaveBeenCalled()
   })
 })

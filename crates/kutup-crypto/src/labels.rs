@@ -482,6 +482,8 @@ pub const SEALED_RECIPIENT_RATE_V1: &[u8] = b"kutup/sealed-recipient-rate/v1\0";
 
 // --- server ------------------------------------------------------------------
 
+/// `kutup-server/src/audit_log.rs` (`CHAIN_DOMAIN`)
+pub const SERVER_ADMIN_AUDIT_CHAIN_V1: &[u8] = b"kutup/server/admin-audit-chain/v1\0";
 /// `kutup-crypto/src/server_data.rs` (`SALT`)
 pub const SERVER_DATA_V1: &[u8] = b"kutup/server/data/v1\0";
 /// `kutup-crypto/src/server_data.rs` (`KEK_INFO`)
@@ -548,7 +550,7 @@ pub const FEDERATION_REQUEST_REPLAY_HASH_V1: &[u8] = b"kutup/federation/request-
 pub const FEDERATION_SIGNATURE_TAG: &str = "kutup-federation-v2";
 
 /// Every label, for the registry's own checks.
-pub const ALL: [&[u8]; 168] = [
+pub const ALL: [&[u8]; 169] = [
     ORG_ACCESS_REQUEST_V1,
     ORG_KEY_CERTIFICATE_V1,
     ORG_KEY_ID_V1,
@@ -696,6 +698,7 @@ pub const ALL: [&[u8]; 168] = [
     SEALED_DELIVERY_CAPABILITY_V1,
     SEALED_ORIGIN_RATE_V1,
     SEALED_RECIPIENT_RATE_V1,
+    SERVER_ADMIN_AUDIT_CHAIN_V1,
     SERVER_DATA_V1,
     SERVER_DATA_KEK_V1,
     SERVER_DATA_KEY_WRAP_V1,

@@ -783,6 +783,43 @@ moment of the dump: files deleted since then are listed but gone, and files
 added since then are in the store but no longer listed (`kutup-server
 orphan-sweep` finds those).
 
+## Database roles
+
+The server can run as its own database role, apart from the owner that holds
+the tables (docs/plans/server-personal-data.md, A8). Then the security and
+admin logs are **append-only for the server**: it may add rows (and count a
+repeated failed sign-in into one), but not change or delete them, so a
+compromised server can't rewrite what it did. The owner role runs the
+migrations, grants the server's role its rights at each start, and deletes
+log rows past their retention (Server settings → Privacy and retention). The
+admin log is also hash-chained; Activity says whether the chain holds.
+
+With one role, everything works, but those logs are not append-only: the
+server says so at start, in `kutup-server check-config`, and on the admin
+Activity page.
+
+With the bundled compose, name the role in `.env`:
+
+```
+POSTGRES_APP_USER=kutup_app
+POSTGRES_APP_PASSWORD=<openssl rand -hex 32>
+```
+
+A new database gets the role when it is created (`postgres/initdb`). For a
+database that already exists, create it once by hand:
+
+```sh
+docker compose exec -T postgres psql -U kutup -d kutup \
+  -c "CREATE ROLE kutup_app LOGIN PASSWORD '<openssl rand -hex 32>'"
+```
+
+Then `docker compose up -d --wait`: the server connects as `kutup_app`, and
+as `POSTGRES_USER` only for migrations, grants and pruning
+(`DATABASE_OWNER_URL`, set from it). Outside the bundled compose, set
+`DATABASE_URL` to the server's role and `DATABASE_OWNER_URL` to the owner's.
+The owner must own the tables: start with two roles on a fresh database, or
+move an existing database's objects to the owner first (`REASSIGN OWNED BY`).
+
 ## Updating
 
 ```sh

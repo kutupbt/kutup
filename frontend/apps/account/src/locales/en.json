@@ -285,6 +285,9 @@
         "byAdmin": "By an administrator",
         "thisDevice": "This device",
         "device": "{{device}}",
+        "times_one": "once",
+        "times_other": "{{count}} times",
+        "kept": "Kept for {{count}} days, the newest 500 at most.",
         "kind": {
           "passwordChange": "Password changed",
           "recovery": "Password reset with the recovery phrase",
@@ -304,7 +307,14 @@
           "securityKeyRemoved": "Security key “{{oldName}}” removed",
           "securityKeyCompromised": "Security key “{{oldName}}” may have been copied (no longer used)",
           "authenticatorOn": "Authenticator app turned on",
-          "authenticatorOff": "Authenticator app turned off"
+          "authenticatorOff": "Authenticator app turned off",
+          "signIn": "Signed in",
+          "signInFailedPassword": "Wrong password at sign-in",
+          "signInFailed2fa": "Wrong second step at sign-in",
+          "signOut": "Signed out",
+          "sessionRevoked": "A session was ended",
+          "allSessionsRevoked": "All other sessions were ended",
+          "adminAccess": "An administrator opened your account's details"
         }
       },
       "recovery": "Recovery phrase",
@@ -724,6 +734,10 @@
       "description": "What administrators changed, newest first.",
       "export": "Export CSV",
       "exportFailed": "The export failed.",
+      "notAppendOnly": "The server runs as the database's owner (DATABASE_OWNER_URL is not set), so this log and the accounts' security logs are not append-only: the server could change or delete them. Set up the two database roles (self-hosting guide, \"Database roles\").",
+      "chainHolds_one": "The log's hash chain holds ({{count}} entry checked).",
+      "chainHolds_other": "The log's hash chain holds ({{count}} entries checked).",
+      "chainBroken": "The log's hash chain breaks at entry {{id}}: an entry was changed or removed there.",
       "federationOnly": "Federation only",
       "domain": "Filter by domain",
       "older": "Load older",
@@ -738,6 +752,7 @@
         "user2faDisable": "{{admin}} turned off 2FA for {{target}}",
         "userRotateTempPassword": "{{admin}} replaced the temporary password of {{target}}",
         "userWipe": "{{admin}} wiped {{target}}",
+        "adminView": "{{admin}} opened {{target}}'s details",
         "settingsUpdate": "{{admin}} changed server settings",
         "mapsSettingsUpdate": "{{admin}} changed the map settings",
         "federationPolicyUpdate": "{{admin}} set {{feature}} federation to {{mode}}",
@@ -933,7 +948,15 @@
       },
       "privacyLimits": {
         "keyBackupKeepDays": "Keep account key backups (days)",
-        "keyBackupKeepDaysHint": "The backup of the keys that seal each account's server-side data. A deleted account's data can no longer be read from any backup after this long."
+        "keyBackupKeepDaysHint": "The backup of the keys that seal each account's server-side data. A deleted account's data can no longer be read from any backup after this long.",
+        "securityEventRetentionDays": "Keep security events (days)",
+        "securityEventRetentionDaysHint": "Each account's sign-ins and security changes. Its owner sees this period.",
+        "securityEventsKeptPerKind": "Security events kept per kind",
+        "securityEventsKeptPerKindHint": "The newest of each kind per account, so repeated failed sign-ins can't push out a password change.",
+        "securityEventFoldSeconds": "Count repeats together within (seconds)",
+        "securityEventFoldSecondsHint": "A failed sign-in, or an administrator's view, this soon after the last one of its kind adds to its count instead of a new event.",
+        "adminAuditRetentionDays": "Keep the admin log (days)",
+        "adminAuditRetentionDaysHint": "What administrators did, including opening an account's data."
       },
       "federationLimits": {
         "federationRetryBaseSeconds": "First wait (seconds)",

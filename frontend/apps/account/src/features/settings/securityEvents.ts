@@ -13,6 +13,13 @@ const KNOWN = new Set([
   'recoveryCodesRenewed',
   'authenticatorOn',
   'authenticatorOff',
+  'signIn',
+  'signInFailedPassword',
+  'signInFailed2fa',
+  'signOut',
+  'sessionRevoked',
+  'allSessionsRevoked',
+  'adminAccess',
 ])
 /**
  * Events about a name, or a named security key: their text names it

@@ -222,7 +222,6 @@ impl FeaturePolicyStore {
                 "policyHash": envelope.policy_hash()?,
                 "identityGeneration": envelope.federation_identity_generation,
             }),
-            now,
         )
         .await?;
         tx.commit().await?;
@@ -235,7 +234,7 @@ impl FeaturePolicyStore {
         envelope: &FederatedFeaturePolicyEnvelopeV1,
     ) -> anyhow::Result<bool> {
         if envelope.domain != expected_domain {
-            self.record_failure(envelope, "wrong_domain").await?;
+            self.record_folded(envelope, "wrong_domain").await?;
             anyhow::bail!("remote feature policy has the wrong domain");
         }
         let mut tx = self.pool.begin().await?;
@@ -260,7 +259,7 @@ impl FeaturePolicyStore {
                 return Ok(false);
             }
             tx.rollback().await?;
-            self.record_failure(envelope, "rollback").await?;
+            self.record_folded(envelope, "rollback").await?;
             anyhow::bail!("remote feature policy equivocated at an accepted sequence");
         }
         envelope.verify_successor(previous.as_ref(), &identity)?;
@@ -339,7 +338,7 @@ impl FeaturePolicyStore {
             .ok_or_else(|| RemotePolicySyncError::Invalid("accepted policy disappeared".into()))
     }
 
-    async fn record_failure(
+    async fn record_folded(
         &self,
         envelope: &FederatedFeaturePolicyEnvelopeV1,
         failure_class: &str,

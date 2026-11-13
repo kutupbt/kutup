@@ -13,6 +13,13 @@
 //! the password itself and needs no finish to learn a guess was wrong, so
 //! only counting the start makes guessing cost anything. A right finish gives
 //! the attempt back.
+//!
+//! The same is why the account's security log counts a session sign-in that
+//! never finished as a wrong password ([`record_unfinished`]): the client
+//! says so (`login/abort`), and one that goes quiet is counted when its
+//! sign-in is dropped (pushed out by newer ones, or expired). The server
+//! cannot tell a wrong password from a sign-in left halfway, and must not
+//! need the client's word for it.
 
 use std::net::SocketAddr;
 
@@ -47,6 +54,45 @@ fn decode(value: &str, field: &str) -> AppResult<Vec<u8>> {
         .ok()
         .filter(|bytes| STANDARD.encode(bytes) == value)
         .ok_or_else(|| AppError::bad_request(format!("invalid {field}")))
+}
+
+/// Puts a wrong password into the security log of each account in
+/// `accounts` (a session sign-in of theirs that failed or never finished),
+/// off the answer's path: a real account must not answer later than a name
+/// that is none (OPAQUE's fake answers hide which is which). Repeats fold.
+pub(crate) fn record_unfinished(pool: &sqlx::PgPool, accounts: Vec<Uuid>) {
+    if accounts.is_empty() {
+        return;
+    }
+    let pool = pool.clone();
+    tokio::spawn(async move {
+        record_unfinished_now(&pool, &accounts).await;
+    });
+}
+
+/// [`record_unfinished`], awaited (the sweep's part: it is off any answer).
+pub(crate) async fn record_unfinished_now(pool: &sqlx::PgPool, accounts: &[Uuid]) {
+    for &user_id in accounts {
+        if let Err(error) = security_events::record_folded(
+            pool,
+            user_id,
+            security_events::Kind::SignInFailedPassword,
+        )
+        .await
+        {
+            tracing::warn!(%user_id, "record a failed sign-in: {}", error.message);
+        }
+    }
+}
+
+/// The accounts whose session sign-ins a `DELETE … RETURNING user_id, purpose`
+/// dropped unfinished.
+pub(crate) fn unfinished_sessions(dropped: Vec<(Option<Uuid>, String)>) -> Vec<Uuid> {
+    dropped
+        .into_iter()
+        .filter(|(_, purpose)| purpose == "session")
+        .filter_map(|(user_id, _)| user_id)
+        .collect()
 }
 
 fn opaque_key_missing() -> AppError {
@@ -256,25 +302,30 @@ pub async fn login_start(
     let (lockout, ceiling) = guard.slots();
     let source = asker.source();
     let mut tx = state.pool.begin().await?;
-    // The newest few per name and per source stay; this one is next.
-    sqlx::query(
+    // The newest few per name and per source stay; this one is next. A
+    // session sign-in pushed out never finished: a failed one.
+    let mut dropped: Vec<(Option<Uuid>, String)> = sqlx::query_as(
         "DELETE FROM opaque_login_states WHERE login_id IN (
              SELECT login_id FROM opaque_login_states WHERE canonical_name = $1
-             ORDER BY expires_at DESC OFFSET $2)",
+             ORDER BY expires_at DESC OFFSET $2)
+         RETURNING user_id, purpose",
     )
     .bind(&canonical)
     .bind(PENDING_PER_NAME - 1)
-    .execute(&mut *tx)
+    .fetch_all(&mut *tx)
     .await?;
-    sqlx::query(
-        "DELETE FROM opaque_login_states WHERE login_id IN (
-             SELECT login_id FROM opaque_login_states WHERE source = $1
-             ORDER BY expires_at DESC OFFSET $2)",
-    )
-    .bind(&source)
-    .bind(PENDING_PER_SOURCE - 1)
-    .execute(&mut *tx)
-    .await?;
+    dropped.extend(
+        sqlx::query_as::<_, (Option<Uuid>, String)>(
+            "DELETE FROM opaque_login_states WHERE login_id IN (
+                 SELECT login_id FROM opaque_login_states WHERE source = $1
+                 ORDER BY expires_at DESC OFFSET $2)
+             RETURNING user_id, purpose",
+        )
+        .bind(&source)
+        .bind(PENDING_PER_SOURCE - 1)
+        .fetch_all(&mut *tx)
+        .await?,
+    );
     sqlx::query(
         "INSERT INTO opaque_login_states (login_id, canonical_name, user_id, purpose, session_id,
              grant_for, source, lockout_key, ceiling_account, ceiling_source, server_key_id,
@@ -303,6 +354,7 @@ pub async fn login_start(
     .execute(&mut *tx)
     .await?;
     tx.commit().await?;
+    record_unfinished(&state.pool, unfinished_sessions(dropped));
 
     Ok(Json(LoginStartResponse {
         login_id,
@@ -340,6 +392,39 @@ impl GrantResponse {
                 + time::Duration::minutes(grants::GRANT_MINUTES),
         }
     }
+}
+
+#[derive(Debug, Deserialize, ToSchema)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct LoginAbortRequest {
+    login_id: Uuid,
+}
+
+/// `POST /api/auth/login/abort` — ends a sign-in the client will not finish:
+/// the password did not open the server's answer (a wrong password, or a
+/// name that is no account). A session sign-in of a real account goes into
+/// its security log as a wrong password. Always `204`, whatever the id, so
+/// it tells nothing about the name.
+#[utoipa::path(
+    post,
+    path = "/api/auth/login/abort",
+    tag = "auth",
+    request_body = LoginAbortRequest,
+    responses((status = 204, description = "Ended, or nothing to end"))
+)]
+pub async fn login_abort(
+    State(state): State<AppState>,
+    body: Result<Json<LoginAbortRequest>, JsonRejection>,
+) -> AppResult<Response> {
+    let Json(req) = body.map_err(|_| AppError::bad_request("invalid request"))?;
+    let dropped: Vec<(Option<Uuid>, String)> = sqlx::query_as(
+        "DELETE FROM opaque_login_states WHERE login_id = $1 RETURNING user_id, purpose",
+    )
+    .bind(req.login_id)
+    .fetch_all(&state.pool)
+    .await?;
+    record_unfinished(&state.pool, unfinished_sessions(dropped));
+    Ok(axum::http::StatusCode::NO_CONTENT.into_response())
 }
 
 /// `POST /api/auth/login/finish` — checks KE3. A sign-in answers as sign-in
@@ -412,8 +497,12 @@ pub async fn login_finish(
         Err(kutup_crypto::error::CryptoError::InvalidInput(_)) => {
             return Err(AppError::bad_request("invalid credentialFinalization"))
         }
-        // A wrong password, or a name that is no account.
-        Err(_) => return Err(AppError::invalid_credentials()),
+        // A wrong password, or a name that is no account. A sign-in that
+        // named a real account goes into its security log.
+        Err(_) => {
+            record_unfinished(&state.pool, unfinished_sessions(vec![(user_id, purpose)]));
+            return Err(AppError::invalid_credentials());
+        }
     }
     // A fake answer cannot be finished; this is a guard, not a path.
     let (Some(user_id), Some(epoch)) = (user_id, epoch) else {

@@ -985,7 +985,18 @@ pub async fn login_two_fa(
         spent
     };
     if !valid {
-        if !ratelimit::record_totp_attempt(&req.pre_auth_token, false) {
+        // Counted first: a log that can't be written never spares an attempt.
+        let counted = ratelimit::record_totp_attempt(&req.pre_auth_token, false);
+        if let Err(error) = crate::security_events::record_folded(
+            &state.pool,
+            account,
+            crate::security_events::Kind::SignInFailed2fa,
+        )
+        .await
+        {
+            tracing::warn!("security log: {}", error.message);
+        }
+        if !counted {
             return Err(AppError::too_many_requests(
                 "too many failed attempts, please log in again",
             ));
@@ -2003,6 +2014,16 @@ pub async fn complete_setup(
         sessions::revoke_owned(&state.pool, uid, issued.session_id).await?;
         return Err(setup_token_invalid());
     }
+    let mut tx = state.pool.begin().await?;
+    crate::security_events::record(
+        &mut tx,
+        uid,
+        crate::security_events::Kind::SignIn,
+        Some(issued.session_id),
+        None,
+    )
+    .await?;
+    tx.commit().await?;
     let access = jwt::generate_access_token(
         &user_id,
         is_admin,
@@ -2137,6 +2158,15 @@ async fn issue_tokens_and_respond(
         ),
         _ => None,
     };
+    // The account's security log (docs/plans/server-personal-data.md, A8).
+    crate::security_events::record(
+        &mut tx,
+        uid,
+        crate::security_events::Kind::SignIn,
+        Some(issued.session_id),
+        None,
+    )
+    .await?;
     tx.commit().await?;
     let access = jwt::generate_access_token(
         user_id,

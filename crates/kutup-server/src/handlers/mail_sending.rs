@@ -200,16 +200,18 @@ async fn load(state: &AppState, attention: bool, user: Option<Uuid>) -> AppResul
 )]
 pub async fn one(
     State(state): State<AppState>,
-    _admin: AdminUser,
+    admin: AdminUser,
     Path(id): Path<String>,
 ) -> AppResult<Json<MailSender>> {
     let target = Uuid::parse_str(&id).map_err(|_| AppError::not_found("not found"))?;
-    load(&state, false, Some(target))
+    let sender = load(&state, false, Some(target))
         .await?
         .into_iter()
         .next()
         .map(|row| Json(MailSender::from(row)))
-        .ok_or_else(|| AppError::not_found("not found"))
+        .ok_or_else(|| AppError::not_found("not found"))?;
+    crate::handlers::admin::viewed(&state, &admin, target, "mailSending").await?;
+    Ok(sender)
 }
 
 /// A limit override: absent leaves it, null clears it (the server's limit).

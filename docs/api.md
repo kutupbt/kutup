@@ -213,7 +213,11 @@ every session of the account.
 **Passwords are OPAQUE** (RFC 9807, docs/plans/opaque.md): the server keeps a
 record per account that is useless without an online exchange, and never sees
 the password or anything to test a guess against offline. Sign-in is
-`login/start` then `login/finish`; a new password is `opaque/register/start`
+`login/start` then `login/finish`. A wrong password fails on the client (the
+server's answer does not open), which then sends `POST /api/auth/login/abort`
+`{"loginId"}` (always `204`, no auth) instead of a finish; the account's
+security log counts it, and counts a sign-in left unfinished the same way when
+it expires (two minutes) or newer ones push it out. A new password is `opaque/register/start`
 then `opaque/register/finish` (or the request that creates the account). Every
 binary value is canonical base64 of the `opaque-ke` messages; suite 1 is
 ristretto255, Triple-DH and Argon2id (64 MiB, t = 3, p = 1).
@@ -1112,9 +1116,13 @@ receiving nothing.
 ### GET /api/user/security-events
 
 What changed the caller's sign-in, newest first: a new password, a recovery, a
-move to the server's current sign-in setup, an administrator's reset. Kept a
-year, or the newest 500. No IP addresses. An account reset keeps the earlier
-events.
+move to the server's current sign-in setup, an administrator's reset, a
+sign-in, a wrong password or second step, a sign-out, a session ended, an
+administrator opening the account's details. Kept `retentionDays` (a site
+setting, default 365), and of each kind at most the newest a second setting
+says (default 100), so repeated failures can't push out a password change. No
+IP addresses. An account reset keeps the earlier events. The log is append-only for the server when it
+runs as its own database role (docs/plans/server-personal-data.md, A8).
 
 **Auth:** Bearer JWT
 
@@ -1132,15 +1140,25 @@ one that is not one of the caller's events is `400`: start from the first page)
       "thisSession": true,
       "client": "web-account",
       "userAgent": "Mozilla/5.0 …",
-      "byAdmin": false
+      "byAdmin": false,
+      "count": 1
     }
   ],
-  "next": "<uuid or null>"
+  "next": "<uuid or null>",
+  "retentionDays": 365
 }
 ```
 
 - `kind`: `passwordChange`, `recovery`, `rotate`, `adminReset`,
-  `accountReset`. More kinds will come; show an unknown one generally.
+  `accountReset`, the name and two-step kinds, and `signIn`,
+  `signInFailedPassword` (a sign-in that named this account and did not
+  finish: the client found the password wrong and ended it with
+  `login/abort`, or it was dropped unfinished),
+  `signInFailed2fa`, `signOut`, `sessionRevoked`, `allSessionsRevoked`,
+  `adminAccess`. More kinds will come; show an unknown one generally.
+- `count`: how many times it happened. A wrong password, a wrong second step
+  and an administrator's view within ten minutes of the same kind's last one
+  are counted into it.
 - `thisSession`: made from the caller's own sign-in.
 - `client`, `userAgent`: what made it, as the session list shows it (absent
   for a recovery or an administrator's reset).
@@ -5211,6 +5229,27 @@ Export the same filtered audit stream as spreadsheet-safe UTF-8 CSV. It accepts
 `before`, `actionPrefix`, and `domain`; `limit` is clamped to 1–5000 and defaults
 to 1000. Cells beginning with spreadsheet formula markers are neutralized and
 the response is downloaded as `kutup-admin-audit.csv`.
+
+---
+
+### GET /api/admin/activity/verify
+
+The admin log's integrity (docs/plans/server-personal-data.md, A8): each row
+stores the previous row's hash and its own, over its admin, action, target,
+time and payload. This walks the chain from the oldest row kept.
+
+**Auth:** Bearer JWT (admin)
+
+**Response:** `{ "checked": 120, "brokenAt": null, "appendOnly": true }`:
+`brokenAt` is the first row whose hash or link is wrong, or that has none. The
+walk starts where the retention job last cut the chain (the last row it
+deleted and its hash, which only the database owner writes), so deleting more
+of the oldest rows breaks it too; `appendOnly` is false
+while the server runs as the database's owner (`DATABASE_OWNER_URL` unset).
+
+Opening one account's limits, mail-domain overrides or mail-sending state
+writes an `admin.view` row here, and `adminAccess` in that account's security
+log.
 
 ---
 
