@@ -6,6 +6,7 @@
 //! groups (auth, files, collab, federation, …) are added in `build_router` as each
 //! handler slice lands.
 
+mod account_closing;
 mod account_data;
 mod account_devices;
 mod account_heads;
@@ -29,6 +30,7 @@ mod collab_federation;
 mod config;
 mod content_range;
 mod db;
+mod destruction_events;
 mod drive_blob;
 mod drive_federation;
 mod drive_federation_albums;
@@ -381,6 +383,22 @@ async fn main() -> anyhow::Result<()> {
     account_data::check_entries(&pool, &config.opaque_setup_keys)
         .await
         .map_err(anyhow::Error::msg)?;
+    // A restore: the accounts the destruction log destroyed after the dump
+    // lose their data keys before anything is served, and close at once
+    // (A2, A7).
+    destruction_events::check_entries(&pool, &config.opaque_setup_keys)
+        .await
+        .map_err(anyhow::Error::msg)?;
+    let replayed = destruction_events::replay(&pool, &config.opaque_setup_keys)
+        .await
+        .map_err(|error| anyhow::anyhow!("replay the destruction log: {}", error.message))?;
+    if replayed > 0 {
+        tracing::warn!(
+            replayed,
+            "restored accounts the destruction log had destroyed: their data keys are gone, \
+             and they are deleted again"
+        );
+    }
     {
         let (pool, keys) = (pool.clone(), config.opaque_setup_keys.clone());
         tokio::spawn(async move {
@@ -503,6 +521,7 @@ async fn main() -> anyhow::Result<()> {
     }
     // Old addresses past their receiving, names past their hold.
     account_names::spawn_sweep(state.pool.clone(), state.config.name_sweep_seconds);
+    account_closing::spawn(state.clone());
     federation_outbox::spawn_worker(state.clone());
     drive_federation::spawn_digest_backfill(state.clone());
     mail::groups::ensure_system_groups(&state.pool, &state.config.chat_server_name).await?;
@@ -817,6 +836,11 @@ fn build_router(state: AppState) -> Router {
                 .route_layer(from_fn(middleware::rate_limit_login))
                 .route_layer(DefaultBodyLimit::max(64 * 1024)),
         )
+        // Keeping a closing account: one try per grant, limited as a sign-in.
+        .route(
+            "/api/auth/keep",
+            post(handlers::closing::keep).route_layer(from_fn(middleware::rate_limit_login)),
+        )
         .route(
             "/api/auth/recover/preflight",
             get(auth::get_recovery_preflight).route_layer(from_fn(middleware::rate_limit_recovery)),
@@ -874,6 +898,7 @@ fn build_router(state: AppState) -> Router {
         )
         .route("/api/user/rename/check", get(handlers::renames::check))
         .route("/api/user/rename", post(handlers::renames::rename))
+        .route("/api/user/close", post(handlers::closing::close))
         .route("/api/user/names", get(handlers::renames::names))
         .route(
             "/api/user/names/:name",
@@ -2319,6 +2344,11 @@ fn build_router(state: AppState) -> Router {
                     post(admin::rotate_temp_password),
                 )
                 .route("/api/admin/users/:id/wipe", post(admin::wipe_user))
+                .route("/api/admin/users/:id/close", post(admin::close_user))
+                .route(
+                    "/api/admin/users/:id/legal-hold",
+                    put(admin::set_legal_hold).delete(admin::clear_legal_hold),
+                )
                 .route("/api/admin/users/:id/reset-grant", post(admin::reset_grant))
                 .route("/api/admin/reports", get(link_reports::list_reports))
                 .route(
@@ -2663,6 +2693,7 @@ const SINGLE_ROLE_WARNING: &str = "DATABASE_OWNER_URL is not set: the server run
 /// Deletes the security events, admin-log rows and ended sessions past their
 /// Privacy and retention settings.
 async fn prune_logs(pool: &sqlx::PgPool) -> error::AppResult<()> {
+    use destruction_events::{record_bulk, Category};
     let days = site_settings::SECURITY_EVENT_RETENTION_DAYS
         .load(pool)
         .await?;
@@ -2670,15 +2701,23 @@ async fn prune_logs(pool: &sqlx::PgPool) -> error::AppResult<()> {
         .load(pool)
         .await?;
     let events = security_events::prune(pool, days, kept_per_kind).await?;
+    record_bulk(pool, Category::SecurityEvents, events, "retention").await?;
     let days = site_settings::ADMIN_AUDIT_RETENTION_DAYS.load(pool).await?;
     let audit = audit_log::prune(pool, days).await?;
+    record_bulk(pool, Category::AdminAudit, audit, "retention").await?;
     let days = site_settings::SESSION_RECORD_GRACE_DAYS.load(pool).await?;
     let sessions = sessions::prune_ended(pool, days).await?;
-    if events + audit + sessions > 0 {
+    record_bulk(pool, Category::Sessions, sessions, "retention").await?;
+    let days = site_settings::DESTRUCTION_EVENT_RETENTION_DAYS
+        .load(pool)
+        .await?;
+    let destructions = destruction_events::prune(pool, days).await?;
+    if events + audit + sessions + destructions > 0 {
         tracing::info!(
             events,
             audit,
             sessions,
+            destructions,
             "retention: rows past their period deleted"
         );
     }

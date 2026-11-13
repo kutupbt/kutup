@@ -537,7 +537,10 @@ pub async fn prune_ended(pool: &PgPool, days: i64) -> AppResult<u64> {
             AND NOT EXISTS (SELECT 1 FROM auth_sessions c
                              WHERE c.parent_session_id = s.id
                                AND LEAST(COALESCE(c.revoked_at, c.expires_at), c.expires_at)
-                                   >= now() - make_interval(days => $1::int))",
+                                   >= now() - make_interval(days => $1::int))
+            -- A legal hold keeps everything of its account
+            -- (docs/plans/server-personal-data.md, A5).
+            AND NOT kutup_account_held(s.user_id)",
     )
     .bind(days)
     .execute(pool)

@@ -924,6 +924,28 @@ pub const SESSION_RECORD_GRACE_DAYS: NumericSetting = NumericSetting {
     unit: SettingUnit::Days,
     per_account: false,
 };
+/// How long an account asked to be deleted waits, closing, before it is
+/// deleted, in days (A5). Its owner can keep it until then.
+pub const ACCOUNT_CLOSING_DAYS: NumericSetting = NumericSetting {
+    key: "account_closing_days",
+    field: "accountClosingDays",
+    default: 14,
+    min: 1,
+    max: 90,
+    unit: SettingUnit::Days,
+    per_account: false,
+};
+/// How long the destruction log keeps a row, in days (A7): longer than any
+/// backup is kept, so a restore can replay it.
+pub const DESTRUCTION_EVENT_RETENTION_DAYS: NumericSetting = NumericSetting {
+    key: "destruction_event_retention_days",
+    field: "destructionEventRetentionDays",
+    default: 1095,
+    min: 365,
+    max: 3650,
+    unit: SettingUnit::Days,
+    per_account: false,
+};
 /// The most security-log events kept per account of each kind (A8): a kind
 /// that repeats (a wrong password) can't push out the rare ones (a password
 /// change, a recovery).
@@ -947,13 +969,15 @@ pub const SECURITY_EVENT_FOLD_SECONDS: NumericSetting = NumericSetting {
     unit: SettingUnit::Seconds,
     per_account: false,
 };
-pub const PRIVACY_SETTINGS: [NumericSetting; 6] = [
+pub const PRIVACY_SETTINGS: [NumericSetting; 8] = [
     KEY_BACKUP_KEEP_DAYS,
     SECURITY_EVENT_RETENTION_DAYS,
     SECURITY_EVENTS_KEPT_PER_KIND,
     SECURITY_EVENT_FOLD_SECONDS,
     ADMIN_AUDIT_RETENTION_DAYS,
     SESSION_RECORD_GRACE_DAYS,
+    ACCOUNT_CLOSING_DAYS,
+    DESTRUCTION_EVENT_RETENTION_DAYS,
 ];
 
 pub const TWO_FACTOR_SETTINGS: [NumericSetting; 3] = [

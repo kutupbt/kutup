@@ -256,7 +256,13 @@ pub async fn prune(pool: &PgPool, days: i64) -> AppResult<u64> {
     let through: Option<(i64, Option<Vec<u8>>)> = sqlx::query_as(
         "SELECT id, row_hash FROM admin_audit_log
           WHERE id = (SELECT max(id) FROM admin_audit_log
-                       WHERE occurred_at < now() - make_interval(days => $1::int))",
+                       WHERE occurred_at < now() - make_interval(days => $1::int)
+                         -- A legal hold keeps its account's rows (A5), and the
+                         -- chain stays whole: nothing from the oldest held row on.
+                         AND id < COALESCE((SELECT min(a.id) FROM admin_audit_log a
+                                              JOIN users u ON u.id = a.target_user_id
+                                             WHERE u.legal_hold_reference IS NOT NULL),
+                                           9223372036854775807))",
     )
     .bind(days)
     .fetch_optional(&mut *tx)

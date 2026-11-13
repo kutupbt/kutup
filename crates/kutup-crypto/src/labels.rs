@@ -494,6 +494,8 @@ pub const SERVER_DATA_KEY_WRAP_V1: &[u8] = b"kutup/server/data-key-wrap/v1\0";
 pub const SERVER_DATA_FIELD_KEY_V1: &[u8] = b"kutup/server/data-field-key/v1\0";
 /// `kutup-crypto/src/server_data.rs` (`FIELD_AAD`)
 pub const SERVER_DATA_FIELD_V1: &[u8] = b"kutup/server/data-field/v1\0";
+/// `kutup-crypto/src/server_data.rs` (`SUBJECT_INFO`)
+pub const SERVER_DESTRUCTION_SUBJECT_V1: &[u8] = b"kutup/server/destruction-subject/v1\0";
 
 // --- session-version ---------------------------------------------------------
 
@@ -550,7 +552,7 @@ pub const FEDERATION_REQUEST_REPLAY_HASH_V1: &[u8] = b"kutup/federation/request-
 pub const FEDERATION_SIGNATURE_TAG: &str = "kutup-federation-v2";
 
 /// Every label, for the registry's own checks.
-pub const ALL: [&[u8]; 169] = [
+pub const ALL: [&[u8]; 170] = [
     ORG_ACCESS_REQUEST_V1,
     ORG_KEY_CERTIFICATE_V1,
     ORG_KEY_ID_V1,
@@ -704,6 +706,7 @@ pub const ALL: [&[u8]; 169] = [
     SERVER_DATA_KEY_WRAP_V1,
     SERVER_DATA_FIELD_KEY_V1,
     SERVER_DATA_FIELD_V1,
+    SERVER_DESTRUCTION_SUBJECT_V1,
     SESSION_VERSION_V1,
     YJS_SEED_V1,
     CHAT_PROFILE_ACCESS_V1,

@@ -46,6 +46,8 @@ interface LoginResponse {
   /** The server moved to a new OPAQUE setup: re-register with this grant (purpose `rotate`). */
   rotate?: boolean
   grant?: string
+  /** The account is closing: no session, but a grant (purpose `keep`) that keeps it. */
+  closing?: { closesAt: string; grant: string }
 }
 
 /**
@@ -68,10 +70,24 @@ export interface PendingSetup {
   setupToken: string
 }
 
+/**
+ * The account was asked to be deleted (docs/plans/server-personal-data.md,
+ * A5): every sign-in step passed, but instead of a session the server offers
+ * to keep it. Holds the open sign-in, as a {@link TotpChallenge} does, to
+ * finish with once kept; end it with {@link abandonClosing}.
+ */
+export interface ClosingOffer {
+  /** When the account is deleted. */
+  closesAt: string
+  grant: string
+  signIn: OpaqueSignIn
+}
+
 export type SignInResult =
   | { kind: 'signedIn' }
   | { kind: 'totp'; challenge: TotpChallenge }
   | { kind: 'setup'; setup: PendingSetup }
+  | { kind: 'closing'; offer: ClosingOffer }
 
 async function activate(
   response: Pick<LoginResponse, 'accessToken' | 'sessionId'>,
@@ -115,7 +131,26 @@ export async function signIn(name: string, password: string): Promise<SignInResu
   if (data.requiresTotp && data.preAuthToken) {
     return { kind: 'totp', challenge: { name, preAuthToken: data.preAuthToken, signIn: opened } }
   }
+  return closingOrFinish(data, opened)
+}
+
+/** A closing account's offer, or the session. */
+function closingOrFinish(data: LoginResponse, opened: OpaqueSignIn): Promise<SignInResult> {
+  if (data.closing) {
+    return Promise.resolve({ kind: 'closing', offer: { ...data.closing, signIn: opened } })
+  }
   return finishSignIn(data, opened)
+}
+
+/** Keeps a closing account and finishes its sign-in. */
+export async function keepAccount(offer: ClosingOffer): Promise<SignInResult> {
+  const { data } = await api.post<LoginResponse>('/auth/keep', { grant: offer.grant })
+  return finishSignIn(data, offer.signIn)
+}
+
+/** Ends a sign-in offered to keep its account (the user went back). Safe to call again. */
+export function abandonClosing(offer: ClosingOffer): void {
+  offer.signIn.close()
 }
 
 /** Opens the master key with the sign-in's export key, activates, and re-registers if the server asks. */
@@ -155,7 +190,7 @@ export async function completeTotp(challenge: TotpChallenge, code: string): Prom
     preAuthToken: challenge.preAuthToken,
     code,
   })
-  return finishSignIn(data, challenge.signIn)
+  return closingOrFinish(data, challenge.signIn)
 }
 
 /** Ends a sign-in waiting for its second factor (the user went back, or left). Safe to call again. */

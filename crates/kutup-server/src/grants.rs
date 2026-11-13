@@ -36,6 +36,10 @@ pub enum Purpose {
     Rotate,
     /// A new username, or dropping a held one (docs/plans/username-renames.md).
     Rename,
+    /// Closing the account (docs/plans/server-personal-data.md, A5).
+    Close,
+    /// Keeping a closing account: a sign-in that passed every step (no session).
+    Keep,
 }
 
 impl Purpose {
@@ -48,6 +52,8 @@ impl Purpose {
             Purpose::Recovery => "recovery",
             Purpose::Rotate => "rotate",
             Purpose::Rename => "rename",
+            Purpose::Close => "close",
+            Purpose::Keep => "keep",
         }
     }
 
@@ -59,6 +65,7 @@ impl Purpose {
             "totp" => Purpose::Totp,
             "adminReset" => Purpose::AdminReset,
             "rename" => Purpose::Rename,
+            "close" => Purpose::Close,
             _ => return None,
         })
     }
@@ -250,11 +257,19 @@ mod tests {
 
     #[test]
     fn reauth_may_ask_for_these_only() {
-        for name in ["pass", "passwordChange", "totp", "adminReset", "rename"] {
+        for name in [
+            "pass",
+            "passwordChange",
+            "totp",
+            "adminReset",
+            "rename",
+            "close",
+        ] {
             assert_eq!(Purpose::for_reauth(name).unwrap().as_str(), name);
         }
         assert_eq!(Purpose::for_reauth("recovery"), None);
         assert_eq!(Purpose::for_reauth("rotate"), None);
+        assert_eq!(Purpose::for_reauth("keep"), None);
     }
 
     /// A session sign-in that expired unfinished is a wrong password in its

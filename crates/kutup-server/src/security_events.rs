@@ -71,6 +71,10 @@ pub enum Kind {
     AllSessionsRevoked,
     /// An administrator opened this account's data in the admin console.
     AdminAccess,
+    /// The owner asked for the account to be deleted; it is closing.
+    AccountClosing,
+    /// A closing account was kept.
+    AccountKept,
 }
 
 impl Kind {
@@ -102,6 +106,8 @@ impl Kind {
             Kind::SessionRevoked => "sessionRevoked",
             Kind::AllSessionsRevoked => "allSessionsRevoked",
             Kind::AdminAccess => "adminAccess",
+            Kind::AccountClosing => "accountClosing",
+            Kind::AccountKept => "accountKept",
         }
     }
 }
@@ -231,12 +237,14 @@ pub async fn record_folded(pool: &sqlx::PgPool, user_id: Uuid, kind: Kind) -> Ap
 pub async fn prune(pool: &sqlx::PgPool, days: i64, kept_per_kind: i64) -> AppResult<u64> {
     let gone = sqlx::query(
         "DELETE FROM account_security_events e
-          WHERE e.at < now() - make_interval(days => $1::int)
-             OR e.id IN (SELECT id FROM (
-                    SELECT id, row_number() OVER (PARTITION BY user_id, kind
-                                                  ORDER BY at DESC, id DESC) AS n
-                      FROM account_security_events) ranked
-                  WHERE ranked.n > $2)",
+          WHERE (e.at < now() - make_interval(days => $1::int)
+                 OR e.id IN (SELECT id FROM (
+                        SELECT id, row_number() OVER (PARTITION BY user_id, kind
+                                                      ORDER BY at DESC, id DESC) AS n
+                          FROM account_security_events) ranked
+                      WHERE ranked.n > $2))
+            -- A legal hold keeps everything of its account (A5).
+            AND NOT kutup_account_held(e.user_id)",
     )
     .bind(days)
     .bind(kept_per_kind)
@@ -275,7 +283,8 @@ pub async fn list(
     let mut conn = pool.acquire().await?;
     let mut events: Vec<Event> = sqlx::query_as(
         "SELECT e.id, e.kind, e.at, e.acting_session_id, e.acting_client, e.client_sealed,
-                e.kind IN ('adminReset', 'accountReset', 'nameClosed', 'nameFreed') AS by_admin,
+                (e.kind IN ('adminReset', 'accountReset', 'nameClosed', 'nameFreed')
+                 OR (e.kind = 'accountKept' AND e.admin_user_id IS NOT NULL)) AS by_admin,
                 e.old_name, e.new_name, e.count
          FROM account_security_events e
          WHERE e.user_id = $1

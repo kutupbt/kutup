@@ -92,6 +92,19 @@ pub struct LoginResponse {
     pub pre_auth_token: String,
     #[serde(default)]
     pub requires_setup: bool,
+    /// The account is closing: no session, but a grant (purpose `keep`)
+    /// that keeps it (docs/plans/server-personal-data.md, A5).
+    #[serde(default)]
+    pub closing: Option<Closing>,
+}
+
+/// A closing account's sign-in answer.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Closing {
+    /// When the account is deleted (RFC 3339).
+    pub closes_at: String,
+    pub grant: String,
 }
 
 #[derive(Debug, Serialize)]

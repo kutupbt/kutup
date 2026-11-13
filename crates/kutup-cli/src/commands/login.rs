@@ -178,6 +178,20 @@ pub(crate) fn login_with_password(
     if resp.requires_setup {
         bail!("account requires first-login setup — use the web UI to complete setup first");
     }
+    // Asked to be deleted: kept only when the person says so.
+    if let Some(closing) = resp.closing.take() {
+        super::confirm(
+            &format!(
+                "This account is closing and will be deleted on {}. Keep it?",
+                closing.closes_at
+            ),
+            false,
+        )
+        .context("the account is closing; sign in again to keep it")?;
+        resp = client
+            .keep_account(&closing.grant)
+            .context("keep the account")?;
+    }
     // What the account's keys are bound to (its key binding), told only with
     // the session.
     if resp.envelope_binding.is_empty() {

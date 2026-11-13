@@ -166,7 +166,8 @@ pub async fn chat_maintenance_once(
     if policy.send_retention_days > 0 {
         match sqlx::query(
             "DELETE FROM chat_sends
-             WHERE created_at < now() - ($1 * interval '1 day')",
+             WHERE created_at < now() - ($1 * interval '1 day')
+               AND NOT kutup_account_held(sender_user_id)",
         )
         .bind(policy.send_retention_days)
         .execute(pool)
@@ -251,11 +252,14 @@ pub async fn sweep_chat_mailboxes_before(
     pool: &PgPool,
     cutoff: OffsetDateTime,
 ) -> anyhow::Result<u64> {
-    Ok(sqlx::query("DELETE FROM chat_mailbox WHERE server_ts < $1")
-        .bind(cutoff)
-        .execute(pool)
-        .await?
-        .rows_affected())
+    Ok(sqlx::query(
+        "DELETE FROM chat_mailbox
+          WHERE server_ts < $1 AND NOT kutup_account_held(recipient_user_id)",
+    )
+    .bind(cutoff)
+    .execute(pool)
+    .await?
+    .rows_affected())
 }
 
 /// Applies version retention (docs/plans/drive-versions-v2.md,
@@ -279,9 +283,12 @@ pub async fn version_retention_tick(pool: &PgPool, storage: &StorageService) -> 
            JOIN collections c ON c.id = f.collection_id
            JOIN users u ON u.id = c.owner_user_id
            WHERE v.file_id IN (
-             SELECT DISTINCT file_id FROM file_versions
-             WHERE NOT keep_forever AND created_at < now() - interval '1 day' AND file_id > $1
-             ORDER BY file_id
+             SELECT DISTINCT tv.file_id FROM file_versions tv
+               JOIN files tf ON tf.id = tv.file_id
+               JOIN collections tc ON tc.id = tf.collection_id
+             WHERE NOT tv.keep_forever AND tv.created_at < now() - interval '1 day'
+               AND tv.file_id > $1 AND NOT kutup_account_held(tc.owner_user_id)
+             ORDER BY tv.file_id
              LIMIT 500)
            ORDER BY v.file_id, v.created_at DESC"#,
         )
@@ -369,6 +376,9 @@ pub async fn version_retention_tick(pool: &PgPool, storage: &StorageService) -> 
     match sqlx::query_scalar::<_, i64>(&crate::handlers::collab::trimming(
         "DELETE FROM file_update_log l
           WHERE l.kind IN ($1, $2, $3) AND l.created_at < now() - interval '1 day'
+            AND NOT kutup_account_held((SELECT c.owner_user_id FROM files f
+                                          JOIN collections c ON c.id = f.collection_id
+                                         WHERE f.id = l.file_id))
          RETURNING l.file_id, l.sender_domain, l.sender_account, l.sender_device, l.sender_seq",
     ))
     .bind(i16::from(kutup_crypto::envelope::kind::OO_OP))
@@ -782,7 +792,7 @@ async fn sweep_expired_chat_backup_staging(
     let expired: Vec<(Uuid, Uuid, i64, i64, String)> = sqlx::query_as(
         "SELECT user_id,object_id,generation,ciphertext_bytes,storage_path
          FROM chat_backup_bases
-         WHERE state='staged' AND expires_at<=NOW()
+         WHERE state='staged' AND expires_at<=NOW() AND NOT kutup_account_held(user_id)
          ORDER BY expires_at LIMIT 64 FOR UPDATE SKIP LOCKED",
     )
     .fetch_all(&mut *transaction)
@@ -831,7 +841,7 @@ pub async fn sweep_chat_delivery_media_before(
     let expired: Vec<(Uuid, Uuid, Uuid, i64)> = sqlx::query_as(
         "SELECT id,user_id,attachment_id,logical_bytes
          FROM chat_media_references
-         WHERE created_at < $1
+         WHERE created_at < $1 AND NOT kutup_account_held(user_id)
          ORDER BY created_at
          LIMIT 512 FOR UPDATE SKIP LOCKED",
     )
@@ -1177,7 +1187,8 @@ pub async fn trash_sweep_once(
 
     let coll_roots: Vec<Uuid> = sqlx::query_scalar(
         "SELECT id FROM collections WHERE trash_root_id = id \
-         AND deleted_at < NOW() - make_interval(days => $1::int)",
+         AND deleted_at < NOW() - make_interval(days => $1::int) \
+         AND NOT kutup_account_held(owner_user_id)",
     )
     .bind(retention_days)
     .fetch_all(pool)
@@ -1194,8 +1205,10 @@ pub async fn trash_sweep_once(
     }
 
     let file_roots: Vec<Uuid> = sqlx::query_scalar(
-        "SELECT id FROM files WHERE trash_root_id = id \
-         AND deleted_at < NOW() - make_interval(days => $1::int)",
+        "SELECT f.id FROM files f JOIN collections c ON c.id = f.collection_id \
+         WHERE f.trash_root_id = f.id \
+         AND f.deleted_at < NOW() - make_interval(days => $1::int) \
+         AND NOT kutup_account_held(c.owner_user_id)",
     )
     .bind(retention_days)
     .fetch_all(pool)

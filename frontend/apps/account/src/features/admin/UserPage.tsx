@@ -6,7 +6,7 @@ import { useTranslation } from 'react-i18next'
 import { Link, useNavigate, useParams } from 'react-router-dom'
 import { toast } from 'sonner'
 import { z } from 'zod'
-import type { UserRow } from '@kutup/session/api-types'
+import type { SuspendedReason, UserRow } from '@kutup/session/api-types'
 import { useRequiredSession } from '@kutup/session/store'
 import { Alert } from '@kutup/ui/components/alert'
 import { Badge } from '@kutup/ui/components/badge'
@@ -17,6 +17,7 @@ import { ConfirmDestructive } from '@kutup/ui/components/confirm-destructive'
 import { Field } from '@kutup/ui/components/field'
 import { Input } from '@kutup/ui/components/input'
 import { Mono } from '@kutup/ui/components/mono'
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@kutup/ui/components/select'
 import { Fact, PageBody, PageHeader, Section } from '@kutup/ui/components/page'
 import { LoadingPanel } from '@kutup/ui/components/states'
 import { apiErrorMessage } from '@kutup/ui/lib/apiError'
@@ -24,7 +25,9 @@ import { copyText } from '@kutup/ui/lib/clipboard'
 import { formatBytes, formatInstant } from '@kutup/ui/lib/format'
 import {
   useAdminUsers,
+  useCloseUser,
   useDeleteUser,
+  useLegalHold,
   useForceDisable2fa,
   useRotateTempPassword,
   useUpdateUser,
@@ -112,6 +115,8 @@ function Quotas({ user }: { user: UserRow }) {
   )
 }
 
+const SUSPENDED_REASONS: SuspendedReason[] = ['admin', 'operator_order', 'security']
+
 type Pending =
   | { kind: 'disable' }
   | { kind: 'enable' }
@@ -121,6 +126,9 @@ type Pending =
   | { kind: 'rotate'; password: string }
   | { kind: 'wipe'; password: string }
   | { kind: 'delete' }
+  | { kind: 'close' }
+  | { kind: 'hold' }
+  | { kind: 'release' }
 
 /** Which referral code the account signed up with (docs/plans/registration-codes.md). */
 function SignedUpWithFact({ userId }: { userId: string }) {
@@ -167,7 +175,11 @@ export function UserPage() {
   const rotate = useRotateTempPassword()
   const wipe = useWipeUser()
   const remove = useDeleteUser()
+  const closeAccount = useCloseUser()
+  const legalHold = useLegalHold()
   const [pending, setPending] = useState<Pending | null>(null)
+  const [reason, setReason] = useState<SuspendedReason>('admin')
+  const [holdReference, setHoldReference] = useState('')
   const [revealed, setRevealed] = useState<string | null>(null)
   const lang = i18n.language
 
@@ -187,7 +199,9 @@ export function UserPage() {
   const locked = user.isProtected
   const close = () => {
     setPending(null)
-    for (const m of [update, disable2fa, rotate, wipe, remove]) m.reset()
+    for (const m of [update, disable2fa, rotate, wipe, remove, closeAccount, legalHold]) m.reset()
+    setReason('admin')
+    setHoldReference('')
   }
 
   // One dialog, configured per action. Each confirms only after the server agrees.
@@ -201,10 +215,32 @@ export function UserPage() {
         return (
           <ConfirmDestructive {...common}
             title={t(disabling ? 'admin.user.disableTitle' : 'admin.user.enableTitle')}
-            description={t(disabling ? 'admin.user.disableDescription' : 'admin.user.enableDescription', { name: user.username })}
-            submit={t(disabling ? 'admin.user.disable' : 'admin.user.enable')}
+            description={
+              disabling ? (
+                <div className="space-y-3">
+                  <p>{t('admin.user.disableDescription', { name: user.username })}</p>
+                  <Select value={reason} onValueChange={(value) => setReason(value as SuspendedReason)}>
+                    <SelectTrigger aria-label={t('admin.user.suspendedReason')}>
+                      <SelectValue placeholder={t('admin.user.suspendedReason')} />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {SUSPENDED_REASONS.map((value) => (
+                        <SelectItem key={value} value={value}>{t(`admin.user.suspendedReasons.${value}`)}</SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+              ) : (
+                t(user.state === 'closing' ? 'admin.user.keepDescription' : 'admin.user.enableDescription', { name: user.username })
+              )
+            }
+            submit={t(disabling ? 'admin.user.disable' : user.state === 'closing' ? 'admin.user.keep' : 'admin.user.enable')}
             pending={update.isPending} error={update.error} errorFallback={t('admin.user.saveFailed')}
-            onConfirm={() => update.mutate({ id: user.id, patch: { isActive: !disabling } }, { onSuccess: close })} />
+            onConfirm={() =>
+              update.mutate(
+                { id: user.id, patch: disabling ? { isActive: false, suspendedReason: reason } : { isActive: true } },
+                { onSuccess: close },
+              )} />
         )
       }
       case 'promote':
@@ -254,6 +290,46 @@ export function UserPage() {
               onSuccess: () => { setRevealed(pending.password); close() },
             })} />
         )
+      case 'close':
+        return (
+          <ConfirmDestructive {...common}
+            title={t('admin.user.closeTitle')}
+            description={t('admin.user.closeDescription', { name: user.username })}
+            confirmPhrase={user.username}
+            submit={t('admin.user.close')}
+            pending={closeAccount.isPending} error={closeAccount.error} errorFallback={t('admin.user.actionFailed')}
+            onConfirm={() => closeAccount.mutate(user.id, { onSuccess: close })} />
+        )
+      case 'hold':
+        return (
+          <ConfirmDestructive {...common} warningVariant="warn"
+            title={t('admin.user.holdTitle')}
+            description={
+              <div className="space-y-3">
+                <p>{t('admin.user.holdDescription', { name: user.username })}</p>
+                <Field label={t('admin.user.holdReference')} required>
+                  {(field) => (
+                    <Input {...field} value={holdReference} maxLength={200} onChange={(e) => setHoldReference(e.target.value)} />
+                  )}
+                </Field>
+              </div>
+            }
+            submit={t('admin.user.hold')}
+            pending={legalHold.isPending} error={legalHold.error} errorFallback={t('admin.user.saveFailed')}
+            onConfirm={() => {
+              if (holdReference.trim() === '') return
+              legalHold.mutate({ id: user.id, reference: holdReference.trim() }, { onSuccess: close })
+            }} />
+        )
+      case 'release':
+        return (
+          <ConfirmDestructive {...common} warningVariant="warn"
+            title={t('admin.user.releaseTitle')}
+            description={t('admin.user.releaseDescription', { name: user.username })}
+            submit={t('admin.user.release')}
+            pending={legalHold.isPending} error={legalHold.error} errorFallback={t('admin.user.saveFailed')}
+            onConfirm={() => legalHold.mutate({ id: user.id, reference: null }, { onSuccess: close })} />
+        )
       case 'delete':
         return (
           <ConfirmDestructive {...common}
@@ -292,23 +368,47 @@ export function UserPage() {
           </Fact>
           <Fact label={t('admin.users.columns.twoFactor')}>{user.totpEnabled ? t('admin.users.on') : t('admin.users.off')}</Fact>
           <SignedUpWithFact userId={user.id} />
+          {user.state === 'closing' && user.closesAt ? (
+            <Fact label={t('admin.user.closesAt')}>{formatInstant(user.closesAt, lang)}</Fact>
+          ) : null}
+          {user.state === 'suspended' && user.suspendedReason ? (
+            <Fact label={t('admin.user.suspendedReason')}>{t(`admin.user.suspendedReasons.${user.suspendedReason}`)}</Fact>
+          ) : null}
         </CardContent>
       </Card>
 
       {locked ? <Alert>{t('admin.user.protectedNote')}</Alert> : null}
+      {user.dataKeyLostAt ? (
+        <Alert variant="error">{t('admin.user.dataKeyLost', { date: formatInstant(user.dataKeyLostAt, lang) ?? '' })}</Alert>
+      ) : null}
+      {user.state === 'closing' && user.deletionAttempts > 0 ? (
+        <Alert variant="error">{t('admin.user.deletionFailing', { count: user.deletionAttempts })}</Alert>
+      ) : null}
 
       <Section title={t('admin.user.access')}>
         <Card className="divide-y divide-border p-0">
-          <ActionRow
-            title={user.isActive ? t('admin.user.disable') : t('admin.user.enable')}
-            description={user.isActive ? t('admin.user.disableHint') : t('admin.user.enableHint')}
-            action={
-              <Button variant="outline" size="sm" disabled={locked || self}
-                onClick={() => setPending({ kind: user.isActive ? 'disable' : 'enable' })}>
-                {user.isActive ? t('admin.user.disable') : t('admin.user.enable')}
-              </Button>
-            }
-          />
+          {user.state === 'closing' ? (
+            <ActionRow
+              title={t('admin.user.keep')}
+              description={t('admin.user.keepHint')}
+              action={
+                <Button variant="outline" size="sm" disabled={locked || self} onClick={() => setPending({ kind: 'enable' })}>
+                  {t('admin.user.keep')}
+                </Button>
+              }
+            />
+          ) : (
+            <ActionRow
+              title={user.isActive ? t('admin.user.disable') : t('admin.user.enable')}
+              description={user.isActive ? t('admin.user.disableHint') : t('admin.user.enableHint')}
+              action={
+                <Button variant="outline" size="sm" disabled={locked || self}
+                  onClick={() => setPending({ kind: user.isActive ? 'disable' : 'enable' })}>
+                  {user.isActive ? t('admin.user.disable') : t('admin.user.enable')}
+                </Button>
+              }
+            />
+          )}
           <ActionRow
             title={user.isAdmin ? t('admin.user.demote') : t('admin.user.promote')}
             description={user.isAdmin ? t('admin.user.demoteHint') : t('admin.user.promoteHint')}
@@ -351,8 +451,30 @@ export function UserPage() {
             <ActionRow title={t('admin.user.wipe')} description={t('admin.user.wipeHint')}
               action={<Button variant="outline" size="sm" disabled={locked || self} onClick={() => setPending({ kind: 'wipe', password: generateTempPassword() })}>{t('admin.user.wipe')}</Button>} />
           )}
-          <ActionRow title={t('admin.user.delete')} description={t('admin.user.deleteHint')}
-            action={<Button variant="destructive" size="sm" disabled={locked || self} onClick={() => setPending({ kind: 'delete' })}>{t('admin.user.delete')}</Button>} />
+          {user.state !== 'closing' ? (
+            <ActionRow title={t('admin.user.close')} description={t('admin.user.closeHint')}
+              action={<Button variant="outline" size="sm" disabled={locked || self} onClick={() => setPending({ kind: 'close' })}>{t('admin.user.close')}</Button>} />
+          ) : null}
+          <ActionRow title={t('admin.user.delete')} description={t(user.legalHoldReference ? 'admin.user.deleteHeldHint' : 'admin.user.deleteHint')}
+            action={<Button variant="destructive" size="sm" disabled={locked || self || Boolean(user.legalHoldReference)} onClick={() => setPending({ kind: 'delete' })}>{t('admin.user.delete')}</Button>} />
+        </Card>
+      </Section>
+
+      <Section title={t('admin.user.legalHold')} description={t('admin.user.legalHoldHint')}>
+        <Card className="p-0">
+          {user.legalHoldReference ? (
+            <ActionRow
+              title={t('admin.user.heldSince', { date: formatInstant(user.legalHoldAt ?? null, lang) ?? '' })}
+              description={user.legalHoldReference}
+              action={<Button variant="outline" size="sm" onClick={() => setPending({ kind: 'release' })}>{t('admin.user.release')}</Button>}
+            />
+          ) : (
+            <ActionRow
+              title={t('admin.user.notHeld')}
+              description={t('admin.user.notHeldHint')}
+              action={<Button variant="outline" size="sm" onClick={() => setPending({ kind: 'hold' })}>{t('admin.user.hold')}</Button>}
+            />
+          )}
         </Card>
       </Section>
       {dialog}

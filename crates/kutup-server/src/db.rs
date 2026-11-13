@@ -31,7 +31,11 @@ pub async fn migrate(pool: &PgPool) -> Result<()> {
 /// The tables the server may only add to (docs/plans/server-personal-data.md,
 /// A8): no UPDATE or DELETE for the app role. The security events keep one
 /// updatable column, a failure's `count`.
-const APPEND_ONLY: &[&str] = &["account_security_events", "admin_audit_log"];
+const APPEND_ONLY: &[&str] = &[
+    "account_security_events",
+    "admin_audit_log",
+    "account_keys.destruction_events",
+];
 
 /// As the owner (`owner`): gives the app role named in `app_url` what it
 /// needs on every table, then takes UPDATE and DELETE back on the append-only
@@ -170,6 +174,8 @@ mod tests {
             "DELETE FROM admin_audit_log",
             "UPDATE admin_audit_log SET action = 'x'",
             "TRUNCATE admin_audit_log",
+            "DELETE FROM account_keys.destruction_events",
+            "UPDATE account_keys.destruction_events SET reference = 'x'",
             "INSERT INTO admin_audit_log (id, admin_user_id, action, payload) \
              VALUES (9223372036854775000, gen_random_uuid(), 'x', '{}')",
             "SELECT setval(pg_get_serial_sequence('admin_audit_log', 'id'), 1)",

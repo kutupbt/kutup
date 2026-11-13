@@ -118,6 +118,22 @@ pub struct LoginResponse {
     requires_setup: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     setup_token: Option<String>,
+    /// The account is closing: no session, but `grant` (purpose `keep`, no
+    /// session, minutes) keeps it at `POST /api/auth/keep`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    closing: Option<Closing>,
+}
+
+/// A closing account's sign-in answer (docs/plans/server-personal-data.md, A5).
+/// No Debug: it carries a one-time grant.
+#[derive(Serialize, ToSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct Closing {
+    /// When the account is deleted.
+    #[serde(with = "time::serde::rfc3339")]
+    #[schema(value_type = String)]
+    closes_at: time::OffsetDateTime,
+    grant: String,
 }
 
 #[derive(Debug, Default, Deserialize, ToSchema)]
@@ -812,8 +828,8 @@ pub(crate) async fn signed_in_answer(
     );
     let row: Option<Row> = sqlx::query_as(
         r#"SELECT master_key_envelope, public_key,
-                  totp_enabled, is_admin, storage_quota_bytes, storage_used_bytes, is_active,
-                  is_first_login,
+                  totp_enabled, is_admin, storage_quota_bytes, storage_used_bytes,
+                  (state = 'active' OR (state = 'closing' AND suspended_before_close IS NULL)), is_first_login,
                   COALESCE(username, ''), COALESCE(color, ''), COALESCE(key_binding, ''),
                   COALESCE(substring(sha256(opaque_record) from 1 for 16) = $2, false)
            FROM users WHERE id = $1"#,
@@ -935,7 +951,7 @@ pub async fn login_two_fa(
     // The authenticator app's secret, only once it is turned on: a secret
     // still being set up never signs anyone in.
     let row: Option<(Option<Vec<u8>>, bool)> = sqlx::query_as(
-        "SELECT CASE WHEN totp_enabled THEN totp_secret_sealed END, is_active
+        "SELECT CASE WHEN totp_enabled THEN totp_secret_sealed END, (state = 'active' OR (state = 'closing' AND suspended_before_close IS NULL))
          FROM users WHERE id = $1",
     )
     .bind(Uuid::parse_str(&user_id).map_err(|_| AppError::unauthorized("unauthorized"))?)
@@ -1027,7 +1043,7 @@ pub(crate) async fn issue_after_second_step(
     let row: Option<Row> = sqlx::query_as(
         r#"SELECT master_key_envelope, public_key,
                   is_admin, storage_quota_bytes, storage_used_bytes,
-                  COALESCE(username, ''), is_active, COALESCE(color, ''),
+                  COALESCE(username, ''), (state = 'active' OR (state = 'closing' AND suspended_before_close IS NULL)), COALESCE(color, ''),
                   COALESCE(key_binding, '')
            FROM users WHERE id = $1"#,
     )
@@ -1140,7 +1156,11 @@ pub async fn recover_grant(
     let stored: Option<String> = match account {
         Some(id) => {
             sqlx::query_scalar(
-                "SELECT recovery_key_verifier FROM users WHERE id = $1 AND is_active",
+                // A closing account recovers too, to keep it at the sign-in after.
+                &format!(
+                    "SELECT recovery_key_verifier FROM users WHERE id = $1 AND {}",
+                    crate::account_closing::SIGNS_IN
+                ),
             )
             .bind(id)
             .fetch_optional(&state.pool)
@@ -1158,11 +1178,12 @@ pub async fn recover_grant(
     // Only while the phrase checked is still the account's: a wipe (or a new
     // setup) in between replaces the verifier, and leaves no grant behind.
     let mut tx = state.pool.begin().await?;
-    let still: Option<Uuid> = sqlx::query_scalar(
+    let still: Option<Uuid> = sqlx::query_scalar(&format!(
         "SELECT id FROM users
-         WHERE id = $1 AND is_active AND recovery_key_verifier = $2
+         WHERE id = $1 AND {} AND recovery_key_verifier = $2
          FOR SHARE",
-    )
+        crate::account_closing::SIGNS_IN
+    ))
     .bind(user_id)
     .bind(&stored_verifier)
     .fetch_optional(&mut *tx)
@@ -2133,6 +2154,37 @@ async fn issue_tokens_and_respond(
     stale: fn() -> AppError,
 ) -> AppResult<Response> {
     let uid = parse_uuid(user_id)?;
+    // Every step passed, for an account asked to close: no session, but the
+    // offer to keep it (docs/plans/server-personal-data.md, A5).
+    let closing: Option<(time::OffsetDateTime, bool)> = sqlx::query_as(
+        "SELECT closes_at, closes_at > now() OR kutup_account_held(id)
+           FROM users WHERE id = $1 AND state = 'closing'",
+    )
+    .bind(uid)
+    .fetch_optional(&state.pool)
+    .await?;
+    if let Some((closes_at, keepable)) = closing {
+        // Past its date it is being deleted: nothing to keep any more.
+        if !keepable {
+            return Err(crate::account_closing::deleting());
+        }
+        let grant = crate::grants::issue(
+            &state.pool,
+            crate::grants::Purpose::Keep,
+            uid,
+            None,
+            None,
+            crate::grants::GRANT_MINUTES,
+        )
+        .await?;
+        return Ok(Json(LoginResponse {
+            user_id: user_id.to_owned(),
+            username: username.to_owned(),
+            closing: Some(Closing { closes_at, grant }),
+            ..Default::default()
+        })
+        .into_response());
+    }
     let issued = sessions::create(&state.pool, uid, client, None, user_agent(headers)).await?;
     let mut tx = state.pool.begin().await?;
     // Still the password that was proved: a change or recovery that landed

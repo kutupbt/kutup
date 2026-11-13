@@ -277,6 +277,12 @@ impl Client {
         decode_json(resp)
     }
 
+    /// Keeps a closing account with the grant its sign-in got; the session.
+    pub fn keep_account(&self, grant: &str) -> Result<LoginResponse> {
+        let resp = self.post_json("/auth/keep", &serde_json::json!({ "grant": grant }))?;
+        decode_json(resp)
+    }
+
     pub fn recover_preflight(&self, name: &str) -> Result<RecoverPreflightResponse> {
         let resp = self
             .request(Method::GET, "/auth/recover/preflight")

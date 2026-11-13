@@ -45,6 +45,7 @@ pub async fn once(state: &AppState) -> anyhow::Result<u64> {
         let due: Vec<(Uuid, Option<Uuid>, Option<Uuid>)> = sqlx::query_as(
             "SELECT id, user_id, group_id FROM mail_messages
               WHERE expires_at IS NOT NULL AND expires_at <= now()
+                AND (user_id IS NULL OR NOT kutup_account_held(user_id))
               ORDER BY expires_at LIMIT 500",
         )
         .fetch_all(&state.pool)

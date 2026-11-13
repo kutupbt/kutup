@@ -482,7 +482,12 @@ pub struct CreateAdminUserRequest {
 #[serde(rename_all = "camelCase")]
 pub struct UpdateAdminUserRequest {
     pub storage_quota_bytes: Option<i64>,
+    /// False suspends the account; true makes a suspended or closing account
+    /// active again (a closing one is kept).
     pub is_active: Option<bool>,
+    /// Why it is suspended (with `isActive: false`): `admin` (the default),
+    /// `operator_order` or `security`.
+    pub suspended_reason: Option<String>,
     pub is_admin: Option<bool>,
 }
 

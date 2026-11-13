@@ -154,6 +154,44 @@ append-only (A8's rules):
 Retention is a site setting, default 3 years. The core emits these events and
 keeps them; reports on them are operator tooling.
 
+**As built (L4, A5 and A7):**
+- `users.state` (`active`, `suspended` with `suspended_reason`, `closing` with
+  `closing_by` and `closes_at`), `state_changed_at`, `purpose_ended_at` (set
+  when closing, cleared when kept). `is_active` stays, generated as
+  `state = 'active'`, for the queries that route, deliver and sign in;
+  nothing writes it.
+- Closing: `POST /api/user/close` with a reauth grant (`close`), or an
+  admin's `POST /api/admin/users/{id}/close`. Every sign-in and grant ends. A
+  sign-in that passes every step gets no session but a grant (`keep`, no
+  session, minutes); `POST /api/auth/keep` makes the account active again and
+  answers as the sign-in. An admin keeps it with `isActive: true`. Either
+  only before `closes_at` (or under a hold): after it the job may be deleting
+  the account, and a keep would leave it active and emptied. The
+  closing job (`crate::account_closing`, every five minutes, 20 at a time)
+  deletes accounts past `closes_at` (`account_closing_days`, default 14).
+- Deletion (`account_closing::destroy`, for the job and an admin's delete):
+  the purges, names held, account id retired, the row deleted (its data key
+  cascades), and the destruction event, in one transaction that checks the
+  hold again.
+- Legal hold: `legal_hold_reference`, `_at`, `_by`; set and lifted by an admin
+  (`user.legalHold.set` / `.clear` in the admin log). It refuses an admin's
+  delete and reset (`409 legalHold`), holds the closing job back, and the
+  retention jobs pass the account's sessions and security events by; the
+  admin log is pruned only up to its oldest row about a held account, so the
+  chain stays whole.
+- The log is `account_keys.destruction_events`, not in `public`: the key dump
+  holds it, so a restore replays a log as new as its keys. Subjects:
+  `kutup_crypto::server_data::destruction_subject`, HKDF of a server key list
+  entry over the account id, one per entry present (`subject_key_ids`,
+  `subjects`), so a rotation later still matches. Bulk deletions (security
+  events, admin log, sessions, the log itself, by retention) are one row with
+  a `count` and no subject. `share_link` and `backup` come with L5 and with a
+  backup job that records its pruning.
+- Replay: at start, before serving, every account whose subject the log holds
+  loses its data key and is closed at once (`closing_by = 'restore'`), for
+  the closing job to delete it again.
+- No email notice yet: it comes with the recovery email.
+
 ## A8. Append-only security and admin logs
 
 - **Two logs stay two:**

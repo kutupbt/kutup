@@ -28,6 +28,7 @@ function Stat({ label, value, detail }: { label: string; value: string | null; d
 
 export function UserStatus({ user }: { user: UserRow }) {
   const { t } = useTranslation()
+  if (user.state === 'closing') return <Badge variant="warn">{t('admin.users.closing')}</Badge>
   if (!user.isActive) return <Badge variant="neutral">{t('admin.users.disabled')}</Badge>
   if (user.isFirstLogin) return <Badge variant="warn">{t('admin.users.awaitingSetup')}</Badge>
   return <Badge variant="ok">{t('admin.users.active')}</Badge>

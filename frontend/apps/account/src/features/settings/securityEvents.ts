@@ -19,6 +19,8 @@ const KNOWN = new Set([
   'sessionRevoked',
   'allSessionsRevoked',
   'adminAccess',
+  'accountClosing',
+  'accountKept',
 ])
 /**
  * Events about a name, or a named security key: their text names it

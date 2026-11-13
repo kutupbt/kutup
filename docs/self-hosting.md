@@ -676,6 +676,32 @@ backups** (Server settings → Privacy and retention, default 7 days). An
 account deleted, or reset, more than that long ago has its key in no backup,
 so what the server sealed for it can't be read from any copy.
 
+The same schema holds the **destruction log** (docs/plans/server-personal-data.md,
+A7): what was deleted, when and by whom, naming each account only by keyed
+hashes of its id under the server key list's entries. A restore takes it
+from the newest key dump, and before serving anything the server finds the
+restored accounts it names, destroys their keys and closes them at once, so
+the closing job deletes them again. Restore the current server key list with
+it, not an older one: the hashes are made under the entries in use when the
+account was deleted. The log is kept **Keep the destruction log** days
+(default 1095), longer than any backup.
+
+## Closing and deleting accounts
+
+An account's owner deletes it in Settings → Account → Delete account (after
+their password), and an administrator in the admin console (Close account,
+or Delete account at once). A closed account is **closing** for **Wait before
+deleting a closed account** days (Privacy and retention, default 14): its
+sign-ins end, and a sign-in before then is offered to keep it. Then the
+server deletes it with everything in it, its row and its data key, and
+writes a destruction event.
+
+A **legal hold** (admin console → the account → Legal hold, with a
+reference) stops every deletion of the account and of anything of it: the
+closing job waits, an administrator's delete or reset is refused, and the
+retention jobs pass its sessions, security events and admin-log rows by.
+Setting and lifting a hold are in the admin activity log.
+
 The same goes for `MAIL_FORWARDING_KEYS`, when Mail's end-to-end forwarding
 is on (docs/plans/mail-forwarding.md): the proxy factors in the database are
 sealed under it, so a dump alone doesn't hold them. A database restored
@@ -758,11 +784,13 @@ docker compose up -d --wait postgres
 scripts/backup-postgres.sh --list                  # database dumps, then "keys: …"
 scripts/backup-postgres.sh --fetch <name> kutup.dump
 docker compose exec -T postgres pg_restore -U kutup -d kutup --clean --if-exists --no-owner < kutup.dump
-# The account data keys: always the NEWEST key dump, whichever database dump
-# you restored. Keys of accounts deleted since are in it no more, so their
-# sealed fields stay unreadable. It may hold keys of accounts made after the
-# database dump: those go before the foreign key is added back, which would
-# fail on them (and leave the keys without their cascade).
+# The account data keys and the destruction log: always the NEWEST key dump,
+# whichever database dump you restored. Keys of accounts deleted since are in
+# it no more, so their sealed fields stay unreadable; at start the server
+# deletes those accounts again (their rows came back with the database dump).
+# It may hold keys of accounts made after the database dump: those go before
+# the foreign key is added back, which would fail on them (and leave the keys
+# without their cascade).
 scripts/backup-postgres.sh --fetch keys:<newest key dump> keys.dump
 docker compose exec -T postgres pg_restore -U kutup -d kutup --clean --if-exists --no-owner \
   --section=pre-data --section=data < keys.dump
@@ -1251,6 +1279,12 @@ if any.
 
     The server refuses to start without an entry that still wraps keys,
     naming each such entry and how many keys it wraps.
+  - **The destruction log names deleted accounts under it** (A7): each event
+    holds a keyed hash of the account under every entry in the list at the
+    time, so a restore can find accounts deleted since its dump. Keep an
+    entry while events made only under it (or older entries) are kept
+    (Keep the destruction log, default 1095 days): the server refuses to
+    start while a kept event names no entry of the list.
 - **Group send endorsement keys:** made on first start when `CHAT_GROUPS`
   and federation are on, stored sealed (above). `kutup-server chat-zk-keys
   rotate` makes a new key that issues from then on; the old one keeps
