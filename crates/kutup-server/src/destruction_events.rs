@@ -328,11 +328,9 @@ mod tests {
             .unwrap();
         // Its event goes too (as the owner): left, it names entry 7, which
         // the server's own list lacks, and the server would refuse to start.
-        sqlx::query(
-            "DELETE FROM account_keys.destruction_events WHERE subject_key_ids = '{7}'",
-        )
-        .execute(&pool)
-        .await
-        .unwrap();
+        sqlx::query("DELETE FROM account_keys.destruction_events WHERE subject_key_ids = '{7}'")
+            .execute(&pool)
+            .await
+            .unwrap();
     }
 }
