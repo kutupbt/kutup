@@ -28,7 +28,8 @@ export type LoginStart = { purpose: 'session'; name: string } | { purpose: 'reau
  * Runs `login/start` and `login/finish` for `password`: the server's answer
  * to the finish, and the sign-in (holding the export key, to open the master
  * key with; close it when done). A wrong password throws `OpaqueAuthFailed`
- * before anything is sent to finish. A reauth names no account: the server
+ * before anything is sent to finish: the sign-in is ended with `login/abort`
+ * instead, so the account's security log counts it. A reauth names no account: the server
  * takes the session's own, so a name changed elsewhere (a rename) cannot
  * make it fail.
  */
@@ -39,7 +40,14 @@ export async function opaqueLogin<T>(password: string, start: LoginStart): Promi
       ...start,
       credentialRequest: signIn.request,
     })
-    const credentialFinalization = await signIn.finish(started.credentialResponse)
+    let credentialFinalization: string
+    try {
+      credentialFinalization = await signIn.finish(started.credentialResponse)
+    } catch (error) {
+      // Best effort: the server drops an unfinished sign-in anyway.
+      void api.post('/auth/login/abort', { loginId: started.loginId }).catch(() => undefined)
+      throw error
+    }
     const { data } = await api.post<T>('/auth/login/finish', { loginId: started.loginId, credentialFinalization })
     return { data, signIn }
   } catch (error) {

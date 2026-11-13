@@ -86,6 +86,16 @@ impl Client {
         super::decode_json(resp)
     }
 
+    /// Ends a sign-in or reauth whose password did not open the server's
+    /// answer (the account's security log counts a wrong password). Best
+    /// effort: the server drops it unfinished anyway.
+    pub fn login_abort(&self, login_id: &str) {
+        let _ = self
+            .request(Method::POST, "/auth/login/abort")
+            .json(&serde_json::json!({ "loginId": login_id }))
+            .send();
+    }
+
     /// Finishes a reauth: its one-time grant.
     pub fn reauth_finish(&self, login_id: &str, finalization: &[u8]) -> Result<String> {
         let resp = self
