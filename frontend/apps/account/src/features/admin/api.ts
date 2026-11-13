@@ -109,6 +109,8 @@ export type UserPatch = Partial<{
   /** False suspends (with `suspendedReason`); true makes a suspended or closing account active. */
   isActive: boolean
   suspendedReason: SuspendedReason
+  /** Whether it may share by public link. */
+  publicSharing: 'on' | 'off'
   isAdmin: boolean
   storageQuotaBytes: number
 }>
@@ -366,8 +368,10 @@ export interface LinkReport {
   link: string | null
   createdAt: string
   resolvedAt: string | null
-  resolution: 'dismissed' | 'removed' | 'disabled' | null
+  resolution: 'dismissed' | 'removed' | 'disabled' | 'blocked' | null
   shareId: string
+  /** Why an operator blocked the link; null while it isn't blocked. */
+  shareBlockedReason: BlockReason | null
   shareType: 'collection' | 'file'
   shareCreatedAt: string
   shareRemovedAt: string | null
@@ -430,6 +434,22 @@ export function useLinkReports(status: 'open' | 'resolved') {
 export function useDismissReport() {
   return useAdminMutation(async (id: string) => {
     await api.post(`/admin/reports/${encodeURIComponent(id)}/dismiss`)
+  })
+}
+
+/** Why an operator blocks a link (docs/plans/server-personal-data.md, A11). */
+export type BlockReason = 'legal_order' | 'abuse' | 'other'
+
+/** Blocks a public link: 451 for a legal order, 410 otherwise; its open reports close. */
+export function useBlockLink() {
+  return useAdminMutation(async ({ shareId, reason, reference }: { shareId: string; reason: BlockReason; reference: string }) => {
+    await api.post(`/admin/shares/${encodeURIComponent(shareId)}/block`, { reason, reference: reference.trim() || undefined })
+  })
+}
+
+export function useUnblockLink() {
+  return useAdminMutation(async (shareId: string) => {
+    await api.delete(`/admin/shares/${encodeURIComponent(shareId)}/block`)
   })
 }
 

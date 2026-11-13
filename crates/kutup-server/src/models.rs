@@ -62,6 +62,9 @@ pub struct SettingsResponse {
     pub old_address_receive_days: i64,
     /// The largest `.kdbx` file Kutup Pass takes in an upload, in bytes.
     pub pass_vault_max_bytes: i64,
+    /// Who may open public links: `on`, `off` or `signed_in` (the share
+    /// dialogs say why links are off).
+    pub public_sharing: crate::public_sharing::PublicSharing,
 }
 
 /// What the feedback form offers besides sending to the administrators.
@@ -78,6 +81,9 @@ pub struct FeedbackSettings {
 pub struct AdminSettingsResponse {
     /// Who may register: `on`, `code` (with a referral code) or `off`.
     pub registration_mode: crate::registration::RegistrationMode,
+    /// Who may open public links: `on`, `off` or `signed_in`
+    /// (docs/plans/server-personal-data.md, A11).
+    pub public_sharing: crate::public_sharing::PublicSharing,
     /// The storage quota new accounts get. Existing accounts keep theirs.
     pub default_storage_quota_bytes: i64,
     /// Retention for unread Chat mailbox ciphertext. Zero disables expiry.
@@ -154,6 +160,9 @@ pub struct MeResponse {
     pub version_retention_days: i32,
     /// Where the account's rename chain stands (`sequence` 0 and no `digest`
     /// before a first rename): what its own devices anchor to.
+    /// Whether this account may share by public link (`on`, `off`), as an
+    /// administrator set it; the site's switch is in the public settings.
+    pub public_sharing: String,
     pub renames: RenameAnchor,
 }
 
@@ -488,6 +497,8 @@ pub struct UpdateAdminUserRequest {
     /// Why it is suspended (with `isActive: false`): `admin` (the default),
     /// `operator_order` or `security`.
     pub suspended_reason: Option<String>,
+    /// Whether it may share by public link: `on` or `off`.
+    pub public_sharing: Option<String>,
     pub is_admin: Option<bool>,
 }
 
@@ -496,6 +507,8 @@ pub struct UpdateAdminUserRequest {
 #[serde(rename_all = "camelCase")]
 pub struct UpdateAdminSettingsRequest {
     pub registration_mode: Option<crate::registration::RegistrationMode>,
+    /// Who may open public links: `on`, `off` or `signed_in`.
+    pub public_sharing: Option<crate::public_sharing::PublicSharing>,
     pub default_storage_quota_bytes: Option<i64>,
     pub chat_mailbox_retention_days: Option<i64>,
     pub chat_media_delivery_retention_days: Option<i64>,

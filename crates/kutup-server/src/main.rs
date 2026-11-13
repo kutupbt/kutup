@@ -58,6 +58,7 @@ mod openapi;
 mod organizations;
 mod photos;
 mod public_fetch;
+mod public_sharing;
 mod ratelimit;
 mod registration;
 mod remote_manifests;
@@ -1920,20 +1921,29 @@ fn build_router(state: AppState) -> Router {
         // --- Public shares. Create is authenticated; the read/download endpoints are
         // anonymous (the token is the capability). ---
         .route("/api/share", post(shares::create_public_share))
-        .route("/api/share/:token", get(shares::get_public_share))
+        .route(
+            "/api/share/:token",
+            get(shares::get_public_share).route_layer(from_fn(middleware::no_store)),
+        )
         .route(
             "/api/share/:token/files",
-            get(shares::list_public_share_files),
+            get(shares::list_public_share_files).route_layer(from_fn(middleware::no_store)),
         )
-        .route("/api/share/:token/epochs", get(shares::public_share_epochs))
-        .route("/api/share/:token/album", get(shares::public_album_items))
+        .route(
+            "/api/share/:token/epochs",
+            get(shares::public_share_epochs).route_layer(from_fn(middleware::no_store)),
+        )
+        .route(
+            "/api/share/:token/album",
+            get(shares::public_album_items).route_layer(from_fn(middleware::no_store)),
+        )
         .route(
             "/api/share/:token/thumbnails/:fileId/:variant",
-            get(shares::public_thumbnail),
+            get(shares::public_thumbnail).route_layer(from_fn(middleware::no_store)),
         )
         .route(
             "/api/share/:token/state/:fileId",
-            get(shares::public_share_state),
+            get(shares::public_share_state).route_layer(from_fn(middleware::no_store)),
         )
         .route(
             "/api/share/:token/report",
@@ -1942,11 +1952,11 @@ fn build_router(state: AppState) -> Router {
         )
         .route(
             "/api/share/:token/files/:fileId/assets/:assetId",
-            get(shares::public_share_asset),
+            get(shares::public_share_asset).route_layer(from_fn(middleware::no_store)),
         )
         .route(
             "/api/share/:token/download/:fileId",
-            get(shares::download_public_share_file),
+            get(shares::download_public_share_file).route_layer(from_fn(middleware::no_store)),
         )
         // --- Server-to-server endpoints. Every feature uses the shared v2
         // identity, discovery, policy, pinning, replay, and signed transport. ---
@@ -2358,6 +2368,10 @@ fn build_router(state: AppState) -> Router {
                 .route(
                     "/api/admin/reports/:id/remove-link",
                     post(link_reports::remove_reported_link),
+                )
+                .route(
+                    "/api/admin/shares/:id/block",
+                    post(link_reports::block_link).delete(link_reports::unblock_link),
                 )
                 .route("/api/admin/feedback", get(feedback::list_feedback))
                 .route(

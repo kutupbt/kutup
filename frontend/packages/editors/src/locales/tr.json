@@ -285,6 +285,22 @@
         "title": "Bu bağlantı kaldırıldı",
         "description": "Sunucunun yöneticileri onu kaldırdı. Gösterdikleri artık burada yok."
       },
+      "blocked": {
+        "title": "Bu bağlantı engellendi",
+        "description": "Sunucunun işletmecileri bu bağlantıyı engelledi. Gösterdiği içerik burada artık kullanılamıyor."
+      },
+      "blockedLegal": {
+        "title": "Bu bağlantı hukuki nedenlerle kullanılamıyor",
+        "description": "Sunucunun işletmecileri bir yasal karar üzerine engelledi."
+      },
+      "sharingOff": {
+        "title": "Herkese açık bağlantılar kapalı",
+        "description": "Bu tür bağlantılar şu an bu sunucuda açılmıyor."
+      },
+      "signInRequired": {
+        "title": "Bu bağlantıyı açmak için oturum açın",
+        "description": "Bu sunucuda herkese açık bağlantılar yalnızca oturum açmış kişiler için açılır. Oturum açın, sonra bağlantıyı yeniden açın."
+      },
       "badKey": {
         "title": "Bu bağlantının anahtarı uymuyor",
         "description": "Bağlantı değiştirilmiş ya da eksik kopyalanmış. Bağlantının tamamını yeniden isteyin."

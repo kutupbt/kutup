@@ -296,6 +296,8 @@ export interface FileLink {
   keyGeneration: number
   expiresAt: string | null
   createdAt: string
+  /** Why an operator blocked what the link reaches; it doesn't open until they lift it. */
+  blockedReason?: 'legal_order' | 'abuse' | 'other'
 }
 
 /** Someone on another server the file is shared with. */

@@ -30,6 +30,7 @@ import { canonicalName } from '@kutup/drive-core/names'
 import { useFolders, type FolderIndex } from '@kutup/drive-core/folders'
 import type { DriveFile, Folder } from '@kutup/drive-core/model'
 import { useCreatePublicLink, useRenameFile, useRenameFolder, useTrashFile, useTrashFolder } from '@kutup/drive-core/mutations'
+import { isTargetBlocked, sharingOffScope } from '@kutup/drive-core/publicSharing'
 import { folderPath, openFile } from '@kutup/editors/paths'
 import { isListName } from '@kutup/map/list'
 import { moveRefusal, type MoveRefusal } from '../drive/move'
@@ -328,7 +329,16 @@ export function FolderPage() {
             onSelect: () =>
               publicLink.mutate(f, {
                 onSuccess: (url) => setDialog({ kind: 'link', url }),
-                onError: (error) => toast.error(apiErrorMessage(error, t('drive.linkFailed'))),
+                onError: (error) => {
+                  const off = sharingOffScope(error)
+                  toast.error(
+                    off
+                      ? t(`publicSharing.off.${off}`)
+                      : isTargetBlocked(error)
+                        ? t('publicSharing.targetBlocked')
+                        : apiErrorMessage(error, t('drive.linkFailed')),
+                  )
+                },
               }),
           },
           { id: 'rename', label: t('drive.actions.rename'), icon: <Pencil />, onSelect: () => setDialog({ kind: 'rename', target }), separated: true },

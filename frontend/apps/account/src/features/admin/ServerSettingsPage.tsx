@@ -13,13 +13,14 @@ import { PageBody, PageHeader, Section } from '@kutup/ui/components/page'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@kutup/ui/components/select'
 import { LoadingPanel } from '@kutup/ui/components/states'
 import { apiErrorMessage } from '@kutup/ui/lib/apiError'
-import type { AdminSettings, RegistrationMode, RegistrySetting, SettingSection } from '@kutup/session/api-types'
+import type { AdminSettings, PublicSharing, RegistrationMode, RegistrySetting, SettingSection } from '@kutup/session/api-types'
 import { SETTING_LABELS } from './limitLabels'
 import { useAdminSettings, useSettingsRegistry, useUpdateAdminSettings } from './api'
 import { Choice } from './federation/Choice'
 import { bytesToGib, gibToBytes } from './helpers'
 
 const MODES: readonly RegistrationMode[] = ['on', 'code', 'off']
+const SHARING: readonly PublicSharing[] = ['on', 'signed_in', 'off']
 
 /** The server's bounds (site_settings::validate_chat_delivery_retention_days). */
 const MAX_RETENTION_DAYS = 3650
@@ -62,6 +63,7 @@ function ServerSettingsForm({ settings, registry }: { settings: AdminSettings; r
   const linkJoins = z.coerce.number<number>().int(t('admin.settings.groupLinkJoinsRange')).min(1, t('admin.settings.groupLinkJoinsRange')).max(MAX_LINK_JOINS, t('admin.settings.groupLinkJoinsRange'))
   const schema = z.object({
     registrationMode: z.enum(['on', 'code', 'off']),
+    publicSharing: z.enum(['on', 'signed_in', 'off']),
     quotaGib: z.coerce.number<number>().positive(t('admin.quota.positive')),
     mailboxDays: days,
     mediaDays: days,
@@ -86,6 +88,7 @@ function ServerSettingsForm({ settings, registry }: { settings: AdminSettings; r
   useEffect(() => {
     reset({
       registrationMode: settings.registrationMode,
+      publicSharing: settings.publicSharing,
       quotaGib: bytesToGib(settings.defaultStorageQuotaBytes),
       mailboxDays: settings.chatMailboxRetentionDays,
       mediaDays: settings.chatMediaDeliveryRetentionDays,
@@ -103,6 +106,7 @@ function ServerSettingsForm({ settings, registry }: { settings: AdminSettings; r
     update.mutate(
       {
         registrationMode: v.registrationMode,
+        publicSharing: v.publicSharing,
         defaultStorageQuotaBytes: gibToBytes(v.quotaGib),
         chatMailboxRetentionDays: v.mailboxDays,
         chatMediaDeliveryRetentionDays: v.mediaDays,
@@ -141,6 +145,19 @@ function ServerSettingsForm({ settings, registry }: { settings: AdminSettings; r
                       name="registrationMode"
                       render={({ field }) => (
                         <Choice value={field.value} options={MODES} labelPrefix="admin.settings.registrationMode" onChange={field.onChange} ariaLabel={t('admin.settings.registration')} />
+                      )}
+                    />
+                  )}
+                </Field>
+              </div>
+              <div className="mt-5 max-w-sm">
+                <Field label={t('admin.settings.publicSharing')} description={t('admin.settings.publicSharingHint')}>
+                  {() => (
+                    <Controller
+                      control={control}
+                      name="publicSharing"
+                      render={({ field }) => (
+                        <Choice value={field.value} options={SHARING} labelPrefix="admin.settings.publicSharingMode" onChange={field.onChange} ariaLabel={t('admin.settings.publicSharing')} />
                       )}
                     />
                   )}

@@ -38,6 +38,8 @@ export interface AccessLink {
   ownerLinkKeyEnvelope: string
   expiresAt: string | null
   createdAt: string
+  /** Why an operator blocked what the link reaches; it doesn't open until they lift it. */
+  blockedReason?: 'legal_order' | 'abuse' | 'other'
 }
 
 export interface AccessFederated {

@@ -686,6 +686,17 @@ it, not an older one: the hashes are made under the entries in use when the
 account was deleted. The log is kept **Keep the destruction log** days
 (default 1095), longer than any backup.
 
+## Public links
+
+Whether "anyone with the link" works is yours to set (docs/plans/server-personal-data.md,
+A11). **Server settings → Accounts → Public links**: anyone with the link,
+only people signed in to this server (a test server keeps its links among
+its own accounts), or off. An administrator turns them off for one account
+on its user page. A link that breaks the rules can be blocked from the
+Reports page: under a legal order it answers `451 Unavailable For Legal
+Reasons`, otherwise `410`; the reference you give (an order's number) is
+seen only by administrators, and the block can be lifted.
+
 ## Closing and deleting accounts
 
 An account's owner deletes it in Settings → Account → Delete account (after
