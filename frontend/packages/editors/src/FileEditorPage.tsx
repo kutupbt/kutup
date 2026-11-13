@@ -22,6 +22,7 @@ import { downloadFile, FsaRequiredError } from './files/downloads'
 import { filesKey, useFolderFiles } from '@kutup/drive-core/files'
 import { currentContentOf, fileKeyAt, versionContentOf } from '@kutup/drive-core/keyring'
 import { rekeyFile } from '@kutup/drive-core/rekey'
+import { openPlayback } from '@kutup/drive-core/playback'
 import { shareRole, useSharedFiles, type ShareRole } from '@kutup/drive-core/fileShares'
 import { useFolders } from '@kutup/drive-core/folders'
 import { useRenameFile } from '@kutup/drive-core/mutations'
@@ -54,8 +55,9 @@ import type { WhiteboardEditorHandle } from './whiteboard/WhiteboardEditor'
 import { hash } from '@kutup/crypto/hash'
 
 /**
- * Decrypted content lives entirely in tab memory, so a 2 GB video would take
- * the tab down. Anything larger is downloaded instead of opened.
+ * Decrypted content lives entirely in tab memory, so a large picture or PDF
+ * would take the tab down. Anything larger is downloaded instead of opened.
+ * Video and audio stream instead, whatever their size.
  */
 const MAX_OPEN_BYTES = 100 * 1024 * 1024
 
@@ -68,7 +70,7 @@ type Opened =
   /** Nothing in the browser opens it: offer the download. */
   | { kind: 'none' }
 
-type Failure = 'notFound' | 'undecryptable' | 'tooLarge' | 'loadFailed' | 'waitingForOwner'
+type Failure = 'notFound' | 'undecryptable' | 'tooLarge' | 'mediaTooLarge' | 'busy' | 'loadFailed' | 'waitingForOwner'
 
 interface Keys {
   /** Where new saves and frames go: the file's current key and generation. */
@@ -203,6 +205,8 @@ function OpenFile({ cid, fid }: { cid: string | null; fid: string }) {
 
     let cancelled = false
     let blobUrl: string | null = null
+    let closePlayback: (() => void) | null = null
+    const controller = new AbortController()
     void (async () => {
       const location = fileLocation(container)
       const remote = location.kind !== 'local'
@@ -229,6 +233,25 @@ function OpenFile({ cid, fid }: { cid: string | null; fid: string }) {
       if (!editor && !viewer) {
         setKeys({ target, fileKeyAt: keyOf })
         setOpened({ kind: 'none' })
+        return
+      }
+      // Video and audio stream (docs/plans/drive-block-format.md §4): a
+      // seek fetches one block, and the file's size doesn't matter.
+      if (!editor && (viewer?.kind === 'video' || viewer?.kind === 'audio')) {
+        try {
+          const playback = await openPlayback(container, f, controller.signal)
+          if (cancelled) {
+            if (playback.kind === 'ready') playback.close()
+            return
+          }
+          if (playback.kind === 'ready') {
+            closePlayback = playback.close
+            setKeys({ target, fileKeyAt: keyOf })
+            setOpened({ kind: 'viewer', blobUrl: playback.src, mimeType: viewer.mimeType })
+          } else setFailure(playback.kind === 'busy' ? 'busy' : 'mediaTooLarge')
+        } catch {
+          if (!cancelled) setFailure('loadFailed')
+        }
         return
       }
       if (f.size > MAX_OPEN_BYTES) {
@@ -270,6 +293,8 @@ function OpenFile({ cid, fid }: { cid: string | null; fid: string }) {
     })()
     return () => {
       cancelled = true
+      controller.abort()
+      closePlayback?.()
       if (blobUrl) URL.revokeObjectURL(blobUrl)
     }
   }, [picked, queryClient, reopen, openAt])
@@ -472,7 +497,9 @@ function FailurePanel({ failure, folder, file }: { failure: Failure; folder?: Fo
           size: formatBytes(file?.size ?? 0, i18n.language),
           limit: formatBytes(MAX_OPEN_BYTES, i18n.language),
         })
-      : t(`file.${failure}`)
+      : failure === 'mediaTooLarge'
+        ? t('file.mediaTooLarge', { size: formatBytes(file?.size ?? 0, i18n.language) })
+        : t(`file.${failure}`)
   return (
     <div className="flex min-h-svh items-center justify-center bg-background p-6">
       <div className="max-w-md space-y-4 text-center">
@@ -484,7 +511,7 @@ function FailurePanel({ failure, folder, file }: { failure: Failure; folder?: Fo
               <ArrowLeft /> {back.app === 'office' ? t('file.backToOffice') : t('file.backToDrive')}
             </BackLink>
           </Button>
-          {failure === 'tooLarge' ? (
+          {failure === 'tooLarge' || failure === 'mediaTooLarge' ? (
             <Button onClick={() => void download()}>
               <Download /> {t('file.actions.download')}
             </Button>

@@ -238,6 +238,8 @@
     "notFound": "Çöp kutusuna taşınmış olabilir ya da klasörüne artık erişimin olmayabilir.",
     "undecryptable": "Anahtarları hesabınla çözülemedi. Klasörün sahibinden yeniden paylaşmasını iste.",
     "tooLarge": "{{size}} boyutuyla tarayıcıda açılamayacak kadar büyük (sınır {{limit}}). Bunun yerine indir.",
+    "mediaTooLarge": "{{size}} boyutuyla bu tarayıcıda oynatılamayacak kadar büyük; tarayıcı burada akışla oynatamıyor. Bunun yerine indir.",
+    "busy": "Bu sekmede çok fazla video ya da ses oynuyor. Bunu oynatmak için birini kapat.",
     "loadFailed": "Yüklenemedi. Bağlantını kontrol edip yeniden dene.",
     "noPreviewTitle": "Bu dosya türü için önizleme yok",
     "noPreview": "Cihazında açmak için indir.",

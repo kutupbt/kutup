@@ -2,25 +2,21 @@
 // §4): streamed through Kutup's service worker from the block reader, so a
 // seek fetches one block and memory doesn't grow with the file; without a
 // service worker, the whole file into a Blob, up to
-// `drive.stream.blob_fallback_max_bytes`. Photos' viewer and Drive's Quick
-// Look both play this way.
+// `drive.stream.blob_fallback_max_bytes`. Drive's file page and Quick Look,
+// Photos' viewer and the public links' players all play this way.
 
 import { useEffect, useState } from 'react'
 import { driveStreamLimits } from '@kutup/files/stream/limits'
-import { openPlayerStream, streamingAvailable, TooManyStreams } from '@kutup/files/stream/page'
+import { openPlayerStream } from '@kutup/files/stream/page'
+import type { DriveObjectToOpen } from '@kutup/crypto/driveBlocks'
+import { openMediaPlayback, type Playback } from '@kutup/files/stream/playback'
 import { resolveApiBase } from '@kutup/session/apiBase'
 import { freshAccessToken } from '@kutup/session/client'
 import { currentContentOf } from './keyring'
 import { contentPath, fileLocation, type DriveFile, type Folder } from './model'
 import { readOriginal } from './original'
 
-export type Playback =
-  /** A `/sw/stream/…` URL, or a Blob's URL; `close` ends it. */
-  | { kind: 'ready'; src: string; streamed: boolean; close: () => void }
-  /** No service worker, and larger than the site lets a tab hold in memory. */
-  | { kind: 'tooLarge' }
-  /** This tab plays `drive.stream.max_concurrent` streams already. */
-  | { kind: 'busy' }
+export type { Playback } from '@kutup/files/stream/playback'
 
 type PlaybackFolder = Pick<Folder, 'id' | 'source' | 'remoteShareId' | 'remoteFileShareId'>
 
@@ -32,37 +28,81 @@ export async function openPlayback(
   onProgress?: (read: number) => void,
 ): Promise<Playback> {
   if (!file.fileKey) throw new Error('file is not open')
-  const limits = await driveStreamLimits()
   const mimeType = file.mimeType || 'application/octet-stream'
-  if (limits.maxBytes > 0 && file.size <= limits.maxBytes && (await streamingAvailable())) {
-    signal?.throwIfAborted()
-    const current = await currentContentOf(file)
-    try {
-      const stream = await openPlayerStream({
-        url: `${await resolveApiBase()}${contentPath(fileLocation(folder), file.id)}`,
-        fileKey: current.fileKey,
-        expected: current.expected,
-        accessToken: freshAccessToken,
-        mimeType,
-        limits,
-        signal,
-      })
-      return { kind: 'ready', src: stream.src, streamed: true, close: stream.close }
-    } catch (error) {
-      if (error instanceof TooManyStreams) return { kind: 'busy' }
-      throw error
-    }
-  }
-  if (file.size > limits.blobFallbackMaxBytes) return { kind: 'tooLarge' }
-  const blob = await readOriginal(folder, file, signal, onProgress)
-  const src = URL.createObjectURL(new Blob([blob], { type: mimeType }))
-  return { kind: 'ready', src, streamed: false, close: () => URL.revokeObjectURL(src) }
+  return openMediaPlayback(
+    {
+      size: file.size,
+      mimeType,
+      limits: () => driveStreamLimits(),
+      stream: async (limits, streamSignal) => {
+        const current = await currentContentOf(file)
+        return openPlayerStream({
+          source: {
+            family: 'drive',
+            url: `${await resolveApiBase()}${contentPath(fileLocation(folder), file.id)}`,
+            fileKey: current.fileKey,
+            expected: current.expected,
+          },
+          accessToken: freshAccessToken,
+          mimeType,
+          limits,
+          signal: streamSignal,
+        })
+      },
+      readWhole: (readSignal, progress) => readOriginal(folder, file, readSignal, progress),
+    },
+    signal,
+    onProgress,
+  )
+}
+
+/** What a public link's player opens: everything it needs comes from the link. */
+export interface PublicPlaybackTarget {
+  /** The link's content route, which answers Range without a session. */
+  url: string
+  size: number
+  mimeType: string
+  /** The file key and what the object must be (its metadata's commitment). */
+  content: () => Promise<{ fileKey: Uint8Array; expected: DriveObjectToOpen }>
+  readWhole: (signal?: AbortSignal, onProgress?: (read: number) => void) => Promise<Blob | Uint8Array>
+}
+
+/** A file reached through a public link: no session, so no token, and the default limits. */
+export async function openPublicPlayback(target: PublicPlaybackTarget, signal?: AbortSignal, onProgress?: (read: number) => void): Promise<Playback> {
+  const mimeType = target.mimeType || 'application/octet-stream'
+  return openMediaPlayback(
+    {
+      size: target.size,
+      mimeType,
+      limits: () => driveStreamLimits({ anonymous: true }),
+      stream: async (limits, streamSignal) => {
+        const { fileKey, expected } = await target.content()
+        return openPlayerStream({
+          source: { family: 'drive', url: target.url, fileKey, expected },
+          accessToken: '',
+          mimeType,
+          limits,
+          signal: streamSignal,
+        })
+      },
+      readWhole: target.readWhole,
+    },
+    signal,
+    onProgress,
+  )
 }
 
 export type PlaybackState = { kind: 'loading'; read: number } | Playback | { kind: 'failed' }
 
-/** A file's playback while `enabled`, closed when the file changes or the component goes. */
-export function usePlayback(folder: PlaybackFolder, file: DriveFile, enabled = true): PlaybackState {
+/**
+ * What `open` gives while `enabled`, closed when `key` changes or the
+ * component goes. `key` names what is played (a file and its content).
+ */
+export function usePlaybackOf(
+  open: (signal: AbortSignal, onProgress: (read: number) => void) => Promise<Playback>,
+  key: string,
+  enabled = true,
+): PlaybackState {
   const [state, setState] = useState<PlaybackState>({ kind: 'loading', read: 0 })
   useEffect(() => {
     if (!enabled) return
@@ -70,7 +110,7 @@ export function usePlayback(folder: PlaybackFolder, file: DriveFile, enabled = t
     let opened: Playback | null = null
     let alive = true
     setState({ kind: 'loading', read: 0 })
-    openPlayback(folder, file, controller.signal, (read) => alive && setState({ kind: 'loading', read })).then(
+    open(controller.signal, (read) => alive && setState({ kind: 'loading', read })).then(
       (playback) => {
         opened = playback
         if (!alive) {
@@ -86,8 +126,17 @@ export function usePlayback(folder: PlaybackFolder, file: DriveFile, enabled = t
       controller.abort()
       if (opened?.kind === 'ready') opened.close()
     }
-    // A file is played by its id and the content it has now.
+    // What is played is named by `key`; `open` is a new closure each render.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [file.id, file.content?.revisionId, file.contentKeyGeneration, enabled])
+  }, [key, enabled])
   return state
+}
+
+/** A file's playback while `enabled`, closed when the file changes or the component goes. */
+export function usePlayback(folder: PlaybackFolder, file: DriveFile, enabled = true): PlaybackState {
+  return usePlaybackOf(
+    (signal, onProgress) => openPlayback(folder, file, signal, onProgress),
+    `${file.id}/${file.content?.revisionId ?? ''}/${file.contentKeyGeneration}`,
+    enabled,
+  )
 }

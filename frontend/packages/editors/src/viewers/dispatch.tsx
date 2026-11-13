@@ -27,7 +27,7 @@ const MIME_BY_EXT: Record<string, string> = {
 export interface ViewerProps {
   filename: string
   /** Object URL backed by a Blob made from the decrypted bytes, or (video
-   *  and audio in Quick Look) a service-worker stream URL. The viewer must
+   *  and audio) a service-worker stream URL. The viewer must
    *  NOT keep this URL alive past the parent's unmount; the parent revokes
    *  or closes it. */
   blobUrl: string

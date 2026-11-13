@@ -60,9 +60,12 @@ describe('the page’s stream glue', () => {
   it('holds a tab to drive.stream.max_concurrent streams', async () => {
     await expect(
       openPlayerStream({
-        url: '/api/files/x/download',
-        fileKey: new Uint8Array(32),
-        expected: { fileId: 'x', generation: 1, content: { revisionId: 'r', manifestSha256: 'm' }, size: 1 },
+        source: {
+          family: 'drive',
+          url: '/api/files/x/download',
+          fileKey: new Uint8Array(32),
+          expected: { fileId: 'x', generation: 1, content: { revisionId: 'r', manifestSha256: 'm' }, size: 1 },
+        },
         accessToken: '',
         mimeType: 'video/mp4',
         limits: { ...DEFAULT_STREAM_LIMITS, maxConcurrent: 0 },

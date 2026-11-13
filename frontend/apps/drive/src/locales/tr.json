@@ -311,6 +311,11 @@
     "emptyTitle": "Dosya yok",
     "emptyDescription": "Bu klasörde şu anda dosya yok.",
     "footer": "Kutup · uçtan uca şifreli. Sunucu bu dosyaların içeriğini hiç görmedi.",
+    "player": {
+      "play": "Oynat",
+      "description": "Bu bağlantıdaki anahtarla çözülerek tarayıcında oynar.",
+      "loading": "Açılıyor…"
+    },
     "failure": {
       "missingKey": {
         "title": "Bu bağlantı eksik",

@@ -7,6 +7,7 @@ import { acceptFileMetadata } from '@kutup/drive-core/metadataGuard'
 import type { DriveFile } from '@kutup/drive-core/model'
 import { thumbnailUrl } from '@kutup/drive-core/thumbnails'
 import { fetchDecryptedChunks } from '@kutup/files/download/fetchDecrypt'
+import { openPublicPlayback, type Playback } from '@kutup/drive-core/playback'
 import { mediaKindOf } from '@kutup/files/media'
 import type { MediaMetadataV1 } from '@kutup/crypto'
 import { resolveApiBase } from '@kutup/session/apiBase'
@@ -164,4 +165,24 @@ export async function readPublicOriginal(token: string, photo: PublicPhoto, sign
     parts.push(new Blob([plain as BlobPart]))
   }
   return new Blob(parts, { type: file.mimeType })
+}
+
+/**
+ * A video through the link, for its player: streamed by block through the
+ * service worker (docs/plans/drive-block-format.md §4) with the link's key
+ * and the default limits, or read whole where no worker controls the page.
+ */
+export async function openPublicVideo(token: string, photo: PublicPhoto, signal?: AbortSignal, onProgress?: (read: number) => void): Promise<Playback> {
+  const url = `${await resolveApiBase()}${base(token)}/download/${photo.file.id}`
+  return openPublicPlayback(
+    {
+      url,
+      size: photo.file.size,
+      mimeType: photo.file.mimeType,
+      content: () => currentContentOf(photo.file),
+      readWhole: (readSignal) => readPublicOriginal(token, photo, readSignal),
+    },
+    signal,
+    onProgress,
+  )
 }

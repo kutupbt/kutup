@@ -540,10 +540,17 @@ copied.
    controller: the page waits for one up to 15 s (registration, activation
    and claim), then falls back to a whole download into a Blob, up to
    `drive.stream.blob_fallback_max_bytes`.
-5. **Players.** Photos' viewer and Drive's Quick Look play video and audio
-   from `/sw/stream/{id}`, for files up to `drive.stream.max_bytes`
-   (Photos' `MAX_VIDEO_BYTES` is gone). The limits come from
-   `GET /api/drive/limits`; a public link's page uses the defaults.
+5. **Players.** Photos' viewer, Drive's Quick Look and file page
+   (`FileEditorPage`), Photos' public albums and Drive's public links
+   (a video or song opens in a player on the link's page) play video and
+   audio from `/sw/stream/{id}`, for files up to `drive.stream.max_bytes`
+   (Photos' `MAX_VIDEO_BYTES` and the file page's 100 MB limit for media
+   are gone). One opener does it for all of them (`@kutup/files`
+   `stream/playback.ts` `openMediaPlayback`; drive-core `playback.ts`
+   `openPlayback`, `openPublicPlayback`, `usePlaybackOf`). The limits come
+   from `GET /api/drive/limits`; a public link's page has no session, so
+   its reader fetches with the link's key and no token, under the
+   defaults.
 
 **Seeking.** When the element seeks, it opens a new range request. The
 reader computes ⌊a/B⌋ and fetches only that block (and reads the next one
@@ -1056,12 +1063,18 @@ Each slice is a PR.
    - `kutup-sw.js` (merged with Chat's and Calendar's push workers), its
      stateless stream route and the page glue.
    - Browser regressions 190 and 191 (written, not yet run).
-5. **Players.** Photos' viewer and Drive's Quick Look stream video and audio,
-   and `MAX_VIDEO_BYTES` gave way to `drive.stream.max_bytes` (built with
-   slice 4). Left: the e2e spec of §9 (a long video, seeking, the network
-   log, WebKit, the no-worker fallback), Drive's file page (`FileEditorPage`)
-   and public links' players, which still read the whole file, and
-   downloads through the worker (`/sw/{id}`, open question 7).
+5. **Players.** Built (2026-11-13).
+   - Photos' viewer and Drive's Quick Look (with slice 4), Drive's file page
+     (`FileEditorPage`), Photos' public albums and Drive's public links stream
+     video and audio through one opener (§4, 5).
+   - The e2e spec of §9: `192-stream-long-video` (a two-hour WebM made with
+     ffmpeg, skipped without it; Photos' viewer and Drive's file page seek to
+     1:30:00 and the network log holds the reads to a few blocks; a song on
+     the file page; the Blob fallback with service workers blocked), in the
+     account suite. Written, not yet run. The e2e config runs Chromium only:
+     a WebKit project waits for a host that runs it (the dev VM lacks its
+     libraries).
+   - Left: downloads through the worker (`/sw/{id}`, open question 7).
 6. **Chat.** Attachments and backup media on suite 2; Chat's viewer streams.
 7. **Removal.**
    - `stream.rs`, suite 1, `KUTPDB2`/`KUTPCM1`/`KUTPBM1`, the JS

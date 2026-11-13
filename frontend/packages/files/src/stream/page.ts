@@ -13,10 +13,9 @@
 // Shift-reload, workers turned off): the player falls back to a whole
 // download into a Blob, up to `drive.stream.blob_fallback_max_bytes`.
 
-import type { DriveObjectToOpen } from '@kutup/crypto/driveBlocks'
 import { randomBytes } from '@kutup/crypto/random'
 import { openBlockReader, type AccessToken, type BlockReaderHandle } from '../blockReader/client'
-import { isStreamChunkRequest, speaksWith, STREAM_PROTOCOL_VERSION, type StreamChunkAnswer } from '../blockReader/protocol'
+import { isStreamChunkRequest, speaksWith, STREAM_PROTOCOL_VERSION, type BlockReaderTarget, type StreamChunkAnswer } from '../blockReader/protocol'
 import { readerSettings, type StreamLimits } from './limits'
 
 /** The service worker's script, at scope `/`. */
@@ -160,9 +159,8 @@ export interface PlayerStream {
 }
 
 export interface OpenPlayerStreamOptions {
-  url: string
-  fileKey: Uint8Array
-  expected: DriveObjectToOpen
+  /** The object streamed, and what it must be. */
+  source: BlockReaderTarget
   accessToken: AccessToken
   /** What the player is told the bytes are; the worker serves only audio and video types as themselves. */
   mimeType: string
@@ -171,7 +169,7 @@ export interface OpenPlayerStreamOptions {
 }
 
 /**
- * Opens a stream of a Drive revision for a player: its manifest and signer
+ * Opens a stream of an object (a Drive revision, a Chat attachment) for a player: its manifest and signer
  * checked before the player gets a byte. The caller has made sure a worker
  * controls the page (`streamingAvailable`). Throws `TooManyStreams` at the
  * tab's limit.
@@ -183,9 +181,7 @@ export async function openPlayerStream(options: OpenPlayerStreamOptions): Promis
   try {
     prepareStreaming()
     reader = await openBlockReader({
-      url: options.url,
-      fileKey: options.fileKey,
-      expected: options.expected,
+      source: options.source,
       accessToken: options.accessToken,
       settings: readerSettings(options.limits),
       signal: options.signal,

@@ -64,13 +64,18 @@ export interface BlockReaderSettings {
   responseMaxBytes: number
 }
 
-export interface BlockReaderTarget {
+/** A Drive revision: opened against its metadata's commitment, or its own sealed record. */
+export interface DriveBlockSource {
+  family: 'drive'
   /** The content route, answered with Range. */
   url: string
   fileKey: Uint8Array
   /** What the object must be (the committed content, or a revision by its record). */
   expected: DriveObjectToOpen
 }
+
+/** What a reader opens: one object of a block family, and what it must be. */
+export type BlockReaderTarget = DriveBlockSource
 
 /** Who signed an opened revision's manifest. */
 export interface OpenedSigner {

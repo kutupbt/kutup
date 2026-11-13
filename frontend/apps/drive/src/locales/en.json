@@ -311,6 +311,11 @@
     "emptyTitle": "No files",
     "emptyDescription": "This folder has no files in it right now.",
     "footer": "Kutup · end-to-end encrypted. The server never saw these files' contents.",
+    "player": {
+      "play": "Play",
+      "description": "Plays in your browser, decrypted with the key in this link.",
+      "loading": "Opening…"
+    },
     "failure": {
       "missingKey": {
         "title": "This link is incomplete",

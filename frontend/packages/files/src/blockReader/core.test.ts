@@ -51,7 +51,7 @@ async function sealed(size: number) {
 }
 
 function target(content: ContentCommitment, size: number) {
-  return { url: 'https://drive.kutup.test/api/files/x/download', fileKey, expected: { fileId, generation: 1, content, size } }
+  return { family: 'drive' as const, url: 'https://drive.kutup.test/api/files/x/download', fileKey, expected: { fileId, generation: 1, content, size } }
 }
 
 describe('the block reader', () => {

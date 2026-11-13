@@ -13,7 +13,8 @@ import { LoadingPanel, Spinner } from '@kutup/ui/components/states'
 import { ThemeToggle } from '@kutup/ui/components/theme-toggle'
 import { PublicNotice } from '@kutup/drive-ui/PublicNotice'
 import { formatDuration, formatTaken } from '../library/format'
-import { loadPublicAlbum, PublicAlbumError, publicThumbnail, readPublicOriginal, type PublicPhoto } from './publicAlbum'
+import { loadPublicAlbum, openPublicVideo, PublicAlbumError, publicThumbnail, readPublicOriginal, type PublicPhoto } from './publicAlbum'
+import { usePlaybackOf } from '@kutup/drive-core/playback'
 
 const MAX_ORIGINAL_BYTES = 50 * 1024 * 1024
 
@@ -63,13 +64,13 @@ function Shown({ token, photo }: { token: string; photo: PublicPhoto }) {
   const small = useLinkThumbnail(token, photo, 'sm')
   const preview = large ?? small
   const [url, setUrl] = useState<string | null>(null)
-  const [failed, setFailed] = useState(false)
+  // Videos stream through the link (docs/plans/drive-block-format.md §4): a seek fetches one block.
+  const playback = usePlaybackOf((signal, onProgress) => openPublicVideo(token, photo, signal, onProgress), `${token}/${photo.id}`, photo.kind === 'video')
   useEffect(() => {
-    if (photo.file.size > MAX_ORIGINAL_BYTES && photo.kind === 'image') return
+    if (photo.kind === 'video' || photo.file.size > MAX_ORIGINAL_BYTES) return
     const controller = new AbortController()
     let made: string | null = null
     setUrl(null)
-    setFailed(false)
     void readPublicOriginal(token, photo, controller.signal)
       .then(async (blob) => {
         const name = photo.file.name ?? ''
@@ -80,9 +81,8 @@ function Shown({ token, photo }: { token: string; photo: PublicPhoto }) {
         made = URL.createObjectURL(shown)
         setUrl(made)
       })
-      .catch((error: unknown) => {
-        if (!(error instanceof DOMException && error.name === 'AbortError')) setFailed(true)
-      })
+      // A picture that can't be read shows its preview.
+      .catch(() => {})
     return () => {
       controller.abort()
       if (made) URL.revokeObjectURL(made)
@@ -91,12 +91,20 @@ function Shown({ token, photo }: { token: string; photo: PublicPhoto }) {
   }, [token, photo.id])
 
   if (photo.kind === 'video') {
-    return url ? (
-      <video src={url} controls autoPlay playsInline className="max-h-full max-w-full" aria-label={photo.file.name ?? ''} />
+    return playback.kind === 'ready' ? (
+      <video src={playback.src} controls autoPlay playsInline className="max-h-full max-w-full" aria-label={photo.file.name ?? ''} />
     ) : (
       <div className="flex flex-col items-center gap-2 text-sm">
         {preview ? <img src={preview} alt="" className="max-h-[70svh] max-w-full object-contain opacity-60" /> : null}
-        {failed ? <span>{t('viewer.failed')}</span> : <Spinner label={t('viewer.loadingVideo')} className="text-white" />}
+        {playback.kind === 'failed' ? (
+          <span>{t('viewer.failed')}</span>
+        ) : playback.kind === 'tooLarge' ? (
+          <span>{t('viewer.videoTooLarge')}</span>
+        ) : playback.kind === 'busy' ? (
+          <span>{t('viewer.tooManyStreams')}</span>
+        ) : (
+          <Spinner label={t('viewer.loadingVideo')} className="text-white" />
+        )}
       </div>
     )
   }

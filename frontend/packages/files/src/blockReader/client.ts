@@ -28,7 +28,8 @@ export interface BlockReaderHandle {
   close(): void
 }
 
-export interface OpenBlockReaderOptions extends BlockReaderTarget {
+export interface OpenBlockReaderOptions {
+  source: BlockReaderTarget
   settings: BlockReaderSettings
   accessToken: AccessToken
   signal?: AbortSignal
@@ -79,7 +80,7 @@ async function checkSigner({ handle, signedBy }: Opened): Promise<void> {
 
 async function openInPage(options: OpenBlockReaderOptions): Promise<Opened> {
   let token = await tokenOf(options.accessToken)
-  const reader = await BlockObjectReader.open(options, options.settings, { fetch: (input, init) => fetch(input, init), token: () => token }, options.signal)
+  const reader = await BlockObjectReader.open(options.source, options.settings, { fetch: (input, init) => fetch(input, init), token: () => token }, options.signal)
   const refresh = async () => {
     token = await tokenOf(options.accessToken)
   }
@@ -159,7 +160,7 @@ async function openInWorker(options: OpenBlockReaderOptions): Promise<Opened> {
     const { opened } = await call<'opened'>({
       type: 'open',
       id: nextId++,
-      target: { url: options.url, fileKey: options.fileKey, expected: options.expected },
+      target: options.source,
       settings: options.settings,
       token: await tokenOf(options.accessToken),
     })
