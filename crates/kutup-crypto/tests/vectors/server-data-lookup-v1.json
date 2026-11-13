@@ -1,0 +1,29 @@
+{
+  "cases": [
+    {
+      "purpose": "mailThread",
+      "value": "CAF1234@mail.example.org",
+      "hash": "8jetmkU5lV8hFtXUTFKRP2faJ+SoHN05ddkZX8So5M4="
+    },
+    {
+      "purpose": "mailThread",
+      "value": "caf1234@mail.example.org",
+      "hash": "SMO2JHykMTpoq0pXEcWv8klctI99tkUnP7vhUk7H2fc="
+    },
+    {
+      "purpose": "mailSearchToken",
+      "value": "s\u0000fatura",
+      "hash": "UjuUsqs4wq9lRKxPHadEpi7wXjPMPxsf2JJiR53u7QM="
+    },
+    {
+      "purpose": "mailSearchToken",
+      "value": "f\u0000fatura",
+      "hash": "5m5Yj60t6Vi6teTaXNEMSD2VqddLpx36c7VB2O0aqgk="
+    },
+    {
+      "purpose": "mailSearchToken",
+      "value": "f\u0000ali.veli@ornek.com.tr",
+      "hash": "s1EQ5H4WxOYdEQlJ5uR5XK3N2URvdc2RwhCJcpmm3m8="
+    }
+  ]
+}

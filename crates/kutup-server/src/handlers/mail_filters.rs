@@ -523,17 +523,7 @@ pub async fn apply(
     ))
 }
 
-type RunRow = (
-    Uuid,
-    String,
-    String,
-    String,
-    serde_json::Value,
-    serde_json::Value,
-    String,
-    String,
-    i32,
-);
+type RunRow = (Uuid, String, Option<Vec<u8>>, String, i32);
 
 async fn run_filters(
     state: &AppState,
@@ -546,9 +536,13 @@ async fn run_filters(
     loop {
         let mut tx = state.pool.begin().await?;
         let loaded = filters::load(&mut tx, user_id, only).await?;
+        let opener = crate::mail::sealed::Opener::load_in(
+            &mut tx,
+            crate::account_data::KeyOwner::Account(user_id),
+        )
+        .await?;
         let rows: Vec<RunRow> = sqlx::query_as(
-            "SELECT m.id, m.direction, m.from_address, m.from_name, m.to_list, m.cc_list, m.subject,
-                    COALESCE(a.address, ''), m.attachment_count
+            "SELECT m.id, m.direction, m.headers, COALESCE(a.address, ''), m.attachment_count
                FROM mail_messages m LEFT JOIN mail_addresses a ON a.id = m.address_id
               WHERE m.user_id = $1 AND m.folder NOT IN ('drafts', 'spam', 'trash') AND m.id > $2
               ORDER BY m.id LIMIT $3",
@@ -562,20 +556,15 @@ async fn run_filters(
             tx.commit().await?;
             break;
         }
-        for (id, direction, from_address, from_name, to, cc, subject, address, attachments) in &rows
-        {
-            let from = (!from_address.is_empty()).then(|| Mailbox {
-                address: from_address.clone(),
-                name: from_name.clone(),
-            });
-            let to: Vec<Mailbox> = serde_json::from_value(to.clone()).unwrap_or_default();
-            let cc: Vec<Mailbox> = serde_json::from_value(cc.clone()).unwrap_or_default();
+        for (id, direction, sealed, address, attachments) in &rows {
+            let headers = opener.open(*id, sealed.as_deref());
+            let from: Option<&Mailbox> = headers.from.as_ref().filter(|m| !m.address.is_empty());
             let message = filters::Subject {
-                from: from.as_ref(),
-                to: &to,
-                cc: &cc,
+                from,
+                to: &headers.to,
+                cc: &headers.cc,
                 address,
-                subject,
+                subject: &headers.subject,
                 attachments: *attachments,
             };
             let outcome = filters::outcome(&loaded, &message);

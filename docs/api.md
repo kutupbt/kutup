@@ -2317,8 +2317,16 @@ draft's attachments go with it), and frees their storage.
 `counts`: `[{ "folder", "unread", "total" }]`, one per folder in use plus
 `starred`. `threads/:id`: the thread's messages, oldest first, as in the list.
 
-`GET /api/mail/messages` also takes `q` (subjects and addresses) and the
-folders `starred` and `all` (everything but Spam and Trash). Each message
+`GET /api/mail/messages` also takes `q` (subjects, senders and To/Cc), and
+advanced search's `from` (the sender) and `to` (To, Cc or Bcc), and the
+folders `starred` and `all` (everything but Spam and Trash). Searches match
+**whole words**, every word of the query, folded (case, accents, Turkish
+dotted and dotless I): `fatura ekim` finds "Ekim faturası" only if both words
+are there whole, so `fatur` finds nothing. An address matches whole, by its
+local part or domain (`ali@ornek.com`, `@ornek.com`), or by its words. The
+server keeps headers sealed and only keyed hashes of their words
+(docs/plans/server-personal-data.md, L7), so substring search is gone; body
+search runs in the browser (docs/plans/mail-body-search.md). Each message
 carries `direction` (`inbound` or `outbound`), `bcc` (your sent copies
 only), `inReplyTo` and `references`.
 

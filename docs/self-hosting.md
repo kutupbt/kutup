@@ -665,12 +665,13 @@ durable operator backups.
 The database backups below do not hold `OPAQUE_SETUP_KEYS`, the server key
 list (it is in `.env`), and must not: back it up on its own, somewhere else. A
 database restored without it signs no one in, and the server-side personal
-fields sealed under the account data keys (the authenticator secret, and more
-to come, docs/plans/server-personal-data.md) can't be read (see the security
-notes).
+fields sealed under the account data keys (the authenticator secret, mail
+headers and signatures, docs/plans/server-personal-data.md) can't be read (see
+the security notes).
 
 Each account's data key lives in the schema `account_keys`, which the database
-dump leaves out. `scripts/backup-postgres.sh` dumps it apart, under
+dump leaves out; so does each shared mailbox's (a mail group's), which its
+messages' headers are sealed under. `scripts/backup-postgres.sh` dumps it apart, under
 `database-backups-keys/`, and keeps those dumps only for **Keep account key
 backups** (Server settings → Privacy and retention, default 7 days). An
 account deleted, or reset, more than that long ago has its key in no backup,
@@ -821,16 +822,18 @@ docker compose exec -T postgres pg_restore -U kutup -d kutup --clean --if-exists
 scripts/backup-postgres.sh --fetch keys:<newest key dump> keys.dump
 docker compose exec -T postgres pg_restore -U kutup -d kutup --clean --if-exists --no-owner \
   --section=pre-data --section=data < keys.dump
-docker compose exec -T postgres psql -U kutup -d kutup -v ON_ERROR_STOP=1 -c \
-  "DELETE FROM account_keys.account_data_keys k WHERE NOT EXISTS (SELECT 1 FROM users u WHERE u.id = k.user_id)"
+docker compose exec -T postgres psql -U kutup -d kutup -v ON_ERROR_STOP=1 \
+  -c "DELETE FROM account_keys.account_data_keys k WHERE NOT EXISTS (SELECT 1 FROM users u WHERE u.id = k.user_id)" \
+  -c "DELETE FROM account_keys.mail_group_data_keys k WHERE NOT EXISTS (SELECT 1 FROM mail_groups g WHERE g.id = k.group_id)"
 docker compose exec -T postgres pg_restore -U kutup -d kutup --no-owner --exit-on-error \
   --section=post-data < keys.dump
 docker compose up -d --wait
 ```
 
 The server refuses to start while the account data keys have lost their
-foreign key to the accounts (a restore that skipped the step above): without
-it, deleting an account would no longer destroy its key.
+foreign key to the accounts, or a shared mailbox's keys theirs to the mail
+groups (a restore that skipped the step above): without it, deleting an
+account or a group would no longer destroy its key.
 
 The dump holds accounts, key envelopes and object references; the files'
 ciphertext stays in the object store. A restore therefore returns to the
@@ -1301,7 +1304,8 @@ if any.
 
     ```sh
     docker compose exec -T postgres psql -U kutup -d kutup -c \
-      "SELECT sealing_key_id, count(*) FROM account_keys.account_data_keys GROUP BY 1"
+      "SELECT sealing_key_id, count(*) FROM (SELECT sealing_key_id FROM account_keys.account_data_keys
+         UNION ALL SELECT sealing_key_id FROM account_keys.mail_group_data_keys) k GROUP BY 1"
     ```
 
     The server refuses to start without an entry that still wraps keys,
