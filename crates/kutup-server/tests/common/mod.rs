@@ -281,6 +281,13 @@ pub fn opaque_login(
         .decode(started["credentialResponse"].as_str().unwrap())
         .unwrap();
     let Ok(signed_in) = signing_in.finish(&response) else {
+        // A wrong password: ended, as a client does (the account's log counts it).
+        let r = c
+            .post(format!("{base}/api/auth/login/abort"))
+            .json(&json!({ "loginId": started["loginId"] }))
+            .send()
+            .unwrap();
+        assert_eq!(r.status(), StatusCode::NO_CONTENT);
         return (StatusCode::UNAUTHORIZED, Value::Null, None);
     };
     let r = with_bearer(

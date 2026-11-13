@@ -105,13 +105,14 @@ KUTUP_LIVE_SERVER="http://127.0.0.1:$port" \
   KUTUP_LIVE_DATABASE_URL="postgres://$POSTGRES_USER:$POSTGRES_PASSWORD@127.0.0.1:$db_port/$POSTGRES_DB" \
   cargo test -p kutup-server --test mail_groups_live -- --nocapture --test-threads 1
 # The security log (docs/plans/server-personal-data.md, A8): sign-ins, sign-outs
-# and folded wrong passwords; and, as the owner, the logs append-only for the
+# and folded wrong passwords (a sign-in left unfinished counts); and, as the owner, the logs append-only for the
 # server's role.
 KUTUP_LIVE_SERVER="http://127.0.0.1:$port" \
   KUTUP_LIVE_ADMIN="$test_admin_username:$test_admin_password" \
   cargo test -p kutup-server --test security_log_live -- --nocapture
 KUTUP_LIVE_DATABASE_URL="postgres://$POSTGRES_USER:$POSTGRES_PASSWORD@127.0.0.1:$db_port/$POSTGRES_DB" \
-  cargo test -p kutup-server --bin kutup-server db::tests::live_ -- --nocapture
+  cargo test -p kutup-server --bin kutup-server -- db::tests::live_ audit_log::tests::live_ \
+    grants::tests::live_ --nocapture
 # Each account's data key (docs/plans/server-personal-data.md, A2): the
 # authenticator secret sealed under it, and the key gone with the account.
 KUTUP_LIVE_SERVER="http://127.0.0.1:$port" \

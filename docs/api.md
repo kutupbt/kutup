@@ -226,7 +226,11 @@ every session of the account.
 **Passwords are OPAQUE** (RFC 9807, docs/plans/opaque.md): the server keeps a
 record per account that is useless without an online exchange, and never sees
 the password or anything to test a guess against offline. Sign-in is
-`login/start` then `login/finish`; a new password is `opaque/register/start`
+`login/start` then `login/finish`. A wrong password fails on the client (the
+server's answer does not open), which then sends `POST /api/auth/login/abort`
+`{"loginId"}` (always `204`, no auth) instead of a finish; the account's
+security log counts it, and counts a sign-in left unfinished the same way when
+it expires (two minutes) or newer ones push it out. A new password is `opaque/register/start`
 then `opaque/register/finish` (or the request that creates the account). Every
 binary value is canonical base64 of the `opaque-ke` messages; suite 1 is
 ristretto255, Triple-DH and Argon2id (64 MiB, t = 3, p = 1).
@@ -1239,7 +1243,9 @@ one that is not one of the caller's events is `400`: start from the first page)
 
 - `kind`: `passwordChange`, `recovery`, `rotate`, `adminReset`,
   `accountReset`, the name and two-step kinds, and `signIn`,
-  `signInFailedPassword` (only when the sign-in named this account),
+  `signInFailedPassword` (a sign-in that named this account and did not
+  finish: the client found the password wrong and ended it with
+  `login/abort`, or it was dropped unfinished),
   `signInFailed2fa`, `signOut`, `sessionRevoked`, `allSessionsRevoked`,
   `adminAccess`, `accountClosing` (the owner asked for the account to be
   deleted), `accountKept`. More kinds will come; show an unknown one
