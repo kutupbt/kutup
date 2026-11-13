@@ -39,7 +39,10 @@ pub struct SecurityEventView {
     /// What made it, as the session list shows a session (none for a
     /// recovery or an administrator's).
     client: Option<String>,
-    user_agent: Option<String>,
+    /// Its browser: family, major version and system (never the raw
+    /// `User-Agent`).
+    #[serde(flatten)]
+    family: crate::client_family::ClientFamily,
     /// For a name event: the name it was about (the old one, for a rename);
     /// for a security key's event: the key's name.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -124,7 +127,7 @@ pub async fn list(
                 .acting_session_id
                 .is_some_and(|s| s == own || s == own_root),
             client: e.acting_client,
-            user_agent: e.acting_user_agent,
+            family: e.client,
             by_admin: e.by_admin,
             old_name: e.old_name,
             new_name: e.new_name,

@@ -78,3 +78,42 @@ fn sign_ins_and_wrong_passwords_are_in_the_accounts_log() {
     assert_eq!(of_kind(&page, "signOut").len(), 1, "{page}");
     purge_accounts(&c, &base, &[&user]);
 }
+
+#[test]
+fn a_sessions_browser_is_its_parsed_family() {
+    let Ok(base) = std::env::var("KUTUP_LIVE_SERVER") else {
+        eprintln!("KUTUP_LIVE_SERVER not set; skipping");
+        return;
+    };
+    let user = register(&client(), &base);
+    let firefox = client_builder()
+        .user_agent("Mozilla/5.0 (X11; Linux x86_64; rv:128.0) Gecko/20100101 Firefox/128.0")
+        .build()
+        .unwrap();
+    let session = sign_in(&firefox, &base, &user.username, &user.password);
+    let token = session["accessToken"].as_str().unwrap().to_owned();
+    let sessions: Value = bearer(firefox.get(format!("{base}/api/auth/sessions")), &token)
+        .send()
+        .unwrap()
+        .json()
+        .unwrap();
+    let this = sessions
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|session| session["current"] == true)
+        .expect("this session is listed");
+    assert_eq!(this["browser"], "Firefox");
+    assert_eq!(this["browserMajor"], 128);
+    assert_eq!(this["os"], "Linux");
+    assert!(this.get("userAgent").is_none());
+    // The sign-in's event carries the same family.
+    let page = events(&firefox, &base, &token);
+    let sign_in_event = of_kind(&page, "signIn")
+        .into_iter()
+        .find(|event| event["thisSession"] == true)
+        .expect("this sign-in's event");
+    assert_eq!(sign_in_event["browser"], "Firefox");
+    assert_eq!(sign_in_event["os"], "Linux");
+    purge_accounts(&firefox, &base, &[&user]);
+}

@@ -31,6 +31,24 @@ fn current(keys: &OpaqueSetupKeys) -> AppResult<(u16, &[u8; 32])> {
         .ok_or_else(|| AppError::internal("the server key list (OPAQUE_SETUP_KEYS) is empty"))
 }
 
+/// The server key list, set once at start ([`install`]), for code that runs
+/// inside a transaction and has no state to hand (the security log).
+static KEYS: std::sync::OnceLock<OpaqueSetupKeys> = std::sync::OnceLock::new();
+
+/// The server's pool, for flagging a lost key off the caller's connection.
+static POOL: std::sync::OnceLock<PgPool> = std::sync::OnceLock::new();
+
+/// Keeps the server key list for [`installed`], and the pool. At start, once.
+pub fn install(keys: &OpaqueSetupKeys, pool: &PgPool) {
+    let _ = KEYS.set(keys.clone());
+    let _ = POOL.set(pool.clone());
+}
+
+/// The key list [`install`] kept; none before the server started (unit tests).
+pub fn installed() -> Option<&'static OpaqueSetupKeys> {
+    KEYS.get()
+}
+
 /// The account's data key of `generation` (the newest when None), when it
 /// has one that opens. Never makes a key, and never writes: a key under an
 /// older entry moves to the current one by the batched job
@@ -43,6 +61,17 @@ pub async fn load(
     user_id: Uuid,
     generation: Option<u32>,
 ) -> AppResult<Option<DataKey>> {
+    let mut conn = pool.acquire().await?;
+    load_in(&mut conn, keys, user_id, generation).await
+}
+
+/// [`load`] on a connection, so it runs in the caller's transaction.
+pub async fn load_in(
+    conn: &mut sqlx::PgConnection,
+    keys: &OpaqueSetupKeys,
+    user_id: Uuid,
+    generation: Option<u32>,
+) -> AppResult<Option<DataKey>> {
     let stored: Option<Vec<u8>> = sqlx::query_scalar(
         "SELECT wrapped FROM account_keys.account_data_keys
           WHERE user_id = $1 AND ($2::integer IS NULL OR generation = $2)
@@ -50,7 +79,7 @@ pub async fn load(
     )
     .bind(user_id)
     .bind(generation.map(|g| g as i32))
-    .fetch_optional(pool)
+    .fetch_optional(&mut *conn)
     .await?;
     let Some(wrapped) = stored else {
         return Ok(None);
@@ -61,15 +90,16 @@ pub async fn load(
             // There, but it doesn't open: restored from another deployment,
             // or an entry's bytes changed under its id. Its fields are lost
             // as if it were gone; the operator is told loudly.
-            lost(pool, user_id, &wrapped);
+            lost(user_id, &wrapped);
             Ok(None)
         }
     }
 }
 
 /// A key that doesn't open: an error in the log, and the account flagged for
-/// the admin console. Off the caller's connection, so a read never waits.
-fn lost(pool: &PgPool, user_id: Uuid, wrapped: &[u8]) {
+/// the admin console. Off the caller's connection (on the server's pool, when
+/// installed), so a read never waits.
+fn lost(user_id: Uuid, wrapped: &[u8]) {
     let entry = kutup_crypto::server_data::inspect_wrapped(wrapped)
         .map(|(entry, _)| entry.to_string())
         .unwrap_or_else(|_| "?".into());
@@ -78,23 +108,59 @@ fn lost(pool: &PgPool, user_id: Uuid, wrapped: &[u8]) {
         entry,
         "an account data key does not open under the server key list: its sealed fields are lost"
     );
-    let pool = pool.clone();
-    tokio::spawn(async move {
-        let _ = sqlx::query(
-            "UPDATE users SET data_key_lost_at = now() WHERE id = $1 AND data_key_lost_at IS NULL",
-        )
-        .bind(user_id)
-        .execute(&pool)
-        .await;
-    });
+    if let Some(pool) = POOL.get().cloned() {
+        tokio::spawn(async move {
+            let _ = sqlx::query(
+                "UPDATE users SET data_key_lost_at = now()
+                  WHERE id = $1 AND data_key_lost_at IS NULL",
+            )
+            .bind(user_id)
+            .execute(&pool)
+            .await;
+        });
+    }
+}
+
+/// Every generation of the account's data key that opens, newest first (a
+/// list opens its rows with the one each names). Never makes a key.
+pub async fn load_all_in(
+    conn: &mut sqlx::PgConnection,
+    keys: &OpaqueSetupKeys,
+    user_id: Uuid,
+) -> AppResult<Vec<DataKey>> {
+    let generations: Vec<i32> = sqlx::query_scalar(
+        "SELECT generation FROM account_keys.account_data_keys
+          WHERE user_id = $1 ORDER BY generation DESC",
+    )
+    .bind(user_id)
+    .fetch_all(&mut *conn)
+    .await?;
+    let mut all = Vec::with_capacity(generations.len());
+    for generation in generations {
+        if let Some(key) = load_in(&mut *conn, keys, user_id, Some(generation as u32)).await? {
+            all.push(key);
+        }
+    }
+    Ok(all)
 }
 
 /// The account's data key for sealing: its newest generation [`load`]ed, or
 /// made (wrapped under the current entry) when it has none that opens: a
-/// lost one is followed by a new generation, so new fields seal again. Only
-/// sealing makes one, outside any transaction that holds the account's row.
+/// lost one is followed by a new generation, so new fields seal again.
 pub async fn key(pool: &PgPool, keys: &OpaqueSetupKeys, user_id: Uuid) -> AppResult<DataKey> {
-    if let Some(key) = load(pool, keys, user_id, None).await? {
+    let mut conn = pool.acquire().await?;
+    key_in(&mut conn, keys, user_id).await
+}
+
+/// [`key`] on a connection, so it runs in the caller's transaction (on that
+/// one connection: never a second one while the transaction holds the
+/// account's row).
+pub async fn key_in(
+    conn: &mut sqlx::PgConnection,
+    keys: &OpaqueSetupKeys,
+    user_id: Uuid,
+) -> AppResult<DataKey> {
+    if let Some(key) = load_in(&mut *conn, keys, user_id, None).await? {
         return Ok(key);
     }
     let (current_id, current_entry) = current(keys)?;
@@ -102,7 +168,7 @@ pub async fn key(pool: &PgPool, keys: &OpaqueSetupKeys, user_id: Uuid) -> AppRes
         "SELECT max(generation) FROM account_keys.account_data_keys WHERE user_id = $1",
     )
     .bind(user_id)
-    .fetch_one(pool)
+    .fetch_one(&mut *conn)
     .await?;
     let generation = newest.map_or(GENERATION, |g| g as u32 + 1);
     let key = DataKey::generate(generation).map_err(internal)?;
@@ -119,13 +185,13 @@ pub async fn key(pool: &PgPool, keys: &OpaqueSetupKeys, user_id: Uuid) -> AppRes
     .bind(current_id as i16)
     .bind(generation as i32)
     .bind(&wrapped)
-    .execute(pool)
+    .execute(&mut *conn)
     .await?
     .rows_affected();
     if made == 1 {
         return Ok(key);
     }
-    load(pool, keys, user_id, None)
+    load_in(conn, keys, user_id, None)
         .await?
         .ok_or_else(|| AppError::internal("an account data key went while it was made"))
 }
@@ -133,7 +199,7 @@ pub async fn key(pool: &PgPool, keys: &OpaqueSetupKeys, user_id: Uuid) -> AppRes
 /// Wraps `key` again under the current entry, only if the row still holds
 /// `old` (another instance may have done it already).
 async fn rewrap(
-    pool: &PgPool,
+    conn: &mut sqlx::PgConnection,
     user_id: Uuid,
     key: &DataKey,
     old: &[u8],
@@ -152,7 +218,7 @@ async fn rewrap(
     .bind(&wrapped)
     .bind(old)
     .bind(key.generation() as i32)
-    .execute(pool)
+    .execute(&mut *conn)
     .await?;
     Ok(())
 }
@@ -196,7 +262,16 @@ pub async fn rewrap_some(
             // this runs, so this is a key changed meanwhile; left as it is.
             continue;
         };
-        rewrap(pool, user_id, &key, &wrapped, current_id, current_entry).await?;
+        let mut conn = pool.acquire().await?;
+        rewrap(
+            &mut conn,
+            user_id,
+            &key,
+            &wrapped,
+            current_id,
+            current_entry,
+        )
+        .await?;
         moved += 1;
     }
     Ok((moved, next))

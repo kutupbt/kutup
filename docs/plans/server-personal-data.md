@@ -265,6 +265,18 @@ keeps them; reports on them are operator tooling.
   (`$proxy_protocol_addr`, `$proxy_protocol_port`) and never removes the
   `proxy_protocol` listeners; any edge log format is operator configuration.
 
+**As built (L3):**
+- `crate::client_family::parse` names Firefox, Chrome, Edge, Safari, Opera,
+  Samsung Internet and the CLI, with the major version, and Windows, macOS,
+  Linux, Android, iOS and ChromeOS.
+- The family is sealed as `client_sealed` on `auth_sessions` and
+  `account_security_events`, for each row. An event opens its session's family
+  and re-seals it for itself, so it outlives the session.
+- Ended sessions go after `session_record_grace_days` (default 30), unless a
+  session forked from one still lives.
+- Feedback sends the family the browser parses ("Firefox on Linux"), not
+  `navigator.userAgent`.
+
 ## A11. Share-link controls
 
 - **Operator block:** `public_shares` gains `blocked_at`, `blocked_reason`

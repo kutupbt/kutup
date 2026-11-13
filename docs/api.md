@@ -708,7 +708,12 @@ all Kutup web apps on that browser; they notice on their next request.
 ### GET /api/auth/sessions
 
 The account's live sessions, most recently used first. `current` marks the
-caller's own sign-in (its root and the sessions forked from it).
+caller's own sign-in (its root and the sessions forked from it). `browser`,
+`browserMajor` and `os` are what the server parsed from the sign-in's
+`User-Agent`; the header itself is never stored, and the parsed family is
+sealed under the account's data key (docs/plans/server-personal-data.md, A10).
+Each is absent when unknown. A session that ended is kept for **Keep ended
+sessions** (a site setting, default 30 days), then deleted.
 
 **Auth:** Bearer
 
@@ -718,7 +723,9 @@ caller's own sign-in (its root and the sessions forked from it).
     "id": "<uuid>",
     "clientType": "web-drive",
     "parentId": "<uuid of the web-account session>",
-    "userAgent": "Mozilla/5.0 …",
+    "browser": "Firefox",
+    "browserMajor": 128,
+    "os": "Linux",
     "createdAt": "2026-09-23T14:07:00Z",
     "lastUsedAt": "2026-09-23T14:12:00Z",
     "current": true
@@ -1139,7 +1146,9 @@ one that is not one of the caller's events is `400`: start from the first page)
       "at": "2026-10-14T09:00:00Z",
       "thisSession": true,
       "client": "web-account",
-      "userAgent": "Mozilla/5.0 …",
+      "browser": "Firefox",
+      "browserMajor": 128,
+      "os": "Linux",
       "byAdmin": false,
       "count": 1
     }
@@ -1160,8 +1169,10 @@ one that is not one of the caller's events is `400`: start from the first page)
   and an administrator's view within ten minutes of the same kind's last one
   are counted into it.
 - `thisSession`: made from the caller's own sign-in.
-- `client`, `userAgent`: what made it, as the session list shows it (absent
-  for a recovery or an administrator's reset).
+- `client`, `browser`, `browserMajor`, `os`: what made it, as the session list
+  shows it (absent for a recovery or an administrator's reset, and each
+  absent when unknown). Sealed for this event's own row, so it stays after the
+  session is deleted.
 - `byAdmin`: an administrator's reset.
 
 ---

@@ -68,7 +68,10 @@ pub struct SessionView {
     client_type: String,
     /// The sign-in this session was forked from (drive/chat under account).
     parent_id: Option<String>,
-    user_agent: Option<String>,
+    /// Its browser: family, major version and system, as parsed at sign-in
+    /// (never the raw `User-Agent`).
+    #[serde(flatten)]
+    client: crate::client_family::ClientFamily,
     #[serde(with = "time::serde::rfc3339")]
     #[schema(value_type = String, format = DateTime)]
     created_at: time::OffsetDateTime,
@@ -102,7 +105,7 @@ pub async fn list_sessions(State(state): State<AppState>, user: AuthUser) -> App
             id: r.id.to_string(),
             client_type: r.client_type,
             parent_id: r.parent_session_id.map(|p| p.to_string()),
-            user_agent: r.user_agent,
+            client: r.client,
             created_at: r.created_at,
             last_used_at: r.last_used_at,
         })

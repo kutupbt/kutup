@@ -956,7 +956,9 @@
         "securityEventFoldSeconds": "Count repeats together within (seconds)",
         "securityEventFoldSecondsHint": "A failed sign-in, or an administrator's view, this soon after the last one of its kind adds to its count instead of a new event.",
         "adminAuditRetentionDays": "Keep the admin log (days)",
-        "adminAuditRetentionDaysHint": "What administrators did, including opening an account's data."
+        "adminAuditRetentionDaysHint": "What administrators did, including opening an account's data.",
+        "sessionRecordGraceDays": "Keep ended sessions (days)",
+        "sessionRecordGraceDaysHint": "Sessions that were signed out, ended elsewhere or expired, with the browser they used."
       },
       "federationLimits": {
         "federationRetryBaseSeconds": "First wait (seconds)",
