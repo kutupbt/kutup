@@ -100,12 +100,31 @@ pub async fn start_account(
 }
 
 /// Turns the account's federation off (its consent withdrawn, or its choice).
+/// What it queued that carries no transport sequence (its rename announces)
+/// is given up at once; a send that is sent checks the switch again.
 pub async fn turn_off(tx: &mut Transaction<'_, Postgres>, user_id: Uuid) -> sqlx::Result<()> {
     sqlx::query("UPDATE users SET federation = 'off' WHERE id = $1")
         .bind(user_id)
         .execute(&mut **tx)
         .await?;
+    sqlx::query(
+        "UPDATE federation_outbox
+            SET state = 'rejected', error_class = 'federation_off', updated_at = now()
+          WHERE kind = 'rename' AND state = 'pending'
+            AND payload->>'incarnation' IN
+                (SELECT account_incarnation_id FROM users WHERE id = $1)",
+    )
+    .bind(user_id)
+    .execute(&mut **tx)
+    .await?;
     Ok(())
+}
+
+/// After a turn-off committed: what is live for the account across servers
+/// stops now, not at its next check (its editors' rooms on other servers'
+/// files; other servers' subscriptions to the files it owns).
+pub async fn after_off(state: &AppState, user_id: Uuid) -> AppResult<()> {
+    state.collab_federation.close_account(state, user_id).await
 }
 
 /// Turns it on, in the caller's transaction: with the `federation_abroad`
@@ -178,6 +197,9 @@ pub async fn put_federation(
         turn_off(&mut tx, user_id).await?;
     }
     tx.commit().await?;
+    if !req.on {
+        after_off(&state, user_id).await?;
+    }
     Ok(StatusCode::NO_CONTENT.into_response())
 }
 
@@ -270,6 +292,115 @@ mod tests {
         assert!(federates(&pool, user).await.unwrap());
         assert!(crate::legal::given(&pool, user, PURPOSE).await.unwrap());
 
+        sqlx::query("DELETE FROM users WHERE id = $1")
+            .bind(user)
+            .execute(&pool)
+            .await
+            .unwrap();
+    }
+
+    /// Off, nothing of the account leaves: a rename announce isn't queued,
+    /// one queued before is given up at the switch, and other servers read
+    /// none of its live locations.
+    #[tokio::test]
+    async fn live_turning_off_stops_what_would_leave() {
+        let Ok(url) = std::env::var("KUTUP_LIVE_DATABASE_URL") else {
+            eprintln!("KUTUP_LIVE_DATABASE_URL unset; skipping");
+            return;
+        };
+        let pool = sqlx::postgres::PgPoolOptions::new()
+            .max_connections(2)
+            .connect(&url)
+            .await
+            .unwrap();
+        let user = account(&pool).await;
+        let incarnation = format!("{:064x}", user.as_u128());
+        sqlx::query("UPDATE users SET account_incarnation_id = $2 WHERE id = $1")
+            .bind(user)
+            .bind(&incarnation)
+            .execute(&pool)
+            .await
+            .unwrap();
+        let peer = format!("peer-{}.test", &user.simple().to_string()[..12]);
+        sqlx::query(
+            "INSERT INTO federation_peer_identities
+                 (domain, trust_state, current_sequence, current_document_hash, current_key_id,
+                  current_public_key, first_seen_at, last_seen_at)
+             VALUES ($1, 'tofu', 1, $2, $2, $3, now(), now())",
+        )
+        .bind(&peer)
+        .bind("ab".repeat(32))
+        .bind(format!("{}=", "A".repeat(43)))
+        .execute(&pool)
+        .await
+        .unwrap();
+        let queued = |sequence: u64| {
+            let (pool, incarnation, peer) = (pool.clone(), incarnation.clone(), peer.clone());
+            async move {
+                let mut conn = pool.acquire().await.unwrap();
+                crate::remote_renames::enqueue(&mut conn, "fed.test", &incarnation, sequence)
+                    .await
+                    .unwrap();
+                sqlx::query_as::<_, (String, Option<String>)>(
+                    "SELECT state, error_class FROM federation_outbox
+                      WHERE kind = 'rename' AND destination = $1
+                        AND payload->>'incarnation' = $2 ORDER BY created_at",
+                )
+                .bind(&peer)
+                .bind(&incarnation)
+                .fetch_all(&pool)
+                .await
+                .unwrap()
+            }
+        };
+        // On: queued for the peer.
+        assert_eq!(queued(1).await, vec![("pending".into(), None)]);
+        // Off: the one queued is given up, and no other is queued.
+        let mut tx = pool.begin().await.unwrap();
+        turn_off(&mut tx, user).await.unwrap();
+        tx.commit().await.unwrap();
+        assert_eq!(
+            queued(2).await,
+            vec![("rejected".into(), Some("federation_off".into()))]
+        );
+
+        // A live location it shares: read here, not by a peer.
+        let stream = uuid::Uuid::new_v4().as_bytes().to_vec();
+        let read = [7u8; 32];
+        let verifier =
+            kutup_crypto::primitives::hash(kutup_crypto::primitives::Suite::V1, read).to_vec();
+        sqlx::query(
+            "INSERT INTO live_location_streams
+                 (stream_id, write_verifier, read_verifier, expires_at, creator_user_id)
+             VALUES ($1, $2, $2, now() + interval '1 hour', $3)",
+        )
+        .bind(&stream)
+        .bind(&verifier)
+        .bind(user)
+        .execute(&pool)
+        .await
+        .unwrap();
+        assert!(
+            crate::live_locations::read_for_tests(&pool, &stream, &verifier, false)
+                .await
+                .is_ok()
+        );
+        assert!(
+            crate::live_locations::read_for_tests(&pool, &stream, &verifier, true)
+                .await
+                .is_err()
+        );
+
+        sqlx::query("DELETE FROM federation_outbox WHERE destination = $1")
+            .bind(&peer)
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query("DELETE FROM federation_peer_identities WHERE domain = $1")
+            .bind(&peer)
+            .execute(&pool)
+            .await
+            .unwrap();
         sqlx::query("DELETE FROM users WHERE id = $1")
             .bind(user)
             .execute(&pool)

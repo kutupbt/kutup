@@ -403,6 +403,19 @@ keeps them; reports on them are operator tooling.
   sealed sends and bundle fetches can't name their sender to this server:
   the apps refuse them (chat-core's transport asks `/user/me`). Groups and
   shares stay, quiet. Mail isn't covered.
+- After review (2026-11-14): off means no transfer at all (the user's
+  decision). The outbound side is gated too: rename announces (not queued,
+  and given up when queued before), live edits of other servers' files
+  (bridges close at once; other servers' subscriptions to its files close at
+  once), Chat media offers and pulls, profile keys, live-location reads both
+  ways (streams record their sharer), and groups and calls homed on another
+  server (the relay, its key and call tokens answer `403 federationOff`; the
+  account stays a member and the group is quiet for it until the switch is
+  on again; the Privacy page says so). An administrator's switch needs the
+  user's own consent when a `federation_abroad` text is published, and is
+  in the admin log. Queued chat, sealed and media sends hold a transport
+  sequence the peer must see: how they are given up is a protocol addition
+  (a withdrawn sequence), in its own note.
 
 **As built (L7):**
 - A message's headers (subject, From, To, Cc, Reply-To, Bcc, Message-ID,

@@ -263,6 +263,14 @@ pub(crate) async fn token(
     let federation = state.federation.as_ref().ok_or_else(|| {
         AppError::not_found("federation is off: remote group calls are unavailable")
     })?;
+    // A call hosted on another server is reached through it: not while this
+    // account's federation is off. The account stays a member; the group is
+    // quiet for it until the switch is on again (crate::federation_switch).
+    crate::federation_switch::ensure_federates(
+        &state.pool,
+        crate::handlers::trusted_uuid(&auth.user_id)?,
+    )
+    .await?;
     let body = serde_json::to_vec(&FederatedTokenRequest {
         room_id: request.room_id.clone(),
         participant_id: request.participant_id.clone(),

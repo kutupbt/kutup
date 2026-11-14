@@ -84,7 +84,7 @@ pub struct GatewayKeyAnswer {
 )]
 pub async fn gateway_key(
     State(state): State<AppState>,
-    _user: AuthUser,
+    user: AuthUser,
     Query(query): Query<GatewayKeyQuery>,
 ) -> AppResult<Json<GatewayKeyAnswer>> {
     let federation = enabled(&state)?;
@@ -107,6 +107,14 @@ pub async fn gateway_key(
             identity_history,
         }));
     }
+    // A group homed on another server is reached through it: not while this
+    // account's federation is off. The account stays a member; the group is
+    // quiet for it until the switch is on again (crate::federation_switch).
+    crate::federation_switch::ensure_federates(
+        &state.pool,
+        crate::handlers::trusted_uuid(&user.user_id)?,
+    )
+    .await?;
     let remote = federation
         .send(
             &query.server,
@@ -199,6 +207,14 @@ pub async fn relay(
             },
         );
     }
+    // A group homed on another server is reached through it: not while this
+    // account's federation is off. The account stays a member; the group is
+    // quiet for it until the switch is on again (crate::federation_switch).
+    crate::federation_switch::ensure_federates(
+        &state.pool,
+        crate::handlers::trusted_uuid(&user.user_id)?,
+    )
+    .await?;
     let remote = federation
         .send(
             &server,

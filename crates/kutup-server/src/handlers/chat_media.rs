@@ -713,6 +713,7 @@ pub async fn deliver_local(
         if state.federation.is_none() {
             return Err(AppError::conflict("Chat federation is disabled"));
         }
+        crate::federation_switch::ensure_federates(&state.pool, origin_user_id).await?;
         return crate::chat_media_federation::stage_remote_delivery(&state, origin_user_id, offer)
             .await
             .map(Json);

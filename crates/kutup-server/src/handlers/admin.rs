@@ -485,16 +485,32 @@ pub async fn update_user(
         }
     }
     if let Some(federation) = req.federation.as_deref() {
-        // An administrator's switch: the consent the user's own asks for is
-        // theirs to give, so turning it on here records none.
+        // An administrator's switch. The consent is the user's to give: with
+        // a `federation_abroad` text published, on needs the user's own
+        // consent already given (`409 consentRequired`; a transfer abroad
+        // rests on it), and records none.
         if !["on", "off"].contains(&federation) {
             return Err(AppError::bad_request("federation must be on or off"));
         }
-        sqlx::query("UPDATE users SET federation = $1 WHERE id = $2")
-            .bind(federation)
-            .bind(target)
-            .execute(&state.pool)
-            .await?;
+        let on = federation == "on";
+        let mut tx = state.pool.begin().await?;
+        if on {
+            crate::federation_switch::turn_on(&mut tx, target, None, "admin").await?;
+        } else {
+            crate::federation_switch::turn_off(&mut tx, target).await?;
+        }
+        crate::audit_log::append_in(
+            &mut tx,
+            crate::handlers::trusted_uuid(&admin.user_id)?,
+            "user.federation",
+            Some(target),
+            &json!({ "username": target_username, "federation": federation }),
+        )
+        .await?;
+        tx.commit().await?;
+        if !on {
+            crate::federation_switch::after_off(&state, target).await?;
+        }
     }
     if let Some(sharing) = req.public_sharing.as_deref() {
         if !["on", "off"].contains(&sharing) {
