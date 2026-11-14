@@ -3438,6 +3438,27 @@ fn verify_queued_media_answers(c: &Client, a: &str, b: &str, alice_token: &str, 
     println!("QUEUED MEDIA REFUSAL AND REPEATS VERIFIED");
 }
 
+/// A's pending and settled plain sends to B, for a failure's message.
+fn outbox_to_b() -> String {
+    let Ok(db_a) = std::env::var("KUTUP_FEDERATION_DB_A") else {
+        return "(no database)".into();
+    };
+    let runtime = tokio::runtime::Runtime::new().unwrap();
+    runtime.block_on(async {
+        let pool = sqlx::PgPool::connect(&db_a).await.unwrap();
+        type Row = (uuid::Uuid, i64, String, i32, Option<String>, Option<String>);
+        let rows: Vec<Row> = sqlx::query_as(
+            "SELECT id, sequence, state, attempts, error_class, last_error
+                   FROM federation_outbox WHERE kind = 'chat' AND destination = 'b.test'
+                  ORDER BY sequence DESC LIMIT 5",
+        )
+        .fetch_all(&pool)
+        .await
+        .unwrap();
+        format!("{rows:?}")
+    })
+}
+
 fn verify_retry_phase(c: &Client, a: &str, b: &str) {
     let bob_token = login(c, b, BOB_USERNAME);
     let deadline = Instant::now() + Duration::from_secs(30);
@@ -3454,7 +3475,8 @@ fn verify_retry_phase(c: &Client, a: &str, b: &str) {
         }
         assert!(
             Instant::now() < deadline,
-            "durably queued federation send was not retried"
+            "durably queued federation send was not retried; A's queue to B: {}",
+            outbox_to_b()
         );
         std::thread::sleep(Duration::from_millis(500));
     }

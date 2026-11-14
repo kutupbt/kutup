@@ -1595,7 +1595,12 @@ async fn attempt_outbox(state: &AppState, id: Uuid) -> AppResult<FederatedSendOu
 
     // Only the destination's head goes: the sends behind it keep their order.
     if plain_head(&state.pool, &row.destination).await? != Some(row.sequence) {
-        return Ok(FederatedSendOutcome::Pending);
+        // A head that is an off account's send is withdrawn now, whatever
+        // its wait: it must not hold the others up (crate::federation_withdrawn).
+        withdraw_off_head(state, &row.destination).await?;
+        if plain_head(&state.pool, &row.destination).await? != Some(row.sequence) {
+            return Ok(FederatedSendOutcome::Pending);
+        }
     }
     // Its account's federation went off since it was queued: it never leaves;
     // its sequence is withdrawn instead (crate::federation_withdrawn).
@@ -1813,6 +1818,27 @@ pub(crate) async fn sender_is_off(pool: &sqlx::PgPool, sender: Uuid) -> AppResul
     .bind(sender)
     .fetch_one(pool)
     .await?)
+}
+
+/// The destination's head, withdrawn now when its account's federation is
+/// off (one try; it waits as any send when the destination doesn't answer).
+async fn withdraw_off_head(state: &AppState, destination: &str) -> AppResult<()> {
+    let head: Option<Uuid> = sqlx::query_scalar(
+        "SELECT o.id FROM federation_outbox o JOIN users u ON u.id = (o.payload->>'sender')::uuid
+          WHERE o.kind = 'chat' AND o.destination = $1 AND o.state = 'pending'
+            AND u.federation = 'off'
+            AND o.sequence = (SELECT MIN(sequence) FROM federation_outbox
+                               WHERE kind = 'chat' AND destination = $1 AND state = 'pending')",
+    )
+    .bind(destination)
+    .fetch_optional(&state.pool)
+    .await?;
+    if let Some(id) = head {
+        if let Some(row) = load_outbox(state, id).await? {
+            withdraw_plain(state, &row).await?;
+        }
+    }
+    Ok(())
 }
 
 /// Withdraws a queued plain send's sequence: used up at the destination,
