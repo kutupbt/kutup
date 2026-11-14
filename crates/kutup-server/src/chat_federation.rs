@@ -363,6 +363,9 @@ pub enum FederatedSendOutcome {
     /// Queued, but the recipient's server does not speak this Chat wire
     /// (`chat.v2`): it goes once that server upgrades.
     PeerUnsupported,
+    /// Never sent: its account's federation went off after it was queued;
+    /// its sequence was withdrawn (crate::federation_withdrawn).
+    Withdrawn,
 }
 
 pub enum FederatedSealedOutcome {
@@ -1594,6 +1597,11 @@ async fn attempt_outbox(state: &AppState, id: Uuid) -> AppResult<FederatedSendOu
     if plain_head(&state.pool, &row.destination).await? != Some(row.sequence) {
         return Ok(FederatedSendOutcome::Pending);
     }
+    // Its account's federation went off since it was queued: it never leaves;
+    // its sequence is withdrawn instead (crate::federation_withdrawn).
+    if sender_is_off(&state.pool, row.sender).await? {
+        return withdraw_plain(state, &row).await;
+    }
 
     let message: SendMessagesRequest = serde_json::from_value(row.request.clone())
         .map_err(|error| AppError::internal(format!("invalid federation outbox: {error}")))?;
@@ -1794,6 +1802,78 @@ async fn attempt_outbox(state: &AppState, id: Uuid) -> AppResult<FederatedSendOu
     )
     .await?;
     Ok(FederatedSendOutcome::Pending)
+}
+
+/// Whether `sender` is an account here whose federation is off (a deleted
+/// one's queued sends still go, as they always did).
+pub(crate) async fn sender_is_off(pool: &sqlx::PgPool, sender: Uuid) -> AppResult<bool> {
+    Ok(sqlx::query_scalar(
+        "SELECT EXISTS (SELECT 1 FROM users WHERE id = $1 AND federation = 'off')",
+    )
+    .bind(sender)
+    .fetch_one(pool)
+    .await?)
+}
+
+/// Withdraws a queued plain send's sequence: used up at the destination,
+/// nothing of it sent, the row settled as `federation_off`.
+async fn withdraw_plain(
+    state: &AppState,
+    row: &FederationOutboxRow,
+) -> AppResult<FederatedSendOutcome> {
+    use crate::federation_withdrawn::{withdraw, Withdrawal};
+    match withdraw(
+        state,
+        kutup_chat_proto::WithdrawnStreamV1::Chat,
+        &row.destination,
+        row.sequence,
+        row.id,
+    )
+    .await?
+    {
+        Withdrawal::Accepted => {
+            federation_outbox::settle(
+                &state.pool,
+                row.id,
+                Some(row.sequence),
+                false,
+                Some("federation_off"),
+                &serde_json::json!({ "withdrawn": true }),
+            )
+            .await?;
+            Ok(FederatedSendOutcome::Withdrawn)
+        }
+        Withdrawal::Gap { expected } => {
+            // What the destination waits for goes first, as for a send.
+            if expected < row.sequence {
+                sqlx::query(
+                    "UPDATE federation_outbox
+                         SET state = 'pending', next_attempt_at = now(),
+                             last_error = 'remote requested replay after a sequence gap',
+                             updated_at = now()
+                         WHERE kind = 'chat' AND destination = $1
+                           AND sequence >= $2 AND sequence < $3",
+                )
+                .bind(&row.destination)
+                .bind(expected)
+                .bind(row.sequence)
+                .execute(&state.pool)
+                .await?;
+            }
+            retry_plain(
+                state,
+                row,
+                "sequence_gap",
+                &format!("remote expects federation sequence {expected}"),
+            )
+            .await?;
+            Ok(FederatedSendOutcome::Pending)
+        }
+        Withdrawal::Retry(error) => {
+            retry_plain(state, row, "transport", &error).await?;
+            Ok(FederatedSendOutcome::Pending)
+        }
+    }
 }
 
 async fn retry_plain(

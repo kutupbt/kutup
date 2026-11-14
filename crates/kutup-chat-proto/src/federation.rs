@@ -119,3 +119,43 @@ mod tests {
         );
     }
 }
+
+/// The version of [`FederatedWithdrawnV1`].
+pub const FEDERATION_WITHDRAWN_VERSION: u16 = 1;
+
+/// The sequenced stream a withdrawn sequence belongs to.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[serde(rename_all = "camelCase")]
+pub enum WithdrawnStreamV1 {
+    /// Plain Chat sends (`/api/fed/chat/messages`).
+    Chat,
+    /// Chat media offers (`/api/fed/chat/media/offers`).
+    Media,
+}
+
+/// A sequence the origin gave up before its transaction left: the send's
+/// account turned its federation off (docs/plans/server-personal-data.md,
+/// the federation switch). It names no sender, recipient or payload. The
+/// destination uses the sequence up, so the stream goes on with no gap, and
+/// answers a repeat of it the same.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct FederatedWithdrawnV1 {
+    pub version: u16,
+    /// The withdrawn transaction's id, as it would have gone.
+    pub transaction_id: String,
+    pub stream: WithdrawnStreamV1,
+    pub sequence: u64,
+    pub origin: String,
+    pub destination: String,
+}
+
+/// The destination's answer to [`FederatedWithdrawnV1`]: the sequence used up.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[serde(rename_all = "camelCase")]
+pub struct FederationWithdrawnResponseV1 {
+    pub accepted_sequence: u64,
+}

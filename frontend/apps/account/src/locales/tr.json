@@ -204,7 +204,7 @@
         "description": "Kutup sunucuları birbiriyle konuşur; böylece hesabı başka bir sunucuda olan kişilerle sohbet edip paylaşım yapabilirsiniz. E-postanız etkilenmez: her adrese her zaman ulaşır.",
         "on": "Diğer sunucularla iletişim: açık",
         "off": "Diğer sunucularla iletişim: kapalı",
-        "hint": "Kapalıyken başka bir sunucudaki hiç kimse size ulaşamaz, siz de onlara ulaşamazsınız. Onlarla sohbetleriniz ve paylaşımlarınız sessizce kalır: başka bir sunucuda barındırılan gruplar ve aramalar da siz yeniden açana kadar sizin için sessizleşir (üyeliğiniz sürer). Hiçbir şey silinmez.",
+        "hint": "Kapalıyken başka bir sunucudaki hiç kimse size ulaşamaz, siz de onlara ulaşamazsınız. Onlarla sohbetleriniz ve paylaşımlarınız sessizce kalır: başka bir sunucuda barındırılan gruplar ve aramalar da siz yeniden açana kadar sizin için sessizleşir (üyeliğiniz sürer). Kapalıyken oralarda size gönderilen mesajlar daha sonra iletilmez. Hiçbir şey silinmez.",
         "turnOn": "Aç",
         "turnOff": "Kapat",
         "consentTitle": "Diğer sunucularla iletişim kurulsun mu?",

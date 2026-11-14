@@ -413,9 +413,17 @@ keeps them; reports on them are operator tooling.
   account stays a member and the group is quiet for it until the switch is
   on again; the Privacy page says so). An administrator's switch needs the
   user's own consent when a `federation_abroad` text is published, and is
-  in the admin log. Queued chat, sealed and media sends hold a transport
-  sequence the peer must see: how they are given up is a protocol addition
-  (a withdrawn sequence), in its own note.
+  in the admin log. Queued plain chat sends and media offers of an off
+  account never leave: each holds a transport sequence the peer must see,
+  so the origin sends a signed withdrawal in its place
+  (`FederatedWithdrawnV1`, `POST /api/fed/chat/withdrawn`: no sender,
+  recipient or payload); the peer uses the sequence up and answers a repeat
+  the same, and the stream goes on with no gap. Required of every server
+  (no fallback: all are deployed together before v1).
+- The one exception: sealed-sender sends queued before the switch may still
+  leave. They name no one to this server (the sender is sealed), so it
+  can't tell they are the account's; the client's own check
+  (`ensureMayReach`) stops new ones while it is off.
 
 **As built (L7):**
 - A message's headers (subject, From, To, Cc, Reply-To, Bcc, Message-ID,

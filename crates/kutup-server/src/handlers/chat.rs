@@ -2306,6 +2306,11 @@ pub async fn send_messages(
                 crate::chat_federation::FederatedSendOutcome::PeerUnsupported => {
                     Err(crate::chat_federation::peer_unsupported_error())
                 }
+                // A repeat of a send queued before this account's federation
+                // went off, and withdrawn since.
+                crate::chat_federation::FederatedSendOutcome::Withdrawn => {
+                    Err(crate::federation_switch::federation_off())
+                }
             };
         }
     };
