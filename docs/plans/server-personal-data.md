@@ -449,6 +449,15 @@ keeps them; reports on them are operator tooling.
   mail groups' own signature (it lands with the main session's batch; it
   seals the same way, under the group's key).
 
+- After review (2026-11-14): a held send's outcome (undo send, scheduled
+  mail), which names its recipients, is sealed under the account's data key
+  (`mail_outbox.result_sealed`) and the row goes `mail_outbox_keep_seconds`
+  (a site setting, a day by default) after it finished; a failure is logged
+  by its status and code only. The addresses an auto-reply answered are kept
+  as keyed hashes under the account's key (`Lookup::MailAutoReplySender`,
+  `mail_auto_reply_sent.sender_hash`). A bounce of a shared-mailbox send
+  matching nothing is on the roadmap.
+
 ## Slices (after review, in this order)
 
 | Slice | Contents | Size |

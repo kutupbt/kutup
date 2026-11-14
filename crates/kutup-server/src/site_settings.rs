@@ -969,7 +969,19 @@ pub const SECURITY_EVENT_FOLD_SECONDS: NumericSetting = NumericSetting {
     unit: SettingUnit::Seconds,
     per_account: false,
 };
-pub const PRIVACY_SETTINGS: [NumericSetting; 8] = [
+/// How long a finished held send (undo send, scheduled) is kept, its sealed
+/// outcome with it, before it goes (A2: what names correspondents goes when
+/// it has done its job).
+pub const MAIL_OUTBOX_KEEP_SECONDS: NumericSetting = NumericSetting {
+    key: "mail_outbox_keep_seconds",
+    field: "mailOutboxKeepSeconds",
+    default: 86400,
+    min: 600,
+    max: 30 * 86400,
+    unit: SettingUnit::Seconds,
+    per_account: false,
+};
+pub const PRIVACY_SETTINGS: [NumericSetting; 9] = [
     KEY_BACKUP_KEEP_DAYS,
     SECURITY_EVENT_RETENTION_DAYS,
     SECURITY_EVENTS_KEPT_PER_KIND,
@@ -978,6 +990,7 @@ pub const PRIVACY_SETTINGS: [NumericSetting; 8] = [
     SESSION_RECORD_GRACE_DAYS,
     ACCOUNT_CLOSING_DAYS,
     DESTRUCTION_EVENT_RETENTION_DAYS,
+    MAIL_OUTBOX_KEEP_SECONDS,
 ];
 
 pub const TWO_FACTOR_SETTINGS: [NumericSetting; 3] = [

@@ -377,15 +377,31 @@ async fn answer(state: &AppState, delivered: Delivered) -> anyhow::Result<()> {
     {
         return Ok(());
     }
-    // Once per sender every RESEND_AFTER_DAYS: the claim is the record.
-    let claimed: Option<String> = sqlx::query_scalar(
-        "INSERT INTO mail_auto_reply_sent (user_id, sender) VALUES ($1, $2)
-         ON CONFLICT (user_id, sender) DO UPDATE SET sent_at = now()
+    // Once per sender every RESEND_AFTER_DAYS: the claim is the record. The
+    // sender is kept as a keyed hash under the account's data key, never its
+    // address (docs/plans/server-personal-data.md, A2).
+    let sender_hash = {
+        let mut conn = state.pool.acquire().await?;
+        super::sealed::key(
+            &mut conn,
+            crate::account_data::KeyOwner::Account(delivered.user_id),
+        )
+        .await
+        .map_err(|error| anyhow::anyhow!(error.message))?
+        .lookup_hash(
+            kutup_crypto::server_data::Lookup::MailAutoReplySender,
+            sender_key.as_bytes(),
+        )?
+        .to_vec()
+    };
+    let claimed: Option<Vec<u8>> = sqlx::query_scalar(
+        "INSERT INTO mail_auto_reply_sent (user_id, sender_hash) VALUES ($1, $2)
+         ON CONFLICT (user_id, sender_hash) DO UPDATE SET sent_at = now()
           WHERE mail_auto_reply_sent.sent_at < now() - make_interval(days => $3)
-         RETURNING sender",
+         RETURNING sender_hash",
     )
     .bind(delivered.user_id)
-    .bind(&sender_key)
+    .bind(&sender_hash)
     .bind(RESEND_AFTER_DAYS)
     .fetch_optional(&state.pool)
     .await?;
@@ -434,9 +450,9 @@ async fn answer(state: &AppState, delivered: Delivered) -> anyhow::Result<()> {
     };
     if let Err(error) = sent {
         // Not answered: the next message from them may try again.
-        sqlx::query("DELETE FROM mail_auto_reply_sent WHERE user_id = $1 AND sender = $2")
+        sqlx::query("DELETE FROM mail_auto_reply_sent WHERE user_id = $1 AND sender_hash = $2")
             .bind(delivered.user_id)
-            .bind(&sender_key)
+            .bind(&sender_hash)
             .execute(&state.pool)
             .await?;
         return Err(error);

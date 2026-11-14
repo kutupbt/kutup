@@ -250,6 +250,8 @@ pub enum Lookup {
     MailThread,
     /// A folded word of a mail header, tagged with its field: search.
     MailSearchToken,
+    /// A correspondent's address an auto-reply answered: once per sender.
+    MailAutoReplySender,
 }
 
 impl Lookup {
@@ -257,6 +259,7 @@ impl Lookup {
         match self {
             Lookup::MailThread => crate::labels::SERVER_DATA_MAIL_THREAD_V1,
             Lookup::MailSearchToken => crate::labels::SERVER_DATA_MAIL_SEARCH_TOKEN_V1,
+            Lookup::MailAutoReplySender => crate::labels::SERVER_DATA_MAIL_AUTO_REPLY_SENDER_V1,
         }
     }
 }

@@ -1127,6 +1127,8 @@
         "securityEventsKeptPerKindHint": "Her hesap için her türün en yenileri; böylece tekrarlanan başarısız girişler bir parola değişikliğini silemez.",
         "securityEventFoldSeconds": "Tekrarları birlikte say (saniye)",
         "securityEventFoldSecondsHint": "Aynı türden son olaydan bu kadar kısa süre sonra gelen başarısız giriş ya da yönetici görüntülemesi yeni bir olay yerine sayıya eklenir.",
+        "mailOutboxKeepSeconds": "Tamamlanan gönderimleri sakla (saniye)",
+        "mailOutboxKeepSecondsHint": "Gönderilmiş, başarısız olmuş ya da geri alınmış bekleyen bir gönderim (gönderimi geri alma, zamanlanmış e-posta), alıcılarını adlandıran mühürlü sonucuyla birlikte, tamamlandıktan bu kadar süre sonra silinir.",
         "adminAuditRetentionDays": "Yönetici kaydını sakla (gün)",
         "adminAuditRetentionDaysHint": "Yöneticilerin yaptıkları, bir hesabın verisini açmak dahil.",
         "sessionRecordGraceDays": "Biten oturumları sakla (gün)",

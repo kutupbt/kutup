@@ -24,6 +24,11 @@
       "purpose": "mailSearchToken",
       "value": "f\u0000ali.veli@ornek.com.tr",
       "hash": "s1EQ5H4WxOYdEQlJ5uR5XK3N2URvdc2RwhCJcpmm3m8="
+    },
+    {
+      "purpose": "mailAutoReplySender",
+      "value": "ali.veli@ornek.com.tr",
+      "hash": "IdHNo1E/j519IrX6bN8tku39rnaDQSYL7ZxWkWxKtZo="
     }
   ]
 }

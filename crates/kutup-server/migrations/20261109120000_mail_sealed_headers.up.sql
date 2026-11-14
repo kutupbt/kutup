@@ -64,3 +64,20 @@ CREATE INDEX idx_mail_messages_search_tokens ON mail_messages USING gin (search_
 ALTER TABLE mail_identities
     DROP COLUMN signature,
     ADD COLUMN signature_sealed bytea;
+
+-- A held send's outcome names its recipients: sealed under the account's
+-- data key, and the row deleted a while after it finished
+-- (`mail_outbox_keep_hours`). An interrupted send keeps none.
+ALTER TABLE mail_outbox
+    DROP COLUMN result,
+    ADD COLUMN result_sealed bytea;
+CREATE INDEX mail_outbox_finished ON mail_outbox (finished_at) WHERE finished_at IS NOT NULL;
+
+-- Whom an auto-reply answered: a keyed hash of the address under the
+-- account's data key, not the address (rows from before go: they last days).
+DELETE FROM mail_auto_reply_sent;
+ALTER TABLE mail_auto_reply_sent
+    DROP CONSTRAINT mail_auto_reply_sent_pkey,
+    DROP COLUMN sender,
+    ADD COLUMN sender_hash bytea NOT NULL CHECK (octet_length(sender_hash) = 32),
+    ADD PRIMARY KEY (user_id, sender_hash);

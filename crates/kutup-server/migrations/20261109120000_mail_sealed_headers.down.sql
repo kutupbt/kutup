@@ -1,3 +1,13 @@
+DELETE FROM mail_auto_reply_sent;
+ALTER TABLE mail_auto_reply_sent
+    DROP CONSTRAINT mail_auto_reply_sent_pkey,
+    DROP COLUMN sender_hash,
+    ADD COLUMN sender text NOT NULL,
+    ADD PRIMARY KEY (user_id, sender);
+DROP INDEX mail_outbox_finished;
+ALTER TABLE mail_outbox
+    DROP COLUMN result_sealed,
+    ADD COLUMN result jsonb;
 ALTER TABLE mail_identities
     DROP COLUMN signature_sealed,
     ADD COLUMN signature text NOT NULL DEFAULT '' CHECK (length(signature) <= 10000);

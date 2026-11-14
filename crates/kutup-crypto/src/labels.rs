@@ -500,6 +500,10 @@ pub const SERVER_DESTRUCTION_SUBJECT_V1: &[u8] = b"kutup/server/destruction-subj
 pub const SERVER_DATA_MAIL_THREAD_V1: &[u8] = b"kutup/server/mail-thread/v1\0";
 /// `kutup-crypto/src/server_data.rs` (`Lookup::MailSearchToken`)
 pub const SERVER_DATA_MAIL_SEARCH_TOKEN_V1: &[u8] = b"kutup/server/mail-search-token/v1\0";
+/// `kutup-crypto/src/server_data.rs` (`Lookup::MailAutoReplySender`): a
+/// correspondent an auto-reply answered
+pub const SERVER_DATA_MAIL_AUTO_REPLY_SENDER_V1: &[u8] =
+    b"kutup/server/mail-auto-reply-sender/v1\0";
 
 // --- session-version ---------------------------------------------------------
 
@@ -556,7 +560,8 @@ pub const FEDERATION_REQUEST_REPLAY_HASH_V1: &[u8] = b"kutup/federation/request-
 pub const FEDERATION_SIGNATURE_TAG: &str = "kutup-federation-v2";
 
 /// Every label, for the registry's own checks.
-pub const ALL: [&[u8]; 172] = [
+pub const ALL: [&[u8]; 173] = [
+    SERVER_DATA_MAIL_AUTO_REPLY_SENDER_V1,
     ORG_ACCESS_REQUEST_V1,
     ORG_KEY_CERTIFICATE_V1,
     ORG_KEY_ID_V1,

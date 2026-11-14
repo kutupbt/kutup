@@ -52,6 +52,7 @@ fn purpose(name: &str) -> Lookup {
     match name {
         "mailThread" => Lookup::MailThread,
         "mailSearchToken" => Lookup::MailSearchToken,
+        "mailAutoReplySender" => Lookup::MailAutoReplySender,
         other => panic!("unknown purpose {other}"),
     }
 }
@@ -62,6 +63,7 @@ const INPUTS: &[(&str, &str)] = &[
     ("mailSearchToken", "s\u{0}fatura"),
     ("mailSearchToken", "f\u{0}fatura"),
     ("mailSearchToken", "f\u{0}ali.veli@ornek.com.tr"),
+    ("mailAutoReplySender", "ali.veli@ornek.com.tr"),
 ];
 
 #[test]
