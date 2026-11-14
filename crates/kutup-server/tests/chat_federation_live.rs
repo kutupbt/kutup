@@ -21,7 +21,6 @@ use kutup_crypto::chat_media::ChatMediaObjectContextV1;
 use kutup_crypto::chat_media_blocks;
 use kutup_crypto::collection_epoch::CollectionEpochStatementV1;
 use kutup_crypto::drive_envelope::{self, DriveEnvelopeContextV1, DriveEnvelopePurpose};
-use kutup_crypto::drive_object::{self, DriveFileBlobContextV1};
 use kutup_crypto::identity::AccountIdentityKeysV1;
 use kutup_crypto::named_share::NamedShareEnvelopeV1;
 use kutup_crypto::profile_key_share::{ProfileKeyEnvelopeV1, ProfileKeyParties};
@@ -1266,21 +1265,30 @@ fn assert_content_once(messages: &[Value], content: &[u8]) {
     );
 }
 
+/// A new file's multipart upload: `ciphertext` is revision `revision` of
+/// it, committed inline (metadata revision 1, its content record under
+/// `file_key`).
 fn drive_upload_body(
     boundary: &str,
     file_id: &str,
     metadata_envelope: &str,
     file_key_envelope: &str,
+    file_key: &[u8; 32],
+    revision: &str,
     ciphertext: &[u8],
 ) -> Vec<u8> {
     let mut body = Vec::new();
     // Every file carries its name hash (the server refuses one without).
     let name_hash = common::test_name_hash(file_id);
+    let revision_content = common::sealed_revision_content(file_id, file_key, revision, 1);
     for (name, value) in [
         ("fileId", file_id),
         ("nameHash", name_hash.as_str()),
         ("metadataEnvelope", metadata_envelope),
+        ("metadataRevision", "1"),
         ("fileKeyEnvelope", file_key_envelope),
+        ("revisionId", revision),
+        ("revisionContentEnvelope", revision_content.as_str()),
     ] {
         body.extend_from_slice(
             format!(
@@ -1691,17 +1699,15 @@ fn drive_round_trip(
         DriveEnvelopeContextV1::file_metadata(&proposed_file_id, 1, 1).unwrap(),
     )
     .unwrap();
-    let ciphertext = drive_object::encrypt_file_blob(
-        plaintext,
-        &file_key,
-        DriveFileBlobContextV1::new(&proposed_file_id, 1).unwrap(),
-    )
-    .unwrap();
+    let revision = common::uuid();
+    let ciphertext = common::block_blob(&proposed_file_id, &file_key, &revision, 1, plaintext);
     let upload_body = drive_upload_body(
         boundary,
         &proposed_file_id,
         &metadata_envelope,
         &file_key_envelope,
+        &file_key,
+        &revision,
         &ciphertext,
     );
     // Each call names itself, with how long it took, so a hang says which.
@@ -1736,6 +1742,8 @@ fn drive_round_trip(
         &uuid::Uuid::new_v4().to_string(),
         &metadata_envelope,
         &file_key_envelope,
+        &file_key,
+        &revision,
         &ciphertext,
     );
     assert_eq!(
@@ -1760,6 +1768,8 @@ fn drive_round_trip(
         &blob_relocation_id,
         &blob_relocation_metadata,
         &blob_relocation_file_key,
+        &file_key,
+        &revision,
         &ciphertext,
     );
     assert_eq!(
@@ -1887,12 +1897,8 @@ fn drive_round_trip(
     part_limit(b, admin_b, relay_part as i64);
     let big_id = uuid::Uuid::new_v4().to_string();
     let big_plain: Vec<u8> = (0..10 * 1024 * 1024u32).map(|i| (i % 251) as u8).collect();
-    let big = drive_object::encrypt_file_blob(
-        &big_plain,
-        &file_key,
-        DriveFileBlobContextV1::new(&big_id, 1).unwrap(),
-    )
-    .unwrap();
+    let big_revision = common::uuid();
+    let big = common::block_blob(&big_id, &file_key, &big_revision, 1, &big_plain);
     let big_upload = drive_upload_body(
         boundary,
         &big_id,
@@ -1908,6 +1914,8 @@ fn drive_round_trip(
             DriveEnvelopeContextV1::file_key(&big_id, &collection_id, 1, 1).unwrap(),
         )
         .unwrap(),
+        &file_key,
+        &big_revision,
         &big,
     );
     // Past the share's 1 MiB upload quota: the owner stores it on her own

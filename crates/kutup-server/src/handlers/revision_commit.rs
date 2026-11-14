@@ -23,7 +23,7 @@ use uuid::Uuid;
 
 use super::files::validate_envelope;
 use super::tus_versions::Landing;
-use crate::drive_blob::{revision_conflict, BlobFormat};
+use crate::drive_blob::{revision_conflict, BlockBlob};
 use crate::error::{AppError, AppResult};
 use crate::handlers::trusted_uuid;
 use crate::middleware::AuthUser;
@@ -122,7 +122,7 @@ pub async fn commit(
         "SELECT id, user_id, kind, collection_id, total_bytes, file_key_envelope, key_epoch,
                 storage_path, s3_upload_id, name_hash, key_generation, content_hash, based_on,
                 uploaded_at IS NOT NULL AS uploaded
-         FROM uploads WHERE file_id = $1 AND revision_id = $2 AND blob_suite = 2
+         FROM uploads WHERE file_id = $1 AND revision_id = $2
          FOR UPDATE",
     )
     .bind(file_id)
@@ -165,9 +165,8 @@ pub async fn commit(
     }
     .and_then(|generation| u32::try_from(generation).ok())
     .ok_or_else(|| AppError::internal("corrupt upload"))?;
-    let format = BlobFormat::Blocks { revision_id };
     let revision_content = crate::drive_blob::revision_content_envelope(
-        format,
+        BlockBlob { revision_id },
         Some(&request.revision_content_envelope),
         file_id,
         generation,
@@ -181,7 +180,7 @@ pub async fn commit(
                 revision_id,
                 row,
                 &metadata,
-                revision_content.as_deref(),
+                &revision_content,
             )
             .await?
         }
@@ -201,8 +200,7 @@ pub async fn commit(
                 content_hash: row.content_hash,
                 based_on: row.based_on,
                 revision_id,
-                format,
-                revision_content_envelope: revision_content,
+                revision_content_envelope: Some(revision_content),
             };
             let seq = super::tus_versions::commit(&state, &mut tx, &landing).await?;
             tx.commit().await?;
@@ -260,7 +258,7 @@ async fn commit_file(
     revision_id: Uuid,
     row: Uploaded,
     (metadata_envelope, metadata_revision): &(String, i64),
-    revision_content_envelope: Option<&str>,
+    revision_content_envelope: &str,
 ) -> AppResult<()> {
     let (Some(file_key_envelope), Some(name_hash)) = (&row.file_key_envelope, &row.name_hash)
     else {

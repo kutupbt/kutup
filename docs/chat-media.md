@@ -45,16 +45,17 @@ key.
 
 | Code | Construction | New writes |
 |---:|---|---|
-| `1` | HKDF-SHA256 plus XChaCha20-Poly1305 secretstream, 5 MiB plaintext frames (`KUTPCM1`) | refused; the code goes in slice 7 of the block format |
 | `2` | The block format (docs/plans/drive-block-format.md §2): 4 MiB XChaCha20-Poly1305 blocks bound to their index, a sealed manifest of their SHA-256 hashes (`KUTPCM2`) | required |
+
+Code `1`, a secretstream with 5 MiB frames, is gone: it no longer parses
+(slice 7 of the block format).
 
 For each attachment the sender generates a fresh random 32-byte
 `attachmentKey`. HKDF-SHA256 derives the block, nonce and manifest keys from
 it with the `kutup/chat-media/blocks/…` labels and the complete object header.
 The raw key appears only inside the encrypted logical message and the
-sender's encrypted linked-device transcript. Each suite's parser refuses the
-other's: a `KUTPCM1` header naming suite 2 and a `KUTPCM2` header naming
-suite 1 both fail.
+sender's encrypted linked-device transcript. The parser refuses any other
+magic or suite: a `KUTPCM2` header naming suite 1 fails.
 
 The attachment ledger's records are account records (`KUTPAR1`, purpose
 `ChatAttachmentLedger`, [`plans/w1-account-record.md`](plans/w1-account-record.md))
@@ -347,8 +348,8 @@ The server advertised `ChatMediaCapabilitiesV1` only after all of the
 following passed:
 
 - [x] canonical Rust vectors and WASM parity for object/ledger headers, HKDF,
-  encryption, final-frame validation and descriptor parsing (suite 1; suite 2
-  has its own in `tests/vectors/blocks-v1.json`);
+  encryption, manifest validation and descriptor parsing (the block
+  format's in `tests/vectors/blocks-v1.json`);
 - [x] parser fuzzing for objects, descriptors, offers, acknowledgements, ledger
   envelopes and diff pages;
 - [x] transaction-failure and restart tests for upload reservation/finalization,

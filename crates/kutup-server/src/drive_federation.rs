@@ -230,10 +230,10 @@ struct ParsedUpload {
     file_key_envelope: String,
     /// The name's hash under the folder's hash key (docs/plans/drive-unique-names.md).
     name_hash: String,
-    /// The block format's revision, when the blob is in it.
-    format: crate::drive_blob::BlobFormat,
-    /// The block format's sealed content record, as sent (checked once the
-    /// file id is known to be the one it names).
+    /// The block-format blob's revision.
+    blob: crate::drive_blob::BlockBlob,
+    /// The revision's sealed content record, as sent (checked once the file
+    /// id is known to be the one it names).
     revision_content_envelope: Option<String>,
     file: NamedTempFile,
     size: i64,
@@ -1832,10 +1832,10 @@ pub async fn upload_file(
         validate_envelope(&parsed.metadata_envelope, metadata_context)?;
         // A new file's key is generation 1.
         parsed
-            .format
+            .blob
             .check_file(&parsed.file, parsed.size as u64, parsed.file_id, 1)?;
         let revision_content = crate::drive_blob::revision_content_envelope(
-            parsed.format,
+            parsed.blob,
             parsed.revision_content_envelope.as_deref(),
             parsed.file_id,
             1,
@@ -1920,7 +1920,7 @@ pub async fn upload_file(
         }
 
         let file_id = parsed.file_id;
-        let revision = parsed.format.revision_id();
+        let revision = parsed.blob.revision_id;
         if let Err(error) = crate::drive_blob::ensure_revision_free(&mut tx, revision, None).await {
             tx.rollback().await?;
             return signed_app_error(federation, &authenticated, error);
@@ -1959,7 +1959,7 @@ pub async fn upload_file(
             .bind(share.id)
             .bind(&parsed.name_hash)
             .bind(revision)
-            .bind(parsed.format.suite())
+            .bind(crate::drive_blob::BLOCK_SUITE)
             .bind(&revision_content)
             .execute(&mut *tx)
             .await
@@ -2239,15 +2239,15 @@ where
             .ok_or_else(|| AppError::bad_request(format!("{name} required")))
     };
     let file_id = required(file_id, "fileId")?;
-    let format = crate::drive_blob::BlobFormat::from_revision(revision_id.as_deref())?;
-    // The block format commits inline: its metadata names revision 1.
-    crate::drive_blob::check_first_metadata_revision(format, metadata_revision.as_deref())?;
+    let blob = crate::drive_blob::BlockBlob::from_revision(revision_id.as_deref())?;
+    // It commits inline: its metadata names revision 1.
+    crate::drive_blob::check_first_metadata_revision(metadata_revision.as_deref())?;
     Ok(ParsedUpload {
         file_id: canonical_uuid(&file_id)?,
         metadata_envelope: required(metadata_envelope, "metadataEnvelope")?,
         file_key_envelope: required(file_key_envelope, "fileKeyEnvelope")?,
         name_hash: crate::drive_names::require_name_hash(name_hash.as_deref())?,
-        format,
+        blob,
         revision_content_envelope,
         file,
         size,
@@ -2634,12 +2634,15 @@ mod tests {
         let boundary = "kutup-drive-test-boundary";
         let ciphertext = b"encrypted bytes, not plaintext";
         let file_id = "e66ebd22-01e5-4dcc-9ea8-4fd9e45252d0";
+        let revision_id = "5b0c6f3e-2d4a-4c1e-9f7b-3a2e1d0c9b8a";
         let mut body = Vec::new();
         for (name, value) in [
             ("fileId", file_id),
             ("metadataEnvelope", "metadata"),
+            ("metadataRevision", "1"),
             ("fileKeyEnvelope", "wrapped-file-key"),
             ("nameHash", &"ab".repeat(32)),
+            ("revisionId", revision_id),
         ] {
             body.extend_from_slice(
                 format!(
@@ -2668,5 +2671,39 @@ mod tests {
         assert_eq!(upload.file_id.to_string(), file_id);
         assert_eq!(upload.metadata_envelope, "metadata");
         assert_eq!(upload.name_hash, "ab".repeat(32));
+        assert_eq!(upload.blob.revision_id.to_string(), revision_id);
+    }
+
+    #[tokio::test]
+    async fn multipart_upload_names_its_revision() {
+        let boundary = "kutup-drive-test-boundary";
+        let mut body = Vec::new();
+        for (name, value) in [
+            ("fileId", "e66ebd22-01e5-4dcc-9ea8-4fd9e45252d0"),
+            ("metadataEnvelope", "metadata"),
+            ("metadataRevision", "1"),
+            ("fileKeyEnvelope", "wrapped-file-key"),
+            ("nameHash", &"ab".repeat(32)),
+        ] {
+            body.extend_from_slice(
+                format!(
+                    "--{boundary}\r\nContent-Disposition: form-data; name=\"{name}\"\r\n\r\n{value}\r\n"
+                )
+                .as_bytes(),
+            );
+        }
+        body.extend_from_slice(
+            format!(
+                "--{boundary}\r\nContent-Disposition: form-data; name=\"file\"; filename=\"ciphertext\"\r\n\r\nx\r\n--{boundary}--\r\n"
+            )
+            .as_bytes(),
+        );
+        // Without a revision it would be the removed streaming format.
+        let refused = parse_upload(
+            &format!("multipart/form-data; boundary={boundary}"),
+            futures_util::stream::once(async move { Ok::<_, std::io::Error>(Bytes::from(body)) }),
+        )
+        .await;
+        assert_eq!(refused.unwrap_err().status, StatusCode::BAD_REQUEST);
     }
 }

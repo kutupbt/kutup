@@ -13,7 +13,6 @@
 use kutup_crypto::collection_epoch::CollectionEpochStatementV1;
 use kutup_crypto::collection_keyring;
 use kutup_crypto::drive_envelope::{self, DriveEnvelopeContextV1, DriveEnvelopePurpose};
-use kutup_crypto::drive_object::{self, DriveFileBlobContextV1};
 use kutup_crypto::file_keyring::{self, FileKeyLinkV1};
 use reqwest::blocking::Client;
 use reqwest::StatusCode;
@@ -217,12 +216,7 @@ fn drive_move_contract() {
     let after = download(&c, &base, &owner.token, &file.id).1;
     assert_eq!(after, before);
     assert_eq!(
-        drive_object::decrypt_file_blob(
-            &after,
-            &key,
-            DriveFileBlobContextV1::new(&file.id, 1).unwrap()
-        )
-        .unwrap(),
+        open_blob(&after, &file.id, &key, 1).unwrap(),
         b"moves without re-encryption"
     );
     assert_eq!(used(&c, &base, &owner.token), used_before, "a move is free");
@@ -385,10 +379,11 @@ fn drive_move_contract() {
         .collect();
     let first = file_keyring::key_at(&current, &second.id, 2, &chain, 1).unwrap();
     assert_eq!(
-        drive_object::decrypt_file_blob(
+        open_blob(
             &download(&c, &base, &owner.token, &second.id).1,
+            &second.id,
             &first,
-            DriveFileBlobContextV1::new(&second.id, 1).unwrap()
+            1
         )
         .unwrap(),
         b"sealed under generation 1"

@@ -39,7 +39,13 @@ fn upload_named(
         .text("fileId", file.id.clone())
         .text("collectionId", folder.id.clone())
         .text("fileKeyEnvelope", file.file_key_envelope.clone())
-        .text("metadataEnvelope", file.metadata_envelope.clone());
+        .text("metadataEnvelope", file.metadata_envelope.clone())
+        .text("metadataRevision", "1")
+        .text("revisionId", file.revision.clone())
+        .text(
+            "revisionContentEnvelope",
+            revision_content_at(file, &file.revision),
+        );
     if let Some(hash) = hash {
         form = form.text("nameHash", hash.to_owned());
     }
@@ -505,7 +511,7 @@ fn tus_create_named(
     let mut meta = vec![
         ("fileId", file.id.as_str()),
         ("collectionId", folder.id.as_str()),
-        ("metadataEnvelope", file.metadata_envelope.as_str()),
+        ("revisionId", file.revision.as_str()),
         ("fileKeyEnvelope", file.file_key_envelope.as_str()),
     ];
     if let Some(hash) = hash {

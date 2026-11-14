@@ -33,8 +33,7 @@ pub const REVISION_CONTENT_ENVELOPE_BYTES: usize =
 const NAME_BUCKET: usize = 256;
 const KEY_DERIVATION_SALT: &[u8] = crate::labels::DRIVE_ENVELOPE_KEY_V1;
 const WHITEBOARD_ASSET_BINDING_LABEL: &[u8] = crate::labels::DRIVE_ENVELOPE_WHITEBOARD_ASSET_V2;
-const THUMBNAIL_BINDING_LABEL: &[u8] = crate::labels::DRIVE_ENVELOPE_THUMBNAIL_V1;
-const THUMBNAIL_REVISION_BINDING_LABEL: &[u8] = crate::labels::DRIVE_ENVELOPE_THUMBNAIL_V2;
+const THUMBNAIL_BINDING_LABEL: &[u8] = crate::labels::DRIVE_ENVELOPE_THUMBNAIL_V2;
 pub const MAX_WHITEBOARD_ASSET_PLAINTEXT_BYTES: usize = 25 * 1024 * 1024;
 pub const MAX_WHITEBOARD_ASSET_ENVELOPE_BYTES: usize =
     HEADER_LEN + MAX_WHITEBOARD_ASSET_PLAINTEXT_BYTES + TAG_LEN;
@@ -340,21 +339,30 @@ impl DriveEnvelopeContextV1 {
 }
 
 impl DriveEnvelopeContextV1 {
-    /// A file's thumbnail. Bound to the file and its key generation; the variant
-    /// takes the parent slot as a derived id (as whiteboard assets do), so a
-    /// small preview never opens as a large one. The revision is fixed at 1:
-    /// without signed file revisions it could not protect freshness anyway
-    /// (docs/plans/drive-thumbnails.md, "Security notes").
-    pub fn thumbnail(file_id: &str, variant: ThumbnailVariant, generation: u32) -> Result<Self> {
+    /// A file's thumbnail of one content revision. Bound to the file and its
+    /// key generation; the parent slot commits to `SHA-256(label ‖ variant ‖
+    /// revision id)` (as whiteboard assets derive theirs), so a small preview
+    /// never opens as a large one and a thumbnail of older content no longer
+    /// opens once the file's metadata names a newer revision, and is drawn
+    /// again (docs/plans/drive-block-format.md §2). The envelope's revision
+    /// is fixed at 1: freshness comes from the content revision.
+    pub fn thumbnail(
+        file_id: &str,
+        revision_id: &str,
+        variant: ThumbnailVariant,
+        generation: u32,
+    ) -> Result<Self> {
         if generation == 0 {
             return Err(CryptoError::InvalidInput(
                 "Drive thumbnail key generation must be non-zero".into(),
             ));
         }
         let file_id = parse_canonical_uuid(file_id, "thumbnail file")?;
+        let revision_id = parse_canonical_uuid(revision_id, "thumbnail revision")?;
         let mut digest = Hasher::new(Suite::V1);
         digest.update(THUMBNAIL_BINDING_LABEL);
         digest.update(variant.as_str().as_bytes());
+        digest.update(revision_id);
         let digest = digest.finish();
         Ok(Self {
             purpose: DriveEnvelopePurpose::Thumbnail,
@@ -363,27 +371,6 @@ impl DriveEnvelopeContextV1 {
             object_id: file_id,
             parent_id: digest[..16].try_into().expect("sixteen-byte digest prefix"),
         })
-    }
-
-    /// A thumbnail of one content revision (docs/plans/drive-block-format.md
-    /// §2): the parent slot commits to `SHA-256(label ‖ variant ‖ revision
-    /// id)`, so a thumbnail of older content no longer opens once the file's
-    /// metadata names a newer revision, and is drawn again.
-    pub fn thumbnail_of_revision(
-        file_id: &str,
-        revision_id: &str,
-        variant: ThumbnailVariant,
-        generation: u32,
-    ) -> Result<Self> {
-        let mut context = Self::thumbnail(file_id, variant, generation)?;
-        let revision_id = parse_canonical_uuid(revision_id, "thumbnail revision")?;
-        let mut digest = Hasher::new(Suite::V1);
-        digest.update(THUMBNAIL_REVISION_BINDING_LABEL);
-        digest.update(variant.as_str().as_bytes());
-        digest.update(revision_id);
-        let digest = digest.finish();
-        context.parent_id = digest[..16].try_into().expect("sixteen-byte digest prefix");
-        Ok(context)
     }
 }
 

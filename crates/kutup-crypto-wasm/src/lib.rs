@@ -20,10 +20,8 @@ use kutup_crypto::chat_backup::{
     self, ChatBackupContextV1, ChatBackupObjectContextV1, ChatBackupObjectPurposeV1,
     ChatBackupProtectionDomainV1, ChatBackupSuiteId,
 };
-use kutup_crypto::chat_media::{self, ChatMediaObjectContextV1};
 use kutup_crypto::chat_profile;
 use kutup_crypto::drive_envelope::{self, DriveEnvelopeContextV1, DriveEnvelopePurpose};
-use kutup_crypto::drive_object::{self, DriveFileBlobContextV1};
 use kutup_crypto::envelope::{self, CollabFrameContextV3};
 use kutup_crypto::kdf;
 use kutup_crypto::local_state::{self, LocalStatePurpose};
@@ -46,32 +44,9 @@ struct AccountIdentityKeysView {
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
-struct DriveFileBlobPreparationView {
-    object_header: String,
-    stream_key: String,
-}
-
-#[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
-struct ChatMediaObjectPreparationView {
-    object_header: String,
-    stream_key: String,
-}
-
-#[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
 struct ChatBackupMediaPreparationView {
     media_id: String,
     outer_encryption_key: String,
-    object_header: String,
-    padded_plaintext_bytes: u64,
-}
-
-#[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
-struct OpenedChatBackupMediaHeaderView {
-    outer_encryption_key: String,
-    source_ciphertext_bytes: u64,
     padded_plaintext_bytes: u64,
 }
 
@@ -510,63 +485,15 @@ pub fn prepare_chat_backup_media(
         .map_err(|error| js_error(&error.to_string()))?;
     let key = chat_backup::derive_media_encryption_key(&root, context, &media_id)
         .map_err(|error| js_error(&error.to_string()))?;
-    let header = kutup_crypto::chat_backup_media::build_media_header(
-        kutup_crypto::chat_backup_media::ChatBackupMediaContextV1 {
-            account_incarnation_id: context.account_incarnation_id,
-            backup_incarnation_id: context.backup_incarnation_id,
-            protection_domain: context.protection_domain,
-            media_id,
-        },
-        source_ciphertext_bytes,
-    )
-    .map_err(|error| js_error(&error.to_string()))?;
-    let parsed = kutup_crypto::chat_backup_media::inspect_media_header(&header)
-        .map_err(|error| js_error(&error.to_string()))?;
+    let padded_plaintext_bytes =
+        kutup_crypto::chat_backup_media::padded_media_plaintext_bytes(source_ciphertext_bytes)
+            .map_err(|error| js_error(&error.to_string()))?;
     serde_wasm_bindgen::to_value(&ChatBackupMediaPreparationView {
         media_id: hex::encode(media_id),
         outer_encryption_key: STANDARD.encode(key.as_slice()),
-        object_header: STANDARD.encode(header),
-        padded_plaintext_bytes: parsed.padded_plaintext_bytes,
+        padded_plaintext_bytes,
     })
     .map_err(|error| js_error(&format!("encode backup media preparation: {error}")))
-}
-
-#[wasm_bindgen(js_name = openChatBackupMediaHeader)]
-pub fn open_chat_backup_media_header(
-    header_base64: &str,
-    backup_root_base64: &str,
-    expected_account_incarnation_id: &str,
-    expected_backup_incarnation_id: &str,
-    expected_media_id: &str,
-) -> Result<JsValue, JsValue> {
-    let header = decode_canonical_base64(header_base64, "backup media header")?;
-    let root = decode_canonical_base64(backup_root_base64, "backup root")?;
-    let expected = chat_backup_context(
-        expected_account_incarnation_id,
-        expected_backup_incarnation_id,
-    )?;
-    let media_id: [u8; 32] = hex::decode(expected_media_id)
-        .ok()
-        .and_then(|value| value.try_into().ok())
-        .filter(|value: &[u8; 32]| hex::encode(value) == expected_media_id)
-        .ok_or_else(|| js_error("backup media id must be lowercase 32-byte hex"))?;
-    let parsed = kutup_crypto::chat_backup_media::inspect_media_header(&header)
-        .map_err(|error| js_error(&error.to_string()))?;
-    if parsed.context.account_incarnation_id != expected.account_incarnation_id
-        || parsed.context.backup_incarnation_id != expected.backup_incarnation_id
-        || parsed.context.protection_domain != expected.protection_domain
-        || parsed.context.media_id != media_id
-    {
-        return Err(js_error("backup media header context mismatch"));
-    }
-    let key = chat_backup::derive_media_encryption_key(&root, expected, &media_id)
-        .map_err(|error| js_error(&error.to_string()))?;
-    serde_wasm_bindgen::to_value(&OpenedChatBackupMediaHeaderView {
-        outer_encryption_key: STANDARD.encode(key.as_slice()),
-        source_ciphertext_bytes: parsed.source_ciphertext_bytes,
-        padded_plaintext_bytes: parsed.padded_plaintext_bytes,
-    })
-    .map_err(|error| js_error(&format!("encode opened backup media header: {error}")))
 }
 
 /// Derive the recovery authorization proof sent to the server. Raw recovery
@@ -853,7 +780,7 @@ pub fn seal_thumbnail(
         image: decode_canonical_base64(image_base64, "thumbnail image")?,
     };
     let file_key = decode_canonical_base64(file_key_base64, "file key")?;
-    let envelope = thumbnail::seal_v2(
+    let envelope = thumbnail::seal(
         &thumbnail,
         thumbnail_variant(variant)?,
         &file_key,
@@ -878,7 +805,7 @@ pub fn open_thumbnail(
 ) -> Result<JsValue, JsValue> {
     let envelope = decode_canonical_base64(envelope_base64, "thumbnail envelope")?;
     let file_key = decode_canonical_base64(file_key_base64, "file key")?;
-    let opened = thumbnail::open_v2(
+    let opened = thumbnail::open(
         &envelope,
         thumbnail_variant(variant)?,
         &file_key,
@@ -959,80 +886,6 @@ pub fn open_revision_content(
         size: content.size as f64,
     })
     .map_err(|error| js_error(&error.to_string()))
-}
-
-#[wasm_bindgen(js_name = prepareDriveFileBlob)]
-pub fn prepare_drive_file_blob(
-    file_key_base64: &str,
-    file_id: &str,
-    generation: u32,
-) -> Result<JsValue, JsValue> {
-    let file_key = decode_canonical_base64(file_key_base64, "file key")?;
-    let context = DriveFileBlobContextV1::new(file_id, generation)
-        .map_err(|error| js_error(&error.to_string()))?;
-    let object_header = drive_object::file_blob_header(context);
-    let stream_key = drive_object::derive_file_blob_key(&file_key, context)
-        .map_err(|error| js_error(&error.to_string()))?;
-    serde_wasm_bindgen::to_value(&DriveFileBlobPreparationView {
-        object_header: STANDARD.encode(object_header),
-        stream_key: STANDARD.encode(stream_key.as_slice()),
-    })
-    .map_err(|error| js_error(&format!("encode Drive file-blob preparation: {error}")))
-}
-
-#[wasm_bindgen(js_name = openDriveFileBlobHeader)]
-pub fn open_drive_file_blob_header(
-    object_header_base64: &str,
-    file_key_base64: &str,
-    expected_file_id: &str,
-    expected_generation: u32,
-) -> Result<String, JsValue> {
-    let object_header = decode_canonical_base64(object_header_base64, "object header")?;
-    let file_key = decode_canonical_base64(file_key_base64, "file key")?;
-    let expected = DriveFileBlobContextV1::new(expected_file_id, expected_generation)
-        .map_err(|error| js_error(&error.to_string()))?;
-    drive_object::validate_file_blob_header(&object_header, expected)
-        .map_err(|error| js_error(&error.to_string()))?;
-    let stream_key = drive_object::derive_file_blob_key(&file_key, expected)
-        .map_err(|error| js_error(&error.to_string()))?;
-    Ok(STANDARD.encode(stream_key.as_slice()))
-}
-
-/// Return the canonical Chat-media header and its purpose-derived stream key.
-/// JS owns only bounded secretstream I/O, exactly as for Drive file blobs.
-#[wasm_bindgen(js_name = prepareChatMediaObject)]
-pub fn prepare_chat_media_object(
-    attachment_key_base64: &str,
-    attachment_id: &str,
-) -> Result<JsValue, JsValue> {
-    let attachment_key = decode_canonical_base64(attachment_key_base64, "attachment key")?;
-    let context = ChatMediaObjectContextV1::new(attachment_id)
-        .map_err(|error| js_error(&error.to_string()))?;
-    let object_header = chat_media::object_header(context);
-    let stream_key = chat_media::derive_object_key(&attachment_key, context)
-        .map_err(|error| js_error(&error.to_string()))?;
-    serde_wasm_bindgen::to_value(&ChatMediaObjectPreparationView {
-        object_header: STANDARD.encode(object_header),
-        stream_key: STANDARD.encode(stream_key.as_slice()),
-    })
-    .map_err(|error| js_error(&format!("encode Chat-media preparation: {error}")))
-}
-
-#[wasm_bindgen(js_name = openChatMediaObjectHeader)]
-pub fn open_chat_media_object_header(
-    object_header_base64: &str,
-    attachment_key_base64: &str,
-    expected_attachment_id: &str,
-) -> Result<String, JsValue> {
-    let object_header = decode_canonical_base64(object_header_base64, "object header")?;
-    let attachment_key = decode_canonical_base64(attachment_key_base64, "attachment key")?;
-    let expected = ChatMediaObjectContextV1::new(expected_attachment_id)
-        .map_err(|error| js_error(&error.to_string()))?;
-    chat_media::validate_object_header(&object_header, expected)
-        .map_err(|error| js_error(&error.to_string()))?;
-    let stream_key = chat_media::derive_object_key(&attachment_key, expected)
-        .map_err(|error| js_error(&error.to_string()))?;
-    Ok(STANDARD.encode(stream_key.as_slice()))
 }
 
 /// Seal one ledger entity's record as an account record of the account bound

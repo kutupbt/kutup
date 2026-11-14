@@ -219,20 +219,17 @@ mod tests {
     }
 
     #[test]
-    fn the_suites_refuse_each_others_headers() {
+    fn only_its_own_header_is_accepted() {
         let context =
             ChatMediaObjectContextV1::new("66666666-6666-4666-8666-666666666666").unwrap();
         // Suite 1 named under the block magic.
         let mut suite_one = header(context);
         suite_one[8..10].copy_from_slice(&1u16.to_be_bytes());
         assert!(validate_header(&suite_one, context).is_err());
-        // A secretstream (KUTPCM1) header, as it is.
-        assert!(validate_header(&crate::chat_media::object_header(context), context).is_err());
-        // The block suite under the secretstream magic.
+        // The block suite under the old secretstream magic.
         let mut old_magic = header(context);
         old_magic[..8].copy_from_slice(b"KUTPCM1\0");
         assert!(validate_header(&old_magic, context).is_err());
-        assert!(crate::chat_media::validate_object_header(&old_magic, context).is_err());
         assert!(validate_header(&header(context), context).is_ok());
     }
 }

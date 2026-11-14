@@ -13,7 +13,7 @@ registry, purpose-specific keys, and an independent migration boundary.
 | `libsignal-protocol` pinned to tag `v0.97.2` and its Cargo lock commit | Direct Chat, Note to Self, PQXDH, Triple Ratchet/SPQR, sealed-sender envelope and certificate primitives | Signal protocol state machines, wire parsing, ratchets and KEM negotiation | Account/device binding, storage transactions, federation, capabilities, abuse controls, padding policy and fail-closed UX |
 | `hpke-rs` and `hpke-rs-rust-crypto` `0.6.1` | Named Drive share envelopes | RFC 9180 context setup and KEM/KDF/AEAD operation | Suite selection, sender signature, account binding, `info`/AAD, limits and persistence |
 | `x-wing` `0.1.1` and `ml-kem` `0.3.3` (through `hpke-rs-rust-crypto`'s post-quantum KEMs) | The groups' anonymous route (`oblivious`): the X-Wing HPKE KEM, 0x647a | X-Wing key derivation from its seed, encapsulation and decapsulation (draft-connolly-cfrg-xwing-kem-06) | The one suite and its refusal of every other KEM, RFC 9458 framing, labels, padding, key config signing and pinning |
-| `dryoc` `0.7` | Argon2id-compatible password derivation and XChaCha secretstream-compatible Drive and Chat-media blobs | Primitive implementation | Parameters, typed formats, key hierarchy, chunk framing and failure policy |
+| `dryoc` `0.7` | Argon2id-compatible password derivation | Primitive implementation | Parameters, key hierarchy and failure policy |
 | RustCrypto `chacha20poly1305` `0.10`, `ed25519-dalek` `2`, `hkdf` `0.12`, `sha2` `0.10` | Kutup-owned envelopes, signatures, hashing and derivation | Primitive implementation and strict key/signature parsing | Canonical encoding, domain separation, nonce generation, context binding and suite policy |
 | rPGP (`pgp`) `=0.21.0`, no default features (no bzip2) | OpenPGP for mail: address keys, encryption to and from Kutup users and outside PGP users, signatures (docs/plans/mail-address-keys.md) | OpenPGP packet parsing and serialization, key generation, SEIPD encryption, signatures | Address-key shape (v4 Ed25519 + Curve25519, preferences), master-key envelope and its address/fingerprint binding, signed key lists under the account authority, key lookup and trust, limits and UX. Audited: Radically Open Security (2024-12, fixes in CVE-2024-53856/53857), ETH analysis via Delta Chat (2024-03), Open Tech Fund (2019). Its RSA dependency carries the known Marvin timing issue, which needs an RSA *private* key: Kutup generates only Curve25519 keys and uses RSA solely for public operations with outside keys. GnuPG 2.4 interoperability is tested in both directions |
 | `opaque-ke` `=4.0.1`, no default features (`ristretto255` only) | OPAQUE sign-in (docs/plans/opaque.md) | RFC 9807 OPAQUE: OPRF (via `voprf`), envelope, 3DH key exchange over ristretto255 | Suite 1 (OPRF ristretto255-SHA512, 3DH with SHA-512, the context `kutup/opaque/v1`, default identities), the KSF (Argon2id at the account-protection V1 cost through dryoc, so not the crate's `argon2` feature), randomness (dryoc), the credential identifier (the key binding), the export key → master-key KEK derivation, the sealed server setup, limits and lockout. Maintained by Meta (facebook/opaque-ke); used by WhatsApp's end-to-end encrypted backups. Vectors: `opaque-v1.json`, replayed from seeded randomness in Rust and checked in WASM |
@@ -48,9 +48,11 @@ explicit and testable.
 - Signatures: Ed25519.
 - Kutup persistent AEAD: XChaCha20-Poly1305.
 - Standards-constrained AEAD: ChaCha20-Poly1305 for HPKE.
-- Large Drive and Chat-media blobs: `crypto_secretstream_xchacha20poly1305`,
-  5 MiB plaintext chunks and an authenticated final tag, with independent typed
-  headers and keys.
+- Large Drive, Chat-media and Chat backup media objects: Kutup's block format
+  (`kutup-crypto` `blocks.rs`, docs/plans/drive-block-format.md): 4 MiB
+  XChaCha20-Poly1305 blocks bound to their index and revision, with a sealed
+  manifest of block hashes (signed by the uploader for Drive) that fixes the
+  size and the end, and independent typed headers and keys per family.
 
 Algorithms used internally by libsignal are part of the pinned Direct Chat
 suite and are not replaced for palette uniformity. Drive post-quantum wrapping

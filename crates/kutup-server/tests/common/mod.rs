@@ -4,9 +4,12 @@
 use base64::engine::general_purpose::STANDARD;
 use base64::Engine;
 use kutup_crypto::account_ref::AccountRef;
+use kutup_crypto::blocks::{self, SignerIdentity};
 use kutup_crypto::collection_epoch::CollectionEpochStatementV1;
+use kutup_crypto::drive_blocks::{
+    self, DriveBlobContextV2, DRIVE_BLOCKS, DRIVE_BLOCKS_HEADER_BYTES,
+};
 use kutup_crypto::drive_envelope::{self, DriveEnvelopeContextV1, DriveEnvelopePurpose};
-use kutup_crypto::drive_object::{self, DriveFileBlobContextV1};
 use kutup_crypto::identity::AccountIdentityKeysV1;
 use kutup_crypto::named_share::NamedShareEnvelopeV1;
 use reqwest::blocking::{multipart, Client, RequestBuilder, Response};
@@ -632,27 +635,82 @@ pub fn share(c: &Client, base: &str, owner: &User, folder: &Folder, to: &User, c
     assert!(r.status().is_success(), "share: {}", r.status());
 }
 
-/// A sealed file for `folder`: (file id, file key, blob, form fields).
+/// A sealed file for `folder`: (file id, file key, its first revision and
+/// that revision's blob, form fields).
 pub struct Sealed {
     pub id: String,
     pub key: [u8; 32],
+    /// The first upload's revision id, which `blob` is sealed for.
+    pub revision: String,
     pub blob: Vec<u8>,
     pub metadata_envelope: String,
     pub file_key_envelope: String,
 }
 
+/// `plain` in the block format as revision `revision` of file `file_id`,
+/// under its key of `generation`. The manifest is signed with a test key:
+/// the server never checks the signature (readers do, against pins).
+pub fn block_blob(
+    file_id: &str,
+    key: &[u8; 32],
+    revision: &str,
+    generation: u32,
+    plain: &[u8],
+) -> Vec<u8> {
+    drive_blocks::seal_file(
+        plain,
+        key,
+        DriveBlobContextV2::new(file_id, revision, generation).unwrap(),
+        &kutup_crypto::primitives::SigningKey::from_seed(
+            kutup_crypto::primitives::Suite::V1,
+            &[0x5e; 32],
+        ),
+        SignerIdentity {
+            account_id: [0x5e; 16],
+            incarnation_id: [0x5e; 32],
+        },
+    )
+    .unwrap()
+    .bytes
+}
+
+/// The plaintext of a block-format blob of file `file_id` sealed under its
+/// key of `generation`, read as if its metadata committed to its own
+/// manifest (the tests check the bytes a reader would get).
+pub fn open_blob(
+    bytes: &[u8],
+    file_id: &str,
+    key: &[u8],
+    generation: u32,
+) -> kutup_crypto::Result<Vec<u8>> {
+    let header = bytes
+        .get(..DRIVE_BLOCKS_HEADER_BYTES)
+        .ok_or(kutup_crypto::CryptoError::TooShort)?;
+    let revision = uuid::Uuid::from_bytes(drive_blocks::inspect_header(header)?.revision_id);
+    drive_blocks::validate_header(
+        header,
+        DriveBlobContextV2::new(file_id, &revision.to_string(), generation)?,
+    )?;
+    let digest = blocks::object_manifest_digest(bytes, DRIVE_BLOCKS_HEADER_BYTES, &DRIVE_BLOCKS)?;
+    let (plain, _) = blocks::open_object(
+        &DRIVE_BLOCKS,
+        key,
+        DRIVE_BLOCKS_HEADER_BYTES,
+        bytes,
+        &digest,
+    )?;
+    Ok(plain.to_vec())
+}
+
 pub fn seal_file(folder: &Folder, id: &str, plain: &[u8]) -> Sealed {
     let mut key = [0u8; 32];
     kutup_crypto::primitives::random(&mut key);
+    let revision = uuid();
     Sealed {
         id: id.to_string(),
         key,
-        blob: drive_object::encrypt_file_blob(
-            plain,
-            &key,
-            DriveFileBlobContextV1::new(id, 1).unwrap(),
-        )
-        .unwrap(),
+        blob: block_blob(id, &key, &revision, 1, plain),
+        revision,
         metadata_envelope: drive_envelope::seal_b64(
             br#"{"name":"a.txt","mimeType":"text/plain","size":1}"#,
             &key,
@@ -668,12 +726,20 @@ pub fn seal_file(folder: &Folder, id: &str, plain: &[u8]) -> Sealed {
     }
 }
 
+/// A whole-buffer upload of `file` into `folder` (`POST /api/files/upload`),
+/// committed inline as its first revision.
 pub fn upload(c: &Client, base: &str, token: &str, folder: &Folder, file: &Sealed) -> Response {
     let form = multipart::Form::new()
         .text("fileId", file.id.clone())
         .text("collectionId", folder.id.clone())
         .text("fileKeyEnvelope", file.file_key_envelope.clone())
         .text("metadataEnvelope", file.metadata_envelope.clone())
+        .text("metadataRevision", "1")
+        .text("revisionId", file.revision.clone())
+        .text(
+            "revisionContentEnvelope",
+            revision_content_at(file, &file.revision),
+        )
         .text("nameHash", test_name_hash(&file.id))
         .part(
             "file",
@@ -692,19 +758,138 @@ pub fn download(c: &Client, base: &str, token: &str, file_id: &str) -> (StatusCo
     (r.status(), r.bytes().unwrap().to_vec())
 }
 
-pub fn post_version(c: &Client, base: &str, token: &str, file_id: &str, blob: Vec<u8>) -> Response {
-    let form = multipart::Form::new()
-        .text("kind", "file")
-        .text("seqAtSnapshot", "0")
-        .text("docKeyId", "1")
-        .part("file", multipart::Part::bytes(blob).file_name("version"));
-    bearer(
-        c.post(format!("{base}/api/files/{file_id}/versions")),
+/// A version of a file, sealed in the block format as its own revision.
+pub struct Version {
+    pub file_id: String,
+    pub key: [u8; 32],
+    pub generation: u32,
+    pub revision: String,
+    pub blob: Vec<u8>,
+}
+
+impl Version {
+    /// `plain` as a new revision of file `file_id`, under its key of
+    /// `generation`.
+    pub fn seal(file_id: &str, key: &[u8; 32], generation: u32, plain: &[u8]) -> Self {
+        let revision = uuid();
+        Self {
+            file_id: file_id.to_owned(),
+            key: *key,
+            generation,
+            blob: block_blob(file_id, key, &revision, generation, plain),
+            revision,
+        }
+    }
+
+    /// The revision's sealed content record (the server checks only its
+    /// binding).
+    pub fn revision_content(&self) -> String {
+        sealed_revision_content(&self.file_id, &self.key, &self.revision, self.generation)
+    }
+
+    /// The file's metadata at `revision`, sealed under this version's key.
+    pub fn metadata_at(&self, revision: i64) -> String {
+        drive_envelope::seal_b64(
+            br#"{"name":"a.txt","mimeType":"text/plain","size":1}"#,
+            &self.key,
+            DriveEnvelopeContextV1::file_metadata(
+                &self.file_id,
+                self.generation,
+                u64::try_from(revision).unwrap(),
+            )
+            .unwrap(),
+        )
+        .unwrap()
+    }
+}
+
+/// `POST /api/files/{id}/versions` with `fields`, committing `version`
+/// inline with the file's next metadata. The test doesn't track the file's
+/// metadata revision: a first request names revision 1, which no stored
+/// file can take next, and the `409 revision_conflict` it gets names the
+/// current one, on top of which the save is sealed again (as clients do).
+/// Any other answer to the first request is the answer.
+pub fn save_version(
+    c: &Client,
+    base: &str,
+    token: &str,
+    version: &Version,
+    fields: &[(&str, &str)],
+) -> Answer {
+    let send = |metadata_revision: i64| {
+        let mut form = multipart::Form::new()
+            .text("revisionId", version.revision.clone())
+            .text("revisionContentEnvelope", version.revision_content())
+            .text("metadataEnvelope", version.metadata_at(metadata_revision))
+            .text("metadataRevision", metadata_revision.to_string());
+        for (name, value) in fields {
+            form = form.text(name.to_string(), value.to_string());
+        }
+        let form = form.part(
+            "file",
+            multipart::Part::bytes(version.blob.clone()).file_name("version"),
+        );
+        bearer(
+            c.post(format!("{base}/api/files/{}/versions", version.file_id)),
+            token,
+        )
+        .multipart(form)
+        .send()
+        .unwrap()
+    };
+    let first = Answer::of(send(1));
+    let current = (first.status == StatusCode::CONFLICT)
+        .then(|| first.json::<Value>().ok())
+        .flatten()
+        .filter(|body| body["code"] == "revision_conflict")
+        .and_then(|body| body["metadataRevision"].as_i64());
+    match current {
+        Some(current) => Answer::of(send(current + 1)),
+        None => first,
+    }
+}
+
+/// A response read whole: its status and body.
+pub struct Answer {
+    status: StatusCode,
+    body: Vec<u8>,
+}
+
+impl Answer {
+    pub fn of(response: Response) -> Self {
+        Self {
+            status: response.status(),
+            body: response.bytes().unwrap().to_vec(),
+        }
+    }
+
+    pub fn status(&self) -> StatusCode {
+        self.status
+    }
+
+    pub fn json<T: serde::de::DeserializeOwned>(&self) -> serde_json::Result<T> {
+        serde_json::from_slice(&self.body)
+    }
+
+    pub fn text(&self) -> String {
+        String::from_utf8_lossy(&self.body).into_owned()
+    }
+}
+
+/// The fields of a whole-file version save.
+pub const WHOLE_FILE: [(&str, &str); 3] =
+    [("kind", "file"), ("seqAtSnapshot", "0"), ("docKeyId", "1")];
+
+/// A whole-file version of `file` (generation 1, its first key) holding
+/// `plain`.
+pub fn post_version(c: &Client, base: &str, token: &str, file: &Sealed, plain: &[u8]) -> Answer {
+    save_version(
+        c,
+        base,
         token,
+        &Version::seal(&file.id, &file.key, 1, plain),
+        &WHOLE_FILE,
     )
-    .multipart(form)
-    .send()
-    .unwrap()
 }
 
 pub fn put_asset(
@@ -748,7 +933,7 @@ pub fn tus_create(
     let meta = [
         ("fileId", file.id.as_str()),
         ("collectionId", folder.id.as_str()),
-        ("metadataEnvelope", file.metadata_envelope.as_str()),
+        ("revisionId", file.revision.as_str()),
         ("fileKeyEnvelope", file.file_key_envelope.as_str()),
         ("nameHash", name_hash.as_str()),
     ]
@@ -1260,6 +1445,25 @@ pub fn revision_content_of(
         &content, &file.key, &file.id, generation,
     )
     .unwrap())
+}
+
+/// A record for `revision` of file `file_id` under its key of `generation`:
+/// the server checks only its binding, never what it commits to.
+pub fn sealed_revision_content(
+    file_id: &str,
+    key: &[u8; 32],
+    revision: &str,
+    generation: u32,
+) -> String {
+    let content = kutup_crypto::revision_content::RevisionContentV1::new(
+        *uuid::Uuid::parse_str(revision).unwrap().as_bytes(),
+        [0; 32],
+        0,
+    );
+    b64(
+        &kutup_crypto::revision_content::seal_revision_content(&content, key, file_id, generation)
+            .unwrap(),
+    )
 }
 
 /// A record for `revision` of `file` at key generation 1: the server checks

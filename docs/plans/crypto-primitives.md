@@ -46,9 +46,10 @@ pub fn pwhash(params: &PwhashParams, password, salt, out) -> Result<()>;  // Arg
   operation matches it once. `Aead::new` resolves the cipher once for a
   stream of blocks (the block format), so per-block cost is unchanged.
   Measured against #321 §9 before the block format builds on it.
-- **Secretstream** (5 MiB frames, libsodium-compatible) moves in as
+- **Secretstream** (5 MiB frames, libsodium-compatible) moved in as
   `primitives::legacy::secretstream`, unchanged, until the block format
-  replaces it at the wipe. Then it is deleted.
+  replaced it at the wipe; it was deleted then (docs/plans/drive-block-format.md
+  §10 slice 7).
 - **Argon2id stays libsodium-compatible** (dryoc's `crypto_pwhash`, one lane,
   `OPSLIMIT 3`, `MEMLIMIT 64 MiB`, persisted per account). Only the call moves
   behind `pwhash`.
@@ -104,7 +105,7 @@ pub fn pwhash(params: &PwhashParams, password, salt, out) -> Result<()>;  // Arg
 | `dryoc::rng::copy_randombytes` (25), `OsRng`, `thread_rng` | `random`, `random_key` |
 | `ed25519_dalek` (14 files) | `SigningKey` / `VerifyingKey` (strict) |
 | `hpke_xwing::suite()` (7 users) | `hpke_seal` / `hpke_open` |
-| `dryoc` pwhash, secretstream | `pwhash`, `legacy::secretstream` |
+| `dryoc` pwhash | `pwhash` (secretstream: deleted with the block format) |
 | server: `Sha256` tokens (36 files), `Hmac` subkeys (4 copies), 4 RNG styles, 3 `constant_time_eq` | `hash`, `subkey`, `random`, `ct_eq` |
 
 **Adapters** stay outside the table, each one module with an `#[allow]` and
@@ -272,7 +273,6 @@ adapter adds its row here, in the PR that adds it.
 | `crates/kutup-crypto/src/pass_vault.rs` | KeePass's composite key (SHA-256 of the password) |
 | `crates/kutup-crypto/src/provisioning.rs` | Signal's ProvisioningCipher |
 | `crates/kutup-crypto/src/safety_number.rs` | Signal's safety number (iterated SHA-512) |
-| `crates/kutup-crypto/src/stream.rs` | secretstream, until the block format replaces it |
 | `crates/kutup-crypto/tests/vectors.rs` | reference implementations for the vectors |
 | `crates/kutup-crypto/tests/chat_contact_list_vectors.rs` | reference implementations for the vectors |
 | `crates/kutup-crypto/tests/chat_group_list_vectors.rs` | reference implementations for the vectors |

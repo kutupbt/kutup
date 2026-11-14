@@ -1,12 +1,10 @@
 //! What the server checks of a Drive blob it stores: only what is public.
-//! A blob in the block format (docs/plans/drive-block-format.md §3, suite 2)
-//! names its revision, which the client chose and the request names too; the
-//! server checks the header against the file, the key generation and that
-//! revision, and the structure the trailer and the length give: the manifest
-//! length fits the block count, and the count fits the length. That catches a
-//! broken client early. It can't check the AEAD. A blob of the streaming
-//! format (suite 1) has its header checked, as before; it goes with the wipe
-//! (slice 7).
+//! Every blob is in the block format (docs/plans/drive-block-format.md §3,
+//! suite 2) and names its revision, which the client chose and the request
+//! names too; the server checks the header against the file, the key
+//! generation and that revision, and the structure the trailer and the
+//! length give: the manifest length fits the block count, and the count fits
+//! the length. That catches a broken client early. It can't check the AEAD.
 
 use std::io::{Read, Seek, SeekFrom};
 
@@ -17,116 +15,67 @@ use kutup_crypto::blocks::TRAILER_LEN;
 use kutup_crypto::drive_blocks::{
     self, DriveBlobContextV2, DRIVE_BLOCKS, DRIVE_BLOCKS_HEADER_BYTES,
 };
-use kutup_crypto::drive_object::{self, DriveFileBlobContextV1, FILE_BLOB_HEADER_BYTES};
 use tempfile::NamedTempFile;
 use uuid::Uuid;
 
 use crate::error::{AppError, AppResult};
 
-/// The format of a blob being stored, from what the request names.
+/// The Drive object suite every stored blob is in (`blob_suite` of
+/// `files`, `file_versions` and `uploads`): the block format.
+pub const BLOCK_SUITE: i16 = 2;
+
+/// A block-format blob being stored, bound to the revision the client chose.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum BlobFormat {
-    /// Suite 1: secretstream, no revision in the blob.
-    Stream,
-    /// Suite 2: blocks, bound to the revision the client chose.
-    Blocks { revision_id: Uuid },
+pub struct BlockBlob {
+    pub revision_id: Uuid,
 }
 
-impl BlobFormat {
-    /// From a request's optional `revisionId`: a canonical lowercase UUID
-    /// names a block-format blob; none, a streaming one.
+impl BlockBlob {
+    /// From a request's `revisionId`: a canonical lowercase random UUID.
     pub fn from_revision(revision_id: Option<&str>) -> AppResult<Self> {
-        match revision_id {
-            None => Ok(Self::Stream),
-            Some(text) => {
-                // A random (v4) UUID only: the id is public, as an ETag, and
-                // a v1 or v7 id would carry a MAC address or a time.
-                let id = Uuid::parse_str(text)
-                    .ok()
-                    .filter(|id| id.get_version_num() == 4 && id.hyphenated().to_string() == text)
-                    .ok_or_else(|| AppError::bad_request("invalid revision id"))?;
-                Ok(Self::Blocks { revision_id: id })
-            }
-        }
+        let text = revision_id.ok_or_else(|| AppError::bad_request("revisionId is required"))?;
+        // A random (v4) UUID only: the id is public, as an ETag, and a v1 or
+        // v7 id would carry a MAC address or a time.
+        let id = Uuid::parse_str(text)
+            .ok()
+            .filter(|id| id.get_version_num() == 4 && id.hyphenated().to_string() == text)
+            .ok_or_else(|| AppError::bad_request("invalid revision id"))?;
+        Ok(Self { revision_id: id })
     }
 
-    /// The revision the stored content will be: the client's for blocks,
-    /// else a new one.
-    pub fn revision_id(self) -> Uuid {
-        match self {
-            Self::Blocks { revision_id } => revision_id,
-            Self::Stream => Uuid::new_v4(),
-        }
+    /// The shortest blob: an empty file's.
+    pub fn min_len() -> u64 {
+        drive_blocks::blob_len(0).expect("an empty blob has a length")
     }
 
-    /// The Drive object suite, as the `uploads` row keeps it.
-    pub fn suite(self) -> i16 {
-        match self {
-            Self::Stream => 1,
-            Self::Blocks { .. } => 2,
-        }
-    }
-
-    pub fn from_suite(suite: i16, revision_id: Uuid) -> AppResult<Self> {
-        match suite {
-            1 => Ok(Self::Stream),
-            2 => Ok(Self::Blocks { revision_id }),
-            _ => Err(AppError::internal("unknown Drive blob suite")),
-        }
-    }
-
-    /// The shortest blob of this format: an empty file's.
-    pub fn min_len(self) -> u64 {
-        match self {
-            Self::Stream => {
-                (drive_object::FILE_BLOB_PREFIX_BYTES + kutup_crypto::stream::ABYTES) as u64
-            }
-            Self::Blocks { .. } => drive_blocks::blob_len(0).expect("an empty blob has a length"),
-        }
-    }
-
-    /// The bytes [`Self::check_head`] needs.
-    pub fn head_len(self) -> usize {
-        match self {
-            Self::Stream => FILE_BLOB_HEADER_BYTES,
-            Self::Blocks { .. } => DRIVE_BLOCKS_HEADER_BYTES,
-        }
-    }
-
-    /// Checks a blob's first bytes against the file and key generation (and,
-    /// for blocks, the revision).
+    /// Checks a blob's first bytes against the file, the key generation and
+    /// the revision.
     pub fn check_head(self, head: &[u8], file_id: Uuid, generation: u32) -> AppResult<()> {
         let invalid = || AppError::bad_request("invalid Drive file blob");
-        let head = head.get(..self.head_len()).ok_or_else(invalid)?;
-        let file = file_id.hyphenated().to_string();
-        let checked = match self {
-            Self::Stream => DriveFileBlobContextV1::new(&file, generation)
-                .and_then(|context| drive_object::validate_file_blob_header(head, context)),
-            Self::Blocks { revision_id } => {
-                DriveBlobContextV2::new(&file, &revision_id.hyphenated().to_string(), generation)
-                    .and_then(|context| drive_blocks::validate_header(head, context))
-            }
-        };
-        checked.map_err(|_| invalid())
+        let head = head.get(..DRIVE_BLOCKS_HEADER_BYTES).ok_or_else(invalid)?;
+        DriveBlobContextV2::new(
+            &file_id.hyphenated().to_string(),
+            &self.revision_id.hyphenated().to_string(),
+            generation,
+        )
+        .and_then(|context| drive_blocks::validate_header(head, context))
+        .map_err(|_| invalid())
     }
 
     /// Checks a whole blob's structure from its length and its trailer (its
-    /// last [`TRAILER_LEN`] bytes); nothing to check for the streaming
-    /// format.
-    pub fn check_tail(self, total: u64, trailer: &[u8]) -> AppResult<()> {
-        if let Self::Blocks { .. } = self {
-            let manifest = DRIVE_BLOCKS
-                .parse_trailer(trailer)
-                .map_err(|_| AppError::bad_request("invalid Drive file blob trailer"))?;
-            DRIVE_BLOCKS
-                .check_structure(DRIVE_BLOCKS_HEADER_BYTES, total, manifest)
-                .map_err(|_| AppError::bad_request("invalid Drive file blob structure"))?;
-        }
+    /// last [`TRAILER_LEN`] bytes).
+    pub fn check_tail(total: u64, trailer: &[u8]) -> AppResult<()> {
+        let manifest = DRIVE_BLOCKS
+            .parse_trailer(trailer)
+            .map_err(|_| AppError::bad_request("invalid Drive file blob trailer"))?;
+        DRIVE_BLOCKS
+            .check_structure(DRIVE_BLOCKS_HEADER_BYTES, total, manifest)
+            .map_err(|_| AppError::bad_request("invalid Drive file blob structure"))?;
         Ok(())
     }
 
-    /// Checks a blob held whole in `file` (`size` bytes): its head and, for
-    /// blocks, its structure.
+    /// Checks a blob held whole in `file` (`size` bytes): its head and its
+    /// structure.
     pub fn check_file(
         self,
         file: &NamedTempFile,
@@ -135,11 +84,11 @@ impl BlobFormat {
         generation: u32,
     ) -> AppResult<()> {
         let invalid = || AppError::bad_request("invalid Drive file blob");
-        if size < self.min_len() {
+        if size < Self::min_len() {
             return Err(invalid());
         }
         let mut source = std::fs::File::open(file.path()).map_err(|_| invalid())?;
-        let mut head = vec![0u8; self.head_len()];
+        let mut head = vec![0u8; DRIVE_BLOCKS_HEADER_BYTES];
         source.read_exact(&mut head).map_err(|_| invalid())?;
         self.check_head(&head, file_id, generation)?;
         let mut trailer = [0u8; TRAILER_LEN];
@@ -147,7 +96,7 @@ impl BlobFormat {
             .seek(SeekFrom::Start(size - TRAILER_LEN as u64))
             .and_then(|_| source.read_exact(&mut trailer))
             .map_err(|_| invalid())?;
-        self.check_tail(size, &trailer)
+        Self::check_tail(size, &trailer)
     }
 }
 
@@ -245,22 +194,13 @@ pub fn revision_conflict_at(metadata_revision: i64, metadata_envelope: Option<&s
 }
 
 /// A whole-buffer upload of a new file (multipart, federated) commits inline
-/// (docs/plans/drive-block-format.md §10 slice 3): in the block format it
-/// names its metadata's revision, which must be 1 (`409` otherwise); the
-/// streaming format's metadata is revision 1 without naming it.
-pub fn check_first_metadata_revision(format: BlobFormat, revision: Option<&str>) -> AppResult<()> {
-    match (format, revision) {
-        (BlobFormat::Stream, None) => Ok(()),
-        (BlobFormat::Stream, Some(_)) => Err(AppError::bad_request(
-            "metadataRevision goes with the block format",
-        )),
-        (BlobFormat::Blocks { .. }, None) => {
-            Err(AppError::bad_request("metadataRevision is required"))
-        }
-        (BlobFormat::Blocks { .. }, Some(text)) => match parse_metadata_revision(text)? {
-            1 => Ok(()),
-            _ => Err(revision_conflict()),
-        },
+/// (docs/plans/drive-block-format.md §10 slice 3): it names its metadata's
+/// revision, which must be 1 (`409` otherwise).
+pub fn check_first_metadata_revision(revision: Option<&str>) -> AppResult<()> {
+    let text = revision.ok_or_else(|| AppError::bad_request("metadataRevision is required"))?;
+    match parse_metadata_revision(text)? {
+        1 => Ok(()),
+        _ => Err(revision_conflict()),
     }
 }
 
@@ -276,49 +216,36 @@ pub fn parse_metadata_revision(text: &str) -> AppResult<i64> {
 /// block-format revision's sealed content record.
 pub const REVISION_CONTENT_FIELD: &str = "revisionContentEnvelope";
 
-/// A block-format revision's sealed `RevisionContent` record
+/// A revision's sealed `RevisionContent` record
 /// (docs/plans/drive-block-format.md §2, §10 slice 3 "History versions"):
-/// required with every block-format revision the server stores and refused
-/// with a streaming one. Only its public header is checked, against the
-/// file, the revision and the key generation that sealed the object, and its
-/// one length; the server can't read what it commits to. Returns what to
-/// store (`None` for the streaming format).
+/// required with every revision the server stores. Only its public header is
+/// checked, against the file, the revision and the key generation that
+/// sealed the object, and its one length; the server can't read what it
+/// commits to. Returns what to store.
 pub fn revision_content_envelope(
-    format: BlobFormat,
+    blob: BlockBlob,
     value: Option<&str>,
     file_id: Uuid,
     generation: u32,
-) -> AppResult<Option<String>> {
+) -> AppResult<String> {
     let invalid = || AppError::bad_request("invalid revisionContentEnvelope");
-    match (format, value) {
-        (BlobFormat::Stream, None) => Ok(None),
-        (BlobFormat::Stream, Some(_)) => Err(AppError::bad_request(
-            "revisionContentEnvelope goes with the block format",
-        )),
-        (BlobFormat::Blocks { .. }, None) => {
-            Err(AppError::bad_request("revisionContentEnvelope is required"))
-        }
-        (BlobFormat::Blocks { revision_id }, Some(text)) => {
-            // Bounded before decoding: the envelope has one length.
-            if text.len()
-                != kutup_crypto::drive_envelope::REVISION_CONTENT_ENVELOPE_BYTES.div_ceil(3) * 4
-            {
-                return Err(invalid());
-            }
-            let bytes = STANDARD.decode(text).map_err(|_| invalid())?;
-            if STANDARD.encode(&bytes) != text {
-                return Err(invalid());
-            }
-            kutup_crypto::revision_content::validate(
-                &bytes,
-                &file_id.hyphenated().to_string(),
-                &revision_id.hyphenated().to_string(),
-                generation,
-            )
-            .map_err(|_| invalid())?;
-            Ok(Some(text.to_owned()))
-        }
+    let text = value.ok_or_else(|| AppError::bad_request("revisionContentEnvelope is required"))?;
+    // Bounded before decoding: the envelope has one length.
+    if text.len() != kutup_crypto::drive_envelope::REVISION_CONTENT_ENVELOPE_BYTES.div_ceil(3) * 4 {
+        return Err(invalid());
     }
+    let bytes = STANDARD.decode(text).map_err(|_| invalid())?;
+    if STANDARD.encode(&bytes) != text {
+        return Err(invalid());
+    }
+    kutup_crypto::revision_content::validate(
+        &bytes,
+        &file_id.hyphenated().to_string(),
+        &blob.revision_id.hyphenated().to_string(),
+        generation,
+    )
+    .map_err(|_| invalid())?;
+    Ok(text.to_owned())
 }
 
 /// Frees what an upload row holds in storage: an uploaded revision's whole
@@ -385,13 +312,13 @@ mod tests {
             let content = RevisionContentV1::new(*revision.as_bytes(), [1; 32], 10);
             STANDARD.encode(seal_revision_content(&content, &key, FILE, 2).unwrap())
         };
-        let blocks = BlobFormat::Blocks {
+        let blocks = BlockBlob {
             revision_id: revision,
         };
         let good = seal(revision);
         assert_eq!(
             revision_content_envelope(blocks, Some(&good), file, 2).unwrap(),
-            Some(good.clone())
+            good
         );
         // Missing; another revision, generation or file; not base64.
         assert!(revision_content_envelope(blocks, None, file, 2).is_err());
@@ -399,12 +326,6 @@ mod tests {
         assert!(revision_content_envelope(blocks, Some(&good), file, 1).is_err());
         assert!(revision_content_envelope(blocks, Some(&good), other, 2).is_err());
         assert!(revision_content_envelope(blocks, Some(&good[1..]), file, 2).is_err());
-        // The streaming format has none.
-        assert_eq!(
-            revision_content_envelope(BlobFormat::Stream, None, file, 2).unwrap(),
-            None
-        );
-        assert!(revision_content_envelope(BlobFormat::Stream, Some(&good), file, 2).is_err());
     }
 
     fn blob(size: usize) -> Vec<u8> {
@@ -429,16 +350,16 @@ mod tests {
         file
     }
 
-    fn blocks() -> BlobFormat {
-        BlobFormat::from_revision(Some(REVISION)).unwrap()
+    fn blocks() -> BlockBlob {
+        BlockBlob::from_revision(Some(REVISION)).unwrap()
     }
 
     #[test]
     fn a_revision_id_names_the_block_format() {
-        assert_eq!(BlobFormat::from_revision(None).unwrap(), BlobFormat::Stream);
+        assert!(BlockBlob::from_revision(None).is_err());
         assert_eq!(
             blocks(),
-            BlobFormat::Blocks {
+            BlockBlob {
                 revision_id: Uuid::parse_str(REVISION).unwrap()
             }
         );
@@ -452,33 +373,24 @@ mod tests {
             "01890000-0000-7000-8000-000000000000",
             "",
         ] {
-            assert!(BlobFormat::from_revision(Some(bad)).is_err(), "{bad}");
+            assert!(BlockBlob::from_revision(Some(bad)).is_err(), "{bad}");
         }
     }
 
     #[test]
     fn a_new_files_inline_commit_names_revision_one() {
-        let stream = BlobFormat::Stream;
-        check_first_metadata_revision(stream, None).unwrap();
-        assert!(check_first_metadata_revision(stream, Some("1")).is_err());
-        check_first_metadata_revision(blocks(), Some("1")).unwrap();
+        check_first_metadata_revision(Some("1")).unwrap();
         assert_eq!(
-            check_first_metadata_revision(blocks(), None)
-                .unwrap_err()
-                .status,
+            check_first_metadata_revision(None).unwrap_err().status,
             axum::http::StatusCode::BAD_REQUEST
         );
         assert_eq!(
-            check_first_metadata_revision(blocks(), Some("2"))
-                .unwrap_err()
-                .status,
+            check_first_metadata_revision(Some("2")).unwrap_err().status,
             axum::http::StatusCode::CONFLICT
         );
         for bad in ["0", "-1", "x", ""] {
             assert_eq!(
-                check_first_metadata_revision(blocks(), Some(bad))
-                    .unwrap_err()
-                    .status,
+                check_first_metadata_revision(Some(bad)).unwrap_err().status,
                 axum::http::StatusCode::BAD_REQUEST,
                 "{bad}"
             );
@@ -500,10 +412,8 @@ mod tests {
                 .is_err());
             assert!(blocks().check_head(&bytes, file, 4).is_err());
             let other =
-                BlobFormat::from_revision(Some("33333333-3333-4333-8333-333333333333")).unwrap();
+                BlockBlob::from_revision(Some("33333333-3333-4333-8333-333333333333")).unwrap();
             assert!(other.check_head(&bytes, file, 3).is_err());
-            // A streaming header is not a block one.
-            assert!(BlobFormat::Stream.check_head(&bytes, file, 3).is_err());
             // A block's worth more, or a broken trailer. (A few bytes more
             // or less within the last block is a shape the server can't
             // tell from another size.)

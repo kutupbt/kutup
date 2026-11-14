@@ -25,7 +25,8 @@ export interface ThumbnailTarget {
 /**
  * Seal and store each thumbnail made for a file, replacing what was there.
  * `source` is the version it was drawn from, or `original` for the upload;
- * the listing compares it with the latest version to spot stale ones.
+ * the listing compares it with the latest version to spot stale ones. The
+ * server checks the envelope is bound to the revision named.
  */
 export async function storeThumbnails(
   target: ThumbnailTarget,
@@ -43,7 +44,7 @@ export async function storeThumbnails(
       variant,
     })
     await api.put(
-      `/files/${target.fileId}/thumbnails/${variant}?${new URLSearchParams({ source }).toString()}`,
+      `/files/${target.fileId}/thumbnails/${variant}?${new URLSearchParams({ source, revision: target.revisionId }).toString()}`,
       envelope,
       { headers: { 'Content-Type': 'application/octet-stream' } },
     )

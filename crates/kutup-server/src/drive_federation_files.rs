@@ -90,8 +90,7 @@ pub struct FileStateResponse {
     /// The version the state is.
     pub version_id: Uuid,
     /// Its sealed content record (docs/plans/drive-block-format.md §2),
-    /// which a reader opens before the state; `null` for a streaming-format
-    /// version.
+    /// which a reader opens before the state.
     pub revision_content_envelope: Option<String>,
 }
 

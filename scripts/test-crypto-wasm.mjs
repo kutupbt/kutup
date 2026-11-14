@@ -192,32 +192,6 @@ assert.throws(
   assert.throws(() => crypto.openDriveEnvelope(wrapped, albumKey, 3, 2, 3n, file, album), /authentication failed/)
 }
 
-// File blobs are bound to the file and the file key's generation, not a folder.
-const blobVector = vectors.driveFileBlob
-const driveFileBlob = crypto.prepareDriveFileBlob(blobVector.fileKey, blobVector.fileId, blobVector.generation)
-assert.deepEqual(driveFileBlob, {
-  objectHeader: blobVector.objectHeader,
-  streamKey: blobVector.derivedStreamKey,
-})
-assert.equal(
-  crypto.openDriveFileBlobHeader(
-    driveFileBlob.objectHeader,
-    blobVector.fileKey,
-    blobVector.fileId,
-    blobVector.generation,
-  ),
-  driveFileBlob.streamKey,
-)
-for (const [fileId, generation] of [
-  ['33333333-3333-4333-8333-333333333333', blobVector.generation],
-  [blobVector.fileId, blobVector.generation + 1],
-]) {
-  assert.throws(
-    () => crypto.openDriveFileBlobHeader(driveFileBlob.objectHeader, blobVector.fileKey, fileId, generation),
-    /context does not match/,
-  )
-}
-
 const identityMaster = 'AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8='
 const collectionKey = Buffer.alloc(32, 0x33).toString('base64')
 const epochStatement = crypto.createCollectionEpochStatement(
@@ -304,25 +278,6 @@ assert.throws(
 )
 
 const attachmentId = '11111111-1111-4111-8111-111111111111'
-const attachmentKey = Buffer.alloc(32, 0x42).toString('base64')
-const chatMedia = crypto.prepareChatMediaObject(attachmentKey, attachmentId)
-assert.deepEqual(chatMedia, {
-  objectHeader: 'S1VUUENNMQAAAQEAERERERERQRGBEREREREREQ==',
-  streamKey: 'pV4kyXvsX6NrGxJmf9SVT3kNGZu2EgwWQWC/qS2kbF8=',
-})
-assert.equal(
-  crypto.openChatMediaObjectHeader(chatMedia.objectHeader, attachmentKey, attachmentId),
-  chatMedia.streamKey,
-)
-assert.throws(
-  () => crypto.openChatMediaObjectHeader(
-    chatMedia.objectHeader,
-    attachmentKey,
-    '22222222-2222-4222-8222-222222222222',
-  ),
-  /context does not match/,
-)
-
 // The Chat attachment ledger: one chained account record per entity.
 const ledgerMaster = Buffer.alloc(32, 0x33).toString('base64')
 const ledgerBinding = '0b6b5e0c-4c1e-4b8e-9c2d-6a1f3e5d7c9b'
@@ -461,7 +416,7 @@ const backupMedia = crypto.prepareChatBackupMedia(
 )
 assert.match(backupMedia.mediaId, /^[0-9a-f]{64}$/)
 assert.equal(backupMedia.paddedPlaintextBytes >= 10_000, true)
-assert.equal(Buffer.from(backupMedia.objectHeader, 'base64').length, 107)
+assert.equal(backupMedia.objectHeader, undefined)
 
 // Local-state envelopes: session-fork payloads (2) and persisted web
 // sessions (3) open to the canonical Rust vectors, fail closed on the wrong
@@ -509,12 +464,16 @@ assert.throws(
 }
 
 // Thumbnails: the browser seals and opens only thumbnails bound to the
-// content revision they show (docs/plans/drive-block-format.md §2; the
-// canonical vector is the revision-less form, which only Rust reads). One
+// content revision they show (docs/plans/drive-block-format.md §2): the
+// canonical vector opens, and a fresh seal round-trips. One
 // opens only as its own variant, file, revision and key generation; the
 // generic envelope export refuses the purposes that have typed exports.
 const thumb = vectors.thumbnail
-const thumbRevision = '22222222-2222-4222-8222-222222222222'
+const thumbRevision = thumb.revisionId
+assert.deepEqual(
+  crypto.openThumbnail(thumb.envelope, thumb.variant, thumb.fileKey, thumb.fileId, thumbRevision, thumb.generation),
+  { format: 1, width: thumb.width, height: thumb.height, image: thumb.image },
+)
 const sealedThumb = crypto.sealThumbnail(
   thumb.image, 1, thumb.width, thumb.height, thumb.variant, thumb.fileKey, thumb.fileId, thumbRevision, thumb.generation,
 )
@@ -536,8 +495,6 @@ assert.throws(() =>
   crypto.openThumbnail(sealedThumb, thumb.variant, thumb.fileKey, thumb.fileId, '44444444-4444-4444-8444-444444444444', thumb.generation),
 )
 assert.throws(() => crypto.openThumbnail(sealedThumb, thumb.variant, thumb.fileKey, thumb.fileId, thumbRevision, thumb.generation + 1))
-// The revision-less canonical vector does not open as a revision's.
-assert.throws(() => crypto.openThumbnail(thumb.envelope, thumb.variant, thumb.fileKey, thumb.fileId, thumbRevision, thumb.generation))
 assert.throws(
   () => crypto.sealThumbnail(Buffer.from('<svg/>').toString('base64'), 3, 10, 10, 'sm', thumb.fileKey, thumb.fileId, thumbRevision, 1),
   /format/,
@@ -649,32 +606,14 @@ assert.throws(() =>
   crypto.openCollabFrame(frameVector.frame, frameVector.fileKey, frameVector.fileId, frameVector.keyGeneration + 1),
 )
 
-// The browser's file metadata is FileMetadataV2: the canonical vectors'
-// fields (FileMetadataV1's, which only Rust reads) plus the content
-// commitment, which goes right after `size`.
+// The file metadata (FileMetadataV2): canonical, strict, and committing to
+// its content.
 const metadataVector = vectors.fileMetadata
-const metadataContent = {
-  revisionId: '22222222-2222-4222-8222-222222222222',
-  manifestSha256: Buffer.alloc(32, 7).toString('base64'),
-}
-const withContent = (json) => JSON.stringify({ ...JSON.parse(json), content: metadataContent })
 for (const { input, output } of metadataVector.canonical) {
-  const expected = output.replace(/^(\{"name":.*?"size":\d+)/, `$1,"content":${JSON.stringify(metadataContent)}`)
-  assert.notEqual(expected, output)
-  assert.equal(crypto.canonicalFileMetadata(withContent(input)), expected)
-  assert.equal(crypto.canonicalFileMetadata(expected), expected)
-  // No content commitment: not a file's metadata any more.
-  assert.throws(() => crypto.canonicalFileMetadata(output))
-}
-for (const bad of metadataVector.invalid) {
-  assert.throws(() => crypto.canonicalFileMetadata(withContent(bad)))
-}
-// The revisions a reader asks for by name: the original upload and the latest saved state.
-for (const { input, output } of metadataVector.v2Canonical) {
   assert.equal(crypto.canonicalFileMetadata(input), output)
   assert.equal(crypto.canonicalFileMetadata(output), output)
 }
-for (const bad of metadataVector.v2Invalid) {
+for (const bad of metadataVector.invalid) {
   assert.throws(() => crypto.canonicalFileMetadata(bad))
 }
 const contentHasher = new crypto.ContentHasher()

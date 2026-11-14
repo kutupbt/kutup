@@ -36,7 +36,7 @@ fi
 export KUTUP_PASSWORD
 [ -n "${KUTUP_INSECURE_TLS:-}" ] && export KUTUP_INSECURE_TLS
 
-SIZE="${VERIFY_SIZE:-6291456}" # 6 MiB → spans the 5 MiB secretstream chunk
+SIZE="${VERIFY_SIZE:-6291456}" # 6 MiB → spans two 4 MiB blocks
 PROFILE="verify-$$"
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"; [ -n "${BIN:-}" ] && "$BIN" --profile "$PROFILE" logout >/dev/null 2>&1; true' EXIT

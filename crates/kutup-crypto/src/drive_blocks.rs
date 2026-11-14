@@ -1,7 +1,6 @@
 //! Drive blobs in the block format (docs/plans/drive-block-format.md §2):
-//! Drive object suite 2 (`DRIVE_BLOCKS_SUITE`; `DriveObjectSuiteId` gains it
-//! when clients switch, so nothing parsing suite 1 accepts it before). Every original, version and editor
-//! snapshot is a revision with its own id, chosen by the client before it
+//! Drive object suite 2 (`DRIVE_BLOCKS_SUITE`), the one suite of Drive file
+//! blobs. Every original, version and editor snapshot is a revision with its own id, chosen by the client before it
 //! seals, so blocks can't move between versions, and the manifest is signed
 //! by the uploader's Drive signing key.
 //!

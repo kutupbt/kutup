@@ -419,18 +419,6 @@ export interface CryptoWasmModule {
   ): {
     mediaId: string
     outerEncryptionKey: string
-    objectHeader: string
-    paddedPlaintextBytes: number
-  }
-  openChatBackupMediaHeader(
-    headerBase64: string,
-    backupRootBase64: string,
-    expectedAccountIncarnationId: string,
-    expectedBackupIncarnationId: string,
-    expectedMediaId: string,
-  ): {
-    outerEncryptionKey: string
-    sourceCiphertextBytes: number
     paddedPlaintextBytes: number
   }
   sealDriveEnvelope(
@@ -583,15 +571,6 @@ export interface CryptoWasmModule {
     signedBy(driveSigningPublicKeyBase64: string): boolean
     free(): void
   }
-  prepareChatMediaObject(
-    attachmentKeyBase64: string,
-    attachmentId: string,
-  ): { objectHeader: string; streamKey: string }
-  openChatMediaObjectHeader(
-    objectHeaderBase64: string,
-    attachmentKeyBase64: string,
-    expectedAttachmentId: string,
-  ): string
   sealChatAttachmentLedger(
     plaintextBase64: string,
     masterKeyBase64: string,

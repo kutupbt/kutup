@@ -509,7 +509,8 @@ impl ChatAttachmentLedgerEntryV1 {
         require_canonical_uuid("attachmentId", &self.attachment_id)?;
         require_canonical_uuid("storageReferenceId", &self.storage_reference_id)?;
         if self.ciphertext_bytes == 0
-            || self.ciphertext_bytes > kutup_crypto::chat_media::max_object_ciphertext_bytes()
+            || self.ciphertext_bytes
+                > chat_media_blocks::max_object_len(MAX_CHAT_MEDIA_PLAINTEXT_BYTES)
         {
             return Err("Chat attachment ledger byte count is invalid".into());
         }
@@ -802,12 +803,10 @@ mod tests {
     #[test]
     fn a_descriptor_names_the_block_suite_and_its_manifest() {
         descriptor().validate().unwrap();
-        let old_suite = ChatAttachmentDescriptorV1 {
-            suite: ChatMediaSuiteId::XChaCha20Poly1305SecretStreamV1,
-            ciphertext_bytes: kutup_crypto::chat_media::object_ciphertext_size(7).unwrap(),
-            ..descriptor()
-        };
-        assert!(old_suite.validate().is_err());
+        // Suite 1 (a secretstream) no longer parses.
+        let mut old_suite = serde_json::to_value(descriptor()).unwrap();
+        old_suite["suite"] = 1.into();
+        assert!(serde_json::from_value::<ChatAttachmentDescriptorV1>(old_suite).is_err());
         let wrong_length = ChatAttachmentDescriptorV1 {
             ciphertext_bytes: descriptor().ciphertext_bytes + 1,
             ..descriptor()

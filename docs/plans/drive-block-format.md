@@ -5,13 +5,12 @@ crypto core) is built: `kutup-crypto` `blocks.rs`, `drive_blocks.rs`,
 `chat_media_blocks.rs`, `chat_backup_media_blocks.rs`, `FileMetadataV2`,
 the revision-bound thumbnail context, vectors (`blocks-v1.json`), the
 `block_object_parsers` fuzz target, the WASM `BlockEncryptor` and
-`BlockReader`, and the benchmark (§9). Nothing uses them yet: clients switch
-in slices 3–6. The suite id 2 is a constant of each family for now:
-`DriveObjectSuiteId` and `ChatMediaSuiteId` (a wire type in descriptors and
-federation offers) gain it in the slice that switches their protocol, so
-nothing that parses suite 1 accepts suite 2 before the server checks it.
-When they do, the suite-1 parsers must still refuse suite 2 under the old
-magics (`KUTPDB2`, `KUTPCM1`), with a test each.
+`BlockReader`, and the benchmark (§9). Slices 3–6 switched the clients and
+Chat to them, and slice 7 removed suite 1 (§10): the block format is the
+only format of Drive blobs, Chat attachments and Chat backup media. The
+Drive blob suite 2 is a constant of its family (`DRIVE_BLOCKS_SUITE`;
+`DriveObjectSuiteId` stays the suite of Drive's envelopes), and
+`ChatMediaSuiteId` holds only suite 2.
 
 Slice 2 (the server) is built too:
 - one `Range` on every content route, with the revision id as the ETag
@@ -25,14 +24,17 @@ Slice 2 (the server) is built too:
 - the §7 settings, with the upload and version limits, in the admin UI and
   `GET /api/drive/limits`.
 
-Streaming-format uploads still work beside it until slice 7. The user's decision: "follow proton drive". Reference:
+Slice 7 removed the streaming-format uploads that worked beside it. The user's decision: "follow proton drive". Reference:
 Proton's web client, `kutup-references/WebClients`. Its new
 `@protontech/drive-sdk` is not checked out there, so the in-repo upload and
 download code (`packages/drive-store`,
 `applications/drive/src/app/modules/fileSaver`, `modals/preview`) is the
 source for what follows.
 
-## Today
+## Before the block format
+
+What Kutup had when this plan was written (the streaming suite 1, removed in
+slice 7):
 
 - A file is one XChaCha20-Poly1305 secretstream (`crates/kutup-crypto`
   `stream.rs`, `drive_object.rs`):
@@ -1093,7 +1095,7 @@ Each slice is a PR.
      (`backupMediaManifestSha256`); restore reads by Range
      (docs/chat-backup.md "Protected media").
    - Each suite's parser refuses the other's header (Rust tests).
-7. **Removal.**
+7. **Removal.** Built (2026-11-13).
    - `stream.rs`, suite 1, `KUTPDB2`/`KUTPCM1`/`KUTPBM1`, the JS
      `streamEncryptor`/`streamDecryptor` and the libsodium stream path all
      go.
@@ -1106,6 +1108,22 @@ Each slice is a PR.
      `TAG_FINAL`" becomes "large objects use 4 MiB AEAD blocks bound to
      their index and revision, with a sealed, signed manifest of block hashes
      that fixes the size and the end".
+   - As built: the server takes only block-format blobs (`drive_blob.rs`
+     `BlockBlob`; every upload names its `revisionId`, every tus upload
+     commits its metadata, every stored revision carries its
+     `RevisionContent`), and migration `20261109160000` makes `blob_suite`
+     2 the only value of `files`, `file_versions` and `uploads`, with every
+     revision's record required and no upload metadata before the commit
+     (NOT VALID: suite-1 rows go with the wipe). A federated version save
+     carries the revision and the metadata as required fields. The thumbnail
+     envelope's context is the revision-bound one only, and
+     `PUT …/thumbnails/{variant}` names the revision (`?revision=`) the
+     server checks it against. The WASM exports of suite 1 (the Drive
+     file-blob and Chat-media header and key exports, and the backup media
+     header) went; `prepareChatBackupMedia` gives the media id, the outer
+     key and the padded length. The vectors lost `driveFileBlob` and
+     `stream`; `fileMetadata` holds `FileMetadataV2` cases only and the
+     thumbnail vector is revision-bound.
 
 Under (B), slices 3–7 land together with the wipe (§6). Under (A), a
 conversion slice comes between 6 and 7, and slice 7 waits for every account.

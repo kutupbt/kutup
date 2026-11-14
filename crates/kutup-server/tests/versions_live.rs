@@ -11,7 +11,7 @@
 mod common;
 
 use common::{register, sign_in, User};
-use reqwest::blocking::{Client, RequestBuilder, Response};
+use reqwest::blocking::{Client, RequestBuilder};
 use reqwest::StatusCode;
 use serde_json::{json, Value};
 
@@ -28,7 +28,6 @@ fn bearer(req: RequestBuilder, token: &str) -> RequestBuilder {
 
 use kutup_crypto::collection_epoch::CollectionEpochStatementV1;
 use kutup_crypto::drive_envelope::{self, DriveEnvelopeContextV1, DriveEnvelopePurpose};
-use kutup_crypto::drive_object::{self, DriveFileBlobContextV1};
 
 fn uuid() -> String {
     uuid::Uuid::new_v4().to_string()
@@ -54,33 +53,67 @@ fn used(c: &Client, base: &str, token: &str) -> i64 {
     me(c, base, token)["storageUsedBytes"].as_i64().unwrap()
 }
 
+/// Saves `version` as a version of `kind` with `extra` fields, committing
+/// the file's next metadata with it (`common::save_version`).
 fn post_version(
     c: &Client,
     base: &str,
     token: &str,
-    file_id: &str,
     kind: &str,
-    blob: Vec<u8>,
+    version: &common::Version,
     extra: &[(&str, &str)],
-) -> Response {
-    let mut form = reqwest::blocking::multipart::Form::new()
-        .text("kind", kind.to_string())
-        .text("seqAtSnapshot", "0")
-        .text("docKeyId", "1");
-    for (k, v) in extra {
-        form = form.text(k.to_string(), v.to_string());
-    }
-    form = form.part(
-        "file",
-        reqwest::blocking::multipart::Part::bytes(blob).file_name("version"),
-    );
-    bearer(
-        c.post(format!("{base}/api/files/{file_id}/versions")),
-        token,
-    )
-    .multipart(form)
-    .send()
-    .unwrap()
+) -> common::Answer {
+    let fields: Vec<(&str, &str)> = [("kind", kind), ("seqAtSnapshot", "0"), ("docKeyId", "1")]
+        .into_iter()
+        .chain(extra.iter().copied())
+        .collect();
+    common::save_version(c, base, token, version, &fields)
+}
+
+/// A new file in `collection_id`, uploaded whole with `plain` as its first
+/// revision, committed inline.
+fn upload_form(
+    collection_id: &str,
+    collection_key: &[u8; 32],
+    file_id: &str,
+    file_key: &[u8; 32],
+    metadata: &[u8],
+    plain: &[u8],
+) -> reqwest::blocking::multipart::Form {
+    let revision = uuid();
+    let blob = common::block_blob(file_id, file_key, &revision, 1, plain);
+    reqwest::blocking::multipart::Form::new()
+        .text("fileId", file_id.to_owned())
+        .text("collectionId", collection_id.to_owned())
+        .text("nameHash", file_id.replace('-', "").repeat(2))
+        .text(
+            "fileKeyEnvelope",
+            drive_envelope::seal_b64(
+                file_key,
+                collection_key,
+                DriveEnvelopeContextV1::file_key(file_id, collection_id, 1, 1).unwrap(),
+            )
+            .unwrap(),
+        )
+        .text(
+            "metadataEnvelope",
+            drive_envelope::seal_b64(
+                metadata,
+                file_key,
+                DriveEnvelopeContextV1::file_metadata(file_id, 1, 1).unwrap(),
+            )
+            .unwrap(),
+        )
+        .text("metadataRevision", "1")
+        .text("revisionId", revision.clone())
+        .text(
+            "revisionContentEnvelope",
+            common::sealed_revision_content(file_id, file_key, &revision, 1),
+        )
+        .part(
+            "file",
+            reqwest::blocking::multipart::Part::bytes(blob).file_name("encrypted"),
+        )
 }
 
 #[test]
@@ -122,38 +155,14 @@ fn versions_v2_contract() {
     // A file in it, as the upload path makes it.
     let file_id = uuid();
     let file_key = [0x61u8; 32];
-    let blob = drive_object::encrypt_file_blob(
-        b"hello thumbnails",
+    let form = upload_form(
+        &collection_id,
+        &collection_key,
+        &file_id,
         &file_key,
-        DriveFileBlobContextV1::new(&file_id, 1).unwrap(),
-    )
-    .unwrap();
-    let form = reqwest::blocking::multipart::Form::new()
-        .text("fileId", file_id.clone())
-        .text("collectionId", collection_id.clone())
-        .text("nameHash", file_id.replace('-', "").repeat(2))
-        .text(
-            "fileKeyEnvelope",
-            drive_envelope::seal_b64(
-                &file_key,
-                &collection_key,
-                DriveEnvelopeContextV1::file_key(&file_id, &collection_id, 1, 1).unwrap(),
-            )
-            .unwrap(),
-        )
-        .text(
-            "metadataEnvelope",
-            drive_envelope::seal_b64(
-                br#"{"name":"a.txt","mimeType":"text/plain","size":16}"#,
-                &file_key,
-                DriveEnvelopeContextV1::file_metadata(&file_id, 1, 1).unwrap(),
-            )
-            .unwrap(),
-        )
-        .part(
-            "file",
-            reqwest::blocking::multipart::Part::bytes(blob).file_name("encrypted"),
-        );
+        br#"{"name":"a.txt","mimeType":"text/plain","size":16}"#,
+        b"hello thumbnails",
+    );
     let uploaded = bearer(c.post(format!("{base}/api/files/upload")), &token)
         .multipart(form)
         .send()
@@ -164,14 +173,7 @@ fn versions_v2_contract() {
         uploaded.status()
     );
 
-    let seal = |plain: &[u8]| {
-        drive_object::encrypt_file_blob(
-            plain,
-            &file_key,
-            DriveFileBlobContextV1::new(&file_id, 1).unwrap(),
-        )
-        .unwrap()
-    };
+    let seal = |plain: &[u8]| common::Version::seal(&file_id, &file_key, 1, plain);
     let download = |token: &str| -> Vec<u8> {
         bearer(c.get(format!("{base}/api/files/{file_id}/download")), token)
             .send()
@@ -196,32 +198,31 @@ fn versions_v2_contract() {
         &c,
         &base,
         &token,
-        &file_id,
         "file",
-        edited.clone(),
+        &edited,
         &[("sizeBytes", "1"), ("label", "Draft")],
     );
     assert_eq!(r.status(), StatusCode::CREATED);
     let v: Value = r.json().unwrap();
     assert_eq!(v["kind"], "file");
     assert_eq!(v["label"], "Draft");
-    assert_eq!(v["sizeBytes"], edited.len() as i64);
+    assert_eq!(v["sizeBytes"], edited.blob.len() as i64);
     assert!(v.get("s3VersionId").is_none());
     assert!(v["storagePath"]
         .as_str()
         .unwrap()
         .ends_with(v["id"].as_str().unwrap()));
-    assert_eq!(used(&c, &base, &token), baseline + edited.len() as i64);
+    assert_eq!(used(&c, &base, &token), baseline + edited.blob.len() as i64);
     // It replaced the original upload, and downloads now name it.
     assert_eq!(v["parentVersionId"], Value::Null);
     assert_eq!(current_version(&token), v["id"].as_str().unwrap());
 
     // The download is the file as it is now: the latest whole-file version…
-    assert_eq!(download(&token), edited);
+    assert_eq!(download(&token), edited.blob);
     // …which a note-state version does not replace.
-    let r = post_version(&c, &base, &token, &file_id, "yjs", seal(b"yjs state"), &[]);
+    let r = post_version(&c, &base, &token, "yjs", &seal(b"yjs state"), &[]);
     assert_eq!(r.status(), StatusCode::CREATED);
-    assert_eq!(download(&token), edited);
+    assert_eq!(download(&token), edited.blob);
     assert_ne!(download(&token), original);
 
     // The version downloads as itself.
@@ -237,21 +238,17 @@ fn versions_v2_contract() {
     .bytes()
     .unwrap()
     .to_vec();
-    assert_eq!(got, edited);
+    assert_eq!(got, edited.blob);
 
     // Refused: an unknown kind, no body, a blob sealed for another file.
     assert_eq!(
-        post_version(&c, &base, &token, &file_id, "zip", seal(b"x"), &[]).status(),
+        post_version(&c, &base, &token, "zip", &seal(b"x"), &[]).status(),
         StatusCode::BAD_REQUEST
     );
-    let other = drive_object::encrypt_file_blob(
-        b"x",
-        &file_key,
-        DriveFileBlobContextV1::new(&uuid(), 1).unwrap(),
-    )
-    .unwrap();
+    let mut other = seal(b"x");
+    other.blob = common::block_blob(&uuid(), &file_key, &other.revision, 1, b"x");
     assert_eq!(
-        post_version(&c, &base, &token, &file_id, "file", other, &[]).status(),
+        post_version(&c, &base, &token, "file", &other, &[]).status(),
         StatusCode::BAD_REQUEST
     );
     let no_file = reqwest::blocking::multipart::Form::new().text("kind", "file");
@@ -271,16 +268,7 @@ fn versions_v2_contract() {
     let stranger = register(&c, &base);
     let stranger_token = token_of(&c, &base, &stranger);
     assert_eq!(
-        post_version(
-            &c,
-            &base,
-            &stranger_token,
-            &file_id,
-            "file",
-            seal(b"x"),
-            &[]
-        )
-        .status(),
+        post_version(&c, &base, &stranger_token, "file", &seal(b"x"), &[]).status(),
         StatusCode::FORBIDDEN
     );
 
@@ -305,9 +293,8 @@ fn versions_v2_contract() {
         &c,
         &base,
         &token,
-        &file_id,
         "file",
-        seal(b"stale"),
+        &seal(b"stale"),
         &[("basedOn", "original")],
     );
     assert_eq!(r.status(), StatusCode::CONFLICT);
@@ -318,29 +305,20 @@ fn versions_v2_contract() {
     assert_eq!(used(&c, &base, &token), before);
     // Made from the current one: stored, recording what it replaced.
     let next = seal(b"next");
-    let r = post_version(
-        &c,
-        &base,
-        &token,
-        &file_id,
-        "file",
-        next.clone(),
-        &[("basedOn", &v_id)],
-    );
+    let r = post_version(&c, &base, &token, "file", &next, &[("basedOn", &v_id)]);
     assert_eq!(r.status(), StatusCode::CREATED);
     let w: Value = r.json().unwrap();
     let w_id = w["id"].as_str().unwrap().to_owned();
     assert_eq!(w["parentVersionId"], v_id.as_str());
-    assert_eq!(download(&token), next);
+    assert_eq!(download(&token), next.blob);
     assert_eq!(current_version(&token), w_id);
     // The same base again is now stale.
     let r = post_version(
         &c,
         &base,
         &token,
-        &file_id,
         "file",
-        seal(b"lost"),
+        &seal(b"lost"),
         &[("basedOn", &v_id)],
     );
     assert_eq!(r.status(), StatusCode::CONFLICT);
@@ -351,9 +329,8 @@ fn versions_v2_contract() {
             &c,
             &base,
             &token,
-            &file_id,
             kind,
-            seal(b"x"),
+            &seal(b"x"),
             &[("basedOn", based_on)],
         );
         assert_eq!(r.status(), StatusCode::BAD_REQUEST, "{kind} {based_on}");
@@ -362,11 +339,10 @@ fn versions_v2_contract() {
     let statuses: Vec<StatusCode> = std::thread::scope(|scope| {
         let saves: Vec<_> = (0..4)
             .map(|n| {
-                let (c, base, token, file_id, w_id) = (&c, &base, &token, &file_id, &w_id);
-                let blob = seal(format!("racer {n}").as_bytes());
+                let (c, base, token, w_id) = (&c, &base, &token, &w_id);
+                let version = seal(format!("racer {n}").as_bytes());
                 scope.spawn(move || {
-                    post_version(c, base, token, file_id, "file", blob, &[("basedOn", w_id)])
-                        .status()
+                    post_version(c, base, token, "file", &version, &[("basedOn", w_id)]).status()
                 })
             })
             .collect();
@@ -385,7 +361,7 @@ fn versions_v2_contract() {
         .all(|s| *s == StatusCode::CREATED || *s == StatusCode::CONFLICT));
     // A save without a base still lands, and records what it replaced.
     let winner = current_version(&token);
-    let r = post_version(&c, &base, &token, &file_id, "file", seal(b"plain"), &[]);
+    let r = post_version(&c, &base, &token, "file", &seal(b"plain"), &[]);
     assert_eq!(r.status(), StatusCode::CREATED);
     assert_eq!(
         r.json::<Value>().unwrap()["parentVersionId"],
@@ -439,39 +415,16 @@ fn owned_file(c: &Client, base: &str, owner: &User) -> (String, String, [u8; 32]
     );
     let file_id = uuid();
     let file_key = [0x62u8; 32];
-    let blob = drive_object::encrypt_file_blob(
-        b"a vault under its old key",
+    let plain = b"a vault under its old key";
+    let size = kutup_crypto::drive_blocks::blob_len(plain.len() as u64).unwrap() as i64;
+    let form = upload_form(
+        &collection_id,
+        &collection_key,
+        &file_id,
         &file_key,
-        DriveFileBlobContextV1::new(&file_id, 1).unwrap(),
-    )
-    .unwrap();
-    let size = blob.len() as i64;
-    let form = reqwest::blocking::multipart::Form::new()
-        .text("fileId", file_id.clone())
-        .text("collectionId", collection_id.clone())
-        .text("nameHash", file_id.replace('-', "").repeat(2))
-        .text(
-            "fileKeyEnvelope",
-            drive_envelope::seal_b64(
-                &file_key,
-                &collection_key,
-                DriveEnvelopeContextV1::file_key(&file_id, &collection_id, 1, 1).unwrap(),
-            )
-            .unwrap(),
-        )
-        .text(
-            "metadataEnvelope",
-            drive_envelope::seal_b64(
-                br#"{"name":"Kasa.kdbx","mimeType":"application/x-keepass2","size":25}"#,
-                &file_key,
-                DriveEnvelopeContextV1::file_metadata(&file_id, 1, 1).unwrap(),
-            )
-            .unwrap(),
-        )
-        .part(
-            "file",
-            reqwest::blocking::multipart::Part::bytes(blob).file_name("encrypted"),
-        );
+        br#"{"name":"Kasa.kdbx","mimeType":"application/x-keepass2","size":25}"#,
+        plain,
+    );
     let uploaded = bearer(c.post(format!("{base}/api/files/upload")), &token)
         .multipart(form)
         .send()
@@ -516,13 +469,8 @@ fn the_original_upload_is_deleted_by_its_owner_once_replaced() {
     );
 
     // Replaced by a whole-file version (the vault saved under a new key).
-    let version = drive_object::encrypt_file_blob(
-        b"the vault under its new key",
-        &file_key,
-        DriveFileBlobContextV1::new(&file_id, 1).unwrap(),
-    )
-    .unwrap();
-    let r = post_version(&c, &base, &token, &file_id, "file", version, &[]);
+    let version = common::Version::seal(&file_id, &file_key, 1, b"the vault under its new key");
+    let r = post_version(&c, &base, &token, "file", &version, &[]);
     assert_eq!(r.status(), StatusCode::CREATED);
     let before = used(&c, &base, &token);
 

@@ -1,8 +1,8 @@
 //! File thumbnails (docs/plans/drive-thumbnails.md): a client-made preview
 //! of a file, sealed under the file key. The server stores the envelope at
 //! `files/{fileId}/thumbnails/{variant}`, checks its public header (purpose,
-//! file, variant, key generation) without any key, and charges its size to the
-//! uploader. An upload replaces the previous one of that variant.
+//! file, variant, the content revision it shows, key generation) without any
+//! key, and charges its size to the uploader. An upload replaces the previous one of that variant.
 
 use axum::body::Bytes;
 use axum::extract::{Path, Query, State};
@@ -30,9 +30,13 @@ fn parse_variant(value: &str) -> AppResult<ThumbnailVariant> {
 pub struct UploadQuery {
     /// The version the picture was drawn from, or `original` for the upload.
     source: Option<String>,
+    /// The content revision the envelope is bound to: the one the file's
+    /// metadata commits to (docs/plans/drive-block-format.md §2). Readers
+    /// open it only while that is still the file's content.
+    revision: Option<String>,
 }
 
-/// `PUT /api/files/{fileId}/thumbnails/{variant}?source={versionId|original}`
+/// `PUT /api/files/{fileId}/thumbnails/{variant}?source={versionId|original}&revision={revisionId}`
 #[utoipa::path(
     put,
     path = "/api/files/{fileId}/thumbnails/{variant}",
@@ -42,7 +46,8 @@ pub struct UploadQuery {
     params(
         ("fileId" = String, Path, description = "File id"),
         ("variant" = String, Path, description = "`sm` or `lg`"),
-        ("source" = Option<String>, Query, description = "Version id the picture was drawn from, or `original`")
+        ("source" = Option<String>, Query, description = "Version id the picture was drawn from, or `original`"),
+        ("revision" = String, Query, description = "The content revision the envelope is bound to (the metadata's `content.revisionId`)")
     ),
     request_body(content = Vec<u8>, content_type = "application/octet-stream", description = "The thumbnail envelope"),
     responses(
@@ -80,7 +85,11 @@ pub async fn upload(
     .ok_or_else(|| AppError::not_found("not found"))?;
     let generation = u32::try_from(key_generation)
         .map_err(|_| AppError::bad_request("invalid file key generation"))?;
-    thumbnail::validate(&body, variant, &fid.to_string(), generation)
+    let revision = query
+        .revision
+        .as_deref()
+        .ok_or_else(|| AppError::bad_request("revision is required"))?;
+    thumbnail::validate(&body, variant, &fid.to_string(), revision, generation)
         .map_err(|_| AppError::bad_request("invalid thumbnail envelope"))?;
 
     let source_version = match query.source.as_deref() {

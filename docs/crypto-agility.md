@@ -274,7 +274,7 @@ purpose-specific Kutup APIs:
   checks; it does not fork the protocol code. (MLS groups and OpenMLS were
   removed.)
 - Kutup-owned account and Drive formats use `dryoc` for libsodium-compatible
-  Argon2id/secretstream, RustCrypto `chacha20poly1305`, `ed25519-dalek`,
+  Argon2id, RustCrypto `chacha20poly1305`, `ed25519-dalek`,
   `hkdf`/`sha2`, and pinned `hpke-rs` for RFC 9180 named-share envelopes.
 
 Dependency versions are locked in Cargo lockfiles. An upstream protocol type

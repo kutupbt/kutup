@@ -29,8 +29,8 @@ The independently outer-encrypted history-media lifecycle is covered by
 
 | Threat | Control | Outcome |
 |---|---|---|
-| Server substitutes or relocates a blob | Typed header, UUID-bound HKDF/AAD, complete digest and final-frame verification | Recipient rejects before plaintext release. |
-| Truncation, reordering, duplication or trailing bytes | Secretstream tags, fixed frame bounds and mandatory final frame | Decryption fails closed. |
+| Server substitutes or relocates a blob | Typed header, UUID-bound HKDF/AAD, the descriptor's manifest digest and complete-digest verification | Recipient rejects before plaintext release. |
+| Truncation, reordering, duplication or trailing bytes | Blocks bound to their index and the `last` flag, a sealed manifest of block hashes fixing the size and the count, and the exact object length | Decryption fails closed. |
 | Malicious filename/MIME/preview | Encrypted metadata is treated as untrusted presentation input; bounded sanitization and decoder isolation | No path traversal, script execution or unbounded decode. |
 | Client-provided remote URL/SSRF | Descriptor carries a canonical domain and opaque token, never a URL; own homeserver uses unified federation resolution | Arbitrary hosts and rebinding targets are never fetched. |
 | Stolen retrieval token | Recipient, destination, object digest and expiry binding; contacts/group capability; constant-time verifier | Token cannot be moved to another recipient/domain/object. |

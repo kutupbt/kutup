@@ -51,7 +51,6 @@ vi.mock('@kutup/crypto/rustWasm', () => ({
       mediaId: `media-${attachmentId}`,
       paddedPlaintextBytes: 256n,
       outerEncryptionKey: 'outer',
-      objectHeader: '',
     }),
     chatBackupMediaBlockEncryptor: (_root: string, _account: string, _backup: string, attachmentId: string) => ({
       mediaId: `media-${attachmentId}`,

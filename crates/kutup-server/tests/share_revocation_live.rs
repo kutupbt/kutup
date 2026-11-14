@@ -14,7 +14,6 @@
 use kutup_crypto::collection_epoch::CollectionEpochStatementV1;
 use kutup_crypto::collection_keyring::{self, EpochLinkV1};
 use kutup_crypto::drive_envelope::{self, DriveEnvelopeContextV1, DriveEnvelopePurpose};
-use kutup_crypto::drive_object::{self, DriveFileBlobContextV1};
 use kutup_crypto::file_keyring::{self, FileKeyLinkV1};
 use kutup_crypto::named_share::NamedShareEnvelopeV1;
 use reqwest::StatusCode;
@@ -267,23 +266,9 @@ fn share_revocation_contract() {
     );
 
     // The file is still at epoch 1: no new content under the old key.
-    let old_blob = |plain: &[u8]| {
-        drive_object::encrypt_file_blob(
-            plain,
-            &file.key,
-            DriveFileBlobContextV1::new(&file.id, 1).unwrap(),
-        )
-        .unwrap()
-    };
-    let r = post_version(
-        &c,
-        &base,
-        &alice.token,
-        &file.id,
-        old_blob(b"edit under the old key"),
-    );
+    let r = post_version(&c, &base, &alice.token, &file, b"edit under the old key");
     assert_eq!(r.status(), StatusCode::CONFLICT);
-    assert!(r.text().unwrap().contains("re-key"));
+    assert!(r.text().contains("re-key"));
     // New uploads with epoch-1 envelopes: the folder key changed.
     let stale = seal_file(&folder, &uuid(), b"stale");
     assert_eq!(
@@ -353,23 +338,13 @@ fn share_revocation_contract() {
     let old_key = file_keyring::key_at(&file_key2, &file.id, 2, &history, 1).unwrap();
     let (_, served) = download(&c, &base, &alice.token, &file.id);
     assert_eq!(
-        drive_object::decrypt_file_blob(
-            &served,
-            &old_key,
-            DriveFileBlobContextV1::new(&file.id, 1).unwrap()
-        )
-        .unwrap(),
+        open_blob(&served, &file.id, &old_key, 1).unwrap(),
         b"written at epoch 1"
     );
 
     // New content now goes under the new key.
-    let new_blob = drive_object::encrypt_file_blob(
-        b"written at epoch 2",
-        &file_key2,
-        DriveFileBlobContextV1::new(&file.id, 2).unwrap(),
-    )
-    .unwrap();
-    let r = post_version(&c, &base, &alice.token, &file.id, new_blob.clone());
+    let new_version = Version::seal(&file.id, &file_key2, 2, b"written at epoch 2");
+    let r = save_version(&c, &base, &alice.token, &new_version, &WHOLE_FILE);
     assert_eq!(r.status(), StatusCode::CREATED);
     assert_eq!(r.json::<Value>().unwrap()["keyGeneration"], 2);
     let rows: Vec<Value> = bearer(
@@ -384,7 +359,10 @@ fn share_revocation_contract() {
         rows.iter().find(|r| r["id"] == file.id.as_str()).unwrap()["contentKeyGeneration"],
         2
     );
-    assert_eq!(download(&c, &base, &alice.token, &file.id).1, new_blob);
+    assert_eq!(
+        download(&c, &base, &alice.token, &file.id).1,
+        new_version.blob
+    );
 
     // The kept public link follows the key, and serves its history.
     let public: Value = c

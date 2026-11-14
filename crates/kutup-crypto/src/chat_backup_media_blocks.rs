@@ -1,8 +1,8 @@
 //! Chat backup media in the block format (docs/plans/drive-block-format.md
 //! §2, Q6): the already-E2EE Chat-media ciphertext, padded to its bucket as
 //! today, wrapped in blocks under the backup's outer key: backup media suite
-//! 2, the suite every backup media object is written in. The header is
-//! suite 1's with its own magic and suite; the manifest is unsigned, as the
+//! 2, the suite every backup media object is written in. The header names
+//! the backup, the media and both lengths; the manifest is unsigned, as the
 //! backup's sealed index commits to its digest.
 
 use zeroize::Zeroizing;
@@ -311,20 +311,16 @@ mod tests {
     }
 
     #[test]
-    fn the_suites_refuse_each_others_headers() {
+    fn only_its_own_header_is_accepted() {
         let block = header(context(), 1_000).unwrap();
         assert!(inspect_header(&block).is_ok());
         // Suite 1 under the block magic.
         let mut suite_one = block;
         suite_one[8..10].copy_from_slice(&1u16.to_be_bytes());
         assert!(inspect_header(&suite_one).is_err());
-        // A secretstream (KUTPBM1) header, as it is.
-        let old = crate::chat_backup_media::build_media_header(context(), 1_000).unwrap();
-        assert!(inspect_header(&old).is_err());
-        // The block suite under the secretstream magic.
+        // The block suite under the old secretstream magic.
         let mut old_magic = block;
         old_magic[..8].copy_from_slice(b"KUTPBM1\0");
-        assert!(crate::chat_backup_media::inspect_media_header(&old_magic).is_err());
         assert!(inspect_header(&old_magic).is_err());
     }
 

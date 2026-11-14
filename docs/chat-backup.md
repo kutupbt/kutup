@@ -232,8 +232,9 @@ incarnations, the media id, the source's length and its padded length; the
 blocks carry the Chat-media ciphertext and zeros up to the padded length.
 The manifest is unsigned: the backup's own sealed records commit to its
 SHA-256 (`backupMediaManifestSha256` beside `backupMediaId` in the
-attachment a display record carries). A suite-1 (`KUTPBM1`) parser refuses
-a suite-2 header and the other way round.
+attachment a display record carries). Suite 1 (a secretstream, `KUTPBM1`)
+is gone: its header no longer parses, and a `KUTPBM2` header naming another
+suite fails.
 
 Normally the homeserver copies an existing account-owned Chat-media
 ciphertext and seals it with the outer key the client sends for that copy

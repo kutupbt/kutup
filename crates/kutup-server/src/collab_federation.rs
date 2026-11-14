@@ -928,18 +928,14 @@ struct CreateVersionBody {
     /// set, so servers without it still accept every other save.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     based_on: Option<String>,
-    /// A block-format blob's revision (the version's id) and its sealed
-    /// content record (docs/plans/drive-block-format.md §2); a block-format
-    /// whole-file save also brings the file's next metadata, committing to
-    /// it. Sent only when set, as `basedOn`.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    revision_id: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    revision_content_envelope: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    metadata_envelope: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    metadata_revision: Option<String>,
+    /// The block-format blob's revision (the version's id) and its sealed
+    /// content record (docs/plans/drive-block-format.md §2), and the file's
+    /// next metadata: committing to it (a whole-file save) or naming it as
+    /// the saved state (a note's).
+    revision_id: String,
+    revision_content_envelope: String,
+    metadata_envelope: String,
+    metadata_revision: String,
     /// The sealed blob, base64.
     blob: String,
 }
@@ -1008,9 +1004,7 @@ pub async fn versions_create(
             ("metadataEnvelope", request.metadata_envelope),
             ("metadataRevision", request.metadata_revision),
         ] {
-            if let Some(value) = value {
-                fields.insert(name.to_owned(), value);
-            }
+            fields.insert(name.to_owned(), value);
         }
         let created = store_version(
             &state,
@@ -2005,6 +1999,12 @@ async fn relay_version_create(
             .and_then(|v| v.parse::<i64>().ok())
             .unwrap_or(0)
     };
+    let required = |name: &str| {
+        fields
+            .get(name)
+            .cloned()
+            .ok_or_else(|| AppError::bad_request(format!("{name} is required")))
+    };
     let created: serde_json::Value = call_home(
         &state,
         &target,
@@ -2018,12 +2018,10 @@ async fn relay_version_create(
             label: fields.get("label").cloned(),
             keep_forever: fields.get("keepForever").is_some_and(|v| v == "true"),
             based_on: fields.get("basedOn").cloned(),
-            revision_id: fields.get("revisionId").cloned(),
-            revision_content_envelope: fields
-                .get(crate::drive_blob::REVISION_CONTENT_FIELD)
-                .cloned(),
-            metadata_envelope: fields.get("metadataEnvelope").cloned(),
-            metadata_revision: fields.get("metadataRevision").cloned(),
+            revision_id: required("revisionId")?,
+            revision_content_envelope: required(crate::drive_blob::REVISION_CONTENT_FIELD)?,
+            metadata_envelope: required("metadataEnvelope")?,
+            metadata_revision: required("metadataRevision")?,
             blob: STANDARD.encode(blob),
         },
         MAX_JSON_RESPONSE,

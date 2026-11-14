@@ -198,8 +198,6 @@ pub const CHAT_MEDIA_DELIVERY_OPERATION_V1: &[u8] = b"kutup/chat-media/delivery-
 /// `kutup-server/src/chat_media_federation.rs`
 pub const CHAT_MEDIA_FEDERATION_ORIGIN_RATE_V1: &[u8] =
     b"kutup/chat-media/federation-origin-rate/v1\0";
-/// `kutup-crypto/src/chat_media.rs` (`OBJECT_KEY_SALT`)
-pub const CHAT_MEDIA_OBJECT_KEY_V1: &[u8] = b"kutup/chat-media/object-key/v1\0";
 /// `kutup-server/src/handlers/chat_media.rs`
 pub const CHAT_MEDIA_RECIPIENT_RATE_V1: &[u8] = b"kutup/chat-media/recipient-rate/v1\0";
 
@@ -264,8 +262,6 @@ pub const DKIM_KEY_V1: &[u8] = b"kutup/dkim-key/v1\0";
 /// `kutup-crypto/src/drive_envelope.rs` (`KEY_DERIVATION_SALT`)
 pub const DRIVE_ENVELOPE_KEY_V1: &[u8] = b"kutup/drive-envelope/key/v1\0";
 /// `kutup-crypto/src/drive_envelope.rs` (`THUMBNAIL_BINDING_LABEL`)
-pub const DRIVE_ENVELOPE_THUMBNAIL_V1: &[u8] = b"kutup/drive-envelope/thumbnail/v1\0";
-/// `kutup-crypto/src/drive_envelope.rs` (`THUMBNAIL_REVISION_BINDING_LABEL`)
 pub const DRIVE_ENVELOPE_THUMBNAIL_V2: &[u8] = b"kutup/drive-envelope/thumbnail/v2\0";
 /// `kutup-crypto/src/drive_envelope.rs` (`WHITEBOARD_ASSET_BINDING_LABEL`)
 pub const DRIVE_ENVELOPE_WHITEBOARD_ASSET_V2: &[u8] = b"kutup/drive-envelope/whiteboard-asset/v2\0";
@@ -279,8 +275,6 @@ pub const DRIVE_OBJECT_BLOCKS_MANIFEST_KEY_V1: &[u8] =
     b"kutup/drive-object/blocks/manifest-key/v1\0";
 /// `kutup-crypto/src/drive_blocks.rs`
 pub const DRIVE_OBJECT_BLOCKS_NONCE_KEY_V1: &[u8] = b"kutup/drive-object/blocks/nonce-key/v1\0";
-/// `kutup-crypto/src/drive_object.rs` (`FILE_BLOB_KEY_SALT`)
-pub const DRIVE_OBJECT_FILE_BLOB_KEY_V1: &[u8] = b"kutup/drive-object/file-blob-key/v1\0";
 
 // --- drive -------------------------------------------------------------------
 
@@ -535,7 +529,7 @@ pub const FEDERATION_REQUEST_REPLAY_HASH_V1: &[u8] = b"kutup/federation/request-
 pub const FEDERATION_SIGNATURE_TAG: &str = "kutup-federation-v2";
 
 /// Every label, for the registry's own checks.
-pub const ALL: [&[u8]; 163] = [
+pub const ALL: [&[u8]; 160] = [
     ORG_ACCESS_REQUEST_V1,
     ORG_KEY_CERTIFICATE_V1,
     ORG_KEY_ID_V1,
@@ -614,7 +608,6 @@ pub const ALL: [&[u8]; 163] = [
     CHAT_MEDIA_BLOCKS_NONCE_KEY_V1,
     CHAT_MEDIA_DELIVERY_OFFER_DIGEST_V1,
     CHAT_MEDIA_FEDERATION_ORIGIN_RATE_V1,
-    CHAT_MEDIA_OBJECT_KEY_V1,
     CHAT_MEDIA_RECIPIENT_RATE_V1,
     CHAT_STORE_INDEX_V1,
     CHAT_STORE_RECORD_V1,
@@ -632,13 +625,11 @@ pub const ALL: [&[u8]; 163] = [
     DEVICE_REVOCATION_V1,
     DKIM_KEY_V1,
     DRIVE_ENVELOPE_KEY_V1,
-    DRIVE_ENVELOPE_THUMBNAIL_V1,
     DRIVE_ENVELOPE_THUMBNAIL_V2,
     DRIVE_ENVELOPE_WHITEBOARD_ASSET_V2,
     DRIVE_OBJECT_BLOCKS_BLOCK_KEY_V1,
     DRIVE_OBJECT_BLOCKS_MANIFEST_KEY_V1,
     DRIVE_OBJECT_BLOCKS_NONCE_KEY_V1,
-    DRIVE_OBJECT_FILE_BLOB_KEY_V1,
     DRIVE_BLOCK_MANIFEST_V1,
     DRIVE_COLLECTION_EPOCH_RECORD_HASH_V1,
     DRIVE_COLLECTION_KEY_COMMITMENT_V1,

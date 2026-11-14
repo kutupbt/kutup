@@ -11,12 +11,10 @@ use kutup_crypto::{
     account_record::{self, AccountRecordPurpose},
     asset,
     drive_envelope::{self, DriveEnvelopeContextV1, DriveEnvelopePurpose},
-    drive_object::{self, DriveFileBlobContextV1},
     envelope,
     identity::AccountIdentityKeysV1,
     kdf,
     local_state::{self, LocalStatePurpose},
-    stream,
 };
 
 fn b64(s: &str) -> Vec<u8> {
@@ -35,9 +33,6 @@ struct CryptoVectors {
     account_record: AccountRecordVec,
     #[serde(rename = "driveEnvelope")]
     drive_envelope: DriveEnvelopeVec,
-    #[serde(rename = "driveFileBlob")]
-    drive_file_blob: DriveFileBlobVec,
-    stream: Vec<StreamVec>,
     asset: AssetVec,
     thumbnail: ThumbnailVec,
     #[serde(rename = "collectionKeyring")]
@@ -61,8 +56,6 @@ struct CryptoVectors {
 struct FileMetadataVec {
     canonical: Vec<FileMetadataCase>,
     invalid: Vec<String>,
-    v2_canonical: Vec<FileMetadataCase>,
-    v2_invalid: Vec<String>,
     content_hash: ContentHashVec,
 }
 
@@ -218,24 +211,6 @@ struct DriveEnvelopeLimit {
     sealed_len: Option<usize>,
 }
 #[derive(Deserialize)]
-struct DriveFileBlobVec {
-    #[serde(rename = "fileKey")]
-    file_key: String,
-    #[serde(rename = "fileId")]
-    file_id: String,
-    generation: u32,
-    #[serde(rename = "objectHeader")]
-    object_header: String,
-    #[serde(rename = "derivedStreamKey")]
-    derived_stream_key: String,
-}
-#[derive(Deserialize)]
-struct StreamVec {
-    key: String,
-    plaintext: String,
-    ciphertext: String,
-}
-#[derive(Deserialize)]
 struct AssetVec {
     #[serde(rename = "fileKey")]
     file_key: String,
@@ -254,6 +229,8 @@ struct ThumbnailVec {
     file_key: String,
     #[serde(rename = "fileId")]
     file_id: String,
+    #[serde(rename = "revisionId")]
+    revision_id: String,
     generation: u32,
     variant: String,
     nonce: String,
@@ -495,31 +472,6 @@ fn drive_envelope_vector() {
 }
 
 #[test]
-fn drive_file_blob_header_and_key_vector() {
-    let vector = load_crypto().drive_file_blob;
-    let context = DriveFileBlobContextV1::new(&vector.file_id, vector.generation).unwrap();
-    assert_eq!(
-        drive_object::file_blob_header(context).as_slice(),
-        b64(&vector.object_header)
-    );
-    assert_eq!(
-        drive_object::derive_file_blob_key(&b64(&vector.file_key), context)
-            .unwrap()
-            .as_slice(),
-        b64(&vector.derived_stream_key)
-    );
-    drive_object::validate_file_blob_header(&b64(&vector.object_header), context).unwrap();
-}
-
-#[test]
-fn stream_decrypts_go_output() {
-    for v in load_crypto().stream {
-        let dec = stream::decrypt_stream(&b64(&v.ciphertext), &b64(&v.key)).unwrap();
-        assert_eq!(dec, b64(&v.plaintext), "stream plaintext mismatch");
-    }
-}
-
-#[test]
 fn whiteboard_asset_matches_canonical_vector() {
     let v = load_crypto().asset;
     let context =
@@ -544,33 +496,6 @@ fn whiteboard_asset_matches_canonical_vector() {
 }
 
 // --- Rust-only round-trips that complement the Go-cross vectors -------------
-
-#[test]
-fn stream_multichunk_roundtrip() {
-    // Exercise the 5 MiB chunk boundary (intermediate TAG_MESSAGE + final).
-    let key = [0x33u8; 32];
-    let plain: Vec<u8> = (0..stream::CHUNK_SIZE + 1)
-        .map(|i| (i % 251) as u8)
-        .collect();
-    let ct = stream::encrypt_stream(&plain, &key).unwrap();
-    // header + 2 chunks: (CHUNK_SIZE + 1) plaintext + 2*ABYTES overhead.
-    assert_eq!(
-        ct.len(),
-        stream::HEADER_BYTES + plain.len() + 2 * stream::ABYTES,
-        "expected exactly two chunks",
-    );
-    let dec = stream::decrypt_stream(&ct, &key).unwrap();
-    assert_eq!(dec, plain);
-}
-
-#[test]
-fn stream_tamper_fails() {
-    let key = [0x33u8; 32];
-    let mut ct = stream::encrypt_stream(b"sensitive content", &key).unwrap();
-    let n = ct.len();
-    ct[n / 2] ^= 0xff;
-    assert!(stream::decrypt_stream(&ct, &key).is_err());
-}
 
 #[test]
 fn asset_tamper_and_aad_fail() {
@@ -730,17 +655,19 @@ fn thumbnail_matches_canonical_vector() {
         variant,
         &b64(&v.file_key),
         &v.file_id,
+        &v.revision_id,
         v.generation,
         &b64(&v.nonce),
     )
     .unwrap();
     assert_eq!(envelope, b64(&v.envelope));
-    thumbnail::validate(&envelope, variant, &v.file_id, v.generation).unwrap();
+    thumbnail::validate(&envelope, variant, &v.file_id, &v.revision_id, v.generation).unwrap();
     let opened = thumbnail::open(
         &envelope,
         variant,
         &b64(&v.file_key),
         &v.file_id,
+        &v.revision_id,
         v.generation,
     )
     .unwrap();
@@ -750,6 +677,16 @@ fn thumbnail_matches_canonical_vector() {
         ThumbnailVariant::Large,
         &b64(&v.file_key),
         &v.file_id,
+        &v.revision_id,
+        v.generation
+    )
+    .is_err());
+    // A thumbnail of another revision of the file.
+    assert!(thumbnail::validate(
+        &envelope,
+        variant,
+        &v.file_id,
+        "44444444-4444-4444-8444-444444444444",
         v.generation
     )
     .is_err());
@@ -815,7 +752,7 @@ fn file_keyring_matches_canonical_vector() {
     assert!(file_keyring::key_at(&b64(&v.keys[1]), &v.file_id, generation, &chain, 1).is_err());
 }
 
-/// Prints the vectors that bind Drive file objects to their file and key
+/// Prints the vectors that bind Drive file values to their file and key
 /// generation, for `tests/vectors/crypto.json`:
 /// `cargo test -p kutup-crypto --test vectors print_file_bound_vectors -- --ignored --nocapture`.
 #[test]
@@ -823,16 +760,6 @@ fn file_keyring_matches_canonical_vector() {
 fn print_file_bound_vectors() {
     let e = |b: &[u8]| base64::engine::general_purpose::STANDARD.encode(b);
     let file_id = "11111111-1111-4111-8111-111111111111";
-
-    let file_key = [0x42u8; 32];
-    let context = DriveFileBlobContextV1::new(file_id, 7).unwrap();
-    let blob = serde_json::json!({
-        "fileKey": e(&file_key),
-        "fileId": file_id,
-        "generation": 7,
-        "objectHeader": e(&drive_object::file_blob_header(context)),
-        "derivedStreamKey": e(drive_object::derive_file_blob_key(&file_key, context).unwrap().as_slice()),
-    });
 
     let asset_key = [0x41u8; 32];
     let asset_plain = b"data:image/png;base64,iVBORw0KGgo=";
@@ -906,7 +833,6 @@ fn print_file_bound_vectors() {
     println!(
         "{}",
         serde_json::json!({
-            "driveFileBlob": blob,
             "asset": asset,
             "fileKeyring": keyring,
             "collabFrame": frame,
@@ -944,20 +870,6 @@ fn file_metadata_matches_canonical_vector() {
     use kutup_crypto::file_metadata::{self, ContentHasher};
     let v = load_crypto().file_metadata;
     for case in &v.canonical {
-        let parsed = file_metadata::decode(case.input.as_bytes()).unwrap();
-        assert_eq!(
-            std::str::from_utf8(&file_metadata::encode(&parsed).unwrap()).unwrap(),
-            case.output
-        );
-        assert_eq!(
-            file_metadata::decode(case.output.as_bytes()).unwrap(),
-            parsed
-        );
-    }
-    for bad in &v.invalid {
-        assert!(file_metadata::decode(bad.as_bytes()).is_err(), "{bad}");
-    }
-    for case in &v.v2_canonical {
         let parsed = file_metadata::decode_v2(case.input.as_bytes()).unwrap();
         assert_eq!(
             std::str::from_utf8(&file_metadata::encode_v2(&parsed).unwrap()).unwrap(),
@@ -968,7 +880,7 @@ fn file_metadata_matches_canonical_vector() {
             parsed
         );
     }
-    for bad in &v.v2_invalid {
+    for bad in &v.invalid {
         assert!(file_metadata::decode_v2(bad.as_bytes()).is_err(), "{bad}");
     }
     let mut hasher = ContentHasher::new();

@@ -11,7 +11,6 @@
 //!     cargo test -p kutup-server --test drive_integrity_live -- --nocapture
 
 use kutup_crypto::drive_envelope::{self, DriveEnvelopeContextV1, DriveEnvelopePurpose};
-use kutup_crypto::drive_object::{self, DriveFileBlobContextV1};
 use reqwest::StatusCode;
 use serde_json::{json, Value};
 
@@ -41,14 +40,6 @@ fn drive_integrity_contract() {
         upload(&c, &base, &owner.token, &folder, &file).status(),
         StatusCode::CREATED
     );
-    let reseal = |plain: &[u8]| {
-        drive_object::encrypt_file_blob(
-            plain,
-            &file.key,
-            DriveFileBlobContextV1::new(&file.id, 1).unwrap(),
-        )
-        .unwrap()
-    };
 
     // --- A view-only recipient reads, and changes nothing. ---
     assert_eq!(
@@ -66,7 +57,7 @@ fn drive_integrity_contract() {
         StatusCode::OK
     );
     assert_eq!(
-        post_version(&c, &base, &viewer.token, &file.id, reseal(b"vandal")).status(),
+        post_version(&c, &base, &viewer.token, &file, b"vandal").status(),
         StatusCode::FORBIDDEN,
         "a viewer saves no version"
     );
@@ -110,13 +101,13 @@ fn drive_integrity_contract() {
 
     // An editor may, charged to themselves.
     let editor_before = used(&c, &base, &editor.token);
-    let edit = reseal(b"edited by the editor");
-    let r = post_version(&c, &base, &editor.token, &file.id, edit.clone());
+    let edit = Version::seal(&file.id, &file.key, 1, b"edited by the editor");
+    let r = save_version(&c, &base, &editor.token, &edit, &WHOLE_FILE);
     assert_eq!(r.status(), StatusCode::CREATED);
     let version: Value = r.json().unwrap();
     assert_eq!(
         used(&c, &base, &editor.token),
-        editor_before + edit.len() as i64
+        editor_before + edit.blob.len() as i64
     );
     // Naming it is an editor's call too.
     let vid = version["id"].as_str().unwrap();
@@ -143,7 +134,7 @@ fn drive_integrity_contract() {
     assert_eq!(r.status(), StatusCode::CONFLICT, "same id, second upload");
     assert_eq!(
         download(&c, &base, &owner.token, &file.id).1,
-        edit,
+        edit.blob,
         "the file still serves its content"
     );
     let r = tus_create(
@@ -172,7 +163,7 @@ fn drive_integrity_contract() {
         "the reservation is not free space"
     );
     assert_eq!(
-        post_version(&c, &base, &owner.token, &file.id, reseal(&[2u8; 4096])).status(),
+        post_version(&c, &base, &owner.token, &file, &[2u8; 4096]).status(),
         StatusCode::PAYLOAD_TOO_LARGE,
         "versions respect it too"
     );
@@ -332,14 +323,9 @@ fn admin_delete_user_hands_contributions_over() {
         upload(&c, &base, &owner.token, &folder, &file).status(),
         StatusCode::CREATED
     );
-    let edit = drive_object::encrypt_file_blob(
-        &[5u8; 30_000],
-        &file.key,
-        DriveFileBlobContextV1::new(&file.id, 1).unwrap(),
-    )
-    .unwrap();
+    let edit = Version::seal(&file.id, &file.key, 1, &[5u8; 30_000]);
     assert_eq!(
-        post_version(&c, &base, &leaver.token, &file.id, edit.clone()).status(),
+        save_version(&c, &base, &leaver.token, &edit, &WHOLE_FILE).status(),
         StatusCode::CREATED
     );
     let added = seal_file(&folder, &uuid(), &[6u8; 10_000]);
@@ -364,7 +350,7 @@ fn admin_delete_user_hands_contributions_over() {
     assert_eq!(r.status(), StatusCode::NO_CONTENT, "delete the account");
 
     // The owner keeps the edited file and the added one, and now pays for both.
-    assert_eq!(download(&c, &base, &owner.token, &file.id).1, edit);
+    assert_eq!(download(&c, &base, &owner.token, &file.id).1, edit.blob);
     assert_eq!(
         download(&c, &base, &owner.token, &added.id).1,
         added.blob,
@@ -372,7 +358,7 @@ fn admin_delete_user_hands_contributions_over() {
     );
     assert_eq!(
         used(&c, &base, &owner.token),
-        owner_before + edit.len() as i64 + added.blob.len() as i64
+        owner_before + edit.blob.len() as i64 + added.blob.len() as i64
     );
     // Their own folder and file are gone.
     runtime.block_on(async {

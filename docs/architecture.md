@@ -40,7 +40,7 @@ flowchart TD
     CBR["random ChatBackupRootV1<br/>typed master-key envelope"]
     CBO["Chat display history<br/>encrypted base + ordered tail<br/>and outer-encrypted media"]
     FK["per-file key<br/>(random, per file)"]
-    BLOB["typed Drive file blob<br/>context-bound XChaCha20 secretstream<br/>5 MB chunks → SeaweedFS"]
+    BLOB["typed Drive file blob<br/>4 MiB AEAD blocks + signed manifest<br/>one object per revision → SeaweedFS"]
 
     P --> OP
     REC --> OP
@@ -170,18 +170,25 @@ sequenceDiagram
 For each file upload:
 
 1. Client generates the canonical file UUID and random **file key** before contacting the server.
-2. Client constructs a 32-byte `DriveFileBlobHeaderV1` containing magic,
-   `DriveObjectSuiteId`, file-blob purpose, the file key's generation (1 for
-   a new file) and the file UUID — no folder, so the file can move without
-   re-encryption. HKDF-SHA256 derives a stream key from the random file key
-   and that exact header.
-3. Client encrypts the bytes in 5 MiB XChaCha20 secretstream frames. The Drive
-   header is associated data on every frame, and even an empty object emits an
-   authenticated `TAG_FINAL` frame. The stored prefix is the 32-byte Drive
-   header followed by the 24-byte secretstream header.
-4. Client seals `{name, mimeType, size}` as a `FileMetadata`
-   `DriveEnvelopeV1` under the file key. Its authenticated context binds the
-   file UUID, the key generation and the metadata revision.
+2. Client picks a random revision id for the content and constructs the
+   48-byte block-format header (`KUTPDB3`, Drive object suite 2,
+   docs/plans/drive-block-format.md §2): magic, suite, file-blob purpose, the
+   file key's generation (1 for a new file), the file UUID and the revision
+   id — no folder, so the file can move without re-encryption. HKDF-SHA256
+   derives the block, nonce and manifest keys from the random file key and
+   that exact header.
+3. Client seals the bytes in 4 MiB XChaCha20-Poly1305 blocks, each bound to
+   the header, its index and whether it is the last; then a sealed manifest
+   of the blocks' hashes, the plaintext size and the uploader's Ed25519
+   signature, and a trailer. The manifest fixes the size and the end; even an
+   empty file is one empty last block.
+4. Client seals `{name, mimeType, size, content}` (`FileMetadataV2`, where
+   `content` commits to the revision id and the sealed manifest's SHA-256)
+   as a `FileMetadata` `DriveEnvelopeV1` under the file key. Its
+   authenticated context binds the file UUID, the key generation and the
+   metadata revision. The metadata commits with the content: inline for a
+   whole-buffer upload, by `POST /api/files/{id}/revisions/{revisionId}/commit`
+   after a tus upload.
 5. Client seals the file key as a `FileKey` `DriveEnvelopeV1` under the
    collection key, bound to the file, the collection, the collection epoch
    and the key generation. This wrap is the only file object that names the
@@ -192,8 +199,8 @@ For each file upload:
    collection epoch and the file's key generation before storage. Multipart,
    tus, version snapshots and signed federation use identical blob semantics.
 7. Rename creates the exact next metadata revision; rollback, gaps, relocation,
-   wrong purpose, stale epoch or generation, stream truncation and bytes
-   after `TAG_FINAL` fail closed.
+   wrong purpose, stale epoch or generation, another revision's object,
+   truncation and trailing bytes fail closed.
 8. A file whose folder rotated past it (someone was removed) gets a new key
    of the next generation before anything new is written to it or it moves;
    the key it leaves is sealed under the new one, so older content, versions
@@ -471,7 +478,7 @@ integration remain tracked in [`roadmap.md`](roadmap.md).
 Files are stored in **SeaweedFS** accessed via its S3-compatible API. The backend uses the Rust `aws-sdk-s3` crate configured to point at the internal SeaweedFS S3 gateway.
 
 - The backend acts as a **streaming proxy** — multipart uploads are spooled to a temp file and streamed to the object store; the tus.io path stores each chunk as S3 multipart parts of one equal size (5 MiB, more for uploads past 10,000 parts), keeping what does not fill a part in the upload's row until the next chunk, so neither buffers the whole file in memory and stores that refuse unequal parts (Cloudflare R2) work.
-- **Uploads from the browser survive a lost connection and a reload.** The web client encrypts a file 5 MiB at a time as tus asks for each range (`frontend/packages/files/src/upload/encryptedSource.ts`), so memory stays at about two chunks whatever the size. A connection lost for any length of time leaves the upload waiting ("Waiting for the connection"); it goes on from the server's offset (tus `HEAD`) once the browser is back online. Drive and Photos also remember each upload in IndexedDB (`pendingUploads.ts`: the tus URL, size and modified time, the folder and its key epoch, the two envelopes the upload already made, and the public prefix: nothing readable without the folder key). After a reload or a crash the upload panel offers it again; choosing the same file (same name, size and modified time) goes on where the server stopped. The encryptor is rebuilt from the stored prefix (libsodium sets a stream up the same way for pushing as for pulling), and what the server already holds is re-encrypted and dropped, not sent; nothing in the format changes. An upload running in some tab holds a Web Lock, so it is never offered as interrupted. One idle for 24 hours is reaped by the server and dropped from the list; one whose folder moved to a new key since cannot go on and is offered only to discard.
+- **Uploads from the browser survive a lost connection and a reload.** The web client seals a file block by block as tus asks for each range (`frontend/packages/files/src/upload/encryptedSource.ts`; a PATCH carries two 4 MiB blocks), so memory stays at a few blocks whatever the size. A connection lost for any length of time leaves the upload waiting ("Waiting for the connection"); it goes on from the server's offset (tus `HEAD`) once the browser is back online. Drive and Photos also remember each upload in IndexedDB (`pendingUploads.ts`: the tus URL, size and modified time, the folder and its key epoch, the envelope the upload already made, its revision id and a draft of its metadata sealed under the file key: nothing readable without the folder key). After a reload or a crash the upload panel offers it again; choosing the same file (same name, size and modified time) goes on where the server stopped. The blocks are sealed again from the one the server's offset falls in (their nonces are synthetic, so the bytes are the same) and what the server already holds is dropped, not sent; the sealed manifest, whose nonce is random, is kept in the record once made (docs/plans/drive-block-format.md §10 slice 3). An upload running in some tab holds a Web Lock, so it is never offered as interrupted. One idle for 24 hours is reaped by the server and dropped from the list; one whose folder moved to a new key since cannot go on and is offered only to discard.
 - Each file is stored under its client-generated UUID; the human-readable name exists only in its authenticated metadata envelope, which the server cannot read. Its keyed name and content hashes ("Names in a folder" above) tell the server only which items in one folder share a name or content.
 - The SeaweedFS cluster (master + volume + filer + S3 gateway) runs as Docker services on the same network as the backend. No S3 ports are exposed externally.
 - Each account has one storage pool (`users.storage_quota_bytes` /
