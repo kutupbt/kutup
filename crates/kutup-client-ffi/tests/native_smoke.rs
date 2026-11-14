@@ -110,6 +110,12 @@ impl ChatHttpClient for MockHttp {
                     .to_string(),
                 })
             }
+            // The sign-in this device is under: what a new device's manifest
+            // entry names.
+            (ChatHttpMethod::Get, "/device-session") => Ok(ChatHttpResponse {
+                status: 200,
+                body_json: r#"{"session":"5f0c6c1e8a3b4d2e9f710b1c2d3e4f505f0c6c1e8a3b4d2e9f710b1c2d3e4f50"}"#.into(),
+            }),
             _ => Err(KutupChatError::Transport {
                 message: format!("unexpected request: {:?} {}", request.method, request.path),
             }),
