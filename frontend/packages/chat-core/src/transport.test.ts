@@ -4,7 +4,9 @@ import api from '@kutup/session/client'
 import { resolveApiBase } from '@kutup/session/apiBase'
 import { ApiChatTransport, FederationOffError, forgetFederationState } from './transport'
 
-vi.mock('@kutup/session/store', () => ({ getSession: () => ({ userId: 'u1', address: 'me@home.test' }) }))
+// A custom-domain address: this server's Chat name is another than its domain.
+vi.mock('@kutup/session/store', () => ({ getSession: () => ({ userId: 'u1', address: 'me@custom.example' }) }))
+vi.mock('@kutup/session/apps', () => ({ loadServerSettings: () => Promise.resolve({ chat: { serverName: 'home.test' } }) }))
 
 /** This account's switch, as `/user/me` says it. */
 let federation: 'on' | 'off' = 'on'
@@ -366,8 +368,10 @@ describe('ApiChatTransport', () => {
       [429, 'rateLimited'],
       [502, 'unreachable'],
       [404, 'groupsOff'],
+      [403, 'groupsOff'],
     ] as const) {
-      const failure = new axios.AxiosError('refused', String(status), undefined, undefined, { status } as never)
+      const data = status === 403 ? { code: 'federationOff' } : undefined
+      const failure = new axios.AxiosError('refused', String(status), undefined, undefined, { status, data } as never)
       vi.spyOn(api, 'post').mockRejectedValueOnce(failure)
       await expect(transport.relayGroupRequest('home.example', new Uint8Array([1]))).resolves.toEqual({ kind })
     }

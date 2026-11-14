@@ -375,10 +375,14 @@ pub async fn put_consent(
     )
     .await?;
     // Talking to other servers rests on this consent: withdrawn, it stops.
-    if req.purpose == crate::federation_switch::PURPOSE && !req.given {
+    let withdrawn = req.purpose == crate::federation_switch::PURPOSE && !req.given;
+    if withdrawn {
         crate::federation_switch::turn_off(&mut tx, user_id).await?;
     }
     tx.commit().await?;
+    if withdrawn {
+        crate::federation_switch::after_off(&state, user_id).await?;
+    }
     Ok(StatusCode::NO_CONTENT.into_response())
 }
 

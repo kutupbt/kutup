@@ -266,6 +266,23 @@ impl Hub {
         }
     }
 
+    /// Forces every connection in the rooms whose key `matches` to close (an
+    /// account's federated rooms when its federation goes off). The
+    /// connections' read loops `leave` as they exit.
+    pub fn close_rooms_where(&self, matches: impl Fn(&str) -> bool) {
+        let victims: Vec<Arc<Peer>> = {
+            let rooms = self.rooms.lock().unwrap();
+            rooms
+                .iter()
+                .filter(|(key, _)| matches(key))
+                .flat_map(|(_, room)| room.peers.values().cloned())
+                .collect()
+        };
+        for v in victims {
+            v.shut();
+        }
+    }
+
     /// Forces every connection from a device of an account to close, across all rooms (the
     /// account's manifest dropped it). The connections' own read loops call `leave` as they
     /// exit, so this only signals; it doesn't mutate room state.

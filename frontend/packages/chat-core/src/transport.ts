@@ -6,6 +6,7 @@ import { accountHead, NotInVerifiedIndexError } from '@kutup/session/accountHead
 import api from '@kutup/session/client'
 import { getSession } from '@kutup/session/store'
 import { apiBase } from '@kutup/session/apiBase'
+import { loadServerSettings } from '@kutup/session/apps'
 import { setChatDeviceAuth } from './device-auth'
 import type { ChatDevice, ChatTransportPort } from './types'
 
@@ -66,8 +67,11 @@ async function federationOn(): Promise<boolean> {
 
 /** Refuses with {@link FederationOffError} a request to another server while this account's federation is off. */
 async function ensureMayReach(server: string): Promise<void> {
-  const own = signedIn().address.split('@')[1]?.toLowerCase()
-  if (server.toLowerCase() === own) return
+  // This server is the one the account's Chat lives on: its Chat name, not
+  // the address's domain (a custom-domain address names another).
+  const settings = await loadServerSettings<{ chat?: { serverName?: string | null } }>()
+  const own = settings.chat?.serverName?.toLowerCase()
+  if (own && server.toLowerCase() === own) return
   if (!(await federationOn())) throw new FederationOffError()
 }
 
@@ -680,6 +684,11 @@ export class ApiChatTransport implements ChatTransportPort {
             return { kind: 'unreachable' }
           case 404:
             return { kind: 'groupsOff' }
+          // This account's federation is off: a group homed elsewhere is
+          // quiet for it until the switch is on again (it stays a member).
+          case 403:
+            if ((error.response.data as { code?: string } | undefined)?.code === 'federationOff') return { kind: 'groupsOff' }
+            break
         }
       }
       throw error

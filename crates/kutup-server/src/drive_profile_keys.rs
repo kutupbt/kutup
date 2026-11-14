@@ -406,6 +406,9 @@ pub async fn put_profile_key(
         return Ok(StatusCode::NO_CONTENT.into_response());
     }
 
+    // Sending it to another server names this account there: not while its
+    // federation is off (crate::federation_switch).
+    crate::federation_switch::ensure_federates(&state.pool, me.id).await?;
     if !remote_pair_shares(&state.pool, me.id, &recipient).await? {
         return Err(AppError::not_found("no share with that person"));
     }

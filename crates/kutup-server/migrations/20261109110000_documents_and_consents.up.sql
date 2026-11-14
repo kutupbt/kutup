@@ -63,3 +63,10 @@ CREATE FUNCTION kutup_account_federates(account uuid) RETURNS boolean
 LANGUAGE sql STABLE AS $$
     SELECT EXISTS (SELECT 1 FROM users WHERE id = account AND federation = 'on')
 $$;
+
+-- Who shares a live location: a stream is read by other servers only while
+-- its sharer's federation is on (crate::federation_switch), and goes with
+-- the account. Streams last hours; any from before go.
+DELETE FROM live_location_streams;
+ALTER TABLE live_location_streams
+    ADD COLUMN creator_user_id uuid NOT NULL REFERENCES users(id) ON DELETE CASCADE;

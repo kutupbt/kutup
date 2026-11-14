@@ -101,5 +101,24 @@ fn federation_follows_its_consent() {
     assert_eq!(withdrawn.status(), StatusCode::NO_CONTENT);
     assert_eq!(me(&c, &base, &user.token)["federation"], "off");
 
+    // An administrator can't turn it on over a withdrawn consent: the
+    // transfer rests on the user's own (409 consentRequired). Off, it can.
+    let by_admin = |federation: &str| {
+        bearer(c.put(format!("{base}/api/admin/users/{}", user.id)), &admin)
+            .json(&json!({ "federation": federation }))
+            .send()
+            .unwrap()
+    };
+    let refused = by_admin("on");
+    assert_eq!(refused.status(), StatusCode::CONFLICT);
+    assert_eq!(refused.json::<Value>().unwrap()["code"], "consentRequired");
+    assert_eq!(me(&c, &base, &user.token)["federation"], "off");
+    // Given again by the user, the administrator's switch works both ways.
+    assert_eq!(set(true, Some(&text)).status(), StatusCode::NO_CONTENT);
+    assert!(by_admin("off").status().is_success());
+    assert_eq!(me(&c, &base, &user.token)["federation"], "off");
+    assert!(by_admin("on").status().is_success());
+    assert_eq!(me(&c, &base, &user.token)["federation"], "on");
+
     purge_accounts(&c, &base, &[&user]);
 }

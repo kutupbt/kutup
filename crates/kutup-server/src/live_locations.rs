@@ -162,13 +162,15 @@ pub async fn create(
         ));
     }
     let inserted = sqlx::query(
-        "INSERT INTO live_location_streams (stream_id, write_verifier, read_verifier, expires_at)
-         VALUES ($1, $2, $3, $4) ON CONFLICT (stream_id) DO NOTHING",
+        "INSERT INTO live_location_streams
+             (stream_id, write_verifier, read_verifier, expires_at, creator_user_id)
+         VALUES ($1, $2, $3, $4, $5) ON CONFLICT (stream_id) DO NOTHING",
     )
     .bind(&stream_id)
     .bind(hash(Suite::V1, write).to_vec())
     .bind(hash(Suite::V1, read).to_vec())
     .bind(expires_at)
+    .bind(crate::handlers::trusted_uuid(&user.user_id)?)
     .execute(&state.pool)
     .await?;
     if inserted.rows_affected() == 0 {
@@ -289,16 +291,21 @@ type StreamRow = (
     OffsetDateTime,
 );
 
+/// The stream's latest update, for a reader here (`for_peer` false) or on
+/// another server: to one, a stream whose sharer's federation is off is no
+/// stream (crate::federation_switch).
 async fn read_local(
     pool: &PgPool,
     stream_id: &[u8],
     verifier: &[u8],
+    for_peer: bool,
 ) -> AppResult<LiveLocationResponse> {
     let row: Option<StreamRow> = sqlx::query_as(
         "SELECT read_verifier, update_bytes, updated_at, expires_at FROM live_location_streams
-         WHERE stream_id = $1",
+         WHERE stream_id = $1 AND (NOT $2 OR kutup_account_federates(creator_user_id))",
     )
     .bind(stream_id)
+    .bind(for_peer)
     .fetch_optional(pool)
     .await?;
     let Some((stored, update, updated_at, expires_at)) = row else {
@@ -349,6 +356,13 @@ pub async fn read(
         None => {}
         Some(server) if server == local => {}
         Some(server) => {
+            // Reading another server's stream reaches it: not while this
+            // account's federation is off.
+            crate::federation_switch::ensure_federates(
+                &state.pool,
+                crate::handlers::trusted_uuid(&user.user_id)?,
+            )
+            .await?;
             let capability = headers
                 .get(READ_HEADER)
                 .and_then(|value| value.to_str().ok())
@@ -360,7 +374,9 @@ pub async fn read(
         }
     }
     let verifier = hashed_secret(&headers, READ_HEADER)?;
-    read_local(&state.pool, &stream, &verifier).await.map(Json)
+    read_local(&state.pool, &stream, &verifier, false)
+        .await
+        .map(Json)
 }
 
 fn stack(state: &AppState) -> AppResult<&FederationStack> {
@@ -470,10 +486,21 @@ pub async fn federated_read(
     let result = async {
         let stream = stream_id_of(&stream_id)?;
         let verifier = hashed_secret(&headers, READ_HEADER)?;
-        read_local(&state.pool, &stream, &verifier).await
+        read_local(&state.pool, &stream, &verifier, true).await
     }
     .await;
     signed(federation, &authenticated, result)
+}
+
+/// [`read_local`], for the switch's tests.
+#[cfg(test)]
+pub(crate) async fn read_for_tests(
+    pool: &PgPool,
+    stream_id: &[u8],
+    verifier: &[u8],
+    for_peer: bool,
+) -> AppResult<LiveLocationResponse> {
+    read_local(pool, stream_id, verifier, for_peer).await
 }
 
 /// Delete ended streams once a minute.

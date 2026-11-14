@@ -1471,7 +1471,10 @@ async fn serve_object_inner(
          JOIN chat_media_objects o ON o.attachment_id=g.attachment_id
          WHERE g.destination=$1 AND g.recipient_account_id=$2 AND g.operation_id=$3
            AND g.attachment_id=$4 AND g.expires_at>now()
-           AND o.origin_domain=$5 AND o.origin_user_id=g.origin_user_id",
+           AND o.origin_domain=$5 AND o.origin_user_id=g.origin_user_id
+           -- A sender whose federation is off serves nothing to another
+           -- server, its grants from before included (crate::federation_switch).
+           AND kutup_account_federates(g.origin_user_id)",
     )
     .bind(authenticated.origin())
     .bind(recipient_account_id(&transaction.offer).map_err(|_| chat_media::unavailable())?)
