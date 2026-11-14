@@ -174,9 +174,11 @@ const chains = new Map<string, Promise<unknown>>()
 
 /**
  * Runs `task` after every earlier task on `entry` in this page, and under the
- * browser's lock of the same name where there is one (other tabs too).
+ * browser's lock of the same name where there is one (other tabs too). Entry
+ * names are keyed hashes of their purpose too, so the local chain pins
+ * (`localChainPins`) share this.
  */
-function serialized<T>(entry: string, task: () => Promise<T>): Promise<T> {
+export function serialized<T>(entry: string, task: () => Promise<T>): Promise<T> {
   const locks = typeof navigator !== 'undefined' ? navigator.locks : undefined
   const run = (): Promise<T> => (locks ? (locks.request(`kutup-revision:${entry}`, task) as Promise<T>) : task())
   const result = (chains.get(entry) ?? Promise.resolve()).then(run, run)

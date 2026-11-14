@@ -31,6 +31,13 @@ ignore = [
     # sender certificates. Native aarch64 clients (the native apps, not started)
     # need it fixed: lifted by a libsignal release pinning >= 0.0.6.
     { id = "RUSTSEC-2026-0212", reason = "aarch64-only, in libsignal's ML-KEM; web is WASM, native apps not started; needs a libsignal bump" },
+    # Bundled SQLite before 3.54 (CVE-2026-119375) in libsqlite3-sys 0.30.1,
+    # through kutup-chat-core's rusqlite 0.32.1: harmful only to a process that
+    # opens a database and WAL pair written by a less trusted party. That
+    # SQLite is the native apps' store (not started); the web keeps Chat in
+    # IndexedDB. Bumping (rusqlite 0.41) would not fix it: the sqlcipher build
+    # still bundles SQLite 3.53.4. Lifted with the native apps (docs/roadmap.md).
+    { id = "RUSTSEC-2026-0459", reason = "bundled SQLite < 3.54 via chat-core's rusqlite/sqlcipher: native-app store only, native apps not started; sqlcipher has no fixed build" },
     # rsa 0.9.10, Marvin: its private-key operation isn't constant time, so
     # one who can time many of them may learn the key. No fixed release. The
     # only private-key use is Pass's SSH agent signing with a vault's RSA SSH

@@ -672,6 +672,10 @@ because their tables only hold transient data.
      chain (`fe/chat-core/src/attachment-ledger.ts`,
      `kutup.chat.attachment-ledger.pin.v1.*`). Pins are sealed, never plain
      (the Proton browser-storage model).
+     *Done:* both are sealed account records (purpose `LocalChainPin`,
+     docs/plans/w1-account-record.md) in the revision guard's IndexedDB
+     store (`fe/crypto/src/localChainPins.ts`); the old keys are removed on
+     the first pin stored.
 
    Browser data is discarded at the wipe anyway, so format changes here are
    free whenever they land. Size M.
