@@ -204,7 +204,7 @@
         "description": "Kutup servers talk to each other, so you can chat and share with people whose accounts are elsewhere. Your mail isn't affected: it always reaches any address.",
         "on": "Talking to other servers: on",
         "off": "Talking to other servers: off",
-        "hint": "While off, nobody on another server can reach you, and you can't reach them. Your conversations and shares with them stay, quietly: groups and calls hosted on another server are quiet for you too (you stay a member) until you turn it back on. Nothing is deleted.",
+        "hint": "While off, nobody on another server can reach you, and you can't reach them. Your conversations and shares with them stay, quietly: groups and calls hosted on another server are quiet for you too (you stay a member) until you turn it back on. Messages sent to you there while it is off aren't delivered later. Nothing is deleted.",
         "turnOn": "Turn on",
         "turnOff": "Turn off",
         "consentTitle": "Talk to other servers?",

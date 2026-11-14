@@ -4741,6 +4741,18 @@ high-water mark commit atomically. Exact replay returns the stored response;
 device mismatch or sequence gap returns typed `409` data so the origin can
 refresh/re-encrypt or replay the missing retained transaction.
 
+### POST /api/fed/chat/withdrawn
+
+A sequence of the origin's plain Chat or media stream given up before its
+transaction left: the sending account turned its federation off
+(docs/plans/server-personal-data.md). Signed `FederatedWithdrawnV1`
+`{ "version": 1, "transactionId", "stream": "chat"|"media", "sequence",
+"origin", "destination" }`: no sender, recipient or payload. The receiver
+uses the sequence up exactly as a delivery would (it must be the next one;
+otherwise `409` with the `sequenceGap` data) and stores the answer, so a
+repeat of the same `transactionId` gets the same `200
+{ "acceptedSequence" }`. Required of every server: there is no fallback.
+
 ---
 
 ## Drive Federation — Local Authenticated Endpoints

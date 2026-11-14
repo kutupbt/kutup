@@ -43,6 +43,7 @@ mod error;
 mod federation;
 mod federation_outbox;
 mod federation_switch;
+mod federation_withdrawn;
 mod file_content;
 mod grants;
 mod handlers;
@@ -2039,6 +2040,12 @@ fn build_router(state: AppState) -> Router {
         .route(
             "/api/fed/chat/accounts/:account_id/manifest",
             get(chat_federation::get_manifest)
+                .route_layer(from_fn(middleware::rate_limit_fed_users)),
+        )
+        .route(
+            federation_withdrawn::PATH,
+            post(federation_withdrawn::receive)
+                .route_layer(DefaultBodyLimit::max(4 * 1024))
                 .route_layer(from_fn(middleware::rate_limit_fed_users)),
         )
         .route(
