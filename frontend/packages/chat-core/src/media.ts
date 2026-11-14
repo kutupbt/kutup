@@ -23,7 +23,7 @@ import type { ChatMediaBlockSource } from '@kutup/files/blockReader/protocol'
 import { openDownloadSink } from '@kutup/files/download/streamDownload'
 import { driveStreamLimits } from '@kutup/files/stream/limits'
 import { openPlayerStream } from '@kutup/files/stream/page'
-import { openMediaPlayback, type Playback } from '@kutup/files/stream/playback'
+import { openMediaPlayback, type Playback, type PlaybackFallback } from '@kutup/files/stream/playback'
 import {
   CiphertextCacheRequestCoordinatorV1,
   type CiphertextCacheBindingV1,
@@ -578,12 +578,14 @@ export async function* fetchChatMediaV1(
  * Plays a video or song attachment (docs/plans/drive-block-format.md §4):
  * streamed from the account's own server through the service worker, so a
  * seek fetches one block; where no worker controls the page, opened whole
- * from the private cache (downloading it there first).
+ * from the private cache (downloading it there first). A stream that fails
+ * before it plays is replaced the same way, handed to `onFallback`.
  */
 export async function openChatMediaPlaybackV1(
   descriptor: ChatAttachmentDescriptorV1,
   cache: PrivateCiphertextCacheV1,
   signal?: AbortSignal,
+  onFallback?: (next: PlaybackFallback) => void,
 ): Promise<Playback> {
   const mimeType = descriptor.mimeType || 'application/octet-stream'
   return openMediaPlayback(
@@ -607,6 +609,8 @@ export async function openChatMediaPlaybackV1(
       },
     },
     signal,
+    undefined,
+    onFallback,
   )
 }
 

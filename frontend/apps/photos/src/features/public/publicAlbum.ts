@@ -7,7 +7,7 @@ import { acceptFileMetadata } from '@kutup/drive-core/metadataGuard'
 import type { DriveFile } from '@kutup/drive-core/model'
 import { thumbnailUrl } from '@kutup/drive-core/thumbnails'
 import { fetchDecryptedChunks } from '@kutup/files/download/fetchDecrypt'
-import { openPublicPlayback, type Playback } from '@kutup/drive-core/playback'
+import { openPublicPlayback, type Playback, type PlaybackFallback } from '@kutup/drive-core/playback'
 import { mediaKindOf } from '@kutup/files/media'
 import type { MediaMetadataV1 } from '@kutup/crypto'
 import { resolveApiBase } from '@kutup/session/apiBase'
@@ -172,7 +172,13 @@ export async function readPublicOriginal(token: string, photo: PublicPhoto, sign
  * service worker (docs/plans/drive-block-format.md §4) with the link's key
  * and the default limits, or read whole where no worker controls the page.
  */
-export async function openPublicVideo(token: string, photo: PublicPhoto, signal?: AbortSignal, onProgress?: (read: number) => void): Promise<Playback> {
+export async function openPublicVideo(
+  token: string,
+  photo: PublicPhoto,
+  signal?: AbortSignal,
+  onProgress?: (read: number) => void,
+  onFallback?: (next: PlaybackFallback) => void,
+): Promise<Playback> {
   const url = `${await resolveApiBase()}${base(token)}/download/${photo.file.id}`
   return openPublicPlayback(
     {
@@ -184,5 +190,6 @@ export async function openPublicVideo(token: string, photo: PublicPhoto, signal?
     },
     signal,
     onProgress,
+    onFallback,
   )
 }

@@ -147,11 +147,26 @@ function streamResponse(answer, range) {
   })
 }
 
+/**
+ * Tells the page that asked that its stream was refused, so it can fall back
+ * to a whole download: some WebKit builds give a media element's requests an
+ * empty `destination`, and the page cannot see a 403's status. The message
+ * carries only the stream id the page itself put in the URL.
+ */
+async function sayRefused(event, streamId) {
+  if (!STREAM_ID.test(streamId) || !event.clientId) return
+  const client = await self.clients.get(event.clientId)
+  client?.postMessage({ type: 'stream_refused', v: STREAM_PROTOCOL, streamId })
+}
+
 async function serveStream(event, url) {
   const request = event.request
-  // Only a player may read a stream; a navigation, a fetch() or an <img> may not.
-  if (request.destination !== 'video' && request.destination !== 'audio') return emptyResponse(403)
   const streamId = url.pathname.slice('/sw/stream/'.length)
+  // Only a player may read a stream; a navigation, a fetch() or an <img> may not.
+  if (request.destination !== 'video' && request.destination !== 'audio') {
+    await sayRefused(event, streamId).catch(() => {})
+    return emptyResponse(403)
+  }
   if (!STREAM_ID.test(streamId)) return emptyResponse(404)
   const header = request.headers.get('Range')
   if (!header) return emptyResponse(400)

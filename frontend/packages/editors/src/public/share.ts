@@ -19,7 +19,7 @@ import {
 import { unlockCollectionKeyring, type EpochLinkV1 } from '@kutup/crypto/collectionKeyring'
 import { fileKeyAtV1 } from '@kutup/crypto/fileKeyring'
 import { editorKindFor } from '@kutup/drive-core/editorKind'
-import { openPublicPlayback, type Playback } from '@kutup/drive-core/playback'
+import { openPublicPlayback, type Playback, type PlaybackFallback } from '@kutup/drive-core/playback'
 import { fetchDecryptedChunks } from '@kutup/files/download/fetchDecrypt'
 import { streamDownload } from '@kutup/files/download/streamDownload'
 import { driveStreamLimits } from '@kutup/files/stream/limits'
@@ -304,7 +304,13 @@ export async function readPublicFile(token: string, file: PublicFile, signal?: A
  * link's key and the default limits, or read whole where no worker controls
  * the page.
  */
-export async function openPublicFilePlayback(token: string, file: PublicFile, signal?: AbortSignal, onProgress?: (read: number) => void): Promise<Playback> {
+export async function openPublicFilePlayback(
+  token: string,
+  file: PublicFile,
+  signal?: AbortSignal,
+  onProgress?: (read: number) => void,
+  onFallback?: (next: PlaybackFallback) => void,
+): Promise<Playback> {
   const fileKey = file.fileKey
   if (!fileKey) throw new Error('file is not open')
   return openPublicPlayback(
@@ -317,6 +323,7 @@ export async function openPublicFilePlayback(token: string, file: PublicFile, si
     },
     signal,
     onProgress,
+    onFallback,
   )
 }
 

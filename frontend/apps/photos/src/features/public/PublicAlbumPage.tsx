@@ -65,7 +65,7 @@ function Shown({ token, photo }: { token: string; photo: PublicPhoto }) {
   const preview = large ?? small
   const [url, setUrl] = useState<string | null>(null)
   // Videos stream through the link (docs/plans/drive-block-format.md §4): a seek fetches one block.
-  const playback = usePlaybackOf((signal, onProgress) => openPublicVideo(token, photo, signal, onProgress), `${token}/${photo.id}`, photo.kind === 'video')
+  const playback = usePlaybackOf((signal, onProgress, onFallback) => openPublicVideo(token, photo, signal, onProgress, onFallback), `${token}/${photo.id}`, photo.kind === 'video')
   useEffect(() => {
     if (photo.kind === 'video' || photo.file.size > MAX_ORIGINAL_BYTES) return
     const controller = new AbortController()

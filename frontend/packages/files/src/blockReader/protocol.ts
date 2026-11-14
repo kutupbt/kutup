@@ -49,6 +49,24 @@ function isRange(range: unknown): range is StreamRange {
   return Number.isSafeInteger(r.start) && (r.start as number) >= 0 && (r.end === null || (Number.isSafeInteger(r.end) && (r.end as number) >= 0))
 }
 
+/**
+ * The service worker tells the page it refused a request for one of its
+ * streams (not a player's request: some WebKit builds give a media element
+ * an empty `destination`), so the page can fall back to a whole download.
+ * No port, and only the stream id the page put in the URL.
+ */
+export interface StreamRefused {
+  type: 'stream_refused'
+  v: number
+  streamId: string
+}
+
+export function isStreamRefused(data: unknown): data is StreamRefused {
+  if (typeof data !== 'object' || data === null) return false
+  const d = data as Partial<StreamRefused>
+  return d.type === 'stream_refused' && typeof d.v === 'number' && typeof d.streamId === 'string'
+}
+
 /** Whether this page can answer a worker that accepts these versions. */
 export function speaksWith(accepts: readonly number[]): boolean {
   return accepts.includes(STREAM_PROTOCOL_VERSION)

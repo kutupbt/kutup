@@ -9,23 +9,28 @@ import { useEffect, useState } from 'react'
 import { driveStreamLimits } from '@kutup/files/stream/limits'
 import { openPlayerStream } from '@kutup/files/stream/page'
 import type { DriveObjectToOpen } from '@kutup/crypto/driveBlocks'
-import { openMediaPlayback, type Playback } from '@kutup/files/stream/playback'
+import { openMediaPlayback, type Playback, type PlaybackFallback } from '@kutup/files/stream/playback'
 import { resolveApiBase } from '@kutup/session/apiBase'
 import { freshAccessToken } from '@kutup/session/client'
 import { currentContentOf } from './keyring'
 import { contentPath, fileLocation, type DriveFile, type Folder } from './model'
 import { readOriginal } from './original'
 
-export type { Playback } from '@kutup/files/stream/playback'
+export type { Playback, PlaybackFallback } from '@kutup/files/stream/playback'
 
 type PlaybackFolder = Pick<Folder, 'id' | 'source' | 'remoteShareId' | 'remoteFileShareId'>
 
-/** Opens the file's current content for a player: streamed where it can be. */
+/**
+ * Opens the file's current content for a player: streamed where it can be.
+ * A stream that fails before it plays is replaced by a whole download,
+ * handed to `onFallback`.
+ */
 export async function openPlayback(
   folder: PlaybackFolder,
   file: DriveFile,
   signal?: AbortSignal,
   onProgress?: (read: number) => void,
+  onFallback?: (next: PlaybackFallback) => void,
 ): Promise<Playback> {
   if (!file.fileKey) throw new Error('file is not open')
   const mimeType = file.mimeType || 'application/octet-stream'
@@ -53,6 +58,7 @@ export async function openPlayback(
     },
     signal,
     onProgress,
+    onFallback,
   )
 }
 
@@ -68,7 +74,12 @@ export interface PublicPlaybackTarget {
 }
 
 /** A file reached through a public link: no session, so no token, and the default limits. */
-export async function openPublicPlayback(target: PublicPlaybackTarget, signal?: AbortSignal, onProgress?: (read: number) => void): Promise<Playback> {
+export async function openPublicPlayback(
+  target: PublicPlaybackTarget,
+  signal?: AbortSignal,
+  onProgress?: (read: number) => void,
+  onFallback?: (next: PlaybackFallback) => void,
+): Promise<Playback> {
   const mimeType = target.mimeType || 'application/octet-stream'
   return openMediaPlayback(
     {
@@ -89,6 +100,7 @@ export async function openPublicPlayback(target: PublicPlaybackTarget, signal?: 
     },
     signal,
     onProgress,
+    onFallback,
   )
 }
 
@@ -96,10 +108,12 @@ export type PlaybackState = { kind: 'loading'; read: number } | Playback | { kin
 
 /**
  * What `open` gives while `enabled`, closed when `key` changes or the
- * component goes. `key` names what is played (a file and its content).
+ * component goes. `key` names what is played (a file and its content). A
+ * stream that fails before it plays becomes what `open`'s `onFallback`
+ * hands over.
  */
 export function usePlaybackOf(
-  open: (signal: AbortSignal, onProgress: (read: number) => void) => Promise<Playback>,
+  open: (signal: AbortSignal, onProgress: (read: number) => void, onFallback: (next: PlaybackFallback) => void) => Promise<Playback>,
   key: string,
   enabled = true,
 ): PlaybackState {
@@ -110,7 +124,12 @@ export function usePlaybackOf(
     let opened: Playback | null = null
     let alive = true
     setState({ kind: 'loading', read: 0 })
-    open(controller.signal, (read) => alive && setState({ kind: 'loading', read })).then(
+    open(
+      controller.signal,
+      (read) => alive && setState({ kind: 'loading', read }),
+      // The first playback's close ends what replaced it.
+      (next) => alive && setState(next),
+    ).then(
       (playback) => {
         opened = playback
         if (!alive) {
@@ -135,7 +154,7 @@ export function usePlaybackOf(
 /** A file's playback while `enabled`, closed when the file changes or the component goes. */
 export function usePlayback(folder: PlaybackFolder, file: DriveFile, enabled = true): PlaybackState {
   return usePlaybackOf(
-    (signal, onProgress) => openPlayback(folder, file, signal, onProgress),
+    (signal, onProgress, onFallback) => openPlayback(folder, file, signal, onProgress, onFallback),
     `${file.id}/${file.content?.revisionId ?? ''}/${file.contentKeyGeneration}`,
     enabled,
   )

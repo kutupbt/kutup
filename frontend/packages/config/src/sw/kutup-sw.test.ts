@@ -27,8 +27,15 @@ interface Asked {
 function worker(reply: ((asked: Asked) => unknown) | null = null, query = '') {
   const handlers: Record<string, Handler> = {}
   const asked: Asked[] = []
+  const refused: unknown[] = []
   const client = {
-    postMessage: (message: Asked, [port]: MessagePort[]) => {
+    postMessage: (message: Asked, transfer?: MessagePort[]) => {
+      // A refusal comes without a port.
+      if (message.type === 'stream_refused') {
+        refused.push(message)
+        return
+      }
+      const [port] = transfer ?? []
       asked.push(message)
       const answer = reply?.(message)
       if (answer !== undefined) {
@@ -76,7 +83,7 @@ function worker(reply: ((asked: Asked) => unknown) | null = null, query = '') {
     })
     return answered
   }
-  return { internals, fetch, asked, self, handlers }
+  return { internals, fetch, asked, refused, self, handlers }
 }
 
 function bytes(length: number, from = 0): ArrayBuffer {
@@ -194,6 +201,24 @@ describe('the service worker', () => {
     expect(await status(`/sw/stream/${STREAM}`, { range: 'bytes=0-', clientId: 'gone' })).toBe(404)
     expect(page.asked).toHaveLength(0)
     const response = (await page.fetch(`/sw/stream/${STREAM}`, { range: 'bytes=0-', destination: 'document' }))!
+    expectSecurityHeaders(response)
+    expect(response.headers.get('content-length')).toBe('0')
+  })
+
+  it('tells the page a stream was refused for its destination, and serves it nothing', async () => {
+    const page = worker(() => ({ v: 1, kind: 'bytes', start: 0, total: 10, mimeType: 'video/mp4', bytes: bytes(10) }))
+    // Some WebKit builds give a media element an empty destination: still 403, never widened.
+    const response = (await page.fetch(`/sw/stream/${STREAM}`, { range: 'bytes=0-', destination: '' }))!
+    expect(response.status).toBe(403)
+    expect(page.asked).toHaveLength(0)
+    expect(page.refused).toEqual([{ type: 'stream_refused', v: STREAM_PROTOCOL_VERSION, streamId: STREAM }])
+    // Not for an id that isn't one, nor with no page to tell.
+    expect((await page.fetch('/sw/stream/short', { range: 'bytes=0-', destination: '' }))!.status).toBe(403)
+    expect((await page.fetch(`/sw/stream/${STREAM}`, { range: 'bytes=0-', destination: '', clientId: '' }))!.status).toBe(403)
+    expect(page.refused).toHaveLength(1)
+    // A player's request is served, and nothing is said.
+    expect((await page.fetch(`/sw/stream/${STREAM}`, { range: 'bytes=0-' }))!.status).toBe(206)
+    expect(page.refused).toHaveLength(1)
     expectSecurityHeaders(response)
     expect(response.headers.get('content-length')).toBe('0')
   })

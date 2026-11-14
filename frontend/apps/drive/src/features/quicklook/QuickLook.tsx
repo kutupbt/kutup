@@ -11,7 +11,7 @@ import { editorKindFor, extensionOf } from '@kutup/drive-core/editorKind'
 import { chooseViewer } from '@kutup/editors/viewers/dispatch'
 import { KindIcon } from '@kutup/drive-ui/KindIcon'
 import { thumbnailUrl } from '@kutup/drive-core/thumbnails'
-import { openPlayback } from '@kutup/drive-core/playback'
+import { openPlayback, type PlaybackFallback } from '@kutup/drive-core/playback'
 
 const MarkdownPreview = lazy(() => import('@kutup/editors/text/markdown/MarkdownPreview'))
 
@@ -82,7 +82,14 @@ export function QuickLook({
     if (viewer && (viewer.kind === 'video' || viewer.kind === 'audio')) {
       const controller = new AbortController()
       let close: (() => void) | null = null
-      openPlayback(folder, f, controller.signal)
+      // A stream that fails before it plays is replaced by a whole download.
+      const replaced = (next: PlaybackFallback) => {
+        if (cancelled) return
+        if (next.kind === 'ready') setLoaded({ kind: 'viewer', url: next.src, mimeType: viewer.mimeType })
+        else if (next.kind === 'tooLarge') fallback('size')
+        else setLoaded({ kind: 'none', reason: next.kind === 'busy' ? 'busy' : 'failed' })
+      }
+      openPlayback(folder, f, controller.signal, undefined, replaced)
         .then((playback) => {
           if (playback.kind === 'ready') {
             if (cancelled) {

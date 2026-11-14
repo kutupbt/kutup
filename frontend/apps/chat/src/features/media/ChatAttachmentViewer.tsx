@@ -16,6 +16,7 @@ import {
   openChatMediaPlaybackV1,
   type ChatMediaViewerKindV1,
 } from '@kutup/chat-core/media'
+import type { PlaybackFallback } from '@kutup/files/stream/playback'
 
 /** What the viewer shows: a verified Blob's URL, or a stream's (`close` ends it). */
 interface Shown {
@@ -34,10 +35,15 @@ async function openShown(
   cache: PrivateCiphertextCacheV1,
   attachment: ChatAttachmentDescriptorV1,
   signal: AbortSignal,
+  onReplaced: (next: Shown | 'busy' | 'tooLarge' | 'failed') => void,
 ): Promise<Shown | 'busy' | 'tooLarge'> {
   const hinted = chatMediaViewerKindV1(attachment)
   if (hinted === 'video' || hinted === 'audio') {
-    const playback = await openChatMediaPlaybackV1(attachment, cache, signal)
+    // A stream that fails before it plays is replaced by a whole download;
+    // the first playback's close ends it too.
+    const replaced = (next: PlaybackFallback) =>
+      onReplaced(next.kind === 'ready' ? { kind: hinted, url: next.src, close: next.close } : next.kind)
+    const playback = await openChatMediaPlaybackV1(attachment, cache, signal, replaced)
     if (playback.kind !== 'ready') return playback.kind
     return { kind: hinted, url: playback.src, close: playback.close }
   }
@@ -70,7 +76,14 @@ export function ChatAttachmentViewer({
     let shown: Shown | null = null
     setOpened(null)
     setFailed(false)
-    void openShown(cache, attachment, controller.signal)
+    const replaced = (next: Shown | 'busy' | 'tooLarge' | 'failed') => {
+      if (controller.signal.aborted) return
+      if (typeof next === 'string') {
+        setOpened(null)
+        setFailed(next)
+      } else setOpened(next)
+    }
+    void openShown(cache, attachment, controller.signal, replaced)
       .then((result) => {
         if (typeof result === 'string') {
           if (!controller.signal.aborted) setFailed(result)

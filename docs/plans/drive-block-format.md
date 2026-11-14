@@ -476,7 +476,18 @@ copied.
      manifest's. Nothing is fetched by block before this succeeds.
    - The page then runs the manifest's signer through the identity-pin
      check (`setManifestSignerCheck`, warn-not-block) before it releases a
-     byte; the check may hold the first byte back for at most 10 s.
+     byte; the check may hold the first byte back for at most 10 s. The
+     hold is released after 10 s whatever the verdict, as everywhere else
+     (warn, not block): a signer that doesn't hold, or a check that never
+     answers, shows its warning, and the bytes still play.
+   - A stream opened with `served: true` (the original upload, a public
+     link's saved state) takes the revision the server's response names,
+     provided it is the one the metadata names, and opens against the
+     record served with it. As noted for slice 3 (§8, "Served
+     revisions"), that is only as fresh as the metadata the reader holds:
+     where the metadata itself can be rolled back (a public link's page),
+     the server can still roll back among genuine revisions of the file,
+     never mix new metadata with older content.
    - Any byte range is served from blocks fetched by their own Range, each
      hashed against the manifest's entry and opened at its index before a
      byte leaves the Worker. It keeps an LRU of verified plaintext blocks
@@ -542,6 +553,22 @@ copied.
    controller: the page waits for one up to 15 s (registration, activation
    and claim), then falls back to a whole download into a Blob, up to
    `drive.stream.blob_fallback_max_bytes`.
+   - A stream that fails before its first frame falls back the same way,
+     within the same limit (review, 2026-11-14): some WebKit builds give a
+     media element's requests an empty `destination`, which the worker
+     refuses (403) and keeps refusing, so the gate is never widened to
+     empty. The worker posts `{type: 'stream_refused', v, streamId}` to the
+     page that asked, for an id of the right form, and the page's stream
+     hears it (`onRefused`); the opener also hears the element's `error`
+     and `loadeddata` (caught on the way down, as they don't bubble). A
+     refusal or an error before `loadeddata` closes the stream and hands the
+     player a Blob (`openMediaPlayback`'s `onFallback`,
+     `streamFallbackDecision`); after the first frame an error is the
+     player's to show.
+   - The worker has one registration per origin (scope `/`), shared by
+     streaming and Web Push. Nothing ever `unregister()`s it: turning
+     notifications off drops only the push subscription, or it would end
+     streaming too.
 5. **Players.** Photos' viewer, Drive's Quick Look and file page
    (`FileEditorPage`), Photos' public albums and Drive's public links
    (a video or song opens in a player on the link's page) play video and

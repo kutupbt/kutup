@@ -15,7 +15,7 @@
 
 import { randomBytes } from '@kutup/crypto/random'
 import { openBlockReader, type AccessToken, type BlockReaderHandle } from '../blockReader/client'
-import { isStreamChunkRequest, speaksWith, STREAM_PROTOCOL_VERSION, type BlockReaderTarget, type StreamChunkAnswer } from '../blockReader/protocol'
+import { isStreamChunkRequest, isStreamRefused, speaksWith, STREAM_PROTOCOL_VERSION, type BlockReaderTarget, type StreamChunkAnswer } from '../blockReader/protocol'
 import { readerSettings, type StreamLimits } from './limits'
 
 /** The service worker's script, at scope `/`. */
@@ -38,6 +38,9 @@ export class TooManyStreams extends Error {
 interface Stream {
   reader: BlockReaderHandle
   mimeType: string
+  /** The worker refused a request for it (see `onRefused`). */
+  refused: boolean
+  onRefused: Set<() => void>
 }
 
 const streams = new Map<string, Stream>()
@@ -56,6 +59,13 @@ function answer(port: MessagePort, message: StreamChunkAnswer) {
 /** The page's handler for the service worker's messages: only `get_stream_chunk` for its own streams. */
 export function onServiceWorkerMessage(event: Pick<MessageEvent, 'data' | 'ports'>): void {
   const request = event.data as unknown
+  if (isStreamRefused(request)) {
+    const stream = streams.get(request.streamId)
+    if (!stream || stream.refused) return
+    stream.refused = true
+    for (const listener of [...stream.onRefused]) listener()
+    return
+  }
   if (!isStreamChunkRequest(request)) return
   const [port] = event.ports
   if (!port) return
@@ -94,6 +104,10 @@ function container(): ServiceWorkerContainer | null {
  * registration Chat or Calendar made for Web Push (`/kutup-sw.js?push=…`)
  * is the same worker and is kept as it is: registering the bare script
  * would drop its words.
+ *
+ * There is one registration per origin (scope `/`), shared by streaming and
+ * Web Push. Never `unregister()` it: turning notifications off would then
+ * break streaming too (and dropping streaming would end push).
  */
 async function register(workers: ServiceWorkerContainer): Promise<ServiceWorkerRegistration | null> {
   const existing = await workers.getRegistration('/')
@@ -156,6 +170,11 @@ export interface PlayerStream {
   size: number
   /** Stops the reader's fetches, drops its blocks and forgets the stream. */
   close: () => void
+  /**
+   * Calls `listener` when the service worker refuses a request for this
+   * stream (at once if it has already); returns its removal.
+   */
+  onRefused: (listener: () => void) => () => void
 }
 
 export interface OpenPlayerStreamOptions {
@@ -190,16 +209,26 @@ export async function openPlayerStream(options: OpenPlayerStreamOptions): Promis
     opening--
   }
   const streamId = newStreamId()
-  streams.set(streamId, { reader, mimeType: options.mimeType })
+  const stream: Stream = { reader, mimeType: options.mimeType, refused: false, onRefused: new Set() }
+  streams.set(streamId, stream)
   let closed = false
   const close = () => {
     if (closed) return
     closed = true
     streams.delete(streamId)
+    stream.onRefused.clear()
     reader.close()
   }
   options.signal?.addEventListener('abort', close, { once: true })
-  return { src: `${STREAM_PATH}${streamId}`, size: reader.opened.size, close }
+  const onRefused = (listener: () => void) => {
+    if (stream.refused) {
+      listener()
+      return () => {}
+    }
+    stream.onRefused.add(listener)
+    return () => void stream.onRefused.delete(listener)
+  }
+  return { src: `${STREAM_PATH}${streamId}`, size: reader.opened.size, close, onRefused }
 }
 
 /** For tests: the streams this page has open. */

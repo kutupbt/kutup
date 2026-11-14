@@ -49,6 +49,25 @@ The independently outer-encrypted history-media lifecycle is covered by
 | Delete-for-everyone promises revocation | UI states deletion is best effort after delivery; saved/decrypted copies cannot be revoked | No false cryptographic erasure claim. |
 | Oversized decompression/image/video bomb | Ciphertext and plaintext-class caps plus bounded client decoders | Resource use is bounded; malformed media does not affect crypto state. |
 
+## What the servers check, and what only recipients check
+
+A server holds no attachment key, so it can check only what is visible
+without one. Every server that keeps an object (the origin for a local
+upload, a destination for a peer's hand-over) checks the same things before
+it keeps it: the typed header names this attachment in the block suite, the
+object's length and trailer give a structure that holds (the sealed
+manifest's length fits the block count, and the count the length), and the
+whole object's SHA-256 is the digest it was uploaded or offered under. A
+peer that hands over anything else, a non-Kutup object included, is refused
+with the same 400 a local upload gets, and the refusal is final for that
+offer.
+
+The manifest digest (the descriptor's commitment to the sealed manifest)
+and each block's AEAD are checked only by recipients, who hold the
+descriptor and the key. A server that passes its checks may still hold an
+object whose manifest is not the one the descriptor names; the recipient
+then refuses it before any plaintext is released.
+
 ## Abuse defaults
 
 - V1 object ceiling: 2 GiB plaintext-class content plus exact suite overhead.

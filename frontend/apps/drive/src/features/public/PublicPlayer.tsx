@@ -16,7 +16,9 @@ export function PublicPlayer({ token, file, onClose }: { token: string; file: Pu
   const { t } = useTranslation()
   const name = file.name ?? ''
   const viewer = chooseViewer(name)
-  const playback = usePlaybackOf((signal, onProgress) => openPublicFilePlayback(token, file, signal, onProgress), `${token}/${file.row.id}`)
+  const playback = usePlaybackOf(
+    (signal, onProgress, onFallback) => openPublicFilePlayback(token, file, signal, onProgress, onFallback),
+    `${token}/${file.row.id}`)
   return (
     <Dialog open onOpenChange={(open) => !open && onClose()}>
       <DialogContent className="max-w-3xl">

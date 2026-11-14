@@ -201,6 +201,9 @@ function Picture({ photo }: { photo: Photo }) {
     setConverted(null)
     setUnplayable(false)
   }, [photo.id, raw])
+  // A stream that failed before it played is replaced by a whole download: try that.
+  const playing = playback.kind === 'ready' ? playback.src : null
+  useEffect(() => setUnplayable(false), [playing])
   useEffect(() => {
     if (photo.kind !== 'image' || !undrawable || original.state !== 'ready') return
     let alive = true

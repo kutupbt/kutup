@@ -1059,12 +1059,26 @@ async fn process_reserved_offer_inner(
                 "origin Chat-media object differs from its signed offer",
             ));
         }
+        // The checks a local upload gets: a peer's object is kept only if
+        // it is this attachment's, in the block suite, with a structure
+        // that holds. Its signed offer named these bytes, so a refusal is
+        // final.
+        let mut file = streamed.file;
+        if let Err(refusal) =
+            check_pulled_object(&mut file, attachment_id, streamed.content_length).await
+        {
+            if refusal.status.is_server_error() {
+                return Err(refusal);
+            }
+            return refuse_reserved(state, transaction, transaction_digest, lease_id, refusal)
+                .await;
+        }
         let path = format!(
             "chat-media/federated/{}/{attachment_id}",
             transaction.origin_domain
         );
         let stream = ByteStream::read_from()
-            .file(streamed.file)
+            .file(file)
             .length(Length::Exact(streamed.content_length))
             .buffer_size(1024 * 1024)
             .build()
@@ -1273,6 +1287,36 @@ async fn process_reserved_offer_inner(
             Err(error)
         }
     }
+}
+
+/// A pulled object's header and trailer, checked as a local upload's are
+/// (`chat_media::check_object_shape`); the file is left at its start.
+async fn check_pulled_object(
+    file: &mut tokio::fs::File,
+    attachment_id: Uuid,
+    total: u64,
+) -> AppResult<()> {
+    use kutup_crypto::blocks::TRAILER_LEN;
+    use kutup_crypto::chat_media_blocks::CHAT_MEDIA_BLOCKS_HEADER_BYTES;
+    use std::io::SeekFrom;
+    use tokio::io::{AsyncReadExt as _, AsyncSeekExt as _};
+    let io = |_| AppError::internal("read pulled Chat-media object");
+    let mut header = Vec::new();
+    let mut trailer = Vec::new();
+    if total >= CHAT_MEDIA_BLOCKS_HEADER_BYTES as u64 {
+        header.resize(CHAT_MEDIA_BLOCKS_HEADER_BYTES, 0);
+        file.seek(SeekFrom::Start(0)).await.map_err(io)?;
+        file.read_exact(&mut header).await.map_err(io)?;
+    }
+    if total >= TRAILER_LEN as u64 {
+        trailer.resize(TRAILER_LEN, 0);
+        file.seek(SeekFrom::Start(total - TRAILER_LEN as u64))
+            .await
+            .map_err(io)?;
+        file.read_exact(&mut trailer).await.map_err(io)?;
+    }
+    file.seek(SeekFrom::Start(0)).await.map_err(io)?;
+    chat_media::check_object_shape(attachment_id, &header, total, &trailer)
 }
 
 /// Records this server's final answer to the offer at its sequence, using
@@ -1497,4 +1541,66 @@ async fn serve_object_inner(
 pub(crate) fn recipient_account_id(offer: &ChatMediaDeliveryOfferV1) -> AppResult<Uuid> {
     Uuid::parse_str(&offer.recipient.account_id)
         .map_err(|_| AppError::bad_request("the recipient's account id is not a UUID"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use kutup_crypto::chat_media::ChatMediaObjectContextV1;
+    use kutup_crypto::chat_media_blocks;
+    use tokio::io::AsyncReadExt as _;
+
+    async fn file_of(bytes: &[u8]) -> tokio::fs::File {
+        let path = tempfile::NamedTempFile::new().unwrap().into_temp_path();
+        tokio::fs::write(&path, bytes).await.unwrap();
+        let file = tokio::fs::File::open(&path).await.unwrap();
+        // Open files outlive their unlinked path on Unix.
+        drop(path);
+        file
+    }
+
+    #[tokio::test]
+    async fn a_peer_object_that_is_not_kutups_is_refused_as_a_local_upload_is() {
+        let attachment = Uuid::new_v4();
+        let context = ChatMediaObjectContextV1::new(&attachment.hyphenated().to_string()).unwrap();
+        let sealed = chat_media_blocks::seal_attachment(b"a video", &[3_u8; 32], context).unwrap();
+        let total = sealed.bytes.len() as u64;
+
+        // Kutup's object: accepted, and the file is back at its start.
+        let mut file = file_of(&sealed.bytes).await;
+        check_pulled_object(&mut file, attachment, total)
+            .await
+            .unwrap();
+        let mut read = Vec::new();
+        file.read_to_end(&mut read).await.unwrap();
+        assert_eq!(read, sealed.bytes);
+
+        // A peer sending any other bytes of the signed length: a final 400.
+        let foreign = vec![0x5a_u8; sealed.bytes.len()];
+        let refusal = check_pulled_object(&mut file_of(&foreign).await, attachment, total)
+            .await
+            .unwrap_err();
+        assert_eq!(refusal.status, StatusCode::BAD_REQUEST);
+        assert_eq!(refusal.message, "invalid Chat-media object header");
+
+        // Another attachment's object, and a short one.
+        let other = check_pulled_object(&mut file_of(&sealed.bytes).await, Uuid::new_v4(), total)
+            .await
+            .unwrap_err();
+        assert_eq!(other.message, "invalid Chat-media object header");
+        let short = check_pulled_object(&mut file_of(b"tiny").await, attachment, 4)
+            .await
+            .unwrap_err();
+        assert_eq!(short.status, StatusCode::BAD_REQUEST);
+
+        // The right header, a broken trailer.
+        let mut broken = sealed.bytes.clone();
+        let end = broken.len();
+        broken[end - 1] ^= 0xff;
+        broken[end - 12] ^= 0xff;
+        let refusal = check_pulled_object(&mut file_of(&broken).await, attachment, total)
+            .await
+            .unwrap_err();
+        assert_eq!(refusal.message, "Chat-media length mismatch");
+    }
 }

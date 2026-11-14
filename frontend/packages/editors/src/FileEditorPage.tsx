@@ -22,7 +22,7 @@ import { downloadFile, FsaRequiredError } from './files/downloads'
 import { filesKey, useFolderFiles } from '@kutup/drive-core/files'
 import { currentContentOf, fileKeyAt, versionContentOf } from '@kutup/drive-core/keyring'
 import { rekeyFile } from '@kutup/drive-core/rekey'
-import { openPlayback } from '@kutup/drive-core/playback'
+import { openPlayback, type PlaybackFallback } from '@kutup/drive-core/playback'
 import { shareRole, useSharedFiles, type ShareRole } from '@kutup/drive-core/fileShares'
 import { useFolders } from '@kutup/drive-core/folders'
 import { useRenameFile } from '@kutup/drive-core/mutations'
@@ -239,7 +239,13 @@ function OpenFile({ cid, fid }: { cid: string | null; fid: string }) {
       // seek fetches one block, and the file's size doesn't matter.
       if (!editor && (viewer?.kind === 'video' || viewer?.kind === 'audio')) {
         try {
-          const playback = await openPlayback(container, f, controller.signal)
+          // A stream that fails before it plays is replaced by a whole download.
+          const replaced = (next: PlaybackFallback) => {
+            if (cancelled) return
+            if (next.kind === 'ready') setOpened({ kind: 'viewer', blobUrl: next.src, mimeType: viewer.mimeType })
+            else setFailure(next.kind === 'busy' ? 'busy' : next.kind === 'tooLarge' ? 'mediaTooLarge' : 'loadFailed')
+          }
+          const playback = await openPlayback(container, f, controller.signal, undefined, replaced)
           if (cancelled) {
             if (playback.kind === 'ready') playback.close()
             return
