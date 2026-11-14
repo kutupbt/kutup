@@ -1,9 +1,11 @@
 import { describe, expect, it } from 'vitest'
 import { decodeKeys, encodeKeys, type SessionKeys } from './keys'
+import { testRoots } from '@kutup/crypto/accountRoots.testing'
 
 const base: SessionKeys = {
   userId: 'u1',
   masterKey: new Uint8Array(32).fill(1),
+  roots: testRoots(1),
   privateKey: new Uint8Array(32).fill(2),
   publicKey: 'p',
   keyBinding: '0b9f4c0e-6a51-4d2f-9a33-5e1f6c7d8e90',
@@ -23,32 +25,21 @@ describe('session keys', () => {
     expect(decodeKeys(encodeKeys(base)).device).toBeUndefined()
   })
 
-  it('still read the form without a device', () => {
-    const v2 = new TextEncoder().encode(
-      JSON.stringify({
-        v: 2,
-        userId: 'u1',
-        masterKey: btoa(String.fromCharCode(...base.masterKey)),
-        privateKey: btoa(String.fromCharCode(...base.privateKey)),
-        publicKey: 'p',
-        keyBinding: base.keyBinding,
-      }),
-    )
-    expect(decodeKeys(v2).device).toBeUndefined()
+  it('keep the account’s roots with them', () => {
+    expect(decodeKeys(encodeKeys(base)).roots).toEqual(base.roots)
   })
 
-  it('read a device of the retired registry (no credential) as none', () => {
-    const encoded = JSON.parse(new TextDecoder().decode(encodeKeys({ ...base, device })))
-    const v3 = new TextEncoder().encode(
-      JSON.stringify({
-        ...encoded,
-        v: 3,
-        device: { id: 7, publicKey: encoded.device.publicKey, privateKey: encoded.device.privateKey, issuedAtMs: 1 },
-      }),
-    )
-    const decoded = decodeKeys(v3)
-    expect(decoded.device).toBeUndefined()
-    expect(decoded.userId).toBe('u1')
+  it('refuse a form from before the roots (sign in again)', () => {
+    const encoded = JSON.parse(new TextDecoder().decode(encodeKeys(base))) as Record<string, unknown>
+    for (const old of [
+      { ...encoded, v: 4, roots: undefined },
+      { ...encoded, v: 2, roots: undefined },
+      { ...encoded, roots: undefined },
+      { ...encoded, roots: { ...base.roots, identityRoot: btoa('short') } },
+      { ...encoded, roots: { ...base.roots, identityGeneration: 0 } },
+    ]) {
+      expect(() => decodeKeys(new TextEncoder().encode(JSON.stringify(old)))).toThrow()
+    }
   })
 
   it('refuse a malformed device', () => {

@@ -183,8 +183,10 @@ pub fn derive_safety_number(
 }
 
 impl AccountAuthority {
-    pub fn derive(master_key: &[u8; 32]) -> Result<Self> {
-        let identity = kutup_crypto::identity::AccountIdentityKeysV1::derive(master_key)
+    /// The account's authority, from its identity root (a stored root,
+    /// docs/plans/identity-root.md).
+    pub fn derive(identity_root: &kutup_crypto::account_roots::IdentityRoot) -> Result<Self> {
+        let identity = kutup_crypto::identity::AccountIdentityKeysV1::derive(identity_root)
             .map_err(|error| ChatError::Invalid(error.to_string()))?;
         Ok(Self { identity })
     }
@@ -721,7 +723,10 @@ mod tests {
     #[test]
     fn a_drive_key_changes_only_by_rising_to_x_wing_in_the_next_manifest() {
         let peer = BOB;
-        let authority = AccountAuthority::derive(&[5u8; 32]).unwrap();
+        let authority = AccountAuthority::derive(
+            &kutup_crypto::account_roots::IdentityRoot::from_bytes([5u8; 32]),
+        )
+        .unwrap();
         let sign = |sequence: u64, previous: Option<String>| {
             authority
                 .sign_manifest(
@@ -764,7 +769,10 @@ mod tests {
     /// A peer's pin, as a verified manifest of `account` with `identity`
     /// leaves it.
     fn trust(account: &str, seed: u8, identity: &str) -> ManifestTrust {
-        let authority = AccountAuthority::derive(&[seed; 32]).unwrap();
+        let authority = AccountAuthority::derive(
+            &kutup_crypto::account_roots::IdentityRoot::from_bytes([seed; 32]),
+        )
+        .unwrap();
         let manifest = authority
             .sign_manifest(
                 account.parse().unwrap(),
@@ -828,7 +836,10 @@ mod tests {
     /// manifests only change devices, gone with another identity.
     #[test]
     fn verified_clears_with_another_identity_only() {
-        let authority = AccountAuthority::derive(&[2u8; 32]).unwrap();
+        let authority = AccountAuthority::derive(
+            &kutup_crypto::account_roots::IdentityRoot::from_bytes([2u8; 32]),
+        )
+        .unwrap();
         let sign = |sequence: u64, previous: Option<String>, identity: &str, devices| {
             authority
                 .sign_manifest(

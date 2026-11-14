@@ -53,6 +53,10 @@ pub struct RegisterRequest {
     record: crate::handlers::opaque::RecordUpload,
     master_key_envelope: String,
     recovery_key_envelope: String,
+    /// The account's root records (docs/plans/identity-root.md): one of
+    /// each, the identity and Drive roots at generation 1, sealed under the
+    /// master key for the key binding.
+    account_roots: Vec<String>,
     public_key: String,
     account_authority_public_key: String,
     account_authority_key_id: String,
@@ -88,6 +92,14 @@ pub struct LoginResponse {
     user_id: String,
     username: String,
     master_key_envelope: String,
+    /// The account's root records (`GET /api/account/roots`), with the
+    /// session only.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    account_roots: Vec<String>,
+    /// The account's authority public key: its newest identity root must
+    /// derive it. With the session only.
+    #[serde(skip_serializing_if = "String::is_empty")]
+    account_authority_public_key: String,
     public_key: String,
     is_admin: bool,
     storage_quota_bytes: i64,
@@ -687,6 +699,7 @@ pub async fn register(
         "recoveryKeyEnvelope",
     )?;
     validate_account_identity(&req)?;
+    let roots = crate::account_roots::checked_first(&req.account_roots, &req.key_binding)?;
 
     // This is an HKDF-derived authorization proof, never the recovery entropy
     // that opens recoveryKeyEnvelope.
@@ -752,6 +765,7 @@ pub async fn register(
         Ok(id) => id,
         Err(err) => return Err(map_insert_conflict(err)),
     };
+    crate::account_roots::store(&mut tx, user_id, &roots).await?;
     crate::account_names::claim(
         &mut tx,
         &req.username,
@@ -1893,6 +1907,7 @@ pub async fn complete_setup(
         "recoveryKeyEnvelope",
     )?;
     validate_account_identity(&req)?;
+    let roots = crate::account_roots::checked_first(&req.account_roots, &account_binding)?;
     let uid = parse_uuid(&user_id).map_err(|_| AppError::unauthorized("unauthorized"))?;
     // The account has its id already (an administrator made it).
     if req.account_id.is_some() || req.account_id_proof.is_some() {
@@ -1952,6 +1967,10 @@ pub async fn complete_setup(
         Ok(_) => return Err(setup_token_invalid()),
     }
     crate::grants::end_all(&mut tx, uid).await?;
+    // The new keys' roots (an account made by an administrator, or reset,
+    // has none until now).
+    crate::account_roots::delete(&mut tx, uid).await?;
+    crate::account_roots::store(&mut tx, uid, &roots).await?;
     // The name belongs to this incarnation from now on (its rename chain
     // starts under the new authority).
     crate::account_names::set_incarnation(&mut tx, uid, &req.account_incarnation_id).await?;
@@ -2108,6 +2127,14 @@ async fn issue_tokens_and_respond(
         _ => None,
     };
     tx.commit().await?;
+    // The account's roots and the authority they must give, with the
+    // session only (docs/plans/identity-root.md).
+    let account_roots = crate::account_roots::load(&state.pool, uid).await?;
+    let account_authority_public_key: String =
+        sqlx::query_scalar("SELECT account_authority_public_key FROM users WHERE id = $1")
+            .bind(uid)
+            .fetch_one(&state.pool)
+            .await?;
     let access = jwt::generate_access_token(
         user_id,
         is_admin,
@@ -2122,6 +2149,8 @@ async fn issue_tokens_and_respond(
         user_id: user_id.to_string(),
         username: username.to_string(),
         master_key_envelope: master_key_envelope.to_string(),
+        account_roots,
+        account_authority_public_key,
         public_key: pub_key.to_string(),
         is_admin,
         storage_quota_bytes: quota,
@@ -2383,7 +2412,10 @@ mod tests {
 
     #[test]
     fn registered_account_identity_identifiers_are_key_bound() {
-        let identity = kutup_crypto::identity::AccountIdentityKeysV1::derive(&[9u8; 32]).unwrap();
+        let identity = kutup_crypto::identity::AccountIdentityKeysV1::derive(
+            &kutup_crypto::account_roots::IdentityRoot::from_bytes([9u8; 32]),
+        )
+        .unwrap();
         let mut request = RegisterRequest {
             public_key: STANDARD.encode(identity.drive_hpke_public_key()),
             account_authority_public_key: STANDARD.encode(identity.authority_public_key()),

@@ -84,7 +84,10 @@ fn authority_of(user: &str) -> AccountAuthority {
     let seed = user
         .bytes()
         .fold(7u8, |acc, b| acc.wrapping_mul(31).wrapping_add(b));
-    AccountAuthority::derive(&[seed; 32]).unwrap()
+    AccountAuthority::derive(&kutup_crypto::account_roots::IdentityRoot::from_bytes(
+        [seed; 32],
+    ))
+    .unwrap()
 }
 
 /// `user`'s signed manifest and bundles, from the devices a test made: the
@@ -1101,7 +1104,12 @@ fn bob_device<R: Rng + CryptoRng>(rng: &mut R) -> (TempDb, DevicePreKeyBundle, S
     let mut bob = block_on(Session::generate(db.open(), BOB, 1, 10, rng)).unwrap();
     let bundle = serve_bundle(bob.published_keys().unwrap(), 1);
     let binding = bob
-        .identity_binding(&AccountAuthority::derive(&[42u8; 32]).unwrap())
+        .identity_binding(
+            &AccountAuthority::derive(&kutup_crypto::account_roots::IdentityRoot::from_bytes(
+                [42u8; 32],
+            ))
+            .unwrap(),
+        )
         .unwrap();
     block_on(bob.complete_registration(1)).unwrap();
     (db, bundle, binding)
@@ -1237,7 +1245,10 @@ fn an_own_account_message_is_taken_only_from_a_device_of_the_own_verified_manife
 
     // Bob's own manifest under his own authority (as his re-registration
     // published it): his identity, device 1 only.
-    let authority = AccountAuthority::derive(&[42u8; 32]).unwrap();
+    let authority = AccountAuthority::derive(
+        &kutup_crypto::account_roots::IdentityRoot::from_bytes([42u8; 32]),
+    )
+    .unwrap();
     let first = authority
         .sign_manifest_with_binding(
             BOB.parse().unwrap(),

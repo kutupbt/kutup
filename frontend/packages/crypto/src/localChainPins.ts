@@ -12,6 +12,7 @@
 // is missing or does not open (altered, moved, another account's) is
 // "unseen": the next state read is trusted and pinned, as on a new device.
 
+import type { ObjectIdKey } from './accountRoots'
 import { toBase64 } from './base64'
 import { getCryptoWasm } from './rustWasm'
 import { indexedDbRevisionStore, memoryRevisionStore, serialized, type RevisionStore } from './revisionGuard'
@@ -100,8 +101,13 @@ let testKeys: ((binding: string) => ChainPinKeys) | null = null
  * The account's chain pins over the browser's store, sealed for its master
  * key and key binding (`envelopeBinding`).
  */
-export function localChainPins(session: { masterKey: Uint8Array; envelopeBinding: string }): LocalChainPins {
+export function localChainPins(session: {
+  masterKey: Uint8Array
+  roots: { objectIdKey: ObjectIdKey }
+  envelopeBinding: string
+}): LocalChainPins {
   const masterKey = toBase64(session.masterKey)
+  const objectIdKey = session.roots.objectIdKey
   const binding = session.envelopeBinding
   const known = pins.get(binding)
   // Made again when the master key is another (the keys are both).
@@ -112,7 +118,7 @@ export function localChainPins(session: { masterKey: Uint8Array; envelopeBinding
   const load = (): Promise<ChainPinKeys> => {
     if (forTests) return Promise.resolve(forTests(binding))
     keys ??= getCryptoWasm()
-      .then((wasm): ChainPinKeys => new wasm.LocalChainPins(masterKey, binding))
+      .then((wasm): ChainPinKeys => new wasm.LocalChainPins(masterKey, objectIdKey, binding))
       .catch((error: unknown) => {
         // Not kept: the next call loads again.
         keys = null

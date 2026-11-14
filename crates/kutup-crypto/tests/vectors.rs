@@ -334,7 +334,10 @@ fn recovery_auth_proof_vector() {
 fn account_identity_vector() {
     let vector = load_crypto().account_identity;
     let master_key: [u8; 32] = b64(&vector.master_key).try_into().unwrap();
-    let identity = AccountIdentityKeysV1::derive(&master_key).unwrap();
+    let identity = AccountIdentityKeysV1::derive(
+        &kutup_crypto::account_roots::IdentityRoot::from_bytes(master_key),
+    )
+    .unwrap();
     assert_eq!(
         identity.authority_public_key().as_slice(),
         b64(&vector.authority_public_key)
@@ -1257,7 +1260,10 @@ fn account_rename_vector() {
     let all: serde_json::Value = serde_json::from_str(include_str!("vectors/crypto.json")).unwrap();
     let v = &all["accountRename"];
     let master: [u8; 32] = b64(v["masterKey"].as_str().unwrap()).try_into().unwrap();
-    let identity = kutup_crypto::identity::AccountIdentityKeysV1::derive(&master).unwrap();
+    let identity = kutup_crypto::identity::AccountIdentityKeysV1::derive(
+        &kutup_crypto::account_roots::IdentityRoot::from_bytes(master),
+    )
+    .unwrap();
     let authority = identity.authority_public_key();
     assert_eq!(
         base64::engine::general_purpose::STANDARD.encode(authority),
@@ -1316,8 +1322,14 @@ fn print_account_rename_vector() {
     use base64::Engine as _;
     use kutup_crypto::account_rename;
     let e = |b: &[u8]| base64::engine::general_purpose::STANDARD.encode(b);
-    let identity = kutup_crypto::identity::AccountIdentityKeysV1::derive(&[0x11; 32]).unwrap();
-    let other = kutup_crypto::identity::AccountIdentityKeysV1::derive(&[0x22; 32]).unwrap();
+    let identity = kutup_crypto::identity::AccountIdentityKeysV1::derive(
+        &kutup_crypto::account_roots::IdentityRoot::from_bytes([0x11; 32]),
+    )
+    .unwrap();
+    let other = kutup_crypto::identity::AccountIdentityKeysV1::derive(
+        &kutup_crypto::account_roots::IdentityRoot::from_bytes([0x22; 32]),
+    )
+    .unwrap();
     let t = 1_790_000_000_000i64;
     let first =
         account_rename::sign(&identity, 1, "alice@kutup.dev", "alicia@kutup.dev", t).unwrap();

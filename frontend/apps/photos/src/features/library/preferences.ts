@@ -57,7 +57,7 @@ export async function ensureUploadFolder(
   if (!id) {
     let name = DEFAULT_UPLOAD_FOLDER
     for (let attempt = 0; !id; attempt++) {
-      const created = await createOwnedCollectionV1(me.masterKey, me.userId, name, index.root.id)
+      const created = await createOwnedCollectionV1(me, me.userId, name, index.root.id)
       try {
         await api.post('/collections', { ...created.payload, nameHash: await nameHashIn(inFolder(index.root), name) })
         id = created.payload.id

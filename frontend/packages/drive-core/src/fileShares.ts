@@ -424,7 +424,7 @@ interface SealTo {
 }
 
 function sealFor(me: DriveIdentity, fileId: string, key: Uint8Array, generation: number, to: SealTo) {
-  return sealFileShareEnvelope(key, me.masterKey, to.drivePublicKey, {
+  return sealFileShareEnvelope(key, me.roots.identityRoot, to.drivePublicKey, {
     fileId,
     generation,
     sender: me.accountRef,

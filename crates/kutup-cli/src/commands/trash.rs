@@ -151,7 +151,7 @@ fn file_meta(
         let keys = if f.key_epoch == f.collection_key_epoch {
             crate::keyring::Keyring::current_only(&col_key, f.collection_key_epoch)
         } else {
-            crate::keyring::Keyring::load(client, &collection, &col_key, master_key)?
+            crate::keyring::Keyring::load(client, &collection, &col_key, session)?
         };
         let (_, metadata) = crate::file_crypto::open(&file, &keys)?;
         Ok(metadata)
@@ -295,7 +295,7 @@ fn restore_renamed(ctx: &crate::context::Ctx, id: &str, wanted: Option<&str>) ->
             .find(|c| c.id == f.collection_id)
             .context("restore the parent folder first (it is still in the trash)")?;
         let col_key = decrypt_collection_key(col, &master_key, &ctx.session)?;
-        let keys = Keyring::load(&ctx.client, col, &col_key, &master_key)?;
+        let keys = Keyring::load(&ctx.client, col, &col_key, &ctx.session)?;
         let hash_key = crate::names::folder_hash_key(&keys, &col.id)?;
         let file = trashed_file(f);
         let (file_key, mut meta) = crate::file_crypto::open(&file, &keys)?;
@@ -330,7 +330,7 @@ fn restore_renamed(ctx: &crate::context::Ctx, id: &str, wanted: Option<&str>) ->
                 .find(|c| &c.id == parent)
                 .context("the folder it goes back to is not listed")?;
             let key = decrypt_collection_key(parent, &master_key, &ctx.session)?;
-            let keys = Keyring::load(&ctx.client, parent, &key, &master_key)?;
+            let keys = Keyring::load(&ctx.client, parent, &key, &ctx.session)?;
             crate::names::folder_hash_key(&keys, &parent.id)?
         }
         None => crate::names::top_level_hash_key(&master_key)?,

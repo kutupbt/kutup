@@ -65,8 +65,9 @@ import { OlderThanSeenError, resetRevisionGuardsForTesting } from '@kutup/crypto
 import type { EventFields } from '@kutup/crypto/calendar'
 import { HeadBlockedError, NotInVerifiedIndexError } from '@kutup/session/accountHead'
 import { createCalendar, deleteCalendar, deleteEvent, loadCalendars, loadEvents, openEvent, saveEvent, type Calendar, type EventRow } from './api'
+import { testRoots } from '@kutup/crypto/accountRoots.testing'
 
-const session = { userId: 'u1', sessionId: 's1', masterKey: new Uint8Array(32) } as unknown as Session
+const session = { userId: 'u1', sessionId: 's1', masterKey: new Uint8Array(32), roots: testRoots(0) } as unknown as Session
 const account = {
   key: { masterKeyBase64: 'm', binding: 'b', address: 'ada@kutup.test', envelope: 'e', fingerprint: 'k' },
   olderKeys: [],

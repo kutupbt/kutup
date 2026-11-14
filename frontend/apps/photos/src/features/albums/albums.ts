@@ -289,7 +289,7 @@ export async function rotateAlbum(
 
 /** A new album, empty. */
 export async function createAlbum(me: DriveIdentity, name: string): Promise<Album> {
-  const created = await createOwnedCollectionV1(me.masterKey, me.userId, name.trim(), null)
+  const created = await createOwnedCollectionV1(me, me.userId, name.trim(), null)
   await api.post('/albums', created.payload)
   const now = new Date().toISOString()
   return toAlbum(

@@ -50,7 +50,7 @@ export function useDriveMutation<T, R = void>(fn: (input: T, me: DriveIdentity) 
 
 export function useCreateFolder() {
   return useDriveMutation(async ({ parent, name }: { parent: Folder; name: string }, me) => {
-    const created = await createOwnedCollectionV1(me.masterKey, me.userId, name.trim(), parent.id)
+    const created = await createOwnedCollectionV1(me, me.userId, name.trim(), parent.id)
     await api.post('/collections', { ...created.payload, nameHash: await nameHashIn(inFolder(parent), name.trim()) })
     return created.payload.id
   })
@@ -205,7 +205,7 @@ export function useShareFolder() {
     }
     // Sealed to the account the address leads to, never to the address.
     const seal = (publicKey: string, to: AccountRef, incarnationId: string) =>
-      sealNamedShareEnvelope(folder.key!, me.masterKey, publicKey, {
+      sealNamedShareEnvelope(folder.key!, me.roots.identityRoot, publicKey, {
         collectionId: folder.id,
         epoch: folder.keyEpoch,
         sender: me.accountRef,

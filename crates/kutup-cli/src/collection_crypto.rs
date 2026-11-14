@@ -10,16 +10,17 @@ use crate::session::Session;
 use kutup_crypto::account_ref::AccountRef;
 use kutup_crypto::collection_epoch::CollectionEpochStatementV1;
 use kutup_crypto::drive_envelope::{self, DriveEnvelopeContextV1, DriveEnvelopePurpose};
-use kutup_crypto::identity::AccountIdentityKeysV1;
 use kutup_crypto::named_share::NamedShareEnvelopeV1;
 
 pub fn create_owned(
     name: &str,
     parent_collection_id: Option<String>,
     owner_user_id: &str,
-    master_key: &[u8],
+    session: &Session,
 ) -> Result<(CreateCollectionRequest, [u8; 32])> {
+    let master_key = session.master_key_bytes()?;
     let master_key: &[u8; 32] = master_key
+        .as_slice()
         .try_into()
         .context("master key must be 32 bytes")?;
     let id = Uuid::new_v4().to_string();
@@ -47,7 +48,7 @@ pub fn create_owned(
             owner_user_id,
         )?,
     )?;
-    let identity = AccountIdentityKeysV1::derive(master_key)?;
+    let identity = session.identity()?;
     let epoch_statement = CollectionEpochStatementV1::create(
         &id,
         owner_user_id,
@@ -72,9 +73,6 @@ pub fn create_owned(
 }
 
 pub fn open_key(col: &Collection, master_key: &[u8], session: &Session) -> Result<Vec<u8>> {
-    let master_key_array: &[u8; 32] = master_key
-        .try_into()
-        .context("master key must be 32 bytes")?;
     let collection_key = if col.is_shared {
         let envelope = NamedShareEnvelopeV1::decode_b64(
             col.named_share_envelope
@@ -97,7 +95,7 @@ pub fn open_key(col: &Collection, master_key: &[u8], session: &Session) -> Resul
                 .as_deref()
                 .ok_or_else(|| anyhow!("share owner signing key is missing"))?,
         )?;
-        let identity = AccountIdentityKeysV1::derive(master_key_array)?;
+        let identity = session.identity()?;
         if envelope.recipient_incarnation_id != hex::decode(identity.incarnation_id())?.as_slice() {
             bail!("named share is intended for another account incarnation");
         }
@@ -128,7 +126,7 @@ pub fn open_key(col: &Collection, master_key: &[u8], session: &Session) -> Resul
             )?,
         )?
     };
-    verify_epoch(col, master_key_array, &collection_key)?;
+    verify_epoch(col, session, &collection_key)?;
     Ok(collection_key)
 }
 
@@ -174,7 +172,7 @@ pub fn rename_request(
     })
 }
 
-fn verify_epoch(col: &Collection, master_key: &[u8; 32], collection_key: &[u8]) -> Result<()> {
+fn verify_epoch(col: &Collection, session: &Session, collection_key: &[u8]) -> Result<()> {
     let statement = CollectionEpochStatementV1::decode_b64(&col.epoch_statement)?;
     let authority = if col.is_shared {
         decode_key(
@@ -183,9 +181,7 @@ fn verify_epoch(col: &Collection, master_key: &[u8; 32], collection_key: &[u8]) 
                 .ok_or_else(|| anyhow!("share owner authority key is missing"))?,
         )?
     } else {
-        AccountIdentityKeysV1::derive(master_key)?
-            .authority_public_key()
-            .to_vec()
+        session.identity()?.authority_public_key().to_vec()
     };
     statement.verify_authority(&authority)?;
     statement.verify_current_binding(&col.id, &col.owner_user_id, col.key_epoch)?;
@@ -218,10 +214,10 @@ fn decode_key(value: &str) -> Result<Vec<u8>> {
 mod tests {
     use super::*;
 
-    fn owned_collection(master_key: &[u8; 32]) -> (Collection, [u8; 32]) {
+    fn owned_collection(session: &Session) -> (Collection, [u8; 32]) {
         let owner_user_id = "11111111-1111-4111-8111-111111111111";
         let (created, collection_key) =
-            create_owned("Design notes", None, owner_user_id, master_key).unwrap();
+            create_owned("Design notes", None, owner_user_id, session).unwrap();
         let statement = CollectionEpochStatementV1::decode_b64(&created.epoch_statement).unwrap();
         (
             Collection {
@@ -256,8 +252,9 @@ mod tests {
     #[test]
     fn owned_record_round_trips_and_rename_advances_exactly_once() {
         let master_key = [7u8; 32];
-        let (collection, expected_key) = owned_collection(&master_key);
-        let opened_key = open_key(&collection, &master_key, &Session::default()).unwrap();
+        let session = Session::for_tests(master_key);
+        let (collection, expected_key) = owned_collection(&session);
+        let opened_key = open_key(&collection, &master_key, &session).unwrap();
         assert_eq!(opened_key, expected_key);
         assert_eq!(open_name(&collection, &opened_key).unwrap(), "Design notes");
 
@@ -282,10 +279,11 @@ mod tests {
     #[test]
     fn owned_record_rejects_wrong_master_and_epoch_hash() {
         let master_key = [8u8; 32];
-        let (mut collection, _) = owned_collection(&master_key);
-        assert!(open_key(&collection, &[9u8; 32], &Session::default()).is_err());
+        let session = Session::for_tests(master_key);
+        let (mut collection, _) = owned_collection(&session);
+        assert!(open_key(&collection, &[9u8; 32], &session).is_err());
 
         collection.epoch_statement_hash = "00".repeat(32);
-        assert!(open_key(&collection, &master_key, &Session::default()).is_err());
+        assert!(open_key(&collection, &master_key, &session).is_err());
     }
 }

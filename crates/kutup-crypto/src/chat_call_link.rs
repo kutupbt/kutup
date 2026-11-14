@@ -21,6 +21,7 @@
 //! random nonce the host stores, so the owner's other devices can show the
 //! same link again without the host ever holding the secret.
 
+use crate::account_roots::CallLinkRoot;
 use base64::engine::general_purpose::{STANDARD, URL_SAFE_NO_PAD};
 use base64::Engine as _;
 use serde::{Deserialize, Serialize};
@@ -203,22 +204,17 @@ pub fn new_call_link_nonce() -> String {
 }
 
 /// The secret of the link its owner made with `nonce` (32 lowercase hex
-/// characters), from the owner's account master key (standard base64, 32
-/// bytes). Only the owner can compute it, on any of their devices.
-pub fn owner_call_link_secret(master_key: &str, nonce: &str) -> Result<Zeroizing<String>> {
-    let invalid_key =
-        || CryptoError::InvalidInput("account master key is not 32 bytes of base64".into());
-    let master = Zeroizing::new(STANDARD.decode(master_key).map_err(|_| invalid_key())?);
-    if master.len() != 32 {
-        return Err(invalid_key());
-    }
+/// characters), from the owner's call-link root
+/// (docs/plans/identity-root.md). Only the owner can compute it, on any of
+/// their devices.
+pub fn owner_call_link_secret(root: &CallLinkRoot, nonce: &str) -> Result<Zeroizing<String>> {
     let invalid_nonce =
         || CryptoError::InvalidInput("call link nonce is 32 lowercase hex characters".into());
     let nonce_bytes = hex::decode(nonce).map_err(|_| invalid_nonce())?;
     if nonce_bytes.len() != CALL_LINK_NONCE_BYTES || hex::encode(&nonce_bytes) != nonce {
         return Err(invalid_nonce());
     }
-    let hkdf = Kdf::new(Suite::V1, SALT, master.as_slice());
+    let hkdf = Kdf::new(Suite::V1, SALT, root.as_bytes());
     let mut info = b"owner secret\0".to_vec();
     info.extend_from_slice(&nonce_bytes);
     let mut secret = Zeroizing::new([0u8; CALL_LINK_SECRET_BYTES]);
@@ -227,24 +223,18 @@ pub fn owner_call_link_secret(master_key: &str, nonce: &str) -> Result<Zeroizing
 }
 
 /// The owner's proof of being a meeting's host (standard base64, 32 bytes),
-/// from the account master key and the meeting's nonce. Unlike the link's
-/// secret, nobody the link is shared with can compute it. The host stores
-/// only its SHA-256: presenting the token lets the owner into a meeting
-/// with a waiting room, and lets them admit the people waiting.
-pub fn owner_call_link_host_token(master_key: &str, nonce: &str) -> Result<Zeroizing<String>> {
-    let invalid_key =
-        || CryptoError::InvalidInput("account master key is not 32 bytes of base64".into());
-    let master = Zeroizing::new(STANDARD.decode(master_key).map_err(|_| invalid_key())?);
-    if master.len() != 32 {
-        return Err(invalid_key());
-    }
+/// from the owner's call-link root and the meeting's nonce. Unlike the
+/// link's secret, nobody the link is shared with can compute it. The host
+/// stores only its SHA-256: presenting the token lets the owner into a
+/// meeting with a waiting room, and lets them admit the people waiting.
+pub fn owner_call_link_host_token(root: &CallLinkRoot, nonce: &str) -> Result<Zeroizing<String>> {
     let invalid_nonce =
         || CryptoError::InvalidInput("call link nonce is 32 lowercase hex characters".into());
     let nonce_bytes = hex::decode(nonce).map_err(|_| invalid_nonce())?;
     if nonce_bytes.len() != CALL_LINK_NONCE_BYTES || hex::encode(&nonce_bytes) != nonce {
         return Err(invalid_nonce());
     }
-    let hkdf = Kdf::new(Suite::V1, SALT, master.as_slice());
+    let hkdf = Kdf::new(Suite::V1, SALT, root.as_bytes());
     let mut info = b"host token\0".to_vec();
     info.extend_from_slice(&nonce_bytes);
     let mut token = Zeroizing::new([0u8; 32]);

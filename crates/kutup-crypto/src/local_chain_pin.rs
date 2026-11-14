@@ -35,16 +35,22 @@ pub struct ChainPin {
 pub struct PinKeys {
     master: Zeroizing<[u8; 32]>,
     generation: MasterKeyGeneration,
+    object_id_key: crate::account_roots::ObjectIdKey,
     binding: String,
 }
 
 impl PinKeys {
     /// The keys of the account bound by `binding`, under its master key's
     /// first generation (every account's, until master-key rotation exists).
-    pub fn derive(master_key: &[u8; 32], binding: &str) -> Result<Self> {
+    pub fn derive(
+        master_key: &[u8; 32],
+        object_id_key: &crate::account_roots::ObjectIdKey,
+        binding: &str,
+    ) -> Result<Self> {
         Ok(Self {
             master: Zeroizing::new(*master_key),
             generation: MasterKeyGeneration::FIRST,
+            object_id_key: object_id_key.clone(),
             binding: account_record::canonical_binding(binding)?,
         })
     }
@@ -68,7 +74,7 @@ impl PinKeys {
         named.extend_from_slice(&(id.len() as u16).to_be_bytes());
         named.extend_from_slice(id.as_bytes());
         Ok(hex::encode(account_record::hashed_object(
-            &self.master,
+            &self.object_id_key,
             PURPOSE,
             &named,
         )))
@@ -130,7 +136,12 @@ mod tests {
 
     #[test]
     fn pins_hide_their_chain_and_open_only_where_sealed() {
-        let keys = PinKeys::derive(&[1; 32], BINDING).unwrap();
+        let keys = PinKeys::derive(
+            &[1; 32],
+            &crate::account_roots::ObjectIdKey::from_bytes([1; 32]),
+            BINDING,
+        )
+        .unwrap();
         let entry = keys.entry_id("photos-library", "incarnation-1").unwrap();
         assert_eq!(entry.len(), 64);
         assert!(!entry.contains("photos"));
@@ -140,12 +151,22 @@ mod tests {
             entry,
             keys.entry_id("photos-library", "incarnation-1").unwrap()
         );
-        let other = PinKeys::derive(&[2; 32], BINDING).unwrap();
+        let other = PinKeys::derive(
+            &[2; 32],
+            &crate::account_roots::ObjectIdKey::from_bytes([2; 32]),
+            BINDING,
+        )
+        .unwrap();
         assert_ne!(
             entry,
             other.entry_id("photos-library", "incarnation-1").unwrap()
         );
-        let guard = crate::revision_guard::GuardKeys::derive(&[1; 32], BINDING).unwrap();
+        let guard = crate::revision_guard::GuardKeys::derive(
+            &[1; 32],
+            &crate::account_roots::ObjectIdKey::from_bytes([1; 32]),
+            BINDING,
+        )
+        .unwrap();
         assert_ne!(
             entry,
             guard.entry_id("photos-library", "incarnation-1").unwrap()
@@ -162,7 +183,12 @@ mod tests {
         let elsewhere = keys.entry_id("photos-library", "incarnation-2").unwrap();
         assert!(keys.open_pin(&elsewhere, &sealed).is_err());
         assert!(other.open_pin(&entry, &sealed).is_err());
-        let rebound = PinKeys::derive(&[1; 32], "7d3f1a2b-9c4e-4f6a-8b1d-2e5c7a9f0b3d").unwrap();
+        let rebound = PinKeys::derive(
+            &[1; 32],
+            &crate::account_roots::ObjectIdKey::from_bytes([1; 32]),
+            "7d3f1a2b-9c4e-4f6a-8b1d-2e5c7a9f0b3d",
+        )
+        .unwrap();
         assert!(rebound.open_pin(&entry, &sealed).is_err());
         let mut altered = sealed.clone();
         *altered.last_mut().unwrap() ^= 1;
@@ -172,6 +198,11 @@ mod tests {
         let seen = guard.seal_seen(&entry, 7).unwrap();
         assert!(keys.open_pin(&entry, &seen).is_err());
         assert!(keys.entry_id("", "x").is_err());
-        assert!(PinKeys::derive(&[1; 32], "aci:x@example.com").is_err());
+        assert!(PinKeys::derive(
+            &[1; 32],
+            &crate::account_roots::ObjectIdKey::from_bytes([1; 32]),
+            "aci:x@example.com"
+        )
+        .is_err());
     }
 }

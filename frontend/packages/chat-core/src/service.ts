@@ -1,3 +1,4 @@
+import type { AccountRoots } from '@kutup/crypto/accountRoots'
 import api from '@kutup/session/client'
 import { isAxiosError } from 'axios'
 import { resolveApiBase } from '@kutup/session/apiBase'
@@ -246,6 +247,7 @@ async function openClientHandle(
     options.displayName,
     options.capabilities.sealedSender,
     options.masterKey,
+    options.roots,
     options.envelopeBinding,
     transport,
   ] as const
@@ -280,6 +282,8 @@ export interface ChatServiceOptions {
   /** The name a first profile starts with (the username). */
   displayName: string
   masterKey: Uint8Array
+  /** The account's stored roots (`session.roots`, docs/plans/identity-root.md). */
+  roots: AccountRoots
   capabilities: ChatCapabilities
   /**
    * How this browser gets its device (docs/plans/account-identity-key.md):
@@ -487,7 +491,7 @@ export class ChatService {
     let attachmentLedger: ChatAttachmentLedger | null = null
     try {
       attachmentLedger = capabilities.media
-        ? await ChatAttachmentLedger.open(options.masterKey, options.envelopeBinding)
+        ? await ChatAttachmentLedger.open(options, options.envelopeBinding)
         : null
     } catch (error) {
       client.free()
@@ -511,6 +515,7 @@ export class ChatService {
           databaseName,
           envelopeBinding: options.envelopeBinding,
           masterKey: options.masterKey,
+          roots: options.roots,
           deviceId: service.deviceId,
           history: () => service.liveHistory(),
           manifestSequence: async () => requireManifestSequence(

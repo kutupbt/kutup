@@ -47,6 +47,7 @@ fn list_key(person: &Person) -> (ContactListKey, String) {
         ContactListKey::new(
             &[seed; 32],
             kutup_crypto::account_record::MasterKeyGeneration::FIRST,
+            &kutup_crypto::account_roots::ObjectIdKey::from_bytes([seed; 32]),
         ),
         format!("{seed:08x}-0000-4000-8000-{seed:012x}"),
     )

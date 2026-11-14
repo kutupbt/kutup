@@ -59,17 +59,18 @@ import {
 } from '@kutup/crypto'
 import { acceptGroupKeys, AddressDisabled, addressKeys, forgetKeys, groupMembers, GroupKeysChanged, KeysIdentityChanged, UnverifiedKeys, verified } from './keys'
 import { randomBytes } from '@kutup/crypto/random'
+import { asIdentityRoot } from '@kutup/crypto/accountRoots.testing'
 
 /** What `GET /api/mail/keys` answers for `address` (as stored), its newest list naming `listed`. */
 async function lookupOf(master: string, binding: string, address: string, listed = address, flags: number = MAIL_KEY_FLAGS.notCompromised | MAIL_KEY_FLAGS.notObsolete) {
   const key = await generateMailAddressKey(master, binding, address)
-  const list = await signMailKeyList(master, {
+  const list = await signMailKeyList(asIdentityRoot(master), {
     address: listed,
     sequence: 1,
     issuedAt: '2026-10-14T12:00:00Z',
     keys: [{ fingerprint: key.fingerprint, sha256Fingerprint: key.sha256Fingerprint, primary: true, flags }],
   })
-  const identity = await deriveAccountIdentityKeys(master)
+  const identity = await deriveAccountIdentityKeys(asIdentityRoot(master))
   return {
     address,
     server: 'kutup.dev',
@@ -172,7 +173,7 @@ describe('an address’s key lists against what this device has seen', () => {
     const key = await generateMailAddressKey(master, binding, 'roll_back@kutup.dev')
     const { verifyMailKeyList } = await import('@kutup/crypto')
     const one = await verifyMailKeyList(first.keyLists[0], first.accountAuthorityPublicKey)
-    const second = await signMailKeyList(master, {
+    const second = await signMailKeyList(asIdentityRoot(master), {
       address: 'roll_back@kutup.dev',
       sequence: 2,
       previousHash: one.hash,
@@ -225,7 +226,7 @@ describe('a disabled address (its owner’s list encrypts to nothing)', () => {
     get.mockResolvedValueOnce({ data: first })
     await expect(addressKeys(address)).resolves.toMatchObject({ sequence: 1, disabled: false })
     // Disabled: the next list keeps the key, no longer encrypted to.
-    const off = await signMailKeyList(master, {
+    const off = await signMailKeyList(asIdentityRoot(master), {
       address,
       sequence: 2,
       previousHash: one.hash,
@@ -268,7 +269,7 @@ describe('a shared mailbox’s keys against the pin list', () => {
 
   /** A mailbox's chain of `count` lists from a new signer; the key the lists name is real. */
   async function newChain(count: number): Promise<Chain & { holder: GroupSignerHolder }> {
-    const identity = await deriveAccountIdentityKeys(master)
+    const identity = await deriveAccountIdentityKeys(asIdentityRoot(master))
     const key = await generateMailAddressKey(master, binding, 'team@kutup.dev')
     const entry = { fingerprint: key.fingerprint, sha256Fingerprint: key.sha256Fingerprint, primary: true, flags: MAIL_KEY_FLAGS.notCompromised | MAIL_KEY_FLAGS.notObsolete }
     const first = await newMailGroupSigner(
@@ -318,7 +319,7 @@ describe('a shared mailbox’s keys against the pin list', () => {
     groupPins.verdict = { kind: 'pinned' }
     groupPins.checked = []
     const chain = await newChain(2)
-    const identity = await deriveAccountIdentityKeys(master)
+    const identity = await deriveAccountIdentityKeys(asIdentityRoot(master))
     const next = await newMailGroupSigner(
       groupId,
       [{ account: manager, incarnationId: identity.incarnationId, hpkePublicKey: identity.driveHpkePublicKey }],
@@ -386,7 +387,7 @@ describe('a shared mailbox’s key lists', () => {
     const groupId = crypto.randomUUID()
     const address = 'hr_team@kutup.dev'
     const master = toBase64(randomBytes(32))
-    const owner = await derive(master)
+    const owner = await derive(asIdentityRoot(master))
     const account = { server: 'kutup.dev', accountId: crypto.randomUUID() }
     const member = { account, incarnationId: owner.incarnationId, hpkePublicKey: owner.driveHpkePublicKey }
     const k1 = await generateMailGroupKey(address, groupId, [member])

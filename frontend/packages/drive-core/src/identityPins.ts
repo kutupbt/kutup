@@ -238,7 +238,7 @@ const HEAD_SCOPE = 'pins'
 const HEAD_ID = 'pins'
 
 function headFor(me: DriveIdentity) {
-  return accountHead({ userId: me.userId, masterKey: me.masterKey, envelopeBinding: me.binding })
+  return accountHead({ userId: me.userId, masterKey: me.masterKey, roots: me.roots, envelopeBinding: me.binding })
 }
 
 /**

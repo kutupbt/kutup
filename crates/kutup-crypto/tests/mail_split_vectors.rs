@@ -186,8 +186,14 @@ fn group_key_shares_open_only_for_their_member() {
     let group_id = "5b0e7f3a-1d2c-4b8e-9f6a-7c3d2e1f0a9b";
     let group = generate_address_key("hr@kutup.dev", 1_790_000_000).unwrap();
     let other = generate_address_key("hr@kutup.dev", 1_790_000_001).unwrap();
-    let bob_keys = AccountIdentityKeysV1::derive(&[0x22; 32]).unwrap();
-    let carol_keys = AccountIdentityKeysV1::derive(&[0x33; 32]).unwrap();
+    let bob_keys = AccountIdentityKeysV1::derive(
+        &kutup_crypto::account_roots::IdentityRoot::from_bytes([0x22; 32]),
+    )
+    .unwrap();
+    let carol_keys = AccountIdentityKeysV1::derive(
+        &kutup_crypto::account_roots::IdentityRoot::from_bytes([0x33; 32]),
+    )
+    .unwrap();
     let bob = AccountRef::new("kutup.dev", "8d2e4b61-0c3a-4e9f-b7d5-6a1f2e3c4d5b").unwrap();
     let carol = AccountRef::new("kutup.dev", "3f1c9a52-6b7e-4f0e-9d1a-2c3b4d5e6f70").unwrap();
     let incarnation = bob_keys.incarnation_id();

@@ -105,6 +105,7 @@ fn a_contact_list_keeps_sealed_entries_by_revision() {
         key: ContactListKey::new(
             &user.master_key,
             kutup_crypto::account_record::MasterKeyGeneration::FIRST,
+            &user.roots.object_id,
         ),
     };
     let (one, one_at_1) = list.entry(1, 1);
@@ -169,6 +170,7 @@ fn a_contact_list_keeps_sealed_entries_by_revision() {
     let groups = kutup_crypto::chat_group_list::GroupListKey::new(
         &user.master_key,
         kutup_crypto::account_record::MasterKeyGeneration::FIRST,
+        &user.roots.object_id,
     );
     let group_entry = groups
         .seal(&user.binding, &groups.entry_id(&[3u8; 32]), 1, b"{}")
@@ -227,6 +229,7 @@ fn the_account_head_covers_the_contact_list() {
         key: ContactListKey::new(
             &user.master_key,
             kutup_crypto::account_record::MasterKeyGeneration::FIRST,
+            &user.roots.object_id,
         ),
     };
     let (one, one_at_1) = list.entry(1, 1);
@@ -283,6 +286,7 @@ fn a_contact_list_keeps_at_most_10000_entries() {
         key: ContactListKey::new(
             &user.master_key,
             kutup_crypto::account_record::MasterKeyGeneration::FIRST,
+            &user.roots.object_id,
         ),
     };
     for n in 0..10_000 {

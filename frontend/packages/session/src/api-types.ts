@@ -95,6 +95,10 @@ export interface LoginResponse {
   userId: string
   username: string
   masterKeyEnvelope: string
+  /** The account's root records (docs/plans/identity-root.md), with the session only. */
+  accountRoots?: string[]
+  /** The authority the newest identity root must derive, with the session only. */
+  accountAuthorityPublicKey?: string
   publicKey: string
   isAdmin: boolean
   storageQuotaBytes: number

@@ -4,6 +4,7 @@
 // Account renames (docs/plans/username-renames.md): the format and its checks
 // are Rust's (kutup-crypto account_rename); this is the browser's door to them.
 
+import type { IdentityRoot } from './accountRoots'
 import { getCryptoWasm } from './rustWasm'
 
 /** One signed rename, as the server stores and serves it. */
@@ -55,15 +56,15 @@ export async function addressFolder(): Promise<(address: string) => string | nul
   return (address) => wasm.foldAddress(address) ?? null
 }
 
-/** The next rename of this account, signed with its authority (from the master key). */
+/** The next rename of this account, signed with its authority (from its identity root). */
 export async function signAccountRename(
-  masterKeyBase64: string,
+  identityRoot: IdentityRoot,
   sequence: number,
   previous: string,
   current: string,
   issuedAtMs: number,
 ): Promise<AccountRenameV1> {
-  const json = (await getCryptoWasm()).signAccountRename(masterKeyBase64, sequence, previous, current, issuedAtMs)
+  const json = (await getCryptoWasm()).signAccountRename(identityRoot, sequence, previous, current, issuedAtMs)
   return JSON.parse(json) as AccountRenameV1
 }
 

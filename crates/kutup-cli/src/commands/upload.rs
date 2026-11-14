@@ -145,7 +145,7 @@ struct Uploads<'a> {
 impl Uploads<'_> {
     fn target(&self, col: &Collection) -> Result<Target> {
         let key = decrypt_collection_key(col, self.master_key, self.session)?;
-        let keys = Keyring::load(self.client, col, &key, self.master_key)?;
+        let keys = Keyring::load(self.client, col, &key, self.session)?;
         Ok(Target {
             id: col.id.clone(),
             key_epoch: col.key_epoch,
@@ -243,7 +243,7 @@ impl Uploads<'_> {
             &parent.id,
             &parent.hash_key,
             &self.session.user_id,
-            self.master_key,
+            self.session,
         ) {
             Ok((id, key)) => Ok(Target {
                 hash_key: kutup_crypto::drive_names::folder_hash_key(&key, &id)?,

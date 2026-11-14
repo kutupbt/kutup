@@ -29,7 +29,7 @@ pub fn run(profile: &str, json: bool, file_id: &str, dest: Option<&str>) -> Resu
             continue;
         };
 
-        let keys = crate::keyring::Keyring::load(&ctx.client, col, &col_key, &master_key)?;
+        let keys = crate::keyring::Keyring::load(&ctx.client, col, &col_key, &ctx.session)?;
         let (file_key, meta) = crate::file_crypto::open(f, &keys).context("decrypt file record")?;
 
         let dest_path = resolve_dest(dest_dir, &meta.name);

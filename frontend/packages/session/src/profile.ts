@@ -86,6 +86,7 @@ export async function activateSession(
       color: me.color || null,
       publicKey: keys.publicKey,
       masterKey: keys.masterKey,
+      roots: keys.roots,
       privateKey: keys.privateKey,
       currentDeviceId: keys.device?.id ?? null,
       device: keys.device ?? null,

@@ -115,7 +115,7 @@ fn thumbnails_contract() {
     let token = token_of(&c, &base, &owner);
     let user_id = me(&c, &base, &token)["id"].as_str().unwrap().to_string();
     let identity =
-        kutup_crypto::identity::AccountIdentityKeysV1::derive(&owner.master_key).unwrap();
+        kutup_crypto::identity::AccountIdentityKeysV1::derive(&owner.roots.identity).unwrap();
 
     // An owned folder, as createOwnedCollectionV1 makes it.
     let collection_id = uuid();

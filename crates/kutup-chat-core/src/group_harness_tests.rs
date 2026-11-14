@@ -343,7 +343,10 @@ impl World {
         let mut rng = rng();
         let client = self.client(&account);
         let db = Rc::new(SqliteChatDb::open_in_memory().unwrap());
-        let authority = AccountAuthority::derive(&[n; 32]).unwrap();
+        let authority = AccountAuthority::derive(
+            &kutup_crypto::account_roots::IdentityRoot::from_bytes([n; 32]),
+        )
+        .unwrap();
         let engine = block_on(Engine::reregister(
             db,
             client.clone(),
@@ -382,7 +385,10 @@ impl World {
         db: Rc<dyn crate::db::ChatDb>,
     ) -> Person {
         let account = person.account.clone();
-        let authority = AccountAuthority::derive(&[person.authority_seed; 32]).unwrap();
+        let authority = AccountAuthority::derive(
+            &kutup_crypto::account_roots::IdentityRoot::from_bytes([person.authority_seed; 32]),
+        )
+        .unwrap();
         let linking = crate::LinkingDevice::new();
         let settings = crate::ProvisionedSettings {
             read_receipts: true,
@@ -413,7 +419,10 @@ impl World {
         linking: &crate::LinkingDevice,
         settings: crate::ProvisionedSettings,
     ) -> kutup_chat_proto::ProvisionEnvelopeV1 {
-        let authority = AccountAuthority::derive(&[person.authority_seed; 32]).unwrap();
+        let authority = AccountAuthority::derive(
+            &kutup_crypto::account_roots::IdentityRoot::from_bytes([person.authority_seed; 32]),
+        )
+        .unwrap();
         let address = STANDARD_NO_PAD_URL.encode(uuid::Uuid::new_v4().as_bytes());
         self.provisioning
             .borrow_mut()
@@ -444,7 +453,10 @@ impl World {
             .strip_suffix(&format!("@{SERVER}"))
             .and_then(|id| u8::from_str_radix(&id[id.len() - 2..], 16).ok())
             .unwrap();
-        let authority = AccountAuthority::derive(&[authority_seed; 32]).unwrap();
+        let authority = AccountAuthority::derive(
+            &kutup_crypto::account_roots::IdentityRoot::from_bytes([authority_seed; 32]),
+        )
+        .unwrap();
         client.device.set(engine.session().device_id());
         engine.set_sealed_sender_enabled(true);
         block_on(engine.sync_own_manifest(&authority, ISSUED_AT)).unwrap();
@@ -455,12 +467,33 @@ impl World {
             crate::profile::profile_owner_key(&[authority_seed; 32], &binding).unwrap();
         block_on(engine.initialize_profile(&profile_owner, "Someone", &mut rng)).unwrap();
         engine
-            .enable_group_list(&[authority_seed; 32], &binding)
+            .enable_group_list(
+                &[authority_seed; 32],
+                &kutup_crypto::account_roots::AccountRoots {
+                    identity_generation: kutup_crypto::account_roots::RootGeneration::FIRST,
+                    identity: kutup_crypto::account_roots::IdentityRoot::from_bytes(
+                        [authority_seed; 32],
+                    ),
+                    drive_generation: kutup_crypto::account_roots::RootGeneration::FIRST,
+                    drive: kutup_crypto::account_roots::DriveRoot::from_bytes([authority_seed; 32]),
+                    pseudonym: kutup_crypto::account_roots::GroupPseudonymRoot::from_bytes(
+                        [authority_seed; 32],
+                    ),
+                    call_link: kutup_crypto::account_roots::CallLinkRoot::from_bytes(
+                        [authority_seed; 32],
+                    ),
+                    object_id: kutup_crypto::account_roots::ObjectIdKey::from_bytes(
+                        [authority_seed; 32],
+                    ),
+                },
+                &binding,
+            )
             .unwrap();
         // Timed as the web is: a block is written at once.
         engine
             .enable_contact_list(
                 &[authority_seed; 32],
+                &kutup_crypto::account_roots::ObjectIdKey::from_bytes([authority_seed; 32]),
                 &binding,
                 crate::contact_list::ContactListTiming {
                     block: crate::contact_list::BlockTiming::Immediate,
@@ -4734,7 +4767,10 @@ fn group_list_a_member_who_replaces_their_only_device_keeps_the_group() {
 
     // Bob's only device is gone; a new one is set up and the old one revoked.
     let mut bob2 = world.link_device(&mut bob);
-    let authority = AccountAuthority::derive(&[0xb2; 32]).unwrap();
+    let authority = AccountAuthority::derive(
+        &kutup_crypto::account_roots::IdentityRoot::from_bytes([0xb2; 32]),
+    )
+    .unwrap();
     block_on(
         bob2.engine
             .revoke_manifest_device(&authority, bob.device(), ISSUED_AT),
@@ -4783,7 +4819,10 @@ fn group_list_a_member_who_replaces_their_only_device_keeps_the_group() {
 /// and the old one revoked. Nothing in his list.
 fn bob_replaced_before_his_list_write(world: &Rc<World>, mut bob: Person) -> Person {
     let mut bob2 = world.link_device(&mut bob);
-    let authority = AccountAuthority::derive(&[bob.authority_seed; 32]).unwrap();
+    let authority = AccountAuthority::derive(
+        &kutup_crypto::account_roots::IdentityRoot::from_bytes([bob.authority_seed; 32]),
+    )
+    .unwrap();
     block_on(
         bob2.engine
             .revoke_manifest_device(&authority, bob.device(), ISSUED_AT),
@@ -4845,7 +4884,11 @@ fn context_of(person: &Person, group_id: &str) -> GroupContextV1 {
 
 /// `person`'s account's pseudonym in `group_id` at `epoch`, as its key gives it.
 fn derived_pseudonym(person: &Person, group_id: &str, epoch: u32) -> String {
-    let keys = crate::group::GroupAccountKeys::derive(&[person.authority_seed; 32]).unwrap();
+    let keys = crate::group::GroupAccountKeys::derive(
+        &kutup_crypto::account_roots::IdentityRoot::from_bytes([person.authority_seed; 32]),
+        &kutup_crypto::account_roots::GroupPseudonymRoot::from_bytes([person.authority_seed; 32]),
+    )
+    .unwrap();
     let group = kutup_chat_proto::group::decode_group_id(group_id).unwrap();
     kutup_chat_proto::group::encode(&keys.pseudonyms.pseudonym(&group, epoch).public_key())
 }
@@ -4958,8 +5001,11 @@ fn group_recover_a_made_up_state_without_his_binding_is_not_joined() {
     let record = block_on(mallory.engine.load_group_record(&group_id)).unwrap();
     let bobs = derived_pseudonym(&bob, &group_id, 0);
     let group = kutup_chat_proto::group::decode_group_id(&group_id).unwrap();
-    let mallory_keys =
-        crate::group::GroupAccountKeys::derive(&[mallory.authority_seed; 32]).unwrap();
+    let mallory_keys = crate::group::GroupAccountKeys::derive(
+        &kutup_crypto::account_roots::IdentityRoot::from_bytes([mallory.authority_seed; 32]),
+        &kutup_crypto::account_roots::GroupPseudonymRoot::from_bytes([mallory.authority_seed; 32]),
+    )
+    .unwrap();
     let entry = crate::group::seal_member_entry(
         &record.master().unwrap().state_key(),
         &group,
@@ -5312,7 +5358,11 @@ fn group_claim_from_a_later_epoch_still_stops_at_the_last_one() {
     bob.receive();
     // The invitation came at epoch 10 (the account's eleventh join).
     let mut record = block_on(bob.engine.load_group_record(&group_id)).unwrap();
-    let keys = crate::group::GroupAccountKeys::derive(&[bob.authority_seed; 32]).unwrap();
+    let keys = crate::group::GroupAccountKeys::derive(
+        &kutup_crypto::account_roots::IdentityRoot::from_bytes([bob.authority_seed; 32]),
+        &kutup_crypto::account_roots::GroupPseudonymRoot::from_bytes([bob.authority_seed; 32]),
+    )
+    .unwrap();
     let group = kutup_chat_proto::group::decode_group_id(&group_id).unwrap();
     record.join_epoch = 10;
     record.pseudonym_seed = crate::group::SecretText(kutup_chat_proto::group::encode(

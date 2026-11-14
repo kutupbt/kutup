@@ -2,8 +2,8 @@
 // opaque entity IDs, revision chains and ciphertext sizes; conversation names
 // and attachment relationships are decoded solely in the browser.
 
+import type { AccountSecrets } from '@kutup/crypto/accountRoots'
 import api from '@kutup/session/client'
-import { toBase64 } from '@kutup/crypto/base64'
 import { deriveAccountIdentityKeys } from '@kutup/crypto/identity'
 import { localChainPins, type ChainPin, type LocalChainPins } from '@kutup/crypto/localChainPins'
 import {
@@ -77,9 +77,10 @@ export class ChatAttachmentLedger {
     this.pinVerified = localPin === null || localPin.revision === 0n
   }
 
-  static async open(masterKey: Uint8Array, binding: string): Promise<ChatAttachmentLedger> {
-    const identity = await deriveAccountIdentityKeys(toBase64(masterKey))
-    const pins = localChainPins({ masterKey, envelopeBinding: binding })
+  static async open(account: AccountSecrets, binding: string): Promise<ChatAttachmentLedger> {
+    const masterKey = account.masterKey
+    const identity = await deriveAccountIdentityKeys(account.roots.identityRoot)
+    const pins = localChainPins({ masterKey, roots: account.roots, envelopeBinding: binding })
     const ledger = new ChatAttachmentLedger(
       { masterKey: masterKey.slice(), binding },
       identity.incarnationId,

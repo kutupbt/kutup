@@ -123,7 +123,10 @@ fn ambiguous_registration_retries_exactly_and_persists_device_id() {
         manifest: RefCell::new(None),
         history: RefCell::new(Vec::new()),
     });
-    let authority = AccountAuthority::derive(&[9u8; 32]).unwrap();
+    let authority = AccountAuthority::derive(
+        &kutup_crypto::account_roots::IdentityRoot::from_bytes([9u8; 32]),
+    )
+    .unwrap();
 
     let first_db = Rc::new(SqliteChatDb::open(&path).unwrap());
     // The account's first Chat device: it re-registers.
@@ -222,7 +225,10 @@ fn ambiguous_registration_retries_exactly_and_persists_device_id() {
 #[test]
 fn a_reregistration_keeps_the_accounts_other_devices() {
     use kutup_chat_proto::{AccountManifestDeviceV3, DeviceKind};
-    let authority = AccountAuthority::derive(&[9u8; 32]).unwrap();
+    let authority = AccountAuthority::derive(
+        &kutup_crypto::account_roots::IdentityRoot::from_bytes([9u8; 32]),
+    )
+    .unwrap();
     let editor = AccountManifestDeviceV3 {
         device_id: 1,
         kind: DeviceKind::Editor,

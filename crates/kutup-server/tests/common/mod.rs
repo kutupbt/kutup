@@ -89,6 +89,8 @@ pub struct User {
     pub token: String,
     pub identity: AccountIdentityKeysV1,
     pub master_key: [u8; 32],
+    /// The account's stored roots (docs/plans/identity-root.md).
+    pub roots: kutup_crypto::account_roots::AccountRoots,
     /// Who the account is: the server it was made on and its id.
     pub person: AccountRef,
     /// `username@domain`, with the domain of the server it was made on.
@@ -472,7 +474,8 @@ fn sign_up_sent(
     let person = AccountRef::new(&server_domain(c, base), &account_id).unwrap();
     let recovery_proof =
         kutup_crypto::kdf::derive_recovery_auth_proof(&recovery_entropy, &key_binding).unwrap();
-    let identity = AccountIdentityKeysV1::derive(&master_key).unwrap();
+    let roots = kutup_crypto::account_roots::AccountRoots::generate();
+    let identity = AccountIdentityKeysV1::derive(&roots.identity).unwrap();
     use kutup_crypto::account_record::{self, AccountRecordPurpose};
     let seal = |plain: &[u8], key: &[u8], purpose| {
         account_record::seal_b64(
@@ -490,6 +493,7 @@ fn sign_up_sent(
             "opaqueRecord": opaque_record, "opaqueServerKeyId": server_key_id,
             "masterKeyEnvelope": export_key.seal_master_key(&master_key, kutup_crypto::account_record::MasterKeyGeneration::FIRST, &key_binding).unwrap(),
             "recoveryKeyEnvelope": seal(&master_key, &recovery_entropy, AccountRecordPurpose::RecoveryMasterKey),
+            "accountRoots": sealed_roots(&roots, &master_key, &key_binding),
             "publicKey": b64(&identity.drive_hpke_public_key()),
             "accountAuthorityPublicKey": b64(&identity.authority_public_key()),
             "accountAuthorityKeyId": identity.authority_key_id(),
@@ -548,7 +552,56 @@ fn sign_up_sent(
         token,
         identity,
         master_key,
+        roots,
     })
+}
+
+/// The account's roots as its server hands them to its session
+/// (`GET /api/account/roots`), opened with its master key and checked
+/// against its authority.
+#[allow(dead_code)]
+pub fn fetch_roots(
+    c: &Client,
+    base: &str,
+    token: &str,
+    master_key: &[u8; 32],
+    binding: &str,
+) -> kutup_crypto::account_roots::AccountRoots {
+    let answer: Value = bearer(c.get(format!("{base}/api/account/roots")), token)
+        .send()
+        .unwrap()
+        .json()
+        .unwrap();
+    let records: Vec<Vec<u8>> = answer["accountRoots"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|record| b64_decode(record.as_str().unwrap()))
+        .collect();
+    let authority: [u8; 32] = b64_decode(answer["accountAuthorityPublicKey"].as_str().unwrap())
+        .try_into()
+        .unwrap();
+    kutup_crypto::account_roots::AccountRoots::open(&records, master_key, binding, &authority)
+        .unwrap()
+}
+
+/// `roots` as an account's client sends them: sealed under `master_key` for
+/// the key `binding`, canonical base64.
+pub fn sealed_roots(
+    roots: &kutup_crypto::account_roots::AccountRoots,
+    master_key: &[u8; 32],
+    binding: &str,
+) -> Vec<String> {
+    roots
+        .seal(
+            master_key,
+            kutup_crypto::account_record::MasterKeyGeneration::FIRST,
+            binding,
+        )
+        .unwrap()
+        .iter()
+        .map(|record| b64(record))
+        .collect()
 }
 
 pub fn me(c: &Client, base: &str, token: &str) -> Value {
@@ -847,7 +900,7 @@ pub fn set_up_again(
     user: &User,
     password: &str,
 ) -> User {
-    let (status, body, identity, master_key, recovery_entropy, binding) =
+    let (status, body, identity, master_key, recovery_entropy, binding, roots) =
         setup_keys(c, base, first_login, &user.username, password);
     assert_eq!(status, StatusCode::OK, "setup: {body}");
     User {
@@ -859,6 +912,7 @@ pub fn set_up_again(
         token: body["accessToken"].as_str().unwrap().to_string(),
         identity,
         master_key,
+        roots,
         person: user.person.clone(),
         account: user.account.clone(),
     }
@@ -892,6 +946,7 @@ fn setup_keys(
     [u8; 32],
     [u8; 32],
     String,
+    kutup_crypto::account_roots::AccountRoots,
 ) {
     // The first sign-in's answer: its setup token and the account's id, which
     // the new keys' Drive key binding names.
@@ -910,7 +965,8 @@ fn setup_keys(
         opaque_register(c, base, password, &binding, None, Some(setup_token));
     let recovery_proof =
         kutup_crypto::kdf::derive_recovery_auth_proof(&recovery_entropy, &binding).unwrap();
-    let identity = AccountIdentityKeysV1::derive(&master_key).unwrap();
+    let roots = kutup_crypto::account_roots::AccountRoots::generate();
+    let identity = AccountIdentityKeysV1::derive(&roots.identity).unwrap();
     use kutup_crypto::account_record::{self, AccountRecordPurpose};
     let seal = |plain: &[u8], key: &[u8], purpose| {
         account_record::seal_b64(
@@ -931,6 +987,7 @@ fn setup_keys(
             "opaqueRecord": opaque_record, "opaqueServerKeyId": server_key_id,
             "masterKeyEnvelope": export_key.seal_master_key(&master_key, kutup_crypto::account_record::MasterKeyGeneration::FIRST, &binding).unwrap(),
             "recoveryKeyEnvelope": seal(&master_key, &recovery_entropy, AccountRecordPurpose::RecoveryMasterKey),
+            "accountRoots": sealed_roots(&roots, &master_key, &binding),
             "publicKey": b64(&identity.drive_hpke_public_key()),
             "accountAuthorityPublicKey": b64(&identity.authority_public_key()),
             "accountAuthorityKeyId": identity.authority_key_id(),
@@ -950,6 +1007,7 @@ fn setup_keys(
         master_key,
         recovery_entropy,
         binding,
+        roots,
     )
 }
 

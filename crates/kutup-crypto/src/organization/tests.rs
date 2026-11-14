@@ -4,7 +4,10 @@ const ORG: &str = "5b0e7f3a-1d2c-4b8e-9f6a-7c3d2e1f0a9b";
 const OTHER_ORG: &str = "6c1f8a4b-2e3d-4c9f-8a7b-8d4e3f2a1b0c";
 
 fn person(master: u8, account: &str) -> (AccountIdentityKeysV1, Party) {
-    let keys = AccountIdentityKeysV1::derive(&[master; 32]).unwrap();
+    let keys = AccountIdentityKeysV1::derive(&crate::account_roots::IdentityRoot::from_bytes(
+        [master; 32],
+    ))
+    .unwrap();
     let account: AccountRef = account.parse().unwrap();
     let party = Party::new(&account, &keys.incarnation_id()).unwrap();
     (keys, party)
@@ -203,7 +206,14 @@ fn an_escrow_opens_only_as_the_members_own_master_key() {
     let (member_keys, member) = member();
     let master = [0x33u8; 32];
     let generation = MasterKeyGeneration::new(2).unwrap();
-    let escrow = EscrowV1::seal(&master, generation, &certificate(&public), &member).unwrap();
+    let escrow = EscrowV1::seal(
+        &master,
+        &crate::account_roots::IdentityRoot::from_bytes(master),
+        generation,
+        &certificate(&public),
+        &member,
+    )
+    .unwrap();
     let opened = EscrowV1::open(
         &escrow,
         ORG,
@@ -234,9 +244,16 @@ fn an_escrow_opens_only_as_the_members_own_master_key() {
     )
     .is_err());
 
-    // Planted: a master key that derives another authority, sealed in the
-    // member's name, never passes as theirs.
-    let planted = EscrowV1::seal(&[0x44; 32], generation, &certificate(&public), &member).unwrap();
+    // Planted: anyone can seal to the organization key, but not with the
+    // member's identity root; with another one, it never passes as theirs.
+    let planted = EscrowV1::seal(
+        &master,
+        &crate::account_roots::IdentityRoot::from_bytes([0x44; 32]),
+        generation,
+        &certificate(&public),
+        &member,
+    )
+    .unwrap();
     assert!(EscrowV1::open(
         &planted,
         ORG,
@@ -248,7 +265,7 @@ fn an_escrow_opens_only_as_the_members_own_master_key() {
 
     // The generation is bound: changed in the header, the escrow fails.
     let mut tampered = escrow.clone();
-    let generation_at = escrow.len() - ENCAPSULATED_LEN - 2 - SEALED_SECRET_LEN - 4;
+    let generation_at = escrow.len() - ENCAPSULATED_LEN - 2 - ESCROW_SECRET_LEN - 4;
     tampered[generation_at + 3] ^= 1;
     assert!(EscrowV1::open(
         &tampered,
@@ -281,6 +298,7 @@ fn an_escrow_names_its_member_and_incarnation() {
     let (other_keys, other) = second_admin();
     let escrow = EscrowV1::seal(
         &[0x33; 32],
+        &crate::account_roots::IdentityRoot::from_bytes([0x33; 32]),
         MasterKeyGeneration::FIRST,
         &certificate(&public),
         &member,

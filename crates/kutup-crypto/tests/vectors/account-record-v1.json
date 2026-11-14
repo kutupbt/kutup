@@ -1626,6 +1626,361 @@
           "envelope": "S1VUUEFSMQAAAQABAAAAAQAkMGI2YjVlMGMtNGMxZS00YjhlLTljMmQtNmExZjNlNWQ3YzliID8+PTw7Ojk4NzY1NDMyMTAvLi0sKyopKCcmJSQjIiEg7hriEiCOpWGk/4QxM4RpFL9x5k9V5slcJfEBDn5zPiEREREREREREREREREREREREREREREREREAAAA4KI3pPCPacLi2T22T6ZePQ+l6WY3xfMIj/wRvmqmfsnTWAdbqHO6FHzrZuKmLu7bzTv/6XikJvVE="
         }
       ]
+    },
+    {
+      "purpose": 22,
+      "objectId": "Pz49PA==",
+      "plaintext": "QkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkI=",
+      "nonce": "ERERERERERERERERERERERERERERERER",
+      "envelope": "S1VUUEFSMQAAAQAWAAAAAQAkMGI2YjVlMGMtNGMxZS00YjhlLTljMmQtNmExZjNlNWQ3YzliBD8+PTymhP0fyYj8VnVzeXRlQtyxYeb5yqVEqJkfzNxTUPqtaBEREREREREREREREREREREREREREREREQAAADBKizdi2acsBANJlhYEgD1Rs7UxvO97f3noOaTwHs9gThwfPrst2orNoWfi4Vhxe94=",
+      "refused": [
+        {
+          "why": "an unknown suite",
+          "step": "inspect",
+          "envelope": "S1VUUEFSMQAAAgAWAAAAAQAkMGI2YjVlMGMtNGMxZS00YjhlLTljMmQtNmExZjNlNWQ3YzliBD8+PTymhP0fyYj8VnVzeXRlQtyxYeb5yqVEqJkfzNxTUPqtaBEREREREREREREREREREREREREREREREQAAADBKizdi2acsBANJlhYEgD1Rs7UxvO97f3noOaTwHs9gThwfPrst2orNoWfi4Vhxe94="
+        },
+        {
+          "why": "an unknown purpose",
+          "step": "inspect",
+          "envelope": "S1VUUEFSMQAAAf//AAAAAQAkMGI2YjVlMGMtNGMxZS00YjhlLTljMmQtNmExZjNlNWQ3YzliBD8+PTymhP0fyYj8VnVzeXRlQtyxYeb5yqVEqJkfzNxTUPqtaBEREREREREREREREREREREREREREREREQAAADBKizdi2acsBANJlhYEgD1Rs7UxvO97f3noOaTwHs9gThwfPrst2orNoWfi4Vhxe94="
+        },
+        {
+          "why": "master-key generation 0",
+          "step": "inspect",
+          "envelope": "S1VUUEFSMQAAAQAWAAAAAAAkMGI2YjVlMGMtNGMxZS00YjhlLTljMmQtNmExZjNlNWQ3YzliBD8+PTymhP0fyYj8VnVzeXRlQtyxYeb5yqVEqJkfzNxTUPqtaBEREREREREREREREREREREREREREREREQAAADBKizdi2acsBANJlhYEgD1Rs7UxvO97f3noOaTwHs9gThwfPrst2orNoWfi4Vhxe94="
+        },
+        {
+          "why": "master-key generation relabelled",
+          "step": "open",
+          "envelope": "S1VUUEFSMQAAAQAWAAAAAgAkMGI2YjVlMGMtNGMxZS00YjhlLTljMmQtNmExZjNlNWQ3YzliBD8+PTymhP0fyYj8VnVzeXRlQtyxYeb5yqVEqJkfzNxTUPqtaBEREREREREREREREREREREREREREREREQAAADBKizdi2acsBANJlhYEgD1Rs7UxvO97f3noOaTwHs9gThwfPrst2orNoWfi4Vhxe94="
+        },
+        {
+          "why": "binding not a canonical key binding",
+          "step": "inspect",
+          "envelope": "S1VUUEFSMQAAAQAWAAAAAQAkQmI2YjVlMGMtNGMxZS00YjhlLTljMmQtNmExZjNlNWQ3YzliBD8+PTymhP0fyYj8VnVzeXRlQtyxYeb5yqVEqJkfzNxTUPqtaBEREREREREREREREREREREREREREREREQAAADBKizdi2acsBANJlhYEgD1Rs7UxvO97f3noOaTwHs9gThwfPrst2orNoWfi4Vhxe94="
+        },
+        {
+          "why": "trailing byte",
+          "step": "inspect",
+          "envelope": "S1VUUEFSMQAAAQAWAAAAAQAkMGI2YjVlMGMtNGMxZS00YjhlLTljMmQtNmExZjNlNWQ3YzliBD8+PTymhP0fyYj8VnVzeXRlQtyxYeb5yqVEqJkfzNxTUPqtaBEREREREREREREREREREREREREREREREQAAADBKizdi2acsBANJlhYEgD1Rs7UxvO97f3noOaTwHs9gThwfPrst2orNoWfi4Vhxe94A"
+        },
+        {
+          "why": "key commitment changed",
+          "step": "open",
+          "envelope": "S1VUUEFSMQAAAQAWAAAAAQAkMGI2YjVlMGMtNGMxZS00YjhlLTljMmQtNmExZjNlNWQ3YzliBD8+PTynhP0fyYj8VnVzeXRlQtyxYeb5yqVEqJkfzNxTUPqtaBEREREREREREREREREREREREREREREREQAAADBKizdi2acsBANJlhYEgD1Rs7UxvO97f3noOaTwHs9gThwfPrst2orNoWfi4Vhxe94="
+        },
+        {
+          "why": "no object id",
+          "step": "inspect",
+          "envelope": "S1VUUEFSMQAAAQAWAAAAAQAkMGI2YjVlMGMtNGMxZS00YjhlLTljMmQtNmExZjNlNWQ3YzliAN6AhJXeB+JtOOpqWge+79qqs3lFgasfYSdv9Tro3zjcERERERERERERERERERERERERERERERERAAAAMN7lC+U+nlWE09jzcQx+fNRXo8Dj2/hOQfNc/2Lg0owA0OhlfP67WpEqyehSX3eaLA=="
+        },
+        {
+          "why": "an object id of the wrong length",
+          "step": "inspect",
+          "envelope": "S1VUUEFSMQAAAQAWAAAAAQAkMGI2YjVlMGMtNGMxZS00YjhlLTljMmQtNmExZjNlNWQ3YzliBQcHBwcHVq+yU0P8D5GRvC1VN/wsY85X5xvhuGDRMtp14wV/tiIREREREREREREREREREREREREREREREREAAAAwOvr/Bk5h60Hx6vsW8+PmJuWuqXWhIyVWxdHsz5KFmOSe4Eyqrq2hqmuSgWHBI7bp"
+        },
+        {
+          "why": "a revision where the purpose has none",
+          "step": "inspect",
+          "envelope": "S1VUUEFSMQAAAQAWAAAAAQAkMGI2YjVlMGMtNGMxZS00YjhlLTljMmQtNmExZjNlNWQ3YzliBD8+PTwAAAAAAAAAAb+upsYUl0nNrmc+cNj74SSiEQIKvFEFNBwbQKjPgTOSERERERERERERERERERERERERERERERERAAAAMDVlYE0gBWsL69qpkQSfkzU+yvZGRnZBNsa+yJBG+XqCvBdZqKr03OXdx/9oMZNXRQ=="
+        },
+        {
+          "why": "a length its padding policy never gives",
+          "step": "inspect",
+          "envelope": "S1VUUEFSMQAAAQAWAAAAAQAkMGI2YjVlMGMtNGMxZS00YjhlLTljMmQtNmExZjNlNWQ3YzliBD8+PTymhP0fyYj8VnVzeXRlQtyxYeb5yqVEqJkfzNxTUPqtaBEREREREREREREREREREREREREREREREQAAADFKizdi2acsBANJlhYEgD1Rs7UxvO97f3noOaTwHs9gTmpRTCfsLr3GEOkIAG9dBe4U"
+        },
+        {
+          "why": "sealed for another account",
+          "step": "open",
+          "envelope": "S1VUUEFSMQAAAQAWAAAAAQAkMWI2YjVlMGMtNGMxZS00YjhlLTljMmQtNmExZjNlNWQ3YzliBD8+PTzf4QkJ5hd+QhTomigB5hs86KabtsCFainEqOXG5tYVEBEREREREREREREREREREREREREREREREQAAADDiaxXsfQ/mIyWDXrexC8aiJTU/VKbikNXTAcq9UN2mIgxs5+z/VKe58h0u1xY4BjY="
+        },
+        {
+          "why": "purpose changed",
+          "step": "inspect-or-open",
+          "envelope": "S1VUUEFSMQAAAQABAAAAAQAkMGI2YjVlMGMtNGMxZS00YjhlLTljMmQtNmExZjNlNWQ3YzliBD8+PTymhP0fyYj8VnVzeXRlQtyxYeb5yqVEqJkfzNxTUPqtaBEREREREREREREREREREREREREREREREQAAADBKizdi2acsBANJlhYEgD1Rs7UxvO97f3noOaTwHs9gThwfPrst2orNoWfi4Vhxe94="
+        }
+      ]
+    },
+    {
+      "purpose": 23,
+      "objectId": "Pz49PA==",
+      "plaintext": "QkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkI=",
+      "nonce": "ERERERERERERERERERERERERERERERER",
+      "envelope": "S1VUUEFSMQAAAQAXAAAAAQAkMGI2YjVlMGMtNGMxZS00YjhlLTljMmQtNmExZjNlNWQ3YzliBD8+PTwzcgGlaqdkFzvQ+4U66U6NSNqQohn/o/G2p0PxoGXDohEREREREREREREREREREREREREREREREQAAADBy+s5PluTktCDDzPlGrLDi6cG7DckAvh/cpxTAtpBAdI8pgXXDTzCsN9DCLWxbc7U=",
+      "refused": [
+        {
+          "why": "an unknown suite",
+          "step": "inspect",
+          "envelope": "S1VUUEFSMQAAAgAXAAAAAQAkMGI2YjVlMGMtNGMxZS00YjhlLTljMmQtNmExZjNlNWQ3YzliBD8+PTwzcgGlaqdkFzvQ+4U66U6NSNqQohn/o/G2p0PxoGXDohEREREREREREREREREREREREREREREREQAAADBy+s5PluTktCDDzPlGrLDi6cG7DckAvh/cpxTAtpBAdI8pgXXDTzCsN9DCLWxbc7U="
+        },
+        {
+          "why": "an unknown purpose",
+          "step": "inspect",
+          "envelope": "S1VUUEFSMQAAAf//AAAAAQAkMGI2YjVlMGMtNGMxZS00YjhlLTljMmQtNmExZjNlNWQ3YzliBD8+PTwzcgGlaqdkFzvQ+4U66U6NSNqQohn/o/G2p0PxoGXDohEREREREREREREREREREREREREREREREQAAADBy+s5PluTktCDDzPlGrLDi6cG7DckAvh/cpxTAtpBAdI8pgXXDTzCsN9DCLWxbc7U="
+        },
+        {
+          "why": "master-key generation 0",
+          "step": "inspect",
+          "envelope": "S1VUUEFSMQAAAQAXAAAAAAAkMGI2YjVlMGMtNGMxZS00YjhlLTljMmQtNmExZjNlNWQ3YzliBD8+PTwzcgGlaqdkFzvQ+4U66U6NSNqQohn/o/G2p0PxoGXDohEREREREREREREREREREREREREREREREQAAADBy+s5PluTktCDDzPlGrLDi6cG7DckAvh/cpxTAtpBAdI8pgXXDTzCsN9DCLWxbc7U="
+        },
+        {
+          "why": "master-key generation relabelled",
+          "step": "open",
+          "envelope": "S1VUUEFSMQAAAQAXAAAAAgAkMGI2YjVlMGMtNGMxZS00YjhlLTljMmQtNmExZjNlNWQ3YzliBD8+PTwzcgGlaqdkFzvQ+4U66U6NSNqQohn/o/G2p0PxoGXDohEREREREREREREREREREREREREREREREQAAADBy+s5PluTktCDDzPlGrLDi6cG7DckAvh/cpxTAtpBAdI8pgXXDTzCsN9DCLWxbc7U="
+        },
+        {
+          "why": "binding not a canonical key binding",
+          "step": "inspect",
+          "envelope": "S1VUUEFSMQAAAQAXAAAAAQAkQmI2YjVlMGMtNGMxZS00YjhlLTljMmQtNmExZjNlNWQ3YzliBD8+PTwzcgGlaqdkFzvQ+4U66U6NSNqQohn/o/G2p0PxoGXDohEREREREREREREREREREREREREREREREQAAADBy+s5PluTktCDDzPlGrLDi6cG7DckAvh/cpxTAtpBAdI8pgXXDTzCsN9DCLWxbc7U="
+        },
+        {
+          "why": "trailing byte",
+          "step": "inspect",
+          "envelope": "S1VUUEFSMQAAAQAXAAAAAQAkMGI2YjVlMGMtNGMxZS00YjhlLTljMmQtNmExZjNlNWQ3YzliBD8+PTwzcgGlaqdkFzvQ+4U66U6NSNqQohn/o/G2p0PxoGXDohEREREREREREREREREREREREREREREREQAAADBy+s5PluTktCDDzPlGrLDi6cG7DckAvh/cpxTAtpBAdI8pgXXDTzCsN9DCLWxbc7UA"
+        },
+        {
+          "why": "key commitment changed",
+          "step": "open",
+          "envelope": "S1VUUEFSMQAAAQAXAAAAAQAkMGI2YjVlMGMtNGMxZS00YjhlLTljMmQtNmExZjNlNWQ3YzliBD8+PTwycgGlaqdkFzvQ+4U66U6NSNqQohn/o/G2p0PxoGXDohEREREREREREREREREREREREREREREREQAAADBy+s5PluTktCDDzPlGrLDi6cG7DckAvh/cpxTAtpBAdI8pgXXDTzCsN9DCLWxbc7U="
+        },
+        {
+          "why": "no object id",
+          "step": "inspect",
+          "envelope": "S1VUUEFSMQAAAQAXAAAAAQAkMGI2YjVlMGMtNGMxZS00YjhlLTljMmQtNmExZjNlNWQ3YzliAJ/WVkWwbx5ZU1sACCEP2f5hGnKVVxdxFFLbrFzxC1UXERERERERERERERERERERERERERERERERAAAAMHTARPlWvQxPlkcoRBdNsmfF9z9K/Q0kBbO6S3jFBaYVKqk85Hc8egpOKDCDzf76PA=="
+        },
+        {
+          "why": "an object id of the wrong length",
+          "step": "inspect",
+          "envelope": "S1VUUEFSMQAAAQAXAAAAAQAkMGI2YjVlMGMtNGMxZS00YjhlLTljMmQtNmExZjNlNWQ3YzliBQcHBwcHQsuaRpWS97oHtChkeru00ns6ASONVQte2GSnlrL5HnsREREREREREREREREREREREREREREREREAAAAw9cX/+gIR5HVMGkRH39bH/zydSQ6oqd9Nky1KJhx8ZXBR1q+ga/CA7lCqYq6fII4S"
+        },
+        {
+          "why": "a revision where the purpose has none",
+          "step": "inspect",
+          "envelope": "S1VUUEFSMQAAAQAXAAAAAQAkMGI2YjVlMGMtNGMxZS00YjhlLTljMmQtNmExZjNlNWQ3YzliBD8+PTwAAAAAAAAAAby8eCT9bnyz5eQpivrzDUi+MDWHiXpw2AjVEPVPZcwVERERERERERERERERERERERERERERERERAAAAMDtZHfPmilyC1g09tMQUyJiZ4jf8mXNFH6Ffu3t7r+6BKQPx/6ymkZuVzuF2OEuULA=="
+        },
+        {
+          "why": "a length its padding policy never gives",
+          "step": "inspect",
+          "envelope": "S1VUUEFSMQAAAQAXAAAAAQAkMGI2YjVlMGMtNGMxZS00YjhlLTljMmQtNmExZjNlNWQ3YzliBD8+PTwzcgGlaqdkFzvQ+4U66U6NSNqQohn/o/G2p0PxoGXDohEREREREREREREREREREREREREREREREQAAADFy+s5PluTktCDDzPlGrLDi6cG7DckAvh/cpxTAtpBAdKfzVbqzPu/rZv/3+Pc/VDQR"
+        },
+        {
+          "why": "sealed for another account",
+          "step": "open",
+          "envelope": "S1VUUEFSMQAAAQAXAAAAAQAkMWI2YjVlMGMtNGMxZS00YjhlLTljMmQtNmExZjNlNWQ3YzliBD8+PTxsPr+v1dd7COmIh7icBRw73o3SZNEzljiou7Gqm/B7OhEREREREREREREREREREREREREREREREQAAADChIrrd8kIqRvYDJq79HrrrV/wsiBT1XZHbl2wUg9VDFxOa6YOlryqXtQK/LDYL+GU="
+        },
+        {
+          "why": "purpose changed",
+          "step": "inspect-or-open",
+          "envelope": "S1VUUEFSMQAAAQABAAAAAQAkMGI2YjVlMGMtNGMxZS00YjhlLTljMmQtNmExZjNlNWQ3YzliBD8+PTwzcgGlaqdkFzvQ+4U66U6NSNqQohn/o/G2p0PxoGXDohEREREREREREREREREREREREREREREREQAAADBy+s5PluTktCDDzPlGrLDi6cG7DckAvh/cpxTAtpBAdI8pgXXDTzCsN9DCLWxbc7U="
+        }
+      ]
+    },
+    {
+      "purpose": 24,
+      "objectId": "",
+      "plaintext": "QkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkI=",
+      "nonce": "ERERERERERERERERERERERERERERERER",
+      "envelope": "S1VUUEFSMQAAAQAYAAAAAQAkMGI2YjVlMGMtNGMxZS00YjhlLTljMmQtNmExZjNlNWQ3YzliAP7yQoM85jcusSN3kkdeZ3zSyEbeFYSanZOBNS1asryVERERERERERERERERERERERERERERERERAAAAMAKU3yYsFDSthvkKqbzwKqo9/mQuJn95drLt+aMoejtbSSHrMEbEwEAhDD3mvzYIKQ==",
+      "refused": [
+        {
+          "why": "an unknown suite",
+          "step": "inspect",
+          "envelope": "S1VUUEFSMQAAAgAYAAAAAQAkMGI2YjVlMGMtNGMxZS00YjhlLTljMmQtNmExZjNlNWQ3YzliAP7yQoM85jcusSN3kkdeZ3zSyEbeFYSanZOBNS1asryVERERERERERERERERERERERERERERERERAAAAMAKU3yYsFDSthvkKqbzwKqo9/mQuJn95drLt+aMoejtbSSHrMEbEwEAhDD3mvzYIKQ=="
+        },
+        {
+          "why": "an unknown purpose",
+          "step": "inspect",
+          "envelope": "S1VUUEFSMQAAAf//AAAAAQAkMGI2YjVlMGMtNGMxZS00YjhlLTljMmQtNmExZjNlNWQ3YzliAP7yQoM85jcusSN3kkdeZ3zSyEbeFYSanZOBNS1asryVERERERERERERERERERERERERERERERERAAAAMAKU3yYsFDSthvkKqbzwKqo9/mQuJn95drLt+aMoejtbSSHrMEbEwEAhDD3mvzYIKQ=="
+        },
+        {
+          "why": "master-key generation 0",
+          "step": "inspect",
+          "envelope": "S1VUUEFSMQAAAQAYAAAAAAAkMGI2YjVlMGMtNGMxZS00YjhlLTljMmQtNmExZjNlNWQ3YzliAP7yQoM85jcusSN3kkdeZ3zSyEbeFYSanZOBNS1asryVERERERERERERERERERERERERERERERERAAAAMAKU3yYsFDSthvkKqbzwKqo9/mQuJn95drLt+aMoejtbSSHrMEbEwEAhDD3mvzYIKQ=="
+        },
+        {
+          "why": "master-key generation relabelled",
+          "step": "open",
+          "envelope": "S1VUUEFSMQAAAQAYAAAAAgAkMGI2YjVlMGMtNGMxZS00YjhlLTljMmQtNmExZjNlNWQ3YzliAP7yQoM85jcusSN3kkdeZ3zSyEbeFYSanZOBNS1asryVERERERERERERERERERERERERERERERERAAAAMAKU3yYsFDSthvkKqbzwKqo9/mQuJn95drLt+aMoejtbSSHrMEbEwEAhDD3mvzYIKQ=="
+        },
+        {
+          "why": "binding not a canonical key binding",
+          "step": "inspect",
+          "envelope": "S1VUUEFSMQAAAQAYAAAAAQAkQmI2YjVlMGMtNGMxZS00YjhlLTljMmQtNmExZjNlNWQ3YzliAP7yQoM85jcusSN3kkdeZ3zSyEbeFYSanZOBNS1asryVERERERERERERERERERERERERERERERERAAAAMAKU3yYsFDSthvkKqbzwKqo9/mQuJn95drLt+aMoejtbSSHrMEbEwEAhDD3mvzYIKQ=="
+        },
+        {
+          "why": "trailing byte",
+          "step": "inspect",
+          "envelope": "S1VUUEFSMQAAAQAYAAAAAQAkMGI2YjVlMGMtNGMxZS00YjhlLTljMmQtNmExZjNlNWQ3YzliAP7yQoM85jcusSN3kkdeZ3zSyEbeFYSanZOBNS1asryVERERERERERERERERERERERERERERERERAAAAMAKU3yYsFDSthvkKqbzwKqo9/mQuJn95drLt+aMoejtbSSHrMEbEwEAhDD3mvzYIKQA="
+        },
+        {
+          "why": "key commitment changed",
+          "step": "open",
+          "envelope": "S1VUUEFSMQAAAQAYAAAAAQAkMGI2YjVlMGMtNGMxZS00YjhlLTljMmQtNmExZjNlNWQ3YzliAP/yQoM85jcusSN3kkdeZ3zSyEbeFYSanZOBNS1asryVERERERERERERERERERERERERERERERERAAAAMAKU3yYsFDSthvkKqbzwKqo9/mQuJn95drLt+aMoejtbSSHrMEbEwEAhDD3mvzYIKQ=="
+        },
+        {
+          "why": "an object id where the purpose has none",
+          "step": "inspect",
+          "envelope": "S1VUUEFSMQAAAQAYAAAAAQAkMGI2YjVlMGMtNGMxZS00YjhlLTljMmQtNmExZjNlNWQ3YzliEAcHBwcHBwcHBwcHBwcHBwdckbktH2UB7dzYWvM24DTu5xhSOmtdvezB6wN/abW4SBEREREREREREREREREREREREREREREREQAAADD6mPjIerq08RZkj5dqG/QB8BqxNNIh4wzarF/K1jD6bfuBdzpFg17FB6V/1PEDGs4="
+        },
+        {
+          "why": "a revision where the purpose has none",
+          "step": "inspect",
+          "envelope": "S1VUUEFSMQAAAQAYAAAAAQAkMGI2YjVlMGMtNGMxZS00YjhlLTljMmQtNmExZjNlNWQ3YzliAAAAAAAAAAABNvEDLuR4kRKivRRTjeO/iqvoSvjpitjtoOmFy54TemEREREREREREREREREREREREREREREREREAAAAwOYECKT9gQ2JQNFyUuomZjMjjzPWXOeffGJPkpAwfkkhJrJIf+7qQzZxaLfFNB/HZ"
+        },
+        {
+          "why": "a length its padding policy never gives",
+          "step": "inspect",
+          "envelope": "S1VUUEFSMQAAAQAYAAAAAQAkMGI2YjVlMGMtNGMxZS00YjhlLTljMmQtNmExZjNlNWQ3YzliAP7yQoM85jcusSN3kkdeZ3zSyEbeFYSanZOBNS1asryVERERERERERERERERERERERERERERERERAAAAMQKU3yYsFDSthvkKqbzwKqo9/mQuJn95drLt+aMoejtb8u/Saw62Bos1Q7kZmT5/4Sk="
+        },
+        {
+          "why": "sealed for another account",
+          "step": "open",
+          "envelope": "S1VUUEFSMQAAAQAYAAAAAQAkMWI2YjVlMGMtNGMxZS00YjhlLTljMmQtNmExZjNlNWQ3YzliAC/6kWnXIcL4/7WUxeL0sGP0PU0L1OHCoqEbiIGyv4kQERERERERERERERERERERERERERERERERAAAAMDaDmi0QxUwK1zNEQnNS3rgdE6DoDhJNX9rTSn7GPfZTDfc5H3L3YzxWStDof+eHXg=="
+        },
+        {
+          "why": "purpose changed",
+          "step": "inspect-or-open",
+          "envelope": "S1VUUEFSMQAAAQABAAAAAQAkMGI2YjVlMGMtNGMxZS00YjhlLTljMmQtNmExZjNlNWQ3YzliAP7yQoM85jcusSN3kkdeZ3zSyEbeFYSanZOBNS1asryVERERERERERERERERERERERERERERERERAAAAMAKU3yYsFDSthvkKqbzwKqo9/mQuJn95drLt+aMoejtbSSHrMEbEwEAhDD3mvzYIKQ=="
+        }
+      ]
+    },
+    {
+      "purpose": 25,
+      "objectId": "",
+      "plaintext": "QkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkI=",
+      "nonce": "ERERERERERERERERERERERERERERERER",
+      "envelope": "S1VUUEFSMQAAAQAZAAAAAQAkMGI2YjVlMGMtNGMxZS00YjhlLTljMmQtNmExZjNlNWQ3YzliAKLmBcIPLrvogqoyiZyn6jqPFov/EoDYtHBwbx/M6CdgERERERERERERERERERERERERERERERERAAAAMJviY0/BulKm3rRWNPY+eQXnVkDZ2ebqXvWf1kCv6168rpi1y3+uMx5cj6JpdUIfAg==",
+      "refused": [
+        {
+          "why": "an unknown suite",
+          "step": "inspect",
+          "envelope": "S1VUUEFSMQAAAgAZAAAAAQAkMGI2YjVlMGMtNGMxZS00YjhlLTljMmQtNmExZjNlNWQ3YzliAKLmBcIPLrvogqoyiZyn6jqPFov/EoDYtHBwbx/M6CdgERERERERERERERERERERERERERERERERAAAAMJviY0/BulKm3rRWNPY+eQXnVkDZ2ebqXvWf1kCv6168rpi1y3+uMx5cj6JpdUIfAg=="
+        },
+        {
+          "why": "an unknown purpose",
+          "step": "inspect",
+          "envelope": "S1VUUEFSMQAAAf//AAAAAQAkMGI2YjVlMGMtNGMxZS00YjhlLTljMmQtNmExZjNlNWQ3YzliAKLmBcIPLrvogqoyiZyn6jqPFov/EoDYtHBwbx/M6CdgERERERERERERERERERERERERERERERERAAAAMJviY0/BulKm3rRWNPY+eQXnVkDZ2ebqXvWf1kCv6168rpi1y3+uMx5cj6JpdUIfAg=="
+        },
+        {
+          "why": "master-key generation 0",
+          "step": "inspect",
+          "envelope": "S1VUUEFSMQAAAQAZAAAAAAAkMGI2YjVlMGMtNGMxZS00YjhlLTljMmQtNmExZjNlNWQ3YzliAKLmBcIPLrvogqoyiZyn6jqPFov/EoDYtHBwbx/M6CdgERERERERERERERERERERERERERERERERAAAAMJviY0/BulKm3rRWNPY+eQXnVkDZ2ebqXvWf1kCv6168rpi1y3+uMx5cj6JpdUIfAg=="
+        },
+        {
+          "why": "master-key generation relabelled",
+          "step": "open",
+          "envelope": "S1VUUEFSMQAAAQAZAAAAAgAkMGI2YjVlMGMtNGMxZS00YjhlLTljMmQtNmExZjNlNWQ3YzliAKLmBcIPLrvogqoyiZyn6jqPFov/EoDYtHBwbx/M6CdgERERERERERERERERERERERERERERERERAAAAMJviY0/BulKm3rRWNPY+eQXnVkDZ2ebqXvWf1kCv6168rpi1y3+uMx5cj6JpdUIfAg=="
+        },
+        {
+          "why": "binding not a canonical key binding",
+          "step": "inspect",
+          "envelope": "S1VUUEFSMQAAAQAZAAAAAQAkQmI2YjVlMGMtNGMxZS00YjhlLTljMmQtNmExZjNlNWQ3YzliAKLmBcIPLrvogqoyiZyn6jqPFov/EoDYtHBwbx/M6CdgERERERERERERERERERERERERERERERERAAAAMJviY0/BulKm3rRWNPY+eQXnVkDZ2ebqXvWf1kCv6168rpi1y3+uMx5cj6JpdUIfAg=="
+        },
+        {
+          "why": "trailing byte",
+          "step": "inspect",
+          "envelope": "S1VUUEFSMQAAAQAZAAAAAQAkMGI2YjVlMGMtNGMxZS00YjhlLTljMmQtNmExZjNlNWQ3YzliAKLmBcIPLrvogqoyiZyn6jqPFov/EoDYtHBwbx/M6CdgERERERERERERERERERERERERERERERERAAAAMJviY0/BulKm3rRWNPY+eQXnVkDZ2ebqXvWf1kCv6168rpi1y3+uMx5cj6JpdUIfAgA="
+        },
+        {
+          "why": "key commitment changed",
+          "step": "open",
+          "envelope": "S1VUUEFSMQAAAQAZAAAAAQAkMGI2YjVlMGMtNGMxZS00YjhlLTljMmQtNmExZjNlNWQ3YzliAKPmBcIPLrvogqoyiZyn6jqPFov/EoDYtHBwbx/M6CdgERERERERERERERERERERERERERERERERAAAAMJviY0/BulKm3rRWNPY+eQXnVkDZ2ebqXvWf1kCv6168rpi1y3+uMx5cj6JpdUIfAg=="
+        },
+        {
+          "why": "an object id where the purpose has none",
+          "step": "inspect",
+          "envelope": "S1VUUEFSMQAAAQAZAAAAAQAkMGI2YjVlMGMtNGMxZS00YjhlLTljMmQtNmExZjNlNWQ3YzliEAcHBwcHBwcHBwcHBwcHBwdTlrt1Y4uq0yx8CZZ0oIZ7+RywBSsf/vzcNUIDumvlyxEREREREREREREREREREREREREREREREQAAADDdIdQi2jxvGHqF6FhSprro85yAb1KeYnWejw+ZsBpSoODbz6gLamaE4d25TbtdYdE="
+        },
+        {
+          "why": "a revision where the purpose has none",
+          "step": "inspect",
+          "envelope": "S1VUUEFSMQAAAQAZAAAAAQAkMGI2YjVlMGMtNGMxZS00YjhlLTljMmQtNmExZjNlNWQ3YzliAAAAAAAAAAABJVg3EfO4PANbfPBtHqPDMJg3rmmmJOKtPdc/nX09edYREREREREREREREREREREREREREREREREAAAAwSzgYtZzziYKxnnYCzWFzkydeCH7NQf3GWNkEIDX/MRPaTdrFAiCcw7LzIHvlzOoc"
+        },
+        {
+          "why": "a length its padding policy never gives",
+          "step": "inspect",
+          "envelope": "S1VUUEFSMQAAAQAZAAAAAQAkMGI2YjVlMGMtNGMxZS00YjhlLTljMmQtNmExZjNlNWQ3YzliAKLmBcIPLrvogqoyiZyn6jqPFov/EoDYtHBwbx/M6CdgERERERERERERERERERERERERERERERERAAAAMZviY0/BulKm3rRWNPY+eQXnVkDZ2ebqXvWf1kCv6168mdE/cMeC56TN14m5koHWlgU="
+        },
+        {
+          "why": "sealed for another account",
+          "step": "open",
+          "envelope": "S1VUUEFSMQAAAQAZAAAAAQAkMWI2YjVlMGMtNGMxZS00YjhlLTljMmQtNmExZjNlNWQ3YzliAEyGCstB8vXR1lbdnnrM6n4Tj+wt840oXnBGlFtXN6U/ERERERERERERERERERERERERERERERERAAAAMKBhya/vJSppVB2cvCkmGG3NPiz8EkBDa1T8dKrHNRNBWyhXstl+yqdWoZycdEpI7w=="
+        },
+        {
+          "why": "purpose changed",
+          "step": "inspect-or-open",
+          "envelope": "S1VUUEFSMQAAAQABAAAAAQAkMGI2YjVlMGMtNGMxZS00YjhlLTljMmQtNmExZjNlNWQ3YzliAKLmBcIPLrvogqoyiZyn6jqPFov/EoDYtHBwbx/M6CdgERERERERERERERERERERERERERERERERAAAAMJviY0/BulKm3rRWNPY+eQXnVkDZ2ebqXvWf1kCv6168rpi1y3+uMx5cj6JpdUIfAg=="
+        }
+      ]
+    },
+    {
+      "purpose": 26,
+      "objectId": "",
+      "plaintext": "QkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkI=",
+      "nonce": "ERERERERERERERERERERERERERERERER",
+      "envelope": "S1VUUEFSMQAAAQAaAAAAAQAkMGI2YjVlMGMtNGMxZS00YjhlLTljMmQtNmExZjNlNWQ3YzliABVNfsHIeBlIKpDQ13FhM23Iab7R/SUUpxnSGD+eg4mRERERERERERERERERERERERERERERERERAAAAMAzI8UZTxrPI1YuKW+KQv8R2bs3cZilWDHbzLnpdPwx+PGSpGcxvcKuQn/MT6GwfEw==",
+      "refused": [
+        {
+          "why": "an unknown suite",
+          "step": "inspect",
+          "envelope": "S1VUUEFSMQAAAgAaAAAAAQAkMGI2YjVlMGMtNGMxZS00YjhlLTljMmQtNmExZjNlNWQ3YzliABVNfsHIeBlIKpDQ13FhM23Iab7R/SUUpxnSGD+eg4mRERERERERERERERERERERERERERERERERAAAAMAzI8UZTxrPI1YuKW+KQv8R2bs3cZilWDHbzLnpdPwx+PGSpGcxvcKuQn/MT6GwfEw=="
+        },
+        {
+          "why": "an unknown purpose",
+          "step": "inspect",
+          "envelope": "S1VUUEFSMQAAAf//AAAAAQAkMGI2YjVlMGMtNGMxZS00YjhlLTljMmQtNmExZjNlNWQ3YzliABVNfsHIeBlIKpDQ13FhM23Iab7R/SUUpxnSGD+eg4mRERERERERERERERERERERERERERERERERAAAAMAzI8UZTxrPI1YuKW+KQv8R2bs3cZilWDHbzLnpdPwx+PGSpGcxvcKuQn/MT6GwfEw=="
+        },
+        {
+          "why": "master-key generation 0",
+          "step": "inspect",
+          "envelope": "S1VUUEFSMQAAAQAaAAAAAAAkMGI2YjVlMGMtNGMxZS00YjhlLTljMmQtNmExZjNlNWQ3YzliABVNfsHIeBlIKpDQ13FhM23Iab7R/SUUpxnSGD+eg4mRERERERERERERERERERERERERERERERERAAAAMAzI8UZTxrPI1YuKW+KQv8R2bs3cZilWDHbzLnpdPwx+PGSpGcxvcKuQn/MT6GwfEw=="
+        },
+        {
+          "why": "master-key generation relabelled",
+          "step": "open",
+          "envelope": "S1VUUEFSMQAAAQAaAAAAAgAkMGI2YjVlMGMtNGMxZS00YjhlLTljMmQtNmExZjNlNWQ3YzliABVNfsHIeBlIKpDQ13FhM23Iab7R/SUUpxnSGD+eg4mRERERERERERERERERERERERERERERERERAAAAMAzI8UZTxrPI1YuKW+KQv8R2bs3cZilWDHbzLnpdPwx+PGSpGcxvcKuQn/MT6GwfEw=="
+        },
+        {
+          "why": "binding not a canonical key binding",
+          "step": "inspect",
+          "envelope": "S1VUUEFSMQAAAQAaAAAAAQAkQmI2YjVlMGMtNGMxZS00YjhlLTljMmQtNmExZjNlNWQ3YzliABVNfsHIeBlIKpDQ13FhM23Iab7R/SUUpxnSGD+eg4mRERERERERERERERERERERERERERERERERAAAAMAzI8UZTxrPI1YuKW+KQv8R2bs3cZilWDHbzLnpdPwx+PGSpGcxvcKuQn/MT6GwfEw=="
+        },
+        {
+          "why": "trailing byte",
+          "step": "inspect",
+          "envelope": "S1VUUEFSMQAAAQAaAAAAAQAkMGI2YjVlMGMtNGMxZS00YjhlLTljMmQtNmExZjNlNWQ3YzliABVNfsHIeBlIKpDQ13FhM23Iab7R/SUUpxnSGD+eg4mRERERERERERERERERERERERERERERERERAAAAMAzI8UZTxrPI1YuKW+KQv8R2bs3cZilWDHbzLnpdPwx+PGSpGcxvcKuQn/MT6GwfEwA="
+        },
+        {
+          "why": "key commitment changed",
+          "step": "open",
+          "envelope": "S1VUUEFSMQAAAQAaAAAAAQAkMGI2YjVlMGMtNGMxZS00YjhlLTljMmQtNmExZjNlNWQ3YzliABRNfsHIeBlIKpDQ13FhM23Iab7R/SUUpxnSGD+eg4mRERERERERERERERERERERERERERERERERAAAAMAzI8UZTxrPI1YuKW+KQv8R2bs3cZilWDHbzLnpdPwx+PGSpGcxvcKuQn/MT6GwfEw=="
+        },
+        {
+          "why": "an object id where the purpose has none",
+          "step": "inspect",
+          "envelope": "S1VUUEFSMQAAAQAaAAAAAQAkMGI2YjVlMGMtNGMxZS00YjhlLTljMmQtNmExZjNlNWQ3YzliEAcHBwcHBwcHBwcHBwcHBwcp1j/BmdwAsIQ0iUCyL4D8OOZGsotuNAmWvrLt9oypzREREREREREREREREREREREREREREREREQAAADDCK+BetVIfAI2isUNkLWNWzYbjNO4P1i/0qUF69iDjjcrGo3aw3FwcDXE1TGnqvgM="
+        },
+        {
+          "why": "a revision where the purpose has none",
+          "step": "inspect",
+          "envelope": "S1VUUEFSMQAAAQAaAAAAAQAkMGI2YjVlMGMtNGMxZS00YjhlLTljMmQtNmExZjNlNWQ3YzliAAAAAAAAAAABrkGHg9pvrh/fe9QQj6m7gQO/brcJZcJh8hndw0kzPTQREREREREREREREREREREREREREREREREAAAAw6ZlzagC8c/s4co94zuGgii+5en9aYCWn+vZ2WWJRIdArkUaVKzb+0MzEHHYL9yZJ"
+        },
+        {
+          "why": "a length its padding policy never gives",
+          "step": "inspect",
+          "envelope": "S1VUUEFSMQAAAQAaAAAAAQAkMGI2YjVlMGMtNGMxZS00YjhlLTljMmQtNmExZjNlNWQ3YzliABVNfsHIeBlIKpDQ13FhM23Iab7R/SUUpxnSGD+eg4mRERERERERERERERERERERERERERERERERAAAAMQzI8UZTxrPI1YuKW+KQv8R2bs3cZilWDHbzLnpdPwx+zblGSSVBJm364Slz0CWcNHU="
+        },
+        {
+          "why": "sealed for another account",
+          "step": "open",
+          "envelope": "S1VUUEFSMQAAAQAaAAAAAQAkMWI2YjVlMGMtNGMxZS00YjhlLTljMmQtNmExZjNlNWQ3YzliAJ+kfk+n9tuN1x8l2GDj6NtfCM1sUCVquIaXocXwu/AUERERERERERERERERERERERERERERERERAAAAMOALaD8TykPkTCLMVwAW9OflGgLTucDEMv6unUTiDqWud3HImew9JY3Xad76ak0ipQ=="
+        },
+        {
+          "why": "purpose changed",
+          "step": "inspect-or-open",
+          "envelope": "S1VUUEFSMQAAAQABAAAAAQAkMGI2YjVlMGMtNGMxZS00YjhlLTljMmQtNmExZjNlNWQ3YzliABVNfsHIeBlIKpDQ13FhM23Iab7R/SUUpxnSGD+eg4mRERERERERERERERERERERERERERERERERAAAAMAzI8UZTxrPI1YuKW+KQv8R2bs3cZilWDHbzLnpdPwx+PGSpGcxvcKuQn/MT6GwfEw=="
+        }
+      ]
     }
   ]
 }

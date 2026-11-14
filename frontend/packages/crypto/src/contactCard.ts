@@ -1,3 +1,4 @@
+import type { IdentityRoot } from './accountRoots'
 import { getCryptoWasm } from './rustWasm'
 import { MASTER_KEY_GENERATION } from './masterKeyGeneration'
 
@@ -25,12 +26,12 @@ export interface ContactSummary {
 
 /** Canonicalizes and signs revision `revision` of a summary; returns the exact JSON text to store. */
 export async function signContactSummary(
-  masterKeyBase64: string,
+  identityRoot: IdentityRoot,
   binding: string,
   revision: number,
   summary: ContactSummary,
 ): Promise<{ summary: string; signature: string }> {
-  return (await getCryptoWasm()).signContactSummary(masterKeyBase64, binding, revision, JSON.stringify(summary))
+  return (await getCryptoWasm()).signContactSummary(identityRoot, binding, revision, JSON.stringify(summary))
 }
 
 /** Verifies a stored summary against the account authority, for its card's revision, and parses it. */

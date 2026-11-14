@@ -1,3 +1,4 @@
+import type { CallLinkRoot } from '@kutup/crypto/accountRoots'
 import type { CallLinkCrypto, CallLinkInfo, CallLinkKeys } from '@kutup/chat-core/types'
 import { loadChatWasm } from '@kutup/chat-core/wasm'
 import { toBase64 } from '@kutup/crypto'
@@ -68,13 +69,13 @@ export async function openCallLink(fragment: string): Promise<OpenCallLink> {
   return { secret, fragment, ...wasm.callLinkKeys(secret) }
 }
 
-async function ownerSecret(masterKey: Uint8Array, nonce: string): Promise<string> {
-  return (await loadChatWasm()).callLinkOwnerSecret(toBase64(masterKey), nonce)
+async function ownerSecret(callLinkRoot: CallLinkRoot, nonce: string): Promise<string> {
+  return (await loadChatWasm()).callLinkOwnerSecret(callLinkRoot, nonce)
 }
 
-async function owned(masterKey: Uint8Array, stored: StoredLink): Promise<OwnedCallLink | null> {
+async function owned(callLinkRoot: CallLinkRoot, stored: StoredLink): Promise<OwnedCallLink | null> {
   const wasm = await loadChatWasm()
-  const secret = await ownerSecret(masterKey, stored.nonce)
+  const secret = await ownerSecret(callLinkRoot, stored.nonce)
   // A row this account's key does not explain is not shown as a meeting.
   if (wasm.callLinkKeys(secret).roomId !== stored.roomId) return null
   let info: MeetingInfo
@@ -83,7 +84,7 @@ async function owned(masterKey: Uint8Array, stored: StoredLink): Promise<OwnedCa
   } catch {
     return null
   }
-  const { hostToken } = wasm.callLinkHostToken(toBase64(masterKey), stored.nonce)
+  const { hostToken } = wasm.callLinkHostToken(callLinkRoot, stored.nonce)
   const account = getSession()?.userId
   if (account) rememberHostToken(account, stored.roomId, hostToken)
   return {
@@ -104,7 +105,7 @@ function forgetOwnHostToken(roomId: string): void {
 }
 
 export async function createCallLink(
-  masterKey: Uint8Array,
+  callLinkRoot: CallLinkRoot,
   info: MeetingInfo,
   waitingRoom = false,
   /** The room id of one of this account's links that the new one replaces, at once. */
@@ -112,26 +113,26 @@ export async function createCallLink(
 ): Promise<OwnedCallLink> {
   const wasm = await loadChatWasm()
   const nonce = wasm.callLinkNonce()
-  const secret = await ownerSecret(masterKey, nonce)
+  const secret = await ownerSecret(callLinkRoot, nonce)
   const keys = wasm.callLinkKeys(secret)
   const { data } = await api.post<StoredLink>('/chat/call-links', {
     roomId: keys.roomId,
     nonce,
     accessTokenHash: keys.accessTokenHash,
     info: wasm.callLinkSealInfo(secret, info),
-    hostTokenHash: wasm.callLinkHostToken(toBase64(masterKey), nonce).hostTokenHash,
+    hostTokenHash: wasm.callLinkHostToken(callLinkRoot, nonce).hostTokenHash,
     waitingRoom,
     ...(replaces ? { replaces } : {}),
   })
-  const link = await owned(masterKey, data)
+  const link = await owned(callLinkRoot, data)
   if (!link) throw new Error('the server returned another meeting')
   return link
 }
 
 /** The account's meetings, newest first, as any of its devices derives them. */
-export async function listCallLinks(masterKey: Uint8Array): Promise<OwnedCallLink[]> {
+export async function listCallLinks(callLinkRoot: CallLinkRoot): Promise<OwnedCallLink[]> {
   const { data } = await api.get<{ links: StoredLink[] }>('/chat/call-links')
-  const links = await Promise.all(data.links.map((stored) => owned(masterKey, stored)))
+  const links = await Promise.all(data.links.map((stored) => owned(callLinkRoot, stored)))
   return links.filter((link): link is OwnedCallLink => link !== null)
 }
 
@@ -146,9 +147,9 @@ export async function updateCallLinkInfo(link: OwnedCallLink, info: MeetingInfo)
 }
 
 /** Turn one of the account's meetings' waiting room on or off. */
-export async function setWaitingRoom(masterKey: Uint8Array, link: OwnedCallLink, enabled: boolean): Promise<OwnedCallLink> {
+export async function setWaitingRoom(callLinkRoot: CallLinkRoot, link: OwnedCallLink, enabled: boolean): Promise<OwnedCallLink> {
   const wasm = await loadChatWasm()
-  const { hostTokenHash } = wasm.callLinkHostToken(toBase64(masterKey), link.nonce)
+  const { hostTokenHash } = wasm.callLinkHostToken(callLinkRoot, link.nonce)
   await api.put(`/chat/call-links/${link.roomId}/waiting-room`, { enabled, hostTokenHash })
   return { ...link, waitingRoom: enabled }
 }
@@ -158,10 +159,10 @@ export async function setWaitingRoom(masterKey: Uint8Array, link: OwnedCallLink,
  * new secret. The old link stops working and whoever is in the meeting is
  * disconnected, so only the people the new link is sent to come back.
  */
-export async function replaceCallLink(masterKey: Uint8Array, link: OwnedCallLink): Promise<OwnedCallLink> {
+export async function replaceCallLink(callLinkRoot: CallLinkRoot, link: OwnedCallLink): Promise<OwnedCallLink> {
   // One request: the server deletes the old link in the transaction that
   // stores the new one, so the two never both work.
-  const next = await createCallLink(masterKey, link.info, link.waitingRoom, link.roomId)
+  const next = await createCallLink(callLinkRoot, link.info, link.waitingRoom, link.roomId)
   forgetOwnHostToken(link.roomId)
   return next
 }

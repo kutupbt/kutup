@@ -248,7 +248,10 @@ fn a_manifest_without_a_chat_identity_lists_no_chat_device() {
 /// successor that adds a device.
 #[test]
 fn an_accounts_first_manifest_and_its_successor() {
-    let keys = kutup_crypto::identity::AccountIdentityKeysV1::derive(&[5; 32]).unwrap();
+    let keys = kutup_crypto::identity::AccountIdentityKeysV1::derive(
+        &kutup_crypto::account_roots::IdentityRoot::from_bytes([5; 32]),
+    )
+    .unwrap();
     let account = AccountRef::new("example.test", "0b6b5e0c-4c1e-4b8e-9c2d-6a1f3e5d7c9b").unwrap();
     let mut first =
         AccountManifestV3::first(account, &keys, vec![editor(2)], "2026-10-26T00:00:00Z");
@@ -262,7 +265,10 @@ fn an_accounts_first_manifest_and_its_successor() {
     next.sign(keys.authority_signing_key()).unwrap();
     next.verify_successor(Some(&first)).unwrap();
     // Another account's authority can't sign it.
-    let other = kutup_crypto::identity::AccountIdentityKeysV1::derive(&[6; 32]).unwrap();
+    let other = kutup_crypto::identity::AccountIdentityKeysV1::derive(
+        &kutup_crypto::account_roots::IdentityRoot::from_bytes([6; 32]),
+    )
+    .unwrap();
     assert!(next.clone().sign(other.authority_signing_key()).is_err());
 }
 
@@ -270,7 +276,10 @@ fn an_accounts_first_manifest_and_its_successor() {
 /// saw, never no head once it saw one, another incarnation's pin ignored.
 #[test]
 fn the_own_manifest_pin_refuses_rollback_and_a_new_chain() {
-    let keys = kutup_crypto::identity::AccountIdentityKeysV1::derive(&[5; 32]).unwrap();
+    let keys = kutup_crypto::identity::AccountIdentityKeysV1::derive(
+        &kutup_crypto::account_roots::IdentityRoot::from_bytes([5; 32]),
+    )
+    .unwrap();
     let account = AccountRef::new("example.test", "0b6b5e0c-4c1e-4b8e-9c2d-6a1f3e5d7c9b").unwrap();
     let incarnation = keys.incarnation_id();
     let mut first = AccountManifestV3::first(
@@ -315,7 +324,10 @@ fn the_own_manifest_pin_refuses_rollback_and_a_new_chain() {
     assert!(AccountManifestPinV1::check(None, Some(&second), &other, &incarnation).is_err());
     // A reset account's new keys: the old incarnation's pin no longer
     // applies, and its own first manifest is taken.
-    let reset = kutup_crypto::identity::AccountIdentityKeysV1::derive(&[6; 32]).unwrap();
+    let reset = kutup_crypto::identity::AccountIdentityKeysV1::derive(
+        &kutup_crypto::account_roots::IdentityRoot::from_bytes([6; 32]),
+    )
+    .unwrap();
     let mut fresh = AccountManifestV3::first(
         account.clone(),
         &reset,

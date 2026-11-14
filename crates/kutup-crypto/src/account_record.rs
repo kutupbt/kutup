@@ -29,7 +29,8 @@ pub use crate::padding::Length;
 const MAGIC: &[u8; 8] = b"KUTPAR1\0";
 const GENERATION_LEN: usize = 4;
 const FIXED_PREFIX_LEN: usize = MAGIC.len() + 2 + 2 + GENERATION_LEN + 2;
-const NONCE_LEN: usize = 24;
+/// An envelope's nonce length.
+pub const NONCE_LEN: usize = 24;
 const LENGTH_LEN: usize = 4;
 const REVISION_LEN: usize = 8;
 const TAG_LEN: usize = 16;
@@ -40,7 +41,6 @@ pub const MAX_OBJECT_LEN: usize = 64;
 const KEY_SALT: &[u8] = crate::labels::ACCOUNT_RECORD_V1;
 const KEY_INFO: &[u8] = crate::labels::ACCOUNT_RECORD_KEY_V1;
 const COMMIT_INFO: &[u8] = crate::labels::ACCOUNT_RECORD_COMMIT_V1;
-const OBJECT_ID_INFO: &[u8] = crate::labels::ACCOUNT_RECORD_OBJECT_ID_V1;
 /// The key commitment's length (see [`record_keys`]).
 const COMMITMENT_LEN: usize = 32;
 /// The previous record's digest in a chained purpose's header.
@@ -238,23 +238,40 @@ pub enum AccountRecordPurpose {
     /// [`hashed_object`] of the chain's scope and id, which is also the name
     /// the device stores it under.
     LocalChainPin = 21,
+    /// One generation of the account's identity root
+    /// (`account_roots`, docs/plans/identity-root.md): the authority and both
+    /// Drive identity keys derive from it. Its object is the identity
+    /// generation (u32 big-endian); every generation is kept.
+    IdentityRoot = 22,
+    /// One generation of the account's Drive root: its own collection keys
+    /// and link owner copies are sealed under it. Its object is the Drive
+    /// root generation (u32 big-endian); every generation is kept.
+    DriveRoot = 23,
+    /// The account's group pseudonym root: each group pseudonym derives from
+    /// it. One per account, never rotated.
+    GroupPseudonymRoot = 24,
+    /// The account's call-link root: call-link owner secrets and host tokens
+    /// derive from it. One per account, never rotated.
+    CallLinkRoot = 25,
+    /// The key of [`hashed_object`] ids. One per account, never rotated, so
+    /// record ids survive a master-key rotation.
+    ObjectIdKey = 26,
 }
 
 /// The object of a record whose id the server must not see (a group id, the
 /// account a contact entry is about): `HMAC(K_id, purpose ‖ id)`, where
-/// `K_id = KDF(master key, salt kutup/account-record/v1, info
-/// kutup/account-record/object-id/v1)`. Stable while the master key is, so
-/// the server keeps one row per record; a master-key rotation moves every
-/// such record to its new id (docs/plans/w6-key-hierarchy.md, "Rotation
-/// checklist").
-pub fn hashed_object(master_key: &[u8; 32], purpose: AccountRecordPurpose, id: &[u8]) -> [u8; 32] {
-    let mut id_key = Zeroizing::new([0u8; 32]);
-    Kdf::new(Suite::V1, KEY_SALT, master_key)
-        .expand(OBJECT_ID_INFO, id_key.as_mut_slice())
-        .expect("a 32-byte HKDF output is valid");
+/// `K_id` is the account's stored object-id key
+/// ([`AccountRecordPurpose::ObjectIdKey`], docs/plans/identity-root.md). It
+/// is random and never rotated, so a record keeps its id across a
+/// master-key rotation.
+pub fn hashed_object(
+    object_id_key: &crate::account_roots::ObjectIdKey,
+    purpose: AccountRecordPurpose,
+    id: &[u8],
+) -> [u8; 32] {
     crate::primitives::mac(
         Suite::V1,
-        id_key.as_ref(),
+        object_id_key.as_bytes(),
         &[&purpose.as_u16().to_be_bytes(), id],
     )
     .to_array()
@@ -311,7 +328,17 @@ impl AccountRecordPurpose {
             chained: false,
         };
         match self {
-            Self::PasswordMasterKey | Self::RecoveryMasterKey | Self::ChatBackupRoot => KEY,
+            Self::PasswordMasterKey
+            | Self::RecoveryMasterKey
+            | Self::ChatBackupRoot
+            | Self::GroupPseudonymRoot
+            | Self::CallLinkRoot
+            | Self::ObjectIdKey => KEY,
+            // One record per generation: the generation is the object.
+            Self::IdentityRoot | Self::DriveRoot => PurposePolicy {
+                object: ObjectPolicy::Required(4),
+                ..KEY
+            },
             // The address and the key's algorithm decide its length.
             Self::MailAddressPrivateKey => PurposePolicy {
                 object: ObjectPolicy::None,
@@ -446,7 +473,7 @@ impl AccountRecordPurpose {
     }
 
     /// Every purpose, for tests and vectors.
-    pub const ALL: [Self; 20] = [
+    pub const ALL: [Self; 25] = [
         Self::PasswordMasterKey,
         Self::RecoveryMasterKey,
         Self::ChatBackupRoot,
@@ -467,6 +494,11 @@ impl AccountRecordPurpose {
         Self::RevisionSeen,
         Self::MailSearchStoreKey,
         Self::LocalChainPin,
+        Self::IdentityRoot,
+        Self::DriveRoot,
+        Self::GroupPseudonymRoot,
+        Self::CallLinkRoot,
+        Self::ObjectIdKey,
     ];
 }
 
@@ -495,6 +527,11 @@ impl TryFrom<u16> for AccountRecordPurpose {
             19 => Ok(Self::RevisionSeen),
             20 => Ok(Self::MailSearchStoreKey),
             21 => Ok(Self::LocalChainPin),
+            22 => Ok(Self::IdentityRoot),
+            23 => Ok(Self::DriveRoot),
+            24 => Ok(Self::GroupPseudonymRoot),
+            25 => Ok(Self::CallLinkRoot),
+            26 => Ok(Self::ObjectIdKey),
             _ => Err(CryptoError::InvalidInput(format!(
                 "unknown account-record purpose {value}"
             ))),

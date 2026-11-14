@@ -94,7 +94,7 @@ fn versions_v2_contract() {
     let token = token_of(&c, &base, &owner);
     let user_id = me(&c, &base, &token)["id"].as_str().unwrap().to_string();
     let identity =
-        kutup_crypto::identity::AccountIdentityKeysV1::derive(&owner.master_key).unwrap();
+        kutup_crypto::identity::AccountIdentityKeysV1::derive(&owner.roots.identity).unwrap();
 
     // An owned folder, as createOwnedCollectionV1 makes it.
     let collection_id = uuid();
@@ -415,7 +415,7 @@ fn owned_file(c: &Client, base: &str, owner: &User) -> (String, String, [u8; 32]
     let token = token_of(c, base, owner);
     let user_id = me(c, base, &token)["id"].as_str().unwrap().to_string();
     let identity =
-        kutup_crypto::identity::AccountIdentityKeysV1::derive(&owner.master_key).unwrap();
+        kutup_crypto::identity::AccountIdentityKeysV1::derive(&owner.roots.identity).unwrap();
     let collection_id = uuid();
     let collection_key = [0x52u8; 32];
     let ctx = |purpose, object: &str, parent: &str| {

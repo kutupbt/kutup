@@ -70,8 +70,9 @@ import { resetRevisionGuardsForTesting } from '@kutup/crypto/revisionGuard'
 import { NotInVerifiedIndexError } from '@kutup/session/accountHead'
 import { ContactChangedError, createContact, deleteContacts, loadContacts, putContact } from './api'
 import { emptyDraft } from './model'
+import { testRoots } from '@kutup/crypto/accountRoots.testing'
 
-const session = { userId: 'u1', masterKey: new Uint8Array(32), envelopeBinding: 'b' } as unknown as Session
+const session = { userId: 'u1', masterKey: new Uint8Array(32), roots: testRoots(0), envelopeBinding: 'b' } as unknown as Session
 const draft = (name: string) => ({ ...emptyDraft(), name })
 const conflict = (code: string) => Object.assign(new Error('409'), { isAxiosError: true, response: { status: 409, data: { code } } })
 

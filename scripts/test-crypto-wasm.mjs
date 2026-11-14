@@ -69,28 +69,55 @@ for (const binding of ['alice@example.com', '0B9F4C0E-6A51-4D2F-9A33-5E1F6C7D8E9
 // hash, revisions account records bound to their entry and the account's key
 // binding.
 const guardBinding = '0b6b5e0c-4c1e-4b8e-9c2d-6a1f3e5d7c9b'
-const guardKeys = new crypto.RevisionGuardKeys(Buffer.alloc(32, 0x31).toString('base64'), guardBinding)
+const guardKeys = new crypto.RevisionGuardKeys(Buffer.alloc(32, 0x31).toString('base64'), Buffer.alloc(32, 0x31).toString('base64'), guardBinding)
 const guardEntry = guardKeys.entryId('contact', 'ayse@example.com')
 assert.match(guardEntry, /^[0-9a-f]{64}$/)
 const guardSealed = guardKeys.sealSeen(guardEntry, 1791633600000)
 assert.equal(guardKeys.openSeen(guardEntry, guardSealed), 1791633600000)
 assert.throws(() => guardKeys.openSeen(guardKeys.entryId('contact', 'bob@example.com'), guardKeys.sealSeen(guardEntry, 5)))
-assert.notEqual(new crypto.RevisionGuardKeys(Buffer.alloc(32, 0x32).toString('base64'), guardBinding).entryId('contact', 'ayse@example.com'), guardEntry)
+assert.notEqual(new crypto.RevisionGuardKeys(Buffer.alloc(32, 0x32).toString('base64'), Buffer.alloc(32, 0x32).toString('base64'), guardBinding).entryId('contact', 'ayse@example.com'), guardEntry)
 // Another account's key binding under the same master key opens nothing.
-const reboundGuard = new crypto.RevisionGuardKeys(Buffer.alloc(32, 0x31).toString('base64'), '7d3f1a2b-9c4e-4f6a-8b1d-2e5c7a9f0b3d')
+const reboundGuard = new crypto.RevisionGuardKeys(Buffer.alloc(32, 0x31).toString('base64'), Buffer.alloc(32, 0x31).toString('base64'), '7d3f1a2b-9c4e-4f6a-8b1d-2e5c7a9f0b3d')
 assert.throws(() => reboundGuard.openSeen(guardEntry, guardSealed))
-assert.throws(() => new crypto.RevisionGuardKeys(Buffer.alloc(32, 0x31).toString('base64'), 'aci:x@example.com'))
+assert.throws(() => new crypto.RevisionGuardKeys(Buffer.alloc(32, 0x31).toString('base64'), Buffer.alloc(32, 0x31).toString('base64'), 'aci:x@example.com'))
+
+// The object-id key names the entries, not the master key (docs/plans/identity-root.md).
+assert.notEqual(
+  new crypto.RevisionGuardKeys(Buffer.alloc(32, 0x31).toString('base64'), Buffer.alloc(32, 0x33).toString('base64'), guardBinding).entryId('contact', 'ayse@example.com'),
+  guardEntry,
+)
+assert.equal(
+  new crypto.RevisionGuardKeys(Buffer.alloc(32, 0x34).toString('base64'), Buffer.alloc(32, 0x31).toString('base64'), guardBinding).entryId('contact', 'ayse@example.com'),
+  guardEntry,
+)
+
+// The account's stored roots (Rust account_roots): made, sealed, opened, and
+// refused when the newest identity root is not the registered authority's.
+{
+  const rootsMaster = Buffer.alloc(32, 0x41).toString('base64')
+  const made = crypto.generateAccountRoots(rootsMaster, 1, guardBinding)
+  assert.equal(made.envelopes.length, 5)
+  const authority = crypto.deriveAccountIdentityKeys(made.roots.identityRoot).authorityPublicKey
+  const opened = crypto.openAccountRoots(rootsMaster, guardBinding, [...made.envelopes].reverse(), authority)
+  assert.deepEqual({ ...opened }, { ...made.roots })
+  const resealed = crypto.sealAccountRoots(rootsMaster, 1, '7d3f1a2b-9c4e-4f6a-8b1d-2e5c7a9f0b3d', made.roots)
+  assert.deepEqual({ ...crypto.openAccountRoots(rootsMaster, '7d3f1a2b-9c4e-4f6a-8b1d-2e5c7a9f0b3d', resealed, authority) }, { ...made.roots })
+  const other = crypto.deriveAccountIdentityKeys(Buffer.alloc(32, 0x42).toString('base64')).authorityPublicKey
+  assert.throws(() => crypto.openAccountRoots(rootsMaster, guardBinding, made.envelopes, other), /identityRootMismatch/)
+  assert.throws(() => crypto.openAccountRoots(rootsMaster, guardBinding, made.envelopes.slice(1), authority))
+  assert.throws(() => crypto.openAccountRoots(Buffer.alloc(32, 0x43).toString('base64'), guardBinding, made.envelopes, authority))
+}
 
 // A device's local chain pins (Rust local_chain_pin): named by a keyed hash,
 // each an account record bound to its entry and the account's key binding.
-const chainPins = new crypto.LocalChainPins(Buffer.alloc(32, 0x31).toString('base64'), guardBinding)
+const chainPins = new crypto.LocalChainPins(Buffer.alloc(32, 0x31).toString('base64'), Buffer.alloc(32, 0x31).toString('base64'), guardBinding)
 const pinEntry = chainPins.entryId('photos-library', 'aa'.repeat(32))
 assert.match(pinEntry, /^[0-9a-f]{64}$/)
 assert.notEqual(pinEntry, guardKeys.entryId('photos-library', 'aa'.repeat(32)))
 const pinSealed = chainPins.sealPin(pinEntry, '18446744073709551615', 'ab'.repeat(32))
 assert.deepEqual({ ...chainPins.openPin(pinEntry, pinSealed) }, { revision: '18446744073709551615', digestHex: 'ab'.repeat(32) })
 assert.throws(() => chainPins.openPin(chainPins.entryId('photos-library', 'bb'.repeat(32)), pinSealed))
-assert.throws(() => new crypto.LocalChainPins(Buffer.alloc(32, 0x31).toString('base64'), '7d3f1a2b-9c4e-4f6a-8b1d-2e5c7a9f0b3d').openPin(pinEntry, pinSealed))
+assert.throws(() => new crypto.LocalChainPins(Buffer.alloc(32, 0x31).toString('base64'), Buffer.alloc(32, 0x31).toString('base64'), '7d3f1a2b-9c4e-4f6a-8b1d-2e5c7a9f0b3d').openPin(pinEntry, pinSealed))
 assert.throws(() => guardKeys.openSeen(pinEntry, pinSealed))
 assert.throws(() => chainPins.sealPin(pinEntry, '01', 'ab'.repeat(32)))
 assert.throws(() => chainPins.sealPin(pinEntry, '1', 'AB'.repeat(32)))

@@ -1081,7 +1081,8 @@ mod tests {
     }
 
     fn identity(seed: u8) -> AccountIdentityKeysV1 {
-        AccountIdentityKeysV1::derive(&[seed; 32]).unwrap()
+        AccountIdentityKeysV1::derive(&crate::account_roots::IdentityRoot::from_bytes([seed; 32]))
+            .unwrap()
     }
 
     fn authority(seed: u8) -> String {

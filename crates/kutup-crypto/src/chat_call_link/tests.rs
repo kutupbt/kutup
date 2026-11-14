@@ -24,6 +24,12 @@ fn joined_nonce_of(sealed: &str) -> [u8; NONCE_BYTES] {
     bytes[end - NONCE_BYTES..end].try_into().unwrap()
 }
 
+/// The owner's call-link root the vectors name `masterKey` (they predate
+/// the stored roots; the derivation is the same).
+fn call_link_root(base64: &str) -> crate::account_roots::CallLinkRoot {
+    crate::account_roots::CallLinkRoot::from_slice(&STANDARD.decode(base64).unwrap()).unwrap()
+}
+
 /// The vectors chat-core's code made before the move
 /// (docs/plans/chat-crypto-move.md): this code derives every key alike, opens
 /// every sealed value, and reseals each byte for byte under its nonce.
@@ -32,9 +38,11 @@ fn the_moved_code_reproduces_the_vectors() {
     let v = vectors();
     let text = |key: &str| v[key].as_str().unwrap().to_owned();
     let sealed = |key: &str| v[key]["sealed"].as_str().unwrap().to_owned();
-    let secret = owner_call_link_secret(&text("masterKey"), &text("nonce")).unwrap();
+    let secret =
+        owner_call_link_secret(&call_link_root(&text("masterKey")), &text("nonce")).unwrap();
     assert_eq!(secret.as_str(), text("ownerSecret"));
-    let host = owner_call_link_host_token(&text("masterKey"), &text("nonce")).unwrap();
+    let host =
+        owner_call_link_host_token(&call_link_root(&text("masterKey")), &text("nonce")).unwrap();
     assert_eq!(host.as_str(), text("hostToken"));
     assert_eq!(call_link_token_hash(&host).unwrap(), text("hostTokenHash"));
     let keys = CallLinkKeys::derive(&secret).unwrap();
@@ -125,8 +133,12 @@ fn a_value_opens_only_for_its_purpose_link_and_account() {
     validate_joined_meeting(&raw, binding, id).unwrap();
     assert!(validate_joined_meeting(&raw, binding, &"ab".repeat(16)).is_err());
     assert!(validate_joined_meeting(&raw[1..], binding, id).is_err());
-    assert!(owner_call_link_secret(&text("masterKey"), "0123").is_err());
-    assert!(owner_call_link_secret(&text("masterKey"), &text("nonce").to_uppercase()).is_err());
+    assert!(owner_call_link_secret(&call_link_root(&text("masterKey")), "0123").is_err());
+    assert!(owner_call_link_secret(
+        &call_link_root(&text("masterKey")),
+        &text("nonce").to_uppercase()
+    )
+    .is_err());
     assert!(parse_call_link_fragment("AA").is_err());
     assert_eq!(new_call_link_nonce().len(), 32);
 }

@@ -697,6 +697,22 @@ fn test_master_key(email: &str) -> [u8; 32] {
     hasher.finish().into()
 }
 
+/// The stored roots of the account seeded by `email`
+/// (docs/plans/identity-root.md), the same each time, each from its own seed.
+fn test_roots(email: &str) -> kutup_crypto::account_roots::AccountRoots {
+    use kutup_crypto::account_roots as r;
+    let seed = |kind: &str| test_master_key(&format!("{kind}:{email}"));
+    r::AccountRoots {
+        identity_generation: r::RootGeneration::FIRST,
+        identity: r::IdentityRoot::from_bytes(seed("identity-root")),
+        drive_generation: r::RootGeneration::FIRST,
+        drive: r::DriveRoot::from_bytes(seed("drive-root")),
+        pseudonym: r::GroupPseudonymRoot::from_bytes(seed("pseudonym-root")),
+        call_link: r::CallLinkRoot::from_bytes(seed("call-link-root")),
+        object_id: r::ObjectIdKey::from_bytes(seed("object-id-key")),
+    }
+}
+
 /// The key binding the account seeded by `email` registers with, the same
 /// each time (docs/plans/account-identity.md): a UUID v4 from a hash.
 fn test_binding(email: &str) -> String {
@@ -766,7 +782,8 @@ fn registration_payload(
     let person = AccountRef::new(&server_name(c, base), &account_id).unwrap();
     let recovery_proof =
         kutup_crypto::kdf::derive_recovery_auth_proof(&recovery_entropy, &binding).unwrap();
-    let identity = kutup_crypto::identity::AccountIdentityKeysV1::derive(&master_key).unwrap();
+    let roots = test_roots(email);
+    let identity = kutup_crypto::identity::AccountIdentityKeysV1::derive(&roots.identity).unwrap();
     use kutup_crypto::account_record::{self, AccountRecordPurpose};
     let master_key_envelope = export_key
         .seal_master_key(
@@ -791,6 +808,7 @@ fn registration_payload(
         "opaqueServerKeyId": opaque_server_key_id,
         "masterKeyEnvelope": master_key_envelope,
         "recoveryKeyEnvelope": recovery_key_envelope,
+        "accountRoots": common::sealed_roots(&roots, &master_key, &binding),
         "publicKey": b64(&identity.drive_hpke_public_key()),
         "accountAuthorityPublicKey": b64(&identity.authority_public_key()),
         "accountAuthorityKeyId": identity.authority_key_id(),
@@ -968,7 +986,7 @@ fn test_credential(email: &str, device: u32) -> [u8; 32] {
 /// The Chat side of the account seeded by `email`, signed in with `token`,
 /// before its first device.
 fn chat_account(c: &Client, base: &str, token: &str, email: &str) -> ChatAccount {
-    let keys = AccountIdentityKeysV1::derive(&test_master_key(email)).unwrap();
+    let keys = AccountIdentityKeysV1::derive(&test_roots(email).identity).unwrap();
     ChatAccount::from_keys(account_of(c, base, token), token, &keys)
 }
 
@@ -1284,9 +1302,8 @@ fn drive_round_trip(
     admins: (&str, &str),
 ) {
     let alice_master = test_master_key(ALICE_EMAIL);
-    let bob_master = test_master_key(BOB_EMAIL);
-    let alice_identity = AccountIdentityKeysV1::derive(&alice_master).unwrap();
-    let bob_identity = AccountIdentityKeysV1::derive(&bob_master).unwrap();
+    let alice_identity = AccountIdentityKeysV1::derive(&test_roots(ALICE_EMAIL).identity).unwrap();
+    let bob_identity = AccountIdentityKeysV1::derive(&test_roots(BOB_EMAIL).identity).unwrap();
     let alice_me = json_response(
         c.get(format!("{a}/api/user/me"))
             .bearer_auth(alice_token)
@@ -3488,8 +3505,12 @@ fn renames_phase(c: &Client, a: &str, b: &str) {
         password: PASSWORD.into(),
         recovery_entropy: [0; 32],
         token: token_a.clone(),
-        identity: kutup_crypto::identity::AccountIdentityKeysV1::derive(&master_key).unwrap(),
+        identity: kutup_crypto::identity::AccountIdentityKeysV1::derive(
+            &test_roots(email).identity,
+        )
+        .unwrap(),
         master_key,
+        roots: test_roots(email),
         person: AccountRef::new(&domain_a, me["accountId"].as_str().unwrap()).unwrap(),
         account: format!("{old}@{domain_a}"),
     };
@@ -3568,8 +3589,12 @@ fn federated_user(
         password: PASSWORD.into(),
         recovery_entropy: [0; 32],
         token: token.to_owned(),
-        identity: kutup_crypto::identity::AccountIdentityKeysV1::derive(&master_key).unwrap(),
+        identity: kutup_crypto::identity::AccountIdentityKeysV1::derive(
+            &test_roots(email).identity,
+        )
+        .unwrap(),
         master_key,
+        roots: test_roots(email),
         person: AccountRef::new(
             me["server"].as_str().unwrap(),
             me["accountId"].as_str().unwrap(),

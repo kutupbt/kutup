@@ -1940,8 +1940,14 @@ mod tests {
 
     #[test]
     fn key_lists_sign_verify_and_chain() {
-        let identity = AccountIdentityKeysV1::derive(&[3u8; 32]).unwrap();
-        let other = AccountIdentityKeysV1::derive(&[4u8; 32]).unwrap();
+        let identity = AccountIdentityKeysV1::derive(
+            &crate::account_roots::IdentityRoot::from_bytes([3u8; 32]),
+        )
+        .unwrap();
+        let other = AccountIdentityKeysV1::derive(&crate::account_roots::IdentityRoot::from_bytes(
+            [4u8; 32],
+        ))
+        .unwrap();
         let authority = identity.authority_public_key();
         let first = list(&identity, 1, None, vec![entry(1, true)])
             .sign(identity.authority_signing_key())
@@ -1983,7 +1989,10 @@ mod tests {
 
     #[test]
     fn key_lists_refuse_invalid_shapes() {
-        let identity = AccountIdentityKeysV1::derive(&[3u8; 32]).unwrap();
+        let identity = AccountIdentityKeysV1::derive(
+            &crate::account_roots::IdentityRoot::from_bytes([3u8; 32]),
+        )
+        .unwrap();
         let bad = [
             list(&identity, 1, None, vec![]),
             list(&identity, 1, None, vec![entry(1, false)]),

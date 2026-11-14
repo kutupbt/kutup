@@ -58,6 +58,7 @@ Specific codes, where an app does something particular (a test in
 | `setupTokenInvalid` | 401 | `complete-setup` (and `register/start` under it): the setup token is expired, not one, already used, or from a temporary password since replaced: sign in again |
 | `wrongPin`, `signedOut`, `noPin` | 403/404 | Kutup Pass's PIN: wrong (with `attemptsLeft`), the last try ended the sign-in, none set |
 | `accountLocked` | 429 | The sign-in lockout or ceiling (a while) |
+| `accountRootsInvalid` | 400 | `register`, `complete-setup`: `accountRoots` is not one record of each root, at generation 1, bound to the key binding (docs/plans/identity-root.md) |
 | `accountIdInvalid` | 400 | `register`: no account id given back, or one this server did not mint for the sign-up's key binding (start the sign-up again) |
 | `revisionTaken` | 409 | A Drive upload or version naming a `revisionId` the file, another file or an open upload already has (a revision names one content: choose a new one) |
 | `securityKeysOff` | 503 | This server can't offer security keys (its account app isn't on https) |
@@ -309,6 +310,7 @@ uses admits exactly N accounts however many sign up at once.
   "opaqueServerKeyId": 1,
   "masterKeyEnvelope": "<canonical base64 AccountRecordV1>",
   "recoveryKeyEnvelope": "<canonical base64 AccountRecordV1>",
+  "accountRoots": ["<canonical base64 AccountRecordV1>", "… five"],
   "publicKey": "<base64>",
   "accountAuthorityPublicKey": "<base64 32 bytes>",
   "accountAuthorityKeyId": "<lowercase SHA-256 hex>",
@@ -331,6 +333,14 @@ the raw recovery entropy that opens `recoveryKeyEnvelope` is never sent. Each
 envelope authenticates its suite, purpose, key binding, nonce and
 exact ciphertext length as AEAD associated data. The three purposes cannot be
 substituted for one another or relocated to another account.
+
+`accountRoots` are the account's stored roots (docs/plans/identity-root.md):
+one account record of each purpose 22–26 (the identity root and the Drive
+root at generation 1, the group pseudonym root, the call-link root, the
+object-id key), sealed under the master key for the key binding (`400
+accountRootsInvalid` otherwise). The account identity derives from the
+identity root, never from the master key, so a new master key leaves it
+unchanged. An administrator-made account sends them at `complete-setup`.
 
 The complete account identity is fixed at registration: the account authority,
 incarnation, Drive X25519 key, and Drive Ed25519 share-signing key are persisted
@@ -453,6 +463,8 @@ malformed finalization is a `400`.
   "userId": "<uuid>",
   "username": "alice",
   "masterKeyEnvelope": "<canonical base64 AccountRecordV1>",
+  "accountRoots": ["<canonical base64 AccountRecordV1>", "…"],
+  "accountAuthorityPublicKey": "<base64 32 bytes>",
   "publicKey": "<base64>",
   "keyBinding": "<the account's key binding (a UUID v4)>",
   "isAdmin": false,
@@ -462,7 +474,11 @@ malformed finalization is a `400`.
 ```
 
 The export key the client got from the exchange opens `masterKeyEnvelope`
-(`kutup_crypto::opaque::ExportKey::open_master_key`). For `web-account` the refresh token is an HttpOnly, host-only cookie named `refresh_token` (`Path=/api/auth/refresh`, `SameSite=Lax`, 30-day sliding `Max-Age`, `Secure` outside development) and is **not** in the JSON body. For `cli` it is returned as `"refreshToken"` in the body and no cookie is set.
+(`kutup_crypto::opaque::ExportKey::open_master_key`), and the master key the
+`accountRoots` (every kept generation): the newest identity root must derive
+`accountAuthorityPublicKey`, or the client refuses the keys
+(`identityRootMismatch`) and uses no older root. Only a session answer
+carries them; nothing before the password is proved does. For `web-account` the refresh token is an HttpOnly, host-only cookie named `refresh_token` (`Path=/api/auth/refresh`, `SameSite=Lax`, 30-day sliding `Max-Age`, `Secure` outside development) and is **not** in the JSON body. For `cli` it is returned as `"refreshToken"` in the body and no cookie is set.
 
 When the account's record is under a setup that is no longer the server's
 current one (`OPAQUE_SETUP_KEYS` rotated), the session also carries
@@ -1314,6 +1330,15 @@ Starts the chain: `{ "head": "<base64, sequence 1>", "basis": "<from an
 index>" }` → `201`. `409 head_conflict` when the account has a head already or
 the basis moved (read the index again and remake the head). **Auth:** Bearer
 JWT.
+
+### GET /api/account/roots
+
+The caller's own root records (docs/plans/identity-root.md), every kept
+generation, and the authority the newest identity root must derive:
+`{ "accountRoots": ["<base64 AccountRecordV1>", …],
+"accountAuthorityPublicKey": "<base64>" }`. For a client that holds the
+master key but not the roots. **Auth:** Bearer JWT; only the session's own
+account's.
 
 ### GET /api/account/heads?from=n
 

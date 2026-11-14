@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { testRoots } from '@kutup/crypto/accountRoots.testing'
 
 // The crypto is not what is tested here: who gets the new key, and who is
 // removed, is.
@@ -23,7 +24,7 @@ const { MembersPendingUpgrade } = await import('./identityPins')
 type FolderAccess = import('./access').FolderAccess
 
 const folder = { id: 'folder', name: 'Shared', key: new Uint8Array(32), keyEpoch: 3, nameRevision: 1, canManage: true, epochStatementHash: 'h3' }
-const me = { userId: 'me', masterKey: new Uint8Array(32), accountRef: { server: 'kutup.dev', accountId: 'me' }, incarnationId: 'inc-me' }
+const me = { userId: 'me', masterKey: new Uint8Array(32), roots: testRoots(0), accountRef: { server: 'kutup.dev', accountId: 'me' }, incarnationId: 'inc-me' }
 
 function member(userId: string, identitySuite: number) {
   return {

@@ -54,9 +54,10 @@ vi.mock('../vault/client', () => ({
 
 import { NotInVerifiedIndexError } from '@kutup/session/accountHead'
 import { forgetVaultKey, keepCopiedKey, keepVaultKey, keptGeneratedPassword, keptKey, keptKeyKind, loadVaultSecrets, putKeptKey } from './secrets'
+import { testRoots } from '@kutup/crypto/accountRoots.testing'
 
 const BINDING = '5f0c2f6e-1d2b-4c3a-8e9f-0a1b2c3d4e5f'
-const session = { userId: 'u1', masterKey: new Uint8Array(32), envelopeBinding: BINDING } as unknown as Session
+const session = { userId: 'u1', masterKey: new Uint8Array(32), roots: testRoots(0), envelopeBinding: BINDING } as unknown as Session
 const row = (kind: string, binding: string, revision = T) => ({ fileId: 'v', envelope: `${kind}:${binding}:v:${revision}`, state: 'open' as const, revision, updatedAt: '' })
 const conflict = (revision: number) => Object.assign(new Error('409'), { isAxiosError: true, response: { status: 409, data: { code: 'revision_conflict', revision } } })
 

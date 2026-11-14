@@ -927,7 +927,10 @@ mod tests {
     const PEER: &str = "peer.test";
 
     fn identity(seed: u8) -> AccountIdentityKeysV1 {
-        AccountIdentityKeysV1::derive(&[seed; 32]).unwrap()
+        AccountIdentityKeysV1::derive(&kutup_crypto::account_roots::IdentityRoot::from_bytes(
+            [seed; 32],
+        ))
+        .unwrap()
     }
 
     /// `who`'s chain through `addresses` (local parts on PEER).

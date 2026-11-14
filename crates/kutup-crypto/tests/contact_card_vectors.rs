@@ -157,7 +157,10 @@ fn write_vectors() {
         return;
     }
     let master = [0x5au8; 32];
-    let identity = AccountIdentityKeysV1::derive(&master).unwrap();
+    let identity = AccountIdentityKeysV1::derive(
+        &kutup_crypto::account_roots::IdentityRoot::from_bytes(master),
+    )
+    .unwrap();
     let (bytes, signature) = sign_summary(
         &summary(),
         BINDING,
@@ -204,7 +207,10 @@ fn write_vectors() {
 fn checked_in_vectors_hold() {
     let v: Vectors = serde_json::from_str(&std::fs::read_to_string(PATH).unwrap()).unwrap();
     let master: [u8; 32] = STANDARD.decode(&v.master_key).unwrap().try_into().unwrap();
-    let identity = AccountIdentityKeysV1::derive(&master).unwrap();
+    let identity = AccountIdentityKeysV1::derive(
+        &kutup_crypto::account_roots::IdentityRoot::from_bytes(master),
+    )
+    .unwrap();
     let (bytes, signature) = sign_summary(
         &summary(),
         &v.binding,
