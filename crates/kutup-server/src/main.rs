@@ -12,6 +12,7 @@ mod account_ids;
 mod account_names;
 mod albums;
 mod auth_check;
+mod blob_purge;
 mod calendar_alarms;
 mod calendar_reminders;
 mod calls;
@@ -41,6 +42,7 @@ mod file_content;
 mod grants;
 mod handlers;
 mod hub;
+mod job_health;
 mod jobs;
 mod jwt;
 mod live_locations;
@@ -54,6 +56,7 @@ mod organizations;
 mod photos;
 mod public_fetch;
 mod ratelimit;
+mod readiness;
 mod registration;
 mod remote_manifests;
 mod remote_renames;
@@ -313,13 +316,16 @@ async fn main() -> anyhow::Result<()> {
         &config.s3_bucket,
         &config.s3_region,
         config.s3_timeouts,
-    );
+    )
+    // Deletes wait out storage_deleted_blob_retention_seconds before they
+    // reach the store (blob_purge.rs), the orphan sweep's included.
+    .with_deferred_deletes(pool.clone());
 
     // Subcommand dispatch — admin tooling that reuses the DB pool + storage without starting
     // the HTTP server. Mirrors the `os.Args[1]` switch in main.go (orphan-sweep). Runs to
     // completion and exits.
     if args.len() > 1 && args[1] == "storage-check" {
-        std::process::exit(storage_check::run(&storage).await);
+        std::process::exit(storage_check::run(&storage.immediate()).await);
     }
     if args.len() > 1 && args[1] == "orphan-sweep" {
         let code = run_orphan_sweep_cmd(&pool, &storage, &args[2..]).await;
@@ -370,6 +376,8 @@ async fn main() -> anyhow::Result<()> {
         },
         chat_hub.clone(),
     );
+    // Deleted blobs past their wait leave the store.
+    blob_purge::spawn(pool.clone(), storage.immediate());
 
     // Live SeaweedFS capacity probe (admin dashboard) — None when SEAWEEDFS_MASTER_URL is empty.
     let storage_probe =
@@ -676,6 +684,7 @@ fn build_router(state: AppState) -> Router {
         // docs/roadmap.md) — the machine-readable spec lives here meanwhile.
         .route("/api-docs/openapi.json", get(openapi_json))
         .route("/api/health", get(health))
+        .route("/api/health/ready", get(readiness::ready))
         .route(
             "/.well-known/kutup/federation.json",
             get(crate::federation::public_discovery)

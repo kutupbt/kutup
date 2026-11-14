@@ -61,6 +61,13 @@ compose up --detach --build --wait \
 curl --fail --silent --show-error --retry 30 --retry-delay 1 \
   --retry-connrefused --retry-all-errors \
   "http://127.0.0.1:$port/api/health" >/dev/null
+# Deleted blobs normally wait two days before they leave the store
+# (docs/self-hosting.md, "Backups"); the purge checks below need them gone
+# within seconds.
+compose exec -T postgres psql --username "$POSTGRES_USER" --dbname "$POSTGRES_DB" \
+  --quiet -v ON_ERROR_STOP=1 --command "INSERT INTO site_settings (key, value) VALUES
+    ('storage_deleted_blob_retention_seconds', '0'), ('storage_deleted_blob_sweep_seconds', '1')
+    ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value" >/dev/null
 
 KUTUP_LIVE_SERVER="http://127.0.0.1:$port" \
   KUTUP_LIVE_ADMIN="$test_admin_username:$test_admin_password" \
@@ -278,14 +285,20 @@ if [[ "$backup_facts" != "0|0" ]]; then
   exit 1
 fi
 
-backup_objects="$(compose exec -T seaweedfs-filer wget \
-  --header=Accept:application/json --quiet --output-document=- \
-  "http://seaweedfs-filer:8888/buckets/${S3_BUCKET:-kutup-files}/chat-backup/?pretty=y" \
-  2>/dev/null || true)"
-if [[ "$backup_objects" =~ \"FileSize\":[[:space:]]+[1-9][0-9]* ]]; then
-  echo "account purge left Chat backup object bytes" >&2
-  exit 1
-fi
+# The purged objects leave the store on the deleted-blob purge's next pass.
+deadline=$((SECONDS + 60))
+while :; do
+  backup_objects="$(compose exec -T seaweedfs-filer wget \
+    --header=Accept:application/json --quiet --output-document=- \
+    "http://seaweedfs-filer:8888/buckets/${S3_BUCKET:-kutup-files}/chat-backup/?pretty=y" \
+    2>/dev/null || true)"
+  [[ "$backup_objects" =~ \"FileSize\":[[:space:]]+[1-9][0-9]* ]] || break
+  if (( SECONDS >= deadline )); then
+    echo "account purge left Chat backup object bytes" >&2
+    exit 1
+  fi
+  sleep 1
+done
 
 # The kutup CLI end to end, as a person runs it: Drive (scripts/verify-cli.sh),
 # then Kutup Pass sync between two machines and its SSH agent. Each makes its

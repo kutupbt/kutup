@@ -947,6 +947,20 @@
         "federationAnnouncePeerDaysHint": "Ad değişiklikleri, bu sunucunun bu süre içinde iletişim kurduğu sunuculara duyurulur.",
         "chatAttachmentSendLifetimeSeconds": "Ekin alıcı sunucuyu bekleme süresi (saniye)",
         "chatAttachmentSendLifetimeSecondsHint": "Bir sohbet ekinin, iletilmedi olarak gösterilmeden önce alıcının sunucusunun onu saklamasını ne kadar bekleyeceği."
+      },
+      "backups": "Yedekler ve sağlık",
+      "backupsHint": "Silinen dosyaların, geri yüklenen bir yedek onları yine bulabilsin diye depolamada ne kadar kaldığı ve hazırlık denetiminin ne beklediği.",
+      "backupLimits": {
+        "storageDeletedBlobRetentionSeconds": "Silinen dosyaları depolamada tut (saniye)",
+        "storageDeletedBlobRetentionSecondsHint": "Silinen şifreli dosyalar depolamadan ancak bu süre sonra kalkar. Veritabanı yedekleri arasındaki süreden uzun tutun ki geri yüklenen bir yedek andığı her dosyayı bulsun.",
+        "storageDeletedBlobSweepSeconds": "Süresi dolan silinmiş dosyaları kaldırma sıklığı (saniye)",
+        "storageDeletedBlobSweepSecondsHint": "Bekleme süresini doldurmuş silinmiş dosyaların depolamadan ne sıklıkla kaldırıldığı.",
+        "healthBackupMaxAgeSeconds": "En yeni yedeğin en fazla yaşı (saniye)",
+        "healthBackupMaxAgeSecondsHint": "En yeni veritabanı ya da posta yedeği bundan eskiyse hazırlık denetimi başarısız olur. 0, yedekleri denetimin dışında bırakır.",
+        "healthJobGraceSeconds": "Arka plan işi payı (saniye)",
+        "healthJobGraceSecondsHint": "Bir arka plan işi, aralığının iki katı artı bu süre içinde başarıyla çalışmadıysa hazırlık denetimi başarısız olur.",
+        "healthProbeTimeoutSeconds": "Hazırlık yoklaması zaman aşımı (saniye)",
+        "healthProbeTimeoutSecondsHint": "Hazırlık denetiminin depolamanın ve posta sunucusunun yanıtını ne kadar beklediği."
       }
     },
     "federation": {
@@ -1633,7 +1647,11 @@
         "description": "Bu hesabın sınırları sitenin sınırlarının yerine geçer; boş bırakılan sitenin değerini korur. Alan adları ve tümünü yakala hesabın kuruluşuna, adresler hesabın kendisine aittir.",
         "organization": "Kuruluş: {{name}} ({{role}})",
         "noOrganization": "Henüz kuruluş yok: alan adı veya tümünü yakala sınırı burada ayarlanırsa bu hesaba tek kişilik bir kuruluş açılır.",
-        "roles": { "owner": "sahip", "admin": "yönetici", "member": "üye" },
+        "roles": {
+          "owner": "sahip",
+          "admin": "yönetici",
+          "member": "üye"
+        },
         "maxDomains": "Alan adı",
         "maxAddresses": "Adres",
         "catchAll": "Tümünü yakala",

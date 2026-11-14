@@ -947,6 +947,20 @@
         "federationAnnouncePeerDaysHint": "Renames are announced to the servers this one was in touch with this recently.",
         "chatAttachmentSendLifetimeSeconds": "Attachment wait for the recipient's server (seconds)",
         "chatAttachmentSendLifetimeSecondsHint": "How long a chat attachment waits for the recipient's server to store it before it shows as not delivered."
+      },
+      "backups": "Backups and health",
+      "backupsHint": "How long deleted files stay in storage so a restored backup still finds them, and what the readiness check expects.",
+      "backupLimits": {
+        "storageDeletedBlobRetentionSeconds": "Keep deleted files in storage (seconds)",
+        "storageDeletedBlobRetentionSecondsHint": "Deleted encrypted files leave storage only after this long. Keep it longer than the time between database backups, so a restored backup still finds every file it names.",
+        "storageDeletedBlobSweepSeconds": "Remove expired deleted files every (seconds)",
+        "storageDeletedBlobSweepSecondsHint": "How often deleted files past their wait are removed from storage.",
+        "healthBackupMaxAgeSeconds": "Newest backup at most (seconds old)",
+        "healthBackupMaxAgeSecondsHint": "The readiness check fails when the newest database or mail backup is older. 0 leaves backups out of the check.",
+        "healthJobGraceSeconds": "Background job grace (seconds)",
+        "healthJobGraceSecondsHint": "The readiness check fails when a background job hasn't succeeded within twice its interval plus this.",
+        "healthProbeTimeoutSeconds": "Readiness probe timeout (seconds)",
+        "healthProbeTimeoutSecondsHint": "How long the readiness check waits for storage and the mail server to answer."
       }
     },
     "federation": {
@@ -1633,7 +1647,11 @@
         "description": "This account's limits over the site's; empty keeps the site's. Domains and the catch-all are its organization's, addresses its own.",
         "organization": "Organization: {{name}} ({{role}})",
         "noOrganization": "No organization yet: setting the domains or the catch-all here gives this account its organization of one.",
-        "roles": { "owner": "owner", "admin": "admin", "member": "member" },
+        "roles": {
+          "owner": "owner",
+          "admin": "admin",
+          "member": "member"
+        },
         "maxDomains": "Domains",
         "maxAddresses": "Addresses",
         "catchAll": "Catch-all",

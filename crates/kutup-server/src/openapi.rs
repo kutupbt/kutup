@@ -22,6 +22,7 @@ All file content and metadata are encrypted client-side; the server stores only 
     paths(
         // --- health ---
         crate::health,
+        crate::readiness::ready,
         // --- auth + user ---
         crate::handlers::auth::get_public_settings,
         crate::handlers::auth::register,
@@ -711,6 +712,14 @@ All file content and metadata are encrypted client-side; the server stores only 
         crate::drive_federation_albums::FederatedAlbumItem,
         crate::drive_federation::FederatedDriveUploadResponse,
         models::HealthResponse,
+        crate::readiness::ReadinessResponse,
+        crate::readiness::ReadinessChecks,
+        crate::readiness::CheckStatus,
+        crate::readiness::ProbeCheck,
+        crate::readiness::JobsCheck,
+        crate::readiness::JobCheck,
+        crate::readiness::BackupsCheck,
+        crate::readiness::BackupCheck,
         models::ErrorResponse,
         models::MessageResponse,
         models::SettingsResponse,
@@ -980,6 +989,7 @@ mod tests {
         // Spot-check key paths (one per route group).
         for path in [
             "/api/health",
+            "/api/health/ready",
             "/api/auth/login/start",
             "/api/auth/login/finish",
             "/api/auth/opaque/register/start",

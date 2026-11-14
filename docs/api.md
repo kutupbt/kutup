@@ -14,6 +14,66 @@ and 2 GiB at first; a tus chunk 64 MiB, a whiteboard asset one envelope, a
 federated Drive upload the upload limit plus 16 MiB, streamed to disk). A
 larger body gets `413`.
 
+## Health
+
+### GET /api/health
+
+Anonymous liveness and identity: `{ "name": "kutup", "version": "…",
+"tusVersions": ["1.0.0"] }`. It touches neither the database nor storage.
+
+### GET /api/health/ready
+
+Readiness: whether the server can do its work
+(docs/plans/restore-drill-and-alerting.md). Allowed with an administrator's
+session (`Authorization: Bearer …`), or without one from this machine or the
+internal network: the connecting address is loopback, private (RFC 1918),
+unique-local or link-local, and so is every client the proxy names in
+`X-Real-IP` and `X-Forwarded-For` (a `Forwarded` header counts as outside).
+Otherwise `401` (no session) or `403` (not an administrator).
+
+Each request runs every check:
+
+| Check | Passes when |
+|---|---|
+| `database` | `SELECT 1` answers |
+| `storage` | a small object under `kutup-health/` is written, read back unchanged and deleted |
+| `mail` | Stalwart's submission port (`MAIL_SUBMISSION_ADDR`) accepts a TCP connection; `off` when mail is off (`MAIL_INBOUND_TOKEN` unset) |
+| `jobs` | each background job this server runs succeeded within twice its interval plus `healthJobGraceSeconds`; one this server started more recently than that and hasn't succeeded yet is `starting` |
+| `backups` | the newest database backup (and mail backup, where mail is on) finished within `healthBackupMaxAgeSeconds`, as the backup scripts (`scripts/backup-postgres.sh`, `scripts/backup-stalwart.sh`) recorded it; `off` when that setting is 0 |
+
+The database, storage and mail probes each wait at most
+`healthProbeTimeoutSeconds`. Statuses: `ok`, `starting`, `off`, `fail`. The
+answer is `200` when no check is `fail`, else `503`, with the same body:
+
+```json
+{
+  "status": "ok",
+  "checkedAt": "2026-11-14T09:00:00Z",
+  "checks": {
+    "database": { "status": "ok", "millis": 2 },
+    "storage": { "status": "ok", "millis": 41 },
+    "mail": { "status": "off" },
+    "jobs": {
+      "status": "ok",
+      "jobs": [
+        { "name": "drive.trash_sweep", "status": "ok", "intervalSeconds": 3600, "lastSuccessAt": "2026-11-14T08:12:03Z" },
+        { "name": "storage.deleted_blob_purge", "status": "ok", "intervalSeconds": 300, "lastSuccessAt": "2026-11-14T08:58:40Z" }
+      ]
+    },
+    "backups": {
+      "status": "ok",
+      "maxAgeSeconds": 172800,
+      "database": { "status": "ok", "name": "kutup-20261114T023112Z.dump.age", "finishedAt": "2026-11-14T02:31:40Z", "ageSeconds": 23300 },
+      "mail": { "status": "off", "finishedAt": null }
+    }
+  }
+}
+```
+
+A failed probe adds `"error"` with the reason. The settings named here are
+whole-number site settings under Administration → Server settings
+(`/api/admin/settings`, section `backups`).
+
 ## Errors
 
 A failed request answers JSON `{"error": "<English text>", "code": "<code>"}`,
@@ -5345,9 +5405,23 @@ Return current global server settings.
   "driveStreamReadaheadBlocks": 1,
   "driveStreamMaxConcurrent": 3,
   "driveStreamResponseMaxBytes": 5242880,
-  "driveStreamBlobFallbackMaxBytes": 1073741824
+  "driveStreamBlobFallbackMaxBytes": 1073741824,
+  "storageDeletedBlobRetentionSeconds": 172800,
+  "storageDeletedBlobSweepSeconds": 300,
+  "healthBackupMaxAgeSeconds": 172800,
+  "healthJobGraceSeconds": 600,
+  "healthProbeTimeoutSeconds": 5
 }
 ```
+
+The backup and health settings (section `backups`;
+docs/plans/restore-drill-and-alerting.md): `storageDeletedBlobRetentionSeconds`
+(0–90 days, two days at first) is how long a deleted blob stays in the object
+store before it is purged, so a restored database dump still finds every blob
+it names; `storageDeletedBlobSweepSeconds` (1–86400) how often the purge runs;
+`healthBackupMaxAgeSeconds` (0–30 days, 0 off), `healthJobGraceSeconds`
+(0–86400) and `healthProbeTimeoutSeconds` (1–60) shape `GET
+/api/health/ready`.
 
 The Drive settings (docs/plans/drive-block-format.md §7; clients read them
 from `GET /api/drive/limits`): `driveUploadMaxBytes` and

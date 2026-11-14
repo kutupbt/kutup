@@ -268,9 +268,14 @@ pub fn spawn(state: AppState) {
                 .load(&state.pool)
                 .await
                 .unwrap_or(CALENDAR_ALARM_TICK_SECONDS.default);
+            crate::job_health::register(
+                "calendar.alarms",
+                std::time::Duration::from_secs(tick as u64),
+            );
             tokio::time::sleep(std::time::Duration::from_secs(tick as u64)).await;
             // Late ones first, moved on without sending, all of them (no
             // account's share applies: nothing is sent); then the due ones.
+            let mut ok = true;
             for late in [true, false] {
                 loop {
                     match fire_due(&state, &client, late).await {
@@ -278,10 +283,14 @@ pub fn spawn(state: AppState) {
                         Ok(false) => break,
                         Err(error) => {
                             tracing::warn!(error = %error, "calendar: firing reminders failed");
+                            ok = false;
                             break;
                         }
                     }
                 }
+            }
+            if ok {
+                crate::job_health::beat(&state.pool, "calendar.alarms").await;
             }
         }
     });

@@ -419,12 +419,14 @@ const TICK: std::time::Duration = std::time::Duration::from_secs(10 * 60);
 /// and forwardings whose forwarder or forwardee address no longer receives
 /// (closed after a rename hold, or freed) end with their proxy factors.
 pub fn spawn(state: AppState) {
+    crate::job_health::register("mail.forwarding", TICK);
     tokio::spawn(async move {
         let mut tick = tokio::time::interval(TICK);
         loop {
             tick.tick().await;
-            if let Err(error) = tidy(&state.pool).await {
-                tracing::warn!(error = %error, "mail: tidying forwardings failed");
+            match tidy(&state.pool).await {
+                Ok(()) => crate::job_health::beat(&state.pool, "mail.forwarding").await,
+                Err(error) => tracing::warn!(error = %error, "mail: tidying forwardings failed"),
             }
         }
     });

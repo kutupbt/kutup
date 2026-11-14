@@ -222,6 +222,10 @@ pub fn spawn_worker(state: AppState) {
                 .load(&state.pool)
                 .await
                 .unwrap_or(crate::site_settings::FEDERATION_WORKER_SECONDS.default);
+            crate::job_health::register(
+                "federation.outbox",
+                Duration::from_secs(seconds.max(1) as u64),
+            );
             tokio::select! {
                 _ = tokio::time::sleep(Duration::from_secs(seconds.max(1) as u64)) => {}
                 _ = WAKE.notified() => {}
@@ -234,6 +238,9 @@ pub fn spawn_worker(state: AppState) {
                 crate::chat_media_federation::flush_due(&state),
                 crate::remote_renames::deliver_due(&state),
             );
+            if chat.is_ok() && sealed.is_ok() && media.is_ok() && renames.is_ok() {
+                crate::job_health::beat(&state.pool, "federation.outbox").await;
+            }
             match chat {
                 Ok(completed) if completed > 0 => {
                     tracing::info!(completed, "chat federation delivered queued sends");

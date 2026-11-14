@@ -157,11 +157,13 @@ pub fn spawn(state: AppState) {
         {
             tracing::warn!(error = %error, "mail: interrupted sends not marked");
         }
+        crate::job_health::register("mail.outbox", TICK);
         let mut tick = tokio::time::interval(TICK);
         loop {
             tick.tick().await;
-            if let Err(error) = send_due(&state).await {
-                tracing::warn!(error = %error, "mail: outbox pass failed");
+            match send_due(&state).await {
+                Ok(()) => crate::job_health::beat(&state.pool, "mail.outbox").await,
+                Err(error) => tracing::warn!(error = %error, "mail: outbox pass failed"),
             }
         }
     });

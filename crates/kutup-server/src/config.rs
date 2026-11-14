@@ -1337,8 +1337,15 @@ mod env_example {
             "KUTUP_STALWART_SETUP_IMAGE",
             "docker-compose.mail-images.yml",
         ),
-        ("KUTUP_BACKUP_PASSPHRASE", "scripts/backup-postgres.sh"),
+        ("BACKUP_S3_ENDPOINT", "scripts/backup-lib.sh"),
+        ("BACKUP_S3_BUCKET", "scripts/backup-lib.sh"),
+        ("BACKUP_S3_ACCESS_KEY", "scripts/backup-lib.sh"),
+        ("BACKUP_S3_SECRET_KEY", "scripts/backup-lib.sh"),
+        ("BACKUP_S3_REGION", "scripts/backup-lib.sh"),
+        ("KUTUP_BACKUP_AGE_RECIPIENT", "scripts/backup-lib.sh"),
         ("KUTUP_BACKUP_KEEP_DAYS", "scripts/backup-postgres.sh"),
+        ("KUTUP_BACKUP_PREFIX", "scripts/backup-postgres.sh"),
+        ("KUTUP_MAIL_BACKUP_PREFIX", "scripts/backup-stalwart.sh"),
     ];
 
     /// Read by the server, but not from `.env` under Compose: it builds or

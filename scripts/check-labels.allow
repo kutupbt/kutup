@@ -42,6 +42,7 @@ crates/kutup-server/src/mail/domains/stalwart.rs	"kutup-domains	Stalwart account
 crates/kutup-server/src/main.rs	"kutup-server:	log prefix
 crates/kutup-server/src/maps.rs	"kutup-maps-cache	cache directory name
 crates/kutup-server/src/remote_renames.rs	"kutup-federation-feature	HTTP header name
+crates/kutup-server/src/readiness.rs	"kutup-health/	S3 key prefix of the readiness probe
 crates/kutup-server/src/storage_check.rs	"kutup-storage-check/	S3 key prefix
 crates/kutup-server/src/storage.rs	"kutup-static	S3 credential provider name
 crates/kutup-server/src/telemetry.rs	"kutup-server	OpenTelemetry names

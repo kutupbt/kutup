@@ -123,6 +123,47 @@ pub struct StorageService {
     /// first one it refuses (Cloudflare R2 returns a version id for every
     /// upload, then answers `NotImplemented` to a GET by it).
     versioned_reads: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    /// Where deletes wait before they reach the store (`None`: they go at
+    /// once). The server defers them for at least the site setting
+    /// `storage_deleted_blob_retention_seconds`, so a database dump restored
+    /// from before a delete never names a purged blob
+    /// (docs/plans/restore-drill-and-alerting.md, gap 5; `crate::blob_purge`).
+    deferred: Option<sqlx::PgPool>,
+}
+
+/// What a deferred delete removes, as `storage_pending_deletions.kind`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PendingKind {
+    /// Every stored version of the key ([`StorageService::delete`]).
+    Object,
+    /// That version where the store deletes by version, else the key
+    /// ([`StorageService::delete_stored`]).
+    Stored,
+    /// Exactly that version ([`StorageService::delete_object_version`]).
+    Version,
+    /// Every object under the prefix ([`StorageService::delete_prefix`]).
+    Prefix,
+}
+
+impl PendingKind {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            PendingKind::Object => "object",
+            PendingKind::Stored => "stored",
+            PendingKind::Version => "version",
+            PendingKind::Prefix => "prefix",
+        }
+    }
+
+    pub fn parse(value: &str) -> Option<PendingKind> {
+        Some(match value {
+            "object" => PendingKind::Object,
+            "stored" => PendingKind::Stored,
+            "version" => PendingKind::Version,
+            "prefix" => PendingKind::Prefix,
+            _ => return None,
+        })
+    }
 }
 
 /// Whether a GET by version id failed because the store doesn't read by
@@ -187,11 +228,73 @@ impl StorageService {
             quick: Client::from_conf(quick),
             bucket: bucket.to_string(),
             versioned_reads: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true)),
+            deferred: None,
         }
+    }
+
+    /// This store with its deletes deferred through `pool`'s
+    /// `storage_pending_deletions`: what the server and its subcommands use.
+    pub fn with_deferred_deletes(mut self, pool: sqlx::PgPool) -> Self {
+        self.deferred = Some(pool);
+        self
+    }
+
+    /// This store with deletes that reach it at once: for the purge job
+    /// itself and for `storage-check`, which removes only its own probes.
+    pub fn immediate(&self) -> Self {
+        StorageService {
+            deferred: None,
+            ..self.clone()
+        }
+    }
+
+    /// Queues deletes for the purge job. A key already waiting keeps its
+    /// first time (the earlier one is the one a dump could name).
+    async fn defer(
+        &self,
+        pool: &sqlx::PgPool,
+        kind: PendingKind,
+        keys: &[String],
+        version_id: &str,
+    ) -> Result<()> {
+        if keys.is_empty() {
+            return Ok(());
+        }
+        sqlx::query(
+            "INSERT INTO storage_pending_deletions (kind, key, version_id)
+             SELECT $1, key, $3 FROM UNNEST($2::text[]) AS key
+             ON CONFLICT (kind, key, version_id) DO NOTHING",
+        )
+        .bind(kind.as_str())
+        .bind(keys)
+        .bind(version_id)
+        .execute(pool)
+        .await
+        .context("queue storage delete")?;
+        Ok(())
+    }
+
+    /// Before a write to `key`: a delete of the key still waiting would
+    /// remove the new object, so it is called off. A purge already holding
+    /// that row finishes first (the row lock), so the write lands after it.
+    async fn cancel_pending(&self, key: &str) -> Result<()> {
+        let Some(pool) = &self.deferred else {
+            return Ok(());
+        };
+        sqlx::query(
+            "DELETE FROM storage_pending_deletions
+             WHERE key = $1 AND kind IN ('object', 'stored')",
+        )
+        .bind(key)
+        .execute(pool)
+        .await
+        .context("cancel queued storage delete")?;
+        Ok(())
     }
 
     /// Streams data to S3 — mirrors `Upload`.
     pub async fn upload(&self, path: &str, body: ByteStream, size: i64) -> Result<()> {
+        self.cancel_pending(path).await?;
         self.client
             .put_object()
             .bucket(&self.bucket)
@@ -212,6 +315,7 @@ impl StorageService {
         body: ByteStream,
         size: i64,
     ) -> Result<String> {
+        self.cancel_pending(key).await?;
         let out = self
             .client
             .put_object()
@@ -271,6 +375,11 @@ impl StorageService {
     /// Deletes a specific (noncurrent) object version — mirrors `DeleteObjectVersion`.
     /// Used by the version-cleanup job.
     pub async fn delete_object_version(&self, key: &str, version_id: &str) -> Result<()> {
+        if let Some(pool) = &self.deferred {
+            return self
+                .defer(pool, PendingKind::Version, &[key.to_owned()], version_id)
+                .await;
+        }
         self.quick
             .delete_object()
             .bucket(&self.bucket)
@@ -287,6 +396,11 @@ impl StorageService {
     /// Some stores (Cloudflare R2) return a version id for every upload and
     /// then refuse to delete by it.
     pub async fn delete_stored(&self, key: &str, version_id: &str) -> Result<()> {
+        if let Some(pool) = &self.deferred {
+            return self
+                .defer(pool, PendingKind::Stored, &[key.to_owned()], version_id)
+                .await;
+        }
         if !version_id.is_empty() && self.delete_object_version(key, version_id).await.is_ok() {
             return Ok(());
         }
@@ -385,6 +499,11 @@ impl StorageService {
     /// markers. On a versioned bucket a plain DELETE only hides the bytes behind
     /// a marker, so "delete" would not delete (docs/plans/drive-versions-v2.md).
     pub async fn delete(&self, path: &str) -> Result<()> {
+        if let Some(pool) = &self.deferred {
+            return self
+                .defer(pool, PendingKind::Object, &[path.to_owned()], "")
+                .await;
+        }
         match self.list_object_versions(path).await {
             Ok(versions) => {
                 let exact: Vec<(String, String)> = versions
@@ -474,6 +593,11 @@ impl StorageService {
         if keys.is_empty() {
             return Ok(());
         }
+        if let Some(pool) = &self.deferred {
+            // A batch delete removes the current object of each key, as a
+            // queued object delete does (with its older versions too).
+            return self.defer(pool, PendingKind::Object, keys, "").await;
+        }
         let objects: Vec<ObjectIdentifier> = keys
             .iter()
             .map(|k| ObjectIdentifier::builder().key(k).build())
@@ -498,6 +622,11 @@ impl StorageService {
     /// Best-effort: callers have already removed the DB rows, so a partial failure only
     /// leaks orphan blobs (recoverable by the admin orphan sweep).
     pub async fn delete_prefix(&self, prefix: &str) -> Result<()> {
+        if let Some(pool) = &self.deferred {
+            return self
+                .defer(pool, PendingKind::Prefix, &[prefix.to_owned()], "")
+                .await;
+        }
         // Every version under the prefix, where the store can list them; the
         // plain key listing below is the fallback for one that cannot.
         if let Ok(versions) = self.list_object_versions(prefix).await {
@@ -532,6 +661,7 @@ impl StorageService {
     /// Opens a new S3 multipart upload at `key`, returning the opaque UploadId —
     /// mirrors `CreateMultipart`.
     pub async fn create_multipart(&self, key: &str) -> Result<String> {
+        self.cancel_pending(key).await?;
         let out = self
             .quick
             .create_multipart_upload()

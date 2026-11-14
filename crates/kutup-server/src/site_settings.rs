@@ -270,6 +270,7 @@ pub enum SettingSection {
     TwoFactor,
     Drive,
     Federation,
+    Backups,
 }
 
 /// A whole-number setting administrators set: its key, its field in
@@ -1101,6 +1102,72 @@ pub const FEDERATION_SETTINGS: [NumericSetting; 9] = [
     CHAT_ATTACHMENT_SEND_LIFETIME_SECONDS,
 ];
 
+/// Backups and health (docs/plans/restore-drill-and-alerting.md). How long
+/// a deleted blob stays in the object store before it is purged, in
+/// seconds: at least the backup interval plus a margin, so a database dump
+/// restored from before a delete never names a purged blob. The first value
+/// is two days, for nightly backups.
+pub const STORAGE_DELETED_BLOB_RETENTION_SECONDS: NumericSetting = NumericSetting {
+    key: "storage_deleted_blob_retention_seconds",
+    field: "storageDeletedBlobRetentionSeconds",
+    default: 2 * 86_400,
+    min: 0,
+    max: 90 * 86_400,
+    unit: SettingUnit::Seconds,
+    per_account: false,
+};
+/// How often deleted blobs past their wait are purged, in seconds.
+pub const STORAGE_DELETED_BLOB_SWEEP_SECONDS: NumericSetting = NumericSetting {
+    key: "storage_deleted_blob_sweep_seconds",
+    field: "storageDeletedBlobSweepSeconds",
+    default: 300,
+    min: 1,
+    max: 86_400,
+    unit: SettingUnit::Seconds,
+    per_account: false,
+};
+/// The oldest the newest backup (database, and mail where mail is on) may
+/// be before `/api/health/ready` reports it, in seconds; 0 leaves backups
+/// out of the check. Two days: two nightly runs.
+pub const HEALTH_BACKUP_MAX_AGE_SECONDS: NumericSetting = NumericSetting {
+    key: "health_backup_max_age_seconds",
+    field: "healthBackupMaxAgeSeconds",
+    default: 2 * 86_400,
+    min: 0,
+    max: 30 * 86_400,
+    unit: SettingUnit::Seconds,
+    per_account: false,
+};
+/// What a background job gets beyond twice its interval before
+/// `/api/health/ready` reports it late, in seconds.
+pub const HEALTH_JOB_GRACE_SECONDS: NumericSetting = NumericSetting {
+    key: "health_job_grace_seconds",
+    field: "healthJobGraceSeconds",
+    default: 600,
+    min: 0,
+    max: 86_400,
+    unit: SettingUnit::Seconds,
+    per_account: false,
+};
+/// How long each `/api/health/ready` probe of the object store and the mail
+/// server may take, in seconds.
+pub const HEALTH_PROBE_TIMEOUT_SECONDS: NumericSetting = NumericSetting {
+    key: "health_probe_timeout_seconds",
+    field: "healthProbeTimeoutSeconds",
+    default: 5,
+    min: 1,
+    max: 60,
+    unit: SettingUnit::Seconds,
+    per_account: false,
+};
+pub const BACKUP_SETTINGS: [NumericSetting; 5] = [
+    STORAGE_DELETED_BLOB_RETENTION_SECONDS,
+    STORAGE_DELETED_BLOB_SWEEP_SECONDS,
+    HEALTH_BACKUP_MAX_AGE_SECONDS,
+    HEALTH_JOB_GRACE_SECONDS,
+    HEALTH_PROBE_TIMEOUT_SECONDS,
+];
+
 /// Every whole-number setting `/api/admin/settings` lists by field.
 pub fn numeric_settings() -> impl Iterator<Item = &'static NumericSetting> {
     registry().map(|(_, setting)| setting)
@@ -1122,6 +1189,7 @@ pub fn registry() -> impl Iterator<Item = (SettingSection, &'static NumericSetti
         .chain(section(SettingSection::TwoFactor, &TWO_FACTOR_SETTINGS))
         .chain(section(SettingSection::Drive, &DRIVE_SETTINGS))
         .chain(section(SettingSection::Federation, &FEDERATION_SETTINGS))
+        .chain(section(SettingSection::Backups, &BACKUP_SETTINGS))
 }
 
 /// The multi-recipient limits now.

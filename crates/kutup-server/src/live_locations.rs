@@ -478,16 +478,17 @@ pub async fn federated_read(
 
 /// Delete ended streams once a minute.
 pub fn spawn_sweeper(pool: PgPool) {
+    crate::job_health::register("chat.live_location_sweep", SWEEP_INTERVAL);
     tokio::spawn(async move {
         let mut tick = tokio::time::interval(SWEEP_INTERVAL);
         loop {
             tick.tick().await;
-            if let Err(error) =
-                sqlx::query("DELETE FROM live_location_streams WHERE expires_at <= now()")
-                    .execute(&pool)
-                    .await
+            match sqlx::query("DELETE FROM live_location_streams WHERE expires_at <= now()")
+                .execute(&pool)
+                .await
             {
-                tracing::warn!(%error, "live location sweep failed");
+                Ok(_) => crate::job_health::beat(&pool, "chat.live_location_sweep").await,
+                Err(error) => tracing::warn!(%error, "live location sweep failed"),
             }
         }
     });

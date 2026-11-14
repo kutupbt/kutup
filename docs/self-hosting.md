@@ -660,6 +660,88 @@ durable operator backups.
 
 ---
 
+## Backups
+
+Backups are encrypted with [age](https://age-encryption.org) to a public
+key and stored in a bucket of their own. Set this up once, before the first
+backup.
+
+1. **Install age** on the machine that runs the backup scripts (the host,
+   not a container): `apt install age` on Debian and Ubuntu (1.0 or newer).
+   The scripts stop with a message when it is missing.
+2. **Make the key pair on another machine** (your laptop, kept offline):
+   `age-keygen -o kutup-backup.key`. It prints the public key (`age1…`).
+   Put that in `.env` as `KUTUP_BACKUP_AGE_RECIPIENT`. The identity file
+   `kutup-backup.key` never goes on the server: the server can write
+   backups but not read them, so a stolen server or a leaked backup key
+   reveals nothing. Keep at least two copies of the identity (for example a
+   password manager and a printed copy in a safe); without it no backup can
+   be read. Several recipients, comma-separated, let two people each hold
+   their own identity.
+3. **Create a second bucket**, with an access key of its own that can reach
+   only that bucket: write and list (and delete, for pruning), never the
+   data bucket. Put it in `.env` as `BACKUP_S3_ENDPOINT`,
+   `BACKUP_S3_BUCKET`, `BACKUP_S3_ACCESS_KEY`, `BACKUP_S3_SECRET_KEY` (and
+   `BACKUP_S3_REGION`, `auto` for R2). The scripts refuse to run while any
+   is missing, and refuse the data bucket or its key: one lost bucket or one
+   leaked key must not take both the data and its backups. Prefer a
+   provider or account other than the data bucket's, and turn on object
+   lock or versioning there if it has it.
+4. **Give the blobs a second copy.** The data bucket holds the only copy of
+   every file's ciphertext. Turn on object versioning, or replicate it to a
+   bucket with a lifecycle rule, at the provider. The blobs are ciphertext,
+   so a replica leaks nothing new.
+
+**Deleted files wait before they leave storage.** A database dump taken at
+time T names blobs that must still exist when it is restored. So the server
+never deletes a blob at once: every delete is queued, and a job removes it
+from the store only after `storageDeletedBlobRetentionSeconds`
+(Administration → Server settings → Backups and health; two days at first,
+checked every `storageDeletedBlobSweepSeconds`). Keep that wait longer than
+the time between database backups plus a margin; with nightly backups, two
+days. Within it a restored dump finds every blob it names. The bucket holds
+deleted ciphertext that much longer; quotas count only what is not deleted.
+A new write to a key whose delete is waiting calls the delete off.
+
+**The readiness check** (`GET /api/health/ready`, [docs/api.md](api.md))
+fails when the newest database backup, or the newest mail backup where mail
+is on, is older than `healthBackupMaxAgeSeconds` (two days at first; 0 turns
+that part off). From the host:
+
+```sh
+docker compose exec -T nginx wget -qO- http://backend:3000/api/health/ready
+```
+
+### What a restore needs
+
+A lost machine leaves only what is elsewhere: the backup bucket, the data
+bucket (or its copy) and the secrets below. Everything in this list that is
+marked *offline copy* must be kept off the server, written down once, and
+checked at each restore drill; the rest can be made again.
+
+| What | Where | Without it | Offline copy |
+|---|---|---|---|
+| age identity (`kutup-backup.key`) | never on the server | no backup can be read | **yes** (the only copy is offline) |
+| `OPAQUE_SETUP_KEYS` (or the file `OPAQUE_SETUP_KEYS_FILE` names) | `.env` | no one signs in with a password; everyone recovers with their recovery phrase | **yes** |
+| `SERVER_DATA_KEYS` (with L1, docs/plans/server-personal-data.md) | `.env` | every sealed server field and the destruction replay are lost | **yes**, once L1 lands |
+| `MAIL_DKIM_KEYS` | `.env` | custom domains' DKIM keys stay sealed; each domain needs new DKIM records | **yes**, with custom domains |
+| `MAIL_FORWARDING_KEYS` | `.env` | end-to-end forwardings stop (Outdated) until re-enabled | **yes**, with forwarding |
+| `FEDERATION_SIGNING_KEY` (only when you set one; otherwise the identity is in the database) | `.env` | other servers no longer recognise this one | **yes**, when set |
+| `CHAT_SEALED_SENDER_POLICY`, `CHAT_SEALED_SENDER_ONLINE_PRIVATE_KEY` (offline-root sealed sender only) | `.env` | sealed sender off until re-provisioned from the offline root | **yes**, when set |
+| `JWT_SECRET` | `.env` | every session ends; people sign in again | yes (convenience) |
+| `BACKUP_S3_*` | `.env`, provider console | the backups can't be fetched until a new key is made at the provider | yes, or provider access |
+| `S3_ENDPOINT`, `S3_BUCKET`, `S3_ACCESS_KEY`, `S3_SECRET_KEY` | `.env`, provider console | the files can't be reached until a new key is made | yes, or provider access |
+| `KUTUP_BACKUP_AGE_RECIPIENT` | `.env` | made again from the identity (`age-keygen -y kutup-backup.key`) | no |
+| `MAIL_INBOUND_TOKEN`, `STALWART_ADMIN_SECRET`, `MAIL_STALWART_DOMAINS_TOKEN` | `.env`, Stalwart's volume | must match Stalwart's restored settings; set new ones on both sides otherwise | yes (convenience) |
+| `CHAT_TURN_SECRET`, `CHAT_SFU_API_KEY`, `CHAT_SFU_API_SECRET` | `.env` | make new ones (and set them in coturn/LiveKit) | no |
+| `POSTGRES_PASSWORD`, `ADMIN_ACCOUNT` | `.env` | a new password works for an empty database; the admin account is in the dump | no |
+| Server names: `KUTUP_BASE_DOMAIN`, `SERVER_URL`, `CHAT_SERVER_NAME`, `FEDERATION_SERVER_NAME`, `MAIL_HOSTNAME` | `.env` | must be the same as before | yes (the whole `.env`) |
+| Stalwart's DKIM key for the main domain | Stalwart's volume (mail backup) | new DKIM records | in the mail backup |
+| TLS certificates | `nginx/certs` | issued again (ACME) | no |
+
+Simplest: keep a copy of the whole `.env` with the identity, offline, and
+update it whenever `.env` changes.
+
 ## Database backups
 
 The database backups below do not hold `OPAQUE_SETUP_KEYS` (it is in `.env`),
@@ -685,30 +767,22 @@ again:
 - **Chat:** clearing the Chat app's site data removes that browser's Chat
   device too; link it again from another device, as a new browser is.
 
-`scripts/backup-postgres.sh` dumps the database, encrypts the dump on this
-machine, and stores it in the object store Kutup already uses (`S3_*` in
-`.env`), under `database-backups/`. It works with the bundled SeaweedFS and
-with an external store; with an external store the backups survive the loss
-of the server, which is the point.
-
-Set a passphrase in `.env` and **keep a copy of it somewhere else**. Without
-it the backups cannot be read, and it is lost with the server otherwise.
-
-```
-KUTUP_BACKUP_PASSPHRASE=<openssl rand -hex 32>
-# KUTUP_BACKUP_KEEP_DAYS=30
-# KUTUP_BACKUP_PREFIX=database-backups
-```
+`scripts/backup-postgres.sh` dumps the database, encrypts the dump with age
+on this machine, and stores it in the backup bucket (`BACKUP_S3_*`, under
+`database-backups/`); see [Backups](#backups) for the bucket, the key pair
+and installing age first.
 
 ```sh
 scripts/backup-postgres.sh                      # back up, then prune
 scripts/backup-postgres.sh --list               # what is stored
-scripts/backup-postgres.sh --fetch <name> kutup.dump   # download and decrypt
+scripts/backup-postgres.sh --fetch <name> kutup.dump kutup-backup.key   # download, check, decrypt
+scripts/backup-postgres.sh --restore <name> kutup-backup.key            # check, decrypt, pg_restore
 ```
 
 Backups older than `KUTUP_BACKUP_KEEP_DAYS` are removed after each run; the
-newest is never removed. To run it nightly with systemd, from the
-deployment's directory (here `/opt/kutup`):
+newest is never removed. Each run also records the backup in the database
+(`backup_runs`), where the readiness check reads its age. To run it nightly
+with systemd, from the deployment's directory (here `/opt/kutup`):
 
 ```ini
 # /etc/systemd/system/kutup-backup.service
@@ -740,21 +814,89 @@ systemctl daemon-reload && systemctl enable --now kutup-backup.timer
 journalctl -u kutup-backup.service      # each run's result
 ```
 
-To restore onto a fresh server: set up `.env` with the same store, the same
-`JWT_SECRET` and server names, and the passphrase, then
+To restore onto a fresh server: set up `.env` from the offline copy (see
+[What a restore needs](#what-a-restore-needs)), bring the identity file, then
 
 ```sh
 docker compose up -d --wait postgres
-scripts/backup-postgres.sh --fetch <name> kutup.dump
-docker compose exec -T postgres pg_restore -U kutup -d kutup --clean --if-exists --no-owner < kutup.dump
+scripts/backup-postgres.sh --restore <name> kutup-backup.key
 docker compose up -d --wait
 ```
 
+`--restore` refuses while the backend runs, and decrypts the whole backup
+and checks it before the database is touched: age authenticates every
+chunk, so a backup that was changed or cut fails here, and nothing is
+restored. It prints how long `pg_restore` took.
+
 The dump holds accounts, key envelopes and object references; the files'
 ciphertext stays in the object store. A restore therefore returns to the
-moment of the dump: files deleted since then are listed but gone, and files
-added since then are in the store but no longer listed (`kutup-server
-orphan-sweep` finds those).
+moment of the dump. Files added since then are in the store but no longer
+listed (`kutup-server orphan-sweep` finds those). Files deleted since then
+are still in the store as long as the dump is younger than
+`storageDeletedBlobRetentionSeconds` (see [Backups](#backups)); a restore
+from an older dump finds some of them missing.
+
+## Restore drill
+
+A backup is only as good as the last restore that worked. Run this drill
+before the first production data matters, after every change to backups,
+and a few times a year (docs/plans/restore-drill-and-alerting.md). Run it on
+another machine, from nothing but what a lost server would leave: the backup
+bucket, the blob bucket (or its replica) and the offline secrets ([What a
+restore needs](#what-a-restore-needs)). Never copy anything from the running
+server, and never point the drill at the live blob bucket.
+
+1. **Start an empty stack** from the release images
+   ([Running published images](#running-published-images)), with `.env`
+   from the offline copy. Set `S3_*` to a **copy** of the blob bucket (made
+   at the provider, or `aws s3 sync` from the replica): a purge job in the
+   restored stack must never delete production blobs. Start only
+   PostgreSQL: `docker compose up -d --wait postgres`.
+2. **Restore the newest database dump**, timing it:
+   `scripts/backup-postgres.sh --list`, then
+   `scripts/backup-postgres.sh --restore <name> kutup-backup.key`. Write
+   down the time it prints.
+3. **Keep every background job from deleting** until the checks are done:
+   before the backend starts, set a long wait for deleted blobs:
+   ```sh
+   docker compose exec -T postgres psql -U kutup -d kutup -c \
+     "INSERT INTO site_settings (key, value) VALUES ('storage_deleted_blob_retention_seconds', '7776000')
+      ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value"
+   ```
+   Then start the stack (`docker compose up -d --wait`); put the setting back
+   (Administration → Server settings) when the drill is over.
+4. **Restore Stalwart's volume**, where mail is on:
+   `scripts/backup-stalwart.sh --list`, then
+   `scripts/backup-stalwart.sh --restore <name> kutup-backup.key`.
+5. **Check, as a user:**
+   - sign in with the password, and with the recovery phrase;
+   - open a file uploaded before the dump, a large one included;
+   - open one uploaded after the dump: expect a clean "missing" state, not a
+     crash;
+   - Chat history comes back from the Chat backup in a new browser;
+   - Mail: old messages open; a new message sends and arrives (the DKIM key
+     came back);
+   - a Pass vault opens;
+   - a second server still federates with the restored one (its federation
+     identity came back).
+6. **Check, as the operator:**
+   - the migrations table matches the release
+     (`SELECT max(version) FROM _sqlx_migrations`);
+   - `docker compose run --rm --no-deps backend check-config` passes;
+   - `GET /api/health/ready` answers 200 (the backup check fails until a
+     backup runs from the restored stack; that is expected);
+   - with L4, the destruction replay runs, and accounts destroyed after the
+     dump stay destroyed.
+7. **Write it down** in the entry below: the date, the time to restore, the
+   data lost (the time between the dump and the moment of the "loss"), and
+   every step that needed knowledge this runbook does not have. Fix the
+   runbook, not your memory.
+
+### Restore, as last run
+
+| Date | Release | Dump restored | Time to restore | Data lost | Gaps found in this runbook |
+|---|---|---|---|---|---|
+| (not run yet) | | | | | |
 
 ## Updating
 
@@ -1025,8 +1167,9 @@ instead of failing, and receiving a message from Gmail checks that part.
 **Mail backups.** Stalwart's `stalwart_data` volume holds its DKIM private
 keys and the mail it has not handed over yet; losing it means publishing new
 DKIM records. `scripts/backup-stalwart.sh` stores it encrypted beside the
-database backups (same `.env` settings and passphrase, under `mail-backups/`,
-`KUTUP_MAIL_BACKUP_PREFIX` to change), stopping Stalwart for the seconds the
+database backups (same backup bucket and age recipient, see
+[Backups](#backups), under `mail-backups/`, `KUTUP_MAIL_BACKUP_PREFIX` to
+change), stopping Stalwart for the seconds the
 copy takes (senders retry). Run it nightly like the database backup:
 
 ```ini
@@ -1059,9 +1202,10 @@ systemctl daemon-reload && systemctl enable --now kutup-mail-backup.timer
 systemctl status kutup-mail-backup.service   # a failed run shows as failed
 ```
 
-To restore: `scripts/backup-stalwart.sh --list`, then `--fetch <name>
-stalwart.tar.gz` and `--restore stalwart.tar.gz` (it stops Stalwart, replaces
-the volume's contents, and starts it again).
+To restore: `scripts/backup-stalwart.sh --list`, then `--restore <name>
+kutup-backup.key` with the offline identity file. It decrypts and checks the
+whole backup first (a changed or cut backup restores nothing), then stops
+Stalwart, replaces the volume's contents, and starts it again.
 
 **Moving MX to Kutup.** Mail starts arriving at Kutup only when the domain's MX
 record points at it, so this is the last step, done once the rest works.

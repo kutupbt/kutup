@@ -21,6 +21,7 @@ const UPLOADS_SWEEP_INTERVAL: Duration = Duration::from_secs(3600);
 const UPLOADS_STALE_AFTER_SECS: i64 = 24 * 3600;
 const TRASH_SWEEP_INTERVAL: Duration = Duration::from_secs(3600);
 const CHAT_SWEEP_INTERVAL: Duration = Duration::from_secs(3600);
+const GROUP_SWEEP_INTERVAL: Duration = Duration::from_secs(5 * 60);
 /// A group link's mailbox nobody has read for this long is abandoned.
 
 #[derive(Clone, Copy)]
@@ -41,12 +42,15 @@ pub fn spawn_all(
     chat: ChatMaintenancePolicy,
     chat_hub: ChatHub,
 ) {
+    use crate::job_health::{beat, register};
     let (p1, s1) = (pool.clone(), storage.clone());
+    register("drive.version_retention", VERSION_CLEANUP_INTERVAL);
     tokio::spawn(async move {
         let mut tick = tokio::time::interval(VERSION_CLEANUP_INTERVAL);
         loop {
             tick.tick().await;
             version_retention_tick(&p1, &s1).await;
+            beat(&p1, "drive.version_retention").await;
         }
     });
     // Group request nonces past their window (docs/plans/pairwise-groups.md §3),
@@ -54,50 +58,66 @@ pub fn spawn_all(
     // blobs an hour past their expiration and endorsement keys past their
     // window (docs/plans/group-send-endorsements.md §3.3, §4).
     let nonces = pool.clone();
+    register("chat.group_sweeps", GROUP_SWEEP_INTERVAL);
     tokio::spawn(async move {
-        let mut tick = tokio::time::interval(std::time::Duration::from_secs(5 * 60));
+        let mut tick = tokio::time::interval(GROUP_SWEEP_INTERVAL);
         loop {
             tick.tick().await;
+            let mut ok = true;
             if let Err(error) = crate::chat_groups::gateway::sweep_nonces(&nonces).await {
                 tracing::warn!(error = %error.message, "group nonce sweep failed");
+                ok = false;
             }
             if let Err(error) = crate::chat_groups::gateway::sweep_avatars(&nonces).await {
                 tracing::warn!(error = %error.message, "group avatar sweep failed");
+                ok = false;
             }
             if let Err(error) = crate::chat_groups::gateway::sweep_endorsements(&nonces).await {
                 tracing::warn!(error = %error.message, "group endorsement sweep failed");
+                ok = false;
             }
             if let Err(error) = crate::chat_group_send::sweep_keys(&nonces).await {
                 tracing::warn!(error = %error.message, "group send key sweep failed");
+                ok = false;
+            }
+            if ok {
+                beat(&nonces, "chat.group_sweeps").await;
             }
         }
     });
     let p2 = pool.clone();
+    register("quota.reconcile", QUOTA_RECONCILE_INTERVAL);
     tokio::spawn(async move {
         let mut tick = tokio::time::interval(QUOTA_RECONCILE_INTERVAL);
         loop {
             tick.tick().await;
             quota_reconcile_tick(&p2).await;
+            beat(&p2, "quota.reconcile").await;
         }
     });
     if trash_retention_days > 0 {
         let (p3, s3) = (pool.clone(), storage.clone());
+        register("drive.trash_sweep", TRASH_SWEEP_INTERVAL);
         tokio::spawn(async move {
             let mut tick = tokio::time::interval(TRASH_SWEEP_INTERVAL);
             loop {
                 tick.tick().await;
                 trash_sweep_once(&p3, &s3, trash_retention_days).await;
+                beat(&p3, "drive.trash_sweep").await;
             }
         });
     }
     let chat_pool = pool.clone();
+    register("chat.maintenance", CHAT_SWEEP_INTERVAL);
     tokio::spawn(async move {
         let mut tick = tokio::time::interval(CHAT_SWEEP_INTERVAL);
         loop {
             tick.tick().await;
             chat_maintenance_once(&chat_pool, chat, Some(&chat_hub)).await;
+            beat(&chat_pool, "chat.maintenance").await;
         }
     });
+    register("uploads.sweep", UPLOADS_SWEEP_INTERVAL);
     tokio::spawn(async move {
         let mut tick = tokio::time::interval(UPLOADS_SWEEP_INTERVAL);
         loop {
@@ -115,6 +135,7 @@ pub fn spawn_all(
             if let Err(error) = crate::grants::sweep(&pool).await {
                 tracing::warn!(%error, "grant sweep failed");
             }
+            beat(&pool, "uploads.sweep").await;
         }
     });
 }
@@ -1265,7 +1286,8 @@ fn drive_file_of_key(key: &str) -> Option<Uuid> {
 /// objects that no row references any more and that are older than `age_floor`: a
 /// crash between storing and committing, a purge whose object delete failed, a
 /// pruned original or retired version left behind. Every stored version of an
-/// orphan goes (on a versioned bucket too).
+/// orphan goes (on a versioned bucket too), after the deleted-blob wait when
+/// `storage` defers its deletes (`crate::blob_purge`).
 pub async fn run_orphan_sweep(
     pool: &PgPool,
     storage: &StorageService,

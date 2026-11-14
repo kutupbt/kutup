@@ -128,6 +128,13 @@ fi
 curl --fail --silent --show-error --retry 30 --retry-delay 1 \
   --retry-connrefused --retry-all-errors \
   "http://127.0.0.1:$port/api/health" >/dev/null
+# Deleted blobs normally wait two days before they leave the store
+# (docs/self-hosting.md, "Backups"); the purge checks below need them gone
+# within seconds.
+compose exec -T postgres psql --username "$POSTGRES_USER" --dbname "$POSTGRES_DB" \
+  --quiet -v ON_ERROR_STOP=1 --command "INSERT INTO site_settings (key, value) VALUES
+    ('storage_deleted_blob_retention_seconds', '0'), ('storage_deleted_blob_sweep_seconds', '1')
+    ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value" >/dev/null
 
 KUTUP_LIVE_SERVER="http://127.0.0.1:$port" \
   KUTUP_LIVE_SMTP="127.0.0.1:$smtp_port" \
@@ -149,14 +156,20 @@ if [[ "$mail_rows" != "0" ]]; then
   echo "account purge left $mail_rows mail rows" >&2
   exit 1
 fi
-mail_objects="$(compose exec -T seaweedfs-filer wget \
-  --header=Accept:application/json --quiet --output-document=- \
-  "http://seaweedfs-filer:8888/buckets/${S3_BUCKET:-kutup-files}/mail/$purged/?pretty=y" \
-  2>/dev/null || true)"
-if [[ "$mail_objects" =~ \"FileSize\":[[:space:]]+[1-9][0-9]* ]]; then
-  echo "account purge left mail object bytes" >&2
-  exit 1
-fi
+# The purged objects leave the store on the deleted-blob purge's next pass.
+deadline=$((SECONDS + 60))
+while :; do
+  mail_objects="$(compose exec -T seaweedfs-filer wget \
+    --header=Accept:application/json --quiet --output-document=- \
+    "http://seaweedfs-filer:8888/buckets/${S3_BUCKET:-kutup-files}/mail/$purged/?pretty=y" \
+    2>/dev/null || true)"
+  [[ "$mail_objects" =~ \"FileSize\":[[:space:]]+[1-9][0-9]* ]] || break
+  if (( SECONDS >= deadline )); then
+    echo "account purge left mail object bytes" >&2
+    exit 1
+  fi
+  sleep 1
+done
 
 # The outside copy reached the sink DKIM-signed by Stalwart, with no Bcc.
 outside_id="$(grep -o 'OUTSIDE-MESSAGE-ID [^ ]*' "$output" | cut -d' ' -f2)"
