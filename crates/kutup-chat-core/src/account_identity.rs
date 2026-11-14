@@ -875,7 +875,10 @@ mod tests {
     use crate::SqliteChatDb;
 
     fn authority(person: &crate::group_harness_tests::Person) -> AccountAuthority {
-        AccountAuthority::derive(&[person.authority_seed; 32]).unwrap()
+        AccountAuthority::derive(&kutup_crypto::account_roots::IdentityRoot::from_bytes(
+            [person.authority_seed; 32],
+        ))
+        .unwrap()
     }
 
     fn head(world: &Rc<World>, account: &str) -> AccountManifestV3 {
@@ -1305,7 +1308,10 @@ mod tests {
             "aci:00000000-0000-4000-8000-000000000003@{}",
             crate::group_harness_tests::SERVER
         );
-        let authority = AccountAuthority::derive(&[3; 32]).unwrap();
+        let authority = AccountAuthority::derive(
+            &kutup_crypto::account_roots::IdentityRoot::from_bytes([3; 32]),
+        )
+        .unwrap();
         let editor = AccountManifestDeviceV3 {
             device_id: 1,
             kind: DeviceKind::Editor,

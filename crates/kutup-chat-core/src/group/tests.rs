@@ -107,7 +107,11 @@ impl Person {
                 &format!("00000000-0000-4000-8000-0000000000{n:02}"),
             )
             .unwrap(),
-            keys: GroupAccountKeys::derive(&[n; 32]).unwrap(),
+            keys: GroupAccountKeys::derive(
+                &kutup_crypto::account_roots::IdentityRoot::from_bytes([n; 32]),
+                &kutup_crypto::account_roots::GroupPseudonymRoot::from_bytes([n; 32]),
+            )
+            .unwrap(),
             profile_key: [n; 32],
         }
     }

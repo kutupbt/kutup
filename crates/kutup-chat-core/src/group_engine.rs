@@ -1242,14 +1242,21 @@ mod tests {
             db,
             home.clone(),
             "aci:00000000-0000-4000-8000-2bd806c97f0e@example.test",
-            &crate::AccountAuthority::derive(&[3u8; 32]).unwrap(),
+            &crate::AccountAuthority::derive(
+                &kutup_crypto::account_roots::IdentityRoot::from_bytes([3u8; 32]),
+            )
+            .unwrap(),
             "2026-10-18T00:00:00Z",
             10,
             &mut OsRng.unwrap_err(),
         ))
         .unwrap();
         let account = engine.session.account_ref().clone();
-        let keys = crate::group::GroupAccountKeys::derive(&[3u8; 32]).unwrap();
+        let keys = crate::group::GroupAccountKeys::derive(
+            &kutup_crypto::account_roots::IdentityRoot::from_bytes([3u8; 32]),
+            &kutup_crypto::account_roots::GroupPseudonymRoot::from_bytes([3u8; 32]),
+        )
+        .unwrap();
         let (mut record, genesis) = group::create_group(NewGroup {
             home: GroupHomePinV1::of(&home.identity).unwrap(),
             me: &account,

@@ -6,7 +6,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 const http = vi.hoisted(() => ({ get: vi.fn(), put: vi.fn() }))
 vi.mock('@kutup/session/client', () => ({ default: { get: http.get, put: http.put } }))
-vi.mock('@kutup/session/store', () => ({ getSession: () => ({ userId: 'u1', masterKey: new Uint8Array(32), envelopeBinding: 'b' }) }))
+vi.mock('@kutup/session/store', () => ({ getSession: () => ({ userId: 'u1', masterKey: new Uint8Array(32), roots: { identityGeneration: 1, identityRoot: 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=', driveGeneration: 1, driveRoot: 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=', pseudonymRoot: 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=', callLinkRoot: 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=', objectIdKey: 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=' }, envelopeBinding: 'b' }) }))
 
 const head = vi.hoisted(() => ({ index: (_attempt: number): [string, number][] => [], covered: true, reads: 0 }))
 vi.mock('@kutup/session/accountHead', async () => {

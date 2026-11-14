@@ -411,8 +411,14 @@ mod tests {
 
     #[test]
     fn summaries_sign_verify_and_refuse_tampering() {
-        let identity = AccountIdentityKeysV1::derive(&[5u8; 32]).unwrap();
-        let other = AccountIdentityKeysV1::derive(&[6u8; 32]).unwrap();
+        let identity = AccountIdentityKeysV1::derive(
+            &crate::account_roots::IdentityRoot::from_bytes([5u8; 32]),
+        )
+        .unwrap();
+        let other = AccountIdentityKeysV1::derive(&crate::account_roots::IdentityRoot::from_bytes(
+            [6u8; 32],
+        ))
+        .unwrap();
         let authority = identity.authority_public_key();
         let (bytes, signature) =
             sign_summary(&summary(), ACCOUNT, 7, identity.authority_signing_key()).unwrap();

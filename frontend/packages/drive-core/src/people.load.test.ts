@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { testRoots } from '@kutup/crypto/accountRoots.testing'
 
 // The exchange with the people you share with, end to end through the
 // transport: profiles are fetched and opened by account, never by address.
@@ -30,6 +31,7 @@ const ME = {
   binding: 'binding',
   incarnationId: 'inc-me',
   masterKey: new Uint8Array(32),
+  roots: testRoots(0),
   privateKey: new Uint8Array(32),
   authorityPublicKey: 'auth-me',
 }

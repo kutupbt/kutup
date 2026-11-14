@@ -187,8 +187,7 @@ fn rename(profile: &str, json: bool, name: &str, yes: bool) -> Result<()> {
         .as_slice()
         .try_into()
         .context("this session holds no account keys; sign in again")?;
-    let identity = kutup_crypto::identity::AccountIdentityKeysV1::derive(&master_key)
-        .context("account keys")?;
+    let identity = ctx.session.identity().context("account keys")?;
     let current = format!("{name}@{server}");
     let sequence = me["renames"]["sequence"].as_u64().unwrap_or(0) + 1;
     let now_ms = std::time::SystemTime::now()

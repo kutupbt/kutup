@@ -1,3 +1,4 @@
+import type { AccountRoots } from '@kutup/crypto/accountRoots'
 import api from '@kutup/session/client'
 import { ACCOUNT_RECORD_PURPOSE, openAccountRecord, sealAccountRecord } from '@kutup/crypto/accountRecord'
 import { fromBase64, toBase64 } from '@kutup/crypto/base64'
@@ -163,6 +164,8 @@ export interface ChatBackupOptions {
   /** What the account's sealed keys are bound to (`session.envelopeBinding`). */
   envelopeBinding: string
   masterKey: Uint8Array
+  /** The account's roots: the backup's signer is its identity (`roots.identityRoot`). */
+  roots: AccountRoots
   deviceId: number
   history: () => Promise<ChatHistoryEntry[]>
   manifestSequence: () => Promise<number>
@@ -451,7 +454,7 @@ export class ChatBackupCoordinator {
   ): Promise<ChatBackupCoordinator> {
     const [db, identity, wasm] = await Promise.all([
       openBackupDb(options.databaseName),
-      deriveAccountIdentityKeys(toBase64(options.masterKey)),
+      deriveAccountIdentityKeys(options.roots.identityRoot),
       getCryptoWasm(),
     ])
     let root: Uint8Array | undefined

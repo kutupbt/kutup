@@ -255,16 +255,14 @@ pub async fn open_native_chat_client(
     database_path: String,
     database_key: Vec<u8>,
     account: String,
-    master_key: Vec<u8>,
-    binding: String,
+    keys: NativeAccountKeys,
     http: Arc<dyn ChatHttpClient>,
 ) -> Result<Arc<NativeChatClient>> {
     start_client(
         database_path,
         database_key,
         account,
-        master_key,
-        binding,
+        keys,
         http,
         Install::Open,
     )
@@ -279,16 +277,14 @@ pub async fn reregister_native_chat_client(
     database_path: String,
     database_key: Vec<u8>,
     account: String,
-    master_key: Vec<u8>,
-    binding: String,
+    keys: NativeAccountKeys,
     http: Arc<dyn ChatHttpClient>,
 ) -> Result<Arc<NativeChatClient>> {
     start_client(
         database_path,
         database_key,
         account,
-        master_key,
-        binding,
+        keys,
         http,
         Install::Reregister,
     )
@@ -305,8 +301,7 @@ pub async fn open_linked_native_chat_client(
     database_path: String,
     database_key: Vec<u8>,
     account: String,
-    master_key: Vec<u8>,
-    binding: String,
+    keys: NativeAccountKeys,
     http: Arc<dyn ChatHttpClient>,
 ) -> Result<Arc<NativeChatClient>> {
     let envelope =
@@ -317,12 +312,28 @@ pub async fn open_linked_native_chat_client(
         database_path,
         database_key,
         account,
-        master_key,
-        binding,
+        keys,
         http,
         Install::Linked { linking, envelope },
     )
     .await
+}
+
+/// The signed-in account's keys, as the app holds them after its sign-in
+/// (docs/plans/identity-root.md). Moved to the engine worker and zeroized
+/// there.
+#[derive(uniffi::Record)]
+pub struct NativeAccountKeys {
+    /// The account master key (32 bytes).
+    pub master_key: Vec<u8>,
+    /// The account's root records, as the sign-in answered them
+    /// (`accountRoots`, base64-decoded).
+    pub root_records: Vec<Vec<u8>>,
+    /// The account's authority public key (`accountAuthorityPublicKey`): the
+    /// newest identity root must derive it.
+    pub authority_public_key: Vec<u8>,
+    /// The account's key binding (`keyBinding`), which its own seals bind.
+    pub binding: String,
 }
 
 /// How the worker gets its device.
@@ -339,8 +350,7 @@ async fn start_client(
     database_path: String,
     database_key: Vec<u8>,
     account: String,
-    master_key: Vec<u8>,
-    binding: String,
+    keys: NativeAccountKeys,
     http: Arc<dyn ChatHttpClient>,
     install: Install,
 ) -> Result<Arc<NativeChatClient>> {
@@ -356,7 +366,25 @@ async fn start_client(
         })?
         .to_string();
     let database_key = take_key(database_key, "database key")?;
+    let NativeAccountKeys {
+        master_key,
+        root_records,
+        authority_public_key,
+        binding,
+    } = keys;
     let master_key = take_key(master_key, "account master key")?;
+    // The account's stored roots (docs/plans/identity-root.md), opened here:
+    // the newest identity root must be the account's registered authority's.
+    let authority_public_key = take_key(authority_public_key, "account authority")?;
+    let roots = kutup_chat_core::AccountRoots::open(
+        &root_records,
+        &master_key,
+        &binding,
+        &authority_public_key,
+    )
+    .map_err(|error| KutupChatError::InvalidInput {
+        message: error.to_string(),
+    })?;
     let (commands, receiver) = mpsc::channel();
     let (ready, initialized) = oneshot::channel();
     let worker_user = user.clone();
@@ -368,6 +396,7 @@ async fn start_client(
                     database_path,
                     database_key,
                     master_key,
+                    roots,
                     binding,
                     user: worker_user,
                     http,
@@ -405,6 +434,7 @@ struct WorkerConfig {
     database_path: String,
     database_key: [u8; 32],
     master_key: [u8; 32],
+    roots: kutup_chat_core::AccountRoots,
     binding: String,
     /// The account: `aci:<uuid>@<server>`.
     user: String,
@@ -475,7 +505,7 @@ fn worker_main(
         config.database_key.zeroize();
         let database = Rc::new(database?);
 
-        let authority = AccountAuthority::derive(&config.master_key)?;
+        let authority = AccountAuthority::derive(&config.roots.identity)?;
         let transport: Rc<dyn ChatTransport> =
             Rc::new(http::NativeTransport::new(config.http.clone()));
         let mut rng = OsRng.unwrap_err();
@@ -538,7 +568,7 @@ fn worker_main(
         };
         // One identity for every app of the account (docs/plans/drive-identity-pins.md).
         engine.enable_identity_pins(&config.master_key, &config.binding)?;
-        engine.enable_group_list(&config.master_key, &config.binding)?;
+        engine.enable_group_list(&config.master_key, &config.roots, &config.binding)?;
         config.master_key.zeroize();
         // The account's identity: a kept sync, one in the mailbox, or none
         // (this device missed it: `LinkRequired`).

@@ -1,12 +1,15 @@
 // The key material an app origin needs, and its wire encoding inside the
 // fork payload and the persisted WebSession blob (both local-state envelopes).
 
+import type { AccountRoots } from '@kutup/crypto/accountRoots'
 import { fromBase64, toBase64 } from '@kutup/crypto/base64'
 
 export interface SessionKeys {
   userId: string
   /** The account master key (32 bytes). */
   masterKey: Uint8Array
+  /** The account's stored roots (docs/plans/identity-root.md), opened. */
+  roots: AccountRoots
   /** The Drive HPKE private key (32 bytes). */
   privateKey: Uint8Array
   /** The Drive HPKE public key, base64. */
@@ -57,17 +60,18 @@ interface EncodedDevice {
 }
 
 /**
- * v2: no device; v3: a device of the retired collaboration registry (read
- * as none: it registers again); v4: a device of the account's manifest.
+ * v5: the account's roots (docs/plans/identity-root.md) and a device of the
+ * account's manifest. Older payloads carry no roots: refused (sign in again).
  */
 interface EncodedKeys {
-  v: 2 | 3 | 4
+  v: 5
   userId: string
   masterKey: string
+  roots: AccountRoots
   privateKey: string
   publicKey: string
   keyBinding: string
-  /** Optional; read from v4 only. */
+  /** Optional. */
   device?: Partial<EncodedDevice>
 }
 
@@ -77,9 +81,10 @@ const KEY_BINDING = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-
 export function encodeKeys(keys: SessionKeys): Uint8Array {
   if (!KEY_BINDING.test(keys.keyBinding)) throw new Error('session keys have no valid key binding')
   const value: EncodedKeys = {
-    v: 4,
+    v: 5,
     userId: keys.userId,
     masterKey: toBase64(keys.masterKey),
+    roots: keys.roots,
     privateKey: toBase64(keys.privateKey),
     publicKey: keys.publicKey,
     keyBinding: keys.keyBinding,
@@ -99,9 +104,10 @@ export function encodeKeys(keys: SessionKeys): Uint8Array {
 export function decodeKeys(bytes: Uint8Array): SessionKeys {
   const value = JSON.parse(new TextDecoder().decode(bytes)) as Partial<EncodedKeys>
   if (
-    (value.v !== 2 && value.v !== 3 && value.v !== 4) ||
+    value.v !== 5 ||
     typeof value.userId !== 'string' ||
     typeof value.masterKey !== 'string' ||
+    !isRoots(value.roots) ||
     typeof value.privateKey !== 'string' ||
     typeof value.publicKey !== 'string' ||
     typeof value.keyBinding !== 'string' ||
@@ -117,12 +123,29 @@ export function decodeKeys(bytes: Uint8Array): SessionKeys {
   const keys: SessionKeys = {
     userId: value.userId,
     masterKey,
+    roots: value.roots,
     privateKey,
     publicKey: value.publicKey,
     keyBinding: value.keyBinding,
   }
-  if (value.v === 4 && value.device !== undefined) keys.device = decodeDevice(value.device)
+  if (value.device !== undefined) keys.device = decodeDevice(value.device)
   return keys
+}
+
+/** Whether `value` is an account's roots: each 32 bytes of canonical base64, generations whole and from 1. */
+function isRoots(value: unknown): value is AccountRoots {
+  if (typeof value !== 'object' || value === null) return false
+  const roots = value as Record<string, unknown>
+  const root = (key: string) => {
+    const field = roots[key]
+    return typeof field === 'string' && fromBase64(field).length === 32 && toBase64(fromBase64(field)) === field
+  }
+  const generation = (key: string) => Number.isSafeInteger(roots[key]) && (roots[key] as number) >= 1
+  return (
+    generation('identityGeneration') &&
+    generation('driveGeneration') &&
+    ['identityRoot', 'driveRoot', 'pseudonymRoot', 'callLinkRoot', 'objectIdKey'].every(root)
+  )
 }
 
 /** Bounds a manifest sequence (a u64) and a device id (1..127). */

@@ -53,6 +53,7 @@ All file content and metadata are encrypted client-side; the server stores only 
         crate::handlers::renames::admin_free,
         crate::handlers::renames::chains,
         crate::handlers::security_events::list,
+        crate::account_roots::get,
         crate::handlers::account_heads::head,
         crate::handlers::account_heads::start,
         crate::handlers::account_heads::heads,

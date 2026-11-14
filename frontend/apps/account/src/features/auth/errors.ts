@@ -3,7 +3,7 @@ import { isAxiosError } from 'axios'
 import { OpaqueAuthFailed, OpaqueWorkerClosed } from '@kutup/crypto/opaqueWorker'
 import { KeyBindingMismatchError } from '@kutup/session/profile'
 import { apiErrorCode, apiErrorMessage } from '@kutup/ui/lib/apiError'
-import { RegistrationConflictError } from './flows'
+import { AccountKeysMismatchError, RegistrationConflictError } from './flows'
 
 type TFunction = ReturnType<typeof useTranslation>['t']
 
@@ -15,6 +15,8 @@ type TFunction = ReturnType<typeof useTranslation>['t']
  */
 export function authErrorMessage(error: unknown, t: TFunction, fallbackKey: string): string {
   if (error instanceof KeyBindingMismatchError) return t('auth.errors.keysChanged')
+  // The newest identity root is not the account's published identity: no older one stands in.
+  if (error instanceof AccountKeysMismatchError) return t('auth.errors.identityMismatch')
   // A wrong password fails in this browser (OPAQUE), before the server answers.
   if (error instanceof OpaqueAuthFailed) return t(fallbackKey)
   if (error instanceof OpaqueWorkerClosed) return t('auth.errors.signInAgain')

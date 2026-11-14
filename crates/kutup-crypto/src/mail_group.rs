@@ -424,7 +424,10 @@ mod tests {
     #[test]
     fn a_signing_key_share_opens_for_its_member_and_signer_only() {
         let key = GroupSigningKey::from_seed(&[5; 32]);
-        let bob = crate::identity::AccountIdentityKeysV1::derive(&[0x22; 32]).unwrap();
+        let bob = crate::identity::AccountIdentityKeysV1::derive(
+            &crate::account_roots::IdentityRoot::from_bytes([0x22; 32]),
+        )
+        .unwrap();
         let bob_ref = AccountRef::new("kutup.dev", "8d2e4b61-0c3a-4e9f-b7d5-6a1f2e3c4d5b").unwrap();
         let incarnation = bob.incarnation_id();
         let share = seal_group_signing_share(

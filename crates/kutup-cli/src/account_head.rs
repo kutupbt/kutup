@@ -362,9 +362,14 @@ impl<'a> CliHead<'a> {
 
     /// This profile's sealed revision guard, taking over the older plaintext
     /// `identity-pins-revision` once (its value becomes the pin list's).
-    pub fn guard(dir: &Path, master_key: &[u8; 32], binding: &str) -> Result<Guard> {
+    pub fn guard(
+        dir: &Path,
+        master_key: &[u8; 32],
+        object_id_key: &kutup_crypto::account_roots::ObjectIdKey,
+        binding: &str,
+    ) -> Result<Guard> {
         let guard = Guard {
-            keys: GuardKeys::derive(master_key, binding)?,
+            keys: GuardKeys::derive(master_key, object_id_key, binding)?,
             path: dir.join("revisions.json"),
         };
         let old = dir.join("identity-pins-revision");
@@ -707,7 +712,13 @@ mod tests {
     fn the_guard_is_sealed_and_only_moves_forward() {
         let temp = tempfile::tempdir().unwrap();
         let dir = temp.path();
-        let guard = CliHead::guard(dir, &[7u8; 32], GUARD_BINDING).unwrap();
+        let guard = CliHead::guard(
+            dir,
+            &[7u8; 32],
+            &kutup_crypto::account_roots::ObjectIdKey::from_bytes([7u8; 32]),
+            GUARD_BINDING,
+        )
+        .unwrap();
         assert_eq!(guard.seen("s", "x").unwrap(), 0);
         guard.accept("s", "x", 5).unwrap();
         assert!(guard.accept("s", "x", 4).is_err());
@@ -715,10 +726,15 @@ mod tests {
         assert!(guard.next("s", "x", 0).unwrap() > 5);
         // Another account's keys read nothing; an altered entry reads as none.
         assert_eq!(
-            CliHead::guard(dir, &[8u8; 32], GUARD_BINDING)
-                .unwrap()
-                .seen("s", "x")
-                .unwrap(),
+            CliHead::guard(
+                dir,
+                &[8u8; 32],
+                &kutup_crypto::account_roots::ObjectIdKey::from_bytes([8u8; 32]),
+                GUARD_BINDING
+            )
+            .unwrap()
+            .seen("s", "x")
+            .unwrap(),
             0
         );
         // Entries are named by an HMAC: the file says nothing of what they are about.
@@ -731,7 +747,13 @@ mod tests {
         let temp = tempfile::tempdir().unwrap();
         let dir = temp.path();
         std::fs::write(dir.join("identity-pins-revision"), "1790000000000").unwrap();
-        let guard = CliHead::guard(dir, &[7u8; 32], GUARD_BINDING).unwrap();
+        let guard = CliHead::guard(
+            dir,
+            &[7u8; 32],
+            &kutup_crypto::account_roots::ObjectIdKey::from_bytes([7u8; 32]),
+            GUARD_BINDING,
+        )
+        .unwrap();
         assert_eq!(
             guard
                 .seen(
@@ -782,7 +804,13 @@ mod tests {
                 std::thread::spawn(move || {
                     // Each its own handles, as another process would have.
                     let store = store(&dir);
-                    let guard = CliHead::guard(&dir, &[7u8; 32], GUARD_BINDING).unwrap();
+                    let guard = CliHead::guard(
+                        &dir,
+                        &[7u8; 32],
+                        &kutup_crypto::account_roots::ObjectIdKey::from_bytes([7u8; 32]),
+                        GUARD_BINDING,
+                    )
+                    .unwrap();
                     for (i, head) in heads.iter().enumerate() {
                         // Out of order across threads: some go back to older heads.
                         let pick = if (i + t) % 3 == 0 {
@@ -809,7 +837,13 @@ mod tests {
             40,
             "the anchor never moved back"
         );
-        let guard = CliHead::guard(temp.path(), &[7u8; 32], GUARD_BINDING).unwrap();
+        let guard = CliHead::guard(
+            temp.path(),
+            &[7u8; 32],
+            &kutup_crypto::account_roots::ObjectIdKey::from_bytes([7u8; 32]),
+            GUARD_BINDING,
+        )
+        .unwrap();
         for t in 0..4 {
             for i in 0..40 {
                 assert_eq!(guard.seen("s", &format!("{t}-{i}")).unwrap(), 1 + i as u64);
@@ -862,7 +896,13 @@ mod tests {
         std::fs::write(dir.join("identity-pins-revision"), "1790000000000").unwrap();
         // The guard's file cannot be written (a directory stands in its place).
         std::fs::create_dir(dir.join("revisions.json")).unwrap();
-        assert!(CliHead::guard(dir, &[7u8; 32], GUARD_BINDING).is_err());
+        assert!(CliHead::guard(
+            dir,
+            &[7u8; 32],
+            &kutup_crypto::account_roots::ObjectIdKey::from_bytes([7u8; 32]),
+            GUARD_BINDING
+        )
+        .is_err());
         assert!(dir.join("identity-pins-revision").exists());
     }
 }

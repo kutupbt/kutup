@@ -2406,6 +2406,8 @@ pub async fn wipe_user(
     // Every second factor and its codes, with the account's row locked, so a
     // turn-on landing meanwhile cannot leave codes behind.
     crate::two_factor::turn_off(&mut tx, target).await?;
+    // The old keys' roots go with them; the setup makes new ones.
+    crate::account_roots::delete(&mut tx, target).await?;
     sqlx::query(
         r#"UPDATE users SET
                master_key_envelope = '', recovery_key_envelope = '',

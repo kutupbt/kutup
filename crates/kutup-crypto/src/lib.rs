@@ -43,6 +43,7 @@ pub mod account_head;
 pub mod account_record;
 pub mod account_ref;
 pub mod account_rename;
+pub mod account_roots;
 pub mod asset;
 pub mod blocks;
 #[cfg(feature = "calendar")]

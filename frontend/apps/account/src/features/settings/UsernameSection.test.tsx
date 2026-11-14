@@ -3,6 +3,7 @@ import { fireEvent, render, screen, waitFor, within } from '@testing-library/rea
 import { AxiosError, AxiosHeaders, type AxiosResponse } from 'axios'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import '../../testI18n'
+import { testRoots } from '@kutup/crypto/accountRoots.testing'
 
 const get = vi.hoisted(() => vi.fn())
 const ownAddressState = vi.hoisted(() => vi.fn(() => Promise.resolve<'keyed' | 'freed' | 'none'>('none')))
@@ -28,7 +29,7 @@ vi.mock('@kutup/crypto/accountRename', () => ({
   signAccountRename,
 }))
 vi.mock('@kutup/mail-core/addressKey', () => ({ firstAddressKey, ownAddressState }))
-const session = { address: 'ada.l@kutup.test', username: 'ada.l', masterKey: new Uint8Array(32), envelopeBinding: 'b' }
+const session = { address: 'ada.l@kutup.test', username: 'ada.l', masterKey: new Uint8Array(32), roots: testRoots(0), envelopeBinding: 'b' }
 vi.mock('@kutup/session/store', () => ({ useRequiredSession: () => session, getSession: () => session }))
 
 const { UsernameSection } = await import('./UsernameSection')

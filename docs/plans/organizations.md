@@ -336,12 +336,19 @@ can't tell a managed account from a private one, as at Proton.
   admin, issued at; signed by the requesting admin's authority. Proton's
   signed `InvitationData`.
 - **`OrganizationEscrowV1`** (`kutup/org/member-escrow/v1\0`): the member's
-  master key sealed (HPKE, X-Wing) to the organization key, AAD binding
-  organization id, key id, member account ref, incarnation and master-key
-  generation. No separate signature is needed: an admin who opens it derives
-  the authority from the master key and checks it equals the member's
-  published authority for that incarnation, so a server can't plant an
-  escrow.
+  master key and identity root (docs/plans/identity-root.md) sealed together
+  (HPKE, X-Wing, 64 bytes) to the organization key, AAD binding organization
+  id, key id, member account ref, incarnation and master-key generation. No
+  separate signature is needed: an admin who opens it derives the authority
+  from the identity root and checks it equals the member's published
+  authority for that incarnation. Only the member holds the identity root,
+  so a server (or anyone with the public organization key) can't plant an
+  escrow. Opening an escrow yields the member's identity root as well as the
+  master key; the master key already opened the member's root records, so
+  an admin can do no more than before. A master-key rotation keeps the
+  authority, so an older escrow still opens: whoever opens one compares its
+  generation with the account's current one (the master-key rotation
+  checklist).
 - Nothing binds a username, address or organization name. Vectors and WASM
   bindings as for every format; labels go into W6's `labels.rs`.
 

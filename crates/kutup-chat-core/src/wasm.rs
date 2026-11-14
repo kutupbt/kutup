@@ -1547,6 +1547,9 @@ impl WasmChatClient {
     /// starts with (the username); `binding` is the account's key binding
     /// (`session.envelopeBinding`), which its own seals bind. A browser
     /// without a device is refused: ask `installation` first.
+    // The page passes one argument list to open, reregister and
+    // completeLink (the master key, its roots and binding among them).
+    #[allow(clippy::too_many_arguments)]
     #[wasm_bindgen(js_name = open)]
     pub async fn open(
         database_name: String,
@@ -1554,10 +1557,12 @@ impl WasmChatClient {
         display_name: String,
         sealed_sender_enabled: bool,
         master_key: Vec<u8>,
+        roots: JsValue,
         binding: String,
         transport: JsChatTransport,
     ) -> std::result::Result<WasmChatClient, JsValue> {
         let master_key = master_key_bytes(master_key)?;
+        let roots = account_roots(roots)?;
         let db = Rc::new(
             IndexedDbChatDb::open(&database_name, &master_key)
                 .await
@@ -1583,6 +1588,7 @@ impl WasmChatClient {
         Self::finish_open(
             engine,
             &master_key,
+            &roots,
             &binding,
             &display_name,
             sealed_sender_enabled,
@@ -1594,6 +1600,9 @@ impl WasmChatClient {
     /// in the account's manifest, every other device of the account dropped.
     /// The account's first Chat device does this; so does "I don't have my
     /// other devices". Contacts see the safety number change once.
+    // The page passes one argument list to open, reregister and
+    // completeLink (the master key, its roots and binding among them).
+    #[allow(clippy::too_many_arguments)]
     #[wasm_bindgen(js_name = reregister)]
     pub async fn reregister(
         database_name: String,
@@ -1601,11 +1610,13 @@ impl WasmChatClient {
         display_name: String,
         sealed_sender_enabled: bool,
         master_key: Vec<u8>,
+        roots: JsValue,
         binding: String,
         transport: JsChatTransport,
     ) -> std::result::Result<WasmChatClient, JsValue> {
         let master_key = master_key_bytes(master_key)?;
-        let authority = AccountAuthority::derive(&master_key).map_err(chat_error)?;
+        let roots = account_roots(roots)?;
+        let authority = AccountAuthority::derive(&roots.identity).map_err(chat_error)?;
         let db = Rc::new(
             IndexedDbChatDb::open(&database_name, &master_key)
                 .await
@@ -1628,6 +1639,7 @@ impl WasmChatClient {
         Self::finish_open(
             engine,
             &master_key,
+            &roots,
             &binding,
             &display_name,
             sealed_sender_enabled,
@@ -1640,11 +1652,12 @@ impl WasmChatClient {
     async fn finish_open(
         mut engine: Engine,
         master_key: &[u8; 32],
+        roots: &kutup_crypto::account_roots::AccountRoots,
         binding: &str,
         display_name: &str,
         sealed_sender_enabled: bool,
     ) -> std::result::Result<WasmChatClient, JsValue> {
-        let authority = AccountAuthority::derive(master_key).map_err(chat_error)?;
+        let authority = AccountAuthority::derive(&roots.identity).map_err(chat_error)?;
         let profile_owner =
             crate::profile::profile_owner_key(master_key, binding).map_err(chat_error)?;
         let mut rng = OsRng.unwrap_err();
@@ -1653,12 +1666,13 @@ impl WasmChatClient {
             .enable_identity_pins(master_key, binding)
             .map_err(chat_error)?;
         engine
-            .enable_group_list(master_key, binding)
+            .enable_group_list(master_key, roots, binding)
             .map_err(chat_error)?;
         // The web writes a block at once (docs/plans/chat-contacts-sync.md).
         engine
             .enable_contact_list(
                 master_key,
+                &roots.object_id,
                 binding,
                 crate::contact_list::ContactListTiming {
                     block: crate::contact_list::BlockTiming::Immediate,
@@ -4153,14 +4167,15 @@ pub fn call_link_nonce() -> String {
     crate::call_link::new_call_link_nonce()
 }
 
-/// The secret of the link its owner made with `nonce`.
+/// The secret of the link its owner made with `nonce`, from the owner's
+/// call-link root (`roots.callLinkRoot`).
 #[wasm_bindgen(js_name = callLinkOwnerSecret)]
 pub fn call_link_owner_secret(
-    master_key: String,
+    call_link_root: String,
     nonce: String,
 ) -> std::result::Result<String, JsValue> {
-    let master_key = zeroize::Zeroizing::new(master_key);
-    crate::call_link::owner_call_link_secret(&master_key, &nonce)
+    let call_link_root = zeroize::Zeroizing::new(call_link_root);
+    crate::call_link::owner_call_link_secret(&call_link_root, &nonce)
         .map(|secret| secret.to_string())
         .map_err(chat_error)
 }
@@ -4176,12 +4191,12 @@ struct CallLinkHostOutput {
 /// the server stores of it.
 #[wasm_bindgen(js_name = callLinkHostToken)]
 pub fn call_link_host_token(
-    master_key: String,
+    call_link_root: String,
     nonce: String,
 ) -> std::result::Result<JsValue, JsValue> {
-    let master_key = zeroize::Zeroizing::new(master_key);
-    let token =
-        crate::call_link::owner_call_link_host_token(&master_key, &nonce).map_err(chat_error)?;
+    let call_link_root = zeroize::Zeroizing::new(call_link_root);
+    let token = crate::call_link::owner_call_link_host_token(&call_link_root, &nonce)
+        .map_err(chat_error)?;
     let hash = crate::call_link::call_link_token_hash(&token).map_err(chat_error)?;
     to_output(&CallLinkHostOutput {
         host_token: token.to_string(),
@@ -4671,6 +4686,48 @@ pub async fn bench_search_index(name: String, count: u32) -> std::result::Result
     to_output(&report)
 }
 
+/// The account's roots as the page holds them (`openAccountRoots` of
+/// `@kutup/crypto`, docs/plans/identity-root.md): each canonical base64.
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct AccountRootsInput {
+    identity_generation: u32,
+    identity_root: String,
+    drive_generation: u32,
+    drive_root: String,
+    pseudonym_root: String,
+    call_link_root: String,
+    object_id_key: String,
+}
+
+fn account_roots(
+    roots: JsValue,
+) -> std::result::Result<kutup_crypto::account_roots::AccountRoots, JsValue> {
+    use base64::Engine as _;
+    use kutup_crypto::account_roots as r;
+    let input: AccountRootsInput = serde_wasm_bindgen::from_value(roots)
+        .map_err(|_| js_error("the account's roots are malformed"))?;
+    let bytes = |value: &str| {
+        let decoded = zeroize::Zeroizing::new(
+            base64::engine::general_purpose::STANDARD
+                .decode(value)
+                .map_err(|_| js_error("an account root is not base64"))?,
+        );
+        Ok::<_, JsValue>(decoded)
+    };
+    let bad = |error: kutup_crypto::error::CryptoError| js_error(&error.to_string());
+    Ok(r::AccountRoots {
+        identity_generation: r::RootGeneration::new(input.identity_generation).map_err(bad)?,
+        identity: r::IdentityRoot::from_slice(&bytes(&input.identity_root)?).map_err(bad)?,
+        drive_generation: r::RootGeneration::new(input.drive_generation).map_err(bad)?,
+        drive: r::DriveRoot::from_slice(&bytes(&input.drive_root)?).map_err(bad)?,
+        pseudonym: r::GroupPseudonymRoot::from_slice(&bytes(&input.pseudonym_root)?)
+            .map_err(bad)?,
+        call_link: r::CallLinkRoot::from_slice(&bytes(&input.call_link_root)?).map_err(bad)?,
+        object_id: r::ObjectIdKey::from_slice(&bytes(&input.object_id_key)?).map_err(bad)?,
+    })
+}
+
 fn master_key_bytes(master_key: Vec<u8>) -> std::result::Result<[u8; 32], JsValue> {
     master_key
         .try_into()
@@ -4729,13 +4786,15 @@ impl WasmLinkingDevice {
         display_name: String,
         sealed_sender_enabled: bool,
         master_key: Vec<u8>,
+        roots: JsValue,
         binding: String,
         transport: JsChatTransport,
     ) -> std::result::Result<WasmChatClient, JsValue> {
         let envelope: kutup_chat_proto::ProvisionEnvelopeV1 =
             from_transport(envelope).map_err(chat_error)?;
         let master_key = master_key_bytes(master_key)?;
-        let authority = AccountAuthority::derive(&master_key).map_err(chat_error)?;
+        let roots = account_roots(roots)?;
+        let authority = AccountAuthority::derive(&roots.identity).map_err(chat_error)?;
         let db = Rc::new(
             IndexedDbChatDb::open(&database_name, &master_key)
                 .await
@@ -4756,6 +4815,7 @@ impl WasmLinkingDevice {
         WasmChatClient::finish_open(
             engine,
             &master_key,
+            &roots,
             &binding,
             &display_name,
             sealed_sender_enabled,

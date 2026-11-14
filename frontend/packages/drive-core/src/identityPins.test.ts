@@ -326,6 +326,7 @@ import {
   verifyPerson,
 } from './identityPins'
 import type { DriveIdentity } from './identity'
+import { testRoots } from '@kutup/crypto/accountRoots.testing'
 
 const me: DriveIdentity = {
   userId: 'me-id',
@@ -334,6 +335,7 @@ const me: DriveIdentity = {
   binding: ME_BINDING,
   incarnationId: 'inc-ME',
   masterKey: new Uint8Array(32),
+  roots: testRoots(0),
   privateKey: new Uint8Array(32),
   authorityPublicKey: 'ME',
 }

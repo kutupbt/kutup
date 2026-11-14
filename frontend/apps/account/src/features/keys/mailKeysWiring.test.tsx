@@ -30,7 +30,7 @@ vi.mock('@kutup/session/client', () => ({
   },
 }))
 vi.mock('@kutup/session/store', () => ({
-  useRequiredSession: () => ({ masterKey: new Uint8Array(32), envelopeBinding: 'binding', userId: 'me' }),
+  useRequiredSession: () => ({ masterKey: new Uint8Array(32), roots: { identityGeneration: 1, identityRoot: 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=', driveGeneration: 1, driveRoot: 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=', pseudonymRoot: 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=', callLinkRoot: 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=', objectIdKey: 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=' }, envelopeBinding: 'binding', userId: 'me' }),
 }))
 
 const { useChangeKey, useNewKey } = await import('./mailKeys')

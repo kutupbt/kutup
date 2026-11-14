@@ -306,7 +306,10 @@ impl MockServer {
             }
         }
         let next = sign(
-            &AccountAuthority::derive(&[11; 32]).unwrap(),
+            &AccountAuthority::derive(&kutup_crypto::account_roots::IdentityRoot::from_bytes(
+                [11; 32],
+            ))
+            .unwrap(),
             account,
             chain.last().map_or(1, |last| last.sequence + 1),
             chain.last().map(|last| last.manifest_hash().unwrap()),
@@ -670,7 +673,10 @@ fn signed_manifest(account: &str, bundle: &DevicePreKeyBundle) -> AccountManifes
     signed_manifest_with_authority(
         account,
         bundle,
-        &AccountAuthority::derive(&[11; 32]).unwrap(),
+        &AccountAuthority::derive(&kutup_crypto::account_roots::IdentityRoot::from_bytes(
+            [11; 32],
+        ))
+        .unwrap(),
     )
 }
 
@@ -704,7 +710,10 @@ fn signed_manifest_with_authority(
 fn local_devices_extend_only_the_prior_account_signed_manifest() {
     let mut rng = test_rng();
     let server = Rc::new(MockServer::default());
-    let authority = AccountAuthority::derive(&[12; 32]).unwrap();
+    let authority = AccountAuthority::derive(
+        &kutup_crypto::account_roots::IdentityRoot::from_bytes([12; 32]),
+    )
+    .unwrap();
     let account = "aci:00000000-0000-4000-8000-2bd806c97f0e@example.test";
 
     let first_session = device(account, 1, &mut rng);
@@ -774,7 +783,7 @@ fn a_manifest_from_before_x_wing_moves_on_to_the_accounts_new_drive_keys() {
     use base64::Engine as _;
     let mut rng = test_rng();
     let server = Rc::new(MockServer::default());
-    let master = [12; 32];
+    let master = kutup_crypto::account_roots::IdentityRoot::from_bytes([12; 32]);
     let authority = AccountAuthority::derive(&master).unwrap();
     let account = "aci:00000000-0000-4000-8000-2bd806c97f0e@example.test";
     let db = Rc::new(SqliteChatDb::open_in_memory().unwrap());
@@ -1126,7 +1135,10 @@ fn production_engine_rejects_a_bundle_device_not_in_the_manifest() {
 #[test]
 fn first_contact_safety_number_authenticates_and_pins_the_remote_manifest() {
     let mut rng = test_rng();
-    let peer_authority = AccountAuthority::derive(&[40; 32]).unwrap();
+    let peer_authority = AccountAuthority::derive(
+        &kutup_crypto::account_roots::IdentityRoot::from_bytes([40; 32]),
+    )
+    .unwrap();
     let bob = device(
         "aci:00000000-0000-4000-8000-81b637d8fcd2@example.test",
         1,
@@ -1173,8 +1185,14 @@ fn a_forged_authority_over_a_real_identity_is_never_verified_by_a_scan() {
     let mut rng = test_rng();
     let bob_account = "aci:00000000-0000-4000-8000-81b637d8fcd2@example.test";
     let alice_account = "aci:00000000-0000-4000-8000-2bd806c97f0e@example.test";
-    let real_authority = AccountAuthority::derive(&[41; 32]).unwrap();
-    let forged_authority = AccountAuthority::derive(&[66; 32]).unwrap();
+    let real_authority = AccountAuthority::derive(
+        &kutup_crypto::account_roots::IdentityRoot::from_bytes([41; 32]),
+    )
+    .unwrap();
+    let forged_authority = AccountAuthority::derive(
+        &kutup_crypto::account_roots::IdentityRoot::from_bytes([66; 32]),
+    )
+    .unwrap();
     let bob = device(bob_account, 1, &mut rng);
     let bob_bundle = bundle_of(&bob, 1);
     let devices = vec![AccountManifestDeviceV3::chat(
@@ -1288,9 +1306,18 @@ fn account_replacement_is_restart_safe_and_requires_the_exact_new_qr() {
         "kutup-chat-account-reset-{}.db",
         OsRng.unwrap_err().try_next_u64().unwrap()
     ));
-    let local_authority = AccountAuthority::derive(&[31; 32]).unwrap();
-    let old_authority = AccountAuthority::derive(&[41; 32]).unwrap();
-    let new_authority = AccountAuthority::derive(&[42; 32]).unwrap();
+    let local_authority = AccountAuthority::derive(
+        &kutup_crypto::account_roots::IdentityRoot::from_bytes([31; 32]),
+    )
+    .unwrap();
+    let old_authority = AccountAuthority::derive(
+        &kutup_crypto::account_roots::IdentityRoot::from_bytes([41; 32]),
+    )
+    .unwrap();
+    let new_authority = AccountAuthority::derive(
+        &kutup_crypto::account_roots::IdentityRoot::from_bytes([42; 32]),
+    )
+    .unwrap();
     let bob_old = device(
         "aci:00000000-0000-4000-8000-81b637d8fcd2@example.test",
         1,
@@ -3595,8 +3622,14 @@ fn pin_of(
 fn chat_meets_a_contact_by_the_identity_its_other_apps_trust() {
     use kutup_crypto::identity_pins::PinState;
     let master = [30u8; 32];
-    let bob_authority = AccountAuthority::derive(&[40; 32]).unwrap();
-    let other_authority = AccountAuthority::derive(&[41; 32]).unwrap();
+    let bob_authority = AccountAuthority::derive(
+        &kutup_crypto::account_roots::IdentityRoot::from_bytes([40; 32]),
+    )
+    .unwrap();
+    let other_authority = AccountAuthority::derive(
+        &kutup_crypto::account_roots::IdentityRoot::from_bytes([41; 32]),
+    )
+    .unwrap();
     let open = |pins: Option<kutup_chat_core::IdentityPinsRecord>| {
         let mut rng = test_rng();
         let bob = device(

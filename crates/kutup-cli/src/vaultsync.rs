@@ -75,6 +75,8 @@ pub struct VaultKeys {
 
 struct Account {
     master_key: Zeroizing<Vec<u8>>,
+    /// The account's roots (docs/plans/identity-root.md).
+    roots: kutup_crypto::account_roots::AccountRoots,
     /// What the account's envelopes are bound to (docs/plans/account-identity.md).
     binding: String,
     /// The profile's data directory: the account head's device state.
@@ -133,6 +135,7 @@ impl VaultKeys {
     pub fn sign_in(&mut self, session: &crate::session::Session, profile: &str) -> Result<()> {
         self.account = Some(Account {
             master_key: Zeroizing::new(session.master_key_bytes()?),
+            roots: session.roots()?,
             binding: session.binding().to_string(),
             dir: crate::config::data_dir(profile)?,
         });
@@ -150,6 +153,7 @@ impl VaultKeys {
             .context("vault keys are not signed in")?;
         self.account = Some(Account {
             master_key: Zeroizing::new(session.master_key_bytes()?),
+            roots: session.roots()?,
             binding: session.binding().to_string(),
             dir,
         });
@@ -241,17 +245,23 @@ impl VaultKeys {
             // Held to the account head; refused (or unreachable), no kept key
             // is used and vaults ask for their own.
             self.stored = Some(
-                verified_secrets(client, &account.master_key, &account.binding, &account.dir)
-                    .map(|rows| {
-                        rows.into_iter()
-                            .filter(|r| r.state == crate::api::pass::VaultSecretState::Open)
-                            .map(|r| (r.file_id, r.envelope))
-                            .collect()
-                    })
-                    .unwrap_or_else(|error| {
-                        eprintln!("  The kept vault keys could not be checked: {error:#}");
-                        BTreeMap::new()
-                    }),
+                verified_secrets(
+                    client,
+                    &account.master_key,
+                    &account.roots,
+                    &account.binding,
+                    &account.dir,
+                )
+                .map(|rows| {
+                    rows.into_iter()
+                        .filter(|r| r.state == crate::api::pass::VaultSecretState::Open)
+                        .map(|r| (r.file_id, r.envelope))
+                        .collect()
+                })
+                .unwrap_or_else(|error| {
+                    eprintln!("  The kept vault keys could not be checked: {error:#}");
+                    BTreeMap::new()
+                }),
             );
         }
         let stored = self.stored.as_ref()?;
@@ -285,6 +295,7 @@ impl VaultKeys {
         let kept = keep_secret(
             client,
             &account.master_key,
+            &account.roots,
             &account.binding,
             &account.dir,
             file_id,
@@ -314,6 +325,7 @@ const GUARD_SCOPE: &str = "pass-vault-secret";
 pub(crate) fn secrets_head<'a>(
     client: &'a Client,
     master_key: &[u8],
+    roots: &kutup_crypto::account_roots::AccountRoots,
     binding: &str,
     dir: &std::path::Path,
 ) -> Result<crate::account_head::CliHead<'a>> {
@@ -321,7 +333,7 @@ pub(crate) fn secrets_head<'a>(
         .try_into()
         .context("master key must be 32 bytes")?;
     let incarnation =
-        kutup_crypto::identity::AccountIdentityKeysV1::derive(&master_key)?.incarnation_id();
+        kutup_crypto::identity::AccountIdentityKeysV1::derive(&roots.identity)?.incarnation_id();
     crate::account_head::CliHead::open(
         client,
         &master_key,
@@ -347,15 +359,17 @@ fn envelope_revision(envelope_b64: &str) -> u64 {
 pub(crate) fn verified_secrets(
     client: &Client,
     master_key: &[u8],
+    roots: &kutup_crypto::account_roots::AccountRoots,
     binding: &str,
     dir: &std::path::Path,
 ) -> Result<Vec<crate::api::pass::VaultSecretRow>> {
-    let mut head = secrets_head(client, master_key, binding, dir)?;
+    let mut head = secrets_head(client, master_key, roots, binding, dir)?;
     let guard = crate::account_head::CliHead::guard(
         dir,
         master_key
             .try_into()
             .context("master key must be 32 bytes")?,
+        &roots.object_id,
         binding,
     )?;
     let mut last = None;
@@ -398,6 +412,7 @@ pub(crate) fn verified_secrets(
 pub(crate) fn keep_secret(
     client: &Client,
     master_key: &[u8],
+    roots: &kutup_crypto::account_roots::AccountRoots,
     binding: &str,
     dir: &std::path::Path,
     file_id: &str,
@@ -419,10 +434,11 @@ pub(crate) fn keep_secret(
         master_key
             .try_into()
             .context("master key must be 32 bytes")?,
+        &roots.object_id,
         binding,
     )?;
     let guard = &guard;
-    let mut head = secrets_head(client, master_key, binding, dir)?;
+    let mut head = secrets_head(client, master_key, roots, binding, dir)?;
     let mut done: Option<String> = None;
     let stored = head.listed_write(HEAD_SCOPE, |_index, _attempt| {
         let now = client
@@ -475,11 +491,12 @@ pub(crate) fn keep_secret(
 pub(crate) fn forget_secret(
     client: &Client,
     master_key: &[u8],
+    roots: &kutup_crypto::account_roots::AccountRoots,
     binding: &str,
     dir: &std::path::Path,
     file_id: &str,
 ) -> Result<()> {
-    let mut head = secrets_head(client, master_key, binding, dir)?;
+    let mut head = secrets_head(client, master_key, roots, binding, dir)?;
     head.listed_write(HEAD_SCOPE, |index, _attempt| {
         if index.revision(file_id).is_none() {
             return Ok(None);

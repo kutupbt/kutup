@@ -5,7 +5,7 @@ use async_trait::async_trait;
 use kutup_chat_proto::{AccountManifestPublicationV3, AccountManifestV3};
 use kutup_client_ffi::{
     open_native_chat_client, ChatHttpClient, ChatHttpMethod, ChatHttpRequest, ChatHttpResponse,
-    KutupChatError,
+    KutupChatError, NativeAccountKeys,
 };
 
 struct MockHttp {
@@ -126,12 +126,33 @@ fn encrypted_install_registers_once_and_reopens() {
     let database = database.to_string_lossy().into_owned();
     let http = Arc::new(MockHttp::new());
 
+    // The account's root records under its master key [9; 32], and its
+    // authority (docs/plans/identity-root.md).
+    let roots = {
+        let roots = kutup_crypto::account_roots::AccountRoots::generate();
+        let records = roots
+            .seal(
+                &[9; 32],
+                kutup_crypto::account_record::MasterKeyGeneration::FIRST,
+                "0b6b5e0c-4c1e-4b8e-9c2d-6a1f3e5d7c9b",
+            )
+            .unwrap();
+        let authority = kutup_crypto::identity::AccountIdentityKeysV1::derive(&roots.identity)
+            .unwrap()
+            .authority_public_key()
+            .to_vec();
+        (records, authority)
+    };
     let first = futures_executor::block_on(open_native_chat_client(
         database.clone(),
         vec![3; 32],
         ALICE.into(),
-        vec![9; 32],
-        "0b6b5e0c-4c1e-4b8e-9c2d-6a1f3e5d7c9b".into(),
+        NativeAccountKeys {
+            master_key: vec![9; 32],
+            root_records: roots.0.clone(),
+            authority_public_key: roots.1.clone(),
+            binding: "0b6b5e0c-4c1e-4b8e-9c2d-6a1f3e5d7c9b".into(),
+        },
         http.clone(),
     ))
     .unwrap();
@@ -168,8 +189,12 @@ fn encrypted_install_registers_once_and_reopens() {
         database.clone(),
         vec![4; 32],
         ALICE.into(),
-        vec![9; 32],
-        "0b6b5e0c-4c1e-4b8e-9c2d-6a1f3e5d7c9b".into(),
+        NativeAccountKeys {
+            master_key: vec![9; 32],
+            root_records: roots.0.clone(),
+            authority_public_key: roots.1.clone(),
+            binding: "0b6b5e0c-4c1e-4b8e-9c2d-6a1f3e5d7c9b".into(),
+        },
         http.clone(),
     ));
     assert!(matches!(wrong_key, Err(KutupChatError::Storage { .. })));
@@ -178,8 +203,12 @@ fn encrypted_install_registers_once_and_reopens() {
         database,
         vec![3; 32],
         ALICE.into(),
-        vec![9; 32],
-        "0b6b5e0c-4c1e-4b8e-9c2d-6a1f3e5d7c9b".into(),
+        NativeAccountKeys {
+            master_key: vec![9; 32],
+            root_records: roots.0.clone(),
+            authority_public_key: roots.1.clone(),
+            binding: "0b6b5e0c-4c1e-4b8e-9c2d-6a1f3e5d7c9b".into(),
+        },
         http.clone(),
     ))
     .unwrap();

@@ -15,6 +15,7 @@
 // account and incarnation, so two accounts in one browser, or an account
 // before and after a reset, never share or compare anchors.
 
+import type { IdentityRoot } from '@kutup/crypto/accountRoots'
 import { isAxiosError } from 'axios'
 import {
   AccountHead,
@@ -530,9 +531,9 @@ export class AccountHeadClient {
 }
 
 /** An engine that opens the Rust head on first use (the master key crosses once). */
-function lazyEngine(masterKey: Uint8Array, binding: string): Promise<HeadEngine> {
+function lazyEngine(masterKey: Uint8Array, identityRoot: IdentityRoot, binding: string): Promise<HeadEngine> {
   return (async () => {
-    const { incarnationId } = await deriveAccountIdentityKeys(toBase64(masterKey))
+    const { incarnationId } = await deriveAccountIdentityKeys(identityRoot)
     return AccountHead.open(masterKey, binding, incarnationId)
   })()
 }
@@ -544,7 +545,12 @@ const clients = new Map<string, { masterKey: string; client: Promise<AccountHead
  * The account's head client for this page: one per signed-in account (made
  * again when the master key changes), over this origin's store.
  */
-export function accountHead(session: { userId: string; masterKey: Uint8Array; envelopeBinding: string }): Promise<AccountHeadClient> {
+export function accountHead(session: {
+  userId: string
+  masterKey: Uint8Array
+  roots: { identityRoot: IdentityRoot }
+  envelopeBinding: string
+}): Promise<AccountHeadClient> {
   const masterKey = toBase64(session.masterKey)
   const known = clients.get(session.userId)
   if (known?.masterKey === masterKey) return known.client
@@ -552,7 +558,7 @@ export function accountHead(session: { userId: string; masterKey: Uint8Array; en
   watchSignOut()
   shared ??= indexedDbRevisionStore()
   const store = shared
-  const client = lazyEngine(session.masterKey, session.envelopeBinding).then((engine) => new AccountHeadClient(engine, store))
+  const client = lazyEngine(session.masterKey, session.roots.identityRoot, session.envelopeBinding).then((engine) => new AccountHeadClient(engine, store))
   // Not kept when it failed: the next call tries again.
   client.catch(() => {
     if (clients.get(session.userId)?.client === client) clients.delete(session.userId)

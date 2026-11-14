@@ -1,9 +1,10 @@
 import { createCollectionEpochStatement, verifyCollectionEpochStatement } from './collectionEpoch'
 import { DRIVE_ENVELOPE_PURPOSE, openDriveEnvelope, sealDriveEnvelope } from './driveEnvelope'
 import { deriveAccountIdentityKeys } from './identity'
+import type { AccountSecrets } from './accountRoots'
 import type { AccountRef } from './accountRef'
 import { openNamedShareEnvelope } from './namedShare'
-import { fromBase64, toBase64 } from './base64'
+import { fromBase64 } from './base64'
 import { generateKey } from './symmetric'
 
 export interface OwnedCollectionWireV1 {
@@ -31,14 +32,14 @@ export interface CreateOwnedCollectionV1 {
 
 /** Build the complete epoch-1 record before the server sees the collection. */
 export async function createOwnedCollectionV1(
-  masterKey: Uint8Array,
+  account: AccountSecrets,
   ownerUserId: string,
   name: string,
   parentCollectionId: string | null,
 ): Promise<CreateOwnedCollectionV1> {
   const id = crypto.randomUUID().toLowerCase()
   const collectionKey = await generateKey()
-  const ownerKeyEnvelope = await sealDriveEnvelope(collectionKey, masterKey, {
+  const ownerKeyEnvelope = await sealDriveEnvelope(collectionKey, account.masterKey, {
     purpose: DRIVE_ENVELOPE_PURPOSE.collectionKey,
     epoch: 1,
     revision: 1n,
@@ -53,14 +54,14 @@ export async function createOwnedCollectionV1(
     parentId: ownerUserId,
   })
   const epochStatement = await createCollectionEpochStatement(
-    masterKey,
+    account.roots.identityRoot,
     collectionKey,
     id,
     ownerUserId,
     1,
     undefined,
   )
-  const identity = await deriveAccountIdentityKeys(toBase64(masterKey))
+  const identity = await deriveAccountIdentityKeys(account.roots.identityRoot)
   const epochStatementHash = await verifyCollectionEpochStatement(
     epochStatement,
     identity.authorityPublicKey,
@@ -80,12 +81,12 @@ export async function createOwnedCollectionV1(
 /** Decrypt and independently verify a complete owner collection record. */
 export async function openOwnedCollectionV1(
   row: OwnedCollectionWireV1,
-  masterKey: Uint8Array,
+  account: AccountSecrets,
 ): Promise<{ collectionKey: Uint8Array; name: string }> {
   if (!Number.isSafeInteger(row.nameRevision) || row.nameRevision < 1) {
     throw new Error('invalid collection name revision')
   }
-  const collectionKey = await openOwnedCollectionKeyV1(row, masterKey)
+  const collectionKey = await openOwnedCollectionKeyV1(row, account)
   const name = await openDriveEnvelope(row.nameEnvelope, collectionKey, {
     purpose: DRIVE_ENVELOPE_PURPOSE.collectionName,
     epoch: row.keyEpoch,
@@ -99,20 +100,20 @@ export async function openOwnedCollectionV1(
 export async function openOwnedCollectionKeyV1(
   row: Pick<OwnedCollectionWireV1,
     'id' | 'ownerUserId' | 'ownerKeyEnvelope' | 'keyEpoch' | 'epochStatement' | 'epochStatementHash'>,
-  masterKey: Uint8Array,
+  account: AccountSecrets,
 ): Promise<Uint8Array> {
   if (!row.ownerKeyEnvelope) throw new Error('owner key envelope missing')
   if (!Number.isSafeInteger(row.keyEpoch) || row.keyEpoch < 1) {
     throw new Error('invalid collection epoch')
   }
-  const collectionKey = await openDriveEnvelope(row.ownerKeyEnvelope, masterKey, {
+  const collectionKey = await openDriveEnvelope(row.ownerKeyEnvelope, account.masterKey, {
     purpose: DRIVE_ENVELOPE_PURPOSE.collectionKey,
     epoch: row.keyEpoch,
     revision: 1n,
     objectId: row.id,
     parentId: row.ownerUserId,
   })
-  const identity = await deriveAccountIdentityKeys(toBase64(masterKey))
+  const identity = await deriveAccountIdentityKeys(account.roots.identityRoot)
   const statementHash = await verifyCollectionEpochStatement(
     row.epochStatement,
     identity.authorityPublicKey,

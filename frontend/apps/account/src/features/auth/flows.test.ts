@@ -8,12 +8,19 @@ vi.mock('@kutup/session/persist', () => ({ persistKeys: vi.fn() }))
 const crypto_ = vi.hoisted(() => ({
   toBase64: () => 'master',
   driveKeysOf: vi.fn(() => Promise.resolve({ publicKey: 'p', privateKey: new Uint8Array(32) })),
-  generateAccountKeySet: vi.fn((binding: string) => Promise.resolve({ mnemonic: 'words', masterKey: new Uint8Array(32), recoveryProof: `proof-${binding}` })),
+  generateAccountKeySet: vi.fn((binding: string) => Promise.resolve({ mnemonic: 'words', masterKey: new Uint8Array(32), roots: testRoots(0), recoveryProof: `proof-${binding}` })),
   rebindAccountKeySet: vi.fn((keys: { mnemonic: string }, binding: string) =>
-    Promise.resolve({ mnemonic: keys.mnemonic, masterKey: new Uint8Array(32), recoveryProof: `proof-${binding}`, recoveryKeyEnvelope: `recovery-${binding}` }),
+    Promise.resolve({ mnemonic: keys.mnemonic, masterKey: new Uint8Array(32), roots: testRoots(0), recoveryProof: `proof-${binding}`, recoveryKeyEnvelope: `recovery-${binding}` }),
   ),
 }))
 vi.mock('@kutup/crypto', () => crypto_)
+const roots_ = vi.hoisted(() => ({
+  openAccountRoots: vi.fn(() =>
+    Promise.resolve({ identityGeneration: 1, identityRoot: 'id', driveGeneration: 1, driveRoot: 'd', pseudonymRoot: 'p', callLinkRoot: 'c', objectIdKey: 'o' }),
+  ),
+  isIdentityRootMismatch: (error: unknown) => String(error).includes('identityRootMismatch'),
+}))
+vi.mock('@kutup/crypto/accountRoots', () => roots_)
 const registrar = vi.hoisted(() => ({ register: vi.fn(), close: vi.fn() }))
 vi.mock('@kutup/crypto/opaqueWorker', () => ({ startOpaqueRegistration: vi.fn(() => Promise.resolve(registrar)) }))
 const signDriveKeyBinding = vi.hoisted(() => vi.fn(() => Promise.resolve('binding')))
@@ -36,7 +43,8 @@ vi.mock('@kutup/session/profile', () => ({ activateSession }))
 const store = vi.hoisted(() => ({ setAccessToken: vi.fn(), clearSession: vi.fn() }))
 vi.mock('@kutup/session/store', () => store)
 
-import { abandonTotp, completeTotp, generateAccountKeys, registerAndSignIn, RegistrationConflictError, signIn } from './flows'
+import { abandonTotp, AccountKeysMismatchError, completeTotp, generateAccountKeys, registerAndSignIn, RegistrationConflictError, signIn } from './flows'
+import { testRoots } from '@kutup/crypto/accountRoots.testing'
 
 function refused(status: number, code?: string): AxiosError {
   const response = { status, data: code ? { error: 'refused', code } : { error: 'slow down' }, headers: {}, config: { headers: new AxiosHeaders() }, statusText: '' } as AxiosResponse
@@ -52,6 +60,7 @@ const keys = () =>
     accountIdProof: 'proof',
     mnemonic: 'words',
     masterKey: new Uint8Array(32),
+    roots: testRoots(0),
     privateKey: new Uint8Array(32),
     publicKey: new Uint8Array(32),
     keyBinding: '3f1c9a52-6b7e-4f0e-9d1a-2c3b4d5e6f70',
@@ -89,6 +98,21 @@ describe('signIn', () => {
     expect(store.clearSession).toHaveBeenCalled()
     expect(masterKey.every((byte) => byte === 0)).toBe(true)
     expect(driveKey.every((byte) => byte === 0)).toBe(true)
+    expect(activateSession).not.toHaveBeenCalled()
+    expect(opened.close).toHaveBeenCalled()
+  })
+
+  it('refuses keys whose newest identity root is not the account’s, and ends the sign-in', async () => {
+    const masterKey = new Uint8Array(32).fill(7)
+    const opened = { ...openSignIn(), openMasterKey: vi.fn(() => Promise.resolve(masterKey)) }
+    opaque.opaqueLogin.mockResolvedValue({ data: { ...session, accountRoots: ['r'], accountAuthorityPublicKey: 'a' }, signIn: opened })
+    roots_.openAccountRoots.mockRejectedValueOnce(new Error('identityRootMismatch: the newest identity root (generation 2) does not derive this account\'s authority'))
+    post.mockResolvedValue({ data: {} })
+    await expect(signIn('alice', 'pw')).rejects.toBeInstanceOf(AccountKeysMismatchError)
+    expect(roots_.openAccountRoots).toHaveBeenCalledWith(masterKey, 'kb', ['r'], 'a')
+    expect(post).toHaveBeenCalledWith('/auth/logout')
+    expect(store.clearSession).toHaveBeenCalled()
+    expect(masterKey.every((byte) => byte === 0)).toBe(true)
     expect(activateSession).not.toHaveBeenCalled()
     expect(opened.close).toHaveBeenCalled()
   })

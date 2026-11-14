@@ -189,13 +189,28 @@ pub(crate) fn login_with_password(
         .export_key
         .open_master_key(&resp.master_key_envelope, &binding)
         .context("decrypt master key")?;
-    // The Drive keys are derived from the master key, never stored
-    // (docs/plans/w6-key-hierarchy.md §1).
+    // The account's roots open with the master key; its identity (the
+    // Drive keys too) comes from the identity root, whose authority must be
+    // the account's (docs/plans/identity-root.md).
     let master: [u8; 32] = master_key
         .as_slice()
         .try_into()
         .context("the master key is 32 bytes")?;
-    let identity = kutup_crypto::identity::AccountIdentityKeysV1::derive(&master)
+    let authority: [u8; 32] = b64
+        .decode(&resp.account_authority_public_key)
+        .ok()
+        .and_then(|bytes| bytes.try_into().ok())
+        .context("the server did not give the account's authority")?;
+    let records = resp
+        .account_roots
+        .iter()
+        .map(|record| b64.decode(record))
+        .collect::<std::result::Result<Vec<_>, _>>()
+        .context("the account's root records are not base64")?;
+    let roots =
+        kutup_crypto::account_roots::AccountRoots::open(&records, &master, &binding, &authority)
+            .context("open the account's roots")?;
+    let identity = kutup_crypto::identity::AccountIdentityKeysV1::derive(&roots.identity)
         .context("derive the account's keys")?;
     let public_key = b64.encode(identity.drive_hpke_public_key());
     if public_key != resp.public_key {
@@ -239,6 +254,8 @@ pub(crate) fn login_with_password(
         private_key: b64.encode(&private_key),
         public_key,
         master_key_envelope,
+        account_roots: resp.account_roots,
+        account_authority_public_key: resp.account_authority_public_key,
         storage_quota_bytes: resp.storage_quota_bytes,
         storage_used_bytes: resp.storage_used_bytes,
     };

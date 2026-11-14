@@ -8,7 +8,6 @@
 
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { isAxiosError } from 'axios'
-import { toBase64 } from '@kutup/crypto/base64'
 import { foldAddress, signAccountRename, type AccountRenameV1 } from '@kutup/crypto/accountRename'
 import { firstAddressKey, ownAddressState, type FirstAddressKey } from '@kutup/mail-core/addressKey'
 import { loadServerSettings } from '@kutup/session/apps'
@@ -102,7 +101,6 @@ export async function renameAccount(name: string, needsKey: boolean, password: O
   if (!session) throw new Error('not signed in')
   // The password first: nothing is built for a wrong one.
   const grant = await accountGrant(password.take(), 'rename')
-  const masterKey = toBase64(session.masterKey)
   // Where the chain ends and the address it ends at, read now. Another device
   // may have renamed since this page loaded: then this rename is no longer
   // the one the person chose, and they are told so.
@@ -119,7 +117,7 @@ export async function renameAccount(name: string, needsKey: boolean, password: O
   if (own === 'freed') throw new NameRefusedError('ownFreedName')
   const body: RenameRequest = {
     grant,
-    rename: await signAccountRename(masterKey, me.renames.sequence + 1, me.address, address, Date.now()),
+    rename: await signAccountRename(session.roots.identityRoot, me.renames.sequence + 1, me.address, address, Date.now()),
     ...(own === 'none' ? { mailAddress: await firstAddressKey(session, address) } : {}),
   }
   try {

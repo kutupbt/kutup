@@ -105,6 +105,8 @@ pub struct Me {
     binding: String,
     pub identity: AccountIdentityKeysV1,
     master_key: [u8; 32],
+    /// The account's object-id key (a stored root): its guard's names.
+    object_id_key: kutup_crypto::account_roots::ObjectIdKey,
     profile: String,
 }
 
@@ -122,12 +124,14 @@ impl Me {
         if current.account_id != ctx.session.user_id {
             bail!("the server described another account than this session's");
         }
+        let roots = ctx.session.roots()?;
         Ok(Me {
             account_ref: AccountRef::new(&current.server, &current.account_id)
                 .context("this session's account id is not valid")?,
             binding: ctx.session.binding().to_string(),
-            identity: AccountIdentityKeysV1::derive(&master_key)?,
+            identity: AccountIdentityKeysV1::derive(&roots.identity)?,
             master_key,
+            object_id_key: roots.object_id,
             profile: profile.to_string(),
         })
     }
@@ -152,6 +156,7 @@ impl Me {
         crate::account_head::CliHead::guard(
             &config::data_dir(&self.profile)?,
             &self.master_key,
+            &self.object_id_key,
             &self.binding,
         )
     }

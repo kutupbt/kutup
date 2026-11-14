@@ -6598,6 +6598,8 @@ struct ForwardState {
     username: String,
     password: String,
     master_key: String,
+    /// The account's identity root (its authority signs the key lists).
+    identity_root: String,
     binding: String,
     address: String,
     address_id: String,
@@ -6853,6 +6855,7 @@ fn outside_forwarding() {
                 username: alice.username.clone(),
                 password: alice.password.clone(),
                 master_key: b64(&alice.master_key),
+                identity_root: b64(alice.roots.identity.as_bytes()),
                 binding: alice.binding.clone(),
                 address: a.address.clone(),
                 address_id: alice_address_id,
@@ -7061,8 +7064,12 @@ Date: Mon, 19 Oct 2026 10:00:00 +0000\r\nMessage-ID: <opause-{tag}@sender.test>\
                 .unwrap();
             assert_eq!(addresses[0]["keyListOwed"], true);
             // The owner's client settles it: the next list without the flag.
-            let master: [u8; 32] = decode(&state.master_key).try_into().unwrap();
-            let identity = kutup_crypto::identity::AccountIdentityKeysV1::derive(&master).unwrap();
+            let identity_root = kutup_crypto::account_roots::IdentityRoot::from_slice(&decode(
+                &state.identity_root,
+            ))
+            .unwrap();
+            let identity =
+                kutup_crypto::identity::AccountIdentityKeysV1::derive(&identity_root).unwrap();
             let signed = mail_key::SignedMailKeyListV1::verify(
                 &decode(addresses[0]["keyList"]["data"].as_str().unwrap()),
                 &decode(addresses[0]["keyList"]["signature"].as_str().unwrap()),

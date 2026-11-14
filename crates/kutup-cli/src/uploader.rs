@@ -523,13 +523,13 @@ pub fn create_sub_collection(
     parent_id: &str,
     parent_hash_key: &[u8; 32],
     owner_user_id: &str,
-    master_key: &[u8],
+    session: &crate::session::Session,
 ) -> Result<(String, [u8; 32])> {
     let (mut request, collection_key) = crate::collection_crypto::create_owned(
         name,
         Some(parent_id.to_string()),
         owner_user_id,
-        master_key,
+        session,
     )?;
     request.name_hash = Some(crate::names::name_hash(parent_hash_key, name)?);
     let resp = client.create_collection(&request)?;

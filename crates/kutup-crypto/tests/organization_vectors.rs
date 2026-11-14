@@ -49,8 +49,11 @@ struct Vectors {
 }
 
 fn person(master: &str, account: &str) -> (AccountIdentityKeysV1, Party) {
-    let keys = AccountIdentityKeysV1::derive(&STANDARD.decode(master).unwrap().try_into().unwrap())
-        .unwrap();
+    let keys = AccountIdentityKeysV1::derive(
+        &kutup_crypto::account_roots::IdentityRoot::from_slice(&STANDARD.decode(master).unwrap())
+            .unwrap(),
+    )
+    .unwrap();
     let account: AccountRef = account.parse().unwrap();
     let party = Party::new(&account, &keys.incarnation_id()).unwrap();
     (keys, party)
@@ -97,8 +100,14 @@ fn write_vectors() {
     .unwrap();
     let verified =
         KeyCertificateV1::verify(&certificate, &admin_keys.authority_public_key()).unwrap();
-    let escrow =
-        EscrowV1::seal(&[0x33; 32], MasterKeyGeneration::FIRST, &verified, &member).unwrap();
+    let escrow = EscrowV1::seal(
+        &[0x33; 32],
+        &kutup_crypto::account_roots::IdentityRoot::from_bytes([0x33; 32]),
+        MasterKeyGeneration::FIRST,
+        &verified,
+        &member,
+    )
+    .unwrap();
     let vectors = Vectors {
         organization_id: ORG.into(),
         organization_seed: hex::encode(seed),

@@ -10,6 +10,7 @@ mod account_devices;
 mod account_heads;
 mod account_ids;
 mod account_names;
+mod account_roots;
 mod albums;
 mod auth_check;
 mod calendar_alarms;
@@ -824,6 +825,7 @@ fn build_router(state: AppState) -> Router {
             get(handlers::account_heads::head).post(handlers::account_heads::start),
         )
         .route("/api/account/heads", get(handlers::account_heads::heads))
+        .route("/api/account/roots", get(account_roots::get))
         .route(
             "/api/account/index/:scope",
             get(handlers::account_heads::index),

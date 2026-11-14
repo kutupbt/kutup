@@ -3,6 +3,7 @@
 // on other accounts' authorities. Rust owns both formats
 // (kutup-crypto drive_key_binding, identity_pins).
 
+import type { IdentityRoot } from './accountRoots'
 import type { AccountRef } from './accountRef'
 import { MASTER_KEY_GENERATION } from './masterKeyGeneration'
 import type { AccountRenameV1 } from './accountRename'
@@ -79,8 +80,8 @@ export const FIRST_DRIVE_KEY_BINDING_EPOCH = 1
  * authority for `account` (its server and id). Each new set of Drive keys
  * takes the next epoch.
  */
-export async function signDriveKeyBinding(masterKeyBase64: string, account: AccountRef, bindingEpoch: number): Promise<string> {
-  return (await getCryptoWasm()).signDriveKeyBinding(masterKeyBase64, account, bindingEpoch)
+export async function signDriveKeyBinding(identityRoot: IdentityRoot, account: AccountRef, bindingEpoch: number): Promise<string> {
+  return (await getCryptoWasm()).signDriveKeyBinding(identityRoot, account, bindingEpoch)
 }
 
 /**

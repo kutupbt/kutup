@@ -25,6 +25,7 @@
 //   is then a fresh one for that value) or put back an older copy of it, but
 //   can neither read the entries nor set one to a revision of its choosing.
 
+import type { ObjectIdKey } from './accountRoots'
 import { toBase64 } from './base64'
 import { getCryptoWasm } from './rustWasm'
 
@@ -200,8 +201,14 @@ let testKeys: ((userId: string) => GuardKeys) | null = null
  * The account's guard over the browser's store: its entries are sealed for
  * the account's master key and key binding (`envelopeBinding`).
  */
-export function revisionGuard(session: { userId: string; masterKey: Uint8Array; envelopeBinding: string }): RevisionGuard {
+export function revisionGuard(session: {
+  userId: string
+  masterKey: Uint8Array
+  roots: { objectIdKey: ObjectIdKey }
+  envelopeBinding: string
+}): RevisionGuard {
   const masterKey = toBase64(session.masterKey)
+  const objectIdKey = session.roots.objectIdKey
   const binding = session.envelopeBinding
   const known = guards.get(session.userId)
   // Made again when the master key or the binding is another (the keys are both).
@@ -212,7 +219,7 @@ export function revisionGuard(session: { userId: string; masterKey: Uint8Array; 
   const load = (): Promise<GuardKeys> => {
     if (forTests) return Promise.resolve(forTests(session.userId))
     keys ??= getCryptoWasm()
-      .then((wasm): GuardKeys => new wasm.RevisionGuardKeys(masterKey, binding))
+      .then((wasm): GuardKeys => new wasm.RevisionGuardKeys(masterKey, objectIdKey, binding))
       .catch((error: unknown) => {
         // Not kept: the next call loads again.
         keys = null

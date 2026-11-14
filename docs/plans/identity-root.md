@@ -1,7 +1,8 @@
 # The identity root and the stored account roots (build note)
 
-Status: **proposed** (second session, 2026-11-13). Builds step 1 of
-[identity-rotation.md](identity-rotation.md) §8 (approved 2026-11-12): the
+Status: **approved** by the main session, 2026-11-13, with four notes (below);
+built on `wipe/identity-root`. Builds step 1 of `docs/plans/identity-rotation.md`
+§8 (PR #413, approved 2026-11-12): the
 account identity and four other long-lived roots become random secrets stored
 as account records under the master key (MK), so an MK rotation changes
 nothing a peer sees and moves no record ids. Branch `wipe/identity-root`, into
@@ -171,3 +172,59 @@ The purpose and the suite version it; a key record has no JSON and no `"v"`.
 
 Size: about 3 days. Risk: wide but mechanical, like W6 §3. The newtypes make
 any missed caller a compile error rather than a wrong key.
+
+## As built (2026-11-13)
+
+The four choices above were accepted. The main session added four notes:
+
+1. **Anti-enumeration.** Every answer given before sign-in that is a fake
+   for an unknown name must carry fake roots. As built, none needs to:
+   recovery ends in an ordinary sign-in, so the recovery answer carries no
+   roots. The roots come only in the session answer, after the password is
+   proved, and from `GET /api/account/roots`, which takes a session. The
+   fake-root code was removed.
+2. **`GET /api/account/roots`** answers the session's own account only. Its
+   live test (`account_roots_live`) also checks that a call with no session
+   is `401`.
+3. **`AccountRoots::open`** refuses:
+   - a root missing or given twice;
+   - two records of one generation;
+   - a newest identity root that doesn't derive the registered authority,
+     with an error starting `identityRootMismatch`. No older generation stands
+     in for it.
+
+   The web shows `auth.errors.identityMismatch` (en and tr) and ends the
+   sign-in; the CLI fails the login.
+4. **Main's slice 3 uses the Drive root.** `DriveRoot` is exported from
+   kutup-crypto, from the WASM roots (`driveRoot`), and from the web session
+   (`session.roots.driveRoot`).
+
+Beyond the note:
+
+- **Organization escrow (`EscrowV1`)** seals the master key and the identity
+  root together (64 bytes), and opening it checks that the identity root
+  derives the member's authority. The old check derived the authority from
+  the master key, which no longer gives it. Opening an escrow therefore
+  yields the member's identity root too. That is no more than the master key
+  gave an admin before: the master key opens the root records.
+  - A master-key rotation now keeps the authority, so an older escrow still
+    opens. The master-key rotation exercise compares the escrow's generation
+    with the account's current one.
+  - `docs/plans/organizations.md` says so.
+- **Test vectors:**
+  - Identity vectors are unchanged: the same 32 bytes, now read as an
+    identity root, derive the same keys.
+  - Group- and contact-list entry ids changed: the object-id key is now the
+    HMAC key itself, with no derivation step.
+  - The organization escrow vector changed.
+  - The account-record vectors gained purposes 22–26.
+- **Web:**
+  - The roots have branded types (`IdentityRoot`, `ObjectIdKey`, …), so a
+    master key passed where a root belongs fails to compile.
+  - Helpers that both seal under the master key and sign as the account take
+    `AccountSecrets` (`{ masterKey, roots }`), and a session is one.
+  - The session's key payload is v5, with the roots. Older payloads carry no
+    roots and are refused, so the person signs in again.
+- **CLI:** the session keeps the sealed root records and the authority, and
+  opens the roots with the master key when it needs them
+  (`Session::roots`, `Session::identity`).

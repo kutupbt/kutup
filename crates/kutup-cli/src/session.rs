@@ -62,6 +62,14 @@ pub struct Session {
     pub public_key: String,
     /// Server-returned encrypted blobs (kept for possible re-derivation).
     pub master_key_envelope: String,
+    /// The account's root records (docs/plans/identity-root.md), sealed
+    /// under the master key, as the sign-in gave them, and the authority the
+    /// newest identity root must derive. A session from before them has
+    /// neither: `kutup login` again.
+    #[serde(default)]
+    pub account_roots: Vec<String>,
+    #[serde(default)]
+    pub account_authority_public_key: String,
     pub storage_quota_bytes: i64,
     pub storage_used_bytes: i64,
 }
@@ -85,6 +93,72 @@ impl Session {
     }
     pub fn private_key_bytes(&self) -> Result<Vec<u8>> {
         b64(&self.private_key)
+    }
+
+    /// The account's roots, opened with the master key: the newest identity
+    /// root must derive the account's authority, or this fails (no older
+    /// one stands in).
+    pub fn roots(&self) -> Result<kutup_crypto::account_roots::AccountRoots> {
+        if self.account_roots.is_empty() || self.account_authority_public_key.is_empty() {
+            return Err(anyhow!(
+                "this session has no account roots: run 'kutup login' again"
+            ));
+        }
+        let master: [u8; 32] = self
+            .master_key_bytes()?
+            .try_into()
+            .map_err(|_| anyhow!("master key must be 32 bytes"))?;
+        let master = zeroize::Zeroizing::new(master);
+        let authority: [u8; 32] = b64(&self.account_authority_public_key)?
+            .try_into()
+            .map_err(|_| anyhow!("the account authority must be 32 bytes"))?;
+        let records = self
+            .account_roots
+            .iter()
+            .map(|record| b64(record))
+            .collect::<Result<Vec<_>>>()?;
+        kutup_crypto::account_roots::AccountRoots::open(
+            &records,
+            &master,
+            self.binding(),
+            &authority,
+        )
+        .context("open the account's roots")
+    }
+
+    /// A signed-in account with master key `master_key` and new roots, for
+    /// tests.
+    #[cfg(test)]
+    pub fn for_tests(master_key: [u8; 32]) -> Session {
+        use base64::Engine;
+        let b64 = base64::engine::general_purpose::STANDARD;
+        let binding = "4b0a3c52-9a1e-4d1c-9a55-0d3f4f6e1b2a";
+        let roots = kutup_crypto::account_roots::AccountRoots::generate();
+        let identity = kutup_crypto::identity::AccountIdentityKeysV1::derive(&roots.identity)
+            .expect("an identity derives");
+        Session {
+            envelope_binding: binding.into(),
+            master_key: b64.encode(master_key),
+            account_roots: roots
+                .seal(
+                    &master_key,
+                    kutup_crypto::account_record::MasterKeyGeneration::FIRST,
+                    binding,
+                )
+                .expect("roots seal")
+                .iter()
+                .map(|record| b64.encode(record))
+                .collect(),
+            account_authority_public_key: b64.encode(identity.authority_public_key()),
+            ..Session::default()
+        }
+    }
+
+    /// The account's identity keys, from its identity root.
+    pub fn identity(&self) -> Result<kutup_crypto::identity::AccountIdentityKeysV1> {
+        Ok(kutup_crypto::identity::AccountIdentityKeysV1::derive(
+            &self.roots()?.identity,
+        )?)
     }
 }
 

@@ -105,6 +105,7 @@ fn a_group_list_keeps_sealed_entries_by_revision() {
         key: GroupListKey::new(
             &user.master_key,
             kutup_crypto::account_record::MasterKeyGeneration::FIRST,
+            &user.roots.object_id,
         ),
     };
     let (one, one_at_1) = list.entry(1, 1);
@@ -211,6 +212,7 @@ fn the_account_head_covers_the_group_list() {
         key: GroupListKey::new(
             &user.master_key,
             kutup_crypto::account_record::MasterKeyGeneration::FIRST,
+            &user.roots.object_id,
         ),
     };
     let (one, one_at_1) = list.entry(1, 1);
@@ -267,6 +269,7 @@ fn a_group_list_keeps_at_most_1024_entries() {
         key: GroupListKey::new(
             &user.master_key,
             kutup_crypto::account_record::MasterKeyGeneration::FIRST,
+            &user.roots.object_id,
         ),
     };
     for n in 0..1024 {

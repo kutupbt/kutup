@@ -308,22 +308,24 @@ impl GroupKeyPair {
 
 const PSEUDONYM_SALT: &[u8] = crate::labels::CHAT_GROUP_PSEUDONYM_V1;
 
-/// Where an account's group pseudonyms come from: its master key, so any
-/// device of the account finds its place in a group again, even one whose
-/// group list entry was lost. A pseudonym's seed is HKDF-SHA256 over the
-/// account master key, salt `kutup/chat-group/pseudonym/v1\0`, info the
-/// group id then the join epoch (u32 big-endian). The join epoch counts the
-/// account's joins of the group: 0 at the first, one more at each rejoin
-/// after leaving, so a rejoin is a new pseudonym. Without the account key,
-/// one account's pseudonyms in different groups (or epochs) are unrelated.
+/// Where an account's group pseudonyms come from: its group pseudonym root
+/// (a stored account root, docs/plans/identity-root.md), so any device of
+/// the account finds its place in a group again, even one whose group list
+/// entry was lost, and a new master key or identity changes none of them. A
+/// pseudonym's seed is HKDF-SHA256 over the root, salt
+/// `kutup/chat-group/pseudonym/v1\0`, info the group id then the join epoch
+/// (u32 big-endian). The join epoch counts the account's joins of the group:
+/// 0 at the first, one more at each rejoin after leaving, so a rejoin is a
+/// new pseudonym. Without the root, one account's pseudonyms in different
+/// groups (or epochs) are unrelated.
 pub struct GroupPseudonymKey {
     hkdf: Kdf,
 }
 
 impl GroupPseudonymKey {
-    pub fn derive(account_master_key: &[u8; 32]) -> Self {
+    pub fn derive(root: &crate::account_roots::GroupPseudonymRoot) -> Self {
         Self {
-            hkdf: Kdf::new(Suite::V1, PSEUDONYM_SALT, account_master_key),
+            hkdf: Kdf::new(Suite::V1, PSEUDONYM_SALT, root.as_bytes()),
         }
     }
 
@@ -655,8 +657,14 @@ mod tests {
 
     #[test]
     fn a_binding_verifies_only_under_its_accounts_authority() {
-        let identity = crate::identity::AccountIdentityKeysV1::derive(&[0x11u8; 32]).unwrap();
-        let other = crate::identity::AccountIdentityKeysV1::derive(&[0x12u8; 32]).unwrap();
+        let identity = crate::identity::AccountIdentityKeysV1::derive(
+            &crate::account_roots::IdentityRoot::from_bytes([0x11u8; 32]),
+        )
+        .unwrap();
+        let other = crate::identity::AccountIdentityKeysV1::derive(
+            &crate::account_roots::IdentityRoot::from_bytes([0x12u8; 32]),
+        )
+        .unwrap();
         let group_id = master().group_id();
         let pseudonym = GroupKeyPair::from_seed(&[3u8; 32]).public_key();
         let signature = sign_binding(
@@ -726,7 +734,10 @@ mod tests {
             // A collection epoch statement starts with its magic.
             b"KUTPCE1\0",
         ];
-        let identity = crate::identity::AccountIdentityKeysV1::derive(&[0x11u8; 32]).unwrap();
+        let identity = crate::identity::AccountIdentityKeysV1::derive(
+            &crate::account_roots::IdentityRoot::from_bytes([0x11u8; 32]),
+        )
+        .unwrap();
         let authority = identity.authority_public_key();
         let group_id = master().group_id();
         let pseudonym = GroupKeyPair::from_seed(&[3u8; 32]).public_key();
