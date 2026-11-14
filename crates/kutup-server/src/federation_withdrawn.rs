@@ -84,8 +84,9 @@ pub async fn withdraw(
                 query: None,
                 content_type: JSON_CONTENT_TYPE.into(),
                 body,
-                // Stable: a repeat of the same withdrawal is the same request.
-                request_id: format!("withdrawn:{transaction_id}"),
+                // Stable: a repeat of the same withdrawal is the same request
+                // (URI-safe, as a transport nonce must be).
+                request_id: format!("{transaction_id}.withdrawn"),
                 extra_headers: Vec::new(),
                 response_limit: MAX_BYTES,
             },
