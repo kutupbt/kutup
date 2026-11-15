@@ -46,7 +46,13 @@ struct Vectors {
     share: String,
     request: String,
     escrow: String,
+    /// The member's key binding and identity-root record (sealed under the
+    /// member's master key): what an escrow is checked against.
+    member_binding: String,
+    member_identity_root_record: String,
 }
+
+const MEMBER_BINDING: &str = "3f1c9a52-6b7e-4f0e-9d1a-2c3b4d5e6f70";
 
 fn person(master: &str, account: &str) -> (AccountIdentityKeysV1, Party) {
     let keys = AccountIdentityKeysV1::derive(
@@ -121,6 +127,21 @@ fn write_vectors() {
         share: STANDARD.encode(share),
         request: STANDARD.encode(request),
         escrow: STANDARD.encode(escrow),
+        member_binding: MEMBER_BINDING.into(),
+        member_identity_root_record: STANDARD.encode(
+            kutup_crypto::account_record::seal_suite(
+                kutup_crypto::account_record::AccountRecordSuiteId::V1,
+                &[0x33; 32],
+                &[0x33; 32],
+                kutup_crypto::account_record::AccountRecordPurpose::IdentityRoot,
+                MasterKeyGeneration::FIRST,
+                MEMBER_BINDING,
+                &kutup_crypto::account_roots::RootGeneration::FIRST.object(),
+                None,
+                &[0x77; 24],
+            )
+            .unwrap(),
+        ),
     };
     std::fs::write(PATH, serde_json::to_string_pretty(&vectors).unwrap() + "\n").unwrap();
 }
@@ -179,6 +200,8 @@ fn checked_in_vectors_hold() {
         &seed,
         &member,
         &member_keys.authority_public_key(),
+        &v.member_binding,
+        &STANDARD.decode(&v.member_identity_root_record).unwrap(),
     )
     .unwrap();
     assert_eq!(

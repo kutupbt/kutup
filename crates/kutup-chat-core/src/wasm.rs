@@ -4687,45 +4687,14 @@ pub async fn bench_search_index(name: String, count: u32) -> std::result::Result
 }
 
 /// The account's roots as the page holds them (`openAccountRoots` of
-/// `@kutup/crypto`, docs/plans/identity-root.md): each canonical base64.
-#[derive(serde::Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct AccountRootsInput {
-    identity_generation: u32,
-    identity_root: String,
-    drive_generation: u32,
-    drive_root: String,
-    pseudonym_root: String,
-    call_link_root: String,
-    object_id_key: String,
-}
-
+/// `@kutup/crypto`, docs/plans/identity-root.md).
 fn account_roots(
     roots: JsValue,
 ) -> std::result::Result<kutup_crypto::account_roots::AccountRoots, JsValue> {
-    use base64::Engine as _;
-    use kutup_crypto::account_roots as r;
-    let input: AccountRootsInput = serde_wasm_bindgen::from_value(roots)
+    let json: kutup_crypto::account_roots::AccountRootsJson = serde_wasm_bindgen::from_value(roots)
         .map_err(|_| js_error("the account's roots are malformed"))?;
-    let bytes = |value: &str| {
-        let decoded = zeroize::Zeroizing::new(
-            base64::engine::general_purpose::STANDARD
-                .decode(value)
-                .map_err(|_| js_error("an account root is not base64"))?,
-        );
-        Ok::<_, JsValue>(decoded)
-    };
-    let bad = |error: kutup_crypto::error::CryptoError| js_error(&error.to_string());
-    Ok(r::AccountRoots {
-        identity_generation: r::RootGeneration::new(input.identity_generation).map_err(bad)?,
-        identity: r::IdentityRoot::from_slice(&bytes(&input.identity_root)?).map_err(bad)?,
-        drive_generation: r::RootGeneration::new(input.drive_generation).map_err(bad)?,
-        drive: r::DriveRoot::from_slice(&bytes(&input.drive_root)?).map_err(bad)?,
-        pseudonym: r::GroupPseudonymRoot::from_slice(&bytes(&input.pseudonym_root)?)
-            .map_err(bad)?,
-        call_link: r::CallLinkRoot::from_slice(&bytes(&input.call_link_root)?).map_err(bad)?,
-        object_id: r::ObjectIdKey::from_slice(&bytes(&input.object_id_key)?).map_err(bad)?,
-    })
+    kutup_crypto::account_roots::AccountRoots::try_from(&json)
+        .map_err(|error| js_error(&error.to_string()))
 }
 
 fn master_key_bytes(master_key: Vec<u8>) -> std::result::Result<[u8; 32], JsValue> {

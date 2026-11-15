@@ -228,3 +228,44 @@ Beyond the note:
 - **CLI:** the session keeps the sealed root records and the authority, and
   opens the roots with the master key when it needs them
   (`Session::roots`, `Session::identity`).
+
+## After review (2026-11-15)
+
+- **Every root has a generation**, the record's object (u32 big-endian):
+  the pseudonym root, call-link root and object-id key too, so any of them
+  can rotate after the wipe without a format change (an identity rotation
+  that releases an escrow rotates all five). `AccountRoots` carries each
+  generation; `open` takes the newest of each.
+- **Rollback of the identity or Drive root:** the account head records
+  their generations (`AccountHeadV1.identityGeneration`,
+  `driveGeneration`). The head is sealed under the master key's head keys
+  and chained, so a server can't forge it, and each device anchors the
+  newest it saw. Every head check (`account_head::check`, the CLI's head,
+  the web's `AccountHead`) is given the roots in use and refuses a head of
+  other generations (`rootGenerationMismatch`): a server serving an older
+  root, or one the head never recorded, is refused on every device, a new
+  one too from its first head. A rotation writes the new generations into
+  the head with the new roots (the rotation exercise).
+- **Checked at sign-in, no window:** the head is read fresh and checked
+  before a session goes live and before anything signs or seals with the
+  roots. The web does this in `activateSession`, which covers sign-in,
+  restore and fork, through `AccountHeadClient.atSignIn`; the CLI does it in
+  `login_with_password`, before the session is saved. An account with no
+  head yet starts its chain then, covering no scope, with the generations it
+  registered. A failed check ends the sign-in (signed out, keys dropped). A
+  rolled-back or forked history signs in blocked, as on any later read: a
+  restore from a backup looks the same, so the person decides (the shell's
+  banner, `kutup account reanchor`). The FFI's `start_client` does not
+  check the head yet: it must before a native app ships (docs/roadmap.md).
+- **Escrow binds the master key:** `EscrowV1::open` also takes the
+  member's identity-root record and key binding, and requires the escrowed
+  master key to open it to the same root at the escrow's generation.
+- **One form across bindings:** `AccountRootsJson` in kutup-crypto is what
+  the WASM exports and chat-core read and give; `sealAccountRoots(mk, gen,
+  binding, roots | null)` replaces `generateAccountRoots` (null: new roots).
+  The crypto WASM is back under its gzip budget (1,797,040 of 1,800,000).
+- **Tests:** WASM vectors open the five root records through
+  `openAccountRoots` and compare plaintexts and generations, and refuse a
+  head of other generations. The list entry ids under the object-id key are
+  computed only inside chat-core (no WASM export reaches them); the browser
+  suites exercise that path.

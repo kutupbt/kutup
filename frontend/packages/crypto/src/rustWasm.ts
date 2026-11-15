@@ -75,8 +75,8 @@ export interface CryptoWasmModule {
     profile: string,
   ): string
   deriveRecoveryAuthProof(recoveryEntropyBase64: string, binding: string): string
-  generateAccountRoots(masterKeyBase64: string, generation: number, binding: string): unknown
-  sealAccountRoots(masterKeyBase64: string, generation: number, binding: string, roots: unknown): string[]
+  /** `roots` null: a new account's, made now. */
+  sealAccountRoots(masterKeyBase64: string, generation: number, binding: string, roots: unknown): unknown
   openAccountRoots(masterKeyBase64: string, binding: string, envelopes: string[], authorityBase64: string): unknown
   deriveAccountIdentityKeys(identityRootBase64: string): {
     authorityPublicKey: string
@@ -160,7 +160,13 @@ export interface CryptoWasmModule {
   deliveredFrameSender(delivered: Uint8Array): string
   sealManifestPins(pins: unknown, masterKeyBase64: string, profile: string): string
   openManifestPins(envelopeBase64: string, masterKeyBase64: string, profile: string): unknown
-  AccountHeadKeys: new (masterKeyBase64: string, binding: string, incarnationId: string) => AccountHeadKeysHandle
+  AccountHeadKeys: new (
+    masterKeyBase64: string,
+    binding: string,
+    incarnationId: string,
+    identityGeneration: number,
+    driveGeneration: number,
+  ) => AccountHeadKeysHandle
   OpaqueLogin: { start(password: string): OpaqueLoginHandle }
   OpaqueRegistration: { start(password: string): OpaqueRegistrationHandle }
   generateMailGroupKey(

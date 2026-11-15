@@ -222,6 +222,8 @@ pub(crate) struct StateStore {
     keys: HeadKeys,
     binding: String,
     incarnation: String,
+    /// The account's root generations in use, which the head must record.
+    generations: account_head::RootGenerations,
     dir: PathBuf,
 }
 
@@ -230,12 +232,14 @@ impl StateStore {
         master_key: &[u8; 32],
         binding: &str,
         incarnation: &str,
+        generations: account_head::RootGenerations,
         dir: PathBuf,
     ) -> Result<Self> {
         Ok(Self {
             keys: HeadKeys::derive(master_key)?,
             binding: binding.to_owned(),
             incarnation: incarnation.to_owned(),
+            generations,
             dir,
         })
     }
@@ -350,11 +354,12 @@ impl<'a> CliHead<'a> {
         master_key: &[u8; 32],
         binding: &str,
         incarnation: &str,
+        generations: account_head::RootGenerations,
         dir: PathBuf,
     ) -> Result<Self> {
         Ok(Self {
             client,
-            store: StateStore::new(master_key, binding, incarnation, dir)?,
+            store: StateStore::new(master_key, binding, incarnation, generations, dir)?,
             verified: None,
             blocked: None,
         })
@@ -448,6 +453,7 @@ impl<'a> CliHead<'a> {
             &self.store.keys,
             &self.store.binding,
             &self.store.incarnation,
+            self.store.generations,
             state.anchor.as_ref(),
             &current,
             segment.as_deref(),
@@ -465,6 +471,7 @@ impl<'a> CliHead<'a> {
                     &self.store.keys,
                     &self.store.binding,
                     &self.store.incarnation,
+                    self.store.generations,
                     &anchor,
                     &current,
                     segment.as_deref(),
@@ -566,6 +573,7 @@ impl<'a> CliHead<'a> {
                     &self.store.keys,
                     &self.store.binding,
                     &self.store.incarnation,
+                    self.store.generations,
                     &writer,
                     vec![entry],
                 )?;
@@ -602,6 +610,43 @@ impl<'a> CliHead<'a> {
             }
         }
         bail!("{scope}: another device kept writing first; try again")
+    }
+
+    /// The check a sign-in makes before its session is kept and before
+    /// anything signs or seals with the roots: the server's head checked,
+    /// roots' generations included, so a rolled-back identity or Drive root
+    /// is never used. With no head yet, the chain is started on what the
+    /// account holds, covering no scope, with the generations it registered.
+    /// A rollback or fork is [`HeadBlocked`], as for any other check.
+    pub fn at_sign_in(&mut self) -> Result<()> {
+        for _ in 1..=5 {
+            // Any scope's index answers with the head and, before the first, the basis.
+            let index = self.index("contacts")?;
+            if self.verified.is_some() {
+                return Ok(());
+            }
+            let basis = index
+                .basis
+                .context("the server has no account head and no basis to start one on")?;
+            let writer = self.store.keys.writer(&self.load()?.device_id)?;
+            let (first, verified) = account_head::first(
+                &self.store.keys,
+                &self.store.binding,
+                &self.store.incarnation,
+                self.store.generations,
+                &writer,
+                Vec::new(),
+            )?;
+            // Another device started it first: check that one.
+            if self
+                .client
+                .start_account_head(&STANDARD.encode(&first), &basis)?
+            {
+                self.verified = Some(verified);
+                return self.advance();
+            }
+        }
+        bail!("another device kept starting the account's history; try again")
     }
 
     /// Where this device stands: checks the head now.
@@ -661,6 +706,7 @@ impl<'a> CliHead<'a> {
                     &store.keys,
                     &store.binding,
                     &store.incarnation,
+                    store.generations,
                     &anchor,
                     current,
                     segment.as_deref(),
@@ -777,8 +823,18 @@ mod tests {
             keys.scope_digest("pins", &[("pins".to_string(), i)])
                 .unwrap()
         };
-        let (_, first) =
-            account_head::first(&keys, BINDING, INCARNATION, &writer, vec![entry(1)]).unwrap();
+        let (_, first) = account_head::first(
+            &keys,
+            BINDING,
+            INCARNATION,
+            account_head::RootGenerations {
+                identity: 1,
+                drive: 1,
+            },
+            &writer,
+            vec![entry(1)],
+        )
+        .unwrap();
         let mut heads = vec![first];
         for i in 2..=n as u64 {
             let last = heads.last().unwrap();
@@ -790,7 +846,17 @@ mod tests {
     }
 
     fn store(dir: &Path) -> StateStore {
-        StateStore::new(&[7u8; 32], BINDING, INCARNATION, dir.to_path_buf()).unwrap()
+        StateStore::new(
+            &[7u8; 32],
+            BINDING,
+            INCARNATION,
+            account_head::RootGenerations {
+                identity: 1,
+                drive: 1,
+            },
+            dir.to_path_buf(),
+        )
+        .unwrap()
     }
 
     #[test]

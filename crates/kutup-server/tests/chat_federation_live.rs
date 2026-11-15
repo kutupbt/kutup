@@ -707,8 +707,11 @@ fn test_roots(email: &str) -> kutup_crypto::account_roots::AccountRoots {
         identity: r::IdentityRoot::from_bytes(seed("identity-root")),
         drive_generation: r::RootGeneration::FIRST,
         drive: r::DriveRoot::from_bytes(seed("drive-root")),
+        pseudonym_generation: r::RootGeneration::FIRST,
         pseudonym: r::GroupPseudonymRoot::from_bytes(seed("pseudonym-root")),
+        call_link_generation: r::RootGeneration::FIRST,
         call_link: r::CallLinkRoot::from_bytes(seed("call-link-root")),
+        object_id_generation: r::RootGeneration::FIRST,
         object_id: r::ObjectIdKey::from_bytes(seed("object-id-key")),
     }
 }

@@ -95,13 +95,14 @@ assert.equal(
 // refused when the newest identity root is not the registered authority's.
 {
   const rootsMaster = Buffer.alloc(32, 0x41).toString('base64')
-  const made = crypto.generateAccountRoots(rootsMaster, 1, guardBinding)
+  const made = crypto.sealAccountRoots(rootsMaster, 1, guardBinding, null)
   assert.equal(made.envelopes.length, 5)
   const authority = crypto.deriveAccountIdentityKeys(made.roots.identityRoot).authorityPublicKey
   const opened = crypto.openAccountRoots(rootsMaster, guardBinding, [...made.envelopes].reverse(), authority)
   assert.deepEqual({ ...opened }, { ...made.roots })
   const resealed = crypto.sealAccountRoots(rootsMaster, 1, '7d3f1a2b-9c4e-4f6a-8b1d-2e5c7a9f0b3d', made.roots)
-  assert.deepEqual({ ...crypto.openAccountRoots(rootsMaster, '7d3f1a2b-9c4e-4f6a-8b1d-2e5c7a9f0b3d', resealed, authority) }, { ...made.roots })
+  assert.deepEqual({ ...resealed.roots }, { ...made.roots })
+  assert.deepEqual({ ...crypto.openAccountRoots(rootsMaster, '7d3f1a2b-9c4e-4f6a-8b1d-2e5c7a9f0b3d', resealed.envelopes, authority) }, { ...made.roots })
   const other = crypto.deriveAccountIdentityKeys(Buffer.alloc(32, 0x42).toString('base64')).authorityPublicKey
   assert.throws(() => crypto.openAccountRoots(rootsMaster, guardBinding, made.envelopes, other), /identityRootMismatch/)
   assert.throws(() => crypto.openAccountRoots(rootsMaster, guardBinding, made.envelopes.slice(1), authority))
@@ -121,6 +122,31 @@ assert.throws(() => new crypto.LocalChainPins(Buffer.alloc(32, 0x31).toString('b
 assert.throws(() => guardKeys.openSeen(pinEntry, pinSealed))
 assert.throws(() => chainPins.sealPin(pinEntry, '01', 'ab'.repeat(32)))
 assert.throws(() => chainPins.sealPin(pinEntry, '1', 'AB'.repeat(32)))
+
+// The account roots' record vectors (purposes 22-26) open through
+// openAccountRoots, the only path that hands them to JavaScript, to the
+// vectors' plaintexts; the authority they must give is the identity root's.
+{
+  const records = JSON.parse(await readFile(`${root}/crates/kutup-crypto/tests/vectors/account-record-v1.json`, 'utf8'))
+  const byPurpose = new Map(records.purposes.map((p) => [p.purpose, p]))
+  const rootPurposes = [22, 23, 24, 25, 26]
+  const authority = crypto.deriveAccountIdentityKeys(byPurpose.get(22).plaintext).authorityPublicKey
+  const opened = crypto.openAccountRoots(
+    records.key,
+    records.binding,
+    rootPurposes.map((purpose) => byPurpose.get(purpose).envelope),
+    authority,
+  )
+  assert.deepEqual(
+    [opened.identityRoot, opened.driveRoot, opened.pseudonymRoot, opened.callLinkRoot, opened.objectIdKey],
+    rootPurposes.map((purpose) => byPurpose.get(purpose).plaintext),
+  )
+  assert.deepEqual(
+    [opened.identityGeneration, opened.driveGeneration, opened.pseudonymGeneration, opened.callLinkGeneration, opened.objectIdGeneration],
+    // Each generation is the record's object, u32 big-endian.
+    rootPurposes.map((purpose) => Buffer.from(byPurpose.get(purpose).objectId, 'base64').readUInt32BE(0)),
+  )
+}
 
 // The shared envelope vectors: every purpose's envelope is well formed, and
 // every refused one is refused here as in Rust (malformed ones by inspect;
@@ -1160,8 +1186,14 @@ assert.equal(crypto.incarnationIdOfAuthority(iv.authorityPublicKey), crypto.deri
 // outcomes apart, and checks indexes only against a head it verified.
 {
   const v = JSON.parse(await readFile(`${root}/crates/kutup-crypto/tests/vectors/account-head-v1.json`, 'utf8'))
-  const head = new crypto.AccountHeadKeys(v.masterKey, v.binding, v.incarnationId)
+  const head = new crypto.AccountHeadKeys(v.masterKey, v.binding, v.incarnationId, 1, 1)
   assert.equal(head.writer(v.device), v.writer)
+  // The heads record root generations 1: roots of another generation (a
+  // server serving an older or a newer one) are refused.
+  for (const [identity, drive] of [[2, 1], [1, 2]]) {
+    const other = new crypto.AccountHeadKeys(v.masterKey, v.binding, v.incarnationId, identity, drive)
+    assert.throws(() => other.check(undefined, v.sealed[0], undefined), /rootGenerationMismatch/)
+  }
   for (const [i, index] of v.indexes.entries()) {
     assert.deepEqual(head.scope('contacts', JSON.stringify(index)), JSON.parse(v.heads[i]).scopes[0])
   }
@@ -1213,7 +1245,7 @@ assert.equal(crypto.incarnationIdOfAuthority(iv.authorityPublicKey), crypto.deri
   // only for its incarnation, advanced only to a verified head.
   assert.equal(head.localStateName(), v.localName)
   assert.deepEqual(head.openLocalState(v.localSealed), v.localState)
-  const other = new crypto.AccountHeadKeys(v.masterKey, v.binding, '6'.repeat(64))
+  const other = new crypto.AccountHeadKeys(v.masterKey, v.binding, '6'.repeat(64), 1, 1)
   assert.notEqual(other.localStateName(), v.localName)
   assert.throws(() => other.openLocalState(v.localSealed))
   assert.throws(() => other.sealLocalState(JSON.stringify(v.localState)), /another incarnation/)

@@ -13,8 +13,11 @@ export function testRoots(key: Uint8Array | number): AccountRoots {
     identityRoot: root as IdentityRoot,
     driveGeneration: 1,
     driveRoot: root as DriveRoot,
+    pseudonymGeneration: 1,
     pseudonymRoot: root as PseudonymRoot,
+    callLinkGeneration: 1,
     callLinkRoot: root as CallLinkRoot,
+    objectIdGeneration: 1,
     objectIdKey: root as ObjectIdKey,
   }
 }

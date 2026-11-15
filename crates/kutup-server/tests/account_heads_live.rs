@@ -55,7 +55,16 @@ impl Chain {
         let entry: ScopeV1 = self.keys.scope_digest(scope, &index).unwrap();
         let head = match &self.last {
             Some((head, sealed)) => head.next(sealed, &self.writer, vec![entry]).unwrap(),
-            None => AccountHeadV1::first(&"ab".repeat(32), &self.writer, vec![entry]).unwrap(),
+            None => AccountHeadV1::first(
+                &"ab".repeat(32),
+                kutup_crypto::account_head::RootGenerations {
+                    identity: 1,
+                    drive: 1,
+                },
+                &self.writer,
+                vec![entry],
+            )
+            .unwrap(),
         };
         let sealed = account_head::seal(&self.keys, &self.binding, &head).unwrap();
         (head, sealed)

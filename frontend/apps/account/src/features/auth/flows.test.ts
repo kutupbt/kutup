@@ -16,7 +16,7 @@ const crypto_ = vi.hoisted(() => ({
 vi.mock('@kutup/crypto', () => crypto_)
 const roots_ = vi.hoisted(() => ({
   openAccountRoots: vi.fn(() =>
-    Promise.resolve({ identityGeneration: 1, identityRoot: 'id', driveGeneration: 1, driveRoot: 'd', pseudonymRoot: 'p', callLinkRoot: 'c', objectIdKey: 'o' }),
+    Promise.resolve({ identityGeneration: 1, identityRoot: 'id', driveGeneration: 1, driveRoot: 'd', pseudonymGeneration: 1, pseudonymRoot: 'p', callLinkGeneration: 1, callLinkRoot: 'c', objectIdGeneration: 1, objectIdKey: 'o' }),
   ),
   isIdentityRootMismatch: (error: unknown) => String(error).includes('identityRootMismatch'),
 }))

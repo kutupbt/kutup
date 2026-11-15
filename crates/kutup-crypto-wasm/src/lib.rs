@@ -591,111 +591,53 @@ pub fn derive_recovery_auth_proof(
     Ok(STANDARD.encode(proof.as_slice()))
 }
 
-/// The account's stored roots as a page holds them (docs/plans/identity-root.md):
-/// each 32 bytes, canonical base64.
 #[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
-struct AccountRootsView {
-    identity_generation: u32,
-    identity_root: String,
-    drive_generation: u32,
-    drive_root: String,
-    pseudonym_root: String,
-    call_link_root: String,
-    object_id_key: String,
-}
-
-impl From<&kutup_crypto::account_roots::AccountRoots> for AccountRootsView {
-    fn from(roots: &kutup_crypto::account_roots::AccountRoots) -> Self {
-        Self {
-            identity_generation: roots.identity_generation.get(),
-            identity_root: STANDARD.encode(roots.identity.as_bytes()),
-            drive_generation: roots.drive_generation.get(),
-            drive_root: STANDARD.encode(roots.drive.as_bytes()),
-            pseudonym_root: STANDARD.encode(roots.pseudonym.as_bytes()),
-            call_link_root: STANDARD.encode(roots.call_link.as_bytes()),
-            object_id_key: STANDARD.encode(roots.object_id.as_bytes()),
-        }
-    }
-}
-
-#[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
-struct GeneratedAccountRootsView {
-    roots: AccountRootsView,
+struct SealedAccountRoots {
+    roots: kutup_crypto::account_roots::AccountRootsJson,
     /// The five root records for the server, canonical base64.
     envelopes: Vec<String>,
 }
 
-/// A new account's roots and their records, sealed under its master key (of
-/// `generation`) for the account bound by `binding`: at sign-up, at an
-/// administrator-made account's setup, and at a reset.
-#[wasm_bindgen(js_name = generateAccountRoots)]
-pub fn generate_account_roots(
-    master_key_base64: &str,
-    generation: u32,
-    binding: &str,
-) -> Result<JsValue, JsValue> {
-    let master_key = master_key_32(master_key_base64)?;
-    let roots = kutup_crypto::account_roots::AccountRoots::generate();
-    let envelopes = roots
-        .seal(&master_key, master_key_generation(generation)?, binding)
-        .map_err(|error| js_error(&error.to_string()))?;
-    serde_wasm_bindgen::to_value(&GeneratedAccountRootsView {
-        roots: AccountRootsView::from(&roots),
-        envelopes: envelopes.iter().map(|e| STANDARD.encode(e)).collect(),
-    })
-    .map_err(|error| js_error(&format!("encode account roots: {error}")))
+fn roots_error(error: kutup_crypto::error::CryptoError) -> JsValue {
+    js_error(&error.to_string())
 }
 
-/// Seals the account's `roots` (as `generateAccountRoots` or
-/// `openAccountRoots` gave them) under its master key (of `generation`) for
-/// the key `binding`: a sign-up whose binding was drawn again, and a
-/// master-key rotation, which re-wraps every root at once.
+/// The account's roots (docs/plans/identity-root.md) sealed under its master
+/// key (of `generation`) for the key `binding`, with the roots: `roots` as
+/// `openAccountRoots` gave them (a sign-up whose binding was drawn again, a
+/// master-key rotation re-wrapping every root at once), or `null` for a new
+/// account's, made now.
 #[wasm_bindgen(js_name = sealAccountRoots)]
 pub fn seal_account_roots(
     master_key_base64: &str,
     generation: u32,
     binding: &str,
     roots: JsValue,
-) -> Result<Vec<String>, JsValue> {
-    use kutup_crypto::account_roots as r;
-    #[derive(serde::Deserialize)]
-    #[serde(rename_all = "camelCase")]
-    struct Input {
-        identity_generation: u32,
-        identity_root: String,
-        drive_generation: u32,
-        drive_root: String,
-        pseudonym_root: String,
-        call_link_root: String,
-        object_id_key: String,
-    }
-    let input: Input = serde_wasm_bindgen::from_value(roots)
-        .map_err(|_| js_error("the account's roots are malformed"))?;
-    let master_key = master_key_32(master_key_base64)?;
-    let bad = |error: kutup_crypto::error::CryptoError| js_error(&error.to_string());
-    let root = |value: &str| decode_canonical_base64(value, "account root");
-    let roots = r::AccountRoots {
-        identity_generation: r::RootGeneration::new(input.identity_generation).map_err(bad)?,
-        identity: r::IdentityRoot::from_slice(&root(&input.identity_root)?).map_err(bad)?,
-        drive_generation: r::RootGeneration::new(input.drive_generation).map_err(bad)?,
-        drive: r::DriveRoot::from_slice(&root(&input.drive_root)?).map_err(bad)?,
-        pseudonym: r::GroupPseudonymRoot::from_slice(&root(&input.pseudonym_root)?).map_err(bad)?,
-        call_link: r::CallLinkRoot::from_slice(&root(&input.call_link_root)?).map_err(bad)?,
-        object_id: r::ObjectIdKey::from_slice(&root(&input.object_id_key)?).map_err(bad)?,
+) -> Result<JsValue, JsValue> {
+    use kutup_crypto::account_roots::{AccountRoots, AccountRootsJson};
+    let roots = if roots.is_null() {
+        AccountRoots::generate()
+    } else {
+        let json: AccountRootsJson = serde_wasm_bindgen::from_value(roots)
+            .map_err(|_| js_error("account roots malformed"))?;
+        AccountRoots::try_from(&json).map_err(roots_error)?
     };
+    let master_key = master_key_32(master_key_base64)?;
     let envelopes = roots
         .seal(&master_key, master_key_generation(generation)?, binding)
-        .map_err(bad)?;
-    Ok(envelopes.iter().map(|e| STANDARD.encode(e)).collect())
+        .map_err(roots_error)?;
+    serde_wasm_bindgen::to_value(&SealedAccountRoots {
+        roots: (&roots).into(),
+        envelopes: envelopes.iter().map(|e| STANDARD.encode(e)).collect(),
+    })
+    .map_err(|error| js_error(&error.to_string()))
 }
 
 /// Opens the account's roots from its root records (`accountRoots` of the
-/// sign-in or recovery answer, or `GET /api/account/roots`). The newest
-/// identity root must derive `registered_authority_base64` (the account's
-/// authority public key); otherwise the error starts with
-/// `identityRootMismatch`, and no older root stands in.
+/// sign-in answer, or `GET /api/account/roots`). The newest identity root
+/// must derive `registered_authority_base64` (the account's authority public
+/// key); otherwise the error is `identityRootMismatch`, and no older root
+/// stands in.
 #[wasm_bindgen(js_name = openAccountRoots)]
 pub fn open_account_roots(
     master_key_base64: &str,
@@ -704,13 +646,12 @@ pub fn open_account_roots(
     registered_authority_base64: &str,
 ) -> Result<JsValue, JsValue> {
     let master_key = master_key_32(master_key_base64)?;
-    let authority: [u8; 32] =
-        decode_canonical_base64(registered_authority_base64, "account authority")?
-            .try_into()
-            .map_err(|_| js_error("account authority must be 32 bytes"))?;
+    let authority: [u8; 32] = decode_canonical_base64(registered_authority_base64, "authority")?
+        .try_into()
+        .map_err(|_| js_error("authority length"))?;
     let envelopes = envelopes
         .iter()
-        .map(|e| decode_canonical_base64(e, "account root record"))
+        .map(|e| decode_canonical_base64(e, "account root"))
         .collect::<Result<Vec<_>, _>>()?;
     let roots = kutup_crypto::account_roots::AccountRoots::open(
         &envelopes,
@@ -718,9 +659,9 @@ pub fn open_account_roots(
         binding,
         &authority,
     )
-    .map_err(|error| js_error(&error.to_string()))?;
-    serde_wasm_bindgen::to_value(&AccountRootsView::from(&roots))
-        .map_err(|error| js_error(&format!("encode account roots: {error}")))
+    .map_err(roots_error)?;
+    serde_wasm_bindgen::to_value(&kutup_crypto::account_roots::AccountRootsJson::from(&roots))
+        .map_err(|error| js_error(&error.to_string()))
 }
 
 /// Derive the purpose-separated V1 account identity from the account's
@@ -728,15 +669,7 @@ pub fn open_account_roots(
 /// for the page's own use; it is never sent to the server.
 #[wasm_bindgen(js_name = deriveAccountIdentityKeys)]
 pub fn derive_account_identity_keys(identity_root_base64: &str) -> Result<JsValue, JsValue> {
-    let identity_root = STANDARD
-        .decode(identity_root_base64)
-        .map_err(|_| js_error("identity root must be canonical base64"))?;
-    if STANDARD.encode(&identity_root) != identity_root_base64 {
-        return Err(js_error("identity root must be canonical base64"));
-    }
-    let identity_root: [u8; 32] = identity_root
-        .try_into()
-        .map_err(|_| js_error("identity root must be 32 bytes"))?;
+    let identity_root = identity_root_32(identity_root_base64)?;
     let identity = kutup_crypto::identity::AccountIdentityKeysV1::derive(&identity_root_of(
         &identity_root[..],
     )?)
@@ -4745,21 +4678,32 @@ pub struct AccountHeadKeys {
     keys: kutup_crypto::account_head::HeadKeys,
     binding: String,
     incarnation_id: String,
+    /// The account's root generations in use, which the head must record.
+    generations: kutup_crypto::account_head::RootGenerations,
 }
 
 #[wasm_bindgen]
 impl AccountHeadKeys {
     #[wasm_bindgen(constructor)]
+    /// `identity_generation`, `drive_generation`: the generations of the
+    /// account's roots in use (`roots.identityGeneration`,
+    /// `roots.driveGeneration`), which a head must record.
     pub fn new(
         master_key_base64: &str,
         binding: &str,
         incarnation_id: &str,
+        identity_generation: u32,
+        drive_generation: u32,
     ) -> Result<AccountHeadKeys, JsValue> {
         let master_key = master_key_32(master_key_base64)?;
         Ok(Self {
             keys: kutup_crypto::account_head::HeadKeys::derive(&master_key).map_err(head_err)?,
             binding: binding.to_owned(),
             incarnation_id: incarnation_id.to_owned(),
+            generations: kutup_crypto::account_head::RootGenerations {
+                identity: identity_generation,
+                drive: drive_generation,
+            },
         })
     }
 
@@ -4883,6 +4827,7 @@ impl AccountHeadKeys {
             &self.keys,
             &self.binding,
             &self.incarnation_id,
+            self.generations,
             anchor_arg(anchor_json)?.as_ref(),
             &sealed_head(current_base64)?,
             segment.as_deref(),
@@ -4912,6 +4857,7 @@ impl AccountHeadKeys {
             &self.keys,
             &self.binding,
             &self.incarnation_id,
+            self.generations,
             &anchor,
             &sealed_head(current_base64)?,
             segment.as_deref(),
@@ -4970,6 +4916,7 @@ impl AccountHeadKeys {
             &self.keys,
             &self.binding,
             &self.incarnation_id,
+            self.generations,
             writer,
             scopes,
         )
@@ -5001,6 +4948,7 @@ impl AccountHeadKeys {
             &self.keys,
             &self.binding,
             &self.incarnation_id,
+            self.generations,
             None,
             &sealed,
             None,

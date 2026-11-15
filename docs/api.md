@@ -335,10 +335,10 @@ exact ciphertext length as AEAD associated data. The three purposes cannot be
 substituted for one another or relocated to another account.
 
 `accountRoots` are the account's stored roots (docs/plans/identity-root.md):
-one account record of each purpose 22–26 (the identity root and the Drive
-root at generation 1, the group pseudonym root, the call-link root, the
-object-id key), sealed under the master key for the key binding (`400
-accountRootsInvalid` otherwise). The account identity derives from the
+one account record of each purpose 22–26 (the identity root, the Drive
+root, the group pseudonym root, the call-link root, the object-id key), each
+at generation 1 (the record's object), sealed under the master key for the
+key binding (`400 accountRootsInvalid` otherwise). The account identity derives from the
 identity root, never from the master key, so a new master key leaves it
 unchanged. An administrator-made account sends them at `complete-setup`.
 

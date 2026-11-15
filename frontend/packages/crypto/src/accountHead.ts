@@ -107,9 +107,21 @@ export class VerifiedHead {
 export class AccountHead {
   private constructor(private readonly handle: AccountHeadKeysHandle) {}
 
-  static async open(masterKey: Uint8Array, binding: string, incarnationId: string): Promise<AccountHead> {
+  /**
+   * `generations`: the account's root generations in use (from its roots); a
+   * head that records others is refused (`rootGenerationMismatch`), so a server
+   * can't serve an older root (docs/plans/identity-root.md).
+   */
+  static async open(
+    masterKey: Uint8Array,
+    binding: string,
+    incarnationId: string,
+    generations: { identityGeneration: number; driveGeneration: number },
+  ): Promise<AccountHead> {
     const wasm = await getCryptoWasm()
-    return new AccountHead(new wasm.AccountHeadKeys(toBase64(masterKey), binding, incarnationId))
+    return new AccountHead(
+      new wasm.AccountHeadKeys(toBase64(masterKey), binding, incarnationId, generations.identityGeneration, generations.driveGeneration),
+    )
   }
 
   writer(deviceId: string): string {

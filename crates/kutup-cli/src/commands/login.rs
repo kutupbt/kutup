@@ -5,6 +5,8 @@ use base64::Engine;
 
 use crate::api::{Client, TotpRequest};
 use crate::commands::prompt_line;
+use crate::config;
+use crate::errors::HeadBlocked;
 use crate::session::{Session, Store};
 use kutup_crypto::opaque;
 
@@ -239,7 +241,37 @@ pub(crate) fn login_with_password(
         bail!("the server described another account than the one signed in");
     }
 
-    // Step 6: persist the session.
+    // Step 6: the account head, checked before the session is kept and
+    // before anything signs or seals with the roots
+    // (docs/plans/identity-root.md). A rolled-back or forked history (a
+    // restore from a backup looks the same) is told, and `kutup account
+    // reanchor` decides, as for any other command; anything else ends the
+    // sign-in.
+    let signed = Client::new(server, &resp.access_token);
+    let checked = config::data_dir(profile).and_then(|dir| {
+        crate::account_head::CliHead::open(
+            &signed,
+            &master,
+            &binding,
+            &identity.incarnation_id(),
+            roots.head_generations(),
+            dir,
+        )?
+        .at_sign_in()
+    });
+    match checked {
+        Ok(()) => {}
+        Err(error) if error.downcast_ref::<HeadBlocked>().is_some() => eprintln!(
+            "warning: the account's history on the server was rolled back or forked; \
+             see `kutup account reanchor`"
+        ),
+        Err(error) => {
+            let _ = signed.logout();
+            return Err(error.context("check the account's history"));
+        }
+    }
+
+    // Step 7: persist the session.
     let mut store = Store::open(profile)?;
     let sess = Session {
         server: server.to_string(),

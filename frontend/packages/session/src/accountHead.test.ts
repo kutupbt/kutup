@@ -614,3 +614,71 @@ describe('races (the #202 review)', () => {
     expect(seen).toEqual(['unknown', 'trusted'])
   })
 })
+
+describe('at sign-in', () => {
+  it('with no head yet, starts the chain on the basis, covering no scope, and anchors it', async () => {
+    const engine = new FakeEngine()
+    const store = memoryRevisionStore()
+    const { http, calls } = server({
+      'GET /account/index/contacts': () => ({ head: null, values: [], basis: 'basis-1' }),
+      'POST /account/head': () => ({}),
+    })
+    await new AccountHeadClient(engine, store, http).atSignIn()
+    const start = calls.find(([method]) => method === 'POST')![2] as { head: string; basis: string }
+    expect(start.basis).toBe('basis-1')
+    expect(unseal(start.head)).toMatchObject({ sequence: 1, previous: null, writer: 'w:dev-1', scopes: [] })
+    expect((await stateIn(engine, store)).anchor).toEqual(anchorOf(start.head))
+  })
+
+  it('checks the head there is, fresh even when a check is still recent, and writes nothing', async () => {
+    const engine = new FakeEngine()
+    const store = memoryRevisionStore()
+    const [head] = chain(1)
+    const { http, calls } = server({
+      'GET /account/index/contacts': () => ({ head, values: [], basis: null }),
+      'GET /account/head': () => ({ head }),
+    })
+    const client = new AccountHeadClient(engine, store, http)
+    await client.verifiedHead()
+    await client.atSignIn()
+    expect(calls.filter(([, url]) => url === '/account/index/contacts')).toHaveLength(1)
+    expect(calls.filter(([method]) => method === 'POST')).toHaveLength(0)
+    expect((await stateIn(engine, store)).anchor).toEqual(anchorOf(head!))
+  })
+
+  it('another device starting the chain first: its head is checked and trusted', async () => {
+    const engine = new FakeEngine()
+    const store = memoryRevisionStore()
+    const [theirs] = chain(1)
+    let started = false
+    const { http } = server({
+      'GET /account/index/contacts': () => (started ? { head: theirs, values: [], basis: null } : { head: null, values: [], basis: 'b' }),
+      'POST /account/head': () => {
+        started = true
+        throw refused(409, 'head_conflict')
+      },
+    })
+    await new AccountHeadClient(engine, store, http).atSignIn()
+    expect((await stateIn(engine, store)).anchor).toEqual(anchorOf(theirs!))
+  })
+
+  it('a head missing that this device remembered blocks (the shell offers to continue)', async () => {
+    const engine = new FakeEngine()
+    const store = memoryRevisionStore()
+    await remembering(engine, store, chain(1)[0]!)
+    const { http, calls } = server({ 'GET /account/index/contacts': () => ({ head: null, values: [], basis: 'b' }) })
+    const client = new AccountHeadClient(engine, store, http)
+    await expect(client.atSignIn()).rejects.toBeInstanceOf(HeadBlockedError)
+    expect(client.current()).toEqual({ kind: 'blocked', reason: 'rollback' })
+    expect(calls.filter(([method]) => method === 'POST')).toHaveLength(0)
+  })
+
+  it('a head that does not check (another root generation) fails the sign-in', async () => {
+    const engine = new FakeEngine()
+    engine.onCheck = () => {
+      throw new Error('rootGenerationMismatch')
+    }
+    const { http } = server({ 'GET /account/index/contacts': () => ({ head: chain(1)[0], values: [], basis: null }) })
+    await expect(new AccountHeadClient(engine, memoryRevisionStore(), http).atSignIn()).rejects.toThrow('rootGenerationMismatch')
+  })
+})

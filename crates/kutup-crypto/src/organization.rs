@@ -622,12 +622,16 @@ impl EscrowV1 {
     }
 
     /// Opens an escrow of `member` with the organization key's seed: the
-    /// master key and identity root, if the authority the identity root
-    /// derives is the member's (`member_authority`, their published account
-    /// authority). The generation only labels which master key it is. A
-    /// master-key rotation keeps the authority (docs/plans/identity-root.md),
-    /// so an older escrow still opens here: the caller compares the
-    /// generation with the account's current one (the master-key rotation
+    /// master key and identity root, if both are the member's. The identity
+    /// root must derive `member_authority` (their published authority), and
+    /// the master key must open `identity_root_record` (the member's current
+    /// identity-root account record, as their server keeps it, bound to
+    /// `member_binding`) to that same root, at the escrow's generation. So
+    /// someone who holds only the identity root (a former admin) can't seal
+    /// an escrow of another master key, or label one with another
+    /// generation. The caller still compares the generation with the
+    /// account's current one: an older escrow of an older master key opens
+    /// its record only if that record is offered (the master-key rotation
     /// checklist).
     pub fn open(
         bytes: &[u8],
@@ -635,6 +639,8 @@ impl EscrowV1 {
         organization_seed: &[u8; 32],
         member: &Party,
         member_authority: &[u8; 32],
+        member_binding: &str,
+        identity_root_record: &[u8],
     ) -> Result<Escrowed> {
         let mut reader = Reader::new(bytes, ESCROW_MAGIC)?;
         let organization: [u8; 16] = reader.array()?;
@@ -674,6 +680,26 @@ impl EscrowV1 {
         if &keys.authority_public_key() != member_authority
             || !member.is_authority(member_authority)?
         {
+            return Err(CryptoError::AuthFailed);
+        }
+        // And the master key the member's: it opens their identity-root
+        // record to the same root, sealed at the escrow's generation.
+        let header = crate::account_record::inspect(identity_root_record)
+            .map_err(|_| CryptoError::AuthFailed)?;
+        if header.purpose != crate::account_record::AccountRecordPurpose::IdentityRoot
+            || header.generation != generation
+        {
+            return Err(CryptoError::AuthFailed);
+        }
+        let sealed_root = crate::account_record::open_object(
+            identity_root_record,
+            master_key.as_slice(),
+            crate::account_record::AccountRecordPurpose::IdentityRoot,
+            member_binding,
+            &header.object_id,
+        )
+        .map_err(|_| CryptoError::AuthFailed)?;
+        if !crate::primitives::ct_eq(&sealed_root, identity_root.as_bytes()) {
             return Err(CryptoError::AuthFailed);
         }
         Ok(Escrowed {

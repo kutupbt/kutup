@@ -339,6 +339,7 @@ pub(crate) fn secrets_head<'a>(
         &master_key,
         binding,
         &incarnation,
+        roots.head_generations(),
         dir.to_path_buf(),
     )
 }

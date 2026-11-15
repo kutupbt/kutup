@@ -27,8 +27,11 @@ export interface AccountRoots {
   identityRoot: IdentityRoot
   driveGeneration: number
   driveRoot: DriveRoot
+  pseudonymGeneration: number
   pseudonymRoot: PseudonymRoot
+  callLinkGeneration: number
   callLinkRoot: CallLinkRoot
+  objectIdGeneration: number
   objectIdKey: ObjectIdKey
 }
 
@@ -60,7 +63,7 @@ export async function generateAccountRoots(
   masterKey: Uint8Array,
   binding: string,
 ): Promise<{ roots: AccountRoots; envelopes: string[] }> {
-  return (await getCryptoWasm()).generateAccountRoots(toBase64(masterKey), MASTER_KEY_GENERATION, binding) as {
+  return (await getCryptoWasm()).sealAccountRoots(toBase64(masterKey), MASTER_KEY_GENERATION, binding, null) as {
     roots: AccountRoots
     envelopes: string[]
   }
@@ -68,7 +71,10 @@ export async function generateAccountRoots(
 
 /** `roots` sealed again under the master key for the key `binding` (a sign-up whose binding was drawn again). */
 export async function sealAccountRoots(masterKey: Uint8Array, binding: string, roots: AccountRoots): Promise<string[]> {
-  return (await getCryptoWasm()).sealAccountRoots(toBase64(masterKey), MASTER_KEY_GENERATION, binding, roots)
+  const sealed = (await getCryptoWasm()).sealAccountRoots(toBase64(masterKey), MASTER_KEY_GENERATION, binding, roots) as {
+    envelopes: string[]
+  }
+  return sealed.envelopes
 }
 
 /**

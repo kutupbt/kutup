@@ -1,5 +1,6 @@
 // Turn unlocked keys + a live access token into the app's Session.
 
+import { accountHead, HeadBlockedError } from './accountHead'
 import api from './client'
 import type { SessionKeys } from './keys'
 import { resetSessionVersion, setSessionVersionHandler } from './sessionVersion'
@@ -71,6 +72,23 @@ export async function activateSession(
     keys.masterKey.fill(0)
     keys.privateKey.fill(0)
     throw new KeyBindingMismatchError()
+  }
+  // The account head, checked before the session goes live and before
+  // anything signs or seals with the roots (docs/plans/identity-root.md): a
+  // server can't serve a rolled-back identity or Drive root. A rolled-back
+  // or forked history (a restore from a backup looks the same) goes on to
+  // the shell's banner, which offers to continue with the server's data;
+  // anything else ends the sign-in.
+  try {
+    await (await accountHead({ userId: keys.userId, masterKey: keys.masterKey, roots: keys.roots, envelopeBinding: keys.keyBinding })).atSignIn()
+  } catch (error) {
+    if (!(error instanceof HeadBlockedError)) {
+      await api.post('/auth/logout').catch(() => undefined)
+      clearSession()
+      keys.masterKey.fill(0)
+      keys.privateKey.fill(0)
+      throw error
+    }
   }
   setSession(
     {

@@ -107,6 +107,8 @@ pub struct Me {
     master_key: [u8; 32],
     /// The account's object-id key (a stored root): its guard's names.
     object_id_key: kutup_crypto::account_roots::ObjectIdKey,
+    /// The root generations in use, which the account head must record.
+    root_generations: kutup_crypto::account_head::RootGenerations,
     profile: String,
 }
 
@@ -131,6 +133,7 @@ impl Me {
             binding: ctx.session.binding().to_string(),
             identity: AccountIdentityKeysV1::derive(&roots.identity)?,
             master_key,
+            root_generations: roots.head_generations(),
             object_id_key: roots.object_id,
             profile: profile.to_string(),
         })
@@ -147,6 +150,7 @@ impl Me {
             &self.master_key,
             &self.binding,
             &self.identity.incarnation_id(),
+            self.root_generations,
             config::data_dir(&self.profile)?,
         )
     }

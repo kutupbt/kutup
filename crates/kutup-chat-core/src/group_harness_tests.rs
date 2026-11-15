@@ -469,23 +469,7 @@ impl World {
         engine
             .enable_group_list(
                 &[authority_seed; 32],
-                &kutup_crypto::account_roots::AccountRoots {
-                    identity_generation: kutup_crypto::account_roots::RootGeneration::FIRST,
-                    identity: kutup_crypto::account_roots::IdentityRoot::from_bytes(
-                        [authority_seed; 32],
-                    ),
-                    drive_generation: kutup_crypto::account_roots::RootGeneration::FIRST,
-                    drive: kutup_crypto::account_roots::DriveRoot::from_bytes([authority_seed; 32]),
-                    pseudonym: kutup_crypto::account_roots::GroupPseudonymRoot::from_bytes(
-                        [authority_seed; 32],
-                    ),
-                    call_link: kutup_crypto::account_roots::CallLinkRoot::from_bytes(
-                        [authority_seed; 32],
-                    ),
-                    object_id: kutup_crypto::account_roots::ObjectIdKey::from_bytes(
-                        [authority_seed; 32],
-                    ),
-                },
+                &kutup_crypto::account_roots::AccountRoots::same_for_tests([authority_seed; 32]),
                 &binding,
             )
             .unwrap();

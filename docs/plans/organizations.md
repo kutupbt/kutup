@@ -341,14 +341,17 @@ can't tell a managed account from a private one, as at Proton.
   id, key id, member account ref, incarnation and master-key generation. No
   separate signature is needed: an admin who opens it derives the authority
   from the identity root and checks it equals the member's published
-  authority for that incarnation. Only the member holds the identity root,
-  so a server (or anyone with the public organization key) can't plant an
-  escrow. Opening an escrow yields the member's identity root as well as the
-  master key; the master key already opened the member's root records, so
-  an admin can do no more than before. A master-key rotation keeps the
-  authority, so an older escrow still opens: whoever opens one compares its
-  generation with the account's current one (the master-key rotation
-  checklist).
+  authority for that incarnation, and opens the member's identity-root
+  record (as their server keeps it, under their key binding) with the
+  escrowed master key: it must hold the same root, sealed at the escrow's
+  generation. So neither a server nor someone who holds only the identity
+  root (a former admin) can plant an escrow of another master key, or
+  relabel its generation. Opening an escrow yields the member's identity
+  root as well as the master key, and through the master key every root of
+  the member: releasing an escrow therefore means an identity rotation of
+  the member (all five roots new; docs/plans/identity-root.md). Whoever opens
+  one still compares its generation with the account's current one (the
+  master-key rotation checklist).
 - Nothing binds a username, address or organization name. Vectors and WASM
   bindings as for every format; labels go into W6's `labels.rs`.
 

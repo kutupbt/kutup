@@ -346,6 +346,12 @@ enum Install {
     },
 }
 
+/// Opens the account's roots and starts the Chat worker.
+///
+/// It does not check the account head yet (docs/plans/identity-root.md):
+/// the web and the CLI check it at sign-in, so a server can't serve a
+/// rolled-back identity or Drive root, and this must do the same before a
+/// native app ships (docs/roadmap.md, "Native iOS and Android apps").
 async fn start_client(
     database_path: String,
     database_key: Vec<u8>,

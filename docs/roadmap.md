@@ -360,6 +360,17 @@ client:
 - the chain started on the index basis;
 - a blocked state shown in the app.
 
+`start_client` also does not check the account head yet. The web and the
+CLI check it at sign-in (docs/plans/identity-root.md, "After review"), and
+`start_client` must do the same before a native app ships: read the head
+fresh, check it with the roots' generations before anything signs or seals
+with them, start the chain when there is none, and give a typed blocked
+error plus a "continue with the server's data" call. The intended way is to
+move the IO-free core of the CLI's `CliHead` (verify with segments, too-old
+re-anchoring, continuing) into `kutup-crypto` and share it, rather than
+write a third copy. The head format is already fixed, so this needs no
+format change.
+
 ### Native desktop apps
 
 Not started, and planned after the native mobile apps (decided 2026-11-06).

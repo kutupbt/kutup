@@ -142,8 +142,7 @@ function isRoots(value: unknown): value is AccountRoots {
   }
   const generation = (key: string) => Number.isSafeInteger(roots[key]) && (roots[key] as number) >= 1
   return (
-    generation('identityGeneration') &&
-    generation('driveGeneration') &&
+    ['identityGeneration', 'driveGeneration', 'pseudonymGeneration', 'callLinkGeneration', 'objectIdGeneration'].every(generation) &&
     ['identityRoot', 'driveRoot', 'pseudonymRoot', 'callLinkRoot', 'objectIdKey'].every(root)
   )
 }

@@ -232,8 +232,16 @@ fn the_account_head_covers_the_group_list() {
         keys.scope_digest("chatGroups", &[(one.clone(), revision)])
             .unwrap()
     };
-    let first =
-        AccountHeadV1::first(&user.identity.incarnation_id(), &writer, vec![scope(1)]).unwrap();
+    let first = AccountHeadV1::first(
+        &user.identity.incarnation_id(),
+        kutup_crypto::account_head::RootGenerations {
+            identity: 1,
+            drive: 1,
+        },
+        &writer,
+        vec![scope(1)],
+    )
+    .unwrap();
     let first_sealed = account_head::seal(&keys, &user.binding, &first).unwrap();
     let r = bearer(c.post(format!("{base}/api/account/head")), &user.token)
         .json(&json!({ "head": STANDARD.encode(&first_sealed), "basis": index["basis"] }))

@@ -2,13 +2,13 @@
 //!
 //! Five random 32-byte secrets, each an account record sealed under the
 //! master key (MK), so a new MK changes nothing a peer sees and moves no
-//! record id:
+//! record id. Each has a generation, the record's object (u32 big-endian):
+//! one record per generation, every generation kept, the newest current.
 //!
 //! - the identity root ([`IdentityRoot`]): the authority and both Drive
-//!   identity keys derive from it (`identity::AccountIdentityKeysV1`); one
-//!   record per identity generation, every generation kept;
+//!   identity keys derive from it (`identity::AccountIdentityKeysV1`);
 //! - the Drive root ([`DriveRoot`]): the account's own collection keys and
-//!   link owner copies; one record per Drive root generation;
+//!   link owner copies;
 //! - the group pseudonym root ([`GroupPseudonymRoot`]);
 //! - the call-link root ([`CallLinkRoot`]);
 //! - the object-id key ([`ObjectIdKey`]) of `account_record::hashed_object`.
@@ -151,46 +151,87 @@ pub fn is_root_purpose(purpose: AccountRecordPurpose) -> bool {
     PURPOSES.contains(&purpose)
 }
 
-/// The newest of a rotating root's records: no generation twice, at least
-/// one.
-fn newest<'a>(
-    mut list: Vec<(RootGeneration, &'a [u8])>,
-    what: &str,
-) -> Result<(RootGeneration, &'a [u8])> {
+/// The newest of a root's records: no generation twice, at least one.
+fn newest(mut list: Vec<(RootGeneration, &[u8])>) -> Result<(RootGeneration, &[u8])> {
     list.sort_by_key(|(generation, _)| *generation);
     if list.windows(2).any(|pair| pair[0].0 == pair[1].0) {
-        return Err(CryptoError::InvalidInput(format!(
-            "two {what} records of one generation"
-        )));
+        return Err(CryptoError::InvalidInput(
+            "account root generation twice".into(),
+        ));
     }
     list.pop()
-        .ok_or_else(|| CryptoError::InvalidInput(format!("no {what} record")))
+        .ok_or_else(|| CryptoError::InvalidInput("account root missing".into()))
 }
 
-/// The account's current roots.
+/// The account's current roots, each with its generation (the record's
+/// object): any of them can rotate without a format change.
 #[derive(Clone, Debug)]
 pub struct AccountRoots {
     pub identity_generation: RootGeneration,
     pub identity: IdentityRoot,
     pub drive_generation: RootGeneration,
     pub drive: DriveRoot,
+    pub pseudonym_generation: RootGeneration,
     pub pseudonym: GroupPseudonymRoot,
+    pub call_link_generation: RootGeneration,
     pub call_link: CallLinkRoot,
+    pub object_id_generation: RootGeneration,
     pub object_id: ObjectIdKey,
 }
 
 impl AccountRoots {
-    /// A new account's roots: random, the rotating ones at generation 1.
+    /// A new account's roots: random, each at generation 1.
     pub fn generate() -> Self {
         Self {
             identity_generation: RootGeneration::FIRST,
             identity: IdentityRoot::generate(),
             drive_generation: RootGeneration::FIRST,
             drive: DriveRoot::generate(),
+            pseudonym_generation: RootGeneration::FIRST,
             pseudonym: GroupPseudonymRoot::generate(),
+            call_link_generation: RootGeneration::FIRST,
             call_link: CallLinkRoot::generate(),
+            object_id_generation: RootGeneration::FIRST,
             object_id: ObjectIdKey::generate(),
         }
+    }
+
+    /// Every root `bytes`, each at generation 1: for tests across crates
+    /// only (an identity derived from it is the one the same bytes gave as
+    /// a master key before the roots).
+    #[doc(hidden)]
+    pub fn same_for_tests(bytes: [u8; ROOT_LEN]) -> Self {
+        Self {
+            identity_generation: RootGeneration::FIRST,
+            identity: IdentityRoot::from_bytes(bytes),
+            drive_generation: RootGeneration::FIRST,
+            drive: DriveRoot::from_bytes(bytes),
+            pseudonym_generation: RootGeneration::FIRST,
+            pseudonym: GroupPseudonymRoot::from_bytes(bytes),
+            call_link_generation: RootGeneration::FIRST,
+            call_link: CallLinkRoot::from_bytes(bytes),
+            object_id_generation: RootGeneration::FIRST,
+            object_id: ObjectIdKey::from_bytes(bytes),
+        }
+    }
+
+    /// The generations the account head records of these roots.
+    pub fn head_generations(&self) -> crate::account_head::RootGenerations {
+        crate::account_head::RootGenerations {
+            identity: self.identity_generation.get(),
+            drive: self.drive_generation.get(),
+        }
+    }
+
+    /// Each root's generation and bytes, in [`PURPOSES`] order.
+    fn parts(&self) -> [(RootGeneration, &[u8; ROOT_LEN]); 5] {
+        [
+            (self.identity_generation, self.identity.as_bytes()),
+            (self.drive_generation, self.drive.as_bytes()),
+            (self.pseudonym_generation, self.pseudonym.as_bytes()),
+            (self.call_link_generation, self.call_link.as_bytes()),
+            (self.object_id_generation, self.object_id.as_bytes()),
+        ]
     }
 
     /// The five envelopes, sealed under `master_key` (of `generation`) for the
@@ -201,42 +242,25 @@ impl AccountRoots {
         generation: MasterKeyGeneration,
         binding: &str,
     ) -> Result<Vec<Vec<u8>>> {
-        let seal = |purpose, root: &[u8; ROOT_LEN], object: &[u8]| {
-            account_record::seal_object(root, master_key, purpose, generation, binding, object)
-        };
-        Ok(vec![
-            seal(
-                AccountRecordPurpose::IdentityRoot,
-                self.identity.as_bytes(),
-                &self.identity_generation.object(),
-            )?,
-            seal(
-                AccountRecordPurpose::DriveRoot,
-                self.drive.as_bytes(),
-                &self.drive_generation.object(),
-            )?,
-            seal(
-                AccountRecordPurpose::GroupPseudonymRoot,
-                self.pseudonym.as_bytes(),
-                &[],
-            )?,
-            seal(
-                AccountRecordPurpose::CallLinkRoot,
-                self.call_link.as_bytes(),
-                &[],
-            )?,
-            seal(
-                AccountRecordPurpose::ObjectIdKey,
-                self.object_id.as_bytes(),
-                &[],
-            )?,
-        ])
+        PURPOSES
+            .iter()
+            .zip(self.parts())
+            .map(|(purpose, (root_generation, root))| {
+                account_record::seal_object(
+                    root,
+                    master_key,
+                    *purpose,
+                    generation,
+                    binding,
+                    &root_generation.object(),
+                )
+            })
+            .collect()
     }
 
     /// Opens the account's roots from its root records (any order, every
-    /// kept generation): each single root exactly once, the identity and
-    /// Drive roots at least once with no generation twice; the newest of
-    /// each is the current one. The newest identity root must derive
+    /// kept generation): each root at least once, no generation twice, the
+    /// newest of each the current one. The newest identity root must derive
     /// `registered_authority` (the account's authority public key), or the
     /// error starts with [`IDENTITY_MISMATCH`]: an older generation never
     /// stands in.
@@ -249,11 +273,7 @@ impl AccountRoots {
         let roots = Self::open_unchecked(envelopes, master_key, binding)?;
         let identity = crate::identity::AccountIdentityKeysV1::derive(&roots.identity)?;
         if identity.authority_public_key() != *registered_authority {
-            return Err(CryptoError::InvalidInput(format!(
-                "{IDENTITY_MISMATCH}: the newest identity root (generation {}) does not \
-                 derive this account's authority",
-                roots.identity_generation.get()
-            )));
+            return Err(CryptoError::InvalidInput(IDENTITY_MISMATCH.into()));
         }
         Ok(roots)
     }
@@ -265,76 +285,120 @@ impl AccountRoots {
         master_key: &[u8; 32],
         binding: &str,
     ) -> Result<Self> {
-        let mut identity: Vec<(RootGeneration, &[u8])> = Vec::new();
-        let mut drive: Vec<(RootGeneration, &[u8])> = Vec::new();
-        let mut single: [Option<&[u8]>; 3] = [None, None, None];
+        let mut found: [Vec<(RootGeneration, &[u8])>; 5] = Default::default();
         for envelope in envelopes {
             let envelope = envelope.as_ref();
             let header = account_record::inspect(envelope)?;
-            match header.purpose {
-                AccountRecordPurpose::IdentityRoot => {
-                    identity.push((RootGeneration::from_object(&header.object_id)?, envelope))
-                }
-                AccountRecordPurpose::DriveRoot => {
-                    drive.push((RootGeneration::from_object(&header.object_id)?, envelope))
-                }
-                purpose => {
-                    let slot = match purpose {
-                        AccountRecordPurpose::GroupPseudonymRoot => 0,
-                        AccountRecordPurpose::CallLinkRoot => 1,
-                        AccountRecordPurpose::ObjectIdKey => 2,
-                        other => {
-                            return Err(CryptoError::InvalidInput(format!(
-                                "account record purpose {} is not an account root",
-                                other.as_u16()
-                            )))
-                        }
-                    };
-                    if single[slot].replace(envelope).is_some() {
-                        return Err(CryptoError::InvalidInput(format!(
-                            "account root {} given twice",
-                            purpose.as_u16()
-                        )));
-                    }
-                }
-            }
+            let slot = PURPOSES
+                .iter()
+                .position(|purpose| *purpose == header.purpose)
+                .ok_or_else(|| CryptoError::InvalidInput("not an account root".into()))?;
+            found[slot].push((RootGeneration::from_object(&header.object_id)?, envelope));
         }
-        let (identity_generation, identity) = newest(identity, "identity root")?;
-        let (drive_generation, drive) = newest(drive, "Drive root")?;
-        let open = |envelope: &[u8], purpose: AccountRecordPurpose, object: &[u8]| {
-            account_record::open_object(envelope, master_key, purpose, binding, object)
-        };
-        let single_root = |slot: usize, purpose: AccountRecordPurpose| {
-            let envelope = single[slot].ok_or_else(|| {
-                CryptoError::InvalidInput(format!("account root {} missing", purpose.as_u16()))
-            })?;
-            open(envelope, purpose, &[])
+        let mut opened = Vec::with_capacity(5);
+        for (purpose, records) in PURPOSES.iter().zip(found) {
+            let (generation, envelope) = newest(records)?;
+            let plain = account_record::open_object(
+                envelope,
+                master_key,
+                *purpose,
+                binding,
+                &generation.object(),
+            )?;
+            let bytes: [u8; ROOT_LEN] = plain
+                .as_slice()
+                .try_into()
+                .map_err(|_| CryptoError::InvalidInput("account root length".into()))?;
+            opened.push((generation, Zeroizing::new(bytes)));
+        }
+        let mut opened = opened.into_iter();
+        let mut next = || opened.next().expect("five roots");
+        let (identity_generation, identity) = next();
+        let (drive_generation, drive) = next();
+        let (pseudonym_generation, pseudonym) = next();
+        let (call_link_generation, call_link) = next();
+        let (object_id_generation, object_id) = next();
+        Ok(Self {
+            identity_generation,
+            identity: IdentityRoot(identity),
+            drive_generation,
+            drive: DriveRoot(drive),
+            pseudonym_generation,
+            pseudonym: GroupPseudonymRoot(pseudonym),
+            call_link_generation,
+            call_link: CallLinkRoot(call_link),
+            object_id_generation,
+            object_id: ObjectIdKey(object_id),
+        })
+    }
+}
+
+/// The roots as a page holds them (`openAccountRoots` of `@kutup/crypto`,
+/// `session.roots`): each root canonical base64, each with its generation.
+/// One form for every client binding.
+#[derive(serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AccountRootsJson {
+    pub identity_generation: u32,
+    pub identity_root: String,
+    pub drive_generation: u32,
+    pub drive_root: String,
+    pub pseudonym_generation: u32,
+    pub pseudonym_root: String,
+    pub call_link_generation: u32,
+    pub call_link_root: String,
+    pub object_id_generation: u32,
+    pub object_id_key: String,
+}
+
+impl From<&AccountRoots> for AccountRootsJson {
+    fn from(roots: &AccountRoots) -> Self {
+        use base64::Engine as _;
+        let b64 = |bytes: &[u8; ROOT_LEN]| base64::engine::general_purpose::STANDARD.encode(bytes);
+        Self {
+            identity_generation: roots.identity_generation.get(),
+            identity_root: b64(roots.identity.as_bytes()),
+            drive_generation: roots.drive_generation.get(),
+            drive_root: b64(roots.drive.as_bytes()),
+            pseudonym_generation: roots.pseudonym_generation.get(),
+            pseudonym_root: b64(roots.pseudonym.as_bytes()),
+            call_link_generation: roots.call_link_generation.get(),
+            call_link_root: b64(roots.call_link.as_bytes()),
+            object_id_generation: roots.object_id_generation.get(),
+            object_id_key: b64(roots.object_id.as_bytes()),
+        }
+    }
+}
+
+impl TryFrom<&AccountRootsJson> for AccountRoots {
+    type Error = CryptoError;
+
+    fn try_from(json: &AccountRootsJson) -> Result<Self> {
+        use base64::Engine as _;
+        let root = |value: &str| -> Result<Zeroizing<[u8; ROOT_LEN]>> {
+            let decoded = Zeroizing::new(
+                base64::engine::general_purpose::STANDARD
+                    .decode(value)
+                    .map_err(|_| CryptoError::InvalidInput("account root encoding".into()))?,
+            );
+            let mut bytes = Zeroizing::new([0u8; ROOT_LEN]);
+            if decoded.len() != ROOT_LEN {
+                return Err(CryptoError::InvalidInput("account root length".into()));
+            }
+            bytes.copy_from_slice(&decoded);
+            Ok(bytes)
         };
         Ok(Self {
-            identity: IdentityRoot::from_slice(&open(
-                identity,
-                AccountRecordPurpose::IdentityRoot,
-                &identity_generation.object(),
-            )?)?,
-            identity_generation,
-            drive: DriveRoot::from_slice(&open(
-                drive,
-                AccountRecordPurpose::DriveRoot,
-                &drive_generation.object(),
-            )?)?,
-            drive_generation,
-            pseudonym: GroupPseudonymRoot::from_slice(&single_root(
-                0,
-                AccountRecordPurpose::GroupPseudonymRoot,
-            )?)?,
-            call_link: CallLinkRoot::from_slice(&single_root(
-                1,
-                AccountRecordPurpose::CallLinkRoot,
-            )?)?,
-            object_id: ObjectIdKey::from_slice(&single_root(
-                2,
-                AccountRecordPurpose::ObjectIdKey,
-            )?)?,
+            identity_generation: RootGeneration::new(json.identity_generation)?,
+            identity: IdentityRoot(root(&json.identity_root)?),
+            drive_generation: RootGeneration::new(json.drive_generation)?,
+            drive: DriveRoot(root(&json.drive_root)?),
+            pseudonym_generation: RootGeneration::new(json.pseudonym_generation)?,
+            pseudonym: GroupPseudonymRoot(root(&json.pseudonym_root)?),
+            call_link_generation: RootGeneration::new(json.call_link_generation)?,
+            call_link: CallLinkRoot(root(&json.call_link_root)?),
+            object_id_generation: RootGeneration::new(json.object_id_generation)?,
+            object_id: ObjectIdKey(root(&json.object_id_key)?),
         })
     }
 }

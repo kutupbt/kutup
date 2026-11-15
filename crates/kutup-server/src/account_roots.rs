@@ -53,12 +53,8 @@ pub fn checked_first(values: &[String], binding: &str) -> AppResult<Vec<Root>> {
         {
             return Err(invalid("a root is given twice"));
         }
-        let object = match header.purpose {
-            AccountRecordPurpose::IdentityRoot | AccountRecordPurpose::DriveRoot => {
-                RootGeneration::FIRST.object().to_vec()
-            }
-            _ => Vec::new(),
-        };
+        // Every root's object is its generation: a new account's are 1.
+        let object = RootGeneration::FIRST.object().to_vec();
         account_record::validate_for(&envelope, header.purpose, binding, &object)
             .map_err(|_| invalid("a record is not this account's first"))?;
         roots.push(Root {

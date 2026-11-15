@@ -248,13 +248,14 @@ pub enum AccountRecordPurpose {
     /// root generation (u32 big-endian); every generation is kept.
     DriveRoot = 23,
     /// The account's group pseudonym root: each group pseudonym derives from
-    /// it. One per account, never rotated.
+    /// it. Its object is its generation (u32 big-endian), so it can rotate
+    /// (with an identity rotation that releases an escrow).
     GroupPseudonymRoot = 24,
     /// The account's call-link root: call-link owner secrets and host tokens
-    /// derive from it. One per account, never rotated.
+    /// derive from it. Its object is its generation (u32 big-endian).
     CallLinkRoot = 25,
-    /// The key of [`hashed_object`] ids. One per account, never rotated, so
-    /// record ids survive a master-key rotation.
+    /// The key of [`hashed_object`] ids: its own, so record ids survive a
+    /// master-key rotation. Its object is its generation (u32 big-endian).
     ObjectIdKey = 26,
 }
 
@@ -328,14 +329,14 @@ impl AccountRecordPurpose {
             chained: false,
         };
         match self {
-            Self::PasswordMasterKey
-            | Self::RecoveryMasterKey
-            | Self::ChatBackupRoot
+            Self::PasswordMasterKey | Self::RecoveryMasterKey | Self::ChatBackupRoot => KEY,
+            // An account root: one record per generation, the generation the
+            // object.
+            Self::IdentityRoot
+            | Self::DriveRoot
             | Self::GroupPseudonymRoot
             | Self::CallLinkRoot
-            | Self::ObjectIdKey => KEY,
-            // One record per generation: the generation is the object.
-            Self::IdentityRoot | Self::DriveRoot => PurposePolicy {
+            | Self::ObjectIdKey => PurposePolicy {
                 object: ObjectPolicy::Required(4),
                 ..KEY
             },
