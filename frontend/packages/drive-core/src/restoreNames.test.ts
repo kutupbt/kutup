@@ -17,8 +17,9 @@ import { QueryClient } from '@tanstack/react-query'
 import type { DriveIdentity } from './identity'
 import { atTopLevel, nameHashIn } from './names'
 import { RestoreCancelled, restoreEntry, type TrashEntry } from './trash'
+import { testRoots } from '@kutup/crypto/accountRoots.testing'
 
-const me = { userId: '33333333-3333-4333-8333-333333333333', masterKey: new Uint8Array(32).fill(9) } as DriveIdentity
+const me = { userId: '33333333-3333-4333-8333-333333333333', masterKey: new Uint8Array(32).fill(9), roots: testRoots(0) } as DriveIdentity
 const top = atTopLevel(me.masterKey)
 
 const conflict = (data: object) =>

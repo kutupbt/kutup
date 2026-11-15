@@ -49,7 +49,7 @@ pub fn folder_keyring(
     sess: &Session,
 ) -> Result<Keyring> {
     let key = decrypt_collection_key(col, master_key, sess)?;
-    Keyring::load(client, col, &key, master_key)
+    Keyring::load(client, col, &key, sess)
 }
 
 /// Decrypts a file's name and size, returning `("[encrypted]", 0)` on failure.
@@ -76,12 +76,15 @@ pub struct FoundFile {
 /// Locates a file across the user's owned collections and unwraps its file key.
 /// Mirrors `findFileAndKey` (versions.go); shared/federated collections are
 /// skipped (their keys don't open with the master key directly).
-pub fn find_file_and_key(client: &Client, master_key: &[u8], file_id: &str) -> Result<FoundFile> {
+pub fn find_file_and_key(
+    client: &Client,
+    master_key: &[u8],
+    sess: &Session,
+    file_id: &str,
+) -> Result<FoundFile> {
     let cols = client.list_collections()?;
     for col in cols {
-        let dummy_session = Session::default();
-        let Ok(col_key) = crate::collection_crypto::open_key(&col, master_key, &dummy_session)
-        else {
+        let Ok(col_key) = crate::collection_crypto::open_key(&col, master_key, sess) else {
             continue;
         };
         let Ok(files) = client.list_files(&col.id) else {
@@ -90,7 +93,7 @@ pub fn find_file_and_key(client: &Client, master_key: &[u8], file_id: &str) -> R
         let Some(f) = files.into_iter().find(|f| f.id == file_id) else {
             continue;
         };
-        let keys = Keyring::load(client, &col, &col_key, master_key)?;
+        let keys = Keyring::load(client, &col, &col_key, sess)?;
         let file_key = crate::file_crypto::open_key(&f, &keys)?;
         return Ok(FoundFile {
             file: f,
@@ -124,7 +127,7 @@ pub fn locate_file(
         let Some(f) = files.into_iter().find(|f| f.id == file_id) else {
             continue;
         };
-        let keys = Keyring::load(client, col, &col_key, master_key)?;
+        let keys = Keyring::load(client, col, &col_key, sess)?;
         let file_key = crate::file_crypto::open_key(&f, &keys)?;
         return Ok(FoundFile {
             file: f,

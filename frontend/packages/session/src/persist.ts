@@ -55,6 +55,7 @@ export async function persistDevice(device: DeviceKeys | null): Promise<void> {
   const keys: SessionKeys = {
     userId: session.userId,
     masterKey: session.masterKey,
+    roots: session.roots,
     privateKey: session.privateKey,
     publicKey: session.publicKey,
     keyBinding: session.envelopeBinding,

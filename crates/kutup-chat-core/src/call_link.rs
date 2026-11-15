@@ -59,20 +59,35 @@ pub fn new_call_link_nonce() -> String {
     crypto::new_call_link_nonce()
 }
 
+/// The owner's call-link root (a stored root, standard base64 of 32 bytes).
+fn call_link_root(base64: &str) -> Result<kutup_crypto::account_roots::CallLinkRoot> {
+    use base64::Engine as _;
+    let bytes = Zeroizing::new(
+        base64::engine::general_purpose::STANDARD
+            .decode(base64)
+            .map_err(|_| ChatError::Invalid("the call-link root is not base64".into()))?,
+    );
+    kutup_crypto::account_roots::CallLinkRoot::from_slice(&bytes).map_err(invalid)
+}
+
 /// The secret of the link its owner made with `nonce` (32 lowercase hex
-/// characters), from the owner's account master key (standard base64, 32
-/// bytes). Only the owner can compute it, on any of their devices.
-pub fn owner_call_link_secret(master_key: &str, nonce: &str) -> Result<Zeroizing<String>> {
-    crypto::owner_call_link_secret(master_key, nonce).map_err(invalid)
+/// characters), from the owner's call-link root (standard base64, 32 bytes;
+/// docs/plans/identity-root.md). Only the owner can compute it, on any of
+/// their devices.
+pub fn owner_call_link_secret(call_link_root_b64: &str, nonce: &str) -> Result<Zeroizing<String>> {
+    crypto::owner_call_link_secret(&call_link_root(call_link_root_b64)?, nonce).map_err(invalid)
 }
 
 /// The owner's proof of being a meeting's host (standard base64, 32 bytes),
-/// from the account master key and the meeting's nonce. Unlike the link's
+/// from the owner's call-link root and the meeting's nonce. Unlike the link's
 /// secret, nobody the link is shared with can compute it. The host stores
 /// only its SHA-256: presenting the token lets the owner into a meeting
 /// with a waiting room, and lets them admit the people waiting.
-pub fn owner_call_link_host_token(master_key: &str, nonce: &str) -> Result<Zeroizing<String>> {
-    crypto::owner_call_link_host_token(master_key, nonce).map_err(invalid)
+pub fn owner_call_link_host_token(
+    call_link_root_b64: &str,
+    nonce: &str,
+) -> Result<Zeroizing<String>> {
+    crypto::owner_call_link_host_token(&call_link_root(call_link_root_b64)?, nonce).map_err(invalid)
 }
 
 /// What the host stores of a token: its SHA-256 (standard base64).

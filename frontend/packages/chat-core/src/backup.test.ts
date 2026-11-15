@@ -73,6 +73,7 @@ import { testSealer } from './testSealer'
 import { getAll, openBackupStore, putValue, type BackupOutboxEntry } from './backup-store'
 import { conversationKey } from './identity'
 import type { ChangeMark, ChatHistoryEntry } from './types'
+import { testRoots } from '@kutup/crypto/accountRoots.testing'
 
 const zeroDigest = '0'.repeat(64)
 const openCoordinators: ChatBackupCoordinator[] = []
@@ -300,6 +301,7 @@ async function open(
     databaseName,
     envelopeBinding: 'aci:00000000-0000-4000-8000-04f8996da763@kutup.dev',
     masterKey: new Uint8Array(32).fill(3),
+    roots: testRoots(3),
     deviceId,
     history,
     manifestSequence: async () => 1,
@@ -323,6 +325,7 @@ async function openWithRetries(
     databaseName,
     envelopeBinding: 'aci:00000000-0000-4000-8000-04f8996da763@kutup.dev',
     masterKey: new Uint8Array(32).fill(3),
+    roots: testRoots(3),
     deviceId: 9,
     history,
     manifestSequence: async () => 1,
@@ -1105,6 +1108,7 @@ describe('ChatBackupCoordinator collection by conversation', () => {
         databaseName: database,
         envelopeBinding: 'aci:00000000-0000-4000-8000-04f8996da763@kutup.dev',
         masterKey: new Uint8Array(32).fill(3),
+    roots: testRoots(3),
         deviceId: 9,
         history: async () => history,
         manifestSequence: async () => 1,

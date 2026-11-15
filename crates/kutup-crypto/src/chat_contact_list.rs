@@ -39,6 +39,7 @@ pub const SEALED_LEN: usize = match account_record::exact_record_len(PURPOSE) {
 pub struct ContactListKey {
     master_key: Zeroizing<[u8; 32]>,
     generation: MasterKeyGeneration,
+    object_id_key: crate::account_roots::ObjectIdKey,
 }
 
 /// An opened entry: its revision (from the authenticated header) and plaintext.
@@ -48,16 +49,23 @@ pub struct OpenedEntry {
 }
 
 impl ContactListKey {
-    pub fn new(master_key: &[u8; 32], generation: MasterKeyGeneration) -> Self {
+    /// Entries sealed under `master_key` (of `generation`), their ids
+    /// hashed under the account's `object_id_key`.
+    pub fn new(
+        master_key: &[u8; 32],
+        generation: MasterKeyGeneration,
+        object_id_key: &crate::account_roots::ObjectIdKey,
+    ) -> Self {
         Self {
             master_key: Zeroizing::new(*master_key),
             generation,
+            object_id_key: object_id_key.clone(),
         }
     }
 
     /// The entry id of `contact` in this account's list.
     pub fn entry_id(&self, contact: &AccountRef) -> [u8; ENTRY_ID_LEN] {
-        account_record::hashed_object(&self.master_key, PURPOSE, &contact.bytes())
+        account_record::hashed_object(&self.object_id_key, PURPOSE, &contact.bytes())
     }
 
     /// Seals an entry's plaintext for `entry_id` at `revision`, bound to the
@@ -178,15 +186,28 @@ mod tests {
 
     #[test]
     fn an_entry_opens_only_for_its_id_and_account() {
-        let key = ContactListKey::new(&[1u8; 32], FIRST);
-        let other = ContactListKey::new(&[2u8; 32], FIRST);
+        let key = ContactListKey::new(
+            &[1u8; 32],
+            FIRST,
+            &crate::account_roots::ObjectIdKey::from_bytes([1u8; 32]),
+        );
+        let other = ContactListKey::new(
+            &[2u8; 32],
+            FIRST,
+            &crate::account_roots::ObjectIdKey::from_bytes([2u8; 32]),
+        );
         let contact = account("00000000-0000-4000-8000-0000000000b2");
         let id = key.entry_id(&contact);
         // The id differs per account, and is the same for one account.
         assert_ne!(id, other.entry_id(&contact));
         assert_eq!(
             id,
-            ContactListKey::new(&[1u8; 32], FIRST).entry_id(&contact)
+            ContactListKey::new(
+                &[1u8; 32],
+                FIRST,
+                &crate::account_roots::ObjectIdKey::from_bytes([1u8; 32])
+            )
+            .entry_id(&contact)
         );
 
         let sealed = key.seal(BINDING, &id, 3, b"entry").unwrap();
@@ -207,7 +228,11 @@ mod tests {
             "another account"
         );
         // A group list entry is not a contact list entry.
-        let group = crate::chat_group_list::GroupListKey::new(&[1u8; 32], FIRST);
+        let group = crate::chat_group_list::GroupListKey::new(
+            &[1u8; 32],
+            FIRST,
+            &crate::account_roots::ObjectIdKey::from_bytes([1u8; 32]),
+        );
         let group_entry = group.seal(BINDING, &id, 3, b"entry").unwrap();
         assert!(key.open(BINDING, &id, &group_entry).is_err());
         assert!(inspect(&group_entry).is_err());
@@ -215,7 +240,11 @@ mod tests {
 
     #[test]
     fn every_entry_has_one_size() {
-        let key = ContactListKey::new(&[1u8; 32], FIRST);
+        let key = ContactListKey::new(
+            &[1u8; 32],
+            FIRST,
+            &crate::account_roots::ObjectIdKey::from_bytes([1u8; 32]),
+        );
         let id = key.entry_id(&account("00000000-0000-4000-8000-0000000000b2"));
         let mut sizes = std::collections::BTreeSet::new();
         for len in [0, 1, 400, MAX_PLAIN_LEN] {
@@ -236,8 +265,12 @@ mod tests {
 
     #[test]
     fn entry_ids_are_canonical_base64url() {
-        let id = ContactListKey::new(&[1u8; 32], FIRST)
-            .entry_id(&account("00000000-0000-4000-8000-0000000000b2"));
+        let id = ContactListKey::new(
+            &[1u8; 32],
+            FIRST,
+            &crate::account_roots::ObjectIdKey::from_bytes([1u8; 32]),
+        )
+        .entry_id(&account("00000000-0000-4000-8000-0000000000b2"));
         let text = encode_entry_id(&id);
         assert_eq!(text.len(), 43);
         assert_eq!(decode_entry_id(&text).unwrap(), id);

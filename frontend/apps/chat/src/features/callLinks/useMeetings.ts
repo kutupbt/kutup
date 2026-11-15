@@ -26,24 +26,24 @@ export function useMeetings(enabled = true) {
     onMutate: () => queryClient.cancelQueries({ queryKey: QUERY }),
     onSettled: () => queryClient.invalidateQueries({ queryKey: QUERY }),
   }
-  const list = useQuery({ queryKey: QUERY, queryFn: () => listCallLinks(session.masterKey), enabled })
+  const list = useQuery({ queryKey: QUERY, queryFn: () => listCallLinks(session.roots.callLinkRoot), enabled })
   const create = useMutation({
     ...settle,
-    mutationFn: ({ info, waitingRoom }: MeetingDraft) => createCallLink(session.masterKey, info, waitingRoom),
+    mutationFn: ({ info, waitingRoom }: MeetingDraft) => createCallLink(session.roots.callLinkRoot, info, waitingRoom),
     onSuccess: (meeting) => update((previous) => [meeting, ...previous]),
   })
   const change = useMutation({
     ...settle,
     mutationFn: async ({ meeting, draft }: { meeting: OwnedCallLink; draft: MeetingDraft }) => {
       let next = await updateCallLinkInfo(meeting, draft.info)
-      if (draft.waitingRoom !== meeting.waitingRoom) next = await setWaitingRoom(session.masterKey, next, draft.waitingRoom)
+      if (draft.waitingRoom !== meeting.waitingRoom) next = await setWaitingRoom(session.roots.callLinkRoot, next, draft.waitingRoom)
       return next
     },
     onSuccess: (meeting) => update((previous) => previous.map((other) => (other.roomId === meeting.roomId ? meeting : other))),
   })
   const replace = useMutation({
     ...settle,
-    mutationFn: (meeting: OwnedCallLink) => replaceCallLink(session.masterKey, meeting),
+    mutationFn: (meeting: OwnedCallLink) => replaceCallLink(session.roots.callLinkRoot, meeting),
     onSuccess: (next, meeting) => update((previous) => previous.map((other) => (other.roomId === meeting.roomId ? next : other))),
   })
   const remove = useMutation({

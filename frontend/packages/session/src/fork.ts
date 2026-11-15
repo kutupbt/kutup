@@ -102,6 +102,7 @@ async function mintFork(child: ForkChild, state: string): Promise<string> {
   const payload = encodeKeys({
     userId: session.userId,
     masterKey: session.masterKey,
+    roots: session.roots,
     privateKey: session.privateKey,
     publicKey: session.publicKey,
     keyBinding: session.envelopeBinding,

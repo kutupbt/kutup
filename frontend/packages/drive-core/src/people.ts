@@ -135,7 +135,7 @@ async function give(person: DrivePerson, keys: Keys, own: ProfileLookup, me: Dri
   if (person.sentProfileVersion === own.version) return
   const envelope = await sealProfileKeyEnvelope(
     fromBase64(own.key),
-    me.masterKey,
+    me.roots.identityRoot,
     keys.hpkePublicKey,
     {
       sender: me.accountRef,

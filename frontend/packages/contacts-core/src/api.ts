@@ -148,7 +148,7 @@ export function useContacts() {
 
 export async function loadContacts(session: Session): Promise<{ contacts: Contact[]; unreadable: number }> {
   const masterKey = toBase64(session.masterKey)
-  const { authorityPublicKey } = await deriveAccountIdentityKeys(masterKey)
+  const { authorityPublicKey } = await deriveAccountIdentityKeys(session.roots.identityRoot)
   // The book and the head's index are two reads: a write landing between
   // them is read again once before the book counts as one the head does not
   // vouch for (then nothing of it is shown).
@@ -223,7 +223,7 @@ async function prepare(session: Session, uid: string, input: ContactDraft, base 
   const draft = { ...input, keys }
   const summary = summaryOf(uid, draft)
   const revision = await revisionGuard(session).next(CONTACT_SCOPE, uid, base)
-  const signed = await signContactSummary(masterKey, session.envelopeBinding, revision, summary)
+  const signed = await signContactSummary(session.roots.identityRoot, session.envelopeBinding, revision, summary)
   const card = await sealContactCard(masterKey, session.envelopeBinding, uid, revision, toVCard({ ...draft, groups: summary.groups }, uid, summary.name))
   return { body: { summary: signed.summary, signature: signed.signature, card }, revision, uid }
 }

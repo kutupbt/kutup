@@ -4,6 +4,7 @@
 // the file's sealed metadata commits to. Rust owns the format; these are
 // typed wrappers.
 
+import type { IdentityRoot } from './accountRoots'
 import { toBase64 } from './base64'
 import { deriveAccountIdentityKeys } from './identity'
 import { getCryptoWasm, type WasmBlockEncryptor } from './rustWasm'
@@ -27,22 +28,22 @@ export interface ContentCommitment {
 }
 
 /**
- * Who signs a manifest: the uploader's account master key (its Drive
- * signing key), account id and incarnation id. The manifest names both
+ * Who signs a manifest: the uploader's identity root (its Drive signing
+ * key), account id and incarnation id. The manifest names both
  * ids, so a reader can tell which of the account's keys signed after a
  * reset.
  */
 export interface ManifestSigner {
-  masterKey: Uint8Array
+  identityRoot: IdentityRoot
   accountId: string
   /** The account's incarnation: the hash of its authority key (lowercase hex). */
   incarnationId: string
 }
 
-/** The signer an account is, from its master key: the incarnation is the one its authority key gives. */
-export async function manifestSignerOf(masterKey: Uint8Array, accountId: string): Promise<ManifestSigner> {
-  const { incarnationId } = await deriveAccountIdentityKeys(toBase64(masterKey))
-  return { masterKey, accountId, incarnationId }
+/** The signer an account is, from its identity root: the incarnation is the one its authority key gives. */
+export async function manifestSignerOf(identityRoot: IdentityRoot, accountId: string): Promise<ManifestSigner> {
+  const { incarnationId } = await deriveAccountIdentityKeys(identityRoot)
+  return { identityRoot, accountId, incarnationId }
 }
 
 /**
@@ -81,7 +82,7 @@ export async function newDriveBlockEncryptor(fileKey: Uint8Array, context: Drive
     plainLength: (index) => inner.blockLength(index),
     sealNext: (plaintext) => inner.sealNext(plaintext),
     finish: (signer) => {
-      const tail = inner.finishSigned(toBase64(signer.masterKey), signer.accountId, signer.incarnationId)
+      const tail = inner.finishSigned(signer.identityRoot, signer.accountId, signer.incarnationId)
       const manifestSha256 = inner.manifestSha256
       if (!manifestSha256) throw new Error('the block encryptor gave no manifest digest')
       return { tail, content: { revisionId: context.revisionId, manifestSha256 } }
@@ -131,7 +132,7 @@ export async function sealDriveFile(
   signer: ManifestSigner,
 ): Promise<{ bytes: Uint8Array; content: ContentCommitment; revisionContentEnvelope: string }> {
   const module = await getCryptoWasm()
-  const sealed = module.driveSealFile(plaintext, toBase64(fileKey), context.fileId, context.revisionId, context.generation, toBase64(signer.masterKey), signer.accountId, signer.incarnationId)
+  const sealed = module.driveSealFile(plaintext, toBase64(fileKey), context.fileId, context.revisionId, context.generation, signer.identityRoot, signer.accountId, signer.incarnationId)
   let bytes: Uint8Array
   let content: ContentCommitment
   try {

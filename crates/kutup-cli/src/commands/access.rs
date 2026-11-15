@@ -17,7 +17,6 @@ use kutup_crypto::account_ref::AccountRef;
 use kutup_crypto::collection_epoch::CollectionEpochStatementV1;
 use kutup_crypto::collection_keyring;
 use kutup_crypto::drive_envelope::{self, DriveEnvelopeContextV1, DriveEnvelopePurpose};
-use kutup_crypto::identity::AccountIdentityKeysV1;
 use kutup_crypto::named_share::NamedShareEnvelopeV1;
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -114,7 +113,7 @@ pub fn remove(profile: &str, json: bool, collection_id: &str, who: &str, yes: bo
         .as_slice()
         .try_into()
         .context("master key must be 32 bytes")?;
-    let identity = AccountIdentityKeysV1::derive(master)?;
+    let identity = ctx.session.identity()?;
     let cols = ctx.client.list_collections()?;
     let col: &Collection = cols
         .iter()

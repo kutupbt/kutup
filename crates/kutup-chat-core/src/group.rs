@@ -48,10 +48,15 @@ pub struct GroupAccountKeys {
 }
 
 impl GroupAccountKeys {
-    pub fn derive(master_key: &[u8; 32]) -> crate::error::Result<Self> {
+    /// From the account's identity root and group pseudonym root (stored
+    /// roots, docs/plans/identity-root.md).
+    pub fn derive(
+        identity_root: &kutup_crypto::account_roots::IdentityRoot,
+        pseudonym_root: &kutup_crypto::account_roots::GroupPseudonymRoot,
+    ) -> crate::error::Result<Self> {
         Ok(Self {
-            authority: crate::manifest::AccountAuthority::derive(master_key)?,
-            pseudonyms: kutup_crypto::chat_group::GroupPseudonymKey::derive(master_key),
+            authority: crate::manifest::AccountAuthority::derive(identity_root)?,
+            pseudonyms: kutup_crypto::chat_group::GroupPseudonymKey::derive(pseudonym_root),
         })
     }
 }

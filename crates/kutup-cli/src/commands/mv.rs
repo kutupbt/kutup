@@ -387,7 +387,7 @@ fn move_file(ctx: &SessionContext, id: &str, to: &str) -> Result<String> {
         // follows.
         let meta = crate::file_crypto::open_metadata(&found.file, &found.file_key)
             .context("decrypt file metadata")?;
-        let dest_keys = crate::keyring::Keyring::load(&ctx.client, dest, &dest_key, &master_key)?;
+        let dest_keys = crate::keyring::Keyring::load(&ctx.client, dest, &dest_key, &ctx.session)?;
         let dest_hash_key = crate::names::folder_hash_key(&dest_keys, &dest.id)?;
         request.name_hash = Some(crate::names::name_hash(&dest_hash_key, &meta.name)?);
         if found.file.content_hash.is_some() {

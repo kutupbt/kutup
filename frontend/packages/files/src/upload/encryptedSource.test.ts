@@ -11,10 +11,11 @@ vi.mock('@kutup/crypto/rustWasm', async () => {
 })
 
 import { DRIVE_BLOCK_SIZE, generateKey, newDriveBlockEncryptor, newRevisionId, openDriveFile } from '@kutup/crypto'
+import { testRoots } from '@kutup/crypto/accountRoots.testing'
 import { hashBlob } from '@kutup/crypto/contentHash'
 import { EncryptedFileSource, NotTheSameFile, type PlaintextSource, type SealedBlockLog, type SealedTail } from './encryptedSource'
 
-const signer = { masterKey: new Uint8Array(32).fill(5), accountId: '22222222-2222-4222-8222-222222222222', incarnationId: '05'.repeat(32) }
+const signer = { identityRoot: testRoots(5).identityRoot, accountId: '22222222-2222-4222-8222-222222222222', incarnationId: '05'.repeat(32) }
 
 function plaintext(size: number): PlaintextSource & { reads: number } {
   // A plain loop: Uint8Array.from over an array-like with a callback takes

@@ -25,16 +25,22 @@ const MAX_PART_LEN: usize = 1024;
 pub struct GuardKeys {
     master: Zeroizing<[u8; 32]>,
     generation: MasterKeyGeneration,
+    object_id_key: crate::account_roots::ObjectIdKey,
     binding: String,
 }
 
 impl GuardKeys {
     /// The keys of the account bound by `binding`, under its master key's
     /// first generation (every account's, until master-key rotation exists).
-    pub fn derive(master_key: &[u8; 32], binding: &str) -> Result<Self> {
+    pub fn derive(
+        master_key: &[u8; 32],
+        object_id_key: &crate::account_roots::ObjectIdKey,
+        binding: &str,
+    ) -> Result<Self> {
         Ok(Self {
             master: Zeroizing::new(*master_key),
             generation: MasterKeyGeneration::FIRST,
+            object_id_key: object_id_key.clone(),
             binding: account_record::canonical_binding(binding)?,
         })
     }
@@ -58,7 +64,7 @@ impl GuardKeys {
         named.extend_from_slice(&(id.len() as u16).to_be_bytes());
         named.extend_from_slice(id.as_bytes());
         Ok(hex::encode(account_record::hashed_object(
-            &self.master,
+            &self.object_id_key,
             PURPOSE,
             &named,
         )))
@@ -108,13 +114,23 @@ mod tests {
 
     #[test]
     fn entries_hide_what_they_are_about_and_open_only_where_sealed() {
-        let keys = GuardKeys::derive(&[1; 32], BINDING).unwrap();
+        let keys = GuardKeys::derive(
+            &[1; 32],
+            &crate::account_roots::ObjectIdKey::from_bytes([1; 32]),
+            BINDING,
+        )
+        .unwrap();
         let entry = keys.entry_id("contact", "ayse@example.com").unwrap();
         assert_eq!(entry.len(), 64);
         assert!(!entry.contains("ayse"));
         // Stable for the account; another account's differs.
         assert_eq!(entry, keys.entry_id("contact", "ayse@example.com").unwrap());
-        let other = GuardKeys::derive(&[2; 32], BINDING).unwrap();
+        let other = GuardKeys::derive(
+            &[2; 32],
+            &crate::account_roots::ObjectIdKey::from_bytes([2; 32]),
+            BINDING,
+        )
+        .unwrap();
         assert_ne!(
             entry,
             other.entry_id("contact", "ayse@example.com").unwrap()
@@ -132,12 +148,22 @@ mod tests {
         let elsewhere = keys.entry_id("contact", "bob@example.com").unwrap();
         assert!(keys.open_seen(&elsewhere, &sealed).is_err());
         assert!(other.open_seen(&entry, &sealed).is_err());
-        let rebound = GuardKeys::derive(&[1; 32], "7d3f1a2b-9c4e-4f6a-8b1d-2e5c7a9f0b3d").unwrap();
+        let rebound = GuardKeys::derive(
+            &[1; 32],
+            &crate::account_roots::ObjectIdKey::from_bytes([1; 32]),
+            "7d3f1a2b-9c4e-4f6a-8b1d-2e5c7a9f0b3d",
+        )
+        .unwrap();
         assert!(rebound.open_seen(&entry, &sealed).is_err());
         let mut altered = sealed.clone();
         *altered.last_mut().unwrap() ^= 1;
         assert!(keys.open_seen(&entry, &altered).is_err());
         assert!(keys.entry_id("", "x").is_err());
-        assert!(GuardKeys::derive(&[1; 32], "aci:x@example.com").is_err());
+        assert!(GuardKeys::derive(
+            &[1; 32],
+            &crate::account_roots::ObjectIdKey::from_bytes([1; 32]),
+            "aci:x@example.com"
+        )
+        .is_err());
     }
 }

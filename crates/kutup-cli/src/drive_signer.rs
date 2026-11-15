@@ -18,6 +18,7 @@ use std::rc::Rc;
 use anyhow::{anyhow, Context, Result};
 use base64::engine::general_purpose::STANDARD;
 use base64::Engine as _;
+use kutup_crypto::account_roots::IdentityRoot;
 use kutup_crypto::blocks::{Manifest, SignerIdentity};
 use kutup_crypto::identity::AccountIdentityKeysV1;
 use kutup_crypto::identity_pins::IdentityPinsV2;
@@ -26,7 +27,7 @@ use kutup_crypto::primitives::{SigningKey, Suite, VerifyingKey};
 use crate::api::Client;
 
 /// The signed-in account as a revision's uploader: its id, its identity keys
-/// (from the master key) and its incarnation.
+/// (from the identity root) and its incarnation.
 pub struct DriveIdentity {
     account: [u8; 16],
     incarnation: [u8; 32],
@@ -34,11 +35,8 @@ pub struct DriveIdentity {
 }
 
 impl DriveIdentity {
-    pub fn derive(master_key: &[u8], account_id: &str) -> Result<Self> {
-        let master: [u8; 32] = master_key
-            .try_into()
-            .map_err(|_| anyhow!("master key must be 32 bytes"))?;
-        let keys = AccountIdentityKeysV1::derive(&master)?;
+    pub fn derive(identity_root: &IdentityRoot, account_id: &str) -> Result<Self> {
+        let keys = AccountIdentityKeysV1::derive(identity_root)?;
         let account = uuid::Uuid::parse_str(account_id)
             .ok()
             .filter(|id| !id.is_nil() && id.hyphenated().to_string() == account_id)
@@ -245,7 +243,7 @@ mod tests {
 
     #[test]
     fn a_pinned_signer_is_verified_and_another_key_is_forged() {
-        let them = DriveIdentity::derive(&[4; 32], ACCOUNT).unwrap();
+        let them = DriveIdentity::derive(&IdentityRoot::from_bytes([4; 32]), ACCOUNT).unwrap();
         let manifest = manifest_by(&them);
         let pins = pins_for(&them, "them@kutup.test");
         let theirs = them.keys.drive_signing_public_key();
@@ -258,14 +256,17 @@ mod tests {
             Verdict::Forged(Some("them@kutup.test".into()))
         );
         // Signed under another incarnation of that account: changed.
-        let reset = DriveIdentity::derive(&[5; 32], ACCOUNT).unwrap();
+        let reset = DriveIdentity::derive(&IdentityRoot::from_bytes([5; 32]), ACCOUNT).unwrap();
         assert!(matches!(
             pins_verdict(&pins, &manifest_by(&reset), |_, _| Some(theirs)),
             Verdict::Changed(_)
         ));
         // An account never met: nothing to say.
-        let stranger =
-            DriveIdentity::derive(&[6; 32], "44444444-4444-4444-8444-444444444444").unwrap();
+        let stranger = DriveIdentity::derive(
+            &IdentityRoot::from_bytes([6; 32]),
+            "44444444-4444-4444-8444-444444444444",
+        )
+        .unwrap();
         assert_eq!(
             pins_verdict(&pins, &manifest_by(&stranger), |_, _| Some(theirs)),
             Verdict::Unknown

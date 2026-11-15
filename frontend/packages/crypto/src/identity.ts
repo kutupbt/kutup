@@ -1,3 +1,4 @@
+import type { IdentityRoot } from './accountRoots'
 import { getCryptoWasm } from './rustWasm'
 
 export interface AccountIdentityKeysV1 {
@@ -9,8 +10,7 @@ export interface AccountIdentityKeysV1 {
   driveSigningPublicKey: string
 }
 
-export async function deriveAccountIdentityKeys(
-  masterKeyBase64: string,
-): Promise<AccountIdentityKeysV1> {
-  return (await getCryptoWasm()).deriveAccountIdentityKeys(masterKeyBase64)
+/** The account's identity keys, from its identity root (`session.roots.identityRoot`). */
+export async function deriveAccountIdentityKeys(identityRoot: IdentityRoot): Promise<AccountIdentityKeysV1> {
+  return (await getCryptoWasm()).deriveAccountIdentityKeys(identityRoot)
 }

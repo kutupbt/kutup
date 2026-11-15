@@ -64,7 +64,7 @@ export interface WasmBlockEncryptor {
   finish(): Uint8Array
   /** For backup media: the media id the backup root derived for the source. */
   readonly mediaId: string | undefined
-  finishSigned(masterKeyBase64: string, uploaderAccountId: string, uploaderIncarnationId: string): Uint8Array
+  finishSigned(identityRootBase64: string, uploaderAccountId: string, uploaderIncarnationId: string): Uint8Array
   free(): void
 }
 
@@ -113,7 +113,10 @@ export interface CryptoWasmModule {
     profile: string,
   ): string
   deriveRecoveryAuthProof(recoveryEntropyBase64: string, binding: string): string
-  deriveAccountIdentityKeys(masterKeyBase64: string): {
+  /** `roots` null: a new account's, made now. */
+  sealAccountRoots(masterKeyBase64: string, generation: number, binding: string, roots: unknown): unknown
+  openAccountRoots(masterKeyBase64: string, binding: string, envelopes: string[], authorityBase64: string): unknown
+  deriveAccountIdentityKeys(identityRootBase64: string): {
     authorityPublicKey: string
     authorityKeyId: string
     incarnationId: string
@@ -121,7 +124,7 @@ export interface CryptoWasmModule {
     driveHpkePrivateKey: string
     driveSigningPublicKey: string
   }
-  signDriveKeyBinding(masterKeyBase64: string, account: { server: string; accountId: string }, bindingEpoch: number): string
+  signDriveKeyBinding(identityRootBase64: string, account: { server: string; accountId: string }, bindingEpoch: number): string
   deriveSafetyNumber(
     local: { server: string; accountId: string },
     localAuthorityBase64: string,
@@ -141,7 +144,7 @@ export interface CryptoWasmModule {
   /** `{ server, accountId }` → `aci:<uuid>@<server>`, both checked. */
   accountRefString(server: string, accountId: string): string
   foldAddress(address: string): string | undefined
-  signAccountRename(masterKeyBase64: string, sequence: number, previous: string, current: string, issuedAtMs: number): string
+  signAccountRename(identityRootBase64: string, sequence: number, previous: string, current: string, issuedAtMs: number): string
   verifyAccountRenameChain(
     authorityPublicBase64: string,
     chainJson: string,
@@ -176,7 +179,7 @@ export interface CryptoWasmModule {
   incarnationIdOfAuthority(authorityPublicKeyBase64: string): string
   sealIdentityPins(masterKeyBase64: string, generation: number, binding: string, revision: number, pinsJson: string): string
   openIdentityPins(masterKeyBase64: string, binding: string, sealedBase64: string): { value: string; revision: number }
-  signContactSummary(masterKeyBase64: string, binding: string, revision: number, summaryJson: string): { summary: string; signature: string }
+  signContactSummary(identityRootBase64: string, binding: string, revision: number, summaryJson: string): { summary: string; signature: string }
   verifyContactSummary(
     summary: string,
     signatureBase64: string,
@@ -189,13 +192,19 @@ export interface CryptoWasmModule {
   sealMailName(masterKeyBase64: string, generation: number, binding: string, kind: string, id: string, revision: number, name: string): string
   openMailName(masterKeyBase64: string, binding: string, kind: string, id: string, sealedBase64: string): { value: string; revision: number }
   inspectAccountRecord(envelopeBase64: string): { purpose: number; generation: number }
-  RevisionGuardKeys: new (masterKeyBase64: string, binding: string) => import('./revisionGuard').GuardKeys & { free(): void }
-  LocalChainPins: new (masterKeyBase64: string, binding: string) => import('./localChainPins').ChainPinKeys & { free(): void }
+  RevisionGuardKeys: new (masterKeyBase64: string, objectIdKeyBase64: string, binding: string) => import('./revisionGuard').GuardKeys & { free(): void }
+  LocalChainPins: new (masterKeyBase64: string, objectIdKeyBase64: string, binding: string) => import('./localChainPins').ChainPinKeys & { free(): void }
   CollabSender: new (account: string, pin: unknown) => import('./accountManifest').CollabSenderHandle
   deliveredFrameSender(delivered: Uint8Array): string
   sealManifestPins(pins: unknown, masterKeyBase64: string, profile: string): string
   openManifestPins(envelopeBase64: string, masterKeyBase64: string, profile: string): unknown
-  AccountHeadKeys: new (masterKeyBase64: string, binding: string, incarnationId: string) => AccountHeadKeysHandle
+  AccountHeadKeys: new (
+    masterKeyBase64: string,
+    binding: string,
+    incarnationId: string,
+    identityGeneration: number,
+    driveGeneration: number,
+  ) => AccountHeadKeysHandle
   OpaqueLogin: { start(password: string): OpaqueLoginHandle }
   OpaqueRegistration: { start(password: string): OpaqueRegistrationHandle }
   generateMailGroupKey(
@@ -533,7 +542,7 @@ export interface CryptoWasmModule {
     fileId: string,
     revisionId: string,
     generation: number,
-    masterKeyBase64: string,
+    identityRootBase64: string,
     uploaderAccountId: string,
     uploaderIncarnationId: string,
   ): { bytes: Uint8Array; manifestSha256: string; free(): void }

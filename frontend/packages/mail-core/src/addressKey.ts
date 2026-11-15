@@ -14,10 +14,13 @@ export interface FirstAddressKey {
 }
 
 /** Generates the first key of `address` and signs its first key list. */
-export async function firstAddressKey(session: Pick<Session, 'masterKey' | 'envelopeBinding'>, address: string): Promise<FirstAddressKey> {
+export async function firstAddressKey(
+  session: Pick<Session, 'masterKey' | 'roots' | 'envelopeBinding'>,
+  address: string,
+): Promise<FirstAddressKey> {
   const masterKey = toBase64(session.masterKey)
   const key = await generateMailAddressKey(masterKey, session.envelopeBinding, address)
-  const list = await signMailKeyList(masterKey, {
+  const list = await signMailKeyList(session.roots.identityRoot, {
     address,
     sequence: 1,
     issuedAt: new Date().toISOString(),

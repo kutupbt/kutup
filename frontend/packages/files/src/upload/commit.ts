@@ -9,11 +9,11 @@ import api from '@kutup/session/client'
 import type { FileRow } from '@kutup/session/api-types'
 import { getSession } from '@kutup/session/store'
 
-/** Who signs a revision's manifest: the signed-in account (its Drive signing key and incarnation, from the master key). */
+/** Who signs a revision's manifest: the signed-in account (its Drive signing key and incarnation, from the identity root). */
 export async function manifestSigner(): Promise<ManifestSigner> {
   const session = getSession()
   if (!session) throw new Error('not signed in')
-  return manifestSignerOf(session.masterKey, session.userId)
+  return manifestSignerOf(session.roots.identityRoot, session.userId)
 }
 
 /** The file's next metadata, sealed at `metadataRevision`. */

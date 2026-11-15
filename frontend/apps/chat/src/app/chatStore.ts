@@ -275,6 +275,7 @@ export function openChat(session: Session, install?: ChatInstall): void {
         account,
         displayName: session.username,
         masterKey: session.masterKey,
+        roots: session.roots,
         capabilities,
         install,
       })

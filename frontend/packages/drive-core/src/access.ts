@@ -176,7 +176,7 @@ export async function rotateFolder(
     parentId: me.userId,
   })
   const [epochStatement, ownerKeyEnvelope, previousKeyEnvelope, nameEnvelope] = await Promise.all([
-    createCollectionEpochStatement(me.masterKey, key, folder.id, me.userId, next, folder.epochStatementHash),
+    createCollectionEpochStatement(me.roots.identityRoot, key, folder.id, me.userId, next, folder.epochStatementHash),
     sealDriveEnvelope(key, me.masterKey, context(DRIVE_ENVELOPE_PURPOSE.collectionKey, 1)),
     sealPreviousCollectionKey(folder.key, key, folder.id, me.userId, next),
     sealDriveEnvelope(
@@ -188,7 +188,7 @@ export async function rotateFolder(
 
   const removedLinks = new Set(removed.publicLinks)
   const seal = (publicKey: string, to: AccountRef, incarnationId: string) =>
-    sealNamedShareEnvelope(key, me.masterKey, publicKey, {
+    sealNamedShareEnvelope(key, me.roots.identityRoot, publicKey, {
       collectionId: folder.id,
       epoch: next,
       sender: me.accountRef,
@@ -271,7 +271,7 @@ export function useSetFolderPermissions() {
       if (!folder.key || !folder.canManage) throw new Error('only the folder\'s manager changes what people may do')
       try {
         const publicKey = sealableDriveKey(member.account, member.drivePublicKey, member.identitySuite)
-        const namedShareEnvelope = await sealNamedShareEnvelope(folder.key, me.masterKey, publicKey, {
+        const namedShareEnvelope = await sealNamedShareEnvelope(folder.key, me.roots.identityRoot, publicKey, {
           collectionId: folder.id,
           epoch: folder.keyEpoch,
           sender: me.accountRef,

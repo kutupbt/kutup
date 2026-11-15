@@ -182,7 +182,7 @@ export async function openCollabSession(options: CollabSessionOptions): Promise<
           const session = getSession()
           if (!session) throw new Error('not signed in')
           const revisionId = newRevisionId()
-          const out = await sealDriveFile(bytes, fileKey, { fileId, revisionId, generation: keyGeneration }, await manifestSignerOf(session.masterKey, session.userId))
+          const out = await sealDriveFile(bytes, fileKey, { fileId, revisionId, generation: keyGeneration }, await manifestSignerOf(session.roots.identityRoot, session.userId))
           return {
             ciphertext: out.bytes,
             revisionId,

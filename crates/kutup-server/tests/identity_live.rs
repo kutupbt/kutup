@@ -94,7 +94,10 @@ fn drive_key_bindings() {
     );
 
     // Registration refuses a binding that does not match the keys sent.
-    let mallory = AccountIdentityKeysV1::derive(&[9u8; 32]).unwrap();
+    let mallory = AccountIdentityKeysV1::derive(
+        &kutup_crypto::account_roots::IdentityRoot::from_bytes([9u8; 32]),
+    )
+    .unwrap();
     let forged = drive_key_binding::sign(&mallory, &alice.person, 1).unwrap();
     let r = c
         .post(format!("{base}/api/auth/register"))
@@ -114,7 +117,10 @@ fn identity_pins_sync_by_revision() {
     let owner = register(&c, &base);
     let binding = owner.binding.clone();
     let key = owner.master_key;
-    let friend = AccountIdentityKeysV1::derive(&[3u8; 32]).unwrap();
+    let friend = AccountIdentityKeysV1::derive(
+        &kutup_crypto::account_roots::IdentityRoot::from_bytes([3u8; 32]),
+    )
+    .unwrap();
     let list = IdentityPinsV2 {
         pins: vec![IdentityPinV2 {
             account: AccountRef::new("kutup.localhost", "0b6b5e0c-4c1e-4b8e-9c2d-6a1f3e5d7c9b")

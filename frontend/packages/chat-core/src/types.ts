@@ -1,3 +1,4 @@
+import type { AccountRoots, CallLinkRoot } from '@kutup/crypto/accountRoots'
 import type { AccountRef } from '@kutup/crypto/accountRef'
 
 export type { AccountRef }
@@ -786,12 +787,12 @@ export interface CallLinkCrypto {
   /** A fresh public nonce for a new link (32 lowercase hex characters). */
   callLinkNonce(): string
   /** The secret of the link its owner made with `nonce`, from the account master key (base64). */
-  callLinkOwnerSecret(masterKey: string, nonce: string): string
+  callLinkOwnerSecret(callLinkRoot: CallLinkRoot, nonce: string): string
   /**
    * The owner's host token for the meeting made with `nonce` and the hash
    * the server stores of it. Nobody the link is shared with can derive it.
    */
-  callLinkHostToken(masterKey: string, nonce: string): { hostToken: string; hostTokenHash: string }
+  callLinkHostToken(callLinkRoot: CallLinkRoot, nonce: string): { hostToken: string; hostTokenHash: string }
   callLinkKeys(secret: string): CallLinkKeys
   /** The part of the link's URL after `#`. */
   callLinkFragment(secret: string): string
@@ -1178,6 +1179,8 @@ export interface ChatWasmModule extends CallLinkCrypto {
       serverName: string,
       sealedSenderEnabled: boolean,
       masterKey: Uint8Array,
+      /** The account's roots (`session.roots`, docs/plans/identity-root.md). */
+      roots: AccountRoots,
       /** The account's key binding (`session.envelopeBinding`), which its own seals bind. */
       binding: string,
       transport: ChatTransportPort,
@@ -1189,6 +1192,8 @@ export interface ChatWasmModule extends CallLinkCrypto {
       serverName: string,
       sealedSenderEnabled: boolean,
       masterKey: Uint8Array,
+      /** The account's roots (`session.roots`, docs/plans/identity-root.md). */
+      roots: AccountRoots,
       binding: string,
       transport: ChatTransportPort,
     ): Promise<WasmChatClientHandle>
@@ -1209,6 +1214,7 @@ export interface WasmLinkingDeviceHandle {
     displayName: string,
     sealedSenderEnabled: boolean,
     masterKey: Uint8Array,
+    roots: AccountRoots,
     binding: string,
     transport: ChatTransportPort,
   ): Promise<WasmChatClientHandle>

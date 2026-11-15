@@ -101,7 +101,7 @@ fn download(
     let master_key = ctx.session.master_key_bytes()?;
     crate::drive_signer::load_pins(&ctx, profile);
 
-    let found = find_file_and_key(&ctx.client, &master_key, file_id)?;
+    let found = find_file_and_key(&ctx.client, &master_key, &ctx.session, file_id)?;
     let (row, file_key) = (&found.file, &found.file_key);
     let meta = crate::file_crypto::open_metadata(row, file_key).context("decrypt metadata")?;
     // A version opens with the file key of the generation it was saved at,
@@ -169,7 +169,7 @@ fn restore(profile: &str, json: bool, file_id: &str, version_id: &str) -> Result
     // current members alone hold.
     let found = rekey_if_behind(
         &ctx.client,
-        find_file_and_key(&ctx.client, &master_key, file_id)?,
+        find_file_and_key(&ctx.client, &master_key, &ctx.session, file_id)?,
     )?;
     let (row, file_key) = (&found.file, &found.file_key);
 

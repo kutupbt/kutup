@@ -12,6 +12,7 @@ vi.mock('./rustWasm', async () => {
 })
 
 import { readFile } from 'node:fs/promises'
+import { testRoots } from './accountRoots.testing'
 import { fromBase64 } from './base64'
 import {
   checkServedRecord,
@@ -29,7 +30,7 @@ import { openFileMetadataDraftV1, sealFileMetadataDraftV1 } from './fileRecord'
 
 const fileKey = new Uint8Array(32).fill(0x21)
 const fileId = '11111111-1111-4111-8111-111111111111'
-const signer = { masterKey: new Uint8Array(32).fill(0x09), accountId: '22222222-2222-4222-8222-222222222222', incarnationId: '05'.repeat(32) }
+const signer = { identityRoot: testRoots(0x09).identityRoot, accountId: '22222222-2222-4222-8222-222222222222', incarnationId: '05'.repeat(32) }
 
 function bytes(length: number, seed = 1): Uint8Array {
   const out = new Uint8Array(length)

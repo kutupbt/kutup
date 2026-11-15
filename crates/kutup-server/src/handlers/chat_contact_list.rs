@@ -286,7 +286,11 @@ mod tests {
     #[test]
     fn an_envelope_is_this_accounts_entry_and_its_revision_comes_from_its_header() {
         let first = kutup_crypto::account_record::MasterKeyGeneration::FIRST;
-        let key = ContactListKey::new(&[3u8; 32], first);
+        let key = ContactListKey::new(
+            &[3u8; 32],
+            first,
+            &kutup_crypto::account_roots::ObjectIdKey::from_bytes([3u8; 32]),
+        );
         let id = key
             .entry_id(&AccountRef::new("b.test", "00000000-0000-4000-8000-0000000000b2").unwrap());
         let text_id = encode_entry_id(&id);
@@ -314,7 +318,11 @@ mod tests {
         )
         .is_err());
         // A group list entry isn't one.
-        let groups = kutup_crypto::chat_group_list::GroupListKey::new(&[3u8; 32], first);
+        let groups = kutup_crypto::chat_group_list::GroupListKey::new(
+            &[3u8; 32],
+            first,
+            &kutup_crypto::account_roots::ObjectIdKey::from_bytes([3u8; 32]),
+        );
         let group_entry = groups.seal(binding, &id, 7, b"{}").unwrap();
         assert!(check(&STANDARD.encode(group_entry)));
     }

@@ -15,6 +15,7 @@
 // account and incarnation, so two accounts in one browser, or an account
 // before and after a reset, never share or compare anchors.
 
+import type { IdentityRoot } from '@kutup/crypto/accountRoots'
 import { isAxiosError } from 'axios'
 import {
   AccountHead,
@@ -382,6 +383,49 @@ export class AccountHeadClient {
   }
 
   /**
+   * The check a sign-in makes before its session goes live and before
+   * anything is signed or sealed with the roots: the server's head read
+   * fresh (a cached check doesn't count) and checked, roots' generations
+   * included, so a rolled-back identity or Drive root never reaches use.
+   * With no head yet, the chain is started on what the account holds, with
+   * the generations it registered (in line with the listed writes).
+   */
+  atSignIn(): Promise<void> {
+    const run = () => this.signInCheck()
+    const result = this.writes.then(run, run)
+    this.writes = result.catch(() => undefined)
+    return result
+  }
+
+  private async signInCheck(): Promise<void> {
+    this.verifiedAt = 0
+    for (let attempt = 1; ; attempt++) {
+      const { data: basis, verified } = await this.checked(async () => {
+        // Any scope's index answers with the head and, before the first, the basis.
+        const { data } = await this.http.get<{ head: string | null; basis: string | null }>('/account/index/contacts')
+        return { current: data.head, data: data.basis }
+      })
+      if (verified) {
+        verified.free()
+        return
+      }
+      if (basis === null) throw new Error('no account head and no basis to start one on')
+      try {
+        const first = this.engine.first(this.engine.writer((await this.load()).deviceId), [])
+        await this.http.post('/account/head', { head: first, basis })
+        const started = this.engine.committed(null, first)
+        await this.remember(started)
+        started.free()
+        return
+      } catch (error) {
+        // Another device started it (or a listed write landed): check that one.
+        if (conflictCode(error) === 'head_conflict' && attempt < WRITE_TRIES) continue
+        throw error
+      }
+    }
+  }
+
+  /**
    * A scope's index checked against the head it was read with (one
    * snapshot), and that verified head (the caller owns it). A scope the
    * server keeps no index of (404) is read as an empty index and checked like
@@ -530,10 +574,14 @@ export class AccountHeadClient {
 }
 
 /** An engine that opens the Rust head on first use (the master key crosses once). */
-function lazyEngine(masterKey: Uint8Array, binding: string): Promise<HeadEngine> {
+function lazyEngine(
+  masterKey: Uint8Array,
+  roots: { identityRoot: IdentityRoot; identityGeneration: number; driveGeneration: number },
+  binding: string,
+): Promise<HeadEngine> {
   return (async () => {
-    const { incarnationId } = await deriveAccountIdentityKeys(toBase64(masterKey))
-    return AccountHead.open(masterKey, binding, incarnationId)
+    const { incarnationId } = await deriveAccountIdentityKeys(roots.identityRoot)
+    return AccountHead.open(masterKey, binding, incarnationId, roots)
   })()
 }
 
@@ -544,7 +592,12 @@ const clients = new Map<string, { masterKey: string; client: Promise<AccountHead
  * The account's head client for this page: one per signed-in account (made
  * again when the master key changes), over this origin's store.
  */
-export function accountHead(session: { userId: string; masterKey: Uint8Array; envelopeBinding: string }): Promise<AccountHeadClient> {
+export function accountHead(session: {
+  userId: string
+  masterKey: Uint8Array
+  roots: { identityRoot: IdentityRoot; identityGeneration: number; driveGeneration: number }
+  envelopeBinding: string
+}): Promise<AccountHeadClient> {
   const masterKey = toBase64(session.masterKey)
   const known = clients.get(session.userId)
   if (known?.masterKey === masterKey) return known.client
@@ -552,7 +605,7 @@ export function accountHead(session: { userId: string; masterKey: Uint8Array; en
   watchSignOut()
   shared ??= indexedDbRevisionStore()
   const store = shared
-  const client = lazyEngine(session.masterKey, session.envelopeBinding).then((engine) => new AccountHeadClient(engine, store))
+  const client = lazyEngine(session.masterKey, session.roots, session.envelopeBinding).then((engine) => new AccountHeadClient(engine, store))
   // Not kept when it failed: the next call tries again.
   client.catch(() => {
     if (clients.get(session.userId)?.client === client) clients.delete(session.userId)

@@ -182,12 +182,30 @@ pub struct ScopeV1 {
     pub digest: String,
 }
 
+/// The generations of the account's identity root and Drive root a head
+/// records (docs/plans/identity-root.md): the server can't forge or roll back
+/// a head, so a root the server serves of another generation than the head's
+/// is refused, on every device (a new one too, from its first head).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct RootGenerations {
+    pub identity: u32,
+    pub drive: u32,
+}
+
+/// The error [`check`] gives when the head names other root generations
+/// than the roots in use.
+pub const ROOT_GENERATION_MISMATCH: &str = "rootGenerationMismatch";
+
 /// The account head.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct AccountHeadV1 {
     /// The account's incarnation (lowercase hex).
     pub incarnation_id: String,
+    /// The account's current identity-root generation.
+    pub identity_generation: u32,
+    /// The account's current Drive-root generation.
+    pub drive_generation: u32,
     /// 1, 2, 3, …: one per change of any listed value.
     pub sequence: u64,
     /// The digest of the head before (lowercase hex); absent at 1.
@@ -203,6 +221,9 @@ impl AccountHeadV1 {
     fn validate(&self) -> Result<()> {
         if !is_lower_hex_32(&self.incarnation_id) || !is_lower_hex_32(&self.writer) {
             return Err(invalid("incarnation or writer is invalid"));
+        }
+        if self.identity_generation == 0 || self.drive_generation == 0 {
+            return Err(invalid("a root generation is 0"));
         }
         if self.sequence == 0 || self.sequence > 1 << 53 {
             return Err(invalid("sequence is invalid"));
@@ -245,6 +266,8 @@ impl AccountHeadV1 {
         scopes.sort_by(|a, b| a.scope.cmp(&b.scope));
         let next = Self {
             incarnation_id: self.incarnation_id.clone(),
+            identity_generation: self.identity_generation,
+            drive_generation: self.drive_generation,
             sequence: self.sequence + 1,
             previous: Some(hex::encode(digest(sealed))),
             writer: writer.to_owned(),
@@ -255,10 +278,17 @@ impl AccountHeadV1 {
     }
 
     /// The first head of an account: trust on first use of what is there now.
-    pub fn first(incarnation_id: &str, writer: &str, mut scopes: Vec<ScopeV1>) -> Result<Self> {
+    pub fn first(
+        incarnation_id: &str,
+        generations: RootGenerations,
+        writer: &str,
+        mut scopes: Vec<ScopeV1>,
+    ) -> Result<Self> {
         scopes.sort_by(|a, b| a.scope.cmp(&b.scope));
         let head = Self {
             incarnation_id: incarnation_id.to_owned(),
+            identity_generation: generations.identity,
+            drive_generation: generations.drive,
             sequence: 1,
             previous: None,
             writer: writer.to_owned(),
@@ -491,6 +521,7 @@ pub fn check(
     keys: &HeadKeys,
     binding: &str,
     incarnation_id: &str,
+    generations: RootGenerations,
     anchor: Option<&Anchor>,
     current: &[u8],
     segment: Option<&[Vec<u8>]>,
@@ -498,6 +529,13 @@ pub fn check(
     let head = open(keys, binding, current)?;
     if head.incarnation_id != incarnation_id {
         return Err(invalid("the head is another incarnation's"));
+    }
+    // The roots in use must be the head's: a server serving an older root
+    // generation (or a newer one the head never recorded) is refused.
+    if head.identity_generation != generations.identity
+        || head.drive_generation != generations.drive
+    {
+        return Err(invalid(ROOT_GENERATION_MISMATCH));
     }
     let status = status_of(
         keys,
@@ -611,6 +649,7 @@ pub fn reanchor(
     keys: &HeadKeys,
     binding: &str,
     incarnation_id: &str,
+    generations: RootGenerations,
     anchor: &Anchor,
     current: &[u8],
     segment: Option<&[Vec<u8>]>,
@@ -621,6 +660,7 @@ pub fn reanchor(
         keys,
         binding,
         incarnation_id,
+        generations,
         Some(anchor),
         current,
         segment,
@@ -683,10 +723,11 @@ pub fn first(
     keys: &HeadKeys,
     binding: &str,
     incarnation_id: &str,
+    generations: RootGenerations,
     writer: &str,
     scopes: Vec<ScopeV1>,
 ) -> Result<(Vec<u8>, VerifiedHead)> {
-    let head = AccountHeadV1::first(incarnation_id, writer, scopes)?;
+    let head = AccountHeadV1::first(incarnation_id, generations, writer, scopes)?;
     let sealed = seal(keys, binding, &head)?;
     let verified = verified(head, &sealed)?;
     Ok((sealed, verified))
@@ -933,6 +974,10 @@ mod tests {
 
     const BINDING: &str = "0b6b5e0c-4c1e-4b8e-9c2d-6a1f3e5d7c9b";
     const INCARNATION: &str = "1111111111111111111111111111111111111111111111111111111111111111";
+    const GENS: RootGenerations = RootGenerations {
+        identity: 1,
+        drive: 1,
+    };
 
     fn keys() -> HeadKeys {
         HeadKeys::derive(&[7u8; 32]).unwrap()
@@ -954,7 +999,7 @@ mod tests {
             contacts.push((format!("contact-{i}"), 100 + i as u64));
             let entry = keys.scope_digest("contacts", &contacts).unwrap();
             let head = if i == 0 {
-                AccountHeadV1::first(INCARNATION, &writer, vec![entry]).unwrap()
+                AccountHeadV1::first(INCARNATION, GENS, &writer, vec![entry]).unwrap()
             } else {
                 let before: &Vec<u8> = &sealed[i - 1];
                 open(keys, BINDING, before)
@@ -988,13 +1033,13 @@ mod tests {
         current: &[u8],
         segment: Option<&[Vec<u8>]>,
     ) -> HeadStatus {
-        check(keys, BINDING, INCARNATION, anchor, current, segment)
+        check(keys, BINDING, INCARNATION, GENS, anchor, current, segment)
             .unwrap()
             .status
     }
 
     fn verified_of(keys: &HeadKeys, sealed: &[u8]) -> VerifiedHead {
-        check(keys, BINDING, INCARNATION, None, sealed, None)
+        check(keys, BINDING, INCARNATION, GENS, None, sealed, None)
             .unwrap()
             .verified
             .unwrap()
@@ -1010,6 +1055,7 @@ mod tests {
             &keys,
             BINDING,
             INCARNATION,
+            GENS,
             &keys.writer("d").unwrap(),
             vec![entry],
         )
@@ -1097,17 +1143,24 @@ mod tests {
             HeadStatus::Fork
         );
         // Only trusted outcomes give a verified head.
-        assert!(
-            check(&keys, BINDING, INCARNATION, Some(&anchor), &sealed[0], None)
-                .unwrap()
-                .verified
-                .is_none()
-        );
+        assert!(check(
+            &keys,
+            BINDING,
+            INCARNATION,
+            GENS,
+            Some(&anchor),
+            &sealed[0],
+            None
+        )
+        .unwrap()
+        .verified
+        .is_none());
         // Another incarnation's head: refused.
         assert!(check(
             &keys,
             BINDING,
             &"2".repeat(64),
+            GENS,
             Some(&anchor),
             &sealed[3],
             Some(&sealed[1..])
@@ -1157,7 +1210,8 @@ mod tests {
         let writer = keys.writer("d").unwrap();
         let a = keys.scope_digest("a", &[]).unwrap();
         let b = keys.scope_digest("b", &[]).unwrap();
-        let head = AccountHeadV1::first(INCARNATION, &writer, vec![b.clone(), a.clone()]).unwrap();
+        let head =
+            AccountHeadV1::first(INCARNATION, GENS, &writer, vec![b.clone(), a.clone()]).unwrap();
         assert_eq!(head.scopes, vec![a.clone(), b.clone()], "sorted");
         let mut twice = head.clone();
         twice.scopes = vec![a.clone(), a];
@@ -1178,6 +1232,7 @@ mod tests {
             &keys,
             BINDING,
             INCARNATION,
+            GENS,
             &anchor,
             &sealed[0],
             None,
@@ -1189,6 +1244,7 @@ mod tests {
             &keys,
             BINDING,
             INCARNATION,
+            GENS,
             &anchor,
             &sealed[0],
             None,
@@ -1206,6 +1262,7 @@ mod tests {
             &keys,
             BINDING,
             INCARNATION,
+            GENS,
             &anchor,
             &sealed[2],
             None,
@@ -1267,7 +1324,7 @@ mod tests {
         let keys = keys();
         let sealed = chain(&keys, 3);
         let verified = |i: usize| {
-            check(&keys, BINDING, INCARNATION, None, &sealed[i], None)
+            check(&keys, BINDING, INCARNATION, GENS, None, &sealed[i], None)
                 .unwrap()
                 .verified
                 .unwrap()
@@ -1292,6 +1349,7 @@ mod tests {
             &keys,
             BINDING,
             INCARNATION,
+            GENS,
             &anchor,
             &sealed[0],
             None,
@@ -1349,7 +1407,7 @@ mod tests {
         .unwrap();
         assert_eq!(reopened.started_over.as_deref(), Some("unreadable"));
         let mut state = reopened;
-        let verified = check(&keys, BINDING, INCARNATION, None, &sealed[0], None)
+        let verified = check(&keys, BINDING, INCARNATION, GENS, None, &sealed[0], None)
             .unwrap()
             .verified
             .unwrap();
@@ -1359,5 +1417,43 @@ mod tests {
             [LocalHeadEvent::StartedFresh { reason: Some(reason), .. }] if reason == "unreadable"
         ));
         assert_eq!(state.started_over, None);
+    }
+
+    /// The roots in use must be the generations the head records: a server
+    /// serving an older identity or Drive root (or a newer one the head
+    /// never recorded) is refused.
+    #[test]
+    fn a_head_refuses_roots_of_other_generations() {
+        let keys = HeadKeys::derive(&[3u8; 32]).unwrap();
+        let writer = keys.writer("d").unwrap();
+        let (sealed, _) = first(&keys, BINDING, INCARNATION, GENS, &writer, vec![]).unwrap();
+        assert!(check(&keys, BINDING, INCARNATION, GENS, None, &sealed, None).is_ok());
+        for other in [
+            RootGenerations {
+                identity: 2,
+                drive: 1,
+            },
+            RootGenerations {
+                identity: 1,
+                drive: 2,
+            },
+        ] {
+            let error = check(&keys, BINDING, INCARNATION, other, None, &sealed, None).unwrap_err();
+            assert!(
+                error.to_string().contains(ROOT_GENERATION_MISMATCH),
+                "{error}"
+            );
+        }
+        // A head can't record generation 0.
+        assert!(AccountHeadV1::first(
+            INCARNATION,
+            RootGenerations {
+                identity: 0,
+                drive: 1
+            },
+            &writer,
+            vec![]
+        )
+        .is_err());
     }
 }

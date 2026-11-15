@@ -53,7 +53,7 @@ export async function uploadDirectoryInto(opts: {
       const free = made.has(parent.id)
         ? await named(parent, freeName(name, namesIn([], subfolders(parent))))
         : await findAvailableName(inFolder(parent), name)
-      const created = await createOwnedCollectionV1(me.masterKey, me.userId, free.name, parent.id)
+      const created = await createOwnedCollectionV1(me, me.userId, free.name, parent.id)
       try {
         await api.post('/collections', { ...created.payload, nameHash: free.hash })
       } catch (error) {

@@ -102,19 +102,29 @@ impl Engine {
         Ok(())
     }
 
-    /// Keeps this account's groups in its group list, under keys from its
-    /// `master_key`, bound to its key `binding`; and takes the account's
-    /// group keys (its self-authority, its pseudonyms) from the same key.
-    pub fn enable_group_list(&mut self, master_key: &[u8; 32], binding: &str) -> Result<()> {
+    /// Keeps this account's groups in its group list, sealed under its
+    /// `master_key` and named under its object-id key, bound to its key
+    /// `binding`; and takes the account's group keys (its self-authority, its
+    /// pseudonyms) from its `roots`.
+    pub fn enable_group_list(
+        &mut self,
+        master_key: &[u8; 32],
+        roots: &kutup_crypto::account_roots::AccountRoots,
+        binding: &str,
+    ) -> Result<()> {
         kutup_crypto::key_binding::check(binding)
             .map_err(|_| ChatError::Invalid("the account's key binding is invalid".into()))?;
-        self.group_keys = Some(crate::group::GroupAccountKeys::derive(master_key)?);
+        self.group_keys = Some(crate::group::GroupAccountKeys::derive(
+            &roots.identity,
+            &roots.pseudonym,
+        )?);
         self.group_list = Some(GroupListSync {
             // Rotation (docs/plans/w6-key-hierarchy.md) seals at the
             // account's current generation; until it exists, the first.
             key: GroupListKey::new(
                 master_key,
                 kutup_crypto::account_record::MasterKeyGeneration::FIRST,
+                &roots.object_id,
             ),
             binding: binding.to_string(),
             listed: BTreeMap::new(),

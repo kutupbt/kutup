@@ -1535,30 +1535,32 @@ mod tests {
 
     /// A signed manifest of a test account, its authority and identity from `seed`.
     fn test_manifest(seed: u8) -> kutup_chat_proto::AccountManifestV3 {
-        crate::AccountAuthority::derive(&[seed; 32])
-            .unwrap()
-            .sign_manifest(
-                "aci:00000000-0000-4000-8000-81b637d8fcd2@chat.example"
-                    .parse()
-                    .unwrap(),
+        crate::AccountAuthority::derive(&kutup_crypto::account_roots::IdentityRoot::from_bytes(
+            [seed; 32],
+        ))
+        .unwrap()
+        .sign_manifest(
+            "aci:00000000-0000-4000-8000-81b637d8fcd2@chat.example"
+                .parse()
+                .unwrap(),
+            1,
+            None,
+            &{
+                let private = libsignal_protocol::PrivateKey::deserialize(&[seed; 32]).unwrap();
+                libsignal_protocol::IdentityKeyPair::new(
+                    libsignal_protocol::IdentityKey::new(private.public_key().unwrap()),
+                    private,
+                )
+            },
+            vec![kutup_chat_proto::AccountManifestDeviceV3::chat(
                 1,
-                None,
-                &{
-                    let private = libsignal_protocol::PrivateKey::deserialize(&[seed; 32]).unwrap();
-                    libsignal_protocol::IdentityKeyPair::new(
-                        libsignal_protocol::IdentityKey::new(private.public_key().unwrap()),
-                        private,
-                    )
-                },
-                vec![kutup_chat_proto::AccountManifestDeviceV3::chat(
-                    1,
-                    kutup_chat_proto::DirectChatSuiteId::PqxdhTripleRatchetV1,
-                    7,
-                    "51".repeat(32),
-                )],
-                "2026-07-29T00:00:00Z",
-            )
-            .unwrap()
+                kutup_chat_proto::DirectChatSuiteId::PqxdhTripleRatchetV1,
+                7,
+                "51".repeat(32),
+            )],
+            "2026-07-29T00:00:00Z",
+        )
+        .unwrap()
     }
 
     #[test]

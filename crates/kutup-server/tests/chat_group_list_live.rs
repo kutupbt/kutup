@@ -105,6 +105,7 @@ fn a_group_list_keeps_sealed_entries_by_revision() {
         key: GroupListKey::new(
             &user.master_key,
             kutup_crypto::account_record::MasterKeyGeneration::FIRST,
+            &user.roots.object_id,
         ),
     };
     let (one, one_at_1) = list.entry(1, 1);
@@ -211,6 +212,7 @@ fn the_account_head_covers_the_group_list() {
         key: GroupListKey::new(
             &user.master_key,
             kutup_crypto::account_record::MasterKeyGeneration::FIRST,
+            &user.roots.object_id,
         ),
     };
     let (one, one_at_1) = list.entry(1, 1);
@@ -230,8 +232,16 @@ fn the_account_head_covers_the_group_list() {
         keys.scope_digest("chatGroups", &[(one.clone(), revision)])
             .unwrap()
     };
-    let first =
-        AccountHeadV1::first(&user.identity.incarnation_id(), &writer, vec![scope(1)]).unwrap();
+    let first = AccountHeadV1::first(
+        &user.identity.incarnation_id(),
+        kutup_crypto::account_head::RootGenerations {
+            identity: 1,
+            drive: 1,
+        },
+        &writer,
+        vec![scope(1)],
+    )
+    .unwrap();
     let first_sealed = account_head::seal(&keys, &user.binding, &first).unwrap();
     let r = bearer(c.post(format!("{base}/api/account/head")), &user.token)
         .json(&json!({ "head": STANDARD.encode(&first_sealed), "basis": index["basis"] }))
@@ -267,6 +277,7 @@ fn a_group_list_keeps_at_most_1024_entries() {
         key: GroupListKey::new(
             &user.master_key,
             kutup_crypto::account_record::MasterKeyGeneration::FIRST,
+            &user.roots.object_id,
         ),
     };
     for n in 0..1024 {

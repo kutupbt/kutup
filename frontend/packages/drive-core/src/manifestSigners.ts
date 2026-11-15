@@ -8,7 +8,7 @@
 // it. As Drive's other signatures, a signature that doesn't hold warns; it
 // never blocks the open.
 
-import { deriveAccountIdentityKeys, setManifestSignerCheck, toBase64, type ManifestSignature } from '@kutup/crypto'
+import { deriveAccountIdentityKeys, setManifestSignerCheck, type ManifestSignature } from '@kutup/crypto'
 import { incarnationIdOfAuthority, pinAddress } from '@kutup/crypto/identityPins'
 import { getSession } from '@kutup/session/store'
 import { driveIdentityOf, type DriveIdentity } from './identity'
@@ -81,7 +81,7 @@ async function signerOf(me: DriveIdentity, signature: ManifestSignature): Promis
     // This account under another incarnation than its own now: its keys
     // went with a reset this device didn't make, or the name is passed off.
     if (signature.incarnationId !== me.incarnationId) return { kind: 'changed', name: me.account }
-    const own = await deriveAccountIdentityKeys(toBase64(me.masterKey))
+    const own = await deriveAccountIdentityKeys(me.roots.identityRoot)
     return (await signature.signedBy(own.driveSigningPublicKey))
       ? { signer: { accountId: me.userId, address: me.account } }
       : { kind: 'forged', name: me.account }

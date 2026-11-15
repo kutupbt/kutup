@@ -104,6 +104,7 @@ fn keep(
     keep_secret(
         &ctx.client,
         &master_key,
+        &ctx.session.roots()?,
         ctx.session.binding(),
         &crate::config::data_dir(profile)?,
         file_id,
@@ -128,6 +129,7 @@ fn secrets(
     verified_secrets(
         &ctx.client,
         &ctx.session.master_key_bytes()?,
+        &ctx.session.roots()?,
         ctx.session.binding(),
         &crate::config::data_dir(profile)?,
     )
@@ -207,6 +209,7 @@ fn forget(profile: &str, json: bool, file_id: &str, force: bool) -> Result<()> {
     forget_secret(
         &ctx.client,
         &ctx.session.master_key_bytes()?,
+        &ctx.session.roots()?,
         ctx.session.binding(),
         &crate::config::data_dir(profile)?,
         file_id,

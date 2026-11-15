@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type { ManifestSignature } from '@kutup/crypto'
+import { testRoots } from '@kutup/crypto/accountRoots.testing'
 import type { IdentityPin } from '@kutup/crypto/identityPins'
 import type { DriveIdentity } from './identity'
 
@@ -25,7 +26,7 @@ vi.mock('./identityPins', () => ({
 
 import { manifestSignerVerdict } from './manifestSigners'
 
-const me = { userId: 'me', account: 'me@kutup.dev', incarnationId: 'inc-ME', masterKey: new Uint8Array(32) } as unknown as DriveIdentity
+const me = { userId: 'me', account: 'me@kutup.dev', incarnationId: 'inc-ME', roots: testRoots(0) } as unknown as DriveIdentity
 
 function signature(accountId: string, incarnationId: string, key: string): ManifestSignature {
   return { fileId: 'f', revisionId: 'r', accountId, incarnationId, signedBy: (candidate) => candidate === key }

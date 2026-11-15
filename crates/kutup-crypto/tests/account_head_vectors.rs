@@ -19,6 +19,11 @@ const PATH: &str = concat!(
 );
 const BINDING: &str = "3f2a6c1e-8b4d-4e7a-9c5f-1d2e3a4b5c6d";
 const INCARNATION: &str = "5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a";
+/// The root generations the vectors' heads record.
+const GENS: account_head::RootGenerations = account_head::RootGenerations {
+    identity: 1,
+    drive: 1,
+};
 
 #[derive(Serialize, Deserialize, PartialEq, Debug)]
 #[serde(rename_all = "camelCase")]
@@ -105,6 +110,7 @@ impl Material {
             &self.keys,
             BINDING,
             INCARNATION,
+            GENS,
             anchor,
             &self.named(current),
             segment.as_deref(),
@@ -135,7 +141,7 @@ fn derive() -> Vectors {
     for (i, index) in indexes.iter().enumerate() {
         let entry = keys.scope_digest("contacts", index).unwrap();
         let head = match heads.last() {
-            None => AccountHeadV1::first(INCARNATION, &writer, vec![entry]).unwrap(),
+            None => AccountHeadV1::first(INCARNATION, GENS, &writer, vec![entry]).unwrap(),
             Some(before) => before.next(&sealed[i - 1], &writer, vec![entry]).unwrap(),
         };
         sealed.push(
@@ -163,7 +169,7 @@ fn derive() -> Vectors {
     let anchors: Vec<Anchor> = sealed
         .iter()
         .map(|s| {
-            account_head::check(&keys, BINDING, INCARNATION, None, s, None)
+            account_head::check(&keys, BINDING, INCARNATION, GENS, None, s, None)
                 .unwrap()
                 .verified
                 .unwrap()
@@ -258,6 +264,7 @@ fn derive() -> Vectors {
         &material.keys,
         BINDING,
         INCARNATION,
+        GENS,
         &anchors[2],
         &material.sealed[0],
         None,
@@ -271,6 +278,7 @@ fn derive() -> Vectors {
             &material.keys,
             BINDING,
             INCARNATION,
+            GENS,
             None,
             &material.sealed[i],
             None,
@@ -357,6 +365,7 @@ fn checked_in_vectors_hold() {
         &keys,
         &v.binding,
         &v.incarnation_id,
+        GENS,
         None,
         &STANDARD.decode(&v.sealed[2]).unwrap(),
         None,

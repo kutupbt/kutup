@@ -16,6 +16,7 @@ import { fromBase64 } from './base64'
 import { deriveAccountIdentityKeys } from './identity'
 import { signDriveKeyBinding, verifyDriveKeyBinding } from './identityPins'
 import { openFileShareEnvelope, openNamedShareEnvelope, openProfileKeyEnvelope } from './namedShare'
+import { asIdentityRoot } from '@kutup/crypto/accountRoots.testing'
 
 // The formats that name a person by their account (docs/plans/account-ids.md),
 // opened in the browser exactly as in Rust (kutup-crypto account_ref_vectors).
@@ -24,8 +25,8 @@ describe('account vectors', () => {
 
   it('binds the Drive keys to the account', async () => {
     const sender = await parseAccountKey(vectors.sender)
-    const keys = await deriveAccountIdentityKeys(vectors.senderMasterKey)
-    expect(await signDriveKeyBinding(vectors.senderMasterKey, sender, 1)).toBe(vectors.binding)
+    const keys = await deriveAccountIdentityKeys(asIdentityRoot(vectors.senderMasterKey))
+    expect(await signDriveKeyBinding(asIdentityRoot(vectors.senderMasterKey), sender, 1)).toBe(vectors.binding)
     const verify = (person: AccountRef) =>
       verifyDriveKeyBinding(person, keys.authorityPublicKey, keys.driveHpkePublicKey, keys.driveSigningPublicKey, vectors.binding, 1)
     expect(await verify(sender)).toBe(true)
@@ -40,8 +41,8 @@ describe('account vectors', () => {
     const [sender, recipient, from, to] = await Promise.all([
       parseAccountKey(vectors.sender),
       parseAccountKey(vectors.recipient),
-      deriveAccountIdentityKeys(vectors.senderMasterKey),
-      deriveAccountIdentityKeys(vectors.recipientMasterKey),
+      deriveAccountIdentityKeys(asIdentityRoot(vectors.senderMasterKey)),
+      deriveAccountIdentityKeys(asIdentityRoot(vectors.recipientMasterKey)),
     ])
     const privateKey = fromBase64(to.driveHpkePrivateKey)
     const parties = (who: AccountRef, toWhom: AccountRef) => ({

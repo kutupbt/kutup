@@ -8,6 +8,7 @@ vi.mock('@kutup/crypto/rustWasm', async () => {
   return { getCryptoWasm: async () => module }
 })
 
+import { testRoots } from '@kutup/crypto/accountRoots.testing'
 import { newRevisionId, sealDriveFile, type ContentCommitment } from '@kutup/crypto/driveBlocks'
 import { BlockObjectReader, answerOnPort } from './core'
 import type { BlockReaderSettings, StreamChunkAnswer } from './protocol'
@@ -15,7 +16,7 @@ import type { BlockReaderSettings, StreamChunkAnswer } from './protocol'
 const B = 4 * 1024 * 1024
 const fileKey = new Uint8Array(32).fill(0x21)
 const fileId = '11111111-1111-4111-8111-111111111111'
-const signer = { masterKey: new Uint8Array(32).fill(0x09), accountId: '22222222-2222-4222-8222-222222222222', incarnationId: '05'.repeat(32) }
+const signer = { identityRoot: testRoots(0x09).identityRoot, accountId: '22222222-2222-4222-8222-222222222222', incarnationId: '05'.repeat(32) }
 const settings: BlockReaderSettings = { cacheBlocks: 3, readaheadBlocks: 0, responseMaxBytes: 5 * 1024 * 1024 }
 
 function pattern(length: number, seed = 1): Uint8Array {

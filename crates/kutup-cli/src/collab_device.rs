@@ -101,11 +101,6 @@ impl<'a> Signer<'a> {
                 "this session holds no account keys; sign in again to edit notes and lists"
             ));
         }
-        let master_key: [u8; 32] = sess
-            .master_key_bytes()?
-            .as_slice()
-            .try_into()
-            .context("master key must be 32 bytes")?;
         let server = client.settings()?.chat.server_name;
         Ok(Signer {
             client,
@@ -114,7 +109,7 @@ impl<'a> Signer<'a> {
             account: AccountRef::new(&server, &sess.user_id)
                 .map_err(|_| anyhow!("this session's account is malformed"))?,
             server,
-            identity: AccountIdentityKeysV1::derive(&master_key)?,
+            identity: sess.identity()?,
         })
     }
 
@@ -302,7 +297,10 @@ mod tests {
     /// successor: each is refused before anything is signed.
     #[test]
     fn a_forged_or_stale_head_is_refused() {
-        let keys = AccountIdentityKeysV1::derive(&[3; 32]).unwrap();
+        let keys = AccountIdentityKeysV1::derive(
+            &kutup_crypto::account_roots::IdentityRoot::from_bytes([3; 32]),
+        )
+        .unwrap();
         let account =
             AccountRef::new("example.test", "0b6b5e0c-4c1e-4b8e-9c2d-6a1f3e5d7c9b").unwrap();
         let mut first = AccountManifestV3::first(
@@ -332,7 +330,10 @@ mod tests {
         assert!(checked_head(Some(&pin), Some(&forged), &account, &keys).is_err());
         assert!(checked_head(None, Some(&forged), &account, &keys).is_err());
         // The same, signed under an authority of the server's.
-        let other = AccountIdentityKeysV1::derive(&[4; 32]).unwrap();
+        let other = AccountIdentityKeysV1::derive(
+            &kutup_crypto::account_roots::IdentityRoot::from_bytes([4; 32]),
+        )
+        .unwrap();
         let mut theirs = AccountManifestV3::first(
             account.clone(),
             &other,

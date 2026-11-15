@@ -13,6 +13,7 @@ import {
   deriveRecoveryAuthProof,
   type AccountKeySet,
 } from '@kutup/crypto'
+import { isIdentityRootMismatch, openAccountRoots, type AccountRoots } from '@kutup/crypto/accountRoots'
 import { startOpaqueRegistration, type OpaqueRegistrar, type OpaqueSignIn } from '@kutup/crypto/opaqueWorker'
 import { FIRST_DRIVE_KEY_BINDING_EPOCH, signDriveKeyBinding } from '@kutup/crypto/identityPins'
 import { loadServerSettings } from '@kutup/session/apps'
@@ -36,6 +37,9 @@ interface LoginResponse {
   userId: string
   username: string
   masterKeyEnvelope: string
+  /** The account's root records and the authority they must give (docs/plans/identity-root.md); with the session. */
+  accountRoots?: string[]
+  accountAuthorityPublicKey?: string
   publicKey: string
   /** What the account's keys are bound to (docs/plans/account-identity.md); only with a session. */
   keyBinding?: string
@@ -57,6 +61,18 @@ export interface TotpChallenge {
   name: string
   preAuthToken: string
   signIn: OpaqueSignIn
+}
+
+/**
+ * The account's newest identity root does not give the authority its server
+ * publishes: the sign-in is refused (no older root stands in), and the person
+ * is told the account's keys do not match.
+ */
+export class AccountKeysMismatchError extends Error {
+  constructor() {
+    super('the account keys do not match its published identity')
+    this.name = 'AccountKeysMismatchError'
+  }
 }
 
 /** An administrator-created account signing in for the first time. */
@@ -97,7 +113,7 @@ async function serverName(): Promise<string> {
  * them. Sent with every new set of keys: a new account's first, at epoch 1.
  */
 async function driveKeyBindingFor(keys: AccountKeys, accountId: string): Promise<string> {
-  return signDriveKeyBinding(toBase64(keys.masterKey), { server: await serverName(), accountId }, FIRST_DRIVE_KEY_BINDING_EPOCH)
+  return signDriveKeyBinding(keys.roots.identityRoot, { server: await serverName(), accountId }, FIRST_DRIVE_KEY_BINDING_EPOCH)
 }
 
 /**
@@ -126,9 +142,21 @@ async function finishSignIn(data: LoginResponse, opened: OpaqueSignIn): Promise<
     // The master envelope opens only under its own binding, so once it has
     // opened the binding is verified.
     const masterKey = await opened.openMasterKey(data.masterKeyEnvelope, binding)
-    // The Drive keys are derived from the master key, never stored
-    // (docs/plans/w6-key-hierarchy.md §1); the server must publish the same.
-    const { publicKey, privateKey } = await driveKeysOf(masterKey)
+    // The account's roots open with the master key; the newest identity root
+    // must give the account's published authority, or the keys are refused
+    // (docs/plans/identity-root.md). The Drive keys derive from it, never
+    // stored (docs/plans/w6-key-hierarchy.md §1); the server must publish the same.
+    let roots: AccountRoots
+    try {
+      roots = await openAccountRoots(masterKey, binding, data.accountRoots ?? [], data.accountAuthorityPublicKey ?? '')
+    } catch (error) {
+      setAccessToken(data.accessToken)
+      await api.post('/auth/logout').catch(() => undefined)
+      clearSession()
+      masterKey.fill(0)
+      throw isIdentityRootMismatch(error) ? new AccountKeysMismatchError() : error
+    }
+    const { publicKey, privateKey } = await driveKeysOf(roots.identityRoot)
     if (publicKey !== data.publicKey) {
       // This sign-in is over: ended on the server too (best effort), and the
       // keys dropped here, as for a key-binding mismatch (profile.ts).
@@ -139,7 +167,7 @@ async function finishSignIn(data: LoginResponse, opened: OpaqueSignIn): Promise<
       privateKey.fill(0)
       throw new Error("the server publishes another Drive key than this account's")
     }
-    await activate(data, { userId: data.userId, masterKey, privateKey, publicKey, keyBinding: binding })
+    await activate(data, { userId: data.userId, masterKey, roots, privateKey, publicKey, keyBinding: binding })
     // A new server setup: the password just used (held by the sign-in's
     // worker) is registered again under it, without asking. A failure leaves
     // the old record, and the next sign-in asks again.
@@ -267,6 +295,7 @@ function registrationBody(keys: AccountKeys) {
     opaqueServerKeyId: keys.opaqueServerKeyId,
     masterKeyEnvelope: keys.masterKeyEnvelope,
     recoveryKeyEnvelope: keys.recoveryKeyEnvelope,
+    accountRoots: keys.accountRoots,
     publicKey: keys.publicKey,
     accountAuthorityPublicKey: keys.accountAuthorityPublicKey,
     accountAuthorityKeyId: keys.accountAuthorityKeyId,
@@ -280,6 +309,7 @@ function sessionKeys(keys: AccountKeys): SessionKeys {
   return {
     userId: '',
     masterKey: keys.masterKey,
+    roots: keys.roots,
     privateKey: keys.privateKey,
     publicKey: keys.publicKey,
     keyBinding: keys.keyBinding,

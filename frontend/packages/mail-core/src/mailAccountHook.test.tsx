@@ -28,7 +28,7 @@ vi.mock('@kutup/session/client', () => ({
   },
 }))
 vi.mock('@kutup/session/store', () => ({
-  useRequiredSession: () => ({ sessionId: 's', address: 'ada@kutup.test', userId: 'me', masterKey: new Uint8Array(32) }),
+  useRequiredSession: () => ({ sessionId: 's', address: 'ada@kutup.test', userId: 'me', masterKey: new Uint8Array(32), roots: { identityGeneration: 1, identityRoot: 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=', driveGeneration: 1, driveRoot: 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=', pseudonymRoot: 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=', callLinkRoot: 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=', objectIdKey: 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=' } }),
 }))
 vi.mock('@kutup/crypto/accountRename', () => ({
   addressFolder: () => Promise.resolve((address: string) => address.toLowerCase()),

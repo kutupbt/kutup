@@ -105,6 +105,7 @@ fn a_contact_list_keeps_sealed_entries_by_revision() {
         key: ContactListKey::new(
             &user.master_key,
             kutup_crypto::account_record::MasterKeyGeneration::FIRST,
+            &user.roots.object_id,
         ),
     };
     let (one, one_at_1) = list.entry(1, 1);
@@ -169,6 +170,7 @@ fn a_contact_list_keeps_sealed_entries_by_revision() {
     let groups = kutup_crypto::chat_group_list::GroupListKey::new(
         &user.master_key,
         kutup_crypto::account_record::MasterKeyGeneration::FIRST,
+        &user.roots.object_id,
     );
     let group_entry = groups
         .seal(&user.binding, &groups.entry_id(&[3u8; 32]), 1, b"{}")
@@ -227,6 +229,7 @@ fn the_account_head_covers_the_contact_list() {
         key: ContactListKey::new(
             &user.master_key,
             kutup_crypto::account_record::MasterKeyGeneration::FIRST,
+            &user.roots.object_id,
         ),
     };
     let (one, one_at_1) = list.entry(1, 1);
@@ -246,8 +249,16 @@ fn the_account_head_covers_the_contact_list() {
         keys.scope_digest("chatContacts", &[(one.clone(), revision)])
             .unwrap()
     };
-    let first =
-        AccountHeadV1::first(&user.identity.incarnation_id(), &writer, vec![scope(1)]).unwrap();
+    let first = AccountHeadV1::first(
+        &user.identity.incarnation_id(),
+        kutup_crypto::account_head::RootGenerations {
+            identity: 1,
+            drive: 1,
+        },
+        &writer,
+        vec![scope(1)],
+    )
+    .unwrap();
     let first_sealed = account_head::seal(&keys, &user.binding, &first).unwrap();
     let r = bearer(c.post(format!("{base}/api/account/head")), &user.token)
         .json(&json!({ "head": STANDARD.encode(&first_sealed), "basis": index["basis"] }))
@@ -283,6 +294,7 @@ fn a_contact_list_keeps_at_most_10000_entries() {
         key: ContactListKey::new(
             &user.master_key,
             kutup_crypto::account_record::MasterKeyGeneration::FIRST,
+            &user.roots.object_id,
         ),
     };
     for n in 0..10_000 {
