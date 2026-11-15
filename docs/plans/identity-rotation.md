@@ -85,7 +85,7 @@ MK (random, generation mk_gen, wrapped by password and recovery)
 ## 4. Two rotations
 
 - **MK rotation** (a password or recovery phrase exposed, an organization
-  taking or releasing escrow, routine): new MK, `mk_gen + 1`, the old MK kept
+  taking escrow, routine): new MK, `mk_gen + 1`, the old MK kept
   in a keyring record under the new one. Records are re-sealed lazily; the
   identity does not change; no contact sees anything.
 - **Identity rotation** (a device lost or stolen, since every device holds
@@ -97,6 +97,15 @@ MK (random, generation mk_gen, wrapped by password and recovery)
   proves nothing to a contact on its own; its use is that the owner's other
   devices and old signatures (epoch chains, block manifests) stay verifiable
   under "an authority of this account at the time".
+- **Releasing escrow is an identity rotation.** An escrow holds the MK and
+  the identity root, and through the MK the other stored roots, so an
+  organization that gave up escrow could still sign as the member and link
+  the member's group pseudonyms, call links and record ids. Releasing escrow
+  therefore rotates all five stored roots (identity, Drive, pseudonym,
+  call-link, object-id key), each to its next generation, together with a
+  new MK. Every root record carries its generation for this reason (decided
+  2026-11-14, after the identity-root review); the flow itself is built
+  with the identity rotation after the wipe.
 
 ## 5. Rotation checklist
 
