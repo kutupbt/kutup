@@ -2,9 +2,9 @@
 // every other app's build holds no Chat WASM, and none of its glue, so an
 // import of @kutup/chat-core/wasm creeping back into Drive, Account, Mail or
 // any other app fails the web gate instead of shipping 3 MB more to it.
-// Every app's page also loads its scripts as files, never inline: the apps'
-// Content-Security-Policy allows no inline script
-// (docs/content-security-policy.md).
+// Every app's page also loads its scripts as files, never inline, and has no
+// inline style: the apps' Content-Security-Policy allows no inline script and
+// no <style> without the page's nonce (docs/content-security-policy.md).
 // Run after `pnpm -C frontend build`.
 import { readdirSync, readFileSync, statSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
@@ -43,6 +43,23 @@ for (const app of readdirSync(apps)) {
     console.error(`${app}: dist/index.html has an inline event handler`)
     found = true
   }
+  // Styles likewise: no <style> or style attribute in the page, and the
+  // style nonce's placeholder (nginx writes each response's nonce over it)
+  // and script ahead of every module (frontend/packages/config/src/styleNonce.ts).
+  // Not the editor sandbox's bridge page: its origin allows inline styles.
+  if (app !== 'editor') {
+    if (/<style\b/i.test(page) || /<[^>]+\sstyle\s*=/i.test(page)) {
+      console.error(`${app}: dist/index.html has an inline style`)
+      found = true
+    }
+    const meta = page.indexOf('<meta name="csp-nonce" content="__KUTUP_CSP_NONCE__">')
+    const script = page.indexOf('<script src="/kutup-style-nonce.js"></script>')
+    const firstModule = page.search(/<script type="module"/)
+    if (meta < 0 || script < meta || (firstModule >= 0 && firstModule < script)) {
+      console.error(`${app}: dist/index.html lacks the csp-nonce meta and /kutup-style-nonce.js ahead of its modules`)
+      found = true
+    }
+  }
   if (app === 'chat') continue
   try {
     statSync(dist)
@@ -60,4 +77,4 @@ for (const app of readdirSync(apps)) {
   }
 }
 if (found) process.exit(1)
-console.log(`no Chat runtime in the ${checked} apps that aren't Chat; no inline script in the ${pages} app pages`)
+console.log(`no Chat runtime in the ${checked} apps that aren't Chat; no inline script or style in the ${pages} app pages`)

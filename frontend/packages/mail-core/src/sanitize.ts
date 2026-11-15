@@ -1,4 +1,5 @@
 import DOMPurify from 'dompurify'
+import { styleNonce } from '@kutup/ui/lib/cspNonce'
 import { cleanTrackingLink, type CleanedLink } from './trackingLinks'
 
 // Mail HTML is hostile until proven otherwise (docs/plans/mail.md), as in
@@ -309,6 +310,10 @@ function frame(body: string, images: string, look?: FrameLook): string {
     ? { background: '#111318', text: '#e5e7eb', muted: '#9ca3af', link: '#93c5fd', border: '#374151' }
     : { background: '#fff', text: '#111827', muted: '#4b5563', link: '#0b62c4', border: '#e5e7eb' }
   const c = look?.colors ?? fallback
+  // The srcdoc frame also inherits the app's policy, which allows a <style>
+  // element only with the page's nonce (docs/content-security-policy.md).
+  // styleNonce() returns only base64 or hex: nothing to escape.
+  const nonce = styleNonce()
   const theme = look
     ? `html { color-scheme: ${look.dark ? 'dark' : 'light'}; }
   body { color: ${c.text}; background: ${c.background}; }
@@ -318,7 +323,7 @@ function frame(body: string, images: string, look?: FrameLook): string {
     : ''
   return `<!doctype html><html><head><meta charset="utf-8">
 <meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src ${images}; style-src 'unsafe-inline'; font-src data:">
-<style>
+<style${nonce ? ` nonce="${nonce}"` : ''}>
   html { color-scheme: light; }
   body { margin: 0; padding: 4px 2px; font: 14px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif; color: #111827; background: #fff; overflow-wrap: anywhere; }
   img { max-width: 100%; height: auto; }

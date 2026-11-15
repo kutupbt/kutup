@@ -122,3 +122,21 @@ describe('sanitizeMailHtml', () => {
     expect(sanitizeSignature('  ')).toBe('')
   })
 })
+
+describe('the frame document', () => {
+  it("gives its own style sheet the page's style nonce, and none without one", () => {
+    expect(plainTextDocument('hi')).toContain('<style>')
+    const meta = document.createElement('meta')
+    meta.name = 'csp-nonce'
+    meta.content = '0123456789abcdef0123456789abcdef'
+    document.head.append(meta)
+    try {
+      expect(plainTextDocument('hi')).toContain('<style nonce="0123456789abcdef0123456789abcdef">')
+      expect(sanitizeMailHtml('<p>hi</p>', { allowRemote: false }).document).toContain('<style nonce="0123456789abcdef0123456789abcdef">')
+      meta.content = '__KUTUP_CSP_NONCE__'
+      expect(plainTextDocument('hi')).toContain('<style>')
+    } finally {
+      meta.remove()
+    }
+  })
+})

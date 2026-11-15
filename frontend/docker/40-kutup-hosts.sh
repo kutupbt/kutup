@@ -103,6 +103,12 @@ strict_policy() {
   connect="'self' $(ws_origin "$origin")"
   images="'self' data: blob:"
   frames="'none'"
+  # <style> elements only with this response's nonce ($request_id, which
+  # the page's <meta name="csp-nonce"> also gets; see the index.html
+  # location below). Style attributes in markup: none, but where the next
+  # case allows them.
+  styles="'self' 'nonce-\$request_id'"
+  style_attrs=""
   # The apps that draw maps (@kutup/map): direct providers' tiles, styles
   # and glyphs are fetched, raster tiles also drawn as images.
   case "$app" in
@@ -115,7 +121,12 @@ strict_policy() {
   esac
   case "$app" in
     # Quick Look shows PDFs in a frame of their decrypted blob: URL.
-    drive) frames="blob:" ;;
+    # Whiteboards, diagrams and maths (Excalidraw, mermaid, KaTeX) write
+    # style attributes into the SVG and HTML they make.
+    drive)
+      frames="blob:"
+      style_attrs="; style-src-attr 'unsafe-inline'"
+      ;;
     # Photos reads a decrypted original back from its blob: URL to convert it.
     photos) connect="$connect blob:" ;;
     # Group calls; PDF attachments in a blob: frame.
@@ -126,13 +137,22 @@ strict_policy() {
     # The message body is a sandboxed srcdoc frame (it inherits this policy);
     # PDF attachments open in a blob: frame. Remote images come through the
     # image proxy as blob: URLs: no https: here.
-    mail) frames="blob:" ;;
+    # Messages keep their senders' style attributes (sanitized; the frame
+    # inherits this policy).
+    mail)
+      frames="blob:"
+      style_attrs="; style-src-attr 'unsafe-inline'"
+      ;;
     # Documents and PDFs open in the editor sandbox; viewers in blob: frames.
-    office) frames="$editor_origin blob:" ;;
+    # Whiteboards, diagrams and maths, as in Drive.
+    office)
+      frames="$editor_origin blob:"
+      style_attrs="; style-src-attr 'unsafe-inline'"
+      ;;
     # Site icons come back from the server as blob: URLs that are read again.
     pass) connect="$connect blob:" ;;
   esac
-  printf '%s' "default-src 'none'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src $images; font-src 'self' data:; media-src 'self' blob:; connect-src $connect; worker-src 'self'; manifest-src 'self'; frame-src $frames; frame-ancestors 'none'; object-src 'none'; base-uri 'none'; form-action 'self'; report-uri /api/csp-report; report-to kutup-csp"
+  printf '%s' "default-src 'none'; script-src 'self' 'wasm-unsafe-eval'; style-src $styles$style_attrs; img-src $images; font-src 'self' data:; media-src 'self' blob:; connect-src $connect; worker-src 'self'; manifest-src 'self'; frame-src $frames; frame-ancestors 'none'; object-src 'none'; base-uri 'none'; form-action 'self'; report-uri /api/csp-report; report-to kutup-csp"
 }
 
 # The policy enforced before the strict one (until KUTUP_CSP_ENFORCE=1). WASM
@@ -230,6 +250,22 @@ $(headers '        ')
     # Anything else there (none is expected) is revalidated.
     location ~ ^/(crypto|crypto-calendar|chat|pass|mail-search)-wasm/ {
         try_files \$uri =404;
+        add_header Cache-Control "no-cache" always;
+$(headers '        ')
+    }
+
+    # The page itself, with the style nonce: nginx writes this response's
+    # \$request_id (128 random bits) over the placeholder in its
+    # <meta name="csp-nonce"> (frontend/packages/config/src/styleNonce.ts),
+    # as the policy above names it. So it is never served as stored: not
+    # the precompressed copies, and without ETag or Last-Modified (sub_filter
+    # drops them) a cache cannot revalidate an old page and nonce.
+    location = /index.html {
+        gzip_static off;
+        brotli_static off;
+        gzip on;
+        sub_filter_once on;
+        sub_filter '__KUTUP_CSP_NONCE__' '\$request_id';
         add_header Cache-Control "no-cache" always;
 $(headers '        ')
     }

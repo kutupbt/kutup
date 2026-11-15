@@ -194,6 +194,23 @@ KUTUP_SERVER=… ./scripts/verify-pass-ssh.sh     # the kutup SSH agent against 
 pnpm -C frontend run test:pass-wasm             # Kutup Pass WASM: edits, saves, merges (after build:wasm)
 ```
 
+The frontend image checks the nginx sites `frontend/docker/40-kutup-hosts.sh`
+writes, report-only and enforced, with `nginx -t` when it is built. To check
+them without building it, write them and test them in the image's nginx
+(Alpine's, with its brotli module; the `apk add` needs the network):
+
+```sh
+d=$(mktemp -d)
+for e in 0 1; do
+  KUTUP_NGINX_CONF=$d/kutup-$e.conf KUTUP_BASE_DOMAIN=example.test \
+    CHAT_SFU_URL=wss://sfu.example.test KUTUP_MAP_DIRECT_ORIGINS=https://tile.example.test \
+    KUTUP_CSP_ENFORCE=$e sh frontend/docker/40-kutup-hosts.sh
+done
+docker run --rm -v "$d:/sites:ro" -v "$PWD/frontend/docker/nginx.conf:/etc/nginx/nginx.conf:ro" alpine:3.23 \
+  sh -c 'apk add -q --no-cache nginx nginx-mod-http-brotli && mkdir -p /run/nginx /etc/nginx/conf.d &&
+    for e in 0 1; do cp /sites/kutup-$e.conf /etc/nginx/conf.d/kutup.conf && nginx -t || exit 1; done'
+```
+
 The backup integration script owns a disposable Compose project and covers the
 HTTP lifecycle, fixed-cutoff mailbox/media retention, account purge, object
 cleanup, and exact Chat-byte release. It ends with the `kutup` CLI end to end
