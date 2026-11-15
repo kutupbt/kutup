@@ -46,6 +46,7 @@ vi.mock('@kutup/session/manifestPins', () => ({
 }))
 
 import { listDeviceInManifest, removeDevicesFromManifest, type ManifestDevice } from '@kutup/crypto/accountManifest'
+import type { IdentityRoot } from '@kutup/crypto/accountRoots'
 import { toBase64 } from '@kutup/crypto/base64'
 import { generateSigningKey } from '@kutup/crypto/signing'
 import { encryptCollabFrame } from './cryptoFrame'
@@ -55,7 +56,7 @@ import { SenderCheck, type SenderRefusal } from './senders'
 const SERVER = 'kutup.example'
 const ACCOUNT_ID = '22222222-2222-4222-8222-222222222222'
 const ACCOUNT = `aci:${ACCOUNT_ID}@${SERVER}`
-const MASTER_KEY = toBase64(new Uint8Array(32).fill(7))
+const IDENTITY_ROOT = toBase64(new Uint8Array(32).fill(7)) as IdentityRoot
 const FILE_KEY = new Uint8Array(32).fill(0x41)
 const binding = { fileId: '11111111-1111-4111-8111-111111111111', keyGeneration: 1 }
 
@@ -89,7 +90,7 @@ async function frame(deviceId: number, manifestSequence: number, key: Key, seque
 }
 
 async function list(entry: ManifestDevice) {
-  chain.push(await listDeviceInManifest(chain.at(-1) ?? null, entry, '2026-10-27T00:00:00Z', MASTER_KEY, ACCOUNT))
+  chain.push(await listDeviceInManifest(chain.at(-1) ?? null, entry, '2026-10-27T00:00:00Z', IDENTITY_ROOT, ACCOUNT))
 }
 
 describe('SenderCheck', () => {
@@ -153,7 +154,7 @@ describe('SenderCheck', () => {
   })
 
   it("drops a removed device's live frames and keeps its logged ones", async () => {
-    chain.push(await removeDevicesFromManifest(chain.at(-1)!, [2], '2026-10-27T00:02:00Z', MASTER_KEY))
+    chain.push(await removeDevicesFromManifest(chain.at(-1)!, [2], '2026-10-27T00:02:00Z', IDENTITY_ROOT))
     const { senders } = check()
     const old = await frame(2, 2, two)
     // Live: the head (3) no longer lists device 2.
@@ -192,7 +193,7 @@ describe('SenderCheck', () => {
     pinned = kept.at(-1)
     first.close()
     chain = []
-    const otherMaster = toBase64(new Uint8Array(32).fill(8))
+    const otherMaster = toBase64(new Uint8Array(32).fill(8)) as IdentityRoot
     const fresh = await generateSigningKey()
     chain.push(await listDeviceInManifest(null, editor(1, fresh), '2026-10-29T00:00:00Z', otherMaster, ACCOUNT))
     const { senders, refused } = check()
@@ -211,7 +212,7 @@ describe('SenderCheck', () => {
 
   it('takes history only linked up to the head', async () => {
     // A logged frame of a device listed only at 2, while the head is 3.
-    chain.push(await removeDevicesFromManifest(chain.at(-1)!, [2], '2026-10-27T00:02:00Z', MASTER_KEY))
+    chain.push(await removeDevicesFromManifest(chain.at(-1)!, [2], '2026-10-27T00:02:00Z', IDENTITY_ROOT))
     const { senders } = check()
     const old = await frame(2, 2, two)
     expect(await senders.verify(old, false)).toBe('take')
