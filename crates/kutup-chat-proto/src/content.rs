@@ -1295,7 +1295,7 @@ pub fn is_reaction_emoji(emoji: &str) -> bool {
     !emoji.is_empty()
         && emoji.len() <= MAX_REACTION_EMOJI_BYTES
         && emoji.chars().count() <= 16
-        && emoji.chars().any(|c| !c.is_ascii())
+        && !emoji.is_ascii()
         && !emoji.chars().any(|c| {
             c.is_control() || (c.is_whitespace() && c != '\u{200d}') || c.is_ascii_alphabetic()
         })
