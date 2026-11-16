@@ -1786,11 +1786,12 @@ mod tests {
             (expired_attachment, &expired_path, &expired_bytes),
             (boundary_attachment, &boundary_path, &boundary_bytes),
         ] {
+            // Suite 2, the block format: the only suite a new row may name.
             sqlx::query(
                 "INSERT INTO chat_media_objects
                  (attachment_id,origin_user_id,origin_domain,suite,ciphertext_bytes,
                   ciphertext_sha256,retrieval_token_hash,storage_path,created_at)
-                 VALUES ($1,$2,'retention.test',1,$3,$4,$5,$6,$7)",
+                 VALUES ($1,$2,'retention.test',2,$3,$4,$5,$6,$7)",
             )
             .bind(attachment_id)
             .bind(user_id)
