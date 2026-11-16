@@ -894,6 +894,23 @@ mod tests {
         }
     }
 
+    /// The server's name is not signed (identity-rotation.md §6): this
+    /// account's own head re-labelled with another server still verifies,
+    /// and is refused as this account's.
+    #[test]
+    fn an_own_head_naming_another_server_is_refused() {
+        let world = World::new();
+        let alice = world.person(1);
+        let account: kutup_chat_proto::AccountRef = alice.account.parse().unwrap();
+        let own = head(&world, &alice.account);
+        verify_own_manifest(&own, &account, &authority(&alice)).unwrap();
+        let mut relabelled = own.clone();
+        relabelled.account =
+            kutup_chat_proto::AccountRef::new("mirror.example", &account.account_id).unwrap();
+        relabelled.verify().unwrap();
+        assert!(verify_own_manifest(&relabelled, &account, &authority(&alice)).is_err());
+    }
+
     /// A server serving the account's head from before a device was linked
     /// (or before one was removed): Chat refuses to sign onto it, in a sync
     /// of its own entry and in a re-registration of this installation.

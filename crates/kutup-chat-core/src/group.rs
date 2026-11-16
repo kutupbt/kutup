@@ -291,8 +291,15 @@ pub fn home_of(pin: &GroupHomePinV1) -> kutup_crypto::chat_group::GroupHome<'_> 
 }
 
 /// The master key `master_key` (base64) of the group `group_id` at `home`:
-/// refused unless the key at that home is that group's. A member who keeps
-/// the key can't move the group to a home of theirs.
+/// refused unless the key at that home is that group's. The id binds the
+/// home's identity document (hash and sequence), not the server's name
+/// (docs/plans/identity-rotation.md §6), so a member who keeps the key can't
+/// move the group to a home of another identity. The name `home` gives is
+/// checked where the home is reached: its identity history, fetched from
+/// that server, must follow from the pinned document, which names its server
+/// under the home's signature (`GatewayCache::refresh`, before any request,
+/// and the recovery's check), so a pin naming another server with the true
+/// document gets nothing signed sent there.
 pub fn master_at(
     master_key: &str,
     group_id: &str,

@@ -533,6 +533,8 @@ pub fn open_padded_text(
 /// The sealed-delivery capability for `recipient` from their profile key:
 /// salted with their permanent account id alone, never a name or their
 /// server's name (docs/plans/account-ids.md, identity-rotation.md §6).
+/// (A, X) and (B, X) derive the same capability; harmless, since it is keyed
+/// by the secret profile key, which only the profile's owner hands out.
 pub fn derive_delivery_capability(
     profile_key: &[u8; 32],
     recipient: &AccountRef,

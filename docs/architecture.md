@@ -422,10 +422,16 @@ key derivation covers the server's name. The manifest and identity binding,
 safety numbers, profile envelopes, the Drive key binding and group pseudonym
 bindings bind the account id alone; shares between two people bind both ids
 and both incarnations; a group id binds its home's identity document. A
-hostile server can mint an id equal to a victim's and gains nothing: every
-statement is checked under the authority pinned for the routing address, the
-incarnation is bound, and a client never looks anything up by account id
-alone. A server rename is then a re-keying of local rows, not a new identity.
+client never looks anything up by account id alone. A server rename is then a
+re-keying of local rows, not a new identity.
+
+A hostile server can mint a victim's id and serve the victim's whole public
+identity as its own account (a mirror): it verifies, and the safety number is
+the victim's. It reads nothing, but a first-time contact can bind it. The
+guard is the synced identity pins' rule that one authority is one account,
+checked on Chat's manifest fetch, Drive's recipient check and Chat's group
+member check; a client that never met the victim can't detect a mirror, as
+with any first contact (docs/v1-format-inventory.md).
 
 ### Transport-only federation
 

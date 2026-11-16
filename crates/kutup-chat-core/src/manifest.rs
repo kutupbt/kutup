@@ -721,6 +721,37 @@ mod tests {
             .unwrap());
     }
 
+    /// The server's name is not signed (identity-rotation.md §6): a peer's
+    /// manifest re-labelled with another server still verifies, but it is
+    /// taken only for the address it was asked for, server included.
+    #[test]
+    fn a_manifest_naming_another_server_than_the_one_asked_is_refused() {
+        let authority = AccountAuthority::derive(
+            &kutup_crypto::account_roots::IdentityRoot::from_bytes([5u8; 32]),
+        )
+        .unwrap();
+        let manifest = authority
+            .sign_manifest(
+                BOB.parse().unwrap(),
+                1,
+                None,
+                &pair(BOB_IDENTITY),
+                vec![device(1, 7)],
+                "2026-10-18T00:00:00Z",
+            )
+            .unwrap();
+        verify_manifest_evidence(BOB, &manifest, None).unwrap();
+        let mirror = BOB.replace("@beta.example", "@mirror.example");
+        // Asked for Bob's id on another server, answered with Bob's manifest.
+        assert!(verify_manifest_evidence(&mirror, &manifest, None).is_err());
+        // Bob's manifest re-labelled as the other server's: it verifies, and
+        // is refused for Bob's address.
+        let mut relabelled = manifest.clone();
+        relabelled.account = mirror.parse().unwrap();
+        relabelled.verify().unwrap();
+        assert!(verify_manifest_evidence(BOB, &relabelled, None).is_err());
+    }
+
     /// The one-way suite upgrade (docs/plans/pq-shares.md): a pinned suite-1
     /// Drive key rises to X-Wing only in the linked next manifest, under the
     /// same authority and signing key; never back, never across a gap.

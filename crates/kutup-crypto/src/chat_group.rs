@@ -58,8 +58,13 @@ const STATE_HASH_DOMAIN: &[u8] = crate::labels::CHAT_GROUP_STATE_HASH_V1;
 /// where the group is reached (docs/plans/identity-rotation.md §6).
 /// Every notary a member takes is verified against the identity history
 /// followed from that pin (chat-core's `GroupRecordV1::followed_history`).
-/// A member who keeps the master key can't make the group live elsewhere: a
-/// home of theirs is another group id, which no member's binding names.
+/// A member who keeps the master key can't make the group live on a home of
+/// another identity: that is another group id, which no member's binding
+/// names. A pin naming another server with the true document gets the same
+/// id; it is stopped where the home is reached: the history fetched from the
+/// named server must follow from the pinned document, which names its server
+/// under the home's own signature (chat-core's `GatewayCache::refresh`, run
+/// before any signed request, and the recovery's check).
 #[derive(Clone, Copy, Debug)]
 pub struct GroupHome<'a> {
     pub server: &'a str,

@@ -15,11 +15,24 @@
 //! and both incarnations. The `(server, account id)` pair is the address
 //! things are looked up by (JSON, federation requests, local stores, pins,
 //! the libsignal address name), never signed bytes, so a server rename is a
-//! re-keying of local rows. A hostile server can mint an id equal to a
-//! victim's; it gains nothing, because every statement is checked under the
-//! authority pinned for the routing address, and the incarnation (the
-//! authority's hash) is bound too. The rule that keeps this safe: nothing is
-//! ever looked up by account id alone.
+//! re-keying of local rows. The rule that keeps this safe: nothing is ever
+//! looked up by account id alone.
+//!
+//! **Mirror accounts.** With the name unbound, a hostile server B can mint a
+//! victim's id X and serve the victim's whole public identity (manifest,
+//! identity binding, Drive key binding, prekeys) as its own account (B, X).
+//! Every signature verifies and the safety number is the victim's. B reads
+//! nothing: the keys are the victim's, whose private halves B lacks. But a
+//! first-time contact can bind (B, X) as a person, and its messages and
+//! shares then route to B (undecryptable there). The guard is the synced
+//! identity pins' rule that one authority is one account
+//! (`identity_pins::record`'s `Recorded::AuthorityElsewhere`): an authority
+//! the list holds for (A, X) is refused for (B, X) on every path that takes a
+//! peer's identity (Chat's manifest fetch, Drive's recipient check, Chat's
+//! group member check). A client that never met the victim can't tell the
+//! mirror apart, as with any first contact; comparing safety numbers in
+//! person doesn't either, since the number names the id and keys only. So
+//! the pin rule is load-bearing.
 
 use std::fmt;
 use std::str::FromStr;
@@ -127,9 +140,9 @@ pub const ACCOUNT_ID_LEN: usize = 16;
 
 /// A permanent account id, the 16 bytes of the server's `users.id`: what a
 /// statement binds for a person (docs/plans/identity-rotation.md §6). It names
-/// no one by itself: a hostile server can mint any id, so it is always read
-/// against the routing address it came with ([`AccountRef`]) and the
-/// authority pinned for that address. Its text form is the lowercase
+/// no one by itself: a hostile server can mint any id (a mirror account, see
+/// the module docs), so it is always read against the routing address it
+/// came with ([`AccountRef`]) and the authority pinned for that address. Its text form is the lowercase
 /// hyphenated UUID.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct AccountId([u8; ACCOUNT_ID_LEN]);

@@ -728,6 +728,12 @@ async function checkPublished(
   }
   const match = await lookupIdentityPin(pins.pins, refOf(person), account, person.accountAuthorityPublicKey)
   const pin = match.kind === 'pinned' ? match.pin : null
+  // One authority is one account. An authority the list holds for another
+  // account is that account's keys handed out under this one: a mirror (the
+  // same account id minted by another server, docs/plans/identity-rotation.md
+  // §6) or a copy. Refused here, before anything is written, so it holds
+  // when the list can't be written too.
+  if (authorityPinnedElsewhere(pins.pins, refOf(person), person.accountAuthorityPublicKey)) return { kind: 'invalid' }
   // ...and those its authority vouches for. A binding is never withdrawn: a
   // pinned account without one is a server leaving it out. An account not
   // yet on X-Wing keys has none that count until it signs in again.
@@ -755,6 +761,11 @@ async function checkPublished(
   if (recorded.kind === 'addressHadOthers') return someoneElse(recorded.pins[0], account)
   if (match.kind === 'someoneElse') return someoneElse(match.pins[0], account)
   return { kind: 'ok', verified: false }
+}
+
+/** Whether `authority` is pinned for another account than `account` (Rust `Recorded::AuthorityElsewhere`). */
+function authorityPinnedElsewhere(pins: PinsText, account: AccountRef, authority: string): boolean {
+  return pins.list.pins.some((pin) => pin.authorityPublicKey === authority && !sameAccount(pin.account, account))
 }
 
 /**

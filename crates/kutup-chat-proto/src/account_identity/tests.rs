@@ -952,3 +952,61 @@ fn the_identity_binding_is_signed_and_names_authority_incarnation_account_and_id
     other.identity_binding = Some(b64(&[0x5c; 63]));
     assert!(other.signing_bytes().is_err());
 }
+
+/// The server's name is not signed (docs/plans/identity-rotation.md §6), so
+/// a manifest re-labelled with another server still verifies: every check
+/// that takes one for an account compares the whole routing address, and
+/// refuses a manifest that names another server than the one asked.
+#[test]
+fn a_manifest_relabelled_with_another_server_verifies_but_is_refused_for_the_address() {
+    let keys = kutup_crypto::identity::AccountIdentityKeysV1::derive(
+        &kutup_crypto::account_roots::IdentityRoot::from_bytes([5; 32]),
+    )
+    .unwrap();
+    let account = AccountRef::new("example.test", "0b6b5e0c-4c1e-4b8e-9c2d-6a1f3e5d7c9b").unwrap();
+    let mirror = AccountRef::new("mirror.test", &account.account_id).unwrap();
+    let mut first = AccountManifestV3::first(
+        account.clone(),
+        &keys,
+        vec![editor(1)],
+        "2026-10-26T00:00:00Z",
+    );
+    first.sign(keys.authority_signing_key()).unwrap();
+    let mut relabelled = first.clone();
+    relabelled.account = mirror.clone();
+    // The signature covers the account id, not the server: it still verifies.
+    relabelled.verify().unwrap();
+
+    // The head check (account_identity.rs, `AccountManifestPinV1::check`).
+    let incarnation = keys.incarnation_id();
+    AccountManifestPinV1::check(None, Some(&first), &account, &incarnation).unwrap();
+    assert!(AccountManifestPinV1::check(None, Some(&relabelled), &account, &incarnation).is_err());
+
+    // A history page asked for the account.
+    let page = AccountManifestHistoryPageV3 {
+        account: account.clone(),
+        from_sequence: 1,
+        to_sequence: 1,
+        manifests: vec![first.clone()],
+        next_sequence: None,
+    };
+    page.validate().unwrap();
+    let page = AccountManifestHistoryPageV3 {
+        manifests: vec![relabelled.clone()],
+        ..page
+    };
+    assert!(page.validate().is_err());
+
+    // Prekey bundles for the account.
+    let manifest = two_devices();
+    let mut other = manifest.clone();
+    other.account = AccountRef::new("mirror.test", &manifest.account.account_id).unwrap();
+    other.verify().unwrap();
+    let bundles = AccountPreKeyBundlesResponse {
+        account: manifest.account.clone(),
+        identity_key: manifest.identity_key.clone().unwrap(),
+        devices: vec![bundle(1, 10), bundle(2, 20)],
+        manifest: other,
+    };
+    assert!(bundles.check_against_manifest().is_err());
+}

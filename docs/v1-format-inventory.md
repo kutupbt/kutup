@@ -113,17 +113,37 @@ capability, the Drive key binding, the group pseudonym binding and the
 collaboration frame signature. Statements between two people bind both ids and
 both incarnations: named and file shares, profile-key shares and a shared
 mailbox's key shares. A Chat group's id binds its home's identity document
-(hash and sequence), not the home's name. What keeps a hostile server that
-mints a victim's id from gaining anything: every statement is checked under
-the authority pinned for the routing address, the incarnation (the
-authority's hash) is bound, and nothing is ever looked up by account id alone.
+(hash and sequence), not the home's name; the name a pin carries is checked
+where the home is reached (its history, fetched from that server, must follow
+from the pinned document, which names its server under the home's signature),
+before any pseudonym-signed request goes there, so a pin naming another
+server with the true document leads nowhere. Nothing is ever looked up by
+account id alone.
+
+*Mirror accounts.* With the name unbound, a hostile server B can mint a
+victim's account id X and serve the victim's whole public identity as its own
+account (B, X): every signature verifies and the safety number is the
+victim's. B reads nothing (it lacks the private keys), but a first-time
+contact can bind (B, X) as a person, and what it sends then routes to B. The
+guard is the synced identity pins' rule that one authority is one account
+(`identity_pins::record`'s `AuthorityElsewhere`), checked before anything is
+written on each path that takes a peer's identity: Chat's manifest fetch,
+Drive's recipient check (which refuses also when the list can't be written)
+and Chat's group member check. A client that never met the victim can't tell
+the mirror apart, as with any first contact, and an in-person comparison of
+the safety number doesn't either. This rule is load-bearing.
 The routing form in binary (`AccountRef::routing_bytes`: u16 server length,
 server, id) remains only where a server names an account beside a payload
 (`envelope::deliver`) and as a store key (the Chat contact-list entry id).
 Not moved yet: the organization documents (`KUTPOC1`, `KUTPOS1`, `KUTPOR1`,
 `KUTPOE1`) still name their parties in the routing form, until the escrow's
 next format change; group requests to a home (`group_route`) bind the home
-they are addressed to, as an HTTP signature binds its audience.
+they are addressed to, as an HTTP signature binds its audience. A Chat
+group's member, slot and ban entries (`GroupMemberEntryV1`,
+`GroupSlotEntryV1`, `GroupBannedAccountV1`) keep a full `AccountRef` inside
+the signed, sealed group state: routing, consistent with §6 (the member
+binding itself signs the id alone), but it goes stale on a server rename,
+until the group state is rewritten with the new name.
 
 `DriveEnvelopeV1` is encoded as magic `KUTPDE1\0`, big-endian suite ID,
 purpose, zero reserved byte, epoch, revision, 16-byte object UUID, 16-byte
