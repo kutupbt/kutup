@@ -96,7 +96,7 @@ impl TryFrom<u16> for AccountRecordSuiteId {
     fn try_from(value: u16) -> Result<Self> {
         match value {
             1 => Ok(Self::V1),
-            _ => Err(CryptoError::InvalidInput(format!(
+            _ => Err(CryptoError::NewerThanMe(format!(
                 "unknown account-record suite {value}"
             ))),
         }
@@ -533,7 +533,7 @@ impl TryFrom<u16> for AccountRecordPurpose {
             24 => Ok(Self::GroupPseudonymRoot),
             25 => Ok(Self::CallLinkRoot),
             26 => Ok(Self::ObjectIdKey),
-            _ => Err(CryptoError::InvalidInput(format!(
+            _ => Err(CryptoError::NewerThanMe(format!(
                 "unknown account-record purpose {value}"
             ))),
         }

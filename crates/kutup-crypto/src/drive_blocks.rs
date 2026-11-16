@@ -75,6 +75,7 @@ pub fn header(context: DriveBlobContextV2) -> [u8; DRIVE_BLOCKS_HEADER_BYTES] {
 /// The context a header names, if it is a well-formed suite-2 file blob
 /// header.
 pub fn inspect_header(header: &[u8]) -> Result<DriveBlobContextV2> {
+    crate::blocks::refuse_newer_suite(header, MAGIC, DRIVE_BLOCKS_SUITE, "Drive block")?;
     if header.len() != DRIVE_BLOCKS_HEADER_BYTES || header.get(..8) != Some(MAGIC) {
         return Err(CryptoError::InvalidInput(
             "not a Drive block-format header".into(),

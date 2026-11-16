@@ -40,7 +40,7 @@ impl TryFrom<u16> for DriveObjectSuiteId {
     fn try_from(value: u16) -> Result<Self> {
         match value {
             1 => Ok(Self::KutupDriveV1),
-            _ => Err(CryptoError::InvalidInput(format!(
+            _ => Err(CryptoError::NewerThanMe(format!(
                 "unknown Drive object suite {value}"
             ))),
         }
@@ -65,7 +65,7 @@ impl TryFrom<u8> for DriveObjectPurpose {
     fn try_from(value: u8) -> Result<Self> {
         match value {
             1 => Ok(Self::FileBlob),
-            _ => Err(CryptoError::InvalidInput(format!(
+            _ => Err(CryptoError::NewerThanMe(format!(
                 "unknown Drive object purpose {value}"
             ))),
         }

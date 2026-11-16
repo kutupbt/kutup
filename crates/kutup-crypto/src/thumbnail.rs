@@ -109,9 +109,11 @@ impl TryFrom<u8> for ThumbnailFormat {
             1 => Ok(Self::Jpeg),
             2 => Ok(Self::Webp),
             3 => Ok(Self::Png),
-            _ => Err(CryptoError::InvalidInput(format!(
-                "unknown thumbnail format {value}"
-            ))),
+            0 => Err(CryptoError::InvalidInput("thumbnail format 0".into())),
+            // An open enum of class *skip* (`format::OPEN_ENUMS`): a format
+            // a newer client draws is newer than this one, which shows the
+            // generic icon and leaves the thumbnail as it is.
+            _ => Err(crate::format::newer(&format!("thumbnail format {value}"))),
         }
     }
 }
@@ -425,7 +427,9 @@ mod tests {
         // Unknown format byte, bad magic.
         let mut unknown = good.clone();
         unknown[4] = 9;
-        assert!(decode(&unknown, v).is_err());
+        assert!(decode(&unknown, v).unwrap_err().is_newer());
+        unknown[4] = 0;
+        assert!(!decode(&unknown, v).unwrap_err().is_newer());
         let mut magic = good;
         magic[0] = b'X';
         assert!(decode(&magic, v).is_err());

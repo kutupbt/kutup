@@ -75,8 +75,13 @@ pub fn open_metadata(file: &File, file_key: &[u8]) -> Result<FileMetadata> {
         )
         .context("invalid file envelope context")?,
     )?;
-    let metadata = kutup_crypto::file_metadata::decode(&metadata)
-        .map_err(|_| anyhow!("invalid file metadata"))?;
+    let metadata = kutup_crypto::file_metadata::decode(&metadata).map_err(|error| {
+        if error.is_newer() {
+            anyhow!("this file's details were written by a newer Kutup: update kutup to open it")
+        } else {
+            anyhow!("invalid file metadata")
+        }
+    })?;
     Ok(metadata)
 }
 
@@ -295,6 +300,7 @@ mod tests {
             size: 42,
             sha256: None,
             media: None,
+            ..FileMetadata::new("", "", 0)
         }
     }
 
@@ -413,6 +419,35 @@ mod tests {
         let reopened = open_metadata(&file, &file_key).unwrap();
         assert_eq!(reopened.name, "istanbul.jpg");
         assert_eq!(reopened.media, photo.media);
+    }
+
+    /// docs/plans/format-evolution.md, rule 3: a field a newer client wrote
+    /// survives `kutup mv` from this one.
+    #[test]
+    fn rename_keeps_fields_a_newer_client_added() {
+        let folder_key = [7u8; 32];
+        let (file, file_key) = uploaded(&folder_key);
+        let mut newer = metadata();
+        newer
+            .extra
+            .insert("futureField".into(), serde_json::json!({"kept": [1, 2]}));
+        let request = rename_request(&file, &file_key, &newer).unwrap();
+        let file = File {
+            metadata_envelope: request.metadata_envelope,
+            metadata_revision: 2,
+            ..file
+        };
+        let mut opened = open_metadata(&file, &file_key).unwrap();
+        opened.name = "renamed.md".into();
+        let request = rename_request(&file, &file_key, &opened).unwrap();
+        let file = File {
+            metadata_envelope: request.metadata_envelope,
+            metadata_revision: 3,
+            ..file
+        };
+        let reopened = open_metadata(&file, &file_key).unwrap();
+        assert_eq!(reopened.name, "renamed.md");
+        assert_eq!(reopened.extra, newer.extra);
     }
 
     #[test]

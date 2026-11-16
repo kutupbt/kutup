@@ -725,6 +725,7 @@ mod tests {
             size: 1,
             sha256: None,
             media: None,
+            ..FileMetadata::new("", "", 0)
         };
         let created = crate::file_crypto::create(FOLDER, 1, &[3u8; 32], &meta).unwrap();
         (

@@ -30,7 +30,7 @@ impl TryFrom<u16> for CollectionEpochSuiteId {
     fn try_from(value: u16) -> Result<Self> {
         match value {
             1 => Ok(Self::Ed25519Sha256V1),
-            _ => Err(CryptoError::InvalidInput(format!(
+            _ => Err(CryptoError::NewerThanMe(format!(
                 "unknown collection epoch suite {value}"
             ))),
         }

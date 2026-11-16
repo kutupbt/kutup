@@ -595,6 +595,7 @@ fn share_upload(profile: &str, json: bool, share_id: &str, path: &str) -> Result
         size: data.len() as u64,
         sha256: Some(base64::engine::general_purpose::STANDARD.encode(hash(Suite::V1, &data))),
         media: None,
+        ..FileMetadata::new("", "", 0)
     };
     // Its name's hash in the shared folder (docs/plans/drive-unique-names.md).
     let keys = shared_keyring(&ctx, &share, &col_key)?;

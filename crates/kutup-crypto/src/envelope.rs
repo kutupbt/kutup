@@ -60,7 +60,7 @@ impl TryFrom<u16> for CollabFrameSuiteId {
     fn try_from(value: u16) -> Result<Self> {
         match value {
             1 => Ok(Self::XChaCha20Poly1305Ed25519V1),
-            _ => Err(CryptoError::InvalidInput(format!(
+            _ => Err(CryptoError::NewerThanMe(format!(
                 "unknown collaboration frame suite {value}"
             ))),
         }

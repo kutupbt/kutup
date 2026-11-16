@@ -41,7 +41,7 @@ impl TryFrom<u16> for NamedShareSuiteId {
     fn try_from(value: u16) -> Result<Self> {
         match value {
             2 => Ok(Self::XWingHkdfSha256ChaCha20Poly1305Ed25519V2),
-            _ => Err(CryptoError::InvalidInput(format!(
+            _ => Err(CryptoError::NewerThanMe(format!(
                 "unknown named-share suite {value}"
             ))),
         }

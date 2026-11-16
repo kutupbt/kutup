@@ -12,7 +12,14 @@ export interface PhotosLibraryOwner {
   binding: string
 }
 
+/**
+ * The record's marks. `v` is the format version (written as 1 when absent);
+ * an opened record also carries whatever a newer client added, which a
+ * spread (`{ ...marks, favourites }`) keeps for the next seal
+ * (docs/plans/format-evolution.md).
+ */
 export interface PhotosLibraryMarks {
+  v?: number
   favourites: string[]
   archived: string[]
   hidden: string[]
@@ -38,7 +45,7 @@ export async function sealPhotosLibrary(
   previousDigest: string | undefined,
 ): Promise<SealedPhotosLibrary> {
   return (await getCryptoWasm()).sealPhotosLibrary(
-    JSON.stringify(marks),
+    JSON.stringify({ v: 1, ...marks }),
     toBase64(owner.masterKey),
     MASTER_KEY_GENERATION,
     owner.binding,

@@ -41,7 +41,15 @@ export interface MediaMetadataV1 {
   liveOf?: string
 }
 
+/**
+ * A file's sealed metadata (docs/plans/format-evolution.md). `v` is the
+ * format version (written as 1 when absent); whatever else an opened record
+ * holds besides the fields below — a newer client's fields, `min`, a content
+ * commitment — rides along unchanged ({@link fileMetadataRest}) so no
+ * rewrite drops it.
+ */
 export interface FileMetadataV1 {
+  v?: number
   name: string
   mimeType: string
   size: number
@@ -82,12 +90,23 @@ function validateRevision(value: number): void {
   }
 }
 
+const KNOWN_METADATA_FIELDS = new Set(['name', 'mimeType', 'size', 'sha256', 'media'])
+
+/**
+ * What an opened metadata record holds besides its name, type, size, hash
+ * and media: its version and anything a newer client wrote. Every rewrite
+ * seals it again, so an older client never erases a newer one's data.
+ */
+export function fileMetadataRest(metadata: FileMetadataV1): Record<string, unknown> {
+  return Object.fromEntries(Object.entries(metadata).filter(([key]) => !KNOWN_METADATA_FIELDS.has(key)))
+}
+
 /** The canonical bytes, checked by the Rust format (`canonicalFileMetadata`). */
 async function encodeMetadata(metadata: FileMetadataV1): Promise<Uint8Array> {
   const module = await getCryptoWasm()
-  const plain: FileMetadataV1 = { name: metadata.name, mimeType: metadata.mimeType, size: metadata.size }
-  if (metadata.sha256) plain.sha256 = metadata.sha256
-  if (metadata.media) plain.media = metadata.media
+  const plain: Record<string, unknown> = { v: 1, ...metadata }
+  if (!metadata.sha256) delete plain.sha256
+  if (!metadata.media) delete plain.media
   return new TextEncoder().encode(module.canonicalFileMetadata(JSON.stringify(plain)))
 }
 

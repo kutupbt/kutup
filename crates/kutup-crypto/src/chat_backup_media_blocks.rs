@@ -53,6 +53,12 @@ pub fn header(
 }
 
 pub fn inspect_header(header: &[u8]) -> Result<ChatBackupMediaBlocksHeader> {
+    crate::blocks::refuse_newer_suite(
+        header,
+        MAGIC,
+        CHAT_BACKUP_MEDIA_BLOCKS_SUITE,
+        "Chat backup media block",
+    )?;
     if header.len() != CHAT_BACKUP_MEDIA_BLOCKS_HEADER_BYTES
         || header.get(..8) != Some(MAGIC)
         || u16::from_be_bytes([header[8], header[9]]) != CHAT_BACKUP_MEDIA_BLOCKS_SUITE

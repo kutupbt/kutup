@@ -21,6 +21,7 @@
 //! - [`chat_media`] — immutable typed Chat-media secretstream objects.
 //! - [`drive_envelope`] — suite-bearing, purpose/key-separated and UUID/epoch/revision-bound Drive values.
 //! - [`drive_object`] — the Drive suite registry and typed, file-bound file-blob framing.
+//! - [`format`] — how formats grow: `v`, the minimum reader, kept unknown fields, open enums.
 //! - [`file_metadata`] — a Drive file's metadata (name, type, size, photo details), canonical JSON.
 //! - [`file_keyring`] — a file's key generations, each sealing the one before.
 //! - [`photos_library`] — an account's own marks on photos (favourites, archived, hidden).
@@ -78,6 +79,7 @@ pub mod envelope;
 pub mod error;
 pub mod file_keyring;
 pub mod file_metadata;
+pub mod format;
 // The HPKE suite's backend (hpke-rs, X-Wing), which primitives::hpke calls.
 pub mod hpke_xwing;
 pub mod identity;

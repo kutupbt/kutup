@@ -80,6 +80,8 @@ export interface DriveFile {
   sha256: string | null
   /** A photo's or video's details (docs/plans/photos.md), when read. */
   media: MediaMetadataV1 | null
+  /** The rest of the sealed metadata (its version, a newer client's fields), kept for rewrites. */
+  metadataRest?: Record<string, unknown>
   /** The file key of `keyGeneration`. */
   fileKey: Uint8Array | null
   /** That key sealed under the folder key at `keyEpoch`, as listed. */
@@ -110,11 +112,11 @@ export interface DriveFile {
  * never dropped.
  */
 export function fileMetadataOf(
-  file: Pick<DriveFile, 'name' | 'mimeType' | 'size' | 'media'> & { sha256?: string | null },
+  file: Pick<DriveFile, 'name' | 'mimeType' | 'size' | 'media' | 'metadataRest'> & { sha256?: string | null },
   change: Partial<FileMetadataV1> = {},
 ): FileMetadataV1 {
   if (!file.name) throw new Error('file is not open')
-  const metadata: FileMetadataV1 = { name: file.name, mimeType: file.mimeType, size: file.size }
+  const metadata: FileMetadataV1 = { ...file.metadataRest, name: file.name, mimeType: file.mimeType, size: file.size }
   if (file.sha256) metadata.sha256 = file.sha256
   if (file.media) metadata.media = file.media
   return { ...metadata, ...change }

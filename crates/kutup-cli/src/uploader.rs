@@ -205,6 +205,7 @@ pub fn upload_streaming(
         size: plain_size as u64,
         sha256: Some(b64().encode(sha256)),
         media: None,
+        ..FileMetadata::new("", "", 0)
     };
     let record = file_crypto::create(collection_id, key_epoch, collection_key, &meta)?;
     debug_assert_eq!(record.metadata_revision, 1);

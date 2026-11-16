@@ -163,7 +163,7 @@ impl TryFrom<u8> for DriveEnvelopePurpose {
             10 => Ok(Self::PreviousFileKey),
             11 => Ok(Self::PublicLinkFileKey),
             12 => Ok(Self::AlbumFileKey),
-            _ => Err(CryptoError::InvalidInput(format!(
+            _ => Err(CryptoError::NewerThanMe(format!(
                 "unknown Drive envelope purpose {value}"
             ))),
         }

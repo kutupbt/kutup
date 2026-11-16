@@ -150,8 +150,10 @@ export {
   renameOwnedCollectionV1,
 } from './ownedCollection'
 export type { CreateOwnedCollectionV1, OwnedCollectionWireV1 } from './ownedCollection'
+export { isNewerFormatError } from './newerFormat'
 export {
   createFileRecordV1,
+  fileMetadataRest,
   openFileMetadataV1,
   openFileRecordV1,
   rekeyFileRecordV1,

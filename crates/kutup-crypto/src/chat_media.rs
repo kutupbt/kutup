@@ -51,7 +51,7 @@ impl TryFrom<u16> for ChatMediaSuiteId {
     fn try_from(value: u16) -> Result<Self> {
         match value {
             1 => Ok(Self::XChaCha20Poly1305SecretStreamV1),
-            _ => Err(CryptoError::InvalidInput(format!(
+            _ => Err(CryptoError::NewerThanMe(format!(
                 "unknown Chat-media suite {value}"
             ))),
         }
@@ -76,7 +76,7 @@ impl TryFrom<u8> for ChatMediaObjectPurpose {
     fn try_from(value: u8) -> Result<Self> {
         match value {
             1 => Ok(Self::AttachmentBlob),
-            _ => Err(CryptoError::InvalidInput(format!(
+            _ => Err(CryptoError::NewerThanMe(format!(
                 "unknown Chat-media object purpose {value}"
             ))),
         }

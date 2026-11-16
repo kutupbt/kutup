@@ -1,5 +1,5 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query'
-import { openFileRecordV1, type FileMetadataV1 } from '@kutup/crypto'
+import { fileMetadataRest, openFileRecordV1, type FileMetadataV1 } from '@kutup/crypto'
 import api from '@kutup/session/client'
 import type { FileRow } from '@kutup/session/api-types'
 import { fileKind } from './kinds'
@@ -54,6 +54,7 @@ export function toDriveFile(
     size: result?.metadata.size ?? 0,
     sha256: result?.metadata.sha256 ?? null,
     media: result?.metadata.media ?? null,
+    metadataRest: result ? fileMetadataRest(result.metadata) : undefined,
     fileKey: result?.fileKey ?? null,
     fileKeyEnvelope: row.fileKeyEnvelope,
     originalKeyGeneration: row.originalKeyGeneration,

@@ -41,6 +41,26 @@ const ACCOUNT_LEN: usize = 16;
 const SIGNATURE_LEN: usize = 64;
 const MANIFEST_AAD_LABEL: &[u8] = b"manifest";
 
+/// A block header of `magic` whose suite (the u16 after the magic) is above
+/// `known`: *newer than me* (docs/plans/format-evolution.md, rule 6: a suite
+/// is *refuse*). Anything else is left to the family's own header check.
+pub(crate) fn refuse_newer_suite(
+    header: &[u8],
+    magic: &[u8; 8],
+    known: u16,
+    what: &str,
+) -> Result<()> {
+    if header.get(..8) == Some(&magic[..]) {
+        if let Some(suite) = header.get(8..10) {
+            let suite = u16::from_be_bytes([suite[0], suite[1]]);
+            if suite > known {
+                return Err(crate::format::newer(&format!("{what} suite {suite}")));
+            }
+        }
+    }
+    Ok(())
+}
+
 /// What a family brings to the shared construction.
 #[derive(Debug)]
 pub struct BlockFamily {
@@ -626,13 +646,22 @@ fn parse_manifest(family: &BlockFamily, header: &[u8], plaintext: &[u8]) -> Resu
         plaintext[4..8].try_into().expect("four bytes"),
     ));
     let size = u64::from_be_bytes(plaintext[8..16].try_into().expect("eight bytes"));
-    if block_size as usize != BLOCK_SIZE
-        || count != block_count(size)?
-        || plaintext.len() != family.manifest_plaintext_len(count)?
-    {
+    if block_size as usize != BLOCK_SIZE || count != block_count(size)? {
         return Err(malformed());
     }
     let hashes_end = MANIFEST_FIXED_LEN + count as usize * HASH_LEN;
+    // The signer kind is *refuse* (docs/plans/format-evolution.md, rule 6):
+    // one this reader does not know is newer than it, whatever follows.
+    if let Some(kind) = plaintext.get(hashes_end) {
+        if *kind > SIGNER_DRIVE_SIGNING_KEY {
+            return Err(crate::format::newer(&format!(
+                "block manifest signer kind {kind}"
+            )));
+        }
+    }
+    if plaintext.len() != family.manifest_plaintext_len(count)? {
+        return Err(malformed());
+    }
     let hashes: Vec<[u8; HASH_LEN]> = plaintext[MANIFEST_FIXED_LEN..hashes_end]
         .as_chunks::<HASH_LEN>()
         .0
@@ -897,6 +926,12 @@ mod tests {
                 "{why}"
             );
         }
+        // An unknown signer kind is newer than this reader, not corrupt.
+        let newer = [&[2][..], &signed[1..]].concat();
+        assert!(matches!(
+            open(&DRIVE_BLOCKS, &header, &manifest(B as u32, 1, 5, &newer)),
+            Err(error) if error.is_newer()
+        ));
     }
 
     #[test]
