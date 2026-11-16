@@ -291,6 +291,14 @@ is code.
   `kutup-chat-proto/tests/vectors/account-succession-v1.json` (absent, two
   valid, a wrong signature).
 
+- **The head and the local state follow the format-evolution rule**
+  (docs/plans/format-evolution.md, row "Account head, local anchor"): `v`
+  first (1), an optional `min`, and fields a newer writer added kept in
+  `extra` and written back by the next head (at most 64). A scope this
+  reader doesn't know is kept and counted like any other. A version or
+  minimum above the reader's is `newer format: account head` (keep, never
+  repair); the plaintext is taken as received, never re-encoded to compare.
+
 ## Decisions (2026-11-15, main session)
 
 1. **Web reading is in this slice:** the session keeps the generation and the

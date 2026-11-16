@@ -240,10 +240,69 @@ pub fn generations_map(
 /// than the roots in use.
 pub const ROOT_GENERATION_MISMATCH: &str = "rootGenerationMismatch";
 
-/// The account head.
+/// The newest account-head version this reader knows
+/// (docs/plans/format-evolution.md).
+pub const ACCOUNT_HEAD_VERSION: u16 = 1;
+/// The newest local-state version this reader knows.
+pub const LOCAL_HEAD_STATE_VERSION: u16 = 1;
+/// The most fields a newer writer may add that this reader keeps.
+const MAX_EXTRA_FIELDS: usize = 64;
+
+/// Fields a newer writer added: kept, in sorted order, and written back.
+pub type Extra = BTreeMap<String, serde_json::Value>;
+
+/// The error a reader gives an object a newer writer made that it may not
+/// act on: "update Kutup", the bytes kept (docs/plans/format-evolution.md,
+/// rule 5). Its text starts `newer format:`.
+fn newer(what: &str) -> CryptoError {
+    CryptoError::InvalidInput(format!("newer format: {what}"))
+}
+
+/// `v` and `min` (absent: `v`; present: below `v`) against this reader's
+/// version: version 0 or a bad `min` is corrupt, a minimum above the reader
+/// is newer than me.
+fn check_version(what: &str, v: u16, min: Option<u16>, reader: u16) -> Result<()> {
+    let minimum = match min {
+        _ if v == 0 => return Err(invalid("version 0")),
+        None => v,
+        Some(min) if min >= 1 && min < v => min,
+        Some(_) => return Err(invalid("min must be below v")),
+    };
+    if minimum > reader {
+        return Err(newer(what));
+    }
+    Ok(())
+}
+
+/// Reads `v` and `min` before the struct, so an object from a newer writer
+/// is newer than me even when its fields no longer fit this reader's struct.
+fn check_json_version(what: &str, plain: &[u8], reader: u16) -> Result<()> {
+    #[derive(Deserialize)]
+    struct Probe {
+        v: u16,
+        #[serde(default)]
+        min: Option<u16>,
+    }
+    let probe: Probe = serde_json::from_slice(plain).map_err(|_| invalid("decode"))?;
+    check_version(what, probe.v, probe.min, reader)
+}
+
+fn check_extra(extra: &Extra) -> Result<()> {
+    if extra.len() > MAX_EXTRA_FIELDS {
+        return Err(invalid("too many unknown fields"));
+    }
+    Ok(())
+}
+
+/// The account head. `v` first (docs/plans/format-evolution.md); fields a
+/// newer writer added are kept in `extra` and written back by the next head;
+/// a scope this reader doesn't know is kept and counted like any other.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[serde(rename_all = "camelCase")]
 pub struct AccountHeadV1 {
+    pub v: u16,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub min: Option<u16>,
     /// The account's incarnation (lowercase hex).
     pub incarnation_id: String,
     /// The account's current generations, by name ([`GENERATION_NAMES`]):
@@ -260,10 +319,14 @@ pub struct AccountHeadV1 {
     pub writer: String,
     /// Sorted by scope, one each.
     pub scopes: Vec<ScopeV1>,
+    #[serde(flatten, default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub extra: Extra,
 }
 
 impl AccountHeadV1 {
     fn validate(&self) -> Result<()> {
+        check_version("account head", self.v, self.min, ACCOUNT_HEAD_VERSION)?;
+        check_extra(&self.extra)?;
         if !is_lower_hex_32(&self.incarnation_id) || !is_lower_hex_32(&self.writer) {
             return Err(invalid("incarnation or writer is invalid"));
         }
@@ -333,12 +396,15 @@ impl AccountHeadV1 {
         }
         scopes.sort_by(|a, b| a.scope.cmp(&b.scope));
         let next = Self {
+            v: self.v,
+            min: self.min,
             incarnation_id: self.incarnation_id.clone(),
             generations: self.generations.clone(),
             sequence: self.sequence + 1,
             previous: Some(hex::encode(digest(sealed))),
             writer: writer.to_owned(),
             scopes,
+            extra: self.extra.clone(),
         };
         next.validate()?;
         Ok(next)
@@ -354,12 +420,15 @@ impl AccountHeadV1 {
     ) -> Result<Self> {
         scopes.sort_by(|a, b| a.scope.cmp(&b.scope));
         let head = Self {
+            v: ACCOUNT_HEAD_VERSION,
+            min: None,
             incarnation_id: incarnation_id.to_owned(),
             generations: generations_map(master_key, generations),
             sequence: 1,
             previous: None,
             writer: writer.to_owned(),
             scopes,
+            extra: Extra::new(),
         };
         head.validate()?;
         Ok(head)
@@ -470,13 +539,13 @@ pub fn open(keys: &HeadKeys, binding: &str, sealed: &[u8]) -> Result<AccountHead
         binding,
         &[],
     )?;
+    check_json_version("account head", &plain, ACCOUNT_HEAD_VERSION)?;
     let head: AccountHeadV1 = serde_json::from_slice(&plain).map_err(|_| invalid("decode"))?;
     head.validate()?;
-    if head.sequence != sequence
-        || previous_bytes(&head)? != previous
-        || serde_json::to_vec(&head).ok().as_deref() != Some(&plain[..])
-    {
-        return Err(invalid("the head is not canonical"));
+    // The plaintext is taken as received (unknown fields included), never
+    // re-encoded; its header must say the same sequence and predecessor.
+    if head.sequence != sequence || previous_bytes(&head)? != previous {
+        return Err(invalid("the head does not match its header"));
     }
     Ok(head)
 }
@@ -855,8 +924,11 @@ pub enum LocalHeadEvent {
 /// one, sealed ([`seal_local_state`]) under the name
 /// [`HeadKeys::local_state_name`].
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[serde(rename_all = "camelCase")]
 pub struct LocalHeadStateV1 {
+    pub v: u16,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub min: Option<u16>,
     pub incarnation_id: String,
     /// Random, this device's: [`HeadKeys::writer`] hashes it into heads.
     pub device_id: String,
@@ -868,6 +940,8 @@ pub struct LocalHeadStateV1 {
     /// kept until the anchor it starts from is logged with it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub started_over: Option<String>,
+    #[serde(flatten, default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub extra: Extra,
 }
 
 impl LocalHeadStateV1 {
@@ -881,18 +955,28 @@ impl LocalHeadStateV1 {
     /// [`Self::new`] with a given device id (vectors; a device moving its id).
     pub fn with_device(incarnation_id: &str, device_id: &str) -> Result<Self> {
         let state = Self {
+            v: LOCAL_HEAD_STATE_VERSION,
+            min: None,
             incarnation_id: incarnation_id.to_owned(),
             device_id: device_id.to_owned(),
             anchor: None,
             anchored_at_ms: 0,
             log: Vec::new(),
             started_over: None,
+            extra: Extra::new(),
         };
         state.validate()?;
         Ok(state)
     }
 
     fn validate(&self) -> Result<()> {
+        check_version(
+            "account head state",
+            self.v,
+            self.min,
+            LOCAL_HEAD_STATE_VERSION,
+        )?;
+        check_extra(&self.extra)?;
         if !is_lower_hex_32(&self.incarnation_id) {
             return Err(invalid("incarnation id is invalid"));
         }
@@ -1046,6 +1130,7 @@ pub fn open_local_state(
         binding,
         &incarnation_object(incarnation_id)?,
     )?);
+    check_json_version("account head state", &plain, LOCAL_HEAD_STATE_VERSION)?;
     let state: LocalHeadStateV1 = serde_json::from_slice(&plain).map_err(|_| invalid("decode"))?;
     state.validate()?;
     if state.incarnation_id != incarnation_id {
@@ -1242,6 +1327,76 @@ mod tests {
         );
         // A head of the old key shown to a client of the new one: refused.
         assert!(check(&rotated, BINDING, INCARNATION, GENS, None, &sealed[1], None).is_err());
+    }
+
+    /// docs/plans/format-evolution.md: a head of a newer version than this
+    /// reader is "newer format", a field or scope it doesn't know is kept and
+    /// written back by the next head.
+    #[test]
+    fn heads_evolve_without_a_wipe() {
+        let keys = keys();
+        let writer = keys.writer("device-a").unwrap();
+        let mut head = AccountHeadV1::first(
+            INCARNATION,
+            MasterKeyGeneration::FIRST,
+            GENS,
+            &writer,
+            vec![],
+        )
+        .unwrap();
+        head.extra
+            .insert("futureField".into(), serde_json::json!({"a": 1}));
+        head.scopes.push(ScopeV1 {
+            scope: "futureScope".into(),
+            count: 2,
+            digest: "ab".repeat(32),
+        });
+        let sealed = seal(&keys, BINDING, &head).unwrap();
+        let opened = open(&keys, BINDING, &sealed).unwrap();
+        assert_eq!(opened, head);
+        let next = opened.next(&sealed, &writer, vec![]).unwrap();
+        assert_eq!(next.extra, head.extra);
+        assert!(next.scope("futureScope").is_some());
+        // A newer version this reader may not act on: newer, not corrupt.
+        let mut newer_head = head.clone();
+        newer_head.v = ACCOUNT_HEAD_VERSION + 1;
+        let plain = serde_json::to_vec(&newer_head).unwrap();
+        let sealed = account_record::seal_chained(
+            &plain,
+            keys.master_keys().current(),
+            HEAD_PURPOSE,
+            keys.master_keys().generation(),
+            BINDING,
+            &[],
+            1,
+            &[0; 32],
+            None,
+        )
+        .unwrap();
+        let error = open(&keys, BINDING, &sealed).unwrap_err();
+        assert!(
+            error.to_string().contains("newer format: account head"),
+            "{error}"
+        );
+        // The same version with a minimum this reader meets: it opens.
+        newer_head.min = Some(ACCOUNT_HEAD_VERSION);
+        let plain = serde_json::to_vec(&newer_head).unwrap();
+        let sealed = account_record::seal_chained(
+            &plain,
+            keys.master_keys().current(),
+            HEAD_PURPOSE,
+            keys.master_keys().generation(),
+            BINDING,
+            &[],
+            1,
+            &[0; 32],
+            None,
+        )
+        .unwrap();
+        assert_eq!(
+            open(&keys, BINDING, &sealed).unwrap().v,
+            ACCOUNT_HEAD_VERSION + 1
+        );
     }
 
     #[test]
