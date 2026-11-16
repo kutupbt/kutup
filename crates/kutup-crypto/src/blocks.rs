@@ -958,8 +958,9 @@ mod tests {
                 "{why}"
             );
         }
-        // An unknown signer kind is newer than this reader, not corrupt.
-        let newer = [&[2][..], &signed[1..]].concat();
+        // An unknown signer kind is newer than this reader, not corrupt
+        // (kind 1, which never shipped, is corrupt: it is below the newest).
+        let newer = [&[SIGNER_DRIVE_SIGNING_KEY + 1][..], &signed[1..]].concat();
         assert!(matches!(
             open(&DRIVE_BLOCKS, &header, &manifest(B as u32, 1, 5, &newer)),
             Err(error) if error.is_newer()
