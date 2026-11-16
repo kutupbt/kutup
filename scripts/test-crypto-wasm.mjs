@@ -738,13 +738,13 @@ assert.throws(() => crypto.openPhotosLibrary(libraryVector.first.envelope, libra
 // The generic account-record path refuses the purpose.
 assert.throws(() => crypto.openAccountRecord(libraryVector.first.envelope, libraryVector.masterKey, 13, libraryVector.binding))
 const resealed = crypto.sealPhotosLibrary(
-  JSON.stringify({ favourites: ['33333333-3333-4333-8333-333333333333', '22222222-2222-4222-8222-222222222222'], archived: [], hidden: [] }),
+  JSON.stringify({ v: 1, favourites: ['33333333-3333-4333-8333-333333333333', '22222222-2222-4222-8222-222222222222'], archived: [], hidden: [], albums: [1] }),
   libraryVector.masterKey, 1, libraryVector.binding, libraryVector.accountIncarnationId, 3, crypto.photosLibraryDigest(libraryVector.second.envelope),
 )
 assert.equal(crypto.photosLibraryDigest(resealed.envelope), resealed.digest)
 assert.equal(
   crypto.openPhotosLibrary(resealed.envelope, ...libraryOwner, libraryVector.accountIncarnationId, 3, crypto.photosLibraryDigest(libraryVector.second.envelope)),
-  '{"favourites":["22222222-2222-4222-8222-222222222222","33333333-3333-4333-8333-333333333333"],"archived":[],"hidden":[]}',
+  '{"v":1,"favourites":["22222222-2222-4222-8222-222222222222","33333333-3333-4333-8333-333333333333"],"archived":[],"hidden":[],"albums":[1]}',
 )
 
 // Mail address keys (docs/plans/mail-address-keys.md).
@@ -1295,7 +1295,7 @@ if (build === 'crypto') {
   assert.deepEqual(opened.fields, v.fields)
   const sealedMetadata = { keyPacket: v.metadata.keyPacket, dataPacket: v.metadata.dataPacket, signature: v.metadata.signature }
   const metadata = unlocked.openMetadata(sealedMetadata, v.calendarId, [v.ownerPublicKey])
-  assert.deepEqual(metadata, { name: v.metadata.name, description: v.metadata.description, verified: true })
+  assert.deepEqual(metadata, { name: v.metadata.name, description: v.metadata.description, verified: true, rest: { v: 1 } })
   // Bound to its calendar: under another id, refused.
   assert.throws(() => unlocked.openMetadata(sealedMetadata, 'another-calendar', [v.ownerPublicKey]))
   assert.equal(unlocked.fingerprint, v.calendarFingerprint)
@@ -1318,6 +1318,9 @@ if (build === 'crypto') {
   assert.deepEqual(unlocked.openEvent(sealed, [v.ownerPublicKey]).fields, v.fields)
   const renamed = unlocked.sealMetadata(...owner, v.calendarId, { name: 'Ev', description: '' })
   assert.equal(unlocked.openMetadata(renamed, v.calendarId, [v.ownerPublicKey]).name, 'Ev')
+  // A rename keeps what a newer client wrote (docs/plans/format-evolution.md).
+  const kept = unlocked.sealMetadata(...owner, v.calendarId, { name: 'Ev', description: '', rest: { v: 1, colourHint: 'teal' } })
+  assert.deepEqual(unlocked.openMetadata(kept, v.calendarId, [v.ownerPublicKey]).rest, { v: 1, colourHint: 'teal' })
   // A new calendar, under the id the client drew.
   const made = crypto.createCalendar(...owner, 'c-new', { name: 'İş', description: '' }, 1790000000)
   const opened2 = crypto.unlockCalendar(...owner, made.passphrase, [v.ownerPublicKey], made.lockedSecretKey)

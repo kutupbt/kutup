@@ -69,7 +69,7 @@ describe('a new version over tus', () => {
       version: { keyGeneration: 1, metadataRevision: sealed.metadataRevision },
     }
     expect(sealed.metadataRevision).toBe(2)
-    expect(await pendingUploadName(upload, collectionKey)).toEqual(next)
+    expect(await pendingUploadName(upload, collectionKey)).toEqual({ v: 1, ...next })
     // Read as a new file's (revision 1), it does not open.
     await expect(pendingUploadName({ ...upload, version: undefined }, collectionKey)).rejects.toThrow()
     expect(uploadIdOf(upload.uploadUrl)).toBe('22222222-2222-4222-8222-222222222222')
