@@ -2,6 +2,8 @@
 // (docs/plans/drive-block-format.md §4): it skips waiting and claims the
 // page, and since the stream route keeps nothing in the worker, the next
 // range request is answered by the new one with no stream to hand over.
+// On WebKit the player may play from a Blob instead (fixtures/stream.ts):
+// then the swap must still leave it playing, and the annotation says so.
 import { expect, test } from '@playwright/test'
 import { driveWithSong, playInQuickLook, seekAndPlay } from '../fixtures/stream'
 
