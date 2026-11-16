@@ -361,23 +361,34 @@ async fn main() -> anyhow::Result<()> {
     ratelimit::reload(&pool).await?;
     ratelimit::spawn_reload(pool.clone());
 
+    // BACKGROUND_JOBS=false (a restore drill's first start): none of the
+    // periodic jobs below runs, so nothing deletes, purges or sends until an
+    // operator has checked the restored data and restarts with them on.
+    let background_jobs = config.background_jobs;
+    if !background_jobs {
+        tracing::warn!(
+            "BACKGROUND_JOBS is off: no purges, sweeps, retention or outbox deliveries run"
+        );
+    }
     // Background maintenance jobs (version cleanup / quota reconcile / uploads sweeper /
     // trash retention).
     let chat_hub = chat_hub::ChatHub::default();
-    jobs::spawn_all(
-        pool.clone(),
-        storage.clone(),
-        config.trash_retention_days,
-        jobs::ChatMaintenancePolicy {
-            mailbox_retention_days: config.chat_mailbox_retention_days,
-            media_delivery_retention_days: config.chat_media_delivery_retention_days,
-            send_retention_days: config.chat_send_retention_days,
-            device_expiry_days: config.chat_device_expiry_days,
-        },
-        chat_hub.clone(),
-    );
-    // Deleted blobs past their wait leave the store.
-    blob_purge::spawn(pool.clone(), storage.immediate());
+    if background_jobs {
+        jobs::spawn_all(
+            pool.clone(),
+            storage.clone(),
+            config.trash_retention_days,
+            jobs::ChatMaintenancePolicy {
+                mailbox_retention_days: config.chat_mailbox_retention_days,
+                media_delivery_retention_days: config.chat_media_delivery_retention_days,
+                send_retention_days: config.chat_send_retention_days,
+                device_expiry_days: config.chat_device_expiry_days,
+            },
+            chat_hub.clone(),
+        );
+        // Deleted blobs past their wait leave the store.
+        blob_purge::spawn(pool.clone(), storage.immediate());
+    }
 
     // Live SeaweedFS capacity probe (admin dashboard) — None when SEAWEEDFS_MASTER_URL is empty.
     let storage_probe =
@@ -404,8 +415,10 @@ async fn main() -> anyhow::Result<()> {
     } else {
         None
     };
-    live_locations::spawn_sweeper(pool.clone());
-    chat_calls::call_link_waiting::spawn_sweeper(pool.clone());
+    if background_jobs {
+        live_locations::spawn_sweeper(pool.clone());
+        chat_calls::call_link_waiting::spawn_sweeper(pool.clone());
+    }
     let maps =
         Arc::new(maps::MapService::start(&pool, &config.maps_cache_dir, &config.server_url).await?);
     // Group send endorsement keys: made on first start, and every stored one
@@ -447,29 +460,33 @@ async fn main() -> anyhow::Result<()> {
         web_push,
         maps,
     };
-    if let Some(federation) = state.federation.as_ref() {
+    if let (true, Some(federation)) = (background_jobs, state.federation.as_ref()) {
         federation.spawn_maintenance();
         if let Some(sealed_sender) = state.sealed_sender.as_ref() {
             sealed_sender.spawn_maintenance(state.pool.clone(), Arc::clone(federation));
         }
     }
-    // Old addresses past their receiving, names past their hold.
-    account_names::spawn_sweep(state.pool.clone(), state.config.name_sweep_seconds);
-    federation_outbox::spawn_worker(state.clone());
-    drive_federation::spawn_digest_backfill(state.clone());
+    if background_jobs {
+        // Old addresses past their receiving, names past their hold.
+        account_names::spawn_sweep(state.pool.clone(), state.config.name_sweep_seconds);
+        federation_outbox::spawn_worker(state.clone());
+        drive_federation::spawn_digest_backfill(state.clone());
+    }
     mail::groups::ensure_system_groups(&state.pool, &state.config.chat_server_name).await?;
     site_settings::seed_mail_outside_sending(&state.pool, state.config.mail_outside_sending)
         .await?;
     mail::spawn_receiver(state.clone()).await?;
-    // Auto-delete of old Trash and Spam, for accounts that turned it on.
-    mail::retention::spawn(state.clone());
-    mail::outbox::spawn(state.clone());
-    mail::snooze::spawn(state.clone());
-    mail::forwarding::spawn(state.clone());
     mail::domains::set_time_scale(state.config.mail_domains_time_scale);
-    mail::domains::sweep::spawn(state.clone());
-    mail::expiry::spawn(state.clone());
-    calendar_alarms::spawn(state.clone());
+    if background_jobs {
+        // Auto-delete of old Trash and Spam, for accounts that turned it on.
+        mail::retention::spawn(state.clone());
+        mail::outbox::spawn(state.clone());
+        mail::snooze::spawn(state.clone());
+        mail::forwarding::spawn(state.clone());
+        mail::domains::sweep::spawn(state.clone());
+        mail::expiry::spawn(state.clone());
+        calendar_alarms::spawn(state.clone());
+    }
 
     // Trailing-slash normalization wraps the whole Router from the *outside* (a
     // `Router::layer` only runs for already-matched paths, so it can't rescue an unmatched

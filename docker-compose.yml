@@ -217,6 +217,8 @@ services:
       NAME_HOLD_DAYS: ${NAME_HOLD_DAYS:-}
       OLD_ADDRESS_RECEIVE_DAYS: ${OLD_ADDRESS_RECEIVE_DAYS:-}
       NAME_SWEEP_SECONDS: ${NAME_SWEEP_SECONDS:-}
+      # Off only for a restore drill's first start (scripts/restore-drill.sh).
+      BACKGROUND_JOBS: ${BACKGROUND_JOBS:-}
       RATE_LIMITS_RELAXED: ${RATE_LIMITS_RELAXED:-}
       # Who may register on a fresh database (on, code, off; default off).
       REGISTRATION_MODE: ${REGISTRATION_MODE:-}

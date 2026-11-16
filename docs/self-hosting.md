@@ -846,6 +846,14 @@ bucket, the blob bucket (or its replica) and the offline secrets ([What a
 restore needs](#what-a-restore-needs)). Never copy anything from the running
 server, and never point the drill at the live blob bucket.
 
+On a test machine with lane stacks, `scripts/restore-drill.sh` runs steps 1
+to 4 for you (an empty `kutup-drill-l<lane>` stack from the release images,
+the newest dump, a scratch copy of the blob bucket, the server started with
+`BACKGROUND_JOBS=false` and then with its jobs on, Stalwart's volume), then
+the readiness, `check-config` and migrations checks, and prints the timings
+and the data-loss window; `--help` lists what it needs, `--dry-run` prints
+every step, and `scripts/test-restore-drill.sh` tests it offline.
+
 1. **Start an empty stack** from the release images
    ([Running published images](#running-published-images)), with `.env`
    from the offline copy. Set `S3_*` to a **copy** of the blob bucket (made

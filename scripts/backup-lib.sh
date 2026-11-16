@@ -3,7 +3,9 @@
 # shellcheck disable=SC2154
 # Shared by scripts/backup-postgres.sh and scripts/backup-stalwart.sh; not
 # run on its own. The caller sets `label` (its name in messages) and runs
-# from the deployment's directory, where .env is.
+# from the deployment's directory, where .env is. KUTUP_ENV_FILE names
+# another settings file instead (scripts/restore-drill.sh, whose stack's
+# settings are its own; it also points Compose there with COMPOSE_ENV_FILES).
 #
 # Backups go to their own bucket with their own key (BACKUP_S3_* in .env),
 # never the bucket Kutup's data is in: one lost bucket or one leaked key
@@ -18,9 +20,11 @@ fail() {
   exit 1
 }
 
+env_file="${KUTUP_ENV_FILE:-.env}"
+
 setting() {
   # The last assignment of a key in .env, taken literally (never evaluated).
-  sed -n "s/^$1=//p" .env | tail -n 1
+  sed -n "s/^$1=//p" "$env_file" | tail -n 1
 }
 
 required() {
@@ -30,7 +34,7 @@ required() {
   printf '%s' "$value"
 }
 
-[ -f .env ] || fail "no .env in $(pwd)"
+[ -f "$env_file" ] || fail "no $env_file in $(pwd)"
 
 # The backup bucket and its key. Unset: refuse, never the data bucket.
 backup_store() {
